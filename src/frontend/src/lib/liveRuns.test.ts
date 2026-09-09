@@ -5,6 +5,7 @@ import {
 	LiveRunsAuthError,
 	liveRelicChips,
 	liveRunDisplayName,
+	liveRunStatusLabel,
 	moodFace,
 	requestRunRelease,
 	requestRunRespawn,
@@ -12,6 +13,45 @@ import {
 	wordmarkMood,
 	type LiveRun
 } from './liveRuns.ts';
+
+const statusRun = (overrides: Partial<LiveRun>) =>
+	({
+		status: null,
+		resource_hold: null,
+		lifecycle: null,
+		await_until: null,
+		phase: null,
+		...overrides
+	}) as Pick<LiveRun, 'status' | 'resource_hold' | 'lifecycle' | 'await_until' | 'phase'>;
+
+const hold = (resume_condition: string) => ({
+	reason: null,
+	provider: null,
+	resume_condition,
+	armed_at: null,
+	released: false
+});
+
+test('a held run outranks stale or fresh heartbeat evidence with its wake condition', () => {
+	assert.equal(
+		liveRunStatusLabel(statusRun({ status: 'held', resource_hold: hold('refill') }), 'unknown'),
+		'parked · refill'
+	);
+	assert.equal(
+		liveRunStatusLabel(statusRun({ status: 'held', resource_hold: hold('operator') }), 'running'),
+		'parked · operator'
+	);
+});
+
+test('declared terminal statuses outrank a stale heartbeat', () => {
+	for (const status of ['done', 'error', 'conflict', 'stopped']) {
+		assert.equal(liveRunStatusLabel(statusRun({ status }), 'unknown'), status);
+	}
+});
+
+test('a stale run still renders unknown when it claims to be running', () => {
+	assert.equal(liveRunStatusLabel(statusRun({ status: 'running' }), 'unknown'), 'unknown');
+});
 
 test('live run display prefers the resident-authored name', () => {
 	assert.equal(
