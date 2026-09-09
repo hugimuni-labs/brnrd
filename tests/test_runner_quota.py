@@ -331,6 +331,41 @@ def test_binding_quota_reset_epoch_none_without_signal():
     ) is None
 
 
+def test_binding_quota_window_uses_the_same_codex_bucket_for_clock_and_draw():
+    levels = {
+        "quota": {
+            "primary_remaining_percent": 60.0,
+            "primary_resets_at": 10_000.0,
+            "primary_window_minutes": 300.0,
+            "secondary_remaining_percent": 20.0,
+            "secondary_resets_at": 20_000.0,
+            "secondary_window_minutes": 10_080.0,
+        }
+    }
+    assert runner_quota.binding_quota_window(levels) == {
+        "remaining_pct": 20.0,
+        "resets_at": 20_000.0,
+        "window_minutes": 10_080.0,
+    }
+
+
+def test_binding_quota_window_refuses_a_binding_model_bucket_without_a_clock():
+    levels = {
+        "quota": {
+            "buckets": {
+                "session": {"remaining_percentage": 60.0},
+                "week": {"remaining_percentage": 50.0},
+                "week_models": {"Fable": {"remaining_percentage": 10.0}},
+            },
+            "session_resets_at": 10_000.0,
+            "week_resets_at": 20_000.0,
+        },
+        "session_used_percentage": 40.0,
+        "week_used_percentage": 50.0,
+    }
+    assert runner_quota.binding_quota_window(levels, model="fable") is None
+
+
 def test_latest_claude_usage_outbox_dir_picks_freshest(tmp_path):
     """claude_usage caches into a *run's* outbox dir, never brr_dir itself —
     the shared-level readers (schedule pacing, dashboard quota publish) have

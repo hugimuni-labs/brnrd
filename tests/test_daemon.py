@@ -194,6 +194,36 @@ def test_quota_pacing_status_stays_absent_without_measurement():
     assert daemon._quota_pacing_status({}, None) is None
 
 
+def test_quota_window_pace_recommends_slowing_down_only_from_a_complete_window():
+    # The window began 100 minutes ago and is 40% consumed: 40% used against
+    # 33.3% elapsed is a real pace signal, not a projection from a bare bar.
+    pace = daemon._quota_window_pace(
+        {
+            "quota": {
+                "primary_remaining_percent": 60.0,
+                "primary_resets_at": 22_000.0,
+                "primary_window_minutes": 300.0,
+            }
+        },
+        now=10_000.0,
+    )
+
+    assert pace == {
+        "consumed_share_pct": 40.0,
+        "elapsed_share_pct": 33.3,
+        "ratio": 1.2,
+        "recommendation": "slow_down",
+        "window_minutes": 300.0,
+        "resets_at": 22_000.0,
+    }
+
+
+def test_quota_window_pace_stays_absent_without_a_binding_window_clock():
+    assert daemon._quota_window_pace(
+        {"quota": {"primary_remaining_percent": 60.0}}, now=10_000.0,
+    ) is None
+
+
 @pytest.mark.parametrize(
     ("status", "expected"),
     [(None, None), ({"floor": None}, None), ({"floor": "low"}, "low"),
