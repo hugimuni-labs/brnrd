@@ -729,9 +729,9 @@ def test_available_runner_catalog_marks_selected_generated_core(tmp_path, monkey
     )
 
     catalog = runner_mod.available_runner_catalog(
-        tmp_path, selected="codex-mini",
+        tmp_path, selected="codex-gpt-5.6-luna",
     )
-    mini = next(item for item in catalog if item["name"] == "codex-mini")
+    mini = next(item for item in catalog if item["name"] == "codex-gpt-5.6-luna")
 
     assert mini["selected"] is True
     assert mini["shell"] == "codex"
@@ -740,6 +740,16 @@ def test_available_runner_catalog_marks_selected_generated_core(tmp_path, monkey
     assert mini["quota_source"] == "codex-local"
     assert mini["availability"] == "available"
     assert "cmd" not in mini
+
+
+def test_legacy_codex_alias_resolves_without_duplicate_catalog_row(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: "/usr/bin/mock")
+    profiles = runner_mod._selection_profiles(tmp_path, probe=False)
+    assert profiles["codex-mini"]["alias_for"] == "codex-gpt-5.6-luna"
+    assert runner_mod.runner_profile("codex-mini", tmp_path).model == "gpt-5.6-luna"
+    names = {row["name"] for row in runner_mod.available_runner_catalog(tmp_path)}
+    assert "codex-gpt-5.6-luna" in names
+    assert "codex-mini" not in names
 
 
 def test_available_runner_catalog_sees_a_disk_feed_rewrite_without_cache_clear(
@@ -1297,13 +1307,9 @@ def test_home_runners_file_overrides_bundled_profiles(tmp_path, monkeypatch):
     (tmp_path / ".brr" / "config").write_text(
         f"runner=local-agent\nhome.path={home}\n"
     )
-    (home / conf.PROFILES_FILENAME).write_text(
-        "---\n"
-        "local-agent:\n"
-        "  binary: local-agent\n"
-        "  cmd: 'local-agent run --yes'\n"
-        "---\n",
-        encoding="utf-8",
+    runner_mod.write_profiles_toml(
+        home / conf.PROFILES_FILENAME,
+        {"local-agent": {"binary": "local-agent", "cmd": "local-agent run --yes"}},
     )
     # Simulate an earlier bundled-profile read in the same daemon
     # process. A home-owned profile must still get its own cache key.
@@ -2649,9 +2655,9 @@ class TestDeclaredCmdOnlyRunnerEndToEnd:
         home.mkdir(exist_ok=True)
         conf.write_config(repo_root, {"home.path": str(home)})
         quoted = " ".join(_shlex.quote(part) for part in cmd)
-        (home / conf.PROFILES_FILENAME).write_text(
-            f"---\nscript-runner:\n  cmd: '{quoted}'\n---\n",
-            encoding="utf-8",
+        runner_mod.write_profiles_toml(
+            home / conf.PROFILES_FILENAME,
+            {"script-runner": {"cmd": quoted}},
         )
         # Force a reload from that file (monkeypatch restores the original
         # cache afterwards).

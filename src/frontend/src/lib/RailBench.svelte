@@ -2,6 +2,7 @@
 	import { glitchReveal } from './transitions';
 	import { environmentDisplay } from './railBench';
 	import type { ConnectedRepo, EnvironmentOption } from './repos';
+	import type { DaemonConfigEntry } from './daemonConfig';
 	import { IDLE_ROW, OFF_MARK, OFF_ROW, SELECTED_OPTION } from './stateChrome';
 
 	// THE BENCH — project · environment, and nothing else, as its own block
@@ -46,9 +47,17 @@
 		/** The repo label the daemon says the next wake already targets, used
 		 *  only as the initial reading before the reader has picked anything. */
 		wakeRepoLabel?: string | null;
+		daemonConfig?: DaemonConfigEntry[] | null;
 	}
 
-	let { repos = null, open, onToggle, onPlaceChange, wakeRepoLabel = null }: Props = $props();
+	let {
+		repos = null,
+		open,
+		onToggle,
+		onPlaceChange,
+		wakeRepoLabel = null,
+		daemonConfig = null
+	}: Props = $props();
 
 	let repoSelection = $state<string | null>(null);
 	let environmentSelection = $state<string | null>(null);
@@ -230,6 +239,38 @@
 							<p class="px-2 font-mono text-[10px] text-ink-mute">No daemon availability report.</p>
 						{/if}
 					</div>
+				</section>
+				<section data-measure="daemon-settings" class="bench-bay md:col-span-2">
+					<div class="workshop-label">daemon</div>
+					{#if daemonConfig === null}
+						<p class="font-mono text-xs text-ink-quiet">Loading daemon settings…</p>
+					{:else if daemonConfig.length === 0}
+						<p class="font-mono text-xs text-ink-quiet">
+							No daemon overrides — built-in defaults apply.
+						</p>
+					{:else}
+						<div class="grid gap-2 md:grid-cols-2">
+							{#each daemonConfig as entry (entry.key)}
+								<label class="config-row border border-stone-800/70 px-3 py-2">
+									<span class="flex items-baseline justify-between gap-3">
+										<span class="font-mono text-[10px] tracking-wide text-stone-300"
+											>{entry.key}</span
+										>
+										<span class="font-mono text-[9px] text-ink-mute">{entry.source}</span>
+									</span>
+									<input
+										readonly
+										aria-label={entry.key}
+										value={String(entry.value)}
+										class="mt-1 w-full border-0 bg-transparent p-0 font-mono text-xs text-stone-100 outline-none"
+									/>
+								</label>
+							{/each}
+						</div>
+						<p class="mt-2 font-mono text-[9px] text-ink-mute">
+							Read-only mirror · edit locally with brnrd config set/unset.
+						</p>
+					{/if}
 				</section>
 			</div>
 		</div>

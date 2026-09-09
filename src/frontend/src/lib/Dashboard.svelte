@@ -118,6 +118,7 @@
 	import NewsLane from '$lib/NewsLane.svelte';
 	import { sectionFrameLit } from '$lib/collapse';
 	import { machineTapVerdict } from '$lib/machineDock';
+	import { fetchDaemonConfig, type DaemonConfigEntry } from '$lib/daemonConfig';
 	import {
 		SCROLL_STEP_THROTTLE_MS,
 		activeSectionFrom,
@@ -186,6 +187,7 @@
 	let now = $state(Date.now());
 
 	let runnersData = $state<RunnersResponse | null>(null);
+	let daemonConfig = $state<DaemonConfigEntry[] | null>(null);
 	let runnersError = $state<string | null>(null);
 	// Transient receipt for the last rack action. A tap has no approval
 	// step and no modal — this line is its only textual acknowledgment,
@@ -1308,6 +1310,13 @@
 				runnersError = e instanceof Error ? e.message : 'runners fetch failed';
 			}
 		}
+		try {
+			daemonConfig = await fetchDaemonConfig();
+		} catch {
+			// The settings mirror is additive and may be absent on an older web
+			// deployment; the rest of the bench remains usable.
+			daemonConfig = [];
+		}
 		// Once, normally — the repo list is not a live surface. The one
 		// exception is a cold account: while the cold-start block is still
 		// showing (no repo, or a repo with no daemon ever paired) the page
@@ -1641,6 +1650,7 @@
 				open={settingsOpen}
 				onToggle={onSettingsToggle}
 				wakeRepoLabel={runnersData?.wake_request?.repo_label ?? null}
+				{daemonConfig}
 				{onPlaceChange}
 			/>
 		</div>

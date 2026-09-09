@@ -2350,6 +2350,15 @@ def _apply_dashboard_wake_request(
     wake_request_mod.record_receipt(
         brr_dir, claimed_id, source=source, event_id=event_id, profile=profile,
     )
+    # A rack tap is both the one-shot request already claimed above and the
+    # account's new default. Keep the one-shot receipt: it explains why this
+    # particular wake changed body. The daemon-owned setting explains why the
+    # wake after it does not snap back.
+    default_path = conf.write_daemon_config(
+        default_repo_root, {"runner.default": profile},
+    )
+    if default_path is None:
+        return refuse("the account daemon config path could not be resolved")
     # #932 conversation-sticky: a user who picks a core is expressing a
     # preference, not blessing a single wake — the 39-seconds-later photo
     # that dispatched on the config default read as a bug. Bind the applied
@@ -18613,6 +18622,21 @@ def start(
 
     release_availability.refresh_if_stale_async(repo_root, on_complete=_report_update)
     account_context = account.resolve_context(repo_root, cfg)
+    # One-release reader shim, made durable and visible at boot. The old repo
+    # keys/files stay in place so downgrade remains possible, but cease to
+    # participate once their account-owned successor exists.
+    migration_logs: list[str] = []
+    seen_roots: set[Path] = set()
+    for registered in [account_context.default_repo, *account_context.repos.values()]:
+        root = registered.root.resolve()
+        if root in seen_roots:
+            continue
+        seen_roots.add(root)
+        migration_logs.extend(conf.migrate_legacy_daemon_config(root))
+    for line in migration_logs:
+        print(line)
+    if migration_logs:
+        cfg = conf.load_config(repo_root)
     # #316: mark runs the previous daemon process left frozen mid-flight
     # so their chat cards read "interrupted" instead of stale running
     # text. Must run before the zombie janitors (which would silently
