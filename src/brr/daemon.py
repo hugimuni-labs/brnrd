@@ -17773,6 +17773,34 @@ def _apply_run_respawn(
     return new_path
 
 
+def _strand_return_resumes_held_parent(target: "_DispatchTarget") -> bool:
+    """A strand's own return that a ``resume: strands`` hold is waiting for.
+
+    The reload window parks strand follow-ups (``spawned_by_run`` events)
+    so the slot can drain before re-exec — written before a seat could park
+    on its children. With ``hold: true`` + ``resume: strands`` the child's
+    return *is* the seat resuming, and hiding it deadlocks three ways:
+    the reload waits for the lingering strand, the strand lingers for its
+    parent, the parent waits for the very event this filter dropped.
+    Measured 2026-09-09 (run-260909-1542-jokz): held 16:35Z, both strands
+    submitted by 16:47Z, nothing woke until a correspondent wrote at
+    17:55Z. Same predicate ``_handle_resource_held_events`` resumes on, so
+    the event that passes here is exactly the one that releases the hold.
+    """
+    event = target.event
+    if not event.get("spawned_by_run"):
+        return False
+    runs_dir = gitops.shared_brr_dir(target.repo_root) / "runs"
+    for held in _held_runs_for_repo(runs_dir):
+        if resource_hold.strand_event_releases(
+            held.meta.get("resource_hold"), event,
+            held_run_id=held.id,
+            child_run_ids=held.meta.get("child_run_ids") or (),
+        ):
+            return True
+    return False
+
+
 def _handle_resource_held_events(
     pending: list["_DispatchTarget"],
     account_context: account.AccountContext | None,
@@ -19196,8 +19224,11 @@ def start(
                 if reload_requested:
                     pending = [
                         t for t in pending
-                        if _event_requires_thread_delivery(t.event)
-                        and not t.event.get("spawned_by_run")
+                        if (
+                            _event_requires_thread_delivery(t.event)
+                            and not t.event.get("spawned_by_run")
+                        )
+                        or _strand_return_resumes_held_parent(t)
                     ]
                 if pending:
                     pending = _handle_daemon_control_events(

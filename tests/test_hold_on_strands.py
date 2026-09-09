@@ -165,6 +165,38 @@ class TestHeldEventsOnStrands:
         reread = protocol._read_event(target.inbox_dir / "evt-kid.md")
         assert reread.get("defer_reason") is None
 
+    def test_reload_window_keeps_the_return_a_strands_hold_waits_for(self, tmp_path):
+        # 2026-09-09, run-260909-1542-jokz: a dev-reload requested while
+        # the seat was parked on its children filtered every
+        # `spawned_by_run` event out of dispatch, so `resume: strands`
+        # could never fire and the reload could never drain the lingering
+        # strand — until a correspondent wrote 80 minutes later.
+        self._arm(tmp_path)
+        own = self._target(
+            tmp_path, source="spawn_submitted", eid="evt-kid",
+            spawn_parent_run_id="run-parent", spawned_by_run="run-kid",
+            conversation_key="cloud:telegram:1:",
+        )
+        stranger = self._target(
+            tmp_path, source="spawn_submitted", eid="evt-other",
+            spawn_parent_run_id="run-elsewhere", spawned_by_run="run-x",
+            conversation_key="cloud:telegram:1:",
+        )
+        plain = self._target(
+            tmp_path, source="cloud", eid="evt-msg",
+            conversation_key="cloud:telegram:1:",
+        )
+        assert daemon._strand_return_resumes_held_parent(own) is True
+        assert daemon._strand_return_resumes_held_parent(stranger) is False
+        assert daemon._strand_return_resumes_held_parent(plain) is False
+
+    def test_reload_window_parks_a_strand_return_with_no_hold(self, tmp_path):
+        target = self._target(
+            tmp_path, source="spawn_submitted", eid="evt-kid",
+            spawn_parent_run_id="run-parent", spawned_by_run="run-kid",
+        )
+        assert daemon._strand_return_resumes_held_parent(target) is False
+
     def test_a_strangers_strand_still_accumulates(self, tmp_path):
         held = self._arm(tmp_path)
         target = self._target(
