@@ -327,3 +327,53 @@ def test_format_findings_keeps_every_type_in_a_mixed_set(tmp_path):
     assert "Cites something" in block
     # The inert-pitfall rule text (shared by all three) prints once.
     assert block.count("Add a `trigger:") == 1
+
+
+def test_eviction_preview_names_files_not_heading_fragments(monkeypatch, tmp_path):
+    """The unannounced-pages list is parsed by its backticks, never its separator.
+
+    THE NERVE THAT FIRED GARBAGE (2026-09-09). The wake renders each dropped
+    page as ```path` (heading gist)`` joined with " · " — and the gist is
+    *itself* a " · "-joined list of headings. Splitting the list on the
+    separator therefore shredded every entry into a filename fragment plus a
+    piece of prose, so the block that exists to say "your surfaces are being
+    dropped" spent weeks emitting findings targeted at `surface/+3 more)`,
+    `surface/§Results` and `surface/What survives on purpose` — none of which
+    name a file. Nobody reported it, which is the measurement that matters: a
+    signal nothing can act on is one every reader learns to skip.
+
+    Drive red: restore `.split("·")` in `check_work_surface_eviction` and
+    confirm the fragments come back; restore to keep.
+    """
+    from brr import notes_preflight
+
+    rendered = (
+        "## Work surface\n\n"
+        "_(3 further surface pages omitted — the surface budget was exhausted: "
+        "`shelf/continuity-bench-2026-09-07.md` (§The claim under test · §Results · +1 more) · "
+        "`shelf/host-scrub-2026-08-19.md` (§0 · What survives on purpose · +7 more) · "
+        "`archive/operator-checklist-retired.md` (4 headings) · read them under `/s`)_"
+    )
+
+    class _Trim:
+        text = rendered
+
+    monkeypatch.setattr(
+        notes_preflight, "_build_work_surface_block_scored", None, raising=False
+    )
+    import brr.prompts as prompts_mod
+    monkeypatch.setattr(
+        prompts_mod, "_build_work_surface_block_scored",
+        lambda _root: (_Trim(), None), raising=False,
+    )
+
+    targets = [f.target for f in notes_preflight.check_work_surface_eviction(tmp_path)]
+
+    assert targets == [
+        "surface/shelf/continuity-bench-2026-09-07.md",
+        "surface/shelf/host-scrub-2026-08-19.md",
+        "surface/archive/operator-checklist-retired.md",
+    ]
+    # The exact fragments that shipped, named so a regression is recognisable.
+    for fragment in ("+1 more", "§Results", "What survives on purpose", "4 headings"):
+        assert not any(fragment in t for t in targets)
