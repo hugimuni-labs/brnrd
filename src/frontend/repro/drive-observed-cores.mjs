@@ -114,7 +114,7 @@ runners.profiles = [
 	claude('claude-sonnet', 'sonnet', 'balanced', 30),
 	claude('claude-opus', 'opus', 'strong', 50),
 	claude('claude-fable', 'fable', 'strong', 55),
-	codex('codex-gpt-6-astra', 'gpt-6-astra', null, 1),
+	{ ...codex('codex-gpt-6-astra', 'gpt-6-astra', 'strong', 54), vendor_priority: 1 },
 	codex('codex-mini', 'gpt-5.6-luna', 'economy', 20),
 	codex('codex', null, 'balanced', 25),
 	codex('codex-full', 'gpt-5.6-sol', 'strong', 45),
