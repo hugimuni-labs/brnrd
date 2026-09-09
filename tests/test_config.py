@@ -51,9 +51,10 @@ def test_legacy_runner_pin_is_read_then_migrated_and_ignored(tmp_path, monkeypat
 
     logs = config.migrate_legacy_daemon_config(tmp_path)
 
-    assert load_config(tmp_path)["runner.default"] == "codex-mini"
+    assert load_config(tmp_path)["runner.default"] == "codex-gpt-5.6-luna"
     assert "shell" not in load_config(tmp_path)
     assert any("shell=/core=" in line and "migrated" in line for line in logs)
+    assert any("codex-mini resolved to codex-gpt-5.6-luna" in line for line in logs)
 
 
 def test_config_table_names_the_winning_source(tmp_path, monkeypatch):
