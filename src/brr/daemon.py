@@ -83,6 +83,7 @@ from . import knowledge
 from . import message_store
 from . import menus
 from . import portals
+from . import pause
 from . import presence
 from . import prompts
 from . import codex_status
@@ -4665,6 +4666,11 @@ def _run_worker(
             pass
 
         attempt_started_monotonic = time.monotonic()
+        # Wall-clock twin of the line above: the pause machinery's "since"
+        # fence needs epoch seconds (it compares against `ps`'s `lstart` and
+        # `boundaries.jsonl`'s `at`), and `time.monotonic()` has no fixed
+        # epoch to convert from.
+        attempt_started_wall = time.time()
         # Proof-of-auth for this attempt's runner domain: a live tool
         # boundary means the Shell authenticated, which is a stronger fact
         # than a clean process exit (`_record_runner_auth_health` below,
@@ -4697,7 +4703,27 @@ def _run_worker(
             repo_label=repo_label,
         )
 
+        def _sweep_pause_cap() -> None:
+            """Force-resume any pause past `seat.pause_cap_seconds` (spec
+            step 5): a stopped process is a leak past its cap, not a pause —
+            the correspondent it was frozen for may have moved on ages ago.
+            Runs every heartbeat (10s), cheap when nothing is paused (one
+            file read).
+            """
+            overdue = pause.overdue_records(outbox_dir)
+            if not overdue:
+                return
+            pause.resume_pids(outbox_dir)
+            _record_outbox_notice(
+                outbox_dir,
+                "paused process(es) force-resumed after "
+                f"{_seat_pause_cap_seconds(cfg):.0f}s cap: "
+                f"{pause.describe_paused(overdue)}",
+                kind="advisory", lifetime="run",
+            )
+
         def _emit_heartbeat() -> None:
+            _sweep_pause_cap()
             _refresh_codex_thread_id(task, codex_events_path)
             # Drain first: promoting an interim response is the resident's
             # mid-run check-in, and the partial should reach the gate as
@@ -4856,6 +4882,68 @@ def _run_worker(
                 refresh_levels=False,
             )
 
+        # Pause-not-kill detection (spec step 1): a correspondent message
+        # landing mid-call is a *new* id in this run's own pending-event
+        # view, not merely a nonzero one — an already-known pending event
+        # was there when this attempt started and the resident already knows
+        # to fold it in at the next natural boundary. Seeded on the first
+        # poll of each attempt (never pauses on backlog that predates it),
+        # then any newly-seen id triggers a pause. `claude`-only (codex's
+        # per-call cap behaviour is an unmeasured, named non-goal); silent
+        # no-op otherwise except one log line so the scope is visible rather
+        # than assumed.
+        _pause_seen_ids: set[str] | None = None
+        if runner_name != "claude" and attempt == 1:
+            print(
+                f"[brnrd] pause-on-message: {eid} attempt {attempt} runner "
+                f"{runner_name!r} is not claude — no-op (unmeasured cap "
+                "behaviour, named non-goal)"
+            )
+
+        def _maybe_pause() -> None:
+            nonlocal _pause_seen_ids
+            if runner_name != "claude" or not _seat_pause_on_message(cfg):
+                return
+            if pause.read_paused_record(outbox_dir):
+                return  # a pause is already in effect; wait for its release
+            try:
+                current_ids = {
+                    str(ev.get("id"))
+                    for ev in _pending_events_for_agent(
+                        inbox_dir, eid, strand=is_strand_run,
+                        account_context=account_context,
+                        repo_label=repo_label, observer_run_id=task.id,
+                    )
+                    if ev.get("id")
+                }
+            except Exception:
+                return
+            if _pause_seen_ids is None:
+                _pause_seen_ids = current_ids
+                return
+            new_ids = current_ids - _pause_seen_ids
+            _pause_seen_ids = current_ids
+            if not new_ids:
+                return
+            runner_pid = runner.live_pid_for_label(f"{eid}-")
+            if runner_pid is None:
+                return
+            since_ts = (
+                hooks_mod.last_boundary_epoch(brr_dir / "runs" / task.id)
+                or attempt_started_wall
+            )
+            records = pause.pause_run_children(
+                runner_pid=runner_pid, since_ts=since_ts,
+                outbox_dir=outbox_dir,
+                cap_seconds=_seat_pause_cap_seconds(cfg),
+            )
+            if records:
+                print(
+                    f"[brnrd] {eid}: paused {len(records)} live tool "
+                    f"child(ren) — correspondent message(s) {sorted(new_ids)} "
+                    "arrived mid-call"
+                )
+
         result = _invoke_with_heartbeat(
             env_backend,
             env_ctx,
@@ -4897,6 +4985,7 @@ def _run_worker(
             # spawned child: the user-side affordance exists precisely for
             # the resident thought no parent run can reach.
             should_abort=(lambda: _stopped_run_control(eid) is not None),
+            pause_check=_maybe_pause,
         )
         if result.observed_core:
             task.meta["core_observed"] = result.observed_core
@@ -5571,6 +5660,7 @@ def _invoke_with_heartbeat(
     flush_path: Path | None = None,
     flush_interval: float = _FLUSH_POLL_INTERVAL,
     should_abort=None,
+    pause_check=None,
 ) -> "runner.RunnerResult":
     """Run *env_backend.invoke* in a thread, ticking *on_heartbeat* every
     *interval* seconds while it's alive.
@@ -5581,6 +5671,14 @@ def _invoke_with_heartbeat(
     ``stop:`` dispatch verb, covering the race where the stop lands before
     the child's subprocess registers for a direct kill.
 
+    *pause_check* (optional callable, no args, no return value) is polled at
+    the same cadence, best-effort — the pause-not-kill feature's own hook:
+    unlike *should_abort* it never ends the invocation, it may SIGSTOP one
+    of the invocation's *own* tool-call children (never this subprocess
+    itself). Polled at the flush cadence rather than only the (10x slower)
+    heartbeat interval, because the whole point is reacting to a message
+    that lands *during* a long call, not only at its next natural check-in.
+
     The runner subprocess can sit silent for many minutes — codex with
     xhigh reasoning routinely chews for 5-10 min without emitting any
     daemon-side packets. The heartbeat keeps the chat card alive: each
@@ -5588,7 +5686,6 @@ def _invoke_with_heartbeat(
     callbacks run on the thought thread driving this invocation (the same
     stack that called here), not on the runner's inner thread, so a
     misbehaving callback can't corrupt the in-flight runner.
-
     """
     import threading
 
@@ -5617,6 +5714,8 @@ def _invoke_with_heartbeat(
     poll = min(interval, flush_interval) if flush_path is not None else interval
     if should_abort is not None:
         poll = min(poll, flush_interval)
+    if pause_check is not None:
+        poll = min(poll, flush_interval)
     while worker.is_alive():
         worker.join(timeout=poll)
         if not worker.is_alive():
@@ -5632,6 +5731,13 @@ def _invoke_with_heartbeat(
                 break
             # Abort requested but no subprocess registered yet: keep
             # polling — the kill lands on a later pass once it exists.
+        if pause_check is not None:
+            try:
+                pause_check()
+            except Exception:
+                # Best-effort, same discipline as on_heartbeat: a broken
+                # pause check must never take down a real run.
+                pass
         # Event-driven flush: the runner boundary wrote a request token. Drain
         # first, then acknowledge that exact token. A Tier-2 Stop hook waits on
         # the ack, so deleting the signal *before* the callback (the old shape)
@@ -10084,6 +10190,38 @@ def _cut_mismatches(
                 )
 
     return mismatches
+
+
+#: Config key: whether a claude-Shell run's live tool children get SIGSTOPped
+#: when a correspondent message arrives mid-call (pause-not-kill). On by
+#: default; a codex Shell no-ops regardless (unmeasured cap behaviour, named
+#: non-goal) and says so once in the daemon log rather than silently.
+SEAT_PAUSE_ON_MESSAGE_KEY = "seat.pause_on_message"
+SEAT_PAUSE_ON_MESSAGE_DEFAULT = True
+
+#: Config key: how long a SIGSTOPped process may sit frozen before the
+#: heartbeat sweep treats it as a leak rather than a pause and force-resumes
+#: it with a `notices` advisory. Default matches the claude Bash tool's own
+#: per-call ceiling — past that, whatever correspondent the pause was for
+#: has almost certainly moved on.
+SEAT_PAUSE_CAP_SECONDS_KEY = "seat.pause_cap_seconds"
+SEAT_PAUSE_CAP_SECONDS_DEFAULT = 600
+
+
+def _seat_pause_on_message(cfg: "dict | None") -> bool:
+    raw = (cfg or {}).get(SEAT_PAUSE_ON_MESSAGE_KEY)
+    if raw is None:
+        return SEAT_PAUSE_ON_MESSAGE_DEFAULT
+    return _truthy(raw)
+
+
+def _seat_pause_cap_seconds(cfg: "dict | None") -> float:
+    try:
+        return float(
+            (cfg or {}).get(SEAT_PAUSE_CAP_SECONDS_KEY, SEAT_PAUSE_CAP_SECONDS_DEFAULT)
+        )
+    except (TypeError, ValueError):
+        return SEAT_PAUSE_CAP_SECONDS_DEFAULT
 
 
 #: Config key: a user-woken seat whose turn ends cleanly with nothing armed
@@ -18369,6 +18507,15 @@ def _run_worker_and_finalize(
             # hole. Same reason the node's Produce section already has it: it
             # is rendered during the run, not after it.
             _capture_pr_handle(task, Path(str(task.meta["outbox_path"])))
+            # A run ending while a pause record is still on disk is a leak
+            # (spec step 5): the process it stopped has no daemon left to
+            # ever resume it once the outbox is removed below. Unconditional,
+            # like every other line in this `finally:` — a stopped/crashed/
+            # errored run leaks exactly as easily as a clean one.
+            try:
+                pause.release_all(Path(str(task.meta["outbox_path"])))
+            except Exception as exc:  # noqa: BLE001 - teardown must not fail here
+                print(f"[brnrd] run {task.id}: pause release failed: {exc}")
             _remove_outbox(Path(str(task.meta["outbox_path"])))
         # The main loop clears the inbox wake at the top of every iteration
         # and only reaps `current` (freeing the single-flight slot) once
