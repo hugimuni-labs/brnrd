@@ -1493,10 +1493,31 @@ def test_poison_outbox_file_does_not_wedge_the_flush_tick(tmp_path, monkeypatch)
         newer = time.time() - 4
         os.utime(healthy, (newer, newer))
         (outbox_dir / ".flush").write_text("tok-1379\n", encoding="utf-8")
-        # > 1 `_FLUSH_POLL_INTERVAL` (1.0s) tick, so the real poll loop in
-        # `_invoke_with_heartbeat` observes the flush signal and fires the
-        # real `_emit_flush` while this "runner" is still "alive".
-        time.sleep(1.3)
+
+        # Wait for the real flush tick, don't guess how long it takes.
+        # `_FLUSH_POLL_INTERVAL` is 1.0s so at least one tick has to pass,
+        # and this used to be a flat `time.sleep(1.3)` — which asserted that
+        # a *background thread* had finished inside a wall-clock constant.
+        # Measured 2026-09-10 under a full-suite gate: everything about the
+        # tick was correct and `replies_current` was still 0, because 1.3s
+        # on a loaded box is not the same 1.3s it was on the author's.
+        # A test that pins a duration fails for a reason that is not the
+        # code. Every assertion below still runs against the snapshot, so a
+        # genuine regression times out here and is reported there, by the
+        # assertion that knows what it means.
+        def _flush_tick_landed() -> bool:
+            state = outbox_dir / "portal-state.json"
+            if not state.exists():
+                return False
+            try:
+                parsed = json.loads(state.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                return False  # caught mid-write; look again
+            return bool(parsed.get("outbound", {}).get("replies_current"))
+
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline and not _flush_tick_landed():
+            time.sleep(0.02)
         poisoned_dir = outbox_dir / ".poisoned"
         processed_dir = outbox_dir / ".processed"
         snapshot["poisoned"] = (
