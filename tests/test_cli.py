@@ -2465,10 +2465,30 @@ def test_help_stays_small_enough_to_read():
     from brr.cli import PUBLIC_COMMANDS
 
     # `enable` (#856) briefly took a nineteenth slot; #1746 folded its one
-    # live behaviour (`--borrowed`) into `init` and retired the verb, so
-    # the ceiling reverts to 18 — back in step with cli.py's own
-    # `HIDDEN_COMMANDS` comment on `config`, which names the same number.
-    assert len(PUBLIC_COMMANDS) <= 18
+    # live behaviour (`--borrowed`) into `init` and retired the verb, so the
+    # ceiling stood at 18.
+    #
+    # 21 since 2026-09-10, and the three arguments are recorded here rather
+    # than in a commit message, because this assertion is the thing that
+    # demands them:
+    #
+    #   `config`  — it is the verb that sets every default, and it was
+    #     hidden. Measured from the maintainer's own terminal: `brnrd -h`
+    #     listed sixteen verbs and not one of them was how you set anything.
+    #     A front door that is scannable and tells you nothing about
+    #     configuration is not the property this ceiling protects.
+    #
+    #   `resume` / `drop` (#1881) — the hand-controls for pause-on-message.
+    #     Hidden on 2026-09-10 precisely because nobody had argued for them;
+    #     argued the same day, by the maintainer: after an interruption the
+    #     *user at their own keyboard* is a legitimate caller, and a user
+    #     cannot reach for a verb the front door does not name. Splitting
+    #     them — `resume` public, `drop` hidden — would be worse than either,
+    #     since they are one control with two directions.
+    #
+    # The ceiling worked exactly as designed in all three cases: it caught
+    # verbs that had never been argued for, and moved only once they were.
+    assert len(PUBLIC_COMMANDS) <= 21
 
 
 def test_hidden_commands_parse_but_are_not_listed():
@@ -3869,3 +3889,31 @@ class TestNpxSpelling:
         assert "no AGENTS.md yet" in out
         assert "brnrd init" in out
         assert "npx" not in out
+
+
+def test_a_bare_read_only_noun_answers_instead_of_erroring():
+    """`brnrd runners` lists; it used to raise an argparse error.
+
+    Measured 2026-09-10 in the maintainer's own terminal. Every subcommand
+    under this noun is a read, so there is exactly one sensible answer to
+    "runners, then?" — and refusing to give it is a papercut with no upside.
+
+    The mutating nouns deliberately keep `required=True`: there is no safe
+    default for `brnrd gate` or `brnrd account`, and inventing one there
+    would be the opposite mistake.
+    """
+    action = _subparsers_action()
+    runners = action.choices["runners"]
+
+    parsed = runners.parse_args([])
+    assert parsed.func.__name__ == "cmd_runners_list"
+    assert parsed.json is False and parsed.all is False
+
+    # Same rule one level down, on the verb this change just promoted to the
+    # front door: arriving at `brnrd config` is asking "what is set?", and
+    # `show` answers it without mutating anything.
+    assert action.choices["config"].parse_args([]).func.__name__ == "cmd_config_show"
+
+    for mutating in ("gate", "account", "home", "daemon"):
+        with pytest.raises(SystemExit):
+            action.choices[mutating].parse_args([])
