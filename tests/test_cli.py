@@ -695,14 +695,25 @@ def test_portal_facets_with_live_status(tmp_path, capsys, monkeypatch):
     assert "quota [level, required] — known: weekly 42%" in out
 
 
-def test_portal_facets_json(capsys, monkeypatch):
+def test_portal_facets_json_emits_every_facet_the_schema_declares(
+    capsys, monkeypatch,
+):
+    """The renderer is checked against the schema, not against a copy of it.
+
+    This set used to be six hand-written strings, and it went red the day
+    ``correspondent`` joined ``facets.FACETS`` — reporting a *new facet*
+    as a *broken renderer*, which is the wrong verdict in the wrong file.
+    ``facets`` and ``cli`` are different modules, so deriving one side is
+    still a real cross-check: a renderer that drops, renames, or invents a
+    key relative to the declared schema fails here, and only that fails.
+    """
+    from brr import facets
+
     monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
     assert main(["portal", "facets", "--json"]) == 0
     rows = json.loads(capsys.readouterr().out)
-    assert {r["key"] for r in rows} == {
-        "quota", "spend", "context_window", "coexisting_runs", "remote_scm",
-        "allowance",
-    }
+    assert {r["key"] for r in rows} == {spec.key for spec in facets.FACETS}
+    assert rows, "the schema declares facets; the renderer emitted none"
 
 
 def test_format_portal_state_surfaces_missing_data():
