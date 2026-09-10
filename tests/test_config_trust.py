@@ -564,11 +564,43 @@ def test_cli_config_promote_force_flag_overwrites(monkeypatch, tmp_path, capsys)
     }
 
 
-def test_config_is_hidden_but_still_parses():
-    from brr.cli import HIDDEN_COMMANDS, PUBLIC_COMMANDS
 
-    assert "config" in HIDDEN_COMMANDS
-    assert "config" not in PUBLIC_COMMANDS
+def _cli_subparsers():
+    """The live ``brnrd`` subparsers action — same accessor ``test_cli`` uses."""
+    import argparse
+
+    from brr import cli as cli_mod
+
+    parser = cli_mod.build_parser()
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return action
+    raise AssertionError("no subparsers action on the brnrd parser")
+
+
+def test_config_still_parses_wherever_help_lists_it():
+    """This file's stake in ``config`` is that it *works*, not where it shows.
+
+    Until 2026-09-10 this asserted ``"config" in HIDDEN_COMMANDS``, bare, with
+    no argument attached. The argument was never a security one — `b7418e21`,
+    which introduced both the verb and this pin, gives it in one clause:
+    *"Hidden from --help (the public list is already [at its ceiling])"*. So
+    the fact lived in two places and only one of them, ``test_cli``'s
+    ``test_help_stays_small_enough_to_read``, carried the reasoning — and that
+    is the copy that must win, because a pin that states a decision without
+    its argument cannot tell a considered change from a regression. It reads
+    as a security constraint purely by being in this file.
+
+    A fact stored twice is repaired once. What this file legitimately owns is
+    below: the verb parses, and the trust split still holds regardless of who
+    can see the verb.
+    """
+    from brr.cli import ALL_COMMANDS
+
+    action = _cli_subparsers()
+    assert "config" in ALL_COMMANDS
+    assert "config" in action.choices, "the verb must parse however it is listed"
+    assert action.choices["config"].parse_args([]).func.__name__ == "cmd_config_show"
 
 
 def test_security_config_resolves_the_same_from_a_linked_worktree(
