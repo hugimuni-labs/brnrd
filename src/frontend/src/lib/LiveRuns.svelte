@@ -380,7 +380,9 @@
 							}`}
 							style={`background-color: ${color}; opacity: ${
 								!declaredStopped && lvl === 'running'
-									? (lifecycleNotice(run)?.tone === 'awaiting' ? 0.6 : 1)
+									? lifecycleNotice(run)?.tone === 'awaiting'
+										? 0.6
+										: 1
 									: 0.3
 							}`}
 						></div>
