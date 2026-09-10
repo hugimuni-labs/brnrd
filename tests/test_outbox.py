@@ -80,7 +80,7 @@ class TestDrainOutbox:
                             lambda brr, pkt: emitted.append(pkt))
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-1")
-        task = types.SimpleNamespace(id="task-1")
+        task = types.SimpleNamespace(id="task-1", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-1", outbox)
         return n, responses, outbox, emitted
 
@@ -241,7 +241,7 @@ class TestDrainOutbox:
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-1")
-        task = types.SimpleNamespace(id="task-1")
+        task = types.SimpleNamespace(id="task-1", meta={})
 
         assert daemon._drain_outbox(
             emit, task, responses, "evt-1", outbox) == 0
@@ -316,7 +316,7 @@ class TestDrainOutbox:
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A")
+        task = types.SimpleNamespace(id="task-A", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         assert n == 1
@@ -366,7 +366,7 @@ class TestDrainOutbox:
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A")
+        task = types.SimpleNamespace(id="task-A", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         assert n == 0
@@ -404,7 +404,7 @@ class TestDrainOutbox:
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A")
+        task = types.SimpleNamespace(id="task-A", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         assert n == 1
@@ -436,7 +436,7 @@ class TestDrainOutbox:
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A")
+        task = types.SimpleNamespace(id="task-A", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         assert n == 1
@@ -532,7 +532,7 @@ class TestDrainOutbox:
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A")
+        task = types.SimpleNamespace(id="task-A", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         assert n == 1
@@ -577,7 +577,7 @@ class TestDrainOutbox:
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A")
+        task = types.SimpleNamespace(id="task-A", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         assert n == 0
@@ -616,7 +616,7 @@ class TestDrainOutbox:
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A")
+        task = types.SimpleNamespace(id="task-A", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         assert n == 1
@@ -642,7 +642,7 @@ class TestDrainOutbox:
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A")
+        task = types.SimpleNamespace(id="task-A", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         assert n == 1
@@ -666,7 +666,7 @@ class TestDrainOutbox:
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A")
+        task = types.SimpleNamespace(id="task-A", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         assert n == 0
@@ -684,7 +684,7 @@ class TestDrainOutbox:
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A")
+        task = types.SimpleNamespace(id="task-A", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         # Unconfigured/unknown gate: dropped, not queued (it'd never deliver).
@@ -717,7 +717,7 @@ class TestDrainOutbox:
         )
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A")
+        task = types.SimpleNamespace(id="task-A", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         assert n == 0
@@ -747,7 +747,7 @@ class TestDrainOutbox:
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A")
+        task = types.SimpleNamespace(id="task-A", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         assert n == 0
@@ -763,7 +763,7 @@ class TestDrainOutbox:
         brr_dir = tmp_path / ".brr"
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-1")
-        task = types.SimpleNamespace(id="task-1")
+        task = types.SimpleNamespace(id="task-1", meta={})
         responses = brr_dir / "responses"
         assert daemon._drain_outbox(emit, task, responses, "evt-1", None) == 0
         assert daemon._drain_outbox(
@@ -788,7 +788,7 @@ class TestDrainOutbox:
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         # Same gate as the target (telegram) — the reachable, unchanged path.
-        task = types.SimpleNamespace(id="task-A", source="telegram")
+        task = types.SimpleNamespace(id="task-A", source="telegram", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         assert n == 1
@@ -824,7 +824,7 @@ class TestDrainOutbox:
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="telegram:111:", event_id="evt-A")
         # Same gate as the target (telegram) — the reachable, unchanged path.
-        task = types.SimpleNamespace(id="task-A", source="telegram")
+        task = types.SimpleNamespace(id="task-A", source="telegram", meta={})
 
         daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
@@ -856,7 +856,7 @@ class TestDrainOutbox:
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         # Same gate as the target (telegram) — the reachable, unchanged path.
-        task = types.SimpleNamespace(id="task-A", source="telegram")
+        task = types.SimpleNamespace(id="task-A", source="telegram", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         assert n == 1
@@ -879,7 +879,7 @@ class TestDrainOutbox:
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A")
+        task = types.SimpleNamespace(id="task-A", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         assert n == 1
@@ -911,7 +911,7 @@ class TestDrainOutbox:
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A")
+        task = types.SimpleNamespace(id="task-A", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         # No deliverable target: dropped rather than misrouted.
@@ -940,7 +940,7 @@ class TestDrainOutbox:
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A", source="telegram")
+        task = types.SimpleNamespace(id="task-A", source="telegram", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         assert n == 1
@@ -965,7 +965,7 @@ class TestDrainOutbox:
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A", source="telegram")
+        task = types.SimpleNamespace(id="task-A", source="telegram", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         assert n == 1
@@ -998,7 +998,7 @@ class TestDrainOutbox:
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id=own_id)
-        task = types.SimpleNamespace(id="task-A", source="telegram")
+        task = types.SimpleNamespace(id="task-A", source="telegram", meta={})
         n = daemon._drain_outbox(emit, task, responses, own_id, outbox, inbox)
 
         assert n == 1
@@ -1042,7 +1042,7 @@ class TestDrainOutbox:
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A", source="telegram")
+        task = types.SimpleNamespace(id="task-A", source="telegram", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         assert n == 0
@@ -1097,7 +1097,7 @@ class TestCrossGateReplyRouting:
         monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A", source="telegram")
+        task = types.SimpleNamespace(id="task-A", source="telegram", meta={})
 
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
@@ -1668,7 +1668,7 @@ class TestDrainAgentCard:
                             lambda brr, pkt: emitted.append(pkt))
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="k", event_id="evt-1")
-        task = types.SimpleNamespace(id="task-1")
+        task = types.SimpleNamespace(id="task-1", meta={})
         st = state if state is not None else {}
         result = daemon._drain_agent_card(emit, task, "evt-1", card, st)
         return result, emitted, card, st
@@ -1697,7 +1697,7 @@ class TestDrainAgentCard:
                             lambda brr, pkt: emitted2.append(pkt))
         emit = daemon._WorkerEmit(
             brr_dir=tmp_path / ".brr", conversation_key="k", event_id="evt-1")
-        task = types.SimpleNamespace(id="task-1")
+        task = types.SimpleNamespace(id="task-1", meta={})
         ok2 = daemon._drain_agent_card(emit, task, "evt-1", card, state)
         assert ok2 is False
         assert emitted2 == []
@@ -1714,7 +1714,7 @@ class TestDrainAgentCard:
                             lambda brr, pkt: emitted.append(pkt))
         emit = daemon._WorkerEmit(
             brr_dir=tmp_path / ".brr", conversation_key="k", event_id="evt-1")
-        task = types.SimpleNamespace(id="task-1")
+        task = types.SimpleNamespace(id="task-1", meta={})
         ok2 = daemon._drain_agent_card(emit, task, "evt-1", card, state)
         assert ok2 is True
         assert len(emitted) == 1
@@ -1732,7 +1732,7 @@ class TestDrainAgentCard:
                             lambda brr, pkt: emitted.append(pkt))
         emit = daemon._WorkerEmit(
             brr_dir=tmp_path / ".brr", conversation_key="k", event_id="evt-1")
-        task = types.SimpleNamespace(id="task-1")
+        task = types.SimpleNamespace(id="task-1", meta={})
         ok2 = daemon._drain_agent_card(emit, task, "evt-1", card, state)
         assert ok2 is True
         assert len(emitted) == 1
@@ -1778,7 +1778,7 @@ class TestDrainAgentCard:
                             lambda brr, pkt: emitted.append(pkt))
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="k", event_id="evt-1")
-        task = types.SimpleNamespace(id="task-1")
+        task = types.SimpleNamespace(id="task-1", meta={})
         n = daemon._drain_outbox(emit, task, responses, "evt-1", outbox)
 
         assert n == 1
@@ -3143,7 +3143,7 @@ class TestLiveRunBodyMirror:
         emit = daemon._WorkerEmit(
             brr_dir=tmp_path / ".brr", conversation_key="k", event_id="evt-1",
         )
-        task = types.SimpleNamespace(id="task-1")
+        task = types.SimpleNamespace(id="task-1", meta={})
 
         assert daemon._drain_agent_card(emit, task, "evt-1", card, {}) is True
 
