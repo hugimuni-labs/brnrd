@@ -1437,6 +1437,22 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         klass=DELTA,
     ),
     _BarSegment(
+        "link", "link",
+        "the open priced decision link — what this stretch of the run is "
+        "for, how much of its declared ceiling it has spent, and the warp "
+        "item it is bound to (`link build the chain · 30%/400k · w-56`). "
+        "`link ∅` when nothing is declared, and that is the reading the "
+        "chip exists for: every other element of this bar reports what "
+        "happened, and this one reports whether anybody said what it was "
+        "*for*. Measured 2026-09-10: a run's largest single expenditure was "
+        "holding its seat across a gate — ten `await` calls, no output — "
+        "chosen ten times and never once given a number.",
+        # OBLIGATION because there is an act that turns it off: declaring a
+        # link. `∅` is not wallpaper — it is a standing ask, and the one
+        # thing on this bar a resident can always discharge in one call.
+        klass=OBLIGATION,
+    ),
+    _BarSegment(
         "owed", "owed",
         "outstanding promises — rows in `.promises.jsonl` this run has not "
         "yet matched with produce (`owed 2`). Renders only when the count is "
@@ -3009,6 +3025,23 @@ def _partition_pending_events(
     return action_events, finished_spawns, action_pending
 
 
+def _weighted_spend_now(resources: dict[str, Any] | None) -> int | None:
+    """This run's weighted spend for the link meter, or ``None``.
+
+    ``None``, never ``0`` — an unreadable endpoint is no measurement, and a
+    meter that renders zero claims the open decision has been free.
+    """
+    if not isinstance(resources, dict):
+        return None
+    facet = resources.get("allowance")
+    if isinstance(facet, dict):
+        for key in ("spent_weighted", "spent"):
+            value = facet.get(key)
+            if isinstance(value, int):
+                return value
+    return None
+
+
 def _render_bar(
     *,
     run: dict[str, Any],
@@ -3051,6 +3084,7 @@ def _render_bar(
     route_stall: bool = False,
     mood_drift: bool = False,
     wait_idle: bool = False,
+    link_chip: str | None = None,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: preamble + changed chips + details.
 
@@ -3194,6 +3228,13 @@ def _render_bar(
     course_chip = course.chip(route)
     if course_chip:
         segments.append(("course", course_chip))
+    # Beside `course` on purpose: both answer "what is this run for", one
+    # from the authored route and one from the decision actually open. When
+    # they disagree — a link bound to no item while rows stand open — that
+    # is the divergence, visible in two adjacent chips rather than inferred
+    # from a boundary counter (#1898, and it is what retires the stall nag).
+    if link_chip:
+        segments.append(("link", link_chip))
     # The bolt CHIP retired 2026-08-19 (his call, evt-…-mhrx: "I honestly
     # don't see the value… the bolt should hold the asks, not events"). It
     # counted pending *events* while wearing the word "asks", and restated
@@ -3506,6 +3547,7 @@ def format_delta(
     note_routing: bool = False,
     event_seen: dict[str, dict[str, Any]] | None = None,
     inbox_pointer: str | None = None,
+    outbox_dir: "Path | None" = None,
     gate_receipt_data: dict[str, Any] | None = None,
     plan: "promises.Blueprint | None" = None,
     plan_edge: bool = False,
@@ -3663,7 +3705,21 @@ def format_delta(
         wait_idle = bool(portal_await.get("armed")) and not portal_await.get(
             "resolved"
         )
+        # The outbox is threaded in explicitly rather than derived from
+        # `inbox_pointer`'s parent: a chip that guesses its own coordinate is
+        # a chip that renders confidently against the wrong run's file.
+        link_chip = None
+        if outbox_dir is not None:
+            try:
+                from . import links as links_mod
+
+                link_chip = links_mod.chip(
+                    outbox_dir, spend_now=_weighted_spend_now(resources),
+                )
+            except Exception:  # noqa: BLE001 - a bar chip must never cost a boundary
+                link_chip = None
         return _render_bar(
+            link_chip=link_chip,
             run=run, pending=action_pending, pending_known=pending_known,
             pending_files=pending_files,
             events=action_events,
@@ -5535,6 +5591,7 @@ def compute_neutral(
                 portal, mood=mood, surprise=edge,
                 census=census,
                 event_seen=event_decisions, inbox_pointer=inbox_pointer,
+                outbox_dir=ctx.outbox_dir,
                 gate_receipt_data=gate_receipt_data,
                 plan=plan, plan_edge=plan_edge,
                 ambient_emit=ambient_emit,
