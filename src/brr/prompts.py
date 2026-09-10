@@ -6180,6 +6180,9 @@ def _format_forge_state(forge: Any) -> str:
     default_branch = forge.get("default_branch")
     lines: list[str] = ["Forge state (local, network-free):"]
     lines.append(f"- {forge_state.render_prod_line(forge.get('prod'))}")
+    # Beside prod's, because prod's answers a different hop and reads as
+    # though it answered this one (#1896).
+    lines.append(f"- {forge_state.render_daemon_line()}")
 
     worktrees = forge.get("worktrees")
     worktree_summary = forge_state.summarize_worktrees(worktrees)
