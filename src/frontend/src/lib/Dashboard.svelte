@@ -51,6 +51,7 @@
 		fetchLiveRuns,
 		heartbeatLevel,
 		liveRunDisplayName,
+		liveRunStatusLabel,
 		wordmarkMood,
 		type DaemonMood,
 		type LiveRun
@@ -1137,7 +1138,13 @@
 		if (live) {
 			const lvl = heartbeatLevel(live.last_seen, now, liveRunsStale);
 			return {
-				status: lvl === 'running' && live.phase ? live.phase : lvl,
+				// Same ranking as the LiveRuns grid, from the same helper — a
+				// declared status outranks freshness inferred from silence. The
+				// panel already shared `heartbeatLevel` so the two surfaces could
+				// not disagree about liveness; sharing only *that* let them
+				// disagree about state, and this panel said `unknown` over a seat
+				// that had parked on purpose.
+				status: liveRunStatusLabel(live, lvl),
 				name: liveRunDisplayName(live),
 				context: live.label
 					? `${live.repo_label || 'unknown repo'} · ${live.kind || 'run'}`

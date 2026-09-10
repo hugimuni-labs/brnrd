@@ -6,10 +6,12 @@
 	import MoodChip from './MoodChip.svelte';
 	import {
 		edgeLine,
+		hasDeclaredStoppedStatus,
 		heartbeatLevel,
 		lifecycleNotice,
 		liveRelicChips,
 		liveRunDisplayName,
+		liveRunStatusLabel,
 		moodFace,
 		roomLine,
 		runCourse,
@@ -92,12 +94,6 @@
 		stalling: STATUS_WARN,
 		unknown: STATUS_UNKNOWN
 	};
-	const LEVEL_LABEL: Record<'running' | 'stalling' | 'unknown', string> = {
-		running: 'running',
-		stalling: 'stalling',
-		unknown: 'unknown'
-	};
-
 	// THE FACE IN THREE TENSES, piece 2: display-time collision re-roll. This
 	// grid is exactly the surface the maintainer named — several runs sharing
 	// one screen — so the glyph now comes from the *window* (this render's
@@ -113,29 +109,16 @@
 		return heartbeatLevel(lastSeen, now, stale);
 	}
 
-	// #200's remaining slice: the heartbeat-freshness label above only ever
-	// said "running" while a thought worked — real lifecycle phase
-	// (queued/preparing/finalizing/delivering/attending/...) was invisible.
-	// A live, non-stalling row now prefers the real phase reported by
-	// `run_progress.project_run` (`cloud.py::_live_runs_snapshot`); a
-	// stalling/unknown/phaseless row keeps the generic freshness label —
-	// "stalling" is more informative than a stale phase reading.
+	// A declared parked or terminal status outranks heartbeat freshness. For a
+	// still-working run, #200's live phase/lifecycle rules remain in force.
 	function label(run: LiveRun, lvl: 'running' | 'stalling' | 'unknown'): string {
-		// The lifecycle notice outranks the generic phase: AWAIT and CLOSING
-		// are the states a reader must not mistake for ordinary work
-		// (maintainer, 2026-08-25: "display awaiting and closing very
-		// specifically"), and the wire now says them positively.
-		if (lvl === 'running') {
-			const notice = lifecycleNotice(run);
-			if (notice) return notice.word;
-			if (run.phase) return run.phase;
-		}
-		return LEVEL_LABEL[lvl];
+		return liveRunStatusLabel(run, lvl);
 	}
 
-	// AWAIT cools the card's status color; STARTING recedes. CLOSING keeps
-	// the burning color — it is still this run's own motion.
+	// Parked/final rows recede: their silent heartbeat is deliberate, not a
+	// warning. AWAIT cools the live status; STARTING recedes.
 	function labelColor(run: LiveRun, lvl: 'running' | 'stalling' | 'unknown'): string {
+		if (hasDeclaredStoppedStatus(run.status)) return STATUS_UNKNOWN;
 		if (lvl === 'running') {
 			const tone = lifecycleNotice(run)?.tone;
 			if (tone === 'awaiting') return STATUS_WARN;
@@ -181,6 +164,7 @@
 					? `${run.repo_label || 'unknown repo'} · ${run.kind || 'run'}`
 					: run.repo_label || 'unknown repo'}
 				{@const lvl = level(run.last_seen)}
+				{@const declaredStopped = hasDeclaredStoppedStatus(run.status)}
 				{@const color = labelColor(run, lvl)}
 				{@const room = roomLine(run.room)}
 				{@const edgeText = edgeLine(run.edge)}
@@ -216,7 +200,10 @@
 							<span class="flex min-w-0 items-center gap-1.5">
 								<span
 									class="inline-block h-2 w-2 shrink-0 rounded-full"
-									style={statusDotStyle(lvl === 'stalling' ? 'cooling' : 'burning', color)}
+									style={statusDotStyle(
+										declaredStopped ? 'unknown' : lvl === 'stalling' ? 'cooling' : 'burning',
+										color
+									)}
 									aria-hidden="true"
 								></span>
 								<span
@@ -385,14 +372,18 @@
 						     listening, deliberately quiet — a quiet state looks quiet. -->
 						<div
 							class={`h-full ${
-								lvl !== 'running'
+								declaredStopped || lvl !== 'running'
 									? 'w-full'
 									: lifecycleNotice(run)?.tone === 'awaiting'
 										? 'w-1/3 animate-[loom-scan_6s_ease-in-out_infinite]'
 										: 'w-1/3 animate-[loom-scan_1.4s_ease-in-out_infinite]'
 							}`}
 							style={`background-color: ${color}; opacity: ${
-								lvl === 'running' ? (lifecycleNotice(run)?.tone === 'awaiting' ? 0.6 : 1) : 0.3
+								!declaredStopped && lvl === 'running'
+									? lifecycleNotice(run)?.tone === 'awaiting'
+										? 0.6
+										: 1
+									: 0.3
 							}`}
 						></div>
 					</div>
