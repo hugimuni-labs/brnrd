@@ -152,9 +152,9 @@ def test_the_control_file_is_dot_prefixed(tmp_path):
     "argv, needle",
     [
         (["--link", "x"], "--link requires --why"),
-        (["--link", "x", "--why", "y", "--boundary", "lots"], "not a token count"),
+        (["--link", "x", "--why", "y", "--cut-at", "lots"], "not a token count"),
         (["--why", "orphan"], "--why given with no --link"),
-        (["--boundary", "1k"], "--boundary given with no --link"),
+        (["--cut-at", "1k"], "--cut-at given with no --link"),
         (["--link-item", "w-1"], "--link-item given with no --link"),
         (["--link", "x", "--why", "y", "--link-close"], "already closes the open one"),
     ],
@@ -179,7 +179,7 @@ def test_open_and_close_through_the_cli(tmp_path, capsys):
         "do", "--outbox", str(tmp_path),
         "--link", "build the priced decision chain",
         "--why", "his ask, personally",
-        "--boundary", "400k",
+        "--cut-at", "400k",
     ]) == 0
     out = capsys.readouterr().out
     assert "link opened: build the priced decision chain" in out
@@ -196,3 +196,77 @@ def test_open_and_close_through_the_cli(tmp_path, capsys):
 
     assert main(["do", "--outbox", str(tmp_path), "--link-close"]) == 0
     assert "nothing open" in capsys.readouterr().out
+
+# ── the cut: what a breached ceiling leaves behind ──────────────────
+
+
+def test_a_breached_ceiling_writes_a_handoff_nobody_asked_for(tmp_path):
+    """The resident who blew past the ceiling is the one least likely to stop.
+
+    His refinement, after the first two links closed at +15% and +367%: a
+    ceiling that only reports is inert, and one that halts gets set high by
+    everyone who wants to keep working. The third option is that passing it
+    leaves a successor something to pick up.
+    """
+    from brr import links as links_mod
+
+    links_mod.open_link(tmp_path, intent="a thing", why="w", boundary=100, spend=0)
+    row = links_mod.open_row(tmp_path)
+    assert links_mod.over_boundary(row, spend_now=470) is True
+
+    path = links_mod.write_cut(tmp_path, row, spend_now=470)
+    assert path is not None and path.parent.name == links_mod.CUT_DIRNAME
+    body = path.read_text(encoding="utf-8")
+    assert "a thing" in body and "why: w" in body
+
+
+def test_an_unstated_remainder_says_so_rather_than_reading_as_finished(tmp_path):
+    """The one thing no record can supply is what remains.
+
+    Silence there would read as completion — which is the failure this whole
+    module is about, one level up.
+    """
+    from brr import links as links_mod
+
+    links_mod.open_link(tmp_path, intent="x", why="w", boundary=10, spend=0)
+    row = links_mod.open_row(tmp_path)
+
+    blank = links_mod.render_cut(row, spend_now=99)
+    assert "Not stated" in blank
+    assert "never as done" in blank
+
+    stated = links_mod.render_cut(row, spend_now=99, rest="the chip renderer")
+    assert "the chip renderer" in stated
+    assert "Not stated" not in stated
+
+
+def test_unmeasurable_spend_is_never_a_breach(tmp_path):
+    """A missing measurement must not manufacture a handoff.
+
+    `None` is not "over" and not "under" — it is *unknown*, and a cut written
+    on unknown would tell a successor the work stopped somewhere it did not.
+    """
+    from brr import links as links_mod
+
+    links_mod.open_link(tmp_path, intent="x", why="w", boundary=10, spend=None)
+    assert links_mod.over_boundary(links_mod.open_row(tmp_path), spend_now=None) is False
+
+
+def test_the_chip_moves_in_tenths_not_on_every_boundary(tmp_path):
+    """A chip that re-renders every boundary is `seen ×N` with better arithmetic.
+
+    The meter is rounded to a tenth of its ceiling on purpose: ten steps over
+    a link's life is enough to be interrupted by and few enough to be worth
+    reading. The change-gate upstream compares chip *text*, so an unrounded
+    meter would defeat it every single time.
+    """
+    from brr import links as links_mod
+
+    links_mod.open_link(tmp_path, intent="x", why="w", boundary=1_000_000, spend=0)
+
+    seen = {links_mod.chip(tmp_path, spend_now=n) for n in range(0, 1_000_000, 7_919)}
+    assert len(seen) == 10, sorted(seen)
+
+    over = links_mod.chip(tmp_path, spend_now=1_400_000)
+    assert "⚠ over" in over
+    assert "1.4m/1m" in over, "past the ceiling the real number replaces the fraction"
