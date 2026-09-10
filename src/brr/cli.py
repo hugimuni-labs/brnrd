@@ -866,11 +866,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="one line: why this decision is worth its cost (only with "
              "--link). Required — the line is the point of the verb")
     do_p.add_argument(
-        "--boundary", default=None, metavar="TOKENS",
+        "--cut-at", dest="cut_at", default=None, metavar="TOKENS",
         help="the ceiling you are committing to for this link (integer, or "
-             "120k/2m — `allowance:` grammar). Reported when passed, never "
-             "enforced: a boundary that stopped a run would be set high by "
-             "everyone, and a boundary nobody sets honestly measures nothing")
+             "120k/2m — `allowance:` grammar). Nothing halts at it: passing it "
+             "makes the link project a handoff into .cut/, named in the "
+             "output. A ceiling that stopped a run would be set high by "
+             "everyone; one that only reported would be inert")
     do_p.add_argument(
         "--link-item", default=None, metavar="ITEM-ID",
         help="bind this link to a warp item that exists, so the item "
@@ -885,6 +886,12 @@ def build_parser() -> argparse.ArgumentParser:
     do_p.add_argument(
         "--link-note", default=None, metavar="TEXT",
         help="a closing line on the link (with --link-close)")
+    do_p.add_argument(
+        "--cut", dest="cut_rest", nargs="?", const="", default=None,
+        metavar="WHAT-REMAINS",
+        help="write the link's handoff into .cut/ on close, with what "
+             "remains — the one thing no record can supply. Automatic when "
+             "the ceiling was passed; the text stays yours either way")
     do_p.add_argument(
         "--note", dest="note", action="append", default=None,
         metavar="EVENT-ID",
@@ -3085,7 +3092,7 @@ def _run_weighted_spend(outbox_dir) -> "int | None":
 
 
 def _do_link(
-    outbox_dir, *, intent, why, boundary, item, close, note,
+    outbox_dir, *, intent, why, boundary, item, close, note, rest=None,
 ) -> "tuple[str | None, bool]":
     """Open or close a decision link. ``(None, False)`` = refused, nothing written.
 
@@ -3102,11 +3109,24 @@ def _do_link(
 
     if close:
         spend = _run_weighted_spend(outbox_dir)
+        breached = links_mod.over_boundary(
+            links_mod.open_row(outbox_dir), spend_now=spend,
+        )
         row = links_mod.close_link(outbox_dir, note=note, spend=spend)
         if row is None:
             return ("link ∅ (nothing open)", True)
         used = links_mod.spent(row)
         tail = f" · {allowance_mod.format_tokens(used)}" if used is not None else ""
+        # A breach writes the handoff whether or not one was asked for: the
+        # whole point of the ceiling is that passing it leaves something a
+        # successor can pick up, and a resident who blew past it is exactly
+        # the one least likely to stop and ask for the file.
+        if breached or rest is not None:
+            path = links_mod.write_cut(outbox_dir, row, rest=rest or None)
+            if path is not None:
+                tail += f" · cut to {path}"
+                if breached and not rest:
+                    tail += " (what remains: unstated)"
         return (f"link closed: {row.get('intent')}{tail}", True)
 
     ceiling = None
@@ -3338,7 +3358,7 @@ def cmd_do(args):
         return 1
     for flag, value in (
         ("--why", getattr(args, "why", None)),
-        ("--boundary", getattr(args, "boundary", None)),
+        ("--cut-at", getattr(args, "cut_at", None)),
         ("--link-item", getattr(args, "link_item", None)),
     ):
         if value and not link_open:
@@ -3440,10 +3460,11 @@ def cmd_do(args):
                 outbox_dir,
                 intent=link_open,
                 why=getattr(args, "why", None),
-                boundary=getattr(args, "boundary", None),
+                boundary=getattr(args, "cut_at", None),
                 item=getattr(args, "link_item", None),
                 close=link_close,
                 note=getattr(args, "link_note", None),
+                rest=getattr(args, "cut_rest", None),
             )
             if seg is None:
                 return 1
