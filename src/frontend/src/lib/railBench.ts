@@ -16,7 +16,8 @@ export interface EnvironmentDisplay {
 
 /**
  * #1516: the environment lane's own "default"/"default" collision — the
- * rack's twin, fixed in #1515 (`SpoolRack.coreLabel`). Against an
+ * rack's twin, fixed in #1515 (`SpoolRack`'s core half, folded into
+ * `headline()` by #1876). Against an
  * environment literally named `host · default` (the ordinary case on a
  * host-environment account), the old code built one string —
  * `` `${environment_default} · default}` `` in the slim bar, `` `default —

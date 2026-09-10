@@ -153,25 +153,11 @@
 		return platform ? `${platform} thread` : 'thread';
 	}
 
-	/** The core half of the row, distinct from the pin badge's "default":
-	 *  this answers "which core", the badge answers "who wakes next" — see
-	 *  the module doc for why a row could otherwise print "default" twice
-	 *  meaning two different things. Vocabulary matches `runner.py` /
-	 *  `run_ledger.py`: "None"/"default" means *unpinned*. */
-	function coreLabel(profile: RunnerProfile): string {
-		if (profile.model && profile.model !== profile.shell) return profile.model;
-		return 'unpinned';
-	}
-
-	/** The vendor's own id for the core, as the Shell last attested it on
-	 *  the run ledger (`fable` → `claude-fable-5-1`). Absent when no run has
-	 *  attested one, or when the alias already is the vendor id (codex) —
-	 *  the alias then stands alone, which is the honest reading. */
-	function observedLabel(profile: RunnerProfile): string | null {
-		const observed = profile.observed_model ?? null;
-		if (!observed || observed === profile.model) return null;
-		return observed;
-	}
+	/* `coreLabel` / `observedLabel` lived here until 2026-09-10. #1876 folded
+	 * both readings into `headline()` (the visible half) and `observedTitle()`
+	 * (the hover half); the two helpers were left behind, computed by nobody.
+	 * CI never said so: the Lint step is `prettier --check . && eslint .`, and
+	 * prettier was failing first, so eslint had not run on `main` in a day. */
 
 	function observedTitle(profile: RunnerProfile): string {
 		const at = profile.observed_at ? ` · last attested ${profile.observed_at}` : '';
@@ -237,9 +223,12 @@
 	function feedTruth(profile: RunnerProfile): string | null {
 		if (profile.feed_state === 'last-known') {
 			const age = profile.feed_age_seconds;
-			return age == null ? 'last known feed entry' : `last known feed entry · ${Math.floor(age / 3600)}h old`;
+			return age == null
+				? 'last known feed entry'
+				: `last known feed entry · ${Math.floor(age / 3600)}h old`;
 		}
-		if (profile.feed_state === 'expired') return 'feed entry expired · pinned role remains explicit';
+		if (profile.feed_state === 'expired')
+			return 'feed entry expired · pinned role remains explicit';
 		if (profile.feed_state === 'not-listed') return 'not listed in the measured feed';
 		return null;
 	}
@@ -458,14 +447,15 @@
 									title={open ? 'hide detail' : 'why this row — rank, quota source, capability'}
 									class="text-ink-quiet hover:text-ink-mute">{open ? '▾' : '▸'} detail</button
 								>
-									{/if}
-									{#if feedTruth(profile)}
-										<span
-											class={profile.feed_state === 'last-known' ? 'text-amber-500' : 'text-ink-mute'}
-											title={profile.feed_last_seen_at ? `last feed observation ${profile.feed_last_seen_at}` : undefined}
-											>{feedTruth(profile)}</span
-										>
-									{/if}
+							{/if}
+							{#if feedTruth(profile)}
+								<span
+									class={profile.feed_state === 'last-known' ? 'text-amber-500' : 'text-ink-mute'}
+									title={profile.feed_last_seen_at
+										? `last feed observation ${profile.feed_last_seen_at}`
+										: undefined}>{feedTruth(profile)}</span
+								>
+							{/if}
 						</div>
 						{#if open}
 							<div

@@ -106,6 +106,14 @@ HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "config", "emotes",
     "relic", "gate-run", "close-check", "promise", "mood", "do", "notes",
     "await", "cut", "legend", "item", "goal", "queue", "envoy",
+    # `resume` / `drop` (#1881, `10be5f34`) act on a *paused live tool
+    # child* — the inside of the SIGSTOP mechanic, reached when a person is
+    # already staring at a stopped subprocess. They arrived listed, which
+    # would have made the front door 20 verbs deep and pushed
+    # `test_help_stays_small_enough_to_read`'s stated ceiling of 18 past
+    # the point the noun consolidation set it at. Hidden is the default a
+    # verb gets until someone argues it into a slot; nobody argued.
+    "resume", "drop",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -941,8 +949,12 @@ def build_parser() -> argparse.ArgumentParser:
     # call the daemon SIGSTOPped for a correspondent message. No daemon
     # round-trip — `.paused.json` already names the real OS pid, and
     # `src/brr/pause.py`'s signal primitives are shared with the daemon.
+    # Hidden per HIDDEN_COMMANDS: no `help=`, which is the only thing
+    # argparse reads when deciding what `brnrd --help` lists. `description=`
+    # keeps `brnrd resume --help` self-explaining.
     resume_p = sub.add_parser(
-        "resume", help="resume a paused live tool child (SIGCONT)")
+        "resume",
+        description="resume a paused live tool child (SIGCONT)")
     resume_p.add_argument(
         "pid", nargs="?", type=int, default=None,
         help="resume only this pid (default: every paused pid)")
@@ -954,8 +966,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     drop_p = sub.add_parser(
         "drop",
-        help="give up on a paused live tool child: SIGCONT, SIGTERM, "
-             "then SIGKILL any survivor after 5s")
+        description="give up on a paused live tool child: SIGCONT, SIGTERM, "
+                    "then SIGKILL any survivor after 5s")
     drop_p.add_argument(
         "pid", nargs="?", type=int, default=None,
         help="drop only this pid (default: every paused pid)")
@@ -5613,23 +5625,23 @@ def cmd_config_promote(args):
             tag = ""
         print(f"  {key}={plan.moves[key]!r}{tag}")
 
-    if plan.profiles_move is not None:
-        source, dest = plan.profiles_move
-        if plan.profiles_conflict:
-            tag = (
-                "  (--force: replaces the existing home copy)"
-                if args.force
-                else "  (CONFLICTS with the existing home copy — needs --force)"
-            )
-        else:
-            tag = ""
+    if plan.profiles_moves:
         print("[brnrd config promote] moving runner profiles:")
-        print(f"  {source} -> {dest}{tag}")
+        for source, dest in plan.profiles_moves:
+            if dest.exists():
+                tag = (
+                    "  (--force: replaces the existing home copy)"
+                    if args.force
+                    else "  (CONFLICTS with the existing home copy — needs --force)"
+                )
+            else:
+                tag = ""
+            print(f"  {source} -> {dest}{tag}")
 
     if (plan.conflicts or plan.profiles_conflict) and not args.force:
         print(
             "[brnrd config promote] refusing to overwrite differing "
-            "security.config value(s) or an existing home runners.md "
+            "security.config value(s) or an existing home profile catalog "
             "without --force"
         )
         return 2
@@ -5647,8 +5659,10 @@ def cmd_config_promote(args):
     done = []
     if plan.moves:
         done.append(f"{len(plan.moves)} promoted key(s)")
-    if plan.profiles_move is not None:
-        done.append("the runner profile catalog")
+    if plan.profiles_moves:
+        done.append(
+            f"{len(plan.profiles_moves)} runner profile catalog(s)"
+        )
     print(
         f"[brnrd config promote] done — {plan.security_path.parent} holds "
         f"{' and '.join(done)}, mode 0600"
