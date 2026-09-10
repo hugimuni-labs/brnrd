@@ -56,9 +56,10 @@ RETIRED_COMMANDS = {
 #: Verbs listed by ``brnrd --help`` — the user-facing surface.
 PUBLIC_COMMANDS = (
     "init", "run", "review", "up", "down",
-    "daemon", "gate", "account", "home",
+    "daemon", "gate", "account", "home", "config",
     "kb", "docs", "portal", "runners", "bench", "agent", "ergonomics",
     "completions", "gc",
+    "resume", "drop",
 )
 
 #: Verbs that parse but are hidden from ``--help``.
@@ -103,17 +104,9 @@ PUBLIC_COMMANDS = (
 # onto the bolt — the run-completion declaration, sibling of ``do``/``await``
 # in shape and reasoning: a live-wake verb, not an operator's terminal.
 HIDDEN_COMMANDS = (
-    "prompts", "hook", "statusline", "worktree-hygiene", "config", "emotes",
+    "prompts", "hook", "statusline", "worktree-hygiene", "emotes",
     "relic", "gate-run", "close-check", "promise", "mood", "do", "notes",
     "await", "cut", "legend", "item", "goal", "queue", "envoy",
-    # `resume` / `drop` (#1881, `10be5f34`) act on a *paused live tool
-    # child* — the inside of the SIGSTOP mechanic, reached when a person is
-    # already staring at a stopped subprocess. They arrived listed, which
-    # would have made the front door 20 verbs deep and pushed
-    # `test_help_stays_small_enough_to_read`'s stated ceiling of 18 past
-    # the point the noun consolidation set it at. Hidden is the default a
-    # verb gets until someone argues it into a slot; nobody argued.
-    "resume", "drop",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -442,8 +435,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Hidden per HIDDEN_COMMANDS above (help ceiling, not obscurity) — omit
     # `help=` here too, or it leaks into the listing despite the constant.
-    config_p = sub.add_parser("config")
-    config_sub = config_p.add_subparsers(dest="config_command", required=True)
+    config_p = sub.add_parser(
+        "config", help="show and set the knobs — runner default, seat, spawn")
+    # Bare `brnrd config` shows, for the same reason bare `brnrd runners`
+    # lists: a person arriving at this noun is asking "what is set?", and
+    # `show` is that question's answer and mutates nothing. The nouns with no
+    # single obvious read — `gate`, `account`, `home`, `daemon` — keep
+    # `required=True`, because inventing a default *there* would be the
+    # opposite mistake.
+    config_sub = config_p.add_subparsers(dest="config_command")
+    config_p.set_defaults(func=cmd_config_show)
 
     p = config_sub.add_parser(
         "promote",
@@ -978,12 +979,8 @@ def build_parser() -> argparse.ArgumentParser:
     # call the daemon SIGSTOPped for a correspondent message. No daemon
     # round-trip — `.paused.json` already names the real OS pid, and
     # `src/brr/pause.py`'s signal primitives are shared with the daemon.
-    # Hidden per HIDDEN_COMMANDS: no `help=`, which is the only thing
-    # argparse reads when deciding what `brnrd --help` lists. `description=`
-    # keeps `brnrd resume --help` self-explaining.
     resume_p = sub.add_parser(
-        "resume",
-        description="resume a paused live tool child (SIGCONT)")
+        "resume", help="resume a paused live tool child (SIGCONT)")
     resume_p.add_argument(
         "pid", nargs="?", type=int, default=None,
         help="resume only this pid (default: every paused pid)")
@@ -995,8 +992,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     drop_p = sub.add_parser(
         "drop",
-        description="give up on a paused live tool child: SIGCONT, SIGTERM, "
-                    "then SIGKILL any survivor after 5s")
+        help="give up on a paused live tool child: SIGCONT, SIGTERM, "
+             "then SIGKILL any survivor after 5s")
     drop_p.add_argument(
         "pid", nargs="?", type=int, default=None,
         help="drop only this pid (default: every paused pid)")
@@ -1095,7 +1092,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     runners_p = sub.add_parser(
         "runners", help="inspect configured Shell/Core runner profiles")
-    runners_sub = runners_p.add_subparsers(dest="runners_command", required=True)
+    # Bare `brnrd runners` lists, rather than raising an argparse error
+    # (measured 2026-09-10, the maintainer's own terminal). Every subcommand
+    # under this noun is a read, so there is one obvious answer to "runners,
+    # then?" and erroring instead of giving it is a papercut with no upside.
+    # Mutating nouns keep `required=True` deliberately — there is no safe
+    # default for `brnrd gate` or `brnrd account`, and guessing one there
+    # would be the opposite mistake.
+    runners_sub = runners_p.add_subparsers(dest="runners_command")
+    runners_p.set_defaults(func=cmd_runners_list, json=False, all=False)
 
     p = runners_sub.add_parser(
         "list",
