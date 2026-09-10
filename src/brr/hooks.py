@@ -960,10 +960,15 @@ def _has_post_tool_obligations(
     which is a coarser axis than the bar segments' own OBLIGATION/DELTA/
     VITAL/AMBIENT class (see `SEGMENT_CLASS`) — most of the list below do
     have a discharge condition the resident can act on (pending events,
-    stale card, overdue armed letters, unmet blueprint promise edge, running
-    long); refused directives are the counted exception (#1266 audit: `!N`
+    stale card, overdue armed letters, unmet blueprint promise edge);
+    refused directives are the counted exception (#1266 audit: `!N`
     is DELTA-classed precisely because reading `notices` cannot clear it,
     yet a fresh refusal still must not go silent, so it stays listed here).
+    A long-running budget is deliberately *not* here (#1897): by this
+    module's own partition rule ("is there an act that turns it off?") a
+    long run has no discharging act, which makes it VITAL, and VITAL never
+    bypasses dedup — it used to force this function true anyway, with no
+    line anywhere rendering the obligation it was forcing dedup open for.
     Pure ambient content (quota %, elapsed time, orientation progress) opens
     nothing on its own.
 
@@ -1020,9 +1025,6 @@ def _has_post_tool_obligations(
         if isinstance(schedule_facet.get("armed"), list) else []
     )
     if any(_armed_entry_is_due(e) for e in armed if isinstance(e, dict)):
-        return True
-    budget = portal.get("budget") if isinstance(portal.get("budget"), dict) else {}
-    if budget.get("long_running"):
         return True
     if plan is not None and plan_edge and plan.owed:
         return True
@@ -1309,11 +1311,13 @@ class _BarSegment:
 #: choices, so a resident (or a human skimming several bars) learns it once.
 #: Every segment renders only when laden/changed; a quiet boundary emits a
 #: short bar with just a handful of these. Deliberately *not* here: pending
-#: events, a stale/blank ``.card``'s reason, an unwritten ``.name``, and a
-#: "running long" warning — those are obligations, and burying an obligation
-#: in a glyph is exactly the failure this vocabulary exists to avoid, so they
-#: stay full detail lines below the bar (see :func:`_render_bar`) instead of
-#: a segment here.
+#: events, a stale/blank ``.card``'s reason, and an unwritten ``.name`` —
+#: those are obligations, and burying an obligation in a glyph is exactly
+#: the failure this vocabulary exists to avoid, so they stay full detail
+#: lines below the bar (see :func:`_render_bar`) instead of a segment here.
+#: (A "running long" warning was once claimed here too; #1897 found no line
+#: anywhere ever rendered it — removed from this list along with the
+#: obligation-forcing and streak that made it act like it existed.)
 BAR_SEGMENTS: tuple[_BarSegment, ...] = (
     # The `run` id chip retired 2026-08-19 (w-54): the id is ambient context
     # the reader already has, and the bar's anchor role moved to the static
@@ -1552,6 +1556,22 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
 SEGMENT_CLASS: dict[str, str] = {
     **{segment.key: segment.klass for segment in BAR_SEGMENTS},
     "pending_unknown": OBLIGATION,
+    # #1897: these five are appended straight into `_render_bar`'s
+    # `segments` list (never through `BAR_SEGMENTS`, so the derivation
+    # above never saw them) — the vocabulary this dict claims to be
+    # complete over was missing a fifth of what the renderer actually
+    # emits. Classified here beside `pending_unknown` for the same reason.
+    "allowance": VITAL,  # a meter — the strand/seat's own spend-vs-ceiling reading.
+    "context_delta": VITAL,  # a meter — cost of this stretch since the last boundary.
+    "room": AMBIENT,  # the resident's own tempo note, echoed verbatim, never parsed.
+    # Forced never-suppressed via `edge_due["paused"] = True` below — the
+    # record stands until resume/drop clears it, which is obligation
+    # behaviour; this makes the label match what the code already does.
+    "paused": OBLIGATION,
+    # Content deliberately change-gated per #1594 (seen-only pending events
+    # collapse to this chip rather than re-opening the bar) — a genuine
+    # discharge condition (the count returns to zero), so OBLIGATION.
+    "pending": OBLIGATION,
 }
 
 # _KEPT_WHEN_QUIET and the `run` id chip retired with w-54 (2026-08-19):
@@ -2439,11 +2459,18 @@ EVENTS_SEEN_ALL_KEY = "events_seen_all_ids"
 PENDING_SENTENCE_SET_KEY = "pending_sentence_set"
 
 # Hook-state key: per-detail-line consecutive-render streak, for the
-# compression-on-repeat rule (#1116 residue, design-the-live-loop.md §1). One
-# entry per compressible OBLIGATION detail line (``notices`` / ``running_long``
-# / ``name_nudge`` / ``card_stale``): incremented every laden boundary the
-# line is due, reset to 0 the moment it is not — so "3rd+ consecutive laden
-# boundary" is a plain counter comparison, not a content diff.
+# compression-on-repeat rule (#1116 residue, design-the-live-loop.md §1).
+# One entry per key actually bumped at the call site (`_bump_repeat_streaks`'s
+# caller in `run_hook`): ``notices`` (compressed into the compact `!N · seen
+# ×N` form at `_REPEAT_COMPRESS_THRESHOLD`) and ``card_stale`` (streak kept
+# for state, no longer rendered as a `seen ×N` suffix — #1897 dropped that).
+# ``running_long`` and ``name_nudge`` were once claimed here too; #1897 found
+# neither had a line that ever rendered them — retired from this comment
+# along with ``running_long``'s obligation-forcing (see
+# `_has_post_tool_obligations`) and streak bump. Incremented every laden
+# boundary the line is due, reset to 0 the moment it is not — so "3rd+
+# consecutive laden boundary" is a plain counter comparison, not a content
+# diff.
 REPEAT_COUNTS_KEY = "detail_repeat_counts"
 
 #: Below this consecutive-streak count a compressible detail line renders in
@@ -3055,6 +3082,13 @@ def _render_bar(
     card: dict[str, Any],
     card_stale: bool,
     resources: dict[str, Any],
+    # Unused in this function's body (#1897): the `.name: still unwritten`
+    # nudge this was meant to feed lives only in the seed/stop prose arm
+    # (`run_name` there is a separate local, read straight off `payload`) —
+    # the mid-run bar never grew a `name_nudge` line to read this. Left as a
+    # parameter rather than removed: `format_delta` threads it through from
+    # its own `run_name` local at the call site, and trimming it here is a
+    # caller-touching change out of scope for this fix.
     run_name: dict[str, Any],
     mood: str | None,
     surprise: str | None = None,
@@ -3109,9 +3143,9 @@ def _render_bar(
 
     Builds the fixed :data:`BAR_SEGMENTS` chips left to right, then appends
     detail lines *only* for new obligations — non-zero pending events, a
-    stale/blank card's reason, an unwritten ``.name``, running long — the
-    same guardrail this whole redesign exists to keep (#513: "never bury an
-    obligation in a glyph"). Returns ``None`` when nothing here is worth a
+    stale/blank card's reason, an unwritten ``.name`` — the same guardrail
+    this whole redesign exists to keep (#513: "never bury an obligation in
+    a glyph"). Returns ``None`` when nothing here is worth a
     turn, mirroring the mid-run gate the old prose form kept: mere resource
     or produce chatter must not manufacture an injection by itself.
 
@@ -3387,7 +3421,6 @@ def _render_bar(
     ):
         details.append(allowance_line)
 
-    streaks = repeat_streaks_in
     # The card nudge, reshaped (his call, 2026-09-06: "the card is an
     # indicator; almost useless in chat, still a gauge on the web UI — the
     # current shape of the nudge is wrong"). Two silences, one line:
@@ -3407,14 +3440,29 @@ def _render_bar(
     # When it does speak: one line of state, no instruction — what moved,
     # not "rewrite .card". The old three-way split (streak-compressed /
     # named-movement / "no change, rewrite anyway") collapses to this one
-    # shape; ``seen ×N`` survives only as the bare number.
+    # shape (his call, 2026-09-10: report state, not a verdict — the
+    # ``seen ×N`` suffix is gone, not just quieter).
+    #
+    # ``_card_acts_behind`` deliberately excludes replies (the reply *is*
+    # the authored act) — so a card that fell behind on a reply, or on any
+    # other movement outside its own tracked universe, yields ``acts = 0``.
+    # #1897: that used to render "last written 0 acts ago" — a fake count
+    # asserting the card was just written when it was the opposite. Nothing
+    # to name ⇒ name the two times ``_card_is_behind`` itself compared
+    # instead of inventing a count.
     if not wait_idle and _card_is_behind(card):
         acts, breakdown = _card_acts_behind(produce, outbound, pending)
-        streak = streaks.get("card_stale", 0)
-        seen = f" · seen ×{streak}" if streak else ""
-        noun = "act" if acts == 1 else "acts"
-        what = f" ({breakdown})" if breakdown else ""
-        details.append(f"- card ## Now: last written {acts} {noun} ago{what}{seen}")
+        if acts:
+            noun = "act" if acts == 1 else "acts"
+            what = f" ({breakdown})" if breakdown else ""
+            details.append(f"- card ## Now: last written {acts} {noun} ago{what}")
+        else:
+            age_txt = _fmt_age(card.get("age_seconds"))
+            moved_txt = _fmt_age(card.get("state_moved_seconds"))
+            if age_txt and moved_txt:
+                details.append(
+                    f"- card ## Now: written {age_txt} ago · state moved {moved_txt} ago"
+                )
 
     # ── The due-filter (w-54): change-gating replaces the laden gate. ──
     #
@@ -5568,8 +5616,7 @@ def compute_neutral(
         pt_card = portal.get("card") if isinstance(portal.get("card"), dict) else {}
         repeat_streaks = _bump_repeat_streaks(state, {
             "notices": bool(_counted_notices(pt_notices)),
-            "running_long": bool(pt_budget.get("long_running")),
-            "card_stale": bool(pt_card.get("stale")),
+            "card_stale": _card_is_behind(pt_card),
         })
 
         # Gate: open when there is something to say.  Obligations bypass the

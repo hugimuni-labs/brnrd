@@ -5875,6 +5875,89 @@ def test_every_bar_segment_declares_its_class():
     assert hooks.SEGMENT_CLASS["pending_unknown"] == hooks.OBLIGATION
 
 
+def test_every_emitted_chip_is_classified():
+    """#1897: the superset check above (`set(SEGMENT_CLASS) >= {s.key for s
+    in BAR_SEGMENTS}`) can never see a key `_render_bar` emits *outside*
+    `BAR_SEGMENTS` — which is exactly how `allowance` / `context_delta` /
+    `room` / `paused` / `pending` went unclassed for as long as they did,
+    `paused` while behaving like a forced-never-suppressed obligation the
+    whole time. Drive the renderer with every optional emitter switched on,
+    collect the keys it actually emitted, and assert *that* set — not the
+    fixed vocabulary — is covered.
+    """
+    from brr import course, promises
+
+    plan = promises.blueprint([{"what": "commit", "count": 2}], {"commit": 1})
+    route = course.parse("## Plan\n- [ ] an open row\n")
+
+    resources = {
+        "allowance": {
+            "status": "known", "tokens": 120_000, "spent": 38_000,
+            "pct": 31.7, "scope": "resident",
+        },
+        "quota": {
+            "status": "known", "summary": "session 57% left",
+            "draws": {
+                "self": 1_200_000,
+                "strands": [{"run_id": "run-a", "title": "t", "weighted": 900_000}],
+            },
+            "hold": {"ratio": 0.8, "known": True},
+        },
+        "context_window": {"status": "known", "summary": "62% context left (est)"},
+        "coexisting_runs": {"status": "known", "siblings": [{"run_id": "run-x"}]},
+        "correspondent": {
+            "status": "known", "quiet_seconds": 999, "summary": "quiet 16m",
+        },
+    }
+
+    rendered: dict[str, str] = {}
+    line = hooks._render_bar(
+        run={},
+        pending=2, pending_known=True, pending_files=1,
+        events=[{"id": "evt-1", "source": "telegram", "summary": "hi"}],
+        budget={"elapsed_seconds": 700, "budget_seconds": 3600},
+        outbound={"replies_current": 1, "replies_other": 2, "outbound_messages": 1},
+        produce={"known": True, "counts": {"commit": 3, "kb": 1}},
+        card={
+            "active": True, "stale": True,
+            "age_seconds": 900, "state_moved_seconds": 500,
+        },
+        card_stale=True,
+        resources=resources,
+        run_name={},
+        mood="fo.cus",
+        surprise="Bash ✗",
+        census="wake 100 KB",
+        notices=[{"kind": "refused", "lifetime": "run"}],
+        finished_spawns=[],
+        armed=[],
+        gate_receipt_data={"verdict": "GREEN", "head": "abc1234"},
+        # `%` is "context left", so a *higher* prior reads as growth.
+        context_prior={"value": 75.0, "unit": "%"},
+        room="live, fast",
+        paused="waiting on you",
+        plan=plan, plan_edge=True,
+        route=route, route_edge=True, route_prompt=True,
+        bolt_asks_total=1, bolt_edge=True,
+        repeat_streaks={"notices": 1, "card_stale": 1},
+        pending_set_changed=True,
+        rendered_chips=rendered,
+        wait_idle=False,
+    )
+    assert line is not None
+    # `allowance_directive` is documented to never appear in `segments`
+    # itself (it gates a detail line, not a chip) but is still persisted
+    # into `rendered_chips` for the next boundary's change-gate — excluded
+    # here for the same reason it is excluded from `BAR_SEGMENTS`.
+    emitted = set(rendered) - {"allowance_directive"}
+    # A real fixture, not a token one: enough distinct chips fired that a
+    # missing classification is actually exercised, including all five
+    # keys this fix adds.
+    assert {"allowance", "context_delta", "room", "paused", "pending"} <= emitted
+    assert len(emitted) >= 15, emitted
+    assert emitted <= set(hooks.SEGMENT_CLASS), emitted - set(hooks.SEGMENT_CLASS)
+
+
 def test_a_quiet_boundary_drops_even_the_vitals_once_seen():
     """The maintainer's w-54 rule, rendered: everything renders on change.
 
@@ -6246,25 +6329,41 @@ def test_name_nudge_detail_is_retired():
         assert rendered is None or ".name" not in rendered
 
 
-def test_card_nudge_names_acts_and_a_bare_streak_number():
-    """Reshaped 2026-09-06 (his call: "the current shape of the nudge is
-    wrong"): no more streak-compressed alternate wording at N>=3 — one line,
-    always, naming what moved past the card's last write; ``seen ×N`` is a
-    bare number riding the same line, not a threshold-gated compression."""
+def test_card_nudge_names_acts_with_no_streak_suffix():
+    """Reshaped twice now: 2026-09-06 dropped the streak-compressed
+    alternate wording; 2026-09-10 (#1897, his call: "agreed on the now some
+    minutes old") drops the ``seen ×N`` suffix entirely — report state, not
+    a verdict, and the streak number is not state. One line, always, naming
+    what moved past the card's last write."""
     payload = _bar_payload(
         card={"active": True, "stale": True, "age_seconds": 900,
               "state_moved_seconds": 500},
     )
-    early = hooks.format_delta(payload, repeat_streaks={"card_stale": 1})
-    later = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
-    unseen = hooks.format_delta(payload, repeat_streaks={"card_stale": 0})
     # replies no longer count: each delivered reply projects into the card
     # itself (THE SAID BLOCK, 2026-09-08)
     receipt = "- card ## Now: last written 4 acts ago (3 commits, 1 kb page)"
-    assert f"{receipt} · seen ×1" in early
-    assert f"{receipt} · seen ×3" in later
-    assert receipt in unseen
-    assert "seen ×" not in unseen
+    for streak in (0, 1, 3):
+        rendered = hooks.format_delta(payload, repeat_streaks={"card_stale": streak})
+        assert rendered is not None
+        assert receipt in rendered
+        assert "seen ×" not in rendered
+
+
+def test_card_nudge_reports_a_time_fact_when_nothing_tracked_moved():
+    """#1897: a card behind on a reply (or any movement outside produce/
+    delivery/pending) yields ``acts == 0`` from `_card_acts_behind` — that
+    used to render the self-contradicting "last written 0 acts ago". Now it
+    names the two times `_card_is_behind` itself compared instead."""
+    payload = _bar_payload(
+        card={"active": True, "stale": True, "age_seconds": 900,
+              "state_moved_seconds": 500},
+        produce={"known": True, "counts": {}},
+        outbound={"replies_current": 1, "replies_other": 0, "outbound_messages": 0},
+    )
+    rendered = hooks.format_delta(payload, repeat_streaks={"card_stale": 1})
+    assert rendered is not None
+    assert "0 acts" not in rendered
+    assert "- card ## Now: written 15m ago · state moved 8m ago" in rendered
 
 
 def test_card_nudge_silent_while_a_wait_is_armed():
