@@ -128,6 +128,22 @@ _UNANNOUNCED_RE = re.compile(
     r"exhausted: (?P<pages>.+?) · read them under",
     re.MULTILINE | re.DOTALL,
 )
+#: Each entry in that list is ``\`path\` (heading gist)``, joined with " · "
+#: (``prompts._build_work_surface_block_scored``). **The gist contains " · "
+#: too** — it is itself a joined list of headings (``§The claim under test ·
+#: §Results · +1 more``) — so splitting the list on the separator shreds every
+#: entry into a filename fragment and a piece of prose. That is what shipped:
+#: findings targeted at ``surface/+3 more)``, ``surface/§Results`` and
+#: ``surface/What survives on purpose``, none of which name a file, in every
+#: wake for weeks. The backticks are the real delimiter and they cannot occur
+#: inside a path — read those instead of trusting the separator.
+#: Anchored to an entry boundary — the start of the list, or a " · "
+#: separator — so a backtick *inside* a gist can never open a page. The
+#: producer also strips backticks from heading text
+#: (``prompts._page_heading_gist``); this is the same invariant enforced
+#: from the reading side, because a parser that fabricates on unexpected
+#: input is how the first version of this shipped for weeks.
+_UNANNOUNCED_PAGE_RE = re.compile(r"(?:^|·\s)`([^`]+)`")
 
 
 # ── 0. The scan's own scope ──────────────────────────────────────────
@@ -630,8 +646,8 @@ def check_work_surface_eviction(repo_root: Path) -> list[Finding]:
         dropped.append((match.group("page"), f"{match.group('bytes')} B"))
     unannounced = _UNANNOUNCED_RE.search(text)
     if unannounced:
-        for part in unannounced.group("pages").split("·"):
-            page = part.strip().strip("`")
+        for page in _UNANNOUNCED_PAGE_RE.findall(unannounced.group("pages")):
+            page = page.strip()
             if page:
                 dropped.append((page, ""))
     if not dropped:
