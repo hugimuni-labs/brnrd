@@ -1548,6 +1548,7 @@ _LIVE_RUN_STRING_BOUNDS = {
     "phase": 32,
     "repo_label": 256,
     "run_id": 64,
+    "status": 16,
     "stream": 256,
 }
 

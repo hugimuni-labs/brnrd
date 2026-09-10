@@ -41,6 +41,7 @@
     "mood": 64,
     "mood_glyph": 16,
     "mood_rest": 16,
-    "lifecycle": 16
+    "lifecycle": 16,
+    "status": 16
   }
 }
