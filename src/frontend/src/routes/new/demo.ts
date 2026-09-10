@@ -212,10 +212,14 @@ export function loadBalanceDemoFrames(): LiveRun[][] {
 			loadBalanceResident({
 				edge: edge('orient', 'Claude · keep architecture + acceptance', '2026-09-09T19:18:10Z')
 			}),
-			codexPass({ edge: edge('mutate', 'Codex · edit + run focused tests', '2026-09-09T19:18:20Z') })
+			codexPass({
+				edge: edge('mutate', 'Codex · edit + run focused tests', '2026-09-09T19:18:20Z')
+			})
 		],
 		[
-			loadBalanceResident({ edge: edge('probe', 'Claude · review Codex diff', '2026-09-09T19:20:30Z') }),
+			loadBalanceResident({
+				edge: edge('probe', 'Claude · review Codex diff', '2026-09-09T19:20:30Z')
+			}),
 			codexPass({ edge: edge('publish', 'Codex · commit implementation', '2026-09-09T19:20:10Z') })
 		],
 		[

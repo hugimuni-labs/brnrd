@@ -621,8 +621,21 @@ def facet_value(facet: dict[str, object] | None) -> str:
     value (a PR handle or a summary); the empty states name themselves and carry
     their reason in parentheses — substantially more legible than a flat
     "unavailable".
+
+    Two different silences used to collapse into that flat word, which is the
+    one rendering this helper exists to avoid.  They are told apart now:
+
+    * **no record at all** — an optional facet at a call site that wires no
+      collector for it (``required=False``, ``resources.get(key)`` → ``None``).
+      Nothing is wrong; nobody measured.  A reader who cannot tell this from a
+      broken collector goes looking for a bug that is not there.
+    * **a status this renderer does not know** — a newer daemon's vocabulary
+      reaching an older reader.  ``unavailable`` is honest there, and the
+      unrecognised word is named rather than swallowed, because the reader's
+      next move is to find out who is speaking it.
     """
-    facet = facet if isinstance(facet, dict) else {}
+    if not isinstance(facet, dict) or not facet:
+        return f"{ABSENT} (not reported by this call site)"
     status = facet.get("status")
     if status == KNOWN:
         if facet.get("pr_number"):
@@ -630,8 +643,11 @@ def facet_value(facet: dict[str, object] | None) -> str:
         summary = str(facet.get("summary") or "").strip()
         return summary or "known"
     note = str(facet.get("note") or "").strip()
-    state = status if status in {ABSENT, UNIMPLEMENTED} else "unavailable"
-    return f"{state} ({note})" if note else str(state)
+    if status in {ABSENT, UNIMPLEMENTED}:
+        return f"{status} ({note})" if note else str(status)
+    unknown = str(status or "").strip()
+    reason = note or (f"unrecognised status {unknown!r}" if unknown else "")
+    return f"unavailable ({reason})" if reason else "unavailable"
 
 
 def render_line(resources: dict[str, object] | None) -> str | None:

@@ -978,6 +978,132 @@ def _render_origin_relationship(relationship: Any) -> str:
     return ""
 
 
+#: When this module was imported — the closest honest stand-in for "when the
+#: process running this code started". Captured at import rather than read at
+#: render, because the question is *which code is speaking*, and that was
+#: settled the moment the interpreter loaded it (#1896).
+_PROCESS_STARTED_AT = datetime.now(timezone.utc)
+
+#: The commit the running process's code was read from, resolved once and
+#: memoised for the process's life. ``False`` = resolved and unavailable
+#: (installed rather than checked out), distinct from ``None`` = not yet
+#: resolved. The distinction matters: a failed resolution must not retry on
+#: every heartbeat, and must not silently render as "no daemon line".
+_PROCESS_COMMIT: str | None | bool = None
+
+
+def _code_checkout_root() -> Path | None:
+    """The git checkout this module's code was read from, if any."""
+    root = Path(__file__).resolve().parent
+    for candidate in (root, *root.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _process_commit() -> str | None:
+    """The commit this process's own code came from, or ``None``.
+
+    Deliberately *not* re-read per render. Re-reading would answer "where is
+    the checkout now", which is a different question and the exact confusion
+    #1896 is about: a wake that showed a stale findings block beside a line
+    reading ``matches origin/main``, because that line described the hosted
+    deploy and nothing described the process that built the block.
+    """
+    global _PROCESS_COMMIT
+    if _PROCESS_COMMIT is not None:
+        return _PROCESS_COMMIT or None
+    candidate = _code_checkout_root()
+    if candidate is not None:
+        try:
+            out = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=candidate,
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            out = None
+        if out is not None and out.returncode == 0 and (sha := out.stdout.strip()):
+            _PROCESS_COMMIT = sha
+            return sha
+    _PROCESS_COMMIT = False
+    return None
+
+
+def _checkout_head(repo_root: Path | None) -> str | None:
+    """Where the checkout is *now* — read fresh, on purpose."""
+    if repo_root is None:
+        return None
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo_root,
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    sha = out.stdout.strip()
+    return sha if out.returncode == 0 and sha else None
+
+
+def _commits_between(repo_root: Path, old: str, new: str) -> int | None:
+    try:
+        out = subprocess.run(
+            ["git", "rev-list", "--count", f"{old}..{new}"], cwd=repo_root,
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    try:
+        return int(out.stdout.strip())
+    except ValueError:
+        return None
+
+
+def render_daemon_line(repo_root: Path | None = None) -> str:
+    """The provenance of the code that assembled *this* wake (#1896).
+
+    Sibling of :func:`render_prod_line`, and the reason it exists: ``prod:``
+    describes the hosted deploy, so a reader meeting ``matches origin/main``
+    on the same screen as a stale wake block has every reason to conclude the
+    block is what current code produces. It is not — the daemon is a
+    long-lived process holding whatever it imported at start, and a wake-time
+    fix is invisible to the next wake until it restarts. Measured 2026-09-10:
+    #1888 merged 10:21Z, the 12:06Z wake still carried the bug it fixed, and
+    the process had held that module in memory since 23:58:59 the night
+    before.
+
+    The ``⇒ wake-time fixes not live`` clause is the whole point of the line:
+    a silent invalidation of the only read-back a resident has for daemon-side
+    work becomes a sentence a wake can read.
+    """
+    started = _PROCESS_STARTED_AT.strftime("%H:%MZ")
+    commit = _process_commit()
+    if repo_root is None:
+        # The checkout whose movement can invalidate *this* process is the one
+        # its code was read from — not whatever repo a caller happens to hold.
+        repo_root = _code_checkout_root()
+    if not commit:
+        # Installed rather than checked out — say which of the two unknowns
+        # this is, never omit the line and leave the prod line answering for it.
+        return f"daemon: installed build (started {started}) · commit unavailable"
+    bits = [f"daemon: {commit[:8]} (started {started})"]
+    head = _checkout_head(repo_root)
+    if head and head != commit:
+        ahead = _commits_between(repo_root, commit, head) if repo_root else None
+        if ahead:
+            noun = "commit" if ahead == 1 else "commits"
+            bits.append(
+                f"checkout {ahead} {noun} ahead ⇒ wake-time fixes not live"
+            )
+        else:
+            # Moved, but not simply forward (a rebase, a different branch).
+            bits.append("checkout has moved ⇒ wake-time fixes not live")
+    elif head:
+        bits.append("checkout matches")
+    return " · ".join(bits)
+
+
 def render_prod_line(prod: Any, *, now: datetime | None = None) -> str:
     """The one-line prod fingerprint, its own absence or staleness included.
 

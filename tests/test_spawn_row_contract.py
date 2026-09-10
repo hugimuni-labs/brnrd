@@ -158,17 +158,45 @@ def test_the_row_says_where_an_unset_core_is_priced():
         "the spawn row names `core:` but never says that omitting it falls "
         "back to a configured default (#1086)"
     )
-    assert "read it" in lowered and "never remember it" in lowered, (
-        "the row prices an unset `core:` from memory instead of pointing at "
-        "the injected Runner catalog. A remembered default is always the last "
-        "regime's — this row said 'the strongest local Core' for weeks after "
-        "the account default became a balanced one, and this assertion is the "
-        "thing that kept it there."
+
+    # Isolate the `core:` clause. The row is `·`-separated; the clause that
+    # prices an unset core is the one naming both `core:` and a default.
+    clauses = [c.strip() for c in lowered.split("·")]
+    core_clause = next(
+        (c for c in clauses if "core:" in c and "unset" in c), ""
     )
-    assert "strongest" not in lowered, (
-        "the row is naming a specific Core class as the default again. The "
-        "default is whatever `.brr/config` currently resolves to; state where "
-        "to read it, never what it says."
+    assert core_clause, (
+        "no clause in the spawn row prices an unset `core:` at all — "
+        f"clauses were {clauses!r}"
+    )
+
+    # The property is the *pointer*, not the sentence. This assertion read
+    # `"never remember it" in lowered` until 2026-09-10, when the wording
+    # moved to "never memorise a number" and a test whose own docstring
+    # says "a guard that string-matches a value cannot survive the value
+    # changing" went red on a synonym while the rule it names was intact.
+    # One read-verb, inside the clause that owes it.
+    assert "read" in core_clause, (
+        "the row prices an unset `core:` from memory instead of pointing at "
+        "the injected Runner catalog. A remembered default is always the "
+        f"last regime's. The clause was: {core_clause!r}"
+    )
+
+    # The load-bearing negative, and the one #1086 actually cost: the row
+    # must not *name* a class. Derived from the catalog rather than the one
+    # word "strongest", so a class added later is guarded the day it exists.
+    from brr import runner
+
+    classes = {
+        str(fields.get("class") or "").strip().lower()
+        for fields in runner._load_profiles(None).values()
+    } - {""}
+    assert classes, "the bundled catalog declares no classes to guard against"
+    named = sorted(c for c in classes if c in core_clause)
+    assert not named, (
+        f"the row names Core class(es) {named} as the default again. The "
+        "default is whatever `.brr/config` currently resolves to; state "
+        f"where to read it, never what it says. Clause: {core_clause!r}"
     )
 
 

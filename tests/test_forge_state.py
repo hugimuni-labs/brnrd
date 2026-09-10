@@ -527,11 +527,13 @@ def test_format_forge_state_renders_prod_line_even_with_nothing_else():
     line that always has something to say (2026-07-30 task)."""
     rendered = prompts._format_forge_state(
         {"worktrees": [], "threads": [], "prod": {"configured": False}}
-    )
-    assert rendered == (
-        "Forge state (local, network-free):\n"
-        "- prod: unknown — no cloud gate configured"
-    )
+    ).splitlines()
+    # Rows, not one byte-equal blob: this test's subject is *that the block
+    # renders when it has nothing else to say*, and pinning the whole string
+    # made it report an added provenance row (#1896) as a broken renderer.
+    assert rendered[0] == "Forge state (local, network-free):"
+    assert "- prod: unknown — no cloud gate configured" in rendered
+    assert any(row.startswith("- daemon: ") for row in rendered), rendered
 
 
 # ── #721: worktrees of this repo outside .brr/worktrees/ ─────────────
@@ -1233,3 +1235,93 @@ def test_the_daemon_actually_feeds_the_deploy_lane_cache():
         "the deploy-run refresh drifted away from the PR-cache refresh it "
         "shares a cadence contract with"
     )
+
+
+# ── The daemon's own provenance (#1896) ─────────────────────────────
+
+
+def test_daemon_line_names_the_running_process_not_the_checkout(tmp_path):
+    """The line answers "which code is speaking", and only that.
+
+    #1896: a wake showed a findings block from code merged out of existence
+    two hours earlier, beside a `prod:` line reading `matches origin/main`.
+    That line described the hosted deploy. Nothing described the process that
+    built the block — which had held the module in memory since the previous
+    night. This pin exists so the two hops can never be confused again.
+    """
+    from brr import forge_state as fs
+
+    original = fs._PROCESS_COMMIT
+    try:
+        fs._PROCESS_COMMIT = "a" * 40
+        line = fs.render_daemon_line(repo_root=None)
+    finally:
+        fs._PROCESS_COMMIT = original
+
+    assert line.startswith("daemon: aaaaaaaa"), line
+    assert "started" in line
+
+
+def test_daemon_line_says_when_the_checkout_has_moved_past_the_process(tmp_path):
+    """The clause that carries the whole value of the line.
+
+    Without it a resident's only read-back for daemon-side work — *look at the
+    next wake* — is silently invalid across a merge, which is how a broken
+    wake block survived for weeks.
+    """
+    from brr import forge_state as fs
+
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    started_at = commit_files(repo, {"a.txt": "one\n"}, message="first")
+    head = commit_files(repo, {"a.txt": "two\n"}, message="second")
+
+    original = fs._PROCESS_COMMIT
+    try:
+        fs._PROCESS_COMMIT = started_at
+        moved = fs.render_daemon_line(repo_root=repo)
+        fs._PROCESS_COMMIT = head
+        matching = fs.render_daemon_line(repo_root=repo)
+    finally:
+        fs._PROCESS_COMMIT = original
+
+    assert "1 commit ahead" in moved, moved
+    assert "wake-time fixes not live" in moved, moved
+    assert "checkout matches" in matching, matching
+    assert "not live" not in matching, matching
+
+
+def test_daemon_line_is_present_even_when_the_commit_is_unresolvable(tmp_path):
+    """An installed build says *which* unknown it is.
+
+    Omitting the line would leave `prod:` as the only provenance on the
+    screen — the exact arrangement that misled a reader in the first place.
+    """
+    from brr import forge_state as fs
+
+    original = fs._PROCESS_COMMIT
+    try:
+        fs._PROCESS_COMMIT = False
+        line = fs.render_daemon_line(repo_root=None)
+    finally:
+        fs._PROCESS_COMMIT = original
+
+    assert line.startswith("daemon:"), line
+    assert "commit unavailable" in line
+
+
+def test_both_wake_renderers_carry_the_daemon_line():
+    """A control on one verb ⇒ walk the others first.
+
+    `prompts._format_forge_state` and `run_context._render_forge_state` are
+    twins that have drifted before; the wake and the recovery context must not
+    disagree about which code wrote them.
+    """
+    from brr import prompts, run_context
+
+    forge = {"prod": None, "default_branch": "main"}
+    for rendered in (
+        prompts._format_forge_state(forge),
+        run_context._render_forge_state(forge),
+    ):
+        assert "daemon: " in rendered, rendered

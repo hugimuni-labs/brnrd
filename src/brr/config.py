@@ -59,6 +59,15 @@ DAEMON_CONFIG_FILENAME = "daemon.config"
 PROFILES_FILENAME = "runners.toml"
 LEGACY_PROFILES_FILENAME = "runners.md"
 
+#: Repo-side profile catalogs ``brnrd config promote`` moves into the
+#: daemon-owned home, **format-preserving**: each file keeps its own name,
+#: because the home-side reader picks its parser from that name
+#: (``runner._profiles_source``: ``runners.toml`` via ``tomllib``,
+#: ``runners.md`` via the one-release frontmatter shim). Moving a Markdown
+#: catalog to the ``.toml`` name would promote a working profile straight
+#: into a parse error.
+PROMOTABLE_PROFILE_FILENAMES = (PROFILES_FILENAME, LEGACY_PROFILES_FILENAME)
+
 # Settings that govern the daemon process rather than one repository.  Prefix
 # families are deliberate: a new dispatch/seat/spawn knob must not quietly
 # fall back into a repo-writable file just because this list was not updated.
@@ -772,13 +781,16 @@ class PromotePlan:
     with a *different* value than ``.brr/config`` holds; applying over a
     conflict requires ``force=True``.
 
-    ``profiles_move`` is the ``(source, destination)`` pair for a repo-side
-    ``runners.md`` (#693) — the *file* half of the same migration, carried
+    ``profiles_moves`` holds one ``(source, destination)`` pair per repo-side
+    profile catalog (#693) — the *file* half of the same migration, carried
     on this plan rather than a second command because an operator whose
     profile stopped working should not have to learn two verbs to fix it.
-    ``None`` when there is no repo-side profile file, or no home to move it
-    into. ``profiles_conflict`` is the file analogue of ``conflicts``: a
-    ``runners.md`` already sitting in the home, which ``force=True``
+    Every pair is format-preserving (``PROMOTABLE_PROFILE_FILENAMES``), and
+    a repo carrying both formats promotes both: moving one and leaving the
+    other would render as a completed migration that silently was not.
+    Empty when there is no repo-side profile file, or no home to move it
+    into. ``profiles_conflict`` is the file analogue of ``conflicts``: at
+    least one destination already sitting in the home, which ``force=True``
     overwrites and a bare run refuses.
     """
 
@@ -786,13 +798,13 @@ class PromotePlan:
     moves: dict[str, Any] = field(default_factory=dict)
     conflicts: dict[str, tuple[Any, Any]] = field(default_factory=dict)
     remaining_repo_cfg: dict[str, Any] = field(default_factory=dict)
-    profiles_move: tuple[Path, Path] | None = None
+    profiles_moves: tuple[tuple[Path, Path], ...] = ()
     profiles_conflict: bool = False
 
     @property
     def is_empty(self) -> bool:
         """Whether this plan would change nothing at all."""
-        return not self.moves and self.profiles_move is None
+        return not self.moves and not self.profiles_moves
 
 
 def plan_promote(repo_root: Path) -> PromotePlan:
@@ -808,11 +820,13 @@ def plan_promote(repo_root: Path) -> PromotePlan:
     }
     remaining = {k: v for k, v in repo_cfg.items() if k not in to_move}
 
-    # The file half (#693). Only the modern location is *promoted*: the
-    # legacy `.brr/prompts/runners.md` is still reported as ignored, but
-    # moving it silently would mean promoting a file the user may have
-    # forgotten they wrote, into the one domain nothing else may write.
-    profiles_move: tuple[Path, Path] | None = None
+    # The file half (#693). Both catalog formats are promoted, each under
+    # its own name — see PROMOTABLE_PROFILE_FILENAMES. Only `.brr/<name>`
+    # is moved: the deeper `.brr/prompts/runners.md` is still reported as
+    # ignored, but moving it silently would mean promoting a file the user
+    # may have forgotten they wrote, into the one domain nothing else may
+    # write.
+    profiles_moves: list[tuple[Path, Path]] = []
     profiles_conflict = False
     if sec_path is not None:
         from . import gitops
@@ -821,18 +835,20 @@ def plan_promote(repo_root: Path) -> PromotePlan:
             brr_dir = gitops.shared_brr_dir(repo_root)
         except Exception:  # noqa: BLE001 - non-repo invocations have nothing to move
             brr_dir = repo_root / ".brr"
-        repo_profiles = brr_dir / LEGACY_PROFILES_FILENAME
-        if repo_profiles.exists():
-            dest = sec_path.parent / LEGACY_PROFILES_FILENAME
-            profiles_move = (repo_profiles, dest)
-            profiles_conflict = dest.exists()
+        for name in PROMOTABLE_PROFILE_FILENAMES:
+            repo_profiles = brr_dir / name
+            if not repo_profiles.exists():
+                continue
+            dest = sec_path.parent / name
+            profiles_moves.append((repo_profiles, dest))
+            profiles_conflict = profiles_conflict or dest.exists()
 
     return PromotePlan(
         security_path=sec_path,
         moves=to_move,
         conflicts=conflicts,
         remaining_repo_cfg=remaining,
-        profiles_move=profiles_move,
+        profiles_moves=tuple(profiles_moves),
         profiles_conflict=profiles_conflict,
     )
 
@@ -841,7 +857,7 @@ def apply_promote(repo_root: Path, plan: PromotePlan, *, force: bool = False) ->
     """Apply *plan* (from :func:`plan_promote`).
 
     Idempotent: rerunning after a successful promote recomputes an empty
-    ``plan.moves`` and a ``None`` ``profiles_move`` (the keys are gone from
+    ``plan.moves`` and an empty ``profiles_moves`` (the keys are gone from
     ``.brr/config``, the file is gone from ``.brr/``), so applying it is a
     no-op. Raises :class:`ConfigPromoteError` rather than clobbering an
     existing differing ``security.config`` value or an existing home-side
@@ -869,8 +885,11 @@ def apply_promote(repo_root: Path, plan: PromotePlan, *, force: bool = False) ->
             + ", ".join(sorted(plan.conflicts))
         )
     if plan.profiles_conflict and not force:
+        clashing = ", ".join(
+            str(dest) for _src, dest in plan.profiles_moves if dest.exists()
+        )
         raise ConfigPromoteError(
-            f"{plan.security_path.parent / LEGACY_PROFILES_FILENAME} already exists — "
+            f"{clashing} already exists — "
             "merge the two profile catalogs by hand, or re-run with --force to "
             "replace the home copy with the repo one"
         )
@@ -882,8 +901,7 @@ def apply_promote(repo_root: Path, plan: PromotePlan, *, force: bool = False) ->
         _write_flat(plan.security_path, merged_security, mode=0o600)
         write_config(repo_root, plan.remaining_repo_cfg)
 
-    if plan.profiles_move is not None:
-        source, dest = plan.profiles_move
+    for source, dest in plan.profiles_moves:
         dest.parent.mkdir(parents=True, exist_ok=True)
         # Copy-then-unlink rather than ``rename``: the repo and the account
         # home are routinely on different filesystems (the home is outside
