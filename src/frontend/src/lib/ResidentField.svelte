@@ -14,9 +14,11 @@
 	import WithheldNotice from './WithheldNotice.svelte';
 	import { glitchReveal, typeReveal } from './transitions';
 	import {
+		hasDeclaredStoppedStatus,
 		heartbeatLevel,
 		lifecycleNotice,
 		liveRunDisplayName,
+		liveRunStatusLabel,
 		moodFace,
 		roomLine,
 		runCourse,
@@ -352,18 +354,16 @@
 		return heartbeatLevel(run.last_seen, now, stale);
 	}
 	const LEVEL_COLOR = { running: STATUS_GOOD, stalling: STATUS_WARN, unknown: STATUS_UNKNOWN };
+	// Same ranking as the LiveRuns grid and the node panel, from the same
+	// helper: a status the run declares outranks one inferred from silence.
+	// A parked seat stops heartbeating by design, so freshness may only
+	// speak for a run that still claims to be working.
 	function statusWord(run: LiveRun): string {
-		const lvl = level(run);
-		if (lvl === 'running') {
-			const notice = lifecycleNotice(run);
-			if (notice) return notice.word;
-			if (run.phase) return run.phase;
-			return 'running';
-		}
-		return lvl;
+		return liveRunStatusLabel(run, level(run));
 	}
 	function statusColor(run: LiveRun): string {
 		const lvl = level(run);
+		if (hasDeclaredStoppedStatus(run.status)) return STATUS_UNKNOWN;
 		if (lvl === 'running') {
 			const tone = lifecycleNotice(run)?.tone;
 			if (tone === 'awaiting') return STATUS_WARN;
