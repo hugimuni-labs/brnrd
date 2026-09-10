@@ -992,7 +992,7 @@ def test_home_owned_runners_md_resolves_and_is_used(tmp_path, cold_profiles):
     """The daemon-owned ``<home>/runners.md`` is the custom-profile home."""
     repo, home = _repo_and_home(tmp_path)
     (home / conf.PROFILES_FILENAME).write_text(
-        "---\nhome-runner:\n  cmd: 'home-runner --go'\n---\n", encoding="utf-8"
+        '[profiles.home-runner]\ncmd = "home-runner --go"\n', encoding="utf-8"
     )
 
     assert _build_cmd("home-runner", "fix it", {}, repo) == ["home-runner", "--go"]
@@ -1013,7 +1013,7 @@ def test_security_config_runner_cmd_still_wins_over_a_home_profile(
         "runner_cmd=pinned-runner --go\n", encoding="utf-8"
     )
     (home / conf.PROFILES_FILENAME).write_text(
-        "---\ncodex:\n  cmd: 'from-home-profile'\n---\n", encoding="utf-8"
+        '[profiles.codex]\ncmd = "from-home-profile"\n', encoding="utf-8"
     )
 
     cfg = conf.load_config(repo)
@@ -1027,7 +1027,7 @@ def test_wake_runner_catalog_renders_home_profiles_and_not_repo_ones(
     must move to the new source too, or the visible half stays poisoned."""
     repo, home = _repo_and_home(tmp_path)
     (home / conf.PROFILES_FILENAME).write_text(
-        "---\nhome-shell:\n  cmd: 'home-shell run'\n---\n", encoding="utf-8"
+        '[profiles.home-shell]\ncmd = "home-shell run"\n', encoding="utf-8"
     )
     (repo / ".brr" / "runners.md").write_text(
         "---\nrepo-shell:\n  cmd: 'repo-shell run'\n---\n", encoding="utf-8"
@@ -1060,7 +1060,7 @@ def test_profiles_cache_key_can_never_name_a_repo_path(tmp_path, cold_profiles):
         "---\nlegacy-shell:\n  cmd: 'legacy-shell run'\n---\n", encoding="utf-8"
     )
 
-    key, _text = runner_mod._profiles_source(repo)
+    key, _fmt, _text = runner_mod._profiles_source(repo)
 
     assert str(repo) not in key, f"cache key names a repo path: {key!r}"
 
