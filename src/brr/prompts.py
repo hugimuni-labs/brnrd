@@ -1814,7 +1814,17 @@ def _page_heading_gist(content: str, max_bytes: int = _OMITTED_HEADING_GIST_BUDG
     (caught and fixed before this ever shipped past its own worker; see
     the second stranded commit this was reconciled from).
     """
-    titles = [_heading_title(e) for e in _split_h2_entries(content)]
+    # Backticks are stripped, and that is load-bearing rather than
+    # cosmetic: this gist is embedded inside a **backtick-delimited**
+    # list — ``\u0060path\u0060 (gist) \u00b7 \u0060path\u0060 (gist)`` — and the reader that
+    # recovers those paths keys on the backticks (the separator cannot
+    # be trusted; it occurs inside the gist too). A heading carrying
+    # inline code would put an extra delimiter pair inside a field and
+    # fabricate a page out of it: this account's own
+    # ``operator-checklist.md`` has ``## 5. Link \u0060arseni…\u0060 to a GitHub
+    # account`` today. A heading's *text* is what a one-line gist wants
+    # anyway; the code formatting has no rendering to do here.
+    titles = [_heading_title(e).replace("`", "") for e in _split_h2_entries(content)]
     if not titles:
         return ""
     prefix_bytes = len("§".encode("utf-8"))
