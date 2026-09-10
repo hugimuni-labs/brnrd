@@ -856,6 +856,35 @@ def build_parser() -> argparse.ArgumentParser:
         "--strict", action="store_true",
         help="refuse an unresolved --mood instead of wearing its nearest face")
     do_p.add_argument(
+        "--link", default=None, metavar="INTENT",
+        help="open a priced decision link: what you are about to do. Closes "
+             "whichever link was open (a chain does not nest). Pair with "
+             "--why, and --boundary/--link-item where they apply")
+    do_p.add_argument(
+        "--why", default=None, metavar="TEXT",
+        help="one line: why this decision is worth its cost (only with "
+             "--link). Required — the line is the point of the verb")
+    do_p.add_argument(
+        "--boundary", default=None, metavar="TOKENS",
+        help="the ceiling you are committing to for this link (integer, or "
+             "120k/2m — `allowance:` grammar). Reported when passed, never "
+             "enforced: a boundary that stopped a run would be set high by "
+             "everyone, and a boundary nobody sets honestly measures nothing")
+    do_p.add_argument(
+        "--link-item", default=None, metavar="ITEM-ID",
+        help="bind this link to a warp item that exists, so the item "
+             "accumulates its own cost across runs. Optional on purpose — a "
+             "link with no item renders ∅, and a run of those is course "
+             "drift measured rather than inferred. Refused against an "
+             "unknown id, nothing written")
+    do_p.add_argument(
+        "--link-close", action="store_true",
+        help="close the open link without opening another; closing nothing "
+             "is not an error")
+    do_p.add_argument(
+        "--link-note", default=None, metavar="TEXT",
+        help="a closing line on the link (with --link-close)")
+    do_p.add_argument(
         "--note", dest="note", action="append", default=None,
         metavar="EVENT-ID",
         help="retire a pending event deliberately, no message goes out "
@@ -3014,6 +3043,107 @@ def _do_promise(outbox_dir: Path, what: str, count: int) -> tuple[str, bool]:
     return f"promise {norm} ✓", True
 
 
+def _run_weighted_spend(outbox_dir) -> "int | None":
+    """This run's weighted spend right now, or ``None`` when unmeasurable.
+
+    ``None``, never ``0``: a link whose endpoints could not be read has no
+    measurement, and rendering that as zero is the empty-column failure this
+    repo keeps rediscovering — a field's name is not a measurement. The
+    weighting is :data:`allowance.TOKEN_WEIGHTS`, the one the bar already
+    prints, so a link's arithmetic and the bar's can never disagree.
+    """
+    from . import allowance as allowance_mod
+    from . import do as do_mod
+
+    payload = do_mod.read_portal_state(outbox_dir) or {}
+    resources = payload.get("resources")
+    if not isinstance(resources, dict):
+        return None
+    facet = resources.get("allowance")
+    if isinstance(facet, dict):
+        for key in ("spent_weighted", "spent"):
+            value = facet.get(key)
+            if isinstance(value, int):
+                return value
+    usage = resources.get("usage")
+    if isinstance(usage, dict):
+        try:
+            return allowance_mod.weighted_tokens(
+                input=usage.get("input", 0) or 0,
+                output=usage.get("output", 0) or 0,
+                cache_read=usage.get("cache_read", 0) or 0,
+                cache_creation=usage.get("cache_creation", 0) or 0,
+            )
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _do_link(
+    outbox_dir, *, intent, why, boundary, item, close, note,
+) -> "tuple[str | None, bool]":
+    """Open or close a decision link. ``(None, False)`` = refused, nothing written.
+
+    Refusals are total and happen before any write, the same guarantee
+    ``--item`` already gives on replies: a half-written chain is worse than
+    no chain, because the gap reads as an unpriced decision that was in fact
+    a rejected one.
+    """
+    import sys
+
+    from . import allowance as allowance_mod
+    from . import items as items_mod
+    from . import links as links_mod
+
+    if close:
+        spend = _run_weighted_spend(outbox_dir)
+        row = links_mod.close_link(outbox_dir, note=note, spend=spend)
+        if row is None:
+            return ("link ∅ (nothing open)", True)
+        used = links_mod.spent(row)
+        tail = f" · {allowance_mod.format_tokens(used)}" if used is not None else ""
+        return (f"link closed: {row.get('intent')}{tail}", True)
+
+    ceiling = None
+    if boundary:
+        ceiling = allowance_mod.parse_tokens(boundary)
+        if ceiling is None:
+            print(
+                f"[brnrd do] --boundary {boundary!r} is not a token count "
+                "(try 400k, 2m, or a plain integer). Nothing was written.",
+                file=sys.stderr,
+            )
+            return (None, False)
+
+    if item:
+        warp_root, warp_err = _item_context()
+        if warp_err:
+            print(f"[brnrd do] {warp_err}. Nothing was written.", file=sys.stderr)
+            return (None, False)
+        if items_mod.resolve_item(warp_root, item) is None:
+            print(
+                f"[brnrd do] --link-item {item}: no such warp item "
+                "(`brnrd item list`). Nothing was written — an invented item "
+                "is worse than a missing one, which is why the flag is "
+                "optional and ∅ is legal.",
+                file=sys.stderr,
+            )
+            return (None, False)
+
+    spend = _run_weighted_spend(outbox_dir)
+    row = links_mod.open_link(
+        outbox_dir, intent=intent, why=why, boundary=ceiling,
+        item=item, spend=spend,
+    )
+    if row is None:
+        return (None, False)
+    bits = [f"link opened: {intent}"]
+    if ceiling:
+        bits.append(allowance_mod.format_tokens(ceiling))
+    bits.append(item if item else "∅")
+    return (" · ".join(bits), True)
+
+
 def cmd_do(args):
     """``brnrd do`` — stage outbox verbs, read the daemon's verdict back in
     the same boundary as the act (`kb/design-...`, evts dt2m/khiw/nkq5).
@@ -3191,7 +3321,39 @@ def cmd_do(args):
         return 1
 
     notes = args.note or []
-    has_verbs = bool(args.mood or notes or replies or gates or args.card)
+    link_open = str(getattr(args, "link", "") or "").strip()
+    link_close = bool(getattr(args, "link_close", False))
+    if link_open and not str(getattr(args, "why", "") or "").strip():
+        print(
+            "[brnrd do] --link requires --why. The line is the verb's whole "
+            "point: a cost you have to say out loud is a plan you have to "
+            "look at. Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+    for flag, value in (
+        ("--why", getattr(args, "why", None)),
+        ("--boundary", getattr(args, "boundary", None)),
+        ("--link-item", getattr(args, "link_item", None)),
+    ):
+        if value and not link_open:
+            print(
+                f"[brnrd do] {flag} given with no --link. Nothing was written.",
+                file=sys.stderr,
+            )
+            return 1
+    if link_open and link_close:
+        print(
+            "[brnrd do] --link and --link-close in one call: opening a link "
+            "already closes the open one. Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    has_verbs = bool(
+        args.mood or notes or replies or gates or args.card
+        or link_open or link_close
+    )
 
     explicit_outbox = str(getattr(args, "outbox", "") or "").strip()
     if explicit_outbox:
@@ -3267,6 +3429,21 @@ def cmd_do(args):
 
         segments: list[str] = []
         any_failed = False
+
+        if link_open or link_close:
+            seg, ok = _do_link(
+                outbox_dir,
+                intent=link_open,
+                why=getattr(args, "why", None),
+                boundary=getattr(args, "boundary", None),
+                item=getattr(args, "link_item", None),
+                close=link_close,
+                note=getattr(args, "link_note", None),
+            )
+            if seg is None:
+                return 1
+            segments.append(seg)
+            any_failed = any_failed or not ok
 
         if args.mood:
             seg, ok = _do_mood(
