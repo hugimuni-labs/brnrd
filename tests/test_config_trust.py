@@ -1093,15 +1093,37 @@ def _drive_repo_profile_notice(tmp_path, monkeypatch, profile_text, eid):
     return matching[0]
 
 
+def _mirror_of_the_active_catalog() -> str:
+    """Frontmatter that re-declares the active catalog, field for field.
+
+    Derived from ``runner._load_profiles`` rather than copied, because here
+    the *wiring* is the subject — does the classifier recognise semantic
+    equivalence — not the values.  The predecessor of this helper read the
+    bundled ``prompts/runners.md``; `14af9849` deleted that file when the
+    catalog became TOML, and ``read_prompt`` fails open with ``""``, so the
+    fixture became an empty string and the test's own subject vanished
+    from it.  A fixture is coverage only if it can still be produced.
+    """
+    profiles = runner_mod._load_profiles(None)
+    lines = ["---"]
+    for name, fields in sorted(profiles.items()):
+        lines.append(f"{name}:")
+        for key, value in fields.items():
+            rendered = value if isinstance(value, int) else f"'{value}'"
+            lines.append(f"  {key}: {rendered}")
+    lines.append("---")
+    return "\n".join(lines) + "\n"
+
+
 def test_mirrored_repo_profile_notice_recommends_deletion(
     tmp_path, monkeypatch, capsys,
 ):
     """A semantic mirror is spent; promoting it would create a drifting shadow."""
-    bundled = daemon.prompts.read_prompt("runners.md", None)
     notice = _drive_repo_profile_notice(
         tmp_path,
         monkeypatch,
-        bundled + "\nRepo-side prose is deliberately irrelevant.\n",
+        _mirror_of_the_active_catalog()
+        + "\nRepo-side prose is deliberately irrelevant.\n",
         "evt-profile-mirror",
     )
     captured = capsys.readouterr()
@@ -1363,7 +1385,20 @@ def test_unreachable_profile_catalog_surfaces_as_a_run_notice_and_warning(
 # ── ``brnrd config promote`` picks the profile file up ──────────────────
 
 
-def test_plan_promote_carries_the_repo_side_profiles_file(tmp_path):
+# The destination filenames below are written as **literals**, not as
+# ``conf.PROFILES_FILENAME``.  That is deliberate and it is the whole
+# lesson of this block.  These tests once read ``home / conf.PROFILES_FILENAME``
+# back when that constant meant ``runners.md``; `54aab916` repointed it at
+# ``runners.toml`` and every one of them silently began asserting a
+# *different* destination than its author wrote — while the production code,
+# mechanically re-pointed at ``LEGACY_PROFILES_FILENAME`` to preserve
+# behaviour, stopped promoting the live format at all.  A pin that borrows
+# the code's own symbol cannot fail when the code moves; it moves with it.
+# Where the *value* is the subject, the referent has to be one production
+# cannot edit.
+
+
+def test_plan_promote_carries_a_markdown_catalog_under_its_own_name(tmp_path):
     repo, home = _repo_and_home(tmp_path)
     (repo / ".brr" / "runners.md").write_text(
         "---\nlocal-agent:\n  cmd: 'local-agent run'\n---\n", encoding="utf-8"
@@ -1371,30 +1406,75 @@ def test_plan_promote_carries_the_repo_side_profiles_file(tmp_path):
 
     plan = conf.plan_promote(repo)
 
-    assert plan.profiles_move == (
-        repo / ".brr" / "runners.md",
-        home / conf.PROFILES_FILENAME,
-    )
+    assert list(plan.profiles_moves) == [
+        (repo / ".brr" / "runners.md", home / "runners.md"),
+    ]
     assert plan.profiles_conflict is False
 
 
-def test_apply_promote_moves_the_profiles_file_and_the_profile_is_then_used(
-    tmp_path, cold_profiles,
-):
-    """One command migrates an existing custom-profile user.
+def test_plan_promote_carries_a_toml_catalog(tmp_path):
+    """The live format is promotable at all — it was invisible for a release.
 
-    Asserts the *effect* — the promoted profile is the one the command
-    builder resolves afterwards — not just that a file moved.
+    ``config promote``'s job *is* the repo-to-home migration, so pinning it
+    to the deprecated filename meant the one file the reader actually loads
+    was the one file the migration could not see.
     """
     repo, home = _repo_and_home(tmp_path)
-    (repo / ".brr" / "runners.md").write_text(
-        "---\nlocal-agent:\n  cmd: 'local-agent run --yes'\n---\n", encoding="utf-8"
+    (repo / ".brr" / "runners.toml").write_text(
+        '[profiles.local-agent]\ncmd = "local-agent run"\n', encoding="utf-8"
     )
+
+    plan = conf.plan_promote(repo)
+
+    assert list(plan.profiles_moves) == [
+        (repo / ".brr" / "runners.toml", home / "runners.toml"),
+    ]
+
+
+def test_plan_promote_carries_both_catalogs_when_both_exist(tmp_path):
+    """Promoting one and leaving the other renders as a finished migration."""
+    repo, home = _repo_and_home(tmp_path)
+    (repo / ".brr" / "runners.toml").write_text(
+        '[profiles.new-agent]\ncmd = "new-agent"\n', encoding="utf-8"
+    )
+    (repo / ".brr" / "runners.md").write_text(
+        "---\nold-agent:\n  cmd: 'old-agent'\n---\n", encoding="utf-8"
+    )
+
+    plan = conf.plan_promote(repo)
+
+    assert list(plan.profiles_moves) == [
+        (repo / ".brr" / "runners.toml", home / "runners.toml"),
+        (repo / ".brr" / "runners.md", home / "runners.md"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "filename, body",
+    [
+        ("runners.toml", '[profiles.local-agent]\ncmd = "local-agent run --yes"\n'),
+        ("runners.md", "---\nlocal-agent:\n  cmd: 'local-agent run --yes'\n---\n"),
+    ],
+)
+def test_a_promoted_catalog_is_readable_where_it_lands(
+    tmp_path, cold_profiles, filename, body,
+):
+    """THE pin: promotion lands a catalog where a reader of *its* format looks.
+
+    Asserts the *effect* — the promoted profile is the one the command
+    builder resolves afterwards — not just that a file moved.  That is what
+    makes the destination filename load-bearing rather than cosmetic: the
+    home reader picks its parser from the name, so a Markdown catalog moved
+    to ``runners.toml`` is a ``tomllib`` error and a promotion that reads
+    as done.  Both formats, one assertion, because the invariant is about
+    neither of them in particular.
+    """
+    repo, _home = _repo_and_home(tmp_path)
+    (repo / ".brr" / filename).write_text(body, encoding="utf-8")
 
     conf.apply_promote(repo, conf.plan_promote(repo))
 
-    assert not (repo / ".brr" / "runners.md").exists()
-    assert (home / conf.PROFILES_FILENAME).exists()
+    assert not (repo / ".brr" / filename).exists()
     assert _build_cmd("local-agent", "fix it", {}, repo) == [
         "local-agent", "run", "--yes",
     ]
@@ -1405,7 +1485,7 @@ def test_apply_promote_refuses_to_clobber_an_existing_home_profiles_file(tmp_pat
     (repo / ".brr" / "runners.md").write_text(
         "---\nrepo-agent:\n  cmd: 'repo-agent'\n---\n", encoding="utf-8"
     )
-    (home / conf.PROFILES_FILENAME).write_text(
+    (home / "runners.md").write_text(
         "---\nhome-agent:\n  cmd: 'home-agent'\n---\n", encoding="utf-8"
     )
 
@@ -1415,7 +1495,7 @@ def test_apply_promote_refuses_to_clobber_an_existing_home_profiles_file(tmp_pat
     with pytest.raises(conf.ConfigPromoteError):
         conf.apply_promote(repo, plan, force=False)
 
-    assert "home-agent" in (home / conf.PROFILES_FILENAME).read_text(encoding="utf-8")
+    assert "home-agent" in (home / "runners.md").read_text(encoding="utf-8")
     assert (repo / ".brr" / "runners.md").exists()
 
 
@@ -1427,10 +1507,10 @@ def test_apply_promote_is_idempotent_for_the_profiles_file(tmp_path):
 
     conf.apply_promote(repo, conf.plan_promote(repo))
     second = conf.plan_promote(repo)
-    assert second.profiles_move is None
+    assert second.profiles_moves == ()
     conf.apply_promote(repo, second)  # no-op, must not raise
 
-    assert "local-agent" in (home / conf.PROFILES_FILENAME).read_text(encoding="utf-8")
+    assert "local-agent" in (home / "runners.md").read_text(encoding="utf-8")
 
 
 def test_cli_config_promote_reports_and_moves_the_profiles_file(
@@ -1451,7 +1531,7 @@ def test_cli_config_promote_reports_and_moves_the_profiles_file(
     assert rc == 0
     out = capsys.readouterr().out
     assert "runners.md" in out
-    assert (home / conf.PROFILES_FILENAME).exists()
+    assert (home / "runners.md").exists()
     assert not (repo / ".brr" / "runners.md").exists()
 
 
@@ -1473,7 +1553,7 @@ def test_cli_config_promote_dry_run_leaves_the_profiles_file_alone(
     assert rc == 0
     assert "runners.md" in capsys.readouterr().out
     assert (repo / ".brr" / "runners.md").exists()
-    assert not (home / conf.PROFILES_FILENAME).exists()
+    assert not (home / "runners.md").exists()
 
 
 def test_account_resolves_the_same_from_a_shared_clone_strand(tmp_path, monkeypatch):
