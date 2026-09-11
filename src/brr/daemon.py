@@ -10308,6 +10308,47 @@ def _park_seat_on_turn_end(task: Run, cfg: "dict | None") -> dict[str, object] |
 #: below is still computed and published every heartbeat either way — "the
 #: number stays informative" — only the *parking* is gated on this flag. A
 #: seat that wants the old always-on behaviour opts back in explicitly.
+def _park_seat_on_daemon_restart(task: Run, cfg: "dict | None") -> dict[str, object] | None:
+    """The boot sweep's park for a seat the dead daemon left *after its bolt*.
+
+    A run whose ``cut:`` was accepted has answered its event; what the
+    daemon interrupted was only the seat holding in ``await``. Re-dispatching
+    the event as a retry wakes a resident on an ask it already answered —
+    a full boot spent learning there is nothing to do (THE STALE SUMMONS).
+    The right shape is the turn-end park's: ``held`` on ``resume: any``, the
+    event marked ``done``, the next message (or own strand, or tick) resumes
+    the seat from its node. Same gates as :func:`_park_seat_on_turn_end` —
+    a seat, never a strand; ``seat.park_on_turn_end`` on — plus the bolt.
+    Returns ``None`` when the ordinary interrupted-and-retry path applies.
+    """
+    if not hasattr(task, "meta") or _is_strand(task.meta):
+        return None
+    bolt = task.meta.get("bolt")
+    if not (isinstance(bolt, dict) and bolt.get("accepted_at")):
+        return None
+    if not _seat_park_enabled(cfg):
+        return None
+    native_session_id = _native_session_id_for(task)
+    return {
+        "reason": resource_hold.REASON_DAEMON_RESTARTED,
+        "provider": _resource_hold_provider_for_runner(
+            task.meta.get("runner_shell") or task.meta.get("runner_name")
+        ),
+        "detail": (
+            f"the daemon restarted under a seat that had bolted at "
+            f"{bolt.get('accepted_at')} — the ask was answered; the seat "
+            f"parks, anything addressed to it resumes it"
+        ),
+        "native_session_id": native_session_id,
+        "resume_kind": (
+            resource_hold.RESUME_NATIVE if native_session_id
+            else resource_hold.RESUME_UNSUPPORTED
+        ),
+        "resume_condition": resource_hold.RESUME_ANY,
+        "reset_deadline": None,
+    }
+
+
 SEAT_PARK_ON_HOLD_COST_KEY = "seat.park_on_hold_cost"
 SEAT_PARK_ON_HOLD_COST_DEFAULT = False
 
@@ -16598,6 +16639,39 @@ def _mark_interrupted_runs(
                     "safety horizon"
                 )
             retry_event = retry_eligible.get(task.event_id or "")
+            park_fields = _park_seat_on_daemon_restart(task, cfg)
+            if park_fields is not None:
+                # The seat had bolted: its ask is answered, only the hold
+                # died. Park instead of retry — the event lands ``done`` so
+                # the main loop never re-dispatches an answered ask, and
+                # the run lands ``held`` (``resume: any``) so the next thing
+                # addressed to the seat boots it from its node.
+                if retry_event is not None:
+                    try:
+                        protocol.set_status(retry_event, "done")
+                    except OSError:
+                        pass
+                hold_meta = _arm_resource_hold(
+                    task, runs_dir,
+                    conversation_key=task.conversation_key or "",
+                    **park_fields,
+                )
+                _WorkerEmit(brr_dir, task.conversation_key, task.event_id)(
+                    "held",
+                    run_id=task.id,
+                    event_id=task.event_id,
+                    reason=hold_meta["reason"],
+                    provider=hold_meta["provider"],
+                    resume_condition=hold_meta["resume_condition"],
+                    resume_kind=hold_meta["resume_kind"],
+                )
+                marked += 1
+                print(
+                    f"[brnrd] interrupted-run marker: {task.id} parked "
+                    f"(bolt accepted {task.meta['bolt'].get('accepted_at')}, "
+                    f"{proof}) — event {task.event_id} done, no retry"
+                )
+                continue
             will_retry = bool(retry_event)
             if will_retry:
                 # #1491: the retry path already recovers the *work* (the
@@ -17591,6 +17665,8 @@ def _hold_body(meta: dict[str, object]) -> str:
     reason = str(meta.get("reason") or "a resource limit").replace("_", " ")
     if meta.get("resume_condition") == resource_hold.RESUME_STRANDS:
         lines = ["Parking this seat on its strands — nothing spends while they work."]
+    elif meta.get("reason") == resource_hold.REASON_DAEMON_RESTARTED:
+        lines = ["The daemon restarted under a parked seat — your next message resumes it; nothing spends until then."]
     elif meta.get("resume_condition") == resource_hold.RESUME_ANY:
         lines = ["Parked — the seat is yours; nothing spends until something reaches it."]
     elif meta.get("resume_condition") == resource_hold.RESUME_REFILL:

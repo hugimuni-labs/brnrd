@@ -119,6 +119,13 @@ RESUME_CONDITIONS = frozenset({
 
 REASON_WAITING_ON_STRANDS = "waiting_on_strands"
 REASON_TURN_ENDED = "turn_ended"
+#: The daemon itself went away under a seat that had already bolted — its
+#: ask was answered and the run was only holding the seat in ``await``. Not a
+#: retry: the ask is done. The seat parks; anything addressed to it resumes it
+#: (THE STALE SUMMONS, 2026-09-09: a retry re-woke a resident on a 5h-old,
+#: already-answered event and it had to read its own node to learn it owed
+#: nothing — one boot spent on discovering there was nothing to do).
+REASON_DAEMON_RESTARTED = "daemon_restarted"
 
 #: The child-event sources that release a ``strands``-condition hold. Not
 #: ``spawn_queued`` (admission, nothing to read yet) and never

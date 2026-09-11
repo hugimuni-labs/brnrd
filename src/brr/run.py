@@ -71,7 +71,12 @@ def _format_run_meta_value(value: Any) -> str:
 #: itself and read as permanent movement — the exact stale-card bug this
 #: digest exists to prevent, reintroduced one layer down. Only a key that
 #: actually needs cross-process dict fidelity belongs here.
-_JSON_META_KEYS = frozenset({"resource_hold"})
+#: ``bolt`` joined 2026-09-09: the boot-time interrupted-run sweep reads
+#: ``bolt.accepted_at`` off a *reloaded* manifest to tell a parked seat from
+#: an interrupted one (``daemon._park_seat_on_daemon_restart``); until then
+#: every cross-process reader saw the dict as a JSON string and the
+#: ``isinstance(..., dict)`` guards read it as absent.
+_JSON_META_KEYS = frozenset({"resource_hold", "bolt"})
 
 
 def _decode_run_meta_value(key: str, value: Any) -> Any:
