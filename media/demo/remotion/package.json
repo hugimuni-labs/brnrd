@@ -1,0 +1,23 @@
+{
+  "name": "brnrd-demo-remotion",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The demo made of receipts — Remotion source for the beats 1-4 (0-12s) proof render.",
+  "scripts": {
+    "start": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts Demo out/proof-12s.mp4",
+    "stills": "remotion still src/index.ts Demo out/frames/frame.png",
+    "tsc": "tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "remotion": "4.0.520",
+    "@remotion/cli": "4.0.520"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "typescript": "7.0.2"
+  }
+}
