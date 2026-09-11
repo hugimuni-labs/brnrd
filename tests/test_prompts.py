@@ -6,6 +6,7 @@ import re
 import pytest
 from pathlib import Path
 
+from _helpers import _says
 from brr import conversations, dominion, prompts
 from brr.prompts import (
     OWN_OUTBOUND_RECEIPT_HEAD_CHARS,
@@ -36,19 +37,6 @@ from brr.prompts import (
     build_run_prompt,
     diffense_emit_enabled,
 )
-
-
-def _says(haystack: str, phrase: str) -> bool:
-    """Whitespace-insensitive containment for prose contracts.
-
-    A prompt guard must assert the *rule*, never the line wrap that happened
-    to carry it. Pinning a literal ``"when none is\n  available"`` makes any
-    reflow read as a deleted rule — a guard that fires for a non-reason is a
-    guard that stops being read. Collapse runs of whitespace on both sides
-    and compare. Machine-parsed strings (JSON keys, frontmatter, CLI syntax)
-    keep their exact pins; this is for sentences.
-    """
-    return " ".join(phrase.split()) in " ".join(haystack.split())
 
 
 def _seed_pitfalls(repo_root, text: str) -> None:
@@ -84,7 +72,7 @@ class TestContextInjection:
         result = _read_recent_log(repo).text
 
         assert "## [2026-07-09]" in result
-        assert "Out of the tree" in result
+        assert _says(result, "Out of the tree")
 
     def test_read_recent_log_prefers_repo_kb_when_both_exist(self, tmp_path):
         from _helpers import init_git_repo
@@ -297,7 +285,7 @@ class TestBlockAttestation:
         assert result.dropped == 1
         assert result.stale is False
         assert result.precise is True
-        assert "the newest entry in the source" in result.text
+        assert _says(result.text, "the newest entry in the source")
         assert "NOT current" not in result.text
 
     def test_the_actual_2026_07_23_incident_same_day_inversion(self):
@@ -349,7 +337,7 @@ class TestBlockAttestation:
 
         assert result.stale is False
         assert result.precise is False
-        assert "the newest entry in the source" not in result.text
+        assert not _says(result.text, "the newest entry in the source")
         assert "day precision" in result.text
         assert "NOT current" not in result.text
 
@@ -413,7 +401,7 @@ class TestBlockAttestation:
         assert result.stale is False
         assert result.newest_item == "2026-07-24 12:20"
         assert result.oldest_item == "2026-07-24 00:59"
-        assert "the newest entry in the source" in result.text
+        assert _says(result.text, "the newest entry in the source")
         assert "day precision" not in result.text
 
     def test_a_cross_midnight_tail_below_a_later_entry_is_caught_as_stale(self):
@@ -514,7 +502,7 @@ class TestBlockAttestation:
         assert result.stale is False
         assert result.dropped == 1
         assert "showing" not in result.text
-        assert "cut to fit the wake budget" in result.text
+        assert _says(result.text, "cut to fit the wake budget")
 
     # ── #688 — which half, charged how, and named as what ────────────────
     #
@@ -560,7 +548,7 @@ class TestBlockAttestation:
         result = _trim_sectioned_page(content, max_bytes=8192, source_hint="`surface/workflow.md`")
 
         assert "## Autonomy" in result.text, "the head is what leads"
-        assert "## Gating and merges" in result.text, (
+        assert _says(result.text, "## Gating and merges"), (
             "the section the dispatcher tick was told to follow exactly"
         )
         assert "## Signatures" not in result.text, (
@@ -602,9 +590,9 @@ class TestBlockAttestation:
         assert result.source_newest == "2026-07-23 11:00"
         assert result.dropped == 1
         assert result.precise is True
-        assert "the newest entry in the source" in result.text
+        assert _says(result.text, "the newest entry in the source")
         # And the dated path keeps its own noun.
-        assert "entry cut to fit the wake budget" in result.text
+        assert _says(result.text, "entry cut to fit the wake budget")
         assert "sections cut" not in result.text
 
     def test_one_undated_heading_makes_the_whole_page_structural(self):
@@ -684,7 +672,7 @@ class TestBlockAttestation:
         # Everything that *could* be given up was: the preamble is gone
         # entirely, and both notices say what went.
         assert "warning line" not in result.text
-        assert "of this page's opening cut" in result.text
+        assert _says(result.text, "of this page's opening cut")
         assert "earlier entries cut" in result.text
         assert rendered - 600 < 300, "overshoot bounded by the notices, not the page"
 
@@ -701,7 +689,7 @@ class TestBlockAttestation:
         result = _trim_sectioned_page(content, 2000, "`surface/plan.md`")
 
         assert len(result.text.encode("utf-8")) <= 2000
-        assert "of this page's opening cut" in result.text
+        assert _says(result.text, "of this page's opening cut")
         assert "warning line 0" in result.text, "the opening's head survives"
         assert "warning line 399" not in result.text
         # The one mandatory entry is never crowded out by the preamble.
@@ -835,8 +823,8 @@ class TestAgeGateDatedSections:
         assert "## Backlog" in body
         assert "## Ideas" in body
         assert marker  # the age-gate marker was appended
-        assert "4 older dated sections age-gated out" in marker
-        assert "keeping the newest 2" in marker
+        assert _says(marker, "4 older dated sections age-gated out")
+        assert _says(marker, "keeping the newest 2")
         assert "surface/plans/x/active.md" in marker
         # And it names exactly what it cut.
         for stale in ("09-01", "09-02", "09-03", "09-04"):
@@ -862,7 +850,7 @@ class TestAgeGateDatedSections:
         assert "This session, 08-15" not in body
         assert "This session, 08-20" in body
         assert "This session, 09-01" in body
-        assert "1 older dated section age-gated out" in marker
+        assert _says(marker, "1 older dated section age-gated out")
         assert "This session, 08-15" in marker  # names what it cut
 
     def test_a_real_iso_year_outranks_any_bare_mm_dd_section(self):
@@ -985,9 +973,9 @@ class TestPromptBuilding:
 
         assert "Resident Identity Core" in prompt
         assert "product-owned identity contract" in prompt
-        assert "Voice And The Seam" in prompt
-        assert "fluency: weave | prose" in prompt
-        assert "Your dominion (working memory)" in prompt
+        assert _says(prompt, "Voice And The Seam")
+        assert _says(prompt, "fluency: weave | prose")
+        assert _says(prompt, "Your dominion (working memory)")
         assert prompt.index("Resident Identity Core") < prompt.index(
             "Your dominion (working memory)"
         )
@@ -1039,7 +1027,7 @@ class TestPromptBuilding:
         )
 
         prompt = build_run_prompt("do something", tmp_path)
-        assert "kb health (deterministic preflight)" in prompt
+        assert _says(prompt, "kb health (deterministic preflight)")
         assert "missing-from-index" in prompt
         assert "kb/decision-orphan.md" in prompt
 
@@ -1105,7 +1093,7 @@ class TestPromptBuilding:
         assert "brnrd docs review-pack" in prompt
         # The pack path is explicit and absolute in the shared runtime dir
         # so it survives worktree teardown.
-        assert "Review pack path: /repo/.brr/diffense/task-9/pack.json" in prompt
+        assert _says(prompt, "Review pack path: /repo/.brr/diffense/task-9/pack.json")
 
     def test_both_diffense_append_sites_append_the_same_bytes(self, tmp_path):
         """One block, two renderers, one manifest measurement — all three agree.
@@ -1206,9 +1194,9 @@ class TestPromptBuilding:
             strand=True,
         )
         assert "Resident Identity Core" in prompt
-        assert "Pitfalls that match this task" in prompt
+        assert _says(prompt, "Pitfalls that match this task")
         assert "Blind retry" in prompt
-        assert "Rebuild the image before you trust the cache." in prompt
+        assert _says(prompt, "Rebuild the image before you trust the cache.")
         assert "bounded, single-purpose thought" in prompt
         assert _says(prompt, "the turn frame in `weave.md` §The turn")
         # Mechanics still ride — a worker wake is still under the daemon.
@@ -1253,7 +1241,7 @@ class TestPromptBuilding:
             run_id="task-9",
             strand=True,
         )
-        assert "Pitfalls that match this task" not in prompt
+        assert not _says(prompt, "Pitfalls that match this task")
         assert "Blind retry" not in prompt
         assert "Resident Identity Core" in prompt
 
@@ -1476,7 +1464,7 @@ class TestPromptBuilding:
         assert len(rendered) == 1
         line = rendered[0]
         # Level is rendered inline
-        assert "quota=codex-local (exhausted, resets Jul 28)" in line
+        assert _says(line, "quota=codex-local (exhausted, resets Jul 28)")
         # availability="available" stays suppressed → no ✗ prefix
         assert not line.startswith("- ✗")
         # No availability= field at all
@@ -1506,7 +1494,7 @@ class TestPromptBuilding:
         assert len(rendered) == 2
         codex_line = next(l for l in rendered if "codex-full" in l)
         claude_line = next(l for l in rendered if "claude-sonnet" in l)
-        assert "quota=codex-local (exhausted, resets Jul 28)" in codex_line
+        assert _says(codex_line, "quota=codex-local (exhausted, resets Jul 28)")
         assert "quota=claude-local" in claude_line
         assert "quota=claude-local (" not in claude_line
 
@@ -1547,13 +1535,13 @@ class TestPromptBuilding:
         assert "/repo/.brr/outbox/evt-1/portal-state.json" in prompt
         assert "BRR_PORTAL_STATE" in prompt
         assert "change_token" in prompt
-        assert "plan / todo boundaries" in prompt
-        assert "immediately before a terminal closeout" in prompt
+        assert _says(prompt, "plan / todo boundaries")
+        assert _says(prompt, "immediately before a terminal closeout")
         assert _says(prompt, "after the runner has returned")
         assert _says(prompt, "dispatched by the daemon at turn end")
-        assert "nobody re-runs you to extract a sentence" in prompt
-        assert "`gate: forge` = the explicit PR handoff" in prompt
-        assert "never owns PR creation" in prompt
+        assert _says(prompt, "nobody re-runs you to extract a sentence")
+        assert _says(prompt, "`gate: forge` = the explicit PR handoff")
+        assert _says(prompt, "never owns PR creation")
 
     def test_daemon_prompt_carries_kb_url_portal_fact(self, tmp_path):
         base = "https://github.test/knowledge/blob/main/repos/Gurio__brr/"
@@ -1564,7 +1552,7 @@ class TestPromptBuilding:
             kb_base_url=base,
         )
         assert f"kb page URL base: {base}" in prompt
-        assert "link only after the knowledge commit is pushed" in prompt
+        assert _says(prompt, "link only after the knowledge commit is pushed")
 
     def test_daemon_prompt_maps_codex_channels_to_brr_portals(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -1610,8 +1598,8 @@ class TestPromptBuilding:
             outbox_path="/repo/.brr/outbox/evt-1",
             run_id="task-9",
         )
-        assert "Budget: no time limit" in prompt
-        assert "does not kill a thought on an elapsed clock" in prompt
+        assert _says(prompt, "Budget: no time limit")
+        assert _says(prompt, "does not kill a thought on an elapsed clock")
         assert ".keepalive" not in prompt
 
     def test_daemon_prompt_includes_driver_manual(self, tmp_path):
@@ -1621,7 +1609,7 @@ class TestPromptBuilding:
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path, run_id="task-9",
         )
-        assert "How the daemon drives you" in prompt
+        assert _says(prompt, "How the daemon drives you")
         assert "single-flight" in prompt
         assert "schedule.md" in prompt  # self-scheduled wakes live here now
 
@@ -1629,7 +1617,7 @@ class TestPromptBuilding:
         """`brnrd run` is a one-shot: no daemon to fire schedules or drain an
         outbox, so it doesn't carry the driver's manual."""
         prompt = build_run_prompt("ship it", tmp_path)
-        assert "How the daemon drives you" not in prompt
+        assert not _says(prompt, "How the daemon drives you")
         assert "schedule.md" not in prompt
 
     def test_prompts_include_weave_register(self, tmp_path):
@@ -1653,9 +1641,9 @@ class TestPromptBuilding:
                 "ship it", "evt-1", "/tmp/resp.md", tmp_path, run_id="task-9",
             ),
         ):
-            assert "The menu closes the turn" in prompt
-            assert "An empty menu is legal" in prompt
-            assert "Free text always overrides" in prompt
+            assert _says(prompt, "The menu closes the turn")
+            assert _says(prompt, "An empty menu is legal")
+            assert _says(prompt, "Free text always overrides")
             assert "Scene-verdict line" in prompt
 
     def test_daemon_prompt_lists_pending_events_and_fold_in_contract(self, tmp_path):
@@ -1668,18 +1656,18 @@ class TestPromptBuilding:
                  "summary": "quick question about X"},
             ],
         )
-        assert "Inbox — other pending events" in prompt
+        assert _says(prompt, "Inbox — other pending events")
         assert "evt-B" in prompt
-        assert "quick question about X" in prompt
-        assert "Every listed event is yours" in prompt
+        assert _says(prompt, "quick question about X")
+        assert _says(prompt, "Every listed event is yours")
         # The fold-in contract names the frontmatter handle.
         assert "event: <id>" in prompt
-        assert "own every pending event" in prompt.lower()
+        assert _says(prompt.lower(), "own every pending event")
         assert _says(prompt, "strand capacity and quota are healthy")
         assert "spawn:" in prompt
         assert "portal-state.json" in prompt
         assert "inbox.json" in prompt
-        assert "snapshot from when you woke" not in prompt
+        assert not _says(prompt, "snapshot from when you woke")
 
     def test_daemon_prompt_lists_pending_event_attachment_path(self, tmp_path):
         """#1156: a folded-in event's already-downloaded attachment renders
@@ -1760,12 +1748,12 @@ class TestPromptBuilding:
             ],
         )
         assert "Original event body" in prompt
-        assert "2 messages arrived close together on this thread" in prompt
+        assert _says(prompt, "2 messages arrived close together on this thread")
         oldest_at = prompt.index("evt-oldest")
         newest_at = prompt.index("evt-newest — waking event")
         assert oldest_at < newest_at, "listed oldest first"
-        assert "hey are you there" in prompt
-        assert "found it, never mind" in prompt
+        assert _says(prompt, "hey are you there")
+        assert _says(prompt, "found it, never mind")
         assert "also:" in prompt
 
     def test_daemon_prompt_burst_listing_requires_a_resolvable_identity(
@@ -1788,7 +1776,7 @@ class TestPromptBuilding:
             ],
         )
         assert "Original event body" in prompt
-        assert "please fix the login flow" in prompt
+        assert _says(prompt, "please fix the login flow")
         assert "arrived close together" not in prompt
 
     def test_daemon_prompt_burst_listing_breaks_past_the_window(self, tmp_path):
@@ -1906,7 +1894,7 @@ class TestPromptBuilding:
         run_section = prompt.split("### Run", 1)[1].split("###", 1)[0]
         assert f"sent {created}" in run_section
         assert "6h06m ago" in run_section
-        assert "the daemon was only asleep" in run_section
+        assert _says(run_section, "the daemon was only asleep")
 
     def test_daemon_prompt_bundle_fresh_event_has_no_stale_wording(self, tmp_path):
         import time
@@ -1939,7 +1927,7 @@ class TestPromptBuilding:
             event_retry_failure_kind="host_interrupted",
         )
         run_section = prompt.split("### Run", 1)[1].split("###", 1)[0]
-        assert "retry of run-260818-1834-lcu3 (host interrupt)" in run_section
+        assert _says(run_section, "retry of run-260818-1834-lcu3 (host interrupt)")
 
     def test_daemon_prompt_kernel_and_bundle_report_the_same_age(self, tmp_path):
         """The #638-class drift this issue's coordinates warn about: the
@@ -1978,7 +1966,7 @@ class TestPromptBuilding:
                 {"kind": "session", "stream": "telegram:9:", "run_id": "task-Z"},
             ],
         )
-        assert "Also awake right now" in prompt
+        assert _says(prompt, "Also awake right now")
         assert "session" in prompt
         assert "telegram:9:" in prompt
         # The framing names reconciliation-by-judgement, not locking.
@@ -1988,7 +1976,7 @@ class TestPromptBuilding:
         prompt = build_daemon_prompt(
             "work on A", "evt-A", "/tmp/resp.md", tmp_path, run_id="task-A",
         )
-        assert "Also awake right now" not in prompt
+        assert not _says(prompt, "Also awake right now")
 
     def test_daemon_prompt_injects_pitfall_when_trigger_hits(self, tmp_path):
         _seed_pitfalls(
@@ -2000,9 +1988,9 @@ class TestPromptBuilding:
             "rebuild the docker image and ship", "evt-A", "/tmp/resp.md",
             tmp_path, run_id="task-A",
         )
-        assert "Pitfalls that match this task" in prompt
+        assert _says(prompt, "Pitfalls that match this task")
         assert "Blind retry" in prompt
-        assert "Rebuild the image before you trust the cache." in prompt
+        assert _says(prompt, "Rebuild the image before you trust the cache.")
 
     def test_daemon_prompt_omits_pitfall_when_no_trigger_match(self, tmp_path):
         _seed_pitfalls(
@@ -2013,7 +2001,7 @@ class TestPromptBuilding:
             "update the readme wording", "evt-A", "/tmp/resp.md",
             tmp_path, run_id="task-A",
         )
-        assert "Pitfalls that match this task" not in prompt
+        assert not _says(prompt, "Pitfalls that match this task")
 
     def test_daemon_prompt_matches_pitfall_against_event_body(self, tmp_path):
         _seed_pitfalls(
@@ -2027,8 +2015,8 @@ class TestPromptBuilding:
             run_id="task-A",
             event_body="the invoice total looks wrong for mid-month signups",
         )
-        assert "Pitfalls that match this task" in prompt
-        assert "Prorate on the day boundary." in prompt
+        assert _says(prompt, "Pitfalls that match this task")
+        assert _says(prompt, "Prorate on the day boundary.")
 
     def test_daemon_prompt_includes_branch_and_runtime_paths(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
@@ -2053,11 +2041,10 @@ class TestPromptBuilding:
         assert "Seed ref: feat/task-abstraction" in prompt
         assert "Current branch: feat/task-abstraction" in prompt
         assert (
-            "Branch setup: target branch held elsewhere; using run branch"
-            in prompt
+            _says(prompt, "Branch setup: target branch held elsewhere; using run branch")
         )
-        assert "Shared runtime dir: /repo/.brr" in prompt
-        assert "Run context file: /repo/.brr/runs/run-123/context.md" in prompt
+        assert _says(prompt, "Shared runtime dir: /repo/.brr")
+        assert _says(prompt, "Run context file: /repo/.brr/runs/run-123/context.md")
         assert "- stdout capture: /tmp/resp.md" in prompt
         assert "fix it" in prompt
         assert "kb/log-" not in prompt
@@ -2080,10 +2067,10 @@ class TestPromptBuilding:
             context_path="/repo/.brr/runs/task-123/context.md",
         )
         assert "### Mode" in prompt
-        assert "Stage: brnrd daemon run" in prompt
+        assert _says(prompt, "Stage: brnrd daemon run")
         assert "Source: telegram" in prompt
         assert "Environment: docker" in prompt
-        assert "Delivery: situational outputs captured by brr" in prompt
+        assert _says(prompt, "Delivery: situational outputs captured by brr")
         # Runtime-recovery line points at the context file and frames it
         # as opt-in detail, not routine reading.
         assert (
@@ -2105,8 +2092,8 @@ class TestPromptBuilding:
             run_id="task-9",
         )
         assert "### Mode" in prompt
-        assert "Stage: brnrd daemon run" in prompt
-        assert "Delivery: situational outputs captured by brr" in prompt
+        assert _says(prompt, "Stage: brnrd daemon run")
+        assert _says(prompt, "Delivery: situational outputs captured by brr")
         assert "Source:" not in prompt
         assert "Environment:" not in prompt
         assert "Runtime recovery:" not in prompt
@@ -2122,9 +2109,9 @@ class TestPromptBuilding:
             environment="host",
         )
 
-        assert "Environment: host — shared checkout" in prompt
-        assert "host finalization does not publish commits" in prompt
-        assert "own the push / PR handoff" in prompt
+        assert _says(prompt, "Environment: host — shared checkout")
+        assert _says(prompt, "host finalization does not publish commits")
+        assert _says(prompt, "own the push / PR handoff")
 
     def test_daemon_prompt_describes_preserved_run_branch(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
@@ -2142,10 +2129,10 @@ class TestPromptBuilding:
 
         assert "Seed ref: main" in prompt
         assert "Branch source: fallback:preserve" in prompt
-        assert "Host context branch: feature/host" in prompt
+        assert _says(prompt, "Host context branch: feature/host")
         # No target branch → nudge the agent to rename the brr/<run-id>
         # placeholder to something descriptive.
-        assert "themed work ⇒ rename" in prompt
+        assert _says(prompt, "themed work ⇒ rename")
         assert "brr/<short-slug>" in prompt
         # The forge-locked `gh pr create` nudge is gone — brr now emits
         # a forge URL in the response card automatically, and PR
@@ -2205,12 +2192,12 @@ class TestPromptBuilding:
             event_body="please fix the login flow",
         )
         assert "Run Context Bundle" in prompt
-        assert "Recent in this conversation" in prompt
+        assert _says(prompt, "Recent in this conversation")
         assert "earlier ping" in prompt
         assert "task-prev" in prompt
         assert "update done" in prompt
         assert "Original event body" in prompt
-        assert "please fix the login flow" in prompt
+        assert _says(prompt, "please fix the login flow")
         assert "Run ID: task-123" in prompt
         assert f"Execution root: {tmp_path}" in prompt
         assert "Seed ref: feat/task" in prompt
@@ -2305,7 +2292,7 @@ class TestPromptBuilding:
         assert "Related input threads" in prompt
         assert "On-demand grouped history" in prompt
         assert "/repo/.brr/runs/task/history/gate.jsonl" in prompt
-        assert "Recent turns (woven, oldest first)" in prompt
+        assert _says(prompt, "Recent turns (woven, oldest first)")
         assert "prior ask" in prompt
         assert "prior answer" in prompt
 
@@ -2337,10 +2324,10 @@ class TestPromptBuilding:
             },
         )
 
-        assert "latest 400 of 4321 records" in prompt
+        assert _says(prompt, "latest 400 of 4321 records")
         assert "/repo/.brr/conversations/telegram__77__" in prompt
         assert "untruncated" not in prompt
-        assert "truncated to the latest" in prompt
+        assert _says(prompt, "truncated to the latest")
 
     def test_daemon_prompt_renders_reader_model_from_snapshot(self, tmp_path):
         # #217 v1: `fluency` in the communication snapshot renders a Reader
@@ -2361,7 +2348,7 @@ class TestPromptBuilding:
             "hi", "evt-2", "/tmp/resp.md", tmp_path,
             communication_snapshot={**base, "fluency": "weave"},
         )
-        assert "Reader fluency: `fluency: weave`" in weave
+        assert _says(weave, "Reader fluency: `fluency: weave`")
         assert "register" in weave
         # The line must never read as a licence for length (2026-07-23).
         assert "still the delta" in weave
@@ -2370,7 +2357,7 @@ class TestPromptBuilding:
             "hi", "evt-2", "/tmp/resp.md", tmp_path,
             communication_snapshot={**base, "fluency": "prose"},
         )
-        assert "Reader fluency: `fluency: prose`" in prose
+        assert _says(prose, "Reader fluency: `fluency: prose`")
         assert "plain language" in prose
         assert "never longer" in prose
 
@@ -2405,10 +2392,10 @@ class TestPromptBuilding:
             },
         )
 
-        assert "Prior run on this thread failed (operational)" in prompt
-        assert "Credit balance is too low" in prompt
+        assert _says(prompt, "Prior run on this thread failed (operational)")
+        assert _says(prompt, "Credit balance is too low")
         assert "3 attempt(s)" in prompt
-        assert "This wake lands after that interruption" in prompt
+        assert _says(prompt, "This wake lands after that interruption")
 
     def test_daemon_prompt_renders_woven_dialogue_bodies(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
@@ -2438,8 +2425,8 @@ class TestPromptBuilding:
             recent_conversation=recent,
         )
 
-        assert "user (telegram):\n  first line\n  second line" in prompt
-        assert "agent (response:evt-prev):\n  agent reply\n  with detail" in prompt
+        assert _says(prompt, "user (telegram):\n  first line\n  second line")
+        assert _says(prompt, "agent (response:evt-prev):\n  agent reply\n  with detail")
         assert "/tmp/evt-prev.md" not in prompt
 
     def test_daemon_prompt_does_not_repeat_identical_event_body(self, tmp_path):
@@ -2468,7 +2455,7 @@ class TestPromptBuilding:
             run_id="task-9",
         )
         assert "Workstream" not in prompt
-        assert "Recent in this conversation" not in prompt
+        assert not _says(prompt, "Recent in this conversation")
         assert "Original event body" not in prompt
 
     def test_bundled_daemon_prompt_points_at_portals_not_dead_commands(self, tmp_path):
@@ -2480,7 +2467,7 @@ class TestPromptBuilding:
             run_id="task-9",
             context_path="/repo/.brr/runs/task-9/context.md",
         )
-        assert "Run context file: /repo/.brr/runs/task-9/context.md" in prompt
+        assert _says(prompt, "Run context file: /repo/.brr/runs/task-9/context.md")
         assert "brr inspect" not in prompt
         assert "brr stream" not in prompt
         # The portals manual is inspected, not injected: the daemon prompt
@@ -2499,9 +2486,9 @@ class TestPromptBuilding:
         )
         # Pending-event ownership is single-sourced in daemon-substrate's
         # portals block since the P2 dedup (run.md Delivery is a pointer now).
-        assert "own every pending event" in prompt.lower()
-        assert "card + mid-thought replies" in prompt
-        assert "nobody waits in the dark" in prompt
+        assert _says(prompt.lower(), "own every pending event")
+        assert _says(prompt, "card + mid-thought replies")
+        assert _says(prompt, "nobody waits in the dark")
 
     def test_delivery_contract_carries_portal_model_summary(self, tmp_path):
         # The portal-grammar summary (inbound/outbound/parked) now rides in
@@ -2560,7 +2547,7 @@ class TestPromptBuilding:
             "blocked — what's needed",
         ):
             assert state in prompt
-        assert "manufactured options are the failure mode" in prompt.lower()
+        assert _says(prompt.lower(), "manufactured options are the failure mode")
         assert "linger" in prompt
         assert "await:" in prompt
         assert "brnrd await" in prompt
@@ -2568,78 +2555,11 @@ class TestPromptBuilding:
         assert _says(prompt, "queue never starves")
 
 
-# ── Phase 3 guardrails: revisit-signal handling ──────────────────────
-
-
-def _read_bundled_run_prompt() -> str:
-    """Read the bundled prompt directly so we pin its shipped content."""
-    from pathlib import Path
-
-    import brr
-
-    return (Path(brr.__file__).parent / "prompts" / "run.md").read_text(
-        encoding="utf-8",
-    )
-
-
-def _read_bundled_daemon_substrate() -> str:
-    from pathlib import Path
-
-    import brr
-
-    return (
-        Path(brr.__file__).parent / "prompts" / "daemon-substrate.md"
-    ).read_text(encoding="utf-8")
-
-
-def test_kb_link_contract_uses_portal_url_with_basename_fallback():
-    run_prompt = _read_bundled_run_prompt()
-    substrate = _read_bundled_daemon_substrate()
-
-    assert "kb-url if portal grants" in run_prompt
-    assert "else basename" in run_prompt
-    assert _says(substrate, "link a kb page with the kb URL the portal provides")
-    assert _says(substrate, "when none is available, use its basename only")
-
-
-def test_seat_prompt_authorizes_end_only_by_release_or_forced_stop():
-    """2026-09-08, his repeated instruction (evt-…-gaoy): the process stays
-    open until the user explicitly releases it, or execution is forced to
-    stop (quota exhausted, a provider limit, a process failure) — never a
-    voluntary choice dressed up as "a known long absence" or a convenient
-    reload. `hold:` names the forced walls it is for; the daemon's own
-    turn-end park stays a safety net for an unexpected end, not license to
-    end one on purpose."""
-    substrate = _read_bundled_daemon_substrate()
-
-    assert _says(
-        substrate,
-        "the process stays open until the user releases it or execution "
-        "is forced to stop",
-    )
-    assert _says(
-        substrate,
-        "`hold:` is for exactly those forced walls — a genuine resource "
-        "limit, never a voluntary choice to stop because staying got long "
-        "or a reload sounded convenient",
-    )
-    assert _says(
-        substrate,
-        "a safety net for a turn that ends some other way, never license "
-        "to end one on purpose",
-    )
-    assert "known long absence" not in substrate
-
-
-def test_seat_prompt_marks_the_hold_cost_ratio_informative_only():
-    """The idle-cost ratio still renders on the chip every heartbeat — only
-    the automatic park on it is gated behind an opt-in the default leaves
-    off (`seat.park_on_hold_cost`)."""
-    substrate = _read_bundled_daemon_substrate()
-
-    assert "seat.park_on_hold_cost" in substrate
-    assert _says(substrate, "the hold-cost ratio renders on the chip either way")
-    assert _says(substrate, "informative only, off by default")
+# _read_bundled_run_prompt / _read_bundled_daemon_substrate and the three
+# tests that used them (test_kb_link_contract_uses_portal_url_with_basename_fallback,
+# test_seat_prompt_authorizes_end_only_by_release_or_forced_stop,
+# test_seat_prompt_marks_the_hold_cost_ratio_informative_only) retired
+# 2026-09-11 — see the note above TestIntrospectionMode for why.
 
 
 def test_recent_conversation_renders_dedup_provenance():
@@ -2782,14 +2702,6 @@ def test_recent_conversation_marker_falls_back_when_bytes_not_local(tmp_path):
     assert "local:" not in block
 
 
-def _read_bundled_agents_md() -> str:
-    from pathlib import Path
-
-    import brr
-
-    return (Path(brr.__file__).parent / "AGENTS.md").read_text(encoding="utf-8")
-
-
 class TestScheduleTurnDedup:
     """Issue #576: a recurring `schedule.md` entry re-enters the conversation
     store as a `source: schedule` turn every time it fires, so an unbounded
@@ -2844,7 +2756,7 @@ class TestScheduleTurnDedup:
         # Only the "### Original event body" copy remains in full.
         assert prompt.count(self._ENTRY_BODY) == 1
         assert (
-            "identical to this run's event body — not repeated" in prompt
+            _says(prompt, "identical to this run's event body — not repeated")
         )
         # The firing itself must still be nameable: timestamp survives.
         assert "2026-07-20T04:44:00Z" in prompt
@@ -2932,8 +2844,8 @@ class TestScheduleTurnDedup:
         assert firing_1 in prompt
         assert firing_2 not in prompt
         assert (
-            "identical to the 2026-07-15T04:44:00Z firing above — not "
-            "repeated" in prompt
+            _says(prompt, "identical to the 2026-07-15T04:44:00Z firing above — not "
+            "repeated")
         )
 
     def test_realistic_fixture_shrinks_and_names_all_firings(self, tmp_path):
@@ -3121,7 +3033,7 @@ class TestRecentTurnByteCap:
         )
 
         assert "B elided" in block
-        assert "no thread key to resolve" in block
+        assert _says(block, "no thread key to resolve")
         assert "`" not in block.split("B elided")[1], "a path was invented"
 
     def test_config_key_retunes_the_cap(self, tmp_path):
@@ -3280,7 +3192,7 @@ class TestOwnOutboundReceipts:
                 f"for:\n{block}"
             )
         # Newest keeps its body — see the exception test below.
-        assert "supporting detail 3 for reply 2" in block
+        assert _says(block, "supporting detail 3 for reply 2")
 
         receipts = [
             ln for ln in block.splitlines() if "B · full turn:" in ln
@@ -3315,7 +3227,7 @@ class TestOwnOutboundReceipts:
                     f"exception is not holding:\n{line}"
                 )
         # And the older one did not.
-        assert "supporting detail 7 for reply 1" not in block
+        assert not _says(block, "supporting detail 7 for reply 1")
 
     def test_all_receipts_variant_is_one_constant_away(self, tmp_path, monkeypatch):
         """The exception is a flag, not a shape baked into the loop."""
@@ -3330,7 +3242,7 @@ class TestOwnOutboundReceipts:
         monkeypatch.setattr(prompts, "OWN_OUTBOUND_KEEP_NEWEST_IN_FULL", False)
         block = _format_recent_conversation(records, brr_dir=brr_dir)
 
-        assert "supporting detail 3 for reply 2" not in block
+        assert not _says(block, "supporting detail 3 for reply 2")
         assert block.count("B · full turn:") == 2
 
     def test_inbound_events_are_untouched(self, tmp_path):
@@ -3365,7 +3277,7 @@ class TestOwnOutboundReceipts:
 
         for line in ask.splitlines():
             assert line in block
-        assert "second ask, also in full" in block
+        assert _says(block, "second ask, also in full")
         assert block.count("B · full turn:") == 1, (
             "an inbound turn was collapsed, or the newest outbound was"
         )
@@ -3392,8 +3304,8 @@ class TestOwnOutboundReceipts:
 
         block = _format_recent_conversation(records, brr_dir=brr_dir)
 
-        assert "run run-1 status=done branch=brr/x" in block
-        assert "update progress run=run-1 stage=worker" in block
+        assert _says(block, "run run-1 status=done branch=brr/x")
+        assert _says(block, "update progress run=run-1 stage=worker")
         assert "full turn:" not in block
 
     def test_empty_body_artifact_still_renders_the_path_line(self, tmp_path):
@@ -3472,7 +3384,7 @@ class TestOwnOutboundReceipts:
             records, turn_max_bytes=RECENT_TURN_MAX_BYTES, brr_dir=brr_dir
         )
 
-        assert "supporting detail 3 for reply 1" not in uncapped
+        assert not _says(uncapped, "supporting detail 3 for reply 1")
         assert uncapped.count("B · full turn:") == 1
         # Both bodies are under the #736 cap, so the two renderings agree:
         # the collapse is doing this on its own, not riding the cap.
@@ -3538,12 +3450,12 @@ class TestOwnOutboundReceipts:
             lambda body, record, *, brr_dir: body,
         )
         before = render()
-        assert "supporting detail 7 for reply 0" in before, (
+        assert _says(before, "supporting detail 7 for reply 0"), (
             "baseline is not the pre-#755 rendering"
         )
 
-        assert "supporting detail 7 for reply 0" not in after
-        assert "supporting detail 7 for reply 3" in after, "newest lost its body"
+        assert not _says(after, "supporting detail 7 for reply 0")
+        assert _says(after, "supporting detail 7 for reply 3"), "newest lost its body"
         saved = len(before.encode("utf-8")) - len(after.encode("utf-8"))
         collapsed = sum(
             len(bodies[f"evt-{n}"].encode("utf-8")) for n in range(3)
@@ -3554,80 +3466,16 @@ class TestOwnOutboundReceipts:
         )
 
 
-class TestRevisitSignalGuardrails:
-    """Pin the prompt + AGENTS.md guidance for design-loaded / "reconsider"
-    tasks. Stance refined 2026-06-20 (see `kb/log.md`): the default is
-    *reconcile and act in the same thought*, not surface-and-wait; a
-    chat-only reply is reserved for a genuine fork, where it still must be
-    authorized so the diff-as-receipt rule can't force a half-fitting
-    commit. Both failure modes — path-of-least-resistance compliance and
-    aloof bounce-back — are guarded. See `kb/design-git-layer-rework.md`
-    Phase 3 for the original revisit-signal rationale."""
-
-    def test_run_prompt_mentions_revisit_signals(self):
-        prompt = _read_bundled_run_prompt()
-        # Section coordinate that gates the guidance.
-        assert "reconsider:" in prompt
-        # The trigger is ownership intent, not a brittle keyword list:
-        # the stance lives in the resident playbook and AGENTS.md →
-        # Stewardship, which this section leans on instead of
-        # re-enumerating trigger phrases.
-        assert "ask→judge-substance ⇒ judgement is deliverable" in prompt
-        assert "intent>trigger-words" in prompt
-
-    def test_run_prompt_biases_to_resolve_and_act(self):
-        prompt = _read_bundled_run_prompt()
-        # The default on a clear, reversible reconsider is to resolve it
-        # in-thread, not to park it for a second "go do that" event.
-        assert "clear ∧ reversible ⇒ land same thought" in prompt
-        assert "clear-call→park = +2 wakes" in prompt
-        assert "authority-map←identity-core §What You Owe" in prompt
-
-    def test_run_prompt_authorizes_no_commit_for_genuine_fork(self):
-        prompt = _read_bundled_run_prompt()
-        # The chat-only-reply outcome must stay named for the genuine-fork
-        # case so the diff-as-receipt rule doesn't force a half-fitting
-        # commit when there is no clear edit yet.
-        assert "op⇐chat-only{fork, proposed-direction} = complete task" in prompt
-        assert "half-fit commit for diff's sake = failure" in prompt
-
-    def test_agents_md_self_review_contains_contradiction_check(self):
-        agents = _read_bundled_agents_md()
-        # The self-review bullet maps onto Stewardship and now catches
-        # both failure modes, not just compliance.
-        assert "reconcile it against the current state" in agents
-        assert "aloof bounce-back" in agents
-        assert "Stewardship" in agents
-
-
-class TestDaemonModeGuardrails:
-    """Pin the run.md changes that route daemon runners through the
-    Run Context Bundle's Mode block and treat the run context file as
-    recovery detail rather than routine reading.  See
-    the earlier editor-orientation research and
-    `kb/plan-agent-orientation-layering.md`."""
-
-    def test_run_prompt_names_mode_block_and_recovery_role(self):
-        prompt = _read_bundled_run_prompt()
-        # AGENTS.md remains the entry point, but whether a wake already
-        # carries it is Shell-dependent (codex reads it natively; claude
-        # does not) — verified live 2026-07-11 on a claude-fable daemon
-        # wake whose context had no AGENTS.md block. The old "injected in
-        # most daemon wakes" wording taught residents to skip the contract
-        # they never received.
-        assert "shell may inject ∅" in prompt
-        assert "absent ∧ task∩shared ⇒ read≺touch*" in prompt
-        assert "Read the `AGENTS.md` playbook at the repo root" not in prompt
-        # The bundle is the authoritative "where am I?" (its Mode block).
-        assert "Run Context Bundle = now{mode, run, delivery, event, thread}" in prompt
-        # Injected Recent Activity counts toward the kb/log.md step so
-        # daemon runs don't re-read the log when the prompt already
-        # carries an extract. `_says` ignores wrapping, so a reflow of the
-        # paragraph can never read as a deleted rule.
-        assert "Recent Activity + bundle/recent-turns = startup-log" in prompt
-        assert "older⇒`kb/log.md`" in prompt
-        # The run context file is recovery detail, not routine reading.
-        assert "recovery-context⇒read only bundle-omissions" in prompt
+# TestRevisitSignalGuardrails / TestDaemonModeGuardrails retired 2026-09-11:
+# both read a bundled prompts/*.md file straight off disk and pinned specific
+# sentences. tests/test_boot_replay.py's `_elide_product_bodies` already
+# proves every bundled prompt body ≥512 bytes (run.md included) reaches the
+# built daemon prompt byte-for-byte untransformed — the assembly fact these
+# tests were standing in for. What they actually pinned beyond that was
+# prose wording, which the doctrine (kb `design-what-a-test-is-pinned-to.md`)
+# says a test should not: a referent the human edits on purpose, reviewed as
+# the prompts/*.md diff itself, not re-litigated as N red tests per edit. See
+# design-what-a-test-is-pinned-to.md "The three changes, priced" row 2.
 
 
 class TestIntrospectionMode:
@@ -3657,7 +3505,7 @@ class TestIntrospectionMode:
         self._enable(tmp_path)
         prompt = build_run_prompt("do something", tmp_path)
         assert "Look at it" in prompt
-        assert "the place, not the errand" in prompt
+        assert _says(prompt, "the place, not the errand")
         # It rides alongside the task; it must not displace the task text,
         # and it sits before the task as the last framing.
         assert "do something" in prompt
@@ -3766,7 +3614,7 @@ class TestWorkSurfaceInjection:
 
         assert "Historical ledger" not in result
         assert "Old reading" not in result
-        assert "2 lifecycle-ended surface pages left out" in result
+        assert _says(result, "2 lifecycle-ended surface pages left out")
         assert "`ledger/decisions.md`" in result
         assert "`shelf/old.md`" in result
         assert (surface / "ledger" / "decisions.md").is_file()
@@ -3813,8 +3661,7 @@ class TestWorkSurfaceInjection:
         )
         prompt = build_daemon_prompt("fix it", "evt-1", "/tmp/r.md", tmp_path)
         assert (
-            "parked branches: brr/lost (2 unmerged commits, pushed age unknown)"
-            in prompt
+            _says(prompt, "parked branches: brr/lost (2 unmerged commits, pushed age unknown)")
         )
 
         monkeypatch.setattr(parked_branches, "detect", lambda _repo: [])
@@ -3898,7 +3745,7 @@ class TestWorkSurfaceInjection:
 
         for title, _bulk in sections:
             assert f"## {title}" in result.text, f"{title} must reach the wake"
-        assert "cut to fit the wake budget" not in result.text
+        assert not _says(result.text, "cut to fit the wake budget")
         assert result.dropped is None, "nothing was trimmed at all"
         assert (surface / "workflow.md").resolve() in whole, (
             "a page handed over whole must be billed as whole (#628)"
@@ -3992,12 +3839,12 @@ class TestWorkSurfaceInjection:
 
         result, _whole = _build_work_surface_block_scored(tmp_path)
 
-        assert "the plan's actual agenda" in result.text
+        assert _says(result.text, "the plan's actual agenda")
         assert "_(page omitted —" not in result.text
-        assert "overflowing section: `Open, ranked`" in result.text
+        assert _says(result.text, "overflowing section: `Open, ranked`")
         assert f"budget: {budget:,} B" in result.text
         assert re.search(r"trimmed page: [\d,]+ B", result.text)
-        assert "1 further surface page omitted" in result.text
+        assert _says(result.text, "1 further surface page omitted")
 
     def test_the_exhausted_budget_line_names_every_page_it_dropped(self, tmp_path):
         """#1020 — a count says a page is missing; only a name says which.
@@ -4042,11 +3889,11 @@ class TestWorkSurfaceInjection:
 
         result, _whole = _build_work_surface_block_scored(tmp_path)
 
-        assert "2 further surface pages omitted" in result.text
+        assert _says(result.text, "2 further surface pages omitted")
         assert "`zzz-other.md`" in result.text, "the dropped contract is named"
         assert "`zzz-last.md`" in result.text, "every dropped page, not just the first"
         assert "The signed clause" not in result.text, "and they really were dropped"
-        assert "`zzz-other.md` (§Gating and merges)" in result.text
+        assert _says(result.text, "`zzz-other.md` (§Gating and merges)")
         assert "`zzz-last.md` (§Tail)" in result.text
 
     def test_a_dropped_pages_long_headings_gist_as_a_count_not_a_clipped_title(
@@ -4114,7 +3961,7 @@ class TestWorkSurfaceInjection:
 
         result, _whole = _build_work_surface_block_scored(tmp_path)
 
-        assert "`zzz-other.md` (§Section Alpha · §Section Beta · +1 more)" in result.text
+        assert _says(result.text, "`zzz-other.md` (§Section Alpha · §Section Beta · +1 more)")
 
     def test_a_headingless_dropped_page_gists_nothing(self, tmp_path):
         """#1111 — no ``## `` headings means no anchors to report; the name
@@ -4197,7 +4044,7 @@ class TestWorkSurfaceInjection:
 
         result, _whole = _build_work_surface_block_scored(tmp_path)
 
-        assert "1 further surface page omitted" in result.text
+        assert _says(result.text, "1 further surface page omitted")
         assert "`zzz-other.md`" in result.text
 
     def test_headingless_no_room_still_uses_the_page_placeholder(self, tmp_path):
@@ -4266,7 +4113,7 @@ class TestHearthInjection:
         result = _build_hearth_block(tmp_path)
 
         assert "The hearth" in result
-        assert "the mantel is bare" in result
+        assert _says(result, "the mantel is bare")
         assert "README.md" not in result  # the seed itself is not a "page"
 
     def test_confidences_marker_always_present(self, tmp_path):
@@ -4311,8 +4158,8 @@ class TestHearthInjection:
         assert "- `arseni.md` — The maintainer — personal context" in result
         assert "- `headingless.md`" in result
         # Never the page body — the whole point of "index-shaped".
-        assert "never rides the wake" not in result
-        assert "just prose, no H1" not in result
+        assert not _says(result, "never rides the wake")
+        assert not _says(result, "just prose, no H1")
 
     def test_readme_excluded_from_the_per_page_index(self, tmp_path):
         from brr import account
@@ -4351,7 +4198,7 @@ class TestHearthInjection:
 
         assert "further hearth page" in result
         assert "omitted" in result
-        assert "read them under `hearth/`" in result
+        assert _says(result, "read them under `hearth/`")
         # The banner names a *count*, never a host filesystem path (#1332
         # guard: same "never host paths" discipline as the remote-reader
         # rule for any other injected block).
@@ -4449,7 +4296,7 @@ class TestSurfaceReserve:
         result, _whole = _build_work_surface_block_scored(tmp_path)
 
         assert "### workflow.md" in result.text
-        assert "The signed clause survives" in result.text
+        assert _says(result.text, "The signed clause survives")
         assert "workflow.md" not in "\n".join(
             line for line in result.text.splitlines() if "omitted" in line
         )
@@ -4495,7 +4342,7 @@ class TestSurfaceReserve:
 
         result, whole = _build_work_surface_block_scored(tmp_path)
 
-        assert "cut to fit the wake budget" not in result.text
+        assert not _says(result.text, "cut to fit the wake budget")
         assert "reserved allocation" not in result.text
         assert (surface / "workflow.md").resolve() in whole
 
@@ -4530,9 +4377,7 @@ class TestSurfaceReserve:
         result, _whole = _build_work_surface_block_scored(tmp_path)
 
         assert "### workflow.md" in result.text
-        assert "mandatory section floor exceeded this page's reserved allocation" in (
-            result.text
-        )
+        assert _says(result.text, "mandatory section floor exceeded this page's reserved allocation")
 
 
 # ── #1061 rec 3 — backchannel injected as handles only ─────────────────
@@ -4561,12 +4406,12 @@ class TestBackchannelHandles:
 
         result, _whole = _build_work_surface_block_scored(tmp_path)
 
-        assert "## Ship the migration" in result.text
+        assert _says(result.text, "## Ship the migration")
         assert "kind: decide" in result.text
         assert "refs: hugimuni-labs/brnrd#1061" in result.text
-        assert "prompt: pick a reserve size" in result.text
+        assert _says(result.text, "prompt: pick a reserve size")
         assert "free-text body" not in result.text
-        assert "injected as handles only" in result.text
+        assert _says(result.text, "injected as handles only")
         assert "full page: `surface/backchannel.md`" in result.text
 
     def test_preserves_state_needs_and_taken_rows(self, tmp_path):
@@ -4589,9 +4434,9 @@ class TestBackchannelHandles:
         assert dropped > 0
         assert "kind: act" in content
         assert "state: ember" in content
-        assert "needs: a decision from the maintainer" in content
+        assert _says(content, "needs: a decision from the maintainer")
         assert "refs: some-page.md" in content
-        assert "prompt: do the thing" in content
+        assert _says(content, "prompt: do the thing")
         assert "taken: run-260807-0100-aaaa" in content
         assert "Free text body" not in content
 
@@ -4611,7 +4456,7 @@ class TestBackchannelHandles:
 
         result, whole = _build_work_surface_block_scored(tmp_path)
 
-        assert "injected as handles only" not in result.text
+        assert not _says(result.text, "injected as handles only")
         assert page.resolve() in whole
 
     def test_only_the_named_page_is_compressed(self, tmp_path):
@@ -4630,8 +4475,8 @@ class TestBackchannelHandles:
 
         result, _whole = _build_work_surface_block_scored(tmp_path)
 
-        assert "This free-text body must survive" in result.text
-        assert "injected as handles only" not in result.text
+        assert _says(result.text, "This free-text body must survive")
+        assert not _says(result.text, "injected as handles only")
 
 
 # ── #1137 — stale-refs annotation on work-surface items ────────────────
@@ -4660,7 +4505,7 @@ class TestStaleRefsAnnotation:
             tmp_path, resolved_prs={1126: "merged 14h ago"}
         )
 
-        assert "## Ship the migration    ⚑ refs #1126 merged 14h ago" in result.text
+        assert _says(result.text, "## Ship the migration    ⚑ refs #1126 merged 14h ago")
 
     def test_item_naming_only_an_open_pr_is_unchanged(self, tmp_path):
         """#997-style: the number is a real forge artifact, just not a
@@ -4720,7 +4565,7 @@ class TestStaleRefsAnnotation:
             tmp_path, resolved_prs={1126: "merged 14h ago"}
         )
 
-        assert "## Two gates, one still open\n" in result.text
+        assert _says(result.text, "## Two gates, one still open\n")
         assert "⚑" not in result.text
 
     def test_only_the_stale_item_is_annotated_among_several(self, tmp_path):
@@ -4737,7 +4582,7 @@ class TestStaleRefsAnnotation:
             tmp_path, resolved_prs={1126: "merged 14h ago"}
         )
 
-        assert "## Done already    ⚑ refs #1126 merged 14h ago" in result.text
+        assert _says(result.text, "## Done already    ⚑ refs #1126 merged 14h ago")
         assert "## Still live\n" in result.text
 
     def test_no_resolved_prs_is_a_noop(self, tmp_path):
@@ -4797,7 +4642,7 @@ class TestStaleRefsAnnotation:
             },
         )
 
-        assert "## Ship the migration    ⚑ refs #1126 merged" in prompt
+        assert _says(prompt, "## Ship the migration    ⚑ refs #1126 merged")
 
 
 # ── CS6 — runner policy injection ─────────────────────────────────────
@@ -4902,10 +4747,10 @@ def test_prior_run_block_hands_back_the_now_and_the_body_shape(tmp_path):
 
     block = prompts._build_prior_run_block(repo)
 
-    assert "run-prior · done · finished · claude-opus · pushed" in block
-    assert "Landing the edge writer." in block
+    assert _says(block, "run-prior · done · finished · claude-opus · pushed")
+    assert _says(block, "Landing the edge writer.")
     # The shape, not the territory: section names without their contents.
-    assert "also in that body: Arc · Open" in block
+    assert _says(block, "also in that body: Arc · Open")
     assert "A long story." not in block
     assert "One question." not in block
 
@@ -4970,7 +4815,7 @@ def test_prior_run_block_carries_the_guard_line_when_a_summary_exists(tmp_path):
 
     block = prompts._build_prior_run_block(repo)
 
-    assert "guard: 16 stops · blocked ×1 · final stop clear" in block
+    assert _says(block, "guard: 16 stops · blocked ×1 · final stop clear")
 
 
 def test_prior_run_block_shouts_when_the_run_ended_over_a_live_block(tmp_path):
@@ -5003,7 +4848,7 @@ def test_prior_run_block_shouts_when_the_run_ended_over_a_live_block(tmp_path):
 
     block = prompts._build_prior_run_block(repo)
 
-    assert "guard: 1 stop · blocked ×1 · final stop BLOCKED" in block
+    assert _says(block, "guard: 1 stop · blocked ×1 · final stop BLOCKED")
 
 
 def test_prior_run_block_has_no_guard_line_when_no_summary_exists(tmp_path):
@@ -5100,7 +4945,7 @@ def test_kb_ownership_signal_five_orphans_truncated():
     assert "a.md" in out
     assert "b.md" in out
     assert "c.md" in out
-    assert "… and 2 more" in out
+    assert _says(out, "… and 2 more")
     assert "d.md" not in out
     assert "e.md" not in out
 
@@ -5232,7 +5077,7 @@ class TestKbMirrorSignal:
         assert "kb health" in block
         assert "1 commit behind" in block
         assert "`origin/main`" in block
-        assert "`git status` there reads clean" in block
+        assert _says(block, "`git status` there reads clean")
 
     def test_behind_and_dirty_gets_a_different_sentence(
         self, tmp_path, monkeypatch
@@ -5444,7 +5289,7 @@ class TestSyncMarkerBannerSpeaksItsClass:
             tmp_path, PushStatus.REJECTED_NON_FAST_FORWARD.value,
         )
         assert "has diverged" in block
-        assert "fetch, merge / resolve" in block
+        assert _says(block, "fetch, merge / resolve")
 
     def test_auth_failure_never_prescribes_a_merge(self, tmp_path):
         from brr.gitops import PushStatus
@@ -5455,8 +5300,8 @@ class TestSyncMarkerBannerSpeaksItsClass:
         # The whole point: no merge instruction anywhere in the banner.
         # (The exact headline, not the substring — the auth banner says
         # "nothing has diverged", which is the opposite claim.)
-        assert "fetch, merge / resolve" not in block
-        assert "**your dominion remote has diverged**" not in block
+        assert not _says(block, "fetch, merge / resolve")
+        assert not _says(block, "**your dominion remote has diverged**")
 
     def test_unreachable_never_prescribes_a_merge(self, tmp_path):
         from brr.gitops import PushStatus
@@ -5464,7 +5309,7 @@ class TestSyncMarkerBannerSpeaksItsClass:
         block = self._render(tmp_path, PushStatus.UNREACHABLE.value)
         assert "could not reach" in block
         assert "nothing has diverged" in block
-        assert "fetch, merge / resolve" not in block
+        assert not _says(block, "fetch, merge / resolve")
 
     def test_unknown_class_renders_as_unknown(self, tmp_path):
         """An unclassified failure is reported unclassified.
@@ -5476,7 +5321,7 @@ class TestSyncMarkerBannerSpeaksItsClass:
         block = self._render(tmp_path, "")
         assert "could not push" in block
         assert "unclassified" in block
-        assert "**your dominion remote has diverged**" not in block
+        assert not _says(block, "**your dominion remote has diverged**")
 
     def test_marker_round_trips_status_and_reason(self, tmp_path):
         from brr import dominion, gitops
@@ -5528,7 +5373,7 @@ class TestNeverLinkedBanner:
 
         block = _build_dominion_block(repo)
 
-        assert "has never been linked" not in block
+        assert not _says(block, "has never been linked")
 
     def test_renders_once_real_content_follows_birth(self, tmp_path):
         from brr import dominion
@@ -5543,11 +5388,11 @@ class TestNeverLinkedBanner:
 
         block = _build_dominion_block(repo)
 
-        assert "**your dominion has never been linked**" in block
+        assert _says(block, "**your dominion has never been linked**")
         assert "brnrd home link" in block
         # Not the push-failure banner's vocabulary — this is a different
         # fact with a different remedy, not a merge to do.
-        assert "fetch, merge / resolve" not in block
+        assert not _says(block, "fetch, merge / resolve")
         assert "has diverged" not in block
 
     def test_needs_sync_takes_precedence_and_suppresses_never_linked(
@@ -5567,7 +5412,7 @@ class TestNeverLinkedBanner:
 
         block = _build_dominion_block(repo)
 
-        assert "has never been linked" not in block
+        assert not _says(block, "has never been linked")
         assert "could not push" in block
 
 
@@ -5646,7 +5491,7 @@ class TestInertPitfallReachesTheWake:
         block = _build_notes_health_block(repo)
 
         assert "inert-pitfall" in block
-        assert "Seeing unshipped frontend — the probe config" in block
+        assert _says(block, "Seeing unshipped frontend — the probe config")
         assert "pitfalls.md" in block
         assert "[info]" in block
 
@@ -5733,7 +5578,7 @@ class TestPitfallCitesClosedIssueReachesTheWake:
         block = _build_notes_health_block(repo)
 
         assert "pitfall-cites-closed-issue" in block
-        assert "Host strand clone shape" in block
+        assert _says(block, "Host strand clone shape")
         assert "#1298" in block
         assert "2026-08-05" in block
 

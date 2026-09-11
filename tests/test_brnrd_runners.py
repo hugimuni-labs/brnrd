@@ -16,42 +16,13 @@ from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.oauth import GitHubIdentity  # noqa: E402
 from brnrd.routers.accounts import account_for_github_identity, issue_session_token  # noqa: E402
-from _helpers import PUBLISH_EVERYTHING, brnrd_account_headers  # noqa: E402
+from _helpers import PUBLISH_EVERYTHING, brnrd_account_headers, brnrd_client, brnrd_repo_and_daemon  # noqa: E402
 
 
-def _client() -> TestClient:
-    app = create_app(
-        Settings(
-            database_url="sqlite:///:memory:",
-            public_base_url="https://brnrd.example",
-            github_oauth_client_id="gh-client",
-            github_oauth_client_secret="gh-secret",
-        )
-    )
-    return TestClient(app, base_url="https://testserver")
+_client = brnrd_client
 
 
-def _repo_and_daemon(client: TestClient) -> tuple[dict[str, str], dict[str, str], str]:
-    account_headers = brnrd_account_headers(
-        client.app, github_id="123", login="octocat", email="a@b.com",
-    )
-    repo = client.post(
-        "/v1/accounts/repos",
-        json={"repo_full_name": "Gurio/brr", "default_branch": "main", "publish_layers": PUBLISH_EVERYTHING},
-        headers=account_headers,
-    ).json()
-    pair = client.post("/v1/accounts/pair").json()
-    client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo["repo_id"], "approve_secret": pair["approve_secret"]},
-        headers=account_headers,
-    )
-    paired = client.get(
-        f"/v1/accounts/pair/{pair['pair_code']}",
-        params={"poll_secret": pair["poll_secret"]},
-    ).json()
-    daemon_headers = {"Authorization": f"Bearer {paired['daemon_token']}"}
-    return account_headers, daemon_headers, repo["repo_id"]
+_repo_and_daemon = brnrd_repo_and_daemon
 
 
 def _login_cookie(client: TestClient) -> None:

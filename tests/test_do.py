@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from _helpers import _says
 from brr import do as do_mod
 from brr import cli
 from brr import emotes
@@ -64,11 +65,11 @@ def test_bare_do_prints_the_portal_snapshot(tmp_path, monkeypatch, capsys):
     assert main(["do"]) == 0
     out = capsys.readouterr().out
     assert "run=run-1" in out
-    assert "pending events (1): evt-2 telegram: hi" in out
-    assert "outbound: current=0 other=0 outbound=0" in out
+    assert _says(out, "pending events (1): evt-2 telegram: hi")
+    assert _says(out, "outbound: current=0 other=0 outbound=0")
     assert "notices: none" in out
     assert "quota: weekly 42%" in out
-    assert "spawn pool: 1/3 used, 2 available" in out
+    assert _says(out, "spawn pool: 1/3 used, 2 available")
 
 
 def test_bare_do_renders_notices(tmp_path, monkeypatch, capsys):
@@ -82,7 +83,7 @@ def test_bare_do_renders_notices(tmp_path, monkeypatch, capsys):
 
     assert main(["do"]) == 0
     out = capsys.readouterr().out
-    assert "notices (1): refused: spawn refused: no pool capacity" in out
+    assert _says(out, "notices (1): refused: spawn refused: no pool capacity")
 
 
 def test_bare_do_outside_a_wake_says_why(monkeypatch, capsys):
@@ -403,7 +404,7 @@ def test_do_reply_with_both_promise_and_no_follow_up_is_refused_by_argparse(
             "--promise", "pr", "--no-follow-up",
         ])
     err = capsys.readouterr().err
-    assert "not allowed with argument" in err
+    assert _says(err, "not allowed with argument")
     assert not list(outbox.glob("do-*.md"))
 
 
@@ -414,7 +415,7 @@ def test_do_promise_flag_without_reply_is_refused(tmp_path, monkeypatch, capsys)
 
     assert main(["do", "--note", "evt-1", "--promise", "pr"]) == 1
     err = capsys.readouterr().err
-    assert "only apply to --reply" in err
+    assert _says(err, "only apply to --reply")
     assert not list(outbox.glob("do-*.md"))
 
 
@@ -473,7 +474,7 @@ def test_do_reply_absent_from_live_inbox_is_refused_before_staging(
     ]) == 1
     err = capsys.readouterr().err
     assert "evt-9" in err
-    assert "not found among pending events" in err
+    assert _says(err, "not found among pending events")
     assert "Nothing was staged" in err
     assert not list(outbox.glob("do-*.md"))
 
@@ -498,7 +499,7 @@ def test_do_multi_reply_all_or_nothing_when_one_target_is_not_pending(
     ]) == 1
     err = capsys.readouterr().err
     assert "evt-2" in err
-    assert "not found among pending events" in err
+    assert _says(err, "not found among pending events")
     assert not list(outbox.glob("do-*.md"))
 
 
@@ -586,7 +587,7 @@ def test_do_reply_with_unpromisable_kind_writes_nothing(tmp_path, monkeypatch, c
         "do", "--reply", "evt-1", "--body", "hi", "--promise", "not-a-kind",
     ]) == 1
     out = capsys.readouterr().out.strip()
-    assert "promise not-a-kind ✗ not promisable" in out
+    assert _says(out, "promise not-a-kind ✗ not promisable")
     assert not (outbox / ".promises.jsonl").exists()
 
 
@@ -1250,7 +1251,7 @@ def test_do_gate_rejects_inline_body(tmp_path, monkeypatch, capsys):
     _do_env(monkeypatch, outbox)
 
     assert main(["do", "--gate", "forge", "--body", "hi"]) == 1
-    assert "only pairs with --body-file" in capsys.readouterr().err
+    assert _says(capsys.readouterr().err, "only pairs with --body-file")
 
 
 def test_do_two_replies_back_to_back_with_no_body_is_rejected(tmp_path, monkeypatch, capsys):
@@ -1279,8 +1280,8 @@ def test_do_rejects_identical_body_for_multiple_event_replies(tmp_path, monkeypa
     ]) == 1
 
     err = capsys.readouterr().err
-    assert "identical reply body targets multiple events" in err
-    assert "Reply once and --note the sibling event(s)" in err
+    assert _says(err, "identical reply body targets multiple events")
+    assert _says(err, "Reply once and --note the sibling event(s)")
     assert not list(outbox.glob("do-*.md"))
 
 
@@ -1327,7 +1328,7 @@ def test_do_card_missing_file_is_reported(tmp_path, monkeypatch, capsys):
     _portal_state(outbox)
 
     assert main(["do", "--card", str(tmp_path / "missing.md")]) == 1
-    assert "card ✗ could not read" in capsys.readouterr().out
+    assert _says(capsys.readouterr().out, "card ✗ could not read")
 
 
 # ── passthrough: `-- <command> [args...]` ───────────────────────────
@@ -1399,7 +1400,7 @@ def test_do_passthrough_command_not_found_reports_and_exits_127(
     monkeypatch.setattr("os.execvp", _fake_execvp)
 
     assert main(["do", "--", "totally-not-a-real-command"]) == 127
-    assert "passthrough command not found" in capsys.readouterr().err
+    assert _says(capsys.readouterr().err, "passthrough command not found")
 
 
 def test_do_without_dashdash_is_unaffected(tmp_path, monkeypatch, capsys):
@@ -1452,7 +1453,7 @@ def test_cut_errors_for_a_missing_file(tmp_path, monkeypatch, capsys):
     _portal_state(outbox)
 
     assert main(["cut", str(tmp_path / "nope.md")]) == 1
-    assert "is not a file" in capsys.readouterr().err
+    assert _says(capsys.readouterr().err, "is not a file")
 
 
 def test_cut_reports_accepted_when_consumed_cleanly(tmp_path, monkeypatch, capsys):
@@ -1532,8 +1533,8 @@ def test_cut_refuses_incident_lenient_shape_before_staging(
 
     assert main(["cut", str(declaration), "--timeout", "0.01"]) == 1
     err = capsys.readouterr().err
-    assert "invalid cut declaration shape" in err
-    assert "lists must be keyed mappings" in err
+    assert _says(err, "invalid cut declaration shape")
+    assert _says(err, "lists must be keyed mappings")
     assert "evt-...: answered" in err
     assert list(outbox.glob("do-*-cut-*.md")) == []
 
@@ -1557,7 +1558,7 @@ def test_cut_refuses_a_strands_row_stranded_in_the_lenient_body(
 
     assert main(["cut", str(declaration), "--timeout", "0.01"]) == 1
     err = capsys.readouterr().err
-    assert "invalid cut declaration shape" in err
+    assert _says(err, "invalid cut declaration shape")
     assert list(outbox.glob("do-*-cut-*.md")) == []
 
 
@@ -1576,7 +1577,7 @@ def test_cut_refuses_bullet_list_inside_canonical_declaration(
     )
 
     assert main(["cut", str(declaration)]) == 1
-    assert "lists must be keyed mappings" in capsys.readouterr().err
+    assert _says(capsys.readouterr().err, "lists must be keyed mappings")
     assert list(outbox.glob("do-*-cut-*.md")) == []
 
 
@@ -1593,7 +1594,7 @@ def test_stage_cut_refuses_unterminated_frontmatter_fence_before_staging(tmp_pat
 
     assert path is None
     assert err is not None
-    assert "invalid cut declaration fence" in err
+    assert _says(err, "invalid cut declaration fence")
     assert "closing `---`" in err
     assert list(outbox.iterdir()) == []
 
@@ -1767,7 +1768,7 @@ def test_cut_reports_the_annotated_count_on_a_forced_accept(
 
     assert main(["cut", str(declaration)]) == 0
     out = capsys.readouterr().out
-    assert "accepted, annotated — 2 check(s) unresolved" in out
+    assert _says(out, "accepted, annotated — 2 check(s) unresolved")
 
 
 def test_accepted_is_one_fact_across_every_verdict_consumer():
