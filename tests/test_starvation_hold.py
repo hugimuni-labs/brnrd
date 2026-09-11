@@ -12,6 +12,7 @@ import json
 import pytest
 
 from brr import daemon, protocol, resource_hold, runner_failures
+from brr.gates import runtime as gate_runtime
 from brr.run import Run
 
 
@@ -184,6 +185,46 @@ class TestRefusedWake:
         assert "evt-human" in hold["accumulated_event_ids"]
         partial = _partials(target.responses_dir, "evt-human")
         assert "1.7%" in partial and "`respawn <core>`" in partial and "`force`" in partial
+
+    def test_the_gate_delivers_the_kept_answer_while_the_event_stays_pending(
+        self, tmp_path, monkeypatch,
+    ):
+        """The kept message's answer must reach the chat *while* it is kept.
+
+        Measured 2026-09-11 (evt-…-x3co): the reply was staged 3s after his
+        message and reached Telegram 4m35s later — after the "Stopped" line
+        that made it untrue — because ``deliver_stream`` swept only
+        ``processing``/``done`` events and a kept message stays ``pending``
+        for the whole ``_HOLD_DEFER_SECONDS`` horizon. Every assertion above
+        reads the partial straight off disk, which is exactly the half that
+        was never broken; this one goes through the gate that speaks.
+        """
+        self._starved_run(tmp_path)
+        target = self._target(tmp_path, "evt-human")
+        monkeypatch.setattr(daemon, "_held_run_binding_pct", lambda *a, **k: 1.7)
+        daemon._handle_resource_held_events([target], None)
+
+        sent: list[str] = []
+
+        def _deliver(_event, body):
+            sent.append(body)
+            return {"message_id": len(sent)}
+
+        gate_runtime.deliver_stream(
+            target.inbox_dir, target.responses_dir, "telegram", _deliver,
+        )
+
+        assert len(sent) == 1 and "1.7%" in sent[0]
+        # Delivered, and still kept: answering a starved seat's mail must not
+        # advance the event toward dispatch.
+        reread = protocol._read_event(target.inbox_dir / "evt-human.md")
+        assert reread.get("status") == "pending"
+        assert reread.get("defer_reason") == "resource_hold"
+
+        gate_runtime.deliver_stream(
+            target.inbox_dir, target.responses_dir, "telegram", _deliver,
+        )
+        assert len(sent) == 1  # never twice
 
     def test_refilled_thaws_on_the_message_itself(self, tmp_path, monkeypatch):
         held = self._starved_run(tmp_path)
