@@ -19217,9 +19217,17 @@ def start(
 
     if account_context.enabled and account_context.dominion_repo.exists():
         try:
-            repo_dominion = account.repo_dominion_path(
-                account_context,
-                account.repo_label(repo_root, cfg),
+            # Once ``brnrd dominion consolidate`` has made the one dominion,
+            # seed *that*: seeding the per-repo path would refill the
+            # directory the consolidation emptied (it keeps only a pointer
+            # file) with starter files, a second dominion born at restart.
+            home_dominion = account.home_dominion_path(account_context)
+            repo_dominion = (
+                home_dominion if home_dominion.is_dir()
+                else account.repo_dominion_path(
+                    account_context,
+                    account.repo_label(repo_root, cfg),
+                )
             )
             dominion.seed_account_dominion(repo_dominion)
         except Exception as exc:  # noqa: BLE001
