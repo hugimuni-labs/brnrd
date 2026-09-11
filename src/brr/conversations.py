@@ -876,6 +876,80 @@ def read_records_for_correspondent(
     return _dedupe_woven_records(out)
 
 
+def unread_pile(
+    brr_dir: Path,
+    key: str,
+    correspondent_key: str | None,
+) -> dict[str, int] | None:
+    """Resident deliveries to *key* since *correspondent_key*'s last inbound word.
+
+    ``{"count": N, "bytes": M}`` — walks the merged, deduped record stream
+    (:func:`read_records_for_correspondent`) oldest-first, resetting to zero
+    on every inbound ``kind == "event"`` record carrying this same
+    ``correspondent_key`` (the identity :func:`correspondent_key_for_event`
+    already recognises as "the correspondent talking" — a schedule firing or
+    spawn completion never resets it, same filter :func:`quiet_seconds` in
+    ``correspondent.py`` uses), then counting every dialogue delivery
+    (:data:`_DIALOGUE_ARTIFACT_KINDS`) after that point. A thread with no
+    inbound event yet counts every delivery since the beginning — there is
+    nothing to reset off, so "since last inbound" is "since the thread
+    opened".
+
+    ``None`` when there is no correspondent identity at all — an unread
+    pile is a fact about a specific person, not a thread nobody has been
+    identified on (mirrors :func:`brr.correspondent.facet_input`'s own
+    ``None`` gate).
+
+    A burst reply (``event:`` + ``also:``) is one physical send answering
+    several pending events — ``daemon.py`` marks every artifact it mints
+    for that send with the same ``delivery_id`` (the partial file the send
+    actually wrote). Counted here by distinct delivery id, so a burst
+    answering three events counts once, not three (a duplicate before this
+    guard: #1925's review). Older artifacts predating the field carry no
+    ``delivery_id`` and always count — nothing to collapse against.
+
+    Reads only *key*'s own store, not :func:`read_records_for_correspondent`'s
+    merged, deduped, cross-conversation view — the correspondent facet
+    calls this on every VITAL boundary, and *key* is already the waking
+    conversation, which *is* this correspondent's own thread (#1925's
+    review: ``conversation_keys_for_correspondent`` walked and re-read
+    every conversation directory in the whole store — ~140ms on an 11MB
+    store — to answer a question this thread's own records already
+    settle). A delivery mirrored onto a sibling gate key (the cloud/native
+    telegram pair `read_recent_for_correspondent` weaves together) is not
+    counted twice here either, at the cost of not being counted at all
+    from the other key's side — an acceptable trade for a fact reread
+    every boundary; the woven views that need the cross-key merge still
+    get it.
+    """
+    if not correspondent_key:
+        return None
+    count = 0
+    total_bytes = 0
+    seen_deliveries: set[str] = set()
+    for record in read_records(brr_dir, key):
+        if (
+            record.get("kind") == "event"
+            and record.get("correspondent_key") == correspondent_key
+        ):
+            count = 0
+            total_bytes = 0
+            seen_deliveries.clear()
+            continue
+        if (
+            record.get("kind") == "artifact"
+            and record.get("artifact_kind") in _DIALOGUE_ARTIFACT_KINDS
+        ):
+            delivery_id = record.get("delivery_id")
+            if delivery_id:
+                if delivery_id in seen_deliveries:
+                    continue
+                seen_deliveries.add(delivery_id)
+            count += 1
+            total_bytes += len(str(record.get("body") or "").encode("utf-8"))
+    return {"count": count, "bytes": total_bytes}
+
+
 def read_recent_for_correspondent(
     brr_dir: Path,
     key: str,

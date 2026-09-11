@@ -2192,7 +2192,8 @@ def _correspondent_chip(resources: dict[str, Any]) -> str | None:
     quiet = facet.get("quiet_seconds")
     has_read = isinstance(facet.get("read"), dict) and facet.get("read")
     long_quiet = quiet is not None and float(quiet) >= _CORRESPONDENT_QUIET_FLOOR_S
-    if not long_quiet and not has_read:
+    has_unread = bool(facet.get("unread_count"))
+    if not long_quiet and not has_read and not has_unread:
         return None
     summary = str(facet.get("summary") or "").strip()
     return f"him: {summary}" if summary else None

@@ -427,6 +427,114 @@ def test_read_recent_for_correspondent_merges_sibling_channels(tmp_path):
     assert [r.get("conversation_key") for r in records] == [native_key, cloud_key]
 
 
+# ── unread_pile (#1914) ──────────────────────────────────────────────
+
+
+def test_unread_pile_counts_deliveries_since_the_last_inbound(tmp_path):
+    inbound = {
+        "id": "evt-in-1",
+        "source": "telegram",
+        "body": "hey",
+        "telegram_chat_id": 10,
+        "telegram_user_id": 42,
+    }
+    key = conversations.conversation_key_for_event(inbound)
+    correspondent_key = conversations.correspondent_key_for_event(inbound)
+    conversations.append_event(tmp_path, key, inbound)
+    conversations.append_artifact(
+        tmp_path, key, kind="response", path="r1", body="a" * 100,
+    )
+    conversations.append_artifact(
+        tmp_path, key, kind="interim_response", path="r2", body="b" * 24,
+    )
+
+    pile = conversations.unread_pile(tmp_path, key, correspondent_key)
+    assert pile == {"count": 2, "bytes": 124}
+
+
+def test_unread_pile_resets_on_a_fresh_inbound_message(tmp_path):
+    first = {
+        "id": "evt-in-1",
+        "source": "telegram",
+        "body": "hey",
+        "telegram_chat_id": 10,
+        "telegram_user_id": 42,
+    }
+    key = conversations.conversation_key_for_event(first)
+    correspondent_key = conversations.correspondent_key_for_event(first)
+    conversations.append_event(tmp_path, key, first)
+    conversations.append_artifact(
+        tmp_path, key, kind="response", path="r1", body="a" * 50,
+    )
+    second = {**first, "id": "evt-in-2", "body": "still there?"}
+    conversations.append_event(tmp_path, key, second)
+
+    pile = conversations.unread_pile(tmp_path, key, correspondent_key)
+    assert pile == {"count": 0, "bytes": 0}
+
+
+def test_unread_pile_none_with_no_correspondent_identity(tmp_path):
+    assert conversations.unread_pile(tmp_path, "schedule:default", None) is None
+
+
+def test_unread_pile_collapses_a_burst_to_one_delivery(tmp_path):
+    """A burst reply (`event:` + `also:`) is one physical send — #1925's
+    review: three `append_artifact` calls sharing a `delivery_id` must
+    count once, not three."""
+    inbound = {
+        "id": "evt-in-1",
+        "source": "telegram",
+        "body": "hey",
+        "telegram_chat_id": 10,
+        "telegram_user_id": 42,
+    }
+    key = conversations.conversation_key_for_event(inbound)
+    correspondent_key = conversations.correspondent_key_for_event(inbound)
+    conversations.append_event(tmp_path, key, inbound)
+    body = "a" * 16
+    for event_id in ("evt-a", "evt-b", "evt-c"):
+        conversations.append_artifact(
+            tmp_path, key, kind="interim_response", path="shared-partial",
+            event_id=event_id, body=body, extra={"delivery_id": "shared-partial"},
+        )
+
+    pile = conversations.unread_pile(tmp_path, key, correspondent_key)
+    assert pile == {"count": 1, "bytes": 16}
+
+
+def test_unread_pile_reads_only_its_own_conversation(tmp_path):
+    """The correspondent facet calls this every boundary — it must not
+    walk the whole store (#1925's review) to answer a question this
+    thread's own records already settle. A delivery recorded on a
+    *different* conversation key for the same correspondent (a sibling
+    gate mirror) is invisible here by design; the woven views that need
+    the cross-key merge still call `read_records_for_correspondent`."""
+    inbound = {
+        "id": "evt-in-1",
+        "source": "telegram",
+        "body": "hey",
+        "telegram_chat_id": 10,
+        "telegram_user_id": 42,
+    }
+    key = conversations.conversation_key_for_event(inbound)
+    correspondent_key = conversations.correspondent_key_for_event(inbound)
+    conversations.append_event(tmp_path, key, inbound)
+    conversations.append_artifact(
+        tmp_path, key, kind="response", path="r1", body="a" * 10,
+    )
+    # A sibling conversation key sharing this correspondent, carrying its
+    # own delivery — the old full-store scan would have merged this in.
+    sibling_key = "cloud:telegram:10:"
+    sibling_inbound = {**inbound, "id": "evt-in-2"}
+    conversations.append_event(tmp_path, sibling_key, sibling_inbound)
+    conversations.append_artifact(
+        tmp_path, sibling_key, kind="response", path="r2", body="b" * 90,
+    )
+
+    pile = conversations.unread_pile(tmp_path, key, correspondent_key)
+    assert pile == {"count": 1, "bytes": 10}
+
+
 # ── Cross-thread weave dedup (#338) ──────────────────────────────────
 
 

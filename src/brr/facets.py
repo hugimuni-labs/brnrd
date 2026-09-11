@@ -312,15 +312,42 @@ def format_quiet(seconds: float | None) -> str | None:
     return f"quiet {int(seconds // 86400)}d"
 
 
-def correspondent_summary(
-    quiet_seconds: float | None, read: object = None
-) -> str:
-    """The one-line reading: how long they have been quiet, and a receipt.
+def _format_unread(count: object, size_bytes: object) -> str | None:
+    """``3 unread · 5.2KB``, or ``None`` when there is nothing to show.
 
-    ``quiet 12m`` · ``quiet 3h · read m4 21:58``. Empty when there is
-    nothing measured — a correspondent heard from seconds ago, on a
-    platform that gives a bot no read status, has produced no reading, and
-    an empty string is what that honestly looks like.
+    A pile of zero is not news (the common, freshly-answered case) — same
+    "quiet enough to matter" restraint :func:`format_quiet` already applies
+    to the sibling half of this chip.
+    """
+    try:
+        n = int(count) if count is not None else None
+    except (TypeError, ValueError):
+        n = None
+    if not n:
+        return None
+    label = f"{n} unread"
+    try:
+        size = float(size_bytes) if size_bytes is not None else None
+    except (TypeError, ValueError):
+        size = None
+    if size is not None:
+        label += f" · {size / 1024:.1f}KB"
+    return label
+
+
+def correspondent_summary(
+    quiet_seconds: float | None,
+    read: object = None,
+    unread_count: object = None,
+    unread_bytes: object = None,
+) -> str:
+    """The one-line reading: how long they have been quiet, a receipt, the pile.
+
+    ``quiet 12m`` · ``quiet 3h · read m4 21:58`` · ``quiet 1h · 3 unread ·
+    5.2KB``. Empty when there is nothing measured — a correspondent heard
+    from seconds ago, on a platform that gives a bot no read status, with
+    an empty pile, has produced no reading, and an empty string is what
+    that honestly looks like.
     """
     parts: list[str] = []
     quiet = format_quiet(quiet_seconds)
@@ -331,6 +358,9 @@ def correspondent_summary(
         at = str(read.get("at") or "").strip()
         if handle or at:
             parts.append(" ".join(x for x in ("read", handle, at) if x))
+    unread = _format_unread(unread_count, unread_bytes)
+    if unread:
+        parts.append(unread)
     return " · ".join(parts)
 
 
@@ -534,11 +564,14 @@ def build(
             "required": spec_corr.required, "summary": None,
             "note": "no chat thread on this run",
             "quiet_seconds": None, "read": None,
+            "unread_count": None, "unread_bytes": None,
         }
     else:
         quiet = correspondent.get("quiet_seconds")
         read = correspondent.get("read") or None
-        summary = correspondent_summary(quiet, read)
+        unread_count = correspondent.get("unread_count")
+        unread_bytes = correspondent.get("unread_bytes")
+        summary = correspondent_summary(quiet, read, unread_count, unread_bytes)
         correspondent_facet = {
             "status": KNOWN if summary else ABSENT,
             "kind": spec_corr.kind,
@@ -547,6 +580,8 @@ def build(
             "note": None if summary else "nothing measured on this thread yet",
             "quiet_seconds": quiet,
             "read": read,
+            "unread_count": unread_count,
+            "unread_bytes": unread_bytes,
         }
 
     spec_allow = FACETS_BY_KEY["allowance"]

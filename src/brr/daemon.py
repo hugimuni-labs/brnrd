@@ -7213,6 +7213,7 @@ def _write_live_portal_state(
             inbox_dir,
             thread_key=_task_thread_key(task),
             correspondent_key=_task_correspondent_key(task),
+            brr_dir=brr_dir,
         )
         await_state, hold_facet_input = _hold_ratio_facet(
             task, await_state, cfg, outbox_dir, allowance_facet_input,
@@ -11859,6 +11860,14 @@ def _drain_outbox(
                 artifact_event_id = target
                 if artifact_key:
                     conversations.append_event(emit.brr_dir, artifact_key, target_event)
+            # One physical send, marked at the write side so a reader never
+            # has to re-derive it: every artifact this burst mints — the
+            # primary reply and each `also:` sibling below — carries the
+            # same `delivery_id` (the partial file this one send actually
+            # wrote). `unread_pile` counts distinct delivery ids rather
+            # than raw artifact rows, so a burst answering N events is one
+            # message, not N (daemon-substrate.md's "a burst is one turn").
+            delivery_id = str(ppath) if ppath else ""
             if artifact_key:
                 conversations.append_artifact(
                     emit.brr_dir, artifact_key,
@@ -11868,6 +11877,7 @@ def _drain_outbox(
                     event_id=artifact_event_id,
                     label=(f"reply:{target}" if cross else f"interim:{event_id}"),
                     body=body,
+                    extra=({"delivery_id": delivery_id} if delivery_id else None),
                 )
             for also_event in also_events:
                 # Same reply, one more retired letter: a burst is one turn,
@@ -11896,6 +11906,7 @@ def _drain_outbox(
                         event_id=also_id,
                         label=f"also:{also_id}",
                         body=body,
+                        extra=({"delivery_id": delivery_id} if delivery_id else None),
                     )
                 emit(
                     "event_also_handled",
