@@ -201,6 +201,54 @@ class TestArmOnConfidentUsageLimitError:
             assert reread.get("defer_reason") is None
             assert reread.get("resume_native_session_id") is None  # no native session here
 
+    def test_arm_time_brakes_only_the_seats_own_conversation(
+        self, tmp_path, monkeypatch,
+    ):
+        """#1890, the second face (2026-09-11): a seat arming on Telegram
+        deferred every sibling in the repo — five overnight ticks on their
+        own ``schedule:*`` conversations sat 2h–7h52m behind it. A seat
+        brakes only its own mail; another conversation's tick stays
+        pending and dispatches as its own run."""
+        write_repo_scaffold(tmp_path)
+        event = make_event(
+            tmp_path, eid="evt-quota-tg", conversation_key="cloud:telegram:1:",
+        )
+        # Written by hand, like the production files: the arm path reads
+        # siblings off disk (`protocol.list_pending`), so the key must be
+        # in the frontmatter — `make_event` keeps extra kwargs in memory.
+        inbox = tmp_path / ".brr" / "inbox"
+        for sib_id, conv in (
+            ("evt-own-sibling", "cloud:telegram:1:"),  # a tick the seat set on its own thread
+            ("evt-foreign-tick", "schedule:the-wire-round"),
+        ):
+            (inbox / f"{sib_id}.md").write_text(
+                f"---\nid: {sib_id}\nstatus: pending\nsource: schedule\n"
+                f"conversation_key: {conv}\n---\ntick\n",
+                encoding="utf-8",
+            )
+        _stub_env_isolated(monkeypatch, tmp_path)
+        _wire_common(monkeypatch)
+        base_env = envs.get_env("worktree")
+
+        def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+            return _usage_limit_result(invocation, runner_name)
+
+        monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+        task = daemon._run_worker_and_finalize(
+            event, tmp_path, tmp_path / ".brr" / "responses", {}, 3,
+        )
+        assert task.status == resource_hold.RUN_STATUS
+
+        inbox_dir = tmp_path / ".brr" / "inbox"
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / task.id / "run.md")
+        assert persisted.meta["resource_hold"]["conversation_key"] == "cloud:telegram:1:"
+        assert persisted.meta["resource_hold"]["accumulated_event_ids"] == ["evt-own-sibling"]
+        assert protocol._read_event(inbox_dir / "evt-own-sibling.md").get("defer_reason") == "resource_hold"
+        foreign = protocol._read_event(inbox_dir / "evt-foreign-tick.md")
+        assert foreign.get("defer_until") is None
+        assert foreign.get("deferred_by_run") is None
+
     def test_resume_only_releases_a_matching_conversation_key(
         self, tmp_path, monkeypatch,
     ):
@@ -421,12 +469,20 @@ class TestHeldRunsForRepo:
 
 
 class TestHandleResourceHeldEvents:
-    def _target(self, tmp_path, *, source: str, eid: str) -> "daemon._DispatchTarget":
+    # One seat per conversation (#1890): the seat and the traffic addressed
+    # to it share a conversation. Before, a keyless seat caught every
+    # event in the repo because the lookup was `[0]`-of-repo.
+    CONV = "cloud:telegram:1:"
+
+    def _target(
+        self, tmp_path, *, source: str, eid: str, conversation_key: str = CONV,
+    ) -> "daemon._DispatchTarget":
         inbox_dir = tmp_path / ".brr" / "inbox"
         inbox_dir.mkdir(parents=True, exist_ok=True)
         path = inbox_dir / f"{eid}.md"
         path.write_text(
-            f"---\nid: {eid}\nsource: {source}\nstatus: pending\n---\nbody\n",
+            f"---\nid: {eid}\nsource: {source}\nstatus: pending\n"
+            f"conversation_key: {conversation_key}\n---\nbody\n",
             encoding="utf-8",
         )
         event = protocol._read_event(path)
@@ -442,6 +498,7 @@ class TestHandleResourceHeldEvents:
             reason=resource_hold.REASON_QUOTA_EXHAUSTED, provider="codex",
             native_session_id="held-thread-1",
             resume_kind=resource_hold.RESUME_NATIVE,
+            conversation_key=self.CONV,
         )
         meta.update(hold_overrides)
         task = Run(id="run-held-1", event_id="evt-lead", body="", status=resource_hold.RUN_STATUS)
