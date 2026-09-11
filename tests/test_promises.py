@@ -297,13 +297,17 @@ def test_an_owed_promise_opens_the_gate_on_a_boundary_nothing_else_moved(
 
 
 def test_the_owed_line_and_chip_both_speak_on_the_edge_only(tmp_path):
-    """An obligation that repeats every boundary trains the reader to skip it.
+    """The line speaks on the edge; the count stands while the debt does.
 
-    The line speaks on the blueprint's own delta, and since w-54 the chip is
-    change-gated too: an unchanged `owed 1` is the number the reader already
-    has, so a later boundary where something *else* moved carries neither.
-    The standing fact's nets are the blueprint edge, the closeout line, and
-    the bolt's own validation at the cut.
+    `owed` is WAITING (w-54 signed "four", 2026-09-11; w-34 reframed
+    OBLIGATION as WAITING: the world waits on an artifact the run said
+    would exist). WAITING's repeat rule is compressed-but-counted: the
+    full "still owed" sentence speaks once, on the blueprint's edge, and
+    the six-character `owed 1` chip stays in the bar while the promise
+    stands, so the count never silently drops. This pin used to assert
+    the chip vanished on an unchanged boundary (81afdfb0, 2026-08-19,
+    written under the unsigned three-class proposal). A debt rendered as
+    absent is the #1887 class of defect, not a quieter bar.
     """
     ctx, outbox, portal = _ctx(tmp_path)
     portal.write_text(json.dumps(_portal("t1")), encoding="utf-8")
@@ -313,8 +317,8 @@ def test_the_owed_line_and_chip_both_speak_on_the_edge_only(tmp_path):
     assert "still owed" in (first["inject"] or "")
     assert "owed 1" in (first["inject"] or "")
 
-    # A later boundary where something *else* moved: neither the line nor
-    # the unchanged chip repeats.
+    # A later boundary where something *else* moved: the line stays quiet,
+    # the chip stays counted.
     portal.write_text(
         json.dumps(_portal("t2", card={"stale": True, "state": "stale",
                                        "age_seconds": 400})),
@@ -322,7 +326,7 @@ def test_the_owed_line_and_chip_both_speak_on_the_edge_only(tmp_path):
     )
     second = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
     assert "card" in (second["inject"] or "")
-    assert "owed 1" not in (second["inject"] or "")
+    assert "owed 1" in (second["inject"] or "")
     assert "still owed" not in (second["inject"] or "")
 
 
