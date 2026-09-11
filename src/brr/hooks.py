@@ -399,14 +399,13 @@ COURSE_DRIFT_COUNT_KEY = "course_drift_count"
 WORK_TOKEN_KEY = "work_token"
 CONTEXT_READING_KEY = "context_reading"
 _COURSE_DRIFT_THRESHOLD = 3
-# COURSE_STALL_COUNT_KEY — boundaries elapsed since the course last moved
-# (route_edge=True resets; a new pending event does not). At
-# _COURSE_STALL_THRESHOLD a "stalled ×N" detail line fires once and the
-# counter re-arms. Distinct from drift: drift counts *work* moves with no
-# route edit; stall counts *boundaries* with no route edit regardless of
-# whether work moved.
-COURSE_STALL_COUNT_KEY = "course_stall_count"
-_COURSE_STALL_THRESHOLD = 10
+# The stall counter ("course unchanged ×N boundaries") retired 2026-09-10 —
+# his call, evt-…-mhrx: "'3 work-moves with no route edit' is a very good
+# proposal, I sign it." It counted *any* boundary with no route edit, so it
+# could not tell "working on it" from "ignoring it" — a run heads-down for
+# ten boundaries on the row it already named tripped the same nag as one
+# that had actually gone idle. Drift (above) keys off *work* moves instead
+# and stays; it is the detector that can make that distinction.
 # The mood's own drift (his ask, evt-…-mhrx: "we should do the mood
 # staleness detection and ask to touch the face file at least"): a face
 # left standing across _MOOD_DRIFT_THRESHOLD work-deltas gets one
@@ -2243,6 +2242,13 @@ def _notices_chip(notices: list) -> str | None:
 # (e.g. "quietly_stuck").
 _MOOD_DISPLAY_MAX_CHARS = 16
 
+# The brand at rest — `brnrd`'s own template, `b`/`d` the headphones, the
+# middle the face — used wherever the mood slot has nothing resolved to
+# show (no word written, or a word the library doesn't know): the neutral
+# face, never an error mark (design-the-pre-attentive-channel.md rule 1/2,
+# 2026-09-10).
+_REST_GLYPH = "b·_·d"
+
 
 def _emote_glyph(name: str) -> str | None:
     """Best-effort base-frame glyph for *name*, from `brr.emotes`.
@@ -2276,39 +2282,28 @@ def _emote_glyph(name: str) -> str | None:
     return glyph or None
 
 
-def _emote_near_misses(name: str) -> list[str]:
-    """Handles a failed ``.mood`` write was probably reaching for.
-
-    Same tolerance shape as ``_emote_glyph``: a hook boundary never dies for
-    a face. Empty list ⇒ say nothing.
-    """
-    try:
-        from . import emotes  # type: ignore
-    except ImportError:
-        return []
-    try:
-        return [e.name for e in emotes.near_misses(name, limit=3)]
-    except Exception:
-        return []
-
-
 def _mood_chip(raw: str) -> str:
     """The resident's `.mood` first line, rendered as a short chip.
 
-    **An unresolved handle says so.** Until 2026-07-25 a `.mood` line that
-    matched no emote rendered as the bare word here and as four ``null``s on
-    the wire, and the dashboard printed the raw string — so a run that wrote
-    ``focused`` (the handle is ``fo.cus``) believed it was wearing a face,
-    published an id, and had no way to find out. The whole first week of the
-    mood channel went out that way; the human looking at brnrd.dev was the
-    only reader who could catch it, and did.
+    **Mood is write-only from the resident** (design-the-pre-attentive-
+    channel.md rule 1, 2026-09-10). Until 2026-09-10 an unresolved handle
+    rendered ``✗ {name} → {near misses}`` — a system grading the resident's
+    own claimed feeling and proposing a correction. Mechanically it was an
+    unrecognised-word notice; the rendering was the defect, because an
+    interior the system can overrule from outside is not an interior, it is
+    a form the resident fills in.
 
-    ``lookup`` is tolerant now, so most of that class resolves. What is left
-    is the honest miss — a family word (``satisfied`` is four faces; picking
-    one would be the guess the honesty bar forbids) or an invented handle —
-    and the fix for a miss is never to guess, it is to **not be silent**.
-    The chip names the nearest faces, at the boundary, while the run can
-    still rewrite the file.
+    So an unresolved word renders as **the word, plain** — no ``✗``, no
+    arrow, no suggestions here. Suggestions belong at write time
+    (``brnrd do --mood`` already reports near misses to the writer, once, in
+    the act, via ``emotes.near_misses`` directly) — that path is untouched.
+    This one only ever reports the fact that no face was found for it,
+    exactly as honestly as it reports a resolved face:
+
+    Before 2026-07-25 an unmatched handle rendered as the bare word with no
+    signal at all — the whole first week of the mood channel went out that
+    way, undetectable except by a human reading brnrd.dev. ``· no face``
+    keeps that regression fixed without re-introducing the grading.
     """
     name = raw.strip()
     if len(name) > _MOOD_DISPLAY_MAX_CHARS:
@@ -2316,28 +2311,41 @@ def _mood_chip(raw: str) -> str:
     glyph = _emote_glyph(name)
     if glyph:
         return f"{glyph} {name}"
-    near = _emote_near_misses(name)
-    if near:
-        return f"✗ {name} → " + " · ".join(near)
-    return f"✗ {name}"
+    return f"{name} · no face"
 
 
-def _bar_preamble(mood: str | None) -> str:
+def _bar_preamble(mood: str | None, *, named: bool = False) -> str:
     """``⌁[<face>]:`` — the bar's one static element (w-54, his sketch).
 
     The bolt is the mark of the resident-owned status line; the face inside
     the brackets is the only thing that renders there, and it is the
     resident's own — the ornament curated by the run, connecting it to the
-    reader. ``·`` when no mood is written (the ``mood?`` nudge still fires
-    once, elsewhere); ``✗`` when the written mood resolves to no emote — the
-    unresolved-handle honesty `_mood_chip` keeps, compressed to one mark
-    (the near-misses ride the mood chip, which still renders for a miss).
+    reader. **Never a face-shaped error** (design-the-pre-attentive-
+    channel.md rule 1/2, 2026-09-10): no mood written, and a written mood
+    the library doesn't know, both render the brand at rest
+    (:data:`_REST_GLYPH`) — the ``⌁[✗]:`` this used to render on a miss was
+    visible enough to notice and impossible to act on, the exact combination
+    the design page calls out. The word itself, when there is one, still
+    renders — as a plain chip beside the preamble (see the mood segment in
+    :func:`_render_bar`), never inside the brackets as a mark.
+
+    *named* renders the mood word once beside the glyph
+    (``⌁[<face>] <name>:``) — the caller's own commit-on-render change-gate
+    fires it on the boundary the face actually changed; every other
+    boundary renders the bare glyph, so the ornament stays learnable
+    without turning into a running caption (rule 3: "it names itself once,
+    on change").
     """
     if not mood:
-        return "⌁[·]:"
+        return f"⌁[{_REST_GLYPH}]:"
     name = mood.strip()
-    glyph = _emote_glyph(name)
-    return f"⌁[{glyph}]:" if glyph else "⌁[✗]:"
+    glyph = _emote_glyph(name) or _REST_GLYPH
+    if not named:
+        return f"⌁[{glyph}]:"
+    display = name
+    if len(display) > _MOOD_DISPLAY_MAX_CHARS:
+        display = display[:_MOOD_DISPLAY_MAX_CHARS].rstrip() + "…"
+    return f"⌁[{glyph}] {display}:"
 
 
 # Substrings that mark a tool result as a failure. Deliberately a heuristic:
@@ -3115,7 +3123,6 @@ def _render_bar(
     last_chips: dict[str, str] | None = None,
     rendered_chips: dict[str, str] | None = None,
     route_drift: bool = False,
-    route_stall: bool = False,
     mood_drift: bool = False,
     wait_idle: bool = False,
     link_chip: str | None = None,
@@ -3295,11 +3302,19 @@ def _render_bar(
         # weave's own measure of a mark. The unresolved-handle form keeps
         # `_mood_chip`'s honesty: a face that resolves to no emote is
         # actionable (rewrite the file), so it renders — change-gated, once
-        # per text — until the handle resolves.
+        # per text — until the handle resolves. Plain fact, never graded: no
+        # `✗`, no suggested replacement (design-the-pre-attentive-
+        # channel.md rule 1).
         mood_text = _mood_chip(mood)
+        # `_mood_chip` is the one place that applies the display truncation
+        # before resolving — reading its own suffix keeps this check exactly
+        # in step with what actually rendered, rather than re-deriving
+        # resolution against an untruncated name that could disagree with it
+        # at the truncation boundary.
+        mood_unresolved = mood_text.endswith(" · no face")
         if surprise:
             segments.append(("mood", f"mood {mood_text} ← {surprise}"))
-        elif mood_text.startswith("✗"):
+        elif mood_unresolved:
             segments.append(("mood", f"mood {mood_text}"))
         elif mood_drift:
             # The face stood still through _MOOD_DRIFT_THRESHOLD work-moves
@@ -3395,19 +3410,6 @@ def _render_bar(
                     f"{_COURSE_DRIFT_THRESHOLD}× since the route did"
                 )
             details.append(route_line)
-    # The course stall (2026-08-23): _COURSE_STALL_THRESHOLD boundaries have
-    # passed with open rows and no route edit — distinct from drift (which
-    # counts *work* moves; stall counts *any* boundary). Fires once per
-    # threshold crossing. Vetoed by a concurrent route_edge/route_prompt/
-    # route_drift — those already re-surface the plan row with a richer
-    # message.
-    if route_stall and not (route_edge or route_prompt or route_drift):
-        stall_chip = course.chip(route)
-        if stall_chip:
-            details.append(
-                f"- {stall_chip} · course unchanged ×{_COURSE_STALL_THRESHOLD} "
-                "boundaries — open rows exist, the plan hasn't moved"
-            )
     # The allowance boundary directive (design-the-allowance.md §2, step 3):
     # fires once at ≥100%, never a kill, never a repeat while the spend
     # number stands unchanged. Gated the same way a bar chip is — against
@@ -3485,6 +3487,18 @@ def _render_bar(
         # clear/update pair above rather than through it; persisted here so
         # next boundary's *last_chips* carries the gate forward.
         rendered_chips["allowance_directive"] = allowance_gate_text
+    # The ornament's own edge (design-the-pre-attentive-channel.md rule 3:
+    # "it names itself once, on change"): the mood word rides the preamble
+    # only on the boundary the face actually changed, under a key that
+    # — like `allowance_directive` above — never appears in *segments* and
+    # so never competes with the ordinary chip due-filter below. No mood
+    # written ⇒ nothing to name, ever.
+    face_now = (mood or "").strip()
+    face_named = bool(face_now) and (
+        last_chips is None or last_chips.get("face") != face_now
+    )
+    if rendered_chips is not None:
+        rendered_chips["face"] = face_now
     edge_due = {
         # An unknown obligation count must never go quiet.
         "pending_unknown": True,
@@ -3501,7 +3515,7 @@ def _render_bar(
         "mood": bool(surprise) or mood_drift,
         # Position trackers re-surface on their own edges even when the
         # numbers happen not to have moved.
-        "course": route_edge or route_prompt or route_drift or route_stall,
+        "course": route_edge or route_prompt or route_drift,
         "owed": plan_edge,
         # Stands until the record clears (resume/drop/cap-sweep/run-end) —
         # never change-gated away like `room`, because the resident reading
@@ -3520,7 +3534,7 @@ def _render_bar(
     if not kept and not details:
         return None
     bar = " │ ".join(text for _, text in kept)
-    line = _bar_preamble(mood) + ((" " + bar) if bar else "")
+    line = _bar_preamble(mood, named=face_named) + ((" " + bar) if bar else "")
     return line + ("\n" + "\n".join(details) if details else "")
 
 
@@ -3615,7 +3629,6 @@ def format_delta(
     last_chips: dict[str, str] | None = None,
     rendered_chips: dict[str, str] | None = None,
     route_drift: bool = False,
-    route_stall: bool = False,
     mood_drift: bool = False,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
@@ -3788,7 +3801,7 @@ def format_delta(
             repeat_streaks=repeat_streaks,
             pending_set_changed=pending_set_changed,
             last_chips=last_chips, rendered_chips=rendered_chips,
-            route_drift=route_drift, route_stall=route_stall, mood_drift=mood_drift,
+            route_drift=route_drift, mood_drift=mood_drift,
             wait_idle=wait_idle,
         )
 
@@ -5365,28 +5378,6 @@ def compute_neutral(
             state[COURSE_DRIFT_COUNT_KEY] = drift_count
     else:
         state[COURSE_DRIFT_COUNT_KEY] = 0
-    # Course stall: count only an idle boundary where open rows exist and the
-    # route did not change. Work/delivery, a listening wait, and a changed
-    # pending-event set are all movement in the world, so those boundaries
-    # neither increment nor reset the counter. A route edit still resets it.
-    route_stall = False
-    portal_await = (
-        portal.get("await") if isinstance(portal.get("await"), dict) else {}
-    )
-    wait_active = portal_await.get("armed") is True or (
-        portal_await.get("resolved") is True and bool(portal_await.get("outcome"))
-    )
-    if route is not None and route.open_rows:
-        if route_edge:
-            state[COURSE_STALL_COUNT_KEY] = 0
-        elif not (work_moved or wait_active or pending_set_changed):
-            stall_count = int(state.get(COURSE_STALL_COUNT_KEY) or 0) + 1
-            if stall_count >= _COURSE_STALL_THRESHOLD:
-                route_stall = True
-                stall_count = 0
-            state[COURSE_STALL_COUNT_KEY] = stall_count
-    else:
-        state[COURSE_STALL_COUNT_KEY] = 0
     # The mood's drift, same engine (evt-…-mhrx): the face stood still while
     # the run visibly moved. Touching `.mood` — any text change — resets;
     # the ask re-arms after another full threshold of work-moves, so a
@@ -5631,7 +5622,7 @@ def compute_neutral(
         rendered_chips: dict[str, str] = {}
         if (
             has_obligations or ambient_emit or edge or plan_edge
-            or route_edge or bolt_edge or route_drift or route_stall
+            or route_edge or bolt_edge or route_drift
             or mood_drift or token_moved or paused
         ):
             inject = format_delta(
@@ -5648,7 +5639,7 @@ def compute_neutral(
                 context_prior=context_prior, room=room, paused=paused,
                 pending_set_changed=pending_set_changed,
                 last_chips=last_chips, rendered_chips=rendered_chips,
-                route_drift=route_drift, route_stall=route_stall,
+                route_drift=route_drift,
                 mood_drift=mood_drift,
             )
             state["last_token"] = token
