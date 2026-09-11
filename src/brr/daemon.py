@@ -19123,6 +19123,29 @@ class _StampedStream:
     def writable(self) -> bool:
         return True
 
+    def reconfigure(self, **kwargs) -> None:
+        """Pass a reconfigure through to the stream underneath.
+
+        Both halves of this were written the same night, hours apart, and
+        neither knew about the other: `start()` calls
+        ``sys.stdout.reconfigure(line_buffering=True)`` so an `execve` or a
+        `SIGKILL` cannot destroy an 8 KB block buffer, and :func:`
+        _install_log_stamps` had already replaced ``sys.stdout`` with this
+        object — which had no ``reconfigure``. The call raised
+        ``AttributeError`` straight into the caller's own ``except
+        (AttributeError, OSError, ValueError): pass``, written for a test's
+        ``StringIO``. **The guard for an exotic stream swallowed a real
+        instruction**, and the buffering fix became a silent no-op on exactly
+        the deployment it was written for.
+
+        Nothing was broken in the end — :meth:`write` flushes after every
+        line, which is stronger than line buffering — and that is the reason
+        this was worth fixing rather than deleting. The one behaviour is now
+        asserted in two independent places instead of held by an accident, so
+        removing either half cannot quietly un-fix the log.
+        """
+        self._stream.reconfigure(**kwargs)
+
     @property
     def encoding(self) -> str:
         return getattr(self._stream, "encoding", "utf-8")
