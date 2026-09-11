@@ -2343,6 +2343,13 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
         for held in _held_runs_for_repo(source_brr_dir / "runs"):
             if held.id in seen_run_ids:
                 continue
+            # #1927: belt-and-suspenders — `_held_runs_for_repo` already
+            # filters on `resource_hold.is_active`, but a PARKED card that
+            # ever renders off the status word alone is exactly the bug this
+            # closes, so the row-builder itself refuses a released hold too,
+            # not only its one upstream caller.
+            if not resource_hold.is_active(held.meta.get("resource_hold")):
+                continue
             out.append(_bounded_live_run(_held_run_row(held)))
     return out
 
