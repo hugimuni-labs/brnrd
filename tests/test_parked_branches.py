@@ -1,6 +1,8 @@
 import json
 import subprocess
 
+import pytest
+
 from brr import forge_pr_cache, gitops, parked_branches
 from brr.run import Run
 
@@ -163,3 +165,49 @@ def test_unmerged_count_is_none_not_zero_when_git_refuses(tmp_path):
     """
     repo = _repo(tmp_path)
     assert gitops.unmerged_commit_count(repo, "main", "brr/does-not-exist") is None
+
+
+def test_warn_new_sweeps_at_most_once_per_ttl(tmp_path, monkeypatch):
+    """The walk is the expensive half, and it sits in front of dispatch.
+
+    ``warn_new`` runs on the daemon's main loop thread every tick, immediately
+    before the scan that turns a waiting chat message into a run, and one sweep
+    is a ``git cherry`` per local ``brr/*`` branch — 15.3s over 346 branches,
+    measured on the author's checkout 2026-09-11. Its output was already
+    deduped per process (``_WARNED``), so every sweep after the first bought
+    nothing at all. Pinned on ``detect`` call count, not on printed text: the
+    defect was the *walk*, so the walk is what this has to count.
+    """
+    calls: list[Path] = []
+    monkeypatch.setattr(parked_branches, "detect", lambda root: calls.append(root) or [])
+    monkeypatch.setattr(parked_branches, "_last_sweep_at", None)
+
+    parked_branches.warn_new(tmp_path, ttl=300.0, now=1_000.0)
+    parked_branches.warn_new(tmp_path, ttl=300.0, now=1_001.0)
+    parked_branches.warn_new(tmp_path, ttl=300.0, now=1_299.9)
+    assert len(calls) == 1, "a tick inside the TTL must not re-walk the branches"
+
+    parked_branches.warn_new(tmp_path, ttl=300.0, now=1_300.0)
+    assert len(calls) == 2, "the sweep must resume once the TTL has elapsed"
+
+
+def test_warn_new_throttles_even_when_a_sweep_raises(tmp_path, monkeypatch):
+    """A failing sweep must not become a retry-every-tick loop.
+
+    ``daemon.py`` swallows this function's exceptions (an ergonomics note may
+    never sink the loop) and comes back in a few seconds. If the TTL were
+    stamped only on success, a git failure would restore exactly the per-tick
+    walk this throttle exists to stop — the pathological case, since a broken
+    sweep is also the one most likely to be slow.
+    """
+    def _boom(_root):
+        raise RuntimeError("git said no")
+
+    monkeypatch.setattr(parked_branches, "detect", _boom)
+    monkeypatch.setattr(parked_branches, "_last_sweep_at", None)
+
+    with pytest.raises(RuntimeError):
+        parked_branches.warn_new(tmp_path, ttl=300.0, now=2_000.0)
+    # Second call inside the TTL returns without reaching `detect` at all —
+    # if it did, this would raise again.
+    parked_branches.warn_new(tmp_path, ttl=300.0, now=2_010.0)

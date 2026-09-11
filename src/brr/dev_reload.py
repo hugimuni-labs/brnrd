@@ -237,7 +237,26 @@ def clear_reexec_marker() -> None:
 
 
 def reexec() -> None:
-    """Replace the current process image with a fresh Python import."""
+    """Replace the current process image with a fresh Python import.
+
+    Flushes the standard streams first. ``execve`` replaces the image without
+    running interpreter shutdown, so anything still sitting in a Python-level
+    buffer is *destroyed*, not written — and under a service manager the
+    daemon's stdout is a file, which means block buffering and up to 8 KB of
+    the newest lines. Measured on this account 2026-09-11: `brr.out.log` holds
+    the spliced line ``…event_id=evt-…-ew8o[brnrd] account dominion ready``,
+    the exact seam where one process's unflushed tail was thrown away and the
+    re-exec'd image's first line landed in its place. The operator's read of
+    that log was *"the daemon doesn't report any issues"* — which is what a
+    discarded buffer looks like from outside.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except (AttributeError, OSError, ValueError):
+            # A closed or exotic stream must never stop the reload: the
+            # breadcrumb is a courtesy, the re-exec is the job.
+            pass
     env = os.environ.copy()
     env[_REEXEC_ENV] = "1"
     argv = [sys.executable, *sys.argv]
