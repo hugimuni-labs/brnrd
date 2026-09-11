@@ -183,7 +183,7 @@ def _knowledge_repo_and_scope(
             )
             return checkout, scope
         knowledge_root = account.knowledge_path(ctx)
-        scope = account.repo_knowledge_path(ctx, label) if split else knowledge_root
+        scope = _split_scope(ctx, repo_root, label) if split else knowledge_root
         if knowledge_root.is_dir():
             return knowledge_root, scope
     except Exception:
@@ -192,6 +192,34 @@ def _knowledge_repo_and_scope(
     if repo_kb.is_dir():
         return repo_root, repo_kb
     return None, None
+
+
+def _is_home_root(ctx: "account.HomeContext", repo_root: Path) -> bool:
+    """Whether *repo_root* is the account home itself (the home label's root)."""
+
+    try:
+        return repo_root.resolve() == account.context_home_root(ctx).resolve()
+    except OSError:
+        return False
+
+
+def _split_scope(ctx: "account.HomeContext", repo_root: Path, label: str) -> Path:
+    """The kb directory a split-mode wake owns: its repo's, else the global kb.
+
+    The home root has no per-repo kb: the resident's own kb is the global
+    one (design-one-resident-per-machine.md, move 1). A label with no
+    per-repo kb dir resolves the global kb too, once one exists — the same
+    answer :func:`active_kb_dir` gives, so a kb URL never points at a
+    directory that isn't there. A label with its own kb dir is unchanged.
+    """
+
+    repo_knowledge = account.repo_knowledge_path(ctx, label)
+    global_knowledge = account.account_knowledge_path(ctx)
+    if _is_home_root(ctx, repo_root):
+        return global_knowledge
+    if not repo_knowledge.is_dir() and global_knowledge.is_dir():
+        return global_knowledge
+    return repo_knowledge
 
 
 def _git_toplevel(path: Path) -> Path | None:
@@ -260,7 +288,9 @@ def sources(repo_root: Path, cfg: dict | None = None) -> list[KnowledgeSource]:
             # split; it always uses the flat bucket below.
             label = account.repo_label(repo_root, cfg)
             repo_knowledge = account.repo_knowledge_path(ctx, label)
-            if repo_knowledge.is_dir():
+            # The home root is the resident's own place: its kb is the
+            # global one, never a per-repo bucket named after the home.
+            if repo_knowledge.is_dir() and not _is_home_root(ctx, repo_root):
                 result.append(
                     KnowledgeSource("home knowledge (repo)", repo_knowledge, "home")
                 )

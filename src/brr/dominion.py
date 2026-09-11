@@ -173,6 +173,20 @@ def resident_dominion_candidates(
             repo_root, cfg, create=False,
         )
         if ctx.enabled:
+            # One resident, one dominion: ``<home>/dominion`` leads for every
+            # label, whatever repo this wake started in — but only once it
+            # exists, so nothing moves until ``brnrd dominion consolidate``
+            # has run. Same git repo as the per-repo path below, so the
+            # capture net's ``capture_root`` is unchanged.
+            home_dominion = account.home_dominion_path(ctx)
+            if home_dominion.is_dir():
+                candidates.append(
+                    ResidentDominion(
+                        path=home_dominion,
+                        capture_root=ctx.dominion_repo,
+                        label="account:home-dominion",
+                    )
+                )
             label = repo_label or account.repo_label(repo_root, cfg)
             candidates.append(
                 ResidentDominion(

@@ -60,6 +60,14 @@ HEARTH_README_NAME = "README.md"
 # conventions survive without remaining separate orientation roots.
 PLANS_PATH = "plans"
 CROSS_REPO_SLUG = "_cross-repo"
+# The global kb's directory under ``knowledge/``. ``CROSS_REPO_SLUG`` stays:
+# it still names the cross-repo *plans* bucket, and it is the global kb's
+# legacy alias (see ``account_knowledge_path``).
+GLOBAL_KB_SLUG = "global"
+# The resident's one dominion, at the home root (``home_dominion_path``).
+HOME_DOMINION_DIRNAME = "dominion"
+# Inside the one dominion: notes folded in from other repos' old dominions.
+PLACES_DIRNAME = "places"
 
 # CS6 — stored runner policy
 RUNNER_POLICY_PATH = "runner-policy"
@@ -1017,9 +1025,36 @@ def repo_knowledge_path(ctx: HomeContext, repo_label_value: str) -> Path:
 
 
 def account_knowledge_path(ctx: HomeContext) -> Path:
-    """Return the cross-repo (account-wide) knowledge directory."""
+    """Return the global (account-wide) knowledge directory — the resident's own kb.
 
-    return knowledge_path(ctx) / CROSS_REPO_SLUG
+    ``knowledge/global/`` is the name (design-one-resident-per-machine.md,
+    move 1). ``knowledge/_cross-repo/`` is the slug it was born under and is
+    honoured as an alias while ``global/`` does not exist yet, so a home that
+    has not run ``brnrd dominion consolidate`` keeps reading the pages it
+    has. With neither present, ``global/`` is returned: a fresh home writes
+    under the new name, never the old one.
+    """
+
+    root = knowledge_path(ctx)
+    current = root / GLOBAL_KB_SLUG
+    if current.is_dir():
+        return current
+    legacy = root / CROSS_REPO_SLUG
+    if legacy.is_dir():
+        return legacy
+    return current
+
+
+def home_dominion_path(ctx: HomeContext) -> Path:
+    """Return the resident's one dominion: ``<home>/dominion``.
+
+    One resident per machine, one dominion (design-one-resident-per-machine.md,
+    move 1). ``dominion.resident_dominion_candidates`` puts this first *when
+    it exists*; until ``brnrd dominion consolidate`` creates it, the per-repo
+    ``repos/<label>/dominion`` keeps resolving exactly as before.
+    """
+
+    return context_home_root(ctx) / HOME_DOMINION_DIRNAME
 
 
 def knowledge_split_mode(cfg: dict[str, Any] | None) -> str:
