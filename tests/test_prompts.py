@@ -2555,75 +2555,11 @@ class TestPromptBuilding:
         assert _says(prompt, "queue never starves")
 
 
-def _read_bundled_run_prompt() -> str:
-    """Read the bundled prompt directly so we pin its shipped content."""
-    from pathlib import Path
-
-    import brr
-
-    return (Path(brr.__file__).parent / "prompts" / "run.md").read_text(
-        encoding="utf-8",
-    )
-
-
-def _read_bundled_daemon_substrate() -> str:
-    from pathlib import Path
-
-    import brr
-
-    return (
-        Path(brr.__file__).parent / "prompts" / "daemon-substrate.md"
-    ).read_text(encoding="utf-8")
-
-
-def test_kb_link_contract_uses_portal_url_with_basename_fallback():
-    run_prompt = _read_bundled_run_prompt()
-    substrate = _read_bundled_daemon_substrate()
-
-    assert _says(run_prompt, "kb-url if portal grants")
-    assert "else basename" in run_prompt
-    assert _says(substrate, "link a kb page with the kb URL the portal provides")
-    assert _says(substrate, "when none is available, use its basename only")
-
-
-def test_seat_prompt_authorizes_end_only_by_release_or_forced_stop():
-    """2026-09-08, his repeated instruction (evt-…-gaoy): the process stays
-    open until the user explicitly releases it, or execution is forced to
-    stop (quota exhausted, a provider limit, a process failure) — never a
-    voluntary choice dressed up as "a known long absence" or a convenient
-    reload. `hold:` names the forced walls it is for; the daemon's own
-    turn-end park stays a safety net for an unexpected end, not license to
-    end one on purpose."""
-    substrate = _read_bundled_daemon_substrate()
-
-    assert _says(
-        substrate,
-        "the process stays open until the user releases it or execution "
-        "is forced to stop",
-    )
-    assert _says(
-        substrate,
-        "`hold:` is for exactly those forced walls — a genuine resource "
-        "limit, never a voluntary choice to stop because staying got long "
-        "or a reload sounded convenient",
-    )
-    assert _says(
-        substrate,
-        "a safety net for a turn that ends some other way, never license "
-        "to end one on purpose",
-    )
-    assert "known long absence" not in substrate
-
-
-def test_seat_prompt_marks_the_hold_cost_ratio_informative_only():
-    """The idle-cost ratio still renders on the chip every heartbeat — only
-    the automatic park on it is gated behind an opt-in the default leaves
-    off (`seat.park_on_hold_cost`)."""
-    substrate = _read_bundled_daemon_substrate()
-
-    assert "seat.park_on_hold_cost" in substrate
-    assert _says(substrate, "the hold-cost ratio renders on the chip either way")
-    assert _says(substrate, "informative only, off by default")
+# _read_bundled_run_prompt / _read_bundled_daemon_substrate and the three
+# tests that used them (test_kb_link_contract_uses_portal_url_with_basename_fallback,
+# test_seat_prompt_authorizes_end_only_by_release_or_forced_stop,
+# test_seat_prompt_marks_the_hold_cost_ratio_informative_only) retired
+# 2026-09-11 — see the note above TestIntrospectionMode for why.
 
 
 def test_recent_conversation_renders_dedup_provenance():
@@ -2764,14 +2700,6 @@ def test_recent_conversation_marker_falls_back_when_bytes_not_local(tmp_path):
     block = _format_recent_conversation(recent, brr_dir=tmp_path)
     assert "[photo ×1]" in block
     assert "local:" not in block
-
-
-def _read_bundled_agents_md() -> str:
-    from pathlib import Path
-
-    import brr
-
-    return (Path(brr.__file__).parent / "AGENTS.md").read_text(encoding="utf-8")
 
 
 class TestScheduleTurnDedup:
@@ -3538,80 +3466,16 @@ class TestOwnOutboundReceipts:
         )
 
 
-class TestRevisitSignalGuardrails:
-    """Pin the prompt + AGENTS.md guidance for design-loaded / "reconsider"
-    tasks. Stance refined 2026-06-20 (see `kb/log.md`): the default is
-    *reconcile and act in the same thought*, not surface-and-wait; a
-    chat-only reply is reserved for a genuine fork, where it still must be
-    authorized so the diff-as-receipt rule can't force a half-fitting
-    commit. Both failure modes — path-of-least-resistance compliance and
-    aloof bounce-back — are guarded. See `kb/design-git-layer-rework.md`
-    Phase 3 for the original revisit-signal rationale."""
-
-    def test_run_prompt_mentions_revisit_signals(self):
-        prompt = _read_bundled_run_prompt()
-        # Section coordinate that gates the guidance.
-        assert "reconsider:" in prompt
-        # The trigger is ownership intent, not a brittle keyword list:
-        # the stance lives in the resident playbook and AGENTS.md →
-        # Stewardship, which this section leans on instead of
-        # re-enumerating trigger phrases.
-        assert _says(prompt, "ask→judge-substance ⇒ judgement is deliverable")
-        assert "intent>trigger-words" in prompt
-
-    def test_run_prompt_biases_to_resolve_and_act(self):
-        prompt = _read_bundled_run_prompt()
-        # The default on a clear, reversible reconsider is to resolve it
-        # in-thread, not to park it for a second "go do that" event.
-        assert _says(prompt, "clear ∧ reversible ⇒ land same thought")
-        assert _says(prompt, "clear-call→park = +2 wakes")
-        assert _says(prompt, "authority-map←identity-core §What You Owe")
-
-    def test_run_prompt_authorizes_no_commit_for_genuine_fork(self):
-        prompt = _read_bundled_run_prompt()
-        # The chat-only-reply outcome must stay named for the genuine-fork
-        # case so the diff-as-receipt rule doesn't force a half-fitting
-        # commit when there is no clear edit yet.
-        assert "op⇐chat-only{fork, proposed-direction} = complete task" in prompt
-        assert _says(prompt, "half-fit commit for diff's sake = failure")
-
-    def test_agents_md_self_review_contains_contradiction_check(self):
-        agents = _read_bundled_agents_md()
-        # The self-review bullet maps onto Stewardship and now catches
-        # both failure modes, not just compliance.
-        assert _says(agents, "reconcile it against the current state")
-        assert "aloof bounce-back" in agents
-        assert "Stewardship" in agents
-
-
-class TestDaemonModeGuardrails:
-    """Pin the run.md changes that route daemon runners through the
-    Run Context Bundle's Mode block and treat the run context file as
-    recovery detail rather than routine reading.  See
-    the earlier editor-orientation research and
-    `kb/plan-agent-orientation-layering.md`."""
-
-    def test_run_prompt_names_mode_block_and_recovery_role(self):
-        prompt = _read_bundled_run_prompt()
-        # AGENTS.md remains the entry point, but whether a wake already
-        # carries it is Shell-dependent (codex reads it natively; claude
-        # does not) — verified live 2026-07-11 on a claude-fable daemon
-        # wake whose context had no AGENTS.md block. The old "injected in
-        # most daemon wakes" wording taught residents to skip the contract
-        # they never received.
-        assert _says(prompt, "shell may inject ∅")
-        assert _says(prompt, "absent ∧ task∩shared ⇒ read≺touch*")
-        assert not _says(prompt, "Read the `AGENTS.md` playbook at the repo root")
-        # The bundle is the authoritative "where am I?" (its Mode block).
-        assert "Run Context Bundle = now{mode, run, delivery, event, thread}" in prompt
-        # Injected Recent Activity counts toward the kb/log.md step so
-        # daemon runs don't re-read the log when the prompt already
-        # carries an extract. `_says` ignores wrapping, so a reflow of the
-        # paragraph can never read as a deleted rule.
-        assert _says(prompt, "Recent Activity + bundle/recent-turns = startup-log")
-        assert "older⇒`kb/log.md`" in prompt
-        # The run context file is recovery detail, not routine reading.
-        assert "recovery-context⇒read only bundle-omissions" in prompt
+# TestRevisitSignalGuardrails / TestDaemonModeGuardrails retired 2026-09-11:
+# both read a bundled prompts/*.md file straight off disk and pinned specific
+# sentences. tests/test_boot_replay.py's `_elide_product_bodies` already
+# proves every bundled prompt body ≥512 bytes (run.md included) reaches the
+# built daemon prompt byte-for-byte untransformed — the assembly fact these
+# tests were standing in for. What they actually pinned beyond that was
+# prose wording, which the doctrine (kb `design-what-a-test-is-pinned-to.md`)
+# says a test should not: a referent the human edits on purpose, reviewed as
+# the prompts/*.md diff itself, not re-litigated as N red tests per edit. See
+# design-what-a-test-is-pinned-to.md "The three changes, priced" row 2.
 
 
 class TestIntrospectionMode:
