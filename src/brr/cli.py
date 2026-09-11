@@ -2011,7 +2011,7 @@ def cmd_emotes(args):
                 print(f"    {line}")
         return 1
 
-    print("feeling → face handle  (write the handle; punctuation is part of its name)")
+    print("feeling → face  (write the feeling; legacy handles still resolve)")
     for e in rows:
         family = e.family or e.kind
         print(f"{family:<17} → {e.resting_frame} {e.name}")
@@ -2110,9 +2110,8 @@ def cmd_mood(args):
     confirmed.
 
     This older standalone verb accepts handles, feelings, synonyms, and
-    small typos. Unlike ``brnrd do --mood``, a completely unknown word still
-    writes nothing; the run-oriented porcelain owns the explicit nearest
-    fallback and ``--strict`` switch.
+    small typos. A completely unknown word writes nothing and names the
+    nearest faces, the same resolver ``brnrd do --mood`` uses.
 
     `--outbox` overrides the environment for anything driving this outside
     a live wake's own process (a script, a test); environment resolution
