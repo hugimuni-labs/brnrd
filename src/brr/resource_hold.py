@@ -285,86 +285,40 @@ def refuses_correspondent(meta: dict[str, Any] | None) -> bool:
     return is_active(meta) and (meta or {}).get("resume_condition") == RESUME_REFILL
 
 
-def seat_conversation(meta: dict[str, Any] | None, fallback: str = "") -> str:
-    """The conversation this hold is the seat of (#1890).
-
-    The record's own ``conversation_key`` (stamped at arm time from the
-    parked run's), else *fallback* — the run's own key, for a record armed
-    before the field was always filled. ``""`` names the legacy keyless
-    seat, which is a conversation bucket of its own, never a wildcard for
-    routine traffic.
-    """
-    key = str((meta or {}).get("conversation_key") or "").strip()
-    return key or str(fallback or "").strip()
-
-
-def event_conversation(event: dict[str, Any] | None) -> str:
-    """The conversation *event* belongs to, derived exactly as dispatch derives it.
-
-    Derive, never read raw: a cloud/Telegram event carries no
-    ``conversation_key`` field of its own (its key is a fingerprint of the
-    gate-thread fields), so a raw read is ``""`` for every correspondent
-    message (run-260907-2223-avku).
-    """
-    if not event:
-        return ""
-    from . import conversations  # lazy: keep this module's import surface nil
-
-    return conversations.conversation_key_for_event(event) or ""
-
-
-def schedule_event_releases(
-    meta: dict[str, Any] | None,
-    event: dict[str, Any] | None,
-    *,
-    seat_conversation_key: str | None = None,
-) -> bool:
-    """Whether a ``schedule`` firing wakes this hold — ``any`` condition, same conversation.
+def schedule_event_releases(meta: dict[str, Any] | None, event: dict[str, Any] | None) -> bool:
+    """Whether a ``schedule`` firing wakes this hold — only on the ``any`` condition.
 
     A tick is a reason to wake a parked seat (design-the-seat-that-never-quits.md:
     "a tick is a reason to wake, not a new life"); under every other
-    condition it accumulates as before. But only a tick *on the seat's own
-    conversation* (#1890): a ``schedule:the-wire-round`` tick released a
-    Telegram seat on 2026-09-10 and booted into the tick's thread carrying
-    the seat's warm session. The correspondent path has refused that since
-    run-260907-2223-avku; this is the same control on the other verb.
-    *seat_conversation_key* overrides the record's own key (the daemon
-    passes the run's key as the fallback via :func:`seat_conversation`).
+    condition it accumulates as before.
     """
     if not is_active(meta) or (meta or {}).get("resume_condition") != RESUME_ANY:
         return False
-    if not event or str(event.get("source") or "") != "schedule":
-        return False
-    seat = (
-        seat_conversation(meta) if seat_conversation_key is None
-        else str(seat_conversation_key or "").strip()
-    )
-    return event_conversation(event) == seat
+    return bool(event) and str(event.get("source") or "") == "schedule"
 
 
-#: The child-event sources a strand's parent owns by run id — the release
-#: sources plus admission (``spawn_queued``), which belongs to the parent
-#: just as much but never releases it.
-STRAND_SOURCES = STRAND_RELEASE_SOURCES | {"spawn_queued"}
-
-
-def strand_event_owned(
+def strand_event_releases(
+    meta: dict[str, Any] | None,
     event: dict[str, Any] | None,
     *,
     held_run_id: str,
     child_run_ids: Any = (),
 ) -> bool:
-    """Whether *event* is one of *held_run_id*'s own strands speaking — any condition.
+    """Whether *event* is one of the held run's own strands reporting back.
 
-    Ownership, not release: a strand event belongs to the seat whose run
-    dispatched it, matched by run id (never by conversation — a strand's
-    thread is its parent's by construction, and a sibling seat's strand
-    must never land on a seat that never dispatched it). Parentage is read
-    from the event (``spawn_parent_run_id``, the field ``spawn_*`` events
-    carry) first, then from the run's own ``child_run_ids``
-    (``spawned_by_run``), so an adopted or re-parented child still counts.
+    ``False`` for any hold not on the ``strands`` condition, for a source
+    outside :data:`STRAND_RELEASE_SOURCES`, and for a child event whose
+    parent is some *other* run — a sibling seat's strand finishing must not
+    wake a seat that never dispatched it. Parentage is read from the event
+    (``spawn_parent_run_id``, the field ``spawn_*`` events carry) first,
+    then from the run's own ``child_run_ids`` (``spawned_by_run``), so an
+    adopted or re-parented child still counts.
     """
-    if not event or str(event.get("source") or "") not in STRAND_SOURCES:
+    if not is_active(meta) or (meta or {}).get("resume_condition") not in (RESUME_STRANDS, RESUME_ANY):
+        return False
+    if not event:
+        return False
+    if str(event.get("source") or "") not in STRAND_RELEASE_SOURCES:
         return False
     owner = str(held_run_id or "").strip()
     if not owner:
@@ -379,27 +333,6 @@ def strand_event_owned(
     else:
         known = {str(part).strip() for part in (child_run_ids or ())}
     return child in known
-
-
-def strand_event_releases(
-    meta: dict[str, Any] | None,
-    event: dict[str, Any] | None,
-    *,
-    held_run_id: str,
-    child_run_ids: Any = (),
-) -> bool:
-    """Whether *event* is one of the held run's own strands reporting back.
-
-    ``False`` for any hold not on the ``strands`` / ``any`` condition, for
-    a source outside :data:`STRAND_RELEASE_SOURCES` (admission is owned but
-    never releases), and for a child event whose parent is some *other*
-    run (:func:`strand_event_owned`).
-    """
-    if not is_active(meta) or (meta or {}).get("resume_condition") not in (RESUME_STRANDS, RESUME_ANY):
-        return False
-    if not event or str(event.get("source") or "") not in STRAND_RELEASE_SOURCES:
-        return False
-    return strand_event_owned(event, held_run_id=held_run_id, child_run_ids=child_run_ids)
 
 
 def hold_boot_ratio(
