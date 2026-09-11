@@ -956,7 +956,7 @@ def _has_post_tool_obligations(
     """True when this boundary carries at least one obligation.
 
     "Obligation" here means *this boundary must not be silently dropped*,
-    which is a coarser axis than the bar segments' own OBLIGATION/DELTA/
+    which is a coarser axis than the bar segments' own WAITING/DELTA/
     VITAL/AMBIENT class (see `SEGMENT_CLASS`) — most of the list below do
     have a discharge condition the resident can act on (pending events,
     stale card, overdue armed letters, unmet blueprint promise edge);
@@ -1261,15 +1261,24 @@ def _wake_census(ctx: HookContext) -> str | None:
 # :data:`BAR_SEGMENTS` for the vocabulary.
 
 
-#: The three classes of the boundary channel (#1116). A line's class is
-#: decided by one question — **is there an act that turns it off?**
+#: The four classes of the boundary channel (#1116, reframed by w-54/w-34
+#: 2026-09-11). A line's class is decided by **whose state is the
+#: subject** — the world's, or the resident's own route:
 #:
-#: - ``OBLIGATION`` — yes. It repeats until discharged, and it *should*:
-#:   byte-identical repetition is the signature of "nothing was done", not
-#:   of "nothing happened", which is why #963's content dedupe could never
-#:   reclaim this class and correctly refused to try.
-#: - ``DELTA`` — it records something that changed. It has no discharge, but
-#:   it earns its bytes by being new.
+#: - ``WAITING`` (renamed from ``OBLIGATION``) — someone or something in
+#:   the world is waiting: a person's message, an artifact this run
+#:   promised, a frozen process. It repeats until the wait ends, and it
+#:   *should*: byte-identical repetition is the signature of "nothing was
+#:   done", not of "nothing happened", which is why #963's content dedupe
+#:   could never reclaim this class and correctly refused to try. Its own
+#:   repeat rule is compressed-but-counted: ``pending 8`` may stand for
+#:   eight lines, but the count never drops out while anything waits.
+#: - ``DELTA`` — the resident's own route, shown as a sign at the junction
+#:   (a route edit, a threshold crossed, a change) — never as a counter of
+#:   the resident's own attention (a ``seen ×N`` suffix, an "acts ago"
+#:   count that grows every boundary regardless of whether anyone acted).
+#:   It records something that changed. It has no discharge, but it earns
+#:   its bytes by being new — it fires once, at the edge, not per boundary.
 #: - ``AMBIENT`` — a meter. No discharge, no news; a fresh reading of a
 #:   number that was already on screen. This is the class that made 80.2% of
 #:   a day's injections share a shape with another.
@@ -1278,7 +1287,7 @@ def _wake_census(ctx: HookContext) -> str | None:
 #: — that gate lives in ``_render_bar``'s laden check and several ambient
 #: chips are already excluded from it. This axis decides what survives once
 #: the bar is open but ambient vitals are quiet.
-OBLIGATION = "obligation"
+WAITING = "waiting"
 DELTA = "delta"
 #: The maintainer's exemption, and it is a fourth fact rather than a
 #: loophole: a line you cannot discharge and cannot afford to lose. You
@@ -1287,7 +1296,7 @@ DELTA = "delta"
 #: that never stops moving stops being read.
 VITAL = "vital"
 AMBIENT = "ambient"
-_SEGMENT_CLASSES = (OBLIGATION, DELTA, VITAL, AMBIENT)
+_SEGMENT_CLASSES = (WAITING, DELTA, VITAL, AMBIENT)
 
 
 @dataclass(frozen=True)
@@ -1450,10 +1459,17 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "*for*. Measured 2026-09-10: a run's largest single expenditure was "
         "holding its seat across a gate — ten `await` calls, no output — "
         "chosen ten times and never once given a number.",
-        # OBLIGATION because there is an act that turns it off: declaring a
-        # link. `∅` is not wallpaper — it is a standing ask, and the one
-        # thing on this bar a resident can always discharge in one call.
-        klass=OBLIGATION,
+        # w-34 (2026-09-11): reclassified from OBLIGATION to DELTA — the
+        # link names the resident's own route (what this stretch is *for*),
+        # the same "my own route becomes a sign" column as `course`/`card`/
+        # `mood`, not something the world is waiting on. It already rendered
+        # this way (no forcing entry in `_render_bar`'s `edge_due`, so it
+        # was always change-gated in practice) — this is a label fix, not a
+        # behaviour change. `∅` is still not wallpaper: it is a standing
+        # ask, the one thing on this bar a resident can always discharge in
+        # one call — DELTA just means it says so once, at the change, not
+        # on every boundary it stands unmet.
+        klass=DELTA,
     ),
     _BarSegment(
         "owed", "owed",
@@ -1466,13 +1482,20 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "chip shaped like a progress bar gets read as one. The chip is the "
         "ambient half; *which* things are owed rides a detail line, latched "
         "on the blueprint's own delta (#1008).",
-        # Obligation: an outstanding promise is actionable and
-        # turn-off-able — keep it. The neighbouring comment calling
-        # the chip "the ambient half" is about the *gate* (it must
-        # not manufacture a boundary), which is unchanged; the
-        # module's own test pins the chip as the standing fact that
-        # rides every boundary while the line speaks on delta.
-        klass=OBLIGATION,
+        # WAITING (renamed from OBLIGATION 2026-09-11, w-34): the world is
+        # waiting on an artifact this run promised — same column as
+        # `pending`/`paused`. The neighbouring comment calling the chip
+        # "the ambient half" is about the *gate* (it must not manufacture a
+        # boundary), which is unchanged; the line speaks on delta
+        # (`plan_edge`) same as before. The CHIP itself used to claim it
+        # "rides every boundary while the line speaks on delta" — measured
+        # false (`_render_bar` forced it only on `plan_edge`, same as the
+        # line, so a second unchanged boundary dropped the chip entirely,
+        # the comment's own claim untested — no pin existed for it). Fixed
+        # here: WAITING's rule is "always due while nonzero", so the chip
+        # now forces on `bool(plan.owed)` in `edge_due`, independent of
+        # `plan_edge`; see the table-driven due-by-class pin.
+        klass=WAITING,
     ),
     _BarSegment(
         "course", "course",
@@ -1485,11 +1508,16 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "The current row rides a detail line on the course's own delta and "
         "on the boundary a fresh event lands (the derailment moment, where "
         "the route must be in the loud zone to be decidable).",
-        # Obligation: an open route row is actionable (do it / check it /
-        # rewrite the plan) and turn-off-able by exactly that act. The chip
-        # never opens the bar by itself — the detail line, latched on the
-        # course's own token, is what earns a boundary.
-        klass=OBLIGATION,
+        # DELTA (was OBLIGATION until w-34, 2026-09-11): the run's own
+        # route, not the world's wait — shown as a sign at the junction
+        # (route edited, drift threshold, a fresh event's derailment
+        # prompt), never as a standing counter. Already behaved this way —
+        # `edge_due["course"]` has only ever forced on the edge flags
+        # (`route_edge`/`route_prompt`/`route_drift`), never "while open",
+        # so this is a label fix, not a behaviour change. The chip never
+        # opens the bar by itself — the detail line, latched on the same
+        # edges, is what earns a boundary.
+        klass=DELTA,
     ),
     # The `bolt` chip retired 2026-08-19 (evt-…-mhrx) — it counted events
     # while saying "asks" and restated owed/produce/pending. The bolt the
@@ -1504,8 +1532,13 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "while the written handle resolves to no emote (actionable — "
         "rewrite the file); and `mood <face> — still?` when the face stood "
         "still through five work-moves.",
-        # the surprise/unresolved/still? forms each name an act.
-        klass=OBLIGATION,
+        # DELTA (was OBLIGATION until w-34, 2026-09-11): the surprise/
+        # unresolved/still? forms each fire on their own edge (a boundary
+        # that surprised the run, a handle that resolves to no emote, the
+        # drift threshold) — a sign at the junction, never a standing
+        # counter of the resident's own attention. Unchanged behaviour;
+        # label fix only.
+        klass=DELTA,
     ),
     _BarSegment(
         "notices", "!",
@@ -1521,13 +1554,17 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         # can never reach zero within a run once tripped, however many times
         # the resident opens `portal-state.json` and reads every entry. That
         # is DELTA's own definition ("records something that changed... has
-        # no discharge, but earns its bytes by being new"), not OBLIGATION's.
-        # Relabeling only — rendering was unchanged by it; `brnrd legend`
-        # (cli.py's cmd_legend) does print this field verbatim, so its `!`
-        # row now correctly says `delta`, which is the fix, not a side
-        # effect. The change that would make this a genuine OBLIGATION (a
+        # no discharge, but earns its bytes by being new"), not WAITING's
+        # (nothing in the world is waiting on a read of `notices`). The
+        # change that would make this a genuine WAITING obligation (a
         # mark-as-seen verb) is bigger than a class label and is proposed,
-        # not built, here.
+        # not built, here. w-34 (2026-09-11) did the other half of "obeying
+        # the class": the detail sentence below used to repeat on every
+        # laden boundary, compressing to a `seen ×N` streak-count suffix
+        # after three — an attention counter, the exact shape this class
+        # exists to end. It now fires once, in full, on the count's own
+        # change (the count is append-only, so "changed" means "grew"), and
+        # stays silent while unchanged — DELTA's rule, not a compression.
         klass=DELTA,
     ),
     _BarSegment(
@@ -1540,8 +1577,21 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "was a fact with no act attached, repeated forever. Last segment "
         "when present. A `stale` value also gets its own detail line "
         "naming why — the chip alone is never the whole obligation.",
-        # a stale card is discharged by writing one.
-        klass=OBLIGATION,
+        # DELTA (was OBLIGATION until w-34, 2026-09-11): a stale card is
+        # discharged by writing one, but the world is not waiting on it —
+        # it is the resident's own route falling behind, same column as
+        # `course`/`mood`/`link`. Measured 2026-09-11: `edge_due["card"]`
+        # forced this chip (and its detail paragraph) to repeat
+        # byte-identically on *every* laden boundary while stale, the exact
+        # "fires constantly, not per-boundary" shape this reclassification
+        # exists to end (see design-the-seam-that-reads-as-a-body.md
+        # finding 2). Fixed: both the chip and its detail line are now
+        # change-gated like any DELTA sign — the chip via the plain default
+        # (no forcing entry left in `edge_due`), the detail paragraph via
+        # its own `last_chips["card_detail"]` latch, so a genuinely new
+        # breakdown (another commit landed) still re-earns a line even
+        # while the chip text itself ("card stale") hasn't moved.
+        klass=DELTA,
     ),
 )
 
@@ -1554,7 +1604,7 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
 #: thing that must never be filed as a meter.
 SEGMENT_CLASS: dict[str, str] = {
     **{segment.key: segment.klass for segment in BAR_SEGMENTS},
-    "pending_unknown": OBLIGATION,
+    "pending_unknown": WAITING,
     # #1897: these five are appended straight into `_render_bar`'s
     # `segments` list (never through `BAR_SEGMENTS`, so the derivation
     # above never saw them) — the vocabulary this dict claims to be
@@ -1563,14 +1613,16 @@ SEGMENT_CLASS: dict[str, str] = {
     "allowance": VITAL,  # a meter — the strand/seat's own spend-vs-ceiling reading.
     "context_delta": VITAL,  # a meter — cost of this stretch since the last boundary.
     "room": AMBIENT,  # the resident's own tempo note, echoed verbatim, never parsed.
-    # Forced never-suppressed via `edge_due["paused"] = True` below — the
-    # record stands until resume/drop clears it, which is obligation
-    # behaviour; this makes the label match what the code already does.
-    "paused": OBLIGATION,
+    # Forced never-suppressed via `edge_due["paused"] = True` below — a
+    # frozen process is the world waiting (w-34, 2026-09-11: renamed from
+    # OBLIGATION to WAITING, same behaviour) — the record stands until
+    # resume/drop clears it.
+    "paused": WAITING,
     # Content deliberately change-gated per #1594 (seen-only pending events
     # collapse to this chip rather than re-opening the bar) — a genuine
-    # discharge condition (the count returns to zero), so OBLIGATION.
-    "pending": OBLIGATION,
+    # discharge condition (the count returns to zero), so WAITING: a
+    # person's message is the paradigm case the class is named for.
+    "pending": WAITING,
 }
 
 # _KEPT_WHEN_QUIET and the `run` id chip retired with w-54 (2026-08-19):
@@ -2678,16 +2730,29 @@ def _event_body_block(
     ]
 
 
-def _event_seen_line(ev: dict[str, Any], shown: int) -> str:
-    """`⏰ evt-1785520992817014311-8jwi · schedule · seen ×3 · unchanged`.
+def _event_seen_line(ev: dict[str, Any]) -> str:
+    """`⏰ evt-1785520992817014311-8jwi · schedule · waiting 3m · unchanged`.
 
     One honest line — full id, because even the collapsed form is the
     surface a reply gets addressed from (#934).
+
+    w-34 (2026-09-11): a pending event is WAITING-class — the world (a
+    person, a schedule entry) is waiting, and the class's own rule is to
+    say what waits and *how long*, never how many times the resident has
+    already had it rendered. This used to carry ``seen ×N``, the render
+    count off :data:`EVENTS_SEEN_KEY` — an attention counter graded on the
+    resident, not a fact about the wait. Replaced with the event's actual
+    age off its own ``created`` timestamp (the same reading
+    :func:`_event_header` uses for a fresh event); silent about age only
+    when the event carries no ``created`` at all, same as every other
+    age-reporting line in this module.
     """
     source = str(ev.get("source") or "-").strip() or "-"
+    age = _fmt_age(_event_age_seconds(ev.get("created")))
+    waiting = f" · waiting {age}" if age else ""
     return (
-        f"{_event_glyph(source)} {_full_event_id(ev.get('id'))} · {source} "
-        f"· seen ×{shown} · unchanged"
+        f"{_event_glyph(source)} {_full_event_id(ev.get('id'))} · {source}"
+        f"{waiting} · unchanged"
     )
 
 
@@ -2811,14 +2876,13 @@ def _render_event_rows(
             continue
         decision = (event_seen or {}).get(str(ev.get("id") or ""))
         status = (decision or {}).get("status") or "new"
-        shown = int((decision or {}).get("shown") or 0)
         if status == "seen":
             flush_burst()
             if skip_seen:
                 seen_skipped += 1
                 continue
             rendered += 1
-            rows.append(f"- {_event_seen_line(ev, shown)}")
+            rows.append(f"- {_event_seen_line(ev)}")
             continue
         if burst_buffer and not conversations.events_continue_burst(
             burst_buffer[-1], ev
@@ -3131,12 +3195,18 @@ def _render_bar(
 
     w-54 (2026-08-19): the bar opens with the one static element —
     ``⌁[<mood>]:`` (:func:`_bar_preamble`) — and every chip after it is
-    **change-gated**: it renders only when its text differs from what the
-    last *rendered* bar carried (*last_chips*), or when its own edge fires
-    (course on ``route_edge``/``route_prompt``/``route_drift``, bolt on
-    ``bolt_edge``/``route_prompt``, owed on ``plan_edge``) or it is an
-    obligation standing unmet (a not-ok card, an unknown pending count).
-    A boundary with no due chip and no detail lines injects **nothing**.
+    **change-gated by default**, then narrowed or widened per its class
+    (w-34, 2026-09-11 — see the ``edge_due`` comment below): it renders when
+    its text differs from what the last *rendered* bar carried
+    (*last_chips*, DELTA's rule — ``card``/``link``/``notices`` fall through
+    to exactly this), when its own DELTA edge fires (course on
+    ``route_edge``/``route_prompt``/``route_drift``, mood on a surprise or
+    drift-threshold), or it is a WAITING obligation standing unmet — always
+    due while nonzero, independent of whether its text just changed (a
+    not-ok card used to be this shape too; it is DELTA now — an unknown
+    pending count, a nonzero ``pending``/``owed``, an armed ``paused``
+    record still are). A boundary with no due chip and no detail lines
+    injects **nothing**.
 
     *rendered_chips*, when given, is filled with every laden chip's current
     text so the caller can commit it as the next boundary's *last_chips* —
@@ -3326,24 +3396,23 @@ def _render_bar(
         segments.append(("card", card_chip))
 
     details: list[str] = []
-    repeat_streaks_in = repeat_streaks or {}
+    notices_detail_value: str | None = None
+    card_detail_value: str | None = None
     if notices_chip:
-        # #1116 residue: every other OBLIGATION-class chip gets a detail
-        # line naming the act that clears it — `!N` didn't. Reuse the count
-        # already computed for the chip (`!N`) rather than recomputing it.
+        # #1116 residue: every other class gets a detail line naming the
+        # act that clears it — `!N` didn't. Reuse the count already
+        # computed for the chip (`!N`) rather than recomputing it.
+        #
+        # w-34 (2026-09-11): notices is DELTA — a sign at the junction, not
+        # a standing counter — so this used to compress to a `seen ×N`
+        # streak-count suffix after three identical boundaries is gone
+        # along with the streak itself. `!N` only ever grows (the ledger is
+        # append-only, #1266), so "the count changed" always means "a new
+        # refusal landed" — the full sentence fires exactly once per new
+        # count, gated the same way `allowance_directive` is below: against
+        # *last_chips*, under a key that never appears in *segments*.
         notices_count = int(notices_chip[1:])
-        notices_streak = repeat_streaks_in.get("notices", 0)
-        if notices_streak >= _REPEAT_COMPRESS_THRESHOLD:
-            # Compression-on-repeat (#1116 residue, design-the-live-loop.md
-            # §1): the boilerplate sentence is what repeats byte-for-byte
-            # every boundary the count stands unaddressed — the compact form
-            # keeps the live count and the discharge surface, drops the
-            # sentence.
-            details.append(
-                f"- !{notices_count} · seen ×{notices_streak} — "
-                "portal-state.json → notices"
-            )
-        else:
+        if last_chips is None or last_chips.get("notices_detail") != notices_chip:
             details.append(
                 f"!{notices_count} — {notices_count} directive"
                 + ("s" if notices_count != 1 else "")
@@ -3351,6 +3420,11 @@ def _render_bar(
                 "`notices`; a refused outbox file is deleted exactly like an "
                 "accepted one, so this is the only way to see what was lost."
             )
+        # Written into *rendered_chips* below, after the clear/update pair
+        # — this dict is reset wholesale later in the function (the same
+        # reason `allowance_directive`/`face` are written after it, not
+        # here).
+        notices_detail_value = notices_chip
     if pending:
         # Same framing fix as the prose form (2026-07-05): a bare count reads
         # as ambient telemetry, so non-zero pending gets an explicit verb —
@@ -3452,19 +3526,37 @@ def _render_bar(
     # asserting the card was just written when it was the opposite. Nothing
     # to name ⇒ name the two times ``_card_is_behind`` itself compared
     # instead of inventing a count.
+    #
+    # w-34 (2026-09-11): card is DELTA now — a sign at the junction, not a
+    # standing counter — so this paragraph used to fire on *every* laden
+    # boundary the card was behind, byte-identical, for as long as the run
+    # stayed behind (measured: `edge_due["card"]` forced the chip itself the
+    # same way). Change-gated below like `allowance_directive`/`notices`:
+    # against *last_chips* under its own key, so a genuinely new breakdown
+    # (another commit landed since the last line) still re-earns a line
+    # even while the two-times-compared sentence's wording repeats.
     if not wait_idle and _card_is_behind(card):
         acts, breakdown = _card_acts_behind(produce, outbound, pending)
         if acts:
             noun = "act" if acts == 1 else "acts"
             what = f" ({breakdown})" if breakdown else ""
-            details.append(f"- card ## Now: last written {acts} {noun} ago{what}")
+            card_detail_text = f"- card ## Now: last written {acts} {noun} ago{what}"
         else:
             age_txt = _fmt_age(card.get("age_seconds"))
             moved_txt = _fmt_age(card.get("state_moved_seconds"))
-            if age_txt and moved_txt:
-                details.append(
-                    f"- card ## Now: written {age_txt} ago · state moved {moved_txt} ago"
-                )
+            card_detail_text = (
+                f"- card ## Now: written {age_txt} ago · state moved {moved_txt} ago"
+                if age_txt and moved_txt else None
+            )
+        if card_detail_text:
+            if (
+                last_chips is None
+                or last_chips.get("card_detail") != card_detail_text
+            ):
+                details.append(card_detail_text)
+            # Written into *rendered_chips* below, after the clear/update
+            # pair, same reason as `notices_detail_value` above.
+            card_detail_value = card_detail_text
 
     # ── The due-filter (w-54): change-gating replaces the laden gate. ──
     #
@@ -3487,6 +3579,16 @@ def _render_bar(
         # clear/update pair above rather than through it; persisted here so
         # next boundary's *last_chips* carries the gate forward.
         rendered_chips["allowance_directive"] = allowance_gate_text
+        # `notices_detail`/`card_detail` (w-34, 2026-09-11): same idiom, one
+        # per DELTA sign whose *detail line* needs its own change-gate
+        # independent of the chip's — written here, after the clear above,
+        # not at the point each was computed, or `.clear()` would erase
+        # them before a caller ever saw them (measured: this was the actual
+        # bug the table-driven due-by-class test below caught).
+        if notices_detail_value is not None:
+            rendered_chips["notices_detail"] = notices_detail_value
+        if card_detail_value is not None:
+            rendered_chips["card_detail"] = card_detail_value
     # The ornament's own edge (design-the-pre-attentive-channel.md rule 3:
     # "it names itself once, on change"): the mood word rides the preamble
     # only on the boundary the face actually changed, under a key that
@@ -3499,28 +3601,56 @@ def _render_bar(
     )
     if rendered_chips is not None:
         rendered_chips["face"] = face_now
+    # w-34 (2026-09-11): the forcing rules below are the renderer obeying
+    # each key's own class (`SEGMENT_CLASS`) rather than a hand-picked
+    # per-key story — WAITING keys force due while the underlying fact
+    # stands (the world doesn't stop waiting because the text repeats);
+    # DELTA keys force due only on their own named edge, never "while
+    # standing" (a sign at the junction, not a counter); a key absent from
+    # this dict falls through to `_due`'s plain default — due when its
+    # rendered text changed — which is DELTA's rule by construction and
+    # AMBIENT's too (`census`/`room` are AMBIENT and never listed here).
+    #
+    # VITAL is the one class this dict does not implement its own rule
+    # for: "due on threshold crossing" would need per-metric baselines
+    # (`_AMBIENT_BUDGET_THRESHOLDS`/`_AMBIENT_QUOTA_THRESHOLDS` cover
+    # budget/quota; nothing analogous exists for context_window, draws,
+    # hold, siblings, correspondent) threaded into this closure, which
+    # `_due`'s OR-shaped default (forced ∨ text-changed) can't express as
+    # a *narrowing* rule — a forced-True entry only ever adds renders, it
+    # cannot suppress the ones the text-change fallback already grants. All
+    # seven VITAL chips render on the plain default (due on text change)
+    # today, same as before this change — an explicit, deliberate exception
+    # to "VITAL due on threshold crossing", named here and in the report
+    # rather than built partway.
     edge_due = {
-        # An unknown obligation count must never go quiet.
+        # WAITING: an unknown pending count must never go quiet.
         "pending_unknown": True,
-        # `stale` repeats until discharged (rewriting the card is the act) —
-        # it rides beside its own detail line, streak-compressed above.
-        # `blank`/`cut` announce their transitions via change-gating like
-        # everything else; the caller-latched nudges (`mood?`, `topic?`)
-        # render once by the same rule — commit-on-render means a rendered
-        # chip was seen, so the old miss-a-quiet-boundary caps are moot.
-        "card": card_stale,
-        # A surprise is fresh news even when its text repeats — the caller
-        # already latches it to the clean→broken transition; a drift ask is
-        # its own edge the same way.
-        "mood": bool(surprise) or mood_drift,
-        # Position trackers re-surface on their own edges even when the
-        # numbers happen not to have moved.
-        "course": route_edge or route_prompt or route_drift,
-        "owed": plan_edge,
-        # Stands until the record clears (resume/drop/cap-sweep/run-end) —
-        # never change-gated away like `room`, because the resident reading
-        # a repeated line and acting once is exactly the intended outcome.
+        # WAITING: the count never drops out while anything is pending —
+        # the detail rows/sentence below stay edge-gated on
+        # `pending_set_changed`; only the standing chip is forced.
+        "pending": bool(pending),
+        # WAITING: an outstanding promise is a fact the world is waiting
+        # on, independent of whether it just changed — `plan_edge` still
+        # gates the *line* naming what's owed (below), same asymmetry as
+        # `pending`'s chip vs. its sentence.
+        "owed": bool(plan.owed) if plan is not None else False,
+        # WAITING: stands until the record clears (resume/drop/cap-
+        # sweep/run-end) — never change-gated away like `room`, because the
+        # resident reading a repeated line and acting once is exactly the
+        # intended outcome.
         "paused": bool(paused),
+        # DELTA: a surprise is fresh news even when its text repeats — the
+        # caller already latches it to the clean→broken transition; a
+        # drift ask is its own edge the same way. `card` and `link` carry
+        # no entry here on purpose — DELTA's plain default (due on text
+        # change) already is their rule, so forcing them would recreate the
+        # exact "fires constantly" bug this reclassification just removed
+        # from `card`.
+        "mood": bool(surprise) or mood_drift,
+        # DELTA: position trackers re-surface on their own edges even when
+        # the numbers happen not to have moved.
+        "course": route_edge or route_prompt or route_drift,
     }
 
     def _due(key: str, text: str) -> bool:
@@ -3651,12 +3781,15 @@ def format_delta(
     :func:`_render_bar` builds — one line per boundary, working-register
     style, from the fixed :data:`BAR_SEGMENTS` vocabulary — with detail lines
     below it only for new obligations. It stays gated and returns ``None``
-    when nothing shifted, so the channel injects no noise — except card
-    staleness (2026-07-05) and non-zero pending events, which always earn a
-    detail line: a stale-or-blank ``.card`` or an unaddressed follow-up is a
-    mid-run failure, not one that can wait for closeout or be buried in a
-    glyph. An unavailable count is the compact ``✉?`` chip — neither a false
-    zero nor silence.
+    when nothing shifted, so the channel injects no noise — except non-zero
+    pending events, which always earn a detail line: an unaddressed
+    follow-up is a mid-run failure, not one that can wait for closeout or
+    be buried in a glyph. An unavailable count is the compact ``✉?`` chip —
+    neither a false zero nor silence. Card staleness (2026-07-05) used to
+    be in this "always" clause too; w-34 (2026-09-11) moved it to DELTA — a
+    stale-or-blank ``.card`` still earns a line, but once, at the edge, not
+    on every boundary it stands unaddressed (see ``_render_bar``'s
+    ``edge_due`` comment).
 
     ``mood`` is the resident's own `.mood` control file (#566 layer 2), read
     fresh by the caller (:func:`_read_mood`) at every boundary — rendered as
@@ -5205,10 +5338,9 @@ def _fold_in_message(
     """
     source = str(event.get("source") or "user").strip() or "user"
     status = (decision or {}).get("status") or "new"
-    shown = int((decision or {}).get("shown") or 0)
     if status == "seen":
         return (
-            f"{_event_seen_line(event, shown)} — still pending: reply with "
+            f"{_event_seen_line(event)} — still pending: reply with "
             f"`event: {event.get('id') or '<id>'}`, or retire it deliberately "
             f"with `note: {event.get('id') or '<id>'}`."
         )
@@ -5596,11 +5728,17 @@ def compute_neutral(
             for decision in (event_decisions or {}).values()
         )
 
-        # Compression-on-repeat (#1116 residue, design-the-live-loop.md §1):
-        # advance each compressible detail line's consecutive-laden-boundary
-        # streak, off the exact same "due" reads `_has_post_tool_obligations`
-        # and `_render_bar` use for these lines — so the streak can
-        # never fall out of step with what actually renders.
+        # w-34 (2026-09-11): neither key below is read by `_render_bar`
+        # anymore — `notices`' compression-on-repeat (#1116 residue,
+        # design-the-live-loop.md §1) was the exact attention-counter shape
+        # w-34 deletes (the detail sentence is now change-gated against
+        # *last_chips* like any DELTA sign, not streak-compressed), and
+        # `card_stale`'s streak was already unread before this (#1897: "kept
+        # for state, no longer rendered as a seen ×N suffix"). Kept
+        # computed and persisted rather than torn out here — the ledger
+        # itself (`REPEAT_COUNTS_KEY`) may still gain a reader, and retiring
+        # the plumbing is a wider, separately-reviewable change than this
+        # one's bounded scope. Not a live signal for either key today.
         pt_notices = (
             portal.get("notices") if isinstance(portal.get("notices"), list) else []
         )

@@ -1595,7 +1595,11 @@ def test_stop_fold_in_of_a_schedule_firing_is_labelled_honestly(tmp_path):
 def test_stop_fold_in_of_an_already_shown_body_is_one_line(tmp_path):
     # A post-tool boundary already showed the body in full; the Stop fold-in
     # of the same unchanged body renders the one-line seen form, not a
-    # second copy.
+    # second copy. w-34 (2026-09-11): the collapsed form used to carry
+    # `seen ×N` — a count of how many times *the resident* had it rendered,
+    # an attention counter on a WAITING-class line (someone is waiting) —
+    # deleted; no `created` on this fixture, so the line has no age to
+    # report either, and stays honest about that (no invented duration).
     ev = {"id": "evt-2", "source": "telegram", "body": "please rename the widget"}
     env = _env(tmp_path)
     _portal(tmp_path, token="t1", pending=1, events=[ev])
@@ -1604,8 +1608,30 @@ def test_stop_fold_in_of_an_already_shown_body_is_one_line(tmp_path):
 
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
     assert out["decision"] == "block"
-    assert _says(out["reason"], "✉ evt-2 · telegram · seen ×1 · unchanged")
+    assert _says(out["reason"], "✉ evt-2 · telegram · unchanged")
+    assert "seen ×" not in out["reason"]
     assert not _says(out["reason"], "please rename the widget")
+
+
+def test_stop_fold_in_of_an_already_shown_body_names_how_long_it_waited(tmp_path):
+    # Same collapse, with a `created` timestamp on the event: the line
+    # names the real-world wait instead of a render count — WAITING's own
+    # rule ("say what waits and how long"), not a tally of the resident's
+    # own attention.
+    created = (
+        datetime.datetime.now(tz=datetime.timezone.utc)
+        - datetime.timedelta(minutes=5)
+    ).isoformat().replace("+00:00", "Z")
+    ev = {
+        "id": "evt-3", "source": "telegram", "body": "please rename the widget",
+        "created": created,
+    }
+    env = _env(tmp_path)
+    _portal(tmp_path, token="t1", pending=1, events=[ev])
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert _says(out["reason"], "✉ evt-3 · telegram · waiting 5m · unchanged")
 
 
 def test_source_glyphs_cover_the_channel_vocabulary():
@@ -1662,11 +1688,14 @@ def test_render_event_rows_no_elision_line_when_it_fits():
 
 
 def test_render_event_rows_all_collapsed_no_elision_line():
-    # The double-count bug: a `seen ×N · unchanged` row is emitted via
+    # The double-count bug: a collapsed `· unchanged` row is emitted via
     # `continue` without bumping the render counter, so an all-collapsed
     # list (nothing actually omitted) still got an elision line claiming
     # every row it had just printed was missing. 5 pending, all collapsed:
-    # 5 rows, no "+N more" line.
+    # 5 rows, no "+N more" line. (w-34, 2026-09-11: the collapsed form used
+    # to carry a `seen ×N` render-count suffix, deleted as an attention
+    # counter — these fixtures carry no `created`, so there is no age to
+    # report either; the "unchanged" collapse itself is what's under test.)
     events = [
         {"id": f"evt-{i}", "source": "telegram", "body": f"msg {i}"}
         for i in range(5)
@@ -1674,7 +1703,8 @@ def test_render_event_rows_all_collapsed_no_elision_line():
     event_seen = {ev["id"]: {"status": "seen", "shown": 3} for ev in events}
     rows = hooks._render_event_rows(events, event_seen, None)
     assert len(rows) == 5
-    assert all("seen ×3 · unchanged" in r for r in rows)
+    assert all("· unchanged" in r for r in rows)
+    assert not any("seen ×" in r for r in rows)
     assert not any("more pending events" in r for r in rows)
 
 
@@ -1693,7 +1723,7 @@ def test_render_event_rows_mixed_collapsed_omission_count_is_exact(monkeypatch):
         events[i]["id"]: {"status": "seen", "shown": 2} for i in range(0, 10, 2)
     }
     rows = hooks._render_event_rows(events, event_seen, None)
-    seen_rows = [r for r in rows if "seen ×2 · unchanged" in r]
+    seen_rows = [r for r in rows if "· unchanged" in r]
     assert len(seen_rows) == 5
     for i in range(0, 10, 2):
         assert any(events[i]["id"] in r for r in seen_rows)
@@ -3682,6 +3712,12 @@ def test_post_tool_bar_renders_pending_count_as_chip(tmp_path):
     # change). Previously the count lived only in a detail line; now it's a
     # first-class chip so seen-only events stay visible at a glance without
     # repeating their detail rows.
+    #
+    # w-34 (2026-09-11): `pending` is WAITING-class, and the class's own rule
+    # is "always due while nonzero" — the count must never drop out while
+    # anything waits. Before this fix the chip was change-gated like a DELTA
+    # sign, so a second boundary with the same pending count went silent
+    # (measured live, #this fix); now the chip persists.
     env = _env(tmp_path)
     ev = {"id": "evt-42", "source": "telegram", "summary": "hello"}
     _portal(tmp_path, token="t1", pending=1, events=[ev])
@@ -3691,10 +3727,13 @@ def test_post_tool_bar_renders_pending_count_as_chip(tmp_path):
     # First render: bar shows the pending count chip.
     assert "pending 1" in bar1
 
-    # Second render: event now seen — bar is quiet (no injection).
+    # Second render: event now seen — the standing chip still rides the
+    # bar (WAITING never drops out), even though nothing else is due.
     _portal(tmp_path, token="t2", pending=1, events=[ev])
     second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    assert "hookSpecificOutput" not in second
+    assert "hookSpecificOutput" in second
+    ctx2 = second["hookSpecificOutput"]["additionalContext"]
+    assert "pending 1" in ctx2.splitlines()[0]
 
 
 # ── Armed dated-letters block (#904) ──────────────────────────────────
@@ -5869,7 +5908,7 @@ def test_every_bar_segment_declares_its_class():
     # And every key the renderer can emit is classified, including the
     # inline `✉?` chip that has no vocabulary entry.
     assert set(hooks.SEGMENT_CLASS) >= {s.key for s in hooks.BAR_SEGMENTS}
-    assert hooks.SEGMENT_CLASS["pending_unknown"] == hooks.OBLIGATION
+    assert hooks.SEGMENT_CLASS["pending_unknown"] == hooks.WAITING
 
 
 def test_every_emitted_chip_is_classified():
@@ -5947,14 +5986,155 @@ def test_every_emitted_chip_is_classified():
     # preamble once on change — neither is a bar chip) but both are still
     # persisted into `rendered_chips` for the next boundary's change-gate —
     # excluded here for the same reason they are excluded from
-    # `BAR_SEGMENTS`.
-    emitted = set(rendered) - {"allowance_directive", "face"}
+    # `BAR_SEGMENTS`. `notices_detail`/`card_detail` (w-34, 2026-09-11) are
+    # the same idiom, one per DELTA sign whose *detail line* needs its own
+    # change-gate independent of the chip's.
+    emitted = set(rendered) - {
+        "allowance_directive", "face", "notices_detail", "card_detail",
+    }
     # A real fixture, not a token one: enough distinct chips fired that a
     # missing classification is actually exercised, including all five
     # keys this fix adds.
     assert {"allowance", "context_delta", "room", "paused", "pending"} <= emitted
     assert len(emitted) >= 15, emitted
     assert emitted <= set(hooks.SEGMENT_CLASS), emitted - set(hooks.SEGMENT_CLASS)
+
+
+# ── w-34 (2026-09-11): the renderer obeys the class ─────────────────────────
+
+
+def test_waiting_chips_stay_due_while_the_fact_stands_unchanged():
+    """WAITING's rule: always due while nonzero — the world doesn't stop
+    waiting because the rendered text repeats. Three boundaries
+    (unchanged, changed, unchanged) against `pending` and `owed`, the two
+    WAITING keys with an independently-triggerable underlying fact
+    (`pending_unknown`/`paused` are also WAITING but each has only one
+    non-empty shape to assert, covered elsewhere)."""
+    from brr import promises
+
+    # `pending`: unchanged (same count) must still render; changed (new
+    # count) renders too; unchanged again still renders. No `last_chips`
+    # threaded between renders 1↔2 — a *third*, independent boundary with
+    # the identical count is the "unchanged" arm; renders 2↔3 change is the
+    # "changed" arm — an actual two-way chip comparison, not merely "does
+    # the first render show it".
+    base = _bar_payload(attention={
+        "pending_event_count": 2, "pending_outbox_file_count": 0,
+    })
+    chips_a: dict[str, str] = {}
+    a = hooks.format_delta(base, rendered_chips=chips_a)
+    assert "pending 2" in a.splitlines()[0]
+
+    chips_b: dict[str, str] = {}
+    b = hooks.format_delta(base, last_chips=chips_a, rendered_chips=chips_b)
+    assert "pending 2" in b.splitlines()[0]  # unchanged — still due (WAITING)
+
+    grown = _bar_payload(attention={
+        "pending_event_count": 3, "pending_outbox_file_count": 0,
+    })
+    c = hooks.format_delta(grown, last_chips=chips_b)
+    assert "pending 3" in c.splitlines()[0]  # changed — due
+
+    # `owed`: same pattern, driven off a blueprint instead of the portal.
+    plan = promises.blueprint([{"what": "commit", "count": 1}], {})
+    chips_x: dict[str, str] = {}
+    x = hooks.format_delta(_bar_payload(), plan=plan, plan_edge=True, rendered_chips=chips_x)
+    assert "owed 1" in x.splitlines()[0]
+
+    chips_y: dict[str, str] = {}
+    y = hooks.format_delta(
+        _bar_payload(), plan=plan, plan_edge=False,
+        last_chips=chips_x, rendered_chips=chips_y,
+    )
+    assert "owed 1" in y.splitlines()[0]  # unchanged, plan_edge False — still due
+
+
+def test_delta_signs_fire_once_at_the_edge_not_per_boundary():
+    """DELTA's rule: due on change, never "while standing" — a sign at the
+    junction. Three boundaries (unchanged, changed, unchanged) against
+    `card`, the chip this reclassification actually changed the behaviour
+    of (course/mood/link/notices were already edge-triggered; the pin
+    above and `test_notices_detail_fires_once_...` cover those)."""
+    stale = _bar_payload(card={"active": True, "stale": True})
+    healthy = _bar_payload(card={"active": True, "stale": False})
+
+    chips_a: dict[str, str] = {}
+    a = hooks.format_delta(stale, rendered_chips=chips_a)
+    assert "card stale" in a.splitlines()[0]
+
+    chips_b: dict[str, str] = {}
+    b = hooks.format_delta(stale, last_chips=chips_a, rendered_chips=chips_b)
+    # unchanged — DELTA does not repeat; a boundary at all only fires if
+    # something *else* in the fully-laden fixture happens to differ.
+    assert b is None or "card stale" not in b.splitlines()[0]
+
+    changed = _bar_payload(card={"active": False})  # → "card blank"
+    c = hooks.format_delta(changed, last_chips=chips_b)
+    assert "card blank" in c.splitlines()[0]  # changed — due again
+
+
+def test_ambient_chips_are_due_on_change_like_the_delta_default():
+    """AMBIENT's rule: due on change, same plain default DELTA falls
+    through to (`census`/`room` carry no `edge_due` override — confirmed
+    directly against the source in `test_every_bar_segment_declares_its_class`'s
+    neighbourhood; this pins the behaviour). `census` is constant for a run
+    by construction (its own docstring), so "due on change" in practice
+    means "renders once, on the run's first laden boundary" — exercised
+    here as unchanged-text non-repeat against a threaded `last_chips`."""
+    payload = _bar_payload()
+    chips_a: dict[str, str] = {}
+    a = hooks.format_delta(payload, census="wake 100 KB", rendered_chips=chips_a)
+    assert "wake 100 KB" in a.splitlines()[0]
+
+    b = hooks.format_delta(payload, census="wake 100 KB", last_chips=chips_a)
+    assert b is None or "wake 100 KB" not in b.splitlines()[0]
+
+
+def test_ambient_never_opens_the_bar_alone_by_construction():
+    """The other half of AMBIENT's rule — "never the sole reason a boundary
+    opens" — is not a `_render_bar` due-filter concern at all: the
+    admission gate lives one layer up, in `_has_post_tool_obligations` and
+    `_ambient_should_emit` (`run_hook`'s callers), and neither function
+    takes `census`/`room` as an argument. Pinned structurally rather than
+    behaviourally (a `format_delta`-level "nothing rendered" assertion
+    would be false whenever any other chip in a fully-laden fixture happens
+    to be due too, which says nothing about AMBIENT specifically)."""
+    import inspect
+
+    for fn in (hooks._has_post_tool_obligations, hooks._ambient_should_emit):
+        params = set(inspect.signature(fn).parameters)
+        assert "census" not in params and "room" not in params, fn.__name__
+
+
+def test_vital_due_on_threshold_crossing_is_a_named_exception_for_most_keys():
+    """VITAL's stated rule is "due on threshold crossing", reusing
+    `_AMBIENT_BUDGET_THRESHOLDS`/`_AMBIENT_QUOTA_THRESHOLDS`. That machinery
+    gates a coarser axis today — whether the boundary opens at all
+    (`_ambient_should_emit`), not whether an already-open bar's *individual*
+    VITAL chip renders — and only covers budget/quota, not context_window,
+    draws, hold, siblings, or correspondent. Per-chip threshold-crossing
+    due-ness is not implemented in `_render_bar` for any VITAL key this
+    pass; every one of them falls through to the plain default (due on text
+    change), same as before. This pins that fallback so a future change
+    that narrows it (implementing the real rule) fails loudly here instead
+    of silently, and stands as the one documented exception this class asks
+    for. See the report for the full reasoning."""
+    a_chips: dict[str, str] = {}
+    a = hooks.format_delta(
+        _bar_payload(budget={"elapsed_seconds": 100, "budget_seconds": 7200}),
+        rendered_chips=a_chips,
+    )
+    assert "⏱" in a.splitlines()[0]
+
+    b = hooks.format_delta(
+        _bar_payload(budget={"elapsed_seconds": 100, "budget_seconds": 7200}),
+        last_chips=a_chips,
+    )
+    # Identical text ⇒ not due under the plain default — proving no
+    # threshold-crossing override is in effect (a real one would still be
+    # silent here, since no threshold crossed; the point is this key has no
+    # override of its own kind at all).
+    assert b is None or "⏱" not in b.splitlines()[0]
 
 
 def test_a_quiet_boundary_drops_even_the_vitals_once_seen():
@@ -6303,14 +6483,31 @@ def test_bolt_asks_total_accumulates_across_boundaries_and_survives_disposition(
 # ── Compression-on-repeat (#1116 residue, design-the-live-loop.md §1) ────────
 
 
-def test_notices_detail_compresses_on_the_third_consecutive_boundary():
+def test_notices_detail_fires_once_on_the_count_and_is_silent_while_unchanged():
+    # w-34 (2026-09-11): notices is DELTA — a sign at the junction, not a
+    # standing counter. The old shape compressed the repeated sentence to a
+    # `seen ×N` streak-count suffix after three identical boundaries — an
+    # attention counter, deleted along with the streak. The new shape: full
+    # sentence once, on the count's own change (threaded via
+    # last_chips/rendered_chips like every other DELTA sign), then silence
+    # while the count stands — not a shorter repeat, no repeat at all.
     notices = [{"at": "2026-07-24T03:36:00Z", "text": "reply NOT delivered"}]
     payload = _bar_payload(notices=notices)
-    full = hooks.format_delta(payload, repeat_streaks={"notices": 2})
-    compact = hooks.format_delta(payload, repeat_streaks={"notices": 3})
-    assert "refused/dropped this run" in full
-    assert "refused/dropped this run" not in compact
-    assert "- !1 · seen ×3 — portal-state.json → notices" in compact
+
+    rendered_chips: dict[str, str] = {}
+    first = hooks.format_delta(payload, rendered_chips=rendered_chips)
+    assert "refused/dropped this run" in first
+
+    second = hooks.format_delta(payload, last_chips=rendered_chips)
+    assert second is None or "refused/dropped this run" not in second
+    assert second is None or "seen ×" not in second
+
+    # A genuinely new notice (the count grows) re-earns the line.
+    notices2 = notices + [{"at": "2026-07-24T03:40:00Z", "text": "reply NOT delivered"}]
+    payload2 = _bar_payload(notices=notices2)
+    third = hooks.format_delta(payload2, last_chips=rendered_chips)
+    assert "refused/dropped this run" in third
+    assert "2 directives refused/dropped this run" in third
 
 
 

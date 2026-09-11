@@ -2031,7 +2031,7 @@ def cmd_legend(args):
 
     for segment in hooks.BAR_SEGMENTS:
         print(f"{segment.glyph} · {segment.key} · {segment.klass} — {segment.meaning}")
-    print(f"✉? · pending_unknown · {hooks.OBLIGATION} — {_PENDING_UNKNOWN_MEANING}")
+    print(f"✉? · pending_unknown · {hooks.WAITING} — {_PENDING_UNKNOWN_MEANING}")
     return 0
 
 
