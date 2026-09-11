@@ -1458,14 +1458,10 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
     _BarSegment(
         "budget", "⏱",
         "the wall-clock ticker — elapsed minutes (`⏱ 41m`), with the "
-        "soft limit only when the user configured one (`16/120m`). With a "
-        "limit set, due-ness bands on `_AMBIENT_BUDGET_THRESHOLDS` "
-        "(w-34b, 2026-09-11) — it renders on the first boundary and again "
-        "each time % used crosses 25/50/75/90, not on every elapsed "
-        "minute. The bare ticker (no limit configured) has no ratio to "
-        "band and stays on the plain text-change default — a minute is a "
-        "minute, so in practice it still rides most open bars. It never "
-        "opens one.",
+        "soft limit only when the user configured one (`16/120m`). VITAL "
+        "(w-34c, 2026-09-11): renders every boundary, whether or not the "
+        "minute moved; a boundary where % used crosses 25/50/75/90 adds a "
+        "trailing arrow and a detail line naming the threshold.",
         # a meter.
         klass=VITAL,
     ),
@@ -3280,18 +3276,22 @@ _VITAL_BAND_KEYS = ("budget", "quota", "context_window", "draws", "hold",
 def _vital_bands(
     budget: dict[str, Any], resources: dict[str, Any],
 ) -> dict[str, str]:
-    """One coarse "band" string per VITAL key with an honest threshold rule
-    (w-34b, 2026-09-11) — the narrowing half of "VITAL is due on threshold
-    crossing", replacing (never OR'd with) the plain text-change default
-    for exactly the keys returned here. A key this function does not
-    return a band for falls through to the default in `_render_bar`'s
-    `_due` — the one documented exception (`siblings`, whose chip text
-    already *is* the count).
+    """One coarse "band" string per VITAL key with an honest threshold rule.
+    VITAL chips are always due (w-34c, 2026-09-11) — this no longer gates
+    whether a chip renders (w-34b's narrowing rule, retired). What it
+    still does: the boundary a key's band changes from the one last
+    rendered is a real threshold crossing, and `_render_bar` uses that to
+    mark the chip with a trailing arrow and add one detail line naming it
+    — emphasis on an always-on reading, not permission to speak at all. A
+    key this function does not return a band for (`siblings`, whose chip
+    text already *is* the count) never gets that emphasis, but renders
+    every boundary all the same, same as every other VITAL key.
 
     Every band is a string so it can ride the same `last_chips`/
     `rendered_chips` dict[str, str] the rest of the bar's change-gating
     already uses (`_render_bar`'s commit-on-render discipline) — no new
-    persistence shape, one more key per chip (`"<key>__band"`).
+    persistence shape, one more key per chip (`"<key>__band"`, plus
+    `"<key>__raw"` for the arrow's own direction, same idiom).
     """
     bands: dict[str, str] = {}
 
@@ -3416,6 +3416,143 @@ def _vital_bands(
         bands["correspondent"] = f"{unit}|{read_key}"
 
     return bands
+
+
+def _vital_scalar(
+    key: str, budget: dict[str, Any], resources: dict[str, Any],
+) -> float | None:
+    """The one raw magnitude a VITAL chip's crossing arrow (w-34c,
+    2026-09-11) compares boundary to boundary — the literal number the
+    reader's eye follows, not the band's severity index. `_vital_bands`
+    counts *thresholds crossed*, which climbs as quota falls (`q S80` →
+    `q S29` is band 0 → band 2), so band comparison alone would mark that
+    fall `↑`. This returns the displayed quantity itself (`29`, not `2`)
+    so the arrow reads the way the chip does: `q S29` after `q S80` is a
+    drop, `↓`. `quota` takes the tightest (lowest) bucket when several are
+    joined — the one whose own crossing is most likely the reason the
+    combined band string changed at all.
+    """
+    if key == "budget":
+        elapsed = budget.get("elapsed_seconds")
+        limit = budget.get("budget_seconds")
+        if elapsed is None or limit is None:
+            return None
+        try:
+            return int(elapsed) * 100 / int(limit)
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
+    if key == "quota":
+        quota = resources.get("quota") if isinstance(resources, dict) else None
+        quota = quota if isinstance(quota, dict) else {}
+        if quota.get("status") != "known":
+            return None
+        summary = str(quota.get("summary") or "")
+        pcts = []
+        for match in _QUOTA_BUCKET_RE.finditer(summary):
+            try:
+                pcts.append(float(match.group("pct")))
+            except (TypeError, ValueError):
+                pass
+        return min(pcts) if pcts else None
+    if key == "context_window":
+        reading = _context_reading(resources)
+        return reading[0] if reading else None
+    if key == "draws":
+        quota = resources.get("quota") if isinstance(resources, dict) else None
+        quota = quota if isinstance(quota, dict) else {}
+        draws = quota.get("draws") if isinstance(quota, dict) else None
+        draws = draws if isinstance(draws, dict) else {}
+        self_spent = draws.get("self")
+        if isinstance(self_spent, (int, float)):
+            return float(self_spent)
+        strands = draws.get("strands")
+        strands = strands if isinstance(strands, list) else []
+        known = [
+            row.get("weighted") for row in strands
+            if isinstance(row, dict) and isinstance(row.get("weighted"), (int, float))
+        ]
+        return float(sum(known)) if known else None
+    if key == "hold":
+        quota = resources.get("quota") if isinstance(resources, dict) else None
+        hold = quota.get("hold") if isinstance(quota, dict) else None
+        ratio = hold.get("ratio") if isinstance(hold, dict) else None
+        return float(ratio) if isinstance(ratio, (int, float)) else None
+    if key == "correspondent":
+        corr = resources.get("correspondent") if isinstance(resources, dict) else None
+        corr = corr if isinstance(corr, dict) else {}
+        if corr.get("status") != "known":
+            return None
+        quiet = corr.get("quiet_seconds")
+        return float(quiet) if isinstance(quiet, (int, float)) else None
+    return None
+
+
+def _vital_crossing_detail(key: str, prior_band: str | None, band: str) -> str:
+    """The one detail line a VITAL chip's threshold crossing earns (w-34c)
+    — pure function of the two band strings (:func:`_vital_bands`'s own
+    output), since every threshold table this names is already folded
+    into the band's own digits. Best-effort naming, not a second source of
+    truth: the arrow on the chip itself is the part that always renders;
+    this line is prose on top of it, and a key this function doesn't
+    recognise still gets a plain fallback rather than raising.
+    """
+    if key == "budget":
+        try:
+            idx = int(band)
+        except ValueError:
+            return "budget crossed a threshold"
+        if 0 < idx <= len(_AMBIENT_BUDGET_THRESHOLDS):
+            return f"budget crossed {_AMBIENT_BUDGET_THRESHOLDS[idx - 1]}% used"
+        return "budget crossed a threshold"
+    if key == "quota":
+        prior_map = dict(
+            chunk.split(":", 1) for chunk in (prior_band or "").split("·")
+            if ":" in chunk
+        )
+        lines = []
+        for chunk in band.split("·"):
+            if ":" not in chunk:
+                continue
+            label, idx_text = chunk.split(":", 1)
+            if prior_map.get(label) == idx_text:
+                continue
+            try:
+                idx = int(idx_text)
+            except ValueError:
+                continue
+            if 0 < idx <= len(_AMBIENT_QUOTA_THRESHOLDS):
+                pct = _AMBIENT_QUOTA_THRESHOLDS[idx - 1]
+                lines.append(f"quota {label[:1].upper()} crossed {pct:.0f}% left")
+        return "; ".join(lines) if lines else "quota crossed a threshold"
+    if key == "context_window":
+        unit, _, idx_text = band.partition(":")
+        try:
+            idx = int(idx_text)
+        except ValueError:
+            return "context crossed a threshold"
+        return (
+            f"context crossed {idx * 10}% left" if unit == "%"
+            else f"context crossed {idx * 100}k tok"
+        )
+    if key == "draws":
+        best = 0
+        for chunk in band.split("·"):
+            label, _, idx_text = chunk.partition(":")
+            if label in ("me", "sum"):
+                try:
+                    best = max(best, int(idx_text))
+                except ValueError:
+                    pass
+        return f"draws crossed {best * 100}k tok" if best else "draws crossed a threshold"
+    if key == "hold":
+        return f"hold crossed ratio {band}" if band != "unknown" else "hold now unknown"
+    if key == "correspondent":
+        prior_unit = (prior_band or "").split("|", 1)[0]
+        unit = band.split("|", 1)[0]
+        if prior_unit != unit:
+            return f"correspondent crossed to {unit}"
+        return "correspondent read landed"
+    return f"{key} crossed a threshold"
 
 
 def _render_bar(
@@ -3894,6 +4031,13 @@ def _render_bar(
         for band_key, band_value in vital_bands.items():
             if band_key in chips_now:
                 rendered_chips[f"{band_key}__band"] = band_value
+                # `__raw` (w-34c): the literal magnitude behind the band,
+                # persisted the same commit-on-render way, purely so the
+                # *next* crossing's arrow has something to compare against
+                # — never read for due-ness, only for direction.
+                raw = _vital_scalar(band_key, budget, resources)
+                if raw is not None:
+                    rendered_chips[f"{band_key}__raw"] = str(raw)
     # The ornament's own edge (design-the-pre-attentive-channel.md rule 3:
     # "it names itself once, on change"): the mood word rides the preamble
     # only on the boundary the face actually changed, under a key that
@@ -3916,16 +4060,15 @@ def _render_bar(
     # rendered text changed — which is DELTA's rule by construction and
     # AMBIENT's too (`census`/`room` are AMBIENT and never listed here).
     #
-    # VITAL (w-34b, 2026-09-11): "due on threshold crossing" is a
-    # *narrowing* rule — it must suppress renders the text-change default
-    # would otherwise grant, which this dict (OR-shaped: forced ∨
-    # text-changed) cannot express. So VITAL keys with an honest band rule
-    # bypass `edge_due`/text-change entirely via `vital_bands` below,
-    # checked first in `_due`. `siblings` has no entry in `vital_bands` —
-    # its chip text (`▷{n}`) already *is* the count, so "band changed" and
-    # "text changed" are the same predicate; building a second one would
-    # only rename the default. It stays on the plain fallback, the one
-    # documented VITAL exception (see the report).
+    # VITAL (w-34c, 2026-09-11, the maintainer's correction to w-34b):
+    # always due while known — checked first in `_due`, ahead of this
+    # dict, so nothing here needs a VITAL entry at all. `_vital_bands`
+    # keeps a second job below: the boundary a key's band actually
+    # changes earns the chip a trailing arrow and one detail line — the
+    # emphasis, never the gate. `siblings` has no band of its own — its
+    # chip text (`▷{n}`) already *is* the count — so it renders every
+    # boundary with no crossing marker ever added, the one documented
+    # VITAL exception (see the report).
     edge_due = {
         # WAITING: an unknown pending count must never go quiet.
         "pending_unknown": True,
@@ -3957,10 +4100,17 @@ def _render_bar(
     }
 
     def _due(key: str, text: str) -> bool:
-        if key in vital_bands:
-            if last_chips is None:
-                return True
-            return last_chips.get(f"{key}__band") != vital_bands[key]
+        # VITAL (w-34c, 2026-09-11 — the maintainer's correction to w-34b):
+        # always due while the facet is known, full stop. w-34b's own
+        # narrowing (due only on a `_vital_bands` crossing) is retired —
+        # "you would only see the session data when it reaches the
+        # threshold but see no actual live [reading] … you wouldn't see
+        # the trend in your body" (his words). `_vital_bands` keeps a job
+        # below: detecting the crossing that earns the chip's emphasis
+        # marker and its one detail line, never gating whether the chip
+        # itself renders.
+        if SEGMENT_CLASS.get(key) == VITAL:
+            return True
         if edge_due.get(key):
             return True
         if last_chips is None:
@@ -3970,7 +4120,49 @@ def _render_bar(
     kept = [(key, text) for key, text in segments if _due(key, text)]
     if not kept and not details:
         return None
-    bar = " │ ".join(text for _, text in kept)
+
+    # The emphasis (w-34c): a VITAL chip always renders, but a boundary
+    # its own band actually crosses earns a trailing arrow on the value
+    # and one detail line naming the crossing — once, on the boundary it
+    # happens, per `_vital_bands`'s own comparison. The next boundary
+    # shows the plain chip again (the comparison is against *this*
+    # boundary's `__band`, freshly committed above as `last_chips` for
+    # the one after).
+    decorated: list[tuple[str, str]] = []
+    for key, text in kept:
+        if key in vital_bands and last_chips is not None:
+            prior_band = last_chips.get(f"{key}__band")
+            band = vital_bands[key]
+            if prior_band is not None and prior_band != band:
+                arrow = "↑"
+                prior_raw_text = last_chips.get(f"{key}__raw")
+                current_raw = _vital_scalar(key, budget, resources)
+                if prior_raw_text is not None and current_raw is not None:
+                    try:
+                        prior_raw = float(prior_raw_text)
+                    except ValueError:
+                        prior_raw = None
+                    # `context_window` can switch unit (tok → %) exactly
+                    # once per run — the two scalars are not the same
+                    # quantity, so a raw comparison across that edge would
+                    # be a coincidence, not a reading. Skip it; the
+                    # crossing still renders, just without a claimed
+                    # direction (`↑`, the same default a first-ever
+                    # crossing with no prior raw falls back to below).
+                    unit_switched = (
+                        key == "context_window"
+                        and prior_band.split(":", 1)[0] != band.split(":", 1)[0]
+                    )
+                    if prior_raw is not None and not unit_switched:
+                        if current_raw < prior_raw:
+                            arrow = "↓"
+                        elif current_raw > prior_raw:
+                            arrow = "↑"
+                text = f"{text}{arrow}"
+                details.append(f"- {_vital_crossing_detail(key, prior_band, band)}")
+        decorated.append((key, text))
+
+    bar = " │ ".join(text for _, text in decorated)
     line = _bar_preamble(mood, named=face_named) + ((" " + bar) if bar else "")
     return line + ("\n" + "\n".join(details) if details else "")
 
