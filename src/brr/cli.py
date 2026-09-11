@@ -2953,6 +2953,40 @@ def _do_render(verb: str, label: str, status: str, detail: str) -> tuple[str, bo
     return f"{verb} {label} ✗ {detail}", False
 
 
+def _do_unread_echo(
+    event: dict | None, outbox_dir: Path,
+) -> str | None:
+    """``unread #4 (7.1KB since his last message)`` for a just-sent reply (#1914).
+
+    Reads the conversation store fresh — this call's own reply artifact is
+    already appended by the time the drain verdict comes back ✓, so the
+    pile this computes includes the message just sent (it *is* unread #N,
+    not "N more besides this one"). ``None`` when *event* carries no
+    correspondent identity (a schedule/spawn-minted target — brnrd#1914 is
+    about a person, not internal bookkeeping) or this environment has no
+    resolvable ``brr_dir`` — best-effort, never a reason to fail the reply
+    it rides.
+    """
+    if not isinstance(event, dict):
+        return None
+    from . import conversations as conversations_mod
+
+    correspondent_key = conversations_mod.correspondent_key_for_event(event)
+    if not correspondent_key:
+        return None
+    conversation_key = conversations_mod.conversation_key_for_event(event)
+    if not conversation_key:
+        return None
+    brr_dir = _maybe_brr_dir()
+    if brr_dir is None:
+        return None
+    pile = conversations_mod.unread_pile(brr_dir, conversation_key, correspondent_key)
+    if not pile or not pile.get("count"):
+        return None
+    size_kb = pile.get("bytes", 0) / 1024
+    return f"unread #{pile['count']} ({size_kb:.1f}KB since his last message)"
+
+
 def _do_mood(
     do_mod, emo, outbox_dir: Path, feeling: str, note: str | None,
     *, strict: bool = False,
@@ -3450,11 +3484,22 @@ def cmd_do(args):
         # whenever the file can't be trusted): no `inbox.json`, or an
         # ambiguous short-id match, never blocks a call this check cannot
         # actually verify.
+        # Captured once, before any reply retires its target — the events
+        # this call is about to answer are still `pending` in this run's own
+        # `inbox.json` right now (`_pending_events_for_agent`'s full event
+        # frontmatter, not a trimmed view), which is the one place their
+        # correspondent/thread identity is still readable after the drain
+        # takes the event off the pending list. Reused below (#1914) to
+        # resolve the unread-pile echo per reply.
+        live_inbox_payload = do_mod.read_live_inbox(outbox_dir)
+        live_inbox_events = {
+            str(ev.get("id") or ""): ev
+            for ev in (live_inbox_payload.get("events") or [])
+            if isinstance(ev, dict)
+        }
         non_pending: list[str] = []
         for event_id, _body, _item_ids in replies:
-            status = do_mod.reply_target_status(
-                do_mod.read_live_inbox(outbox_dir), event_id,
-            )
+            status = do_mod.reply_target_status(live_inbox_payload, event_id)
             if status is None or status == "pending":
                 continue
             detail = f"status={status}" if status else "not found among pending events"
@@ -3543,6 +3588,17 @@ def cmd_do(args):
                         for item_id in item_ids:
                             do_mod.append_ask(outbox_dir, event_id, item_id)
                             segments.append(f"item {item_id} ✓")
+                    if do_mod.accepted(status):
+                        # #1914: the pile echo at the moment of sending — the
+                        # boundary where the choice about length is still
+                        # open, not the next heartbeat's chip. Best-effort:
+                        # an unresolvable identity or brr_dir renders no
+                        # segment, never a failure of the reply itself.
+                        seg = _do_unread_echo(
+                            live_inbox_events.get(event_id), outbox_dir,
+                        )
+                        if seg:
+                            segments.append(seg)
                     reply_index += 1
 
             # The promise write: one row for the whole call (never one per

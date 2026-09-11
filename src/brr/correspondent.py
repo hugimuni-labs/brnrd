@@ -84,6 +84,7 @@ def facet_input(
     thread_key: str | None,
     correspondent_key: str | None,
     now: float | None = None,
+    brr_dir: Path | None = None,
 ) -> dict[str, Any] | None:
     """Build :func:`brr.facets.build`'s ``correspondent`` input.
 
@@ -91,13 +92,27 @@ def facet_input(
     in a repo nobody messaged, a test harness) — which the facet renders
     ``absent``, the affirmative-empty answer, rather than claiming a
     correspondent who does not exist.
+
+    ``brr_dir`` given ⇒ carries the unread pile too (#1914) —
+    :func:`brr.conversations.unread_pile`'s ``{"count", "bytes"}`` of
+    resident deliveries to this thread since the correspondent's last
+    inbound word, read from the conversation store (a different source
+    than ``quiet_seconds``' own inbox scan). ``None`` (omitted or no
+    ``brr_dir``) reads as "nothing measured" on that half, same as any
+    other unwired collector.
     """
     if not thread_key:
         return None
+    unread = (
+        conversations.unread_pile(brr_dir, thread_key, correspondent_key)
+        if brr_dir is not None else None
+    )
     return {
         "quiet_seconds": quiet_seconds(inbox_dir, correspondent_key, now=now),
         # Platform-given; the relay fills it where the platform has one. On
         # the Telegram lane this stays None forever — an honest absence,
         # not a pending feature.
         "read": None,
+        "unread_count": unread.get("count") if unread else None,
+        "unread_bytes": unread.get("bytes") if unread else None,
     }
