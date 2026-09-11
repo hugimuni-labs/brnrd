@@ -107,6 +107,7 @@ HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "emotes",
     "relic", "gate-run", "close-check", "promise", "mood", "do", "notes",
     "await", "cut", "legend", "item", "goal", "queue", "envoy",
+    "dominion",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -432,6 +433,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--yes", action="store_true",
                    help="skip the confirmation prompt (required with --delete when not on a TTY)")
     p.set_defaults(func=cmd_home_sweep_orphans)
+
+    # Hidden per HIDDEN_COMMANDS: a one-time migration, not a daily verb.
+    dominion_p = sub.add_parser("dominion")
+    dominion_sub = dominion_p.add_subparsers(dest="dominion_command", required=True)
+    p = dominion_sub.add_parser(
+        "consolidate",
+        help="move the per-repo dominions into one dominion at the home root, "
+             "and knowledge/_cross-repo to knowledge/global (default: dry run)",
+    )
+    p.add_argument("--dry-run", action="store_true",
+                   help="print the plan and move nothing (the default)")
+    p.add_argument("--apply", action="store_true",
+                   help="git mv and commit in the home and knowledge repos")
+    p.add_argument("--primary", default=None,
+                   help="repo label whose dominion becomes the one dominion "
+                        "(default: the account's default repo)")
+    p.set_defaults(func=cmd_dominion_consolidate)
 
     # Hidden per HIDDEN_COMMANDS above (help ceiling, not obscurity) — omit
     # `help=` here too, or it leaks into the listing despite the constant.
@@ -5704,6 +5722,33 @@ def cmd_home_manifest(args):
     print(f"  knowledge origin : {manifest.knowledge_origin_url or '(none — local only)'}")
     if not manifest.has_memory:
         print("\n  no memory yet — this resident is starting fresh")
+    return 0
+
+
+def cmd_dominion_consolidate(args):
+    """``brnrd dominion consolidate [--dry-run | --apply]`` — move 1 of
+    design-one-resident-per-machine.md. Dry run unless ``--apply``."""
+
+    from . import account
+    from . import config as conf
+    from . import dominion_consolidate as consolidate
+
+    repo_root = _repo_root()
+    cfg = conf.load_config(repo_root)
+    ctx = account.resolve_context(repo_root, cfg, create=False)
+    plan = consolidate.build_plan(ctx, primary_label=args.primary)
+    applying = bool(args.apply) and not bool(args.dry_run)
+    print(consolidate.render_plan(plan, applying=applying))
+    if not applying:
+        return 0
+    if plan.blockers:
+        return 1
+    try:
+        for line in consolidate.apply_plan(plan):
+            print(line)
+    except consolidate.ConsolidateError as exc:
+        print(f"[brnrd dominion consolidate] refused: {exc}")
+        return 1
     return 0
 
 
