@@ -92,7 +92,7 @@ console = [
 # `pyyaml` is not a runtime dependency: `scripts/gate.py` reads
 # `.github/workflows/ci.yml` so the local gate cannot drift from CI's
 # own leg list. A hardcoded copy is the bug that script exists to prevent.
-dev = ["pytest>=7.0", "pyyaml>=6", "brnrd[backend]", "brnrd[console]"]
+dev = ["pytest>=7.0", "pyyaml>=6", "ruff>=0.16", "brnrd[backend]", "brnrd[console]"]
 
 [project.scripts]
 brnrd = "brr.cli:main"
@@ -101,3 +101,26 @@ brnrd-console = "brr.operator_console:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.ruff]
+# Python's own lint, added 2026-09-12, and scoped to exactly one rule.
+#
+# The night that bought it: two independent branches opened hours apart both
+# wrote `print(..., file=sys.stderr)` in new `daemon.py` code. That module has
+# no module-level `import sys` — it imports it per-use — so both were
+# `NameError`, both sat on an *error-handling* branch (the branch least likely
+# to be exercised by hand), and both reached CI red. A 40-millisecond static
+# check would have caught either before the push. There was no Python linter
+# in this repo at all; `npm run lint` covered the frontend and nothing covered
+# the 20,000-line daemon.
+#
+# One rule on purpose. F821 is not a style opinion: every finding is a name
+# that does not resolve, which is a runtime error waiting for its branch to be
+# taken. Adding the rest of ruff's default set would be a formatting argument
+# bolted onto a correctness gate, and would make this job something people
+# learn to skim. Widen the select list when a *second* class earns the same
+# receipt — not before.
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["F821"]

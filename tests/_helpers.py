@@ -19,6 +19,12 @@ import socket
 import subprocess
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+# Deferred on purpose: fastapi is an optional test dependency, imported
+# inside the helpers that need it. The annotation still has to be true.
+if TYPE_CHECKING:
+    from fastapi.testclient import TestClient
 from typing import Any, Callable, Iterable
 
 from brr import envs

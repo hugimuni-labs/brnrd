@@ -20,7 +20,16 @@ import difflib
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
+
+# The names below are used only inside *string* annotations, which never
+# execute — so a missing import here is invisible at runtime and a lie to
+# anything that resolves them (`typing.get_type_hints`, an IDE, a reader).
+# Imported under TYPE_CHECKING so the annotation is true without paying an
+# import cycle, and so `ruff --select F821` has nothing left to report but
+# a genuine undefined name.
+if TYPE_CHECKING:
+    from .bootscore import BootContinuity, BootScore, ContractEntry
 
 from . import account, card, config as conf, dev_reload, forge_state, menus, protocol
 from . import lane_liveness

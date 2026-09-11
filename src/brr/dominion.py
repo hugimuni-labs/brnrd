@@ -18,7 +18,13 @@ from dataclasses import dataclass
 import re
 from pathlib import Path
 
+from typing import TYPE_CHECKING
+
 from . import gitops
+
+# Used only inside a string annotation — see the note in `runner.py`.
+if TYPE_CHECKING:
+    from . import account
 
 
 DEFAULT_BRANCH = "brr-home"
