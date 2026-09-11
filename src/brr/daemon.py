@@ -19113,7 +19113,8 @@ def start(
     # report is worse than a log that is silent, because silence at least
     # reads as absence. A line at a time costs one write per print on a
     # narration that emits a handful per tick.
-    for _stream in (sys.stdout, sys.stderr):
+    import sys as _sys  # this module imports sys per-use; there is no global one
+    for _stream in (_sys.stdout, _sys.stderr):
         try:
             _stream.reconfigure(line_buffering=True)
         except (AttributeError, OSError, ValueError):
