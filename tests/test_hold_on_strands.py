@@ -221,10 +221,13 @@ class TestHeldEventsOnStrands:
         assert daemon._handle_resource_held_events([target], None) == []
         assert self._persisted(tmp_path).meta["resource_hold"]["released"] is False
 
-    def test_schedule_still_accumulates_under_a_strands_hold(self, tmp_path):
+    def test_schedule_wakes_a_strands_hold(self, tmp_path):
+        # #1890 redo: a tick is a reason to wake every seat but a wall's
+        # (design-the-seat-that-never-quits.md) — it used to accumulate here.
         self._arm(tmp_path)
         target = self._target(tmp_path, source="schedule", eid="evt-tick")
-        assert daemon._handle_resource_held_events([target], None) == []
+        assert daemon._handle_resource_held_events([target], None) == [target]
+        assert self._persisted(tmp_path).meta["resource_hold"]["released_by"] == "schedule"
 
     def test_siblings_in_the_releasing_batch_pass_through(self, tmp_path):
         """A schedule tick sorted behind the releasing child event must not
@@ -362,13 +365,22 @@ class TestResumeAny:
         assert error is None
         assert spec["resume_condition"] == resource_hold.RESUME_ANY
 
-    def test_schedule_releases_only_under_any(self):
-        meta_any = resource_hold.build(reason="x", provider="claude", resume_condition=resource_hold.RESUME_ANY)
-        meta_str = resource_hold.build(reason="x", provider="claude", resume_condition=resource_hold.RESUME_STRANDS)
+    def test_schedule_releases_every_hold_but_a_wall(self):
+        # #1890 redo (was: only under `any`).
+        def meta(cond, reason="x"):
+            return resource_hold.build(reason=reason, provider="claude", resume_condition=cond)
+
         tick = {"source": "schedule"}
-        assert resource_hold.schedule_event_releases(meta_any, tick)
-        assert not resource_hold.schedule_event_releases(meta_str, tick)
-        assert not resource_hold.schedule_event_releases(meta_any, {"source": "spawn_queued"})
+        for cond in (resource_hold.RESUME_ANY, resource_hold.RESUME_STRANDS, resource_hold.RESUME_OPERATOR):
+            assert resource_hold.schedule_event_releases(meta(cond), tick)
+        for cond in (resource_hold.RESUME_REFILL, resource_hold.RESUME_RESET):
+            assert not resource_hold.schedule_event_releases(meta(cond), tick)
+        assert not resource_hold.schedule_event_releases(
+            meta(resource_hold.RESUME_OPERATOR, resource_hold.REASON_QUOTA_EXHAUSTED), tick,
+        )
+        assert not resource_hold.schedule_event_releases(
+            meta(resource_hold.RESUME_ANY), {"source": "spawn_queued"},
+        )
 
     def test_own_strand_releases_under_any(self):
         meta = resource_hold.build(reason="x", provider="claude", resume_condition=resource_hold.RESUME_ANY)
