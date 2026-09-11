@@ -88,6 +88,17 @@ def _score_env(tmp_path):
     return env
 
 
+def _drop_budget(path):
+    """Strip the `budget` key from a written portal-state fixture — `_portal`'s
+    own `budget or {...}` default is truthy-gated, so `budget={}` cannot
+    suppress it; a test isolating a *non*-VITAL dedup path needs a payload
+    with no VITAL facet at all (w-34c, 2026-09-11), and `budget`'s bare
+    ticker is VITAL on `elapsed_seconds` alone, ceiling or not."""
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("budget", None)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
 def _inject_text(out):
     return (out.get("hookSpecificOutput") or {}).get("additionalContext") or ""
 
@@ -219,19 +230,49 @@ def test_post_tool_reinjects_when_token_moves(tmp_path):
 
 
 def test_content_identical_block_is_suppressed_when_portal_token_moves(tmp_path):
-    resources = {
-        "quota": {"status": "known", "summary": "week 80% left"},
-    }
+    # w-34c (2026-09-11): this fixture's `quota` reading is VITAL, and a
+    # VITAL chip now bypasses content dedup on purpose (the maintainer's
+    # correction — a byte-identical repeat is the point, not noise to
+    # eat). Pinned instead with a *non*-VITAL delta (`produce`), which is
+    # exactly the case #963's dedup exists for: a portal token bump with
+    # no change to what the resident would actually see must still be
+    # swallowed.
+    # `_portal`'s own `budget or {...}` default is truthy-gated, so
+    # `budget={}` does not suppress it — the fixture's bare ticker
+    # (`elapsed_seconds` present) is VITAL regardless of a configured
+    # ceiling, and would bypass dedup on its own, the same reason this
+    # test's original `quota` reading was retired above. Strip the key
+    # outright, post-write, to get a payload with no VITAL facet at all.
+    produce = {"known": True, "counts": {"commit": 1}}
+    env = _env(tmp_path)
+    path = _portal(tmp_path, token="t1", produce=produce)
+    _drop_budget(path)
+    first, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert "⚒1" in first["hookSpecificOutput"]["additionalContext"]
+
+    # The portal snapshot moved, but the exact block the resident would see
+    # did not. The content is the authority; a broad snapshot token is not.
+    path = _portal(tmp_path, token="t2", produce=produce)
+    _drop_budget(path)
+    second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert "hookSpecificOutput" not in second
+
+
+def test_a_vital_chip_bypasses_content_dedup_on_a_bare_token_bump(tmp_path):
+    """The other half of the case above: a VITAL-only repeat (nothing else
+    changed, only the portal token ticked) must still reach the model —
+    dedup exists for ambient noise, and VITAL is deliberately exempted
+    from it now (w-34c, 2026-09-11), same reasoning as `_due`'s own
+    exemption."""
+    resources = {"quota": {"status": "known", "summary": "week 80% left"}}
     env = _env(tmp_path)
     _portal(tmp_path, token="t1", resources=resources)
     first, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
     assert "q W80" in first["hookSpecificOutput"]["additionalContext"]
 
-    # The portal snapshot moved, but the exact block the resident would see
-    # did not. The content is the authority; a broad snapshot token is not.
     _portal(tmp_path, token="t2", resources=resources)
     second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    assert "hookSpecificOutput" not in second
+    assert "q W80" in second["hookSpecificOutput"]["additionalContext"]
 
 
 def test_content_changed_block_is_always_resent(tmp_path):
@@ -253,12 +294,20 @@ def test_content_changed_block_is_always_resent(tmp_path):
 
 
 def test_content_block_never_seen_is_always_sent(tmp_path):
-    _portal(tmp_path, token="t1", resources={
-        "quota": {"status": "known", "summary": "week 80% left"},
-    })
+    # w-34c (2026-09-11): a VITAL reading (this test's original `quota`)
+    # now bypasses the dedup path entirely, so it never touches
+    # `PENDING_INJECT_KEY`/`LAST_INJECT_KEY` at all — this test is about
+    # *that bookkeeping's* own first-seen behaviour, which still needs a
+    # dedup-eligible (non-VITAL, non-obligation) chip to exercise;
+    # `_drop_budget` strips the fixture's own default VITAL ticker (its
+    # `budget or {...}` default is truthy-gated, so `budget={}` alone
+    # would not suppress it).
+    path = _portal(tmp_path, token="t1",
+                    produce={"known": True, "counts": {"commit": 1}})
+    _drop_budget(path)
     first, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     assert "hookSpecificOutput" in first, first
-    assert "q W80" in first["hookSpecificOutput"]["additionalContext"]
+    assert "⚒1" in first["hookSpecificOutput"]["additionalContext"]
     state = json.loads((tmp_path / hooks.HOOK_STATE_NAME).read_text())
     assert hooks.PENDING_INJECT_KEY in state
     assert hooks.LAST_INJECT_KEY not in state
@@ -643,7 +692,12 @@ def test_produce_renders_once_on_change_then_goes_quiet(tmp_path):
     seen: dict[str, str] = {}
     first = hooks.format_delta(payload, rendered_chips=seen)
     assert first is not None and "⚒2" in first.splitlines()[0]
-    assert hooks.format_delta(payload, last_chips=seen) is None
+    # w-34c (2026-09-11): this fixture's `budget` (a configured ceiling) is
+    # VITAL and always due, so the second boundary is not fully silent —
+    # `produce` (DELTA) is the thing that actually goes quiet.
+    again = hooks.format_delta(payload, last_chips=seen)
+    assert again is not None
+    assert "⚒2" not in again
 
 
 def test_unwritten_run_name_no_longer_nags_without_a_ledger(tmp_path):
@@ -3649,10 +3703,12 @@ def test_post_tool_bar_renders_every_segment_when_laden(monkeypatch):
     )
 
 
-def test_post_tool_bar_is_quiet_when_chips_stand_unchanged():
+def test_post_tool_bar_is_quiet_but_for_the_vital_when_chips_stand_unchanged():
     # w-54: quiet is not "nothing is laden" — it is "nothing moved since the
-    # last rendered bar". First boundary renders everything once; the same
-    # payload against its own rendered chips injects nothing at all.
+    # last rendered bar" — *except* a VITAL chip (w-34c, 2026-09-11), which
+    # rides every boundary while known. `budget` has a configured ceiling
+    # here, so it is the one thing still standing on the second, otherwise
+    # fully unchanged, boundary.
     payload = _bar_payload(
         budget={"elapsed_seconds": 60, "budget_seconds": 7200},
         outbound={"replies_current": 0, "replies_other": 0,
@@ -3663,15 +3719,18 @@ def test_post_tool_bar_is_quiet_when_chips_stand_unchanged():
     seen: dict[str, str] = {}
     first = hooks.format_delta(payload, rendered_chips=seen)
     assert first is not None  # everything is news exactly once
-    assert hooks.format_delta(payload, last_chips=seen) is None
+    again = hooks.format_delta(payload, last_chips=seen)
+    assert again == "⌁[b·_·d]: ⏱ 1/120m"
 
 
-def test_post_tool_bar_renders_only_the_chips_that_moved():
+def test_post_tool_bar_renders_only_the_chips_that_moved_plus_the_vitals():
     # The ticker crossed a threshold band, the quota did not: the bar
-    # carries the preamble and the one changed chip, nothing else. (w-34b,
-    # 2026-09-11: `budget` with a configured ceiling now bands on
-    # `_AMBIENT_BUDGET_THRESHOLDS`, so the move has to cross one — 16m→17m
-    # of 120m stays inside the same band and would no longer qualify.)
+    # carries the preamble, the crossed chip decorated with its arrow, and
+    # the quota VITAL riding along plain (w-34c, 2026-09-11 — VITAL chips
+    # are always due, not just on their own crossing). (w-34b, 2026-09-11:
+    # `budget` with a configured ceiling bands on
+    # `_AMBIENT_BUDGET_THRESHOLDS`, so 16m→31m of 120m crosses the 25%
+    # threshold for real.)
     payload = _bar_payload(
         budget={"elapsed_seconds": 16 * 60, "budget_seconds": 120 * 60},
         outbound={"replies_current": 0, "replies_other": 0,
@@ -3683,7 +3742,8 @@ def test_post_tool_bar_renders_only_the_chips_that_moved():
     hooks.format_delta(payload, rendered_chips=seen)
     payload["budget"] = {"elapsed_seconds": 31 * 60, "budget_seconds": 120 * 60}
     rendered = hooks.format_delta(payload, last_chips=seen)
-    assert rendered.splitlines()[0] == "⌁[b·_·d]: ⏱ 31/120m"
+    assert rendered.splitlines()[0] == "⌁[b·_·d]: ⏱ 31/120m↑ │ q W80"
+    assert "budget crossed 25% used" in rendered
 
 
 def test_post_tool_bar_pending_events_always_get_a_detail_line():
@@ -4195,8 +4255,14 @@ def test_allowance_directive_fires_once_at_100pct_then_goes_quiet():
     assert first is not None
     assert "allowance spent (125k/120k)" in first
     assert "park" in first and "ask: allowance +<tokens>" in first
-    # Unchanged spend ⇒ silent on the next boundary.
-    assert hooks.format_delta(payload, last_chips=seen) is None
+    # w-34c (2026-09-11): `allowance` is VITAL — the chip itself still
+    # rides the next boundary unchanged (always due), but the directive
+    # paragraph is its own change-gate (`allowance_directive`) and stays
+    # silent once the number hasn't moved.
+    again = hooks.format_delta(payload, last_chips=seen)
+    assert again is not None
+    assert hooks._allowance_chip(resources) in again
+    assert "allowance spent (125k/120k)" not in again
 
 
 def test_allowance_directive_refires_after_the_number_moves():
@@ -6000,7 +6066,9 @@ def test_every_emitted_chip_is_classified():
     # half of `_due` persisted alongside it.
     emitted = set(rendered) - {
         "allowance_directive", "face", "notices_detail", "card_detail",
-    } - {f"{key}__band" for key in hooks._VITAL_BAND_KEYS}
+    } - {f"{key}__band" for key in hooks._VITAL_BAND_KEYS} - {
+        f"{key}__raw" for key in hooks._VITAL_BAND_KEYS
+    }
     # A real fixture, not a token one: enough distinct chips fired that a
     # missing classification is actually exercised, including all five
     # keys this fix adds.

@@ -965,11 +965,13 @@ def _has_post_tool_obligations(
     yet a fresh refusal still must not go silent, so it stays listed here).
     A long-running budget is deliberately *not* here (#1897): by this
     module's own partition rule ("is there an act that turns it off?") a
-    long run has no discharging act, which makes it VITAL, and VITAL never
-    bypasses dedup — it used to force this function true anyway, with no
-    line anywhere rendering the obligation it was forcing dedup open for.
-    Pure ambient content (quota %, elapsed time, orientation progress) opens
-    nothing on its own.
+    long run has no discharging act, which makes it VITAL. VITAL chips
+    bypass dedup too now (w-34c, 2026-09-11, `run_hook`'s own `has_vital`
+    check, right beside this function's call site) — but through that
+    separate check, not this one: this function stays about obligations
+    the resident must *act on*, and a vital is a reading, not an ask.
+    Pure ambient content with no vital and no obligation (a plain orientation
+    progress note) still opens nothing on its own.
 
     An unavailable portal counts as an obligation: the unknown count cannot
     be reported as zero, so the resident must not mistake silence for all-clear.
@@ -6303,7 +6305,24 @@ def compute_neutral(
         # Content dedup: ambient-only injections are hash-checked so a content-
         # stable bar does not re-inject on every token tick.  Obligation-carrying
         # injections bypass dedup — see the ``has_obligations`` note above.
-        if not has_obligations:
+        #
+        # w-34c (2026-09-11): a VITAL chip bypasses it too, now — the
+        # `_has_post_tool_obligations` docstring's own #1897 reasoning
+        # ("VITAL never bypasses dedup … no line anywhere rendering the
+        # obligation it was forcing dedup open for") is exactly the
+        # decision the maintainer's correction overturns here: there *is*
+        # a line now (the always-due VITAL chip), and dedup swallowing a
+        # byte-identical repeat of it would silently defeat the whole
+        # feature — "ride every boundary" and "suppressed when unchanged"
+        # cannot both hold for the same chip. `rendered_chips` carries
+        # every currently-known chip's text regardless of this boundary's
+        # own due-ness (`_render_bar`'s `chips_now`), so a VITAL key's
+        # presence there is the cheap, already-computed signal.
+        has_vital = any(
+            SEGMENT_CLASS.get(key) == VITAL for key in rendered_chips
+            if not key.endswith(("__band", "__raw"))
+        )
+        if not has_obligations and not has_vital:
             inject = _suppress_unchanged_inject(state, inject)
 
         # Commit-on-render (w-54): the chip ledger advances only when this
