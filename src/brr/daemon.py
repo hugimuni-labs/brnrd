@@ -19097,6 +19097,30 @@ def start(
     inbox_dir = brr_dir / "inbox"
     responses_dir = brr_dir / "responses"
 
+    # Line-buffer this daemon's own narration before it says anything.
+    #
+    # Every diagnostic below is a `print`, and under launchd/systemd stdout is
+    # a *file*, so Python block-buffers it at 8 KB. Three things then discard
+    # that buffer rather than write it: a dev-reload `execve` (no interpreter
+    # shutdown), a `SIGKILL`, and a host suspend that never comes back. The
+    # window destroyed is precisely the newest lines — the ones describing
+    # whatever went wrong just before the process ended, which is the only
+    # part an operator is reading the log for.
+    #
+    # Measured on this account 2026-09-11: after a daemon died mid-flight the
+    # log's final line was a splice of two processes' output, and its owner's
+    # reading was "the daemon doesn't report any issues" — a log that cannot
+    # report is worse than a log that is silent, because silence at least
+    # reads as absence. A line at a time costs one write per print on a
+    # narration that emits a handful per tick.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(line_buffering=True)
+        except (AttributeError, OSError, ValueError):
+            # Not a TextIOWrapper (a test's StringIO, a captured pipe) — the
+            # daemon's job is not to own its caller's streams.
+            pass
+
     existing_pid = read_pid(brr_dir)
     if existing_pid and not reload_mod.is_reexec_for_current_process(existing_pid):
         raise SystemExit("[brnrd] daemon already running")

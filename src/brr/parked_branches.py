@@ -12,6 +12,32 @@ from .run import list_runs
 TERMINAL_RUN_STATUSES = frozenset({"done", "error", "conflict", "stopped"})
 _WARNED: set[str] = set()
 
+#: How long one :func:`warn_new` sweep's verdict stands before the walk runs
+#: again. The walk is one ``git cherry`` per local ``brr/*`` branch —
+#: **15.3s measured** over 346 branches on this account's own checkout
+#: (2026-09-11) — and it runs on the daemon's *main loop thread*, immediately
+#: in front of the dispatch scan that decides whether a waiting chat message
+#: becomes a run. Every neighbour in that same tick
+#: (``forge_pr_cache``, ``lane_liveness``, ``forge_workflow_cache``,
+#: ``forge_issue_cache``, ``release_availability``) is already TTL-gated and
+#: threaded off the loop for exactly this reason; this one was not, so the
+#: loop paid the full walk per tick.
+#:
+#: The cost bought nothing after the first pass: the *output* is already
+#: deduped for the process's lifetime (``_WARNED``), so sweep two onward spent
+#: 15s of CPU-bound git to print nothing. A TTL is what makes the spend match
+#: the value — a branch that parks is now announced within this window instead
+#: of within one tick, which is the right trade for a note nobody acts on in
+#: the same minute.
+_SWEEP_TTL_SECONDS = 300.0
+
+#: Monotonic stamp of the last completed :func:`warn_new` sweep, or ``None``
+#: when this process has never swept. Deliberately monotonic, not wall-clock:
+#: a TTL that reads ``time.time()`` skips or repeats a sweep when the host
+#: clock steps (a suspend/resume, an NTP correction), and this daemon runs
+#: across laptop sleeps every day.
+_last_sweep_at: float | None = None
+
 
 @dataclass(frozen=True)
 class ParkedBranch:
@@ -107,8 +133,28 @@ def render(items: list[ParkedBranch], *, now: float | None = None) -> str | None
     return "parked branches: " + " · ".join(rows)
 
 
-def warn_new(repo_root: Path) -> None:
-    """Emit the daemon's ergo warning once per branch per process lifetime."""
+def warn_new(
+    repo_root: Path,
+    *,
+    ttl: float = _SWEEP_TTL_SECONDS,
+    now: float | None = None,
+) -> None:
+    """Emit the daemon's ergo warning once per branch per process lifetime.
+
+    Rate-limited to one sweep per *ttl* seconds (:data:`_SWEEP_TTL_SECONDS`),
+    because the sweep itself is the expensive part and the daemon calls this
+    every main-loop tick, right before dispatch. *now* is a monotonic reading,
+    injectable for tests; ``None`` reads :func:`time.monotonic`.
+    """
+    global _last_sweep_at
+    stamp = time.monotonic() if now is None else now
+    if _last_sweep_at is not None and stamp - _last_sweep_at < ttl:
+        return
+    # Stamped before the walk, not after: a sweep that raises (a git failure,
+    # a cache read error) must not become a retry-every-tick loop — the caller
+    # in `daemon.py` swallows the exception and would otherwise arrive back
+    # here, unthrottled, in a few seconds.
+    _last_sweep_at = stamp
     for item in detect(repo_root):
         if item.name in _WARNED:
             continue

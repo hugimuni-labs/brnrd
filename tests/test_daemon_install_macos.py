@@ -428,3 +428,85 @@ def test_logs_tails_launchagent_stdout_and_stderr(tmp_path):
             {"check": False},
         )
     ]
+
+
+def _install_plist(home: Path, workdir: Path) -> None:
+    """Write the LaunchAgent plist only — no launchctl, no daemon."""
+    path = macos.plist_path(home=home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        macos.render_plist("/usr/local/bin/brnrd", home=home, workdir=str(workdir)),
+        encoding="utf-8",
+    )
+
+
+def test_start_loaded_service_reports_failure_when_no_pidfile_appears(tmp_path):
+    """`daemon up`'s receipt is the pidfile, never launchctl's exit code.
+
+    Until 2026-09-11 this path discarded `bootstrap`'s code, never read the
+    pidfile, and let its caller print "launchd service started" regardless.
+    Measured that night: the operator restarted several times, was told the
+    service had started each time, and no daemon process existed anywhere on
+    the machine — "doesn't report any issues, but also doesn't poll".
+    """
+    home = tmp_path / "home"
+    _install_plist(home, tmp_path / "not-a-repo")
+
+    def _fail(cmd, **_kwargs):
+        return subprocess.CompletedProcess(
+            cmd, 113, stdout="", stderr="Could not find service",
+        )
+
+    result = macos.start_loaded_service(
+        run=_fail, sleep=lambda _s: None, poll_timeout=0.0, home=home,
+    )
+
+    assert result.started is False
+    assert result.pid is None
+    assert result.error and "Could not find service" in result.error
+
+
+def test_start_loaded_service_confirms_a_live_pid_and_names_a_prior_one(tmp_path):
+    """A pid read back out of the daemon's own pidfile is the proof.
+
+    ``pid_before`` carries the second fact the old one-bit success line could
+    not: whether this call *started* the daemon or merely found one already
+    up — two things an operator reads differently.
+    """
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(
+        ["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True,
+    )
+    brr_dir = repo / ".brr"
+    brr_dir.mkdir()
+    # This process is provably alive, so `daemon.read_pid`'s `os.kill(pid, 0)`
+    # liveness check passes without inventing a process.
+    (brr_dir / "daemon.pid").write_text(str(os.getpid()), encoding="utf-8")
+    _install_plist(home, repo)
+
+    result = macos.start_loaded_service(
+        run=_ok, sleep=lambda _s: None, poll_timeout=0.0, home=home,
+    )
+
+    assert result.started is True
+    assert result.pid == os.getpid()
+    assert result.pid_before == os.getpid()
+    assert result.error is None
+
+
+def test_start_loaded_service_is_a_noop_without_an_installed_plist(tmp_path):
+    """No plist, nothing to start — and nothing to claim either."""
+    calls: list[list[str]] = []
+
+    result = macos.start_loaded_service(
+        run=lambda cmd, **kw: calls.append(cmd) or _ok(cmd),
+        sleep=lambda _s: None,
+        poll_timeout=0.0,
+        home=tmp_path / "empty-home",
+    )
+
+    assert result.started is False
+    assert result.error is None
+    assert calls == []
