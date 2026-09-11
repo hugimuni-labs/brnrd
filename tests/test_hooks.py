@@ -7485,6 +7485,56 @@ def test_notes_health_scan_throttled_by_interval(tmp_path, monkeypatch):
     assert calls["n"] == 2, "past the throttle window: due for a re-scan"
 
 
+def test_notes_health_covers_the_four_1200_transitions(tmp_path, monkeypatch):
+    """#1200's own table, one row per transition — each fires exactly once,
+    on the boundary its finding first appears, and stays silent on the next
+    unchanged scan (the same shape `test_...fire_only_new_since_last_scan`
+    proves generically; this pins it against the four *real* `Finding`
+    shapes the issue names, so a rename of any of them breaks a test here
+    rather than only in production)."""
+    from brr import notes_preflight
+
+    monkeypatch.setattr(hooks, "NOTES_HEALTH_SCAN_INTERVAL_SECONDS", 0)
+    rows = [
+        notes_preflight.Finding(
+            type="stale-signature", target="workflow.md § Gating",
+            description="which section, which signature, `git show <sha>`.",
+            severity="warning"),
+        notes_preflight.Finding(
+            type="eviction-preview", target="surface/active.md",
+            description="an earlier page's growth evicted this one.",
+            severity="warning"),
+        notes_preflight.Finding(
+            type="inert-pitfall", target="pitfalls.md § Foo",
+            description="written without a `trigger:`.", severity="warning"),
+        notes_preflight.Finding(
+            type="surface-root-unresolved", target="plans",
+            description="expected `surface/plans/`, found nothing.",
+            severity="error"),
+    ]
+
+    for finding in rows:
+        calls = {"n": 0}
+        scripted = [[], [finding], [finding]]  # baseline, new, unchanged
+
+        def fake_scan(repo_root, cfg, _scripted=scripted, _calls=calls):
+            result = _scripted[_calls["n"]]
+            _calls["n"] += 1
+            return result
+
+        monkeypatch.setattr(notes_preflight, "scan", fake_scan)
+        ctx = hooks.HookContext({"BRR_WORK_TREE": str(tmp_path)})
+        state: dict = {}
+
+        assert hooks._notes_health_transitions(ctx, state) == [], finding.type
+        fired = hooks._notes_health_transitions(ctx, state)
+        assert len(fired) == 1 and finding.type in fired[0], finding.type
+        assert finding.target in fired[0], finding.type
+        assert hooks._notes_health_transitions(ctx, state) == [], (
+            f"{finding.type} rendered again while merely still true"
+        )
+
+
 def test_notes_health_transitions_silent_with_no_repo_root(tmp_path):
     """No `BRR_WORK_TREE`/`BRR_HOST_ROOT`/`BRR_REPO_DIR` armed (an ad-hoc
     hook run, most `run_hook` unit tests in this file) ⇒ silent, not an
