@@ -4021,7 +4021,7 @@ def test_post_tool_mood_renders_in_the_preamble(tmp_path):
     # the face's first boundary, so it names itself once (rule 3) — the
     # word rides beside the glyph exactly here, then drops on every later
     # boundary that repeats the same face (see the "named once" test below).
-    assert ctx.splitlines()[0].startswith("⌁[b·_·d] bo_Od:")
+    assert ctx.splitlines()[0].startswith("⌁[b·o·d] bo_Od:")
     assert "mood b·_·d" not in ctx  # no chip for a resolved, unsurprised face
     assert "keep?" not in ctx
     assert "←" not in ctx
@@ -4053,7 +4053,7 @@ def test_seed_and_stop_render_mood_as_a_plain_prose_line(tmp_path):
     (tmp_path / hooks.MOOD_NAME).write_text("hmn_", encoding="utf-8")
     out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "- mood: b·_·d hmn_" in ctx
+    assert "- mood: b·o·d hmn_" in ctx
     assert _says(ctx, "a mood worth showing is one the work moved")
 
 
@@ -4161,7 +4161,7 @@ def test_the_word_for_the_feeling_renders_the_same_chip_as_the_handle():
     """
     from brr import emotes
 
-    assert emotes.lookup("focused") is emotes.EMOTES["fo.cus"]
+    assert emotes.lookup("focused") is emotes.lookup("fo.cus")
     assert hooks._mood_chip("focused") == f"{emotes.glyph('fo.cus')} focused"
 
 
@@ -4186,7 +4186,8 @@ def test_a_real_emote_handle_renders_its_face_in_the_chip():
 
     expected = emotes.glyph(name)
     assert expected, "a resolvable handle must yield a base-frame glyph"
-    assert expected == emotes.EMOTES[name].frames[0], "base frame is frames[0]"
+    resolved_name = emotes.lookup(name).name
+    assert expected == emotes.EMOTES[resolved_name].frames[0], "base frame is frames[0]"
 
     assert hooks._emote_glyph(name) == expected
     assert hooks._mood_chip(name) == f"{expected} {name}"
