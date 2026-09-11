@@ -56,6 +56,24 @@ class InstallResult:
 
 
 @dataclass(frozen=True)
+class StartResult:
+    """What :func:`start_loaded_service` actually achieved, not what it asked.
+
+    ``started`` is confirmed by reading the daemon's own pidfile back, the
+    same discipline :class:`InstallResult` already applies — a `launchctl`
+    exit code proves a request was accepted, never that a process lives.
+    """
+
+    started: bool
+    pid: int | None
+    #: The pid found *before* the bootstrap, so a caller can distinguish
+    #: "started it" from "it was already up" instead of printing one word for
+    #: two different facts.
+    pid_before: int | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
 class UninstallResult:
     plist_path: Path
     removed: bool
@@ -422,15 +440,82 @@ def logs(
     run(cmd, check=False)
 
 
-def start_loaded_service(*, run: RunFn = subprocess.run) -> None:
-    if not plist_path().exists():
-        return
-    _run_launchctl(
-        ["bootstrap", _gui_domain(), str(plist_path())],
+def start_loaded_service(
+    *,
+    run: RunFn = subprocess.run,
+    sleep: Callable[[float], None] = time.sleep,
+    poll_timeout: float = DEFAULT_POLL_TIMEOUT,
+    home: Path | None = None,
+) -> StartResult:
+    """Bring the LaunchAgent up and **read back whether it is actually up**.
+
+    This is the path `brnrd daemon up` takes, and until 2026-09-11 it took
+    `bootstrap` on faith (`check=False`, exit code discarded), fired
+    `kickstart`, and let its caller print "launchd service started" with no
+    evidence — the same class of claim `install()` was taught to stop making
+    in #1238, one function away and never fixed here. Measured cost on this
+    account the night of 2026-09-11: the operator restarted the daemon several
+    times, was told each time that the service had started, and no process
+    existed on the machine at all — "the daemon doesn't report any issues,
+    but also doesn't poll".
+
+    The receipt is the **pidfile**, never launchctl's exit codes:
+
+    - `bootstrap` returns non-zero for a job that is *already* loaded
+      (EEXIST), which is not a failure — discarding its code was right for
+      that case and wrong as a general policy, so its detail is kept as
+      advisory text and only reported when nothing came up.
+    - `kickstart` no longer raises: a failure there is information for the
+      caller to render, not a reason to vault out of `daemon up` (same
+      reasoning as ``InstallResult.error``).
+    - the pid is polled out of the daemon's own pidfile, the same file
+      `brnrd daemon status` reads — so "started" here means what a later
+      `status` will say, which is the only version of the claim worth
+      printing.
+
+    ``pid_before`` lets the caller tell *started* from *was already running*:
+    two different facts an operator reads differently, and one bit cannot
+    carry both.
+    """
+    if not plist_path(home=home).exists():
+        return StartResult(started=False, pid=None, pid_before=None, error=None)
+
+    workdir = installed_workdir(home=home)
+    pid_before = daemon_pid_for_workdir(workdir)
+
+    bootstrap = _run_launchctl(
+        ["bootstrap", _gui_domain(), str(plist_path(home=home))],
         run=run,
         check=False,
     )
-    _run_launchctl(["kickstart", _gui_service()], run=run)
+    kickstart = _run_launchctl(["kickstart", _gui_service()], run=run, check=False)
+
+    pid = (
+        _poll_for_pid(workdir, timeout=poll_timeout, sleep=sleep)
+        if workdir is not None else None
+    )
+    if pid is not None:
+        return StartResult(started=True, pid=pid, pid_before=pid_before, error=None)
+
+    # Nothing came up. Now — and only now — launchd's own words are the most
+    # useful thing this function knows; prefer kickstart's, since bootstrap's
+    # is usually the benign "already loaded".
+    detail = (
+        (kickstart.stderr or kickstart.stdout or "").strip()
+        or (bootstrap.stderr or bootstrap.stdout or "").strip()
+    )
+    if workdir is None:
+        detail = detail or (
+            "the installed plist names no WorkingDirectory, so there is no "
+            "pidfile to confirm against — re-run `brnrd daemon install` from "
+            "the checkout the service should run from"
+        )
+    return StartResult(
+        started=False,
+        pid=None,
+        pid_before=pid_before,
+        error=detail or "no daemon pidfile appeared within the poll window",
+    )
 
 
 def stop_loaded_service(*, run: RunFn = subprocess.run) -> None:

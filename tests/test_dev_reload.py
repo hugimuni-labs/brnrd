@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from brr import dev_reload
 from brr.dev_reload import DevReloadWatcher
 
@@ -328,3 +330,66 @@ def test_breadcrumb_handles_empty_changed_list():
     bc = dev_reload.format_dev_reload_breadcrumb([])
     assert "dev-reload" in bc
     assert "changed:" not in bc
+
+
+def test_reexec_flushes_streams_before_replacing_the_image(monkeypatch):
+    """``execve`` destroys a buffered tail; the flush is what saves the log.
+
+    Under launchd the daemon's stdout is a file, so Python block-buffers it at
+    8 KB and no interpreter shutdown runs across ``execve``. The reload's own
+    breadcrumb — and every line behind it in the buffer — was therefore thrown
+    away exactly when an operator needed it. Measured 2026-09-11 on this
+    account: `brr.out.log` ends in a spliced line where one process's lost tail
+    meets the re-exec'd image's first print.
+
+    Pinned on ordering, not on the flush alone: a flush *after* the exec would
+    be no fix, and a flush that never happens is the original bug.
+    """
+    events: list[str] = []
+
+    class _Stream:
+        def __init__(self, name: str) -> None:
+            self._name = name
+
+        def flush(self) -> None:
+            events.append(f"flush:{self._name}")
+
+    def _fake_execve(path, argv, env):
+        events.append("execve")
+        raise AssertionError("execve reached")
+
+    monkeypatch.setattr(dev_reload.sys, "stdout", _Stream("stdout"))
+    monkeypatch.setattr(dev_reload.sys, "stderr", _Stream("stderr"))
+    monkeypatch.setattr(dev_reload.os, "execve", _fake_execve)
+
+    with pytest.raises(AssertionError, match="execve reached"):
+        dev_reload.reexec()
+
+    assert events == ["flush:stdout", "flush:stderr", "execve"]
+
+
+def test_reexec_survives_a_stream_that_cannot_flush(monkeypatch):
+    """The breadcrumb is a courtesy; the re-exec is the job.
+
+    A closed or exotic stream (a captured pipe in a test harness, a stream the
+    host already tore down) must not turn a reload into a crash — the daemon
+    would then be neither reloaded nor running.
+    """
+    class _Broken:
+        def flush(self) -> None:
+            raise ValueError("I/O operation on closed file")
+
+    reached: list[str] = []
+
+    def _fake_execve(path, argv, env):
+        reached.append("execve")
+        raise AssertionError("execve reached")
+
+    monkeypatch.setattr(dev_reload.sys, "stdout", _Broken())
+    monkeypatch.setattr(dev_reload.sys, "stderr", _Broken())
+    monkeypatch.setattr(dev_reload.os, "execve", _fake_execve)
+
+    with pytest.raises(AssertionError, match="execve reached"):
+        dev_reload.reexec()
+
+    assert reached == ["execve"]

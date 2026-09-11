@@ -221,8 +221,24 @@ def start_service() -> int | None:
         return code
 
     if _is_macos() and macos.plist_path().exists():
-        macos.start_loaded_service()
-        print("[brnrd] launchd service started")
+        result = macos.start_loaded_service()
+        if not result.started:
+            # Louder than the old unconditional success line, and nonzero, so
+            # a restart that produced no daemon reads as a failure both to the
+            # operator and to whatever ran the command (2026-09-11: several
+            # "started" prints, no process on the machine).
+            print("[brnrd] launchd service did NOT come up")
+            if result.error:
+                print(f"[brnrd] launchd said: {result.error}")
+            print(
+                "[brnrd] check `brnrd daemon status` and the logs in "
+                f"{macos.log_dir()}"
+            )
+            return 1
+        if result.pid_before is not None and result.pid_before == result.pid:
+            print(f"[brnrd] launchd service already running (pid {result.pid})")
+        else:
+            print(f"[brnrd] launchd service started (pid {result.pid})")
         return 0
 
     return None
