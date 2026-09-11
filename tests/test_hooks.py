@@ -3608,8 +3608,11 @@ def test_post_tool_bar_renders_every_segment_when_laden(monkeypatch):
 
     glyph = hooks._emote_glyph("smug_")
     assert glyph  # the fixture is a real handle, or this pins nothing
+    # No `last_chips` ⇒ this is the face's first boundary, so it names
+    # itself once (rule 3) — `⌁[<face>] smug_:`, not the bare `⌁[<face>]:`
+    # a repeat boundary would render.
     assert bar == (
-        f"⌁[{glyph}]: ⏱ 16/120m │ q S57↻31m·W50↻3d3h·F27 │ ▷1 │ ⇡2+3 │ ⚒4"
+        f"⌁[{glyph}] smug_: ⏱ 16/120m │ q S57↻31m·W50↻3d3h·F27 │ ▷1 │ ⇡2+3 │ ⚒4"
     )
 
 
@@ -3644,7 +3647,7 @@ def test_post_tool_bar_renders_only_the_chips_that_moved():
     hooks.format_delta(payload, rendered_chips=seen)
     payload["budget"] = {"elapsed_seconds": 17 * 60, "budget_seconds": 120 * 60}
     rendered = hooks.format_delta(payload, last_chips=seen)
-    assert rendered.splitlines()[0] == "⌁[·]: ⏱ 17/120m"
+    assert rendered.splitlines()[0] == "⌁[b·_·d]: ⏱ 17/120m"
 
 
 def test_post_tool_bar_pending_events_always_get_a_detail_line():
@@ -3909,8 +3912,11 @@ def test_post_tool_mood_renders_in_the_preamble(tmp_path):
     (tmp_path / hooks.MOOD_NAME).write_text("bo_Od\n", encoding="utf-8")
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    # Glyph in the brackets: `bo_Od` is a real handle (#601 seam).
-    assert ctx.splitlines()[0].startswith("⌁[b·_·d]:")
+    # Glyph in the brackets: `bo_Od` is a real handle (#601 seam). This is
+    # the face's first boundary, so it names itself once (rule 3) — the
+    # word rides beside the glyph exactly here, then drops on every later
+    # boundary that repeats the same face (see the "named once" test below).
+    assert ctx.splitlines()[0].startswith("⌁[b·_·d] bo_Od:")
     assert "mood b·_·d" not in ctx  # no chip for a resolved, unsurprised face
     assert "keep?" not in ctx
     assert "←" not in ctx
@@ -3925,7 +3931,7 @@ def test_post_tool_mood_absent_renders_no_segment(tmp_path):
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert ctx.splitlines()[0].startswith("⌁[·]:")
+    assert ctx.splitlines()[0].startswith("⌁[b·_·d]:")
     assert "mood b" not in ctx and "←" not in ctx
 
 
@@ -3947,17 +3953,22 @@ def test_seed_and_stop_render_mood_as_a_plain_prose_line(tmp_path):
 
 
 def test_seed_says_so_when_the_mood_handle_did_not_resolve(tmp_path):
-    """The boundary that can still fix it is the boundary that says so.
+    """The boundary that can still fix it is the boundary that says so —
+    honestly, never gradingly (design-the-pre-attentive-channel.md rule 1).
 
     ``curiousity`` is a slip past the typo tolerance (``curious`` itself now resolves to its family's face); ``hmn_``/``itch_``/``ooh_`` are the faces it was reaching for. A
     resident writing the word believed it wore one for the whole run, and
-    the dashboard published the word as an id. Now the seed answers back.
+    the dashboard published the word as an id. Now the seed answers back —
+    with the plain word and "no face", never a `✗` or a suggested
+    replacement: the resident's claimed mood is never overruled, only its
+    absence of a face reported.
     """
     _portal(tmp_path, token="t1", pending=0)
     (tmp_path / hooks.MOOD_NAME).write_text("curiousity", encoding="utf-8")
     out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "- mood: ✗ curiousity → " in ctx
+    assert "- mood: curiousity · no face" in ctx
+    assert "✗" not in ctx and "→" not in ctx
 
 
 def test_mood_malformed_file_is_read_defensively(tmp_path):
@@ -3981,21 +3992,21 @@ def test_mood_blank_file_renders_no_segment(tmp_path):
     # A blank first line is an absent mood: bare preamble, no face, no
     # display chip. (`mood?` may not fire here — a write happened, so the
     # ever-written latch holds; the pin is only about the face.)
-    assert ctx.splitlines()[0].startswith("⌁[·]:")
+    assert ctx.splitlines()[0].startswith("⌁[b·_·d]:")
     assert "mood ✗" not in ctx and "←" not in ctx
 
 
 def test_mood_chip_truncates_a_long_name():
-    """The cap is on the *name*, and the miss mark rides outside it.
+    """The cap is on the *name*, and the no-face marker rides outside it.
 
-    An overlong handle is by definition not a face, so the chip marks it —
-    but the truncation is what keeps the statusline a line. The ``✗`` and
-    any suggestions are the payload of a broken state: loud exactly when
-    something is wrong, absent the rest of the time.
+    An overlong handle is by definition not a face, so the chip says so —
+    but the truncation is what keeps the statusline a line. Plain fact,
+    never graded (design-the-pre-attentive-channel.md rule 1): no ``✗``, no
+    suggestions, just the word and the honest "no face" it earned.
     """
     chip = hooks._mood_chip("a-very-long-mood-name-that-overflows-the-chip")
-    assert chip == "✗ a-very-long-mood…"
-    name = chip.removeprefix("✗ ")
+    assert chip == "a-very-long-mood… · no face"
+    name = chip.removesuffix(" · no face")
     assert len(name) <= hooks._MOOD_DISPLAY_MAX_CHARS + 1
 
 
@@ -4015,11 +4026,10 @@ def test_emote_glyph_degrades_to_none_for_an_unresolvable_name():
     assert name not in emotes.EMOTES, "fixture must stay unresolvable"
     assert emotes.lookup(name) is None, "fixture must stay unresolvable"
     assert hooks._emote_glyph(name) is None
-    # Degrades, but no longer *silently*: the chip used to render the bare
-    # word, which is indistinguishable from a face that simply has no glyph.
-    # A run reading its own boundary could not tell the two apart, and on the
-    # dashboard the same ambiguity shipped to the public page.
-    assert hooks._mood_chip(name) == f"✗ {name}"
+    # Degrades, but no longer *silently* — and no longer *graded*: the word
+    # renders plain, with the honest "no face" the design page asks for
+    # (rule 1), never a `✗` grading the resident's own claimed mood.
+    assert hooks._mood_chip(name) == f"{name} · no face"
 
 
 def test_a_family_word_renders_its_default_face():
@@ -4481,7 +4491,7 @@ def test_no_mood_means_no_surprise_annotation(tmp_path):
     # No face ⇒ no surprise arrow, and no face in the preamble. The
     # first-bar `mood?` hint may legally ride (floor 0 since evt-…-mhrx).
     assert "←" not in ctx
-    assert ctx.splitlines()[0].startswith("⌁[·]:")
+    assert ctx.splitlines()[0].startswith("⌁[b·_·d]:")
 
 
 # ── #616: notices segment and spawn_completed closeout rendering ─────────────
@@ -5932,11 +5942,13 @@ def test_every_emitted_chip_is_classified():
         wait_idle=False,
     )
     assert line is not None
-    # `allowance_directive` is documented to never appear in `segments`
-    # itself (it gates a detail line, not a chip) but is still persisted
-    # into `rendered_chips` for the next boundary's change-gate — excluded
-    # here for the same reason it is excluded from `BAR_SEGMENTS`.
-    emitted = set(rendered) - {"allowance_directive"}
+    # `allowance_directive` and `face` are documented to never appear in
+    # `segments` itself (one gates a detail line, the other names the
+    # preamble once on change — neither is a bar chip) but both are still
+    # persisted into `rendered_chips` for the next boundary's change-gate —
+    # excluded here for the same reason they are excluded from
+    # `BAR_SEGMENTS`.
+    emitted = set(rendered) - {"allowance_directive", "face"}
     # A real fixture, not a token one: enough distinct chips fired that a
     # missing classification is actually exercised, including all five
     # keys this fix adds.
@@ -6529,12 +6541,41 @@ def test_stop_names_the_annotated_count_on_a_forced_accept(tmp_path):
 
 def test_bar_preamble_forms():
     # The one static element: the bolt, then the resident's own face.
-    assert hooks._bar_preamble(None) == "⌁[·]:"
-    assert hooks._bar_preamble("") == "⌁[·]:"
+    # Never a face-shaped error (design-the-pre-attentive-channel.md rule 2):
+    # no mood, and an unresolved one, both render the brand at rest —
+    # `⌁[✗]:` is gone, on purpose.
+    assert hooks._bar_preamble(None) == "⌁[b·_·d]:"
+    assert hooks._bar_preamble("") == "⌁[b·_·d]:"
     # A real handle renders its base frame (#601 seam).
     assert hooks._bar_preamble("bo_Od") == "⌁[b·_·d]:"
-    # An unresolved handle is a miss, marked — never a guess, never silence.
-    assert hooks._bar_preamble("no-such-face") == "⌁[✗]:"
+    # An unresolved handle is the same neutral face, not an error mark — the
+    # word itself (never the ornament) is where the miss is visible, and
+    # only when `named=True` fires it.
+    assert hooks._bar_preamble("no-such-face") == "⌁[b·_·d]:"
+    # A handle whose base frame differs from the rest glyph proves the
+    # bracket really does carry the resolved face, not always the same
+    # placeholder.
+    from brr import emotes
+
+    assert emotes.glyph("ugh_") == "b-_-d"
+    assert hooks._bar_preamble("ugh_") == "⌁[b-_-d]:"
+
+
+def test_bar_preamble_names_the_face_once_on_change():
+    # Rule 3: "it names itself once, on change." named=False is the bare,
+    # habitual form; named=True is the one boundary the face actually
+    # changed on — word beside the glyph, then bare again.
+    assert hooks._bar_preamble("ugh_", named=True) == "⌁[b-_-d] ugh_:"
+    assert hooks._bar_preamble("ugh_", named=False) == "⌁[b-_-d]:"
+    # No mood ⇒ nothing to name, regardless of the flag — there is no word.
+    assert hooks._bar_preamble(None, named=True) == "⌁[b·_·d]:"
+    # An overlong mood is capped the same way the mood chip caps it, so the
+    # named form can't blow out the line either.
+    long_name = "a-very-long-mood-name-that-overflows-the-chip"
+    named = hooks._bar_preamble(long_name, named=True)
+    assert named.startswith("⌁[b·_·d] ")
+    assert named.endswith("…:")
+    assert len(named) <= len("⌁[b·_·d] ") + hooks._MOOD_DISPLAY_MAX_CHARS + 1 + 1
 
 
 def test_ticker_renders_elapsed_alone_when_no_limit_is_configured():
@@ -6547,13 +6588,18 @@ def test_ticker_renders_elapsed_alone_when_no_limit_is_configured():
     assert hooks._budget_chip({}) is None
 
 
-def test_unresolved_mood_keeps_its_near_miss_chip():
+def test_unresolved_mood_renders_plain_no_grading():
     # The steady face moved to the preamble, but the unresolved-handle
     # honesty stays a chip: a face that resolves to no emote is actionable.
+    # Never graded (design-the-pre-attentive-channel.md rule 1): no `✗`, no
+    # near-miss arrow, in either the preamble or the chip — and never a
+    # face-shaped error in the ornament (rule 2): the brand at rest, named
+    # once since this is the mood's first boundary.
     rendered = hooks.format_delta(_bar_payload(), mood="zzzz-not-a-feeling")
     bar = rendered.splitlines()[0]
-    assert bar.startswith("⌁[✗]:")
-    assert "mood ✗ zzzz-not-a-feeli…" in bar
+    assert bar.startswith("⌁[b·_·d] zzzz-not-a-feeli…:")
+    assert "mood zzzz-not-a-feeli… · no face" in bar
+    assert "✗" not in rendered and "→" not in rendered
 
 
 def test_course_drift_resurfaces_the_route_after_three_work_deltas(tmp_path):
@@ -6747,144 +6793,6 @@ def test_closeout_guard_unweakened_for_seen_events(tmp_path):
     stop, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
     assert stop.get("decision") == "block"
     assert "pending" in stop["reason"]
-
-
-def test_course_stall_fires_at_threshold(tmp_path):
-    """After _COURSE_STALL_THRESHOLD boundaries with open rows and no route
-    edit, the stall detail line renders once and the counter re-arms.
-
-    The very first boundary sets route_edge=True (card seen for the first
-    time) which resets the counter, so the stall fires after
-    1 (seed/route-edge) + threshold more calls = threshold+1 total calls.
-    """
-    (tmp_path / hooks.CARD_NAME).write_text(
-        "## Now\nworking\n\n## Plan\n- [ ] do the thing\n", encoding="utf-8"
-    )
-    env = _env(tmp_path)
-    threshold = hooks._COURSE_STALL_THRESHOLD
-    # Run threshold boundaries (first resets via route_edge, then threshold
-    # non-edge ones accumulate): stall must NOT fire yet.
-    for i in range(threshold):
-        _portal(tmp_path, token=f"t{i}", pending=0)
-        out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-        assert "course unchanged ×" not in _inject_text(out)
-    # The threshold+1th boundary: stall fires.
-    _portal(tmp_path, token=f"t{threshold}", pending=0)
-    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    text = _inject_text(out)
-    assert f"course unchanged ×{threshold} boundaries" in text
-    # Counter re-armed: next boundary alone does not re-fire.
-    _portal(tmp_path, token=f"t{threshold + 1}", pending=0)
-    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    assert "course unchanged ×" not in _inject_text(out)
-
-
-def test_course_stall_does_not_count_boundaries_while_await_is_armed(tmp_path):
-    (tmp_path / hooks.CARD_NAME).write_text(
-        "## Now\nwaiting\n\n## Plan\n- [ ] wait for the result\n", encoding="utf-8"
-    )
-    env = _env(tmp_path)
-    for i in range(hooks._COURSE_STALL_THRESHOLD + 1):
-        _portal(
-            tmp_path, token=f"t{i}", pending=0,
-            await_state={"armed": True, "resolved": False},
-        )
-        out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-        assert "course unchanged ×" not in _inject_text(out)
-
-
-def test_course_stall_does_not_count_boundaries_that_deliver_replies(tmp_path):
-    (tmp_path / hooks.CARD_NAME).write_text(
-        "## Now\ndelivering\n\n## Plan\n- [ ] answer the thread\n", encoding="utf-8"
-    )
-    env = _env(tmp_path)
-    for i in range(hooks._COURSE_STALL_THRESHOLD + 1):
-        _portal(
-            tmp_path, token=f"t{i}", pending=0,
-            outbound={
-                "replies_current": i,
-                "replies_other": 0,
-                "outbound_messages": 0,
-            },
-        )
-        out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-        assert "course unchanged ×" not in _inject_text(out)
-
-
-def test_course_stall_delivery_boundary_pauses_but_does_not_reset_counter(tmp_path):
-    (tmp_path / hooks.CARD_NAME).write_text(
-        "## Now\nworking\n\n## Plan\n- [ ] do the thing\n", encoding="utf-8"
-    )
-    env = _env(tmp_path)
-    threshold = hooks._COURSE_STALL_THRESHOLD
-    _portal(tmp_path, token="route-edge", pending=0)
-    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    for i in range(threshold // 2):
-        _portal(tmp_path, token=f"idle-before-{i}", pending=0)
-        out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-        assert "course unchanged ×" not in _inject_text(out)
-    _portal(
-        tmp_path, token="delivery", pending=0,
-        outbound={
-            "replies_current": 1,
-            "replies_other": 0,
-            "outbound_messages": 0,
-        },
-    )
-    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    assert "course unchanged ×" not in _inject_text(out)
-    for i in range(threshold - threshold // 2 - 1):
-        _portal(
-            tmp_path, token=f"idle-after-{i}", pending=0,
-            outbound={
-                "replies_current": 1,
-                "replies_other": 0,
-                "outbound_messages": 0,
-            },
-        )
-        out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-        assert "course unchanged ×" not in _inject_text(out)
-    _portal(
-        tmp_path, token="idle-fire", pending=0,
-        outbound={
-            "replies_current": 1,
-            "replies_other": 0,
-            "outbound_messages": 0,
-        },
-    )
-    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    assert f"course unchanged ×{threshold} boundaries" in _inject_text(out)
-
-
-def test_course_stall_resets_on_route_edit(tmp_path):
-    """Editing the card (route_edge=True) resets the stall counter."""
-    card = tmp_path / hooks.CARD_NAME
-    card.write_text(
-        "## Now\nworking\n\n## Plan\n- [ ] do the thing\n", encoding="utf-8"
-    )
-    env = _env(tmp_path)
-    threshold = hooks._COURSE_STALL_THRESHOLD
-    # Burn threshold boundaries (first is route_edge, resets; then threshold-1
-    # non-edge ones accumulate to stall_count = threshold-1 < threshold).
-    for i in range(threshold):
-        _portal(tmp_path, token=f"t{i}", pending=0)
-        hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    # Edit the card — route_edge fires, resets the stall counter.
-    card.write_text(
-        "## Now\nworking\n\n## Plan\n- [x] do the thing\n- [ ] next\n",
-        encoding="utf-8",
-    )
-    _portal(tmp_path, token=f"t{threshold}", pending=0)
-    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    assert "course unchanged ×" not in _inject_text(out)
-    # threshold more non-edge boundaries: stall fires again from new baseline.
-    for i in range(threshold - 1):
-        _portal(tmp_path, token=f"t{threshold + 1 + i}", pending=0)
-        out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-        assert "course unchanged ×" not in _inject_text(out)
-    _portal(tmp_path, token=f"t{2 * threshold + 1}", pending=0)
-    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    assert f"course unchanged ×{threshold} boundaries" in _inject_text(out)
 
 
 def test_boundary_detail_redacts_file_tool_pattern():
