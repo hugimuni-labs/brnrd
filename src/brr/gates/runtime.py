@@ -524,6 +524,54 @@ def _delivery_settled(gate: str, eid: str) -> None:
     _delivery_retry.pop((gate, eid), None)
 
 
+def _deliverable(
+    inbox_dir: Path, responses_dir: Path, source: str,
+) -> list[dict]:
+    """Active events, plus pending ones already carrying a staged interim.
+
+    A *pending* event normally has nothing staged for it — partials are what
+    a run writes while it processes, and a run means ``processing``. One
+    writer breaks that symmetry: a starved seat answers the correspondent
+    whose message it is *keeping* (``daemon._refuse_starved_wake``), and that
+    event stays ``pending``, deferred for the hold horizon, until a refill or
+    a release. Sweeping only :func:`protocol.list_active` left that answer on
+    disk until something *else* flipped the event to ``processing``.
+
+    Measured 2026-09-11 (evt-…-x3co): "Still hibernating — binding quota
+    reads 1.0%" was staged three seconds after the message and reached the
+    chat four minutes thirty-five seconds later — immediately *after* the
+    "Stopped — seat released" line that made it untrue. The correspondent's
+    reading of it was the correct one: sending a message to a starved seat
+    produced silence, so the seat looked dead rather than parked.
+
+    Delivery state stays where it was: a pending event is only ever swept for
+    its partials here — the terminal branch in :func:`deliver_stream` is
+    gated on ``status == "done"``, and nothing in this path advances an event
+    toward dispatch.
+
+    Deliberately narrow. "Any pending event with a staged partial" would also
+    have covered this, and `test_pending_event_is_not_delivered` pins the
+    opposite for the general case — a pin worth keeping: the other partial
+    writers (a runner-policy proposal, a config-change proposal, an outbox
+    reply aimed at a *different* event) all stage while their event is
+    ``processing``, so broadening the rule would change delivery timing for
+    paths this change never measured. A hold's own deferral is the one state
+    that means "kept, deliberately, and answered anyway", so that is the only
+    pending event swept here.
+    """
+    events = protocol.list_active(inbox_dir, source)
+    seen = {str(event.get("id") or "") for event in events}
+    for event in protocol.list_pending(inbox_dir):
+        eid = str(event.get("id") or "")
+        if not eid or eid in seen or event.get("source") != source:
+            continue
+        if event.get("defer_reason") != "resource_hold":
+            continue
+        if protocol.list_partials(responses_dir, eid):
+            events.append(event)
+    return events
+
+
 def deliver_stream(
     inbox_dir: Path,
     responses_dir: Path,
@@ -567,7 +615,7 @@ def deliver_stream(
     if deliver_terminal is None:
         deliver_terminal = deliver_partial
     now = time.monotonic()
-    for event in protocol.list_active(inbox_dir, source):
+    for event in _deliverable(inbox_dir, responses_dir, source):
         eid = event["id"]
         if not _delivery_due(source, eid, now=now):
             continue
