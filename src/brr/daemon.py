@@ -17559,6 +17559,13 @@ def _supersede_hold(
     superseded = resource_hold.mark_released(other_meta, by="superseded")
     superseded["superseded_by"] = by_run
     other.meta["resource_hold"] = superseded
+    # #1927: `held` (resource_hold.RUN_STATUS) rides `_UNFINISHED_RUN_STATUSES`
+    # exclusion — nothing sweeps it back off "held" on its own, so a release
+    # that leaves status untouched draws a PARKED card forever. Every release
+    # in this module ends the run's process one way or another; "done" is
+    # this module's own terminal word for that (`_apply_run_release` already
+    # used it before this fix reached the other four call sites).
+    other.status = "done"
     other.save(runs_dir)
     print(
         f"[brnrd] resource hold superseded: {other.id} -> {by_run} "
@@ -17985,6 +17992,10 @@ def _apply_resource_hold_resume(
         return
     released = resource_hold.mark_released(meta, by=by)
     held.meta["resource_hold"] = released
+    # #1927: the resume dispatches a *fresh* run on this same conversation
+    # (see `_handle_resource_held_events`) — this held run's own process is
+    # over, so its status must leave "held" or it draws a stale PARKED card.
+    held.status = "done"
     held.save(runs_dir)
     stamps: dict[str, object] = {}
     # #1890: the resume boots into the *seat's* conversation, never the
@@ -18015,6 +18026,32 @@ def _apply_resource_hold_resume(
             resume_native_provider=event.get("resume_native_provider"),
             seat_conversation=seat,
         )
+
+
+def _reconcile_stale_held_status(runs_dir: Path) -> int:
+    """Correct any run left on ``status: "held"`` whose hold is actually released.
+
+    #1927: every release path in this module now moves status off "held"
+    itself (``_supersede_hold``, ``_apply_resource_hold_resume``,
+    ``_release_reset_holds_due``'s own ``mark_released`` call,
+    ``_apply_run_respawn`` — ``_apply_run_release`` always did). This is the
+    backstop for a record written before that fix landed, or by some future
+    release path that forgets: read raw by status word (not through
+    ``_held_runs_for_repo``, which already excludes anything ``is_active``
+    is ``False`` for) so a stale record is *found*, not silently skipped.
+    Idempotent — a record already corrected reads ``is_active`` ``True`` or
+    a non-"held" status and is left alone the next time this runs.
+    """
+    fixed = 0
+    for task in list_runs(runs_dir, status=resource_hold.RUN_STATUS):
+        meta = task.meta.get("resource_hold")
+        if not meta or resource_hold.is_active(meta):
+            continue
+        task.status = "done"
+        task.save(runs_dir)
+        fixed += 1
+        print(f"[brnrd] resource hold status reconciled (was stale 'held'): {task.id}")
+    return fixed
 
 
 def _release_reset_holds_due(
@@ -18050,6 +18087,7 @@ def _release_reset_holds_due(
         if not runs_dir.is_dir():
             continue
         inbox_dir = _repo_inbox(root)
+        _reconcile_stale_held_status(runs_dir)
         for held in _held_runs_for_repo(runs_dir):
             meta = held.meta.get("resource_hold") or {}
             released_by = "reset"
@@ -18066,6 +18104,7 @@ def _release_reset_holds_due(
                 continue
             released_meta = resource_hold.mark_released(meta, by=released_by)
             held.meta["resource_hold"] = released_meta
+            held.status = "done"  # #1927: leave "held" or the dashboard stays parked
             held.save(runs_dir)
             for accumulated_id in released_meta.get("accumulated_event_ids") or []:
                 _undefer_held_event(
@@ -18175,6 +18214,7 @@ def _apply_run_respawn(
         return None
     released = resource_hold.mark_released(meta, by="respawn")
     held.meta["resource_hold"] = released
+    held.status = "done"  # #1927: leave "held" or the dashboard stays parked
     held.save(runs_dir)
     drawers = _hold_undefer_inboxes(account_context, inbox_dir)
     for accumulated_id in released.get("accumulated_event_ids") or []:

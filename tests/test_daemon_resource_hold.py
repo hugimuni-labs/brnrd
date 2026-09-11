@@ -705,8 +705,10 @@ class TestApplyRunReleaseAndRespawn:
         persisted = Run.from_file(runs_dir / held.id / "run.md")
         assert persisted.meta["resource_hold"]["released"] is True
         assert persisted.meta["resource_hold"]["released_by"] == "respawn"
-        # The seat itself does not resume — only a fresh event does.
-        assert persisted.status == resource_hold.RUN_STATUS
+        # The seat itself does not resume — only a fresh event does — but its
+        # own status must still leave "held" (#1927), or a card for a run
+        # nobody is coming back to draws PARKED forever.
+        assert persisted.status == "done"
 
         minted = protocol._read_event(new_path)
         assert minted["respawned_from_event"] == "evt-lead"
@@ -731,6 +733,113 @@ class TestApplyRunReleaseAndRespawn:
         # Nothing touched — the hold is still active, not silently consumed
         # by a call that could not actually mint a successor.
         assert persisted.meta["resource_hold"]["released"] is False
+
+
+class TestReleaseLeavesStatus:
+    """#1927: every release path must move a held run's status off "held",
+    not only ``resource_hold.released`` — a stale status word is what the
+    dashboard's parked-card renderer (and anything else trusting the run
+    manifest directly) actually reads.
+    """
+
+    def _held_run(self, runs_dir: Path, run_id: str, **hold_overrides) -> Run:
+        meta = resource_hold.build(reason="x", provider="codex")
+        meta.update(hold_overrides)
+        task = Run(id=run_id, event_id="evt-1", body="", status=resource_hold.RUN_STATUS)
+        task.meta["resource_hold"] = meta
+        task.save(runs_dir)
+        return task
+
+    def test_supersede_moves_the_superseded_run_off_held(self, tmp_path):
+        runs_dir = tmp_path / ".brr" / "runs"
+        ghost = self._held_run(runs_dir, "run-ghost")
+
+        into = daemon._supersede_hold(
+            runs_dir, ghost, resource_hold.build(reason="x", provider="codex"),
+            by_run="run-seat",
+        )
+
+        assert into is not None
+        persisted = Run.from_file(runs_dir / "run-ghost" / "run.md")
+        assert persisted.status == "done"
+        assert persisted.meta["resource_hold"]["released"] is True
+        assert persisted.meta["resource_hold"]["released_by"] == "superseded"
+
+    def test_correspondent_resume_moves_the_held_run_off_held(self, tmp_path):
+        """Same fixture as TestHandleResourceHeldEvents — the resumed
+        conversation continues on a *fresh* run/event, so the parked run's
+        own record must read as finished, not still "held"."""
+        from test_daemon_resource_hold import TestHandleResourceHeldEvents
+
+        harness = TestHandleResourceHeldEvents()
+        harness._arm_held_run(tmp_path)
+        target = harness._target(tmp_path, source="telegram", eid="evt-human-status")
+
+        daemon._handle_resource_held_events([target], None)
+
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / "run-held-1" / "run.md")
+        assert persisted.meta["resource_hold"]["released"] is True
+        assert persisted.status == "done"
+
+    def test_reset_release_moves_the_held_run_off_held(self, tmp_path, monkeypatch):
+        from test_daemon_resource_hold import TestHandleResourceHeldEvents
+
+        harness = TestHandleResourceHeldEvents()
+        held = harness._arm_held_run(
+            tmp_path,
+            resume_condition=resource_hold.RESUME_RESET,
+            reset_deadline=1000.0,
+        )
+        monkeypatch.setattr(daemon.time, "time", lambda: 2000.0)
+
+        released = daemon._release_reset_holds_due(None, tmp_path)
+
+        assert released == 1
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / held.id / "run.md")
+        assert persisted.status == "done"
+
+
+class TestReconcileStaleHeldStatus:
+    def _stale_released_run(self, runs_dir: Path, run_id: str) -> Run:
+        meta = resource_hold.mark_released(
+            resource_hold.build(reason="x", provider="codex"), by="operator",
+        )
+        task = Run(id=run_id, event_id="evt-1", body="", status=resource_hold.RUN_STATUS)
+        task.meta["resource_hold"] = meta
+        task.save(runs_dir)
+        return task
+
+    def test_corrects_a_pre_existing_stale_record(self, tmp_path):
+        runs_dir = tmp_path / ".brr" / "runs"
+        stale = self._stale_released_run(runs_dir, "run-stale")
+
+        fixed = daemon._reconcile_stale_held_status(runs_dir)
+
+        assert fixed == 1
+        persisted = Run.from_file(runs_dir / stale.id / "run.md")
+        assert persisted.status == "done"
+
+    def test_idempotent_on_a_second_pass(self, tmp_path):
+        runs_dir = tmp_path / ".brr" / "runs"
+        self._stale_released_run(runs_dir, "run-stale-2")
+        daemon._reconcile_stale_held_status(runs_dir)
+
+        fixed_again = daemon._reconcile_stale_held_status(runs_dir)
+
+        assert fixed_again == 0
+
+    def test_leaves_a_genuinely_active_hold_untouched(self, tmp_path):
+        runs_dir = tmp_path / ".brr" / "runs"
+        meta = resource_hold.build(reason="x", provider="codex")
+        active = Run(id="run-active-2", event_id="evt-1", body="", status=resource_hold.RUN_STATUS)
+        active.meta["resource_hold"] = meta
+        active.save(runs_dir)
+
+        fixed = daemon._reconcile_stale_held_status(runs_dir)
+
+        assert fixed == 0
+        persisted = Run.from_file(runs_dir / "run-active-2" / "run.md")
+        assert persisted.status == resource_hold.RUN_STATUS
 
 
 class TestFindHeldRun:
