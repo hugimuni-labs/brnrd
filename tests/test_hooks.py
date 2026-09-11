@@ -7396,3 +7396,151 @@ def test_room_pin_is_echoed_each_boundary_never_parsed(tmp_path):
     assert hooks._read_room(ctx) == "live, fast, one-liners"
     (outbox / ".room").write_text("\n", encoding="utf-8")
     assert hooks._read_room(ctx) is None
+
+
+# ── #1200: notes-health findings fire on the boundary they become new ────
+
+
+def test_notes_health_transitions_fire_only_new_since_last_scan(tmp_path, monkeypatch):
+    """A `notes_preflight` finding earns a line only on the boundary its
+    `(type, target)` identity was not in the *previous* scan — never while
+    merely still true, and again if it leaves and comes back (this diffs
+    against the last scan, not "ever seen"). The run's first call is the
+    baseline: whatever is true right now is what the wake block already
+    showed, so it establishes state and reports nothing.
+    """
+    from brr import notes_preflight
+
+    monkeypatch.setattr(hooks, "NOTES_HEALTH_SCAN_INTERVAL_SECONDS", 0)
+    calls = {"n": 0}
+    stale_sig = notes_preflight.Finding(
+        type="stale-signature", target="workflow.md § Gating",
+        description="the section moved, the signature didn't.",
+        severity="warning",
+    )
+    inert_pf = notes_preflight.Finding(
+        type="inert-pitfall", target="pitfalls.md § Foo",
+        description="written without a `trigger:`.", severity="warning",
+    )
+    scripted = [
+        [stale_sig],              # 1: baseline
+        [stale_sig],              # 2: unchanged
+        [stale_sig, inert_pf],    # 3: inert_pf is new
+        [stale_sig, inert_pf],    # 4: unchanged again
+        [inert_pf],               # 5: stale_sig merely left — not reported
+        [stale_sig, inert_pf],    # 6: stale_sig is back — a reappearance
+    ]
+
+    def fake_scan(repo_root, cfg):
+        result = scripted[calls["n"]]
+        calls["n"] += 1
+        return result
+
+    monkeypatch.setattr(notes_preflight, "scan", fake_scan)
+    ctx = hooks.HookContext({"BRR_WORK_TREE": str(tmp_path)})
+    state: dict = {}
+
+    assert hooks._notes_health_transitions(ctx, state) == []
+    assert hooks._notes_health_transitions(ctx, state) == []
+    r3 = hooks._notes_health_transitions(ctx, state)
+    assert len(r3) == 1 and "inert-pitfall" in r3[0] and "Foo" in r3[0]
+    assert hooks._notes_health_transitions(ctx, state) == []
+    assert hooks._notes_health_transitions(ctx, state) == []
+    r6 = hooks._notes_health_transitions(ctx, state)
+    assert len(r6) == 1 and "stale-signature" in r6[0] and "Gating" in r6[0]
+    assert calls["n"] == 6
+
+
+def test_notes_health_scan_throttled_by_interval(tmp_path, monkeypatch):
+    """The scan itself (measured at 1.2-2.8s on a real dominion) is
+    throttled to `NOTES_HEALTH_SCAN_INTERVAL_SECONDS`; the render decision
+    is not — see the prior test. The baseline call always scans regardless
+    of the clock."""
+    from brr import notes_preflight
+
+    calls = {"n": 0}
+
+    def fake_scan(repo_root, cfg):
+        calls["n"] += 1
+        return []
+
+    monkeypatch.setattr(notes_preflight, "scan", fake_scan)
+    clock = {"t": 1_000.0}
+    monkeypatch.setattr(hooks.time, "time", lambda: clock["t"])
+    ctx = hooks.HookContext({"BRR_WORK_TREE": str(tmp_path)})
+    state: dict = {}
+
+    hooks._notes_health_transitions(ctx, state)
+    assert calls["n"] == 1, "the baseline call must scan regardless of the clock"
+
+    hooks._notes_health_transitions(ctx, state)
+    assert calls["n"] == 1, "a same-instant call must not re-scan"
+
+    clock["t"] += hooks.NOTES_HEALTH_SCAN_INTERVAL_SECONDS - 1
+    hooks._notes_health_transitions(ctx, state)
+    assert calls["n"] == 1, "inside the throttle window: still no re-scan"
+
+    clock["t"] += 2
+    hooks._notes_health_transitions(ctx, state)
+    assert calls["n"] == 2, "past the throttle window: due for a re-scan"
+
+
+def test_notes_health_transitions_silent_with_no_repo_root(tmp_path):
+    """No `BRR_WORK_TREE`/`BRR_HOST_ROOT`/`BRR_REPO_DIR` armed (an ad-hoc
+    hook run, most `run_hook` unit tests in this file) ⇒ silent, not an
+    exception — the same "never a nag on a proxy" doctrine `gate_command`/
+    `boot_score_path` already follow."""
+    ctx = hooks.HookContext({})
+    assert hooks._notes_health_transitions(ctx, {}) == []
+
+
+def test_notes_health_lines_render_as_bar_detail_rows():
+    """`_render_bar`/`format_delta` append the caller's already-gated
+    `notes_health_lines` verbatim — no further filtering here; the newness
+    decision is entirely `_notes_health_transitions`'s (#1200)."""
+    payload = _vital_quiet_payload()
+    line = "- **stale-signature** [warning] `workflow.md § Gating` — the section moved, the signature didn't."
+    out = hooks.format_delta(payload, notes_health_lines=[line])
+    assert out is not None and line in out
+
+    quiet = hooks.format_delta(payload, notes_health_lines=None)
+    assert quiet is None or line not in quiet
+
+
+def test_notes_health_transition_opens_the_gate_alone(tmp_path, monkeypatch):
+    """The whole point of #1200: a boundary where a notes-health finding is
+    the *only* thing that moved must still inject — it must not wait for
+    some other chip to happen to be due too. Two `run_hook` calls against an
+    unchanged portal snapshot (same token, ambient already settled after the
+    first boundary): the second must still carry the new finding."""
+    from brr import notes_preflight
+
+    monkeypatch.setattr(hooks, "NOTES_HEALTH_SCAN_INTERVAL_SECONDS", 0)
+    finding_sets = [[], [notes_preflight.Finding(
+        type="surface-root-unresolved", target="plans",
+        description="expected `surface/plans/`, found nothing.",
+        severity="error",
+    )]]
+    calls = {"n": 0}
+
+    def fake_scan(repo_root, cfg):
+        result = finding_sets[calls["n"]]
+        calls["n"] += 1
+        return result
+
+    monkeypatch.setattr(notes_preflight, "scan", fake_scan)
+
+    _portal(tmp_path, token="t1", pending=0)
+    env = _env(tmp_path)
+    env["BRR_WORK_TREE"] = str(tmp_path)
+
+    first, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    # First boundary renders anyway (ambient's own first-render rule) and
+    # establishes the notes-health baseline (finding_sets[0] == [] — no line).
+    assert "surface-root-unresolved" not in _inject_text(first)
+
+    # Second call: identical portal snapshot (same token, budget/quota
+    # unmoved) — nothing but notes-health changed.
+    second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert "surface-root-unresolved" in _inject_text(second)
+    assert calls["n"] == 2
