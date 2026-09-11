@@ -707,7 +707,7 @@ def nearest(query: str, *, limit: int = 4) -> list[Emote]:
 
 
 def glyph(name: str) -> str | None:
-    """Base-frame glyph for *name*, or ``None`` if the handle is unknown.
+    """Resting-frame glyph for *name*, or ``None`` if the handle is unknown.
 
     The rendering path, and the seam this module owes its one non-resident
     caller: ``hooks._emote_glyph`` calls exactly this, to prefix the
@@ -715,10 +715,25 @@ def glyph(name: str) -> str | None:
     resolves through :func:`lookup` for the same reason ``sequences_of``
     does — one function decides what a handle means, and every reader
     goes through it.
+
+    Returns :attr:`Emote.resting_frame`, not ``frames[0]``. Before the
+    2026-09-11 rework these were the same thing to ask; after it they
+    are not — ``frames[0]`` is the shared *animation base* (identical
+    across most of the vocabulary on purpose, see :attr:`Emote.resting_frame`'s
+    own docstring), and a still surface asking this function "which face
+    is this" wants the word's own resting look, not the base every
+    animation opens on. Every non-resident-facing still (the bar
+    preamble, the CLI mood echoes, the dashboard's daemon-mood glyph)
+    reads through here, so fixing it here fixes all of them at once — the
+    six words whose ``frames[0]`` was ``REST_GLYPH`` used to render as no
+    face at all on every one of these surfaces before this returned
+    ``resting_frame``. Callers that explicitly want the animation base
+    (playing the sequence, not resting on it) read ``.frames[0]`` off the
+    ``Emote`` directly, e.g. via :func:`sequences_of`.
     """
 
     emote = lookup(name)
-    return emote.frames[0] if emote else None
+    return emote.resting_frame if emote else None
 
 
 def for_telemetry(state: str) -> Emote | None:

@@ -3012,7 +3012,7 @@ def _do_mood(
         )
         return f"mood {feeling} ✗ no match{tail}", False
     do_mod.write_mood(outbox_dir, resolved.name, note)
-    glyph = resolved.frames[0] if resolved.frames else resolved.name
+    glyph = resolved.resting_frame if resolved.frames else resolved.name
     return f"mood {glyph} {resolved.name} ✓", True
 
 
