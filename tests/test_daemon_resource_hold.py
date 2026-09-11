@@ -384,10 +384,13 @@ class TestResidentHoldDirective:
             event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
         )
 
+        # #1890 redo: a resident `hold:` with no measured wall is refused.
+        # The run still lands held — on the daemon's own turn-end park,
+        # never on the resident's reason or condition.
         assert task.status == resource_hold.RUN_STATUS
         hold = task.meta["resource_hold"]
-        assert hold["reason"] == "near weekly quota"
-        assert hold["resume_condition"] == resource_hold.RESUME_OPERATOR
+        assert hold["reason"] == resource_hold.REASON_TURN_ENDED
+        assert hold["resume_condition"] == resource_hold.RESUME_ANY
 
 
 class TestHeldRunsForRepo:
