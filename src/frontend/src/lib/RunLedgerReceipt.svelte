@@ -85,7 +85,20 @@
 							     2026-07-09, must never be silent again). -->
 							<p class="truncate font-mono text-ink-quiet">
 								{runner}
-								{#if row.core_mismatch === false}
+								{#if row.runner_substituted_from}
+									<!-- #1929: brr swapped Shells mid-run. This branch comes
+									     first because after a fallback `core_mismatch` is
+									     `false` — the manifest's expected core was rewritten
+									     to the substitute — so the pin-attestation branches
+									     below would render the ✓ on exactly the run that
+									     changed author. A swap is never "as asked". -->
+									<span
+										class="rounded bg-amber-950/70 px-1 text-amber-300"
+										title={row.substitution_reason ??
+											'brr moved this run to another Runner after an operational failure'}
+										>⚙ fell back from {row.runner_substituted_from}</span
+									>
+								{:else if row.core_mismatch === false}
 									<!-- Amber, not green: `statusPalette.ts` excludes the
 									     hue outright, and the meaning here is carried by the
 									     contrast with the red badge in the sibling branch, not
@@ -107,7 +120,12 @@
 							     say a pin was broken but never what broke it, which
 							     is exactly the blind spot that cost three days of
 							     guesswork (2026-07-13..16). Null on clean runs. -->
-							{#if row.core_mismatch && row.substitution_reason}
+							<!-- Fires for either route to a substitution: a pin the
+							     Shell did not respect (`core_mismatch`), or brr's own
+							     mid-run Runner swap (`runner_substituted_from`). Gating
+							     this on `core_mismatch` alone hid the reason on every
+							     dispatch fallback, which is the case that has one. -->
+							{#if (row.core_mismatch || row.runner_substituted_from) && row.substitution_reason}
 								<p class="truncate font-mono text-red-400/80" title={row.substitution_reason}>
 									{row.substitution_reason}
 								</p>

@@ -1457,6 +1457,15 @@ class RunLedgerRowIn(BaseModel):
     # substitution display reads this (`runLedger.ts`); a row without it
     # renders as "dispatched as asked" even when it wasn't.
     substitution_reason: str | None = None
+    # #1929: the Runner that *died*, when brr swapped Shells mid-run. Without
+    # it `substitution_reason` is the only evidence a swap happened, and it is
+    # read from the Claude result envelope — which a non-Claude substitute
+    # never writes, and a fallback crosses failure domains by construction, so
+    # the substitute is usually not Claude. The local ledger also keeps the
+    # full `runner_substitutions` list; that stays host-side (see the
+    # mirror-parity guard's WITHHELD note) because these two fields carry the
+    # fact and the reason, and a nested audit list has no cloud reader.
+    runner_substituted_from: str | None = None
     # #743's five-value channel attribution ("gate-sole" / "dispatch-edge" /
     # …) — debug detail, mirrored so the receipt a human drills into agrees
     # with the local ledger.
