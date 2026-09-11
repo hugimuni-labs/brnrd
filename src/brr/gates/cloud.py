@@ -393,7 +393,7 @@ def _token_path(state_dir: Path) -> Path:
 
 def _write_token(state_dir: Path, token: str) -> None:
     """THE lawful writer of the bearer token's on-disk location."""
-    _atomic_write_private(_token_path(state_dir), token)
+    _atomic_write_private(_token_path(state_dir), token)  # noqa: F821 — bound by the _COMPAT_NAMES re-export above
 
 
 def _read_token(state_dir: Path, raw_state: dict) -> str | None:
@@ -881,9 +881,9 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         # vanished, the restart didn't help, the daemon looked healthy).
         # The poll loop below re-attempts registration once it gets through.
         print(f"[brnrd:cloud] register failed: {e}, will retry")
-    _try_refresh_publishing_credential(state, force=True, brr_dir=brr_dir)
+    _try_refresh_publishing_credential(state, force=True, brr_dir=brr_dir)  # noqa: F821 — bound by the _COMPAT_NAMES re-export above
     threading.Thread(
-        target=_dashboard_publish_loop,
+        target=_dashboard_publish_loop,  # noqa: F821 — bound by the _COMPAT_NAMES re-export above
         # #1396/#1437: this run's own responses_dir, not the fixed
         # `brr_dir / "responses"` layout — account mode's real value
         # diverges (see `_dashboard_publish_tick`'s docstring).
@@ -895,7 +895,7 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     auth_backoff = _AUTH_RETRY_MIN_S
     while True:
         try:
-            _try_refresh_publishing_credential(_load_state(brr_dir), brr_dir=brr_dir)
+            _try_refresh_publishing_credential(_load_state(brr_dir), brr_dir=brr_dir)  # noqa: F821 — bound by the _COMPAT_NAMES re-export above
             _loop_once(brr_dir, inbox_dir, responses_dir)
             runtime.record_loop_health(brr_dir, "cloud", ok=True)
             backoff = 1

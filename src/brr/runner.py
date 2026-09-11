@@ -31,7 +31,16 @@ import tomllib
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
+
+# The names below are used only inside *string* annotations, which never
+# execute — so a missing import here is invisible at runtime and a lie to
+# anything that resolves them (`typing.get_type_hints`, an IDE, a reader).
+# Imported under TYPE_CHECKING so the annotation is true without paying an
+# import cycle, and so `ruff --select F821` has nothing left to report but
+# a genuine undefined name.
+if TYPE_CHECKING:
+    from .runner_select import RunnerProfile
 
 from . import runner_failures
 from .cli import brnrd_cmd
