@@ -876,6 +876,51 @@ def read_records_for_correspondent(
     return _dedupe_woven_records(out)
 
 
+def unread_pile(
+    brr_dir: Path,
+    key: str,
+    correspondent_key: str | None,
+) -> dict[str, int] | None:
+    """Resident deliveries to *key* since *correspondent_key*'s last inbound word.
+
+    ``{"count": N, "bytes": M}`` — walks the merged, deduped record stream
+    (:func:`read_records_for_correspondent`) oldest-first, resetting to zero
+    on every inbound ``kind == "event"`` record carrying this same
+    ``correspondent_key`` (the identity :func:`correspondent_key_for_event`
+    already recognises as "the correspondent talking" — a schedule firing or
+    spawn completion never resets it, same filter :func:`quiet_seconds` in
+    ``correspondent.py`` uses), then counting every dialogue delivery
+    (:data:`_DIALOGUE_ARTIFACT_KINDS`) after that point. A thread with no
+    inbound event yet counts every delivery since the beginning — there is
+    nothing to reset off, so "since last inbound" is "since the thread
+    opened".
+
+    ``None`` when there is no correspondent identity at all — an unread
+    pile is a fact about a specific person, not a thread nobody has been
+    identified on (mirrors :func:`brr.correspondent.facet_input`'s own
+    ``None`` gate).
+    """
+    if not correspondent_key:
+        return None
+    count = 0
+    total_bytes = 0
+    for record in read_records_for_correspondent(brr_dir, key, correspondent_key):
+        if (
+            record.get("kind") == "event"
+            and record.get("correspondent_key") == correspondent_key
+        ):
+            count = 0
+            total_bytes = 0
+            continue
+        if (
+            record.get("kind") == "artifact"
+            and record.get("artifact_kind") in _DIALOGUE_ARTIFACT_KINDS
+        ):
+            count += 1
+            total_bytes += len(str(record.get("body") or "").encode("utf-8"))
+    return {"count": count, "bytes": total_bytes}
+
+
 def read_recent_for_correspondent(
     brr_dir: Path,
     key: str,

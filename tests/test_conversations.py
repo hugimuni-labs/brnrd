@@ -427,6 +427,56 @@ def test_read_recent_for_correspondent_merges_sibling_channels(tmp_path):
     assert [r.get("conversation_key") for r in records] == [native_key, cloud_key]
 
 
+# ── unread_pile (#1914) ──────────────────────────────────────────────
+
+
+def test_unread_pile_counts_deliveries_since_the_last_inbound(tmp_path):
+    inbound = {
+        "id": "evt-in-1",
+        "source": "telegram",
+        "body": "hey",
+        "telegram_chat_id": 10,
+        "telegram_user_id": 42,
+    }
+    key = conversations.conversation_key_for_event(inbound)
+    correspondent_key = conversations.correspondent_key_for_event(inbound)
+    conversations.append_event(tmp_path, key, inbound)
+    conversations.append_artifact(
+        tmp_path, key, kind="response", path="r1", body="a" * 100,
+    )
+    conversations.append_artifact(
+        tmp_path, key, kind="interim_response", path="r2", body="b" * 24,
+    )
+
+    pile = conversations.unread_pile(tmp_path, key, correspondent_key)
+    assert pile == {"count": 2, "bytes": 124}
+
+
+def test_unread_pile_resets_on_a_fresh_inbound_message(tmp_path):
+    first = {
+        "id": "evt-in-1",
+        "source": "telegram",
+        "body": "hey",
+        "telegram_chat_id": 10,
+        "telegram_user_id": 42,
+    }
+    key = conversations.conversation_key_for_event(first)
+    correspondent_key = conversations.correspondent_key_for_event(first)
+    conversations.append_event(tmp_path, key, first)
+    conversations.append_artifact(
+        tmp_path, key, kind="response", path="r1", body="a" * 50,
+    )
+    second = {**first, "id": "evt-in-2", "body": "still there?"}
+    conversations.append_event(tmp_path, key, second)
+
+    pile = conversations.unread_pile(tmp_path, key, correspondent_key)
+    assert pile == {"count": 0, "bytes": 0}
+
+
+def test_unread_pile_none_with_no_correspondent_identity(tmp_path):
+    assert conversations.unread_pile(tmp_path, "schedule:default", None) is None
+
+
 # ── Cross-thread weave dedup (#338) ──────────────────────────────────
 
 

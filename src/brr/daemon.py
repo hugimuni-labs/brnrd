@@ -7213,6 +7213,7 @@ def _write_live_portal_state(
             inbox_dir,
             thread_key=_task_thread_key(task),
             correspondent_key=_task_correspondent_key(task),
+            brr_dir=brr_dir,
         )
         await_state, hold_facet_input = _hold_ratio_facet(
             task, await_state, cfg, outbox_dir, allowance_facet_input,

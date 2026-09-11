@@ -7515,6 +7515,34 @@ def test_correspondent_chip_rides_the_bar_beside_the_siblings_count():
     assert "him: quiet 25m" in line
 
 
+def test_correspondent_chip_carries_the_unread_pile(): # #1914
+    chip = hooks._correspondent_chip(
+        _correspondent_resources(
+            quiet_seconds=3600, read=None, unread_count=3, unread_bytes=5324,
+        )
+    )
+    assert chip == "him: quiet 1h · 3 unread · 5.2KB"
+
+
+def test_correspondent_chip_unread_pile_bypasses_the_quiet_floor(): # #1914
+    # A burst of unread messages matters even seconds after the person spoke
+    # last — the chip must not wait for the quiet floor to say so.
+    chip = hooks._correspondent_chip(
+        _correspondent_resources(
+            quiet_seconds=5, read=None, unread_count=2, unread_bytes=1024,
+        )
+    )
+    assert chip == "him: 2 unread · 1.0KB"
+
+
+def test_correspondent_chip_zero_unread_is_not_news(): # #1914
+    assert hooks._correspondent_chip(
+        _correspondent_resources(
+            quiet_seconds=42, read=None, unread_count=0, unread_bytes=0,
+        )
+    ) is None
+
+
 def test_room_pin_is_echoed_each_boundary_never_parsed(tmp_path):
     """`.room` (evt-…-dfxc): the resident's own note on how to talk now
     rides the bar verbatim; absent or blank ⇒ no segment."""
