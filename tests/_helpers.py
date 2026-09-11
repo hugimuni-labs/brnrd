@@ -25,6 +25,22 @@ from brr import envs
 from brr.runner import RunnerResult
 
 
+# ── prose assertions ────────────────────────────────────────────────
+
+
+def _says(haystack: str, phrase: str) -> bool:
+    """Whitespace-insensitive containment for prose contracts.
+
+    A prompt guard must assert the *rule*, never the line wrap that happened
+    to carry it. Pinning a literal ``"when none is\n  available"`` makes any
+    reflow read as a deleted rule — a guard that fires for a non-reason is a
+    guard that stops being read. Collapse runs of whitespace on both sides
+    and compare. Machine-parsed strings (JSON keys, frontmatter, CLI syntax)
+    keep their exact pins; this is for sentences.
+    """
+    return " ".join(phrase.split()) in " ".join(haystack.split())
+
+
 # ── git fixtures ────────────────────────────────────────────────────
 
 

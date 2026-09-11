@@ -12,6 +12,7 @@ import time
 
 import pytest
 
+from _helpers import _says
 from brr import card, hooks, portals
 
 
@@ -388,7 +389,7 @@ def test_post_tool_pending_sermon_compresses_on_unchanged_second_boundary(tmp_pa
     _portal(tmp_path, token="t1", pending=1, events=events)
     out1, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx1 = out1["hookSpecificOutput"]["additionalContext"]
-    assert "Address each below with an `event:` reply" in ctx1
+    assert _says(ctx1, "Address each below with an `event:` reply")
 
     _portal(tmp_path, token="t2", pending=1, events=events)
     out2, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
@@ -397,7 +398,7 @@ def test_post_tool_pending_sermon_compresses_on_unchanged_second_boundary(tmp_pa
     if "hookSpecificOutput" in out2:
         ctx2 = out2["hookSpecificOutput"]["additionalContext"]
         assert "Address each below" not in ctx2
-        assert "event:`/`note:` each before closeout" not in ctx2
+        assert not _says(ctx2, "event:`/`note:` each before closeout")
 
 
 def test_post_tool_pending_sermon_full_again_on_a_new_event_id(tmp_path):
@@ -417,7 +418,7 @@ def test_post_tool_pending_sermon_full_again_on_a_new_event_id(tmp_path):
     _portal(tmp_path, token="t3", pending=2, events=events3)
     out3, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx3 = out3["hookSpecificOutput"]["additionalContext"]
-    assert "Address each below with an `event:` reply" in ctx3
+    assert _says(ctx3, "Address each below with an `event:` reply")
 
 
 def test_pending_set_changed_tracks_ids_and_count():
@@ -467,10 +468,10 @@ def test_format_delta_pending_sermon_form_follows_pending_set_changed():
     # With event_seen=None, the event is "new" on both calls, so event
     # rows render. Only the instruction sentence differs.
     no_sentence = hooks.format_delta(payload, pending_set_changed=False)
-    assert "Address each below with an `event:` reply" in full
+    assert _says(full, "Address each below with an `event:` reply")
     assert "Address each below" not in no_sentence
     # The compact sentence is gone — the pending chip carries the count.
-    assert "event:`/`note:` each before closeout" not in no_sentence
+    assert not _says(no_sentence, "event:`/`note:` each before closeout")
     # The event row itself still renders (new event in both cases).
     assert "evt-9" in no_sentence
 
@@ -483,7 +484,7 @@ def test_stop_surfaces_unpushed_and_modified_scm(tmp_path):
     )
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "2 commit(s) not pushed" in ctx
+    assert _says(ctx, "2 commit(s) not pushed")
     assert "3 modified file(s)" in ctx
     assert "brr/run-x" in ctx
 
@@ -495,7 +496,7 @@ def test_seed_surfaces_scm_when_dirty(tmp_path):
              "unpushed_commits": 1, "modified_files": 0},
     )
     out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
-    assert "1 commit(s) not pushed" in out["hookSpecificOutput"]["additionalContext"]
+    assert _says(out["hookSpecificOutput"]["additionalContext"], "1 commit(s) not pushed")
 
 
 def test_stop_silent_scm_when_clean(tmp_path):
@@ -600,7 +601,7 @@ def test_stop_briefing_carries_the_produce_manifest(tmp_path):
     )
     stop, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = stop["hookSpecificOutput"]["additionalContext"]
-    assert "your produce this run" in ctx
+    assert _says(ctx, "your produce this run")
     assert "\U0001f528 a1b2c3d do it \u2014 https://forge/c/a1b2c3d" in ctx
     assert "\U0001f500 PR #451 \u2014 https://forge/pr/451" in ctx
 
@@ -608,9 +609,7 @@ def test_stop_briefing_carries_the_produce_manifest(tmp_path):
     # repeating it at every tool boundary would be noise the reader learns to
     # skip.
     post, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
-    assert "your produce this run" not in (
-        (post.get("hookSpecificOutput") or {}).get("additionalContext") or ""
-    )
+    assert not _says((post.get("hookSpecificOutput") or {}).get("additionalContext") or "", "your produce this run")
 
 
 def test_produce_line_is_silent_when_empty(tmp_path):
@@ -675,7 +674,7 @@ def test_post_tool_surfaces_stale_card(tmp_path):
     )
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "card ## Now: last written 1 act ago (1 PR)" in ctx
+    assert _says(ctx, "card ## Now: last written 1 act ago (1 PR)")
     assert "rewrite .card" not in ctx
 
 
@@ -717,13 +716,13 @@ def test_seed_surfaces_resources_with_known_quota_and_gaps(tmp_path):
     out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert "resources:" in ctx
-    assert "quota=weekly 42% - resets 3d" in ctx
+    assert _says(ctx, "quota=weekly 42% - resets 3d")
     # The gaps read as named states with their reason, not a flat "unavailable".
-    assert "spend=unimplemented (no spend collector for this medium yet)" in ctx
+    assert _says(ctx, "spend=unimplemented (no spend collector for this medium yet)")
     assert "coexisting-runs=unimplemented" in ctx
-    assert "remote-scm=absent (no PR recorded for this branch yet)" in ctx
-    assert "correspondent=absent (no chat thread on this run)" in ctx
-    assert "allowance=unimplemented (not a strand-stack run)" in ctx
+    assert _says(ctx, "remote-scm=absent (no PR recorded for this branch yet)")
+    assert _says(ctx, "correspondent=absent (no chat thread on this run)")
+    assert _says(ctx, "allowance=unimplemented (not a strand-stack run)")
     assert "unavailable" not in ctx
 
 
@@ -742,7 +741,7 @@ def test_seed_surfaces_recorded_pr_posture(tmp_path):
     out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert "remote-scm=PR #207" in ctx
-    assert "quota=absent (no snapshot for this medium)" in ctx
+    assert _says(ctx, "quota=absent (no snapshot for this medium)")
 
 
 def test_post_tool_renders_resources_when_injection_fires(tmp_path):
@@ -792,8 +791,8 @@ def test_stop_flags_no_outbound_messages(tmp_path):
     _portal(tmp_path, token="t1", pending=0)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "nothing communicated on any thread yet" in ctx
-    assert "dispatches your final message" in ctx
+    assert _says(ctx, "nothing communicated on any thread yet")
+    assert _says(ctx, "dispatches your final message")
 
 
 def test_stop_reply_guard_silent_on_an_unaddressed_run(tmp_path):
@@ -803,8 +802,8 @@ def test_stop_reply_guard_silent_on_an_unaddressed_run(tmp_path):
     _portal(tmp_path, token="t1", pending=0, current_event=None)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "nothing communicated on any thread" not in ctx
-    assert "waking thread itself has no reply" not in ctx
+    assert not _says(ctx, "nothing communicated on any thread")
+    assert not _says(ctx, "waking thread itself has no reply")
 
 
 def test_stop_silent_on_outbound_when_something_sent(tmp_path):
@@ -815,8 +814,8 @@ def test_stop_silent_on_outbound_when_something_sent(tmp_path):
     )
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "nothing communicated on any thread" not in ctx
-    assert "waking thread itself has no reply" not in ctx
+    assert not _says(ctx, "nothing communicated on any thread")
+    assert not _says(ctx, "waking thread itself has no reply")
     assert "delivery so far" in ctx
 
 
@@ -833,8 +832,8 @@ def test_stop_informs_when_only_other_threads_answered(tmp_path):
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert "delivery so far" in ctx
-    assert "waking thread itself has no reply yet" in ctx
-    assert "nothing communicated on any thread" not in ctx
+    assert _says(ctx, "waking thread itself has no reply yet")
+    assert not _says(ctx, "nothing communicated on any thread")
 
 
 def test_stop_silent_when_gate_less_event_delivered_elsewhere(tmp_path):
@@ -860,8 +859,8 @@ def test_stop_silent_when_gate_less_event_delivered_elsewhere(tmp_path):
     )
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "waking thread itself has no reply yet" not in ctx
-    assert "nothing communicated on any thread" not in ctx
+    assert not _says(ctx, "waking thread itself has no reply yet")
+    assert not _says(ctx, "nothing communicated on any thread")
 
 
 def test_stop_gate_less_and_silent_names_body_only_stdout(tmp_path):
@@ -876,14 +875,14 @@ def test_stop_gate_less_and_silent_names_body_only_stdout(tmp_path):
     _portal(tmp_path, token="t1", pending=0, current_event_replyable=False)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "nothing communicated on any thread yet" in ctx
-    assert "no gate owns this waking event" in ctx
+    assert _says(ctx, "nothing communicated on any thread yet")
+    assert _says(ctx, "no gate owns this waking event")
     assert "body/message store only" in ctx
-    assert "a configured user gate if this run has something to say" in ctx
+    assert _says(ctx, "a configured user gate if this run has something to say")
     assert "gate: telegram" not in ctx
     assert "`gate:" not in ctx
     # The addressed-run promise must not leak into the gate-less wording.
-    assert "dispatches your final message to the waking thread" not in ctx
+    assert not _says(ctx, "dispatches your final message to the waking thread")
 
 
 def test_stop_gate_less_and_silent_names_the_resolved_gate(tmp_path):
@@ -900,8 +899,8 @@ def test_stop_gate_less_and_silent_names_the_resolved_gate(tmp_path):
     )
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "no gate owns this waking event" in ctx
-    assert "gate (`gate: cloud`) if this run has something to say" in ctx
+    assert _says(ctx, "no gate owns this waking event")
+    assert _says(ctx, "gate (`gate: cloud`) if this run has something to say")
     assert "telegram" not in ctx
 
 
@@ -918,7 +917,7 @@ def test_stop_gate_less_and_delivered_names_the_resolved_gate(tmp_path):
         },
     )
     assert _ROUTING in ctx
-    assert "rides a `gate: cloud` delivery" in ctx
+    assert _says(ctx, "rides a `gate: cloud` delivery")
     assert "telegram" not in ctx
 
 
@@ -936,7 +935,7 @@ def test_stop_gate_less_and_delivered_names_no_gate_when_unresolvable(tmp_path):
         },
     )
     assert _ROUTING in ctx
-    assert "rides a configured gate delivery" in ctx
+    assert _says(ctx, "rides a configured gate delivery")
     assert "telegram" not in ctx
     assert "`gate:" not in ctx
 
@@ -953,8 +952,8 @@ def test_stop_gate_name_resolution_does_not_move_the_firing_arm(tmp_path):
             "gate": "cloud", "already_delivered": False, "reason": None,
         },
     )
-    assert "dispatches your final message to the waking thread" in ctx
-    assert "no gate owns this waking event" not in ctx
+    assert _says(ctx, "dispatches your final message to the waking thread")
+    assert not _says(ctx, "no gate owns this waking event")
     assert _ROUTING not in ctx
 
 
@@ -965,9 +964,9 @@ def test_stop_gate_owned_event_keeps_addressed_wording(tmp_path):
     _portal(tmp_path, token="t1", pending=0, current_event_replyable=True)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "nothing communicated on any thread yet" in ctx
-    assert "dispatches your final message to the waking thread" in ctx
-    assert "no gate owns this waking event" not in ctx
+    assert _says(ctx, "nothing communicated on any thread yet")
+    assert _says(ctx, "dispatches your final message to the waking thread")
+    assert not _says(ctx, "no gate owns this waking event")
 
     _portal(
         tmp_path, token="t2", pending=0, current_event_replyable=True,
@@ -976,7 +975,7 @@ def test_stop_gate_owned_event_keeps_addressed_wording(tmp_path):
     )
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "waking thread itself has no reply yet" in ctx
+    assert _says(ctx, "waking thread itself has no reply yet")
 
 
 def test_stop_missing_replyable_key_keeps_addressed_behavior(tmp_path):
@@ -989,8 +988,8 @@ def test_stop_missing_replyable_key_keeps_addressed_behavior(tmp_path):
     path.write_text(json.dumps(payload), encoding="utf-8")
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "dispatches your final message to the waking thread" in ctx
-    assert "no gate owns this waking event" not in ctx
+    assert _says(ctx, "dispatches your final message to the waking thread")
+    assert not _says(ctx, "no gate owns this waking event")
 
 
 # ── The gate-less routing fact, all four cells (#728) ────────────────────
@@ -1033,15 +1032,15 @@ def test_stop_gate_less_and_delivered_states_the_routing_fact(tmp_path):
         outbound=_DELIVERED,
     )
     assert _ROUTING in ctx
-    assert "no gate owns this waking event" in ctx
-    assert "the closeout is not exempt" in ctx
+    assert _says(ctx, "no gate owns this waking event")
+    assert _says(ctx, "the closeout is not exempt")
     # Prior delivery is named as irrelevant rather than treated as a clear:
     # that is the whole correction. A discriminator on "did a gate delivery
     # happen" would have gone quiet on exactly this run.
-    assert "however much has already gone out" in ctx
+    assert _says(ctx, "however much has already gone out")
     # And it must not resurrect either arm the older tests fence off here.
-    assert "nothing communicated on any thread" not in ctx
-    assert "waking thread itself has no reply yet" not in ctx
+    assert not _says(ctx, "nothing communicated on any thread")
+    assert not _says(ctx, "waking thread itself has no reply yet")
 
 
 def test_stop_gate_less_and_silent_keeps_the_fact_in_the_silence_arm(tmp_path):
@@ -1049,7 +1048,7 @@ def test_stop_gate_less_and_silent_keeps_the_fact_in_the_silence_arm(tmp_path):
     # on its own line in this cell would be the duplication the latch exists
     # to prevent, so the dedicated line stays out of the way.
     ctx = _stop(tmp_path, token="t1", current_event_replyable=False)
-    assert "no gate owns this waking event" in ctx
+    assert _says(ctx, "no gate owns this waking event")
     assert "body/message store only" in ctx
     assert _ROUTING not in ctx
 
@@ -1062,13 +1061,13 @@ def test_stop_gate_owned_and_delivered_states_no_routing_fact(tmp_path):
         outbound=_DELIVERED,
     )
     assert _ROUTING not in ctx
-    assert "waking thread itself has no reply yet" in ctx
+    assert _says(ctx, "waking thread itself has no reply yet")
 
 
 def test_stop_gate_owned_and_silent_states_no_routing_fact(tmp_path):
     ctx = _stop(tmp_path, token="t1", current_event_replyable=True)
     assert _ROUTING not in ctx
-    assert "dispatches your final message to the waking thread" in ctx
+    assert _says(ctx, "dispatches your final message to the waking thread")
 
 
 def test_gate_less_routing_fact_is_stated_once_per_run(tmp_path):
@@ -1098,7 +1097,7 @@ def test_gate_less_silence_arm_primes_the_routing_latch(tmp_path):
     # silence arm; delivering and stopping again must not tell it twice in
     # different words. One fact, one statement, whichever arm carried it.
     first = _stop(tmp_path, token="t1", current_event_replyable=False)
-    assert "no gate owns this waking event" in first
+    assert _says(first, "no gate owns this waking event")
     second = _stop(
         tmp_path, token="t2", current_event_replyable=False,
         outbound=_DELIVERED,
@@ -1112,7 +1111,7 @@ def test_gate_less_silence_warning_survives_the_routing_latch(tmp_path):
     # on its own — so it must keep re-rendering at every closeout.
     _stop(tmp_path, token="t1", current_event_replyable=False)
     second = _stop(tmp_path, token="t2", current_event_replyable=False)
-    assert "nothing communicated on any thread yet" in second
+    assert _says(second, "nothing communicated on any thread yet")
 
 
 # ── #1142: the "no reply yet" line's consecutive-firing streak ──────────
@@ -1132,7 +1131,7 @@ def test_stop_no_reply_streak_counts_and_escalates(tmp_path):
     # Firing #1: informative, state-description wording — same sentence the
     # pre-#1142 tests above already pin, now prefixed with the count.
     first = _stop(tmp_path, token="t1", outbound=_DELIVERED)
-    assert "stop boundary #1 · 0 prior terminal messages consumed" in first
+    assert _says(first, "stop boundary #1 · 0 prior terminal messages consumed")
     assert _NO_REPLY_YET in first
     assert _VERDICT not in first
 
@@ -1143,7 +1142,7 @@ def test_stop_no_reply_streak_counts_and_escalates(tmp_path):
             "replies_current": 0, "replies_other": 0, "outbound_messages": 2,
         },
     )
-    assert "stop boundary #2 · 1 prior terminal message consumed" in second
+    assert _says(second, "stop boundary #2 · 1 prior terminal message consumed")
     assert _VERDICT in second
     assert "gate: <name>" in second
 
@@ -1196,7 +1195,7 @@ def test_stop_no_reply_streak_resets_when_replied(tmp_path):
             "replies_current": 0, "replies_other": 0, "outbound_messages": 3,
         },
     )
-    assert "stop boundary #1 · 0 prior terminal messages consumed" in fresh
+    assert _says(fresh, "stop boundary #1 · 0 prior terminal messages consumed")
     assert _VERDICT not in fresh
 
 
@@ -1218,7 +1217,7 @@ def test_stop_no_reply_streak_resets_on_new_waking_event(tmp_path):
             "replies_current": 0, "replies_other": 0, "outbound_messages": 3,
         },
     )
-    assert "stop boundary #1 · 0 prior terminal messages consumed" in third
+    assert _says(third, "stop boundary #1 · 0 prior terminal messages consumed")
     assert _VERDICT not in third
 
 
@@ -1274,7 +1273,7 @@ def test_content_dedupe_never_reaches_the_closeout_channel(tmp_path):
     env = _env(tmp_path)
     first, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
     body = first["hookSpecificOutput"]["additionalContext"]
-    assert "nothing communicated on any thread yet" in body
+    assert _says(body, "nothing communicated on any thread yet")
 
     # Same portal, new token, byte-identical render: it lands again.
     _portal(tmp_path, token="t2", pending=0, current_event_replyable=False)
@@ -1377,7 +1376,7 @@ def test_stop_folds_pending_body_verbatim(tmp_path):
     }])
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     assert out["decision"] == "block"
-    assert "please also rename the widget" in out["reason"]
+    assert _says(out["reason"], "please also rename the widget")
     assert "folded-in follow-up" in out["reason"]
 
 
@@ -1405,12 +1404,8 @@ def test_stop_does_not_nag_for_self_retiring_spawn_completion(tmp_path):
     assert code == 0
     assert out.get("decision") != "block"
     assert "0 pending event(s)" in out["hookSpecificOutput"]["additionalContext"]
-    assert "1 finished spawn(s) observed" in (
-        out["hookSpecificOutput"]["additionalContext"]
-    )
-    assert "no address needed; will retire at run end" in (
-        out["hookSpecificOutput"]["additionalContext"]
-    )
+    assert _says(out["hookSpecificOutput"]["additionalContext"], "1 finished spawn(s) observed")
+    assert _says(out["hookSpecificOutput"]["additionalContext"], "no address needed; will retire at run end")
 
 
 def test_stop_nag_selects_action_event_beside_finished_spawn(tmp_path):
@@ -1434,11 +1429,11 @@ def test_stop_nag_selects_action_event_beside_finished_spawn(tmp_path):
 
     assert code == 0
     assert out["decision"] == "block"
-    assert "please answer the actual follow-up" in out["reason"]
-    assert "child completion is a self-retiring fact" not in out["reason"]
+    assert _says(out["reason"], "please answer the actual follow-up")
+    assert not _says(out["reason"], "child completion is a self-retiring fact")
     context = out["hookSpecificOutput"]["additionalContext"]
     assert "1 pending event(s)" in context
-    assert "1 finished spawn(s) observed" in context
+    assert _says(context, "1 finished spawn(s) observed")
 
 
 # ── Pending-event letter chrome ──────────────────────────────────────────
@@ -1512,9 +1507,9 @@ def test_pending_long_body_renders_first_line_plus_accounting(tmp_path):
     }])
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "⏰ evt-1785520000000000001-tick · schedule · the-only-tick" in ctx
-    assert "## the only tick" in ctx
-    assert "KB total · full body: " in ctx
+    assert _says(ctx, "⏰ evt-1785520000000000001-tick · schedule · the-only-tick")
+    assert _says(ctx, "## the only tick")
+    assert _says(ctx, "KB total · full body: ")
     assert str(tmp_path / "inbox.json") in ctx
     assert "DEEP-TAIL-MARKER" not in ctx
 
@@ -1542,7 +1537,7 @@ def test_seen_suppression_collapses_repeat_boundaries(tmp_path):
     if "hookSpecificOutput" in second:
         ctx2 = second["hookSpecificOutput"]["additionalContext"]
         assert "seen ×" not in ctx2, "seen row must not appear in bar path"
-        assert "## the only tick" not in ctx2, "body must not re-render in bar path"
+        assert not _says(ctx2, "## the only tick"), "body must not re-render in bar path"
         bar2 = ctx2.splitlines()[0]
         assert "pending 1" in bar2, "count chip must appear on bar line"
 
@@ -1552,7 +1547,7 @@ def test_seen_suppression_collapses_repeat_boundaries(tmp_path):
     if "hookSpecificOutput" in third:
         ctx3 = third["hookSpecificOutput"]["additionalContext"]
         assert "seen ×" not in ctx3
-        assert "## the only tick" not in ctx3
+        assert not _says(ctx3, "## the only tick")
 
     # The closeout guard (Stop) still surfaces the full list — load-bearing.
     stop, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
@@ -1590,10 +1585,10 @@ def test_stop_fold_in_of_a_schedule_firing_is_labelled_honestly(tmp_path):
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     assert out["decision"] == "block"
     reason = out["reason"]
-    assert "schedule firing folded in" in reason
-    assert "not a user message" in reason
+    assert _says(reason, "schedule firing folded in")
+    assert _says(reason, "not a user message")
     assert "from the user" not in reason
-    assert "KB total · full body: " in reason
+    assert _says(reason, "KB total · full body: ")
     assert "DEEP-TAIL-MARKER" not in reason
 
 
@@ -1605,12 +1600,12 @@ def test_stop_fold_in_of_an_already_shown_body_is_one_line(tmp_path):
     env = _env(tmp_path)
     _portal(tmp_path, token="t1", pending=1, events=[ev])
     first, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    assert "please rename the widget" in first["hookSpecificOutput"]["additionalContext"]
+    assert _says(first["hookSpecificOutput"]["additionalContext"], "please rename the widget")
 
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
     assert out["decision"] == "block"
-    assert "✉ evt-2 · telegram · seen ×1 · unchanged" in out["reason"]
-    assert "please rename the widget" not in out["reason"]
+    assert _says(out["reason"], "✉ evt-2 · telegram · seen ×1 · unchanged")
+    assert not _says(out["reason"], "please rename the widget")
 
 
 def test_source_glyphs_cover_the_channel_vocabulary():
@@ -1769,11 +1764,9 @@ def test_render_event_rows_collapses_a_burst_into_one_turn():
 
     # One collapsed row, not three chrome rows — the count, both endpoints
     # of the age span, and the actual ids for the `event:`/`also:` reply.
-    assert "✉ 3 from Gurio (@StasisRush) · 20s–2m ·" in joined
-    assert (
-        "— one turn; reply evt-1785520000000000030-cccc with also: "
-        "evt-1785520000000000010-aaaa, evt-1785520000000000020-bbbb"
-    ) in joined
+    assert _says(joined, "✉ 3 from Gurio (@StasisRush) · 20s–2m ·")
+    assert _says(joined, "— one turn; reply evt-1785520000000000030-cccc with also: "
+        "evt-1785520000000000010-aaaa, evt-1785520000000000020-bbbb")
     assert joined.count("evt-1785520000000000010-aaaa") == 1
     assert joined.count("evt-1785520000000000020-bbbb") == 1
 
@@ -1826,8 +1819,8 @@ def test_post_tool_bar_collapses_a_burst_row(tmp_path):
     _portal(tmp_path, token="t1", pending=3, events=burst)
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = _inject_text(out)
-    assert "3 from Gurio (@StasisRush)" in ctx
-    assert "one turn; reply evt-burst-3 with also: evt-burst-1, evt-burst-2" in ctx
+    assert _says(ctx, "3 from Gurio (@StasisRush)")
+    assert _says(ctx, "one turn; reply evt-burst-3 with also: evt-burst-1, evt-burst-2")
 
 
 def test_session_start_seed_caps_pending_events_at_40(tmp_path):
@@ -1915,7 +1908,7 @@ def test_missing_portal_state_seed_reports_unknown_pending_count(tmp_path):
 
     assert code == 0
     rendered = out["hookSpecificOutput"]["additionalContext"]
-    assert "could not count pending event(s)" in rendered
+    assert _says(rendered, "could not count pending event(s)")
     assert "0 pending event(s)" not in rendered
 
 
@@ -1926,7 +1919,7 @@ def test_malformed_portal_state_closeout_reports_unknown_pending_count(tmp_path)
 
     assert code == 0
     rendered = out["hookSpecificOutput"]["additionalContext"]
-    assert "could not count pending event(s)" in rendered
+    assert _says(rendered, "could not count pending event(s)")
     assert "0 pending event(s)" not in rendered
 
 
@@ -2430,7 +2423,7 @@ def test_pre_tool_control_file_refusal_does_not_recommend_git_work_tree(tmp_path
     # $GIT_WORK_TREE" — that recommendation must be gone here, even though
     # the reworded message still *names* $GIT_WORK_TREE to say it's the
     # wrong place.
-    assert "Rewrite the path relative to $GIT_WORK_TREE" not in reason
+    assert not _says(reason, "Rewrite the path relative to $GIT_WORK_TREE")
     assert str(outbox) in reason
 
 
@@ -2804,7 +2797,7 @@ def test_scm_blocks_missing_forge_handoff_when_pushed(tmp_path):
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
                             _armed_scm(tmp_path, repo))
     assert out["decision"] == "block"
-    assert "no PR or accepted `gate: forge` handoff" in out["reason"]
+    assert _says(out["reason"], "no PR or accepted `gate: forge` handoff")
 
 
 def test_scm_accepts_durable_forge_handoff_before_pr_exists(tmp_path):
@@ -2853,7 +2846,7 @@ def test_scm_names_forge_gate_route_only_when_armed(tmp_path):
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
     assert out["decision"] == "block"
     assert "gate: forge" in out["reason"]
-    assert "open the PR yourself" not in out["reason"]
+    assert not _says(out["reason"], "open the PR yourself")
 
 
 def test_scm_omits_forge_gate_route_when_unarmed(tmp_path):
@@ -2868,7 +2861,7 @@ def test_scm_omits_forge_gate_route_when_unarmed(tmp_path):
     assert "BRR_FORGE_GATE" not in env
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
     assert out["decision"] == "block"
-    assert "open the PR yourself" in out["reason"]
+    assert _says(out["reason"], "open the PR yourself")
     assert "gate: forge" not in out["reason"]
 
 
@@ -2927,7 +2920,7 @@ def test_gate_blocks_when_the_tree_changed_and_no_receipt_exists(tmp_path):
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
                             _armed_gate(tmp_path, repo))
     assert out["decision"] == "block"
-    assert "the gate never ran" in out["reason"]
+    assert _says(out["reason"], "the gate never ran")
     # It names the repo's own command, never one brr invented.
     assert "python scripts/gate.py" in out["reason"]
 
@@ -3014,14 +3007,12 @@ def test_gate_blocks_when_the_tree_moved_while_the_gate_was_running(tmp_path):
     # wrong cause is worse than none, so the two older sentences must not
     # appear — neither is true here.
     assert "written-mid-gate.py" in out["reason"]
-    assert "the gate never ran" not in out["reason"]
-    assert "a different tree than the one you are ending on" not in out["reason"]
+    assert not _says(out["reason"], "the gate never ran")
+    assert not _says(out["reason"], "a different tree than the one you are ending on")
     # Composition, not just content: the clause is placed as a whole sentence
     # and the next one starts cleanly after it.
-    assert (
-        "written-mid-gate.py changed during `python scripts/gate.py`, so no "
-        "leg ever saw it. The receipt's GREEN is about the tree"
-    ) in out["reason"]
+    assert _says(out["reason"], "written-mid-gate.py changed during `python scripts/gate.py`, so no "
+        "leg ever saw it. The receipt's GREEN is about the tree")
 
 
 def test_gate_silent_on_a_receipt_that_records_a_still_tree(tmp_path):
@@ -3110,11 +3101,9 @@ def test_gate_moved_tree_message_falls_back_to_the_referent_it_cannot_name(tmp_p
                             _armed_gate(tmp_path, repo))
     assert out["decision"] == "block"
     assert "diff_digest" in out["reason"]
-    assert (
-        "no path in `git status` changed during `python scripts/gate.py`, but "
+    assert _says(out["reason"], "no path in `git status` changed during `python scripts/gate.py`, but "
         "diff_digest did — content moved under a path that was already dirty "
-        "when the gate started. The receipt's GREEN is about the tree"
-    ) in out["reason"]
+        "when the gate started. The receipt's GREEN is about the tree")
     # The garble this shape exists to prevent, spelled out so a future edit
     # that reintroduces noun-vs-clause has to walk past it.
     assert "started changed" not in out["reason"]
@@ -3152,7 +3141,7 @@ def test_gate_treats_a_malformed_receipt_as_no_receipt(tmp_path):
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
                             _armed_gate(tmp_path, repo))
     assert out["decision"] == "block"
-    assert "the gate never ran" in out["reason"]
+    assert _says(out["reason"], "the gate never ran")
 
 
 def test_gate_a_receipt_for_a_different_tree_does_not_satisfy_this_one(tmp_path):
@@ -3172,7 +3161,7 @@ def test_gate_a_receipt_for_a_different_tree_does_not_satisfy_this_one(tmp_path)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
                             _armed_gate(tmp_path, repo))
     assert out["decision"] == "block"
-    assert "the gate never ran" in out["reason"]
+    assert _says(out["reason"], "the gate never ran")
     # And once `repo` gets its own entry beside `other`'s, both survive and
     # this guard reads only its own.
     _gate_receipt(tmp_path, repo)
@@ -3251,7 +3240,7 @@ def test_vigil_block_names_which_arming_was_missing(tmp_path):
     reason = out["reason"]
     assert "portal `await`" in reason
     assert "spawn:" in reason
-    assert "background shell command is not a continuation" in reason
+    assert _says(reason, "background shell command is not a continuation")
 
 
 def test_vigil_ignores_a_live_keepalive(tmp_path):
@@ -3276,7 +3265,7 @@ def test_linger_blocks_exit_while_the_horizon_is_still_live(tmp_path):
     _portal_await(tmp_path, resolved=False)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
     assert out["decision"] == "block"
-    assert "no completed portal wait" in out["reason"]
+    assert _says(out["reason"], "no completed portal wait")
 
 
 def test_linger_accepts_an_elapsed_horizon(tmp_path):
@@ -3525,7 +3514,7 @@ class TestStopRunBody:
         rendered = hooks.format_delta(self._payload(), stop=True, run_body=body)
 
         assert "your run body" in rendered
-        assert "The part that fell out of context." in rendered
+        assert _says(rendered, "The part that fell out of context.")
         assert "Landing it." in rendered
 
     def test_the_body_is_a_closeout_capsule_only(self):
@@ -3735,7 +3724,7 @@ def test_post_tool_bar_renders_armed_dated_letters():
         },
     ]})
     rendered = hooks.format_delta(payload, mood="smug_")
-    assert "⏲ 1 armed dated letter(s)" in rendered
+    assert _says(rendered, "⏲ 1 armed dated letter(s)")
     assert (
         "- ⏲ 2026-08-01T09:00:00Z · Ship the thing · "
         "premise: the release branch is still green"
@@ -3826,10 +3815,8 @@ def test_post_tool_surfaces_armed_dated_letters_end_to_end(tmp_path):
     assert code == 0
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert "armed dated letter" in ctx
-    assert (
-        "⏲ 2026-08-01T09:00:00Z · Ship the thing · "
-        "premise: the release branch is still green"
-    ) in ctx
+    assert _says(ctx, "⏲ 2026-08-01T09:00:00Z · Ship the thing · "
+        "premise: the release branch is still green")
 
 
 # ── Armed-letter obligation classification (#1209) ────────────────────────
@@ -3897,7 +3884,7 @@ def test_armed_entry_render_path_unaffected_by_obligation_horizon():
         {"id": "x", "when": "2026-12-25T09:00:00Z", "heading": "X",
          "at": time.time() + 6 * 3600},
     ])
-    assert "⏲ 2026-12-25T09:00:00Z · X" in rows[1]
+    assert _says(rows[1], "⏲ 2026-12-25T09:00:00Z · X")
 
 
 def test_armed_entry_is_due_helper_directly():
@@ -3956,7 +3943,7 @@ def test_seed_and_stop_render_mood_as_a_plain_prose_line(tmp_path):
     out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert "- mood: b·_·d hmn_" in ctx
-    assert "a mood worth showing is one the work moved" in ctx
+    assert _says(ctx, "a mood worth showing is one the work moved")
 
 
 def test_seed_says_so_when_the_mood_handle_did_not_resolve(tmp_path):
@@ -4346,7 +4333,7 @@ def test_render_bar_renders_the_draws_chip_beside_quota():
     line = hooks.format_delta(payload, rendered_chips={})
     assert line is not None
     assert "q S83" in line
-    assert "me 1.2m · ▷1 3.4m" in line
+    assert _says(line, "me 1.2m · ▷1 3.4m")
 
 
 def test_quota_chip_disambiguates_a_repeated_first_letter():
@@ -4445,7 +4432,7 @@ def test_mood_ask_fires_on_the_failure_edge_and_names_it(tmp_path):
         hooks.PHASE_POST_TOOL, _batch("Exit code 1"), _env(tmp_path)
     )
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "mood b·_·d fo.cus ← Bash ✗" in ctx
+    assert _says(ctx, "mood b·_·d fo.cus ← Bash ✗")
 
 
 def test_mood_ask_is_transition_stamped_not_per_pass(tmp_path):
@@ -4667,9 +4654,9 @@ def test_advisory_notice_is_readable_but_excluded_from_the_seed_briefing_count(
     _portal(tmp_path, token="t1", pending=0, notices=notices)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "notices: 0 directive(s) brnrd refused or dropped" in ctx
+    assert _says(ctx, "notices: 0 directive(s) brnrd refused or dropped")
     assert "+1 advisory" in ctx
-    assert "a note closes event evt-y8lx" in ctx
+    assert _says(ctx, "a note closes event evt-y8lx")
 
 
 # ── #716: `lifetime` splits standing environmental notices out of `!N` ───────
@@ -4750,7 +4737,7 @@ def test_seed_briefing_renders_the_standing_notice_separately_from_advisory(
     _portal(tmp_path, token="t1", pending=0, notices=notices)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "notices: 0 directive(s) brnrd refused or dropped" in ctx
+    assert _says(ctx, "notices: 0 directive(s) brnrd refused or dropped")
     assert "+1 standing" in ctx
     assert "advisory" not in ctx
     assert ".brr/runners.md" in ctx
@@ -4838,7 +4825,7 @@ def test_closeout_excludes_spawn_completed_from_obligation_count():
     # Must NOT demand address.
     assert "Address each" not in rendered
     # spawn_completed must appear as a distinct fact line, not an obligation.
-    assert "1 finished spawn(s) observed" in rendered
+    assert _says(rendered, "1 finished spawn(s) observed")
     assert "no address needed" in rendered
     # The event id should appear (visibility constraint #1).
     assert "evt-spawn-done" in rendered
@@ -4903,10 +4890,10 @@ def test_closeout_names_live_children_handed_to_next_run():
         "below would pass over someone else's edges"
     )
     rendered = hooks.format_delta(payload, stop=True)
-    assert "2 child run(s) still live" in rendered
+    assert _says(rendered, "2 child run(s) still live")
     assert "evt-child-b" in rendered
     assert "run-child-a" in rendered
-    assert "passes to the next run on this thread" in rendered
+    assert _says(rendered, "passes to the next run on this thread")
 
 
 def test_finished_spawn_outcomes_render_identically_at_both_boundaries():
@@ -5075,10 +5062,10 @@ def test_stop_spells_out_notice_text(tmp_path):
     )
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "notices: 1 directive(s) brnrd refused or dropped" in ctx
-    assert "no gate owns dispatch_message events" in ctx
+    assert _says(ctx, "notices: 1 directive(s) brnrd refused or dropped")
+    assert _says(ctx, "no gate owns dispatch_message events")
     # Stop is the last re-route boundary and says so; seed does not.
-    assert "last boundary that can re-route one" in ctx
+    assert _says(ctx, "last boundary that can re-route one")
 
 
 def test_seed_spells_out_notice_text_without_the_stop_clause(tmp_path):
@@ -5086,8 +5073,8 @@ def test_seed_spells_out_notice_text_without_the_stop_clause(tmp_path):
             notices=[_notice("spawn dropped: no inbox to queue into")])
     out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "spawn dropped: no inbox to queue into" in ctx
-    assert "last boundary that can re-route one" not in ctx
+    assert _says(ctx, "spawn dropped: no inbox to queue into")
+    assert not _says(ctx, "last boundary that can re-route one")
 
 
 def test_no_notices_stays_silent(tmp_path):
@@ -5182,7 +5169,7 @@ def test_census_renders_total_biggest_block_and_oldest_item(tmp_path):
     assert code == 0
     bar = _inject_text(out).splitlines()[0]
     assert "wake 113.0 KB" in bar
-    assert "top work-surface 24.1 KB" in bar
+    assert _says(bar, "top work-surface 24.1 KB")
     # The oldest item across every measured block, not the top block's own.
     assert "oldest 2026-07-25" in bar
 
@@ -5221,7 +5208,7 @@ def test_census_fields_degrade_one_at_a_time(tmp_path):
         hooks.PHASE_POST_TOOL, "{}", _score_env(tmp_path)
     )
     bar = _inject_text(out).splitlines()[0]
-    assert "top run-context-bundle 19.3 KB" in bar
+    assert _says(bar, "top run-context-bundle 19.3 KB")
     assert "wake " not in bar
     assert "oldest" not in bar
 
@@ -5280,7 +5267,7 @@ def test_census_omits_ledger_categories_when_no_entry_carries_authority(tmp_path
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _score_env(tmp_path))
     bar = _inject_text(out).splitlines()[0]
-    assert "wake 113.0 KB · top work-surface 24.1 KB · oldest 2026-07-25" in bar
+    assert _says(bar, "wake 113.0 KB · top work-surface 24.1 KB · oldest 2026-07-25")
 
 
 def test_census_flags_the_top_offender_past_the_warn_threshold(tmp_path):
@@ -5295,7 +5282,7 @@ def test_census_flags_the_top_offender_past_the_warn_threshold(tmp_path):
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _score_env(tmp_path))
     bar = _inject_text(out).splitlines()[0]
-    assert "identity 5.9 KB ⚠ work-surface" in bar
+    assert _says(bar, "identity 5.9 KB ⚠ work-surface")
 
 
 def test_census_stays_unflagged_under_the_warn_threshold(tmp_path):
@@ -6067,7 +6054,7 @@ def test_a_subagent_boundary_carries_none_of_the_parents_correspondence(tmp_path
     parent, _ = hooks.run_hook(
         hooks.PHASE_POST_TOOL, json.dumps(_PARENT_PAYLOAD), env)
     parent_text = parent["hookSpecificOutput"]["additionalContext"]
-    assert "merge the PR and deploy the batch" in parent_text
+    assert _says(parent_text, "merge the PR and deploy the batch")
     assert "evt-2" in parent_text
 
     child, code = hooks.run_hook(
@@ -6382,7 +6369,7 @@ def test_card_nudge_silent_while_a_wait_is_armed():
     # — the nudge speaks again.
     payload["await"] = {"armed": True, "resolved": True, "outcome": "event"}
     rendered = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
-    assert "card ## Now: last written 4 acts ago" in rendered
+    assert _says(rendered, "card ## Now: last written 4 acts ago")
 
 
 def test_card_nudge_silent_when_nothing_moved_since_the_last_write():
@@ -6519,8 +6506,8 @@ def test_stop_affirms_an_accepted_bolt_instead_of_nagging(tmp_path):
     _add_bolt_facet(tmp_path)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "bolt: accepted — the cut stands." in ctx
-    assert "declare this run's completion" not in ctx
+    assert _says(ctx, "bolt: accepted — the cut stands.")
+    assert not _says(ctx, "declare this run's completion")
 
 
 def test_stop_names_the_annotated_count_on_a_forced_accept(tmp_path):
@@ -6528,7 +6515,7 @@ def test_stop_names_the_annotated_count_on_a_forced_accept(tmp_path):
     _add_bolt_facet(tmp_path, annotated=2)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "bolt: accepted, annotated — 2 check(s) unresolved" in ctx
+    assert _says(ctx, "bolt: accepted, annotated — 2 check(s) unresolved")
 
 
 # ── w-54: the line that learned silence ──────────────────────────────────
@@ -6631,7 +6618,7 @@ def test_course_edit_resets_the_drift_counter(tmp_path):
     )
     portal("t4", 3)
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    assert "the run has moved 3× since the route did" not in _inject_text(out)
+    assert not _says(_inject_text(out), "the run has moved 3× since the route did")
 
 
 def test_card_behind_renders_the_moment_the_run_outruns_it():
@@ -7029,14 +7016,14 @@ def test_stop_delta_names_the_phase_commit_when_the_seat_parks():
     payload = {"seat": {"parks_on_turn_end": True}, "attention": {}, "inbound": {"events": []}}
     rendered = hooks.format_delta(payload, stop=True)
     assert "phase commit" in rendered
-    assert "declare this run's completion" not in rendered
+    assert not _says(rendered, "declare this run's completion")
     assert "brnrd portal closeout" not in rendered
 
 
 def test_stop_delta_keeps_the_closeout_wording_when_the_seat_closes():
     payload = {"seat": {"parks_on_turn_end": False}, "attention": {}, "inbound": {"events": []}}
     rendered = hooks.format_delta(payload, stop=True)
-    assert "declare this run's completion" in rendered
+    assert _says(rendered, "declare this run's completion")
     assert "phase commit" not in rendered
 
 
