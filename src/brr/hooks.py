@@ -1250,6 +1250,130 @@ def _wake_census(ctx: HookContext) -> str | None:
     return line
 
 
+#: Run-state key (#1200): the last-*observed* `notes_preflight` finding-identity
+#: set, JSON-encoded as a sorted `[[type, target], ...]` list. Deliberately a
+#: plain `state[...]` entry, not a `rendered_chips` one — the fact "this
+#: finding exists" is true regardless of whether the boundary that discovered
+#: it went on to render anything (commit-on-*observe*, not commit-on-render);
+#: see :func:`_notes_health_transitions`.
+NOTES_HEALTH_LAST_KEY = "notes_health_last"
+#: Run-state key: wall-clock `time.time()` of the last actual
+#: `notes_preflight.scan` call, for the throttle below.
+NOTES_HEALTH_SCAN_EPOCH_KEY = "notes_health_scan_epoch"
+#: Measured on this account's own dominion before wiring anything in (#1200's
+#: own "Trap" note, left by the prior strand): `notes_preflight.scan_scoped`
+#: costs **1.2-2.8s**, not the 0.33s #1188 measured — that was the once-per-wake
+#: figure; nothing had measured it at boundary frequency. A post-tool boundary
+#: can fire many times a minute, so the *scan* is throttled to once per this
+#: many seconds — the *render* decision (new since the last scan) never is.
+NOTES_HEALTH_SCAN_INTERVAL_SECONDS = 120
+
+
+def _notes_health_repo_root(ctx: HookContext) -> "Path | None":
+    """The checkout ``notes_preflight`` should scan from this hook, or ``None``.
+
+    ``ctx.repo_dir`` (``BRR_REPO_DIR``) is *not* this: it is armed only for
+    the ``scm``/``gate`` closeout obligations, on a narrower condition (host
+    env, or a configured ``hooks.gate_command``) that leaves it unset for an
+    ordinary worktree run — the common case, including this one. What this
+    hook actually has in that case is ``ctx.git_work_tree``
+    (``BRR_WORK_TREE`` — this run's own worktree checkout, the same root the
+    wake block itself was built from) or, failing that, ``ctx.host_root``
+    (``BRR_HOST_ROOT`` — the shared host checkout the worktree branched
+    from; same repo, same ``.brr/`` via :func:`brr.gitops.shared_brr_dir`'s
+    own walk). ``ctx.repo_dir`` is the last resort for a host-env run where
+    neither of those is armed (see ``HookContext.__init__``: "Both unset ⇒
+    ... a resident, a host run, or a strand whose pin didn't apply").
+    Nothing usable ⇒ ``None``, and the caller stays silent — the same
+    "never a nag on a proxy" doctrine ``gate_command``/``boot_score_path``
+    already follow.
+    """
+    return ctx.git_work_tree or ctx.host_root or ctx.repo_dir
+
+
+def _notes_health_transitions(ctx: HookContext, state: dict[str, Any]) -> list[str]:
+    """New ``notes_preflight`` findings since the last time this scanned (#1200).
+
+    The wake block (:func:`brr.prompts._build_notes_health_block`) is the
+    baseline — the standing picture, once, as it ships today. This is the
+    boundary half the maintainer asked for: a finding earns a line only on
+    the boundary it becomes true, never on every boundary it is *still*
+    true — the exact "wall of text" #818/#963 measured and #1200 exists to
+    keep the boundary channel from repeating (see the pitfall this reference
+    matches: content dedupe cannot distinguish an unmet obligation from
+    ambient noise, so a repeated finding earns habituation, not action).
+
+    Silent by design on a run's **first** call: whatever ``notes_preflight``
+    finds right now is exactly what the wake block already showed, so
+    reporting it again here would be the duplicate this feature exists to
+    prevent. That call still pays the scan and establishes the baseline —
+    only a *later* scan that finds an identity the previous one didn't is a
+    transition. Every scan (baseline or not) is gated by
+    :data:`NOTES_HEALTH_SCAN_INTERVAL_SECONDS` — cost, never relevance:
+    when a scan is skipped, no line renders and the prior baseline stands
+    unchanged, waiting for the next boundary that is due.
+
+    ``(type, target)`` is the finding's own stable per-instance identity
+    (:func:`brr.notes_preflight.scan_scoped` sorts by exactly this pair) —
+    the same key a reader would use to say "is this the finding I saw
+    before, or a new one".
+    """
+    repo_root = _notes_health_repo_root(ctx)
+    if repo_root is None:
+        return []
+    try:
+        from . import config as conf
+        from . import notes_preflight
+    except Exception:
+        return []
+    try:
+        cfg = conf.load_config(repo_root)
+    except Exception:
+        cfg = {}
+    # Same off-switch the wake block honours (`_build_notes_health_block`) —
+    # one knob for "no deterministic maintenance nagging on this repo",
+    # not a second one a reader has to discover after turning the first off.
+    if str(cfg.get("kb_maintenance", "auto")).strip().lower() == "never":
+        return []
+
+    have_baseline = NOTES_HEALTH_LAST_KEY in state
+    last_scan = state.get(NOTES_HEALTH_SCAN_EPOCH_KEY)
+    due = (
+        not have_baseline
+        or last_scan is None
+        or (time.time() - float(last_scan)) >= NOTES_HEALTH_SCAN_INTERVAL_SECONDS
+    )
+    if not due:
+        return []
+
+    state[NOTES_HEALTH_SCAN_EPOCH_KEY] = time.time()
+    try:
+        findings = notes_preflight.scan(repo_root, cfg)
+    except Exception:  # noqa: BLE001 - a maintenance nudge must never cost a boundary
+        return []
+
+    current_ids = sorted({(f.type, f.target) for f in findings})
+    prior_raw = state.get(NOTES_HEALTH_LAST_KEY)
+    # Written unconditionally, before the baseline check below returns early
+    # — next boundary's diff must compare against what THIS scan found, not
+    # against whatever a stale render-suppression left behind.
+    state[NOTES_HEALTH_LAST_KEY] = json.dumps(current_ids)
+
+    if not have_baseline:
+        return []
+
+    try:
+        prior_ids = {tuple(pair) for pair in json.loads(prior_raw or "[]")}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        prior_ids = set()
+
+    new_ids = [key for key in current_ids if key not in prior_ids]
+    if not new_ids:
+        return []
+    by_id = {(f.type, f.target): f for f in findings}
+    return [by_id[key].render() for key in new_ids if key in by_id]
+
+
 # ── Injection rendering (portal-state → compact delta) ───────────────────
 #
 # Slice 8 (#513): the mid-run (``post-tool``) boundary renders as ONE compact
@@ -3343,6 +3467,7 @@ def _render_bar(
     mood_drift: bool = False,
     wait_idle: bool = False,
     link_chip: str | None = None,
+    notes_health_lines: list[str] | None = None,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: preamble + changed chips + details.
 
@@ -3366,6 +3491,13 @@ def _render_bar(
     only after this boundary actually rendered (commit-on-render, #728's
     discipline). *last_chips* ``None`` means everything is due — the
     conservative default for direct calls and the run's first bar.
+
+    *notes_health_lines* (#1200), when given, are appended verbatim as
+    detail rows — already-gated, already-rendered ``Finding.render()`` text
+    for whichever notes-health findings the caller (:func:`_notes_health_transitions`)
+    determined were new since its own last scan. This function does no
+    further filtering on them; the newness decision is entirely the
+    caller's, off its own state, not *last_chips*.
 
     ``ambient_emit`` is accepted for caller compatibility but no longer
     filters chips: per-chip change-gating subsumes the class-wide
@@ -3614,6 +3746,13 @@ def _render_bar(
         # pressure.
         details.append(_finished_spawns_line(finished_spawns))
     details.extend(_render_armed_rows(armed))
+    # #1200: notes-health transitions — the caller (`_notes_health_transitions`)
+    # already did the only gating this needs (new-since-last-scan, throttled).
+    # No further change-gate here: unlike `notices_detail`/`card_detail`, the
+    # caller's own state (not `last_chips`) is what "seen" means for this one
+    # — see that function's docstring for why.
+    if notes_health_lines:
+        details.extend(notes_health_lines)
     # The blueprint's obligation half. Latched on its own delta by the caller
     # (`plan_edge`), never rendered per boundary: an owed line that repeats
     # for as long as it stands is the *fires constantly for a non-reason*
@@ -3928,6 +4067,7 @@ def format_delta(
     rendered_chips: dict[str, str] | None = None,
     route_drift: bool = False,
     mood_drift: bool = False,
+    notes_health_lines: list[str] | None = None,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
@@ -4005,6 +4145,11 @@ def format_delta(
     state at all: unlike the letter chrome it is never seen-suppressed, so
     it re-shows at every boundary that shows anything else, which is the
     entire point (sweep by reading, not remembering).
+
+    ``notes_health_lines`` (#1200) is the caller's own new-since-last-scan
+    ``notes_preflight`` findings (:func:`_notes_health_transitions`) — read
+    off run state, not the portal snapshot, for the same reason ``plan``/
+    ``route`` are caller-owned: "has this already been seen" is run state.
     """
     if not payload:
         return None
@@ -4104,6 +4249,7 @@ def format_delta(
             last_chips=last_chips, rendered_chips=rendered_chips,
             route_drift=route_drift, mood_drift=mood_drift,
             wait_idle=wait_idle,
+            notes_health_lines=notes_health_lines,
         )
 
     lines: list[str] = []
@@ -5916,6 +6062,14 @@ def compute_neutral(
             "card_stale": _card_is_behind(pt_card),
         })
 
+        # #1200: computed *before* the gate below, not inside `format_delta` —
+        # a boundary where this is the only thing that moved must still open
+        # the gate (that is the whole feature: fire on the transition, not
+        # only when something else happened to be due too). Its own internal
+        # throttle (`NOTES_HEALTH_SCAN_INTERVAL_SECONDS`) keeps the cost sane
+        # regardless of how often this boundary itself fires.
+        notes_health_lines = _notes_health_transitions(ctx, state)
+
         # Gate: open when there is something to say.  Obligations bypass the
         # token check; ambient and deltas use it as before. ``route_drift``
         # opens it for the blueprint edge's reason: the divergence it names
@@ -5930,6 +6084,7 @@ def compute_neutral(
             has_obligations or ambient_emit or edge or plan_edge
             or route_edge or bolt_edge or route_drift
             or mood_drift or token_moved or paused
+            or notes_health_lines
         ):
             inject = format_delta(
                 portal, mood=mood, surprise=edge,
@@ -5947,6 +6102,7 @@ def compute_neutral(
                 last_chips=last_chips, rendered_chips=rendered_chips,
                 route_drift=route_drift,
                 mood_drift=mood_drift,
+                notes_health_lines=notes_health_lines,
             )
             state["last_token"] = token
             if ambient_emit and inject is not None:
