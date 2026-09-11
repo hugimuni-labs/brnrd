@@ -198,10 +198,13 @@ class TestHeldEventsOnStrands:
         assert daemon._strand_return_resumes_held_parent(target) is False
 
     def test_a_strangers_strand_still_accumulates(self, tmp_path):
+        # A stranger's strand on the seat's own thread is that seat's mail
+        # — accumulated, never a release. On another conversation it is
+        # not this seat's at all (#1890, test_seat_per_conversation.py).
         held = self._arm(tmp_path)
         target = self._target(
             tmp_path, source="spawn_submitted", eid="evt-other",
-            spawn_parent_run_id="run-someone-else",
+            spawn_parent_run_id="run-someone-else", conversation_key="cloud:telegram:1:",
         )
 
         survivors = daemon._handle_resource_held_events([target], None)
@@ -223,7 +226,9 @@ class TestHeldEventsOnStrands:
 
     def test_schedule_still_accumulates_under_a_strands_hold(self, tmp_path):
         self._arm(tmp_path)
-        target = self._target(tmp_path, source="schedule", eid="evt-tick")
+        target = self._target(
+            tmp_path, source="schedule", eid="evt-tick", conversation_key="cloud:telegram:1:",
+        )
         assert daemon._handle_resource_held_events([target], None) == []
 
     def test_siblings_in_the_releasing_batch_pass_through(self, tmp_path):
@@ -235,7 +240,9 @@ class TestHeldEventsOnStrands:
             tmp_path, source="spawn_submitted", eid="evt-kid",
             spawn_parent_run_id="run-parent", conversation_key="cloud:telegram:1:",
         )
-        tick = self._target(tmp_path, source="schedule", eid="evt-tick")
+        tick = self._target(
+            tmp_path, source="schedule", eid="evt-tick", conversation_key="cloud:telegram:1:",
+        )
 
         survivors = daemon._handle_resource_held_events([kid, tick], None)
 
@@ -363,12 +370,25 @@ class TestResumeAny:
         assert spec["resume_condition"] == resource_hold.RESUME_ANY
 
     def test_schedule_releases_only_under_any(self):
-        meta_any = resource_hold.build(reason="x", provider="claude", resume_condition=resource_hold.RESUME_ANY)
-        meta_str = resource_hold.build(reason="x", provider="claude", resume_condition=resource_hold.RESUME_STRANDS)
-        tick = {"source": "schedule"}
+        conv = "cloud:telegram:1:"
+        meta_any = resource_hold.build(
+            reason="x", provider="claude", resume_condition=resource_hold.RESUME_ANY,
+            conversation_key=conv,
+        )
+        meta_str = resource_hold.build(
+            reason="x", provider="claude", resume_condition=resource_hold.RESUME_STRANDS,
+            conversation_key=conv,
+        )
+        tick = {"source": "schedule", "conversation_key": conv}
         assert resource_hold.schedule_event_releases(meta_any, tick)
         assert not resource_hold.schedule_event_releases(meta_str, tick)
-        assert not resource_hold.schedule_event_releases(meta_any, {"source": "spawn_queued"})
+        assert not resource_hold.schedule_event_releases(
+            meta_any, {"source": "spawn_queued", "conversation_key": conv},
+        )
+        # #1890: a tick on another conversation never wakes this seat.
+        assert not resource_hold.schedule_event_releases(
+            meta_any, {"source": "schedule", "conversation_key": "schedule:the-wire-round"},
+        )
 
     def test_own_strand_releases_under_any(self):
         meta = resource_hold.build(reason="x", provider="claude", resume_condition=resource_hold.RESUME_ANY)
@@ -387,7 +407,11 @@ class TestResumeAny:
         )
         task.save(runs_dir)
         helper = TestHeldEventsOnStrands()
-        tick = helper._target(tmp_path, source="schedule", eid="evt-tick")
+        # The tick is on the seat's own conversation (a self-wake the seat
+        # scheduled on its thread) — #1890: only that tick wakes it.
+        tick = helper._target(
+            tmp_path, source="schedule", eid="evt-tick", conversation_key="cloud:telegram:1:",
+        )
 
         assert daemon._handle_resource_held_events([tick], None) == [tick]
         hold = Run.from_file(runs_dir / "run-seat" / "run.md").meta["resource_hold"]

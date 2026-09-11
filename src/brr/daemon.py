@@ -17488,6 +17488,15 @@ def _arm_resource_hold(
     (``_mark_interrupted_runs``, the zombie sweepers,
     ``_reconcile_orphaned_spawn_dispatches``) leaves this run alone without
     needing to know this function exists.
+
+    **One seat per conversation, by construction (#1890).** Any other
+    active hold on the same conversation is superseded here: released
+    ``by="superseded"`` and its accumulated mail folded into this record,
+    so the one seat a conversation resumes is the one holding all of its
+    letters. Before this a conversation could collect holds (three active
+    in one repo on 2026-09-11, two of them on one ``schedule:*`` thread)
+    and every consumer took ``[0]`` — the older seats stranded with mail
+    nothing would ever un-defer.
     """
     previous = task.meta.get("resource_hold") or {}
     generation = int(previous.get("generation") or 0) + 1
@@ -17496,6 +17505,21 @@ def _arm_resource_hold(
         generation=generation,
         **hold_fields,
     )
+    seat = resource_hold.seat_conversation(meta, task.conversation_key or "")
+    for other in _held_runs_for_repo(runs_dir):
+        if other.id == task.id or _seat_conversation(other) != seat:
+            continue
+        other_meta = other.meta.get("resource_hold") or {}
+        for folded_id in other_meta.get("accumulated_event_ids") or []:
+            meta = resource_hold.accumulate_event(meta, folded_id)
+        superseded = resource_hold.mark_released(other_meta, by="superseded")
+        superseded["superseded_by"] = task.id
+        other.meta["resource_hold"] = superseded
+        other.save(runs_dir)
+        print(
+            f"[brnrd] resource hold superseded: {other.id} -> {task.id} "
+            f"(one seat per conversation: {seat or '<keyless>'})"
+        )
     task.meta["resource_hold"] = meta
     task.update_status(resource_hold.RUN_STATUS, runs_dir)
     return meta
@@ -17642,6 +17666,21 @@ def _finalize_resource_hold(
         f"({meta['provider']}/{meta['reason']}, resume={meta['resume_condition']})"
     )
     _write_terminal_hold_response(emit, task, event, responses_dir, resp_path, meta)
+    seat = resource_hold.seat_conversation(meta, task.conversation_key or "")
+    child_ids = task.meta.get("child_run_ids") or ()
+
+    def _not_this_seats(pending: dict) -> bool:
+        # #1890: a seat brakes only its own mail — its conversation's
+        # letters and its own strands. Another conversation's tick or
+        # message pending at arm time dispatches as its own run; deferring
+        # it here is how five overnight ticks sat 2h–7h52m behind an
+        # operator seat on 2026-09-11.
+        if resource_hold.strand_event_owned(
+            pending, held_run_id=task.id, child_run_ids=child_ids,
+        ):
+            return False
+        return resource_hold.event_conversation(pending) != seat
+
     deferred_ids = _defer_pending_siblings_after_failure(
         inbox_dir,
         lead_event_id=eid,
@@ -17649,12 +17688,13 @@ def _finalize_resource_hold(
         seconds=_HOLD_DEFER_SECONDS,
         reason="resource_hold",
         keep_pending=lambda pending: (
-            resource_hold.schedule_event_releases(meta, pending)
-            or resource_hold.strand_event_releases(
-                meta, pending,
-                held_run_id=task.id,
-                child_run_ids=task.meta.get("child_run_ids") or (),
+            resource_hold.schedule_event_releases(
+                meta, pending, seat_conversation_key=seat,
             )
+            or resource_hold.strand_event_releases(
+                meta, pending, held_run_id=task.id, child_run_ids=child_ids,
+            )
+            or _not_this_seats(pending)
         ),
     )
     if deferred_ids:
@@ -17701,12 +17741,13 @@ def _native_session_id_for(task: Run) -> str | None:
 
 
 def _held_runs_for_repo(runs_dir: Path) -> list[Run]:
-    """Active (unreleased) resource holds recorded under *runs_dir*.
+    """Active (unreleased) resource holds recorded under *runs_dir*, newest-armed first.
 
-    Newest-armed first — a repo should only ever have one live hold at a
-    time (the single-flight resident slot means only one resident thought
-    runs per repo), but if a stale record ever survives beside a fresher
-    one, the fresher one is the honest answer to "is this repo held".
+    A *listing*, not an answer to "which seat is this event for": a repo
+    holds one seat per conversation (#1890), so several active holds in
+    one repo is the ordinary shape. Routing goes through
+    :func:`_held_seats_by_conversation` / :func:`_seat_for_event`; nothing
+    may index this list's ``[0]``.
     """
     held = [
         r for r in list_runs(runs_dir, status=resource_hold.RUN_STATUS)
@@ -17717,6 +17758,59 @@ def _held_runs_for_repo(runs_dir: Path) -> list[Run]:
         reverse=True,
     )
     return held
+
+
+def _seat_conversation(held: Run) -> str:
+    """The conversation *held* is the seat of — the hold's own key, else the run's."""
+    return resource_hold.seat_conversation(
+        held.meta.get("resource_hold"), getattr(held, "conversation_key", "") or "",
+    )
+
+
+def _held_seats_by_conversation(held_runs: list[Run]) -> dict[str, Run]:
+    """One active seat per conversation (#1890).
+
+    *held_runs* is :func:`_held_runs_for_repo`'s newest-first listing, so
+    a pre-#1890 duplicate on one conversation resolves to its newest hold
+    — the one ``_arm_resource_hold`` would have kept; the next arm on that
+    conversation supersedes the rest and folds their mail.
+    """
+    seats: dict[str, Run] = {}
+    for held in held_runs:
+        seats.setdefault(_seat_conversation(held), held)
+    return seats
+
+
+def _seat_for_event(
+    held_runs: list[Run], seats: dict[str, Run], event: dict,
+) -> Run | None:
+    """The one held seat *event* is addressed to, or ``None`` (#1890).
+
+    1. a strand event ⇒ the seat whose run dispatched it — ownership by
+       run id, whatever its conversation (``resource_hold.strand_event_owned``);
+    2. else the seat of the event's own conversation, derived the way
+       dispatch derives it;
+    3. else — correspondent traffic only — the legacy keyless seat: the
+       pre-#1890 guard let any conversation's message through to a hold
+       that recorded no key, and the correspondent path stays unchanged.
+       Routine sources (ticks, strands) never fall through to it.
+
+    ``None`` ⇒ no seat is waiting on this event: it dispatches as its own
+    run — not deferred behind a seat it does not belong to, never releasing
+    that seat, never inheriting its session.
+    """
+    for held in held_runs:
+        if resource_hold.strand_event_owned(
+            event, held_run_id=held.id,
+            child_run_ids=held.meta.get("child_run_ids") or (),
+        ):
+            return held
+    seat = seats.get(resource_hold.event_conversation(event))
+    if seat is not None:
+        return seat
+    if str(event.get("source") or "") in _HOLD_ACCUMULATE_ONLY_SOURCES:
+        return None
+    return seats.get("")
 
 
 def _accumulate_held_event(runs_dir: Path, held: Run, event_id: str) -> None:
@@ -17861,6 +17955,14 @@ def _apply_resource_hold_resume(
     released = resource_hold.mark_released(meta, by=by)
     held.meta["resource_hold"] = released
     held.save(runs_dir)
+    # #1890: a resume boots into the *seat's* conversation, never the
+    # releaser's — the way `_apply_run_respawn` carries the held run's key
+    # forward. Routing already matches conversations for ticks and
+    # messages; a strand's event (owned by run id) can derive a different
+    # key (`run:<parent>`), and this is where it is re-keyed.
+    seat = _seat_conversation(held)
+    if seat and resource_hold.event_conversation(event) != seat:
+        event["conversation_key"] = seat
     if (
         released.get("native_session_id")
         and released.get("resume_kind") == resource_hold.RESUME_NATIVE
@@ -18108,6 +18210,12 @@ def _handle_resource_held_events(
     resume trigger instead: it passes through unchanged (enriched with
     resume metadata by ``_apply_resource_hold_resume``) and continues down
     the ordinary pipeline exactly as it would for an idle repo.
+
+    **Per conversation, never per repo (#1890).** Each event is routed to
+    the one seat it is addressed to (:func:`_seat_for_event`): its own
+    strand's parent, else its conversation's seat. An event no seat is
+    waiting on is not this filter's concern at all — whatever else is held
+    in the repo, it dispatches as its own run.
     """
     if not pending:
         return pending
@@ -18121,8 +18229,12 @@ def _handle_resource_held_events(
         if not held_runs:
             survivors.extend(targets)
             continue
-        held = held_runs[0]
+        seats = _held_seats_by_conversation(held_runs)
         for target in targets:
+            held = _seat_for_event(held_runs, seats, target.event)
+            if held is None:
+                survivors.append(target)
+                continue
             hold_meta = held.meta.get("resource_hold") or {}
             if not resource_hold.is_active(hold_meta):
                 # Released earlier in this same batch (a correspondent
@@ -18132,7 +18244,10 @@ def _handle_resource_held_events(
                 survivors.append(target)
                 continue
             source = str(target.event.get("source") or "")
-            if resource_hold.schedule_event_releases(hold_meta, target.event):
+            if resource_hold.schedule_event_releases(
+                hold_meta, target.event,
+                seat_conversation_key=_seat_conversation(held),
+            ):
                 _apply_resource_hold_resume(
                     runs_dir, target.inbox_dir, held, target.event, by="schedule",
                     account_context=account_context,
