@@ -899,23 +899,52 @@ def unread_pile(
     pile is a fact about a specific person, not a thread nobody has been
     identified on (mirrors :func:`brr.correspondent.facet_input`'s own
     ``None`` gate).
+
+    A burst reply (``event:`` + ``also:``) is one physical send answering
+    several pending events — ``daemon.py`` marks every artifact it mints
+    for that send with the same ``delivery_id`` (the partial file the send
+    actually wrote). Counted here by distinct delivery id, so a burst
+    answering three events counts once, not three (a duplicate before this
+    guard: #1925's review). Older artifacts predating the field carry no
+    ``delivery_id`` and always count — nothing to collapse against.
+
+    Reads only *key*'s own store, not :func:`read_records_for_correspondent`'s
+    merged, deduped, cross-conversation view — the correspondent facet
+    calls this on every VITAL boundary, and *key* is already the waking
+    conversation, which *is* this correspondent's own thread (#1925's
+    review: ``conversation_keys_for_correspondent`` walked and re-read
+    every conversation directory in the whole store — ~140ms on an 11MB
+    store — to answer a question this thread's own records already
+    settle). A delivery mirrored onto a sibling gate key (the cloud/native
+    telegram pair `read_recent_for_correspondent` weaves together) is not
+    counted twice here either, at the cost of not being counted at all
+    from the other key's side — an acceptable trade for a fact reread
+    every boundary; the woven views that need the cross-key merge still
+    get it.
     """
     if not correspondent_key:
         return None
     count = 0
     total_bytes = 0
-    for record in read_records_for_correspondent(brr_dir, key, correspondent_key):
+    seen_deliveries: set[str] = set()
+    for record in read_records(brr_dir, key):
         if (
             record.get("kind") == "event"
             and record.get("correspondent_key") == correspondent_key
         ):
             count = 0
             total_bytes = 0
+            seen_deliveries.clear()
             continue
         if (
             record.get("kind") == "artifact"
             and record.get("artifact_kind") in _DIALOGUE_ARTIFACT_KINDS
         ):
+            delivery_id = record.get("delivery_id")
+            if delivery_id:
+                if delivery_id in seen_deliveries:
+                    continue
+                seen_deliveries.add(delivery_id)
             count += 1
             total_bytes += len(str(record.get("body") or "").encode("utf-8"))
     return {"count": count, "bytes": total_bytes}
