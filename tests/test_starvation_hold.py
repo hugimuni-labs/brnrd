@@ -218,6 +218,118 @@ class TestRefusedWake:
         assert not reread.get("defer_until")
 
 
+# ── the wall that outlived its reason (#1934) ────────────────────────
+
+
+class TestWallArmedOnAFallbackBody:
+    """A wall claims *the seat* cannot run; after a fallback it only knows
+    that the substitute could not.
+
+    Measured 2026-09-11 (`run-260911-1808-1r0b`): claude-opus died on a 401,
+    auto-fallback moved the run to codex-gpt-5.6-sol, codex's weekly bucket
+    read 1.0%, and the hold armed from it was thawable only by *codex*
+    refilling to 10% — not before 2026-09-15 — while the sticky body the
+    next wake would pick sat at 11% with healthy auth. One seat per repo
+    (#1890), so that froze every thread and every tick until a human
+    released it from the dashboard, 1h58m later.
+    """
+
+    def _starved_on_the_fallback(self, tmp_path) -> Run:
+        runs_dir = tmp_path / ".brr" / "runs"
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        task = _seat()
+        task.id = "run-fellback"
+        task.status = resource_hold.RUN_STATUS
+        # What a fallback leaves behind: `runner` is the body originally
+        # selected, `runner_name` the substitute that starved.
+        task.meta.update({
+            "runner": "claude-opus",
+            "runner_name": "codex-gpt-5.6-sol",
+            "runner_shell": "codex",
+            "runner_core": "gpt-5.6-sol",
+        })
+        task.meta["resource_hold"] = resource_hold.build(
+            **daemon._starvation_hold_spec(task, {}, 1.0, detail="starved"),
+        )
+        task.save(runs_dir)
+        return task
+
+    def _target(self, tmp_path, eid: str) -> "daemon._DispatchTarget":
+        return TestRefusedWake._target(self, tmp_path, eid)
+
+    def test_the_intended_body_survives_the_fallback_that_overwrote_runner_name(self):
+        task = _seat()
+        task.meta.update({"runner": "claude-opus", "runner_name": "codex-gpt-5.6-sol"})
+        assert daemon._seat_intended_runner(task) == "claude-opus"
+        task.meta["dashboard_wake_sticky_profile"] = "claude-fable"
+        assert daemon._seat_intended_runner(task) == "claude-fable"
+
+    def test_no_alternate_read_when_the_intended_body_is_the_starved_one(self, tmp_path):
+        task = _seat()
+        task.meta["runner"] = task.meta["runner_name"]  # never fell back
+        task.meta["resource_hold"] = resource_hold.build(
+            **daemon._starvation_hold_spec(task, {}, 1.0, detail="starved"),
+        )
+        assert daemon._seat_alternate_binding_pct(
+            tmp_path, task, refresh=False,
+        ) is None
+
+    def test_a_message_thaws_the_seat_when_the_intended_body_can_pay(
+        self, tmp_path, monkeypatch,
+    ):
+        held = self._starved_on_the_fallback(tmp_path)
+        target = self._target(tmp_path, "evt-human")
+        monkeypatch.setattr(daemon, "_held_run_binding_pct", lambda *a, **k: 1.0)
+        monkeypatch.setattr(
+            daemon, "_seat_alternate_binding_pct",
+            lambda *a, **k: ("claude-opus", 11.0),
+        )
+
+        survivors = daemon._handle_resource_held_events([target], None)
+
+        assert survivors == [target]
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / held.id / "run.md")
+        assert persisted.meta["resource_hold"]["released_by"] == "alternate"
+
+    def test_the_sweep_thaws_the_seat_when_the_intended_body_can_pay(
+        self, tmp_path, monkeypatch,
+    ):
+        held = self._starved_on_the_fallback(tmp_path)
+        target = self._target(tmp_path, "evt-kept")
+        monkeypatch.setattr(daemon, "_held_run_binding_pct", lambda *a, **k: 1.0)
+        monkeypatch.setattr(daemon, "_seat_alternate_binding_pct", lambda *a, **k: None)
+        daemon._handle_resource_held_events([target], None)
+        assert daemon._release_reset_holds_due(None, tmp_path) == 0
+
+        monkeypatch.setattr(
+            daemon, "_seat_alternate_binding_pct",
+            lambda *a, **k: ("claude-opus", 11.0),
+        )
+        assert daemon._release_reset_holds_due(None, tmp_path) == 1
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / held.id / "run.md")
+        assert persisted.meta["resource_hold"]["released_by"] == "alternate"
+        reread = protocol._read_event(target.inbox_dir / "evt-kept.md")
+        assert not reread.get("defer_until")
+
+    def test_an_alternate_under_the_floor_keeps_the_message(
+        self, tmp_path, monkeypatch,
+    ):
+        """The fix must not become "any reading thaws it" — the alternate is
+        judged against the same `refill_floor_pct` the record was armed with."""
+        self._starved_on_the_fallback(tmp_path)
+        target = self._target(tmp_path, "evt-human")
+        monkeypatch.setattr(daemon, "_held_run_binding_pct", lambda *a, **k: 1.0)
+        monkeypatch.setattr(
+            daemon, "_seat_alternate_binding_pct",
+            lambda *a, **k: ("claude-opus", 4.0),
+        )
+
+        assert daemon._handle_resource_held_events([target], None) == []
+        # And the reading the correspondent is given stays the starved
+        # bucket's own — the alternate is a release test, not the answer.
+        assert "1.0%" in _partials(target.responses_dir, "evt-human")
+
+
 # ── the record itself ─────────────────────────────────────────────────
 
 
