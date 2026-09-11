@@ -95,6 +95,25 @@ def test_legend_is_hidden_but_still_parses():
     assert "legend" in HIDDEN_COMMANDS
 
 
+def test_legend_prints_waiting_not_obligation(capsys):
+    # w-34 (2026-09-11): the class formerly named OBLIGATION is WAITING —
+    # someone or something in the world is waiting, not a performance note
+    # on the resident. `pending_unknown` is the one hand-declared row
+    # (BAR_SEGMENTS can't carry it), so it is the direct pin that the
+    # renamed constant actually reaches the legend's own text — the class
+    # column specifically, not a blanket ban on the ordinary English word
+    # "obligation" appearing in a chip's prose `meaning`.
+    from brr import hooks
+
+    assert main(["legend"]) == 0
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    class_column = {line.split(" · ")[2].split(" — ")[0] for line in lines}
+    assert class_column == set(hooks._SEGMENT_CLASSES)
+    assert "waiting" in class_column
+    assert "obligation" not in class_column
+
+
 # ── brnrd relic issue (#686) ─────────────────────────────────────────────────
 #
 # The front door onto `.relics.jsonl`. Issue produce is the one relic kind
