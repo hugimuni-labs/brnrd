@@ -25,6 +25,22 @@ from brr import envs
 from brr.runner import RunnerResult
 
 
+# ── prose assertions ────────────────────────────────────────────────
+
+
+def _says(haystack: str, phrase: str) -> bool:
+    """Whitespace-insensitive containment for prose contracts.
+
+    A prompt guard must assert the *rule*, never the line wrap that happened
+    to carry it. Pinning a literal ``"when none is\n  available"`` makes any
+    reflow read as a deleted rule — a guard that fires for a non-reason is a
+    guard that stops being read. Collapse runs of whitespace on both sides
+    and compare. Machine-parsed strings (JSON keys, frontmatter, CLI syntax)
+    keep their exact pins; this is for sentences.
+    """
+    return " ".join(phrase.split()) in " ".join(haystack.split())
+
+
 # ── git fixtures ────────────────────────────────────────────────────
 
 
@@ -273,3 +289,63 @@ def brnrd_account_headers(
         )
         token = issue_session_token(db, account)
     return {"Authorization": f"Bearer {token}"}
+
+
+def brnrd_client() -> "TestClient":
+    """A bare-minimum brnrd app + GitHub-oauth-configured ``TestClient``.
+
+    The byte-identical copy shared (as of 2026-09-11) by
+    ``test_brnrd_{config_approval,activity,run_ledger,quota,runners}.py``.
+    Modules whose scenario needs different ``Settings`` (billing's Stripe
+    keys, limits' repo cap, stats' cohort size, dashboard/machines/
+    account_deletion's per-test overrides) still build their own — this is
+    the one every one of those diverges *from*, not a replacement for them.
+    """
+    from brnrd import create_app
+    from brnrd.config import Settings
+    from fastapi.testclient import TestClient
+
+    app = create_app(
+        Settings(
+            database_url="sqlite:///:memory:",
+            public_base_url="https://brnrd.example",
+            github_oauth_client_id="gh-client",
+            github_oauth_client_secret="gh-secret",
+        )
+    )
+    return TestClient(app, base_url="https://testserver")
+
+
+def brnrd_repo_and_daemon(client: "TestClient") -> tuple[dict[str, str], dict[str, str], str]:
+    """Pair a repo end-to-end against :func:`brnrd_client` and return
+    ``(account_headers, daemon_headers, repo_id)``.
+
+    The byte-identical copy shared (as of 2026-09-11) by
+    ``test_brnrd_{activity,run_ledger,quota,runners}.py``.
+    ``test_brnrd_config_approval.py`` also returns the session token and a
+    plain (no ``publish_layers``) repo body, so it keeps its own copy.
+    """
+    account_headers = brnrd_account_headers(
+        client.app, github_id="123", login="octocat", email="a@b.com",
+    )
+    repo = client.post(
+        "/v1/accounts/repos",
+        json={
+            "repo_full_name": "Gurio/brr",
+            "default_branch": "main",
+            "publish_layers": PUBLISH_EVERYTHING,
+        },
+        headers=account_headers,
+    ).json()
+    pair = client.post("/v1/accounts/pair").json()
+    client.post(
+        f"/v1/accounts/pair/{pair['pair_code']}/approve",
+        json={"repo_id": repo["repo_id"], "approve_secret": pair["approve_secret"]},
+        headers=account_headers,
+    )
+    paired = client.get(
+        f"/v1/accounts/pair/{pair['pair_code']}",
+        params={"poll_secret": pair["poll_secret"]},
+    ).json()
+    daemon_headers = {"Authorization": f"Bearer {paired['daemon_token']}"}
+    return account_headers, daemon_headers, repo["repo_id"]

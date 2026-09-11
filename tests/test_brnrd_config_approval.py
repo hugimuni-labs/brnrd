@@ -24,19 +24,10 @@ from sqlalchemy import select  # noqa: E402
 from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.models import ConfigChangeRequest, Event  # noqa: E402
-from _helpers import brnrd_account_headers  # noqa: E402
+from _helpers import brnrd_account_headers, brnrd_client  # noqa: E402
 
 
-def _client() -> TestClient:
-    app = create_app(
-        Settings(
-            database_url="sqlite:///:memory:",
-            public_base_url="https://brnrd.example",
-            github_oauth_client_id="gh-client",
-            github_oauth_client_secret="gh-secret",
-        )
-    )
-    return TestClient(app, base_url="https://testserver")
+_client = brnrd_client
 
 
 def _repo_and_daemon(client: TestClient) -> tuple[str, dict[str, str], dict[str, str], str]:

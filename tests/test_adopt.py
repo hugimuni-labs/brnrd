@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from _helpers import _says
 from brr import adopt
 from brr.runner import RunnerResult
 
@@ -202,7 +203,7 @@ def test_failed_remote_clone_exits_with_url_and_access_recovery(tmp_path):
     output = result.stdout + result.stderr
     assert result.returncode != 0
     assert "Git could not clone https://example.invalid/private.git" in output
-    assert "Check that the URL exists and that you have access" in output
+    assert _says(output, "Check that the URL exists and that you have access")
     assert "repository access refused" in output
     assert "Traceback" not in output
 
@@ -365,7 +366,7 @@ class TestOfferHomeLink:
 
         adopt._offer_home_link(tmp_path)  # must not raise
 
-        assert "gh is not authenticated" in capsys.readouterr().out
+        assert _says(capsys.readouterr().out, "gh is not authenticated")
 
 
 class TestBuildDefaultDockerImage:
@@ -819,10 +820,10 @@ class TestNpxSpelling:
         adopt.init_repo()
 
         out = capsys.readouterr().out
-        assert "next: `npx brnrd up`, then send it work." not in out
+        assert not _says(out, "next: `npx brnrd up`, then send it work.")
         assert (
-            "next: `npx brnrd account connect` or "
-            "`npx brnrd gate setup telegram`" in out
+            _says(out, "next: `npx brnrd account connect` or "
+            "`npx brnrd gate setup telegram`")
         )
 
     def test_wake_closing_line_stays_bare_for_a_path_install(
@@ -834,10 +835,9 @@ class TestNpxSpelling:
         adopt.init_repo()
 
         out = capsys.readouterr().out
-        assert "next: `brnrd up`, then send it work." not in out
+        assert not _says(out, "next: `brnrd up`, then send it work.")
         assert (
-            "next: `brnrd account connect` or `brnrd gate setup telegram`"
-            in out
+            _says(out, "next: `brnrd account connect` or `brnrd gate setup telegram`")
         )
         assert "npx" not in out
 
@@ -853,7 +853,7 @@ class TestNpxSpelling:
         with pytest.raises(SystemExit):
             adopt.init_repo()
 
-        assert "re-run `npx brnrd init` to retry" in capsys.readouterr().out
+        assert _says(capsys.readouterr().out, "re-run `npx brnrd init` to retry")
 
     def test_setup_retry_line_stays_bare_for_a_path_install(
         self, tmp_path, monkeypatch, capsys,
@@ -869,7 +869,7 @@ class TestNpxSpelling:
             adopt.init_repo()
 
         out = capsys.readouterr().out
-        assert "re-run `brnrd init` to retry" in out
+        assert _says(out, "re-run `brnrd init` to retry")
         assert "npx" not in out
 
     def test_incomplete_verify_line_is_npx_spelled(
@@ -886,7 +886,7 @@ class TestNpxSpelling:
         adopt.init_repo()
 
         out = capsys.readouterr().out
-        assert "init incomplete — re-run `npx brnrd init` to retry" in out
+        assert _says(out, "init incomplete — re-run `npx brnrd init` to retry")
 
     def test_incomplete_verify_line_stays_bare_for_a_path_install(
         self, tmp_path, monkeypatch, capsys,
@@ -901,7 +901,7 @@ class TestNpxSpelling:
         adopt.init_repo()
 
         out = capsys.readouterr().out
-        assert "init incomplete — re-run `brnrd init` to retry" in out
+        assert _says(out, "init incomplete — re-run `brnrd init` to retry")
         assert "npx" not in out
 
     def test_runner_doctor_from_init_is_npx_spelled(self, tmp_path, monkeypatch):
@@ -916,8 +916,8 @@ class TestNpxSpelling:
             adopt.init_repo()
 
         text = str(excinfo.value)
-        assert "re-run `npx brnrd init`" in text
-        assert "Full profile table: npx brnrd runners list --all" in text
+        assert _says(text, "re-run `npx brnrd init`")
+        assert _says(text, "Full profile table: npx brnrd runners list --all")
 
     def test_runner_doctor_stays_bare_for_a_path_install(self, tmp_path, monkeypatch):
         monkeypatch.delenv("BRNRD_LAUNCHER", raising=False)
@@ -931,7 +931,7 @@ class TestNpxSpelling:
 
         text = str(excinfo.value)
         assert "re-run `brnrd init`" in text
-        assert "Full profile table: brnrd runners list --all" in text
+        assert _says(text, "Full profile table: brnrd runners list --all")
         assert "npx" not in text
 
     def test_missing_git_recovery_is_npx_spelled_in_a_real_process(self, tmp_path):
@@ -953,7 +953,7 @@ class TestNpxSpelling:
 
         output = result.stdout + result.stderr
         assert result.returncode != 0
-        assert "re-run `npx brnrd init`" in output
+        assert _says(output, "re-run `npx brnrd init`")
         assert "Traceback" not in output
 
 
@@ -1001,8 +1001,8 @@ class TestIdentityAtInit:
         # printed third in the first thing a stranger ever sees from this
         # product. Both halves are pinned: the reason is still stated, and
         # the subject of the sentence is the tool.
-        assert "`gh` isn't signed in here" in out
-        assert "you can link GitHub later" in out
+        assert _says(out, "`gh` isn't signed in here")
+        assert _says(out, "you can link GitHub later")
         assert "you: not detected" not in out
 
     def test_degrades_when_gh_is_unauthenticated(self, tmp_path, monkeypatch, capsys):
@@ -1025,7 +1025,7 @@ class TestIdentityAtInit:
         # Same wording rule as the sibling above: state the tool, never
         # report the person as undetected.
         out = capsys.readouterr().out
-        assert "`gh` isn't signed in here" in out
+        assert _says(out, "`gh` isn't signed in here")
         assert "you: not detected" not in out
 
     def test_identity_is_stated_before_the_tty_branch(
@@ -1072,13 +1072,13 @@ class TestChannelMenu:
             "`brnrd gate setup telegram` — give the resident a door that "
             "reaches it without a terminal open." in out
         )
-        assert "a mailbox (`brnrd account connect`)" in out
-        assert "an identity that isn't you" in out
+        assert _says(out, "a mailbox (`brnrd account connect`)")
+        assert _says(out, "an identity that isn't you")
         assert "brnrd.dev" in out
-        assert "more doors (`brnrd gate setup telegram`" in out
+        assert _says(out, "more doors (`brnrd gate setup telegram`")
         assert "`brnrd daemon install`" in out
         # the line this replaces must be gone, not merely joined by the new one
-        assert "next: `brnrd up`, then send it work." not in out
+        assert not _says(out, "next: `brnrd up`, then send it work.")
 
     def test_channel_menu_is_npx_spelled(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("BRNRD_LAUNCHER", "npx")
@@ -1087,9 +1087,9 @@ class TestChannelMenu:
         adopt.init_repo()
 
         out = capsys.readouterr().out
-        assert "`npx brnrd account connect`" in out
-        assert "`npx brnrd gate setup telegram`" in out
-        assert "`npx brnrd daemon install`" in out
+        assert _says(out, "`npx brnrd account connect`")
+        assert _says(out, "`npx brnrd gate setup telegram`")
+        assert _says(out, "`npx brnrd daemon install`")
 
     def test_channel_menu_stays_bare_for_a_path_install(
         self, tmp_path, monkeypatch, capsys,
@@ -1138,7 +1138,7 @@ class TestChannelMenu:
 
         out = capsys.readouterr().out
         assert "gates configured: telegram" in out
-        assert "`brnrd up` makes them live." in out
+        assert _says(out, "`brnrd up` makes them live.")
     def test_setup_runner_question_names_shell_and_core_and_persists_override(
         self, tmp_path, monkeypatch,
     ):
@@ -1509,7 +1509,7 @@ class TestBorrowed:
 
         out = capsys.readouterr().out
         assert "did NOT take" in out
-        assert "undo it by hand" in out
+        assert _says(out, "undo it by hand")
 
     def test_borrowed_undoes_a_commit_the_runner_makes_on_its_own(self, tmp_path, monkeypatch):
         # Driven for real against a scratch repo (#1746 report): the setup

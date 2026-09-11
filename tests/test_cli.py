@@ -13,7 +13,7 @@ import pytest
 
 from brr.cli import main
 
-from _helpers import init_git_repo
+from _helpers import _says, init_git_repo
 
 
 REPO = Path(__file__).parents[1]
@@ -278,7 +278,7 @@ def test_relic_pr_keeps_the_repo_a_url_names(tmp_path, monkeypatch, capsys):
     assert _relic_lines(outbox) == [
         {"kind": "pr", "number": 1461, "repo": "hugimuni-labs/brnrd"},
     ]
-    assert "pr #1461 in hugimuni-labs/brnrd" in capsys.readouterr().out
+    assert _says(capsys.readouterr().out, "pr #1461 in hugimuni-labs/brnrd")
 
 
 def test_relic_pr_explicit_repo_wins_over_the_url(tmp_path, monkeypatch):
@@ -326,7 +326,7 @@ def test_relic_pr_refuses_unparseable_input(tmp_path, monkeypatch, capsys):
 
     assert main(["relic", "pr", "not-a-pr"]) == 1
     err = capsys.readouterr().err
-    assert "not a PR number or URL" in err
+    assert _says(err, "not a PR number or URL")
     assert "nothing was written" in err.lower()
     assert not (outbox / ".relics.jsonl").exists()
 
@@ -431,7 +431,7 @@ def test_relic_merge_refuses_unparseable_input(tmp_path, monkeypatch, capsys):
 
     assert main(["relic", "merge", "not-a-merge"]) == 1
     err = capsys.readouterr().err
-    assert "PR number, PR URL, or commit sha" in err
+    assert _says(err, "PR number, PR URL, or commit sha")
     assert "nothing was written" in err.lower()
     assert not (outbox / ".relics.jsonl").exists()
 
@@ -520,7 +520,7 @@ def test_relic_comment_writes_the_grammar_record(tmp_path, monkeypatch, capsys):
     assert _relic_lines(outbox) == [
         {"kind": "comment", "on": "issue #903 — stale-open sweep"},
     ]
-    assert "issue #903 — stale-open sweep" in capsys.readouterr().out
+    assert _says(capsys.readouterr().out, "issue #903 — stale-open sweep")
 
 
 def test_relic_comment_refuses_a_blank_on(tmp_path, monkeypatch, capsys):
@@ -530,7 +530,7 @@ def test_relic_comment_refuses_a_blank_on(tmp_path, monkeypatch, capsys):
 
     assert main(["relic", "comment", "  "]) == 1
     err = capsys.readouterr().err
-    assert "say what the comment was on" in err
+    assert _says(err, "say what the comment was on")
     assert not (outbox / ".relics.jsonl").exists()
 
 
@@ -578,7 +578,7 @@ def test_relic_message_refuses_a_blank_note(tmp_path, monkeypatch, capsys):
 
     assert main(["relic", "message", " "]) == 1
     err = capsys.readouterr().err
-    assert "say what the message was" in err
+    assert _says(err, "say what the message was")
     assert not (outbox / ".relics.jsonl").exists()
 
 
@@ -653,7 +653,7 @@ def test_portal_state_prints_text_view(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "run=run-1" in out
     assert "token=abc123" in out
-    assert "evt-2 telegram: quick follow-up" in out
+    assert _says(out, "evt-2 telegram: quick follow-up")
     assert "card: working" in out
 
 
@@ -677,7 +677,7 @@ def test_portal_facets_schema_only_without_run(capsys, monkeypatch):
     assert "boundary facet catalogue" in out
     assert "quota [level, required]" in out
     assert "coexisting-runs [state, optional]" in out
-    assert "no live run detected" in out
+    assert _says(out, "no live run detected")
 
 
 def test_portal_facets_with_live_status(tmp_path, capsys, monkeypatch):
@@ -740,9 +740,9 @@ def test_format_portal_state_surfaces_missing_data():
     assert "nothing sent yet" in out
     assert "budget: elapsed=" in out
     assert "limit=" not in out and "keepalive=" not in out
-    assert "spend=unimplemented (not metered yet)" in out
-    assert "remote-scm=absent (no PR recorded for this branch yet)" in out
-    assert "allowance=unimplemented (not a strand-stack run)" in out
+    assert _says(out, "spend=unimplemented (not metered yet)")
+    assert _says(out, "remote-scm=absent (no PR recorded for this branch yet)")
+    assert _says(out, "allowance=unimplemented (not a strand-stack run)")
     assert "unavailable" not in out
 
 
@@ -845,7 +845,7 @@ def test_await_rejects_an_unparseable_timeout(tmp_path, capsys):
     outbox = _await_outbox(tmp_path)
 
     assert main(["await", "--outbox", str(outbox), "--timeout", "banana"]) == 1
-    assert "not a positive duration" in capsys.readouterr().err
+    assert _says(capsys.readouterr().err, "not a positive duration")
     assert _staged_await(outbox) == [], "nothing may be staged on a bad ceiling"
 
 
@@ -1099,8 +1099,8 @@ def test_await_reports_a_park_outcome_with_the_ratio(tmp_path, capsys, monkeypat
 
     assert main(["await", "--outbox", str(outbox)]) == 0
     out = capsys.readouterr().out
-    assert "parking — holding has cost 1.4·boot" in out
-    assert "end the turn and the seat parks" in out
+    assert _says(out, "parking — holding has cost 1.4·boot")
+    assert _says(out, "end the turn and the seat parks")
 
 
 def test_await_reports_its_own_arming_verdict(tmp_path, capsys, monkeypatch):
@@ -1185,7 +1185,7 @@ def test_await_arms_through_a_capped_advisory_notice(tmp_path, capsys, monkeypat
 
     assert main(["await", "--outbox", str(outbox), "--json"]) == 0
     captured = capsys.readouterr()
-    assert "armed (advisory: await capped" in captured.err
+    assert _says(captured.err, "armed (advisory: await capped")
     payload = json.loads(captured.out)
     assert payload["outcome"] == "event"
 
@@ -1427,8 +1427,8 @@ def test_account_connect_refused_connection_exits_with_recovery_not_traceback(
     output = result.stdout + result.stderr
     assert result.returncode != 0
     assert "account service at http://127.0.0.1:9 is unreachable" in output
-    assert "Check the URL and network connection" in output
-    assert "re-run `brnrd account connect`" in output
+    assert _says(output, "Check the URL and network connection")
+    assert _says(output, "re-run `brnrd account connect`")
     assert "Traceback" not in output
 
 
@@ -1454,9 +1454,9 @@ def test_account_connect_pairing_timeout_exits_with_approval_recovery(
 
     assert excinfo.value.code != 0
     message = str(excinfo.value)
-    assert "pairing was not approved" in message
-    assert "Approve the pairing link" in message
-    assert "re-run `brnrd account connect`" in message
+    assert _says(message, "pairing was not approved")
+    assert _says(message, "Approve the pairing link")
+    assert _says(message, "re-run `brnrd account connect`")
 
 
 def test_account_connect_pairs_installs_and_starts_service(
@@ -1511,7 +1511,7 @@ def test_account_connect_pairs_installs_and_starts_service(
             },
         ),
     ]
-    assert "Connected and listening in the background" in capsys.readouterr().out
+    assert _says(capsys.readouterr().out, "Connected and listening in the background")
 
 
 def test_account_connect_leaves_a_running_daemon_alone(
@@ -1547,7 +1547,7 @@ def test_account_connect_leaves_a_running_daemon_alone(
 
     assert installed == []
     out = capsys.readouterr().out
-    assert "background service already running (pid 4242)" in out
+    assert _says(out, "background service already running (pid 4242)")
     assert str(tmp_path / "the-first-repo") in out
     # The explicit repoint verb is named, so the behaviour is a default and
     # not a wall.
@@ -1579,7 +1579,7 @@ def test_account_connect_still_installs_when_no_daemon_is_running(
     assert main(["account", "connect", "https://brnrd.example"]) is None
 
     assert len(installed) == 1
-    assert "Connected and listening in the background" in capsys.readouterr().out
+    assert _says(capsys.readouterr().out, "Connected and listening in the background")
 
 
 def test_account_connect_reports_when_the_service_does_not_come_up(
@@ -1603,8 +1603,8 @@ def test_account_connect_reports_when_the_service_does_not_come_up(
     assert main(["account", "connect", "https://brnrd.example"]) is None
 
     out = capsys.readouterr().out
-    assert "Connected and listening in the background" not in out
-    assert "did not come up" in out
+    assert not _says(out, "Connected and listening in the background")
+    assert _says(out, "did not come up")
 
 
 def test_account_connect_installs_without_agents_md(
@@ -1641,7 +1641,7 @@ def test_account_connect_installs_without_agents_md(
 
     assert len(installed) == 1
     out = capsys.readouterr().out
-    assert "Connected and listening in the background" in out
+    assert _says(out, "Connected and listening in the background")
 
 
 def test_account_connect_no_service_keeps_foreground_escape(
@@ -1684,7 +1684,7 @@ def test_account_connect_queues_greeting_when_a_door_is_configured(
     assert main(["account", "connect", "https://brnrd.example"]) is None
 
     out = capsys.readouterr().out
-    assert "queued the setup interview" in out
+    assert _says(out, "queued the setup interview")
     assert "telegram" in out
     pending = protocol.list_pending(repo / ".brr" / "inbox")
     assert len(pending) == 1
@@ -1737,7 +1737,7 @@ def test_account_connect_defaults_flag_writes_init_defaults_not_the_interview(
     ]) is None
 
     assert calls == [((), {"defaults": True, "knowledge_shape": "home"})]
-    assert "writing brnrd init defaults" in capsys.readouterr().out
+    assert _says(capsys.readouterr().out, "writing brnrd init defaults")
     assert protocol.list_pending(repo / ".brr" / "inbox") == []
 
 
@@ -1834,7 +1834,7 @@ def test_account_connect_skips_setup_entirely_once_agents_md_exists(
     assert main(["account", "connect", "https://brnrd.example"]) is None
 
     out = capsys.readouterr().out
-    assert "queued the setup interview" not in out
+    assert not _says(out, "queued the setup interview")
     assert "no interview queued" not in out
     assert protocol.list_pending(repo / ".brr" / "inbox") == []
 
@@ -1959,7 +1959,7 @@ def test_home_link_reports_actionable_error_with_no_traceback(monkeypatch, tmp_p
 
     with pytest.raises(SystemExit) as exc:
         main(["home", "link", "--yes"])
-    assert "gh is not authenticated" in str(exc.value)
+    assert _says(str(exc.value), "gh is not authenticated")
 
 
 def _scaffold_project_home(tmp_path, name="repo"):
@@ -2646,7 +2646,7 @@ def test_gate_list_reads_each_gates_own_is_configured(monkeypatch, tmp_path, cap
     assert seen == list(GATES)
     out = capsys.readouterr().out
     assert "✓ telegram   configured" in out
-    assert "· slack      not configured" in out
+    assert _says(out, "· slack      not configured")
 
 
 def test_gate_list_json_shape(monkeypatch, tmp_path, capsys):
@@ -2744,8 +2744,8 @@ def test_completions_track_the_parser_not_a_hand_list(capsys):
     # completions without anyone remembering to update a table.
     assert main(["completions", "bash"]) == 0
     out = capsys.readouterr().out
-    assert "add connect disconnect relabel status" in out  # brnrd account
-    assert "auth bind list setup" in out  # brnrd gate
+    assert _says(out, "add connect disconnect relabel status")  # brnrd account
+    assert _says(out, "auth bind list setup")  # brnrd gate
 
 
 def test_completions_omit_retired_and_hidden_spellings(capsys):
@@ -2916,7 +2916,7 @@ def test_cmd_kb_project_fallback_names_the_reason_and_scaffolds_nothing(
     out = capsys.readouterr().out
     assert rc == 0
     assert "project fallback" in out
-    assert "no account link found" in out
+    assert _says(out, "no account link found")
     assert str(repo) in out
     # The whole point: reading must not have originated the thing it reports
     # having not found linked.
@@ -2956,7 +2956,7 @@ def test_cmd_notes_check_names_the_resolution_reason(tmp_path, capsys, monkeypat
     out = capsys.readouterr().out
     assert rc in (0, 1)
     assert "project fallback" in out
-    assert "no account link found" in out
+    assert _says(out, "no account link found")
 
 
 def test_cmd_kb_with_query_hit_exits_0(tmp_path, capsys, monkeypatch):
@@ -3019,7 +3019,7 @@ def test_wake_dump_renders_the_boot_then_every_boundary_in_order(tmp_path):
 
     assert "# the wake" in out
     assert "3 hook fire(s)" in out
-    assert "act distribution: 1 distinct / 1 classified · orient 1" in out
+    assert _says(out, "act distribution: 1 distinct / 1 classified · orient 1")
     # Order is the run's own, and it is the whole point of the file.
     assert out.index("seed capsule") < out.index("closeout")
     # A silent boundary is rendered, not skipped — the count must stay honest.
@@ -3040,7 +3040,7 @@ def test_wake_dump_distinguishes_an_old_run_from_a_quiet_one(tmp_path):
     run_dir = _run_dir_with(tmp_path, prompt="# the wake\n")
     out = _wake_dump(run_dir, boot=True, limit=None)
 
-    assert "predates the boundary transcript" in out
+    assert _says(out, "predates the boundary transcript")
     assert "hook fire(s)" not in out
 
 
@@ -3058,7 +3058,7 @@ def test_wake_dump_limit_says_it_is_showing_only_the_first_n(tmp_path):
     )
     out = _wake_dump(run_dir, boot=False, limit=2)
 
-    assert "5 hook fire(s), showing the first 2" in out
+    assert _says(out, "5 hook fire(s), showing the first 2")
     assert "tick 1" in out
     assert "tick 4" not in out
     assert "# the wake" not in out  # --no-boot
@@ -3265,7 +3265,7 @@ def test_prompts_replay_refuses_a_mounted_run_missing_the_sidecar(tmp_path, monk
     code = main(["prompts", "replay", "run-cli-mounted-0001", "--prompts", str(tmp_path)])
 
     assert code == 1
-    assert "captured before the sidecar existed" in capsys.readouterr().err
+    assert _says(capsys.readouterr().err, "captured before the sidecar existed")
 
 
 def test_prompts_replay_rejects_a_missing_prompts_dir(tmp_path, monkeypatch, capsys):
@@ -3429,7 +3429,7 @@ def test_gate_run_refuses_a_tree_the_command_moved_under_itself(tmp_path, monkey
     reason = hooks._gate_closeout_clause(ctx)
     assert reason is not None
     assert "written-mid-gate.py" in reason
-    assert "the gate never ran" not in reason
+    assert not _says(reason, "the gate never ran")
 
 
 def test_gate_run_on_two_trees_under_one_outbox_both_survive(tmp_path, monkeypatch):
@@ -3486,7 +3486,7 @@ def test_close_check_refuses_a_pr_body_and_exits_nonzero(tmp_path, capsys):
 
     assert main(["close-check", str(body)]) == 1
     out = capsys.readouterr().out
-    assert "pr-body:3: close keyword with a tail" in out
+    assert _says(out, "pr-body:3: close keyword with a tail")
     assert "Mask the digits" in out
 
 
@@ -3496,7 +3496,7 @@ def test_close_check_passes_a_clean_body(tmp_path, capsys):
 
     assert main(["close-check", str(body)]) == 0
     out = capsys.readouterr().out
-    assert "will close 1 issue(s) (pr-body)" in out
+    assert _says(out, "will close 1 issue(s) (pr-body)")
     assert "Closes #839" in out
 
 
@@ -3517,8 +3517,8 @@ def test_close_check_reads_stdin_and_honours_the_channel(monkeypatch, capsys):
     )
     assert main(["close-check", "--channel", "commit-msg"]) == 1
     out = capsys.readouterr().out
-    assert "commit-msg:1: close keyword not at the start of a line" in out
-    assert "Bypass: git commit --no-verify" in out
+    assert _says(out, "commit-msg:1: close keyword not at the start of a line")
+    assert _says(out, "Bypass: git commit --no-verify")
 
 
 def test_close_check_missing_file_is_a_clean_error(tmp_path, capsys):
@@ -3532,7 +3532,7 @@ def test_close_check_enumerates_two_close_keywords(tmp_path, capsys):
 
     assert main(["close-check", str(body)]) == 0
     out = capsys.readouterr().out
-    assert "will close 2 issue(s) (pr-body)" in out
+    assert _says(out, "will close 2 issue(s) (pr-body)")
     assert "Closes #1433" in out
     assert "Closes #1434" in out
 
@@ -3543,7 +3543,7 @@ def test_close_check_no_close_keywords(tmp_path, capsys):
 
     assert main(["close-check", str(body)]) == 0
     out = capsys.readouterr().out
-    assert "no close keywords (pr-body)" in out
+    assert _says(out, "no close keywords (pr-body)")
 
 
 def test_close_check_resolve_with_unreachable_forge(tmp_path, capsys, monkeypatch):
@@ -3722,16 +3722,16 @@ class TestNpxSpelling:
 
     def test_pairing_timeout_recovery_is_npx_spelled(self, tmp_path, monkeypatch):
         monkeypatch.setenv("BRNRD_LAUNCHER", "npx")
-        assert "re-run `npx brnrd account connect`" in self._timeout_connect(
+        assert _says(self._timeout_connect(
             tmp_path, monkeypatch,
-        )
+        ), "re-run `npx brnrd account connect`")
 
     def test_pairing_timeout_recovery_stays_bare_for_a_path_install(
         self, tmp_path, monkeypatch,
     ):
         monkeypatch.delenv("BRNRD_LAUNCHER", raising=False)
         message = self._timeout_connect(tmp_path, monkeypatch)
-        assert "re-run `brnrd account connect`" in message
+        assert _says(message, "re-run `brnrd account connect`")
         assert "npx" not in message
 
     def _connect_no_service(self, tmp_path, monkeypatch):
@@ -3745,7 +3745,7 @@ class TestNpxSpelling:
     def test_foreground_escape_is_npx_spelled(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("BRNRD_LAUNCHER", "npx")
         self._connect_no_service(tmp_path, monkeypatch)
-        assert "Run `npx brnrd up --foreground`" in capsys.readouterr().out
+        assert _says(capsys.readouterr().out, "Run `npx brnrd up --foreground`")
 
     def test_foreground_escape_stays_bare_for_a_path_install(
         self, tmp_path, monkeypatch, capsys,
@@ -3753,7 +3753,7 @@ class TestNpxSpelling:
         monkeypatch.delenv("BRNRD_LAUNCHER", raising=False)
         self._connect_no_service(tmp_path, monkeypatch)
         out = capsys.readouterr().out
-        assert "Run `brnrd up --foreground`" in out
+        assert _says(out, "Run `brnrd up --foreground`")
         assert "npx" not in out
 
     def test_cloud_gate_setup_pointer_is_npx_spelled(
@@ -3766,7 +3766,7 @@ class TestNpxSpelling:
 
         main(["gate", "setup", "cloud"])
 
-        assert "Run `npx brnrd account connect`" in capsys.readouterr().out
+        assert _says(capsys.readouterr().out, "Run `npx brnrd account connect`")
 
     def test_cloud_gate_setup_pointer_stays_bare_for_a_path_install(
         self, tmp_path, monkeypatch, capsys,
@@ -3779,7 +3779,7 @@ class TestNpxSpelling:
         main(["gate", "setup", "cloud"])
 
         out = capsys.readouterr().out
-        assert "Run `brnrd account connect`" in out
+        assert _says(out, "Run `brnrd account connect`")
         assert "npx" not in out
 
     def test_account_add_without_a_connected_home_is_npx_spelled(
@@ -3793,7 +3793,7 @@ class TestNpxSpelling:
         with pytest.raises(SystemExit) as excinfo:
             main(["account", "add", str(repo)])
 
-        assert "run `npx brnrd account connect` first" in str(excinfo.value)
+        assert _says(str(excinfo.value), "run `npx brnrd account connect` first")
 
     def test_account_add_without_a_connected_home_stays_bare(
         self, tmp_path, monkeypatch,
@@ -3807,7 +3807,7 @@ class TestNpxSpelling:
             main(["account", "add", str(repo)])
 
         message = str(excinfo.value)
-        assert "run `brnrd account connect` first" in message
+        assert _says(message, "run `brnrd account connect` first")
         assert "npx" not in message
 
     def test_account_status_project_home_pointer_is_npx_spelled(
@@ -3820,7 +3820,7 @@ class TestNpxSpelling:
 
         assert main(["account", "status"]) == 0
 
-        assert "`npx brnrd account connect` links it" in capsys.readouterr().out
+        assert _says(capsys.readouterr().out, "`npx brnrd account connect` links it")
 
     def test_account_status_project_home_pointer_stays_bare(
         self, tmp_path, monkeypatch, capsys,
@@ -3833,7 +3833,7 @@ class TestNpxSpelling:
         assert main(["account", "status"]) == 0
 
         out = capsys.readouterr().out
-        assert "`brnrd account connect` links it" in out
+        assert _says(out, "`brnrd account connect` links it")
         assert "npx" not in out
 
     def _up_before_init(self, tmp_path, monkeypatch, capsys):

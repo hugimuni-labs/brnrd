@@ -8,7 +8,7 @@ from pathlib import Path
 
 from brr import account, dominion, gitops, prompts
 
-from _helpers import commit_files, init_git_repo
+from _helpers import _says, commit_files, init_git_repo
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
@@ -56,7 +56,7 @@ def test_fresh_bootstrap_creates_orphan_branch_and_worktree(tmp_path):
     # The README carries the user-facing "don't delete this branch" guidance
     # for a maintainer who notices brr-home in their branch list.
     readme = (path / "README.md").read_text(encoding="utf-8")
-    assert "don't delete this branch" in readme.lower()
+    assert _says(readme.lower(), "don't delete this branch")
 
 
 def test_orphan_history_is_independent_of_main(tmp_path):
@@ -159,14 +159,14 @@ def test_resolve_self_inject_includes_seeded_playbook(tmp_path):
 
     digest = dominion.resolve_self_inject(path)
 
-    assert "Playbook — your standing orientation" in digest
+    assert _says(digest, "Playbook — your standing orientation")
     assert "self-inject: full playbook.md" in digest  # provenance marker
     # The rich seed (not the old stub) shipped and was injected in full.
     # Pin structure, not prose: the first and the last `## ` section both
     # arriving proves whole-file injection, and survives seed rewordings —
     # this test's own prose pins rotted on the 2026-07 register rewrite.
     assert "## Two memories" in digest
-    assert "## Keep this place useful" in digest
+    assert _says(digest, "## Keep this place useful")
 
 
 def test_seed_playbook_fits_default_inject_budget_in_full(tmp_path):
@@ -187,8 +187,8 @@ def test_seed_playbook_fits_default_inject_budget_in_full(tmp_path):
     # The playbook's closing section survives — nothing was clipped. Pinned
     # by heading, not prose: a phrase pin rots on every seed rewording while
     # asserting nothing more than the heading does.
-    assert "## Keep this place useful" in digest
-    assert "truncated to fit dominion inject budget" not in digest
+    assert _says(digest, "## Keep this place useful")
+    assert not _says(digest, "truncated to fit dominion inject budget")
     assert "collapsed" not in digest.split("\n", 1)[0]  # no collapse banner
 
     # The invariant, numerically (#919 rec 3: the seed's own ceiling, not the
@@ -217,8 +217,8 @@ def test_build_injected_context_matches_runner_injection(tmp_path):
     # It carries the product-owned identity core and the resident-owned
     # dominion digest (playbook + self-inject)...
     assert "Resident Identity Core" in context
-    assert "Your dominion (working memory)" in context
-    assert "Playbook — your standing orientation" in context
+    assert _says(context, "Your dominion (working memory)")
+    assert _says(context, "Playbook — your standing orientation")
     assert context.index("Resident Identity Core") < context.index(
         "Your dominion (working memory)"
     )
@@ -273,8 +273,8 @@ def test_build_injected_context_includes_mode_toggles(tmp_path):
     context = prompts.build_injected_context(repo, task_text="fix the parser")
 
     # Diffense and introspection blocks are present...
-    assert "## Review pack (diffense)" in context
-    assert "## Look at it" in context
+    assert _says(context, "## Review pack (diffense)")
+    assert _says(context, "## Look at it")
     # ...and the inject context is a subset of the full daemon prompt, so
     # there is no drift between what the tool shows and what the wake sees.
     daemon_prompt = prompts.build_daemon_prompt(
@@ -294,7 +294,7 @@ def test_dominion_block_surfaces_write_path_and_commit(tmp_path):
     assert str(path) in block
     # ...and told to commit its own memory (no capture-at-sleep reliance —
     # an uncommitted note can vanish when a non-brr session ends).
-    assert "commit what you mean to keep" in block
+    assert _says(block, "commit what you mean to keep")
     # No divergence by default → no dynamic reconcile signal.
     assert "Reason on record" not in block
 
@@ -309,7 +309,7 @@ def test_dominion_block_surfaces_divergence_when_marked(tmp_path):
     # The dynamic signal fires (distinct from the playbook's standing
     # guidance) and carries the recorded reason.
     assert "Reason on record" in block
-    assert "push of brr-home was rejected" in block
+    assert _says(block, "push of brr-home was rejected")
 
 
 def test_seed_account_dominion_preserves_existing_files(tmp_path):
@@ -321,9 +321,9 @@ def test_seed_account_dominion_preserves_existing_files(tmp_path):
 
     assert (path / "playbook.md").read_text(encoding="utf-8") == "custom\n"
     assert (path / "self-inject").exists()
-    assert "Default startup does not create a GitHub repo" in (
+    assert _says((
         path / "README.md"
-    ).read_text(encoding="utf-8")
+    ).read_text(encoding="utf-8"), "Default startup does not create a GitHub repo")
 
 
 def test_resolve_self_inject_modes(tmp_path):
@@ -607,13 +607,13 @@ def test_resolve_self_inject_collapses_sections_bottom_up(tmp_path):
 
     assert overflow is not None
     # Section A's body (all 6 lines) survives whole — never trimmed.
-    assert "Section A filler line 5" in digest
-    assert "Section A\n_(§ collapsed" not in digest
+    assert _says(digest, "Section A filler line 5")
+    assert not _says(digest, "Section A\n_(§ collapsed")
     # B and C are each collapsed to their own stub under their own heading...
-    assert "Section B\n_(§ collapsed" in digest
-    assert "Section C\n_(§ collapsed" in digest
-    assert "Section B filler line" not in digest
-    assert "Section C filler line" not in digest
+    assert _says(digest, "Section B\n_(§ collapsed")
+    assert _says(digest, "Section C\n_(§ collapsed")
+    assert not _says(digest, "Section B filler line")
+    assert not _says(digest, "Section C filler line")
     # ...and named bottom-up: C (lowest priority) before B in the banner.
     banner_line = next(
         line for line in digest.splitlines() if line.startswith("> collapsed bottom-up")
@@ -689,10 +689,10 @@ def test_resolve_self_inject_realistic_30kb_fixture_collapses_to_fit(tmp_path):
     assert len(digest.encode("utf-8")) <= dominion.DEFAULT_INJECT_BUDGET_BYTES
     # The opening orientation and the topmost section (highest priority)
     # survive whole...
-    assert "Read top to bottom; invariants" in digest
-    assert "Two memories para0 line 0" in digest
+    assert _says(digest, "Read top to bottom; invariants")
+    assert _says(digest, "Two memories para0 line 0")
     # ...while lowest-priority trailing sections are named, sized stubs.
-    assert "Closing notes\n_(§ collapsed" in digest
+    assert _says(digest, "Closing notes\n_(§ collapsed")
     assert "§ collapsed" in digest
 
 
@@ -724,8 +724,8 @@ def test_run_prompt_injects_dominion_digest(tmp_path):
 
     prompt = prompts.build_run_prompt("do the thing", repo)
 
-    assert "Your dominion (working memory)" in prompt
-    assert "Playbook — your standing orientation" in prompt
+    assert _says(prompt, "Your dominion (working memory)")
+    assert _says(prompt, "Playbook — your standing orientation")
 
 
 def test_daemon_prompt_injects_dominion_digest(tmp_path):
@@ -736,7 +736,7 @@ def test_daemon_prompt_injects_dominion_digest(tmp_path):
         "do the thing", "evt-1", "/tmp/resp.md", repo,
     )
 
-    assert "Your dominion (working memory)" in prompt
+    assert _says(prompt, "Your dominion (working memory)")
 
 
 def test_daemon_prompt_names_thread_of_record_slot(tmp_path):
@@ -750,7 +750,7 @@ def test_daemon_prompt_names_thread_of_record_slot(tmp_path):
 
     assert "Thread of record" in prompt
     assert "thread-of-record.md" in prompt
-    assert "brr points at the slot but does not synthesize" in prompt
+    assert _says(prompt, "brr points at the slot but does not synthesize")
 
 
 def test_prompt_without_dominion_has_no_block(tmp_path):
@@ -758,7 +758,7 @@ def test_prompt_without_dominion_has_no_block(tmp_path):
 
     prompt = prompts.build_run_prompt("do the thing", repo)
 
-    assert "Your dominion (working memory)" not in prompt
+    assert not _says(prompt, "Your dominion (working memory)")
 
 
 def test_disabled_dominion_is_not_injected(tmp_path):
@@ -770,4 +770,4 @@ def test_disabled_dominion_is_not_injected(tmp_path):
 
     prompt = prompts.build_run_prompt("do the thing", repo)
 
-    assert "Your dominion (working memory)" not in prompt
+    assert not _says(prompt, "Your dominion (working memory)")
