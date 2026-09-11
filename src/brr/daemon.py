@@ -10624,6 +10624,46 @@ def _hold_ratio_facet(
     return updated, hold_facet
 
 
+def _resident_hold_refusal(
+    task: Run, resume_condition: str, cfg: "dict | None",
+) -> str | None:
+    """Why a resident-staged ``hold:`` is refused, or ``None`` to accept it (#1890 redo).
+
+    His rule, 2026-09-11 (evt-…-oiz9): *"it should only ever stop the run if
+    the user decides to do so"* — or a resource wall. So a resident ``hold:``
+    stands only on a wall the daemon itself can confirm: ``resume: refill``
+    or ``resume: reset`` with the binding quota last measured at a boundary
+    (``task.meta["quota_binding_pct"]``, stamped by ``_starvation_facet``)
+    under ``seat.starve_floor_pct``. That reading is the only wall a *live*
+    resident can stand on: an auth failure or a provider limit kills the
+    Shell, and the worker's failure path (``_maybe_arm_resource_hold_on_failure``)
+    arms that hold itself — never this verb.
+    """
+    await_rest = (
+        "`brnrd await` is the resting state — a message, an own strand, or a "
+        "tick resolves it, and the seat stays warm"
+    )
+    if resume_condition not in resource_hold.WALL_RESUME_CONDITIONS:
+        return (
+            f"hold refused: resume: {resume_condition} is not a resource wall — "
+            f"{await_rest}. `hold:` parks only on a wall the daemon can "
+            "confirm: `resume: refill` (or `reset`) with the binding quota "
+            "measured under the starvation floor"
+        )
+    pct = task.meta.get("quota_binding_pct")
+    floor = _seat_starve_floor_pct(cfg)
+    if isinstance(pct, (int, float)) and float(pct) < floor:
+        return None
+    reading = (
+        f"last read {float(pct):.1f}%" if isinstance(pct, (int, float))
+        else "not measured this run"
+    )
+    return (
+        f"hold refused: resume: {resume_condition} needs a measured wall — the "
+        f"binding quota is {reading} (floor {floor:g}%) — {await_rest}"
+    )
+
+
 def _park_bolt_on_live_strands(
     task: Run,
     declaration: "cut_verb.CutDeclaration",
@@ -11218,21 +11258,17 @@ def _drain_outbox(
                 )
                 resume_condition = hold_spec["resume_condition"]
                 reset_deadline = hold_spec["reset_deadline_hint"]
-                if (
-                    resume_condition == resource_hold.RESUME_STRANDS
-                    and not _owned_child_controls(task.id)
-                ):
-                    # A hold on strands that do not exist would be a close
-                    # wearing a hold's status — nothing but the operator
-                    # could ever release it. Refuse, name the two verbs
-                    # that fit.
+                hold_cfg = conf.load_config(repo_root) if repo_root else {}
+                refusal = _resident_hold_refusal(task, resume_condition, hold_cfg)
+                if refusal:
+                    # #1890 redo: the resident cannot park by choice. `await`
+                    # is the resting state; a park is for a wall the daemon
+                    # itself can confirm. The daemon's own parks (turn-end
+                    # safety net, starvation, a bolt on live strands, the
+                    # hold-cost opt-in) never pass through this branch.
                     _record_outbox_notice(
-                        outbox_dir,
-                        "hold dropped: resume: strands but this run owns no "
-                        "live strand — nothing would wake it. Waiting on a "
-                        "person ⇒ `brnrd await` (live) or `resume: operator`; "
-                        "finished ⇒ `cut:`",
-                        kind="dropped", lifetime="run", source_file=fpath.name,
+                        outbox_dir, refusal,
+                        kind="refused", lifetime="run", source_file=fpath.name,
                     )
                     _retire_outbox_staging(fpath)
                     continue
@@ -11240,16 +11276,17 @@ def _drain_outbox(
                     reset_deadline = _codex_reset_deadline(None, native_session_id)
                 if resume_condition == resource_hold.RESUME_RESET and reset_deadline is None:
                     # Explicit, concrete boundary rather than a silent
-                    # downgrade nobody is told about — "Unknown or
-                    # unsupported native resume capability must be
-                    # explicit" applies just as much to an unmeasurable
-                    # reset condition.
-                    resume_condition = resource_hold.RESUME_OPERATOR
+                    # downgrade nobody is told about. The wall is confirmed
+                    # (starvation measured), only its clock is not — so the
+                    # seat parks on the measured refill instead: `operator`
+                    # is not a wall and would let a tick wake a seat that
+                    # cannot run.
+                    resume_condition = resource_hold.RESUME_REFILL
                     _record_outbox_notice(
                         outbox_dir,
                         "hold: resume: reset requested but no measured "
                         "provider reset deadline is available — armed as "
-                        "resume: operator instead",
+                        "resume: refill (a measured quota refill thaws it) instead",
                         kind="advisory", lifetime="run", source_file=fpath.name,
                     )
                 task.meta["pending_resource_hold"] = {
@@ -11271,13 +11308,12 @@ def _drain_outbox(
                     # carries the floors and the bucket the thaw reads,
                     # exactly as the daemon-armed one does.
                     last_pct = task.meta.get("quota_binding_pct")
-                    cfg = conf.load_config(repo_root) if repo_root else {}
                     task.meta["pending_resource_hold"]["quota"] = {
                         "binding_remaining_pct": (
                             float(last_pct) if isinstance(last_pct, (int, float)) else None
                         ),
-                        "starve_floor_pct": _seat_starve_floor_pct(cfg),
-                        "refill_floor_pct": _seat_refill_floor_pct(cfg),
+                        "starve_floor_pct": _seat_starve_floor_pct(hold_cfg),
+                        "refill_floor_pct": _seat_refill_floor_pct(hold_cfg),
                         "runner": str(task.meta.get("runner_name") or ""),
                         "model": str(task.meta.get("runner_core") or ""),
                     }
@@ -17488,6 +17524,14 @@ def _arm_resource_hold(
     (``_mark_interrupted_runs``, the zombie sweepers,
     ``_reconcile_orphaned_spawn_dispatches``) leaves this run alone without
     needing to know this function exists.
+
+    **One seat per repo, by construction (#1890).** Every other active hold
+    under *runs_dir* is superseded here — released ``by="superseded"`` with
+    ``superseded_by`` naming this run — and its accumulated mail is folded
+    into this record, so the one seat the repo resumes holds every letter.
+    Before this a repo could collect holds (two ``resume: any`` ghosts on
+    2026-09-11) while every consumer read the newest as "the seat", and the
+    older ones stranded mail nothing would ever un-defer.
     """
     previous = task.meta.get("resource_hold") or {}
     generation = int(previous.get("generation") or 0) + 1
@@ -17496,9 +17540,31 @@ def _arm_resource_hold(
         generation=generation,
         **hold_fields,
     )
+    for other in _held_runs_for_repo(runs_dir):
+        if other.id == task.id:
+            continue
+        meta = _supersede_hold(runs_dir, other, meta, by_run=task.id)
     task.meta["resource_hold"] = meta
     task.update_status(resource_hold.RUN_STATUS, runs_dir)
     return meta
+
+
+def _supersede_hold(
+    runs_dir: Path, other: Run, into: dict[str, object], *, by_run: str,
+) -> dict[str, object]:
+    """Release *other*'s hold as superseded by *by_run*; fold its mail into *into*."""
+    other_meta = other.meta.get("resource_hold") or {}
+    for folded_id in other_meta.get("accumulated_event_ids") or []:
+        into = resource_hold.accumulate_event(into, folded_id)
+    superseded = resource_hold.mark_released(other_meta, by="superseded")
+    superseded["superseded_by"] = by_run
+    other.meta["resource_hold"] = superseded
+    other.save(runs_dir)
+    print(
+        f"[brnrd] resource hold superseded: {other.id} -> {by_run} "
+        "(one seat per repo)"
+    )
+    return into
 
 
 def _hold_body(meta: dict[str, object]) -> str:
@@ -17701,12 +17767,12 @@ def _native_session_id_for(task: Run) -> str | None:
 
 
 def _held_runs_for_repo(runs_dir: Path) -> list[Run]:
-    """Active (unreleased) resource holds recorded under *runs_dir*.
+    """Active (unreleased) resource holds recorded under *runs_dir*, newest-armed first.
 
-    Newest-armed first — a repo should only ever have one live hold at a
-    time (the single-flight resident slot means only one resident thought
-    runs per repo), but if a stale record ever survives beside a fresher
-    one, the fresher one is the honest answer to "is this repo held".
+    A *listing*. The one seat is :func:`_repo_seat`, which enforces the
+    cardinality this list alone does not: ``_arm_resource_hold`` supersedes
+    on every arm, but records armed before #1890 can still sit side by side
+    on disk, so nothing may take this list's ``[0]`` as "the seat".
     """
     held = [
         r for r in list_runs(runs_dir, status=resource_hold.RUN_STATUS)
@@ -17717,6 +17783,58 @@ def _held_runs_for_repo(runs_dir: Path) -> list[Run]:
         reverse=True,
     )
     return held
+
+
+def _repo_seat(runs_dir: Path) -> Run | None:
+    """The repo's one parked seat, or ``None`` (#1890).
+
+    One seat per repo: the newest-armed hold is the seat, and any older
+    active hold beside it (a ghost from before arm-time supersession, e.g.
+    ``run-260910-0123-fi7s`` / ``run-260910-1123-9od3``) is superseded into
+    it here, its mail folded — so the guarantee holds at read time too, not
+    only after the next arm.
+    """
+    held_runs = _held_runs_for_repo(runs_dir)
+    if not held_runs:
+        return None
+    seat = held_runs[0]
+    if len(held_runs) > 1:
+        meta = seat.meta.get("resource_hold") or {}
+        for ghost in held_runs[1:]:
+            meta = _supersede_hold(runs_dir, ghost, meta, by_run=seat.id)
+        seat.meta["resource_hold"] = meta
+        seat.save(runs_dir)
+    return seat
+
+
+def _seat_conversation(held: Run) -> str:
+    """The conversation *held* is the seat of — the hold's own key, else the run's."""
+    return resource_hold.seat_conversation(
+        held.meta.get("resource_hold"), getattr(held, "conversation_key", "") or "",
+    )
+
+
+def _rekey_to_seat(event: dict, seat_conversation: str) -> bool:
+    """Re-key a routine event to the seat's conversation (#1890). ``True`` if changed.
+
+    A resumed seat stays on its own thread: a tick or a strand's return that
+    wakes it is *mail the seat reads*, not a thread it moves into — the
+    fresh dispatch derives its conversation from the lead event
+    (``conversations.conversation_key_for_event`` reads an explicit key
+    first), so without this a ``schedule:the-wire-round`` tick booted the
+    Telegram seat's warm session into the wire-round thread (2026-09-10)
+    and the maintainer's next message found nothing parked. Only routine
+    sources are re-keyed — a correspondent's message keeps its own thread,
+    whose key routes its reply.
+    """
+    if not seat_conversation:
+        return False
+    if str(event.get("source") or "") not in _HOLD_ACCUMULATE_ONLY_SOURCES:
+        return False
+    if (conversations.conversation_key_for_event(event) or "") == seat_conversation:
+        return False
+    event["conversation_key"] = seat_conversation
+    return True
 
 
 def _accumulate_held_event(runs_dir: Path, held: Run, event_id: str) -> None:
@@ -17783,8 +17901,13 @@ def _undefer_held_event(
     *,
     resume_native_session_id: str | None = None,
     resume_native_provider: str | None = None,
+    seat_conversation: str = "",
 ) -> None:
     """Release one accumulated event back to ordinary pending eligibility.
+
+    *seat_conversation* re-keys a routine letter (:func:`_rekey_to_seat`) so
+    an accumulated tick that sorts ahead of the trigger and leads the
+    resumed dispatch still boots on the seat's thread.
 
     Accepts one drawer or several (:func:`_hold_undefer_inboxes`) and takes
     the first that actually holds the letter. An id that resolves in *no*
@@ -17830,6 +17953,8 @@ def _undefer_held_event(
         updates["resume_native_session_id"] = resume_native_session_id
     if resume_native_provider:
         updates["resume_native_provider"] = resume_native_provider
+    if _rekey_to_seat(ev, seat_conversation):
+        updates["conversation_key"] = seat_conversation
     try:
         protocol.update_event_meta(ev, **updates)
     except OSError:
@@ -17861,18 +17986,34 @@ def _apply_resource_hold_resume(
     released = resource_hold.mark_released(meta, by=by)
     held.meta["resource_hold"] = released
     held.save(runs_dir)
+    stamps: dict[str, object] = {}
+    # #1890: the resume boots into the *seat's* conversation, never the
+    # releaser's (a tick's `schedule:*`, a strand's `run:<parent>`). Written
+    # to disk as well as the in-memory event, so a dispatch that re-reads
+    # the lead (a burst settle, a restart before claim) still lands home.
+    seat = _seat_conversation(held)
+    if _rekey_to_seat(event, seat):
+        stamps["conversation_key"] = seat
     if (
         released.get("native_session_id")
         and released.get("resume_kind") == resource_hold.RESUME_NATIVE
     ):
         event["resume_native_session_id"] = released["native_session_id"]
         event["resume_native_provider"] = released.get("provider")
+        stamps["resume_native_session_id"] = event["resume_native_session_id"]
+        stamps["resume_native_provider"] = event["resume_native_provider"]
+    if stamps and isinstance(event.get("_path"), Path):
+        try:
+            protocol.update_event_meta(event, **stamps)
+        except OSError:
+            pass
     drawers = _hold_undefer_inboxes(account_context, inbox_dir)
     for accumulated_id in released.get("accumulated_event_ids") or []:
         _undefer_held_event(
             drawers, accumulated_id,
             resume_native_session_id=event.get("resume_native_session_id"),
             resume_native_provider=event.get("resume_native_provider"),
+            seat_conversation=seat,
         )
 
 
@@ -17931,6 +18072,7 @@ def _release_reset_holds_due(
                     _hold_undefer_inboxes(account_context, inbox_dir), accumulated_id,
                     resume_native_session_id=released_meta.get("native_session_id"),
                     resume_native_provider=released_meta.get("provider"),
+                    seat_conversation=_seat_conversation(held),
                 )
             released += 1
             print(
@@ -18117,11 +18259,10 @@ def _handle_resource_held_events(
     survivors: list["_DispatchTarget"] = []
     for repo_root, targets in by_repo.items():
         runs_dir = gitops.shared_brr_dir(repo_root) / "runs"
-        held_runs = _held_runs_for_repo(runs_dir)
-        if not held_runs:
+        held = _repo_seat(runs_dir)
+        if held is None:
             survivors.extend(targets)
             continue
-        held = held_runs[0]
         for target in targets:
             hold_meta = held.meta.get("resource_hold") or {}
             if not resource_hold.is_active(hold_meta):

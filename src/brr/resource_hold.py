@@ -44,6 +44,14 @@ or the automatic-detection path chose:
   rate or a repeated poll). Only reachable through an explicit resident
   choice (the ``hold:`` outbox verb's own ``resume: reset`` field).
 
+**One seat per repo; a tick wakes it; only a wall parks it by choice (#1890
+redo).** A ``schedule`` firing resumes every hold that is not a *resource
+wall* (:func:`is_resource_wall`: ``refill`` / ``reset``, or a quota reason),
+and the resume is re-keyed to the seat's own conversation — a tick is mail
+the seat reads, never a thread it moves into. A resident-staged ``hold:``
+is refused unless it names a wall the daemon can confirm
+(``daemon._resident_hold_refusal``); ``brnrd await`` is the resting state.
+
 Every function here is pure: no filesystem, no daemon state, no clock
 side-effects beyond an injectable ``now``. ``daemon.py`` owns persistence
 (``Run.meta["resource_hold"]``, which rides the existing ``run.md``
@@ -285,14 +293,56 @@ def refuses_correspondent(meta: dict[str, Any] | None) -> bool:
     return is_active(meta) and (meta or {}).get("resume_condition") == RESUME_REFILL
 
 
+#: The two conditions that name a *resource wall* — the seat cannot run until
+#: the provider says it can, so nothing routine may wake it: ``refill`` (the
+#: starvation park) and ``reset`` (a measured provider reset).
+WALL_RESUME_CONDITIONS = frozenset({RESUME_REFILL, RESUME_RESET})
+#: Reasons that name a resource wall whatever condition they were armed on —
+#: the automatic codex ``usage_limit_exceeded`` hold arms ``resume: operator``
+#: ("silence is neither permission nor a reset"), and a tick waking it would
+#: only die on the same wall.
+WALL_REASONS = frozenset({REASON_QUOTA_EXHAUSTED, REASON_QUOTA_STARVED})
+
+
+def is_resource_wall(meta: dict[str, Any] | None) -> bool:
+    """Whether this active hold is parked on a resource wall (#1890 redo).
+
+    A wall is the one reason a seat is parked that routine traffic must not
+    defeat: the seat cannot run. Every other hold is a seat at rest — the
+    daemon's turn-end park, a bolt on live strands, an operator wait — and
+    a tick is a reason to wake it.
+    """
+    if not is_active(meta):
+        return False
+    return (
+        (meta or {}).get("resume_condition") in WALL_RESUME_CONDITIONS
+        or (meta or {}).get("reason") in WALL_REASONS
+    )
+
+
+def seat_conversation(meta: dict[str, Any] | None, fallback: str = "") -> str:
+    """The conversation this hold is the seat of.
+
+    The record's own ``conversation_key`` (stamped at arm time from the
+    parked run's), else *fallback* — the run's own key, for a record armed
+    before the field was always filled.
+    """
+    key = str((meta or {}).get("conversation_key") or "").strip()
+    return key or str(fallback or "").strip()
+
+
 def schedule_event_releases(meta: dict[str, Any] | None, event: dict[str, Any] | None) -> bool:
-    """Whether a ``schedule`` firing wakes this hold — only on the ``any`` condition.
+    """Whether a ``schedule`` firing wakes this hold — every hold but a wall.
 
     A tick is a reason to wake a parked seat (design-the-seat-that-never-quits.md:
-    "a tick is a reason to wake, not a new life"); under every other
-    condition it accumulates as before.
+    "a tick is a reason to wake, not a new life") — whichever conversation
+    the tick belongs to: a repo has one seat, and the resume is re-keyed to
+    the *seat's* conversation (``daemon._apply_resource_hold_resume``), so
+    the tick is mail the seat reads, never a thread it moves into. Only a
+    resource wall (:func:`is_resource_wall`) lets ticks accumulate: the seat
+    cannot run, and waking it would spend a boot to die on the same wall.
     """
-    if not is_active(meta) or (meta or {}).get("resume_condition") != RESUME_ANY:
+    if not is_active(meta) or is_resource_wall(meta):
         return False
     return bool(event) and str(event.get("source") or "") == "schedule"
 

@@ -38,6 +38,13 @@ Grammar, everything but the marker optional:
                                       # to operator-only when neither is
                                       # available — never a guessed rate.
 
+Parsing is grammar only. Since #1890's redo the daemon refuses every parsed
+``hold:`` that is not a confirmed resource wall — ``resume: refill`` / ``reset``
+with the binding quota measured under ``seat.starve_floor_pct``
+(``daemon._resident_hold_refusal``); ``brnrd await`` is the resting state,
+and ``operator`` / ``strands`` / ``any`` stay in the grammar for the
+daemon's own parks and for a refusal that names what was asked.
+
 ``resume: reset`` with no ``reset:`` and no measurable provider deadline is
 not a refusal here — parsing succeeds with ``reset_deadline=None`` and the
 daemon-side apply step is the one that decides whether to honour ``reset``
