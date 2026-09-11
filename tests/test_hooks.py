@@ -235,6 +235,9 @@ def test_content_identical_block_is_suppressed_when_portal_token_moves(tmp_path)
 
 
 def test_content_changed_block_is_always_resent(tmp_path):
+    # w-34b (2026-09-11): `quota` now bands on `_AMBIENT_QUOTA_THRESHOLDS`,
+    # so the move has to cross one (80%→79% stays in the same band and
+    # would no longer qualify as "changed").
     env = _env(tmp_path)
     _portal(tmp_path, token="t1", resources={
         "quota": {"status": "known", "summary": "week 80% left"},
@@ -242,11 +245,11 @@ def test_content_changed_block_is_always_resent(tmp_path):
     hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
 
     _portal(tmp_path, token="t2", resources={
-        "quota": {"status": "known", "summary": "week 79% left"},
+        "quota": {"status": "known", "summary": "week 25% left"},
     })
     changed, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
     assert "hookSpecificOutput" in changed, changed
-    assert "q W79" in changed["hookSpecificOutput"]["additionalContext"]
+    assert "q W25" in changed["hookSpecificOutput"]["additionalContext"]
 
 
 def test_content_block_never_seen_is_always_sent(tmp_path):
@@ -3664,8 +3667,11 @@ def test_post_tool_bar_is_quiet_when_chips_stand_unchanged():
 
 
 def test_post_tool_bar_renders_only_the_chips_that_moved():
-    # The ticker moved, the quota did not: the bar carries the preamble and
-    # the one changed chip, nothing else.
+    # The ticker crossed a threshold band, the quota did not: the bar
+    # carries the preamble and the one changed chip, nothing else. (w-34b,
+    # 2026-09-11: `budget` with a configured ceiling now bands on
+    # `_AMBIENT_BUDGET_THRESHOLDS`, so the move has to cross one — 16m→17m
+    # of 120m stays inside the same band and would no longer qualify.)
     payload = _bar_payload(
         budget={"elapsed_seconds": 16 * 60, "budget_seconds": 120 * 60},
         outbound={"replies_current": 0, "replies_other": 0,
@@ -3675,9 +3681,9 @@ def test_post_tool_bar_renders_only_the_chips_that_moved():
     )
     seen: dict[str, str] = {}
     hooks.format_delta(payload, rendered_chips=seen)
-    payload["budget"] = {"elapsed_seconds": 17 * 60, "budget_seconds": 120 * 60}
+    payload["budget"] = {"elapsed_seconds": 31 * 60, "budget_seconds": 120 * 60}
     rendered = hooks.format_delta(payload, last_chips=seen)
-    assert rendered.splitlines()[0] == "⌁[b·_·d]: ⏱ 17/120m"
+    assert rendered.splitlines()[0] == "⌁[b·_·d]: ⏱ 31/120m"
 
 
 def test_post_tool_bar_pending_events_always_get_a_detail_line():
@@ -5988,10 +5994,13 @@ def test_every_emitted_chip_is_classified():
     # excluded here for the same reason they are excluded from
     # `BAR_SEGMENTS`. `notices_detail`/`card_detail` (w-34, 2026-09-11) are
     # the same idiom, one per DELTA sign whose *detail line* needs its own
-    # change-gate independent of the chip's.
+    # change-gate independent of the chip's. The `*__band` keys (w-34b,
+    # 2026-09-11) are the same idiom once more, one per VITAL key with a
+    # threshold-crossing rule — never a chip themselves, just the narrowing
+    # half of `_due` persisted alongside it.
     emitted = set(rendered) - {
         "allowance_directive", "face", "notices_detail", "card_detail",
-    }
+    } - {f"{key}__band" for key in hooks._VITAL_BAND_KEYS}
     # A real fixture, not a token one: enough distinct chips fired that a
     # missing classification is actually exercised, including all five
     # keys this fix adds.
@@ -6106,35 +6115,139 @@ def test_ambient_never_opens_the_bar_alone_by_construction():
         assert "census" not in params and "room" not in params, fn.__name__
 
 
-def test_vital_due_on_threshold_crossing_is_a_named_exception_for_most_keys():
-    """VITAL's stated rule is "due on threshold crossing", reusing
-    `_AMBIENT_BUDGET_THRESHOLDS`/`_AMBIENT_QUOTA_THRESHOLDS`. That machinery
-    gates a coarser axis today — whether the boundary opens at all
-    (`_ambient_should_emit`), not whether an already-open bar's *individual*
-    VITAL chip renders — and only covers budget/quota, not context_window,
-    draws, hold, siblings, or correspondent. Per-chip threshold-crossing
-    due-ness is not implemented in `_render_bar` for any VITAL key this
-    pass; every one of them falls through to the plain default (due on text
-    change), same as before. This pins that fallback so a future change
-    that narrows it (implementing the real rule) fails loudly here instead
-    of silently, and stands as the one documented exception this class asks
-    for. See the report for the full reasoning."""
-    a_chips: dict[str, str] = {}
-    a = hooks.format_delta(
-        _bar_payload(budget={"elapsed_seconds": 100, "budget_seconds": 7200}),
-        rendered_chips=a_chips,
-    )
-    assert "⏱" in a.splitlines()[0]
+def _vital_quiet_payload(**over):
+    """A minimal post-tool payload with every *other* chip held quiet, so a
+    table-driven VITAL-band test can attribute a render to the one facet
+    under test rather than to noise from `_bar_payload`'s fully-laden
+    fixture (which changes several unrelated facts between calls)."""
+    base = {
+        "run": {"id": "run-x"},
+        "attention": {"pending_event_count": 0, "pending_outbox_file_count": 0},
+        "inbound": {"events": []},
+        "budget": {"elapsed_seconds": 60, "budget_seconds": 7200},
+        "outbound": {"replies_current": 0, "replies_other": 0,
+                     "outbound_messages": 0},
+        "produce": {"known": False, "counts": {}},
+        "card": {"active": True, "stale": False},
+        "resources": {},
+    }
+    base.update(over)
+    return base
 
-    b = hooks.format_delta(
-        _bar_payload(budget={"elapsed_seconds": 100, "budget_seconds": 7200}),
-        last_chips=a_chips,
+
+def test_vital_chips_band_by_threshold_crossing_not_by_text_change():
+    """w-34b (2026-09-11): VITAL's stated rule, built — `budget` (when a
+    ceiling is configured), `quota`, `context_window`, `draws`, `hold`, and
+    `correspondent` now band their due-ness on `_vital_bands`, *replacing*
+    the plain text-change default rather than OR-ing with it: a reading
+    that moves within its current band must stay quiet even though its
+    rendered text changed, and a reading that crosses a band edge must
+    render even against an otherwise-unchanged bar. `siblings` — the one
+    VITAL key with no band of its own — is pinned separately below.
+
+    Table-driven: each row is (glyph, first render, same-band move, band
+    crossing), isolated via `_vital_quiet_payload` so only the row's own
+    facet varies between the three calls.
+    """
+    cases = [
+        (
+            "⏱",  # budget: `_AMBIENT_BUDGET_THRESHOLDS` (25, 50, 75, 90)
+            _vital_quiet_payload(
+                budget={"elapsed_seconds": 600, "budget_seconds": 7200}),  # 8%
+            _vital_quiet_payload(
+                budget={"elapsed_seconds": 1200, "budget_seconds": 7200}),  # 17%, same band
+            _vital_quiet_payload(
+                budget={"elapsed_seconds": 1860, "budget_seconds": 7200}),  # 26%, crosses 25
+        ),
+        (
+            "q S",  # quota: `_AMBIENT_QUOTA_THRESHOLDS` (30, 20, 10, 5), descending
+            _vital_quiet_payload(resources={"quota": {
+                "status": "known", "summary": "session 80% left"}}),
+            _vital_quiet_payload(resources={"quota": {
+                "status": "known", "summary": "session 70% left"}}),  # same band
+            _vital_quiet_payload(resources={"quota": {
+                "status": "known", "summary": "session 25% left"}}),  # crosses 30
+        ),
+        (
+            "ctx ",  # context_window: 10-point bands once a real % is known
+            _vital_quiet_payload(resources={"context_window": {
+                "status": "known", "summary": "62% context left"}}),
+            _vital_quiet_payload(resources={"context_window": {
+                "status": "known", "summary": "65% context left"}}),  # same band
+            _vital_quiet_payload(resources={"context_window": {
+                "status": "known", "summary": "71% context left"}}),  # crosses 70
+        ),
+        (
+            "ctx ",  # context_window: 100k-token bands before % is known
+            _vital_quiet_payload(resources={"context_window": {
+                "status": "known", "summary": "120k tok"}}),
+            _vital_quiet_payload(resources={"context_window": {
+                "status": "known", "summary": "180k tok"}}),  # same band
+            _vital_quiet_payload(resources={"context_window": {
+                "status": "known", "summary": "210k tok"}}),  # crosses 200k
+        ),
+        (
+            "me ",  # draws: 100k-token bands, self spend
+            _vital_quiet_payload(resources={"quota": {
+                "draws": {"self": 50_000}}}),
+            _vital_quiet_payload(resources={"quota": {
+                "draws": {"self": 90_000}}}),  # same band
+            _vital_quiet_payload(resources={"quota": {
+                "draws": {"self": 150_000}}}),  # crosses 100k
+        ),
+        (
+            "hold ",  # hold: whole-boot-ratio bands
+            _vital_quiet_payload(resources={"quota": {
+                "hold": {"ratio": 3.2}}}),
+            _vital_quiet_payload(resources={"quota": {
+                "hold": {"ratio": 3.8}}}),  # same band
+            _vital_quiet_payload(resources={"quota": {
+                "hold": {"ratio": 4.1}}}),  # crosses 4
+        ),
+        (
+            "him: quiet",  # correspondent: the m/h/d presence bucket
+            _vital_quiet_payload(
+                resources=_correspondent_resources(quiet_seconds=400, read=None)),
+            _vital_quiet_payload(
+                resources=_correspondent_resources(quiet_seconds=1000, read=None)),
+            _vital_quiet_payload(
+                resources=_correspondent_resources(quiet_seconds=4000, read=None)),
+        ),
+    ]
+
+    for glyph, first, same_band, crossing in cases:
+        chips: dict[str, str] = {}
+        a = hooks.format_delta(first, rendered_chips=chips)
+        assert a is not None and glyph in a.splitlines()[0], glyph
+
+        b = hooks.format_delta(same_band, last_chips=chips)
+        assert b is None or glyph not in b.splitlines()[0], (
+            f"{glyph} rendered on a same-band move — banding did not "
+            "replace the text-change default"
+        )
+
+        c = hooks.format_delta(crossing, last_chips=chips)
+        assert c is not None and glyph in c.splitlines()[0], (
+            f"{glyph} stayed quiet across its own band edge"
+        )
+
+
+def test_siblings_is_the_named_vital_exception_with_no_band_of_its_own():
+    """`siblings`' chip text (`▷{n}`) already *is* the count a band would
+    reduce it to, so building one would only rename the text-change
+    default — the one documented VITAL exception (see the report). Pinned
+    directly against `_vital_bands` so a future change that gives it a real
+    band changes this test rather than silently widening the table above
+    without anyone noticing the coverage grew."""
+    bands = hooks._vital_bands(
+        {"elapsed_seconds": 1, "budget_seconds": 100},
+        {"coexisting_runs": {
+            "status": "known", "siblings": [{"run_id": "a"}, {"run_id": "b"}]}},
     )
-    # Identical text ⇒ not due under the plain default — proving no
-    # threshold-crossing override is in effect (a real one would still be
-    # silent here, since no threshold crossed; the point is this key has no
-    # override of its own kind at all).
-    assert b is None or "⏱" not in b.splitlines()[0]
+    assert "siblings" not in bands
+    assert set(hooks._VITAL_BAND_KEYS) == {
+        "budget", "quota", "context_window", "draws", "hold", "correspondent",
+    }
 
 
 def test_a_quiet_boundary_drops_even_the_vitals_once_seen():
@@ -6144,8 +6257,11 @@ def test_a_quiet_boundary_drops_even_the_vitals_once_seen():
     superseded by per-chip change-gating: an *unchanged* quota reading is
     the number you already saw, and a boundary where nothing moved injects
     nothing at all. The vital's protection survives as the other half —
-    the moment it moves, it renders, and threshold crossings still open
-    the line from the caller's side.
+    the moment it crosses a band edge, it renders, and threshold crossings
+    still open the line from the caller's side. (w-34b, 2026-09-11: `quota`
+    now bands on `_AMBIENT_QUOTA_THRESHOLDS` rather than on raw text change —
+    the 80%→79% move this test used to call "moved" stays in the same band
+    and is quiet below; the "moves again" arm crosses one for real.)
     """
     payload = _bar_payload(
         budget={"elapsed_seconds": 60, "budget_seconds": 7200},
@@ -6163,14 +6279,23 @@ def test_a_quiet_boundary_drops_even_the_vitals_once_seen():
     quiet = hooks.format_delta(payload, census="wake 40 KB", last_chips=seen)
     assert quiet is None
 
-    # A vital that moved is news again; the wallpaper stays down.
+    # Same band (80% → 79%, both above the 30%-left threshold) ⇒ still
+    # quiet — this is the narrowing rule from the default's own OR-shape.
     payload["resources"] = {
         "quota": {"status": "known", "summary": "session 79% left"},
+    }
+    same_band = hooks.format_delta(payload, census="wake 40 KB", last_chips=seen)
+    assert same_band is None
+
+    # A vital that crosses a band edge is news again; the wallpaper stays
+    # down.
+    payload["resources"] = {
+        "quota": {"status": "known", "summary": "session 25% left"},
     }
     again = hooks.format_delta(payload, census="wake 40 KB", last_chips=seen)
     assert again is not None
     bar = again.splitlines()[0]
-    assert "q S79" in bar
+    assert "q S25" in bar
     assert "wake 40 KB" not in bar
 
 

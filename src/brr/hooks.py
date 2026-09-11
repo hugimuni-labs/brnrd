@@ -1334,10 +1334,14 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
     _BarSegment(
         "budget", "⏱",
         "the wall-clock ticker — elapsed minutes (`⏱ 41m`), with the "
-        "soft limit only when the user configured one (`16/120m`). "
-        "Changes nearly every boundary; renders only when its text moved, "
-        "like every chip since w-54 — but a minute is a minute, so in "
-        "practice it rides most open bars. It never opens one.",
+        "soft limit only when the user configured one (`16/120m`). With a "
+        "limit set, due-ness bands on `_AMBIENT_BUDGET_THRESHOLDS` "
+        "(w-34b, 2026-09-11) — it renders on the first boundary and again "
+        "each time % used crosses 25/50/75/90, not on every elapsed "
+        "minute. The bare ticker (no limit configured) has no ratio to "
+        "band and stays on the plain text-change default — a minute is a "
+        "minute, so in practice it still rides most open bars. It never "
+        "opens one.",
         # a meter.
         klass=VITAL,
     ),
@@ -3141,6 +3145,155 @@ def _weighted_spend_now(resources: dict[str, Any] | None) -> int | None:
     return None
 
 
+#: VITAL keys :func:`_vital_bands` computes a narrowing rule for. A key
+#: absent here (``siblings``) has no honest band of its own and keeps the
+#: plain text-change default — see the comment on ``edge_due`` in
+#: :func:`_render_bar`.
+_VITAL_BAND_KEYS = ("budget", "quota", "context_window", "draws", "hold",
+                    "correspondent")
+
+
+def _vital_bands(
+    budget: dict[str, Any], resources: dict[str, Any],
+) -> dict[str, str]:
+    """One coarse "band" string per VITAL key with an honest threshold rule
+    (w-34b, 2026-09-11) — the narrowing half of "VITAL is due on threshold
+    crossing", replacing (never OR'd with) the plain text-change default
+    for exactly the keys returned here. A key this function does not
+    return a band for falls through to the default in `_render_bar`'s
+    `_due` — the one documented exception (`siblings`, whose chip text
+    already *is* the count).
+
+    Every band is a string so it can ride the same `last_chips`/
+    `rendered_chips` dict[str, str] the rest of the bar's change-gating
+    already uses (`_render_bar`'s commit-on-render discipline) — no new
+    persistence shape, one more key per chip (`"<key>__band"`).
+    """
+    bands: dict[str, str] = {}
+
+    # budget: reuses `_AMBIENT_BUDGET_THRESHOLDS`, ascending, only when a
+    # real ceiling is configured — a percentage needs a denominator. The
+    # bare-ticker case (`runner.timeout_seconds` unset, so no
+    # `budget_seconds`) has no ratio to band at all and stays on the
+    # default (an exception, same reasoning `_budget_chip`'s own docstring
+    # already gives: "a minute is a minute").
+    elapsed = budget.get("elapsed_seconds")
+    limit = budget.get("budget_seconds")
+    if elapsed is not None and limit is not None:
+        try:
+            pct_used = int(elapsed) * 100 / int(limit)
+            band = sum(1 for t in _AMBIENT_BUDGET_THRESHOLDS if pct_used >= t)
+            bands["budget"] = str(band)
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+
+    quota = resources.get("quota") if isinstance(resources, dict) else None
+    quota = quota if isinstance(quota, dict) else {}
+
+    # quota: reuses `_AMBIENT_QUOTA_THRESHOLDS`, descending, *per bucket* —
+    # the chip joins every bucket into one string (`q S57·W50·F27`), so a
+    # session-bucket crossing must not be masked by a week bucket standing
+    # still. Banded independently per label, then joined sorted so the
+    # combined band string is stable regardless of the summary's own
+    # ordering.
+    if quota.get("status") == "known":
+        summary = str(quota.get("summary") or "")
+        parts = []
+        for match in _QUOTA_BUCKET_RE.finditer(summary):
+            label = match.group("label").strip().lower()
+            try:
+                pct_left = float(match.group("pct"))
+            except (TypeError, ValueError):
+                continue
+            band = sum(1 for t in _AMBIENT_QUOTA_THRESHOLDS if pct_left <= t)
+            parts.append(f"{label}:{band}")
+        if parts:
+            bands["quota"] = "·".join(sorted(parts))
+
+    # context_window: 10-point-wide bands once a real percentage is known;
+    # 100k-token-wide bands off the live occupancy count before then (the
+    # same magnitude `_context_delta_chip` already treats as the unit worth
+    # reporting). Banding the two units under one key is enough — a unit
+    # switch (tok → %, the one-time moment Claude's final envelope lands)
+    # changes the band string's own prefix, so it is news by construction
+    # without a separate case for it.
+    reading = _context_reading(resources)
+    if reading is not None:
+        value, unit = reading
+        if unit == "%":
+            bands["context_window"] = f"%:{int(value // 10)}"
+        else:
+            bands["context_window"] = f"tok:{int(value // 100_000)}"
+
+    # draws: this run's own weighted spend and every owned strand's summed
+    # spend, each banded to the nearest 100k tokens — below that, two
+    # consecutive reads of a number that only ever grows are noise, not
+    # news (the same threshold `context_window`'s live tail uses above).
+    # The strand *count* is its own band component: a strand joining or
+    # leaving is news regardless of what the sum did.
+    draws = quota.get("draws") if isinstance(quota, dict) else None
+    draws = draws if isinstance(draws, dict) else {}
+    self_spent = draws.get("self")
+    strands = draws.get("strands")
+    strands = strands if isinstance(strands, list) else []
+    draws_parts = []
+    if self_spent is not None:
+        try:
+            draws_parts.append(f"me:{int(self_spent) // 100_000}")
+        except (TypeError, ValueError):
+            pass
+    if strands:
+        draws_parts.append(f"n:{len(strands)}")
+        known = [
+            int(row.get("weighted")) for row in strands
+            if isinstance(row, dict) and row.get("weighted") is not None
+        ]
+        if known:
+            draws_parts.append(f"sum:{sum(known) // 100_000}")
+    if draws_parts:
+        bands["draws"] = "·".join(draws_parts)
+
+    # hold: whole-boot-ratio bands. The design this chip rides
+    # (design-the-seat-that-never-quits.md §machinery slice 3) reads the
+    # ratio against a whole-number floor (`seat.park_after_boot_ratio`,
+    # default 12), so crossing an integer is the news that number's own
+    # meaning is built around; a fractional wobble within one is not.
+    # `hold ?·boot` (armed, no boot cost landed yet) is its own band —
+    # its rendered text never changes either, so this only makes the rule
+    # explicit rather than accidental.
+    hold = quota.get("hold") if isinstance(quota, dict) else None
+    if isinstance(hold, dict):
+        ratio = hold.get("ratio")
+        bands["hold"] = "unknown" if ratio is None else str(int(ratio))
+
+    # correspondent: the presence *bucket* — silent, or which unit
+    # `format_quiet` chose (m/h/d) — not the raw minute count, which
+    # `format_quiet` re-renders on every single minute while quiet (#1200's
+    # own example: "quiet 10m → quiet 1h" is the transition that earns a
+    # line, not each minute in between). A landed read receipt is its own
+    # news layered on top: read events are rare enough that "any change" is
+    # the honest rule for that half, so the receipt's own identity rides
+    # the band string directly rather than being banded itself.
+    corr = resources.get("correspondent") if isinstance(resources, dict) else None
+    corr = corr if isinstance(corr, dict) else {}
+    if corr.get("status") == "known":
+        quiet = corr.get("quiet_seconds")
+        unit = "-"
+        if quiet is not None:
+            q = max(0.0, float(quiet))
+            if q >= 86400:
+                unit = "d"
+            elif q >= 3600:
+                unit = "h"
+            elif q >= 60:
+                unit = "m"
+        read = corr.get("read") if isinstance(corr.get("read"), dict) else None
+        read_key = f"{read.get('message')}@{read.get('at')}" if read else ""
+        bands["correspondent"] = f"{unit}|{read_key}"
+
+    return bands
+
+
 def _render_bar(
     *,
     run: dict[str, Any],
@@ -3245,6 +3398,11 @@ def _render_bar(
     existing tests) gets the conservative always-full behaviour.
 
     """
+    # Computed up front (w-34b): both the rendered_chips commit below and
+    # the due-filter at the end of this function need it, and the commit
+    # happens first in source order.
+    vital_bands = _vital_bands(budget, resources)
+
     segments: list[tuple[str, str]] = []
     budget_chip = _budget_chip(budget)
     if budget_chip:
@@ -3589,6 +3747,14 @@ def _render_bar(
             rendered_chips["notices_detail"] = notices_detail_value
         if card_detail_value is not None:
             rendered_chips["card_detail"] = card_detail_value
+        # VITAL bands (w-34b): same commit-on-render idiom, under keys that
+        # never appear in *segments* — only for chips actually active this
+        # boundary (`chips_now`), so a facet that has gone quiet (its chip
+        # dropped out of `segments` entirely) doesn't keep writing a band
+        # nobody is reading.
+        for band_key, band_value in vital_bands.items():
+            if band_key in chips_now:
+                rendered_chips[f"{band_key}__band"] = band_value
     # The ornament's own edge (design-the-pre-attentive-channel.md rule 3:
     # "it names itself once, on change"): the mood word rides the preamble
     # only on the boundary the face actually changed, under a key that
@@ -3611,18 +3777,16 @@ def _render_bar(
     # rendered text changed — which is DELTA's rule by construction and
     # AMBIENT's too (`census`/`room` are AMBIENT and never listed here).
     #
-    # VITAL is the one class this dict does not implement its own rule
-    # for: "due on threshold crossing" would need per-metric baselines
-    # (`_AMBIENT_BUDGET_THRESHOLDS`/`_AMBIENT_QUOTA_THRESHOLDS` cover
-    # budget/quota; nothing analogous exists for context_window, draws,
-    # hold, siblings, correspondent) threaded into this closure, which
-    # `_due`'s OR-shaped default (forced ∨ text-changed) can't express as
-    # a *narrowing* rule — a forced-True entry only ever adds renders, it
-    # cannot suppress the ones the text-change fallback already grants. All
-    # seven VITAL chips render on the plain default (due on text change)
-    # today, same as before this change — an explicit, deliberate exception
-    # to "VITAL due on threshold crossing", named here and in the report
-    # rather than built partway.
+    # VITAL (w-34b, 2026-09-11): "due on threshold crossing" is a
+    # *narrowing* rule — it must suppress renders the text-change default
+    # would otherwise grant, which this dict (OR-shaped: forced ∨
+    # text-changed) cannot express. So VITAL keys with an honest band rule
+    # bypass `edge_due`/text-change entirely via `vital_bands` below,
+    # checked first in `_due`. `siblings` has no entry in `vital_bands` —
+    # its chip text (`▷{n}`) already *is* the count, so "band changed" and
+    # "text changed" are the same predicate; building a second one would
+    # only rename the default. It stays on the plain fallback, the one
+    # documented VITAL exception (see the report).
     edge_due = {
         # WAITING: an unknown pending count must never go quiet.
         "pending_unknown": True,
@@ -3654,6 +3818,10 @@ def _render_bar(
     }
 
     def _due(key: str, text: str) -> bool:
+        if key in vital_bands:
+            if last_chips is None:
+                return True
+            return last_chips.get(f"{key}__band") != vital_bands[key]
         if edge_due.get(key):
             return True
         if last_chips is None:
