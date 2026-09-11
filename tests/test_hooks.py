@@ -4305,36 +4305,107 @@ def test_allowance_chip_sits_beside_quota_chip_for_the_resident():
     chip), design-the-continuous-seat.md's "Boundaries" section and design-
     the-allowance.md both insist provider headroom and allocated work stay
     separate, simultaneously visible facts for the seat itself — so both
-    chips render."""
+    chips render. The seat's own half reads as pace (2026-09-11: "not only
+    stop quoting it as budget, but also change the wording so it doesn't
+    read like one either"), not a ceiling — see the pace-specific tests
+    below for the ratio itself."""
     resources = {
         "quota": {"status": "known", "summary": "session 57% left"},
         "allowance": {
             "status": "known", "tokens": 20_000_000, "spent": 500_000,
-            "pct": 2.5, "scope": "resident",
+            "pct": 2.5, "scope": "resident", "explicit": False,
         },
     }
     payload = _portal_payload(resources=resources)
     line = hooks.format_delta(payload, rendered_chips={})
     assert line is not None
-    assert "spend 500k/20m" in line
+    assert "spend 500k ·" in line
+    assert "/20m" not in line
     assert "q S57" in line
+
+
+def test_allowance_chip_seat_shows_pace_no_denominator():
+    """The unconfigured seat ceiling renders `spend <n> · pace <ratio>×` —
+    no `/<ceiling>` anywhere, the exact shape a budget reads as."""
+    resources = {
+        "quota": {
+            "status": "known", "summary": "session 57% left",
+            "pacing": {"pace": {"ratio": 0.87}},
+        },
+        "allowance": {
+            "status": "known", "tokens": 20_000_000, "spent": 28_000_000,
+            "pct": 140.0, "scope": "resident", "explicit": False,
+        },
+    }
+    assert hooks._allowance_chip(resources) == "spend 28m · pace 0.9×"
+
+
+def test_allowance_chip_seat_pace_unknown_when_window_unmeasured():
+    """No reset-window reading this boundary ⇒ `pace ?`, never a guess."""
+    resources = {
+        "allowance": {
+            "status": "known", "tokens": 20_000_000, "spent": 500_000,
+            "pct": 2.5, "scope": "resident", "explicit": False,
+        },
+    }
+    assert hooks._allowance_chip(resources) == "spend 500k · pace ?"
+
+
+def test_allowance_chip_seat_explicit_ceiling_restores_x_over_y():
+    """An operator who configured `resident.allowance_tokens` gets the
+    ceiling shape back — they asked for a budget, so it reads like one."""
+    resources = {
+        "allowance": {
+            "status": "known", "tokens": 20_000_000, "spent": 500_000,
+            "pct": 2.5, "scope": "resident", "explicit": True,
+        },
+    }
+    assert hooks._allowance_chip(resources) == "spend 500k/20m"
+
+
+def test_allowance_chip_strand_always_ceiling_shape():
+    """A strand's chip is untouched by any of this — always `X/Y`, whether
+    or not `explicit` is present on the facet."""
+    resources = {
+        "allowance": {
+            "status": "known", "tokens": 120_000, "spent": 38_000,
+            "pct": 31.7, "scope": "strand",
+        },
+    }
+    assert hooks._allowance_chip(resources) == "spend 38k/120k"
 
 
 def test_allowance_directive_silent_for_resident_scope_even_past_100pct():
     """The strand-only park/ask directive (`submit: true`, `ask: allowance
     +<tokens>`) names verbs the daemon refuses off a strand — see
-    `_allowance_directive`'s docstring. The resident's own overrun must not
-    fire it; the chip alone stays the visible signal."""
+    `_allowance_directive`'s docstring. The resident's own overrun on an
+    *unconfigured* ceiling must not fire it; the pace chip alone stays the
+    visible signal."""
     resources = {
         "allowance": {
             "status": "known", "tokens": 120_000, "spent": 140_000,
-            "pct": 116.7, "scope": "resident",
+            "pct": 116.7, "scope": "resident", "explicit": False,
         },
     }
     payload = _portal_payload(resources=resources)
     line = hooks.format_delta(payload, rendered_chips={})
     assert line is None or "allowance spent" not in line
     assert line is None or "submit: true" not in line
+
+
+def test_allowance_directive_fires_for_an_explicitly_configured_seat_ceiling():
+    """The operator set `resident.allowance_tokens` themselves — a real
+    budget, so its overrun earns the real directive, same as a strand's."""
+    resources = {
+        "allowance": {
+            "status": "known", "tokens": 120_000, "spent": 140_000,
+            "pct": 116.7, "scope": "resident", "explicit": True,
+        },
+    }
+    line, gate_text = hooks._allowance_directive(resources)
+    assert line is not None
+    assert "submit: true" in line
+    assert gate_text == "140000"
 
 
 # ── draws — attribution of the shared quota gauge (brnrd#1810, design-
