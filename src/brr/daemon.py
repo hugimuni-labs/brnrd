@@ -19064,6 +19064,84 @@ def _burst_settle_delay(
     return min(window - quiet_for, max_wait - waited)
 
 
+# ── Log stamps ───────────────────────────────────────────────────────
+#
+# Every line this process prints is a log line, and until 2026-09-12 not one
+# of them carried a time. The night that priced it: a daemon booted, polled
+# once, dispatched nothing for seventeen minutes, and the only surviving
+# record of it — `~/Library/Logs/brr/brr.out.log` — could not say *when* any
+# of its lines were written. "Did the daemon die?" then has no answer in the
+# daemon's own record; every reconstruction has to be triangulated from file
+# mtimes elsewhere, which is how a sixteen-minute stall becomes an evening.
+# (The gap was named in `_run_worker_and_finalize`'s own crash comment years
+# of commits ago — "the daemon's own stdout isn't captured to a file" — and
+# capturing it without stamping it only moves the blindness.)
+#
+# Line-oriented and idempotent: the stamp goes on at a line start only, so a
+# `print(..., end="")` progression stays one line, and re-installing over an
+# already-stamped stream is a no-op (dev-reload re-execs a fresh image, but
+# a test may call it twice).
+
+
+class _StampedStream:
+    """Prefix each line written to a daemon log stream with a UTC stamp."""
+
+    def __init__(self, stream) -> None:
+        self._stream = stream
+        self._at_line_start = True
+
+    def write(self, text: str) -> int:
+        if not text:
+            return 0
+        out: list[str] = []
+        for chunk in str(text).splitlines(keepends=True):
+            if self._at_line_start and chunk.strip():
+                stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                out.append(f"{stamp} {chunk}")
+            else:
+                out.append(chunk)
+            self._at_line_start = chunk.endswith("\n")
+        self._stream.write("".join(out))
+        try:
+            self._stream.flush()
+        except Exception:  # noqa: BLE001 — a closed stream is not this layer's problem
+            pass
+        return len(text)
+
+    def flush(self) -> None:
+        self._stream.flush()
+
+    def isatty(self) -> bool:
+        try:
+            return bool(self._stream.isatty())
+        except Exception:  # noqa: BLE001
+            return False
+
+    def fileno(self) -> int:
+        return self._stream.fileno()
+
+    def writable(self) -> bool:
+        return True
+
+    @property
+    def encoding(self) -> str:
+        return getattr(self._stream, "encoding", "utf-8")
+
+
+def _install_log_stamps() -> None:
+    """Stamp this process's own log lines. Never raises; logging is not the job."""
+    import sys
+
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        if stream is None or isinstance(stream, _StampedStream):
+            continue
+        try:
+            setattr(sys, name, _StampedStream(stream))
+        except Exception:  # noqa: BLE001 — a log wrapper must never sink a boot
+            pass
+
+
 # ── Main loop ────────────────────────────────────────────────────────
 
 
@@ -19093,6 +19171,7 @@ def start(
     Reload waits until the in-flight thought drains so no running run
     has its process replaced underneath it.
     """
+    _install_log_stamps()
     brr_dir = gitops.shared_brr_dir(repo_root)
     inbox_dir = brr_dir / "inbox"
     responses_dir = brr_dir / "responses"
