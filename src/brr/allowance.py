@@ -436,11 +436,35 @@ def resident_ceiling_tokens(cfg: "Mapping[str, Any] | None") -> int:
     window is a continuous conversation, not one dispatched thought, and an
     operator may need to size them apart — but the same parser and the same
     magnitude until its own evidence says otherwise.
+
+    Thin wrapper over :func:`resident_ceiling_state` for callers that only
+    ever wanted the number; see that function for the ``explicit`` half.
+    """
+    return resident_ceiling_state(cfg)[0]
+
+
+def resident_ceiling_state(cfg: "Mapping[str, Any] | None") -> "tuple[int, bool]":
+    """``(tokens, explicit)`` — *explicit* is ``True`` only when
+    ``resident.allowance_tokens`` is present in config *and* parses to a
+    real value. An unset key, or one that fails to parse (degrading to the
+    default the same way :func:`resident_ceiling_tokens` always has),
+    reads ``explicit=False`` either way — a typo must not look like an
+    operator's deliberate choice.
+
+    This is what tells a renderer (:func:`brr.hooks._allowance_chip`,
+    :func:`brr.hooks._allowance_directive`) whether the seat's ceiling is a
+    real budget an operator set (render/gate on it like a strand's) or the
+    library default nobody chose (render the seat's own pace instead — the
+    maintainer's 2026-09-11 correction: "not only stop quoting it as
+    budget, but also change the wording so it doesn't read like one
+    either").
     """
     cfg = cfg or {}
     raw = cfg.get("resident.allowance_tokens")
     tokens = parse_tokens(raw) if raw is not None else None
-    return tokens if tokens is not None else DEFAULT_RESIDENT_ALLOWANCE_TOKENS
+    if tokens is not None:
+        return tokens, True
+    return DEFAULT_RESIDENT_ALLOWANCE_TOKENS, False
 
 
 def resident_window_key(reset_epoch: "float | int | None") -> str | None:
@@ -498,11 +522,14 @@ def resident_allowance_state(
     collector *is* wired, it just has nothing yet) rather than
     ``unimplemented``.
     """
-    tokens = resident_ceiling_tokens(cfg)
+    tokens, explicit = resident_ceiling_state(cfg)
     if live_spent is None:
         meta["resident_allowance_tokens"] = tokens
         meta["resident_allowance_spent"] = None
-        return {"tokens": tokens, "spent": None, "scope": "resident"}
+        return {
+            "tokens": tokens, "spent": None, "scope": "resident",
+            "explicit": explicit,
+        }
     window_key = resident_window_key(reset_epoch)
     stored_window = meta.get("resident_allowance_window")
     stored_baseline = meta.get("resident_allowance_baseline")
@@ -517,4 +544,7 @@ def resident_allowance_state(
     spent = max(0, int(live_spent) - baseline)
     meta["resident_allowance_tokens"] = tokens
     meta["resident_allowance_spent"] = spent
-    return {"tokens": tokens, "spent": spent, "scope": "resident"}
+    return {
+        "tokens": tokens, "spent": spent, "scope": "resident",
+        "explicit": explicit,
+    }

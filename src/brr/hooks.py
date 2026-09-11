@@ -1992,10 +1992,24 @@ def _context_window_chip(resources: dict[str, Any]) -> str | None:
 
 
 def _allowance_chip(resources: dict[str, Any]) -> str | None:
-    """The own-allowance ``spend 38k/120k`` chip — a strand's ``spawn:``
-    ceiling, or the resident seat's own standing allowance (design-the-
-    allowance.md §2, slices 1-2). One renderer for both: the facet shape is
-    identical, only where the ceiling number came from differs.
+    """The own-allowance chip — a strand's ``spawn:`` ceiling, or the
+    resident seat's own standing spend (design-the-allowance.md §2,
+    slices 1-2; reworded 2026-09-11: the seat's reading is a pace against
+    the binding quota window, never a budget it's about to run out of —
+    the maintainer's correction, "not only stop quoting it as budget, but
+    also change the wording so it doesn't read like one either").
+
+    A **strand** always renders the ceiling shape, ``spend 38k/120k`` — a
+    parent-granted budget is exactly what it is.
+
+    The **resident seat** renders ``spend 28m · pace 0.9×`` — spend against
+    no denominator, plus the consumed-share-vs-elapsed-share-of-the-binding-
+    window ratio from ``resources.quota.pacing.pace`` (:func:`_resident_pace`)
+    — *unless* the operator explicitly configured ``resident.allowance_tokens``
+    (the facet's own ``explicit`` flag, from :func:`allowance.
+    resident_allowance_state`), in which case an intentionally-set ceiling
+    earns the same ``X/Y`` shape a strand gets — the operator asked for a
+    budget, so it reads like one.
 
     Renders only once metering has something to show (``known`` — tokens
     *and* a spend reading both present); a ceiling with no reading yet, or
@@ -2010,7 +2024,30 @@ def _allowance_chip(resources: dict[str, Any]) -> str | None:
     tokens, spent = facet.get("tokens"), facet.get("spent")
     if tokens is None or spent is None:
         return None
+    if _allowance_scope(resources) == "resident" and not facet.get("explicit"):
+        return f"spend {allowance.format_tokens(spent)} · {_resident_pace(resources)}"
     return f"spend {allowance.format_tokens(spent)}/{allowance.format_tokens(tokens)}"
+
+
+def _resident_pace(resources: dict[str, Any]) -> str:
+    """``pace 0.9×`` — consumed share of the binding quota window ÷ its
+    elapsed share (:func:`brr.daemon._quota_window_pace`'s ``ratio``, rides
+    in as ``resources.quota.pacing.pace``). ``pace ?`` when the window's
+    reset instant isn't known this boundary — never a guessed ratio.
+    """
+    quota = resources.get("quota") if isinstance(resources, dict) else None
+    quota = quota if isinstance(quota, dict) else {}
+    pacing = quota.get("pacing")
+    pacing = pacing if isinstance(pacing, dict) else {}
+    pace = pacing.get("pace")
+    pace = pace if isinstance(pace, dict) else {}
+    ratio = pace.get("ratio")
+    if ratio is None:
+        return "pace ?"
+    try:
+        return f"pace {float(ratio):.1f}×"
+    except (TypeError, ValueError):
+        return "pace ?"
 
 
 def _allowance_scope(resources: dict[str, Any]) -> str:
@@ -2028,18 +2065,21 @@ def _allowance_scope(resources: dict[str, Any]) -> str:
 def _allowance_directive(resources: dict[str, Any]) -> tuple[str | None, str]:
     """The one-shot ≥100% park-or-ask line, plus its own change-gate key.
 
-    Strand-only: its wording (``submit: true`` then ``brnrd await``, or
-    ``ask: allowance +<tokens>``) names verbs the daemon refuses from
-    anything but a strand (``ask: allowance`` is explicitly "a strand's own
-    verb" — ``daemon._queue_allowance_ask``). Firing it at the resident
-    seat's own standing-allowance overrun (``scope: "resident"``) would
-    hand it two directives it cannot follow — see :func:`_allowance_scope`.
-    The resident's own overrun stays visible on the chip alone
-    (:func:`_allowance_chip`) until a resident-appropriate directive is
-    specified; design-the-continuous-seat.md's "Pursuit without rewarding
-    waste" section, in any case, treats unspent/overrun headroom as
-    something to weigh at a planning boundary, not something a mechanical
-    nag should force.
+    Strand-only by default: its wording (``submit: true`` then
+    ``brnrd await``, or ``ask: allowance +<tokens>``) names verbs the
+    daemon refuses from anything but a strand (``ask: allowance`` is
+    explicitly "a strand's own verb" — ``daemon._queue_allowance_ask``).
+    Firing it at the resident seat's own standing-allowance overrun
+    (``scope: "resident"``) would hand it two directives it cannot
+    follow — see :func:`_allowance_scope` — *unless* the seat's ceiling is
+    one the operator actually set (``explicit``, same gate
+    :func:`_allowance_chip` uses): an explicitly-configured ceiling is a
+    real budget, so its overrun earns the real directive too. The
+    unconfigured default ceiling's overrun stays visible on the chip alone
+    (:func:`_allowance_chip`, the ``pace`` reading) — design-the-continuous-
+    seat.md's "Pursuit without rewarding waste" section treats unspent/
+    overrun headroom against a number nobody chose as something to weigh
+    at a planning boundary, not something a mechanical nag should force.
 
     Returns ``(line_or_None, gate_text)``. *gate_text* is always returned
     (even when *line* is ``None``) so the caller can persist it into
@@ -2056,7 +2096,8 @@ def _allowance_directive(resources: dict[str, Any]) -> tuple[str | None, str]:
     if pct is None or spent is None or pct < 100:
         return None, ""
     gate_text = str(spent)
-    if _allowance_scope(resources) != "strand":
+    scope = _allowance_scope(resources)
+    if scope == "resident" and not facet.get("explicit"):
         return None, gate_text
     return allowance.directive_line(spent, facet.get("tokens")), gate_text
 

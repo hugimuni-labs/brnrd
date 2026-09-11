@@ -318,9 +318,37 @@ def test_resident_allowance_state_reports_the_ceiling_before_any_reading():
     )
     assert facet == {
         "tokens": allowance.DEFAULT_RESIDENT_ALLOWANCE_TOKENS,
-        "spent": None, "scope": "resident",
+        "spent": None, "scope": "resident", "explicit": False,
     }
     assert meta["resident_allowance_spent"] is None
+
+
+def test_resident_allowance_state_explicit_when_operator_configured_it():
+    """An operator-set `resident.allowance_tokens` earns `explicit: True` —
+    the ceiling-shape chip's gate (`brr.hooks._allowance_chip`)."""
+    meta: dict = {}
+    facet = allowance.resident_allowance_state(
+        meta, cfg={"resident.allowance_tokens": "2m"}, reset_epoch=None,
+        live_spent=None,
+    )
+    assert facet == {
+        "tokens": 2_000_000, "spent": None, "scope": "resident",
+        "explicit": True,
+    }
+
+
+def test_resident_ceiling_state_config_first_then_default():
+    assert allowance.resident_ceiling_state(None) == (
+        allowance.DEFAULT_RESIDENT_ALLOWANCE_TOKENS, False,
+    )
+    assert allowance.resident_ceiling_state(
+        {"resident.allowance_tokens": "2m"}
+    ) == (2_000_000, True)
+    # Unparsable degrades to the default *and* reads not-explicit — a typo
+    # must not look like a deliberate operator choice.
+    assert allowance.resident_ceiling_state(
+        {"resident.allowance_tokens": "not-a-number"}
+    ) == (allowance.DEFAULT_RESIDENT_ALLOWANCE_TOKENS, False)
 
 
 def test_resident_allowance_state_baselines_on_first_reading():

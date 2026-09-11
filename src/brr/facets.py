@@ -571,12 +571,24 @@ def build(
         scope = str(allowance.get("scope") or "strand").strip() or "strand"
         if scope not in ("strand", "resident"):
             scope = "strand"
+        # Whether a resident's ceiling is one the operator actually set
+        # (`resident.allowance_tokens`) vs. the unconfigured library default
+        # — carried through so a renderer can tell a real budget (render/
+        # gate it like a strand's) from a number nobody chose (render the
+        # seat's own pace instead, :func:`brr.hooks._allowance_chip`).
+        # Irrelevant for a strand (always a real, parent-granted ceiling)
+        # but always present so a renderer never has to guess a missing key
+        # into a meaning; defaults `True` for a strand and any caller that
+        # predates this key, matching the ceiling-shape rendering they
+        # already got.
+        explicit = bool(allowance.get("explicit", True))
         if spent is None:
             allowance_facet = {
                 "status": ABSENT, "kind": spec_allow.kind,
                 "required": spec_allow.required, "summary": None,
                 "note": "no usage reading from this Shell yet",
                 "tokens": tokens, "spent": None, "pct": None, "scope": scope,
+                "explicit": explicit,
             }
         else:
             pct = allowance_metering.spend_pct(spent, tokens)
@@ -591,6 +603,7 @@ def build(
                 "required": spec_allow.required,
                 "summary": summary, "note": None,
                 "tokens": tokens, "spent": spent, "pct": pct, "scope": scope,
+                "explicit": explicit,
             }
 
     return {
