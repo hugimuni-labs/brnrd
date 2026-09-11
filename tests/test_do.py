@@ -197,27 +197,28 @@ def test_do_mood_resolves_and_writes_the_control_file(tmp_path, monkeypatch, cap
     assert main(["do", "--mood", "focused", "--mood-note", "deep in it"]) == 0
     out = capsys.readouterr().out
     assert out.startswith("mood ")
-    assert "fo.cus ✓" in out
+    assert "focused ✓" in out
 
     lines = (outbox / ".mood").read_text(encoding="utf-8").splitlines()
-    assert lines[0] == "fo.cus"
+    assert lines[0] == "focused"
     assert lines[1] == "deep in it"
 
 
-def test_do_mood_unknown_writes_nearest_and_preserves_residents_word(
+def test_do_mood_unknown_refuses_and_writes_nothing(
     tmp_path, monkeypatch, capsys,
 ):
+    """No silent nearest-face write (design-the-pre-attentive-channel.md's
+    rework rule) — an unresolved word is refused with the vocabulary,
+    strict or not; `--strict` no longer changes this behaviour."""
     outbox = tmp_path / "outbox"
     outbox.mkdir()
     _do_env(monkeypatch, outbox)
     _portal_state(outbox)
 
-    assert main(["do", "--mood", "zzzznotarealface"]) == 0
+    assert main(["do", "--mood", "zzzznotarealface"]) == 1
     out = capsys.readouterr().out
-    assert "~ nearest:" in out
-    lines = (outbox / ".mood").read_text(encoding="utf-8").splitlines()
-    assert lines[0] in emotes.EMOTES
-    assert lines[1] == "zzzznotarealface"
+    assert "✗ no match" in out
+    assert not (outbox / ".mood").exists()
 
 
 def test_do_mood_strict_refuses_unknown_and_writes_nothing(
@@ -1231,7 +1232,7 @@ def test_do_multiple_verbs_join_one_summary_line(tmp_path, monkeypatch, capsys):
     ])
     assert rc == 0
     out = capsys.readouterr().out.strip()
-    assert out == "mood b·_·d fo.cus ✓ · note evt-1 ✓ · reply evt-2 ✓"
+    assert out == "mood b·_·d focused ✓ · note evt-1 ✓ · reply evt-2 ✓"
 
 
 def test_do_body_with_no_preceding_verb_is_rejected(tmp_path, monkeypatch, capsys):
@@ -1360,7 +1361,7 @@ def test_do_passthrough_execs_after_staging_verdicts_to_stderr(
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "mood " in captured.err and "fo.cus ✓" in captured.err
+    assert "mood " in captured.err and "focused ✓" in captured.err
 
 
 def test_do_passthrough_with_no_verbs_still_execs(tmp_path, monkeypatch, capsys):

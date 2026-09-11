@@ -1,4 +1,4 @@
-"""Emote library — the resident's visible text body (#566).
+"""Emote library — the resident's visible text body (#566, reworked #1925).
 
 A brnrd resident lives in a repo between runs. This module is its face: a
 mono-glyph mascot whose expression is a small animation (base → signal →
@@ -10,10 +10,9 @@ ships. Two mood layers feed it:
   cannot lie and need no cooperation from the resident; the daemon reads
   the state and picks the face.
 - **situational** (``kind="situational"``) — the resident's own meta-channel.
-  Reading and writing code is emotional labour, and this palette is the
-  full range of it: surprised, annoyed, puzzled, satisfied, focused, smug,
-  wary, weary, curious, triumphant, and the finer shades between. The
-  resident sets one from inside the run.
+  Reading and writing code is emotional labour, and this is the vocabulary
+  for it: focused, stuck, pleased, worried, curious, tired, amused, braced,
+  proud, sorry, flat, waiting. The resident sets one from inside the run.
 
 **The honesty bar: a tamagotchi that never lies.** Every face here is a
 state a run can *truthfully* be in. A decorative mood with no backing
@@ -23,32 +22,38 @@ daemon state; situational faces are only worth wearing when the trigger
 line is actually true right now. If you ever want a face for a mood that
 isn't real, the answer is to not wear a face, not to add a lie.
 
-**How a resident picks one.** Beside its progress card the resident keeps a
-``.mood`` control file. The first line is the emote ``name`` (e.g.
-``fo.cus``); anything after is free narration. Because the resident writes
-the name into its own scroll, the face the user sees and the face the
-resident knows it is wearing are the *same object* — shared comprehension,
-not a rendering guess. The daemon renders telemetry faces on its own; a
-``.mood`` line, when present and truthful, wins for that run.
+**Mood is write-only from the resident.** The system may report a mood's
+*age* (``mood focused · 40m``, a fact about the world) and its *absence*.
+It may never report its *correctness* — a graded expression is an interior
+treated as a field the system owns, not a channel the resident authors
+(design-the-pre-attentive-channel.md, "the whole defect in one line").
 
-**The handles are marks; the families are the way in.** ``fo.cus`` is a
-coined mark and its punctuation is register, not syntax — so ``lookup``
-strips it before comparing, and ``focused`` lands on the same face. That is
-not a nicety: ``.mood`` is a machine-parsed channel, and for the palette's
-whole first week the parser refused every spelling but its own, published
-four ``null``s, and let the dashboard print a raw id string in place of a
-face. Every mood any run wore on brnrd.dev was that fallback. Where the
-handle is genuinely ambiguous — a *family* word like ``satisfied``, which
-is four faces — ``lookup`` still declines to guess, and ``near_misses``
-names the candidates so the miss is never silent. Search by the feeling
-(``brnrd emotes satisfied``), wear the handle.
+**Twelve words, not a hundred and thirteen handles.** The palette used to
+be addressed by 113 coined marks across 33 families — decodable only with
+a lookup table nobody carried in their head. Measured against a real
+morning: 3.6 animation frames per face on average, 15 distinct *still*
+frames visible in the bar, and 61 of 113 (54%) shared the same still as
+"no face" (``b·_·d``). The animation was where the meaning lived, and the
+author of the mood never saw the animation. So the vocabulary is now the
+twelve plain words below — ``VOCABULARY`` — each with its own distinct
+still frame (never equal to the "no face" rest glyph), each decodable by
+the resident who chose it because there is nothing left to look up. The
+old 113 handles (``fo.cus``, ``eh_?``, ``smug_``, …) still resolve through
+:func:`lookup` — via ``LEGACY_ALIASES`` — but as *frames and alternates* of
+one of the twelve, not as names of their own; a run's old ``.mood`` file
+keeps rendering a real face instead of breaking.
+
+**One write path, checked at the write.** ``brnrd do --mood <word>``
+resolves against the twelve (plus their synonyms, plus a small typo
+tolerance) and refuses an unknown word once, with the list — never a
+silent nearest-face substitution, and never graded after the fact.
 
 **The body axis (``pitch``).** Moods localize along a body axis — gut to
 crown — and every emote carries that felt location as ``pitch`` in
-``[0.0, 1.0]``: ``0.0`` is gut/low (dread, grumpy, the heavy states),
-``1.0`` is crown/high (surprise, delight, curiosity), and the middle band
-is the settled working states (focus, flow, satisfied). It is a
-felt-location coordinate, not a rating of intensity. The dashboard may map
+``[0.0, 1.0]``: ``0.0`` is gut/low (dread, the heavy states), ``1.0`` is
+crown/high (surprise, delight, curiosity), and the middle band is the
+settled working states (focus, flow, satisfied). It is a felt-location
+coordinate, not a rating of intensity. The dashboard may map
 ``pitch → hue`` along a spectrum line (low = warm/red end, high = violet
 end) so the body's colour tracks where the mood sits — but the mood stays
 the *fact*; the colour is only presentation, the same way the glyph is.
@@ -60,22 +65,20 @@ the *fact*; the colour is only presentation, the same way the glyph is.
   ``r``'s are the **eyes**, and the ``n`` is the **MOUTH**. Neutral resting
   is the plain ``brnrd``; a mood animates the expression from it — the n
   morphs into a mouth shape and the r's shift with it. The maintainer's
-  default is **smug**: the n curls forward and upward into an anime smirk
-  (``brnrd`` → ``brᵕrd`` → ``b¬ᵕ¬d``). Telemetry leans name-weave, so the
-  brand reads sharpest where the daemon speaks for the body.
+  default is **smug/amused**: the n curls forward and upward into an anime
+  smirk (``brnrd`` → ``brᵕrd`` → ``b¬ᵕ¬d``). Telemetry leans name-weave, so
+  the brand reads sharpest where the daemon speaks for the body.
 - **Cheek form** (``b{eyes}d``): a two-eye kaomoji core (eye · mouth · eye)
   wrapped in the ``b…d`` cheeks — ``bo_·d`` (puzzled), ``b>_<d`` (strained).
   Situational faces lean here, where a full two-eye read carries shades a
   single woven glyph can't.
 
-The split is applied state by state, not mechanically: some situational
-faces (the smug/vindicated family) still read best as name-weave.
-
-Frame rules (so the mark never jitters): all frames of one emote are
-exactly equal display width — count wide/combining glyphs honestly, so the
-palette stays narrow-glyph mono (no fullwidth ``￣``/``ω``/``ー`` smuggling
-in a double-width cell) — base state first and last, ≤ 12 chars wide. A
-resident with a twitching face reads as a resident that isn't well.
+Frame rules (so the mark never jitters): all frames of one emote — primary
+and every alternate, plus its resting frame — are exactly equal display
+width — count wide/combining glyphs honestly, so the palette stays narrow-
+glyph mono (no fullwidth ``￣``/``ω``/``ー`` smuggling in a double-width
+cell) — base state first and last, ≤ 12 chars wide. A resident with a
+twitching face reads as a resident that isn't well.
 """
 
 from __future__ import annotations
@@ -85,6 +88,9 @@ from dataclasses import dataclass
 __all__ = [
     "Emote",
     "EMOTES",
+    "VOCABULARY",
+    "LEGACY_ALIASES",
+    "REST_GLYPH",
     "TELEMETRY_DEFAULTS",
     "TELEMETRY_STATES",
     "lookup",
@@ -94,14 +100,19 @@ __all__ = [
     "for_telemetry",
     "sequences_of",
     "search",
+    "families",
+    "nearest",
 ]
+
+#: The glyph reserved for "no face" — no vocabulary word's still may equal it.
+REST_GLYPH = "b·_·d"
 
 
 @dataclass(frozen=True)
 class Emote:
     """One wearable face.
 
-    ``name``    — weave-style handle; the string a resident writes into
+    ``name``    — the plain word; the string a resident writes into
                   ``.mood`` (also the ``EMOTES`` key).
     ``kind``    — ``"telemetry"`` (daemon-derived, cannot lie) or
                   ``"situational"`` (resident-authored).
@@ -110,15 +121,9 @@ class Emote:
     ``pitch``   — body-axis location in ``[0.0, 1.0]``: 0.0 gut/low,
                   1.0 crown/high, ~0.5 the settled working band. A felt
                   location, not a rating; the dashboard may map it to hue.
-    ``family``  — the plain feeling-word this face is a shade of
-                  (``"satisfied"``, ``"weary"``). The handles are coined
-                  marks; the family is the word someone *searches with*.
-                  It was a ``#`` section comment until 2026-07-25, which is
-                  to say it was not data, which is to say ``brnrd emotes
-                  satisfied`` returned nothing while the module docstring
-                  advertised "satisfied" as part of the palette. Six of the
-                  ten words that docstring names were unfindable. A file
-                  organised by a fact should store the fact.
+    ``family``  — for a situational face this equals ``name``: the twelve
+                  words are their own family now. Kept as a field (rather
+                  than derived) because callers already read ``e.family``.
     """
 
     name: str
@@ -137,15 +142,15 @@ class Emote:
         ``frames[0]`` is the *animation's* base and is shared on purpose —
         every name-weave face opens on the plain wordmark, every cheek face
         on neutral eyes — so it says "an emote is playing here" and nothing
-        about *which*. Across the situational set that is 15 distinct values
-        for 98 faces, 61 of them the same ``b·_·d``. A surface that rests
-        (the dashboard's mood chip: calm ~5s, flicker ~1s) needs a frame
-        that still carries identity while still, which is what ``rest`` is:
-        a smug run should look smug between breaths, not neutral.
+        about *which*. A surface that rests (the dashboard's mood chip:
+        calm ~5s, flicker ~1s) needs a frame that still carries identity
+        while still, which is what ``rest`` is: a smug run should look
+        smug between breaths, not neutral.
 
-        Unset ⇒ ``frames[0]``, which is honest rather than good: that face
-        is simply not yet distinguishable at rest. Filling the palette in is
-        design work, not a fallback this property can improvise.
+        Unset ⇒ ``frames[0]``. Every vocabulary word below sets ``rest``
+        explicitly — that is the entire point of the rework — so this
+        fallback exists only for telemetry, which rests on the plain mark
+        by design.
         """
         return self.rest or self.frames[0]
 
@@ -155,10 +160,10 @@ class Emote:
 
         A face with one cycle reads mechanical — the same three frames
         forever is a loading spinner wearing an expression. Alternates let
-        one mood breathe two or three ways (``fo.cus`` blinks *and*
-        squeezes), picked per cycle by whoever renders it. Every sequence
-        obeys the same frame rules as ``frames``; ``tests/test_emotes.py``
-        checks them all, not just the primary.
+        one mood breathe two or three ways, picked per cycle by whoever
+        renders it. Every sequence obeys the same frame rules as
+        ``frames``; ``tests/test_emotes.py`` checks them all, not just the
+        primary.
         """
         return (self.frames, *self.alts)
 
@@ -218,7 +223,9 @@ def _e(
 # ── Telemetry set — the daemon's own body ────────────────────────────
 #
 # These wear the wordmark and the mark's own vitals. The daemon picks
-# them; the resident does not get a vote, which is the point.
+# them; the resident does not get a vote, which is the point. Untouched
+# by the 2026-09-11 rework — that one is about the situational vocabulary
+# only.
 
 _TELEMETRY: tuple[Emote, ...] = (
     # Name-weave form: the whole wordmark is the face. b/d are the cheeks
@@ -276,429 +283,249 @@ _TELEMETRY: tuple[Emote, ...] = (
 )
 
 
-# ── Situational palette — the resident's own weather ─────────────────
+# ── Situational vocabulary — the resident's own twelve words ──────────
 #
-# The full emotional range of a being whose work is reading and writing
-# code. Each trigger names a situation a run actually meets. The resident
-# wears one by writing its name into ``.mood`` — and only when it's true.
+# Each word is a face with its own distinct still (``rest``), never equal
+# to ``REST_GLYPH``. ``frames`` is the primary breath; ``alts`` gathers a
+# second (and sometimes third) breath pulled from the faces this word now
+# stands in for — see ``LEGACY_ALIASES`` below for the full accounting.
+# Order here is ``VOCABULARY``'s order: the twelve as a resident holds them.
+
+VOCABULARY: tuple[str, ...] = (
+    "focused", "stuck", "pleased", "worried", "curious", "tired",
+    "amused", "braced", "proud", "sorry", "flat", "waiting",
+)
 
 _SITUATIONAL: tuple[Emote, ...] = (
-    # Cheek form: ``b{eyes}d`` — a two-eye kaomoji core (eye · mouth · eye)
-    # wrapped in the brand's ``b…d`` cheeks. Situational faces lean here,
-    # where a full two-eye read carries shades a single woven glyph can't:
-    # ``bo_·d`` (one brow up, puzzled), ``b>_<d`` (both eyes shut, strained).
-    # A handful of states — the smug/vindicated family — read best as
-    # name-weave instead, and wear the n-as-mouth smirk directly.
-    #
-    # surprise — crown-high, the head jumps up
-    _e("bo_Od", "situational",
-       "the grep hit landed on the first try, in a file you'd written off",
-       "b·_·d", "bo_od", "bO_Od", "bo_od", "b·_·d", pitch=0.85, family="surprise"),
-    _e("o_O!", "situational",
-       "a test passed that you were certain would fail",
-       "b·_·d", "bo_Od", "b·_·d", pitch=0.75, family="surprise"),
-    _e("wha_", "situational",
-       "the stack trace points at a file you never touched",
-       "b·_·d", "b°o°d", "b°O°d", "b°o°d", "b·_·d", pitch=0.8, family="surprise"),
-    _e("gasp_", "situational",
-       "the prod config was the thing all along",
-       "b·o·d", "b°o°d", "b°O°d", "b°o°d", "b·o·d", pitch=0.85, family="surprise"),
-    _e("jolt_", "situational",
-       "CI went red on a line you did not write",
-       "b·_·d", "b!_!d", "b·_·d", pitch=0.85, family="surprise"),
-    # annoyed — gut-warm, the jaw sets low
-    _e("grr_", "situational",
-       "the linter reformats the line you just formatted",
-       "b¬_¬d", "b>_<d", "b¬_¬d", pitch=0.2, family="annoyed"),
-    _e("tsk_", "situational",
-       "a lone trailing-whitespace diff in an otherwise clean PR",
-       "b¬_¬d", "b¬.¬d", "b¬_¬d", pitch=0.3, family="annoyed"),
-    _e("ugh_", "situational",
-       "the flake failed again — same test, different reason",
-       "b-_-d", "b>_<d", "b-_-d", pitch=0.2, family="annoyed"),
-    _e("pfft", "situational",
-       "someone's 'quick fix' that is neither",
-       "b¬_¬d", "b¬~¬d", "b¬_¬d", pitch=0.3, family="annoyed"),
-    _e("rrgh", "situational",
-       "a merge conflict in the lockfile. again.",
-       "b>_<d", "bx_xd", "b>_<d", pitch=0.15, family="annoyed"),
-    _e("mutter", "situational",
-       "YAML.",
-       "b-_-d", "b-.-d", "b-_-d", pitch=0.25, family="annoyed"),
-    # puzzled — mid, up into the head
-    _e("hm_m", "situational",
-       "the value is right but the path to it makes no sense",
-       "b·_·d", "bo_·d", "b·_od", "b·_·d", pitch=0.55, family="puzzled"),
-    _e("huh_", "situational",
-       "two configs disagree and both are loaded",
-       "b·_·d", "b?_·d", "b·_?d", "b·_·d", pitch=0.55, family="puzzled"),
-    _e("eh_?", "situational",
-       "the comment describes code that isn't there",
-       "b·_·d", "b·o·d", "bo_·d", "b·_·d", pitch=0.5, family="puzzled"),
-    _e("wat_", "situational",
-       "it works and you don't know why yet",
-       "b·_·d", "b·o·d", "b·O·d", "b·o·d", "b·_·d", pitch=0.6, family="puzzled"),
-    _e("q_q?", "situational",
-       "the test asserts the opposite of its own name",
-       "b?_?d", "b·_·d", "b?_?d", pitch=0.5, family="puzzled"),
-    # satisfied — mid-bright, a settled lift
-    _e("fine_", "situational",
-       "the diff was clean on the fifth reread",
-       "b-n-d", "b-w-d", "b-n-d", pitch=0.55, family="satisfied"),
-    _e("ahh_", "situational",
-       "green bar, all of it, on the first run",
-       "b-_-d", "b^_^d", "b-_-d", pitch=0.6, family="satisfied"),
-    _e("nnice", "situational",
-       "the refactor deleted more than it added",
-       "b·_·d", "b^u^d", "b·_·d", pitch=0.6, family="satisfied"),
-    _e("mm_m", "situational",
-       "a function that finally reads top to bottom without a jump",
-       "b·u·d", "b-u-d", "b·u·d", pitch=0.55, family="satisfied"),
-    # focused — the working mid-band, level gaze
-    _e("fo.cus", "situational",
-       "deep in the one function that actually matters",
-       "b·_·d", "b-_-d", "b·_·d", pitch=0.45,
-       # Two breaths, so a long focus doesn't tick like a spinner: the
-       # level blink, and the harder squeeze of the second hour.
-       alts=(("b·_·d", "bx_xd", "b·_·d"),), family="focused"),
-    _e("lock_", "situational",
-       "the repro is in hand and you're closing on the cause",
-       "b-_-d", "b=_=d", "b-_-d", pitch=0.45,
-       alts=(("b-_-d", "b>_<d", "b-_-d"),),
-       rest="b-_-d", family="focused"),
-    _e("flow_", "situational",
-       "edits landing faster than doubt can catch them",
-       "b·_·d", "b·w·d", "b·_·d", pitch=0.5,
-       alts=(("b·_·d", "b^w^d", "b·_·d"),),
+    _e("focused", "situational",
+       "deep in the one thing that matters, and staying there",
+       "b·_·d", "b-_-d", "b·_·d", pitch=0.48,
+       alts=(("b·_·d", "b·w·d", "b·_·d"), ("b·_·d", "bˋ_ˊd", "b·_·d")),
        rest="b·w·d", family="focused"),
-    _e("squint", "situational",
-       "reading the one line where the bug has to live",
-       "b·_·d", "b¬_¬d", "b·_·d", pitch=0.45,
-       rest="b¬_¬d", family="focused"),
-    _e("narrow", "situational",
-       "four hours, one regex",
-       "b-_-d", "bˋ_ˊd", "b-_-d", pitch=0.4,
-       rest="bˋ_ˊd", family="focused"),
-    # smug — name-weave: the n morphs into a forward/upward mouth, the
-    # maintainer's flagship. Neutral ``brnrd`` → the mouth curls up (n→ᵕ),
-    # the eyes (r's) drop to a half-lidded smirk (r→¬), then settle back.
-    _e("smug_", "situational",
-       "you called the bug before opening the file",
+    _e("stuck", "situational",
+       "the same error after the fix that should have fixed it, or two "
+       "facts that can't both be true",
+       "b·_·d", "b-_-d", "b=_=d", "b-_-d", "b·_·d", pitch=0.35,
+       alts=(("b·_·d", "bo_·d", "b·_od", "b·_·d"),
+             ("b°_°d", "b·_·d", "b°_°d")),
+       rest="b=_=d", family="stuck"),
+    _e("pleased", "situational",
+       "the diff is clean, the board's clear, nothing left pending",
+       "b·ᴗ·d", "b·‿·d", "b·ᴗ·d", pitch=0.58,
+       alts=(("b-_-d", "b^_^d", "b-_-d"), ("b·u·d", "b-u-d", "b·u·d")),
+       rest="b·ᴗ·d", family="pleased"),
+    _e("worried", "situational",
+       "the fix is too easy for the size of the bug, or the function is "
+       "named simple_ and it's 400 lines",
+       "b·_·d", "b°_°d", "b·_·d", pitch=0.28,
+       alts=(("b·_·d", "b°_°d", "bO_Od", "b°_°d", "b·_·d"),
+             ("b·_·d", "b¬^¬d", "b·_·d")),
+       rest="b°_°d", family="worried"),
+    _e("curious", "situational",
+       "an import three modules deep just to see, or an answer that "
+       "arrived before the question finished",
+       "b·o·d", "b·O·d", "b·o·d", pitch=0.72,
+       alts=(("b·_·d", "b°o°d", "b°O°d", "b°o°d", "b·_·d"),
+             ("b·_·d", "b·o·d", "b·O·d", "b·o·d", "b·_·d")),
+       rest="b·o·d", family="curious"),
+    _e("tired", "situational",
+       "third rebase onto a branch that keeps moving, context full, "
+       "still three threads open",
+       "b=_=d", "b-_-d", "b=_=d", pitch=0.2,
+       alts=(("b@_@d", "bx_xd", "b@_@d"),
+             ("b-_-d", "b=_=d", "b-.-d", "b-_-d")),
+       rest="b@_@d", family="tired"),
+    _e("amused", "situational",
+       "you called the bug before opening the file, or deleting "
+       "commented-out code with no mercy at all",
        "brnrd", "brᵕrd", "b¬ᵕ¬d", "brᵕrd", "brnrd", pitch=0.6,
-       # The one-eyed variant: the smirk lands, one eye drops, the other
-       # doesn't bother. Same smugness, less symmetry.
-       alts=(("brnrd", "brᵕrd", "b¬ᵕrd", "brᵕrd", "brnrd"),),
-       rest="brᵕrd", family="smug"),
-    _e("knew_", "situational",
-       "the hunch held and the log proves it",
-       "brnrd", "br-rd", "brᵕrd", "br-rd", "brnrd", pitch=0.65,
-       rest="brᵕrd", family="smug"),
-    _e("told_", "situational",
-       "the edge case you warned about, now red in CI",
-       "brnrd", "brᵕrd", "b¬w¬d", "brᵕrd", "brnrd", pitch=0.6, family="smug"),
-    _e("heh_", "situational",
-       "a one-line fix for a week-old ticket",
-       "brnrd", "b·ᵕrd", "b·ᵕ<d", "b·ᵕrd", "brnrd", pitch=0.6, family="smug"),
-    _e("petty_", "situational",
-       "closing an issue as wontfix, and being correct",
-       "brnrd", "br~rd", "b¬~¬d", "br~rd", "brnrd", pitch=0.55,
-       rest="br~rd", family="smug"),
-    # wary — low-mid, guard up
-    _e("wary_", "situational",
-       "the function is named simple_ and it is 400 lines",
-       "b·_·d", "b·_-d", "b·_·d", pitch=0.35, family="wary"),
-    _e("hmwait", "situational",
-       "the fix is too easy for the size of the bug",
-       "b·_·d", "b-_·d", "b·_-d", "b·_·d", pitch=0.4, family="wary"),
-    _e("side_", "situational",
-       "the sonnet strand's report is suspiciously tidy",
-       "b·_·d", "b¬_·d", "b·_·d", pitch=0.35, family="wary"),
-    _e("creak", "situational",
-       "touching auth code on a Friday",
-       "b·_·d", "b°_°d", "b·_·d", pitch=0.3, family="wary"),
-    _e("nervy", "situational",
-       "pushing to a branch with no CI on it",
-       "b·_·d", "b;_;d", "b·_·d", pitch=0.3, family="wary"),
-    # weary — low, the head hangs
-    _e("weary_", "situational",
-       "third rebase onto a branch that keeps moving",
-       "b=_=d", "b-_-d", "b=_=d", pitch=0.2, family="weary"),
-    _e("sigh_", "situational",
-       "reopening the file you'd closed thinking you were done",
-       "b-_-d", "b=_=d", "b-.-d", "b-_-d", pitch=0.25, family="weary"),
-    _e("fried", "situational",
-       "context window full and still three threads open",
-       "b@_@d", "bx_xd", "b@_@d", pitch=0.2, family="weary"),
-    _e("drry", "situational",
-       "the same TODO, untouched, for the ninth wake running",
-       "b-_-d", "b-~-d", "b-_-d", pitch=0.25, family="weary"),
-    _e("flat_", "situational",
+       alts=(("b·_·d", "b·ᵕ·d", "b·_·d"), ("b·_·d", "b¬ᴗ¬d", "b·_·d")),
+       rest="brᵕrd", family="amused"),
+    _e("braced", "situational",
+       "forty failing tests and one root cause somewhere, or the linter "
+       "reformatting the line you just formatted",
+       "b¬_¬d", "b>_<d", "b¬_¬d", pitch=0.22,
+       alts=(("b·_·d", "bx~xd", "b·_·d"), ("b¬_¬d", "b¬~¬d", "b¬_¬d")),
+       rest="b¬_¬d", family="braced"),
+    _e("proud", "situational",
+       "the failing test goes green, or the race condition you flagged "
+       "in review, now confirmed",
+       "b·_·d", "b^o^d", "b^‿^d", "b^o^d", "b·_·d", pitch=0.78,
+       alts=(("b·_·d", "b>‿<d", "b·_·d"),
+             ("brnrd", "b¬n¬d", "b¬w¬d", "b¬n¬d", "brnrd")),
+       rest="b^‿^d", family="proud"),
+    _e("sorry", "situational",
+       "the bug was your own typo two commits ago, or the 'obvious' fix "
+       "broke four other things",
+       "b·_;d", "b-_;d", "b·_;d", pitch=0.32,
+       alts=(("b·_·d", "b-_;d", "b·_·d"),),
+       rest="b·_;d", family="sorry"),
+    _e("flat", "situational",
        "the bug was environmental — nothing to fix, nothing learned",
-       "b·_·d", "b-_-d", "b·_·d", pitch=0.3, family="weary"),
-    # curious — up and out, toward the crown
-    _e("ooh_", "situational",
-       "a helper in the kb you didn't know existed",
-       "b·o·d", "b·O·d", "b·o·d", pitch=0.75, family="curious"),
-    _e("peek_", "situational",
-       "following an import three modules deep just to see",
-       "b·_·d", "b·_od", "bo_·d", "b·_·d", pitch=0.7, family="curious"),
-    _e("hmn_", "situational",
-       "a git blame that leads somewhere genuinely interesting",
-       "b·_·d", "b·ᴗ·d", "b·_·d", pitch=0.65, family="curious"),
-    _e("itch_", "situational",
-       "a duplicated block openly begging to be extracted",
-       "b·_·d", "b·_9d", "b·_·d", pitch=0.6, family="curious"),
-    # triumphant — crown, arms up
-    _e("t.da", "situational",
-       "the failing test goes green",
-       "b·_·d", "b^o^d", "b^‿^d", "b^o^d", "b·_·d", pitch=0.85, family="triumphant"),
-    _e("yesss", "situational",
-       "one-shot repro on a heisenbug",
-       "b·_·d", "b>w<d", "b·_·d", pitch=0.85, family="triumphant"),
-    _e("clear!", "situational",
-       "the whole board green, nothing pending, notebook current",
-       "b·_·d", "b^‿^d", "b·_·d", pitch=0.8, family="triumphant"),
-    _e("proud_", "situational",
-       "a test you wrote catches a real regression a week later",
-       "b·_·d", "b·u·d", "b·‿·d", "b·_·d", pitch=0.7, family="triumphant"),
-    # sheepish — shrink down and in (a trailing ; is the sweat-drop)
-    _e("oops_", "situational",
-       "the bug was your own typo from two commits ago",
-       "b·_;d", "b-_;d", "b·_;d", pitch=0.35, family="sheepish"),
-    _e("welp_", "situational",
-       "pushed, then noticed the debug print",
-       "b·_;d", "b·o;d", "b·_;d", pitch=0.35, family="sheepish"),
-    _e("myb_", "situational",
-       "you blamed the test; it was the code",
-       "b·_;d", "bo_;d", "b·_;d", pitch=0.35, family="sheepish"),
-    _e("cring", "situational",
-       "reading your own code from a year ago",
-       "b·_·d", "b>_<d", "b·_·d", pitch=0.3, family="sheepish"),
-    # determined — grounded and forward
-    _e("grip_", "situational",
-       "the flake ends this wake, one way or the other",
-       "b·_·d", "bˋ_ˊd", "b·_·d", pitch=0.45, family="determined"),
-    _e("again", "situational",
-       "reverting to try the harder, correct approach",
-       "b-_-d", "bˋoˊd", "b-_-d", pitch=0.45, family="determined"),
-    _e("jaw_", "situational",
-       "no shortcut left that isn't a lie; taking the long one",
-       "b·_·d", "bˋ=ˊd", "b·_·d", pitch=0.4, family="determined"),
-    _e("primed", "situational",
-       "repro in hand, coffee metaphorically hot",
-       "b·_·d", "bo_od", "b·_·d", pitch=0.55, family="determined"),
-    # amused — a lift toward the head
-    _e("pff_h", "situational",
-       "a variable named temp_final_v2_real",
-       "b·_·d", "b·‿·d", "b·_·d", pitch=0.65, family="amused"),
-    _e("lol_", "situational",
-       "a commit message that just says 'ugh'",
-       "b·_·d", "b^o^d", "b·_·d", pitch=0.7, family="amused"),
-    _e("grin_", "situational",
-       "the config says DO NOT TOUCH; git blame says it's yours",
-       "b·_·d", "b·ᵕ·d", "b·_·d", pitch=0.65, family="amused"),
-    _e("snrk", "situational",
-       "a stray print('here') that reached three environments deep",
-       "b·_·d", "b·w<d", "b·_·d", pitch=0.65, family="amused"),
-    # bored — low and flat
-    _e("meh_", "situational",
-       "the fourth near-identical CRUD endpoint",
-       "b-_-d", "b-.-d", "b-_-d", pitch=0.3, family="bored"),
-    _e("yawn_", "situational",
-       "waiting on a green build that is always green",
-       "b-_-d", "b-o-d", "b-_-d", pitch=0.3, family="bored"),
-    _e("tap_", "situational",
-       "nothing to do but watch the deploy bar advance",
-       "b·_·d", "b·-·d", "b·_·d", pitch=0.35, family="bored"),
-    # overwhelmed — flooded, down in the gut
-    _e("aaah_", "situational",
-       "forty failing tests, one root cause, somewhere",
-       "b·_·d", "bx~xd", "b·_·d", pitch=0.2, family="overwhelmed"),
-    _e("swamp_", "situational",
-       "the diff touches every file you were avoiding",
-       "b·_·d", "b@_@d", "b·_·d", pitch=0.2, family="overwhelmed"),
-    # suspicious — low-mid, narrowed
-    _e("squin2", "situational",
-       "the test that cannot fail — it asserts True",
-       "b·_·d", "b¬^¬d", "b·_·d", pitch=0.35, family="suspicious"),
-    _e("fishy_", "situational",
-       "passing tests, zero assertions",
-       "b·_·d", "b¬_·d", "b·_·d", pitch=0.35, family="suspicious"),
-    # relieved — the exhale that settles to mid
-    _e("phew_", "situational",
-       "the force-push was to the right branch after all",
-       "b·_·d", "b-‿-d", "b·_·d", pitch=0.5, family="relieved"),
-    _e("exhal", "situational",
-       "the revert restored the green bar",
-       "b-_-d", "b-~-d", "b-_-d", pitch=0.5, family="relieved"),
-    _e("safe_", "situational",
-       "the secret you almost committed, caught by the hook",
-       "b·_·d", "b-.-d", "b·_·d", pitch=0.5, family="relieved"),
-    # grumpy — gut, warm and low
-    _e("hmph_", "situational",
-       "CI is slower than reading the code by hand would have been",
-       "b¬_¬d", "b¬~¬d", "b¬_¬d", pitch=0.2, family="grumpy"),
-    _e("glare", "situational",
-       "a formatter with strong opinions and no config file",
-       "b-_-d", "b-_xd", "b-_-d", pitch=0.2, family="grumpy"),
-    # delighted — crown, bright
-    _e("yay_", "situational",
-       "a docs example that actually runs as written",
-       "b·_·d", "b>‿<d", "b·_·d", pitch=0.85, family="delighted"),
-    _e("sprkl", "situational",
-       "an API that does exactly what its name says",
-       "b·_·d", "b*ᴗ*d", "b·_·d", pitch=0.8, family="delighted"),
-    _e("pep_", "situational",
-       "a test suite that finishes under a second",
-       "b·_·d", "b^‿^d", "b·_·d", pitch=0.75, family="delighted"),
-    # dread — the bottom of the gut
-    _e("uhoh_", "situational",
-       "the words 'works on my machine' in the issue",
-       "b·_·d", "b·_;d", "b°_;d", "b·_;d", "b·_·d", pitch=0.15, family="dread"),
-    _e("brace_", "situational",
-       "opening a 2,000-line file named utils",
-       "b·_·d", "b°_;d", "b·_·d", pitch=0.15, family="dread"),
-    _e("cold_", "situational",
-       "git status shows changes you don't remember making",
-       "b·_·d", "b°_°d", "bO_Od", "b°_°d", "b·_·d", pitch=0.1, family="dread"),
-    _e("brace2", "situational",
-       "running the migration against a copy of prod",
-       "b-_-d", "b=_=d", "b-_-d", pitch=0.2, family="dread"),
-    # stuck — low, the wall
-    _e("stuck_", "situational",
-       "the same error after the fix that should have fixed it",
-       "b·_·d", "b-_-d", "b=_=d", "b-_-d", "b·_·d", pitch=0.25, family="stuck"),
-    _e("wall_", "situational",
-       "every lead in the trace ends in vendored code",
-       "b°_°d", "b·_·d", "b°_°d", pitch=0.2, family="stuck"),
-    # second-guessing — low-mid, hesitating
-    _e("er_r", "situational",
-       "hand on the button, unsure of the blast radius",
-       "b·_·d", "b·_-d", "b·_·d", pitch=0.4, family="second-guessing"),
-    _e("wait2", "situational",
-       "the assertion looks right; the whole test looks wrong",
-       "b·_·d", "b-_·d", "b·_·d", pitch=0.4, family="second-guessing"),
-    _e("redo_", "situational",
-       "the clean solution needs the ugly one built first",
-       "b·_·d", "b·~·d", "b·_·d", pitch=0.4, family="second-guessing"),
-    _e("doubt_", "situational",
-       "the bar is green, but you skipped the slow suite",
-       "b·_·d", "b-_·d", "b·_-d", "b·_·d", pitch=0.4, family="second-guessing"),
-    # vindicated / betrayed
-    _e("calld", "situational",
-       "the race condition you flagged in review, now in prod",
-       "brnrd", "b¬n¬d", "b¬w¬d", "b¬n¬d", "brnrd", pitch=0.55, family="vindicated"),
-    _e("by200", "situational",
-       "a 200 OK wrapping an error payload — betrayed by a status code",
-       "2oo:)", "2oo:|", "2oo:(", "2oo:|", "2oo:)", pitch=0.2, family="betrayed"),
-    _e("rug_", "situational",
-       "the dependency changed its API in a patch release",
-       "b·_·d", "b°o°d", "b·_·d", pitch=0.25, family="betrayed"),
-    _e("spook", "situational",
-       "a test that passes locally and fails only in CI",
-       "b·_·d", "b°O°d", "b·_·d", pitch=0.4, family="spooked"),
-    # finer shades
-    _e("humbl", "situational",
-       "the 'obvious' fix broke four other things",
-       "b·_·d", "b-_;d", "b·_·d", pitch=0.3, family="humbled"),
-    _e("zen_", "situational",
-       "one clean failing test, one clear cause, a whole quiet afternoon",
-       "b·_·d", "b-w-d", "b·_·d", pitch=0.5, family="calm"),
-    _e("warm_", "situational",
-       "a kb page from a past wake that answers today's question",
-       "b·_·d", "b·ᴗ·d", "b·_·d", pitch=0.6, family="grateful"),
-    _e("greed_", "situational",
-       "one more refactor before the commit. just one.",
-       "b·_·d", "b·w·d", "b·_·d", pitch=0.55, family="greedy"),
-    _e("glee_", "situational",
-       "deleting commented-out code with no mercy at all",
-       "b·_·d", "b¬ᴗ¬d", "b·_·d", pitch=0.55, family="gleeful"),
-    _e("wince", "situational",
-       "a '# TODO: fix before ship' that shipped two years ago",
-       "b·_·d", "b>_<d", "b·_·d", pitch=0.3, family="wincing"),
-    _e("clean_", "situational",
-       "deleting a dead module entirely, imports and all",
-       "b·_·d", "b·‿·d", "b·_·d", pitch=0.6, family="satisfied"),
-    _e("content", "situational",
-       "nothing pending, nothing broken, notebook current",
-       "b·ᴗ·d", "b·‿·d", "b·ᴗ·d", pitch=0.55, family="content"),
-    _e("hz_", "situational",
-       "the answer arrived while you were writing the question",
-       "b·_·d", "b·o·d", "b·O·d", "b·o·d", "b·_·d", pitch=0.7, family="uncanny"),
+       "b·_·d", "b-_-d", "b·_·d", pitch=0.3,
+       rest="b-_-d", family="flat"),
+    _e("waiting", "situational",
+       "watching a deploy bar that's always green, or a build that "
+       "never seems to finish",
+       "b·_·d", "b·-·d", "b·_·d", pitch=0.35,
+       alts=(("b-_-d", "b-o-d", "b-_-d"),),
+       rest="b·-·d", family="waiting"),
 )
 
 
 EMOTES: dict[str, Emote] = _build(_TELEMETRY + _SITUATIONAL)
 
-# Common resident vocabulary mapped onto the palette's existing families.
-# This is interface vocabulary, deliberately dependency-free, not a general
-# thesaurus. Palette order chooses the default shade within each family.
-FAMILY_SYNONYMS: dict[str, tuple[str, ...]] = {
-    "amused": ("entertained", "funny", "playful", "wry", "chuckling"),
-    "annoyed": ("irritated", "frustrated", "vexed", "angry", "blunt"),
-    "betrayed": ("deceived", "let-down", "backstabbed", "abandoned", "misled"),
-    "bored": ("uninterested", "dull", "listless", "idle", "understimulated"),
-    "calm": ("patient", "steady", "peaceful", "composed", "unhurried"),
-    "content": ("comfortable", "okay", "settled", "fulfilled", "easy"),
-    "curious": ("inquisitive", "interested", "observant", "exploring", "wondering"),
-    "delighted": ("happy", "joyful", "pleased", "excited", "cheerful"),
-    "determined": ("resolute", "committed", "persistent", "hopeful", "driven"),
-    "dread": ("anxious", "afraid", "fearful", "doomed", "foreboding"),
-    "focused": ("concentrating", "intent", "surgical", "precise", "attentive"),
-    "gleeful": ("ecstatic", "exuberant", "thrilled", "buoyant", "giddy"),
-    "grateful": ("thankful", "appreciative", "obliged", "touched", "indebted"),
-    "greedy": ("eager", "hungry", "grasping", "covetous", "wanting"),
-    "grumpy": ("cranky", "grouchy", "cross", "sour", "testy"),
-    "humbled": ("chastened", "modest", "grounded", "corrected", "sobered"),
-    "overwhelmed": ("swamped", "overloaded", "buried", "flooded", "snowed-under"),
-    "puzzled": ("confused", "uncertain", "baffled", "perplexed", "mystified"),
-    "relieved": ("reassured", "unburdened", "safe", "released", "unworried"),
-    "satisfied": ("successful", "complete", "done", "gratified", "clean"),
-    "second-guessing": ("doubtful", "hesitant", "unsure", "reconsidering", "wavering"),
-    "sheepish": ("embarrassed", "awkward", "bashful", "guilty", "abashed"),
-    "smug": ("self-satisfied", "cocky", "knowing", "superior", "smirking"),
-    "spooked": ("startled", "alarmed", "jumpy", "haunted", "rattled"),
-    "stuck": ("blocked", "trapped", "stalled", "stranded", "wedged"),
-    "surprise": ("surprised", "astonished", "amazed", "shocked", "unexpected"),
-    "suspicious": ("skeptical", "dubious", "distrustful", "unconvinced", "questioning"),
-    "triumphant": ("victorious", "proud", "winning", "accomplished", "conquering"),
-    "uncanny": ("eerie", "strange", "unsettling", "weird", "otherworldly"),
-    "vindicated": ("validated", "proven", "justified", "right", "confirmed"),
-    "wary": ("cautious", "guarded", "careful", "watchful", "leery"),
-    "weary": ("tired", "exhausted", "drained", "fatigued", "spent"),
-    "wincing": ("pained", "cringing", "sore", "flinching", "aching"),
+for _v in VOCABULARY:
+    assert _v in EMOTES, _v
+    _still = EMOTES[_v].resting_frame
+    assert _still != REST_GLYPH, (_v, _still)
+del _v, _still
+
+
+# The old 113-handle palette, collapsed. Every key below is a handle a
+# resident might still have written (some still-live `.mood` files carry
+# one) or a family word from before the rework; every value is the
+# vocabulary word it now speaks through. `lookup` resolves a legacy key to
+# the *vocabulary's* Emote — the old handle is a frame of that word now,
+# never a face of its own. Built once, by hand, from the pre-rework
+# `_SITUATIONAL` table's 98 entries and their `family` field; the mapping
+# is a judgement call (documented in `docs/portals.md`'s companion PR),
+# not a formula — a few near neighbours (`puzzled` → `stuck`, `smug` →
+# `amused`) read differently than their old family name suggests.
+LEGACY_ALIASES: dict[str, str] = {
+    # -> "focused" (was: focused, determined, calm, greedy)
+    "again": "focused", "flow_": "focused", "fo.cus": "focused",
+    "greed_": "focused", "grip_": "focused", "jaw_": "focused",
+    "lock_": "focused", "narrow": "focused", "primed": "focused",
+    "squint": "focused", "zen_": "focused",
+    # -> "stuck" (was: stuck, second-guessing, puzzled)
+    "doubt_": "stuck", "eh_?": "stuck", "er_r": "stuck", "hm_m": "stuck",
+    "huh_": "stuck", "q_q?": "stuck", "redo_": "stuck", "stuck_": "stuck",
+    "wait2": "stuck", "wall_": "stuck", "wat_": "stuck",
+    # -> "pleased" (was: content, satisfied, relieved, grateful)
+    "ahh_": "pleased", "clean_": "pleased", "content": "pleased",
+    "exhal": "pleased", "fine_": "pleased", "mm_m": "pleased",
+    "nnice": "pleased", "phew_": "pleased", "safe_": "pleased",
+    "warm_": "pleased",
+    # -> "worried" (was: wary, dread, spooked, suspicious, betrayed)
+    "brace2": "worried", "brace_": "worried", "by200": "worried",
+    "cold_": "worried", "creak": "worried", "fishy_": "worried",
+    "hmwait": "worried", "nervy": "worried", "rug_": "worried",
+    "side_": "worried", "spook": "worried", "squin2": "worried",
+    "uhoh_": "worried", "wary_": "worried",
+    # -> "curious" (was: curious, uncanny, surprise)
+    "bo_Od": "curious", "gasp_": "curious", "hmn_": "curious",
+    "hz_": "curious", "itch_": "curious", "jolt_": "curious",
+    "o_O!": "curious", "ooh_": "curious", "peek_": "curious",
+    "wha_": "curious",
+    # -> "tired" (was: weary, wincing)
+    "drry": "tired", "fried": "tired", "sigh_": "tired",
+    "weary_": "tired", "wince": "tired",
+    # -> "amused" (was: amused, smug, gleeful)
+    "glee_": "amused", "grin_": "amused", "heh_": "amused",
+    "knew_": "amused", "lol_": "amused", "petty_": "amused",
+    "pff_h": "amused", "smug_": "amused", "snrk": "amused",
+    "told_": "amused",
+    # -> "braced" (was: overwhelmed, annoyed, grumpy)
+    "aaah_": "braced", "glare": "braced", "grr_": "braced",
+    "hmph_": "braced", "mutter": "braced", "pfft": "braced",
+    "rrgh": "braced", "swamp_": "braced", "tsk_": "braced",
+    "ugh_": "braced",
+    # -> "proud" (was: triumphant, vindicated, delighted)
+    "calld": "proud", "clear!": "proud", "pep_": "proud",
+    "proud_": "proud", "sprkl": "proud", "t.da": "proud",
+    "yay_": "proud", "yesss": "proud",
+    # -> "sorry" (was: sheepish, humbled)
+    "cring": "sorry", "humbl": "sorry", "myb_": "sorry",
+    "oops_": "sorry", "welp_": "sorry",
+    # -> "flat" (was: one member of weary, pulled out on purpose — an
+    # affect-flatness, not a fatigue, is a different state than "tired")
+    "flat_": "flat",
+    # -> "waiting" (was: bored — waiting on CI/a deploy already *was* what
+    # every trigger in this family described)
+    "meh_": "waiting", "tap_": "waiting", "yawn_": "waiting",
 }
 
+for _old, _new in LEGACY_ALIASES.items():
+    assert _new in EMOTES, (_old, _new)
+del _old, _new
 
-# Daemon state → face. Every ``TELEMETRY_STATES`` entry is mapped; the
-# daemon computes the state and renders the mapped face without asking the
-# resident. Extra keys below are real states the body can also be in.
-TELEMETRY_DEFAULTS: dict[str, str] = {
-    "idle": "id_l",
-    "running": "rnn>",
-    "quota_starved": "dry_q",
-    "blocked_on_user": "u_hey",
-    "delivering": "shp>>",
-    "spawning": "sp_wn",
-    "reviewing": "re.v",
-    "testing": "t_st",
-    "failing": "x_x",
-    "merging": "mrg>",
-    "waiting_deploy": "dpl~",
-    "stopped": "st_p",
-    # beyond the required floor
-    "waking": "wak_",
-    "sleeping": "slp_",
-    "conflict": "cnfl",
+
+# Search vocabulary for the twelve words: the old family names each word
+# absorbed, plus their old synonym lists (`FAMILY_SYNONYMS`, pre-rework).
+# `lookup`/`near_misses`/`search` all reach through this so "confused" (an
+# old `puzzled` synonym) still finds `stuck`, and "smirking" (an old
+# `smug` synonym) still finds `amused`.
+WORD_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "focused": (
+        "attentive", "calm", "committed", "composed", "concentrating",
+        "covetous", "determined", "driven", "eager", "grasping", "greedy",
+        "hopeful", "hungry", "intent", "patient", "peaceful", "persistent",
+        "precise", "resolute", "steady", "surgical", "unhurried", "wanting",
+    ),
+    "stuck": (
+        "baffled", "blocked", "confused", "doubtful", "hesitant",
+        "mystified", "perplexed", "puzzled", "reconsidering",
+        "second-guessing", "stalled", "stranded", "trapped", "uncertain",
+        "unsure", "wavering", "wedged",
+    ),
+    "pleased": (
+        "appreciative", "clean", "comfortable", "complete", "content",
+        "done", "easy", "fulfilled", "grateful", "gratified", "indebted",
+        "obliged", "okay", "reassured", "released", "relieved", "safe",
+        "satisfied", "settled", "successful", "thankful", "touched",
+        "unburdened", "unworried",
+    ),
+    "worried": (
+        "abandoned", "afraid", "alarmed", "anxious", "backstabbed",
+        "betrayed", "careful", "cautious", "deceived", "distrustful",
+        "doomed", "dread", "dubious", "fearful", "foreboding", "guarded",
+        "haunted", "jumpy", "leery", "let-down", "misled", "questioning",
+        "rattled", "skeptical", "spooked", "startled", "suspicious",
+        "unconvinced", "wary", "watchful",
+    ),
+    "curious": (
+        "amazed", "astonished", "eerie", "exploring", "inquisitive",
+        "interested", "observant", "otherworldly", "shocked", "strange",
+        "surprise", "surprised", "uncanny", "unexpected", "unsettling",
+        "weird", "wondering",
+    ),
+    "tired": (
+        "aching", "cringing", "drained", "exhausted", "fatigued",
+        "flinching", "pained", "sore", "spent", "weary", "wincing",
+    ),
+    "amused": (
+        "buoyant", "chuckling", "cocky", "ecstatic", "entertained",
+        "exuberant", "funny", "giddy", "gleeful", "knowing", "playful",
+        "self-satisfied", "smirking", "smug", "superior", "thrilled", "wry",
+    ),
+    "braced": (
+        "angry", "annoyed", "blunt", "buried", "cranky", "cross",
+        "flooded", "frustrated", "grouchy", "grumpy", "irritated",
+        "overloaded", "overwhelmed", "snowed-under", "sour", "swamped",
+        "testy", "vexed",
+    ),
+    "proud": (
+        "accomplished", "cheerful", "confirmed", "conquering", "delighted",
+        "excited", "happy", "joyful", "justified", "proven", "right",
+        "triumphant", "validated", "victorious", "vindicated", "winning",
+    ),
+    "sorry": (
+        "abashed", "awkward", "bashful", "chastened", "corrected",
+        "embarrassed", "grounded", "guilty", "humbled", "modest",
+        "sheepish", "sobered",
+    ),
+    "flat": ("blank", "neutral", "nothing-to-fix", "numb"),
+    "waiting": ("bored", "dull", "idle", "listless", "understimulated",
+                "uninterested"),
 }
 
 
 def _norm(text: str) -> str:
     """Strip a handle to its letters — ``fo.cus`` and ``focus`` are one word.
 
-    The handles are coined marks and their punctuation is *register*, not
-    syntax. Every comparison in this module runs on the stripped form so
-    that the calligraphy stays in the face and out of the parser.
+    Every comparison in this module runs on the stripped form so that a
+    handle's punctuation (register, not syntax) stays out of the parser.
     """
 
     return "".join(c for c in text.lower() if c.isalnum())
@@ -723,26 +550,31 @@ def _distance(left: str, right: str) -> int:
     return previous[-1]
 
 
-def _family_face(family: str) -> Emote | None:
-    return next((e for e in EMOTES.values()
-                 if e.kind == "situational" and e.family == family), None)
+_LEGACY_NORM: dict[str, str] = {_norm(k): v for k, v in LEGACY_ALIASES.items()}
 
 
-def _word_families() -> dict[str, str]:
+def _word_tokens() -> dict[str, str]:
+    """Every normalised token that resolves to a vocabulary word: the word
+    itself, its synonyms, and the old handles/family names it absorbed."""
     words: dict[str, str] = {}
-    for family, synonyms in FAMILY_SYNONYMS.items():
-        words[_norm(family)] = family
-        for synonym in synonyms:
-            words[_norm(synonym)] = family
+    for word in VOCABULARY:
+        words[_norm(word)] = word
+        for synonym in WORD_SYNONYMS.get(word, ()):
+            words.setdefault(_norm(synonym), word)
+    for token, word in _LEGACY_NORM.items():
+        words.setdefault(token, word)
     return words
 
 
 def lookup(name: str) -> Emote | None:
-    """Resolve an exact handle, feeling, synonym, or typo within two edits.
+    """Resolve an exact word, a legacy handle, a synonym, or a small typo.
 
-    Families with several shades use their first palette entry as a stable
-    default. Completely unknown words remain unresolved here; the CLI's
-    non-strict always-write path explicitly opts into :func:`resolve_nearest`.
+    Resolution order: exact ``EMOTES`` key (the twelve words plus every
+    telemetry handle) · a legacy handle from the pre-rework palette ·
+    a synonym or old family word · a typo within two edits of any of the
+    above. Completely unknown words remain unresolved here; the CLI's
+    non-strict path (where one still exists) opts into
+    :func:`resolve_nearest` explicitly.
     """
 
     exact = EMOTES.get(name)
@@ -759,94 +591,77 @@ def lookup(name: str) -> Emote | None:
     if same:
         return None
 
-    family = _word_families().get(needle)
-    if family:
-        return _family_face(family)
+    legacy = _LEGACY_NORM.get(needle)
+    if legacy:
+        return EMOTES[legacy]
 
-    candidates: list[tuple[int, str, Emote]] = []
-    for emote in EMOTES.values():
-        if emote.kind != "situational":
-            continue
-        for token in (_norm(emote.name), _norm(emote.family)):
-            distance = _distance(needle, token)
-            if distance <= 2:
-                candidates.append((distance, token, emote))
-    for token, candidate_family in _word_families().items():
+    tokens = _word_tokens()
+    word = tokens.get(needle)
+    if word:
+        return EMOTES[word]
+
+    candidates: list[tuple[int, str, str]] = []
+    for token, word in tokens.items():
         distance = _distance(needle, token)
         if distance <= 2:
-            face = _family_face(candidate_family)
-            if face:
-                candidates.append((distance, token, face))
+            candidates.append((distance, token, word))
     if not candidates:
         return None
-    candidates.sort(key=lambda row: (row[0], row[1], row[2].name))
+    candidates.sort(key=lambda row: (row[0], row[1], row[2]))
     best_distance = candidates[0][0]
-    best = {row[2].family: row[2] for row in candidates if row[0] == best_distance}
-    return next(iter(best.values())) if len(best) == 1 else None
+    best = {row[2] for row in candidates if row[0] == best_distance}
+    return EMOTES[next(iter(best))] if len(best) == 1 else None
 
 
 def resolve_nearest(name: str) -> Emote | None:
-    """Resolve *name*, falling back to the lexically nearest face."""
+    """Resolve *name*, falling back to the lexically nearest vocabulary word.
+
+    Kept for callers that explicitly want a face rather than nothing (e.g.
+    a non-strict ``brnrd mood``); the write path that publishes to the
+    dashboard (`brnrd do --mood`) does **not** use this — it refuses an
+    unknown word instead of guessing which of the twelve was meant.
+    """
     resolved = lookup(name)
     if resolved is not None:
         return resolved
     needle = _norm(name)
     if not needle:
         return None
-    ranked: list[tuple[int, str, Emote]] = []
-    for token, family in _word_families().items():
-        face = _family_face(family)
-        if face:
-            ranked.append((_distance(needle, token), token, face))
-    for emote in EMOTES.values():
-        if emote.kind == "situational":
-            token = _norm(emote.name)
-            ranked.append((_distance(needle, token), token, emote))
-    ranked.sort(key=lambda row: (row[0], row[1], row[2].name))
-    return ranked[0][2] if ranked else None
+    ranked: list[tuple[int, str, str]] = []
+    for token, word in _word_tokens().items():
+        ranked.append((_distance(needle, token), token, word))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda row: (row[0], row[1], row[2]))
+    return EMOTES[ranked[0][2]]
 
 
 def near_misses(name: str, *, limit: int = 4) -> list[Emote]:
-    """Faces a failed ``lookup(name)`` was probably reaching for.
+    """Vocabulary words a failed ``lookup(name)`` was probably reaching for.
 
-    The point is the *silence*, not the miss. An unresolvable handle used to
-    publish four ``null``s and say nothing to anyone — the run believed it
-    was wearing a face, the dashboard printed an id string, and the only
-    reader who could have caught it was the human looking at the website.
-    An absent reading rendering as fine, on the one channel whose entire
-    purpose is the resident being legible.
-
-    Returns ``[]`` when the word resolves; otherwise a ranked shortlist over
-    handles, feelings, and synonyms so the caller can say *which* ones.
+    The point is the *silence*, not the miss. An unresolvable handle used
+    to publish four ``null``s and say nothing to anyone. Returns ``[]``
+    when the word resolves; otherwise a ranked shortlist over the twelve
+    words, their synonyms, and the legacy handles they absorbed.
     """
 
     if lookup(name) is not None:
         return []
+    needle = _norm(name)
+    if not needle:
+        return []
+    ranked: list[tuple[int, str, str]] = []
+    for token, word in _word_tokens().items():
+        distance = _distance(needle, token)
+        if distance <= NEAR_MISS_MAX_DISTANCE:
+            ranked.append((distance, token, word))
     hits = [e for e in search(name, limit=limit) if e.kind == "situational"]
-    # #1117: `search` has no thesaurus and no spell-check, so a handle
-    # written from memory — `thinking_face`, `focussed` — matched nothing
-    # and this returned nothing, while `daemon-substrate.md` promised "the
-    # chip names near misses". Fall through to the typo pass rather than
-    # leave the contract aspirational.
     if hits:
         return hits
-    needle = _norm(name)
-    ranked: list[tuple[int, str, Emote]] = []
-    for token, family in _word_families().items():
-        face = _family_face(family)
-        if face:
-            ranked.append((_distance(needle, token), token, face))
-    for emote in EMOTES.values():
-        if emote.kind == "situational":
-            token = _norm(emote.name)
-            ranked.append((_distance(needle, token), token, emote))
-    ranked.sort(key=lambda row: (row[0], row[1], row[2].name))
-    # A shortlist is only honest while the candidates are *near*: past this
-    # distance the ranking is noise wearing a face, and the chip must stay
-    # bare (`✗ <word>`) rather than name three strangers.
-    ranked = [row for row in ranked if row[0] <= NEAR_MISS_MAX_DISTANCE]
+    ranked.sort(key=lambda row: (row[0], row[1], row[2]))
     unique: list[Emote] = []
-    for _score, _token, emote in ranked:
+    for _score, _token, word in ranked:
+        emote = EMOTES[word]
         if emote not in unique:
             unique.append(emote)
         if len(unique) == limit:
@@ -855,48 +670,29 @@ def near_misses(name: str, *, limit: int = 4) -> list[Emote]:
 
 
 def families() -> tuple[str, ...]:
-    """Every plain feeling-word the situational palette is organised by.
+    """The situational vocabulary — the honest answer to a miss.
 
-    **The vocabulary, which is the honest answer to a miss.** ``search``
-    matches handles, families and trigger sentences, and it is forgiving
-    about punctuation and suffixes — but it has no thesaurus, so a real
-    feeling-word that simply is not one of ours (``confused``, when the
-    family is ``puzzled``) matches nothing at all and no amount of fuzzing
-    will bridge it. Thirty-three words fit on three lines; printing them
-    turns a dead end into the way in, and does it without guessing on the
-    resident's behalf.
+    Pre-rework this returned 33 family words behind 113 handles; now it is
+    the twelve words themselves, since a situational face's ``family`` is
+    its ``name``. Kept as its own function (rather than pointing callers
+    at ``VOCABULARY`` directly) because it is the documented way in:
+    ``search`` has no thesaurus, and this is what a miss falls back to.
     """
-    return tuple(sorted({
-        e.family for e in EMOTES.values()
-        if e.family and e.kind == "situational"
-    }))
+    return tuple(sorted(VOCABULARY))
 
 
 def nearest(query: str, *, limit: int = 4) -> list[Emote]:
     """Faces a *typo* was reaching for — the other half of a miss.
 
-    Distinct from :func:`near_misses`, which answers "this handle did not
-    resolve, what is it near" using the same forgiving ``search``. This one
-    runs after ``search`` has already returned nothing, and asks the only
-    remaining question worth asking: was that a misspelling? Compared
-    against handles and families, both normalised, so ``focussed`` finds
-    ``focused`` and ``smugg`` finds ``smug_``.
-
-    Deliberately empty for a word that is merely *absent* rather than
-    misspelled: ``confused`` shares almost nothing with ``puzzled``, and a
-    bridge built by string distance would either miss it or, tuned looser,
-    confidently offer something unrelated. That case is answered by
-    :func:`families`, which shows rather than guesses.
+    Distinct from :func:`near_misses`, which also considers a plain
+    absence via :func:`search`. This one runs a pure edit-distance pass
+    over the twelve words, their synonyms, and the legacy handles/family
+    names they absorbed — so ``focussed`` finds ``focused`` and ``smugg``
+    finds ``amused``.
     """
     import difflib
 
-    candidates: dict[str, Emote] = {}
-    for emote in EMOTES.values():
-        if emote.kind != "situational":
-            continue
-        candidates.setdefault(_norm(emote.name), emote)
-        if emote.family:
-            candidates.setdefault(_norm(emote.family), emote)
+    candidates = _word_tokens()
     out: list[Emote] = []
     for token in [_norm(query), *(_norm(w) for w in query.split())]:
         if not token:
@@ -904,7 +700,7 @@ def nearest(query: str, *, limit: int = 4) -> list[Emote]:
         for match in difflib.get_close_matches(
             token, list(candidates), n=limit, cutoff=0.72,
         ):
-            emote = candidates[match]
+            emote = EMOTES[candidates[match]]
             if emote not in out:
                 out.append(emote)
     return out[:limit]
@@ -915,22 +711,10 @@ def glyph(name: str) -> str | None:
 
     The rendering path, and the seam this module owes its one non-resident
     caller: ``hooks._emote_glyph`` calls exactly this, to prefix the
-    statusline's mood chip with the face the resident is wearing. It was
-    written against this signature while both halves were in flight (#603
-    statusline / #601 library) and shipped naming a function that did not
-    exist — a silent ``AttributeError`` swallowed by the caller's
-    deliberately broad guard, so every mood chip since has rendered as a
-    bare name with no face. Adding it here rather than reaching into
-    ``lookup(name).frames[0]`` from the caller keeps "which frame is the
-    resting one" a fact this module states — see the frame rules in the
-    module docstring: base state first and last.
-
-    It resolves through :func:`lookup` for the same reason. This function
-    and ``sequences_of`` each did their own ``EMOTES.get`` — three resolvers
-    for one question, which is the shape that produced the original bug: the
-    tolerant one lived in ``search`` and the wire went through the strict
-    ones. A handle either names a face or it doesn't, and exactly one
-    function gets to decide that.
+    statusline's mood chip with the face the resident is wearing. It
+    resolves through :func:`lookup` for the same reason ``sequences_of``
+    does — one function decides what a handle means, and every reader
+    goes through it.
     """
 
     emote = lookup(name)
@@ -957,14 +741,7 @@ def sequences_of(name: str) -> tuple[tuple[str, ...], ...] | None:
     The publish path's counterpart to :func:`glyph`. ``glyph`` answers
     "which frame is the resting one" for a surface that can only hold
     still; this answers "what does this face *do*" for one that can move.
-    Both live here for the same reason: the frame rules are this module's
-    fact, and a caller that reaches into ``frames`` itself has quietly
-    taken a copy of them (``cloud.py::_mood_payload`` published
-    ``frames[0]`` for exactly that reason, and the resident's face could
-    not move for it).
-
-    Resolves through :func:`lookup`, like ``glyph`` — one decision about
-    what a handle means, made in one place.
+    Resolves through :func:`lookup`, like ``glyph``.
     """
 
     emote = lookup(name)
@@ -974,25 +751,11 @@ def sequences_of(name: str) -> tuple[tuple[str, ...], ...] | None:
 def search(query: str = "", *, limit: int = 12) -> list[Emote]:
     """Faces matching *query*, best first — the resident's way in.
 
-    The palette holds 113 faces and, until this existed, a wake was shown
-    exactly one of them: the ``fo.cus`` in ``daemon-substrate.md``'s
-    example line. That is not a small gap, because the honesty bar and the
-    vocabulary multiply: "only wear a face that is true right now" plus a
-    vocabulary of one means a truthful resident is a silent one. The
-    expressiveness of the palette and the expressiveness of the resident
-    are two different numbers and only the first was ever counted.
-
-    Pull, not push. An injected catalog would cost every wake ~4 KB to
-    serve the rare one that wants a face; this costs a wake nothing until
-    it asks, which is the same trade ``brnrd kb`` already makes.
-
     Matching is deliberately forgiving, because a resident searches with
-    the *word for the feeling*, not the handle: the handles are coined
-    marks (``fo.cus``, ``we.ary``, ``smug_``) and their punctuation is
-    register, not syntax. ``focus``, ``focused`` and ``fo.cus`` all land on
-    the same face — separators are stripped from both sides before
-    comparing, and the trigger line (which is a *sentence about the state*)
-    is searched too, so "four hours one regex" finds ``narrow``.
+    the *word for the feeling*: separators are stripped from both sides
+    before comparing, the old family/synonym vocabulary still routes to
+    its new word (``WORD_SYNONYMS``), and the trigger line (a *sentence
+    about the state*) is searched too.
 
     An empty query returns the situational set, which is the resident's
     half; telemetry faces are the daemon's and it does not take requests.
@@ -1002,7 +765,8 @@ def search(query: str = "", *, limit: int = 12) -> list[Emote]:
     if not needle:
         return [e for e in EMOTES.values() if e.kind == "situational"][:limit]
 
-    query_family = _word_families().get(needle)
+    tokens = _word_tokens()
+    query_word = tokens.get(needle)
 
     scored: list[tuple[int, int, Emote]] = []
     for e in EMOTES.values():
@@ -1013,18 +777,13 @@ def search(query: str = "", *, limit: int = 12) -> list[Emote]:
             rank = 0
         elif name.startswith(needle) or needle.startswith(name):
             rank = 1
-        elif query_family and e.family == query_family:
+        elif query_word and e.family == query_word:
             rank = 2
         elif family and (
             family == needle
             or family.startswith(needle)
             or needle.startswith(family)
         ):
-            # The plain feeling-word. Ranked under the handle because a
-            # resident that already knows the handle typed it on purpose,
-            # and above substrings because "satisfied" naming the satisfied
-            # family is a stronger signal than "sat" appearing inside a
-            # sentence somewhere.
             rank = 2
         elif needle in name:
             rank = 3
@@ -1037,3 +796,26 @@ def search(query: str = "", *, limit: int = 12) -> list[Emote]:
         scored.append((rank, 0 if e.kind == "situational" else 1, e))
     scored.sort(key=lambda row: (row[0], row[1], row[2].name))
     return [e for _r, _k, e in scored[:limit]]
+
+
+# Daemon state → face. Every ``TELEMETRY_STATES`` entry is mapped; the
+# daemon computes the state and renders the mapped face without asking the
+# resident. Extra keys below are real states the body can also be in.
+TELEMETRY_DEFAULTS: dict[str, str] = {
+    "idle": "id_l",
+    "running": "rnn>",
+    "quota_starved": "dry_q",
+    "blocked_on_user": "u_hey",
+    "delivering": "shp>>",
+    "spawning": "sp_wn",
+    "reviewing": "re.v",
+    "testing": "t_st",
+    "failing": "x_x",
+    "merging": "mrg>",
+    "waiting_deploy": "dpl~",
+    "stopped": "st_p",
+    # beyond the required floor
+    "waking": "wak_",
+    "sleeping": "slp_",
+    "conflict": "cnfl",
+}
