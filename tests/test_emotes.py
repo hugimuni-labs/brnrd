@@ -361,14 +361,24 @@ def test_lookup_resolves_synonym_and_legacy_family_word():
 
 def test_one_handle_resolver_serves_every_public_reader():
     """Three functions asked "what face is this?" and answered separately —
-    fixed once, upstream in ``lookup``, so every reader agrees."""
+    fixed once, upstream in ``lookup``, so every reader agrees.
+
+    ``glyph`` is pinned to ``resting_frame``, not ``frames[0]`` — the old
+    pin (``== emote.frames[0]``) codified the exact defect this rework
+    fixes: six of twelve words share ``frames[0] == REST_GLYPH`` (the
+    animation base), so pinning ``glyph`` to it made "no face" the
+    *tested* behaviour for half the vocabulary. ``focused`` is one of the
+    six (its ``frames[0]`` is ``REST_GLYPH``, its ``resting_frame`` is
+    not) — kept in this parametrization on purpose so a regression back
+    to ``frames[0]`` fails here, not just in the table-driven still test.
+    """
     for spelling in ("fo.cus", "focus", "focused", "not-a-face-at-all", "puzzled"):
         emote = emotes.lookup(spelling)
         if emote is None:
             assert emotes.glyph(spelling) is None, spelling
             assert emotes.sequences_of(spelling) is None, spelling
         else:
-            assert emotes.glyph(spelling) == emote.frames[0], spelling
+            assert emotes.glyph(spelling) == emote.resting_frame, spelling
             assert emotes.sequences_of(spelling) == emote.sequences, spelling
 
 

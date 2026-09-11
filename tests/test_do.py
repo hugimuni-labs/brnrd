@@ -1232,7 +1232,10 @@ def test_do_multiple_verbs_join_one_summary_line(tmp_path, monkeypatch, capsys):
     ])
     assert rc == 0
     out = capsys.readouterr().out.strip()
-    assert out == "mood b·_·d focused ✓ · note evt-1 ✓ · reply evt-2 ✓"
+    # `focused`'s own still (`b·w·d`), not `b·_·d` — `focused` is one of the
+    # six words whose animation base (`frames[0]`) used to double as the
+    # "no face" rest glyph before the resting-frame rework.
+    assert out == "mood b·w·d focused ✓ · note evt-1 ✓ · reply evt-2 ✓"
 
 
 def test_do_body_with_no_preceding_verb_is_rejected(tmp_path, monkeypatch, capsys):
