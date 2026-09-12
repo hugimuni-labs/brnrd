@@ -10,5 +10,9 @@
 	{
 		"driver": "drive-observed-cores.mjs",
 		"shots": ["phone-2-claude-cores.png", "phone-3-codex-cores.png"]
+	},
+	{
+		"driver": "drive-run-ledger.mjs",
+		"shots": ["phone-1-run-ledger-receipt.png"]
 	}
 ]
