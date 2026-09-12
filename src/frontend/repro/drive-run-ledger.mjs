@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { mkdir } from 'node:fs/promises';
 import * as fixtures from './fixtures.mjs';
-import { closeBrowser, stopVite, runDriver } from './finish.mjs';
+import { closeBrowser, stopVite, runDriver, exerciseRecorder } from './finish.mjs';
 
 const args = process.argv.slice(2);
 const arg = (flag) => {
@@ -38,6 +38,11 @@ async function waitForServer(url, tries = 90) {
 
 async function main() {
 	await mkdir(OUT, { recursive: true });
+	// Which source modules actually run while these shots are taken, so the
+	// PR comment can say whether this check looked at the change under
+	// review instead of putting a green tick on a surface nobody opened
+	// (#1944).
+	const modules = exerciseRecorder();
 	const vite = spawn('npx', ['vite', 'dev', '--port', String(PORT), '--strictPort'], {
 		stdio: ['ignore', 'pipe', 'pipe']
 	});
@@ -52,7 +57,7 @@ async function main() {
 			deviceScaleFactor: 2,
 			reducedMotion: 'no-preference'
 		});
-		const page = await context.newPage();
+		const page = await modules.watch(await context.newPage(), 'drive-run-ledger');
 		await page.route('**/v1/dashboard/**', async (route) => {
 			const body = ROUTES[new URL(route.request().url()).pathname];
 			await route.fulfill({
@@ -91,7 +96,9 @@ async function main() {
 			throw new Error(`fallback receipt assertion failed: ${JSON.stringify(report)}`);
 		}
 		await page.screenshot({ path: `${OUT}/phone-1-run-ledger-receipt.png`, fullPage: false });
+		await modules.harvest(page, 'drive-run-ledger');
 		await context.close();
+		await modules.save(OUT, 'drive-run-ledger');
 		await closeBrowser(browser, 'drive-run-ledger');
 	} finally {
 		stopVite(vite, 'drive-run-ledger');
