@@ -4295,12 +4295,27 @@ def _run_worker(
         if not _is_strand(task.meta):
             obligations.append("vigil")
 
-        # A cloud conversation stays warm by default. Unlike `vigil`, which
-        # checks a claim the reply made, `linger` checks the lifecycle itself:
-        # a user should not pay for a cold wake merely because the resident
-        # forgot the final wait. Schedule/forge/internal runs have no live chat
-        # counterpart to catch and remain outside the obligation.
-        if not _is_strand(task.meta) and str(task.meta.get("source") or "") == "cloud":
+        # A conversation stays warm by default. Unlike `vigil`, which checks a
+        # claim the reply made, `linger` checks the lifecycle itself: a user
+        # should not pay for a cold wake merely because the resident forgot the
+        # final wait.
+        #
+        # Armed for every non-strand seat, and deliberately NOT gated on
+        # `source == "cloud"` any more (2026-09-12, `run-260912-0824-cicv`).
+        # That gate read the *wake source* to decide a question about the
+        # *room*: the run it let through was `source: schedule`, sent the
+        # maintainer four chat replies between 08:29 and 08:48Z, and closed its
+        # turn at 08:55 with no clause standing — `linger` was the only guard
+        # that could have caught a turn ending on an honest `done`, and it was
+        # the one guard not armed. A schedule tick that spends half an hour
+        # talking to a live human *is* a live chat counterpart by the time its
+        # turn ends, and nothing at dispatch time can know that yet.
+        #
+        # So the arming is now unconditional for a seat and the *clause* is
+        # what reads the room, at Stop, from portal-state — where the answer
+        # actually exists (`_linger_closeout_clause`). A run that never spoke
+        # to anyone stays silent exactly as before.
+        if not _is_strand(task.meta):
             obligations.append("linger")
 
         # A strand that ends its turn with neither a submit nor a bolt has

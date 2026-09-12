@@ -5231,6 +5231,30 @@ def _strand_hold_clause(payload: dict[str, Any], portal: dict[str, Any]) -> str 
     )
 
 
+# ── Why there is no "is anyone in the room" check here ──────────────────
+#
+# The first cut of this fix (2026-09-12) replaced the daemon's
+# `source == "cloud"` arming gate with a `_has_live_counterpart(portal)` read
+# at Stop: an attached correspondent, a reply sent into a chat thread, or a
+# replyable waking event. It was the same mistake one layer down, and he named
+# it inside twenty minutes:
+#
+#   "The seat is not how it was spawned, but rather whether there is an entity
+#    here (or just workers). The seat should never quit, no matter how it was
+#    spawned." — 2026-09-12, evt-1789206411396536000-bfgl
+#
+# A seat is a life, not a conversation. Whether a person happened to speak to
+# it during this turn is a fact about the turn; it says nothing about whether
+# the entity should still be here afterwards. The only thing that legitimately
+# ends a seat is a release by its user or a physical inability to proceed —
+# quota, provider, process failure — and those already have their own paths
+# (`stopped`, `hold: true` with a measured wall). So the clause below asks one
+# question of a seat, always: is a wait armed?
+#
+# Strands keep their own clause (`_strand_hold_clause`): a strand *is* a
+# thought and does end.
+
+
 def _linger_closeout_clause(ctx: "HookContext") -> str | None:
     """Require a completed linger, or an explicit reason for skipping it.
 
@@ -5242,6 +5266,11 @@ def _linger_closeout_clause(ctx: "HookContext") -> str | None:
     exists (unexpected-turn-end parking is preserved as a safety net, never
     a deliberate substitute for `brnrd await`) — it just no longer excuses
     a live conversation from being told to hold it open.
+
+    2026-09-12: armed for every non-strand seat, and asked of every one of
+    them — the `source: cloud` arming gate is gone and nothing replaced it.
+    See the block above this function for why no "is anyone in the room"
+    read stands here either: a seat is an entity, not a conversation.
     """
     if ctx.outbox_dir is None or _linger_opted_out(ctx):
         return None
@@ -5250,12 +5279,12 @@ def _linger_closeout_clause(ctx: "HookContext") -> str | None:
     if await_state.get("armed") and await_state.get("resolved"):
         return None
     return (
-        "no completed portal wait records the linger. A cloud conversation "
-        "lingers by default: deliver first, "
-        "run `brnrd await` — hold until the next reply; close only when a "
-        "wait resolves quiet at a configured horizon or the correspondent "
-        "ends the conversation. If stopping now is deliberate, write the "
-        f"reason as the first line of `{portals.LINGER_OPT_OUT_NAME}`"
+        "no completed portal wait records the linger. A seat does not end "
+        "its own turn: deliver first, then "
+        "run `brnrd await` — hold until something arrives. A seat ends when "
+        "its user releases it or execution is forced to stop, never because "
+        "this turn ran out of things to do. If stopping now is deliberate, "
+        f"write the reason as the first line of `{portals.LINGER_OPT_OUT_NAME}`"
     )
 
 

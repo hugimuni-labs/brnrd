@@ -3342,7 +3342,7 @@ def test_linger_blocks_cloud_closeout_without_a_horizon(tmp_path):
     env["BRR_CLOSEOUT_OBLIGATIONS"] = "linger"
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
     assert out["decision"] == "block"
-    assert "lingers by default" in out["reason"]
+    assert "does not end its own turn" in out["reason"]
     assert portals.LINGER_OPT_OUT_NAME in out["reason"]
 
 
@@ -7439,7 +7439,86 @@ def test_linger_still_asks_even_when_the_seat_parks(tmp_path):
     _portal_seat_parks(tmp_path)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
     assert out["decision"] == "block"
-    assert "lingers by default" in out["reason"]
+    assert "does not end its own turn" in out["reason"]
+
+
+# ── A seat is an entity, not a conversation (2026-09-12) ────────────────
+#
+# `linger` used to be armed by the daemon only for a `source: cloud` wake, so
+# the one shape it could never catch was a schedule tick that acquired a live
+# human halfway through its turn: `run-260912-0824-cicv` sent the maintainer
+# four chat replies and then closed on an honest `done — clean handoff` with
+# nothing armed to stop it.
+#
+# The first fix read the *room* at Stop instead (an attached correspondent, a
+# reply sent, a replyable event). He named that as the same mistake one layer
+# down — "the seat is not how it was spawned, but rather whether there is an
+# entity here (or just workers); the seat should never quit, no matter how it
+# was spawned" — so the arming is unconditional for a non-strand seat and the
+# clause asks every one of them the same question: is a wait armed?
+
+
+def _portal_unaddressed(tmp_path, *, resources=None, **kw):
+    """A schedule wake: no gate owns the current event, nobody to answer."""
+    _portal(tmp_path, token="t1", pending=0, current_event_replyable=False,
+            resources=_coexisting() if resources is None else resources, **kw)
+    env = _env(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "linger"
+    return env
+
+
+def test_linger_reaches_a_schedule_run_that_spoke_to_a_person(tmp_path):
+    """The `run-260912-0824-cicv` shape: unaddressed wake, replies sent into a
+    chat thread that is not the waking event's. Nothing was armed before."""
+    env = _portal_unaddressed(tmp_path, outbound={
+        "replies_current": 0, "replies_other": 4, "outbound_messages": 0,
+    })
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out["decision"] == "block"
+    assert "does not end its own turn" in out["reason"]
+
+
+def test_linger_asks_a_seat_that_spoke_to_nobody_too(tmp_path):
+    """The correction that distinguishes this from the first cut: an
+    unaddressed wake with no correspondent, no replies and nothing armed is
+    still a *seat*, and a seat does not end its own turn."""
+    env = _portal_unaddressed(tmp_path)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out["decision"] == "block"
+    assert "does not end its own turn" in out["reason"]
+
+
+def test_linger_asks_even_with_an_absent_correspondent(tmp_path):
+    """`status: absent` is the daemon saying it looked and found nobody. That
+    is a fact about the room and the clause is no longer asking about rooms."""
+    resources = dict(_coexisting())
+    resources["correspondent"] = {
+        "kind": "state", "status": "absent", "summary": None,
+    }
+    env = _portal_unaddressed(tmp_path, resources=resources)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out["decision"] == "block"
+
+
+def test_linger_still_accepts_a_resolved_wait_on_an_unaddressed_seat(tmp_path):
+    """The one honest exit stays open on every seat, not only a cloud one: a
+    wait was armed and it resolved."""
+    env = _portal_unaddressed(tmp_path)
+    _portal_await(tmp_path, resolved=True)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out.get("decision") != "block", out
+
+
+def test_linger_still_accepts_a_reasoned_opt_out_on_an_unaddressed_seat(tmp_path):
+    """And so does the deliberate, written-down stop — `.linger-opt-out` is
+    the resident saying *this* end is a decision, which is exactly the thing
+    the clause exists to force into the open."""
+    env = _portal_unaddressed(tmp_path)
+    (tmp_path / portals.LINGER_OPT_OUT_NAME).write_text(
+        "operator asked for an immediate stop\n", encoding="utf-8"
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out.get("decision") != "block", out
 
 
 def test_vigil_has_nothing_to_ask_when_the_seat_parks(tmp_path):
