@@ -4021,7 +4021,7 @@ def test_post_tool_mood_renders_in_the_preamble(tmp_path):
     # the face's first boundary, so it names itself once (rule 3) — the
     # word rides beside the glyph exactly here, then drops on every later
     # boundary that repeats the same face (see the "named once" test below).
-    assert ctx.splitlines()[0].startswith("⌁[b·_·d] bo_Od:")
+    assert ctx.splitlines()[0].startswith("⌁[b·o·d] bo_Od:")
     assert "mood b·_·d" not in ctx  # no chip for a resolved, unsurprised face
     assert "keep?" not in ctx
     assert "←" not in ctx
@@ -4053,7 +4053,7 @@ def test_seed_and_stop_render_mood_as_a_plain_prose_line(tmp_path):
     (tmp_path / hooks.MOOD_NAME).write_text("hmn_", encoding="utf-8")
     out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "- mood: b·_·d hmn_" in ctx
+    assert "- mood: b·o·d hmn_" in ctx
     assert _says(ctx, "a mood worth showing is one the work moved")
 
 
@@ -4138,13 +4138,21 @@ def test_emote_glyph_degrades_to_none_for_an_unresolvable_name():
 
 
 def test_a_family_word_renders_its_default_face():
-    """A family is wearable via its stable palette-order default."""
+    """A synonym is wearable via the word it now resolves to.
+
+    Pre-rework, ``family`` was a distinct grouping name a synonym could
+    equal; post-rework every situational face's ``family`` equals its own
+    ``name`` (``test_every_situational_face_declares_its_family``), so a
+    synonym's ``family`` is the *target* word's name, not the synonym
+    itself. ``satisfied`` resolves to ``pleased``.
+    """
     from brr import emotes
 
     name = "satisfied"
     resolved = emotes.lookup(name)
     assert resolved is not None
-    assert resolved.family == name
+    assert resolved.name == "pleased"
+    assert resolved.family == "pleased"
     chip = hooks._mood_chip(name)
     assert chip == f"{resolved.resting_frame} satisfied"
 
@@ -4161,7 +4169,7 @@ def test_the_word_for_the_feeling_renders_the_same_chip_as_the_handle():
     """
     from brr import emotes
 
-    assert emotes.lookup("focused") is emotes.EMOTES["fo.cus"]
+    assert emotes.lookup("focused") is emotes.lookup("fo.cus")
     assert hooks._mood_chip("focused") == f"{emotes.glyph('fo.cus')} focused"
 
 
@@ -4185,8 +4193,11 @@ def test_a_real_emote_handle_renders_its_face_in_the_chip():
     assert emotes.lookup(name) is not None, "fixture handle must be a real emote"
 
     expected = emotes.glyph(name)
-    assert expected, "a resolvable handle must yield a base-frame glyph"
-    assert expected == emotes.EMOTES[name].frames[0], "base frame is frames[0]"
+    assert expected, "a resolvable handle must yield a resting-frame glyph"
+    resolved_name = emotes.lookup(name).name
+    assert expected == emotes.EMOTES[resolved_name].resting_frame, (
+        "resting glyph is resting_frame, not the shared animation base"
+    )
 
     assert hooks._emote_glyph(name) == expected
     assert hooks._mood_chip(name) == f"{expected} {name}"
@@ -4624,7 +4635,8 @@ def test_mood_ask_fires_on_the_failure_edge_and_names_it(tmp_path):
         hooks.PHASE_POST_TOOL, _batch("Exit code 1"), _env(tmp_path)
     )
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert _says(ctx, "mood b·_·d fo.cus ← Bash ✗")
+    # `fo.cus` resolves to `focused`, whose own still is `b·w·d`.
+    assert _says(ctx, "mood b·w·d fo.cus ← Bash ✗")
 
 
 def test_mood_ask_is_transition_stamped_not_per_pass(tmp_path):
@@ -7075,27 +7087,27 @@ def test_bar_preamble_forms():
     # `⌁[✗]:` is gone, on purpose.
     assert hooks._bar_preamble(None) == "⌁[b·_·d]:"
     assert hooks._bar_preamble("") == "⌁[b·_·d]:"
-    # A real handle renders its base frame (#601 seam).
-    assert hooks._bar_preamble("bo_Od") == "⌁[b·_·d]:"
+    # A real handle renders its own still (#601 seam, resting-frame rework):
+    # `bo_Od` is a legacy alias for `curious`, whose still is `b·o·d`.
+    assert hooks._bar_preamble("bo_Od") == "⌁[b·o·d]:"
     # An unresolved handle is the same neutral face, not an error mark — the
     # word itself (never the ornament) is where the miss is visible, and
     # only when `named=True` fires it.
     assert hooks._bar_preamble("no-such-face") == "⌁[b·_·d]:"
-    # A handle whose base frame differs from the rest glyph proves the
-    # bracket really does carry the resolved face, not always the same
-    # placeholder.
+    # A handle whose still differs from the rest glyph proves the bracket
+    # really does carry the resolved face, not always the same placeholder.
     from brr import emotes
 
-    assert emotes.glyph("ugh_") == "b-_-d"
-    assert hooks._bar_preamble("ugh_") == "⌁[b-_-d]:"
+    assert emotes.glyph("ugh_") == "b¬_¬d"
+    assert hooks._bar_preamble("ugh_") == "⌁[b¬_¬d]:"
 
 
 def test_bar_preamble_names_the_face_once_on_change():
     # Rule 3: "it names itself once, on change." named=False is the bare,
     # habitual form; named=True is the one boundary the face actually
     # changed on — word beside the glyph, then bare again.
-    assert hooks._bar_preamble("ugh_", named=True) == "⌁[b-_-d] ugh_:"
-    assert hooks._bar_preamble("ugh_", named=False) == "⌁[b-_-d]:"
+    assert hooks._bar_preamble("ugh_", named=True) == "⌁[b¬_¬d] ugh_:"
+    assert hooks._bar_preamble("ugh_", named=False) == "⌁[b¬_¬d]:"
     # No mood ⇒ nothing to name, regardless of the flag — there is no word.
     assert hooks._bar_preamble(None, named=True) == "⌁[b·_·d]:"
     # An overlong mood is capped the same way the mood chip caps it, so the
@@ -7105,6 +7117,38 @@ def test_bar_preamble_names_the_face_once_on_change():
     assert named.startswith("⌁[b·_·d] ")
     assert named.endswith("…:")
     assert len(named) <= len("⌁[b·_·d] ") + hooks._MOOD_DISPLAY_MAX_CHARS + 1 + 1
+
+
+def test_bar_preamble_renders_each_words_own_still_never_the_rest_glyph():
+    """The whole point of the rework, proved at the render seam.
+
+    The review that spawned this fix found the data correct (all 12
+    ``resting_frame``s distinct, none ``REST_GLYPH``) but nothing
+    resident-facing reading it — ``_bar_preamble`` went through
+    ``emotes.glyph()``, which returned ``frames[0]``, the shared
+    animation base, so 6 of 12 words rendered the same "no face" glyph
+    in the bar. This is the positive control: revert ``emotes.glyph``
+    to ``frames[0]`` and this test goes red for exactly those 6 words
+    (``focused, stuck, worried, proud, flat, waiting`` — see
+    ``emotes.py``'s own ``_SITUATIONAL`` table for which ``frames[0]``
+    equals ``REST_GLYPH``).
+    """
+    from brr import emotes
+
+    situational = [e for e in emotes.EMOTES.values() if e.kind == "situational"]
+    assert len(situational) == 12
+
+    rendered: dict[str, str] = {}
+    for e in situational:
+        preamble = hooks._bar_preamble(e.name)
+        # Never the "no face" glyph — every word has its own still.
+        assert preamble != f"⌁[{emotes.REST_GLYPH}]:", (e.name, preamble)
+        # The bar renders exactly the word's own resting_frame.
+        assert preamble == f"⌁[{e.resting_frame}]:", (e.name, preamble)
+        rendered[e.name] = preamble
+
+    # Pairwise distinct: no two words share a rendered still.
+    assert len(set(rendered.values())) == len(rendered), rendered
 
 
 def test_ticker_renders_elapsed_alone_when_no_limit_is_configured():

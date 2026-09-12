@@ -865,15 +865,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="how long to wait for a staged directive to drain "
              "(default 30s)")
     do_p.add_argument(
-        "--mood", default=None, metavar="FEELING-OR-HANDLE",
-        help="resolve a feeling or handle through the emotes index and "
-             "write .mood")
+        "--mood", default=None, metavar="WORD",
+        help="resolve a word (or a pre-rework handle) through the twelve-"
+             "word emotes vocabulary and write .mood; an unresolved word "
+             "is refused with the list, never silently guessed")
     do_p.add_argument(
         "--mood-note", default=None, metavar="TEXT",
-        help="narration after the resolved mood handle (only with --mood)")
+        help="narration after the resolved mood word (only with --mood)")
     do_p.add_argument(
         "--strict", action="store_true",
-        help="refuse an unresolved --mood instead of wearing its nearest face")
+        help="accepted for backward compatibility; refusing an unresolved "
+             "--mood is now the only behaviour, strict or not")
     do_p.add_argument(
         "--link", default=None, metavar="INTENT",
         help="open a priced decision link: what you are about to do. Closes "
@@ -2009,7 +2011,7 @@ def cmd_emotes(args):
                 print(f"    {line}")
         return 1
 
-    print("feeling → face handle  (write the handle; punctuation is part of its name)")
+    print("feeling → face  (write the feeling; legacy handles still resolve)")
     for e in rows:
         family = e.family or e.kind
         print(f"{family:<17} → {e.resting_frame} {e.name}")
@@ -2108,9 +2110,8 @@ def cmd_mood(args):
     confirmed.
 
     This older standalone verb accepts handles, feelings, synonyms, and
-    small typos. Unlike ``brnrd do --mood``, a completely unknown word still
-    writes nothing; the run-oriented porcelain owns the explicit nearest
-    fallback and ``--strict`` switch.
+    small typos. A completely unknown word writes nothing and names the
+    nearest faces, the same resolver ``brnrd do --mood`` uses.
 
     `--outbox` overrides the environment for anything driving this outside
     a live wake's own process (a script, a test); environment resolution
@@ -2991,20 +2992,26 @@ def _do_mood(
     do_mod, emo, outbox_dir: Path, feeling: str, note: str | None,
     *, strict: bool = False,
 ) -> tuple[str, bool]:
+    """Resolve *feeling* through the vocabulary and write ``.mood`` — or
+    refuse.
+
+    design-the-pre-attentive-channel.md's rework rule: an unknown word is
+    refused once, with the list, never silently resolved to the nearest
+    face. `--strict` is accepted for backward compatibility (older scripts
+    still pass it) but no longer changes behaviour — this is now the only
+    path; ``resolve_nearest`` stays exported for callers that explicitly
+    want a guess (`brnrd mood`'s own non-strict UX does not use it either).
+    """
+    del strict  # kept for CLI compatibility only — see docstring
     resolved = emo.lookup(feeling)
     if resolved is None:
         misses = emo.near_misses(feeling)
-        if strict:
-            tail = " — try: " + ", ".join(e.name for e in misses) if misses else ""
-            return f"mood {feeling} ✗ no match{tail}", False
-        resolved = emo.resolve_nearest(feeling)
-        if resolved is None:
-            return f"mood {feeling} ✗ no match", False
-        preserved_note = feeling if not note else f"{feeling} — {note}"
-        do_mod.write_mood(outbox_dir, resolved.name, preserved_note)
-        return f"mood {feeling} ~ nearest: {resolved.name} ✓", True
+        tail = " — try: " + ", ".join(e.name for e in misses) if misses else (
+            " — try: " + ", ".join(emo.families())
+        )
+        return f"mood {feeling} ✗ no match{tail}", False
     do_mod.write_mood(outbox_dir, resolved.name, note)
-    glyph = resolved.frames[0] if resolved.frames else resolved.name
+    glyph = resolved.resting_frame if resolved.frames else resolved.name
     return f"mood {glyph} {resolved.name} ✓", True
 
 
