@@ -5231,55 +5231,28 @@ def _strand_hold_clause(payload: dict[str, Any], portal: dict[str, Any]) -> str 
     )
 
 
-def _has_live_counterpart(portal: dict[str, Any] | None) -> bool:
-    """Whether a person is on the other end of this run — read, never inferred.
-
-    The `linger` obligation used to be armed off the *wake source*
-    (``source == "cloud"``), which answered a question about the room by
-    looking at the doorbell. `run-260912-0824-cicv` is the receipt: woken by
-    the schedule, it sent the maintainer four chat replies and then closed its
-    turn with no clause armed to stop it, because a schedule tick is by
-    definition not a cloud wake. The room is a *run-time* fact, so it is read
-    here, at Stop, from the daemon's own projection.
-
-    Any one of three is a room:
-
-    - **a correspondent is attached** — the daemon publishes
-      ``resources.correspondent`` with a quiet-time reading only when one is;
-    - **this run spoke into a chat thread** — any reply counted in
-      ``outbound``, to the waking event or to another;
-    - **the waking event can be replied to** — ``inbound.current_event_replyable``,
-      which is the daemon's own answer to "is there someone to answer".
-
-    Unreadable portal state ⇒ ``False``, and the clause stays silent. That is
-    the module's standing doctrine (an unassertable obligation never blocks),
-    and it is also the conservative direction here: the cost of a missed
-    linger is one cold boot, the cost of a false one is a guard that fires on
-    runs with nobody to linger for, which is how a guard stops being read.
-    """
-    if not isinstance(portal, dict):
-        return False
-
-    resources = portal.get("resources")
-    if isinstance(resources, dict):
-        correspondent = resources.get("correspondent")
-        if isinstance(correspondent, dict) and correspondent.get("status") == "known":
-            return True
-
-    outbound = portal.get("outbound")
-    if isinstance(outbound, dict):
-        for key in ("replies_current", "replies_other", "outbound_messages"):
-            try:
-                if int(outbound.get(key) or 0) > 0:
-                    return True
-            except (TypeError, ValueError):
-                continue
-
-    inbound = portal.get("inbound")
-    if isinstance(inbound, dict) and inbound.get("current_event_replyable"):
-        return True
-
-    return False
+# ── Why there is no "is anyone in the room" check here ──────────────────
+#
+# The first cut of this fix (2026-09-12) replaced the daemon's
+# `source == "cloud"` arming gate with a `_has_live_counterpart(portal)` read
+# at Stop: an attached correspondent, a reply sent into a chat thread, or a
+# replyable waking event. It was the same mistake one layer down, and he named
+# it inside twenty minutes:
+#
+#   "The seat is not how it was spawned, but rather whether there is an entity
+#    here (or just workers). The seat should never quit, no matter how it was
+#    spawned." — 2026-09-12, evt-1789206411396536000-bfgl
+#
+# A seat is a life, not a conversation. Whether a person happened to speak to
+# it during this turn is a fact about the turn; it says nothing about whether
+# the entity should still be here afterwards. The only thing that legitimately
+# ends a seat is a release by its user or a physical inability to proceed —
+# quota, provider, process failure — and those already have their own paths
+# (`stopped`, `hold: true` with a measured wall). So the clause below asks one
+# question of a seat, always: is a wait armed?
+#
+# Strands keep their own clause (`_strand_hold_clause`): a strand *is* a
+# thought and does end.
 
 
 def _linger_closeout_clause(ctx: "HookContext") -> str | None:
@@ -5294,28 +5267,24 @@ def _linger_closeout_clause(ctx: "HookContext") -> str | None:
     a deliberate substitute for `brnrd await`) — it just no longer excuses
     a live conversation from being told to hold it open.
 
-    2026-09-12: the obligation is now armed for every non-strand seat, not
-    only a `source: cloud` one, so *this* function is what decides whether a
-    room exists — see :func:`_has_live_counterpart`. The gate moved from the
-    wake source to the state at Stop because that is where the answer lives:
-    a schedule tick can acquire a live human halfway through its turn, and
-    dispatch cannot know that yet.
+    2026-09-12: armed for every non-strand seat, and asked of every one of
+    them — the `source: cloud` arming gate is gone and nothing replaced it.
+    See the block above this function for why no "is anyone in the room"
+    read stands here either: a seat is an entity, not a conversation.
     """
     if ctx.outbox_dir is None or _linger_opted_out(ctx):
         return None
     portal = _read_json(ctx.portal_state_path)
-    if not _has_live_counterpart(portal):
-        return None
     await_state = portal.get("await") if isinstance(portal.get("await"), dict) else {}
     if await_state.get("armed") and await_state.get("resolved"):
         return None
     return (
-        "no completed portal wait records the linger. A conversation "
-        "lingers by default: deliver first, "
-        "run `brnrd await` — hold until the next reply; close only when a "
-        "wait resolves quiet at a configured horizon or the correspondent "
-        "ends the conversation. If stopping now is deliberate, write the "
-        f"reason as the first line of `{portals.LINGER_OPT_OUT_NAME}`"
+        "no completed portal wait records the linger. A seat does not end "
+        "its own turn: deliver first, then "
+        "run `brnrd await` — hold until something arrives. A seat ends when "
+        "its user releases it or execution is forced to stop, never because "
+        "this turn ran out of things to do. If stopping now is deliberate, "
+        f"write the reason as the first line of `{portals.LINGER_OPT_OUT_NAME}`"
     )
 
 
