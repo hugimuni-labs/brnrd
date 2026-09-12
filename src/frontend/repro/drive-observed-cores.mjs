@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { mkdir } from 'node:fs/promises';
 import * as fixtures from './fixtures.mjs';
+import { closeBrowser, stopVite, runDriver } from './finish.mjs';
 
 const args = process.argv.slice(2);
 const arg = (f) => {
@@ -214,14 +215,11 @@ async function main() {
 			);
 			await ctx.close();
 		}
-		await browser.close();
+		await closeBrowser(browser, 'drive-observed-cores');
 	} finally {
-		vite.kill('SIGTERM');
+		stopVite(vite, 'drive-observed-cores');
 	}
 	console.log(JSON.stringify(report, null, 2));
 }
 
-main().catch((err) => {
-	console.error(err);
-	process.exit(1);
-});
+runDriver(main);
