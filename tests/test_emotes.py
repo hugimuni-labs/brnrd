@@ -1,4 +1,4 @@
-"""Tests for the emote library (#566).
+"""Tests for the emote library (#566, reworked #1925).
 
 The mascot's honesty bar — "a tamagotchi that never lies" — is enforced
 here structurally: every handle is unique and self-keyed, every face
@@ -6,6 +6,13 @@ animates without jitter (all frames equal width, base first and last),
 every daemon state the body must speak resolves to a real face, and the
 two lookup paths (resident via ``lookup``, daemon via ``for_telemetry``)
 refuse to invent a mood for a name they don't know.
+
+The 2026-09-11 rework collapsed the 113-handle, 33-family situational
+palette into twelve plain words (``VOCABULARY``), each with its own still
+frame distinct from the "no face" rest glyph. The old handles still
+resolve — through ``LEGACY_ALIASES`` — but as frames of one of the twelve,
+not as faces of their own; that half of the contract is pinned below
+alongside the twelve-word structure itself.
 """
 
 from __future__ import annotations
@@ -15,19 +22,30 @@ import unicodedata
 import pytest
 
 from brr import emotes
-from brr.emotes import EMOTES, TELEMETRY_DEFAULTS, TELEMETRY_STATES, Emote
+from brr.emotes import (
+    EMOTES,
+    LEGACY_ALIASES,
+    REST_GLYPH,
+    TELEMETRY_DEFAULTS,
+    TELEMETRY_STATES,
+    VOCABULARY,
+    Emote,
+)
 
 
 def test_library_is_populated_in_range():
-    """Extensive-by-mandate: the palette is large and the split is real —
-    a floor of daemon-derived faces and a wide resident-authored range."""
-    assert 80 <= len(EMOTES) <= 130
+    """Telemetry keeps its floor; the situational half is now exactly the
+    twelve-word vocabulary, not a wide range — that width reduction is the
+    entire point of the rework."""
     kinds = {name: e.kind for name, e in EMOTES.items()}
     telemetry = [n for n, k in kinds.items() if k == "telemetry"]
     situational = [n for n, k in kinds.items() if k == "situational"]
     assert set(kinds.values()) == {"telemetry", "situational"}
     assert len(telemetry) >= 12
-    assert 70 <= len(situational) <= 100
+    assert situational == sorted(situational, key=lambda n: VOCABULARY.index(n)) \
+        or set(situational) == set(VOCABULARY)
+    assert set(situational) == set(VOCABULARY)
+    assert len(VOCABULARY) == 12
 
 
 def test_names_are_unique_and_equal_dict_keys():
@@ -44,11 +62,6 @@ def test_every_emote_frames_are_equal_width():
     codepoint count; a combining mark would smuggle in a zero-width glyph
     that len() can't see, so those are banned outright."""
     for name, e in EMOTES.items():
-        # Every sequence, not just the primary: an alternate that jitters
-        # jitters exactly as visibly, and pinning only `frames` is how a
-        # second cycle would arrive unchecked. `rest` is held between
-        # flickers, so it has to match the width too or the chip twitches
-        # on the way in and out of the animation.
         for seq in (*e.sequences, (e.resting_frame,)):
             for f in seq:
                 assert not any(unicodedata.combining(c) for c in f), (name, f)
@@ -115,17 +128,14 @@ def test_pitch_tracks_the_body_axis():
     """Sanity that pitch is set with meaning, not left at a flat default:
     the heavy gut states sit low and the crown states sit high, on the
     right side of the midline."""
-    assert EMOTES["cold_"].pitch < 0.3       # dread, deep gut
-    assert EMOTES["uhoh_"].pitch < 0.3
-    assert EMOTES["rrgh"].pitch < 0.3        # gut-warm annoyance
+    assert EMOTES["worried"].pitch < 0.3     # dread/wary family, deep gut
+    assert EMOTES["braced"].pitch < 0.3      # gut-warm, gritted
+    assert EMOTES["tired"].pitch < 0.3       # weary, low
     assert EMOTES["x_x"].pitch < 0.3         # failing telemetry
-    assert EMOTES["bo_Od"].pitch > 0.7       # surprise, crown
-    assert EMOTES["t.da"].pitch > 0.7        # triumph
-    assert EMOTES["yay_"].pitch > 0.7        # delight
-    assert EMOTES["ooh_"].pitch > 0.6        # curiosity
+    assert EMOTES["curious"].pitch > 0.6     # surprise/curiosity, crown
+    assert EMOTES["proud"].pitch > 0.7       # triumph/delight
     # the working band sits near the middle
-    assert 0.4 <= EMOTES["fo.cus"].pitch <= 0.6
-    assert 0.4 <= EMOTES["flow_"].pitch <= 0.6
+    assert 0.4 <= EMOTES["focused"].pitch <= 0.6
     # not every face shares one value — pitch is authored, not defaulted
     assert len({e.pitch for e in EMOTES.values()}) >= 8
 
@@ -133,7 +143,7 @@ def test_pitch_tracks_the_body_axis():
 def test_lookup_returns_emote_or_none():
     for name in EMOTES:
         assert emotes.lookup(name) is EMOTES[name]
-    assert emotes.lookup("fo.cus").kind == "situational"
+    assert emotes.lookup("focused").kind == "situational"
     assert emotes.lookup("definitely-not-a-face") is None
     assert emotes.lookup("") is None
 
@@ -145,8 +155,8 @@ def test_for_telemetry_resolves_states_and_refuses_unknowns():
     assert emotes.for_telemetry("running").name == TELEMETRY_DEFAULTS["running"]
     # An unmapped state renders nothing rather than inventing a mood.
     assert emotes.for_telemetry("not_a_daemon_state") is None
-    # A real *situational* handle is not a telemetry state.
-    assert emotes.for_telemetry("fo.cus") is None
+    # A real *situational* word is not a telemetry state.
+    assert emotes.for_telemetry("focused") is None
 
 
 def test_emote_is_frozen():
@@ -204,61 +214,60 @@ def test_name_weave_neutral_resting_frame_is_exactly_brnrd():
     assert idle.frames[0][2] == "n"
 
 
-def test_smug_mutates_the_n_mouth_forward_and_upward():
-    """Decision 2, the heart of it: 'smug' is the maintainer's named default
-    — the n (mouth) extends forward and upward into an anime smirk, and the
-    eyes (r's) shift with it. Neutral ``brnrd`` has a flat ``n`` mouth; the
-    smug peak must curl that mouth up and move at least one eye."""
-    smug = EMOTES["smug_"]
-    assert _is_name_weave(smug.frames[0])
-    assert smug.frames[0] == "brnrd"          # rests on neutral
-    assert smug.frames[0][2] == "n"           # neutral mouth is flat 'n'
+def test_amused_mutates_the_n_mouth_forward_and_upward():
+    """Decision 2, the heart of it: the maintainer's named default — the
+    n (mouth) extends forward and upward into an anime smirk, and the eyes
+    (r's) shift with it. Neutral ``brnrd`` has a flat ``n`` mouth; the
+    amused peak must curl that mouth up and move at least one eye. Post-
+    rework this is ``EMOTES["amused"]`` — the smug/knew/told family folded
+    into it — rather than a standalone ``smug_`` handle."""
+    amused = EMOTES["amused"]
+    assert _is_name_weave(amused.frames[0])
+    assert amused.frames[0] == "brnrd"          # rests on neutral
+    assert amused.frames[0][2] == "n"           # neutral mouth is flat 'n'
     # some frame curls the mouth (index 2) up-and-forward, away from 'n'
-    curled = [f for f in smug.frames if f[2] in _UP_MOUTHS]
-    assert curled, (smug.name, smug.frames)
+    curled = [f for f in amused.frames if f[2] in _UP_MOUTHS]
+    assert curled, (amused.name, amused.frames)
     assert all(f[2] != "n" for f in curled)
     # and the eyes (index 1 / 3) shift with the mood — not left at 'r'
-    assert any(f[1] != "r" or f[3] != "r" for f in smug.frames), smug.frames
+    assert any(f[1] != "r" or f[3] != "r" for f in amused.frames), amused.frames
+    # the old handle still resolves onto the same face
+    assert emotes.lookup("smug_") is amused
 
 
-def test_situational_split_leans_cheek_form_with_a_name_weave_family():
+def test_situational_split_leans_cheek_form_with_a_name_weave_word():
     """Decision 1, situational half: situational faces lean cheek form
-    (``b{eyes}d``) for two-eye nuance, while a named family (smug /
-    vindicated) still reads best as name-weave. Both halves must be real —
-    the mix is not all-one-thing."""
+    (``b{eyes}d``) for two-eye nuance, while ``amused`` (the old smug/
+    vindicated family) still reads best as name-weave. Both halves must be
+    real — the mix is not all-one-thing, even at twelve faces."""
     situational = [e for e in EMOTES.values() if e.kind == "situational"]
-    cheek = [e for e in situational if all(_is_name_weave(f) for f in e.frames)
-             and any(f == "brnrd" for f in e.frames) is False
-             and e.frames[0] != "brnrd"]
+    cheek = [e for e in situational if e.frames[0] != "brnrd"]
     name_weave = [e for e in situational if e.frames[0] == "brnrd"]
-    # the bulk wear the brand cheeks
-    assert len(cheek) >= 50, len(cheek)
-    # the smug/vindicated family carries the wordmark smirk
-    assert len(name_weave) >= 3
-    for handle in ("smug_", "knew_", "told_"):
-        assert EMOTES[handle].frames[0] == "brnrd", handle
+    assert len(cheek) >= 9, len(cheek)
+    assert len(name_weave) >= 1
+    assert EMOTES["amused"].frames[0] == "brnrd"
 
 
 def test_cheek_form_carries_the_brand_cheeks():
     """A cheek-form face is a two-eye kaomoji wrapped in ``b…d`` — the
-    example faces the maintainer named must be exactly that shape."""
-    puzzled = EMOTES["hm_m"]        # bo_·d — one brow up
+    example faces the maintainer named must be exactly that shape.
+    ``stuck`` absorbed the old puzzled family (``hm_m`` → ``bo_·d``);
+    ``braced`` absorbed the old annoyed family (``grr_`` → ``b>_<d``)."""
+    stuck = EMOTES["stuck"]
     assert any(_is_name_weave(f) and f[0] == "b" and f[-1] == "d"
-               for f in puzzled.frames)
-    assert "bo_·d" in puzzled.frames
-    strained = EMOTES["grr_"]       # b>_<d — both eyes shut
-    assert "b>_<d" in strained.frames
+               for f in stuck.frames)
+    assert "bo_·d" in stuck.alts[0]
+    braced = EMOTES["braced"]
+    assert "b>_<d" in braced.frames
 
 
 def test_resting_frame_is_wearable_while_still():
     """`rest` is what a calm surface holds — the dashboard chip sits on it
     ~5s between flickers. Two things must hold: it is a real frame shape
     (checked for width above), and it belongs to *this* face rather than
-    being a frame borrowed from the palette at large. The weaker property
-    is the one asserted, because the strong one ("visually distinct from
-    every sibling") is a design judgement no test can make: an authored
-    rest must at least appear in the face's own animation, so the still
-    frame and the moving one are the same body.
+    being a frame borrowed from the palette at large: an authored rest must
+    at least appear in the face's own animation, so the still frame and the
+    moving one are the same body.
     """
     for name, e in EMOTES.items():
         if e.rest is None:
@@ -267,23 +276,15 @@ def test_resting_frame_is_wearable_while_still():
         assert appears, (name, e.rest, e.sequences)
 
 
-def test_the_resting_palette_gap_is_measured_rather_than_assumed():
-    """The bug this whole slice came from, kept as a number.
-
-    `frames[0]` is shared by design, so resting on it renders most of the
-    situational palette identically. This pins the *direction of travel*:
-    distinct resting frames must never drop below what is authored today.
-    It is deliberately a floor and not an equality — the palette pass that
-    authors the rest of them should make this test pass harder, never
-    edit it.
-    """
+def test_every_vocabulary_word_has_a_unique_still_not_the_rest_glyph():
+    """The whole defect the rework closes, pinned as a number: 61 of 113
+    old stills equalled the "no face" glyph. Now every one of the twelve
+    is distinct, and none is ``REST_GLYPH``."""
     situational = [e for e in EMOTES.values() if e.kind == "situational"]
-    by_base = {e.frames[0] for e in situational}
-    by_rest = {e.resting_frame for e in situational}
-    assert len(by_rest) >= len(by_base), (len(by_rest), len(by_base))
-    assert len(by_rest) >= 17, (
-        f"{len(by_rest)} distinct resting frames for {len(situational)} faces"
-    )
+    assert len(situational) == 12
+    stills = [e.resting_frame for e in situational]
+    assert REST_GLYPH not in stills
+    assert len(set(stills)) == len(situational), "every word's still must be its own"
 
 
 def test_sequences_of_is_the_publish_paths_only_reach_into_frames():
@@ -296,114 +297,88 @@ def test_sequences_of_is_the_publish_paths_only_reach_into_frames():
 
     assert sequences_of("no-such-handle") is None
     focus = sequences_of("fo.cus")
-    assert focus is not None and len(focus) == 2, focus
+    assert focus is not None and len(focus) >= 2, focus
     assert focus[0] != focus[1]
+    # the legacy handle and the vocabulary word answer identically
+    assert sequences_of("fo.cus") == sequences_of("focused")
 
 
 def test_every_situational_face_declares_its_family():
     """A new face joining with no edit is the tell of an enumerated class.
-
-    The families were ``#`` section comments until 2026-07-25 — a fact the
-    file was *organised by* and did not *store*. So ``search("satisfied")``
-    returned nothing while the module docstring advertised satisfied as part
-    of the palette, and a resident that searched the obvious word, found
-    nothing, and invented a plausible-looking handle got a raw id string
-    published to the dashboard. That is the observed sequence, not a
-    hypothetical one.
-
-    This is the guard that makes the class closed rather than merely known:
-    add a face outside a family and the suite goes red at the moment of the
-    edit, instead of at the moment someone searches for it.
-    """
+    Post-rework a situational face's family equals its own name — the
+    twelve words are their own family now — but the field still must not
+    be empty, so a future addition can't slip in unclassified."""
     orphans = [
         e.name for e in EMOTES.values() if e.kind == "situational" and not e.family
     ]
     assert not orphans, orphans
+    for e in EMOTES.values():
+        if e.kind == "situational":
+            assert e.family == e.name, e.name
 
 
 def test_the_palette_the_docstring_advertises_is_actually_findable():
     """The claim and the check read the same source, so they cannot drift.
 
-    Six of the ten feeling-words this module's own docstring names as the
-    situational palette — surprised, annoyed, puzzled, satisfied, curious,
-    triumphant — returned *nothing* from ``search``. A document describing a
-    capability the code does not have is worse than silence: it is the
-    reason a resident stops searching and starts guessing.
-
-    The word list is parsed out of the docstring rather than copied here. A
-    word added to the prose is a word this test then demands the palette can
-    answer for.
+    The rework's docstring advertises the twelve words by name (in
+    ``VOCABULARY``'s own definition line); every one of them must be
+    findable through ``search``.
     """
-    import re
-
-    doc = emotes.__doc__ or ""
-    m = re.search(r"full range of it:(.+?)\.", doc, re.S)
-    assert m, "the docstring no longer advertises a palette — update this test"
-    advertised = [
-        w.strip()
-        for w in m.group(1).replace("\n", " ").split(",")
-        if w.strip() and "finer shades" not in w and not w.strip().startswith("and ")
-    ]
-    assert len(advertised) >= 8, advertised
-
-    unfindable = [w for w in advertised if not emotes.search(w)]
+    unfindable = [w for w in VOCABULARY if not emotes.search(w)]
     assert not unfindable, unfindable
 
 
-def test_lookup_reads_the_word_for_the_feeling_not_only_the_mark():
-    """``.mood`` is a machine-parsed channel; the handles are coined marks.
-
-    ``weave.md`` is explicit that the register decorates nothing a parser
-    reads — and then the palette minted every handle *as* a mark (``fo.cus``)
-    and matched it byte for byte. A run writing ``focused`` resolved to
-    ``None``, published four ``null``s, and the dashboard fell back to
-    printing the raw string; that fallback was every mood brnrd.dev ever
-    showed. Meanwhile ``search``'s own docstring promised these three
-    spellings were one face, and they were — in the command nobody publishes
-    through. Two resolvers, one contract, and the strict one owned the wire.
-    """
-    focus = EMOTES["fo.cus"]
+def test_lookup_reads_the_word_for_the_feeling_not_only_the_legacy_mark():
+    """``.mood`` is a machine-parsed channel; the old handles were coined
+    marks (``fo.cus``). A run's older ``.mood`` file, and a resident
+    writing the plain word, must land on the same face."""
+    focus = EMOTES["focused"]
     assert emotes.lookup("fo.cus") is focus
     assert emotes.lookup("focus") is focus
     assert emotes.lookup("focused") is focus
 
-    # Every handle still resolves to itself — tolerance must not shadow the
-    # exact spelling with a prefix neighbour.
+    # Every current handle still resolves to itself — tolerance must not
+    # shadow the exact spelling with a prefix neighbour.
     for name, emote in EMOTES.items():
         assert emotes.lookup(name) is emote, name
 
+    # Every legacy handle resolves onto its assigned vocabulary word.
+    for old, word in LEGACY_ALIASES.items():
+        hit = emotes.lookup(old)
+        assert hit is not None, old
+        assert hit.name == word, (old, hit.name, word)
 
-def test_lookup_resolves_handle_feeling_synonym_and_small_typo():
-    """Every public vocabulary layer reaches a stable existing face."""
-    for e in EMOTES.values():
-        if not e.family:
-            continue
-        hit = emotes.lookup(e.family)
-        assert hit is not None, e.family
-        assert hit.family == e.family
 
-    assert emotes.lookup("fo.cus") is EMOTES["fo.cus"]
+def test_lookup_resolves_synonym_and_legacy_family_word():
+    """Every public vocabulary layer reaches a stable, existing face."""
     assert emotes.lookup("curious").family == "curious"
-    assert emotes.lookup("attentive") is EMOTES["fo.cus"]
-    assert emotes.lookup("attentiv") is EMOTES["fo.cus"]
+    # An old family word ("puzzled") now routes through to its new home.
+    assert emotes.lookup("puzzled").name == "stuck"
+    # An old synonym ("smirking", once under "smug") still resolves.
+    assert emotes.lookup("smirking").name == "amused"
+    assert emotes.lookup("attentive").name == "focused"
 
 
 def test_one_handle_resolver_serves_every_public_reader():
-    """Three functions asked "what face is this?" and answered separately.
+    """Three functions asked "what face is this?" and answered separately —
+    fixed once, upstream in ``lookup``, so every reader agrees.
 
-    ``glyph`` and ``sequences_of`` each ran their own ``EMOTES.get``, while
-    ``search`` normalized and ``lookup`` did not — so "is ``focused`` a
-    face?" had two answers depending on who asked, and the wire happened to
-    ask the strict one. A fact stored four times is repaired once and stays
-    broken three times.
+    ``glyph`` is pinned to ``resting_frame``, not ``frames[0]`` — the old
+    pin (``== emote.frames[0]``) codified the exact defect this rework
+    fixes: six of twelve words share ``frames[0] == REST_GLYPH`` (the
+    animation base), so pinning ``glyph`` to it made "no face" the
+    *tested* behaviour for half the vocabulary. ``focused`` is one of the
+    six (its ``frames[0]`` is ``REST_GLYPH``, its ``resting_frame`` is
+    not) — kept in this parametrization on purpose so a regression back
+    to ``frames[0]`` fails here, not just in the table-driven still test.
     """
-    for spelling in ("fo.cus", "focus", "focused", "not-a-face-at-all", "satisfied"):
+    for spelling in ("fo.cus", "focus", "focused", "not-a-face-at-all", "puzzled"):
         emote = emotes.lookup(spelling)
         if emote is None:
             assert emotes.glyph(spelling) is None, spelling
             assert emotes.sequences_of(spelling) is None, spelling
         else:
-            assert emotes.glyph(spelling) == emote.frames[0], spelling
+            assert emotes.glyph(spelling) == emote.resting_frame, spelling
             assert emotes.sequences_of(spelling) == emote.sequences, spelling
 
 
@@ -415,7 +390,8 @@ def test_near_misses_is_empty_exactly_when_lookup_succeeds():
     """
     for name in EMOTES:
         assert emotes.near_misses(name) == []
-    assert emotes.near_misses("sa.tis"), "the maintainer's invented handle must guide"
+    for old in LEGACY_ALIASES:
+        assert emotes.near_misses(old) == []
     # Nothing near ⇒ a bare miss, never three strangers ranked by luck.
     assert emotes.near_misses("xyzzy-not-a-feeling") == []
     # A slip past the typo tolerance still gets its shortlist.
@@ -423,33 +399,37 @@ def test_near_misses_is_empty_exactly_when_lookup_succeeds():
     assert emotes.near_misses("curiousity")
 
 
-def test_a_miss_bridges_instead_of_scolding():
-    """#1117: `brnrd emotes confused` told a person who had typed a feeling
-    to "try a feeling, not a handle".
+def test_an_unknown_word_names_the_vocabulary_never_guesses():
+    """`brnrd do --mood` refuses an unknown word with the list — no silent
+    nearest-face write. Two honest answers, kept distinct:
 
-    Two populations, two honest answers, and the distinction is the point:
-
-    - a **typo** gets the face it was reaching for (`nearest`)
+    - a **typo** gets the face it was reaching for (`resolve_nearest`)
     - a word that is simply **not ours** gets the vocabulary (`families`),
-      because there is no thesaurus here — `confused` shares almost nothing
-      with `puzzled`, and a bridge built by string distance would either
-      miss it or, tuned looser, confidently offer something unrelated
-
-    Pinned in both directions on purpose: loosening `nearest` until it
-    "solves" `confused` is exactly the change this test exists to stop.
+      because there is no thesaurus wide enough to bridge every feeling
     """
-    assert [e.name for e in emotes.nearest("fokus")] == ["fo.cus"]
-    assert emotes.nearest("confused") == [], (
+    assert [e.name for e in emotes.nearest("fokused")] == ["focused"]
+    assert emotes.nearest("elated") == [], (
         "a word that is merely absent must not be guessed at"
     )
-    assert "puzzled" in emotes.families()
-    assert len(emotes.families()) >= 30
+    assert set(emotes.families()) == set(VOCABULARY)
+    assert len(emotes.families()) == 12
 
 
 def test_lookup_accepts_a_typo_within_two_edits():
     """A small misspelling resolves before the ranked-shortlist path."""
-    assert emotes.lookup("wearry").name == "weary_"
-    assert emotes.search("wearry") == [], "search has no spell-check"
-    assert emotes.near_misses("wearry") == []
+    assert emotes.lookup("tird").name == "tired"
+    assert emotes.lookup("focusd").name == "focused"
+    assert emotes.search("focusd") == [], "search has no spell-check"
+    assert emotes.near_misses("focusd") == []
     # A handle that *does* resolve still has no near misses to name.
     assert emotes.near_misses("fo.cus") == []
+
+
+def test_legacy_aliases_cover_the_pre_rework_situational_palette():
+    """98 old handles, one rework: every one of them still resolves, and
+    none of them survives as a top-level ``EMOTES`` key — the whole point
+    is that they are frames of a word now, not names of their own."""
+    assert len(LEGACY_ALIASES) == 98
+    for old, word in LEGACY_ALIASES.items():
+        assert old not in EMOTES, old
+        assert word in VOCABULARY, (old, word)
