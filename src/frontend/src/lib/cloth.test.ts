@@ -31,6 +31,7 @@ function row(over: Partial<RunLedgerRow>): RunLedgerRow {
 		core_expected: null,
 		core_mismatch: null,
 		substitution_reason: null,
+		runner_substituted_from: null,
 		repo_label: null,
 		source_system: null,
 		name: null,

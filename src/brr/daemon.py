@@ -3118,6 +3118,98 @@ def _uninitialized_first_wake_applies(
     )
 
 
+#: A failure kind, rendered for the one reader who did not choose it.
+#: Deliberately short and non-technical: the correspondent is being told
+#: *that* the author changed and *why in one clause*, not handed a taxonomy.
+_SUBSTITUTION_CAUSE = {
+    "quota_exhausted": "ran out of quota",
+    "auth_error": "lost its credential",
+    "provider_error": "hit a provider outage",
+}
+
+
+def _record_runner_substitution(
+    task: Run,
+    previous_runner: str | None,
+    runner_name: str | None,
+    failure_kind: str | None,
+) -> None:
+    """Stamp the manifest so a failover survives as a statistic (#1929).
+
+    ``_record_task_runner`` rewrites ``core_requested`` to the substitute on
+    the way past, which is correct for the field's own job — "what was this
+    *attempt* dispatched with" — and is exactly why the ledger could not see a
+    swap: ``core_expected`` ended up naming the substitute, ``core_mismatch``
+    recorded agreement with itself, and ``substitution_reason`` came back
+    ``None`` on the one run that had a reason (it is read from the *Claude*
+    envelope, which a codex substitute does not write).
+
+    So the substitution is recorded here, where it is known, as its own fact
+    rather than inferred later from fields that no longer disagree. A list,
+    not a scalar: two failures in one run are two rows, and the shape that
+    holds one holds both.
+    """
+    try:
+        history = list(task.meta.get("runner_substitutions") or [])
+    except Exception:
+        history = []
+    history.append({
+        "from": previous_runner,
+        "to": runner_name,
+        "failure_kind": failure_kind or None,
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    })
+    task.meta["runner_substitutions"] = history
+
+
+def _announce_runner_substitution(
+    responses_dir: Path,
+    event_id: str,
+    previous_runner: str | None,
+    runner_name: str | None,
+    failure_kind: str | None,
+) -> None:
+    """Tell the correspondent that the author of this reply changed (#1930).
+
+    Before this, a Shell/Core swap was announced to the daemon log, to the
+    ``retrying`` emit, to the run card's attempts block — and, via
+    ``fallback_notice``, into the resident's own wake prompt. Everyone was
+    told except the person waiting for the answer. The failure mode is the
+    ugly one: **the better the recovery works, the more silent it is.** A
+    fallback that recovers cleanly looks, from the chat, like nothing
+    happened at all — and the run that follows is a cold boot wearing a warm
+    coat, with a different model's judgement behind the same voice.
+
+    Written as a partial through the same machinery a starved seat answers
+    with, so it reaches the chat *while the run continues* rather than
+    arriving bundled with a verdict that is minutes newer than it.
+
+    Never raises: an announcement that could sink a recovery would be worse
+    than the silence it replaces.
+    """
+    cause = _SUBSTITUTION_CAUSE.get(
+        str(failure_kind or ""), "failed operationally",
+    )
+    message = (
+        f"⚙ Switched runner mid-run: **{previous_runner}** {cause}, "
+        f"so this is being finished by **{runner_name}**.\n\n"
+        "Same thread, same work — different model behind it, resumed from "
+        "files rather than from the earlier context."
+    )
+    try:
+        protocol.write_partial(responses_dir, event_id, message)
+    except Exception:
+        # `sys` is imported per-use in this module; reaching for a global
+        # here is how a handler written "so it can never raise" raises —
+        # caught by the test that drives this branch with a blocked path.
+        import sys as _sys
+        print(
+            f"[brnrd] worker {event_id}: could not announce the "
+            f"{previous_runner} -> {runner_name} substitution",
+            file=_sys.stderr,
+        )
+
+
 def _run_worker(
     event: dict,
     repo_root: Path,
@@ -5437,11 +5529,26 @@ def _run_worker(
             if last_failure and not retry_reason else ""
         )
         if failure_kind:
+            # #1931: the substitute has to be able to *finish*. Every other
+            # filter in `automatic_fallback_runner` asks whether a candidate
+            # is legal; this reading asks whether it is alive. Measured
+            # 2026-09-11: a claude 401 fell through to a codex profile whose
+            # weekly window read 1%, and that same reading parked the seat
+            # fourteen minutes later. One cached snapshot, no network.
+            try:
+                from .gates import cloud_publisher as _cloud_pub
+                fallback_quota = _cloud_pub.quota_shell_binding_pct(brr_dir)
+            except Exception:
+                # A quota collector that cannot answer must never be able to
+                # block a dispatch — an empty map disables the rule.
+                fallback_quota = {}
             fallback_choice = runner.fallback_runner_profile(
                 repo_root,
                 runner_choice,
                 failure_kind,
                 tried=attempted_runners,
+                quota_pct=fallback_quota,
+                starve_floor_pct=_seat_starve_floor_pct(cfg),
             )
             fallback_runner_name = fallback_choice.name if fallback_choice else None
         attempt_payload: dict[str, object] = {
@@ -5551,6 +5658,12 @@ def _run_worker(
                 runner=runner_name,
                 from_runner=previous_runner,
                 failure_kind=failure_kind,
+            )
+            _record_runner_substitution(
+                task, previous_runner, runner_name, failure_kind,
+            )
+            _announce_runner_substitution(
+                responses_dir, eid, previous_runner, runner_name, failure_kind,
             )
             last_failure = None
             continue

@@ -19,6 +19,8 @@ _ROW_FIELDS = {
     "core_expected",
     "core_mismatch",
     "substitution_reason",
+    "runner_substituted_from",
+    "runner_substitutions",
     "repo_label",
     "source_system",
     "external_refs",
@@ -806,3 +808,68 @@ def test_read_run_topics_control_filters_junk_tokens_among_valid_ones(tmp_path):
     outbox.mkdir()
     (outbox / ".topics").write_text("the-loom !!! the-post\n", encoding="utf-8")
     assert run_ledger.read_run_topics_control(outbox) == ["the-loom", "the-post"]
+
+
+# ── #1929: a failover that leaves a statistic ─────────────────────────
+#
+# Measured on run-260911-1808-1r0b: claude-opus died on a 401, brr fell back
+# to codex-gpt-5.6-sol, and the ledger row read
+# `core_expected: gpt-5.6-sol / core_mismatch: null / substitution_reason:
+# null` — the one field designed to catch a swap recording agreement with
+# itself, because `_record_task_runner` had rewritten `core_requested` to the
+# substitute on the way past. Failovers were, by construction, uncountable.
+
+
+def test_a_dispatch_fallback_is_recorded_even_though_core_expected_agrees():
+    task = _task("run-failover")
+    # Exactly the post-fallback manifest: every core field already names the
+    # substitute, so nothing derived from them can see the swap.
+    task.meta["runner_shell"] = "codex"
+    task.meta["runner_core"] = "gpt-5.6-sol"
+    task.meta["core_requested"] = "gpt-5.6-sol"
+    task.meta["runner_substitutions"] = [{
+        "from": "claude-opus", "to": "codex-gpt-5.6-sol",
+        "failure_kind": "auth_error", "at": "2026-09-11T19:19:17Z",
+    }]
+
+    row = run_ledger.build_closed_run_row(
+        task, {}, after_levels={"model_ids": ["gpt-5.6-sol"]},
+    )
+
+    # The old fields are untouched and still agree with themselves — that is
+    # the point: this is not a fix to `core_expected`'s meaning, it is the
+    # fact it could never carry, recorded where it was known.
+    assert row["core_expected"] == "gpt-5.6-sol"
+    assert not row["core_mismatch"]
+    assert row["runner_substituted_from"] == "claude-opus"
+    assert row["substitution_reason"] == (
+        "dispatch fallback: claude-opus -> codex-gpt-5.6-sol after auth_error"
+    )
+    assert len(row["runner_substitutions"]) == 1
+
+
+def test_a_clean_run_carries_no_substitution_columns():
+    row = run_ledger.build_closed_run_row(_task("run-clean"), {}, after_levels=_levels())
+    assert row["runner_substituted_from"] is None
+    assert row["runner_substitutions"] is None
+    assert row["substitution_reason"] is None
+
+
+def test_the_claude_envelope_outranks_the_dispatch_reason(monkeypatch):
+    """Two sources, one column, envelope first.
+
+    The envelope reason is the more specific observation — a Claude Shell
+    quietly serving a different model *within* the attempt that produced the
+    output. The dispatch reason describes brr's own swap between attempts.
+    When both exist the envelope wins; it is about the run that spoke.
+    """
+    from brr import claude_status
+    monkeypatch.setattr(
+        claude_status, "substitution_reason", lambda *_a, **_k: "envelope says so",
+    )
+    task = _task("run-both")
+    task.meta["runner_substitutions"] = [{
+        "from": "a", "to": "b", "failure_kind": "quota_exhausted",
+    }]
+    row = run_ledger.build_closed_run_row(task, {}, after_levels=_levels())
+    assert row["substitution_reason"] == "envelope says so"

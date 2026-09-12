@@ -60,6 +60,8 @@ _ROW_FIELDS = (
     "core_expected",
     "core_mismatch",
     "substitution_reason",
+    "runner_substituted_from",
+    "runner_substitutions",
     "repo_label",
     "source_system",
     "external_refs",
@@ -225,6 +227,14 @@ def build_closed_run_row(
             file=sys.stderr,
         )
 
+    try:
+        substitutions = [
+            dict(entry) for entry in (task.meta.get("runner_substitutions") or [])
+            if isinstance(entry, dict)
+        ]
+    except Exception:
+        substitutions = []
+
     after_weekly, after_five_hour = quota_used_percentages(after_levels)
     before_weekly = _num(task.meta.get(_BEFORE_WEEKLY_KEY))
     before_five_hour = _num(task.meta.get(_BEFORE_FIVE_HOUR_KEY))
@@ -301,7 +311,22 @@ def build_closed_run_row(
         # *Why* a substitution happened, when the envelope carried a signal
         # (fallback/refusal/iterations). ``None`` when clean or unobservable —
         # the reason rides next to the ``core_mismatch`` alarm bit (#substitution).
-        "substitution_reason": claude_status.substitution_reason(after_levels),
+        "substitution_reason": (
+            claude_status.substitution_reason(after_levels)
+            or _dispatch_substitution_reason(substitutions)
+        ),
+        # #1929: the two columns that make a failover countable. Before them,
+        # a run that changed Shell mid-flight was indistinguishable from one
+        # that never did — `core_expected` had been rewritten to the
+        # substitute by `_record_task_runner`, so the field designed to catch
+        # a swap recorded agreement with itself, and the envelope-derived
+        # `substitution_reason` above is `None` whenever the substitute is not
+        # a Claude Shell (which is the common case: a fallback crosses
+        # failure domains by construction).
+        "runner_substituted_from": (
+            _str_or_none(substitutions[0].get("from")) if substitutions else None
+        ),
+        "runner_substitutions": substitutions or None,
         "repo_label": _str_or_none(task.meta.get("repo_label")),
         "source_system": _source_system(task),
         "external_refs": collected_relics or external_refs(task.meta.get("external_refs")),
@@ -362,6 +387,26 @@ def bolt_declaration_value(bolt_meta: Any) -> dict[str, Any] | None:
         }
     fields = ("asks", "owed", "decisions", "spend_declared", "next", "dissent", "strands")
     return {field: bolt_meta.get(field) for field in fields}
+
+
+def _dispatch_substitution_reason(substitutions: list[dict]) -> str | None:
+    """The reason a *dispatch* substituted, when the envelope has none.
+
+    ``claude_status.substitution_reason`` reads the Claude result envelope and
+    is the right answer when a Claude Shell silently served a different model.
+    It cannot answer the other case at all: brr itself swapping Shells after
+    an operational failure, where the substitute is usually *not* Claude and
+    writes no such envelope. Same column, two sources, envelope first — it is
+    the more specific observation, and it is about the attempt that actually
+    produced the output.
+    """
+    if not substitutions:
+        return None
+    last = substitutions[-1]
+    kind = str(last.get("failure_kind") or "").strip() or "operational failure"
+    frm = str(last.get("from") or "?").strip()
+    to = str(last.get("to") or "?").strip()
+    return f"dispatch fallback: {frm} -> {to} after {kind}"
 
 
 def core_mismatch(expected: str | None, observed: str | None) -> bool | None:

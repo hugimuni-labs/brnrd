@@ -678,3 +678,103 @@ def test_fallback_from_an_unclassed_runner_does_not_escalate_to_strong():
         failure_kind=runner_failures.AUTH_ERROR,
     )
     assert picked is not None and picked.name == "cheap"
+
+
+# ── #1931: a substitute that cannot finish is not a substitute ────────
+#
+# Measured 2026-09-11: a claude 401 at 19:19:17Z fell through to
+# codex-gpt-5.6-sol, whose weekly window read 1%; that reading armed a
+# starvation hold fourteen minutes later and the seat parked. Every filter
+# the selector already had passed the candidate — different failure domain,
+# same class, capable. None of them asked whether it could run.
+
+
+def _fallback_pair():
+    """A claude Runner that just died, and the one legal codex substitute."""
+    return [
+        _profile(
+            "claude-opus", shell="claude", provider="anthropic",
+            quota_source="claude-local", capability_score=0.95,
+            **{"class": "strong", "cost_rank": 50},
+        ),
+        _profile(
+            "codex-sol", shell="codex", provider="openai",
+            quota_source="codex-local", capability_score=0.90,
+            **{"class": "strong", "cost_rank": 45},
+        ),
+    ]
+
+
+def test_fallback_refuses_the_only_candidate_when_its_quota_is_under_the_floor():
+    chosen = rs.automatic_fallback_runner(
+        _fallback_pair(),
+        current="claude-opus",
+        failure_kind="auth_error",
+        tried=("claude-opus",),
+        quota_pct={"claude": 0.0, "codex": 1.0},
+        starve_floor_pct=2.0,
+    )
+    # None reaches the daemon's give-up branch, which carries the real
+    # failure to the correspondent. The alternative it replaces is a run
+    # that dies a second time, quietly, fourteen minutes later.
+    assert chosen is None
+
+
+def test_fallback_takes_the_same_candidate_once_its_quota_clears_the_floor():
+    chosen = rs.automatic_fallback_runner(
+        _fallback_pair(),
+        current="claude-opus",
+        failure_kind="auth_error",
+        tried=("claude-opus",),
+        quota_pct={"claude": 0.0, "codex": 40.0},
+        starve_floor_pct=2.0,
+    )
+    assert chosen is not None and chosen.name == "codex-sol"
+
+
+def test_fallback_treats_an_unread_shell_as_viable_not_exhausted():
+    """Unknown stays unknown (#632 standing decision 2).
+
+    A quota collector that has never run for a shell must not make that
+    shell look dead — that would turn a missing measurement into a refused
+    recovery, which is the failure this rule exists to prevent, inverted.
+    """
+    chosen = rs.automatic_fallback_runner(
+        _fallback_pair(),
+        current="claude-opus",
+        failure_kind="auth_error",
+        tried=("claude-opus",),
+        quota_pct={"claude": 0.0},   # no reading at all for codex
+        starve_floor_pct=2.0,
+    )
+    assert chosen is not None and chosen.name == "codex-sol"
+
+
+def test_fallback_without_a_quota_map_is_the_pre_1931_selector():
+    """Omitting the argument disables the rule — every existing caller."""
+    chosen = rs.automatic_fallback_runner(
+        _fallback_pair(),
+        current="claude-opus",
+        failure_kind="auth_error",
+        tried=("claude-opus",),
+    )
+    assert chosen is not None and chosen.name == "codex-sol"
+
+
+def test_fallback_prefers_a_live_shell_over_a_starved_one():
+    runners = _fallback_pair() + [
+        _profile(
+            "gemini-pro", shell="gemini", provider="google",
+            quota_source="gemini-local", capability_score=0.88,
+            **{"class": "strong", "cost_rank": 44},
+        ),
+    ]
+    chosen = rs.automatic_fallback_runner(
+        runners,
+        current="claude-opus",
+        failure_kind="auth_error",
+        tried=("claude-opus",),
+        quota_pct={"claude": 0.0, "codex": 1.0, "gemini": 80.0},
+        starve_floor_pct=2.0,
+    )
+    assert chosen is not None and chosen.name == "gemini-pro"

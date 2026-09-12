@@ -62,6 +62,11 @@ _ROW = {
     "usd_subscription_attributed": 0.25,
     "usd_credits_equivalent": None,
     "substitution_reason": None,
+    # #1929: `None` here is the *clean-run* value, and the fixture's job is to
+    # be a clean run. The echo assertion below is an equality on the whole
+    # row, so a new mirrored column has to appear here or the round-trip
+    # reports a difference the server did not invent.
+    "runner_substituted_from": None,
     "terminal_route": "gate-sole",
     "bolt": "accepted",
     "bolt_declaration": {

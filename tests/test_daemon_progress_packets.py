@@ -573,7 +573,12 @@ def test_operational_failure_falls_back_to_next_runner(tmp_path, monkeypatch):
     _patch_runner(monkeypatch)
     monkeypatch.setattr(
         daemon.runner, "fallback_runner_profile",
-        lambda _repo, _current, kind, *, tried=(): (
+        # `**_kw` rather than a widened signature: this stub stands in for a
+        # selector whose keyword arguments are its whole subject (#1931 added
+        # `quota_pct` / `starve_floor_pct`), and a stub that enumerates them
+        # breaks on every future one while proving nothing about this test,
+        # which is about the *packet* a fallback emits.
+        lambda _repo, _current, kind, *, tried=(), **_kw: (
             daemon.runner.runner_profile("claude", _repo)
             if kind == "quota_exhausted" else None
         ),

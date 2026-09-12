@@ -27,6 +27,13 @@ from brnrd.schemas import RunLedgerRowIn  # noqa: E402
 #: carries its reason; removing a field from the local ledger removes it
 #: here too (the stale-entry assertion below enforces that).
 WITHHELD: dict[str, str] = {
+    "runner_substitutions": (
+        "the per-swap audit list (from/to/failure_kind/at). Its two "
+        "load-bearing facts are mirrored as `runner_substituted_from` and "
+        "`substitution_reason`; the nested list has no cloud reader and an "
+        "unbounded nested array is the shape that gets a whole row rejected "
+        "by a receiver's size limit (#1889's lesson)"
+    ),
     "reply_archive": (
         "a host-local filesystem path; no cloud reader exists, and "
         "mirroring host paths into the dashboard store leaks machine "

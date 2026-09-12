@@ -1909,8 +1909,17 @@ def fallback_runner_profile(
     failure_kind: str | None,
     *,
     tried: list[str] | tuple[str, ...] = (),
+    quota_pct: "dict[str, float] | None" = None,
+    starve_floor_pct: float | None = None,
 ) -> "RunnerProfile | None":
-    """Typed fallback for the daemon's dispatch path."""
+    """Typed fallback for the daemon's dispatch path.
+
+    ``quota_pct`` / ``starve_floor_pct`` are threaded straight through to
+    :func:`runner_select.automatic_fallback_runner`; the daemon supplies both
+    because it is the one caller that knows the configured seat floor. Left
+    unset here on purpose — this module must not reach into daemon config, and
+    a helper that guessed the floor would be a second place for it to drift.
+    """
     from . import runner_select
 
     return runner_select.automatic_fallback_runner(
@@ -1918,6 +1927,8 @@ def fallback_runner_profile(
         current=current.name,
         failure_kind=failure_kind,
         tried=tried,
+        quota_pct=quota_pct,
+        starve_floor_pct=starve_floor_pct,
     )
 
 

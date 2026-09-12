@@ -171,6 +171,15 @@ export interface RunLedgerRow {
 	// transcript — the result envelope declares success and carries no reason.
 	// Null on clean runs and whenever the Shell records no refusal.
 	substitution_reason: string | null;
+	// #1929: the Runner brr swapped *away from* mid-run, when an operational
+	// failure (quota/auth/provider) moved the work to another Shell between
+	// attempts. Distinct from `core_mismatch`, which is about one attempt
+	// running a different model than pinned: after a dispatch fallback the
+	// manifest's expected core has been rewritten to the substitute, so
+	// `core_mismatch` is *false* and the row used to render a ✓ — an
+	// affirmative "dispatched as asked" on the one run that wasn't.
+	// Null on clean runs.
+	runner_substituted_from: string | null;
 	repo_label: string | null;
 	source_system: string | null;
 	name: string | null;

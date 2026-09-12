@@ -69,6 +69,7 @@ function ledgerRow(over: Partial<RunLedgerRow> & { run_id: string }): RunLedgerR
 		core_expected: null,
 		core_mismatch: null,
 		substitution_reason: null,
+		runner_substituted_from: null,
 		repo_label: 'hugimuni-labs/brnrd',
 		source_system: 'cloud',
 		name: 'the-prior-run',
