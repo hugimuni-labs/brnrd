@@ -710,9 +710,25 @@ class TestTerminalLoop:
                 if events:
                     break
                 time.sleep(0.01)
-            # A real gap — several poll ticks of the model genuinely
-            # thinking before its next message, the case #1240 names.
-            time.sleep(0.08)
+            # The gap, *observed* rather than hoped for (#1941).
+            #
+            # This was `time.sleep(0.08)` against `poll_interval=0.01` — eight
+            # ticks of headroom on an idle machine, and none on a runner with
+            # three suites on it. The assertion below is about the loop having
+            # reached a tick where nothing was handled; under load the second
+            # message landed first, that tick never came, and the test failed
+            # on PRs touching nothing near it. (The recorded failure prints
+            # two `got it — thinking…` acks and zero bare lines.)
+            #
+            # Nothing about the gap needs wall-clock: the loop emits the bare
+            # line on its first idle tick. So wait for the line itself, with a
+            # generous bound that fails loudly instead of hanging.
+            deadline = time.monotonic() + 5.0
+            while "[brnrd] thinking…" not in printed:
+                assert time.monotonic() < deadline, (
+                    "the idle tick never came in 5s: " + repr(printed)
+                )
+                time.sleep(0.005)
             _write_outbox(outbox, "02.md", "and how should it be checked?")
 
         result = init_wake.run_init_wake(
