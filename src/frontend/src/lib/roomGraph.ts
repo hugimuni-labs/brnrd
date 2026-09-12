@@ -415,6 +415,17 @@ export interface WatchFact {
 	until?: string | null;
 }
 
+/** The newest wire-attested boundary's place in a live camp. Its `file` is
+ * null when the redacted row names no safely attributable leaf, so the map
+ * lights the directory it can actually attest instead. */
+export interface BoundaryTouch {
+	repoLabel: string;
+	branch: string | null;
+	roomDir: string | null;
+	dir: string;
+	file: string | null;
+}
+
 export interface RoomGraph {
 	generatedAt: string | null;
 	islands: RoomIsland[];
@@ -438,6 +449,9 @@ export interface RoomGraph {
 	clockwork: ClockEntry[];
 	garage: FuelRow[];
 	watch: WatchFact[];
+	/** Current boundary touches, one per live run when its bounded ledger
+	 * carries a usable newest row. Optional for hand-built older test graphs. */
+	boundaryTouches?: BoundaryTouch[];
 	daemonMood: DaemonMood | null;
 	stale: boolean;
 }
@@ -489,6 +503,7 @@ export function compileRoomGraph(
 	const strands = runs.filter((r) => r.is_subspawn).sort((x, y) => startKey(x) - startKey(y));
 
 	const glyphByRun = new Map<string, string>();
+	const boundaryTouches: BoundaryTouch[] = [];
 	for (const r of residents) glyphByRun.set(r.run_id, '@');
 	strands.forEach((s, i) => glyphByRun.set(s.run_id, STRAND_GLYPHS[i % STRAND_GLYPHS.length]));
 
@@ -564,6 +579,22 @@ export function compileRoomGraph(
 				at: edgeAt,
 				file: fileForChamber(run.edge?.detail, edgeDir)
 			});
+		// `boundaries` is explicitly newest-first. Empty and absent both stay
+		// unlit: this mark means the bounded ledger attested a touch, not that
+		// a pre-ledger cursor happened to resemble one.
+		const newest = run.boundaries?.[0] ?? null;
+		const touchDir = newest
+			? (dirFromEdge(newest, attested) ?? (newest.dir === '.' ? '.' : null))
+			: null;
+		if (touchDir) {
+			boundaryTouches.push({
+				repoLabel: label,
+				branch,
+				roomDir: dir,
+				dir: touchDir,
+				file: fileForChamber(newest?.detail, touchDir)
+			});
+		}
 		for (const step of steps) {
 			if (!step.dir) continue;
 			const existing = camp.chambers.find((c) => c.dir === step.dir);
@@ -787,6 +818,7 @@ export function compileRoomGraph(
 		clockwork,
 		garage,
 		watch,
+		boundaryTouches,
 		daemonMood: live?.daemon_mood ?? null,
 		stale: live?.stale ?? false
 	};

@@ -69,6 +69,9 @@ export interface RoomTopology {
 	edges: PlaceEdge[];
 	/** Where each live actor stands, by run id. Every value is a real node. */
 	actorPlaces: Record<string, PlaceId>;
+	/** Nodes named by each live run's newest boundary. The topology resolves
+	 * the graph's safe directory/file touch into the actual rendered trie. */
+	boundaryTouchNodes: Set<PlaceId>;
 	/** Islands in first-seen (graph) order — the layout allocates island
 	 *  slots in this order, so it must be stable. */
 	islandRoots: PlaceId[];
@@ -280,6 +283,27 @@ export function compileTopology(graph: RoomGraph): RoomTopology {
 	}
 
 	// ── actor place resolution ──────────────────────────────────────────────
+	const boundaryTouchNodes = new Set<PlaceId>();
+	for (const touch of graph.boundaryTouches ?? []) {
+		const cid = campId(touch.repoLabel, { branch: touch.branch, dir: touch.roomDir });
+		if (!b.nodes[cid]) continue; // the camp itself was not published
+		const leafDir = ensureDirPath(b, touch.repoLabel, cid, touch.dir);
+		let target = leafDir;
+		if (touch.file) {
+			const fid = fileId(leafDir, touch.file);
+			addNode(b, {
+				id: fid,
+				kind: 'file',
+				label: touch.file,
+				repoId: touch.repoLabel,
+				campId: cid,
+				parentId: leafDir
+			});
+			addEdge(b, leafDir, fid, 'tree');
+			target = fid;
+		}
+		boundaryTouchNodes.add(target);
+	}
 	const actorPlaces: Record<string, PlaceId> = {};
 	for (const actor of graph.actors) {
 		actorPlaces[actor.runId] = resolveActorPlace(b, graph, actor);
@@ -289,12 +313,13 @@ export function compileTopology(graph: RoomGraph): RoomTopology {
 	// After actors, deliberately: an actor standing in a pass-through
 	// directory pins it, and folding first would drop the node its own
 	// `dirId` lookup resolves to, silently demoting that actor to its camp.
-	foldPassThroughDirs(b, new Set(Object.values(actorPlaces)));
+	foldPassThroughDirs(b, new Set([...Object.values(actorPlaces), ...boundaryTouchNodes]));
 
 	return {
 		nodes: b.nodes,
 		edges: b.edges,
 		actorPlaces,
+		boundaryTouchNodes,
 		islandRoots,
 		homeId: HOME_ID
 	};
