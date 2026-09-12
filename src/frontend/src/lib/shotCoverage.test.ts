@@ -17,6 +17,17 @@ import {
 const RECEIPT = `${FRONTEND_ROOT}/src/lib/RunLedgerReceipt.svelte`;
 const FUEL = `${FRONTEND_ROOT}/src/lib/Fuel.svelte`;
 
+// A verdict that earns a headline must produce one; a `null` here is the
+// failure, not something to match an empty string against.
+const headlineOf = (
+	coverage: ReturnType<typeof classifyCoverage>,
+	options: { allIdentical?: boolean } = {}
+): string => {
+	const headline = coverageHeadline(coverage, options);
+	assert.notEqual(headline, null, 'this verdict is supposed to carry a headline');
+	return headline ?? '';
+};
+
 test('normalizeModule maps a vite dev URL to its repo path', () => {
 	assert.equal(
 		normalizeModule('http://localhost:5197/src/lib/RunLedgerReceipt.svelte', {
@@ -92,7 +103,7 @@ test('imported by a captured page and never run is nothing-looked, loudly', () =
 	assert.equal(coverage.verdict, 'nothing-looked');
 	assert.deepEqual(coverage.importedNotRun, [RECEIPT]);
 	assert.deepEqual(coverage.neverLoaded, []);
-	const headline = coverageHeadline(coverage, { allIdentical: true });
+	const headline = headlineOf(coverage, { allIdentical: true });
 	assert.match(headline, /Nothing looked/);
 	assert.match(headline, /imported it and never ran a line/);
 	// The sentence a reviewer needs: the pixel table is not about their change.
@@ -104,19 +115,19 @@ test('never fetched at all reads differently from imported-and-idle', () => {
 	assert.equal(coverage.verdict, 'nothing-looked');
 	assert.deepEqual(coverage.neverLoaded, [RECEIPT]);
 	assert.deepEqual(coverage.importedNotRun, []);
-	assert.match(coverageHeadline(coverage, {}), /no captured surface even fetched it/);
+	assert.match(headlineOf(coverage), /no captured surface even fetched it/);
 });
 
 test('a missing module record is unknown, never nothing-looked', () => {
 	const coverage = classifyCoverage({ changed: [RECEIPT], loaded: [], coverageKnown: false });
 	assert.equal(coverage.verdict, 'unknown');
-	assert.match(coverageHeadline(coverage, {}), /Coverage unknown/);
+	assert.match(headlineOf(coverage), /Coverage unknown/);
 });
 
 test('an exercised change is covered, and the headline refuses to say visible', () => {
 	const coverage = classifyCoverage({ changed: [RECEIPT], exercised: [RECEIPT, FUEL] });
 	assert.equal(coverage.verdict, 'covered');
-	const headline = coverageHeadline(coverage, { allIdentical: true });
+	const headline = headlineOf(coverage, { allIdentical: true });
 	assert.match(headline, /\*Exercised\* is not \*visible\*/);
 });
 
@@ -125,7 +136,7 @@ test('a partly exercised change names the half nobody saw', () => {
 	assert.equal(coverage.verdict, 'partial');
 	assert.deepEqual(coverage.covered, [FUEL]);
 	assert.deepEqual(coverage.uncovered, [RECEIPT]);
-	assert.match(coverageHeadline(coverage, {}), /Partly looked/);
+	assert.match(headlineOf(coverage), /Partly looked/);
 });
 
 // A PR that only touches the harness itself must not accuse the harness of

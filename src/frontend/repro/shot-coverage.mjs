@@ -53,7 +53,11 @@ export const APP_SOURCE_PREFIXES = [`${FRONTEND_ROOT}/src/`, `${FRONTEND_ROOT}/s
 // on the day it is right.
 const NOT_RENDERABLE = /(\.test\.[cm]?[jt]sx?|\.spec\.[cm]?[jt]sx?|\.d\.ts)$/;
 
-/** Is this repo-relative path something a captured page could have run? */
+/**
+ * Is this repo-relative path something a captured page could have run?
+ * @param {string} file
+ * @returns {boolean}
+ */
 export function isAppSource(file) {
 	if (NOT_RENDERABLE.test(file)) return false;
 	return APP_SOURCE_PREFIXES.some((prefix) => file.startsWith(prefix));
@@ -67,6 +71,10 @@ export function isAppSource(file) {
  * `URL` itself; `/@fs/` escapes the root and is relativised against it;
  * dependency pre-bundles, `/@vite/`, `/@id/` and the SvelteKit scratch dir are
  * not repository sources and are dropped.
+ *
+ * @param {string} rawUrl
+ * @param {{ origin?: string, root?: string }} options
+ * @returns {string | null}
  */
 export function normalizeModule(rawUrl, { origin, root }) {
 	let url;
@@ -95,6 +103,23 @@ export function normalizeModule(rawUrl, { origin, root }) {
  * `loaded`  — repo-relative paths the captured pages fetched.
  * `coverageKnown` — false when no driver produced a module record.
  */
+/**
+ * @typedef {object} Coverage
+ * @property {'no-app-source'|'unknown'|'nothing-looked'|'partial'|'covered'} verdict
+ * @property {string[]} appSource
+ * @property {string[]} ignored
+ * @property {string[]} covered
+ * @property {string[]} importedNotRun
+ * @property {string[]} neverLoaded
+ * @property {string[]} uncovered
+ * @property {number} exercisedCount
+ * @property {number} loadedCount
+ */
+
+/**
+ * @param {{ changed?: string[], exercised?: string[], loaded?: string[], coverageKnown?: boolean }} [input]
+ * @returns {Coverage}
+ */
 export function classifyCoverage({
 	changed = [],
 	exercised = [],
@@ -109,6 +134,7 @@ export function classifyCoverage({
 	const importedNotRun = appSource.filter((file) => !exercisedSet.has(file) && loadedSet.has(file));
 	const neverLoaded = appSource.filter((file) => !loadedSet.has(file));
 	const uncovered = [...importedNotRun, ...neverLoaded];
+	/** @type {Coverage['verdict']} */
 	let verdict;
 	if (!appSource.length) verdict = 'no-app-source';
 	else if (!coverageKnown) verdict = 'unknown';
@@ -128,8 +154,10 @@ export function classifyCoverage({
 	};
 }
 
+/** @type {(n: number, one: string, many?: string) => string} */
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
+/** @type {(files: string[], limit?: number) => string[]} */
 const list = (files, limit = 25) => {
 	const shown = files.slice(0, limit).map((file) => `- \`${file}\``);
 	if (files.length > limit) shown.push(`- _…and ${files.length - limit} more._`);
@@ -139,6 +167,10 @@ const list = (files, limit = 25) => {
 /**
  * The one-line headline, placed where a skimming reviewer cannot miss it.
  * Returns `null` when there is nothing worth a headline.
+ *
+ * @param {Coverage} coverage
+ * @param {{ allIdentical?: boolean }} [options]
+ * @returns {string | null}
  */
 export function coverageHeadline(coverage, { allIdentical } = {}) {
 	const them = coverage.appSource.length === 1 ? 'it' : 'them';
@@ -179,7 +211,13 @@ export function coverageHeadline(coverage, { allIdentical } = {}) {
 	}
 }
 
-/** The `<details>` block: the receipts behind the headline. */
+/**
+ * The `<details>` block: the receipts behind the headline.
+ *
+ * @param {Coverage} coverage
+ * @param {{ surfaces?: string[], allIdentical?: boolean }} [options]
+ * @returns {string[]}
+ */
 export function renderCoverage(coverage, { surfaces = [], allIdentical = false } = {}) {
 	const lines = ['<details><summary>What this compared, and what it could not see</summary>', ''];
 	if (surfaces.length)
