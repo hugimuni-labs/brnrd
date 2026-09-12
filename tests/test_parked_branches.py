@@ -1,5 +1,6 @@
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -76,12 +77,33 @@ def test_render_is_present_only_for_nonempty_detector_result():
     assert line == "parked branches: brr/x (2 unmerged commits, pushed 1h ago)"
 
 
+@pytest.fixture(autouse=True)
+def _fresh_sweep_state():
+    """Both pieces of this module's process-lifetime state, reset per test.
+
+    `warn_new` carries two: `_WARNED` (which branches have been announced)
+    and `_last_sweep_at` (when the expensive walk last ran). The TTL was
+    added on 2026-09-11 with its own tests resetting the new one — and the
+    *pre-existing* test below still cleared only `_WARNED`. It passed alone
+    and failed in a full run, which is how `main` went red: a second sweep
+    inside the 300s window returns before it can print anything.
+
+    Autouse rather than another `monkeypatch.setattr` line per test, because
+    the failure mode is "a future test forgets the second one", and a fixture
+    is the only version of this that a new test cannot omit.
+    """
+    parked_branches._WARNED.clear()
+    parked_branches._last_sweep_at = None
+    yield
+    parked_branches._WARNED.clear()
+    parked_branches._last_sweep_at = None
+
+
 def test_ergo_warning_is_once_per_branch_per_daemon_lifetime(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(
         parked_branches, "detect",
         lambda _repo: [parked_branches.ParkedBranch("brr/x", 2, None)],
     )
-    parked_branches._WARNED.clear()
     parked_branches.warn_new(tmp_path)
     parked_branches.warn_new(tmp_path)
     assert capsys.readouterr().out.count("[brnrd:ergo]") == 1
