@@ -39,10 +39,17 @@ async function renderStrip(weaving: ReadonlySet<string>): Promise<string> {
 
 after(() => rmSync(generated, { force: true }));
 
-test('a live topic gives its heddle a visible weaving bolt', async () => {
+test('a live topic makes its existing heddle glow without changing the rune', async () => {
 	const lit = await renderStrip(new Set(['loom']));
 	const unlit = await renderStrip(new Set());
 
-	ok(lit.includes('aria-label="weaving now"'), 'the live topic is visibly lit');
-	ok(!unlit.includes('aria-label="weaving now"'), 'an unclaimed topic stays unlit');
+	ok(
+		/class="[^"]*heddle-weaving/.test(lit),
+		'the existing live-topic button carries the glow state'
+	);
+	ok(lit.includes('aria-label="weaving now"'), 'the existing button names the live state');
+	ok(lit.includes('text-shadow:'), 'the topic-colored rune receives a soft luminance');
+	ok(!lit.includes('↯'), 'the rune gains no bolt glyph');
+	ok(!/class="[^"]*heddle-weaving/.test(unlit), 'an unclaimed topic does not glow');
+	ok(!unlit.includes('aria-label="weaving now"'), 'an unclaimed topic has no live-state name');
 });
