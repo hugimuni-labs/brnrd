@@ -14,5 +14,9 @@
 	{
 		"driver": "drive-run-ledger.mjs",
 		"shots": ["phone-1-run-ledger-receipt.png"]
+	},
+	{
+		"driver": "drive-heddle-live-topics.mjs",
+		"shots": ["before-unclaimed.png", "after-mint-lit.png"]
 	}
 ]
