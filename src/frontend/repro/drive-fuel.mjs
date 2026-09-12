@@ -231,13 +231,31 @@ async function main() {
 			);
 			await ctx.close();
 		}
-		await browser.close();
+		// Bounded teardown, and narrated (#1944). On a CI runner this driver
+		// printed its whole JSON payload and then never exited — SIGKILLed at
+		// four minutes, having already done every bit of its work. Locally it
+		// exits in ~20s. Whichever handle keeps the loop alive there, a capture
+		// script's contract is "write the files, print the line, return": a
+		// hang in cleanup is pure cost, and an unbounded `close()` is the one
+		// thing between doing the job and reporting it.
+		process.stderr.write('[drive-fuel] closing browser\n');
+		await Promise.race([browser.close(), delay(15000)]);
+		process.stderr.write('[drive-fuel] browser closed\n');
 	} finally {
 		vite.kill('SIGTERM');
+		process.stderr.write('[drive-fuel] vite signalled\n');
 	}
 	console.log(`shots → ${OUT}`);
 }
-main().catch((e) => {
-	console.error(e);
-	process.exit(1);
-});
+main()
+	.then(async () => {
+		// Flush stdout before forcing the exit: `process.exit` can truncate a
+		// pipe, and this process's stdout *is* the payload `ci-shots.mjs`
+		// embeds in its summary.
+		await new Promise((resolve) => process.stdout.write('', resolve));
+		process.exit(0);
+	})
+	.catch((e) => {
+		console.error(e);
+		process.exit(1);
+	});
