@@ -72,6 +72,11 @@ test('isAppSource counts only what a page can load', () => {
 	assert.equal(isAppSource(`${FRONTEND_ROOT}/static/logo.svg`), true);
 	assert.equal(isAppSource(`${FRONTEND_ROOT}/repro/drive-fuel.mjs`), false);
 	assert.equal(isAppSource(`${FRONTEND_ROOT}/package-lock.json`), false);
+	// This very file: under the app source root, and no page will ever run it.
+	// Without this, a test-only PR reads as "nothing looked".
+	assert.equal(isAppSource(`${FRONTEND_ROOT}/src/lib/shotCoverage.test.ts`), false);
+	assert.equal(isAppSource(`${FRONTEND_ROOT}/src/lib/Foo.spec.js`), false);
+	assert.equal(isAppSource(`${FRONTEND_ROOT}/src/app.d.ts`), false);
 });
 
 // THE #1938 CASE, and the reason `loaded` is not the signal. That PR changed

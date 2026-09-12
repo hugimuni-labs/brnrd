@@ -46,8 +46,16 @@ export const FRONTEND_ROOT = 'src/frontend';
 // reported as ignored rather than counted as a coverage miss.
 export const APP_SOURCE_PREFIXES = [`${FRONTEND_ROOT}/src/`, `${FRONTEND_ROOT}/static/`];
 
-/** Is this repo-relative path something a captured page could have loaded? */
+// Files that live under the app source root and still cannot render: the unit
+// tests beside the components they test, and the type declarations the browser
+// never sees. Counting them would make every test-only PR read as *nothing
+// looked*, and a headline that cries on a test file is a headline nobody reads
+// on the day it is right.
+const NOT_RENDERABLE = /(\.test\.[cm]?[jt]sx?|\.spec\.[cm]?[jt]sx?|\.d\.ts)$/;
+
+/** Is this repo-relative path something a captured page could have run? */
 export function isAppSource(file) {
+	if (NOT_RENDERABLE.test(file)) return false;
 	return APP_SOURCE_PREFIXES.some((prefix) => file.startsWith(prefix));
 }
 
