@@ -18,5 +18,9 @@
 	{
 		"driver": "drive-heddle-live-topics.mjs",
 		"shots": ["before-unclaimed.png", "after-mint-lit.png"]
+	},
+	{
+		"driver": "drive-ascii-file-touch.mjs",
+		"shots": ["before-root-file-touch.png", "after-file-touch.png"]
 	}
 ]

@@ -383,6 +383,7 @@ export function cameraCenterFor(
 interface NodeAux {
 	campCommits: Map<PlaceId, number>;
 	forgeCounts: Map<string, string>;
+	boundaryTouchNodes: Set<PlaceId>;
 }
 
 function nodeText(
@@ -392,15 +393,16 @@ function nodeText(
 	now: number | undefined,
 	aux?: NodeAux
 ): string | null {
+	const lit = aux?.boundaryTouchNodes?.has(node.id) ?? false;
 	switch (node.kind) {
 		case 'repo-root': {
 			const short = node.label.includes('/') ? node.label.split('/').pop()! : node.label;
 			return `⌂ ${level === 'atlas' ? node.label : short}`;
 		}
 		case 'directory':
-			return `${foldDirLabel(node.label, MAX_DIR_LABEL_CHARS - 1)}/`;
+			return `${lit ? '∙ ' : ''}${foldDirLabel(node.label, MAX_DIR_LABEL_CHARS - 1)}/`;
 		case 'file':
-			return `· ${node.label}`;
+			return `${lit ? '∙' : '·'} ${node.label}`;
 		case 'camp': {
 			// The camp is a branch off the trunk now — a tree child with its
 			// own canopy beneath it, so the row-clip governs its width like
@@ -409,7 +411,7 @@ function nodeText(
 			// forge; the suffix survives, the branch name gives way.
 			const commits = aux?.campCommits.get(node.id) ?? 0;
 			const suffix = commits > 0 ? ` +${commits}c` : '';
-			return `▛ ${clip(node.label, 24 - suffix.length)}${suffix}`;
+			return `${lit ? '∙ ' : ''}▛ ${clip(node.label, 24 - suffix.length)}${suffix}`;
 		}
 		case 'portal-rack':
 			return 'P';
@@ -856,7 +858,8 @@ export function renderWorld(
 			graph.islands
 				.map((i) => [i.label, countsLabel(i.forge ?? {})] as [string, string])
 				.filter(([, s]) => s.length > 0)
-		)
+		),
+		boundaryTouchNodes: topo.boundaryTouchNodes
 	};
 	const paintable = Object.values(topo.nodes)
 		.map((node) => ({ node, p: layout.nodes[node.id] }))

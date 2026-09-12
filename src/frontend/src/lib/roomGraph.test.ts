@@ -626,6 +626,43 @@ test('fileFromDetail reads the leaf and refuses the non-file', () => {
 	assert.equal(fileFromDetail(null), null);
 });
 
+test('the newest boundary resolves to its rendered file leaf, then moves to a directory', () => {
+	const run = liveRun({
+		run_id: 'r-boundary-light',
+		room: { env: 'worktree', branch: 'brr/light', dir: null },
+		edge: edge('orient', 'Read old.ts', { dir: 'src', at: '2026-08-26T10:10:00Z' }),
+		boundaries: [
+			edge('orient', 'Read AsciiField.svelte', {
+				dir: 'src/frontend/src/lib',
+				at: '2026-08-26T10:12:00Z'
+			})
+		]
+	});
+	const lit = compileTopology(compileRoomGraph(liveWire([run]), null));
+	const litNodes = [...lit.boundaryTouchNodes].map((id) => lit.nodes[id]);
+	assert.deepEqual(
+		litNodes.map((node) => [node.kind, node.label]),
+		[['file', 'AsciiField.svelte']]
+	);
+
+	const moved = compileTopology(
+		compileRoomGraph(
+			liveWire([
+				{
+					...run,
+					boundaries: [edge('orient', 'git status --short', { dir: 'src/frontend' })]
+				}
+			]),
+			null
+		)
+	);
+	const movedNodes = [...moved.boundaryTouchNodes].map((id) => moved.nodes[id]);
+	assert.deepEqual(
+		movedNodes.map((node) => [node.kind, node.label]),
+		[['directory', 'frontend']]
+	);
+});
+
 test('the empty world is a graph, not a crash', () => {
 	const graph = compileRoomGraph(null, null);
 	assert.deepEqual(graph.islands, []);
