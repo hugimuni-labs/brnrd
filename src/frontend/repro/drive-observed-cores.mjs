@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { mkdir } from 'node:fs/promises';
 import * as fixtures from './fixtures.mjs';
-import { closeBrowser, stopVite, runDriver } from './finish.mjs';
+import { closeBrowser, stopVite, runDriver, exerciseRecorder } from './finish.mjs';
 
 const args = process.argv.slice(2);
 const arg = (f) => {
@@ -158,6 +158,11 @@ async function waitForServer(url, tries = 90) {
 
 async function main() {
 	await mkdir(OUT, { recursive: true });
+	// Which source modules actually run while these shots are taken, so the
+	// PR comment can say whether this check looked at the change under
+	// review instead of putting a green tick on a surface nobody opened
+	// (#1944).
+	const modules = exerciseRecorder();
 	const vite = spawn('npx', ['vite', 'dev', '--port', String(PORT), '--strictPort'], {
 		stdio: ['ignore', 'pipe', 'pipe']
 	});
@@ -172,7 +177,7 @@ async function main() {
 				viewport: { width: vp.width, height: vp.height },
 				deviceScaleFactor: 2
 			});
-			const page = await ctx.newPage();
+			const page = await modules.watch(await ctx.newPage(), 'drive-observed-cores');
 			await page.route('**/v1/dashboard/**', async (route) => {
 				const body = ROUTES[new URL(route.request().url()).pathname];
 				await route.fulfill({
@@ -213,8 +218,10 @@ async function main() {
 					title: b.title
 				}))
 			);
+			await modules.harvest(page, 'drive-observed-cores');
 			await ctx.close();
 		}
+		await modules.save(OUT, 'drive-observed-cores');
 		await closeBrowser(browser, 'drive-observed-cores');
 	} finally {
 		stopVite(vite, 'drive-observed-cores');

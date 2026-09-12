@@ -4,6 +4,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { classifyCoverage, coverageHeadline, renderCoverage } from './shot-coverage.mjs';
 
 const [command, ...args] = process.argv.slice(2);
 const value = (name, fallback = null) => {
@@ -151,10 +152,56 @@ if (command === 'capture') {
 		'https://raw.githubusercontent.com/hugimuni-labs/brnrd/shots/pr-PLACEHOLDER/SHA'
 	);
 	const url = (path) => `${urlBase}/${path.split('/').map(encodeURIComponent).join('/')}`;
+
+	// Did this check look at what the PR changed? (#1944)
+	//
+	// Two inputs, both receipts rather than beliefs: the files the PR touched
+	// under `src/frontend`, and the source modules each captured page actually
+	// fetched from the dev server while its shots were taken. The second is
+	// written by `moduleRecorder` beside the shots; a driver that produced no
+	// record contributes nothing, and if *no* driver produced one the verdict
+	// is `unknown` rather than a confident accusation from an empty set.
+	const changedFile = value('--changed');
+	const changed =
+		changedFile && existsSync(changedFile)
+			? readFileSync(changedFile, 'utf8')
+					.split('\n')
+					.map((line) => line.trim())
+					.filter(Boolean)
+			: [];
+	const afterDir = value('--after');
+	const exercised = new Set();
+	const loaded = new Set();
+	let records = 0;
+	if (afterDir)
+		for (const entry of manifest()) {
+			const record = join(resolve(afterDir), entry.driver.replace(/\.mjs$/, ''), 'modules.json');
+			if (!existsSync(record)) continue;
+			try {
+				const parsed = JSON.parse(readFileSync(record, 'utf8'));
+				for (const file of parsed.exercised ?? []) exercised.add(file);
+				for (const file of parsed.loaded ?? []) loaded.add(file);
+				records += 1;
+			} catch (err) {
+				process.stderr.write(`[ci-shots] unreadable module record ${record}: ${err.message}\n`);
+			}
+		}
+	const allIdentical = summary.drivers.every((driver) =>
+		driver.shots.filter((shot) => shot.status === 'diffed').every((shot) => shot.pixels === 0)
+	);
+	const coverage = classifyCoverage({
+		changed,
+		exercised: [...exercised],
+		loaded: [...loaded],
+		coverageKnown: records > 0
+	});
+	const headline = coverageHeadline(coverage, { allIdentical });
+
 	const lines = [
 		'<!-- ui-shots -->',
 		'## UI screenshots',
 		'',
+		...(headline ? [headline, ''] : []),
 		`Head: \`${sha}\` · merge-base: \`${base}\``,
 		''
 	];
@@ -187,58 +234,13 @@ if (command === 'capture') {
 		for (const shot of driver.shots.filter((item) => item.status === 'skipped'))
 			lines.push(`_Skipped \`${driver.driver}\` / ${shot.shot}: ${shot.reason}._`, '');
 
-	// What this check did *not* look at (#1944).
-	//
-	// Measured on #1938: that PR rewrote a render condition in
-	// `RunLedgerReceipt.svelte` that was putting a green "matches the
-	// configured core pin" tick on runs which had changed Runner mid-flight.
-	// This job fired, compared its five pairs, and reported every one
-	// `unchanged | unchanged | 0 px changed` — correctly, because no driver in
-	// the manifest opens the run-ledger receipt. A reviewer reads that table
-	// as *the UI did not change*. The truth was *nothing looked*.
-	//
-	// So the table always says which surfaces it is a statement about, and
-	// when every pair is identical it says so in those words. No import-graph
-	// analysis: the reader is given the two lists — what changed, what was
-	// compared — and can draw the conclusion in one glance, which is more
-	// than a green check ever offered.
-	const covered = summary.drivers.flatMap((driver) =>
+	const surfaces = summary.drivers.flatMap((driver) =>
 		driver.shots
 			.filter((shot) => shot.status === 'diffed')
 			.map((shot) => `\`${driver.driver.replace(/\.mjs$/, '')}/${shot.shot}\``)
 	);
-	const changedFile = value('--changed');
-	const changed =
-		changedFile && existsSync(changedFile)
-			? readFileSync(changedFile, 'utf8')
-					.split('\n')
-					.map((l) => l.trim())
-					.filter(Boolean)
-			: [];
-	if (covered.length) {
-		const allIdentical = summary.drivers.every((driver) =>
-			driver.shots.filter((shot) => shot.status === 'diffed').every((shot) => shot.pixels === 0)
-		);
-		lines.push('<details><summary>What this compared, and what it could not see</summary>', '');
-		lines.push(`**Surfaces compared (${covered.length}):** ${covered.join(' · ')}`, '');
-		if (changed.length)
-			lines.push(
-				`**Frontend files changed (${changed.length}):**`,
-				...changed.map((file) => `- \`${file}\``),
-				''
-			);
-		if (allIdentical)
-			lines.push(
-				'**Every compared pair is identical.** That means no *captured*',
-				'surface changed — not that no surface changed. A component that',
-				'renders on none of the surfaces above is invisible to this check,',
-				'and the green tick above is not a statement about it. If your',
-				'change is one of those, say what you looked at and judged in the',
-				'PR instead (`workflow.md` §Orchestration), or add a driver.',
-				''
-			);
-		lines.push('</details>', '');
-	}
+	if (surfaces.length || changed.length)
+		lines.push(...renderCoverage(coverage, { surfaces, allIdentical }));
 
 	if (!pairs) process.exit(0);
 	const output = value('--output');
