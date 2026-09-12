@@ -57,7 +57,11 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           node repro/ci-shots.mjs diff --before "$RUNNER_TEMP/ui-shots/before" --after "$RUNNER_TEMP/ui-shots/after" --out "$RUNNER_TEMP/ui-shots/diff" --output "$RUNNER_TEMP/ui-shots/summary.json"
-          node repro/ci-shots.mjs comment --summary "$RUNNER_TEMP/ui-shots/summary.json" --base "$BASE_SHA" --sha "$PR_SHA" --url-base "https://raw.githubusercontent.com/$REPOSITORY/shots/pr-$PR_NUMBER/$PR_SHA" --output "$RUNNER_TEMP/ui-shots/comment.md"
+          # The changed frontend files, so the comment can name what it did
+          # *not* look at (#1944): five identical pairs read as "the UI did not
+          # change" when the honest sentence is "no captured surface did".
+          git diff --name-only "$BASE_SHA" "$PR_SHA" -- . > "$RUNNER_TEMP/ui-shots/changed.txt" || true
+          node repro/ci-shots.mjs comment --summary "$RUNNER_TEMP/ui-shots/summary.json" --base "$BASE_SHA" --sha "$PR_SHA" --changed "$RUNNER_TEMP/ui-shots/changed.txt" --url-base "https://raw.githubusercontent.com/$REPOSITORY/shots/pr-$PR_NUMBER/$PR_SHA" --output "$RUNNER_TEMP/ui-shots/comment.md"
       - name: Upload screenshot artifact
         uses: actions/upload-artifact@v4
         with:

@@ -146,6 +146,60 @@ if (command === 'capture') {
 	for (const driver of summary.drivers)
 		for (const shot of driver.shots.filter((item) => item.status === 'skipped'))
 			lines.push(`_Skipped \`${driver.driver}\` / ${shot.shot}: ${shot.reason}._`, '');
+
+	// What this check did *not* look at (#1944).
+	//
+	// Measured on #1938: that PR rewrote a render condition in
+	// `RunLedgerReceipt.svelte` that was putting a green "matches the
+	// configured core pin" tick on runs which had changed Runner mid-flight.
+	// This job fired, compared its five pairs, and reported every one
+	// `unchanged | unchanged | 0 px changed` — correctly, because no driver in
+	// the manifest opens the run-ledger receipt. A reviewer reads that table
+	// as *the UI did not change*. The truth was *nothing looked*.
+	//
+	// So the table always says which surfaces it is a statement about, and
+	// when every pair is identical it says so in those words. No import-graph
+	// analysis: the reader is given the two lists — what changed, what was
+	// compared — and can draw the conclusion in one glance, which is more
+	// than a green check ever offered.
+	const covered = summary.drivers.flatMap((driver) =>
+		driver.shots
+			.filter((shot) => shot.status === 'diffed')
+			.map((shot) => `\`${driver.driver.replace(/\.mjs$/, '')}/${shot.shot}\``)
+	);
+	const changedFile = value('--changed');
+	const changed =
+		changedFile && existsSync(changedFile)
+			? readFileSync(changedFile, 'utf8')
+					.split('\n')
+					.map((l) => l.trim())
+					.filter(Boolean)
+			: [];
+	if (covered.length) {
+		const allIdentical = summary.drivers.every((driver) =>
+			driver.shots.filter((shot) => shot.status === 'diffed').every((shot) => shot.pixels === 0)
+		);
+		lines.push('<details><summary>What this compared, and what it could not see</summary>', '');
+		lines.push(`**Surfaces compared (${covered.length}):** ${covered.join(' · ')}`, '');
+		if (changed.length)
+			lines.push(
+				`**Frontend files changed (${changed.length}):**`,
+				...changed.map((file) => `- \`${file}\``),
+				''
+			);
+		if (allIdentical)
+			lines.push(
+				'**Every compared pair is identical.** That means no *captured*',
+				'surface changed — not that no surface changed. A component that',
+				'renders on none of the surfaces above is invisible to this check,',
+				'and the green tick above is not a statement about it. If your',
+				'change is one of those, say what you looked at and judged in the',
+				'PR instead (`workflow.md` §Orchestration), or add a driver.',
+				''
+			);
+		lines.push('</details>', '');
+	}
+
 	if (!pairs) process.exit(0);
 	const output = value('--output');
 	if (output) writeFileSync(output, `${lines.join('\n')}\n`);
