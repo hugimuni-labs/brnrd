@@ -96,8 +96,15 @@ jobs:
             git worktree add -b shots "$SHOTS_DIR" origin/shots
           else
             git worktree add --detach "$SHOTS_DIR" HEAD
+            # `switch --orphan` already empties the index *and* the working
+            # tree, so the `git rm -rf .` that used to follow it had nothing to
+            # match and exited 128 under `bash -e`. That is why the `shots`
+            # branch has never existed, why the publish step has never
+            # succeeded, and why no `ui-shots` comment has ever been posted —
+            # a first-run bug in a bootstrap that had, by construction, only
+            # ever had first runs.
             git -C "$SHOTS_DIR" switch --orphan shots
-            git -C "$SHOTS_DIR" rm -rf .
+            git -C "$SHOTS_DIR" rm -rf . --ignore-unmatch --quiet || true
           fi
           # Closed PR folders are disposable; an API failure must not block a review.
           for number in $(gh api --paginate 'repos/'"$GITHUB_REPOSITORY"'/pulls?state=closed&per_page=100' --jq '.[].number' 2>/dev/null || true); do
@@ -109,7 +116,9 @@ jobs:
           cp -R "$RUNNER_TEMP/ui-shots/diff" "$SHOTS_DIR/pr-$PR_NUMBER/$PR_SHA/diff"
           git -C "$SHOTS_DIR" add -A
           git -C "$SHOTS_DIR" diff --cached --quiet || git -C "$SHOTS_DIR" -c user.name=github-actions[bot] -c user.email=41898282+github-actions[bot] commit -m "chore: publish UI shots for PR #$PR_NUMBER"
-          git -C "$SHOTS_DIR" push origin shots
+          # `-u` so the first publish creates the remote branch rather than
+          # pushing to a ref that does not exist yet.
+          git -C "$SHOTS_DIR" push -u origin shots
       - name: Upsert PR comment
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
