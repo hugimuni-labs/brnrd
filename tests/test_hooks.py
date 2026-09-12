@@ -7442,6 +7442,82 @@ def test_linger_still_asks_even_when_the_seat_parks(tmp_path):
     assert "lingers by default" in out["reason"]
 
 
+# ── The room, not the doorbell (`run-260912-0824-cicv`, 2026-09-12) ──────
+#
+# `linger` used to be armed by the daemon only for a `source: cloud` wake, so
+# the one shape it could never catch was a schedule tick that acquired a live
+# human halfway through its turn. That run sent the maintainer four chat
+# replies and then closed on an honest `done — clean handoff`, with `vigil`
+# (which only reads a *continuation claim*) correctly silent and `linger`
+# never armed. The arming is unconditional for a seat now, and these are the
+# tests for the discrimination that replaced it, which reads portal-state at
+# Stop instead of guessing from the wake source.
+
+
+def _portal_unaddressed(tmp_path, *, resources=None, **kw):
+    """A schedule wake: no gate owns the current event, nobody to answer."""
+    _portal(tmp_path, token="t1", pending=0, current_event_replyable=False,
+            resources=_coexisting() if resources is None else resources, **kw)
+    env = _env(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "linger"
+    return env
+
+
+def test_linger_stays_silent_on_a_tick_with_nobody_in_the_room(tmp_path):
+    """The half that keeps the widened arming honest: an unaddressed wake that
+    never spoke to anyone has no linger to ask for, and a guard that fires
+    there is a guard that stops being read."""
+    env = _portal_unaddressed(tmp_path)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out.get("decision") != "block", out
+
+
+def test_linger_reaches_a_schedule_run_that_spoke_to_a_person(tmp_path):
+    """The 08:55 shape exactly: unaddressed wake, replies sent to a chat
+    thread that is not the waking event's. Before this, nothing was armed."""
+    env = _portal_unaddressed(tmp_path, outbound={
+        "replies_current": 0, "replies_other": 4, "outbound_messages": 0,
+    })
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out["decision"] == "block"
+    assert "lingers by default" in out["reason"]
+
+
+def test_linger_reads_an_attached_correspondent_as_a_room(tmp_path):
+    """A correspondent reading is published only when one is attached, so it
+    is a room even before this run has said anything into it."""
+    resources = dict(_coexisting())
+    resources["correspondent"] = {
+        "kind": "state", "status": "known", "quiet_seconds": 42.0,
+        "summary": "quiet 1m", "unread_count": 0,
+    }
+    env = _portal_unaddressed(tmp_path, resources=resources)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out["decision"] == "block"
+
+
+def test_linger_reads_an_absent_correspondent_as_no_room(tmp_path):
+    """`status: absent` is the daemon saying it looked and found nobody —
+    the opposite of a missing key, and it must not read as a room."""
+    resources = dict(_coexisting())
+    resources["correspondent"] = {
+        "kind": "state", "status": "absent", "summary": None,
+    }
+    env = _portal_unaddressed(tmp_path, resources=resources)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out.get("decision") != "block", out
+
+
+def test_linger_room_survives_an_unreadable_portal_as_silence(tmp_path):
+    """Unassertable ⇒ silent, the module's standing doctrine — and the
+    conservative direction: a missed linger costs one cold boot, a false one
+    costs the guard's credibility."""
+    assert hooks._has_live_counterpart(None) is False
+    assert hooks._has_live_counterpart({}) is False
+    assert hooks._has_live_counterpart({"outbound": "not-a-dict"}) is False
+    assert hooks._has_live_counterpart({"outbound": {"replies_other": "x"}}) is False
+
+
 def test_vigil_has_nothing_to_ask_when_the_seat_parks(tmp_path):
     env = _armed_vigil(tmp_path)
     _portal_seat_parks(tmp_path)

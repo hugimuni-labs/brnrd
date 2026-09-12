@@ -5231,6 +5231,57 @@ def _strand_hold_clause(payload: dict[str, Any], portal: dict[str, Any]) -> str 
     )
 
 
+def _has_live_counterpart(portal: dict[str, Any] | None) -> bool:
+    """Whether a person is on the other end of this run — read, never inferred.
+
+    The `linger` obligation used to be armed off the *wake source*
+    (``source == "cloud"``), which answered a question about the room by
+    looking at the doorbell. `run-260912-0824-cicv` is the receipt: woken by
+    the schedule, it sent the maintainer four chat replies and then closed its
+    turn with no clause armed to stop it, because a schedule tick is by
+    definition not a cloud wake. The room is a *run-time* fact, so it is read
+    here, at Stop, from the daemon's own projection.
+
+    Any one of three is a room:
+
+    - **a correspondent is attached** — the daemon publishes
+      ``resources.correspondent`` with a quiet-time reading only when one is;
+    - **this run spoke into a chat thread** — any reply counted in
+      ``outbound``, to the waking event or to another;
+    - **the waking event can be replied to** — ``inbound.current_event_replyable``,
+      which is the daemon's own answer to "is there someone to answer".
+
+    Unreadable portal state ⇒ ``False``, and the clause stays silent. That is
+    the module's standing doctrine (an unassertable obligation never blocks),
+    and it is also the conservative direction here: the cost of a missed
+    linger is one cold boot, the cost of a false one is a guard that fires on
+    runs with nobody to linger for, which is how a guard stops being read.
+    """
+    if not isinstance(portal, dict):
+        return False
+
+    resources = portal.get("resources")
+    if isinstance(resources, dict):
+        correspondent = resources.get("correspondent")
+        if isinstance(correspondent, dict) and correspondent.get("status") == "known":
+            return True
+
+    outbound = portal.get("outbound")
+    if isinstance(outbound, dict):
+        for key in ("replies_current", "replies_other", "outbound_messages"):
+            try:
+                if int(outbound.get(key) or 0) > 0:
+                    return True
+            except (TypeError, ValueError):
+                continue
+
+    inbound = portal.get("inbound")
+    if isinstance(inbound, dict) and inbound.get("current_event_replyable"):
+        return True
+
+    return False
+
+
 def _linger_closeout_clause(ctx: "HookContext") -> str | None:
     """Require a completed linger, or an explicit reason for skipping it.
 
@@ -5242,15 +5293,24 @@ def _linger_closeout_clause(ctx: "HookContext") -> str | None:
     exists (unexpected-turn-end parking is preserved as a safety net, never
     a deliberate substitute for `brnrd await`) — it just no longer excuses
     a live conversation from being told to hold it open.
+
+    2026-09-12: the obligation is now armed for every non-strand seat, not
+    only a `source: cloud` one, so *this* function is what decides whether a
+    room exists — see :func:`_has_live_counterpart`. The gate moved from the
+    wake source to the state at Stop because that is where the answer lives:
+    a schedule tick can acquire a live human halfway through its turn, and
+    dispatch cannot know that yet.
     """
     if ctx.outbox_dir is None or _linger_opted_out(ctx):
         return None
     portal = _read_json(ctx.portal_state_path)
+    if not _has_live_counterpart(portal):
+        return None
     await_state = portal.get("await") if isinstance(portal.get("await"), dict) else {}
     if await_state.get("armed") and await_state.get("resolved"):
         return None
     return (
-        "no completed portal wait records the linger. A cloud conversation "
+        "no completed portal wait records the linger. A conversation "
         "lingers by default: deliver first, "
         "run `brnrd await` — hold until the next reply; close only when a "
         "wait resolves quiet at a configured horizon or the correspondent "
