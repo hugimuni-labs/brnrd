@@ -142,6 +142,10 @@ export interface LiveRun {
 	 *  detail summary (secrets masked at write time, hooks._tool_detail),
 	 *  response bytes, and whether the daemon injected context there. */
 	edge?: LiveRunEdge | null;
+	/** The bounded, newest-first boundary ledger tail for this live run.
+	 * It is the same redacted projection as `edge`/`crossings`, sourced from
+	 * the local daemon's `boundaries.jsonl` through the live-runs snapshot. */
+	boundaries?: LiveRunEdge[] | null;
 	/** THE CROSSINGS — the boundaries that carried an injection, newest first,
 	 *  bounded daemon-side at 8 (`cloud_publisher._CROSSINGS_MAX`).
 	 *

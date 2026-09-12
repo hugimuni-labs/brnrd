@@ -1966,6 +1966,12 @@ def _wire_injection(inject: object) -> str | None:
 #: run louder than eight per tick has already lost the reader's attention.
 _CROSSINGS_MAX = 8
 
+#: The live dashboard needs the shuttle's recent path, not merely the last
+#: edge it happened to poll or the subset that carried an injection.  Keep
+#: the same already-redacted projection as those two existing views and a
+#: small, bounded tail so one lively run cannot dominate its live-runs packet.
+_BOUNDARIES_MAX = 16
+
 
 def _boundary_records(brr_dir: Path, run_id: str) -> list[dict[str, Any]]:
     """Attested boundaries from a bounded transcript tail, newest first.
@@ -2061,6 +2067,23 @@ def _crossings_payload(
         if len(out) >= _CROSSINGS_MAX:
             break
     return out
+
+
+def _boundaries_payload(
+    brr_dir: Path, run_id: str, manifest: Mapping[str, Any] | None = None
+) -> list[dict[str, Any]]:
+    """Recent boundary ledger rows, newest first, for the live dashboard.
+
+    This is deliberately a projection of the local ``boundaries.jsonl`` tail,
+    not a second collection path.  ``_boundary_row`` is already the wire-safe
+    boundary shape used by ``edge`` and ``crossings``: details are redacted and
+    bounded, injection text is collapsed and bounded, and working directories
+    are relative to the run tree.
+    """
+    return [
+        _boundary_row(record, brr_dir, manifest)
+        for record in _boundary_records(brr_dir, run_id)[:_BOUNDARIES_MAX]
+    ]
 
 
 def _await_facet(brr_dir: Path, manifest: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -2350,6 +2373,10 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
                 "await_until": await_until,
                 "room": _room_payload(source_brr_dir, manifest) if manifest else None,
                 "edge": _edge_payload(source_brr_dir, run_id, manifest),
+                # The shuttle's actual recent path.  `edge` is a cursor and
+                # `crossings` filters to injected boundaries; neither can let
+                # a local dashboard watch every boundary the daemon recorded.
+                "boundaries": _boundaries_payload(source_brr_dir, run_id, manifest),
                 # The crossings themselves, not the cursor. `edge` is whichever
                 # boundary is current; this is the bounded tail of the ones that
                 # actually carried a letter, so a ceremony can ride the crossing

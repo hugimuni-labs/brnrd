@@ -1320,7 +1320,10 @@ def test_dashboard_live_runs_api_round_trips_claimed_topics():
                 [
                     {"id": "pres-t", "kind": "daemon", "stream": "telegram:x:",
                      "run_id": "run-threaded", "repo_label": "Gurio/brr",
-                     "topics": ["the-loom", "the-post"]},
+                     "topics": ["the-loom", "the-post"],
+                     "boundaries": [{"at": "2026-09-12T16:00:00Z", "phase": "tool",
+                                     "act": "read", "tools": ["exec_command"],
+                                     "detail": "rg live-runs", "injected": False}]},
                     {"id": "pres-u", "kind": "daemon", "stream": "telegram:y:",
                      "run_id": "run-unclaimed", "repo_label": "Gurio/brr"},
                 ]
@@ -1334,6 +1337,10 @@ def test_dashboard_live_runs_api_round_trips_claimed_topics():
     assert r.status_code == 200
     rows = {row["run_id"]: row for row in r.json()["runs"]}
     assert rows["run-threaded"]["topics"] == ["the-loom", "the-post"]
+    assert rows["run-threaded"]["boundaries"] == [
+        {"at": "2026-09-12T16:00:00Z", "phase": "tool", "act": "read",
+         "tools": ["exec_command"], "detail": "rg live-runs", "injected": False}
+    ]
     # A snapshot stored before this field existed serves no key at all;
     # a validated unclaimed row serves []. Both read as "no claim" — the
     # frontend type is optional for exactly this reason.
@@ -1344,10 +1351,12 @@ def test_dashboard_live_runs_api_round_trips_claimed_topics():
     # stored-snapshot passthrough above.
     from brnrd import schemas as _schemas
 
-    intake = _schemas.isolate_live_runs(
-        [{"id": "pres-w", "run_id": "run-w", "topics": ["the-loom"]}]
-    )
+    intake = _schemas.isolate_live_runs([{
+        "id": "pres-w", "run_id": "run-w", "topics": ["the-loom"],
+        "boundaries": [{"phase": "tool", "act": "read"}],
+    }])
     assert intake.runs[0].topics == ["the-loom"]
+    assert intake.runs[0].boundaries[0].act == "read"
     assert _schemas.isolate_live_runs([{"id": "pres-x", "run_id": "run-x"}]).runs[0].topics == []
 
 

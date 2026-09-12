@@ -29,7 +29,8 @@
 	let data = $state<SurfaceResponse | null>(null);
 	let error = $state<string | null>(null);
 	let unauthenticated = $state(false);
-	let liveRunIds = $state<ReadonlySet<string>>(new Set());
+	let liveRuns = $state<Array<{ run_id: string; id: string; topics?: string[] | null }>>([]);
+	let liveRunIds = $derived(new Set(liveRuns.map((run) => run.run_id || run.id)));
 	let tab = $state<'live' | 'completed'>('live');
 	let selected = $state<Set<string> | null>(null);
 
@@ -38,11 +39,15 @@
 	let threads = $derived(topicThreads(graph));
 	let counts = $derived(topicCounts(graph));
 	let weavingTopics = $derived(
-		new Set(
-			weavingRows(graph, liveRunIds)
+		new Set([
+			...weavingRows(graph, liveRunIds)
 				.map((row) => row.callSign)
-				.filter(Boolean)
-		)
+				.filter(Boolean),
+			...liveRuns
+				.flatMap((run) => run.topics ?? [])
+				.map((slug) => graph.topicByAlias.get(slug)?.canonicalId)
+				.filter((slug): slug is string => Boolean(slug))
+		])
 	);
 	let completed = $derived(
 		completedItems(graph).filter((item) => itemInTopics(item, graph, selected))
@@ -72,7 +77,7 @@
 		}
 		try {
 			const live = await fetchLiveRuns();
-			liveRunIds = new Set(live.runs.map((run) => run.run_id || run.id));
+			liveRuns = live.runs;
 		} catch (e) {
 			// Live framing is a supplement — the item space reads fine without
 			// it, and a 401 is already carried by the surface fetch.
