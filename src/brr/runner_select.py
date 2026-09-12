@@ -399,6 +399,8 @@ def automatic_fallback_runner(
     current: str,
     failure_kind: str | None,
     tried: list[str] | tuple[str, ...] = (),
+    quota_pct: "dict[str, float] | None" = None,
+    starve_floor_pct: float | None = None,
 ) -> RunnerProfile | None:
     """Pick the next local Runner after an operational failure.
 
@@ -411,9 +413,36 @@ def automatic_fallback_runner(
       the **nearest** one to the failed Runner's own class wins — a fallback is
       a substitute for the failed Core, not a demotion to whatever is cheapest;
     - provider outages require a different provider, while quota/auth failures
-      require a different failure domain (quota source first, provider second).
+      require a different failure domain (quota source first, provider second);
+    - a candidate whose own binding quota reads *below the floor at which a
+      seat parks for starvation* is not a fallback at all, and is dropped.
 
-    Returns ``None`` when no conservative local fallback exists.
+    The last rule is #1931, and it is the one with a receipt. On 2026-09-11 a
+    claude 401 at ``19:19:17Z`` fell through to ``codex-gpt-5.6-sol``, whose
+    weekly window read **1%**; fourteen minutes later that same reading armed
+    a ``quota_starved`` hold and the seat parked. Every filter above passed —
+    different failure domain, same class, capable — because none of them
+    asked the one question that decided the outcome: *can this Runner finish
+    a run?* A substitute that parks on arrival is a slower way to fail.
+
+    ``quota_pct`` maps a **shell** to its binding remaining percent (the
+    minimum across that shell's windows). A shell with no reading is not in
+    the map and is treated as viable — unknown stays unknown and is never
+    fabricated into either a healthy or an exhausted label (#632 standing
+    decision 2). Omit the argument entirely and this rule does not run, which
+    is what every existing caller and test gets.
+
+    Deliberately a filter and not a ranking: among candidates that *can*
+    finish, the nearest-class rule above already decides, and re-sorting those
+    by remaining quota would quietly demote a capable Core for a cheaper one
+    with a fuller tank — the escalation-by-the-back-door this function exists
+    to prevent. Quota answers viability, not preference.
+
+    Returns ``None`` when no conservative local fallback exists — including
+    when every candidate is starved. That ``None`` reaches the daemon's
+    give-up branch, which carries the real failure to the correspondent; a
+    doomed fallback would have buried it under a second death fourteen
+    minutes later.
     """
     if failure_kind not in AUTO_FALLBACK_FAILURES:
         return None
@@ -461,7 +490,47 @@ def automatic_fallback_runner(
 
     if not candidates:
         return None
+
+    if quota_pct:
+        floor = (
+            _FALLBACK_STARVE_FLOOR_PCT_DEFAULT
+            if starve_floor_pct is None else float(starve_floor_pct)
+        )
+        viable = [
+            runner for runner in candidates
+            if _fallback_quota_viable(runner, quota_pct, floor)
+        ]
+        if not viable:
+            return None
+        candidates = viable
+
     return sorted(candidates, key=_by_fallback_capability(current_profile.class_rank))[0]
+
+
+#: Mirrors ``daemon.SEAT_STARVE_FLOOR_PCT_KEY``'s default. The daemon passes
+#: the configured value down; this constant only covers a caller that reads a
+#: quota map without one, so the two can never disagree in a live dispatch.
+_FALLBACK_STARVE_FLOOR_PCT_DEFAULT = 2.0
+
+
+def _fallback_quota_viable(
+    runner: RunnerProfile,
+    quota_pct: "dict[str, float]",
+    floor_pct: float,
+) -> bool:
+    """Can this Runner plausibly finish a run before its quota parks the seat?
+
+    ``True`` when there is no reading for its shell — the absence of a
+    measurement is not evidence of exhaustion, and refusing on it would make
+    a missing collector look like a dead provider.
+    """
+    shell = (runner.shell or "").strip()
+    if not shell or shell not in quota_pct:
+        return True
+    try:
+        return float(quota_pct[shell]) >= floor_pct
+    except (TypeError, ValueError):
+        return True
 
 
 def quality_escalation_runner(

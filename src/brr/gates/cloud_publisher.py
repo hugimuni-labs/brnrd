@@ -1145,6 +1145,45 @@ def quota_shell_labels(brr_dir: Path) -> dict[str, str | None]:
     return result
 
 
+def quota_shell_binding_pct(brr_dir: Path) -> dict[str, float]:
+    """The binding remaining percent per shell, as a number.
+
+    :func:`quota_shell_labels`'s sibling, and the reason it exists: that one
+    returns a *label* (``"82%"``, ``"exhausted, resets Jul 28"``) shaped for a
+    catalog row a human reads. A decision cannot be made on a label without
+    parsing prose back into a number, so the automatic-fallback path
+    (#1931) reads this instead.
+
+    "Binding" is the minimum across the shell's windows — a 5-hour window at
+    90% does not help when the weekly one reads 1%, which is precisely the
+    reading that armed a starvation hold fourteen minutes after a fallback
+    chose that shell on 2026-09-11.
+
+    Shells with no numeric reading are **omitted**, never defaulted: the
+    caller must treat a missing key as unknown rather than as healthy or as
+    exhausted (#632 standing decision 2). Errors are absorbed and return
+    ``{}`` — a quota collector that cannot answer must not be able to block a
+    dispatch.
+    """
+    try:
+        shells = _context().quota_snapshot(brr_dir)
+    except Exception:
+        return {}
+    result: dict[str, float] = {}
+    for shell_data in shells:
+        shell = str(shell_data.get("shell") or "").strip()
+        if not shell:
+            continue
+        percents = [
+            float(w["percent"])
+            for w in (shell_data.get("windows") or [])
+            if isinstance(w, dict) and isinstance(w.get("percent"), (int, float))
+        ]
+        if percents:
+            result[shell] = min(percents)
+    return result
+
+
 def _gate_health_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     """Configured ingestion paths, including quiet paths with no poll yet."""
     return runtime.gate_health_rows(brr_dir)
