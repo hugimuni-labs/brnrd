@@ -115,6 +115,53 @@ export const runLedger = {
 	span_seconds_served: 0
 };
 
+// A closed run that crossed the runner boundary during dispatch. The
+// fallback rewrites `core_expected` to the substitute, so `core_mismatch` is
+// deliberately false; `runner_substituted_from` is the load-bearing signal
+// that keeps the receipt from claiming the run matched its original author.
+// Kept separate from the empty default so ordinary repros remain unchanged.
+export const runLedgerFallback = {
+	generated_at: now,
+	rows: [
+		{
+			run_id: 'run-fallback-receipt',
+			event_id: 'evt-fallback-receipt',
+			started_at: '2026-08-12T22:10:00Z',
+			ended_at: '2026-08-12T22:30:10Z',
+			wall_clock_seconds: 1210,
+			runner_shell: 'codex',
+			runner_core: 'gpt-5.6-luna',
+			core_expected: 'gpt-5.6-luna',
+			core_mismatch: false,
+			substitution_reason: 'dispatch fallback: claude-opus -> codex-gpt-5.6-luna after auth_error',
+			runner_substituted_from: 'claude-opus',
+			repo_label: 'hugimuni-labs/brnrd',
+			source_system: 'telegram',
+			name: 'the fallback that still finished',
+			external_refs: [
+				{ kind: 'summary', text: 'fallback completed with the substitute runner' },
+				{ kind: 'commit', sha: 'a8b92c4d42' },
+				{ kind: 'branch', name: 'brr/the-fallback-that-still-finished' }
+			],
+			parent_run_id: null,
+			is_subspawn: false,
+			tokens_input: 18400,
+			tokens_output: 2100,
+			tokens_cache_read: 7200,
+			tokens_cache_creation: 400,
+			context_window_used: 18.2,
+			weekly_pct_delta: 1.4,
+			five_hour_pct_delta: 3.1,
+			usd_subscription_attributed: 0.42,
+			usd_credits_equivalent: null,
+			estimate_vs_actual: null
+		}
+	],
+	stale: false,
+	reported_at: now,
+	span_seconds_served: 7 * 24 * 60 * 60
+};
+
 // Six topics (matches the evidence photo's six heddle glyphs), and ~49 warp
 // items split decision/preparation so the cloth list is long enough to
 // scroll several viewport-heights on a 390x844 layout — the repro's whole
