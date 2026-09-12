@@ -1,0 +1,43 @@
+{
+  "root": "/home/runner/work/brnrd/brnrd/src/frontend",
+  "drivers": [
+    {
+      "driver": "drive-fuel.mjs",
+      "shots": [
+        "phone-1-deck.png",
+        "desktop-1-deck.png"
+      ],
+      "status": "captured",
+      "out": "/home/runner/work/_temp/ui-shots/after/drive-fuel",
+      "stdout": "{\n \"width\": \"phone\",\n \"gaugeHeight\": 140,\n \"rows\": [\n  {\n   \"text\": \"claude | 5h | 12% | ▾ | ↻0m | week | 33% | fable/week | 4%\",\n   \"fills\": 1,\n   \"ghosts\": 0,\n   \"height\": 34\n  },\n  {\n   \"text\": \"codex | week | 81% | ▸ | ↻0m | 5h | 95%\",\n   \"fills\": 1,\n   \"ghosts\": 0,\n   \"height\": 34\n  }\n ],\n \"deckAfterOpen\": 85,\n \"resourcesBefore\": \"claude · windows\",\n \"resourcesAfter\": \"codex · windows\",\n \"openRows\": 1,\n \"settingsHasRack\": false,\n \"cursorHolds\": true,\n \"allowanceChip\": \"Fable STRONG claude-fable 4% allowance\"\n}\n{\n \"width\": \"desktop\",\n \"gaugeHeight\": 140,\n \"rows\": [\n  {\n   \"text\": \"claude | 5h | 12% | ▾ | ↻0m | week | 33% | fable/week | 4%\",\n   \"fills\": 1,\n   \"ghosts\": 0,\n   \"height\": 34\n  },\n  {\n   \"text\": \"codex | week | 81% | ▸ | ↻0m | 5h | 95%\",\n   \"fills\": 1,\n   \"ghosts\": 0,\n   \"height\": 34\n  }\n ],\n \"deckAfterOpen\": 85,\n \"resourcesBefore\": \"claude · windows\",\n \"resourcesAfter\": \"codex · windows\",\n \"openRows\": 1,\n \"settingsHasRack\": false,\n \"cursorHolds\": true,\n \"allowanceChip\": \"Fable STRONG claude-fable 4% allowance\"\n}\nshots → /home/runner/work/_temp/ui-shots/after/drive-fuel\n"
+    },
+    {
+      "driver": "drive-locked-shell.mjs",
+      "shots": [
+        "phone-2-open-claude.png"
+      ],
+      "status": "captured",
+      "out": "/home/runner/work/_temp/ui-shots/after/drive-locked-shell",
+      "stdout": "{\n  \"providerRows\": [\n    \"claude · week · 41% · ▸ · ↻0m · auth failed 05:06Z · sign in · 5h · 100% · fable/week · 23%\",\n    \"codex · week · 53% · ▸ · ↻2d23h · 5h · 100%\"\n  ],\n  \"rackRows\": [\n    {\n      \"text\": \"claude picks its own core BALANCED\",\n      \"disabled\": false,\n      \"title\": \"claude: auth failed 05:06Z on claude-sonnet — sign in again, then tap — the wake re-checks the credential\"\n    },\n    {\n      \"text\": \"Haiku ECONOMY claude-haiku\",\n      \"disabled\": false,\n      \"title\": \"claude-haiku: auth failed 05:06Z on claude-sonnet — sign in again, then tap — the wake re-checks the credential\"\n    },\n    {\n      \"text\": \"Sonnet BALANCED claude-sonnet\",\n      \"disabled\": false,\n      \"title\": \"claude-sonnet: auth failed 05:06Z on claude-sonnet — sign in again, then tap — the wake re-checks the credential\"\n    },\n    {\n      \"text\": \"Opus STRONG claude-opus\",\n      \"disabled\": false,\n      \"title\": \"claude-opus: auth failed 05:06Z on claude-sonnet — sign in again, then tap — the wake re-checks the credential\"\n    },\n    {\n      \"text\": \"Fable STRONG claude-fable 23% allowance\",\n      \"disabled\": false,\n      \"title\": \"claude-fable: auth failed 05:06Z on claude-sonnet — sign in again, then tap — the wake re-checks the credential\"\n    }\n  ]\n}\n"
+    },
+    {
+      "driver": "drive-observed-cores.mjs",
+      "shots": [
+        "phone-2-claude-cores.png",
+        "phone-3-codex-cores.png"
+      ],
+      "status": "captured",
+      "out": "/home/runner/work/_temp/ui-shots/after/drive-observed-cores",
+      "stdout": "{\n  \"providerRows\": [\n    \"claude · week · 41% · ▸ · ↻0m · 5h · 100% · fable/week · 23%\",\n    \"codex · week · 53% · ▸ · ↻2d23h · 5h · 100%\"\n  ],\n  \"offCount\": \"2 off ▸\",\n  \"rackRows\": [\n    {\n      \"text\": \"codex picks its own core BALANCED\",\n      \"disabled\": false,\n      \"title\": \"next wake on codex — one wake, cancelable until it fires\"\n    },\n    {\n      \"text\": \"GPT-5.6-Luna ECONOMY codex-mini\",\n      \"disabled\": false,\n      \"title\": \"next wake on codex-mini — one wake, cancelable until it fires\"\n    },\n    {\n      \"text\": \"GPT-5.6-Sol STRONG codex-full\",\n      \"disabled\": false,\n      \"title\": \"next wake on codex-full — one wake, cancelable until it fires\"\n    },\n    {\n      \"text\": \"GPT-6-Astra STRONG codex-gpt-6-astra\",\n      \"disabled\": false,\n      \"title\": \"next wake on codex-gpt-6-astra — one wake, cancelable until it fires\"\n    }\n  ]\n}\n"
+    },
+    {
+      "driver": "drive-run-ledger.mjs",
+      "shots": [
+        "phone-1-run-ledger-receipt.png"
+      ],
+      "status": "captured",
+      "out": "/home/runner/work/_temp/ui-shots/after/drive-run-ledger",
+      "stdout": "{\n  \"viewport\": {\n    \"width\": 390,\n    \"height\": 844,\n    \"deviceScaleFactor\": 2\n  },\n  \"receiptText\": \"hugimuni-labs/brnrd ·  · codex · gpt-5.6-luna ⚙ fell back from claude-opus ·  · dispatch fallback: claude-opus -> codex-gpt-5.6-luna after auth_error ·  · started 8/12/2026, 10:10:00 PM ·  · ended 8/12/2026, 10:30:10 PM ·  · WALL ·  · 20m 10s ·  · TOKENS ·  · 18.4K / 2.1K ·  · WEEKLY / 5H ·  · +1.40% / +3.10% ·  · SUBSCRIPTION ·  · $0.42 ·  · 🌿 1 · ▼ PRODUCE\",\n  \"fallbackMarker\": 1,\n  \"fallbackReason\": 1,\n  \"falseGreenTitle\": 0,\n  \"shot\": \"/home/runner/work/_temp/ui-shots/after/drive-run-ledger/phone-1-run-ledger-receipt.png\"\n}\n"
+    }
+  ]
+}
