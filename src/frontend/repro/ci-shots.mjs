@@ -30,7 +30,14 @@ const run = (program, argv, cwd, { timeout = 0 } = {}) => {
 	const result = spawnSync(program, argv, {
 		cwd,
 		encoding: 'utf8',
-		stdio: ['ignore', 'pipe', 'pipe'],
+		// stdout is captured — it is the JSON payload the summary embeds.
+		// stderr is *inherited*, deliberately: buffering it means a child that
+		// is killed at the timeout contributes nothing to the log, and that is
+		// precisely the case worth reading. Measured on this PR's own run —
+		// `drive-fuel.mjs` was SIGKILLed at 240 s having printed, as far as the
+		// log could tell, absolutely nothing in four minutes. It had printed;
+		// the buffer was thrown away with the process.
+		stdio: ['ignore', 'pipe', 'inherit'],
 		timeout: timeout || undefined,
 		killSignal: 'SIGKILL'
 	});
@@ -41,7 +48,10 @@ const run = (program, argv, cwd, { timeout = 0 } = {}) => {
 		throw new Error(
 			`${program} ${argv.join(' ')} did not finish` +
 				(result.signal ? ` (killed with ${result.signal} after ${timeout}ms)` : '') +
-				`:\n${result.stderr || result.stdout || result.error?.message || ''}`
+				// stderr went straight to this process's own stderr, so it is
+				// already above this line in the log — saying so beats printing
+				// an empty string and looking like the child said nothing.
+				`. Its own output is inlined above.\n${result.stdout || result.error?.message || ''}`
 		);
 	if (result.status !== 0)
 		throw new Error(`${program} ${argv.join(' ')} failed:\n${result.stderr || result.stdout}`);
