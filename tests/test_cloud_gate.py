@@ -3926,6 +3926,42 @@ def test_live_runs_snapshot_carries_claimed_topics(tmp_path):
     assert rows["run-no-topics"]["topics"] == []
 
 
+def test_live_runs_snapshot_carries_a_bounded_boundary_ledger_tail(tmp_path):
+    """The dashboard stream is the local ledger's safe, newest-first tail.
+
+    Topics and boundaries ride the existing live-runs snapshot together: no
+    second poll or collector is needed for the heddle reader.
+    """
+    import json
+
+    from brr import presence
+
+    brr_dir = tmp_path / ".brr"
+    run_id = "run-boundary-stream"
+    run_dir = brr_dir / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "boundaries.jsonl").write_text(
+        "\n".join(
+            json.dumps({"at": f"2026-09-12T16:{minute:02d}:00Z", "phase": "tool",
+                        "act": "read", "tools": ["exec_command"], "detail": f"read {minute}"})
+            for minute in range(20)
+        ) + "\n",
+        encoding="utf-8",
+    )
+    presence.register(
+        brr_dir, kind="daemon", stream="t:boundaries:", run_id=run_id,
+        repo_label="Gurio/brr", pid=os.getpid(), entry_id="e-boundaries",
+    )
+    presence.heartbeat(brr_dir, "e-boundaries", topics=["the-loom"])
+
+    row = next(item for item in cloud._live_runs_snapshot(brr_dir) if item["run_id"] == run_id)
+
+    assert row["topics"] == ["the-loom"]
+    assert len(row["boundaries"]) == 16
+    assert [boundary["detail"] for boundary in row["boundaries"][:2]] == ["read 19", "read 18"]
+    assert row["boundaries"][-1]["detail"] == "read 4"
+
+
 def test_a_runs_mood_reaches_the_wire_as_richly_as_the_daemons_own(tmp_path):
     """The asymmetry that caused this, asserted as a rule rather than a value.
 

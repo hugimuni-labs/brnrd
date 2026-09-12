@@ -526,7 +526,21 @@
 	// Which topics have an item weaving right now — the answer to "which one
 	// is being worked", rendered on the heddle rail where the question gets
 	// asked rather than only on the run that is doing it.
-	let weavingCallSigns = $derived(new Set(weaving.map((row) => row.callSign).filter(Boolean)));
+	// A live claim belongs on the heddle even before a run has taken an item.
+	// The live-runs packet carries `.topics` alongside its bounded boundary
+	// ledger; resolve its raw slug through this graph so aliases light the one
+	// canonical thread, and unknown/stale slugs do not mint phantom heddles.
+	let liveTopicCallSigns = $derived(
+		new Set(
+			(liveRuns ?? [])
+				.flatMap((run) => run.topics ?? [])
+				.map((slug) => warpGraphData.topicByAlias.get(slug)?.canonicalId)
+				.filter((slug): slug is string => Boolean(slug))
+		)
+	);
+	let weavingCallSigns = $derived(
+		new Set([...weaving.map((row) => row.callSign).filter(Boolean), ...liveTopicCallSigns])
+	);
 	let crossingIndex = $derived(runTopicIndex(warpGraphData, surfaceData?.files ?? []));
 	let topicFaceMap = $derived(topicFaces(warpGraphData));
 

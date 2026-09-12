@@ -1043,6 +1043,11 @@ class LiveRunIn(BaseModel):
     await_until: str | None = None
     room: LiveRunRoomIn | None = None
     edge: LiveRunEdgeIn | None = None
+    # The bounded local boundary ledger tail, newest first.  This deliberately
+    # shares `LiveRunEdgeIn` with the cursor (`edge`) and injection-only tail
+    # (`crossings`): the dashboard gets one redacted, relative-path-safe
+    # boundary shape rather than three nearly-identical disclosures.
+    boundaries: list[LiveRunEdgeIn] = Field(default_factory=list, max_length=16)
     # THE CROSSINGS, distinct from `edge` above and for one reason: `edge` is
     # a **cursor** — whichever boundary is current at publish time. A client
     # polling on an interval sees whichever edge that poll caught, so two
