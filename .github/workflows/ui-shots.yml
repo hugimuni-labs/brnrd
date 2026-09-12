@@ -14,6 +14,12 @@ jobs:
     # Fork tokens cannot publish the protected image branch or PR comments.
     if: github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
+    # A job with no ceiling inherits GitHub's 6-hour default, and a job that
+    # never finishes posts no comment, never turns red, and is never read.
+    # All sixteen runs this workflow has ever had ended cancelled or still
+    # hanging (2026-09-12). Twenty minutes is generous: two full captures of
+    # three drivers take under four minutes on a laptop.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: src/frontend
@@ -44,11 +50,23 @@ jobs:
           echo "sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
           echo "dir=$BASE_DIR" >> "$GITHUB_OUTPUT"
       - name: Capture before and after
+        timeout-minutes: 12
         env:
           BASE_DIR: ${{ steps.base.outputs.dir }}
         run: |
+          # The *after* capture is this PR's code and must succeed.
           node repro/ci-shots.mjs capture --out "$RUNNER_TEMP/ui-shots/after" --port-start 5197
-          node repro/ci-shots.mjs capture --root "$BASE_DIR/src/frontend" --out "$RUNNER_TEMP/ui-shots/before" --port-start 5297
+          # The *before* capture runs the merge-base's drivers — always older
+          # code, and code this PR may be fixing. It must never be able to
+          # destroy the after capture's information: a failure here leaves
+          # whatever shots it did produce on disk, and the diff step already
+          # records a pair with no `before` as `skipped` with its reason.
+          # (Measured on the PR that fixed the drivers' teardown: the after
+          # capture went green in 27s and the before capture hung, because the
+          # base tree still had the bug. A harness that can only report when
+          # both trees are healthy cannot report the commit that makes them so.)
+          node repro/ci-shots.mjs capture --root "$BASE_DIR/src/frontend" --out "$RUNNER_TEMP/ui-shots/before" --port-start 5297 \
+            || echo "::warning::before-capture failed on the merge-base tree; pairs without a before image are reported as skipped"
       - name: Diff pairs and render comment
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -57,7 +75,11 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           node repro/ci-shots.mjs diff --before "$RUNNER_TEMP/ui-shots/before" --after "$RUNNER_TEMP/ui-shots/after" --out "$RUNNER_TEMP/ui-shots/diff" --output "$RUNNER_TEMP/ui-shots/summary.json"
-          node repro/ci-shots.mjs comment --summary "$RUNNER_TEMP/ui-shots/summary.json" --base "$BASE_SHA" --sha "$PR_SHA" --url-base "https://raw.githubusercontent.com/$REPOSITORY/shots/pr-$PR_NUMBER/$PR_SHA" --output "$RUNNER_TEMP/ui-shots/comment.md"
+          # The changed frontend files, so the comment can name what it did
+          # *not* look at (#1944): five identical pairs read as "the UI did not
+          # change" when the honest sentence is "no captured surface did".
+          git diff --name-only "$BASE_SHA" "$PR_SHA" -- . > "$RUNNER_TEMP/ui-shots/changed.txt" || true
+          node repro/ci-shots.mjs comment --summary "$RUNNER_TEMP/ui-shots/summary.json" --base "$BASE_SHA" --sha "$PR_SHA" --changed "$RUNNER_TEMP/ui-shots/changed.txt" --url-base "https://raw.githubusercontent.com/$REPOSITORY/shots/pr-$PR_NUMBER/$PR_SHA" --output "$RUNNER_TEMP/ui-shots/comment.md"
       - name: Upload screenshot artifact
         uses: actions/upload-artifact@v4
         with:
@@ -74,8 +96,15 @@ jobs:
             git worktree add -b shots "$SHOTS_DIR" origin/shots
           else
             git worktree add --detach "$SHOTS_DIR" HEAD
+            # `switch --orphan` already empties the index *and* the working
+            # tree, so the `git rm -rf .` that used to follow it had nothing to
+            # match and exited 128 under `bash -e`. That is why the `shots`
+            # branch has never existed, why the publish step has never
+            # succeeded, and why no `ui-shots` comment has ever been posted —
+            # a first-run bug in a bootstrap that had, by construction, only
+            # ever had first runs.
             git -C "$SHOTS_DIR" switch --orphan shots
-            git -C "$SHOTS_DIR" rm -rf .
+            git -C "$SHOTS_DIR" rm -rf . --ignore-unmatch --quiet || true
           fi
           # Closed PR folders are disposable; an API failure must not block a review.
           for number in $(gh api --paginate 'repos/'"$GITHUB_REPOSITORY"'/pulls?state=closed&per_page=100' --jq '.[].number' 2>/dev/null || true); do
@@ -87,7 +116,9 @@ jobs:
           cp -R "$RUNNER_TEMP/ui-shots/diff" "$SHOTS_DIR/pr-$PR_NUMBER/$PR_SHA/diff"
           git -C "$SHOTS_DIR" add -A
           git -C "$SHOTS_DIR" diff --cached --quiet || git -C "$SHOTS_DIR" -c user.name=github-actions[bot] -c user.email=41898282+github-actions[bot] commit -m "chore: publish UI shots for PR #$PR_NUMBER"
-          git -C "$SHOTS_DIR" push origin shots
+          # `-u` so the first publish creates the remote branch rather than
+          # pushing to a ref that does not exist yet.
+          git -C "$SHOTS_DIR" push -u origin shots
       - name: Upsert PR comment
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}

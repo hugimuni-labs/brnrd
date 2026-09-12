@@ -15,12 +15,44 @@ const manifestPath = value(
 	join(dirname(new URL(import.meta.url).pathname), 'ci-shots.json')
 );
 const manifest = () => JSON.parse(readFileSync(manifestPath, 'utf8'));
-const run = (program, argv, cwd) => {
+// Per-driver ceiling. A driver boots a vite server and takes a handful of
+// screenshots; on this laptop all three finish inside two minutes. Without a
+// bound, one that waits on a selector or a server that never binds hangs the
+// whole job until GitHub's 6-hour default — and a job that never finishes
+// posts no comment, never goes red, and is therefore never read. Measured
+// 2026-09-12: of the sixteen `ui-shots` runs that have ever existed, ten were
+// cancelled by the next push and six were still hanging in
+// `Capture before and after`. Not one has ever succeeded. The clause they
+// back was signed 2026-08-30.
+const DRIVER_TIMEOUT_MS = Number(process.env.CI_SHOTS_DRIVER_TIMEOUT_MS || 240_000);
+
+const run = (program, argv, cwd, { timeout = 0 } = {}) => {
 	const result = spawnSync(program, argv, {
 		cwd,
 		encoding: 'utf8',
-		stdio: ['ignore', 'pipe', 'pipe']
+		// stdout is captured — it is the JSON payload the summary embeds.
+		// stderr is *inherited*, deliberately: buffering it means a child that
+		// is killed at the timeout contributes nothing to the log, and that is
+		// precisely the case worth reading. Measured on this PR's own run —
+		// `drive-fuel.mjs` was SIGKILLed at 240 s having printed, as far as the
+		// log could tell, absolutely nothing in four minutes. It had printed;
+		// the buffer was thrown away with the process.
+		stdio: ['ignore', 'pipe', 'inherit'],
+		timeout: timeout || undefined,
+		killSignal: 'SIGKILL'
 	});
+	// `spawnSync` reports a timeout as `signal` + `error`, never as a status —
+	// checking only `status !== 0` reads a killed child as a clean run and
+	// returns its partial stdout, which is the same silence one layer in.
+	if (result.error || result.signal)
+		throw new Error(
+			`${program} ${argv.join(' ')} did not finish` +
+				(result.signal ? ` (killed with ${result.signal} after ${timeout}ms)` : '') +
+				// stderr went straight to this process's own stderr, so it is
+				// already above this line in the log — saying so beats printing
+				// an empty string and looking like the child said nothing.
+				`. Its own output is inlined above.\n${result.stdout || result.error?.message || ''}`
+		);
 	if (result.status !== 0)
 		throw new Error(`${program} ${argv.join(' ')} failed:\n${result.stderr || result.stdout}`);
 	return result.stdout;
@@ -43,11 +75,19 @@ if (command === 'capture') {
 			continue;
 		}
 		const driverOut = join(out, entry.driver.replace(/\.mjs$/, ''));
+		// Progress to stderr, so a hung run says *which* driver it is hung in.
+		// The old loop buffered every driver's stdout and printed one JSON blob
+		// at the end, so a job stuck here reported nothing at all — the six
+		// hung runs above are, in their own logs, a step name and silence.
+		const startedAt = Date.now();
+		process.stderr.write(`[ci-shots] capture ${entry.driver} (root=${root})\n`);
 		const stdout = run(
 			process.execPath,
 			[driver, '--out', driverOut, '--port', String(portStart + index)],
-			root
+			root,
+			{ timeout: DRIVER_TIMEOUT_MS }
 		);
+		process.stderr.write(`[ci-shots] ✓ ${entry.driver} in ${Date.now() - startedAt}ms\n`);
 		result.drivers.push({ ...entry, status: 'captured', out: driverOut, stdout });
 	}
 	writeFileSync(join(out, 'capture.json'), `${JSON.stringify(result, null, 2)}\n`);
@@ -146,6 +186,60 @@ if (command === 'capture') {
 	for (const driver of summary.drivers)
 		for (const shot of driver.shots.filter((item) => item.status === 'skipped'))
 			lines.push(`_Skipped \`${driver.driver}\` / ${shot.shot}: ${shot.reason}._`, '');
+
+	// What this check did *not* look at (#1944).
+	//
+	// Measured on #1938: that PR rewrote a render condition in
+	// `RunLedgerReceipt.svelte` that was putting a green "matches the
+	// configured core pin" tick on runs which had changed Runner mid-flight.
+	// This job fired, compared its five pairs, and reported every one
+	// `unchanged | unchanged | 0 px changed` — correctly, because no driver in
+	// the manifest opens the run-ledger receipt. A reviewer reads that table
+	// as *the UI did not change*. The truth was *nothing looked*.
+	//
+	// So the table always says which surfaces it is a statement about, and
+	// when every pair is identical it says so in those words. No import-graph
+	// analysis: the reader is given the two lists — what changed, what was
+	// compared — and can draw the conclusion in one glance, which is more
+	// than a green check ever offered.
+	const covered = summary.drivers.flatMap((driver) =>
+		driver.shots
+			.filter((shot) => shot.status === 'diffed')
+			.map((shot) => `\`${driver.driver.replace(/\.mjs$/, '')}/${shot.shot}\``)
+	);
+	const changedFile = value('--changed');
+	const changed =
+		changedFile && existsSync(changedFile)
+			? readFileSync(changedFile, 'utf8')
+					.split('\n')
+					.map((l) => l.trim())
+					.filter(Boolean)
+			: [];
+	if (covered.length) {
+		const allIdentical = summary.drivers.every((driver) =>
+			driver.shots.filter((shot) => shot.status === 'diffed').every((shot) => shot.pixels === 0)
+		);
+		lines.push('<details><summary>What this compared, and what it could not see</summary>', '');
+		lines.push(`**Surfaces compared (${covered.length}):** ${covered.join(' · ')}`, '');
+		if (changed.length)
+			lines.push(
+				`**Frontend files changed (${changed.length}):**`,
+				...changed.map((file) => `- \`${file}\``),
+				''
+			);
+		if (allIdentical)
+			lines.push(
+				'**Every compared pair is identical.** That means no *captured*',
+				'surface changed — not that no surface changed. A component that',
+				'renders on none of the surfaces above is invisible to this check,',
+				'and the green tick above is not a statement about it. If your',
+				'change is one of those, say what you looked at and judged in the',
+				'PR instead (`workflow.md` §Orchestration), or add a driver.',
+				''
+			);
+		lines.push('</details>', '');
+	}
+
 	if (!pairs) process.exit(0);
 	const output = value('--output');
 	if (output) writeFileSync(output, `${lines.join('\n')}\n`);

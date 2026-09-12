@@ -19,6 +19,7 @@ import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { mkdir } from 'node:fs/promises';
 import * as fixtures from './fixtures.mjs';
+import { closeBrowser, stopVite, runDriver } from './finish.mjs';
 
 const args = process.argv.slice(2);
 const arg = (f) => {
@@ -231,13 +232,10 @@ async function main() {
 			);
 			await ctx.close();
 		}
-		await browser.close();
+		await closeBrowser(browser, 'drive-fuel');
 	} finally {
-		vite.kill('SIGTERM');
+		stopVite(vite, 'drive-fuel');
 	}
 	console.log(`shots → ${OUT}`);
 }
-main().catch((e) => {
-	console.error(e);
-	process.exit(1);
-});
+runDriver(main);
