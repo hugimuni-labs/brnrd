@@ -421,3 +421,94 @@ def test_eviction_preview_survives_a_heading_that_carries_inline_code(monkeypatc
     # emits the right pages *plus* fabricated ones passed every presence check.
     assert len(targets) == 2, targets
     assert targets == ["surface/plans/x/active.md", "surface/operator-checklist.md"]
+
+
+# ── keeps-past-its-date ──────────────────────────────────────────────
+#
+# `surface/shelf/index.md`: "Every page declares a `keeps:`; expiry renders
+# in place, nothing sweeps." And `prompts._surface_page_has_ended` reads
+# authored state only — a page leaves the wake when its author rewrites the
+# row, never because a date passed. Nothing was ever going to tell the
+# author the date had passed. Measured 2026-09-12 on this account: a shelf
+# page two days past its own stated deadline still riding every wake while
+# seventeen other pages were dropped whole for want of the budget.
+
+
+def _shelf_surface(tmp_path, pages: dict[str, str]) -> Path:
+    surface = tmp_path / "home" / "surface"
+    (surface / "shelf").mkdir(parents=True)
+    (surface / "index.md").write_text("# Work surface\n", encoding="utf-8")
+    for name, body in pages.items():
+        (surface / "shelf" / name).write_text(body, encoding="utf-8")
+    return surface
+
+
+def _drive(monkeypatch, tmp_path, pages: dict[str, str]):
+    """Run the check against a synthetic surface, through its real readers."""
+    from brr import account as account_mod
+
+    surface = _shelf_surface(tmp_path, pages)
+    monkeypatch.setattr(account_mod, "resolve_context", lambda *a, **k: object())
+    monkeypatch.setattr(account_mod, "work_surface_path", lambda _ctx: surface)
+    monkeypatch.setattr(
+        account_mod, "work_surface_files",
+        lambda _ctx: sorted(surface.rglob("*.md")),
+    )
+    return notes_preflight.check_shelf_expiry(tmp_path, {})
+
+
+def test_a_deadline_that_passed_is_reported(monkeypatch, tmp_path):
+    out = _drive(monkeypatch, tmp_path, {
+        "old.md": "keeps: until it ships, or 2020-01-01\n\n# Old\n",
+    })
+    assert len(out) == 1
+    assert out[0].type == "keeps-past-its-date"
+    assert out[0].target == "surface/shelf/old.md"
+    assert "2020-01-01" in out[0].description
+
+
+def test_a_deadline_still_ahead_is_silent(monkeypatch, tmp_path):
+    out = _drive(monkeypatch, tmp_path, {
+        "live.md": "keeps: until it ships, or 2099-01-01\n\n# Live\n",
+    })
+    assert out == []
+
+
+def test_a_measurement_date_is_not_a_deadline(monkeypatch, tmp_path):
+    """The first draft fired on two live pages for exactly this reason.
+
+    `keeps: 48 h — … Measured 2026-09-05T22:2x` and `keeps: 7 days —
+    refreshed 2026-09-09` both say when the page was *taken*. A check that is
+    wrong about a live page is one the reader learns to skip.
+    """
+    out = _drive(monkeypatch, tmp_path, {
+        "recon.md": "keeps: 48 h — threads die. Measured 2020-01-01T22:20Z\n\n# R\n",
+        "guide.md": "keeps: 7 days — refreshed 2020-01-01 from live receipts\n\n# G\n",
+    })
+    assert out == []
+
+
+def test_an_author_retired_page_is_never_reported(monkeypatch, tmp_path):
+    """Driven against `prompts._surface_page_has_ended`, not re-implemented:
+    a page already taken out of the wake must not also be nagged about."""
+    out = _drive(monkeypatch, tmp_path, {
+        "done.md": "keeps: expired 2020-01-02 — until it shipped, or 2020-01-01\n\n# D\n",
+    })
+    assert out == []
+
+
+def test_only_shelf_pages_are_judged(monkeypatch, tmp_path):
+    """`keeps:` is the shelf's contract. A standing page that happens to
+    contain the word is not on a clock."""
+    surface = _shelf_surface(tmp_path, {})
+    (surface / "workflow.md").write_text(
+        "keeps: until it ships, or 2020-01-01\n", encoding="utf-8",
+    )
+    from brr import account as account_mod
+    monkeypatch.setattr(account_mod, "resolve_context", lambda *a, **k: object())
+    monkeypatch.setattr(account_mod, "work_surface_path", lambda _ctx: surface)
+    monkeypatch.setattr(
+        account_mod, "work_surface_files",
+        lambda _ctx: sorted(surface.rglob("*.md")),
+    )
+    assert notes_preflight.check_shelf_expiry(tmp_path, {}) == []
