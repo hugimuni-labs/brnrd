@@ -71,22 +71,20 @@
 <span class="ml-auto flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[16px]">
 	{#each threads as thread (thread.canonicalId)}
 		{@const lit = isLit(thread.canonicalId)}
+		{@const isWeaving = weaving.has(thread.canonicalId)}
 		<button
 			type="button"
 			class="cursor-pointer rounded-sm leading-none"
-			style={lit
-				? `color: ${thread.face.color}; box-shadow: 0 1.5px 0 0 ${thread.face.color};`
-				: ''}
-			class:text-ink-mute={!lit}
-			class:opacity-40={!lit}
+			style={`${lit ? `color: ${thread.face.color}; box-shadow: 0 1.5px 0 0 ${thread.face.color};` : ''}${isWeaving ? ` color: ${thread.face.color}; text-shadow: 0 0 5px ${thread.face.color}, 0 0 10px ${thread.face.color};` : ''}`}
+			class:text-ink-mute={!lit && !isWeaving}
+			class:opacity-40={!lit && !isWeaving}
+			class:heddle-weaving={isWeaving}
 			aria-pressed={lit}
-			title={`${thread.title} · ${lit ? 'lit — filtering it in' : 'off — press to filter to it'}`}
+			aria-label={isWeaving ? 'weaving now' : undefined}
+			title={`${thread.title} · ${isWeaving ? 'weaving now — held by a live run' : lit ? 'lit — filtering it in' : 'off — press to filter to it'}`}
 			onclick={() => onToggle?.(thread.canonicalId)}
 		>
-			{thread.face.glyph}{#if weaving.has(thread.canonicalId)}<span
-					class="text-amber-300/90"
-					aria-label="weaving now">↯</span
-				>{/if}
+			{thread.face.glyph}
 		</button>
 	{/each}
 	<button

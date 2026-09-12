@@ -71,12 +71,18 @@
 			<ul class="mt-2 space-y-1" id={FOLD_ID}>
 				{#each threads as thread (thread.canonicalId)}
 					{@const lit = isLit(thread.canonicalId)}
+					{@const isWeaving = weaving.has(thread.canonicalId)}
 					{@const count = counts.get(thread.canonicalId)}
 					<li class="flex items-baseline gap-x-2">
 						<button
 							type="button"
 							class="flex min-w-0 flex-1 cursor-pointer items-baseline gap-x-2 text-left"
+							class:heddle-weaving={isWeaving}
 							aria-pressed={lit}
+							aria-label={isWeaving ? 'weaving now' : undefined}
+							title={isWeaving
+								? `${thread.title} · weaving now — held by a live run`
+								: thread.title}
 							onclick={() => onToggle?.(thread.canonicalId)}
 						>
 							<!-- The layer-eye (his read: lean into the Photoshop-layers
@@ -92,19 +98,21 @@
 							>
 							<span
 								class="shrink-0 font-mono text-[16px] leading-none"
-								style={lit ? `color: ${thread.face.color}` : ''}
+								style={lit || isWeaving
+									? `color: ${thread.face.color};${isWeaving ? ` text-shadow: 0 0 5px ${thread.face.color}, 0 0 10px ${thread.face.color};` : ''}`
+									: ''}
 								class:text-ink-mute={!lit}
-								class:opacity-50={!lit}
+								class:opacity-50={!lit && !isWeaving}
 								aria-hidden="true">{thread.face.glyph}</span
 							>
 							<span
 								class="min-w-0 flex-1 break-words"
-								class:text-amber-100={lit}
-								class:text-ink-quiet={!lit}>{thread.title}</span
+								style={isWeaving
+									? `color: ${thread.face.color}; text-shadow: 0 0 5px ${thread.face.color}, 0 0 10px ${thread.face.color};`
+									: ''}
+								class:text-amber-100={lit && !isWeaving}
+								class:text-ink-quiet={!lit && !isWeaving}>{thread.title}</span
 							>
-							{#if weaving.has(thread.canonicalId)}
-								<span class="shrink-0 text-amber-300/90" aria-label="weaving now">↯</span>
-							{/if}
 							{#if count}
 								<span class="shrink-0 font-mono text-[10px] text-ink-quiet">
 									{count.ready} ready{count.blocked > 0 ? ` · ${count.blocked} held` : ''}

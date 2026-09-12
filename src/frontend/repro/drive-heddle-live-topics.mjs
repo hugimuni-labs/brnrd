@@ -1,6 +1,7 @@
 // Captures the warp's heddle rail on either side of a live `.topics` claim.
 // Usage: node repro/drive-heddle-live-topics.mjs [--out DIR] [--port N]
 import { spawn } from 'node:child_process';
+import { strict as assert } from 'node:assert';
 import { mkdir } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -73,7 +74,7 @@ async function capture(page, routes, name) {
 	await delay(150);
 	await rail.screenshot({ path: `${OUT}/${name}.png` });
 	return {
-		bolts: await page.locator('[aria-label="weaving now"]').count(),
+		glows: await page.locator('button.heddle-weaving[aria-label="weaving now"]').count(),
 		text: (await rail.innerText()).replace(/\s+/g, ' ').trim()
 	};
 }
@@ -97,6 +98,8 @@ async function main() {
 		await beforePage.close();
 		const afterPage = await modules.watch(await context.newPage(), 'drive-heddle-live-topics');
 		const after = await capture(afterPage, routesFor(['mint']), 'after-mint-lit');
+		assert.equal(before.glows, 0, 'an unclaimed topic has no glowing heddle');
+		assert.ok(after.glows > 0, 'a live topic glows through its existing heddle button');
 		await modules.harvest(afterPage, 'drive-heddle-live-topics');
 		await context.close();
 		await modules.save(OUT, 'drive-heddle-live-topics');
