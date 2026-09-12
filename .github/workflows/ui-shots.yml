@@ -54,8 +54,19 @@ jobs:
         env:
           BASE_DIR: ${{ steps.base.outputs.dir }}
         run: |
+          # The *after* capture is this PR's code and must succeed.
           node repro/ci-shots.mjs capture --out "$RUNNER_TEMP/ui-shots/after" --port-start 5197
-          node repro/ci-shots.mjs capture --root "$BASE_DIR/src/frontend" --out "$RUNNER_TEMP/ui-shots/before" --port-start 5297
+          # The *before* capture runs the merge-base's drivers — always older
+          # code, and code this PR may be fixing. It must never be able to
+          # destroy the after capture's information: a failure here leaves
+          # whatever shots it did produce on disk, and the diff step already
+          # records a pair with no `before` as `skipped` with its reason.
+          # (Measured on the PR that fixed the drivers' teardown: the after
+          # capture went green in 27s and the before capture hung, because the
+          # base tree still had the bug. A harness that can only report when
+          # both trees are healthy cannot report the commit that makes them so.)
+          node repro/ci-shots.mjs capture --root "$BASE_DIR/src/frontend" --out "$RUNNER_TEMP/ui-shots/before" --port-start 5297 \
+            || echo "::warning::before-capture failed on the merge-base tree; pairs without a before image are reported as skipped"
       - name: Diff pairs and render comment
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
