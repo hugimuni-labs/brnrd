@@ -15,12 +15,34 @@ const manifestPath = value(
 	join(dirname(new URL(import.meta.url).pathname), 'ci-shots.json')
 );
 const manifest = () => JSON.parse(readFileSync(manifestPath, 'utf8'));
-const run = (program, argv, cwd) => {
+// Per-driver ceiling. A driver boots a vite server and takes a handful of
+// screenshots; on this laptop all three finish inside two minutes. Without a
+// bound, one that waits on a selector or a server that never binds hangs the
+// whole job until GitHub's 6-hour default — and a job that never finishes
+// posts no comment, never goes red, and is therefore never read. Measured
+// 2026-09-12: of the sixteen `ui-shots` runs that have ever existed, ten were
+// cancelled by the next push and six were still hanging in
+// `Capture before and after`. Not one has ever succeeded. The clause they
+// back was signed 2026-08-30.
+const DRIVER_TIMEOUT_MS = Number(process.env.CI_SHOTS_DRIVER_TIMEOUT_MS || 240_000);
+
+const run = (program, argv, cwd, { timeout = 0 } = {}) => {
 	const result = spawnSync(program, argv, {
 		cwd,
 		encoding: 'utf8',
-		stdio: ['ignore', 'pipe', 'pipe']
+		stdio: ['ignore', 'pipe', 'pipe'],
+		timeout: timeout || undefined,
+		killSignal: 'SIGKILL'
 	});
+	// `spawnSync` reports a timeout as `signal` + `error`, never as a status —
+	// checking only `status !== 0` reads a killed child as a clean run and
+	// returns its partial stdout, which is the same silence one layer in.
+	if (result.error || result.signal)
+		throw new Error(
+			`${program} ${argv.join(' ')} did not finish` +
+				(result.signal ? ` (killed with ${result.signal} after ${timeout}ms)` : '') +
+				`:\n${result.stderr || result.stdout || result.error?.message || ''}`
+		);
 	if (result.status !== 0)
 		throw new Error(`${program} ${argv.join(' ')} failed:\n${result.stderr || result.stdout}`);
 	return result.stdout;
@@ -43,11 +65,19 @@ if (command === 'capture') {
 			continue;
 		}
 		const driverOut = join(out, entry.driver.replace(/\.mjs$/, ''));
+		// Progress to stderr, so a hung run says *which* driver it is hung in.
+		// The old loop buffered every driver's stdout and printed one JSON blob
+		// at the end, so a job stuck here reported nothing at all — the six
+		// hung runs above are, in their own logs, a step name and silence.
+		const startedAt = Date.now();
+		process.stderr.write(`[ci-shots] capture ${entry.driver} (root=${root})\n`);
 		const stdout = run(
 			process.execPath,
 			[driver, '--out', driverOut, '--port', String(portStart + index)],
-			root
+			root,
+			{ timeout: DRIVER_TIMEOUT_MS }
 		);
+		process.stderr.write(`[ci-shots] ✓ ${entry.driver} in ${Date.now() - startedAt}ms\n`);
 		result.drivers.push({ ...entry, status: 'captured', out: driverOut, stdout });
 	}
 	writeFileSync(join(out, 'capture.json'), `${JSON.stringify(result, null, 2)}\n`);

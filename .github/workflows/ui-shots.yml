@@ -14,6 +14,12 @@ jobs:
     # Fork tokens cannot publish the protected image branch or PR comments.
     if: github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
+    # A job with no ceiling inherits GitHub's 6-hour default, and a job that
+    # never finishes posts no comment, never turns red, and is never read.
+    # All sixteen runs this workflow has ever had ended cancelled or still
+    # hanging (2026-09-12). Twenty minutes is generous: two full captures of
+    # three drivers take under four minutes on a laptop.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: src/frontend
@@ -44,6 +50,7 @@ jobs:
           echo "sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
           echo "dir=$BASE_DIR" >> "$GITHUB_OUTPUT"
       - name: Capture before and after
+        timeout-minutes: 12
         env:
           BASE_DIR: ${{ steps.base.outputs.dir }}
         run: |
