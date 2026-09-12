@@ -18236,9 +18236,23 @@ def _release_reset_holds_due(
                 # the provider now reports. The arm-time deadline is
                 # informative only; the number decides.
                 pct = _held_run_binding_pct(root, held, refresh=True)
-                if not resource_hold.refill_condition_met(meta, pct):
-                    continue
-                released_by = "refill"
+                if resource_hold.refill_condition_met(meta, pct):
+                    released_by = "refill"
+                else:
+                    # #1934: a wall armed on an auto-fallback body must not
+                    # outlive the reason it was armed for. The substitute's
+                    # empty bucket says nothing about the body the next wake
+                    # would actually pick — read that one before staying put.
+                    alternate = _seat_alternate_binding_pct(root, held, refresh=True)
+                    if alternate is None or not resource_hold.refill_condition_met(
+                        meta, alternate[1],
+                    ):
+                        continue
+                    released_by = "alternate"
+                    print(
+                        f"[brnrd] starved seat {held.id}: {alternate[0]} reads "
+                        f"{alternate[1]:.1f}% — the wall outlived its reason"
+                    )
             elif not resource_hold.reset_condition_met(meta):
                 continue
             released_meta = resource_hold.mark_released(meta, by=released_by)
@@ -18527,14 +18541,29 @@ def _handle_resource_held_events(
                 # refill — and either thaw on the measured number or
                 # keep the message and answer it with the reading.
                 pct = _held_run_binding_pct(repo_root, held, refresh=True)
+                thawed_by: str | None = None
+                reading = pct
                 if resource_hold.refill_condition_met(hold_meta, pct):
+                    thawed_by = "refill"
+                else:
+                    # #1934: same test as the sweep — the wall's claim is
+                    # about the body it was armed on, which after a fallback
+                    # is not the body this message would be answered by.
+                    alternate = _seat_alternate_binding_pct(
+                        repo_root, held, refresh=True,
+                    )
+                    if alternate is not None and resource_hold.refill_condition_met(
+                        hold_meta, alternate[1],
+                    ):
+                        thawed_by, reading = "alternate", alternate[1]
+                if thawed_by is not None:
                     _apply_resource_hold_resume(
-                        runs_dir, target.inbox_dir, held, target.event, by="refill",
+                        runs_dir, target.inbox_dir, held, target.event, by=thawed_by,
                         account_context=account_context,
                     )
                     print(
                         f"[brnrd] starved seat thawed on a correspondent "
-                        f"message — binding quota {pct:.1f}%: {held.id}"
+                        f"message — binding quota {reading:.1f}%: {held.id}"
                     )
                     survivors.append(target)
                     continue
@@ -18676,6 +18705,75 @@ def _held_run_binding_pct(
         print(f"[brnrd] starved seat {held.id}: quota read failed ({exc})")
         return None
     return runner_quota.binding_quota_remaining_pct(levels, model=model)
+
+
+def _seat_intended_runner(held: Run) -> str | None:
+    """The body this seat would dispatch to next, or ``None``.
+
+    Deliberately *not* ``runner_name``: auto-fallback overwrites it — and
+    ``runner_shell`` / ``runner_core`` / the ledger baseline with it
+    (:func:`_record_task_runner`) — with the substitute it chose, so after
+    a fallback those fields name the body that *died*, not the one a fresh
+    wake would pick. The sticky profile a tap pinned, and the profile
+    originally selected for the run, both survive untouched.
+    """
+    for key in ("dashboard_wake_sticky_profile", "runner"):
+        name = str(held.meta.get(key) or "").strip()
+        if name:
+            return name
+    return None
+
+
+def _seat_alternate_binding_pct(
+    repo_root: Path, held: Run, *, refresh: bool,
+) -> "tuple[str, float] | None":
+    """``(runner, pct)`` for a *different* body this seat could run on (#1934).
+
+    A wall's claim is "the seat cannot run". When the hold was armed on a
+    fallback body that claim is about the substitute: measured 2026-09-11,
+    claude died on a 401, the run fell back to codex, codex's weekly bucket
+    read 1%, and the wall it armed was thawable only by *codex* refilling —
+    four days out — while the sticky body the next wake would pick sat at
+    11% and healthy. Read that body's own bucket so the claim is tested
+    rather than inherited.
+
+    ``None`` when the intended body is the one that starved, is missing or
+    unavailable in the catalog, or cannot be proven — "no evidence" is not
+    a thaw, the same rule :func:`_held_run_binding_pct` follows.
+    """
+    intended = _seat_intended_runner(held)
+    if not intended:
+        return None
+    meta = held.meta.get("resource_hold") or {}
+    quota = meta.get("quota") if isinstance(meta.get("quota"), dict) else {}
+    starved = str(quota.get("runner") or held.meta.get("runner_name") or "").strip()
+    if intended.lower() == starved.lower():
+        return None
+    try:
+        rows = runner.available_runner_catalog(repo_root)
+    except Exception as exc:  # noqa: BLE001 — an unreadable catalog is "unproven", never a thaw
+        print(f"[brnrd] starved seat {held.id}: runner catalog read failed ({exc})")
+        return None
+    for row in rows:
+        if str(row.get("name") or "").lower() != intended.lower():
+            continue
+        if str(row.get("availability") or "") != "available":
+            return None
+        core = str(row.get("core") or "").strip() or None
+        try:
+            levels, _slots = _collect_levels(
+                intended, None, repo_root,
+                refresh=refresh, shared_dir=gitops.shared_brr_dir(repo_root),
+            )
+        except Exception as exc:  # noqa: BLE001 — same rule as the starved read
+            print(
+                f"[brnrd] starved seat {held.id}: {intended} quota "
+                f"read failed ({exc})"
+            )
+            return None
+        pct = runner_quota.binding_quota_remaining_pct(levels, model=core)
+        return (intended, float(pct)) if isinstance(pct, (int, float)) else None
+    return None
 
 
 def _refuse_starved_wake(
