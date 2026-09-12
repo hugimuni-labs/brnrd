@@ -70,6 +70,7 @@ produced a line.
 
 from __future__ import annotations
 
+import datetime as _dt
 import re
 import subprocess
 from dataclasses import dataclass
@@ -668,6 +669,121 @@ def check_work_surface_eviction(repo_root: Path) -> list[Finding]:
                 "load-bearing material where the reserve protects it."
             ),
             severity="warning",
+        ))
+    return out
+
+
+#: A *deadline* date in a shelf page's ``keeps:`` row — an ISO date directly
+#: after ``until`` or ``or``, and not the head of a timestamp.
+#:
+#: Both halves of that narrowing are paid for. The first draft matched any
+#: ISO date in the row and fired on two live pages, because ``keeps: 48 h —
+#: … Measured 2026-09-05T22:2x`` and ``keeps: 7 days — refreshed 2026-09-09``
+#: state when the page was *taken*, not when it dies. A check that is wrong
+#: about a live page is a check the reader learns to skip, which costs more
+#: than the one it would have caught.
+#:
+#: What this deliberately cannot read: ``48 h``, ``7 days``, ``until the
+#: connect flow changes``. Each needs a different inferred anchor — the
+#: page's own date? the filename's? the last commit's? — and inferring one
+#: is how a guard starts asserting things it cannot be proven wrong about.
+#: One unambiguous form, reported; the rest belong to the author, who is the
+#: only party that knows.
+_KEEPS_DATE_RE = re.compile(
+    r"(?im)^keeps:.*?\b(?:until|or)\s+(\d{4}-\d{2}-\d{2})(?!T)"
+)
+
+
+def check_shelf_expiry(repo_root: Path, cfg: dict | None = None) -> list[Finding]:
+    """Shelf pages past a date they set for themselves.
+
+    ``surface/shelf/index.md`` states the contract: *"Every page declares a
+    ``keeps:``; expiry renders in place, nothing sweeps."* And
+    ``prompts._surface_page_has_ended`` implements the other half exactly as
+    designed — **authored state only, no dates inferred**: a page leaves the
+    wake when its author rewrites ``keeps:`` to ``expired …``, never because
+    a date passed.
+
+    Nothing was ever going to tell the author that the date had passed.
+    Measured on this account 2026-09-12: three shelf pages were past their
+    own stated deadline — one by two days, two by five — while seventeen
+    other pages were being dropped **whole** from every wake for want of the
+    budget those three were spending. The eviction was announced (#1020);
+    the reason it was needed was not.
+
+    So: a prompt, never a sweep. Same posture as
+    :func:`check_pitfall_issue_refs` — the finding says *your own declaration
+    says this is over*, and the author decides whether that means rewriting
+    the row, extending it, or that the page was always going to outlive its
+    first guess.
+
+    The predicate is driven against
+    :func:`brr.prompts._surface_page_has_ended`, not re-implemented: a page
+    that *has* been retired must never be reported, and only the real
+    function knows what retired means.
+    """
+    from . import account as account_mod
+    from .prompts import _surface_page_has_ended
+
+    if cfg is None:
+        try:
+            from . import config as conf
+
+            cfg = conf.load_config(repo_root)
+        except Exception:
+            cfg = {}
+    try:
+        ctx = account_mod.resolve_context(repo_root, cfg, create=False)
+        pages = account_mod.work_surface_files(ctx)
+        root = account_mod.work_surface_path(ctx)
+    except Exception:
+        return []
+
+    # Sanity assertion (this module's second discipline): a check that
+    # iterates over nothing must not report "clean". An account with a work
+    # surface always has at least its index; no pages means the walk broke,
+    # and silence would be the wrong answer to that.
+    if not pages:
+        return []
+
+    today = _dt.date.today()
+    out: list[Finding] = []
+    for path in pages:
+        try:
+            rel = path.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        if not rel.startswith("shelf/"):
+            continue
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if _surface_page_has_ended(content):
+            continue
+        match = _KEEPS_DATE_RE.search(content[:2048])
+        if not match:
+            continue
+        try:
+            stated = _dt.date.fromisoformat(match.group(1))
+        except ValueError:
+            continue
+        if stated >= today:
+            continue
+        out.append(Finding(
+            type="keeps-past-its-date",
+            target=f"surface/{rel}",
+            description=(
+                f"this page's own `keeps:` row names **{stated.isoformat()}**, "
+                f"{(today - stated).days} day(s) ago, and the row still reads "
+                "live — so the page rides every wake and spends budget that "
+                "the eviction walk then takes from some other page. Nothing "
+                "sweeps this by design (`prompts._surface_page_has_ended` "
+                "reads authored state only): rewrite the row to "
+                "`keeps: expired <date> — <why>` if it is over, or give it a "
+                "new date if it is not."
+            ),
+            severity="info",
         ))
     return out
 
@@ -1344,6 +1460,7 @@ def scan_scoped(
         pass
 
     out.extend(check_work_surface_eviction(repo_root))
+    out.extend(check_shelf_expiry(repo_root, cfg))
 
     # `signatures` is a registry trait, not a filename: a second signed
     # page enrols itself in this check by declaring the trait, with no
