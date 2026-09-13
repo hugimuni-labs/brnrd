@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import forge_pr_cache, gitops
-from .run import list_runs
+from .run import TERMINAL_STATUSES as RUN_TERMINAL_STATUSES, list_runs
 
-TERMINAL_RUN_STATUSES = frozenset({"done", "error", "conflict", "stopped"})
+TERMINAL_RUN_STATUSES = RUN_TERMINAL_STATUSES
 _WARNED: set[str] = set()
 
 #: How long one :func:`warn_new` sweep's verdict stands before the walk runs

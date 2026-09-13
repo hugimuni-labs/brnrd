@@ -21,7 +21,7 @@ from typing import Any
 
 from .. import account, conversations, message_store, protocol
 from .. import config as conf
-from ..run import Run
+from ..run import TERMINAL_STATUSES, Run
 from . import model as live
 
 Boundary = live.Boundary
@@ -34,7 +34,7 @@ resolve_repo_root = live.resolve_repo_root
 # into an unbounded filesystem walk. Explicit --run selection is always added
 # even when it sits outside this recent window.
 _HISTORY_RAIL_LIMIT = 200
-_TERMINAL = {"done", "error", "conflict"}
+_TERMINAL = TERMINAL_STATUSES
 
 
 def _read_text(path: Path) -> str:
