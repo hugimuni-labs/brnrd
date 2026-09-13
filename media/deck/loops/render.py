@@ -129,9 +129,9 @@ def loop_away(i: int) -> Image.Image:
     text(draw, (260, 290), "02:00 → 07:00", 51, AMBER, bold=True)
     text(draw, (1548, 290), "WHILE YOU SLEPT", 19, MUTED, bold=True, anchor="ra")
     entries = [
-        ("02:4x", "#1959 (`a1691bb0`) closes #1954."),
-        ("07:5x", "#1960 (`270a9415`) — both drivers converted with `a1691bb0` as the pattern:"),
-        ("12:1x", "He merged #1961 himself in the afternoon."),
+        ("02:4x", "Merged: #1959 → a1691bb0. drive-fuel reads a live page — the 1-in-6 red on frontend PRs is structurally gone."),
+        ("07:5x", "Merged: #1960 → 270a9415. The #1954 species, closed."),
+        ("12:1x", "#1961, move 1 of the rewrite, as a proposal."),
     ]
     for number, (stamp, quote) in enumerate(entries, start=1):
         y = 342 + (number - 1) * 156
