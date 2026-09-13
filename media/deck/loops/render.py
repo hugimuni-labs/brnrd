@@ -139,7 +139,7 @@ def loop_away(i: int) -> Image.Image:
         ("12:1x", "#1961, move 1 of the rewrite, as a proposal."),
     ]
     for number, (stamp, quote) in enumerate(entries, start=1):
-        y = 342 + (number - 1) * 156
+        y = 392 + (number - 1) * 140
         onset = number * FPS - 6
         lit = i >= onset
         text(draw, (260, y), stamp, 20, MUTED if not lit else PALE_AMBER, bold=lit)
