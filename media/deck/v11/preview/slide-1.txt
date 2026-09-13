@@ -1,0 +1,28 @@
+slide 1 (12191999 x 6858000 EMU)
+
+left=621792 top=566928 width=4389120 height=228600
+WEB SUMMIT LISBON 2026 · ALPHA
+
+left=502920 top=6364224 width=1188720 height=164592
+brnrd >_
+
+left=9098280 top=6382512 width=2057400 height=146304
+hugimuni sas · web summit 2026
+
+left=11475720 top=6382512 width=274320 height=146304
+01
+
+left=713232 top=1344168 width=9784080 height=1051560
+brnrd — the AI coding pal that lives on your machine
+
+left=749808 top=2944368 width=6949440 height=822960
+Built by two people, and by the pal itself. Open source. Runs on the subscription you already pay for.
+
+left=749808 top=4096512 width=3108960 height=292608
+Web Summit Lisbon 2026
+
+left=749808 top=4535424 width=1097280 height=274320
+Alpha
+
+left=2011680 top=4535424 width=2194560 height=274320
+HugiMuni SAS

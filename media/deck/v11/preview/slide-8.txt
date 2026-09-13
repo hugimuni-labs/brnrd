@@ -1,0 +1,31 @@
+slide 8 (12191999 x 6858000 EMU)
+
+left=621792 top=566928 width=4389120 height=228600
+WE ARE SMALL
+
+left=502920 top=6364224 width=1188720 height=164592
+brnrd >_
+
+left=9098280 top=6382512 width=2057400 height=146304
+hugimuni sas · web summit 2026
+
+left=11475720 top=6382512 width=274320 height=146304
+08
+
+left=621792 top=987552 width=7589520 height=658368
+We are small. It doesn't matter.
+
+left=658368 top=1856231 width=8001000 height=640080
+Two founders. Zero raised. Three daily users — one of them is the pal. No marketing team; this deck is the marketing.
+
+left=658368 top=2670048 width=8001000 height=502920
+We know the shortcomings: money, and nobody who has sold software before.
+
+left=658368 top=3364992 width=8001000 height=658368
+We're building it anyway — an AI coding pal you play: a resident on your machine, a map of your project it walks, a game about the work.
+
+left=658368 top=4105656 width=8001000 height=457200
+Watch, or join. brnrd.dev · open source · $7 flat hosted, live.
+
+left=7973568 top=5248656 width=3429000 height=384048
+(vision, not product: the painting is where this goes)

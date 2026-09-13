@@ -1,0 +1,25 @@
+slide 7 (12191999 x 6858000 EMU)
+
+left=621792 top=566928 width=4389120 height=228600
+BUILT WITH IT, BY IT
+
+left=502920 top=6364224 width=1188720 height=164592
+brnrd >_
+
+left=9098280 top=6382512 width=2057400 height=146304
+hugimuni sas · web summit 2026
+
+left=11475720 top=6382512 width=274320 height=146304
+07
+
+left=621792 top=987552 width=5669280 height=658368
+The repo is the demo.
+
+left=658368 top=1847088 width=5532120 height=1874519
+As of 13 Sep 2026: 2,946 commits on main since March — 1,898 of them the resident's own (64%). 1,325 merged. 27 releases. A 272-page knowledge base it writes and keeps.
+
+left=685800 top=4005072 width=5486400 height=594360
+It reviews its workers' diffs, files its own bugs, runs its own X account.
+
+left=685800 top=4892040 width=5577840 height=594360
+It reviewed this deck and found it had no numbers. Twice.

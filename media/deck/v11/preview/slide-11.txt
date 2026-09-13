@@ -1,0 +1,19 @@
+slide 11 (12191999 x 6858000 EMU)
+
+left=621792 top=566928 width=4389120 height=228600
+BACKUP · Q&A
+
+left=502920 top=6364224 width=1188720 height=164592
+brnrd >_
+
+left=9098280 top=6382512 width=2057400 height=146304
+hugimuni sas · web summit 2026
+
+left=11475720 top=6382512 width=274320 height=146304
+B2
+
+left=621792 top=987552 width=7635240 height=1170432
+Your machine. Your login. Your repo.
+
+left=658368 top=2514600 width=7498079 height=2103120
+Self-hosted, brnrd runs on your machine, using the vendors' own binaries under your own account. No credentials are handed to us. The settings that decide what an agent may execute live outside the repo the agent can write to, so a run cannot rewrite its own permissions.

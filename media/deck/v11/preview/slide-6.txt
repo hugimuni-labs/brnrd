@@ -1,0 +1,25 @@
+slide 6 (12191999 x 6858000 EMU)
+
+left=621792 top=566928 width=4389120 height=228600
+FROM A PHONE
+
+left=502920 top=6364224 width=1188720 height=164592
+brnrd >_
+
+left=9098280 top=6382512 width=2057400 height=146304
+hugimuni sas · web summit 2026
+
+left=11475720 top=6382512 width=274320 height=146304
+06
+
+left=621792 top=987552 width=5303520 height=731520
+Message it. It ships.
+
+left=658368 top=2148840 width=5349240 height=1901952
+Receipt, 1 Sep 2026: a change requested from WhatsApp; the PR opened 76 seconds after the follow-up; merged from the phone. No terminal was opened.
+
+left=685800 top=4773168 width=2194560 height=329184
+76 SECONDS
+
+left=2880360 top=4800600 width=2743200 height=310896
+request → PR → merge

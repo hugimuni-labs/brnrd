@@ -1,0 +1,22 @@
+slide 4 (12191999 x 6858000 EMU)
+
+left=621792 top=566928 width=4389120 height=228600
+THE WALL
+
+left=502920 top=6364224 width=1188720 height=164592
+brnrd >_
+
+left=9098280 top=6382512 width=2057400 height=146304
+hugimuni sas · web summit 2026
+
+left=11475720 top=6382512 width=274320 height=146304
+04
+
+left=621792 top=969264 width=5230368 height=1298448
+Your quota runs out mid-task. Ours waits, then carries on.
+
+left=658368 top=2505456 width=5074920 height=1024128
+It budgets your quota, hands chores to cheaper models, and parks itself at the wall instead of dying halfway.
+
+left=685800 top=4169663 width=5212080 height=1143000
+Receipt, 5 Sep 2026: Codex hit its weekly wall at 18:16. The seat continued on Claude — same thread, same memory.

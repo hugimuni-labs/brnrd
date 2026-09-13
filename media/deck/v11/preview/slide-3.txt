@@ -1,0 +1,28 @@
+slide 3 (12191999 x 6858000 EMU)
+
+left=621792 top=566928 width=4389120 height=228600
+THE RESIDENT
+
+left=502920 top=6364224 width=1188720 height=164592
+brnrd >_
+
+left=9098280 top=6382512 width=2057400 height=146304
+hugimuni sas · web summit 2026
+
+left=11475720 top=6382512 width=274320 height=146304
+03
+
+left=621792 top=987552 width=5212080 height=658368
+A resident, not a session.
+
+left=658368 top=1947672 width=4983480 height=3154680
+It lives on your machine. It runs on the Claude or Codex subscription you already pay for — "that, but running your subscriptions," as one user put it. You message it from Telegram or GitHub like a colleague. It keeps its own memory, its own playbook, its own scars. It is still there tomorrow.
+
+left=6172200 top=4343400 width=1143000 height=292608
+agents
+
+left=8028431 top=4343400 width=1143000 height=292608
+brnrd
+
+left=9802368 top=4343400 width=1143000 height=292608
+channels
