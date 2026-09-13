@@ -145,7 +145,6 @@ MOVIES = {
     "wall": "loop-2-the-wall.mp4",
     "away": "loop-4-away.mp4",
     "stage": "loop-3-stage.mp4",
-    "stage_4x3": "loop-3-stage-phone-4x3.mp4",
 }
 
 
@@ -487,8 +486,8 @@ def verify_media(output: Path, source_movies: Iterable[Path], painting: Path):
     with zipfile.ZipFile(output) as archive:
         media = {name: archive.read(name) for name in archive.namelist() if name.startswith("ppt/media/")}
     mp4_entries = {name: blob for name, blob in media.items() if name.lower().endswith(".mp4")}
-    if len(mp4_entries) != 5:
-        raise AssertionError(f"expected five embedded MP4s, found {len(mp4_entries)}")
+    if len(mp4_entries) != 4:
+        raise AssertionError(f"expected four embedded MP4s, found {len(mp4_entries)}")
     packaged_by_hash = {sha256_bytes(blob): name for name, blob in mp4_entries.items()}
     mappings = []
     for source in source_movies:
@@ -500,7 +499,7 @@ def verify_media(output: Path, source_movies: Iterable[Path], painting: Path):
     painting_entry = next((name for name, blob in media.items() if sha256_bytes(blob) == painting_digest), None)
     if painting_entry is None:
         raise AssertionError("darkened painting is not embedded")
-    print("MEDIA CHECK: PASS (5/5 MP4s embedded)")
+    print("MEDIA CHECK: PASS (4/4 MP4s embedded)")
     for mapping in mappings:
         print(f"  {mapping}")
     print(f"PAINTING CHECK: PASS ({painting_entry})")
