@@ -57,10 +57,10 @@ SLIDES = [{'label': 'TITLE',
            'Lose the thread — close it and it forgets; keep it open and it buries you.',
            'The bottleneck moved from intelligence to supervision.']},
  {'label': 'THE RESIDENT',
-  'headline': 'A resident, not a session.',
-  'body': ['Lives on your machine. Runs on the Claude or Codex subscription you already pay for — "that, but '
-           'running your subscriptions," as one user put it. Message it from Telegram or GitHub like a '
-           'colleague. It is still there tomorrow.']},
+  'headline': 'It stays.',
+  'body': ['A resident, not a session: it lives on your machine, not in a tab. It keeps a schedule, a mood, '
+           "a run in progress — that's them on the right. Message it from Telegram like a colleague; it's "
+           'still there tomorrow.']},
  {'label': 'THE WALL',
   'headline': 'Your quota runs out mid-task. Ours waits, then carries on.',
   'body': ['It budgets your quota, hands chores to cheaper models, and parks itself at the wall instead of '
@@ -96,7 +96,7 @@ SLIDES = [{'label': 'TITLE',
   'body': ["Codex and Claude now run tasks remotely. Each run is still a session inside one vendor's walled "
            'garden. Whatever decides what to do next, remembers last week and collects the result has to '
            'live above the vendors. That layer is brnrd, on your machine, on the subscription you already '
-           'pay for.',
+           'pay for. "That, but running your subscriptions," as one user put it.',
            'Every run carries a receipt — wall time, tokens, the share of your week it took. You juggle '
            'subscriptions to turn money into results; the pal keeps the book.']},
  {'label': 'TEAM & WEB SUMMIT',
