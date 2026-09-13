@@ -54,153 +54,107 @@ def rounded(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], *,
     draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
 
 
-def header(draw: ImageDraw.ImageDraw, chapter: str, title: str) -> None:
-    text(draw, (92, 76), "brnrd >_", 32, AMBER, bold=True)
-    text(draw, (92, 136), chapter.upper(), 19, MUTED, bold=True)
-    text(draw, (92, 184), title, 42, PHOSPHOR, bold=True)
-    draw.line((92, 248, W - 92, 248), fill=LINE, width=2)
-
-
-def glow_dot(image: Image.Image, xy: tuple[int, int], r: int, color: str) -> None:
-    glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
-    gd = ImageDraw.Draw(glow)
-    x, y = xy
-    gd.ellipse((x - r * 3, y - r * 3, x + r * 3, y + r * 3), fill=color + "48")
-    glow = glow.filter(ImageFilter.GaussianBlur(r * 2))
-    image.alpha_composite(glow) if image.mode == "RGBA" else None
-    ImageDraw.Draw(image).ellipse((x - r, y - r, x + r, y + r), fill=color)
+def thin_margin(draw: ImageDraw.ImageDraw) -> None:
+    """The loop itself is the slide content: only a quiet enclosing margin."""
+    draw.rectangle((42, 42, W - 42, H - 42), outline="#111a1e", width=2)
 
 
 def loop_lose(i: int) -> Image.Image:
     image, draw = canvas()
-    header(draw, "02 · lose the thread", "Keep it open and it buries you.")
-    x0, y0, x1, y1 = 230, 310, 1690, 930
+    thin_margin(draw)
+    x0, y0, x1, y1 = 230, 188, 1690, 892
     rounded(draw, (x0, y0, x1, y1), radius=30)
     rounded(draw, (x0, y0, x1, y0 + 74), fill="#10191d", radius=30)
     draw.rectangle((x0, y0 + 46, x1, y0 + 74), fill="#10191d")
     text(draw, (x0 + 44, y0 + 37), "telegram · brnrd / project", 23, PALE_AMBER, bold=True, anchor="lm")
     text(draw, (x1 - 40, y0 + 37), "LIVE", 18, AMBER, bold=True, anchor="rm")
     entries = [
-        ("you", "can you trace the deploy issue?", 408),
-        ("brnrd", "reading the run history…", 493),
-        ("you", "also check the quota before retrying", 578),
-        ("brnrd", "one moment — preserving context", 663),
+        ("you", "could you leave it running while I sleep?", 308),
+        ("brnrd", "I'll keep the thread and post the receipts.", 414),
+        ("you", "try to make good use of the quota this night", 520),
+        ("brnrd", "holding the context open.", 626),
     ]
     for sender, body, y in entries:
         col = PALE_AMBER if sender == "you" else PHOSPHOR
         text(draw, (x0 + 54, y), sender, 19, col, bold=True)
         text(draw, (x0 + 190, y), body, 19, "#b1c0c2")
         draw.line((x0 + 54, y + 37, x1 - 54, y + 37), fill="#142025", width=1)
-    draw.line((x0 + 42, 790, x1 - 42, 790), fill=LINE, width=2)
-    # Counter changes textually but does not move; the spinner is the only
-    # moving mark, making the stuck state legible at a glance.
-    count = 1208 + i // 8
-    text(draw, (x0 + 54, 834), f"{count:,} messages · still loading", 18, MUTED)
-    cx, cy = x1 - 90, 837
-    angle = i * (math.tau / 12)
-    draw.arc((cx - 22, cy - 22, cx + 22, cy + 22), 35, 290, fill=AMBER, width=5)
-    ex, ey = cx + 18 * math.cos(angle), cy + 18 * math.sin(angle)
+    draw.line((x0 + 42, 730, x1 - 42, 730), fill=LINE, width=2)
+    count = 1208 + round(7 * i / (FRAMES - 1))
+    text(draw, (x0 + 54, 774), f"{count:,} unread · still loading", 18, MUTED)
+    cx, cy = x1 - 90, 777
+    angle = i * math.tau * 3 / FRAMES
+    degrees = math.degrees(angle)
+    draw.arc((cx - 26, cy - 26, cx + 26, cy + 26), degrees + 24, degrees + 296,
+             fill=AMBER, width=6)
+    ex, ey = cx + 23 * math.cos(angle + math.radians(296)), cy + 23 * math.sin(angle + math.radians(296))
     draw.ellipse((ex - 5, ey - 5, ex + 5, ey + 5), fill=PALE_AMBER)
     return image
 
 
 def loop_wall(i: int) -> Image.Image:
     image, draw = canvas()
-    header(draw, "05 · the wall", "The thread stays. The core changes.")
-    rounded(draw, (250, 344, 1670, 840), radius=30)
-    text(draw, (320, 425), "run-260913-0009-1h9d", 23, PALE_AMBER, bold=True)
-    text(draw, (320, 470), "the thread carries on", 19, MUTED)
+    thin_margin(draw)
+    rounded(draw, (250, 292, 1670, 788), radius=30)
+    text(draw, (320, 373), "run-260913-0009-1h9d", 23, PALE_AMBER, bold=True)
+    text(draw, (320, 418), "the thread carries on", 19, MUTED)
     progress = max(0.0, 0.12 * (1 - min(i, 30) / 30))
     pct = int(round(progress * 100))
-    text(draw, (320, 595), "codex · week", 27, PHOSPHOR, bold=True)
-    text(draw, (1540, 595), f"{pct}%", 40, AMBER if pct else PALE_AMBER, bold=True, anchor="ra")
-    rounded(draw, (320, 640, 1540, 706), fill="#11191d", outline=LINE, radius=18)
+    text(draw, (320, 543), "codex · week", 27, PHOSPHOR, bold=True)
+    text(draw, (1540, 543), f"{pct}%", 40, AMBER if pct else PALE_AMBER, bold=True, anchor="ra")
+    rounded(draw, (320, 588, 1540, 654), fill="#11191d", outline=LINE, radius=18)
     if progress:
-        draw.rounded_rectangle((324, 644, 324 + int(1212 * progress), 702), radius=14, fill=AMBER)
+        draw.rounded_rectangle((324, 592, 324 + int(1212 * progress), 650), radius=14, fill=AMBER)
     flipped = i >= 30
     if flipped and i < 42:
         bloom = (42 - i) / 12
         glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
         gd = ImageDraw.Draw(glow)
-        gd.ellipse((1100 - 200, 755 - 90, 1100 + 200, 755 + 90), fill=(255, 174, 36, int(110 * bloom)))
+        gd.ellipse((1100 - 200, 703 - 90, 1100 + 200, 703 + 90), fill=(255, 174, 36, int(110 * bloom)))
         image = Image.alpha_composite(image.convert("RGBA"), glow.filter(ImageFilter.GaussianBlur(38))).convert("RGB")
         draw = ImageDraw.Draw(image)
-    text(draw, (320, 770), "core", 19, MUTED)
-    text(draw, (430, 770), "claude" if flipped else "codex", 35, PALE_AMBER if flipped else PHOSPHOR, bold=True)
+    text(draw, (320, 718), "core", 19, MUTED)
+    text(draw, (430, 718), "claude" if flipped else "codex", 35, PALE_AMBER if flipped else PHOSPHOR, bold=True)
     if flipped:
-        text(draw, (1340, 770), "boundary ✓ resumed", 20, AMBER, anchor="ra")
+        text(draw, (1340, 718), "boundary ✓ resumed", 20, AMBER, anchor="ra")
     else:
-        text(draw, (1340, 770), "boundary · waiting", 20, MUTED, anchor="ra")
-    return image
-
-
-def loop_stage(i: int) -> Image.Image:
-    image, draw = canvas()
-    header(draw, "04 · message from the work", "No terminal required.")
-    px0, py0, px1, py1 = 650, 290, 1270, 990
-    rounded(draw, (px0, py0, px1, py1), fill="#0b1115", outline="#57666a", radius=50, width=4)
-    rounded(draw, (px0 + 22, py0 + 54, px1 - 22, py1 - 34), fill="#0f191d", outline="#17262b", radius=24)
-    text(draw, (px0 + 54, py0 + 91), "Telegram", 21, PHOSPHOR, bold=True)
-    text(draw, (px0 + 54, py0 + 126), "brnrd · online", 16, MUTED)
-    text(draw, (px0 + 54, py1 - 73), "Message", 18, MUTED)
-    # Banner enters once in the first .8 seconds, then is completely still.
-    t = min(1.0, i / 12)
-    ease = 1 - (1 - t) ** 3
-    y = int(py0 + 162 - (190 * ease))
-    bx0, bx1 = px0 + 44, px1 - 44
-    rounded(draw, (bx0, y, bx1, y + 148), fill="#18262a", outline=AMBER, radius=19, width=3)
-    text(draw, (bx0 + 22, y + 29), "brnrd", 18, AMBER, bold=True)
-    text(draw, (bx0 + 22, y + 65), "PR is up: #1749", 20, PHOSPHOR, bold=True)
-    text(draw, (bx0 + 22, y + 101), "github.com/…/pull/1749", 15, PALE_AMBER)
-    text(draw, (px0 + 44, py0 + 262), "dashboard · quiet below", 16, "#4c6268")
-    for row in range(4):
-        yy = py0 + 308 + row * 60
-        draw.line((px0 + 48, yy, px1 - 48, yy), fill="#16242a", width=10)
+        text(draw, (1340, 718), "boundary · waiting", 20, MUTED, anchor="ra")
     return image
 
 
 def loop_away(i: int) -> Image.Image:
     image, draw = canvas()
-    header(draw, "08 · while you're away", "The morning has receipts.")
-    rounded(draw, (195, 325, 1195, 910), fill="#0a1519", outline=LINE, radius=30)
-    # one quiet island and tree, frozen beneath the three event lights
-    draw.ellipse((340, 665, 930, 825), fill="#132d2b", outline="#2d6259", width=2)
-    draw.rectangle((615, 525, 634, 706), fill="#76562c")
-    for box in [(530, 410, 640, 580), (610, 365, 750, 560), (705, 435, 820, 595)]:
-        draw.ellipse(box, fill="#1e5d53", outline="#4d9d86", width=2)
-    draw.ellipse((213, 345, 222, 354), fill=PHOSPHOR)
-    text(draw, (238, 350), "night shift", 16, MUTED, anchor="lm")
-    knots = [(390, "#1959"), (545, "#1960"), (700, "#1961")]
-    for n, (y, label) in enumerate(knots, start=1):
-        lit = i >= n * FPS
-        col = AMBER if lit else "#35514f"
+    thin_margin(draw)
+    rounded(draw, (180, 210, 1740, 870), fill="#0b1011", outline="#263130", radius=22)
+    text(draw, (260, 290), "02:00 → 07:00", 51, AMBER, bold=True)
+    text(draw, (1548, 290), "WHILE YOU SLEPT", 19, MUTED, bold=True, anchor="ra")
+    entries = [
+        ("02:4x", "#1959 (`a1691bb0`) closes #1954."),
+        ("07:5x", "#1960 (`270a9415`) — both drivers converted with `a1691bb0` as the pattern:"),
+        ("12:1x", "He merged #1961 himself in the afternoon."),
+    ]
+    for number, (stamp, quote) in enumerate(entries, start=1):
+        y = 342 + (number - 1) * 156
+        onset = number * FPS - 6
+        lit = i >= onset
+        text(draw, (260, y), stamp, 20, MUTED if not lit else PALE_AMBER, bold=lit)
+        text(draw, (388, y), "✣", 30, AMBER if lit else "#34403b", bold=True)
         if lit:
-            draw.ellipse((1025 - 30, y - 30, 1025 + 30, y + 30), fill="#2b260f")
-            draw.ellipse((1011, y - 14, 1039, y + 14), fill=AMBER)
-            # Five-frame spark makes each recorded merge feel like an event,
-            # without introducing any wandering scenery.
-            if n * FPS <= i < n * FPS + 5:
-                for dx, dy in ((0, -43), (0, 43), (-43, 0), (43, 0)):
-                    draw.line((1025 + dx // 2, y + dy // 2, 1025 + dx, y + dy), fill=PALE_AMBER, width=3)
-            draw.line((1048, y, 1120, y), fill=AMBER, width=2)
+            # The quote types in as one event; only a new merge arrives each second.
+            shown = quote[:min(len(quote), max(1, (i - onset + 1) * 7))]
+            text(draw, (450, y), shown, 21, PHOSPHOR, bold=True)
+            if i < onset + 5:
+                for dx, dy in ((0, -34), (0, 34), (-34, 0), (34, 0)):
+                    draw.line((402 + dx // 2, y + dy // 2, 402 + dx, y + dy), fill=PALE_AMBER, width=2)
         else:
-            draw.ellipse((1014, y - 11, 1036, y + 11), outline=col, width=3)
-            draw.line((1048, y, 1120, y), fill=col, width=2)
-        text(draw, (1140, y), label, 25, PALE_AMBER if lit else MUTED, bold=lit, anchor="lm")
-    text(draw, (1280, 412), "MORNING DIGEST", 19, MUTED, bold=True)
-    text(draw, (1280, 472), "three self-woken passes", 24, PHOSPHOR, bold=True)
-    text(draw, (1280, 520), "nine merges while you slept", 19, PALE_AMBER)
-    # A real time range, with the clock moving once through the established night.
-    hour = 2 + round(5 * i / (FRAMES - 1))
-    text(draw, (1635, 810), f"{hour:02d}:00", 55, AMBER, bold=True, anchor="ra")
-    text(draw, (1635, 855), "02:00 → 07:00", 16, MUTED, anchor="ra")
+            draw.line((450, y + 15, 1510, y + 15), fill="#18211f", width=2)
+    text(draw, (260, 794), "three merges landed; the morning is already different.", 19, PALE_AMBER)
     return image
 
 
 LOOPS = {
     "loop-1-lose-the-thread": loop_lose,
     "loop-2-the-wall": loop_wall,
-    "loop-3-stage": loop_stage,
     "loop-4-away": loop_away,
 }
 
