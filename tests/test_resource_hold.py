@@ -22,6 +22,7 @@ class TestBuild:
         assert meta["resume_condition"] == resource_hold.RESUME_OPERATOR
         assert meta["resume_kind"] == resource_hold.RESUME_UNSUPPORTED
         assert meta["reset_deadline"] is None
+        assert meta["seat_key"] == ""
         assert meta["released"] is False
         assert meta["released_at"] is None
         assert meta["released_by"] is None

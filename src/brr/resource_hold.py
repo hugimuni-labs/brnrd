@@ -151,6 +151,7 @@ def build(
     resume_condition: str = RESUME_OPERATOR,
     reset_deadline: float | None = None,
     conversation_key: str = "",
+    seat_key: str = "",
     generation: int = 1,
     now: float | None = None,
     quota: dict[str, Any] | None = None,
@@ -182,6 +183,10 @@ def build(
         "resume_kind": resume_kind if native_session_id else RESUME_UNSUPPORTED,
         "resume_condition": resume_condition,
         "reset_deadline": reset_deadline,
+        # The repository-seat index address is identity; the conversation is
+        # only the last thread that seat stood on.  Keeping both prevents a
+        # parking thread from becoming an accidental admission boundary.
+        "seat_key": seat_key,
         "conversation_key": conversation_key,
         "armed_at": _stamp(now),
         "generation": int(generation),
@@ -321,11 +326,13 @@ def is_resource_wall(meta: dict[str, Any] | None) -> bool:
 
 
 def seat_conversation(meta: dict[str, Any] | None, fallback: str = "") -> str:
-    """The conversation this hold is the seat of.
+    """The last conversation this held seat stood on.
 
     The record's own ``conversation_key`` (stamped at arm time from the
     parked run's), else *fallback* — the run's own key, for a record armed
-    before the field was always filled.
+    before the field was always filled.  This is routing information for
+    routine mail, not the seat's identity; the hold's ``seat_key`` field
+    owns that distinction at the daemon boundary.
     """
     key = str((meta or {}).get("conversation_key") or "").strip()
     return key or str(fallback or "").strip()
@@ -337,7 +344,7 @@ def schedule_event_releases(meta: dict[str, Any] | None, event: dict[str, Any] |
     A tick is a reason to wake a parked seat (design-the-seat-that-never-quits.md:
     "a tick is a reason to wake, not a new life") — whichever conversation
     the tick belongs to: a repo has one seat, and the resume is re-keyed to
-    the *seat's* conversation (``daemon._apply_resource_hold_resume``), so
+    the seat's last conversation (``daemon._apply_resource_hold_resume``), so
     the tick is mail the seat reads, never a thread it moves into. Only a
     resource wall (:func:`is_resource_wall`) lets ticks accumulate: the seat
     cannot run, and waking it would spend a boot to die on the same wall.

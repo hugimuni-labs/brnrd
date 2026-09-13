@@ -201,13 +201,10 @@ class TestArmOnConfidentUsageLimitError:
             assert reread.get("defer_reason") is None
             assert reread.get("resume_native_session_id") is None  # no native session here
 
-    def test_resume_only_releases_a_matching_conversation_key(
+    def test_correspondent_on_another_thread_releases_the_repo_seat(
         self, tmp_path, monkeypatch,
     ):
-        """Parent review, defect B (medium): a correspondent event from a
-        *different* conversation than the one the hold belongs to must not
-        release it or steal its native-resume stamp — "the slot is free,
-        the quota is theirs to risk"."""
+        """The seat is repository-scoped, not keyed to its parking thread."""
         write_repo_scaffold(tmp_path)
         event = make_event(
             tmp_path, eid="evt-quota-conv", conversation_key="telegram:1:",
@@ -255,25 +252,10 @@ class TestArmOnConfidentUsageLimitError:
         survivors = daemon._handle_resource_held_events([target], None)
 
         assert len(survivors) == 1
-        assert "resume_native_session_id" not in survivors[0].event
-        persisted = Run.from_file(tmp_path / ".brr" / "runs" / task.id / "run.md")
-        assert persisted.meta["resource_hold"]["released"] is False
-
-        # Now the matching-conversation message: this one does release it.
-        matching_path = inbox_dir / "evt-telegram-followup.md"
-        matching_path.write_text(
-            "---\nid: evt-telegram-followup\nstatus: pending\nsource: telegram\n"
-            "conversation_key: telegram:1:\n---\nfollow up\n",
-            encoding="utf-8",
-        )
-        matching_event = protocol._read_event(matching_path)
-        matching_target = daemon._DispatchTarget(
-            event=matching_event, repo_root=tmp_path, inbox_dir=inbox_dir,
-            responses_dir=tmp_path / ".brr" / "responses", repo_label="home",
-        )
-        daemon._handle_resource_held_events([matching_target], None)
         persisted = Run.from_file(tmp_path / ".brr" / "runs" / task.id / "run.md")
         assert persisted.meta["resource_hold"]["released"] is True
+        assert persisted.meta["resource_hold"]["conversation_key"] == "github:issue:42:"
+        assert persisted.conversation_key == "github:issue:42:"
 
     def test_strand_run_falls_through_to_ordinary_failure(self, tmp_path, monkeypatch):
         """A strand's own allowance/ask-park contract owns its lifecycle —
@@ -526,15 +508,14 @@ class TestHandleResourceHeldEvents:
         assert persisted.meta["resource_hold"]["released"] is True
         assert persisted.meta["resource_hold"]["released_by"] == "operator"
 
-    def test_other_gate_thread_without_raw_key_does_not_release(self, tmp_path):
-        """The mirror: a GitHub issue comment (also no raw key) on the same
-        repo while a Telegram seat is held must still pass through untouched."""
+    def test_other_gate_thread_without_raw_key_resumes_the_repo_seat(self, tmp_path):
+        """A derived thread routes the reply but does not define seat identity."""
         self._arm_held_run(tmp_path, conversation_key="cloud:telegram:155783668:")
         inbox_dir = tmp_path / ".brr" / "inbox"
         inbox_dir.mkdir(parents=True, exist_ok=True)
         path = inbox_dir / "evt-gh.md"
         path.write_text(
-            "---\nid: evt-gh\nsource: github\nstatus: pending\n"
+            "---\nid: evt-gh\nsource: cloud\nstatus: pending\n"
             "cloud_platform: telegram\ncloud_chat_id: 999\n---\nunrelated\n",
             encoding="utf-8",
         )
@@ -545,9 +526,55 @@ class TestHandleResourceHeldEvents:
         )
         survivors = daemon._handle_resource_held_events([target], None)
         assert len(survivors) == 1
-        assert "resume_native_session_id" not in survivors[0].event
+        assert survivors[0].event["resume_native_session_id"] == "held-thread-1"
         persisted = Run.from_file(tmp_path / ".brr" / "runs" / "run-held-1" / "run.md")
+        assert persisted.meta["resource_hold"]["released"] is True
+        assert persisted.meta["resource_hold"]["conversation_key"] == (
+            "cloud:telegram:999:"
+        )
+
+    def test_message_for_a_different_repo_does_not_release_this_seat(self, tmp_path):
+        repo_a = tmp_path / "repo-a"
+        repo_b = tmp_path / "repo-b"
+        self._arm_held_run(repo_a, conversation_key="schedule:tick")
+        target = self._target(repo_b, source="cloud", eid="evt-other-repo")
+
+        assert daemon._handle_resource_held_events([target], None) == [target]
+
+        persisted = Run.from_file(
+            repo_a / ".brr" / "runs" / "run-held-1" / "run.md",
+        )
         assert persisted.meta["resource_hold"]["released"] is False
+        assert "resume_native_session_id" not in target.event
+
+    def test_misrouted_hold_with_another_repo_seat_key_does_not_release(self, tmp_path):
+        runs_dir = tmp_path / ".brr" / "runs"
+        foreign_runs_dir = tmp_path / "other-repo" / ".brr" / "runs"
+        self._arm_held_run(
+            tmp_path,
+            seat_key=daemon._repo_seat_key(foreign_runs_dir),
+            conversation_key="schedule:tick",
+        )
+        target = self._target(tmp_path, source="cloud", eid="evt-wrong-seat")
+
+        assert daemon._handle_resource_held_events([target], None) == [target]
+
+        persisted = Run.from_file(runs_dir / "run-held-1" / "run.md")
+        assert persisted.meta["resource_hold"]["released"] is False
+        assert "resume_native_session_id" not in target.event
+
+    def test_strand_thread_does_not_release_the_parent_seat(self, tmp_path):
+        self._arm_held_run(tmp_path, conversation_key="schedule:tick")
+        target = self._target(tmp_path, source="dispatch_message", eid="evt-strand-thread")
+        target.event["conversation_key"] = "run:run-parent"
+
+        assert daemon._handle_resource_held_events([target], None) == [target]
+
+        persisted = Run.from_file(
+            tmp_path / ".brr" / "runs" / "run-held-1" / "run.md",
+        )
+        assert persisted.meta["resource_hold"]["released"] is False
+        assert "resume_native_session_id" not in target.event
 
     def test_resume_consumes_the_hold_exactly_once(self, tmp_path):
         self._arm_held_run(tmp_path)

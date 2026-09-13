@@ -17677,6 +17677,7 @@ def _arm_resource_hold(
     generation = int(previous.get("generation") or 0) + 1
     meta = resource_hold.build(
         conversation_key=conversation_key,
+        seat_key=_repo_seat_key(runs_dir),
         generation=generation,
         **hold_fields,
     )
@@ -17926,6 +17927,20 @@ def _held_runs_for_repo(runs_dir: Path) -> list[Run]:
     return held
 
 
+def _repo_seat_key(runs_dir: Path) -> str:
+    """Stable identity of the repository seat indexed by *runs_dir*.
+
+    The current seat index is repository-scoped: linked worktrees already
+    converge on the host's shared ``.brr/runs`` directory.  Persisting that
+    resolved address names the same boundary :func:`_repo_seat` enforces,
+    without pretending the later account-wide seat migration has landed.
+    """
+    try:
+        return str(runs_dir.resolve())
+    except OSError:
+        return str(runs_dir.absolute())
+
+
 def _repo_seat(runs_dir: Path) -> Run | None:
     """The repo's one parked seat, or ``None`` (#1890).
 
@@ -17945,11 +17960,20 @@ def _repo_seat(runs_dir: Path) -> Run | None:
             meta = _supersede_hold(runs_dir, ghost, meta, by_run=seat.id)
         seat.meta["resource_hold"] = meta
         seat.save(runs_dir)
+    meta = seat.meta.get("resource_hold") or {}
+    if not str(meta.get("seat_key") or "").strip():
+        # Active holds written before the seat key existed remain resumable.
+        # Upgrade them at the one read that establishes which record is the
+        # repository's seat, rather than leaving the admission guard to infer
+        # identity from the last conversation.
+        meta["seat_key"] = _repo_seat_key(runs_dir)
+        seat.meta["resource_hold"] = meta
+        seat.save(runs_dir)
     return seat
 
 
 def _seat_conversation(held: Run) -> str:
-    """The conversation *held* is the seat of — the hold's own key, else the run's."""
+    """The last thread *held* stood on — the hold's key, else the run's."""
     return resource_hold.seat_conversation(
         held.meta.get("resource_hold"), getattr(held, "conversation_key", "") or "",
     )
@@ -18124,13 +18148,24 @@ def _apply_resource_hold_resume(
     meta = held.meta.get("resource_hold") or {}
     if not resource_hold.is_active(meta):
         return
+    arriving_conversation = conversations.conversation_key_for_event(event) or ""
+    seat = _seat_conversation(held)
+    if str(event.get("source") or "") not in _HOLD_ACCUMULATE_ONLY_SOURCES:
+        # A correspondent moves the seat's routing address to the arriving
+        # thread.  The hold keeps this as a historical "last stood on" fact;
+        # it is never consulted as admission identity again.
+        seat = arriving_conversation or seat
+        if seat:
+            updated_meta = dict(meta)
+            updated_meta["conversation_key"] = seat
+            held.meta["resource_hold"] = updated_meta
+            held.conversation_key = seat
     released = release_held_run(held, by=by, why="resume")
     stamps: dict[str, object] = {}
     # #1890: the resume boots into the *seat's* conversation, never the
     # releaser's (a tick's `schedule:*`, a strand's `run:<parent>`). Written
     # to disk as well as the in-memory event, so a dispatch that re-reads
     # the lead (a burst settle, a restart before claim) still lands home.
-    seat = _seat_conversation(held)
     if _rekey_to_seat(event, seat):
         stamps["conversation_key"] = seat
     if (
@@ -18520,28 +18555,22 @@ def _handle_resource_held_events(
                     runs_dir, held, str(target.event.get("id") or ""),
                 )
                 continue
-            held_conv_key = str(
-                (held.meta.get("resource_hold") or {}).get("conversation_key") or ""
-            )
-            # Derive, never read raw: a cloud/Telegram event carries no
-            # `conversation_key` field of its own (its key is a fingerprint
-            # of `cloud_platform` + `cloud_chat_id` + topic), so the raw
-            # read was `""` for every correspondent message and the guard
-            # below waved the resume past as "a different conversation"
-            # — a fresh full-boot dispatch beside a hold still marked
-            # active (measured 2026-09-07, run-260907-2223-avku).
+            held_seat_key = str(hold_meta.get("seat_key") or "").strip()
+            target_seat_key = _repo_seat_key(runs_dir)
+            if held_seat_key != target_seat_key:
+                # A record moved or misrouted across repository indexes is
+                # not this repository's seat.  Thread equality cannot grant
+                # it jurisdiction.
+                survivors.append(target)
+                continue
             event_conv_key = (
                 conversations.conversation_key_for_event(target.event) or ""
             )
-            if held_conv_key and event_conv_key != held_conv_key:
-                # A different conversation entirely (a GitHub issue
-                # comment on the same repo while a Telegram seat is
-                # held, say) — this event is not this hold's concern.
-                # Pass it through untouched: no release, no resume
-                # stamp. The resident slot is free (the held run's
-                # process already exited); whichever conversation
-                # dispatches here spends its own quota, not the held
-                # one's.
+            if event_conv_key.startswith("run:"):
+                # A strand's private thread is not correspondent mail to the
+                # resident seat.  Qualifying child returns were handled by
+                # `strand_event_releases` above; everything else stays
+                # isolated and starts no parent-seat resume.
                 survivors.append(target)
                 continue
             if resource_hold.refuses_correspondent(hold_meta):
