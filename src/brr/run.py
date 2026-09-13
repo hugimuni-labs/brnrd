@@ -17,6 +17,7 @@ import random
 import string
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -27,10 +28,11 @@ from typing import Any
 #: request) has a process that has genuinely exited, on purpose, and every
 #: boot-time janitor that reaps an unfinished run must leave it alone
 #: rather than reap it as an orphan or a zombie. It is also not a terminal
-#: outcome the way ``done``/``error``/``conflict`` are: a held run resumes
+#: outcome the way ``done``/``error`` are: a held run resumes
 #: (an explicit operator message, or a measured provider reset) rather
 #: than ending.
-STATUSES = ("pending", "running", "done", "error", "conflict", "held")
+STATUSES = ("pending", "running", "done", "error", "held", "stopped", "released")
+TERMINAL_STATUSES = frozenset({"done", "error", "stopped", "released"})
 _ENV_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _EVENT_META_FIELDS = {
     "id", "body", "source", "status", "_path", "created", "branch", "env",
@@ -71,7 +73,7 @@ def _format_run_meta_value(value: Any) -> str:
 #: itself and read as permanent movement — the exact stale-card bug this
 #: digest exists to prevent, reintroduced one layer down. Only a key that
 #: actually needs cross-process dict fidelity belongs here.
-_JSON_META_KEYS = frozenset({"resource_hold"})
+_JSON_META_KEYS = frozenset({"resource_hold", "transitions"})
 
 
 def _decode_run_meta_value(key: str, value: Any) -> Any:
@@ -162,7 +164,7 @@ class Run:
         env:              Execution environment backend — ``host``,
                           ``worktree``, ``docker``, or a future built-in.
         status:           Lifecycle state — pending → running →
-                          done / error / conflict, or → held (a resource
+                          done / error / stopped / released, or → held (a resource
                           hold — quota exhaustion or an explicit resident
                           request — parked pending an explicit resume,
                           not a terminal outcome; see STATUSES above).
@@ -188,6 +190,7 @@ class Run:
     conversation_key: str = ""
     terminal_reply: str | None = field(default=None, repr=False)
     meta: dict[str, Any] = field(default_factory=dict)
+    _runs_dir: Path | None = field(default=None, repr=False, compare=False)
 
     @classmethod
     def from_event(cls, event: dict[str, Any], cfg: dict[str, Any] | None = None) -> Run:
@@ -278,21 +281,44 @@ class Run:
             source=fm.get("source", ""),
             conversation_key=str(fm.get("conversation_key", "") or ""),
             meta=meta,
+            _runs_dir=path.parent.parent,
         )
 
-    def save(self, runs_dir: Path) -> Path:
+    def save(self, runs_dir: Path | None = None) -> Path:
         """Persist this run manifest to disk. Returns the file path."""
         from . import protocol
 
-        path = run_manifest_path(runs_dir, self.id)
+        if runs_dir is not None:
+            self._runs_dir = runs_dir
+        if self._runs_dir is None:
+            raise ValueError(f"run {self.id!r} has no bound runs directory")
+        path = run_manifest_path(self._runs_dir, self.id)
         path.parent.mkdir(parents=True, exist_ok=True)
         protocol._atomic_write(path, self.to_frontmatter())
         return path
 
+    def transition(self, to: str, *, why: str, by: str | None = None) -> None:
+        """Move to a valid status and persist the reason as a ledger row."""
+        if to not in STATUSES:
+            raise ValueError(f"invalid run status {to!r}; expected one of {STATUSES!r}")
+        transitions = self.meta.get("transitions")
+        if not isinstance(transitions, list):
+            transitions = []
+        transitions.append({
+            "from": self.status,
+            "to": to,
+            "why": why,
+            "by": by,
+            "at": datetime.now(timezone.utc).isoformat(),
+        })
+        self.meta["transitions"] = transitions
+        self.status = to
+        self.save()
+
     def update_status(self, status: str, runs_dir: Path) -> None:
         """Update status in memory and on disk."""
-        self.status = status
-        self.save(runs_dir)
+        self._runs_dir = runs_dir
+        self.transition(status, why="update_status")
 
 
 def list_runs(runs_dir: Path, status: str | None = None) -> list[Run]:

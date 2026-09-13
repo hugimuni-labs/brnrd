@@ -145,6 +145,10 @@ def test_a_tick_accumulated_under_a_wall_is_rekeyed_when_the_wall_lifts(tmp_path
         _runs_dir(tmp_path), msg.inbox_dir, seat, msg.event, by="refill",
     )
 
+    released = Run.from_file(_runs_dir(tmp_path) / "run-seat-A" / "run.md")
+    assert released.meta["transitions"][-1]["from"] == "held"
+    assert released.meta["transitions"][-1]["to"] == "done"
+    assert released.meta["transitions"][-1]["why"].startswith("released:")
     on_disk = protocol._read_event(tick.inbox_dir / "evt-tick.md")
     assert on_disk.get("defer_reason") is None
     assert on_disk.get("conversation_key") == SEAT_CONV
@@ -216,6 +220,10 @@ def test_arming_a_second_hold_supersedes_the_first_and_folds_its_mail(tmp_path):
     assert old["released"] is True
     assert old["released_by"] == "superseded"
     assert old["superseded_by"] == "run-seat-B"
+    old_run = Run.from_file(runs_dir / "run-seat-A" / "run.md")
+    assert old_run.meta["transitions"][-1]["from"] == "held"
+    assert old_run.meta["transitions"][-1]["to"] == "done"
+    assert old_run.meta["transitions"][-1]["why"].startswith("released:")
     assert meta["accumulated_event_ids"] == ["evt-old-1", "evt-old-2"]
     assert [r.id for r in daemon._held_runs_for_repo(runs_dir)] == ["run-seat-B"]
 

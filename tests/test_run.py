@@ -1,6 +1,8 @@
 """Tests for run module — Run dataclass, env resolution, persistence."""
 
-from brr.run import Run, list_runs
+import pytest
+
+from brr.run import STATUSES, TERMINAL_STATUSES, Run, list_runs
 
 
 class TestRunFromEvent:
@@ -70,6 +72,12 @@ class TestRunFromEvent:
 
 
 class TestPersistence:
+    def test_status_vocabulary_and_terminal_subset(self):
+        assert STATUSES == (
+            "pending", "running", "done", "error", "held", "stopped", "released",
+        )
+        assert TERMINAL_STATUSES == {"done", "error", "stopped", "released"}
+
     def test_save_and_load(self, tmp_path):
         run = Run(
             id="run-123", event_id="evt-456", body="implement feature",
@@ -168,6 +176,25 @@ class TestPersistence:
 
         reloaded = Run.from_file(tmp_path / "run-1" / "run.md")
         assert reloaded.status == "done"
+        assert reloaded.meta["transitions"][-1] == {
+            "from": "pending",
+            "to": "done",
+            "why": "update_status",
+            "by": None,
+            "at": run.meta["transitions"][-1]["at"],
+        }
+
+    @pytest.mark.parametrize("status", ["conflict", "bogus"])
+    def test_update_status_rejects_values_outside_the_vocabulary(
+        self, tmp_path, status,
+    ):
+        run = Run(id="run-invalid", event_id="evt-1", body="x")
+        run.save(tmp_path)
+
+        with pytest.raises(ValueError, match=rf"{status}.*pending.*released"):
+            run.update_status(status, tmp_path)
+
+        assert Run.from_file(tmp_path / "run-invalid" / "run.md").status == "pending"
 
     def test_list_runs(self, tmp_path):
         for i, status in enumerate(["pending", "running", "done"]):

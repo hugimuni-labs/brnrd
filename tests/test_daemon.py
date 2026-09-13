@@ -307,6 +307,9 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     assert persisted is not None
     assert persisted.status == "done"
     assert persisted.meta["pid"] == os.getpid()
+    assert persisted.meta["transitions"][-1]["from"] == "running"
+    assert persisted.meta["transitions"][-1]["to"] == "done"
+    assert persisted.meta["transitions"][-1]["why"] == "runner_completed"
     response = (tmp_path / ".brr" / "responses" / "evt-1.md").read_text(encoding="utf-8")
     assert response == "plain answer\n"
 
