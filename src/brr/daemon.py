@@ -100,6 +100,7 @@ from . import runner_quota
 from . import wake_request as wake_request_mod
 from . import runner_select
 from . import schedule as schedule_mod
+from . import shuttle
 from . import spending_plan
 from . import statusline
 from . import sync
@@ -3560,6 +3561,16 @@ def _run_worker(
         presence_id = None
 
     task.update_status("running", runs_dir)
+    shuttle_home = (
+        account.context_home_root(account_context)
+        if account_context is not None else brr_dir
+    )
+    entity = shuttle.Shuttle.load(shuttle_home)
+    if not _is_strand(task.meta) and entity.state == "released":
+        entity.transition(
+            "awake", why="event_dispatched", by="daemon", run_id=task.id,
+            repo_root=str(repo_root), conversation_key=task.conversation_key,
+        )
     resp_path = protocol.response_path(responses_dir, eid)
     # Per-event drop zone for interim responses the resident ships
     # mid-flight (the multi-response protocol, kb/design-multi-response.md).
@@ -4452,6 +4463,7 @@ def _run_worker(
         brr_dir=brr_dir,
         account_context=account_context,
         repo_label=repo_label,
+        shuttle_home=shuttle_home,
     )
 
     attempt = 0
@@ -4808,6 +4820,7 @@ def _run_worker(
             brr_dir=brr_dir,
             account_context=account_context,
             repo_label=repo_label,
+            shuttle_home=shuttle_home,
         )
 
         def _sweep_pause_cap() -> None:
@@ -4903,6 +4916,7 @@ def _run_worker(
                 brr_dir=brr_dir,
                 account_context=account_context,
                 repo_label=repo_label,
+                shuttle_home=shuttle_home,
             )
             if presence_id:
                 presence.heartbeat(
@@ -4987,6 +5001,7 @@ def _run_worker(
                 account_context=account_context,
                 repo_label=repo_label,
                 refresh_levels=False,
+                shuttle_home=shuttle_home,
             )
 
         # Pause-not-kill detection (spec step 1): a correspondent message
@@ -5182,6 +5197,7 @@ def _run_worker(
             brr_dir=brr_dir,
             account_context=account_context,
             repo_label=repo_label,
+            shuttle_home=shuttle_home,
         )
         # Capture the resident's dominion edits before any branch/exit. One
         # call site covers success, retry, and hard failure: a clean
@@ -5473,6 +5489,21 @@ def _run_worker(
                     emit, task, event, eid, runs_dir, env_backend, env_ctx,
                     branch_plan, cfg, inbox_dir, responses_dir, resp_path,
                     pending_hold, conversation_key=task.conversation_key,
+                    account_home=(
+                        account.context_home_root(account_context)
+                        if account_context is not None else brr_dir
+                    ),
+                    repo_root=repo_root,
+                )
+            entity = shuttle.Shuttle.load(
+                account.context_home_root(account_context)
+                if account_context is not None else brr_dir
+            )
+            if not _is_strand(task.meta) and entity.state in ("awake", "listening"):
+                entity.transition(
+                    "released", why="runner_completed", by="daemon",
+                    run_id=task.id, repo_root=str(repo_root),
+                    conversation_key=task.conversation_key,
                 )
             task.transition("done", why="runner_completed")
             _set_event_status_if_present(event, "done")
@@ -5534,6 +5565,11 @@ def _run_worker(
                 emit, task, event, eid, runs_dir, env_backend, env_ctx,
                 branch_plan, cfg, inbox_dir, responses_dir, resp_path,
                 hold_spec, conversation_key=task.conversation_key,
+                account_home=(
+                    account.context_home_root(account_context)
+                    if account_context is not None else brr_dir
+                ),
+                repo_root=repo_root,
             )
         retry_reason = result.retry_reason()
         will_retry = bool(retry_reason and retries_used < max_retries)
@@ -6904,6 +6940,7 @@ def _resolve_await_state(
     pending_events: list[dict[str, object]],
     *,
     outbox_dir: Path | None,
+    shuttle_home: Path | None = None,
 ) -> dict[str, object]:
     """Evaluate an armed ``await:`` against this tick's pending events.
 
@@ -6997,6 +7034,13 @@ def _resolve_await_state(
         armed["which"] = which
         result["outcome"] = outcome
         result["which"] = which
+        if shuttle_home is not None:
+            entity = shuttle.Shuttle.load(shuttle_home)
+            if entity.state == "listening":
+                entity.transition(
+                    "awake", why=f"await_resolved:{outcome}", by="daemon",
+                    run_id=task.id, conversation_key=task.conversation_key,
+                )
     return result
 
 
@@ -7159,6 +7203,7 @@ def _write_live_portal_state(
     brr_dir: Path | None = None,
     account_context: account.AccountContext | None = None,
     repo_label: str | None = None,
+    shuttle_home: Path | None = None,
 ) -> Path | None:
     """Refresh the runner-visible daemon-state portal.
 
@@ -7198,6 +7243,7 @@ def _write_live_portal_state(
         await_state = _resolve_await_state(
             task, events,
             outbox_dir=outbox_dir,
+            shuttle_home=shuttle_home,
         )
         # The bolt (design-the-bolt.md): absent until a `cut:` is accepted
         # this run — sibling work reads exactly this shape, so the key
@@ -7377,6 +7423,15 @@ def _write_live_portal_state(
                 ]
             except OSError:
                 coexisting_snapshot = None
+        shuttle_projection: dict[str, object] | None = None
+        if shuttle_home is not None:
+            live_shuttle = shuttle.Shuttle.load(shuttle_home)
+            shuttle_projection = {
+                "state": live_shuttle.state,
+                "why": live_shuttle.why,
+                "since": live_shuttle.since,
+                "run_id": live_shuttle.run_id,
+            }
         payload: dict[str, object] = {
             "version": 1,
             "generated_at": time.strftime(
@@ -7456,6 +7511,7 @@ def _write_live_portal_state(
             },
             "budget": {"elapsed_seconds": elapsed},
             "await": await_state,
+            "shuttle": shuttle_projection,
             # design-the-seat-that-never-quits.md: what happens when this
             # turn ends with nothing armed — the hooks' Stop phase reads it
             # to say "phase commit, then the seat parks" only when the
@@ -11345,6 +11401,18 @@ def _drain_outbox(
                 # (``_resolve_await_state``'s own update, keyed off the
                 # event's real timestamp).
                 task.meta.setdefault("hold_correspondent_at", time.time())
+                home = (
+                    account.context_home_root(account_context)
+                    if account_context is not None else outbox_dir.parent.parent
+                )
+                entity = shuttle.Shuttle.load(home)
+                if not _is_strand(task.meta) and entity.state == "awake":
+                    entity.transition(
+                        "listening", why="await_armed", by="daemon",
+                        run_id=task.id,
+                        repo_root=str(repo_root or entity.repo_root),
+                        conversation_key=task.conversation_key,
+                    )
                 promoted += 1
                 if stats is not None:
                     stats["await"] = stats.get("await", 0) + 1
@@ -17652,6 +17720,8 @@ def _arm_resource_hold(
     runs_dir: Path,
     *,
     conversation_key: str,
+    account_home: Path | None = None,
+    repo_root: Path | None = None,
     **hold_fields: object,
 ) -> dict[str, object]:
     """Park *task*: persist the hold record and move its status to "held".
@@ -17677,7 +17747,7 @@ def _arm_resource_hold(
     generation = int(previous.get("generation") or 0) + 1
     meta = resource_hold.build(
         conversation_key=conversation_key,
-        seat_key=_repo_seat_key(runs_dir),
+        seat_key=_shuttle_key(account_home, runs_dir),
         generation=generation,
         **hold_fields,
     )
@@ -17687,6 +17757,29 @@ def _arm_resource_hold(
         meta = _supersede_hold(runs_dir, other, meta, by_run=task.id)
     task.meta["resource_hold"] = meta
     task.update_status(resource_hold.RUN_STATUS, runs_dir)
+    home = _shuttle_home(account_home, runs_dir)
+    entity = shuttle.Shuttle.load(home)
+    # Direct caller tests and recovery paths can arm before the ordinary
+    # dispatch-site wake has been observed. The graph deliberately requires
+    # the incarnation edge rather than permitting released -> parked.
+    if entity.state == "released":
+        entity.transition(
+            "awake", why="event_dispatched", by="daemon", run_id=task.id,
+            repo_root=str(repo_root or _repo_root_for_runs(runs_dir)),
+            conversation_key=conversation_key,
+        )
+    elif entity.state == "parked":
+        entity.transition(
+            "awake", why="released:superseded", by="superseded", run_id=task.id,
+            repo_root=str(repo_root or _repo_root_for_runs(runs_dir)),
+            conversation_key=conversation_key,
+        )
+    entity.transition(
+        "parked", why=str(meta.get("reason") or "resource_hold"), by="daemon",
+        run_id=task.id,
+        repo_root=str(repo_root or _repo_root_for_runs(runs_dir)),
+        conversation_key=conversation_key,
+    )
     return meta
 
 
@@ -17824,6 +17917,8 @@ def _finalize_resource_hold(
     hold_fields: dict[str, object],
     *,
     conversation_key: str,
+    account_home: Path | None = None,
+    repo_root: Path | None = None,
 ) -> Run:
     """Park *task* on a resource hold instead of retry / fallback / give-up.
 
@@ -17843,7 +17938,8 @@ def _finalize_resource_hold(
     many correspondent messages arrive afterward.
     """
     meta = _arm_resource_hold(
-        task, runs_dir, conversation_key=conversation_key, **hold_fields,
+        task, runs_dir, conversation_key=conversation_key,
+        account_home=account_home, repo_root=repo_root, **hold_fields,
     )
     print(
         f"[brnrd] worker {eid}: resource hold armed "
@@ -17927,21 +18023,22 @@ def _held_runs_for_repo(runs_dir: Path) -> list[Run]:
     return held
 
 
-def _repo_seat_key(runs_dir: Path) -> str:
-    """Stable identity of the repository seat indexed by *runs_dir*.
-
-    The current seat index is repository-scoped: linked worktrees already
-    converge on the host's shared ``.brr/runs`` directory.  Persisting that
-    resolved address names the same boundary :func:`_repo_seat` enforces,
-    without pretending the later account-wide seat migration has landed.
-    """
-    try:
-        return str(runs_dir.resolve())
-    except OSError:
-        return str(runs_dir.absolute())
+def _repo_root_for_runs(runs_dir: Path) -> Path:
+    """Best-effort repository root for a shared ``.brr/runs`` directory."""
+    return runs_dir.parent.parent
 
 
-def _repo_seat(runs_dir: Path) -> Run | None:
+def _shuttle_home(account_home: Path | None, runs_dir: Path) -> Path:
+    """The already-resolved home, with a project-local compatibility fallback."""
+    return account_home or runs_dir.parent
+
+
+def _shuttle_key(account_home: Path | None, runs_dir: Path) -> str:
+    """Stable account identity for the one machine-wide Shuttle."""
+    return shuttle.key_for(_shuttle_home(account_home, runs_dir))
+
+
+def _repo_seat(runs_dir: Path, *, account_home: Path | None = None) -> Run | None:
     """The repo's one parked seat, or ``None`` (#1890).
 
     One seat per repo: the newest-armed hold is the seat, and any older
@@ -17961,14 +18058,18 @@ def _repo_seat(runs_dir: Path) -> Run | None:
         seat.meta["resource_hold"] = meta
         seat.save(runs_dir)
     meta = seat.meta.get("resource_hold") or {}
-    if not str(meta.get("seat_key") or "").strip():
-        # Active holds written before the seat key existed remain resumable.
-        # Upgrade them at the one read that establishes which record is the
-        # repository's seat, rather than leaving the admission guard to infer
-        # identity from the last conversation.
-        meta["seat_key"] = _repo_seat_key(runs_dir)
+    current_key = _shuttle_key(account_home, runs_dir)
+    recorded_key = str(meta.get("seat_key") or "").strip()
+    if not recorded_key or Path(recorded_key).is_absolute():
+        # Active holds written before the account-wide Shuttle key existed
+        # remain resumable. This is the one read that establishes the live
+        # record, so it owns the in-place upgrade and its witness.
+        meta["seat_key"] = current_key
         seat.meta["resource_hold"] = meta
         seat.save(runs_dir)
+        print(
+            f"[brnrd] hold seat_key upgraded to the shuttle key: {seat.id}"
+        )
     return seat
 
 
@@ -18161,6 +18262,16 @@ def _apply_resource_hold_resume(
             held.meta["resource_hold"] = updated_meta
             held.conversation_key = seat
     released = release_held_run(held, by=by, why="resume")
+    entity = shuttle.Shuttle.load(_shuttle_home(
+        account.context_home_root(account_context) if account_context else None,
+        runs_dir,
+    ))
+    if entity.state == "parked":
+        entity.transition(
+            "awake", why="released:resume", by=by, run_id=held.id,
+            repo_root=str(_repo_root_for_runs(runs_dir)),
+            conversation_key=seat,
+        )
     stamps: dict[str, object] = {}
     # #1890: the resume boots into the *seat's* conversation, never the
     # releaser's (a tick's `schedule:*`, a strand's `run:<parent>`). Written
@@ -18306,6 +18417,16 @@ def _release_reset_holds_due(
             released_meta = release_held_run(
                 held, by=released_by, why=f"measured_{released_by}",
             )
+            entity = shuttle.Shuttle.load(_shuttle_home(
+                account.context_home_root(account_context) if account_context else None,
+                runs_dir,
+            ))
+            if entity.state == "parked":
+                entity.transition(
+                    "awake", why=f"released:measured_{released_by}",
+                    by=released_by, run_id=held.id, repo_root=str(root),
+                    conversation_key=_seat_conversation(held),
+                )
             for accumulated_id in released_meta.get("accumulated_event_ids") or []:
                 _undefer_held_event(
                     _hold_undefer_inboxes(account_context, inbox_dir), accumulated_id,
@@ -18354,6 +18475,16 @@ def _apply_run_release(
     released = release_held_run(
         held, by="dashboard", why="dashboard_release",
     )
+    entity = shuttle.Shuttle.load(_shuttle_home(
+        account.context_home_root(account_context) if account_context else None,
+        runs_dir,
+    ))
+    if entity.state == "parked":
+        entity.transition(
+            "released", why="released:dashboard_release", by="dashboard",
+            run_id=held.id, repo_root=str(_repo_root_for_runs(runs_dir)),
+            conversation_key=_seat_conversation(held),
+        )
     if inbox_dir is not None:
         drawers = _hold_undefer_inboxes(account_context, inbox_dir)
         for accumulated_id in released.get("accumulated_event_ids") or []:
@@ -18411,6 +18542,26 @@ def _apply_run_respawn(
     meta = held.meta.get("resource_hold") or {}
     if not resource_hold.is_active(meta):
         return None
+    home = _shuttle_home(
+        account.context_home_root(account_context) if account_context else None,
+        runs_dir,
+    )
+    entity = shuttle.Shuttle.load(home)
+    # A dashboard respawn starts from a parked seat. The state graph has no
+    # parked -> handing-off edge: wake the old incarnation before beginning
+    # its handoff, preserving both facts instead of weakening the graph.
+    if entity.state == "parked":
+        entity.transition(
+            "awake", why="released:dashboard_respawn", by="dashboard",
+            run_id=held.id, repo_root=str(_repo_root_for_runs(runs_dir)),
+            conversation_key=_seat_conversation(held),
+        )
+    if entity.state in ("awake", "listening"):
+        entity.transition(
+            "handing-off", why="dashboard_respawn", by="dashboard",
+            run_id=held.id, repo_root=str(_repo_root_for_runs(runs_dir)),
+            conversation_key=_seat_conversation(held),
+        )
     released = release_held_run(
         held, by="respawn", why="dashboard_respawn",
     )
@@ -18438,6 +18589,12 @@ def _apply_run_respawn(
     new_path = protocol.create_event(
         inbox_dir, held.source or "respawn", handoff, **event_meta,
     )
+    if entity.state == "handing-off":
+        entity.transition(
+            "awake", why="respawn_event_minted", by="dashboard",
+            run_id=new_path.stem, repo_root=str(_repo_root_for_runs(runs_dir)),
+            conversation_key=held.conversation_key,
+        )
     print(
         f"[brnrd] resource hold released by dashboard (respawn): "
         f"{held.id} -> {new_path.stem}"
@@ -18491,13 +18648,23 @@ def _handle_resource_held_events(
     """
     if not pending:
         return pending
+    account_home = (
+        account.context_home_root(account_context)
+        if account_context is not None else None
+    )
+    standing_repo_root: Path | None = None
+    if account_home is not None:
+        entity = shuttle.Shuttle.load(account_home)
+        if entity.state == "parked" and entity.repo_root:
+            standing_repo_root = Path(entity.repo_root)
     by_repo: dict[Path, list["_DispatchTarget"]] = {}
     for target in pending:
         by_repo.setdefault(target.repo_root, []).append(target)
     survivors: list["_DispatchTarget"] = []
     for repo_root, targets in by_repo.items():
-        runs_dir = gitops.shared_brr_dir(repo_root) / "runs"
-        held = _repo_seat(runs_dir)
+        seat_repo_root = standing_repo_root or repo_root
+        runs_dir = gitops.shared_brr_dir(seat_repo_root) / "runs"
+        held = _repo_seat(runs_dir, account_home=account_home)
         if held is None:
             survivors.extend(targets)
             continue
@@ -18556,7 +18723,7 @@ def _handle_resource_held_events(
                 )
                 continue
             held_seat_key = str(hold_meta.get("seat_key") or "").strip()
-            target_seat_key = _repo_seat_key(runs_dir)
+            target_seat_key = _shuttle_key(account_home, runs_dir)
             if held_seat_key != target_seat_key:
                 # A record moved or misrouted across repository indexes is
                 # not this repository's seat.  Thread equality cannot grant
@@ -18579,7 +18746,7 @@ def _handle_resource_held_events(
                 # a message is the cheapest moment to check for a
                 # refill — and either thaw on the measured number or
                 # keep the message and answer it with the reading.
-                pct = _held_run_binding_pct(repo_root, held, refresh=True)
+                pct = _held_run_binding_pct(seat_repo_root, held, refresh=True)
                 thawed_by: str | None = None
                 reading = pct
                 if resource_hold.refill_condition_met(hold_meta, pct):
@@ -18589,7 +18756,7 @@ def _handle_resource_held_events(
                     # about the body it was armed on, which after a fallback
                     # is not the body this message would be answered by.
                     alternate = _seat_alternate_binding_pct(
-                        repo_root, held, refresh=True,
+                        seat_repo_root, held, refresh=True,
                     )
                     if alternate is not None and resource_hold.refill_condition_met(
                         hold_meta, alternate[1],
@@ -18635,7 +18802,7 @@ def _handle_resource_held_events(
                     )
                     continue
                 if verb == "respawn":
-                    shell, core, note = _resolve_bounce_runner(repo_root, arg)
+                    shell, core, note = _resolve_bounce_runner(seat_repo_root, arg)
                     if note:
                         _write_control_response(target, note)
                         continue
