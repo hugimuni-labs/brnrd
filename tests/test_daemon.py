@@ -310,6 +310,9 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     assert persisted.meta["transitions"][-1]["from"] == "running"
     assert persisted.meta["transitions"][-1]["to"] == "done"
     assert persisted.meta["transitions"][-1]["why"] == "runner_completed"
+    entity = daemon.shuttle.Shuttle.load(tmp_path / ".brr")
+    assert entity.state == "released"
+    assert entity.transitions[-1]["why"] == "runner_completed"
     response = (tmp_path / ".brr" / "responses" / "evt-1.md").read_text(encoding="utf-8")
     assert response == "plain answer\n"
 
@@ -13677,6 +13680,8 @@ def _drain_await(tmp_path, frontmatter, *, meta=None, stats=None, pre_pending=()
 
 def test_drain_outbox_arms_a_bare_await(tmp_path):
     """The whole documented shape: a marker and a ceiling, nothing else."""
+    entity = daemon.shuttle.Shuttle.load(tmp_path / ".brr")
+    entity.transition("awake", why="event_dispatched", run_id="run-parent")
     stats: dict[str, int] = {}
     promoted, task, outbox = _drain_await(
         tmp_path, "---\nawait: true\ntimeout: 20m\n---\n", stats=stats,
@@ -13689,6 +13694,9 @@ def test_drain_outbox_arms_a_bare_await(tmp_path):
     assert armed["timeout_seconds"] == 1200.0
     assert armed["resolved"] is False
     assert armed["generation"]
+    entity = daemon.shuttle.Shuttle.load(tmp_path / ".brr")
+    assert entity.state == "listening"
+    assert entity.transitions[-1]["why"] == "await_armed"
     # The staged file is retired like every other drained verb — an armed
     # await isn't left sitting in the outbox to be misread as an
     # undelivered plain message.
@@ -14132,16 +14140,24 @@ class TestHoldRatioFacet:
         assert "pending_resource_hold" not in task.meta
 
 
-def test_resolve_await_state_refreshes_correspondent_clock_on_a_real_event():
+def test_resolve_await_state_refreshes_correspondent_clock_on_a_real_event(tmp_path):
     task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
     task.meta["await"] = _armed(armed_at=time.time() - 100)
     task.meta["hold_correspondent_at"] = 0.0
     event = {"id": "evt-2", "source": "telegram", "created": "2026-09-06T12:00:00Z"}
+    entity = daemon.shuttle.Shuttle.load(tmp_path)
+    entity.transition("awake", why="event_dispatched", run_id=task.id)
+    entity.transition("listening", why="await_armed", run_id=task.id)
 
-    state = daemon._resolve_await_state(task, [event], outbox_dir=None)
+    state = daemon._resolve_await_state(
+        task, [event], outbox_dir=None, shuttle_home=tmp_path,
+    )
 
     assert state["outcome"] == "event"
     assert task.meta["hold_correspondent_at"] > 0.0
+    entity = daemon.shuttle.Shuttle.load(tmp_path)
+    assert entity.state == "awake"
+    assert entity.transitions[-1]["why"] == "await_resolved:event"
 
 
 def test_resolve_await_state_ignores_accumulate_only_sources_for_the_clock():
