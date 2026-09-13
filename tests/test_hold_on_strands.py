@@ -159,9 +159,13 @@ class TestHeldEventsOnStrands:
         survivors = daemon._handle_resource_held_events([target], None)
 
         assert survivors == [target]
-        hold = self._persisted(tmp_path).meta["resource_hold"]
+        persisted = self._persisted(tmp_path)
+        hold = persisted.meta["resource_hold"]
         assert hold["released"] is True
         assert hold["released_by"] == "strand"
+        assert persisted.meta["transitions"][-1]["from"] == "held"
+        assert persisted.meta["transitions"][-1]["to"] == "done"
+        assert persisted.meta["transitions"][-1]["why"].startswith("released:")
         reread = protocol._read_event(target.inbox_dir / "evt-kid.md")
         assert reread.get("defer_reason") is None
 

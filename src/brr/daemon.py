@@ -112,7 +112,7 @@ from . import resource_hold
 from . import usage_samples
 from . import weld
 from . import worktree
-from .run import Run, list_runs, run_manifest_path
+from .run import STATUSES, TERMINAL_STATUSES, Run, list_runs, run_manifest_path
 
 class _RunnerRuntime(NamedTuple):
     """What resolving a runner profile yields for one attempt.
@@ -430,9 +430,7 @@ _PUBLISH_TREE_MISMATCH = "publish-tree-mismatch"
 #: wherever a reader must distinguish "this run produced nothing" from "this
 #: run has not produced it *yet*" — the completion note's produce handles, and
 #: the bolt's stranded-strand check (#1298).
-_TERMINAL_RUN_STATUSES = frozenset(
-    {"done", "error", "conflict", "stopped", "released"}
-)
+_TERMINAL_RUN_STATUSES = TERMINAL_STATUSES
 
 
 def _publish_tree_mismatch(repo_root: Path) -> dict | None:
@@ -3344,7 +3342,8 @@ def _run_worker(
             task.meta["root_kind"] = "home"
             task.meta["forge_lane"] = False
         task.conversation_key = conv_key
-        task.status = "done"
+        task.save(runs_dir)
+        task.transition("done", why="duplicate_origin_message")
         if correspondent_key:
             task.meta["correspondent_key"] = correspondent_key
         task.meta["repo_label"] = repo_label
@@ -3451,7 +3450,8 @@ def _run_worker(
             f"source={event.get('source', '')} "
             f"tier={task.meta.get('trust_tier', '')} reason={reason}"
         )
-        task.status = "done"
+        task.save(runs_dir)
+        task.transition("done", why="trust_refused")
         task.meta["publish_status"] = "refused"
         protocol.update_event_meta(event, run_id=task.id, repo_label=repo_label)
         _persist_run_state_doc(
@@ -5474,7 +5474,7 @@ def _run_worker(
                     branch_plan, cfg, inbox_dir, responses_dir, resp_path,
                     pending_hold, conversation_key=task.conversation_key,
                 )
-            task.update_status("done", runs_dir)
+            task.transition("done", why="runner_completed")
             _set_event_status_if_present(event, "done")
             emit("finalizing", run_id=task.id, stage="done")
             # Per-branch lock around finalize: serialises publish on a
@@ -14642,7 +14642,6 @@ def _finalize_stopped_run(
     with _branch_lock(branch_plan.target_branch):
         task = env_backend.finalize(env_ctx, task, runs_dir)
     if isinstance(submitted_produce, dict):
-        task.status = "released"
         task.meta["publish_branch"] = submitted_produce.get(
             "spawn_published_branch"
         )
@@ -16238,7 +16237,9 @@ def _closed_ledger_run_ids(account_context: account.AccountContext) -> set[str]:
 # looking only for "running", walked past every one of them: 280 of 602 nodes
 # on the live account, permanently claiming they had never started. The
 # guardrail was guarding a state the writer no longer produced.
-_UNFINISHED_RUN_STATUSES = frozenset({"running", "pending"})
+_UNFINISHED_RUN_STATUSES = (
+    frozenset(STATUSES) - TERMINAL_STATUSES - {resource_hold.RUN_STATUS}
+)
 
 
 def _reaped_run_state_text(text: str, *, reaped_at: str, reason: str) -> str:
@@ -17695,17 +17696,11 @@ def _supersede_hold(
     other_meta = other.meta.get("resource_hold") or {}
     for folded_id in other_meta.get("accumulated_event_ids") or []:
         into = resource_hold.accumulate_event(into, folded_id)
-    superseded = resource_hold.mark_released(other_meta, by="superseded")
-    superseded["superseded_by"] = by_run
-    other.meta["resource_hold"] = superseded
-    # #1927: `held` (resource_hold.RUN_STATUS) rides `_UNFINISHED_RUN_STATUSES`
-    # exclusion — nothing sweeps it back off "held" on its own, so a release
-    # that leaves status untouched draws a PARKED card forever. Every release
-    # in this module ends the run's process one way or another; "done" is
-    # this module's own terminal word for that (`_apply_run_release` already
-    # used it before this fix reached the other four call sites).
-    other.status = "done"
-    other.save(runs_dir)
+    other_meta["superseded_by"] = by_run
+    other.meta["resource_hold"] = other_meta
+    release_held_run(
+        other, by="superseded", why=f"superseded_by:{by_run}",
+    )
     print(
         f"[brnrd] resource hold superseded: {other.id} -> {by_run} "
         "(one seat per repo)"
@@ -18129,13 +18124,7 @@ def _apply_resource_hold_resume(
     meta = held.meta.get("resource_hold") or {}
     if not resource_hold.is_active(meta):
         return
-    released = resource_hold.mark_released(meta, by=by)
-    held.meta["resource_hold"] = released
-    # #1927: the resume dispatches a *fresh* run on this same conversation
-    # (see `_handle_resource_held_events`) — this held run's own process is
-    # over, so its status must leave "held" or it draws a stale PARKED card.
-    held.status = "done"
-    held.save(runs_dir)
+    released = release_held_run(held, by=by, why="resume")
     stamps: dict[str, object] = {}
     # #1890: the resume boots into the *seat's* conversation, never the
     # releaser's (a tick's `schedule:*`, a strand's `run:<parent>`). Written
@@ -18167,29 +18156,53 @@ def _apply_resource_hold_resume(
         )
 
 
+def release_held_run(run: Run, *, by: str, why: str) -> dict[str, object]:
+    """Consume one hold and record why its run left ``held``.
+
+    A stale reconciler may hand us a hold whose resource record was already
+    released while the run status was not. Preserve that first releaser's
+    resource receipt, but still write the missing run transition.
+    """
+    meta = run.meta.get("resource_hold") or {}
+    released = (
+        resource_hold.mark_released(meta, by=by)
+        if resource_hold.is_active(meta)
+        else meta
+    )
+    run.meta["resource_hold"] = released
+    run.transition("done", why=f"released:{why}", by=by)
+    return released
+
+
 def _reconcile_stale_held_status(runs_dir: Path) -> int:
     """Correct any run left on ``status: "held"`` whose hold is actually released.
 
-    #1927: every release path in this module now moves status off "held"
-    itself (``_supersede_hold``, ``_apply_resource_hold_resume``,
-    ``_release_reset_holds_due``'s own ``mark_released`` call,
-    ``_apply_run_respawn`` — ``_apply_run_release`` always did). This is the
-    backstop for a record written before that fix landed, or by some future
-    release path that forgets: read raw by status word (not through
+    Every release path in this module now moves status off "held" through
+    :func:`release_held_run`. This is a witness for a record written before
+    that invariant landed, or by a future path that bypasses it: read raw by
+    status word (not through
     ``_held_runs_for_repo``, which already excludes anything ``is_active``
     is ``False`` for) so a stale record is *found*, not silently skipped.
     Idempotent — a record already corrected reads ``is_active`` ``True`` or
     a non-"held" status and is left alone the next time this runs.
+
+    Delete this witness once it has stayed silent for a week.
     """
     fixed = 0
     for task in list_runs(runs_dir, status=resource_hold.RUN_STATUS):
         meta = task.meta.get("resource_hold")
         if not meta or resource_hold.is_active(meta):
             continue
-        task.status = "done"
-        task.save(runs_dir)
+        release_held_run(
+            task,
+            by=str(meta.get("released_by") or "reconciler"),
+            why="stale_status_reconciliation",
+        )
         fixed += 1
-        print(f"[brnrd] resource hold status reconciled (was stale 'held'): {task.id}")
+        print(
+            f"[brnrd] stale held status reconciled: {task.id} — "
+            "a release path bypassed release_held_run"
+        )
     return fixed
 
 
@@ -18255,10 +18268,9 @@ def _release_reset_holds_due(
                     )
             elif not resource_hold.reset_condition_met(meta):
                 continue
-            released_meta = resource_hold.mark_released(meta, by=released_by)
-            held.meta["resource_hold"] = released_meta
-            held.status = "done"  # #1927: leave "held" or the dashboard stays parked
-            held.save(runs_dir)
+            released_meta = release_held_run(
+                held, by=released_by, why=f"measured_{released_by}",
+            )
             for accumulated_id in released_meta.get("accumulated_event_ids") or []:
                 _undefer_held_event(
                     _hold_undefer_inboxes(account_context, inbox_dir), accumulated_id,
@@ -18304,10 +18316,9 @@ def _apply_run_release(
     meta = held.meta.get("resource_hold") or {}
     if not resource_hold.is_active(meta):
         return
-    released = resource_hold.mark_released(meta, by="dashboard")
-    held.meta["resource_hold"] = released
-    held.status = "done"
-    held.save(runs_dir)
+    released = release_held_run(
+        held, by="dashboard", why="dashboard_release",
+    )
     if inbox_dir is not None:
         drawers = _hold_undefer_inboxes(account_context, inbox_dir)
         for accumulated_id in released.get("accumulated_event_ids") or []:
@@ -18365,10 +18376,9 @@ def _apply_run_respawn(
     meta = held.meta.get("resource_hold") or {}
     if not resource_hold.is_active(meta):
         return None
-    released = resource_hold.mark_released(meta, by="respawn")
-    held.meta["resource_hold"] = released
-    held.status = "done"  # #1927: leave "held" or the dashboard stays parked
-    held.save(runs_dir)
+    released = release_held_run(
+        held, by="respawn", why="dashboard_respawn",
+    )
     drawers = _hold_undefer_inboxes(account_context, inbox_dir)
     for accumulated_id in released.get("accumulated_event_ids") or []:
         _undefer_held_event(drawers, accumulated_id)
@@ -18829,7 +18839,7 @@ def _set_event_run_outcome(event: dict, outcome: str) -> bool:
 
     The letter's lifecycle (``protocol.LETTER_STATUSES`` —
     pending/processing/done/delivered/noted) and a run's outcome
-    (``run.py``'s ``STATUSES`` plus the daemon's ``stopped`` result) are two
+    (``run.py``'s constrained ``STATUSES``) are two
     different state machines that used to share one field. This writes the
     outcome to its own ``run_outcome:`` key and settles the letter at
     ``"done"`` instead of the raw outcome word. ``"done"`` is correct, not
