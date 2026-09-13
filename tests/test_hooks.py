@@ -4453,7 +4453,7 @@ def test_draws_chip_strands_only_when_self_unknown():
             },
         },
     }
-    assert hooks._draws_chip(resources) == "▷1 900k"
+    assert hooks._draws_chip(resources) == "▷1·a 900k"
 
 
 def test_draws_chip_never_fabricates_a_zero_for_an_absent_self():
@@ -4476,6 +4476,24 @@ def test_draws_chip_renders_a_bare_count_when_no_strand_has_a_reading_yet():
         },
     }
     assert hooks._draws_chip(resources) == "▷2"
+
+
+def test_draws_chip_names_the_one_thread_by_its_id_suffix():
+    """One thread: the chip carries its id suffix so the seat can address it
+    without guessing (a guessed ``to:`` was refused on 2026-09-13)."""
+    resources = {"quota": {"draws": {"self": None, "strands": [
+        {"run_id": "run-260913-2017-tv63", "title": "x", "weighted": 900_000},
+    ]}}}
+    assert hooks._draws_chip(resources) == "▷1·tv63 900k"
+    resources = {"quota": {"draws": {"self": None, "strands": [
+        {"run_id": "run-260913-2017-tv63", "title": "x", "weighted": None},
+    ]}}}
+    assert hooks._draws_chip(resources) == "▷1·tv63"
+    two = {"quota": {"draws": {"self": None, "strands": [
+        {"run_id": "run-a", "title": "x", "weighted": None},
+        {"run_id": "run-b", "title": "y", "weighted": None},
+    ]}}}
+    assert hooks._draws_chip(two) == "▷2"
 
 
 def test_draws_chip_none_without_a_draws_facet():
@@ -4536,7 +4554,7 @@ def test_render_bar_renders_the_draws_chip_beside_quota():
     line = hooks.format_delta(payload, rendered_chips={})
     assert line is not None
     assert "q S83" in line
-    assert _says(line, "me 1.2m · ▷1 3.4m")
+    assert _says(line, "me 1.2m · ▷1·a 3.4m")
 
 
 def test_quota_chip_disambiguates_a_repeated_first_letter():
@@ -5120,6 +5138,26 @@ def test_finished_spawn_outcomes_render_identically_at_both_boundaries():
                 "spawn_status": "error",
             }],
             "- ▷ 1 finished spawn(s) — 1 error (run-error).",
+        ),
+        (
+            # A thread stopped after its submit finishes ``released``: the
+            # seat's *stopped after submit* row, never an error.
+            [{
+                "id": "evt-released", "source": "spawn_completed",
+                "spawn_parent_run_id": run_id, "spawned_by_run": "run-released",
+                "spawn_status": "released",
+            }],
+            "- ▷ 1 finished spawn(s) observed — no address needed; "
+            "will retire at run end.",
+        ),
+        (
+            [{
+                "id": "evt-released-mute", "source": "spawn_completed",
+                "spawn_parent_run_id": run_id, "spawned_by_run": "run-mute",
+                "spawn_status": "released", "spawn_report_found": False,
+            }],
+            "- ▷ 1 finished spawn(s) — 1 released after submit "
+            "(run-mute; no report written).",
         ),
         (
             [

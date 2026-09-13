@@ -2133,10 +2133,17 @@ def _draws_chip(resources: dict[str, Any]) -> str | None:
             int(row.get("weighted")) for row in strands
             if isinstance(row, dict) and row.get("weighted") is not None
         ]
+        # One thread: name it, so the seat can address it without guessing
+        # (a guessed ``to:`` was refused on 2026-09-13; the chip knew the id).
+        label = f"▷{len(strands)}"
+        if len(strands) == 1 and isinstance(strands[0], dict):
+            run_id = str(strands[0].get("run_id") or "").strip()
+            if run_id:
+                label += f"·{run_id.rsplit('-', 1)[-1]}"
         if known:
-            parts.append(f"▷{len(strands)} {allowance.format_tokens(sum(known))}")
+            parts.append(f"{label} {allowance.format_tokens(sum(known))}")
         else:
-            parts.append(f"▷{len(strands)}")
+            parts.append(label)
     return " · ".join(parts) if parts else None
 
 
@@ -4219,8 +4226,13 @@ def _finished_spawns_line(finished_spawns: list[dict[str, Any]]) -> str:
         for event in finished_spawns
         if str(event.get("spawn_status") or "").strip()
     ]
-    error_count = sum(status != "done" for status in statuses)
+    # A thread that converged and was then stopped after its ``submit:``
+    # finishes ``released`` — that is the seat's own ledger row *stopped after
+    # submit*, not a failure. Counting it under "error" made the chip call a
+    # night's produce a defect on every line (eleven of twelve, 2026-09-14).
     ok_count = statuses.count("done")
+    released_count = statuses.count("released")
+    error_count = sum(status not in ("done", "released") for status in statuses)
     # An event that carries no status is not a healthy one — it is one whose
     # outcome was never determined, and that is the case this whole line
     # exists for. Folding it into the all-clear branch would restate #730's
@@ -4246,6 +4258,8 @@ def _finished_spawns_line(finished_spawns: list[dict[str, Any]]) -> str:
     counts: list[str] = []
     if ok_count:
         counts.append(f"{ok_count} ok")
+    if released_count:
+        counts.append(f"{released_count} released after submit")
     if error_count:
         counts.append(f"{error_count} error")
     if unknown_count:
@@ -4254,7 +4268,7 @@ def _finished_spawns_line(finished_spawns: list[dict[str, Any]]) -> str:
     noteworthy = [
         event for event in finished_spawns
         if not str(event.get("spawn_status") or "").strip()
-        or event.get("spawn_status") != "done"
+        or event.get("spawn_status") not in ("done", "released")
         or event.get("spawn_report_found") is False
     ]
     notes: list[str] = []
