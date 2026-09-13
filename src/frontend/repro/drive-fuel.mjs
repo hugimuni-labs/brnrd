@@ -114,6 +114,12 @@ const WIDTHS = [
 	{ name: 'desktop', width: 1280, height: 900 }
 ];
 
+async function roundedHeight(locator, name) {
+	const box = await locator.boundingBox();
+	if (!box) throw new Error(`${name} was not measurable`);
+	return Math.round(box.height);
+}
+
 async function waitForServer(url, tries = 90) {
 	for (let i = 0; i < tries; i++) {
 		try {
@@ -158,65 +164,78 @@ async function main() {
 				});
 			});
 			await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'networkidle' });
-			await page.waitForSelector('[data-measure="fuel"]', { timeout: 15000 });
-			await delay(700);
-
+			const fuel = page.locator('[data-measure="fuel"]');
 			const deck = page.locator('[data-measure="gauge"]');
+			const providerRows = page.locator('.fuel-provider-row');
+			const claudeRow = providerRows.first();
+			const codexRow = providerRows.nth(1);
+			await fuel.waitFor({ state: 'visible', timeout: 15000 });
+			await claudeRow.waitFor({ state: 'visible', timeout: 15000 });
+
 			await deck.screenshot({ path: `${OUT}/${vp.name}-1-deck.png` });
 
 			// press the CLAUDE fuel row, as a reader would
-			await page.locator('.fuel-provider-row').first().click();
-			await page.waitForSelector('[data-measure="provider-bay"]', { timeout: 15000 });
-			await delay(600);
-			const deckAfterOpen = await page.evaluate(() =>
-				Math.round(document.querySelector('[data-measure="fuel"]').getBoundingClientRect().height)
-			);
+			await claudeRow.click();
+			await page.locator('.fuel-provider-row.is-open').filter({ hasText: 'claude' }).waitFor({
+				state: 'visible',
+				timeout: 15000
+			});
+			await page
+				.locator('[data-measure="provider-bay"]')
+				.waitFor({ state: 'visible', timeout: 15000 });
+			const deckAfterOpen = await roundedHeight(fuel, 'fuel deck');
 			await page.screenshot({ path: `${OUT}/${vp.name}-2-open-claude.png`, fullPage: false });
 			const before = await page.locator('[data-measure="resources"] .workshop-label').textContent();
 
 			// press CODEX: the open row folds, this one opens, and the bay follows.
 			// There is no second control that could disagree with it.
-			await page.locator('.fuel-provider-row').nth(1).click();
-			await delay(500);
+			await codexRow.click();
+			await page.locator('.fuel-provider-row.is-open').filter({ hasText: 'codex' }).waitFor({
+				state: 'visible',
+				timeout: 15000
+			});
 			const after = await page.locator('[data-measure="resources"] .workshop-label').textContent();
-			const openRows = await page.evaluate(
-				() => document.querySelectorAll('.fuel-provider-row[aria-expanded="true"]').length
-			);
+			const openRows = await page.locator('.fuel-provider-row[aria-expanded="true"]').count();
 			await page.screenshot({ path: `${OUT}/${vp.name}-3-open-codex.png`, fullPage: false });
 
 			// settings is its own small block now, and holds no core picker
-			await page.locator('[data-role="bench-handle"]').click();
-			await page.waitForSelector('[data-measure="settings"]', { timeout: 15000 });
-			await delay(400);
+			const benchHandle = page.locator('[data-role="bench-handle"]');
+			await benchHandle.click();
+			await page.locator('[data-role="bench-handle"][aria-expanded="true"]').waitFor({
+				state: 'visible',
+				timeout: 15000
+			});
 			await page.screenshot({ path: `${OUT}/${vp.name}-5-settings.png`, fullPage: false });
-			const settingsHasRack = await page.evaluate(
-				() =>
-					document.querySelector('[data-measure="settings"] [data-measure="spool-rack"]') !== null
-			);
+			const settingsHasRack =
+				(await page.locator('[data-measure="settings"] [data-measure="spool-rack"]').count()) !== 0;
 
 			// back to claude, and read the allowance chip off the fable row
-			await page.locator('.fuel-provider-row').first().click();
-			await page.waitForSelector('[data-measure="provider-bay"]', { timeout: 15000 });
-			await delay(400);
-			const allowanceChip = await page.evaluate(() => {
-				const row = [...document.querySelectorAll('[data-role="rack-row-tap"]')].find((b) =>
-					b.textContent.includes('claude-fable')
-				);
-				return row ? row.innerText.replace(/\n/g, ' ') : null;
+			await claudeRow.click();
+			await page.locator('.fuel-provider-row.is-open').filter({ hasText: 'claude' }).waitFor({
+				state: 'visible',
+				timeout: 15000
 			});
+			const fableRow = page
+				.locator('[data-role="rack-row-tap"]')
+				.filter({ hasText: 'claude-fable' });
+			const allowanceChip = (await fableRow.count())
+				? (await fableRow.innerText()).replace(/\n/g, ' ')
+				: null;
 			await page.screenshot({ path: `${OUT}/${vp.name}-4-allowance.png`, fullPage: false });
 
-			const rows = await page.evaluate(() =>
-				[...document.querySelectorAll('.fuel-provider-row')].map((row) => ({
-					text: row.innerText.replace(/\n/g, ' | '),
-					fills: row.querySelectorAll('.fuel-fill').length,
-					ghosts: row.querySelectorAll('.fuel-ghost').length,
-					height: Math.round(row.getBoundingClientRect().height)
-				}))
+			const rows = await Promise.all(
+				Array.from({ length: await providerRows.count() }, async (_, index) => {
+					const row = providerRows.nth(index);
+					const [text, fills, ghosts, height] = await Promise.all([
+						row.innerText(),
+						row.locator('.fuel-fill').count(),
+						row.locator('.fuel-ghost').count(),
+						roundedHeight(row, `provider row ${index}`)
+					]);
+					return { text: text.replace(/\n/g, ' | '), fills, ghosts, height };
+				})
 			);
-			const gaugeH = await page.evaluate(() =>
-				Math.round(document.querySelector('[data-measure="gauge"]').getBoundingClientRect().height)
-			);
+			const gaugeH = await roundedHeight(deck, 'gauge');
 			console.log(
 				JSON.stringify(
 					{
