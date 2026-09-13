@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from brr import daemon, envs, protocol, resource_hold
+from brr import account, daemon, envs, protocol, resource_hold, shuttle
 from brr.run import Run
 from brr.runner import RunnerResult
 
@@ -115,6 +115,10 @@ class TestArmOnConfidentUsageLimitError:
         assert hold["provider"] == "codex"
         assert hold["resume_condition"] == resource_hold.RESUME_OPERATOR
         assert hold["released"] is False
+        entity = shuttle.Shuttle.load(tmp_path / ".brr")
+        assert entity.state == "parked"
+        assert entity.run_id == task.id
+        assert entity.transitions[-1]["to"] == "parked"
         # The letter's own lifecycle settles at "done" either way
         # (design-the-post.md), with the run's real outcome in its own key.
         assert event.get("status") == "done"
@@ -406,6 +410,26 @@ class TestHeldRunsForRepo:
 
 
 class TestHandleResourceHeldEvents:
+    def _account_context(self, tmp_path, repos):
+        home = tmp_path / "account-home"
+        registry = home / "account" / "repos.json"
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text(
+            json.dumps({"account_id": "acc-test", "home_id": "acc-test"}),
+            encoding="utf-8",
+        )
+        mapped = {
+            label: account.AccountRepo(label=label, root=root)
+            for label, root in repos.items()
+        }
+        return account.HomeContext(
+            account_id="acc-test", dominion_repo=home,
+            dispatch_inbox=home / "dispatch" / "inbox",
+            responses_dir=home / "dispatch" / "responses",
+            runs_dir=home / "runs", repos=mapped,
+            default_repo=next(iter(mapped.values())), home_root=home,
+        )
+
     def _target(self, tmp_path, *, source: str, eid: str) -> "daemon._DispatchTarget":
         inbox_dir = tmp_path / ".brr" / "inbox"
         inbox_dir.mkdir(parents=True, exist_ok=True)
@@ -533,26 +557,40 @@ class TestHandleResourceHeldEvents:
             "cloud:telegram:999:"
         )
 
-    def test_message_for_a_different_repo_does_not_release_this_seat(self, tmp_path):
+    def test_message_about_another_repo_is_mail_to_the_same_shuttle(self, tmp_path):
         repo_a = tmp_path / "repo-a"
         repo_b = tmp_path / "repo-b"
-        self._arm_held_run(repo_a, conversation_key="schedule:tick")
+        context = self._account_context(
+            tmp_path, {"org/repo-a": repo_a, "org/repo-b": repo_b},
+        )
+        held = self._arm_held_run(
+            repo_a, seat_key="acc-test", conversation_key="schedule:tick",
+        )
+        entity = shuttle.Shuttle.load(context.home_root)
+        entity.transition(
+            "awake", why="event_dispatched", run_id=held.id,
+            repo_root=str(repo_a), conversation_key="schedule:tick",
+        )
+        entity.transition(
+            "parked", why="turn_ended", run_id=held.id,
+            repo_root=str(repo_a), conversation_key="schedule:tick",
+        )
         target = self._target(repo_b, source="cloud", eid="evt-other-repo")
 
-        assert daemon._handle_resource_held_events([target], None) == [target]
+        assert daemon._handle_resource_held_events([target], context) == [target]
 
         persisted = Run.from_file(
             repo_a / ".brr" / "runs" / "run-held-1" / "run.md",
         )
-        assert persisted.meta["resource_hold"]["released"] is False
-        assert "resume_native_session_id" not in target.event
+        assert persisted.meta["resource_hold"]["released"] is True
+        assert target.event["resume_native_session_id"] == "held-thread-1"
+        assert shuttle.Shuttle.load(context.home_root).state == "awake"
 
-    def test_misrouted_hold_with_another_repo_seat_key_does_not_release(self, tmp_path):
+    def test_misrouted_hold_with_another_account_key_does_not_release(self, tmp_path):
         runs_dir = tmp_path / ".brr" / "runs"
-        foreign_runs_dir = tmp_path / "other-repo" / ".brr" / "runs"
         self._arm_held_run(
             tmp_path,
-            seat_key=daemon._repo_seat_key(foreign_runs_dir),
+            seat_key="acc-foreign",
             conversation_key="schedule:tick",
         )
         target = self._target(tmp_path, source="cloud", eid="evt-wrong-seat")
@@ -687,10 +725,24 @@ class TestApplyRunReleaseAndRespawn:
             encoding="utf-8",
         )
 
+    def _park_shuttle(self, runs_dir: Path, held: Run) -> None:
+        entity = shuttle.Shuttle.load(runs_dir.parent)
+        entity.transition(
+            "awake", why="event_dispatched", run_id=held.id,
+            repo_root=str(runs_dir.parent.parent),
+            conversation_key=held.conversation_key,
+        )
+        entity.transition(
+            "parked", why="quota_exhausted", run_id=held.id,
+            repo_root=str(runs_dir.parent.parent),
+            conversation_key=held.conversation_key,
+        )
+
     def test_release_ends_the_run_and_undefers_accumulated_events(self, tmp_path):
         runs_dir = tmp_path / ".brr" / "runs"
         inbox_dir = tmp_path / ".brr" / "inbox"
         held = self._held_run(runs_dir, "run-held-1", accumulated_event_ids=["evt-side-1"])
+        self._park_shuttle(runs_dir, held)
         self._accumulated_event(inbox_dir, "evt-side-1")
 
         daemon._apply_run_release(runs_dir, inbox_dir, held)
@@ -702,6 +754,9 @@ class TestApplyRunReleaseAndRespawn:
         assert persisted.meta["transitions"][-1]["from"] == "held"
         assert persisted.meta["transitions"][-1]["to"] == "done"
         assert persisted.meta["transitions"][-1]["why"].startswith("released:")
+        entity = shuttle.Shuttle.load(runs_dir.parent)
+        assert entity.state == "released"
+        assert entity.transitions[-1]["by"] == "dashboard"
         reread = protocol._read_event(inbox_dir / "evt-side-1.md")
         assert reread.get("defer_until") is None
         # A release never fabricates a native-session resume hint — this is
@@ -728,6 +783,7 @@ class TestApplyRunReleaseAndRespawn:
         runs_dir = tmp_path / ".brr" / "runs"
         inbox_dir = tmp_path / ".brr" / "inbox"
         held = self._held_run(runs_dir, "run-held-3", accumulated_event_ids=["evt-side-2"])
+        self._park_shuttle(runs_dir, held)
         self._accumulated_event(inbox_dir, "evt-side-2")
 
         new_path = daemon._apply_run_respawn(
@@ -741,6 +797,11 @@ class TestApplyRunReleaseAndRespawn:
         assert persisted.meta["transitions"][-1]["from"] == "held"
         assert persisted.meta["transitions"][-1]["to"] == "done"
         assert persisted.meta["transitions"][-1]["why"].startswith("released:")
+        entity = shuttle.Shuttle.load(runs_dir.parent)
+        assert [row["to"] for row in entity.transitions[-3:]] == [
+            "awake", "handing-off", "awake",
+        ]
+        assert entity.run_id == new_path.stem
         # The seat itself does not resume — only a fresh event does — but its
         # own status must still leave "held" (#1927), or a card for a run
         # nobody is coming back to draws PARKED forever.

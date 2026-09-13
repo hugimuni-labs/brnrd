@@ -4507,6 +4507,18 @@ def test_hold_chip_none_without_a_hold_facet():
     assert hooks._hold_chip({}) is None
 
 
+@pytest.mark.parametrize(("state", "why", "expected"), [
+    ("awake", "event_dispatched", "awake"),
+    ("listening", "await_armed", "listening"),
+    ("parked", "quota_exhausted", "parked·quota_exhausted"),
+])
+def test_hold_chip_prefers_the_shuttle_state(state, why, expected):
+    resources = {"quota": {"hold": {"ratio": None, "known": False}}}
+    assert hooks._hold_chip(
+        resources, {"state": state, "why": why},
+    ) == expected
+
+
 def test_render_bar_renders_the_hold_chip_beside_quota():
     resources = {
         "quota": {
@@ -4519,6 +4531,26 @@ def test_render_bar_renders_the_hold_chip_beside_quota():
     line = hooks.format_delta(payload, rendered_chips={})
     assert line is not None
     assert "hold 1.4·boot" in line
+
+
+def test_render_bar_replaces_the_unknown_hold_with_the_shuttle_state():
+    resources = {
+        "quota": {
+            "status": "known", "summary": "session 83% left",
+            "hold": {"ratio": None, "known": False},
+        },
+        "allowance": {"status": "unimplemented"},
+    }
+    payload = _portal_payload(resources=resources)
+    payload["shuttle"] = {
+        "state": "parked", "why": "quota_starved", "since": "now", "run_id": "run-1",
+    }
+
+    line = hooks.format_delta(payload, rendered_chips={})
+
+    assert line is not None
+    assert "parked·quota_starved" in line
+    assert "hold ?·boot" not in line
 
 
 def test_render_bar_renders_the_draws_chip_beside_quota():

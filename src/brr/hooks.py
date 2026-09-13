@@ -2140,19 +2140,17 @@ def _draws_chip(resources: dict[str, Any]) -> str | None:
     return " · ".join(parts) if parts else None
 
 
-def _hold_chip(resources: dict[str, Any]) -> str | None:
-    """The ``hold N·boot`` chip (design-the-seat-that-never-quits.md
-    §"The machinery, in slices" #3) — the ratio the daemon acts on while an
-    ``await:`` sits armed and idle, read straight off ``resources.quota.hold``
-    (:func:`brr.facets.build`'s ``hold`` param, attached by
-    ``daemon._hold_ratio_facet`` every heartbeat an await is armed).
-
-    ``None`` (no chip at all) when no await is armed this boundary — the
-    common case for most of a run. ``hold ?·boot`` while armed but no boot
-    cost has landed yet (Codex, or a Claude transcript with no usage row) —
-    never a guessed ratio, exactly what the resident sees before the daemon
-    would act on one.
-    """
+def _hold_chip(
+    resources: dict[str, Any], shuttle_state: dict[str, Any] | None = None,
+) -> str | None:
+    """The Shuttle's live state, falling back to the legacy hold-cost ratio."""
+    if isinstance(shuttle_state, dict):
+        state = str(shuttle_state.get("state") or "").strip()
+        why = str(shuttle_state.get("why") or "").strip()
+        if state == "parked":
+            return f"parked·{why}" if why else "parked"
+        if state in {"awake", "listening", "handing-off", "released"}:
+            return state
     quota = resources.get("quota") if isinstance(resources, dict) else None
     quota = quota if isinstance(quota, dict) else {}
     hold = quota.get("hold")
@@ -3621,6 +3619,7 @@ def _render_bar(
     # caller-touching change out of scope for this fix.
     run_name: dict[str, Any],
     mood: str | None,
+    shuttle_state: dict[str, Any] | None = None,
     surprise: str | None = None,
     census: str | None = None,
     notices: list[Any] | None = None,
@@ -3765,7 +3764,7 @@ def _render_bar(
     # The ratio the daemon acts on while `brnrd await` sits armed and idle
     # (design-the-seat-that-never-quits.md §machinery slice 3) — visible
     # before it acts, same as `draws` above.
-    hold_chip = _hold_chip(resources)
+    hold_chip = _hold_chip(resources, shuttle_state)
     if hold_chip:
         segments.append(("hold", hold_chip))
     if census:
@@ -4411,6 +4410,10 @@ def format_delta(
         payload.get("resources")
         if isinstance(payload.get("resources"), dict) else {}
     )
+    shuttle_state = (
+        payload.get("shuttle")
+        if isinstance(payload.get("shuttle"), dict) else None
+    )
 
     pending_raw = attention.get("pending_event_count")
     pending_known = pending_raw is not None
@@ -4467,7 +4470,8 @@ def format_delta(
             pending_files=pending_files,
             events=action_events,
             budget=budget, outbound=outbound, produce=produce, card=card,
-            card_stale=card_stale, resources=resources, run_name=run_name,
+            card_stale=card_stale, resources=resources,
+            shuttle_state=shuttle_state, run_name=run_name,
             context_prior=context_prior,
             room=room,
             paused=paused,
