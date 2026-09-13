@@ -175,7 +175,8 @@ async function main() {
 		for (const vp of WIDTHS) {
 			const ctx = await browser.newContext({
 				viewport: { width: vp.width, height: vp.height },
-				deviceScaleFactor: 2
+				deviceScaleFactor: 2,
+				reducedMotion: 'no-preference'
 			});
 			const page = await modules.watch(await ctx.newPage(), 'drive-observed-cores');
 			await page.route('**/v1/dashboard/**', async (route) => {
@@ -187,36 +188,46 @@ async function main() {
 				});
 			});
 			await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'networkidle' });
-			await page.waitForSelector('[data-measure="fuel"]', { timeout: 15000 });
-			await delay(700);
-			report.providerRows = await page.evaluate(() =>
-				[...document.querySelectorAll('.fuel-provider-row')].map((r) =>
-					r.innerText.replace(/\n/g, ' · ')
+			const fuel = page.locator('[data-measure="fuel"]');
+			const gauge = page.locator('[data-measure="gauge"]');
+			const providerRows = page.locator('.fuel-provider-row');
+			const claudeRow = providerRows.first();
+			const codexRow = providerRows.nth(1);
+			await fuel.waitFor({ state: 'visible', timeout: 15000 });
+			await claudeRow.waitFor({ state: 'visible', timeout: 15000 });
+			report.providerRows = await Promise.all(
+				Array.from({ length: await providerRows.count() }, async (_, index) =>
+					(await providerRows.nth(index).innerText()).replace(/\n/g, ' · ')
 				)
 			);
-			await page
-				.locator('[data-measure="gauge"]')
-				.screenshot({ path: `${OUT}/${vp.name}-1-deck.png` });
-			await page.locator('.fuel-provider-row').first().click();
-			await page.waitForSelector('[data-measure="provider-bay"]', { timeout: 15000 });
-			await delay(600);
-			await page
-				.locator('[data-measure="provider-bay"]')
-				.screenshot({ path: `${OUT}/${vp.name}-2-claude-cores.png` });
-			await page.locator('.fuel-provider-row').nth(1).click();
-			await delay(600);
-			await page
-				.locator('[data-measure="provider-bay"]')
-				.screenshot({ path: `${OUT}/${vp.name}-3-codex-cores.png` });
-			report.offCount = await page.evaluate(
-				() => document.querySelector('[data-role="rack-off-count"]')?.innerText ?? null
-			);
-			report.rackRows = await page.evaluate(() =>
-				[...document.querySelectorAll('[data-role="rack-row-tap"]')].map((b) => ({
-					text: b.innerText.replace(/\n/g, ' '),
-					disabled: b.disabled,
-					title: b.title
-				}))
+			await gauge.screenshot({ path: `${OUT}/${vp.name}-1-deck.png` });
+			await claudeRow.click();
+			await page.locator('.fuel-provider-row.is-open').filter({ hasText: 'claude' }).waitFor({
+				state: 'visible',
+				timeout: 15000
+			});
+			const providerBay = page.locator('[data-measure="provider-bay"]');
+			await providerBay.waitFor({ state: 'visible', timeout: 15000 });
+			await providerBay.screenshot({ path: `${OUT}/${vp.name}-2-claude-cores.png` });
+			await codexRow.click();
+			await page.locator('.fuel-provider-row.is-open').filter({ hasText: 'codex' }).waitFor({
+				state: 'visible',
+				timeout: 15000
+			});
+			await providerBay.screenshot({ path: `${OUT}/${vp.name}-3-codex-cores.png` });
+			const offCount = page.locator('[data-role="rack-off-count"]');
+			report.offCount = (await offCount.count()) ? await offCount.innerText() : null;
+			const rackRows = page.locator('[data-role="rack-row-tap"]');
+			report.rackRows = await Promise.all(
+				Array.from({ length: await rackRows.count() }, async (_, index) => {
+					const row = rackRows.nth(index);
+					const [text, disabled, title] = await Promise.all([
+						row.innerText(),
+						row.isDisabled(),
+						row.getAttribute('title')
+					]);
+					return { text: text.replace(/\n/g, ' '), disabled, title };
+				})
 			);
 			await modules.harvest(page, 'drive-observed-cores');
 			await ctx.close();
