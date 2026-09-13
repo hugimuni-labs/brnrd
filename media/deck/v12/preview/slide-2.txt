@@ -1,0 +1,31 @@
+slide 2 (12191999 x 6858000 EMU)
+
+left=621792 top=566928 width=4389120 height=228600
+PROBLEM
+
+left=502920 top=6364224 width=1188720 height=164592
+brnrd >_
+
+left=9098280 top=6382512 width=2057400 height=146304
+hugimuni sas · web summit 2026
+
+left=11475720 top=6382512 width=274320 height=146304
+02
+
+left=621792 top=987552 width=6583680 height=566928
+You babysit a terminal.
+
+left=658368 top=1755648 width=6309360 height=438912
+Agents got powerful. The way we work with them didn't.
+
+left=896112 top=2615184 width=6172200 height=502920
+Start — open a terminal, start an agent.
+
+left=896112 top=3282696 width=6172200 height=502920
+Babysit — watch it work, answer its blockers.
+
+left=896112 top=3950208 width=6172200 height=502920
+Lose the thread — close it and it forgets; keep it open and it buries you.
+
+left=685800 top=5084064 width=6583680 height=530352
+The bottleneck moved from intelligence to supervision.

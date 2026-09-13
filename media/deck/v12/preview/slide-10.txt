@@ -1,0 +1,31 @@
+slide 10 (12191999 x 6858000 EMU)
+
+left=621792 top=566928 width=4389120 height=228600
+TEAM & WEB SUMMIT
+
+left=502920 top=6364224 width=1188720 height=164592
+brnrd >_
+
+left=9098280 top=6382512 width=2057400 height=146304
+hugimuni sas · web summit 2026
+
+left=11475720 top=6382512 width=274320 height=146304
+10
+
+left=621792 top=987552 width=6583680 height=658368
+Remembered by the right people.
+
+left=731520 top=3200400 width=2651760 height=658368
+Alexandra Lapunova — co-founder & President
+
+left=3886200 top=3200400 width=2651760 height=658368
+Arseni Lapunov — co-founder & CTO
+
+left=6876288 top=3200400 width=2651760 height=658368
+HugiMuni SAS, France
+
+left=731520 top=4608576 width=9052560 height=731520
+At Web Summit: show it, meet the first users and partners, and the people building agents who want a pal above the vendors.
+
+left=731520 top=5486400 width=1828800 height=320040
+brnrd.dev

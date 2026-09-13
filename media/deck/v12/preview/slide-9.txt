@@ -1,0 +1,22 @@
+slide 9 (12191999 x 6858000 EMU)
+
+left=621792 top=566928 width=4389120 height=228600
+ABOVE THE VENDORS
+
+left=502920 top=6364224 width=1188720 height=164592
+brnrd >_
+
+left=9098280 top=6382512 width=2057400 height=146304
+hugimuni sas · web summit 2026
+
+left=11475720 top=6382512 width=274320 height=146304
+09
+
+left=621792 top=987552 width=7635240 height=1170432
+Their cloud moves the hands. The memory has to live somewhere.
+
+left=658368 top=2514600 width=7498079 height=1645920
+Codex and Claude now run tasks remotely. Each run is still a session inside one vendor's walled garden. Whatever decides what to do next, remembers last week and collects the result has to live above the vendors. That layer is brnrd, on your machine, on the subscription you already pay for.
+
+left=658368 top=4572000 width=7498079 height=1005840
+Every run carries a receipt — wall time, tokens, the share of your week it took. You juggle subscriptions to turn money into results; the pal keeps the book.
