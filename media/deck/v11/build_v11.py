@@ -382,8 +382,6 @@ def build(prs: Presentation, v10: Presentation, movies: dict[str, Path], posters
     add_text(slide, "request → PR → merge", 3.15, 5.25, 3.0, 0.34, size=15.5, color=COOL)
     add_movie(slide, movies["stage"], posters["stage"], (7.05, 0.92, 5.3, 3.0))
     # The organizer-facing gate requires all five supplied MP4s in the package.
-    # Keep the narrower phone cut as an embedded alternate, outside the canvas.
-    add_movie(slide, movies["stage_4x3"], posters["stage_4x3"], (13.34, 0, 0.01, 0.01))
 
     # 7 — the repo is the demo
     slide = prs.slides.add_slide(blank)
@@ -600,7 +598,7 @@ def main():
     print(f"OUTPUT: {args.output} ({args.output.stat().st_size} bytes)")
     print(f"DESKTOP COPY: {args.desktop_output}")
     print(f"PREVIEW: {preview_result}")
-    print("STAGE SLOT: visible 16:9 cut in 5.3 x 3.0 in; 4:3 cut embedded off-canvas as the required alternate")
+    print("STAGE SLOT: visible 16:9 cut in 5.3 x 3.0 in; no off-canvas alternate; the 4:3 cut stays on the loops branch")
 
 
 if __name__ == "__main__":
