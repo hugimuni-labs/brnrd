@@ -106,15 +106,20 @@ def loop_wall(i: int) -> Image.Image:
     if progress:
         draw.rounded_rectangle((324, 592, 324 + int(1212 * progress), 650), radius=14, fill=AMBER)
     flipped = i >= 30
-    if flipped and i < 42:
-        bloom = (42 - i) / 12
-        glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
-        gd = ImageDraw.Draw(glow)
-        gd.ellipse((1100 - 200, 703 - 90, 1100 + 200, 703 + 90), fill=(255, 174, 36, int(110 * bloom)))
-        image = Image.alpha_composite(image.convert("RGBA"), glow.filter(ImageFilter.GaussianBlur(38))).convert("RGB")
-        draw = ImageDraw.Draw(image)
     text(draw, (320, 718), "core", 19, MUTED)
-    text(draw, (430, 718), "claude" if flipped else "codex", 35, PALE_AMBER if flipped else PHOSPHOR, bold=True)
+    # The flip is an event on the label itself, not a glow beside it: the old
+    # word thins out over two frames, the new one arrives bright and settles,
+    # and a thin rule sweeps under it on the beat. Nothing floats.
+    if not flipped:
+        text(draw, (430, 718), "codex", 35, PHOSPHOR, bold=True)
+    else:
+        k = i - 30  # frames since the flip
+        if k < 2:
+            text(draw, (430, 718), "codex", 35, "#3a4a4f", bold=True)
+        arrive = "#ffffff" if k < 3 else PALE_AMBER
+        text(draw, (430 if k >= 2 else 600, 718), "claude", 35, arrive, bold=True)
+        sweep = min(1.0, k / 9)
+        draw.line((430, 766, 430 + int(150 * sweep), 766), fill=AMBER, width=3)
     if flipped:
         text(draw, (1340, 718), "boundary ✓ resumed", 20, AMBER, anchor="ra")
     else:
@@ -129,7 +134,7 @@ def loop_away(i: int) -> Image.Image:
     text(draw, (260, 290), "02:00 → 07:00", 51, AMBER, bold=True)
     text(draw, (1548, 290), "WHILE YOU SLEPT", 19, MUTED, bold=True, anchor="ra")
     entries = [
-        ("02:4x", "Merged: #1959 → a1691bb0. drive-fuel reads a live page — the 1-in-6 red on frontend PRs is structurally gone."),
+        ("02:4x", "Merged: #1959 → a1691bb0. drive-fuel reads a live page."),
         ("07:5x", "Merged: #1960 → 270a9415. The #1954 species, closed."),
         ("12:1x", "#1961, move 1 of the rewrite, as a proposal."),
     ]
