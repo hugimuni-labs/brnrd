@@ -7,7 +7,7 @@ that fail to parse (transient state during rename).
 An inbox event's ``status:`` field belongs to exactly one state machine:
 the letter's own lifecycle (``pending`` -> ``processing`` -> ``done`` ->
 ``delivered``/``noted`` — see :data:`LETTER_STATUSES`). A run's *outcome*
-(``run.py``'s ``STATUSES`` plus the daemon's ``stopped`` result) is a
+(``run.py``'s constrained ``STATUSES``) is a
 different machine and is not a letter state; ``daemon.py`` records it in
 the event's own ``run_outcome:`` key instead of writing it here (see
 ``daemon.py``'s ``_set_event_run_outcome``). Event files written before
@@ -662,8 +662,8 @@ LETTER_STATUSES = frozenset({
 })
 
 #: Values a run's *outcome* used to write straight into ``status:`` before
-#: the split above — ``run.py``'s ``STATUSES`` (``error``/``conflict``) plus
-#: the daemon's own ``stopped`` result and its retired ``cancelled``
+#: the split above — including the retired run-axis ``conflict`` and event
+#: translation ``cancelled`` values alongside ``error``/``stopped``
 #: translation for a parent- or dashboard-initiated stop. No current writer
 #: puts these in ``status:`` (see ``daemon.py``'s ``_set_event_run_outcome``
 #: — the outcome lands in ``run_outcome:`` and the letter settles at

@@ -606,6 +606,9 @@ class TestHandleResourceHeldEvents:
         )
         assert persisted.meta["resource_hold"]["released"] is True
         assert persisted.meta["resource_hold"]["released_by"] == "reset"
+        assert persisted.meta["transitions"][-1]["from"] == "held"
+        assert persisted.meta["transitions"][-1]["to"] == "done"
+        assert persisted.meta["transitions"][-1]["why"].startswith("released:")
         inbox_dir = tmp_path / ".brr" / "inbox"
         reread = protocol._read_event(inbox_dir / "evt-sched-3.md")
         assert reread.get("defer_until") is None
@@ -669,6 +672,9 @@ class TestApplyRunReleaseAndRespawn:
         assert persisted.status == "done"
         assert persisted.meta["resource_hold"]["released"] is True
         assert persisted.meta["resource_hold"]["released_by"] == "dashboard"
+        assert persisted.meta["transitions"][-1]["from"] == "held"
+        assert persisted.meta["transitions"][-1]["to"] == "done"
+        assert persisted.meta["transitions"][-1]["why"].startswith("released:")
         reread = protocol._read_event(inbox_dir / "evt-side-1.md")
         assert reread.get("defer_until") is None
         # A release never fabricates a native-session resume hint — this is
@@ -705,6 +711,9 @@ class TestApplyRunReleaseAndRespawn:
         persisted = Run.from_file(runs_dir / held.id / "run.md")
         assert persisted.meta["resource_hold"]["released"] is True
         assert persisted.meta["resource_hold"]["released_by"] == "respawn"
+        assert persisted.meta["transitions"][-1]["from"] == "held"
+        assert persisted.meta["transitions"][-1]["to"] == "done"
+        assert persisted.meta["transitions"][-1]["why"].startswith("released:")
         # The seat itself does not resume — only a fresh event does — but its
         # own status must still leave "held" (#1927), or a card for a run
         # nobody is coming back to draws PARKED forever.
@@ -818,6 +827,9 @@ class TestReconcileStaleHeldStatus:
         assert fixed == 1
         persisted = Run.from_file(runs_dir / stale.id / "run.md")
         assert persisted.status == "done"
+        assert persisted.meta["transitions"][-1]["from"] == "held"
+        assert persisted.meta["transitions"][-1]["to"] == "done"
+        assert persisted.meta["transitions"][-1]["why"].startswith("released:")
 
     def test_idempotent_on_a_second_pass(self, tmp_path):
         runs_dir = tmp_path / ".brr" / "runs"
