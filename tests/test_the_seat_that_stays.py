@@ -132,6 +132,37 @@ def test_the_next_message_finds_the_seat_not_a_fresh_run(tmp_path):
     assert msg.event.get("resume_native_session_id") == WARM
 
 
+def test_a_telegram_message_resumes_a_seat_parked_on_the_schedule_thread(tmp_path):
+    """The measured 2026-09-12 failure: the parking thread is not identity."""
+    _park(tmp_path, condition=resource_hold.RESUME_ANY)
+    runs_dir = _runs_dir(tmp_path)
+    seat = Run.from_file(runs_dir / "run-seat-A" / "run.md")
+    seat.conversation_key = TICK_CONV
+    seat.meta["resource_hold"]["conversation_key"] = TICK_CONV
+    seat.save(runs_dir)
+    telegram = _target(
+        tmp_path, eid="evt-maintainer", source="cloud",
+        cloud_platform="telegram", cloud_chat_id="155783668",
+        cloud_topic_id="", cloud_user_id="155783668",
+    )
+
+    assert daemon._handle_resource_held_events([telegram], None) == [telegram]
+
+    persisted = Run.from_file(runs_dir / "run-seat-A" / "run.md")
+    hold = persisted.meta["resource_hold"]
+    assert hold["released"] is True and hold["released_by"] == "operator"
+    assert hold["conversation_key"] == "cloud:telegram:155783668:"
+    assert persisted.conversation_key == "cloud:telegram:155783668:"
+    assert conversations.conversation_key_for_event(telegram.event) == (
+        "cloud:telegram:155783668:"
+    )
+    assert telegram.event["resume_native_session_id"] == WARM
+    assert [path.name for path in runs_dir.iterdir()] == ["run-seat-A"]
+    assert persisted.meta["transitions"][-1]["from"] == "held"
+    assert persisted.meta["transitions"][-1]["to"] == "done"
+    assert persisted.meta["transitions"][-1]["why"].startswith("released:")
+
+
 def test_a_tick_accumulated_under_a_wall_is_rekeyed_when_the_wall_lifts(tmp_path):
     """A wall's ticks un-defer on the measured refill; the one that leads the
     resumed dispatch must still boot on the seat's thread."""
@@ -155,15 +186,16 @@ def test_a_tick_accumulated_under_a_wall_is_rekeyed_when_the_wall_lifts(tmp_path
     assert on_disk.get("resume_native_session_id") == WARM
 
 
-def test_a_correspondent_from_another_thread_keeps_its_own_key(tmp_path):
-    """Re-keying is for routine mail only — a person's message routes its
-    reply by its own thread, and still never releases a foreign seat."""
+def test_a_correspondent_from_another_thread_resumes_and_keeps_its_own_key(tmp_path):
+    """A person's message is mail to the repo seat, whatever its thread;
+    the resumed dispatch and the released hold both record the arrival."""
     _park(tmp_path, condition=resource_hold.RESUME_ANY)
     other = _target(tmp_path, eid="evt-gh", source="github", conversation_key="github:o/r#7")
     assert daemon._handle_resource_held_events([other], None) == [other]
-    assert _hold(tmp_path)["released"] is False
+    assert _hold(tmp_path)["released"] is True
+    assert _hold(tmp_path)["conversation_key"] == "github:o/r#7"
     assert conversations.conversation_key_for_event(other.event) == "github:o/r#7"
-    assert "resume_native_session_id" not in other.event
+    assert other.event["resume_native_session_id"] == WARM
 
 
 # ── walls: the seat cannot run, so ticks accumulate ─────────────────
