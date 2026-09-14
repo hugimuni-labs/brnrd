@@ -22,5 +22,9 @@
 	{
 		"driver": "drive-ascii-file-touch.mjs",
 		"shots": ["before-root-file-touch.png", "after-file-touch.png"]
+	},
+	{
+		"driver": "drive-bench-view.mjs",
+		"shots": ["1-list.png", "2-file.png", "3-missing.png"]
 	}
 ]
