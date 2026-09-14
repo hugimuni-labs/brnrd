@@ -20,12 +20,86 @@
 		green: '#8acb78'
 	};
 
-	const trunk = { x: 640, top: 112, bottom: 616 };
-	const fileTarget = { x: trunk.x + 72, y: 246, r: 54 };
-	const radial = { x: trunk.x + 4, y: fileTarget.y, r: 82 };
-	const grantButton = { x: 906, y: 221, w: 86, h: 32 };
+	// The tree is the between — it does not scroll, it is the map: a grid,
+	// column i at ROOT_X + i*CHAR_W, row r at ROW_Y0 + r*ROW_H. Glyphs are
+	// placed one character at a time (never a whole-line fillText) so a
+	// font with different advance widths for '│├─' than for letters still
+	// lands every column on the grid.
+	const FONT_SIZE = 17;
+	const ROOT_X = 92;
+	const ROW_Y0 = 150;
+	const ROW_H = 56;
+
+	ctx.font = `${FONT_SIZE}px ${mono}`;
+	const CHAR_W = ctx.measureText('0').width;
+	const GUTTER_X = ROOT_X - CHAR_W * 2.5;
+
+	function flatten(node, ancestorIsLast, isLast, isRoot) {
+		const stem = ancestorIsLast.map((last) => (last ? '    ' : '│   ')).join('');
+		const prefix = isRoot ? '' : stem + (isLast ? '└── ' : '├── ');
+		const row = { name: node.name, prefix, text: prefix + node.name, role: node.role ?? 'dir' };
+		if ('thread' in node) row.thread = node.thread;
+		const children = node.children ?? [];
+		const childAncestors = isRoot ? [] : [...ancestorIsLast, isLast];
+		return children.reduce(
+			(rows, child, index) =>
+				rows.concat(flatten(child, childAncestors, index === children.length - 1, false)),
+			[row]
+		);
+	}
+
+	const treeSpec = {
+		name: 'brnrd/',
+		children: [
+			{
+				name: 'src/',
+				children: [
+					{ name: 'brr/', children: [{ name: 'daemon.py', role: 'file' }] },
+					{
+						name: 'frontend/repro/',
+						children: [
+							{ name: 'audit-the-rail.mjs', role: 'thread', thread: 0 },
+							{ name: 'read-the-seat.mjs', role: 'thread', thread: 1 },
+							{ name: 'drive-the-mock.mjs', role: 'thread', thread: 2 }
+						]
+					}
+				]
+			},
+			{ name: 'tests/', role: 'tests' }
+		]
+	};
+
+	const rows = flatten(treeSpec, [], true, true).map((row, index) => {
+		const y = ROW_Y0 + index * ROW_H;
+		const leafEndX = ROOT_X + row.text.length * CHAR_W;
+		const connectorX = row.prefix.length
+			? ROOT_X + (row.prefix.length - 4 + 1.5) * CHAR_W
+			: ROOT_X + CHAR_W * 1.5;
+		return { ...row, index, y, leafEndX, connectorX };
+	});
+	const daemonRow = rows.find((row) => row.role === 'file');
+	const threadRows = rows
+		.filter((row) => row.role === 'thread')
+		.sort((a, b) => a.thread - b.thread);
+
+	const fileTarget = {
+		x: ROOT_X - 6,
+		y: daemonRow.y - 15,
+		w: daemonRow.leafEndX - ROOT_X + 96,
+		h: 30
+	};
+	const menu = {
+		x: daemonRow.leafEndX + 36,
+		fold: daemonRow.y - 22,
+		split: daemonRow.y,
+		test: daemonRow.y + 22
+	};
+	const splitTarget = { x: menu.x - 6, y: menu.split - 12, w: 74, h: 24 };
+	const askRow = threadRows[1];
+	const askBox = { x: askRow.leafEndX + 230, y: askRow.y - 70, w: 184, h: 104 };
+	const grantButton = { x: askBox.x + 76, y: askBox.y + 61, w: 86, h: 32 };
 	const pointer = { x: 1080, y: 118, visible: false, manualUntil: 0 };
-	const interaction = { radialUntil: 0, splitAt: 0, grantAt: 0, grantPhase: null };
+	const interaction = { menuUntil: 0, splitAt: 0, grantAt: 0, grantPhase: null };
 	let previousCycle = -1;
 
 	function rng(seed) {
@@ -44,29 +118,9 @@
 	const sparkRadii = Array.from({ length: 20 }, () => 10 + random() * 35);
 
 	const threads = [
-		{
-			label: 'audit the rail',
-			start: { x: trunk.x, y: 320 },
-			control: { x: 480, y: 286 },
-			end: { x: 292, y: 352 },
-			color: colors.amber,
-			loot: '#1965'
-		},
-		{
-			label: 'read the seat',
-			start: { x: trunk.x, y: 365 },
-			control: { x: 782, y: 284 },
-			end: { x: 942, y: 330 },
-			color: colors.ice
-		},
-		{
-			label: 'drive the mock',
-			start: { x: trunk.x, y: 414 },
-			control: { x: 790, y: 510 },
-			end: { x: 952, y: 538 },
-			color: colors.green,
-			loot: '#1966'
-		}
+		{ row: threadRows[0], color: colors.amber, loot: '#1965' },
+		{ row: threadRows[1], color: colors.ice },
+		{ row: threadRows[2], color: colors.green, loot: '#1966' }
 	];
 
 	const clamp = (value, low = 0, high = 1) => Math.min(high, Math.max(low, value));
@@ -77,19 +131,20 @@
 	const range = (time, from, to) => ease((time - from) / (to - from));
 	const fadeWindow = (time) => 1 - range(time, 18.9, 20);
 
-	function curvePoint(thread, progress) {
-		const p = clamp(progress);
-		const inverse = 1 - p;
-		return {
-			x:
-				inverse * inverse * thread.start.x +
-				2 * inverse * p * thread.control.x +
-				p * p * thread.end.x,
-			y:
-				inverse * inverse * thread.start.y +
-				2 * inverse * p * thread.control.y +
-				p * p * thread.end.y
-		};
+	// The shuttle's own beat: it steps line to line, one row per tool
+	// boundary, then parks at the dispatch hub while the crew works and
+	// again at tests/ once the results are in.
+	const SHUTTLE_STOPS = [
+		{ from: 0, to: 0.6, row: 0 },
+		{ from: 0.6, to: 1.2, row: 1 },
+		{ from: 1.2, to: 1.8, row: 2 },
+		{ from: 1.8, to: 3.03, row: 3 },
+		{ from: 3.03, to: 15.25, row: 4 },
+		{ from: 15.25, to: 18.9, row: 8 }
+	];
+	function shuttleStop(phase) {
+		for (const stop of SHUTTLE_STOPS) if (phase >= stop.from && phase < stop.to) return stop;
+		return SHUTTLE_STOPS[0];
 	}
 
 	function line(a, b, color, width = 1, alpha = 1) {
@@ -128,12 +183,30 @@
 		ctx.restore();
 	}
 
-	function drawBackdrop(phase) {
+	// One grid cell. Every tree glyph — static or lit — goes through this,
+	// so a base character and its overlay always share the exact same x.
+	function glyph(ch, col, y, color, alpha = 1, glow = 0) {
+		if (ch === ' ') return;
+		ctx.save();
+		ctx.globalAlpha = alpha;
+		ctx.fillStyle = color;
+		if (glow) {
+			ctx.shadowColor = color;
+			ctx.shadowBlur = glow;
+		}
+		ctx.font = `${FONT_SIZE}px ${mono}`;
+		ctx.textAlign = 'left';
+		ctx.textBaseline = 'middle';
+		ctx.fillText(ch, ROOT_X + col * CHAR_W, y);
+		ctx.restore();
+	}
+
+	function drawBackdrop() {
 		ctx.fillStyle = colors.void;
 		ctx.fillRect(0, 0, W, H);
 
-		const haze = ctx.createRadialGradient(trunk.x, 320, 20, trunk.x, 320, 420);
-		haze.addColorStop(0, 'rgba(217, 164, 65, 0.07)');
+		const haze = ctx.createRadialGradient(ROOT_X, 320, 20, ROOT_X, 320, 520);
+		haze.addColorStop(0, 'rgba(217, 164, 65, 0.06)');
 		haze.addColorStop(1, 'rgba(12, 9, 6, 0)');
 		ctx.fillStyle = haze;
 		ctx.fillRect(0, 0, W, H);
@@ -144,90 +217,51 @@
 		for (let y = 29; y < H; y += 29) line({ x: 0, y }, { x: W, y }, ctx.strokeStyle);
 		ctx.restore();
 
-		const pulse = 0.56 + 0.22 * Math.sin((phase * Math.PI * 2) / (BEAT / 1000));
-		ctx.save();
-		ctx.strokeStyle = colors.amber;
-		ctx.lineWidth = 2.2;
-		ctx.globalAlpha = 0.72;
-		ctx.shadowColor = colors.amber;
-		ctx.shadowBlur = 9 + pulse * 9;
-		ctx.beginPath();
-		ctx.moveTo(trunk.x, trunk.top);
-		ctx.lineTo(trunk.x, trunk.bottom);
-		ctx.stroke();
-		ctx.restore();
-
 		text('NOW', 48, 42, 10, colors.mute);
 		text('attested trace', 48, 62, 11, colors.amber);
 		text('interpreted plaque', W - 48, 62, 11, colors.ice, 'right');
 	}
 
-	function drawShuttle(phase) {
-		const pulse = 0.72 + 0.28 * Math.sin((phase * Math.PI * 2) / (BEAT / 1000));
-		glowText('b·_·d', trunk.x, 92, 21, colors.bright, 'center', pulse);
-		text('SHUTTLE', trunk.x, 67, 9, colors.mute, 'center');
-	}
-
-	function drawFilePlaque(phase) {
-		const arrived = range(phase, 0.9, 1.65);
-		const x = trunk.x + 34;
-		const y = fileTarget.y;
-		line({ x: trunk.x + 4, y }, { x: x - 8, y }, colors.ice, 1, 0.44 * arrived);
-		text('│', x, y, 18, colors.ice, 'left', arrived);
-		text('daemon.py', x + 17, y, 14, colors.ink, 'left', arrived);
-		text('place', x + 17, y + 20, 9, colors.mute, 'left', arrived);
-	}
-
-	function drawTrunkBeads(phase) {
-		const arrivals = [0.35, 0.95, 1.55, 2.15, 16.65, 17.25, 17.85, 18.45];
-		for (const [index, at] of arrivals.entries()) {
-			if (phase < at) continue;
-			const later = arrivals.slice(index + 1);
-			const slot = later.reduce((total, nextAt) => total + range(phase, nextAt, nextAt + 0.24), 0);
-			const beadY = 132 + slot * 29;
-			const born = range(phase, at, at + 0.18);
-			const fallsOffRing = clamp(slot - 3);
-			const alpha = (0.94 - Math.min(slot, 3) * 0.18) * born * (1 - fallsOffRing);
-			glowText('●', trunk.x, beadY, 11, colors.bright, 'center', alpha);
+	// Always fully lit — the tree does not fade, only what moves through it
+	// does. Structure glyphs dim, names bright.
+	function drawTreeMap() {
+		for (const row of rows) {
+			for (let i = 0; i < row.text.length; i += 1) {
+				const dim = i < row.prefix.length;
+				glyph(row.text[i], i, row.y, dim ? colors.mute : colors.ink);
+			}
 		}
+		const annotation = daemonRow;
+		text('← place', annotation.leafEndX + 16, annotation.y, 11, colors.mute, 'left', 0.85);
 	}
 
-	function drawRadial(phase) {
-		const scripted = phase >= 2.18 && phase < 3.03;
-		const manual = performance.now() < interaction.radialUntil;
+	// A thread's progress: a lit fill along its own row, grown from the
+	// leaf (its file, right) toward the trunk (its connector, left).
+	function drawLitFill(row, pathProgress, color) {
+		const litChars = Math.round(clamp(pathProgress) * row.text.length);
+		if (litChars <= 0) return;
+		const start = row.text.length - litChars;
+		for (let i = start; i < row.text.length; i += 1) glyph(row.text[i], i, row.y, color, 1, 5);
+	}
+
+	function drawShuttleCursor(phase) {
+		const stop = shuttleStop(phase);
+		const justArrived = range(phase, stop.from, stop.from + 0.22);
+		const pulse = 0.72 + 0.28 * Math.sin((phase * Math.PI * 2) / (BEAT / 1000));
+		const alpha = Math.min(1, justArrived + 0.4) * pulse;
+		glowText('▸', GUTTER_X, rows[stop.row].y, 18, colors.bright, 'left', alpha);
+	}
+
+	function drawActionMenu(phase) {
+		const scripted = phase >= 1.8 && phase < 3.03;
+		const manual = performance.now() < interaction.menuUntil;
 		if (!scripted && !manual) return;
-		const intro = scripted ? range(phase, 2.18, 2.36) : 1;
+		const intro = scripted ? range(phase, 1.8, 2.0) : 1;
 		const outro = scripted ? 1 - range(phase, 2.86, 3.03) : 1;
 		const alpha = Math.min(intro, outro);
-		ctx.save();
-		ctx.globalAlpha = alpha;
-		ctx.strokeStyle = 'rgba(198, 224, 235, 0.48)';
-		ctx.lineWidth = 1;
-		ctx.beginPath();
-		ctx.arc(radial.x, radial.y, radial.r, -0.73, 0.73);
-		ctx.stroke();
-		ctx.restore();
-		text('fold', radial.x + 63, radial.y - 50, 12, colors.quiet, 'center', alpha);
-		text('split', radial.x + 86, radial.y, 13, colors.bright, 'center', alpha);
-		text('test', radial.x + 63, radial.y + 50, 12, colors.quiet, 'center', alpha);
-	}
-
-	function drawCurve(thread, progress, alpha) {
-		ctx.save();
-		ctx.globalAlpha = alpha;
-		ctx.strokeStyle = thread.color;
-		ctx.lineWidth = 1.35;
-		ctx.shadowColor = thread.color;
-		ctx.shadowBlur = 5;
-		ctx.beginPath();
-		ctx.moveTo(thread.start.x, thread.start.y);
-		for (let step = 1; step <= 48; step += 1) {
-			const p = (progress * step) / 48;
-			const point = curvePoint(thread, p);
-			ctx.lineTo(point.x, point.y);
-		}
-		ctx.stroke();
-		ctx.restore();
+		text('fold', menu.x, menu.fold, 12, colors.quiet, 'left', alpha);
+		text('split', menu.x, menu.split, 13, colors.bright, 'left', alpha);
+		text('test', menu.x, menu.test, 12, colors.quiet, 'left', alpha);
 	}
 
 	function drawFuel(x, y, value, color, alpha, bloom = 0) {
@@ -242,25 +276,30 @@
 		ctx.restore();
 	}
 
-	function drawThread(thread, index, progress, fuel, alpha, bloom = 0) {
-		const point = curvePoint(thread, progress);
-		const side = index === 0 ? -1 : 1;
-		const labelX = point.x + side * 18;
-		const align = side < 0 ? 'right' : 'left';
-		glowText('▷', point.x, point.y, 16, thread.color, 'center', alpha);
-		text(thread.label, labelX, point.y - 18, 12, colors.ink, align, alpha);
-		text(`${Math.round(fuel * 150)}k / 150k`, labelX, point.y + 1, 9, colors.quiet, align, alpha);
-		const barX = side < 0 ? point.x - 168 : point.x + 18;
-		drawFuel(barX, point.y + 15, fuel, thread.color, alpha, bloom);
+	function drawThreadAnnotations(thread, markerProgress, fuel, alpha, bloom = 0) {
+		const row = thread.row;
+		const barX = row.leafEndX + 55;
+		text(`${Math.round(fuel * 150)}k / 150k`, barX, row.y - 14, 9, colors.quiet, 'left', alpha);
+		drawFuel(barX, row.y + 2, fuel, thread.color, alpha, bloom);
+		const p = clamp(markerProgress);
+		if (p > 0 && p < 1) {
+			const boundaryCol = row.text.length * (1 - p);
+			glowText('▷', ROOT_X + boundaryCol * CHAR_W, row.y, 13, thread.color, 'center', alpha * 0.9);
+		}
 	}
 
-	function drawBranchBeads(thread, progress, phase, alpha) {
+	function drawLeafBeads(row, color, phase, alpha) {
 		const count = Math.min(4, Math.max(0, Math.floor((phase - 3.15) / 0.72)));
 		for (let index = 0; index < count; index += 1) {
-			const beadProgress = clamp(progress - 0.08 - index * 0.13);
-			if (beadProgress <= 0) continue;
-			const point = curvePoint(thread, beadProgress);
-			text('●', point.x, point.y, 8, thread.color, 'center', alpha * (1 - index * 0.17));
+			const at = 3.15 + index * 0.72;
+			const born = range(phase, at, at + 0.22);
+			glyph(
+				'●',
+				row.text.length + 1 + index * 0.9,
+				row.y - 15,
+				color,
+				alpha * born * (1 - index * 0.17)
+			);
 		}
 	}
 
@@ -269,18 +308,18 @@
 		const leave = 1 - range(phase, grantedAt + 0.12, grantedAt + 0.48);
 		const localAlpha = alpha * Math.min(enter, leave);
 		if (localAlpha <= 0) return;
-		const x = 830;
-		const y = 164 - 8 * enter;
+		const x = askBox.x;
+		const y = askBox.y - 8 * enter;
 		ctx.save();
 		ctx.globalAlpha = localAlpha;
 		ctx.fillStyle = 'rgba(12, 9, 6, 0.94)';
 		ctx.strokeStyle = 'rgba(198, 224, 235, 0.55)';
-		ctx.fillRect(x, y, 184, 104);
-		ctx.strokeRect(x, y, 184, 104);
+		ctx.fillRect(x, y, askBox.w, askBox.h);
+		ctx.strokeRect(x, y, askBox.w, askBox.h);
 		ctx.beginPath();
-		ctx.moveTo(916, y + 104);
-		ctx.lineTo(938, y + 124);
-		ctx.lineTo(952, y + 104);
+		ctx.moveTo(x + 86, y + askBox.h);
+		ctx.lineTo(x + 108, y + askBox.h + 20);
+		ctx.lineTo(x + 122, y + askBox.h);
 		ctx.stroke();
 		ctx.restore();
 		text('RADIO / read the seat', x + 14, y + 18, 9, colors.mute, 'left', localAlpha);
@@ -316,7 +355,7 @@
 
 	function drawManualBlooms(now) {
 		for (const [at, x, y, color] of [
-			[interaction.splitAt, radial.x + 86, radial.y, colors.bright],
+			[interaction.splitAt, menu.x + 20, menu.split, colors.bright],
 			[
 				interaction.grantAt,
 				grantButton.x + grantButton.w / 2,
@@ -328,11 +367,10 @@
 			const progress = ease((now - at) / BEAT);
 			if (progress <= 0 || progress >= 1) continue;
 			for (let index = 0; index < sparkAngles.length; index += 1) {
-				const radius = sparkRadii[index] * progress;
 				text(
 					'·',
-					x + Math.cos(sparkAngles[index]) * radius,
-					y + Math.sin(sparkAngles[index]) * radius,
+					x + Math.cos(sparkAngles[index]) * sparkRadii[index] * progress,
+					y + Math.sin(sparkAngles[index]) * sparkRadii[index] * progress,
 					14,
 					color,
 					'center',
@@ -346,15 +384,18 @@
 		const fall = range(phase, at, at + 0.52);
 		const settle = range(phase, at + 0.52, at + 0.8);
 		if (fall <= 0) return;
-		const y = thread.end.y - 32 + fall * 32 - Math.sin(fall * Math.PI) * 11;
-		glowText('✣ PR', thread.end.x, y, 19, colors.bright, 'center', alpha);
-		text(thread.loot, thread.end.x, y + 25, 9, colors.quiet, 'center', alpha * settle);
-		drawBloom(thread.end.x, thread.end.y, phase, at + 0.28, colors.bright);
+		const row = thread.row;
+		const x = row.leafEndX + 210;
+		const y = row.y - 32 + fall * 32 - Math.sin(fall * Math.PI) * 11;
+		glowText('✣ PR', x, y, 19, colors.bright, 'center', alpha);
+		text(thread.loot, x, y + 25, 9, colors.quiet, 'center', alpha * settle);
+		drawBloom(x, row.y, phase, at + 0.28, colors.bright);
 	}
 
-	function drawMergeRing(phase, y, at, alpha) {
+	function drawMergeRing(thread, phase, at, alpha) {
 		const progress = range(phase, at, at + 0.55);
 		if (progress <= 0) return;
+		const row = thread.row;
 		ctx.save();
 		ctx.globalAlpha = alpha * progress;
 		ctx.strokeStyle = colors.bright;
@@ -362,7 +403,7 @@
 		ctx.shadowColor = colors.amber;
 		ctx.shadowBlur = 10;
 		ctx.beginPath();
-		ctx.ellipse(trunk.x, y, 13 + progress * 5, 5 + progress * 2, 0, 0, Math.PI * 2);
+		ctx.ellipse(row.connectorX, row.y, 13 + progress * 5, 8 + progress * 2, 0, 0, Math.PI * 2);
 		ctx.stroke();
 		ctx.restore();
 	}
@@ -390,30 +431,32 @@
 				range(phase, grantedAt, grantedAt + 0.66) * 0.88 -
 				range(phase, grantedAt + 0.66, 15.25) * 0.36;
 
-		const progresses = [p0, p1, p2];
+		const pathProgress = [p0, returnProgress > 0 ? 1 : p1Out, p2];
+		const markerProgress = [p0, p1, p2];
+		const grantBloom =
+			range(phase, grantedAt, grantedAt + 0.72) *
+			(1 - range(phase, grantedAt + 0.72, grantedAt + 1.42));
+
 		threads.forEach((thread, index) => {
-			drawCurve(thread, index === 1 && returnProgress > 0 ? 1 : progresses[index], alpha);
-			drawBranchBeads(thread, index === 1 ? p1Out : progresses[index], phase, alpha);
+			drawLitFill(thread.row, pathProgress[index], thread.color);
+			drawLeafBeads(thread.row, thread.color, phase, alpha);
+			drawThreadAnnotations(
+				thread,
+				markerProgress[index],
+				fuels[index],
+				alpha,
+				index === 1 ? grantBloom : 0
+			);
 		});
 
-		drawThread(threads[0], 0, p0, fuels[0], alpha);
-		drawThread(
-			threads[1],
-			1,
-			p1,
-			fuels[1],
-			alpha,
-			range(phase, grantedAt, grantedAt + 0.72) *
-				(1 - range(phase, grantedAt + 0.72, grantedAt + 1.42))
-		);
-		drawThread(threads[2], 2, p2, fuels[2], alpha);
-
 		drawAsk(phase, alpha, grantedAt);
-		drawBloom(threads[1].end.x, threads[1].end.y + 15, phase, grantedAt, colors.ice);
+		const grantX = grantButton.x + grantButton.w / 2;
+		const grantY = grantButton.y + grantButton.h / 2;
+		drawBloom(grantX, grantY, phase, grantedAt, colors.ice);
 		drawLoot(threads[0], phase, 11.15, alpha);
 		drawLoot(threads[2], phase, 14.1, alpha);
-		drawMergeRing(phase, 490, 12.0, alpha);
-		drawMergeRing(phase, 542, 15.3, alpha);
+		drawMergeRing(threads[0], phase, 12.0, alpha);
+		drawMergeRing(threads[2], phase, 15.3, alpha);
 	}
 
 	function drawCloth(phase) {
@@ -449,13 +492,14 @@
 		let x = 1080;
 		let y = 118;
 		let visible = false;
-		if (phase >= 1.78 && phase < 3.18) {
+		if (phase >= 1.5 && phase < 3.18) {
 			visible = true;
-			const firstMove = range(phase, 1.78, 2.18);
-			x = 1080 + (fileTarget.x - 1080) * firstMove;
-			y = 118 + (fileTarget.y - 118) * firstMove;
-			const secondMove = range(phase, 2.38, 2.76);
-			x += (radial.x + 86 - fileTarget.x) * secondMove;
+			const firstMove = range(phase, 1.5, 1.9);
+			x = 1080 + (fileTarget.x + fileTarget.w / 2 - 1080) * firstMove;
+			y = 118 + (fileTarget.y + fileTarget.h / 2 - 118) * firstMove;
+			const secondMove = range(phase, 2.1, 2.5);
+			x += (menu.x + 20 - x) * secondMove;
+			y += (menu.split - y) * secondMove;
 		}
 		if (phase >= 7.62 && phase < 9.72) {
 			visible = true;
@@ -469,8 +513,8 @@
 	function drawPointer(phase) {
 		const point = scriptedPointer(phase);
 		if (!point.visible) return;
-		const clickOne = 1 - range(Math.abs(phase - 2.2), 0, 0.22);
-		const clickTwo = 1 - range(Math.abs(phase - 2.8), 0, 0.22);
+		const clickOne = 1 - range(Math.abs(phase - 1.9), 0, 0.22);
+		const clickTwo = 1 - range(Math.abs(phase - 2.5), 0, 0.22);
 		const clickGrant = 1 - range(Math.abs(phase - 8.88), 0, 0.24);
 		const click = Math.max(clickOne, clickTwo, clickGrant);
 		if (click > 0) {
@@ -506,11 +550,10 @@
 			previousCycle = cycle;
 		}
 		const phase = (elapsed % CYCLE) / 1000;
-		drawBackdrop(phase);
-		drawShuttle(phase);
-		drawTrunkBeads(phase);
-		drawFilePlaque(phase);
-		drawRadial(phase);
+		drawBackdrop();
+		drawTreeMap();
+		drawShuttleCursor(phase);
+		drawActionMenu(phase);
 		drawCrew(phase);
 		drawCloth(phase);
 		drawManualBlooms(now);
@@ -527,7 +570,6 @@
 	}
 
 	function within(point, target) {
-		if ('r' in target) return Math.hypot(point.x - target.x, point.y - target.y) <= target.r;
 		return (
 			point.x >= target.x &&
 			point.x <= target.x + target.w &&
@@ -554,13 +596,12 @@
 		const now = performance.now();
 		const phase = ((now - START) % CYCLE) / 1000;
 		if (within(point, fileTarget)) {
-			interaction.radialUntil = now + 1_800;
+			interaction.menuUntil = now + 1_800;
 			return;
 		}
-		const splitTarget = { x: radial.x + 86, y: radial.y, r: 34 };
-		if (now < interaction.radialUntil && within(point, splitTarget)) {
+		if (now < interaction.menuUntil && within(point, splitTarget)) {
 			interaction.splitAt = now;
-			interaction.radialUntil = 0;
+			interaction.menuUntil = 0;
 			return;
 		}
 		if (phase >= 8 && phase < 9.7 && within(point, grantButton)) {
@@ -573,7 +614,7 @@
 		beat: BEAT,
 		cycle: CYCLE,
 		seed: SEED,
-		targets: { file: fileTarget, split: { x: radial.x + 86, y: radial.y }, grant: grantButton }
+		targets: { file: fileTarget, split: splitTarget, grant: grantButton }
 	};
 
 	requestAnimationFrame(draw);
