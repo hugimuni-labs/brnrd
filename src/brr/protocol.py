@@ -394,6 +394,7 @@ INTERNAL_SOURCES: frozenset[str] = frozenset({
     "bench",
     "cli",
     "dispatch_message",
+    "fold",
     "init",
     "respawn",
     "schedule",
