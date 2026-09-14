@@ -442,6 +442,72 @@ def _scenario_spawn_bad_contract(_inbox, outbox, _own):
     _write(outbox, "spawn.md", "---\nspawn: true\nshell: nosuchshell\n---\ntask\n")
 
 
+# ── move 5c: `topic:` on each verb ─────────────────────────────────────
+#
+# Captured on `brr/the-event-carries-its-topic`, not on an unsplit `main`:
+# `main` had no assignment to describe. They pin the frame's act-topic
+# writes — the message's `topic:`, the index row, the thread map, the event
+# stamp, the bolt's `topic`, the child event's `topic` — so a later move that
+# reroutes a verb has to say what it did to them.
+
+
+def _topic_home(outbox: Path, *slugs: str) -> None:
+    topics = outbox.parents[2] / "home" / "surface" / "topics"
+    topics.mkdir(parents=True, exist_ok=True)
+    for slug in slugs or ("the-loom",):
+        (topics / f"{slug}.md").write_text(
+            "---\nrune: ᛗ\nsignature:\n  places: [src/brr/heddles.py]\n"
+            "  words: [loom]\n  produce: []\n  threads: []\n---\n"
+            f"# {slug}\n",
+            encoding="utf-8",
+        )
+
+
+def _scenario_topic_event_reply_explicit(_inbox, outbox, _own):
+    _topic_home(outbox, "the-loom", "the-post")
+    _write(outbox, ".topic", "the-post\n")
+    _write(outbox, "reply.md", "---\ntopic: the-loom\n---\nthe loom moved\n")
+
+
+def _scenario_topic_event_reply_inherits_control(_inbox, outbox, _own):
+    _topic_home(outbox)
+    _write(outbox, ".topic", "the-loom\n")
+    _write(outbox, "reply.md", "working on it\n")
+
+
+def _scenario_topic_event_reply_unknown_slug(_inbox, outbox, _own):
+    _topic_home(outbox)
+    _write(outbox, "reply.md", "---\ntopic: nope\n---\nno such layer\n")
+
+
+def _scenario_topic_control_mints_new(_inbox, outbox, _own):
+    _write(outbox, ".topic", "new the-post\n")
+    _write(outbox, "reply.md", "a new chase\n")
+
+
+def _scenario_topic_cut_bolt(_inbox, outbox, _own):
+    _topic_home(outbox)
+    _write(outbox, ".topic", "the-loom\n")
+    _write(outbox, ".topics", "the-loom\n")
+    _write(outbox, "cut.md", "---\ncut: true\n---\ndone — nothing to hand over\n")
+
+
+def _scenario_topic_spawn_inherits(_inbox, outbox, _own):
+    _topic_home(outbox)
+    _write(outbox, ".topic", "the-loom\n")
+    report = outbox.parents[2] / "child-report.md"
+    _write(
+        outbox, "spawn.md",
+        "---\nspawn: true\nshell: claude\nbranch: brr/child\n"
+        f"report: {report}\ntitle: a child\n---\nchild task\n",
+    )
+
+
+def _scenario_topic_verb_typo_dropped(_inbox, outbox, _own):
+    _topic_home(outbox)
+    _write(outbox, "topic.md", "---\ntopic: rename the-loom the-weave\n---\nplaces: [src/**]\n")
+
+
 SCENARIOS: dict[str, dict[str, Any]] = {
     "event_reply_with_also": {"stage": _scenario_event_reply_with_also, "with_account": True},
     "note": {"stage": _scenario_note},
@@ -491,6 +557,18 @@ SCENARIOS: dict[str, dict[str, Any]] = {
     "await_from_strand": {
         "stage": _scenario_await_from_strand, "task_meta": {"strand": True},
     },
+    # Move 5c (captured on its own branch — see the block above).
+    "topic_event_reply_explicit": {"stage": _scenario_topic_event_reply_explicit, "with_account": True},
+    "topic_event_reply_inherits_control": {
+        "stage": _scenario_topic_event_reply_inherits_control, "with_account": True,
+    },
+    "topic_event_reply_unknown_slug": {
+        "stage": _scenario_topic_event_reply_unknown_slug, "with_account": True,
+    },
+    "topic_control_mints_new": {"stage": _scenario_topic_control_mints_new, "with_account": True},
+    "topic_cut_bolt": {"stage": _scenario_topic_cut_bolt, "with_account": True},
+    "topic_spawn_inherits": {"stage": _scenario_topic_spawn_inherits, "with_account": True},
+    "topic_verb_typo_dropped": {"stage": _scenario_topic_verb_typo_dropped, "with_account": True},
 }
 
 

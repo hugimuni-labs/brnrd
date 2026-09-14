@@ -31,7 +31,8 @@ op⇐reply owed — answer the person
 keep⇒commit ; shared⇒dflt↗branch ; Δ⇒op⇐↑push — leave receipts: commit what you mean to keep
 long-act⇒.card/## Now first ; private-knowledge⇒write — lose no work
 
-first outward ⇒ .name + .mood
+first outward ⇒ .name + .mood + .topic
+this run's topic: an existing heddle ∨ `new <slug>` ∨ null
 first produce ⇒ .topics
 ∅then ⇒ daemon→plain fallback ; next-wake→declare
 
@@ -219,7 +220,7 @@ hooks:
 source manifest:
     block                                                           owner        authority      bytes  location / freshness
   -------------------------------------------------------------------------------------------------------------------------
-  ✓ Boot kernel (action-first score)                                daemon-live  runtime        1,114  computed
+  ✓ Boot kernel (action-first score)                                daemon-live  runtime        1,186  computed
   ✓ Operational preamble (run.md)                                   product      contract     [bytes]  {PACKAGE_ROOT}/prompts/run.md  [mtime]
   ✓ Working register (weave.md)                                     product      contract     [bytes]  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)                  product      contract     [bytes]  {PACKAGE_ROOT}/prompts/register.md  [mtime]

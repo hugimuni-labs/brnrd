@@ -34,6 +34,7 @@ from pathlib import Path, PurePosixPath
 from .. import account
 from .. import daemon
 from .. import protocol
+from .. import run_topic
 from .shapes import Handled, OutboxFile
 
 SOURCE = "fold"
@@ -124,6 +125,10 @@ def handle(f: OutboxFile) -> Handled:
     path = bench_path(home, account.slug_repo_label(label), place, commit)
     made_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     existed = path.exists()
+    # Move 5c: the fold belongs to the act's one topic — on the bench file
+    # (a new one only; an existing file is the weaver's), on the ask, and
+    # as one ``fold`` row in the topic's index.
+    topic = run_topic.act_topic(task) or ""
     if not existed:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -133,7 +138,8 @@ def handle(f: OutboxFile) -> Handled:
                 f"commit: {commit}\n"
                 f"question: {question}\n"
                 f"made_at: {made_at}\n"
-                "---\n",
+                + (f"topic: {topic}\n" if topic else "")
+                + "---\n",
                 encoding="utf-8",
             )
         except OSError as exc:
@@ -154,6 +160,7 @@ def handle(f: OutboxFile) -> Handled:
             focus_question=question,
             focus_bench_path=str(path),
             fold_by_run=str(getattr(task, "id", "") or ""),
+            **({"topic": topic} if topic else {}),
         )
     except (OSError, ValueError) as exc:
         # The store half already happened; say where, so the ask can be
@@ -173,6 +180,15 @@ def handle(f: OutboxFile) -> Handled:
         commit=commit,
         bench_path=str(path),
     )
+    if topic:
+        try:
+            ref = path.relative_to(home).as_posix()
+        except ValueError:
+            ref = str(path)
+        run_topic.assign(
+            home, topic, kind="fold", ref=ref,
+            run=str(getattr(task, "id", "") or ""), at=made_at,
+        )
     stats = f.ctx.stats
     if stats is not None:
         stats["fold"] = stats.get("fold", 0) + 1

@@ -18,6 +18,14 @@ silent file edit:
   resolving, the grammar ``warpGraph.ts`` already reads); absorbed files move
   to ``topics/retired/``. ``c`` may be one of the sources.
 - ``topic: retire <slug>`` — the file moves to ``topics/retired/``.
+- ``topic: show <slug> [since <span>]`` (move 5c) — the topic's index
+  rendered into the bench at the place ``topics/<slug>`` and the ask
+  delivered to the seat, the way ``fold:`` does (``topic_show``).
+- ``topic: assign <slug> -> <event-id | run-id>`` (move 5c) — assign a run
+  that ended in error with no topic (``topic_unset``), once.
+
+A bare ``topic: <slug>`` is not a verb: it is the act's topic, read by the
+rows that deliver the act (``run_topic``).
 
 ``->`` and ``→`` both read as the arrow. Every write is whole-or-nothing:
 the verb checks every precondition before it touches a file.
@@ -44,6 +52,28 @@ from .shapes import Handled, OutboxFile
 
 VERB = "topic"
 _ARROW_RE = re.compile(r"\s*(?:->|→)\s*")
+#: The words that make `topic:` a verb. Anything else — a bare slug — is the
+#: act's topic (move 5c) and the file falls through the table to the row that
+#: delivers it.
+OPS = ("new", "split", "merge", "retire", "show", "assign")
+_TARGET_ID_RE = re.compile(r"^(?:evt-\d{10,}-[a-z0-9]{4}|run-\d{6}-\d{4}-[a-z0-9]{4})$")
+
+
+def is_op(raw: object) -> bool:
+    """``True`` when a ``topic:`` value is this verb's, not an act's topic.
+
+    An act's topic is exactly one slug that is not an op word
+    (``topic: the-loom``). Anything else — an op (``new foo``), or a value
+    that is not one slug (``rename a b``, ``a, b``) — is claimed by the verb,
+    so a mistyped op is dropped with a notice instead of falling through to
+    ``event`` and delivering its signature body as a chat message.
+    """
+    words = str(raw or "").split()
+    if not words:
+        return False
+    if len(words) == 1 and heddles.SLUG_RE.match(words[0]) and words[0].lower() not in OPS:
+        return False
+    return True
 
 
 def _finish(f: OutboxFile, text: str, *, kind: str, promoted: int) -> Handled:
@@ -70,6 +100,21 @@ def parse(raw: str) -> tuple[str, list[str], list[str]] | None:
     if op in ("new", "retire"):
         names = _slugs(rest)
         return (op, names, []) if len(names) == 1 else None
+    if op == "show":
+        words = rest.split()
+        if len(words) == 1:
+            return op, words, []
+        if len(words) == 3 and words[1].lower() == "since" and heddles.parse_span(words[2]):
+            return op, words[:1], [words[2]]
+        return None
+    if op == "assign":
+        parts = _ARROW_RE.split(rest)
+        if len(parts) != 2:
+            return None
+        sources, targets = _slugs(parts[0]), _slugs(parts[1])
+        if len(sources) != 1 or len(targets) != 1 or not _TARGET_ID_RE.match(targets[0]):
+            return None
+        return op, sources, targets
     if op in ("split", "merge"):
         parts = _ARROW_RE.split(rest)
         if len(parts) != 2:
@@ -161,7 +206,8 @@ def handle(f: OutboxFile) -> Handled:
     if parsed is None:
         return _refuse(
             f, f"topic dropped: {raw!r} is not a topic verb — write `topic: new <slug>`, "
-            "`topic: split <slug> -> a, b`, `topic: merge a, b -> c` or `topic: retire <slug>`",
+            "`topic: split <slug> -> a, b`, `topic: merge a, b -> c`, `topic: retire <slug>`, "
+            "`topic: show <slug> [since <span>]` or `topic: assign <slug> -> <event-id>`",
             kind="dropped",
         )
     op, sources, targets = parsed
@@ -170,7 +216,8 @@ def handle(f: OutboxFile) -> Handled:
             f, f"topic refused: {op} {' '.join(sources + targets)} — the heddles are the "
             "whole cloth's; a strand names the layer in its return value instead",
         )
-    bad = [s for s in sources + targets if not heddles.SLUG_RE.match(s)]
+    slug_args = sources + (targets if op in ("split", "merge") else [])
+    bad = [s for s in slug_args if not heddles.SLUG_RE.match(s)]
     if bad:
         return _refuse(
             f, f"topic dropped: {', '.join(repr(b) for b in bad)} — a topic slug is "
@@ -183,6 +230,10 @@ def handle(f: OutboxFile) -> Handled:
     existing = {t.slug: t for t in _all_topics(directory)}
 
     try:
+        if op == "show":
+            return _show(f, ctx, sources[0], targets[0] if targets else None)
+        if op == "assign":
+            return _assign(f, ctx, sources[0], targets[0])
         if op == "new":
             return _new(f, directory, existing, sources[0])
         if op == "retire":
@@ -207,6 +258,8 @@ def _all_topics(directory: Path) -> list[heddles.Topic]:
 
 
 def _accepted(f: OutboxFile, op: str, text: str, slugs: list[str]) -> Handled:
+    if op == "show":  # a read, not a change: its packet is `fold_requested`
+        return _finish(f, text, kind="advisory", promoted=1)
     f.ctx.emit(
         "topic_changed",
         run_id=getattr(f.run, "id", ""),
@@ -322,3 +375,129 @@ def _merge(f, directory: Path, existing, sources: list[str], target: str) -> Han
         f"topic merge {', '.join(sources)} → {target} (ids: {' '.join(aliases)}; moved {', '.join(moved) or 'nothing'})",
         [*sources, target] if target not in sources else list(sources),
     )
+
+
+# ── Move 5c: `show` and `assign` ─────────────────────────────────────────
+
+
+def _show(f: OutboxFile, ctx, slug: str, since: str | None) -> Handled:
+    """`topic: show <slug> [since <span>]` — the index, rendered into the
+    bench at the place ``topics/<slug>`` (the ``fold:`` store, commit =
+    ``HEAD``), and the ask delivered to the seat the way ``fold:`` does.
+
+    The page is the frame's rendering, so it is rewritten on every show —
+    unlike a fold's bench file, whose body is the weaver's."""
+    from .. import protocol
+    from .. import topic_show
+    from . import fold
+
+    task = f.run
+    meta = getattr(task, "meta", None) or {}
+    home = account.context_home_root(ctx)
+    canonical = heddles.resolve_slug(home, slug)
+    index_file = heddles.index_path(home, slug)
+    if canonical is None and (index_file is None or not index_file.exists()):
+        return _refuse(f, f"topic refused: show {slug} — no heddle and no index by that name")
+    label = str(meta.get("repo_label") or "")
+    if not label and getattr(ctx, "default_repo", None) is not None:
+        label = str(getattr(ctx.default_repo, "label", "") or "")
+    if not label or f.ctx.repo_root is None:
+        return _refuse(f, f"topic dropped: show {slug} — this run has no repo checkout to key the bench to",
+                       kind="dropped")
+    commit = fold.read_head(f.ctx.repo_root)
+    if not commit:
+        return _refuse(f, f"topic dropped: show {slug} — `git rev-parse HEAD` did not answer", kind="dropped")
+    if f.ctx.inbox_dir is None:
+        return _refuse(f, f"topic dropped: show {slug} — no inbox to deliver the ask to", kind="dropped")
+    place = f"{heddles.TOPICS_DIRNAME}/{canonical or slug}"
+    brr_dir = getattr(f.ctx.emit, "brr_dir", None)
+    body = topic_show.render(
+        home, slug, since=since,
+        inbox_dirs=[f.ctx.inbox_dir],
+        runs_dirs=[Path(brr_dir) / "runs"] if brr_dir is not None else [],
+    )
+    made_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    path = fold.bench_path(home, account.slug_repo_label(label), place, commit)
+    _write(path, (
+        "---\n"
+        f"place: {place}\n"
+        f"commit: {commit}\n"
+        f"topic: {canonical or slug}\n"
+        f"since: {since or ''}\n"
+        f"made_at: {made_at}\n"
+        "---\n" + body
+    ))
+    rows = body.count("\n- ")
+    conversation_key = str(getattr(task, "conversation_key", "") or f.ctx.emit.conversation_key or "")
+    lines = [f"topic show {canonical or slug}" + (f" since {since}" if since else "") + f" · {rows} acts",
+             f"bench: {path}"]
+    try:
+        event_path = protocol.create_event(
+            f.ctx.inbox_dir, fold.SOURCE, "\n\n".join(lines),
+            conversation_key=" ".join(conversation_key.split()),
+            repo_label=label,
+            focus_place=place,
+            focus_commit=commit,
+            focus_question=f"the index of {canonical or slug}",
+            focus_bench_path=str(path),
+            fold_by_run=str(getattr(task, "id", "") or ""),
+        )
+    except (OSError, ValueError) as exc:
+        return _refuse(
+            f, f"topic dropped: show {slug} — the page is at {path} but the ask was not "
+            f"delivered: {exc}", kind="dropped",
+        )
+    f.ctx.emit(
+        "fold_requested",
+        run_id=getattr(task, "id", ""),
+        event_id=f.ctx.event_id,
+        fold_event=event_path.stem,
+        place=place,
+        commit=commit,
+        bench_path=str(path),
+    )
+    return _accepted(f, "show", f"topic show {canonical or slug} → {path.name} at {place} ({rows} acts)",
+                     [canonical or slug])
+
+
+def _assign(f: OutboxFile, ctx, slug: str, target: str) -> Handled:
+    """`topic: assign <slug> -> <event-id | run-id>` — assign a run that ended
+    in error with no topic, once. Refused for anything already assigned:
+    nothing is reclassified after the fact."""
+    from .. import protocol
+    from .. import run_topic
+    from ..run import Run, run_manifest_path
+
+    home = account.context_home_root(ctx)
+    canonical = heddles.resolve_slug(home, slug)
+    if canonical is None:
+        return _refuse(f, f"topic refused: assign {slug} — no heddle by that name; `topic: new {slug}` first")
+    brr_dir = getattr(f.ctx.emit, "brr_dir", None)
+    if brr_dir is None:
+        return _refuse(f, f"topic dropped: assign {slug} -> {target} — no runs directory", kind="dropped")
+    runs_dir = Path(brr_dir) / "runs"
+    event_id = target if target.startswith("evt-") else ""
+    run_id = target if target.startswith("run-") else ""
+    event_file = Path(f.ctx.inbox_dir) / f"{event_id}.md" if (event_id and f.ctx.inbox_dir) else None
+    if event_id and not run_id and event_file is not None and event_file.is_file():
+        run_id = str(protocol.parse_frontmatter(event_file.read_text(encoding="utf-8")).get("run_id") or "")
+    manifest = Run.from_file(run_manifest_path(runs_dir, run_id)) if run_id else None
+    if manifest is None:
+        return _refuse(f, f"topic refused: assign {slug} -> {target} — no run found for it")
+    if manifest.meta.get(run_topic.META_UNSET) is not True or manifest.meta.get(run_topic.META_EVENT_TOPIC):
+        return _refuse(
+            f, f"topic refused: assign {slug} -> {target} — {manifest.id} is not topic-unset "
+            "(an assigned act is never reclassified)",
+        )
+    event_id = event_id or manifest.event_id
+    manifest.meta[run_topic.META_EVENT_TOPIC] = canonical
+    manifest.meta.pop(run_topic.META_UNSET, None)
+    manifest.save(runs_dir)
+    run_topic.stamp_event(f.ctx.inbox_dir, event_id, topic=canonical)
+    run_topic.assign(
+        home, canonical, kind="event", ref=event_id, run=manifest.id,
+        thread=manifest.conversation_key or "",
+    )
+    return _accepted(f, "assign", f"topic assign {canonical} -> {event_id} ({manifest.id} was topic-unset)",
+                     [canonical])
+

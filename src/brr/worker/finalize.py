@@ -193,6 +193,10 @@ def _finalize_exhausted(p: Prepared, b: Boundary) -> Finalized:
         print(f"[brnrd] worker {eid}: gave up after {attempt} attempt(s)")
     if trace_dirs:
         task.meta["trace_dirs"] = ", ".join(trace_dirs)
+    # Move 5c: a run that errs before its `.topic` settled carries
+    # `topic: None` + `topic_unset: True`; the next wake on the thread sees
+    # `predecessor_topic_unset` in its bundle and may assign it once.
+    _mark_topic_unset(p, task)
     task.update_status("error", runs_dir)
     failure_reason = daemon._failure_reason(last_failure, attempt)
     daemon._write_terminal_failure_response(
@@ -250,3 +254,21 @@ def _finalize_exhausted(p: Prepared, b: Boundary) -> Finalized:
             failed_payload["timed_out"] = True
     emit("failed", **failed_payload)
     return Finalized(task, "failed")
+
+
+def _mark_topic_unset(p: Prepared, task) -> None:
+    from .. import run_topic
+
+    try:
+        home = (
+            account.context_home_root(p.account_context)
+            if p.account_context is not None else None
+        )
+        run_topic.settle(
+            task, outbox_dir=p.outbox_dir, account_home=home,
+            inbox_dir=p.inbox_dir, is_strand=daemon._is_strand(task.meta),
+        )
+        run_topic.mark_unset_on_error(task, p.outbox_dir)
+    except Exception:  # noqa: BLE001 - never sink a failure finalize
+        return
+

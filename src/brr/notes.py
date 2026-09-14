@@ -161,6 +161,16 @@ _REGISTRY: tuple[Surface, ...] = (
         lifetime=LIFETIME_RUN,
     ),
     Surface(
+        key="topic",
+        root=ROOT_INTRA_RUN,
+        path_hint="<outbox>/.topic",
+        role="the run's one topic — every act it writes inherits it (move 5c)",
+        readers=("brr.run_topic.settle", "brr.hooks", "brr.hud"),
+        grammar="first line: an existing heddle slug, `new <slug>`, or `null`",
+        parser="brr.run_topic",
+        lifetime=LIFETIME_RUN,
+    ),
+    Surface(
         key="name",
         root=ROOT_INTRA_RUN,
         path_hint="<outbox>/.name",
@@ -750,6 +760,7 @@ def resolve_roots(
 _RESOLVERS: dict[str, Callable[[_Roots], list[Path]]] = {
     "card": lambda r: _one(r.outbox, ".card"),
     "mood": lambda r: _one(r.outbox, ".mood"),
+    "topic": lambda r: _one(r.outbox, ".topic"),
     "name": lambda r: _one(r.outbox, ".name"),
     "pr": lambda r: _one(r.outbox, ".pr"),
     "linger-opt-out": lambda r: _one(r.outbox, ".linger-opt-out"),

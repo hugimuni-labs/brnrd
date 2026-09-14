@@ -14,6 +14,9 @@ Two properties of that order are kept on purpose and named here:
 
 - **The control verbs outrank speech.** Every key above ``cut`` consumes the
   file; a file that also says ``event:`` or ``gate:`` is not delivered.
+- **``topic:`` is a verb only as an op** (``new`` · ``split`` · ``merge`` ·
+  ``retire`` · ``show`` · ``assign``). A bare slug is the act's topic
+  (move 5c) and the file falls through to the rows that deliver it.
 - **``cut:`` falls through.** An accepted bolt pops ``event``/``gate``, may set
   ``gate`` to the notify fallback, and hands the rewritten file to the rows
   after it (``gate``, then ``event``) — the handler returns ``then=``.
@@ -105,7 +108,12 @@ def _selects_fold(fm: dict) -> object:
 
 
 def _selects_topic(fm: dict) -> object:
-    return "topic" in fm
+    # Move 5c: `topic:` is also every act's modifier (`event:` + `topic:
+    # the-loom`). Only an op claims the file; a bare slug falls through to
+    # the rows below, which carry it as the act's topic.
+    from . import topic
+
+    return topic.is_op(fm.get("topic"))
 
 
 def _selects_mark(fm: dict) -> object:
@@ -159,6 +167,35 @@ def dispatch(f: OutboxFile) -> list[Handled]:
     Selectors run unguarded, as the drain's ``if`` tests did; each handler
     runs inside a notice attribution for its own file.
     """
+    with _act_scope(f):
+        return _dispatch(f)
+
+
+def _act_scope(f: OutboxFile):
+    """Move 5c: one topic for everything this file writes (``run_topic``)."""
+    from .. import account
+    from .. import run_topic
+
+    task = f.run
+    meta = getattr(task, "meta", None) or {}
+    home = None
+    if f.ctx.account_context is not None:
+        try:
+            home = account.context_home_root(f.ctx.account_context)
+        except Exception:  # noqa: BLE001
+            home = None
+    run_id = str(getattr(task, "id", "") or "")
+    return run_topic.acting(run_topic.ActScope(
+        f.frontmatter, task,
+        outbox_dir=f.ctx.outbox_dir, account_home=home, inbox_dir=f.ctx.inbox_dir,
+        notice=lambda kind, text: daemon._record_outbox_notice(
+            f.ctx.outbox_dir, text, kind=kind, lifetime="run", verb="topic", run=run_id,
+        ),
+        is_strand=bool(daemon._is_strand(meta)) if isinstance(meta, dict) else False,
+    ))
+
+
+def _dispatch(f: OutboxFile) -> list[Handled]:
     from . import notices
 
     results: list[Handled] = []

@@ -35,6 +35,13 @@ plus **claims** — ``.topics`` (the weaver's self-declared claim) and a
 strand's ``topic:`` (declared on its ``spawn:``) — each a match with its own
 ``at``. A claim is one more signature term; it decays like the rest.
 
+plus **assignments** (move 5c, design-the-loom §21) — the rows this run
+wrote into ``surface/topics/<slug>.index.jsonl`` (an alias's file lights the
+topic that absorbed it), kind ``assigned`` at the row's ``at``: an assigned
+act brightens a heddle exactly like a match. The index, its alias-resolving
+reader :func:`index`, the thread map and the dispatch-time :func:`propose`
+live at the bottom of this module.
+
 **Brightness** is ``0.5 ** (age / HALF_LIFE_SECONDS)`` with a one-hour half
 life. Why an hour: the chip is read at the tempo of boundaries (seconds to
 minutes) and a chase inside a session touches its places every few minutes,
@@ -850,6 +857,7 @@ def light(
             _score_produce(state, run_dir, outbox_dir, now_epoch)
             _score_messages(state, node_dir)
             _score_claims(state, outbox_dir, strand_claims, events)
+            _score_assigned(state, account_home, run_id)
             heddles = []
             for compiled in state.compiled:
                 record = state.last.get(compiled.topic.slug, {})
@@ -906,3 +914,284 @@ def chip_segment(heddles: Iterable[Mapping[str, Any] | Heddle]) -> str | None:
     if rest:
         text += " · (" + ", ".join(rest) + ")"
     return text
+
+
+# ── Assignment: the index, the thread map, the proposal (move 5c) ────────
+#
+# design-the-loom §21: every act that enters the loom belongs to exactly one
+# topic at the moment of entry. The topic is the *file*: one
+# ``surface/topics/<slug>.index.jsonl`` per topic, one row per act
+# ``{kind, ref, at, run}``, appended by the frame at assignment. A merged
+# topic's index file stays where it was; its slug lives on as an ``ids:``
+# alias of the topic it merged into, and :func:`index` reads both — a merge
+# is a remap at read time, never a rewrite of history.
+
+INDEX_SUFFIX = ".index.jsonl"
+#: ``{thread key: {topic, at, run}}`` — the thread's last assigned topic, the
+#: proposal's fallback. A JSON file, not a topic: ``load_topics`` and the warp
+#: graph read ``*.md`` only.
+THREADS_NAME = "threads.json"
+INDEX_KINDS = ("message", "strand", "bolt", "fold", "produce", "event")
+_INDEX_LOCK = threading.Lock()
+_SPAN_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(s|m|h|d|w)\s*$", re.IGNORECASE)
+_SPAN_UNIT = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+
+
+def parse_span(text: object) -> float | None:
+    """``"2h"`` → 7200.0 · ``"3d"`` → 259200.0 · anything else → ``None``."""
+    match = _SPAN_RE.match(str(text or ""))
+    if not match:
+        return None
+    return float(match.group(1)) * _SPAN_UNIT[match.group(2).lower()]
+
+
+def index_path(account_home: Path | None, slug: str) -> Path | None:
+    directory = topics_dir(account_home)
+    if directory is None or not SLUG_RE.match(slug or ""):
+        return None
+    return directory / f"{slug}{INDEX_SUFFIX}"
+
+
+def _topic_names(account_home: Path | None) -> dict[str, Topic]:
+    """Every live topic by slug *and* by each ``ids:`` alias — first claim wins,
+    the warp graph's rule."""
+    names: dict[str, Topic] = {}
+    topics = load_topics(topics_dir(account_home))
+    for topic in topics:
+        names.setdefault(topic.slug, topic)
+    for topic in topics:
+        for alias in topic.aliases:
+            names.setdefault(alias, topic)
+    return names
+
+
+def resolve_slug(account_home: Path | None, name: object) -> str | None:
+    """The live topic *name* means — itself, or the topic that absorbed it as
+    an alias. ``None`` for an unknown name, a split breadcrumb, or no home."""
+    text = str(name or "").strip()
+    if not SLUG_RE.match(text):
+        return None
+    topic = _topic_names(account_home).get(text)
+    return topic.slug if topic is not None else None
+
+
+def _read_index_file(path: Path) -> list[dict[str, Any]]:
+    try:
+        with path.open("rb") as handle:
+            data = handle.read(_READ_CAP_BYTES)
+    except OSError:
+        return []
+    return list(_json_rows(data.decode("utf-8", errors="replace").splitlines()))
+
+
+def append_index(
+    account_home: Path | None,
+    slug: str,
+    *,
+    kind: str,
+    ref: str,
+    at: object = None,
+    run: str = "",
+) -> bool:
+    """Append one act to *slug*'s index. ``True`` when a row was written.
+
+    Deduped by ``ref``: an act has one id, and a second assignment of the same
+    ref (a retried drain, a heartbeat that saw the same control twice) writes
+    nothing. The caller resolves *slug* first (:func:`resolve_slug`); an
+    unknown kind, an empty ref or no home writes nothing. Never raises.
+    """
+    path = index_path(account_home, slug)
+    ref = " ".join(str(ref or "").split())
+    if path is None or kind not in INDEX_KINDS or not ref:
+        return False
+    epoch = _epoch(at) if at is not None else None
+    if epoch is None:
+        epoch = _dt.datetime.now(tz=_dt.timezone.utc).timestamp()
+    row = {"kind": kind, "ref": ref, "at": _iso(epoch), "run": str(run or "")}
+    try:
+        with _INDEX_LOCK:
+            if any(r.get("ref") == ref for r in _read_index_file(path)):
+                return False
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    except OSError:
+        return False
+    return True
+
+
+def index(
+    account_home: Path | None,
+    slug: str,
+    since: object = None,
+    *,
+    now: object = None,
+) -> list[dict[str, Any]]:
+    """*slug*'s acts, oldest first — its own file and every alias's, merged by
+    ``at`` and deduped by ``ref`` (the earliest row wins).
+
+    *slug* may itself be an alias: it resolves to the topic that absorbed it,
+    so asking for a merged-away name reads the merged whole. An unknown slug
+    still reads its own file if one exists (a retired topic's history is not
+    erased). *since* is an epoch, an ISO time, or a span (``"2h"``, ``"3d"``)
+    counted back from *now*. Never raises.
+    """
+    if not SLUG_RE.match(str(slug or "")):
+        return []
+    names = _topic_names(account_home)
+    topic = names.get(slug)
+    files = [slug]
+    if topic is not None:
+        files = [topic.slug, *topic.aliases]
+        if slug not in files:
+            files.append(slug)
+    cutoff: float | None = None
+    if since is not None:
+        span = parse_span(since)
+        if span is not None:
+            now_epoch = _epoch(now) if now is not None else None
+            if now_epoch is None:
+                now_epoch = _dt.datetime.now(tz=_dt.timezone.utc).timestamp()
+            cutoff = now_epoch - span
+        else:
+            cutoff = _epoch(since)
+    rows: list[tuple[float, int, dict[str, Any]]] = []
+    order = 0
+    for name in _dedupe(files):
+        path = index_path(account_home, name)
+        if path is None:
+            continue
+        for row in _read_index_file(path):
+            at = _epoch(row.get("at"))
+            if at is None or not row.get("ref"):
+                continue
+            rows.append((at, order, row))
+            order += 1
+    rows.sort(key=lambda item: (item[0], item[1]))
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for at, _, row in rows:
+        ref = str(row.get("ref"))
+        if ref in seen:
+            continue
+        seen.add(ref)
+        # `since` filters after the dedupe: an act is dated by its first
+        # assignment, so a later duplicate row never re-enters the window.
+        if cutoff is not None and at < cutoff:
+            continue
+        out.append({
+            "kind": row.get("kind"), "ref": ref, "at": row.get("at"),
+            "run": row.get("run") or "",
+        })
+    return out
+
+
+def _threads_path(account_home: Path | None) -> Path | None:
+    directory = topics_dir(account_home)
+    return directory / THREADS_NAME if directory is not None else None
+
+
+def _read_threads(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def record_thread_topic(
+    account_home: Path | None, thread: str, slug: str, *, at: object = None, run: str = "",
+) -> bool:
+    """Remember *slug* as *thread*'s last assigned topic. Never raises."""
+    path = _threads_path(account_home)
+    thread = str(thread or "").strip()
+    if path is None or not thread or not SLUG_RE.match(slug or ""):
+        return False
+    epoch = _epoch(at) if at is not None else None
+    try:
+        with _INDEX_LOCK:
+            data = _read_threads(path)
+            data[thread] = {
+                "topic": slug,
+                "at": _iso(epoch if epoch is not None else _dt.datetime.now(
+                    tz=_dt.timezone.utc).timestamp()),
+                "run": str(run or ""),
+            }
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(f".{path.name}.tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
+                           encoding="utf-8")
+            os.replace(tmp, path)
+    except OSError:
+        return False
+    return True
+
+
+def thread_topic(account_home: Path | None, thread: str) -> str | None:
+    """*thread*'s last assigned topic, resolved through aliases — ``None`` when
+    the thread has none or it no longer names a live topic."""
+    path = _threads_path(account_home)
+    if path is None or not str(thread or "").strip():
+        return None
+    record = _read_threads(path).get(str(thread).strip())
+    if not isinstance(record, dict):
+        return None
+    return resolve_slug(account_home, record.get("topic"))
+
+
+_PATHLIKE_RE = re.compile(r"[\w.\-]+(?:/[\w.\-*]+)+")
+
+
+def propose(
+    account_home: Path | None, text: object, *, thread: str = "",
+) -> tuple[str | None, str]:
+    """The frame's proposal for an inbound act: ``(slug, why)``.
+
+    ``why`` is ``"signature"`` when a topic's signature matched the text best
+    (most distinct terms hit: words, produce refs, thread ids, and path-shaped
+    tokens against places; ties go to the slug order), ``"thread"`` when
+    nothing matched and *thread*'s last assigned topic stands, and ``"none"``
+    otherwise. A home with no topics proposes nothing. Never raises.
+    """
+    try:
+        topics = load_topics(topics_dir(account_home))
+        body = str(text or "")
+        best: tuple[int, str] | None = None
+        if topics and body.strip():
+            paths = [relative_place(p) for p in _PATHLIKE_RE.findall(body)]
+            paths = [p for p in paths if p]
+            for topic in topics:
+                compiled = _compile(topic)
+                hits = sum(1 for p in compiled.words if p.search(body))
+                hits += sum(
+                    1 for ref in compiled.refs
+                    if re.search(r"(?<![\w#])" + re.escape(ref) + r"(?!\w)", body, re.IGNORECASE)
+                )
+                hits += sum(1 for t in compiled.threads if t in body)
+                hits += sum(1 for pattern in compiled.places if any(pattern.match(p) for p in paths))
+                if hits and (best is None or hits > best[0]):
+                    best = (hits, topic.slug)
+        if best is not None:
+            return best[1], "signature"
+        fallback = thread_topic(account_home, thread) if thread else None
+        if fallback:
+            return fallback, "thread"
+    except Exception:  # noqa: BLE001 - a proposal must never sink a dispatch
+        return None, "none"
+    return None, "none"
+
+
+def _score_assigned(state: _RunState, account_home: Path | None, run_id: str) -> None:
+    """Index rows this run wrote light their topic — kind ``assigned``, at the
+    row's ``at``, the same decay as any match. Read incrementally per file;
+    an alias's file lights the topic that absorbed it."""
+    if not run_id or account_home is None:
+        return
+    for compiled in state.compiled:
+        for name in compiled.names:
+            path = index_path(account_home, name)
+            if path is None:
+                continue
+            for row in _json_rows(_read_new_lines(state, path)):
+                if str(row.get("run") or "") == run_id:
+                    _hit(state, compiled.topic.slug, "assigned", _epoch(row.get("at")))

@@ -32,6 +32,10 @@
   "inbound": {
     "current_event": "evt-1",
     "current_event_replyable": true,
+    "current_event_topic": {
+      "confirmed": null,
+      "proposed": null
+    },
     "events": []
   },
   "knowledge": {
@@ -160,7 +164,8 @@
     "phase": "finalizing",
     "repo": null,
     "runner": "codex",
-    "status": "held"
+    "status": "held",
+    "topic": null
   },
   "schedule": {
     "armed": []

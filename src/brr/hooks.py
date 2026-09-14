@@ -56,6 +56,7 @@ from . import promises
 from . import protocol
 from . import relics
 from . import run_ledger
+from . import run_topic
 
 PHASE_POST_TOOL = "post-tool"
 PHASE_STOP = "stop"
@@ -5006,6 +5007,31 @@ def format_delta(
             "- .name: still unwritten — add a short resident-authored run name "
             "so the live dashboard can identify this work beyond its waking-message excerpt."
         )
+    # Move 5c: the topic is set at boot beside `.card` and `.mood`. Same
+    # grace and the same tone as `.name` — a reading of what is missing, with
+    # the frame's proposal when it has one; silent once `.topic` holds any
+    # line (`null` included) or the event arrived assigned.
+    run_facet = payload.get("run") if isinstance(payload.get("run"), dict) else {}
+    inbound_facet = payload.get("inbound") if isinstance(payload.get("inbound"), dict) else {}
+    event_topic = (
+        inbound_facet.get("current_event_topic")
+        if isinstance(inbound_facet.get("current_event_topic"), dict) else {}
+    )
+    if (
+        not stop
+        and isinstance(elapsed, (int, float)) and elapsed >= 240
+        and "current_event_topic" in inbound_facet
+        and not run_facet.get("topic")
+        and not event_topic.get("confirmed")
+        and outbox_dir is not None
+        and run_topic.read_control(outbox_dir) is None
+    ):
+        proposed = event_topic.get("proposed")
+        lines.append(
+            "- .topic: still unwritten — this run's topic: "
+            + (f"`{proposed}` proposed, or " if proposed else "")
+            + "an existing heddle or `new <slug>` (`null` for none)."
+        )
     # Card staleness (all phases): the note is the one live surface a
     # watching user sees between replies, so its own silence needs the same
     # "this is attention-worthy" framing pending events got 2026-07-05 — a
@@ -7499,6 +7525,111 @@ def _tool_place_path(tool_name: object, tool_input: object) -> str | None:
     return None
 
 
+#: Move 5c: how many paths a Shell row names, and how many candidate tokens it
+#: may stat to find them — the row is on the hot path, so both are small.
+SHELL_PLACE_PATHS_MAX = 8
+_SHELL_PLACE_STAT_MAX = 64
+_SHELL_TOKEN_RE = re.compile(r"[\w.\-/@+~]+(?::[\w.\-/@+~]+)*")
+_SHELL_SEGMENT_RE = re.compile(r"\|\||&&|[;|&]|\$\(|`")
+_HEREDOC_RE = re.compile(r"<<-?\s*['\"]?\w+")
+
+
+def _repo_root_for(cwd: str | None, hint: Path | None = None) -> Path | None:
+    """The checkout a shell act ran in: the armed repo dir, ``$GIT_WORK_TREE``,
+    else the nearest parent of *cwd* holding ``.git`` — ``stat`` only."""
+    if hint is not None:
+        return hint
+    work_tree = (os.environ.get("GIT_WORK_TREE") or "").strip()
+    if work_tree:
+        return Path(work_tree)
+    if not cwd:
+        return None
+    current = Path(cwd)
+    for _ in range(32):
+        try:
+            if (current / ".git").exists():
+                return current
+        except OSError:
+            return None
+        if current.parent == current:
+            return None
+        current = current.parent
+    return None
+
+
+def _shell_place_paths(
+    tool_input: object, cwd: str | None, root: Path | None,
+) -> list[str]:
+    """The paths a Shell command names that exist under the repo root.
+
+    Read from the command text the hook already holds — never run: every
+    line up to a heredoc opener, plus the heredoc's first body line (where
+    ``python3 - <<'PY'`` names its file); each token also split at ``:`` so
+    ``git show HEAD:src/x.py`` and ``src/x.py:12`` both yield the path; the
+    first bare word of each command segment (the program) is skipped. A
+    token counts when it resolves — relative to *cwd*, else the root — to a
+    file or directory inside *root*. At most :data:`SHELL_PLACE_PATHS_MAX`,
+    in command order, as absolute paths (the row's other tools record
+    absolute paths too, and ``heddles.relative_place`` relativises both).
+    """
+    if not isinstance(tool_input, dict) or root is None:
+        return []
+    command = tool_input.get("command", tool_input.get("cmd", ""))
+    if isinstance(command, list):
+        command = " ".join(str(part) for part in command)
+    if not isinstance(command, str) or not command.strip():
+        return []
+    try:
+        root_resolved = root.resolve()
+    except OSError:
+        return []
+    base = Path(cwd) if cwd else root_resolved
+    lines: list[str] = []
+    raw_lines = command.splitlines()
+    for index, line in enumerate(raw_lines):
+        lines.append(line)
+        if _HEREDOC_RE.search(line):
+            if index + 1 < len(raw_lines):
+                lines.append(raw_lines[index + 1])
+            break
+    found: list[str] = []
+    stats = 0
+    for line in lines:
+        for segment in _SHELL_SEGMENT_RE.split(line):
+            tokens = _SHELL_TOKEN_RE.findall(segment)
+            for position, token in enumerate(tokens):
+                for part in token.split(":"):
+                    part = part.strip().rstrip(",")
+                    if position == 0 and "/" not in part:
+                        continue
+                    if len(part) < 2 or part.startswith("-") or part.isdigit() or part in ("..",):
+                        continue
+                    if stats >= _SHELL_PLACE_STAT_MAX or len(found) >= SHELL_PLACE_PATHS_MAX:
+                        return found
+                    candidate = Path(os.path.expanduser(part))
+                    if not candidate.is_absolute():
+                        candidate = base / candidate
+                    stats += 1
+                    try:
+                        if not candidate.exists():
+                            continue
+                        resolved = Path(os.path.normpath(str(candidate)))
+                    except OSError:
+                        continue
+                    text = str(resolved)
+                    root_text = str(root_resolved)
+                    if not (text == root_text or text.startswith(root_text + os.sep)):
+                        alt = str(root).rstrip(os.sep)
+                        if not (text == alt or text.startswith(alt + os.sep)):
+                            continue
+                    if text in (root_text, str(root).rstrip(os.sep)):
+                        continue
+                    summary = redact_detail(text[:_DETAIL_OTHER_MAX])
+                    if summary not in found:
+                        found.append(summary)
+    return found
+
+
 def record_boundary(
     ctx: HookContext,
     phase: str,
@@ -7546,6 +7677,8 @@ def record_boundary(
     first_act: str | None = None
     first_detail: str | None = None
     first_path: str | None = None
+    first_name: str | None = None
+    first_input: object = None
     total_out_bytes: int = 0
     has_out_bytes = False
     if phase == PHASE_POST_TOOL and isinstance(payload, dict):
@@ -7558,6 +7691,7 @@ def record_boundary(
                 if isinstance(name, str) and name.strip():
                     tool_names.append(name.strip())
                     if first_act is None:
+                        first_name, first_input = name, call.get("tool_input")
                         first_act = classify_act(name, call.get("tool_input"))
                         first_detail = _tool_detail(name, call.get("tool_input"))
                         first_path = _tool_place_path(name, call.get("tool_input"))
@@ -7569,6 +7703,7 @@ def record_boundary(
             name = payload.get("tool_name")
             if isinstance(name, str) and name.strip():
                 tool_names.append(name.strip())
+                first_name, first_input = name, payload.get("tool_input")
                 first_act = classify_act(name, payload.get("tool_input"))
                 first_detail = _tool_detail(name, payload.get("tool_input"))
                 first_path = _tool_place_path(name, payload.get("tool_input"))
@@ -7609,7 +7744,26 @@ def record_boundary(
     # checkout's current HEAD" — `produce.latest_commit` is the newest commit
     # the run *produced* (absent before the first one) and the gate receipt's
     # `head` is HEAD at gating time, both stale-or-other by construction.
-    record["place"] = {"path": first_path, "commit": None}
+    # Move 5c: a Shell act names its paths in its command text — `place.path`
+    # is the first that exists under the repo root, `place.paths` all of them
+    # (capped), so a seat that works in `sed` lights its places too.
+    paths: list[str] = [first_path] if first_path else []
+    if first_path is None and isinstance(first_name, str) and (
+        first_name.strip().lower().replace("-", "_").replace(".", "_") in _SHELL_TOOL_NAMES
+    ):
+        try:
+            paths = _shell_place_paths(
+                first_input,
+                cwd.strip() if isinstance(cwd, str) and cwd.strip() else None,
+                _repo_root_for(
+                    cwd.strip() if isinstance(cwd, str) else None,
+                    getattr(ctx, "repo_dir", None),
+                ),
+            )
+        except Exception:  # noqa: BLE001 - the row never sinks a boundary
+            paths = []
+        first_path = paths[0] if paths else None
+    record["place"] = {"path": first_path, "paths": paths, "commit": None}
     # An in-process subagent's boundary is recorded (it happened, and a reader
     # asking "what did this run's environment say" wants it) but tagged, so
     # `derive_boundaries_summary` can keep the run's own verdict — which is
