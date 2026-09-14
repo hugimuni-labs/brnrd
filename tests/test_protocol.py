@@ -683,66 +683,78 @@ def test_terminal_event_statuses_is_derived_from_letter_statuses():
 
 
 def _outbox_verbs_the_drain_handles() -> set[str]:
-    """The outbox verb vocabulary `daemon._drain_outbox` actually dispatches
-    on, read from its own source rather than hand-listed a second time.
+    """The outbox verb vocabulary the drain actually dispatches on, read from
+    the dispatch's own source rather than hand-listed a second time.
 
-    `_drain_outbox` is a flat sequence of ``if <verb check>: ... continue``
-    statements inside one ``for fpath in entries:`` loop (no elif chain).
-    A verb check is either inline in the ``If.test`` (``if
-    str(fm.get("to") or "").strip():``), or a preceding sibling ``Assign``
-    whose target the ``If.test`` then names (``note_target = str(fm.get(
-    "note") or "").strip()`` / ``if note_target:``), or — for ``event:``,
-    the unconditional fallback once nothing else matched — a sibling
-    ``Assign`` with no gating ``if`` at all. Two verbs
-    (``runner_policy``, ``config_change``) hide their own ``fm.get(...)``
-    behind a same-module predicate function called as the bare ``If.test``
-    (``_runner_policy_proposal_requested(fm)``); one level of recursion
-    into such a *bare-`fm`-argument* call picks those up too.
+    Move 4 split ``daemon._drain_outbox`` into ``brr.outbox``: the precedence
+    now lives once, in ``outbox/table.py``'s ``ROWS`` — a tuple of
+    ``Row(<key>, <selector>, <handler>)`` in the order the drain tries them.
+    A selector is a module-level function of ``fm`` whose body is the old
+    ``if`` test verbatim: ``fm.get("<verb>")``, ``"<verb>" in fm``, or a
+    bare-``fm`` call to a ``daemon.py`` predicate that hides its own
+    ``fm.get(...)`` (``daemon._runner_policy_proposal_requested(fm)``) — one
+    level of recursion into such a call picks those up. ``event`` is the one
+    row with ``selects=None``: the unconditional fallback once nothing else
+    matched, as it was on ``main``; its key is the row's own literal.
 
-    Deliberately restricted to this **top level of the dispatch loop's own
-    body** — not a blanket ``ast.walk`` of the whole function — because a
-    verb's own *branch body* can legitimately read further ``fm`` sub-fields
-    once that verb is already chosen (the ``gate:`` branch's own
-    ``target_thread=str(fm.get("thread") or "")``, the respawn/spawn
-    `_queue_*` helpers' `shell`/`core`/`at`/`scope`), and those are not
-    routing selectors — ``_OUTBOX_ROUTING_KEYS`` gates the lenient parse's
-    *leading* key, not everything a message body may later contain.
+    Deliberately restricted to the **selectors** — never the handlers — for
+    the reason the old top-level-only scan gave: a handler legitimately reads
+    further ``fm`` sub-fields once its verb is chosen (``gate:``'s
+    ``thread``, the ``_queue_*`` helpers' ``shell``/``core``/``at``), and
+    those are not routing selectors — ``_OUTBOX_ROUTING_KEYS`` gates the
+    lenient parse's *leading* key, not everything a message may contain.
     """
-    tree = ast.parse(Path(daemon_mod.__file__).read_text(encoding="utf-8"))
+    from brr.outbox import table as table_mod
+
+    tree = ast.parse(Path(table_mod.__file__).read_text(encoding="utf-8"))
+    daemon_tree = ast.parse(Path(daemon_mod.__file__).read_text(encoding="utf-8"))
     functions = {
         node.name: node
         for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef)
     }
-    drain = functions.get("_drain_outbox")
+    daemon_functions = {
+        node.name: node
+        for node in ast.walk(daemon_tree)
+        if isinstance(node, ast.FunctionDef)
+    }
+    rows_assign = next(
+        (
+            node for node in tree.body
+            if isinstance(node, (ast.Assign, ast.AnnAssign))
+            and any(
+                isinstance(t, ast.Name) and t.id == "ROWS"
+                for t in (node.targets if isinstance(node, ast.Assign) else [node.target])
+            )
+        ),
+        None,
+    )
     # Sanity: a rename must break this loudly rather than pass over nothing.
-    assert drain is not None, (
-        "_drain_outbox not found in daemon.py — this guard has been "
+    assert rows_assign is not None and isinstance(rows_assign.value, ast.Tuple), (
+        "outbox/table.py has no `ROWS = (...)` tuple — this guard has been "
         "silently disarmed by a rename"
-    )
-    dispatch_loop = next(
-        (node for node in drain.body if isinstance(node, ast.For)), None,
-    )
-    assert dispatch_loop is not None, (
-        "_drain_outbox no longer wraps its dispatch in one `for` loop — "
-        "this guard's top-level-only scan needs re-deriving, not widening "
-        "back to a blanket ast.walk (that is what let `thread` — a "
-        "gate: sub-field, not a verb — slip in)"
     )
 
     verbs: set[str] = set()
     visited: set[str] = set()
 
     def bare_fm_callee(node: ast.AST) -> str | None:
-        if (
+        if not (
             isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
             and not node.keywords
             and len(node.args) == 1
             and isinstance(node.args[0], ast.Name)
             and node.args[0].id == "fm"
         ):
+            return None
+        if isinstance(node.func, ast.Name):
             return node.func.id
+        if (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "daemon"
+        ):
+            return node.func.attr
         return None
 
     def scan_expr(expr: ast.AST) -> None:
@@ -771,19 +783,24 @@ def _outbox_verbs_the_drain_handles() -> set[str]:
                 verbs.add(node.left.value)
             else:
                 callee_name = bare_fm_callee(node)
-                if (
-                    callee_name
-                    and callee_name in functions
-                    and callee_name not in visited
-                ):
+                target = functions.get(callee_name or "") or daemon_functions.get(
+                    callee_name or ""
+                )
+                if target is not None and callee_name not in visited:
                     visited.add(callee_name)
-                    scan_expr(functions[callee_name])
+                    scan_expr(target)
 
-    for stmt in dispatch_loop.body:
-        if isinstance(stmt, ast.If):
-            scan_expr(stmt.test)
-        elif isinstance(stmt, ast.Assign):
-            scan_expr(stmt.value)
+    for row in rows_assign.value.elts:
+        assert isinstance(row, ast.Call) and len(row.args) == 3, ast.dump(row)
+        key_node, selects_node, _handler = row.args
+        if isinstance(selects_node, ast.Constant) and selects_node.value is None:
+            assert isinstance(key_node, ast.Constant), ast.dump(key_node)
+            verbs.add(key_node.value)
+            continue
+        assert isinstance(selects_node, ast.Name), ast.dump(selects_node)
+        selector = functions[selects_node.id]
+        visited.add(selects_node.id)
+        scan_expr(selector)
 
     return verbs
 
@@ -799,7 +816,7 @@ def test_outbox_routing_keys_cover_every_verb_the_drain_handles():
     silently unlisted.
 
     Drive red: delete one verb (e.g. `"note"`) from `_OUTBOX_ROUTING_KEYS`,
-    or add a new `fm.get("thing")` verb branch to `_drain_outbox` without
+    or add a new `fm.get("thing")` row to `outbox/table.py`'s `ROWS` without
     listing `"thing"` here.
     """
     derived = _outbox_verbs_the_drain_handles()

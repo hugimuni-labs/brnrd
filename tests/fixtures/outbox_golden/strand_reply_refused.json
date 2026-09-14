@@ -1,0 +1,21 @@
+{
+  "emitted": [],
+  "promoted": 0,
+  "stats": {},
+  "task_meta": {
+    "strand": true
+  },
+  "tree": {
+    ".brr/inbox/<EVT1>.md": "---\nid: <EVT1>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
+    ".brr/inbox/<EVT2>.md": "---\nid: <EVT2>\nsource: telegram\nstatus: pending\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\nnot yours\n",
+    ".brr/outbox/<EVT1>/.notices.jsonl": [
+      {
+        "at": "<V>",
+        "kind": "refused",
+        "lifetime": "run",
+        "text": "reply refused: event evt-…<TAIL> belongs to another thread — a strand-stack run may only answer its own waking event or a parent's `to:` steer. To reach a human directly, use `gate: <name>`; to report back, your terminal stream is already the return value your dispatcher collects. The message was NOT delivered."
+      }
+    ],
+    ".brr/outbox/<EVT1>/.processed/reply.md": "---\nevent: <EVT2>\n---\nmine now\n"
+  }
+}

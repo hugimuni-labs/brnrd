@@ -1,0 +1,18 @@
+{
+  "emitted": [],
+  "promoted": 0,
+  "stats": {},
+  "task_meta": {},
+  "tree": {
+    ".brr/inbox/<EVT1>.md": "---\nid: <EVT1>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
+    ".brr/outbox/<EVT1>/.notices.jsonl": [
+      {
+        "at": "<V>",
+        "kind": "refused",
+        "lifetime": "run",
+        "text": "hold refused: resume: operator is not a resource wall — `brnrd await` is the resting state — a message, an own strand, or a tick resolves it, and the seat stays warm. `hold:` parks only on a wall the daemon can confirm: `resume: refill` (or `reset`) with the binding quota measured under the starvation floor"
+      }
+    ],
+    ".brr/outbox/<EVT1>/.processed/hold.md": "---\nhold: true\nresume: operator\nreason: bored\n---\n"
+  }
+}

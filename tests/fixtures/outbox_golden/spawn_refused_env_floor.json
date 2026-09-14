@@ -1,0 +1,18 @@
+{
+  "emitted": [],
+  "promoted": 0,
+  "stats": {},
+  "task_meta": {},
+  "tree": {
+    ".brr/inbox/<EVT1>.md": "---\nid: <EVT1>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
+    ".brr/outbox/<EVT1>/.notices.jsonl": [
+      {
+        "at": "<V>",
+        "kind": "refused",
+        "lifetime": "run",
+        "text": "spawn refused: environment 'host' is not spawnable — worktree is the floor; opt-down to sandbox/docker/solitary only."
+      }
+    ],
+    ".brr/outbox/<EVT1>/.processed/spawn-host.md": "---\nspawn: true\nshell: claude\nenvironment: host\n---\nshare my cwd\n"
+  }
+}
