@@ -1066,6 +1066,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--produce", action="store_true",
         help="print what the frame attests as produce: the loom's four kinds, "
              "the last refs, and the relic counts")
+    hud_mode.add_argument(
+        "--topic", default=None, metavar="SLUG",
+        help="print a topic's index — the acts assigned to it (and its "
+             "aliases), oldest first; the rendering `topic: show` writes to the bench")
+    hud_p.add_argument(
+        "--since", default=None, metavar="SPAN",
+        help="with --topic: only acts newer than SPAN (e.g. 2h, 3d)")
     hud_p.add_argument(
         "--outbox", default=None, metavar="DIR",
         help="outbox dir to read (default: this run's own, via "
@@ -5159,6 +5166,8 @@ def cmd_hud(args):
 
     from . import hud as hud_mod
 
+    if getattr(args, "topic", None):
+        return _hud_topic(args)
     if args.outbox:
         outbox_dir, error = _resolve_explicit_outbox(args.outbox)
         if error:
@@ -5188,6 +5197,41 @@ def cmd_hud(args):
         print(hud_mod.render_produce(current))
     else:
         print(hud_mod.render_bar(current, outbox_dir=Path(outbox_dir)))
+    return 0
+
+
+def _hud_topic(args) -> int:
+    """``brnrd hud --topic <slug> [--since <span>]`` — read-only: the same
+    rendering ``topic: show`` writes into the bench, printed."""
+    import sys
+
+    from . import account
+    from . import config as conf
+    from . import gitops
+    from . import heddles
+    from . import topic_show
+
+    slug = str(args.topic or "").strip()
+    since = getattr(args, "since", None)
+    if not heddles.SLUG_RE.match(slug):
+        print(f"brnrd hud: {slug!r} is not a topic slug", file=sys.stderr)
+        return 1
+    if since is not None and heddles.parse_span(since) is None:
+        print(f"brnrd hud: --since {since!r} is not a span (e.g. 2h, 3d)", file=sys.stderr)
+        return 1
+    repo_root = _repo_root()
+    cfg = conf.load_config(repo_root)
+    ctx = account.resolve_context(repo_root, cfg, create=False)
+    home = account.context_home_root(ctx)
+    brr_dir = gitops.shared_brr_dir(repo_root)
+    inbox_dirs = [brr_dir / "inbox"]
+    try:
+        inbox_dirs.append(ctx.dispatch_inbox)
+    except AttributeError:
+        pass
+    print(topic_show.render(
+        home, slug, since=since, inbox_dirs=inbox_dirs, runs_dirs=[brr_dir / "runs"],
+    ), end="")
     return 0
 
 
