@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from . import allowance
+from . import await_verb
 from . import card as card_rule
 from . import conversations
 from . import course
@@ -390,6 +391,10 @@ AMBIENT_QUOTA_KEY = "ambient_quota"
 # since then is not news and does not render again. Committed only on render,
 # so a suppressed boundary cannot mark a change as seen.
 BAR_LAST_CHIPS_KEY = "bar_last_chips"
+# LEASE_SHOWN_KEY — identity (`await_verb.lease_record_key`) of the last
+# `brnrd await` lease whose `slept … · woke: …` chip rendered (move 2c).
+# Committed only on render, same rule as the chip ledger above.
+LEASE_SHOWN_KEY = "lease_shown"
 # COURSE_DRIFT_COUNT_KEY / WORK_TOKEN_KEY — the course drift trigger (w-54):
 # count work-deltas (produce / delivery / gate movement) landing while the
 # route stands still; at _COURSE_DRIFT_THRESHOLD the course line re-surfaces
@@ -1532,6 +1537,18 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         # a meter — this run cannot act on it beyond ending the turn, but
         # it is exactly the number the daemon's own park decision reads.
         klass=VITAL,
+    ),
+    _BarSegment(
+        "lease_wake", "slept",
+        "move 2c: the `brnrd await` lease that just ended — how long the "
+        "frame held the seat without a single boundary and why it let go "
+        "(`slept 3h12m · woke: event`; `woke:` is `event` / `condition` / "
+        "`timeout` / `park`, or `ceiling` / `shell_cap` for a call that "
+        "returned `pending`). Once per lease, on the first boundary after "
+        "it — the lease itself had none to say it on.",
+        # DELTA: news at the edge the lease ended; forced due on that one
+        # boundary (`edge_due`), gone the next.
+        klass=DELTA,
     ),
     _BarSegment(
         "census", "wake",
@@ -3767,6 +3784,7 @@ def _render_bar(
     link_chip: str | None = None,
     notes_health_lines: list[str] | None = None,
     frame_tick: dict[str, Any] | None = None,
+    lease_wake: str | None = None,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: preamble + changed chips + details.
 
@@ -3892,6 +3910,10 @@ def _render_bar(
     hold_chip = _hold_chip(resources, shuttle_state)
     if hold_chip:
         segments.append(("hold", hold_chip))
+    # Beside `hold`: the other half of the same wait — `hold` while it
+    # stands, this once it has ended (move 2c).
+    if lease_wake:
+        segments.append(("lease_wake", lease_wake))
     if census:
         # Sits beside `orient` because both describe the *wake*, not the run:
         # what the boot cost, and how much of it has been walked. Never in the
@@ -4265,6 +4287,9 @@ def _render_bar(
         # DELTA: position trackers re-surface on their own edges even when
         # the numbers happen not to have moved.
         "course": route_edge or route_prompt or route_drift,
+        # DELTA: the lease's end is news exactly once — the caller passes
+        # the chip only on the first boundary after it (`LEASE_SHOWN_KEY`).
+        "lease_wake": bool(lease_wake),
     }
 
     def _due(key: str, text: str) -> bool:
@@ -4430,6 +4455,7 @@ def format_delta(
     route_drift: bool = False,
     mood_drift: bool = False,
     notes_health_lines: list[str] | None = None,
+    lease_wake: str | None = None,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
@@ -4593,6 +4619,7 @@ def format_delta(
                 link_chip = None
         return _render_bar(
             link_chip=link_chip,
+            lease_wake=lease_wake,
             frame_tick=(
                 payload.get("tick")
                 if isinstance(payload.get("tick"), dict) else None
@@ -6477,6 +6504,16 @@ def compute_neutral(
         # regardless of how often this boundary itself fires.
         notes_health_lines = _notes_health_transitions(ctx, state)
 
+        # Move 2c: a `brnrd await` lease emits no boundary for its whole
+        # span, so the first one after it says how long and why — once.
+        lease_wake = None
+        lease_key = None
+        lease_record = await_verb.read_lease_record(ctx.outbox_dir)
+        if lease_record is not None:
+            lease_key = await_verb.lease_record_key(lease_record)
+            if state.get(LEASE_SHOWN_KEY) != lease_key:
+                lease_wake = await_verb.lease_chip(lease_record)
+
         # Gate: open when there is something to say.  Obligations bypass the
         # token check; ambient and deltas use it as before. ``route_drift``
         # opens it for the blueprint edge's reason: the divergence it names
@@ -6491,7 +6528,7 @@ def compute_neutral(
             has_obligations or ambient_emit or edge or plan_edge
             or route_edge or bolt_edge or route_drift
             or mood_drift or token_moved or paused
-            or notes_health_lines
+            or notes_health_lines or lease_wake
         ):
             inject = format_delta(
                 portal, mood=mood, surprise=edge,
@@ -6510,6 +6547,7 @@ def compute_neutral(
                 route_drift=route_drift,
                 mood_drift=mood_drift,
                 notes_health_lines=notes_health_lines,
+                lease_wake=lease_wake,
             )
             state["last_token"] = token
             if ambient_emit and inject is not None:
@@ -6543,6 +6581,8 @@ def compute_neutral(
         # changes as seen, or they would never render at all.
         if inject is not None and rendered_chips:
             state[BAR_LAST_CHIPS_KEY] = rendered_chips
+        if inject is not None and lease_wake and "slept " in inject:
+            state[LEASE_SHOWN_KEY] = lease_key
 
     if phase == PHASE_STOP:
         # `action_events` / `action_pending` were already partitioned above
@@ -6679,6 +6719,14 @@ def render_native(
                     "permissionDecision": "deny",
                     "permissionDecisionReason": reason or "refused (#1184)",
                 }
+            elif flavour == "claude" and isinstance(neutral.get("updated_input"), dict):
+                # Move 2c: a rewrite, not a decision — no
+                # ``permissionDecision``, so the call still passes through
+                # whatever permission rules the run has.
+                out["hookSpecificOutput"] = {
+                    "hookEventName": event_name,
+                    "updatedInput": neutral["updated_input"],
+                }
             return out, 0
         # Both Claude and Codex accept the same ``hookSpecificOutput``
         # injection envelope (fire-verified). They diverge only on stop-control:
@@ -6771,7 +6819,10 @@ def _claude_hook_settings(brr_bin: str) -> dict[str, Any]:
             # on every keystroke. See ``install_hook_config`` for why this
             # one key merges *additively* with a repo's own ``PreToolUse``
             # rather than replacing it the way the other three do.
-            "PreToolUse": [_matched_entry(PHASE_PRE_TOOL, "Edit|Write|Monitor")],
+            # `Bash` joined for move 2c: `brnrd await`'s lease needs its
+            # call's timeout raised and stamped (`_await_lease_input`); any
+            # other Bash call returns `{}` without touching state.
+            "PreToolUse": [_matched_entry(PHASE_PRE_TOOL, "Edit|Write|Monitor|Bash")],
         },
     }
 
@@ -7147,6 +7198,57 @@ _ROOTED_WRITE_TOOLS = frozenset({"Edit", "Write"})
 _WAIT_BY_RETURNING_TOOLS = frozenset({"Monitor"})
 
 
+def _await_lease_input(
+    ctx: "HookContext", payload: dict[str, Any], env: dict[str, str],
+) -> dict[str, Any] | None:
+    """The rewritten input for a ``brnrd await`` Bash call; ``None`` otherwise.
+
+    Move 2c's hook half (see ``await_verb``'s lease notes). The CLI cannot
+    see the ``timeout`` its own Bash call was given, and the resident should
+    not have to remember one — claude's default is two minutes, which kills
+    a wait outright (pitfall, 2026-08). So for a daemon-hosted claude run the
+    hook sets ``timeout`` to the Shell's per-call maximum
+    (``BASH_MAX_TIMEOUT_MS``, which the daemon widens to cover a full lease;
+    claude's own 600000 default when unset) and stamps that same number into
+    the command's environment as ``await_verb.CALL_CAP_ENV``. The two facts
+    come from one reading, so the CLI's early return can never disagree with
+    the kill it is avoiding.
+
+    Not rewritten: another Shell (codex does not install this phase), a run
+    with no outbox (an editor session), a backgrounded call (no timeout
+    applies to it), or a command already carrying the stamp.
+    """
+    if ctx.outbox_dir is None or ctx.flavour != "claude":
+        return None
+    if payload.get("tool_name") != "Bash":
+        return None
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return None
+    command = tool_input.get("command")
+    if not await_verb.is_await_command(command):
+        return None
+    if tool_input.get("run_in_background") or await_verb.CALL_CAP_ENV in command:
+        return None
+    def _env_ms(key: str) -> int | None:
+        try:
+            value = int(str(env.get(key) or "").strip())
+        except ValueError:
+            return None
+        return value if value > 0 else None
+
+    # claude's own rule, read out of 2.1.269: the per-call maximum is
+    # max(BASH_MAX_TIMEOUT_MS or 600000, BASH_DEFAULT_TIMEOUT_MS or 120000).
+    cap_ms = max(
+        _env_ms("BASH_MAX_TIMEOUT_MS") or await_verb.CLAUDE_BASH_DEFAULT_MAX_TIMEOUT_MS,
+        _env_ms("BASH_DEFAULT_TIMEOUT_MS") or 120_000,
+    )
+    updated = dict(tool_input)
+    updated["timeout"] = cap_ms
+    updated["command"] = f"export {await_verb.CALL_CAP_ENV}={cap_ms}; {command}"
+    return updated
+
+
 def _wait_by_returning_neutral(
     ctx: "HookContext", payload: dict[str, Any]
 ) -> dict[str, Any] | None:
@@ -7392,6 +7494,19 @@ def run_hook(
         # *correspondence*: a child owes no reply to the parent's
         # correspondents. A stray write into the shared host checkout is a
         # hazard either limb can cause, so neither is exempted here).
+        if payload.get("tool_name") == "Bash":
+            # Matched only for move 2c's lease: every other Bash call leaves
+            # here with no opinion and no transcript row, so widening the
+            # matcher adds one cheap process per call and nothing else.
+            updated = _await_lease_input(ctx, payload, env)
+            if updated is None:
+                return {}, 0
+            neutral = {
+                "inject": None, "block": False, "block_reason": None,
+                "updated_input": updated,
+            }
+            record_boundary(ctx, phase, neutral, payload)
+            return render_native(ctx.flavour, phase, neutral)
         neutral = _wait_by_returning_neutral(ctx, payload) or _rooted_write_neutral(ctx, payload)
         record_boundary(ctx, phase, neutral, payload)
         return render_native(ctx.flavour, phase, neutral)
