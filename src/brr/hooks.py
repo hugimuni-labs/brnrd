@@ -6573,7 +6573,9 @@ def compute_neutral(
             SEGMENT_CLASS.get(key) == VITAL for key in rendered_chips
             if not key.endswith(("__band", "__raw"))
         )
-        if not has_obligations and not has_vital:
+        # A lease's end is news even when a previous lease ended with the
+        # same bytes (`slept 10m · woke: event` twice) — never deduped away.
+        if not has_obligations and not has_vital and not lease_wake:
             inject = _suppress_unchanged_inject(state, inject)
 
         # Commit-on-render (w-54): the chip ledger advances only when this

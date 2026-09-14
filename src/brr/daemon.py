@@ -16500,6 +16500,13 @@ def start(
             # below no longer joins them — this condition, not that call, is
             # what keeps ``reexec()`` from replacing the process image out
             # from under a live child.
+            #
+            # A seat holding a ``brnrd await`` lease (move 2c) is a current
+            # thought, not an idle one: its runner process is alive inside
+            # the blocked Bash call, so the worker future is not done and
+            # ``current`` is not ``None`` — for up to the lease ceiling (6h).
+            # Keep it so: a reload under a lease would kill the very wait
+            # that exists to keep the seat warm.
             if reload_requested and current is None and not active_spawns:
                 # Emit a deliberate breadcrumb *before* exec so an operator
                 # watching the terminal can tell this restart was intentional
