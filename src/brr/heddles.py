@@ -35,6 +35,13 @@ plus **claims** — ``.topics`` (the weaver's self-declared claim) and a
 strand's ``topic:`` (declared on its ``spawn:``) — each a match with its own
 ``at``. A claim is one more signature term; it decays like the rest.
 
+plus **assignments** (move 5c, design-the-loom §21) — the rows this run
+wrote into ``surface/topics/<slug>.index.jsonl`` (an alias's file lights the
+topic that absorbed it), kind ``assigned`` at the row's ``at``: an assigned
+act brightens a heddle exactly like a match. The index, its alias-resolving
+reader :func:`index`, the thread map and the dispatch-time :func:`propose`
+live at the bottom of this module.
+
 **Brightness** is ``0.5 ** (age / HALF_LIFE_SECONDS)`` with a one-hour half
 life. Why an hour: the chip is read at the tempo of boundaries (seconds to
 minutes) and a chase inside a session touches its places every few minutes,
