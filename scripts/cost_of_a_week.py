@@ -831,7 +831,9 @@ def main() -> None:
       "tokens = local Claude transcripts from the window start to its last reading.\n")
     for name, readings, pred in (("claude weekly, all models", gauge["week"], lambda e: True),
                                  ("claude Fable bucket, Fable tokens", gauge["fable"], lambda e: e.family == "fable")):
-        rows = window_table(readings, ctl, lo - timedelta(days=7), as_of, pred, seats, merges)
+        first_token = claude[0].t if claude else as_of
+        rows = [r for r in window_table(readings, ctl, lo - timedelta(days=7), as_of, pred, seats, merges)
+                if r["start"] >= first_token - timedelta(days=1) and r["fresh"] > 0]  # a 0-token row is a transcript gap, not free work
         p(f"\n### {name}\n")
         p(table(["window (UTC)", "last reading", "readings", "resets", "points", "fresh tokens", "total tokens",
                  "pts / M fresh", "pts / 100M total", "seat-hours", "pts / seat-hour", "PRs", "pts / PR"],
