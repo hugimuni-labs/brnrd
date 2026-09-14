@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
@@ -12,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from brnrd import (
+    bench_store,
     github_marker,
     publish_scope,
     run_release_requests,
@@ -1424,6 +1426,42 @@ def dashboard_config_api(request: Request, db: Session = Depends(get_db)) -> JSO
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
     repos = _repos(db, account_id)
     return JSONResponse({"config": _daemon_config_view(db, repos)})
+
+
+def _bench_home(request: Request) -> Path | None:
+    raw = str(getattr(request.app.state.settings, "bench_home", "") or "")
+    return Path(raw) if raw else None
+
+
+@router.get("/v1/dashboard/bench")
+def dashboard_bench_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """List the resident's bench (design-the-loom.md §6/§18) — see
+    `bench_store` for the store's shape and this endpoint's own scope
+    (single local root, no per-account sync yet)."""
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    return JSONResponse({"files": bench_store.list_bench_files(_bench_home(request))})
+
+
+@router.get("/v1/dashboard/bench/{repo}/{rest:path}")
+def dashboard_bench_file_api(
+    repo: str, rest: str, request: Request, db: Session = Depends(get_db)
+) -> JSONResponse:
+    """Render one bench file's frontmatter + body.
+
+    `{rest:path}` swallows `<place>/<commit>` as one segment (`place` may
+    itself contain `/`, per the store's own nested-dir layout) — split
+    from the right, since the file name is always the last component.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    place, _, commit = rest.rpartition("/")
+    record = bench_store.read_bench_file(_bench_home(request), repo, place, commit)
+    if record is None:
+        return JSONResponse({"detail": "bench file not found"}, status_code=404)
+    return JSONResponse(record)
 
 
 @router.post("/v1/dashboard/runners/wake-request")
