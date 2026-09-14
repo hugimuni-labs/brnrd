@@ -355,6 +355,19 @@ def handle_note(f: OutboxFile) -> Handled:
     # a pending event deliberately with no outbound message. Same
     # union resolution as ``event:``; refusals land in notices.
     with daemon._OutboxEntryGuard(outbox_dir, fpath):
+        # move 5b (§19.2): the frame's card-delta item is a pending item,
+        # not an inbox event — `note:` on its id accepts it here, before the
+        # event resolution would refuse an id no drawer holds.
+        from .. import card_frame
+
+        if note_target.startswith(card_frame.DELTA_ID_PREFIX) and card_frame.clear_delta(
+            getattr(task, "meta", {}), note_target,
+        ):
+            if stats is not None:
+                stats["note"] = stats.get("note", 0) + 1
+            emit("card_delta_noted", run_id=task.id, event_id=event_id, target_event=note_target)
+            daemon._retire_outbox_staging(fpath)
+            return _handled(f, 'note', 1)
         noted_id = daemon._note_event_closed(
             task, address_sources, note_target, body, outbox_dir,
             current_event_id=event_id,

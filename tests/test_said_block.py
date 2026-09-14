@@ -1,5 +1,5 @@
 """THE SAID BLOCK — a delivered reply projects its lead line into `.card`."""
-from brr import daemon, hooks
+from brr import daemon
 from brr.run import Run
 
 
@@ -36,12 +36,3 @@ def test_project_said_writes_the_card_newest_first(tmp_path):
     for i in range(10):
         daemon._project_said(task, tmp_path, f"evt-{i}-c{i:03d}", f"row {i}")
     assert len(task.meta["said_rows"]) == daemon._SAID_MAX_ROWS
-
-
-def test_card_acts_behind_no_longer_counts_replies():
-    total, text = hooks._card_acts_behind(
-        {"known": True, "counts": {"commit": 1}},
-        {"replies_current": 9, "replies_other": 2}, 1,
-    )
-    assert total == 2
-    assert "repl" not in text

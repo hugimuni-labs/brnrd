@@ -315,3 +315,33 @@ def test_chip_leads_with_the_brightest_three_and_parks_dimmer_after_a_dot():
     assert heddles.chip_segment(rows[:2]) == "♦ workshop · loom"
     assert heddles.chip_segment([{"slug": "x", "brightness": 0.0}]) is None
     assert heddles.chip_segment([]) is None
+
+
+def test_the_hook_bar_renders_the_heddle_segment_from_the_portal():
+    """The chip line before/after: before, the hook read `.topics` and
+    rendered nothing from it; after, `♦` renders the frame's lit list,
+    change-gated like any DELTA sign."""
+    from brr import hooks
+
+    payload = {
+        "run": {"id": "run-x"},
+        "attention": {"pending_event_count": 0, "pending_outbox_file_count": 0},
+        "inbound": {"events": []},
+        "card": {"active": True, "stale": False, "age_seconds": 5},
+        "heddles": [
+            {"slug": "the-workshop", "brightness": 0.97},
+            {"slug": "the-loom", "brightness": 0.6},
+            {"slug": "summit", "brightness": 0.52},
+            {"slug": "the-post", "brightness": 0.12},
+            {"slug": "legal", "brightness": 0.0},
+        ],
+    }
+    chips: dict[str, str] = {}
+    rendered = hooks.format_delta(payload, rendered_chips=chips)
+    assert "♦ workshop · loom · summit · (post)" in rendered.splitlines()[0]
+    assert hooks.SEGMENT_CLASS["heddles"] == hooks.DELTA
+    again = hooks.format_delta(payload, last_chips=chips)
+    assert again is None or "♦" not in again
+    payload["heddles"] = []
+    quiet = hooks.format_delta(payload)
+    assert quiet is None or "♦" not in quiet

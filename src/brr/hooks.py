@@ -49,6 +49,7 @@ from . import conversations
 from . import course
 from . import facets
 from . import gate_receipt
+from . import heddles as heddles_mod
 from . import portals
 from . import promises
 from . import protocol
@@ -454,16 +455,11 @@ GATE_RECEIPT_NAME = gate_receipt.RECEIPT_NAME
 MOOD_NAME = ".mood"
 ROOM_NAME = ".room"
 _ROOM_READ_CAP_CHARS = 200
-# The resident's own topic claim (the-run-that-claims-its-thread). Same
-# idiom as `.mood` above — read fresh at every boundary rather than through
-# `run_ledger.read_run_topics_control` (which the daemon side uses for the
-# closeout/live-read paths): the hook path stays import-light on purpose
-# (see `_read_mood`'s docstring for the same call), so this is a second,
-# deliberately small copy of the same lenient parse — the two must never
-# disagree, same risk `keepalive_until` names for its own two readers.
+# The resident's own topic claim (the-run-that-claims-its-thread). The hook
+# no longer reads it (move 5b): the heddles segment renders the frame's lit
+# list from the portal, and `.topics` is one claim that list is scored on
+# (`heddles.light`). The name stays for the control-file readers below.
 TOPICS_NAME = ".topics"
-_TOPICS_READ_CAP_CHARS = 2000
-_TOPIC_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # The run body rides the closeout delta whole. Capped only against a
 # pathological card: this is the resident's own prose, and truncating it is a
 # worse failure than the tokens it costs at a once-per-run boundary.
@@ -712,32 +708,6 @@ def _read_paused(ctx: HookContext) -> str | None:
         return None
     described = pause_mod.describe_paused(records)
     return described or None
-
-
-def _read_topics(ctx: HookContext) -> list[str] | None:
-    """Read the resident's `.topics` claim fresh, lenient, slug-filtered.
-
-    Same "read the artifact" doctrine as :func:`_read_mood`: the resident
-    may write this at any boundary, and the discoverability chip needs to
-    see it disappear the moment it does. Accepts a bare slug row or a
-    `topics:`-prefixed one; junk tokens are dropped rather than raising.
-    Returns ``None`` for absent, unreadable, or filtered-to-nothing — same
-    class as "no claim" for the caller's eligibility check.
-    """
-    if ctx.outbox_dir is None:
-        return None
-    path = ctx.outbox_dir / TOPICS_NAME
-    try:
-        with path.open("r", encoding="utf-8", errors="replace") as handle:
-            first_line = handle.readline(_TOPICS_READ_CAP_CHARS)
-    except OSError:
-        return None
-    text = first_line.strip()
-    if text.lower().startswith("topics:"):
-        text = text[len("topics:"):].strip()
-    tokens = [t for t in re.split(r"[\s·]+", text) if t]
-    slugs = [t for t in tokens if _TOPIC_SLUG_RE.match(t)]
-    return slugs or None
 
 
 def _read_hook_state(ctx: HookContext) -> dict[str, Any]:
@@ -1717,9 +1687,25 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         klass=DELTA,
     ),
     _BarSegment(
+        "heddles", "♦",
+        "the lit heddles (design-the-loom §20) — `♦ workshop · loom · summit "
+        "· (post)`: the account's topic layers whose signatures matched this "
+        "run's rows lately (a touched place, a delivered word, produce, a "
+        "strand, a claim), brightest three first, dimmer lit ones in "
+        "parentheses. Lit by the frame, never declared; brightness halves "
+        "hourly, so the segment says where the work has been. `.topics` "
+        "still counts as a claim. Absent when nothing is lit.",
+        # DELTA: nothing waits on it and there is nothing to discharge — it
+        # records the route. The text changes only when the lit set or its
+        # order does, which is exactly the change gate.
+        klass=DELTA,
+    ),
+    _BarSegment(
         "card", "card",
         "the live `.card` surface's health, spoken only when it needs a "
-        "hand: `stale` / `blank` / `cut N>4096`. The last measures the "
+        "hand: `stale` (untouched for 24 h) / `blank` / `cut N>4096`. What "
+        "moved past the card is not a chip: the frame drafts it as the "
+        "`card Δ` item (move 5b). The last measures the "
         "*projection* the transport publishes, not the file — a long card "
         "with a well-formed `Now` is fine; `cut` means the live surface is "
         "losing the tail. A healthy card renders nothing (w-54): `card ok` "
@@ -2305,6 +2291,11 @@ def _produce_total(produce: dict[str, Any]) -> int:
     return sum(int(v or 0) for v in counts.values() if isinstance(v, (int, float)))
 
 
+#: `card stale` — a card untouched this long (move 5b: the one card nag
+#: kept; what moved past a younger card is the frame's delta item).
+CARD_STALE_AFTER_SECONDS = 24 * 3600
+
+
 def _card_chip(card: dict[str, Any], card_stale: bool) -> str | None:
     """The live `.card` surface's health — measured, not assumed.
 
@@ -2314,41 +2305,29 @@ def _card_chip(card: dict[str, Any], card_stale: bool) -> str | None:
     well-formed ``Now`` is safe and a 4.1 KB one is not — and the resident
     cannot tell those apart from any other surface it can see.
 
-    So the meter runs the function the transport runs. Since #722 the daemon
-    bounds the projection rather than overflowing it, which means this no
-    longer warns of an imminent 422 — it warns that the live card is being
-    *truncated*, which is the same fact arriving early enough to act on.
+    A healthy card renders **nothing** (w-54, 2026-08-19): silence is the ok.
 
-    A healthy card renders **nothing** (w-54, 2026-08-19): ``card ok`` was
-    the textbook always-on chip — a fact with no act attached, repeated at
-    every boundary. The chip now speaks only when the surface needs a hand
-    (stale / blank / cut); silence is the ok.
+    Move 5b (design-the-loom §19.2) retired ``card behind``: a count of acts
+    since the last write was a nag, and the frame now drafts *what* moved as
+    the ``card.delta`` item at the moment it moves. ``card stale`` stays for
+    a card untouched for :data:`CARD_STALE_AFTER_SECONDS` — the one gap no
+    delta covers. *card_stale* (the daemon's 240 s movement verdict) no
+    longer decides the chip; it is kept for the callers that thread it.
     """
-    if card_stale:
-        return "card stale"
+    del card_stale  # the chip reads the card's age (move 5b)
     if not card.get("active"):
         return "card blank"
+    age = card.get("age_seconds")
+    if (
+        isinstance(age, (int, float)) and not isinstance(age, bool)
+        and age >= CARD_STALE_AFTER_SECONDS
+    ):
+        return "card stale"
     text = card.get("text")
     if isinstance(text, str):
         size = len(card_rule.now_projection(text))
         if size > card_rule.CARD_TEXT_MAX_CHARS:
             return f"card cut {size}>{card_rule.CARD_TEXT_MAX_CHARS}"
-    # `card behind` — the run moved after the last card write, said the
-    # moment it becomes true (his ask, evt-…-mhrx: the 240s clock made the
-    # transition *look wrong* by hiding it for four minutes). The 240s
-    # grace now gates only the stale nag above; this is the bare fact,
-    # change-gated like every chip, so it costs one render per episode
-    # and vanishes the moment the card catches up.
-    moved = card.get("state_moved_seconds")
-    age = card.get("age_seconds")
-    if (
-        isinstance(moved, (int, float)) and isinstance(age, (int, float))
-        and not isinstance(moved, bool) and not isinstance(age, bool)
-        and moved < age
-    ):
-        return "card behind"
-    # Healthy (or an older capsule shape with no body to measure — absence
-    # of evidence of trouble is the quiet state, not a verdict to invent).
     return None
 
 
@@ -2371,53 +2350,6 @@ def _card_is_behind(card: dict[str, Any]) -> bool:
     ):
         return False
     return moved < age
-
-
-# Kind → singular label, in the order the receipt names them (PRs/merges
-# lead — the artifacts a reader most wants to know exist — commits and
-# branches next, the rest after). Mirrors ``_LIVE_KINDS`` (relics.py) minus
-# ``summary``/``pending``, which are not relic kinds.
-_CARD_ACT_ORDER = (
-    "pr", "merge", "commit", "branch", "kb", "issue", "comment", "message",
-    "file", "item",
-)
-_CARD_ACT_LABELS: dict[str, str] = {"kb": "kb page", "pr": "PR"}
-_CARD_ACT_PLURALS: dict[str, str] = {"branch": "branches"}
-
-
-def _card_acts_behind(
-    produce: dict[str, Any], outbound: dict[str, Any], pending: int,
-) -> tuple[int, str]:
-    """What moved past the card's last write — a total, and a short receipt.
-
-    Same universe :func:`_card_is_behind` already tests (produce, delivery,
-    pending events); this names it instead of a bare "Ns ago" timestamp, so
-    the nudge says what the card is missing rather than only when it went
-    stale. Every count here is the run's current total (the codebase tracks
-    no "since the card's last write" baseline for produce/delivery — see
-    :func:`_produce_total` / :func:`_delivery_chip`, the same convention),
-    consistent with how the rest of the bar already reports these facts.
-    """
-    parts: list[str] = []
-    total = 0
-    counts = produce.get("counts") if isinstance(produce.get("counts"), dict) else {}
-    for kind in _CARD_ACT_ORDER:
-        n = counts.get(kind)
-        if not isinstance(n, (int, float)) or isinstance(n, bool) or not n:
-            continue
-        n = int(n)
-        total += n
-        label = _CARD_ACT_LABELS.get(kind, kind)
-        plural = _CARD_ACT_PLURALS.get(kind, label + "s")
-        parts.append(f"1 {label}" if n == 1 else f"{n} {plural}")
-    # Replies are not something the card is behind on: each delivered reply
-    # projects its own lead line into the card (`daemon._project_said`,
-    # 2026-09-08) — the reply *is* the authored act. Counting them here was
-    # the second round of card-filling the design retired.
-    if pending > 0:
-        total += pending
-        parts.append("1 pending" if pending == 1 else f"{pending} pending")
-    return total, ", ".join(parts)
 
 
 # #1002: a notice carries a ``kind`` since daemon.py:5765 — ``refused`` |
@@ -3767,6 +3699,7 @@ def _render_bar(
     link_chip: str | None = None,
     notes_health_lines: list[str] | None = None,
     frame_tick: dict[str, Any] | None = None,
+    heddles: list[Any] | None = None,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: preamble + changed chips + details.
 
@@ -3986,6 +3919,9 @@ def _render_bar(
             # (his ask, evt-…-mhrx): one `still?` beside the claimed face —
             # the ask is the mismatch check, the touch is the discharge.
             segments.append(("mood", f"mood {mood_text} — still?"))
+    heddles_chip = heddles_mod.chip_segment(heddles or ())
+    if heddles_chip:
+        segments.append(("heddles", heddles_chip))
     card_chip = _card_chip(card, card_stale)
     if card_chip:
         segments.append(("card", card_chip))
@@ -4099,66 +4035,24 @@ def _render_bar(
     ):
         details.append(allowance_line)
 
-    # The card nudge, reshaped (his call, 2026-09-06: "the card is an
-    # indicator; almost useless in chat, still a gauge on the web UI — the
-    # current shape of the nudge is wrong"). Two silences, one line:
-    #
-    # - a live wait *is* idle with nothing to report — nagging every poll of
-    #   an armed ``brnrd await`` was the exact repeating-paragraph failure
-    #   this replaces, so an unresolved arming vetoes the whole block
-    #   regardless of staleness.
-    # - nothing the card would report has moved since it was last written
-    #   (:func:`_card_is_behind` — no elapsed-time grace: card_stale's old
-    #   240s clock is gone from this line, since a movement that just
-    #   happened is still a movement to report, not a countdown to wait
-    #   out) ⇒ silence. The compact ``card stale``/``card blank``/``card
-    #   behind`` bar chip still carries the fact on its own gate; this
-    #   paragraph is not the only surface for it.
-    #
-    # When it does speak: one line of state, no instruction — what moved,
-    # not "rewrite .card". The old three-way split (streak-compressed /
-    # named-movement / "no change, rewrite anyway") collapses to this one
-    # shape (his call, 2026-09-10: report state, not a verdict — the
-    # ``seen ×N`` suffix is gone, not just quieter).
-    #
-    # ``_card_acts_behind`` deliberately excludes replies (the reply *is*
-    # the authored act) — so a card that fell behind on a reply, or on any
-    # other movement outside its own tracked universe, yields ``acts = 0``.
-    # #1897: that used to render "last written 0 acts ago" — a fake count
-    # asserting the card was just written when it was the opposite. Nothing
-    # to name ⇒ name the two times ``_card_is_behind`` itself compared
-    # instead of inventing a count.
-    #
-    # w-34 (2026-09-11): card is DELTA now — a sign at the junction, not a
-    # standing counter — so this paragraph used to fire on *every* laden
-    # boundary the card was behind, byte-identical, for as long as the run
-    # stayed behind (measured: `edge_due["card"]` forced the chip itself the
-    # same way). Change-gated below like `allowance_directive`/`notices`:
-    # against *last_chips* under its own key, so a genuinely new breakdown
-    # (another commit landed since the last line) still re-earns a line
-    # even while the two-times-compared sentence's wording repeats.
-    if not wait_idle and _card_is_behind(card):
-        acts, breakdown = _card_acts_behind(produce, outbound, pending)
-        if acts:
-            noun = "act" if acts == 1 else "acts"
-            what = f" ({breakdown})" if breakdown else ""
-            card_detail_text = f"- card ## Now: last written {acts} {noun} ago{what}"
-        else:
-            age_txt = _fmt_age(card.get("age_seconds"))
-            moved_txt = _fmt_age(card.get("state_moved_seconds"))
-            card_detail_text = (
-                f"- card ## Now: written {age_txt} ago · state moved {moved_txt} ago"
-                if age_txt and moved_txt else None
-            )
-        if card_detail_text:
-            if (
-                last_chips is None
-                or last_chips.get("card_detail") != card_detail_text
-            ):
-                details.append(card_detail_text)
-            # Written into *rendered_chips* below, after the clear/update
-            # pair, same reason as `notices_detail_value` above.
-            card_detail_value = card_detail_text
+    # The card's delta as mail (move 5b, design-the-loom §19.2) — replaces
+    # the `card ## Now: last written N acts ago` nudge. The frame drafts the
+    # line at the moment something moved (a strand returned, a PR merged, a
+    # delivery batch, a refusal) and stands it as a pending item; this only
+    # renders it: named, one line, the act that accepts it beside it. Like
+    # finished spawns it is a fact, not an obligation — no count, no clock.
+    # Change-gated on its own text (id + line) under `card_detail`, so it
+    # speaks when drafted or re-drafted and stays quiet while it stands; an
+    # armed, unresolved wait silences it (idle has nothing to report).
+    delta = card.get("delta") if isinstance(card.get("delta"), dict) else None
+    if not wait_idle and delta and delta.get("text") and delta.get("id"):
+        card_detail_text = (
+            f"- card Δ {delta['text']} — `note: {delta['id']}` accepts · "
+            "editing .card folds it in"
+        )
+        if last_chips is None or last_chips.get("card_detail") != card_detail_text:
+            details.append(card_detail_text)
+        card_detail_value = card_detail_text
 
     # ── The due-filter (w-54): change-gating replaces the laden gate. ──
     #
@@ -4621,6 +4515,10 @@ def format_delta(
             route_drift=route_drift, mood_drift=mood_drift,
             wait_idle=wait_idle,
             notes_health_lines=notes_health_lines,
+            heddles=(
+                payload.get("heddles")
+                if isinstance(payload.get("heddles"), list) else None
+            ),
         )
 
     lines: list[str] = []
@@ -6141,10 +6039,6 @@ def compute_neutral(
     paused = _read_paused(ctx)
     if mood is not None:
         state[MOOD_EVER_WRITTEN_KEY] = True
-    # Same fresh-read discipline, for the topic-discoverability chip's own
-    # reason: the resident may write `.topics` between hook fires, and the
-    # chip's whole job is to disappear the moment a claim lands.
-    topics = _read_topics(ctx)
     # Re-read every boundary, like `.mood` and `.card`: a resident gates
     # more than once in a long run, and a cached verdict is exactly the
     # stale claim this chip exists to make visible. `gate_receipt.read_receipt`
