@@ -446,3 +446,79 @@ def test_record_then_measure_round_trips(tmp_path):
     assert burn["samples"] == 3
     assert burn["burned_percent"] == 8.0
     assert burn["span_minutes"] == 120.0
+
+
+# ── the gauge that never goes blind (move 5, #1971 "the blind weekend") ──
+
+
+def _claude_levels(now, used, resets):
+    stamp = datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {
+        "session_used_percentage": used / 2,
+        "session_resets_at": now - (now % 18000) + 18000,
+        "week_used_percentage": used,
+        "week_resets_at": resets,
+        "updated_at": stamp,
+    }
+
+
+def test_a_seat_alive_for_60_hours_has_a_claude_weekly_reading_every_hour(tmp_path):
+    """2026-09-12 15:08Z → 09-14 00:37Z: a seat that never closed had no Claude
+    weekly reading for 33.5 h, because the sample log kept 10 h and nothing
+    else wrote the gauge down. A week of retention, compacted past a day,
+    keeps every hour of a 60-hour seat."""
+    state = tmp_path / ".brr"
+    start = datetime(2026, 9, 12, 15, 0, tzinfo=timezone.utc).timestamp()
+    resets = start + 5 * 86400
+    hours = 60
+    # A heartbeat read every 5 minutes: finer than the hour being asserted,
+    # coarser than the real 30 s so the test stays quick (the throttle makes
+    # the real cadence one sample a minute anyway).
+    for step in range(hours * 12 + 1):
+        now = start + step * 300
+        usage_samples.record(state, "claude", _claude_levels(now, 1 + step / 40, resets), now=now)
+    rows = [json.loads(line) for line in usage_samples.log_path(state).read_text().splitlines()]
+    weekly = [r for r in rows if r["shell"] == "claude" and r["window_minutes"] == WEEK_MINUTES]
+    covered = {int((r["at"] - start) // 3600) for r in weekly}
+    assert covered >= set(range(hours)), sorted(set(range(hours)) - covered)
+    # Older than a day: one reading per hour per window, the newest of the hour.
+    now = start + hours * 3600
+    old = [r for r in weekly if r["at"] < now - 24 * 3600]
+    per_hour = {}
+    for r in old:
+        per_hour.setdefault(int(r["at"] // 3600), []).append(r)
+    assert per_hour and all(len(v) == 1 for v in per_hour.values())
+    assert all(r["at"] % 3600 == 3300 for r in old)  # :55, the hour's last 5-minute read
+    # The last day stays whole, so the burn reads it at full resolution.
+    recent = [r for r in weekly if r["at"] >= now - 24 * 3600]
+    assert len(recent) == 24 * 12 + 1
+    burn = usage_samples.recent_burn(state, "claude", now=now)
+    assert burn is not None and burn["samples"] == 5 * 12 + 1
+
+
+def test_compact_keeps_one_per_hour_per_window_and_both_sides_of_a_reset():
+    hour = 3600.0
+    rows = [
+        {"at": 10 * hour + 60, "shell": "claude", "used_percent": 90.0, "window_minutes": WEEK_MINUTES, "resets_at": 1.0},
+        {"at": 10 * hour + 1200, "shell": "claude", "used_percent": 91.0, "window_minutes": WEEK_MINUTES, "resets_at": 1.0},
+        # the reset inside the same hour: a new window, kept beside the old one
+        {"at": 10 * hour + 1800, "shell": "claude", "used_percent": 1.0, "window_minutes": WEEK_MINUTES, "resets_at": 2.0},
+        {"at": 10 * hour + 2400, "shell": "claude", "used_percent": 2.0, "window_minutes": WEEK_MINUTES, "resets_at": 2.0},
+        # another shell and another window in that hour keep their own sample
+        {"at": 10 * hour + 30, "shell": "codex", "used_percent": 5.0, "window_minutes": 300.0, "resets_at": 3.0},
+        {"at": 10 * hour + 90, "shell": "claude", "used_percent": 7.0, "window_minutes": 300.0, "resets_at": 4.0},
+        # a row missing its identity passes through untouched
+        {"at": 10 * hour + 100, "shell": "claude", "used_percent": 7.0},
+        # at or after the cutoff: untouched
+        {"at": 12 * hour, "shell": "claude", "used_percent": 92.0, "window_minutes": WEEK_MINUTES, "resets_at": 1.0},
+        {"at": 12 * hour + 60, "shell": "claude", "used_percent": 93.0, "window_minutes": WEEK_MINUTES, "resets_at": 1.0},
+    ]
+    kept = usage_samples.compact(rows, before=12 * hour)
+    assert [r["used_percent"] for r in kept] == [91.0, 2.0, 5.0, 7.0, 7.0, 92.0, 93.0]
+    assert usage_samples.compact(kept, before=12 * hour) == kept  # idempotent
+
+
+def test_retention_is_a_week_with_a_day_at_full_resolution():
+    assert usage_samples._RETENTION_HOURS == 7 * 24
+    assert usage_samples._FULL_RESOLUTION_HOURS == 24
+    assert usage_samples._FULL_RESOLUTION_HOURS >= 2 * usage_samples.BURN_HORIZON_HOURS
