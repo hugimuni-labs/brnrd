@@ -1,0 +1,36 @@
+{
+  "armed_record": {
+    "armed_at": "<F>",
+    "armed_pending_ids": [],
+    "file": null,
+    "generation": "gen-1",
+    "resolved": false,
+    "timeout_seconds": null
+  },
+  "correspondent_clock_moved": false,
+  "first_tick": {
+    "armed": true,
+    "armed_at": "<TS>",
+    "deadline": null,
+    "file": null,
+    "generation": "gen-1",
+    "resolved": false,
+    "timeout_seconds": null
+  },
+  "next_tick": {
+    "armed": true,
+    "armed_at": "<TS>",
+    "deadline": null,
+    "file": null,
+    "generation": "gen-1",
+    "resolved": false,
+    "timeout_seconds": null
+  },
+  "shuttle": {
+    "state": "listening",
+    "whys": [
+      "event_dispatched",
+      "await_armed"
+    ]
+  }
+}

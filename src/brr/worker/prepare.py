@@ -17,6 +17,7 @@ Lines on ``main`` (``3def7ad6``): ``daemon.py:3234–4468``.
 
 from __future__ import annotations
 
+from .. import await_verb
 from .. import branching
 from .. import config as conf
 from .. import conversations
@@ -1120,6 +1121,17 @@ def runner_runtime(
     # no conversation — never export an empty value.
     if task.conversation_key:
         env["BRR_CONVERSATION_ID"] = task.conversation_key
+
+    # Move 2c: `brnrd await` holds a lease rather than returning every ten
+    # minutes, and claude's Bash tool kills any call at BASH_MAX_TIMEOUT_MS
+    # (default 600000). Widen it to cover a full lease; the pre-tool hook
+    # sets the await call's own `timeout` to this and tells the CLI
+    # (`hooks._await_lease_input`). An operator's own value is left alone —
+    # the hook reads whatever the Shell actually has, so a narrower cap just
+    # means the lease returns `pending` sooner. Other Bash calls keep
+    # claude's 2-minute default; only a call that asks for more can use it.
+    if hooks_flavour == "claude" and not os.environ.get("BASH_MAX_TIMEOUT_MS"):
+        env["BASH_MAX_TIMEOUT_MS"] = str(await_verb.CLAUDE_BASH_MAX_TIMEOUT_MS)
 
     # #1135: pin brnrd's own commit identity for the runner's *own* shell,
     # not just brnrd's internal git calls. `gitops.bot_identity_env()`

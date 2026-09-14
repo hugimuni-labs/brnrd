@@ -1,0 +1,42 @@
+{
+  "armed_record": {
+    "armed_at": "<F>",
+    "armed_pending_ids": [],
+    "file": "<TMP>/gate.log",
+    "generation": "gen-1",
+    "outcome": "condition",
+    "resolved": true,
+    "timeout_seconds": "<F>",
+    "which": "file:<TMP>/gate.log"
+  },
+  "correspondent_clock_moved": false,
+  "first_tick": {
+    "armed": true,
+    "armed_at": "<TS>",
+    "deadline": "<TS>",
+    "file": "<TMP>/gate.log",
+    "generation": "gen-1",
+    "outcome": "condition",
+    "resolved": true,
+    "timeout_seconds": "<F>",
+    "which": "file:<TMP>/gate.log"
+  },
+  "next_tick": {
+    "armed": true,
+    "armed_at": "<TS>",
+    "file": "<TMP>/gate.log",
+    "generation": "gen-1",
+    "outcome": "condition",
+    "resolved": true,
+    "timeout_seconds": "<F>",
+    "which": "file:<TMP>/gate.log"
+  },
+  "shuttle": {
+    "state": "awake",
+    "whys": [
+      "event_dispatched",
+      "await_armed",
+      "await_resolved:condition"
+    ]
+  }
+}
