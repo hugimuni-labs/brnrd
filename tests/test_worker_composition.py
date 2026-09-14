@@ -49,16 +49,19 @@ _VOLATILE_KEYS = frozenset({
     "started", "finished", "heartbeat_at", "expires_at", "mtime",
     "session_id", "claude_session_id", "age_seconds",
 })
-# Subtrees read from machine-level caches (quota/context/spend collectors);
-# their *shape* is the worker's, their numbers are not.
-_SHAPE_ONLY_KEYS = frozenset({"resources", "levels", "runner_catalog", "catalog"})
+# Subtrees assembled from the *host* — which Shells and cores this machine
+# has, its quota/context/spend caches. Neither their numbers nor their shape is
+# the worker's: a CI runner without a stronger local core drops
+# `resources.runner.quality_escalation` entirely (caught on the first CI run
+# of this file). Opaque, and the probes that feed the worker are pinned below.
+_HOST_OPAQUE_KEYS = frozenset({"resources", "levels", "runner_catalog", "catalog"})
 
 
 def _normalise(value: Any, roots: list[str], *, key: str = "") -> Any:
     if key in _VOLATILE_KEYS and value not in (None, "", [], {}):
         return "<V>"
-    if key in _SHAPE_ONLY_KEYS:
-        return _shape(value)
+    if key in _HOST_OPAQUE_KEYS:
+        return f"<{key}>" if value not in (None, "", [], {}) else value
     if isinstance(value, dict):
         return {
             _normalise_str(str(k), roots): _normalise(v, roots, key=str(k))
@@ -75,14 +78,6 @@ def _normalise(value: Any, roots: list[str], *, key: str = "") -> Any:
     if isinstance(value, float):
         return "<F>"
     return value
-
-
-def _shape(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {str(k): _shape(v) for k, v in sorted(value.items(), key=lambda kv: str(kv[0]))}
-    if isinstance(value, list):
-        return ["<item>"] if value else []
-    return type(value).__name__
 
 
 def _normalise_str(text: str, roots: list[str]) -> str:
@@ -110,6 +105,10 @@ def _patch_runner(monkeypatch, *, fallback: Callable[..., Any] | None = None) ->
         lambda task, eid, rp, _root, **kw: f"RUN {eid} -> {rp}",
     )
     monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+    # Host capability probes the worker reads — pinned so the capture is the
+    # worker's behaviour, not this machine's inventory of Shells.
+    monkeypatch.setattr(daemon, "_quality_escalation_meta", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon.runner, "available_runner_catalog", lambda *_a, **_k: [])
 
 
 def _result(invocation, runner_name, *, stdout="", stderr="", code=0, **kw) -> RunnerResult:
