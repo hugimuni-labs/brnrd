@@ -7231,6 +7231,26 @@ def test_ticker_renders_elapsed_alone_when_no_limit_is_configured():
     assert hooks._budget_chip({}) is None
 
 
+def test_ticker_carries_the_frame_tick_as_one_token():
+    # Move 2b: the portal's `tick` is the chip's to read, `t<n>` after the
+    # minutes; absent or malformed ⇒ the ticker is unchanged.
+    assert hooks._budget_chip(
+        {"elapsed_seconds": 41 * 60}, {"n": 812, "at": "2026-09-14T01:00:00Z"},
+    ) == "⏱ 41m t812"
+    assert hooks._budget_chip({"elapsed_seconds": 60}, None) == "⏱ 1m"
+    assert hooks._budget_chip({"elapsed_seconds": 60}, {"n": "x"}) == "⏱ 1m"
+    payload = _bar_payload(
+        budget={"elapsed_seconds": 60, "budget_seconds": 7200},
+        outbound={"replies_current": 0, "replies_other": 0,
+                  "outbound_messages": 0},
+        produce={"known": False, "counts": {}},
+        resources={},
+    )
+    payload["tick"] = {"n": 7, "at": "2026-09-14T01:00:00Z"}
+    bar = hooks.format_delta(payload)
+    assert bar is not None and "⏱ 1/120m t7" in bar
+
+
 def test_unresolved_mood_renders_plain_no_grading():
     # The steady face moved to the preamble, but the unresolved-handle
     # honesty stays a chip: a face that resolves to no emote is actionable.

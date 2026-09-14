@@ -44,6 +44,7 @@ def test_persistence_round_trip_and_transition_row_shape(tmp_path):
         "to": "awake",
         "why": "event_dispatched",
         "by": "daemon",
+        "tick": None,
     }
     assert reread.run_id == "run-1"
     assert reread.repo_root == "/repo"
@@ -102,3 +103,19 @@ def test_transition_history_keeps_the_last_200_rows(tmp_path):
     assert len(reread.transitions) == 200
     assert reread.transitions[0]["why"] == "row-5"
     assert reread.transitions[-1]["why"] == "row-204"
+
+
+def test_a_transition_row_carries_the_frame_tick(tmp_path):
+    from brr import tick
+
+    home = _home(tmp_path)
+    entity = shuttle.Shuttle.load(home)
+    tick.advance(home)
+    tick.advance(home)
+
+    entity.transition("awake", why="event_dispatched")
+    entity.transition("listening", why="await_armed", tick=41)
+
+    rows = shuttle.Shuttle.load(home).transitions
+    assert rows[-2]["tick"] == 2  # the loop's latest, read by default
+    assert rows[-1]["tick"] == 41  # the caller's beat wins
