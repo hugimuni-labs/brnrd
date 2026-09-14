@@ -481,17 +481,19 @@ def test_a_seat_alive_for_60_hours_has_a_claude_weekly_reading_every_hour(tmp_pa
     weekly = [r for r in rows if r["shell"] == "claude" and r["window_minutes"] == WEEK_MINUTES]
     covered = {int((r["at"] - start) // 3600) for r in weekly}
     assert covered >= set(range(hours)), sorted(set(range(hours)) - covered)
-    # Older than a day: one reading per hour per window, the newest of the hour.
+    # Older than the full-resolution window: one reading per hour per window,
+    # the newest of the hour.
     now = start + hours * 3600
-    old = [r for r in weekly if r["at"] < now - 24 * 3600]
+    full = usage_samples._FULL_RESOLUTION_HOURS * 3600
+    old = [r for r in weekly if r["at"] < now - full]
     per_hour = {}
     for r in old:
         per_hour.setdefault(int(r["at"] // 3600), []).append(r)
     assert per_hour and all(len(v) == 1 for v in per_hour.values())
     assert all(r["at"] % 3600 == 3300 for r in old)  # :55, the hour's last 5-minute read
-    # The last day stays whole, so the burn reads it at full resolution.
-    recent = [r for r in weekly if r["at"] >= now - 24 * 3600]
-    assert len(recent) == 24 * 12 + 1
+    # The full-resolution window stays whole, so the burn reads every sample.
+    recent = [r for r in weekly if r["at"] >= now - full]
+    assert len(recent) == int(usage_samples._FULL_RESOLUTION_HOURS) * 12 + 1
     burn = usage_samples.recent_burn(state, "claude", now=now)
     assert burn is not None and burn["samples"] == 5 * 12 + 1
 
@@ -518,7 +520,27 @@ def test_compact_keeps_one_per_hour_per_window_and_both_sides_of_a_reset():
     assert usage_samples.compact(kept, before=12 * hour) == kept  # idempotent
 
 
-def test_retention_is_a_week_with_a_day_at_full_resolution():
+def test_retention_is_a_week_with_twice_the_burn_horizon_at_full_resolution():
     assert usage_samples._RETENTION_HOURS == 7 * 24
-    assert usage_samples._FULL_RESOLUTION_HOURS == 24
-    assert usage_samples._FULL_RESOLUTION_HOURS >= 2 * usage_samples.BURN_HORIZON_HOURS
+    assert usage_samples._FULL_RESOLUTION_HOURS == 2 * usage_samples.BURN_HORIZON_HOURS
+
+
+def test_a_compacted_week_stays_near_mains_row_count(tmp_path):
+    """Four windows (two per Shell) sampled once a minute for a week: the log
+    holds the full-resolution window whole plus one row per hour per window
+    before it — about 3,000 rows, not the ~40,000 a week at full resolution
+    would be, and within 1.3x of main's 10-hour log (2,400)."""
+    hour = 3600.0
+    now = 1789400000.0
+    full = usage_samples._FULL_RESOLUTION_HOURS
+    rows = []
+    for minute in range(7 * 24 * 60):
+        at = now - 7 * 24 * hour + minute * 60 + 1
+        for shell, minutes in (("claude", WEEK_MINUTES), ("claude", 300.0), ("codex", WEEK_MINUTES), ("codex", 300.0)):
+            rows.append({"at": at, "shell": shell, "used_percent": 1.0, "window_minutes": minutes, "resets_at": 1.0})
+    kept = usage_samples.compact(rows, before=now - full * hour)
+    assert len(kept) <= 1.3 * 4 * 10 * 60
+    # ± one bucket per window at each edge: the hour straddling the cutoff
+    # and the hour the week starts in are partial wall-clock hours.
+    expected = 4 * int(full * 60) + 4 * int(7 * 24 - full)
+    assert abs(len(kept) - expected) <= 8, (len(kept), expected)

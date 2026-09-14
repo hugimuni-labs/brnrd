@@ -64,11 +64,15 @@ BURN_MIN_SPAN_MINUTES = 30.0
 _RETENTION_HOURS = 7 * 24.0
 
 # Past this age a sample is compacted to one per hour per window (the newest
-# reading in that hour), so a week of history stays a small file: the burn
-# reads the last BURN_HORIZON_HOURS at full resolution, and a day of it is
-# kept whole for anyone reading the day back. Compaction happens on the
-# rewrite `record` already does, so it is idempotent and needs no schedule.
-_FULL_RESOLUTION_HOURS = 24.0
+# reading in that hour), so a week of history stays a small file. Full
+# resolution is kept exactly as long as it was before retention grew — twice
+# the burn horizon, the only reader that needs every minute. Measured on a
+# steady-state log (2026-09-14): a 24 h raw window made each `record` write
+# 2.6× the rows main's did (~6,300 vs ~2,400) on a call the heartbeat makes
+# per level read; 10 h raw plus a week of hourly rows is ~3,000. Compaction
+# happens on the rewrite `record` already does, so it is idempotent and needs
+# no schedule.
+_FULL_RESOLUTION_HOURS = BURN_HORIZON_HOURS * 2
 
 # Hard ceiling on retained records, in case a pathological caller samples far
 # faster than the throttle expects. Newest are kept.
