@@ -12,6 +12,7 @@ closure that flips it).
 
 from __future__ import annotations
 
+from .. import hud
 from .. import presence
 from .. import prompts
 from .. import protocol
@@ -375,11 +376,11 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
     # `boundaries.jsonl`'s `at`), and `time.monotonic()` has no fixed
     # epoch to convert from.
     attempt_started_wall = time.time()
-    daemon._write_live_portal_state(
-        outbox_dir,
-        inbox_dir,
-        eid,
-        task,
+    hud.write_live(hud.HUDInputs(
+        outbox_dir=outbox_dir,
+        inbox_dir=inbox_dir,
+        current_event_id=eid,
+        task=task,
         phase="running",
         attempt=attempt,
         runner_name=runner_name,
@@ -396,7 +397,7 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
         account_context=account_context,
         repo_label=repo_label,
         shuttle_home=shuttle_home,
-    )
+    ))
 
     return Dispatched(
         attempt=replace(
