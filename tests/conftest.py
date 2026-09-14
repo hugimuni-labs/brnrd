@@ -267,3 +267,20 @@ def _reset_cloud_publishing_state_dir(monkeypatch):
         os.environ.pop("BRNRD_MANAGED_GITHUB_TOKEN", None)
         return
     yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_frame_tick():
+    """Forget the frame tick ``tick.advance`` holds in process memory.
+
+    ``brr.tick`` serves the loop's latest tick from a module global so the
+    boundary path pays no I/O, and ``Run.transition`` stamps it with no home
+    to read from. A test that advances (or runs the daemon loop) would
+    otherwise leak its beat into every later ledger row under
+    pytest-randomly's shuffle — the ``_publishing_state_dir`` class above.
+    """
+    from brr import tick
+
+    tick._reset_for_tests()
+    yield
+    tick._reset_for_tests()
