@@ -993,6 +993,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="also resolve when this path appears — an extra trigger for "
              "what the daemon cannot see; never narrows the wait")
     await_p.add_argument(
+        "--ceiling", default=None, metavar="DURATION",
+        help="how long this one call may hold its lease before returning "
+             "`pending` (30m, 2h, or seconds; at most 6h); default 50m — "
+             "under the prompt cache's 1h TTL — or the run's remaining "
+             "budget when shorter. The wait itself stands past it")
+    await_p.add_argument(
         "--json", action="store_true", help="emit the outcome as JSON")
     await_p.add_argument(
         "--outbox", default=None, metavar="DIR",
@@ -4961,6 +4967,10 @@ def _await_slice_ceiling_seconds(shell: str | None = None) -> float:
 #: round trip.
 _AWAIT_POLL_INTERVAL_SECONDS = 1.0
 
+#: Every this many polls the lease re-parses ``portal-state.json`` even when
+#: its stat stamp did not move — a floor under the stat gate, not the path.
+_AWAIT_FORCED_READ_POLLS = 30
+
 #: Floor for the budget-derived default, so a run in its last seconds still
 #: arms something the daemon can evaluate at least once.
 _AWAIT_MIN_TIMEOUT_SECONDS = 30.0
@@ -5202,10 +5212,17 @@ def cmd_await(args):
        way ``brnrd do`` does. That is what kills #1187 by construction: a
        directive that fails to arm fails in the call that made it, instead of
        leaving a stale ``resolved: true`` in place looking like an answer;
-    3. slice-polls ``portal-state.json`` until the daemon resolves the wait
-       (``event`` / ``condition`` / ``timeout``) or the call hits its own
-       Shell-safe ceiling, in which case the outcome is ``pending`` and
-       *call again* is the entire instruction.
+    3. **holds a lease** (move 2c): watches ``portal-state.json`` until the
+       daemon resolves the wait (``event`` / ``condition`` / ``timeout`` /
+       ``park``) or the lease ceiling passes (``--ceiling``, at most
+       ``await_verb.LEASE_MAX_SECONDS``; default
+       ``await_verb.LEASE_DEFAULT_SECONDS``, the cache-warm length). The
+       Shell's per-call kill deadline is honoured only as far as it is
+       *known* — stamped by the pre-tool hook into
+       ``await_verb.CALL_CAP_ENV`` — and falls back to the per-Shell slice
+       when it is not. Either early return is ``pending``, and *call again*
+       is the entire instruction. Every return leaves
+       ``await_verb.LEASE_RECORD_FILE`` for the next boundary's chip.
 
     The daemon does the evaluating, on its own heartbeat, whether or not
     this command is running — that is what makes this a listening wait
@@ -5215,6 +5232,7 @@ def cmd_await(args):
     import sys
     import time
 
+    from . import await_verb
     from . import do as do_mod
 
     explicit_outbox = str(getattr(args, "outbox", "") or "").strip()
@@ -5243,6 +5261,21 @@ def cmd_await(args):
 
     previous = payload.get("await") if isinstance(payload.get("await"), dict) else {}
     previous_generation = previous.get("generation")
+
+    requested_ceiling = None
+    if getattr(args, "ceiling", None) is not None:
+        requested_ceiling = _await_parse_timeout(str(args.ceiling))
+        if requested_ceiling is None or requested_ceiling <= 0:
+            print(
+                f"[brnrd await] --ceiling {args.ceiling!r} is not a positive "
+                "duration (e.g. 30m, 2h, 90s, or a bare number of seconds)",
+                file=sys.stderr,
+            )
+            return 1
+    lease_seconds = await_verb.lease_ceiling(
+        payload.get("budget") if isinstance(payload.get("budget"), dict) else None,
+        requested_ceiling,
+    )
 
     if args.timeout is not None:
         timeout_seconds = _await_parse_timeout(str(args.timeout))
@@ -5305,12 +5338,18 @@ def cmd_await(args):
             print(f"[brnrd await] ✗ not armed — {result['detail']}", file=sys.stderr)
         return 1
 
-    def _emit(state: dict, outcome: str) -> int:
+    def _emit(state: dict, outcome: str, *, returned_on: str | None = None) -> int:
         result = {
             "outcome": outcome,
             "which": state.get("which"),
             "deadline": state.get("deadline"),
         }
+        if outcome == "pending":
+            # Why this call returned without an answer: `ceiling` = the lease
+            # ran its full length; `shell_cap` = the Shell would have killed
+            # the call first (no hook stamp, or a cap under the lease). The
+            # wait stands either way — `call again` continues it.
+            result["returned_on"] = returned_on
         if outcome == "park":
             # design-the-seat-that-never-quits.md §machinery slice 3:
             # holding has cost more than a boot — the daemon resolved this
@@ -5319,6 +5358,16 @@ def cmd_await(args):
             # await projection precisely so this print never has to reach
             # into a second file for it).
             result["ratio"] = state.get("ratio")
+        slept = time.monotonic() - lease_started
+        result["slept_seconds"] = round(slept, 3)
+        # The chip's one-time `slept … · woke: …` segment reads this at the
+        # next boundary — the lease emitted none of its own.
+        await_verb.write_lease_record(
+            outbox_dir,
+            generation=state.get("generation"),
+            slept_seconds=slept,
+            outcome=returned_on if outcome == "pending" and returned_on else outcome,
+        )
         if args.json:
             print(json.dumps(result))
         elif outcome == "park":
@@ -5329,22 +5378,61 @@ def cmd_await(args):
                 "end the turn and the seat parks (anything addressed to it "
                 "resumes it)"
             )
+        elif outcome == "pending" and returned_on == "ceiling":
+            print(
+                "[brnrd await] pending — lease ceiling "
+                f"{await_verb.format_slept(lease_seconds)} reached; the wait "
+                "still stands — call again"
+            )
         else:
             tail = f" ({result['which']})" if result["which"] else ""
             note = " — call again" if outcome == "pending" else ""
             print(f"[brnrd await] {outcome}{tail}{note}")
         return 0
 
-    # The ceiling counts from the *call's* start, not from the arm: the
-    # staging + drain-verdict wait above (up to 30s under a busy daemon)
-    # is inside the Shell's per-call cap too. Measured 2026-09-06 20:1xZ:
-    # 580s from the arm + a 30s drain wait = the claude Bash tool killing
-    # the call at 10m instead of it returning `pending`.
-    deadline = call_started + _await_slice_ceiling_seconds()
+    # The lease (move 2c): hold until the daemon resolves the wait or the
+    # lease ceiling passes. The only earlier return is the Shell's own kill
+    # deadline, and that is known only when the pre-tool hook stamped the
+    # timeout it gave this call (`await_verb.CALL_CAP_ENV`); no stamp ⇒ the
+    # per-Shell slice this command always used.
+    #
+    # Both count from the *call's* start, not from the arm: the staging +
+    # drain-verdict wait above (up to 30s under a busy daemon) is inside the
+    # Shell's per-call cap too. Measured 2026-09-06 20:1xZ: 580s from the arm
+    # + a 30s drain wait = the claude Bash tool killing the call at 10m
+    # instead of it returning `pending`.
+    lease_started = time.monotonic()
+    stamped_cap = await_verb.call_cap_seconds(dict(os.environ))
+    if stamped_cap is not None:
+        call_bound = max(
+            1.0, stamped_cap - await_verb.CALL_CAP_MARGIN_SECONDS,
+        )
+    else:
+        call_bound = _await_slice_ceiling_seconds()
+    if lease_seconds <= call_bound:
+        deadline, returned_on = call_started + lease_seconds, "ceiling"
+    else:
+        deadline, returned_on = call_started + call_bound, "shell_cap"
+
+    state_path = outbox_dir / do_mod.PORTAL_STATE_NAME
+    last_stamp = None
+    state: dict = {}
+    polls = 0
     while True:
-        state = do_mod.read_portal_state(outbox_dir).get("await")
-        if not isinstance(state, dict):
-            state = {}
+        # A stat per poll, a parse only when the daemon rewrote the file (the
+        # heartbeat replaces it atomically, so the inode/mtime move) — plus a
+        # full re-read every `_AWAIT_FORCED_READ_POLLS` as a safety net for a
+        # filesystem with coarse mtimes.
+        try:
+            info = state_path.stat()
+            stamp = (info.st_ino, info.st_mtime_ns, info.st_size)
+        except OSError:
+            stamp = None
+        if stamp != last_stamp or polls % _AWAIT_FORCED_READ_POLLS == 0:
+            last_stamp = stamp
+            read = do_mod.read_portal_state(outbox_dir).get("await")
+            state = read if isinstance(read, dict) else {}
+        polls += 1
         # Generation-gated: a portal-state file written *before* this tick's
         # drain still carries the previous call's sticky-resolved outcome,
         # and reporting that as this wait's answer is the very stale-answer
@@ -5353,7 +5441,7 @@ def cmd_await(args):
         if fresh and state.get("resolved"):
             return _emit(state, str(state.get("outcome") or "event"))
         if time.monotonic() >= deadline:
-            return _emit(state, "pending")
+            return _emit(state, "pending", returned_on=returned_on)
         time.sleep(_AWAIT_POLL_INTERVAL_SECONDS)
 
 

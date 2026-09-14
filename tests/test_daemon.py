@@ -1078,9 +1078,14 @@ def test_run_worker_does_not_infer_native_hooks_from_runner_name(
     assert task.status == "done"
 
 
+@pytest.mark.parametrize("operator_bash_max", [None, "900000"])
 def test_run_worker_installs_native_hooks_only_when_profile_declares_them(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, operator_bash_max,
 ):
+    if operator_bash_max is None:
+        monkeypatch.delenv("BASH_MAX_TIMEOUT_MS", raising=False)
+    else:
+        monkeypatch.setenv("BASH_MAX_TIMEOUT_MS", operator_bash_max)
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-declared-hooks")
     _stub_env_isolated(monkeypatch, tmp_path)
@@ -1136,6 +1141,16 @@ def test_run_worker_installs_native_hooks_only_when_profile_declares_them(
     assert checked == ["claude"]
     assert installed == ["claude"]
     assert seen_env["BRR_RUNNER"] == "claude"
+    # Move 2c: a claude runner's Bash per-call cap covers a full await
+    # lease — unless the operator already chose one, which rides through.
+    if operator_bash_max is None:
+        from brr import await_verb
+
+        assert seen_env["BASH_MAX_TIMEOUT_MS"] == str(
+            await_verb.CLAUDE_BASH_MAX_TIMEOUT_MS
+        )
+    else:
+        assert "BASH_MAX_TIMEOUT_MS" not in seen_env
 
 
 def test_run_worker_threads_runner_quota_into_prompt(tmp_path, monkeypatch):
