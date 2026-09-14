@@ -1283,6 +1283,13 @@ def handle_fold(f: OutboxFile) -> Handled:
     return _guarded(f, "fold", fold.handle)
 
 
+def handle_topic(f: OutboxFile) -> Handled:
+    """`topic: new|split|merge|retire` — the resident manages its heddles (``topic.py``)."""
+    from . import topic
+
+    return _guarded(f, "topic", topic.handle)
+
+
 def _not_yet(f: OutboxFile, verb: str) -> Handled:
     """A 4b verb: parsed and routed, refused with a notice until its semantics land."""
     daemon._record_outbox_notice(

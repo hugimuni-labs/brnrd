@@ -78,6 +78,7 @@ from . import gate_receipt
 from . import claude_status
 from . import claude_usage
 from . import gitops
+from . import heddles
 from . import hooks as hooks_mod
 from . import knowledge
 from . import message_store
@@ -7459,7 +7460,25 @@ def _queue_spawn_request(
         meta["trust_tier"] = task.meta["trust_tier"]
     if reason:
         meta["spawn_reason"] = reason
+    # move 5b: a strand dispatched under a heddle (`topic: the-loom`) is a
+    # claim — the parent's heddles light from it (`heddles.light`'s
+    # ``strand_claims``), and the child's return carries it back
+    # (``spawn_topics`` on ``spawn_completed``).
+    spawn_topics = [
+        t for t in re.split(r"[\s,·]+", str(fm.get("topic") or fm.get("topics") or ""))
+        if t and heddles.SLUG_RE.match(t)
+    ]
+    if spawn_topics:
+        meta["spawn_topics"] = " ".join(spawn_topics)
     new_path = protocol.create_event(inbox_dir, source, new_body, **meta)
+    if spawn_topics:
+        claims = list(task.meta.get("strand_topic_claims") or [])
+        claims.append({
+            "topics": spawn_topics,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "event": new_path.stem,
+        })
+        task.meta["strand_topic_claims"] = claims[-50:]
     # Dispatch-edge ownership (wyrd §3): record who dispatched this child so
     # the `stop:` verb can enforce parent-only control from the first moment
     # the spawn exists — before it has a run id, before it has a process.
@@ -10970,6 +10989,10 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
         produce_kwargs["spawn_allowance_tokens"] = task.meta["spawn_allowance_tokens"]
     if task.meta.get("spawn_allowance_spent") is not None:
         produce_kwargs["spawn_tokens_spent"] = task.meta["spawn_allowance_spent"]
+    # move 5b: the heddle the strand was dispatched under rides its return,
+    # so the parent's heddles light again at the moment it lands.
+    if str(task.meta.get("spawn_topics") or "").strip():
+        produce_kwargs["spawn_topics"] = " ".join(str(task.meta["spawn_topics"]).split())
     try:
         completion = protocol.create_event(
             inbox_dir,

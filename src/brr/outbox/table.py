@@ -7,8 +7,8 @@ spawn, and nothing else. This is exactly the order ``_drain_outbox`` applied on
 ``main`` as a flat run of ``if <selector>: … continue``:
 
     runner_policy › config_change › respawn › spawn › ask › submit › to › stop
-    › note › await › hold › [land › fold › mark › stake › cut-at] › cut › gate
-    › event
+    › note › await › hold › [land › fold › topic › mark › stake › cut-at] › cut
+    › gate › event
 
 Two properties of that order are kept on purpose and named here:
 
@@ -21,7 +21,8 @@ Two properties of that order are kept on purpose and named here:
 ``event`` is the fallback row (``selects=None``): a file no earlier row claimed
 is a reply — to ``event: <id>`` if it names one, to the waking event if not.
 
-The frame-owned verbs added by move 4 (``land``, ``fold``) and the 4b stubs
+The frame-owned verbs added by move 4 (``land``, ``fold``), move 5b's
+``topic`` (the resident's heddles, ``topic.py``) and the 4b stubs
 (``mark``, ``stake``, ``cut-at``) sit after ``hold`` and before ``cut``: no
 file ``main`` already routed changes hands, and a ``stake:`` riding a
 ``spawn:``/``respawn:`` request stays that request's modifier.
@@ -103,6 +104,10 @@ def _selects_fold(fm: dict) -> object:
     return "fold" in fm
 
 
+def _selects_topic(fm: dict) -> object:
+    return "topic" in fm
+
+
 def _selects_mark(fm: dict) -> object:
     return "mark" in fm
 
@@ -137,6 +142,7 @@ ROWS: tuple[Row, ...] = (
     Row("hold", _selects_hold, verbs.handle_hold),
     Row("land", _selects_land, verbs.handle_land),
     Row("fold", _selects_fold, verbs.handle_fold),
+    Row("topic", _selects_topic, verbs.handle_topic),
     Row("mark", _selects_mark, verbs.handle_mark),
     Row("stake", _selects_stake, verbs.handle_stake),
     Row("cut-at", _selects_cut_at, verbs.handle_cut_at),
