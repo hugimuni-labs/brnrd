@@ -174,6 +174,21 @@ describe('parseWarpTopic', () => {
 		const topic = parseWarpTopic('surface/topics/old.md', '# Old\n\nsplit-into: a b\n');
 		assert.deepEqual(topic.splitInto, ['a', 'b']);
 	});
+
+	it('skips the heddle signature frontmatter before the title (move 5b)', () => {
+		const topic = parseWarpTopic(
+			'surface/topics/loom.md',
+			'---\nrune: ⚒\nsignature:\n  places: [src/**]\n---\n# The loom\n\nids: weave\n\nBody.\n'
+		);
+		assert.equal(topic.title, 'The loom');
+		assert.deepEqual(topic.ids, ['loom', 'weave']);
+		assert.equal(topic.definitionMarkdown, 'Body.');
+	});
+
+	it('leaves an unclosed leading rule alone', () => {
+		const topic = parseWarpTopic('surface/topics/x.md', '---\n# X\n');
+		assert.equal(topic.title, 'x');
+	});
 });
 
 describe('the graph', () => {

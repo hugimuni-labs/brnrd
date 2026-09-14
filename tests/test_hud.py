@@ -73,6 +73,7 @@ def test_the_field_table():
         "knowledge": "Knowledge",
         "name": "Name",
         "resources": "dict[str, Any]",
+        "heddles": "list[dict[str, Any]]",
         "bolt": "Bolt | None",
         "change_token": "str",
     }

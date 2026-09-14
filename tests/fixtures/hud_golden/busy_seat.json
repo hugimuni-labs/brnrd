@@ -18,6 +18,7 @@
   "card": {
     "active": true,
     "age_seconds": 700,
+    "delta": null,
     "stale": false,
     "state_moved_seconds": null,
     "text": "## Now\nshipping\n"
@@ -32,6 +33,7 @@
     "would_land": true
   },
   "generated_at": "2026-09-14T16:26:40Z",
+  "heddles": [],
   "inbound": {
     "current_event": "evt-1",
     "current_event_replyable": true,

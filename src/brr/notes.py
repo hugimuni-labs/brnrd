@@ -354,9 +354,16 @@ _REGISTRY: tuple[Surface, ...] = (
         rides="work-surface",
         root=ROOT_SURFACE,
         path_hint="<surface>/topics/*.md",
-        role="the filter axis: topic definitions with alias id sets",
-        readers=("frontend warpGraph.ts",),
-        grammar="one `# ` title, `ids:`/`split-into:` rows, definition body",
+        role=(
+            "the filter axis and the heddles: topic definitions with alias "
+            "id sets, lit by their signature (design-the-loom §20)"
+        ),
+        readers=("frontend warpGraph.ts", "brr.heddles"),
+        grammar=(
+            "optional `---` frontmatter (`rune:`, `signature:` places/words/"
+            "produce/threads), one `# ` title, `ids:`/`split-into:` rows, "
+            "definition body; managed by `topic: new|split|merge|retire`"
+        ),
         budget="excluded from the surface page walk, same as warp items",
         traits=(),
     ),
