@@ -1,0 +1,18 @@
+{
+  "emitted": [],
+  "promoted": 0,
+  "stats": {},
+  "task_meta": {},
+  "tree": {
+    ".brr/inbox/<EVT1>.md": "---\nid: <EVT1>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
+    ".brr/outbox/<EVT1>/.notices.jsonl": [
+      {
+        "at": "<V>",
+        "kind": "refused",
+        "lifetime": "run",
+        "text": "stop refused: '<EVT1>' matches no live concurrent spawn (already finished, never dispatched here, or the id is wrong)"
+      }
+    ],
+    ".brr/outbox/<EVT1>/.processed/stop.md": "---\nstop: <EVT1>\n---\n"
+  }
+}

@@ -79,6 +79,8 @@ def frontmatter_body(text: str) -> str:
 _OUTBOX_ROUTING_KEYS = (
     "event", "gate", "respawn", "spawn", "submit", "stop", "to", "runner_policy",
     "config_change", "note", "await", "cut", "ask", "hold",
+    # move 4: the frame-owned verbs, and the 4b stubs that refuse "not yet".
+    "land", "fold", "mark", "stake", "cut-at",
 )
 
 
@@ -392,6 +394,7 @@ INTERNAL_SOURCES: frozenset[str] = frozenset({
     "bench",
     "cli",
     "dispatch_message",
+    "fold",
     "init",
     "respawn",
     "schedule",

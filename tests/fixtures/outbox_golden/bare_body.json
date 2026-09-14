@@ -1,0 +1,75 @@
+{
+  "emitted": [
+    {
+      "payload": {
+        "event_id": "<EVT1>",
+        "path": "<TMP>/.brr/responses/<EVT1>.partials/000001.md",
+        "run_id": "run-parent",
+        "target_event": null
+      },
+      "type": "interim_response"
+    },
+    {
+      "payload": {
+        "event_id": "<EVT1>",
+        "path": "<TMP>/.brr/responses/<EVT1>.partials/000002.md",
+        "run_id": "run-parent",
+        "target_event": null
+      },
+      "type": "interim_response"
+    }
+  ],
+  "promoted": 2,
+  "stats": {
+    "current": 2,
+    "delivered": 2
+  },
+  "task_meta": {
+    "said_rows": [
+      {
+        "at": "<V>",
+        "event": "<EVT1>",
+        "lead": "second"
+      },
+      {
+        "at": "<V>",
+        "event": "<EVT1>",
+        "lead": "first"
+      }
+    ]
+  },
+  "tree": {
+    ".brr/conversations/telegram__42__/<EVT1>.jsonl": [
+      {
+        "artifact_kind": "interim_response",
+        "body": "first",
+        "delivery_id": "<TMP>/.brr/responses/<EVT1>.partials/000001.md",
+        "event_id": "<EVT1>",
+        "kind": "artifact",
+        "label": "interim:<EVT1>",
+        "path": "<TMP>/.brr/responses/<EVT1>.partials/000001.md",
+        "run_id": "run-parent",
+        "summary": "first",
+        "ts": "<V>"
+      },
+      {
+        "artifact_kind": "interim_response",
+        "body": "second",
+        "delivery_id": "<TMP>/.brr/responses/<EVT1>.partials/000002.md",
+        "event_id": "<EVT1>",
+        "kind": "artifact",
+        "label": "interim:<EVT1>",
+        "path": "<TMP>/.brr/responses/<EVT1>.partials/000002.md",
+        "run_id": "run-parent",
+        "summary": "second",
+        "ts": "<V>"
+      }
+    ],
+    ".brr/inbox/<EVT1>.md": "---\nid: <EVT1>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
+    ".brr/outbox/<EVT1>/.card": "## Said\n⇐ projected from delivered replies — the resident's words, the daemon's hand · newest first\n- <CLOCK> → <TAIL>: second\n- <CLOCK> → <TAIL>: first\n",
+    ".brr/outbox/<EVT1>/.processed/001.md": "first\n",
+    ".brr/outbox/<EVT1>/.processed/002.md": "second\n",
+    ".brr/responses/<EVT1>.partials/000001.md": "first\n",
+    ".brr/responses/<EVT1>.partials/000002.md": "second\n"
+  }
+}

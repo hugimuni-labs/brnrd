@@ -1,0 +1,18 @@
+{
+  "emitted": [],
+  "promoted": 0,
+  "stats": {},
+  "task_meta": {},
+  "tree": {
+    ".brr/inbox/<EVT1>.md": "---\nid: <EVT1>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
+    ".brr/outbox/<EVT1>/.notices.jsonl": [
+      {
+        "at": "<V>",
+        "kind": "dropped",
+        "lifetime": "run",
+        "text": "cut dropped: empty frontmatter in staged cut — staging casualty, not a reply"
+      }
+    ],
+    ".brr/outbox/<EVT1>/.processed/do-1-cut-2.md": "no frontmatter at all\n"
+  }
+}

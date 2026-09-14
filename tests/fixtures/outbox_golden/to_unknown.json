@@ -1,0 +1,18 @@
+{
+  "emitted": [],
+  "promoted": 0,
+  "stats": {},
+  "task_meta": {},
+  "tree": {
+    ".brr/inbox/<EVT1>.md": "---\nid: <EVT1>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
+    ".brr/outbox/<EVT1>/.notices.jsonl": [
+      {
+        "at": "<V>",
+        "kind": "refused",
+        "lifetime": "run",
+        "text": "message refused: 'evt-nobody' matches no live concurrent spawn (already finished, never dispatched here, or the id is wrong)"
+      }
+    ],
+    ".brr/outbox/<EVT1>/.processed/steer.md": "---\nto: evt-nobody\n---\nturn left\n"
+  }
+}

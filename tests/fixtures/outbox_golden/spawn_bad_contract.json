@@ -1,0 +1,42 @@
+{
+  "emitted": [
+    {
+      "payload": {
+        "core": null,
+        "event_id": "<EVT1>",
+        "proposed_runner": "nosuchshell",
+        "reason": null,
+        "run_id": "run-parent",
+        "spawn_allowance_tokens": 20000000,
+        "spawn_event_id": "<EVT2>"
+      },
+      "type": "spawn_requested"
+    }
+  ],
+  "promoted": 1,
+  "stats": {
+    "spawn": 1
+  },
+  "task_meta": {},
+  "tree": {
+    ".brr/conversations/telegram__42__/<EVT1>.jsonl": [
+      {
+        "artifact_kind": "spawn_request",
+        "body": "task",
+        "event_id": "<EVT1>",
+        "kind": "artifact",
+        "label": "spawn:<EVT2>",
+        "path": "<TMP>/.brr/inbox/<EVT2>.md",
+        "run_id": "run-parent",
+        "summary": "task",
+        "ts": "<V>"
+      }
+    ],
+    ".brr/inbox/<EVT1>.md": "---\nid: <EVT1>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
+    ".brr/inbox/<EVT2>.md": "---\nid: <EVT2>\nsource: spawn\nstatus: pending\nstrand: True\nenvironment: worktree\nshell: nosuchshell\nspawn_allowance_tokens: <HEX>\nrespawned_from_event: <EVT1>\nrespawned_by_run: run-parent\nspawn_immediate: True\nspawn_parent_run_id: run-parent\nspawn_parent_conversation_key: telegram:42:\ncreated: <TS>\n---\ntask\n",
+    ".brr/outbox/<EVT1>/.processed/spawn.md": "---\nspawn: true\nshell: nosuchshell\n---\ntask\n",
+    ".brr/schedule/signals.json": {
+      "spawn": "<F>"
+    }
+  }
+}

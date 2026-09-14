@@ -1,0 +1,30 @@
+{
+  "emitted": [
+    {
+      "payload": {
+        "event_id": "<EVT1>",
+        "run_id": "run-parent",
+        "target_event": "<EVT2>"
+      },
+      "type": "event_noted"
+    }
+  ],
+  "promoted": 1,
+  "stats": {
+    "note": 1
+  },
+  "task_meta": {},
+  "tree": {
+    ".brr/inbox/<EVT1>.md": "---\nid: <EVT1>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
+    ".brr/inbox/<EVT2>.md": "---\nid: <EVT2>\nsource: telegram\nstatus: noted\ntelegram_user_id: 42\ntelegram_chat_id: 42\nnoted_by: run-parent\nnoted_at: <TS>\ncreated: <TS>\n---\nfyi\n",
+    ".brr/outbox/<EVT1>/.notices.jsonl": [
+      {
+        "at": "<V>",
+        "kind": "advisory",
+        "lifetime": "run",
+        "text": "note: body text ignored — a note closes event <EVT2> without speaking; use event: to reply"
+      }
+    ],
+    ".brr/outbox/<EVT1>/.processed/note.md": "---\nnote: <EVT2>\n---\nignored body\n"
+  }
+}

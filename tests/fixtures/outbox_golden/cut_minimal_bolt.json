@@ -1,0 +1,95 @@
+{
+  "emitted": [
+    {
+      "payload": {
+        "annotated": 0,
+        "event_id": "<EVT1>",
+        "run_id": "run-parent"
+      },
+      "type": "cut_accepted"
+    },
+    {
+      "payload": {
+        "event_id": "<EVT1>",
+        "path": "<TMP>/.brr/responses/<EVT1>.partials/000001.md",
+        "run_id": "run-parent",
+        "target_event": null
+      },
+      "type": "interim_response"
+    }
+  ],
+  "promoted": 1,
+  "stats": {
+    "current": 1,
+    "cut": 1,
+    "delivered": 1
+  },
+  "task_meta": {
+    "bolt": {
+      "accepted_at": "<TS>",
+      "annotated": 0,
+      "asks": [],
+      "attempts": 1,
+      "bounces": [],
+      "decisions": [],
+      "declaration_version": 1,
+      "dissent": [],
+      "next": null,
+      "owed": [],
+      "spend_declared": null,
+      "strands": []
+    },
+    "repo_label": "Gurio/brr",
+    "said_rows": [
+      {
+        "at": "<V>",
+        "event": "<EVT1>",
+        "lead": "done — nothing to hand over"
+      }
+    ]
+  },
+  "tree": {
+    ".brr/conversations/telegram__42__/<EVT1>.jsonl": [
+      {
+        "artifact_kind": "interim_response",
+        "body": "done — nothing to hand over",
+        "delivery_id": "<TMP>/.brr/responses/<EVT1>.partials/000001.md",
+        "event_id": "<EVT1>",
+        "kind": "artifact",
+        "label": "interim:<EVT1>",
+        "path": "<TMP>/.brr/responses/<EVT1>.partials/000001.md",
+        "run_id": "run-parent",
+        "summary": "done — nothing to hand over",
+        "ts": "<V>"
+      }
+    ],
+    ".brr/inbox/<EVT1>.md": "---\nid: <EVT1>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
+    ".brr/outbox/<EVT1>/.card": "## Said\n⇐ projected from delivered replies — the resident's words, the daemon's hand · newest first\n- <CLOCK> → <TAIL>: done — nothing to hand over\n",
+    ".brr/outbox/<EVT1>/.processed/cut.md": "---\ncut: true\n---\ndone — nothing to hand over\n",
+    ".brr/outbox/<EVT1>/.topics": "daemon\n",
+    ".brr/responses/<EVT1>.partials/000001.md": "---\nmessage_path: <TMP>/home/runs/Gurio__brr/run-parent/messages/000001-interim.md\n---\n\ndone — nothing to hand over\n",
+    "home/.gitignore": "/dispatch/inbox/\n/dispatch/queue/\n/dispatch/responses/\n/knowledge/\n/.brr/\n/security.config\n/account/gates/cloud.token\n/account/x-browser-profile/\n*.tmp\n",
+    "home/README.md": "# Your brnrd resident's memory\n\nThis repo is the **working memory** of your brnrd resident — the standing\nagent that works your repositories. Its notes, plans, run records,\nschedule, and self-orientation live here as plain files. brnrd created\nthis repo for you; **you own it**, in the ordinary git sense: it sits in\nyour filesystem (and, if linked, under your GitHub login), and nothing in\nit is beyond your edit.\n\n## Who writes here, who reads it\n\nThe brnrd daemon commits here after every thought (its capture net), and\nthe resident reads it on every wake; the dashboard renders parts of it\nwhen you connect an account. You can read and edit anything at any time —\nyour edits are just commits, and the agent works with what it finds.\n\n## Where it lives, and what the cloud sees\n\nLocal-first: the durable copy is this repo, on your machine. If you link\nit to GitHub (`brnrd home link`), the remote is a **private** repo under\n*your* GitHub login, created with *your* credentials — brnrd's GitHub App\nnever owns or holds it, and brnrd refuses to push this content to a\npublic repo. If you connect a brnrd account, the hosted dashboard keeps a\n**bounded render cache** of this content — the authored work surface,\nknowledge pages, and run nodes from the last 14 days — alongside other\npublish lanes covering runs, quota and review state, and disconnecting\npurges it; this repo remains the durable copy either way. `SECURITY.md`\nin the brnrd source repo has the full lane-by-lane inventory and is the\nauthority on those bounds.\n\n## How to leave\n\nIt's plain git — no export, no support ticket:\n\n- **Copy it:** `git clone` this repo anywhere.\n- **Move it:** `git remote set-url origin <wherever>` — brnrd follows\n  your remote config.\n- **End it:** delete the repo (and the GitHub remote, if you made one).\n",
+    "home/account/repos.json": {
+      "account_id": "",
+      "default_repo": "Gurio/brr",
+      "home_id": "Gurio__brr-<HEX>",
+      "home_kind": "project",
+      "repos": [
+        {
+          "kind": "home",
+          "label": "home",
+          "path": "<TMP>/home"
+        },
+        {
+          "kind": "repo",
+          "label": "Gurio/brr",
+          "path": "<TMP>/repo"
+        }
+      ]
+    },
+    "home/hearth/README.md": "# The hearth\n\nThe shared space between you and your resident — confidences, story, the shape of the relationship. Distinct from `surface/` (the work you do together), `knowledge/` (what the projects taught it), and the rest of this home (its own working memory): this room is about the two of you, not the tasks.\n\n## What goes here\n\nWhatever you'd want a long-running collaborator to actually remember about you and about this relationship — free-form Markdown, one page per thing that deserves its own file. Nothing here is a form to fill in.\n\n## What the daemon does with it\n\nEvery wake sees a small index — each page's filename and its own first heading, nothing more — so the room is known without being read cold every time. A page's full text is read on demand, the same way any other file is.\n\n## The one hard rule\n\nThis room stays home. It is excluded from kb capture, from every knowledge push lane, and from dashboard mirroring — the wake injection carries its own reminder that page contents are confidences, never quoted into kb pages, issues, PRs, or any other public surface.\n",
+    "home/runs/Gurio__brr/run-parent/messages/000001-interim.md": "---\ndirection: out\nstatus: pending\ncreated_at: <TS>\nkind: interim\ntarget_event: <EVT1>\ntarget_gate: telegram\ntarget_thread: telegram:42:\nsource_ref: <TMP>/.brr/outbox/<EVT1>/cut.md\n---\n\ndone — nothing to hand over\n",
+    "home/surface/index.md": "# Work surface\n\nThe shared orientation for user and resident. The wake and dashboard discover Markdown here because it exists; code chooses typography, not which authored pages matter.\n\n## Standing pages\n\n- [Current plan](plans/Gurio__brr/active.md) — ranked moves and cross-run position for this repo.\n- [Workflow](workflow.md) — the agreement about autonomy, delivery, gating, and cadence.\n- [Decision ledger](ledger/decisions.md) — the shared decision through-line.\n\n## Shape\n\nKeep this layer free-form and link pages that belong together: those links become the later loom graph's edges. Daemon-attested files such as `runs/*/state.md` frame each run body, not pages to move in here. Add a page when it earns a shared purpose; do not turn the surface into a form.\n"
+  }
+}

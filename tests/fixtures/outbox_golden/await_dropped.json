@@ -1,0 +1,18 @@
+{
+  "emitted": [],
+  "promoted": 0,
+  "stats": {},
+  "task_meta": {},
+  "tree": {
+    ".brr/inbox/<EVT1>.md": "---\nid: <EVT1>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
+    ".brr/outbox/<EVT1>/.notices.jsonl": [
+      {
+        "at": "<V>",
+        "kind": "dropped",
+        "lifetime": "run",
+        "text": "await dropped: timeout: is required — write `timeout: none` for no ceiling"
+      }
+    ],
+    ".brr/outbox/<EVT1>/.processed/await.md": "---\nawait: true\nspawn:evt-1: x\n---\n"
+  }
+}
