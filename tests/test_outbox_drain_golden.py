@@ -244,10 +244,14 @@ def _scenario_note(inbox, outbox, _own):
 
 
 def _scenario_spawn_accepted(_inbox, outbox, _own):
+    # The declared report lives under the scenario's own tree: a real `/tmp`
+    # path is shared across runs and machines, and the drain's report seeder
+    # answers differently when a previous run already left a file there.
+    report = outbox.parents[2] / "child-report.md"
     _write(
         outbox, "spawn.md",
         "---\nspawn: true\nshell: claude\nbranch: brr/child\n"
-        "report: /tmp/child-report.md\ntitle: a child\n---\nchild task\n",
+        f"report: {report}\ntitle: a child\n---\nchild task\n",
     )
 
 

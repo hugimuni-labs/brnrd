@@ -194,7 +194,7 @@ def test_spawn_accepted_is_accepted(tmp_path, monkeypatch):
     (result,) = table.dispatch(file(
         "spawn.md",
         "---\nspawn: true\nshell: claude\nbranch: brr/child\n"
-        "report: /tmp/child-report.md\ntitle: a child\n---\nchild task\n",
+        f"report: {tmp_path / 'child-report.md'}\ntitle: a child\n---\nchild task\n",
     ))
     assert (result.verb, result.outcome, result.promoted) == ("spawn", "accepted", 1)
     assert stats == {"spawn": 1}
@@ -258,7 +258,7 @@ def test_a_stake_riding_a_spawn_stays_the_spawns_modifier(tmp_path, monkeypatch)
     file, *_ = _setup(tmp_path, monkeypatch)
     results = table.dispatch(file(
         "spawn.md",
-        "---\nspawn: true\nshell: claude\nbranch: brr/c\nreport: /tmp/r.md\n"
+        f"---\nspawn: true\nshell: claude\nbranch: brr/c\nreport: {tmp_path / 'r.md'}\n"
         "stake: 5\n---\ntask\n",
     ))
     assert _verbs(results) == ["spawn"]
