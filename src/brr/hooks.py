@@ -1463,7 +1463,9 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "soft limit only when the user configured one (`16/120m`). VITAL "
         "(w-34c, 2026-09-11): renders every boundary, whether or not the "
         "minute moved; a boundary where % used crosses 25/50/75/90 adds a "
-        "trailing arrow and a detail line naming the threshold.",
+        "trailing arrow and a detail line naming the threshold. The "
+        "frame's tick rides after the minutes as `t<n>` (`⏱ 41m t812`) "
+        "when the daemon stamped one (move 2b).",
         # a meter.
         klass=VITAL,
     ),
@@ -1756,8 +1758,16 @@ SEGMENT_CLASS: dict[str, str] = {
 # quiet-boundary filter, and the bar's anchor is the `⌁[<mood>]:` preamble.
 
 
-def _budget_chip(budget: dict[str, Any]) -> str | None:
+def _budget_chip(
+    budget: dict[str, Any], frame_tick: dict[str, Any] | None = None,
+) -> str | None:
     """The wall-clock ticker: elapsed minutes, with the limit only when real.
+
+    ``frame_tick`` is the portal's ``tick`` (move 2b): when the daemon
+    stamped one, its number rides after the minutes as one token —
+    ``⏱ 41m t812`` — the frame's beat beside the run's clock. The chip is
+    that field's first reader (design-the-loom.md §17: a field the weaver
+    cannot read on the next tick is not emitted).
 
     The w-54 redesign (2026-08-19): there is no default time limit, so the
     ``x/ym`` form renders only when the user configured one
@@ -1771,10 +1781,15 @@ def _budget_chip(budget: dict[str, Any]) -> str | None:
         return None
     try:
         if limit is not None:
-            return f"⏱ {int(elapsed) // 60}/{int(limit) // 60}m"
-        return f"⏱ {int(elapsed) // 60}m"
+            chip = f"⏱ {int(elapsed) // 60}/{int(limit) // 60}m"
+        else:
+            chip = f"⏱ {int(elapsed) // 60}m"
     except (TypeError, ValueError):
         return None
+    n = frame_tick.get("n") if isinstance(frame_tick, dict) else None
+    if isinstance(n, int) and not isinstance(n, bool):
+        chip += f" t{n}"
+    return chip
 
 
 # One quota-bucket phrase within the facet's rendered summary string, e.g.
@@ -3655,6 +3670,7 @@ def _render_bar(
     wait_idle: bool = False,
     link_chip: str | None = None,
     notes_health_lines: list[str] | None = None,
+    frame_tick: dict[str, Any] | None = None,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: preamble + changed chips + details.
 
@@ -3723,7 +3739,7 @@ def _render_bar(
     vital_bands = _vital_bands(budget, resources)
 
     segments: list[tuple[str, str]] = []
-    budget_chip = _budget_chip(budget)
+    budget_chip = _budget_chip(budget, frame_tick)
     if budget_chip:
         segments.append(("budget", budget_chip))
     # A strand's own metered allowance replaces the shared, lagging quota
@@ -4480,6 +4496,10 @@ def format_delta(
                 link_chip = None
         return _render_bar(
             link_chip=link_chip,
+            frame_tick=(
+                payload.get("tick")
+                if isinstance(payload.get("tick"), dict) else None
+            ),
             run=run, pending=action_pending, pending_known=pending_known,
             pending_files=pending_files,
             events=action_events,
