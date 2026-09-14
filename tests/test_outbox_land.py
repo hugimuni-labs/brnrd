@@ -370,3 +370,25 @@ def test_gh_merge_is_pinned_to_the_read_head(monkeypatch, tmp_path):
     assert seen == [[
         "gh", "pr", "merge", "12", "--squash", "--match-head-commit", HEAD, "--repo", "o/r",
     ]]
+
+
+def test_a_checkout_read_failing_after_the_merge_still_produces_and_announces(tmp_path, monkeypatch):
+    class Flaky(FakeCheckout):
+        def head(self):
+            raise land.LandError("`git rev-parse` did not answer")
+
+    result = _drive(tmp_path, monkeypatch, FakeGitHub([("ci", "SUCCESS")]), Flaky())
+    assert result["produce"][0]["ref"] == MERGED
+    assert "not fast-forwarded — LandError: `git rev-parse` did not answer" in _reply_text(result)
+
+
+def test_an_unexpected_raise_costs_the_file_not_the_tick(tmp_path, monkeypatch):
+    class Broken(FakeGitHub):
+        def pr(self, number):
+            raise RuntimeError("gh exploded")
+
+    result = _drive(tmp_path, monkeypatch, Broken([("ci", "SUCCESS")]), FakeCheckout())
+    (notice,) = result["notices"]
+    assert "drain error: RuntimeError: gh exploded processing land.md" in notice["text"]
+    assert (notice["source_file"], notice["verb"]) == ("land.md", "land")
+    assert (result["outbox"] / ".poisoned").exists()

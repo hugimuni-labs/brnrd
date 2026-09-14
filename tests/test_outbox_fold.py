@@ -193,3 +193,30 @@ def test_normalise_place(raw, expected):
 
 def test_fold_is_a_declared_internal_source():
     assert fold.SOURCE in protocol.INTERNAL_SOURCES
+
+
+def test_an_unexpected_raise_costs_the_file_not_the_tick(tmp_path, monkeypatch):
+    def boom(*_a, **_k):
+        raise RuntimeError("bench unreachable")
+
+    monkeypatch.setattr(fold, "read_head", boom)
+    result = _drive(tmp_path, monkeypatch, "---\nfold: src\n---\n")
+    (notice,) = result["notices"]
+    assert "drain error: RuntimeError: bench unreachable processing fold.md" in notice["text"]
+    assert (result["outbox"] / ".poisoned").exists()
+
+
+def test_an_ask_that_cannot_be_delivered_names_the_bench_file(tmp_path, monkeypatch):
+    def refuse(*_a, **_k):
+        raise OSError("inbox read-only")
+
+    import types
+
+    monkeypatch.setattr(fold, "protocol", types.SimpleNamespace(create_event=refuse))
+    result = _drive(tmp_path, monkeypatch, "---\nfold: src\n---\n")
+    path = result["home"] / "bench" / "hugimuni-labs__brnrd" / "src" / f"{result['head']}.md"
+    assert path.exists()
+    (notice,) = result["notices"]
+    assert notice["kind"] == "dropped"
+    assert str(path) in notice["text"] and "inbox read-only" in notice["text"]
+    assert (result["outbox"] / ".processed" / "fold.md").exists()

@@ -380,8 +380,12 @@ def handle(f: OutboxFile) -> Handled:
             kind="dropped",
         )
 
-    # 6. the daemon's checkout
-    checkout_line = _fast_forward(f, checkout, base, sha, pr)
+    # 6. the daemon's checkout — the merge has happened; a read failing here
+    # is said in the announcement, never allowed to swallow it
+    try:
+        checkout_line = _fast_forward(f, checkout, base, sha, pr)
+    except Exception as exc:  # noqa: BLE001 - the merge is done; see above
+        checkout_line = f"not fast-forwarded — {type(exc).__name__}: {exc}"
 
     # 7. produce, from the read sha
     at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())

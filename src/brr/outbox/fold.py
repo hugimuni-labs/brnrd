@@ -144,16 +144,26 @@ def handle(f: OutboxFile) -> Handled:
     if question:
         lines.append(f"question: {question}")
     lines.append(f"bench: {path}" + (" (already there — left as it was)" if existed else ""))
-    event_path = protocol.create_event(
-        f.ctx.inbox_dir, "fold", "\n\n".join(lines),
-        conversation_key=conversation_key,
-        repo_label=label,
-        focus_place=place,
-        focus_commit=commit,
-        focus_question=question,
-        focus_bench_path=str(path),
-        fold_by_run=str(getattr(task, "id", "") or ""),
-    )
+    try:
+        event_path = protocol.create_event(
+            f.ctx.inbox_dir, "fold", "\n\n".join(lines),
+            conversation_key=_one_line(conversation_key),
+            repo_label=_one_line(label),
+            focus_place=place,
+            focus_commit=commit,
+            focus_question=question,
+            focus_bench_path=str(path),
+            fold_by_run=str(getattr(task, "id", "") or ""),
+        )
+    except (OSError, ValueError) as exc:
+        # The store half already happened; say where, so the ask can be
+        # re-issued against the same file rather than lost behind a generic
+        # drain error.
+        return _refuse(
+            f, f"fold dropped: {place} — the bench file is at {path} but the ask "
+            f"was not delivered: {exc} — re-issue `fold: {place}` to ask again",
+            kind="dropped",
+        )
     f.ctx.emit(
         "fold_requested",
         run_id=getattr(task, "id", ""),

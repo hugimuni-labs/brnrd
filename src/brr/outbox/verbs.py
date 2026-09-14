@@ -1259,18 +1259,28 @@ def handle_event(f: OutboxFile) -> Handled:
 # ── move 4: the frame-owned verbs ──────────────────────────────────────
 
 
+def _guarded(f: OutboxFile, verb: str, run) -> Handled:
+    """Run a frame-owned verb inside the same per-file guard every moved
+    handler wears (#1379): a raise costs this file — quarantined, one
+    notice — never the tick."""
+    guard = daemon._OutboxEntryGuard(f.ctx.outbox_dir, f.path)
+    with guard:
+        return run(f)
+    return _handled(f, verb, 0)
+
+
 def handle_land(f: OutboxFile) -> Handled:
     """`land: <pr>` — the frame merges a PR it has read green (``land.py``)."""
     from . import land
 
-    return land.handle(f)
+    return _guarded(f, "land", land.handle)
 
 
 def handle_fold(f: OutboxFile) -> Handled:
     """`fold: <place>` — the frame opens a bench file and asks the weaver (``fold.py``)."""
     from . import fold
 
-    return fold.handle(f)
+    return _guarded(f, "fold", fold.handle)
 
 
 def _not_yet(f: OutboxFile, verb: str) -> Handled:
