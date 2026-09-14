@@ -7159,7 +7159,7 @@ def _queue_spawn_request(
     # ``strand_claims``), and the child's return carries it back
     # (``spawn_topics`` on ``spawn_completed``).
     spawn_topics = [
-        t for t in re.split(r"[\s,·]+", str(fm.get("topic") or fm.get("topics") or ""))
+        t for t in re.split(r"[\s,·]+", str(fm.get("topic") or ""))
         if t and heddles.SLUG_RE.match(t)
     ]
     if spawn_topics:
