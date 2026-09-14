@@ -31,12 +31,12 @@ names both its verb and its target in the message text (grepped across
 every `_record_outbox_notice` call site for `note:`/`reply:`/`gate:`) — but
 it is still a heuristic, and a concurrent notice from unrelated activity
 that happens to share both substrings would misattribute. The precise fix
-is a daemon-side one: give `_record_outbox_notice` (`daemon.py` around
-L6135-6188) an optional `source_file:` field threaded from each call site's
-`fpath.name`, so a reader here could match on identity instead of text. Not
-done in this change — see the constraint against daemon-side edits — and
-named here so the gap has one place to live instead of being rediscovered
-each time this heuristic misses.
+was daemon-side and has landed there (move 4, ``brr.outbox.notices``): every
+notice written while the drain handles a staged file carries that file's
+``source_file`` and ``verb``. The join on this side is still wired only for
+``cmd_cut``; passing ``source_file`` for ``--note``/``--reply``/``--gate``
+too is the remaining half, and until it is, those verdicts keep matching on
+text.
 
 **What "consumed" means.** `_drain_outbox` always ends a branch with
 `_retire_outbox_staging(fpath)`, whether the directive was accepted or
@@ -594,12 +594,11 @@ def find_matching_notice(
 
     *source_file*, when given, is tried first as an **identity** join
     against a notice's own ``source_file`` field (``daemon.py``'s
-    ``_record_outbox_notice``, threaded today only from the ``cut:``
-    branch's call sites — see that function's docstring) — an exact match
-    beats the text-substring heuristic below outright, closing the
-    correlation gap this module's own docstring names. Every other verb
-    passes no *source_file*, so their notices — which carry no
-    ``source_file`` field — keep matching purely on *needles*, unchanged.
+    ``_record_outbox_notice``, written on every notice the drain records
+    for a staged file since move 4) — an exact match beats the
+    text-substring heuristic below outright, closing the correlation gap
+    this module's own docstring names. Callers that pass no *source_file*
+    (every verb but ``cut`` today) keep matching purely on *needles*.
     """
     if source_file:
         for notice in notices:
@@ -679,8 +678,8 @@ def await_verdict(
 
     *source_file*, when given, is forwarded to :func:`find_matching_notice`
     as its identity-join key (``cmd_cut`` is the one caller that passes it
-    today, since ``cut:`` notices are the one kind that currently carries
-    ``source_file``).
+    today; since move 4 every drain notice carries ``source_file``, so the
+    other verbs could pass it too — not yet wired).
     """
     sleep = sleep or time.sleep
     clock = clock or time.monotonic
@@ -791,8 +790,9 @@ def await_verdict_batch(
     the same poll tick), so one real refusal can now amplify into at most
     one false :data:`FAILED` verdict instead of N. It does **not** decide
     *which* directive a genuinely ambiguous notice truly belongs to — that
-    identity question is exactly the daemon-side ``source_file`` gap this
-    module's docstring already names as out of scope here.
+    identity question is what ``source_file`` answers, which the daemon now
+    writes on every drain notice but this batch path does not yet join on
+    (see this module's docstring).
 
     Returns a list of ``(status, detail)`` pairs, one per entry of
     *directives*, in the same order.
