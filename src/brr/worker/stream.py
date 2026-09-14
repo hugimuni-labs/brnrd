@@ -14,6 +14,7 @@ Lines on ``main`` (``3def7ad6``): ``daemon.py:4794–4803`` and ``4827–5212``.
 from __future__ import annotations
 
 from .. import hooks as hooks_mod
+from .. import hud
 from .. import pause
 from .. import presence
 from .. import run_ledger
@@ -151,11 +152,11 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
             repo_label=repo_label,
             observer_run_id=task.id,
         )
-        daemon._write_live_portal_state(
-            outbox_dir,
-            inbox_dir,
-            eid,
-            task,
+        hud.write_live(hud.HUDInputs(
+            outbox_dir=outbox_dir,
+            inbox_dir=inbox_dir,
+            current_event_id=eid,
+            task=task,
             phase="running",
             attempt=attempt,
             runner_name=runner_name,
@@ -172,7 +173,7 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
             account_context=account_context,
             repo_label=repo_label,
             shuttle_home=shuttle_home,
-        )
+        ))
         if presence_id:
             presence.heartbeat(
                 brr_dir, presence_id,
@@ -235,11 +236,11 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
             repo_label=repo_label,
             observer_run_id=task.id,
         )
-        daemon._write_live_portal_state(
-            outbox_dir,
-            inbox_dir,
-            eid,
-            task,
+        hud.write_live(hud.HUDInputs(
+            outbox_dir=outbox_dir,
+            inbox_dir=inbox_dir,
+            current_event_id=eid,
+            task=task,
             phase="running",
             attempt=attempt,
             runner_name=runner_name,
@@ -257,7 +258,7 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
             repo_label=repo_label,
             refresh_levels=False,
             shuttle_home=shuttle_home,
-        )
+        ))
 
     # Pause-not-kill detection (spec step 1): a correspondent message
     # landing mid-call is a *new* id in this run's own pending-event
@@ -432,11 +433,11 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
         repo_label=repo_label,
         observer_run_id=task.id,
     )
-    daemon._write_live_portal_state(
-        outbox_dir,
-        inbox_dir,
-        eid,
-        task,
+    hud.write_live(hud.HUDInputs(
+        outbox_dir=outbox_dir,
+        inbox_dir=inbox_dir,
+        current_event_id=eid,
+        task=task,
         phase="finalizing",
         attempt=attempt,
         runner_name=runner_name,
@@ -453,7 +454,7 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
         account_context=account_context,
         repo_label=repo_label,
         shuttle_home=shuttle_home,
-    )
+    ))
     # Capture the resident's dominion edits before any branch/exit. One
     # call site covers success, retry, and hard failure: a clean
     # dominion no-ops, and on retry the next pass just re-captures any

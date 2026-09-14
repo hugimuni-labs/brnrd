@@ -55,10 +55,24 @@ BURN_HORIZON_HOURS = 5.0
 # the rate is noise, and a noisy projection is worse than no projection.
 BURN_MIN_SPAN_MINUTES = 30.0
 
-# Records are kept for twice the horizon, then pruned on write: enough history
-# that a full-horizon measurement is always available, bounded enough that the
-# file never becomes a thing anyone has to think about.
-_RETENTION_HOURS = BURN_HORIZON_HOURS * 2
+# Records are kept for a week, then pruned on write. Twice the burn horizon
+# (10 h) was enough for the burn, and nothing else: a seat that never closes
+# writes no run-dir snapshot, so the pruned log was the only gauge history, and
+# 2026-09-12 15:08Z → 09-14 00:37Z had no Claude weekly reading at all
+# (docs/analysis/the-cost-of-a-week.md, "the blind weekend"). A week covers
+# Claude's weekly window end to end.
+_RETENTION_HOURS = 7 * 24.0
+
+# Past this age a sample is compacted to one per hour per window (the newest
+# reading in that hour), so a week of history stays a small file. Full
+# resolution is kept exactly as long as it was before retention grew — twice
+# the burn horizon, the only reader that needs every minute. Measured on a
+# steady-state log (2026-09-14): a 24 h raw window made each `record` write
+# 2.6× the rows main's did (~6,300 vs ~2,400) on a call the heartbeat makes
+# per level read; 10 h raw plus a week of hourly rows is ~3,000. Compaction
+# happens on the rewrite `record` already does, so it is idempotent and needs
+# no schedule.
+_FULL_RESOLUTION_HOURS = BURN_HORIZON_HOURS * 2
 
 # Hard ceiling on retained records, in case a pathological caller samples far
 # faster than the throttle expects. Newest are kept.
@@ -220,6 +234,37 @@ def _recent_enough(records: Iterable[dict[str, Any]], cutoff: float) -> list[dic
     return kept
 
 
+def compact(records: list[dict[str, Any]], before: float) -> list[dict[str, Any]]:
+    """Thin samples older than *before* to one per hour per window. Order kept.
+
+    A window is ``(shell, window_minutes, resets_at)``, the identity the burn
+    already compares by, so a reset inside an hour keeps a sample on each side
+    of it. The newest sample in an hour stands for that hour. Samples at or
+    after *before*, and rows missing any identity field, pass through
+    unchanged.
+    """
+    keep: dict[tuple[Any, ...], int] = {}
+    for index, item in enumerate(records):
+        at = _num(item.get("at"))
+        minutes = _num(item.get("window_minutes"))
+        resets = _num(item.get("resets_at"))
+        if at is None or at >= before or minutes is None or resets is None:
+            continue
+        bucket = (item.get("shell"), minutes, resets, int(at // 3600.0))
+        previous = keep.get(bucket)
+        if previous is None or at >= (_num(records[previous].get("at")) or 0.0):
+            keep[bucket] = index
+    survivors = set(keep.values())
+    out = []
+    for index, item in enumerate(records):
+        at = _num(item.get("at"))
+        minutes = _num(item.get("window_minutes"))
+        resets = _num(item.get("resets_at"))
+        if at is None or at >= before or minutes is None or resets is None or index in survivors:
+            out.append(item)
+    return out
+
+
 def record(
     state_dir: Path | str | None,
     shell: str | None,
@@ -231,7 +276,9 @@ def record(
     A side effect of a read that already happened — call it wherever levels are
     obtained, never on a cadence of its own. Throttled per
     ``(shell, window)`` to :data:`_MIN_SAMPLE_INTERVAL_SECONDS`, pruned to
-    :data:`_RETENTION_HOURS` on write, and **silent on every failure**: a
+    :data:`_RETENTION_HOURS` and compacted past
+    :data:`_FULL_RESOLUTION_HOURS` (:func:`compact`) on write, and **silent on
+    every failure**: a
     missing directory, an unwritable log, a corrupt line, a levels dict of an
     unexpected shape all yield ``0`` rather than an exception. Telemetry about
     the work is never worth failing the work.
@@ -283,6 +330,7 @@ def record(
         # date: how long brr keeps history is a real-time question.
         combined = _recent_enough(existing, wall - _RETENTION_HOURS * 3600.0) + fresh
         combined.sort(key=lambda r: _num(r.get("at")) or 0.0)
+        combined = compact(combined, wall - _FULL_RESOLUTION_HOURS * 3600.0)
         if len(combined) > _MAX_RECORDS:
             combined = combined[-_MAX_RECORDS:]
 

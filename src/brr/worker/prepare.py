@@ -23,6 +23,7 @@ from .. import conversations
 from .. import forge_state
 from .. import gitops
 from .. import hooks as hooks_mod
+from .. import hud
 from .. import knowledge
 from .. import menus
 from .. import presence
@@ -975,11 +976,11 @@ def prepare(
     daemon._record_task_runner(task, runner_choice)
     run_ledger.mark_run_started(task, runner_name, outbox_dir, run_root)
     task.save(runs_dir)
-    daemon._write_live_portal_state(
-        outbox_dir,
-        inbox_dir,
-        eid,
-        task,
+    hud.write_live(hud.HUDInputs(
+        outbox_dir=outbox_dir,
+        inbox_dir=inbox_dir,
+        current_event_id=eid,
+        task=task,
         phase="preparing",
         runner_name=runner_name,
         runner_meta=runner_meta,
@@ -995,7 +996,7 @@ def prepare(
         account_context=account_context,
         repo_label=repo_label,
         shuttle_home=shuttle_home,
-    )
+    ))
 
     return Prepared(
         event=event,

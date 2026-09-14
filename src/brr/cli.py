@@ -107,7 +107,7 @@ HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "emotes",
     "relic", "gate-run", "close-check", "promise", "mood", "do", "notes",
     "await", "cut", "legend", "item", "goal", "queue", "envoy",
-    "dominion",
+    "dominion", "hud",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -1046,6 +1046,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--timeout", type=float, default=None, metavar="SECONDS",
         help="how long to wait for the daemon's verdict (default 30s)")
     cut_p.set_defaults(func=cmd_cut)
+
+    # Hidden per HIDDEN_COMMANDS, same family as `do`/`await`/`cut`: the
+    # seat reading its own instruments as data (move 5 of the daemon
+    # rewrite). Read-only — it stages nothing and waits on nothing.
+    hud_p = sub.add_parser("hud")
+    hud_mode = hud_p.add_mutually_exclusive_group()
+    hud_mode.add_argument(
+        "--json", action="store_true",
+        help="print the run's HUD as JSON — portal-state.json read through the "
+             "schema (an older portal's missing keys print as null)")
+    hud_mode.add_argument(
+        "--produce", action="store_true",
+        help="print what the frame attests as produce: the loom's four kinds, "
+             "the last refs, and the relic counts")
+    hud_p.add_argument(
+        "--outbox", default=None, metavar="DIR",
+        help="outbox dir to read (default: this run's own, via "
+             "BRR_OUTBOX_DIR / BRR_PORTAL_STATE)")
+    hud_p.set_defaults(func=cmd_hud)
 
     p = sub.add_parser("kb", help="search home/repo knowledge; omit query to print graph shape")
     p.add_argument("query", nargs="?", default=None,
@@ -5115,6 +5134,50 @@ def cmd_drop(args):
         f"[brnrd drop] dropped {len(dropped)} process(es): "
         f"{pause_mod.describe_paused(dropped)}"
     )
+    return 0
+
+
+def cmd_hud(args):
+    """``brnrd hud`` — print this run's HUD: the bar line, ``--json``, or ``--produce``.
+
+    The default is the chip's bar line rendered by the hooks' own renderer from
+    the same :class:`brr.hud.HUD` object ``--json`` prints, so the verb and the
+    chip cannot drift. Exit 1 when there is no portal to read (outside a wake,
+    or before the daemon's first write).
+    """
+    import sys
+
+    from . import hud as hud_mod
+
+    if args.outbox:
+        outbox_dir, error = _resolve_explicit_outbox(args.outbox)
+        if error:
+            print(error, file=sys.stderr)
+            return 1
+    else:
+        outbox_dir = _wake_outbox_dir()
+    if outbox_dir is None:
+        print(
+            "brnrd hud: no run outbox — run it inside a wake "
+            "(BRR_OUTBOX_DIR / BRR_PORTAL_STATE) or pass --outbox DIR",
+            file=sys.stderr,
+        )
+        return 1
+    path = Path(outbox_dir) / hud_mod.PORTAL_STATE_NAME
+    current = hud_mod.HUD.load(path)
+    if current is None:
+        print(
+            f"brnrd hud: no readable {hud_mod.PORTAL_STATE_NAME} at {path} — "
+            "the daemon writes it on the run's first heartbeat",
+            file=sys.stderr,
+        )
+        return 1
+    if args.json:
+        sys.stdout.write(current.to_json())
+    elif args.produce:
+        print(hud_mod.render_produce(current))
+    else:
+        print(hud_mod.render_bar(current, outbox_dir=Path(outbox_dir)))
     return 0
 
 
