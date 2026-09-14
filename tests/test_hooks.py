@@ -1461,8 +1461,10 @@ def test_stop_does_not_nag_for_self_retiring_spawn_completion(tmp_path):
     assert code == 0
     assert out.get("decision") != "block"
     assert "0 pending event(s)" in out["hookSpecificOutput"]["additionalContext"]
-    assert _says(out["hookSpecificOutput"]["additionalContext"], "1 finished spawn(s) observed")
-    assert _says(out["hookSpecificOutput"]["additionalContext"], "no address needed; will retire at run end")
+    # 2026-09-14: named until noted, not compressed to a count — the thread
+    # stays on the line as `<id suffix> <status>` until this run notes its
+    # event, never "will retire at run end" (that framing is gone).
+    assert _says(out["hookSpecificOutput"]["additionalContext"], "▷ finished: child done")
 
 
 def test_stop_nag_selects_action_event_beside_finished_spawn(tmp_path):
@@ -1490,7 +1492,7 @@ def test_stop_nag_selects_action_event_beside_finished_spawn(tmp_path):
     assert not _says(out["reason"], "child completion is a self-retiring fact")
     context = out["hookSpecificOutput"]["additionalContext"]
     assert "1 pending event(s)" in context
-    assert _says(context, "1 finished spawn(s) observed")
+    assert _says(context, "▷ finished: done done")
 
 
 # ── Pending-event letter chrome ──────────────────────────────────────────
@@ -4436,7 +4438,7 @@ def test_draws_chip_renders_self_and_strands():
             },
         },
     }
-    assert hooks._draws_chip(resources) == "me 1.2m · ▷2 3.4m"
+    assert hooks._draws_chip(resources) == "me 1.2m · ▷2·a·b 3.4m"
 
 
 def test_draws_chip_self_only_when_no_strands():
@@ -4463,7 +4465,9 @@ def test_draws_chip_never_fabricates_a_zero_for_an_absent_self():
 
 def test_draws_chip_renders_a_bare_count_when_no_strand_has_a_reading_yet():
     """A strand still counts toward `N` before its own first heartbeat has
-    metered anything — but the sum is absent, not a fabricated 0."""
+    metered anything — but the summed *tokens* stay absent, not a
+    fabricated 0. Ids still render when known (2026-09-14): the token sum
+    and the id naming are independent facts."""
     resources = {
         "quota": {
             "draws": {
@@ -4471,6 +4475,24 @@ def test_draws_chip_renders_a_bare_count_when_no_strand_has_a_reading_yet():
                 "strands": [
                     {"run_id": "run-a", "title": None, "weighted": None},
                     {"run_id": "run-b", "title": None, "weighted": None},
+                ],
+            },
+        },
+    }
+    assert hooks._draws_chip(resources) == "▷2·a·b"
+
+
+def test_draws_chip_omits_ids_when_coverage_is_partial():
+    """One strand's ``run_id`` missing among two: never a partial id list —
+    that would read as complete and isn't. The bare count is the honest
+    fallback, the same "never fabricate" rule the token sum follows."""
+    resources = {
+        "quota": {
+            "draws": {
+                "self": None,
+                "strands": [
+                    {"run_id": "run-a", "title": None, "weighted": None},
+                    {"run_id": "", "title": None, "weighted": None},
                 ],
             },
         },
@@ -4489,11 +4511,33 @@ def test_draws_chip_names_the_one_thread_by_its_id_suffix():
         {"run_id": "run-260913-2017-tv63", "title": "x", "weighted": None},
     ]}}}
     assert hooks._draws_chip(resources) == "▷1·tv63"
+
+
+def test_draws_chip_names_up_to_three_threads_bare_beyond():
+    """2026-09-14: the single-thread naming extends to up to three threads,
+    joined with `·`; a fourth falls back to the bare count — the ids would
+    out-cost their gain past a scannable width, and by then `to: <id>`
+    needs a `portal-state.json` read regardless."""
     two = {"quota": {"draws": {"self": None, "strands": [
         {"run_id": "run-a", "title": "x", "weighted": None},
         {"run_id": "run-b", "title": "y", "weighted": None},
     ]}}}
-    assert hooks._draws_chip(two) == "▷2"
+    assert hooks._draws_chip(two) == "▷2·a·b"
+
+    three = {"quota": {"draws": {"self": None, "strands": [
+        {"run_id": "run-a", "title": "x", "weighted": 100_000},
+        {"run_id": "run-b", "title": "y", "weighted": 200_000},
+        {"run_id": "run-c", "title": "z", "weighted": 300_000},
+    ]}}}
+    assert hooks._draws_chip(three) == "▷3·a·b·c 600k"
+
+    four = {"quota": {"draws": {"self": None, "strands": [
+        {"run_id": "run-a", "title": "w", "weighted": None},
+        {"run_id": "run-b", "title": "x", "weighted": None},
+        {"run_id": "run-c", "title": "y", "weighted": None},
+        {"run_id": "run-d", "title": "z", "weighted": None},
+    ]}}}
+    assert hooks._draws_chip(four) == "▷4"
 
 
 def test_draws_chip_none_without_a_draws_facet():
@@ -4587,6 +4631,113 @@ def test_render_bar_renders_the_draws_chip_beside_quota():
     assert line is not None
     assert "q S83" in line
     assert _says(line, "me 1.2m · ▷1·a 3.4m")
+
+
+# ── spawn_refused — a refused admission, named beside `▷` (2026-09-14, his
+# ask: "you need visibility" — a dispatch he could not check `notices`
+# against was reported "dispatched" 2026-09-09) ─────────────────────────
+
+
+def test_spawn_refused_chip_present_for_a_matching_refusal():
+    notices = [_kind_notice(
+        "spawn refused: evt-1 — binding quota floor is critical",
+        "refused", "run",
+    )]
+    assert hooks._spawn_refused_chip(notices) == (
+        "✗ spawn refused · evt-1 — binding quota floor is critical"
+    )
+
+
+def test_spawn_refused_chip_absent_without_a_spawn_refused_notice():
+    # A refused note/gate/event directive is real — !N already counts it —
+    # but it isn't this chip's business; narrowed by the text prefix so it
+    # never misnames one "spawn refused".
+    notices = [_kind_notice("note dropped: event not pending", "refused", "run")]
+    assert hooks._spawn_refused_chip(notices) is None
+    assert hooks._spawn_refused_chip([]) is None
+
+
+def test_spawn_refused_chip_ignores_advisory_and_standing():
+    # Same filter `_notices_chip` uses (`_counted_notices`): an advisory or
+    # standing notice is not a fresh refusal.
+    standing = [_kind_notice(
+        "spawn refused: repo 'x' is not served", "refused", "standing",
+    )]
+    assert hooks._spawn_refused_chip(standing) is None
+    advisory = [_kind_notice(
+        "spawn refused: repo 'x' is not served", "advisory", "run",
+    )]
+    assert hooks._spawn_refused_chip(advisory) is None
+
+
+def test_spawn_refused_chip_takes_the_most_recent_match():
+    # `.notices.jsonl` is append-only (#1266) — "most recent" is the list's
+    # own last matching entry, no timestamp parsing needed.
+    notices = [
+        _kind_notice("spawn refused: first reason", "refused", "run"),
+        _kind_notice("spawn refused: second reason", "refused", "run"),
+    ]
+    assert hooks._spawn_refused_chip(notices) == "✗ spawn refused · second reason"
+
+
+def test_render_bar_shows_spawn_refused_beside_draws():
+    resources = {
+        "quota": {
+            "status": "known", "summary": "session 83% left",
+            "draws": {"self": 1_200_000, "strands": []},
+        },
+    }
+    notices = [_kind_notice(
+        "spawn refused: evt-1 — binding quota floor is critical",
+        "refused", "run",
+    )]
+    payload = _bar_payload(resources=resources, notices=notices)
+    rendered = hooks.format_delta(payload, rendered_chips={})
+    assert rendered is not None
+    bar = rendered.splitlines()[0]
+    assert "✗ spawn refused · evt-1 — binding quota floor is critical" in bar
+    assert bar.index("me 1.2m") < bar.index("✗ spawn refused")
+
+
+def test_render_bar_shows_spawn_refused_even_without_a_draws_chip():
+    # Admission can refuse before a child run — and so a `draws` strand row
+    # — ever exists; the refusal must still surface.
+    notices = [_kind_notice(
+        "spawn refused: a strand-stack run cannot spawn", "refused", "run",
+    )]
+    payload = _bar_payload(notices=notices)
+    rendered = hooks.format_delta(payload, rendered_chips={})
+    assert rendered is not None
+    assert "✗ spawn refused · a strand-stack run cannot spawn" in rendered.splitlines()[0]
+
+
+def test_spawn_refused_chip_appears_once_then_falls_silent():
+    """DELTA-classed like `!N` (see `BAR_SEGMENTS`): the plain change-gate
+    every DELTA chip already gets is the entire "once per refusal, until
+    the next boundary after it was rendered" lifetime — no bespoke
+    consumed/seen tracking added for this."""
+    notices = [_kind_notice(
+        "spawn refused: evt-1 — binding quota floor is critical",
+        "refused", "run",
+    )]
+    payload = _bar_payload(notices=notices)
+
+    rendered_chips: dict[str, str] = {}
+    first = hooks.format_delta(payload, rendered_chips=rendered_chips)
+    assert first is not None
+    assert "✗ spawn refused · evt-1 — binding quota floor is critical" in first
+
+    second = hooks.format_delta(payload, last_chips=rendered_chips)
+    assert second is None or "✗ spawn refused" not in second
+
+    # A genuinely new refusal (different text) re-earns its own boundary.
+    notices2 = notices + [_kind_notice(
+        "spawn refused: environment 'host' is not spawnable", "refused", "run",
+    )]
+    payload2 = _bar_payload(notices=notices2)
+    third = hooks.format_delta(payload2, last_chips=rendered_chips)
+    assert third is not None
+    assert "✗ spawn refused · environment 'host' is not spawnable" in third
 
 
 def test_quota_chip_disambiguates_a_repeated_first_letter():
@@ -5078,9 +5229,10 @@ def test_closeout_excludes_spawn_completed_from_obligation_count():
     assert "0 pending event(s)" in rendered
     # Must NOT demand address.
     assert "Address each" not in rendered
-    # spawn_completed must appear as a distinct fact line, not an obligation.
-    assert _says(rendered, "1 finished spawn(s) observed")
-    assert "no address needed" in rendered
+    # spawn_completed must appear as a distinct fact line, not an obligation —
+    # named by id suffix and status (2026-09-14: no count-only/"will retire"
+    # compression while it stands unnoted).
+    assert _says(rendered, "▷ finished: done done")
     # The event id should appear (visibility constraint #1).
     assert "evt-spawn-done" in rendered
 
@@ -5118,8 +5270,9 @@ def test_closeout_still_shows_action_events_alongside_finished_spawns():
     assert "1 pending event(s)" in rendered
     assert "Address each" in rendered
     assert "evt-followup" in rendered
-    # Finished spawn reported separately.
-    assert "1 finished spawn(s)" in rendered
+    # Finished spawn reported separately, named — no status carried here, so
+    # it renders as the outcome-never-determined case (#730).
+    assert _says(rendered, "▷ finished: done status unknown")
     assert "evt-done" in rendered
 
 
@@ -5151,7 +5304,13 @@ def test_closeout_names_live_children_handed_to_next_run():
 
 
 def test_finished_spawn_outcomes_render_identically_at_both_boundaries():
-    """The bar and seed/closeout prose share one outcome-aware fact line."""
+    """The bar and seed/closeout prose share one outcome-aware fact line.
+
+    2026-09-14 (his ask, #1966 follow-on): named per thread as `<id suffix>
+    <status>`, oldest->newest by event id, never compressed to a count and
+    never "will retire at run end" while a thread is still pending — a
+    thread leaves the line only when the seat notes its event.
+    """
     run_id = "run-parent"
     cases = [
         (
@@ -5160,8 +5319,7 @@ def test_finished_spawn_outcomes_render_identically_at_both_boundaries():
                 "spawn_parent_run_id": run_id, "spawned_by_run": "run-ok",
                 "spawn_status": "done",
             }],
-            "- ▷ 1 finished spawn(s) observed — no address needed; "
-            "will retire at run end.",
+            "- ▷ finished: ok done",
         ),
         (
             [{
@@ -5169,29 +5327,30 @@ def test_finished_spawn_outcomes_render_identically_at_both_boundaries():
                 "spawn_parent_run_id": run_id, "spawned_by_run": "run-error",
                 "spawn_status": "error",
             }],
-            "- ▷ 1 finished spawn(s) — 1 error (run-error).",
+            "- ▷ finished: error error",
         ),
         (
             # A thread stopped after its submit finishes ``released``: the
-            # seat's *stopped after submit* row, never an error.
+            # seat's *stopped after submit* row, never an error — and, same
+            # as every other outcome, named and kept until noted.
             [{
                 "id": "evt-released", "source": "spawn_completed",
                 "spawn_parent_run_id": run_id, "spawned_by_run": "run-released",
                 "spawn_status": "released",
             }],
-            "- ▷ 1 finished spawn(s) observed — no address needed; "
-            "will retire at run end.",
+            "- ▷ finished: released released",
         ),
         (
             [{
-                "id": "evt-released-mute", "source": "spawn_completed",
+                "id": "evt-mute", "source": "spawn_completed",
                 "spawn_parent_run_id": run_id, "spawned_by_run": "run-mute",
                 "spawn_status": "released", "spawn_report_found": False,
             }],
-            "- ▷ 1 finished spawn(s) — 1 released after submit "
-            "(run-mute; no report written).",
+            "- ▷ finished: mute released (no report)",
         ),
         (
+            # Sorted oldest->newest by event id (`evt-error` < `evt-ok`
+            # lexicographically) — independent of input list order.
             [
                 {
                     "id": "evt-ok", "source": "spawn_completed",
@@ -5204,34 +5363,34 @@ def test_finished_spawn_outcomes_render_identically_at_both_boundaries():
                     "spawned_by_run": "run-error", "spawn_status": "error",
                 },
             ],
-            "- ▷ 2 finished spawn(s) — 1 ok, 1 error (run-error).",
+            "- ▷ finished: error error · ok done",
         ),
         (
             [{
-                "id": "evt-no-report", "source": "spawn_completed",
+                "id": "evt-noreport", "source": "spawn_completed",
                 "spawn_parent_run_id": run_id,
-                "spawned_by_run": "run-no-report", "spawn_status": "done",
+                "spawned_by_run": "run-noreport", "spawn_status": "done",
                 "spawn_report_found": False,
             }],
-            "- ▷ 1 finished spawn(s) — 1 ok "
-            "(run-no-report; no report written).",
+            "- ▷ finished: noreport done (no report)",
         ),
         # An event with no ``spawn_status`` is the case this line exists for:
-        # an outcome that was never determined. It must NOT take the all-clear
-        # branch — "no address needed" is itself a claim about outcome, and
-        # restating it here would reproduce #730 in the one place nobody
-        # drives. Reachable in practice: every completion event minted before
-        # this shipped carries no status, and daemon.py is restart-only.
+        # an outcome that was never determined. It renders literally as
+        # ``status unknown`` — never folded into a healthier word, which
+        # would restate #730's defect in the one place nobody drives.
+        # Reachable in practice: every completion event minted before this
+        # shipped carries no status, and daemon.py is restart-only.
         (
             [{
                 "id": "evt-legacy", "source": "spawn_completed",
                 "spawn_parent_run_id": run_id,
                 "spawned_by_run": "run-legacy",
             }],
-            "- ▷ 1 finished spawn(s) — 1 status unknown (run-legacy).",
+            "- ▷ finished: legacy status unknown",
         ),
-        # Parts sum to the whole: a known-good spawn beside an undetermined
-        # one accounts for both, rather than suppressing the "ok" term.
+        # Every spawn is accounted for, individually — a known-good spawn
+        # beside an undetermined one names both, rather than compressing
+        # either.
         (
             [
                 {
@@ -5245,7 +5404,7 @@ def test_finished_spawn_outcomes_render_identically_at_both_boundaries():
                     "spawned_by_run": "run-unknown",
                 },
             ],
-            "- ▷ 2 finished spawn(s) — 1 ok, 1 status unknown (run-unknown).",
+            "- ▷ finished: ok done · unknown status unknown",
         ),
     ]
 
@@ -5262,9 +5421,39 @@ def test_finished_spawn_outcomes_render_identically_at_both_boundaries():
             rendered = hooks.format_delta(payload, stop=stop)
             fact_lines = [
                 line for line in rendered.splitlines()
-                if line.startswith("- ▷ ")
+                if line.startswith("- ▷ finished:")
             ]
             assert fact_lines == [expected], f"stop={stop}, events={events}"
+
+
+def test_finished_spawns_line_caps_shown_ids_and_names_the_newest():
+    """More than six pending completions: the six newest are named, the
+    rest fold into a `+N more` tail rather than reopening the count-only
+    compression this whole change replaces."""
+    run_id = "run-parent"
+    events = [
+        {
+            "id": f"evt-{i:02d}", "source": "spawn_completed",
+            "spawn_parent_run_id": run_id, "spawned_by_run": f"run-t{i}",
+            "spawn_status": "done",
+        }
+        for i in range(1, 9)  # evt-01..evt-08, eight pending completions
+    ]
+    payload = _bar_payload(
+        run={"id": run_id},
+        attention={
+            "pending_event_count": len(events), "pending_outbox_file_count": 0,
+        },
+        inbound={"events": events},
+    )
+    rendered = hooks.format_delta(payload, stop=False)
+    line = next(l for l in rendered.splitlines() if l.startswith("- ▷ finished:"))
+    # The two oldest (t1, t2) are folded away; the six newest (t3..t8) named.
+    assert "t1 done" not in line
+    assert "t2 done" not in line
+    for i in range(3, 9):
+        assert f"t{i} done" in line
+    assert line.endswith("+2 more")
 
 
 def test_spawn_completed_for_different_run_still_counts_as_obligation():
