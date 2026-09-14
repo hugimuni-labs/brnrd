@@ -117,6 +117,8 @@
 	import ConfigRequests from '$lib/ConfigRequests.svelte';
 	import { NewsAuthError, fetchNews, type NewsItem } from '$lib/news';
 	import NewsLane from '$lib/NewsLane.svelte';
+	import { BenchAuthError, fetchBench, type BenchFile } from '$lib/bench';
+	import BenchLane from '$lib/BenchLane.svelte';
 	import { sectionFrameLit } from '$lib/collapse';
 	import { machineTapVerdict } from '$lib/machineDock';
 	import { fetchDaemonConfig, type DaemonConfigEntry } from '$lib/daemonConfig';
@@ -405,6 +407,9 @@
 
 	let newsItems = $state<NewsItem[] | null>(null);
 	let newsError = $state<string | null>(null);
+
+	let benchFiles = $state<BenchFile[] | null>(null);
+	let benchError = $state<string | null>(null);
 
 	let surfaceData = $state<SurfaceResponse | null>(null);
 	let surfaceError = $state<string | null>(null);
@@ -1414,6 +1419,15 @@
 			}
 		}
 		try {
+			const bench = await fetchBench();
+			benchFiles = bench.files;
+			benchError = null;
+		} catch (e) {
+			if (!(e instanceof BenchAuthError)) {
+				benchError = e instanceof Error ? e.message : 'bench fetch failed';
+			}
+		}
+		try {
 			const surface = await fetchSurface();
 			surfaceData = surface;
 			surfaceError = null;
@@ -1517,6 +1531,10 @@
 			{#if (newsItems?.length ?? 0) > 0 || newsError}<NewsLane
 					items={newsItems ?? []}
 					error={newsError}
+				/>{/if}
+			{#if (benchFiles?.length ?? 0) > 0 || benchError}<BenchLane
+					files={benchFiles ?? []}
+					error={benchError}
 				/>{/if}
 		{/snippet}
 		{#snippet content()}
@@ -2138,6 +2156,12 @@
 			     above — see NewsLane.svelte. -->
 			{#if (newsItems && newsItems.length > 0) || newsError}
 				<NewsLane items={newsItems ?? []} error={newsError} />
+			{/if}
+			<!-- The bench (design-the-loom.md §6/§18): folds and inspections at
+			     a place. Same mount-only-when-there's-something contract as
+			     NewsLane/ConfigRequests above — see BenchLane.svelte. -->
+			{#if (benchFiles && benchFiles.length > 0) || benchError}
+				<BenchLane files={benchFiles ?? []} error={benchError} />
 			{/if}
 			<!-- The graph: unblocked items colorful on top — glance, decide or
 			     do — blocked ones greyed below, live-held ones framed in place. -->
