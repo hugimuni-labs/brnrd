@@ -25,10 +25,14 @@
 	// placed one character at a time (never a whole-line fillText) so a
 	// font with different advance widths for '│├─' than for letters still
 	// lands every column on the grid.
-	const FONT_SIZE = 17;
-	const ROOT_X = 92;
-	const ROW_Y0 = 150;
-	const ROW_H = 56;
+	// Sized so the widest row (30 chars — the 18-char thread leaves under
+	// their `│       ├── ` prefix, not daemon.py's 21) reaches ~69% of the
+	// 1280-wide frame; the row count and vertical band (below the header,
+	// above the cloth line) pick ROW_Y0/ROW_H.
+	const FONT_SIZE = 44;
+	const ROOT_X = 90;
+	const ROW_Y0 = 125;
+	const ROW_H = 60;
 
 	ctx.font = `${FONT_SIZE}px ${mono}`;
 	const CHAR_W = ctx.measureText('0').width;
@@ -82,11 +86,18 @@
 		.filter((row) => row.role === 'thread')
 		.sort((a, b) => a.thread - b.thread);
 
+	// The right margin: one fixed column, not a per-row offset — the way
+	// `tree` output leaves room for `ls -l`-style columns beside the names
+	// instead of ragging each one to its own line length. Cleared past the
+	// widest row's leaf beads (leafEndX + ~3.7 chars) with a gap so nothing
+	// grazes it.
+	const RECEIPT_X = Math.max(...threadRows.map((row) => row.leafEndX)) + CHAR_W * 5;
+
 	const fileTarget = {
 		x: ROOT_X - 6,
-		y: daemonRow.y - 15,
+		y: daemonRow.y - 23,
 		w: daemonRow.leafEndX - ROOT_X + 96,
-		h: 30
+		h: 46
 	};
 	const menu = {
 		x: daemonRow.leafEndX + 36,
@@ -96,7 +107,7 @@
 	};
 	const splitTarget = { x: menu.x - 6, y: menu.split - 12, w: 74, h: 24 };
 	const askRow = threadRows[1];
-	const askBox = { x: askRow.leafEndX + 230, y: askRow.y - 70, w: 184, h: 104 };
+	const askBox = { x: RECEIPT_X, y: askRow.y - 70, w: 184, h: 104 };
 	const grantButton = { x: askBox.x + 76, y: askBox.y + 61, w: 86, h: 32 };
 	const pointer = { x: 1080, y: 118, visible: false, manualUntil: 0 };
 	const interaction = { menuUntil: 0, splitAt: 0, grantAt: 0, grantPhase: null };
@@ -278,7 +289,7 @@
 
 	function drawThreadAnnotations(thread, markerProgress, fuel, alpha, bloom = 0) {
 		const row = thread.row;
-		const barX = row.leafEndX + 55;
+		const barX = RECEIPT_X;
 		text(`${Math.round(fuel * 150)}k / 150k`, barX, row.y - 14, 9, colors.quiet, 'left', alpha);
 		drawFuel(barX, row.y + 2, fuel, thread.color, alpha, bloom);
 		const p = clamp(markerProgress);
@@ -380,16 +391,39 @@
 		}
 	}
 
-	function drawLoot(thread, phase, at, alpha) {
+	// The badge falls in at `at`, holds, then hands off to `drawMerged` at
+	// `mergeAt` (the same instant the merge ring fires) — a crossfade in the
+	// same column, not two receipts sharing one spot forever.
+	function drawLoot(thread, phase, at, mergeAt, alpha) {
 		const fall = range(phase, at, at + 0.52);
 		const settle = range(phase, at + 0.52, at + 0.8);
 		if (fall <= 0) return;
+		const holdAlpha = alpha * (1 - range(phase, mergeAt, mergeAt + 0.3));
+		if (holdAlpha <= 0) return;
 		const row = thread.row;
-		const x = row.leafEndX + 210;
+		const x = RECEIPT_X + 75;
 		const y = row.y - 32 + fall * 32 - Math.sin(fall * Math.PI) * 11;
-		glowText('✣ PR', x, y, 19, colors.bright, 'center', alpha);
-		text(thread.loot, x, y + 25, 9, colors.quiet, 'center', alpha * settle);
+		glowText('✣ PR', x, y, 19, colors.bright, 'center', holdAlpha);
+		text(thread.loot, x, y + 25, 9, colors.quiet, 'center', holdAlpha * settle);
 		drawBloom(x, row.y, phase, at + 0.28, colors.bright);
+	}
+
+	// The "merged" receipt — used to live as two hand-placed lines in the
+	// cloth footer (`#1965 merged` / `#1966 merged`); now it's the third
+	// item in the thread's own column, beside its fuel bar and PR badge,
+	// at the row it belongs to, fading in as the PR badge above fades out.
+	function drawMerged(thread, phase, at, alpha) {
+		const show = range(phase, at, at + 0.3);
+		if (show <= 0) return;
+		text(
+			`${thread.loot} merged`,
+			RECEIPT_X,
+			thread.row.y + 22,
+			10,
+			colors.quiet,
+			'left',
+			alpha * show
+		);
 	}
 
 	function drawMergeRing(thread, phase, at, alpha) {
@@ -453,10 +487,12 @@
 		const grantX = grantButton.x + grantButton.w / 2;
 		const grantY = grantButton.y + grantButton.h / 2;
 		drawBloom(grantX, grantY, phase, grantedAt, colors.ice);
-		drawLoot(threads[0], phase, 11.15, alpha);
-		drawLoot(threads[2], phase, 14.1, alpha);
+		drawLoot(threads[0], phase, 11.15, 12.0, alpha);
+		drawLoot(threads[2], phase, 14.1, 15.3, alpha);
 		drawMergeRing(threads[0], phase, 12.0, alpha);
 		drawMergeRing(threads[2], phase, 15.3, alpha);
+		drawMerged(threads[0], phase, 12.0, alpha);
+		drawMerged(threads[2], phase, 15.3, alpha);
 	}
 
 	function drawCloth(phase) {
@@ -464,16 +500,6 @@
 		const top = 632;
 		line({ x: 70, y: top }, { x: W - 70, y: top }, colors.amber, 1, 0.52);
 		text('CLOTH', 72, top - 14, 9, colors.mute);
-		if (phase >= 12) {
-			const first = range(phase, 12, 12.55) * alpha;
-			text('✣', 102, top + 22, 13, colors.bright, 'left', first);
-			text('#1965 merged', 124, top + 22, 11, colors.ink, 'left', first);
-		}
-		if (phase >= 15.2) {
-			const second = range(phase, 15.2, 15.75) * alpha;
-			text('✣', 310, top + 22, 13, colors.bright, 'left', second);
-			text('#1966 merged', 332, top + 22, 11, colors.ink, 'left', second);
-		}
 		if (phase >= 16) {
 			text(
 				'crew converged · trunk +2',
