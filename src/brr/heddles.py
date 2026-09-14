@@ -1058,18 +1058,20 @@ def index(
             at = _epoch(row.get("at"))
             if at is None or not row.get("ref"):
                 continue
-            if cutoff is not None and at < cutoff:
-                continue
             rows.append((at, order, row))
             order += 1
     rows.sort(key=lambda item: (item[0], item[1]))
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
-    for _, _, row in rows:
+    for at, _, row in rows:
         ref = str(row.get("ref"))
         if ref in seen:
             continue
         seen.add(ref)
+        # `since` filters after the dedupe: an act is dated by its first
+        # assignment, so a later duplicate row never re-enters the window.
+        if cutoff is not None and at < cutoff:
+            continue
         out.append({
             "kind": row.get("kind"), "ref": ref, "at": row.get("at"),
             "run": row.get("run") or "",

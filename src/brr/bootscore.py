@@ -975,8 +975,6 @@ def format_kernel(score: BootScore) -> str:
             "the report at its declared path · the branch published · the "
             "return message on stdout (to the parent, never a chat)"
         )
-        lines.append("")
-        lines.append("first outward ⇒ .topic — this run's topic: an existing heddle ∨ null")
     else:
         lines.append("×3 standing · self-owned")
         lines.append("op⇐reply owed — answer the person")

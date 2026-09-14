@@ -274,6 +274,13 @@ def for_act(
     live slug.
     """
     say = notice or (lambda _kind, _text: None)
+    # The run's `.topic` settles first, whatever the act says: a control
+    # written before this act is the boot's answer, and it — not the act —
+    # is what confirms or overrides the waking event's proposal.
+    settled = settle(
+        task, outbox_dir=outbox_dir, account_home=account_home,
+        inbox_dir=inbox_dir, notice=notice, is_strand=is_strand,
+    )
     raw = str((frontmatter or {}).get("topic") or "").strip()
     if raw and account_home is not None:
         for token in raw.replace(",", " ").replace("·", " ").split():
@@ -281,10 +288,6 @@ def for_act(
             if slug:
                 return slug
         say("advisory", f"topic: {raw!r} names no heddle — the act inherits the run's topic")
-    settled = settle(
-        task, outbox_dir=outbox_dir, account_home=account_home,
-        inbox_dir=inbox_dir, notice=notice, is_strand=is_strand,
-    )
     if settled:
         return settled
     return run_topic(task)
