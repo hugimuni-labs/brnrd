@@ -101,6 +101,7 @@ from . import wake_request as wake_request_mod
 from . import runner_select
 from . import schedule as schedule_mod
 from . import shuttle
+from . import tick as tick_mod
 from . import spending_plan
 from . import statusline
 from . import sync
@@ -6909,7 +6910,12 @@ def _change_token(payload: dict[str, object]) -> str:
         # run-260907-2223-avku: 25+ Stop re-fires on an accepted bolt and
         # an accepted `hold:`, ~270k context each). The bar reads
         # ``resources`` from the payload directly, never through this token.
-        if key not in {"generated_at", "change_token", "scm", "produce", "resources"}
+        # ``tick`` moves every loop iteration by construction (move 2b) — the
+        # same reason ``generated_at`` is out: a token that moves on its own
+        # is a token that re-fires Stop.
+        if key not in {
+            "generated_at", "change_token", "scm", "produce", "resources", "tick",
+        }
     }
     budget = stable.get("budget")
     if isinstance(budget, dict):
@@ -7432,10 +7438,19 @@ def _write_live_portal_state(
                 "since": live_shuttle.since,
                 "run_id": live_shuttle.run_id,
             }
+        # The frame's beat (move 2b): which loop iteration this capsule
+        # belongs to. ``generated_at`` stays — nothing reads ``tick`` yet
+        # but the chip. Read from memory in the daemon (the loop is in this
+        # process), so the boundary path pays no I/O for it.
+        frame_tick = tick_mod.current(shuttle_home)
         payload: dict[str, object] = {
             "version": 1,
             "generated_at": time.strftime(
                 "%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "tick": (
+                {"n": frame_tick.n, "at": frame_tick.at}
+                if frame_tick is not None else None
+            ),
             "run": {
                 "id": task.id,
                 "event_id": current_event_id,
@@ -19909,8 +19924,26 @@ def start(
     # its call site below): the loop ticks every few seconds, and a warning
     # that repeats every tick is a warning nobody reads.
     _parked_warn_failed = False
+    # The frame's beat (move 2b, design-the-loom.md §17 "the metronome"):
+    # one numbered tick per iteration of this loop, advanced first — before
+    # the sweeps, the reap, schedules and dispatch — so everything the
+    # iteration emits names the tick it belongs to. This is the only
+    # advance point: the loop has one wait (``wake.wait`` at its bottom) and
+    # no ``continue``. Persisted under the account home, so a re-exec
+    # resumes the count rather than repeating it.
+    tick_home = account.context_home_root(account_context)
+    _tick_warn_failed = False
     try:
         while running:
+            try:
+                tick_mod.advance(tick_home)
+            except Exception as exc:  # noqa: BLE001 — a beat must never sink the loop
+                if not _tick_warn_failed:
+                    _tick_warn_failed = True
+                    print(
+                        "[brnrd] frame tick not persisted "
+                        f"(reported once per process): {exc}"
+                    )
             if time.monotonic() >= next_zombie_sweep:
                 next_zombie_sweep = time.monotonic() + _ZOMBIE_SWEEP_INTERVAL_SECONDS
                 _sweep_zombie_runs(account_context)

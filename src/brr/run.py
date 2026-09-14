@@ -297,8 +297,17 @@ class Run:
         protocol._atomic_write(path, self.to_frontmatter())
         return path
 
-    def transition(self, to: str, *, why: str, by: str | None = None) -> None:
-        """Move to a valid status and persist the reason as a ledger row."""
+    def transition(
+        self, to: str, *, why: str, by: str | None = None, tick: int | None = None,
+    ) -> None:
+        """Move to a valid status and persist the reason as a ledger row.
+
+        The row carries the frame's tick: *tick* when the caller supplies
+        one, else the tick this process's daemon loop last advanced
+        (``None`` outside a daemon — a CLI verb has no beat to name).
+        """
+        from . import tick as tick_mod
+
         if to not in STATUSES:
             raise ValueError(f"invalid run status {to!r}; expected one of {STATUSES!r}")
         transitions = self.meta.get("transitions")
@@ -310,6 +319,7 @@ class Run:
             "why": why,
             "by": by,
             "at": datetime.now(timezone.utc).isoformat(),
+            "tick": tick if tick is not None else tick_mod.current_n(),
         })
         self.meta["transitions"] = transitions
         self.status = to

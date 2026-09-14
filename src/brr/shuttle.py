@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import tick as tick_mod
+
 
 STATES = ("awake", "listening", "parked", "handing-off", "released")
 
@@ -64,7 +66,7 @@ class Shuttle:
     repo_root: str
     conversation_key: str
     since: str
-    transitions: list[dict[str, str]]
+    transitions: list[dict[str, Any]]
     _account_home: Path | None = field(default=None, repr=False, compare=False)
 
     @classmethod
@@ -143,7 +145,13 @@ class Shuttle:
         run_id: str | None = None,
         repo_root: str | None = None,
         conversation_key: str | None = None,
+        tick: int | None = None,
     ) -> None:
+        """Move along one edge and persist; the row names the frame's tick.
+
+        *tick* is the caller's beat. Omitted ⇒ ``tick.current`` for this
+        Shuttle's home — the loop's latest, ``None`` when no loop has ticked.
+        """
         edge = (self.state, to)
         if edge not in _EDGES:
             raise ValueError(f"invalid Shuttle transition {edge[0]} -> {edge[1]}")
@@ -154,6 +162,7 @@ class Shuttle:
             "to": to,
             "why": why,
             "by": by or "",
+            "tick": tick if tick is not None else tick_mod.current_n(self._account_home),
         })
         self.transitions = self.transitions[-_MAX_TRANSITIONS:]
         self.state = to

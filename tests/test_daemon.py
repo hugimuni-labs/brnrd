@@ -9158,6 +9158,33 @@ def test_write_live_portal_state_wires_the_delivery_facet(tmp_path):
     assert payload["delivery"]["gate"] == "telegram"
 
 
+def test_write_live_portal_state_stamps_the_frame_tick(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    home = tmp_path / "home"
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+
+    before = json.loads(daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        brr_dir=brr_dir, shuttle_home=home,
+    ).read_text(encoding="utf-8"))
+    assert before["tick"] is None  # no loop has ticked: absent, never guessed
+    daemon.tick_mod.advance(home)
+    beat = daemon.tick_mod.advance(home)
+
+    payload = json.loads(daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        brr_dir=brr_dir, shuttle_home=home,
+    ).read_text(encoding="utf-8"))
+
+    assert payload["tick"] == {"n": 2, "at": beat.at}
+    assert "generated_at" in payload
+    # The beat moves every iteration by construction; the token must not.
+    assert payload["change_token"] == before["change_token"]
+
+
 def test_write_live_portal_state_wires_produce_inputs(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     outbox_dir = brr_dir / "outbox" / "evt-1"

@@ -182,7 +182,21 @@ class TestPersistence:
             "why": "update_status",
             "by": None,
             "at": run.meta["transitions"][-1]["at"],
+            "tick": None,
         }
+
+    def test_a_transition_row_carries_the_frame_tick(self, tmp_path):
+        from brr import tick
+
+        tick.advance(tmp_path / "home")
+        run = Run(id="run-1", event_id="evt-1", body="x")
+        run.save(tmp_path)
+
+        run.transition("running", why="dispatched")
+        run.transition("done", why="runner_completed", tick=9)
+
+        reloaded = Run.from_file(tmp_path / "run-1" / "run.md")
+        assert [row["tick"] for row in reloaded.meta["transitions"]] == [1, 9]
 
     @pytest.mark.parametrize("status", ["conflict", "bogus"])
     def test_update_status_rejects_values_outside_the_vocabulary(
