@@ -131,8 +131,13 @@ def stage(
     status: str = PENDING,
     reason: str = "",
     created_at: str | None = None,
+    topic: str = "",
 ) -> Path | None:
-    """Create one durable outbound message; ``source_ref`` makes retries idempotent."""
+    """Create one durable outbound message; ``source_ref`` makes retries idempotent.
+
+    *topic* (move 5c) is the one topic the act belongs to; it rides the
+    message's frontmatter and is omitted when empty.
+    """
 
     text = (body or "").strip()
     if not text or not run_id:
@@ -157,6 +162,7 @@ def stage(
             "target_thread": target_thread,
             "source_ref": source_ref,
             "reason": reason,
+            "topic": topic,
         }
         protocol._atomic_write(path, _render(meta, text))
         return path

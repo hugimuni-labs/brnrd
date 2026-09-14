@@ -67,6 +67,7 @@ the daemon decorates each wake · attention, action, the reply = yours
   | `.name` | run's short name, ≤60 chars — by the first outward act |
   | `.mood` | emote chip + narration · `brnrd emotes <feeling>` = the index · honest-only: write when real, rewrite when it changes |
   | `.room` | your own note on how to talk *now*, one line, your words (`he's afk till 9 — hold interim lines, one digest on return` · `live, fast, one-liners`) · echoed on every boundary line as `room: …`, never parsed · the tempo is read from his words and written here by you; rewrite when the room changes, delete when it's plain |
+  | `.topic` | this run's one topic, set at boot beside `.card` and `.mood` — an existing heddle's slug · `new <slug>` · `null` · the waking event carries the frame's proposal; the first `.topic` confirms or overrides it · every act inherits it unless its own `topic: <slug>` says otherwise |
   | `.topics` | topic slugs this run touched; a run may mint one · topicless at the bolt ⇒ one dissent row |
   | `.pr` | the URL of a PR this run created — without it `remote_scm` reads absent |
   | `.promises.jsonl` | what you *said* you'd make: `brnrd promise <what>` / `--release --why` · drives the `owed` chip |

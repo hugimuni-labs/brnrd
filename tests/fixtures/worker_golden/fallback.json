@@ -251,6 +251,10 @@
   "inbound": {
    "current_event": "evt-fallback",
    "current_event_replyable": true,
+   "current_event_topic": {
+    "confirmed": null,
+    "proposed": null
+   },
    "events": []
   },
   "knowledge": {
@@ -297,7 +301,8 @@
    "phase": "finalizing",
    "repo": "<TMP>",
    "runner": "claude",
-   "status": "running"
+   "status": "running",
+   "topic": null
   },
   "schedule": {
    "armed": []

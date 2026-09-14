@@ -60,6 +60,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from .. import daemon
+from .. import run_topic
 from .. import gitops
 from ..hud import PRODUCE_LEDGER_NAME
 from .. import relics
@@ -392,11 +393,18 @@ def handle(f: OutboxFile) -> Handled:
     at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     run_id = str(getattr(task, "id", "") or "")
     produce = Produce(kind="knot", ref=sha, at=at)
-    _write_produce(
-        f.ctx.emit.brr_dir, run_id,
-        {"kind": "knot", "ref": sha, "at": at, "verb": "land", "pr": number,
-         "base": base, "head": head, "by": "frame"},
-    )
+    row = {"kind": "knot", "ref": sha, "at": at, "verb": "land", "pr": number,
+           "base": base, "head": head, "by": "frame"}
+    # Move 5c: the produce row carries the act's one topic, indexed.
+    topic = run_topic.act_topic(task)
+    if topic:
+        row["topic"] = topic
+    _write_produce(f.ctx.emit.brr_dir, run_id, row)
+    if topic:
+        run_topic.assign(
+            run_topic.act_home(f.ctx.account_context), topic, kind="produce",
+            ref=sha, run=run_id, at=at,
+        )
     relics.append(
         f.ctx.outbox_dir, "merge", sha=sha, pr=number,
         subject=str(pr.get("title") or ""), url=str(pr.get("url") or "") or None,
@@ -416,7 +424,8 @@ def handle(f: OutboxFile) -> Handled:
         stats["land"] = stats.get("land", 0) + 1
     daemon._retire_outbox_staging(f.path)
     return _handled(
-        f, "land", 1, produce=(produce,), then=f.rewritten({}, announcement),
+        f, "land", 1, produce=(produce,),
+        then=f.rewritten({"topic": topic} if topic else {}, announcement),
     )
 
 

@@ -162,6 +162,7 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
             repo_label=repo_label,
             work_dir=run_root,
             repo_root=repo_root,
+            inbox_dir=inbox_dir,
         )
         hud.write_live(hud.HUDInputs(
             outbox_dir=outbox_dir,

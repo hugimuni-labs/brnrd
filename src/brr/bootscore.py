@@ -986,7 +986,8 @@ def format_kernel(score: BootScore) -> str:
             "long-act⇒.card/## Now first ; private-knowledge⇒write — lose no work"
         )
         lines.append("")
-        lines.append("first outward ⇒ .name + .mood")
+        lines.append("first outward ⇒ .name + .mood + .topic")
+        lines.append("this run's topic: an existing heddle ∨ `new <slug>` ∨ null")
         lines.append("first produce ⇒ .topics")
         lines.append("∅then ⇒ daemon→plain fallback ; next-wake→declare")
     lines.append("")

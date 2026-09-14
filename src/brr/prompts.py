@@ -5480,6 +5480,47 @@ def _bundle_burst_group(
     return []
 
 
+def _topic_bundle_lines(event_meta: dict[str, Any] | None) -> list[str]:
+    """Move 5c: the waking event's topic, as the bundle's reading of it.
+
+    One line for the topic (assigned at dispatch, or proposed, or neither)
+    and one more only when the previous run on this thread ended in error
+    with no topic. Nothing renders without a waking event record — the
+    reading is about *that* event.
+    """
+    if not isinstance(event_meta, dict):
+        return []
+    lines: list[str] = []
+    assigned = str(event_meta.get("topic") or "").strip()
+    proposed = str(event_meta.get("topic_proposed") or "").strip()
+    if assigned:
+        lines.append(
+            f"- Topic: `{assigned}` — assigned to this event at dispatch; "
+            "`.topic` names what your own acts carry"
+        )
+    elif proposed:
+        why = str(event_meta.get("topic_proposed_by") or "").strip()
+        lines.append(
+            f"- Topic: `{proposed}` proposed"
+            + (f" ({why})" if why else "")
+            + " — this run's topic: an existing heddle or `new <slug>`, "
+            "one line in `.topic` (`null` for none)"
+        )
+    else:
+        lines.append(
+            "- Topic: none proposed — this run's topic: an existing heddle or "
+            "`new <slug>`, one line in `.topic` (`null` for none)"
+        )
+    predecessor = str(event_meta.get("predecessor_topic_unset") or "").split()
+    if len(predecessor) == 2:
+        run, event = predecessor
+        lines.append(
+            f"- predecessor_topic_unset: {run} ended in error with no topic — "
+            f"`topic: assign <slug> -> {event}` assigns its event, once"
+        )
+    return lines
+
+
 def _build_run_context_bundle(
     *,
     event_id: str,
@@ -5618,6 +5659,7 @@ def _build_run_context_bundle(
     retry_note = format_retry_note(event_retry_of, event_retry_failure_kind)
     if retry_note:
         sections.append(f"- Event {retry_note}")
+    sections.extend(_topic_bundle_lines(event_meta))
     if run_id:
         sections.append(f"- Run ID: {run_id}")
     sections.append(f"- Execution root: {repo_root}")

@@ -6270,9 +6270,11 @@ def test_boundary_row_place_names_the_file_a_tool_touched(tmp_path):
     }), env)
 
     batch, single, bash = _transcript(run_dir)
-    assert batch["place"] == {"path": "/src/brr/hooks.py", "commit": None}
-    assert single["place"] == {"path": "/nb/a.ipynb", "commit": None}
-    assert bash["place"] == {"path": None, "commit": None}
+    assert batch["place"] == {"path": "/src/brr/hooks.py", "paths": ["/src/brr/hooks.py"], "commit": None}
+    assert single["place"] == {"path": "/nb/a.ipynb", "paths": ["/nb/a.ipynb"], "commit": None}
+    # Move 5c: a shell row names the paths its command names — under the repo
+    # root only; `/etc/hosts` is not a place of this repo.
+    assert bash["place"] == {"path": None, "paths": [], "commit": None}
 
 
 def test_boundary_row_readings_are_null_shaped_without_a_portal(tmp_path):
@@ -6288,7 +6290,7 @@ def test_boundary_row_readings_are_null_shaped_without_a_portal(tmp_path):
         assert record["ctx"] == {"tokens_after": None, "delta": None}
         assert record["spend"] == {"allowance_used": None, "allowance": None}
         assert record["quota"] == {"S": None, "W": None, "F": None}
-        assert record["place"] == {"path": None, "commit": None}
+        assert record["place"] == {"path": None, "paths": [], "commit": None}
 
 
 def test_redact_detail_masks_authorization_header():
