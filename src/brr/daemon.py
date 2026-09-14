@@ -1089,6 +1089,18 @@ def _enrich_catalog_quota(
             row["quota_level"] = labels[shell]
 
 
+def _attach_lane_liveness_facet(snapshot: dict, repo_root: Path) -> None:
+    """Lane liveness (w-71) on the wake's communication snapshot.
+
+    The snapshot is assembled in ``worker.prepare``; this write stays in
+    ``daemon`` beside its twin, the scan tick's
+    ``lane_liveness.refresh_if_stale_async``, because
+    ``tests/test_lane_liveness.py::test_the_two_wiring_points_exist_in_the_daemon``
+    pins both wiring points to this module's source. A pure cache read.
+    """
+    snapshot[lane_liveness.FACET_KEY] = lane_liveness.read_state(repo_root)
+
+
 def _quality_escalation_meta(
     repo_root: Path,
     runner_name: str | None,

@@ -24,7 +24,6 @@ from .. import forge_state
 from .. import gitops
 from .. import hooks as hooks_mod
 from .. import knowledge
-from .. import lane_liveness
 from .. import menus
 from .. import presence
 from .. import prompts
@@ -801,9 +800,7 @@ def prepare(
         # `absent` verdict is itself the answer a wake must see: "nobody has
         # probed" must not render as silence, which reads as fine.
         if not is_home_root:
-            communication_snapshot[lane_liveness.FACET_KEY] = (
-                lane_liveness.read_state(repo_root)
-            )
+            daemon._attach_lane_liveness_facet(communication_snapshot, repo_root)
         # Reader fluency (#217): which language this thread's reader reads.
         # v1 reads the repo-level `fluency` config key (weave | prose);
         # per-correspondent declaration at the gate boundary stays the
