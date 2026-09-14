@@ -81,6 +81,8 @@ _OUTBOX_ROUTING_KEYS = (
     "config_change", "note", "await", "cut", "ask", "hold",
     # move 4: the frame-owned verbs, and the 4b stubs that refuse "not yet".
     "land", "fold", "mark", "stake", "cut-at",
+    # move 5b: the resident's heddles (`topic: new|split|merge|retire`).
+    "topic",
 )
 
 

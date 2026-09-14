@@ -77,6 +77,8 @@ from . import gate_receipt
 from . import claude_status
 from . import claude_usage
 from . import gitops
+from . import heddles
+from . import card_frame
 from . import hooks as hooks_mod
 from . import knowledge
 from . import message_store
@@ -4652,6 +4654,80 @@ def _live_delivery_projection(
     }
 
 
+def _frame_heartbeat(
+    task: Run,
+    *,
+    outbox_dir: Path | None,
+    card_state: dict[str, object] | None,
+    output_stats: dict[str, int] | None,
+    brr_dir: Path | None,
+    account_context: account.AccountContext | None,
+    repo_label: str | None,
+    work_dir: Path | None,
+    repo_root: Path | None,
+) -> None:
+    """Move 5b: the frame's two readers, once per heartbeat — never per boundary.
+
+    1. **The heddles** (``heddles.light``) score the account's topic
+       signatures against this run's rows; the lit list is stashed on
+       *card_state* for the portal writer to publish as ``heddles``.
+    2. **The card frame** (``card_frame.frame_pass``) ticks coordinate lines
+       on ``.card`` whose PR merged / strand returned, and drafts the delta
+       item at the moments it recognises; the item persists on ``task.meta``
+       and the portal publishes it as ``card.delta``.
+
+    Here rather than inside :func:`_write_live_portal_state`, which runs at
+    every tool boundary (the flush path): both readers are incremental, but
+    a read on the boundary path is a read on every boundary. The events are
+    the live inbox the heartbeat has just written — no second scan.
+    Best-effort: a failure costs this heartbeat's reading, never the run.
+    """
+    if outbox_dir is None or card_state is None:
+        return
+    try:
+        live = json.loads((outbox_dir / portals.LIVE_INBOX_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        live = {}
+    raw_events = live.get("events") if isinstance(live, dict) else None
+    events = [e for e in raw_events or [] if isinstance(e, dict)]
+    run_dir = brr_dir / "runs" / task.id if brr_dir is not None else None
+    node_dir = None
+    home = None
+    if account_context is not None:
+        try:
+            home = account.context_home_root(account_context)
+            if repo_label:
+                node_dir = account.run_dir(account_context, repo_label, task.id)
+        except Exception:  # noqa: BLE001
+            home = None
+    try:
+        lit = heddles.light(
+            home, run_dir,
+            outbox_dir=outbox_dir, node_dir=node_dir,
+            roots=[r for r in (work_dir, repo_root) if r is not None],
+            run_id=task.id,
+            strand_claims=task.meta.get("strand_topic_claims") or (),
+            events=events,
+        )
+        card_state["heddles"] = [h.as_dict() for h in lit]
+    except Exception:  # noqa: BLE001
+        card_state["heddles"] = []
+    card_frame.frame_pass(
+        task.meta,
+        outbox_dir=outbox_dir,
+        run_dir=run_dir,
+        repo_root=repo_root,
+        stats=output_stats,
+        events=events,
+        notice=lambda kind, text: _record_outbox_notice(
+            outbox_dir, text, kind=kind, lifetime="run", verb="card_ticks",
+            run=task.id,
+        ),
+        run_id=task.id,
+        is_strand=_is_strand(task.meta),
+    )
+
+
 def _write_live_portal_state(
     outbox_dir: Path | None,
     inbox_dir: Path,
@@ -7078,7 +7154,25 @@ def _queue_spawn_request(
         meta["trust_tier"] = task.meta["trust_tier"]
     if reason:
         meta["spawn_reason"] = reason
+    # move 5b: a strand dispatched under a heddle (`topic: the-loom`) is a
+    # claim — the parent's heddles light from it (`heddles.light`'s
+    # ``strand_claims``), and the child's return carries it back
+    # (``spawn_topics`` on ``spawn_completed``).
+    spawn_topics = [
+        t for t in re.split(r"[\s,·]+", str(fm.get("topic") or ""))
+        if t and heddles.SLUG_RE.match(t)
+    ]
+    if spawn_topics:
+        meta["spawn_topics"] = " ".join(spawn_topics)
     new_path = protocol.create_event(inbox_dir, source, new_body, **meta)
+    if spawn_topics:
+        claims = list(task.meta.get("strand_topic_claims") or [])
+        claims.append({
+            "topics": spawn_topics,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "event": new_path.stem,
+        })
+        task.meta["strand_topic_claims"] = claims[-50:]
     # Dispatch-edge ownership (wyrd §3): record who dispatched this child so
     # the `stop:` verb can enforce parent-only control from the first moment
     # the spawn exists — before it has a run id, before it has a process.
@@ -10589,6 +10683,10 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
         produce_kwargs["spawn_allowance_tokens"] = task.meta["spawn_allowance_tokens"]
     if task.meta.get("spawn_allowance_spent") is not None:
         produce_kwargs["spawn_tokens_spent"] = task.meta["spawn_allowance_spent"]
+    # move 5b: the heddle the strand was dispatched under rides its return,
+    # so the parent's heddles light again at the moment it lands.
+    if str(task.meta.get("spawn_topics") or "").strip():
+        produce_kwargs["spawn_topics"] = " ".join(str(task.meta["spawn_topics"]).split())
     try:
         completion = protocol.create_event(
             inbox_dir,

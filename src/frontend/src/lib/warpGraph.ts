@@ -162,6 +162,13 @@ interface ParsedPage {
 function parsePage(markdown: string, rowRe: RegExp): ParsedPage {
 	const lines = (markdown ?? '').replace(/\r\n/g, '\n').split('\n');
 	let i = 0;
+	// A leading `---` frontmatter block is metadata, never the title or the
+	// body — a topic file carries its heddle signature there (move 5b,
+	// design-the-loom §20). Unclosed ⇒ not frontmatter; parse as before.
+	if (lines.length && lines[0].trim() === '---') {
+		const close = lines.findIndex((line, index) => index > 0 && line.trim() === '---');
+		if (close > 0) i = close + 1;
+	}
 	let title: string | null = null;
 	while (i < lines.length && lines[i].trim() === '') i += 1;
 	const heading = i < lines.length ? TITLE_RE.exec(lines[i]) : null;

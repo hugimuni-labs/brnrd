@@ -717,21 +717,29 @@ def test_unwritten_run_name_no_longer_nags_without_a_ledger(tmp_path):
     assert ".name" not in out["hookSpecificOutput"]["additionalContext"]
 
 
-def test_post_tool_surfaces_stale_card(tmp_path):
+def test_post_tool_surfaces_the_card_delta_item(tmp_path):
     # 2026-07-05: the card is the one live surface a watching user sees
-    # between replies; unlike SCM, a card behind the run is a mid-run
-    # failure, so it must render at post-tool, not just at closeout.
-    # 2026-09-06: reshaped to one state line naming what moved — no more
-    # "no change in Ns — rewrite .card" instruction.
+    # between replies, so what it is missing must render at post-tool.
+    # Move 5b (design-the-loom §19.2): not as a count of acts — as the
+    # frame's drafted line, with the act that accepts it.
     _portal(
         tmp_path, token="t1", pending=0,
         produce={"known": True, "counts": {"pr": 1}},
         card={"active": True, "text": "old note", "age_seconds": 400,
-              "state_moved_seconds": 100, "stale": True},
+              "state_moved_seconds": 100, "stale": True,
+              "delta": {"id": "card-delta-ocgl-1", "at": "2026-09-14T17:00:00Z",
+                        "trigger": "strand_returned",
+                        "text": "since your last card write: 1 strand returned (run-260914-1604-7e3w)"}},
     )
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert _says(ctx, "card ## Now: last written 1 act ago (1 PR)")
+    assert _says(
+        ctx,
+        "card Δ since your last card write: 1 strand returned (run-260914-1604-7e3w) — "
+        "`note: card-delta-ocgl-1` accepts · editing .card folds it in",
+    )
+    assert "acts ago" not in ctx
+    assert "card behind" not in ctx
     assert "rewrite .card" not in ctx
 
 
@@ -5182,7 +5190,10 @@ def test_card_chip_meters_the_projection_not_the_file():
 
     # Unchanged verdicts.
     assert hooks._card_chip({"active": False}, card_stale=False) == "card blank"
-    assert hooks._card_chip({"active": True}, card_stale=True) == "card stale"
+    # move 5b: `card stale` is a card untouched for a day, whatever the
+    # daemon's 240 s movement verdict says.
+    assert hooks._card_chip({"active": True, "age_seconds": 86400}, card_stale=False) == "card stale"
+    assert hooks._card_chip({"active": True, "age_seconds": 86399}, card_stale=True) is None
     # A capsule with no body to measure is not a failure verdict.
     assert hooks._card_chip({"active": True}, card_stale=False) is None
 
@@ -6581,7 +6592,7 @@ def test_delta_signs_fire_once_at_the_edge_not_per_boundary():
     `card`, the chip this reclassification actually changed the behaviour
     of (course/mood/link/notices were already edge-triggered; the pin
     above and `test_notices_detail_fires_once_...` cover those)."""
-    stale = _bar_payload(card={"active": True, "stale": True})
+    stale = _bar_payload(card={"active": True, "stale": True, "age_seconds": 90000})
     healthy = _bar_payload(card={"active": True, "stale": False})
 
     chips_a: dict[str, str] = {}
@@ -7235,60 +7246,64 @@ def test_name_nudge_detail_is_retired():
         assert rendered is None or ".name" not in rendered
 
 
-def test_card_nudge_names_acts_with_no_streak_suffix():
-    """Reshaped twice now: 2026-09-06 dropped the streak-compressed
-    alternate wording; 2026-09-10 (#1897, his call: "agreed on the now some
-    minutes old") drops the ``seen ×N`` suffix entirely — report state, not
-    a verdict, and the streak number is not state. One line, always, naming
-    what moved past the card's last write."""
-    payload = _bar_payload(
-        card={"active": True, "stale": True, "age_seconds": 900,
-              "state_moved_seconds": 500},
-    )
-    # replies no longer count: each delivered reply projects into the card
-    # itself (THE SAID BLOCK, 2026-09-08)
-    receipt = "- card ## Now: last written 4 acts ago (3 commits, 1 kb page)"
+def _delta_card(text="since your last card write: #1975 merged", delta_id="card-delta-ocgl-1"):
+    return {"active": True, "stale": True, "age_seconds": 900,
+            "state_moved_seconds": 500,
+            "delta": {"id": delta_id, "text": text, "at": "2026-09-14T17:00:00Z",
+                      "trigger": "pr_merged"}}
+
+
+def test_card_delta_line_replaces_the_acts_count():
+    """Move 5b (§19.2): the `last written N acts ago` receipt is retired —
+    the frame drafts what moved and this renders it once, named, with the
+    act that accepts it. No streak suffix, no count, at any streak."""
+    payload = _bar_payload(card=_delta_card())
+    line = ("- card Δ since your last card write: #1975 merged — "
+            "`note: card-delta-ocgl-1` accepts · editing .card folds it in")
     for streak in (0, 1, 3):
         rendered = hooks.format_delta(payload, repeat_streaks={"card_stale": streak})
         assert rendered is not None
-        assert receipt in rendered
+        assert line in rendered
+        assert "acts ago" not in rendered
         assert "seen ×" not in rendered
 
 
-def test_card_nudge_reports_a_time_fact_when_nothing_tracked_moved():
-    """#1897: a card behind on a reply (or any movement outside produce/
-    delivery/pending) yields ``acts == 0`` from `_card_acts_behind` — that
-    used to render the self-contradicting "last written 0 acts ago". Now it
-    names the two times `_card_is_behind` itself compared instead."""
-    payload = _bar_payload(
-        card={"active": True, "stale": True, "age_seconds": 900,
-              "state_moved_seconds": 500},
-        produce={"known": True, "counts": {}},
-        outbound={"replies_current": 1, "replies_other": 0, "outbound_messages": 0},
-    )
-    rendered = hooks.format_delta(payload, repeat_streaks={"card_stale": 1})
-    assert rendered is not None
-    assert "0 acts" not in rendered
-    assert "- card ## Now: written 15m ago · state moved 8m ago" in rendered
+def test_card_delta_line_is_change_gated_on_its_own_text():
+    """Drafted ⇒ once; standing ⇒ quiet; re-drafted (new facts) ⇒ once more."""
+    first = _bar_payload(card=_delta_card())
+    chips_a: dict[str, str] = {}
+    a = hooks.format_delta(first, rendered_chips=chips_a)
+    assert "card Δ" in a
+    chips_b: dict[str, str] = {}
+    b = hooks.format_delta(first, last_chips=chips_a, rendered_chips=chips_b)
+    assert b is None or "card Δ" not in b
+    redrafted = _bar_payload(card=_delta_card(
+        "since your last card write: #1975 merged · 2 replies delivered"))
+    c = hooks.format_delta(redrafted, last_chips=chips_b)
+    assert "#1975 merged · 2 replies delivered" in c
+    # A card behind with no drafted item says nothing about the card.
+    behind = _bar_payload(card={"active": True, "stale": True, "age_seconds": 900,
+                                "state_moved_seconds": 500})
+    rendered = hooks.format_delta(behind)
+    assert rendered is None or "card ##" not in rendered and "card Δ" not in rendered
 
 
 def test_card_nudge_silent_while_a_wait_is_armed():
     """Silence #1: an armed, unresolved ``brnrd await`` is idle by
-    definition — nothing to report — so the nudge does not restate itself
-    on every poll of the same wait, however behind the card is."""
+    definition — nothing to report — so the delta line does not restate
+    itself on every poll of the same wait."""
     payload = _bar_payload(
-        card={"active": True, "stale": True, "age_seconds": 900,
-              "state_moved_seconds": 500},
+        card=_delta_card(),
         **{"await": {"armed": True, "resolved": False}},
     )
     rendered = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
-    assert rendered is None or "card:" not in rendered
+    assert rendered is None or "card Δ" not in rendered
 
     # A *resolved* wait (the daemon has something for this run) is not idle
-    # — the nudge speaks again.
+    # — the line speaks again.
     payload["await"] = {"armed": True, "resolved": True, "outcome": "event"}
     rendered = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
-    assert _says(rendered, "card ## Now: last written 4 acts ago")
+    assert _says(rendered, "card Δ since your last card write: #1975 merged")
 
 
 def test_card_nudge_silent_when_nothing_moved_since_the_last_write():
@@ -7626,29 +7641,23 @@ def test_course_edit_resets_the_drift_counter(tmp_path):
     assert not _says(_inject_text(out), "the run has moved 3× since the route did")
 
 
-def test_card_behind_renders_the_moment_the_run_outruns_it():
-    # evt-…-mhrx: the 240s clock hid the transition and "looked wrong". The
-    # bare fact renders at once; the stale nag keeps its grace period.
+def test_card_behind_is_retired_and_stale_means_a_day_untouched():
+    # Move 5b: `card behind` was a count dressed as a chip; the delta item
+    # names what moved instead. The chip speaks for a blank, a cut, or a
+    # card untouched for 24 h.
     chip = hooks._card_chip(
         {"active": True, "text": "## Now\nfine", "age_seconds": 90,
          "state_moved_seconds": 10},
-        card_stale=False,
-    )
-    assert chip == "card behind"
-    # The card catching up clears it: written after the last move.
-    chip = hooks._card_chip(
-        {"active": True, "text": "## Now\nfine", "age_seconds": 5,
-         "state_moved_seconds": 10},
-        card_stale=False,
-    )
-    assert chip is None
-    # Stale outranks behind — the nag form owns the chip once earned.
-    chip = hooks._card_chip(
-        {"active": True, "text": "x", "age_seconds": 500,
-         "state_moved_seconds": 400},
         card_stale=True,
     )
+    assert chip is None
+    chip = hooks._card_chip(
+        {"active": True, "text": "x", "age_seconds": 24 * 3600,
+         "state_moved_seconds": 400},
+        card_stale=False,
+    )
     assert chip == "card stale"
+    assert hooks._card_chip({"active": False, "age_seconds": 99999}, card_stale=False) == "card blank"
 
 
 def test_mood_drift_asks_still_beside_the_standing_face():

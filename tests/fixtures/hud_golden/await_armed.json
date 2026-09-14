@@ -19,6 +19,7 @@
   "card": {
     "active": false,
     "age_seconds": 600,
+    "delta": null,
     "stale": true,
     "state_moved_seconds": null,
     "text": ""
@@ -33,6 +34,7 @@
     "would_land": true
   },
   "generated_at": "2026-09-14T16:26:40Z",
+  "heddles": [],
   "inbound": {
     "current_event": "evt-1",
     "current_event_replyable": true,

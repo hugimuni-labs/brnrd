@@ -320,8 +320,9 @@ def test_the_owed_line_and_chip_both_speak_on_the_edge_only(tmp_path):
     # A later boundary where something *else* moved: the line stays quiet,
     # the chip stays counted.
     portal.write_text(
-        json.dumps(_portal("t2", card={"stale": True, "state": "stale",
-                                       "age_seconds": 400})),
+        # move 5b: `card stale` is a card untouched for a day
+        json.dumps(_portal("t2", card={"active": True, "stale": True, "state": "stale",
+                                       "age_seconds": 90000})),
         encoding="utf-8",
     )
     second = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})

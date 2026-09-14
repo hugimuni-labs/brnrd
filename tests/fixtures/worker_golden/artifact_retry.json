@@ -213,6 +213,7 @@
   "card": {
    "active": false,
    "age_seconds": "<V>",
+   "delta": null,
    "stale": false,
    "state_moved_seconds": null,
    "text": ""
@@ -227,6 +228,7 @@
    "would_land": true
   },
   "generated_at": "<V>",
+  "heddles": [],
   "inbound": {
    "current_event": "evt-retry",
    "current_event_replyable": true,

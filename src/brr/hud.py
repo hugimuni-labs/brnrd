@@ -140,6 +140,10 @@ class Card(_Shape):
     age_seconds: int | None
     stale: bool
     state_moved_seconds: int | None
+    #: Move 5b (design-the-loom §19.2): the frame-drafted "since your last
+    #: card write" item ``{id, text, at, trigger}`` — ``note: <id>`` accepts
+    #: it, a card edit folds it in (``card_frame``). ``None`` when none stands.
+    delta: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -391,6 +395,11 @@ class HUD:
     knowledge: Knowledge
     name: Name
     resources: dict[str, Any]
+    #: Move 5b (design-the-loom §20): the lit heddles, brightest first —
+    #: ``{slug, rune, brightness, last_match_at, matched_by}`` — scored on the
+    #: heartbeat (``daemon._frame_heartbeat`` → ``heddles.light``) and read
+    #: here from the stash, so the boundary flush pays nothing for them.
+    heddles: list[dict[str, Any]] = field(default_factory=list)
     bolt: Bolt | None = None
     change_token: str = ""
 
@@ -542,6 +551,7 @@ def build(inputs: HUDInputs) -> HUD:
     Raises ``OSError`` like the writer's body did; :func:`write_live` is the
     caller that swallows it.
     """
+    from . import card_frame
     from . import correspondent as correspondent_mod
     from . import daemon, presence, protocol, relics, resource_hold, run_ledger, shuttle
     from . import schedule as schedule_mod
@@ -856,6 +866,7 @@ def build(inputs: HUDInputs) -> HUD:
                 int(time.monotonic() - state_moved_monotonic)
                 if state_moved_monotonic is not None else None
             ),
+            delta=card_frame.portal_delta(task.meta),
         ),
         budget=Budget(elapsed_seconds=elapsed),
         await_=await_state,
@@ -937,6 +948,10 @@ def build(inputs: HUDInputs) -> HUD:
             hold=hold_facet_input,
             correspondent=correspondent_facet_input,
         ),
+        heddles=[
+            dict(h) for h in ((card_state or {}).get("heddles") or [])
+            if isinstance(h, dict)
+        ],
         bolt=Bolt(**bolt_state) if bolt_state is not None else None,
     )
     resources = hud.resources

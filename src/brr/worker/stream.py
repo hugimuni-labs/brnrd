@@ -152,6 +152,17 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
             repo_label=repo_label,
             observer_run_id=task.id,
         )
+        daemon._frame_heartbeat(
+            task,
+            outbox_dir=outbox_dir,
+            card_state=card_state,
+            output_stats=output_stats,
+            brr_dir=brr_dir,
+            account_context=account_context,
+            repo_label=repo_label,
+            work_dir=run_root,
+            repo_root=repo_root,
+        )
         hud.write_live(hud.HUDInputs(
             outbox_dir=outbox_dir,
             inbox_dir=inbox_dir,
