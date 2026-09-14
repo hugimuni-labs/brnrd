@@ -741,6 +741,8 @@ def handle_cut(f: OutboxFile) -> Handled:
                     dissent=mismatches if annotated else (),
                 ),
             }
+        if hasattr(task, "meta"):
+            _assign_bolt_topic(task, accepted_at)
         if stats is not None:
             stats["cut"] = stats.get("cut", 0) + 1
         parked = daemon._park_bolt_on_live_strands(
@@ -805,6 +807,24 @@ def handle_cut(f: OutboxFile) -> Handled:
     if cut_guard.tripped:
         return _handled(f, 'cut', promoted)
     return _handled(f, 'cut', promoted, then=f.rewritten(fm, body))
+
+
+def _assign_bolt_topic(task, accepted_at: str) -> None:
+    """Move 5c: the bolt carries the act's one topic (``cut: true`` +
+    ``topic: <slug>``, else the run's) and lands one ``bolt`` index row."""
+    from .. import run_topic
+
+    try:
+        topic = run_topic.act_topic(task)
+        if not topic or not isinstance(task.meta.get("bolt"), dict):
+            return
+        task.meta["bolt"]["topic"] = topic
+        run_topic.assign(
+            run_topic.act_home(), topic, kind="bolt",
+            ref=f"{task.id}/bolt/{accepted_at}", run=task.id, at=accepted_at,
+        )
+    except Exception:  # noqa: BLE001 - a topic never rolls a bolt back
+        return
 
 
 def handle_gate(f: OutboxFile) -> Handled:

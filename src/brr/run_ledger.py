@@ -40,6 +40,10 @@ _RUN_MOOD_MAX_CHARS = 64
 #: convention `items._split_ids` already uses for an item's own `topics:`
 #: row and `taken:` row.
 RUN_TOPICS_CONTROL_NAME = ".topics"
+#: Move 5c (design-the-loom §21): the run's *one* topic, set at boot beside
+#: `.card` and `.mood` — an existing heddle's slug, `new <slug>`, or `null`.
+#: Read by :mod:`brr.run_topic`; `.topics` above stays the 5b claim.
+RUN_TOPIC_CONTROL_NAME = ".topic"
 _RUN_TOPICS_MAX_BYTES = 2000
 _RUN_TOPICS_MAX_SLUGS = 32
 _TOPIC_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")

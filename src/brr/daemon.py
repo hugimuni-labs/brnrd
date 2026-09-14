@@ -78,6 +78,7 @@ from . import claude_status
 from . import claude_usage
 from . import gitops
 from . import heddles
+from . import run_topic
 from . import card_frame
 from . import hooks as hooks_mod
 from . import knowledge
@@ -4665,6 +4666,7 @@ def _frame_heartbeat(
     repo_label: str | None,
     work_dir: Path | None,
     repo_root: Path | None,
+    inbox_dir: Path | None = None,
 ) -> None:
     """Move 5b: the frame's two readers, once per heartbeat — never per boundary.
 
@@ -4700,6 +4702,16 @@ def _frame_heartbeat(
                 node_dir = account.run_dir(account_context, repo_label, task.id)
         except Exception:  # noqa: BLE001
             home = None
+    # Move 5c: fold the run's `.topic` in before the heddles light — the
+    # waking event's stamp and its index row land here, so the same
+    # heartbeat's reading already shows the assignment.
+    run_topic.settle(
+        task, outbox_dir=outbox_dir, account_home=home, inbox_dir=inbox_dir,
+        notice=lambda kind, text: _record_outbox_notice(
+            outbox_dir, text, kind=kind, lifetime="run", verb="topic", run=task.id,
+        ),
+        is_strand=_is_strand(task.meta),
+    )
     try:
         lit = heddles.light(
             home, run_dir,
@@ -5629,7 +5641,15 @@ def _stage_outbound(
     if account_context is None or not account_context.enabled:
         return None, blocked
     label = str(task.meta.get("repo_label") or account_context.default_repo.label)
-    return message_store.stage(
+    # Move 5c: the message belongs to the act's one topic — the open drain
+    # scope's (the file's own `topic:`, else the run's), or the run's own
+    # outside a drain (a closeout's terminal reply inherits).
+    topic = ""
+    try:
+        topic = run_topic.act_topic(task) or ""
+    except Exception:  # noqa: BLE001 - a topic never blocks a delivery
+        topic = ""
+    path = message_store.stage(
         account_context,
         repo_label=label,
         run_id=task.id,
@@ -5641,7 +5661,46 @@ def _stage_outbound(
         source_ref=source_ref,
         status=status,
         reason=reason,
-    ), blocked
+        topic=topic,
+    )
+    if topic and path is not None:
+        _assign_message_topic(
+            task, account_context, path, topic, target_event,
+            replies=kind in ("interim", "terminal"),
+        )
+    return path, blocked
+
+
+def _assign_message_topic(
+    task: Run,
+    account_context: account.AccountContext,
+    path: Path,
+    topic: str,
+    target_event: str,
+    *,
+    replies: bool = False,
+) -> None:
+    """One ``message`` row in the topic's index; a *reply* (``interim`` /
+    ``terminal``) written inside a drain confirms the event it answers when
+    that event has no topic yet (``run_topic.confirm_event``). A dispatch or
+    a gate message confirms nothing — it answers no event."""
+    try:
+        home = run_topic.act_home(account_context)
+        thread = str(getattr(task, "conversation_key", "") or "")
+        run_topic.assign(
+            home, topic, kind="message", ref=f"{task.id}/{path.stem}",
+            run=task.id, thread=thread,
+        )
+        scope = run_topic.current_act()
+        target = target_event or str(task.event_id or "")
+        if scope is not None and replies and target:
+            run_topic.confirm_event(
+                home, scope.inbox_dir, target, topic, run=task.id, thread=thread,
+            )
+            if target == task.event_id and not task.meta.get(run_topic.META_EVENT_TOPIC):
+                task.meta[run_topic.META_EVENT_TOPIC] = topic
+    except Exception:  # noqa: BLE001
+        return
 
 
 _CUT_DECLARATION_BODY_KEYS = frozenset({
@@ -7164,7 +7223,22 @@ def _queue_spawn_request(
     ]
     if spawn_topics:
         meta["spawn_topics"] = " ".join(spawn_topics)
+    # move 5c: the strand is assigned at entry — its dispatch event carries
+    # the act's one topic (the `topic:` it names, else the parent's), so
+    # the child's waking event arrives confirmed and is never re-proposed.
+    assigned_topic = None
+    try:
+        assigned_topic = run_topic.act_topic(task)
+    except Exception:  # noqa: BLE001
+        assigned_topic = None
+    if assigned_topic:
+        meta["topic"] = assigned_topic
     new_path = protocol.create_event(inbox_dir, source, new_body, **meta)
+    if assigned_topic:
+        run_topic.assign(
+            run_topic.act_home(account_context), assigned_topic, kind="strand",
+            ref=new_path.stem, run=task.id,
+        )
     if spawn_topics:
         claims = list(task.meta.get("strand_topic_claims") or [])
         claims.append({

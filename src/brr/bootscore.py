@@ -975,6 +975,8 @@ def format_kernel(score: BootScore) -> str:
             "the report at its declared path · the branch published · the "
             "return message on stdout (to the parent, never a chat)"
         )
+        lines.append("")
+        lines.append("first outward ⇒ .topic — this run's topic: an existing heddle ∨ null")
     else:
         lines.append("×3 standing · self-owned")
         lines.append("op⇐reply owed — answer the person")
@@ -986,7 +988,8 @@ def format_kernel(score: BootScore) -> str:
             "long-act⇒.card/## Now first ; private-knowledge⇒write — lose no work"
         )
         lines.append("")
-        lines.append("first outward ⇒ .name + .mood")
+        lines.append("first outward ⇒ .name + .mood + .topic")
+        lines.append("this run's topic: an existing heddle ∨ `new <slug>` ∨ null")
         lines.append("first produce ⇒ .topics")
         lines.append("∅then ⇒ daemon→plain fallback ; next-wake→declare")
     lines.append("")

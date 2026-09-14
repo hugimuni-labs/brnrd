@@ -99,6 +99,10 @@ class RunFacet(_Shape):
     runner: str | None
     repo: str | None
     branch: str | None
+    #: Move 5c (design-the-loom §21): the run's one topic — its settled
+    #: ``.topic``, else the waking event's assigned ``topic``; ``None`` when
+    #: neither (``run_topic.run_topic``).
+    topic: str | None = None
 
 
 @dataclass(frozen=True)
@@ -117,6 +121,10 @@ class Inbound(_Shape):
     current_event: str
     current_event_replyable: bool
     events: list[dict[str, Any]] = field(default_factory=list)
+    #: Move 5c: ``{proposed, confirmed}`` — the frame's dispatch-time
+    #: proposal for the waking event and the topic it was assigned (by the
+    #: run's first ``.topic``, or by its dispatcher at entry).
+    current_event_topic: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -553,7 +561,7 @@ def build(inputs: HUDInputs) -> HUD:
     """
     from . import card_frame
     from . import correspondent as correspondent_mod
-    from . import daemon, presence, protocol, relics, resource_hold, run_ledger, shuttle
+    from . import daemon, presence, protocol, relics, resource_hold, run_ledger, run_topic, shuttle
     from . import schedule as schedule_mod
     from . import tick as tick_mod
 
@@ -804,6 +812,7 @@ def build(inputs: HUDInputs) -> HUD:
             runner=runner_name,
             repo=task.meta.get("repo_label"),
             branch=task.meta.get("branch_name"),
+            topic=run_topic.run_topic(task),
         ),
         attention=Attention(
             pending_event_count=len(events),
@@ -829,6 +838,10 @@ def build(inputs: HUDInputs) -> HUD:
                 runs_dir=brr_dir / "runs" if brr_dir is not None else None,
             ),
             events=events,
+            current_event_topic={
+                "proposed": task.meta.get(run_topic.META_PROPOSED) or None,
+                "confirmed": task.meta.get(run_topic.META_EVENT_TOPIC) or None,
+            },
         ),
         outbound=Outbound(
             replies_current=int(stats.get("current", 0)),

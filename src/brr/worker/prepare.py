@@ -32,6 +32,7 @@ from .. import prompts
 from .. import protocol
 from .. import run_context
 from .. import run_ledger
+from .. import run_topic
 from .. import runner
 from .. import runner_quota
 from .. import shuttle
@@ -263,6 +264,7 @@ def prepare(
         # without the resident having to notice the miss on its own.
         task.meta["wake_request"] = wake_request_report
     protocol.update_event_meta(event, run_id=task.id, repo_label=repo_label)
+    _stamp_topic_proposal(event, task, account_context, brr_dir, conv_key)
 
     # Source-trust tiering (#517): an untrusted event that no isolated
     # environment can hold (solitary unavailable, or trust.untrusted=refuse)
@@ -1387,3 +1389,33 @@ def runner_runtime(
         # compatibility path.
         env["BRR_FLUSH_SYNC"] = "1"
     return daemon._RunnerRuntime(meta, quota, env, extra_args, hooks_installed)
+
+
+def _stamp_topic_proposal(event, task, account_context, brr_dir, conv_key) -> None:
+    """Move 5c: the waking event carries a topic proposal from dispatch.
+
+    ``topic_proposed`` (+ ``topic_proposed_by`` ∈ ``signature`` · ``thread``)
+    lands on the event file and the run's meta when the frame can propose
+    one; the resident's ``.topic`` confirms or overrides it at its first
+    boundary (``run_topic.settle``). An event already carrying ``topic:`` (a
+    strand's dispatch) was assigned at entry and is not proposed for. The
+    previous run on the thread ending unassigned rides the event dict (never
+    the file) as ``predecessor_topic_unset`` for the bundle's one line.
+    Best-effort: nothing here may sink a dispatch, and nothing is written
+    when nothing is proposed.
+    """
+    try:
+        home = account.context_home_root(account_context) if account_context is not None else None
+        slug, why = run_topic.proposal(home, event, thread=conv_key)
+        if slug:
+            protocol.update_event_meta(
+                event, topic_proposed=slug, topic_proposed_by=why,
+            )
+            task.meta[run_topic.META_PROPOSED] = slug
+            task.meta[run_topic.META_PROPOSED_WHY] = why
+        predecessor = run_topic.predecessor_topic_unset(brr_dir, conv_key, task.id)
+        if predecessor:
+            event["predecessor_topic_unset"] = f"{predecessor['run']} {predecessor['event']}"
+    except Exception:  # noqa: BLE001 - a proposal never sinks a dispatch
+        return
+
