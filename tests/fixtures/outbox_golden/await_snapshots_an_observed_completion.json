@@ -1,0 +1,46 @@
+{
+  "emitted": [
+    {
+      "payload": {
+        "event_id": "<EVT1>",
+        "file": null,
+        "run_id": "run-parent",
+        "timeout_seconds": "<F>"
+      },
+      "type": "await_armed"
+    }
+  ],
+  "promoted": 1,
+  "stats": {
+    "await": 1
+  },
+  "task_meta": {
+    "await": {
+      "armed_at": "<V>",
+      "armed_pending_ids": [
+        "<EVT2>"
+      ],
+      "file": null,
+      "generation": "<V>",
+      "resolved": false,
+      "timeout_seconds": "<F>"
+    },
+    "hold_correspondent_at": "<V>"
+  },
+  "tree": {
+    ".brr/inbox/<EVT1>.md": "---\nid: <EVT1>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
+    ".brr/inbox/<EVT2>.md": "---\nid: <EVT2>\nsource: spawn_completed\nstatus: pending\nspawn_parent_run_id: run-parent\nobserved_by: run-parent\ncreated: <TS>\n---\nchild finished\n",
+    ".brr/inbox/<EVT3>.md": "---\nid: <EVT3>\nsource: telegram\nstatus: pending\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\nstill here?\n",
+    ".brr/outbox/<EVT1>/.processed/await.md": "---\nawait: true\ntimeout: 20m\n---\n",
+    ".brr/shuttle.json": {
+      "conversation_key": "",
+      "key": "<TMP>/.brr",
+      "repo_root": "",
+      "run_id": "",
+      "since": "<V>",
+      "state": "released",
+      "transitions": [],
+      "why": "first_read"
+    }
+  }
+}

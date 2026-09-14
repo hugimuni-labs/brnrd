@@ -2065,7 +2065,7 @@ def test_install_hook_config_writes_wellformed_claude_settings(tmp_path):
     # #1184: unlike the other three (unconditional), the rooted-write guard
     # is matcher-scoped to the two tools that take a raw file path — every
     # other tool call never reaches ``brnrd hook pre-tool`` at all.
-    assert hook_block["PreToolUse"][0]["matcher"] == "Edit|Write|Monitor"
+    assert hook_block["PreToolUse"][0]["matcher"] == "Edit|Write|Monitor|Bash"
     for name in ("PostToolBatch", "Stop", "SessionStart"):
         assert "matcher" not in hook_block[name][0]
     # statusLine is a TUI footer and does not fire under daemon --print runs,
@@ -2113,7 +2113,7 @@ def test_install_hook_config_merges_and_preserves_user_keys(tmp_path):
     pre_tool = settings["hooks"]["PreToolUse"]
     assert pre_tool[0] == {"hooks": []}
     assert pre_tool[-1]["hooks"][0]["command"] == "brnrd hook pre-tool"
-    assert pre_tool[-1]["matcher"] == "Edit|Write|Monitor"
+    assert pre_tool[-1]["matcher"] == "Edit|Write|Monitor|Bash"
 
 
 def test_install_hook_config_repeated_installs_keep_one_brr_pre_tool(tmp_path):
@@ -2150,7 +2150,7 @@ def test_install_hook_config_repairs_stale_brr_pre_tool_copies(tmp_path):
     settings_dir = tmp_path / ".claude"
     settings_dir.mkdir()
     stale_entry = {
-        "matcher": "Edit|Write|Monitor",
+        "matcher": "Edit|Write|Monitor|Bash",
         "hooks": [
             {"type": "command", "command": "/old/location/brnrd hook pre-tool"}
         ],

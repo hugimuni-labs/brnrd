@@ -1,0 +1,52 @@
+{
+  "emitted": [
+    {
+      "payload": {
+        "event_id": "<EVT1>",
+        "file": null,
+        "run_id": "run-parent",
+        "timeout_seconds": "<F>"
+      },
+      "type": "await_armed"
+    }
+  ],
+  "promoted": 1,
+  "stats": {
+    "await": 1
+  },
+  "task_meta": {
+    "await": {
+      "armed_at": "<V>",
+      "armed_pending_ids": [],
+      "file": null,
+      "generation": "<V>",
+      "resolved": false,
+      "timeout_seconds": "<F>"
+    },
+    "hold_correspondent_at": "<V>",
+    "strand": true
+  },
+  "tree": {
+    ".brr/inbox/<EVT1>.md": "---\nid: <EVT1>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
+    ".brr/outbox/<EVT1>/.processed/await.md": "---\nawait: true\ntimeout: 5m\n---\n",
+    ".brr/shuttle.json": {
+      "conversation_key": "",
+      "key": "<TMP>/.brr",
+      "repo_root": "",
+      "run_id": "run-parent",
+      "since": "<V>",
+      "state": "awake",
+      "transitions": [
+        {
+          "at": "<V>",
+          "by": "",
+          "from": "released",
+          "tick": null,
+          "to": "awake",
+          "why": "event_dispatched"
+        }
+      ],
+      "why": "event_dispatched"
+    }
+  }
+}

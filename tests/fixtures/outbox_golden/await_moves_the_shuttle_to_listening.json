@@ -1,0 +1,59 @@
+{
+  "emitted": [
+    {
+      "payload": {
+        "event_id": "<EVT1>",
+        "file": null,
+        "run_id": "run-parent",
+        "timeout_seconds": null
+      },
+      "type": "await_armed"
+    }
+  ],
+  "promoted": 1,
+  "stats": {
+    "await": 1
+  },
+  "task_meta": {
+    "await": {
+      "armed_at": "<V>",
+      "armed_pending_ids": [],
+      "file": null,
+      "generation": "<V>",
+      "resolved": false,
+      "timeout_seconds": null
+    },
+    "hold_correspondent_at": "<V>"
+  },
+  "tree": {
+    ".brr/inbox/<EVT1>.md": "---\nid: <EVT1>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
+    ".brr/outbox/<EVT1>/.processed/await.md": "---\nawait: true\ntimeout: none\n---\n",
+    ".brr/shuttle.json": {
+      "conversation_key": "telegram:42:",
+      "key": "<TMP>/.brr",
+      "repo_root": "",
+      "run_id": "run-parent",
+      "since": "<V>",
+      "state": "listening",
+      "transitions": [
+        {
+          "at": "<V>",
+          "by": "",
+          "from": "released",
+          "tick": null,
+          "to": "awake",
+          "why": "event_dispatched"
+        },
+        {
+          "at": "<V>",
+          "by": "daemon",
+          "from": "awake",
+          "tick": null,
+          "to": "listening",
+          "why": "await_armed"
+        }
+      ],
+      "why": "await_armed"
+    }
+  }
+}

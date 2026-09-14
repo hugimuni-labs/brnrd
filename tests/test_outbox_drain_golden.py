@@ -393,6 +393,51 @@ def _scenario_stop_self(_inbox, outbox, own):
     _write(outbox, "stop.md", f"---\nstop: {own}\n---\n")
 
 
+def _scenario_await_open_ended(_inbox, outbox, _own):
+    _write(outbox, "await.md", "---\nawait: true\ntimeout: none\n---\n")
+
+
+def _scenario_await_file_trigger(_inbox, outbox, _own):
+    gate = outbox.parents[2] / "gate.log"
+    _write(outbox, "await.md", f"---\nawait: true\ntimeout: 5m\nfile: {gate}\n---\n")
+
+
+def _scenario_await_missing_timeout(_inbox, outbox, _own):
+    _write(outbox, "await.md", "---\nawait: true\n---\n")
+
+
+def _scenario_await_snapshots_an_observed_completion(inbox, outbox, _own):
+    # #1327's arm-time snapshot: a completion this run already observed is
+    # excluded from the wait; a fresh correspondent message is not.
+    protocol.create_event(
+        inbox, "spawn_completed", "child finished",
+        spawn_parent_run_id="run-parent", observed_by="run-parent",
+    )
+    protocol.create_event(
+        inbox, "telegram", "still here?", telegram_user_id="42", telegram_chat_id="42",
+    )
+    _write(outbox, "await.md", "---\nawait: true\ntimeout: 20m\n---\n")
+
+
+def _awake_shuttle(outbox: Path) -> None:
+    from brr import shuttle
+
+    shuttle.Shuttle.load(outbox.parents[1]).transition(
+        "awake", why="event_dispatched", run_id="run-parent",
+    )
+
+
+def _scenario_await_moves_the_shuttle_to_listening(_inbox, outbox, _own):
+    _awake_shuttle(outbox)
+    _write(outbox, "await.md", "---\nawait: true\ntimeout: none\n---\n")
+
+
+def _scenario_await_from_strand(_inbox, outbox, _own):
+    # A strand arms the same wait; the seat's row is not its to move.
+    _awake_shuttle(outbox)
+    _write(outbox, "await.md", "---\nawait: true\ntimeout: 5m\n---\n")
+
+
 def _scenario_spawn_bad_contract(_inbox, outbox, _own):
     _write(outbox, "spawn.md", "---\nspawn: true\nshell: nosuchshell\n---\ntask\n")
 
@@ -432,6 +477,20 @@ SCENARIOS: dict[str, dict[str, Any]] = {
     "also_refused": {"stage": _scenario_also_refused, "with_account": True},
     "stop_self": {"stage": _scenario_stop_self},
     "spawn_bad_contract": {"stage": _scenario_spawn_bad_contract},
+    # Move 2c's goldens for the await verb's parse, captured on the unsplit
+    # drain (`1354fea5`) like every row above.
+    "await_open_ended": {"stage": _scenario_await_open_ended},
+    "await_file_trigger": {"stage": _scenario_await_file_trigger},
+    "await_missing_timeout": {"stage": _scenario_await_missing_timeout},
+    "await_snapshots_an_observed_completion": {
+        "stage": _scenario_await_snapshots_an_observed_completion,
+    },
+    "await_moves_the_shuttle_to_listening": {
+        "stage": _scenario_await_moves_the_shuttle_to_listening,
+    },
+    "await_from_strand": {
+        "stage": _scenario_await_from_strand, "task_meta": {"strand": True},
+    },
 }
 
 
