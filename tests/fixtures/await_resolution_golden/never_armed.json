@@ -1,0 +1,16 @@
+{
+  "armed_record": null,
+  "correspondent_clock_moved": false,
+  "first_tick": {
+    "armed": false
+  },
+  "next_tick": {
+    "armed": false
+  },
+  "shuttle": {
+    "state": "awake",
+    "whys": [
+      "event_dispatched"
+    ]
+  }
+}
