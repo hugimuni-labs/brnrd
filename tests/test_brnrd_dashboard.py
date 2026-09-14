@@ -2457,3 +2457,139 @@ def test_runners_rack_drops_ghost_rows_from_a_retired_daemon_when_a_fresh_one_sp
     # a shell only the old daemon knows keeps its rows, marked stale
     gemini = next(row for row in body["profiles"] if row["name"] == "gemini")
     assert gemini["daemon_stale"] is True
+
+
+# ── the bench (design-the-loom.md §6, §18) ──────────────────────────
+
+
+def _write_bench_file(root, repo, place, commit, *, body="the fold body\n", **frontmatter):
+    """Write one bench file under a temp bench root, `place` kept nested."""
+    place_dir = root / repo / place
+    place_dir.mkdir(parents=True, exist_ok=True)
+    lines = ["---"]
+    for key, value in frontmatter.items():
+        if key == "marks":
+            for mark in value:
+                lines.append(f"mark: {mark}")
+            continue
+        if value is None:
+            continue
+        lines.append(f"{key}: {value}")
+    lines.append("---")
+    (place_dir / f"{commit}.md").write_text("\n".join(lines) + "\n" + body, encoding="utf-8")
+
+
+def test_dashboard_bench_api_requires_login():
+    client = _client()
+    assert client.get("/v1/dashboard/bench").status_code == 401
+
+
+def test_dashboard_bench_api_is_empty_when_unconfigured():
+    """No `bench_home` set at all — the default — is the same "nothing
+    folded yet" shape as a configured-but-empty folder, never a 500."""
+    client = _client()
+    token = _login(client)
+    r = client.get("/v1/dashboard/bench", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    assert r.json() == {"files": []}
+
+
+def test_dashboard_bench_api_is_empty_when_folder_absent(tmp_path):
+    missing = tmp_path / "does-not-exist" / "bench"
+    client = _client(bench_home=str(missing))
+    token = _login(client)
+    r = client.get("/v1/dashboard/bench", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    assert r.json() == {"files": []}
+
+
+def test_dashboard_bench_api_lists_files_newest_first(tmp_path):
+    root = tmp_path / "bench"
+    _write_bench_file(
+        root, "Gurio__brr", "src/brr/daemon.py", "older1",
+        question="why retry", made_at="2026-09-10T10:00:00Z", marks=["keep"],
+    )
+    _write_bench_file(
+        root, "Gurio__brr", "src/brr/daemon.py", "newer1",
+        made_at="2026-09-14T10:00:00Z",
+    )
+    client = _client(bench_home=str(root))
+    token = _login(client)
+    r = client.get("/v1/dashboard/bench", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    files = r.json()["files"]
+    assert [f["commit"] for f in files] == ["newer1", "older1"]
+    older = files[1]
+    assert older["repo"] == "Gurio__brr"
+    assert older["place"] == "src/brr/daemon.py"
+    assert older["question"] == "why retry"
+    assert older["marks"] == ["keep"]
+    assert older["path"] == "Gurio__brr/src/brr/daemon.py/older1"
+
+
+def test_dashboard_bench_api_caps_at_200(tmp_path):
+    root = tmp_path / "bench"
+    for i in range(210):
+        _write_bench_file(
+            root, "Gurio__brr", "place", f"c{i:04d}",
+            made_at=f"2026-01-01T00:{i % 60:02d}:00Z",
+        )
+    client = _client(bench_home=str(root))
+    token = _login(client)
+    r = client.get("/v1/dashboard/bench", headers={"Authorization": f"Bearer {token}"})
+    assert len(r.json()["files"]) == 200
+
+
+def test_dashboard_bench_file_api_renders_body_and_frontmatter(tmp_path):
+    root = tmp_path / "bench"
+    _write_bench_file(
+        root, "Gurio__brr", "src/brr/daemon.py", "abc1234",
+        question="why does it retry",
+        made_at="2026-09-14T10:00:00Z", marks=["keep", "keep"],
+        body="The fold body, in full.\n",
+    )
+    client = _client(bench_home=str(root))
+    token = _login(client)
+    r = client.get(
+        "/v1/dashboard/bench/Gurio__brr/src/brr/daemon.py/abc1234",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["repo"] == "Gurio__brr"
+    assert body["place"] == "src/brr/daemon.py"
+    assert body["commit"] == "abc1234"
+    assert body["question"] == "why does it retry"
+    assert body["marks"] == ["keep", "keep"]
+    assert body["body"] == "The fold body, in full.\n"
+
+
+def test_dashboard_bench_file_api_404s_when_absent(tmp_path):
+    root = tmp_path / "bench"
+    root.mkdir()
+    client = _client(bench_home=str(root))
+    token = _login(client)
+    r = client.get(
+        "/v1/dashboard/bench/Gurio__brr/src/brr/daemon.py/nope",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 404
+
+
+def test_dashboard_bench_file_api_refuses_a_traversal_outside_bench_home(tmp_path):
+    """The one thing this endpoint must never do: read a file outside its
+    configured root because a path segment carried `..`. Exercised at the
+    store level (`bench_store.read_bench_file`), not through the URL, since
+    an HTTP client normalises `../` out of a path before the request ever
+    reaches the server — the real gate is the resolved-path containment
+    check, and that is what this asserts."""
+    from brnrd import bench_store
+
+    root = tmp_path / "bench"
+    root.mkdir()
+    secret = tmp_path / "secret.txt"
+    secret.write_text("top secret\n", encoding="utf-8")
+
+    assert bench_store.read_bench_file(root, "repo", "../../secret", "txt") is None
+    assert bench_store.read_bench_file(root, "..", "place", "commit") is None
+    assert bench_store.read_bench_file(root, "repo", "a/../../..", "etc") is None
