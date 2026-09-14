@@ -192,6 +192,29 @@ export const surface = {
 	reported_at: now
 };
 
+// The bench (design-the-loom.md §6/§18): folds at a place, listed by
+// `GET /v1/dashboard/bench`. `path` matches `repo/place/commit`, the same
+// address `benchFileHref` builds and the detail route (`bench.commit`
+// below) is fetched at — see `repro/drive-bench-view.mjs`.
+export const bench = {
+	files: [
+		{
+			repo: 'hugimuni-labs__brnrd',
+			place: 'design-the-loom.md',
+			commit: 'a1b2c3d',
+			question: 'what does the bench store look like',
+			made_at: now,
+			marks: [],
+			path: 'hugimuni-labs__brnrd/design-the-loom.md/a1b2c3d'
+		}
+	]
+};
+
+export const benchFile = {
+	...bench.files[0],
+	body: '# The bench\n\nOne markdown file per fold, keyed to a commit.\n'
+};
+
 export const ROUTES = {
 	'/v1/dashboard/quota': quota,
 	'/v1/dashboard/runners': runners,
@@ -208,7 +231,8 @@ export const ROUTES = {
 	'/v1/dashboard/activity': scheduledWakes,
 	'/v1/dashboard/config-requests': configRequests,
 	'/v1/dashboard/run-ledger': runLedger,
-	'/v1/dashboard/surface': surface
+	'/v1/dashboard/surface': surface,
+	'/v1/dashboard/bench': bench
 };
 
 // --- Scale-parameterized fixtures (repro/measure-rail.mjs) --------------
