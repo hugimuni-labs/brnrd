@@ -995,8 +995,9 @@ def build_parser() -> argparse.ArgumentParser:
     await_p.add_argument(
         "--ceiling", default=None, metavar="DURATION",
         help="how long this one call may hold its lease before returning "
-             "`pending` (30m, 2h, or seconds); default: the run's remaining "
-             "budget, capped at 6h. The wait itself stands past it")
+             "`pending` (30m, 2h, or seconds; at most 6h); default 50m — "
+             "under the prompt cache's 1h TTL — or the run's remaining "
+             "budget when shorter. The wait itself stands past it")
     await_p.add_argument(
         "--json", action="store_true", help="emit the outcome as JSON")
     await_p.add_argument(
@@ -5150,8 +5151,9 @@ def cmd_await(args):
        leaving a stale ``resolved: true`` in place looking like an answer;
     3. **holds a lease** (move 2c): watches ``portal-state.json`` until the
        daemon resolves the wait (``event`` / ``condition`` / ``timeout`` /
-       ``park``) or the lease ceiling passes (``--ceiling``; default the run's
-       remaining budget, capped at ``await_verb.LEASE_MAX_SECONDS``). The
+       ``park``) or the lease ceiling passes (``--ceiling``, at most
+       ``await_verb.LEASE_MAX_SECONDS``; default
+       ``await_verb.LEASE_DEFAULT_SECONDS``, the cache-warm length). The
        Shell's per-call kill deadline is honoured only as far as it is
        *known* — stamped by the pre-tool hook into
        ``await_verb.CALL_CAP_ENV`` — and falls back to the per-Shell slice

@@ -24,15 +24,18 @@ from brr.run import Run
 # ── units ────────────────────────────────────────────────────────────────
 
 
-def test_lease_ceiling_defaults_to_remaining_budget_capped_at_six_hours():
-    assert await_verb.lease_ceiling(None) == await_verb.LEASE_MAX_SECONDS
-    assert await_verb.lease_ceiling({"budget_seconds": None}) == await_verb.LEASE_MAX_SECONDS
+def test_lease_ceiling_defaults_to_the_cache_warm_length_or_the_budget():
+    assert await_verb.LEASE_DEFAULT_SECONDS < 3600, "must sit under the 1h cache TTL"
+    assert await_verb.lease_ceiling(None) == await_verb.LEASE_DEFAULT_SECONDS
+    assert await_verb.lease_ceiling({"budget_seconds": None}) == (
+        await_verb.LEASE_DEFAULT_SECONDS
+    )
     assert await_verb.lease_ceiling(
-        {"budget_seconds": 3600, "elapsed_seconds": 600},
-    ) == 3000
+        {"budget_seconds": 3600, "elapsed_seconds": 3000},
+    ) == 600
     assert await_verb.lease_ceiling(
         {"budget_seconds": 86400, "elapsed_seconds": 0},
-    ) == await_verb.LEASE_MAX_SECONDS
+    ) == await_verb.LEASE_DEFAULT_SECONDS
     # --ceiling wins over the budget, and is still capped.
     assert await_verb.lease_ceiling(
         {"budget_seconds": 3600, "elapsed_seconds": 600}, 1800,
@@ -184,7 +187,7 @@ def test_the_lease_holds_past_the_old_ten_minute_mark_and_returns_on_a_wake(
     seat = _Seat(tmp_path, monkeypatch, stamped_cap_ms=_FULL_CAP)
     seat.at(_TWO_HOURS, lambda: inject(seat))
 
-    result = seat.run(capsys)
+    result = seat.run(capsys, "--ceiling", "3h")
 
     assert result["outcome"] == "event"
     # Not the old slice: nothing returned at 560s / 600s.
@@ -218,12 +221,36 @@ def test_the_lease_returns_pending_at_its_ceiling_and_the_wait_stands(
     assert await_verb.read_lease_record(seat.outbox)["outcome"] == "ceiling"
 
 
-def test_the_default_ceiling_is_six_hours_without_a_budget(
+def test_the_default_lease_returns_on_a_wake_inside_its_warm_length(
+    tmp_path, monkeypatch, capsys,
+):
+    seat = _Seat(tmp_path, monkeypatch, stamped_cap_ms=_FULL_CAP)
+    seat.at(40 * 60, lambda: _inject_message(seat))
+
+    result = seat.run(capsys)
+
+    assert result["outcome"] == "event"
+    assert 40 * 60 <= seat.clock.now < 45 * 60
+
+
+def test_the_default_ceiling_is_the_cache_warm_length(
     tmp_path, monkeypatch, capsys,
 ):
     seat = _Seat(tmp_path, monkeypatch, stamped_cap_ms=_FULL_CAP)
 
     result = seat.run(capsys)
+
+    assert result["returned_on"] == "ceiling"
+    assert await_verb.LEASE_DEFAULT_SECONDS <= seat.clock.now
+    assert seat.clock.now < await_verb.LEASE_DEFAULT_SECONDS + 120
+
+
+def test_a_ceiling_past_the_hard_cap_is_held_to_six_hours(
+    tmp_path, monkeypatch, capsys,
+):
+    seat = _Seat(tmp_path, monkeypatch, stamped_cap_ms=_FULL_CAP)
+
+    result = seat.run(capsys, "--ceiling", "12h")
 
     assert result["returned_on"] == "ceiling"
     assert await_verb.LEASE_MAX_SECONDS <= seat.clock.now

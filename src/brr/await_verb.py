@@ -180,10 +180,26 @@ def evaluate(
 #    it. No stamp (codex, a hookless profile, an older daemon) ⇒ the old
 #    per-Shell slice and ``pending — call again``, unchanged.
 
-#: The lease's hard ceiling: one call never blocks longer than this. A wait
-#: that outlives it still stands on the daemon's side — the call returns
-#: ``pending`` and the next call continues the same arming.
+#: The lease's hard ceiling: one call never blocks longer than this, however
+#: long ``--ceiling`` asks for. A wait that outlives it still stands on the
+#: daemon's side — the call returns ``pending`` and the next call continues
+#: the same arming.
 LEASE_MAX_SECONDS = 6 * 3600.0
+
+#: The lease's *default* length: under the prompt cache's one-hour TTL, not
+#: the hard ceiling. Measured on the seat's own transcript (2026-09-13 21:00Z
+#: → 09-14 06:00Z): 48 idle re-calls, each a cache *read* of ~370–420k
+#: tokens — 17.5m read, 48k written. ``allowance.TOKEN_WEIGHTS`` prices a read
+#: at 0.1 and a write at 1.25, so holding a warm scroll costs ~0.1·C an hour
+#: and a cold wake costs ~1.25·C once: a lease that outlives the TTL is only
+#: cheaper than re-reading hourly past ~12.5 hours of silence. A 50-minute
+#: default turns that night into ~11 warm turns (~0.46m weighted) where a
+#: 6-hour default would be 2 cold ones (~1.05m) and the old slice was 48
+#: (~1.81m) — and a message landing mid-silence wakes a warm scroll either
+#: way. Ten minutes of margin: the TTL counts from the request that issued
+#: the call, and the staging wait, the hook and the API round trip sit
+#: between that request and the lease's own clock.
+LEASE_DEFAULT_SECONDS = 50 * 60.0
 
 #: Env var the pre-tool hook exports into a rewritten ``brnrd await`` call:
 #: the ``timeout`` (ms) it gave that call. The CLI's only honest source for
@@ -224,9 +240,10 @@ def lease_ceiling(
 ) -> float:
     """Seconds one ``brnrd await`` call may hold its lease.
 
-    *requested* (``--ceiling``) wins when given; otherwise the run's remaining
-    budget (``budget_seconds - elapsed_seconds``). Either way capped at
-    :data:`LEASE_MAX_SECONDS`, and a run with no readable budget gets the cap.
+    *requested* (``--ceiling``) wins when given, capped at
+    :data:`LEASE_MAX_SECONDS`. Otherwise :data:`LEASE_DEFAULT_SECONDS` — the
+    cache-warm length — shortened to the run's remaining budget
+    (``budget_seconds - elapsed_seconds``) when that is less.
     """
     if requested is not None and requested > 0:
         return min(float(requested), LEASE_MAX_SECONDS)
@@ -236,8 +253,8 @@ def lease_ceiling(
             budget.get("elapsed_seconds")
         )
     except (TypeError, ValueError):
-        return LEASE_MAX_SECONDS
-    return max(1.0, min(remaining, LEASE_MAX_SECONDS))
+        return LEASE_DEFAULT_SECONDS
+    return max(1.0, min(remaining, LEASE_DEFAULT_SECONDS))
 
 
 def call_cap_seconds(env: dict[str, str]) -> float | None:
