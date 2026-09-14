@@ -1,0 +1,77 @@
+{
+ "event": {
+  "repo_label": "<TMP>",
+  "run_id": "<RUN>",
+  "run_outcome": null,
+  "status": "done"
+ },
+ "hold_active": false,
+ "inbox_file": "---\nid: evt-untrusted\nstatus: done\nsource: github\ntrust_tier: untrusted\nrun_id: <RUN>\nrepo_label: <TMP>\n---\nhi\n",
+ "log": [
+  "[brnrd] trust refuse run=<RUN> event=evt-untrusted source=github tier=untrusted reason=untrusted source and solitary is unavailable (no docker.image configured)"
+ ],
+ "packets": [
+  {
+   "payload": {
+    "env": "solitary",
+    "event_id": "evt-untrusted",
+    "repo_label": "<TMP>",
+    "run_id": "<RUN>",
+    "run_state_path": null,
+    "run_state_url": null
+   },
+   "type": "run_created"
+  },
+  {
+   "payload": {
+    "kind": "response",
+    "path": "<TMP>/.brr/responses/evt-untrusted.md",
+    "run_id": "<RUN>"
+   },
+   "type": "artifact_created"
+  },
+  {
+   "payload": {
+    "run_id": "<RUN>",
+    "stage": "refused"
+   },
+   "type": "finalizing"
+  },
+  {
+   "payload": {
+    "event_id": "evt-untrusted",
+    "publish_status": "refused",
+    "run_id": "<RUN>"
+   },
+   "type": "done"
+  }
+ ],
+ "persisted": {
+  "meta": {
+   "publish_status": "refused",
+   "repo_label": "<TMP>",
+   "transitions": [
+    {
+     "at": "<V>",
+     "by": null,
+     "from": "pending",
+     "tick": null,
+     "to": "done",
+     "why": "trust_refused"
+    }
+   ],
+   "trust_refused": "untrusted source and solitary is unavailable (no docker.image configured)",
+   "trust_tier": "untrusted"
+  },
+  "status": "done",
+  "terminal_reply": null
+ },
+ "portal": null,
+ "response": "This request came from an untrusted source and no isolated environment is available to run it safely (untrusted source and solitary is unavailable (no docker.image configured)). No run was started. An operator can configure `trust.untrusted_env` (e.g. `solitary` with a `docker.image`) to enable isolated runs for untrusted sources.",
+ "returned": {
+  "body": "hi",
+  "env": "solitary",
+  "status": "done"
+ },
+ "shuttle": null
+}

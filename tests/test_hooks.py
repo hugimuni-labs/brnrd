@@ -6173,6 +6173,113 @@ def test_boundary_detail_absent_for_non_tool_phases(tmp_path):
     assert "out_bytes" not in record
 
 
+# ── The bead and its coordinates (ctx / spend / quota / place) ────────────
+
+
+def test_boundary_row_carries_context_tokens_and_their_delta(tmp_path):
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", resources={
+        "context_window": {"status": "known", "summary": "148k tok"},
+    })
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    _portal(tmp_path, token="t2", resources={
+        "context_window": {"status": "known", "summary": "151.2k tok"},
+    })
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+
+    first, second = _transcript(run_dir)
+    assert first["ctx"] == {"tokens_after": 148000, "delta": None}
+    assert second["ctx"] == {"tokens_after": 151200, "delta": 3200}
+
+
+def test_boundary_row_never_converts_a_percent_context_reading(tmp_path):
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", resources={
+        "context_window": {"status": "known", "summary": "148k tok"},
+    })
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    _portal(tmp_path, token="t2", resources={
+        "context_window": {"status": "known", "summary": "62% context left (est)"},
+    })
+    hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+
+    assert _transcript(run_dir)[-1]["ctx"] == {"tokens_after": None, "delta": None}
+
+
+def test_boundary_row_carries_the_allowance_spend(tmp_path):
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", resources={
+        "allowance": {
+            "status": "known", "tokens": 120000, "spent": 38000, "scope": "strand",
+        },
+    })
+    hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+
+    assert _transcript(run_dir)[-1]["spend"] == {
+        "allowance_used": 38000, "allowance": 120000,
+    }
+
+
+def test_boundary_row_carries_quota_by_the_chips_own_letters(tmp_path):
+    env, run_dir = _transcript_env(tmp_path)
+    summary = (
+        "session 68% left (resets 1pm); week 77% left (resets Sep 19); "
+        "Fable week 40% left"
+    )
+    resources = {"quota": {"status": "known", "summary": summary}}
+    _portal(tmp_path, token="t1", resources=resources)
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+
+    assert _transcript(run_dir)[-1]["quota"] == {"S": 68, "W": 77, "F": 40}
+    # One parse feeds both: the chip still reads the same buckets.
+    assert hooks._quota_chip(resources).startswith("q S68")
+
+    _portal(tmp_path, token="t2", resources={
+        "quota": {"status": "unknown", "summary": summary},
+    })
+    hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert _transcript(run_dir)[-1]["quota"] == {"S": None, "W": None, "F": None}
+
+
+def test_boundary_row_place_names_the_file_a_tool_touched(tmp_path):
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1")
+    hooks.run_hook(hooks.PHASE_POST_TOOL, json.dumps({
+        "tool_calls": [
+            {"tool_name": "Edit", "tool_input": {"file_path": " /src/brr/hooks.py "}},
+            {"tool_name": "Read", "tool_input": {"file_path": "/other.py"}},
+        ],
+    }), env)
+    hooks.run_hook(hooks.PHASE_POST_TOOL, json.dumps({
+        "tool_name": "NotebookEdit",
+        "tool_input": {"notebook_path": "/nb/a.ipynb"},
+    }), env)
+    hooks.run_hook(hooks.PHASE_POST_TOOL, json.dumps({
+        "tool_name": "Bash", "tool_input": {"command": "cat /etc/hosts"},
+    }), env)
+
+    batch, single, bash = _transcript(run_dir)
+    assert batch["place"] == {"path": "/src/brr/hooks.py", "commit": None}
+    assert single["place"] == {"path": "/nb/a.ipynb", "commit": None}
+    assert bash["place"] == {"path": None, "commit": None}
+
+
+def test_boundary_row_readings_are_null_shaped_without_a_portal(tmp_path):
+    env, run_dir = _transcript_env(tmp_path)
+    hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    hooks.run_hook(hooks.PHASE_PRE_TOOL, json.dumps({
+        "tool_name": "Read", "tool_input": {"file_path": "/x.py"},
+    }), env)
+
+    records = _transcript(run_dir)
+    assert len(records) == 2
+    for record in records:
+        assert record["ctx"] == {"tokens_after": None, "delta": None}
+        assert record["spend"] == {"allowance_used": None, "allowance": None}
+        assert record["quota"] == {"S": None, "W": None, "F": None}
+        assert record["place"] == {"path": None, "commit": None}
+
+
 def test_redact_detail_masks_authorization_header():
     """Authorization header values are masked regardless of case."""
     result = hooks.redact_detail("curl -H 'Authorization: Bearer mytoken123'")
