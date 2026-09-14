@@ -1,0 +1,40 @@
+{
+  "emitted": [
+    {
+      "payload": {
+        "core": null,
+        "defer_until": null,
+        "event_id": "<EVT1>",
+        "proposed_runner": "claude",
+        "quality": null,
+        "reason": null,
+        "respawn_event_id": "<EVT2>",
+        "run_id": "run-parent"
+      },
+      "type": "respawn_requested"
+    }
+  ],
+  "promoted": 1,
+  "stats": {
+    "respawn": 1
+  },
+  "task_meta": {},
+  "tree": {
+    ".brr/conversations/telegram__42__/<EVT1>.jsonl": [
+      {
+        "artifact_kind": "respawn_request",
+        "body": "carry on",
+        "event_id": "<EVT1>",
+        "kind": "artifact",
+        "label": "respawn:<EVT2>",
+        "path": "<TMP>/.brr/inbox/<EVT2>.md",
+        "run_id": "run-parent",
+        "summary": "carry on",
+        "ts": "<V>"
+      }
+    ],
+    ".brr/inbox/<EVT1>.md": "---\nid: <EVT1>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
+    ".brr/inbox/<EVT2>.md": "---\nid: <EVT2>\nsource: telegram\nstatus: pending\ntelegram_user_id: 42\ntelegram_chat_id: 42\nrespawned_from_event: <EVT1>\nrespawned_by_run: run-parent\nshell: claude\ncreated: <TS>\n---\ncarry on\n",
+    ".brr/outbox/<EVT1>/.processed/respawn.md": "---\nrespawn: true\nshell: claude\n---\ncarry on\n"
+  }
+}

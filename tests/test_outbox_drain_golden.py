@@ -42,6 +42,8 @@ WRITE = os.environ.get("BRR_OUTBOX_GOLDEN_WRITE") == "1"
 _ADDED_NOTICE_FIELDS = frozenset({"source_file", "verb", "run"})
 
 _EVT_RE = re.compile(r"evt-\d{10,}-[a-z0-9]{4}")
+# The chrome's short form (`evt-…qjst`) carries only the random tail.
+_SHORT_EVT_RE = re.compile(r"evt-…[a-z0-9]{4}")
 _RUN_ID_RE = re.compile(r"run-\d{6}-\d{4}-[a-z0-9]{4}")
 _ISO_RE = re.compile(
     r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?"
@@ -81,6 +83,7 @@ class _Ids:
 def _norm_str(text: str, root: str, ids: _Ids) -> str:
     text = text.replace(root, "<TMP>")
     text = ids.sub(text)
+    text = _SHORT_EVT_RE.sub("evt-…<TAIL>", text)
     text = _RUN_ID_RE.sub("<RUN>", text)
     text = _ISO_RE.sub("<TS>", text)
     text = _STAMP_RE.sub("<STAMP>", text)
@@ -318,6 +321,78 @@ def _scenario_staging_and_dotfiles(_inbox, outbox, _own):
     _write(outbox, ".keepalive", "1\n")
 
 
+def _scenario_gate_delivered(_inbox, outbox, _own):
+    _write(outbox, "gate.md", "---\ngate: telegram\n---\nheads up\n")
+
+
+def _scenario_cut_bounced_topicless(_inbox, outbox, _own):
+    _write(outbox, "cut.md", "---\ncut: true\n---\ndone — nothing to hand over\n")
+
+
+def _scenario_cut_minimal_bolt(_inbox, outbox, _own):
+    _write(outbox, ".topics", "daemon\n")
+    _write(
+        outbox, "cut.md",
+        "---\ncut: true\n---\ndone — nothing to hand over\n",
+    )
+
+
+def _scenario_respawn(_inbox, outbox, _own):
+    _write(outbox, "respawn.md", "---\nrespawn: true\nshell: claude\n---\ncarry on\n")
+
+
+def _scenario_runner_policy(_inbox, outbox, _own):
+    _write(
+        outbox, "policy.md",
+        "---\nrunner_policy: propose\n---\n- prefer sonnet for chores\n",
+    )
+
+
+def _scenario_config_change(_inbox, outbox, _own):
+    _write(outbox, "config.md", "---\nconfig_change: seat.pause_on_message=false\n---\nwhy\n")
+
+
+def _scenario_await_dropped(_inbox, outbox, _own):
+    _write(outbox, "await.md", "---\nawait: true\nspawn:evt-1: x\n---\n")
+
+
+def _scenario_hold_parse_error(_inbox, outbox, _own):
+    _write(outbox, "hold.md", "---\nhold: true\nresume: sometime\n---\n")
+
+
+def _scenario_event_unknown(_inbox, outbox, _own):
+    _write(outbox, "reply.md", "---\nevent: evt-1234567890123-abcd\n---\nhello?\n")
+
+
+def _scenario_self_reply_short_id(_inbox, outbox, own):
+    _write(outbox, "reply.md", f"---\nevent: evt-…{own[-4:]}\n---\nshort self\n")
+
+
+def _scenario_strand_reply_refused(inbox, outbox, _own):
+    other = protocol.create_event(
+        inbox, "telegram", "not yours", telegram_user_id="42", telegram_chat_id="42",
+    )
+    _write(outbox, "reply.md", f"---\nevent: {other.stem}\n---\nmine now\n")
+
+
+def _scenario_also_refused(inbox, outbox, _own):
+    lead = protocol.create_event(
+        inbox, "telegram", "one", telegram_user_id="42", telegram_chat_id="42",
+    )
+    _write(
+        outbox, "reply.md",
+        f"---\nevent: {lead.stem}\nalso: evt-1234567890123-nope\n---\nboth\n",
+    )
+
+
+def _scenario_stop_self(_inbox, outbox, own):
+    _write(outbox, "stop.md", f"---\nstop: {own}\n---\n")
+
+
+def _scenario_spawn_bad_contract(_inbox, outbox, _own):
+    _write(outbox, "spawn.md", "---\nspawn: true\nshell: nosuchshell\n---\ntask\n")
+
+
 SCENARIOS: dict[str, dict[str, Any]] = {
     "event_reply_with_also": {"stage": _scenario_event_reply_with_also, "with_account": True},
     "note": {"stage": _scenario_note},
@@ -337,6 +412,22 @@ SCENARIOS: dict[str, dict[str, Any]] = {
     "ask_allowance_from_resident": {"stage": _scenario_ask_allowance_from_resident},
     "empty_cut_casualty": {"stage": _scenario_empty_cut_casualty},
     "staging_and_dotfiles": {"stage": _scenario_staging_and_dotfiles},
+    "gate_delivered": {"stage": _scenario_gate_delivered, "with_account": True},
+    "cut_bounced_topicless": {"stage": _scenario_cut_bounced_topicless, "with_account": True},
+    "cut_minimal_bolt": {"stage": _scenario_cut_minimal_bolt, "with_account": True},
+    "respawn": {"stage": _scenario_respawn},
+    "runner_policy": {"stage": _scenario_runner_policy, "with_account": True},
+    "config_change": {"stage": _scenario_config_change, "with_account": True},
+    "await_dropped": {"stage": _scenario_await_dropped},
+    "hold_parse_error": {"stage": _scenario_hold_parse_error},
+    "event_unknown": {"stage": _scenario_event_unknown},
+    "self_reply_short_id": {"stage": _scenario_self_reply_short_id, "with_account": True},
+    "strand_reply_refused": {
+        "stage": _scenario_strand_reply_refused, "task_meta": {"strand": True},
+    },
+    "also_refused": {"stage": _scenario_also_refused, "with_account": True},
+    "stop_self": {"stage": _scenario_stop_self},
+    "spawn_bad_contract": {"stage": _scenario_spawn_bad_contract},
 }
 
 

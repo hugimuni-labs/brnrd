@@ -1,0 +1,18 @@
+{
+  "emitted": [],
+  "promoted": 0,
+  "stats": {},
+  "task_meta": {},
+  "tree": {
+    ".brr/inbox/<EVT2>.md": "---\nid: <EVT2>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
+    ".brr/outbox/<EVT2>/.notices.jsonl": [
+      {
+        "at": "<V>",
+        "kind": "refused",
+        "lifetime": "run",
+        "text": "reply dropped: event <EVT1> not found in any inbox (the id is wrong, or the event is gone) — the message was NOT delivered"
+      }
+    ],
+    ".brr/outbox/<EVT2>/.processed/reply.md": "---\nevent: <EVT1>\n---\nhello?\n"
+  }
+}
