@@ -204,6 +204,149 @@ class Bolt(_Shape):
     accepted_at: str | None
 
 
+#: The frame's typed produce rows (``land:`` writes them, #1975), one file per
+#: run under ``<brr_dir>/runs/<run_id>/``. ``outbox.land`` spells its path
+#: with this name.
+PRODUCE_LEDGER_NAME = "produce.jsonl"
+
+#: The four kinds of produce the loom draws (``design-the-loom.md`` §3).
+LOOM_KINDS = ("knot", "heddle", "card", "page")
+
+#: Today's relic kinds, read as the loom's: a commit or a merge is a knot; a
+#: branch is a heddle and a PR is a raised one; an issue or a warp item is a
+#: card; a kb page is a page. ``comment``, ``message`` and ``file`` have no
+#: loom kind yet — counted as ``unmapped``, never guessed into one.
+RELIC_LOOM_KIND = {
+    "commit": "knot", "merge": "knot",
+    "branch": "heddle", "pr": "heddle",
+    "issue": "card", "item": "card",
+    "kb": "page",
+}
+
+#: How many refs ``produce.ledger.last`` carries.
+LEDGER_LAST = 5
+
+
+def relic_ref(record: dict[str, Any]) -> str | None:
+    """The coordinate a relic names: a sha, a branch, ``#n``, an address, a path."""
+    kind = str(record.get("kind") or "")
+    if kind in {"commit", "merge"}:
+        value = record.get("sha")
+    elif kind == "branch":
+        value = record.get("name")
+    elif kind in {"pr", "issue"}:
+        number = record.get("number")
+        value = f"#{number}" if number not in (None, "") else None
+    elif kind == "item":
+        value = record.get("address")
+    else:
+        value = record.get("path")
+    text = str(value or "").strip()
+    return text or None
+
+
+def read_produce_ledger(brr_dir: Path | None, run_id: str | None) -> list[dict[str, Any]]:
+    """Every parseable row of this run's ``produce.jsonl``, in file order. Never raises."""
+    if brr_dir is None or not run_id:
+        return []
+    rows: list[dict[str, Any]] = []
+    try:
+        text = (Path(brr_dir) / "runs" / run_id / PRODUCE_LEDGER_NAME).read_text(encoding="utf-8")
+    except OSError:
+        return []
+    for line in text.splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def _same_ref(kind: str, a: str, b: str) -> bool:
+    if a == b:
+        return True
+    # A knot's sha may be abbreviated on one side (relics derive short shas;
+    # ``land:`` writes the full one): one is a prefix of the other, 7+ chars.
+    if kind == "knot":
+        short, long_ = sorted((a, b), key=len)
+        return len(short) >= 7 and long_.startswith(short)
+    return False
+
+
+def project_produce(
+    ledger_rows: list[dict[str, Any]],
+    relic_records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """``produce.ledger`` — the run's produce as the loom's four kinds.
+
+    Two sources, one projection. The frame's typed rows (``produce.jsonl``)
+    come first; today's relics (the records ``relics.live_summary`` already
+    compiled, never ``.relics.jsonl`` read a second time) are folded in under
+    :data:`RELIC_LOOM_KIND`. A relic naming the same ``(kind, ref)`` as a
+    frame row is the same produce: ``land:`` writes both a ``knot`` row and a
+    ``merge`` relic from one read, and it counts once.
+
+    ``last`` is the newest :data:`LEDGER_LAST` refs: frame rows by ``at``
+    (newest first), then relics in manifest order — relics carry no time, so
+    they never outrank a stamped row.
+    """
+    entries: list[dict[str, Any]] = []
+    unmapped = 0
+
+    def _admit(kind: str, ref: str, at: Any, source: str) -> None:
+        for seen in entries:
+            if seen["kind"] == kind and _same_ref(kind, seen["ref"], ref):
+                return
+        entries.append({"kind": kind, "ref": ref, "at": at, "source": source})
+
+    stamped = [r for r in ledger_rows if isinstance(r.get("at"), str)]
+    unstamped = [r for r in ledger_rows if not isinstance(r.get("at"), str)]
+    for row in sorted(stamped, key=lambda r: r["at"], reverse=True) + unstamped:
+        kind = str(row.get("kind") or "")
+        ref = str(row.get("ref") or "").strip()
+        if kind not in LOOM_KINDS or not ref:
+            unmapped += 1
+            continue
+        _admit(kind, ref, row.get("at"), "frame")
+    for record in relic_records:
+        if not isinstance(record, dict):
+            continue
+        kind = RELIC_LOOM_KIND.get(str(record.get("kind") or ""))
+        ref = relic_ref(record)
+        if kind is None or ref is None:
+            unmapped += 1
+            continue
+        _admit(kind, ref, None, "relic")
+    counts = {kind: 0 for kind in LOOM_KINDS}
+    for entry in entries:
+        counts[entry["kind"]] += 1
+    return {
+        "counts": counts,
+        "last": entries[:LEDGER_LAST],
+        "unmapped": unmapped,
+        "sources": {
+            "frame": sum(1 for e in entries if e["source"] == "frame"),
+            "relic": sum(1 for e in entries if e["source"] == "relic"),
+        },
+    }
+
+
+def with_ledger(
+    produce: dict[str, Any], brr_dir: Path | None, run_id: str | None,
+) -> dict[str, Any]:
+    """*produce* (the relics facet) plus its ``ledger`` projection; never mutates it."""
+    records = produce.get("records") if produce.get("known") else None
+    return {
+        **produce,
+        "ledger": project_produce(
+            read_produce_ledger(brr_dir, run_id),
+            records if isinstance(records, list) else [],
+        ),
+    }
+
+
 #: HUD field name → portal key, where Python's grammar forced a rename.
 _KEY_OF = {"await_": "await"}
 #: HUD fields omitted from the payload when ``None`` (the key is absent, not null).
@@ -294,6 +437,61 @@ class HUD:
             return cls.from_json(Path(path).read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError):
             return None
+
+
+# ── the verb's renderings (``brnrd hud``) ────────────────────────────
+
+
+def render_bar(hud: HUD, *, outbox_dir: Path | None = None) -> str:
+    """The chip's bar line, rendered from *hud* by the hooks' own renderer.
+
+    The same ``hooks.format_delta`` → ``hooks._render_bar`` path a mid-run
+    boundary takes, on this object's payload, with every chip due (no prior
+    bar to diff against). What is not in the HUD — the mood, the course, the
+    room, which the hook reads from the run's own control files — is not
+    rendered here, so this line is the HUD's share of the bar, not a replay of
+    the last one injected.
+    """
+    from . import hooks
+
+    line = hooks.format_delta(hud.to_dict(), outbox_dir=outbox_dir)
+    return line or ""
+
+
+def render_produce(hud: HUD) -> str:
+    """What the frame attests: ``produce.ledger``, one row per ref, then the relic counts.
+
+    For comparing against the card's *Produce* section, which the resident
+    writes; this is the other book.
+    """
+    produce = hud.produce if isinstance(hud.produce, dict) else {}
+    ledger = produce.get("ledger") if isinstance(produce.get("ledger"), dict) else None
+    lines: list[str] = []
+    if ledger is None:
+        lines.append("ledger: absent (a portal written before move 5)")
+    else:
+        counts = ledger.get("counts") if isinstance(ledger.get("counts"), dict) else {}
+        lines.append(
+            "ledger: " + " · ".join(f"{kind} {int(counts.get(kind) or 0)}" for kind in LOOM_KINDS)
+            + f" · unmapped {int(ledger.get('unmapped') or 0)}"
+        )
+        sources = ledger.get("sources") if isinstance(ledger.get("sources"), dict) else {}
+        lines.append(
+            f"sources: frame {int(sources.get('frame') or 0)} · relic {int(sources.get('relic') or 0)}"
+        )
+        for entry in ledger.get("last") or []:
+            if not isinstance(entry, dict):
+                continue
+            at = f" @ {entry['at']}" if entry.get("at") else ""
+            lines.append(f"  {entry.get('kind')} {entry.get('ref')} ({entry.get('source')}){at}")
+    if produce.get("known"):
+        counts = produce.get("counts") if isinstance(produce.get("counts"), dict) else {}
+        lines.append(
+            "relics: " + (" · ".join(f"{k} {v}" for k, v in sorted(counts.items())) or "none")
+        )
+    else:
+        lines.append("relics: unknown (no work tree measured)")
+    return "\n".join(lines)
 
 
 @dataclass(frozen=True)
@@ -688,7 +886,10 @@ def build(inputs: HUDInputs) -> HUD:
             task.meta.get("resource_hold")
         ),
         scm=scm_facet,
-        produce=produce_facet,
+        # Move 5: the relics facet plus the loom's four kinds, projected from
+        # the frame's ``produce.jsonl`` and the same relic records (added
+        # after the movement stamp above, which reads the relics facet alone).
+        produce=with_ledger(produce_facet, brr_dir, task.id),
         # #904's armed dated-letters projection: the still-armed `at:`
         # schedule entries, read from the snapshot `_fire_due_schedules`
         # writes each scheduling tick (`schedule.save_armed_letters`) —

@@ -7,7 +7,9 @@ change* as the contract. The existing suite is the first proof; this module is
 the second: every scenario below was driven through the **unsplit** writer on
 ``main`` and the exact bytes it wrote were frozen under
 ``tests/fixtures/hud_golden/``. The same drive through the split writer must
-reproduce each file byte for byte.
+reproduce each file byte for byte — with one named exception, move 5's
+``produce.ledger`` projection, which is popped before the compare (see
+:func:`without_ledger`) and pinned on its own in ``tests/test_hud.py``.
 
 Two substitutions make a capture portable, and both are exact:
 
@@ -34,7 +36,7 @@ from typing import Any, Callable
 
 import pytest
 
-from brr import claude_status, daemon, schedule as schedule_mod, shuttle, tick as tick_mod
+from brr import daemon, schedule as schedule_mod, tick as tick_mod
 from brr.run import Run
 
 GOLDEN_DIR = Path(__file__).parent / "fixtures" / "hud_golden"
@@ -343,6 +345,23 @@ def drive(name: str, tmp_path: Path, monkeypatch) -> tuple[str, dict[str, Any]]:
     return text, json.loads(text)
 
 
+def without_ledger(text: str) -> tuple[str, Any]:
+    """The payload as ``main`` wrote it: move 5's one added key taken back out.
+
+    ``produce.ledger`` (the loom's four kinds, §5 of the move) is the only key
+    the split adds. It is popped and the payload re-serialised with the
+    writer's own ``json.dumps`` arguments, so every other byte is still
+    compared against the capture from the unsplit writer. Absent ⇒ the text
+    is returned untouched (the capture itself runs through here).
+    """
+    payload = json.loads(text)
+    produce = payload.get("produce")
+    if not isinstance(produce, dict) or "ledger" not in produce:
+        return text, None
+    ledger = produce.pop("ledger")
+    return json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", ledger
+
+
 @pytest.mark.parametrize("name", sorted(SCENARIOS))
 def test_portal_state_golden(name, tmp_path, monkeypatch):
     text, payload = drive(name, tmp_path, monkeypatch)
@@ -350,7 +369,10 @@ def test_portal_state_golden(name, tmp_path, monkeypatch):
     assert payload["change_token"] == daemon._change_token(
         {k: v for k, v in payload.items() if k != "change_token"}
     )
-    got = portable(text, tmp_path)
+    main_text, ledger = without_ledger(text)
+    if not WRITE:
+        assert ledger is not None, "the split writer projects produce.ledger on every tick"
+    got = portable(main_text, tmp_path)
     golden = GOLDEN_DIR / f"{name}.json"
     if WRITE:
         golden.parent.mkdir(parents=True, exist_ok=True)
