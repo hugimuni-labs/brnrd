@@ -1,0 +1,221 @@
+{
+ "event": {
+  "repo_label": "<TMP>",
+  "run_id": "<RUN>",
+  "run_outcome": "held",
+  "status": "done"
+ },
+ "hold_active": true,
+ "inbox_file": "---\nid: evt-quota\nstatus: done\nsource: telegram\ntrust_tier: owner\nrun_id: <RUN>\nrepo_label: <TMP>\nrun_outcome: held\n---\nq\n",
+ "log": [
+  "[brnrd] run <RUN> (event evt-quota): env=worktree",
+  "[brnrd] worker evt-quota: installed codex hook config via argv",
+  "[brnrd] worker evt-quota: attempt 1",
+  "[brnrd] pause-on-message: evt-quota attempt 1 runner 'codex' is not claude — no-op (unmeasured cap behaviour, named non-goal)",
+  "[brnrd] worker evt-quota: runner error: mock failed (exit 1): codex task_complete error (usage limit exceeded): out of quota",
+  "[brnrd] worker evt-quota: resource hold armed (codex/quota_exhausted, resume=operator)",
+  "[brnrd] salvage: branch unresolvable for <RUN> (no branch or resolvable HEAD in <TMP>: fatal: not a git repository (or any of the parent directories): .git); no branch to publish",
+  "[brnrd] run <RUN>: stray-check-incomplete — this run's branch never moved but the shared checkout at <TMP> did: {'kind': 'stray-check-incomplete', 'signals': ['stray-check-incomplete'], 'incomplete_arms': ['commit', 'dirty']}",
+  "[brnrd] run <RUN>: REFUSING default-branch publish — <TMP> is not the tree git resolves for it (--show-toplevel says <git would not say>): this path is not a git repository at all. Nothing is pushed from here until this is resolved."
+ ],
+ "packets": [
+  {
+   "payload": {
+    "event_id": "evt-quota",
+    "source": "telegram"
+   },
+   "type": "event_received"
+  },
+  {
+   "payload": {
+    "error": null,
+    "event_id": "evt-quota",
+    "ff_branches": {},
+    "run_id": "<RUN>",
+    "skipped": {
+     "main": "no remote configured"
+    },
+    "summary": "skipped main (no remote configured)"
+   },
+   "type": "synced"
+  },
+  {
+   "payload": {
+    "env": "worktree",
+    "event_id": "evt-quota",
+    "repo_label": "<TMP>",
+    "run_id": "<RUN>",
+    "run_state_path": null,
+    "run_state_url": null
+   },
+   "type": "run_created"
+  },
+  {
+   "payload": {
+    "branch_name": "brr/<RUN>",
+    "branch_source": "fallback:preserve",
+    "env": "worktree",
+    "repo_label": "<TMP>",
+    "run_id": "<RUN>",
+    "seed_ref": "main",
+    "target_branch": null
+   },
+   "type": "env_prepared"
+  },
+  {
+   "payload": {
+    "branch": "brr/<RUN>",
+    "env": "worktree",
+    "run_id": "<RUN>",
+    "runner": "codex",
+    "seed_ref": "main",
+    "target_branch": null
+   },
+   "type": "run_started"
+  },
+  {
+   "payload": {
+    "event_id": "evt-quota",
+    "flavour": "codex",
+    "path": "<argv -c hooks.*>",
+    "run_id": "<RUN>"
+   },
+   "type": "hooks_installed"
+  },
+  {
+   "payload": {
+    "attempt": 1,
+    "event_id": "evt-quota",
+    "run_id": "<RUN>"
+   },
+   "type": "attempt_started"
+  },
+  {
+   "payload": {
+    "kind": "response",
+    "path": "<TMP>/.brr/responses/evt-quota.md",
+    "run_id": "<RUN>"
+   },
+   "type": "artifact_created"
+  },
+  {
+   "payload": {
+    "run_id": "<RUN>",
+    "stage": "held"
+   },
+   "type": "finalizing"
+  },
+  {
+   "payload": {
+    "event_id": "evt-quota",
+    "provider": "codex",
+    "reason": "quota_exhausted",
+    "resume_condition": "operator",
+    "resume_kind": "unsupported",
+    "run_id": "<RUN>"
+   },
+   "type": "held"
+  }
+ ],
+ "persisted": {
+  "meta": {
+   "branch_name": "brr/<RUN>",
+   "branch_source": "fallback:preserve",
+   "context_path": "<TMP>/.brr/runs/<RUN>/context.md",
+   "has_new_commit": false,
+   "host_context_branch": "main",
+   "host_dirty_at_dispatch": "[]",
+   "host_head_at_dispatch_unavailable": true,
+   "kb_base_url": null,
+   "outbox_path": "<TMP>/.brr/outbox/evt-quota",
+   "pid": "<V>",
+   "presence_id": "<V>",
+   "repo_label": "<TMP>",
+   "resident_allowance_spent": null,
+   "resident_allowance_tokens": 20000000,
+   "resource_hold": {
+    "accumulated_event_ids": [],
+    "armed_at": "<V>",
+    "conversation_key": "telegram:50:",
+    "detail": "out of quota",
+    "generation": 1,
+    "native_session_id": null,
+    "provider": "codex",
+    "quota": null,
+    "reason": "quota_exhausted",
+    "released": false,
+    "released_at": null,
+    "released_by": null,
+    "reset_deadline": null,
+    "resume_condition": "operator",
+    "resume_kind": "unsupported",
+    "seat_key": "<TMP>/.brr"
+   },
+   "response_path": "<TMP>/.brr/responses/evt-quota.md",
+   "run_ledger_baseline_runner": "codex",
+   "run_state_digest": "{\"delivered\": {\"current\": 0, \"other\": 0, \"outbound\": 0}, \"events\": [], \"produce\": {\"branch\": \"main\", \"counts\": {}, \"issue_actions\": {\"completed\": 0, \"created\": 0, \"unattributed\": 0}, \"known\": true, \"latest_commit\": null, \"pr\": null, \"records\": [{\"kind\": \"note\", \"text\": \"seed unresolvable at 'main'\"}]}, \"scm\": {\"branch\": \"main\", \"known\": true, \"modified_files\": 0, \"unpushed_commits\": 0}}",
+   "run_state_digest_seen": true,
+   "runner_class": "balanced",
+   "runner_name": "codex",
+   "runner_shell": "codex",
+   "seed_ref": "main",
+   "started_at": "<V>",
+   "telegram_chat_id": 50,
+   "transitions": [
+    {
+     "at": "<V>",
+     "by": null,
+     "from": "pending",
+     "tick": null,
+     "to": "running",
+     "why": "update_status"
+    },
+    {
+     "at": "<V>",
+     "by": null,
+     "from": "running",
+     "tick": null,
+     "to": "held",
+     "why": "update_status"
+    }
+   ],
+   "trust_tier": "owner"
+  },
+  "status": "held",
+  "terminal_reply": null
+ },
+ "portal": null,
+ "response": "Parking this conversation — codex hit quota exhausted.\n\nout of quota\n\nNothing else will wake this seat while it's parked — send a message when ready to resume.",
+ "returned": {
+  "body": "q",
+  "env": "worktree",
+  "status": "held"
+ },
+ "shuttle": {
+  "conversation_key": "telegram:50:",
+  "key": "<TMP>/.brr",
+  "repo_root": "<TMP>",
+  "run_id": "<RUN>",
+  "since": "<V>",
+  "state": "parked",
+  "transitions": [
+   {
+    "at": "<V>",
+    "by": "daemon",
+    "from": "released",
+    "tick": null,
+    "to": "awake",
+    "why": "event_dispatched"
+   },
+   {
+    "at": "<V>",
+    "by": "daemon",
+    "from": "awake",
+    "tick": null,
+    "to": "parked",
+    "why": "quota_exhausted"
+   }
+  ],
+  "why": "quota_exhausted"
+ }
+}
