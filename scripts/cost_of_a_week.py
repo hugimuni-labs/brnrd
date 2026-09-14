@@ -45,6 +45,7 @@ from __future__ import annotations
 import argparse
 import bisect
 import glob
+import itertools
 import json
 import math
 import os
@@ -78,6 +79,8 @@ USAGE_KEYS = (
 # The weekly window is observed at 1 % resolution; a "reading" whose resets_at
 # moves by less than this is the same window, jittered by the PTY scrape.
 SAME_WINDOW_SLACK_S = 2 * 3600
+# A fall this large inside one window is a reset, not scrape jitter.
+RESET_FALL_PTS = 5.0
 
 
 def parse_ts(value) -> datetime | None:
@@ -200,6 +203,20 @@ class TokenEvent:
     who: str  # resident | strand | interactive | other-repo
     fresh: int  # input + cache creation + output (claude); uncached input + output (codex)
     cache_read: int
+    output: int = 0
+    cache_creation: int = 0
+    context: int = 0  # prompt size of this call: input + cache read + cache creation
+
+    @property
+    def priced(self) -> float:
+        """Input-token equivalents at Anthropic's published ratios.
+
+        uncached input 1 · cache write 1.25 · cache read 0.1 · output 5. The
+        same ratios hold for every current Claude model, so the per-family
+        weight a fit finds is the family's price, not a token-type artefact.
+        """
+        uncached = self.fresh - self.output - self.cache_creation
+        return uncached + 1.25 * self.cache_creation + 0.1 * self.cache_read + 5 * self.output
 
     @property
     def total(self) -> int:
@@ -259,7 +276,11 @@ def load_claude_tokens(runs, as_of: datetime) -> list[TokenEvent]:
         fresh = c["input_tokens"] + c["cache_creation_input_tokens"] + c["output_tokens"]
         if c["fam"] is None or fresh + c["cache_read_input_tokens"] == 0:
             continue  # '<synthetic>' rows and empty stubs
-        out.append(TokenEvent(c["t"], "claude", c["fam"], c["who"], fresh, c["cache_read_input_tokens"]))
+        out.append(TokenEvent(
+            c["t"], "claude", c["fam"], c["who"], fresh, c["cache_read_input_tokens"],
+            output=c["output_tokens"], cache_creation=c["cache_creation_input_tokens"],
+            context=c["input_tokens"] + c["cache_read_input_tokens"] + c["cache_creation_input_tokens"],
+        ))
     out.sort(key=lambda e: e.t)
     return out
 
@@ -310,7 +331,7 @@ def load_codex(runs, as_of: datetime):
                 prev_in, prev_cached, prev_out = inp, cached, outp
                 if min(d_in, d_c, d_o) < 0 or d_in + d_o == 0:
                     continue
-                events.append(TokenEvent(t, "codex", None, who, (d_in - d_c) + d_o, d_c))
+                events.append(TokenEvent(t, "codex", None, who, (d_in - d_c) + d_o, d_c, output=d_o))
     events.sort(key=lambda e: e.t)
     weekly.sort(key=lambda g: g.t)
     return events, weekly
@@ -371,32 +392,44 @@ class Interval:
 
 
 def gauge_intervals(readings: list[GaugeReading]) -> list[Interval]:
-    """Consecutive readings to consumed points, reset-aware.
+    """Consecutive readings to consumed points, reset-aware and jitter-proof.
 
-    - same window (resets_at within slack, both known), used rose or held:
-      delta = cur - prev. **clean**.
-    - the window rolled (prev's reset instant passed): delta = cur, i.e. what
-      the new window has used since the reset. The old window's tail after
-      prev is lost, so it undercounts. Not clean.
-    - used fell inside what claims to be the same window: a mid-window reset
-      (a grant). delta = cur. Not clean.
-    - a resets_at missing: rose ⇒ cur - prev, fell ⇒ cur. Not clean.
+    Readings from parallel sessions dither by a point around a rounding edge
+    (19, 20, 19, 20 inside one minute), so a fall is not a reset. Inside one
+    window the series is read as a high-water mark: an interval consumes
+    ``max(0, cur - hwm)``.
+
+    - same window (resets_at within slack), fall < RESET_FALL_PTS: jitter
+      or a rise. **clean**.
+    - the window rolled (prev's reset instant passed, or resets_at moved):
+      delta = cur, what the new window has used since its reset. The old
+      window's tail after prev is lost, so it undercounts. Not clean.
+    - a fall of >= RESET_FALL_PTS inside the same window: a mid-window reset.
+      delta = cur. Not clean.
+    - resets_at missing on either end: the same rules without the rollover
+      test. Not clean.
     """
-    out = []
+    out: list[Interval] = []
+    hwm = readings[0].used if readings else 0.0
     for prev, cur in zip(readings, readings[1:]):
         if cur.t <= prev.t:
+            hwm = max(hwm, cur.used)
             continue
-        if prev.resets_at and cur.resets_at:
-            rolled = cur.t.timestamp() >= prev.resets_at - 60 or abs(cur.resets_at - prev.resets_at) > SAME_WINDOW_SLACK_S
-            if rolled:
-                out.append(Interval(prev.t, cur.t, cur.used, False, "rollover"))
-            elif cur.used >= prev.used:
-                out.append(Interval(prev.t, cur.t, cur.used - prev.used, True, "same"))
-            else:
-                out.append(Interval(prev.t, cur.t, cur.used, False, "drop"))
+        known = bool(prev.resets_at and cur.resets_at)
+        rolled = known and (
+            cur.t.timestamp() >= prev.resets_at - 60
+            or abs(cur.resets_at - prev.resets_at) > SAME_WINDOW_SLACK_S
+        )
+        if rolled:
+            out.append(Interval(prev.t, cur.t, cur.used, False, "rollover"))
+            hwm = cur.used
+        elif hwm - cur.used >= RESET_FALL_PTS:
+            out.append(Interval(prev.t, cur.t, cur.used, False, "drop"))
+            hwm = cur.used
         else:
-            d = cur.used - prev.used if cur.used >= prev.used else cur.used
-            out.append(Interval(prev.t, cur.t, d, False, "unknown-window"))
+            d = max(0.0, cur.used - hwm)
+            hwm = max(hwm, cur.used)
+            out.append(Interval(prev.t, cur.t, d, known, "same" if known else "unknown-window"))
     return out
 
 
@@ -518,6 +551,132 @@ def daily_ratios(intervals: list[Interval], tl: Timeline, lo: datetime, pred=lam
     return [days[k] for k in sorted(days)]
 
 
+def apportion(intervals: list[Interval], tl: Timeline, lo: datetime, hi: datetime,
+              pred=lambda e: True) -> tuple[float, float]:
+    """Points consumed inside [lo, hi), and how many of them were spread.
+
+    A gauge interval's points are spread over its span in proportion to the
+    fresh tokens drawn inside it (uniformly over time when none were). A
+    short interval lands where it is; a 33-hour gap with no reading (the seat
+    writes no snapshot until it closes) is spread over the hours that
+    actually drew tokens, instead of landing on the day the next reading
+    happened. Returns ``(points, points_from_intervals_longer_than_12h)``.
+    """
+    total = spread = 0.0
+    for iv in intervals:
+        if iv.hi <= lo or iv.lo >= hi or iv.delta == 0:
+            continue
+        evs = [e for e in tl.window(iv.lo, iv.hi) if pred(e)]
+        weight = sum(e.fresh for e in evs)
+        if weight > 0:
+            part = sum(e.fresh for e in evs if lo <= e.t < hi) / weight
+        else:
+            a, b = max(iv.lo, lo), min(iv.hi, hi)
+            part = max(0.0, (b - a).total_seconds()) / (iv.hi - iv.lo).total_seconds()
+        total += iv.delta * part
+        if iv.hi - iv.lo > timedelta(hours=12):
+            spread += iv.delta * part
+    return total, spread
+
+
+def window_table(readings: list[GaugeReading], tl: Timeline, lo: datetime, as_of: datetime,
+                 pred=lambda e: True, seats=None, merges=None):
+    """One row per weekly window the gauge names by its resets_at.
+
+    points = the sum over the window's epochs of each epoch's highest reading
+    (an epoch ends at a mid-window reset), i.e. what the window consumed up to
+    its last reading. tokens = every transcript token from the window's start
+    to that last reading.
+    """
+    by: dict[int, list[GaugeReading]] = defaultdict(list)
+    for r in readings:
+        if r.resets_at:
+            by[int(round(r.resets_at / 3600))].append(r)
+    rows = []
+    for key in sorted(by):
+        rs = sorted(by[key], key=lambda r: r.t)
+        end = datetime.fromtimestamp(key * 3600, timezone.utc)
+        start = end - timedelta(days=7)
+        if end <= lo:
+            continue
+        pts, hwm, resets = 0.0, 0.0, 0
+        for r in rs:
+            if hwm - r.used >= RESET_FALL_PTS:
+                pts += hwm
+                hwm, resets = r.used, resets + 1
+            hwm = max(hwm, r.used)
+        pts += hwm
+        last = rs[-1].t
+        evs = [e for e in tl.window(start, last) if pred(e)]
+        fresh = sum(e.fresh for e in evs)
+        tot = sum(e.total for e in evs)
+        rows.append({
+            "start": start, "end": end, "last": last, "readings": len(rs), "resets": resets,
+            "points": pts, "fresh": fresh, "total": tot,
+            "seat_hours": hours_in(seats, start, min(last, as_of)) if seats is not None else None,
+            "prs": sum(1 for t, _ in merges if start <= t < min(end, as_of)) if merges is not None else None,
+        })
+    return rows
+
+
+FIT_FAMILIES = ("fable", "opus", "sonnet")  # haiku (<= 4 % of any week) is folded into sonnet
+
+
+def family_priced(events) -> list[float]:
+    v = defaultdict(float)
+    for e in events:
+        fam = "sonnet" if e.family == "haiku" else e.family
+        v[fam] += e.priced / 1e6
+    return [v[f] for f in FIT_FAMILIES]
+
+
+def nnls(X: list[list[float]], y: list[float]) -> list[float] | None:
+    """Non-negative least squares for a handful of columns: every subset tried."""
+    n = len(X[0]) if X else 0
+    best = None
+    for k in range(1, n + 1):
+        for cols in itertools.combinations(range(n), k):
+            m = len(cols)
+            M = [[sum(x[i] * x[j] for x in X) for j in cols] + [sum(x[i] * t for x, t in zip(X, y))] for i in cols]
+            singular = False
+            for i in range(m):
+                piv = max(range(i, m), key=lambda r: abs(M[r][i]))
+                if abs(M[piv][i]) < 1e-12:
+                    singular = True
+                    break
+                M[i], M[piv] = M[piv], M[i]
+                for r in range(m):
+                    if r != i:
+                        f = M[r][i] / M[i][i]
+                        M[r] = [a - f * b for a, b in zip(M[r], M[i])]
+            if singular:
+                continue
+            w = [0.0] * n
+            for i, j in enumerate(cols):
+                w[j] = M[i][m] / M[i][i]
+            if min(w) < 0:
+                continue
+            sse = sum((t - sum(a * b for a, b in zip(w, x))) ** 2 for x, t in zip(X, y))
+            if best is None or sse < best[0]:
+                best = (sse, w)
+    return None if best is None else best[1]
+
+
+def fit_days(intervals: list[Interval], tl: Timeline, lo: datetime, hi: datetime,
+             exclude: tuple[datetime, datetime] | None = None):
+    """Clean <= 12 h gauge intervals in [lo, hi), summed per UTC day: (points, priced-by-family)."""
+    days: dict[str, list] = {}
+    for iv in intervals:
+        if not iv.clean or iv.hi - iv.lo > timedelta(hours=12) or not (lo <= iv.hi < hi):
+            continue
+        if exclude and exclude[0] <= iv.hi < exclude[1]:
+            continue
+        d = days.setdefault(iv.hi.strftime("%Y-%m-%d"), [0.0, [0.0] * len(FIT_FAMILIES)])
+        d[0] += iv.delta
+        d[1] = [a + b for a, b in zip(d[1], family_priced(tl.window(iv.lo, iv.hi)))]
+    return [(v[0], v[1]) for _, v in sorted(days.items())]
+
+
 def step_scan(days: list[DayRatio], min_side=4, min_points=3.0, use="fresh"):
     """Every split date with >= min_side usable days per side, ranked by |log ratio|."""
     usable = [d for d in days if getattr(d, use) > 0 and d.points >= 0 and (d.points >= min_points)]
@@ -606,23 +765,26 @@ def main() -> None:
                 bucket = "interactive"
             tok[(e.shell, bucket)] += e.total
             tok[(e.shell, bucket, "fresh")] += e.fresh
-        share = sum(iv.delta for iv in week_iv if ws <= iv.hi < we)
-        cshare = sum(iv.delta for iv in codex_iv if ws <= iv.hi < we)
-        all_tok = sum(v for k, v in tok.items() if len(k) == 2)
-        all_fresh = sum(v for k, v in tok.items() if len(k) == 3)
+            if e.shell == "claude":
+                tok["claude_priced"] += e.priced
+        share, share_spread = apportion(week_iv, ctl, ws, we)
+        cshare, _ = apportion(codex_iv, xtl, ws, we)
+        all_tok = sum(v for k, v in tok.items() if isinstance(k, tuple) and len(k) == 2)
+        all_fresh = sum(v for k, v in tok.items() if isinstance(k, tuple) and len(k) == 3)
         rows.append([
             label, fmt_f(hrs, 1), str(prs),
             fmt_m(tok[("claude", "resident")] + tok[("codex", "resident")]),
             fmt_m(tok[("claude", "strand")] + tok[("codex", "strand")]),
             fmt_m(tok[("claude", "interactive")]),
-            fmt_f(share, 0), fmt_f(cshare, 0),
+            f"{share:,.0f}" + (f" ({share_spread:,.0f} spread)" if share_spread >= 0.5 else ""), fmt_f(cshare, 0),
             fmt_m(all_tok / prs) if prs else "—",
             fmt_m(all_fresh / prs) if prs else "—",
+            fmt_m(tok["claude_priced"] / prs) if prs else "—",
             fmt_f(share / hrs if hrs else None, 2),
         ])
-        chart_week.append((iso_week(ws), all_tok / prs if prs else None, all_fresh / prs if prs else None))
+        chart_week.append((iso_week(ws), all_tok / prs if prs else None, tok["claude_priced"] / prs if prs else None))
     p(table(["week", "seat-hours", "PRs merged", "tokens resident", "tokens strands", "tokens interactive",
-             "claude weekly pts", "codex weekly pts", "tokens / PR", "fresh tokens / PR",
+             "claude weekly pts", "codex weekly pts", "tokens / PR", "fresh tokens / PR", "claude priced / PR",
              "claude pts / seat-hour"], rows))
 
     p("\n### Tokens by shell and who, per week (total · fresh)\n")
@@ -661,6 +823,63 @@ def main() -> None:
     drops = [iv for iv in week_iv if iv.kind == "drop" and iv.hi >= lo]
     if drops:
         p("\nmid-window drops in the claude weekly gauge: " + ", ".join(f"{iv.lo:%m-%d %H:%M}→{iv.hi:%m-%d %H:%M}Z" for iv in drops))
+
+
+    # --- per Claude weekly window ----------------------------------------
+    p("\n## Per Claude weekly window (the gauge's own week)\n")
+    p("points = highest reading per epoch, summed (an epoch ends at a mid-window reset); "
+      "tokens = local Claude transcripts from the window start to its last reading.\n")
+    for name, readings, pred in (("claude weekly, all models", gauge["week"], lambda e: True),
+                                 ("claude Fable bucket, Fable tokens", gauge["fable"], lambda e: e.family == "fable")):
+        rows = window_table(readings, ctl, lo - timedelta(days=7), as_of, pred, seats, merges)
+        p(f"\n### {name}\n")
+        p(table(["window (UTC)", "last reading", "readings", "resets", "points", "fresh tokens", "total tokens",
+                 "pts / M fresh", "pts / 100M total", "seat-hours", "pts / seat-hour", "PRs", "pts / PR"],
+                [[f"{r['start']:%m-%d %H:%M} → {r['end']:%m-%d %H:%M}", f"{r['last']:%m-%d %H:%M}",
+                  str(r["readings"]), str(r["resets"]), fmt_f(r["points"], 0), fmt_m(r["fresh"]), fmt_m(r["total"]),
+                  fmt_f(r["points"] / (r["fresh"] / 1e6) if r["fresh"] else None, 2),
+                  fmt_f(r["points"] / (r["total"] / 1e8) if r["total"] else None, 2),
+                  fmt_f(r["seat_hours"], 1),
+                  fmt_f(r["points"] / r["seat_hours"] if r["seat_hours"] else None, 2),
+                  str(r["prs"]), fmt_f(r["points"] / r["prs"] if r["prs"] else None, 2)] for r in rows]))
+
+
+    # --- mix-adjusted: does the current window cost what its model mix predicts? ---
+    split = max((r["start"] for r in window_table(gauge["week"], ctl, lo, as_of)), default=as_of)
+    fit_lo = split - timedelta(weeks=args.weeks)
+    p("\n## Mix-adjusted test: what the model mix predicts vs what the gauge read\n")
+    p(f"Model: weekly points = w_fable·F + w_opus·O + w_sonnet·S, where F/O/S are priced tokens "
+      f"(input-token equivalents, see `TokenEvent.priced`) per family. Fitted by non-negative least squares on "
+      f"clean <= 12 h gauge intervals summed per day, {fit_lo:%Y-%m-%d %H:%M} → {split:%Y-%m-%d %H:%M}Z "
+      f"(everything before the current window). Each earlier window is predicted from a fit that leaves "
+      f"its own days out; the current window from the full pre-window fit.\n")
+    fit_chart = []
+    base = fit_days(week_iv, ctl, fit_lo, split)
+    w_all = nnls([x for _, x in base], [y for y, _ in base])
+    if w_all:
+        p(table(["family", "pts per M priced tokens", "relative to sonnet"],
+                [[f, fmt_f(w, 3), fmt_f(w / w_all[2], 1) if w_all[2] else "—"] for f, w in zip(FIT_FAMILIES, w_all)]))
+        p(f"\nfit days: {len(base)}\n")
+        rows = []
+        for r in window_table(gauge["week"], ctl, fit_lo, as_of):
+            if r["start"] < fit_lo or r["fresh"] == 0:
+                continue
+            evs = ctl.window(r["start"], r["last"])
+            x = family_priced(evs)
+            tot = sum(x) or 1.0
+            if r["start"] < split:
+                days_out = fit_days(week_iv, ctl, fit_lo, split, exclude=(r["start"], r["end"]))
+                w = nnls([d for _, d in days_out], [y for y, _ in days_out]) or w_all
+                n_fit = len(days_out)
+            else:
+                w, n_fit = w_all, len(base)
+            pred = sum(a * b for a, b in zip(w, x))
+            fit_chart.append((f"{r['start']:%m-%d}→{r['end']:%m-%d}", r["points"], pred, r["start"] >= split,
+                              r["points"] / (r["fresh"] / 1e6)))
+            rows.append([f"{r['start']:%m-%d %H:%M} → {r['end']:%m-%d %H:%M}", "current" if r["start"] >= split else "earlier",
+                         " · ".join(f"{f} {100 * v / tot:.0f}%" for f, v in zip(FIT_FAMILIES, x)),
+                         fmt_f(r["points"], 0), fmt_f(pred, 1), fmt_f(r["points"] / pred if pred else None, 2), str(n_fit)])
+        p(table(["window", "", "priced mix", "actual pts", "predicted pts", "actual / predicted", "fit days"], rows))
 
     # --- the step ---------------------------------------------------------
     p("\n## Share per token by day (clean intervals only)\n")
@@ -702,16 +921,17 @@ def main() -> None:
     while d0 < as_of:
         d1 = min(d0 + timedelta(days=1), as_of)
         hrs = hours_in(seats, d0, d1)
-        pts = sum(iv.delta for iv in week_iv if d0 <= iv.hi < d1)
-        clean = sum(iv.delta for iv in week_iv if d0 <= iv.hi < d1 and iv.clean)
-        day_rows.append([f"{d0:%Y-%m-%d}", fmt_f(hrs, 1), fmt_f(pts, 0), fmt_f(clean, 0),
+        pts, spread = apportion(week_iv, ctl, d0, d1)
+        day_rows.append([f"{d0:%Y-%m-%d}", fmt_f(hrs, 1), fmt_f(pts, 1), fmt_f(spread, 1),
                          fmt_f(pts / hrs if hrs >= 1 else None, 2)])
-        chart_hours.append((d0, hrs, pts))
+        chart_hours.append((d0, hrs, pts, spread))
         d0 = d1
-    p(table(["day", "seat-hours", "pts (all)", "pts (clean)", "pts / seat-hour"], day_rows))
+    p("points spread over the day by token weight; `from >12 h gaps` = the part that came from a gauge gap longer than 12 h (no reading to place it).\n")
+    p(table(["day", "seat-hours", "pts", "from >12 h gaps", "pts / seat-hour"], day_rows))
 
     if args.charts:
-        write_charts(Path(args.charts), chart_hours, chart_week, chart_days)
+        fit_chart = fit_chart if w_all else []
+        write_charts(Path(args.charts), chart_hours, [w for w in chart_week if w[0] != iso_week(this_week)], fit_chart)
 
 
 def write_charts(outdir: Path, hours, weeks, days) -> None:
@@ -728,9 +948,12 @@ def write_charts(outdir: Path, hours, weeks, days) -> None:
 
     # 1. share per seat-hour by day
     fig, ax = plt.subplots(figsize=(9, 3.6), dpi=150)
-    xs = [d for d, h, _ in hours if h >= 1]
-    ys = [p / h for _, h, p in hours if h >= 1]
-    ax.bar(xs, ys, width=0.8, color=accent)
+    xs = [d for d, h, _, _ in hours if h >= 1]
+    ys = [p / h for _, h, p, _ in hours if h >= 1]
+    spread = [sp / h for _, h, _, sp in hours if h >= 1]
+    ax.bar(xs, ys, width=0.8, color=accent, label="measured between readings <= 12 h apart")
+    ax.bar(xs, spread, width=0.8, color=muted, label="spread from a gauge gap > 12 h")
+    ax.legend(frameon=False, fontsize=9)
     ax.set_title("Claude weekly-window points per resident seat-hour, by UTC day", loc="left", color=ink)
     ax.set_ylabel("pts / seat-hour")
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
@@ -742,41 +965,48 @@ def write_charts(outdir: Path, hours, weeks, days) -> None:
     plt.close(fig)
 
     # 2. tokens per merged PR by week
-    fig, ax = plt.subplots(figsize=(7, 3.6), dpi=150)
-    labels = [w for w, t, _ in weeks]
-    tot = [(t or 0) / 1e6 for _, t, _ in weeks]
-    fresh = [(f or 0) / 1e6 for _, _, f in weeks]
-    ax.bar(labels, tot, color=muted, label="total (incl. cache reads)")
-    ax.bar(labels, fresh, color=accent, label="fresh (input + cache writes + output)")
-    for i, (t, f) in enumerate(zip(tot, fresh)):
-        ax.text(i, t, f"{t:.1f}M", ha="center", va="bottom", fontsize=9, color=ink)
-    ax.set_title("Tokens per merged PR, by ISO week (last week partial)", loc="left", color=ink)
-    ax.set_ylabel("million tokens / PR")
-    ax.legend(frameon=False, fontsize=9)
-    ax.grid(axis="y", color="#e5e7eb")
-    ax.set_axisbelow(True)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 3.6), dpi=150)
+    labels = [w for w, _, _ in weeks]
+    for ax, vals, color, title in (
+        (ax1, [(t or 0) / 1e6 for _, t, _ in weeks], muted, "All tokens per merged PR (Claude + Codex)"),
+        (ax2, [(q or 0) / 1e6 for _, _, q in weeks], accent, "Claude priced tokens per merged PR"),
+    ):
+        ax.bar(labels, vals, color=color)
+        for i, v in enumerate(vals):
+            ax.text(i, v, f"{v:.1f}M", ha="center", va="bottom", fontsize=9, color=ink)
+        ax.set_title(title, loc="left", color=ink, fontsize=10)
+        ax.set_ylabel("million / PR")
+        ax.grid(axis="y", color="#e5e7eb")
+        ax.set_axisbelow(True)
     fig.tight_layout()
     fig.savefig(outdir / "tokens-per-merged-pr-by-week.png", metadata={"Software": None})
     plt.close(fig)
 
-    # 3. points per million fresh tokens by day, claude vs codex control
-    fig, ax = plt.subplots(figsize=(9, 3.6), dpi=150)
-    for name, color in (("claude weekly", accent), ("codex weekly (control)", muted)):
-        ds = [d for d in days.get(name, []) if d.fresh > 0 and d.points >= 3]
-        ax.plot([datetime.strptime(d.day, "%Y-%m-%d") for d in ds],
-                [d.points / (d.fresh / 1e6) for d in ds], marker="o", color=color, label=name)
-    ax.set_yscale("log")
-    ax.set_title("Weekly-window points per million fresh tokens, by UTC day (log)", loc="left", color=ink)
-    ax.set_ylabel("pts / M fresh tokens")
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
-    ax.legend(frameon=False, fontsize=9)
-    ax.grid(axis="y", color="#e5e7eb")
-    ax.set_axisbelow(True)
-    fig.autofmt_xdate()
-    fig.tight_layout()
-    fig.savefig(outdir / "share-per-token-by-day.png", metadata={"Software": None})
-    plt.close(fig)
-
+    # 3. the mix-adjusted test, per Claude weekly window
+    if days:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 3.8), dpi=150)
+        labels = [d[0] + (" (now)" if d[3] else "") for d in days]
+        xs = range(len(days))
+        ax1.bar(xs, [d[4] for d in days], color=[accent if d[3] else muted for d in days])
+        for i, d in enumerate(days):
+            ax1.text(i, d[4], f"{d[4]:.1f}", ha="center", va="bottom", fontsize=9, color=ink)
+        ax1.set_xticks(list(xs), labels, fontsize=8)
+        ax1.set_title("Raw: weekly pts per M fresh tokens", loc="left", color=ink)
+        ax1.grid(axis="y", color="#e5e7eb")
+        ax1.set_axisbelow(True)
+        width = 0.38
+        ax2.bar([i - width / 2 for i in xs], [d[1] for d in days], width, color=accent, label="gauge read")
+        ax2.bar([i + width / 2 for i in xs], [d[2] for d in days], width, color=muted, label="model mix predicts")
+        for i, d in enumerate(days):
+            ax2.text(i, max(d[1], d[2]), f"{d[1] / d[2]:.2f}×", ha="center", va="bottom", fontsize=9, color=ink)
+        ax2.set_xticks(list(xs), labels, fontsize=8)
+        ax2.set_title("Mix-adjusted: weekly pts, actual vs predicted", loc="left", color=ink)
+        ax2.legend(frameon=False, fontsize=8, loc="upper left")
+        ax2.grid(axis="y", color="#e5e7eb")
+        ax2.set_axisbelow(True)
+        fig.tight_layout()
+        fig.savefig(outdir / "mix-adjusted-by-window.png", metadata={"Software": None})
+        plt.close(fig)
 
 if __name__ == "__main__":
     main()
