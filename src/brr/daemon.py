@@ -12232,6 +12232,10 @@ PRESERVED: dict[str, str] = {
     run_ledger.RUN_MOOD_CONTROL_NAME: "mood",
     # The resident-authored run name — one line, no privacy surface.
     run_ledger.RUN_NAME_CONTROL_NAME: "name",
+    # Move 5c: the run's one topic — one line (a heddle slug, `new <slug>`
+    # or `null`), no privacy surface; the node keeps what the run said it
+    # was about beside the name.
+    run_ledger.RUN_TOPIC_CONTROL_NAME: "topic",
     # The PR this run created — one line (a number or a URL), no privacy
     # surface. Read *before* ``_remove_outbox`` deletes the file the same
     # as ``_capture_pr_handle`` already does (see the ``finally:`` note
