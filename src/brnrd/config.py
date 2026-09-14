@@ -246,6 +246,16 @@ class Settings:
     limit_max_event_body_bytes: int = _env_int("BRNRD_LIMIT_MAX_EVENT_BODY_BYTES", 100_000)
     limit_max_event_attachments: int = _env_int("BRNRD_LIMIT_MAX_EVENT_ATTACHMENTS", 10)
 
+    # design-the-loom.md §6/§18 — the bench: `<bench_home>/<repo>/<place>/
+    # <commit>.md`, one local filesystem root, not an account-to-directory
+    # mapping. Empty (the default) means "no bench configured", which
+    # `bench_store.list_bench_files`/`read_bench_file` render as an empty
+    # list / 404 rather than an error — the hosted multi-tenant sync this
+    # would need per account is out of scope for this move (named in both
+    # the design page and the dispatch spec); this serves whatever this
+    # process's own disk has, which is the self-hosted/VPS shape today.
+    bench_home: str = os.environ.get("BRNRD_BENCH_HOME", "")
+
     oauth_state_cookie: str = os.environ.get("BRNRD_OAUTH_STATE_COOKIE", "brnrd_oauth_state")
     oauth_pkce_cookie: str = os.environ.get("BRNRD_OAUTH_PKCE_COOKIE", "brnrd_oauth_pkce")
     oauth_next_cookie: str = os.environ.get("BRNRD_OAUTH_NEXT_COOKIE", "brnrd_oauth_next")
