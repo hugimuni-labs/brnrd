@@ -1494,12 +1494,29 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "draws", "me/▷",
         "attribution of the `q` chip just above (brnrd#1810): this run's "
         "own weighted spend against the shared quota gauge, plus every "
-        "owned strand's, summed (`me 1.2m · ▷2 3.4m`). Renders only the "
-        "half(s) with a reading; absent when neither this run nor any "
-        "owned strand has one.",
+        "owned strand's, summed (`me 1.2m · ▷2·06q8·cpk5 3.4m`). Up to "
+        "three strands are named by id suffix; a fourth and beyond fall "
+        "back to the bare count (`▷4`). Renders only the half(s) with a "
+        "reading; absent when neither this run nor any owned strand has "
+        "one.",
         # a meter; this run cannot act on the shared pool by watching it,
         # only by choosing whether to spawn more onto it.
         klass=VITAL,
+    ),
+    _BarSegment(
+        "spawn_refused", "✗",
+        "a spawn this run dispatched that the daemon refused at admission "
+        "(`✗ spawn refused · binding quota floor is critical`), beside the "
+        "`draws`/`▷` chip it would otherwise have joined. Renders only "
+        "while a matching notice exists (`_SPAWN_REFUSED_PREFIX`, narrowed "
+        "from `_counted_notices`'s wider refused/dropped set).",
+        # DELTA: a refusal is news the boundary it lands, not a standing
+        # fact to keep repeating — the plain default change-gate (fires
+        # once per distinct refusal text, silent the boundary after) is
+        # exactly "once per refusal, until the next boundary after it was
+        # rendered". `!N` already carries the standing count for anyone who
+        # missed the one boundary this named it.
+        klass=DELTA,
     ),
     _BarSegment(
         "hold", "hold",
@@ -2121,7 +2138,8 @@ def _draws_chip(resources: dict[str, Any]) -> str | None:
     """Who is drawing on the shared quota gauge this boundary (brnrd#1810,
     design-the-seat-that-never-quits.md §"The measurement") — this run's
     own weighted spend (``me 1.2m``) plus every owned strand's, summed
-    (``▷2 3.4m``), beside the ordinary ``q S83`` chip. Reads
+    (``▷2·06q8·cpk5 3.4m`` for up to three threads, bare ``▷N`` past
+    that), beside the ordinary ``q S83`` chip. Reads
     ``resources.quota.draws`` (:func:`brr.facets.build`'s ``draws`` param) —
     the daemon writes it off the same allowance meter every heartbeat
     already runs; nothing here re-meters anything.
@@ -2148,13 +2166,31 @@ def _draws_chip(resources: dict[str, Any]) -> str | None:
             int(row.get("weighted")) for row in strands
             if isinstance(row, dict) and row.get("weighted") is not None
         ]
-        # One thread: name it, so the seat can address it without guessing
-        # (a guessed ``to:`` was refused on 2026-09-13; the chip knew the id).
+        # Up to three threads: name each by its id suffix, so the seat can
+        # address any of them without guessing (a guessed ``to:`` was
+        # refused on 2026-09-13; the chip knew the id when there was only
+        # one — 2026-09-14 extends the same naming past the single-thread
+        # case). Past three the ids would out-cost their gain — a fourth
+        # id barely fits a scannable bar, and by then `to: <id>` needs a
+        # `portal-state.json` read regardless — so the bare count stands,
+        # same as it always did above three.
         label = f"▷{len(strands)}"
-        if len(strands) == 1 and isinstance(strands[0], dict):
-            run_id = str(strands[0].get("run_id") or "").strip()
-            if run_id:
-                label += f"·{run_id.rsplit('-', 1)[-1]}"
+        if 1 <= len(strands) <= 3:
+            ids: list[str] = []
+            for row in strands:
+                run_id = (
+                    str(row.get("run_id") or "").strip()
+                    if isinstance(row, dict) else ""
+                )
+                if run_id:
+                    ids.append(run_id.rsplit("-", 1)[-1])
+            # Partial coverage (one thread's run_id missing) never renders
+            # a partial id list — a label naming two of three ids reads as
+            # complete and isn't; the bare count is the honest fallback,
+            # the same "never fabricate" rule `known`/`self_spent` above
+            # already follow.
+            if len(ids) == len(strands):
+                label += "·" + "·".join(ids)
         if known:
             parts.append(f"{label} {allowance.format_tokens(sum(known))}")
         else:
@@ -2475,6 +2511,50 @@ def _notices_chip(notices: list) -> str | None:
     """
     n = len(_counted_notices(notices))
     return f"!{n}" if n else None
+
+
+#: The exact prefix every spawn-admission refusal's notice text starts with
+#: (``daemon.py``'s ``_record_outbox_notice`` call sites, e.g. ``"spawn
+#: refused: {event.get('id')} — binding quota floor is critical"``). A
+#: ``refused`` notice can also be a rejected ``note:``/``gate:``/``event:``
+#: directive with nothing to do with spawning — this prefix is what narrows
+#: ``_counted_notices``'s wider set to the one class this chip speaks for.
+_SPAWN_REFUSED_PREFIX = "spawn refused:"
+
+
+def _spawn_refused_chip(notices: list) -> str | None:
+    """``✗ spawn refused · <reason>`` beside the `` ▷`` draws chip — the
+    pitfall this closes (2026-09-09): a spawn refused at admission left no
+    trace but a `portal-state.json → notices` row nobody was reading, and
+    the resident told him "dispatched" fifty boundaries before catching it.
+
+    Reuses :func:`_counted_notices`'s own kind/lifetime filter (``refused``,
+    ``lifetime == "run"`` — never ``advisory``/``standing``, same reasoning
+    as `!N`) rather than a second one, then narrows to notices whose text
+    actually starts with :data:`_SPAWN_REFUSED_PREFIX` — a refused
+    ``note:``/``gate:`` is real too, but `!N` already carries it and this
+    chip would misname it "spawn refused" otherwise. The most recent match
+    wins when several refusals landed this run (``.notices.jsonl`` is
+    append-only, #1266, so "most recent" is well-ordered).
+
+    No bespoke consumed/seen bookkeeping: the ``spawn_refused`` bar segment
+    is DELTA-classed (:data:`BAR_SEGMENTS`), so the ordinary change-gate
+    every DELTA chip already gets (``_render_bar``'s ``_due``, comparing
+    against ``last_chips``) renders this exactly once — the boundary the
+    text first appears — then drops it the boundary after, the same
+    "sign at the junction, not a counter" lifetime `!N`'s own detail
+    sentence uses. A second, later refusal (different text) earns its own
+    one boundary the same way.
+    """
+    prefix = _SPAWN_REFUSED_PREFIX
+    candidates = [
+        n for n in _counted_notices(notices)
+        if isinstance(n, dict) and str(n.get("text") or "").strip().startswith(prefix)
+    ]
+    if not candidates:
+        return None
+    reason = str(candidates[-1].get("text") or "").strip()[len(prefix):].strip()
+    return f"✗ spawn refused · {reason}" if reason else "✗ spawn refused"
 
 
 # Rendered chip length for a `.mood` name — short enough that a verbose mood
@@ -3784,6 +3864,12 @@ def _render_bar(
     draws_chip = _draws_chip(resources)
     if draws_chip:
         segments.append(("draws", draws_chip))
+    # A spawn this run dispatched that the daemon refused at admission —
+    # independent of whether `draws` rendered this boundary (admission can
+    # refuse before a child run, and so a `draws` strand row, ever exists).
+    spawn_refused_chip = _spawn_refused_chip(notices or [])
+    if spawn_refused_chip:
+        segments.append(("spawn_refused", spawn_refused_chip))
     # The ratio the daemon acts on while `brnrd await` sits armed and idle
     # (design-the-seat-that-never-quits.md §machinery slice 3) — visible
     # before it acts, same as `draws` above.
@@ -3943,10 +4029,10 @@ def _render_bar(
                 )
             details.extend(event_rows)
     if finished_spawns:
-        # Finished spawns are facts, not obligations — the parent already
-        # observed them; they will self-retire at run end. Reported as a
-        # distinct line so the run body can name them without any "address each"
-        # pressure.
+        # Finished spawns are facts, not obligations — no "address each"
+        # pressure — but named individually and kept on the line until the
+        # seat notes each one (2026-09-14, his ask): a clean completion is
+        # not silent just because it isn't urgent.
         details.append(_finished_spawns_line(finished_spawns))
     details.extend(_render_armed_rows(armed))
     # #1200: notes-health transitions — the caller (`_notes_health_transitions`)
@@ -4233,70 +4319,65 @@ def _render_bar(
     return line + ("\n" + "\n".join(details) if details else "")
 
 
+#: Above this many pending completions, the line names only the newest —
+#: an id list past this width stops being something a reader can scan and
+#: starts being wallpaper, the exact failure the count-only form this
+#: replaces was reaching for (badly: it hid every id, not just the old
+#: ones). Six is a boundary's worth of "just spawned a fan-out" without
+#: turning the bar into a second `portal-state.json`.
+_FINISHED_SPAWNS_SHOWN_MAX = 6
+
+
+def _finished_spawn_id(event: dict[str, Any]) -> str:
+    """The id a reader would address this thread by — the run id's own
+    short suffix, same convention :func:`_draws_chip` names a live strand
+    by (``run-260914-1051-lfgp`` -> ``lfgp``), so a finished thread and a
+    still-running one read as the same kind of handle."""
+    child_id = str(event.get("spawned_by_run") or event.get("id") or "-").strip()
+    child_id = child_id or "-"
+    return child_id.rsplit("-", 1)[-1] if "-" in child_id else child_id
+
+
 def _finished_spawns_line(finished_spawns: list[dict[str, Any]]) -> str:
-    """Render the shared finished-spawn fact without inferring absent status."""
-    count = len(finished_spawns)
-    statuses = [
-        str(event["spawn_status"]).strip()
-        for event in finished_spawns
-        if str(event.get("spawn_status") or "").strip()
-    ]
-    # A thread that converged and was then stopped after its ``submit:``
-    # finishes ``released`` — that is the seat's own ledger row *stopped after
-    # submit*, not a failure. Counting it under "error" made the chip call a
-    # night's produce a defect on every line (eleven of twelve, 2026-09-14).
-    ok_count = statuses.count("done")
-    released_count = statuses.count("released")
-    error_count = sum(status not in ("done", "released") for status in statuses)
-    # An event that carries no status is not a healthy one — it is one whose
-    # outcome was never determined, and that is the case this whole line
-    # exists for. Folding it into the all-clear branch would restate #730's
-    # defect in the one place nobody drives: "no address needed" is itself a
-    # claim about outcome. It is reachable, too — every completion event
-    # minted before this shipped has no ``spawn_status``, and daemon.py is
-    # the restart-only liveness class, so that window is real.
-    unknown_count = count - len(statuses)
-    missing_reports = [
-        event for event in finished_spawns
-        if event.get("spawn_report_found") is False
-    ]
+    """Name every pending ``spawn_completed`` event, until the seat clears it.
 
-    if not error_count and not missing_reports and not unknown_count:
-        return (
-            f"- ▷ {count} finished spawn(s) observed — "
-            "no address needed; will retire at run end."
-        )
+    2026-09-14 (his ask): the prior count-only form ("1 ok, 14 released
+    after submit, 1 error (run-…-06q8)") named only the *noteworthy*
+    thread(s) and compressed everything healthy to a number, on the
+    premise that a clean completion "will retire at run end" and needs no
+    address. That premise is exactly what he asked this line to stop
+    leaning on — a spawned/completed thread stays visible, named, until
+    *this run* explicitly consumes its event (``note:`` / ``event:``),
+    not until the daemon happens to clean up behind it. Since
+    *finished_spawns* is already the still-pending subset (a noted event
+    has left ``inbound.events`` and so left this list — see
+    :func:`_partition_pending_events`), "still in this list" and "not yet
+    noted" are the same condition; no separate tracking needed here.
 
-    # The parts sum to the whole, always. A ledger whose columns do not add
-    # up is how a reader learns to stop trusting the ledger (#683, one file
-    # over), so every spawn is accounted for under exactly one term.
-    counts: list[str] = []
-    if ok_count:
-        counts.append(f"{ok_count} ok")
-    if released_count:
-        counts.append(f"{released_count} released after submit")
-    if error_count:
-        counts.append(f"{error_count} error")
-    if unknown_count:
-        counts.append(f"{unknown_count} status unknown")
-
-    noteworthy = [
-        event for event in finished_spawns
-        if not str(event.get("spawn_status") or "").strip()
-        or event.get("spawn_status") not in ("done", "released")
-        or event.get("spawn_report_found") is False
-    ]
-    notes: list[str] = []
-    for event in noteworthy:
-        child_id = str(event.get("spawned_by_run") or event.get("id") or "-")
-        note = child_id
+    Every entry renders as ``<id suffix> <status>``, oldest→newest by
+    event id (``evt-<epoch-ns>-<suffix>`` sorts lexicographically =
+    chronologically), so "the newest" is well-defined without a second
+    timestamp field. A missing ``spawn_status`` renders as literally
+    ``status unknown`` — the outcome-never-determined case this whole
+    line exists to surface (#730), never folded into a healthier word. A
+    ``spawn_report_found is False`` entry earns a trailing ``(no
+    report)`` — the completion attested a branch with nothing behind it
+    (#640 residue).
+    """
+    ordered = sorted(finished_spawns, key=lambda event: str(event.get("id") or ""))
+    shown = ordered[-_FINISHED_SPAWNS_SHOWN_MAX:]
+    omitted = len(ordered) - len(shown)
+    entries: list[str] = []
+    for event in shown:
+        status = str(event.get("spawn_status") or "").strip() or "status unknown"
+        entry = f"{_finished_spawn_id(event)} {status}"
         if event.get("spawn_report_found") is False:
-            note += "; no report written"
-        notes.append(note)
-
-    summary = ", ".join(counts) if counts else "report missing"
-    detail = f" ({'; '.join(notes)})" if notes else ""
-    return f"- ▷ {count} finished spawn(s) — {summary}{detail}."
+            entry += " (no report)"
+        entries.append(entry)
+    summary = " · ".join(entries)
+    if omitted:
+        summary += f" · +{omitted} more"
+    return f"- ▷ finished: {summary}"
 
 
 def format_delta(
