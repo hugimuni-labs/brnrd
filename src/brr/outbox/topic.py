@@ -60,9 +60,20 @@ _TARGET_ID_RE = re.compile(r"^(?:evt-\d{10,}-[a-z0-9]{4}|run-\d{6}-\d{4}-[a-z0-9
 
 
 def is_op(raw: object) -> bool:
-    """``True`` when a ``topic:`` value starts with one of :data:`OPS`."""
+    """``True`` when a ``topic:`` value is this verb's, not an act's topic.
+
+    An act's topic is exactly one slug that is not an op word
+    (``topic: the-loom``). Anything else — an op (``new foo``), or a value
+    that is not one slug (``rename a b``, ``a, b``) — is claimed by the verb,
+    so a mistyped op is dropped with a notice instead of falling through to
+    ``event`` and delivering its signature body as a chat message.
+    """
     words = str(raw or "").split()
-    return bool(words) and words[0].lower() in OPS
+    if not words:
+        return False
+    if len(words) == 1 and heddles.SLUG_RE.match(words[0]) and words[0].lower() not in OPS:
+        return False
+    return True
 
 
 def _finish(f: OutboxFile, text: str, *, kind: str, promoted: int) -> Handled:

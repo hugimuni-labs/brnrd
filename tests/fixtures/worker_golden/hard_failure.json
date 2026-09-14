@@ -156,6 +156,8 @@
    "seed_ref": "main",
    "started_at": "<V>",
    "telegram_chat_id": 40,
+   "topic": null,
+   "topic_unset": true,
    "transitions": [
     {
      "at": "<V>",
@@ -213,6 +215,10 @@
   "inbound": {
    "current_event": "evt-timeout",
    "current_event_replyable": true,
+   "current_event_topic": {
+    "confirmed": null,
+    "proposed": null
+   },
    "events": []
   },
   "knowledge": {
@@ -259,7 +265,8 @@
    "phase": "finalizing",
    "repo": "<TMP>",
    "runner": "codex",
-   "status": "running"
+   "status": "running",
+   "topic": null
   },
   "schedule": {
    "armed": []
