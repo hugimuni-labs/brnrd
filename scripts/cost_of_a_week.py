@@ -880,8 +880,9 @@ def main() -> None:
                               r["points"] / (r["fresh"] / 1e6)))
             rows.append([f"{r['start']:%m-%d %H:%M} → {r['end']:%m-%d %H:%M}", "current" if r["start"] >= split else "earlier",
                          " · ".join(f"{f} {100 * v / tot:.0f}%" for f, v in zip(FIT_FAMILIES, x)),
+                         f"{100 * sum(e.priced for e in evs if e.context > 200_000) / max(1.0, sum(e.priced for e in evs)):.0f}%",
                          fmt_f(r["points"], 0), fmt_f(pred, 1), fmt_f(r["points"] / pred if pred else None, 2), str(n_fit)])
-        p(table(["window", "", "priced mix", "actual pts", "predicted pts", "actual / predicted", "fit days"], rows))
+        p(table(["window", "", "priced mix", "priced at >200k context", "actual pts", "predicted pts", "actual / predicted", "fit days"], rows))
 
     # --- the step ---------------------------------------------------------
     p("\n## Share per token by day (clean intervals only)\n")
