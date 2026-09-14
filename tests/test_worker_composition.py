@@ -24,7 +24,7 @@ from typing import Any, Callable
 
 import pytest
 
-from brr import daemon, envs, protocol, resource_hold
+from brr import daemon, protocol, resource_hold
 from brr.run import Run
 from brr.runner import RunnerArtifactRecord, RunnerResult
 
