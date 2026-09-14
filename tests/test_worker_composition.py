@@ -284,6 +284,12 @@ def _capture(name: str, tmp_path: Path, monkeypatch, capsys) -> dict[str, Any]:
     outbox = brr / "outbox" / event["id"]
     portal_path = outbox / "portal-state.json"
     portal = json.loads(portal_path.read_text(encoding="utf-8")) if portal_path.exists() else None
+    if isinstance(portal, dict) and isinstance(portal.get("produce"), dict):
+        # Move 5 (the HUD is one shape) adds one key to the portal on purpose:
+        # `produce.ledger`, the loom's four kinds. These goldens predate it, so
+        # it is taken out here — asserted present, never silently ignored — and
+        # pinned on its own in test_hud.py.
+        assert isinstance(portal["produce"].pop("ledger", None), dict), "produce.ledger missing"
     shuttle_path = brr / "shuttle.json"
     shuttle_rows = (
         json.loads(shuttle_path.read_text(encoding="utf-8")) if shuttle_path.exists() else None

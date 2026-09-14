@@ -1,0 +1,184 @@
+{
+  "attention": {
+    "needs_attention": false,
+    "pending_event_count": 0,
+    "pending_outbox_file_count": 0
+  },
+  "await": {
+    "armed": false
+  },
+  "budget": {
+    "elapsed_seconds": 3600
+  },
+  "card": {
+    "active": false,
+    "age_seconds": 3600,
+    "delta": null,
+    "stale": true,
+    "state_moved_seconds": null,
+    "text": ""
+  },
+  "change_token": "<TOKEN>",
+  "delivery": {
+    "already_delivered": false,
+    "gate": "telegram",
+    "known": true,
+    "reason": null,
+    "route": "gate-sole",
+    "would_land": true
+  },
+  "generated_at": "2026-09-14T16:26:40Z",
+  "heddles": [],
+  "inbound": {
+    "current_event": "evt-1",
+    "current_event_replyable": true,
+    "events": []
+  },
+  "knowledge": {
+    "kb_base_url": null
+  },
+  "name": {
+    "written": false
+  },
+  "notices": [],
+  "outbound": {
+    "any_sent": false,
+    "oldest_pending_age_seconds": null,
+    "outbound_messages": 0,
+    "pending_outbox_files": [],
+    "replies_current": 0,
+    "replies_other": 0
+  },
+  "produce": {
+    "known": false
+  },
+  "resource_hold": {
+    "active": true,
+    "armed_at": "2026-09-14T16:00:00Z",
+    "reason": "children in flight",
+    "resume": "strands",
+    "seat_key": "acc-1"
+  },
+  "resources": {
+    "allowance": {
+      "explicit": false,
+      "kind": "level",
+      "note": null,
+      "pct": 0.0,
+      "required": false,
+      "scope": "resident",
+      "spent": 0,
+      "status": "known",
+      "summary": "spend 0/20m \u00b7 0%",
+      "tokens": 20000000
+    },
+    "coexisting_runs": {
+      "kind": "state",
+      "note": "no sibling runs active right now",
+      "owned_children": [],
+      "required": false,
+      "spawn_pool": {
+        "floor": null,
+        "queued": 0
+      },
+      "status": "absent",
+      "summary": null
+    },
+    "context_window": {
+      "kind": "level",
+      "note": "no context-window collector for this Shell yet",
+      "required": true,
+      "status": "unimplemented",
+      "summary": null
+    },
+    "correspondent": {
+      "kind": "state",
+      "note": "no chat thread on this run",
+      "quiet_seconds": null,
+      "read": null,
+      "required": false,
+      "status": "absent",
+      "summary": null,
+      "unread_bytes": null,
+      "unread_count": null
+    },
+    "quota": {
+      "draws": {
+        "self": 0,
+        "strands": []
+      },
+      "kind": "level",
+      "note": "no quota reading from this Shell yet",
+      "required": true,
+      "status": "absent",
+      "summary": null
+    },
+    "remote_scm": {
+      "branch": null,
+      "kind": "state",
+      "note": "no PR recorded for this branch yet",
+      "pr_number": null,
+      "pr_state": "none",
+      "required": true,
+      "status": "absent",
+      "summary": null
+    },
+    "runner": {
+      "attestation": "unverifiable",
+      "capability_freshness": null,
+      "capability_score": null,
+      "capability_source": null,
+      "class": null,
+      "core_mismatch": null,
+      "cost_rank": null,
+      "hooks": null,
+      "model": null,
+      "model_observed": null,
+      "model_requested": null,
+      "name": "codex",
+      "owner": "user",
+      "provider": null,
+      "quota_source": null,
+      "status": "known",
+      "substitution_reason": null,
+      "summary": "codex"
+    },
+    "spend": {
+      "kind": "level",
+      "note": "no spend collector for this Shell yet",
+      "required": true,
+      "status": "unimplemented",
+      "summary": null
+    }
+  },
+  "run": {
+    "attempt": 1,
+    "branch": null,
+    "env": "worktree",
+    "event_id": "evt-1",
+    "id": "run-1",
+    "phase": "finalizing",
+    "repo": null,
+    "runner": "codex",
+    "status": "held"
+  },
+  "schedule": {
+    "armed": []
+  },
+  "scm": {
+    "branch": null,
+    "known": false,
+    "modified_files": 0,
+    "unpushed_commits": 0
+  },
+  "seat": {
+    "parks_on_turn_end": true
+  },
+  "shuttle": null,
+  "strand": {
+    "is_strand": false,
+    "submitted": false
+  },
+  "tick": null,
+  "version": 1
+}

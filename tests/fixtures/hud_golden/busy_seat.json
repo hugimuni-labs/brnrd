@@ -1,0 +1,211 @@
+{
+  "attention": {
+    "needs_attention": true,
+    "pending_event_count": 2,
+    "pending_outbox_file_count": 0
+  },
+  "await": {
+    "armed": false
+  },
+  "bolt": {
+    "accepted": true,
+    "accepted_at": "2026-09-14T16:20:00Z",
+    "annotated": 2
+  },
+  "budget": {
+    "elapsed_seconds": 1800
+  },
+  "card": {
+    "active": true,
+    "age_seconds": 700,
+    "delta": null,
+    "stale": false,
+    "state_moved_seconds": null,
+    "text": "## Now\nshipping\n"
+  },
+  "change_token": "<TOKEN>",
+  "delivery": {
+    "already_delivered": true,
+    "gate": "telegram",
+    "known": true,
+    "reason": null,
+    "route": "gate-extra",
+    "would_land": true
+  },
+  "generated_at": "2026-09-14T16:26:40Z",
+  "heddles": [],
+  "inbound": {
+    "current_event": "evt-1",
+    "current_event_replyable": true,
+    "events": [
+      {
+        "body": "and one more thing",
+        "conversation_key": "telegram:1",
+        "id": "evt-2",
+        "source": "telegram",
+        "status": "pending",
+        "summary": "and one more thing",
+        "trust_tier": "owner"
+      },
+      {
+        "body": "child spec",
+        "id": "evt-3",
+        "source": "telegram",
+        "spawn_immediate": true,
+        "spawn_quota_queued": true,
+        "status": "pending",
+        "summary": "child spec",
+        "trust_tier": "owner"
+      }
+    ]
+  },
+  "knowledge": {
+    "kb_base_url": "https://example.invalid/kb/"
+  },
+  "name": {
+    "written": true
+  },
+  "notices": [],
+  "outbound": {
+    "any_sent": true,
+    "oldest_pending_age_seconds": null,
+    "outbound_messages": 0,
+    "pending_outbox_files": [],
+    "replies_current": 0,
+    "replies_other": 1
+  },
+  "produce": {
+    "known": false
+  },
+  "resource_hold": null,
+  "resources": {
+    "allowance": {
+      "explicit": false,
+      "kind": "level",
+      "note": null,
+      "pct": 0.0,
+      "required": false,
+      "scope": "resident",
+      "spent": 0,
+      "status": "known",
+      "summary": "spend 0/20m \u00b7 0%",
+      "tokens": 20000000
+    },
+    "coexisting_runs": {
+      "kind": "state",
+      "note": "no sibling runs active right now",
+      "owned_children": [],
+      "required": false,
+      "spawn_pool": {
+        "floor": null,
+        "queued": 1
+      },
+      "status": "absent",
+      "summary": null
+    },
+    "context_window": {
+      "kind": "level",
+      "note": "no context-window collector for this Shell yet",
+      "required": true,
+      "status": "unimplemented",
+      "summary": null
+    },
+    "correspondent": {
+      "kind": "state",
+      "note": "nothing measured on this thread yet",
+      "quiet_seconds": null,
+      "read": null,
+      "required": false,
+      "status": "absent",
+      "summary": null,
+      "unread_bytes": null,
+      "unread_count": null
+    },
+    "quota": {
+      "draws": {
+        "self": 0,
+        "strands": []
+      },
+      "kind": "level",
+      "note": null,
+      "required": true,
+      "status": "known",
+      "summary": "session 88% left"
+    },
+    "remote_scm": {
+      "branch": "brr/run-1",
+      "kind": "state",
+      "note": "no PR recorded for this branch yet",
+      "pr_number": null,
+      "pr_state": "none",
+      "required": true,
+      "status": "absent",
+      "summary": null
+    },
+    "runner": {
+      "attestation": "pending",
+      "capability_freshness": null,
+      "capability_score": null,
+      "capability_source": null,
+      "class": null,
+      "core_mismatch": null,
+      "cost_rank": null,
+      "hooks": null,
+      "model": "fable",
+      "model_observed": null,
+      "model_requested": "fable",
+      "name": "claude",
+      "owner": "user",
+      "provider": null,
+      "quota_source": null,
+      "status": "known",
+      "substitution_reason": null,
+      "summary": "claude"
+    },
+    "spend": {
+      "kind": "level",
+      "note": "no spend collector for this Shell yet",
+      "required": true,
+      "status": "unimplemented",
+      "summary": null
+    }
+  },
+  "run": {
+    "attempt": 1,
+    "branch": "brr/run-1",
+    "env": "worktree",
+    "event_id": "evt-1",
+    "id": "run-1",
+    "phase": "running",
+    "repo": "acme__widgets",
+    "runner": "claude",
+    "status": "pending"
+  },
+  "schedule": {
+    "armed": [
+      {
+        "at": 1789453200.0,
+        "heading": "Morning sweep",
+        "id": "morning",
+        "premise": "the queue is still there",
+        "when": "2026-09-15T06:00:00Z"
+      }
+    ]
+  },
+  "scm": {
+    "branch": "brr/run-1",
+    "known": false,
+    "modified_files": 0,
+    "unpushed_commits": 0
+  },
+  "seat": {
+    "parks_on_turn_end": true
+  },
+  "shuttle": null,
+  "strand": {
+    "is_strand": false,
+    "submitted": false
+  },
+  "tick": null,
+  "version": 1
+}

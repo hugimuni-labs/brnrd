@@ -1,0 +1,178 @@
+{
+  "attention": {
+    "needs_attention": false,
+    "pending_event_count": 0,
+    "pending_outbox_file_count": 0
+  },
+  "await": {
+    "armed": false
+  },
+  "budget": {
+    "elapsed_seconds": 240
+  },
+  "card": {
+    "active": false,
+    "age_seconds": 240,
+    "delta": null,
+    "stale": false,
+    "state_moved_seconds": null,
+    "text": ""
+  },
+  "change_token": "<TOKEN>",
+  "delivery": {
+    "already_delivered": false,
+    "gate": null,
+    "known": true,
+    "reason": null,
+    "route": "dispatch-edge",
+    "would_land": true
+  },
+  "generated_at": "2026-09-14T16:26:40Z",
+  "heddles": [],
+  "inbound": {
+    "current_event": "evt-1",
+    "current_event_replyable": true,
+    "events": []
+  },
+  "knowledge": {
+    "kb_base_url": null
+  },
+  "name": {
+    "written": false
+  },
+  "notices": [],
+  "outbound": {
+    "any_sent": false,
+    "oldest_pending_age_seconds": null,
+    "outbound_messages": 0,
+    "pending_outbox_files": [],
+    "replies_current": 0,
+    "replies_other": 0
+  },
+  "produce": {
+    "known": false
+  },
+  "resource_hold": null,
+  "resources": {
+    "allowance": {
+      "explicit": true,
+      "kind": "level",
+      "note": null,
+      "pct": 0.0,
+      "required": false,
+      "scope": "strand",
+      "spent": 4200,
+      "status": "known",
+      "summary": "spend 4.2k/20m \u00b7 0%",
+      "tokens": 20000000
+    },
+    "coexisting_runs": {
+      "kind": "state",
+      "note": "no sibling runs active right now",
+      "owned_children": [],
+      "required": false,
+      "spawn_pool": {
+        "floor": null,
+        "queued": 0
+      },
+      "status": "absent",
+      "summary": null
+    },
+    "context_window": {
+      "kind": "level",
+      "note": "no context-window collector for this Shell yet",
+      "required": true,
+      "status": "unimplemented",
+      "summary": null
+    },
+    "correspondent": {
+      "kind": "state",
+      "note": "no chat thread on this run",
+      "quiet_seconds": null,
+      "read": null,
+      "required": false,
+      "status": "absent",
+      "summary": null,
+      "unread_bytes": null,
+      "unread_count": null
+    },
+    "quota": {
+      "draws": {
+        "self": 4200,
+        "strands": []
+      },
+      "kind": "level",
+      "note": "no quota reading from this Shell yet",
+      "required": true,
+      "status": "absent",
+      "summary": null
+    },
+    "remote_scm": {
+      "branch": "brr/the-strand",
+      "kind": "state",
+      "note": "no PR recorded for this branch yet",
+      "pr_number": null,
+      "pr_state": "none",
+      "required": true,
+      "status": "absent",
+      "summary": null
+    },
+    "runner": {
+      "attestation": "pending",
+      "capability_freshness": null,
+      "capability_score": null,
+      "capability_source": null,
+      "class": null,
+      "core_mismatch": null,
+      "cost_rank": null,
+      "hooks": null,
+      "model": "opus",
+      "model_observed": null,
+      "model_requested": "opus",
+      "name": "claude",
+      "owner": "user",
+      "provider": null,
+      "quota_source": null,
+      "status": "known",
+      "substitution_reason": null,
+      "summary": "claude"
+    },
+    "spend": {
+      "kind": "level",
+      "note": "no spend collector for this Shell yet",
+      "required": true,
+      "status": "unimplemented",
+      "summary": null
+    }
+  },
+  "run": {
+    "attempt": 1,
+    "branch": "brr/the-strand",
+    "env": "worktree",
+    "event_id": "evt-1",
+    "id": "run-2",
+    "phase": "running",
+    "repo": "acme__widgets",
+    "runner": "claude",
+    "status": "pending"
+  },
+  "schedule": {
+    "armed": []
+  },
+  "scm": {
+    "branch": "brr/the-strand",
+    "known": false,
+    "modified_files": 0,
+    "unpushed_commits": 0
+  },
+  "seat": {
+    "parks_on_turn_end": false
+  },
+  "shuttle": null,
+  "strand": {
+    "is_strand": true,
+    "submitted": true
+  },
+  "tick": null,
+  "version": 1
+}

@@ -61,12 +61,13 @@ from typing import Any, Callable, Protocol
 
 from .. import daemon
 from .. import gitops
+from ..hud import PRODUCE_LEDGER_NAME
 from .. import relics
 from ..run import Run, run_manifest_path
 from .shapes import Handled, OutboxFile, Produce
 
 GREEN_STATES = frozenset({"SUCCESS", "SKIPPED"})
-PRODUCE_NAME = "produce.jsonl"
+PRODUCE_NAME = PRODUCE_LEDGER_NAME  # one spelling: the HUD projects what land writes
 
 
 class LandError(Exception):
