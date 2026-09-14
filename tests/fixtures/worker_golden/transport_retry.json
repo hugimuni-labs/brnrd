@@ -1,0 +1,340 @@
+{
+ "event": {
+  "repo_label": "<TMP>",
+  "run_id": "<RUN>",
+  "run_outcome": null,
+  "status": "done"
+ },
+ "hold_active": false,
+ "inbox_file": "---\nid: evt-transport\nstatus: done\nsource: telegram\ntrust_tier: owner\nrun_id: <RUN>\nrepo_label: <TMP>\n---\nbig\n",
+ "log": [
+  "[brnrd] run <RUN> (event evt-transport): env=worktree",
+  "[brnrd] worker evt-transport: installed codex hook config via argv",
+  "[brnrd] worker evt-transport: attempt 1",
+  "[brnrd] pause-on-message: evt-transport attempt 1 runner 'codex' is not claude — no-op (unmeasured cap behaviour, named non-goal)",
+  "[brnrd] worker evt-transport: runner error: mock failed (exit 1): API Error: Connection closed mid-response. The response above may be incomplete.",
+  "[brnrd] worker evt-transport: transport failure mid-response: the model connection dropped before the turn completed, retrying...",
+  "[brnrd] worker evt-transport: attempt 2",
+  "[brnrd] worker evt-transport: response ready (current_reply)",
+  "[brnrd] worker evt-transport: terminal stream is this run's only delivery — the fallback net carried it, not a route the run chose"
+ ],
+ "packets": [
+  {
+   "payload": {
+    "event_id": "evt-transport",
+    "source": "telegram"
+   },
+   "type": "event_received"
+  },
+  {
+   "payload": {
+    "error": null,
+    "event_id": "evt-transport",
+    "ff_branches": {},
+    "run_id": "<RUN>",
+    "skipped": {
+     "main": "no remote configured"
+    },
+    "summary": "skipped main (no remote configured)"
+   },
+   "type": "synced"
+  },
+  {
+   "payload": {
+    "env": "worktree",
+    "event_id": "evt-transport",
+    "repo_label": "<TMP>",
+    "run_id": "<RUN>",
+    "run_state_path": null,
+    "run_state_url": null
+   },
+   "type": "run_created"
+  },
+  {
+   "payload": {
+    "branch_name": "brr/<RUN>",
+    "branch_source": "fallback:preserve",
+    "env": "worktree",
+    "repo_label": "<TMP>",
+    "run_id": "<RUN>",
+    "seed_ref": "main",
+    "target_branch": null
+   },
+   "type": "env_prepared"
+  },
+  {
+   "payload": {
+    "branch": "brr/<RUN>",
+    "env": "worktree",
+    "run_id": "<RUN>",
+    "runner": "codex",
+    "seed_ref": "main",
+    "target_branch": null
+   },
+   "type": "run_started"
+  },
+  {
+   "payload": {
+    "event_id": "evt-transport",
+    "flavour": "codex",
+    "path": "<argv -c hooks.*>",
+    "run_id": "<RUN>"
+   },
+   "type": "hooks_installed"
+  },
+  {
+   "payload": {
+    "attempt": 1,
+    "event_id": "evt-transport",
+    "run_id": "<RUN>"
+   },
+   "type": "attempt_started"
+  },
+  {
+   "payload": {
+    "attempt": 1,
+    "event_id": "evt-transport",
+    "reason": "transport failure mid-response: the model connection dropped before the turn completed",
+    "run_id": "<RUN>",
+    "will_retry": true
+   },
+   "type": "attempt_failed"
+  },
+  {
+   "payload": {
+    "attempt": 2,
+    "event_id": "evt-transport",
+    "reason": "transport failure mid-response: the model connection dropped before the turn completed",
+    "run_id": "<RUN>"
+   },
+   "type": "retrying"
+  },
+  {
+   "payload": {
+    "attempt": 2,
+    "event_id": "evt-transport",
+    "run_id": "<RUN>"
+   },
+   "type": "attempt_started"
+  },
+  {
+   "payload": {
+    "kind": "response",
+    "path": "<TMP>/.brr/responses/evt-transport.md",
+    "run_id": "<RUN>"
+   },
+   "type": "artifact_created"
+  },
+  {
+   "payload": {
+    "run_id": "<RUN>",
+    "stage": "done"
+   },
+   "type": "finalizing"
+  },
+  {
+   "payload": {
+    "committed": false,
+    "event_id": "evt-transport",
+    "outbound_messages": 0,
+    "publish_branch": null,
+    "publish_status": null,
+    "replies_current": 0,
+    "replies_other": 0,
+    "respawn_requests": 0,
+    "run_id": "<RUN>",
+    "success_signal": "current_reply"
+   },
+   "type": "done"
+  }
+ ],
+ "persisted": {
+  "meta": {
+   "branch_name": "brr/<RUN>",
+   "branch_source": "fallback:preserve",
+   "context_path": "<TMP>/.brr/runs/<RUN>/context.md",
+   "has_new_commit": false,
+   "host_context_branch": "main",
+   "host_dirty_at_dispatch": "[]",
+   "host_head_at_dispatch_unavailable": true,
+   "kb_base_url": null,
+   "outbox_path": "<TMP>/.brr/outbox/evt-transport",
+   "pid": "<V>",
+   "presence_id": "<V>",
+   "repo_label": "<TMP>",
+   "resident_allowance_spent": null,
+   "resident_allowance_tokens": 20000000,
+   "response_path": "<TMP>/.brr/responses/evt-transport.md",
+   "run_ledger_baseline_runner": "codex",
+   "run_state_digest": "{\"delivered\": {\"current\": 0, \"other\": 0, \"outbound\": 0}, \"events\": [], \"produce\": {\"branch\": \"main\", \"counts\": {}, \"issue_actions\": {\"completed\": 0, \"created\": 0, \"unattributed\": 0}, \"known\": true, \"latest_commit\": null, \"pr\": null, \"records\": [{\"kind\": \"note\", \"text\": \"seed unresolvable at 'main'\"}]}, \"scm\": {\"branch\": \"main\", \"known\": true, \"modified_files\": 0, \"unpushed_commits\": 0}}",
+   "run_state_digest_seen": true,
+   "runner_class": "balanced",
+   "runner_name": "codex",
+   "runner_shell": "codex",
+   "seed_ref": "main",
+   "started_at": "<V>",
+   "success_signal": "current_reply",
+   "telegram_chat_id": 21,
+   "terminal_route": "gate-sole",
+   "transitions": [
+    {
+     "at": "<V>",
+     "by": null,
+     "from": "pending",
+     "tick": null,
+     "to": "running",
+     "why": "update_status"
+    },
+    {
+     "at": "<V>",
+     "by": null,
+     "from": "running",
+     "tick": null,
+     "to": "done",
+     "why": "runner_completed"
+    }
+   ],
+   "trust_tier": "owner"
+  },
+  "status": "done",
+  "terminal_reply": null
+ },
+ "portal": {
+  "attention": {
+   "needs_attention": false,
+   "pending_event_count": 0,
+   "pending_outbox_file_count": 0
+  },
+  "await": {
+   "armed": false
+  },
+  "budget": {
+   "elapsed_seconds": "<V>"
+  },
+  "card": {
+   "active": false,
+   "age_seconds": "<V>",
+   "stale": false,
+   "state_moved_seconds": null,
+   "text": ""
+  },
+  "change_token": "<V>",
+  "delivery": {
+   "already_delivered": false,
+   "gate": "telegram",
+   "known": true,
+   "reason": null,
+   "route": "gate-sole",
+   "would_land": true
+  },
+  "generated_at": "<V>",
+  "inbound": {
+   "current_event": "evt-transport",
+   "current_event_replyable": true,
+   "events": []
+  },
+  "knowledge": {
+   "kb_base_url": null
+  },
+  "name": {
+   "written": false
+  },
+  "notices": [],
+  "outbound": {
+   "any_sent": false,
+   "oldest_pending_age_seconds": null,
+   "outbound_messages": 0,
+   "pending_outbox_files": [],
+   "replies_current": 0,
+   "replies_other": 0
+  },
+  "produce": {
+   "branch": "main",
+   "counts": {},
+   "issue_actions": {
+    "completed": 0,
+    "created": "<V>",
+    "unattributed": 0
+   },
+   "known": true,
+   "latest_commit": null,
+   "pr": null,
+   "records": [
+    {
+     "kind": "note",
+     "text": "seed unresolvable at 'main'"
+    }
+   ]
+  },
+  "resource_hold": null,
+  "resources": "<resources>",
+  "run": {
+   "attempt": 2,
+   "branch": "brr/<RUN>",
+   "env": "worktree",
+   "event_id": "evt-transport",
+   "id": "<RUN>",
+   "phase": "finalizing",
+   "repo": "<TMP>",
+   "runner": "codex",
+   "status": "running"
+  },
+  "schedule": {
+   "armed": []
+  },
+  "scm": {
+   "branch": "main",
+   "known": true,
+   "modified_files": 0,
+   "unpushed_commits": 0
+  },
+  "seat": {
+   "parks_on_turn_end": false
+  },
+  "shuttle": {
+   "run_id": "<RUN>",
+   "since": "<V>",
+   "state": "awake",
+   "why": "event_dispatched"
+  },
+  "strand": {
+   "is_strand": false,
+   "submitted": false
+  },
+  "tick": null,
+  "version": 1
+ },
+ "response": "landed",
+ "returned": {
+  "body": "big",
+  "env": "worktree",
+  "status": "done"
+ },
+ "shuttle": {
+  "conversation_key": "telegram:21:",
+  "key": "<TMP>/.brr",
+  "repo_root": "<TMP>",
+  "run_id": "<RUN>",
+  "since": "<V>",
+  "state": "released",
+  "transitions": [
+   {
+    "at": "<V>",
+    "by": "daemon",
+    "from": "released",
+    "tick": null,
+    "to": "awake",
+    "why": "event_dispatched"
+   },
+   {
+    "at": "<V>",
+    "by": "daemon",
+    "from": "awake",
+    "tick": null,
+    "to": "released",
+    "why": "runner_completed"
+   }
+  ],
+  "why": "runner_completed"
+ }
+}

@@ -1,0 +1,129 @@
+{
+ "event": {
+  "repo_label": "<TMP>",
+  "run_id": "<RUN>",
+  "run_outcome": "error",
+  "status": "done"
+ },
+ "hold_active": false,
+ "inbox_file": "---\nid: evt-envfail\nstatus: done\nsource: telegram\ntrust_tier: owner\nrun_id: <RUN>\nrepo_label: <TMP>\nrun_outcome: error\n---\nx\n",
+ "log": [
+  "[brnrd] run <RUN> (event evt-envfail): env=worktree",
+  "[brnrd] run <RUN>: env setup failed: worktree add failed"
+ ],
+ "packets": [
+  {
+   "payload": {
+    "event_id": "evt-envfail",
+    "source": "telegram"
+   },
+   "type": "event_received"
+  },
+  {
+   "payload": {
+    "error": null,
+    "event_id": "evt-envfail",
+    "ff_branches": {},
+    "run_id": "<RUN>",
+    "skipped": {
+     "main": "no remote configured"
+    },
+    "summary": "skipped main (no remote configured)"
+   },
+   "type": "synced"
+  },
+  {
+   "payload": {
+    "env": "worktree",
+    "event_id": "evt-envfail",
+    "repo_label": "<TMP>",
+    "run_id": "<RUN>",
+    "run_state_path": null,
+    "run_state_url": null
+   },
+   "type": "run_created"
+  },
+  {
+   "payload": {
+    "kind": "response",
+    "path": "<TMP>/.brr/responses/evt-envfail.md",
+    "run_id": "<RUN>"
+   },
+   "type": "artifact_created"
+  },
+  {
+   "payload": {
+    "error": "worktree add failed",
+    "run_id": "<RUN>",
+    "stage": "env"
+   },
+   "type": "failed"
+  }
+ ],
+ "persisted": {
+  "meta": {
+   "branch_source": "fallback:preserve",
+   "has_new_commit": false,
+   "host_context_branch": "main",
+   "host_dirty_at_dispatch": "[]",
+   "host_head_at_dispatch_unavailable": true,
+   "outbox_path": "<TMP>/.brr/outbox/evt-envfail",
+   "pid": "<V>",
+   "presence_id": "<V>",
+   "repo_label": "<TMP>",
+   "response_path": "<TMP>/.brr/responses/evt-envfail.md",
+   "runner_class": "balanced",
+   "runner_name": "codex",
+   "runner_shell": "codex",
+   "seed_ref": "main",
+   "telegram_chat_id": 60,
+   "transitions": [
+    {
+     "at": "<V>",
+     "by": null,
+     "from": "pending",
+     "tick": null,
+     "to": "running",
+     "why": "update_status"
+    },
+    {
+     "at": "<V>",
+     "by": null,
+     "from": "running",
+     "tick": null,
+     "to": "error",
+     "why": "update_status"
+    }
+   ],
+   "trust_tier": "owner"
+  },
+  "status": "error",
+  "terminal_reply": null
+ },
+ "portal": null,
+ "response": "I couldn't complete this run.\n\nbrr is surfacing this because environment setup failed: worktree add failed.",
+ "returned": {
+  "body": "x",
+  "env": "worktree",
+  "status": "error"
+ },
+ "shuttle": {
+  "conversation_key": "telegram:60:",
+  "key": "<TMP>/.brr",
+  "repo_root": "<TMP>",
+  "run_id": "<RUN>",
+  "since": "<V>",
+  "state": "awake",
+  "transitions": [
+   {
+    "at": "<V>",
+    "by": "daemon",
+    "from": "released",
+    "tick": null,
+    "to": "awake",
+    "why": "event_dispatched"
+   }
+  ],
+  "why": "event_dispatched"
+ }
+}

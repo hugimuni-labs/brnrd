@@ -544,6 +544,10 @@ class HookContext:
         # receipt is missing. Unset ⇒ the `gate` obligation is unassertable and
         # stays silent, the same doctrine as `BRR_REPO_DIR`.
         self.gate_command = (env.get("BRR_GATE_COMMAND") or "").strip() or None
+        # The boundary row's ctx/spend/quota readings, set by `compute_neutral`
+        # from the portal it already read (`_boundary_readings`); `None` on a
+        # phase that never reads the portal (pre-tool, a subagent boundary).
+        self.boundary_readings: dict[str, Any] | None = None
         self.flush_sync = (
             env.get("BRR_FLUSH_SYNC") or ""
         ).strip().lower() in {"1", "true", "yes", "on"}
@@ -1888,23 +1892,35 @@ def _quota_bucket_letter(label: str, taken: set[str]) -> str:
     return letter
 
 
-def _quota_chip(resources: dict[str, Any]) -> str | None:
+def _quota_buckets(resources: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """The quota facet's buckets as ``(letter, pct, part)`` — the one parse
+    both :func:`_quota_chip` and the boundary row's ``quota`` read, so the
+    two cannot drift. ``pct`` is the whole-number remaining percent as text
+    (the chip's own truncation); ``part`` is the bucket's summary clause.
+    Empty unless the facet is ``known`` with a non-blank summary."""
     facet = resources.get("quota") if isinstance(resources, dict) else None
     facet = facet if isinstance(facet, dict) else {}
     if facet.get("status") != "known":
-        return None
+        return []
     summary = str(facet.get("summary") or "").strip()
     if not summary:
-        return None
+        return []
     taken: set[str] = set()
-    chips: list[str] = []
+    buckets: list[tuple[str, str, str]] = []
     for part in summary.split(";"):
         match = _QUOTA_BUCKET_RE.search(part)
         if not match:
             continue
         pct = match.group("pct").split(".")[0]
         label = match.group("label")
-        chip = f"{_quota_bucket_letter(label, taken)}{pct}"
+        buckets.append((_quota_bucket_letter(label, taken), pct, part))
+    return buckets
+
+
+def _quota_chip(resources: dict[str, Any]) -> str | None:
+    chips: list[str] = []
+    for letter, pct, part in _quota_buckets(resources):
+        chip = f"{letter}{pct}"
         # The clock rides every bucket that states one, as time remaining
         # (2026-09-05, "did you not see the timer?" — a budget flag written
         # against a percent alone asked for a reset the timer was about to
@@ -6258,6 +6274,13 @@ def compute_neutral(
     context_now = _context_reading(portal.get("resources") or {})
     if context_now is not None:
         state[CONTEXT_READING_KEY] = {"value": context_now[0], "unit": context_now[1]}
+    # The per-boundary row's readings, off the values already in hand here —
+    # carried to `record_boundary` on ctx rather than in the neutral result,
+    # which stays the three-key envelope the Shell-facing renderer reads.
+    try:
+        ctx.boundary_readings = _boundary_readings(portal, context_prior, context_now)
+    except Exception:  # noqa: BLE001 — a row stamp must never sink the boundary it rides
+        ctx.boundary_readings = None
 
     if phase == PHASE_SESSION_START:
         inject = format_delta(
@@ -7387,6 +7410,84 @@ def run_hook(
     return render_native(ctx.flavour, phase, neutral)
 
 
+def _facet_int(value: object) -> int | None:
+    """An integer a facet carries, or ``None`` — never a coerced guess."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
+
+
+def _boundary_readings(
+    portal: dict[str, Any],
+    context_prior: dict[str, Any] | None,
+    context_now: tuple[float, str] | None,
+) -> dict[str, Any]:
+    """The row's ``ctx`` / ``spend`` / ``quota`` from what
+    :func:`compute_neutral` already holds — the portal it read and the
+    context readings it compared. Unknown is ``None``, never a conversion:
+    a ``%`` context reading is not a token count."""
+    resources = portal.get("resources") if isinstance(portal, dict) else None
+    resources = resources if isinstance(resources, dict) else {}
+
+    tokens_after: int | None = None
+    delta: int | None = None
+    if context_now is not None and context_now[1] == "tok":
+        tokens_after = int(round(context_now[0]))
+        if isinstance(context_prior, dict) and context_prior.get("unit") == "tok":
+            try:
+                delta = tokens_after - int(round(float(context_prior.get("value"))))
+            except (TypeError, ValueError, OverflowError):
+                delta = None
+
+    facet = resources.get("allowance")
+    facet = facet if isinstance(facet, dict) else {}
+
+    quota: dict[str, int | None] = {"S": None, "W": None, "F": None}
+    for letter, pct, _part in _quota_buckets(resources):
+        if letter in quota and quota[letter] is None:
+            try:
+                quota[letter] = int(pct)
+            except ValueError:
+                pass
+
+    return {
+        "ctx": {"tokens_after": tokens_after, "delta": delta},
+        "spend": {
+            "allowance_used": _facet_int(facet.get("spent")),
+            "allowance": _facet_int(facet.get("tokens")),
+        },
+        "quota": quota,
+    }
+
+
+_SHELL_TOOL_NAMES = ("bash", "shell", "exec", "exec_command", "functions_exec")
+
+
+def _tool_place_path(tool_name: object, tool_input: object) -> str | None:
+    """The file path one tool call touched, normalised and redacted exactly
+    as :func:`_tool_detail` treats a path; ``None`` for a shell tool or a
+    call carrying no ``file_path`` / ``path`` / ``notebook_path``."""
+    if not isinstance(tool_name, str) or not tool_name.strip():
+        return None
+    if not isinstance(tool_input, dict):
+        return None
+    name_lower = tool_name.strip().lower().replace("-", "_").replace(".", "_")
+    if name_lower in _SHELL_TOOL_NAMES:
+        return None
+    for key in ("file_path", "path", "notebook_path"):
+        val = tool_input.get(key)
+        if isinstance(val, str) and val.strip():
+            summary = val.strip()
+            if len(summary) > _DETAIL_OTHER_MAX:
+                summary = summary[:_DETAIL_OTHER_MAX] + "…"
+            return redact_detail(summary)
+    return None
+
+
 def record_boundary(
     ctx: HookContext,
     phase: str,
@@ -7433,6 +7534,7 @@ def record_boundary(
     tool_names: list[str] = []
     first_act: str | None = None
     first_detail: str | None = None
+    first_path: str | None = None
     total_out_bytes: int = 0
     has_out_bytes = False
     if phase == PHASE_POST_TOOL and isinstance(payload, dict):
@@ -7447,6 +7549,7 @@ def record_boundary(
                     if first_act is None:
                         first_act = classify_act(name, call.get("tool_input"))
                         first_detail = _tool_detail(name, call.get("tool_input"))
+                        first_path = _tool_place_path(name, call.get("tool_input"))
                 response = call.get("tool_response")
                 if response is not None:
                     total_out_bytes += _response_bytes(response)
@@ -7457,6 +7560,7 @@ def record_boundary(
                 tool_names.append(name.strip())
                 first_act = classify_act(name, payload.get("tool_input"))
                 first_detail = _tool_detail(name, payload.get("tool_input"))
+                first_path = _tool_place_path(name, payload.get("tool_input"))
             response = payload.get("tool_response")
             if response is not None:
                 total_out_bytes = _response_bytes(response)
@@ -7476,6 +7580,25 @@ def record_boundary(
     cwd = payload.get("cwd") if isinstance(payload, dict) else None
     if isinstance(cwd, str) and cwd.strip():
         record["cwd"] = cwd.strip()[:512]
+    # The bead and its coordinates: what this boundary cost the scroll, the
+    # spend and quota standing at it, and where the act landed. Read only off
+    # what the hook already holds (`compute_neutral`'s readings on ctx, the
+    # payload's first tool call) — no second portal read, no git, no
+    # measurement on the hot path. Unknown is null, never a guess.
+    readings = getattr(ctx, "boundary_readings", None)
+    readings = readings if isinstance(readings, dict) else {}
+    record["ctx"] = dict(
+        readings.get("ctx") or {"tokens_after": None, "delta": None}
+    )
+    record["spend"] = dict(
+        readings.get("spend") or {"allowance_used": None, "allowance": None}
+    )
+    record["quota"] = dict(readings.get("quota") or {"S": None, "W": None, "F": None})
+    # `commit` stays null: nothing the hook holds at this moment means "the
+    # checkout's current HEAD" — `produce.latest_commit` is the newest commit
+    # the run *produced* (absent before the first one) and the gate receipt's
+    # `head` is HEAD at gating time, both stale-or-other by construction.
+    record["place"] = {"path": first_path, "commit": None}
     # An in-process subagent's boundary is recorded (it happened, and a reader
     # asking "what did this run's environment say" wants it) but tagged, so
     # `derive_boundaries_summary` can keep the run's own verdict — which is

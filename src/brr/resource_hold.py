@@ -64,11 +64,13 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from .run import TERMINAL_STATUSES
+
 #: The run status this hold rides on (``run.py``'s ``STATUSES``) —
 #: deliberately excluded from ``daemon.py``'s ``_UNFINISHED_RUN_STATUSES``,
 #: so every boot-time janitor leaves a held run alone without needing to
 #: know this module exists.
-RUN_STATUS = "held"
+RUN_STATUS = "held"  # still written as a mirror; read through :func:`run_is_held`
 
 REASON_QUOTA_EXHAUSTED = "quota_exhausted"
 REASON_RESIDENT_REQUESTED = "resident_requested"
@@ -201,6 +203,26 @@ def build(
 def is_active(meta: dict[str, Any] | None) -> bool:
     """Whether *meta* names a hold still awaiting its resume."""
     return bool(meta) and not meta.get("released")
+
+
+def run_is_held(status: str | None, meta: dict[str, Any] | None) -> bool:
+    """Whether a run is parked on a resource hold — derived, never read off
+    the status word.
+
+    The hold is the record: ``meta["resource_hold"]`` active (not yet
+    ``mark_released``) on a run that has not ended. ``Run.status == "held"``
+    is a mirror of that fact, still written by ``_arm_resource_hold`` beside
+    the record and the Shuttle's ``parked`` (move 3 of the daemon rewrite
+    keeps the write because existing expectations pin it); no reader decides
+    anything from the word itself, except ``_reconcile_stale_held_status``,
+    whose whole job is to catch the word and the record disagreeing.
+
+    A terminal status wins over a stale active record: a run that ended is
+    not held, whatever its hold record says.
+    """
+    if not is_active((meta or {}).get("resource_hold")):
+        return False
+    return str(status or "").casefold() not in TERMINAL_STATUSES
 
 
 def mark_released(meta: dict[str, Any], *, by: str, now: float | None = None) -> dict[str, Any]:
