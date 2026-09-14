@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .. import account, conversations, message_store, protocol
+from .. import account, conversations, message_store, protocol, resource_hold
 from .. import config as conf
 from ..run import TERMINAL_STATUSES, Run
 from . import model as live
@@ -126,6 +126,13 @@ def _summary_from_task(task: Run, run_dir: Path, repo_label: str) -> RunView:
     is_subspawn = bool(meta.get("is_subspawn")) or bool(parent) or task.source == "spawn"
     started = _epoch(meta.get("started_at")) or _stat_time(run_dir / "run.md", "st_ctime")
     ended = _epoch(meta.get("ended_at"))
+    # A parked run reads as held from its hold record, not the status word
+    # (move 3 of the daemon rewrite); a stored status otherwise stands.
+    status = (
+        resource_hold.RUN_STATUS
+        if resource_hold.run_is_held(task.status, meta)
+        else task.status
+    )
     if not ended and task.status in _TERMINAL:
         ended = _stat_time(run_dir / "run.md")
     runner_name, runner_shell, runner_core, runner_class = _runner_fields(meta)
@@ -134,7 +141,7 @@ def _summary_from_task(task: Run, run_dir: Path, repo_label: str) -> RunView:
         run_id=task.id,
         presence_id="",
         kind="history-strand" if is_subspawn else "history",
-        label=_history_title(task.status, title, task.id),
+        label=_history_title(status, title, task.id),
         name="",
         stream=task.conversation_key,
         repo_label=repo_label,
@@ -147,7 +154,7 @@ def _summary_from_task(task: Run, run_dir: Path, repo_label: str) -> RunView:
         started_at=started,
         last_seen=ended or _stat_time(run_dir / "run.md") or started,
         event_id=task.event_id,
-        manifest={"status": task.status, **meta},
+        manifest={"status": status, **meta},
     )
 
 

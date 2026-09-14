@@ -3523,8 +3523,9 @@ def _processing_event_is_orphaned(
         # event's `run_id` write and the manifest's own save landing.
         # Positive proof only.
         return False
-    if manifest.status.casefold() not in _UNFINISHED_RUN_STATUSES:
-        # The run itself already reached a terminal status; the matching
+    if not _run_unfinished(manifest):
+        # The run itself already reached a terminal status (or is parked on
+        # a hold, which no event of its own outlives); the matching
         # event-status write that should have followed never landed —
         # proven orphaned outright, independent of presence/pid.
         return True
@@ -13779,6 +13780,19 @@ _UNFINISHED_RUN_STATUSES = (
 )
 
 
+def _run_unfinished(task: Run) -> bool:
+    """A run a boot janitor may treat as abandoned work: an unfinished
+    status and no active resource hold. The hold is read from the record
+    (:func:`resource_hold.run_is_held`), not from the ``held`` word —
+    ``_UNFINISHED_RUN_STATUSES`` still excludes the word so a legacy
+    manifest whose hold was released without its status moving stays out
+    of reach until ``_reconcile_stale_held_status`` settles it."""
+    return (
+        task.status.casefold() in _UNFINISHED_RUN_STATUSES
+        and not resource_hold.run_is_held(task.status, task.meta)
+    )
+
+
 def _reaped_run_state_text(text: str, *, reaped_at: str, reason: str) -> str:
     """Rewrite a RUNNING state document as a retained, explicit failure."""
     lines = text.splitlines()
@@ -13978,7 +13992,7 @@ def _reap_zombie_run_manifests(
             continue
         live_run_ids = _live_run_ids(brr_dir, now=timestamp)
         for task in list_runs(runs_dir):
-            if task.status.casefold() not in _UNFINISHED_RUN_STATUSES:
+            if not _run_unfinished(task):
                 continue
             if task.id in live_run_ids:
                 continue
@@ -14237,7 +14251,7 @@ def _mark_interrupted_runs(
             continue
         live_run_ids = _live_run_ids(brr_dir, now=timestamp)
         for task in list_runs(runs_dir):
-            if task.status.casefold() not in _UNFINISHED_RUN_STATUSES:
+            if not _run_unfinished(task):
                 continue
             if task.id in live_run_ids:
                 continue
@@ -15366,7 +15380,7 @@ def _write_terminal_hold_response(
     task.terminal_reply = body
     protocol.write_response(responses_dir, event["id"], body)
     _record_response_artifact(emit, task, response_path)
-    _set_event_run_outcome(event, task.status)
+    _set_event_run_outcome(event, _run_outcome_word(task))
     return True
 
 
@@ -15481,9 +15495,12 @@ def _held_runs_for_repo(runs_dir: Path) -> list[Run]:
     on every arm, but records armed before #1890 can still sit side by side
     on disk, so nothing may take this list's ``[0]`` as "the seat".
     """
+    # Derived from the hold record, not the ``held`` status word (move 3):
+    # the word is a mirror ``_arm_resource_hold`` still writes in the same
+    # save as the record, so on every reachable manifest the two agree.
     held = [
-        r for r in list_runs(runs_dir, status=resource_hold.RUN_STATUS)
-        if resource_hold.is_active(r.meta.get("resource_hold"))
+        r for r in list_runs(runs_dir)
+        if resource_hold.run_is_held(r.status, r.meta)
     ]
     held.sort(
         key=lambda r: str((r.meta.get("resource_hold") or {}).get("armed_at") or ""),
@@ -16497,6 +16514,15 @@ def _set_event_status_if_present(event: dict, status: str) -> bool:
     return True
 
 
+def _run_outcome_word(task: Run) -> str:
+    """The run outcome a letter records: ``held`` when the run is parked on a
+    resource hold — read from the hold record (move 3), not the status word —
+    else the run's status."""
+    if resource_hold.run_is_held(task.status, task.meta):
+        return resource_hold.RUN_STATUS
+    return task.status
+
+
 def _set_event_run_outcome(event: dict, outcome: str) -> bool:
     """Record a run's terminal outcome without letting it overwrite the
     letter's own ``status:`` (design-the-post.md §THE FIELD TWO MACHINES
@@ -16605,7 +16631,7 @@ def _run_worker_and_finalize(
             if task.status == "done":
                 _set_event_status_if_present(event, "done")
             else:
-                _set_event_run_outcome(event, task.status)
+                _set_event_run_outcome(event, _run_outcome_word(task))
         if task.status == "error":
             print(f"[brnrd] run {task.id}: failed")
 
@@ -16727,7 +16753,9 @@ def _run_worker_and_finalize(
             run_id=task.id if task is not None else "",
             parked=bool(
                 task is not None
-                and getattr(task, "status", "") == resource_hold.RUN_STATUS
+                and resource_hold.run_is_held(
+                    getattr(task, "status", ""), getattr(task, "meta", None),
+                )
             ),
         )
         return task
