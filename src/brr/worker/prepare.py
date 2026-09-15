@@ -36,6 +36,7 @@ from .. import run_topic
 from .. import runner
 from .. import runner_quota
 from .. import shuttle
+from .. import stake as stake_mod
 from .. import sync
 import os
 import time
@@ -265,6 +266,15 @@ def prepare(
         task.meta["wake_request"] = wake_request_report
     protocol.update_event_meta(event, run_id=task.id, repo_label=repo_label)
     _stamp_topic_proposal(event, task, account_context, brr_dir, conv_key)
+    # Move 4b: a stake the waking event carries (frontmatter, or a chat
+    # message's lead `stake:` line) arms at the run's first boundary
+    # (`daemon._stake_facet`), where the seat's meter is read.
+    stake_request = stake_mod.request_from(event, str(event.get("body") or ""))
+    if stake_request is not None:
+        stake_request["event_id"] = eid
+        if event.get("stake_carried_spent") not in (None, ""):
+            stake_request["carried_spent"] = str(event.get("stake_carried_spent"))
+        task.meta["stake_request"] = stake_request
 
     # Source-trust tiering (#517): an untrusted event that no isolated
     # environment can hold (solitary unavailable, or trust.untrusted=refuse)

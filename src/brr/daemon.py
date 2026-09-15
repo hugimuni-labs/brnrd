@@ -105,6 +105,7 @@ from . import schedule as schedule_mod
 from . import shuttle
 from . import tick as tick_mod
 from . import spending_plan
+from . import stake as stake_mod
 from . import statusline
 from . import sync
 from . import transcript
@@ -5370,6 +5371,28 @@ def _queue_respawn_request(
         meta["respawn_reason"] = reason
     if quality_target:
         meta["respawn_quality"] = quality_target
+    # Move 4b: `stake:` on a respawn rides the handoff's event, so the next
+    # run arms it from its waking event. A respawn continues the same ask,
+    # so what the armed stake already spent carries with it.
+    stake_raw = str(fm.get("stake") or "").strip()
+    if stake_raw:
+        cut_at_raw = str(fm.get("cut-at") or fm.get("cut_at") or "").strip()
+        try:
+            stake_mod.normalise(stake_raw, cut_at_raw or None, cfg=None)
+        except stake_mod.StakeError as exc:
+            _record_outbox_notice(
+                outbox_dir, f"respawn refused: stake: {exc}",
+                kind="refused", lifetime="run",
+            )
+            return False
+        meta["stake"] = stake_raw
+        meta.pop("cut_at", None)
+        if cut_at_raw:
+            meta["cut_at"] = cut_at_raw
+    armed_stake = task.meta.get("stake") if isinstance(task.meta.get("stake"), dict) else None
+    if meta.get("stake") and armed_stake and armed_stake.get("state") in ("armed", "cut"):
+        meta["stake_carried_spent"] = str(int(armed_stake.get("spent") or 0))
+        meta["stake_carried_from"] = task.id
     new_path = protocol.create_event(inbox_dir, source, new_body, **meta)
     print(f"[brnrd] outbox: queued respawn request ({new_path.stem})")
     if emit.conversation_key:
@@ -7011,6 +7034,35 @@ def _queue_spawn_request(
     # default — the same posture `report:`'s path-shape check above takes.
     allowance_raw = str(fm.get("allowance") or "").strip()
     allowance_tokens: int | None = None
+    # Move 4b (design-the-loom §16): a `stake:` on a spawn *is* its
+    # allowance — one instrument. The share normalises to tokens against
+    # `stake.window_tokens` and continues down the allowance path below;
+    # naming both is two ceilings for one strand, refused.
+    spawn_stake: dict[str, object] | None = None
+    stake_raw = str(fm.get("stake") or "").strip()
+    cut_at_raw = str(fm.get("cut-at") or fm.get("cut_at") or "").strip()
+    if stake_raw:
+        if allowance_raw:
+            _record_outbox_notice(
+                outbox_dir,
+                f"spawn refused: both `stake: {stake_raw}` and `allowance: "
+                f"{allowance_raw}` — a stake on a spawn is its allowance; name one",
+                kind="refused", lifetime="run",
+            )
+            return False
+        try:
+            stake_cfg = conf.load_config(emit.brr_dir.parent)
+        except Exception:  # noqa: BLE001 - config read is best-effort here
+            stake_cfg = {}
+        try:
+            spawn_stake = stake_mod.normalise(stake_raw, cut_at_raw or None, cfg=stake_cfg)
+        except stake_mod.StakeError as exc:
+            _record_outbox_notice(
+                outbox_dir, f"spawn refused: stake: {exc}",
+                kind="refused", lifetime="run",
+            )
+            return False
+        allowance_raw = str(spawn_stake["tokens"])
     if allowance_raw:
         allowance_tokens = allowance.parse_tokens(allowance_raw)
         if allowance_tokens is None:
@@ -7166,6 +7218,14 @@ def _queue_spawn_request(
     if core:
         meta["core"] = core
     meta["spawn_allowance_tokens"] = allowance_tokens
+    if spawn_stake is not None:
+        # The share the parent said, beside the tokens it became; the cut-at
+        # is recorded, not enforced — a strand's allowance is never a kill
+        # (design-the-allowance.md), and that stays his to change.
+        meta["spawn_stake_share_pct"] = spawn_stake["share_pct"]
+        meta["spawn_stake_unit"] = spawn_stake["unit"]
+        meta["spawn_stake_cut_at_tokens"] = spawn_stake["cut_at_tokens"]
+        meta["spawn_stake_window_basis"] = spawn_stake["window_basis"]
     if contract_branch:
         meta["spawn_contract_branch"] = contract_branch
     if contract_report:
@@ -7916,6 +7976,188 @@ def _starvation_facet(
         updated["starved"] = pct
         return updated, facet
     return await_state, facet
+
+
+def _stake_hold_spec(task: Run, row: dict[str, object]) -> dict[str, object]:
+    """The `pending_resource_hold` shape for a seat at its stake's cut-at."""
+    native_session_id = _native_session_id_for(task)
+    return {
+        "reason": resource_hold.REASON_STAKE_CUT,
+        "provider": _resource_hold_provider_for_runner(
+            task.meta.get("runner_shell") or task.meta.get("runner_name")
+        ),
+        "detail": stake_mod.cut_terms(row),
+        "native_session_id": native_session_id,
+        "resume_kind": (
+            resource_hold.RESUME_NATIVE if native_session_id
+            else resource_hold.RESUME_UNSUPPORTED
+        ),
+        "resume_condition": resource_hold.RESUME_RAISE,
+        "reset_deadline": None,
+    }
+
+
+def _stake_arm(
+    task: Run,
+    request: dict[str, object],
+    *,
+    cfg: "dict | None",
+    event_id: str,
+    source: str,
+    outbox_dir: Path | None,
+) -> dict[str, object] | None:
+    """Arm (or raise) this run's stake from one request; ``None`` on refusal.
+
+    A raise keeps what the ask already spent — the stake is the ask's total,
+    so ``stake: 8%`` after 5% spent leaves 3% — and pins the meter's last
+    reading at arm time, so only spend from here on moves it. A refused
+    request writes one notice and leaves any armed stake as it was.
+    """
+    previous = task.meta.get("stake") if isinstance(task.meta.get("stake"), dict) else None
+    try:
+        row = stake_mod.normalise(request.get("stake"), request.get("cut_at"), cfg=cfg)
+    except stake_mod.StakeError as exc:
+        _record_outbox_notice(
+            outbox_dir,
+            f"stake refused: {event_id or 'the request'} — {exc}; nothing was armed",
+            kind="refused", lifetime="run", verb="stake", run=task.id,
+        )
+        return None
+    carried = request.get("carried_spent")
+    if previous is not None and previous.get("state") in ("armed", "cut"):
+        row["spent"] = int(previous.get("spent") or 0)
+        row["raises"] = int(previous.get("raises") or 0) + 1
+    elif carried not in (None, ""):
+        try:
+            row["spent"] = max(0, int(float(str(carried))))
+            row["raises"] = 1
+        except (TypeError, ValueError):
+            row["spent"] = 0
+    else:
+        row["spent"] = 0
+    if int(row["cut_at_tokens"]) <= int(row["spent"]) and row["spent"]:
+        _record_outbox_notice(
+            outbox_dir,
+            f"stake refused: {event_id or 'the request'} — cut-at "
+            f"{allowance.format_tokens(row['cut_at_tokens'])} is not above what this ask "
+            f"already spent ({allowance.format_tokens(row['spent'])}); nothing was raised",
+            kind="refused", lifetime="run", verb="stake", run=task.id,
+        )
+        return None
+    reading = task.meta.get("resident_allowance_spent")
+    row["last_reading"] = int(reading) if isinstance(reading, (int, float)) else None
+    if previous is None and source == "event":
+        # The waking event's stake arms before the seat's meter has read
+        # anything this run; its first reading is all this run's.
+        row["last_reading"] = None
+    row["state"] = "armed"
+    row["event_id"] = event_id
+    row["source"] = source
+    window = int(row.get("window_tokens") or 0)
+    row["spent_share_pct"] = (
+        round(100.0 * int(row["spent"]) / window, 3) if window else None
+    )
+    row["pct"] = allowance.spend_pct(row["spent"], row.get("tokens"))
+    task.meta["stake"] = row
+    pending = task.meta.get("pending_resource_hold")
+    if isinstance(pending, dict) and pending.get("reason") == resource_hold.REASON_STAKE_CUT:
+        # Raised before the turn ended: the cut the boundary stamped no
+        # longer stands.
+        task.meta.pop("pending_resource_hold", None)
+    kind = "raised" if previous is not None or carried not in (None, "") else "armed"
+    _record_outbox_notice(
+        outbox_dir,
+        f"stake {kind}: {stake_mod.chip(row)} · cut-at "
+        f"{allowance.format_tokens(row['cut_at_tokens'])} "
+        f"({float(row['cut_at_share_pct']):g}% of a "
+        f"{allowance.format_tokens(row['window_tokens'])} window, {row['window_basis']})"
+        + (f" — from {event_id}" if event_id else ""),
+        kind="advisory", lifetime="run", verb="stake", run=task.id,
+    )
+    return row
+
+
+def _stake_facet(
+    task: Run,
+    await_state: "dict | None",
+    cfg: "dict | None",
+    events: "list[dict] | None",
+    outbox_dir: Path | None,
+) -> tuple["dict | None", "dict[str, object] | None"]:
+    """The stake, judged at every boundary (design-the-loom §16, move 4b).
+
+    Seat only — a strand's stake became its ``allowance:`` at dispatch.
+    Arms the waking event's stake (stamped at prepare as
+    ``task.meta["stake_request"]``), then any pending message on this
+    run's own thread carrying one (a raise needs the owner's channel),
+    meters the seat's window-scoped spend
+    (``task.meta["resident_allowance_spent"]``, written by
+    ``_collect_allowance_facet`` a moment earlier) into it, and at the
+    cut-at stamps a ``stake_cut`` / ``resume: raise`` hold for the worker
+    tail — resolving an armed ``await`` with ``park`` as starvation does.
+
+    Returns ``(possibly-updated await_state, the stake row | None)``.
+    """
+    if not hasattr(task, "meta") or _is_strand(task.meta):
+        return await_state, None
+    request = task.meta.pop("stake_request", None)
+    if isinstance(request, dict):
+        _stake_arm(
+            task, request, cfg=cfg, event_id=str(request.get("event_id") or ""),
+            source="event", outbox_dir=outbox_dir,
+        )
+    seen = [str(x) for x in (task.meta.get("stake_seen_events") or [])]
+    thread = str(getattr(task, "conversation_key", "") or "")
+    for ev in events or ():
+        if not isinstance(ev, dict):
+            continue
+        eid = str(ev.get("id") or "")
+        if not eid or eid in seen:
+            continue
+        found = stake_mod.request_from(ev, str(ev.get("body") or ""))
+        if found is None:
+            continue
+        seen.append(eid)
+        if thread and (conversations.conversation_key_for_event(ev) or "") != thread:
+            continue
+        existing = task.meta.get("stake")
+        if isinstance(existing, dict) and existing.get("state") in ("armed", "cut"):
+            if trust.resolve_tier(ev, cfg) != trust.OWNER:
+                _record_outbox_notice(
+                    outbox_dir,
+                    f"stake refused: {eid} — a raise spends more of the window; "
+                    "only the owner's channel raises a stake",
+                    kind="refused", lifetime="run", verb="stake", run=task.id,
+                )
+                continue
+        _stake_arm(task, found, cfg=cfg, event_id=eid, source="message", outbox_dir=outbox_dir)
+    if seen:
+        task.meta["stake_seen_events"] = seen[-64:]
+    row = task.meta.get("stake")
+    if not isinstance(row, dict):
+        return await_state, None
+    if row.get("state") in ("armed", "cut"):
+        reading = task.meta.get("resident_allowance_spent")
+        stake_mod.meter(row, int(reading) if isinstance(reading, (int, float)) else None)
+    if not stake_mod.at_cut(row):
+        return await_state, row
+    row["state"] = "cut"
+    if task.meta.get("pending_resource_hold"):
+        return await_state, row
+    task.meta["pending_resource_hold"] = _stake_hold_spec(task, row)
+    armed = task.meta.get("await")
+    if isinstance(armed, dict):
+        armed["resolved"] = True
+        armed["outcome"] = "park"
+        armed["which"] = None
+    if isinstance(await_state, dict) and await_state.get("armed"):
+        updated = dict(await_state)
+        updated["resolved"] = True
+        updated["outcome"] = "park"
+        updated["which"] = None
+        updated["stake_cut"] = True
+        return updated, row
+    return await_state, row
 
 
 def _seat_park_after_boot_ratio(cfg: "dict | None") -> float:
@@ -14053,6 +14295,10 @@ def _hold_body(meta: dict[str, object]) -> str:
         lines = ["Parked — the seat is yours; nothing spends until something reaches it."]
     elif meta.get("resume_condition") == resource_hold.RESUME_REFILL:
         lines = [f"Hibernating — {provider} quota is starved."]
+    elif meta.get("resume_condition") == resource_hold.RESUME_RAISE:
+        # The detail *is* the terms (`stake.cut_terms`): the reading and
+        # the one word that raises it — nothing to append below.
+        return str(meta.get("detail") or stake_mod.cut_terms(None))
     else:
         lines = [f"Parking this conversation — {provider} hit {reason}."]
     detail = meta.get("detail")
@@ -14984,6 +15230,14 @@ def _handle_resource_held_events(
                 # isolated and starts no parent-seat resume.
                 survivors.append(target)
                 continue
+            if resource_hold.awaits_raise(hold_meta):
+                # The stake's cut (move 4b): only the user's raise wakes it.
+                if _raise_stake_at_cut(
+                    runs_dir, held, target, seat_repo_root,
+                    account_context=account_context,
+                ):
+                    survivors.append(target)
+                continue
             if resource_hold.refuses_correspondent(hold_meta):
                 # The starvation park: the operator's word does not
                 # outrank an empty bucket. Read the provider again —
@@ -15224,6 +15478,96 @@ def _seat_alternate_binding_pct(
         pct = runner_quota.binding_quota_remaining_pct(levels, model=core)
         return (intended, float(pct)) if isinstance(pct, (int, float)) else None
     return None
+
+
+def _raise_stake_at_cut(
+    runs_dir: Path,
+    held: Run,
+    target: "_DispatchTarget",
+    repo_root: Path,
+    *,
+    account_context: "account.AccountContext | None",
+) -> bool:
+    """A message reaching a seat parked at its stake's cut-at. ``True`` ⇒ resumed.
+
+    Releases only on a ``stake:`` the message carries (frontmatter, or its
+    lead lines), from the owner's channel, whose cut-at clears what the ask
+    already spent. The raise rides the event (``stake`` / ``cut_at`` /
+    ``stake_carried_spent``) so the resumed run arms it from its waking
+    event with the spend carried. Anything else is kept for the raise and
+    answered with the terms — never dropped, never a wake.
+    """
+    event = target.event
+    request = stake_mod.request_from(event, str(event.get("body") or ""))
+    row = held.meta.get("stake") if isinstance(held.meta.get("stake"), dict) else {}
+    carried = int(row.get("spent") or 0)
+    refusal: str | None = None
+    if request is not None:
+        try:
+            cfg = conf.load_config(repo_root)
+        except Exception:  # noqa: BLE001 - a config read never blocks the answer
+            cfg = {}
+        if trust.resolve_tier(event, cfg) != trust.OWNER:
+            refusal = "a raise spends more of the window; only the owner's channel raises a stake"
+        else:
+            try:
+                raised = stake_mod.normalise(request["stake"], request.get("cut_at"), cfg=cfg)
+            except stake_mod.StakeError as exc:
+                refusal = str(exc)
+            else:
+                if int(raised["cut_at_tokens"]) <= carried:
+                    refusal = (
+                        f"that cut-at ({allowance.format_tokens(raised['cut_at_tokens'])}) "
+                        f"is not above what this ask already spent "
+                        f"({allowance.format_tokens(carried)})"
+                    )
+        if refusal is None:
+            stamps = {
+                "stake": request["stake"],
+                "cut_at": request.get("cut_at") or None,
+                "stake_carried_spent": str(carried),
+                "stake_carried_from": held.id,
+            }
+            try:
+                protocol.update_event_meta(event, **stamps)
+            except OSError:
+                pass
+            event.update({k: v for k, v in stamps.items() if v is not None})
+            _apply_resource_hold_resume(
+                runs_dir, target.inbox_dir, held, event, by="raise",
+                account_context=account_context,
+            )
+            print(
+                f"[brnrd] stake raised to {request['stake']} on {event.get('id')} — "
+                f"seat {held.id} resumes ({allowance.format_tokens(carried)} carried)"
+            )
+            return True
+    _keep_at_stake_cut(runs_dir, held, target, refusal)
+    return False
+
+
+def _keep_at_stake_cut(
+    runs_dir: Path, held: Run, target: "_DispatchTarget", refusal: str | None,
+) -> None:
+    """Keep a message for the raise, and tell the correspondent the terms."""
+    event_id = str(target.event.get("id") or "")
+    try:
+        protocol.update_event_meta(
+            target.event,
+            defer_until=_format_utc_after(_HOLD_DEFER_SECONDS),
+            deferred_by_run=held.id,
+            defer_reason="resource_hold",
+        )
+    except OSError:
+        return
+    _accumulate_held_event(runs_dir, held, event_id)
+    terms = stake_mod.cut_terms(held.meta.get("stake"))
+    body = (f"Not raised — {refusal}.\n\n" if refusal else "") + terms
+    try:
+        protocol.write_partial(target.responses_dir, event_id, body)
+    except OSError as exc:
+        print(f"[brnrd] seat {held.id} at its stake's cut: could not answer {event_id}: {exc}")
+    print(f"[brnrd] seat {held.id} at its stake's cut kept {event_id}")
 
 
 def _refuse_starved_wake(
