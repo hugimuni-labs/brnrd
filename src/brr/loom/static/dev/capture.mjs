@@ -205,14 +205,35 @@ for (const [w, h] of [
     path: resolve(output, "live-face-close.png"),
     clip: { x: 1340, y: 8, width: 564, height: 470 },
   });
-  // Mid-scan: wait until the scan has lit two trails at once.
+  // Mid-traverse: the scan crosses a plaque and a thread rises from it.
   let lit = 0;
-  for (let i = 0; i < 90 && lit < 2; i++) {
-    await page.waitForTimeout(400);
+  for (let i = 0; i < 90 && lit < 1; i++) {
+    await page.waitForTimeout(300);
     lit = Number(await page.evaluate(() => document.querySelector("#loom").dataset.trailsLit || 0));
   }
-  assert.ok(lit >= 2, "the scan lights two trails within three traverses");
-  await page.screenshot({ path: resolve(output, "live-mid-scan-1920x1080.png") });
+  assert.ok(lit >= 1, "a traverse raises a thread from the weft");
+  await page.screenshot({ path: resolve(output, "live-mid-traverse-1920x1080.png") });
+  await page.close();
+}
+// ?scan=off: no scan at all — the heartbeat on the face, a plaque's thread on
+// hover — so the two readings can be compared.
+{
+  const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+  observe(page);
+  await page.goto(base + "/loom/?scan=off");
+  await page.locator("#receipt h1").waitFor({ state: "attached" });
+  await page.waitForTimeout(SETTLE + 1200);
+  const dataset = () => page.evaluate(() => ({ ...document.querySelector("#loom").dataset }));
+  const quiet = await dataset();
+  assert.equal(quiet.scan, "off");
+  assert.equal(quiet.trailsLit, "0", "nothing rises without the scan");
+  // The focused plaque sits on the rail; hovering it shows its thread.
+  const box = await page.locator("canvas").boundingBox();
+  await page.mouse.move(box.width - 220, box.height - 190);
+  await page.waitForTimeout(500);
+  const hovered = await dataset();
+  assert.equal(hovered.scan, "off");
+  await page.screenshot({ path: resolve(output, "live-scan-off-1920x1080.png") });
   await page.close();
 }
 // Narrow drawer, reduced motion, and missing measurements are real edge states.

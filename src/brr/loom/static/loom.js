@@ -2452,23 +2452,29 @@ function paintScene() {
 }
 
 /* -------------------------------------------------------------- live ---- */
-/* The scan along the weft: a vertical line crosses the cloth's time axis
- * once per daemon heartbeat (else every 10 s). Crossing a pass lights that
- * run's trail on the tree; trails are the pings, files never ping. */
+/* The scan lives on the cloth — the weft is time; the tree has no time axis.
+ * One traverse per heartbeat tick. Crossing a pass pulses its plaque and
+ * raises a hairline thread from it into the tree, through that run's trail
+ * places in order. Nothing on the tree lights unless a thread reaches it. */
 const SCAN_FALLBACK_MS = 10000;
+const scanOff = params.get("scan") === "off";
 const scan = { tick: null, tickAt: null, period: SCAN_FALLBACK_MS, prevX: null };
 const trailLit = new Map();
+let tickPulse = null;
 function noteTick(next) {
-  const tick = list(next?.shuttle?.transitions).at(-1)?.tick;
+  const tick = next?.shuttle?.tick ?? list(next?.shuttle?.transitions).at(-1)?.tick;
   if (tick == null || tick === scan.tick) return;
   if (scan.tickAt != null) scan.period = Math.max(2000, Math.min(60000, clock - scan.tickAt));
   scan.tick = tick;
   scan.tickAt = clock;
+  tickPulse = { born: clock };
 }
 function scanX() {
   const { m, right } = layout;
   const phase =
-    scan.tickAt != null ? clamp((clock - scan.tickAt) / scan.period) : ((clock % scan.period) + scan.period) % scan.period / scan.period;
+    scan.tickAt != null
+      ? clamp((clock - scan.tickAt) / scan.period)
+      : (((clock % scan.period) + scan.period) % scan.period) / scan.period;
   return m + phase * (right - 20 - m);
 }
 // A run's trail: the feed's `trail` when it lands; until then a live
@@ -2492,64 +2498,101 @@ function trailPaths(row, ask = true) {
   return out.slice(-8);
 }
 function trailColor(row, entry) {
-  const seat = row.run === state.run?.id || (entry && !entry.row.parent && entry.strands.some((r) => r.run === state.run?.id) && row === entry.row);
+  const seat =
+    row.run === state.run?.id ||
+    (entry && !entry.row.parent && entry.strands.some((r) => r.run === state.run?.id) && row === entry.row);
   if (seat) return INK.amber;
   const topic = list(row.topics)[0];
   return topic ? color(topic) : INK.boneDim;
 }
-function lightCrossed(x0, x1) {
-  for (const entry of railLayout()) {
-    if (entry.x < x0 || entry.x > x1) continue;
-    for (const row of [entry.row, ...entry.strands])
-      trailLit.set(row.run, { at: clock, paths: trailPaths(row), color: trailColor(row, entry), x: entry.x });
+// At a heartbeat's pace a traverse crosses every group, so the tree would
+// carry twenty threads at once: the newest six stay, the rest let go.
+const THREADS_AT_ONCE = 6;
+function raise(entry) {
+  for (const row of [entry.row, ...entry.strands]) {
+    trailLit.delete(row.run);
+    trailLit.set(row.run, { at: clock, paths: trailPaths(row), color: trailColor(row, entry), x: entry.x });
   }
+  for (const run of [...trailLit.keys()].slice(0, Math.max(0, trailLit.size - THREADS_AT_ONCE))) trailLit.delete(run);
 }
-function routeBetween(a, b) {
-  const from = beam(a),
-    to = beam(b);
-  if (!from.length || !to.length) return [];
-  let shared = 0;
-  while (shared < from.length && shared < to.length && Math.abs(from[shared].x - to[shared].x) < 0.01 && Math.abs(from[shared].y - to[shared].y) < 0.01) shared++;
-  return [...from.slice(Math.max(0, shared - 1)).reverse(), ...to.slice(shared)];
+function lightCrossed(x0, x1) {
+  for (const entry of railLayout()) if (entry.x >= x0 && entry.x <= x1) raise(entry);
 }
-function drawTrailLine(paths, stroke, alpha) {
-  const visible = paths.filter((p) => targetPositions.has(p));
-  for (let i = 1; i < visible.length; i++) strokePath(routeBetween(visible[i - 1], visible[i]), stroke, 1.6, alpha, 8);
-  visible.forEach((path, i) => {
-    const p = point(path);
-    if (!p) return;
-    g.globalAlpha = alpha;
-    dot(p.x, p.y, i === visible.length - 1 ? 3 : 2, stroke, 10);
+function prefix(points, fraction) {
+  if (fraction >= 1) return points;
+  const lengths = points.slice(1).map((p, i) => Math.hypot(p.x - points[i].x, p.y - points[i].y));
+  const total = lengths.reduce((a, b) => a + b, 0);
+  let want = total * clamp(fraction);
+  const out = [points[0]];
+  for (let i = 0; i < lengths.length; i++) {
+    if (want <= lengths[i]) {
+      const t = lengths[i] ? want / lengths[i] : 1;
+      out.push({ x: points[i].x + (points[i + 1].x - points[i].x) * t, y: points[i].y + (points[i + 1].y - points[i].y) * t });
+      return out;
+    }
+    want -= lengths[i];
+    out.push(points[i + 1]);
+  }
+  return out;
+}
+// A hairline: 1 px, dots r 2, never more than 0.7 alpha.
+function hairline(points, stroke, alpha, dotsFrom = 1) {
+  strokePath(points, stroke, 1, Math.min(0.7, alpha), 4);
+  points.slice(dotsFrom).forEach((p) => {
+    g.globalAlpha = Math.min(0.7, alpha);
+    dot(p.x, p.y, 2, stroke, 6);
     g.globalAlpha = 1;
   });
-  return visible.length;
 }
-function drawScanTrails() {
+function threadPoints(t) {
+  const up = t.paths.map((path) => point(path)).filter(Boolean);
+  return up.length ? [{ x: t.x, y: layout.railY - 8 }, ...up] : [];
+}
+function drawRisenThreads() {
   let lit = 0;
-  if (reduced.matches) {
-    // No traverse: every trail in view, still, at 40 %.
-    for (const entry of railLayout().filter((e) => e.x >= layout.m && e.x <= layout.right - 20))
-      for (const row of [entry.row, ...entry.strands])
-        if (drawTrailLine(trailPaths(row, false), trailColor(row, entry), 0.4) > 1) lit++;
+  const T = layout.tree;
+  g.save();
+  g.beginPath();
+  g.rect(layout.m, T.y, layout.right - layout.m, layout.railY - T.y);
+  g.clip();
+  // At rest the seat keeps a faint hairline through its last places.
+  const seatTrail = actorHistory().map((p) => point(p)).filter(Boolean);
+  if (seatTrail.length > 1) hairline(seatTrail, INK.amber, 0.18, 0);
+  if (scanOff || reduced.matches) {
+    // No traverse: a plaque shows its thread on hover.
+    const row = hovered?.kind === "cloth" ? hovered.data : null;
+    const entry = row ? railLayout().find((e) => e.row.run === row.run || e.strands.some((r) => r.run === row.run)) : null;
+    if (row && entry) {
+      const points = threadPoints({ x: entry.x, paths: trailPaths(row, false) });
+      if (points.length > 1) {
+        hairline(points, trailColor(row, entry), 0.7);
+        lit++;
+      }
+    }
   } else {
-    const decay = scan.period * 0.85;
     for (const [run, t] of trailLit) {
-      const age = (clock - t.at) / decay;
-      if (age >= 1 || age < 0) {
-        if (age >= 1) trailLit.delete(run);
+      const age = clock - t.at;
+      const rise = Math.min(1, age / 400);
+      const fade = age <= 400 ? 0.7 : 0.7 * Math.max(0, 1 - (age - 400) / Math.max(400, scan.period - 400));
+      if (fade <= 0.02) {
+        trailLit.delete(run);
         continue;
       }
-      if (drawTrailLine(t.paths, t.color, Math.pow(1 - age, 1.5) * 0.9) > 1) lit++;
+      const points = threadPoints(t);
+      if (points.length < 2) continue;
+      hairline(prefix(points, rise), t.color, fade);
+      lit++;
     }
   }
+  g.restore();
   canvas.dataset.trailsLit = String(lit);
+  canvas.dataset.scan = scanOff ? "off" : "on";
 }
 function drawScanLine() {
-  if (reduced.matches || !isRevealed("cloth")) return;
-  const T = layout.tree,
-    x = scanX(),
-    y0 = T.y,
-    y1 = layout.railY + 22;
+  if (scanOff || reduced.matches || !isRevealed("cloth")) return;
+  const x = scanX(),
+    y0 = layout.cloth + 34,
+    y1 = layout.railY + (layout.compact ? 20 : 26);
   if (!paused) {
     if (scan.prevX != null && x >= scan.prevX) lightCrossed(scan.prevX, x);
     else if (scan.prevX != null) {
@@ -2558,16 +2601,18 @@ function drawScanLine() {
     }
     scan.prevX = x;
   }
-  // A short phosphor wake behind the line.
-  const wake = g.createLinearGradient(x - 90, 0, x, 0);
+  const wake = g.createLinearGradient(x - 70, 0, x, 0);
   wake.addColorStop(0, "rgba(242,177,52,0)");
-  wake.addColorStop(1, "rgba(242,177,52,0.09)");
-  // Over the window only while the line is inside it; always over the cloth.
-  const top = x >= T.x && x <= T.x + T.w ? y0 : layout.cloth + 34;
+  wake.addColorStop(1, "rgba(242,177,52,0.1)");
   g.fillStyle = wake;
-  g.fillRect(x - 90, top, 90, y1 - top);
-  strokePath([{ x, y: top }, { x, y: y1 }], INK.amber, 1.2, 0.7, 8);
-  dot(x, layout.railY, 2.6, "#fff1d0", 10);
+  g.fillRect(x - 70, y0, 70, y1 - y0);
+  strokePath([{ x, y: y0 }, { x, y: y1 }], INK.amber, 1, 0.7, 6);
+  // The plaque it just crossed pulses once.
+  for (const t of trailLit.values()) {
+    const age = (clock - t.at) / 300;
+    if (age >= 1) continue;
+    ring(t.x, layout.railY, 6 + age * 14, INK.amber, (1 - age) * 0.7, 1);
+  }
 }
 function blockRect(i) {
   const a = actorPoint();
@@ -2720,6 +2765,12 @@ function drawFaceLive(pulse) {
       if (state.run) drawSprite(glowSprite("⌁", layout.compact ? 22 : 30, "#ffd27a", 12), cx, cy + 6, layout.compact ? 22 : 30);
       text(state.run ? "no face attested" : "no pass", cx, box.y + box.h - 8, INK.faint, 9, box.w - 8, { align: "center" });
     }
+  }
+  // With the scan off, the heartbeat shows on the face instead.
+  if ((scanOff || reduced.matches) && tickPulse && box && !reduced.matches) {
+    const age = (clock - tickPulse.born) / 700;
+    if (age < 1) ring(box.x + box.w / 2, box.y + box.h / 2, box.w * 0.4 + age * 26, INK.amber, (1 - age) * 0.5, 1.2);
+    else tickPulse = null;
   }
   const gauge = regionRects.gauge;
   if (gauge && gauge.ratio != null) {
@@ -2904,7 +2955,6 @@ function draw(timestamp) {
       g.beginPath();
       g.rect(layout.tree.x, layout.tree.y, layout.tree.w, layout.tree.h);
       g.clip();
-      drawScanTrails();
       drawTrail();
       drawThreads();
       drawActor(pulse);
@@ -2922,6 +2972,7 @@ function draw(timestamp) {
       const live = railLayout().find((r) => !r.focus && (r.row.run === state.run?.id || r.strands.some((x) => x.run === state.run?.id)));
       if (live && live.x > layout.m && live.x < layout.right - 20) halo(live.x, layout.railY, 16 + pulse * 8, INK.amber, 0.2);
     }
+    if (windowOn) drawRisenThreads();
     drawScanLine();
     tooltip();
     drawRadial();

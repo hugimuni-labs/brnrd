@@ -25,17 +25,20 @@ Unknown measurements remain unknown. Directory nodes derive from measured paths.
 
 ## Motion
 
-- **The scan along the weft.** A vertical line travels left→right across the
-  cloth's x-mapping, one traverse per daemon heartbeat
-  (`shuttle.transitions[-1].tick` advancing; else every 10 s), with a short
-  phosphor wake. Crossing a pass lights its run's **trail** on the tree — a
-  polyline through its places along the branches, amber for the seat, its first
-  topic's hue otherwise — decaying before the next traverse. A trail is
+- **The scan on the cloth.** The weft is time, so the scan line lives only on
+  the cloth: one traverse per heartbeat tick (`shuttle.tick`, else
+  `shuttle.transitions[-1].tick`, else every 10 s), thin and bright with a short
+  wake, moving through the rail's *current* x-mapping, fisheye included. Each
+  plaque it crosses pulses once and raises a **hairline thread** from the plaque
+  into the tree, through that run's trail places in order (1 px, dots r 2, alpha
+  ≤ 0.7, run-hued; amber for the seat), rising over ~400 ms and fading over the
+  rest of the traverse. Nothing on the tree lights unless a thread from the weft
+  reaches it; the seat keeps a faint hairline at rest. A trail is
   `cloth.rows[].trail` when present; else a live strand's places, the seat's
   last eight, a row's `places`, or the places of the beads its pass page attests
-  (asked once, on first crossing). Files never ping. Reduced motion: no
-  traverse, trails in view drawn still at 40 %. The canvas reports
-  `data-trails-lit`.
+  (asked once, on first crossing). `?scan=off` removes the scan: the heartbeat
+  pulses on the face and a plaque shows its thread on hover — the same under
+  reduced motion. The canvas reports `data-scan` and `data-trails-lit`.
 - **The walk.** The shuttle follows the branch curves to each new measured
   place in 300–600 ms, eased. The last 8 places leave a fading amber trail; the
   walked route holds light for 900 ms. Each boundary lands as 12–20 sparks with
