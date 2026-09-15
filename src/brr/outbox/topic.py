@@ -466,11 +466,13 @@ def _show(f: OutboxFile, ctx, query) -> Handled:
             "---\n" + page
         ))
     acts = sum(1 for r in heddles.index(home, slug, query.since) if r.get("kind") in query.index_kinds)
-    inline = topic_show.render(home, slug, cap_bytes=topic_show.INLINE_CAP_BYTES, **render_kw)
     described = query.describe().replace(slug, canonical or slug, 1)
     head = [f"topic show {described} · {acts} acts"]
     if path is not None:
         head.append(f"bench: {path}")
+    # The cap bounds the whole body the seat reads, the head lines included.
+    room = topic_show.INLINE_CAP_BYTES - len(("\n".join(head) + "\n\n").encode("utf-8"))
+    inline = topic_show.render(home, slug, cap_bytes=room, **render_kw)
     conversation_key = str(getattr(task, "conversation_key", "") or f.ctx.emit.conversation_key or "")
     fields = dict(
         conversation_key=" ".join(conversation_key.split()),
