@@ -107,7 +107,7 @@ HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "emotes",
     "relic", "gate-run", "close-check", "promise", "mood", "do", "notes",
     "await", "cut", "legend", "item", "goal", "queue", "envoy",
-    "dominion", "hud",
+    "dominion", "hud", "loom",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -1091,6 +1091,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="outbox dir to read (default: this run's own, via "
              "BRR_OUTBOX_DIR / BRR_PORTAL_STATE)")
     hud_p.set_defaults(func=cmd_hud)
+
+    # Hidden per HIDDEN_COMMANDS while the loom screen is a proposal: the
+    # public list is a ceiling a verb argues its way onto
+    # (test_help_stays_small_enough_to_read). Read-only in v1.
+    loom_p = sub.add_parser("loom")
+    loom_p.add_argument(
+        "--port", type=int, default=7777,
+        help="port on 127.0.0.1 to serve /loom on (0 = any free port; default 7777)")
+    loom_p.add_argument(
+        "--open", action="store_true",
+        help="open the loom page in the browser once the listener is bound")
+    loom_p.add_argument(
+        "--once", action="store_true",
+        help="print /loom/state.json once and exit — no listener")
+    loom_p.set_defaults(func=cmd_loom)
 
     p = sub.add_parser("kb", help="search home/repo knowledge; omit query to print graph shape")
     p.add_argument("query", nargs="?", default=None,
@@ -5212,6 +5227,50 @@ def cmd_hud(args):
         print(_hud_card_halves(Path(outbox_dir), current.to_dict()))
     else:
         print(hud_mod.render_bar(current, outbox_dir=Path(outbox_dir)))
+    return 0
+
+
+def cmd_loom(args):
+    """``brnrd loom`` — serve the loom screen on ``http://127.0.0.1:<port>/loom``.
+
+    The repo root and account home resolve the way ``brnrd hud --topic``
+    resolves them. ``--once`` prints :func:`brr.loom.state.build` as JSON and
+    exits (the test hook and the reviewer's tool); otherwise the listener
+    serves until Ctrl-C. Binds ``127.0.0.1`` only; writes nothing.
+    """
+    import json
+    import sys
+
+    from . import account
+    from . import config as conf
+    from .loom import server as loom_server
+    from .loom import state as loom_state
+
+    repo_root = _repo_root()
+    cfg = conf.load_config(repo_root)
+    ctx = account.resolve_context(repo_root, cfg, create=False)
+    home = account.context_home_root(ctx)
+    if args.once:
+        payload = loom_state.build(repo_root, home)
+        sys.stdout.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+        return 0
+    try:
+        listener = loom_server.make_server(repo_root, home, port=args.port)
+    except OSError as exc:
+        print(f"brnrd loom: cannot listen on 127.0.0.1:{args.port} — {exc}", file=sys.stderr)
+        return 1
+    print(f"brnrd loom: serving {listener.url} (Ctrl-C to stop)", flush=True)
+    if args.open:
+        import webbrowser
+
+        webbrowser.open(listener.url)
+    try:
+        listener.serve_forever(poll_interval=0.25)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        listener.stopping.set()
+        listener.server_close()
     return 0
 
 
