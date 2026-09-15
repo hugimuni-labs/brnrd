@@ -147,9 +147,11 @@ class TestStakeFacet:
             "id": "evt-raise", "source": "telegram", "trust_tier": "owner",
             "conversation_key": "telegram:42:", "body": "stake: 3m\n\ncarry on",
         }
+        # The boundary the raise arrives on spent 50k more — charged first.
+        task.meta["resident_allowance_spent"] = 1_650_000
         _state, row = daemon._stake_facet(task, None, {}, [raise_event], tmp_path)
         assert row["state"] == "armed" and row["tokens"] == 3_000_000
-        assert row["spent"] == 1_600_000 and row["raises"] == 1
+        assert row["spent"] == 1_650_000 and row["raises"] == 1
         assert "pending_resource_hold" not in task.meta
         # Spend from here on moves it; the raise pinned the meter's reading.
         task.meta["resident_allowance_spent"] = 1_700_000
@@ -442,6 +444,17 @@ class TestMark:
         result = _drain(tmp_path, monkeypatch, "m.md", f"---\nmark: keep {link}\n---\n")
         assert "is not a path inside the bench" in result["notices"][-1]["text"]
         assert outside.read_text(encoding="utf-8") == "---\n---\nkey\n"
+
+    def test_resolve_speaks_the_bench_roots_spelling(self, tmp_path):
+        real = tmp_path / "real" / "bench"
+        (real / "r" / "p").mkdir(parents=True)
+        (real / "r" / "p" / "c.md").write_text("x", encoding="utf-8")
+        alias = tmp_path / "alias"
+        alias.symlink_to(tmp_path / "real")
+        # The caller names the file through one spelling, the root is another.
+        found = mark.resolve(alias / "bench", str(real / "r" / "p" / "c.md"))
+        assert found == alias / "bench" / "r" / "p" / "c.md"
+        assert found.relative_to(alias / "bench").parts == ("r", "p", "c.md")
 
     def test_a_strand_may_not_mark(self, tmp_path, monkeypatch):
         _fold(tmp_path / "home")

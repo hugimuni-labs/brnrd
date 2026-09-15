@@ -89,10 +89,12 @@ def resolve(bench_root: Path, raw: str) -> Path | None:
     if not candidate.name.endswith(".md"):
         candidate = candidate.with_name(candidate.name + ".md")
     try:
-        candidate.resolve().relative_to(bench_root.resolve())
+        inside = candidate.resolve().relative_to(bench_root.resolve())
     except (OSError, ValueError):
         return None
-    return candidate
+    # Spelled from *bench_root*, whatever spelling the caller used for the
+    # same directory (`/var` and `/private/var` are one place on macOS).
+    return bench_root / inside
 
 
 def read_frontmatter(path: Path) -> dict[str, str]:

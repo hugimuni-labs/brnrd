@@ -8100,13 +8100,23 @@ def _stake_facet(
     """
     if not hasattr(task, "meta") or _is_strand(task.meta):
         return await_state, None
+    seen = [str(x) for x in (task.meta.get("stake_seen_events") or [])]
     request = task.meta.pop("stake_request", None)
     if isinstance(request, dict):
+        request_event = str(request.get("event_id") or "")
+        if request_event and request_event not in seen:
+            seen.append(request_event)
         _stake_arm(
-            task, request, cfg=cfg, event_id=str(request.get("event_id") or ""),
+            task, request, cfg=cfg, event_id=request_event,
             source="event", outbox_dir=outbox_dir,
         )
-    seen = [str(x) for x in (task.meta.get("stake_seen_events") or [])]
+    reading = task.meta.get("resident_allowance_spent")
+    reading = int(reading) if isinstance(reading, (int, float)) else None
+    row = task.meta.get("stake")
+    if isinstance(row, dict) and row.get("state") in ("armed", "cut"):
+        # Charge this boundary's spend to the stake as it stands, before a
+        # raise below re-pins the meter at the same reading.
+        stake_mod.meter(row, reading)
     thread = str(getattr(task, "conversation_key", "") or "")
     for ev in events or ():
         if not isinstance(ev, dict):
@@ -8136,9 +8146,6 @@ def _stake_facet(
     row = task.meta.get("stake")
     if not isinstance(row, dict):
         return await_state, None
-    if row.get("state") in ("armed", "cut"):
-        reading = task.meta.get("resident_allowance_spent")
-        stake_mod.meter(row, int(reading) if isinstance(reading, (int, float)) else None)
     if not stake_mod.at_cut(row):
         return await_state, row
     row["state"] = "cut"
