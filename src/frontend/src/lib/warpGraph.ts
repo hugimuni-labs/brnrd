@@ -124,6 +124,12 @@ export interface WarpTopic {
 	/** Non-empty = this topic split; the file is a breadcrumb whose id is
 	 *  retired (an id alive on two children would resolve to neither). */
 	splitInto: string[];
+	/** The heddle signature's authored glyph (move 5b's frontmatter
+	 *  `rune: …`, design-the-loom §20) — `null` when the file carries none,
+	 *  the common case. `topicFace`/`topicFaces` wear this over the derived
+	 *  glyph so a heddle minted with `topic: new` and a `rune:` shows the
+	 *  same stave on the chip (`heddles.py`) and on the rail. */
+	rune: string | null;
 }
 
 export interface WarpGraph {
@@ -154,6 +160,35 @@ interface ParsedPage {
 	title: string | null;
 	rows: Map<string, string>;
 	body: string;
+	/** The frontmatter block's top-level scalars (`rune:` is the one a
+	 *  caller reads today) — empty when the file has no block. Nested rows
+	 *  (`signature:` and its lists) are not this reader's job; `heddles.py`
+	 *  owns that grammar server-side. */
+	frontmatter: Map<string, string>;
+}
+
+/** A frontmatter block's top-level `key: value` scalars, mirroring the
+ *  quoting `heddles.py`'s `_unquote` accepts. Indented lines (the
+ *  `signature:` block and its lists) are skipped by column — this reader
+ *  has exactly one consumer (`rune:`) and no reason to grow the rest of
+ *  the backend's YAML subset. */
+function frontmatterScalars(lines: string[]): Map<string, string> {
+	const scalars = new Map<string, string>();
+	for (const raw of lines) {
+		if (!raw.trim() || /^[ \t]/.test(raw)) continue;
+		const match = /^([A-Za-z][\w-]*):[ \t]*(.*)$/.exec(raw);
+		if (!match) continue;
+		let value = match[2].trim();
+		if (
+			value.length >= 2 &&
+			value[0] === value[value.length - 1] &&
+			(value[0] === '"' || value[0] === "'")
+		) {
+			value = value.slice(1, -1);
+		}
+		if (value) scalars.set(match[1], value);
+	}
+	return scalars;
 }
 
 /** One title line, one contiguous recognized-row block, then the body —
@@ -162,12 +197,16 @@ interface ParsedPage {
 function parsePage(markdown: string, rowRe: RegExp): ParsedPage {
 	const lines = (markdown ?? '').replace(/\r\n/g, '\n').split('\n');
 	let i = 0;
+	let frontmatter = new Map<string, string>();
 	// A leading `---` frontmatter block is metadata, never the title or the
 	// body — a topic file carries its heddle signature there (move 5b,
 	// design-the-loom §20). Unclosed ⇒ not frontmatter; parse as before.
 	if (lines.length && lines[0].trim() === '---') {
 		const close = lines.findIndex((line, index) => index > 0 && line.trim() === '---');
-		if (close > 0) i = close + 1;
+		if (close > 0) {
+			frontmatter = frontmatterScalars(lines.slice(1, close));
+			i = close + 1;
+		}
 	}
 	let title: string | null = null;
 	while (i < lines.length && lines[i].trim() === '') i += 1;
@@ -189,7 +228,7 @@ function parsePage(markdown: string, rowRe: RegExp): ParsedPage {
 	const bodyLines = lines.slice(i);
 	while (bodyLines.length && bodyLines[0].trim() === '') bodyLines.shift();
 	while (bodyLines.length && bodyLines[bodyLines.length - 1].trim() === '') bodyLines.pop();
-	return { title, rows, body: bodyLines.join('\n') };
+	return { title, rows, body: bodyLines.join('\n'), frontmatter };
 }
 
 export function isWarpItemFile(path: string): boolean {
@@ -248,7 +287,7 @@ const TOPIC_ROW_RE = /^(ids|split-into)[:][ \t]*(.*)$/;
 
 export function parseWarpTopic(path: string, markdown: string): WarpTopic {
 	const canonicalId = basename(path);
-	const { title, rows, body } = parsePage(markdown, TOPIC_ROW_RE);
+	const { title, rows, body, frontmatter } = parsePage(markdown, TOPIC_ROW_RE);
 	const aliases = splitIds(rows.get('ids') ?? '').filter((alias) => alias !== canonicalId);
 	return {
 		canonicalId,
@@ -256,7 +295,8 @@ export function parseWarpTopic(path: string, markdown: string): WarpTopic {
 		path,
 		title: title ?? canonicalId,
 		definitionMarkdown: body,
-		splitInto: splitIds(rows.get('split-into') ?? '')
+		splitInto: splitIds(rows.get('split-into') ?? ''),
+		rune: frontmatter.get('rune') ?? null
 	};
 }
 
@@ -693,9 +733,15 @@ export function runTopicIndex(
 
 /** The topic's face: same rune+hue derivation runs used to wear, now
  *  seeded from the *canonical topic id* — stable across merges (the id
- *  survives) and across topic-set changes (nothing is index-based). */
+ *  survives) and across topic-set changes (nothing is index-based). An
+ *  authored `rune:` (move 5b's heddle signature; the rune-on-the-rail gap
+ *  `the-heddles-light-themselves.md` §Open judgements named) wins over the
+ *  derived glyph — the hue stays derived either way, so the portal chip
+ *  (`heddles.py`) and the rail agree on the mark without agreeing on how
+ *  it was picked. */
 export function topicFace(topic: WarpTopic): RunFace {
-	return runFace(topic.canonicalId);
+	const face = runFace(topic.canonicalId);
+	return topic.rune ? { ...face, glyph: topic.rune } : face;
 }
 
 /** The rune space — the Elder Futhark's 24 staves. The topic cap the
@@ -778,10 +824,17 @@ function separateHues(faces: Map<string, RunFace>): Map<string, RunFace> {
  *  read faces from this one map — a surface hashing its own face would
  *  disagree with the rail the moment a probe re-rolls one. */
 export function topicFaces(graph: WarpGraph): Map<string, RunFace> {
-	const ids = graph.topics
-		.filter((topic) => topic.splitInto.length === 0)
-		.map((topic) => topic.canonicalId);
-	return separateHues(runFacesInWindow(ids));
+	const topics = graph.topics.filter((topic) => topic.splitInto.length === 0);
+	const faces = separateHues(runFacesInWindow(topics.map((topic) => topic.canonicalId)));
+	// An authored `rune:` wins over the derived glyph, same rule as
+	// `topicFace` above — only the mark changes; the hue this set-probe
+	// spread stays untouched.
+	for (const topic of topics) {
+		if (!topic.rune) continue;
+		const face = faces.get(topic.canonicalId);
+		if (face) faces.set(topic.canonicalId, { ...face, glyph: topic.rune });
+	}
+	return faces;
 }
 
 /** The thread alphabet, in topic order — what every crossing strip and the

@@ -100,6 +100,26 @@ async function main() {
 		const after = await capture(afterPage, routesFor(['mint']), 'after-mint-lit');
 		assert.equal(before.glows, 0, 'an unclaimed topic has no glowing heddle');
 		assert.ok(after.glows > 0, 'a live topic glows through its existing heddle button');
+
+		// The rune on the rail (brr/the-rune-on-the-rail): mint and tos carry
+		// an authored `rune:` in fixtures.mjs's frontmatter; the rail must
+		// show exactly that glyph, not the id-derived one. The other four
+		// (mcp, runner, schedule, seed) carry no frontmatter, so they still
+		// show whatever `runFacesInWindow` derives for these six ids today —
+		// asserted here so a regression in the override (always deriving, or
+		// always authored) fails on either side.
+		for (const [id, rune] of Object.entries({ mint: '⚒', tos: '☉' })) {
+			assert.ok(
+				before.text.includes(rune),
+				`${id} wears its authored rune ${rune}, not a derived glyph`
+			);
+		}
+		for (const [id, glyph] of Object.entries({ mcp: 'ᛗ', runner: 'ᚨ', schedule: 'ᚱ', seed: 'ᛚ' })) {
+			assert.ok(
+				before.text.includes(glyph),
+				`${id} keeps its derived glyph ${glyph} — no frontmatter to override it`
+			);
+		}
 		await modules.harvest(afterPage, 'drive-heddle-live-topics');
 		await context.close();
 		await modules.save(OUT, 'drive-heddle-live-topics');
