@@ -12,7 +12,7 @@
         "at": "<V>",
         "kind": "dropped",
         "lifetime": "run",
-        "text": "topic dropped: 'rename the-loom the-weave' is not a topic verb — write `topic: new <slug>`, `topic: split <slug> -> a, b`, `topic: merge a, b -> c`, `topic: retire <slug>`, `topic: show <slug> [since <span>]` or `topic: assign <slug> -> <event-id>`"
+        "text": "topic dropped: 'rename the-loom the-weave' is not a topic verb — write `topic: new <slug>`, `topic: split <slug> -> a, b`, `topic: merge a, b -> c`, `topic: retire <slug>`, `topic: show <slug> [since <span>] [kinds: …] [depth: …] [bench: …]`, `topic: rune <slug> <glyph>` or `topic: assign <slug> -> <event-id>`"
       }
     ],
     ".brr/outbox/<EVT1>/.processed/topic.md": "---\ntopic: rename the-loom the-weave\n---\nplaces: [src/**]\n",
