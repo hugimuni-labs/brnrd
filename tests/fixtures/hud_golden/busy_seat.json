@@ -61,6 +61,29 @@
         "summary": "child spec",
         "trust_tier": "owner"
       }
+    ],
+    "unstamped": [
+      {
+        "from": "telegram",
+        "id": "evt-1",
+        "proposed": null,
+        "proposed_by": null,
+        "suggested": null
+      },
+      {
+        "from": "telegram",
+        "id": "evt-2",
+        "proposed": null,
+        "proposed_by": null,
+        "suggested": null
+      },
+      {
+        "from": "telegram",
+        "id": "evt-3",
+        "proposed": null,
+        "proposed_by": null,
+        "suggested": null
+      }
     ]
   },
   "knowledge": {

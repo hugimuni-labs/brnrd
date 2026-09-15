@@ -5496,6 +5496,8 @@ def _topic_bundle_lines(event_meta: dict[str, Any] | None) -> list[str]:
     proposed = str(event_meta.get("topic_proposed") or "").strip()
     suggested = str(event_meta.get("topic_suggested") or "").strip()
     if assigned:
+        # Move 5e: an event may carry several topics (`topic: a b`).
+        assigned = "`, `".join(assigned.split())
         lines.append(
             f"- Topic: `{assigned}` — assigned to this event at dispatch; "
             "`.topic` names what your own acts carry"

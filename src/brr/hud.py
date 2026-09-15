@@ -125,6 +125,11 @@ class Inbound(_Shape):
     #: proposal for the waking event and the topic it was assigned (by the
     #: run's first ``.topic``, or by its dispatcher at entry).
     current_event_topic: dict[str, Any] | None = None
+    #: Move 5e: inbound correspondent events with no ``topic:`` yet — the
+    #: waking event and the pending ones — each ``{id, from, proposed,
+    #: proposed_by, suggested}`` (``run_topic.unstamped_events``); the
+    #: boundary names each on its own line until its stamp lands.
+    unstamped: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -546,6 +551,30 @@ class HUDInputs:
     shuttle_home: Path | None = None
 
 
+def _unstamped(task: Any, events: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Move 5e: the unstamped inbound events, the waking one first. A strand
+    shows none — its inbound is closed and its waking event is a dispatch."""
+    from . import daemon, run_topic
+
+    meta = getattr(task, "meta", None)
+    meta = meta if isinstance(meta, dict) else {}
+    if daemon._is_strand(meta):
+        return []
+    # `.topic: null` settled is the run's deliberate answer for its waking
+    # event — no topic — so the waking event stops standing on the line.
+    settled = str(meta.get(run_topic.META_CONTROL_STAMP) or "").strip().strip("`").lower()
+    if settled.startswith("topic:"):
+        settled = settled[len("topic:"):].strip()
+    if settled in run_topic._NULL_WORDS:
+        return run_topic.unstamped_events(events)
+    waking = {
+        **meta,
+        "id": str(getattr(task, "event_id", "") or ""),
+        "source": str(getattr(task, "source", "") or ""),
+    }
+    return run_topic.unstamped_events(events, waking=waking)
+
+
 def build(inputs: HUDInputs) -> HUD:
     """Collect this tick's HUD. Moved verbatim from the dict writer on ``main``.
 
@@ -852,6 +881,7 @@ def build(inputs: HUDInputs) -> HUD:
                 "proposed": task.meta.get(run_topic.META_PROPOSED) or None,
                 "confirmed": task.meta.get(run_topic.META_EVENT_TOPIC) or None,
             },
+            unstamped=_unstamped(task, events),
         ),
         outbound=Outbound(
             replies_current=int(stats.get("current", 0)),

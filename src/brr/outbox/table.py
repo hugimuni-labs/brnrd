@@ -111,9 +111,15 @@ def _selects_topic(fm: dict) -> object:
     # Move 5c: `topic:` is also every act's modifier (`event:` + `topic:
     # the-loom`). Only an op claims the file; a bare slug falls through to
     # the rows below, which carry it as the act's topic.
+    # Move 5e: on an `event:` reply or an `also:` burst a slug *list* is
+    # the modifier too — the answered event is stamped with every slug.
     from . import topic
 
-    return topic.is_op(fm.get("topic"))
+    value = fm.get("topic")
+    if not topic.is_op(value):
+        return False
+    replies = any(str(fm.get(key) or "").strip() for key in ("event", "also"))
+    return not (replies and topic.is_slug_list(value))
 
 
 def _selects_mark(fm: dict) -> object:
