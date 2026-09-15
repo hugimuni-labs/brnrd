@@ -21,7 +21,7 @@ Unknown measurements remain unknown. Directory nodes derive from measured paths.
 | ice `#8fd3ff`                       | the user's hand and the settled — hover, selection, focus plaque edge, console caret, `grant`, knots, PRs  |
 | dark `#3a3328`                      | the between — branch lines, unlit runes                                                                    |
 | green / red                         | receipts (course ticks, the live dot) / walls (quota under 10 %, a `refill` hold)                          |
-| six muted hues                      | heddles, by position — runes, chips, thin halos and arcs only; never fills                                 |
+| six muted hues                      | heddles, by slug order (stable as the feed reorders) — runes, chips, thin halos and arcs only; never fills                                 |
 
 ## Motion
 
