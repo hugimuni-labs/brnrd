@@ -5968,6 +5968,11 @@ def _format_pending_events(
         sep = f": {summary}" if summary else ""
         rendered += 1
         bullets.append(f"- {eid}{src}{sep}")
+        from . import run_topic
+
+        topic_line = run_topic.event_topic_line(ev)
+        if topic_line:
+            bullets.append(f"  - {topic_line}")
         if ev.get("orphaned"):
             # #1496 ("the event nobody could see"): daemon._pending_events_
             # for_agent only lets a `status: processing` event through this

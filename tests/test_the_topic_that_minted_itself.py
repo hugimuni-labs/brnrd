@@ -351,3 +351,125 @@ def test_hud_topic_takes_the_same_flags(tmp_path, monkeypatch, capsys):
     args = types.SimpleNamespace(topic="the-loom", since=None, kinds=None, depth="deep")
     assert cli._hud_topic(args) == 1
     assert "heads · cut · whole" in capsys.readouterr().err
+
+
+# ── the steer: every inbound event carries a reading; a seat's reply follows it ──
+
+
+def _ctx(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir(exist_ok=True)
+    return account.resolve_context(repo, {"home.path": str(tmp_path / "home"), "repo.label": "o/r"})
+
+
+def test_every_inbound_event_is_stamped_once_where_the_seat_first_sees_it(tmp_path):
+    ctx = _ctx(tmp_path)
+    home = account.context_home_root(ctx)
+    _topic(home, "the-loom", words=("loom",))
+    inbox = tmp_path / ".brr" / "inbox"
+    own = protocol.create_event(inbox, "telegram", "the waking one", status="processing")
+    hit = protocol.create_event(inbox, "telegram", "the loom again")
+    miss = protocol.create_event(inbox, "telegram", "the deck v12 is stale")
+    assigned = protocol.create_event(inbox, "telegram", "the loom", topic="the-post")
+    internal = protocol.create_event(inbox, "schedule", "nightly sweep of the loom")
+
+    records = {r["id"]: r for r in daemon._pending_events_for_agent(
+        inbox, own.stem, account_context=ctx, repo_label="o/r")}
+    assert records[hit.stem]["topic_proposed"] == "the-loom"
+    assert records[hit.stem]["topic_proposed_by"] == "signature"
+    assert records[miss.stem]["topic_suggested"] == "the-deck-v12"
+    assert "topic_proposed" not in records[assigned.stem]
+    assert "topic_suggested" not in records[internal.stem]
+    assert protocol._read_event(miss)["topic_suggested"] == "the-deck-v12"  # on the file
+    # once: a second flush writes nothing new
+    before = miss.read_text(encoding="utf-8")
+    daemon._pending_events_for_agent(inbox, own.stem, account_context=ctx, repo_label="o/r")
+    assert miss.read_text(encoding="utf-8") == before
+    # a strand's view stamps nothing
+    later = protocol.create_event(inbox, "telegram", "reddit read please")
+    daemon._pending_events_for_agent(inbox, own.stem, strand=True, account_context=ctx, repo_label="o/r")
+    assert "topic_suggested" not in protocol._read_event(later)
+
+
+def test_a_shown_event_names_its_reading_in_the_bundle_wording(tmp_path):
+    from brr import hooks, prompts
+
+    assert run_topic.event_topic_line({"topic_suggested": "the-deck-v12"}) == \
+        "topic: none matched — new `the-deck-v12`?"
+    assert run_topic.event_topic_line({"topic_proposed": "the-loom", "topic_proposed_by": "thread"}) == \
+        "topic: `the-loom` proposed (thread)"
+    assert run_topic.event_topic_line({"topic": "the-post", "topic_suggested": "x"}) == "topic: `the-post`"
+    assert run_topic.event_topic_line({}) is None
+    ev = {"id": "evt-1", "source": "telegram", "topic_suggested": "the-deck-v12", "created": ""}
+    assert "topic: none matched — new `the-deck-v12`?" in hooks._event_header(ev, size=10)
+    assert "topic:" not in hooks._event_header({"id": "evt-2", "source": "telegram"}, size=10)
+    rendered = prompts._format_pending_events(
+        [{"id": "evt-1", "source": "telegram", "summary": "the deck", "topic_proposed": "the-loom",
+          "topic_proposed_by": "signature"}]
+    )
+    assert "  - topic: `the-loom` proposed (signature)" in rendered
+
+
+def _letter_seat(tmp_path, monkeypatch, *, control: str | None, reply_topic: str = "", strand=False):
+    got = _seat(tmp_path, monkeypatch, {}, control=control)
+    letter = protocol.create_event(got["inbox"], "telegram", "about the post", topic_proposed="the-post",
+                                   topic_proposed_by="signature", telegram_user_id="42",
+                                   telegram_chat_id="42")
+    if strand:
+        got["task"].meta["spawn_parent_run_id"] = "run-parent"
+    extra = f"topic: {reply_topic}\n" if reply_topic else ""
+    (got["outbox"] / "reply.md").write_text(
+        f"---\nevent: {letter.stem}\n{extra}---\nthe answer\n", encoding="utf-8")
+    _drain_again(tmp_path, got)
+    got["letter"] = letter
+    got["notices"] = daemon._read_outbox_notices(got["outbox"])
+    return got
+
+
+def test_a_seat_reply_inherits_the_answered_event_and_the_run_follows_it(tmp_path, monkeypatch):
+    got = _letter_seat(tmp_path, monkeypatch, control="the-loom")
+    home, task, letter = got["home"], got["task"], got["letter"]
+    (message,) = [r for r in heddles.index(home, "the-post") if r["kind"] == "message"]
+    assert message["run"] == "run-seat"
+    # the reply confirmed the letter's proposal …
+    assert protocol._read_event(letter)["topic"] == "the-post"
+    assert letter.stem in [r["ref"] for r in heddles.index(home, "the-post")]
+    # … and the run's `.topic` followed it, once, with one advisory
+    assert (got["outbox"] / ".topic").read_text(encoding="utf-8") == "the-post\n"
+    assert run_topic.run_topic(task) == "the-post"
+    follows = [n for n in got["notices"] if "the run follows it" in n["text"]]
+    assert len(follows) == 1 and follows[0]["kind"] == "advisory"
+    assert ".topic: the-loom → the-post — the reply to " in follows[0]["text"]
+    # the waking event keeps what it was confirmed as — nothing reclassified
+    assert protocol._read_event(got["inbox"] / f"{task.event_id}.md")["topic"] == "the-loom"
+    # the next settle reads the rewritten control as already settled
+    assert run_topic.settle(task, outbox_dir=got["outbox"], account_home=home,
+                            inbox_dir=got["inbox"]) == "the-post"
+
+
+def test_the_act_own_topic_still_wins_and_an_agreeing_reply_moves_nothing(tmp_path, monkeypatch):
+    got = _letter_seat(tmp_path, monkeypatch, control="the-loom", reply_topic="the-loom")
+    assert protocol._read_event(got["letter"])["topic"] == "the-loom"
+    assert (got["outbox"] / ".topic").read_text(encoding="utf-8") == "the-loom\n"
+    assert not [n for n in got["notices"] if "the run follows it" in n["text"]]
+
+
+def test_a_strand_reply_does_not_inherit_the_answered_event(tmp_path, monkeypatch):
+    assert run_topic.answered_topic(
+        {"event": "evt-x"}, Run(id="r", event_id="evt-w", body="", source="spawn"),
+        account_home=tmp_path, resolve_event=lambda _id: {"topic_proposed": "the-post"},
+    ) is None  # no such heddle under tmp_path: nothing resolves
+    home = tmp_path / "home"
+    _topic(home, "the-post")
+    _topic(home, "the-loom")
+    task = Run(id="r", event_id="evt-w", body="", source="spawn", meta={"run_topic": "the-loom"})
+    lookup = lambda _id: {"topic_proposed": "the-post"}  # noqa: E731
+    assert run_topic.for_act({"event": "evt-x"}, task, outbox_dir=None, account_home=home,
+                             resolve_event=lookup) == "the-post"
+    assert run_topic.for_act({"event": "evt-x"}, task, outbox_dir=None, account_home=home,
+                             resolve_event=lookup, is_strand=True) == "the-loom"
+    # a suggestion is not a topic until minted; other verbs answer no event
+    assert run_topic.for_act({"event": "evt-x"}, task, outbox_dir=None, account_home=home,
+                             resolve_event=lambda _id: {"topic_suggested": "the-post"}) == "the-loom"
+    assert run_topic.for_act({"spawn": True}, task, outbox_dir=None, account_home=home,
+                             resolve_event=lookup) == "the-loom"
