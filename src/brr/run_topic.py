@@ -42,7 +42,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from . import heddles
 
@@ -67,6 +67,44 @@ Notice = Callable[[str, str], None]
 #: ``event id → the event's frontmatter dict`` (with ``_path``) or ``None`` —
 #: the drain's resolver across every drawer the run can address.
 EventLookup = Callable[[str], "Mapping[str, Any] | None"]
+
+
+# ── Move 5e: an inbound message may belong to several topics ──
+#
+# An *event's* ``topic:`` may hold a list (``topic: the-loom the-post`` —
+# space-separated canonical slugs, written by :func:`confirm_event`); every
+# *act* still belongs to exactly one. Readers that need the event's one
+# topic for inheritance read the first.
+
+_LIST_SPLIT = str.maketrans({",": " ", "·": " "})
+
+
+def topic_words(value: object) -> list[str]:
+    """The tokens of a ``topic:`` value — commas, ``·`` and spaces all split."""
+    return str(value or "").translate(_LIST_SPLIT).split()
+
+
+def first_topic(value: object) -> str | None:
+    """The first slug of a (possibly listed) ``topic:`` value, or ``None``."""
+    words = topic_words(value)
+    return words[0] if words else None
+
+
+def live_topics(account_home: Path | None, value: object) -> tuple[list[str], list[str]]:
+    """``(live, dropped)`` for a ``topic:`` value: each token resolved through
+    aliases to a live heddle, deduplicated in order; tokens that name none."""
+    live: list[str] = []
+    dropped: list[str] = []
+    if account_home is None:
+        return live, dropped
+    for token in topic_words(value):
+        slug = heddles.resolve_slug(account_home, token)
+        if slug is None:
+            if token not in dropped:
+                dropped.append(token)
+        elif slug not in live:
+            live.append(slug)
+    return live, dropped
 
 
 @dataclass(frozen=True)
@@ -277,7 +315,7 @@ def run_topic(task: Any) -> str | None:
     meta = getattr(task, "meta", None)
     if not isinstance(meta, dict):
         return None
-    return meta.get(META_RUN_TOPIC) or meta.get(META_EVENT_TOPIC) or None
+    return meta.get(META_RUN_TOPIC) or first_topic(meta.get(META_EVENT_TOPIC)) or None
 
 
 def for_act(
@@ -314,10 +352,13 @@ def for_act(
     )
     raw = str((frontmatter or {}).get("topic") or "").strip()
     if raw and account_home is not None:
-        for token in raw.replace(",", " ").replace("·", " ").split():
-            slug = heddles.resolve_slug(account_home, token)
-            if slug:
-                return slug
+        live, dropped = live_topics(account_home, raw)
+        if live:
+            if dropped and _answers_an_event(frontmatter):
+                names = ", ".join(dropped)
+                say("advisory", f"topic: {names} names no heddle — dropped; the act "
+                    f"carries {', '.join(live)}")
+            return live[0]
         say("advisory", f"topic: {raw!r} names no heddle — the act inherits the run's topic")
     if not is_strand:
         answered = answered_topic(frontmatter, task, account_home=account_home,
@@ -327,6 +368,23 @@ def for_act(
     if settled:
         return settled
     return run_topic(task)
+
+
+def own_topics(
+    frontmatter: Mapping[str, Any] | None, account_home: Path | None,
+) -> list[str]:
+    """Move 5e: every live slug an act's own ``topic:`` names, in order —
+    the set a reply stamps on the event it answers. Empty when the act
+    names none (it then carries its inherited one topic)."""
+    raw = (frontmatter or {}).get("topic")
+    return live_topics(account_home, raw)[0] if raw else []
+
+
+def _answers_an_event(frontmatter: Mapping[str, Any] | None) -> bool:
+    """A file whose ``topic:`` may be a list: an ``event:`` reply, an
+    ``also:`` burst, or a ``note:`` (move 5e)."""
+    fm = frontmatter or {}
+    return any(str(fm.get(key) or "").strip() for key in ("event", "also", "note"))
 
 
 def mark_unset_on_error(task: Any, outbox_dir: Path | None = None) -> bool:
@@ -434,6 +492,15 @@ class ActScope:
                 self._topic = None
         return self._topic
 
+    def topics(self) -> list[str]:
+        """Move 5e: the topics this act stamps on the event it answers — its
+        own ``topic:`` list when any slug is live, else its one topic."""
+        first = self.topic()
+        own = own_topics(self.frontmatter, self.account_home)
+        if own and own[0] == first:
+            return own
+        return [first] if first else []
+
 
 _ACT: contextvars.ContextVar[ActScope | None] = contextvars.ContextVar(
     "brr_run_topic_act", default=None,
@@ -480,7 +547,7 @@ def confirm_event(
     account_home: Path | None,
     inbox_dir: Path | None,
     event_id: str,
-    slug: str | None,
+    slug: str | Sequence[str] | None,
     *,
     run: str = "",
     thread: str = "",
@@ -488,10 +555,20 @@ def confirm_event(
 ) -> bool:
     """A reply carrying a topic confirms its target event — once. An event
     that already has ``topic:`` keeps it (nothing is reclassified).
-    *event_path* reaches an event in another drawer (move 5d)."""
+    *event_path* reaches an event in another drawer (move 5d).
+
+    Move 5e: *slug* may be a list. The event is stamped with all of them
+    (``topic: the-loom the-post``, space-separated, in order), one ``event``
+    row lands in **each** topic's index under the same ref, and the thread
+    remembers the first. ``True`` when the stamp landed."""
     from . import protocol
 
-    if not slug or not event_id:
+    slugs: list[str] = []
+    for item in ([slug] if isinstance(slug, str) else list(slug or ())):
+        for word in topic_words(item):
+            if word not in slugs:
+                slugs.append(word)
+    if not slugs or not event_id:
         return False
     path = _event_path(inbox_dir, event_id)
     if path is None and event_path is not None and Path(event_path).is_file():
@@ -504,9 +581,12 @@ def confirm_event(
         return False
     if str(existing.get("topic") or "").strip():
         return False
-    if not stamp_event(None, event_id, event_path=path, topic=slug):
+    if not stamp_event(None, event_id, event_path=path, topic=" ".join(slugs)):
         return False
-    return assign(account_home, slug, kind="event", ref=event_id, run=run, thread=thread)
+    for index, each in enumerate(slugs):
+        assign(account_home, each, kind="event", ref=event_id, run=run,
+               thread=thread if index == 0 else "")
+    return True
 
 
 # ── Move 5d: every inbound event carries a topic reading; replies follow it ──
@@ -572,9 +652,9 @@ def event_topic_line(event: Mapping[str, Any] | None) -> str | None:
     matched — new `x`?`` · ``None`` when the event carries no reading."""
     if not isinstance(event, Mapping):
         return None
-    assigned = str(event.get("topic") or "").strip()
+    assigned = topic_words(event.get("topic"))
     if assigned:
-        return f"topic: `{assigned}`"
+        return "topic: " + ", ".join(f"`{slug}`" for slug in assigned)
     proposed = str(event.get(META_PROPOSED) or "").strip()
     if proposed:
         why = str(event.get(META_PROPOSED_WHY) or "").strip()
@@ -625,7 +705,7 @@ def answered_topic(
     if not isinstance(event, Mapping):
         return None
     for key in ("topic", META_PROPOSED):
-        slug = heddles.resolve_slug(account_home, event.get(key))
+        slug = heddles.resolve_slug(account_home, first_topic(event.get(key)))
         if slug:
             return slug
     return None

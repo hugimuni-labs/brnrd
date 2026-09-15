@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import hashlib
 import time
+from pathlib import Path
+from typing import Any
 
 from .. import account
 from .. import await_verb
@@ -368,11 +370,23 @@ def handle_note(f: OutboxFile) -> Handled:
             emit("card_delta_noted", run_id=task.id, event_id=event_id, target_event=note_target)
             daemon._retire_outbox_staging(fpath)
             return _handled(f, 'note', 1)
+        # Move 5e: resolve the file before the retire moves it out of the
+        # pending union, so a `topic:` on the note can stamp it after.
+        noted_path = None
+        if str(fm.get("topic") or "").strip():
+            try:
+                found, _responses, _ambiguous = daemon._resolve_event_target(
+                    address_sources, note_target,
+                )
+                noted_path = found.get("_path") if isinstance(found, dict) else None
+            except Exception:  # noqa: BLE001
+                noted_path = None
         noted_id = daemon._note_event_closed(
             task, address_sources, note_target, body, outbox_dir,
             current_event_id=event_id,
         )
         if noted_id:
+            _stamp_noted_topics(f, noted_id, noted_path)
             promoted += 1
             if stats is not None:
                 stats["note"] = stats.get("note", 0) + 1
@@ -384,6 +398,73 @@ def handle_note(f: OutboxFile) -> Handled:
             )
         daemon._retire_outbox_staging(fpath)
     return _handled(f, 'note', promoted)
+
+
+def _stamp_also_topics(task: Any, also_event: dict, thread: str) -> None:
+    """Move 5e: an ``also:`` sibling is answered by the same reply, so it is
+    stamped with the same topics the primary event was — the act scope's
+    list (its own ``topic:``, else its one inherited topic). Never raises."""
+    from .. import run_topic
+
+    try:
+        scope = run_topic.current_act()
+        if scope is None:
+            return
+        slugs = scope.topics()
+        also_id = str(also_event.get("id") or "")
+        if not slugs or not also_id:
+            return
+        run_topic.confirm_event(
+            scope.account_home, None, also_id, slugs,
+            run=str(getattr(task, "id", "") or ""), thread=thread,
+            event_path=also_event.get("_path"),
+        )
+    except Exception:  # noqa: BLE001 - a stamp never costs the delivery
+        return
+
+
+def _stamp_noted_topics(f: OutboxFile, noted_id: str, event_path: object) -> None:
+    """Move 5e: ``note: <id>`` + ``topic: <slug[, slug…]>`` stamps the event
+    it retires — the acknowledgement carries the stamp, never a separate act.
+    Unknown slugs drop with one advisory; an event already stamped keeps its
+    topic (nothing is reclassified). Never raises."""
+    from .. import run_topic
+
+    raw = str(f.frontmatter.get("topic") or "").strip()
+    if not raw:
+        return
+    try:
+        scope = run_topic.current_act()
+        home = scope.account_home if scope is not None else None
+        say = (scope.notice if scope is not None and scope.notice is not None
+               else (lambda _kind, _text: None))
+        live, dropped = run_topic.live_topics(home, raw)
+        if dropped:
+            tail = (f"the event carries {', '.join(live)}" if live
+                    else "the event retires unstamped")
+            say("advisory", f"note {noted_id}: topic: {', '.join(dropped)} names no heddle — "
+                f"dropped; {tail}")
+        if not live:
+            return
+        thread = ""
+        if isinstance(event_path, Path) and event_path.is_file():
+            try:
+                thread = conversations.conversation_key_for_event(
+                    protocol._read_event(event_path)) or ""
+            except Exception:  # noqa: BLE001
+                thread = ""
+        stamped = run_topic.confirm_event(
+            home, None, noted_id, live,
+            run=str(getattr(f.run, "id", "") or ""), thread=thread,
+            event_path=event_path if isinstance(event_path, Path) else None,
+        )
+        if not stamped and isinstance(event_path, Path) and event_path.is_file():
+            held = str(protocol._read_event(event_path).get("topic") or "").strip()
+            if held:
+                say("advisory", f"note {noted_id}: already stamped {held} — topic: "
+                    f"{', '.join(live)} not applied (nothing is reclassified)")
+    except Exception:  # noqa: BLE001 - a stamp never costs the retire
+        return
 
 
 def handle_await(f: OutboxFile) -> Handled:
@@ -1283,6 +1364,7 @@ def _deliver_event(f: OutboxFile) -> Handled:
                 pass
             daemon._set_event_status_if_present(also_event, "done")
             also_key = conversations.conversation_key_for_event(also_event) or ""
+            _stamp_also_topics(task, also_event, also_key)
             if also_key:
                 conversations.append_event(emit.brr_dir, also_key, also_event)
                 conversations.append_artifact(

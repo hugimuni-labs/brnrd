@@ -81,6 +81,20 @@ def is_op(raw: object) -> bool:
     return True
 
 
+def is_slug_list(raw: object) -> bool:
+    """Move 5e: ``True`` when a ``topic:`` value is a list of slugs — commas,
+    ``·`` or spaces between them — whose first word is not an op. On an
+    ``event:`` reply or an ``also:`` burst such a value is the act's
+    modifier (the answered event is stamped with every slug); on any other
+    file it stays the verb's, so ``topic: rename a b`` is still dropped."""
+    from .. import run_topic
+
+    words = run_topic.topic_words(raw)
+    if not words or words[0].lower() in OPS:
+        return False
+    return all(heddles.SLUG_RE.match(word) for word in words)
+
+
 def _finish(f: OutboxFile, text: str, *, kind: str, promoted: int) -> Handled:
     from .verbs import _handled
 
