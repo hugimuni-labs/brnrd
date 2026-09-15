@@ -416,10 +416,16 @@ def _quota(outbox_dir: Path | None, portal: Mapping[str, Any]) -> dict[str, Any]
 
     resources = portal.get("resources") if isinstance(portal.get("resources"), dict) else {}
     for _letter, pct, part in hooks._quota_buckets(resources):
-        match = hooks._QUOTA_BUCKET_RE.search(part)
+        # The bucket's name is the clause before its percent, verbatim —
+        # codex says ``5h``/``7d``, which the chip's letter regex reads as
+        # ``h``/``d``; a window is not renamed into another Shell's words.
+        match = _QUOTA_LABEL_RE.match(part)
         if match and pct.isdigit():
             out.setdefault(f"{_key(match.group('label'))}_pct_left", int(pct))
     return out
+
+
+_QUOTA_LABEL_RE = re.compile(r"\s*(?P<label>.+?)\s+\d+(?:\.\d+)?\s*%\s*left")
 
 
 def _key(label: str) -> str:

@@ -241,6 +241,15 @@ def test_hud_reads_portal_chip_quota_spend_and_strands(machine):
     ]
 
 
+def test_quota_labels_stay_the_shells_own(machine):
+    portal_path = machine["brr"] / "outbox" / "evt-live" / "portal-state.json"
+    portal = json.loads(portal_path.read_text())
+    portal["resources"]["quota"]["summary"] = "5h 55% left (resets 23:25Z); 7d 38% left (resets 08:26Z)"
+    portal_path.write_text(json.dumps(portal))
+    hud = state.build(machine["repo"], machine["home"], now=NOW)["hud"]
+    assert hud["quota"] == {"5h_pct_left": 55, "7d_pct_left": 38}
+
+
 def test_quota_prefers_the_runner_snapshot(machine):
     outbox = machine["brr"] / "outbox" / "evt-live"
     _write(outbox / ".claude-usage-levels.json", json.dumps({"quota": {"buckets": {
