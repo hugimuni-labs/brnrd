@@ -1,12 +1,15 @@
 // Capture dependency is external to the shipped page. No bundler required.
 // node capture.mjs /absolute/path/to/playwright/index.mjs [base URL] [output dir]
+// The base must serve the feed: live frames are shot against /loom/ as served.
 import { mkdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
 const { chromium } = await import(pathToFileURL(resolve(process.argv[2])).href);
 const base = process.argv[3] || "http://127.0.0.1:7788";
-const output = resolve(process.argv[4] || "media/loom/screen");
+const output = resolve(process.argv[4] || "media/loom/screen/opus");
+// The first-load reveal lays six regions in 300 ms apart; frames wait past it.
+const SETTLE = 2600;
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 const errors = [],
@@ -33,8 +36,8 @@ for (const [w, h] of [
   });
   observe(page);
   await page.goto(base + "/loom/?src=dev");
-  await page.locator("#receipt h1").waitFor();
-  await page.waitForTimeout(900);
+  await page.locator("#receipt h1").waitFor({ state: "attached" });
+  await page.waitForTimeout(SETTLE);
   frameRates.push(await page.evaluate(()=>new Promise(resolve=>{
     const gaps=[];let previous;
     function sample(now){if(previous)gaps.push(now-previous);previous=now;if(gaps.length<90)requestAnimationFrame(sample);else{gaps.sort((a,b)=>a-b);resolve({width:innerWidth,median_ms:gaps[45],p95_ms:gaps[85],mean_fps:1000/(gaps.reduce((a,b)=>a+b,0)/gaps.length)});}}
@@ -52,7 +55,7 @@ for (const [w, h] of [
   await page.keyboard.press("Space");
   await page.keyboard.press("1");
   await page.waitForTimeout(650);
-  await page.screenshot({path:resolve(output,`lifted-${w}x${h}.png`)});
+  await page.screenshot({path:resolve(output,`fixture-lifted-${w}x${h}.png`)});
   await page.keyboard.press("2");
   await page.waitForTimeout(650);
   assert.match(
@@ -61,11 +64,11 @@ for (const [w, h] of [
   );
   assert.match(await page.locator("#receipt").innerText(), /the-shuttle/);
   await page.screenshot({
-    path: resolve(output, `intersection-${w}x${h}.png`),
+    path: resolve(output, `fixture-intersection-${w}x${h}.png`),
   });
   await page.keyboard.press("Escape");
   await page.keyboard.press('ArrowLeft');await page.waitForTimeout(650);
-  await page.screenshot({path:resolve(output,`rail-mid-scroll-${w}x${h}.png`)});
+  await page.screenshot({path:resolve(output,`fixture-rail-mid-scroll-${w}x${h}.png`)});
   await page.keyboard.press('ArrowRight');await page.waitForTimeout(650);
   await page
     .getByRole("button", {
@@ -86,6 +89,70 @@ for (const [w, h] of [
     await page.locator("#console-note").innerText(),
     "reaches the shuttle in pass 2 — the local gate is not wired yet",
   );
+  await page.close();
+}
+// Live: the real state of this machine, as the feed serves it.
+for (const [w, h] of [
+  [1920, 1080],
+  [1280, 720],
+]) {
+  const page = await browser.newPage({
+    viewport: { width: w, height: h },
+    deviceScaleFactor: 1,
+    reducedMotion: "no-preference",
+  });
+  observe(page);
+  await page.goto(base + "/loom/");
+  await page.locator("#receipt h1").waitFor({ state: "attached" });
+  await page.waitForTimeout(SETTLE);
+  await page.screenshot({ path: resolve(output, `live-${w}x${h}.png`) });
+  if (w === 1920) {
+    const heddles = await (await fetch(base + "/loom/state.json")).json();
+    const lit = heddles.heddles
+      .map((x, i) => [x, i])
+      .filter(([x, i]) => i < 6 && x.lit > 0.05)
+      .sort((a, b) => b[0].lit - a[0].lit);
+    if (lit[0]) {
+      await page.keyboard.press(String(lit[0][1] + 1));
+      await page.waitForTimeout(900);
+      await page.screenshot({ path: resolve(output, `live-lifted-${w}x${h}.png`) });
+      if (lit[1]) {
+        await page.keyboard.press(String(lit[1][1] + 1));
+        await page.waitForTimeout(900);
+        await page.screenshot({ path: resolve(output, `live-intersection-${w}x${h}.png`) });
+      }
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(700);
+    }
+    for (let i = 0; i < 7; i++) await page.keyboard.press("ArrowLeft");
+    await page.waitForTimeout(900);
+    await page.screenshot({ path: resolve(output, `live-rail-mid-scroll-${w}x${h}.png`) });
+    await page.keyboard.press("Escape");
+  }
+  await page.close();
+}
+// Close-ups at 2× for the face and the sweep.
+{
+  const page = await browser.newPage({
+    viewport: { width: 1920, height: 1080 },
+    deviceScaleFactor: 2,
+    reducedMotion: "no-preference",
+  });
+  observe(page);
+  await page.goto(base + "/loom/");
+  await page.locator("#receipt h1").waitFor({ state: "attached" });
+  await page.waitForTimeout(SETTLE);
+  await page.screenshot({
+    path: resolve(output, "live-face-close.png"),
+    clip: { x: 1340, y: 8, width: 564, height: 470 },
+  });
+  // Mid-sweep: half a beat past a quarter turn, so the line and its
+  // phosphor are both in frame.
+  await page.waitForTimeout(900);
+  await page.screenshot({
+    path: resolve(output, "live-mid-sweep.png"),
+    clip: { x: 300, y: 215, width: 1044, height: 640 },
+  });
   await page.close();
 }
 // Narrow drawer, reduced motion, and missing measurements are real edge states.
@@ -132,16 +199,18 @@ await empty.route("**/loom/dev/state.sample.json", (r) =>
   }),
 );
 await empty.goto(base + "/loom/?src=dev");
-await empty.locator("#receipt h1").waitFor();
+await empty.locator("#receipt h1").waitFor({ state: "attached" });
 assert.equal(await empty.locator("#receipt h1").innerText(), "No live pass");
+await empty.waitForTimeout(SETTLE);
 await empty.screenshot({ path: resolve(output, "empty-1280x720.png") });
 await empty.close();
 // Exercise the live transport and a hostile-looking fold as text, without a daemon.
 const fixture = JSON.parse(
   await readFile(new URL("./state.sample.json", import.meta.url), "utf8"),
 );
+// Tall enough that the bench is a column, not a drawer.
 const transport = await browser.newPage({
-  viewport: { width: 1280, height: 720 },
+  viewport: { width: 1440, height: 900 },
 });
 observe(transport);
 const updated = structuredClone(fixture);
@@ -198,12 +267,12 @@ const ctx = await browser.newContext({
 const movie = await ctx.newPage();
 observe(movie);
 await movie.goto(base + "/loom/?src=dev&replay");
-await movie.locator("#receipt h1").waitFor();
-await movie.waitForTimeout(6000);
+await movie.locator("#receipt h1").waitFor({ state: "attached" });
+await movie.waitForTimeout(8000);
 await movie.keyboard.press("1");
-await movie.waitForTimeout(7000);
+await movie.waitForTimeout(6000);
 await movie.keyboard.press("Escape");
-await movie.waitForTimeout(7000);
+await movie.waitForTimeout(6000);
 await ctx.close();
 await movie.video().saveAs(resolve(output, "fixture-beat.webm"));
 await movie.video().delete();
@@ -221,7 +290,7 @@ console.log(
       frameRates,
       requests: requests.length,
       network: "only /loom/*",
-      screenshots: "two sizes, intersections, empty",
+      screenshots: "fixture + live at two sizes, lift, intersection, rail, face, sweep, empty",
       video: "fixture-beat.webm, 20 seconds",
     },
     null,

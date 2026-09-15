@@ -200,6 +200,39 @@ function text(value, x, y, fill = INK.bone, size = 12, limit = Infinity, o = {})
   g.textAlign = "left";
   return w;
 }
+const glyphSprites = new Map();
+// Glowing type that moves every frame is blurred once into a sprite.
+function glowSprite(value, size, fill, glow, weight = 600) {
+  const dpr = canvas.width / width || 1,
+    key = `${value}/${size}/${fill}/${glow}/${weight}/${dpr}`;
+  let sprite = glyphSprites.get(key);
+  if (!sprite) {
+    const [c, x] = layer();
+    x.font = font(size, weight);
+    const w = Math.ceil(x.measureText(value).width),
+      pad = glow * 2 + 4;
+    c.width = Math.ceil((w + pad * 2) * dpr);
+    c.height = Math.ceil((size * 1.4 + pad * 2) * dpr);
+    x.scale(dpr, dpr);
+    x.font = font(size, weight);
+    x.textBaseline = "middle";
+    x.fillStyle = fill;
+    x.shadowColor = INK.amber;
+    x.shadowBlur = glow * dpr;
+    x.fillText(value, pad, pad + size * 0.7);
+    x.shadowBlur = 0;
+    x.fillText(value, pad, pad + size * 0.7);
+    sprite = { canvas: c, w, h: size * 1.4 + pad * 2, pad };
+    if (glyphSprites.size > 64) glyphSprites.clear();
+    glyphSprites.set(key, sprite);
+  }
+  return sprite;
+}
+function drawSprite(sprite, cx, baseline, size, scale = 1) {
+  const w = (sprite.w + sprite.pad * 2) * scale,
+    h = sprite.h * scale;
+  g.drawImage(sprite.canvas, cx - w / 2, baseline - size * 0.35 - h / 2, w, h);
+}
 function line(x, y, x2, y2, stroke = INK.dark, alpha = 1, w = 1) {
   g.globalAlpha = alpha;
   g.strokeStyle = stroke;
@@ -646,7 +679,7 @@ function rebuild() {
   treeNodes = nodes;
   const T = layout.tree,
     bottom = T.y + T.h - 30,
-    top = T.y + 26;
+    top = T.y + 46;
   const maxDepth = Math.max(1, ...nodes.map((n) => n.depth));
   const x0 = T.x + 64,
     x1 = T.x + T.w - 80,
@@ -729,6 +762,7 @@ function planLabels() {
     n.label = null;
     const p = targetPositions.get(n.path);
     if (p) boxes.push({ x: p.x - 6, y: p.y - 6, w: 12, h: 12 });
+    if (p && n.place?.knots > 0) boxes.push({ x: p.x + 4, y: p.y + 4, w: 10, h: 10 });
   }
   const a = actor && targetPositions.get(actor.path);
   if (a) boxes.push({ x: a.x - 40, y: a.y - 36, w: 124, h: 30 });
@@ -1208,10 +1242,14 @@ function drawBrand() {
     ? "FIXTURE · " + (replay ? "BOUNDARY REPLAY" : "ILLUSTRATIVE DATA")
     : sourceStatus.toUpperCase();
   const live = sourceStatus === "live";
-  if (live) dot(right - 96, y - 4, 3, INK.receipt, 8);
-  text(status, right - 20, y - 1, dev ? INK.amber : live ? INK.boneDim : INK.wall, 9, 300, {
+  const sw = text(status, right - 20, y - 1, dev ? INK.amber : live ? INK.boneDim : INK.wall, 9, 300, {
     align: "right",
   });
+  if (live) dot(right - 30 - sw, y - 4, 3, INK.receipt, 8);
+  if (!layout.face && state.run) {
+    const word = LEXICON[state.shuttle?.state] || known(state.shuttle?.state);
+    text(`${state.run.mood_glyph || ""}  ${word}`, m + w + 110, y - 1, INK.amber, 11, right - m - w - 140 - sw);
+  }
 }
 function drawHeddles() {
   const { m, compact, right } = layout;
@@ -1394,9 +1432,7 @@ function drawTree() {
     if (node.path) dot(p.x, p.y, radius + 1.2, c, 12 + heat * 6);
     dot(p.x, p.y, radius, node.place?.heat == null && node.path ? INK.faint : INK.bone);
     if (node.place?.knots > 0) {
-      diamond(p.x + 9, p.y + 9, 3.2, INK.ice, 0.85);
-      ring(p.x + 9, p.y + 9, 6.5, INK.ice, 0.3);
-      if (node.place.knots > 1) text(node.place.knots, p.x + 18, p.y + 13, INK.ice, 8);
+      diamond(p.x + 8, p.y + 8, 2.4, INK.ice, focused ? 0.55 : 0.3);
     }
     if (node.label) {
       const dir = node.children.size > 0;
@@ -1494,12 +1530,13 @@ function drawFace() {
     ["wall", resume === "refill" || resume === "reset", INK.wall],
   ];
   const lampY = faceBox.y + faceBox.h - (compact ? 6 : 8),
-    lampStep = Math.min(62, ww / lamps.length);
+    litLamp = lamps.findIndex(([, on]) => on),
+    lampStep = compact ? 14 : Math.min(62, ww / lamps.length);
   lamps.forEach(([label, on, hue], i) => {
-    const lx = wx + 4 + i * lampStep;
+    const lx = wx + 4 + i * lampStep + (compact && litLamp >= 0 && i > litLamp ? 56 : 0);
     if (on) dot(lx, lampY - 3, 3.2, hue, 10);
     else ring(lx, lampY - 3, 3, INK.dark, 1, 1.2);
-    text(label, lx + 8, lampY, on ? INK.bone : INK.faint, 8, lampStep - 10);
+    if (!compact || on) text(label, lx + 8, lampY, on ? INK.bone : INK.faint, 8, compact ? 60 : lampStep - 10);
   });
   // waiting on · the act · the correspondent
   const strandsLive = list(state.hud?.strands).filter((t) => t.status === "live").length;
@@ -1559,13 +1596,15 @@ function drawFace() {
   }
   g.restore();
   text("fuel", gx, gy + gr * 0.62, INK.faint, 8, Infinity, { align: "center" });
-  const tx = gx + gr + 18,
-    tw = (compact ? pw * 0.46 : pw * 0.44) - (tx - px);
-  text(`${compactNumber(spent)} / ${compactNumber(budget)}`, tx, gy - (compact ? 6 : 10), INK.bone, compact ? 12 : 15, tw, {
+  const qx = px + pw * (compact ? 0.54 : 0.48),
+    qw = pw * (compact ? 0.3 : 0.38) - 12;
+  const tx = gx + gr + (compact ? 12 : 18),
+    tw = qx - tx - 10;
+  text(`${compactNumber(spent)} / ${compactNumber(budget)}`, tx, gy - (compact ? 6 : 10), INK.bone, compact ? 11 : 15, tw, {
     weight: 500,
   });
   text(
-    budget > 0 ? `spend · ${Math.round((spent / budget) * 100)}% of allowance` : "spend · allowance unknown",
+    budget > 0 ? `${Math.round((spent / budget) * 100)}% of allowance` : "allowance unknown",
     tx,
     gy + (compact ? 8 : 8),
     INK.boneDim,
@@ -1584,8 +1623,6 @@ function drawFace() {
     tw,
   );
   // Quota: three glowing bars, percentage left. Red only under a wall.
-  const qx = px + pw * (compact ? 0.5 : 0.48),
-    qw = pw * (compact ? 0.36 : 0.38) - 12;
   const bars = [
     ["session", "session_pct_left"],
     ["week", "week_pct_left"],
@@ -1642,14 +1679,14 @@ function drawFace() {
     const ty = y + 6;
     text("⌁", px, ty, thread.status === "live" ? INK.amber : INK.faint, 11);
     const title = String(thread.title || thread.id || "thread").split(/:\s/)[0];
-    text(title, px + 16, ty, INK.bone, 9, pw - 190);
-    text(known(thread.status), px + pw - 150, ty, thread.status === "live" ? INK.boneDim : INK.faint, 9, 50);
-    line(px + pw - 96, ty - 3, px + pw - 42, ty - 3, "#2a241b", 1, 2);
+    text(title, px + 16, ty, INK.bone, 9, pw - 210);
+    text(known(thread.status), px + pw - 186, ty, thread.status === "live" ? INK.boneDim : INK.faint, 9, 54);
+    line(px + pw - 128, ty - 3, px + pw - 84, ty - 3, "#2a241b", 1, 2);
     if (fuel !== null)
       strokePath(
         [
-          { x: px + pw - 96, y: ty - 3 },
-          { x: px + pw - 96 + 54 * fuel, y: ty - 3 },
+          { x: px + pw - 128, y: ty - 3 },
+          { x: px + pw - 128 + 44 * fuel, y: ty - 3 },
         ],
         INK.amber,
         2,
@@ -1717,8 +1754,17 @@ function drawCloth() {
   const { m, right, cloth, compact, clothH } = layout,
     entries = railLayout();
   regionRects.cloth = { x: m - 8, y: cloth - 2, w: right - m + 4, h: clothH };
-  regionTitle("cloth", "the cloth", m, cloth + 14, right - m - 200);
-  text("← → · wheel to focus", right - 20, cloth + 14, INK.faint, 9, 200, { align: "right" });
+  regionTitle("cloth", "the cloth", m, cloth + 14, right - m - 500, { readingWidth: right - m - 40 });
+  hit(right - 250, cloth + 2, 230, 18, "legend", null, "Open legend");
+  text(
+    `${paused ? "Ⅱ beat paused" : reduced.matches ? "reduced motion" : "600 ms / beat"} · ← → focus · ? replay the reading · L legend · Space pause`,
+    right - 20,
+    cloth + 14,
+    paused ? INK.amber : INK.faint,
+    9,
+    470,
+    { align: "right" },
+  );
   const lineY = cloth + (compact ? 64 : 84),
     ph = compact ? 62 : 84;
   strokePath([{ x: m, y: lineY }, { x: right - 20, y: lineY }], INK.dark, 1.5, 1);
@@ -1813,9 +1859,6 @@ function drawCloth() {
 function drawFooter() {
   const { m, right, consoleH } = layout;
   const y = height - consoleH - 8;
-  text(paused ? "Ⅱ BEAT PAUSED" : reduced.matches ? "REDUCED MOTION" : "600 ms / beat", m, y, INK.faint, 9);
-  text("? replay the reading · L legend · Space pause", right - 20, y, INK.faint, 9, 360, { align: "right" });
-  hit(right - 300, y - 14, 280, 20, "legend", null, "Open legend");
   if (sourceStatus !== "live" && sourceStatus !== "fixture" && state)
     text(sourceStatus.toUpperCase() + " · LAST RECEIVED " + known(state.at), layout.wx, y, INK.wall, 9, layout.ww - 380);
 }
@@ -1868,8 +1911,9 @@ function drawSweepUnder(center, angle) {
   // Range rings: the scope's graticule, centred on the shuttle.
   for (let r = 80; r < R; r += 80) ring(center.x, center.y, r, INK.amber, r % 240 ? 0.035 : 0.06);
   if (!reduced.matches) {
-    const w = Math.ceil(T.w),
-      h = Math.ceil(T.h);
+    // Half resolution: coarser grain, a quarter of the fill.
+    const w = Math.ceil(T.w / 2),
+      h = Math.ceil(T.h / 2);
     if (sweepCanvas.width !== w || sweepCanvas.height !== h) {
       sweepCanvas.width = w;
       sweepCanvas.height = h;
@@ -1889,8 +1933,8 @@ function drawSweepUnder(center, angle) {
     s.fillStyle = noisePattern;
     s.fillRect(jx, jy, w, h);
     s.restore();
-    const cx = center.x - T.x,
-      cy = center.y - T.y;
+    const cx = (center.x - T.x) / 2,
+      cy = (center.y - T.y) / 2;
     const mask = s.createConicGradient(angle - Math.PI / 2, cx, cy);
     mask.addColorStop(0, "rgba(0,0,0,0)");
     mask.addColorStop(0.249, "rgba(0,0,0,0.95)");
@@ -1899,7 +1943,7 @@ function drawSweepUnder(center, angle) {
     s.globalCompositeOperation = "destination-in";
     s.fillStyle = mask;
     s.fillRect(0, 0, w, h);
-    const fall = s.createRadialGradient(cx, cy, 10, cx, cy, R);
+    const fall = s.createRadialGradient(cx, cy, 5, cx, cy, R / 2);
     fall.addColorStop(0, "rgba(0,0,0,1)");
     fall.addColorStop(1, "rgba(0,0,0,0.25)");
     s.fillStyle = fall;
@@ -1913,7 +1957,11 @@ function drawSweepUnder(center, angle) {
     wash.addColorStop(0.25, "rgba(242,177,52,0)");
     wash.addColorStop(1, "rgba(242,177,52,0)");
     g.fillStyle = wash;
-    g.fillRect(T.x, T.y, T.w, T.h);
+    g.beginPath();
+    g.moveTo(center.x, center.y);
+    g.arc(center.x, center.y, R, angle - Math.PI / 2, angle);
+    g.closePath();
+    g.fill();
   }
   g.restore();
   return R;
@@ -2023,7 +2071,9 @@ function drawActor(pulse) {
   halo(a.x, a.y - 8, 34, INK.amber, 0.38);
   dot(a.x, a.y, 3.2, "#fff1d0", 14);
   const glyph = state.run.mood_glyph || "unknown";
-  const gw = text(glyph, a.x, gy, "#ffd27a", 15, 140, { align: "center", weight: 600, glow: 18, glowColor: INK.amber });
+  const sprite = glowSprite(glyph, 15, "#ffd27a", 14);
+  drawSprite(sprite, a.x, gy, 15);
+  const gw = sprite.w;
   regionRects.actorGlyphW = gw;
   const box = { x: a.x - gw / 2 - 8, y: gy - 17, w: gw + 16, h: 24 };
   regionRects.actor = box;
@@ -2108,13 +2158,11 @@ function drawThreads() {
     g.globalAlpha = alpha;
     text("⌁", x, y, INK.amber, 12);
     g.globalAlpha = 1;
-    const title = String(thread.title || thread.id || "thread").split(/:\s/)[0];
-    const tx = x + 14 > T.x + T.w - 150 ? x - 150 : x + 14;
-    text(title, tx, y - 1, done ? INK.faint : INK.boneDim, 9, 140);
+    const tx = x + 14;
     const fuel = thread.allowance > 0 ? clamp(1 - (thread.spent || 0) / thread.allowance) : null;
-    line(tx, y + 5, tx + 56, y + 5, "#2a241b", 1, 2);
-    if (fuel !== null) strokePath([{ x: tx, y: y + 5 }, { x: tx + 56 * fuel, y: y + 5 }], INK.amber, 2, 0.7 * alpha, 5);
-    hit(Math.min(x, tx) - 4, y - 14, 160, 24, "strand", thread, thread.title);
+    line(tx, y - 4, tx + 22, y - 4, "#2a241b", 1, 2);
+    if (fuel !== null) strokePath([{ x: tx, y: y - 4 }, { x: tx + 22 * fuel, y: y - 4 }], INK.amber, 2, 0.7 * alpha, 5);
+    hit(x - 4, y - 14, 44, 20, "strand", thread, String(thread.title || thread.id || "thread").split(/:\s/)[0] + " · " + known(thread.status));
   });
 }
 function drawFaceLive(pulse) {
@@ -2129,8 +2177,13 @@ function drawFaceLive(pulse) {
       // Keyframes on the beat: a slow blink every eighth beat, a small breath.
       const beat = Math.floor(clock / BEAT);
       const shown = !reduced.matches && beat % 8 === 7 && (clock % BEAT) / BEAT < 0.45 ? glyph.replace(/[·•oᴗ^]/g, (ch) => (ch === "ᴗ" ? ch : "-")) : glyph;
-      const size = (layout.compact ? 24 : 34) * (1 + (reduced.matches ? 0 : (pulse - 0.5) * 0.03));
-      text(shown, cx, cy + size * 0.35, "#ffd27a", size, box.w - 12, { align: "center", weight: 600, glow: 20, glowColor: INK.amber });
+      // Fit the feed's glyph whole — never elide the face.
+      let size = layout.compact ? 24 : 34;
+      g.font = font(size, 600);
+      while (size > 12 && g.measureText(glyph).width > box.w - 16) g.font = font(--size, 600);
+      size *= 1 + (reduced.matches ? 0 : (pulse - 0.5) * 0.03);
+      const base = Math.round(size / (1 + (reduced.matches ? 0 : (pulse - 0.5) * 0.03)));
+      drawSprite(glowSprite(shown, base, "#ffd27a", 16), cx, cy + size * 0.35, size, size / base);
     } else text("no pass", cx, cy + 4, INK.faint, 11, box.w, { align: "center" });
   }
   const gauge = regionRects.gauge;
