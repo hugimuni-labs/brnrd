@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="The loom — a local window onto measured work."
+    />
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/loom/loom.css" />
+    <title>brnrd / the loom</title>
+  </head>
+  <body>
+    <canvas
+      id="loom"
+      tabindex="0"
+      aria-label="The loom: measured places, work and passes. Use 1 through 6 to lift topics; Tab for receipt controls; question mark for help."
+    ></canvas>
+    <nav id="access" aria-label="Loom selections"></nav>
+    <aside id="bench" aria-label="The bench">
+      <header>
+        <span>04 / THE BENCH</span
+        ><button id="close-bench" aria-label="Close bench">×</button>
+      </header>
+      <div id="receipt"></div>
+    </aside>
+    <form id="console" autocomplete="off">
+      <label for="message"
+        ><span id="focus">@shuttle</span> <span class="prompt">›</span></label
+      >
+      <input
+        id="message"
+        placeholder="Write to the shuttle…"
+        aria-describedby="console-note"
+      />
+      <span id="console-note" role="status">READ ONLY · gate in pass 2</span>
+    </form>
+    <dialog id="legend">
+      <h1>The loom</h1>
+      <p>A window onto work, measured one boundary at a time.</p>
+      <dl>
+        <dt>ᛗ Heddles · 1–6</dt>
+        <dd>
+          Lift a topic across the tree, work and cloth. Several lifted means
+          intersection. Esc drops all.
+        </dd>
+        <dt>├ Places</dt>
+        <dd>
+          The tree grows upward from now. Brighter means hotter. Small rings
+          count knots; they do not claim a merge.
+        </dd>
+        <dt>◇ Passes / · boundaries</dt>
+        <dd>
+          The bottom line carries passes, left to right in time. The small beads
+          at a place open the context blocks.
+        </dd>
+        <dt>⌁ The shuttle</dt>
+        <dd>
+          Stands at its last measured place. New boundaries land in sparks; the
+          stack contains measured context deltas.
+        </dd>
+        <dt>◎ The warp</dt>
+        <dd>
+          Ready work shines. Held work dims, tied to the item it needs.
+          Completed work leaves a tick at the cloth.
+        </dd>
+        <dt>Space / ?</dt>
+        <dd>
+          Pause visual motion / open this legend. Data keeps arriving while
+          paused. Reduced motion is respected.
+        </dd>
+        <dt>Click / Tab</dt>
+        <dd>
+          Open a receipt on the bench. Selecting a place carries its address to
+          the console. Enter cannot send yet.
+        </dd>
+      </dl>
+      <button id="close-legend">Return to the window</button>
+    </dialog>
+    <script type="module" src="/loom/loom.js"></script>
+  </body>
+</html>
