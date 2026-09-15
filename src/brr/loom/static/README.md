@@ -25,9 +25,10 @@ Unknown measurements remain unknown. Directory nodes derive from measured paths.
 
 ## Motion
 
-- **The sweep (sonar / echography).** A line rotates about the shuttle's place,
-  one turn every four beats (2.4 s), eased within each beat, with a 90° phosphor
-  wedge and speckle grain behind it. A place pings (brighten + one ring, 300 ms)
+- **The sweep (sonar / echography).** A line rotates about the shuttle's place
+  at constant angular velocity, one turn every four beats (2.4 s) on the
+  animation clock; the beat modulates the wedge's brightness, never its angle. A
+  90° phosphor wedge and speckle grain trail behind it. A place pings (brighten + one ring, 300 ms)
   when the line crosses it; a place that just received a boundary pings bright
   the next time it is crossed.
 - **The walk.** The shuttle follows the branch curves to each new measured
@@ -44,6 +45,34 @@ Unknown measurements remain unknown. Directory nodes derive from measured paths.
 - Every flicker derives from the animation clock: Space freezes every pixel.
   `prefers-reduced-motion` stops rotation, walks, sparks, glitches and the
   reveal; bloom and the static range rings stay.
+
+## Two roots and the places beyond files
+
+`tree.home.places` (account-home paths: dominion · knowledge · surface · bench)
+grow a second, smaller, ice-tinted root left of the repo on the weft. A bead's
+`place_kind` routes the shuttle: `file` → the repo tree, `home` → the home tree,
+`forge · wire · shed · crew` → four fixed places (forge upper-right, shed beside
+the face, crew beside the strands, wire lower-left). Walks between roots run
+down one tree, along the weft, and up the other. The PRs of the passes in focus
+sit as ice diamonds at the forge; a new one drops in. `clock` beads do not move
+the shuttle. Until the feed ships these keys the live window shows the repo
+root and four unvisited fixed places; the fixture exercises both.
+
+## The bench renders pages
+
+Selecting on the tree, rail, warp or a rune opens a page, each with a one-line
+reading under its title and ‹ back: **pass** (contract excerpt, body, started →
+ended, duration, topics, the card halves for the live run, produce with PR
+links, strands as links, the last 12 beads), **bead** (the verb line, the
+command whole, result size, the delta as a bar, places as links, the chip at
+that boundary, ‹ prev · next ›), **item** (type/state/taken, needs and siblings
+as links, refs, prompt, body), **place** (kind, heat, knots, the actions, passes
+and beads that touched it, folds) and **heddle** (signature, counts by kind, the
+index's last rows). What the frame does not attest renders as
+_— reads more when the feed lands_. The page endpoint `GET
+/loom/page/{kind}?id=…` is asked only when the frame advertises the kind in
+`pages: [...]`, so a feed without it is never probed into a console of 404s;
+unrecognised scalar fields from a page render under "From the feed".
 
 ## Contract
 
@@ -66,8 +95,9 @@ Unknown measurements remain unknown. Directory nodes derive from measured paths.
 | `heddles[].signature`, `last_lit`   | Lifted-layer bench receipt                                                                                                       |
 | `warp.goals`, `warp.items`          | ◎ goals; items as rings in their topic hue, held dim, ties to visible prerequisites; done and retired hidden                     |
 | `beads`                             | Shuttle position, trail, landing sparks, context stack bars (length by `delta`); click a bar for the block                       |
-| `cloth.rows`                        | Focus rail: one plaque (name · topic chips · `now · this run · N min` or `HH:MM → HH:MM · N min` · body · knots · PRs); neighbours shrink 0.9^d to 0.35 with topic arcs; at most three time labels |
-| `tree.places` + `beads[].places`    | Upward path trie of the passes in view; the 30 hottest (60 when lifted) plus the shuttle, its trail, threads and the selection; `+N dim` opens on branch hover; depth > 4 elided `…/`; labels placed by priority with collision avoidance, the rest on hover |
+| `cloth.rows[].parent`               | Strands group under their top ancestor: stacked under its plaque, counted `⌁n` on its mini plaque, satellites on its dot |
+| `cloth.rows`                        | Focus rail: one plaque (name · topic chips · `now · this run · N min` or `HH:MM → HH:MM · N min` · body · knots · PRs); the ten nearest as mini plaques (title · runes), the rest as dots with topic arcs; at most three time labels |
+| `tree.places` + `beads[].places`    | Upward path trie of the passes in view; the 30 hottest (60 when lifted) plus the shuttle, its trail, threads and the selection; `+N dim` opens on branch hover (never while lifted); a knot mark only where `knots ≥ 2`; depth > 4 elided `…/`; labels placed by priority with collision avoidance, the rest on hover |
 | `bench.folds`                       | Place receipt lists available folds and marks; click fetches `/loom/bench?path=…` as plain text                                 |
 
 `1–6` lift the first six supplied heddles; all supplied heddles remain clickable.
@@ -87,5 +117,9 @@ those PRs' contents. Its folds are empty. Replay duplicates fixture blocks with
 new times/context totals, and remains visibly labelled **FIXTURE / REPLAY**.
 
 `dev/capture.mjs` shoots the fixture and the live feed, asserts the pause,
-reduced-motion, drawer, transport and fold-as-text behaviour, and samples frame
-times.
+reduced-motion, drawer, transport and fold-as-text behaviour, drives a scripted
+lift sequence (one click = one toggle, intersection never widens, a second
+click restores the counts, hover does not reflow while lifted, Esc drops all),
+walks the pages (bead ‹ back returns to its pass), and samples frame times. The
+canvas carries its own readout as `data-lifted`, `data-places`, `data-passes`,
+`data-groups`, `data-warp`, `data-actor` and `data-runes`.
