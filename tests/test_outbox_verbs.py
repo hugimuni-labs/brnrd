@@ -243,12 +243,18 @@ def test_a_bounced_cut_does_not_fall_through(tmp_path, monkeypatch):
     assert results[0].then is None
 
 
-@pytest.mark.parametrize("key", ["mark", "stake", "cut-at"])
-def test_the_4b_verbs_refuse_not_yet(tmp_path, monkeypatch, key):
+@pytest.mark.parametrize(
+    ("key", "prefix"),
+    [("mark", "mark dropped: "), ("stake", "stake refused: "), ("cut-at", "cut-at refused: ")],
+)
+def test_the_4b_verbs_refuse_what_their_grammar_does_not_read(tmp_path, monkeypatch, key, prefix):
+    # Move 4b gave the three stubs their semantics; a value outside each
+    # grammar still costs only the file, attributed to its own row.
     file, outbox, *_ = _setup(tmp_path, monkeypatch)
     (result,) = table.dispatch(file(f"{key}.md", f"---\n{key}: something\n---\nbody\n"))
     assert (result.verb, result.outcome, result.promoted) == (key, "refused", 0)
-    assert result.notice.startswith(f"{key} refused: not yet")
+    assert result.notice.startswith(prefix)
+    assert "not yet" not in result.notice
     rows = daemon._read_outbox_notices(outbox)
     assert rows[-1]["verb"] == key and rows[-1]["source_file"] == f"{key}.md"
     assert (outbox / ".processed" / f"{key}.md").exists()

@@ -25,7 +25,7 @@ Two properties of that order are kept on purpose and named here:
 is a reply — to ``event: <id>`` if it names one, to the waking event if not.
 
 The frame-owned verbs added by move 4 (``land``, ``fold``), move 5b's
-``topic`` (the resident's heddles, ``topic.py``) and the 4b stubs
+``topic`` (the resident's heddles, ``topic.py``) and move 4b's
 (``mark``, ``stake``, ``cut-at``) sit after ``hold`` and before ``cut``: no
 file ``main`` already routed changes hands, and a ``stake:`` riding a
 ``spawn:``/``respawn:`` request stays that request's modifier.

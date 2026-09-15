@@ -14,9 +14,9 @@ and rewrote only two things, both mechanically —
   ``monkeypatch.setattr(daemon, "<helper>", …)`` still lands. Names ``daemon``
   only imported are imported here directly.
 
-The verbs move 4 adds (``land``, ``fold``) and the 4b stubs (``mark``,
+The verbs move 4 adds (``land``, ``fold``) and move 4b's (``mark``,
 ``stake``, ``cut-at``) are at the bottom; their machinery lives in
-``land.py`` and ``fold.py``.
+``land.py``, ``fold.py``, ``mark.py`` and ``stake.py``.
 """
 
 from __future__ import annotations
@@ -895,6 +895,28 @@ def handle_gate(f: OutboxFile) -> Handled:
 
 
 def handle_event(f: OutboxFile) -> Handled:
+    """`event:` — the reply row; move 4b adds one read around it.
+
+    A reply answering a ``mark: keep`` promotion ask that names its page
+    records ``promoted_to`` on the bench file (``mark.py``). The target is
+    read *before* delivery — a delivered ask no longer resolves.
+    """
+    from . import mark
+
+    try:
+        promotion = mark.promotion_target(f)
+    except Exception:  # noqa: BLE001 - the promotion read never costs the reply
+        promotion = None
+    result = _deliver_event(f)
+    if promotion is not None and mark.ask_retired(promotion):
+        try:
+            mark.record_promotion(f, promotion)
+        except Exception:  # noqa: BLE001
+            pass
+    return result
+
+
+def _deliver_event(f: OutboxFile) -> Handled:
     """`event:` — moved from ``daemon._drain_outbox`` on main (lines 9224–9601)."""
     fpath = f.path
     fm = f.frontmatter
@@ -1323,28 +1345,22 @@ def handle_topic(f: OutboxFile) -> Handled:
     return _guarded(f, "topic", topic.handle)
 
 
-def _not_yet(f: OutboxFile, verb: str) -> Handled:
-    """A 4b verb: parsed and routed, refused with a notice until its semantics land."""
-    daemon._record_outbox_notice(
-        f.ctx.outbox_dir,
-        f"{verb} refused: not yet — `{verb}:` is parsed but has no semantics "
-        "until move 4b; nothing was done",
-        kind="refused", lifetime="run",
-    )
-    daemon._retire_outbox_staging(f.path)
-    return _handled(f, verb, 0)
-
-
 def handle_mark(f: OutboxFile) -> Handled:
-    """`mark:` — the user's write on a bench file (design-the-loom §6). 4b."""
-    return _not_yet(f, "mark")
+    """`mark: keep|drop <bench path>` — the user's write on a bench file (``mark.py``)."""
+    from . import mark
+
+    return _guarded(f, "mark", mark.handle)
 
 
 def handle_stake(f: OutboxFile) -> Handled:
-    """`stake:` — one instrument for money (design-the-loom §16). 4b."""
-    return _not_yet(f, "stake")
+    """`stake: refuse` — the seat's answer to a stake (``stake.py``)."""
+    from . import stake
+
+    return _guarded(f, "stake", stake.handle_stake)
 
 
 def handle_cut_at(f: OutboxFile) -> Handled:
-    """`cut-at:` — the stake's hold point (design-the-loom §16). 4b."""
-    return _not_yet(f, "cut-at")
+    """`cut-at:` alone — it rides a stake; refused (``stake.py``)."""
+    from . import stake
+
+    return _guarded(f, "cut-at", stake.handle_cut_at)
