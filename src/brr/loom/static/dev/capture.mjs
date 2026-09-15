@@ -205,13 +205,14 @@ for (const [w, h] of [
     path: resolve(output, "live-face-close.png"),
     clip: { x: 1340, y: 8, width: 564, height: 470 },
   });
-  // Mid-sweep: half a beat past a quarter turn, so the line and its
-  // phosphor are both in frame.
-  await page.waitForTimeout(900);
-  await page.screenshot({
-    path: resolve(output, "live-mid-sweep.png"),
-    clip: { x: 300, y: 215, width: 1044, height: 640 },
-  });
+  // Mid-scan: wait until the scan has lit two trails at once.
+  let lit = 0;
+  for (let i = 0; i < 90 && lit < 2; i++) {
+    await page.waitForTimeout(400);
+    lit = Number(await page.evaluate(() => document.querySelector("#loom").dataset.trailsLit || 0));
+  }
+  assert.ok(lit >= 2, "the scan lights two trails within three traverses");
+  await page.screenshot({ path: resolve(output, "live-mid-scan-1920x1080.png") });
   await page.close();
 }
 // Narrow drawer, reduced motion, and missing measurements are real edge states.
@@ -393,7 +394,7 @@ console.log(
       frameRates,
       requests: requests.length,
       network: "only /loom/*",
-      screenshots: "fixture + live at two sizes, lift, intersection, rail, face, sweep, empty",
+      screenshots: "fixture + live at two sizes, lift, intersection, rail, face, scan, empty",
       video: "fixture-beat.webm, 20 seconds",
     },
     null,

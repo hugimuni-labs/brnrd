@@ -2,9 +2,9 @@
  *
  * Layers, back to front, per frame:
  *   ground  — warm near-black, vignette, scanlines (cached; under everything)
- *   sweep   — the sonar's phosphor wedge and speckle (live)
  *   scene   — regions, branch lines, places, labels, instruments (cached)
- *   live    — sweep line, pings, the shuttle walking, sparks, threads, face
+ *   live    — scan along the weft and the trails it lights, the shuttle
+ *             walking, sparks, threads, face
  *   glitch  — local slice + chroma split on the element that changed (live)
  *
  * Colour law: amber is the resident's light only; ice is the user's hand and
@@ -20,7 +20,6 @@ function layer() {
 }
 const [groundCanvas, groundContext] = layer();
 const [sceneCanvas, sceneContext] = layer();
-const [sweepCanvas, sweepContext] = layer();
 const [glitchCanvas, glitchContext] = layer();
 const [tintCanvas, tintContext] = layer();
 let sceneDirty = true,
@@ -156,15 +155,11 @@ let revealAt = null,
   revealed = new Set();
 let glitches = [],
   glitchSeed = 1;
-const pings = new Map(),
-  pendingPing = new Set();
 let trails = new Map();
 let prForge = null,
   forgeDrop = null;
-let sweepPrev = null,
-  expanded = null,
-  expandTimer = 0,
-  noisePattern = null;
+let expanded = null,
+  expandTimer = 0;
 const runeRects = new Map(),
   threadRects = new Map();
 const regionRects = {};
@@ -989,9 +984,6 @@ function receive(next) {
         const born = Math.max(clock, landing) + i * 140;
         sparks.push({ born, seed: glitchSeed++, count: 12 + (glitchSeed % 9) });
         glitch(() => blockRect(0), 120, born);
-        for (const path of list(b.places)) pendingPing.add(path);
-        const bp = beadPath(b);
-        if (bp) pendingPing.add(bp);
       });
     const before = prForge;
     prForge = prsInView().length;
@@ -1048,6 +1040,7 @@ function receive(next) {
   // cloth.rows[].trail is kept ready for the sonar's next shape; nothing
   // draws it yet.
   trails = new Map(list(state.cloth?.rows).filter((r) => Array.isArray(r.trail)).map((r) => [r.run, r.trail]));
+  noteTick(state);
   sourceStatus = dev ? "fixture" : "live";
   renderReceipt();
 }
@@ -1150,7 +1143,7 @@ const PAGE_PARAMS = {
   place: (path) => (path && !/^(forge|wire|shed|crew|clock):$/.test(path) ? { path: String(path).replace(/^home:/, "") } : null),
   heddle: (slug) => (slug ? { slug } : null),
 };
-function page(kind, key) {
+function page(kind, key, o = {}) {
   // Asked on selection; a 404 or an empty answer reads as pending. A frame
   // that lists `pages` and omits this kind is taken at its word.
   if (dev) return null;
@@ -1168,7 +1161,7 @@ function page(kind, key) {
     .then((body) => {
       pages.set(url, body && typeof body === "object" && !body.error ? { status: "ok", body } : { status: "absent" });
       // Re-render only the page that asked, and never over a fold being read.
-      if (selected !== asked || pendingFold !== generation) return;
+      if (o.quiet || selected !== asked || pendingFold !== generation) return;
       lastReceipt = "";
       renderReceipt();
     })
@@ -2459,148 +2452,122 @@ function paintScene() {
 }
 
 /* -------------------------------------------------------------- live ---- */
-function sweepAngle() {
-  if (reduced.matches) return -Math.PI / 2;
-  // Constant angular velocity: one rotation per four beats on the animation
-  // clock. The beat modulates the wedge's brightness, never its angle.
-  return -Math.PI / 2 + (clock / (4 * BEAT)) * Math.PI * 2;
+/* The scan along the weft: a vertical line crosses the cloth's time axis
+ * once per daemon heartbeat (else every 10 s). Crossing a pass lights that
+ * run's trail on the tree; trails are the pings, files never ping. */
+const SCAN_FALLBACK_MS = 10000;
+const scan = { tick: null, tickAt: null, period: SCAN_FALLBACK_MS, prevX: null };
+const trailLit = new Map();
+function noteTick(next) {
+  const tick = list(next?.shuttle?.transitions).at(-1)?.tick;
+  if (tick == null || tick === scan.tick) return;
+  if (scan.tickAt != null) scan.period = Math.max(2000, Math.min(60000, clock - scan.tickAt));
+  scan.tick = tick;
+  scan.tickAt = clock;
 }
-function sweepCenter() {
-  return actorPoint() || point("") || null;
+function scanX() {
+  const { m, right } = layout;
+  const phase =
+    scan.tickAt != null ? clamp((clock - scan.tickAt) / scan.period) : ((clock % scan.period) + scan.period) % scan.period / scan.period;
+  return m + phase * (right - 20 - m);
 }
-function drawSweepUnder(center, angle, pulse = 0.5) {
-  const T = layout.tree;
-  const R = Math.max(
-    ...[
-      [T.x, T.y],
-      [T.x + T.w, T.y],
-      [T.x, T.y + T.h],
-      [T.x + T.w, T.y + T.h],
-    ].map(([x, y]) => Math.hypot(x - center.x, y - center.y)),
-  );
-  g.save();
-  g.beginPath();
-  g.rect(T.x, T.y, T.w, T.h);
-  g.clip();
-  // Range rings: the scope's graticule, centred on the shuttle.
-  for (let r = 80; r < R; r += 80) ring(center.x, center.y, r, INK.amber, r % 240 ? 0.035 : 0.06);
-  if (!reduced.matches) {
-    // Half resolution: coarser grain, a quarter of the fill.
-    const w = Math.ceil(T.w / 2),
-      h = Math.ceil(T.h / 2);
-    if (sweepCanvas.width !== w || sweepCanvas.height !== h) {
-      sweepCanvas.width = w;
-      sweepCanvas.height = h;
-      noisePattern = null;
-    }
-    const s = sweepContext;
-    s.globalCompositeOperation = "source-over";
-    s.clearRect(0, 0, w, h);
-    if (!noisePattern) noisePattern = s.createPattern(noiseTexture(), "repeat");
-    // Ultrasound speckle: the grain shimmers on its own clock, masked to the
-    // swept sector and fading with the phosphor.
-    const step = Math.floor(clock / 70),
-      jx = Math.floor(rand(step) * 256),
-      jy = Math.floor(rand(step + 0.37) * 256);
-    s.save();
-    s.translate(-jx, -jy);
-    s.fillStyle = noisePattern;
-    s.fillRect(jx, jy, w, h);
-    s.restore();
-    const cx = (center.x - T.x) / 2,
-      cy = (center.y - T.y) / 2;
-    const mask = s.createConicGradient(angle - Math.PI / 2, cx, cy);
-    mask.addColorStop(0, "rgba(0,0,0,0)");
-    mask.addColorStop(0.249, "rgba(0,0,0,0.95)");
-    mask.addColorStop(0.25, "rgba(0,0,0,0)");
-    mask.addColorStop(1, "rgba(0,0,0,0)");
-    s.globalCompositeOperation = "destination-in";
-    s.fillStyle = mask;
-    s.fillRect(0, 0, w, h);
-    const fall = s.createRadialGradient(cx, cy, 5, cx, cy, R / 2);
-    fall.addColorStop(0, "rgba(0,0,0,1)");
-    fall.addColorStop(1, "rgba(0,0,0,0.25)");
-    s.fillStyle = fall;
-    s.fillRect(0, 0, w, h);
-    g.globalAlpha = 0.48 + 0.2 * pulse;
-    g.drawImage(sweepCanvas, T.x, T.y, T.w, T.h);
-    g.globalAlpha = 1;
-    const wash = g.createConicGradient(angle - Math.PI / 2, center.x, center.y);
-    wash.addColorStop(0, "rgba(242,177,52,0)");
-    wash.addColorStop(0.249, `rgba(242,177,52,${(0.09 + 0.07 * pulse).toFixed(3)})`);
-    wash.addColorStop(0.25, "rgba(242,177,52,0)");
-    wash.addColorStop(1, "rgba(242,177,52,0)");
-    g.fillStyle = wash;
-    g.beginPath();
-    g.moveTo(center.x, center.y);
-    g.arc(center.x, center.y, R, angle - Math.PI / 2, angle);
-    g.closePath();
-    g.fill();
+// A run's trail: the feed's `trail` when it lands; until then a live
+// strand's places, the seat's last eight, a row's attested places, or the
+// places of the beads its pass page attests (asked once, on first crossing).
+function trailPaths(row, ask = true) {
+  if (Array.isArray(row.trail))
+    return row.trail
+      .map((p) => (typeof p === "string" ? p : p?.path ? (p.kind === "home" ? "home:" + p.path : p.path) : null))
+      .filter(Boolean);
+  if (row.run === state.run?.id) return actorHistory();
+  const thread = list(state.hud?.strands).find((t) => t.id === row.run);
+  if (list(thread?.places).length) return list(thread.places);
+  if (Array.isArray(row.places)) return row.places.map((p) => (typeof p === "string" ? p : p.path)).filter(Boolean);
+  const body = ask ? page("pass", row.run, { quiet: true }) : null;
+  const out = [];
+  for (const b of list(body?.beads).slice().reverse()) {
+    const path = beadPath(b);
+    if (path && out.at(-1) !== path) out.push(path);
   }
-  g.restore();
-  return R;
+  return out.slice(-8);
 }
-function noiseTexture() {
-  const [c, x] = layer();
-  c.width = c.height = 256;
-  for (let i = 0; i < 2600; i++) {
-    const a = rand(i * 1.3);
-    x.fillStyle = a > 0.82 ? "rgba(242,177,52,0.95)" : `rgba(232,220,192,${(0.25 + a * 0.4).toFixed(2)})`;
-    x.fillRect(Math.floor(rand(i * 3.1) * 256), Math.floor(rand(i * 7.7) * 256), a > 0.95 ? 2 : 1, 1);
-  }
-  return c;
+function trailColor(row, entry) {
+  const seat = row.run === state.run?.id || (entry && !entry.row.parent && entry.strands.some((r) => r.run === state.run?.id) && row === entry.row);
+  if (seat) return INK.amber;
+  const topic = list(row.topics)[0];
+  return topic ? color(topic) : INK.boneDim;
 }
-function drawSweepOver(center, angle, R) {
-  const T = layout.tree;
-  g.save();
-  g.beginPath();
-  g.rect(T.x, T.y, T.w, T.h);
-  g.clip();
-  if (!reduced.matches) {
-    strokePath(
-      [center, { x: center.x + Math.cos(angle) * R, y: center.y + Math.sin(angle) * R }],
-      INK.amber,
-      1.3,
-      0.75,
-      10,
-    );
-    // Pings: the line crossing a place brightens it and throws one ring.
-    const span = sweepPrev === null ? 0 : angle - sweepPrev;
-    if (span > 0 && span < Math.PI) {
-      for (const node of treeNodes) {
-        if (node.root || node.path === actor?.path) continue;
-        const p = point(node.path);
-        if (!p) continue;
-        const d = Math.hypot(p.x - center.x, p.y - center.y);
-        if (d < 6 || d > R) continue;
-        const theta = Math.atan2(p.y - center.y, p.x - center.x);
-        const delta = (((theta - sweepPrev) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
-        if (delta <= span) {
-          const strong = pendingPing.delete(node.path);
-          pings.set(node.path, { at: clock, strong });
-          if (strong) glitch(() => {
-            const q = point(node.path);
-            return q && { x: q.x - 40, y: q.y - 22, w: 110, h: 34 };
-          }, 120);
-        }
-      }
-    }
-    sweepPrev = angle;
+function lightCrossed(x0, x1) {
+  for (const entry of railLayout()) {
+    if (entry.x < x0 || entry.x > x1) continue;
+    for (const row of [entry.row, ...entry.strands])
+      trailLit.set(row.run, { at: clock, paths: trailPaths(row), color: trailColor(row, entry), x: entry.x });
   }
-  for (const [path, ping] of pings) {
-    const dur = ping.strong ? 520 : 300,
-      age = (clock - ping.at) / dur;
-    if (age >= 1 || age < 0) {
-      if (age >= 1) pings.delete(path);
-      continue;
-    }
+}
+function routeBetween(a, b) {
+  const from = beam(a),
+    to = beam(b);
+  if (!from.length || !to.length) return [];
+  let shared = 0;
+  while (shared < from.length && shared < to.length && Math.abs(from[shared].x - to[shared].x) < 0.01 && Math.abs(from[shared].y - to[shared].y) < 0.01) shared++;
+  return [...from.slice(Math.max(0, shared - 1)).reverse(), ...to.slice(shared)];
+}
+function drawTrailLine(paths, stroke, alpha) {
+  const visible = paths.filter((p) => targetPositions.has(p));
+  for (let i = 1; i < visible.length; i++) strokePath(routeBetween(visible[i - 1], visible[i]), stroke, 1.6, alpha, 8);
+  visible.forEach((path, i) => {
     const p = point(path);
-    if (!p) continue;
-    halo(p.x, p.y, ping.strong ? 30 : 16, INK.amber, (1 - age) * (ping.strong ? 0.55 : 0.35));
-    dot(p.x, p.y, 2.2, "#fff4dc", 0);
-    ring(p.x, p.y, 5 + age * (ping.strong ? 26 : 16), INK.amber, (1 - age) * 0.85, ping.strong ? 1.5 : 1);
+    if (!p) return;
+    g.globalAlpha = alpha;
+    dot(p.x, p.y, i === visible.length - 1 ? 3 : 2, stroke, 10);
+    g.globalAlpha = 1;
+  });
+  return visible.length;
+}
+function drawScanTrails() {
+  let lit = 0;
+  if (reduced.matches) {
+    // No traverse: every trail in view, still, at 40 %.
+    for (const entry of railLayout().filter((e) => e.x >= layout.m && e.x <= layout.right - 20))
+      for (const row of [entry.row, ...entry.strands])
+        if (drawTrailLine(trailPaths(row, false), trailColor(row, entry), 0.4) > 1) lit++;
+  } else {
+    const decay = scan.period * 0.85;
+    for (const [run, t] of trailLit) {
+      const age = (clock - t.at) / decay;
+      if (age >= 1 || age < 0) {
+        if (age >= 1) trailLit.delete(run);
+        continue;
+      }
+      if (drawTrailLine(t.paths, t.color, Math.pow(1 - age, 1.5) * 0.9) > 1) lit++;
+    }
   }
-  g.restore();
+  canvas.dataset.trailsLit = String(lit);
+}
+function drawScanLine() {
+  if (reduced.matches || !isRevealed("cloth")) return;
+  const T = layout.tree,
+    x = scanX(),
+    y0 = T.y,
+    y1 = layout.railY + 22;
+  if (!paused) {
+    if (scan.prevX != null && x >= scan.prevX) lightCrossed(scan.prevX, x);
+    else if (scan.prevX != null) {
+      lightCrossed(scan.prevX, Infinity);
+      lightCrossed(-Infinity, x);
+    }
+    scan.prevX = x;
+  }
+  // A short phosphor wake behind the line.
+  const wake = g.createLinearGradient(x - 90, 0, x, 0);
+  wake.addColorStop(0, "rgba(242,177,52,0)");
+  wake.addColorStop(1, "rgba(242,177,52,0.09)");
+  // Over the window only while the line is inside it; always over the cloth.
+  const top = x >= T.x && x <= T.x + T.w ? y0 : layout.cloth + 34;
+  g.fillStyle = wake;
+  g.fillRect(x - 90, top, 90, y1 - top);
+  strokePath([{ x, y: top }, { x, y: y1 }], INK.amber, 1.2, 0.7, 8);
+  dot(x, layout.railY, 2.6, "#fff1d0", 10);
 }
 function blockRect(i) {
   const a = actorPoint();
@@ -2611,20 +2578,6 @@ function blockRect(i) {
   return { x: gx + gw / 2 + 6, y: a.y - 26 - i * 6, w: 40, h: 8 };
 }
 function drawTrail() {
-  const history = actorHistory();
-  for (let i = 1; i < history.length; i++) {
-    const from = beam(history[i - 1]),
-      to = beam(history[i]);
-    if (!from.length || !to.length) continue;
-    let shared = 0;
-    while (shared < from.length && shared < to.length && Math.abs(from[shared].x - to[shared].x) < 0.01 && Math.abs(from[shared].y - to[shared].y) < 0.01) shared++;
-    const route = [...from.slice(Math.max(0, shared - 1)).reverse(), ...to.slice(shared)];
-    strokePath(route, INK.amber, 1.4, ((i + 1) / history.length) * 0.32, 6);
-  }
-  history.forEach((path, i) => {
-    const p = point(path);
-    if (p) dot(p.x, p.y, 1.8 + i * 0.15, INK.amber, 6 + i);
-  });
   // The trace: the light the walk leaves on the line, fading after arrival.
   if (walk.route.length && !reduced.matches) {
     const t = (clock - walk.born) / walk.dur,
@@ -2943,24 +2896,15 @@ function draw(timestamp) {
   g.clearRect(0, 0, width, height);
   g.drawImage(groundCanvas, 0, 0, width, height);
   hits = [...sceneHits];
-  let center = null,
-    angle = 0,
-    R = 0;
   const windowOn = state && isRevealed("window");
-  if (windowOn) {
-    center = sweepCenter();
-    angle = sweepAngle();
-    if (center) R = drawSweepUnder(center, angle, pulse);
-  }
   g.drawImage(sceneCanvas, 0, 0, width, height);
   if (state) {
     if (windowOn) {
-      if (center && !paused) drawSweepOver(center, angle, R);
-      else if (center) drawSweepOver(center, sweepPrev ?? angle, R);
       g.save();
       g.beginPath();
       g.rect(layout.tree.x, layout.tree.y, layout.tree.w, layout.tree.h);
       g.clip();
+      drawScanTrails();
       drawTrail();
       drawThreads();
       drawActor(pulse);
@@ -2972,13 +2916,13 @@ function draw(timestamp) {
         else forgeDrop = null;
       }
       g.restore();
-      if (walk.route.length && clock - walk.born >= walk.dur && actor) pendingPing.delete(actor.path);
     }
     drawFaceLive(pulse);
     if (isRevealed("cloth")) {
       const live = railLayout().find((r) => !r.focus && (r.row.run === state.run?.id || r.strands.some((x) => x.run === state.run?.id)));
       if (live && live.x > layout.m && live.x < layout.right - 20) halo(live.x, layout.railY, 16 + pulse * 8, INK.amber, 0.2);
     }
+    drawScanLine();
     tooltip();
     drawRadial();
   }

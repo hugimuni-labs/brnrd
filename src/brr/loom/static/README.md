@@ -17,7 +17,7 @@ Unknown measurements remain unknown. Directory nodes derive from measured paths.
 | ----------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | ground `#0b0906` → vignette         | the room; faint scanlines live in the ground layer, under every glyph                                      |
 | bone `#e8dcc0`                      | type and places; brightness follows `heat`                                                                 |
-| **amber `#f2b134`**                 | **the resident only** — the shuttle glyph, its halo, trail and trace, sparks, the sweep, its context stack |
+| **amber `#f2b134`**                 | **the resident only** — the shuttle glyph, its halo, trail and trace, sparks, the scan and the seat's trail, its context stack |
 | ice `#8fd3ff`                       | the user's hand and the settled — hover, selection, focus plaque edge, console caret, `grant`, knots, PRs  |
 | dark `#3a3328`                      | the between — branch lines, unlit runes                                                                    |
 | green / red                         | receipts (course ticks, the live dot) / walls (quota under 10 %, a `refill` hold)                          |
@@ -25,12 +25,17 @@ Unknown measurements remain unknown. Directory nodes derive from measured paths.
 
 ## Motion
 
-- **The sweep (sonar / echography).** A line rotates about the shuttle's place
-  at constant angular velocity, one turn every four beats (2.4 s) on the
-  animation clock; the beat modulates the wedge's brightness, never its angle. A
-  90° phosphor wedge and speckle grain trail behind it. A place pings (brighten + one ring, 300 ms)
-  when the line crosses it; a place that just received a boundary pings bright
-  the next time it is crossed.
+- **The scan along the weft.** A vertical line travels left→right across the
+  cloth's x-mapping, one traverse per daemon heartbeat
+  (`shuttle.transitions[-1].tick` advancing; else every 10 s), with a short
+  phosphor wake. Crossing a pass lights its run's **trail** on the tree — a
+  polyline through its places along the branches, amber for the seat, its first
+  topic's hue otherwise — decaying before the next traverse. A trail is
+  `cloth.rows[].trail` when present; else a live strand's places, the seat's
+  last eight, a row's `places`, or the places of the beads its pass page attests
+  (asked once, on first crossing). Files never ping. Reduced motion: no
+  traverse, trails in view drawn still at 40 %. The canvas reports
+  `data-trails-lit`.
 - **The walk.** The shuttle follows the branch curves to each new measured
   place in 300–600 ms, eased. The last 8 places leave a fading amber trail; the
   walked route holds light for 900 ms. Each boundary lands as 12–20 sparks with
@@ -43,8 +48,8 @@ Unknown measurements remain unknown. Directory nodes derive from measured paths.
   reading under its title. `?` replays it. The shuttle carries
   `you are here → the resident` for six seconds after, and on hover.
 - Every flicker derives from the animation clock: Space freezes every pixel.
-  `prefers-reduced-motion` stops rotation, walks, sparks, glitches and the
-  reveal; bloom and the static range rings stay.
+  `prefers-reduced-motion` stops the traverse, walks, sparks, glitches and the
+  reveal; bloom stays.
 
 ## Two roots and the places beyond files
 
@@ -79,7 +84,7 @@ unrecognised scalar fields from a page render under "From the feed".
 | Contract key                        | Mark / receipt                                                                                                                   |
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `repo`, `at`                        | Tree root label; last-received timestamp on a stale frame; "since" and "waiting on" minutes are `at` minus the attested instants |
-| `beat_ms`                           | Contract specifies 600 ms; the sweep, walk and pings use this fixed beat                                                         |
+| `beat_ms`                           | Contract specifies 600 ms; the walk, reveal and face breath use this fixed beat                                                         |
 | `shuttle.state`, `since`            | Face: weaving · at the shed · in the box · handing off · released; since HH:MM                                                   |
 | `run.name`, `shell`, `core`, `card` | Default bench: now, plan ticks, vector, ledger verbatim; `course n/m` in the face footer                                         |
 | `run.mood`, `mood_glyph`            | Face glyph (fit whole, blinks every eighth beat — presentational), and the shuttle on the tree at the newest bead's last place    |
