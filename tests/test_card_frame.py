@@ -140,7 +140,9 @@ def test_a_land_produce_row_is_a_merge(h):
     with (h.run_dir / "produce.jsonl").open("w", encoding="utf-8") as fh:
         fh.write(json.dumps({"kind": "knot", "ref": "abc", "verb": "land", "pr": 42, "at": iso(T0 + 1)}) + "\n")
     h.run(T0 + 2)
-    assert h.read_card() == "- [x] ship #42\n"
+    weaver, frame = card_frame.card_halves(h.read_card())
+    assert weaver == "- [x] ship #42"
+    assert "- merges: #42 → abc" in frame  # the same row is now a ledger line (§19.3)
 
 
 def test_the_frames_tick_is_not_the_weavers_write():
@@ -159,19 +161,18 @@ def _baseline(h):
     assert card_frame.portal_delta(h.meta) is None
 
 
-def test_trigger_strand_returned(h):
+def test_a_strand_return_is_a_moment_but_no_longer_the_deltas(h):
+    # §19.3: the ledger shows the return; the delta keeps deliveries and refusals.
     _baseline(h)
     h.events = [{"id": "evt-x", "source": "spawn_completed", "created": iso(T0 + 30),
-                 "spawned_by_run": "run-260914-1608-8jwz"}]
+                 "spawned_by_run": "run-260914-1608-8jwz", "spawn_status": "done"}]
     result = h.run(T0 + 40)
     assert result.triggers == ["strand_returned"]
-    delta = card_frame.portal_delta(h.meta)
-    assert delta["text"] == "since your last card write: 1 strand returned (run-260914-1608-8jwz)"
-    assert delta["id"] == "card-delta-ocgl-1"
-    assert delta["trigger"] == "strand_returned"
+    assert card_frame.portal_delta(h.meta) is None
+    assert "- strand done: run-260914-1608-8jwz — done" in h.read_card()
 
 
-def test_trigger_pr_merged_counts_only_the_cards_prs(h):
+def test_a_merge_is_a_moment_but_no_longer_the_deltas(h):
     _baseline(h)
     h.set_forge([
         {"number": 1976, "state": "MERGED", "branch": "brr/x", "merged_at": iso(T0 + 30)},
@@ -179,7 +180,20 @@ def test_trigger_pr_merged_counts_only_the_cards_prs(h):
     ])
     result = h.run(T0 + 40)
     assert result.triggers == ["pr_merged"]
-    assert card_frame.portal_delta(h.meta)["text"] == "since your last card write: #1976 merged"
+    assert card_frame.portal_delta(h.meta) is None
+
+
+def test_a_delivery_after_a_return_names_only_the_delivery(h):
+    _baseline(h)
+    h.events = [{"id": "evt-x", "source": "spawn_completed", "created": iso(T0 + 30),
+                 "spawned_by_run": "run-260914-1608-8jwz"}]
+    h.stats.update({"current": 1})
+    result = h.run(T0 + 40)
+    assert result.triggers == ["strand_returned", "delivery"]
+    delta = card_frame.portal_delta(h.meta)
+    assert delta["text"] == "since your last card write: 1 reply delivered"
+    assert delta["id"] == "card-delta-ocgl-1"
+    assert delta["trigger"] == "delivery"
 
 
 def test_a_strangers_merge_is_no_trigger(h):

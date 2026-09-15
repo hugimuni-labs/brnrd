@@ -434,6 +434,7 @@ def _strand_lines(
         finished_ids.update(
             str(event.get(k) or "").strip() for k in ("spawned_by_run", "spawned_by_event")
         )
+    finished_ids.discard("")
     finished.sort(key=lambda row: (row[0], row[1]))
 
     resources = _mapping(hud.get("resources"))
