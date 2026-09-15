@@ -576,6 +576,24 @@ def handle_await(f: OutboxFile) -> Handled:
             if account_context is not None else outbox_dir.parent.parent
         )
         entity = shuttle.Shuttle.load(home)
+        # #1991: the arm is where the seat claims the row — a strand never
+        # does (its wait stays on its own run record). The resolve is gated
+        # on the run id this arm stamps, so a row left `listening` under a
+        # run that is no longer arming it (a seat stopped mid-wait: only
+        # `_finalize_completed` releases the row) would otherwise never
+        # close. Reclaim it here, through the graph's own edges, instead of
+        # through the ungated resolve that used to repair it by accident.
+        if (
+            not daemon._is_strand(task.meta)
+            and entity.state == "listening"
+            and entity.run_id != task.id
+        ):
+            entity.transition(
+                "awake", why="await_armed:reclaimed", by="daemon",
+                run_id=task.id,
+                repo_root=str(repo_root or entity.repo_root),
+                conversation_key=task.conversation_key,
+            )
         if not daemon._is_strand(task.meta) and entity.state == "awake":
             entity.transition(
                 "listening", why="await_armed", by="daemon",
