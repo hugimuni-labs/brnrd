@@ -125,6 +125,12 @@ def machine(tmp_path: Path) -> dict:
             spawn_parent_run_id=RUN, spawn_allowance_tokens="15000000", transitions=_transitions(NOW - 500))
     _write(kid_outbox / "portal-state.json", json.dumps({"run": {"id": CHILD}, "strand": {"is_strand": True, "submitted": True}}))
     _jsonl(kid_outbox / ".relics.jsonl", [{"kind": "commit", "sha": "abc1234"}, {"kind": "pr", "number": 12}])
+    kid_rows = [
+        {"at": iso(NOW - 400 + i), "act": "mutate", "place": {"path": f"src/brr/f{i % 15}.py", "paths": []}}
+        for i in range(30)
+    ]
+    kid_rows.append({"at": iso(NOW - 300), "phase": "pre-tool", "place": {"path": "src/brr/nope.py", "paths": []}})
+    _jsonl(brr / "runs" / CHILD / "boundaries.jsonl", kid_rows)
 
     # ── topics and their indexes ──
     topics = home / "surface" / "topics"
@@ -147,6 +153,7 @@ def machine(tmp_path: Path) -> dict:
     # ── the run ledger; the old run's own boundaries, five hours back ──
     _jsonl(brr / "run-ledger.jsonl", [
         {"run_id": OLD, "started_at": iso(NOW - 20000), "ended_at": None, "name": "stale copy"},
+        {"run_id": RUN, "started_at": iso(NOW - 30000), "ended_at": iso(NOW - 29000), "name": "an earlier stint"},
         {"run_id": OLD, "started_at": iso(NOW - 20000), "ended_at": iso(NOW - 18000), "name": "the old run",
          "runner_shell": "claude", "runner_core": "opus", "parent_run_id": None,
          "tokens_input": 10, "tokens_output": 20, "tokens_cache_creation": 30, "tokens_cache_read": 999_999,
@@ -207,7 +214,8 @@ def test_released_seat_serves_no_run_but_the_rest(machine):
     assert out["run"] is None and out["hud"] is None and out["beads"] == []
     assert out["shuttle"]["state"] == "released"
     assert [i["id"] for i in out["warp"]["items"]] == ["w-1", "w-2", "w-3", "w-4"]
-    assert [r["run"] for r in out["cloth"]["rows"]] == [OLD]
+    assert [r["run"] for r in out["cloth"]["rows"]] == [RUN, OLD]  # ledger order: each run's last entry
+    assert out["cloth"]["rows"][0]["ended"] == iso(NOW - 29000)  # not live now: the ledger's end stands
 
 
 def test_shuttle_keeps_the_last_twelve_transitions(machine):
@@ -236,9 +244,28 @@ def test_hud_reads_portal_chip_quota_spend_and_strands(machine):
     assert hud["quota"] == {"session_pct_left": 85, "week_pct_left": 56}
     assert hud["spend"] == {"tokens": 2_200_000, "allowance_tokens": 20_000_000, "pct": 11}
     assert hud["ctx_tokens"] == 272_900
-    assert hud["strands"] == [
-        {"id": CHILD, "title": "the kid", "status": "submitted", "spent": 4200, "allowance": 15_000_000},
-    ]
+    (kid,) = hud["strands"]
+    assert {k: kid[k] for k in ("id", "title", "status", "spent", "allowance")} == {
+        "id": CHILD, "title": "the kid", "status": "submitted", "spent": 4200, "allowance": 15_000_000,
+    }
+    # the last 12 distinct places of its own log, newest first; the pre-tool row is no bead
+    assert kid["places"] == [f"src/brr/f{i % 15}.py" for i in range(29, 17, -1)]
+    assert kid["last_bead_at"] == iso(NOW - 400 + 29)
+
+
+def test_hud_full_is_the_typed_hud_as_hud_json_prints_it(machine):
+    from brr import hud as hud_mod
+
+    portal = json.loads((machine["brr"] / "outbox" / "evt-live" / "portal-state.json").read_text())
+    full = state.build(machine["repo"], machine["home"], now=NOW)["hud"]["full"]
+    assert full == json.loads(hud_mod.HUD.from_dict(portal).to_json())
+    assert full["run"]["id"] == RUN and "attention" in full and "resources" in full
+
+
+def test_a_strand_without_a_log_has_no_position(machine):
+    (machine["brr"] / "runs" / CHILD / "boundaries.jsonl").unlink()
+    (kid,) = state.build(machine["repo"], machine["home"], now=NOW)["hud"]["strands"]
+    assert kid["places"] == [] and kid["last_bead_at"] is None
 
 
 def test_quota_labels_stay_the_shells_own(machine):
@@ -294,19 +321,24 @@ def test_beads_carry_places_and_topics(machine):
 
 def test_cloth_joins_the_ledger_with_index_refs(machine):
     rows = state.build(machine["repo"], machine["home"], now=NOW)["cloth"]["rows"]
-    assert [r["run"] for r in rows] == [OLD, RUN, CHILD]
-    old, live, kid = rows
+    assert [r["run"] for r in rows] == [RUN, OLD, CHILD]  # ledger order (each run's last entry), then open strands
+    live, old, kid = rows
     assert old["name"] == "the old run"  # the run's last ledger entry wins
     assert old["topics"] == ["the-loom", "the-post"]
     assert (old["prs"], old["knots"], old["pages"], old["tokens"]) == ([7, 9], 2, 1, 60)
     assert (old["ended"], old["shell"], old["core"], old["parent"]) == (iso(NOW - 18000), "claude", "opus", None)
-    assert live["ended"] is None and live["topics"] == ["the-post"] and live["name"] == "the live seat"
+    assert old["duration_s"] == 2000
+    # the live run's earlier stint is in the ledger; its end is still null
+    assert live["ended"] is None and live["duration_s"] is None
+    assert live["topics"] == ["the-post"] and live["name"] == "an earlier stint"
+    assert kid["ended"] is None and kid["duration_s"] is None
     assert (kid["parent"], kid["shell"], kid["core"], kid["prs"], kid["knots"]) == (RUN, "codex", "astra", [12], 1)
 
 
 def test_tree_heat_decays_by_the_hour(machine):
     places = {p["path"]: p for p in state.build(machine["repo"], machine["home"], now=NOW)["tree"]["places"]}
-    assert set(places) == {"src/brr/hud.py", "media/post/a.png", "src/brr/old.py"}
+    assert {"src/brr/hud.py", "media/post/a.png", "src/brr/old.py"} <= set(places)
+    assert places["src/brr/f14.py"]["knots"] == 1  # the open strand's own log counts too
     assert places["src/brr/old.py"]["heat"] == pytest.approx(0.5 ** 5, abs=1e-4)
     assert places["src/brr/old.py"]["knots"] == 1  # the old run mutated it
     assert places["src/brr/hud.py"]["heat"] > 0.95  # touched by a bead two minutes ago
