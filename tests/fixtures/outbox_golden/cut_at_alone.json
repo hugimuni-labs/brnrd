@@ -1,0 +1,18 @@
+{
+  "emitted": [],
+  "promoted": 0,
+  "stats": {},
+  "task_meta": {},
+  "tree": {
+    ".brr/inbox/<EVT1>.md": "---\nid: <EVT1>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
+    ".brr/outbox/<EVT1>/.notices.jsonl": [
+      {
+        "at": "<V>",
+        "kind": "refused",
+        "lifetime": "run",
+        "text": "cut-at refused: `cut-at: 9%` rides a stake — on the user's request, or beside `stake:` on `spawn:`/`respawn:`; nothing was armed"
+      }
+    ],
+    ".brr/outbox/<EVT1>/.processed/cut-at.md": "---\ncut-at: 9%\n---\n"
+  }
+}

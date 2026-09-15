@@ -1,0 +1,18 @@
+{
+  "emitted": [],
+  "promoted": 0,
+  "stats": {},
+  "task_meta": {},
+  "tree": {
+    ".brr/inbox/<EVT1>.md": "---\nid: <EVT1>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
+    ".brr/outbox/<EVT1>/.notices.jsonl": [
+      {
+        "at": "<V>",
+        "kind": "refused",
+        "lifetime": "run",
+        "text": "stake refused: `stake: 8%` — a stake is the user's word and arrives on their message; the seat answers one with `stake: refuse` + a line, and hands one to a thread on `spawn:`/`respawn:`"
+      }
+    ],
+    ".brr/outbox/<EVT1>/.processed/stake.md": "---\nstake: 8%\n---\nraising myself\n"
+  }
+}

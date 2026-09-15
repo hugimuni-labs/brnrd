@@ -45,6 +45,9 @@ ROW_EXEMPT = {
     # teaches it; the row names the canonical spelling only.
     "runner",
     "env",
+    # `cut-at:`'s identifier spelling (event frontmatter keys must match
+    # [A-Za-z_]…); the row names the outbox spelling.
+    "cut_at",
     # Choreography rather than cost or evidence — the isolation ladder and the
     # free-text note. `brnrd docs portals` owns both, and the row's own header
     # says that split is deliberate. `test_exempt_keys_stay_reachable` pins the

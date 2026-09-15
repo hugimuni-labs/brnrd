@@ -1,0 +1,43 @@
+{
+  "emitted": [
+    {
+      "payload": {
+        "core": null,
+        "event_id": "<EVT1>",
+        "proposed_runner": "claude",
+        "reason": null,
+        "run_id": "run-parent",
+        "spawn_allowance_tokens": 5000000,
+        "spawn_event_id": "<EVT2>"
+      },
+      "type": "spawn_requested"
+    }
+  ],
+  "promoted": 1,
+  "stats": {
+    "spawn": 1
+  },
+  "task_meta": {},
+  "tree": {
+    ".brr/conversations/telegram__42__/<EVT1>.jsonl": [
+      {
+        "artifact_kind": "spawn_request",
+        "body": "the child's task\n\n## Declared contract (from your dispatcher)\n\n- **branch: `brr/child`** — publish on exactly this name. Rename your placeholder branch to it before committing; the completion check compares this string to the branch you end on, and any other name is reported to your parent as a contract mismatch.\n- **report: `<TMP>/child-report.md`** — write that file. It is checked by `stat`, not read out of your prose, and a PR body is not a substitute. Budget for it early: a run that spends its whole window on the work has none left for the receipt.",
+        "event_id": "<EVT1>",
+        "kind": "artifact",
+        "label": "spawn:<EVT2>",
+        "path": "<TMP>/.brr/inbox/<EVT2>.md",
+        "run_id": "run-parent",
+        "summary": "the child's task ## Declared contract (from your dispatcher) - **branch: `brr/child`** — publish on exactly this name. Rename your placeholder branch to it before committing; the completion check compares this string to the branch you en...",
+        "ts": "<V>"
+      }
+    ],
+    ".brr/inbox/<EVT1>.md": "---\nid: <EVT1>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
+    ".brr/inbox/<EVT2>.md": "---\nid: <EVT2>\nsource: spawn\nstatus: pending\nstrand: True\nenvironment: worktree\nshell: claude\nspawn_allowance_tokens: 5000000\nspawn_stake_share_pct: 5.0\nspawn_stake_unit: share\nspawn_stake_cut_at_tokens: 7500000\nspawn_stake_window_basis: default\nspawn_contract_branch: brr/child\nspawn_contract_report: <TMP>/child-report.md\nrespawned_from_event: <EVT1>\nrespawned_by_run: run-parent\nspawn_immediate: True\nspawn_parent_run_id: run-parent\nspawn_parent_conversation_key: telegram:42:\ncreated: <TS>\n---\nthe child's task\n\n## Declared contract (from your dispatcher)\n\n- **branch: `brr/child`** — publish on exactly this name. Rename your placeholder branch to it before committing; the completion check compares this string to the branch you end on, and any other name is reported to your parent as a contract mismatch.\n- **report: `<TMP>/child-report.md`** — write that file. It is checked by `stat`, not read out of your prose, and a PR body is not a substitute. Budget for it early: a run that spends its whole window on the work has none left for the receipt.\n",
+    ".brr/outbox/<EVT1>/.processed/spawn.md": "---\nspawn: true\nshell: claude\nbranch: brr/child\nreport: <TMP>/child-report.md\nstake: 5%\n---\nthe child's task\n",
+    ".brr/schedule/signals.json": {
+      "spawn": "<F>"
+    },
+    "child-report.md": "# Report — (untitled)\n\nDispatched by run run-parent, event <EVT1>.\nDeclared branch: brr/child\n\n## Status\n\n_Seeded at dispatch — grow this as work lands. Do not wait until the end\nto write it; a run that budgets its whole window for the work has none\nleft for this file._\n"
+  }
+}

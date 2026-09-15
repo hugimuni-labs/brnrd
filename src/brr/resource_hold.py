@@ -92,6 +92,11 @@ REASON_HOLD_COSTLIER_THAN_BOOT = "hold_costlier_than_boot"
 #: ``seat.starve_floor_pct``; released only by :data:`RESUME_REFILL`.
 REASON_QUOTA_STARVED = "quota_starved"
 
+#: The stake's hard stop (design-the-loom §16, move 4b): the seat's metered
+#: spend against the user's ``stake:`` reached its ``cut-at:``. Released only
+#: by :data:`RESUME_RAISE`.
+REASON_STAKE_CUT = "stake_cut"
+
 RESUME_OPERATOR = "operator"
 RESUME_RESET = "reset"
 #: Released only by a *measured* refill: the daemon reads the provider's
@@ -115,8 +120,14 @@ RESUME_STRANDS = "strands"
 #: own when a turn ends with nothing armed (``seat.park_on_turn_end``), so
 #: "the run ended" stops being a thing that happens to a user-woken seat.
 RESUME_ANY = "any"
+#: Released only by the user raising the stake: a message on the seat's
+#: thread carrying a new ``stake:`` whose cut-at clears what the ask already
+#: spent. A message without one is kept and answered with the terms
+#: (``daemon._keep_at_stake_cut``); a tick never wakes it (a wall reason).
+RESUME_RAISE = "raise"
 RESUME_CONDITIONS = frozenset({
     RESUME_OPERATOR, RESUME_RESET, RESUME_STRANDS, RESUME_ANY, RESUME_REFILL,
+    RESUME_RAISE,
 })
 
 REASON_WAITING_ON_STRANDS = "waiting_on_strands"
@@ -320,6 +331,11 @@ def refuses_correspondent(meta: dict[str, Any] | None) -> bool:
     return is_active(meta) and (meta or {}).get("resume_condition") == RESUME_REFILL
 
 
+def awaits_raise(meta: dict[str, Any] | None) -> bool:
+    """Whether this active hold is the stake's cut, waiting on a raise."""
+    return is_active(meta) and (meta or {}).get("resume_condition") == RESUME_RAISE
+
+
 #: The two conditions that name a *resource wall* — the seat cannot run until
 #: the provider says it can, so nothing routine may wake it: ``refill`` (the
 #: starvation park) and ``reset`` (a measured provider reset).
@@ -328,7 +344,9 @@ WALL_RESUME_CONDITIONS = frozenset({RESUME_REFILL, RESUME_RESET})
 #: the automatic codex ``usage_limit_exceeded`` hold arms ``resume: operator``
 #: ("silence is neither permission nor a reset"), and a tick waking it would
 #: only die on the same wall.
-WALL_REASONS = frozenset({REASON_QUOTA_EXHAUSTED, REASON_QUOTA_STARVED})
+#: ``stake_cut`` joins them: the seat may not run past the user's hard stop,
+#: so a tick accumulates rather than spending a boot to re-park.
+WALL_REASONS = frozenset({REASON_QUOTA_EXHAUSTED, REASON_QUOTA_STARVED, REASON_STAKE_CUT})
 
 
 def is_resource_wall(meta: dict[str, Any] | None) -> bool:

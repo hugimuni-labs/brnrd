@@ -641,6 +641,17 @@ def build(
                 "explicit": explicit,
             }
 
+    # Move 4b: the seat's stake rides its own allowance facet — the same
+    # meter, the user's instrument on it. Present only while a stake is on
+    # the run, the way the bolt is present only once cut.
+    if isinstance(allowance, dict) and allowance_facet.get("status") != UNIMPLEMENTED:
+        from . import stake as stake_mod
+
+        stake_projection = stake_mod.boundary_projection(allowance.get("stake"))
+        if stake_projection is not None:
+            allowance_facet["stake"] = stake_projection
+            allowance_facet["stake_summary"] = stake_mod.chip(allowance.get("stake"))
+
     return {
         "runner": _runner_block(
             runner_name,

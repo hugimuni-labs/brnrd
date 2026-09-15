@@ -398,6 +398,7 @@ INTERNAL_SOURCES: frozenset[str] = frozenset({
     "dispatch_message",
     "fold",
     "init",
+    "mark",
     "respawn",
     "schedule",
     "spawn",

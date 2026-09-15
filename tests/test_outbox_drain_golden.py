@@ -508,6 +508,74 @@ def _scenario_topic_verb_typo_dropped(_inbox, outbox, _own):
     _write(outbox, "topic.md", "---\ntopic: rename the-loom the-weave\n---\nplaces: [src/**]\n")
 
 
+# ── move 4b: the mark and the stake ────────────────────────────────────
+# Captured on `brr/the-mark-and-the-stake`: `main` refused all three keys as
+# "not yet", so there was no behaviour to freeze — these pin what 4b made.
+
+_BENCH_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+
+
+def _bench_file(outbox: Path, *, place: str = "src/brr/daemon.py") -> Path:
+    bench = outbox.parents[2] / "home" / "bench" / "Gurio__brr" / place
+    bench.mkdir(parents=True, exist_ok=True)
+    path = bench / f"{_BENCH_COMMIT}.md"
+    path.write_text(
+        f"---\nplace: {place}\ncommit: {_BENCH_COMMIT}\nquestion: where?\n"
+        "made_at: 2026-09-15T02:00:00Z\n---\nthe fold\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _scenario_mark_keep(_inbox, outbox, _own):
+    _bench_file(outbox)
+    _write(outbox, "mark.md", f"---\nmark: keep Gurio__brr/src/brr/daemon.py/{_BENCH_COMMIT}\n---\n")
+
+
+def _scenario_mark_drop(_inbox, outbox, _own):
+    path = _bench_file(outbox)
+    _write(outbox, "mark.md", f"---\nmark: drop {path}\n---\n")
+
+
+def _scenario_mark_outside_the_bench(_inbox, outbox, _own):
+    _bench_file(outbox)
+    _write(outbox, "mark.md", "---\nmark: keep ../surface/topics/x\n---\n")
+
+
+def _scenario_mark_promotion_reply(inbox, outbox, _own):
+    path = _bench_file(outbox)
+    protocol.create_event(
+        inbox, "mark", "keep src/brr/daemon.py — promote this fold to a kb page",
+        conversation_key="telegram:42:", focus_place="src/brr/daemon.py",
+        focus_bench_path=str(path), mark_verdict="keep",
+    )
+    ask = sorted(inbox.glob("*.md"))[-1].stem
+    _write(outbox, "reply.md", f"---\nevent: {ask}\npage: repos/x/the-drain.md\n---\nwritten\n")
+
+
+def _scenario_stake_refuse(inbox, outbox, own):
+    event = protocol._read_event(inbox / f"{own}.md")
+    protocol.update_event_meta(event, stake="5%")
+    _write(outbox, "refuse.md", "---\nstake: refuse\n---\nthe ask is a one-liner; no stake needed\n")
+
+
+def _scenario_stake_amount_from_the_seat(_inbox, outbox, _own):
+    _write(outbox, "stake.md", "---\nstake: 8%\n---\nraising myself\n")
+
+
+def _scenario_cut_at_alone(_inbox, outbox, _own):
+    _write(outbox, "cut-at.md", "---\ncut-at: 9%\n---\n")
+
+
+def _scenario_stake_on_spawn(_inbox, outbox, _own):
+    report = outbox.parents[2] / "child-report.md"
+    _write(
+        outbox, "spawn.md",
+        f"---\nspawn: true\nshell: claude\nbranch: brr/child\nreport: {report}\n"
+        "stake: 5%\n---\nthe child's task\n",
+    )
+
+
 SCENARIOS: dict[str, dict[str, Any]] = {
     "event_reply_with_also": {"stage": _scenario_event_reply_with_also, "with_account": True},
     "note": {"stage": _scenario_note},
@@ -569,6 +637,15 @@ SCENARIOS: dict[str, dict[str, Any]] = {
     "topic_cut_bolt": {"stage": _scenario_topic_cut_bolt, "with_account": True},
     "topic_spawn_inherits": {"stage": _scenario_topic_spawn_inherits, "with_account": True},
     "topic_verb_typo_dropped": {"stage": _scenario_topic_verb_typo_dropped, "with_account": True},
+    # Move 4b (captured on its own branch — see the block above).
+    "mark_keep": {"stage": _scenario_mark_keep, "with_account": True},
+    "mark_drop": {"stage": _scenario_mark_drop, "with_account": True},
+    "mark_outside_the_bench": {"stage": _scenario_mark_outside_the_bench, "with_account": True},
+    "mark_promotion_reply": {"stage": _scenario_mark_promotion_reply, "with_account": True},
+    "stake_refuse": {"stage": _scenario_stake_refuse, "with_account": True},
+    "stake_amount_from_the_seat": {"stage": _scenario_stake_amount_from_the_seat},
+    "cut_at_alone": {"stage": _scenario_cut_at_alone},
+    "stake_on_spawn": {"stage": _scenario_stake_on_spawn},
 }
 
 

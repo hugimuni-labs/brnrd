@@ -766,6 +766,16 @@ def build(inputs: HUDInputs) -> HUD:
     if isinstance(pacing_status, dict) and starvation_facet_input is not None:
         pacing_status = dict(pacing_status)
         pacing_status["starvation"] = starvation_facet_input
+    # The stake (move 4b): armed from the waking event or a message on the
+    # thread, metered off the seat's own reading `_collect_allowance_facet`
+    # just wrote, and at its cut-at stamps the `stake_cut` hold the worker
+    # tail finalizes. Rides the allowance facet — one instrument, one facet.
+    await_state, stake_row = daemon._stake_facet(
+        task, await_state, cfg, events, outbox_dir,
+    )
+    if stake_row is not None and isinstance(allowance_facet_input, dict):
+        allowance_facet_input = dict(allowance_facet_input)
+        allowance_facet_input["stake"] = stake_row
     coexisting_snapshot: list[dict[str, object]] | None = None
     if brr_dir is not None:
         try:

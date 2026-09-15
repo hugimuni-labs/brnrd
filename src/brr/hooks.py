@@ -2076,6 +2076,11 @@ def _allowance_chip(resources: dict[str, Any]) -> str | None:
     tokens, spent = facet.get("tokens"), facet.get("spent")
     if tokens is None or spent is None:
         return None
+    if _allowance_scope(resources) == "resident" and facet.get("stake_summary"):
+        # Move 4b: a stake on the seat is the budget the user set for this
+        # ask — it reads like one, in the unit they gave (`stake 1.1m/5% ·
+        # 22%`). The seat's total stays on the `me` chip.
+        return str(facet["stake_summary"])
     if _allowance_scope(resources) == "resident" and not facet.get("explicit"):
         return f"spend {allowance.format_tokens(spent)} · {_resident_pace(resources)}"
     return f"spend {allowance.format_tokens(spent)}/{allowance.format_tokens(tokens)}"
@@ -2152,6 +2157,23 @@ def _allowance_directive(resources: dict[str, Any]) -> tuple[str | None, str]:
     if scope == "resident" and not facet.get("explicit"):
         return None, gate_text
     return allowance.directive_line(spent, facet.get("tokens")), gate_text
+
+
+def _stake_directive(resources: dict[str, Any]) -> tuple[str | None, str]:
+    """The one-shot line at the stake's cut-at, plus its change-gate key.
+
+    Fires once when the seat's stake reads ``cut`` (the frame has stamped the
+    ``stake_cut`` hold for this turn's end), silent again until a raise moves
+    the cut-at. Same idiom as :func:`_allowance_directive`.
+    """
+    facet = resources.get("allowance") if isinstance(resources, dict) else None
+    facet = facet if isinstance(facet, dict) else {}
+    row = facet.get("stake")
+    if not isinstance(row, dict) or row.get("state") != "cut":
+        return None, ""
+    from . import stake as stake_mod
+
+    return stake_mod.directive_line(row), f"cut:{row.get('cut_at_tokens')}"
 
 
 def _draws_chip(resources: dict[str, Any]) -> str | None:
@@ -4057,6 +4079,12 @@ def _render_bar(
         or last_chips.get("allowance_directive") != allowance_gate_text
     ):
         details.append(allowance_line)
+    stake_line, stake_gate_text = _stake_directive(resources)
+    if stake_line and (
+        last_chips is None
+        or last_chips.get("stake_directive") != stake_gate_text
+    ):
+        details.append(stake_line)
 
     # The card's delta as mail (move 5b, design-the-loom §19.2) — replaces
     # the `card ## Now: last written N acts ago` nudge. The frame drafts the
@@ -4098,6 +4126,7 @@ def _render_bar(
         # clear/update pair above rather than through it; persisted here so
         # next boundary's *last_chips* carries the gate forward.
         rendered_chips["allowance_directive"] = allowance_gate_text
+        rendered_chips["stake_directive"] = stake_gate_text
         # `notices_detail`/`card_detail` (w-34, 2026-09-11): same idiom, one
         # per DELTA sign whose *detail line* needs its own change-gate
         # independent of the chip's — written here, after the clear above,
@@ -7491,12 +7520,26 @@ def _boundary_readings(
             except ValueError:
                 pass
 
+    spend: dict[str, Any] = {
+        "allowance_used": _facet_int(facet.get("spent")),
+        "allowance": _facet_int(facet.get("tokens")),
+    }
+    # Move 4b: while a stake is on the run, every boundary row carries what
+    # it has spent against it — tokens and window share — beside the seat's
+    # own allowance reading. Absent otherwise, like the portal facet's key.
+    stake_row = facet.get("stake")
+    if isinstance(stake_row, dict):
+        spend["stake"] = {
+            "state": stake_row.get("state"),
+            "spent": _facet_int(stake_row.get("spent")),
+            "spent_share_pct": stake_row.get("spent_share_pct"),
+            "tokens": _facet_int(stake_row.get("tokens")),
+            "share_pct": stake_row.get("share_pct"),
+            "cut_at_tokens": _facet_int(stake_row.get("cut_at_tokens")),
+        }
     return {
         "ctx": {"tokens_after": tokens_after, "delta": delta},
-        "spend": {
-            "allowance_used": _facet_int(facet.get("spent")),
-            "allowance": _facet_int(facet.get("tokens")),
-        },
+        "spend": spend,
         "quota": quota,
     }
 

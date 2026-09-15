@@ -6515,7 +6515,8 @@ def test_every_emitted_chip_is_classified():
         wait_idle=False,
     )
     assert line is not None
-    # `allowance_directive` and `face` are documented to never appear in
+    # `allowance_directive` (and move 4b's `stake_directive`, the same gate
+    # for the stake's cut-at line) and `face` are documented to never appear in
     # `segments` itself (one gates a detail line, the other names the
     # preamble once on change — neither is a bar chip) but both are still
     # persisted into `rendered_chips` for the next boundary's change-gate —
@@ -6527,7 +6528,7 @@ def test_every_emitted_chip_is_classified():
     # threshold-crossing rule — never a chip themselves, just the narrowing
     # half of `_due` persisted alongside it.
     emitted = set(rendered) - {
-        "allowance_directive", "face", "notices_detail", "card_detail",
+        "allowance_directive", "stake_directive", "face", "notices_detail", "card_detail",
     } - {f"{key}__band" for key in hooks._VITAL_BAND_KEYS} - {
         f"{key}__raw" for key in hooks._VITAL_BAND_KEYS
     }
