@@ -1,4 +1,49 @@
 {
+ "attempts": [
+  {
+   "attempt": "1",
+   "extra_runner_args": [
+    "-c",
+    "hooks.PostToolUse=[{hooks=[{type=\"command\",command=\"brnrd hook post-tool\"}]}]",
+    "-c",
+    "hooks.Stop=[{hooks=[{type=\"command\",command=\"brnrd hook stop\"}]}]",
+    "-c",
+    "hooks.SessionStart=[{hooks=[{type=\"command\",command=\"brnrd hook session-start\"}]}]"
+   ],
+   "runner": "codex"
+  },
+  {
+   "attempt": "2",
+   "extra_runner_args": [
+    "-c",
+    "hooks.PostToolUse=[{hooks=[{type=\"command\",command=\"brnrd hook post-tool\"}]}]",
+    "-c",
+    "hooks.Stop=[{hooks=[{type=\"command\",command=\"brnrd hook stop\"}]}]",
+    "-c",
+    "hooks.SessionStart=[{hooks=[{type=\"command\",command=\"brnrd hook session-start\"}]}]"
+   ],
+   "runner": "codex"
+  }
+ ],
+ "boundaries": [
+  {
+   "attempt": 1,
+   "kind": "retry",
+   "last_failure": null,
+   "next_last_failure": null
+  },
+  {
+   "attempt": 2,
+   "kind": "completed",
+   "last_failure": null,
+   "next_last_failure": null
+  },
+  {
+   "attempt": 2,
+   "finalize": "completed",
+   "last_failure": null
+  }
+ ],
  "event": {
   "repo_label": "<TMP>",
   "run_id": "<RUN>",

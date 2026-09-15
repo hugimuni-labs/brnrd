@@ -68,7 +68,10 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
     runner_name = a.lane.name
     runner_meta = a.lane.meta
     quota_summary = a.lane.quota_summary
-    extra_runner_args = a.lane.extra_args
+    # This attempt's mount, and only this attempt's: an attempt that does not
+    # mount (mount off, native resume, a mount that failed closed) resumes
+    # nothing — never the seed the previous attempt forged.
+    resume_args: list[str] = []
     run_hooks_installed = a.lane.hooks_installed
     runner_catalog = a.lane.catalog
     quality_escalation = a.lane.quality_escalation
@@ -297,10 +300,7 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
                 # the seed into the VM's real HOME at invoke time.
                 home=env_backend.session_seed_home(env_ctx),
             )
-            extra_runner_args = [
-                *transcript.resume_argv(session_id),
-                *extra_runner_args,
-            ]
+            resume_args = transcript.resume_argv(session_id)
             print(f"[brnrd] boot mounted as transcript: session {session_id}")
         except Exception as exc:  # noqa: BLE001 — fail closed, never silently
             # The mounted blocks have already left the prose. If the mount did
@@ -406,7 +406,7 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
                 a.lane,
                 meta=runner_meta,
                 quota_summary=quota_summary,
-                extra_args=extra_runner_args,
+                resume_args=resume_args,
             ),
             prompt_mode="normal",
             fallback_notice=None,

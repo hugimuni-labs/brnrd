@@ -62,7 +62,10 @@ def boundary(p: Prepared, s: Streamed) -> Boundary:
     quality_escalation = a.lane.quality_escalation
     retries_used = a.retries_used
     attempted_runners = a.attempted_runners
-    last_failure = a.last_failure
+    # This attempt's failure, and only this attempt's (move 3b): an earlier
+    # attempt's failure is history (``a.failures``), never the reading a
+    # clean — or differently failed — attempt ends the run on.
+    last_failure: dict[str, object] | None = None
     if result.trace_dir:
         trace_dirs.append(str(result.trace_dir.relative_to(brr_dir)))
     stop_control = daemon._stopped_run_control(eid)
@@ -72,7 +75,7 @@ def boundary(p: Prepared, s: Streamed) -> Boundary:
         # fallback machinery, which would relaunch the killed work.
         return Boundary(
             kind="stopped",
-            attempt=replace(a, last_failure=last_failure),
+            attempt=replace(a, last_failure=None),
             stop_control=stop_control,
         )
     attempt_failure_kind: str | None = None
@@ -126,6 +129,11 @@ def boundary(p: Prepared, s: Streamed) -> Boundary:
                 }
                 attempt_failure_kind = str(last_failure["failure_kind"])
     daemon._record_runner_auth_health(repo_root, runner_choice, attempt_failure_kind)
+    failures = (
+        [*a.failures, {"attempt": attempt, **last_failure}]
+        if last_failure is not None else list(a.failures)
+    )
+    ended = replace(a, last_failure=last_failure, failures=failures)
 
     # Detect a fresh commit on the worktree branch before finalize runs
     # — finalize tears the worktree down on success, so this read has
@@ -342,7 +350,7 @@ def boundary(p: Prepared, s: Streamed) -> Boundary:
             # no double-publish.
             return Boundary(
                 kind="hold",
-                attempt=replace(a, last_failure=last_failure),
+                attempt=ended,
                 hold_spec=pending_hold,
                 terminal_reply=terminal_reply,
                 success_signal=signal,
@@ -350,7 +358,7 @@ def boundary(p: Prepared, s: Streamed) -> Boundary:
             )
         return Boundary(
             kind="completed",
-            attempt=replace(a, last_failure=last_failure),
+            attempt=ended,
             terminal_reply=terminal_reply,
             success_signal=signal,
             has_new_commit=has_new_commit,
@@ -366,7 +374,7 @@ def boundary(p: Prepared, s: Streamed) -> Boundary:
         # unchanged to AUTO_FALLBACK_FAILURES further down.
         return Boundary(
             kind="hold",
-            attempt=replace(a, last_failure=last_failure),
+            attempt=ended,
             hold_spec=hold_spec,
         )
     retry_reason = result.retry_reason()
@@ -466,13 +474,14 @@ def boundary(p: Prepared, s: Streamed) -> Boundary:
         )
         return Boundary(
             kind="retry",
-            attempt=replace(a, last_failure=last_failure),
+            attempt=ended,
             next_attempt=replace(
                 a,
                 n=attempt + 1,
                 retries_used=retries_used,
                 prompt_mode=prompt_mode,
-                last_failure=last_failure,
+                last_failure=None,
+                failures=failures,
             ),
         )
     if fallback_runner_name:
@@ -529,11 +538,9 @@ def boundary(p: Prepared, s: Streamed) -> Boundary:
         daemon._announce_runner_substitution(
             responses_dir, eid, previous_runner, runner_name, failure_kind,
         )
-        reached = replace(a, last_failure=last_failure)
-        last_failure = None
         return Boundary(
             kind="fallback",
-            attempt=reached,
+            attempt=ended,
             next_attempt=Attempt(
                 n=attempt + 1,
                 lane=Lane(
@@ -552,7 +559,8 @@ def boundary(p: Prepared, s: Streamed) -> Boundary:
                 attempted_runners=attempted_runners,
                 prompt_mode=prompt_mode,
                 fallback_notice=fallback_notice,
-                last_failure=last_failure,
+                last_failure=None,
+                failures=failures,
             ),
         )
     # Nothing left to try: a timeout, an unrecognised non-zero exit, or a
@@ -561,7 +569,7 @@ def boundary(p: Prepared, s: Streamed) -> Boundary:
     # the captured error up to the gate.
     return Boundary(
         kind="exhausted",
-        attempt=replace(a, last_failure=last_failure),
+        attempt=ended,
         relay_candidate=relay_candidate,
         relay_plan=relay_plan,
     )

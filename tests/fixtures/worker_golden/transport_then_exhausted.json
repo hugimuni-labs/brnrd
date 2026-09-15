@@ -11,41 +11,68 @@
     "hooks.SessionStart=[{hooks=[{type=\"command\",command=\"brnrd hook session-start\"}]}]"
    ],
    "runner": "codex"
+  },
+  {
+   "attempt": "2",
+   "extra_runner_args": [
+    "-c",
+    "hooks.PostToolUse=[{hooks=[{type=\"command\",command=\"brnrd hook post-tool\"}]}]",
+    "-c",
+    "hooks.Stop=[{hooks=[{type=\"command\",command=\"brnrd hook stop\"}]}]",
+    "-c",
+    "hooks.SessionStart=[{hooks=[{type=\"command\",command=\"brnrd hook session-start\"}]}]"
+   ],
+   "runner": "codex"
   }
  ],
  "boundaries": [
   {
    "attempt": 1,
-   "kind": "completed",
+   "kind": "retry",
+   "last_failure": {
+    "codex_task_error": null,
+    "error": "API Error: Connection closed mid-response. The response above may be incomplete.",
+    "exit_code": 1,
+    "failure_kind": "transport_error",
+    "timed_out": false
+   },
+   "next_last_failure": null
+  },
+  {
+   "attempt": 2,
+   "kind": "exhausted",
    "last_failure": null,
    "next_last_failure": null
   },
   {
-   "attempt": 1,
-   "finalize": "completed",
+   "attempt": 2,
+   "finalize": "exhausted",
    "last_failure": null
   }
  ],
  "event": {
   "repo_label": "<TMP>",
   "run_id": "<RUN>",
-  "run_outcome": null,
+  "run_outcome": "error",
   "status": "done"
  },
  "hold_active": false,
- "inbox_file": "---\nid: evt-close\nstatus: done\nsource: telegram\ntrust_tier: owner\nrun_id: <RUN>\nrepo_label: <TMP>\n---\nship it\n",
+ "inbox_file": "---\nid: evt-transport-exhausted\nstatus: done\nsource: telegram\ntrust_tier: owner\nrun_id: <RUN>\nrepo_label: <TMP>\nrun_outcome: error\n---\nbig\n",
  "log": [
-  "[brnrd] run <RUN> (event evt-close): env=worktree",
-  "[brnrd] worker evt-close: installed codex hook config via argv",
-  "[brnrd] worker evt-close: attempt 1",
-  "[brnrd] pause-on-message: evt-close attempt 1 runner 'codex' is not claude — no-op (unmeasured cap behaviour, named non-goal)",
-  "[brnrd] worker evt-close: response ready (current_reply)",
-  "[brnrd] worker evt-close: terminal stream is this run's only delivery — the fallback net carried it, not a route the run chose"
+  "[brnrd] run <RUN> (event evt-transport-exhausted): env=worktree",
+  "[brnrd] worker evt-transport-exhausted: installed codex hook config via argv",
+  "[brnrd] worker evt-transport-exhausted: attempt 1",
+  "[brnrd] pause-on-message: evt-transport-exhausted attempt 1 runner 'codex' is not claude — no-op (unmeasured cap behaviour, named non-goal)",
+  "[brnrd] worker evt-transport-exhausted: runner error: mock failed (exit 1): API Error: Connection closed mid-response. The response above may be incomplete.",
+  "[brnrd] worker evt-transport-exhausted: transport failure mid-response: the model connection dropped before the turn completed, retrying...",
+  "[brnrd] worker evt-transport-exhausted: attempt 2",
+  "[brnrd] worker evt-transport-exhausted: gave up after 2 attempt(s)",
+  "[brnrd] salvage: branch unresolvable for <RUN> (no branch or resolvable HEAD in <TMP>: fatal: not a git repository (or any of the parent directories): .git); no branch to publish"
  ],
  "packets": [
   {
    "payload": {
-    "event_id": "evt-close",
+    "event_id": "evt-transport-exhausted",
     "source": "telegram"
    },
    "type": "event_received"
@@ -53,7 +80,7 @@
   {
    "payload": {
     "error": null,
-    "event_id": "evt-close",
+    "event_id": "evt-transport-exhausted",
     "ff_branches": {},
     "run_id": "<RUN>",
     "skipped": {
@@ -66,7 +93,7 @@
   {
    "payload": {
     "env": "worktree",
-    "event_id": "evt-close",
+    "event_id": "evt-transport-exhausted",
     "repo_label": "<TMP>",
     "run_id": "<RUN>",
     "run_state_path": null,
@@ -99,7 +126,7 @@
   },
   {
    "payload": {
-    "event_id": "evt-close",
+    "event_id": "evt-transport-exhausted",
     "flavour": "codex",
     "path": "<argv -c hooks.*>",
     "run_id": "<RUN>"
@@ -109,15 +136,52 @@
   {
    "payload": {
     "attempt": 1,
-    "event_id": "evt-close",
+    "event_id": "evt-transport-exhausted",
     "run_id": "<RUN>"
    },
    "type": "attempt_started"
   },
   {
    "payload": {
+    "attempt": 1,
+    "event_id": "evt-transport-exhausted",
+    "reason": "transport failure mid-response: the model connection dropped before the turn completed",
+    "run_id": "<RUN>",
+    "will_retry": true
+   },
+   "type": "attempt_failed"
+  },
+  {
+   "payload": {
+    "attempt": 2,
+    "event_id": "evt-transport-exhausted",
+    "reason": "transport failure mid-response: the model connection dropped before the turn completed",
+    "run_id": "<RUN>"
+   },
+   "type": "retrying"
+  },
+  {
+   "payload": {
+    "attempt": 2,
+    "event_id": "evt-transport-exhausted",
+    "run_id": "<RUN>"
+   },
+   "type": "attempt_started"
+  },
+  {
+   "payload": {
+    "attempt": 2,
+    "event_id": "evt-transport-exhausted",
+    "reason": "missing required output(s): out.md",
+    "run_id": "<RUN>",
+    "will_retry": false
+   },
+   "type": "attempt_failed"
+  },
+  {
+   "payload": {
     "kind": "response",
-    "path": "<TMP>/.brr/responses/evt-close.md",
+    "path": "<TMP>/.brr/responses/evt-transport-exhausted.md",
     "run_id": "<RUN>"
    },
    "type": "artifact_created"
@@ -125,24 +189,19 @@
   {
    "payload": {
     "run_id": "<RUN>",
-    "stage": "done"
+    "stage": "failed"
    },
    "type": "finalizing"
   },
   {
    "payload": {
-    "committed": false,
-    "event_id": "evt-close",
-    "outbound_messages": 0,
-    "publish_branch": null,
-    "publish_status": null,
-    "replies_current": 0,
-    "replies_other": 0,
-    "respawn_requests": 0,
+    "attempts": 2,
+    "event_id": "evt-transport-exhausted",
+    "failure_kind": "no_output",
     "run_id": "<RUN>",
-    "success_signal": "current_reply"
+    "stage": "run"
    },
-   "type": "done"
+   "type": "failed"
   }
  ],
  "persisted": {
@@ -155,13 +214,13 @@
    "host_dirty_at_dispatch": "[]",
    "host_head_at_dispatch_unavailable": true,
    "kb_base_url": null,
-   "outbox_path": "<TMP>/.brr/outbox/evt-close",
+   "outbox_path": "<TMP>/.brr/outbox/evt-transport-exhausted",
    "pid": "<V>",
    "presence_id": "<V>",
    "repo_label": "<TMP>",
    "resident_allowance_spent": null,
    "resident_allowance_tokens": 20000000,
-   "response_path": "<TMP>/.brr/responses/evt-close.md",
+   "response_path": "<TMP>/.brr/responses/evt-transport-exhausted.md",
    "run_ledger_baseline_runner": "codex",
    "run_state_digest": "{\"delivered\": {\"current\": 0, \"other\": 0, \"outbound\": 0}, \"events\": [], \"produce\": {\"branch\": \"main\", \"counts\": {}, \"issue_actions\": {\"completed\": 0, \"created\": 0, \"unattributed\": 0}, \"known\": true, \"latest_commit\": null, \"pr\": null, \"records\": [{\"kind\": \"note\", \"text\": \"seed unresolvable at 'main'\"}]}, \"scm\": {\"branch\": \"main\", \"known\": true, \"modified_files\": 0, \"unpushed_commits\": 0}}",
    "run_state_digest_seen": true,
@@ -170,9 +229,9 @@
    "runner_shell": "codex",
    "seed_ref": "main",
    "started_at": "<V>",
-   "success_signal": "current_reply",
-   "telegram_chat_id": 10,
-   "terminal_route": "gate-sole",
+   "telegram_chat_id": 22,
+   "topic": null,
+   "topic_unset": true,
    "transitions": [
     {
      "at": "<V>",
@@ -187,13 +246,13 @@
      "by": null,
      "from": "running",
      "tick": null,
-     "to": "done",
-     "why": "runner_completed"
+     "to": "error",
+     "why": "update_status"
     }
    ],
    "trust_tier": "owner"
   },
-  "status": "done",
+  "status": "error",
   "terminal_reply": null
  },
  "portal": {
@@ -228,7 +287,7 @@
   "generated_at": "<V>",
   "heddles": [],
   "inbound": {
-   "current_event": "evt-close",
+   "current_event": "evt-transport-exhausted",
    "current_event_replyable": true,
    "current_event_topic": {
     "confirmed": null,
@@ -272,10 +331,10 @@
   "resource_hold": null,
   "resources": "<resources>",
   "run": {
-   "attempt": 1,
+   "attempt": 2,
    "branch": "brr/<RUN>",
    "env": "worktree",
-   "event_id": "evt-close",
+   "event_id": "evt-transport-exhausted",
    "id": "<RUN>",
    "phase": "finalizing",
    "repo": "<TMP>",
@@ -308,19 +367,19 @@
   "tick": null,
   "version": 1
  },
- "response": "all done",
+ "response": "I couldn't complete this run.\n\nbrr is surfacing this because runner produced no reply after 2 attempt(s); attempt 1 before it: runner connection dropped mid-response: API Error: Connection closed mid-response. The response above may be incomplete..",
  "returned": {
-  "body": "ship it",
+  "body": "big",
   "env": "worktree",
-  "status": "done"
+  "status": "error"
  },
  "shuttle": {
-  "conversation_key": "telegram:10:",
+  "conversation_key": "telegram:22:",
   "key": "<TMP>/.brr",
   "repo_root": "<TMP>",
   "run_id": "<RUN>",
   "since": "<V>",
-  "state": "released",
+  "state": "awake",
   "transitions": [
    {
     "at": "<V>",
@@ -329,16 +388,8 @@
     "tick": null,
     "to": "awake",
     "why": "event_dispatched"
-   },
-   {
-    "at": "<V>",
-    "by": "daemon",
-    "from": "awake",
-    "tick": null,
-    "to": "released",
-    "why": "runner_completed"
    }
   ],
-  "why": "runner_completed"
+  "why": "event_dispatched"
  }
 }
