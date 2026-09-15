@@ -157,3 +157,79 @@ def test_page_routes_over_the_socket(kid_contract):
         listener.shutdown()
         listener.server_close()
         thread.join(timeout=5)
+
+
+# ── the place page grows: gh_url, text, attention ─────────────────────────
+
+
+def _fake_origin(repo: Path, url: str, head: str | None = "trunk") -> None:
+    _write(repo / ".git" / "config", f'[core]\n\tbare = false\n[remote "origin"]\n\turl = {url}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n')
+    if head:
+        _write(repo / ".git" / "refs" / "remotes" / "origin" / "HEAD", f"ref: refs/remotes/origin/{head}\n")
+
+
+def test_place_page_links_github_and_serves_text(machine):
+    repo = machine["repo"]
+    _fake_origin(repo, "git@github.com:acme/widgets.git")
+    _write(repo / "src" / "brr" / "long.py", "".join(f"line {i}\n" for i in range(1, 301)))
+    (repo / "src" / "brr" / "blob.bin").write_bytes(b"\x89PNG\0\0binary")
+    snapshot = state.build(repo, machine["home"], now=NOW)
+    page, read = pages.place_page(repo, machine["home"], "src/brr/real.py", snapshot)
+    assert page["gh_url"] == "https://github.com/acme/widgets/blob/trunk/src/brr/real.py"
+    assert page["text"] == {"from": 1, "to": 1, "total": 1, "binary": False, "text": "print('real')"}
+    assert any(r.endswith(".git/config") for r in read)
+    long, _ = pages.place_page(repo, machine["home"], "src/brr/long.py", snapshot)
+    assert (long["text"]["from"], long["text"]["to"], long["text"]["total"]) == (1, 200, 300)
+    ranged, _ = pages.place_page(repo, machine["home"], "src/brr/long.py", snapshot, text_from=250, text_to=260)
+    assert ranged["text"]["text"].splitlines() == [f"line {i}" for i in range(250, 261)]
+    blob, _ = pages.place_page(repo, machine["home"], "src/brr/blob.bin", snapshot)
+    assert blob["text"] == {"from": None, "to": None, "total": None, "binary": True, "text": None}
+    _fake_origin(repo, "https://gitlab.example/acme/widgets.git")
+    assert pages.place_page(repo, machine["home"], "src/brr/real.py", snapshot)[0]["gh_url"] is None
+
+
+def test_place_page_attention_from_the_beads(machine):
+    snapshot = state.build(machine["repo"], machine["home"], now=NOW)
+    page, _ = pages.place_page(machine["repo"], machine["home"], "src/brr/real.py", snapshot)
+    # `sed -n 1,9p` on a one-line file: clamped to the file as it is
+    assert page["attention"] == [{"from": 1, "to": 1, "kind": "read", "count": 1, "last": iso(NOW - 90)}]
+
+
+@pytest.fixture
+def long_file(machine):
+    _write(machine["repo"] / "src" / "brr" / "long.py", "".join(f"x = {i}\n" for i in range(100)))
+    return machine
+
+
+def _attention(machine, detail, tools=("Bash",)):
+    where = state.locate(machine["repo"], machine["home"])
+    row = {"act": "probe", "detail": detail, "cwd": str(machine["repo"]), "tools": list(tools)}
+    return pages.attention_of_row(row, "src/brr/long.py", where, 100)
+
+
+def test_attention_three_command_shapes_three_ranges(long_file):
+    m = long_file
+    assert _attention(m, "sed -n '10,20p' src/brr/long.py")[0] == [{"from": 10, "to": 20, "kind": "read"}]
+    assert _attention(m, "head -n 5 src/brr/long.py")[0] == [{"from": 1, "to": 5, "kind": "read"}]
+    assert _attention(m, "tail -n 10 src/brr/long.py")[0] == [{"from": 91, "to": 100, "kind": "read"}]  # the last 10 as it is now
+    assert _attention(m, "grep -n needle src/brr/long.py")[0] == [{"from": 1, "to": 100, "kind": "read", "whole": True}]
+    absolute = str(m["repo"] / "src" / "brr" / "long.py")
+    assert _attention(m, absolute, tools=("Read",))[0] == [{"from": 1, "to": 100, "kind": "read", "whole": True}]
+    assert _attention(m, absolute, tools=("Edit",)) == ([], {"read": 0, "edit": 1})  # no range recorded: counted
+    diff = "git diff src/brr/long.py\n+++ b/src/brr/long.py\n@@ -40,3 +40,6 @@ def f():"
+    assert _attention(m, diff)[0] == [{"from": 40, "to": 45, "kind": "edit"}]
+    assert _attention(m, "sed -n 1,5p src/brr/other.py")[0] == []  # another file
+
+
+def test_attention_overlapping_ranges_merge(long_file):
+    ranges = []
+    for detail, at in (("sed -n 10,20p src/brr/long.py", "t1"), ("sed -n 15,30p src/brr/long.py", "t2"),
+                       ("sed -n 31,33p src/brr/long.py", "t3"), ("sed -n 60,70p src/brr/long.py", "t4"),
+                       ("grep -n x src/brr/long.py", "t5")):
+        found, _ = _attention(long_file, detail)
+        ranges += [{**r, "last": at} for r in found]
+    assert pages.merge_ranges(ranges) == [
+        {"from": 10, "to": 33, "kind": "read", "count": 3, "last": "t3"},  # overlapping and touching merge
+        {"from": 60, "to": 70, "kind": "read", "count": 1, "last": "t4"},
+        {"from": 1, "to": 100, "kind": "read", "count": 1, "last": "t5", "whole": True},  # a grep swallows nothing
+    ]

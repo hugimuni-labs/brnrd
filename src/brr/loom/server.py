@@ -247,7 +247,15 @@ class LoomHandler(BaseHTTPRequestHandler):
         elif kind == "item":
             payload, read = pages.item_page(home, arg("id"))
         elif kind == "place":
-            payload, read = pages.place_page(repo_root, home, arg("path"), self.server.cache.payload())
+            try:
+                text_from = int(arg("from")) if arg("from") else None
+                text_to = int(arg("to")) if arg("to") else None
+            except ValueError:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": "from/to must be integers", "read": []}, head=head)
+                return
+            payload, read = pages.place_page(
+                repo_root, home, arg("path"), self.server.cache.payload(), text_from=text_from, text_to=text_to
+            )
         elif kind == "heddle":
             payload, read = pages.heddle_page(home, arg("slug"), self.server.cache.payload())
         else:
