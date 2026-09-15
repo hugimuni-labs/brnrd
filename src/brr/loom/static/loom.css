@@ -455,3 +455,6 @@ a.bench-link:hover,
   margin: 0;
   padding: 4px 9px;
 }
+a.bench-link.receipt {
+  color: #7fcf8a;
+}
