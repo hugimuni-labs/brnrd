@@ -3619,6 +3619,12 @@ def _pending_events_for_agent(
 
     events: list[dict] = []
     now_ts = time.time()
+    topic_home: Path | None = None
+    if not strand and account_context is not None and account_context.enabled:
+        try:
+            topic_home = account.context_home_root(account_context)
+        except Exception:  # noqa: BLE001 - no home reads no topics
+            topic_home = None
     # Lazy, keyed by resolved ``.brr`` dir rather than by source: most
     # events in a drawer are plain "pending" and never touch this, so the
     # presence-dir scan only happens once a "processing" candidate actually
@@ -3693,6 +3699,13 @@ def _pending_events_for_agent(
             # Observation stamp (#1146): only the declared parent's own
             # render of its own completion counts. Best-effort — a failed
             # write here must not drop the event from this wake's own view.
+            # Move 5d: every inbound event a seat sees carries the frame's
+            # topic reading — a proposal, else a suggested new slug — stamped
+            # once, here, where it first reaches the view.
+            if not strand and topic_home is not None:
+                run_topic.stamp_inbound(
+                    topic_home, ev, thread=conversations.conversation_key_for_event(ev) or "",
+                )
             if (
                 observer_run_id
                 and ev.get("source") == "spawn_completed"
@@ -5717,11 +5730,23 @@ def _assign_message_topic(
         scope = run_topic.current_act()
         target = target_event or str(task.event_id or "")
         if scope is not None and replies and target:
-            run_topic.confirm_event(
+            event_path = None
+            if target != task.event_id and scope.resolve_event is not None:
+                found = scope.resolve_event(target)
+                event_path = found.get("_path") if isinstance(found, dict) else None
+            confirmed = run_topic.confirm_event(
                 home, scope.inbox_dir, target, topic, run=task.id, thread=thread,
+                event_path=event_path,
             )
             if target == task.event_id and not task.meta.get(run_topic.META_EVENT_TOPIC):
                 task.meta[run_topic.META_EVENT_TOPIC] = topic
+            # Move 5d: on a seat, the run's `.topic` follows a reply that
+            # confirmed a topic different from it.
+            if confirmed and not scope.is_strand:
+                run_topic.follow_reply(
+                    task, topic, outbox_dir=scope.outbox_dir, event_id=target,
+                    notice=scope.notice,
+                )
     except Exception:  # noqa: BLE001
         return
 

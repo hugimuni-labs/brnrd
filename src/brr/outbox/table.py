@@ -192,7 +192,22 @@ def _act_scope(f: OutboxFile):
             f.ctx.outbox_dir, text, kind=kind, lifetime="run", verb="topic", run=run_id,
         ),
         is_strand=bool(daemon._is_strand(meta)) if isinstance(meta, dict) else False,
+        resolve_event=_event_resolver(f),
     ))
+
+
+def _event_resolver(f: OutboxFile):
+    """Move 5d: ``event id → the pending event`` across every drawer this
+    run addresses — the same resolution an ``event:`` reply gets."""
+    sources = list(f.ctx.address_sources or [])
+
+    def resolve(event_id: str):
+        if not sources:
+            return None
+        event, _responses, _ambiguous = daemon._resolve_event_target(sources, event_id)
+        return event
+
+    return resolve
 
 
 def _dispatch(f: OutboxFile) -> list[Handled]:

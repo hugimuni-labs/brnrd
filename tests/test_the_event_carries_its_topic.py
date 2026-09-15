@@ -153,13 +153,17 @@ def test_the_proposal_is_the_best_signature_match(tmp_path):
     assert heddles.propose(home, "a letter about #1975") == ("the-post", "signature")
 
 
-def test_the_proposal_falls_back_to_the_thread_then_none(tmp_path):
+def test_the_proposal_falls_back_to_the_thread_then_a_suggestion_then_none(tmp_path):
     home = tmp_path / "home"
     _topic(home, "the-loom", words=("loom",))
-    assert heddles.propose(home, "nothing matches here", thread="telegram:42:") == (None, "none")
+    # move 5d: no match and no thread ⇒ a new slug is suggested from the text
+    assert heddles.propose(home, "nothing matches here", thread="telegram:42:") == (
+        "nothing-matches", "suggested")
     heddles.record_thread_topic(home, "telegram:42:", "the-loom")
     assert heddles.propose(home, "nothing matches here", thread="telegram:42:") == ("the-loom", "thread")
-    assert heddles.propose(tmp_path / "empty-home", "loom", thread="telegram:42:") == (None, "none")
+    assert heddles.propose(tmp_path / "empty-home", "loom", thread="telegram:42:") == ("loom", "suggested")
+    assert heddles.propose(home, "???", thread="telegram:99:") == (None, "none")
+    assert heddles.propose(None, "loom") == (None, "none")
 
 
 def test_prepare_stamps_the_proposal_on_the_event_and_writes_nothing_without_one(tmp_path):
@@ -183,11 +187,18 @@ def test_prepare_stamps_the_proposal_on_the_event_and_writes_nothing_without_one
     assert protocol._read_event(hit_path)["topic_proposed_by"] == "signature"
     assert task.meta["topic_proposed"] == "the-loom"
 
+    # move 5d: a miss carries a suggested new slug, never a proposal
     miss_path = protocol.create_event(inbox, "telegram", "unrelated")
-    before = miss_path.read_text(encoding="utf-8")
     miss = protocol._read_event(miss_path)
     prepare._stamp_topic_proposal(miss, Run.from_event(miss), ctx, brr_dir, "telegram:99:")
-    assert miss_path.read_text(encoding="utf-8") == before
+    assert protocol._read_event(miss_path)["topic_suggested"] == "unrelated"
+    assert "topic_proposed" not in protocol._read_event(miss_path)
+
+    blank_path = protocol.create_event(inbox, "telegram", "???")
+    before = blank_path.read_text(encoding="utf-8")
+    blank = protocol._read_event(blank_path)
+    prepare._stamp_topic_proposal(blank, Run.from_event(blank), ctx, brr_dir, "telegram:98:")
+    assert blank_path.read_text(encoding="utf-8") == before
 
     # A strand's dispatch arrives assigned and is never proposed for.
     assigned_path = protocol.create_event(inbox, "spawn", "the loom", topic="the-loom")
@@ -532,7 +543,10 @@ def test_topic_show_renders_the_index_into_the_bench_and_asks_the_seat(tmp_path,
     heddles.append_index(home, "the-loom", kind="strand", ref=strand.stem, run="run-seat")
     heddles.append_index(home, "the-loom", kind="produce", ref="d" * 40, run="run-seat")
     task = got["task"]
-    (got["outbox"] / "show.md").write_text("---\ntopic: show the-loom since 1d\n---\n", encoding="utf-8")
+    # move 5d: every kind, heads, and the page asked for (bench defaults to false)
+    (got["outbox"] / "show.md").write_text(
+        "---\ntopic: show the-loom since 1d kinds: messages, strands, produce, events "
+        "depth: heads bench: true\n---\n", encoding="utf-8")
     emit = daemon._WorkerEmit(brr_dir=got["brr_dir"], conversation_key="telegram:42:", event_id=task.event_id)
     ctx = account.resolve_context(tmp_path / "repo", {"home.path": str(tmp_path / "home"), "repo.label": "o/r"})
     assert daemon._drain_outbox(emit, task, got["brr_dir"] / "responses", task.event_id, got["outbox"],
@@ -554,7 +568,8 @@ def test_topic_show_renders_the_index_into_the_bench_and_asks_the_seat(tmp_path,
     from brr import topic_show
 
     printed = topic_show.render(home, "the-loom", since="1d", inbox_dirs=[got["inbox"]],
-                                runs_dirs=[got["brr_dir"] / "runs"])
+                                runs_dirs=[got["brr_dir"] / "runs"],
+                                kinds=("messages", "strands", "produce", "events"), depth="heads")
     assert text.endswith(printed)
 
 

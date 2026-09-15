@@ -2937,6 +2937,9 @@ def _event_header(
     if age:
         parts.append(age)
     parts.append(_fmt_body_size(size))
+    topic_line = run_topic.event_topic_line(ev)
+    if topic_line:
+        parts.append(topic_line)
     if changed:
         parts.append("Δ changed")
     if _reaches_nobody(source):
