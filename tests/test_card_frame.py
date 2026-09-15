@@ -115,13 +115,15 @@ def test_a_line_naming_two_prs_waits_for_both(h):
     h.run(T0)
     h.set_forge([{"number": 10, "state": "MERGED", "branch": "brr/a", "merged_at": iso(T0 + 5)}])
     h.run(T0 + 10)
-    assert h.read_card() == "- [ ] land #10 and #11\n"
+    assert card_frame.card_halves(h.read_card())[0] == "- [ ] land #10 and #11"
     h.set_forge([
         {"number": 10, "state": "MERGED", "branch": "brr/a", "merged_at": iso(T0 + 5)},
         {"number": 11, "state": "MERGED", "branch": "brr/b", "merged_at": iso(T0 + 15)},
     ])
     h.run(T0 + 20)
-    assert h.read_card() == "- [x] land #10 and #11\n"
+    weaver, frame = card_frame.card_halves(h.read_card())
+    assert weaver == "- [x] land #10 and #11"
+    assert "- merges: #10 · #11" in frame  # the forge's merges of the card's PRs (§19.3)
 
 
 def test_an_open_pr_and_an_unreturned_strand_tick_nothing(h):

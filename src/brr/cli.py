@@ -5244,11 +5244,23 @@ def _hud_card_halves(outbox_dir: Path, payload: dict) -> str:
     except (OSError, ValueError):
         live = {}
     events = [e for e in (live.get("events") or []) if isinstance(e, dict)] if isinstance(live, dict) else []
+    produce_rows = hud_mod.read_produce_ledger(brr_dir, run_id)
+    relics = card_frame._read_jsonl(outbox_dir / ".relics.jsonl")
+    try:
+        forge = json.loads((brr_dir / "forge-pr-state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        forge = {}
+    forge_rows = [r for r in (forge.get("prs") or []) if isinstance(r, dict)] if isinstance(forge, dict) else []
+    facts = card_frame.gather_facts(produce_rows=produce_rows, relics=relics, forge_prs=forge_rows)
     lines = card_frame.build_ledger(
         payload,
-        produce_rows=hud_mod.read_produce_ledger(brr_dir, run_id),
-        relics=card_frame._read_jsonl(outbox_dir / ".relics.jsonl"),
+        produce_rows=produce_rows,
+        relics=relics,
         events=events,
+        merged=card_frame.ledger_merges(
+            facts, card_text=card_text, produce_rows=produce_rows, relics=relics,
+            meta={"branch_name": (payload.get("run") or {}).get("branch")}, run_id=run_id,
+        ),
     )
     weaver, _ = card_frame.card_halves(card_text)
     said_span = card_frame._section_span(card_text, "## Said")

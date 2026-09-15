@@ -129,6 +129,38 @@ def test_spend_reads_the_allowance_and_the_stake(facet, expected):
     assert card_frame.build_ledger({"resources": {"allowance": facet}}) == [expected]
 
 
+def test_forge_merges_join_the_land_rows_in_merge_order():
+    merged = {1976: T0 + 20, 1990: T0 + 60, 1970: T0 + 1}
+    assert card_frame.build_ledger({}, produce_rows=PRODUCE_ROWS, merged=merged) == [
+        "- merges: #1970 · #1975 → a06f566 · #1976 → 1c60878 · #1990",
+    ]
+
+
+def test_ledger_merges_are_the_cards_since_the_run_began():
+    began = card_frame.run_started("run-260915-1130-zgtd")
+    assert card_frame._iso(began) == "2026-09-15T11:30:00Z"
+    facts = card_frame.gather_facts(forge_prs=[
+        {"number": 1983, "state": "MERGED", "branch": "brr/a", "merged_at": card_frame._iso(began + 60)},
+        {"number": 1975, "state": "MERGED", "branch": "brr/b", "merged_at": card_frame._iso(began - 86400)},
+        {"number": 1999, "state": "MERGED", "branch": "brr/stranger", "merged_at": card_frame._iso(began + 60)},
+        {"number": 1984, "state": "OPEN", "branch": "brr/c"},
+    ])
+    card = "- [x] converge #1983\n- [ ] follow up on #1975\n- [ ] #1984\n"
+    merged = card_frame.ledger_merges(facts, card_text=card, produce_rows=[], relics=[],
+                                      meta={}, run_id="run-260915-1130-zgtd")
+    assert merged == {1983: began + 60}
+    assert card_frame.ledger_merges(facts, card_text=card, produce_rows=[], relics=[],
+                                    meta={}, run_id="not-a-run-id") == {}
+
+
+def test_a_long_title_is_cut_at_a_word():
+    hud = {"resources": {"coexisting_runs": {"owned_children": [{"run_id": "run-260915-1130-1v30",
+        "title": "move 5e — the message that spans topics: an inbound event stamped into several indexes"}]}}}
+    assert card_frame.build_ledger(hud) == [
+        "- strand live: run-260915-1130-1v30 — move 5e — the message that spans topics: an inbound event…",
+    ]
+
+
 def test_spend_with_no_reading_is_absent():
     facet = {"status": "unimplemented", "spent": None}
     assert card_frame.build_ledger({"resources": {"allowance": facet}}) == []

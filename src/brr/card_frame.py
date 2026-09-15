@@ -73,6 +73,7 @@ _LEDGER_REFS = 5
 _LEDGER_MERGES = 6
 _LEDGER_STRANDS_LIVE = 6
 _LEDGER_STRANDS_DONE = 6
+_LEDGER_TITLE_CHARS = 60
 _OPEN_RE = re.compile(r"^(\s*[-*+]\s+)\[ \](\s+.*)$")
 _DONE_RE = re.compile(r"^(\s*[-*+]\s+)\[[xX]\](\s+.*)$")
 PR_RE = re.compile(r"(?<![\w&])#(\d{1,6})\b")
@@ -450,8 +451,10 @@ def _strand_lines(
             continue
         line = f"- strand live: {ident}"
         title = " ".join(str(child.get("title") or "").split())
+        if len(title) > _LEDGER_TITLE_CHARS:
+            title = title[:_LEDGER_TITLE_CHARS].rsplit(" ", 1)[0].rstrip(" —-·:,") + "…"
         if title:
-            line += f" — {title[:80]}"
+            line += f" — {title}"
         if child.get("status") == "submitted":
             line += " (submitted)"
         live.append(line)
@@ -467,37 +470,76 @@ def _strand_lines(
 
 
 def _merge_line(
-    produce_rows: Iterable[Mapping[str, Any]], relics: Iterable[Mapping[str, Any]],
+    produce_rows: Iterable[Mapping[str, Any]],
+    relics: Iterable[Mapping[str, Any]],
+    merged: Mapping[int, float | None] | None = None,
 ) -> list[str]:
+    """``- merges: #N → sha`` — ``land:`` rows and ``merge`` relics carry the
+    sha; *merged* (the forge cache's merges this card is about, see
+    :func:`ledger_merges`) adds the ones merged by hand, as bare ``#N``."""
     def number(value: object) -> int | None:
         try:
             return int(str(value or "").strip().lstrip("#"))
         except ValueError:
             return None
 
-    stamped: list[tuple[str, int, str]] = []
+    rows: dict[int, tuple[float, str]] = {}  # number → (when, sha)
+
+    def admit(n: int, at: float | None, sha: str) -> None:
+        when = at if at is not None else float("inf")
+        seen = rows.get(n)
+        if seen is None:
+            rows[n] = (when, sha)
+        else:
+            rows[n] = (min(seen[0], when), seen[1] or sha)
+
     for row in produce_rows or ():
-        if not isinstance(row, Mapping) or row.get("verb") != "land":
-            continue
-        n = number(row.get("pr"))
-        if n is not None:
-            stamped.append((str(row.get("at") or ""), n, str(row.get("ref") or row.get("sha") or "")))
-    stamped.sort(key=lambda row: row[0])
-    merges: dict[int, str] = {}
-    for _, n, sha in stamped:
-        merges.setdefault(n, sha)
+        if isinstance(row, Mapping) and row.get("verb") == "land":
+            n = number(row.get("pr"))
+            if n is not None:
+                admit(n, _epoch(row.get("at")), str(row.get("ref") or row.get("sha") or ""))
     for record in relics or ():
-        if not isinstance(record, Mapping) or record.get("kind") != "merge":
-            continue
-        n = number(record.get("pr") or record.get("number"))
-        if n is not None and not merges.get(n):
-            merges[n] = str(record.get("sha") or "")
-    if not merges:
+        if isinstance(record, Mapping) and record.get("kind") == "merge":
+            n = number(record.get("pr") or record.get("number"))
+            if n is not None:
+                admit(n, _epoch(record.get("at")), str(record.get("sha") or ""))
+    for n, at in (merged or {}).items():
+        admit(int(n), at, "")
+    if not rows:
         return []
-    rows = list(merges.items())[-_LEDGER_MERGES:]
+    ordered = sorted(rows.items(), key=lambda kv: (kv[1][0], kv[0]))[-_LEDGER_MERGES:]
     return ["- merges: " + " · ".join(
-        f"#{n} → {sha[:7]}" if sha else f"#{n}" for n, sha in rows
+        f"#{n} → {sha[:7]}" if sha else f"#{n}" for n, (_, sha) in ordered
     )]
+
+
+def run_started(run_id: str) -> float | None:
+    """When a ``run-YYMMDD-HHMM-xxxx`` began (UTC), from its id."""
+    match = re.match(r"^run-(\d{6})-(\d{4})-", str(run_id or ""))
+    if not match:
+        return None
+    try:
+        stamp = _dt.datetime.strptime(match.group(1) + match.group(2), "%y%m%d%H%M")
+    except ValueError:
+        return None
+    return stamp.replace(tzinfo=_dt.timezone.utc).timestamp()
+
+
+def ledger_merges(
+    facts: Facts, *, card_text: str, produce_rows, relics, meta: Mapping[str, Any], run_id: str,
+) -> dict[int, float | None]:
+    """The merges the ledger names beyond its own ``land:`` rows: the ones the
+    delta used to name (:func:`_merge_is_ours` — the card, the run's relics or
+    its own PR/branch), merged since the run began. A card line about a PR
+    merged last week is not this run's merge."""
+    began = run_started(run_id)
+    if began is None:
+        return {}
+    return {
+        n: at for n, at in facts.merged_prs.items()
+        if at is not None and at >= began
+        and _merge_is_ours(n, facts, card_text, produce_rows, relics, meta)
+    }
 
 
 def _spend_line(hud: Mapping[str, Any]) -> list[str]:
@@ -547,6 +589,7 @@ def build_ledger(
     events: Iterable[Mapping[str, Any]] = (),
     heddles: Iterable[Mapping[str, Any]] | None = None,
     since: float | None = None,
+    merged: Mapping[int, float | None] | None = None,
 ) -> list[str]:
     """The ``## Ledger`` block's lines, heading and legend excluded — each part
     only when it has something to say, oldest → newest within a part.
@@ -559,7 +602,9 @@ def build_ledger(
               done: pending ``spawn_completed`` events since *since*
               (the weaver's last card write), id — ``spawn_status``
     merges    ``land:`` rows (``produce.jsonl``) and ``merge`` relics
-              (``.relics.jsonl``), ``#N → sha``
+              (``.relics.jsonl``), ``#N → sha``; plus *merged* — the
+              forge cache's merges of this card's PRs since the run
+              began (:func:`ledger_merges`), ``#N`` (the cache has no sha)
     spend     ``hud.resources.allowance``: the seat's or strand's reading,
               and the stake when one is on (``stake 1.1m/5% · 22%``)
     heddles   *heddles* (else ``hud.heddles``) as the chip prints them
@@ -571,7 +616,7 @@ def build_ledger(
     lines = (
         _produce_lines(hud)
         + _strand_lines(hud, events, since)
-        + _merge_line(produce_rows, relics)
+        + _merge_line(produce_rows, relics, merged)
         + _spend_line(hud)
         + _heddle_line(heddles)
     )
@@ -640,7 +685,7 @@ def _write_card_if_unchanged(path: Path, base: str, text: str) -> bool:
 
 
 def _project_ledger(state, result, *, card_path, card_text, outbox_dir, hud, heddles,
-                    produce_rows, relics, events, since, notice, notices_mod) -> str:
+                    produce_rows, relics, events, since, merged, notice, notices_mod) -> str:
     """Splice the rebuilt ledger into the card; returns the card text now on disk."""
     if not card_text.strip():
         return card_text  # no card yet: the weaver writes it first
@@ -648,7 +693,7 @@ def _project_ledger(state, result, *, card_path, card_text, outbox_dir, hud, hed
         hud = read_portal(outbox_dir)
     lines = build_ledger(
         hud, produce_rows=produce_rows, relics=relics, events=events,
-        heddles=heddles, since=since or None,
+        heddles=heddles, since=since or None, merged=merged,
     )
     present = _section_span(card_text, LEDGER_HEADING) is not None
     readding = False
@@ -871,6 +916,8 @@ def _frame_pass(meta, result, *, outbox_dir, run_dir, repo_root, stats, events, 
         state, result, card_path=card_path, card_text=card_text, outbox_dir=outbox_dir,
         hud=hud, heddles=heddles, produce_rows=produce_rows, relics=relics,
         events=events, since=weaver_at, notice=notice, notices_mod=notices_mod,
+        merged=ledger_merges(facts, card_text=card_text, produce_rows=produce_rows,
+                             relics=relics, meta=meta, run_id=run_id),
     )
     if baseline:
         meta[META_KEY] = state
