@@ -5737,12 +5737,16 @@ def _assign_message_topic(
             if target != task.event_id and scope.resolve_event is not None:
                 found = scope.resolve_event(target)
                 event_path = found.get("_path") if isinstance(found, dict) else None
+            # Move 5e: the answered event is stamped with every topic the
+            # reply's `topic:` list names (the message itself is indexed
+            # under the first alone, above).
+            slugs = scope.topics() or [topic]
             confirmed = run_topic.confirm_event(
-                home, scope.inbox_dir, target, topic, run=task.id, thread=thread,
+                home, scope.inbox_dir, target, slugs, run=task.id, thread=thread,
                 event_path=event_path,
             )
             if target == task.event_id and not task.meta.get(run_topic.META_EVENT_TOPIC):
-                task.meta[run_topic.META_EVENT_TOPIC] = topic
+                task.meta[run_topic.META_EVENT_TOPIC] = " ".join(slugs)
             # Move 5d: on a seat, the run's `.topic` follows a reply that
             # confirmed a topic different from it.
             if confirmed and not scope.is_strand:

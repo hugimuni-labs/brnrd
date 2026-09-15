@@ -36,7 +36,8 @@
       "confirmed": null,
       "proposed": null
     },
-    "events": []
+    "events": [],
+    "unstamped": []
   },
   "knowledge": {
     "kb_base_url": null

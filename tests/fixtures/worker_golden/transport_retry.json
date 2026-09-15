@@ -288,7 +288,16 @@
     "confirmed": null,
     "proposed": null
    },
-   "events": []
+   "events": [],
+   "unstamped": [
+    {
+     "from": "telegram",
+     "id": "evt-transport",
+     "proposed": null,
+     "proposed_by": null,
+     "suggested": null
+    }
+   ]
   },
   "knowledge": {
    "kb_base_url": null
