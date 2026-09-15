@@ -158,6 +158,7 @@ let glitches = [],
   glitchSeed = 1;
 const pings = new Map(),
   pendingPing = new Set();
+let trails = new Map();
 let prForge = null,
   forgeDrop = null;
 let sweepPrev = null,
@@ -1044,6 +1045,9 @@ function receive(next) {
       });
     }
   }
+  // cloth.rows[].trail is kept ready for the sonar's next shape; nothing
+  // draws it yet.
+  trails = new Map(list(state.cloth?.rows).filter((r) => Array.isArray(r.trail)).map((r) => [r.run, r.trail]));
   sourceStatus = dev ? "fixture" : "live";
   renderReceipt();
 }
@@ -1375,6 +1379,97 @@ function itemPage(data) {
   }
   extras(body, ["id", "title", "type", "state", "taken", "refs", "prompt", "body", "metric"]);
 }
+// Attention, read tolerantly until the feed's key settles: a list of
+// {from|start|line, to|end, kind|what, count}, or {read: [...], edit: [...]}
+// with [from, to, count] tuples. Kinds other than read count as edits.
+function attentionBands(raw) {
+  const out = [];
+  const push = (from, to, kind, count) => {
+    from = Number(from);
+    to = Number(to ?? from);
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return;
+    out.push({ from: Math.min(from, to), to: Math.max(from, to), kind: /^read/.test(String(kind || "read")) ? "read" : "edit", count: Number(count) || 1 });
+  };
+  const one = (x, kind) =>
+    Array.isArray(x) ? push(x[0], x[1], kind, x[2]) : x && typeof x === "object" && push(x.from ?? x.start ?? x.line, x.to ?? x.end ?? x.line, x.kind ?? x.what ?? kind, x.count ?? x.n);
+  if (Array.isArray(raw)) raw.forEach((x) => one(x));
+  else if (raw && typeof raw === "object")
+    for (const [kind, ranges] of Object.entries(raw)) if (Array.isArray(ranges)) ranges.forEach((x) => one(x, kind));
+  return out;
+}
+function fileView(body) {
+  const rawText = typeof body.text === "string" ? body.text : typeof body.text?.text === "string" ? body.text.text : null;
+  const bands = attentionBands(body.attention);
+  if (rawText == null && !bands.length) return false;
+  const lines = rawText == null ? [] : rawText.split("\n");
+  const total = Math.max(lines.length, Number(body.line_count ?? body.lines ?? body.text?.total_lines) || 0, ...bands.map((b) => b.to), 1);
+  const picker = element("div", undefined, "range-picker");
+  const from = element("input"),
+    to = element("input");
+  for (const [input, value, label] of [
+    [from, 1, "from line"],
+    [to, total, "to line"],
+  ]) {
+    input.type = "number";
+    input.min = 1;
+    input.max = total;
+    input.value = value;
+    input.setAttribute("aria-label", label);
+  }
+  picker.append(element("span", "lines"), from, element("span", "–"), to, element("span", `of ${total}`, "eyebrow"));
+  receipt.append(picker);
+  const view = element("div", undefined, "file-view");
+  const strip = element("div", undefined, "attention-strip");
+  strip.setAttribute("aria-label", "attention: lines read (bone) and edited (amber)");
+  const pre = element("pre", undefined, "file-text");
+  view.append(strip, pre);
+  receipt.append(view);
+  const heat = new Map();
+  for (const b of bands)
+    for (let n = b.from; n <= Math.min(b.to, lines.length); n++) {
+      const h = heat.get(n) || { read: 0, edit: 0 };
+      h[b.kind] += b.count;
+      heat.set(n, h);
+    }
+  const render = () => {
+    const a = Math.max(1, Math.min(total, Number(from.value) || 1)),
+      z = Math.max(a, Math.min(total, Number(to.value) || total));
+    const frag = document.createDocumentFragment();
+    for (let n = a; n <= Math.min(z, lines.length); n++) {
+      const ln = element("span", undefined, "ln");
+      ln.dataset.n = n;
+      const h = heat.get(n);
+      if (h) ln.classList.add(h.edit ? "edited" : "read");
+      ln.append(element("i", String(n)), document.createTextNode(lines[n - 1] + "\n"));
+      frag.append(ln);
+    }
+    pre.replaceChildren(frag);
+    if (!lines.length) pre.append(element("span", rawText == null ? PENDING : "(empty file)", "pending"));
+  };
+  from.onchange = to.onchange = render;
+  render();
+  const max = Math.max(1, ...bands.map((b) => b.count));
+  for (const b of bands) {
+    const band = element("button", undefined, `band ${b.kind}`);
+    band.type = "button";
+    band.title = `${b.kind} · lines ${b.from}–${b.to} · ${b.count}×`;
+    band.setAttribute("aria-label", band.title);
+    band.style.top = `${((b.from - 1) / total) * 100}%`;
+    band.style.height = `max(2px, ${((b.to - b.from + 1) / total) * 100}%)`;
+    band.style.opacity = (0.3 + 0.7 * (b.count / max)).toFixed(2);
+    band.onclick = () => {
+      if (b.from < Number(from.value) || b.from > Number(to.value)) {
+        from.value = 1;
+        to.value = total;
+        render();
+      }
+      const target = pre.querySelector(`.ln[data-n="${b.from}"]`);
+      if (target) pre.scrollTop = target.offsetTop - pre.offsetTop - 24;
+    };
+    strip.append(band);
+  }
+  return true;
+}
 function placePage(data) {
   const body = page("place", data.path);
   const fixed = /^(forge|wire|shed|crew|clock):$/.test(data.path) ? data.path.slice(0, -1) : null;
@@ -1387,6 +1482,17 @@ function placePage(data) {
   row("knots", body?.knots ?? p?.knots);
   row("last", body?.last ?? p?.last);
   if (fixed === "forge") row("PRs in view", prsInView().map((n) => "#" + n).join(" · ") || "none");
+  if (body?.gh_url) {
+    const a = element("a", "open on GitHub ↗", "bench-link");
+    a.href = body.gh_url;
+    a.target = "_blank";
+    a.rel = "noreferrer";
+    receipt.append(a);
+  } else if (!fixed) pending("the GitHub link");
+  if (!fixed) {
+    section("The file");
+    if (!body || !fileView(body)) pending("text and attention");
+  }
   section("At this place");
   const actionsRow = element("div", undefined, "action-row");
   for (const action of ["fold", "explain", "fix", "test", "split", "read"]) {
@@ -1419,7 +1525,7 @@ function placePage(data) {
     button("keep", actions.keep);
     button("drop", actions.drop);
   } else for (const fold of folds) button(`${fold.path} · ${list(fold.marks).join(", ")}`, () => openFold(fold));
-  extras(body, ["path", "kind", "tree", "heat", "last", "knots", "fold"]);
+  extras(body, ["path", "kind", "tree", "heat", "last", "knots", "fold", "gh_url", "line_count", "lines"]);
 }
 function heddlePages() {
   const shown = list(state.heddles).filter((h) => lifted.has(h.slug));

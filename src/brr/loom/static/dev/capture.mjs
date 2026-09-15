@@ -320,6 +320,48 @@ assert.equal(
   "folds are text, never markup",
 );
 await transport.close();
+// The place page against the attention contract as the steer names it
+// (gh_url · text · attention) — a mocked answer until the feed ships it.
+{
+  const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+  observe(page);
+  const text = Array.from({ length: 240 }, (_, i) => `line ${i + 1}: ${"x".repeat(i % 40)}`).join("\n");
+  await page.route("**/loom/state.json", (r) => r.fulfill({ json: fixture }));
+  await page.route("**/loom/events", (r) => r.fulfill({ contentType: "text/event-stream", body: "" }));
+  await page.route("**/loom/page/place?*", (r) =>
+    r.fulfill({
+      json: {
+        path: "src/brr/loom/static/loom.js",
+        kind: "file",
+        tree: "repo",
+        gh_url: "https://github.com/hugimuni-labs/brnrd/blob/main/src/brr/loom/static/loom.js",
+        text,
+        attention: [
+          { from: 10, to: 40, kind: "read", count: 3 },
+          { from: 120, to: 126, kind: "edit", count: 1 },
+          { from: 200, to: 230, kind: "read", count: 1 },
+        ],
+      },
+    }),
+  );
+  await page.route("**/loom/page/**", (r) => r.fallback());
+  await page.goto(base + "/loom/");
+  await page.waitForTimeout(SETTLE);
+  await page.getByRole("button", { name: "Open place src/brr/loom/static/loom.js", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await page.locator(".attention-strip .band.edit").waitFor();
+  assert.equal(await page.locator(".attention-strip .band").count(), 3);
+  assert.equal(await page.locator("#receipt a[href*='github.com']").count(), 1);
+  await page.locator(".attention-strip .band.edit").click();
+  await page.waitForTimeout(200);
+  const scrolled = await page.locator("pre.file-text").evaluate((el) => el.scrollTop);
+  assert.ok(scrolled > 1000, "a band scrolls the text to its lines");
+  await page.locator(".range-picker input").first().fill("100");
+  await page.locator(".range-picker input").first().dispatchEvent("change");
+  assert.equal(await page.locator("pre.file-text .ln").first().getAttribute("data-n"), "100");
+  await page.screenshot({ path: resolve(output, "contract-page-place-attention.png"), clip: { x: 1340, y: 440, width: 580, height: 640 } });
+  await page.close();
+}
 const ctx = await browser.newContext({
   viewport: { width: 1280, height: 720 },
   reducedMotion: "no-preference",

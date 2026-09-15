@@ -458,3 +458,82 @@ a.bench-link:hover,
 a.bench-link.receipt {
   color: #7fcf8a;
 }
+.range-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+  font-size: 10px;
+  color: #b3a78e;
+}
+.range-picker input {
+  width: 64px;
+  background: #0d0a07;
+  border: 1px solid #3a3328;
+  color: #e8dcc0;
+  padding: 3px 5px;
+  caret-color: #8fd3ff;
+}
+.range-picker input:focus {
+  outline: none;
+  border-color: #8fd3ff88;
+}
+.file-view {
+  position: relative;
+  display: grid;
+  grid-template-columns: 10px 1fr;
+  gap: 6px;
+  height: 360px;
+}
+.attention-strip {
+  position: relative;
+  background: #15110c;
+  border: 1px solid #241f18;
+}
+.attention-strip .band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  padding: 0;
+  border: 0;
+  min-height: 2px;
+}
+.attention-strip .band.read {
+  background: #e8dcc0;
+}
+.attention-strip .band.edit {
+  background: #f2b134;
+  box-shadow: 0 0 6px #f2b13488;
+}
+.attention-strip .band:hover,
+.attention-strip .band:focus-visible {
+  outline: 1px solid #8fd3ff;
+}
+pre.file-text {
+  overflow: auto;
+  margin: 0;
+  background: #0d0a07;
+  border-left: 1px solid #241f18;
+  font-size: 10px;
+  line-height: 1.55;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+pre.file-text .ln {
+  display: block;
+}
+pre.file-text .ln i {
+  display: inline-block;
+  width: 3.5em;
+  padding-right: 8px;
+  text-align: right;
+  font-style: normal;
+  color: #4a4234;
+  user-select: none;
+}
+pre.file-text .ln.read {
+  background: #e8dcc00d;
+}
+pre.file-text .ln.edited {
+  background: #f2b1341a;
+}
