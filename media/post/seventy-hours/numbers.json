@@ -1,0 +1,195 @@
+{
+  "generated_at": "2026-09-15T13:57:40.487766+00:00",
+  "run_window": {
+    "start": "2026-09-12T15:13:00Z",
+    "seat_run_id": "run-260912-1513-7hw5"
+  },
+  "gauge": {
+    "seat_series_points": 727,
+    "seat_series_start": "2026-09-12T15:14:37+00:00",
+    "seat_series_end": "2026-09-15T13:55:06+00:00",
+    "seat_series_start_pct_used": 2.0,
+    "seat_series_end_pct_used": 42.0,
+    "usage_samples_points": 551,
+    "prs_plotted": 27,
+    "source_seat_boundaries": "/Users/gurio/Source/Projects/brnrd/.brr/runs/run-260912-1513-7hw5/boundaries.jsonl",
+    "source_usage_samples": "/Users/gurio/Source/Projects/brnrd/.brr/usage-samples.jsonl",
+    "source_prs": "gh pr list --state merged --search 'merged:>=2026-09-12T15:13:00Z'",
+    "note": "The seat's own boundary log (boundaries.jsonl) carries a weekly-quota reading at every boundary across the full 70h span with no gap larger than ~12 minutes \u2014 including the 09-12->09-14 stretch the shelf page's 'blind weekend' note (sourced from usage-samples.jsonl's 10h retention and per-strand claude-usage-levels.json snapshots, neither of which cover that period) called blind. The per-strand snapshot files the shelf spec assumed exist do not: none of the 31 strand run dirs under .brr/runs/ contain a claude-usage-levels.json. This chart uses the seat's own continuous log instead, which is denser and gap-free; the 'blind weekend' finding does not hold against it."
+  },
+  "days": {
+    "days": [
+      "2026-09-12",
+      "2026-09-13",
+      "2026-09-14",
+      "2026-09-15"
+    ],
+    "messages_per_day": {
+      "2026-09-12": 21,
+      "2026-09-13": 48,
+      "2026-09-14": 17,
+      "2026-09-15": 8
+    },
+    "prs_merged_per_day": {
+      "2026-09-12": 5,
+      "2026-09-13": 7,
+      "2026-09-14": 9,
+      "2026-09-15": 6
+    },
+    "messages_total": 94,
+    "prs_total": 27,
+    "source_messages": "/Users/gurio/Source/Projects/brnrd/.brr/conversations/cloud__telegram__155783668__",
+    "source_prs": "gh pr list --state merged --search 'merged:>=2026-09-12T15:13:00Z'"
+  },
+  "prs_merged_since_run_start": [
+    {
+      "number": 1935,
+      "mergedAt": "2026-09-12T15:37:00Z",
+      "title": "A starvation wall must not outlive the body it was armed on (#1934)"
+    },
+    {
+      "number": 1955,
+      "mergedAt": "2026-09-12T17:17:46Z",
+      "title": "The weaver sees the shuttle \u2014 live boundaries on the wire, topics lit on the heddles (#1937)"
+    },
+    {
+      "number": 1956,
+      "mergedAt": "2026-09-12T17:53:44Z",
+      "title": "ui-shots: the heddle driver joins the manifest"
+    },
+    {
+      "number": 1957,
+      "mergedAt": "2026-09-12T19:38:32Z",
+      "title": "The tree lights where the shuttle reads \u2014 file-touch on /ascii from the boundary stream"
+    },
+    {
+      "number": 1958,
+      "mergedAt": "2026-09-12T21:14:52Z",
+      "title": "The heddle glows instead of tagging \u2014 his read of #1955"
+    },
+    {
+      "number": 1959,
+      "mergedAt": "2026-09-13T00:38:58Z",
+      "title": "drive-fuel reads a live page \u2014 the 1-in-6 flake made structurally impossible (#1954)"
+    },
+    {
+      "number": 1960,
+      "mergedAt": "2026-09-13T05:50:20Z",
+      "title": "The other two drivers read a live page \u2014 the #1954 species, not the instance"
+    },
+    {
+      "number": 1961,
+      "mergedAt": "2026-09-13T12:29:50Z",
+      "title": "The run state machine gets a vocabulary and one transition (move 1 of the rewrite)"
+    },
+    {
+      "number": 1962,
+      "mergedAt": "2026-09-13T17:15:55Z",
+      "title": "The seat is not a conversation \u2014 the hold keys on the seat, not the last thread (:18511)"
+    },
+    {
+      "number": 1966,
+      "mergedAt": "2026-09-13T22:20:46Z",
+      "title": "The frame counts its successes \u2014 released-after-submit is not an error; the one thread's id on the chip"
+    },
+    {
+      "number": 1967,
+      "mergedAt": "2026-09-13T23:08:20Z",
+      "title": "chore: bump brnrd to 0.6.22"
+    },
+    {
+      "number": 1968,
+      "mergedAt": "2026-09-13T23:48:02Z",
+      "title": "The Shuttle gets a row \u2014 move 2 of the daemon rewrite"
+    },
+    {
+      "number": 1969,
+      "mergedAt": "2026-09-14T01:20:42Z",
+      "title": "The frame ticks \u2014 move 2b of the daemon rewrite"
+    },
+    {
+      "number": 1972,
+      "mergedAt": "2026-09-14T11:36:32Z",
+      "title": "The chip keeps its threads: named finished spawns, refused-spawn visibility, up to three ids"
+    },
+    {
+      "number": 1973,
+      "mergedAt": "2026-09-14T12:34:42Z",
+      "title": "The throw has phases \u2014 move 3 of the daemon rewrite"
+    },
+    {
+      "number": 1975,
+      "mergedAt": "2026-09-14T15:34:38Z",
+      "title": "The outbox is a verb table \u2014 move 4 of the daemon rewrite"
+    },
+    {
+      "number": 1974,
+      "mergedAt": "2026-09-14T16:07:33Z",
+      "title": "The bench on /daily \u2014 GET /v1/dashboard/bench, a BenchLane section, /bench/[repo]/[...rest]"
+    },
+    {
+      "number": 1976,
+      "mergedAt": "2026-09-14T17:28:24Z",
+      "title": "The HUD is one shape \u2014 move 5 of the daemon rewrite"
+    },
+    {
+      "number": 1977,
+      "mergedAt": "2026-09-14T18:00:09Z",
+      "title": "The wait that costs nothing \u2014 move 2c of the daemon rewrite"
+    },
+    {
+      "number": 1978,
+      "mergedAt": "2026-09-14T19:31:09Z",
+      "title": "The heddles light themselves \u2014 move 5b"
+    },
+    {
+      "number": 1979,
+      "mergedAt": "2026-09-14T22:46:51Z",
+      "title": "The event carries its topic \u2014 move 5c"
+    },
+    {
+      "number": 1980,
+      "mergedAt": "2026-09-15T03:22:58Z",
+      "title": "The mark and the stake \u2014 move 4b"
+    },
+    {
+      "number": 1982,
+      "mergedAt": "2026-09-15T08:49:37Z",
+      "title": "The loop quirks \u2014 move 3b"
+    },
+    {
+      "number": 1981,
+      "mergedAt": "2026-09-15T09:39:14Z",
+      "title": "The rune on the rail \u2014 the frontend half of the heddle signature"
+    },
+    {
+      "number": 1983,
+      "mergedAt": "2026-09-15T10:33:05Z",
+      "title": "Minting made the natural move \u2014 move 5d"
+    },
+    {
+      "number": 1984,
+      "mergedAt": "2026-09-15T12:16:39Z",
+      "title": "The card in two halves \u2014 \u00a719.3"
+    },
+    {
+      "number": 1985,
+      "mergedAt": "2026-09-15T12:24:13Z",
+      "title": "The message that spans topics \u2014 move 5e"
+    }
+  ],
+  "card": {
+    "source": "brnrd hud --card --outbox .brr/outbox/evt-1789225987990906000-820q",
+    "renderer": "scripts/render_card.py",
+    "content": "the weaver's half only (## Now / ## Plan / ## Vector) \u2014 ## Said / ## Ledger excluded"
+  },
+  "run_page": {
+    "source_url": "https://brnrd.dev/runs/hugimuni-labs__brnrd/run-260912-1513-7hw5",
+    "auth": "brnrd_session cookie from .tmp/brnrd_session.cookie (value never printed/logged/committed)",
+    "screenshots": [
+      "run-page.png (1280x800)",
+      "run-page-phone.png (390x844)"
+    ],
+    "page_shows": "corpus mirrored 9/15/2026, 1:56:30 PM (dashboard's own mirror timestamp)"
+  }
+}
