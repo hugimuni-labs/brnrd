@@ -432,10 +432,11 @@ def _key(label: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(label).strip().lower()).strip("_") or "bucket"
 
 
-def _strands(brr_dir: Path, portal: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _strands(brr_dir: Path, portal: Mapping[str, Any], roots: Iterable[Path] = ()) -> list[dict[str, Any]]:
     """The portal's ``owned_children``, each read at its own ``run.md``
     (status, ``spawn_allowance_tokens``) and portal (``strand.submitted``);
-    ``spent`` is the parent portal's weighted draw for it."""
+    ``spent`` is the parent portal's weighted draw for it; ``places`` /
+    ``last_bead_at`` its own boundaries (:func:`strand_trace`)."""
     coexisting = ((portal.get("resources") or {}).get("coexisting_runs") or {})
     children = coexisting.get("owned_children") if isinstance(coexisting, dict) else None
     out: list[dict[str, Any]] = []
@@ -456,14 +457,44 @@ def _strands(brr_dir: Path, portal: Mapping[str, Any]) -> list[dict[str, Any]]:
             status = "submitted" if submitted else "live"
         else:
             status = "done"
+        places, last_bead_at = strand_trace(brr_dir, run_id, roots)
         out.append({
             "id": run_id or None,
             "title": str(child.get("title") or meta.get("title") or "") or None,
             "status": status,
             "spent": _int(child.get("weighted")),
             "allowance": _int(meta.get("spawn_allowance_tokens")),
+            "places": places,
+            "last_bead_at": last_bead_at,
         })
     return out
+
+
+STRAND_PLACES = 12
+_STRAND_BEADS_SCAN = 4000
+
+
+def strand_trace(brr_dir: Path, run_id: str, roots: Iterable[Path]) -> tuple[list[str], str | None]:
+    """A strand's position on the tree: the last :data:`STRAND_PLACES` distinct
+    repo places in its own ``<brr>/runs/<id>/boundaries.jsonl`` (newest first,
+    extracted exactly as ``beads[].places``) and its last bead's ``at``.
+    ``([], None)`` when the log is absent or holds no bead."""
+    if not run_id or "/" in run_id or run_id.startswith("."):
+        return [], None
+    rows = tail_rows(brr_dir / "runs" / run_id / "boundaries.jsonl", _STRAND_BEADS_SCAN, _is_bead)
+    if not rows:
+        return [], None
+    roots = tuple(roots)
+    places: list[str] = []
+    for row in reversed(rows):
+        for place in row_places(row, roots):
+            if place not in places:
+                places.append(place)
+            if len(places) >= STRAND_PLACES:
+                break
+        if len(places) >= STRAND_PLACES:
+            break
+    return places, rows[-1].get("at")
 
 
 def _last_boundary(rows: list[dict[str, Any]], pick: Callable[[dict[str, Any]], Any]) -> Any:
@@ -474,19 +505,24 @@ def _last_boundary(rows: list[dict[str, Any]], pick: Callable[[dict[str, Any]], 
     return None
 
 
-def read_hud(brr_dir: Path, live: _Live | None, rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+def read_hud(
+    brr_dir: Path, live: _Live | None, rows: list[dict[str, Any]], roots: Iterable[Path] = ()
+) -> dict[str, Any] | None:
     """``hud`` — the live outbox's portal. ``chip`` is the last chip the hook
     injected (a boundary row's ``inject`` first line), else
     :func:`brr.hud.render_bar` on the portal; ``ctx_tokens`` the last
-    boundary's ``ctx.tokens_after``; ``spend`` the portal's allowance facet."""
+    boundary's ``ctx.tokens_after``; ``spend`` the portal's allowance facet;
+    ``full`` the whole typed HUD exactly as ``brnrd hud --json`` prints it
+    (``HUD.from_dict(portal).to_dict()``), so the gauge can render every
+    instrument the chip carries."""
     from .. import hud as hud_mod
 
     if live is None or not live.portal:
         return None
     portal = live.portal
+    current = _safe(lambda: hud_mod.HUD.from_dict(portal), None)
     chip = _last_boundary(rows, lambda r: _first_line(r.get("inject")) if isinstance(r.get("inject"), str) else None)
-    if chip is None:
-        current = hud_mod.HUD.from_dict(portal)
+    if chip is None and current is not None:
         chip = _safe(lambda: hud_mod.render_bar(current, outbox_dir=live.outbox_dir), None) or None
     resources = portal.get("resources") if isinstance(portal.get("resources"), dict) else {}
     allowance = resources.get("allowance") if isinstance(resources.get("allowance"), dict) else {}
@@ -503,7 +539,8 @@ def read_hud(brr_dir: Path, live: _Live | None, rows: list[dict[str, Any]]) -> d
         "quota": _safe(lambda: _quota(live.outbox_dir, portal), {}),
         "spend": spend,
         "ctx_tokens": ctx,
-        "strands": _safe(lambda: _strands(brr_dir, portal), []),
+        "strands": _safe(lambda: _strands(brr_dir, portal, roots), []),
+        "full": _safe(lambda: current.to_dict(), None) if current is not None else None,
     }
 
 
@@ -741,20 +778,24 @@ def read_cloth(
 ) -> dict[str, Any]:
     """``cloth`` — the last :data:`CLOTH_LAST` runs of ``<brr>/run-ledger.jsonl``
     (one row per run, its last entry), then the live run and its live strands
-    when the ledger has not closed them yet (``ended: null``)."""
+    when the ledger has not closed them yet. ``ended`` is ``null`` for the live
+    run always; ``duration_s`` is ``ended − started``, ``null`` while live."""
     topics_by_run = _safe(lambda: run_topics(account_home, compiled), {})
     ledger = tail_rows(brr_dir / "run-ledger.jsonl", CLOTH_LAST * 2, lambda r: bool(r.get("run_id")))
     latest: dict[str, dict[str, Any]] = {}
     for row in ledger:
         latest.pop(str(row["run_id"]), None)
         latest[str(row["run_id"])] = row
+    live_id = live.run_id if live is not None else None
     rows = []
     for run_id, row in list(latest.items())[-CLOTH_LAST:]:
         prs, knots, pages = _refs_summary(row.get("external_refs") or ())
         rows.append({
             "run": run_id,
             "started": row.get("started_at"),
-            "ended": row.get("ended_at"),
+            # A resumed seat has a closed ledger row for an earlier stint; the
+            # live run's end is not written yet, whatever that row says.
+            "ended": None if run_id == live_id else row.get("ended_at"),
             "name": row.get("name"),
             "shell": row.get("runner_shell"),
             "core": row.get("runner_core"),
@@ -775,7 +816,17 @@ def read_cloth(
         row = _safe(lambda: _live_row(brr_dir, run_id, topics_by_run.get(run_id, [])), None)
         if row is not None:
             rows.append(row)
+    for row in rows:
+        row["duration_s"] = _duration(row.get("started"), row.get("ended"))
     return {"rows": rows}
+
+
+def _duration(started: Any, ended: Any) -> int | None:
+    """``ended − started`` in whole seconds; ``None`` while live or unknown."""
+    a, b = _epoch(started), _epoch(ended)
+    if a is None or b is None or b < a:
+        return None
+    return int(round(b - a))
 
 
 # ── tree ─────────────────────────────────────────────────────────────────
@@ -980,7 +1031,7 @@ def build(repo_root: Path | str, account_home: Path | str | None, *, now: object
         )
     beaded = [row for row in boundaries if _is_bead(row)][-BEADS_LAST:]
 
-    hud = _safe(lambda: read_hud(brr_dir, live, boundaries), None)
+    hud = _safe(lambda: read_hud(brr_dir, live, boundaries, roots), None)
     beads = _safe(lambda: read_beads(beaded, roots, compiled, live.run_id if live else ""), [])
     cloth = _safe(
         lambda: read_cloth(brr_dir, home, compiled, live, (hud or {}).get("strands") or []),
