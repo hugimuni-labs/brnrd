@@ -4523,9 +4523,16 @@ def _resolve_await_state(
         armed["which"] = which
         result["outcome"] = outcome
         result["which"] = which
-        if shuttle_home is not None:
+        if shuttle_home is not None and not _is_strand(task.meta):
+            # #1991: only the wait that moved the seat to `listening` may
+            # move it back. The arm (`outbox/verbs.py::handle_await`) is
+            # seat-only and stamps its own run id on the row, so a
+            # resolution from any other run — a strand's `brnrd await`
+            # resolving while the seat listens — is not this row's to move.
+            # Before this gate the strand's resolve flipped the seat awake
+            # and wrote the strand's id into `run_id`.
             entity = shuttle.Shuttle.load(shuttle_home)
-            if entity.state == "listening":
+            if entity.state == "listening" and entity.run_id == task.id:
                 entity.transition(
                     "awake", why=f"await_resolved:{outcome}", by="daemon",
                     run_id=task.id, conversation_key=task.conversation_key,
@@ -14303,6 +14310,13 @@ def _arm_resource_hold(
         meta = _supersede_hold(runs_dir, other, meta, by_run=task.id)
     task.meta["resource_hold"] = meta
     task.update_status(resource_hold.RUN_STATUS, runs_dir)
+    if _is_strand(task.meta):
+        # #1991: a strand is a thread, never the seat — the row is not its
+        # to park. Reachable: a strand's `hold: resume: refill` passes
+        # `_resident_hold_refusal` whenever its own boundary measured the
+        # starvation wall (`quota_binding_pct` is stamped before the
+        # facet's seat-only return).
+        return meta
     home = _shuttle_home(account_home, runs_dir)
     entity = shuttle.Shuttle.load(home)
     # Direct caller tests and recovery paths can arm before the ordinary
