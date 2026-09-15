@@ -20,8 +20,9 @@ which is how a merge done by hand "observed on main" arrives); a return is a
 ``spawn_completed`` / ``spawn_submitted`` event.
 
 **The card's delta as mail (§19.2).** At the moments the frame recognises —
-a strand returned, a PR merged, a delivery batch, a refusal — it drafts one
-line from the ledger, *since your last card write: …*, and stages it as a
+a delivery batch, a refusal (a strand returning and a PR merging are still
+moments, for the ticks, but since §19.3 they are ledger lines, not delta
+text) — it drafts one line, *since your last card write: …*, and stages it as a
 pending item on the portal (``card.delta{id, text, at, trigger}``). The
 hooks render it the way they render finished spawns: named, kept, never an
 obligation. ``note: <id>`` accepts it; the weaver's next card edit folds it
