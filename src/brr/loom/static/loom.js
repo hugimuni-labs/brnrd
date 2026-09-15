@@ -613,17 +613,20 @@ function mergedPlaces() {
   );
 }
 // Places beyond files: four fixed places around the roots.
-const FIXED = ["forge", "wire", "shed", "crew"];
-const FIXED_GLYPH = { forge: "◆", wire: "≋", shed: "⌂", crew: "⁂" };
+const FIXED = ["forge", "wire", "shed", "crew", "clock"];
+const FIXED_GLYPH = { forge: "◆", wire: "≋", shed: "⌂", crew: "⁂", clock: "◷" };
 function beadPath(b) {
   const kind = b?.place_kind || "file";
   if (FIXED.includes(kind)) return kind + ":";
-  if (kind === "clock") return null;
-  const p = list(b?.places).at(-1);
-  if (!p) return null;
-  return kind === "home" ? "home:" + p : p;
+  if (kind === "home") {
+    const h = list(b?.home_places).at(-1) || list(b?.places).at(-1);
+    return h ? "home:" + h : null;
+  }
+  return list(b?.places).at(-1) || null;
 }
-const fileBead = (b) => (b.place_kind || "file") === "file";
+// Files a bead named are repo places whatever its kind; home paths ride
+// `home_places` (or `places` on a home bead from an older feed).
+const fileBead = (b) => (b.place_kind || "file") !== "home" || list(b.home_places).length > 0;
 function newestPlace() {
   return [...list(state?.beads)].reverse().map(beadPath).find(Boolean) || null;
 }
@@ -641,8 +644,7 @@ function homePlaces() {
   for (const p of list(state?.tree?.home?.places))
     if (p.path) places.set("home:" + p.path, { ...p, topics: list(p.topics), path: "home:" + p.path, kind: "home" });
   for (const b of list(state?.beads))
-    if (b.place_kind === "home")
-      for (const path of list(b.places))
+    for (const path of b.place_kind === "home" && !list(b.home_places).length ? list(b.places) : list(b.home_places))
         if (!places.has("home:" + path))
           places.set("home:" + path, { path: "home:" + path, heat: null, knots: null, topics: list(b.topics), last: b.at, kind: "home" });
   return [...places.values()].filter((p) => matches(p.topics));
@@ -789,6 +791,7 @@ function rebuild() {
     shed: { x: T.x + T.w - 46, y: T.y + T.h * 0.34 },
     crew: { x: T.x + T.w - 64, y: T.y + T.h * 0.66 },
     wire: { x: T.x + 40, y: T.y + T.h - 74 },
+    clock: { x: T.x + 46, y: T.y + 58 },
   };
   const fixedNodes = FIXED.map((kind) => ({
     path: kind + ":",
@@ -1136,18 +1139,32 @@ function link(label, callback) {
 // bench renders what the contract attests and says so — never invents.
 const PENDING = "— reads more when the feed lands";
 const pages = new Map();
-function page(kind, id) {
-  // Asked only once the frame advertises the kind (`pages: [...]`): a feed
-  // without the endpoint is never probed into a console full of 404s.
-  if (dev || id == null || !list(state?.pages).includes(kind)) return null;
-  const url = `/loom/page/${kind}?id=${encodeURIComponent(id)}`;
-  const known = pages.get(url);
-  if (known) return known.status === "ok" ? known.body : null;
+const PAGE_PARAMS = {
+  bead: (b) => (b?.n == null ? null : { run: b.run || state?.run?.id || "", n: b.n }),
+  pass: (id) => (id ? { id } : null),
+  item: (id) => (id ? { id } : null),
+  place: (path) => (path && !/^(forge|wire|shed|crew|clock):$/.test(path) ? { path: String(path).replace(/^home:/, "") } : null),
+  heddle: (slug) => (slug ? { slug } : null),
+};
+function page(kind, key) {
+  // Asked on selection; a 404 or an empty answer reads as pending. A frame
+  // that lists `pages` and omits this kind is taken at its word.
+  if (dev) return null;
+  if (Array.isArray(state?.pages) && !state.pages.includes(kind)) return null;
+  const params = PAGE_PARAMS[kind]?.(key);
+  if (!params) return null;
+  const url = `/loom/page/${kind}?${new URLSearchParams(params)}`;
+  const seen = pages.get(url);
+  if (seen) return seen.status === "ok" ? seen.body : null;
   pages.set(url, { status: "loading" });
+  const asked = selected,
+    generation = pendingFold;
   fetch(url)
     .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
     .then((body) => {
-      pages.set(url, { status: "ok", body });
+      pages.set(url, body && typeof body === "object" && !body.error ? { status: "ok", body } : { status: "absent" });
+      // Re-render only the page that asked, and never over a fold being read.
+      if (selected !== asked || pendingFold !== generation) return;
       lastReceipt = "";
       renderReceipt();
     })
@@ -1207,100 +1224,120 @@ function card(run) {
 function passPage(data) {
   const live = data.run === state.run?.id;
   const body = page("pass", data.run);
-  head(live ? "pass · this run" : "pass", data.name || data.run, "a pass: one run's work, from its card to what it produced");
-  tags(data.topics);
-  if (body?.contract) receipt.append(element("pre", body.contract, "excerpt"));
-  else pending("contract excerpt");
-  row("body", [data.shell, data.core].map(known).join(" / "));
-  row("started → ended", `${known(data.started)} → ${data.ended || "open"}`);
-  const minutes = minutesOf(data);
+  head(live ? "pass · this run" : `pass${body?.status ? " · " + body.status : ""}`, body?.title || data.name || data.run, "a pass: one run's work, from its card to what it produced");
+  tags(body?.topics?.length ? body.topics : data.topics);
+  if (body?.contract) {
+    const excerpt = body.contract.length > 700 ? body.contract.slice(0, 700) + "…" : body.contract;
+    receipt.append(element("pre", excerpt, "excerpt"));
+  } else pending("contract excerpt");
+  row("body", [body?.shell || data.shell, body?.core || data.core].map(known).join(" / "));
+  row("started → ended", `${known(body?.started || data.started)} → ${body?.ended || data.ended || "open"}`);
+  const minutes = body?.duration_s != null ? Math.round(body.duration_s / 60) : minutesOf(data);
   row("duration", minutes == null ? "unknown" : `${minutes} min`);
   row("run", data.run);
-  if (data.parent) {
-    const parent = list(state.cloth?.rows).find((r) => r.run === data.parent);
-    if (parent) {
-      section("Dispatched by");
-      link(parent.name || parent.run, () => select("cloth", parent));
-    } else row("parent", data.parent);
+  if (body?.branch) row("branch", body.branch);
+  if (body?.mood) row("mood", body.mood);
+  const parentId = body?.parent || data.parent;
+  if (parentId) {
+    const parent = list(state.cloth?.rows).find((r) => r.run === parentId);
+    section("Dispatched by");
+    parent ? link(parent.name || parent.run, () => select("cloth", parent)) : receipt.append(element("p", parentId));
   }
-  if (live && state.run) card(state.run);
+  const cardData = live ? state.run?.card : body?.card;
+  if (cardData) card({ card: { now: cardData.now, plan: cardData.plan, vector: cardData.vector, ledger: cardData.ledger } });
   section("Produce");
-  const prs = list(body?.prs || data.prs);
-  if (prs.length)
-    for (const pr of prs) {
-      const n = typeof pr === "object" ? pr.number : pr;
-      const a = element("a", `PR #${n}${pr?.title ? " · " + pr.title : ""}`, "bench-link");
-      a.href = prUrl(n);
-      a.target = "_blank";
-      a.rel = "noreferrer";
-      receipt.append(a);
-    }
-  else receipt.append(element("p", "no PR"));
-  if (Array.isArray(body?.commits))
-    for (const c of body.commits) receipt.append(element("p", `${String(c.sha || c).slice(0, 8)} ${c.subject || ""}`, "mono"));
-  else row("knots", `${known(data.knots)}${Array.isArray(data.knots) ? "" : " · commits"}`), pending("commit shas");
-  if (Array.isArray(body?.pages)) for (const pg of body.pages) receipt.append(element("p", String(pg.path || pg)));
-  else row("pages", data.pages);
+  const prs = body?.produce?.prs || list(data.prs).map((n) => ({ number: n }));
+  for (const pr of prs) {
+    const a = element("a", `PR #${pr.number}${pr.state ? " · " + pr.state.toLowerCase() : ""}`, "bench-link");
+    a.href = pr.url || prUrl(pr.number);
+    a.target = "_blank";
+    a.rel = "noreferrer";
+    if (pr.state === "MERGED") a.classList.add("receipt");
+    receipt.append(a);
+  }
+  if (!prs.length) receipt.append(element("p", "no PR"));
+  if (Array.isArray(body?.produce?.commits)) {
+    for (const c of body.produce.commits) receipt.append(element("p", `${String(c.sha).slice(0, 8)}  ${c.subject || ""}`, "mono"));
+    if (!body.produce.commits.length) receipt.append(element("p", "no commits", "mono"));
+  } else {
+    row("knots", data.knots);
+    pending("commit shas");
+  }
+  if (Array.isArray(body?.produce?.pages) && body.produce.pages.length)
+    for (const pg of body.produce.pages) receipt.append(element("p", String(pg.path || pg.title || pg), "mono"));
+  else row("pages", data.pages ?? (body ? 0 : undefined));
+  if (body?.report_path) row("report", `${body.report_path}${body.report_exists === false ? " (missing)" : ""}`);
   row("tokens", number(data.tokens));
-  const strands = list(state.cloth?.rows).filter((r) => r.parent === data.run && r.run !== data.run);
+  const rows = list(state.cloth?.rows);
+  const strands = body?.strands
+    ? body.strands.map((t) => ({ ...t, row: rows.find((r) => r.run === t.id) }))
+    : rows.filter((r) => r.parent === data.run && r.run !== data.run).map((r) => ({ id: r.run, title: r.name, status: strandStatus(r), row: r }));
   section(`Strands · ${strands.length}`);
-  for (const r of strands) link(`⌁ ${String(r.name || r.run).split(/:\s/)[0]} · ${strandStatus(r)}`, () => select("cloth", r));
+  for (const t of strands) {
+    const label = `⌁ ${String(t.title || t.id).split(/:\s/)[0]} · ${known(t.status)}`;
+    t.row ? link(label, () => select("cloth", t.row)) : receipt.append(element("p", label, "mono"));
+  }
   if (!strands.length) receipt.append(element("p", "none"));
   section("Last boundaries");
-  const beads = live ? list(state.beads) : list(body?.beads || data.beads);
+  const beads = (body?.beads?.length ? body.beads : live ? list(state.beads) : list(data.beads)).map((b) => ({ run: data.run, ...b }));
   if (beads.length) beadList(beads);
   else pending();
-  extras(body, ["contract", "prs", "commits", "pages", "beads"]);
+  extras(body, ["id", "title", "name", "mood", "status", "contract", "shell", "core", "started", "ended", "duration_s", "parent", "branch", "report_path", "report_exists"]);
 }
 function beadPage(data) {
   const beads = list(state.beads),
     index = beads.findIndex((b) => beadKey(b) === beadKey(data));
-  const body = page("bead", data.at);
+  const body = page("bead", data);
+  const b = { ...data, ...(body || {}) };
   head(
-    "bead",
-    `${known(data.act)} · ${String(data.at || "?").slice(11, 19)}Z · ${data.place_kind || "file"}`,
+    `bead${b.n != null ? " · n " + b.n : ""}`,
+    `${known(b.act)} · ${String(b.at || "?").slice(11, 19)}Z · ${b.place_kind || "file"}`,
     "a boundary: what the shuttle did, where, and what it cost",
   );
   const nav = element("div", undefined, "page-nav");
-  for (const [label, i] of [
-    ["‹ prev", index - 1],
-    ["next ›", index + 1],
+  const step = (n) =>
+    beads.find((x) => x.n === n) || (index >= 0 ? beads[index + (n > (b.n ?? 0) ? 1 : -1)] : null) || (n != null ? { run: b.run, n } : null);
+  for (const [label, n, fallback] of [
+    ["‹ prev", body?.prev, index - 1],
+    ["next ›", body?.next, index + 1],
   ]) {
-    const b = element("button", label, "bench-back");
-    b.type = "button";
-    b.disabled = index < 0 || i < 0 || i >= beads.length;
-    b.onclick = () => select("bead", beads[i], { back: true });
-    nav.append(b);
+    const target = body ? (n == null ? null : step(n)) : beads[fallback];
+    const btn = element("button", label, "bench-back");
+    btn.type = "button";
+    btn.disabled = !target;
+    btn.onclick = () => target && select("bead", target, { back: true });
+    nav.append(btn);
   }
-  nav.append(element("span", index < 0 ? "" : `${index + 1} / ${beads.length}`, "eyebrow"));
+  nav.append(element("span", index < 0 ? "" : `${index + 1} / ${beads.length} in this frame`, "eyebrow"));
   receipt.append(nav);
-  tags(data.topics);
+  tags(b.topics);
   section("Command");
-  receipt.append(element("pre", body?.command || data.detail || "unknown", "code"));
-  if (body?.result_bytes != null || data.result_bytes != null) row("result", `${number(body?.result_bytes ?? data.result_bytes)} bytes`);
+  receipt.append(element("pre", b.detail_full || b.detail || "unknown", "code"));
+  if (b.result_bytes != null) row("result", `${number(b.result_bytes)} bytes`);
   else pending("result size");
+  if (Array.isArray(b.tools) && b.tools.length) row("tools", b.tools.join(", "));
   section("Context");
-  const windowTokens = body?.window_tokens ?? null,
-    of = windowTokens || data.ctx_after;
+  const of = b.window_tokens || b.ctx_after;
   const bar = element("div", undefined, "delta-bar");
   const fill = element("span");
-  fill.style.width = `${Math.max(1, Math.min(100, ((data.delta || 0) / (of || 1)) * 100))}%`;
+  fill.style.width = `${Math.max(1, Math.min(100, ((b.delta || 0) / (of || 1)) * 100))}%`;
   bar.append(fill);
   receipt.append(bar);
   receipt.append(
     element(
       "p",
-      `+${number(data.delta)} → ${number(data.ctx_after)} in the scroll · bar against ${windowTokens ? "the window" : "the scroll (no window size attested)"}`,
+      `+${number(b.delta)} → ${number(b.ctx_after)} in the scroll · bar against ${b.window_tokens ? `the ${compactNumber(b.window_tokens)} window` : "the scroll (no window size attested)"}`,
       "mono",
     ),
   );
   section("Places");
-  for (const path of list(data.places)) link(path, () => select("place", { path }));
-  if (!list(data.places).length) receipt.append(element("p", "none attested"));
+  for (const path of list(b.places)) link(path, () => select("place", { path }));
+  for (const path of list(b.home_places)) link("home · " + path, () => select("place", { path: "home:" + path, kind: "home" }));
+  if (!list(b.places).length && !list(b.home_places).length) receipt.append(element("p", b.place_kind && b.place_kind !== "file" ? `the ${b.place_kind}` : "none attested"));
   section("The chip at this boundary");
-  if (body?.chip) receipt.append(element("pre", body.chip, "code"));
+  if (b.chip) receipt.append(element("pre", b.chip, "code"));
   else pending();
-  extras(body, ["command", "result_bytes", "window_tokens", "chip"]);
+  extras(body, ["run", "n", "at", "act", "place_kind", "detail_full", "result_bytes", "ctx_after", "delta", "window_tokens", "chip", "prev", "next"]);
 }
 function itemPage(data) {
   const body = page("item", data.id);
@@ -1315,31 +1352,41 @@ function itemPage(data) {
     item ? link(`${need} · ${item.title}`, () => select("warp", item)) : receipt.append(element("p", need));
   }
   if (!list(data.needs).length) receipt.append(element("p", "none"));
+  if (list(body?.advances).length) row("advances", body.advances.join(", "));
   section("Refs");
-  if (Array.isArray(body?.refs)) for (const r of body.refs) receipt.append(element("p", String(r.label || r.path || r)));
+  if (body?.refs) for (const r of (Array.isArray(body.refs) ? body.refs : String(body.refs).split(" · "))) receipt.append(element("p", String(r.label || r.path || r), "mono"));
+  else if (body) receipt.append(element("p", "none"));
   else pending();
+  if (body?.metric) section("Metric", body.metric);
   section("Prompt");
   if (body?.prompt) receipt.append(element("pre", body.prompt));
+  else if (body) receipt.append(element("p", "none"));
   else pending();
   if (body?.body) {
     section("Body");
     receipt.append(element("pre", body.body));
   }
   const topic = list(data.topics)[0];
-  const siblings = list(state.warp?.items).filter((w) => w.id !== data.id && topic && list(w.topics).includes(topic));
+  const siblings = body?.siblings || list(state.warp?.items).filter((w) => w.id !== data.id && topic && list(w.topics).includes(topic));
   section(`On ${topic || "no topic"} · ${siblings.length}`);
-  for (const w of siblings.slice(0, 12)) link(`${w.id} · ${w.title} · ${known(w.state)}`, () => select("warp", w));
-  extras(body, ["refs", "prompt", "body"]);
+  for (const w of siblings.slice(0, 12)) {
+    const item = list(state.warp?.items).find((x) => x.id === w.id) || w;
+    link(`${w.id} · ${w.title} · ${known(w.state)}`, () => select("warp", item));
+  }
+  extras(body, ["id", "title", "type", "state", "taken", "refs", "prompt", "body", "metric"]);
 }
 function placePage(data) {
   const body = page("place", data.path);
-  head("place", data.path, "a place: everything the cloth knows happened here");
-  const p = mergedPlaces().find((p) => p.path === data.path) || data;
-  tags(p?.topics);
-  row("kind", data.kind || (String(data.path).includes(":") ? data.path.split(":")[0] : "file"));
-  row("heat", p?.heat);
-  row("knots", p?.knots);
-  row("last", p?.last);
+  const fixed = /^(forge|wire|shed|crew|clock):$/.test(data.path) ? data.path.slice(0, -1) : null;
+  head(fixed ? "place · beyond files" : "place", fixed || data.path, fixed ? `a place beyond files: where the shuttle goes to ${{ forge: "make PRs and merges", wire: "speak on a channel", shed: "wait", crew: "tend its strands", clock: "keep time" }[fixed]}` : "a place: everything the cloth knows happened here");
+  const p = mergedPlaces().find((p) => p.path === data.path) || homePlaces().find((p) => p.path === data.path) || data;
+  tags(body?.topics?.length ? body.topics : p?.topics);
+  row("kind", body?.kind || data.kind || fixed || (String(data.path).startsWith("home:") ? "home" : "file"));
+  if (body?.tree) row("tree", body.tree);
+  row("heat", body?.heat ?? p?.heat);
+  row("knots", body?.knots ?? p?.knots);
+  row("last", body?.last ?? p?.last);
+  if (fixed === "forge") row("PRs in view", prsInView().map((n) => "#" + n).join(" · ") || "none");
   section("At this place");
   const actionsRow = element("div", undefined, "action-row");
   for (const action of ["fold", "explain", "fix", "test", "split", "read"]) {
@@ -1349,20 +1396,30 @@ function placePage(data) {
     actionsRow.append(b);
   }
   receipt.append(actionsRow);
-  const passes = list(state.cloth?.rows).filter((r) => (passPlaces(r) || []).includes(data.path));
+  const rows = list(state.cloth?.rows);
+  const passes = body?.passes || rows.filter((r) => (passPlaces(r) || []).includes(data.path)).map((r) => ({ run: r.run, name: r.name }));
   section(`Passes that touched it · ${passes.length}`);
-  for (const r of passes.slice(-12)) link(r.name || r.run, () => select("cloth", r));
-  if (!passes.length) pending();
-  const beads = list(state.beads).filter(
-    (b) => (beadPath(b) === data.path || (fileBead(b) && list(b.places).includes(data.path))) && matches(b.topics),
+  for (const ps of passes.slice(-12)) {
+    const r = rows.find((x) => x.run === ps.run);
+    const label = `${ps.name || ps.run}${ps.mutated ? " · changed it" : ""}${ps.last ? " · " + clothTime(ps.last) : ""}`;
+    r ? link(label, () => select("cloth", r)) : receipt.append(element("p", label, "mono"));
+  }
+  if (!passes.length) body ? receipt.append(element("p", "none")) : pending();
+  const beads = body?.beads || list(state.beads).filter(
+    (b) => (beadPath(b) === data.path || list(b.places).includes(data.path)) && matches(b.topics),
   );
   section(`Beads · ${beads.length}`);
   if (beads.length) beadList(beads);
-  else receipt.append(element("p", "none in this run"));
-  const folds = list(state.bench?.folds).filter((f) => f.place === data.path);
+  else receipt.append(element("p", "none in this frame"));
+  const folds = body?.folds || list(state.bench?.folds).filter((f) => f.place === data.path);
   section("Fold", folds.length ? undefined : "No fold at this place yet.");
-  for (const fold of folds) button(`${fold.path} · ${list(fold.marks).join(", ")}`, () => openFold(fold));
-  extras(body, []);
+  if (body?.fold?.text) {
+    receipt.append(element("p", `${body.fold.path} · ${list(body.fold.marks).join(", ") || "no marks"}`, "mono"));
+    receipt.append(element("pre", body.fold.text));
+    button("keep", actions.keep);
+    button("drop", actions.drop);
+  } else for (const fold of folds) button(`${fold.path} · ${list(fold.marks).join(", ")}`, () => openFold(fold));
+  extras(body, ["path", "kind", "tree", "heat", "last", "knots", "fold"]);
 }
 function heddlePages() {
   const shown = list(state.heddles).filter((h) => lifted.has(h.slug));
@@ -1393,8 +1450,13 @@ function heddlePages() {
       `${list(state.tree?.places).filter(has).length} places · ${list(state.cloth?.rows).filter(has).length} passes · ${list(state.warp?.items).filter(has).length} items · ${list(state.beads).filter(has).length} beads`,
     );
     for (const [key, value] of Object.entries(h.signature || {})) row(key, list(value).join(", ") || "none");
-    if (Array.isArray(body?.rows)) for (const r of body.rows.slice(-8)) receipt.append(element("p", typeof r === "string" ? r : JSON.stringify(r), "mono"));
-    else pending("the index's last rows");
+    if (body?.counts && typeof body.counts === "object")
+      row("index", Object.entries(body.counts).map(([k, v]) => `${v} ${k}`).join(" · ") + (body.total != null ? ` · ${body.total} rows` : ""));
+    if (Array.isArray(body?.rows)) {
+      receipt.append(element("h2", "The index's last rows"));
+      for (const r of body.rows.slice(-10).reverse())
+        receipt.append(element("p", typeof r === "string" ? r : `${String(r.at || "").slice(5, 16)}  ${known(r.kind)}  ${r.ref || ""}`, "mono"));
+    } else pending("the index's last rows");
   }
   button("Open the shuttle’s card", () => select("run"));
 }
@@ -2478,7 +2540,8 @@ function drawActor(pulse) {
   halo(a.x, a.y - 8, 86, INK.amber, 0.22);
   halo(a.x, a.y - 8, 34, INK.amber, 0.38);
   dot(a.x, a.y, 3.2, "#fff1d0", 14);
-  const glyph = state.run.mood_glyph || "unknown";
+  // No attested face ⇒ the shuttle's sign, never a word dressed as a face.
+  const glyph = state.run.mood_glyph || "⌁";
   const sprite = glowSprite(glyph, 15, "#ffd27a", 14);
   const gw = sprite.w;
   // The glyph stays inside the window even at an edge place.
@@ -2594,7 +2657,10 @@ function drawFaceLive(pulse) {
       size *= 1 + (reduced.matches ? 0 : (pulse - 0.5) * 0.03);
       const base = Math.round(size / (1 + (reduced.matches ? 0 : (pulse - 0.5) * 0.03)));
       drawSprite(glowSprite(shown, base, "#ffd27a", 16), cx, cy + size * 0.35, size, size / base);
-    } else text("no pass", cx, cy + 4, INK.faint, 11, box.w, { align: "center" });
+    } else {
+      if (state.run) drawSprite(glowSprite("⌁", layout.compact ? 22 : 30, "#ffd27a", 12), cx, cy + 6, layout.compact ? 22 : 30);
+      text(state.run ? "no face attested" : "no pass", cx, box.y + box.h - 8, INK.faint, 9, box.w - 8, { align: "center" });
+    }
   }
   const gauge = regionRects.gauge;
   if (gauge && gauge.ratio != null) {

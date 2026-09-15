@@ -18,7 +18,9 @@ const errors = [],
 function observe(page) {
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("console", (m) => {
-    if (m.type() === "error") errors.push(m.text());
+    // A bench page the feed has no answer for is a 404 the bench reads as
+    // pending — an expected miss, not a page error.
+    if (m.type() === "error" && !String(m.location()?.url || "").includes("/loom/page/")) errors.push(m.text());
   });
   page.on("request", (r) => {
     const u = new URL(r.url());
@@ -113,8 +115,7 @@ for (const [w, h] of [
     const base0 = await data(page);
     const runes = JSON.parse(base0.runes);
     const live = (await (await fetch(base + "/loom/state.json")).json()).heddles
-      .filter((x) => x.lit > 0.05)
-      .sort((a, b) => b.lit - a.lit)
+      .sort((a, b) => (b.lit || 0) - (a.lit || 0))
       .map((x) => x.slug);
     const [a, b] = live;
     const click = async (slug) => {
@@ -144,8 +145,10 @@ for (const [w, h] of [
         assert.equal(none.lifted, "", "every toggle is undone by its second click");
         assert.equal(none.passes, base0.passes);
       }
+      if (!b) assert.equal((await click(a)).lifted, "", "a second click drops the lone rune");
       const again = await click(a);
       assert.equal(again.lifted, a);
+      assert.equal(again.places, one.places, "the same lift rebuilds the same window");
       await page.keyboard.press("Escape");
       await page.waitForTimeout(300);
       assert.equal((await data(page)).lifted, "", "Esc drops all");
@@ -287,6 +290,8 @@ await transport.route("**/loom/events", (r) =>
     body: "event: state\ndata: " + JSON.stringify(updated) + "\n\n",
   }),
 );
+// A feed without bench pages: the bench must read pending, not break.
+await transport.route("**/loom/page/**", (r) => r.fulfill({ status: 404, json: { error: "no page" } }));
 await transport.route("**/loom/bench?*", (r) =>
   r.fulfill({
     contentType: "text/plain",
