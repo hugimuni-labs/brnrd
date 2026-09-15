@@ -4091,8 +4091,9 @@ def _render_bar(
 
     # The card's delta as mail (move 5b, design-the-loom §19.2) — replaces
     # the `card ## Now: last written N acts ago` nudge. The frame drafts the
-    # line at the moment something moved (a strand returned, a PR merged, a
-    # delivery batch, a refusal) and stands it as a pending item; this only
+    # line at the moment something moved that the card's `## Ledger` block
+    # cannot show (§19.3: replies delivered, a refusal — strands, merges and
+    # produce are ledger lines now) and stands it as a pending item; this only
     # renders it: named, one line, the act that accepts it beside it. Like
     # finished spawns it is a fact, not an obligation — no count, no clock.
     # Change-gated on its own text (id + line) under `card_detail`, so it
