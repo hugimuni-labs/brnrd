@@ -506,3 +506,62 @@ class TestStakeRefuse:
         (tmp_path / ".brr").rename(tmp_path / ".brr-1")
         result = _drain(tmp_path, monkeypatch, "s.md", "---\nstake: refuse\n---\nno\n")
         assert "carries no stake to refuse" in result["notices"][-1]["text"]
+
+
+# ── through the frame: the portal, and the Shuttle at the cut ────────
+
+
+def test_the_portal_carries_the_seats_stake_and_parks_at_its_cut(tmp_path, monkeypatch):
+    """`hud.build` end to end: the waking event's stake arms at the first
+    boundary, the seat's own meter moves it, the cut stamps the hold."""
+    import json as json_mod
+
+    from test_hud_golden import frozen_host
+
+    frozen_host(monkeypatch)
+    meter = {"cumulative": 4_200}
+    monkeypatch.setattr(daemon.allowance, "collect_spent", lambda *_a, **_k: meter["cumulative"])
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["stake_request"] = {"stake": "1m", "cut_at": "", "event_id": "evt-1"}
+
+    def boundary() -> dict:
+        path = daemon._write_live_portal_state(
+            outbox_dir, inbox_dir, "evt-1", task,
+            phase="running", runner_name="claude", brr_dir=brr_dir,
+        )
+        return json_mod.loads(path.read_text(encoding="utf-8"))
+
+    first = boundary()["resources"]["allowance"]
+    assert first["stake"]["state"] == "armed" and first["stake"]["spent"] == 0
+    meter["cumulative"] = 4_200 + 700_000
+    second = boundary()["resources"]["allowance"]
+    assert second["stake_summary"] == "stake 700k/1m · 70%"
+    meter["cumulative"] = 4_200 + 1_600_000
+    boundary()
+    assert task.meta["pending_resource_hold"]["reason"] == resource_hold.REASON_STAKE_CUT
+
+
+def test_the_shuttle_reads_parked_stake_cut(tmp_path):
+    from brr import shuttle
+
+    home = tmp_path / "home"
+    runs_dir = tmp_path / ".brr" / "runs"
+    runs_dir.mkdir(parents=True)
+    task = _seat()
+    row = stake.normalise("1m", None, cfg={})
+    row.update(state="cut", spent=1_600_000)
+    task.meta["stake"] = row
+    task.save(runs_dir)
+    daemon._arm_resource_hold(
+        task, runs_dir, conversation_key="telegram:42:", account_home=home,
+        **daemon._stake_hold_spec(task, row),
+    )
+    live = shuttle.Shuttle.load(home)
+    assert (live.state, live.why) == ("parked", "stake_cut")
+    assert hooks._hold_chip({}, {"state": live.state, "why": live.why}) == "parked·stake_cut"
+    reloaded = Run.from_file(runs_dir / task.id / "run.md")
+    assert reloaded.meta["stake"]["spent"] == 1_600_000
