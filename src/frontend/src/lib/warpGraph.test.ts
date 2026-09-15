@@ -175,7 +175,7 @@ describe('parseWarpTopic', () => {
 		assert.deepEqual(topic.splitInto, ['a', 'b']);
 	});
 
-	it('skips the heddle signature frontmatter before the title (move 5b)', () => {
+	it('skips the heddle signature frontmatter before the title, reads its rune (move 5b, the rune on the rail)', () => {
 		const topic = parseWarpTopic(
 			'surface/topics/loom.md',
 			'---\nrune: ⚒\nsignature:\n  places: [src/**]\n---\n# The loom\n\nids: weave\n\nBody.\n'
@@ -183,11 +183,33 @@ describe('parseWarpTopic', () => {
 		assert.equal(topic.title, 'The loom');
 		assert.deepEqual(topic.ids, ['loom', 'weave']);
 		assert.equal(topic.definitionMarkdown, 'Body.');
+		assert.equal(topic.rune, '⚒');
 	});
 
-	it('leaves an unclosed leading rule alone', () => {
+	it('rune is null without a rune: row, even with other frontmatter present', () => {
+		const topic = parseWarpTopic(
+			'surface/topics/loom.md',
+			'---\nsignature:\n  places: [src/**]\n---\n# The loom\n'
+		);
+		assert.equal(topic.rune, null);
+	});
+
+	it('a quoted rune unwraps, either quote style', () => {
+		const doubleQuoted = parseWarpTopic('surface/topics/x.md', '---\nrune: "⚒"\n---\n# X\n');
+		assert.equal(doubleQuoted.rune, '⚒');
+		const singleQuoted = parseWarpTopic('surface/topics/y.md', "---\nrune: '☉'\n---\n# Y\n");
+		assert.equal(singleQuoted.rune, '☉');
+	});
+
+	it('rune is null with no frontmatter block at all', () => {
+		const topic = parseWarpTopic('surface/topics/post.md', '# The post\n\nids: mail\n');
+		assert.equal(topic.rune, null);
+	});
+
+	it('leaves an unclosed leading rule alone, and reads no rune out of it', () => {
 		const topic = parseWarpTopic('surface/topics/x.md', '---\n# X\n');
 		assert.equal(topic.title, 'x');
+		assert.equal(topic.rune, null);
 	});
 });
 
@@ -454,6 +476,28 @@ describe('the graph', () => {
 		const g = graphOf(TOPIC_LOOM);
 		const faces = topicFaces(g);
 		assert.deepEqual(faces.get('loom'), topicFace(g.topics.find((t) => t.canonicalId === 'loom')!));
+	});
+
+	it('an authored rune wins over the derived glyph, on the rune-space chip and the set-probed rail alike (the rune on the rail)', () => {
+		const runed = file(
+			'surface/topics/loom.md',
+			'---\nrune: ⚒\n---\n# The loom\n\nThe dashboard becomes the machine it renders.'
+		);
+		const g = graphOf(runed, TOPIC_POST);
+		const loom = g.topics.find((t) => t.canonicalId === 'loom')!;
+		assert.equal(loom.rune, '⚒');
+		// Single-topic derivation (`topicFace`) and the set-probed map
+		// (`topicFaces`) both wear it.
+		assert.equal(topicFace(loom).glyph, '⚒');
+		const faces = topicFaces(g);
+		assert.equal(faces.get('loom')!.glyph, '⚒');
+		// The hue-separation pass is untouched by the override — same
+		// hues as the unruned baseline, only the glyph differs.
+		const baseline = topicFaces(graphOf(TOPIC_LOOM, TOPIC_POST));
+		assert.equal(faces.get('loom')!.hue, baseline.get('loom')!.hue);
+		assert.equal(faces.get('post')!.hue, baseline.get('post')!.hue);
+		// A topic with no rune: row keeps deriving, unaffected by its sibling.
+		assert.equal(faces.get('post')!.glyph, baseline.get('post')!.glyph);
 	});
 
 	it('liveTakenRuns frames only currently-live holders', () => {
