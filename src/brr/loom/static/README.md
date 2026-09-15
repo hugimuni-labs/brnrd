@@ -28,7 +28,11 @@ Unknown measurements remain unknown. Directory nodes derive from measured paths.
 - **The scan on the cloth.** The weft is time, so the scan line lives only on
   the cloth: one traverse per heartbeat tick (`shuttle.tick`, else
   `shuttle.transitions[-1].tick`, else every 10 s), thin and bright with a short
-  wake, moving through the rail's *current* x-mapping, fisheye included. Each
+  wake, moving through the rail's *current* x-mapping, fisheye included. It is the
+  topmost thing wherever it exists — over the plaques, the rail and the warp
+  column, whose full height it runs while it crosses — and it redraws what it
+  touches: a plaque pulses, the warp's threads flicker once, and the wake tints
+  them for ~200 ms. Each
   plaque it crosses pulses once and raises a **hairline thread** from the plaque
   into the tree, through that run's trail places in order (1 px, dots r 2, alpha
   ≤ 0.7, run-hued; amber for the seat), rising over ~400 ms and fading over the

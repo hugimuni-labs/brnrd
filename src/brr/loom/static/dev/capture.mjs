@@ -213,6 +213,18 @@ for (const [w, h] of [
   }
   assert.ok(lit >= 1, "a traverse raises a thread from the weft");
   await page.screenshot({ path: resolve(output, "live-mid-traverse-1920x1080.png") });
+  // Entering from the left: the line runs the warp column's full height, over
+  // everything it passes.
+  let overWarp = false;
+  for (let i = 0; i < 200 && !overWarp; i++) {
+    await page.waitForTimeout(120);
+    overWarp = await page.evaluate(() => {
+      const el = document.querySelector("#loom");
+      return Number(el.dataset.scanX || 1e9) < innerWidth * 0.12;
+    });
+  }
+  assert.ok(overWarp, "the scan enters over the warp column");
+  await page.screenshot({ path: resolve(output, "live-scan-over-warp-1920x1080.png"), clip: { x: 0, y: 150, width: 820, height: 800 } });
   await page.close();
 }
 // ?scan=off: no scan at all — the heartbeat on the face, a plaque's thread on

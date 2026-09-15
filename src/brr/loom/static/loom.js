@@ -2511,7 +2511,14 @@ const THREADS_AT_ONCE = 6;
 function raise(entry) {
   for (const row of [entry.row, ...entry.strands]) {
     trailLit.delete(row.run);
-    trailLit.set(row.run, { at: clock, paths: trailPaths(row), color: trailColor(row, entry), x: entry.x });
+    trailLit.set(row.run, {
+      at: clock,
+      paths: trailPaths(row),
+      color: trailColor(row, entry),
+      x: entry.x,
+      w: entry.w,
+      focus: entry.focus,
+    });
   }
   for (const run of [...trailLit.keys()].slice(0, Math.max(0, trailLit.size - THREADS_AT_ONCE))) trailLit.delete(run);
 }
@@ -2588,12 +2595,21 @@ function drawRisenThreads() {
   canvas.dataset.trailsLit = String(lit);
   canvas.dataset.scan = scanOff ? "off" : "on";
 }
+let warpFlash = null;
 function drawScanLine() {
   if (scanOff || reduced.matches || !isRevealed("cloth")) return;
   const x = scanX(),
-    y0 = layout.cloth + 34,
+    // Over the warp column the line runs its full height: it is the topmost
+    // thing wherever it exists, and nothing it passes may occlude it.
+    overWarp = x <= layout.warp + 6,
+    y0 = overWarp ? layout.top - 6 : layout.cloth + 34,
     y1 = layout.railY + (layout.compact ? 20 : 26);
   if (!paused) {
+    if (scan.prevX != null && scan.prevX < layout.m + 6 && x >= layout.m + 6) {
+      // Entering: the warp's threads flicker once as the line touches them.
+      warpFlash = { born: clock };
+      glitch(() => regionRects.warp, 140);
+    }
     if (scan.prevX != null && x >= scan.prevX) lightCrossed(scan.prevX, x);
     else if (scan.prevX != null) {
       lightCrossed(scan.prevX, Infinity);
@@ -2601,6 +2617,25 @@ function drawScanLine() {
     }
     scan.prevX = x;
   }
+  // The wake tints what it just crossed for ~200 ms.
+  if (warpFlash) {
+    const age = (clock - warpFlash.born) / 200;
+    if (age < 1) {
+      const w = regionRects.warp;
+      if (w) {
+        g.fillStyle = `rgba(242,177,52,${(0.12 * (1 - age)).toFixed(3)})`;
+        g.fillRect(w.x, w.y, w.w, w.h);
+      }
+    } else warpFlash = null;
+  }
+  for (const t of trailLit.values()) {
+    const age = (clock - t.at) / 200;
+    if (age >= 1 || !t.w) continue;
+    const h = t.focus ? (layout.compact ? 88 : 116) : layout.compact ? 28 : 34;
+    g.fillStyle = `rgba(242,177,52,${(0.14 * (1 - age)).toFixed(3)})`;
+    g.fillRect(t.x - t.w / 2, layout.railY - (t.focus ? (layout.compact ? 26 : 32) : h / 2), t.w, h);
+  }
+  canvas.dataset.scanX = String(Math.round(x));
   const wake = g.createLinearGradient(x - 70, 0, x, 0);
   wake.addColorStop(0, "rgba(242,177,52,0)");
   wake.addColorStop(1, "rgba(242,177,52,0.1)");
@@ -2973,9 +3008,9 @@ function draw(timestamp) {
       if (live && live.x > layout.m && live.x < layout.right - 20) halo(live.x, layout.railY, 16 + pulse * 8, INK.amber, 0.2);
     }
     if (windowOn) drawRisenThreads();
-    drawScanLine();
     tooltip();
     drawRadial();
+    drawScanLine();
   }
   applyGlitches();
   requestAnimationFrame(draw);
