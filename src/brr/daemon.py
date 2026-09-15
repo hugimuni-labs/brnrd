@@ -4688,9 +4688,11 @@ def _frame_heartbeat(
        signatures against this run's rows; the lit list is stashed on
        *card_state* for the portal writer to publish as ``heddles``.
     2. **The card frame** (``card_frame.frame_pass``) ticks coordinate lines
-       on ``.card`` whose PR merged / strand returned, and drafts the delta
-       item at the moments it recognises; the item persists on ``task.meta``
-       and the portal publishes it as ``card.delta``.
+       on ``.card`` whose PR merged / strand returned, rebuilds the card's
+       ``## Ledger`` block (§19.3) from the portal as last written plus the
+       heddles just lit, and drafts the delta item at the moments it
+       recognises; the item persists on ``task.meta`` and the portal
+       publishes it as ``card.delta``.
 
     Here rather than inside :func:`_write_live_portal_state`, which runs at
     every tool boundary (the flush path): both readers are incremental, but
@@ -4751,6 +4753,7 @@ def _frame_heartbeat(
         ),
         run_id=task.id,
         is_strand=_is_strand(task.meta),
+        heddles=card_state.get("heddles"),
     )
 
 
@@ -9547,16 +9550,40 @@ def _drain_agent_card(
     body = text.strip()
     if has_last and state["last"] == body:
         return False
-    state["last"] = body
+    # §19.3: the frame's own blocks (`## Said`, `## Ledger`) and ticks move
+    # the bytes without the weaver writing — the ledger's spend line does on
+    # most heartbeats. Such a change is not a card write (no fresh
+    # `written_monotonic` for the staleness verdict), and when it moves
+    # neither the `## Now` projection nor the course (a frame tick does move
+    # the course) it sends no `card_composed` packet; the node body is still
+    # refreshed so the live node stays whole.
+    ticked = (task.meta.get(card_frame.META_KEY) or {}).get("ticked") or ()
+    frame_only = bool(
+        has_last and state["last"]
+        and card_frame.intent_hash(body, ticked) == card_frame.intent_hash(str(state["last"]), ticked)
+    )
     projection = _card_now_projection(body)
+    course = card.course(body)
+    state["last"] = body
+    if frame_only and projection == state.get("projection") and course == state.get("course"):
+        if account_context is not None and repo_label:
+            try:
+                _persist_run_body(
+                    account_context, task, repo_label=repo_label, card_path=card_path,
+                )
+            except Exception:  # noqa: BLE001 - a card-control bug must not break a run
+                pass
+        return False
     state["projection"] = projection
-    state["written_monotonic"] = time.monotonic()
+    state["course"] = course
+    if not frame_only:
+        state["written_monotonic"] = time.monotonic()
     emit(
         "card_composed",
         run_id=task.id,
         event_id=event_id,
         text=projection,
-        course=card.course(body),
+        course=course,
     )
     # A running run's node used to carry a frame and its traffic but no body,
     # because the body was only captured at closeout — so the one run a reader
