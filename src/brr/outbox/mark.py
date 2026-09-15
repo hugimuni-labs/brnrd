@@ -274,9 +274,9 @@ def _page_from_produce(brr_dir: Path, run_id: str) -> str:
     return ""
 
 
-def promotion_target(f: OutboxFile) -> tuple[Path, str] | None:
+def promotion_target(f: OutboxFile) -> tuple[Path, str, Path | None] | None:
     """Before an ``event:`` reply is delivered: is it the answer to a keep's
-    ask that names its page? ``(bench file, page)`` or ``None``.
+    ask that names its page? ``(bench file, page, ask event file)`` or ``None``.
 
     Read before the reply handler runs — once delivered, the ask is no
     longer pending and does not resolve.
@@ -300,11 +300,29 @@ def promotion_target(f: OutboxFile) -> tuple[Path, str] | None:
     )
     if not page:
         return None
-    return Path(bench), page
+    ask = event.get("_path")
+    return Path(bench), page, ask if isinstance(ask, Path) else None
 
 
-def record_promotion(f: OutboxFile, target: tuple[Path, str]) -> None:
-    path, page = target
+def ask_retired(target: tuple[Path, str, Path | None]) -> bool:
+    """Whether the reply handler retired the promotion ask.
+
+    Not the reply's ``outcome``: a ``mark`` ask belongs to no gate, so its
+    answer is retired ``done`` with the text staged undeliverable — which is
+    exactly an answered internal ask. The ask's own status is the receipt.
+    """
+    ask = target[2]
+    if ask is None:
+        return False
+    try:
+        status = str(protocol.parse_frontmatter(ask.read_text(encoding="utf-8")).get("status") or "")
+    except OSError:
+        return False
+    return status not in ("pending", "processing")
+
+
+def record_promotion(f: OutboxFile, target: tuple[Path, str, Path | None]) -> None:
+    path, page, _ask = target
     try:
         home = account.context_home_root(f.ctx.account_context)
         path.resolve().relative_to((home / "bench").resolve())

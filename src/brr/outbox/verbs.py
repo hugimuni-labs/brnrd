@@ -908,7 +908,7 @@ def handle_event(f: OutboxFile) -> Handled:
     except Exception:  # noqa: BLE001 - the promotion read never costs the reply
         promotion = None
     result = _deliver_event(f)
-    if promotion is not None and result.outcome == "accepted":
+    if promotion is not None and mark.ask_retired(promotion):
         try:
             mark.record_promotion(f, promotion)
         except Exception:  # noqa: BLE001
