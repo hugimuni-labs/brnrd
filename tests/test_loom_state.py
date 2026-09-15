@@ -250,7 +250,14 @@ def test_shuttle_keeps_the_last_twelve_transitions(machine):
     shuttle = state.build(machine["repo"], machine["home"], now=NOW)["shuttle"]
     assert shuttle["state"] == "awake" and shuttle["run_id"] == RUN and shuttle["why"] == "event_dispatched"
     assert [t["why"] for t in shuttle["transitions"]] == [f"t{i}" for i in range(2, 14)]
-    assert set(shuttle["transitions"][0]) == {"at", "from", "to", "why"}
+    assert set(shuttle["transitions"][0]) == {"at", "from", "to", "why", "tick"}
+    assert [t["tick"] for t in shuttle["transitions"]] == list(range(2, 14))
+    assert shuttle["tick"] is None  # no loop has ticked on this home
+
+
+def test_shuttle_tick_is_the_frames_latest_beat(machine):
+    _write(machine["home"] / "tick.json", json.dumps({"n": 4242, "at": iso(NOW), "mono": 1.0}))
+    assert state.build(machine["repo"], machine["home"], now=NOW)["shuttle"]["tick"] == 4242
 
 
 def test_run_facet_reads_controls_and_card_halves(machine):

@@ -195,7 +195,8 @@ def _int(value: Any) -> int | None:
 
 def read_shuttle(account_home: Path | None) -> dict[str, Any] | None:
     """``<account_home>/shuttle.json`` — the seat's state and its last
-    :data:`TRANSITIONS_LAST` transitions. ``None`` when there is no record
+    :data:`TRANSITIONS_LAST` transitions ``{at, from, to, why, tick}``, and
+    ``tick``, the frame's latest beat number. ``None`` when there is no record
     (read with the file's own loader, which would *create* a missing one —
     so absence is checked first: this never writes)."""
     from .. import shuttle as shuttle_mod
@@ -206,13 +207,20 @@ def read_shuttle(account_home: Path | None) -> dict[str, Any] | None:
         seat = shuttle_mod.Shuttle.load(Path(account_home))
     except ValueError:
         return None
+    from .. import tick as tick_mod
+
+    latest = _safe(lambda: tick_mod.current(Path(account_home)), None)
     return {
         "state": seat.state,
         "why": seat.why or None,
         "since": seat.since or None,
         "run_id": seat.run_id or None,
+        # The frame's beat (``<home>/tick.json``, :func:`brr.tick.current`) —
+        # the page's scan is clocked on it; ``null`` before any loop ticked.
+        "tick": latest.n if latest is not None else None,
         "transitions": [
-            {"at": row.get("at"), "from": row.get("from"), "to": row.get("to"), "why": row.get("why")}
+            {"at": row.get("at"), "from": row.get("from"), "to": row.get("to"), "why": row.get("why"),
+             "tick": _int(row.get("tick"))}
             for row in seat.transitions[-TRANSITIONS_LAST:]
         ],
     }
