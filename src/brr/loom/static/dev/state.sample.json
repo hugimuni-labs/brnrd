@@ -21,7 +21,7 @@
     "id": "fixture-screen",
     "name": "The window learns to hold the work",
     "mood": "curious",
-    "mood_glyph": "\u2301[b\u00b7o\u00b7d]",
+    "mood_glyph": "⌁[b·o·d]",
     "started": "2026-09-15T18:00:00Z",
     "elapsed_s": 2400,
     "topic": "the-loom",
@@ -43,16 +43,18 @@
           "done": false
         }
       ],
-      "vector": ["The tree is the between; the bench is the within."],
+      "vector": [
+        "The tree is the between; the bench is the within."
+      ],
       "ledger": [
-        "spend: 2.2m / 20m \u00b7 11%",
-        "produce: the window \u00b7 proposal",
+        "spend: 2.2m / 20m · 11%",
+        "produce: the window · proposal",
         "open: the local gate, pass 2"
       ]
     }
   },
   "hud": {
-    "chip": "\u2301[b\u00b7o\u00b7d]: \u23f1 40m \u2502 q H85\u00b7D56 \u2502 weaving \u2502 threads 2",
+    "chip": "⌁[b·o·d]: ⏱ 40m │ q H85·D56 │ weaving │ threads 2",
     "quota": {
       "session_pct_left": 85,
       "week_pct_left": 56,
@@ -71,7 +73,9 @@
         "status": "live",
         "spent": 480000,
         "allowance": 4000000,
-        "places": ["src/brr/loom/state.py"],
+        "places": [
+          "src/brr/loom/state.py"
+        ],
         "ask_tokens": 150000
       },
       {
@@ -80,7 +84,9 @@
         "status": "submitted",
         "spent": 190000,
         "allowance": 1000000,
-        "places": ["tests/test_loom.py"],
+        "places": [
+          "tests/test_loom.py"
+        ],
         "ask_tokens": null
       }
     ],
@@ -204,11 +210,11 @@
           "scope": "resident",
           "spent": 2200000,
           "status": "known",
-          "summary": "spend 0/20m \u00b7 0%",
+          "summary": "spend 0/20m · 0%",
           "tokens": 20000000,
           "stake": {
             "tokens": 4000000,
-            "summary": "4m \u00b7 cut at 80%"
+            "summary": "4m · cut at 80%"
           }
         },
         "coexisting_runs": {
@@ -340,23 +346,32 @@
   "heddles": [
     {
       "slug": "the-loom",
-      "rune": "\u16d7",
+      "rune": "ᛗ",
       "lit": 0.96,
       "last_lit": "2026-09-15T18:40:00Z",
       "signature": {
-        "places": ["src/brr/loom/*"],
-        "words": ["loom"],
+        "places": [
+          "src/brr/loom/*"
+        ],
+        "words": [
+          "loom"
+        ],
         "produce": [],
-        "threads": ["fixture-feed", "fixture-map"]
+        "threads": [
+          "fixture-feed",
+          "fixture-map"
+        ]
       }
     },
     {
       "slug": "the-shuttle",
-      "rune": "\u16b1",
+      "rune": "ᚱ",
       "lit": 0.62,
       "last_lit": "2026-09-15T18:37:00Z",
       "signature": {
-        "places": ["src/brr/daemon.py"],
+        "places": [
+          "src/brr/daemon.py"
+        ],
         "words": [],
         "produce": [],
         "threads": []
@@ -364,7 +379,7 @@
     },
     {
       "slug": "the-seam",
-      "rune": "\u16c9",
+      "rune": "ᛉ",
       "lit": 0.3,
       "last_lit": "2026-09-15T18:20:00Z",
       "signature": {
@@ -376,7 +391,7 @@
     },
     {
       "slug": "the-warp",
-      "rune": "\u16b9",
+      "rune": "ᚹ",
       "lit": 0.48,
       "last_lit": "2026-09-15T18:30:00Z",
       "signature": {
@@ -388,7 +403,7 @@
     },
     {
       "slug": "the-bench",
-      "rune": "\u16d2",
+      "rune": "ᛒ",
       "lit": 0.72,
       "last_lit": "2026-09-15T18:38:00Z",
       "signature": {
@@ -400,7 +415,7 @@
     },
     {
       "slug": "the-voice",
-      "rune": "\u16a8",
+      "rune": "ᚨ",
       "lit": 0.12,
       "last_lit": "2026-09-15T17:50:00Z",
       "signature": {
@@ -424,7 +439,9 @@
         "id": "w-80",
         "type": "action",
         "title": "Give the loom its window",
-        "topics": ["the-loom"],
+        "topics": [
+          "the-loom"
+        ],
         "needs": [],
         "state": "ready",
         "taken": "fixture-screen"
@@ -433,7 +450,10 @@
         "id": "w-81",
         "type": "preparation",
         "title": "Read the ledger on the beat",
-        "topics": ["the-loom", "the-shuttle"],
+        "topics": [
+          "the-loom",
+          "the-shuttle"
+        ],
         "needs": [],
         "state": "ready",
         "taken": "fixture-feed"
@@ -442,8 +462,13 @@
         "id": "w-82",
         "type": "action",
         "title": "Let the console reach back",
-        "topics": ["the-loom", "the-voice"],
-        "needs": ["w-81"],
+        "topics": [
+          "the-loom",
+          "the-voice"
+        ],
+        "needs": [
+          "w-81"
+        ],
         "state": "held",
         "taken": null
       },
@@ -451,7 +476,9 @@
         "id": "w-83",
         "type": "decision",
         "title": "Open the fold at its place",
-        "topics": ["the-bench"],
+        "topics": [
+          "the-bench"
+        ],
         "needs": [],
         "state": "ready",
         "taken": null
@@ -460,7 +487,9 @@
         "id": "w-84",
         "type": "action",
         "title": "Separate the card halves",
-        "topics": ["the-seam"],
+        "topics": [
+          "the-seam"
+        ],
         "needs": [],
         "state": "done",
         "taken": null
@@ -471,47 +500,114 @@
     {
       "at": "2026-09-15T18:35:00Z",
       "act": "probe",
-      "places": ["src/brr/daemon.py"],
+      "places": [
+        "src/brr/daemon.py"
+      ],
       "ctx_after": 270000,
       "delta": 1100,
       "detail": "Read how the live shuttle enters the frame",
-      "topics": ["the-loom", "the-shuttle"]
+      "topics": [
+        "the-loom",
+        "the-shuttle"
+      ]
     },
     {
       "at": "2026-09-15T18:36:00Z",
       "act": "probe",
-      "places": ["src/brr/hud.py"],
+      "places": [
+        "src/brr/hud.py"
+      ],
       "ctx_after": 272600,
       "delta": 2600,
       "detail": "Read the chip and the measured quotas",
-      "topics": ["the-loom", "the-seam"]
+      "topics": [
+        "the-loom",
+        "the-seam"
+      ]
     },
     {
       "at": "2026-09-15T18:37:00Z",
       "act": "mutate",
-      "places": ["src/brr/loom/state.py"],
+      "places": [
+        "src/brr/loom/state.py"
+      ],
       "ctx_after": 278000,
       "delta": 5400,
       "detail": "Join the live boundaries to their places",
-      "topics": ["the-loom", "the-shuttle"]
+      "topics": [
+        "the-loom",
+        "the-shuttle"
+      ]
     },
     {
       "at": "2026-09-15T18:38:00Z",
       "act": "probe",
-      "places": ["src/brr/bench.py"],
+      "places": [
+        "src/brr/bench.py"
+      ],
       "ctx_after": 283000,
       "delta": 5000,
       "detail": "Read the fold at its measured address",
-      "topics": ["the-loom", "the-bench"]
+      "topics": [
+        "the-loom",
+        "the-bench"
+      ]
     },
     {
       "at": "2026-09-15T18:39:00Z",
       "act": "mutate",
-      "places": ["src/brr/loom/static/loom.js"],
+      "places": [
+        "src/brr/loom/static/loom.js"
+      ],
       "ctx_after": 293000,
       "delta": 10000,
       "detail": "Draw the wyrd-tree and let a click open its receipt",
-      "topics": ["the-loom"]
+      "topics": [
+        "the-loom"
+      ]
+    },
+    {
+      "at": "2026-09-15T18:39:30Z",
+      "act": "probe",
+      "place_kind": "home",
+      "places": [
+        "knowledge/repos/brnrd/design-the-loom.md"
+      ],
+      "ctx_after": 291000,
+      "delta": 3000,
+      "detail": "Read the one document, section 4",
+      "topics": [
+        "the-loom"
+      ]
+    },
+    {
+      "at": "2026-09-15T18:40:00Z",
+      "act": "publish",
+      "place_kind": "forge",
+      "places": [
+        "#1961"
+      ],
+      "ctx_after": 293000,
+      "delta": 2000,
+      "detail": "gh pr create --title \"Give the loom its window\"",
+      "topics": [
+        "the-loom"
+      ]
+    },
+    {
+      "at": "2026-09-15T18:40:30Z",
+      "act": "reply",
+      "place_kind": "wire",
+      "places": [
+        "telegram"
+      ],
+      "ctx_after": 294200,
+      "delta": 1200,
+      "detail": "Tell him the window is up",
+      "topics": [
+        "the-loom",
+        "the-voice"
+      ]
     }
   ],
   "cloth": {
@@ -523,13 +619,19 @@
         "name": "The seat that stays",
         "shell": "claude",
         "core": "fable",
-        "topics": ["the-shuttle"],
-        "prs": [1961],
+        "topics": [
+          "the-shuttle"
+        ],
+        "prs": [
+          1961
+        ],
         "knots": 4,
         "pages": 1,
         "tokens": 980000,
         "parent": null,
-        "places": ["src/brr/daemon.py"]
+        "places": [
+          "src/brr/daemon.py"
+        ]
       },
       {
         "run": "fixture-2",
@@ -538,13 +640,21 @@
         "name": "A name for every layer",
         "shell": "codex",
         "core": "gpt-5.5",
-        "topics": ["the-loom", "the-warp"],
-        "prs": [1980],
+        "topics": [
+          "the-loom",
+          "the-warp"
+        ],
+        "prs": [
+          1980
+        ],
         "knots": 3,
         "pages": 1,
         "tokens": 450000,
         "parent": null,
-        "places": ["src/brr/warp.py", "src/brr/loom/state.py"]
+        "places": [
+          "src/brr/warp.py",
+          "src/brr/loom/state.py"
+        ]
       },
       {
         "run": "fixture-3",
@@ -553,13 +663,20 @@
         "name": "The fold finds an address",
         "shell": "claude",
         "core": "opus",
-        "topics": ["the-bench", "the-loom"],
-        "prs": [1981],
+        "topics": [
+          "the-bench",
+          "the-loom"
+        ],
+        "prs": [
+          1981
+        ],
         "knots": 2,
         "pages": 1,
         "tokens": 310000,
         "parent": null,
-        "places": ["src/brr/bench.py"]
+        "places": [
+          "src/brr/bench.py"
+        ]
       },
       {
         "run": "fixture-4",
@@ -568,13 +685,19 @@
         "name": "The card in two halves",
         "shell": "codex",
         "core": "gpt-5.5",
-        "topics": ["the-seam"],
-        "prs": [1984],
+        "topics": [
+          "the-seam"
+        ],
+        "prs": [
+          1984
+        ],
         "knots": 2,
         "pages": 0,
         "tokens": 270000,
         "parent": null,
-        "places": ["src/brr/hud.py"]
+        "places": [
+          "src/brr/hud.py"
+        ]
       },
       {
         "run": "fixture-5",
@@ -583,13 +706,21 @@
         "name": "A message spans topics",
         "shell": "claude",
         "core": "opus",
-        "topics": ["the-warp", "the-voice"],
-        "prs": [1985],
+        "topics": [
+          "the-warp",
+          "the-voice"
+        ],
+        "prs": [
+          1985
+        ],
         "knots": 3,
         "pages": 0,
         "tokens": 380000,
         "parent": null,
-        "places": ["src/brr/warp.py", "src/brr/prompts/weave.md"]
+        "places": [
+          "src/brr/warp.py",
+          "src/brr/prompts/weave.md"
+        ]
       },
       {
         "run": "fixture-screen",
@@ -598,7 +729,9 @@
         "name": "The window learns to hold the work",
         "shell": "codex",
         "core": "gpt-6-astra",
-        "topics": ["the-loom"],
+        "topics": [
+          "the-loom"
+        ],
         "prs": [],
         "knots": 0,
         "pages": 0,
@@ -625,65 +758,128 @@
         "heat": 0.48,
         "last": "2026-09-15T18:35:00Z",
         "knots": 3,
-        "topics": ["the-loom", "the-shuttle"]
+        "topics": [
+          "the-loom",
+          "the-shuttle"
+        ]
       },
       {
         "path": "src/brr/hud.py",
         "heat": 0.6,
         "last": "2026-09-15T18:36:00Z",
         "knots": 2,
-        "topics": ["the-loom", "the-seam"]
+        "topics": [
+          "the-loom",
+          "the-seam"
+        ]
       },
       {
         "path": "src/brr/bench.py",
         "heat": 0.7,
         "last": "2026-09-15T18:38:00Z",
         "knots": 1,
-        "topics": ["the-loom", "the-bench"]
+        "topics": [
+          "the-loom",
+          "the-bench"
+        ]
       },
       {
         "path": "src/brr/warp.py",
         "heat": 0.25,
         "last": "2026-09-15T17:10:00Z",
         "knots": 2,
-        "topics": ["the-warp"]
+        "topics": [
+          "the-warp"
+        ]
       },
       {
         "path": "src/brr/loom/state.py",
         "heat": 0.85,
         "last": "2026-09-15T18:37:00Z",
         "knots": 0,
-        "topics": ["the-loom", "the-shuttle"]
+        "topics": [
+          "the-loom",
+          "the-shuttle"
+        ]
       },
       {
         "path": "src/brr/loom/static/index.html",
         "heat": 0.72,
         "last": "2026-09-15T18:38:00Z",
         "knots": 0,
-        "topics": ["the-loom"]
+        "topics": [
+          "the-loom"
+        ]
       },
       {
         "path": "src/brr/loom/static/loom.js",
         "heat": 1,
         "last": "2026-09-15T18:39:00Z",
         "knots": 0,
-        "topics": ["the-loom"]
+        "topics": [
+          "the-loom"
+        ]
       },
       {
         "path": "src/brr/prompts/weave.md",
         "heat": 0.3,
         "last": "2026-09-15T17:00:00Z",
         "knots": 1,
-        "topics": ["the-voice"]
+        "topics": [
+          "the-voice"
+        ]
       },
       {
         "path": "tests/test_loom.py",
         "heat": 0.65,
         "last": "2026-09-15T18:36:00Z",
         "knots": 1,
-        "topics": ["the-loom"]
+        "topics": [
+          "the-loom"
+        ]
       }
-    ]
+    ],
+    "home": {
+      "places": [
+        {
+          "path": "dominion/thread-of-record.md",
+          "heat": 0.72,
+          "last": "2026-09-15T18:36:30Z",
+          "knots": 0,
+          "topics": [
+            "the-loom"
+          ]
+        },
+        {
+          "path": "knowledge/repos/brnrd/design-the-loom.md",
+          "heat": 0.9,
+          "last": "2026-09-15T18:39:30Z",
+          "knots": 2,
+          "topics": [
+            "the-loom",
+            "the-warp"
+          ]
+        },
+        {
+          "path": "surface/plans/active.md",
+          "heat": 0.4,
+          "last": "2026-09-15T18:20:00Z",
+          "knots": 0,
+          "topics": [
+            "the-warp"
+          ]
+        },
+        {
+          "path": "bench/folds/loom-js.md",
+          "heat": 0.55,
+          "last": "2026-09-15T18:38:30Z",
+          "knots": 0,
+          "topics": [
+            "the-bench"
+          ]
+        }
+      ]
+    }
   },
   "bench": {
     "folds": []

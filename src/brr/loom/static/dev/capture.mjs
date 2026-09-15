@@ -92,6 +92,7 @@ for (const [w, h] of [
   await page.close();
 }
 // Live: the real state of this machine, as the feed serves it.
+const data = (page) => page.evaluate(() => ({ ...document.querySelector("#loom").dataset }));
 for (const [w, h] of [
   [1920, 1080],
   [1280, 720],
@@ -107,23 +108,78 @@ for (const [w, h] of [
   await page.waitForTimeout(SETTLE);
   await page.screenshot({ path: resolve(output, `live-${w}x${h}.png`) });
   if (w === 1920) {
-    const heddles = await (await fetch(base + "/loom/state.json")).json();
-    const lit = heddles.heddles
-      .map((x, i) => [x, i])
-      .filter(([x, i]) => i < 6 && x.lit > 0.05)
-      .sort((a, b) => b[0].lit - a[0].lit);
-    if (lit[0]) {
-      await page.keyboard.press(String(lit[0][1] + 1));
-      await page.waitForTimeout(900);
+    // Lift is deterministic: one click = one toggle, the window rebuilt from
+    // the intersection each time, a second click restores the counts exactly.
+    const base0 = await data(page);
+    const runes = JSON.parse(base0.runes);
+    const live = (await (await fetch(base + "/loom/state.json")).json()).heddles
+      .filter((x) => x.lit > 0.05)
+      .sort((a, b) => b.lit - a.lit)
+      .map((x) => x.slug);
+    const [a, b] = live;
+    const click = async (slug) => {
+      const [x, y] = runes[slug];
+      await page.mouse.click(x, y);
+      await page.waitForTimeout(450);
+      return data(page);
+    };
+    if (a) {
+      const one = await click(a);
+      assert.equal(one.lifted, a, "one click lifts one rune");
       await page.screenshot({ path: resolve(output, `live-lifted-${w}x${h}.png`) });
-      if (lit[1]) {
-        await page.keyboard.press(String(lit[1][1] + 1));
-        await page.waitForTimeout(900);
-        await page.screenshot({ path: resolve(output, `live-intersection-${w}x${h}.png`) });
-      }
-      await page.keyboard.press("Escape");
+      assert.match(await page.locator("#receipt").innerText(), /The shed is raised/);
+      await page.screenshot({ path: resolve(output, "live-page-heddle.png") });
+      // No hover reflow while lifted.
+      await page.mouse.move(700, 600);
       await page.waitForTimeout(700);
+      assert.equal((await data(page)).places, one.places, "hover does not reflow a lifted window");
+      if (b) {
+        const both = await click(b);
+        assert.equal(both.lifted, `${a},${b}`, "a second rune intersects");
+        assert.ok(Number(both.places) <= Number(one.places), "an intersection never widens the window");
+        await page.screenshot({ path: resolve(output, `live-intersection-${w}x${h}.png`) });
+        const onlyB = await click(a);
+        assert.equal(onlyB.lifted, b, "clicking a lifted rune drops only it");
+        const none = await click(b);
+        assert.equal(none.lifted, "", "every toggle is undone by its second click");
+        assert.equal(none.passes, base0.passes);
+      }
+      const again = await click(a);
+      assert.equal(again.lifted, a);
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(300);
+      assert.equal((await data(page)).lifted, "", "Esc drops all");
     }
+    // The bench renders pages: pass, bead, item, place.
+    await page.getByRole("button", { name: "Open shuttle card", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: resolve(output, "live-page-pass.png") });
+    const beadRow = page.locator("#receipt .bench-row").first();
+    if (await beadRow.count()) {
+      await beadRow.click();
+      await page.waitForTimeout(400);
+      assert.match(await page.locator("#receipt").innerText(), /command/i);
+      await page.screenshot({ path: resolve(output, "live-page-bead.png") });
+      await page.locator("#receipt .bench-back").first().click();
+      await page.waitForTimeout(300);
+      assert.match(await page.locator("#receipt").innerText(), /a pass:/, "‹ back returns to the pass");
+    }
+    const work = page.locator('#access button:text-matches("^Open work ")').first();
+    if (await work.count()) {
+      await work.focus();
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(400);
+      await page.screenshot({ path: resolve(output, "live-page-item.png") });
+    }
+    const place = page.locator('#access button:text-matches("^Open place ")').first();
+    if (await place.count()) {
+      await place.focus();
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(600);
+      await page.screenshot({ path: resolve(output, "live-page-place.png") });
+    }
+    await page.keyboard.press("Escape");
     for (let i = 0; i < 7; i++) await page.keyboard.press("ArrowLeft");
     await page.waitForTimeout(900);
     await page.screenshot({ path: resolve(output, `live-rail-mid-scroll-${w}x${h}.png`) });

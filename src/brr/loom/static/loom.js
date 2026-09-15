@@ -158,6 +158,8 @@ let glitches = [],
   glitchSeed = 1;
 const pings = new Map(),
   pendingPing = new Set();
+let prForge = null,
+  forgeDrop = null;
 let sweepPrev = null,
   expanded = null,
   expandTimer = 0,
@@ -542,7 +544,7 @@ function passPlaces(row) {
       .map((p) => (typeof p === "string" ? p : p.path))
       .filter(Boolean);
   if (row?.run === state?.run?.id)
-    return [...new Set(list(state.beads).flatMap((b) => list(b.places)))];
+    return [...new Set(list(state.beads).filter(fileBead).flatMap((b) => list(b.places)))];
   const thread = list(state?.hud?.strands).find((t) => t.id === row?.run);
   return Array.isArray(thread?.places) ? thread.places : null;
 }
@@ -572,7 +574,7 @@ function mergedPlaces() {
   const places = new Map();
   for (const p of list(state?.tree?.places))
     if (p.path) places.set(p.path, { ...p, topics: list(p.topics) });
-  for (const b of list(state?.beads))
+  for (const b of list(state?.beads).filter(fileBead))
     for (const path of list(b.places)) {
       if (!places.has(path))
         places.set(path, {
@@ -610,35 +612,48 @@ function mergedPlaces() {
     (p) => matches(p.topics) && (!union || union.has(p.path)),
   );
 }
+// Places beyond files: four fixed places around the roots.
+const FIXED = ["forge", "wire", "shed", "crew"];
+const FIXED_GLYPH = { forge: "◆", wire: "≋", shed: "⌂", crew: "⁂" };
+function beadPath(b) {
+  const kind = b?.place_kind || "file";
+  if (FIXED.includes(kind)) return kind + ":";
+  if (kind === "clock") return null;
+  const p = list(b?.places).at(-1);
+  if (!p) return null;
+  return kind === "home" ? "home:" + p : p;
+}
+const fileBead = (b) => (b.place_kind || "file") === "file";
 function newestPlace() {
-  const b = [...list(state?.beads)].reverse().find((b) => list(b.places).length);
-  return b ? list(b.places).at(-1) : null;
+  return [...list(state?.beads)].reverse().map(beadPath).find(Boolean) || null;
 }
 function actorHistory() {
   const out = [];
   for (const b of list(state?.beads)) {
     if (!matches(b.topics)) continue;
-    const p = list(b.places).at(-1);
+    const p = beadPath(b);
     if (p && out.at(-1) !== p) out.push(p);
   }
   return out.slice(-8);
 }
-function rebuild() {
-  sceneDirty = true;
-  if (!state || !layout) return;
-  const all = mergedPlaces();
-  const actorPath = newestPlace();
-  // Fewer things at once: the hottest places, plus everything the eye must
-  // not lose — the shuttle, its trail, the threads, the selection.
-  const pinned = new Set(actorHistory());
-  if (actorPath) pinned.add(actorPath);
-  for (const t of list(state.hud?.strands)) {
-    const p = list(t.places).at(-1);
-    if (p) pinned.add(p);
-  }
-  if (selected.kind === "place" && selected.data?.path)
-    pinned.add(selected.data.path);
-  const ranked = all
+function homePlaces() {
+  const places = new Map();
+  for (const p of list(state?.tree?.home?.places))
+    if (p.path) places.set("home:" + p.path, { ...p, topics: list(p.topics), path: "home:" + p.path, kind: "home" });
+  for (const b of list(state?.beads))
+    if (b.place_kind === "home")
+      for (const path of list(b.places))
+        if (!places.has("home:" + path))
+          places.set("home:" + path, { path: "home:" + path, heat: null, knots: null, topics: list(b.topics), last: b.at, kind: "home" });
+  return [...places.values()].filter((p) => matches(p.topics));
+}
+function prsInView() {
+  const entry = layout && state ? railLayout().find((r) => r.focus) : null;
+  if (!entry) return [];
+  return [...new Set([entry.row, ...entry.strands].flatMap((r) => list(r.prs)))];
+}
+function cap(places, limit, pinned) {
+  const ranked = places
     .slice()
     .sort(
       (a, b) =>
@@ -646,46 +661,37 @@ function rebuild() {
         String(b.last || "").localeCompare(String(a.last || "")) ||
         a.path.localeCompare(b.path),
     );
-  const cap = lifted.size ? LIFTED_CAP : PLACE_CAP,
-    shown = new Map();
+  const shown = new Map();
   for (const p of ranked) if (pinned.has(p.path)) shown.set(p.path, p);
   for (const p of ranked) {
-    if (shown.size >= cap) break;
+    if (shown.size >= limit) break;
     shown.set(p.path, p);
   }
   if (expanded)
-    for (const p of ranked)
-      if (p.path.startsWith(expanded + "/")) shown.set(p.path, p);
-  shownCount = shown.size;
-  hiddenCount = all.length - shown.size;
-  const root = {
-    path: "",
-    name: state.repo || "repo",
-    children: new Map(),
-  };
-  for (const place of shown.values()) {
-    const parts = place.path.split("/").filter(Boolean);
-    const compact =
-      parts.length > 4 ? [parts[0], parts[1], "…", parts.at(-1)] : parts;
+    for (const p of ranked) if (p.path.startsWith(expanded + "/")) shown.set(p.path, p);
+  return shown;
+}
+function buildTrie(places, rootPath, rootName) {
+  const root = { path: rootPath, name: rootName, children: new Map(), root: true, home: rootPath === "home:" };
+  for (const place of places) {
+    const rel = place.path.slice(rootPath.length),
+      parts = rel.split("/").filter(Boolean);
+    const compact = parts.length > 4 ? [parts[0], parts[1], "…", parts.at(-1)] : parts;
     let node = root,
       prefix = "";
     compact.forEach((part, i) => {
       const leaf = i === compact.length - 1;
-      prefix = leaf ? place.path : (prefix ? prefix + "/" : "") + part;
-      if (!node.children.has(prefix))
-        node.children.set(prefix, {
-          path: prefix,
-          name: part,
-          children: new Map(),
-        });
-      node = node.children.get(prefix);
+      prefix = leaf ? rel : (prefix ? prefix + "/" : "") + part;
+      const key = rootPath + prefix;
+      if (!node.children.has(key))
+        node.children.set(key, { path: key, name: part, children: new Map(), home: root.home });
+      node = node.children.get(key);
     });
     node.place = place;
   }
   function compress(node) {
-    for (const [key, child] of node.children)
-      node.children.set(key, compress(child));
-    while (node !== root && !node.place && node.children.size === 1) {
+    for (const [key, child] of node.children) node.children.set(key, compress(child));
+    while (!node.root && !node.place && node.children.size === 1) {
       const child = [...node.children.values()][0];
       node = { ...child, name: node.name + "/" + child.name };
     }
@@ -694,7 +700,7 @@ function rebuild() {
   compress(root);
   const nodes = [],
     leaves = [];
-  function visit(node, parent = null, depth = 0) {
+  (function visit(node, parent = null, depth = 0) {
     node.parent = parent;
     node.depth = depth;
     nodes.push(node);
@@ -706,58 +712,98 @@ function rebuild() {
       ),
     );
     for (const child of node.children.values()) visit(child, node, depth + 1);
-    if (!node.children.size) leaves.push(node);
-    node.topics = node.place?.topics || [
-      ...new Set([...node.children.values()].flatMap((n) => n.topics)),
-    ];
-  }
-  visit(root);
-  for (const node of nodes)
-    node.hiddenBelow = node.path
-      ? all.filter(
-          (p) => !shown.has(p.path) && p.path.startsWith(node.path + "/"),
-        ).length
-      : hiddenCount;
-  treeNodes = nodes;
-  const T = layout.tree,
-    bottom = T.y + T.h - 30,
-    top = T.y + 46;
+    if (!node.children.size && !node.root) leaves.push(node);
+    node.topics = node.place?.topics || [...new Set([...node.children.values()].flatMap((n) => n.topics))];
+  })(root);
+  return { root, nodes, leaves };
+}
+function layoutTrie(trie, x0, x1, top, bottom, next) {
+  const { nodes, leaves, root } = trie;
   const maxDepth = Math.max(1, ...nodes.map((n) => n.depth));
-  const x0 = T.x + 64,
-    x1 = T.x + T.w - 80,
-    spacing = (x1 - x0) / Math.max(1, leaves.length - 1);
-  const next = new Map();
+  const spacing = (x1 - x0) / Math.max(1, leaves.length - 1);
   const yOf = (depth) => bottom - ((bottom - top) * depth) / maxDepth;
   leaves.forEach((node, i) =>
     next.set(node.path, {
-      x: leaves.length === 1 ? T.x + T.w / 2 : x0 + i * spacing,
+      x: leaves.length === 1 ? (x0 + x1) / 2 : x0 + i * spacing,
       // Crowded rows alternate half a step so labels can take turns.
-      y:
-        yOf(node.depth) +
-        (spacing < 70 && node.depth > 0 && i % 2
-          ? Math.min(22, (bottom - top) / maxDepth / 2.4)
-          : 0),
+      y: yOf(node.depth) + (spacing < 70 && i % 2 ? Math.min(22, (bottom - top) / maxDepth / 2.4) : 0),
     }),
   );
-  function place(node) {
+  (function place(node) {
     if (!node.children.size) return;
     const children = [...node.children.values()];
     children.forEach(place);
     next.set(node.path, {
-      x:
-        children.reduce((sum, n) => sum + next.get(n.path).x, 0) /
-        children.length,
+      x: children.reduce((sum, n) => sum + next.get(n.path).x, 0) / children.length,
       y: yOf(node.depth),
     });
-  }
-  place(root);
-  const r0 = next.get("");
-  next.set("", {
-    x: Math.max(T.x + T.w * 0.3, Math.min(T.x + T.w * 0.7, r0?.x ?? T.x + T.w / 2)),
+  })(root);
+  const r0 = next.get(root.path);
+  next.set(root.path, {
+    x: Math.max(x0 + (x1 - x0) * 0.25, Math.min(x0 + (x1 - x0) * 0.75, r0?.x ?? (x0 + x1) / 2)),
     y: bottom,
   });
-  const changed =
-    JSON.stringify([...next]) !== JSON.stringify([...targetPositions]);
+}
+function rebuild() {
+  sceneDirty = true;
+  if (!state || !layout) return;
+  const all = mergedPlaces(),
+    allHome = homePlaces();
+  const actorPath = newestPlace();
+  // Fewer things at once: the hottest places, plus everything the eye must
+  // not lose — the shuttle, its trail, the threads, the selection.
+  const pinned = new Set(actorHistory());
+  if (actorPath) pinned.add(actorPath);
+  for (const t of list(state.hud?.strands)) {
+    const p = list(t.places).at(-1);
+    if (p) pinned.add(p);
+  }
+  if (selected.kind === "place" && selected.data?.path) pinned.add(selected.data.path);
+  const shown = cap(all, lifted.size ? LIFTED_CAP : PLACE_CAP, pinned),
+    shownHome = cap(allHome, lifted.size ? 24 : 12, pinned);
+  shownCount = shown.size + shownHome.size;
+  hiddenCount = all.length + allHome.length - shownCount;
+  const repo = buildTrie([...shown.values()], "", state.repo || "repo"),
+    home = buildTrie([...shownHome.values()], "home:", "home");
+  const hasHome = home.leaves.length > 0;
+  for (const [trie, pool, set] of [
+    [repo, all, shown],
+    [home, allHome, shownHome],
+  ])
+    for (const node of trie.nodes)
+      node.hiddenBelow = node.root
+        ? pool.length - set.size
+        : pool.filter((p) => !set.has(p.path) && p.path.startsWith(node.path + "/")).length;
+  const T = layout.tree,
+    bottom = T.y + T.h - 30,
+    top = T.y + 46;
+  const homeW = hasHome ? Math.min(T.w * 0.3, 380) : 0,
+    rightStrip = 120;
+  const next = new Map();
+  layoutTrie(repo, T.x + homeW + 64, T.x + T.w - rightStrip, top, bottom, next);
+  if (hasHome) layoutTrie(home, T.x + 44, T.x + homeW - 24, T.y + T.h * 0.42, bottom, next);
+  // The fixed places: the forge upper-right, the shed beside the face, the
+  // crew beside the strands, the wire lower-left.
+  const fixedAt = {
+    forge: { x: T.x + T.w - 64, y: T.y + 58 },
+    shed: { x: T.x + T.w - 46, y: T.y + T.h * 0.34 },
+    crew: { x: T.x + T.w - 64, y: T.y + T.h * 0.66 },
+    wire: { x: T.x + 40, y: T.y + T.h - 74 },
+  };
+  const fixedNodes = FIXED.map((kind) => ({
+    path: kind + ":",
+    name: kind,
+    fixed: kind,
+    children: new Map(),
+    depth: 1,
+    topics: [],
+    parent: kind === "wire" && hasHome ? home.root : repo.root,
+    hiddenBelow: 0,
+  }));
+  for (const n of fixedNodes) next.set(n.path, fixedAt[n.fixed]);
+  treeNodes = [...repo.nodes, ...(hasHome ? home.nodes : []), ...fixedNodes];
+  layout.hasHome = hasHome;
+  const changed = JSON.stringify([...next]) !== JSON.stringify([...targetPositions]);
   if (changed) {
     positions = new Map([...next].map(([path, p]) => [path, point(path) || p]));
     targetPositions = next;
@@ -774,10 +820,9 @@ function rebuild() {
       from[shared].y === to[shared].y
     )
       shared++;
-    const route = from.length
-      ? [...from.slice(Math.max(0, shared - 1)).reverse(), ...to.slice(shared)]
-      : [];
-    // The shuttle walks the branch lines: 300–600 ms, eased, never teleports.
+    // Different roots share nothing: the walk runs down one tree, along the
+    // weft, and up the other.
+    const route = from.length ? [...from.slice(Math.max(0, shared - 1)).reverse(), ...to.slice(shared)] : [];
     walk = {
       route,
       born: clock,
@@ -791,10 +836,11 @@ function rebuild() {
   Object.assign(canvas.dataset, {
     lifted: [...lifted].join(","),
     places: String(shownCount),
-    placesTotal: String(all.length),
+    placesTotal: String(all.length + allHome.length),
     passes: String(clothRows().length),
     groups: String(railGroups().length),
     warp: String(list(state.warp?.items).filter((w) => matches(w.topics) && !["done", "retired"].includes(w.state)).length),
+    actor: actorPath || "",
   });
 }
 function planLabels() {
@@ -818,7 +864,7 @@ function planLabels() {
   const a = actor && targetPositions.get(actor.path);
   if (a) boxes.push({ x: a.x - 40, y: a.y - 36, w: 124, h: 30 });
   const rank = (n) =>
-    !n.path
+    n.root
       ? 0
       : n.path === actor?.path
         ? 1
@@ -827,16 +873,20 @@ function planLabels() {
           : n.children.size
             ? 10 + n.depth
             : 100 - clamp(n.place?.heat) * 50;
+  for (const n of treeNodes) {
+    const p = n.fixed && targetPositions.get(n.path);
+    if (p) boxes.push({ x: p.x - 30, y: p.y - 16, w: 60, h: n.fixed === "forge" ? 48 : 36 });
+  }
   for (const n of treeNodes.slice().sort((x, y) => rank(x) - rank(y))) {
     const p = targetPositions.get(n.path);
-    if (!p) continue;
+    if (!p || n.fixed) continue;
     const dir = n.children.size > 0,
-      size = !n.path ? 11 : 10;
-    measure.font = font(size, !n.path || dir ? 500 : 400);
-    let label = !n.path ? n.name : dir ? n.name + "/" : n.name;
+      size = n.root ? (n.home ? 10 : 11) : n.home ? 9 : 10;
+    measure.font = font(size, n.root || dir ? 500 : 400);
+    let label = n.root ? n.name : dir ? n.name + "/" : n.name;
     if (label.length > 28) label = label.slice(0, 26) + "…";
     const w = measure.measureText(label).width;
-    const cands = !n.path
+    const cands = n.root
       ? [[p.x - w / 2, p.y + 20]]
       : dir
         ? [
@@ -853,7 +903,7 @@ function planLabels() {
           ];
     for (const [lx, ly] of cands) {
       const b = { x: lx - 2, y: ly - size, w: w + 4, h: size + 4 };
-      if (!n.path || clear(b)) {
+      if (n.root || clear(b)) {
         boxes.push(b);
         n.label = { text: label, dx: lx - p.x, dy: ly - p.y, size, w };
         break;
@@ -936,7 +986,15 @@ function receive(next) {
         sparks.push({ born, seed: glitchSeed++, count: 12 + (glitchSeed % 9) });
         glitch(() => blockRect(0), 120, born);
         for (const path of list(b.places)) pendingPing.add(path);
+        const bp = beadPath(b);
+        if (bp) pendingPing.add(bp);
       });
+    const before = prForge;
+    prForge = prsInView().length;
+    if (before != null && prForge > before) {
+      forgeDrop = { born: clock };
+      glitch(() => regionRects.forge, 140, clock + 400);
+    }
     if (prior.shuttle?.state !== next.shuttle?.state)
       glitch(() => regionRects.faceWord, 140);
     for (const h of list(next.heddles)) {
@@ -1295,7 +1353,9 @@ function placePage(data) {
   section(`Passes that touched it · ${passes.length}`);
   for (const r of passes.slice(-12)) link(r.name || r.run, () => select("cloth", r));
   if (!passes.length) pending();
-  const beads = list(state.beads).filter((b) => list(b.places).includes(data.path) && matches(b.topics));
+  const beads = list(state.beads).filter(
+    (b) => (beadPath(b) === data.path || (fileBead(b) && list(b.places).includes(data.path))) && matches(b.topics),
+  );
   section(`Beads · ${beads.length}`);
   if (beads.length) beadList(beads);
   else receipt.append(element("p", "none in this run"));
@@ -1654,46 +1714,87 @@ function drawTree() {
   g.clip();
   const focusPaths = focusedPaths();
   const inFocus = (node) =>
-    !node.path ||
-    [...focusPaths].some(
-      (path) => path === node.path || path.startsWith(node.path + "/"),
-    );
+    node.root ||
+    node.home ||
+    node.fixed ||
+    [...focusPaths].some((path) => path === node.path || path.startsWith(node.path + "/"));
+  const visited = new Set(actorHistory());
+  const root = point(""),
+    homeRoot = layout.hasHome ? point("home:") : null;
+  // The weft: both roots stand on it; the trunk runs down into the cloth.
+  if (root) strokePath([{ x: root.x, y: root.y }, { x: root.x, y: T.y + T.h }], "#5d513d", 1.4, 0.9);
+  if (homeRoot && root) {
+    strokePath([{ x: T.x, y: root.y }, { x: T.x + T.w, y: root.y }], INK.darker, 1, 1);
+    strokePath([homeRoot, root], "#5d513d", 1.4, 0.9);
+    strokePath([{ x: homeRoot.x, y: homeRoot.y }, { x: homeRoot.x, y: T.y + T.h }], "#4a5a63", 1.2, 0.7);
+  }
   for (const node of treeNodes) {
     const p = point(node.path);
     if (!p || !node.parent) continue;
     const parent = point(node.parent.path);
     if (!parent) continue;
+    if (node.fixed) {
+      g.save();
+      g.setLineDash([2, 5]);
+      strokePath(edgePoints(parent, p), visited.has(node.path) ? "#6b5a3a" : INK.dark, 1, 0.8);
+      g.restore();
+      continue;
+    }
     const lit = inFocus(node);
-    strokePath(edgePoints(parent, p), lit ? "#5d513d" : INK.dark, lit ? 1.4 : 1, lit ? 0.95 : 0.6);
-  }
-  const root = point("");
-  if (root) {
-    // Where the weft enters: the trunk runs down into the cloth.
-    strokePath([{ x: root.x, y: root.y }, { x: root.x, y: T.y + T.h }], "#5d513d", 1.4, 0.9);
+    strokePath(
+      edgePoints(parent, p),
+      node.home ? "#3f5260" : lit ? "#5d513d" : INK.dark,
+      lit ? 1.3 : 1,
+      node.home ? 0.8 : lit ? 0.95 : 0.6,
+    );
   }
   for (const node of treeNodes) {
     const p = point(node.path);
     if (!p) continue;
+    if (node.fixed) {
+      const on = actor?.path === node.path,
+        seen = visited.has(node.path),
+        size = 22;
+      g.save();
+      g.fillStyle = "#0f0c08";
+      g.fillRect(p.x - size / 2, p.y - size / 2, size, size);
+      g.strokeStyle = on ? INK.amber : seen ? "#6b5a3a" : "#3a3328";
+      g.strokeRect(p.x - size / 2 + 0.5, p.y - size / 2 + 0.5, size - 1, size - 1);
+      g.restore();
+      text(FIXED_GLYPH[node.fixed], p.x, p.y + 4, on || seen ? INK.bone : INK.faint, 12, Infinity, { align: "center" });
+      text(node.fixed, p.x, p.y + size / 2 + 12, on || seen ? INK.boneDim : INK.faint, 9, Infinity, { align: "center" });
+      if (node.fixed === "forge") {
+        // PRs of the passes in focus: knots that are PRs, dropped at the forge.
+        const prs = prsInView();
+        prs.slice(-8).forEach((n, i) => diamond(p.x - 24 + (i % 8) * 7, p.y + size / 2 + 22, 2.4, INK.ice, 0.85));
+        if (prs.length > 8) text(`+${prs.length - 8}`, p.x + 34, p.y + size / 2 + 25, INK.ice, 8);
+        regionRects.forge = { x: p.x - 34, y: p.y - 18, w: 72, h: 56 };
+      }
+      hit(p.x - 18, p.y - 16, 36, 44, "place", { path: node.path, kind: node.fixed, heat: null, knots: null, topics: [] }, node.fixed);
+      continue;
+    }
     const focused = inFocus(node),
       heat = node.place ? clamp(node.place.heat) : 0.35,
-      c = node.path ? firstColor(node.topics) : INK.bone;
-    const radius = !node.path ? 4.5 : node.place ? 2.2 + heat * 3.2 : 2.2;
+      c = node.home ? INK.ice : !node.root ? firstColor(node.topics) : INK.bone;
+    const radius = (node.root ? 4.5 : node.place ? 2.2 + heat * 3.2 : 2.2) * (node.home ? 0.8 : 1);
     g.globalAlpha = focused ? 1 : 0.4;
-    // Bloom twice: the hue, thin, then the bone core.
-    if (node.path) dot(p.x, p.y, radius + 1.2, c, 12 + heat * 6);
-    dot(p.x, p.y, radius, node.place?.heat == null && node.path ? INK.faint : INK.bone);
-    if (node.place?.knots >= 2) {
-      diamond(p.x + 8, p.y + 8, 2.4, INK.ice, focused ? 0.55 : 0.3);
-    }
+    // Bloom twice: the hue, thin, then the bone core. Home is ice-tinted.
+    if (!node.root) dot(p.x, p.y, radius + 1.2, c, 12 + heat * 6);
+    dot(p.x, p.y, radius, node.home ? "#cfe9f7" : node.place?.heat == null && !node.root ? INK.faint : INK.bone);
+    if (node.place?.knots >= 2) diamond(p.x + 8, p.y + 8, 2.4, INK.ice, focused ? 0.55 : 0.3);
     if (node.label) {
       const dir = node.children.size > 0;
-      const fill = !node.path
-        ? INK.bone
-        : dir
-          ? INK.boneDim
-          : `rgba(232, 220, 192, ${(focused ? 0.55 + heat * 0.45 : 0.4).toFixed(2)})`;
+      const fill = node.home
+        ? node.root
+          ? INK.ice
+          : "rgba(169, 203, 224, 0.8)"
+        : node.root
+          ? INK.bone
+          : dir
+            ? INK.boneDim
+            : `rgba(232, 220, 192, ${(focused ? 0.55 + heat * 0.45 : 0.4).toFixed(2)})`;
       text(node.label.text, p.x + node.label.dx, p.y + node.label.dy, fill, node.label.size, Infinity, {
-        weight: !node.path || dir ? 500 : 400,
+        weight: node.root || dir ? 500 : 400,
       });
       if (dir && node.hiddenBelow > 0 && node.label.dx < 0)
         text(`+${node.hiddenBelow}`, p.x + node.label.dx - 4, p.y + node.label.dy, INK.faint, 9, Infinity, {
@@ -1704,9 +1805,8 @@ function drawTree() {
     const hx = node.label ? Math.min(p.x - 8, p.x + node.label.dx) : p.x - 8,
       hw = node.label ? Math.max(16, node.label.w + Math.abs(node.label.dx) + 8) : 16;
     if (node.place) hit(hx, p.y - 16, hw, 28, "place", node.place, node.path);
-    else if (node.path) hit(p.x - 10, p.y - 10, 20, 20, "branch", node, node.path);
-    if (selected.kind === "place" && selected.data?.path === node.path)
-      ring(p.x, p.y, radius + 8, INK.ice, 0.9);
+    else if (!node.root) hit(p.x - 10, p.y - 10, 20, 20, "branch", node, node.path);
+    if (selected.kind === "place" && selected.data?.path === node.path) ring(p.x, p.y, radius + 8, INK.ice, 0.9);
   }
   g.restore();
   if (!treeNodes.some((n) => n.place))
@@ -2300,7 +2400,7 @@ function drawSweepOver(center, angle, R) {
     const span = sweepPrev === null ? 0 : angle - sweepPrev;
     if (span > 0 && span < Math.PI) {
       for (const node of treeNodes) {
-        if (!node.path || node.path === actor?.path) continue;
+        if (node.root || node.path === actor?.path) continue;
         const p = point(node.path);
         if (!p) continue;
         const d = Math.hypot(p.x - center.x, p.y - center.y);
@@ -2338,7 +2438,9 @@ function blockRect(i) {
   const a = actorPoint();
   if (!a || !state?.run) return null;
   const gw = regionRects.actorGlyphW || 44;
-  return { x: a.x + gw / 2 + 6, y: a.y - 26 - i * 6, w: 40, h: 8 };
+  const T = layout.tree,
+    gx = Math.max(T.x + gw / 2 + 6, Math.min(T.x + T.w - gw / 2 - 48, a.x));
+  return { x: gx + gw / 2 + 6, y: a.y - 26 - i * 6, w: 40, h: 8 };
 }
 function drawTrail() {
   const history = actorHistory();
@@ -2378,10 +2480,12 @@ function drawActor(pulse) {
   dot(a.x, a.y, 3.2, "#fff1d0", 14);
   const glyph = state.run.mood_glyph || "unknown";
   const sprite = glowSprite(glyph, 15, "#ffd27a", 14);
-  drawSprite(sprite, a.x, gy, 15);
   const gw = sprite.w;
+  // The glyph stays inside the window even at an edge place.
+  const gx = Math.max(T.x + gw / 2 + 6, Math.min(T.x + T.w - gw / 2 - 48, a.x));
+  drawSprite(sprite, gx, gy, 15);
   regionRects.actorGlyphW = gw;
-  const box = { x: a.x - gw / 2 - 8, y: gy - 17, w: gw + 16, h: 24 };
+  const box = { x: gx - gw / 2 - 8, y: gy - 17, w: gw + 16, h: 24 };
   regionRects.actor = box;
   hit(box.x, box.y, box.w, box.h, "actor", null, "the resident");
   // The context stack: one small glowing bar per recent block.
@@ -2389,7 +2493,7 @@ function drawActor(pulse) {
     .filter((b) => matches(b.topics))
     .slice(-6);
   blocks.reverse().forEach((b, i) => {
-    const x = a.x + gw / 2 + 8,
+    const x = gx + gw / 2 + 8,
       y = a.y - 24 - i * 6,
       w = 8 + clamp((b.delta || 0) / 20000) * 26;
     strokePath([{ x, y }, { x: x + w, y }], INK.amber, 3, 0.9 - i * 0.12, 8);
@@ -2402,15 +2506,15 @@ function drawActor(pulse) {
     const label = "you are here → the resident";
     g.font = font(10);
     const lw = g.measureText(label).width;
-    let lx = a.x - gw / 2 - 18 - lw;
-    if (lx < T.x + 8) lx = a.x + gw / 2 + 60;
+    let lx = gx - gw / 2 - 18 - lw;
+    if (lx < T.x + 8) lx = gx + gw / 2 + 60;
     const ly = gy - 18;
     g.save();
     g.fillStyle = "rgba(11,9,6,0.85)";
     g.fillRect(lx - 6, ly - 12, lw + 12, 17);
     g.restore();
     text(label, lx, ly, INK.bone, 10);
-    line(lx + lw + 6, ly - 4, a.x - gw / 2 - 4, gy - 6, INK.amber, 0.6);
+    if (lx < gx) line(lx + lw + 6, ly - 4, gx - gw / 2 - 4, gy - 6, INK.amber, 0.6);
   }
 }
 function drawSparks() {
@@ -2689,6 +2793,12 @@ function draw(timestamp) {
       drawThreads();
       drawActor(pulse);
       drawSparks();
+      if (forgeDrop && regionRects.forge && !reduced.matches) {
+        const t = (clock - forgeDrop.born) / 400,
+          f = regionRects.forge;
+        if (t < 1) diamond(f.x + 10 + Math.min(7, prsInView().length - 1) * 7, f.y - 30 + smooth(t) * 70, 3.5, INK.ice, 1);
+        else forgeDrop = null;
+      }
       g.restore();
       if (walk.route.length && clock - walk.born >= walk.dur && actor) pendingPing.delete(actor.path);
     }
