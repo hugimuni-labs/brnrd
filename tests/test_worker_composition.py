@@ -24,7 +24,8 @@ from typing import Any, Callable
 
 import pytest
 
-from brr import daemon, protocol, resource_hold
+import brr.worker as worker
+from brr import daemon, prompts, protocol, resource_hold, transcript
 from brr.run import Run
 from brr.runner import RunnerArtifactRecord, RunnerResult
 
@@ -173,6 +174,74 @@ def _scenario_transport_retry(tmp_path, monkeypatch):
     return make_event(tmp_path, eid="evt-transport", body="big", telegram_chat_id=21), 2, daemon._run_worker
 
 
+def _scenario_transport_then_exhausted(tmp_path, monkeypatch):
+    """Attempt 1 drops mid-response (a recorded failure, retried); attempt 2
+    exits clean without its artifact and the budget is spent. The ending
+    attempt failed differently from the first — the reading ``finalize``
+    names is the one move 3b pins."""
+    monkeypatch.setattr(daemon, "SEAT_PARK_ON_TURN_END_DEFAULT", False)
+    _patch_runner(monkeypatch)
+
+    def _invoke(_ctx, runner_name, invocation, _cfg, *, trace=False):
+        if invocation.label.endswith("attempt-1"):
+            return _result(
+                invocation, runner_name, code=1,
+                stdout="API Error: Connection closed mid-response. The response above may be incomplete.",
+            )
+        return _result(invocation, runner_name, artifacts=[
+            RunnerArtifactRecord(path=Path("out.md"), label="out.md", exists=False),
+        ])
+
+    monkeypatch.setattr(daemon.envs, "get_env", lambda _n: StubWorktreeEnv(invoke_fn=_invoke))
+    return make_event(tmp_path, eid="evt-transport-exhausted", body="big", telegram_chat_id=22), 1, daemon._run_worker
+
+
+def _scenario_mounted_retry(tmp_path, monkeypatch):
+    """A mounted Shell (claude, ``boot.mount`` on) that misses its artifact
+    twice: three attempts, so attempt 3's argv shows how many resume argvs
+    the lane carries by then."""
+    monkeypatch.setattr(daemon, "SEAT_PARK_ON_TURN_END_DEFAULT", False)
+    _patch_runner(monkeypatch)
+    monkeypatch.setattr(
+        daemon.runner, "resolve_runner_profile",
+        lambda root, _overrides=None: daemon.runner.runner_profile("claude", root),
+    )
+    mounts: list[str] = []
+
+    def _mount(*_a, **_k):
+        mounts.append(f"mount-{len(mounts) + 1}")
+        return mounts[-1]
+
+    monkeypatch.setattr(transcript, "mount_claude_session", _mount)
+    # The scaffold renders no mountable block, so the sink would stay empty and
+    # ``dispatch`` would never reach the prepend. One stand-in entry, only when
+    # the builder was handed a sink — the prepend itself is ``dispatch``'s.
+    real_build = prompts.build_daemon_prompt_with_score
+
+    def _build(*a, _mount_sink=None, **kw):
+        built = real_build(*a, _mount_sink=_mount_sink, **kw)
+        if _mount_sink is not None:
+            _mount_sink.setdefault("identity-core", "mounted")
+        return built
+
+    monkeypatch.setattr(prompts, "build_daemon_prompt_with_score", _build)
+
+    def _invoke(_ctx, runner_name, invocation, _cfg, *, trace=False):
+        if not invocation.label.endswith("attempt-3"):
+            return _result(invocation, runner_name, artifacts=[
+                RunnerArtifactRecord(path=Path("out.md"), label="out.md", exists=False),
+            ])
+        _write_response(invocation, "done\n")
+        return _result(invocation, runner_name, stdout="done\n")
+
+    class _MountingEnv(StubWorktreeEnv):
+        def session_seed_home(self, _ctx):
+            return None
+
+    monkeypatch.setattr(daemon.envs, "get_env", lambda _n: _MountingEnv(invoke_fn=_invoke))
+    return make_event(tmp_path, eid="evt-mounted-retry", body="missing artifact", telegram_chat_id=23), 2, daemon._run_worker
+
+
 def _scenario_hard_failure(tmp_path, monkeypatch):
     _patch_runner(monkeypatch)
 
@@ -244,6 +313,8 @@ SCENARIOS = {
     "park_at_turn_end": _scenario_park_at_turn_end,
     "artifact_retry": _scenario_artifact_retry,
     "transport_retry": _scenario_transport_retry,
+    "transport_then_exhausted": _scenario_transport_then_exhausted,
+    "mounted_retry": _scenario_mounted_retry,
     "hard_failure": _scenario_hard_failure,
     "fallback": _scenario_fallback,
     "quota_hold": _scenario_quota_hold,
@@ -272,6 +343,44 @@ def _capture(name: str, tmp_path: Path, monkeypatch, capsys) -> dict[str, Any]:
         return real_emit(brr_dir, packet)
 
     monkeypatch.setattr(daemon.updates, "emit", _recording_emit)
+    # Move 3b: the loop state no packet shows. What each attempt handed the
+    # Shell (``extra_runner_args``), and the ``last_failure`` every boundary
+    # carried — onward in ``next_attempt`` and into ``finalize``.
+    attempts: list[dict[str, Any]] = []
+    real_invoke = StubWorktreeEnv.invoke
+
+    def _recording_invoke(self, ctx, runner_name, invocation, cfg=None, *, trace=False):
+        attempts.append({
+            "attempt": invocation.label.rsplit("-attempt-", 1)[-1],
+            "runner": runner_name,
+            "extra_runner_args": list(invocation.extra_runner_args or []),
+        })
+        return real_invoke(self, ctx, runner_name, invocation, cfg, trace=trace)
+
+    monkeypatch.setattr(StubWorktreeEnv, "invoke", _recording_invoke)
+    boundaries: list[dict[str, Any]] = []
+    real_boundary, real_finalize = worker.boundary, worker.finalize
+
+    def _recording_boundary(p, s):
+        b = real_boundary(p, s)
+        boundaries.append({
+            "kind": b.kind,
+            "attempt": b.attempt.n,
+            "last_failure": b.attempt.last_failure,
+            "next_last_failure": (
+                b.next_attempt.last_failure if b.next_attempt is not None else None
+            ),
+        })
+        return b
+
+    def _recording_finalize(p, b):
+        boundaries.append({
+            "finalize": b.kind, "attempt": b.attempt.n, "last_failure": b.attempt.last_failure,
+        })
+        return real_finalize(p, b)
+
+    monkeypatch.setattr(worker, "boundary", _recording_boundary)
+    monkeypatch.setattr(worker, "finalize", _recording_finalize)
     capsys.readouterr()
     task = drive(event, tmp_path, tmp_path / ".brr" / "responses", {}, max_retries)
     out = capsys.readouterr().out
@@ -312,6 +421,8 @@ def _capture(name: str, tmp_path: Path, monkeypatch, capsys) -> dict[str, Any]:
         "shuttle": shuttle_rows,
         "log": [line for line in out.splitlines() if line.startswith("[brnrd]")],
         "hold_active": resource_hold.is_active(task.meta.get("resource_hold")),
+        "attempts": attempts,
+        "boundaries": boundaries,
     }
     return _normalise(captured, roots)
 

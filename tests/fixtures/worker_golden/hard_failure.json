@@ -1,4 +1,43 @@
 {
+ "attempts": [
+  {
+   "attempt": "1",
+   "extra_runner_args": [
+    "-c",
+    "hooks.PostToolUse=[{hooks=[{type=\"command\",command=\"brnrd hook post-tool\"}]}]",
+    "-c",
+    "hooks.Stop=[{hooks=[{type=\"command\",command=\"brnrd hook stop\"}]}]",
+    "-c",
+    "hooks.SessionStart=[{hooks=[{type=\"command\",command=\"brnrd hook session-start\"}]}]"
+   ],
+   "runner": "codex"
+  }
+ ],
+ "boundaries": [
+  {
+   "attempt": 1,
+   "kind": "exhausted",
+   "last_failure": {
+    "codex_task_error": null,
+    "error": "OpenAI Codex v0.128.0\nthinking…\nrunner timed out after <N>s",
+    "exit_code": 124,
+    "failure_kind": "timed_out",
+    "timed_out": true
+   },
+   "next_last_failure": null
+  },
+  {
+   "attempt": 1,
+   "finalize": "exhausted",
+   "last_failure": {
+    "codex_task_error": null,
+    "error": "OpenAI Codex v0.128.0\nthinking…\nrunner timed out after <N>s",
+    "exit_code": 124,
+    "failure_kind": "timed_out",
+    "timed_out": true
+   }
+  }
+ ],
  "event": {
   "repo_label": "<TMP>",
   "run_id": "<RUN>",
