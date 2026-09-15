@@ -10,11 +10,13 @@ The pieces, in the order a run meets them:
 
 1. **The proposal at dispatch.** ``worker.prepare`` stamps the waking event
    with ``topic_proposed`` (``heddles.propose``: the signatures' best match
-   over the event's text, else the thread's last assigned topic, else
-   nothing). A proposal is not an assignment: nothing is indexed.
+   over the event's text, else the thread's last assigned topic), or — when
+   neither stands — ``topic_suggested``, a candidate slug for a new heddle
+   minted from the text. Neither is an assignment: nothing is indexed.
 2. **The boot sets the topic.** Beside ``.card`` and ``.mood`` the wake asks
    for ``.topic`` in the run's outbox — one line: an existing heddle's slug,
-   ``new <slug>`` (minted here, a resident only), or ``null``.
+   ``new <slug>`` (minted here, a resident only), ``new`` alone (mint the
+   slug the frame suggested — move 5d), or ``null``.
    :func:`settle` reads it on the heartbeat and at every drain; the first
    slug it resolves **confirms or overrides** the proposal: the waking event
    gains ``topic:``, one ``event`` row lands in that topic's index, and the
@@ -56,14 +58,23 @@ META_CONTROL_STAMP = "run_topic_control"
 META_EVENT_TOPIC = "topic"
 META_PROPOSED = "topic_proposed"
 META_PROPOSED_WHY = "topic_proposed_by"
+#: Move 5d: a candidate slug for a *new* heddle, minted from the event's text
+#: when nothing proposes a live one; `new` alone in `.topic` mints it.
+META_SUGGESTED = "topic_suggested"
 META_UNSET = "topic_unset"
 
 Notice = Callable[[str, str], None]
+#: ``event id → the event's frontmatter dict`` (with ``_path``) or ``None`` —
+#: the drain's resolver across every drawer the run can address.
+EventLookup = Callable[[str], "Mapping[str, Any] | None"]
 
 
 @dataclass(frozen=True)
 class Control:
-    """The first line of ``.topic``: ``op`` ∈ ``slug`` · ``new`` · ``null``."""
+    """The first line of ``.topic``: ``op`` ∈ ``slug`` · ``new`` · ``null``.
+
+    ``new`` with an empty ``slug`` is `new` alone — mint the slug the frame
+    suggested on the waking event (``topic_suggested``)."""
 
     op: str
     slug: str
@@ -72,7 +83,7 @@ class Control:
 
 def read_control(outbox_dir: Path | None) -> Control | None:
     """``.topic``, parsed leniently — ``None`` when absent, empty or not the
-    grammar (``<slug>`` · ``new <slug>`` · ``null``, an optional ``topic:``
+    grammar (``<slug>`` · ``new <slug>`` · ``new`` · ``null``, an optional ``topic:``
     prefix). Never raises."""
     if outbox_dir is None:
         return None
@@ -95,6 +106,8 @@ def read_control(outbox_dir: Path | None) -> Control | None:
     stamp = first
     if len(words) == 1 and words[0].lower() in _NULL_WORDS:
         return Control("null", "", stamp)
+    if len(words) == 1 and words[0].lower() == "new":
+        return Control("new", "", stamp)
     if len(words) == 2 and words[0].lower() == "new" and heddles.SLUG_RE.match(words[1]):
         return Control("new", words[1], stamp)
     if len(words) == 1 and heddles.SLUG_RE.match(words[0]):
@@ -154,12 +167,16 @@ def _event_path(inbox_dir: Path | None, event_id: str) -> Path | None:
 
 
 def stamp_event(
-    inbox_dir: Path | None, event_id: str, **updates: object,
+    inbox_dir: Path | None, event_id: str, *, event_path: Path | None = None, **updates: object,
 ) -> bool:
-    """Set flat keys on the inbox event file; ``False`` when it is gone."""
+    """Set flat keys on the inbox event file; ``False`` when it is gone.
+    *event_path* names the file directly (an event resolved in another
+    drawer); otherwise it is ``<inbox_dir>/<event_id>.md``."""
     from . import protocol
 
     path = _event_path(inbox_dir, event_id)
+    if path is None and event_path is not None and Path(event_path).is_file():
+        path = Path(event_path)
     if path is None:
         return False
     try:
@@ -185,6 +202,7 @@ def settle(
 
     - ``new <slug>`` mints ``surface/topics/<slug>.md`` (a resident only —
       the heddles are the whole cloth's) unless it exists, then assigns;
+      ``new`` alone does the same for the event's ``topic_suggested``;
     - ``<slug>`` assigns when it names a live heddle (an alias resolves to
       the topic that absorbed it); an unknown slug is refused by notice and
       the run keeps whatever topic it had;
@@ -205,25 +223,33 @@ def settle(
         if control.op == "null":
             meta[META_RUN_TOPIC] = None
             return None
-        slug = heddles.resolve_slug(account_home, control.slug)
+        name = control.slug
+        if control.op == "new" and not name:
+            suggested = str(meta.get(META_SUGGESTED) or "").strip()
+            if not heddles.SLUG_RE.match(suggested):
+                say("refused", ".topic refused: new — this event carries no suggested slug; "
+                    "write `new <slug>`, an existing heddle, or null")
+                return meta.get(META_RUN_TOPIC) or None
+            name = suggested
+        slug = heddles.resolve_slug(account_home, name)
         if control.op == "new" and slug is None:
             if is_strand:
-                say("refused", f".topic refused: new {control.slug} — a strand names an existing "
+                say("refused", f".topic refused: new {name} — a strand names an existing "
                     "heddle; minting one is the seat's act")
                 return meta.get(META_RUN_TOPIC) or None
             if account_home is None:
-                say("dropped", f".topic dropped: new {control.slug} — no account home holds the topics")
+                say("dropped", f".topic dropped: new {name} — no account home holds the topics")
                 return meta.get(META_RUN_TOPIC) or None
-            path = _mint(account_home, control.slug)
+            path = _mint(account_home, name)
             if path is None:
-                say("dropped", f".topic dropped: new {control.slug} — the topic file could not be written")
+                say("dropped", f".topic dropped: new {name} — the topic file could not be written")
                 return meta.get(META_RUN_TOPIC) or None
-            say("advisory", f".topic: minted surface/topics/{control.slug}.md (an empty signature — "
+            say("advisory", f".topic: minted surface/topics/{name}.md (an empty signature — "
                 "it lights on assignments until you write one)")
-            slug = control.slug
+            slug = name
         if slug is None:
-            say("refused", f".topic refused: {control.slug} is not a heddle — write an existing "
-                f"slug, or `new {control.slug}` to mint it")
+            say("refused", f".topic refused: {name} is not a heddle — write an existing "
+                f"slug, or `new {name}` to mint it")
             return meta.get(META_RUN_TOPIC) or None
         previous = meta.get(META_RUN_TOPIC)
         meta[META_RUN_TOPIC] = slug
@@ -263,6 +289,7 @@ def for_act(
     inbox_dir: Path | None = None,
     notice: Notice | None = None,
     is_strand: bool = False,
+    resolve_event: EventLookup | None = None,
 ) -> str | None:
     """The one topic an outbox act belongs to.
 
@@ -272,6 +299,10 @@ def for_act(
     a moment before the act counts), else the waking event's ``topic``, else
     ``None``. A multi-slug value (a 5b ``spawn:`` claim) assigns its first
     live slug.
+
+    Move 5d, on a seat (never a strand): between the act's own ``topic:`` and
+    the run's ``.topic`` sits **the event the act answers** — its assigned
+    ``topic``, else its ``topic_proposed`` (:func:`answered_topic`).
     """
     say = notice or (lambda _kind, _text: None)
     # The run's `.topic` settles first, whatever the act says: a control
@@ -288,6 +319,11 @@ def for_act(
             if slug:
                 return slug
         say("advisory", f"topic: {raw!r} names no heddle — the act inherits the run's topic")
+    if not is_strand:
+        answered = answered_topic(frontmatter, task, account_home=account_home,
+                                  resolve_event=resolve_event)
+        if answered:
+            return answered
     if settled:
         return settled
     return run_topic(task)
@@ -371,8 +407,10 @@ class ActScope:
         inbox_dir: Path | None,
         notice: Notice | None,
         is_strand: bool,
+        resolve_event: EventLookup | None = None,
     ) -> None:
         self.frontmatter = dict(frontmatter or {})
+        self.resolve_event = resolve_event
         self.task = task
         self.outbox_dir = outbox_dir
         self.account_home = account_home
@@ -390,7 +428,7 @@ class ActScope:
                     self.frontmatter, self.task,
                     outbox_dir=self.outbox_dir, account_home=self.account_home,
                     inbox_dir=self.inbox_dir, notice=self.notice,
-                    is_strand=self.is_strand,
+                    is_strand=self.is_strand, resolve_event=self.resolve_event,
                 )
             except Exception:  # noqa: BLE001
                 self._topic = None
@@ -446,14 +484,18 @@ def confirm_event(
     *,
     run: str = "",
     thread: str = "",
+    event_path: Path | None = None,
 ) -> bool:
     """A reply carrying a topic confirms its target event — once. An event
-    that already has ``topic:`` keeps it (nothing is reclassified)."""
+    that already has ``topic:`` keeps it (nothing is reclassified).
+    *event_path* reaches an event in another drawer (move 5d)."""
     from . import protocol
 
     if not slug or not event_id:
         return False
     path = _event_path(inbox_dir, event_id)
+    if path is None and event_path is not None and Path(event_path).is_file():
+        path = Path(event_path)
     if path is None:
         return False
     try:
@@ -462,6 +504,163 @@ def confirm_event(
         return False
     if str(existing.get("topic") or "").strip():
         return False
-    if not stamp_event(inbox_dir, event_id, topic=slug):
+    if not stamp_event(None, event_id, event_path=path, topic=slug):
         return False
     return assign(account_home, slug, kind="event", ref=event_id, run=run, thread=thread)
+
+
+# ── Move 5d: every inbound event carries a topic reading; replies follow it ──
+#
+# The waking event is stamped at dispatch (``worker.prepare``); every *other*
+# inbound event is stamped where it first reaches a seat's view —
+# ``daemon._pending_events_for_agent``, the one chokepoint that feeds the
+# wake prompt, ``inbox.json`` and ``portal-state.json``. The stamp is the same
+# one: ``topic_proposed`` (+ ``topic_proposed_by``) for a live match, else
+# ``topic_suggested``. Once per event: an event carrying any of the three
+# keys is left alone, and a text that yields nothing is remembered in-process
+# so a boundary flush does not re-read it.
+
+_TOPIC_KEYS = ("topic", META_PROPOSED, META_SUGGESTED)
+_UNSTAMPABLE: dict[str, None] = {}
+_UNSTAMPABLE_MAX = 4096
+
+
+def stamp_inbound(
+    account_home: Path | None, event: dict[str, Any], *, thread: str = "",
+) -> str | None:
+    """Stamp one inbound event with the frame's reading of its topic; return
+    the key written (``topic_proposed`` · ``topic_suggested``) or ``None``.
+
+    Mutates *event* too, so the caller's record carries the stamp in the
+    same pass. Internal sources (``protocol.INTERNAL_SOURCES``: completions,
+    schedules, folds…) and events without a file are skipped. Never raises.
+    """
+    from . import protocol
+
+    try:
+        if account_home is None or not isinstance(event, dict):
+            return None
+        event_id = str(event.get("id") or "")
+        if not event_id or event_id in _UNSTAMPABLE:
+            return None
+        if any(str(event.get(k) or "").strip() for k in _TOPIC_KEYS):
+            return None
+        if str(event.get("source") or "") in protocol.INTERNAL_SOURCES:
+            return None
+        if not isinstance(event.get("_path"), Path):
+            return None
+        slug, why = heddles.propose(account_home, event.get("body") or "", thread=thread)
+        if not slug:
+            if len(_UNSTAMPABLE) >= _UNSTAMPABLE_MAX:
+                _UNSTAMPABLE.pop(next(iter(_UNSTAMPABLE)))
+            _UNSTAMPABLE[event_id] = None
+            return None
+        updates: dict[str, object] = (
+            {META_SUGGESTED: slug} if why == "suggested"
+            else {META_PROPOSED: slug, META_PROPOSED_WHY: why}
+        )
+        protocol.update_event_meta(event, **updates)
+        event.update(updates)
+        return next(iter(updates))
+    except Exception:  # noqa: BLE001 - a reading never costs the event its view
+        return None
+
+
+def event_topic_line(event: Mapping[str, Any] | None) -> str | None:
+    """How a shown event names its topic — the bundle's wording, one phrase:
+    ``topic: `x``` · ``topic: `x` proposed (signature)`` · ``topic: none
+    matched — new `x`?`` · ``None`` when the event carries no reading."""
+    if not isinstance(event, Mapping):
+        return None
+    assigned = str(event.get("topic") or "").strip()
+    if assigned:
+        return f"topic: `{assigned}`"
+    proposed = str(event.get(META_PROPOSED) or "").strip()
+    if proposed:
+        why = str(event.get(META_PROPOSED_WHY) or "").strip()
+        return f"topic: `{proposed}` proposed" + (f" ({why})" if why else "")
+    suggested = str(event.get(META_SUGGESTED) or "").strip()
+    if suggested:
+        return f"topic: none matched — new `{suggested}`?"
+    return None
+
+
+def _answered_event_id(frontmatter: Mapping[str, Any] | None, task: Any) -> str:
+    """The event an act answers: its ``event:`` target, else — for a plain
+    reply, a file with no routing key but ``topic`` — the waking event.
+    Other verbs (``spawn:``, ``fold:``, ``cut:``…) answer no event."""
+    from . import protocol
+
+    fm = frontmatter or {}
+    target = str(fm.get("event") or "").strip()
+    if target:
+        return target
+    if any(key in fm for key in protocol._OUTBOX_ROUTING_KEYS if key != "topic"):
+        return ""
+    return str(getattr(task, "event_id", "") or "")
+
+
+def answered_topic(
+    frontmatter: Mapping[str, Any] | None,
+    task: Any,
+    *,
+    account_home: Path | None,
+    resolve_event: EventLookup | None = None,
+) -> str | None:
+    """The live topic of the event this act answers — its assigned ``topic``,
+    else its ``topic_proposed`` — or ``None``. A suggestion is not a topic
+    until it is minted, so it is never inherited."""
+    meta = getattr(task, "meta", None)
+    target = _answered_event_id(frontmatter, task)
+    if not target or account_home is None:
+        return None
+    event: Mapping[str, Any] | None = None
+    if target == str(getattr(task, "event_id", "") or "") and isinstance(meta, dict):
+        event = {"topic": meta.get(META_EVENT_TOPIC), META_PROPOSED: meta.get(META_PROPOSED)}
+    elif resolve_event is not None:
+        try:
+            event = resolve_event(target)
+        except Exception:  # noqa: BLE001
+            event = None
+    if not isinstance(event, Mapping):
+        return None
+    for key in ("topic", META_PROPOSED):
+        slug = heddles.resolve_slug(account_home, event.get(key))
+        if slug:
+            return slug
+    return None
+
+
+def follow_reply(
+    task: Any,
+    slug: str,
+    *,
+    outbox_dir: Path | None,
+    event_id: str,
+    notice: Notice | None = None,
+) -> bool:
+    """A seat's reply just confirmed *slug* on the event it answers; when that
+    differs from the run's topic, the run's ``.topic`` follows it — the
+    control rewritten (so every later read agrees), the settled stamp moved
+    with it, one advisory notice. ``True`` when the run moved."""
+    meta = getattr(task, "meta", None)
+    if not slug or not isinstance(meta, dict) or outbox_dir is None:
+        return False
+    previous = meta.get(META_RUN_TOPIC) or None
+    if previous == slug:
+        return False
+    path = Path(outbox_dir) / CONTROL_NAME
+    try:
+        if path.is_symlink():
+            return False
+        tmp = path.with_name(f".{path.name}.follow.tmp")
+        tmp.write_text(slug + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        return False
+    meta[META_RUN_TOPIC] = slug
+    meta[META_CONTROL_STAMP] = slug
+    if notice is not None:
+        notice("advisory", f".topic: {previous or 'unset'} → {slug} — the reply to {event_id} "
+               f"confirmed {slug}; the run follows it (acts from here inherit {slug})")
+    return True

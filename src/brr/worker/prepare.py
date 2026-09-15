@@ -1407,7 +1407,9 @@ def _stamp_topic_proposal(event, task, account_context, brr_dir, conv_key) -> No
     ``topic_proposed`` (+ ``topic_proposed_by`` ∈ ``signature`` · ``thread``)
     lands on the event file and the run's meta when the frame can propose
     one; the resident's ``.topic`` confirms or overrides it at its first
-    boundary (``run_topic.settle``). An event already carrying ``topic:`` (a
+    boundary (``run_topic.settle``). When nothing proposes a live topic, the
+    event carries ``topic_suggested`` instead (move 5d) — a slug minted from
+    its text that `new` alone in ``.topic`` mints. An event already carrying ``topic:`` (a
     strand's dispatch) was assigned at entry and is not proposed for. The
     previous run on the thread ending unassigned rides the event dict (never
     the file) as ``predecessor_topic_unset`` for the bundle's one line.
@@ -1417,7 +1419,12 @@ def _stamp_topic_proposal(event, task, account_context, brr_dir, conv_key) -> No
     try:
         home = account.context_home_root(account_context) if account_context is not None else None
         slug, why = run_topic.proposal(home, event, thread=conv_key)
-        if slug:
+        if slug and why == "suggested":
+            # Move 5d: a candidate for a *new* heddle, not a live topic — its
+            # own key, so nothing reading `topic_proposed` mistakes it.
+            protocol.update_event_meta(event, topic_suggested=slug)
+            task.meta[run_topic.META_SUGGESTED] = slug
+        elif slug:
             protocol.update_event_meta(
                 event, topic_proposed=slug, topic_proposed_by=why,
             )
