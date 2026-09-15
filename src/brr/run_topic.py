@@ -665,6 +665,74 @@ def event_topic_line(event: Mapping[str, Any] | None) -> str | None:
     return None
 
 
+# ── Move 5e (f): the unstamped event stands at the boundary until stamped ──
+
+
+def unstamped_events(
+    events: Sequence[Mapping[str, Any]] | None,
+    *,
+    waking: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Inbound correspondent events that carry no ``topic:`` yet — the waking
+    event first (when given), then the pending ones in the order shown.
+
+    One row each: ``{id, from, proposed, proposed_by, suggested}``. Internal
+    sources (``protocol.INTERNAL_SOURCES``) never appear: they have no
+    correspondent, so nothing waits on their topic. An event leaves the list
+    when its stamp lands — a reply's ``topic:``, a ``note:`` carrying
+    ``topic:``, or ``.topic`` for the waking event — or when it leaves the
+    pending set. Never raises."""
+    from . import protocol
+
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    candidates = ([waking] if isinstance(waking, Mapping) else []) + list(events or [])
+    for event in candidates:
+        try:
+            if not isinstance(event, Mapping):
+                continue
+            event_id = str(event.get("id") or "").strip()
+            source = str(event.get("source") or "").strip()
+            if not event_id or event_id in seen or not source:
+                continue
+            if source in protocol.INTERNAL_SOURCES or topic_words(event.get("topic")):
+                continue
+            seen.add(event_id)
+            rows.append({
+                "id": event_id,
+                "from": _correspondent(event) or source,
+                "proposed": str(event.get(META_PROPOSED) or "").strip() or None,
+                "proposed_by": str(event.get(META_PROPOSED_WHY) or "").strip() or None,
+                "suggested": str(event.get(META_SUGGESTED) or "").strip() or None,
+            })
+        except Exception:  # noqa: BLE001 - a reading never costs the boundary
+            continue
+    return rows
+
+
+def _correspondent(event: Mapping[str, Any]) -> str | None:
+    from . import hooks
+
+    try:
+        return hooks._event_correspondent(dict(event))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def unstamped_line(row: Mapping[str, Any]) -> str:
+    """``✉ k6mj from Gurio · topic: none matched — new deck-v13?`` ·
+    ``… · topic: the-loom proposed`` · ``… · topic: unread``."""
+    event_id = str(row.get("id") or "-")
+    suffix = event_id.rsplit("-", 1)[-1] if "-" in event_id else event_id
+    if row.get("proposed"):
+        reading = f"{row['proposed']} proposed"
+    elif row.get("suggested"):
+        reading = f"none matched — new {row['suggested']}?"
+    else:
+        reading = "unread"
+    return f"✉ {suffix} from {row.get('from') or '-'} · topic: {reading}"
+
+
 def _answered_event_id(frontmatter: Mapping[str, Any] | None, task: Any) -> str:
     """The event an act answers: its ``event:`` target, else — for a plain
     reply, a file with no routing key but ``topic`` — the waking event.

@@ -3346,6 +3346,30 @@ def _render_armed_rows(armed: list[Any] | None) -> list[str]:
     return rows
 
 
+#: Move 5e: the most unstamped events the boundary names one per line.
+_UNSTAMPED_SHOWN_MAX = 6
+
+
+def _unstamped_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    inbound = payload.get("inbound") if isinstance(payload.get("inbound"), dict) else {}
+    rows = inbound.get("unstamped")
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def _unstamped_lines(unstamped: list[dict[str, Any]] | None) -> list[str]:
+    """Move 5e (design-the-loom §21, amendment (f)): every inbound event with
+    no ``topic:`` yet, one line each, standing the way a finished strand does
+    — never change-gated, never counted as an obligation — until its stamp
+    lands (a reply's ``topic:``, ``note: <id>`` + ``topic:``, or ``.topic``
+    for the waking event). The waking event leads; past six, a count."""
+    rows = [row for row in (unstamped or []) if isinstance(row, dict)]
+    shown = rows[:_UNSTAMPED_SHOWN_MAX]
+    lines = [f"- {run_topic.unstamped_line(row)}" for row in shown]
+    if len(rows) > len(shown):
+        lines.append(f"- ✉ +{len(rows) - len(shown)} more unstamped")
+    return lines
+
+
 def _partition_pending_events(
     payload: dict[str, Any],
 ) -> tuple[list[Any], list[dict[str, Any]], int]:
@@ -3717,6 +3741,7 @@ def _render_bar(
     census: str | None = None,
     notices: list[Any] | None = None,
     finished_spawns: list[dict[str, Any]] | None = None,
+    unstamped: list[dict[str, Any]] | None = None,
     event_seen: dict[str, dict[str, Any]] | None = None,
     inbox_pointer: str | None = None,
     armed: list[Any] | None = None,
@@ -4034,6 +4059,8 @@ def _render_bar(
         # seat notes each one (2026-09-14, his ask): a clean completion is
         # not silent just because it isn't urgent.
         details.append(_finished_spawns_line(finished_spawns))
+    # Move 5e: an unstamped inbound event stands here the same way.
+    details.extend(_unstamped_lines(unstamped))
     details.extend(_render_armed_rows(armed))
     # #1200: notes-health transitions — the caller (`_notes_health_transitions`)
     # already did the only gating this needs (new-since-last-scan, throttled).
@@ -4563,6 +4590,7 @@ def format_delta(
             mood=mood, surprise=surprise,
             census=census,
             notices=notices, finished_spawns=finished_spawns,
+            unstamped=_unstamped_rows(payload),
             event_seen=event_seen, inbox_pointer=inbox_pointer,
             armed=armed, gate_receipt_data=gate_receipt_data,
             plan=plan, plan_edge=plan_edge,
@@ -4623,6 +4651,7 @@ def format_delta(
             lines.append(
                 f"  · {ev.get('id') or '-'}: {summary[:200]}"
             )
+    lines.extend(_unstamped_lines(_unstamped_rows(payload)))
     live_children = _live_child_handover_line(
         {"run": run, "resources": resources}
     )
