@@ -198,7 +198,11 @@ def _finalize_exhausted(p: Prepared, b: Boundary) -> Finalized:
     # `predecessor_topic_unset` in its bundle and may assign it once.
     _mark_topic_unset(p, task)
     task.update_status("error", runs_dir)
-    failure_reason = daemon._failure_reason(last_failure, attempt)
+    failure_reason = _cite_earlier_failure(
+        daemon._failure_reason(last_failure, attempt),
+        last_failure,
+        b.attempt.failures,
+    )
     daemon._write_terminal_failure_response(
         emit,
         task,
@@ -254,6 +258,33 @@ def _finalize_exhausted(p: Prepared, b: Boundary) -> Finalized:
             failed_payload["timed_out"] = True
     emit("failed", **failed_payload)
     return Finalized(task, "failed")
+
+
+def _cite_earlier_failure(
+    reason: str,
+    last_failure: dict[str, object] | None,
+    failures: list[dict[str, object]],
+) -> str:
+    """Name the latest earlier failure when the ending attempt recorded none.
+
+    Move 3b's one reader of the old survival: ``last_failure`` used to outlive
+    a plain retry, so a run whose attempt 1 dropped mid-response and whose
+    attempt 2 then missed its artifact finalized *as the drop* — the right
+    detail under the wrong attribution. ``last_failure`` is now the ending
+    attempt's, so the reason says what the ending attempt did, and the
+    history says what came before it. Only when the ending attempt has no
+    failure of its own: that is the one case the survival used to supply,
+    and a failed ending attempt's reason already names its cause.
+    """
+    if last_failure is not None or not failures:
+        return reason
+    earlier = failures[-1]
+    kind = str(earlier.get("failure_kind") or "")
+    detail = str(earlier.get("error") or "").strip()
+    cited = runner_failures.reason_prefix(kind) if kind else "runner failed"
+    if detail and kind != runner_failures.INTERRUPTED:
+        cited = f"{cited}: {detail}"
+    return f"{reason}; attempt {earlier.get('attempt')} before it: {cited}"
 
 
 def _mark_topic_unset(p: Prepared, task) -> None:

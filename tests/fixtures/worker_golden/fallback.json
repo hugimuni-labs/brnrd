@@ -1,4 +1,48 @@
 {
+ "attempts": [
+  {
+   "attempt": "1",
+   "extra_runner_args": [
+    "-c",
+    "hooks.PostToolUse=[{hooks=[{type=\"command\",command=\"brnrd hook post-tool\"}]}]",
+    "-c",
+    "hooks.Stop=[{hooks=[{type=\"command\",command=\"brnrd hook stop\"}]}]",
+    "-c",
+    "hooks.SessionStart=[{hooks=[{type=\"command\",command=\"brnrd hook session-start\"}]}]"
+   ],
+   "runner": "codex"
+  },
+  {
+   "attempt": "2",
+   "extra_runner_args": [],
+   "runner": "claude"
+  }
+ ],
+ "boundaries": [
+  {
+   "attempt": 1,
+   "kind": "fallback",
+   "last_failure": {
+    "codex_task_error": null,
+    "error": "You've hit your session limit",
+    "exit_code": 1,
+    "failure_kind": "quota_exhausted",
+    "timed_out": false
+   },
+   "next_last_failure": null
+  },
+  {
+   "attempt": 2,
+   "kind": "completed",
+   "last_failure": null,
+   "next_last_failure": null
+  },
+  {
+   "attempt": 2,
+   "finalize": "completed",
+   "last_failure": null
+  }
+ ],
  "event": {
   "repo_label": "<TMP>",
   "run_id": "<RUN>",

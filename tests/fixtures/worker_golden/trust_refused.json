@@ -1,4 +1,6 @@
 {
+ "attempts": [],
+ "boundaries": [],
  "event": {
   "repo_label": "<TMP>",
   "run_id": "<RUN>",

@@ -32,10 +32,20 @@ class Lane:
 
     Replaced whole on an automatic fallback (``boundary``); refined between
     attempts (``dispatch`` strips the last attempt's observed model, reads the
-    level quota on attempt 1, prepends a mounted transcript's resume argv;
-    ``stream`` records the observed core). Those refinements carry into the
-    next attempt exactly as the old loop-scoped locals did — including the
-    mount argv, which a retry on a mounted Shell prepends a second time.
+    level quota on attempt 1, sets this attempt's mounted-transcript resume
+    argv; ``stream`` records the observed core). Those refinements carry into
+    the next attempt exactly as the old loop-scoped locals did.
+
+    ``extra_args`` is the lane's own argv (codex's hook overrides) and is
+    never rewritten after the lane is resolved. ``resume_args`` is the one
+    attempt's mount — ``dispatch`` *replaces* it every attempt (a fresh
+    session id, or ``[]`` when the attempt did not mount), and
+    :meth:`runner_args` composes the two. Move 3b: the mount argv used to be
+    prepended onto ``extra_args`` itself, so a retry on a mounted Shell
+    stacked every earlier attempt's ``--resume <id> --fork-session`` behind
+    its own (attempt 3 carried three, each a *different* session — no dedupe
+    could have caught them), and a retry whose mount failed still resumed
+    the previous attempt's seed under a prose prompt.
     """
 
     choice: RunnerProfile
@@ -48,6 +58,12 @@ class Lane:
     catalog: list[dict[str, Any]]
     quality_escalation: dict[str, object] | None
     wake_note: str | None
+    resume_args: list[str] = field(default_factory=list)
+
+    def runner_args(self) -> list[str]:
+        """The argv this attempt hands the Shell: the mount first, then the
+        lane's own — the order the prepend always produced on attempt 1."""
+        return [*self.resume_args, *self.extra_args]
 
 
 @dataclass(frozen=True)
@@ -122,9 +138,16 @@ class Attempt:
     2× a budget nobody raised, and #729 forbids adding a config key to
     re-cap it.
 
-    ``last_failure`` survives a plain retry (a later attempt that exits
-    clean keeps the earlier failure on record) and is cleared only by a
-    fallback — the loop's behaviour, kept.
+    ``last_failure`` is *this* attempt's failure: ``None`` when the attempt
+    began, set by ``boundary`` only if the attempt itself failed, and handed
+    to the next attempt as ``None`` on a retry and on a fallback alike — so
+    the ``Boundary`` that ends the run carries the failure of the attempt
+    that ended it, never an earlier one. ``failures`` is the history: every
+    recorded failure in attempt order, each row the failure dict plus its
+    ``attempt`` number; it rides every retry *and* fallback. Move 3b: before
+    it, ``last_failure`` survived a plain retry and only a fallback cleared
+    it, so a transport drop on attempt 1 followed by a missing artifact on
+    attempt 2 finalized as the transport drop.
     """
 
     n: int
@@ -134,6 +157,7 @@ class Attempt:
     prompt_mode: str = "normal"
     fallback_notice: str | None = None
     last_failure: dict[str, object] | None = None
+    failures: list[dict[str, object]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

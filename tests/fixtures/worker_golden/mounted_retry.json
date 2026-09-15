@@ -3,25 +3,52 @@
   {
    "attempt": "1",
    "extra_runner_args": [
-    "-c",
-    "hooks.PostToolUse=[{hooks=[{type=\"command\",command=\"brnrd hook post-tool\"}]}]",
-    "-c",
-    "hooks.Stop=[{hooks=[{type=\"command\",command=\"brnrd hook stop\"}]}]",
-    "-c",
-    "hooks.SessionStart=[{hooks=[{type=\"command\",command=\"brnrd hook session-start\"}]}]"
+    "--resume",
+    "mount-1",
+    "--fork-session"
    ],
-   "runner": "codex"
+   "runner": "claude"
+  },
+  {
+   "attempt": "2",
+   "extra_runner_args": [
+    "--resume",
+    "mount-2",
+    "--fork-session"
+   ],
+   "runner": "claude"
+  },
+  {
+   "attempt": "3",
+   "extra_runner_args": [
+    "--resume",
+    "mount-3",
+    "--fork-session"
+   ],
+   "runner": "claude"
   }
  ],
  "boundaries": [
   {
    "attempt": 1,
+   "kind": "retry",
+   "last_failure": null,
+   "next_last_failure": null
+  },
+  {
+   "attempt": 2,
+   "kind": "retry",
+   "last_failure": null,
+   "next_last_failure": null
+  },
+  {
+   "attempt": 3,
    "kind": "completed",
    "last_failure": null,
    "next_last_failure": null
   },
   {
-   "attempt": 1,
+   "attempt": 3,
    "finalize": "completed",
    "last_failure": null
   }
@@ -33,19 +60,25 @@
   "status": "done"
  },
  "hold_active": false,
- "inbox_file": "---\nid: evt-close\nstatus: done\nsource: telegram\ntrust_tier: owner\nrun_id: <RUN>\nrepo_label: <TMP>\n---\nship it\n",
+ "inbox_file": "---\nid: evt-mounted-retry\nstatus: done\nsource: telegram\ntrust_tier: owner\nrun_id: <RUN>\nrepo_label: <TMP>\n---\nmissing artifact\n",
  "log": [
-  "[brnrd] run <RUN> (event evt-close): env=worktree",
-  "[brnrd] worker evt-close: installed codex hook config via argv",
-  "[brnrd] worker evt-close: attempt 1",
-  "[brnrd] pause-on-message: evt-close attempt 1 runner 'codex' is not claude — no-op (unmeasured cap behaviour, named non-goal)",
-  "[brnrd] worker evt-close: response ready (current_reply)",
-  "[brnrd] worker evt-close: terminal stream is this run's only delivery — the fallback net carried it, not a route the run chose"
+  "[brnrd] run <RUN> (event evt-mounted-retry): env=worktree",
+  "[brnrd] worker evt-mounted-retry: installed claude hook config at <TMP>/.claude/settings.local.json",
+  "[brnrd] boot mounted as transcript: session mount-1",
+  "[brnrd] worker evt-mounted-retry: attempt 1",
+  "[brnrd] worker evt-mounted-retry: missing required output(s): out.md, retrying...",
+  "[brnrd] boot mounted as transcript: session mount-2",
+  "[brnrd] worker evt-mounted-retry: attempt 2",
+  "[brnrd] worker evt-mounted-retry: missing required output(s): out.md, retrying...",
+  "[brnrd] boot mounted as transcript: session mount-3",
+  "[brnrd] worker evt-mounted-retry: attempt 3",
+  "[brnrd] worker evt-mounted-retry: response ready (current_reply)",
+  "[brnrd] worker evt-mounted-retry: terminal stream is this run's only delivery — the fallback net carried it, not a route the run chose"
  ],
  "packets": [
   {
    "payload": {
-    "event_id": "evt-close",
+    "event_id": "evt-mounted-retry",
     "source": "telegram"
    },
    "type": "event_received"
@@ -53,7 +86,7 @@
   {
    "payload": {
     "error": null,
-    "event_id": "evt-close",
+    "event_id": "evt-mounted-retry",
     "ff_branches": {},
     "run_id": "<RUN>",
     "skipped": {
@@ -66,7 +99,7 @@
   {
    "payload": {
     "env": "worktree",
-    "event_id": "evt-close",
+    "event_id": "evt-mounted-retry",
     "repo_label": "<TMP>",
     "run_id": "<RUN>",
     "run_state_path": null,
@@ -91,7 +124,7 @@
     "branch": "brr/<RUN>",
     "env": "worktree",
     "run_id": "<RUN>",
-    "runner": "codex",
+    "runner": "claude",
     "seed_ref": "main",
     "target_branch": null
    },
@@ -99,9 +132,9 @@
   },
   {
    "payload": {
-    "event_id": "evt-close",
-    "flavour": "codex",
-    "path": "<argv -c hooks.*>",
+    "event_id": "evt-mounted-retry",
+    "flavour": "claude",
+    "path": "<TMP>/.claude/settings.local.json",
     "run_id": "<RUN>"
    },
    "type": "hooks_installed"
@@ -109,7 +142,61 @@
   {
    "payload": {
     "attempt": 1,
-    "event_id": "evt-close",
+    "event_id": "evt-mounted-retry",
+    "run_id": "<RUN>"
+   },
+   "type": "attempt_started"
+  },
+  {
+   "payload": {
+    "attempt": 1,
+    "event_id": "evt-mounted-retry",
+    "reason": "missing required output(s): out.md",
+    "run_id": "<RUN>",
+    "will_retry": true
+   },
+   "type": "attempt_failed"
+  },
+  {
+   "payload": {
+    "attempt": 2,
+    "event_id": "evt-mounted-retry",
+    "reason": "missing required output(s): out.md",
+    "run_id": "<RUN>"
+   },
+   "type": "retrying"
+  },
+  {
+   "payload": {
+    "attempt": 2,
+    "event_id": "evt-mounted-retry",
+    "run_id": "<RUN>"
+   },
+   "type": "attempt_started"
+  },
+  {
+   "payload": {
+    "attempt": 2,
+    "event_id": "evt-mounted-retry",
+    "reason": "missing required output(s): out.md",
+    "run_id": "<RUN>",
+    "will_retry": true
+   },
+   "type": "attempt_failed"
+  },
+  {
+   "payload": {
+    "attempt": 3,
+    "event_id": "evt-mounted-retry",
+    "reason": "missing required output(s): out.md",
+    "run_id": "<RUN>"
+   },
+   "type": "retrying"
+  },
+  {
+   "payload": {
+    "attempt": 3,
+    "event_id": "evt-mounted-retry",
     "run_id": "<RUN>"
    },
    "type": "attempt_started"
@@ -117,7 +204,7 @@
   {
    "payload": {
     "kind": "response",
-    "path": "<TMP>/.brr/responses/evt-close.md",
+    "path": "<TMP>/.brr/responses/evt-mounted-retry.md",
     "run_id": "<RUN>"
    },
    "type": "artifact_created"
@@ -132,7 +219,7 @@
   {
    "payload": {
     "committed": false,
-    "event_id": "evt-close",
+    "event_id": "evt-mounted-retry",
     "outbound_messages": 0,
     "publish_branch": null,
     "publish_status": null,
@@ -155,23 +242,23 @@
    "host_dirty_at_dispatch": "[]",
    "host_head_at_dispatch_unavailable": true,
    "kb_base_url": null,
-   "outbox_path": "<TMP>/.brr/outbox/evt-close",
+   "outbox_path": "<TMP>/.brr/outbox/evt-mounted-retry",
    "pid": "<V>",
    "presence_id": "<V>",
    "repo_label": "<TMP>",
    "resident_allowance_spent": null,
    "resident_allowance_tokens": 20000000,
-   "response_path": "<TMP>/.brr/responses/evt-close.md",
-   "run_ledger_baseline_runner": "codex",
+   "response_path": "<TMP>/.brr/responses/evt-mounted-retry.md",
+   "run_ledger_baseline_runner": "claude",
    "run_state_digest": "{\"delivered\": {\"current\": 0, \"other\": 0, \"outbound\": 0}, \"events\": [], \"produce\": {\"branch\": \"main\", \"counts\": {}, \"issue_actions\": {\"completed\": 0, \"created\": 0, \"unattributed\": 0}, \"known\": true, \"latest_commit\": null, \"pr\": null, \"records\": [{\"kind\": \"note\", \"text\": \"seed unresolvable at 'main'\"}]}, \"scm\": {\"branch\": \"main\", \"known\": true, \"modified_files\": 0, \"unpushed_commits\": 0}}",
    "run_state_digest_seen": true,
    "runner_class": "balanced",
-   "runner_name": "codex",
-   "runner_shell": "codex",
+   "runner_name": "claude",
+   "runner_shell": "claude",
    "seed_ref": "main",
    "started_at": "<V>",
    "success_signal": "current_reply",
-   "telegram_chat_id": 10,
+   "telegram_chat_id": 23,
    "terminal_route": "gate-sole",
    "transitions": [
     {
@@ -228,7 +315,7 @@
   "generated_at": "<V>",
   "heddles": [],
   "inbound": {
-   "current_event": "evt-close",
+   "current_event": "evt-mounted-retry",
    "current_event_replyable": true,
    "current_event_topic": {
     "confirmed": null,
@@ -272,14 +359,14 @@
   "resource_hold": null,
   "resources": "<resources>",
   "run": {
-   "attempt": 1,
+   "attempt": 3,
    "branch": "brr/<RUN>",
    "env": "worktree",
-   "event_id": "evt-close",
+   "event_id": "evt-mounted-retry",
    "id": "<RUN>",
    "phase": "finalizing",
    "repo": "<TMP>",
-   "runner": "codex",
+   "runner": "claude",
    "status": "running",
    "topic": null
   },
@@ -308,14 +395,14 @@
   "tick": null,
   "version": 1
  },
- "response": "all done",
+ "response": "done",
  "returned": {
-  "body": "ship it",
+  "body": "missing artifact",
   "env": "worktree",
   "status": "done"
  },
  "shuttle": {
-  "conversation_key": "telegram:10:",
+  "conversation_key": "telegram:23:",
   "key": "<TMP>/.brr",
   "repo_root": "<TMP>",
   "run_id": "<RUN>",

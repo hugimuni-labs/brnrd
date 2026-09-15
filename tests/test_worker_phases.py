@@ -232,6 +232,111 @@ def test_dispatch_refuses_a_stopped_run_as_a_boundary(tmp_path, monkeypatch):
     assert isinstance(ended, Finalized) and ended.stage == "stopped"
 
 
+# ── move 3b: the loop quirks ─────────────────────────────────────────
+
+
+def test_a_retry_on_a_mounted_shell_resumes_only_its_own_session(tmp_path, monkeypatch):
+    """Quirk 1. Each attempt's mount argv replaces the last one's; the lane's
+    own ``extra_args`` never change; an attempt whose mount fails resumes
+    nothing rather than the previous attempt's seed."""
+    from brr import prompts, transcript
+
+    p = _prepared(tmp_path, monkeypatch)
+    p.task.meta["runner_shell"] = "claude"
+    monkeypatch.setattr(StubWorktreeEnv, "session_seed_home", lambda self, _ctx: None, raising=False)
+    real_build = prompts.build_daemon_prompt_with_score
+
+    def _build(*a, _mount_sink=None, **kw):
+        built = real_build(*a, _mount_sink=_mount_sink, **kw)
+        if _mount_sink is not None:
+            _mount_sink.setdefault("identity-core", "mounted")
+        return built
+
+    monkeypatch.setattr(prompts, "build_daemon_prompt_with_score", _build)
+    sessions = iter(["s-1", "s-2", "s-3"])
+    monkeypatch.setattr(transcript, "mount_claude_session", lambda *_a, **_k: next(sessions))
+
+    attempt = Attempt(n=1, lane=p.lane)
+    for n in (1, 2, 3):
+        dispatched = worker.dispatch(p, dataclasses.replace(attempt, n=n))
+        assert isinstance(dispatched, Dispatched)
+        attempt = dispatched.attempt  # a retry carries this lane forward
+        assert attempt.lane.resume_args == ["--resume", f"s-{n}", "--fork-session"]
+        assert attempt.lane.extra_args == p.lane.extra_args
+        assert attempt.lane.runner_args() == [
+            "--resume", f"s-{n}", "--fork-session", *p.lane.extra_args,
+        ]
+        assert attempt.lane.runner_args().count("--resume") == 1
+
+    def _mount_fails(*_a, **_k):
+        raise RuntimeError("no seed")
+
+    monkeypatch.setattr(transcript, "mount_claude_session", _mount_fails)
+    dispatched = worker.dispatch(p, dataclasses.replace(attempt, n=4))
+    assert isinstance(dispatched, Dispatched)
+    assert dispatched.attempt.lane.resume_args == []
+    assert dispatched.attempt.lane.runner_args() == p.lane.extra_args
+
+
+def test_last_failure_is_the_ending_attempts_and_failures_keep_the_history(tmp_path, monkeypatch):
+    """Quirk 2. A transport drop on attempt 1 is retried; attempt 2 misses its
+    artifact with the budget spent. The ending boundary names attempt 2's
+    reading (no hard failure), the history keeps attempt 1's, and the
+    exhausted message cites it as *before* the ending attempt."""
+    def invoke(_ctx, runner_name, invocation, _cfg, *, trace=False):
+        if invocation.label.endswith("attempt-1"):
+            return _result(
+                invocation, runner_name, code=1,
+                stdout="API Error: Connection closed mid-response. The response above may be incomplete.",
+            )
+        return _result(invocation, runner_name, artifacts=[
+            RunnerArtifactRecord(path=Path("out.md"), label="out.md", exists=False),
+        ])
+
+    p = _prepared(tmp_path, monkeypatch, invoke, max_retries=1)
+    first = _to_boundary(p, Attempt(n=1, lane=p.lane))
+
+    assert first.kind == "retry"
+    assert first.attempt.last_failure["failure_kind"] == "transport_error"
+    nxt = first.next_attempt
+    assert nxt is not None and nxt.last_failure is None
+    assert [f["attempt"] for f in nxt.failures] == [1]
+
+    ending = _to_boundary(p, nxt)
+
+    assert ending.kind == "exhausted"
+    assert ending.attempt.last_failure is None
+    assert [(f["attempt"], f["failure_kind"]) for f in ending.attempt.failures] == [
+        (1, "transport_error"),
+    ]
+    ended = worker.finalize(p, ending)
+    assert ended.stage == "failed"
+    from brr import protocol
+
+    response = protocol.read_response(p.responses_dir, p.eid) or ""
+    assert "runner produced no reply after 2 attempt(s); attempt 1 before it: " in response
+    assert "runner connection dropped mid-response: API Error" in response
+
+
+def test_a_clean_attempt_after_a_failed_one_ends_with_no_failure(tmp_path, monkeypatch):
+    def invoke(_ctx, runner_name, invocation, _cfg, *, trace=False):
+        if invocation.label.endswith("attempt-1"):
+            return _result(
+                invocation, runner_name, code=1,
+                stdout="API Error: Connection closed mid-response. The response above may be incomplete.",
+            )
+        return succeed_invoke()(_ctx, runner_name, invocation, _cfg, trace=trace)
+
+    p = _prepared(tmp_path, monkeypatch, invoke, max_retries=1)
+    first = _to_boundary(p, Attempt(n=1, lane=p.lane))
+    assert first.kind == "retry"
+    ending = _to_boundary(p, first.next_attempt)
+
+    assert ending.kind == "completed"
+    assert ending.attempt.last_failure is None
+    assert [f["attempt"] for f in ending.attempt.failures] == [1]
+
+
 # ── the seams themselves ─────────────────────────────────────────────
 
 

@@ -61,7 +61,7 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
     runner_meta = a.lane.meta
     quota_summary = a.lane.quota_summary
     runner_env = a.lane.env
-    extra_runner_args = a.lane.extra_args
+    extra_runner_args = a.lane.runner_args()
     run_hooks_installed = a.lane.hooks_installed
     runner_catalog = a.lane.catalog
     quality_escalation = a.lane.quality_escalation
