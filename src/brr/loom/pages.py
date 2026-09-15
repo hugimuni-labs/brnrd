@@ -208,7 +208,12 @@ def pass_page(repo_root: Path | str, account_home: Path | str | None, run_id: st
     ended = None if live else ledger.get("ended_at")
     compiled = st.compiled_topics(home)
     names = heddles_mod._topic_names(home) if home else {}
-    topics = st._with_stamp(st.run_topics(home, compiled).get(run_id, []), st.run_md_topic(brr_dir, run_id, names))
+    topics = st.merge_topics(
+        names,
+        [st.run_md_topic(brr_dir, run_id, names)],
+        st.run_claim_topics(home, ledger.get("repo_label") or meta.get("repo_label"), run_id, outbox),
+        st.run_topics(home, compiled).get(run_id, []),
+    )
 
     branch = str(meta.get("spawn_contract_branch") or meta.get("branch_name") or "") or None
     relics = st.tail_rows(outbox / ".relics.jsonl", 10_000) if outbox else []
@@ -345,10 +350,235 @@ def _clean_place(path: str) -> str | None:
     return text
 
 
+TEXT_LINES = 200
+_BINARY_PROBE = 8192
+_GH_REMOTE_RE = re.compile(r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
+
+
+def _git_dir_of(start: Path, stop: Path) -> tuple[Path | None, Path | None]:
+    """``(worktree top, common git dir)`` of the checkout holding *start*,
+    walking up no further than *stop*; ``.git`` files (worktrees) followed."""
+    here = start if start.is_dir() else start.parent
+    stop = stop.resolve()
+    while True:
+        dot = here / ".git"
+        if dot.is_dir():
+            return here, dot
+        if dot.is_file():
+            text = st._read_text(dot) or ""
+            match = re.match(r"gitdir:\s*(.+)", text.strip())
+            if match:
+                gitdir = Path(match.group(1).strip())
+                gitdir = gitdir if gitdir.is_absolute() else (here / gitdir)
+                common = st._read_text(gitdir / "commondir")
+                if common:
+                    common_path = Path(common.strip())
+                    gitdir = common_path if common_path.is_absolute() else gitdir / common_path
+                return here, gitdir.resolve()
+        if here.resolve() == stop or here.parent == here:
+            return None, None
+        here = here.parent
+
+
+def gh_url(file_path: Path, stop: Path, read: list[str]) -> str | None:
+    """``https://github.com/<org>/<repo>/blob/<default branch>/<path>`` for a
+    file in a checkout whose ``origin`` is GitHub — read from the checkout's
+    git ``config`` and ``refs/remotes/origin/HEAD`` (else ``main``), no git
+    call. ``None`` when the remote is not GitHub or there is no checkout."""
+    top, gitdir = _git_dir_of(file_path, stop)
+    if top is None or gitdir is None:
+        return None
+    read.append(_rel(gitdir / "config"))
+    config = st._read_text(gitdir / "config") or ""
+    url = None
+    in_origin = False
+    for line in config.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("["):
+            in_origin = stripped.replace(" ", "") in ('[remote"origin"]',)
+            continue
+        if in_origin:
+            key, _, value = stripped.partition("=")
+            if key.strip() == "url":
+                url = value.strip()
+                break
+    match = _GH_REMOTE_RE.match(url or "")
+    if not match:
+        return None
+    head = st._read_text(gitdir / "refs" / "remotes" / "origin" / "HEAD") or ""
+    branch_match = re.match(r"ref:\s*refs/remotes/origin/(\S+)", head.strip())
+    branch = branch_match.group(1) if branch_match else "main"
+    try:
+        rel = file_path.resolve().relative_to(top.resolve()).as_posix()
+    except (OSError, ValueError):
+        return None
+    return f"https://github.com/{match.group(1)}/{match.group(2)}/blob/{branch}/{rel}"
+
+
+def file_text(file_path: Path, start: int | None, end: int | None) -> dict[str, Any]:
+    """``{from, to, lines, total, binary, text}`` — the first
+    :data:`TEXT_LINES` lines, or ``start``..``end`` (1-based, inclusive,
+    capped at :data:`TEXT_LINES` lines). A file with a NUL byte in its first
+    8 KB is binary: no text."""
+    try:
+        with file_path.open("rb") as handle:
+            probe = handle.read(_BINARY_PROBE)
+    except OSError:
+        return {"from": None, "to": None, "total": None, "binary": None, "text": None}
+    if b"\0" in probe:
+        return {"from": None, "to": None, "total": None, "binary": True, "text": None}
+    lines = (st._read_text(file_path) or "").splitlines()
+    first = max(1, start or 1)
+    last = min(len(lines), end if end is not None else first + TEXT_LINES - 1, first + TEXT_LINES - 1)
+    chunk = lines[first - 1:last] if last >= first else []
+    return {"from": first if chunk else None, "to": last if chunk else None, "total": len(lines),
+            "binary": False, "text": "\n".join(chunk)}
+
+
+# ── attention: which lines a pass read or edited ─────────────────────────
+
+_SEGMENT_SPLIT_RE = re.compile(r"\s*(?:&&|\|\||;|\||\n)\s*")
+_SED_RANGE_RE = re.compile(r"(\d+)(?:\s*,\s*(\d+))?p")
+_EDIT_TOOLS = frozenset({"Edit", "MultiEdit", "Write", "NotebookEdit", "apply_patch"})
+
+
+def _tokens(segment: str) -> list[str]:
+    import shlex
+
+    try:
+        return shlex.split(segment, posix=True)
+    except ValueError:
+        return segment.split()
+
+
+def _names_place(token: str, cwd: str, place: str, where: Any) -> bool:
+    if not token or token.startswith("-"):
+        return False
+    value = token if token.startswith("/") else (f"{cwd.rstrip('/')}/{token}" if cwd.startswith("/") else token)
+    if st.home_place(value, where) == place:
+        return True
+    return heddles_mod.relative_place(value, where.roots) == place
+
+
+def attention_of_row(row: Mapping[str, Any], place: str, where: Any, total: int | None) -> tuple[list[dict], dict]:
+    """The line ranges one boundary row read or edited in *place*, and the
+    touches it made that name no range (``{read: n, edit: n}``).
+
+    Shapes, from ``detail``: ``sed -n 'A,Bp'`` · ``head -n N`` / ``head -N`` ·
+    ``tail -n N`` (the last N of the file as it is now) · ``grep``/``rg``/``cat``
+    naming the file (the whole file). A Read row (``tools: [Read]``, detail =
+    the path, no offset recorded) reads the whole file; an edit tool row
+    (Edit/Write/MultiEdit/apply_patch) records no range — counted, not drawn.
+    ``git diff``/``show`` hunk headers in ``detail`` (``+++ b/<path>`` then
+    ``@@ … +C,D @@``) are edits."""
+    detail = row.get("detail") if isinstance(row.get("detail"), str) else ""
+    cwd = str(row.get("cwd") or "")
+    tools = [str(t) for t in row.get("tools") or () if isinstance(t, str)]
+    ranges: list[dict] = []
+    unranged = {"read": 0, "edit": 0}
+    whole = (1, total) if total else None
+    if tools and tools[0] in ("Read",) and _names_place(detail.strip(), cwd, place, where):
+        if whole:
+            ranges.append({"from": whole[0], "to": whole[1], "kind": "read", "whole": True})
+        else:
+            unranged["read"] += 1
+        return ranges, unranged
+    if tools and tools[0] in _EDIT_TOOLS and place in (detail.replace("\\", "/")):
+        if any(_names_place(tok, cwd, place, where) for tok in detail.split()):
+            unranged["edit"] += 1
+            return ranges, unranged
+    current_file = None
+    for line in detail.splitlines() if "@@" in detail else ():
+        header = re.match(r"^\+\+\+ b/(.+)$", line.strip())
+        if header:
+            current_file = header.group(1).strip()
+            continue
+        hunk = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line.strip())
+        if hunk and current_file and heddles_mod.relative_place(current_file, where.roots) == place:
+            begin = int(hunk.group(1))
+            length = int(hunk.group(2)) if hunk.group(2) is not None else 1
+            ranges.append({"from": begin, "to": max(begin, begin + length - 1), "kind": "edit"})
+    for segment in _SEGMENT_SPLIT_RE.split(detail):
+        tokens = _tokens(segment)
+        if not tokens:
+            continue
+        cmd = tokens[0].rsplit("/", 1)[-1]
+        named = [t for t in tokens[1:] if _names_place(t, cwd, place, where)]
+        if not named:
+            continue
+        if cmd == "sed" and "-n" in tokens:
+            script = next((t for t in tokens[1:] if _SED_RANGE_RE.search(t) and not _names_place(t, cwd, place, where)), "")
+            for match in _SED_RANGE_RE.finditer(script):
+                begin = int(match.group(1))
+                end = int(match.group(2)) if match.group(2) else begin
+                ranges.append({"from": min(begin, end), "to": max(begin, end), "kind": "read"})
+        elif cmd == "head":
+            count = _count_flag(tokens)
+            ranges.append({"from": 1, "to": count if count is not None else 10, "kind": "read"})
+        elif cmd == "tail":
+            count = _count_flag(tokens)
+            count = count if count is not None else 10
+            if total:
+                ranges.append({"from": max(1, total - count + 1), "to": total, "kind": "read"})
+            else:
+                unranged["read"] += 1
+        elif cmd in ("grep", "rg", "cat", "less", "nl", "wc"):
+            if whole:
+                ranges.append({"from": whole[0], "to": whole[1], "kind": "read", "whole": True})
+            else:
+                unranged["read"] += 1
+    if total:
+        ranges = [
+            {**r, "from": min(r["from"], total), "to": min(r["to"], total)} for r in ranges if r["from"] <= total
+        ]
+    return ranges, unranged
+
+
+def _count_flag(tokens: list[str]) -> int | None:
+    for index, token in enumerate(tokens):
+        if token == "-n" and index + 1 < len(tokens) and tokens[index + 1].lstrip("+").isdigit():
+            return int(tokens[index + 1].lstrip("+"))
+        if re.fullmatch(r"-n\+?\d+", token):
+            return int(token[2:].lstrip("+"))
+        if re.fullmatch(r"-\d+", token):
+            return int(token[1:])
+    return None
+
+
+def merge_ranges(ranges: list[dict]) -> list[dict]:
+    """Per kind, overlapping or touching ranges merge: ``count`` sums, ``last``
+    is the newest. Whole-file touches (``whole: true`` — a grep, a cat, a Read
+    with no offset) merge only with each other, so one ``grep`` never swallows
+    the ranges a ``sed -n`` actually looked at. Sorted by kind, ranged first."""
+    out: list[dict] = []
+    for kind, whole in (("read", False), ("edit", False), ("read", True), ("edit", True)):
+        rows = sorted(
+            (r for r in ranges if r["kind"] == kind and bool(r.get("whole")) == whole),
+            key=lambda r: (r["from"], r["to"]),
+        )
+        merged: list[dict] = []
+        for row in rows:
+            if merged and row["from"] <= merged[-1]["to"] + 1:
+                top = merged[-1]
+                top["to"] = max(top["to"], row["to"])
+                top["count"] += row.get("count", 1)
+                top["last"] = max(filter(None, (top["last"], row.get("last"))), default=None)
+            else:
+                entry = {"from": row["from"], "to": row["to"], "kind": kind,
+                         "count": row.get("count", 1), "last": row.get("last")}
+                if whole:
+                    entry["whole"] = True
+                merged.append(entry)
+        out += merged
+    return out
+
+
 def place_page(
-    repo_root: Path | str, account_home: Path | str | None, path: str, state: Mapping[str, Any] | None = None
+    repo_root: Path | str, account_home: Path | str | None, path: str, state: Mapping[str, Any] | None = None,
+    *, text_from: int | None = None, text_to: int | None = None,
 ) -> Page:
-    """``{path, kind, tree, heat, last, knots, topics, beads, passes, folds, fold}``.
+    """``{path, kind, tree, heat, last, knots, topics, gh_url, text, attention,
+    unranged, beads, passes, folds, fold}``.
 
     ``kind`` is ``home`` for a path under the account home's
     ``dominion/ knowledge/ surface/ bench/`` that exists there, else ``file``.
@@ -356,7 +586,12 @@ def place_page(
     beat's :func:`brr.loom.state.build`). ``passes``: the cloth runs whose own
     boundaries touched it, newest first. ``beads``: the last 12 beads that
     touched it — the live run's, then those passes'. ``folds``: bench files
-    whose ``place`` is it; ``fold`` the newest one's text."""
+    whose ``place`` is it; ``fold`` the newest one's text. ``gh_url``: the file
+    on GitHub (:func:`gh_url`). ``text``: :func:`file_text`, only for a file
+    that resolves inside the repo or the home. ``attention``: every range the
+    beads touching it read or edited, across the live run and those passes
+    (:func:`attention_of_row`), merged (:func:`merge_ranges`); ``unranged``
+    the touches that named no lines."""
     where = st.locate(repo_root, account_home)
     place = _clean_place(path)
     if place is None:
@@ -401,6 +636,31 @@ def place_page(
                     if len(beads) >= PAGE_BEADS:
                         break
     passes.sort(key=lambda r: r["last"] or "", reverse=True)
+    root = home if is_home else where.brr_dir.parent
+    file_path = (root / place) if root else None
+    inside = False
+    if file_path is not None:
+        try:
+            file_path.resolve().relative_to(root.resolve())
+            inside = file_path.is_file()
+        except (OSError, ValueError):
+            inside = False
+    text = file_text(file_path, text_from, text_to) if inside else None
+    url = gh_url(file_path, root, read) if inside else None
+    total = (text or {}).get("total")
+    ranges: list[dict] = []
+    unranged = {"read": 0, "edit": 0}
+    runs_rows = [(run, None)] if run else []
+    runs_rows += [(p["run"], None) for p in passes if p["run"] != run]
+    for run_id, _ in runs_rows:
+        boundaries = where.brr_dir / "runs" / str(run_id) / "boundaries.jsonl"
+        for bead_row in st.tail_rows(boundaries, 4000, st._is_bead):
+            found, missed = attention_of_row(bead_row, place, where, total)
+            for item in found:
+                item["last"] = bead_row.get("at")
+            ranges += found
+            unranged["read"] += missed["read"]
+            unranged["edit"] += missed["edit"]
     folds = [f for f in (state.get("bench") or {}).get("folds") or () if f.get("place") == place]
     fold = None
     if folds and home:
@@ -408,7 +668,7 @@ def place_page(
         text_path = home / "bench" / f"{newest['path']}.md"
         read.append(_rel(text_path))
         fold = {"path": newest["path"], "marks": newest.get("marks") or [], "text": st._read_text(text_path)}
-    if entry is None and not passes and not beads and not folds:
+    if entry is None and not passes and not beads and not folds and not inside:
         return None, read
     return {
         "path": place,
@@ -418,6 +678,10 @@ def place_page(
         "last": (entry or {}).get("last"),
         "knots": (entry or {}).get("knots"),
         "topics": (entry or {}).get("topics") or [],
+        "gh_url": url,
+        "text": text,
+        "attention": merge_ranges(ranges),
+        "unranged": unranged,
         "beads": beads[:PAGE_BEADS],
         "passes": passes,
         "folds": folds,

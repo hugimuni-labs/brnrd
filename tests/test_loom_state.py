@@ -22,6 +22,7 @@ RUN = "run-260922-1000-live"
 CHILD = "run-260922-1010-kid1"
 OLD = "run-260921-0800-old1"
 STAMP = "run-260921-0700-stmp"
+CLAIM = "run-260921-0600-clam"
 
 
 def iso(epoch: float) -> str:
@@ -107,6 +108,7 @@ def machine(tmp_path: Path) -> dict:
     _write(outbox / ".name", "the live seat\n")
     _write(outbox / ".mood", "curious\nnarration\n")
     _write(outbox / ".topic", "the-loom\n")
+    _write(outbox / ".topics", "topics: the-clockwork\n")
     long_detail = "cat src/brr/hud.py " + "x" * 400
     _jsonl(brr / "runs" / RUN / "boundaries.jsonl", [
         {"at": iso(NOW - 120), "phase": "pre-tool", "place": {"path": None, "paths": []}, "inject": None},
@@ -167,8 +169,16 @@ def machine(tmp_path: Path) -> dict:
 
     # ── the run ledger; the old run's own boundaries, five hours back ──
     _run_md(brr, STAMP, brr / "outbox" / "evt-stamp", status="done", topic="the-loom")
+    from brr import account
+
+    node = home / "runs" / account.slug_repo_label("acme/widgets")
+    _write(node / CLAIM / "topics.md", "topics: the-post not-minted-yet\n")  # the dashboard's claim, nothing else
+    _write(node / STAMP / "topics.md", "topics: the-post the-loom\n")
     _jsonl(brr / "run-ledger.jsonl", [
-        {"run_id": STAMP, "started_at": iso(NOW - 40000), "ended_at": iso(NOW - 39000), "name": "stamped, never indexed"},
+        {"run_id": CLAIM, "started_at": iso(NOW - 50000), "ended_at": iso(NOW - 49000), "name": "the failover that says what it did",
+         "repo_label": "acme/widgets"},
+        {"run_id": STAMP, "started_at": iso(NOW - 40000), "ended_at": iso(NOW - 39000), "name": "stamped, never indexed",
+         "repo_label": "acme/widgets"},
         {"run_id": OLD, "started_at": iso(NOW - 20000), "ended_at": None, "name": "stale copy"},
         {"run_id": RUN, "started_at": iso(NOW - 30000), "ended_at": iso(NOW - 29000), "name": "an earlier stint"},
         {"run_id": OLD, "started_at": iso(NOW - 20000), "ended_at": iso(NOW - 18000), "name": "the old run",
@@ -232,8 +242,8 @@ def test_released_seat_serves_no_run_but_the_rest(machine):
     assert out["run"] is None and out["hud"] is None and out["beads"] == []
     assert out["shuttle"]["state"] == "released"
     assert [i["id"] for i in out["warp"]["items"]] == ["w-1", "w-2", "w-3", "w-4"]
-    assert [r["run"] for r in out["cloth"]["rows"]] == [STAMP, RUN, OLD]  # ledger order: each run's last entry
-    assert out["cloth"]["rows"][1]["ended"] == iso(NOW - 29000)  # not live now: the ledger's end stands
+    assert [r["run"] for r in out["cloth"]["rows"]] == [CLAIM, STAMP, RUN, OLD]  # ledger order: each run's last entry
+    assert out["cloth"]["rows"][2]["ended"] == iso(NOW - 29000)  # not live now: the ledger's end stands
 
 
 def test_shuttle_keeps_the_last_twelve_transitions(machine):
@@ -350,9 +360,10 @@ def test_beads_carry_places_and_topics(machine):
 
 def test_cloth_joins_the_ledger_with_index_refs(machine):
     rows = state.build(machine["repo"], machine["home"], now=NOW)["cloth"]["rows"]
-    assert [r["run"] for r in rows] == [STAMP, RUN, OLD, CHILD]  # ledger order (each run's last entry), then open strands
-    stamp, live, old, kid = rows
-    assert stamp["topics"] == ["the-loom"]  # no index row: run.md's stamped topic carries it
+    assert [r["run"] for r in rows] == [CLAIM, STAMP, RUN, OLD, CHILD]  # ledger order (each run's last entry), then open strands
+    claim, stamp, live, old, kid = rows
+    assert claim["topics"] == ["the-post", "not-minted-yet"]  # only a claim, on its node; unknown slugs stay
+    assert stamp["topics"] == ["the-loom", "the-post"]  # the stamp, then the claim, deduped
     assert old["name"] == "the old run"  # the run's last ledger entry wins
     assert old["topics"] == ["the-loom", "the-post"]
     assert (old["prs"], old["knots"], old["pages"], old["tokens"]) == ([7, 9], 2, 1, 60)
@@ -361,7 +372,7 @@ def test_cloth_joins_the_ledger_with_index_refs(machine):
     # the live run's earlier stint is in the ledger; its end is still null
     assert live["ended"] is None and live["duration_s"] is None
     # a live run reads its own controls even when an earlier stint is in the ledger
-    assert live["topics"] == ["the-post"] and live["name"] == "the live seat" and live["mood"] == "curious"
+    assert live["topics"] == ["the-post", "the-clockwork"] and live["name"] == "the live seat" and live["mood"] == "curious"
     assert kid["ended"] is None and kid["duration_s"] is None
     assert (kid["parent"], kid["shell"], kid["core"], kid["prs"], kid["knots"]) == (RUN, "codex", "astra", [12], 1)
 
@@ -437,3 +448,13 @@ def test_detail_paths_must_exist_and_sit_in_repo_or_home(machine):
     assert state.row_paths(row, where) == (["src/brr/real.py"], [])
     # nothing in detail: the frame's place, then the cwd
     assert state.row_paths({"act": "probe", "detail": "ls", "cwd": str(machine["repo"] / "src")}, where) == (["src"], [])
+
+
+def test_cloth_rows_carry_their_trail(machine):
+    rows = {r["run"]: r for r in state.build(machine["repo"], machine["home"], now=NOW)["cloth"]["rows"]}
+    assert rows[OLD]["trail"] == [
+        {"path": "src/brr/hud.py", "at": iso(NOW - 5 * 3600)}, {"path": "src/brr/old.py", "at": iso(NOW - 5 * 3600)},
+    ]
+    assert [t["path"] for t in rows[CHILD]["trail"]] == [f"src/brr/f{i}.py" for i in range(14, 6, -1)]
+    assert rows[RUN]["trail"][0] == {"path": "src/brr/real.py", "at": iso(NOW - 90)}
+    assert rows[CLAIM]["trail"] == []  # no boundaries log

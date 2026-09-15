@@ -961,12 +961,63 @@ def run_md_topic(brr_dir: Path, run_id: str, names: Mapping[str, Any]) -> str | 
         return None
     if raw.startswith("topic:"):
         raw = raw[len("topic:"):].strip()
+    if raw in ("null", "none", "new") or not heddles_mod.SLUG_RE.match(raw):
+        return None
     topic = names.get(raw)
-    return topic.slug if topic is not None else None
+    return topic.slug if topic is not None else raw
 
 
 def _with_stamp(topics: list[str], stamped: str | None) -> list[str]:
     return topics + [stamped] if stamped and stamped not in topics else list(topics)
+
+
+_CLAIM_SPLIT_RE = re.compile(r"[\s·]+")
+
+
+def _claim_slugs(text: str | None) -> list[str]:
+    """``topics: a b`` / ``a b`` (the ``.topics`` control's two shapes, the
+    node's rendered one) → slug-shaped tokens, in order."""
+    first = (text or "").splitlines()[0].strip() if (text or "").strip() else ""
+    if first.lower().startswith("topics:"):
+        first = first[len("topics:"):].strip()
+    return [t for t in _CLAIM_SPLIT_RE.split(first) if heddles_mod.SLUG_RE.match(t)]
+
+
+def run_claim_topics(
+    account_home: Path | None, repo_label: str | None, run_id: str, outbox_dir: Path | None = None
+) -> list[str]:
+    """The run's own ``.topics`` claim — the live outbox's control
+    (:func:`brr.run_ledger.read_run_topics_control`), else the copy closeout
+    renders on its node, ``<home>/runs/<repo>/<run>/topics.md``
+    (``daemon._persist_run_topics``) — what the dashboard shows."""
+    from .. import run_ledger
+
+    if outbox_dir is not None:
+        claimed = run_ledger.read_run_topics_control(outbox_dir)
+        if claimed:
+            return list(claimed)
+    if account_home is None or not repo_label or not run_id:
+        return []
+    from .. import account
+
+    node = Path(account_home) / "runs" / account.slug_repo_label(repo_label) / run_id / "topics.md"
+    return _claim_slugs(_read_text(node))
+
+
+def merge_topics(names: Mapping[str, Any], *groups: Iterable[str | None]) -> list[str]:
+    """Deduped, in group order; a name the topics know resolves to its slug
+    (an ``ids:`` alias to the topic that absorbed it), an unknown slug-shaped
+    name stays as written — a claim may name a topic not minted yet."""
+    out: list[str] = []
+    for group in groups:
+        for name in group or ():
+            if not name:
+                continue
+            topic = names.get(name)
+            slug = topic.slug if topic is not None else name
+            if heddles_mod.SLUG_RE.match(slug) and slug not in out:
+                out.append(slug)
+    return out
 
 
 def _live_row(brr_dir: Path, run_id: str, topics: list[str]) -> dict[str, Any] | None:
@@ -995,6 +1046,7 @@ def _live_row(brr_dir: Path, run_id: str, topics: list[str]) -> dict[str, Any] |
         "pages": pages,
         "tokens": None,
         "parent": str(meta.get("spawn_parent_run_id") or "") or None,
+        "trail": [],
     }
 
 
@@ -1004,11 +1056,17 @@ def read_cloth(
     compiled: list[Any],
     live: _Live | None,
     strands: list[dict[str, Any]],
+    where: "Where | None" = None,
+    repo_label: str | None = None,
 ) -> dict[str, Any]:
     """``cloth`` — the last :data:`CLOTH_LAST` runs of ``<brr>/run-ledger.jsonl``
     (one row per run, its last entry), then the live run and its live strands
     when the ledger has not closed them yet. ``ended`` is ``null`` for the live
-    run always; ``duration_s`` is ``ended − started``, ``null`` while live."""
+    run always; ``duration_s`` is ``ended − started``, ``null`` while live.
+    ``topics`` = the ``run.md`` stamp ∪ the run's own ``.topics`` claim ∪ the
+    topic indexes, deduped in that order; ``trail`` = its last
+    :data:`TRAIL_PLACES` distinct repo places, newest first (:func:`trail`)."""
+    where = where or Where(_roots(brr_dir.parent, brr_dir), account_home, brr_dir)
     topics_by_run = _safe(lambda: run_topics(account_home, compiled), {})
     names = _safe(lambda: heddles_mod._topic_names(account_home), {}) if account_home else {}
     ledger = tail_rows(brr_dir / "run-ledger.jsonl", CLOTH_LAST * 2, lambda r: bool(r.get("run_id")))
@@ -1031,7 +1089,13 @@ def read_cloth(
             "mood": None,
             "shell": row.get("runner_shell"),
             "core": row.get("runner_core"),
-            "topics": _with_stamp(topics_by_run.get(run_id, []), run_md_topic(brr_dir, run_id, names)),
+            "topics": merge_topics(
+                names,
+                [run_md_topic(brr_dir, run_id, names)],
+                run_claim_topics(account_home, row.get("repo_label") or repo_label, run_id),
+                topics_by_run.get(run_id, []),
+            ),
+            "trail": trail(brr_dir, run_id, where),
             "prs": prs,
             "knots": knots,
             "pages": pages,
@@ -1045,12 +1109,24 @@ def read_cloth(
     for run_id in open_ids:
         if run_id in latest:
             continue
-        topics = _with_stamp(topics_by_run.get(run_id, []), run_md_topic(brr_dir, run_id, names))
+        live_outbox = find_outbox(brr_dir, run_id, _load_run(brr_dir, run_id))[0]
+        topics = merge_topics(
+            names,
+            [run_md_topic(brr_dir, run_id, names)],
+            run_claim_topics(account_home, repo_label, run_id, live_outbox),
+            topics_by_run.get(run_id, []),
+        )
         row = _safe(lambda: _live_row(brr_dir, run_id, topics), None)
+        if row is not None:
+            row["trail"] = trail(brr_dir, run_id, where)
         if row is not None:
             rows.append(row)
     for row in rows:
         if row["run"] in open_ids and row["run"] in latest:
+            live_outbox = find_outbox(brr_dir, row["run"], _load_run(brr_dir, row["run"]))[0]
+            row["topics"] = merge_topics(
+                names, row["topics"], run_claim_topics(account_home, repo_label, row["run"], live_outbox)
+            )
             live_row = _safe(lambda: _live_row(brr_dir, row["run"], row["topics"]), None) or {}
             for key in ("name", "title", "mood", "shell", "core"):
                 if live_row.get(key):
@@ -1090,6 +1166,21 @@ _SCANS_LOCK = threading.Lock()
 
 def scan_places(path: Path, where: Where) -> dict[tuple[str, str], list[Any]]:
     return _scan(path, where)[0]
+
+
+TRAIL_PLACES = 8
+
+
+def trail(brr_dir: Path, run_id: str, where: Where) -> list[dict[str, Any]]:
+    """A run's last :data:`TRAIL_PLACES` distinct repo places, newest first,
+    each ``{path, at}`` — from the same incremental read of its
+    ``boundaries.jsonl`` the tree uses, so it costs nothing new per beat."""
+    if not run_id or "/" in run_id or run_id.startswith("."):
+        return []
+    places = scan_places(brr_dir / "runs" / run_id / "boundaries.jsonl", where)
+    rows = [(key[1], seen[0]) for key, seen in places.items() if key[0] == "repo" and seen[0] is not None]
+    rows.sort(key=lambda kv: (-kv[1], kv[0]))
+    return [{"path": path, "at": _iso(at)} for path, at in rows[:TRAIL_PLACES]]
 
 
 def bead_count(path: Path, where: Where) -> int | None:
@@ -1311,14 +1402,15 @@ def build(repo_root: Path | str, account_home: Path | str | None, *, now: object
         lambda: read_beads(beaded, where, compiled, live.run_id if live else "", source=source, first_n=first_n),
         [],
     )
+    repo_label = _safe(lambda: _repo_label(live, brr_dir), None)
     cloth = _safe(
-        lambda: read_cloth(brr_dir, home, compiled, live, (hud or {}).get("strands") or []),
+        lambda: read_cloth(brr_dir, home, compiled, live, (hud or {}).get("strands") or [], where, repo_label),
         {"rows": []},
     )
     return {
         "at": _iso(now_epoch),
         "beat_ms": BEAT_MS,
-        "repo": _safe(lambda: _repo_label(live, brr_dir), None),
+        "repo": repo_label,
         "shuttle": shuttle,
         "run": _safe(lambda: read_run(live, now_epoch), None),
         "hud": hud,
