@@ -11,6 +11,8 @@ nothing else, read-only in v1. Routes:
   several — never doubles the work;
 - ``GET /loom/bench?path=<repo>/<place>/<commit>`` → one bench file's text,
   resolved inside ``<account_home>/bench`` only;
+- ``GET /loom/page/<bead|pass|item|place|heddle>?…`` → one bench page
+  (:mod:`brr.loom.pages`), JSON with the files it ``read``;
 - ``GET /loom/events`` → Server-Sent Events: one ``state`` frame per beat while
   the client stays connected;
 - ``GET /loom/<asset>`` → a file under ``static/``.
@@ -60,6 +62,7 @@ class StateCache:
         self._clock = clock
         self._lock = threading.Lock()
         self._body: bytes | None = None
+        self._payload: dict[str, Any] | None = None
         self._at = 0.0
         self.builds = 0
 
@@ -69,9 +72,16 @@ class StateCache:
             if self._body is None or now - self._at >= self._beat:
                 payload = self._build()
                 self._body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                self._payload = payload
                 self._at = now
                 self.builds += 1
             return self._body
+
+    def payload(self) -> dict[str, Any]:
+        """The same beat's state as a dict (the bench pages read it)."""
+        self.get()
+        with self._lock:
+            return self._payload if self._payload is not None else {}
 
 
 def resolve_inside(root: Path, raw: str, *, suffix: str = "") -> Path | None:
@@ -109,10 +119,12 @@ class LoomServer(ThreadingHTTPServer):
         cache: StateCache,
         *,
         account_home: Path | None,
+        repo_root: Path | None = None,
         static_dir: Path = STATIC_DIR,
         beat_ms: int = state_mod.BEAT_MS,
     ) -> None:
         self.cache = cache
+        self.repo_root = Path(repo_root) if repo_root else None
         self.account_home = Path(account_home) if account_home else None
         self.static_dir = Path(static_dir)
         self.beat_ms = beat_ms
@@ -181,6 +193,8 @@ class LoomHandler(BaseHTTPRequestHandler):
                 self._send(HTTPStatus.OK, self.server.cache.get(), "application/json; charset=utf-8", head=head)
             elif path == "/loom/bench":
                 self._bench(parse_qs(url.query).get("path", [""])[0], head=head)
+            elif path.startswith("/loom/page/"):
+                self._page(path[len("/loom/page/"):], parse_qs(url.query), head=head)
             elif path == "/loom/events":
                 if head:
                     self._send(HTTPStatus.OK, b"", "text/event-stream", head=True)
@@ -210,6 +224,43 @@ class LoomHandler(BaseHTTPRequestHandler):
         if kind.startswith("text/") or kind in ("application/javascript", "application/json", "image/svg+xml"):
             kind += "; charset=utf-8"
         self._send(HTTPStatus.OK, body, kind, head=head)
+
+    def _page(self, kind: str, query: dict[str, list[str]], *, head: bool) -> None:
+        """``/loom/page/<kind>`` — one bench page (:mod:`brr.loom.pages`) as
+        JSON; ``404 {error, read}`` when the thing is not on disk."""
+        from . import pages
+
+        def arg(name: str) -> str:
+            return (query.get(name) or [""])[0]
+
+        repo_root = self.server.repo_root or Path.cwd()
+        home = self.server.account_home
+        if kind == "bead":
+            try:
+                n = int(arg("n"))
+            except ValueError:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": "n must be an integer", "read": []}, head=head)
+                return
+            payload, read = pages.bead_page(repo_root, home, arg("run"), n)
+        elif kind == "pass":
+            payload, read = pages.pass_page(repo_root, home, arg("id"))
+        elif kind == "item":
+            payload, read = pages.item_page(home, arg("id"))
+        elif kind == "place":
+            payload, read = pages.place_page(repo_root, home, arg("path"), self.server.cache.payload())
+        elif kind == "heddle":
+            payload, read = pages.heddle_page(home, arg("slug"), self.server.cache.payload())
+        else:
+            self._json(HTTPStatus.NOT_FOUND, {"error": f"no page kind {kind!r}", "read": []}, head=head)
+            return
+        if payload is None:
+            self._json(HTTPStatus.NOT_FOUND, {"error": f"no such {kind}", "read": read}, head=head)
+            return
+        self._json(HTTPStatus.OK, {**payload, "read": read}, head=head)
+
+    def _json(self, status: int, payload: dict[str, Any], *, head: bool) -> None:
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        self._send(status, body, "application/json; charset=utf-8", head=head)
 
     def _bench(self, raw: str, *, head: bool) -> None:
         home = self.server.account_home
@@ -254,4 +305,6 @@ def make_server(
     home = Path(account_home) if account_home else None
     builder = build or (lambda: state_mod.build(repo_root, home))
     cache = StateCache(builder, beat_ms)
-    return LoomServer(port, cache, account_home=home, static_dir=static_dir or STATIC_DIR, beat_ms=beat_ms)
+    return LoomServer(
+        port, cache, account_home=home, repo_root=Path(repo_root), static_dir=static_dir or STATIC_DIR, beat_ms=beat_ms
+    )

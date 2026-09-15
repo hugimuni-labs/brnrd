@@ -432,11 +432,12 @@ def _key(label: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(label).strip().lower()).strip("_") or "bucket"
 
 
-def _strands(brr_dir: Path, portal: Mapping[str, Any], roots: Iterable[Path] = ()) -> list[dict[str, Any]]:
+def _strands(brr_dir: Path, portal: Mapping[str, Any], where: "Where") -> list[dict[str, Any]]:
     """The portal's ``owned_children``, each read at its own ``run.md``
     (status, ``spawn_allowance_tokens``) and portal (``strand.submitted``);
-    ``spent`` is the parent portal's weighted draw for it; ``places`` /
-    ``last_bead_at`` its own boundaries (:func:`strand_trace`)."""
+    ``spent`` is the parent portal's weighted draw for it; ``places``,
+    ``last_bead_at`` and ``last_place_kind`` its own boundaries
+    (:func:`strand_trace`)."""
     coexisting = ((portal.get("resources") or {}).get("coexisting_runs") or {})
     children = coexisting.get("owned_children") if isinstance(coexisting, dict) else None
     out: list[dict[str, Any]] = []
@@ -457,7 +458,9 @@ def _strands(brr_dir: Path, portal: Mapping[str, Any], roots: Iterable[Path] = (
             status = "submitted" if submitted else "live"
         else:
             status = "done"
-        places, last_bead_at = strand_trace(brr_dir, run_id, roots)
+        places, last_bead_at, last_kind = strand_trace(
+            brr_dir, run_id, where, source=str(getattr(run, "source", "") or "")
+        )
         out.append({
             "id": run_id or None,
             # A strand queued in the spawn pool has an edge but no run id yet;
@@ -469,6 +472,7 @@ def _strands(brr_dir: Path, portal: Mapping[str, Any], roots: Iterable[Path] = (
             "allowance": _int(meta.get("spawn_allowance_tokens")),
             "places": places,
             "last_bead_at": last_bead_at,
+            "last_place_kind": last_kind,
         })
     return out
 
@@ -477,27 +481,29 @@ STRAND_PLACES = 12
 _STRAND_BEADS_SCAN = 4000
 
 
-def strand_trace(brr_dir: Path, run_id: str, roots: Iterable[Path]) -> tuple[list[str], str | None]:
+def strand_trace(
+    brr_dir: Path, run_id: str, where: "Where", *, source: str = ""
+) -> tuple[list[str], str | None, str | None]:
     """A strand's position on the tree: the last :data:`STRAND_PLACES` distinct
     repo places in its own ``<brr>/runs/<id>/boundaries.jsonl`` (newest first,
-    extracted exactly as ``beads[].places``) and its last bead's ``at``.
-    ``([], None)`` when the log is absent or holds no bead."""
+    extracted exactly as ``beads[].places``), its last bead's ``at`` and that
+    bead's :func:`place_kind`. ``([], None, None)`` when the log is absent or
+    holds no bead."""
     if not run_id or "/" in run_id or run_id.startswith("."):
-        return [], None
+        return [], None, None
     rows = tail_rows(brr_dir / "runs" / run_id / "boundaries.jsonl", _STRAND_BEADS_SCAN, _is_bead)
     if not rows:
-        return [], None
-    roots = tuple(roots)
+        return [], None, None
     places: list[str] = []
     for row in reversed(rows):
-        for place in row_places(row, roots):
+        for place in row_paths(row, where)[0]:
             if place not in places:
                 places.append(place)
             if len(places) >= STRAND_PLACES:
                 break
         if len(places) >= STRAND_PLACES:
             break
-    return places, rows[-1].get("at")
+    return places, rows[-1].get("at"), place_kind(rows[-1], where, source=source)
 
 
 def _last_boundary(rows: list[dict[str, Any]], pick: Callable[[dict[str, Any]], Any]) -> Any:
@@ -509,7 +515,7 @@ def _last_boundary(rows: list[dict[str, Any]], pick: Callable[[dict[str, Any]], 
 
 
 def read_hud(
-    brr_dir: Path, live: _Live | None, rows: list[dict[str, Any]], roots: Iterable[Path] = ()
+    brr_dir: Path, live: _Live | None, rows: list[dict[str, Any]], where: "Where"
 ) -> dict[str, Any] | None:
     """``hud`` — the live outbox's portal. ``chip`` is the last chip the hook
     injected (a boundary row's ``inject`` first line), else
@@ -542,7 +548,7 @@ def read_hud(
         "quota": _safe(lambda: _quota(live.outbox_dir, portal), {}),
         "spend": spend,
         "ctx_tokens": ctx,
-        "strands": _safe(lambda: _strands(brr_dir, portal, roots), []),
+        "strands": _safe(lambda: _strands(brr_dir, portal, where), []),
         "full": _safe(lambda: current.to_dict(), None) if current is not None else None,
     }
 
@@ -616,6 +622,16 @@ def match_topics(
 # ── warp ─────────────────────────────────────────────────────────────────
 
 
+def item_state(item: Any, by_id: Mapping[str, Any]) -> str:
+    """``done`` / ``retired`` from the receipt row, else ``held`` while a
+    ``needs:`` id is still open (:func:`brr.items.open_blockers`), else ``ready``."""
+    from .. import items
+
+    if item.state in ("done", "retired"):
+        return item.state
+    return "held" if items.open_blockers(item, by_id) else "ready"
+
+
 def read_warp(account_home: Path | None) -> dict[str, Any]:
     """``warp`` — ``<account_home>/surface/warp/*.md`` via
     :func:`brr.items.load_items`. Goals (``type: goal``) apart; an item's
@@ -633,14 +649,7 @@ def read_warp(account_home: Path | None) -> dict[str, Any]:
         if item.type == items.GOAL_TYPE:
             goals.append({"id": item.id, "title": item.headline, "metric": item.metric})
             continue
-        if item.state == "done":
-            state = "done"
-        elif item.state == "retired":
-            state = "retired"
-        elif items.open_blockers(item, by_id):
-            state = "held"
-        else:
-            state = "ready"
+        state = item_state(item, by_id)
         taken = [t for t in item.taken if t.startswith("run-")]
         rows.append({
             "id": item.id,
@@ -654,45 +663,220 @@ def read_warp(account_home: Path | None) -> dict[str, Any]:
     return {"goals": goals, "items": rows}
 
 
-# ── beads ────────────────────────────────────────────────────────────────
+# ── places and kinds ─────────────────────────────────────────────────
 
 
-def row_places(row: Mapping[str, Any], roots: Iterable[Path]) -> list[str]:
-    """A boundary row's repo places: the frame's own ``place.path`` /
-    ``place.paths`` extraction, relativised; runtime paths (``.brr/``) and
-    paths outside every root dropped."""
-    place = row.get("place") if isinstance(row.get("place"), dict) else {}
-    raw = list(place.get("paths") or []) if isinstance(place.get("paths"), list) else []
-    if place.get("path"):
-        raw.insert(0, place.get("path"))
+#: The account home's four trees the home tree grows from.
+HOME_TREE_DIRS = ("dominion", "knowledge", "surface", "bench")
+#: What a bead touched, as the loom draws it.
+PLACE_KINDS = ("file", "home", "forge", "wire", "shed", "crew", "clock")
+
+
+class Where:
+    """The coordinates a boundary row's paths resolve against: the repo
+    roots (:func:`_roots`), the account home and the shared ``.brr``."""
+
+    __slots__ = ("roots", "home", "home_spellings", "brr_dir", "outbox_spellings")
+
+    def __init__(self, roots: Iterable[Path], home: Path | None, brr_dir: Path):
+        self.roots = tuple(roots)
+        self.home = home
+        self.brr_dir = brr_dir
+        self.home_spellings = _spellings(home) if home is not None else ()
+        self.outbox_spellings = _spellings(brr_dir / "outbox")
+
+    def key(self) -> tuple:
+        return (self.roots, self.home_spellings)
+
+
+def _spellings(path: Path) -> tuple[str, ...]:
     out: list[str] = []
-    for value in raw:
-        rel = heddles_mod.relative_place(value if isinstance(value, str) else None, roots)
-        if not rel or rel.startswith(_NOT_TREE) or rel in (".brr", ".git") or rel in out:
-            continue
-        out.append(rel)
+    for spelling in (str(path), str(_resolved(path))):
+        spelling = spelling.rstrip("/")
+        if spelling and spelling not in out:
+            out.append(spelling)
+    return tuple(sorted(out, key=len, reverse=True))
+
+
+def _under(value: str, bases: Iterable[str]) -> str | None:
+    """*value* relative to the first base it sits under (``""`` for the base
+    itself), or ``None``."""
+    for base in bases:
+        if value == base:
+            return ""
+        if value.startswith(base + "/"):
+            return value[len(base) + 1:]
+    return None
+
+
+#: An absolute path token in a command line — not one glued to a variable
+#: (``$O/000007-x.md``) or a word.
+_ABS_PATH_RE = re.compile(r"(?<![\w.~$}/-])/(?:[\w.@+-]+/)*[\w.@+-]+")
+#: A relative path token with at least one ``/``.
+_REL_PATH_RE = re.compile(r"(?<![\w./$~}@-])(?:\./)?[\w@+-][\w.@+-]*(?:/[\w.@+-]+)+")
+
+
+def detail_paths(row: Mapping[str, Any]) -> list[str]:
+    """The path tokens a row's ``detail`` names — where the act looked:
+    absolute ones as written, relative ones joined to the row's ``cwd``.
+    Unchecked; :func:`row_paths` keeps only the ones that exist."""
+    detail = row.get("detail") if isinstance(row.get("detail"), str) else ""
+    if not detail:
+        return []
+    cwd = str(row.get("cwd") or "").rstrip("/")
+    found: list[str] = [m.group(0) for m in _ABS_PATH_RE.finditer(detail)]
+    if cwd.startswith("/"):
+        for match in _REL_PATH_RE.finditer(detail):
+            token = match.group(0)
+            found.append(f"{cwd}/{token[2:] if token.startswith('./') else token}")
+    out: list[str] = []
+    for value in found:
+        if not value.endswith("…") and value not in out:
+            out.append(value)
     return out
 
 
+def frame_paths(row: Mapping[str, Any]) -> list[str]:
+    """The frame's own ``place.path`` / ``place.paths`` for the row, if any."""
+    place = row.get("place")
+    if not isinstance(place, dict):
+        return []
+    raw = [place.get("path")]
+    if isinstance(place.get("paths"), list):
+        raw += place["paths"]
+    out: list[str] = []
+    for value in raw:
+        if isinstance(value, str) and value and value not in out:
+            out.append(value)
+    return out
+
+
+def raw_paths(row: Mapping[str, Any]) -> list[str]:
+    """Every path a row names, ``detail`` first, then the frame's — for
+    classifying (:func:`place_kind`), never as places."""
+    out = detail_paths(row)
+    return out + [p for p in frame_paths(row) if p not in out]
+
+
+def home_place(value: str, where: Where) -> str | None:
+    """*value* as a home place (``knowledge/…``) when it sits under one of
+    :data:`HOME_TREE_DIRS` of the account home; ``None`` otherwise."""
+    rest = _under(value, where.home_spellings) if value.startswith("/") else None
+    if not rest:
+        return None
+    head = rest.split("/", 1)[0]
+    return rest.rstrip("/") if head in HOME_TREE_DIRS else None
+
+
+def _resolve_paths(values: Iterable[str], where: Where, *, check: bool) -> tuple[list[str], list[str]]:
+    places: list[str] = []
+    homes: list[str] = []
+    for value in values:
+        if check and not os.path.exists(value):
+            continue
+        home = home_place(value, where)
+        if home is not None:
+            if home not in homes:
+                homes.append(home)
+            continue
+        rel = heddles_mod.relative_place(value, where.roots)
+        if not rel or rel.startswith(_NOT_TREE) or rel in (".brr", ".git") or rel in places:
+            continue
+        places.append(rel)
+    return places, homes
+
+
+def row_paths(row: Mapping[str, Any], where: Where) -> tuple[list[str], list[str]]:
+    """``(repo places, home places)`` — where the act *looked*, in order of
+    evidence: the paths ``detail`` names that exist; else the frame's own
+    ``place`` extraction; else the row's ``cwd``. Only paths inside a repo root
+    (relativised by :func:`brr.heddles.relative_place`, a worktree's
+    ``.brr/worktrees/<id>/`` prefix included) or under the account home's
+    :data:`HOME_TREE_DIRS` are places; runtime paths (``.brr/``, ``.git/``)
+    and anything else (``/tmp/…``) are not."""
+    for values, check in ((detail_paths(row), True), (frame_paths(row), False)):
+        places, homes = _resolve_paths(values, where, check=check)
+        if places or homes:
+            return places, homes
+    cwd = str(row.get("cwd") or "")
+    return _resolve_paths([cwd] if cwd.startswith("/") else [], where, check=True)
+
+
+def row_places(row: Mapping[str, Any], roots: Iterable[Path]) -> list[str]:
+    """A boundary row's repo places (:func:`row_paths` without a home)."""
+    return row_paths(row, Where(roots, None, Path("/nonexistent-brr")))[0]
+
+
+_FORGE_RE = re.compile(r"\b(?:gh\s+(?:pr|issue|api)|git\s+push)\b")
+_CREW_RE = re.compile(r"(?:^|[\s>'\"])(?:spawn:\s*true\b|(?:to|stop):\s*(?:run|evt)-[\w-]+)")
+_SHED_RE = re.compile(r"\bbrnrd\s+await\b")
+_WIRE_NAME_RE = re.compile(r"(?:^|/)(?:\d{6}-[^/\s]*\.md|\.card|\.mood)$")
+_WIRE_DETAIL_RE = re.compile(r"(?<![\w.])(?:\d{6}-[\w.-]*\.md|\.card|\.mood)\b")
+
+
+def place_kind(row: Mapping[str, Any], where: Where, *, source: str = "") -> str:
+    """What a bead touched, one of :data:`PLACE_KINDS`, first match wins:
+
+    - a wake row (``phase: session-start``): ``clock`` when the run's *source*
+      is ``schedule``, ``crew`` for a ``spawn*`` source, else ``wire``;
+    - ``gh pr|issue|api`` or ``git push`` in ``detail`` → ``forge``;
+    - a ``spawn: true`` / ``to: <id>`` / ``stop: <id>`` directive in ``detail`` → ``crew``;
+    - ``brnrd await`` → ``shed``;
+    - a path under ``<brr>/outbox/`` naming ``000NNN-*.md``, ``.card`` or
+      ``.mood`` (on the path, or in ``detail`` beside the outbox dir), or any
+      ``conversations/`` path → ``wire``;
+    - a path under the account home's ``dominion/ knowledge/ surface/ bench/`` → ``home``;
+    - else ``file``.
+    """
+    if row.get("phase") == "session-start":
+        if source == "schedule":
+            return "clock"
+        return "crew" if source.startswith("spawn") else "wire"
+    detail = row.get("detail") if isinstance(row.get("detail"), str) else ""
+    if _FORGE_RE.search(detail):
+        return "forge"
+    if _CREW_RE.search(detail):
+        return "crew"
+    if _SHED_RE.search(detail):
+        return "shed"
+    raw = raw_paths(row)
+    for value in raw:
+        if "/conversations/" in value or value.startswith("conversations/"):
+            return "wire"
+        inside = _under(value, where.outbox_spellings)
+        if inside is not None and (_WIRE_NAME_RE.search(value) or _WIRE_DETAIL_RE.search(detail)):
+            return "wire"
+    if any(home_place(value, where) is not None for value in raw):
+        return "home"
+    return "file"
+
+
 def _is_bead(row: Mapping[str, Any]) -> bool:
-    return bool(row.get("act"))
+    return bool(row.get("act")) or row.get("phase") == "session-start"
 
 
 def read_beads(
-    rows: list[dict[str, Any]], roots: Iterable[Path], compiled: list[Any], run_id: str
+    rows: list[dict[str, Any]], where: Where, compiled: list[Any], run_id: str, *, source: str = "",
+    first_n: int | None = 0,
 ) -> list[dict[str, Any]]:
     """``beads`` — one per boundary row that carried an act (the post-tool
-    rows), oldest first."""
-    roots = tuple(roots)
+    rows) or woke the run (``session-start``, ``act`` = that phase), oldest
+    first. ``n`` is the bead's index among the run's beads (``first_n`` + its
+    position; ``GET /loom/page/bead?run=&n=`` takes it). ``places`` are repo
+    places, ``home_places`` the account home's (:func:`row_paths`);
+    ``place_kind`` is :func:`place_kind`."""
     out = []
-    for row in rows:
+    for index, row in enumerate(rows):
         ctx = row.get("ctx") if isinstance(row.get("ctx"), dict) else {}
         detail = row.get("detail") if isinstance(row.get("detail"), str) else ""
-        places = row_places(row, roots)
+        places, homes = row_paths(row, where)
         out.append({
+            "n": first_n + index if first_n is not None else None,
             "at": row.get("at"),
-            "act": row.get("act"),
+            "act": row.get("act") or row.get("phase"),
+            "place_kind": place_kind(row, where, source=source),
             "places": places,
+            "home_places": homes,
             "ctx_after": _int(ctx.get("tokens_after")),
             "delta": _int(ctx.get("delta")),
             "detail": detail[:DETAIL_CHARS] or None,
@@ -735,7 +919,8 @@ def _ledger_tokens(row: Mapping[str, Any]) -> int | None:
 
 
 def run_topics(account_home: Path | None, compiled: list[Any]) -> dict[str, list[str]]:
-    """run id → the topics whose index (aliases resolved) holds an act of it."""
+    """run id → the topics whose index (aliases resolved) holds an act of it —
+    every kind of row (``message``, ``strand``, ``event``, ``produce``, …)."""
     out: dict[str, list[str]] = {}
     for item in compiled:
         slug = item.topic.slug
@@ -744,6 +929,44 @@ def run_topics(account_home: Path | None, compiled: list[Any]) -> dict[str, list
             if run and slug not in out.setdefault(run, []):
                 out[run].append(slug)
     return out
+
+
+_RUN_TOPIC_CACHE: dict[str, tuple[tuple, str | None]] = {}
+_RUN_TOPIC_LOCK = threading.Lock()
+
+
+def run_md_topic(brr_dir: Path, run_id: str, names: Mapping[str, Any]) -> str | None:
+    """The topic a run was stamped with — ``run.md``'s ``topic:`` (the frame
+    writes the waking event's assignment there) — resolved through *names*
+    (slug or ``ids:`` alias → topic). ``null``/unknown ⇒ ``None``. Cached by
+    the file's size and mtime."""
+    if not run_id or "/" in run_id or run_id.startswith("."):
+        return None
+    path = brr_dir / "runs" / run_id / "run.md"
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    ident = (stat.st_size, stat.st_mtime_ns)
+    with _RUN_TOPIC_LOCK:
+        cached = _RUN_TOPIC_CACHE.get(str(path))
+    if cached is not None and cached[0] == ident:
+        raw = cached[1]
+    else:
+        run = _load_run(brr_dir, run_id)
+        raw = str(((getattr(run, "meta", None) or {}).get("topic")) or "").strip().strip("`").lower() or None
+        with _RUN_TOPIC_LOCK:
+            _RUN_TOPIC_CACHE[str(path)] = (ident, raw)
+    if not raw:
+        return None
+    if raw.startswith("topic:"):
+        raw = raw[len("topic:"):].strip()
+    topic = names.get(raw)
+    return topic.slug if topic is not None else None
+
+
+def _with_stamp(topics: list[str], stamped: str | None) -> list[str]:
+    return topics + [stamped] if stamped and stamped not in topics else list(topics)
 
 
 def _live_row(brr_dir: Path, run_id: str, topics: list[str]) -> dict[str, Any] | None:
@@ -756,11 +979,14 @@ def _live_row(brr_dir: Path, run_id: str, topics: list[str]) -> dict[str, Any] |
     prs, knots, pages = _refs_summary(relics)
     shell, core = _shell_core(meta, portal)
     name = _first_line(_read_text(outbox_dir / ".name")) if outbox_dir else None
+    title = str(meta.get("title") or "") or None
     return {
         "run": run_id,
         "started": _started(run),
         "ended": None,
-        "name": name or (str(meta.get("title") or "") or None),
+        "name": name or title,
+        "title": title,
+        "mood": _first_line(_read_text(outbox_dir / ".mood")) if outbox_dir else None,
         "shell": shell,
         "core": core,
         "topics": topics,
@@ -784,6 +1010,7 @@ def read_cloth(
     when the ledger has not closed them yet. ``ended`` is ``null`` for the live
     run always; ``duration_s`` is ``ended − started``, ``null`` while live."""
     topics_by_run = _safe(lambda: run_topics(account_home, compiled), {})
+    names = _safe(lambda: heddles_mod._topic_names(account_home), {}) if account_home else {}
     ledger = tail_rows(brr_dir / "run-ledger.jsonl", CLOTH_LAST * 2, lambda r: bool(r.get("run_id")))
     latest: dict[str, dict[str, Any]] = {}
     for row in ledger:
@@ -800,9 +1027,11 @@ def read_cloth(
             # live run's end is not written yet, whatever that row says.
             "ended": None if run_id == live_id else row.get("ended_at"),
             "name": row.get("name"),
+            "title": None,
+            "mood": None,
             "shell": row.get("runner_shell"),
             "core": row.get("runner_core"),
-            "topics": topics_by_run.get(run_id, []),
+            "topics": _with_stamp(topics_by_run.get(run_id, []), run_md_topic(brr_dir, run_id, names)),
             "prs": prs,
             "knots": knots,
             "pages": pages,
@@ -816,10 +1045,16 @@ def read_cloth(
     for run_id in open_ids:
         if run_id in latest:
             continue
-        row = _safe(lambda: _live_row(brr_dir, run_id, topics_by_run.get(run_id, [])), None)
+        topics = _with_stamp(topics_by_run.get(run_id, []), run_md_topic(brr_dir, run_id, names))
+        row = _safe(lambda: _live_row(brr_dir, run_id, topics), None)
         if row is not None:
             rows.append(row)
     for row in rows:
+        if row["run"] in open_ids and row["run"] in latest:
+            live_row = _safe(lambda: _live_row(brr_dir, row["run"], row["topics"]), None) or {}
+            for key in ("name", "title", "mood", "shell", "core"):
+                if live_row.get(key):
+                    row[key] = live_row[key]
         row["duration_s"] = _duration(row.get("started"), row.get("ended"))
     return {"rows": rows}
 
@@ -836,30 +1071,41 @@ def _duration(started: Any, ended: Any) -> int | None:
 
 
 class _PlaceScan:
-    """One boundaries file's places, read incrementally: place → ``[last
-    epoch, mutated]``. Finished runs are read once per process."""
+    """One boundaries file's places, read incrementally: ``(tree, place)`` →
+    ``[last epoch, mutated]`` with tree ``repo`` or ``home``. Finished runs
+    are read once per process."""
 
-    __slots__ = ("offset", "ident", "places")
+    __slots__ = ("offset", "ident", "places", "beads")
 
     def __init__(self) -> None:
         self.offset = 0
         self.ident: tuple = ()
-        self.places: dict[str, list[Any]] = {}
+        self.places: dict[tuple[str, str], list[Any]] = {}
+        self.beads = 0
 
 
 _SCANS: dict[str, _PlaceScan] = {}
 _SCANS_LOCK = threading.Lock()
 
 
-def scan_places(path: Path, roots: tuple[Path, ...]) -> dict[str, list[Any]]:
+def scan_places(path: Path, where: Where) -> dict[tuple[str, str], list[Any]]:
+    return _scan(path, where)[0]
+
+
+def bead_count(path: Path, where: Where) -> int | None:
+    """How many beads the file holds (the same incremental read)."""
+    return _scan(path, where)[1]
+
+
+def _scan(path: Path, where: Where) -> tuple[dict[tuple[str, str], list[Any]], int | None]:
     key = str(path)
     try:
         stat = path.stat()
     except OSError:
-        return {}
+        return {}, None
     with _SCANS_LOCK:
         scan = _SCANS.get(key)
-        ident = (stat.st_ino, roots)
+        ident = (stat.st_ino, where.key())
         if scan is None or scan.ident != ident or stat.st_size < scan.offset:
             scan = _PlaceScan()
             scan.ident = ident
@@ -870,73 +1116,86 @@ def scan_places(path: Path, roots: tuple[Path, ...]) -> dict[str, list[Any]]:
                     handle.seek(scan.offset)
                     chunk = handle.read(stat.st_size - scan.offset)
             except OSError:
-                return dict(scan.places)
+                return dict(scan.places), scan.beads
             end = chunk.rfind(b"\n")
             if end >= 0:
                 scan.offset += end + 1
                 for line in chunk[: end + 1].decode("utf-8", errors="replace").splitlines():
-                    if '"act"' not in line:
+                    if '"act"' not in line and "session-start" not in line:
                         continue
                     try:
                         row = json.loads(line)
                     except ValueError:
                         continue
-                    if not isinstance(row, dict) or not row.get("act"):
+                    if not isinstance(row, dict) or not _is_bead(row):
                         continue
+                    scan.beads += 1
                     at = _epoch(row.get("at"))
                     mutated = row.get("act") == "mutate"
-                    for place in row_places(row, roots):
-                        seen = scan.places.setdefault(place, [None, False])
+                    places, homes = row_paths(row, where)
+                    for tree_key in [("repo", p) for p in places] + [("home", h) for h in homes]:
+                        seen = scan.places.setdefault(tree_key, [None, False])
                         if at is not None and (seen[0] is None or at > seen[0]):
                             seen[0] = at
                         seen[1] = seen[1] or mutated
-        return dict(scan.places)
+        return dict(scan.places), scan.beads
 
 
 def read_tree(
     brr_dir: Path,
-    roots: tuple[Path, ...],
+    where: Where,
     compiled: list[Any],
     beads: list[dict[str, Any]],
     cloth: Mapping[str, Any],
     now_epoch: float,
 ) -> dict[str, Any]:
-    """``tree`` — every place the beads touched, and every place a cloth run
-    touched in its own ``boundaries.jsonl``. ``knots`` counts the runs whose
-    ``mutate`` rows touched it (the ledger's commits carry no paths, so the
-    run that changed the file is what the files attest); ``heat`` is
-    :func:`brr.heddles.brightness` of the last touch — halves every hour."""
-    last: dict[str, float | None] = {}
-    knots: dict[str, set[str]] = {}
+    """``tree`` — two trees of the same shape. ``repo`` (and ``places``, its
+    alias for one version): every repo place the beads touched and every one a
+    cloth run touched in its own ``boundaries.jsonl``. ``home.places``: the
+    same for the account home's ``dominion/ knowledge/ surface/ bench/``.
+    ``knots`` counts the runs whose ``mutate`` rows touched a place (the
+    ledger's commits carry no paths, so the run that changed the file is what
+    the files attest); ``heat`` is :func:`brr.heddles.brightness` of the last
+    touch — halves every hour."""
+    last: dict[tuple[str, str], float | None] = {}
+    knots: dict[tuple[str, str], set[str]] = {}
 
-    def touch(place: str, at: float | None) -> None:
-        prior = last.get(place)
-        if place not in last or (at is not None and (prior is None or at > prior)):
-            last[place] = at if at is not None else prior
+    def touch(key: tuple[str, str], at: float | None) -> None:
+        prior = last.get(key)
+        if key not in last or (at is not None and (prior is None or at > prior)):
+            last[key] = at if at is not None else prior
 
     for bead in beads:
         at = _epoch(bead.get("at"))
         for place in bead.get("places") or ():
-            touch(place, at)
+            touch(("repo", place), at)
+        for place in bead.get("home_places") or ():
+            touch(("home", place), at)
     for row in (cloth or {}).get("rows") or ():
         run_id = str(row.get("run") or "")
         if not run_id or "/" in run_id:
             continue
-        for place, (at, mutated) in scan_places(brr_dir / "runs" / run_id / "boundaries.jsonl", roots).items():
-            touch(place, at)
+        for key, (at, mutated) in scan_places(brr_dir / "runs" / run_id / "boundaries.jsonl", where).items():
+            touch(key, at)
             if mutated:
-                knots.setdefault(place, set()).add(run_id)
-    ordered = sorted(last.items(), key=lambda kv: (-(kv[1] or 0.0), kv[0]))[:TREE_MAX]
-    return {"places": [
-        {
-            "path": place,
-            "heat": heddles_mod.brightness(at, now_epoch),
-            "last": _iso(at),
-            "knots": len(knots.get(place, ())),
-            "topics": match_topics(compiled, places=[place]),
-        }
-        for place, at in ordered
-    ]}
+                knots.setdefault(key, set()).add(run_id)
+
+    def tree(kind: str) -> list[dict[str, Any]]:
+        rows = [(key[1], at) for key, at in last.items() if key[0] == kind]
+        ordered = sorted(rows, key=lambda kv: (-(kv[1] or 0.0), kv[0]))[:TREE_MAX]
+        return [
+            {
+                "path": place,
+                "heat": heddles_mod.brightness(at, now_epoch),
+                "last": _iso(at),
+                "knots": len(knots.get((kind, place), ())),
+                "topics": match_topics(compiled, places=[place]) if kind == "repo" else [],
+            }
+            for place, at in ordered
+        ]
+
+    repo = tree("repo")
+    return {"repo": repo, "places": repo, "home": {"places": tree("home")}}
 
 
 # ── bench ────────────────────────────────────────────────────────────────
@@ -1008,6 +1267,13 @@ def _repo_label(live: _Live | None, brr_dir: Path) -> str | None:
     return str(last[0]["repo_label"]) if last else None
 
 
+def locate(repo_root: Path | str, account_home: Path | str | None) -> Where:
+    """The coordinates :func:`build` reads with — for the bench pages."""
+    brr_dir = _brr_dir(Path(repo_root))
+    home = Path(account_home) if account_home else None
+    return Where(_roots(Path(repo_root), brr_dir), home, brr_dir)
+
+
 def build(repo_root: Path | str, account_home: Path | str | None, *, now: object = None) -> dict[str, Any]:
     """The loom screen's state — see the module docstring for every source.
 
@@ -1034,8 +1300,17 @@ def build(repo_root: Path | str, account_home: Path | str | None, *, now: object
         )
     beaded = [row for row in boundaries if _is_bead(row)][-BEADS_LAST:]
 
-    hud = _safe(lambda: read_hud(brr_dir, live, boundaries, roots), None)
-    beads = _safe(lambda: read_beads(beaded, roots, compiled, live.run_id if live else ""), [])
+    where = Where(roots, home, brr_dir)
+    source = str(getattr(live.run, "source", "") or "") if live is not None else ""
+    hud = _safe(lambda: read_hud(brr_dir, live, boundaries, where), None)
+    first_n = None
+    if live is not None:
+        total = _safe(lambda: bead_count(brr_dir / "runs" / live.run_id / "boundaries.jsonl", where), None)
+        first_n = max(0, total - len(beaded)) if total is not None else None
+    beads = _safe(
+        lambda: read_beads(beaded, where, compiled, live.run_id if live else "", source=source, first_n=first_n),
+        [],
+    )
     cloth = _safe(
         lambda: read_cloth(brr_dir, home, compiled, live, (hud or {}).get("strands") or []),
         {"rows": []},
@@ -1051,7 +1326,10 @@ def build(repo_root: Path | str, account_home: Path | str | None, *, now: object
         "warp": _safe(lambda: read_warp(home), {"goals": [], "items": []}),
         "beads": beads,
         "cloth": cloth,
-        "tree": _safe(lambda: read_tree(brr_dir, roots, compiled, beads, cloth, now_epoch), {"places": []}),
+        "tree": _safe(
+            lambda: read_tree(brr_dir, where, compiled, beads, cloth, now_epoch),
+            {"repo": [], "places": [], "home": {"places": []}},
+        ),
         "bench": _safe(lambda: read_bench(home), {"folds": []}),
     }
 

@@ -21,6 +21,7 @@ NOW = 1_790_000_000.0
 RUN = "run-260922-1000-live"
 CHILD = "run-260922-1010-kid1"
 OLD = "run-260921-0800-old1"
+STAMP = "run-260921-0700-stmp"
 
 
 def iso(epoch: float) -> str:
@@ -119,7 +120,14 @@ def machine(tmp_path: Path) -> dict:
                    "paths": [str(brr / "outbox" / "evt-live" / ".card"),
                              str(brr / "worktrees" / RUN / "src" / "brr" / "w.py"), "media/post/a.png"]},
          "inject": None},
+        # where the act looked: the file the command names, not the cwd the frame recorded
+        {"at": iso(NOW - 90), "act": "probe", "detail": "sed -n 1,9p src/brr/real.py > /tmp/scratch.txt", "cwd": str(repo),
+         "place": {"path": str(repo), "paths": [str(repo)]}, "inject": None},
+        {"at": iso(NOW - 80), "act": "orient",
+         "detail": f"cat {home}/knowledge/repos/acme/design.md {home}/shuttle.json", "cwd": str(repo), "inject": None},
     ])
+    _write(repo / "src" / "brr" / "real.py", "print('real')\n")
+    _write(home / "knowledge" / "repos" / "acme" / "design.md", "# design\n")
 
     # ── the strand, submitted ──
     kid_outbox = brr / "outbox" / "evt-kid"
@@ -158,7 +166,9 @@ def machine(tmp_path: Path) -> dict:
     _write(warp / "g-1.md", "# The goal\n\ntype: goal\nmetric: stars\n")
 
     # ── the run ledger; the old run's own boundaries, five hours back ──
+    _run_md(brr, STAMP, brr / "outbox" / "evt-stamp", status="done", topic="the-loom")
     _jsonl(brr / "run-ledger.jsonl", [
+        {"run_id": STAMP, "started_at": iso(NOW - 40000), "ended_at": iso(NOW - 39000), "name": "stamped, never indexed"},
         {"run_id": OLD, "started_at": iso(NOW - 20000), "ended_at": None, "name": "stale copy"},
         {"run_id": RUN, "started_at": iso(NOW - 30000), "ended_at": iso(NOW - 29000), "name": "an earlier stint"},
         {"run_id": OLD, "started_at": iso(NOW - 20000), "ended_at": iso(NOW - 18000), "name": "the old run",
@@ -203,7 +213,8 @@ def test_absence_is_null_or_empty_never_a_guess(tmp_path):
     assert out["repo"] is None and out["shuttle"] is None and out["run"] is None and out["hud"] is None
     assert out["heddles"] == [] and out["beads"] == []
     assert out["warp"] == {"goals": [], "items": []}
-    assert out["cloth"] == {"rows": []} and out["tree"] == {"places": []} and out["bench"] == {"folds": []}
+    assert out["cloth"] == {"rows": []} and out["bench"] == {"folds": []}
+    assert out["tree"] == {"repo": [], "places": [], "home": {"places": []}}
     assert not (tmp_path / "nohome" / "shuttle.json").exists()  # the loader would have minted one
 
 
@@ -221,8 +232,8 @@ def test_released_seat_serves_no_run_but_the_rest(machine):
     assert out["run"] is None and out["hud"] is None and out["beads"] == []
     assert out["shuttle"]["state"] == "released"
     assert [i["id"] for i in out["warp"]["items"]] == ["w-1", "w-2", "w-3", "w-4"]
-    assert [r["run"] for r in out["cloth"]["rows"]] == [RUN, OLD]  # ledger order: each run's last entry
-    assert out["cloth"]["rows"][0]["ended"] == iso(NOW - 29000)  # not live now: the ledger's end stands
+    assert [r["run"] for r in out["cloth"]["rows"]] == [STAMP, RUN, OLD]  # ledger order: each run's last entry
+    assert out["cloth"]["rows"][1]["ended"] == iso(NOW - 29000)  # not live now: the ledger's end stands
 
 
 def test_shuttle_keeps_the_last_twelve_transitions(machine):
@@ -259,7 +270,7 @@ def test_hud_reads_portal_chip_quota_spend_and_strands(machine):
     }
     # the last 12 distinct places of its own log, newest first; the pre-tool row is no bead
     assert kid["places"] == [f"src/brr/f{i % 15}.py" for i in range(29, 17, -1)]
-    assert kid["last_bead_at"] == iso(NOW - 400 + 29)
+    assert kid["last_bead_at"] == iso(NOW - 400 + 29) and kid["last_place_kind"] == "file"
 
 
 def test_hud_full_is_the_typed_hud_as_hud_json_prints_it(machine):
@@ -277,7 +288,8 @@ def test_a_strand_without_a_log_has_no_position(machine):
     assert kid["places"] == [] and kid["last_bead_at"] is None
     # dispatched but not started: the portal's edge has no run id yet
     assert queued == {"id": None, "event_id": "evt-queued", "title": "not started", "status": None,
-                      "spent": None, "allowance": None, "places": [], "last_bead_at": None}
+                      "spent": None, "allowance": None, "places": [], "last_bead_at": None,
+                      "last_place_kind": None}
 
 
 def test_quota_labels_stay_the_shells_own(machine):
@@ -322,8 +334,12 @@ def test_warp_state_is_derived(machine):
 
 def test_beads_carry_places_and_topics(machine):
     beads = state.build(machine["repo"], machine["home"], now=NOW)["beads"]
-    assert [b["act"] for b in beads] == ["probe", "mutate"]  # the pre-tool row is no bead
-    probe, mutate = beads
+    assert [b["act"] for b in beads] == ["probe", "mutate", "probe", "orient"]  # the pre-tool row is no bead
+    assert [b["n"] for b in beads] == [0, 1, 2, 3]
+    probe, mutate, looked, home_read = beads
+    assert looked["places"] == ["src/brr/real.py"]  # detail first; /tmp is no place; the cwd only as a last resort
+    assert home_read["places"] == [] and home_read["home_places"] == ["knowledge/repos/acme/design.md"]
+    assert home_read["place_kind"] == "home" and looked["place_kind"] == "file"
     assert probe["places"] == ["src/brr/hud.py"]
     assert probe["topics"] == ["the-loom"]
     assert len(probe["detail"]) == 160 and (probe["ctx_after"], probe["delta"]) == (272_600, 700)
@@ -334,8 +350,9 @@ def test_beads_carry_places_and_topics(machine):
 
 def test_cloth_joins_the_ledger_with_index_refs(machine):
     rows = state.build(machine["repo"], machine["home"], now=NOW)["cloth"]["rows"]
-    assert [r["run"] for r in rows] == [RUN, OLD, CHILD]  # ledger order (each run's last entry), then open strands
-    live, old, kid = rows
+    assert [r["run"] for r in rows] == [STAMP, RUN, OLD, CHILD]  # ledger order (each run's last entry), then open strands
+    stamp, live, old, kid = rows
+    assert stamp["topics"] == ["the-loom"]  # no index row: run.md's stamped topic carries it
     assert old["name"] == "the old run"  # the run's last ledger entry wins
     assert old["topics"] == ["the-loom", "the-post"]
     assert (old["prs"], old["knots"], old["pages"], old["tokens"]) == ([7, 9], 2, 1, 60)
@@ -343,14 +360,19 @@ def test_cloth_joins_the_ledger_with_index_refs(machine):
     assert old["duration_s"] == 2000
     # the live run's earlier stint is in the ledger; its end is still null
     assert live["ended"] is None and live["duration_s"] is None
-    assert live["topics"] == ["the-post"] and live["name"] == "an earlier stint"
+    # a live run reads its own controls even when an earlier stint is in the ledger
+    assert live["topics"] == ["the-post"] and live["name"] == "the live seat" and live["mood"] == "curious"
     assert kid["ended"] is None and kid["duration_s"] is None
     assert (kid["parent"], kid["shell"], kid["core"], kid["prs"], kid["knots"]) == (RUN, "codex", "astra", [12], 1)
 
 
 def test_tree_heat_decays_by_the_hour(machine):
     places = {p["path"]: p for p in state.build(machine["repo"], machine["home"], now=NOW)["tree"]["places"]}
-    assert {"src/brr/hud.py", "media/post/a.png", "src/brr/old.py"} <= set(places)
+    assert {"src/brr/hud.py", "media/post/a.png", "src/brr/old.py", "src/brr/real.py"} <= set(places)
+    tree = state.build(machine["repo"], machine["home"], now=NOW)["tree"]
+    assert tree["repo"] == tree["places"]  # the alias, for one version
+    assert [p["path"] for p in tree["home"]["places"]] == ["knowledge/repos/acme/design.md"]
+    assert tree["home"]["places"][0]["heat"] > 0.95 and tree["home"]["places"][0]["last"] == iso(NOW - 80)
     assert places["src/brr/f14.py"]["knots"] == 1  # the open strand's own log counts too
     assert places["src/brr/old.py"]["heat"] == pytest.approx(0.5 ** 5, abs=1e-4)
     assert places["src/brr/old.py"]["knots"] == 1  # the old run mutated it
@@ -379,3 +401,39 @@ def test_tail_rows_reads_the_end_of_a_long_file(tmp_path):
     path = _jsonl(tmp_path / "rows.jsonl", [{"n": i, "pad": "x" * 50} for i in range(2000)])
     rows = state.tail_rows(path, 3, cap=1000)
     assert [r["n"] for r in rows] == [1997, 1998, 1999]
+
+
+# ── the place-kind classifier: one row per kind ──────────────────────────
+
+
+def _where(machine):
+    return state.locate(machine["repo"], machine["home"])
+
+
+@pytest.mark.parametrize("kind,row,source", [
+    ("file", {"act": "probe", "detail": "rg foo src/brr/hud.py"}, ""),
+    ("home", {"act": "orient", "detail": "cat {home}/dominion/pitfalls.md"}, ""),
+    ("forge", {"act": "publish", "detail": "gh pr create --title x"}, ""),
+    ("forge", {"act": "publish", "detail": "git push -u origin brr/x"}, ""),
+    ("wire", {"act": "dispatch", "detail": "cat > $O/000007-plan.md <<EOF --- event: evt-1 ---",
+              "place": {"path": "{brr}/outbox/evt-live", "paths": ["{brr}/outbox/evt-live"]}}, ""),
+    ("wire", {"act": "mutate", "detail": "edit", "place": {"path": "{brr}/outbox/evt-live/.card", "paths": []}}, ""),
+    ("wire", {"act": "probe", "detail": "ls {home}/conversations/x"}, ""),
+    ("shed", {"act": "wait", "detail": "brnrd await --file /tmp/x"}, ""),
+    ("crew", {"act": "dispatch", "detail": "cat > $O/000009-kid.md <<EOF --- spawn: true branch: brr/x ---"}, ""),
+    ("crew", {"act": "dispatch", "detail": "printf -- '--- to: run-260922-1010-kid1 ---' > $O/000010.md"}, ""),
+    ("clock", {"phase": "session-start", "cwd": "/"}, "schedule"),
+    ("crew", {"phase": "session-start", "cwd": "/"}, "spawn"),
+])
+def test_place_kind_classifies_one_row_per_kind(machine, kind, row, source):
+    text = json.dumps(row).replace("{home}", str(machine["home"])).replace("{brr}", str(machine["brr"]))
+    assert state.place_kind(json.loads(text), _where(machine), source=source) == kind
+
+
+def test_detail_paths_must_exist_and_sit_in_repo_or_home(machine):
+    where = _where(machine)
+    row = {"act": "probe", "cwd": str(machine["repo"]),
+           "detail": f"diff src/brr/real.py src/brr/ghost.py /tmp/x {machine['home']}/shuttle.json"}
+    assert state.row_paths(row, where) == (["src/brr/real.py"], [])
+    # nothing in detail: the frame's place, then the cwd
+    assert state.row_paths({"act": "probe", "detail": "ls", "cwd": str(machine["repo"] / "src")}, where) == (["src"], [])

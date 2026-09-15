@@ -1,0 +1,159 @@
+"""The bench pages (``brr.loom.pages``) — one fixture per kind, and the route."""
+
+from __future__ import annotations
+
+import http.client
+import json
+import subprocess
+import threading
+from pathlib import Path
+
+import pytest
+
+from brr.loom import pages, server, state
+from tests.test_loom_state import CHILD, NOW, OLD, RUN, _jsonl, _write, iso, machine  # noqa: F401 - fixture
+
+
+@pytest.fixture(autouse=True)
+def _strict(monkeypatch):
+    monkeypatch.setenv("BRNRD_LOOM_STRICT", "1")
+
+
+@pytest.fixture
+def kid_contract(machine):
+    brr = machine["brr"]
+    run_md = brr / "runs" / CHILD / "run.md"
+    run_md.write_text(run_md.read_text().replace(
+        "title: the kid", "title: the kid\nspawn_contract_branch: brr/kid\n"
+        f"spawn_contract_report: {machine['repo'] / 'kid-report.md'}",
+    ))
+    _write(machine["repo"] / "kid-report.md", "# report\n")
+    _write(brr / "inbox" / f"evt-{CHILD}.md", "---\nid: evt-x\nsource: spawn\nstatus: processing\n---\n" + "spec " * 200)
+    _write(brr / "forge-pr-state.json", json.dumps({"schema": 3, "prs": [
+        {"number": 12, "branch": "brr/kid", "state": "OPEN", "url": "https://forge/pr/12"},
+        {"number": 99, "branch": "brr/other", "state": "OPEN", "url": "https://forge/pr/99"},
+    ]}))
+    return machine
+
+
+def test_bead_page_is_one_row_whole(machine):
+    page, read = pages.bead_page(machine["repo"], machine["home"], RUN, 1)
+    assert page["n"] == 1 and page["act"] == "mutate" and page["prev"] == 0 and page["next"] == 2
+    assert page["detail_full"] == "write the post" and page["ctx_after"] == 272_900 and page["delta"] == 300
+    assert page["place_kind"] == "wire"  # the row wrote the outbox's .card
+    assert page["window_tokens"] is None  # the HUD names no window size; read says where it looked
+    assert any(r.endswith("portal-state.json") for r in read) and any(r.endswith("boundaries.jsonl") for r in read)
+    first, _ = pages.bead_page(machine["repo"], machine["home"], RUN, 0)
+    assert first["chip"] == "⌁[b·o·d]: ⏱ 10m │ spend 2.2m" and len(first["detail_full"]) > 160
+    last, _ = pages.bead_page(machine["repo"], machine["home"], RUN, -1)
+    assert last["act"] == "orient" and last["next"] is None
+    assert pages.bead_page(machine["repo"], machine["home"], RUN, 99)[0] is None
+    assert pages.bead_page(machine["repo"], machine["home"], "../etc", 0) == (None, [])
+
+
+def test_bead_n_in_state_addresses_the_page(machine):
+    beads = state.build(machine["repo"], machine["home"], now=NOW)["beads"]
+    for bead in beads:
+        page, _ = pages.bead_page(machine["repo"], machine["home"], RUN, bead["n"])
+        assert page["at"] == bead["at"] and page["act"] == bead["act"]
+
+
+def test_pass_page_joins_contract_card_produce_and_beads(kid_contract):
+    m = kid_contract
+    page, read = pages.pass_page(m["repo"], m["home"], CHILD)
+    assert page["contract"].startswith("spec spec") and len(page["contract"]) == 600
+    assert (page["shell"], page["core"], page["parent"], page["status"]) == ("codex", "astra", RUN, "running")
+    assert page["ended"] is None and page["duration_s"] is None and page["branch"] == "brr/kid"
+    assert page["produce"]["prs"] == [{"number": 12, "url": "https://forge/pr/12", "state": "OPEN"}]
+    # no git history here: the relics' commits stand in, and read names the git call tried
+    assert page["produce"]["commits"] == [{"sha": "abc1234", "subject": ""}]
+    assert any(r.startswith("$ log") for r in read)
+    assert page["report_exists"] is True
+    assert len(page["beads"]) == 12 and page["beads"][-1]["n"] == 29
+
+    live, _ = pages.pass_page(m["repo"], m["home"], RUN)
+    assert live["card"]["now"] == "weaving the feed" and live["mood"] == "curious"
+    assert [s["id"] for s in live["strands"]][0] == CHILD
+
+    old, _ = pages.pass_page(m["repo"], m["home"], OLD)
+    assert old["status"] == "done" and old["ended"] == iso(NOW - 18000) and old["duration_s"] == 2000
+    assert old["produce"]["pages"] == ["p.md"] and {p["number"] for p in old["produce"]["prs"]} == {7, 9}
+    assert old["topics"] == ["the-loom", "the-post"]
+    assert pages.pass_page(m["repo"], m["home"], "run-nope")[0] is None
+
+
+def test_pass_page_reads_the_branch_log(kid_contract, tmp_path):
+    m = kid_contract
+    host = m["repo"]
+    git = ["git", "-C", str(host), "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+    env = {k: v for k, v in __import__("os").environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")}
+    for args in (["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "base"],
+                 ["checkout", "-q", "-b", "brr/kid"], ["commit", "-q", "--allow-empty", "-m", "the kid's work"]):
+        subprocess.run(git + args, check=True, env=env)
+    page, _ = pages.pass_page(host, m["home"], CHILD)
+    assert [c["subject"] for c in page["produce"]["commits"]] == ["the kid's work"]
+
+
+def test_item_page_parses_the_file_with_siblings(machine):
+    page, read = pages.item_page(machine["home"], "w-3")
+    assert page["state"] == "held" and page["taken"] == "run-260922-0930-bbbb" and page["needs"] == ["w-4"]
+    assert page["siblings"] == [{"id": "w-4", "title": "Four", "state": "ready"}]
+    assert read[0].endswith("surface/warp/w-3.md")
+    two, _ = pages.item_page(machine["home"], "w-2")
+    assert two["siblings"] == [{"id": "w-1", "title": "One", "state": "done"}] and two["type"] == "decision"
+    assert pages.item_page(machine["home"], "w-404")[0] is None
+    assert pages.item_page(machine["home"], "../w-1") == (None, [])
+
+
+def test_place_page_joins_heat_beads_passes_and_folds(machine):
+    snapshot = state.build(machine["repo"], machine["home"], now=NOW)
+    page, _ = pages.place_page(machine["repo"], machine["home"], "src/brr/hud.py", snapshot)
+    assert page["kind"] == "file" and page["tree"] == "repo" and page["heat"] > 0.95 and page["topics"] == ["the-loom"]
+    assert [b["run"] for b in page["beads"]] == [RUN, OLD]  # the live run's bead first, then the old pass's
+    assert [p["run"] for p in page["passes"]] == [RUN, OLD]  # newest touch first
+    assert page["passes"][1] == {"run": OLD, "name": "the old run", "last": iso(NOW - 5 * 3600), "mutated": False}
+    home, _ = pages.place_page(machine["repo"], machine["home"], "knowledge/repos/acme/design.md", snapshot)
+    assert home["kind"] == "home" and home["tree"] == "home" and len(home["beads"]) == 1
+    fold, _ = pages.place_page(machine["repo"], machine["home"], "src/brr/daemon.py", snapshot)
+    assert fold["heat"] is None and fold["fold"]["marks"] == ["keep", "drop"] and "body" in fold["fold"]["text"]
+    assert pages.place_page(machine["repo"], machine["home"], "src/nowhere.py", snapshot)[0] is None
+    assert pages.place_page(machine["repo"], machine["home"], "../secret", snapshot) == (None, [])
+
+
+def test_heddle_page_renders_the_topic_and_its_index(machine):
+    snapshot = state.build(machine["repo"], machine["home"], now=NOW)
+    page, read = pages.heddle_page(machine["home"], "the-post", snapshot)
+    assert page["rune"] == "ᛈ" and page["signature"]["places"] == ["media/**"]
+    assert page["counts"] == {"strand": 1, "message": 1} and page["total"] == 2
+    assert page["rows"][-1] == {"at": iso(NOW - 50), "kind": "message", "ref": "m2", "run": RUN}
+    assert pages.heddle_page(machine["home"], "the-nothing")[0] is None
+
+
+def test_page_routes_over_the_socket(kid_contract):
+    m = kid_contract
+    listener = server.make_server(m["repo"], m["home"], port=0, beat_ms=60_000)
+    thread = threading.Thread(target=listener.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+    thread.start()
+    try:
+        def get(path):
+            conn = http.client.HTTPConnection("127.0.0.1", listener.port, timeout=10)
+            conn.request("GET", path)
+            resp = conn.getresponse()
+            body = json.loads(resp.read())
+            conn.close()
+            return resp.status, body
+
+        status, body = get("/loom/page/item?id=w-3")
+        assert status == 200 and body["state"] == "held" and body["read"]
+        assert get(f"/loom/page/bead?run={RUN}&n=0")[1]["act"] == "probe"
+        assert get(f"/loom/page/pass?id={CHILD}")[1]["branch"] == "brr/kid"
+        assert get("/loom/page/place?path=src/brr/hud.py")[0] == 200
+        assert get("/loom/page/heddle?slug=the-loom")[1]["slug"] == "the-loom"
+        status, body = get("/loom/page/item?id=w-404")
+        assert status == 404 and body["error"] == "no such item" and body["read"]
+        assert get(f"/loom/page/bead?run={RUN}&n=x")[0] == 400
+        assert get("/loom/page/nope")[0] == 404
+    finally:
+        listener.shutdown()
+        listener.server_close()
+        thread.join(timeout=5)
