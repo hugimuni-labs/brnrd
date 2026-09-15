@@ -168,8 +168,18 @@ export const runLedgerFallback = {
 // point is a *long list under a docking stack*, not the item content.
 const TOPIC_IDS = ['mint', 'mcp', 'seed', 'schedule', 'runner', 'tos'];
 
+// Two of six carry an authored heddle signature rune (move 5b's
+// frontmatter, design-the-loom §20) — the rest keep the derived glyph, so
+// the repro exercises both branches of `topicFace`/`topicFaces` at once
+// (brr/the-rune-on-the-rail). Chosen off any Elder Futhark stave so a
+// broken override (still deriving) is visibly wrong, not coincidentally
+// right.
+const TOPIC_RUNES = { mint: '⚒', tos: '☉' };
+
 function topicFile(id) {
-	return { path: `surface/topics/${id}.md`, markdown: `# ${id}\n\nids: ${id}\n` };
+	const rune = TOPIC_RUNES[id];
+	const frontmatter = rune ? `---\nrune: ${rune}\n---\n` : '';
+	return { path: `surface/topics/${id}.md`, markdown: `${frontmatter}# ${id}\n\nids: ${id}\n` };
 }
 
 function warpFile(n) {
