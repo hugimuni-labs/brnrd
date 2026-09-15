@@ -92,7 +92,8 @@ def machine(tmp_path: Path) -> dict:
             "quota": {"status": "known", "summary": "session 85% left (resets 3pm); week 56% left (resets Sep 19)"},
             "runner": {"catalog": [{"name": "claude-fable", "shell": "claude", "model": "fable"}]},
             "coexisting_runs": {"owned_children": [
-                {"run_id": CHILD, "title": "the kid", "weighted": 4200},
+                {"run_id": CHILD, "event_id": "evt-kid", "title": "the kid", "weighted": 4200},
+                {"run_id": "", "event_id": "evt-queued", "title": "not started"},
             ]},
         },
     }))
@@ -115,7 +116,8 @@ def machine(tmp_path: Path) -> dict:
         {"at": iso(NOW - 100), "act": "mutate", "detail": "write the post", "cwd": str(repo),
          "ctx": {"delta": 300, "tokens_after": 272_900},
          "place": {"path": str(brr / "outbox" / "evt-live" / ".card"),
-                   "paths": [str(brr / "outbox" / "evt-live" / ".card"), "media/post/a.png"]},
+                   "paths": [str(brr / "outbox" / "evt-live" / ".card"),
+                             str(brr / "worktrees" / RUN / "src" / "brr" / "w.py"), "media/post/a.png"]},
          "inject": None},
     ])
 
@@ -125,8 +127,13 @@ def machine(tmp_path: Path) -> dict:
             spawn_parent_run_id=RUN, spawn_allowance_tokens="15000000", transitions=_transitions(NOW - 500))
     _write(kid_outbox / "portal-state.json", json.dumps({"run": {"id": CHILD}, "strand": {"is_strand": True, "submitted": True}}))
     _jsonl(kid_outbox / ".relics.jsonl", [{"kind": "commit", "sha": "abc1234"}, {"kind": "pr", "number": 12}])
+    # A worktree strand's rows carry worktree-absolute paths and a worktree cwd
+    # (every other row here); relative ones are taken as repo places already.
+    kid_tree = brr / "worktrees" / CHILD
     kid_rows = [
-        {"at": iso(NOW - 400 + i), "act": "mutate", "place": {"path": f"src/brr/f{i % 15}.py", "paths": []}}
+        {"at": iso(NOW - 400 + i), "act": "mutate", "cwd": str(kid_tree),
+         "place": {"path": str(kid_tree / "src" / "brr" / f"f{i % 15}.py") if i % 2 == 0 else f"src/brr/f{i % 15}.py",
+                   "paths": []}}
         for i in range(30)
     ]
     kid_rows.append({"at": iso(NOW - 300), "phase": "pre-tool", "place": {"path": "src/brr/nope.py", "paths": []}})
@@ -244,9 +251,11 @@ def test_hud_reads_portal_chip_quota_spend_and_strands(machine):
     assert hud["quota"] == {"session_pct_left": 85, "week_pct_left": 56}
     assert hud["spend"] == {"tokens": 2_200_000, "allowance_tokens": 20_000_000, "pct": 11}
     assert hud["ctx_tokens"] == 272_900
-    (kid,) = hud["strands"]
-    assert {k: kid[k] for k in ("id", "title", "status", "spent", "allowance")} == {
-        "id": CHILD, "title": "the kid", "status": "submitted", "spent": 4200, "allowance": 15_000_000,
+    kid, queued = hud["strands"]
+    assert queued["id"] is None and queued["event_id"] == "evt-queued"
+    assert {k: kid[k] for k in ("id", "event_id", "title", "status", "spent", "allowance")} == {
+        "id": CHILD, "event_id": "evt-kid", "title": "the kid", "status": "submitted", "spent": 4200,
+        "allowance": 15_000_000,
     }
     # the last 12 distinct places of its own log, newest first; the pre-tool row is no bead
     assert kid["places"] == [f"src/brr/f{i % 15}.py" for i in range(29, 17, -1)]
@@ -264,8 +273,11 @@ def test_hud_full_is_the_typed_hud_as_hud_json_prints_it(machine):
 
 def test_a_strand_without_a_log_has_no_position(machine):
     (machine["brr"] / "runs" / CHILD / "boundaries.jsonl").unlink()
-    (kid,) = state.build(machine["repo"], machine["home"], now=NOW)["hud"]["strands"]
+    kid, queued = state.build(machine["repo"], machine["home"], now=NOW)["hud"]["strands"]
     assert kid["places"] == [] and kid["last_bead_at"] is None
+    # dispatched but not started: the portal's edge has no run id yet
+    assert queued == {"id": None, "event_id": "evt-queued", "title": "not started", "status": None,
+                      "spent": None, "allowance": None, "places": [], "last_bead_at": None}
 
 
 def test_quota_labels_stay_the_shells_own(machine):
@@ -315,7 +327,8 @@ def test_beads_carry_places_and_topics(machine):
     assert probe["places"] == ["src/brr/hud.py"]
     assert probe["topics"] == ["the-loom"]
     assert len(probe["detail"]) == 160 and (probe["ctx_after"], probe["delta"]) == (272_600, 700)
-    assert mutate["places"] == ["media/post/a.png"]  # the outbox path is runtime, not the tree
+    # the outbox path is runtime, not the tree; a worktree path is a repo place
+    assert mutate["places"] == ["src/brr/w.py", "media/post/a.png"]
     assert mutate["topics"] == ["the-post"]
 
 

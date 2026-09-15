@@ -460,6 +460,9 @@ def _strands(brr_dir: Path, portal: Mapping[str, Any], roots: Iterable[Path] = (
         places, last_bead_at = strand_trace(brr_dir, run_id, roots)
         out.append({
             "id": run_id or None,
+            # A strand queued in the spawn pool has an edge but no run id yet;
+            # its dispatch event is the handle it already has.
+            "event_id": str(child.get("event_id") or "") or None,
             "title": str(child.get("title") or meta.get("title") or "") or None,
             "status": status,
             "spent": _int(child.get("weighted")),
