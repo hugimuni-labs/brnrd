@@ -5483,7 +5483,8 @@ def _bundle_burst_group(
 def _topic_bundle_lines(event_meta: dict[str, Any] | None) -> list[str]:
     """Move 5c: the waking event's topic, as the bundle's reading of it.
 
-    One line for the topic (assigned at dispatch, or proposed, or neither)
+    One line for the topic (assigned at dispatch, or proposed, or a new slug
+    suggested — move 5d — or none of those)
     and one more only when the previous run on this thread ended in error
     with no topic. Nothing renders without a waking event record — the
     reading is about *that* event.
@@ -5493,6 +5494,7 @@ def _topic_bundle_lines(event_meta: dict[str, Any] | None) -> list[str]:
     lines: list[str] = []
     assigned = str(event_meta.get("topic") or "").strip()
     proposed = str(event_meta.get("topic_proposed") or "").strip()
+    suggested = str(event_meta.get("topic_suggested") or "").strip()
     if assigned:
         lines.append(
             f"- Topic: `{assigned}` — assigned to this event at dispatch; "
@@ -5505,6 +5507,11 @@ def _topic_bundle_lines(event_meta: dict[str, Any] | None) -> list[str]:
             + (f" ({why})" if why else "")
             + " — this run's topic: an existing heddle or `new <slug>`, "
             "one line in `.topic` (`null` for none)"
+        )
+    elif suggested:
+        lines.append(
+            f"- Topic: none matched — new `{suggested}`? one line in .topic: "
+            "that, an existing heddle, or null"
         )
     else:
         lines.append(

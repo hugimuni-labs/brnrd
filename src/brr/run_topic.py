@@ -10,11 +10,13 @@ The pieces, in the order a run meets them:
 
 1. **The proposal at dispatch.** ``worker.prepare`` stamps the waking event
    with ``topic_proposed`` (``heddles.propose``: the signatures' best match
-   over the event's text, else the thread's last assigned topic, else
-   nothing). A proposal is not an assignment: nothing is indexed.
+   over the event's text, else the thread's last assigned topic), or — when
+   neither stands — ``topic_suggested``, a candidate slug for a new heddle
+   minted from the text. Neither is an assignment: nothing is indexed.
 2. **The boot sets the topic.** Beside ``.card`` and ``.mood`` the wake asks
    for ``.topic`` in the run's outbox — one line: an existing heddle's slug,
-   ``new <slug>`` (minted here, a resident only), or ``null``.
+   ``new <slug>`` (minted here, a resident only), ``new`` alone (mint the
+   slug the frame suggested — move 5d), or ``null``.
    :func:`settle` reads it on the heartbeat and at every drain; the first
    slug it resolves **confirms or overrides** the proposal: the waking event
    gains ``topic:``, one ``event`` row lands in that topic's index, and the
@@ -56,6 +58,9 @@ META_CONTROL_STAMP = "run_topic_control"
 META_EVENT_TOPIC = "topic"
 META_PROPOSED = "topic_proposed"
 META_PROPOSED_WHY = "topic_proposed_by"
+#: Move 5d: a candidate slug for a *new* heddle, minted from the event's text
+#: when nothing proposes a live one; `new` alone in `.topic` mints it.
+META_SUGGESTED = "topic_suggested"
 META_UNSET = "topic_unset"
 
 Notice = Callable[[str, str], None]
@@ -63,7 +68,10 @@ Notice = Callable[[str, str], None]
 
 @dataclass(frozen=True)
 class Control:
-    """The first line of ``.topic``: ``op`` ∈ ``slug`` · ``new`` · ``null``."""
+    """The first line of ``.topic``: ``op`` ∈ ``slug`` · ``new`` · ``null``.
+
+    ``new`` with an empty ``slug`` is `new` alone — mint the slug the frame
+    suggested on the waking event (``topic_suggested``)."""
 
     op: str
     slug: str
@@ -72,7 +80,7 @@ class Control:
 
 def read_control(outbox_dir: Path | None) -> Control | None:
     """``.topic``, parsed leniently — ``None`` when absent, empty or not the
-    grammar (``<slug>`` · ``new <slug>`` · ``null``, an optional ``topic:``
+    grammar (``<slug>`` · ``new <slug>`` · ``new`` · ``null``, an optional ``topic:``
     prefix). Never raises."""
     if outbox_dir is None:
         return None
@@ -95,6 +103,8 @@ def read_control(outbox_dir: Path | None) -> Control | None:
     stamp = first
     if len(words) == 1 and words[0].lower() in _NULL_WORDS:
         return Control("null", "", stamp)
+    if len(words) == 1 and words[0].lower() == "new":
+        return Control("new", "", stamp)
     if len(words) == 2 and words[0].lower() == "new" and heddles.SLUG_RE.match(words[1]):
         return Control("new", words[1], stamp)
     if len(words) == 1 and heddles.SLUG_RE.match(words[0]):
@@ -185,6 +195,7 @@ def settle(
 
     - ``new <slug>`` mints ``surface/topics/<slug>.md`` (a resident only —
       the heddles are the whole cloth's) unless it exists, then assigns;
+      ``new`` alone does the same for the event's ``topic_suggested``;
     - ``<slug>`` assigns when it names a live heddle (an alias resolves to
       the topic that absorbed it); an unknown slug is refused by notice and
       the run keeps whatever topic it had;
@@ -205,25 +216,33 @@ def settle(
         if control.op == "null":
             meta[META_RUN_TOPIC] = None
             return None
-        slug = heddles.resolve_slug(account_home, control.slug)
+        name = control.slug
+        if control.op == "new" and not name:
+            suggested = str(meta.get(META_SUGGESTED) or "").strip()
+            if not heddles.SLUG_RE.match(suggested):
+                say("refused", ".topic refused: new — this event carries no suggested slug; "
+                    "write `new <slug>`, an existing heddle, or null")
+                return meta.get(META_RUN_TOPIC) or None
+            name = suggested
+        slug = heddles.resolve_slug(account_home, name)
         if control.op == "new" and slug is None:
             if is_strand:
-                say("refused", f".topic refused: new {control.slug} — a strand names an existing "
+                say("refused", f".topic refused: new {name} — a strand names an existing "
                     "heddle; minting one is the seat's act")
                 return meta.get(META_RUN_TOPIC) or None
             if account_home is None:
-                say("dropped", f".topic dropped: new {control.slug} — no account home holds the topics")
+                say("dropped", f".topic dropped: new {name} — no account home holds the topics")
                 return meta.get(META_RUN_TOPIC) or None
-            path = _mint(account_home, control.slug)
+            path = _mint(account_home, name)
             if path is None:
-                say("dropped", f".topic dropped: new {control.slug} — the topic file could not be written")
+                say("dropped", f".topic dropped: new {name} — the topic file could not be written")
                 return meta.get(META_RUN_TOPIC) or None
-            say("advisory", f".topic: minted surface/topics/{control.slug}.md (an empty signature — "
+            say("advisory", f".topic: minted surface/topics/{name}.md (an empty signature — "
                 "it lights on assignments until you write one)")
-            slug = control.slug
+            slug = name
         if slug is None:
-            say("refused", f".topic refused: {control.slug} is not a heddle — write an existing "
-                f"slug, or `new {control.slug}` to mint it")
+            say("refused", f".topic refused: {name} is not a heddle — write an existing "
+                f"slug, or `new {name}` to mint it")
             return meta.get(META_RUN_TOPIC) or None
         previous = meta.get(META_RUN_TOPIC)
         meta[META_RUN_TOPIC] = slug

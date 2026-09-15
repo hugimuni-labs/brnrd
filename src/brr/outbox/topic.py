@@ -18,9 +18,14 @@ silent file edit:
   resolving, the grammar ``warpGraph.ts`` already reads); absorbed files move
   to ``topics/retired/``. ``c`` may be one of the sources.
 - ``topic: retire <slug>`` — the file moves to ``topics/retired/``.
-- ``topic: show <slug> [since <span>]`` (move 5c) — the topic's index
-  rendered into the bench at the place ``topics/<slug>`` and the ask
-  delivered to the seat, the way ``fold:`` does (``topic_show``).
+- ``topic: show <slug> [since <span>] [kinds: a, b] [depth: heads|cut|whole]
+  [bench: true|false]`` (move 5c, reshaped in 5d) — the topic's index
+  rendered into the ask delivered to the seat (its body carries the
+  rendering, capped at 24 KB), and into the bench at the place
+  ``topics/<slug>`` only with ``bench: true`` (``topic_show``).
+- ``topic: rune <slug> <glyph>`` (move 5d) — set the heddle's ``rune:``: one
+  grapheme of one or two code points; the chip and the rail read it at the
+  next boundary.
 - ``topic: assign <slug> -> <event-id | run-id>`` (move 5c) — assign a run
   that ended in error with no topic (``topic_unset``), once.
 
@@ -55,7 +60,7 @@ _ARROW_RE = re.compile(r"\s*(?:->|→)\s*")
 #: The words that make `topic:` a verb. Anything else — a bare slug — is the
 #: act's topic (move 5c) and the file falls through the table to the row that
 #: delivers it.
-OPS = ("new", "split", "merge", "retire", "show", "assign")
+OPS = ("new", "split", "merge", "retire", "show", "assign", "rune")
 _TARGET_ID_RE = re.compile(r"^(?:evt-\d{10,}-[a-z0-9]{4}|run-\d{6}-\d{4}-[a-z0-9]{4})$")
 
 
@@ -101,12 +106,17 @@ def parse(raw: str) -> tuple[str, list[str], list[str]] | None:
         names = _slugs(rest)
         return (op, names, []) if len(names) == 1 else None
     if op == "show":
-        words = rest.split()
-        if len(words) == 1:
-            return op, words, []
-        if len(words) == 3 and words[1].lower() == "since" and heddles.parse_span(words[2]):
-            return op, words[:1], [words[2]]
-        return None
+        from .. import topic_show
+
+        query = topic_show.parse_query(rest)
+        if isinstance(query, str):
+            return None
+        return op, [query.slug], [rest]
+    if op == "rune":
+        words = rest.split(" ")
+        if len(words) != 2 or not words[0] or not words[1]:
+            return None
+        return op, [words[0]], [words[1]]
     if op == "assign":
         parts = _ARROW_RE.split(rest)
         if len(parts) != 2:
@@ -203,11 +213,21 @@ def handle(f: OutboxFile) -> Handled:
     meta = getattr(task, "meta", None) or {}
     raw = " ".join(str(f.frontmatter.get("topic") or "").split())
     parsed = parse(raw)
+    if parsed is None and raw.split(" ", 1)[0].lower() == "show":
+        from .. import topic_show
+
+        reason = topic_show.parse_query(raw.partition(" ")[2])
+        return _refuse(
+            f, f"topic dropped: {raw!r} — {reason}; write `topic: show <slug> [since <span>] "
+            "[kinds: messages, produce] [depth: heads|cut|whole] [bench: true|false]`",
+            kind="dropped",
+        )
     if parsed is None:
         return _refuse(
             f, f"topic dropped: {raw!r} is not a topic verb — write `topic: new <slug>`, "
             "`topic: split <slug> -> a, b`, `topic: merge a, b -> c`, `topic: retire <slug>`, "
-            "`topic: show <slug> [since <span>]` or `topic: assign <slug> -> <event-id>`",
+            "`topic: show <slug> [since <span>] [kinds: …] [depth: …] [bench: …]`, "
+            "`topic: rune <slug> <glyph>` or `topic: assign <slug> -> <event-id>`",
             kind="dropped",
         )
     op, sources, targets = parsed
@@ -231,7 +251,11 @@ def handle(f: OutboxFile) -> Handled:
 
     try:
         if op == "show":
-            return _show(f, ctx, sources[0], targets[0] if targets else None)
+            from .. import topic_show
+
+            return _show(f, ctx, topic_show.parse_query(targets[0]))
+        if op == "rune":
+            return _rune(f, ctx, directory, sources[0], targets[0])
         if op == "assign":
             return _assign(f, ctx, sources[0], targets[0])
         if op == "new":
@@ -380,19 +404,24 @@ def _merge(f, directory: Path, existing, sources: list[str], target: str) -> Han
 # ── Move 5c: `show` and `assign` ─────────────────────────────────────────
 
 
-def _show(f: OutboxFile, ctx, slug: str, since: str | None) -> Handled:
-    """`topic: show <slug> [since <span>]` — the index, rendered into the
-    bench at the place ``topics/<slug>`` (the ``fold:`` store, commit =
-    ``HEAD``), and the ask delivered to the seat the way ``fold:`` does.
+def _show(f: OutboxFile, ctx, query) -> Handled:
+    """`topic: show <slug> [since <span>] [kinds: …] [depth: …] [bench: …]`.
 
-    The page is the frame's rendering, so it is rewritten on every show —
-    unlike a fold's bench file, whose body is the weaver's."""
+    The index is rendered for the query (``topic_show.render``) and delivered
+    to the seat as an ask the way ``fold:`` does — a ``source: fold`` event
+    whose **body carries the rendering** (capped at
+    ``topic_show.INLINE_CAP_BYTES``), so the seat reads it in the boundary
+    the ask lands in. ``bench: true`` also writes the page, uncapped, at the
+    place ``topics/<slug>`` (the ``fold:`` store, commit = ``HEAD``) and
+    rewrites it on every show — unlike a fold's bench file, whose body is the
+    weaver's. Without it nothing is written to the bench."""
     from .. import protocol
     from .. import topic_show
     from . import fold
 
     task = f.run
     meta = getattr(task, "meta", None) or {}
+    slug = query.slug
     home = account.context_home_root(ctx)
     canonical = heddles.resolve_slug(home, slug)
     index_file = heddles.index_path(home, slug)
@@ -401,51 +430,66 @@ def _show(f: OutboxFile, ctx, slug: str, since: str | None) -> Handled:
     label = str(meta.get("repo_label") or "")
     if not label and getattr(ctx, "default_repo", None) is not None:
         label = str(getattr(ctx.default_repo, "label", "") or "")
-    if not label or f.ctx.repo_root is None:
-        return _refuse(f, f"topic dropped: show {slug} — this run has no repo checkout to key the bench to",
-                       kind="dropped")
-    commit = fold.read_head(f.ctx.repo_root)
-    if not commit:
-        return _refuse(f, f"topic dropped: show {slug} — `git rev-parse HEAD` did not answer", kind="dropped")
     if f.ctx.inbox_dir is None:
         return _refuse(f, f"topic dropped: show {slug} — no inbox to deliver the ask to", kind="dropped")
     place = f"{heddles.TOPICS_DIRNAME}/{canonical or slug}"
     brr_dir = getattr(f.ctx.emit, "brr_dir", None)
-    body = topic_show.render(
-        home, slug, since=since,
+    render_kw = dict(
+        since=query.since,
         inbox_dirs=[f.ctx.inbox_dir],
         runs_dirs=[Path(brr_dir) / "runs"] if brr_dir is not None else [],
+        kinds=query.kinds,
+        depth=query.depth,
     )
-    made_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    path = fold.bench_path(home, account.slug_repo_label(label), place, commit)
-    _write(path, (
-        "---\n"
-        f"place: {place}\n"
-        f"commit: {commit}\n"
-        f"topic: {canonical or slug}\n"
-        f"since: {since or ''}\n"
-        f"made_at: {made_at}\n"
-        "---\n" + body
-    ))
-    rows = body.count("\n- ")
+    path: Path | None = None
+    commit = ""
+    if query.bench:
+        if not label or f.ctx.repo_root is None:
+            return _refuse(f, f"topic dropped: show {slug} bench: true — this run has no repo checkout "
+                           "to key the bench to", kind="dropped")
+        commit = fold.read_head(f.ctx.repo_root)
+        if not commit:
+            return _refuse(f, f"topic dropped: show {slug} — `git rev-parse HEAD` did not answer",
+                           kind="dropped")
+        page = topic_show.render(home, slug, **render_kw)
+        made_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        path = fold.bench_path(home, account.slug_repo_label(label), place, commit)
+        _write(path, (
+            "---\n"
+            f"place: {place}\n"
+            f"commit: {commit}\n"
+            f"topic: {canonical or slug}\n"
+            f"since: {query.since or ''}\n"
+            f"kinds: {', '.join(query.kinds)}\n"
+            f"depth: {query.depth}\n"
+            f"made_at: {made_at}\n"
+            "---\n" + page
+        ))
+    acts = sum(1 for r in heddles.index(home, slug, query.since) if r.get("kind") in query.index_kinds)
+    inline = topic_show.render(home, slug, cap_bytes=topic_show.INLINE_CAP_BYTES, **render_kw)
+    described = query.describe().replace(slug, canonical or slug, 1)
+    head = [f"topic show {described} · {acts} acts"]
+    if path is not None:
+        head.append(f"bench: {path}")
     conversation_key = str(getattr(task, "conversation_key", "") or f.ctx.emit.conversation_key or "")
-    lines = [f"topic show {canonical or slug}" + (f" since {since}" if since else "") + f" · {rows} acts",
-             f"bench: {path}"]
+    fields = dict(
+        conversation_key=" ".join(conversation_key.split()),
+        focus_place=place,
+        focus_question=f"the index of {canonical or slug}",
+        fold_by_run=str(getattr(task, "id", "") or ""),
+    )
+    if label:
+        fields["repo_label"] = label
+    if path is not None:
+        fields.update(focus_commit=commit, focus_bench_path=str(path))
     try:
         event_path = protocol.create_event(
-            f.ctx.inbox_dir, fold.SOURCE, "\n\n".join(lines),
-            conversation_key=" ".join(conversation_key.split()),
-            repo_label=label,
-            focus_place=place,
-            focus_commit=commit,
-            focus_question=f"the index of {canonical or slug}",
-            focus_bench_path=str(path),
-            fold_by_run=str(getattr(task, "id", "") or ""),
+            f.ctx.inbox_dir, fold.SOURCE, "\n".join(head) + "\n\n" + inline, **fields,
         )
     except (OSError, ValueError) as exc:
+        where = f"the page is at {path} but " if path is not None else ""
         return _refuse(
-            f, f"topic dropped: show {slug} — the page is at {path} but the ask was not "
-            f"delivered: {exc}", kind="dropped",
+            f, f"topic dropped: show {slug} — {where}the ask was not delivered: {exc}", kind="dropped",
         )
     f.ctx.emit(
         "fold_requested",
@@ -454,10 +498,69 @@ def _show(f: OutboxFile, ctx, slug: str, since: str | None) -> Handled:
         fold_event=event_path.stem,
         place=place,
         commit=commit,
-        bench_path=str(path),
+        bench_path=str(path) if path is not None else "",
     )
-    return _accepted(f, "show", f"topic show {canonical or slug} → {path.name} at {place} ({rows} acts)",
+    where = f"{path.name} at {place}" if path is not None else f"inline in {event_path.stem}"
+    return _accepted(f, "show", f"topic show {canonical or slug} → {where} ({acts} acts)",
                      [canonical or slug])
+
+
+# ── Move 5d: `rune` ──────────────────────────────────────────────────────
+
+#: Code points that may follow a base to make one grapheme of two: combining
+#: marks (by category), variation selectors, skin-tone modifiers.
+_RUNE_JOINERS = (range(0xFE00, 0xFE10), range(0x1F3FB, 0x1F400), range(0xE0100, 0xE01F0))
+_REGIONAL = range(0x1F1E6, 0x1F200)
+
+
+def rune_problem(glyph: str) -> str | None:
+    """``None`` when *glyph* is one grapheme of one or two code points; else
+    why not. No grapheme library: the second code point must be a combining
+    mark, a variation selector or a skin-tone modifier — or the pair two
+    regional indicators (a flag)."""
+    import unicodedata
+
+    if not glyph:
+        return "empty"
+    if len(glyph) > 2:
+        return f"{len(glyph)} code points — a rune is one grapheme of one or two"
+    first = glyph[0]
+    if unicodedata.category(first)[0] in "CZM":
+        return f"U+{ord(first):04X} is not a visible base character"
+    if len(glyph) == 1:
+        return None
+    second = glyph[1]
+    if ord(first) in _REGIONAL and ord(second) in _REGIONAL:
+        return None
+    if unicodedata.category(second).startswith("M") or any(ord(second) in r for r in _RUNE_JOINERS):
+        return None
+    return "two graphemes — a rune is one"
+
+
+def _rune(f: OutboxFile, ctx, directory: Path, slug: str, glyph: str) -> Handled:
+    """`topic: rune <slug> <glyph>` — set ``rune:`` in the topic file's
+    frontmatter, everything else kept. Refused for a glyph that is not one
+    grapheme of one or two code points, or a slug that is not a live heddle
+    (an alias is not: the rune belongs to the topic file, named by its own
+    slug)."""
+    problem = rune_problem(glyph)
+    if problem:
+        return _refuse(f, f"topic refused: rune {slug} {glyph!r} — {problem}")
+    topic = next((t for t in heddles.load_topics(directory) if t.slug == slug), None)
+    if topic is None:
+        home = account.context_home_root(ctx)
+        owner = heddles.resolve_slug(home, slug)
+        hint = f" — it is an alias of {owner}; `topic: rune {owner} {glyph}`" if owner else ""
+        return _refuse(f, f"topic refused: rune {slug} — not a live heddle{hint}")
+    if topic.rune == glyph:
+        return _finish(f, f"topic rune {slug}: already {glyph} — nothing written",
+                       kind="advisory", promoted=0)
+    _write(topic.path, heddles.render_topic(replace(topic, rune=glyph)))
+    was = f" (was {topic.rune})" if topic.rune else ""
+    return _accepted(
+        f, "rune", f"topic rune {slug} → {glyph}{was} · surface/topics/{slug}.md; "
+        "the chip and the rail read it at the next boundary", [slug],
+    )
 
 
 def _assign(f: OutboxFile, ctx, slug: str, target: str) -> Handled:

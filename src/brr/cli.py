@@ -1074,6 +1074,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--since", default=None, metavar="SPAN",
         help="with --topic: only acts newer than SPAN (e.g. 2h, 3d)")
     hud_p.add_argument(
+        "--kinds", default=None, metavar="LIST",
+        help="with --topic: the acts to show, comma-separated — messages, strands, "
+             "bolts, folds, produce, events (default: messages, produce)")
+    hud_p.add_argument(
+        "--depth", default=None, metavar="heads|cut|whole",
+        help="with --topic: how much of each message (and inbound event) renders — "
+             "its first line, its first and last paragraphs, or all of it (default: whole)")
+    hud_p.add_argument(
         "--outbox", default=None, metavar="DIR",
         help="outbox dir to read (default: this run's own, via "
              "BRR_OUTBOX_DIR / BRR_PORTAL_STATE)")
@@ -5201,23 +5209,30 @@ def cmd_hud(args):
 
 
 def _hud_topic(args) -> int:
-    """``brnrd hud --topic <slug> [--since <span>]`` — read-only: the same
-    rendering ``topic: show`` writes into the bench, printed."""
+    """``brnrd hud --topic <slug> [--since <span>] [--kinds a,b] [--depth d]``
+    — read-only: the rendering ``topic: show`` delivers for the same query,
+    printed whole (the 24 KB inline cap is the ask event's, not a terminal's;
+    ``bench:`` has no flag here because this verb never writes)."""
     import sys
 
     from . import account
     from . import config as conf
     from . import gitops
-    from . import heddles
     from . import topic_show
 
-    slug = str(args.topic or "").strip()
+    parts = [str(args.topic or "").strip()]
     since = getattr(args, "since", None)
-    if not heddles.SLUG_RE.match(slug):
-        print(f"brnrd hud: {slug!r} is not a topic slug", file=sys.stderr)
-        return 1
-    if since is not None and heddles.parse_span(since) is None:
-        print(f"brnrd hud: --since {since!r} is not a span (e.g. 2h, 3d)", file=sys.stderr)
+    kinds = getattr(args, "kinds", None)
+    depth = getattr(args, "depth", None)
+    if since is not None:
+        parts.append(f"since {since}")
+    if kinds is not None:
+        parts.append(f"kinds: {kinds}")
+    if depth is not None:
+        parts.append(f"depth: {depth}")
+    query = topic_show.parse_query(" ".join(parts))
+    if isinstance(query, str):
+        print(f"brnrd hud: --topic {' '.join(parts)!r} — {query}", file=sys.stderr)
         return 1
     repo_root = _repo_root()
     cfg = conf.load_config(repo_root)
@@ -5230,7 +5245,8 @@ def _hud_topic(args) -> int:
     except AttributeError:
         pass
     print(topic_show.render(
-        home, slug, since=since, inbox_dirs=inbox_dirs, runs_dirs=[brr_dir / "runs"],
+        home, query.slug, since=query.since, inbox_dirs=inbox_dirs, runs_dirs=[brr_dir / "runs"],
+        kinds=query.kinds, depth=query.depth,
     ), end="")
     return 0
 

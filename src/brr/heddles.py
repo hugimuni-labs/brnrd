@@ -73,6 +73,7 @@ import json
 import os
 import re
 import threading
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -1150,8 +1151,11 @@ def propose(
     ``why`` is ``"signature"`` when a topic's signature matched the text best
     (most distinct terms hit: words, produce refs, thread ids, and path-shaped
     tokens against places; ties go to the slug order), ``"thread"`` when
-    nothing matched and *thread*'s last assigned topic stands, and ``"none"``
-    otherwise. A home with no topics proposes nothing. Never raises.
+    nothing matched and *thread*'s last assigned topic stands,
+    ``"suggested"`` when neither stands and the text yields a candidate for a
+    *new* heddle (:func:`suggest_slug` — minted only if the run says so), and
+    ``"none"`` otherwise. A proposal names a live topic; a suggestion names
+    one that does not exist yet. Never raises.
     """
     try:
         topics = load_topics(topics_dir(account_home))
@@ -1176,9 +1180,154 @@ def propose(
         fallback = thread_topic(account_home, thread) if thread else None
         if fallback:
             return fallback, "thread"
+        suggested = suggest_slug(account_home, body)
+        if suggested:
+            return suggested, "suggested"
     except Exception:  # noqa: BLE001 - a proposal must never sink a dispatch
         return None, "none"
     return None, "none"
+
+
+# ── The suggestion: a new heddle's name, minted from the event (move 5d) ──
+#
+# When nothing proposes a live topic, the frame offers a *candidate* so that
+# minting costs the resident one line (`new` alone in `.topic`). The name is
+# the text's first noun-ish phrase of one to three words — a heuristic with
+# no part-of-speech model, on purpose: leading filler (greetings, pronouns,
+# modals, request verbs, articles) is skipped, the phrase runs until a
+# function word or a punctuation mark, and a leading ``the`` is kept when a
+# content word follows it (the house style: ``the-loom``, ``the-post``). A
+# suggestion is a prior, never an assignment: nothing is indexed until a run
+# writes `new`.
+
+SUGGEST_MAX_WORDS = 3
+SUGGEST_MAX_CHARS = 40
+_SUGGEST_SCAN_LINES = 6
+_SUGGEST_WORD_MAX = 24
+
+#: Skipped while the phrase has not started: filler, pronouns, modals,
+#: request verbs, articles and prepositions.
+_SUGGEST_LEAD = frozenset("""
+hey hi hello yo ok okay so well and but also then now just please pls plz thanks thank
+hmm ah oh um umm lol btw fyi re fw fwd yes yeah yep sure maybe quick quickly question
+can could would will should shall may might must you u i im ive id we were weve let lets
+us me my our your his her their its it this that these those there here what whats how
+why when where who which whose do does did done is are was be been being am have has
+had get got go going gonna wanna want wants need needs like a an to of in on at for
+with from by about into onto over under as if or not no some any all look looking check
+see tell show give take make try write read fix add open run start draft review update
+find think work build ship send post merge land move put keep use help new next another
+more talk discuss chat ask say plan explain consider figure
+""".split())
+#: End a phrase that has started.
+_SUGGEST_BOUNDARY = frozenset("""
+a an and or but for of to in on at with from by about into onto over under as if than
+then so is are was were be been am it its this that these those i you we they he she me
+us him them my your our their can could would should will shall may might must do does
+did has have had not no please when where what why how which who whose there here the
+vs via per after before since until while because
+""".split())
+_SUGGEST_TOKEN_RE = re.compile(r"[a-z0-9]+(?:['’][a-z]+)?|[^\sa-z0-9]")
+_SUGGEST_MARKUP_RE = re.compile(r"https?://\S+|`[^`]*`|\[([^\]]*)\]\([^)]*\)|[@#][\w-]+")
+
+
+def _ascii_fold(text: str) -> str:
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+
+
+def slug_phrase(text: object) -> str | None:
+    """The first noun-ish phrase of 1–3 words in *text*, slugified — or
+    ``None`` when no line yields one (empty text, only filler, a script the
+    ASCII fold drops). Pure: no home, no collision check."""
+    in_fence = False
+    scanned = 0
+    for raw in str(text or "").replace("\r\n", "\n").split("\n"):
+        stripped = raw.strip()
+        if stripped.startswith(("```", "~~~")):
+            in_fence = not in_fence
+            continue
+        if in_fence or not stripped or stripped == "---":
+            continue
+        scanned += 1
+        if scanned > _SUGGEST_SCAN_LINES:
+            break
+        line = _SUGGEST_MARKUP_RE.sub(lambda m: m.group(1) or " ", stripped)
+        line = re.sub(r"^(?:[#>*+\-]+|\d+[.)])\s*", "", line)
+        phrase = _phrase(_SUGGEST_TOKEN_RE.findall(_ascii_fold(line).lower()))
+        if phrase:
+            return phrase
+    return None
+
+
+def _phrase(tokens: list[str]) -> str | None:
+    phrase: list[str] = []
+    for token in tokens:
+        if not token[0].isalnum():
+            if token in "_'’":  # joined inside words by the fold, never a stop
+                continue
+            if phrase and phrase != ["the"]:
+                break
+            phrase = []
+            continue
+        word = re.sub(r"['’]", "", token)[:_SUGGEST_WORD_MAX]
+        if not phrase or phrase == ["the"]:
+            if word == "the":
+                phrase = ["the"]
+                continue
+            if word in _SUGGEST_LEAD or word in _SUGGEST_BOUNDARY:
+                phrase = []
+                continue
+            phrase.append(word)
+        elif word in _SUGGEST_BOUNDARY:
+            break
+        else:
+            phrase.append(word)
+        if len(phrase) >= SUGGEST_MAX_WORDS:
+            break
+    if not phrase or phrase == ["the"] or all(w.isdigit() for w in phrase if w != "the"):
+        return None
+    slug = "-".join(phrase)
+    while len(slug) > SUGGEST_MAX_CHARS and "-" in slug:
+        slug = slug.rsplit("-", 1)[0]
+    slug = slug[:SUGGEST_MAX_CHARS].strip("-")
+    return slug if SLUG_RE.match(slug) else None
+
+
+def taken_slugs(account_home: Path | None) -> set[str]:
+    """Every name a new heddle must not take: live slugs and their ``ids:``
+    aliases, split breadcrumbs, retired files, and any slug that still has an
+    index file (minting over it would inherit that history at read time)."""
+    names = set(_topic_names(account_home))
+    directory = topics_dir(account_home)
+    if directory is None:
+        return names
+    for pattern in ("*.md", f"{RETIRED_DIRNAME}/*.md", f"*{INDEX_SUFFIX}"):
+        for path in directory.glob(pattern):
+            names.add(path.name.split(".", 1)[0])
+    return names
+
+
+def suggest_slug(account_home: Path | None, text: object) -> str | None:
+    """A candidate slug for a new heddle, from *text*: :func:`slug_phrase`,
+    with ``-2``, ``-3``… appended until it collides with nothing in
+    :func:`taken_slugs`. ``None`` with no home (nothing could mint it) or
+    when the text yields no phrase. Never raises."""
+    if account_home is None:
+        return None
+    try:
+        base = slug_phrase(text)
+        if not base:
+            return None
+        taken = taken_slugs(account_home)
+        if base not in taken:
+            return base
+        for n in range(2, 1000):
+            candidate = f"{base[:SUGGEST_MAX_CHARS - len(str(n)) - 1].rstrip('-')}-{n}"
+            if candidate not in taken:
+                return candidate
+    except Exception:  # noqa: BLE001 - a suggestion must never sink a dispatch
+        return None
+    return None
 
 
 def _score_assigned(state: _RunState, account_home: Path | None, run_id: str) -> None:

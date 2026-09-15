@@ -987,7 +987,7 @@ def format_kernel(score: BootScore) -> str:
         )
         lines.append("")
         lines.append("first outward ⇒ .name + .mood + .topic")
-        lines.append("this run's topic: an existing heddle ∨ `new <slug>` ∨ null")
+        lines.append("this run's topic: an existing heddle ∨ `new <slug>` ∨ null (minting costs one line)")
         lines.append("first produce ⇒ .topics")
         lines.append("∅then ⇒ daemon→plain fallback ; next-wake→declare")
     lines.append("")
