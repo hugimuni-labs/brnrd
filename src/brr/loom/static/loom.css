@@ -1,7 +1,7 @@
 :root {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color: #d7d9d7;
-  background: #090d10;
+  background: #07080d;
   color-scheme: dark;
   font-size: 12px;
 }
@@ -51,7 +51,7 @@ button:focus-visible {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  color: #788e93;
+  color: #99adc7;
   letter-spacing: 2px;
   font-size: 10px;
   margin-bottom: 27px;
@@ -75,7 +75,7 @@ p {
 #receipt h2 {
   font-size: 10px;
   font-weight: 400;
-  color: #8caaae;
+  color: #a2b7d1;
   letter-spacing: 2px;
   margin: 25px 0 13px;
   text-transform: uppercase;
@@ -165,7 +165,7 @@ pre {
   right: 0;
   min-height: 76px;
   border-top: 1px solid #2a373b;
-  background: #0d1317;
+  background: #0b0e17;
   display: flex;
   align-items: center;
   gap: 18px;
@@ -193,7 +193,7 @@ pre {
   font-size: 13px;
 }
 #message::placeholder {
-  color: #6b8188;
+  color: #728196;
 }
 #console-note {
   font-size: 10px;

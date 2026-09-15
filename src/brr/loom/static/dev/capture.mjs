@@ -10,7 +10,8 @@ const output = resolve(process.argv[4] || "media/loom/screen");
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 const errors = [],
-  requests = [];
+  requests = [],
+  frameRates = [];
 function observe(page) {
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("console", (m) => {
@@ -34,6 +35,11 @@ for (const [w, h] of [
   await page.goto(base + "/loom/?src=dev");
   await page.locator("#receipt h1").waitFor();
   await page.waitForTimeout(900);
+  frameRates.push(await page.evaluate(()=>new Promise(resolve=>{
+    const gaps=[];let previous;
+    function sample(now){if(previous)gaps.push(now-previous);previous=now;if(gaps.length<90)requestAnimationFrame(sample);else{gaps.sort((a,b)=>a-b);resolve({width:innerWidth,median_ms:gaps[45],p95_ms:gaps[85],mean_fps:1000/(gaps.reduce((a,b)=>a+b,0)/gaps.length)});}}
+    requestAnimationFrame(sample);
+  })));
   await page.screenshot({ path: resolve(output, `fixture-${w}x${h}.png`) });
   await page.keyboard.press("Space");
   const still = await page.locator("canvas").screenshot();
@@ -46,6 +52,7 @@ for (const [w, h] of [
   await page.keyboard.press("Space");
   await page.keyboard.press("1");
   await page.waitForTimeout(650);
+  await page.screenshot({path:resolve(output,`lifted-${w}x${h}.png`)});
   await page.keyboard.press("2");
   await page.waitForTimeout(650);
   assert.match(
@@ -57,6 +64,9 @@ for (const [w, h] of [
     path: resolve(output, `intersection-${w}x${h}.png`),
   });
   await page.keyboard.press("Escape");
+  await page.keyboard.press('ArrowLeft');await page.waitForTimeout(650);
+  await page.screenshot({path:resolve(output,`rail-mid-scroll-${w}x${h}.png`)});
+  await page.keyboard.press('ArrowRight');await page.waitForTimeout(650);
   await page
     .getByRole("button", {
       name: "Open place src/brr/loom/static/loom.js",
@@ -68,11 +78,13 @@ for (const [w, h] of [
     await page.locator("#focus").innerText(),
     "@src/brr/loom/static/loom.js",
   );
+  await page.getByRole('button',{name:'explain',exact:true}).click();
+  assert.equal(await page.locator('#console-note').innerText(),'reaches the shuttle in pass 2 — the local gate is not wired yet');
   await page.locator("#message").fill("hello");
   await page.locator("#message").press("Enter");
   assert.equal(
     await page.locator("#console-note").innerText(),
-    "the gate is not wired yet — write reaches the shuttle in pass 2",
+    "reaches the shuttle in pass 2 — the local gate is not wired yet",
   );
   await page.close();
 }
@@ -171,6 +183,7 @@ await transport
   .getByRole("button", { name: "fixture/fold · keep", exact: true })
   .click();
 await transport.getByText("A measured fold.", { exact: false }).waitFor();
+await transport.getByRole("button",{name:"keep",exact:true}).click();
 assert.equal(
   await transport.locator("#receipt script").count(),
   0,
@@ -205,6 +218,7 @@ console.log(
   JSON.stringify(
     {
       errors,
+      frameRates,
       requests: requests.length,
       network: "only /loom/*",
       screenshots: "two sizes, intersections, empty",
