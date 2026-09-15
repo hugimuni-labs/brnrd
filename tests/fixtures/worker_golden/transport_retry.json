@@ -36,36 +36,18 @@
     "failure_kind": "transport_error",
     "timed_out": false
    },
-   "next_last_failure": {
-    "codex_task_error": null,
-    "error": "API Error: Connection closed mid-response. The response above may be incomplete.",
-    "exit_code": 1,
-    "failure_kind": "transport_error",
-    "timed_out": false
-   }
+   "next_last_failure": null
   },
   {
    "attempt": 2,
    "kind": "completed",
-   "last_failure": {
-    "codex_task_error": null,
-    "error": "API Error: Connection closed mid-response. The response above may be incomplete.",
-    "exit_code": 1,
-    "failure_kind": "transport_error",
-    "timed_out": false
-   },
+   "last_failure": null,
    "next_last_failure": null
   },
   {
    "attempt": 2,
    "finalize": "completed",
-   "last_failure": {
-    "codex_task_error": null,
-    "error": "API Error: Connection closed mid-response. The response above may be incomplete.",
-    "exit_code": 1,
-    "failure_kind": "transport_error",
-    "timed_out": false
-   }
+   "last_failure": null
   }
  ],
  "event": {

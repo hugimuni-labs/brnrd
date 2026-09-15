@@ -14,9 +14,6 @@
    "extra_runner_args": [
     "--resume",
     "mount-2",
-    "--fork-session",
-    "--resume",
-    "mount-1",
     "--fork-session"
    ],
    "runner": "claude"
@@ -26,12 +23,6 @@
    "extra_runner_args": [
     "--resume",
     "mount-3",
-    "--fork-session",
-    "--resume",
-    "mount-2",
-    "--fork-session",
-    "--resume",
-    "mount-1",
     "--fork-session"
    ],
    "runner": "claude"

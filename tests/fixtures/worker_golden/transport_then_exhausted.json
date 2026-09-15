@@ -36,36 +36,18 @@
     "failure_kind": "transport_error",
     "timed_out": false
    },
-   "next_last_failure": {
-    "codex_task_error": null,
-    "error": "API Error: Connection closed mid-response. The response above may be incomplete.",
-    "exit_code": 1,
-    "failure_kind": "transport_error",
-    "timed_out": false
-   }
+   "next_last_failure": null
   },
   {
    "attempt": 2,
    "kind": "exhausted",
-   "last_failure": {
-    "codex_task_error": null,
-    "error": "API Error: Connection closed mid-response. The response above may be incomplete.",
-    "exit_code": 1,
-    "failure_kind": "transport_error",
-    "timed_out": false
-   },
+   "last_failure": null,
    "next_last_failure": null
   },
   {
    "attempt": 2,
    "finalize": "exhausted",
-   "last_failure": {
-    "codex_task_error": null,
-    "error": "API Error: Connection closed mid-response. The response above may be incomplete.",
-    "exit_code": 1,
-    "failure_kind": "transport_error",
-    "timed_out": false
-   }
+   "last_failure": null
   }
  ],
  "event": {
@@ -214,10 +196,8 @@
   {
    "payload": {
     "attempts": 2,
-    "error": "API Error: Connection closed mid-response. The response above may be incomplete.",
     "event_id": "evt-transport-exhausted",
-    "exit_code": 1,
-    "failure_kind": "transport_error",
+    "failure_kind": "no_output",
     "run_id": "<RUN>",
     "stage": "run"
    },
@@ -387,7 +367,7 @@
   "tick": null,
   "version": 1
  },
- "response": "I couldn't complete this run.\n\nbrr is surfacing this because runner connection dropped mid-response after 2 attempt(s): API Error: Connection closed mid-response. The response above may be incomplete..",
+ "response": "I couldn't complete this run.\n\nbrr is surfacing this because runner produced no reply after 2 attempt(s); attempt 1 before it: runner connection dropped mid-response: API Error: Connection closed mid-response. The response above may be incomplete..",
  "returned": {
   "body": "big",
   "env": "worktree",
