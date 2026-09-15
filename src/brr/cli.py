@@ -1067,6 +1067,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="print what the frame attests as produce: the loom's four kinds, "
              "the last refs, and the relic counts")
     hud_mode.add_argument(
+        "--card", action="store_true",
+        help="print the card's two halves: the weaver's (every heading but "
+             "## Said / ## Ledger) as the file holds it, and the frame's as it "
+             "would write them now — read-only, for comparing against .card")
+    hud_mode.add_argument(
         "--topic", default=None, metavar="SLUG",
         help="print a topic's index — the acts assigned to it (and its "
              "aliases), oldest first; the rendering `topic: show` writes to the bench")
@@ -5203,9 +5208,75 @@ def cmd_hud(args):
         sys.stdout.write(current.to_json())
     elif args.produce:
         print(hud_mod.render_produce(current))
+    elif getattr(args, "card", False):
+        print(_hud_card_halves(Path(outbox_dir), current.to_dict()))
     else:
         print(hud_mod.render_bar(current, outbox_dir=Path(outbox_dir)))
     return 0
+
+
+def _hud_card_halves(outbox_dir: Path, payload: dict) -> str:
+    """``brnrd hud --card`` — the two halves the frame would write, read-only.
+
+    The frame's half is rebuilt with :func:`brr.card_frame.build_ledger` from
+    the same sources the heartbeat reads: this portal, the run's
+    ``produce.jsonl`` (under the ``.brr`` dir the outbox lives in),
+    ``.relics.jsonl`` and the live ``inbox.json`` events. Two differences from
+    the daemon's pass, named: the heddles are the portal's (the heartbeat
+    passes the ones it has just lit), and finished strands are every pending
+    return — the "since your last card write" cut lives on the run's meta,
+    which only the daemon holds. ``## Said`` is printed as the card holds it:
+    its rows come from the delivery record, not from anything this verb reads.
+    """
+    import json
+
+    from . import card_frame, hud as hud_mod
+
+    card_path = outbox_dir / card_frame.CARD_NAME
+    try:
+        card_text = card_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        card_text = ""
+    run_id = str((payload.get("run") or {}).get("id") or "")
+    brr_dir = outbox_dir.parent.parent
+    try:
+        live = json.loads((outbox_dir / "inbox.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        live = {}
+    events = [e for e in (live.get("events") or []) if isinstance(e, dict)] if isinstance(live, dict) else []
+    produce_rows = hud_mod.read_produce_ledger(brr_dir, run_id)
+    relics = card_frame._read_jsonl(outbox_dir / ".relics.jsonl")
+    try:
+        forge = json.loads((brr_dir / "forge-pr-state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        forge = {}
+    forge_rows = [r for r in (forge.get("prs") or []) if isinstance(r, dict)] if isinstance(forge, dict) else []
+    facts = card_frame.gather_facts(produce_rows=produce_rows, relics=relics, forge_prs=forge_rows)
+    lines = card_frame.build_ledger(
+        payload,
+        produce_rows=produce_rows,
+        relics=relics,
+        events=events,
+        merged=card_frame.ledger_merges(
+            facts, card_text=card_text, produce_rows=produce_rows, relics=relics,
+            meta={"branch_name": (payload.get("run") or {}).get("branch")}, run_id=run_id,
+        ),
+    )
+    weaver, _ = card_frame.card_halves(card_text)
+    said_span = card_frame._section_span(card_text, "## Said")
+    said = card_text[said_span[0]:said_span[1]].strip("\n") if said_span else ""
+    frame = card_frame.render_ledger(lines)
+    ledger_note = "" if lines else "\n(nothing to project — the frame writes no heading on a card without one)"
+    out = [
+        "── the weaver's half (as .card holds it) ──",
+        weaver or "(empty)",
+        "",
+        "── the frame's half (as the frame would write it now) ──",
+        frame + ledger_note,
+    ]
+    if said:
+        out += ["", said]
+    return "\n".join(out)
 
 
 def _hud_topic(args) -> int:
