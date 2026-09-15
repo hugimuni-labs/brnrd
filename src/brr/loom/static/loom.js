@@ -169,7 +169,10 @@ const regionRects = {};
 const matches = (topics) =>
   [...lifted].every((topic) => list(topics).includes(topic));
 function color(topic) {
-  const i = list(state?.heddles).findIndex((h) => h.slug === topic);
+  const slugs = list(state?.heddles)
+    .map((h) => h.slug)
+    .sort();
+  const i = slugs.indexOf(topic);
   return i < 0 ? INK.faint : HUES[i % HUES.length];
 }
 const firstColor = (topics) => color(list(topics)[0]);
@@ -424,7 +427,7 @@ function resize() {
     wide = width >= 1000,
     m = compact ? 20 : 28,
     consoleH = 76,
-    clothH = compact ? 112 : 150;
+    clothH = compact ? 128 : 178;
   const right = wide ? Math.round(width * 0.7) : width - m;
   layout = {
     m,
@@ -437,6 +440,7 @@ function resize() {
     warp: Math.round(Math.min(290, Math.max(170, width * 0.16))),
     cloth: height - consoleH - clothH,
   };
+  layout.railY = layout.cloth + (compact ? 56 : 74);
   layout.top = layout.headerBottom + 10;
   layout.wx = layout.warp + 22;
   layout.ww = right - layout.wx - 12;
@@ -475,27 +479,60 @@ function clothRows() {
           : String(a.started).localeCompare(String(b.started)),
     );
 }
-function railLayout() {
+// Passes group under their parent: a strand never sits beside the pass that
+// dispatched it on the time line.
+function railGroups() {
   const rows = clothRows(),
+    byRun = new Map(rows.map((r) => [r.run, r]));
+  const topOf = (r) => {
+    let cur = r,
+      guard = 0;
+    while (cur.parent && cur.parent !== cur.run && byRun.has(cur.parent) && guard++ < 12)
+      cur = byRun.get(cur.parent);
+    return cur;
+  };
+  const groups = new Map();
+  for (const r of rows) {
+    const top = topOf(r);
+    if (!groups.has(top.run)) groups.set(top.run, { row: top, strands: [] });
+    if (top !== r) groups.get(top.run).strands.push(r);
+  }
+  const live = state?.run?.id;
+  const holdsLive = (gr) => gr.row.run === live || gr.strands.some((r) => r.run === live);
+  for (const gr of groups.values())
+    gr.strands.sort((a, b) => String(a.started).localeCompare(String(b.started)));
+  return [...groups.values()].sort((a, b) =>
+    holdsLive(a) ? 1 : holdsLive(b) ? -1 : String(a.row.started).localeCompare(String(b.row.started)),
+  );
+}
+const groupOf = (run) =>
+  railGroups().find((gr) => gr.row.run === run || gr.strands.some((r) => r.run === run));
+function railLayout() {
+  const groups = railGroups(),
     { m, right, compact } = layout;
-  let focus = rows.findIndex((r) => r.run === focusRun);
-  if (focus < 0) focus = rows.length - 1;
-  const cardWidth = Math.min(compact ? 330 : 400, (right - m * 2) * 0.44),
-    live = focus === rows.length - 1;
-  // The live pass sits rightmost by default; a focused past pass centres.
+  let focus = groups.findIndex((gr) => gr.row.run === focusRun);
+  if (focus < 0) focus = groups.length - 1;
+  const cardWidth = Math.min(compact ? 320 : 400, (right - m * 2) * 0.4),
+    live = focus === groups.length - 1;
   const center = live ? right - 20 - cardWidth / 2 : (right + m) / 2;
-  return rows.map((row, i) => {
+  const side = Math.max(center - cardWidth / 2 - m, right - 20 - (center + cardWidth / 2)) - 12;
+  // A wide shoulder: the ten nearest read as plaques in miniature.
+  const miniBase = Math.max(44, Math.min(compact ? 92 : 124, (side - 60) / 7.1));
+  const widthAt = (k) => (k <= 10 ? Math.max(40, miniBase * Math.pow(0.92, k - 1)) : 12);
+  return groups.map((gr, i) => {
     const d = i - focus,
-      scale = Math.max(0.35, Math.pow(0.9, Math.abs(d)));
-    let offset = cardWidth / 2 + 34;
-    for (let j = 1; j < Math.abs(d); j++)
-      offset += 46 * Math.max(0.35, Math.pow(0.9, j));
+      ad = Math.abs(d);
+    if (!d) return { ...gr, focus: true, kind: "plaque", scale: 1, x: center, w: cardWidth };
+    let offset = cardWidth / 2 + 10;
+    for (let k = 1; k < ad; k++) offset += widthAt(k) + (k <= 10 ? 6 : 3);
+    const w = widthAt(ad);
     return {
-      row,
-      focus: i === focus,
-      scale,
-      x: d ? center + Math.sign(d) * offset : center,
-      w: i === focus ? cardWidth : 30 * scale,
+      ...gr,
+      focus: false,
+      kind: ad <= 10 ? "mini" : "dot",
+      scale: Math.pow(0.92, ad),
+      x: center + Math.sign(d) * (offset + w / 2),
+      w,
     };
   });
 }
@@ -509,22 +546,27 @@ function passPlaces(row) {
   const thread = list(state?.hud?.strands).find((t) => t.id === row?.run);
   return Array.isArray(thread?.places) ? thread.places : null;
 }
+function groupPlaces(entry) {
+  const lists = [entry.row, ...entry.strands].map(passPlaces).filter((p) => p !== null);
+  return lists.length ? [...new Set(lists.flat())] : null;
+}
 function focusedPaths() {
-  const row = railLayout().find((r) => r.focus)?.row;
-  return new Set(passPlaces(row) || []);
+  const entry = railLayout().find((r) => r.focus);
+  return new Set((entry && groupPlaces(entry)) || []);
 }
 function focusPass(run) {
-  focusRun = run;
-  const row = clothRows().find((r) => r.run === run);
+  const gr = groupOf(run);
+  focusRun = gr ? gr.row.run : run;
   radial = null;
-  rebuild();
+  const row = clothRows().find((r) => r.run === run);
   if (row) select("cloth", row);
+  else rebuild();
 }
 function stepFocus(delta) {
-  const rows = clothRows(),
+  const groups = railGroups(),
     index = railLayout().findIndex((r) => r.focus);
-  if (rows.length)
-    focusPass(rows[Math.max(0, Math.min(rows.length - 1, index + delta))].run);
+  if (groups.length)
+    focusPass(groups[Math.max(0, Math.min(groups.length - 1, index + delta))].row.run);
 }
 function mergedPlaces() {
   const places = new Map();
@@ -560,10 +602,10 @@ function mergedPlaces() {
         (r) => r.x + r.w / 2 > layout.m && r.x - r.w / 2 < layout.right - 20,
       )
     : [];
-  const mapped = visible.map((r) => passPlaces(r.row));
-  const union = mapped.length
-    ? new Set(mapped.filter((p) => p !== null).flat())
-    : null;
+  // The window is the union of places of the passes in view — counted only
+  // over passes that attest places; none attesting ⇒ no filter, never empty.
+  const mapped = visible.map(groupPlaces).filter((p) => p !== null);
+  const union = mapped.length ? new Set(mapped.flat()) : null;
   return [...places.values()].filter(
     (p) => matches(p.topics) && (!union || union.has(p.path)),
   );
@@ -745,6 +787,15 @@ function rebuild() {
   actor = actorPath && next.has(actorPath) ? { path: actorPath } : null;
   planLabels();
   updateAccess();
+  // A readable receipt of what the window holds, for tests and assistive tools.
+  Object.assign(canvas.dataset, {
+    lifted: [...lifted].join(","),
+    places: String(shownCount),
+    placesTotal: String(all.length),
+    passes: String(clothRows().length),
+    groups: String(railGroups().length),
+    warp: String(list(state.warp?.items).filter((w) => matches(w.topics) && !["done", "retired"].includes(w.state)).length),
+  });
 }
 function planLabels() {
   const T = layout.tree,
@@ -762,7 +813,7 @@ function planLabels() {
     n.label = null;
     const p = targetPositions.get(n.path);
     if (p) boxes.push({ x: p.x - 6, y: p.y - 6, w: 12, h: 12 });
-    if (p && n.place?.knots > 0) boxes.push({ x: p.x + 4, y: p.y + 4, w: 10, h: 10 });
+    if (p && n.place?.knots >= 2) boxes.push({ x: p.x + 4, y: p.y + 4, w: 10, h: 10 });
   }
   const a = actor && targetPositions.get(actor.path);
   if (a) boxes.push({ x: a.x - 40, y: a.y - 36, w: 124, h: 30 });
@@ -941,12 +992,18 @@ function glitch(rect, dur = 120, born = clock) {
   if (glitches.length > 24) glitches = glitches.slice(-24);
 }
 function toggle(slug) {
+  // One click = one toggle; everything below is rebuilt from the intersection.
   radial = null;
   actions.lift();
+  clearTimeout(expandTimer);
   lifted.has(slug) ? lifted.delete(slug) : lifted.add(slug);
   warpScroll = 0;
   expanded = null;
+  hovered = null;
+  if (focusRun && !clothRows().some((r) => r.run === focusRun)) focusRun = null;
+  if (selected.kind !== "heddles") pageHistory = [...pageHistory, selected].slice(-24);
   selected = { kind: "heddles" };
+  lastReceipt = "";
   rebuild();
   glitch(() => runeRects.get(slug), 140);
   renderReceipt();
@@ -954,11 +1011,15 @@ function toggle(slug) {
     ? "@" + [...lifted].join(" ∩ ")
     : "@shuttle";
 }
-function select(kind, data) {
+let pageHistory = [];
+function select(kind, data, o = {}) {
   sceneDirty = true;
-  if (kind === "cloth" && focusRun !== data.run) {
-    focusRun = data.run;
+  if (kind === "cloth") {
+    const gr = groupOf(data.run);
+    focusRun = gr ? gr.row.run : data.run;
   }
+  if (!o.back && selected && !(selected.kind === kind && selected.data === data))
+    pageHistory = [...pageHistory, selected].slice(-24);
   radial = kind === "place" ? { path: data.path } : null;
   selected = { kind, data };
   if (kind === "cloth" || kind === "place") rebuild();
@@ -966,7 +1027,16 @@ function select(kind, data) {
   pendingFold++;
   if (kind === "place")
     document.querySelector("#focus").textContent = "@" + data.path;
+  lastReceipt = "";
   renderReceipt();
+  receipt.scrollTop = 0;
+  bench.scrollTop = 0;
+}
+function back() {
+  const prior = pageHistory.at(-1);
+  if (!prior) return;
+  pageHistory = pageHistory.slice(0, -1);
+  select(prior.kind, prior.data, { back: true });
 }
 function element(tag, value, className) {
   const el = document.createElement(tag);
@@ -986,18 +1056,287 @@ function row(key, value) {
 function tags(topics) {
   const box = element("div", undefined, "tags");
   for (const topic of list(topics)) {
-    const el = element("span", topic, "tag");
+    const rune = list(state?.heddles).find((h) => h.slug === topic)?.rune;
+    const el = element("span", (rune ? rune + " " : "") + topic, "tag");
     el.style.color = color(topic);
     el.style.borderColor = color(topic) + "66";
     box.append(el);
   }
   receipt.append(box);
 }
-function button(label, callback) {
-  const el = element("button", label, "bench-action");
+function button(label, callback, className = "bench-action") {
+  const el = element("button", label, className);
   el.type = "button";
   el.onclick = callback;
   receipt.append(el);
+  return el;
+}
+function link(label, callback) {
+  return button(label, callback, "bench-link");
+}
+// The feed's page endpoint: read once per address; until it answers, the
+// bench renders what the contract attests and says so — never invents.
+const PENDING = "— reads more when the feed lands";
+const pages = new Map();
+function page(kind, id) {
+  // Asked only once the frame advertises the kind (`pages: [...]`): a feed
+  // without the endpoint is never probed into a console full of 404s.
+  if (dev || id == null || !list(state?.pages).includes(kind)) return null;
+  const url = `/loom/page/${kind}?id=${encodeURIComponent(id)}`;
+  const known = pages.get(url);
+  if (known) return known.status === "ok" ? known.body : null;
+  pages.set(url, { status: "loading" });
+  fetch(url)
+    .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+    .then((body) => {
+      pages.set(url, { status: "ok", body });
+      lastReceipt = "";
+      renderReceipt();
+    })
+    .catch(() => pages.set(url, { status: "absent" }));
+  return null;
+}
+function pending(label) {
+  receipt.append(element("p", label ? `${label} ${PENDING}` : PENDING, "pending"));
+}
+function head(eyebrow, title, reading) {
+  const top = element("div", undefined, "page-top");
+  const backButton = element("button", "‹ back", "bench-back");
+  backButton.type = "button";
+  backButton.disabled = !pageHistory.length;
+  backButton.onclick = back;
+  top.append(backButton, element("span", eyebrow, "eyebrow"));
+  receipt.append(top);
+  receipt.append(element("h1", title));
+  receipt.append(element("p", reading, "reading"));
+}
+function extras(body, skip) {
+  // Fields the feed page carries that this bench does not yet lay out.
+  if (!body) return;
+  const rest = Object.entries(body).filter(
+    ([k, v]) => !skip.includes(k) && v != null && typeof v !== "object",
+  );
+  if (!rest.length) return;
+  section("From the feed");
+  for (const [k, v] of rest) row(k.replaceAll("_", " "), v);
+}
+const prUrl = (n) => `https://github.com/${state.repo}/pull/${n}`;
+function beadList(beads) {
+  const box = element("div", undefined, "compact-list");
+  receipt.append(box);
+  for (const b of beads.slice(-12).reverse()) {
+    const el = element("button", undefined, "bench-row");
+    el.type = "button";
+    el.append(
+      element("span", String(b.at || "?").slice(11, 19)),
+      element("span", known(b.act)),
+      element("span", list(b.places).at(-1) || b.place_kind || "—"),
+    );
+    el.onclick = () => select("bead", b);
+    box.append(el);
+  }
+}
+function card(run) {
+  section("Now", run.card?.now);
+  section("Plan");
+  for (const item of list(run.card?.plan))
+    receipt.append(element("p", (item.done ? "✓ " : "· ") + item.text, item.done ? "tick" : ""));
+  section("Vector");
+  for (const v of list(run.card?.vector)) receipt.append(element("p", v));
+  section("Ledger");
+  receipt.append(element("pre", list(run.card?.ledger).join("\n") || "unknown"));
+}
+function passPage(data) {
+  const live = data.run === state.run?.id;
+  const body = page("pass", data.run);
+  head(live ? "pass · this run" : "pass", data.name || data.run, "a pass: one run's work, from its card to what it produced");
+  tags(data.topics);
+  if (body?.contract) receipt.append(element("pre", body.contract, "excerpt"));
+  else pending("contract excerpt");
+  row("body", [data.shell, data.core].map(known).join(" / "));
+  row("started → ended", `${known(data.started)} → ${data.ended || "open"}`);
+  const minutes = minutesOf(data);
+  row("duration", minutes == null ? "unknown" : `${minutes} min`);
+  row("run", data.run);
+  if (data.parent) {
+    const parent = list(state.cloth?.rows).find((r) => r.run === data.parent);
+    if (parent) {
+      section("Dispatched by");
+      link(parent.name || parent.run, () => select("cloth", parent));
+    } else row("parent", data.parent);
+  }
+  if (live && state.run) card(state.run);
+  section("Produce");
+  const prs = list(body?.prs || data.prs);
+  if (prs.length)
+    for (const pr of prs) {
+      const n = typeof pr === "object" ? pr.number : pr;
+      const a = element("a", `PR #${n}${pr?.title ? " · " + pr.title : ""}`, "bench-link");
+      a.href = prUrl(n);
+      a.target = "_blank";
+      a.rel = "noreferrer";
+      receipt.append(a);
+    }
+  else receipt.append(element("p", "no PR"));
+  if (Array.isArray(body?.commits))
+    for (const c of body.commits) receipt.append(element("p", `${String(c.sha || c).slice(0, 8)} ${c.subject || ""}`, "mono"));
+  else row("knots", `${known(data.knots)}${Array.isArray(data.knots) ? "" : " · commits"}`), pending("commit shas");
+  if (Array.isArray(body?.pages)) for (const pg of body.pages) receipt.append(element("p", String(pg.path || pg)));
+  else row("pages", data.pages);
+  row("tokens", number(data.tokens));
+  const strands = list(state.cloth?.rows).filter((r) => r.parent === data.run && r.run !== data.run);
+  section(`Strands · ${strands.length}`);
+  for (const r of strands) link(`⌁ ${String(r.name || r.run).split(/:\s/)[0]} · ${strandStatus(r)}`, () => select("cloth", r));
+  if (!strands.length) receipt.append(element("p", "none"));
+  section("Last boundaries");
+  const beads = live ? list(state.beads) : list(body?.beads || data.beads);
+  if (beads.length) beadList(beads);
+  else pending();
+  extras(body, ["contract", "prs", "commits", "pages", "beads"]);
+}
+function beadPage(data) {
+  const beads = list(state.beads),
+    index = beads.findIndex((b) => beadKey(b) === beadKey(data));
+  const body = page("bead", data.at);
+  head(
+    "bead",
+    `${known(data.act)} · ${String(data.at || "?").slice(11, 19)}Z · ${data.place_kind || "file"}`,
+    "a boundary: what the shuttle did, where, and what it cost",
+  );
+  const nav = element("div", undefined, "page-nav");
+  for (const [label, i] of [
+    ["‹ prev", index - 1],
+    ["next ›", index + 1],
+  ]) {
+    const b = element("button", label, "bench-back");
+    b.type = "button";
+    b.disabled = index < 0 || i < 0 || i >= beads.length;
+    b.onclick = () => select("bead", beads[i], { back: true });
+    nav.append(b);
+  }
+  nav.append(element("span", index < 0 ? "" : `${index + 1} / ${beads.length}`, "eyebrow"));
+  receipt.append(nav);
+  tags(data.topics);
+  section("Command");
+  receipt.append(element("pre", body?.command || data.detail || "unknown", "code"));
+  if (body?.result_bytes != null || data.result_bytes != null) row("result", `${number(body?.result_bytes ?? data.result_bytes)} bytes`);
+  else pending("result size");
+  section("Context");
+  const windowTokens = body?.window_tokens ?? null,
+    of = windowTokens || data.ctx_after;
+  const bar = element("div", undefined, "delta-bar");
+  const fill = element("span");
+  fill.style.width = `${Math.max(1, Math.min(100, ((data.delta || 0) / (of || 1)) * 100))}%`;
+  bar.append(fill);
+  receipt.append(bar);
+  receipt.append(
+    element(
+      "p",
+      `+${number(data.delta)} → ${number(data.ctx_after)} in the scroll · bar against ${windowTokens ? "the window" : "the scroll (no window size attested)"}`,
+      "mono",
+    ),
+  );
+  section("Places");
+  for (const path of list(data.places)) link(path, () => select("place", { path }));
+  if (!list(data.places).length) receipt.append(element("p", "none attested"));
+  section("The chip at this boundary");
+  if (body?.chip) receipt.append(element("pre", body.chip, "code"));
+  else pending();
+  extras(body, ["command", "result_bytes", "window_tokens", "chip"]);
+}
+function itemPage(data) {
+  const body = page("item", data.id);
+  head(`item · ${data.id}`, data.title, "a warp item: intent hanging on its topics, waiting for a pass");
+  tags(data.topics);
+  row("type", data.type);
+  row("state", data.state);
+  row("taken", data.taken);
+  section("Needs");
+  for (const need of list(data.needs)) {
+    const item = list(state.warp?.items).find((w) => w.id === need);
+    item ? link(`${need} · ${item.title}`, () => select("warp", item)) : receipt.append(element("p", need));
+  }
+  if (!list(data.needs).length) receipt.append(element("p", "none"));
+  section("Refs");
+  if (Array.isArray(body?.refs)) for (const r of body.refs) receipt.append(element("p", String(r.label || r.path || r)));
+  else pending();
+  section("Prompt");
+  if (body?.prompt) receipt.append(element("pre", body.prompt));
+  else pending();
+  if (body?.body) {
+    section("Body");
+    receipt.append(element("pre", body.body));
+  }
+  const topic = list(data.topics)[0];
+  const siblings = list(state.warp?.items).filter((w) => w.id !== data.id && topic && list(w.topics).includes(topic));
+  section(`On ${topic || "no topic"} · ${siblings.length}`);
+  for (const w of siblings.slice(0, 12)) link(`${w.id} · ${w.title} · ${known(w.state)}`, () => select("warp", w));
+  extras(body, ["refs", "prompt", "body"]);
+}
+function placePage(data) {
+  const body = page("place", data.path);
+  head("place", data.path, "a place: everything the cloth knows happened here");
+  const p = mergedPlaces().find((p) => p.path === data.path) || data;
+  tags(p?.topics);
+  row("kind", data.kind || (String(data.path).includes(":") ? data.path.split(":")[0] : "file"));
+  row("heat", p?.heat);
+  row("knots", p?.knots);
+  row("last", p?.last);
+  section("At this place");
+  const actionsRow = element("div", undefined, "action-row");
+  for (const action of ["fold", "explain", "fix", "test", "split", "read"]) {
+    const b = element("button", action, "bench-action inline");
+    b.type = "button";
+    b.onclick = () => actions[action]();
+    actionsRow.append(b);
+  }
+  receipt.append(actionsRow);
+  const passes = list(state.cloth?.rows).filter((r) => (passPlaces(r) || []).includes(data.path));
+  section(`Passes that touched it · ${passes.length}`);
+  for (const r of passes.slice(-12)) link(r.name || r.run, () => select("cloth", r));
+  if (!passes.length) pending();
+  const beads = list(state.beads).filter((b) => list(b.places).includes(data.path) && matches(b.topics));
+  section(`Beads · ${beads.length}`);
+  if (beads.length) beadList(beads);
+  else receipt.append(element("p", "none in this run"));
+  const folds = list(state.bench?.folds).filter((f) => f.place === data.path);
+  section("Fold", folds.length ? undefined : "No fold at this place yet.");
+  for (const fold of folds) button(`${fold.path} · ${list(fold.marks).join(", ")}`, () => openFold(fold));
+  extras(body, []);
+}
+function heddlePages() {
+  const shown = list(state.heddles).filter((h) => lifted.has(h.slug));
+  head(
+    lifted.size ? (lifted.size > 1 ? "intersection" : "heddle") : "heddles",
+    lifted.size ? "The shed is raised" : "The whole cloth",
+    lifted.size ? "a heddle: a topic, its signature and what it has lit" : "no rune lifted — lift one to raise its work",
+  );
+  tags([...lifted]);
+  section(
+    "Selection",
+    lifted.size
+      ? "Only rows carrying every lifted topic are in the window."
+      : "No layers lifted. All measured rows are visible.",
+  );
+  row("places", mergedPlaces().length);
+  row("passes", clothRows().length);
+  row("items", canvas.dataset.warp);
+  row("beads", list(state.beads).filter((b) => matches(b.topics)).length);
+  for (const h of shown) {
+    const body = page("heddle", h.slug);
+    section(`${h.rune} / ${h.slug}`);
+    row("lit", h.lit);
+    row("last lit", h.last_lit);
+    const has = (x) => list(x.topics).includes(h.slug);
+    row(
+      "counts",
+      `${list(state.tree?.places).filter(has).length} places · ${list(state.cloth?.rows).filter(has).length} passes · ${list(state.warp?.items).filter(has).length} items · ${list(state.beads).filter(has).length} beads`,
+    );
+    for (const [key, value] of Object.entries(h.signature || {})) row(key, list(value).join(", ") || "none");
+    if (Array.isArray(body?.rows)) for (const r of body.rows.slice(-8)) receipt.append(element("p", typeof r === "string" ? r : JSON.stringify(r), "mono"));
+    else pending("the index's last rows");
+  }
+  button("Open the shuttle’s card", () => select("run"));
 }
 function renderReceipt() {
   if (!state) return;
@@ -1008,138 +1347,49 @@ function renderReceipt() {
     state.hud,
     [...lifted],
     state.bench,
+    pageHistory.length,
   ]);
   if (signature === lastReceipt) return;
   lastReceipt = signature;
   receipt.replaceChildren();
   const { kind, data } = selected;
-  receipt.append(
-    element("p", dev ? "FIXTURE / illustrative data" : state.repo, "eyebrow"),
-  );
+  if (dev) receipt.append(element("p", "FIXTURE / illustrative data", "eyebrow"));
   if (kind === "run") {
     const run = state.run;
-    receipt.append(element("h1", run?.name || "No live pass"));
     if (!run) {
+      head("pass", "No live pass", "nothing is weaving right now");
       section("The shuttle", known(state.shuttle?.state));
       return;
     }
-    tags(run.topic ? [run.topic] : []);
-    row("body", [run.shell, run.core].map(known).join(" / "));
-    section("Now", run.card?.now);
-    section("Plan");
-    for (const item of list(run.card?.plan))
-      receipt.append(
-        element(
-          "p",
-          (item.done ? "✓ " : "· ") + item.text,
-          item.done ? "tick" : "",
-        ),
-      );
-    section("Vector");
-    for (const v of list(run.card?.vector)) receipt.append(element("p", v));
-    section("Ledger");
-    receipt.append(
-      element("pre", list(run.card?.ledger).join("\n") || "unknown"),
-    );
+    const liveRow = list(state.cloth?.rows).find((r) => r.run === run.id) || {
+      run: run.id,
+      name: run.name,
+      shell: run.shell,
+      core: run.core,
+      started: run.started,
+      topics: run.topic ? [run.topic] : [],
+    };
+    passPage({ ...liveRow, name: run.name || liveRow.name });
     section("Context");
     row("in the scroll", number(state.hud?.ctx_tokens));
-    button("Inspect the latest boundary", () => {
-      const b = list(state.beads)
-        .filter((b) => matches(b.topics))
-        .at(-1);
-      if (b) select("bead", b);
-    });
-  } else if (kind === "heddles") {
-    receipt.append(
-      element("h1", lifted.size ? "The shed is raised" : "The whole cloth"),
-    );
-    tags([...lifted]);
-    section(
-      "Selection",
-      lifted.size
-        ? "Only rows carrying every lifted topic are in the window."
-        : "No layers lifted. All measured rows are visible.",
-    );
-    row("places", mergedPlaces().length);
-    row(
-      "passes",
-      list(state.cloth?.rows).filter((r) => matches(r.topics)).length,
-    );
-    for (const h of list(state.heddles).filter((h) => lifted.has(h.slug))) {
-      section(h.rune + " / " + h.slug);
-      row("last lit", h.last_lit);
-      for (const [key, value] of Object.entries(h.signature || {}))
-        row(key, list(value).join(", ") || "none");
-    }
-    button("Open the shuttle’s card", () => select("run"));
-  } else if (kind === "bead") {
-    receipt.append(element("h1", known(data.act) + " / boundary"));
-    tags(data.topics);
-    section("Block", data.detail);
-    row("at", data.at);
-    row("context", number(data.ctx_after));
-    row("delta", number(data.delta));
-    section("Places");
-    for (const path of list(data.places))
-      button(path, () => select("place", { path }));
-  } else if (kind === "cloth") {
-    receipt.append(element("h1", data.name || data.run));
-    tags(data.topics);
-    row("body", [data.shell, data.core].map(known).join(" / "));
-    row("started", data.started);
-    row("ended", data.ended);
-    row(
-      "PRs",
-      list(data.prs)
-        .map((n) => "#" + n)
-        .join(" · ") || "none",
-    );
-    row("knots", data.knots);
-    row("pages", data.pages);
-    row("tokens", number(data.tokens));
-    row("parent", data.parent);
-  } else if (kind === "place") {
-    receipt.append(element("h1", data.path));
-    const p = mergedPlaces().find((p) => p.path === data.path);
-    tags(p?.topics);
-    row("heat", p?.heat);
-    row("knots", p?.knots);
-    row("last", p?.last);
-    section("At this place");
-    for (const action of ["fold", "explain", "fix", "test", "split", "read"])
-      button(action, () => actions[action]());
-    const folds = list(state.bench?.folds).filter((f) => f.place === data.path);
-    section("Fold", folds.length ? undefined : "No fold at this place yet.");
-    for (const fold of folds)
-      button(`${fold.path} · ${list(fold.marks).join(", ")}`, () =>
-        openFold(fold),
-      );
-    section("Boundaries");
-    for (const b of list(state.beads)
-      .filter((b) => list(b.places).includes(data.path) && matches(b.topics))
-      .slice(-12))
-      button(`${known(b.act)} · ${known(b.at)}`, () => select("bead", b));
-  } else if (kind === "warp") {
-    receipt.append(element("h1", data.title));
-    tags(data.topics);
-    row("id", data.id);
-    row("state", data.state);
-    row("type", data.type);
-    row("taken", data.taken);
-    row("needs", list(data.needs).join(", ") || "none");
-  } else if (kind === "goal") {
-    receipt.append(element("h1", data.title));
-    row("goal", data.id);
+  } else if (kind === "heddles") heddlePages();
+  else if (kind === "bead") beadPage(data);
+  else if (kind === "cloth") passPage(data);
+  else if (kind === "place") placePage(data);
+  else if (kind === "warp") itemPage(data);
+  else if (kind === "goal") {
+    head(`goal · ${data.id}`, data.title, "a goal: what the warp is for");
     section("Metric", data.metric);
   } else if (kind === "strand") {
-    receipt.append(element("h1", data.title));
+    const row0 = list(state.cloth?.rows).find((r) => r.run === data.id);
+    if (row0) passPage(row0);
+    else head("thread", data.title, "a thread out from this pass");
+    section("Thread");
     row("thread", data.id);
     row("status", data.status);
     row("spent", number(data.spent));
     row("allowance", number(data.allowance));
-    section("Places", list(data.places).join("\n") || "none attested");
-    if (askOf(data) != null)
-      button(`ask +${compactNumber(askOf(data))} → grant`, actions.grant);
+    if (askOf(data) != null) button(`ask +${compactNumber(askOf(data))} → grant`, actions.grant);
   }
 }
 async function openFold(fold) {
@@ -1287,7 +1537,7 @@ function drawHeddles() {
       lit = clamp(h.lit),
       c = color(h.slug);
     const y = base - (raised ? 8 : 0);
-    runeRects.set(h.slug, { x: x - 6, y: y - size - 2, w: size + 12, h: size + 10 });
+    runeRects.set(h.slug, { x: x - 6, y: y - size - 2, w: size + 12, h: size + 10, cx: x + size / 2, cy: base - size / 2 });
     g.save();
     g.globalAlpha = lit > 0.05 ? 0.45 + lit * 0.55 : 0.55;
     text(h.rune || "?", x, y, lit > 0.05 ? c : INK.dark, size, Infinity, {
@@ -1317,6 +1567,7 @@ function drawHeddles() {
     hit(x - 6, base - size - 12, cell - 4, size + 36, "heddle", h.slug, "Lift " + h.slug);
   });
   if (!hed.length) text("No heddles yet", m, base - 10, INK.faint, 11);
+  canvas.dataset.runes = JSON.stringify(Object.fromEntries([...runeRects].map(([k, r]) => [k, [Math.round(r.cx), Math.round(r.cy)]])));
 }
 function drawWarp() {
   const { m, top, warp, cloth, compact } = layout;
@@ -1431,7 +1682,7 @@ function drawTree() {
     // Bloom twice: the hue, thin, then the bone core.
     if (node.path) dot(p.x, p.y, radius + 1.2, c, 12 + heat * 6);
     dot(p.x, p.y, radius, node.place?.heat == null && node.path ? INK.faint : INK.bone);
-    if (node.place?.knots > 0) {
+    if (node.place?.knots >= 2) {
       diamond(p.x + 8, p.y + 8, 2.4, INK.ice, focused ? 0.55 : 0.3);
     }
     if (node.label) {
@@ -1467,8 +1718,8 @@ function drawTree() {
       12,
       T.w - 30,
     );
-  const focused = railLayout().find((r) => r.focus)?.row;
-  if (focused && passPlaces(focused) === null)
+  const focused = railLayout().find((r) => r.focus);
+  if (focused && groupPlaces(focused) === null)
     text("Place history not attested for this pass", T.x + 12, T.y + 18, INK.faint, 9, T.w);
 }
 function drawFace() {
@@ -1750,8 +2001,23 @@ function minutesOf(row) {
   const s = (Date.parse(row.ended || state.at) - Date.parse(row.started)) / 60000;
   return Number.isFinite(s) ? Math.max(0, Math.round(s)) : null;
 }
+function strandStatus(r) {
+  const thread = list(state.hud?.strands).find((t) => t.id === r.run);
+  if (thread?.status) return thread.status;
+  return r.ended ? "ended " + clothTime(r.ended) : "open";
+}
+function drawRunes(topics, x, y, size, limitX) {
+  let cx = x;
+  for (const topic of topics) {
+    const rune = list(state.heddles).find((h) => h.slug === topic)?.rune || "·";
+    if (cx + size > limitX) break;
+    text(rune, cx, y, color(topic), size);
+    cx += size * 0.9 + 3;
+  }
+  return cx;
+}
 function drawCloth() {
-  const { m, right, cloth, compact, clothH } = layout,
+  const { m, right, cloth, compact, clothH, railY } = layout,
     entries = railLayout();
   regionRects.cloth = { x: m - 8, y: cloth - 2, w: right - m + 4, h: clothH };
   regionTitle("cloth", "the cloth", m, cloth + 14, right - m - 500, { readingWidth: right - m - 40 });
@@ -1765,27 +2031,37 @@ function drawCloth() {
     470,
     { align: "right" },
   );
-  const lineY = cloth + (compact ? 64 : 84),
-    ph = compact ? 62 : 84;
-  strokePath([{ x: m, y: lineY }, { x: right - 20, y: lineY }], INK.dark, 1.5, 1);
+  if (lifted.size) {
+    const runes = list(state.heddles)
+      .filter((h) => lifted.has(h.slug))
+      .map((h) => h.rune)
+      .join(" ∩ ");
+    text(`lifted ${runes}`, right - 20, cloth + (compact ? 27 : 30), INK.ice, 9, 200, { align: "right" });
+  }
+  strokePath([{ x: m, y: railY }, { x: right - 20, y: railY }], INK.dark, 1.5, 1);
   g.save();
   g.beginPath();
-  g.rect(m - 4, cloth + 28, right - m, clothH - 22);
+  g.rect(m - 4, cloth + 34, right - m, clothH - 34);
   g.clip();
   const visible = entries.filter((e) => e.x + e.w / 2 >= m && e.x - e.w / 2 <= right - 20);
+  const earlier = entries.filter((e) => e.x + e.w / 2 < m).length;
+  const liveRun = state.run?.id;
   for (const entry of visible) {
-    const { row, focus, x, w, scale } = entry;
+    const { row, strands, focus, x, w, kind } = entry;
     const topics = list(row.topics),
-      live = row.run === state.run?.id;
+      holdsLive = row.run === liveRun || strands.some((r) => r.run === liveRun);
     if (focus) {
       const x0 = x - w / 2,
-        y0 = lineY - ph / 2;
+        shownStrands = strands.slice(-(compact ? 2 : 3)),
+        stackH = shownStrands.length ? shownStrands.length * (compact ? 12 : 14) + 6 : 0,
+        ph = (compact ? 60 : 80) + stackH,
+        y0 = railY - (compact ? 26 : 32);
       bezel(x0, y0, w, ph, { edge: "#3b3327" });
       strokePath([{ x: x0 + 1, y: y0 + 1 }, { x: x0 + w - 1, y: y0 + 1 }], INK.ice, 1.5, 0.9, 6);
-      text(row.name || row.run, x0 + 12, y0 + (compact ? 17 : 21), INK.bone, compact ? 11 : 12, w - 24, { weight: 500 });
+      text(row.name || row.run, x0 + 12, y0 + (compact ? 16 : 20), INK.bone, compact ? 11 : 12, w - 24, { weight: 500 });
       let cx = x0 + 12;
-      const chipY = y0 + (compact ? 24 : 30),
-        chipH = compact ? 15 : 18;
+      const chipY = y0 + (compact ? 22 : 28),
+        chipH = compact ? 14 : 17;
       for (const topic of topics.slice(0, 4)) {
         const rune = list(state.heddles).find((h) => h.slug === topic)?.rune || "?";
         const label = topic.replace(/^the-/, "");
@@ -1795,66 +2071,97 @@ function drawCloth() {
         g.strokeStyle = color(topic) + "aa";
         g.strokeRect(cx + 0.5, chipY + 0.5, cw, chipH);
         text(rune, cx + 5, chipY + chipH - 4, color(topic), compact ? 11 : 12);
-        text(label, cx + 19, chipY + chipH - 5, INK.bone, 9, cw - 22);
+        text(label, cx + 19, chipY + chipH - 4, INK.bone, 9, cw - 22);
         cx += cw + 6;
       }
-      if (!topics.length) text("no topic stamped", cx, chipY + chipH - 5, INK.faint, 9);
+      if (!topics.length) text("no topic stamped", cx, chipY + chipH - 4, INK.faint, 9);
       const minutes = minutesOf(row);
-      const when = live
-        ? `now · this run · ${minutes ?? "?"} min`
-        : `${clothTime(row.started)} → ${row.ended ? clothTime(row.ended) : "open"} · ${minutes ?? "?"} min`;
-      const facts = `${known(row.shell)}/${known(row.core)} · ${known(row.knots)} knots · ${list(row.prs).length ? list(row.prs).length + " PR" + (list(row.prs).length > 1 ? "s" : "") : "no PR"}`;
-      const by = y0 + ph - (compact ? 9 : 12);
-      const ww = text(when, x0 + 12, by, live ? INK.amber : INK.bone, compact ? 9 : 10, w * 0.55);
+      const when =
+        row.run === liveRun
+          ? `now · this run · ${minutes ?? "?"} min`
+          : `${clothTime(row.started)} → ${row.ended ? clothTime(row.ended) : "open"} · ${minutes ?? "?"} min`;
+      const prs = list(row.prs).length;
+      const facts = `${known(row.shell)}/${known(row.core)} · ${known(row.knots)} knots · ${prs ? prs + " PR" + (prs > 1 ? "s" : "") : "no PR"}${strands.length ? ` · ${strands.length} strand${strands.length > 1 ? "s" : ""}` : ""}`;
+      const by = y0 + (compact ? 50 : 66);
+      const ww = text(when, x0 + 12, by, row.run === liveRun ? INK.amber : INK.bone, compact ? 9 : 10, w * 0.5);
       text(facts, x0 + 24 + ww, by, INK.faint, 9, w - ww - 36);
-      hit(x0, y0, w, ph, "cloth", row, row.name || row.run);
-    } else {
-      const r = 7 * scale + 2;
-      if (live) {
-        halo(x, lineY, 22, INK.amber, 0.35);
-        dot(x, lineY, r * 0.55, INK.amber, 10);
-      } else {
-        dot(x, lineY, Math.max(1.5, r * 0.4), INK.boneDim);
+      hit(x0, y0, w, by - y0 + 6, "cloth", row, row.name || row.run);
+      // Its strands, stacked under it.
+      let sy = by + (compact ? 14 : 18);
+      if (shownStrands.length) line(x0 + 12, sy - (compact ? 9 : 11), x0 + w - 12, sy - (compact ? 9 : 11), "#2a241b");
+      const extra = strands.length - shownStrands.length;
+      for (const r of shownStrands) {
+        const st = strandStatus(r),
+          on = r.run === liveRun || st === "live";
+        text("⌁", x0 + 14, sy, on ? INK.amber : INK.faint, 10);
+        text(String(r.name || r.run).split(/:\s/)[0], x0 + 28, sy, on ? INK.bone : INK.boneDim, 9, w - 150);
+        text(st, x0 + w - 12, sy, on ? INK.boneDim : INK.faint, 9, 110, { align: "right" });
+        hit(x0 + 8, sy - 10, w - 16, compact ? 12 : 14, "cloth", r, r.name || r.run);
+        sy += compact ? 12 : 14;
       }
-      if (topics.length)
-        topics.forEach((topic, i) => {
-          g.strokeStyle = color(topic);
-          g.globalAlpha = 0.85;
-          g.lineWidth = 1.5;
-          g.beginPath();
-          g.arc(x, lineY, r + 2, (i * Math.PI * 2) / topics.length + 0.12, ((i + 1) * Math.PI * 2) / topics.length - 0.12);
-          g.stroke();
-          g.globalAlpha = 1;
-        });
-      else ring(x, lineY, r + 2, INK.dark, 0.9);
-      if (list(row.prs).length) diamond(x, lineY - r - 8, 2.5, INK.ice, 0.7);
-      hit(x - Math.max(8, r + 4), lineY - 22, Math.max(16, (r + 4) * 2), 44, "cloth", row, row.name || row.run);
+      // The facts line counts every strand; the stack shows the latest.
+      void extra;
+    } else if (kind === "mini") {
+      const mh = compact ? 28 : 34,
+        y0 = railY - mh / 2,
+        x0 = x - w / 2;
+      g.save();
+      g.fillStyle = "rgba(16,13,9,0.92)";
+      g.fillRect(x0, y0, w, mh);
+      g.strokeStyle = holdsLive ? "#7a5a22" : "#2e271d";
+      g.strokeRect(x0 + 0.5, y0 + 0.5, w - 1, mh - 1);
+      g.restore();
+      const alpha = 0.55 + 0.45 * entry.scale;
+      g.globalAlpha = alpha;
+      text(row.name || row.run, x0 + 5, y0 + (compact ? 11 : 13), INK.bone, compact ? 8 : 9, w - 10);
+      const rx = drawRunes(topics.slice(0, 3), x0 + 5, y0 + mh - 5, compact ? 9 : 10, x0 + w - 18);
+      if (!topics.length) text("·", x0 + 5, y0 + mh - 5, INK.faint, 9);
+      if (strands.length)
+        text(`⌁${strands.length}`, x0 + w - 5, y0 + mh - 5, holdsLive ? INK.amber : INK.faint, 8, 30, { align: "right" });
+      else if (list(row.prs).length) diamond(x0 + w - 8, y0 + mh - 8, 2.5, INK.ice, 0.7);
+      g.globalAlpha = 1;
+      void rx;
+      hit(x0, y0, w, mh, "cloth", row, row.name || row.run);
+    } else {
+      const r = 3;
+      dot(x, railY, 1.6, holdsLive ? INK.amber : INK.boneDim);
+      topics.forEach((topic, i) => {
+        g.strokeStyle = color(topic);
+        g.lineWidth = 1.2;
+        g.beginPath();
+        g.arc(x, railY, r + 1.5, (i * Math.PI * 2) / topics.length + 0.15, ((i + 1) * Math.PI * 2) / topics.length - 0.15);
+        g.stroke();
+      });
+      // Strands as satellites on the collapsed halo.
+      strands.slice(0, 5).forEach((_, i) => dot(x + Math.cos(-Math.PI / 2 + i * 1.2) * 7, railY + Math.sin(-Math.PI / 2 + i * 1.2) * 7, 0.9, INK.faint));
+      hit(x - 6, railY - 12, 12, 24, "cloth", row, row.name || row.run);
     }
   }
   g.restore();
+
   // Time reads: three labels at most — the start, a middle, now.
   const focusEntry = entries.find((e) => e.focus);
   const small = visible.filter((e) => !e.focus);
   const picks = [];
   if (small.length) picks.push(small[0]);
   if (small.length > 2) picks.push(small[Math.floor(small.length / 2)]);
-  const liveEntry = visible.find((e) => e.row.run === state.run?.id);
+  const liveEntry = visible.find((e) => e.row.run === liveRun || e.strands.some((r) => r.run === liveRun));
   if (liveEntry && !liveEntry.focus) picks.push(liveEntry);
   else if (small.length > 1) picks.push(small.at(-1));
-  const labelY = lineY + ph / 2 + (compact ? 12 : 16);
-  let lastEnd = -Infinity;
+  const labelY = railY + (compact ? 26 : 32);
+  let lastEnd = earlier ? m + text(`← +${earlier} earlier`, m, labelY, INK.faint, 9) : -Infinity;
   for (const e of picks) {
-    const label = e.row.run === state.run?.id ? "now" : clothTime(e.row.started);
+    const label = e === liveEntry ? "now" : clothTime(e.row.started);
     g.font = font(9);
     const lw = g.measureText(label).width;
     const lx = Math.max(m, Math.min(right - 20 - lw, e.x - lw / 2));
     const overPlaque = focusEntry && lx + lw > focusEntry.x - focusEntry.w / 2 - 6 && lx < focusEntry.x + focusEntry.w / 2 + 6;
     if (lx < lastEnd + 24 || overPlaque) continue;
-    line(e.x, lineY + 8, e.x, labelY - 10, INK.dark);
+    line(e.x, railY + (compact ? 15 : 18), e.x, labelY - 10, INK.dark);
     text(label, lx, labelY, label === "now" ? INK.amber : INK.boneDim, 9);
     lastEnd = lx + lw;
   }
-  if (!entries.length) text("No passes in this shed", m, lineY + 4, INK.faint, 11);
+  if (!entries.length) text("No passes in this shed", m, railY + 4, INK.faint, 11);
 }
 function drawFooter() {
   const { m, right, consoleH } = layout;
@@ -1886,15 +2193,14 @@ function paintScene() {
 /* -------------------------------------------------------------- live ---- */
 function sweepAngle() {
   if (reduced.matches) return -Math.PI / 2;
-  // One rotation every four beats, eased within each beat.
-  const b = clock / BEAT,
-    i = Math.floor(b);
-  return -Math.PI / 2 + ((i + smooth(b - i)) * Math.PI) / 2;
+  // Constant angular velocity: one rotation per four beats on the animation
+  // clock. The beat modulates the wedge's brightness, never its angle.
+  return -Math.PI / 2 + (clock / (4 * BEAT)) * Math.PI * 2;
 }
 function sweepCenter() {
   return actorPoint() || point("") || null;
 }
-function drawSweepUnder(center, angle) {
+function drawSweepUnder(center, angle, pulse = 0.5) {
   const T = layout.tree;
   const R = Math.max(
     ...[
@@ -1948,12 +2254,12 @@ function drawSweepUnder(center, angle) {
     fall.addColorStop(1, "rgba(0,0,0,0.25)");
     s.fillStyle = fall;
     s.fillRect(0, 0, w, h);
-    g.globalAlpha = 0.6;
+    g.globalAlpha = 0.48 + 0.2 * pulse;
     g.drawImage(sweepCanvas, T.x, T.y, T.w, T.h);
     g.globalAlpha = 1;
     const wash = g.createConicGradient(angle - Math.PI / 2, center.x, center.y);
     wash.addColorStop(0, "rgba(242,177,52,0)");
-    wash.addColorStop(0.249, "rgba(242,177,52,0.13)");
+    wash.addColorStop(0.249, `rgba(242,177,52,${(0.09 + 0.07 * pulse).toFixed(3)})`);
     wash.addColorStop(0.25, "rgba(242,177,52,0)");
     wash.addColorStop(1, "rgba(242,177,52,0)");
     g.fillStyle = wash;
@@ -2368,7 +2674,7 @@ function draw(timestamp) {
   if (windowOn) {
     center = sweepCenter();
     angle = sweepAngle();
-    if (center) R = drawSweepUnder(center, angle);
+    if (center) R = drawSweepUnder(center, angle, pulse);
   }
   g.drawImage(sceneCanvas, 0, 0, width, height);
   if (state) {
@@ -2388,9 +2694,8 @@ function draw(timestamp) {
     }
     drawFaceLive(pulse);
     if (isRevealed("cloth")) {
-      const live = railLayout().find((r) => r.row.run === state.run?.id && !r.focus);
-      const lineY = layout.cloth + (layout.compact ? 64 : 84);
-      if (live && live.x > layout.m && live.x < layout.right - 20) halo(live.x, lineY, 16 + pulse * 8, INK.amber, 0.2);
+      const live = railLayout().find((r) => !r.focus && (r.row.run === state.run?.id || r.strands.some((x) => x.run === state.run?.id)));
+      if (live && live.x > layout.m && live.x < layout.right - 20) halo(live.x, layout.railY, 16 + pulse * 8, INK.amber, 0.2);
     }
     tooltip();
     drawRadial();
@@ -2425,7 +2730,7 @@ canvas.addEventListener("pointermove", (event) => {
         ? treeNodes.find((n) => n.path === hovered.data.path)
         : null;
   clearTimeout(expandTimer);
-  if (node?.hiddenBelow > 0 && expanded !== node.path)
+  if (!lifted.size && node?.hiddenBelow > 0 && expanded !== node.path)
     expandTimer = setTimeout(() => {
       expanded = node.path;
       rebuild();
@@ -2488,6 +2793,7 @@ document.addEventListener("keydown", (event) => {
     warpScroll = 0;
     expanded = null;
     selected = { kind: "run" };
+    pageHistory = [];
     document.querySelector("#focus").textContent = "@shuttle";
     rebuild();
     renderReceipt();
