@@ -1,0 +1,33 @@
+{
+  "at": "2026-09-16T15:54:06Z",
+  "repo": "empty-project",
+  "run": null,
+  "shuttle": {
+    "state": "released"
+  },
+  "hud": {
+    "strands": [],
+    "spend": null
+  },
+  "warp": {
+    "items": [],
+    "goals": []
+  },
+  "heddles": [],
+  "beads": [],
+  "tree": {
+    "repo": [],
+    "home": {
+      "places": []
+    }
+  },
+  "bench": {
+    "folds": []
+  },
+  "cloth": {
+    "rows": []
+  },
+  "_fixture": {
+    "note": "Empty project; fuel and pack deliberately absent."
+  }
+}
