@@ -2284,7 +2284,7 @@ function drawCloth() {
   regionTitle("cloth", "the cloth", m, cloth + 14, right - m - 500, { readingWidth: right - m - 40 });
   hit(right - 250, cloth + 2, 230, 18, "legend", null, "Open legend");
   text(
-    `${paused ? "Ⅱ beat paused" : reduced.matches ? "reduced motion" : "600 ms / beat"} · ← → focus · ? replay the reading · L legend · Space pause`,
+    `${paused ? "Ⅱ beat paused" : reduced.matches ? "reduced motion" : "600 ms / beat"} · S scan: ${scanMode} · ← → focus · ? replay · L legend · Space pause`,
     right - 20,
     cloth + 14,
     paused ? INK.amber : INK.faint,
@@ -2457,8 +2457,29 @@ function paintScene() {
  * raises a hairline thread from it into the tree, through that run's trail
  * places in order. Nothing on the tree lights unless a thread reaches it. */
 const SCAN_FALLBACK_MS = 10000;
-const scanOff = params.get("scan") === "off";
-const scan = { tick: null, tickAt: null, period: SCAN_FALLBACK_MS, prevX: null };
+const SCAN_MODES = ["up", "root", "cloth", "off"];
+// Default `up`; ?scan= selects, S cycles, the choice persists.
+let scanMode = (() => {
+  const asked = params.get("scan");
+  if (SCAN_MODES.includes(asked)) return asked;
+  try {
+    const kept = localStorage.getItem("loom.scan");
+    if (SCAN_MODES.includes(kept)) return kept;
+  } catch {}
+  return "up";
+})();
+function setScanMode(mode) {
+  scanMode = mode;
+  scan.prevX = scan.prevY = scan.prevR = null;
+  trailLit.clear();
+  nodePings.clear();
+  sceneDirty = true;
+  try {
+    localStorage.setItem("loom.scan", mode);
+  } catch {}
+}
+const nodePings = new Map();
+const scan = { tick: null, tickAt: null, period: SCAN_FALLBACK_MS, prevX: null, prevY: null, prevR: null };
 const trailLit = new Map();
 let tickPulse = null;
 function noteTick(next) {
@@ -2469,13 +2490,55 @@ function noteTick(next) {
   scan.tickAt = clock;
   tickPulse = { born: clock };
 }
+function scanPhase() {
+  return scan.tickAt != null
+    ? clamp((clock - scan.tickAt) / scan.period)
+    : (((clock % scan.period) + scan.period) % scan.period) / scan.period;
+}
 function scanX() {
   const { m, right } = layout;
-  const phase =
-    scan.tickAt != null
-      ? clamp((clock - scan.tickAt) / scan.period)
-      : (((clock % scan.period) + scan.period) % scan.period) / scan.period;
-  return m + phase * (right - 20 - m);
+  return m + scanPhase() * (right - 20 - m);
+}
+function pingNode(path) {
+  nodePings.set(path, clock);
+  if (nodePings.size > 240) nodePings.delete(nodePings.keys().next().value);
+}
+// A node lights as the front crosses it, and decays behind.
+function drawNodePings() {
+  const T = layout.tree;
+  g.save();
+  g.beginPath();
+  g.rect(T.x, T.y, T.w, T.h);
+  g.clip();
+  let lit = 0;
+  for (const [path, at] of nodePings) {
+    const age = (clock - at) / 450;
+    if (age >= 1) {
+      nodePings.delete(path);
+      continue;
+    }
+    const p = point(path);
+    if (!p) continue;
+    lit++;
+    const node = treeNodes.find((n) => n.path === path);
+    const hue = node?.home ? INK.ice : INK.amber;
+    g.globalAlpha = (1 - age) * 0.8;
+    dot(p.x, p.y, 2.4, hue, 10);
+    g.globalAlpha = 1;
+    ring(p.x, p.y, 3 + age * 10, hue, (1 - age) * 0.5, 1);
+  }
+  g.restore();
+  canvas.dataset.pings = String(lit);
+}
+// The lowest place a run's trail touches: where an upward front meets it.
+function trailFloor(entry) {
+  let y = -Infinity;
+  for (const row of [entry.row, ...entry.strands])
+    for (const path of trailPaths(row, false)) {
+      const p = targetPositions.get(path);
+      if (p && p.y > y) y = p.y;
+    }
+  return y;
 }
 // A run's trail: the feed's `trail` when it lands; until then a live
 // strand's places, the seat's last eight, a row's attested places, or the
@@ -2565,7 +2628,7 @@ function drawRisenThreads() {
   // At rest the seat keeps a faint hairline through its last places.
   const seatTrail = actorHistory().map((p) => point(p)).filter(Boolean);
   if (seatTrail.length > 1) hairline(seatTrail, INK.amber, 0.18, 0);
-  if (scanOff || reduced.matches) {
+  if (scanMode === "off" || reduced.matches) {
     // No traverse: a plaque shows its thread on hover.
     const row = hovered?.kind === "cloth" ? hovered.data : null;
     const entry = row ? railLayout().find((e) => e.row.run === row.run || e.strands.some((r) => r.run === row.run)) : null;
@@ -2593,11 +2656,11 @@ function drawRisenThreads() {
   }
   g.restore();
   canvas.dataset.trailsLit = String(lit);
-  canvas.dataset.scan = scanOff ? "off" : "on";
+  canvas.dataset.scan = scanMode;
 }
 let warpFlash = null;
-function drawScanLine() {
-  if (scanOff || reduced.matches || !isRevealed("cloth")) return;
+function drawScanCloth() {
+  if (reduced.matches || !isRevealed("cloth")) return;
   const x = scanX(),
     // Over the warp column the line runs its full height: it is the topmost
     // thing wherever it exists, and nothing it passes may occlude it.
@@ -2647,6 +2710,103 @@ function drawScanLine() {
     const age = (clock - t.at) / 300;
     if (age >= 1) continue;
     ring(t.x, layout.railY, 6 + age * 14, INK.amber, (1 - age) * 0.7, 1);
+  }
+}
+function weftY() {
+  const root = point("") || { y: layout.tree.y + layout.tree.h - 30 };
+  return root.y;
+}
+// `up` — a wavefront rising from the weft to the top of the window: what it
+// measures is distance from the root.
+function drawScanUp() {
+  const T = layout.tree,
+    phase = scanPhase(),
+    base = weftY(),
+    y = base - (base - T.y) * phase;
+  if (!paused && scan.prevY != null && y < scan.prevY) {
+    for (const node of treeNodes) {
+      if (node.root) continue;
+      const p = targetPositions.get(node.path);
+      if (p && p.y <= scan.prevY && p.y > y) pingNode(node.path);
+    }
+    // A run's thread rises when the front reaches its trail's lowest place.
+    for (const entry of railLayout()) {
+      if (entry.x < layout.m || entry.x > layout.right - 20) continue;
+      const floor = trailFloor(entry);
+      if (floor > -Infinity && floor <= scan.prevY && floor > y) raise(entry);
+    }
+  }
+  if (!paused) scan.prevY = y;
+  g.save();
+  g.beginPath();
+  g.rect(T.x, T.y, T.w, T.h);
+  g.clip();
+  const wake = g.createLinearGradient(0, y + 60, 0, y);
+  wake.addColorStop(0, "rgba(242,177,52,0)");
+  wake.addColorStop(1, "rgba(242,177,52,0.1)");
+  g.fillStyle = wake;
+  g.fillRect(T.x, y, T.w, 60);
+  strokePath([{ x: T.x, y }, { x: T.x + T.w, y }], INK.amber, 1, 0.7, 6);
+  g.restore();
+  canvas.dataset.scanY = String(Math.round(y));
+}
+// `root` — the same front as a half-circle expanding from the root.
+function drawScanRoot() {
+  const T = layout.tree,
+    phase = scanPhase(),
+    repo = point("") || { x: T.x + T.w / 2, y: T.y + T.h - 30 },
+    home = layout.hasHome ? point("home:") : null;
+  const reach = Math.hypot(T.w, T.h),
+    r = reach * phase;
+  const dist = (p, o) => Math.hypot(p.x - o.x, p.y - o.y);
+  if (!paused && scan.prevR != null && r > scan.prevR) {
+    for (const node of treeNodes) {
+      if (node.root) continue;
+      const p = targetPositions.get(node.path);
+      if (!p || p.y > (node.home && home ? home.y : repo.y) + 4) continue;
+      const d = dist(p, node.home && home ? home : repo) * (node.home ? 1 / 0.6 : 1);
+      if (d > scan.prevR && d <= r) pingNode(node.path);
+    }
+  }
+  if (!paused) scan.prevR = r;
+  g.save();
+  g.beginPath();
+  g.rect(T.x, T.y, T.w, T.h);
+  g.clip();
+  for (const [origin, hue, scale] of [
+    [repo, INK.amber, 1],
+    ...(home ? [[home, INK.ice, 0.6]] : []),
+  ]) {
+    const rr = r * scale;
+    g.save();
+    g.globalAlpha = 0.6;
+    g.strokeStyle = hue;
+    g.lineWidth = 1;
+    g.shadowColor = hue;
+    g.shadowBlur = 6;
+    g.beginPath();
+    g.arc(origin.x, origin.y, Math.max(1, rr), Math.PI, Math.PI * 2);
+    g.stroke();
+    g.restore();
+    // A short wake inside the front.
+    const wake = g.createRadialGradient(origin.x, origin.y, Math.max(1, rr - 46), origin.x, origin.y, Math.max(2, rr));
+    wake.addColorStop(0, "rgba(242,177,52,0)");
+    wake.addColorStop(1, hue === INK.ice ? "rgba(143,211,255,0.08)" : "rgba(242,177,52,0.09)");
+    g.fillStyle = wake;
+    g.beginPath();
+    g.arc(origin.x, origin.y, Math.max(2, rr), Math.PI, Math.PI * 2);
+    g.fill();
+  }
+  g.restore();
+  canvas.dataset.scanR = String(Math.round(r));
+}
+function drawScan() {
+  if (scanMode === "off" || reduced.matches) return;
+  if (scanMode === "cloth") drawScanCloth();
+  else {
+    if (scanMode === "up") drawScanUp();
+    else drawScanRoot();
+    drawNodePings();
   }
 }
 function blockRect(i) {
@@ -2802,7 +2962,7 @@ function drawFaceLive(pulse) {
     }
   }
   // With the scan off, the heartbeat shows on the face instead.
-  if ((scanOff || reduced.matches) && tickPulse && box && !reduced.matches) {
+  if (scanMode === "off" && tickPulse && box && !reduced.matches) {
     const age = (clock - tickPulse.born) / 700;
     if (age < 1) ring(box.x + box.w / 2, box.y + box.h / 2, box.w * 0.4 + age * 26, INK.amber, (1 - age) * 0.5, 1.2);
     else tickPulse = null;
@@ -3010,7 +3170,7 @@ function draw(timestamp) {
     if (windowOn) drawRisenThreads();
     tooltip();
     drawRadial();
-    drawScanLine();
+    drawScan();
   }
   applyGlitches();
   requestAnimationFrame(draw);
@@ -3114,6 +3274,9 @@ document.addEventListener("keydown", (event) => {
   } else if (event.key === "?") {
     event.preventDefault();
     replayReveal();
+  } else if (event.key === "s" || event.key === "S") {
+    event.preventDefault();
+    setScanMode(SCAN_MODES[(SCAN_MODES.indexOf(scanMode) + 1) % SCAN_MODES.length]);
   } else if (event.key === "l" || event.key === "L") {
     event.preventDefault();
     legend.open ? legend.close() : legend.showModal();

@@ -205,6 +205,16 @@ for (const [w, h] of [
     path: resolve(output, "live-face-close.png"),
     clip: { x: 1340, y: 8, width: 564, height: 470 },
   });
+  await page.close();
+}
+// `cloth`: the line runs the weft, plaques raise threads, and it stays the
+// topmost thing it passes.
+{
+  const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+  observe(page);
+  await page.goto(base + "/loom/?scan=cloth");
+  await page.locator("#receipt h1").waitFor({ state: "attached" });
+  await page.waitForTimeout(SETTLE);
   // Mid-traverse: the scan crosses a plaque and a thread rises from it.
   let lit = 0;
   for (let i = 0; i < 90 && lit < 1; i++) {
@@ -225,6 +235,32 @@ for (const [w, h] of [
   }
   assert.ok(overWarp, "the scan enters over the warp column");
   await page.screenshot({ path: resolve(output, "live-scan-over-warp-1920x1080.png"), clip: { x: 0, y: 150, width: 820, height: 800 } });
+  await page.close();
+}
+// The two fronts: `up` measures depth from the weft, `root` radial distance.
+for (const mode of ["up", "root"]) {
+  const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+  observe(page);
+  await page.goto(`${base}/loom/?scan=${mode}`);
+  await page.locator("#receipt h1").waitFor({ state: "attached" });
+  let pings = 0;
+  for (let i = 0; i < 80 && pings < 2; i++) {
+    await page.waitForTimeout(250);
+    pings = Number(await page.evaluate(() => document.querySelector("#loom").dataset.pings || 0));
+  }
+  assert.equal(await page.evaluate(() => document.querySelector("#loom").dataset.scan), mode);
+  assert.ok(pings >= 2, `the ${mode} front lights nodes as it crosses them`);
+  await page.screenshot({ path: resolve(output, `live-scan-${mode}-1920x1080.png`) });
+  if (mode === "up") {
+    // S cycles, and the choice is remembered on reload.
+    await page.keyboard.press("S");
+    await page.waitForTimeout(300);
+    assert.equal(await page.evaluate(() => document.querySelector("#loom").dataset.scan), "root", "S cycles up → root");
+    await page.goto(base + "/loom/");
+    await page.locator("#receipt h1").waitFor({ state: "attached" });
+    await page.waitForTimeout(1200);
+    assert.equal(await page.evaluate(() => document.querySelector("#loom").dataset.scan), "root", "the choice persists");
+  }
   await page.close();
 }
 // ?scan=off: no scan at all — the heartbeat on the face, a plaque's thread on
