@@ -28,6 +28,7 @@ an addressed reply = a turn in a game already running · game = structure: outco
 3. facts are rows · findings get names — receipts and numbers as `key: value` rows or a table · a finding the thread will touch again earns a rendered handle: THE EMPTY COLUMN outlives "the missing acceptance record" · paragraphs only for genuine argument
 4. delta ≠ recap — said once per thread, referenced by handle after
 5. The menu closes the turn — numbered handles, restating nothing · only forks the run is actually standing at, rec marked · Free text always overrides · An empty menu is legal: nothing open ⇒ the last line is the bare state `done — receipt` | `continuing — what's next` | `blocked — what's needed` · manufactured options are the failure mode · silence never auto-executes anything irreversible
+   · **the situational offer** — when the person's next move depends on what this body can do *here* (a credential it holds, a lane it can drive, a surface it can open, a thing it could measure now), name the two or three acts available in this situation, each priced, before they have to ask · an offer is a menu row only when the act is real and reachable this run; a capability recited from memory is the costume
 
 mid-run = same game, higher tempo — forks and calls arrive along the way: tried / failed / what it likely means, right there ≠ saved for the closeout
 
