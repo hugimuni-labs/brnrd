@@ -16,12 +16,12 @@
     <canvas
       id="loom"
       tabindex="0"
-      aria-label="The loom: measured places, work and passes. Use 1 through 6 to lift topics; Tab for receipt controls; question mark for help."
+      aria-label="The loom: measured places, work and passes. Use 1 through 6 to lift topics; Tab for receipt controls; L for the legend; question mark replays the reading."
     ></canvas>
     <nav id="access" aria-label="Loom selections"></nav>
     <aside id="bench" aria-label="The bench">
       <header>
-        <span>04 / THE BENCH</span
+        <span><b>THE BENCH</b><i>whatever you clicked</i></span
         ><button id="close-bench" aria-label="Close bench">×</button>
       </header>
       <div id="receipt"></div>
@@ -41,40 +41,54 @@
       <h1>The loom</h1>
       <p>A window onto work, measured one boundary at a time.</p>
       <dl>
-        <dt>ᛗ Heddles · 1–6</dt>
+        <dt>⌁ The shuttle — you are here</dt>
         <dd>
-          Lift a topic across the tree, work and cloth. Several lifted means
-          intersection. Esc drops all.
+          The resident, walking the branch lines to each place it measured. Its
+          amber light is the only amber on screen: its trail, the sparks, the
+          scan. Bars beside it are its most recent context blocks.
         </dd>
-        <dt>├ Places</dt>
+        <dt>│ The scan · S · ?scan=</dt>
         <dd>
-          The tree grows upward from now. Brighter means hotter. Small rings
-          count knots; they do not claim a merge.
+          One traverse per heartbeat, in one of four readings. <b>up</b>
+          (default): a wavefront rises from the weft to the top of the window —
+          it measures distance from the root, and each node lights as it is
+          crossed. <b>root</b>: the same front as a half-circle expanding from
+          the root, so nodes light by radial distance; the home root keeps its
+          own smaller front in ice. <b>cloth</b>: the line runs along the weft
+          and each plaque it crosses raises a hairline thread into the tree.
+          <b>off</b>: no scan — the heartbeat pulses on the face and a plaque
+          shows its thread on hover. <kbd>S</kbd> cycles; the choice is
+          remembered.
         </dd>
-        <dt>◇ Passes / · boundaries</dt>
+        <dt>├ The window</dt>
         <dd>
-          The bottom line carries passes, left to right in time. The small beads
-          at a place open the context blocks.
+          The files the shuttle touched, grown upward from the root. Brighter
+          means more recent. The thirty hottest show; hover a branch or lift a
+          rune for the rest. Ice diamonds count knots.
         </dd>
-        <dt>⌁ The shuttle</dt>
+        <dt>ᛗ The heddles · 1–6</dt>
         <dd>
-          Stands at its last measured place. New boundaries land in sparks; the
-          stack contains measured context deltas.
+          Topics. Lit means live work. Lift one to raise its work across the
+          window, the warp and the cloth; several lifted is an intersection. Esc
+          drops all.
         </dd>
         <dt>◎ The warp</dt>
+        <dd>Open items hanging on their topics; ties mark what each needs.</dd>
+        <dt>◇ The cloth · ← →</dt>
         <dd>
-          Ready work shines. Held work dims, tied to the item it needs.
-          Completed work leaves a tick at the cloth.
+          Every pass, oldest left, this one rightmost. The plaque is the pass in
+          focus; the window shows the places of the passes in view.
         </dd>
-        <dt>Space / ?</dt>
+        <dt>Colour</dt>
         <dd>
-          Pause visual motion / open this legend. Data keeps arriving while
-          paused. Reduced motion is respected.
+          Amber is the resident. Ice is your hand and the settled. Green is a
+          receipt, red a wall; topic hues only on runes, chips and halos.
         </dd>
-        <dt>Click / Tab</dt>
+        <dt>? · L · Space</dt>
         <dd>
-          Open a receipt on the bench. Selecting a place carries its address to
-          the console. Enter cannot send yet.
+          Replay the reading · this legend · pause the beat (data keeps
+          arriving). Reduced motion is respected. Actions reach the shuttle in
+          pass 2 — the local gate is not wired yet.
         </dd>
       </dl>
       <button id="close-legend">Return to the window</button>
