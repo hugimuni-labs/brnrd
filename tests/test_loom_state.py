@@ -346,7 +346,18 @@ def test_warp_state_is_derived(machine):
     assert by["w-4"]["state"] == "ready"
     assert by["w-3"]["taken"] == "run-260922-0930-bbbb" and by["w-4"]["taken"] is None
     assert by["w-2"] == {"id": "w-2", "type": "decision", "title": "Two", "topics": ["the-loom"],
-                         "needs": ["w-1"], "state": "ready", "taken": None}
+                         "needs": ["w-1"], "state": "ready", "taken": None,
+                         # design-the-dungeon.md §5
+                         "visited_at": None, "opens": [], "stake": None, "receipt": None}
+    assert by["w-4"]["opens"] == ["w-3"]          # the reverse edge: deciding w-4 opens w-3
+
+
+def test_the_dungeon_keys_ride_the_contract(machine):
+    out = state.build(machine["repo"], machine["home"], now=NOW)
+    assert out["fuel"] == {"buckets": []}         # no usage snapshot in this machine ⇒ no vial, no zero
+    assert out["pack"] is None                    # no wake manifest ⇒ no pack
+    assert out["relics"] == []
+    assert out["shuttle"]["place"] in ("shed", "archive", "forge", "wire", "crew", "clock") or out["shuttle"]["place"].startswith("w-")
 
 
 def test_beads_carry_places_and_topics(machine):
