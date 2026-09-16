@@ -4,8 +4,23 @@
 const $ = id => document.getElementById(id);
 const canvas = $('map'), ctx = canvas.getContext('2d');
 const fixture = new URLSearchParams(location.search).get('fixture');
-const fixtures = new Set(['live', 'empty', 'eighty']);
-const colors = { ink:'#0b0906', line:'#3a3328', text:'#e8dcc0', dim:'#b3a78e', ice:'#8fd3ff', amber:'#f2b134' };
+const fixtures = new Set(['live', 'empty', 'three', 'eighty']);
+const colors = { ink:'#0b0906', line:'#3a3328', text:'#e8dcc0', dim:'#b3a78e', ice:'#8fd3ff', amber:'#f2b134',
+  absent:'#2b2318', absentText:'#6d5f4b', ember:'#7a5c27' };
+/* The color law (§9): colour is the temperature of a reading.
+ * amber = warm, alive, spending, the resident's trace · ice = a reading gone low, and the user's hand
+ * black = absent, paused, unknown — never a grey placeholder, never dim amber for "nobody was here".
+ */
+const channels = hex => [1,3,5].map(i => parseInt(hex.slice(i,i+2),16));
+const mix = (cold,warm,t) => { const a=channels(cold),b=channels(warm),k=Math.max(0,Math.min(1,t));
+  return `rgb(${a.map((v,i)=>Math.round(v+(b[i]-v)*k)).join(',')})`; };
+const WARM_PCT = 55, COLD_PCT = 12;
+// null = unmeasured. A measured reading is 1 at full and 0 once it is spent.
+const temperature = pct => typeof pct === 'number' && Number.isFinite(pct)
+  ? Math.max(0,Math.min(1,(pct-COLD_PCT)/(WARM_PCT-COLD_PCT))) : null;
+const tempColor = pct => { const t=temperature(pct); return t===null?colors.absent:mix(colors.ice,colors.amber,t*t*(3-2*t)); };
+const bindingWindow = name => { const bucket=(Array.isArray(state.fuel?.buckets)?state.fuel.buckets:[]).find(b=>b.name===name);
+  const windows=Array.isArray(bucket?.windows)?bucket.windows:[];return windows.find(w=>w.binding)||windows[0]||null; };
 const fixed = ['shed','forge','wire','crew','clock','archive','pack','belt'];
 const symbols = {decision:'◆', preparation:'◇', action:'●', goal:'◎'};
 const collator = new Intl.Collator('en', {numeric:true});
@@ -22,81 +37,131 @@ const compact = n => number(n) ? n >= 1000 ? `${(n / 1000).toFixed(1)}k` : Strin
 const bytes = n => number(n) ? `${(n/1024).toFixed(1)} KB` : '?';
 function element(tag, text, className) { const e = document.createElement(tag); if (text != null) e.textContent = text; if (className) e.className = className; return e; }
 function placeOf(bead) { const p = bead?.place || bead?.place_kind; return p === 'file' || p === 'home' ? 'archive' : p; }
-let state = {}, rooms = [], roomById = new Map(), edges = [], wings = [], selected = 'shed';
+let state = {}, rooms = [], roomById = new Map(), edges = [], wings = [], rings = [], selected = 'shed';
 let opened = new Set(), camera = {x:0,y:0,z:1}, width = 1, height = 1, actor = 'shed', actorPoint = null;
 let stepTimer = null;
 let lastBead = null, pulse = null, frame = 0, footprints = [], history = [], pageGeneration = 0, archiveIndex = 0;
-let archiveExpanded = new Set(['repo','home']), archiveRows = [], initialized = false, layoutStore = {};
+let archiveExpanded = new Set(['repo','home']), archiveRows = [], initialized = false;
 const referenceNow = () => fixture ? timestamp(state.at) : Date.now();
 const visited = item => Number.isFinite(timestamp(item.visited_at)) && referenceNow() - timestamp(item.visited_at) <= 7*86400000;
-function loadLayout() {
-  try { layoutStore = JSON.parse(localStorage.getItem(`dungeon.slots.v2:${state.repo || 'empty'}`) || '{}'); } catch { layoutStore = {}; }
-  if (!layoutStore || typeof layoutStore !== 'object' || Array.isArray(layoutStore)) layoutStore = {};
+/* The generative rule (§9): depth is dependency, angle is topic, radius grows with count.
+ * Every distance on this map is a fraction of ring 1's radius, so the first view of three rooms
+ * and of eighty is the same picture at the same scale — only the ring's population differs.
+ */
+const FOOT = {goal:196,decision:170,action:92,preparation:80,reference:62};
+const BOX  = {goal:[176,90],decision:[150,74],action:[78,46],preparation:[68,40],reference:[52,28]};
+const RING1_MIN = 430, RING_GAP = 168, GUTTER = 20;
+const HUB_FRACTION = .30, SECTOR_FLOOR = .055;
+// A room's ring is its dependency depth. Two needs ⇒ the deepest chain: the room is entered
+// only after all of them, so the longest path is its honest distance from the hub.
+function depthOf(item,byId,seen=new Set()){
+  if(!item||seen.has(item.id))return 1;
+  seen.add(item.id);
+  const parents=array(item.needs).map(id=>byId.get(id)).filter(Boolean);
+  return parents.length?1+Math.max(...parents.map(p=>depthOf(p,byId,new Set(seen)))):1;
 }
-function slot(wing, id) {
-  const key = `wing:${wing}`, slots = layoutStore[key] ||= {};
-  if (Number.isInteger(slots[id]) && slots[id] >= 0) return slots[id];
-  const used = new Set(Object.values(slots));
-  let n = wing === '__wings' ? 0 : hash(id) % 6;
-  while (used.has(n)) n++;
-  slots[id] = n;
-  return n;
+function frameFirstView(){
+  const edge=(rings[1]||RING1_MIN)*1.30;
+  camera={x:0,y:0,z:Math.min((width-18)/(2*edge),(height-18)/(2*edge))};
+  canvas.dataset.ring1=String(Math.round(rings[1]||0));canvas.dataset.z=camera.z.toFixed(3);
+  window.__loomFrame={z:camera.z,ring1:rings[1]||0,rings:rings.map(r=>Math.round(r))};
+  requestDraw();
 }
 function buildMap() {
-  rooms = []; edges = []; wings = [];
+  rooms = []; edges = []; wings = []; rings = [RING1_MIN*HUB_FRACTION];
   const add = r => { rooms.push(r); return r; };
-  // A central court, not a row of tiles: the eight measured places never move.
-  fixed.forEach((id,i) => {
-    const angle=-Math.PI/2+i*Math.PI/4;
-    add({id,kind:'hub',title:id,x:Math.cos(angle)*130,y:Math.sin(angle)*130,
-      w:id==='shed'?94:id==='archive'?96:85,h:id==='shed'?54:42});
-  });
-  const crew=rooms.find(r=>r.id==='crew');
-  array(state.hud?.strands).forEach((strand,i)=>{
-    add({id:`strand:${strand.id}`,title:strand.title||strand.id,kind:'strand',strand,
-      x:-44+(i%2)*88,y:25+Math.floor(i/2)*52,w:80,h:42});
-    edges.push({from:'crew',to:`strand:${strand.id}`,kind:'passage'});
-  });
   const items=array(state.warp?.items).filter(i=>i?.id&&i.state!=='retired'&&
     (i.state!=='done'||!Number.isFinite(timestamp(i.done_at||i.receipt?.at))||referenceNow()-timestamp(i.done_at||i.receipt?.at)<=7*86400000));
-  const goals=array(state.warp?.goals).map(g=>({...g,type:'goal'}));
-  const topics=array(state.heddles).map(h=>h.slug).filter(Boolean);
-  for(const i of [...items,...goals]){const topic=array(i.topics)[0]||'unnamed';if(!topics.includes(topic))topics.push(topic);}
-  const activeTopics=topics.filter(t=>[...items,...goals].some(i=>(array(i.topics)[0]||'unnamed')===t||array(i.topics).includes(t)));
-  activeTopics.forEach(topic=>{
-    const wingIndex=slot('__wings',topic),angle=(wingIndex%6)*Math.PI/3;
-    const offset=Math.floor(wingIndex/6)*2000;
-    const point=(radius,lateral=0)=>({x:Math.cos(angle)*(radius+offset)-Math.sin(angle)*lateral,y:Math.sin(angle)*(radius+offset)+Math.cos(angle)*lateral});
-    const wing={id:`wing:${topic}`,slug:topic,title:topic,...point(186),w:100,h:28,kind:'wing',angle,offset,extent:480};
+  const byId=new Map(items.map(i=>[i.id,i]));
+  const goals=array(state.warp?.goals).map(g=>({...g,type:'goal',id:g.id||`goal:${g.title}`}));
+  const topicOf=i=>array(i.topics)[0]||'unnamed';
+  // Sector order: the heddles as the loom holds them, then any topic an item named for itself.
+  const order=array(state.heddles).map(h=>h.slug).filter(Boolean);
+  for(const i of [...items,...goals]) { const t=topicOf(i); if(!order.includes(t)) order.push(t); }
+  // A topic with no room gets no sector: an empty wedge would be a placeholder, which the law forbids.
+  const sectors=order.map(slug=>({slug,
+    members:[...items,...goals].filter(i=>topicOf(i)===slug),
+    refs:items.filter(i=>array(i.topics).slice(1).includes(slug))}))
+    .filter(s=>s.members.length||s.refs.length);
+  for(const s of sectors){
+    s.cells=s.members.map(i=>({item:i,id:i.id,kind:'item',ring:i.type==='goal'?0:depthOf(i,byId),
+      foot:FOOT[i.type]||FOOT.action,box:BOX[i.type]||BOX.action}));
+    const rim=Math.max(1,...s.cells.filter(c=>c.item.type!=='goal').map(c=>c.ring));
+    for(const c of s.cells) if(c.item.type==='goal') c.ring=rim+1;   // a goal sits at the sector's outer rim
+    for(const i of s.refs) s.cells.push({item:i,id:`ref:${s.slug}:${i.id}`,target:i.id,kind:'reference',
+      ring:depthOf(i,byId),foot:FOOT.reference,box:BOX.reference});
+    s.weight=s.cells.reduce((n,c)=>n+c.foot+GUTTER,0)||FOOT.action;
+  }
+  // The angle a topic owns is its share of the population; the wall between sectors is a real gap.
+  const total=sectors.reduce((n,s)=>n+s.weight,0)||1;
+  const wall=sectors.length>1?Math.min(.1,1.1/sectors.length):0;
+  const usable=Math.PI*2-wall*sectors.length;
+  for(const s of sectors) s.span=Math.max(usable*SECTOR_FLOOR,usable*(s.weight/total));
+  const claimed=sectors.reduce((n,s)=>n+s.span,0)||1;
+  let cursor=-Math.PI/2;
+  for(const s of sectors){s.span*=usable/claimed;s.from=cursor;s.mid=cursor+s.span/2;cursor+=s.span+wall;}
+  // Ring radius: whatever the busiest sector needs for its rooms to stand side by side on that ring.
+  const deepest=Math.max(1,...sectors.flatMap(s=>s.cells.map(c=>c.ring)));
+  for(let k=1;k<=deepest;k++){
+    let need=k===1?RING1_MIN:0;
+    for(const s of sectors){
+      const arc=s.cells.filter(c=>c.ring===k).reduce((n,c)=>n+c.foot+GUTTER,0);
+      if(arc) need=Math.max(need,arc/s.span);
+    }
+    rings[k]=Math.max(need,rings[k-1]+RING_GAP);
+  }
+  rings[0]=rings[1]*HUB_FRACTION;              // the hub is a fraction of ring 1, so the frame never changes
+  const unit=rings[1]/RING1_MIN;
+  fixed.forEach((id,i)=>{const a=-Math.PI/2+i*Math.PI/4;
+    add({id,kind:'hub',title:id,x:Math.cos(a)*rings[0],y:Math.sin(a)*rings[0],unit,
+      w:(id==='archive'?96:86)*unit,h:(id==='shed'?52:42)*unit});});
+  array(state.hud?.strands).forEach((strand,i)=>{
+    add({id:`strand:${strand.id}`,title:strand.title||strand.id,kind:'strand',strand,unit,
+      x:(-46+(i%2)*92)*unit,y:(20+Math.floor(i/2)*54)*unit,w:84*unit,h:44*unit});
+    edges.push({from:'crew',to:`strand:${strand.id}`,kind:'passage'});});
+  const angleOf=new Map();
+  for(const s of sectors){
+    s.arcs=[];
+    for(let k=1;k<=deepest;k++){
+      const cells=s.cells.filter(c=>c.ring===k).sort((a,b)=>{
+        const pa=array(a.item.needs).map(id=>angleOf.get(id)).find(number),
+              pb=array(b.item.needs).map(id=>angleOf.get(id)).find(number);
+        return number(pa)&&number(pb)&&pa!==pb?pa-pb:collator.compare(a.id,b.id);});
+      if(!cells.length)continue;
+      const r=rings[k],wanted=cells.reduce((n,c)=>n+c.foot+GUTTER,0)/r;
+      const squeeze=wanted>s.span?s.span/wanted:1;
+      let t=s.from+(s.span-Math.min(wanted,s.span))/2;
+      for(const c of cells){
+        const step=(c.foot+GUTTER)/r*squeeze,a=t+step/2;t+=step;
+        angleOf.set(c.id,a);
+        add({id:c.id,title:c.item.title||c.id,item:c.kind==='item'?c.item:null,target:c.target,
+          kind:c.kind,wing:s.slug,ring:k,angle:a,unit,
+          x:Math.cos(a)*r,y:Math.sin(a)*r,w:c.box[0],h:c.box[1]});
+      }
+      s.arcs.push({r,from:angleOf.get(cells[0].id),to:angleOf.get(cells.at(-1).id)});
+      // The ring itself is a corridor: the hand walks sideways along it.
+      cells.forEach((c,i)=>{if(i)edges.push({from:cells[i-1].id,to:c.id,kind:'ring'});});
+    }
+    const lip=rings[0]+(rings[1]-rings[0])*.44;
+    const wing={id:`wing:${s.slug}`,slug:s.slug,title:s.slug,kind:'wing',angle:s.mid,ring:0,unit,
+      x:Math.cos(s.mid)*lip,y:Math.sin(s.mid)*lip,w:120*unit,h:26*unit,
+      from:s.from,span:s.span,arcs:s.arcs,extent:rings[Math.max(...s.cells.map(c=>c.ring))],
+      population:s.cells.length};
     wings.push(wing);add(wing);
     const mouth=rooms.filter(r=>r.kind==='hub').sort((a,b)=>Math.hypot(a.x-wing.x,a.y-wing.y)-Math.hypot(b.x-wing.x,b.y-wing.y))[0];
-    edges.push({from:mouth.id,to:wing.id,kind:'passage'});
-    const members=[...items,...goals].filter(i=>(array(i.topics)[0]||'unnamed')===topic).sort((a,b)=>collator.compare(a.id,b.id));
-    for(const item of members){
-      const n=slot(topic,item.id),goal=item.type==='goal',decision=item.type==='decision';
-      const depth=goal?1320+Math.floor(n/2)*130:278+Math.floor(n/2)*142;
-      const side=goal?0:(n%2?1:-1)*(48+(hash(item.id)%3)*7);
-      const size=goal?[172,104]:decision?[138,76]:item.type==='preparation'?[88,50]:[96+(hash(item.id)%3)*8,54];
-      add({id:item.id,title:item.title||item.id,item,kind:'item',wing:topic,...point(depth,side),w:size[0],h:size[1]});
-      wing.extent=Math.max(wing.extent,depth+115);
-      const needs=array(item.needs).filter(id=>items.some(i=>i.id===id));
-      if(needs.length)needs.forEach(id=>edges.push({from:id,to:item.id,kind:'needs'}));
-      else edges.push({from:wing.id,to:item.id,kind:'passage'});
+    if(mouth)edges.push({from:mouth.id,to:wing.id,kind:'passage'});
+    for(const c of s.cells){
+      const needs=c.kind==='item'?array(c.item.needs).filter(id=>byId.has(id)):[];
+      if(needs.length)needs.forEach(id=>edges.push({from:id,to:c.id,kind:'needs'}));
+      else edges.push({from:wing.id,to:c.id,kind:'spur'});
     }
-    for(const item of items.filter(i=>array(i.topics).slice(1).includes(topic))){
-      const n=slot(topic,`ref:${item.id}`),depth=278+Math.floor(n/2)*142;
-      add({id:`ref:${topic}:${item.id}`,target:item.id,title:`↗ ${item.id}`,kind:'reference',wing:topic,...point(depth,n%2?60:-60),w:78,h:34});
-      wing.extent=Math.max(wing.extent,depth+100);
-      edges.push({from:wing.id,to:`ref:${topic}:${item.id}`,kind:'passage'});
-    }
-  });
+  }
   roomById=new Map(rooms.map(r=>[r.id,r]));
   fixed.forEach((id,i)=>edges.push({from:id,to:fixed[(i+1)%fixed.length],kind:'passage'}));
-  try{localStorage.setItem(`dungeon.slots.v2:${state.repo||'empty'}`,JSON.stringify(layoutStore));}catch{/* An unavailable browser store is not a missing world. */}
   if(!roomById.has(selected))selected='shed';
   const select=$('wing'),old=select.value;select.replaceChildren(element('option','Wings'));select.firstChild.value='';
-  for(const wing of wings){const option=element('option',wing.slug);option.value=wing.id;select.append(option);}select.value=old;
-  $('count').textContent=`${items.length} rooms · ${wings.length} wings`;
+  for(const wing of wings){const option=element('option',`${wing.slug} · ${wing.population}`);option.value=wing.id;select.append(option);}select.value=old;
+  $('count').textContent=`${items.length} rooms · ${wings.length} wings · ${rings.length-1} rings`;
   $('access').replaceChildren();
   for(const r of rooms){const b=element('button',`${r.id} ${r.title}`);b.onclick=()=>{choose(r.id);activate(r);};$('access').append(b);}
 }
@@ -144,7 +209,7 @@ function chamber(r){
   ctx.lineTo(l,t+r.h-c);ctx.lineTo(l,t+c);ctx.closePath();
 }
 function fogged(r,seen=new Set()){
-  if(!r.item||seen.has(r.id)||opened.has(r.id))return false;
+  if(!r.item||r.ring===1||seen.has(r.id)||opened.has(r.id))return false;
   seen.add(r.id);return locked(r)||array(r.item.needs).some(id=>{const parent=roomById.get(id);return parent&&fogged(parent,seen);});
 }
 function glow(x,y,radius,strength){
@@ -157,70 +222,93 @@ function draw(now=performance.now()){
   ctx.save();ctx.translate(width/2-camera.x*camera.z,height/2-camera.y*camera.z);ctx.scale(camera.z,camera.z);
   // Architectural regions are the type layout; only measured visits supply light.
   for(const wing of wings){
-    const u={x:Math.cos(wing.angle),y:Math.sin(wing.angle)},v={x:-u.y,y:u.x};
-    const at=(r,t)=>({x:u.x*(r+wing.offset)+v.x*t,y:u.y*(r+wing.offset)+v.y*t});
-    const outline=[[198,-55],[235,-120],[wing.extent,-145],[wing.extent+45,-70],[wing.extent+45,70],[wing.extent,145],[235,120],[198,55]];
-    ctx.beginPath();outline.forEach(([r,t],i)=>{const p=at(r,t);if(i)ctx.lineTo(p.x,p.y);else ctx.moveTo(p.x,p.y);});ctx.closePath();
-    ctx.fillStyle='#100d0840';ctx.fill();ctx.strokeStyle='#6e542d55';ctx.lineWidth=.8/camera.z;ctx.stroke();
-    const mouth=at(200,0),end=at(wing.extent,0);ctx.beginPath();ctx.moveTo(mouth.x,mouth.y);ctx.lineTo(end.x,end.y);ctx.strokeStyle='#b38b4038';ctx.lineWidth=.7;ctx.stroke();
+    // The sector is a wedge sized by its population: the wall between topics is real, the floor is not paint.
+    ctx.beginPath();ctx.arc(0,0,rings[0]*1.16,wing.from,wing.from+wing.span);
+    ctx.arc(0,0,wing.extent+140*wing.unit,wing.from+wing.span,wing.from,true);ctx.closePath();
+    ctx.fillStyle='#0f0c0728';ctx.fill();ctx.strokeStyle='#3c2f1a';ctx.lineWidth=.7/camera.z;ctx.stroke();
+    for(const arc of wing.arcs||[]){   // the ring corridor: the hand walks it sideways
+      ctx.beginPath();ctx.arc(0,0,arc.r,arc.from,arc.to);ctx.strokeStyle='#4e3c1f';ctx.lineWidth=.9/camera.z;ctx.stroke();
+    }
   }
-  ctx.beginPath();ctx.arc(0,0,184,0,Math.PI*2);ctx.strokeStyle='#6e542d70';ctx.lineWidth=.9;ctx.stroke();
+  ctx.beginPath();ctx.arc(0,0,rings[0]*1.16,0,Math.PI*2);ctx.strokeStyle='#5b4724';ctx.lineWidth=.9/camera.z;ctx.stroke();
   for(const e of edges){
+    if(e.kind==='ring')continue;                       // drawn as the sector's arc, not as a chord
     const a=roomById.get(e.from),b=roomById.get(e.to);if(!a||!b)continue;
-    const shut=e.kind==='needs'&&fogged(b),lit=(a.kind==='hub'||visited(a.item||{})||visited(b.item||{}))&&!shut;
+    const shut=e.kind==='needs'&&fogged(b),lit=e.kind==='needs'&&(visited(a.item||{})||visited(b.item||{}))&&!shut;
     const dx=b.x-a.x,dy=b.y-a.y,length=Math.hypot(dx,dy)||1,ux=dx/length,uy=dy/length;
     const trimA=Math.min(a.w/(2*Math.max(.01,Math.abs(ux))),a.h/(2*Math.max(.01,Math.abs(uy)))),trimB=Math.min(b.w/(2*Math.max(.01,Math.abs(ux))),b.h/(2*Math.max(.01,Math.abs(uy))));
     let start={x:a.x+ux*trimA,y:a.y+uy*trimA};const end={x:b.x-ux*trimB,y:b.y-uy*trimB};
-    if(a.kind==='wing'&&e.kind==='passage'){const u={x:Math.cos(a.angle),y:Math.sin(a.angle)},distance=(end.x-a.x)*u.x+(end.y-a.y)*u.y;start={x:a.x+u.x*distance,y:a.y+u.y*distance};}
+    if(e.kind==='spur'){   // a door off the ring corridor, not a rope back to the hub
+      const inner={x:b.x-b.x/Math.hypot(b.x,b.y)*(trimB+13),y:b.y-b.y/Math.hypot(b.x,b.y)*(trimB+13)};
+      ctx.strokeStyle=visited(b.item||{})?'#8a6a30':'#3c2f1a';ctx.lineWidth=.9/Math.max(.6,camera.z);
+      ctx.beginPath();ctx.moveTo(inner.x,inner.y);ctx.lineTo(b.x-b.x/Math.hypot(b.x,b.y)*trimB,b.y-b.y/Math.hypot(b.x,b.y)*trimB);ctx.stroke();
+      continue;
+    }
     const door={x:start.x+(end.x-start.x)*.72,y:start.y+(end.y-start.y)*.72};
-    ctx.strokeStyle=lit?'#cf963e90':'#a87c363c';ctx.lineWidth=(e.kind==='needs'?1.1:.65)/Math.max(.6,camera.z);ctx.shadowColor='#f2b13444';ctx.shadowBlur=lit?5:0;
+    ctx.strokeStyle=lit?'#cf963e90':e.kind==='needs'?'#7c5c2b':'#3a2d19';ctx.lineWidth=(e.kind==='needs'?1.1:.65)/Math.max(.6,camera.z);ctx.shadowColor='#f2b13444';ctx.shadowBlur=lit?5:0;
     ctx.beginPath();ctx.moveTo(start.x,start.y);if(shut){ctx.lineTo(door.x-ux*7,door.y-uy*7);ctx.moveTo(door.x+ux*7,door.y+uy*7);}ctx.lineTo(end.x,end.y);ctx.stroke();ctx.shadowBlur=0;
-    if(shut){ctx.save();ctx.translate(door.x,door.y);ctx.rotate(Math.atan2(dy,dx));ctx.fillStyle=colors.ink;ctx.fillRect(-5,-10,10,20);ctx.strokeStyle='#d4a357';ctx.lineWidth=1;ctx.strokeRect(-3,-9,6,18);ctx.beginPath();ctx.moveTo(-3,0);ctx.lineTo(3,0);ctx.stroke();ctx.restore();}
+    if(shut){ctx.save();ctx.translate(door.x,door.y);ctx.rotate(Math.atan2(dy,dx));ctx.fillStyle=colors.ink;ctx.fillRect(-5,-10,10,20);ctx.strokeStyle=blockers(b).length?colors.ice:'#d4a357';ctx.lineWidth=1;ctx.strokeRect(-3,-9,6,18);ctx.beginPath();ctx.moveTo(-3,0);ctx.lineTo(3,0);ctx.stroke();ctx.restore();}
   }
-  footprints.forEach((b,i)=>{const p=roomPoint(placeOf(b));if(!p)return;ctx.globalAlpha=(i+1)/footprints.length*.38;ctx.fillStyle=colors.amber;ctx.beginPath();ctx.arc(p.x-24+i*4,p.y+23,1.2,0,Math.PI*2);ctx.fill();});ctx.globalAlpha=1;
-  const actorRoom=state.run&&state.shuttle?.state!=='released'?roomById.get(actor):null;
   for(const r of rooms){
     const sx=(r.x-camera.x)*camera.z+width/2,sy=(r.y-camera.y)*camera.z+height/2;
     if(sx+r.w*camera.z<0||sx-r.w*camera.z>width||sy+r.h*camera.z<0||sy-r.h*camera.z>height)continue;
-    const hand=r.id===selected,shut=fogged(r),fresh=visited(r.item||{}),resident=r.id===actorRoom?.id;
+    const hand=r.id===selected,shut=fogged(r),warm=visited(r.item||{}),resident=r.id===actorRoom?.id;
     const hubLit=r.kind==='hub'&&(resident||array(state.beads).some(b=>placeOf(b)===r.id));
-    const lit=(fresh||hubLit)&&!shut,done=r.item?.state==='done';
-    const left=r.x-r.w/2,top=r.y-r.h/2;
+    const lit=(warm||hubLit)&&!shut,done=r.item?.state==='done';
+    const his=r.item?.type==='decision'&&r.item.state==='ready';   // the hand's door: ice, by the colour law
+    const left=r.x-r.w/2,top=r.y-r.h/2,tokens=camera.z<.55;
     if(r.kind==='wing'){
-      const size=Math.max(13,10/camera.z);drawText(r.title,r.x-r.w/2,r.y-19,colors.text,size,Math.max(140,100/camera.z));continue;
+      const size=Math.max(13*r.unit,11/camera.z);
+      ctx.textAlign=Math.cos(r.angle)<-.3?'right':Math.cos(r.angle)>.3?'left':'center';
+      drawText(`${r.title} · ${r.population}`,r.x,r.y,lit?colors.text:'#9c8a6b',size,600*r.unit);
+      ctx.textAlign='left';continue;
     }
-    if(lit||resident)glow(r.x,r.y,Math.max(r.w,r.h)*.95,resident?.18:.08);
+    // A room nobody has entered is dark: absent is black, never dim amber.
+    const line=shut?'#221b12':lit?colors.amber:done?colors.ember:colors.absent;
+    if(lit||resident)glow(r.x,r.y,Math.max(r.w,r.h)*.95,resident?.2:.08);
     ctx.fillStyle=colors.ink;chamber(r);ctx.fill();
-    ctx.globalAlpha=shut?.18:lit?.9:r.kind==='hub'?.52:.25;
-    ctx.strokeStyle=colors.amber;ctx.lineWidth=lit?1.15:.8;ctx.shadowColor='#f2b13477';ctx.shadowBlur=lit?9:0;chamber(r);ctx.stroke();ctx.shadowBlur=0;ctx.globalAlpha=1;
-    if(hand){ctx.strokeStyle=colors.ice;ctx.lineWidth=1.3/camera.z;chamber({...r,w:r.w+7,h:r.h+7});ctx.stroke();}
-    if(camera.z<.32&&r.kind!=='hub')continue;
-    if(r.kind==='reference'){drawText(r.title,left+8,r.y+4,colors.dim,Math.max(9,8/camera.z),r.w-16);continue;}
+    ctx.strokeStyle=line;ctx.lineWidth=(lit?1.15:.85)/Math.max(.55,camera.z);ctx.shadowColor='#f2b13477';ctx.shadowBlur=lit?9:0;chamber(r);ctx.stroke();ctx.shadowBlur=0;
+    if(his&&!shut){ctx.strokeStyle=colors.ice;ctx.lineWidth=1.25/Math.max(.55,camera.z);ctx.shadowColor='#8fd3ff55';ctx.shadowBlur=7;chamber(r);ctx.stroke();ctx.shadowBlur=0;}
+    if(hand){ // the hand: corner brackets, ice, never a fill
+      const c=Math.max(9,7/camera.z),o=5/Math.max(.55,camera.z);ctx.strokeStyle=colors.ice;ctx.lineWidth=1.4/Math.max(.55,camera.z);
+      for(const [mx,my] of [[-1,-1],[1,-1],[1,1],[-1,1]]){const px=r.x+mx*(r.w/2+o),py=r.y+my*(r.h/2+o);
+        ctx.beginPath();ctx.moveTo(px-mx*c,py);ctx.lineTo(px,py);ctx.lineTo(px,py-my*c);ctx.stroke();}
+    }
+    if(r.kind==='reference'){if(!tokens)drawText(r.title,left+6,r.y+4,colors.absentText,Math.max(9,8/camera.z),r.w-12);continue;}
     if(r.kind==='strand'){
-      if(camera.z<.7){drawText('▱',r.x-4,r.y+4,colors.amber,14);continue;}
-      drawText('▱ '+r.title,left+7,top+15,colors.amber,8,r.w-14);
-      const bucket=array(state.fuel?.buckets).find(b=>b.name===r.strand.bucket),window=array(bucket?.windows).find(w=>w.binding)||array(bucket?.windows)[0];
-      if(window&&number(window.pct_left)){ctx.fillStyle='#3a3328';ctx.fillRect(left+7,top+26,r.w-14,2);ctx.fillStyle=colors.amber;ctx.fillRect(left+7,top+26,(r.w-14)*Math.max(0,Math.min(100,window.pct_left))/100,2);drawText(`${window.name} ${window.pct_left}%`,left+7,top+39,colors.dim,7,r.w-14);}else drawText('fuel ?',left+7,top+34,colors.dim,8);
+      const window=bindingWindow(r.strand.bucket),pct=window&&number(window.pct_left)?window.pct_left:null;
+      const heat=pct===null?colors.absent:tempColor(pct);   // a starved strand reads cold
+      if(tokens){drawText('▱',r.x-6*r.unit,r.y+5*r.unit,heat,Math.max(14*r.unit,12/camera.z));continue;}
+      drawText('▱ '+r.title,left+7*r.unit,top+15*r.unit,heat,Math.max(8*r.unit,8/camera.z),r.w-14*r.unit);
+      ctx.fillStyle='#1b150d';ctx.fillRect(left+7*r.unit,top+25*r.unit,r.w-14*r.unit,2.4*r.unit);
+      if(pct!==null){ctx.fillStyle=heat;ctx.fillRect(left+7*r.unit,top+25*r.unit,(r.w-14*r.unit)*Math.max(0,Math.min(100,pct))/100,2.4*r.unit);
+        drawText(`${window.name} ${Math.round(pct)}%`,left+7*r.unit,top+38*r.unit,heat,Math.max(7*r.unit,7/camera.z),r.w-14*r.unit);}
+      else drawText('fuel unmeasured',left+7*r.unit,top+38*r.unit,colors.absentText,Math.max(7*r.unit,7/camera.z),r.w-14*r.unit);
       continue;
     }
     if(r.kind==='hub'){
-      const tower=r.id==='shed'&&state.shuttle?.state==='listening';
-      if(tower){ctx.strokeStyle=colors.amber;ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(left+9,top);ctx.lineTo(left+9,top-14);ctx.lineTo(left+15,top-14);ctx.lineTo(left+15,top-7);ctx.lineTo(left+21,top-7);ctx.lineTo(left+21,top-14);ctx.lineTo(left+27,top-14);ctx.lineTo(left+27,top);ctx.stroke();}
-      drawText(r.title,left+8,r.y+(resident?14:4),lit?colors.text:colors.dim,Math.max(11,9/camera.z),r.w-16);
-      if(camera.z>=1.1&&!resident)drawText(hubDetail(r.id),left+8,top+r.h+13,colors.dim,7,r.w+10);
+      if(r.id==='shed'&&state.shuttle?.state==='listening'){   // the watchtower
+        const u=r.unit;ctx.strokeStyle=colors.amber;ctx.lineWidth=1.2/Math.max(.55,camera.z);ctx.beginPath();
+        ctx.moveTo(left+9*u,top);ctx.lineTo(left+9*u,top-14*u);ctx.lineTo(left+15*u,top-14*u);ctx.lineTo(left+15*u,top-7*u);
+        ctx.lineTo(left+21*u,top-7*u);ctx.lineTo(left+21*u,top-14*u);ctx.lineTo(left+27*u,top-14*u);ctx.lineTo(left+27*u,top);ctx.stroke();}
+      drawText(r.title,left+8*r.unit,r.y+(resident?14:4)*r.unit,lit?colors.text:colors.absentText,Math.max(11*r.unit,9/camera.z),r.w-16*r.unit);
+      if(!resident&&!tokens)drawText(hubDetail(r.id),left+8*r.unit,top+r.h+13*r.unit,lit?'#9c8a6b':colors.absentText,Math.max(7*r.unit,7/camera.z),r.w+10*r.unit);
       continue;
     }
-    const item=r.item,his=item.type==='decision'&&item.state==='ready';
-    if(shut){drawText('▣ '+r.id,left+8,r.y+4,'#826434',Math.max(9,8/camera.z),r.w-16);continue;}
-    ctx.globalAlpha=hand?1:lit?.95:.35;
-    const textColor=hand?colors.ice:colors.text;
-    drawText(`${symbols[item.type]||'·'} ${r.id}${his?' · his':''}`,left+8,top+17,textColor,Math.max(9,8/camera.z),r.w-16);
-    if(camera.z>=.72){wrap(item.title,left+8,top+33,r.w-16,item.type==='decision'||item.type==='goal'?2:1,textColor,9);}
-    if(item.type==='goal'&&camera.z>=.72)wrap(item.metric||'metric unmeasured',left+8,top+76,r.w-16,1,colors.dim,8);
-    if(done&&item.receipt&&camera.z>=.72)drawText(receiptText(item.receipt),left+8,top+r.h-7,colors.dim,8,r.w-16);
-    ctx.globalAlpha=1;
-    if(his){const downstream=opens(r);drawText(`opens ${downstream.join(', ')||'—'}`,left+4,top+r.h+14,hand?colors.ice:'#be9955',Math.max(9,8/camera.z),Math.max(r.w,90/camera.z));if(camera.z>=.85)drawText(`stake ${item.stake??'?'}`,left+4,top+r.h+27,colors.dim,8,r.w+40);}
-    if(item.taken&&item.taken!==state.run?.id)drawText('▱',r.x+r.w/2-10,r.y-4,colors.amber,14);
+    const item=r.item;
+    if(shut){drawText('▣ '+r.id,left+7,r.y+4,'#4d3f28',Math.max(9,8/camera.z),r.w-14);continue;}
+    const label=his?colors.ice:hand?colors.ice:lit?colors.text:done?'#8d754a':colors.absentText;
+    drawText(`${symbols[item.type]||'·'} ${r.id}`,left+7,top+(tokens?r.h/2+4:16),label,Math.max(9,8/camera.z),r.w-13);
+    if(!tokens){
+      if(r.w>=120)wrap(item.title,left+7,top+32,r.w-14,item.type==='goal'?2:2,lit||his?colors.text:colors.absentText,9);
+      else drawText(item.title,left+7,top+30,lit||his?'#c9bda2':colors.absentText,8,r.w-13);
+      if(item.type==='goal')drawText(item.metric||'metric unmeasured',left+7,top+r.h-9,item.metric?'#9c8a6b':colors.absentText,8,r.w-14);
+      if(done&&item.receipt)drawText(receiptText(item.receipt),left+7,top+r.h-8,'#8d754a',8,r.w-14);
+      if(his){const out=opens(r);
+        drawText(`opens ${out.join(', ')||'—'}`,left+4,top+r.h+13,colors.ice,Math.max(9,8/camera.z),Math.max(r.w,120));
+        if(camera.z>=.8)drawText(`stake ${item.stake??'?'}`,left+4,top+r.h+25,item.stake?'#9c8a6b':colors.absentText,8,r.w+60);}
+    }
+    if(item.taken&&item.taken!==state.run?.id)drawText('▱',r.x+r.w/2-11,r.y-5,colors.amber,Math.max(13,11/camera.z));
   }
   if(actorRoom){const p=actorPoint||actorRoom;glow(p.x,p.y,42,.12);ctx.shadowColor='#f2b13499';ctx.shadowBlur=10;drawText(state.run?.mood_glyph||'b·_·d',p.x-24,p.y-5,colors.amber,Math.max(14,11/camera.z));ctx.shadowBlur=0;}
   if(pulse){const p=roomById.get(pulse.id),t=(now-pulse.at)/650;if(p&&t<1){ctx.strokeStyle=`rgba(242,177,52,${(1-t)*.65})`;ctx.lineWidth=2;chamber({...p,w:p.w+8*t,h:p.h+8*t});ctx.stroke();requestDraw();}else pulse=null;}
@@ -241,26 +329,30 @@ function selection(){
   const info=r.item?`${ownership(r.item)} · ${r.item.state||'?'} · ${opens(r).length?`opens ${opens(r).join(', ')}`:'no downstream rooms'} · stake ${r.item.stake??'?'}`:r.kind==='hub'?hubDetail(r.id):r.title;
   box.append(element('div',info,'door-info'));
   if(r.item?.needs?.length)box.append(element('div',`${locked(r)?'Locked':'Needs'}: ${r.item.needs.join(', ')}${opened.has(r.id)?' · revealed by your hand; work state unchanged':''}`,'muted'));
-  $('map-caption').textContent='THE WARP / LIGHT IS A VISIT';
+  $('map-caption').textContent=`THE WARP / RING ${roomById.get(selected)?.ring??0} · DEPTH IS DEPENDENCY, ANGLE IS TOPIC`;
 }
 function receiptText(receipt){if(typeof receipt==='string')return receipt;return [receipt.kind,receipt.number!=null?`#${receipt.number}`:null,receipt.action,receipt.commit?.slice(0,8)].filter(Boolean).join(' ')||'receipt recorded';}
 function renderPanels(){
   const shuttle=state.shuttle||{},last=array(state.beads).at(-1), place=shuttle.state==='listening'?'shed':shuttle.place||placeOf(last)||'shed';
-  $('glyph').textContent=state.run?.mood_glyph||'b·_·d';$('glyph').title=`Locate resident: ${place}`;$('state').textContent=shuttle.state||'unmeasured';
+  $('glyph').textContent=state.run?.mood_glyph||'b·_·d';$('glyph').title=`Locate resident: ${place}`;$('state').textContent=shuttle.state||'unmeasured';$('state').classList.toggle('unmeasured',!shuttle.state);
   $('act').textContent=shuttle.state==='listening'?'listening · shed → wire':last?`${last.act||'act'} · ${place}`:state.run?`at ${place} · no act reading`:'No resident reading';
   const since=shuttle.since||state.run?.started;
   $('since').textContent=since&&Number.isFinite(timestamp(since))?`since ${new Date(timestamp(since)).toISOString().slice(11,16)} UTC`:'';
   $('waiting').textContent=shuttle.waiting_on?`waiting on ${shuttle.waiting_on}`:shuttle.state==='held'?`held · ${shuttle.why||'reason unmeasured'}`:'';
   $('fuel').replaceChildren();
   const buckets=[...array(state.fuel?.buckets)].sort((a,b)=>Number(!!b.seat)-Number(!!a.seat));
-  if(!buckets.length)$('fuel').append(element('p','No fuel reading','muted'));
+  if(!buckets.length)$('fuel').append(element('p','No fuel reading','unmeasured'));
   for(const bucket of buckets){
     const block=element('div',null,`bucket${bucket.seat?'':' secondary'}`),name=element('div',bucket.name,'bucket-name');name.append(element('span',bucket.seat?'SEAT':'BUCKET'));block.append(name);
     for(const window of array(bucket.windows)){
-      const row=element('div',null,`window${window.binding?' binding':''}`),heading=element('div',null,'window-heading'),value=element('strong',number(window.pct_left)?String(Math.round(window.pct_left)):'?');value.append(element('small',number(window.pct_left)?'%':''));heading.append(element('span',window.name||'window'),value);row.append(heading);
-      if(number(window.pct_left)){const bar=element('div',null,'bar'),fill=element('i');fill.style.width=`${Math.min(100,Math.max(0,window.pct_left))}%`;bar.append(fill);row.append(bar);}
+      const row=element('div',null,`window${window.binding?' binding':''}`),heading=element('div',null,'window-heading'),value=element('strong',number(window.pct_left)?String(Math.round(window.pct_left)):'?');
+      // The vial cools as it empties: a window's colour is its own reading, never a status word.
+      const heat=tempColor(window.pct_left);value.style.color=heat;if(!number(window.pct_left))value.classList.add('unmeasured');
+      value.append(element('small',number(window.pct_left)?'%':''));heading.append(element('span',window.name||'window'),value);row.append(heading);
+      if(number(window.pct_left)){const bar=element('div',null,'bar'),fill=element('i');fill.style.width=`${Math.min(100,Math.max(0,window.pct_left))}%`;fill.style.background=heat;bar.append(fill);row.append(bar);}
+      else row.append(element('div',null,'bar'));
       const reset=timestamp(window.resets_at), seconds=Number.isFinite(reset)?(reset-referenceNow())/1000:null;
-      row.append(element('div',seconds===null?'↻ reset unmeasured':seconds<=0?'↻ reset due · awaiting reading':`↻ resets in ${duration(seconds)}`,'reset'));
+      row.append(element('div',seconds===null?'↻ reset unmeasured':seconds<=0?'↻ reset due · awaiting reading':`↻ resets in ${duration(seconds)}`,seconds===null?'reset unmeasured':'reset'));
       const f=window.forecast;
       if(number(f?.rate_pct_per_h)&&number(f?.dry_in_s)&&f.dry_in_s>=0){
         let forecast=null;
@@ -280,7 +372,7 @@ function renderPanels(){
 }
 function renderPack(target,all){
   target.replaceChildren();const pack=state.pack;
-  if(!pack){target.append(element('p','No pack reading','muted'));return;}
+  if(!pack){target.append(element('p','No pack reading','unmeasured'));return;}
   target.append(element('p',`${compact(pack.ctx_tokens)} / ${compact(pack.window_tokens)} tokens`));
   const blocks=array(pack.blocks).map(b=>({...b,bytes_kept:b.bytes_kept??b.bytes})).sort((a,b)=>(b.bytes_kept??-1)-(a.bytes_kept??-1));
   if(blocks.length&&blocks.every(b=>number(b.bytes_kept)))target.append(element('p',`${blocks.length} blocks · ${bytes(blocks.reduce((n,b)=>n+b.bytes_kept,0))} kept`,'muted'));
@@ -415,8 +507,8 @@ function updateActor(first){
   else if(key&&key!==lastBead&&target!==actor)stepActor(target);
   lastBead=key;
 }
-function ingest(next){state=next;const first=!initialized;if(first)resize();if(first)loadLayout();buildMap();updateActor(first);renderPanels();selection();
-  if(first){initialized=true;const door=rooms.find(r=>r.item?.type==='decision'&&r.item.state==='ready');choose(door?.id||'shed',false);camera={x:0,y:0,z:Math.min(1.25,(width-20)/670,(height-26)/420)};selection();}
+function ingest(next){state=next;const first=!initialized;if(first)resize();buildMap();updateActor(first);renderPanels();selection();
+  if(first){initialized=true;const door=rooms.find(r=>r.item?.type==='decision'&&r.item.state==='ready');choose(door?.id||'shed',false);frameFirstView();selection();}
   $('source').textContent=fixture?`${fixture.toUpperCase()} FIXTURE · frozen`:`${state.repo||'local'} · live`;
   canvas.dataset.ready='true';canvas.dataset.actor=actor;canvas.dataset.rooms=String(rooms.length);requestDraw();
 }
@@ -425,7 +517,7 @@ canvas.addEventListener('pointerdown',event=>{canvas.focus();canvas.setPointerCa
 canvas.addEventListener('pointermove',event=>{if(!drag)return;const dx=event.clientX-drag.x,dy=event.clientY-drag.y;if(Math.hypot(dx,dy)>4)drag.moved=true;camera.x=drag.cx-dx/camera.z;camera.y=drag.cy-dy/camera.z;requestDraw();});
 canvas.addEventListener('pointerup',event=>{if(!drag)return;const moved=drag.moved;drag=null;if(moved)return;const rect=canvas.getBoundingClientRect(),x=(event.clientX-rect.left-width/2)/camera.z+camera.x,y=(event.clientY-rect.top-height/2)/camera.z+camera.y;const r=[...rooms].reverse().find(r=>Math.abs(x-r.x)<=r.w/2&&Math.abs(y-r.y)<=r.h/2);if(r){const again=selected===r.id;choose(r.id,false);if(again)activate(r);}});
 canvas.addEventListener('pointercancel',()=>{drag=null;});
-canvas.addEventListener('wheel',event=>{event.preventDefault();if(event.ctrlKey||event.metaKey){camera.z=Math.max(.12,Math.min(1.7,camera.z*(event.deltaY>0?.9:1.1)));}else{camera.x+=event.deltaX/camera.z;camera.y+=event.deltaY/camera.z;}requestDraw();},{passive:false});
+canvas.addEventListener('wheel',event=>{event.preventDefault();if(event.ctrlKey||event.metaKey){camera.z=Math.max(.06,Math.min(2.2,camera.z*(event.deltaY>0?.9:1.1)));}else{camera.x+=event.deltaX/camera.z;camera.y+=event.deltaY/camera.z;}requestDraw();},{passive:false});
 canvas.addEventListener('mousemove',event=>{const rect=canvas.getBoundingClientRect(),x=(event.clientX-rect.left-width/2)/camera.z+camera.x,y=(event.clientY-rect.top-height/2)/camera.z+camera.y;const r=rooms.find(r=>Math.abs(x-r.x)<=r.w/2&&Math.abs(y-r.y)<=r.h/2);canvas.title=r?.item?`${r.id} · ${ownership(r.item)} · opens ${opens(r).join(', ')||'—'} · stake ${r.item.stake??'?'}`:r?.title||'';});
 document.addEventListener('keydown',event=>{
   if(event.key==='?'&&!['INPUT','TEXTAREA'].includes(event.target.tagName)){openBench({kind:'readings',title:'All measured readings'});event.preventDefault();return;}
@@ -436,11 +528,11 @@ document.addEventListener('keydown',event=>{
   if(['h','j','k','l','ArrowDown','ArrowUp','ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();move(event.key);}
   if(event.key==='Enter'){event.preventDefault();activate(roomById.get(selected));}
 });
-$('glyph').onclick=()=>{if(roomById.has(actor)){choose(actor);camera.z=width<600?.92:1;requestDraw();}};
-$('hub').onclick=()=>{choose('shed',false);camera.x=0;camera.y=0;camera.z=Math.min(1.25,(width-20)/670,(height-26)/420);requestDraw();};
-$('doors').onclick=()=>{const doors=rooms.filter(r=>r.item?.type==='decision'&&r.item.state==='ready');if(doors.length){const next=doors[(doors.findIndex(r=>r.id===selected)+1)%doors.length];choose(next.id);camera.z=width<600?.92:1;requestDraw();}else{$('selection').replaceChildren(element('span','No ready decisions in this reading.'));}};
-$('wing').onchange=event=>{if(event.target.value){choose(event.target.value);camera.z=.85;requestDraw();}canvas.focus();};
-$('zoom-in').onclick=()=>{camera.z=Math.min(1.7,camera.z*1.25);requestDraw();};$('zoom-out').onclick=()=>{camera.z=Math.max(.12,camera.z/1.25);requestDraw();};
+$('glyph').onclick=()=>{if(roomById.has(actor)){choose(actor);camera.z=Math.max(camera.z,width<600?.85:1);requestDraw();}};
+$('hub').onclick=()=>{choose('shed',false);frameFirstView();};
+$('doors').onclick=()=>{const doors=rooms.filter(r=>r.item?.type==='decision'&&r.item.state==='ready');if(doors.length){const next=doors[(doors.findIndex(r=>r.id===selected)+1)%doors.length];choose(next.id);camera.z=Math.max(camera.z,width<600?.85:1);requestDraw();}else{$('selection').replaceChildren(element('span','No ready decisions in this reading.'));}};
+$('wing').onchange=event=>{if(event.target.value){const w=roomById.get(event.target.value);choose(event.target.value);camera.z=Math.min(1.4,(width-40)/((w?.extent||rings[1])*1.1));requestDraw();}canvas.focus();};
+$('zoom-in').onclick=()=>{camera.z=Math.min(2.2,camera.z*1.25);requestDraw();};$('zoom-out').onclick=()=>{camera.z=Math.max(.06,camera.z/1.25);requestDraw();};
 $('overview').onclick=()=>{$('map-caption').textContent='THE MAP / SELECT A WING TO ENTER';const xs=rooms.map(r=>r.x),ys=rooms.map(r=>r.y),minX=Math.min(...xs)-180,maxX=Math.max(...xs)+180,minY=Math.min(...ys)-120,maxY=Math.max(...ys)+120;camera={x:(minX+maxX)/2,y:(minY+maxY)/2,z:Math.min(1,(width-30)/(maxX-minX),(height-30)/(maxY-minY))};requestDraw();};
 $('readings').onclick=()=>openBench({kind:'readings',title:'All measured readings'});
 $('back').onclick=back;$('close').onclick=closeBench;
