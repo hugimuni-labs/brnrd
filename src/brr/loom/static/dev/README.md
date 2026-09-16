@@ -18,10 +18,11 @@ Run `node src/brr/loom/static/dev/capture.mjs` with Playwright installed at
 
 The camera, opened doors and archive expansion are local reading state, never
 writes to the work graph. Slot assignments persist per repository in localStorage
-under `dungeon.slots.v1:`. A slot is retained when its room disappears; adding a
+under `dungeon.slots.v2:`. A slot is retained when its room disappears; adding a
 colliding room uses the next unused slot. Clearing browser storage reconstructs
 the map deterministically from the currently present IDs.
 
-The map's solid corridors mean `needs`. Dotted passages connect the generated
-wing/hub layout for navigation and make no claim about work dependencies.
+The map's closed doors mark unresolved `needs`. The region mouths and central
+court also carry thin navigation passages; these make no claim about work
+dependencies. Lighting follows measured visits and the resident's place.
 `?` or the face's question button opens all readings, including the full HUD.

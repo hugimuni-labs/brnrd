@@ -31,7 +31,7 @@ for (const fixture of ['live','empty','eighty']) for (const [width,height] of [[
     await page.getByRole('button',{name:'w-2 Prepare the rollback kit',exact:true}).focus();
     await page.keyboard.press('Enter');
     assert.match(await page.locator('#selection').innerText(),/revealed by your hand/);
-    await page.getByRole('button',{name:'Hub',exact:true}).click();
+    await page.getByRole('button',{name:'Recenter',exact:true}).click();
     await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   await page.screenshot({path:resolve(output,`hub-${width}x${height}.png`)});
     await page.getByRole('button',{name:'archive archive',exact:true}).focus();await page.keyboard.press('Enter');
