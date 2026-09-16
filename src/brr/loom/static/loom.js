@@ -14,11 +14,13 @@ const colors = { ink:'#0b0906', line:'#3a3328', text:'#e8dcc0', dim:'#b3a78e', i
 const channels = hex => [1,3,5].map(i => parseInt(hex.slice(i,i+2),16));
 const mix = (cold,warm,t) => { const a=channels(cold),b=channels(warm),k=Math.max(0,Math.min(1,t));
   return `rgb(${a.map((v,i)=>Math.round(v+(b[i]-v)*k)).join(',')})`; };
-const WARM_PCT = 55, COLD_PCT = 12;
-// null = unmeasured. A measured reading is 1 at full and 0 once it is spent.
+const WARM_PCT = 48, COLD_PCT = 18;
+const ease = t => t*t*(3-2*t);
+// null = unmeasured. A measured reading is 1 at full and 0 once it is spent; the knee is sharp
+// so a window reads warm or reads cold — the blend between them is a band, not a colour to sit in.
 const temperature = pct => typeof pct === 'number' && Number.isFinite(pct)
-  ? Math.max(0,Math.min(1,(pct-COLD_PCT)/(WARM_PCT-COLD_PCT))) : null;
-const tempColor = pct => { const t=temperature(pct); return t===null?colors.absent:mix(colors.ice,colors.amber,t*t*(3-2*t)); };
+  ? ease(ease(Math.max(0,Math.min(1,(pct-COLD_PCT)/(WARM_PCT-COLD_PCT))))) : null;
+const tempColor = pct => { const t=temperature(pct); return t===null?colors.absent:mix(colors.ice,colors.amber,t); };
 const bindingWindow = name => { const bucket=(Array.isArray(state.fuel?.buckets)?state.fuel.buckets:[]).find(b=>b.name===name);
   const windows=Array.isArray(bucket?.windows)?bucket.windows:[];return windows.find(w=>w.binding)||windows[0]||null; };
 const fixed = ['shed','forge','wire','crew','clock','archive','pack','belt'];
@@ -61,7 +63,7 @@ function depthOf(item,byId,seen=new Set()){
   return parents.length?1+Math.max(...parents.map(p=>depthOf(p,byId,new Set(seen)))):1;
 }
 function frameFirstView(){
-  const edge=(rings[1]||RING1_MIN)*1.30;
+  const edge=(rings[1]||RING1_MIN)*1.14;
   camera={x:0,y:0,z:Math.min((width-18)/(2*edge),(height-18)/(2*edge))};
   canvas.dataset.ring1=String(Math.round(rings[1]||0));canvas.dataset.z=camera.z.toFixed(3);
   window.__loomFrame={z:camera.z,ring1:rings[1]||0,rings:rings.map(r=>Math.round(r))};
@@ -115,9 +117,12 @@ function buildMap() {
   fixed.forEach((id,i)=>{const a=-Math.PI/2+i*Math.PI/4;
     add({id,kind:'hub',title:id,x:Math.cos(a)*rings[0],y:Math.sin(a)*rings[0],unit,
       w:(id==='archive'?96:86)*unit,h:(id==='shed'?52:42)*unit});});
-  array(state.hud?.strands).forEach((strand,i)=>{
+  const crew=rooms.find(r=>r.id==='crew'),crewAngle=crew?Math.atan2(crew.y,crew.x):Math.PI/2;
+  array(state.hud?.strands).forEach((strand,i)=>{   // a strand's plaque hangs in the crew room
+    const lane=(i%2?1:-1)*Math.ceil((i+1)/2)*54*unit,depth=rings[0]*1.34;
     add({id:`strand:${strand.id}`,title:strand.title||strand.id,kind:'strand',strand,unit,
-      x:(-46+(i%2)*92)*unit,y:(20+Math.floor(i/2)*54)*unit,w:84*unit,h:44*unit});
+      x:Math.cos(crewAngle)*depth-Math.sin(crewAngle)*lane,y:Math.sin(crewAngle)*depth+Math.cos(crewAngle)*lane,
+      w:84*unit,h:44*unit});
     edges.push({from:'crew',to:`strand:${strand.id}`,kind:'passage'});});
   const angleOf=new Map();
   for(const s of sectors){
@@ -129,10 +134,11 @@ function buildMap() {
         return number(pa)&&number(pb)&&pa!==pb?pa-pb:collator.compare(a.id,b.id);});
       if(!cells.length)continue;
       const r=rings[k],wanted=cells.reduce((n,c)=>n+c.foot+GUTTER,0)/r;
-      const squeeze=wanted>s.span?s.span/wanted:1;
-      let t=s.from+(s.span-Math.min(wanted,s.span))/2;
+      // A ring that is not full spreads across its sector: a few rooms make a ring, not a clump.
+      const stretch=wanted<s.span?s.span/wanted:1,squeeze=wanted>s.span?s.span/wanted:1;
+      let t=s.from;
       for(const c of cells){
-        const step=(c.foot+GUTTER)/r*squeeze,a=t+step/2;t+=step;
+        const step=(c.foot+GUTTER)/r*squeeze*stretch,a=t+step/2;t+=step;
         angleOf.set(c.id,a);
         add({id:c.id,title:c.item.title||c.id,item:c.kind==='item'?c.item:null,target:c.target,
           kind:c.kind,wing:s.slug,ring:k,angle:a,unit,
@@ -249,6 +255,9 @@ function draw(now=performance.now()){
     ctx.beginPath();ctx.moveTo(start.x,start.y);if(shut){ctx.lineTo(door.x-ux*7,door.y-uy*7);ctx.moveTo(door.x+ux*7,door.y+uy*7);}ctx.lineTo(end.x,end.y);ctx.stroke();ctx.shadowBlur=0;
     if(shut){ctx.save();ctx.translate(door.x,door.y);ctx.rotate(Math.atan2(dy,dx));ctx.fillStyle=colors.ink;ctx.fillRect(-5,-10,10,20);ctx.strokeStyle=blockers(b).length?colors.ice:'#d4a357';ctx.lineWidth=1;ctx.strokeRect(-3,-9,6,18);ctx.beginPath();ctx.moveTo(-3,0);ctx.lineTo(3,0);ctx.stroke();ctx.restore();}
   }
+  // The last measured beads, as footprints: the resident's own trace, so amber.
+  footprints.forEach((b,i)=>{const p=roomPoint(placeOf(b));if(!p)return;ctx.globalAlpha=(i+1)/footprints.length*.38;ctx.fillStyle=colors.amber;ctx.beginPath();ctx.arc(p.x-24+i*4,p.y+23,1.2,0,Math.PI*2);ctx.fill();});ctx.globalAlpha=1;
+  const actorRoom=state.run&&state.shuttle?.state!=='released'?roomById.get(actor):null;
   for(const r of rooms){
     const sx=(r.x-camera.x)*camera.z+width/2,sy=(r.y-camera.y)*camera.z+height/2;
     if(sx+r.w*camera.z<0||sx-r.w*camera.z>width||sy+r.h*camera.z<0||sy-r.h*camera.z>height)continue;
@@ -256,7 +265,7 @@ function draw(now=performance.now()){
     const hubLit=r.kind==='hub'&&(resident||array(state.beads).some(b=>placeOf(b)===r.id));
     const lit=(warm||hubLit)&&!shut,done=r.item?.state==='done';
     const his=r.item?.type==='decision'&&r.item.state==='ready';   // the hand's door: ice, by the colour law
-    const left=r.x-r.w/2,top=r.y-r.h/2,tokens=camera.z<.55;
+    const left=r.x-r.w/2,top=r.y-r.h/2,tokens=camera.z<.55,beads=camera.z<.3;
     if(r.kind==='wing'){
       const size=Math.max(13*r.unit,11/camera.z);
       ctx.textAlign=Math.cos(r.angle)<-.3?'right':Math.cos(r.angle)>.3?'left':'center';
@@ -265,9 +274,22 @@ function draw(now=performance.now()){
     }
     // A room nobody has entered is dark: absent is black, never dim amber.
     const line=shut?'#221b12':lit?colors.amber:done?colors.ember:colors.absent;
+    if(beads&&(r.kind==='item'||r.kind==='reference')){
+      /* A crowded ring reads as beads on its corridor: the population is the picture, and its
+       * colour still says whose it is. Walking in (zoom) is what makes a room a room. */
+      const dot=(r.item?.type==='goal'?9:r.kind==='reference'?3.5:6)/camera.z;
+      const fill=shut?'#241c12':his?colors.ice:lit?colors.amber:done?colors.ember:colors.absent;
+      ctx.beginPath();ctx.arc(r.x,r.y,dot,0,Math.PI*2);
+      if(r.item?.type==='goal'){ctx.strokeStyle=fill;ctx.lineWidth=2.4/camera.z;ctx.stroke();}
+      else{ctx.fillStyle=fill;ctx.fill();}
+      if(his&&!shut){ctx.strokeStyle=colors.ice;ctx.lineWidth=1.1/camera.z;ctx.beginPath();ctx.arc(r.x,r.y,dot*1.9,0,Math.PI*2);ctx.stroke();}
+      if(hand){ctx.strokeStyle=colors.ice;ctx.lineWidth=2/camera.z;ctx.beginPath();ctx.arc(r.x,r.y,dot*2.9,0,Math.PI*2);ctx.stroke();}
+      if(resident)glow(r.x,r.y,30/camera.z,.22);
+      continue;
+    }
     if(lit||resident)glow(r.x,r.y,Math.max(r.w,r.h)*.95,resident?.2:.08);
     ctx.fillStyle=colors.ink;chamber(r);ctx.fill();
-    ctx.strokeStyle=line;ctx.lineWidth=(lit?1.15:.85)/Math.max(.55,camera.z);ctx.shadowColor='#f2b13477';ctx.shadowBlur=lit?9:0;chamber(r);ctx.stroke();ctx.shadowBlur=0;
+    ctx.strokeStyle=r.kind==='hub'&&!lit?'#5b4724':line;ctx.lineWidth=(lit?1.15:.85)/Math.max(.55,camera.z);ctx.shadowColor='#f2b13477';ctx.shadowBlur=lit?9:0;chamber(r);ctx.stroke();ctx.shadowBlur=0;
     if(his&&!shut){ctx.strokeStyle=colors.ice;ctx.lineWidth=1.25/Math.max(.55,camera.z);ctx.shadowColor='#8fd3ff55';ctx.shadowBlur=7;chamber(r);ctx.stroke();ctx.shadowBlur=0;}
     if(hand){ // the hand: corner brackets, ice, never a fill
       const c=Math.max(9,7/camera.z),o=5/Math.max(.55,camera.z);ctx.strokeStyle=colors.ice;ctx.lineWidth=1.4/Math.max(.55,camera.z);
@@ -291,8 +313,9 @@ function draw(now=performance.now()){
         const u=r.unit;ctx.strokeStyle=colors.amber;ctx.lineWidth=1.2/Math.max(.55,camera.z);ctx.beginPath();
         ctx.moveTo(left+9*u,top);ctx.lineTo(left+9*u,top-14*u);ctx.lineTo(left+15*u,top-14*u);ctx.lineTo(left+15*u,top-7*u);
         ctx.lineTo(left+21*u,top-7*u);ctx.lineTo(left+21*u,top-14*u);ctx.lineTo(left+27*u,top-14*u);ctx.lineTo(left+27*u,top);ctx.stroke();}
-      drawText(r.title,left+8*r.unit,r.y+(resident?14:4)*r.unit,lit?colors.text:colors.absentText,Math.max(11*r.unit,9/camera.z),r.w-16*r.unit);
-      if(!resident&&!tokens)drawText(hubDetail(r.id),left+8*r.unit,top+r.h+13*r.unit,lit?'#9c8a6b':colors.absentText,Math.max(7*r.unit,7/camera.z),r.w+10*r.unit);
+      drawText(r.title,left+8*r.unit,r.y+(resident?14:4)*r.unit,lit?colors.text:'#9c8a6b',Math.max(11*r.unit,9/camera.z),r.w-16*r.unit);
+      if(!resident&&!tokens){const out=Math.hypot(r.x,r.y)||1,ox=r.x/out,oy=r.y/out;ctx.textAlign='center';
+        drawText(hubDetail(r.id),r.x+ox*(r.w/2+14*r.unit),r.y+oy*(r.h/2+14*r.unit)+4*r.unit,lit?'#9c8a6b':colors.absentText,Math.max(7*r.unit,7/camera.z),r.w+30*r.unit);ctx.textAlign='left';}
       continue;
     }
     const item=r.item;
@@ -310,7 +333,8 @@ function draw(now=performance.now()){
     }
     if(item.taken&&item.taken!==state.run?.id)drawText('▱',r.x+r.w/2-11,r.y-5,colors.amber,Math.max(13,11/camera.z));
   }
-  if(actorRoom){const p=actorPoint||actorRoom;glow(p.x,p.y,42,.12);ctx.shadowColor='#f2b13499';ctx.shadowBlur=10;drawText(state.run?.mood_glyph||'b·_·d',p.x-24,p.y-5,colors.amber,Math.max(14,11/camera.z));ctx.shadowBlur=0;}
+  if(actorRoom){const p=actorPoint||actorRoom;glow(p.x,p.y,48*(actorRoom.unit||1),.13);ctx.shadowColor='#f2b13499';ctx.shadowBlur=10;ctx.textAlign='center';
+    drawText(state.run?.mood_glyph||'b·_·d',p.x,p.y-4*(actorRoom.unit||1),colors.amber,Math.max(14*(actorRoom.unit||1),12/camera.z));ctx.textAlign='left';ctx.shadowBlur=0;}
   if(pulse){const p=roomById.get(pulse.id),t=(now-pulse.at)/650;if(p&&t<1){ctx.strokeStyle=`rgba(242,177,52,${(1-t)*.65})`;ctx.lineWidth=2;chamber({...p,w:p.w+8*t,h:p.h+8*t});ctx.stroke();requestDraw();}else pulse=null;}
   ctx.restore();
   // Static glass treatment: never a sweep, clock, pulse or invented activity.
@@ -329,7 +353,7 @@ function selection(){
   const info=r.item?`${ownership(r.item)} · ${r.item.state||'?'} · ${opens(r).length?`opens ${opens(r).join(', ')}`:'no downstream rooms'} · stake ${r.item.stake??'?'}`:r.kind==='hub'?hubDetail(r.id):r.title;
   box.append(element('div',info,'door-info'));
   if(r.item?.needs?.length)box.append(element('div',`${locked(r)?'Locked':'Needs'}: ${r.item.needs.join(', ')}${opened.has(r.id)?' · revealed by your hand; work state unchanged':''}`,'muted'));
-  $('map-caption').textContent=`THE WARP / RING ${roomById.get(selected)?.ring??0} · DEPTH IS DEPENDENCY, ANGLE IS TOPIC`;
+  $('map-caption').textContent=width<620?`RING ${roomById.get(selected)?.ring??0}`:`THE WARP / RING ${roomById.get(selected)?.ring??0} · DEPTH IS DEPENDENCY, ANGLE IS TOPIC`;
 }
 function receiptText(receipt){if(typeof receipt==='string')return receipt;return [receipt.kind,receipt.number!=null?`#${receipt.number}`:null,receipt.action,receipt.commit?.slice(0,8)].filter(Boolean).join(' ')||'receipt recorded';}
 function renderPanels(){
