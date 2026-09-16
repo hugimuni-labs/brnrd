@@ -53,7 +53,7 @@ const visited = item => Number.isFinite(timestamp(item.visited_at)) && reference
 const FOOT = {goal:196,decision:170,action:92,preparation:80,reference:62};
 const BOX  = {goal:[176,90],decision:[150,74],action:[78,46],preparation:[68,40],reference:[52,28]};
 const RING1_MIN = 430, RING_GAP = 168, GUTTER = 20;
-const HUB_FRACTION = .30, SECTOR_FLOOR = .055;
+const HUB_FRACTION = .33, SECTOR_FLOOR = .055;
 // A room's ring is its dependency depth. Two needs ⇒ the deepest chain: the room is entered
 // only after all of them, so the longest path is its honest distance from the hub.
 function depthOf(item,byId,seen=new Set()){
@@ -117,7 +117,7 @@ function buildMap() {
   const unit=rings[1]/RING1_MIN;
   fixed.forEach((id,i)=>{const a=-Math.PI/2+i*Math.PI/4;
     add({id,kind:'hub',title:id,x:Math.cos(a)*rings[0],y:Math.sin(a)*rings[0],unit,
-      w:(id==='archive'?96:86)*unit,h:(id==='shed'?52:42)*unit});});
+      w:(id==='archive'?104:94)*unit,h:(id==='shed'?54:44)*unit});});
   const crew=rooms.find(r=>r.id==='crew'),crewAngle=crew?Math.atan2(crew.y,crew.x):Math.PI/2;
   array(state.hud?.strands).forEach((strand,i)=>{   // a strand's plaque hangs in the crew room
     const lane=(i%2?1:-1)*Math.ceil((i+1)/2)*62*unit,depth=rings[0]*1.5;
@@ -282,7 +282,8 @@ function draw(now=performance.now()){
     if(beads&&(r.kind==='item'||r.kind==='reference')){
       /* A crowded ring reads as beads on its corridor: the population is the picture, and its
        * colour still says whose it is. Walking in (zoom) is what makes a room a room. */
-      const dot=(r.item?.type==='goal'?9:r.kind==='reference'?3.5:6)/camera.z;
+      const room=Math.max(2.2,Math.min(6,r.w*camera.z*.45));
+      const dot=(r.item?.type==='goal'?room*1.5:r.kind==='reference'?room*.6:room)/camera.z;
       const fill=shut?'#241c12':his?colors.ice:lit?colors.amber:done?colors.ember:colors.absent;
       ctx.beginPath();ctx.arc(r.x,r.y,dot,0,Math.PI*2);
       if(r.item?.type==='goal'){ctx.strokeStyle=fill;ctx.lineWidth=2.4/camera.z;ctx.stroke();}
