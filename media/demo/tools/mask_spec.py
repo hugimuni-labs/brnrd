@@ -23,9 +23,17 @@ same windows.
 BANNER_TITLE = (126, 92, 406, 138)     # iOS notification banner, the title line
 CHAT_HEADER = (186, 102, 522, 174)     # WhatsApp chat nav bar, the contact title
 OPEN_SWEEP = (110, 84, 720, 260)       # the app-open animation: the title sweeps
+# The banner does not fade where it stands: as the app opens it slides *up* and
+# off the top of the screen, and the title crosses y=84 on its way out — read
+# off frames 1017 and 1993, where it escaped a rect that stopped at the banner.
+BANNER_EXIT = (100, 0, 480, 152)
 LIST_SELF = (0, 466, 540, 536)         # chat list, his own row
 LIST_THIRD_A = (0, 1076, 540, 1150)    # chat list, +375 29 872-95-21
 LIST_THIRD_B = (0, 1392, 540, 1456)    # chat list, +375 29 663-97-48
+# The window opens at 37.88 rather than at the frame the list looks drawn:
+# on frame 338 the rows render with the avatars still grey placeholders, which
+# is what fooled a probe that looked for a dark avatar — and the two numbers
+# are fully legible on it.
 # the list rows run to x=0 on purpose: iOS's push animation slides the list
 # left under the incoming chat, and a rect that started at the text would let
 # the first glyphs out on the left (caught on frame 352).
@@ -36,9 +44,9 @@ LIST_THIRD_B = (0, 1392, 540, 1456)    # chat list, +375 29 663-97-48
 WINDOWS = {
     # the ask, 13:07-13:08Z — home screen, chat list, then the chat
     "c02_ask.mp4": [
-        (38.02, 39.20, LIST_SELF),
-        (38.02, 39.20, LIST_THIRD_A),
-        (38.02, 39.20, LIST_THIRD_B),
+        (37.88, 39.20, LIST_SELF),
+        (37.88, 39.20, LIST_THIRD_A),
+        (37.88, 39.20, LIST_THIRD_B),
         (38.80, 39.62, OPEN_SWEEP),
         (39.40, 999.0, CHAT_HEADER),
     ],
@@ -47,7 +55,8 @@ WINDOWS = {
     # the reply, 13:11Z — banner, the app opens, the chat
     "s_notify.png": [(None, None, BANNER_TITLE)],
     "c04b_notify.mp4": [
-        (263.55, 263.90, BANNER_TITLE),
+        (263.55, 263.98, BANNER_TITLE),
+        (263.78, 264.02, BANNER_EXIT),
         (263.80, 264.38, OPEN_SWEEP),
         (264.18, 999.0, CHAT_HEADER),
     ],
@@ -58,6 +67,7 @@ WINDOWS = {
     "s_folded.png": [(None, None, BANNER_TITLE)],
     "c05c_folded.mp4": [
         (428.55, 429.95, BANNER_TITLE),
+        (429.72, 430.02, BANNER_EXIT),
         (429.82, 430.50, OPEN_SWEEP),
         (430.30, 999.0, CHAT_HEADER),
     ],

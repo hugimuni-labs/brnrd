@@ -17,6 +17,14 @@ export type Rect = [number, number, number, number];
 export const BANNER_TITLE: Rect = [126, 92, 406, 138]; // iOS banner, title line
 export const CHAT_HEADER: Rect = [186, 102, 522, 174]; // WhatsApp nav bar title
 export const OPEN_SWEEP: Rect = [110, 84, 720, 260]; // the app-open animation
+// The banner does not fade where it stands: as the app opens it slides *up*
+// and off the top of the screen, and the title crosses y=84 on its way out —
+// read off frames 1017 and 1993, where it escaped a rect that stopped at the
+// banner.
+export const BANNER_EXIT: Rect = [100, 0, 480, 152];
+// The list window opens at 37.88 rather than at the frame the list looks
+// drawn: on frame 338 the rows render with the avatars still grey
+// placeholders, and both numbers are fully legible on it.
 // The chat-list rows run to x = 0 on purpose: iOS's push animation slides the
 // list left under the incoming chat, and a rect that started at the text let
 // the first glyphs out on the left (caught on frame 352 of the 68-s cut).
@@ -29,9 +37,9 @@ type Window = [number | null, number | null, Rect];
 export const WINDOWS: Record<string, Window[]> = {
   // the ask, 13:07-13:08Z — home screen, chat list, then the chat
   "c02_ask.mp4": [
-    [38.02, 39.2, LIST_SELF],
-    [38.02, 39.2, LIST_THIRD_A],
-    [38.02, 39.2, LIST_THIRD_B],
+    [37.88, 39.2, LIST_SELF],
+    [37.88, 39.2, LIST_THIRD_A],
+    [37.88, 39.2, LIST_THIRD_B],
     [38.8, 39.62, OPEN_SWEEP],
     [39.4, 999, CHAT_HEADER],
   ],
@@ -40,7 +48,8 @@ export const WINDOWS: Record<string, Window[]> = {
   // the reply, 13:11Z — banner, the app opens, the chat
   "s_notify.png": [[null, null, BANNER_TITLE]],
   "c04b_notify.mp4": [
-    [263.55, 263.9, BANNER_TITLE],
+    [263.55, 263.98, BANNER_TITLE],
+    [263.78, 264.02, BANNER_EXIT],
     [263.8, 264.38, OPEN_SWEEP],
     [264.18, 999, CHAT_HEADER],
   ],
@@ -51,6 +60,7 @@ export const WINDOWS: Record<string, Window[]> = {
   "s_folded.png": [[null, null, BANNER_TITLE]],
   "c05c_folded.mp4": [
     [428.55, 429.95, BANNER_TITLE],
+    [429.72, 430.02, BANNER_EXIT],
     [429.82, 430.5, OPEN_SWEEP],
     [430.3, 999, CHAT_HEADER],
   ],
