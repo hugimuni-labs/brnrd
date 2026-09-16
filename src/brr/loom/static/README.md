@@ -43,6 +43,13 @@ Unknown measurements remain unknown. Directory nodes derive from measured paths.
   (asked once, on first crossing). `?scan=off` removes the scan: the heartbeat
   pulses on the face and a plaque shows its thread on hover — the same under
   reduced motion. The canvas reports `data-scan` and `data-trails-lit`.
+- **The watch.** While `shuttle.state` is `listening` (or the seat's last bead
+  measured at the shed), the shuttle stands at the shed, drawn as a tower in
+  amber outline: a beacon blinks from its top on the beat, dashed sight-lines
+  run to the wire and the crew, and each live strand's last place hangs on a
+  faint hairline. The face reads *at the shed · watching the wire and N
+  strands*. When the state moves back to `awake`, the shuttle walks from the
+  tower to the first new bead's place. The canvas reports `data-watching`.
 - **The walk.** The shuttle follows the branch curves to each new measured
   place in 300–600 ms, eased. The last 8 places leave a fading amber trail; the
   walked route holds light for 900 ms. Each boundary lands as 12–20 sparks with
