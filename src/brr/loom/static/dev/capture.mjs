@@ -251,6 +251,11 @@ for (const mode of ["up", "root"]) {
   assert.equal(await page.evaluate(() => document.querySelector("#loom").dataset.scan), mode);
   assert.ok(pings >= 2, `the ${mode} front lights nodes as it crosses them`);
   await page.screenshot({ path: resolve(output, `live-scan-${mode}-1920x1080.png`) });
+  if (mode === "up" && (await page.evaluate(() => document.querySelector("#loom").dataset.watching)) === "true") {
+    // The watch: the shuttle stands at the tower while the seat listens.
+    assert.match(await page.locator("canvas").getAttribute("aria-label"), /loom/);
+    await page.screenshot({ path: resolve(output, "live-watchtower-1920x1080.png") });
+  }
   if (mode === "up") {
     // S cycles, and the choice is remembered on reload.
     await page.keyboard.press("S");

@@ -623,8 +623,15 @@ function beadPath(b) {
 // Files a bead named are repo places whatever its kind; home paths ride
 // `home_places` (or `places` on a home bead from an older feed).
 const fileBead = (b) => (b.place_kind || "file") !== "home" || list(b.home_places).length > 0;
+// The seat keeps watch: listening, or its last bead measured at the shed.
+function watching() {
+  const last = [...list(state?.beads)].reverse().find((b) => beadPath(b));
+  return state?.shuttle?.state === "listening" || beadPath(last) === "shed:";
+}
 function newestPlace() {
-  return [...list(state?.beads)].reverse().map(beadPath).find(Boolean) || null;
+  const measured = [...list(state?.beads)].reverse().map(beadPath).find(Boolean) || null;
+  // While it watches, the shuttle stands at the shed — the watchtower.
+  return watching() ? "shed:" : measured;
 }
 function actorHistory() {
   const out = [];
@@ -784,7 +791,7 @@ function rebuild() {
   // crew beside the strands, the wire lower-left.
   const fixedAt = {
     forge: { x: T.x + T.w - 64, y: T.y + 58 },
-    shed: { x: T.x + T.w - 46, y: T.y + T.h * 0.34 },
+    shed: { x: T.x + T.w - 68, y: T.y + T.h * 0.34 },
     crew: { x: T.x + T.w - 64, y: T.y + T.h * 0.66 },
     wire: { x: T.x + 40, y: T.y + T.h - 74 },
     clock: { x: T.x + 46, y: T.y + 58 },
@@ -1916,13 +1923,47 @@ function drawTree() {
       const on = actor?.path === node.path,
         seen = visited.has(node.path),
         size = 22;
-      g.save();
-      g.fillStyle = "#0f0c08";
-      g.fillRect(p.x - size / 2, p.y - size / 2, size, size);
-      g.strokeStyle = on ? INK.amber : seen ? "#6b5a3a" : "#3a3328";
-      g.strokeRect(p.x - size / 2 + 0.5, p.y - size / 2 + 0.5, size - 1, size - 1);
-      g.restore();
-      text(FIXED_GLYPH[node.fixed], p.x, p.y + 4, on || seen ? INK.bone : INK.faint, 12, Infinity, { align: "center" });
+      if (node.fixed !== "shed") {
+        g.save();
+        g.fillStyle = "#0f0c08";
+        g.fillRect(p.x - size / 2, p.y - size / 2, size, size);
+        g.strokeStyle = on ? INK.amber : seen ? "#6b5a3a" : "#3a3328";
+        g.strokeRect(p.x - size / 2 + 0.5, p.y - size / 2 + 0.5, size - 1, size - 1);
+        g.restore();
+      }
+      if (node.fixed === "shed") {
+        // A watchtower, not a box: legs, a cabin, a lamp housing.
+        const keep = watching(),
+          stroke = keep ? INK.amber : on || seen ? INK.boneDim : INK.faint;
+        strokePath(
+          [
+            { x: p.x - 11, y: p.y + 14 },
+            { x: p.x - 5, y: p.y - 3 },
+            { x: p.x + 5, y: p.y - 3 },
+            { x: p.x + 11, y: p.y + 14 },
+          ],
+          stroke,
+          1,
+          0.9,
+          keep ? 6 : 0,
+        );
+        strokePath([{ x: p.x - 9, y: p.y - 3 }, { x: p.x + 9, y: p.y - 3 }], stroke, 1, 0.9);
+        strokePath([{ x: p.x - 8, y: p.y + 6 }, { x: p.x + 8, y: p.y + 6 }], stroke, 1, 0.5);
+        strokePath(
+          [
+            { x: p.x - 7, y: p.y - 3 },
+            { x: p.x - 7, y: p.y - 13 },
+            { x: p.x + 7, y: p.y - 13 },
+            { x: p.x + 7, y: p.y - 3 },
+          ],
+          stroke,
+          1,
+          0.9,
+          keep ? 6 : 0,
+        );
+        strokePath([{ x: p.x - 10, y: p.y - 13 }, { x: p.x, y: p.y - 20 }, { x: p.x + 10, y: p.y - 13 }], stroke, 1, 0.9);
+        regionRects.tower = { x: p.x, y: p.y, top: p.y - 20 };
+      } else text(FIXED_GLYPH[node.fixed], p.x, p.y + 4, on || seen ? INK.bone : INK.faint, 12, Infinity, { align: "center" });
       text(node.fixed, p.x, p.y + size / 2 + 12, on || seen ? INK.boneDim : INK.faint, 9, Infinity, { align: "center" });
       if (node.fixed === "forge") {
         // PRs of the passes in focus: knots that are PRs, dropped at the forge.
@@ -2008,6 +2049,7 @@ function drawFace() {
   g.restore();
   hit(faceBox.x, faceBox.y, faceBox.w, faceBox.h, "run", null, "the resident");
   const shuttleState = state.shuttle?.state,
+    liveStrands = list(state.hud?.strands).filter((t) => t.status === "live").length,
     word = LEXICON[shuttleState] || known(shuttleState);
   const wx = faceBox.x + faceBox.w + 16,
     ww = f.x + f.w - 18 - wx;
@@ -2021,10 +2063,19 @@ function drawFace() {
   const since = state.shuttle?.since,
     sinceMin =
       since && state.at ? Math.max(0, Math.round((Date.parse(state.at) - Date.parse(since)) / 60000)) : null;
+  if (watching())
+    text(
+      `watching the wire and ${liveStrands} strand${liveStrands === 1 ? "" : "s"}`,
+      wx,
+      wordY + (compact ? 15 : 19),
+      INK.amber,
+      compact ? 9 : 10,
+      ww,
+    );
   text(
     `${state.run?.mood ? state.run.mood + " · " : ""}since ${since ? since.slice(11, 16) : "?"}${sinceMin == null ? "" : " · " + sinceMin + "m"}`,
     wx,
-    wordY + (compact ? 16 : 20),
+    wordY + (watching() ? (compact ? 28 : 36) : compact ? 16 : 20),
     INK.boneDim,
     compact ? 9 : 10,
     ww,
@@ -2834,7 +2885,8 @@ function drawActor(pulse) {
   if (!a || !state.run) return;
   const T = layout.tree;
   const bob = reduced.matches ? 0 : (pulse - 0.5) * 3;
-  const gy = a.y - 15 + bob;
+  // At the tower it stands above the cabin, not across it.
+  const gy = a.y - (actor.path === "shed:" ? 30 : 15) + bob;
   // The brightest thing on screen: the resident's own light.
   halo(a.x, a.y - 8, 86, INK.amber, 0.22);
   halo(a.x, a.y - 8, 34, INK.amber, 0.38);
@@ -2877,6 +2929,32 @@ function drawActor(pulse) {
     g.restore();
     text(label, lx, ly, INK.bone, 10);
     if (lx < gx) line(lx + lw + 6, ly - 4, gx - gw / 2 - 4, gy - 6, INK.amber, 0.6);
+  }
+}
+// The watch: a beacon on the beat, sight-lines to the wire and the crew, and
+// a faint hairline to each live strand's last place.
+function drawWatch(pulse) {
+  const tower = regionRects.tower;
+  canvas.dataset.watching = String(watching());
+  if (!tower || !watching()) return;
+  const top = { x: tower.x, y: tower.top - 2 };
+  const beat = reduced.matches ? 0.5 : pulse;
+  halo(top.x, top.y, 26 + beat * 10, INK.amber, 0.12 + beat * 0.18);
+  dot(top.x, top.y, 1.8 + beat * 1.2, "#fff1d0", 8 + beat * 10);
+  // What it watches: the wire, the crew, and every live strand's last place.
+  const looks = [point("wire:"), point("crew:")].filter(Boolean);
+  for (const thread of list(state.hud?.strands).filter((t) => t.status === "live")) {
+    const p = point(list(thread.places).at(-1) || "");
+    if (p) looks.push(p);
+  }
+  g.save();
+  g.setLineDash([2, 6]);
+  for (const p of looks) strokePath([{ x: tower.x, y: tower.y }, p], INK.amber, 1, 0.25);
+  g.restore();
+  for (const p of looks.slice(2)) {
+    g.globalAlpha = 0.35;
+    dot(p.x, p.y, 2, INK.amber, 6);
+    g.globalAlpha = 1;
   }
 }
 function drawSparks() {
@@ -3152,6 +3230,7 @@ function draw(timestamp) {
       g.clip();
       drawTrail();
       drawThreads();
+      drawWatch(pulse);
       drawActor(pulse);
       drawSparks();
       if (forgeDrop && regionRects.forge && !reduced.matches) {
