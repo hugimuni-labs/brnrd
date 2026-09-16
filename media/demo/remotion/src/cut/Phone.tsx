@@ -1,6 +1,7 @@
 import React from "react";
 import { AbsoluteFill, Easing, Img, OffthreadVideo, Sequence, interpolate, staticFile, useCurrentFrame, useVideoConfig } from "remotion";
-import { CamKey, Scene, VIDEO_H, VIDEO_W, fps, sceneFrames, segFrames } from "./scenes";
+import { CamKey, Scene, Seg, VIDEO_H, VIDEO_W, fps, sceneFrames, segFrames } from "./scenes";
+import { MASK_EDGE, MASK_FILL, rectsFor } from "./mask";
 
 // The phone footage fitted to the frame height; the camera is a scale about
 // a point of the phone frame (cx, cy in 0..1), eased between keys.
@@ -18,6 +19,31 @@ const camAt = (keys: CamKey[], t: number): CamKey => {
   return t <= keys[0].at ? keys[0] : keys[keys.length - 1];
 };
 
+// The phone number, covered inside the phone's own coordinate space so the
+// mask tracks every zoom. Drawn only on the sharp layer — the cover layer
+// behind it is blurred 28px, where nothing is legible and a hard rect would
+// be the only sharp thing on screen.
+const NumberMask: React.FC<{ seg: Seg }> = ({ seg }) => {
+  const frame = useCurrentFrame();
+  const t = seg.still ? seg.clipStart : seg.clipStart + seg.from + (frame / fps) * seg.rate;
+  const rects = rectsFor(seg.clip, t);
+  if (!rects.length) return null;
+  return (
+    <>
+      {rects.map(([x0, y0, x1, y1], i) => (
+        <div
+          key={i}
+          style={{
+            position: "absolute", left: x0, top: y0, width: x1 - x0, height: y1 - y0,
+            boxSizing: "border-box", background: MASK_FILL, border: `2px solid ${MASK_EDGE}`,
+            borderRadius: 12, pointerEvents: "none",
+          }}
+        />
+      ))}
+    </>
+  );
+};
+
 const Footage: React.FC<{ scene: Scene; blur?: boolean }> = ({ scene, blur }) => {
   let start = 0;
   return (
@@ -27,6 +53,7 @@ const Footage: React.FC<{ scene: Scene; blur?: boolean }> = ({ scene, blur }) =>
         const el = seg.still ? (
           <Sequence key={i} from={start} durationInFrames={n} layout="none">
             <Img src={staticFile(`stills/${seg.clip}`)} style={{ width: VIDEO_W, height: VIDEO_H, display: "block", filter: blur ? "blur(28px) brightness(0.32) saturate(0.7)" : undefined }} />
+            {blur ? null : <NumberMask seg={seg} />}
           </Sequence>
         ) : (
           <Sequence key={i} from={start} durationInFrames={n} layout="none">
@@ -38,6 +65,7 @@ const Footage: React.FC<{ scene: Scene; blur?: boolean }> = ({ scene, blur }) =>
               muted
               style={{ width: VIDEO_W, height: VIDEO_H, display: "block", filter: blur ? "blur(28px) brightness(0.32) saturate(0.7)" : undefined }}
             />
+            {blur ? null : <NumberMask seg={seg} />}
           </Sequence>
         );
         start += n;
