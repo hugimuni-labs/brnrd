@@ -61,5 +61,10 @@ for (const fixture of ['live','empty','three','eighty']) for (const [width,heigh
  await page.close();
 }
 await browser.close();
+// The generative rule's own test: three rooms and eighty open in the same frame, ring 1 on the same glass.
+for (const width of [1440,390]) {
+  const sizes=[...new Set(receipts.filter(r=>r.width===width&&r.fixture!=='empty').map(r=>r.screen_ring1))];
+  assert.equal(sizes.length,1,`ring 1 opens at one size per viewport; got ${sizes.join(', ')} at ${width}`);
+}
 assert.deepEqual(errors,[]);
 console.log(JSON.stringify({receipts,errors,output},null,2));
