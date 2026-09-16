@@ -9,7 +9,7 @@ const output = process.env.CAPTURE_DIR || '/tmp/dungeon-gen1';
 await mkdir(output,{recursive:true});
 const browser = await chromium.launch({headless:true});
 const errors = [], receipts = [];
-for (const fixture of ['live','empty','eighty']) for (const [width,height] of [[1440,900],[390,844]]) {
+for (const fixture of ['live','empty','three','eighty']) for (const [width,height] of [[1440,900],[390,844]]) {
   const context=await browser.newContext({viewport:{width,height},reducedMotion:'no-preference'});
   const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
   await page.goto(`${base}/loom/?fixture=${fixture}`);
@@ -42,7 +42,9 @@ for (const fixture of ['live','empty','eighty']) for (const [width,height] of [[
     await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   await page.screenshot({path:resolve(output,`archive-${width}x${height}.png`)});
   }
-  receipts.push({fixture,width,height,still:true,overflow:false});
+  // The generative rule's own test: the first view is framed on ring 1 at every population.
+  const frame=await page.evaluate(()=>({z:window.__loomFrame?.z,ring1:window.__loomFrame?.ring1,rooms:Number(document.querySelector('canvas').dataset.rooms)}));
+  receipts.push({fixture,width,height,still:true,overflow:false,...frame,screen_ring1:frame.z&&frame.ring1?Math.round(frame.z*frame.ring1*2):null});
   await context.close();
 }
 // Drive a page against the real endpoint shape, including hostile-looking text.
