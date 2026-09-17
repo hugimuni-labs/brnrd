@@ -3887,6 +3887,16 @@ def _collect_levels(
             codex_usage.COLLECTED_SLOTS | codex_status.COLLECTED_SLOTS
         )
     if claude_status.supported(runner_name):
+        if outbox_dir is None and shared_dir is not None:
+            # Claude's collectors cache into a *run's* outbox, never into
+            # the shared dir the codex branch above reads. A reader with no
+            # run of its own — the schedule-pacing read, a held seat's
+            # refill test — has to go find the freshest one a run left
+            # behind; passing ``None`` through read as "unreadable" on every
+            # sweep, so a wall armed on claude could never measure its own
+            # refill (2026-09-16: parked at 1%, session back at 96%, `force`
+            # was the only way out).
+            outbox_dir = runner_quota.latest_claude_usage_outbox_dir(shared_dir)
         if refresh:
             usage_levels = claude_usage.load_or_refresh_snapshot(
                 outbox_dir, cwd=work_dir
@@ -10165,22 +10175,12 @@ def _fire_due_schedules(
         ) -> dict[str, object]:
             if not runner_name:
                 return {"mode": "normal"}
-            # claude_usage/claude_status only ever cache into a *run's*
-            # outbox dir, never brr_dir itself — brr_dir has no "current
-            # run" of its own here, so go find the freshest one a recent
-            # run left behind (previously always missed, since brr_dir was
-            # passed straight through and never held the cache file).
+            # No run of its own here: ``_collect_levels`` finds the
+            # freshest run-cached claude reading itself when the outbox is
+            # ``None`` (codex's probe cache is account-scoped at brr_dir).
             if runner_name not in level_cache:
-                levels_dir = brr_dir
-                if claude_status.supported(runner_name):
-                    levels_dir = (
-                        runner_quota.latest_claude_usage_outbox_dir(brr_dir)
-                        or brr_dir
-                    )
-                # Codex needs none of that hunt: its probe cache is
-                # account-scoped at brr_dir and warm across runs.
                 level_cache[runner_name], _ = _collect_levels(
-                    runner_name, levels_dir, None,
+                    runner_name, None, None,
                     refresh=False, shared_dir=brr_dir,
                 )
             binding_pct = runner_quota.binding_quota_remaining_pct(
@@ -14962,6 +14962,14 @@ def _release_reset_holds_due(
                 # the provider now reports. The arm-time deadline is
                 # informative only; the number decides.
                 pct = _held_run_binding_pct(root, held, refresh=True)
+                if pct is None:
+                    # Say so: a silent ``continue`` here rendered as "still
+                    # starved" for a wall no reading had touched.
+                    print(
+                        f"[brnrd] starved seat {held.id}: binding quota "
+                        "unreadable — the wall stands until a reading proves "
+                        "a refill"
+                    )
                 if resource_hold.refill_condition_met(meta, pct):
                     released_by = "refill"
                 else:
