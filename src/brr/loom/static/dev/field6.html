@@ -580,71 +580,26 @@ function drawScene(x,now){
     return true;
   });
 
-  // ── the pods: one object each, one trail each, two ranges ────────────────
-  const ps=podAt(z);
-  for(const p of pods){
-    // resolved by the parent: [WORLD]'s camera-aware pod + strand pods, with
-    // [FRAME]'s correction kept — the trail comes from phosphor decay, not a polyline.
-    const t=podXY(p,z), me=p.kind==='resident';
-    if(step){p.x+=(t.x-p.x)*0.045;p.y+=(t.y-p.y)*0.045;
-      }  // the trail is the phosphor's job now (the dispatcher's steer) — no polyline
-    x.save();x.globalCompositeOperation='lighter';
-    if(me&&p.listening){             // the sonar: the daemon's real ~10 s beat, nothing returns
-      const beat=10000, ph=(now%beat)/beat;
-      x.save();x.globalCompositeOperation='lighter';
-      for(const off of [0,0.34,0.68]){
-        const e=(ph+off)%1, rr=(18+e*Math.min(W,H)*0.42)*ps;
-        x.strokeStyle=`rgba(242,177,52,${0.20*(1-e)*(1-e)})`;x.lineWidth=1.4*(1-e)+0.3;
-        x.beginPath();x.arc(p.x,p.y,rr,0,7);x.stroke();
-      }
-      x.restore();
-    }
-    const sc=ps*(me?1:0.78), rx=11*sc, ry=6.5*sc;
-    if(me){x.save();x.globalCompositeOperation='lighter';
-      const rg=x.createRadialGradient(p.x,p.y,0,p.x,p.y,26*sc);
-      rg.addColorStop(0,'rgba(242,177,52,0.35)');rg.addColorStop(1,'rgba(242,177,52,0)');
-      x.fillStyle=rg;x.beginPath();x.arc(p.x,p.y,26*sc,0,7);x.fill();x.restore();}
-    x.fillStyle='#0b0906';x.beginPath();x.ellipse(p.x,p.y,rx,ry,0,0,7);x.fill();
-    if(!me&&p.fill!=null){           // a strand's hull fills with what it has spent
-      x.save();x.beginPath();x.ellipse(p.x,p.y,rx,ry,0,0,7);x.clip();
-      x.fillStyle='rgba(242,177,52,0.45)';x.fillRect(p.x-rx,p.y+ry-2*ry*p.fill,rx*2,2*ry*p.fill);x.restore();
-    }
-    x.strokeStyle=me?A:'rgba(242,177,52,0.52)';x.lineWidth=me?1.2:0.9;
-    x.beginPath();x.ellipse(p.x,p.y,rx,ry,0,0,7);x.stroke();
-    if(sc>0.5){
-      x.fillStyle=me?A:'rgba(242,177,52,0.62)';x.font=`${me?10:9}px ${MONO}`;x.textAlign='center';
-      x.fillText(p.label,p.x,p.y-12*sc-2);x.textAlign='left';
-    }
-  }
+  // ── the pods: [ACTOR] draws them, as tiled terminal faces ────────────────
+  ACTOR.drawPods(x,z,step,now);
   drawSounder(x,z);
+  ACTOR.panel(x,z,now);
 }
 
 // the depth sounder — the camera's own readout, in the world, because a
 // continuous axis with no reading is a control a stranger cannot hold.
-// PROVISIONAL: worldHud() returns {z, range, say}; this comes out the moment
-// [FRAME] renders it as chrome.
-function drawSounder(x,z){
-  const bx=W-26, top=H*0.26, bot=H*0.74, at=zz=>bot+(top-bot)*((zz-ZMIN)/(ZMAX-ZMIN));
-  x.strokeStyle='rgba(90,77,60,0.35)';x.lineWidth=1;
-  x.beginPath();x.moveTo(bx,top);x.lineTo(bx,bot);x.stroke();
-  x.font=`9px ${MONO}`;x.textAlign='right';
-  for(const [zz,lb] of [[ZMAX,'interior'],[0.46,'mid'],[ZMIN,'schematic']]){
-    const y=at(zz);x.strokeStyle='rgba(90,77,60,0.45)';
-    x.beginPath();x.moveTo(bx-4,y);x.lineTo(bx+4,y);x.stroke();
-    x.fillStyle=RANGE(z)===lb?'#d9cba9':'#4a4336';x.fillText(lb,bx-8,y+3);
-  }
-  const y=at(clamp(z,ZMIN,ZMAX));
-  x.fillStyle=A;x.beginPath();x.moveTo(bx+3,y);x.lineTo(bx+10,y-4);x.lineTo(bx+10,y+4);x.closePath();x.fill();
-  x.fillStyle='#8a7c5e';x.fillText(RANGE_SAY[RANGE(z)],W-40,H-16);x.textAlign='left';
-}
+// [ACTOR] owns its body now: the three detents are marks on it.
+function drawSounder(x,z){ACTOR.sounder(x,z);}
 
 // ── the axis itself: wheel · + − · 1 2 3 · pinch. One control, no modes. ────
-const zoom=f=>{CAM.tz=clamp(CAM.tz*f,ZMIN,ZMAX);};
+const zoom=f=>{CAM.tz=clamp(CAM.tz*f,ZMIN,ZMAX);ACTOR.camera.push(performance.now());};
 addEventListener('wheel',e=>{e.preventDefault();zoom(Math.exp(-e.deltaY*(e.ctrlKey?0.010:0.0018)));},{passive:false});
 addEventListener('keydown',e=>{
   if(e.key==='+'||e.key==='=')zoom(1.18);
   else if(e.key==='-'||e.key==='_')zoom(1/1.18);
-  else if(e.key==='1')CAM.tz=ZMAX;else if(e.key==='2')CAM.tz=0.46;else if(e.key==='3')CAM.tz=ZMIN;
+  else if(e.key==='1')ACTOR.camera.jump(ZMAX);
+  else if(e.key==='2')ACTOR.camera.jump(0.46);
+  else if(e.key==='3')ACTOR.camera.jump(ZMIN);
 });
 let pinch=null;
 addEventListener('touchmove',e=>{
@@ -653,7 +608,8 @@ addEventListener('touchmove',e=>{
   if(pinch)zoom(d/pinch);pinch=d;e.preventDefault();
 },{passive:false});
 addEventListener('touchend',()=>{pinch=null;});
-function tickCam(){CAM.z+=(CAM.tz-CAM.z)*0.14;if(Math.abs(CAM.tz-CAM.z)<0.0008)CAM.z=CAM.tz;}
+function tickCam(){ACTOR.camera.settle(performance.now());
+  CAM.z+=(CAM.tz-CAM.z)*0.14;if(Math.abs(CAM.tz-CAM.z)<0.0008)CAM.z=CAM.tz;}
 
 // ── the hand: hit-testing is the world's, at every altitude ────────────────
 cv.addEventListener('mousemove',e=>{
@@ -683,6 +639,770 @@ cv.addEventListener('mousemove',e=>{
     h.style.whiteSpace='pre';h.textContent=txt;}
   else h.style.display='none';
 });
+
+// ═══ [ACTOR] ═══════════════════════════════════════════════════════════════
+// The camera's rest, the pod's face, and the room a hand can choose.
+//
+// THE FENCE, AND WHY IT IS HERE: this block was dispatched as a stub already
+// standing in the file. It was not in `2aac813b` (field6 = field5 + a title),
+// so it is written here as one contiguous region inside [WORLD], and every
+// line it needed outside itself is listed in the report under *Crossings*.
+//
+// The seam, as named by the dispatch — the only things another hand may assume:
+//   ACTOR.camera.detent(z) → {z,k,key}   the nearest rest on the one axis
+//   ACTOR.camera.settle(now)             called from tickCam; eases tz to rest
+//   ACTOR.camera.push(now)               "a hand is on the wheel right now"
+//   ACTOR.drawPods(g,z,step,now)         every pod, as a tiled terminal face
+//   ACTOR.sounder(g,z)                   the depth sounder, with the detents on it
+//   ACTOR.panel(g,z,now)                 what is selected, and the verb offered
+//   ACTOR.select.room(r) / .deck(d) / .clear() / .at(px,py,z)
+//   SELECTED = {kind,id,slug,chosen:Set}  — the shared selection, by ID, so a
+//     feed refresh that rebuilds `rooms` cannot drop what a hand had chosen.
+// Nothing here writes to the feed, the corridors, the cloth, or the console.
+
+const SELECTED={kind:null,id:null,slug:null,chosen:new Set(),hint:null,open:null};
+// the offer's own rectangle, published by panel() each frame so the hand can
+// reach it: a verb only the keyboard can press is a verb nobody finds
+const BTN={on:false,x:0,y:0,w:0,h:0};
+const BENCH={scroll:0,total:0,fit:0};
+const inBtn=(px,py)=>BTN.on&&px>=BTN.x&&px<=BTN.x+BTN.w&&py>=BTN.y&&py<=BTN.y+BTN.h;
+window.SELECTED=SELECTED;                 // the seam, reachable from a console
+
+// ── 1 · the camera rests, it does not switch ───────────────────────────────
+// The maintainer asked for three states and doubted his own ask. He was right
+// to: a mode is a thing a stranger has to be told. So the axis stays exactly
+// the continuous function it was, and gains three places it comes to rest —
+// the wheel eases into the nearest once the hand stops, `1`/`2`/`3` jump, and
+// scrolling straight through a detent is never caught by it.
+const DETENTS=[{z:ZMAX,k:'interior',key:'1'},{z:0.46,k:'mid',key:'2'},{z:ZMIN,k:'schematic',key:'3'}];
+const SETTLE_MS=180;                      // hand off the wheel this long ⇒ it rests
+const CAMST={last:0,ease:false,jump:false};
+const nearestDetent=z=>DETENTS.reduce((b,d)=>Math.abs(d.z-z)<Math.abs(b.z-z)?d:b,DETENTS[0]);
+const atRest=z=>Math.abs(nearestDetent(z).z-z)<0.012;
+
+const ACTOR={
+  camera:{
+    detent:nearestDetent,
+    push(now){CAMST.last=now;CAMST.ease=false;CAMST.jump=false;},   // a hand on the wheel
+    jump(z){CAM.tz=z;CAMST.jump=true;CAMST.ease=false;CAMST.last=0;},
+    settle(now){
+      if(CAMST.jump)return;
+      if(!CAMST.last||now-CAMST.last<SETTLE_MS)return;
+      const d=nearestDetent(CAM.tz);
+      if(Math.abs(d.z-CAM.tz)<0.0015){CAM.tz=d.z;CAMST.last=0;CAMST.ease=false;return;}
+      CAMST.ease=true;
+      CAM.tz+=(d.z-CAM.tz)*0.16;          // the ease: visible, ~0.4 s, never a snap
+    },
+    state(){const d=nearestDetent(CAM.z);
+      return {detent:d,resting:atRest(CAM.z),easing:CAMST.ease,range:RANGE(CAM.z)};},
+  },
+
+// ── 2 · the actor: a tiled terminal face ───────────────────────────────────
+// The pod was an ellipse, which is the least characterful object we could have
+// picked for the one object on screen that is the product. It is now a cell
+// grid in the loom's own ink, carrying `run.mood_glyph` — `b` and `d` are the
+// headphone cups, the three middle cells are the face.
+//
+// What animates it, and what does NOT: a cell retypes when its CHARACTER
+// changes, the way a terminal repaints one cell — inverted for ~110 ms, then
+// the new glyph, staggered 40 ms per column. A change comes from one of two
+// readings: the feed handing down a new `mood_glyph`, or the keyframe step.
+// The keyframe step rides the daemon's own ~10 s heartbeat — the same beat the
+// sonar rings already draw — so nothing here is on a decorative timer.
+//
+// The keyframes: `run.mood_frames` if the feed ever carries it (emotes.py has
+// it already: `sequences_of(mood)`, base → expression → base). It does not
+// today, so the second frame is DERIVED — the eye cells blink `·`/`°` → `-`,
+// which is the one motion the emote vocabulary itself uses for half its faces.
+// That is motion, not a reading, and it is the only invented thing in here.
+  BEAT:10000, RETYPE:110, STAGGER:40,
+  frames(pod,run){
+    const g=pod.glyphNow||'b·_·d';
+    const fed=run&&Array.isArray(run.mood_frames)&&run.mood_frames.length?run.mood_frames:null;
+    if(fed)return {list:fed.map(s=>Array.from(String(s))),src:'feed'};
+    const base=Array.from(g);
+    // no glyph in the feed ⇒ no invented motion either: the frame stands still
+    if(!pod.glyphFed)return {list:[base],src:'unfed'};
+    const blink=base.map((c,i)=>(i>0&&i<base.length-1&&(c==='·'||c==='°'))?'-':c);
+    const same=blink.join('')===base.join('');
+    return {list:same?[base]:[base,blink],src:same?'still':'derived'};
+  },
+  face(pod,now,run){
+    if(!pod.face)pod.face={cells:[],want:'',fi:0,src:''};
+    const f=pod.face, fr=this.frames(pod,run);
+    f.src=fr.src;
+    // the keyframe step rides the beat the feed carries — the face blinks when
+    // the daemon ticks. No tick in sight ⇒ the page's own 10 s constant, which
+    // is the debt the sonar already had and this halves.
+    const ph=this.sweep.phase(now), on=ph===null?((now%this.BEAT)/this.BEAT>0.94)
+                                               :(now-BEAT.at<520);
+    const fi=(fr.list.length>1&&on)?1:0;
+    const want=fr.list[Math.min(fi,fr.list.length-1)];
+    const key=want.join('');
+    if(key!==f.want){
+      const old=f.cells;
+      f.cells=want.map((ch,i)=>{
+        const o=old[i];
+        return (o&&o.ch===ch)?o:{ch,prev:o?o.ch:ch,t0:now+i*ACTOR.STAGGER};
+      });
+      f.want=key;
+    }
+    return f;
+  },
+  // one pod, drawn as its grid. Returns nothing; the ink is [WORLD]'s.
+  drawPod(g,p,z,now,run){
+    const me=p.kind==='resident', sc=podAt(z)*(me?1:0.8);
+    const f=this.face(p,now,run), n=Math.max(1,f.cells.length);
+    const cw=Math.max(2.2,9.4*sc), ch=Math.max(2.6,12.4*sc);
+    const gw=cw*n, gh=ch*(me?1:1);
+    const x0=p.x-gw/2, y0=p.y-gh/2;
+    const ink=me?A:'rgba(242,177,52,0.62)';
+    const legible=cw>=5.2;                 // below this a glyph is a smudge, so
+                                           // the face degrades to its lit cells
+    if(me){                                // the resident carries its own light
+      g.save();g.globalCompositeOperation='lighter';
+      const rg=g.createRadialGradient(p.x,p.y,0,p.x,p.y,26*sc);
+      rg.addColorStop(0,'rgba(242,177,52,0.30)');rg.addColorStop(1,'rgba(242,177,52,0)');
+      g.fillStyle=rg;g.beginPath();g.arc(p.x,p.y,26*sc,0,7);g.fill();g.restore();
+    }
+    // the glass the cells sit on — the hull, still a body, now a rectangle of it
+    g.fillStyle='#0b0906';g.fillRect(x0-2,y0-2,gw+4,gh+4);
+    g.strokeStyle=me?'rgba(242,177,52,0.75)':'rgba(242,177,52,0.42)';
+    g.lineWidth=me?1.1:0.8;g.strokeRect(x0-2.5,y0-2.5,gw+5,gh+5);
+    // a strand's hull still fills with what it has spent — the reading the
+    // ellipse carried, kept: the fill rises through the cell grid itself.
+    if(!me&&p.fill!=null){
+      g.save();g.beginPath();g.rect(x0-2,y0-2,gw+4,gh+4);g.clip();
+      g.fillStyle='rgba(242,177,52,0.20)';
+      g.fillRect(x0-2,y0+gh+2-(gh+4)*p.fill,gw+4,(gh+4)*p.fill);g.restore();
+    }
+    g.textAlign='center';g.textBaseline='middle';
+    g.font=`${Math.max(6,Math.round(ch*0.82))}px ${MONO}`;
+    for(let i=0;i<n;i++){
+      const c=f.cells[i], cx=x0+(i+0.5)*cw, cy=y0+gh/2;
+      const head=(i===0||i===n-1);         // the headphone cups
+      const t=now-c.t0, retyping=t>=0&&t<this.RETYPE;
+      const shown=t<0?c.prev:c.ch;
+      const lit=shown!==' '&&shown!=='·'&&shown!=='-';
+      if(head){                            // the cup: a filled cell, dimmer ink
+        g.fillStyle=me?'rgba(242,177,52,0.13)':'rgba(242,177,52,0.08)';
+        g.fillRect(cx-cw/2+0.6,cy-ch/2+0.6,cw-1.2,ch-1.2);
+      }
+      if(legible&&i){                      // the cell wall: it is a GRID, and at
+        g.strokeStyle=me?'rgba(242,177,52,0.22)':'rgba(242,177,52,0.14)';
+        g.lineWidth=0.6;                   // 4x magnification the first read saw
+        g.beginPath();g.moveTo(cx-cw/2,cy-ch/2+0.8);   // amber text in a box
+        g.lineTo(cx-cw/2,cy+ch/2-0.8);g.stroke();
+      }
+      if(!legible){                        // schematic: a lit cell cluster
+        if(lit||head){g.fillStyle=head?(me?'rgba(242,177,52,0.42)':'rgba(242,177,52,0.26)'):ink;
+          g.fillRect(cx-cw/2+0.5,cy-ch/2+0.5,Math.max(1,cw-1),Math.max(1,ch-1));}
+        continue;
+      }
+      if(retyping){                        // the cell repaints, terminal-style
+        g.fillStyle=ink;g.fillRect(cx-cw/2+0.6,cy-ch/2+0.6,cw-1.2,ch-1.2);
+        g.fillStyle='#0b0906';g.fillText(shown,cx,cy+0.5);
+      }else{
+        g.fillStyle=head?(me?'rgba(242,177,52,0.78)':'rgba(242,177,52,0.5)'):ink;
+        g.fillText(shown,cx,cy+0.5);
+      }
+    }
+    g.textBaseline='alphabetic';
+    // the resident's label WAS its mood glyph — the face says it now, so the
+    // name is not printed twice. A strand still names itself: its tag is the
+    // only thing on screen that tells two of them apart.
+    if(sc>0.5&&!me&&p.label){
+      g.fillStyle='rgba(242,177,52,0.62)';g.font=`9px ${MONO}`;
+      g.fillText(p.label,p.x,y0-7);
+    }
+    g.textAlign='left';
+  },
+  drawPods(g,z,step,now){
+    const run=(S&&S.run)||{};
+    if(step)this.sweep.poll(now);
+    this.sweep.draw(g,z,now);
+    for(const p of pods){
+      const t=podXY(p,z), me=p.kind==='resident';
+      if(step){p.x+=(t.x-p.x)*0.045;p.y+=(t.y-p.y)*0.045;}
+      const fed=me?(run.mood_glyph||null):((p.strand&&(p.strand.mood_glyph||p.strand.glyph))||null);
+      p.glyphFed=!!fed; p.glyphNow=fed||(me?'b·_·d':'b·:·d');
+      if(me&&p.listening){               // the sonar: the daemon's real ~10 s beat
+        g.save();g.globalCompositeOperation='lighter';
+        const bp=this.sweep.phase(now);
+        const ph=bp===null?(now%this.BEAT)/this.BEAT:bp, ps=podAt(z);
+        for(const off of [0,0.34,0.68]){
+          const e=(ph+off)%1, rr=(18+e*Math.min(W,H)*0.42)*ps;
+          g.strokeStyle=`rgba(242,177,52,${0.20*(1-e)*(1-e)})`;g.lineWidth=1.4*(1-e)+0.3;
+          g.beginPath();g.arc(p.x,p.y,rr,0,7);g.stroke();
+        }
+        g.restore();
+      }
+      this.drawPod(g,p,z,now,me?run:null);
+    }
+    this.readyPod(g,z,now);
+  },
+  // the staged pod: what a chosen room has waiting at the hub. Dashed, unlit,
+  // never amber-filled — it has not been dispatched, and it must not read as if
+  // it had. This is the whole reason the prototype exists.
+  readyPod(g,z,now){
+    if(!SELECTED.chosen.size)return;
+    const cell=hubBy.get('crew');if(!cell)return;
+    const sc=podAt(z)*0.85, n=5;
+    const cw=Math.max(6.4,9.4*sc), ch=Math.max(9,12.4*sc), gw=cw*n;
+    // above the ship's own roof — inside it, it sat across the cell labels and
+    // read like one more lit room rather than something waiting to leave
+    const p={x:cell.x,y:waterAt(z)-6-hubH(z)-26};
+    const x0=p.x-gw/2, y0=p.y-ch/2;
+    g.save();g.setLineDash([2,2]);
+    g.strokeStyle='rgba(143,211,255,0.55)';g.lineWidth=0.9;
+    g.strokeRect(x0-2.5,y0-2.5,gw+5,ch+5);
+    // the cells themselves, empty: a hull with no light in it. At schematic the
+    // glyph is below legibility and an empty dashed rectangle read as nothing —
+    // the grid is what says "a pod, and nobody in it yet".
+    g.strokeStyle='rgba(143,211,255,0.28)';g.lineWidth=0.6;
+    for(let i=1;i<n;i++){g.beginPath();g.moveTo(x0+i*cw,y0);g.lineTo(x0+i*cw,y0+ch);g.stroke();}
+    g.setLineDash([]);
+    g.textAlign='center';g.textBaseline='middle';
+    g.font=`${Math.max(6,Math.round(ch*0.82))}px ${MONO}`;
+    g.fillStyle='rgba(143,211,255,0.60)';
+    if(cw>=5.2)Array.from('b·_·d').forEach((c,i)=>g.fillText(c,x0+(i+0.5)*cw,y0+ch/2));
+    g.textBaseline='alphabetic';
+    g.font=`9px ${MONO}`;g.fillStyle='rgba(143,211,255,0.75)';
+    g.fillText(`ready · ${[...SELECTED.chosen].join(' ')}`,p.x,y0-6);
+    g.font=`8px ${MONO}`;g.fillStyle='#5c7f96';
+    g.fillText('staged · no gate wired',p.x,y0-16);
+    g.textAlign='left';g.restore();
+  },
+
+// ── 3 · the sounder, with the three rests marked on it ─────────────────────
+  sounder(g,z){
+    const bx=W-26, top=H*0.34, bot=H*0.78;   // clears the belt: at H*0.26
+                                             // the 'interior' mark sat under the
+                                             // fifth vial and could not be read
+    const at=zz=>bot+(top-bot)*((zz-ZMIN)/(ZMAX-ZMIN));
+    g.strokeStyle='rgba(90,77,60,0.35)';g.lineWidth=1;
+    g.beginPath();g.moveTo(bx,top);g.lineTo(bx,bot);g.stroke();
+    g.font=`9px ${MONO}`;g.textAlign='right';
+    const st=this.camera.state();
+    for(const d of DETENTS){
+      const y=at(d.z), here=st.detent===d, rest=here&&st.resting;
+      g.strokeStyle=rest?'rgba(242,177,52,0.85)':'rgba(90,77,60,0.55)';
+      g.lineWidth=rest?1.4:1;
+      g.beginPath();g.moveTo(bx-6,y);g.lineTo(bx+6,y);g.stroke();
+      if(rest){g.fillStyle=A;g.fillRect(bx-2.5,y-2.5,5,5);}      // it is resting here
+      else{g.strokeStyle='rgba(90,77,60,0.6)';g.strokeRect(bx-2.5,y-2.5,5,5);}
+      g.fillStyle=rest?'#e8dcc0':(here?'#8a7c5e':'#4a4336');
+      g.fillText(`${d.k} ${d.key}`,bx-10,y+3);
+    }
+    const y=at(clamp(z,ZMIN,ZMAX));
+    g.fillStyle=A;g.beginPath();g.moveTo(bx+4,y);g.lineTo(bx+11,y-4);g.lineTo(bx+11,y+4);g.closePath();g.fill();
+    if(!st.resting){                        // where it will come to rest, and why
+      const ty=at(st.detent.z);
+      g.strokeStyle='rgba(242,177,52,0.35)';g.lineWidth=1;g.setLineDash([2,3]);
+      g.beginPath();g.moveTo(bx+14,y);g.lineTo(bx+14,ty);g.stroke();g.setLineDash([]);
+      g.fillStyle='#8a7c5e';g.textAlign='left';
+      g.fillText(st.easing?'resting →':'between',bx+18,(y+ty)/2+3);
+    }
+    g.textAlign='right';
+    g.fillStyle='#8a7c5e';g.fillText(RANGE_SAY[RANGE(z)],W-40,H-16);g.textAlign='left';
+  },
+
+// ── 4 · the room a hand can choose, and the verb said honestly ─────────────
+// A topic is a DECK and an item is a room on it (the maintainer's read), so
+// both are selectable and a deck says its own state. The verb offered here
+// fires nothing: there is no gate on this page. It stages, it marks, and it
+// says which — a button that looks like it worked when it did nothing is the
+// one failure this prototype exists to avoid.
+  select:{
+    room(r){if(!r)return;SELECTED.kind='room';SELECTED.id=r.it.id;SELECTED.slug=r.deck.slug;SELECTED.hint=null;
+      if(SELECTED.open)ACTOR.bench.open(r.it.id);},
+    deck(d){if(!d)return;SELECTED.kind='deck';SELECTED.slug=d.slug;SELECTED.id=null;SELECTED.hint=null;},
+    clear(){SELECTED.kind=null;SELECTED.id=null;SELECTED.slug=null;SELECTED.hint=null;ACTOR.bench.close();},
+    room_(){return SELECTED.id?byItem.get(SELECTED.id)||null:null;},
+    deck_(){return SELECTED.slug?decks.find(d=>d.slug===SELECTED.slug)||null:null;},
+    // what is under the hand: a room, else the deck whose column it is in
+    at(px,py,z){
+      const rs=roomAt(z);
+      for(const r of rooms){
+        const {x:rx,y:ry}=roomXY(r,z);
+        const w=Math.max(7,r.rw*rs)/2, h=Math.max(7,r.rh*rs)/2;
+        if(Math.abs(rx-px)<=w&&Math.abs(ry-py)<=h)return {room:r};
+      }
+      const top=waterAt(z)+bandAt(z);
+      if(py>top+4)for(const d of decks)
+        if(Math.abs(d.x-px)<=d.w/2)return {deck:d};
+      return null;
+    },
+    // walking the deck: ← → along a lane, ↑ ↓ across the lanes, [ ] between decks
+    walk(dx,dy){
+      const r=this.room_();
+      if(SELECTED.kind==='deck'||!r){
+        const d=this.deck_()||decks[0];
+        if(!d)return;
+        if(dx){const i=decks.indexOf(d);this.deck(decks[(i+dx+decks.length)%decks.length]);}
+        else if(dy>0){const l=d.lanes.find(l=>l.length);if(l)this.room(byItem.get(l[0].id));}
+        return;
+      }
+      const same=rooms.filter(q=>q.deck===r.deck&&q.lane===r.lane).sort((a,b)=>a.u-b.u);
+      if(dx){
+        const i=same.indexOf(r), nx=i+dx;
+        if(nx>=0&&nx<same.length)return this.room(same[nx]);
+        // crossing to the next deck keeps the LANE — walking off the end of
+        // "his ready decisions" and arriving in someone's done pile is a lie
+        // about where you are standing (measured: ← from w-25/mine landed on
+        // w-5/his). Same lane if it has rooms, else the nearest lane that does.
+        const di=decks.indexOf(r.deck), nd=decks[(di+dx+decks.length)%decks.length];
+        const on=l=>rooms.filter(q=>q.deck===nd&&q.lane===l).sort((a,b)=>a.u-b.u);
+        let pool=on(r.lane);
+        for(let d=1;!pool.length&&d<LANES.length;d++){
+          pool=on(r.lane-d);if(!pool.length)pool=on(r.lane+d);
+        }
+        if(pool.length)return this.room(dx>0?pool[0]:pool[pool.length-1]);
+        return;
+      }
+      if(dy){
+        for(let l=r.lane+dy;l>=0&&l<LANES.length;l+=dy){
+          const pool=rooms.filter(q=>q.deck===r.deck&&q.lane===l);
+          if(pool.length)return this.room(pool.reduce((b,q)=>Math.abs(q.u-r.u)<Math.abs(b.u-r.u)?q:b));
+        }
+      }
+    },
+    // the offered verb. It stages an intent and says so; nothing is sent.
+    choose(){
+      const r=this.room_();if(!r)return false;
+      if(SELECTED.chosen.has(r.it.id))SELECTED.chosen.delete(r.it.id);
+      else SELECTED.chosen.add(r.it.id);
+      return true;
+    },
+  },
+
+  // the chosen rooms, marked in the world: a second outline, ice, never amber —
+  // amber is what an act lit, and choosing is not an act yet.
+  marks(g,z){
+    const rs=roomAt(z);
+    for(const id of SELECTED.chosen){
+      const r=byItem.get(id);if(!r)continue;
+      const {x:rx,y:ry}=roomXY(r,z);
+      const w=Math.max(4,r.rw*rs), h=Math.max(4,r.rh*rs);
+      g.save();g.setLineDash([2,2]);g.strokeStyle='rgba(143,211,255,0.8)';g.lineWidth=1;
+      g.strokeRect(rx-w/2-3,ry-h/2-3,w+6,h+6);g.setLineDash([]);
+      g.fillStyle='rgba(143,211,255,0.9)';g.fillRect(rx-w/2-3,ry-h/2-3,3,3);
+      if(rs>0.35){g.font=`8px ${MONO}`;g.fillStyle='#8fd3ff';g.textAlign='center';
+        g.fillText('chosen',rx,ry-h/2-6);g.textAlign='left';}
+      g.restore();
+      const cell=hubBy.get('crew');          // the tether: the ship holds it
+      if(cell){const c=cellXY(cell,z);
+        g.save();g.setLineDash([1,4]);g.strokeStyle='rgba(143,211,255,0.22)';g.lineWidth=0.8;
+        g.beginPath();g.moveTo(c.x,c.y);g.bezierCurveTo(c.x,(c.y+ry)/2,rx,(c.y+ry)/2,rx,ry);
+        g.stroke();g.restore();}
+    }
+    const sel=this.select.room_();
+    if(sel){
+      const {x:rx,y:ry}=roomXY(sel,z);
+      const w=Math.max(4,sel.rw*rs), h=Math.max(4,sel.rh*rs);
+      g.strokeStyle='rgba(232,220,192,0.9)';g.lineWidth=1.2;
+      g.strokeRect(rx-w/2-1.5,ry-h/2-1.5,w+3,h+3);
+      const t=6;                              // the corner ticks: this one
+      for(const [sx,sy] of [[-1,-1],[1,-1],[-1,1],[1,1]]){
+        const px=rx+sx*(w/2+4), py=ry+sy*(h/2+4);
+        g.beginPath();g.moveTo(px,py);g.lineTo(px-sx*t,py);g.moveTo(px,py);g.lineTo(px,py-sy*t);g.stroke();
+      }
+    }
+    const dk=SELECTED.kind==='deck'?this.select.deck_():null;
+    if(dk){
+      const dh=waterAt(z)+bandAt(z)+10;
+      g.strokeStyle='rgba(232,220,192,0.75)';g.lineWidth=1.4;
+      g.beginPath();g.moveTo(dk.x-dk.w/2+4,dh);g.lineTo(dk.x+dk.w/2-4,dh);g.stroke();
+      g.save();g.setLineDash([2,4]);g.strokeStyle='rgba(232,220,192,0.22)';g.lineWidth=0.7;
+      for(const sx of [-1,1]){g.beginPath();g.moveTo(dk.x+sx*(dk.w/2-4),dh);
+        g.lineTo(dk.x+sx*(dk.w/2-4),H-24);g.stroke();}
+      g.restore();
+    }
+  },
+
+// ── 5 · the panel: what is chosen, and what this page can honestly do ──────
+  panel(g,z,now){
+    this.marks(g,z);
+    this.bench.draw(g,z,now);
+    const rows=[];let head=null,foot=null;
+    const r=this.select.room_(), dk=SELECTED.kind==='deck'?this.select.deck_():null;
+    if(r){
+      const it=r.it, staged=SELECTED.chosen.has(it.id);
+      head=`ROOM ${it.id} · ${LANES[r.lane].k}`;
+      rows.push(['*',it.title||'—']);     // '*' ⇒ the headline: it wraps, never cut
+      rows.push(['type',`${it.type} · ${it.state}`]);
+      rows.push(['deck',`${r.deck.rune||''} ${r.deck.slug}`]);
+      rows.push(['opens',it.opens&&it.opens.length?it.opens.join(', ')
+        :(r.opens.length?r.opens.join(', '):'nothing measured')]);
+      if(r.gated)rows.push(['behind',`the door ${r.gated.it.id} holds`]);
+      rows.push(['stake',it.stake==null?'not measured':String(it.stake)]);
+      rows.push(['taken',it.taken==null?'—':String(it.taken)]);
+      rows.push(['visited',it.visited_at?`${it.visited_at} · ${r.fp} footprints`:'never']);
+      rows.push(['','⏎ opens the body']);
+      foot=staged
+        ?['CHOSEN — staged, nothing sent',
+          `would dispatch: topic ${r.deck.slug} · item ${it.id}`,
+          'no gate is wired on this page · d or click to unstage']
+        :['d · click   dispatch brnrd here',
+          'stages the intent · nothing is sent',
+          'there is no gate wired on this page yet'];
+    }else if(dk){
+      const n=k=>dk.lanes[k].length;
+      const lit=rooms.filter(q=>q.deck===dk&&q.lit!==null).length;
+      head=`DECK ${dk.rune||''} ${dk.slug} · ${dk.n} rooms`;
+      rows.push(['his',`${n(0)} ready decisions`]);
+      rows.push(['mine',`${n(1)} ready work`]);
+      rows.push(['held',String(n(2))]);
+      rows.push(['done',String(n(3))]);
+      rows.push(['warm',`${lit} touched this week · ${dk.n-lit} dark`]);
+      rows.push(['anchor',dk.anchor?`${dk.anchor.n} files on the island`:'no files measured']);
+      foot=['↓ or click a room','a topic is a deck · an item is a room on it'];
+    }else{
+      head='NOTHING CHOSEN';
+      rows.push(['','click a room or a deck']);
+      rows.push(['keys','← → along a lane · ↑ ↓ across lanes']);
+      rows.push(['','[ ] between decks · ⏎ chooses · esc clears']);
+      if(SELECTED.hint)rows.push(['',SELECTED.hint]);
+    }
+    const pw=360, px=W-16-pw;
+    g.save();g.font=`10px ${MONO}`;
+    const nlines=rows.reduce((n,[k,v])=>n+(k==='*'?wrapText(g,String(v),pw-20).length:1),0);
+    g.restore();
+    const ph=26+nlines*14+(foot?foot.length*13+12:0);
+    const py=H-20-ph;
+    g.save();
+    g.fillStyle='#0b0906';g.fillRect(px,py,pw,ph);
+    g.strokeStyle='rgba(154,133,94,0.30)';g.lineWidth=1;
+    g.strokeRect(px+0.5,py+0.5,pw-1,ph-1);
+    g.font=`10px ${MONO}`;g.fillStyle='#e8dcc0';
+    g.fillText(head,px+10,py+16);
+    g.strokeStyle='rgba(154,133,94,0.18)';
+    g.beginPath();g.moveTo(px+10,py+21.5);g.lineTo(px+pw-10,py+21.5);g.stroke();
+    let y=py+34;
+    for(const [k,v] of rows){
+      if(k==='*'){                      // the headline wraps — the one thing a
+        g.fillStyle='#e8dcc0';          // human reads was the one thing cut
+        for(const l of wrapText(g,String(v),pw-20)){g.fillText(l,px+10,y);y+=14;}
+        continue;
+      }
+      if(k){g.fillStyle='#5a4d3c';g.fillText(k,px+10,y);}
+      g.fillStyle=k?'#d9cba9':'#8a7c5e';
+      const s=String(v), max=Math.floor((pw-(k?78:20))/5.9);
+      g.fillText(s.length>max?s.slice(0,max-1)+'…':s,px+(k?72:10),y);
+      y+=14;
+    }
+    BTN.on=false;
+    if(foot){
+      const staged=r&&SELECTED.chosen.has(r.it.id);
+      y+=2;
+      // a deck offers no verb, only a way down: amber is reserved for the offer
+      g.strokeStyle=r?(staged?'rgba(143,211,255,0.55)':'rgba(242,177,52,0.45)')
+                     :'rgba(154,133,94,0.30)';
+      g.save();if(!staged&&r)g.setLineDash([3,2]);
+      g.strokeRect(px+10.5,y-11.5,pw-21,foot.length*13+6);g.restore();
+      if(r)Object.assign(BTN,{on:true,x:px+10.5,y:y-11.5,w:pw-21,h:foot.length*13+6});
+      foot.forEach((t,i)=>{
+        g.fillStyle=i===0?(staged?'#8fd3ff':A):'#5a4d3c';
+        g.font=`${i===0?10:9}px ${MONO}`;g.fillText(t,px+16,y+i*13);
+      });
+    }
+    g.restore();
+  },
+};
+
+// ── 6 · the ship's sweep: echography, on the daemon's own beat ─────────────
+// The phosphor lights what the resident TOUCHED — that is a trace, and a trace
+// only ever shows you where you have already been. Duskers' echography reveals
+// structure you did not have. There is a true sweep on this page and it is not
+// the pod's: the daemon's heartbeat, which the feed carries as `shuttle.tick`
+// (measured on the live daemon: one step every ~10-12 s).
+//
+// So: a ring leaves the SHIP when the tick advances, and what comes back is
+// what that frame actually read. The law, kept:
+//   · a field the feed does not carry returns NOTHING — the room stays black.
+//   · a field that reads empty returns a DARK echo with its number ("nothing
+//     armed" is a reading; an unlit room with no echo is an absence).
+//   · a reading that says failure comes back TORN — the hatch, first used here
+//     for something operational.
+// And it must not be mistakable for the pod's ping: the pod throws an amber
+// line at one place when a boundary landed; the ship throws ice rings at every
+// room it can hear, on the beat. Same law, two bodies.
+const BEAT={tick:null,at:0,stamp:null,period:null,n:0};
+const SWEEP_MS=1700, ECHO_MS=2600;
+const full=S=>(S&&S.hud&&S.hud.full)||null;
+const numOr=(v,d)=>num(v)?v:d;
+// each row: the hub room, and the one reading the frame can answer for it
+const RETURNS=[
+  {k:'clock',read:S=>{const f=full(S),a=f&&f.schedule&&f.schedule.armed;
+    if(!Array.isArray(a))return null;                       // no field ⇒ no echo
+    return {lit:a.length>0,say:a.length?`${a.length} armed`:'nothing armed'};}},
+  {k:'belt',read:S=>{const f=full(S),q=f&&f.resources&&f.resources.quota;
+    if(q&&q.status&&q.status!=='known')return {torn:true,say:'quota unread'};
+    const b=q&&q.pacing&&q.pacing.binding_remaining_pct;
+    if(num(b))return {lit:true,say:`${Math.round(b)} % binding`};
+    const w=[].concat(...(((S.fuel||{}).buckets)||[]).map(x=>x.windows||[]))
+              .filter(x=>num(x.pct_left));
+    if(w.length){const m=w.reduce((a,x)=>x.pct_left<a.pct_left?x:a);
+      return {lit:true,say:`${Math.round(m.pct_left)} % ${m.name}`};}
+    return null;}},
+  {k:'wire',read:S=>{const d=full(S)&&full(S).delivery;
+    if(!d||d.known!==true)return null;                      // no poll ⇒ no echo
+    return d.would_land?{lit:true,say:`${d.gate||'gate'} · would land`}
+                       :{torn:true,say:`${d.gate||'gate'} · would not land`};}},
+  {k:'shed',read:S=>{const f=full(S);if(!f)return null;
+    const h=f.resource_hold;
+    if(h){const r=numOr(h.refill_floor_pct,numOr((((f.resources||{}).quota||{}).pacing||{}).starvation
+          &&f.resources.quota.pacing.starvation.refill_floor_pct,null));
+      return {torn:true,say:`held · ${h.resume||'hold'}${num(r)?` · refill at ${r} %`:''}`};}
+    const st=(((f.resources||{}).quota||{}).pacing||{}).starvation;
+    if(st&&st.starved===true)return {torn:true,
+      say:`starved · refill at ${numOr(st.refill_floor_pct,'—')} %`};
+    return null;}},                                          // not held ⇒ nothing to say
+  {k:'crew',read:S=>{const st=(S.hud||{}).strands;
+    if(!Array.isArray(st))return null;
+    return {lit:st.length>0,say:st.length?`${st.length} out`:'none out'};}},
+];
+ACTOR.sweep={
+  // the beat is READ, not counted: the tick the feed carries is the daemon's.
+  // Fired when this page SEES it advance, which is within one 3 s pull of the
+  // real thing — the period below is measured between two sightings, never
+  // assumed, and a feed whose tick never moves (a fixture) never sweeps.
+  poll(now){
+    const f=full(S);
+    const t=S&&((S.shuttle&&S.shuttle.tick)||(f&&f.tick&&f.tick.n));
+    if(!num(t))return;
+    const stamp=Date.parse((f&&f.tick&&f.tick.at)||'')||null;
+    if(BEAT.tick===null){BEAT.tick=t;BEAT.at=now;BEAT.stamp=stamp;return;}
+    if(t===BEAT.tick)return;
+    BEAT.period=(stamp&&BEAT.stamp&&stamp>BEAT.stamp)?(stamp-BEAT.stamp)
+               :(BEAT.at?now-BEAT.at:null);
+    BEAT.stamp=stamp;BEAT.tick=t;BEAT.at=now;BEAT.n++;
+    for(const r of RETURNS){
+      const cell=hubBy.get(r.k);if(!cell)continue;
+      let got=null;try{got=r.read(S);}catch(e){got=null;}
+      cell.echo=got?{...got,t0:now,cell}:null;               // null ⇒ silence, drawn as nothing
+    }
+  },
+  phase(now){return BEAT.period?clamp((now-BEAT.at)/BEAT.period,0,1):null;},
+  draw(g,z,now){
+    if(!hub||!BEAT.at)return;
+    const k=(now-BEAT.at)/SWEEP_MS;
+    const ox=hub.x, oy=waterAt(z)-6-hubH(z)/2;
+    if(k<1){                                    // the ring, leaving the ship
+      g.save();g.globalCompositeOperation='lighter';
+      for(const off of [0,0.13,0.26]){
+        const e=k+off;if(e>1)continue;
+        const rr=e*Math.hypot(W,H)*0.62;
+        g.strokeStyle=`rgba(143,211,255,${0.20*(1-e)*(1-e)})`;g.lineWidth=1.2*(1-e)+0.3;
+        g.beginPath();g.arc(ox,oy,rr,0,7);g.stroke();
+      }
+      g.restore();
+      g.font=`9px ${MONO}`;g.fillStyle=`rgba(143,211,255,${0.7*(1-k)})`;g.textAlign='center';
+      g.fillText(`sweep · tick ${BEAT.tick}${BEAT.period?` · +${(BEAT.period/1000).toFixed(1)} s`:''}`,
+                 ox,oy-hubH(z)/2-30);
+      g.textAlign='left';
+    }
+    for(const c of hub.cells){                  // and what came back
+      const e=c.echo;if(!e)continue;
+      const age=now-e.t0;if(age>ECHO_MS){c.echo=null;continue;}
+      const p=cellXY(c,z), cw=Math.max(3,c.cw*(0.2+0.8*hubAt(z)));
+      const ch=Math.max(3,(hubH(z)/c.rows-5)*(0.28+0.72*hubAt(z)));
+      const a=1-age/ECHO_MS;
+      if(e.torn){                               // a poll that came back wrong
+        g.save();g.beginPath();g.rect(p.x-cw/2,p.y-ch/2,cw,ch);g.clip();
+        g.strokeStyle=`rgba(143,211,255,${0.55*a})`;g.lineWidth=1;
+        for(let hx=-ch;hx<cw+ch;hx+=6){g.beginPath();
+          g.moveTo(p.x-cw/2+hx,p.y+ch/2);g.lineTo(p.x-cw/2+hx+ch,p.y-ch/2);g.stroke();}
+        g.restore();
+      }else if(e.lit){
+        g.save();g.globalCompositeOperation='lighter';
+        g.fillStyle=`rgba(143,211,255,${0.13*a})`;g.fillRect(p.x-cw/2,p.y-ch/2,cw,ch);g.restore();
+      }
+      g.strokeStyle=e.lit||e.torn?`rgba(143,211,255,${0.30+0.5*a})`:`rgba(143,211,255,${0.18*a})`;
+      g.lineWidth=1;g.strokeRect(p.x-cw/2,p.y-ch/2,cw,ch);
+      if(hubAt(z)>0.10&&e.say){                 // the reading itself, in the ship's ink
+        g.font=`8px ${MONO}`;g.textAlign='center';
+        g.fillStyle=e.torn?`rgba(143,211,255,${0.85*a})`
+                  :(e.lit?`rgba(143,211,255,${0.8*a})`:`rgba(90,120,140,${0.75*a})`);
+        g.fillText(e.say,p.x,p.y+ch/2-2);g.textAlign='left';
+      }
+    }
+  },
+};
+
+// ── 7 · the bench: the room's own page, opened over the ground ─────────────
+// The card is the HEADER of a chosen room. The maintainer's read: the one
+// thing a human actually reads — the headline — was the one thing cut, and a
+// sentence truncated mid-clause is worse than two lines. So the headline wraps
+// here and everywhere, and `⏎` (or a second click) opens the body itself.
+//
+// The body is not invented and not a new feed field: the daemon already serves
+// it at `/loom/page/item?id=<id>` (loom/pages.py → item_page) — title, type,
+// state, prompt, metric, refs, the parsed body, and the siblings on the same
+// topic. Same origin as state.json, with the same 7777 fallback FEEDS uses, so
+// the dev page works when it is served from anywhere. One fetch per id, cached;
+// a fetch that fails SAYS so in the panel instead of showing an empty page.
+const PAGES=new Map();
+const ITEM_URLS=id=>[`/loom/page/item?id=${encodeURIComponent(id)}`,
+                     `http://127.0.0.1:7777/loom/page/item?id=${encodeURIComponent(id)}`];
+// canvas has no flow: every long string on this page is wrapped by measuring it
+function wrapText(g,text,maxw){
+  const out=[];
+  for(const para of String(text==null?'':text).split('\n')){
+    if(!para.trim()){out.push('');continue;}
+    let line='';
+    for(const word of para.split(/\s+/)){
+      const t=line?line+' '+word:word;
+      if(g.measureText(t).width<=maxw){line=t;continue;}
+      if(line)out.push(line);
+      line=word;
+      while(g.measureText(line).width>maxw&&line.length>1){   // a word longer than the pane
+        let cut=line.length;
+        while(cut>1&&g.measureText(line.slice(0,cut)).width>maxw)cut--;
+        out.push(line.slice(0,cut));line=line.slice(cut);
+      }
+    }
+    if(line)out.push(line);
+  }
+  return out;
+}
+// markdown, flattened for a canvas: headings and bullets keep their shape, the
+// emphasis markers and link plumbing go — they are noise without a text engine
+const flatten=t=>String(t||'')
+  .replace(/\[([^\]]+)\]\(([^)]+)\)/g,'$1')
+  .replace(/\*\*([^*]+)\*\*/g,'$1').replace(/`([^`]+)`/g,'$1')
+  .replace(/^\s*[-*]\s+/gm,'· ');
+ACTOR.bench={
+  open(id){
+    if(!id)return;SELECTED.open=id;
+    if(PAGES.has(id))return;
+    PAGES.set(id,{state:'loading'});
+    (async()=>{
+      for(const u of ITEM_URLS(id)){
+        try{const r=await fetch(u,{cache:'no-store'});if(!r.ok)continue;
+          const d=await r.json();PAGES.set(id,{state:'ok',d});return;}catch(e){}
+      }
+      PAGES.set(id,{state:'fail',why:'the daemon did not answer /loom/page/item'});
+    })();
+  },
+  close(){SELECTED.open=null;BENCH.scroll=0;},
+  scroll(d){BENCH.scroll=Math.max(0,BENCH.scroll+d);},
+  draw(g,z,now){
+    const id=SELECTED.open;if(!id)return;
+    const pg=PAGES.get(id)||{state:'loading'};
+    const x0=Math.round(W*0.055), x1=Math.round(W*0.64), w=x1-x0;
+    const y0=Math.round(H*0.17), y1=Math.round(H*0.86), h=y1-y0;
+    g.save();
+    g.fillStyle='#090806';g.fillRect(x0,y0,w,h);
+    g.strokeStyle='rgba(154,133,94,0.34)';g.lineWidth=1;g.strokeRect(x0+0.5,y0+0.5,w-1,h-1);
+    // the bench's own corner ticks, so it reads as a surface, not a dialog
+    for(const [sx,cx] of [[1,x0],[-1,x1]])for(const [sy,cy] of [[1,y0],[-1,y1]]){
+      g.strokeStyle='rgba(154,133,94,0.55)';g.beginPath();
+      g.moveTo(cx+sx*0.5,cy+sy*10);g.lineTo(cx+sx*0.5,cy+sy*0.5);g.lineTo(cx+sx*10,cy+sy*0.5);g.stroke();
+    }
+    // the phosphor composites with 'lighten': a translucent pane can never
+    // hide a lit warp (7 % of it read straight through), and 135 characters
+    // to a line is a wall. Opaque, and a readable column inside it.
+    const pad=16, iw=Math.min(w-pad*2,660);let y=y0+24;
+    const line=(t,ink,size,lead)=>{g.font=`${size}px ${MONO}`;g.fillStyle=ink;
+      for(const l of wrapText(g,t,iw)){if(y>y1-10)return false;g.fillText(l,x0+pad,y);y+=lead;}return true;};
+    g.font=`10px ${MONO}`;g.fillStyle='#5a4d3c';
+    g.fillText(`${id} · the bench — esc closes · ↑ ↓ scrolls`,x0+pad,y);y+=18;
+    if(pg.state==='loading'){line('reading the item page…','#8a7c5e',11,16);g.restore();return;}
+    if(pg.state==='fail'){
+      line('the body could not be read','#f2b134',12,17);
+      line(pg.why||'no reason given','#8a7c5e',10,14);
+      line(ITEM_URLS(id)[0],'#5a4d3c',9,13);
+      g.restore();return;
+    }
+    const d=pg.d||{};
+    line(d.title||'(no headline)','#e8dcc0',13,18);          // it WRAPS. That is the fix.
+    y+=4;
+    line(`${d.type||'—'} · ${d.state||'—'} · ${(d.topics||[]).join(', ')||'no topic'}`
+       +(d.taken?` · taken ${d.taken}`:''),'#8a7c5e',10,15);
+    y+=6;
+    g.strokeStyle='rgba(154,133,94,0.18)';g.beginPath();
+    g.moveTo(x0+pad,y-6);g.lineTo(x1-pad,y-6);g.stroke();
+    // everything below the rule scrolls as one column
+    const rows=[];
+    const push=(t,ink,size,lead)=>rows.push({t,ink,size,lead});
+    if(d.prompt)push(flatten(d.prompt),'#d9cba9',11,16);
+    if(d.metric)push('metric · '+flatten(d.metric),'#8a7c5e',10,15);
+    if(d.needs&&d.needs.length)push('needs '+d.needs.join(', '),'#8fd3ff',10,15);
+    if(d.advances&&d.advances.length)push('advances '+d.advances.join(', '),'#8a7c5e',10,15);
+    if(d.body){push('',null,10,8);
+      for(const para of flatten(d.body).split('\n')){
+        const head=/^#{1,6}\s/.test(para);
+        push(para.replace(/^#{1,6}\s*/,''),head?'#e8dcc0':'#bfb094',head?11:10,head?17:15);
+      }}
+    if(d.refs)push('refs · '+flatten(d.refs),'#5a4d3c',9,13);
+    if((d.siblings||[]).length){
+      push('',null,10,8);push(`on this topic · ${d.siblings.length}`,'#5a4d3c',10,15);
+      for(const sb of d.siblings.slice(0,8))
+        push(`${sb.id}  ${sb.title||''}`,sb.state==='ready'?'#8fd3ff':'#5f5642',9,13);
+    }
+    // measure, then draw the window the scroll is standing at
+    const lines=[];
+    for(const r of rows){
+      if(!r.ink){lines.push({t:'',ink:'#000',size:r.size,lead:r.lead});continue;}
+      g.font=`${r.size}px ${MONO}`;
+      for(const l of wrapText(g,r.t,iw))lines.push({t:l,ink:r.ink,size:r.size,lead:r.lead});
+    }
+    const room=y1-14-y, fit=Math.max(1,Math.floor(room/14));
+    BENCH.total=lines.length;BENCH.fit=fit;
+    BENCH.scroll=Math.min(BENCH.scroll,Math.max(0,lines.length-fit));
+    for(const l of lines.slice(BENCH.scroll,BENCH.scroll+fit)){
+      if(l.t){g.font=`${l.size}px ${MONO}`;g.fillStyle=l.ink;g.fillText(l.t,x0+pad,y);}
+      y+=l.lead;
+      if(y>y1-14)break;
+    }
+    if(lines.length>fit){
+      g.font=`9px ${MONO}`;g.fillStyle='#5a4d3c';g.textAlign='right';
+      g.fillText(`${BENCH.scroll+1}–${Math.min(lines.length,BENCH.scroll+fit)} of ${lines.length} lines · ↑ ↓`,
+                 x1-pad,y1-6);g.textAlign='left';
+      const t0=y0+30, th=(y1-12)-t0, kh=Math.max(14,th*fit/lines.length);
+      const ky=t0+(th-kh)*(BENCH.scroll/Math.max(1,lines.length-fit));
+      g.strokeStyle='rgba(154,133,94,0.20)';g.strokeRect(x1-7.5,t0,3,th);
+      g.fillStyle='rgba(242,177,52,0.45)';g.fillRect(x1-7,ky,2,kh);
+    }
+    g.restore();
+  },
+};
+
+// the hand, and the keys. Additive listeners: the wheel/±/123 handlers above
+// keep their own, and this block never rewrites them.
+cv.addEventListener('mousedown',e=>{
+  const z=CAM.z;
+  if(inBtn(e.clientX,e.clientY)){ACTOR.select.choose();return;}   // the offer
+  const hit=ACTOR.select.at(e.clientX,e.clientY,z);
+  if(hit&&hit.room){
+    if(SELECTED.kind==='room'&&SELECTED.id===hit.room.it.id)ACTOR.bench.open(SELECTED.id);
+    else{ACTOR.bench.close();ACTOR.select.room(hit.room);}
+  }
+  else if(hit&&hit.deck)ACTOR.select.deck(hit.deck);
+  else{ACTOR.select.clear();
+    if(RANGE(z)==='interior')SELECTED.hint='the warp is under the ground — 2 or 3 to come down to it';}
+});
+cv.addEventListener('mousemove',e=>{
+  if(inBtn(e.clientX,e.clientY)){cv.style.cursor='pointer';return;}
+  const h=ACTOR.select.at(e.clientX,e.clientY,CAM.z);
+  cv.style.cursor=h&&h.room?'pointer':(h?'crosshair':'default');
+});
+addEventListener('keydown',e=>{
+  const k=e.key;
+  if(SELECTED.open&&(k==='ArrowUp'||k==='ArrowDown')){      // the bench scrolls
+    e.preventDefault();ACTOR.bench.scroll(k==='ArrowDown'?3:-3);return;}
+  if(k==='Enter'){e.preventDefault();
+    if(SELECTED.open)ACTOR.bench.close();else ACTOR.bench.open(SELECTED.id);return;}
+  if(k==='d'||k==='D'){ACTOR.select.choose();return;}       // the verb, off ⏎
+  if(k==='ArrowLeft'||k==='ArrowRight'){e.preventDefault();ACTOR.select.walk(k==='ArrowRight'?1:-1,0);}
+  else if(k==='ArrowUp'||k==='ArrowDown'){e.preventDefault();ACTOR.select.walk(0,k==='ArrowDown'?1:-1);}
+  else if(k==='['||k===']'){e.preventDefault();
+    const d=ACTOR.select.deck_()||decks[0];if(d){const i=decks.indexOf(d);
+      ACTOR.select.deck(decks[(i+(k===']'?1:-1)+decks.length)%decks.length]);}}
+  else if(k==='Escape'){if(SELECTED.open)ACTOR.bench.close();else ACTOR.select.clear();}
+});
+// ═══ end [ACTOR] ═══════════════════════════════════════════════════════════
 
 // ═══ [FRAME] ═══════════════════════════════════════════════════════════════
 // ── the draw · the post-pass lives here ───
