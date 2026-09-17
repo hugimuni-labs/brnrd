@@ -23,10 +23,12 @@ The sources, by key — each part's own docstring names its files:
   (:func:`brr.heddles.load_topics`) joined with the portal's lit list.
 - ``warp`` — ``<account_home>/surface/warp/*.md``
   (:func:`brr.items.load_items`), state derived from ``done:`` / ``retired:``
-  / open ``needs:``.
+  / open ``needs:``; each item also gains ``visited_at`` and ``footprints``
+  (:func:`warp_footprints`, :func:`apply_warp_footprints`) — the item's own
+  bead touches, drawn from every run's ``boundaries.jsonl`` the feed reads.
 - ``beads`` — the live run's ``<brr>/runs/<id>/boundaries.jsonl`` tail, places
   relativised by :func:`brr.heddles.relative_place`, topics by the heddles'
-  compiled signatures.
+  compiled signatures, warp/goal ids touched by :func:`bead_items`.
 - ``cloth`` — ``<brr>/run-ledger.jsonl`` tail, plus the live run and its live
   strands (``run.md`` + ``.relics.jsonl``), topics from each topic's
   ``<slug>.index.jsonl`` (:func:`brr.heddles.index`).
@@ -58,6 +60,9 @@ CLOTH_LAST = 80
 DETAIL_CHARS = 160
 TREE_MAX = 500
 BENCH_MAX = 200
+#: A warp/goal id's kept bead touches — per run while scanning, and again
+#: after every run's touches are merged (:func:`warp_footprints`).
+FOOTPRINTS_MAX = 20
 #: How far back from a jsonl file's end a tail read looks.
 _TAIL_CAP_BYTES = 8 * 1024 * 1024
 #: The places that are runtime, never the tree.
@@ -863,6 +868,45 @@ def _is_bead(row: Mapping[str, Any]) -> bool:
     return bool(row.get("act")) or row.get("phase") == "session-start"
 
 
+#: A ``w-<N>`` / ``g-<N>`` token, word-bounded — the same shape either id
+#: space allocates (:mod:`brr.items`), scanned bare (never guessed from
+#: ``topics``, which drift from what an act actually touched).
+_ITEM_TOKEN_RE = re.compile(r"\b[wg]-\d+\b")
+#: A warp item's own authored file, as a home place (:func:`home_place`).
+_WARP_FILE_RE = re.compile(r"^surface/warp/([wg]-\d+)\.md$")
+#: An outbox reply/note file — :data:`_WIRE_NAME_RE`'s numbered shape, minus
+#: ``.card``/``.mood`` (a control file, never a reply body to scan).
+_OUTBOX_NOTE_RE = re.compile(r"(?:^|/)\d{6}-[^/\s]*\.md$")
+
+
+def bead_items(row: Mapping[str, Any], where: Where, homes: Iterable[str]) -> list[str]:
+    """The warp/goal ids a bead touched, dedup, first-seen order, from three
+    doors: the item's own file under ``surface/warp/<id>.md`` (*homes*, from
+    :func:`row_paths`); a ``w-<N>``/``g-<N>`` token in the row's ``detail``;
+    an outbox reply/note file the row names, its body scanned the same way.
+    Never guessed from ``topics``."""
+    out: list[str] = []
+
+    def add(ids: Iterable[str]) -> None:
+        for item_id in ids:
+            if item_id not in out:
+                out.append(item_id)
+
+    for home in homes:
+        match = _WARP_FILE_RE.match(home)
+        if match:
+            add([match.group(1)])
+    detail = row.get("detail") if isinstance(row.get("detail"), str) else ""
+    add(_ITEM_TOKEN_RE.findall(detail))
+    for value in raw_paths(row):
+        if not value.startswith("/") or _under(value, where.outbox_spellings) is None:
+            continue
+        if not _OUTBOX_NOTE_RE.search(value) or not os.path.exists(value):
+            continue
+        add(_ITEM_TOKEN_RE.findall(_read_text(Path(value)) or ""))
+    return out
+
+
 def read_beads(
     rows: list[dict[str, Any]], where: Where, compiled: list[Any], run_id: str, *, source: str = "",
     first_n: int | None = 0,
@@ -872,7 +916,8 @@ def read_beads(
     first. ``n`` is the bead's index among the run's beads (``first_n`` + its
     position; ``GET /loom/page/bead?run=&n=`` takes it). ``places`` are repo
     places, ``home_places`` the account home's (:func:`row_paths`);
-    ``place_kind`` is :func:`place_kind`."""
+    ``place_kind`` is :func:`place_kind`. ``items`` are the warp/goal ids the
+    act touched (:func:`bead_items`)."""
     out = []
     for index, row in enumerate(rows):
         ctx = row.get("ctx") if isinstance(row.get("ctx"), dict) else {}
@@ -889,6 +934,7 @@ def read_beads(
             "delta": _int(ctx.get("delta")),
             "detail": detail[:DETAIL_CHARS] or None,
             "topics": match_topics(compiled, places=places, text=detail, run_id=run_id),
+            "items": bead_items(row, where, homes),
         })
     return out
 
@@ -1157,15 +1203,17 @@ def _duration(started: Any, ended: Any) -> int | None:
 class _PlaceScan:
     """One boundaries file's places, read incrementally: ``(tree, place)`` →
     ``[last epoch, mutated]`` with tree ``repo`` or ``home``. Finished runs
-    are read once per process."""
+    are read once per process. ``items``: warp/goal id → its last
+    :data:`FOOTPRINTS_MAX` ``{n, at, act}`` touches, same incremental pass."""
 
-    __slots__ = ("offset", "ident", "places", "beads")
+    __slots__ = ("offset", "ident", "places", "beads", "items")
 
     def __init__(self) -> None:
         self.offset = 0
         self.ident: tuple = ()
         self.places: dict[tuple[str, str], list[Any]] = {}
         self.beads = 0
+        self.items: dict[str, list[dict[str, Any]]] = {}
 
 
 _SCANS: dict[str, _PlaceScan] = {}
@@ -1174,6 +1222,13 @@ _SCANS_LOCK = threading.Lock()
 
 def scan_places(path: Path, where: Where) -> dict[tuple[str, str], list[Any]]:
     return _scan(path, where)[0]
+
+
+def scan_items(path: Path, where: Where) -> dict[str, list[dict[str, Any]]]:
+    """A boundaries file's warp/goal touches, the same incremental read
+    :func:`scan_places` uses — id → its last :data:`FOOTPRINTS_MAX`
+    ``{n, at, act}`` rows, oldest first."""
+    return _scan(path, where)[2]
 
 
 TRAIL_PLACES = 8
@@ -1196,12 +1251,14 @@ def bead_count(path: Path, where: Where) -> int | None:
     return _scan(path, where)[1]
 
 
-def _scan(path: Path, where: Where) -> tuple[dict[tuple[str, str], list[Any]], int | None]:
+def _scan(
+    path: Path, where: Where
+) -> tuple[dict[tuple[str, str], list[Any]], int | None, dict[str, list[dict[str, Any]]]]:
     key = str(path)
     try:
         stat = path.stat()
     except OSError:
-        return {}, None
+        return {}, None, {}
     with _SCANS_LOCK:
         scan = _SCANS.get(key)
         ident = (stat.st_ino, where.key())
@@ -1215,7 +1272,7 @@ def _scan(path: Path, where: Where) -> tuple[dict[tuple[str, str], list[Any]], i
                     handle.seek(scan.offset)
                     chunk = handle.read(stat.st_size - scan.offset)
             except OSError:
-                return dict(scan.places), scan.beads
+                return dict(scan.places), scan.beads, dict(scan.items)
             end = chunk.rfind(b"\n")
             if end >= 0:
                 scan.offset += end + 1
@@ -1228,16 +1285,22 @@ def _scan(path: Path, where: Where) -> tuple[dict[tuple[str, str], list[Any]], i
                         continue
                     if not isinstance(row, dict) or not _is_bead(row):
                         continue
+                    n = scan.beads
                     scan.beads += 1
                     at = _epoch(row.get("at"))
                     mutated = row.get("act") == "mutate"
                     places, homes = row_paths(row, where)
+                    for item_id in bead_items(row, where, homes):
+                        touched = scan.items.setdefault(item_id, [])
+                        touched.append({"n": n, "at": row.get("at"), "act": row.get("act") or row.get("phase")})
+                        if len(touched) > FOOTPRINTS_MAX:
+                            del touched[0]
                     for tree_key in [("repo", p) for p in places] + [("home", h) for h in homes]:
                         seen = scan.places.setdefault(tree_key, [None, False])
                         if at is not None and (seen[0] is None or at > seen[0]):
                             seen[0] = at
                         seen[1] = seen[1] or mutated
-        return dict(scan.places), scan.beads
+        return dict(scan.places), scan.beads, dict(scan.items)
 
 
 def read_tree(
@@ -1353,6 +1416,63 @@ def read_bench(account_home: Path | None) -> dict[str, Any]:
     return {"folds": folds}
 
 
+# ── warp footprints ──────────────────────────────────────────────────────
+
+
+def warp_footprints(
+    brr_dir: Path, where: Where, live: "_Live | None", cloth: Mapping[str, Any]
+) -> dict[str, list[dict[str, Any]]]:
+    """Every warp/goal id's last :data:`FOOTPRINTS_MAX` bead touches, oldest
+    first, across the live run and every cloth run the feed already reads
+    (``cloth["rows"]``) — the same incremental, cached read :func:`trail`
+    uses (:func:`scan_items`), so this costs nothing new per beat."""
+    run_ids: list[str] = []
+    if live is not None:
+        run_ids.append(live.run_id)
+    for row in (cloth or {}).get("rows") or ():
+        run_id = str(row.get("run") or "")
+        if run_id and "/" not in run_id and run_id not in run_ids:
+            run_ids.append(run_id)
+    per_item: dict[str, list[dict[str, Any]]] = {}
+    for run_id in run_ids:
+        touched = _safe(lambda rid=run_id: scan_items(brr_dir / "runs" / rid / "boundaries.jsonl", where), {})
+        for item_id, rows in touched.items():
+            dest = per_item.setdefault(item_id, [])
+            for row in rows:
+                dest.append({"run": run_id, "n": row.get("n"), "at": row.get("at"), "act": row.get("act")})
+    for item_id, rows in per_item.items():
+        rows.sort(key=lambda r: (_epoch(r.get("at")) or 0.0, r.get("n") if r.get("n") is not None else 0))
+        per_item[item_id] = rows[-FOOTPRINTS_MAX:]
+    return per_item
+
+
+def _newer_at(a: Any, b: Any) -> Any:
+    """*a* unless *b* names a strictly later moment (either side may be
+    ``None`` / unparseable — that side never wins)."""
+    ea, eb = _epoch(a), _epoch(b)
+    if eb is None:
+        return a
+    if ea is None or eb > ea:
+        return b
+    return a
+
+
+def apply_warp_footprints(warp: Mapping[str, Any], footprints: Mapping[str, list[dict[str, Any]]]) -> dict[str, Any]:
+    """``warp.items[]`` gain ``footprints`` (:func:`warp_footprints`, oldest
+    first) and ``visited_at`` — a value already on the row (a value some
+    other producer already wrote there, e.g. its own file's home-tree touch)
+    stands unless the bead-derived one is newer (:func:`_newer_at`)."""
+    items = []
+    for row in warp.get("items") or ():
+        row = dict(row) if isinstance(row, dict) else row
+        if isinstance(row, dict):
+            fps = list(footprints.get(str(row.get("id") or "")) or ())
+            row["footprints"] = fps
+            row["visited_at"] = _newer_at(row.get("visited_at"), fps[-1]["at"] if fps else None)
+        items.append(row)
+    return {"goals": list(warp.get("goals") or ()), "items": items}
+
+
 # ── the contract ─────────────────────────────────────────────────────────
 
 
@@ -1415,6 +1535,9 @@ def build(repo_root: Path | str, account_home: Path | str | None, *, now: object
         lambda: read_cloth(brr_dir, home, compiled, live, (hud or {}).get("strands") or [], where, repo_label),
         {"rows": []},
     )
+    warp = _safe(lambda: read_warp(home), {"goals": [], "items": []})
+    footprints = _safe(lambda: warp_footprints(brr_dir, where, live, cloth), {})
+    warp = _safe(lambda: apply_warp_footprints(warp, footprints), warp)
     return {
         "at": _iso(now_epoch),
         "beat_ms": BEAT_MS,
@@ -1423,7 +1546,7 @@ def build(repo_root: Path | str, account_home: Path | str | None, *, now: object
         "run": _safe(lambda: read_run(live, now_epoch), None),
         "hud": hud,
         "heddles": _safe(lambda: read_heddles(compiled, live.portal if live else None), []),
-        "warp": _safe(lambda: read_warp(home), {"goals": [], "items": []}),
+        "warp": warp,
         "beads": beads,
         "cloth": cloth,
         "tree": _safe(
