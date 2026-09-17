@@ -19,14 +19,12 @@ canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
 #state .k{color:var(--absent)}#state .v{color:#e8dcc0}#state .amber{color:var(--amber)}#state .ice{color:var(--ice)}
 #legend{left:16px;bottom:14px;color:var(--absent);line-height:1.7}
 #legend b{color:var(--dim);font-weight:400}
-#hover{position:fixed;pointer-events:none;background:#0b0906ee;border:1px solid #3a3328;padding:5px 8px;font:10px ui-monospace,Menlo,monospace;display:none;z-index:5}
 </style>
 <canvas id="c"></canvas>
 <div class="hud" id="top"><b>brnrd</b><span>/ THE PODS · field6 · the record and the actor</span><span id="src"></span></div>
 <div class="hud" id="state"></div>
 <div class="hud" id="belt"></div>
 <div class="hud" id="legend"></div>
-<div id="hover"></div>
 <script>
 /* ═══════════════════════════════════════════════════════════════════════════
    TWO REGIONS, TWO HANDS — do not edit outside your own region.
@@ -137,6 +135,7 @@ function layoutHub(x0,w){
 // drawn along the full shore, under the island and under the ship alike.
 function layoutGround(x0,w){
   const ps=rows(S.tree&&S.tree.home).slice(0,120);
+  const prev=byHome;                       // a path already standing is not an arrival
   homeNodes=[];byHome=new Map();
   const g=new Map();
   for(const p of ps){const top=p.path.split('/')[0];if(!g.has(top))g.set(top,[]);g.get(top).push(p);}
@@ -150,8 +149,10 @@ function layoutGround(x0,w){
     for(const p of vs){
       const depth=p.path.split('/').length;
       const e=Math.min(depth,4)/4;
+      const was=prev.get(p.path);
       const n={...p,x:cx+(hash(p.path+'h')-0.5)*rw*0.88,e,root:top,
-               r:1.8+Math.min(2.6,(p.knots||0)*0.5),flare:0,home:true,up:null};
+               r:1.8+Math.min(2.6,(p.knots||0)*0.5),flare:0,home:true,up:null,
+               born:was?was.born:performance.now()+hash(p.path+'b')*300};
       homeNodes.push(n);byHome.set(p.path,n);
     }
   }
@@ -167,6 +168,7 @@ function layoutGround(x0,w){
 // one is what is drawn. §1: nothing draws that was not measured.)
 function layoutIsland(x0,w){
   const ps=rows(S.tree&&S.tree.repo).filter(p=>!p.path.includes('node_modules')).slice(0,220);
+  const prev=byPath;                       // a path already standing is not an arrival
   nodes=[];byPath=new Map();
   const g=new Map();
   for(const p of ps){const top=p.path.split('/')[0];if(!g.has(top))g.set(top,[]);g.get(top).push(p);}
@@ -181,8 +183,10 @@ function layoutIsland(x0,w){
     for(const p of vs){
       const depth=p.path.split('/').length;
       const e=Math.min(depth,7)/7+hash(p.path)*0.045;        // elevation, z-free
+      const was=prev.get(p.path);
       const n={...p,x:cx+(hash(p.path+'x')-0.5)*bw*0.86,e,bough,
-               r:2.2+Math.min(3.4,(p.knots||1)*0.5),flare:0,depth,up:null};
+               r:2.2+Math.min(3.4,(p.knots||1)*0.5),flare:0,depth,up:null,
+               born:was?was.born:performance.now()+hash(p.path+'b')*300};
       nodes.push(n);byPath.set(p.path,n);
     }
   }
@@ -277,28 +281,100 @@ const cellXY=(c,z)=>{const w=waterAt(z),hh=hubH(z);
 // ── the pods: the resident, and one per live strand ────────────────────────
 function podFor(id,kind){
   let p=pods.find(p=>p.id===id);
-  if(!p){p={id,kind,x:W/2,y:water-120,trail:[],target:null,fill:null,label:''};pods.push(p);}
+  if(!p){p={id,kind,x:W/2,y:water-120,trail:[],target:null,fill:null,label:'',
+            placed:false,route:null,routeTo:null,u:1};pods.push(p);}
   return p;
 }
 const resolveIn=(m,s)=>!s?null:(m.get(s)||[...m.keys()].filter(k=>k.startsWith(s+'/')).map(k=>m.get(k))[0]||null);
 // the pod flies between the ranges: over the file it touched at z=1, over the
 // island it is working in at altitude — one object, one trail, two readings.
-function podXY(p,z){
-  const w=waterAt(z), t=p.target;
-  if(!t)return {x:p.x||W/2,y:w-110*z-46*(1-z)};
-  if(t.cell){const c=cellXY(t.cell,z);return {x:c.x,y:c.y-15*podAt(z)};}
-  if(t.home){const n=t.home;return {x:n.x,y:homeY(n,z)-10*podAt(z)};}
-  const n=t.node;
+function nodePt(n,z){
+  const w=waterAt(z);
   const near={x:n.x,y:treeY(n,z)-30*z-10};
   const far={x:(n.bough?n.bough.x:n.x),y:w-28-16*(1-z)};
   const k=clamp((1-z)/0.6,0,1), e=k*k*(3-2*k);
   return {x:near.x+(far.x-near.x)*e,y:near.y+(far.y-near.y)*e};
 }
+function podXY(p,z){
+  const w=waterAt(z), t=p.target;
+  if(!t)return {x:p.x||W/2,y:w-110*z-46*(1-z)};
+  if(t.cell){const c=cellXY(t.cell,z);return {x:c.x,y:c.y-15*podAt(z)};}
+  if(t.home){const n=t.home;return {x:n.x,y:homeY(n,z)-10*podAt(z)};}
+  if(t.room){const q=roomXY(t.room,z);return {x:q.x,y:q.y-11*podAt(z)};}
+  return nodePt(t.node,z);
+}
 const aimAt=b=>{
   const n=resolveIn(byPath,(b.places||[])[0]);           if(n)return {node:n};
   const h=resolveIn(byHome,(b.home_places||[])[0]);      if(h)return {home:h};
+  const r=((b.items||[])[0]&&byItem.get((b.items||[])[0]))||null;  if(r)return {room:r};
   const c=hubRoomFor(b);                                 return c?{cell:c}:null;
 };
+
+// ── the pod travels the structure, it does not cut across it ───────────────
+// A pod that cuts a straight line from wherever it stood says the map is
+// decoration. So a move is a ROUTE through the things that are drawn: up its
+// branch to the shore, along the shore, down the branch it is going to — and
+// at altitude, along the corridor between two rooms where the feed carries the
+// edge, else up to the deck line, along it, and down. Every waypoint resolves
+// at draw time, so the camera can move under a pod in flight.
+const sameTarget=(a,b)=>(!a&&!b)||!!(a&&b&&a.node===b.node&&a.home===b.home&&a.cell===b.cell&&a.room===b.room);
+const shoreY=z=>waterAt(z)-10-14*z;
+function ptOf(a,z){
+  if(a.free)return a.free;
+  if(a.shore!==undefined)return {x:a.shore,y:shoreY(z)};
+  if(a.node)return nodePt(a.node,z);
+  if(a.home)return {x:a.home.x,y:homeY(a.home,z)-10*podAt(z)};
+  if(a.cell){const c=cellXY(a.cell,z);return {x:c.x,y:c.y-15*podAt(z)};}
+  if(a.deck)return {x:a.deck.x,y:waterAt(z)+bandAt(z)+10};
+  if(a.room){const q=roomXY(a.room,z);return {x:q.x,y:q.y-11*podAt(z)};}
+  if(a.bez){                                   // the corridor's own curve
+    const p=roomXY(a.bez.a,z), q=roomXY(a.bez.b,z), my=(p.y+q.y)/2, t=a.bez.t, u=1-t;
+    return {x:u*u*u*p.x+3*u*u*t*p.x+3*u*t*t*q.x+t*t*t*q.x,
+            y:u*u*u*p.y+3*u*u*t*my+3*u*t*t*my+t*t*t*q.y};
+  }
+  return {x:W/2,y:waterAt(z)};
+}
+// shore → … → the target: the chain of things actually drawn between them
+function chainOf(t){
+  if(!t)return [];
+  if(t.node){const c=[];let n=t.node;while(n&&c.length<10){c.push({node:n});n=n.up;}
+    c.push({shore:(t.node.bough?t.node.bough.x:t.node.x)});return c.reverse();}
+  if(t.home){const c=[];let n=t.home;while(n&&c.length<10){c.push({home:n});n=n.up;}
+    const rt=ground&&ground.roots.find(r=>r.top===t.home.root);
+    c.push({shore:rt?rt.x:t.home.x});return c.reverse();}
+  if(t.cell)return [{shore:hub?hub.x:W/2},{cell:t.cell}];
+  if(t.room)return [{shore:t.room.deck.x},{deck:t.room.deck},{room:t.room}];
+  return [];
+}
+function routeBetween(from,to,p){
+  if(from&&from.room&&to&&to.room){            // at altitude: the corridors
+    const c=corridors.find(c=>(c.a===from.room&&c.b===to.room)||(c.b===from.room&&c.a===to.room));
+    if(c)return [{room:from.room},{bez:{a:c.a,b:c.b,t:0.25}},{bez:{a:c.a,b:c.b,t:0.5}},
+                 {bez:{a:c.a,b:c.b,t:0.75}},{room:to.room}];
+    return from.room.deck===to.room.deck
+      ?[{room:from.room},{deck:from.room.deck},{room:to.room}]
+      :[{room:from.room},{deck:from.room.deck},{deck:to.room.deck},{room:to.room}];
+  }
+  const a=chainOf(from).reverse(), b=chainOf(to);
+  if(!b.length)return [];
+  return a.length?[...a,...b]:[{free:{x:p.x,y:p.y}},...b];
+}
+function polyAt(route,u,z){
+  const pts=route.map(a=>ptOf(a,z));
+  if(pts.length===1)return pts[0];
+  const seg=[];let tot=0;
+  for(let i=1;i<pts.length;i++){const d=Math.hypot(pts[i].x-pts[i-1].x,pts[i].y-pts[i-1].y);seg.push(d);tot+=d;}
+  if(tot<0.001)return pts[pts.length-1];
+  let want=u*tot;
+  for(let i=0;i<seg.length;i++){
+    if(want<=seg[i]||i===seg.length-1){
+      const t=seg[i]>0.001?clamp(want/seg[i],0,1):1;
+      return {x:pts[i].x+(pts[i+1].x-pts[i].x)*t,y:pts[i].y+(pts[i+1].y-pts[i].y)*t};
+    }
+    want-=seg[i];
+  }
+  return pts[pts.length-1];
+}
 
 function ingest(d){
   const first=!S;S=d;
@@ -358,7 +434,8 @@ function renderHud(d){
 function worldHud(){
   const sh=(S&&S.shuttle)||{}, last=((S&&S.beads)||[]).slice(-1)[0]||{};
   const me=pods.find(p=>p.kind==='resident')||null;
-  const where=p=>!p||!p.target?null:(p.target.cell?p.target.cell.k:(p.target.home?p.target.home.path:(p.target.node?p.target.node.path:null)));
+  const where=p=>!p||!p.target?null:(p.target.cell?p.target.cell.k:(p.target.home?p.target.home.path
+    :(p.target.room?p.target.room.it.id:(p.target.node?p.target.node.path:null))));
   return {state:sh.state||null,why:sh.why||null,last:last.act||null,vials:lastVials,
     pod:me?{x:me.x,y:me.y,listening:!!me.listening,place:where(me)}:null,
     strands:pods.filter(p=>p.kind==='strand').map(p=>({id:p.id,label:p.label,place:where(p),fill:p.fill})),
@@ -369,20 +446,197 @@ function worldHud(){
 }
 
 // ── drawWorld's scene. [FRAME] decides where it lands; [WORLD] what is in it. ─
+
+// ═══ [LAYERS] · THE COMPOSITOR ═════════════════════════════════════════════
+// The layer pass's own region, and the only place ink is laid.
+//
+// The diagnosis it implements, in one line: the scene's remaining defects were
+// never missing features — they were elements drawn in the wrong layer. The
+// room card was drawn in the water's layer, so the cloth, drawn after it,
+// overshadowed it. The doors strip lost the same argument earlier. So there
+// are FOUR layers, every element is in exactly one, and one function draws
+// them in order:
+//
+//   ground   the sea · the warp's decks, rooms and corridors · the home's
+//            roots · the island · the repo's canopy · the hub
+//   water    the streams: the pings · the pods · the sweep · the cloth ·
+//            the wire in its corner
+//   windows  the inspections: the body · a room's card and its page · a
+//            pass's detail · the expanded transcript · a hover plaque
+//            A WINDOW DIMS THE GROUND BENEATH IT AND THE WATER DOES NOT DRAW
+//            WHERE IT COVERS. That is the fix.
+//   edges    the instruments: the sounder and the belt right, the top banner
+//            and the legend. Drawn AFTER the phosphor, never into it — an
+//            instrument that leaves a ghost is not an instrument.
+//
+// Enforcement, not convention: `?layers=check` wraps the context's sinks and
+// records every draw call made inside the compositor's span but outside a
+// layer. `window.__layers` is the receipt.
+const LAYER={cur:null,scene:false,depth:0,stray:[],leaks:0,armed:false,counts:{}};
+const PANES=[];                       // this frame's window panes, read by [FRAME]
+const RESERVE={card:null};            // what a window has taken from the water
+
+function armLayers(){
+  if(LAYER.armed)return;LAYER.armed=true;
+  const P=CanvasRenderingContext2D.prototype, check=new URLSearchParams(location.search).get('layers')==='check';
+  const sv=P.save, rs=P.restore;
+  P.save=function(){if(LAYER.cur)LAYER.depth++;return sv.call(this);};
+  P.restore=function(){if(LAYER.cur)LAYER.depth--;return rs.call(this);};
+  if(!check)return;
+  for(const m of ['fillRect','strokeRect','fillText','strokeText','stroke','fill','drawImage','clearRect']){
+    const f=P[m];
+    P[m]=function(...a){
+      if(LAYER.scene&&!LAYER.cur)LAYER.stray.push(m+' · '+((new Error().stack||'').split('\n')[2]||'').trim());
+      else if(LAYER.cur)LAYER.counts[LAYER.cur]=(LAYER.counts[LAYER.cur]||0)+1;
+      return f.apply(this,a);
+    };
+  }
+}
+// one layer: entered with a known state, left with the same one. A block that
+// leaks a save() is repaired here rather than poisoning the next layer — the
+// exact failure [RECORD] measured and could not fix from inside its own fence
+// ("globalCompositeOperation reads 'lighter' on entry to this function").
+function L(name,g,fn){
+  LAYER.cur=name;const d0=LAYER.depth;
+  g.save();
+  g.globalCompositeOperation='source-over';g.globalAlpha=1;g.setLineDash([]);
+  g.textAlign='left';g.textBaseline='alphabetic';g.lineWidth=1;g.filter='none';
+  g.font=`10px ${MONO}`;
+  try{fn();}
+  finally{
+    while(LAYER.depth>d0){g.restore();LAYER.depth--;LAYER.leaks++;}
+    g.restore();LAYER.cur=null;
+  }
+}
+// the water does not draw where a window covers: one even-odd clip, the screen
+// minus every pane. Cheaper than it looks — one path, set once per frame.
+function clipOut(g,wins,fn){
+  const m=wins.filter(w=>w.mask!==false);
+  if(!m.length)return fn();
+  g.save();g.beginPath();g.rect(0,0,W,H);
+  for(const w of m)g.rect(w.x,w.y,w.w,w.h);
+  g.clip('evenodd');
+  try{fn();}finally{g.restore();}
+}
+// a window dims the ground beneath it: its own seat, or the whole ground when
+// the window is a stop (the body, a pass, the transcript, a room's page).
+function dimUnder(g,wins){
+  for(const w of wins){
+    if(w.dim==='scene'){g.fillStyle='rgba(7,6,4,0.72)';g.fillRect(0,0,W,H);}
+    else if(w.dim==='rect'){g.fillStyle='rgba(7,6,4,0.80)';g.fillRect(w.x,w.y,w.w,w.h);}
+  }
+}
+
+// ── the beat: the daemon's pulse, as a breath ──────────────────────────────
+// The glow only ever moved on a transition, so a scene with nothing happening
+// was a dead scene. `shuttle.tick` is a real number in the feed and the sweep
+// already reads it, so the canopy breathes on it: crest at the tick, scaled by
+// each place's own `heat`, so a place no act has lit cannot breathe and a
+// still frame still looks still. NO MEASURED TICK ⇒ NO BREATH: nothing pulses
+// that has no reading behind it.
+const BREATH_A=0.16;
+function breath(now){
+  const ph=(typeof ACTOR!=='undefined'&&ACTOR.sweep)?ACTOR.sweep.phase(now):null;
+  return ph===null?0:0.5+0.5*Math.cos(ph*6.283185307);
+}
+
+// ── the glitch: it belongs to ARRIVAL, and to nothing else ─────────────────
+// A glitch reads as information resolving, which is right for structure that
+// has just appeared — a place entering the tree, a pass landing on the cloth,
+// a room's page opening — and wrong for anything ongoing. Three arrivals, each
+// stamped from a reading; glitch on arrival, phosphor on trace, breath on the
+// beat, and nothing else moves.
+const GLITCH_MS=520;
+const GLYPHS='▓▒░/\\|_-=+*<>[]{}#%&';
+function glitchK(born,now){
+  if(!num(born))return null;
+  const k=(now-born)/GLITCH_MS;
+  return (k<0||k>=1)?null:k;
+}
+function glitchText(g,s,px,py,k){
+  if(k===null||k===undefined)return g.fillText(s,px,py);
+  const n=s.length, cut=Math.floor(n*k*k);
+  let out='';
+  for(let i=0;i<n;i++)out+=(i<cut||s[i]===' ')?s[i]:GLYPHS[(Math.random()*GLYPHS.length)|0];
+  g.fillText(out,px,py);
+}
+function glitchSlices(g,px,py,w,h,k,ink){
+  const j=(1-k)*9;
+  g.save();g.globalAlpha=0.35+0.45*k;g.fillStyle=ink;
+  for(let i=0;i<3;i++)g.fillRect(px+(Math.random()-0.5)*2*j,py+(i+0.5)*h/3-0.5,w,1);
+  g.restore();
+}
+
+// ── THE ONE FUNCTION ───────────────────────────────────────────────────────
 let lastStep=-1;
 function drawScene(x,now){
-  // [FRAME] may hand this several contexts in one tick (buffers, a post-pass).
-  // State advances on the first call of a tick only; every call draws.
+  armLayers();
   const step=(now!==lastStep); if(step){lastStep=now;tickCam();}
   const z=CAM.z; water=waterAt(z);
-  const band=bandAt(z), dv=diveAt(z), rs=roomAt(z), ho=hubAt(z);
-  const dtx=deckAt(z), txt=clamp((rs-0.45)/0.33,0,1);   // deck names at mid, room names at the schematic
+  LAYER.scene=true;
+  try{
+    // 1 · every window declares its pane before any ink is laid. The card is
+    //     measured first: the cloth reserves its column off this rect.
+    const card=ACTOR.cardWindow(x,z,now);
+    RESERVE.card=card;
+    RECORD.prepare(x,z,now);                  // derive · lay out · measure, no ink
+    const wins=[RECORD.wireWindow(x,z),card,ACTOR.benchWindow(x,z),
+                RECORD.paneWindow(x),RECORD.hoverWindow(x),worldHoverWindow(x)].filter(Boolean);
+    PANES.length=0;for(const w of wins)if(w.mask!==false)PANES.push({x:w.x,y:w.y,w:w.w,h:w.h});
+    // 2 · the four layers, in order, and nothing outside them
+    L('ground',x,()=>{
+      drawSea(x,z);
+      drawWarp(x,z);
+      RECORD.roots(x,z);
+      drawHome(x,z,step);
+      drawIsland(x,z);
+      drawCanopy(x,z,step,now);
+      drawHub(x,z,step);
+      RECORD.marks(x,z);
+      ACTOR.marks(x,z);
+      dimUnder(x,wins);
+    });
+    L('water',x,()=>clipOut(x,wins,()=>{
+      drawPings(x,z,now);
+      ACTOR.drawPods(x,z,step,now);
+      RECORD.water(x,z,now);
+    }));
+    L('windows',x,()=>{for(const w of wins)w.draw(x);});
+  }finally{LAYER.scene=false;}
+  window.__layers={stray:LAYER.stray.length,strayAt:LAYER.stray.slice(0,4),
+    leaks:LAYER.leaks,panes:PANES.length,counts:LAYER.counts};
+}
+// the fourth layer lands after the phosphor, so [FRAME] calls it at its own
+// moment — but the compositor still owns what is in it and in what order.
+function drawEdges(x,now){
+  armLayers();
+  LAYER.scene=true;
+  try{
+    L('edges',x,()=>{
+      ACTOR.sounder(x,CAM.z);
+      if(CHROME)chromePlate(x);
+    });
+  }finally{LAYER.scene=false;}
+}
+
+// ── the sea: the world's own body, not one of its streams ──────────────────
+// Named here because the name collides: the WATER LAYER is the streams. This
+// gradient is the medium they run in, it never moves on its own, and it is
+// ground.
+function drawSea(x,z){
   const g=x.createLinearGradient(0,water-180,0,H);
   g.addColorStop(0,'#07060400');g.addColorStop(0.55,`rgba(10,10,16,${0.30+0.70*z})`);
   g.addColorStop(1,`rgba(5,6,11,${0.40+0.60*z})`);
   x.fillStyle=g;x.fillRect(0,water-180,W,H-water+180);
   x.font=`10px ${MONO}`;
 
+}
+
+// ── the warp, the decks and the rooms: ground ──────────────────────────────
+function drawWarp(x,z){
+  const band=bandAt(z), dv=diveAt(z), rs=roomAt(z);
+  const dtx=deckAt(z), txt=clamp((rs-0.45)/0.33,0,1);
+  x.font=`10px ${MONO}`;
   // ── the warp, in the dark under the ground ───────────────────────────────
   for(const dk of decks){
     if(dk.anchor){                    // the tether: drawn only where it is measured
@@ -456,6 +710,11 @@ function drawScene(x,now){
   // decks at mid and the schematic. (dispatcher's fourth steer, point 3)
   /*[RECORD]*/
 
+}
+
+function drawHome(x,z,step){
+  const band=bandAt(z), NOW=performance.now();
+  x.font=`10px ${MONO}`;
   // ── the ground: the home, the shelf everything stands on ─────────────────
   if(ground){
     x.fillStyle=`rgba(14,12,9,${0.85})`;x.fillRect(0,water,W,band);
@@ -476,6 +735,8 @@ function drawScene(x,now){
         x.fillStyle=rg;x.beginPath();x.arc(n.x,ny,R,0,7);x.fill();x.restore();}
       x.fillStyle=lum>0.02?A:'#2b2318';x.globalAlpha=lum>0.02?clamp(0.35+lum,0,1):0.5;
       x.beginPath();x.arc(n.x,ny,rr,0,7);x.fill();x.globalAlpha=1;
+      {const gk=glitchK(n.born,NOW);
+       if(gk!==null)glitchSlices(x,n.x-rr*3,ny-rr*2,rr*6,rr*4,gk,lum>0.02?A:'#4a4336');}
       if(step)n.flare*=0.955;
     }
     if(band>28){
@@ -487,6 +748,9 @@ function drawScene(x,now){
     }
   }
 
+}
+
+function drawIsland(x,z){
   // ── the island: the repo, moored into the home ───────────────────────────
   if(island){
     const hw=island.w*0.5, hh=18*z+12*(1-z);
@@ -505,9 +769,15 @@ function drawScene(x,now){
     x.fillText(`${island.label} · ${island.n} of ${island.total} places`,island.x,water+12);x.textAlign='left';
   }
 
+}
+
+function drawCanopy(x,z,step,now){
+  const br=breath(now);
   // ── the canopy: it compresses onto its island; nothing fades out ─────────
   for(const n of nodes){
-    const ny=treeY(n,z), hv=clamp(n.heat||0,0,1), a=n.up;
+    // the breath rides what an act already lit: a place at heat 0 cannot breathe
+    const ny=treeY(n,z), hv=clamp(clamp(n.heat||0,0,1)*(1+BREATH_A*br),0,1), a=n.up;
+    const gk=glitchK(n.born,now);
     x.strokeStyle=`rgba(110,94,64,${(0.12+hv*0.5)*(0.45+0.55*z)})`;x.lineWidth=(a?0.7:1.1)*(0.5+0.5*z);
     x.beginPath();x.moveTo(n.x,ny);
     if(a){const ay=treeY(a,z);x.bezierCurveTo(n.x,(ny+ay)/2,a.x,(ny+ay)/2,a.x,ay);}
@@ -520,9 +790,15 @@ function drawScene(x,now){
       x.fillStyle=rg;x.beginPath();x.arc(n.x,ny,R,0,7);x.fill();x.restore();}
     x.fillStyle=lum>0.02?A:'#2b2318';x.globalAlpha=lum>0.02?clamp(0.35+lum,0,1):0.55;
     x.beginPath();x.arc(n.x,ny,rr,0,7);x.fill();x.globalAlpha=1;
+    if(gk!==null)glitchSlices(x,n.x-rr*3,ny-rr*2,rr*6,rr*4,gk,lum>0.02?A:'#4a4336');
     if(step)n.flare*=0.955;
   }
 
+}
+
+function drawHub(x,z,step){
+  const ho=hubAt(z);
+  x.font=`10px ${MONO}`;
   // ── the mothership: moored over the home, the one fixed point ────────────
   if(hub){
     const hh=hubH(z), top=water-6-hh, hw=hub.w/2;
@@ -555,6 +831,9 @@ function drawScene(x,now){
     x.fillText('the hub · moored at home',hub.x,water+12);x.textAlign='left';
   }
 
+}
+
+function drawPings(x,z,now){
   // ── pings: light leaves a pod only when a boundary landed ────────────────
   const PING=1700;
   pings=pings.filter(p=>{
@@ -582,17 +861,35 @@ function drawScene(x,now){
     return true;
   });
 
-  // ── the pods: [ACTOR] draws them, as tiled terminal faces ────────────────
-  ACTOR.drawPods(x,z,step,now);
-  drawSounder(x,z);
-  ACTOR.panel(x,z,now);
-  RECORD.draw(x,now,{z,water,nodes,rooms,pods,S}); /*[RECORD]*/
 }
 
-// the depth sounder — the camera's own readout, in the world, because a
-// continuous axis with no reading is a control a stranger cannot hold.
-// [ACTOR] owns its body now: the three detents are marks on it.
-function drawSounder(x,z){ACTOR.sounder(x,z);}
+// ── the world's hover: a window, on the canvas ─────────────────────────────
+// It was a DOM node (`#hover`), which is the one surface no layer can reach —
+// above the canvas, outside the post-pass, unreachable by the compositor. It
+// is a plaque now, in the windows layer, and [RECORD]'s cloth plaque wins when
+// both would stand.
+const HOVER={txt:null,x:0,y:0};
+function worldHoverWindow(g){
+  if(!HOVER.txt||(RECORD.hover&&RECORD.mouse))return null;
+  g.save();g.font=`10px ${MONO}`;
+  const ls=String(HOVER.txt).split('\n');
+  const w=Math.max(...ls.map(l=>g.measureText(l).width))+16, h=ls.length*13+10;
+  g.restore();
+  const bx=clamp(HOVER.x+12,4,W-w-4), by=clamp(HOVER.y+12,4,H-h-4);
+  return {name:'world-hover',x:bx,y:by,w,h,dim:'none',draw(g){
+    g.save();g.font=`10px ${MONO}`;
+    g.fillStyle='rgba(11,9,6,0.93)';g.fillRect(bx,by,w,h);
+    g.strokeStyle='rgba(58,51,40,0.9)';g.lineWidth=1;g.strokeRect(bx+.5,by+.5,w-1,h-1);
+    g.fillStyle='#d9cba9';
+    ls.forEach((l,i)=>g.fillText(l,bx+8,by+17+i*13));
+    g.restore();
+  }};
+}
+
+// the depth sounder is an EDGE now — an instrument, drawn after the phosphor
+// by the compositor's fourth layer, so the one control a stranger has to hold
+// no longer leaves a ghost of itself when the camera moves. ACTOR.sounder is
+// its body; drawEdges is where it lands.
 
 // ── the axis itself: wheel · + − · 1 2 3 · pinch. One control, no modes. ────
 const zoom=f=>{CAM.tz=clamp(CAM.tz*f,ZMIN,ZMAX);ACTOR.camera.push(performance.now());};
@@ -616,7 +913,7 @@ function tickCam(){ACTOR.camera.settle(performance.now());
 
 // ── the hand: hit-testing is the world's, at every altitude ────────────────
 cv.addEventListener('mousemove',e=>{
-  const z=CAM.z,h=$('#hover');let txt=null;
+  const z=CAM.z;let txt=null;
   const n=nodes.find(n=>Math.hypot(n.x-e.clientX,treeY(n,z)-e.clientY)<7);
   if(n)txt=`${n.path} · heat ${(n.heat||0).toFixed(2)} · ${n.knots||0} knots · last ${n.last||'—'}`;
   if(!txt){const hn=homeNodes.find(n=>Math.hypot(n.x-e.clientX,homeY(n,z)-e.clientY)<6);
@@ -638,9 +935,7 @@ cv.addEventListener('mousemove',e=>{
       }
     }
   }
-  if(txt){h.style.display='block';h.style.left=(e.clientX+12)+'px';h.style.top=(e.clientY+12)+'px';
-    h.style.whiteSpace='pre';h.textContent=txt;}
-  else h.style.display='none';
+  HOVER.txt=txt;HOVER.x=e.clientX;HOVER.y=e.clientY;
 });
 
 // ═══ [ACTOR] ═══════════════════════════════════════════════════════════════
@@ -657,7 +952,9 @@ cv.addEventListener('mousemove',e=>{
 //   ACTOR.camera.push(now)               "a hand is on the wheel right now"
 //   ACTOR.drawPods(g,z,step,now)         every pod, as a tiled terminal face
 //   ACTOR.sounder(g,z)                   the depth sounder, with the detents on it
-//   ACTOR.panel(g,z,now)                 what is selected, and the verb offered
+//   ACTOR.cardWindow(g,z,now)            the room card, as a window descriptor
+//   ACTOR.benchWindow(g,z)               a room's page, the same
+//   ACTOR.marks(g,z)                     the hand's marks, in the ground layer
 //   ACTOR.select.room(r) / .deck(d) / .clear() / .at(px,py,z)
 //   SELECTED = {kind,id,slug,chosen:Set}  — the shared selection, by ID, so a
 //     feed refresh that rebuilds `rooms` cannot drop what a hand had chosen.
@@ -718,7 +1015,7 @@ const ACTOR={
 // today, so the second frame is DERIVED — the eye cells blink `·`/`°` → `-`,
 // which is the one motion the emote vocabulary itself uses for half its faces.
 // That is motion, not a reading, and it is the only invented thing in here.
-  BEAT:10000, RETYPE:110, STAGGER:40,
+  RETYPE:110, STAGGER:40,
   frames(pod,run){
     const g=pod.glyphNow||'b·_·d';
     const fed=run&&Array.isArray(run.mood_frames)&&run.mood_frames.length?run.mood_frames:null;
@@ -737,8 +1034,10 @@ const ACTOR={
     // the keyframe step rides the beat the feed carries — the face blinks when
     // the daemon ticks. No tick in sight ⇒ the page's own 10 s constant, which
     // is the debt the sonar already had and this halves.
-    const ph=this.sweep.phase(now), on=ph===null?((now%this.BEAT)/this.BEAT>0.94)
-                                               :(now-BEAT.at<520);
+    // NO MEASURED TICK ⇒ NO BLINK. The page's own 10 s constant was a
+    // decorative timer wearing the daemon's clothes; the face is still until a
+    // real tick moves, and that stillness is a reading too.
+    const on=this.sweep.phase(now)!==null&&(now-BEAT.at<520);
     const fi=(fr.list.length>1&&on)?1:0;
     const want=fr.list[Math.min(fi,fr.list.length-1)];
     const key=want.join('');
@@ -826,15 +1125,31 @@ const ACTOR={
     this.sweep.draw(g,z,now);
     for(const p of pods){
       const t=podXY(p,z), me=p.kind==='resident';
-      if(step){p.x+=(t.x-p.x)*0.045;p.y+=(t.y-p.y)*0.045;}
+      // THE FIRST READING IS A PLACEMENT. A pod used to be born at the centre
+      // of the screen and fly in from it — a position it never held, asserted
+      // for a second and a half before the truth arrived.
+      if(!p.placed){p.x=t.x;p.y=t.y;p.route=null;p.routeTo=p.target;if(p.target)p.placed=true;}
+      else if(!sameTarget(p.target,p.routeTo)){      // a new reading ⇒ a new route
+        const r=routeBetween(p.routeTo,p.target,p);
+        p.route=r.length>1?r:null;p.routeTo=p.target;p.u=0;
+      }
+      if(step){
+        if(p.route){                                  // it travels the structure
+          p.u=Math.min(1,p.u+Math.max(0.008,(1-p.u)*0.06));
+          const q=polyAt(p.route,p.u,z);p.x=q.x;p.y=q.y;
+          if(p.u>=1)p.route=null;
+        }else{p.x+=(t.x-p.x)*0.045;p.y+=(t.y-p.y)*0.045;}   // settling, as the camera moves
+      }
       const fed=me?(run.mood_glyph||null):((p.strand&&(p.strand.mood_glyph||p.strand.glyph))||null);
       p.glyphFed=!!fed; p.glyphNow=fed||(me?'b·_·d':'b·:·d');
-      if(me&&p.listening){               // the sonar: the daemon's real ~10 s beat
+      if(me&&p.listening){               // the sonar: the daemon's real beat
+        const bp=this.sweep.phase(now), ps=podAt(z);
         g.save();g.globalCompositeOperation='lighter';
-        const bp=this.sweep.phase(now);
-        const ph=bp===null?(now%this.BEAT)/this.BEAT:bp, ps=podAt(z);
-        for(const off of [0,0.34,0.68]){
-          const e=(ph+off)%1, rr=(18+e*Math.min(W,H)*0.42)*ps;
+        if(bp===null){                   // listening is a reading; the rings are the beat's.
+          g.strokeStyle='rgba(242,177,52,0.15)';g.lineWidth=1;   // one still ring, no clock
+          g.beginPath();g.arc(p.x,p.y,34*ps,0,7);g.stroke();
+        }else for(const off of [0,0.34,0.68]){
+          const e=(bp+off)%1, rr=(18+e*Math.min(W,H)*0.42)*ps;
           g.strokeStyle=`rgba(242,177,52,${0.20*(1-e)*(1-e)})`;g.lineWidth=1.4*(1-e)+0.3;
           g.beginPath();g.arc(p.x,p.y,rr,0,7);g.stroke();
         }
@@ -879,9 +1194,17 @@ const ACTOR={
 
 // ── 3 · the sounder, with the three rests marked on it ─────────────────────
   sounder(g,z){
-    const bx=W-26, top=H*0.34, bot=H*0.78;   // clears the belt: at H*0.26
+    const bx=W-26, top=H*0.34, bot=H*0.66;   // clears the belt: at H*0.26
                                              // the 'interior' mark sat under the
-                                             // fifth vial and could not be read
+                                             // fifth vial and could not be read.
+                                             // And now it clears the ROOM CARD:
+                                             // edges are drawn after windows, so
+                                             // at H*0.78 the 'schematic' mark
+                                             // printed straight across the card.
+                                             // A constant, not the card's own
+                                             // rect — an axis whose scale moved
+                                             // when you picked a room is worse
+                                             // than a shorter axis.
     const at=zz=>bot+(top-bot)*((zz-ZMIN)/(ZMAX-ZMIN));
     g.strokeStyle='rgba(90,77,60,0.35)';g.lineWidth=1;
     g.beginPath();g.moveTo(bx,top);g.lineTo(bx,bot);g.stroke();
@@ -907,7 +1230,7 @@ const ACTOR={
       g.fillText(st.easing?'resting →':'between',bx+18,(y+ty)/2+3);
     }
     g.textAlign='right';
-    g.fillStyle='#8a7c5e';g.fillText(RANGE_SAY[RANGE(z)],W-40,H-16);g.textAlign='left';
+    g.fillStyle='#8a7c5e';g.fillText(RANGE_SAY[RANGE(z)],W-16,H-6);g.textAlign='left';
   },
 
 // ── 4 · the room a hand can choose, and the verb said honestly ─────────────
@@ -1023,10 +1346,22 @@ const ACTOR={
     }
   },
 
-// ── 5 · the panel: what is chosen, and what this page can honestly do ──────
-  panel(g,z,now){
-    this.marks(g,z);
-    this.bench.draw(g,z,now);
+// ── 5 · the room card: a WINDOW, and that is the whole fix ────────────────
+// It was drawn inside the water's layer, before [RECORD]'s cloth, so the cloth
+// printed over it every frame and its right-aligned key row landed inside the
+// card. It is an inspection — "a room's card" — so it is a window: measured
+// before any ink is laid, the ground dimmed under its seat, the water cut out
+// of its rect, the phosphor punched at it, and drawn after every stream.
+// marks() and bench.draw() left with it: the marks are ground (they are ON the
+// rooms), the page is a window of its own.
+  // a room's page is a window too — one rect, one dim, drawn among the others
+  benchWindow(g,z){
+    if(!SELECTED.open)return null;
+    const r=this.bench.rect();
+    return {name:'bench',x:r.x0,y:r.y0,w:r.w,h:r.h,dim:'scene',
+            draw:gg=>ACTOR.bench.draw(gg,CAM.z,performance.now())};
+  },
+  cardWindow(g,z,now){
     const rows=[];let head=null,foot=null;
     const r=this.select.room_(), dk=SELECTED.kind==='deck'?this.select.deck_():null;
     if(r){
@@ -1073,8 +1408,16 @@ const ACTOR={
     g.restore();
     const ph=26+nlines*14+(foot?foot.length*13+12:0);
     const py=H-20-ph;
+    return {name:'card',x:px,y:py,w:pw,h:ph,dim:'rect',
+            draw:gg=>ACTOR.cardDraw(gg,{px,py,pw,ph,head,rows,foot,r})};
+  },
+  // the pane is GLASS again. It went opaque because a translucent pane could
+  // not hide a lit warp — the phosphor's ghost printed straight through it. The
+  // ghost is punched at the pane now and the water is clipped out of it, so the
+  // only thing left under the card is the dimmed ground, at 0.80 · 0.12 ≈ 2 %.
+  cardDraw(g,{px,py,pw,ph,head,rows,foot,r}){
     g.save();
-    g.fillStyle='#0b0906';g.fillRect(px,py,pw,ph);
+    g.fillStyle='rgba(9,8,6,0.88)';g.fillRect(px,py,pw,ph);
     g.strokeStyle='rgba(154,133,94,0.30)';g.lineWidth=1;
     g.strokeRect(px+0.5,py+0.5,pw-1,ph-1);
     g.font=`10px ${MONO}`;g.fillStyle='#e8dcc0';
@@ -1283,20 +1626,23 @@ ACTOR.bench={
     (async()=>{
       for(const u of ITEM_URLS(id)){
         try{const r=await fetch(u,{cache:'no-store'});if(!r.ok)continue;
-          const d=await r.json();PAGES.set(id,{state:'ok',d});return;}catch(e){}
+          const d=await r.json();PAGES.set(id,{state:'ok',d,born:performance.now()});return;}catch(e){}
       }
       PAGES.set(id,{state:'fail',why:'the daemon did not answer /loom/page/item'});
     })();
   },
   close(){SELECTED.open=null;BENCH.scroll=0;},
   scroll(d){BENCH.scroll=Math.max(0,BENCH.scroll+d);},
+  rect(){const x0=Math.round(W*0.055), x1=Math.round(W*0.64);
+    const y0=Math.round(H*0.17), y1=Math.round(H*0.86);
+    return {x0,x1,y0,y1,w:x1-x0,h:y1-y0};},
   draw(g,z,now){
     const id=SELECTED.open;if(!id)return;
     const pg=PAGES.get(id)||{state:'loading'};
-    const x0=Math.round(W*0.055), x1=Math.round(W*0.64), w=x1-x0;
-    const y0=Math.round(H*0.17), y1=Math.round(H*0.86), h=y1-y0;
+    const {x0,x1,y0,y1,w,h}=this.rect();
+    const gk=glitchK(pg.born,now);          // a page OPENING is an arrival
     g.save();
-    g.fillStyle='#090806';g.fillRect(x0,y0,w,h);
+    g.fillStyle='rgba(9,8,6,0.90)';g.fillRect(x0,y0,w,h);
     g.strokeStyle='rgba(154,133,94,0.34)';g.lineWidth=1;g.strokeRect(x0+0.5,y0+0.5,w-1,h-1);
     // the bench's own corner ticks, so it reads as a surface, not a dialog
     for(const [sx,cx] of [[1,x0],[-1,x1]])for(const [sy,cy] of [[1,y0],[-1,y1]]){
@@ -1308,7 +1654,7 @@ ACTOR.bench={
     // to a line is a wall. Opaque, and a readable column inside it.
     const pad=16, iw=Math.min(w-pad*2,660);let y=y0+24;
     const line=(t,ink,size,lead)=>{g.font=`${size}px ${MONO}`;g.fillStyle=ink;
-      for(const l of wrapText(g,t,iw)){if(y>y1-10)return false;g.fillText(l,x0+pad,y);y+=lead;}return true;};
+      for(const l of wrapText(g,t,iw)){if(y>y1-10)return false;glitchText(g,l,x0+pad,y,gk);y+=lead;}return true;};
     g.font=`10px ${MONO}`;g.fillStyle='#5a4d3c';
     g.fillText(`${id} · the bench — esc closes · ↑ ↓ scrolls`,x0+pad,y);y+=18;
     if(pg.state==='loading'){line('reading the item page…','#8a7c5e',11,16);g.restore();return;}
@@ -1355,7 +1701,7 @@ ACTOR.bench={
     BENCH.total=lines.length;BENCH.fit=fit;
     BENCH.scroll=Math.min(BENCH.scroll,Math.max(0,lines.length-fit));
     for(const l of lines.slice(BENCH.scroll,BENCH.scroll+fit)){
-      if(l.t){g.font=`${l.size}px ${MONO}`;g.fillStyle=l.ink;g.fillText(l.t,x0+pad,y);}
+      if(l.t){g.font=`${l.size}px ${MONO}`;g.fillStyle=l.ink;glitchText(g,l.t,x0+pad,y,gk);}
       y+=l.lead;
       if(y>y1-14)break;
     }
@@ -1495,7 +1841,9 @@ const RECORD=(()=>{
     R.src=S;
     tintsFrom(S);
     const rows=((S.cloth||{}).rows||[]).filter(r=>r&&r.run);
-    R.passes=rows.map(r=>({...r,t0:T(r.started),t1:T(r.ended),live:!r.ended}))
+    const was=R.byRun, NOW=performance.now();      // a run already on the cloth has not just landed
+    R.passes=rows.map(r=>({...r,t0:T(r.started),t1:T(r.ended),live:!r.ended,
+                           born:(was.get(r.run)||{}).born||NOW}))
                  .sort((a,b)=>(a.t0||0)-(b.t0||0));
     R.byRun=new Map(R.passes.map(p=>[p.run,p]));
     // the fold's index, both directions, out of one field: footprints.
@@ -1712,9 +2060,14 @@ const RECORD=(()=>{
   }
 
   // ── geometry ─────────────────────────────────────────────────────────────
+  // THE CLOTH YIELDS. Where a window and a stream want the same pixels, the
+  // stream is the one that moves: the cloth's right end stops at the room
+  // card's left edge instead of being clipped out from under its own key row.
   function geom(){
     const n=R.passes.length||1;
-    const x0=W*0.045, x1=W*0.975, base=H-BOTTOM;
+    const cd=(typeof RESERVE!=='undefined'&&RESERVE.card)||null;
+    const x0=W*0.045, base=H-BOTTOM;
+    const x1=Math.max(x0+60,Math.min(W*0.975,cd?cd.x-10:W*0.975));
     const pw=(x1-x0)/n, gap=Math.min(2.2,pw*0.22);
     return R.geom={x0,x1,base,pw,gap,n};
   }
@@ -1736,8 +2089,10 @@ const RECORD=(()=>{
     g.fillStyle='#4a4336';g.textAlign='right';
     g.fillText('THE CLOTH',G.x0-6,G.base-1);g.textAlign='left';
     let lastDay=null;
+    const NOW=performance.now();
     R.passes.forEach((p,i)=>{
       const {x:px,w:pw}=plaqueX(i), ph=plaqueH(p), rc=recency(p);
+      const gk=glitchK(p.born,NOW);           // A NEW PASS LANDING IS AN ARRIVAL
       const y=G.base-(p.parent?3:0), top=y-ph;
       const d=p.t0?Math.floor(p.t0/DAY):null;
       if(d!==null&&d!==lastDay){          // the time axis, said where the day turns
@@ -1780,6 +2135,7 @@ const RECORD=(()=>{
       if(R.cursor===i&&R.pass!==p.run){
         g.strokeStyle='rgba(232,220,192,0.45)';g.lineWidth=1;
         g.beginPath();g.moveTo(px+pw/2,G.base+2);g.lineTo(px+pw/2,G.base+5);g.stroke();}
+      if(gk!==null)glitchSlices(g,px-4,top,pw+8,Math.max(3,ph),gk,INK);
     });
     // THE TOPIC LEGEND ROW IS DELETED. We settled today that a topic is a deck
     // and an item is a room on it — so the decks ARE the legend, and a chip row
@@ -1921,16 +2277,22 @@ const RECORD=(()=>{
   // So this is ONE window, drawn once and opened by anything worth stopping
   // for: `P` inspects the body, `Enter` inspects whatever is selected. If a
   // thing does not fit water, window or edge, that is the signal to ask.
-  function drawWindow(g,title,rows,note,gap){
-    // the base row is the one whose label names it; everything else is an act
-    const isBase=r=>/\bbase\b/i.test(String(r.k||r.l||r.label||''));
-    const rowMax=Math.max(0,...rows.filter(r=>!isBase(r)).map(r=>num(r.v)?r.v:0));
+  function windowRect(rows,note,gap){
     const w=Math.min(520,W*0.42), lh=18;
     const foot=(note?30:10)+(gap?16:0);
     const h=Math.min(H*0.80,58+lh*rows.length+foot);
-    const x=Math.round(W*0.5-w/2), y=Math.round(H*0.5-h/2);
+    return {x:Math.round(W*0.5-w/2),y:Math.round(H*0.5-h/2),w,h};
+  }
+  function drawWindow(g,rect,title,rows,note,gap){
+    // the base row is the one whose label names it; everything else is an act
+    const isBase=r=>/\bbase\b/i.test(String(r.k||r.l||r.label||''));
+    const rowMax=Math.max(0,...rows.filter(r=>!isBase(r)).map(r=>num(r.v)?r.v:0));
+    const lh=18;
+    const foot=(note?30:10)+(gap?16:0);
+    const {x,y,w,h}=rect;
     g.save();
-    g.fillStyle='rgba(7,6,4,0.72)';g.fillRect(0,0,W,H);      // the ground, dimmed
+    // the dim belongs to the compositor now — a window says how far it reaches
+    // and the ground layer does the dimming, once, for every window at once.
     g.fillStyle='#070604';g.fillRect(x,y,w,h);               // the window's own ground
     g.strokeStyle='rgba(122,104,72,0.55)';g.lineWidth=1;g.strokeRect(x+.5,y+.5,w-1,h-1);
     g.font=`10px ${MONO}`;g.fillStyle='#8a7c5e';g.fillText(title,x+14,y+22);
@@ -2060,7 +2422,17 @@ const RECORD=(()=>{
   }
 
   // ── 4 · the wire: the last things said, in the same ink ──────────────────
-  function drawWire(g,z){
+  function wireMetrics(z){
+    const vis=R.log?1:INTERIOR(z);
+    const G=R.geom||geom();
+    const lh=R.log?14:13;
+    const n=R.log?Math.max(8,Math.floor((G.base-90)/lh)):8;
+    const lines=R.wire.slice(-n);
+    const x0=W*0.045, bot=G.base-WIRE, wmax=R.log?W*0.66:W*0.44;
+    R.wireTop=lines.length?bot-lh*(lines.length-1):bot;
+    return {vis,G,lh,n,lines,x0,bot,wmax};
+  }
+  function drawWire(g,z,M){
     // ── THE CHAT: an online game's, not a panel ──────────────────────────
     // The maintainer's shape, superseding 'a log window' and then 'lines in the
     // water': bottom-left, IN the water, no chrome — no border, no header, no
@@ -2079,19 +2451,15 @@ const RECORD=(()=>{
     //             the place it names, so it reads as the run's own history
     //   Esc     — back to the corner
     // Same colour law at both sizes. No scrollbars, no header, no panel.
-    const vis=R.log?1:INTERIOR(z);      // expanded, it is the scene's; corner, the interior's
-    if(vis<=0.01)return;
-    const G=R.geom||geom();
-    const lh=R.log?14:13;
-    const n=R.log?Math.max(8,Math.floor((G.base-90)/lh)):8;
-    const lines=R.wire.slice(-n);
-    if(!lines.length)return;
-    const x0=W*0.045, bot=G.base-WIRE, wmax=R.log?W*0.66:W*0.44;
-    R.wireTop=bot-lh*(lines.length-1);
+    // TWO LAYERS, ONE ELEMENT, and the dispatch named it in both lists. The
+    // measurement settles it: in the corner the wire fades with INTERIOR(z) and
+    // is anchored to the mothership — it is altitude-scoped and world-anchored,
+    // which is water, not an instrument at an edge. Expanded, it dims the ground
+    // and stops: that is a window. So the corner is water, `L` is a window, and
+    // the one thing that changes between them is which layer draws it.
+    const {vis,G,lh,lines,x0,bot,wmax}=M;
+    if(vis<=0.01||!lines.length)return;
     g.save();
-    if(R.log){                          // a dim of the ground, not a frame
-      g.fillStyle='rgba(7,6,4,0.72)';g.fillRect(0,0,W,H);
-    }
     g.font=`${R.log?10:9}px ${MONO}`;
     lines.forEach((l,i)=>{
       // i ascending = older -> newer. The newest sits highest and brightest;
@@ -2125,8 +2493,8 @@ const RECORD=(()=>{
   }
 
   // ── the hover plaque: this block's own, on the canvas ────────────────────
-  function drawHover(g){
-    if(!R.hover||!R.mouse)return;
+  function hoverPlaque(g){
+    if(!R.hover||!R.mouse)return null;
     const p=R.hover, m=R.roomsOf(p.run), fp=[...m.values()].reduce((a,b)=>a+b,0);
     const ls=[`${p.run}${p.live?'  · live':''}`,
       p.name||p.title||'—',
@@ -2138,8 +2506,14 @@ const RECORD=(()=>{
       p.parent?`child of ${p.parent}`:'no parent'];
     g.save();g.font=`9px ${MONO}`;
     const w=Math.max(...ls.map(l=>g.measureText(l).width))+14, h=ls.length*12+10;
+    g.restore();
     const bx=clamp(R.mouse.x+12,4,W-w-4);
     const by=clamp(R.mouse.y-h-10,40,(R.geom?R.geom.base-26:H)-h-4);
+    return {ls,w,h,bx,by};
+  }
+  function drawHover(g,m){
+    g.save();g.font=`9px ${MONO}`;
+    const {ls,w,h,bx,by}=m;
     g.fillStyle='rgba(11,9,6,0.93)';g.fillRect(bx,by,w,h);
     g.strokeStyle='rgba(58,51,40,0.9)';g.lineWidth=1;g.strokeRect(bx+.5,by+.5,w-1,h-1);
     ls.forEach((l,i)=>{g.fillStyle=i===0?INK:(i===1?'#d9cba9':'#8a7c5e');g.fillText(l,bx+7,by+16+i*12);});
@@ -2234,29 +2608,65 @@ const RECORD=(()=>{
   //    Correct behaviour for that pipeline, and not this block's to change: a
   //    fix is one `destination-out` rect in [FRAME]'s phosphor. Consequence to
   //    know: read this strip a second after a camera move, not during one.
-  R.draw=(g,now,view)=>{
-    const S0=(view&&view.S)||(typeof S!=='undefined'?S:null);
-    if(!S0)return;
-    R.view=view||null;
-    g.save();
-    g.globalCompositeOperation='source-over';g.globalAlpha=1;
-    g.setLineDash([]);g.textAlign='left';g.textBaseline='alphabetic';g.filter='none';
+  // THE SEAM IS FIVE NAMES NOW, NOT ONE. `R.draw` was a single entry point
+  // called last inside drawScene, which is exactly how this block's work ended
+  // up in three different layers at once: the roots are ground, the fold's
+  // brackets are ground (they are ON the rooms), the cloth and the corner wire
+  // are water, and the body window, the pass window, the transcript and the
+  // hover plaque are windows. One function could not be all four, so it is not
+  // one function.
+  //
+  // WHAT THIS REPAIRS, from the two facts this block measured and could not fix
+  // from inside its own fence:
+  //   1. "globalCompositeOperation reads 'lighter' on entry" — the compositor
+  //      enters every layer with a known state and repairs a leaked save(), so
+  //      this block no longer has to reset what it depends on.
+  //   2. "the strip occludes the world, not the phosphor's ghost of it" — the
+  //      fix named there (one destination-out rect in [FRAME]'s phosphor) is
+  //      built: every window pane is punched out of the phosphor each frame.
+  R.prepare=(g,z,now)=>{
+    const S0=(typeof S!=='undefined'?S:null);
+    R.ready=!!S0; if(!S0)return;
     if(R.src!==S0)sync(S0);
-    const z=(view&&num(view.z))?view.z:CAM.z;
-    const nds=(view&&view.nodes)||(typeof nodes!=='undefined'?nodes:[]);
     if(R.rootsFor!==S0){layoutRoots(S0);R.rootsFor=S0;}
-    drawRoots(g,z);
-    drawLitRooms(g,z,(view&&view.rooms)||(typeof rooms!=='undefined'?rooms:[]));
-    drawLitFiles(g,z,nds);
-    const pds=(view&&view.pods)||(typeof pods!=='undefined'?pods:[]);
-    drawBody(g,pds);
+    geom();                       // reads RESERVE.card: the cloth's own width
+    R.wireM=wireMetrics(z);       // sets R.wireTop, which rootDepth reads
+  };
+  R.roots=(g,z)=>{if(R.ready)drawRoots(g,z);};
+  R.marks=(g,z)=>{
+    if(!R.ready)return;
+    drawLitRooms(g,z,typeof rooms!=='undefined'?rooms:[]);
+    drawLitFiles(g,z,typeof nodes!=='undefined'?nodes:[]);
+  };
+  R.water=(g,z,now)=>{
+    if(!R.ready)return;
+    drawBody(g,typeof pods!=='undefined'?pods:[]);
     drawCloth(g);
-    drawWire(g,z);
-    if(!R.win)drawHover(g);          // a hover is not a stop: not over a window
-    if(R.win==='body'){const b=bodyRows();
-      if(b)drawWindow(g,'THE BODY \u00b7 every act, with its price',b.rows,b.note,b.gap);}
-    else if(R.win==='pass'){const w=passRows();if(w)drawWindow(g,`THE PASS \u00b7 ${R.pass}`,w.rows,w.note);}
-    g.restore();
+    if(!R.log)drawWire(g,z,R.wireM);       // the corner. `L` is a window.
+  };
+  R.wireWindow=(g,z)=>{
+    if(!R.ready||!R.log||!R.wireM||!R.wireM.lines.length)return null;
+    const M=R.wireM;
+    return {name:'wire',x:M.x0-10,y:R.wireTop-16,w:M.wmax+20,
+            h:Math.max(20,(M.bot-R.wireTop)+26),dim:'scene',
+            draw:gg=>drawWire(gg,z,M)};
+  };
+  R.paneWindow=g=>{
+    if(!R.ready||!R.win)return null;
+    const b=R.win==='body'?bodyRows():passRows();
+    if(!b)return null;
+    const title=R.win==='body'?'THE BODY · every act, with its price'
+                              :`THE PASS · ${R.pass}`;
+    const rect=windowRect(b.rows,b.note,b.gap);
+    return {...rect,name:R.win,dim:'scene',
+            draw:gg=>drawWindow(gg,rect,title,b.rows,b.note,b.gap)};
+  };
+  R.hoverWindow=g=>{
+    if(!R.ready||R.win)return null;        // a hover is not a stop, and a stop wins
+    const m=hoverPlaque(g);
+    if(!m)return null;
+    return {name:'hover',x:m.bx,y:m.by,w:m.w,h:m.h,dim:'none',
+            draw:gg=>drawHover(gg,m)};
   };
   return R;
 })();
@@ -2277,7 +2687,8 @@ function drawWorld(x,now){  // [WORLD] draws; [FRAME] decides where
 // measured, it is wrong however good it looks.
 //
 // Pipeline, per frame:
-//   wb   phosphor decay, then drawWorld() — the only buffer that remembers
+//   wb   phosphor decay · the window punch · drawWorld() — the only buffer
+//        that remembers, and the panes are punched out of its memory
 //   cv   bg · wb · chrome                 — the composed frame
 //   q*   bright-pass (square) · blur · 3 channel copies, scaled about centre
 //   ov   scanlines × vignette (static) + grain (moving) — darken only
@@ -2406,6 +2817,16 @@ function phosphor(dt,src){
   if(DITHER&&ditherPat){wx.globalCompositeOperation='destination-out';wx.fillStyle=ditherPat;
     wx.translate(Math.random()*64|0,Math.random()*64|0);
     wx.fillRect(-64,-64,wb.width+128,wb.height+128);wx.setTransform(1,0,0,1,0,0);}
+  // THE WINDOW PUNCH. [RECORD] measured this and named the fix it could not
+  // make from inside its own fence: a dark pane occludes the WORLD but not the
+  // phosphor's ghost of it, because the phosphor is a per-channel max and dark
+  // ink cannot lower one. So the memory is cleared where a window stands —
+  // opaque black through 'source-over', never 'destination-out', which would
+  // unpin the alpha this whole buffer depends on being 1.
+  if(PANES.length){
+    wx.globalCompositeOperation='source-over';wx.fillStyle='#000';
+    for(const q of PANES)wx.fillRect(q.x*DPR,q.y*DPR,q.w*DPR,q.h*DPR);
+  }
   wx.globalCompositeOperation='lighten';                     // excite: a true max
   wx.drawImage(src,0,0);
   wx.restore();
@@ -2620,7 +3041,7 @@ function drawChrome(g){
 // The plate is redrawn when [WORLD]'s HUD changes, not sixty times a second:
 // the signature is the markup [WORLD] wrote, so a reading that moves redraws
 // the chrome and a reading that stands still costs one drawImage.
-function chromePlate(){
+function chromePlate(g0){
   const key=[($('#state')||{}).innerHTML,($('#belt')||{}).innerHTML,
              ($('#legend')||{}).innerHTML,($('#src')||{}).textContent,W,H].join('\u0001');
   if(key!==chromeKey){
@@ -2629,8 +3050,8 @@ function chromePlate(){
     g.setTransform(DPR,0,0,DPR,0,0);g.globalCompositeOperation='source-over';g.globalAlpha=1;
     drawChrome(g);
   }
-  x.save();x.setTransform(1,0,0,1,0,0);x.globalCompositeOperation='source-over';x.globalAlpha=1;
-  x.drawImage(cb,0,0);x.restore();
+  g0.save();g0.setTransform(1,0,0,1,0,0);g0.globalCompositeOperation='source-over';g0.globalAlpha=1;
+  g0.drawImage(cb,0,0);g0.restore();
 }
 
 // ── the loop ───────────────────────────────────────────────────────────────
@@ -2677,8 +3098,9 @@ function frame(now){        // [FRAME] owns this loop: buffers, effects, chrome
     drawWorld(x,now);x.restore();
   }
   const p1=performance.now();
-  // chrome, in the same ink, under the same glass
-  if(CHROME)chromePlate();
+  // the fourth layer: the instruments, in the same ink, under the same glass —
+  // and AFTER the phosphor, so a sounder the hand is moving leaves no ghost
+  drawEdges(x,now);
   const p2=performance.now();
   if(FX){composite(bloomPass());overlayPass();}
   if(SYNC)x.getImageData(0,0,1,1);
@@ -2691,12 +3113,10 @@ function frame(now){        // [FRAME] owns this loop: buffers, effects, chrome
 }
 if(CHROME)for(const id of ['top','state','belt','legend']){const el=$('#'+id);if(el)el.style.display='none';}
 addEventListener('resize',()=>{wb.width=0;});
-cv.addEventListener('mousemove',e=>{
-  const n=nodes.find(n=>!n.isLabel&&Math.hypot(n.x-e.clientX,n.y-e.clientY)<7);
-  const h=$('#hover');
-  if(n){h.style.display='block';h.style.left=(e.clientX+12)+'px';h.style.top=(e.clientY+12)+'px';
-    h.textContent=`${n.path} · heat ${(n.heat||0).toFixed(2)} · ${n.knots||0} knots · last ${n.last||'—'}`;}
-  else h.style.display='none';
-});
+// (deleted) a second mousemove handler lived here and matched on `n.y` — a
+// field no node has carried since the camera became one axis — so it hid the
+// tooltip the [WORLD] handler had just filled, every time the mouse moved.
+// [RECORD] found it and wrote "not this block's to fix". The hover is a window
+// on the canvas now and this handler had nothing left to do.
 resize();pull();setInterval(pull,3000);requestAnimationFrame(frame);
 </script>
