@@ -3596,13 +3596,46 @@ class TestWorkSurfaceInjection:
         assert "ship it" in result
 
     def test_lifecycle_ended_pages_leave_the_wake_but_stay_discoverable(self, tmp_path):
+        """``ledger/`` is not indexed (#2002 covers ``shelf/``/``archive/``
+        only), so a frozen ledger page still goes through the ordinary
+        lifecycle-omission path. A lifecycle-ended *shelf* page no longer
+        reaches that path at all — it never enters the per-page walk — so
+        its expiry shows up as the index's own ``keeps:`` text instead of a
+        lifecycle-omitted count (see ``test_shelf_pages_ride_as_an_index_line``
+        for that half).
+        """
         home = _seed_account_home(tmp_path)
         surface = home / "surface"
         (surface / "ledger").mkdir(parents=True)
-        (surface / "shelf").mkdir(parents=True)
         (surface / "index.md").write_text("# Start", encoding="utf-8")
         (surface / "ledger" / "decisions.md").write_text(
             "> **FROZEN 2026-08-11.** Historical ledger.\n\n## Old\nclosed",
+            encoding="utf-8",
+        )
+
+        result = _build_work_surface_block(tmp_path)
+
+        assert "Historical ledger" not in result
+        assert _says(result, "1 lifecycle-ended surface page left out")
+        assert "`ledger/decisions.md`" in result
+        assert (surface / "ledger" / "decisions.md").is_file()
+
+    def test_shelf_pages_ride_as_an_index_line(self, tmp_path):
+        """#2002 — a shelf page never enters the per-page walk by default;
+        it rides the wake as one composed-index line (basename · keeps ·
+        bytes) instead of a full ``### shelf/<name>.md`` section, and an
+        expired one's ``keeps:`` text renders in place rather than being
+        swept into the lifecycle-omitted count.
+        """
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        (surface / "shelf").mkdir(parents=True)
+        (surface / "index.md").write_text("# Start", encoding="utf-8")
+        (surface / "operator-checklist.md").write_text(
+            "# Operator\n\nstanding", encoding="utf-8"
+        )
+        (surface / "shelf" / "artifact.md").write_text(
+            "keeps: until changed\n\n# Artifact\n\nlong-lived body text",
             encoding="utf-8",
         )
         (surface / "shelf" / "old.md").write_text(
@@ -3612,30 +3645,59 @@ class TestWorkSurfaceInjection:
 
         result = _build_work_surface_block(tmp_path)
 
-        assert "Historical ledger" not in result
+        assert "### operator-checklist.md" in result
+        assert "standing" in result
+        assert "### shelf/artifact.md" not in result
+        assert "### shelf/old.md" not in result
+        assert "long-lived body text" not in result
         assert "Old reading" not in result
-        assert _says(result, "2 lifecycle-ended surface pages left out")
-        assert "`ledger/decisions.md`" in result
-        assert "`shelf/old.md`" in result
-        assert (surface / "ledger" / "decisions.md").is_file()
-        assert (surface / "shelf" / "old.md").is_file()
+        assert "the shelf & archive — index" in result
+        assert "`artifact.md` · keeps: until changed ·" in result
+        assert "`old.md` · keeps: expired 2026-08-19" in result
 
-    def test_standing_pages_spend_before_shelf_pages(self, tmp_path):
+    def test_shelf_page_opts_back_into_the_walk_with_wake_full(self, tmp_path):
+        """The escape hatch: a shelf page whose subject is live declares
+        ``wake: full`` and rides the ordinary walk, full text and all — it
+        is excluded from the composed index so it is never rendered twice.
+        """
         home = _seed_account_home(tmp_path)
         surface = home / "surface"
         (surface / "shelf").mkdir(parents=True)
         (surface / "index.md").write_text("# Start", encoding="utf-8")
-        (surface / "operator-checklist.md").write_text(
-            "# Operator\n\nstanding", encoding="utf-8"
-        )
-        (surface / "shelf" / "artifact.md").write_text(
-            "keeps: until changed\n\n# Artifact", encoding="utf-8"
+        (surface / "shelf" / "live.md").write_text(
+            "wake: full\nkeeps: until it ships\n\n# Live artifact\n\nthe body",
+            encoding="utf-8",
         )
 
         result = _build_work_surface_block(tmp_path)
 
-        assert result.index("### operator-checklist.md") < result.index(
-            "### shelf/artifact.md"
+        assert "### shelf/live.md" in result
+        assert "the body" in result
+        assert "`live.md` · keeps:" not in result
+
+    def test_standing_page_demoted_to_index_with_wake_index(self, tmp_path):
+        """The hatch runs both ways: a page outside ``shelf/``/``archive/``
+        can declare ``wake: index`` and ride the composed index instead of
+        the ordinary walk.
+        """
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir(parents=True)
+        (surface / "index.md").write_text("# Start", encoding="utf-8")
+        (surface / "operator-checklist.md").write_text(
+            "wake: index\nkeeps: until the checklist is rewritten\n\n"
+            "# Operator\n\nlong body nobody needs every wake",
+            encoding="utf-8",
+        )
+
+        result = _build_work_surface_block(tmp_path)
+
+        assert "### operator-checklist.md" not in result
+        assert "long body nobody needs every wake" not in result
+        assert "the shelf & archive — index" in result
+        assert (
+            "`operator-checklist.md` · keeps: until the checklist is rewritten"
+            in result
         )
 
     def test_surface_block_rides_in_daemon_prompt(self, tmp_path):
