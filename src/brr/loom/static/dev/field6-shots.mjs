@@ -328,9 +328,18 @@ receipts.frame_ms = [];
       return {frameMs:+(s.reduce((a,v)=>a+v.frameMs,0)/s.length).toFixed(3),
               worldMs:+(s.reduce((a,v)=>a+v.worldMs,0)/s.length).toFixed(3)};};
     const withR = await grab();
-    await p2.evaluate(()=>{window.__rd=RECORD.draw;RECORD.draw=()=>{};});
+    // (repaired by the layer pass) this stubbed `RECORD.draw`, which no longer
+    // exists — the block has four seams now, one per layer it lands in — so the
+    // stub was a no-op and the delta it reported was measurement noise, twice
+    // NEGATIVE on the run that caught it. It stubs all four.
+    await p2.evaluate(()=>{window.__rd={};
+      for(const k of ['ground','marks','water','prepare']){window.__rd[k]=RECORD[k];RECORD[k]=()=>{};}
+      window.__rw={wire:RECORD.wireWindow,pane:RECORD.paneWindow,hover:RECORD.hoverWindow};
+      RECORD.wireWindow=()=>null;RECORD.paneWindow=()=>null;RECORD.hoverWindow=()=>null;});
     const withoutR = await grab();
-    await p2.evaluate(()=>{RECORD.draw=window.__rd;});
+    await p2.evaluate(()=>{for(const k in window.__rd)RECORD[k]=window.__rd[k];
+      RECORD.wireWindow=window.__rw.wire;RECORD.paneWindow=window.__rw.pane;
+      RECORD.hoverWindow=window.__rw.hover;});
     receipts[`record_cost_${dsf}x`]={with:withR,without:withoutR,
       deltaWorldMs:+(withR.worldMs-withoutR.worldMs).toFixed(3),
       deltaFrameMs:+(withR.frameMs-withoutR.frameMs).toFixed(3)};
@@ -434,14 +443,20 @@ receipts.frame_ms = [];
 
   // ── the seam: an [ACTOR] that writes SELECTED lights the cloth with no
   //    local mirror in play. This is the merge, rehearsed from one branch. ──
+  // (repaired by the layer pass) this drove the seam by ASSIGNING SELECTED,
+  // which the merge made impossible — [ACTOR] declares it `const`, so the
+  // assignment threw and took the whole harness with it. It goes through
+  // [ACTOR]'s own select() now, which is what this file says it does anyway:
+  // every direction of the fold driven by the real interaction.
   receipts.seam = await p.evaluate(rid=>{
     RECORD.pass=null; RECORD.roomLocal=null;
-    SELECTED={kind:'room',id:rid};
+    ACTOR.select.room(byItem.get(rid));
     const s=RECORD.selection();
     const via={selection:s, lit:[...RECORD.passesOf(rid).keys()].length, local:RECORD.roomLocal};
-    SELECTED={kind:'deck',id:'the-loom'};                 // the third direction
+    const dk=decks.find(d=>d.slug==='the-loom');          // the third direction
+    if(dk)ACTOR.select.deck(dk);
     const deck={selection:RECORD.selection(), passes:RECORD.passesOfDeck('the-loom').size};
-    SELECTED=null;
+    ACTOR.select.clear();
     return {via,deck};
   }, busiest);
   assert.equal(receipts.seam.via.local,null,'SELECTED must be honoured without the local mirror');
@@ -479,7 +494,7 @@ receipts.frame_ms = [];
   }
 
   // ── the body, and the wire, on their own keys ──
-  await p.evaluate(()=>{SELECTED=null;RECORD.pass=null;RECORD.roomLocal=null;});
+  await p.evaluate(()=>{ACTOR.select.clear();RECORD.pass=null;RECORD.roomLocal=null;});
   await p.keyboard.press('1'); await p.waitForTimeout(2600);  // > the phosphor's ~1.5 s ghost   // back to the interior
   await p.keyboard.press('p'); await p.waitForTimeout(900);
   receipts.body = await p.evaluate(()=>{
@@ -525,6 +540,152 @@ receipts.frame_ms = [];
   await shot(p,'09b-tint-after-the-ghost');
   await c.close();
 }
+
+// ── 10 · THE LAYER PASS ─────────────────────────────────────────────────────
+// Four layers, one compositor. Every receipt below is a number the page itself
+// publishes or a position sampled from the real animation — never a look.
+// `LAYERS_BEFORE` points at a copy of the page as it stood before this pass;
+// unset, the before/after legs are skipped and say so.
+const before = process.env.LAYERS_BEFORE || null;   // e.g. /loom/dev/field6-before.html
+const pageAt = (u,q) => `${base}${u}${q?'?'+q:''}`;
+const cutOf = (p,x0,y0,w,h,s=1) => p.evaluate(([x0,y0,w,h,s])=>{
+  const c=document.createElement('canvas');c.width=w*s;c.height=h*s;
+  const g=c.getContext('2d');g.imageSmoothingEnabled=false;
+  g.drawImage(document.getElementById('c'),
+    x0*devicePixelRatio,y0*devicePixelRatio,w*devicePixelRatio,h*devicePixelRatio,0,0,w*s,h*s);
+  return c.toDataURL('image/png');},[x0,y0,w,h,s]);
+const pngOf = async (n,d) => writeFile(resolve(out,n+'.png'),Buffer.from(d.split(',')[1],'base64'));
+
+// 10a · the actor's load. Sampled from the first frame that has a target, so
+// the receipt is the path itself: how far the pod travelled from the position
+// it first asserted to the one it actually held.
+{
+  const legs=[['after','/loom/dev/field6.html']].concat(before?[['before',before]]:[]);
+  for (const [name,url] of legs) {
+    const c=await ctx(1), p=await c.newPage();
+    p.on('pageerror',e=>errors.push('load:'+name+':'+e.message));
+    await p.goto(pageAt(url),{waitUntil:'load'});
+    const track=await p.evaluate(async()=>{
+      const seen=[];
+      for(let i=0;i<70&&seen.length<=28;i++){
+        await new Promise(r=>setTimeout(r,100));
+        const q=(typeof pods!=='undefined')&&pods.find(x=>x.kind==='resident');
+        if(q&&q.target)seen.push([Math.round(q.x),Math.round(q.y)]);
+      }
+      return seen;});
+    const last=track[track.length-1]||[0,0];
+    receipts['load_'+name]={firstFrameWithATarget:track[0]||null,settled:last,samples:track.length,
+      travelledFromItsFirstReading:Math.round(track.reduce((m,[x,y])=>
+        Math.max(m,Math.hypot(x-last[0],y-last[1])),0))};
+    await p.waitForTimeout(600);
+    await pngOf('layers-load-'+name, await cutOf(p,120,440,620,300,2));
+    await c.close();
+  }
+  assert.equal(receipts.load_after.travelledFromItsFirstReading,0,
+    'the first reading is a placement: a pod must not fly in from a position it never held');
+}
+
+// 10b · a room card over the cloth — the defect this pass was dispatched for
+{
+  const legs=[['after','/loom/dev/field6.html']].concat(before?[['before',before]]:[]);
+  for (const [name,url] of legs) {
+    const c=await ctx(1), p=await c.newPage();
+    p.on('pageerror',e=>errors.push('card:'+name+':'+e.message));
+    await p.goto(pageAt(url),{waitUntil:'load'}); await settle(p);
+    await p.keyboard.press('3'); await p.waitForTimeout(2600);
+    const busiest=await p.evaluate(()=>{
+      const its=(S.warp.items||[]).filter(i=>(i.footprints||[]).length);
+      its.sort((a,b)=>b.footprints.length-a.footprints.length);return its[0].id;});
+    const at=await p.evaluate(id=>{const r=byItem.get(id),q=roomXY(r,CAM.z);
+      return {x:Math.round(q.x),y:Math.round(q.y)};},busiest);
+    await p.mouse.click(at.x,at.y); await p.waitForTimeout(2200);
+    receipts['card_'+name]={item:busiest,...await p.evaluate(()=>{
+      const G=RECORD.geom, cd=(typeof RESERVE!=='undefined'&&RESERVE.card)||null;
+      return {clothRightEdge:Math.round(G.x1),plaqueWidth:+G.pw.toFixed(2),
+        cardLeftEdge:cd?Math.round(cd.x):null,
+        clothOverCard:Math.max(0,Math.round(G.x1-(cd?cd.x:innerWidth-376)))};})};
+    await pngOf('layers-card-'+name, await cutOf(p,1000,620,440,280,2));
+    await shot(p,'layers-card-full-'+name);
+    await c.close();
+  }
+  assert.equal(receipts.card_after.clothOverCard,0,
+    'where a stream and a window want the same pixels, the stream is the one that moves');
+}
+
+// 10c · the compositor's own receipt: nothing draws outside a layer
+{
+  const c=await ctx(1), p=await c.newPage();
+  p.on('pageerror',e=>errors.push('layers:'+e.message));
+  await p.goto(pageAt('/loom/dev/field6.html','layers=check'),{waitUntil:'load'});
+  // the glitch belongs to arrival: the whole tree arrives at once on first load
+  await p.waitForTimeout(900);
+  receipts.arrival=await p.evaluate(()=>({
+    glitching:nodes.filter(n=>glitchK(n.born,performance.now())!==null).length,of:nodes.length}));
+  await shot(p,'layers-arrival');
+  await settle(p);
+  receipts.arrival.stillGlitchingAfterSettle=await p.evaluate(()=>
+    nodes.filter(n=>glitchK(n.born,performance.now())!==null).length);
+  assert.equal(receipts.arrival.stillGlitchingAfterSettle,0,'a glitch is an arrival, never a state');
+  await p.keyboard.press('3'); await p.waitForTimeout(2200);
+  receipts.layers_idle=await p.evaluate(()=>window.__layers);
+  await p.keyboard.press('l'); await p.waitForTimeout(900);
+  receipts.layers_transcript=await p.evaluate(()=>window.__layers);
+  await shot(p,'layers-transcript-is-a-window');
+  await p.keyboard.press('Escape'); await p.waitForTimeout(400);
+  await p.keyboard.press('p'); await p.waitForTimeout(900);
+  receipts.layers_body=await p.evaluate(()=>window.__layers);
+  await shot(p,'layers-body-is-a-window');
+  await p.keyboard.press('Escape'); await p.waitForTimeout(400);
+  for(const k of ['layers_idle','layers_transcript','layers_body']){
+    assert.equal(receipts[k].stray,0,`${k}: nothing may draw outside a layer`);
+    assert.equal(receipts[k].leaks,0,`${k}: no layer may leak a save()`);
+  }
+
+  // 10d · the pod travels the structure. Driven by a real target change, then
+  // sampled off the real animation. The receipt is STRUCTURAL, not a magnitude:
+  // the route's waypoints name a shore, and the path measurably rides it. (A
+  // length ratio was the first thing measured here and it is a bad test — a
+  // target that happens to sit at the shore's own height makes the routed path
+  // 0.5 % longer than the straight line while being entirely correct.)
+  await p.keyboard.press('1'); await p.waitForTimeout(2200);
+  receipts.route=await p.evaluate(async()=>{
+    const me=pods.find(q=>q.kind==='resident');
+    // the highest place on the furthest bough: a straight line to it cuts
+    // diagonally across the whole canopy, which is the move being ended
+    const far=nodes.slice().sort((a,b)=>
+      (Math.abs(b.x-me.x)+b.e*260)-(Math.abs(a.x-me.x)+a.e*260))[0];
+    const rt=routeBetween(me.routeTo,{node:far},me)||[];
+    const from={x:me.x,y:me.y};
+    me.target={node:far};
+    const seen=[];
+    for(let i=0;i<150;i++){await new Promise(r=>requestAnimationFrame(r));
+      seen.push([me.x,me.y]);
+      if(i>2&&me.u>=1&&!me.route)break;}
+    const to=seen[seen.length-1];
+    let walked=0;for(let i=1;i<seen.length;i++)walked+=Math.hypot(seen[i][0]-seen[i-1][0],seen[i][1]-seen[i-1][1]);
+    // how far the path bulges off the straight line it refused to take
+    const dx=to[0]-from.x, dy=to[1]-from.y, len=Math.hypot(dx,dy)||1;
+    const dev=Math.max(...seen.map(([x,y])=>Math.abs((x-from.x)*dy-(y-from.y)*dx)/len));
+    const shore=waterAt(CAM.z)-10-14*CAM.z;
+    return {waypoints:rt.map(a=>Object.keys(a)[0]),
+      straightLine:Math.round(len),walked:Math.round(walked),
+      maxDeviationFromTheStraightLine:Math.round(dev),
+      closestApproachToTheShore:Math.round(Math.min(...seen.map(([,y])=>Math.abs(y-shore)))),
+      frames:seen.length};});
+  assert.ok(receipts.route.waypoints.includes('shore'),
+    'a route between two places on the island goes by way of the shore');
+  assert.ok(receipts.route.closestApproachToTheShore<10,
+    'and the pod measurably rides it, rather than being routed on paper');
+  assert.ok(receipts.route.maxDeviationFromTheStraightLine>20,
+    'a path that never leaves the chord is the straight line by another name');
+  await shot(p,'layers-route');
+
+  receipts.beat=await p.evaluate(()=>({tick:BEAT.tick,sightings:BEAT.n,
+    period_ms:BEAT.period&&Math.round(BEAT.period),src:BEAT.src,rejected:BEAT.rejected,
+    breathNow:+breath(performance.now()).toFixed(3),amplitude:BREATH_A}));
+  await c.close();
+}
+
 await browser.close();
 assert.deepEqual(errors,[],'the page must raise no errors');
 console.log(JSON.stringify({receipts,out},null,1));
