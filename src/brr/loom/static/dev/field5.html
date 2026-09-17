@@ -217,10 +217,10 @@ function drawScene(x,now){
   // the pods
   for(const p of pods){
     p.x+=(p.tx-p.x)*0.045;p.y+=(p.ty-p.y)*0.045;
-    p.trail.push({x:p.x,y:p.y});if(p.trail.length>60)p.trail.shift();
-    x.save();x.globalCompositeOperation='lighter';
-    x.beginPath();p.trail.forEach((q,i)=>i?x.lineTo(q.x,q.y):x.moveTo(q.x,q.y));
-    x.strokeStyle='rgba(242,177,52,0.13)';x.lineWidth=1.2;x.stroke();x.restore();
+    // [FRAME] edit, on the dispatcher's steer (2026-09-17): the drawn polyline
+    // read as a vector, not as persistence. The pod's trail is the phosphor's
+    // job now — its own motion leaves it for free. `p.trail` stays allocated in
+    // [WORLD]'s podFor() and is simply no longer drawn.
     // the await sonar: the daemon's real ~10 s heartbeat, and nothing comes back
     if(p.listening){
       const beat=10000, ph=((now%beat)/beat);
@@ -268,22 +268,31 @@ const CHROME  = Q.get('chrome')!=='off' && Q.get('chrome')!=='dom';
 const BLOOM   = Q.get('bloom')||'chain';
 const AB      = Q.get('ab')!=='off';
 const GRAIN   = Q.get('grain')!=='off';
-const DITHER  = Q.get('dither')!=='off';
+const DITHER  = Q.get('dither')==='on';     // off: a screen-space pattern inside the
+                                            // phosphor is a texture the bloom then
+                                            // blurs — light must carry no pattern
 const PERF    = Q.get('perf')==='1';
+const SYNC    = Q.get('sync')==='1';        // measurement only: a 1×1 readback per
+                                            // frame flushes the GPU pipeline, so the
+                                            // timed span includes the work the driver
+                                            // would otherwise defer past it
 const TAU     = +(Q.get('tau')||380);       // ms · a ghost reaches 2 % in ~1.5 s
-const BLOOM_A = +(Q.get('bloomA')||0.58);
+const BLOOM_A = +(Q.get('bloomA')||0.45);
+const BP      = +(Q.get('bp')||8);          // the bright-pass exponent: v→v^BP
 const AB_K    = +(Q.get('abk')||0.00085);   // ±0.6 px at the edge of a 1440 frame
 const BG='#070604', DIM='#6b5f47', INK='#e8dcc0', ABSENT='#5a4d3c', GLASS='#1b1610';
 const MONO='ui-monospace,SFMono-Regular,Menlo,monospace';
 
 const mk=()=>document.createElement('canvas');
 const wb=mk(), wx=wb.getContext('2d');                       // the phosphor
-const half=mk(), qA=mk(), qB=mk(), eA=mk(), sA=mk(), bt=mk();// the bloom ladder
-const ov=mk();                                               // scanlines × vignette
+const ws=mk(), sx=ws.getContext('2d');                       // this frame's world, clean
+const half=mk(), qA=mk(), qB=mk(), eA=mk(), sA=mk(), tA=mk(), bt=mk(), qC=mk();// the bloom ladder
+const OV=[mk(),mk(),mk(),mk()];                              // scanlines × grain × vignette
 const gr=mk();                                               // the grain tile
 const dz=mk();                                               // the dither tile
+const cb=mk();                                               // the chrome plate
 const cx2=c=>c.getContext('2d');
-let grainPat=null, ditherPat=null, lastNow=0, BW=0,BH=0;
+let grainPat=null, ditherPat=null, lastNow=0, BW=0,BH=0, chromeKey='';
 
 function mkNoise(c,size,fn){c.width=c.height=size;const g=cx2(c),d=g.createImageData(size,size);
   for(let i=0;i<size*size;i++){const a=fn();d.data[i*4]=0;d.data[i*4+1]=0;d.data[i*4+2]=0;d.data[i*4+3]=a;}
@@ -291,60 +300,103 @@ function mkNoise(c,size,fn){c.width=c.height=size;const g=cx2(c),d=g.createImage
 
 function ensureBuffers(){
   if(wb.width===cv.width&&wb.height===cv.height&&cv.width)return;
-  wb.width=cv.width;wb.height=cv.height;
+  wb.width=cv.width;wb.height=cv.height;ws.width=cv.width;ws.height=cv.height;
+  wx.setTransform(1,0,0,1,0,0);wx.globalCompositeOperation='source-over';wx.globalAlpha=1;
+  wx.fillStyle='#000';wx.fillRect(0,0,wb.width,wb.height);   // opaque: alpha pinned at 1
   BW=Math.max(2,Math.round(cv.width/4));BH=Math.max(2,Math.round(cv.height/4));
   half.width=Math.max(2,Math.round(cv.width/2));half.height=Math.max(2,Math.round(cv.height/2));
-  for(const c of [qA,qB,bt]){c.width=BW;c.height=BH;}
+  for(const c of [qA,qB,bt,qC]){c.width=BW;c.height=BH;}
   eA.width=Math.max(1,BW>>1);eA.height=Math.max(1,BH>>1);
   sA.width=Math.max(1,BW>>2);sA.height=Math.max(1,BH>>2);
-  for(const c of [half,qA,qB,eA,sA,bt]){const g=cx2(c);g.imageSmoothingEnabled=true;g.imageSmoothingQuality='high';}
-  if(!grainPat){mkNoise(gr,180,()=>Math.random()*22|0);grainPat=cx2(ov).createPattern(gr,'repeat');}
-  if(!ditherPat){mkNoise(dz,64,()=>Math.random()<0.035?255:0);ditherPat=cx2(ov).createPattern(dz,'repeat');}
+  tA.width=Math.max(1,BW>>3);tA.height=Math.max(1,BH>>3);
+  for(const c of [half,qA,qB,eA,sA,tA,bt,qC]){const g=cx2(c);g.imageSmoothingEnabled=true;g.imageSmoothingQuality='high';}
+  cb.width=cv.width;cb.height=cv.height;chromeKey='';
+  if(!grainPat){mkNoise(gr,180,()=>Math.random()*22|0);grainPat=cx2(OV[0]).createPattern(gr,'repeat');}
+  if(!ditherPat){mkNoise(dz,64,()=>Math.random()<0.06?96:0);ditherPat=cx2(OV[0]).createPattern(dz,'repeat');}
   buildOverlay();
 }
 
 // ── the overlay: scanlines and vignette, built once per size ───────────────
 // Screen space, device-pixel aligned, never moved by the camera — a scanline
 // that travels with the world shimmers, and this one cannot travel.
+// Four variants with the grain baked in, picked at random each frame: the
+// overlay is then one drawImage instead of a drawImage plus a full-res pattern
+// fill, and the grain still moves.
 function buildOverlay(){
-  ov.width=cv.width;ov.height=cv.height;const g=cx2(ov);
-  g.clearRect(0,0,ov.width,ov.height);
   const per=Math.max(2,Math.round(3*DPR)), dark=Math.max(1,Math.round(DPR));
-  g.fillStyle='rgba(0,0,0,0.15)';
-  for(let y=0;y<ov.height;y+=per)g.fillRect(0,y,ov.width,dark);
-  const cxp=ov.width/2, cyp=ov.height/2, r=Math.hypot(cxp,cyp);
-  const vg=g.createRadialGradient(cxp,cyp,r*0.35,cxp,cyp,r);
-  vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(0.72,'rgba(0,0,0,0.20)');vg.addColorStop(1,'rgba(0,0,0,0.52)');
-  g.fillStyle=vg;g.fillRect(0,0,ov.width,ov.height);
-  // the glass edge: the frame is a tube, and a tube has corners it cannot reach
-  g.strokeStyle='rgba(0,0,0,0.55)';g.lineWidth=Math.max(2,6*DPR);
-  g.strokeRect(g.lineWidth/2,g.lineWidth/2,ov.width-g.lineWidth,ov.height-g.lineWidth);
-  grainPat=cx2(ov).createPattern(gr,'repeat');
-  ditherPat=cx2(ov).createPattern(dz,'repeat');
+  for(const o of OV){
+    o.width=cv.width;o.height=cv.height;const g=cx2(o);
+    g.clearRect(0,0,o.width,o.height);
+    g.globalAlpha=1;g.fillStyle='rgba(0,0,0,0.10)';
+    for(let y=0;y<o.height;y+=per)g.fillRect(0,y,o.width,dark);
+    if(GRAIN){g.save();g.globalAlpha=0.5;g.fillStyle=g.createPattern(gr,'repeat');
+      g.translate(Math.random()*180|0,Math.random()*180|0);
+      g.fillRect(-180,-180,o.width+360,o.height+360);g.restore();}
+    const cxp=o.width/2, cyp=o.height/2, r=Math.hypot(cxp,cyp);
+    const vg=g.createRadialGradient(cxp,cyp,r*0.35,cxp,cyp,r);
+    vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(0.72,'rgba(0,0,0,0.20)');vg.addColorStop(1,'rgba(0,0,0,0.52)');
+    g.fillStyle=vg;g.fillRect(0,0,o.width,o.height);
+    // the glass edge: the frame is a tube, and a tube has corners it cannot reach
+    g.strokeStyle='rgba(0,0,0,0.55)';g.lineWidth=Math.max(2,6*DPR);
+    g.strokeRect(g.lineWidth/2,g.lineWidth/2,o.width-g.lineWidth,o.height-g.lineWidth);
+  }
+  ditherPat=cx2(OV[0]).createPattern(dz,'repeat');
 }
 
 // ── 1 · the phosphor ───────────────────────────────────────────────────────
 // Stop clearing. Erode what is there toward nothing, frame-rate independent,
 // so a ping that crossed the tree a second ago is still faintly on the glass.
-// The dither is the floor-breaker: an 8-bit alpha stops falling once the
-// per-frame step rounds below half a level (~4 % opacity), which would leave a
-// permanent smear where the pod has been. A sparse full-erase tile, offset at
-// random each frame, dissolves that residue instead of parking it.
-function phosphor(dt){
-  wx.save();wx.setTransform(1,0,0,1,0,0);wx.globalCompositeOperation='destination-out';
-  wx.globalAlpha=1;wx.fillStyle=`rgba(0,0,0,${1-Math.exp(-dt/TAU)})`;
+//
+// A phosphor is excited to a brightness and decays from it; it does not sum.
+// Two ways to get that wrong, both measured here, both of which produced the
+// same hard-edged disc on every warm node — 'the glow reads cheap':
+//
+//   summing   — drawing this frame onto the decayed one with 'lighter' amplifies
+//               every static source by 1/(1-e^-dt/τ) ≈ 24× at 60 fps.
+//   alpha     — 'lighten' blends *colour* as a max but still composites *alpha*
+//               as a union (αs+αb−αs·αb), so on a transparent buffer a gradient
+//               drawn at α=0.3 climbs to opaque in ~10 frames. Same disc, and it
+//               survives with the bloom switched off, which is how it was caught.
+//
+// So the buffer is opaque and grounded on black: alpha is pinned at 1, 'lighten'
+// is a true per-channel max, and the frame composites it additively over the
+// background. Decay is two moves, because one does not reach zero: a proportional
+// fade (the ~1.5 s curve) plus a 'color-burn' constant that subtracts ~1 level a
+// frame and clamps at 0. Without the second, an 8-bit channel stalls wherever the
+// proportional step rounds below half a level and parks a permanent smear where
+// the pod has been, at about 4 % — dim, and never going anywhere.
+//
+// The dither is the older fix for that floor and is off by default: a screen-space
+// pattern inside the buffer the bloom reads is a texture on the light itself.
+function phosphor(dt,src){
+  wx.save();wx.setTransform(1,0,0,1,0,0);wx.globalAlpha=1;
+  wx.globalCompositeOperation='source-over';                 // proportional: the curve
+  wx.fillStyle=`rgba(0,0,0,${1-Math.exp(-dt/TAU)})`;
   wx.fillRect(0,0,wb.width,wb.height);
-  if(DITHER&&ditherPat){wx.globalAlpha=1;wx.fillStyle=ditherPat;
+  wx.globalCompositeOperation='color-burn';                  // constant: the floor
+  wx.fillStyle='rgb(254,254,254)';
+  wx.fillRect(0,0,wb.width,wb.height);
+  if(DITHER&&ditherPat){wx.globalCompositeOperation='destination-out';wx.fillStyle=ditherPat;
     wx.translate(Math.random()*64|0,Math.random()*64|0);
-    wx.fillRect(-64,-64,wb.width+128,wb.height+128);}
+    wx.fillRect(-64,-64,wb.width+128,wb.height+128);wx.setTransform(1,0,0,1,0,0);}
+  wx.globalCompositeOperation='lighten';                     // excite: a true max
+  wx.drawImage(src,0,0);
   wx.restore();
 }
 
 // ── 2 · bloom ──────────────────────────────────────────────────────────────
-// The bright-pass is a square, not a threshold: drawing the downsample onto
-// itself with 'multiply' maps v → v², which pushes the mid-dark toward nothing
-// and leaves the pod, a fresh ping and a warm place standing. No pixel is read
-// back into JS. The dark stays dark because v² says so.
+// Wide and weak, over a high threshold. The threshold is a power curve built
+// from repeated 'multiply' — v → v^8 — which costs three quarter-res draws and
+// no pixel readback: 1.0 survives, 0.85 falls to 0.27, 0.5 to 0.004. That is what
+// reserves the halo for what an act *just* lit — the pod, a ping in flight, a
+// place still flaring — and leaves a warm-but-older node a bright core and
+// nothing around it. Light decays to a core, not to a smaller disc.
+//
+// Then four octaves down to 1/32, weighted 35/36/21/8 from 1/4 outward — enough
+// width that no halo has a findable edge, little enough of the widest octave
+// that a crowded canopy does not wash the black. A tight bright blur clips
+// channels and walks amber toward white; a wide dim one adds light without
+// giving anything a shape it did not already have.
 function bloomPass(){
   if(BLOOM==='off')return null;
   const h=cx2(half), a=cx2(qA), b=cx2(qB);
@@ -355,17 +407,25 @@ function bloomPass(){
   b.globalCompositeOperation='source-over';b.globalAlpha=1;
   b.clearRect(0,0,BW,BH);b.drawImage(qA,0,0);
   b.globalCompositeOperation='multiply';b.drawImage(qA,0,0);
+  const c=cx2(qC);
+  for(let k=2;k<BP;k*=2){                       // v² → v⁴ → v⁸, one draw-pair each
+    c.globalCompositeOperation='source-over';c.globalAlpha=1;
+    c.clearRect(0,0,BW,BH);c.drawImage(qB,0,0);
+    b.globalCompositeOperation='multiply';b.drawImage(qC,0,0);
+  }
   b.globalCompositeOperation='source-over';
   if(BLOOM==='filter'){
-    a.clearRect(0,0,BW,BH);a.filter='blur(4px)';a.drawImage(qB,0,0);a.filter='none';
+    a.clearRect(0,0,BW,BH);a.filter='blur(9px)';a.drawImage(qB,0,0);a.filter='none';
     return qA;
   }
-  const e=cx2(eA), s=cx2(sA);
+  const e=cx2(eA), s=cx2(sA), t=cx2(tA);
   e.clearRect(0,0,eA.width,eA.height);e.drawImage(qB,0,0,eA.width,eA.height);
   s.clearRect(0,0,sA.width,sA.height);s.drawImage(eA,0,0,sA.width,sA.height);
-  a.clearRect(0,0,BW,BH);a.globalAlpha=1;a.drawImage(sA,0,0,BW,BH);
-  a.globalAlpha=0.5;a.drawImage(eA,0,0,BW,BH);
-  a.globalAlpha=0.34;a.drawImage(qB,0,0,BW,BH);
+  t.clearRect(0,0,tA.width,tA.height);t.drawImage(sA,0,0,tA.width,tA.height);
+  a.clearRect(0,0,BW,BH);a.globalAlpha=1;a.drawImage(tA,0,0,BW,BH);
+  a.globalAlpha=0.72;a.drawImage(sA,0,0,BW,BH);
+  a.globalAlpha=0.55;a.drawImage(eA,0,0,BW,BH);
+  a.globalAlpha=0.35;a.drawImage(qB,0,0,BW,BH);
   a.globalAlpha=1;
   return qA;
 }
@@ -382,15 +442,22 @@ function composite(bloom){
   x.globalCompositeOperation='lighter';x.globalAlpha=BLOOM_A;
   if(!AB){x.drawImage(bloom,0,0,cv.width,cv.height);}
   else{
-    const g=cx2(bt);
+    // The split happens at bloom resolution, not screen resolution: the offsets
+    // are relative, so a quarter-res scale is the same screen displacement, and
+    // the frame pays one full-res composite instead of three.
+    const g=cx2(bt), c=cx2(qC);
+    g.globalCompositeOperation='source-over';g.globalAlpha=1;g.clearRect(0,0,BW,BH);
+    g.globalCompositeOperation='lighter';
     for(const [tint,s] of CHAN){
-      g.globalCompositeOperation='source-over';g.globalAlpha=1;
-      g.clearRect(0,0,BW,BH);g.drawImage(bloom,0,0);
-      g.globalCompositeOperation='multiply';g.fillStyle=tint;g.fillRect(0,0,BW,BH);
-      g.globalCompositeOperation='source-over';
-      const w=cv.width*s, hh=cv.height*s;
-      x.drawImage(bt,(cv.width-w)/2,(cv.height-hh)/2,w,hh);
+      c.globalCompositeOperation='source-over';c.globalAlpha=1;
+      c.clearRect(0,0,BW,BH);c.drawImage(bloom,0,0);
+      c.globalCompositeOperation='multiply';c.fillStyle=tint;c.fillRect(0,0,BW,BH);
+      c.globalCompositeOperation='source-over';
+      const w=BW*s, hh=BH*s;
+      g.drawImage(qC,(BW-w)/2,(BH-hh)/2,w,hh);
     }
+    g.globalCompositeOperation='source-over';
+    x.drawImage(bt,0,0,cv.width,cv.height);
   }
   x.restore();
 }
@@ -400,10 +467,7 @@ function composite(bloom){
 // and the black is a reading: never touched. So the grain multiplies down.
 function overlayPass(){
   x.save();x.setTransform(1,0,0,1,0,0);x.globalCompositeOperation='source-over';x.globalAlpha=1;
-  x.drawImage(ov,0,0);
-  if(GRAIN&&grainPat){x.globalAlpha=0.5;x.fillStyle=grainPat;
-    x.translate(Math.random()*180|0,Math.random()*180|0);
-    x.fillRect(-180,-180,cv.width+360,cv.height+360);}
+  x.drawImage(OV[Math.random()*4|0],0,0);
   x.restore();
 }
 
@@ -484,13 +548,13 @@ function drawChrome(g){
   const tw=g.measureText(m.title).width;
   g.font=`10px ${MONO}`;g.fillStyle=DIM;g.fillText(m.sub,16+tw+8,25);
   g.fillStyle=ABSENT;g.textAlign='right';g.fillText(m.src,W-16,25);g.textAlign='left';
-  hair(g,16,36,W-16,36,0.22);
-  hair(g,16,36,16,30,0.22);hair(g,W-16,36,W-16,30,0.22);        // the corner ticks
+  hair(g,16,36,W-16,36,0.26);
+  hair(g,16,36,16,30,0.26);hair(g,W-16,36,W-16,30,0.26);        // the corner ticks
   // ── the state block: a bracket, and the readings inside it ──
   let y=60;
   const bx=16, bw=300;
-  hair(g,bx,y-14,bx,y-14+(m.rows.length*19)+6,0.16);
-  hair(g,bx,y-14,bx+9,y-14,0.16);hair(g,bx,y-14+(m.rows.length*19)+6,bx+9,y-14+(m.rows.length*19)+6,0.16);
+  hair(g,bx,y-14,bx,y-14+(m.rows.length*19)+6,0.24);
+  hair(g,bx,y-14,bx+9,y-14,0.24);hair(g,bx,y-14+(m.rows.length*19)+6,bx+9,y-14+(m.rows.length*19)+6,0.24);
   m.rows.forEach((r,i)=>{runLine(g,r,bx+12,y+i*19,11);});
   // ── the belt: etched glass, and the fill is the reading's own colour ──
   const vw=196, vx=W-16-vw;
@@ -526,6 +590,22 @@ function drawChrome(g){
   }
 }
 
+// The plate is redrawn when [WORLD]'s HUD changes, not sixty times a second:
+// the signature is the markup [WORLD] wrote, so a reading that moves redraws
+// the chrome and a reading that stands still costs one drawImage.
+function chromePlate(){
+  const key=[($('#state')||{}).innerHTML,($('#belt')||{}).innerHTML,
+             ($('#legend')||{}).innerHTML,($('#src')||{}).textContent,W,H].join('\u0001');
+  if(key!==chromeKey){
+    chromeKey=key;const g=cx2(cb);
+    g.setTransform(1,0,0,1,0,0);g.clearRect(0,0,cb.width,cb.height);
+    g.setTransform(DPR,0,0,DPR,0,0);g.globalCompositeOperation='source-over';g.globalAlpha=1;
+    drawChrome(g);
+  }
+  x.save();x.setTransform(1,0,0,1,0,0);x.globalCompositeOperation='source-over';x.globalAlpha=1;
+  x.drawImage(cb,0,0);x.restore();
+}
+
 // ── the loop ───────────────────────────────────────────────────────────────
 const RING=[]; let fpsWin=[], stat={frame:0,world:0,pass:0,chrome:0,fps:0};
 function perf(now,total,world,chromeMs,passMs){
@@ -541,20 +621,32 @@ function frame(now){        // [FRAME] owns this loop: buffers, effects, chrome
   const p0=performance.now();
   ensureBuffers();
   const dt=Math.max(1,Math.min(100,now-(lastNow||now-16)));lastNow=now;
-  // the world, on its own phosphor — the only buffer that remembers
-  if(FX)phosphor(dt);
-  else{wx.save();wx.setTransform(1,0,0,1,0,0);wx.clearRect(0,0,wb.width,wb.height);wx.restore();}
-  wx.save();wx.setTransform(DPR,0,0,DPR,0,0);wx.globalCompositeOperation='source-over';wx.globalAlpha=1;
-  drawWorld(wx,now);wx.restore();
-  const p1=performance.now();
-  // compose
+  // this frame's world, drawn clean, then merged into the phosphor
   x.save();x.setTransform(1,0,0,1,0,0);x.globalCompositeOperation='source-over';x.globalAlpha=1;
-  x.fillStyle=BG;x.fillRect(0,0,cv.width,cv.height);x.drawImage(wb,0,0);x.restore();
+  x.fillStyle=BG;x.fillRect(0,0,cv.width,cv.height);x.restore();
+  if(FX){
+    // grounded on opaque black, not cleared: 'lighten' takes the max of two
+    // *unpremultiplied* colours, so a glow drawn at α=0.3 onto a transparent
+    // scratch converges the phosphor to full-strength amber across the whole
+    // gradient — the flat disc again. Over opaque black the scratch already
+    // holds what the glow looks like, and the max is the max of what is seen.
+    sx.save();sx.setTransform(1,0,0,1,0,0);sx.globalCompositeOperation='source-over';
+    sx.globalAlpha=1;sx.fillStyle='#000';sx.fillRect(0,0,ws.width,ws.height);sx.restore();
+    sx.save();sx.setTransform(DPR,0,0,DPR,0,0);sx.globalCompositeOperation='source-over';sx.globalAlpha=1;
+    drawWorld(sx,now);sx.restore();
+    phosphor(dt,ws);
+    x.save();x.setTransform(1,0,0,1,0,0);x.globalCompositeOperation='lighter';x.globalAlpha=1;
+    x.drawImage(wb,0,0);x.restore();
+  }else{
+    x.save();x.setTransform(DPR,0,0,DPR,0,0);x.globalCompositeOperation='source-over';x.globalAlpha=1;
+    drawWorld(x,now);x.restore();
+  }
+  const p1=performance.now();
   // chrome, in the same ink, under the same glass
-  if(CHROME){x.save();x.setTransform(DPR,0,0,DPR,0,0);x.globalCompositeOperation='source-over';x.globalAlpha=1;
-    drawChrome(x);x.restore();}
+  if(CHROME)chromePlate();
   const p2=performance.now();
   if(FX){composite(bloomPass());overlayPass();}
+  if(SYNC)x.getImageData(0,0,1,1);
   const p3=performance.now();
   if(PERF){x.save();x.setTransform(DPR,0,0,DPR,0,0);x.font=`10px ${MONO}`;x.fillStyle=DIM;x.textAlign='right';
     x.fillText(`${stat.fps} fps · frame ${stat.frame.toFixed(2)} ms · pass ${stat.pass.toFixed(2)} ms · chrome ${stat.chrome.toFixed(2)} ms · ${FX?BLOOM:'fx off'}`,W-16,H-6);
