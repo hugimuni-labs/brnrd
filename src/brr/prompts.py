@@ -2113,6 +2113,118 @@ def _surface_page_has_ended(content: str) -> bool:
     return re.search(r"(?im)^keeps:\s*expired\b", opening) is not None
 
 
+#: A page's explicit override of its own wake-injection treatment — see
+#: ``_surface_page_wake_mode``. Same 1024-char opening window as
+#: ``_surface_page_has_ended`` (a directive is a top-of-page declaration,
+#: not prose that happens to use the word later — confirmed against
+#: `shelf/index.md`'s own worked example of a `keeps:` row, which sits past
+#: this window and so is never mistaken for a real directive).
+_WAKE_DIRECTIVE_RE = re.compile(r"(?im)^wake:\s*(full|index)\s*$")
+
+#: A shelf/archive page's own ``keeps:`` row, read for the composed index
+#: line (#2002) — same shape and window as the expiry test above, but
+#: capturing the text rather than testing it.
+_KEEPS_ROW_RE = re.compile(r"(?im)^keeps:\s*(.*)$")
+
+
+def _page_wake_directive(content: str) -> str | None:
+    """A page's own ``wake: full`` / ``wake: index`` override, or ``None``.
+
+    Scanned from the opening text only — see ``_WAKE_DIRECTIVE_RE``.
+    """
+    match = _WAKE_DIRECTIVE_RE.search(content[:1024])
+    return match.group(1).lower() if match else None
+
+
+def _page_keeps_text(content: str) -> str | None:
+    """The page's own ``keeps:`` row, first 90 chars — ``None`` when absent.
+
+    The caller renders the ``—`` placeholder; this stays ``None`` rather
+    than guessing so a page with no declared shelf life is visibly one, not
+    silently stamped with an empty string that reads the same as a blank
+    row.
+    """
+    match = _KEEPS_ROW_RE.search(content[:1024])
+    if not match:
+        return None
+    text = match.group(1).strip()
+    return text[:90] if text else None
+
+
+def _surface_page_wake_mode(relative: str, content: str) -> str:
+    """``"full"`` or ``"index"`` — how a surface page rides the wake.
+
+    Default: ``shelf/`` and ``archive/`` pages carry a composed index line
+    only (#2002 — 17 shelf pages / 155 KB against a ~50 KB total surface
+    budget meant every one was evicted whole, every wake, before the first
+    standing page even rendered). Every other page defaults to full
+    injection, unchanged from before this existed. A page's own
+    ``wake: full`` / ``wake: index`` row overrides the directory default
+    either way — a shelf page whose subject is live can opt back into the
+    ordinary walk without moving house, and a standing page can be demoted
+    to an index line the same way.
+    """
+    directive = _page_wake_directive(content)
+    if directive is not None:
+        return directive
+    return "index" if relative.startswith(("shelf/", "archive/")) else "full"
+
+
+def _surface_shelf_archive_index(
+    surface_files: list[Path], surface: Path
+) -> tuple[str | None, "frozenset[Path]"]:
+    """The shelf/archive composed index text, and which pages it covers.
+
+    Mirrors the warp index (:func:`_build_work_surface_block_scored`'s own
+    opening block): a directory of many small, individually unremarkable
+    pages rides the wake as one line each — basename · ``keeps:`` ·
+    bytes — instead of entering the per-page walk and evicting whatever
+    sorts after it. Membership is :func:`_surface_page_wake_mode`, so a page
+    opts out with its own ``wake: full`` row; a page from any *other*
+    directory rides here instead with its own ``wake: index`` row — the
+    hatch runs both ways, and this is the one place that reads it.
+
+    Returns ``(None, frozenset())`` when nothing on the account has an
+    index-mode page — the caller must not render an empty section header.
+    The second element is the set of *resolved* paths this call covered, so
+    the main per-page walk can skip exactly those and nothing else (a page
+    that failed to read, or opted ``wake: full``, is never in it).
+    """
+    sections: dict[str, list[str]] = {"shelf": [], "archive": [], "other": []}
+    covered: set[Path] = set()
+    for path in surface_files:
+        relative = path.relative_to(surface).as_posix()
+        if relative.startswith(("warp/", "topics/")):
+            continue  # the warp's own composed index, never this one
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if not content.strip():
+            continue
+        if _surface_page_wake_mode(relative, content) != "index":
+            continue
+        if relative.startswith("shelf/"):
+            bucket = "shelf"
+        elif relative.startswith("archive/"):
+            bucket = "archive"
+        else:
+            bucket = "other"
+        keeps = _page_keeps_text(content) or "—"
+        size = len(content.strip().encode("utf-8"))
+        sections[bucket].append(f"- `{path.name}` · keeps: {keeps} · {size:,} B")
+        covered.add(path.resolve())
+
+    parts = [
+        f"{name}:\n" + "\n".join(rows)
+        for name in ("shelf", "archive", "other")
+        if (rows := sections[name])
+    ]
+    if not parts:
+        return None, frozenset()
+    return "\n\n".join(parts), frozenset(covered)
+
+
 def _build_work_surface_block_scored(
     repo_root: Path,
     *,
@@ -2211,6 +2323,11 @@ def _build_work_surface_block_scored(
     unannounced: list[tuple[str, str]] = []
     lifecycle_omitted: list[str] = []
 
+    surface_files = sorted(
+        acc.work_surface_files(ctx),
+        key=lambda path: _surface_wake_rank(path.relative_to(surface).as_posix()),
+    )
+
     # The warp index (2026-08-11): `surface/warp/` and `surface/topics/`
     # are the item space — dozens of small files whose *graph*, not whose
     # pages, is what a wake needs. Injecting them as pages would flood the
@@ -2240,6 +2357,37 @@ def _build_work_surface_block_scored(
         if size <= remaining:
             blocks.append(block)
             remaining -= size
+
+    # The shelf/archive index (#2002): the same treatment, one step later.
+    # `surface/shelf/` and `surface/archive/` are commissioned artifacts and
+    # retired pages — individually unremarkable, collectively 17 pages /
+    # 155 KB against a ~50 KB total budget the standing pages already fill,
+    # so every one was evicted whole, every wake, before this existed. Both
+    # directories ride here as one line each instead — see
+    # `_surface_shelf_archive_index` for the membership rule (a page opts
+    # out with `wake: full`; any other page opts in with `wake: index`).
+    # `surface_files` is computed once, above, and reused for both indexes.
+    shelf_archive_index, indexed_paths = _surface_shelf_archive_index(
+        surface_files, surface
+    )
+    if shelf_archive_index:
+        block = (
+            "### the shelf & archive — index\n\n"
+            "Commissioned artifacts (`surface/shelf/`) and retired pages "
+            "(`surface/archive/`) ride the wake as one line each, not "
+            "whole — read one at its own path when a task touches it. A "
+            "page's own `wake: full` row opts it back into the ordinary "
+            "walk while its subject is live; `wake: index` demotes any "
+            "other page the same way.\n\n" + shelf_archive_index
+        )
+        size = len(block.encode("utf-8"))
+        if size <= remaining:
+            blocks.append(block)
+            remaining -= size
+        else:
+            # Didn't fit — nothing was actually skipped from the walk below,
+            # so nothing should be treated as covered by it either.
+            indexed_paths = frozenset()
 
     # #1061 rec 1 — the named reserve, floor pre-pass. For each load-bearing
     # page, render once against `min(page size, _SURFACE_RESERVE_PAGE_BYTES)`
@@ -2280,16 +2428,16 @@ def _build_work_surface_block_scored(
         remaining = max(0, remaining - size)
         reserve_floor[resolved] = _ReserveFloor(content, block, trimmed, size)
 
-    surface_files = sorted(
-        acc.work_surface_files(ctx),
-        key=lambda path: _surface_wake_rank(path.relative_to(surface).as_posix()),
-    )
     for path in surface_files:
         resolved = path.resolve()
         relative = path.relative_to(surface).as_posix()
         if relative.startswith(("warp/", "topics/")):
             # The item space rides as the composed index above, never as
             # pages — see the warp-index block.
+            continue
+        if resolved in indexed_paths:
+            # Rode the shelf/archive composed index above instead — see
+            # `_surface_shelf_archive_index`.
             continue
         floor = reserve_floor.get(resolved)
         if floor is not None:
