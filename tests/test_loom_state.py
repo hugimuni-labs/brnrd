@@ -348,7 +348,7 @@ def test_warp_state_is_derived(machine):
     assert by["w-2"] == {"id": "w-2", "type": "decision", "title": "Two", "topics": ["the-loom"],
                          "needs": ["w-1"], "state": "ready", "taken": None,
                          # design-the-dungeon.md §5
-                         "visited_at": None, "opens": [], "stake": None, "receipt": None}
+                         "visited_at": None, "opens": [], "stake": None, "receipt": None, "footprints": []}
     assert by["w-4"]["opens"] == ["w-3"]          # the reverse edge: deciding w-4 opens w-3
 
 
@@ -476,3 +476,70 @@ def test_cloth_rows_carry_their_trail(machine):
     assert [t["path"] for t in rows[CHILD]["trail"]] == [f"src/brr/f{i}.py" for i in range(14, 6, -1)]
     assert rows[RUN]["trail"][0] == {"path": "src/brr/real.py", "at": iso(NOW - 90)}
     assert rows[CLAIM]["trail"] == []  # no boundaries log
+
+
+# ── bead → warp item join ─────────────────────────────────────────────────
+
+
+def test_bead_items_finds_ids_by_home_path_detail_and_outbox_reply_body(tmp_path):
+    repo = tmp_path / "repo"
+    home = tmp_path / "home"
+    brr = repo / ".brr"
+    (repo / "src").mkdir(parents=True)
+    where = state.locate(repo, home)
+
+    # the item's own authored file, as a home place
+    home_row = {"act": "orient", "place": {"path": str(home / "surface" / "warp" / "w-9.md"), "paths": []}}
+    assert state.bead_items(home_row, where, state.row_paths(home_row, where)[1]) == ["w-9"]
+
+    # a bare token in detail — a goal id too, never guessed from topics
+    detail_row = {"act": "reply", "detail": "unblocked w-9 and g-2 both"}
+    assert state.bead_items(detail_row, where, []) == ["w-9", "g-2"]
+
+    # an outbox reply/note file the row names — its body scanned the same way
+    note = brr / "outbox" / "evt-x" / "000005-reply.md"
+    _write(note, "---\nevent: evt-x\n---\nsettling w-9, see also w-11\n")
+    note_row = {"act": "dispatch", "place": {"path": str(note), "paths": [str(note)]}}
+    assert state.bead_items(note_row, where, []) == ["w-9", "w-11"]
+
+    # nothing named ⇒ nothing found
+    assert state.bead_items({"act": "probe", "detail": "ls -la"}, where, []) == []
+
+
+def test_beads_and_warp_items_join_on_bead_touches(tmp_path):
+    """Through the real caller (:func:`state.build`): a bead whose path is
+    the item's own file, a bead whose detail names it, and a bead naming
+    nothing ⇒ ``beads[].items`` per row, ``warp.items[w-18].visited_at`` the
+    later of the two, ``footprints`` in order."""
+    repo = tmp_path / "repo"
+    home = tmp_path / "home"
+    brr = repo / ".brr"
+    run_id = "run-260923-1200-w18xx"
+    outbox = brr / "outbox" / "evt-w18"
+
+    _write(home / "shuttle.json", json.dumps({
+        "key": "acc", "state": "awake", "why": "event_dispatched", "run_id": run_id,
+        "repo_root": str(repo), "conversation_key": "cloud:x", "since": iso(NOW - 60),
+        "transitions": [],
+    }))
+    _run_md(brr, run_id, outbox, transitions=_transitions(NOW - 300))
+    _write(outbox / "portal-state.json", json.dumps({"run": {"id": run_id}}))
+    _write(home / "surface" / "warp" / "w-18.md", "# Eighteen\n\ntype: action\n")
+
+    w18_path = home / "surface" / "warp" / "w-18.md"
+    _jsonl(brr / "runs" / run_id / "boundaries.jsonl", [
+        {"at": iso(NOW - 200), "act": "orient", "cwd": str(repo),
+         "place": {"path": str(w18_path), "paths": [str(w18_path)]}},
+        {"at": iso(NOW - 100), "act": "reply", "detail": "reply: w-18 unblocked", "cwd": str(repo)},
+        {"at": iso(NOW - 50), "act": "probe", "detail": "ls -la", "cwd": str(repo)},
+    ])
+
+    out = state.build(repo, home, now=NOW)
+    assert [b["items"] for b in out["beads"]] == [["w-18"], ["w-18"], []]
+
+    by = {i["id"]: i for i in out["warp"]["items"]}
+    assert by["w-18"]["visited_at"] == iso(NOW - 100)  # the later of the two
+    assert by["w-18"]["footprints"] == [
+        {"run": run_id, "n": 0, "at": iso(NOW - 200), "act": "orient"},
+        {"run": run_id, "n": 1, "at": iso(NOW - 100), "act": "reply"},
+    ]
