@@ -709,10 +709,10 @@ function drawWorld(x,now){  // [WORLD] draws; [FRAME] decides where
 //       ?chrome=off|dom · ?perf=1 · ?tau=<ms> · ?bloomA= · ?abk=
 // ═══════════════════════════════════════════════════════════════════════════
 const Q=new URLSearchParams(location.search);
-const FX      = Q.get('fx')!=='off';
+let   FX      = Q.get('fx')!=='off';  // ?fx=off, or flipped live by __fxSet
 const CHROME  = Q.get('chrome')!=='off' && Q.get('chrome')!=='dom';
 const BLOOM   = Q.get('bloom')||'chain';
-const AB      = Q.get('ab')!=='off';
+let   AB      = Q.get('ab')!=='off';
 const GRAIN   = Q.get('grain')!=='off';
 const DITHER  = Q.get('dither')==='on';     // off: a screen-space pattern inside the
                                             // phosphor is a texture the bloom then
@@ -780,7 +780,10 @@ function buildOverlay(){
       g.fillRect(-180,-180,o.width+360,o.height+360);g.restore();}
     const cxp=o.width/2, cyp=o.height/2, r=Math.hypot(cxp,cyp);
     const vg=g.createRadialGradient(cxp,cyp,r*0.35,cxp,cyp,r);
-    vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(0.72,'rgba(0,0,0,0.20)');vg.addColorStop(1,'rgba(0,0,0,0.52)');
+    // pulled back from 0.20/0.52: the corners are where the dim end of the scene
+    // lives — the never-touched places and the legend that names them — and a
+    // vignette that reads well on the pod costs the 'black' state its legibility
+    vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(0.72,'rgba(0,0,0,0.13)');vg.addColorStop(1,'rgba(0,0,0,0.38)');
     g.fillStyle=vg;g.fillRect(0,0,o.width,o.height);
     // the glass edge: the frame is a tube, and a tube has corners it cannot reach
     g.strokeStyle='rgba(0,0,0,0.55)';g.lineWidth=Math.max(2,6*DPR);
@@ -1063,6 +1066,14 @@ function perf(now,total,world,chromeMs,passMs){
     frameMs:+stat.frame.toFixed(3),worldMs:+stat.world.toFixed(3),
     chromeMs:+stat.chrome.toFixed(3),passMs:+stat.pass.toFixed(3),fps:stat.fps,frames:RING.length};
 }
+// One hook, for the rehearsal harness: the same scene state, photographed with
+// the pass on and off, is a comparison two page loads cannot make.
+window.__fxSet=(v,k)=>{
+  if(k==='ab'){AB=!!v;return AB;}
+  FX=!!v;if(!FX){wx.save();wx.setTransform(1,0,0,1,0,0);
+    wx.globalCompositeOperation='source-over';wx.globalAlpha=1;
+    wx.fillStyle='#000';wx.fillRect(0,0,wb.width,wb.height);wx.restore();}
+  return FX;};
 function frame(now){        // [FRAME] owns this loop: buffers, effects, chrome
   const p0=performance.now();
   ensureBuffers();
