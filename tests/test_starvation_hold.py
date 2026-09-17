@@ -167,6 +167,35 @@ class TestRefusedWake:
         task.save(runs_dir)
         return task
 
+    def test_the_reading_runs_through_the_real_reader_on_a_claude_seat(
+        self, tmp_path,
+    ):
+        """Claude caches ``/usage`` in a *run's* outbox; the held-seat reader
+        has no run of its own and passed ``None`` through, so every refill test
+        on a claude wall read ``None`` — parked at 1%, session back at 96%,
+        ``force`` the only way out (2026-09-16, run-260916-1700-8m31). Every
+        other test here stubs the reader; this one runs it."""
+        from brr import claude_usage
+        task = self._starved_run(tmp_path)
+        task.meta["runner_name"] = "claude-fable"
+        task.meta["runner_core"] = "fable"
+        task.meta["resource_hold"] = resource_hold.build(
+            **daemon._starvation_hold_spec(task, {}, 1.0, detail="starved"),
+        )
+        # nothing cached anywhere ⇒ honestly unreadable, never a guess
+        assert daemon._held_run_binding_pct(tmp_path, task, refresh=False) is None
+        cache = tmp_path / ".brr" / "outbox" / "evt-earlier-run"
+        cache.mkdir(parents=True)
+        (cache / claude_usage.SNAPSHOT_NAME).write_text(json.dumps({
+            "quota": {"buckets": {
+                "session": {"remaining_percentage": 96.0},
+                "week": {"remaining_percentage": 43.0},
+                "week_models": {"Fable": {"remaining_percentage": 22.0}},
+            }},
+        }), encoding="utf-8")
+        assert daemon._held_run_binding_pct(tmp_path, task, refresh=False) == 22.0
+        assert resource_hold.refill_condition_met(task.meta["resource_hold"], 22.0)
+
     def test_still_starved_keeps_the_message_and_answers_with_the_reading(
         self, tmp_path, monkeypatch,
     ):
