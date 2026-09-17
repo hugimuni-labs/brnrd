@@ -215,6 +215,18 @@ receipts.frame_ms = [];
   await shot(p,'06-the-body-window');
   assert.equal(receipts.body.window,'body','P must open the body window');
   assert.equal(receipts.body.reconciles,true,'the transcript column must reconcile with the feed');
+  // ── P follows the selection: the seat, then a strand's budget ──
+  await p.keyboard.press('p'); await p.waitForTimeout(900);
+  receipts.strand_window = await p.evaluate(()=>{
+    const id=RECORD.podLocal, st=(S.hud.strands||[]).find(q=>q.id===id);
+    return {win:RECORD.win,pod:id,
+      title:st&&st.title, spent:st&&st.spent, allowance:st&&st.allowance,
+      status:st&&st.status, places:st&&(st.places||[]).length,
+      strandsInFeed:(S.hud.strands||[]).length};
+  });
+  await shot(p,'12-a-strands-body-is-a-budget');
+  assert.ok(receipts.strand_window.pod,'P again must walk to a strand while [ACTOR] has no pod pick');
+  assert.ok(receipts.strand_window.allowance>0,'a strand panel needs a real end to draw');
   await p.keyboard.press('Escape'); await p.waitForTimeout(300);
   await p.keyboard.press('l'); await p.waitForTimeout(900);
   receipts.wire = await p.evaluate(()=>({log:RECORD.log,lines:RECORD.wire.length,

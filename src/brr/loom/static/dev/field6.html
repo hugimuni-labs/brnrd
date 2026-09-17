@@ -744,7 +744,7 @@ const RECORD=(()=>{
     wire:[], body:null, geom:null, cursor:-1, pass:null, roomLocal:null, place:null,
     roots:[], byRoot:new Map(), rootTops:[], rootsFor:null, wireTop:null, chanCount:{},
     hover:null, mouse:null, log:false, win:null, view:null,
-    lastOpen:null, lastOpenAt:0, pendingOpen:null
+    lastOpen:null, lastOpenAt:0, pendingOpen:null, podLocal:null
   };
 
   // ── the tint: the deck a bead belonged to, as a bend in the same light ────
@@ -1231,8 +1231,16 @@ const RECORD=(()=>{
     let ry=y+50;
     for(const r of show){
       if(num(r.v)){
+        // a row with its own `cap` is a budget and is scaled against its end;
+        // a row without one is a share of the panel's total. The seat has no
+        // ceiling and a strand does, which is the whole difference between them.
+        const f=num(r.cap)&&r.cap>0?clamp(r.v/r.cap,0,1):clamp(r.v/tot,0,1);
+        if(num(r.cap)&&!r.base){      // the end of the budget, drawn as an end
+          g.strokeStyle='rgba(122,104,72,0.55)';g.lineWidth=1;
+          g.strokeRect(x+14.5,ry-8.5,(w-140)-1,8);
+        }
         g.fillStyle=r.base?'rgba(143,211,255,0.30)':'rgba(242,177,52,0.32)';
-        g.fillRect(x+14,ry-8,(w-140)*clamp(r.v/tot,0,1),7);
+        g.fillRect(x+14,ry-8,(w-140)*f,7);
       }
       if(r.his){                       // his line, on the top layer, in his ice
         g.strokeStyle='rgba(143,211,255,0.5)';g.lineWidth=1;
@@ -1306,7 +1314,45 @@ const RECORD=(()=>{
       gap:'no `pack` in the feed: the base is one row, not its blocks \u00b7 '
          +'tokens, not bytes \u2014 the feed measures ctx_after/delta'};
   }
-  // a pass, inspected — the window's second legitimate user
+  // A STRAND, inspected — the same window asking the other question.
+  // The seat's panel is OCCUPANCY (boot + run = what is on the body, no
+  // ceiling, only a floor it parks at). A strand's is a BUDGET: spent of
+  // allowance, a bar with a real end it can reach. Same panel, two questions:
+  // how heavy am I, versus how much is left. They are not flattened.
+  //
+  // The feed does not carry a strand's blocks or its per-bead deltas (filed as
+  // #2007), so this renders exactly what `hud.strands[]` gives and names the
+  // hole IN THE PANEL rather than faking it or leaving a blank. When the feed
+  // lands, the rows appear under the base with no redesign here.
+  const strands=()=>(((R.src||{}).hud||{}).strands)||[];
+  function strandRows(id){
+    const st=strands().find(q=>q.id===id); if(!st)return null;
+    const live=/live|running|await/.test(st.status||'');
+    const spent=num(st.spent)?st.spent:null, all=num(st.allowance)?st.allowance:null;
+    const rows=[];
+    if(spent!==null&&all!==null){
+      // the budget, as a bar with an end: `v` is the spend and the window's
+      // scale is the allowance, so the bar reads as 'how much is left'.
+      rows.push({k:`spent of allowance \u2014 ${(100*spent/all).toFixed(1)}% of the budget`,
+                 v:spent,cap:all,t:`${(spent/1000).toFixed(1)}k / ${(all/1e6).toFixed(0)}m`});
+    }else rows.push({k:'spent of allowance',t:'unmeasured'});
+    rows.push({k:'status',t:live?'live':(st.status||'done')});
+    if(!live)rows.push({k:'frozen at',
+      t:(st.last_bead_at||'').slice(11,19)+'Z \u00b7 boundaries unmeasured'});
+    else rows.push({k:'last act',t:`${(st.last_bead_at||'').slice(11,16)} \u00b7 ${st.last_place_kind||'\u2014'}`});
+    rows.push({k:'places it has touched',t:String((st.places||[]).length)});
+    for(const pl of (st.places||[]).slice(0,6))rows.push({k:`   ${pl}`,t:''});
+    // the base is the brief its parent wrote — visibly the base, as the seat's
+    // base is its waking event.
+    rows.push({k:`the base \u2014 the spec its parent wrote: ${st.title||st.id}`,
+               v:1,cap:1,t:'',base:true});
+    return {rows,
+      note:live?`live \u00b7 ${(spent/1000).toFixed(1)}k spent, `
+                +`${(((all||0)-(spent||0))/1e6).toFixed(1)}m of the budget left`
+               :`frozen \u00b7 ${(spent/1000).toFixed(1)}k was the whole of it`,
+      gap:'blocks and per-bead deltas unmeasured for a strand \u2014 feed #2007'};
+  }
+  // a pass, inspected — the window's third legitimate user
   function passRows(){
     const p=R.byRun.get(R.pass); if(!p)return null;
     const m=R.roomsOf(p.run), fp=[...m.values()].reduce((a,b)=>a+b,0);
@@ -1470,8 +1516,14 @@ const RECORD=(()=>{
     else if(k==='p'||k==='P'){
       // the hour's price: what changed since this window was last opened. In
       // memory only, by his instruction — nothing is stored.
-      if(R.win==='body'){R.lastOpen=R.pendingOpen;R.lastOpenAt=Date.now();R.win=null;}
-      else R.win='body';
+      if(R.win==='body'){
+        // open again and it walks: the seat, then each live strand, then shut.
+        // A stand-in for the actor hand's pod selection, nothing more.
+        const ids=strands().map(q=>q.id);
+        const at=R.podLocal?ids.indexOf(R.podLocal)+1:0;
+        if(!SELECTED&&at<ids.length){R.podLocal=ids[at];}
+        else{R.lastOpen=R.pendingOpen;R.lastOpenAt=Date.now();R.win=null;R.podLocal=null;}
+      }else R.win='body';
     }
     else if(k==='Enter')R.win=R.win?null:(R.pass?'pass':'body');
     else if(k==='Escape'){
@@ -1519,8 +1571,21 @@ const RECORD=(()=>{
     drawCloth(g);
     drawWire(g,z);
     if(!R.win)drawHover(g);          // a hover is not a stop: not over a window
-    if(R.win==='body'){const b=bodyRows();
-      if(b)drawWindow(g,'THE BODY \u00b7 every act, with its price',b.rows,b.note,b.gap);}
+    if(R.win==='body'){
+      // P inspects WHOEVER IS SELECTED. Selection is the actor hand's: this
+      // reads SELECTED for a pod and never writes it. Nothing selected ⇒ the
+      // seat's. `R.podLocal` is the same local stand-in the room fold uses, so
+      // the difference can be shown from one branch before [ACTOR] lands.
+      const sp=(()=>{const q=SELECTED;
+        if(q&&(q.kind==='pod'||q.kind==='strand')&&q.id)return q.id;
+        return R.podLocal;})();
+      const st=sp&&strands().find(q=>q.id===sp);
+      if(st){const w=strandRows(sp);
+        if(w)drawWindow(g,`THE BODY \u00b7 ${st.title?st.title.slice(0,46):sp} \u00b7 what is left`,
+                        w.rows,w.note,w.gap);}
+      else{const b=bodyRows();
+        if(b)drawWindow(g,'THE BODY \u00b7 the seat \u00b7 every act, with its price',b.rows,b.note,b.gap);}
+    }
     else if(R.win==='pass'){const w=passRows();if(w)drawWindow(g,`THE PASS \u00b7 ${R.pass}`,w.rows,w.note);}
     g.restore();
   };
