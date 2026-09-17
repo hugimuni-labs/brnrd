@@ -219,10 +219,12 @@ function layoutWarp(x0,w){
   // the measured anchor: where this topic's OWN FILES stand on the island.
   // `tree.repo[].topics` is the join — the same rows the canopy is built from —
   // so the deck under a stand of trees is the topic those trees carry.
+  const boughX=new Map((island?island.boughs:[]).map(b=>[b.top,b.x]));
+  const atX=p=>{const n=byPath.get(p.path);return n?n.x:boughX.get(p.path.split('/')[0]);};
   const anchor=new Map();
   for(const t of order){
-    const fs=nodes.filter(n=>(n.topics||[]).includes(t));
-    if(fs.length)anchor.set(t,{x:fs.reduce((s,n)=>s+n.x,0)/fs.length,n:fs.length});
+    const xs=rows(S.tree&&S.tree.repo).filter(p=>(p.topics||[]).includes(t)).map(atX).filter(num);
+    if(xs.length)anchor.set(t,{x:xs.reduce((a,b)=>a+b,0)/xs.length,n:xs.length});
   }
   const groups=new Map();
   for(const it of items){const t=(it.topics&&it.topics[0])||'—';
@@ -248,7 +250,7 @@ function layoutWarp(x0,w){
       ls.forEach((it,k)=>{
         const c=k%cols, r=Math.floor(k/cols);
         rooms.push(byItem.set(it.id,{it,deck:dk,lane:li,
-          u:dx-inner/2+(c+0.5)*(inner/cols), v:(li+(r+0.6)/(rn+0.4))/LANES.length,
+          u:dx-inner/2+(c+0.5)*(inner/cols), v:(li+0.20+((r+0.5)/rn)*0.70)/LANES.length,
           rw,rh:15,lit:litness(it),fp:(it.footprints||[]).length,opens:[],gated:null}).get(it.id));
       });
     });
@@ -267,9 +269,9 @@ function layoutWarp(x0,w){
 // ── projection: world → screen, the only place z is spent ──────────────────
 const treeY=(n,z)=>waterAt(z)-7*z-n.e*canopyAt(z);
 const homeY=(n,z)=>waterAt(z)+6+n.e*(bandAt(z)-12);
-const LANETOP=26;
+const LANETOP=44;
 const roomXY=(r,z)=>{const w=waterAt(z)+bandAt(z),d=diveAt(z);
-  return {x:r.u,y:w+LANETOP*Math.max(0.3,d)+r.v*(H-w-LANETOP-30)*d};};
+  return {x:r.u,y:w+LANETOP*Math.max(0.3,d)+r.v*(H-w-LANETOP-62)*d};};
 const hubH=z=>22*z+92*hubAt(z);
 const cellXY=(c,z)=>{const w=waterAt(z),hh=hubH(z);
   return {x:c.x,y:w-6-hh+((c.row+0.5)/c.rows)*(hh-4)};};
@@ -286,7 +288,7 @@ const resolveIn=(m,s)=>!s?null:(m.get(s)||[...m.keys()].filter(k=>k.startsWith(s
 function podXY(p,z){
   const w=waterAt(z), t=p.target;
   if(!t)return {x:p.x||W/2,y:w-110*z-46*(1-z)};
-  if(t.cell){const c=cellXY(t.cell,z);return {x:c.x,y:c.y-15*podAt(z)};}
+  if(t.cell){const c=cellXY(t.cell,z);return {x:c.x,y:c.y-24*podAt(z)-6};}
   if(t.home){const n=t.home;return {x:n.x,y:homeY(n,z)-10*podAt(z)};}
   const n=t.node;
   const near={x:n.x,y:treeY(n,z)-30*z-10};
@@ -394,7 +396,12 @@ function drawScene(x,now){
     x.beginPath();x.moveTo(dk.x-dk.w/2+4,dh);x.lineTo(dk.x+dk.w/2-4,dh);x.stroke();
     if(dtx>0.02){
       x.globalAlpha=dtx;x.textAlign='center';x.fillStyle=dk.anchor?'#8a7c5e':'#4a4336';
-      x.fillText(`${dk.rune} ${dk.slug} · ${dk.n}${dk.anchor?'':' · no files measured'}`,dk.x,dh+11);
+      // a deck names itself only as far as its own width allows — at 390 the
+      // full line would overprint its neighbour, so it sheds words, never lies
+      const full=`${dk.rune} ${dk.slug} · ${dk.n}${dk.anchor?'':' · no files measured'}`;
+      const mid2=`${dk.rune} ${dk.slug} · ${dk.n}`, lab=`${dk.slug.replace(/^the-/,'')}`;
+      const fits=t=>x.measureText(t).width<=dk.w-6;
+      x.fillText(fits(full)?full:fits(mid2)?mid2:fits(lab)?lab:String(dk.n),dk.x,dh-4);
       x.textAlign='left';x.globalAlpha=1;
     }
   }
@@ -402,7 +409,7 @@ function drawScene(x,now){
     x.globalAlpha=dtx*0.85;x.font=`9px ${MONO}`;
     const top=water+band;
     for(let li=0;li<LANES.length;li++){
-      const y=top+LANETOP*Math.max(0.3,dv)+((li+0.04)/LANES.length)*(H-top-LANETOP-30)*dv;
+      const y=top+LANETOP*Math.max(0.3,dv)+((li+0.04)/LANES.length)*(H-top-LANETOP-62)*dv;
       x.strokeStyle='rgba(90,77,60,0.22)';x.lineWidth=.6;
       x.beginPath();x.moveTo(W*0.03,y);x.lineTo(W*0.97,y);x.stroke();
       x.fillStyle=li===0?'#5c7f96':'#4a4336';x.fillText(LANES[li].label,W*0.03+3,y-3);
@@ -451,7 +458,7 @@ function drawScene(x,now){
   }
   if(z>0.62&&rooms.length){
     x.fillStyle='#4a6a80';x.font=`10px ${MONO}`;
-    x.fillText(`${rooms.filter(r=>r.lane===0).length} doors below the ground — his · scroll to rise and read them`,W*0.06,water+band+24);
+    x.fillText(`${rooms.filter(r=>r.lane===0).length} doors below the ground — his · scroll to rise and read them`,W*0.06,water+band+72);
   }
 
   // ── the ground: the home, the shelf everything stands on ─────────────────
@@ -478,7 +485,7 @@ function drawScene(x,now){
     }
     if(band>28){
       x.font=`9px ${MONO}`;x.textAlign='center';x.globalAlpha=clamp((band-28)/20,0,1);
-      for(const r of ground.roots){x.fillStyle='#5f5642';x.fillText(`${r.top} · ${r.n}`,r.x,water+15);}
+      for(const r of ground.roots){x.fillStyle='#5f5642';x.fillText(`${r.top} · ${r.n}`,r.x,water+27);}
       x.fillStyle='#4a4336';x.textAlign='left';
       x.fillText('the home — the ground the islands are moored into',W*0.03,water+band-4);
       x.globalAlpha=1;
@@ -584,6 +591,7 @@ function drawScene(x,now){
   const ps=podAt(z);
   for(const p of pods){
     const t=podXY(p,z), me=p.kind==='resident';
+    if(!me){const j=hash(p.id);t.x+=(j-0.5)*54;t.y+=(hash(p.id+'y')-0.5)*26;}
     if(step){p.x+=(t.x-p.x)*0.045;p.y+=(t.y-p.y)*0.045;
       p.trail.push({u:p.x/W,v:(p.y-water)/H});if(p.trail.length>60)p.trail.shift();}
     x.save();x.globalCompositeOperation='lighter';
