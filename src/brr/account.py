@@ -1510,7 +1510,18 @@ def _work_surface_seed_text(slug: str) -> str:
         "links become the later loom graph's edges. Daemon-attested files such "
         "as `runs/*/state.md` frame each run body, not pages to "
         "move in here. Add a page when it earns a shared purpose; do not turn "
-        "the surface into a form.\n"
+        "the surface into a form.\n\n"
+        "**Eviction order is path order, not priority (#1020).** When the "
+        "surface budget runs out mid-wake, the pages that get dropped are "
+        "whichever sort last by path under `surface/` — alphabetical, "
+        "incidental, and currently undeclared anywhere but this line. The "
+        "item space is exempt: `warp/` and `topics/` never enter the page "
+        "walk — the wake carries their composed index instead. `shelf/` and "
+        "`archive/` are exempt the same way (#2002): each page there rides "
+        "the wake as one index line (name · `keeps:` · size), not injected "
+        "whole, unless it declares `wake: full` in its own opening lines; "
+        "any other page can opt into that same index treatment with "
+        "`wake: index`.\n"
     )
 
 
