@@ -661,6 +661,10 @@ cv.addEventListener('mousemove',e=>{
 // Nothing here writes to the feed, the corridors, the cloth, or the console.
 
 const SELECTED={kind:null,id:null,slug:null,chosen:new Set(),hint:null};
+// the offer's own rectangle, published by panel() each frame so the hand can
+// reach it: a verb only the keyboard can press is a verb nobody finds
+const BTN={on:false,x:0,y:0,w:0,h:0};
+const inBtn=(px,py)=>BTN.on&&px>=BTN.x&&px<=BTN.x+BTN.w&&py>=BTN.y&&py<=BTN.y+BTN.h;
 window.SELECTED=SELECTED;                 // the seam, reachable from a console
 
 // ── 1 · the camera rests, it does not switch ───────────────────────────────
@@ -780,6 +784,12 @@ const ACTOR={
         g.fillStyle=me?'rgba(242,177,52,0.13)':'rgba(242,177,52,0.08)';
         g.fillRect(cx-cw/2+0.6,cy-ch/2+0.6,cw-1.2,ch-1.2);
       }
+      if(legible&&i){                      // the cell wall: it is a GRID, and at
+        g.strokeStyle=me?'rgba(242,177,52,0.22)':'rgba(242,177,52,0.14)';
+        g.lineWidth=0.6;                   // 4x magnification the first read saw
+        g.beginPath();g.moveTo(cx-cw/2,cy-ch/2+0.8);   // amber text in a box
+        g.lineTo(cx-cw/2,cy+ch/2-0.8);g.stroke();
+      }
       if(!legible){                        // schematic: a lit cell cluster
         if(lit||head){g.fillStyle=head?(me?'rgba(242,177,52,0.42)':'rgba(242,177,52,0.26)'):ink;
           g.fillRect(cx-cw/2+0.5,cy-ch/2+0.5,Math.max(1,cw-1),Math.max(1,ch-1));}
@@ -831,7 +841,7 @@ const ACTOR={
     if(!SELECTED.chosen.size)return;
     const cell=hubBy.get('crew');if(!cell)return;
     const sc=podAt(z)*0.85, n=5;
-    const cw=Math.max(2.2,9.4*sc), ch=Math.max(2.6,12.4*sc), gw=cw*n;
+    const cw=Math.max(6.4,9.4*sc), ch=Math.max(9,12.4*sc), gw=cw*n;
     // above the ship's own roof — inside it, it sat across the cell labels and
     // read like one more lit room rather than something waiting to leave
     const p={x:cell.x,y:waterAt(z)-6-hubH(z)-26};
@@ -1022,8 +1032,8 @@ const ACTOR={
       foot=staged
         ?['CHOSEN — staged, nothing sent',
           `would dispatch: topic ${r.deck.slug} · item ${it.id}`,
-          'no gate is wired on this page · ⏎ to unstage']
-        :['⏎  dispatch brnrd here',
+          'no gate is wired on this page · ⏎ or click to unstage']
+        :['⏎ · click   dispatch brnrd here',
           'stages the intent · nothing is sent',
           'there is no gate wired on this page yet'];
     }else if(dk){
@@ -1062,12 +1072,16 @@ const ACTOR={
       g.fillText(s.length>max?s.slice(0,max-1)+'…':s,px+(k?72:10),y);
       y+=14;
     }
+    BTN.on=false;
     if(foot){
       const staged=r&&SELECTED.chosen.has(r.it.id);
       y+=2;
-      g.strokeStyle=staged?'rgba(143,211,255,0.55)':'rgba(242,177,52,0.45)';
-      g.save();if(!staged)g.setLineDash([3,2]);
+      // a deck offers no verb, only a way down: amber is reserved for the offer
+      g.strokeStyle=r?(staged?'rgba(143,211,255,0.55)':'rgba(242,177,52,0.45)')
+                     :'rgba(154,133,94,0.30)';
+      g.save();if(!staged&&r)g.setLineDash([3,2]);
       g.strokeRect(px+10.5,y-11.5,pw-21,foot.length*13+6);g.restore();
+      if(r)Object.assign(BTN,{on:true,x:px+10.5,y:y-11.5,w:pw-21,h:foot.length*13+6});
       foot.forEach((t,i)=>{
         g.fillStyle=i===0?(staged?'#8fd3ff':A):'#5a4d3c';
         g.font=`${i===0?10:9}px ${MONO}`;g.fillText(t,px+16,y+i*13);
@@ -1080,13 +1094,16 @@ const ACTOR={
 // the hand, and the keys. Additive listeners: the wheel/±/123 handlers above
 // keep their own, and this block never rewrites them.
 cv.addEventListener('mousedown',e=>{
-  const z=CAM.z, hit=ACTOR.select.at(e.clientX,e.clientY,z);
+  const z=CAM.z;
+  if(inBtn(e.clientX,e.clientY)){ACTOR.select.choose();return;}   // the offer
+  const hit=ACTOR.select.at(e.clientX,e.clientY,z);
   if(hit&&hit.room)ACTOR.select.room(hit.room);
   else if(hit&&hit.deck)ACTOR.select.deck(hit.deck);
   else{ACTOR.select.clear();
     if(RANGE(z)==='interior')SELECTED.hint='the warp is under the ground — 2 or 3 to come down to it';}
 });
 cv.addEventListener('mousemove',e=>{
+  if(inBtn(e.clientX,e.clientY)){cv.style.cursor='pointer';return;}
   const h=ACTOR.select.at(e.clientX,e.clientY,CAM.z);
   cv.style.cursor=h&&h.room?'pointer':(h?'crosshair':'default');
 });

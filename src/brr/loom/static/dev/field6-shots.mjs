@@ -147,7 +147,10 @@ for (const [key,label] of [['1','interior'],['3','schematic']]) {
   await p.screenshot({path:resolve(out,'select-room.png')});
   await png('select-panel', await cut(1440-382,900-270,378,258,2));
 
-  await p.keyboard.press('Enter'); await p.waitForTimeout(900);   // the offered verb
+  // the offered verb, pressed the way a stranger would: with the mouse
+  const btn=await p.evaluate(()=>({x:Math.round(BTN.x+BTN.w/2),y:Math.round(BTN.y+BTN.h/2),on:BTN.on}));
+  assert.ok(btn.on,'the offer must publish a rectangle a hand can reach');
+  await p.mouse.click(btn.x,btn.y); await p.waitForTimeout(900);
   const staged=await p.evaluate(()=>[...SELECTED.chosen]);
   assert.deepEqual(staged,[target.id],'⏎ must stage the intent');
   await p.screenshot({path:resolve(out,'select-chosen.png')});
