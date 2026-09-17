@@ -228,6 +228,15 @@ for (const [key,label] of [['1','interior'],['3','schematic']]) {
     await p.screenshot({path:resolve(out,'bench-scrolled.png')});
     await png('bench-long', await cut(Math.round(1440*0.05),Math.round(900*0.16),
       Math.round(1440*0.60),Math.round(900*0.71)));
+    // nothing in the warp today is long enough to overflow a 900 px pane (the
+    // longest body is 29 lines of 37 that fit), so the scroll is measured in a
+    // window short enough to make it real rather than left unexercised
+    await p.setViewportSize({width:1440,height:430}); await p.waitForTimeout(900);
+    for(let i=0;i<4;i++){await p.keyboard.press('ArrowDown');await p.waitForTimeout(110);}
+    receipts.bench.short_window=await p.evaluate(()=>({lines:BENCH.total,fit:BENCH.fit,scroll:BENCH.scroll}));
+    assert.ok(receipts.bench.short_window.scroll>0,'a body past the pane must scroll');
+    await p.screenshot({path:resolve(out,'bench-scrolled.png')});
+    await p.setViewportSize({width:1440,height:900}); await p.waitForTimeout(900);
   }
   // a fetch that fails must SAY so, not show an empty page
   await p.evaluate(()=>{ACTOR.bench.open('w-999999');});

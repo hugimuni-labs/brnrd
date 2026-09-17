@@ -1071,7 +1071,7 @@ const ACTOR={
     const ph=26+nlines*14+(foot?foot.length*13+12:0);
     const py=H-20-ph;
     g.save();
-    g.fillStyle='rgba(11,9,6,0.90)';g.fillRect(px,py,pw,ph);
+    g.fillStyle='#0b0906';g.fillRect(px,py,pw,ph);
     g.strokeStyle='rgba(154,133,94,0.30)';g.lineWidth=1;
     g.strokeRect(px+0.5,py+0.5,pw-1,ph-1);
     g.font=`10px ${MONO}`;g.fillStyle='#e8dcc0';
@@ -1293,14 +1293,17 @@ ACTOR.bench={
     const x0=Math.round(W*0.055), x1=Math.round(W*0.64), w=x1-x0;
     const y0=Math.round(H*0.17), y1=Math.round(H*0.86), h=y1-y0;
     g.save();
-    g.fillStyle='rgba(9,8,6,0.93)';g.fillRect(x0,y0,w,h);
+    g.fillStyle='#090806';g.fillRect(x0,y0,w,h);
     g.strokeStyle='rgba(154,133,94,0.34)';g.lineWidth=1;g.strokeRect(x0+0.5,y0+0.5,w-1,h-1);
     // the bench's own corner ticks, so it reads as a surface, not a dialog
     for(const [sx,cx] of [[1,x0],[-1,x1]])for(const [sy,cy] of [[1,y0],[-1,y1]]){
       g.strokeStyle='rgba(154,133,94,0.55)';g.beginPath();
       g.moveTo(cx+sx*0.5,cy+sy*10);g.lineTo(cx+sx*0.5,cy+sy*0.5);g.lineTo(cx+sx*10,cy+sy*0.5);g.stroke();
     }
-    const pad=16, iw=w-pad*2;let y=y0+24;
+    // the phosphor composites with 'lighten': a translucent pane can never
+    // hide a lit warp (7 % of it read straight through), and 135 characters
+    // to a line is a wall. Opaque, and a readable column inside it.
+    const pad=16, iw=Math.min(w-pad*2,660);let y=y0+24;
     const line=(t,ink,size,lead)=>{g.font=`${size}px ${MONO}`;g.fillStyle=ink;
       for(const l of wrapText(g,t,iw)){if(y>y1-10)return false;g.fillText(l,x0+pad,y);y+=lead;}return true;};
     g.font=`10px ${MONO}`;g.fillStyle='#5a4d3c';
