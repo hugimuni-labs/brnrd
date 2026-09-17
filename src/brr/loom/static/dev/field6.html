@@ -450,10 +450,11 @@ function drawScene(x,now){
       x.globalAlpha=1;x.font=`10px ${MONO}`;
     }
   }
-  if(z>0.62&&rooms.length){
-    x.fillStyle='#4a6a80';x.font=`10px ${MONO}`;
-    x.fillText(`${rooms.filter(r=>r.lane===0).length} doors below the ground — his · scroll to rise and read them`,W*0.06,water+band+24);
-  }
+  // [RECORD] crossing: the doors strip is a hint, not a caption. At the
+  // interior his ready decisions are the faint ice motes the room loop above
+  // already draws — no count, no label, no names; the named rooms belong to the
+  // decks at mid and the schematic. (dispatcher's fourth steer, point 3)
+  /*[RECORD]*/
 
   // ── the ground: the home, the shelf everything stands on ─────────────────
   if(ground){
@@ -718,19 +719,32 @@ cv.addEventListener('mousemove',e=>{
 globalThis.SELECTED ??= null;
 const RECORD=(()=>{
   const INK='#e8dcc0', ABSENT_INK='#6b5f47', DAY=864e5;
-  // THE LOWER ZONE, one budget, measured off the first frames: the day labels
-  // were landing on the chrome's legend (854..890, [FRAME]'s), the fold's own
-  // sentence under the wire, and the collapsed wire on the warp's 'done' lane.
-  // Top to bottom: wire base-64 | sentence base-50 | keys base-36 | plaques
-  // base-21..base | day ticks base+9.  The legend is the only reason for 70.
-  const BOTTOM=70, KEYS=36, SAY=50, WIRE=64;
+  // THE BAND HOLDS ONE THING PER ALTITUDE. The dispatcher's rule, after he and
+  // the maintainer read this page live: 'the water has become a filing
+  // cabinet' — four bands under the shore, three of them panels wearing the
+  // scene's colours. So this block owns no bands now. Interior: the room
+  // motes, the roots, the chat. Mid: the decks. Schematic: the rooms.
+  //
+  // It is also what finally fixed the chat. Three iterations of plate opacity
+  // could not make it readable over the warp, because it was being drawn at an
+  // altitude that is not its own. Scoped to the interior, the water is dark and
+  // it needs no ground at all.
+  //
+  // What is left, top to bottom: the roots hang under the shore | the chat
+  // sinks at the band's floor under the mothership | the fold's sentence |
+  // the cloth's plaques base-21..base | the day ticks base+9. The chrome
+  // legend owns 854..890 and is [FRAME]'s.
+  const BOTTOM=70, SAY=28, WIRE=42;
+  const INTERIOR=z=>clamp((z-0.55)/0.30,0,1);   // 1 at the interior, 0 by mid
   // the strip's own ground, so every row of it has one: wire -> keys.
   // R.top() is the only place its extent is decided, and pickRoom refuses
   // anything inside it — a room you cannot see must not be a room you can pick.
   const R={
     src:null, passes:[], byRun:new Map(), fpByRun:new Map(), tints:new Map(), runes:new Map(),
-    wire:[], body:null, geom:null, cursor:-1, pass:null, roomLocal:null,
-    hover:null, mouse:null, log:false, pack:false, view:null
+    wire:[], body:null, geom:null, cursor:-1, pass:null, roomLocal:null, place:null,
+    roots:[], byRoot:new Map(), rootTops:[], rootsFor:null, wireTop:null, chanCount:{},
+    hover:null, mouse:null, log:false, win:null, view:null,
+    lastOpen:null, lastOpenAt:0, pendingOpen:null
   };
 
   // ── the tint: the deck a bead belonged to, as a bend in the same light ────
@@ -775,13 +789,35 @@ const RECORD=(()=>{
       }
     // the wire: two speakers, both measured. The world's, from the inbound
     // events the daemon kept; mine, from the beads' own detail.
+    // CHANNEL BY COLOUR, NOT BY LABEL — the reader knows who spoke before
+    // reading the words. Every test below is a field the feed carries:
+    //   his ......... an inbound event with `cloud_username` / source 'cloud'.
+    //                 The whisper channel: ice, and the brightest floor, so it
+    //                 pulls the eye with no notification chrome anywhere.
+    //   machinery ... any other inbound source (spawn_completed, schedule, …)
+    //                 and this run's own acts in forge · clock · crew
+    //   mine ........ every other act of this run, amber bent by its deck
+    // Measured on this feed: 4 inbound (1 his, 3 machinery) and 127 acts
+    // (8 machinery). The expanded size also needs the PLACE each act names.
     const inb=(((S.hud||{}).full||{}).inbound||{}).events||[];
-    const said=inb.map(e=>({at:T(e.created),who:e.source||'event',
-      text:String(e.body||'').replace(/\s+/g,' ').trim(),mine:false,topics:[]}));
+    const MACH=/^(forge|clock|crew)$/;
+    const said=inb.map(e=>{
+      const his=e.source==='cloud'||!!e.cloud_username||!!e.cloud_user;
+      return {at:T(e.created),
+        who:his?(e.cloud_username||e.cloud_user||'him'):(e.source||'event'),
+        text:String(e.body||'').replace(/\s+/g,' ').trim(),
+        chan:his?'his':'mach',place:his?'wire':(e.source||''),topics:[]};
+    });
     const mine=(S.beads||[]).map(b=>({at:T(b.at),who:b.act,
-      text:String(b.detail||'').replace(/\s+/g,' ').trim(),mine:true,
+      text:String(b.detail||'').replace(/\s+/g,' ').trim(),
+      chan:MACH.test(b.place_kind||'')?'mach':'mine',
+      place:(b.places||[])[0]||(b.home_places||[])[0]||b.place_kind||'',
+      add:num(b.delta)?b.delta:null,
       topics:b.topics||[],kind:b.place_kind||''}));
+    // the base row left the stream with the byte column: it is an inspection,
+    // and it lives in the body window now.
     R.wire=[...said,...mine].filter(l=>l.text).sort((a,b)=>(a.at||0)-(b.at||0));
+    R.chanCount=R.wire.reduce((m,l)=>(m[l.chan]=(m[l.chan]||0)+1,m),{});
     if(R.cursor<0)R.cursor=R.passes.length-1;
     // the hull's denominator, if a reading ever names one
     const cw=((((S.hud||{}).full||{}).resources||{}).context_window)||{};
@@ -820,9 +856,141 @@ const RECORD=(()=>{
     .map(p=>[p.run,(p.topics||[]).length]));
   // pass → the rooms it left a footprint in
   R.roomsOf=run=>R.fpByRun.get(run)||new Map();
-  const litPasses=()=>{const s=sel();
+  // pass → the PLACES it touched, from `cloth.rows[].trail`. The dispatcher
+  // asked for this on the roots. MEASURED FIRST, and the roots half is empty:
+  //   265 distinct trail paths across 83 passes · 265 of 265 are repo paths
+  //   trail \u2229 home places ......... 0
+  //   beads[].home_places ............. 0 of 127 beads
+  // So a pass\u2192page fold on the roots has no reading to stand on and is NOT
+  // drawn. The same fold on the canopy has a perfect one, so that is what ships
+  // (and the root ring below lights the moment either source carries a path).
+  R.placesOf=run=>{
+    const p=R.byRun.get(run);
+    return new Set(((p&&p.trail)||[]).map(t=>t.path));
+  };
+  const litPlaces=()=>R.pass?R.placesOf(R.pass):new Set();
+  const litRootPaths=()=>{
+    const s=litPlaces(); if(!s.size||!R.byRoot)return new Set();
+    return new Set([...s].filter(p=>R.byRoot.has(p)));
+  };
+  const litPasses=()=>{
+    if(R.place)return R.passesOfPlace(R.place);
+    const s=sel();
     return !s?new Map():s.kind==='deck'?R.passesOfDeck(s.id):R.passesOf(s.id);};
   const litRooms=()=>R.pass?R.roomsOf(R.pass):new Map();
+
+  // ── THE ROOTS: the resident's memory, grown downward from the same shore ──
+  // The dispatcher's third steer: `tree.home` (43 places — dominion · knowledge
+  // · surface) renders today as a label strip on the shore, so the maintainer
+  // cannot find his own memory in the scene. This draws it as a root system
+  // under the waterline, mirroring the canopy above, same brush, same states.
+  //
+  // WHAT THE READING GIVES, MEASURED BEFORE DRAWING ANYTHING:
+  //   43 places · tops: surface 21 · knowledge 18 · dominion 4 · depths 1..4
+  //   `knots`  non-zero on 21 of 43 — real differentiation, so it is the size
+  //   `last`   present on all 43, 37 distinct values across 7 days — the light
+  //   `heat`   0.0 on ALL 43, while the repo's canopy has it populated. So the
+  //            light here is recency off `last`, on the same week curve the
+  //            rooms and the cloth use, and the report names the gap.
+  //   `topics` empty on all 43 — so a root takes no tint. It is not silent
+  //            indexing; there is nothing indexed.
+  //
+  // THE DUPLICATION, DECLARED: layoutRoots is this block's own copy of the
+  // grouping [WORLD]'s layoutGround does (top segment · sqrt width · hash
+  // jitter · longest-prefix parent). The dispatcher asked for a copy rather
+  // than an edit, and this is it — one honest duplicate, named here and in the
+  // report. If the two ever disagree, [WORLD]'s is the original.
+  const homeRows=t=>Array.isArray(t)?t:((t&&t.places)||[]);
+  function layoutRoots(S){
+    const ps=homeRows(S.tree&&S.tree.home).slice(0,120);
+    R.roots=[];R.byRoot=new Map();
+    if(!ps.length)return;
+    // laid out across the ISLAND's span, not the whole shore: the maintainer
+    // asked for the canopy mirrored, and the shore's left end is the
+    // mothership's — which is where the chat now lives.
+    const hubW=clamp(W*0.22,180,320);
+    const x0=W*0.03+hubW+W*0.02, w=W*0.94-hubW-W*0.02;
+    const g=new Map();
+    for(const q of ps){const top=q.path.split('/')[0];
+      if(!g.has(top))g.set(top,[]);g.get(top).push(q);}
+    const list=[...g.entries()].sort((a,b)=>a[0].localeCompare(b[0]));
+    const tot=list.reduce((n,[,v])=>n+Math.max(2,Math.sqrt(v.length)),0)||1;
+    let cur=0; R.rootTops=[];
+    for(const [top,vs] of list){
+      const rw=w*Math.max(2,Math.sqrt(vs.length))/tot, cx=x0+cur+rw/2; cur+=rw;
+      R.rootTops.push({top,x:cx,w:rw,n:vs.length});
+      vs.sort((a,b)=>a.path.localeCompare(b.path));
+      for(const q of vs){
+        const depth=q.path.split('/').length;
+        const n={...q,x:cx+(hash(q.path+'root')-0.5)*rw*0.86,
+                 e:Math.min(depth,4)/4+hash(q.path)*0.04, top,
+                 r:1.7+Math.min(2.8,(q.knots||0)*0.55),
+                 lit:recency({t1:Date.parse(q.last||'')||null,t0:null}),up:null};
+        R.roots.push(n);R.byRoot.set(q.path,n);
+      }
+    }
+    for(const n of R.roots){
+      const parts=n.path.split('/');
+      for(let k=parts.length-1;k>0;k--){
+        const a=R.byRoot.get(parts.slice(0,k).join('/'));
+        if(a&&a!==n){n.up=a;break;}
+      }
+    }
+  }
+  // the depth available is whatever the shore, the warp and this block's own
+  // strip leave: shallow at the interior, deepest at mid (where the maintainer
+  // asked for both canopies at once), retracted at the schematic where the
+  // warp rises into the same water. One continuous function of z, no modes.
+  // the roots share the interior band: the room motes above them, the chat
+  // sinking below. MEASURED, and it is the honest limit — about 58 px for four
+  // path levels at the interior. The structure and the three tops read; a leaf
+  // page's name does not. Legible leaves would need mid, and mid is the decks'
+  // by the band's own rule: that trade is the maintainer's, not this block's.
+  function rootDepth(z){
+    const top=(water||waterAt(z))+bandAt(z);
+    const floor=(R.wireTop||((R.geom?R.geom.base:H)-WIRE))-16;
+    return Math.max(0,floor-top)*INTERIOR(z);
+  }
+  const rootY=(n,z)=>(waterAt(z)+bandAt(z))+6+n.e*(rootDepth(z)-6);
+  function drawRoots(g,z){
+    if(!R.roots||!R.roots.length)return;
+    const dp=rootDepth(z), lam=litRootPaths();
+    if(dp<6)return;                    // not the roots' altitude: draw nothing
+    g.save();
+    for(const n of R.roots){
+      const ny=rootY(n,z), a=n.up, lum=n.lit===null?0:n.lit;
+      g.strokeStyle=`rgba(110,94,64,${(0.10+lum*0.45)*(0.45+0.55*(1-diveAt(z)))})`;
+      g.lineWidth=(a?0.7:1.1);
+      g.beginPath();g.moveTo(n.x,ny);
+      if(a){const ay=rootY(a,z);g.bezierCurveTo(n.x,(ny+ay)/2,a.x,(ny+ay)/2,a.x,ay);}
+      else g.lineTo(n.x,waterAt(z)+bandAt(z)-2);
+      g.stroke();
+      const rr=Math.max(0.8,n.r*(0.5+0.5*(1-diveAt(z))));
+      if(lum>0.02&&dp>14){
+        g.save();g.globalCompositeOperation='lighter';
+        const R2=rr+12*lum, rg=g.createRadialGradient(n.x,ny,0,n.x,ny,R2);
+        rg.addColorStop(0,`rgba(242,177,52,${0.26*lum})`);rg.addColorStop(1,'rgba(242,177,52,0)');
+        g.fillStyle=rg;g.beginPath();g.arc(n.x,ny,R2,0,7);g.fill();g.restore();
+      }
+      g.fillStyle=lum>0.02?A:'#2b2318';
+      g.globalAlpha=lum>0.02?clamp(0.35+lum,0,1):0.5;
+      g.beginPath();g.arc(n.x,ny,rr,0,7);g.fill();g.globalAlpha=1;
+      if(lam.has(n.path)){            // the fold, where a pass touched a page
+        g.strokeStyle=INK;g.lineWidth=1;
+        g.beginPath();g.arc(n.x,ny,rr+3.5,0,7);g.stroke();
+      }
+    }
+    if(dp>26&&R.rootTops){            // the three tops name themselves
+      g.font=`9px ${MONO}`;g.textAlign='center';
+      g.globalAlpha=clamp((dp-26)/40,0,1);
+      for(const t of R.rootTops){
+        if(t.w<t.top.length*6.6+10)continue;
+        g.fillStyle='#5f5642';g.fillText(`${t.top} \u00b7 ${t.n}`,t.x,rootY({e:1},z)+11);
+      }
+      g.globalAlpha=1;g.textAlign='left';
+    }
+    g.restore();
+  }
 
   // ── geometry ─────────────────────────────────────────────────────────────
   function geom(){
@@ -894,24 +1062,17 @@ const RECORD=(()=>{
         g.strokeStyle='rgba(232,220,192,0.45)';g.lineWidth=1;
         g.beginPath();g.moveTo(px+pw/2,G.base+2);g.lineTo(px+pw/2,G.base+5);g.stroke();}
     });
-    // the tint key: the decks, each in its own bent light
-    const ky=G.base-KEYS, kw=(R.strip?R.strip.w:W*0.46+28);
-    R.keys={x:G.x0-14,y:ky-12,w:kw,h:17};
-    g.fillStyle='#070604';g.fillRect(R.keys.x,R.keys.y,R.keys.w,R.keys.h);
-    let kx=G.x0;
-    for(const t of [...R.tints.keys()].slice(0,8)){
-      const lab=`${R.runes.get(t)||''} ${t}`;
-      g.fillStyle=R.tint([t],0.85);g.fillRect(kx,ky-6,4,4);
-      g.fillStyle='rgba(122,108,82,0.9)';g.fillText(lab,kx+7,ky-2);
-      kx+=g.measureText(lab).width+18;
-      if(kx>G.x0-14+kw-130)break;
-    }
-    // this block's own keys, said once, where its own furniture is
-    g.fillStyle='rgba(74,67,54,0.95)';g.textAlign='right';
-    g.fillText('\u2190 \u2192 scrub \u00b7 L wire \u00b7 P body \u00b7 Esc',G.x0-18+kw,ky-2);
+    // THE TOPIC LEGEND ROW IS DELETED. We settled today that a topic is a deck
+    // and an item is a room on it — so the decks ARE the legend, and a chip row
+    // duplicated the one place that owns topics while reading as a filter bar
+    // out of the old dashboard. The tint itself stays: the tint is what was
+    // asked for. This block's keys ride the cloth's own label row now, not a
+    // row of their own, because a row of their own was one of the four bands.
+    g.fillStyle='rgba(74,67,54,0.9)';g.textAlign='right';
+    g.fillText('\u2190 \u2192 scrub \u00b7 L history \u00b7 P body \u00b7 \u21b5 inspect \u00b7 Esc',G.x1,G.base-1);
     g.textAlign='left';
-    // the fold's sentence is the wire's neighbour, not the cloth's: it is drawn
-    // in drawWire, on the same plate, because on the bare warp it was mush.
+    const say=foldSay();
+    if(say){g.fillStyle=INK;g.globalAlpha=0.85;g.fillText(say,G.x0,G.base-SAY);g.globalAlpha=1;}
     g.restore();
   }
   // the fold, said out loud — including the case the brief singled out: a room
@@ -922,6 +1083,13 @@ const RECORD=(()=>{
       const who=p?`${p.name||p.title||R.pass} · ${p.shell||'?'}/${p.core||'?'}`:R.pass;
       return m.size?`${who} → ${m.size} room${m.size>1?'s':''} · ${n} footprint${n>1?'s':''} · lit in the warp`
         :`${who} — this pass left no footprint in any room · ${(p&&p.knots)||0} knots, ${(p&&p.pages)||0} pages`;
+    }
+    if(R.place){
+      const m=R.passesOfPlace(R.place), n=[...m.values()].reduce((a,b)=>a+b,0);
+      const root=R.byRoot&&R.byRoot.has(R.place);
+      return m.size?`${R.place} \u2192 ${m.size} pass${m.size>1?'es':''} \u00b7 ${n} touch${n>1?'es':''} \u00b7 lit on the cloth`
+        :`${R.place} \u2014 no pass in the record's ${R.passes.length} names this place`
+          +(root?' \u00b7 and no pass ever names a home place: the trail carries only repo paths':'');
     }
     const s=sel();if(!s)return null;
     if(s.kind==='deck'){
@@ -957,6 +1125,31 @@ const RECORD=(()=>{
       }
       if(rs>0.4){g.fillStyle=INK;g.globalAlpha=0.8;g.fillText(`×${k}`,rx+w+2,ry-h+3);g.globalAlpha=1;}
     }
+    g.restore();
+  }
+
+  // ── 2b · the fold onto the canopy: the files a pass touched ──────────────
+  // Same mark as the rooms get, for the same reason: interface ink, never
+  // warmth. `trail` is ordered newest-first, so the pass's own last touch gets
+  // the one label — the rest are rings.
+  function drawLitFiles(g,z,nds){
+    const s=litPlaces(); if(!s.size||!nds||!nds.length)return;
+    const p=R.byRun.get(R.pass), newest=((p&&p.trail)||[])[0];
+    g.save();g.strokeStyle=INK;g.lineWidth=1;g.font=`8px ${MONO}`;
+    let hit=0;
+    for(const n of nds){
+      if(!s.has(n.path))continue;
+      hit++;
+      const ny=treeY(n,z), rr=Math.max(2.2,n.r*(0.42+0.58*z))+3.5;
+      g.beginPath();g.arc(n.x,ny,rr,0,7);g.stroke();
+      if(newest&&n.path===newest.path){
+        g.fillStyle=INK;g.globalAlpha=0.9;
+        g.textAlign=n.x>W*0.8?'right':'left';
+        g.fillText(n.path.split('/').pop(),n.x+(n.x>W*0.8?-rr-3:rr+3),ny+3);
+        g.textAlign='left';g.globalAlpha=1;
+      }
+    }
+    R.litFiles={of:s.size,drawn:hit};
     g.restore();
   }
 
@@ -1000,85 +1193,200 @@ const RECORD=(()=>{
     g.fillStyle=win?'#8a7c5e':ABSENT_INK;g.fillText(tag,tx,h.y+3);
     g.restore();
   }
-  // the cutaway on P: what is in the window, from the only breakdown this feed
-  // carries — each boundary's own `delta`, grouped by the act that spent it.
-  function drawPack(g,pds){
-    const h=podHull(pds), S0=R.src||{}, b=S0.beads||[];
-    if(!b.length)return;
-    const base=(b[0].ctx_after||0)-(b[0].delta||0);
-    const byAct=new Map();
-    for(const q of b){const d=q.delta||0;if(d>0)byAct.set(q.act,(byAct.get(q.act)||0)+d);}
-    const acts=[...byAct.entries()].sort((a,c)=>c[1]-a[1]);
-    const tot=base+acts.reduce((a,c)=>a+c[1],0);
-    const px=16, py=176, pw=330, rowh=18, ph=40+rowh*(acts.length+1)+30;
+  // ── THE WINDOW: a posture, not a panel ───────────────────────────────────
+  // The rule that governs this whole surface, in his words and it is the better
+  // cut: A STREAM BELONGS IN THE WATER, AN INSPECTION BELONGS IN A WINDOW.
+  //   the water ... ground · pods · cloth · the chat — live, unframed
+  //   windows ..... body · pass · page — one thing, stopped, closable
+  //   the edges ... the belt and the sounder right, the chat's corner left
+  // So this is ONE window, drawn once and opened by anything worth stopping
+  // for: `P` inspects the body, `Enter` inspects whatever is selected. If a
+  // thing does not fit water, window or edge, that is the signal to ask.
+  function drawWindow(g,title,rows,note,gap){
+    const w=Math.min(520,W*0.42), lh=18;
+    const foot=(note?30:10)+(gap?16:0);
+    const h=Math.min(H*0.80,58+lh*rows.length+foot);
+    const x=Math.round(W*0.5-w/2), y=Math.round(H*0.5-h/2);
     g.save();
-    g.fillStyle='rgba(7,6,4,0.82)';g.fillRect(px,py,pw,ph);
-    g.strokeStyle='rgba(122,104,72,0.45)';g.lineWidth=1;g.strokeRect(px+.5,py+.5,pw-1,ph-1);
-    if(h){g.strokeStyle='rgba(122,104,72,0.30)';g.setLineDash([2,3]);
-      g.beginPath();g.moveTo(px+pw,py+14);g.lineTo(h.x-h.rx-4,h.y);g.stroke();g.setLineDash([]);}
-    g.font=`10px ${MONO}`;g.fillStyle='#8a7c5e';
-    g.fillText('THE BODY · what is in the window',px+10,py+17);
+    g.fillStyle='rgba(7,6,4,0.72)';g.fillRect(0,0,W,H);      // the ground, dimmed
+    g.fillStyle='#070604';g.fillRect(x,y,w,h);               // the window's own ground
+    g.strokeStyle='rgba(122,104,72,0.55)';g.lineWidth=1;g.strokeRect(x+.5,y+.5,w-1,h-1);
+    g.font=`10px ${MONO}`;g.fillStyle='#8a7c5e';g.fillText(title,x+14,y+22);
+    g.strokeStyle='rgba(122,104,72,0.28)';
+    g.beginPath();g.moveTo(x+14,y+30.5);g.lineTo(x+w-14,y+30.5);g.stroke();
+    g.fillStyle='rgba(74,67,54,0.9)';g.textAlign='right';g.fillText('esc',x+w-14,y+22);
+    g.textAlign='left';
+    const tot=rows.reduce((a,r)=>a+Math.max(0,r.v||0),0)||1;
     g.font=`9px ${MONO}`;
-    let y=py+36;
-    const bar=(lab,v,col)=>{
-      g.fillStyle=col;g.fillRect(px+10,y-8,(pw-116)*(tot?clamp(v/tot,0,1):0),7);
-      g.fillStyle='#4a4336';
-      let lb=lab; while(lb.length&&g.measureText(lb).width>pw-76)lb=lb.slice(0,-2);
-      g.fillText(lb,px+10,y+8);
-      g.fillStyle='#d9cba9';g.textAlign='right';g.fillText(`${(v/1000).toFixed(1)}k`,px+pw-10,y+8);
-      g.textAlign='left';y+=rowh;
-    };
-    bar('the boot \u2014 already in at the first boundary',base,'rgba(143,211,255,0.30)');
-    for(const [act,v] of acts)bar(`${act} \u2014 its own reads`,v,'rgba(242,177,52,0.34)');
-    const d=Math.abs(tot-(R.body.occ||0));
-    g.fillStyle='#8a7c5e';
-    g.fillText(`${(tot/1000).toFixed(1)}k stacked · the feed reads ${((R.body.occ||0)/1000).toFixed(1)}k`
-      +(d<1?' — they reconcile':` — ${(d/1000).toFixed(1)}k unaccounted`),px+10,y+4);
-    g.fillStyle=ABSENT_INK;
-    g.fillText('no `pack` in the feed: the wake’s own blocks are not published',px+10,y+17);
+    // the pinned rows go last and are never dropped: the base is the point of
+    // the panel, and a panel that silently drops the point is worse than a
+    // shorter one. Everything above it is the newest that fit.
+    const pinned=rows.filter(r=>r.base||r.his);
+    const flow=rows.filter(r=>!r.base&&!r.his);
+    const room=Math.max(1,Math.floor((h-58-foot)/lh)-pinned.length);
+    const cut=Math.max(0,flow.length-room);
+    const show=[...rows.filter(r=>r.his),...flow.slice(0,room),
+                ...(cut?[{k:`\u2026 ${cut} older act${cut>1?'s':''} above the base, not shown`,t:''}]:[]),
+                ...rows.filter(r=>r.base)];
+    let ry=y+50;
+    for(const r of show){
+      if(num(r.v)){
+        g.fillStyle=r.base?'rgba(143,211,255,0.30)':'rgba(242,177,52,0.32)';
+        g.fillRect(x+14,ry-8,(w-140)*clamp(r.v/tot,0,1),7);
+      }
+      if(r.his){                       // his line, on the top layer, in his ice
+        g.strokeStyle='rgba(143,211,255,0.5)';g.lineWidth=1;
+        g.beginPath();g.moveTo(x+14,ry+3.5);g.lineTo(x+w-14,ry+3.5);g.stroke();
+      }
+      g.fillStyle=r.his?'#bfe2f8':(r.base?'#7f9cb0':'#4a4336');
+      let lb=r.k; while(lb.length&&g.measureText(lb).width>w-150)lb=lb.slice(0,-2);
+      g.fillText(lb,x+14,ry+8);
+      if(r.t!==undefined){g.fillStyle='#d9cba9';g.textAlign='right';
+        g.fillText(r.t,x+w-14,ry+8);g.textAlign='left';}
+      ry+=lh;
+    }
+    if(note){g.fillStyle='#8a7c5e';
+      let nl=note; while(nl.length&&g.measureText(nl).width>w-28)nl=nl.slice(0,-2);
+      g.fillText(nl,x+14,y+h-(gap?28:12));}
+    if(gap){g.fillStyle=ABSENT_INK;g.font=`8px ${MONO}`;
+      let gl=gap; while(gl.length&&g.measureText(gl).width>w-28)gl=gl.slice(0,-2);
+      g.fillText(gl,x+14,y+h-12);}
     g.restore();
+  }
+  // the body, ITEMIZED — the hull stays its one-glance summary
+  function bodyRows(){
+    // THE BODY, ITEMIZED — the most valuable single panel in anything drawn so
+    // far (his words, on field3's L+P screenshot), so it is built for its value
+    // and not its layout:
+    //   1. every act carries its price ON the act — the cost sits beside the
+    //      decision, never in a status bar
+    //   2. the base is the oldest and heaviest row, at the bottom
+    //   3. one total line: boot + run = what is on the body at this boundary
+    //   4. his line lands on the top layer and grows it — kept, and made
+    //      honest: see the note on the row
+    //   5. the delta since P was last opened, in memory only, no storage
+    // SINGLE COLUMN, deliberately: the log is already the chat's job out in the
+    // water, so a second column here would be the same list twice. What the
+    // window adds is the price, and a price reads best beside its own act.
+    const S0=R.src||{}, b=S0.beads||[];
+    if(!b.length)return null;
+    const base=(b[0].ctx_after||0)-(b[0].delta||0);
+    const run=b.reduce((a,q)=>a+Math.max(0,q.delta||0),0);
+    const tot=base+run;
+    const rows=[];
+    // his arrival, on the top layer, when it is newer than my last act
+    const inb=(((S0.hud||{}).full||{}).inbound||{}).events||[];
+    const his=inb.filter(e=>e.source==='cloud'||e.cloud_username||e.cloud_user)
+                 .sort((x,y)=>Date.parse(y.created||0)-Date.parse(x.created||0))[0];
+    const lastAct=b.length?Date.parse(b[b.length-1].at||0):0;
+    if(his&&Date.parse(his.created||0)>=lastAct)
+      rows.push({k:'a user line lands on the top layer and grows it',
+                 t:'\u2014',his:true,v:0});
+    // the run's own acts, newest first, each with its price
+    const acts=b.filter(q=>(q.delta||0)>0).slice().reverse();
+    for(const q of acts)rows.push({
+      k:`${(q.at||'').slice(11,16)}  ${q.act}  ${(q.places||[])[0]||(q.home_places||[])[0]||q.place_kind||''}`,
+      v:q.delta,t:`+${(q.delta/1000).toFixed(1)}k`});
+    // the base, at the bottom, oldest and heaviest
+    rows.push({k:'the base \u2014 the wake, as one row',v:base,
+               t:`${(base/1000).toFixed(1)}k`,base:true});
+    // the total line, and the hour's price if this window has been open before
+    let note=`boot ${(base/1000).toFixed(1)}k + run ${(run/1000).toFixed(1)}k = `
+      +`${(tot/1000).toFixed(1)}k on the body at this boundary`;
+    if(num(R.lastOpen)&&R.lastOpen!==tot){
+      const d=tot-R.lastOpen, mins=Math.max(1,Math.round((Date.now()-R.lastOpenAt)/60000));
+      note+=` \u00b7 +${(d/1000).toFixed(1)}k since you last looked, ${mins} min ago`;
+    }
+    R.pendingOpen=tot;
+    return {rows,note,
+      // the two readings this panel cannot take, said inside it rather than
+      // faked: `pack.blocks` is not in this feed at all, so the base is one
+      // arithmetic row instead of `work surface 51.3k \u00b7 portals 12.1k \u2026`;
+      // and the feed prices ACTS, not arrivals, so his line has no number.
+      gap:'no `pack` in the feed: the base is one row, not its blocks \u00b7 '
+         +'tokens, not bytes \u2014 the feed measures ctx_after/delta'};
+  }
+  // a pass, inspected — the window's second legitimate user
+  function passRows(){
+    const p=R.byRun.get(R.pass); if(!p)return null;
+    const m=R.roomsOf(p.run), fp=[...m.values()].reduce((a,b)=>a+b,0);
+    const tr=(p.trail||[]).length;
+    return {rows:[
+      {k:'core',t:`${p.shell||'?'}/${p.core||'?'}`},
+      {k:'ran for',t:fmtDur(dur(p))},
+      {k:'started',t:(p.started||'').replace('T',' ').replace('Z','')},
+      {k:'knots \u00b7 pages',t:`${p.knots||0} \u00b7 ${p.pages||0}`},
+      {k:'tokens',t:num(p.tokens)?`${(p.tokens/1e6).toFixed(2)}m`:'unmeasured'},
+      {k:'prs',t:String((p.prs||[]).length)},
+      {k:'decks',t:(p.topics||[]).join(', ')||'none measured'},
+      {k:'rooms \u00b7 footprints',t:`${m.size} \u00b7 ${fp}`},
+      {k:'places its trail names',t:String(tr)},
+      {k:'parent',t:p.parent||'none'}],
+      note:p.name||p.title||p.run};
   }
 
   // ── 4 · the wire: the last things said, in the same ink ──────────────────
-  function drawWire(g){
+  function drawWire(g,z){
+    // ── THE CHAT: an online game's, not a panel ──────────────────────────
+    // The maintainer's shape, superseding 'a log window' and then 'lines in the
+    // water': bottom-left, IN the water, no chrome — no border, no header, no
+    // ground, the scene showing through it. It sits under the MOTHERSHIP,
+    // moored at the shore's left end, so a message appears where the thing that
+    // received it lives; the right edge already owns the sounder and the belt.
+    // One instrument per edge. Persistent and capped: the last 8, older sinking
+    // out and fading to nothing before they reach the cloth. No scrollbar
+    // furniture: L pulls the history up over the scene, Esc drops it.
+    // THREE SIZES, ONE GESTURE (his refinement, and field3's L *behaviour* is
+    // the reference — never its look, which is the bordered spreadsheet this
+    // generation exists to not be):
+    //   corner  — the last 8 in the water, bottom-left, no chrome
+    //   L       — the transcript grows over the scene, still unframed, the
+    //             ground dimmed behind it, each line carrying its act kind and
+    //             the place it names, so it reads as the run's own history
+    //   Esc     — back to the corner
+    // Same colour law at both sizes. No scrollbars, no header, no panel.
+    const vis=R.log?1:INTERIOR(z);      // expanded, it is the scene's; corner, the interior's
+    if(vis<=0.01)return;
     const G=R.geom||geom();
-    const n=R.log?26:3, lh=R.log?15:13, lines=R.wire.slice(-n);
+    const lh=R.log?14:13;
+    const n=R.log?Math.max(8,Math.floor((G.base-90)/lh)):8;
+    const lines=R.wire.slice(-n);
     if(!lines.length)return;
-    const x0=W*0.045, bot=G.base-WIRE, wmax=R.log?W*0.62:W*0.46;
-    g.save();g.font=`${R.log?10:9}px ${MONO}`;
-    // ONE ground for the whole strip — wire, the fold's sentence, the tint key,
-    // the keys — because three per-row plates still left the warp's room labels
-    // printing through the sentence row. Verified by probing every row of the
-    // band for a pixel over luminance 70 that this block did not draw.
-    const py=bot-lh*lines.length-(R.log?16:8);
-    const sw=wmax+28;
-    R.strip={x:G.x0-14,y:py,w:sw,h:(bot+20)-py};   // the record's own footprint
-    g.fillStyle='#070604';g.fillRect(R.strip.x,R.strip.y,R.strip.w,R.strip.h);
-    g.strokeStyle=`rgba(122,104,72,${R.log?0.35:0.20})`;g.lineWidth=1;
-    g.strokeRect(R.strip.x+.5,R.strip.y+.5,R.strip.w-1,R.strip.h-1);
-    if(R.log){g.fillStyle='#8a7c5e';
-      g.fillText('THE WIRE \u00b7 who said what, oldest at the top',x0,py+12);}
+    const x0=W*0.045, bot=G.base-WIRE, wmax=R.log?W*0.66:W*0.44;
+    R.wireTop=bot-lh*(lines.length-1);
+    g.save();
+    if(R.log){                          // a dim of the ground, not a frame
+      g.fillStyle='rgba(7,6,4,0.72)';g.fillRect(0,0,W,H);
+    }
+    g.font=`${R.log?10:9}px ${MONO}`;
     lines.forEach((l,i)=>{
+      // i ascending = older -> newer. The newest sits highest and brightest;
+      // in the corner the oldest has sunk to the band's floor and is nearly
+      // gone. Expanded, nothing sinks out: the whole list is the point.
       const age=(lines.length-1-i)/Math.max(1,lines.length-1);
-      const a=R.log?0.35+0.65*(1-age):clamp(0.95-age*0.78,0.12,0.95);
-      const y=bot-(lines.length-1-i)*lh;
-      g.fillStyle=`rgba(90,77,60,${a})`;
-      g.fillText(l.at?new Date(l.at).toISOString().slice(11,19):'  ·  ',x0,y);
-      const wx=x0+52, who=(l.mine?'':'⇐ ')+l.who;
-      // the world's voice is ice; mine is amber, bent by the deck it was on
-      g.fillStyle=l.mine?R.tint(l.topics,a):`rgba(143,211,255,${a})`;
-      g.fillText(who,wx,y);
-      const tw=g.measureText(who).width, room=wmax-(wx-x0)-tw-22;
+      const fade=R.log?1:(1-age)*(1-age);
+      // the whisper channel keeps a floor the others do not
+      const a=clamp((l.chan==='his'?0.34+0.66*fade:0.06+0.94*fade)*vis,0,1);
+      const y=R.wireTop+age*lh*(lines.length-1);
+      const ink=l.chan==='mine'?R.tint(l.topics,a)
+              :`rgba(${l.chan==='his'?'143,211,255':'107,95,71'},${a})`;
+      g.fillStyle=`rgba(90,77,60,${a*0.7})`;
+      g.fillText(l.at?new Date(l.at).toISOString().slice(11,16):'  .  ',x0,y);
+      let cur=x0+38;
+      g.fillStyle=ink;g.fillText(l.who,cur,y);
+      cur+=g.measureText(l.who).width+7;
+      if(R.log&&l.place){               // the place the act names: history, not chat
+        g.fillStyle=`rgba(138,124,94,${a*0.85})`;
+        const pl=l.place.length>46?'\u2026'+l.place.slice(-45):l.place;
+        g.fillText(pl,cur,y);cur+=g.measureText(pl).width+8;
+      }
       let t=l.text;
+      const room=wmax-(cur-x0)-16;
       while(t.length&&g.measureText(t).width>room)t=t.slice(0,-2);
-      g.fillStyle=`rgba(232,220,192,${a*0.82})`;g.fillText(t,wx+tw+8,y);
+      // his words carry his colour too; mine and the machinery's stay ink
+      g.fillStyle=l.chan==='his'?`rgba(191,226,248,${a})`:`rgba(232,220,192,${a*0.8})`;
+      g.fillText(t,cur,y);
     });
-    if(!R.log){g.fillStyle='rgba(74,67,54,0.9)';g.font=`8px ${MONO}`;
-      g.fillText('THE WIRE',x0,py+9);}
-    const say=foldSay();                        // the fold, said on the plate
-    if(say){g.font=`9px ${MONO}`;g.fillStyle=INK;g.globalAlpha=0.9;
-      let t=say; while(t.length&&g.measureText(t).width>wmax-4)t=t.slice(0,-2);
-      g.fillText(t,x0,bot+15);g.globalAlpha=1;}
     g.restore();
   }
 
@@ -1113,8 +1421,8 @@ const RECORD=(()=>{
   };
   // only while [ACTOR] has no select(): a local mirror, never a write to SELECTED
   R.pickRoom=(mx,my)=>{
-    const inside=r=>r&&mx>=r.x&&mx<=r.x+r.w&&my>=r.y&&my<=r.y+r.h;
-    if(inside(R.strip)||inside(R.keys))return false;   // covered ⇒ not pickable
+    // no guard left to keep: this block covers nothing now, so it hides no
+    // room. The guard existed for the strip, and the strip is gone with it.
     const rms=(R.view&&R.view.rooms)||(typeof rooms!=='undefined'?rooms:[]);
     const rs=roomAt(CAM.z);
     for(const r of rms){
@@ -1124,15 +1432,31 @@ const RECORD=(()=>{
     }
     return false;
   };
+  // the other direction of the place fold: a file or a page, and the passes
+  // that touched it light on the cloth. Uses this block's own selection, so it
+  // still never writes SELECTED.
+  R.pickPlace=(mx,my)=>{
+    const z=CAM.z;
+    const nds=(R.view&&R.view.nodes)||(typeof nodes!=='undefined'?nodes:[]);
+    const near=(px,py)=>Math.hypot(px-mx,py-my)<7;
+    for(const n of nds)if(near(n.x,treeY(n,z))){R.place=n.path;R.pass=null;R.roomLocal=null;return true;}
+    for(const n of (R.roots||[]))if(near(n.x,rootY(n,z))){R.place=n.path;R.pass=null;R.roomLocal=null;return true;}
+    return false;
+  };
+  // place → the passes whose trail names it
+  R.passesOfPlace=path=>new Map(R.passes
+    .filter(p=>((p.trail)||[]).some(t=>t.path===path))
+    .map(p=>[p.run,((p.trail)||[]).filter(t=>t.path===path).length]));
   cv.addEventListener('mousemove',e=>{R.mouse={x:e.clientX,y:e.clientY};R.hover=R.hit(e.clientX,e.clientY);});
   cv.addEventListener('mouseleave',()=>{R.hover=null;R.mouse=null;});
   cv.addEventListener('click',e=>{
     const p=R.hit(e.clientX,e.clientY);
-    if(p){R.cursor=R.passes.indexOf(p);R.pass=p.run;R.roomLocal=null;return;}
+    if(p){R.cursor=R.passes.indexOf(p);R.pass=p.run;R.roomLocal=null;R.place=null;return;}
     if(typeof ACTOR!=='undefined'&&ACTOR&&typeof ACTOR.select==='function'){
       try{if(ACTOR.select(e)){R.pass=null;return;}}catch(err){}
     }
     if(R.pickRoom(e.clientX,e.clientY))return;
+    if(R.pickPlace(e.clientX,e.clientY))return;
     R.pass=null;R.roomLocal=null;
   });
   addEventListener('keydown',e=>{     // field3's model: ← → scrub · L wire · P body · Esc
@@ -1140,11 +1464,21 @@ const RECORD=(()=>{
     if(k==='ArrowLeft'||k==='ArrowRight'){
       if(!R.passes.length)return;
       R.cursor=clamp((R.cursor<0?R.passes.length-1:R.cursor)+(k==='ArrowRight'?1:-1),0,R.passes.length-1);
-      R.pass=R.passes[R.cursor].run;R.roomLocal=null;e.preventDefault();
+      R.pass=R.passes[R.cursor].run;R.roomLocal=null;R.place=null;e.preventDefault();
     }
-    else if(k==='l'||k==='L')R.log=!R.log;
-    else if(k==='p'||k==='P')R.pack=!R.pack;
-    else if(k==='Escape'){R.pass=null;R.roomLocal=null;R.log=false;R.pack=false;}
+    else if(k==='l'||k==='L'){R.log=!R.log;R.win=null;}
+    else if(k==='p'||k==='P'){
+      // the hour's price: what changed since this window was last opened. In
+      // memory only, by his instruction — nothing is stored.
+      if(R.win==='body'){R.lastOpen=R.pendingOpen;R.lastOpenAt=Date.now();R.win=null;}
+      else R.win='body';
+    }
+    else if(k==='Enter')R.win=R.win?null:(R.pass?'pass':'body');
+    else if(k==='Escape'){
+      if(R.win){
+        if(R.win==='body'){R.lastOpen=R.pendingOpen;R.lastOpenAt=Date.now();}
+        R.win=null;return;}                    // a window closes first
+      R.pass=null;R.roomLocal=null;R.place=null;R.log=false;}
   });
 
   // ── the one entry point [WORLD] calls, last inside drawScene ─────────────
@@ -1175,13 +1509,19 @@ const RECORD=(()=>{
     g.setLineDash([]);g.textAlign='left';g.textBaseline='alphabetic';g.filter='none';
     if(R.src!==S0)sync(S0);
     const z=(view&&num(view.z))?view.z:CAM.z;
+    const nds=(view&&view.nodes)||(typeof nodes!=='undefined'?nodes:[]);
+    if(R.rootsFor!==S0){layoutRoots(S0);R.rootsFor=S0;}
+    drawRoots(g,z);
     drawLitRooms(g,z,(view&&view.rooms)||(typeof rooms!=='undefined'?rooms:[]));
+    drawLitFiles(g,z,nds);
     const pds=(view&&view.pods)||(typeof pods!=='undefined'?pods:[]);
     drawBody(g,pds);
     drawCloth(g);
-    drawWire(g);
-    if(R.pack)drawPack(g,pds);
-    drawHover(g);
+    drawWire(g,z);
+    if(!R.win)drawHover(g);          // a hover is not a stop: not over a window
+    if(R.win==='body'){const b=bodyRows();
+      if(b)drawWindow(g,'THE BODY \u00b7 every act, with its price',b.rows,b.note,b.gap);}
+    else if(R.win==='pass'){const w=passRows();if(w)drawWindow(g,`THE PASS \u00b7 ${R.pass}`,w.rows,w.note);}
     g.restore();
   };
   return R;
