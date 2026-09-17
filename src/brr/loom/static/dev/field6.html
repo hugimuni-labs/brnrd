@@ -718,8 +718,15 @@ cv.addEventListener('mousemove',e=>{
 globalThis.SELECTED ??= null;
 const RECORD=(()=>{
   const INK='#e8dcc0', ABSENT_INK='#6b5f47', DAY=864e5;
-  const BOTTOM=56;          // the chrome's legend owns the last ~50 px of canvas;
-                            // lift it and this constant is the only change needed.
+  // THE LOWER ZONE, one budget, measured off the first frames: the day labels
+  // were landing on the chrome's legend (854..890, [FRAME]'s), the fold's own
+  // sentence under the wire, and the collapsed wire on the warp's 'done' lane.
+  // Top to bottom: wire base-64 | sentence base-50 | keys base-36 | plaques
+  // base-21..base | day ticks base+9.  The legend is the only reason for 70.
+  const BOTTOM=70, KEYS=36, SAY=50, WIRE=64;
+  // the strip's own ground, so every row of it has one: wire -> keys.
+  // R.top() is the only place its extent is decided, and pickRoom refuses
+  // anything inside it — a room you cannot see must not be a room you can pick.
   const R={
     src:null, passes:[], byRun:new Map(), fpByRun:new Map(), tints:new Map(), runes:new Map(),
     wire:[], body:null, geom:null, cursor:-1, pass:null, roomLocal:null,
@@ -736,14 +743,17 @@ const RECORD=(()=>{
     const order=[...new Set([...((S.heddles||[]).map(h=>h.slug)),
       ...((S.beads||[]).flatMap(b=>b.topics||[])),
       ...(((S.cloth||{}).rows||[]).flatMap(r=>r.topics||[]))])].filter(Boolean);
-    R.tints=new Map(order.map((t,i)=>[t,-26+52*((i*0.6180339887)%1)]));
+    // measured against the first frames: +-26 deg at 84% sat read as a rainbow
+    // — eight decks, eight colours, a second light source. +-11 at 72% is a
+    // bend inside the amber's own family, which is what the brief asked for.
+    R.tints=new Map(order.map((t,i)=>[t,-11+22*((i*0.6180339887)%1)]));
     R.runes=new Map((S.heddles||[]).map(h=>[h.slug,h.rune||'']));
   }
   R.hue=t=>HUE+(R.tints.get(t)||0);
   R.tint=(topics,a)=>{
     const t=(topics||[])[0];
     if(!t||!R.tints.has(t))return `rgba(242,177,52,${a})`;
-    return `hsla(${R.hue(t).toFixed(1)},84%,58%,${a})`;
+    return `hsla(${R.hue(t).toFixed(1)},72%,58%,${a})`;
   };
 
   // ── sync: everything below is derived from the reading, once per feed ─────
@@ -885,16 +895,23 @@ const RECORD=(()=>{
         g.beginPath();g.moveTo(px+pw/2,G.base+2);g.lineTo(px+pw/2,G.base+5);g.stroke();}
     });
     // the tint key: the decks, each in its own bent light
-    let kx=G.x0; const ky=G.base-30;
+    const ky=G.base-KEYS, kw=(R.strip?R.strip.w:W*0.46+28);
+    R.keys={x:G.x0-14,y:ky-12,w:kw,h:17};
+    g.fillStyle='#070604';g.fillRect(R.keys.x,R.keys.y,R.keys.w,R.keys.h);
+    let kx=G.x0;
     for(const t of [...R.tints.keys()].slice(0,8)){
       const lab=`${R.runes.get(t)||''} ${t}`;
       g.fillStyle=R.tint([t],0.85);g.fillRect(kx,ky-6,4,4);
       g.fillStyle='rgba(122,108,82,0.9)';g.fillText(lab,kx+7,ky-2);
       kx+=g.measureText(lab).width+18;
-      if(kx>G.x1-140)break;
+      if(kx>G.x0-14+kw-130)break;
     }
-    const say=foldSay();
-    if(say){g.fillStyle=INK;g.globalAlpha=0.85;g.fillText(say,G.x0,G.base-44);g.globalAlpha=1;}
+    // this block's own keys, said once, where its own furniture is
+    g.fillStyle='rgba(74,67,54,0.95)';g.textAlign='right';
+    g.fillText('\u2190 \u2192 scrub \u00b7 L wire \u00b7 P body \u00b7 Esc',G.x0-18+kw,ky-2);
+    g.textAlign='left';
+    // the fold's sentence is the wire's neighbour, not the cloth's: it is drawn
+    // in drawWire, on the same plate, because on the bare warp it was mush.
     g.restore();
   }
   // the fold, said out loud — including the case the brief singled out: a room
@@ -974,11 +991,14 @@ const RECORD=(()=>{
         g.beginPath();g.moveTo(h.x-h.rx+k,h.y+h.ry);g.lineTo(h.x-h.rx+k+h.ry*2,h.y-h.ry);g.stroke();}
     }
     g.restore();
-    g.save();g.font=`9px ${MONO}`;g.textAlign='center';g.fillStyle=win?'#8a7c5e':ABSENT_INK;
-    g.fillText(win?`${(occ/1000).toFixed(0)}k of ${(win/1000).toFixed(0)}k`
-                 :`${(occ/1000).toFixed(1)}k tok · window unmeasured`,h.x,h.y+h.ry+11);
-    g.fillStyle=ABSENT_INK;g.font=`8px ${MONO}`;
-    g.fillText('P',h.x,h.y+h.ry+20);g.textAlign='left';g.restore();
+    // beside the hull, not under it: under it is where the hub writes its caption
+    g.save();g.font=`9px ${MONO}`;
+    const tag=win?`${(occ/1000).toFixed(0)}k of ${(win/1000).toFixed(0)}k`
+                 :`${(occ/1000).toFixed(1)}k tok \u00b7 window unmeasured`;
+    const tw=g.measureText(tag).width, tx=h.x+h.rx+7;
+    g.fillStyle='rgba(7,6,4,0.90)';g.fillRect(tx-3,h.y-7,tw+6,13);
+    g.fillStyle=win?'#8a7c5e':ABSENT_INK;g.fillText(tag,tx,h.y+3);
+    g.restore();
   }
   // the cutaway on P: what is in the window, from the only breakdown this feed
   // carries — each boundary's own `delta`, grouped by the act that spent it.
@@ -990,7 +1010,7 @@ const RECORD=(()=>{
     for(const q of b){const d=q.delta||0;if(d>0)byAct.set(q.act,(byAct.get(q.act)||0)+d);}
     const acts=[...byAct.entries()].sort((a,c)=>c[1]-a[1]);
     const tot=base+acts.reduce((a,c)=>a+c[1],0);
-    const px=16, py=176, pw=312, rowh=18, ph=40+rowh*(acts.length+1)+30;
+    const px=16, py=176, pw=330, rowh=18, ph=40+rowh*(acts.length+1)+30;
     g.save();
     g.fillStyle='rgba(7,6,4,0.82)';g.fillRect(px,py,pw,ph);
     g.strokeStyle='rgba(122,104,72,0.45)';g.lineWidth=1;g.strokeRect(px+.5,py+.5,pw-1,ph-1);
@@ -1002,12 +1022,14 @@ const RECORD=(()=>{
     let y=py+36;
     const bar=(lab,v,col)=>{
       g.fillStyle=col;g.fillRect(px+10,y-8,(pw-116)*(tot?clamp(v/tot,0,1):0),7);
-      g.fillStyle='#4a4336';g.fillText(lab,px+10,y+8);
+      g.fillStyle='#4a4336';
+      let lb=lab; while(lb.length&&g.measureText(lb).width>pw-76)lb=lb.slice(0,-2);
+      g.fillText(lb,px+10,y+8);
       g.fillStyle='#d9cba9';g.textAlign='right';g.fillText(`${(v/1000).toFixed(1)}k`,px+pw-10,y+8);
       g.textAlign='left';y+=rowh;
     };
-    bar('the boot — in the window at the first boundary kept',base,'rgba(143,211,255,0.30)');
-    for(const [act,v] of acts)bar(`${act} — this run's own reads`,v,'rgba(242,177,52,0.34)');
+    bar('the boot \u2014 already in at the first boundary',base,'rgba(143,211,255,0.30)');
+    for(const [act,v] of acts)bar(`${act} \u2014 its own reads`,v,'rgba(242,177,52,0.34)');
     const d=Math.abs(tot-(R.body.occ||0));
     g.fillStyle='#8a7c5e';
     g.fillText(`${(tot/1000).toFixed(1)}k stacked · the feed reads ${((R.body.occ||0)/1000).toFixed(1)}k`
@@ -1020,16 +1042,22 @@ const RECORD=(()=>{
   // ── 4 · the wire: the last things said, in the same ink ──────────────────
   function drawWire(g){
     const G=R.geom||geom();
-    const n=R.log?26:5, lh=R.log?15:13, lines=R.wire.slice(-n);
+    const n=R.log?26:3, lh=R.log?15:13, lines=R.wire.slice(-n);
     if(!lines.length)return;
-    const x0=W*0.045, bot=G.base-(R.log?52:36), wmax=R.log?W*0.62:W*0.44;
+    const x0=W*0.045, bot=G.base-WIRE, wmax=R.log?W*0.62:W*0.46;
     g.save();g.font=`${R.log?10:9}px ${MONO}`;
-    if(R.log){
-      g.fillStyle='rgba(7,6,4,0.72)';g.fillRect(x0-10,bot-lh*lines.length-16,wmax+20,lh*lines.length+26);
-      g.strokeStyle='rgba(122,104,72,0.35)';g.lineWidth=1;
-      g.strokeRect(x0-9.5,bot-lh*lines.length-15.5,wmax+19,lh*lines.length+25);
-      g.fillStyle='#8a7c5e';g.fillText('THE WIRE · who said what, oldest at the top',x0,bot-lh*lines.length-4);
-    }
+    // ONE ground for the whole strip — wire, the fold's sentence, the tint key,
+    // the keys — because three per-row plates still left the warp's room labels
+    // printing through the sentence row. Verified by probing every row of the
+    // band for a pixel over luminance 70 that this block did not draw.
+    const py=bot-lh*lines.length-(R.log?16:8);
+    const sw=wmax+28;
+    R.strip={x:G.x0-14,y:py,w:sw,h:(bot+20)-py};   // the record's own footprint
+    g.fillStyle='#070604';g.fillRect(R.strip.x,R.strip.y,R.strip.w,R.strip.h);
+    g.strokeStyle=`rgba(122,104,72,${R.log?0.35:0.20})`;g.lineWidth=1;
+    g.strokeRect(R.strip.x+.5,R.strip.y+.5,R.strip.w-1,R.strip.h-1);
+    if(R.log){g.fillStyle='#8a7c5e';
+      g.fillText('THE WIRE \u00b7 who said what, oldest at the top',x0,py+12);}
     lines.forEach((l,i)=>{
       const age=(lines.length-1-i)/Math.max(1,lines.length-1);
       const a=R.log?0.35+0.65*(1-age):clamp(0.95-age*0.78,0.12,0.95);
@@ -1040,12 +1068,17 @@ const RECORD=(()=>{
       // the world's voice is ice; mine is amber, bent by the deck it was on
       g.fillStyle=l.mine?R.tint(l.topics,a):`rgba(143,211,255,${a})`;
       g.fillText(who,wx,y);
-      const tw=g.measureText(who).width, room=wmax-(wx-x0)-tw-12;
+      const tw=g.measureText(who).width, room=wmax-(wx-x0)-tw-22;
       let t=l.text;
       while(t.length&&g.measureText(t).width>room)t=t.slice(0,-2);
       g.fillStyle=`rgba(232,220,192,${a*0.82})`;g.fillText(t,wx+tw+8,y);
     });
-    if(!R.log){g.fillStyle='rgba(74,67,54,0.9)';g.font=`9px ${MONO}`;g.fillText('L · the wire',x0,bot+11);}
+    if(!R.log){g.fillStyle='rgba(74,67,54,0.9)';g.font=`8px ${MONO}`;
+      g.fillText('THE WIRE',x0,py+9);}
+    const say=foldSay();                        // the fold, said on the plate
+    if(say){g.font=`9px ${MONO}`;g.fillStyle=INK;g.globalAlpha=0.9;
+      let t=say; while(t.length&&g.measureText(t).width>wmax-4)t=t.slice(0,-2);
+      g.fillText(t,x0,bot+15);g.globalAlpha=1;}
     g.restore();
   }
 
@@ -1064,7 +1097,7 @@ const RECORD=(()=>{
     g.save();g.font=`9px ${MONO}`;
     const w=Math.max(...ls.map(l=>g.measureText(l).width))+14, h=ls.length*12+10;
     const bx=clamp(R.mouse.x+12,4,W-w-4);
-    let by=R.mouse.y-h-10; if(by<40)by=R.mouse.y+14;
+    const by=clamp(R.mouse.y-h-10,40,(R.geom?R.geom.base-26:H)-h-4);
     g.fillStyle='rgba(11,9,6,0.93)';g.fillRect(bx,by,w,h);
     g.strokeStyle='rgba(58,51,40,0.9)';g.lineWidth=1;g.strokeRect(bx+.5,by+.5,w-1,h-1);
     ls.forEach((l,i)=>{g.fillStyle=i===0?INK:(i===1?'#d9cba9':'#8a7c5e');g.fillText(l,bx+7,by+16+i*12);});
@@ -1080,6 +1113,8 @@ const RECORD=(()=>{
   };
   // only while [ACTOR] has no select(): a local mirror, never a write to SELECTED
   R.pickRoom=(mx,my)=>{
+    const inside=r=>r&&mx>=r.x&&mx<=r.x+r.w&&my>=r.y&&my<=r.y+r.h;
+    if(inside(R.strip)||inside(R.keys))return false;   // covered ⇒ not pickable
     const rms=(R.view&&R.view.rooms)||(typeof rooms!=='undefined'?rooms:[]);
     const rs=roomAt(CAM.z);
     for(const r of rms){
@@ -1113,10 +1148,31 @@ const RECORD=(()=>{
   });
 
   // ── the one entry point [WORLD] calls, last inside drawScene ─────────────
+  // TWO MEASURED FACTS ABOUT THE CONTEXT THIS BLOCK IS HANDED, both found by
+  // looking at frames and then probing, not by reading the code:
+  //
+  // 1. IT IS NOT CLEAN. [WORLD]'s pods loop opens `save()` + composite
+  //    'lighter' once per pod and restores only three of its four saves, so
+  //    everything drawn after it — the depth sounder included — runs ADDITIVE.
+  //    Probed: `globalCompositeOperation` reads 'lighter' on entry to this
+  //    function. A dark plate is invisible in that mode, which is why this
+  //    block resets the state it depends on instead of assuming it. Their line
+  //    to fix; named in the report.
+  // 2. THE STRIP OCCLUDES THE WORLD, NOT THE PHOSPHOR'S GHOST OF IT. With
+  //    ?fx=off the strip measures 0 pixels over luminance 70 where the warp's
+  //    room labels are; with the pass on, a room that moved *through* this
+  //    region is still decaying in the phosphor for ~1.5 s and prints through,
+  //    because the phosphor is a per-channel max and dark ink cannot lower it.
+  //    Correct behaviour for that pipeline, and not this block's to change: a
+  //    fix is one `destination-out` rect in [FRAME]'s phosphor. Consequence to
+  //    know: read this strip a second after a camera move, not during one.
   R.draw=(g,now,view)=>{
     const S0=(view&&view.S)||(typeof S!=='undefined'?S:null);
     if(!S0)return;
     R.view=view||null;
+    g.save();
+    g.globalCompositeOperation='source-over';g.globalAlpha=1;
+    g.setLineDash([]);g.textAlign='left';g.textBaseline='alphabetic';g.filter='none';
     if(R.src!==S0)sync(S0);
     const z=(view&&num(view.z))?view.z:CAM.z;
     drawLitRooms(g,z,(view&&view.rooms)||(typeof rooms!=='undefined'?rooms:[]));
@@ -1126,6 +1182,7 @@ const RECORD=(()=>{
     drawWire(g);
     if(R.pack)drawPack(g,pds);
     drawHover(g);
+    g.restore();
   };
   return R;
 })();
