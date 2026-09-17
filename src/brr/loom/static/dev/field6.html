@@ -716,6 +716,8 @@ const ACTOR={
     const fed=run&&Array.isArray(run.mood_frames)&&run.mood_frames.length?run.mood_frames:null;
     if(fed)return {list:fed.map(s=>Array.from(String(s))),src:'feed'};
     const base=Array.from(g);
+    // no glyph in the feed ⇒ no invented motion either: the frame stands still
+    if(!pod.glyphFed)return {list:[base],src:'unfed'};
     const blink=base.map((c,i)=>(i>0&&i<base.length-1&&(c==='·'||c==='°'))?'-':c);
     const same=blink.join('')===base.join('');
     return {list:same?[base]:[base,blink],src:same?'still':'derived'};
@@ -792,8 +794,11 @@ const ACTOR={
       }
     }
     g.textBaseline='alphabetic';
-    if(sc>0.5&&p.label){
-      g.fillStyle=me?A:'rgba(242,177,52,0.62)';g.font=`${me?10:9}px ${MONO}`;
+    // the resident's label WAS its mood glyph — the face says it now, so the
+    // name is not printed twice. A strand still names itself: its tag is the
+    // only thing on screen that tells two of them apart.
+    if(sc>0.5&&!me&&p.label){
+      g.fillStyle='rgba(242,177,52,0.62)';g.font=`9px ${MONO}`;
       g.fillText(p.label,p.x,y0-7);
     }
     g.textAlign='left';
@@ -803,8 +808,8 @@ const ACTOR={
     for(const p of pods){
       const t=podXY(p,z), me=p.kind==='resident';
       if(step){p.x+=(t.x-p.x)*0.045;p.y+=(t.y-p.y)*0.045;}
-      p.glyphNow=me?((run.mood_glyph)||'b·_·d')
-                   :((p.strand&&(p.strand.mood_glyph||p.strand.glyph))||'b·:·d');
+      const fed=me?(run.mood_glyph||null):((p.strand&&(p.strand.mood_glyph||p.strand.glyph))||null);
+      p.glyphFed=!!fed; p.glyphNow=fed||(me?'b·_·d':'b·:·d');
       if(me&&p.listening){               // the sonar: the daemon's real ~10 s beat
         g.save();g.globalCompositeOperation='lighter';
         const ph=(now%this.BEAT)/this.BEAT, ps=podAt(z);
@@ -825,12 +830,20 @@ const ACTOR={
   readyPod(g,z,now){
     if(!SELECTED.chosen.size)return;
     const cell=hubBy.get('crew');if(!cell)return;
-    const p=cellXY(cell,z), sc=podAt(z)*0.7, n=5;
+    const sc=podAt(z)*0.85, n=5;
     const cw=Math.max(2.2,9.4*sc), ch=Math.max(2.6,12.4*sc), gw=cw*n;
-    const x0=p.x-gw/2, y0=p.y-18*sc-ch/2;
+    // above the ship's own roof — inside it, it sat across the cell labels and
+    // read like one more lit room rather than something waiting to leave
+    const p={x:cell.x,y:waterAt(z)-6-hubH(z)-26};
+    const x0=p.x-gw/2, y0=p.y-ch/2;
     g.save();g.setLineDash([2,2]);
     g.strokeStyle='rgba(143,211,255,0.55)';g.lineWidth=0.9;
     g.strokeRect(x0-2.5,y0-2.5,gw+5,ch+5);
+    // the cells themselves, empty: a hull with no light in it. At schematic the
+    // glyph is below legibility and an empty dashed rectangle read as nothing —
+    // the grid is what says "a pod, and nobody in it yet".
+    g.strokeStyle='rgba(143,211,255,0.28)';g.lineWidth=0.6;
+    for(let i=1;i<n;i++){g.beginPath();g.moveTo(x0+i*cw,y0);g.lineTo(x0+i*cw,y0+ch);g.stroke();}
     g.setLineDash([]);
     g.textAlign='center';g.textBaseline='middle';
     g.font=`${Math.max(6,Math.round(ch*0.82))}px ${MONO}`;
@@ -846,7 +859,9 @@ const ACTOR={
 
 // ── 3 · the sounder, with the three rests marked on it ─────────────────────
   sounder(g,z){
-    const bx=W-26, top=H*0.26, bot=H*0.74;
+    const bx=W-26, top=H*0.34, bot=H*0.78;   // clears the belt: at H*0.26
+                                             // the 'interior' mark sat under the
+                                             // fifth vial and could not be read
     const at=zz=>bot+(top-bot)*((zz-ZMIN)/(ZMAX-ZMIN));
     g.strokeStyle='rgba(90,77,60,0.35)';g.lineWidth=1;
     g.beginPath();g.moveTo(bx,top);g.lineTo(bx,bot);g.stroke();
@@ -914,8 +929,16 @@ const ACTOR={
       if(dx){
         const i=same.indexOf(r), nx=i+dx;
         if(nx>=0&&nx<same.length)return this.room(same[nx]);
+        // crossing to the next deck keeps the LANE — walking off the end of
+        // "his ready decisions" and arriving in someone's done pile is a lie
+        // about where you are standing (measured: ← from w-25/mine landed on
+        // w-5/his). Same lane if it has rooms, else the nearest lane that does.
         const di=decks.indexOf(r.deck), nd=decks[(di+dx+decks.length)%decks.length];
-        const pool=rooms.filter(q=>q.deck===nd).sort((a,b)=>a.u-b.u);
+        const on=l=>rooms.filter(q=>q.deck===nd&&q.lane===l).sort((a,b)=>a.u-b.u);
+        let pool=on(r.lane);
+        for(let d=1;!pool.length&&d<LANES.length;d++){
+          pool=on(r.lane-d);if(!pool.length)pool=on(r.lane+d);
+        }
         if(pool.length)return this.room(dx>0?pool[0]:pool[pool.length-1]);
         return;
       }
@@ -1017,13 +1040,14 @@ const ACTOR={
     }else{
       head='NOTHING CHOSEN';
       rows.push(['','click a room or a deck']);
-      rows.push(['keys','← → along a lane · ↑ ↓ across lanes · esc clears']);
+      rows.push(['keys','← → along a lane · ↑ ↓ across lanes']);
+      rows.push(['','[ ] between decks · ⏎ chooses · esc clears']);
       if(SELECTED.hint)rows.push(['',SELECTED.hint]);
     }
-    const pw=326, px=W-16-pw, ph=26+rows.length*14+(foot?foot.length*13+12:0);
+    const pw=360, px=W-16-pw, ph=26+rows.length*14+(foot?foot.length*13+12:0);
     const py=H-20-ph;
     g.save();
-    g.fillStyle='rgba(11,9,6,0.72)';g.fillRect(px,py,pw,ph);
+    g.fillStyle='rgba(11,9,6,0.90)';g.fillRect(px,py,pw,ph);
     g.strokeStyle='rgba(154,133,94,0.30)';g.lineWidth=1;
     g.strokeRect(px+0.5,py+0.5,pw-1,ph-1);
     g.font=`10px ${MONO}`;g.fillStyle='#e8dcc0';
