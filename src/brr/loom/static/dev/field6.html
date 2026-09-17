@@ -1922,6 +1922,9 @@ const RECORD=(()=>{
   // for: `P` inspects the body, `Enter` inspects whatever is selected. If a
   // thing does not fit water, window or edge, that is the signal to ask.
   function drawWindow(g,title,rows,note,gap){
+    // the base row is the one whose label names it; everything else is an act
+    const isBase=r=>/\bbase\b/i.test(String(r.k||r.l||r.label||''));
+    const rowMax=Math.max(0,...rows.filter(r=>!isBase(r)).map(r=>num(r.v)?r.v:0));
     const w=Math.min(520,W*0.42), lh=18;
     const foot=(note?30:10)+(gap?16:0);
     const h=Math.min(H*0.80,58+lh*rows.length+foot);
@@ -1950,16 +1953,28 @@ const RECORD=(()=>{
     let ry=y+50;
     for(const r of show){
       if(num(r.v)){
-        g.fillStyle=r.base?'rgba(143,211,255,0.30)':'rgba(242,177,52,0.32)';
-        g.fillRect(x+14,ry-8,(w-140)*clamp(r.v/tot,0,1),7);
+        // softer than a tick was, because the label now rides it
+        g.fillStyle=isBase(r)?'rgba(143,211,255,0.20)':'rgba(242,177,52,0.17)';
+        // His read, 2026-09-17: a per-row tick beside the text spends a column
+        // to say what the row can say by itself. So THE ROW IS THE BAR — the
+        // weight is a fill running the row's own width, behind the label, and
+        // the stack reads as a profile instead of a list with decoration.
+        // Two scales, because one lies: an act is 1–6k against a 462k base, so
+        // scaling every row to the total leaves the acts invisible. The base
+        // row keeps the total's scale (it *is* most of the body); an act row
+        // scales against the largest act, so the stack is scannable and the
+        // base still says plainly that it dominates.
+        const den=(isBase(r)?tot:(rowMax||tot))||1;
+        g.fillRect(x+10,ry-11,(w-20)*clamp(r.v/den,0,1),lh-3);
       }
       if(r.his){                       // his line, on the top layer, in his ice
         g.strokeStyle='rgba(143,211,255,0.5)';g.lineWidth=1;
         g.beginPath();g.moveTo(x+14,ry+3.5);g.lineTo(x+w-14,ry+3.5);g.stroke();
       }
-      g.fillStyle=r.his?'#bfe2f8':(r.base?'#7f9cb0':'#4a4336');
+      // the label must read over its own bar: brighter than the old dim ink
+      g.fillStyle=r.his?'#cfe9fb':(isBase(r)?'#a8c4d6':'#c2b393');
       let lb=r.k; while(lb.length&&g.measureText(lb).width>w-150)lb=lb.slice(0,-2);
-      g.fillText(lb,x+14,ry+8);
+      g.fillText(lb,x+14,ry+8);   // the label rides the fill (the row is the bar)
       if(r.t!==undefined){g.fillStyle='#d9cba9';g.textAlign='right';
         g.fillText(r.t,x+w-14,ry+8);g.textAlign='left';}
       ry+=lh;
