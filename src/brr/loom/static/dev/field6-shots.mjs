@@ -16,7 +16,11 @@ import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
 const { chromium } = await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE
   || '/Users/gurio/Source/Projects/brnrd/src/frontend/node_modules/playwright/index.mjs'));
-const base = process.env.LOOM_URL || 'http://127.0.0.1:7797';
+const base = process.env.LOOM_URL || 'http://127.0.0.1:7797';   // the fixture feed
+// the sweep needs a feed whose tick MOVES, which only the live daemon's does:
+// serve the dev dir with no state.json of its own and the page falls through to
+// 127.0.0.1:7777 the way FEEDS already says it will.
+const live = process.env.LIVE_URL || 'http://127.0.0.1:7789';
 const out  = process.env.OUT || '/tmp/actorshots';
 const page6 = q => `${base}/loom/dev/field6.html${q?'?'+q:''}`;
 await mkdir(out,{recursive:true});
@@ -37,6 +41,14 @@ const cut = (px,py,w,h,s=1) => p.evaluate(([x0,y0,w,h,s])=>{
   g.drawImage(document.getElementById('c'),
     x0*devicePixelRatio,y0*devicePixelRatio,w*devicePixelRatio,h*devicePixelRatio,0,0,w*s,h*s);
   return c.toDataURL('image/png');},[px,py,w,h,s]);
+const cutOn = (pg,px,py,w,h,s=1) => pg.evaluate(([x0,y0,w,h,s])=>{
+  const c=document.createElement('canvas');c.width=w*s;c.height=h*s;
+  const g=c.getContext('2d');g.imageSmoothingEnabled=false;
+  g.drawImage(document.getElementById('c'),
+    x0*devicePixelRatio,y0*devicePixelRatio,w*devicePixelRatio,h*devicePixelRatio,0,0,w*s,h*s);
+  return c.toDataURL('image/png');},[px,py,w,h,s]);
+const png2 = async (pg,name,data) =>
+  writeFile(resolve(out,name+'.png'),Buffer.from(data.split(',')[1],'base64'));
 const png = async (name,data) =>
   writeFile(resolve(out,name+'.png'),Buffer.from(data.split(',')[1],'base64'));
 
@@ -186,6 +198,79 @@ for (const [key,label] of [['1','interior'],['3','schematic']]) {
   await p.screenshot({path:resolve(out,'interior-click.png')});
 }
 
-await c.close(); await browser.close();
+// ── 5 · the bench: the room's own body, opened over the ground ─────────────
+{
+  await p.keyboard.press('3'); await p.waitForTimeout(1500);
+  const t=await p.evaluate(()=>{const r=rooms.find(q=>(q.it.title||'').length>40)||rooms[0];
+    const {x,y}=roomXY(r,CAM.z);return {id:r.it.id,title:r.it.title,x:Math.round(x),y:Math.round(y)};});
+  await p.mouse.click(t.x,t.y); await p.waitForTimeout(400);
+  await p.screenshot({path:resolve(out,'bench-card-before.png')});
+  await p.keyboard.press('Enter');                       // ⏎ opens the body
+  await p.waitForFunction(id=>{const g=PAGES.get(id);return g&&g.state!=='loading';},t.id,{timeout:8000});
+  await p.waitForTimeout(500);
+  const pg=await p.evaluate(id=>{const g=PAGES.get(id);
+    return {state:g.state,why:g.why||null,title:(g.d||{}).title||null,
+            body:((g.d||{}).body||'').length,siblings:((g.d||{}).siblings||[]).length,
+            lines:BENCH.total,fit:BENCH.fit};},t.id);
+  receipts.bench={id:t.id,card_title:t.title,...pg};
+  assert.equal(pg.state,'ok','the bench must read the item page');
+  await p.screenshot({path:resolve(out,'bench-open.png')});
+  await png('bench-body', await cut(Math.round(1440*0.05),Math.round(900*0.16),
+    Math.round(1440*0.60),Math.round(900*0.71)));
+  // a body long enough to need the scroll, so the scroll is actually measured
+  const long=await p.evaluate(()=>{const r=byItem.get('w-80');
+    if(!r)return null;ACTOR.select.room(r);ACTOR.bench.open('w-80');return 'w-80';});
+  if(long){
+    await p.waitForFunction(()=>{const g=PAGES.get('w-80');return g&&g.state!=='loading';},null,{timeout:8000});
+    await p.waitForTimeout(600);
+    for(let i=0;i<4;i++){await p.keyboard.press('ArrowDown');await p.waitForTimeout(120);}
+    receipts.bench.long=await p.evaluate(()=>({id:'w-80',lines:BENCH.total,fit:BENCH.fit,scroll:BENCH.scroll}));
+    await p.screenshot({path:resolve(out,'bench-scrolled.png')});
+    await png('bench-long', await cut(Math.round(1440*0.05),Math.round(900*0.16),
+      Math.round(1440*0.60),Math.round(900*0.71)));
+  }
+  // a fetch that fails must SAY so, not show an empty page
+  await p.evaluate(()=>{ACTOR.bench.open('w-999999');});
+  await p.waitForFunction(()=>{const g=PAGES.get('w-999999');return g&&g.state!=='loading';},null,{timeout:8000});
+  await p.waitForTimeout(400);
+  receipts.bench.fail=await p.evaluate(()=>PAGES.get('w-999999'));
+  assert.equal(receipts.bench.fail.state,'fail','a missing item must fail loudly');
+  await png('bench-fail', await cut(Math.round(1440*0.05),Math.round(900*0.16),
+    Math.round(1440*0.60),260));
+  await p.keyboard.press('Escape'); await p.waitForTimeout(300);
+  assert.equal(await p.evaluate(()=>SELECTED.open),null,'esc must close the bench');
+  // and the verb is still where it was, on `d` now that ⏎ opens
+  await p.keyboard.press('d'); await p.waitForTimeout(300);
+  receipts.bench.staged_with_d=await p.evaluate(()=>[...SELECTED.chosen]);
+}
+await c.close();
+
+// ── 6 · the ship's sweep, against the live daemon's own tick ────────────────
+{
+  const c2=await ctx(1), q=await c2.newPage();
+  q.on('pageerror',e=>errors.push(e.message));
+  await q.goto(`${live}/loom/dev/field6.html`,{waitUntil:'load'});
+  await q.waitForTimeout(4500);
+  const feed=await q.evaluate(()=>({repo:S&&S.repo,tick:S&&S.shuttle&&S.shuttle.tick}));
+  if(feed.tick==null){
+    receipts.sweep={skipped:'no live feed reachable — the tick could not be read'};
+  }else{
+    await q.evaluate(()=>{ACTOR.camera.jump(0.46);}); await q.waitForTimeout(1500);
+    const n0=await q.evaluate(()=>BEAT.n);
+    await q.waitForFunction(n=>BEAT.n>n,n0,{timeout:45000});   // the daemon's own beat
+    await q.waitForTimeout(260);                               // the ring, still in flight
+    await q.screenshot({path:resolve(out,'sweep-ring.png')});
+    const hub0=await q.evaluate(()=>({x:Math.round(hub.x),y:Math.round(waterAt(CAM.z))}));
+    await png2(q,'sweep-hub', await cutOn(q,hub0.x-190,hub0.y-230,380,250,2));
+    const got=await q.evaluate(()=>({
+      tick:BEAT.tick,n:BEAT.n,period_ms:Math.round(BEAT.period||0),
+      echoes:hub.cells.filter(c=>c.echo).map(c=>({room:c.k,...c.echo,t0:undefined,cell:undefined}))}));
+    receipts.sweep={feed:feed.repo,...got};
+    await q.waitForTimeout(1400);
+    await q.screenshot({path:resolve(out,'sweep-echoes.png')});
+  }
+  await c2.close();
+}
+await browser.close();
 assert.deepEqual(errors,[]);
 console.log(JSON.stringify({receipts,out},null,1));
