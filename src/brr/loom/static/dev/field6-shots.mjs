@@ -146,6 +146,16 @@ receipts.frame_ms = [];
   receipts.scrub = {before, after: await p.evaluate(()=>({cursor:RECORD.cursor,pass:RECORD.pass}))};
   assert.equal(receipts.scrub.after.cursor, before-2, 'two ArrowLefts move the cursor two passes');
 
+  // ── the window's second user: a pass, stopped and inspected ──
+  await p.keyboard.press('Enter'); await p.waitForTimeout(800);
+  receipts.pass_window = await p.evaluate(()=>({win:RECORD.win,pass:RECORD.pass}));
+  await shot(p,'08-the-pass-window');
+  assert.equal(receipts.pass_window.win,'pass','Enter on a selected pass must inspect it');
+  await p.keyboard.press('Escape'); await p.waitForTimeout(400);
+  receipts.esc_closes_window_first = await p.evaluate(()=>({win:RECORD.win,pass:RECORD.pass}));
+  assert.equal(receipts.esc_closes_window_first.win,null);
+  assert.ok(receipts.esc_closes_window_first.pass,'esc closes the window before it clears the selection');
+
   // ── the seam: an [ACTOR] that writes SELECTED lights the cloth with no
   //    local mirror in play. This is the merge, rehearsed from one branch. ──
   receipts.seam = await p.evaluate(rid=>{
@@ -161,63 +171,63 @@ receipts.frame_ms = [];
   assert.equal(receipts.seam.via.local,null,'SELECTED must be honoured without the local mirror');
   assert.ok(receipts.seam.via.lit>0);
 
-  // ── the strip must OCCLUDE, and that is a regression test, not a look ──
-  // Found the hard way: one extra g.restore() inside this block popped its own
-  // composite-op reset, so every dark fill after it ADDED (the leaked 'lighter'
-  // from [WORLD]'s pods loop). The strip looked drawn and hid nothing. ?fx=off
-  // isolates it from the phosphor's ~1.5 s ghost, which bleeds through by design.
+  // The occlusion test is retired with the thing it tested: after the fourth
+  // steer this block draws no panel at all, so there is nothing to occlude.
+  // What replaces it is the altitude scope — the chat must be INVISIBLE at the
+  // schematic, which is the rule that made the panel unnecessary.
   {
     const q = await browser.newContext({viewport:{width:1440,height:900},deviceScaleFactor:1});
     const pp = await q.newPage();
-    pp.on('pageerror',e=>errors.push('occlude:'+e.message));
+    pp.on('pageerror',e=>errors.push('scope:'+e.message));
     await pp.goto(page6('fx=off'),{waitUntil:'load'}); await settle(pp);
+    const probe = async () => pp.evaluate(()=>({z:+CAM.z.toFixed(3),
+      chatVisible: RECORD.wireTop!==null && (function(){
+        const g=document.getElementById('c').getContext('2d');
+        const d=g.getImageData(Math.round(innerWidth*0.04),Math.round(RECORD.wireTop)-10,
+                               Math.round(innerWidth*0.45),44).data;
+        let mx=0; for(let i=0;i<d.length;i+=4){
+          const v=0.2126*d[i]+0.7152*d[i+1]+0.0722*d[i+2]; if(v>mx)mx=v;}
+        return Math.round(mx);})(),
+      rootDepthNonZero: RECORD.roots.length>0}));
+    await pp.keyboard.press('1'); await pp.waitForTimeout(2600);
+    const interior = await probe();
+    await pp.screenshot({path:resolve(out,'10-interior-roots-and-the-chat.png')});
     await pp.keyboard.press('3'); await pp.waitForTimeout(2600);
-    await pp.mouse.move(1430,300); await pp.waitForTimeout(200);
-    const band = () => pp.evaluate(()=>{
-      const g=document.getElementById('c').getContext('2d');
-      const x0=Math.round(RECORD.strip.x), top=Math.round(RECORD.strip.y);
-      const w=Math.round(RECORD.strip.w), h=Math.round(RECORD.strip.h);
-      const d=g.getImageData(x0,top,w,h).data, out=[];
-      for(let i=0;i<d.length;i+=4){
-        const v=0.2126*d[i]+0.7152*d[i+1]+0.0722*d[i+2];
-        if(v>70)out.push((i/4)|0);
-      }
-      return {x0,top,w,h,set:out};
-    });
-    const lit = await band();
-    await pp.evaluate(()=>{window.__rd=RECORD.draw;RECORD.draw=()=>{};});
-    await pp.waitForTimeout(400);
-    const bare = await band();
-    await pp.evaluate(()=>{RECORD.draw=window.__rd;});
-    const mine=new Set(lit.set), theirs=new Set(bare.set);
-    const leaked=[...theirs].filter(i=>mine.has(i));
-    receipts.occlusion={band:{top:lit.top,h:lit.h,w:lit.w},
-      scene_bright_in_band:theirs.size, with_strip:mine.size,
-      leaked:leaked.length, leaked_pct:+(100*leaked.length/Math.max(1,theirs.size)).toFixed(2)};
-    await pp.screenshot({path:resolve(out,'10-the-strip-occludes.png'),clip:{x:40,y:690,width:1360,height:160}});
+    const schematic = await probe();
+    await pp.screenshot({path:resolve(out,'11-schematic-the-band-is-the-warps.png')});
+    receipts.altitude_scope={interior,schematic};
     await q.close();
-    assert.ok(receipts.occlusion.leaked_pct < 2,
-      `the strip must occlude the scene under it (leaked ${receipts.occlusion.leaked_pct}%)`);
+    assert.ok(interior.chatVisible > 60, `the chat must read at the interior (${interior.chatVisible})`);
+    assert.ok(schematic.chatVisible < interior.chatVisible*0.5,
+      `the chat must give the band back at the schematic (${schematic.chatVisible} vs ${interior.chatVisible})`);
   }
 
   // ── the body, and the wire, on their own keys ──
   await p.evaluate(()=>{SELECTED=null;RECORD.pass=null;RECORD.roomLocal=null;});
   await p.keyboard.press('1'); await p.waitForTimeout(2600);  // > the phosphor's ~1.5 s ghost   // back to the interior
-  await p.keyboard.press('p'); await p.waitForTimeout(700);
+  await p.keyboard.press('p'); await p.waitForTimeout(900);
   receipts.body = await p.evaluate(()=>{
     const b=S.beads, base=(b[0].ctx_after||0)-(b[0].delta||0);
     const sum=b.reduce((a,x)=>a+Math.max(0,x.delta||0),0);
-    return {pack:RECORD.pack, occ:RECORD.body.occ, win:RECORD.body.win,
+    return {window:RECORD.win, occ:RECORD.body.occ, win:RECORD.body.win,
       say:RECORD.body.say, base, sum, stacked:base+sum,
       reconciles:Math.abs(base+sum-RECORD.body.occ)<1, feedHasPack:('pack' in S)};});
-  await shot(p,'06-body-the-pack-cutaway');
-  assert.equal(receipts.body.reconciles,true,'the stacked breakdown must reconcile with the feed');
-  await p.keyboard.press('p'); await p.waitForTimeout(300);
-  await p.keyboard.press('l'); await p.waitForTimeout(700);
+  await shot(p,'06-the-body-window');
+  assert.equal(receipts.body.window,'body','P must open the body window');
+  assert.equal(receipts.body.reconciles,true,'the transcript column must reconcile with the feed');
+  await p.keyboard.press('Escape'); await p.waitForTimeout(300);
+  await p.keyboard.press('l'); await p.waitForTimeout(900);
   receipts.wire = await p.evaluate(()=>({log:RECORD.log,lines:RECORD.wire.length,
-    theirs:RECORD.wire.filter(l=>!l.mine).length, mine:RECORD.wire.filter(l=>l.mine).length,
-    tail:RECORD.wire.slice(-3).map(l=>({who:l.who,mine:l.mine,topics:l.topics}))}));
-  await shot(p,'07-wire-expanded');
+    channels:RECORD.chanCount,
+    placed:RECORD.wire.filter(l=>l.place).length,
+    streamHasNoWeights:RECORD.wire.every(l=>l.base===undefined),
+    tail:RECORD.wire.slice(-3).map(l=>({who:l.who,chan:l.chan,place:l.place}))}));
+  await shot(p,'07-the-history-is-the-body');
+  // NOT an assertion: the feed's inbound window rotates, so his line is present
+  // some minutes and gone others. It was measured present (1 of 4) at 20:35Z and
+  // absent at 20:47Z. A test that depends on a transient feed row is a bad test;
+  // the count is the receipt.
+  assert.equal(receipts.wire.streamHasNoWeights,true,'a stream carries no inspection');
   await p.keyboard.press('Escape'); await p.waitForTimeout(400);
 
   // ── the tint: one bend per deck, and a ping that carries its own ──
@@ -234,9 +244,9 @@ receipts.frame_ms = [];
         born:performance.now()+i*40,act:'(harness)',kind:'file',detail:'tint '+t,topics:[t]});});
     return out;});
   await p.waitForTimeout(520);
-  await shot(p,'08-tint-one-ping-per-deck');
+  await shot(p,'09-tint-one-ping-per-deck');
   await p.waitForTimeout(1400);
-  await shot(p,'09-tint-after-the-ghost');
+  await shot(p,'09b-tint-after-the-ghost');
   await c.close();
 }
 await browser.close();
