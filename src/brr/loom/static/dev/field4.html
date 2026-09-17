@@ -1,0 +1,149 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>the bridge — every open stream, with its position</title>
+<style>
+:root{--bg:#0b0906;--panel:#120e09;--line:#3a3328;--text:#e8dcc0;--dim:#8f8470;--ice:#8fd3ff;--amber:#f2b134;--ember:#7a5c27;--dark:#2b2318;--absent:#5a4d3c;font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);overflow:hidden}
+header{height:40px;display:flex;gap:10px;align-items:center;padding:0 14px;border-bottom:1px solid var(--line)}
+header b{font-size:15px}header span{color:var(--dim);letter-spacing:2px;font-size:10px}
+button{font:inherit;color:var(--text);background:#15110b;border:1px solid var(--line);padding:5px 9px;cursor:pointer}
+button.on{border-color:var(--amber);color:var(--amber)}#modes{display:flex;gap:6px}#right{margin-left:auto;color:var(--dim);font-size:10px}
+main{display:grid;grid-template-columns:minmax(0,1fr) 420px;height:calc(100vh - 40px)}
+#bridge{overflow:auto;padding:10px 0 20px}
+.grp{display:flex;align-items:baseline;gap:10px;padding:14px 16px 6px;color:var(--dim);font-size:10px;letter-spacing:2px}
+.grp i{font-style:normal;letter-spacing:0;color:var(--absent)}
+.grp b{margin-left:auto;font-weight:400;letter-spacing:0;color:var(--dim)}
+.row{display:grid;grid-template-columns:18px 210px minmax(0,1fr) 190px 66px;gap:10px;align-items:baseline;padding:6px 16px;border-left:2px solid transparent;cursor:pointer}
+.row:hover{background:#f2b1340c}.row.sel{border-left-color:var(--ice);background:#8fd3ff10}
+.row .g{color:var(--amber)}.row.his .g,.row.his .n{color:var(--ice)}.row.cold .g{color:var(--ice)}.row.none .g,.row.none .n,.row.none .l{color:var(--absent)}
+.row .n{color:var(--text)}.row .l{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .o{color:var(--amber);font-size:11px}.row.his .o{color:var(--ice)}.row.none .o{color:var(--absent)}
+.row .a{color:var(--absent);font-size:10px;text-align:right}
+aside{border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+#place{height:300px;border-bottom:1px solid var(--line);position:relative}
+svg{width:100%;height:100%;display:block}
+text{font:10px ui-monospace,Menlo,monospace;fill:var(--dim)}.lit{fill:var(--text)}
+#detail{flex:1;overflow:auto;padding:14px 16px;font-size:11px;line-height:1.75}
+#detail h3{margin:0 0 2px;font-weight:400;font-size:13px;color:var(--ice)}
+#detail .m{color:var(--dim);font-size:10px;margin-bottom:10px}
+#detail p{margin:6px 0}#detail .k{color:var(--dim)}#detail .v{color:var(--text)}
+#fuel{border-top:1px solid var(--line);padding:12px 16px}
+.win{margin-bottom:9px}.win .h{display:flex;justify-content:space-between;align-items:baseline}
+.win .h b{font-weight:400;font-size:19px}.win .h span{color:var(--dim);font-size:10px}
+.bar{height:4px;background:#18120b;margin:4px 0 2px}.bar i{display:block;height:100%}
+.win .r{color:var(--dim);font-size:10px}
+footer{border-top:1px solid var(--line);padding:9px 16px;color:var(--absent);font-size:10px;line-height:1.6}
+footer b{color:var(--dim);font-weight:400}
+</style>
+<header><b>brnrd</b><span>/ THE BRIDGE · every open stream, with its position</span>
+ <div id="modes"></div>
+ <div id="right">reading: 2026-09-17 09:0xZ · this account, real</div></header>
+<main>
+ <section id="bridge"></section>
+ <aside>
+   <div id="place"><svg id="svg" viewBox="0 0 420 300" preserveAspectRatio="xMidYMid meet"></svg></div>
+   <div id="detail"></div>
+   <div id="fuel"></div>
+   <footer id="gap"></footer>
+ </aside>
+</main>
+<script>
+const $=s=>document.querySelector(s);const NS='http://www.w3.org/2000/svg';
+const el=(n,a={},t)=>{const e=document.createElementNS(NS,n);for(const[k,v]of Object.entries(a))e.setAttribute(k,v);if(t!=null)e.textContent=t;return e;};
+const NOW=Date.parse('2026-09-17T09:05:00Z');
+const ago=iso=>{const s=(NOW-Date.parse(iso))/1000;if(!isFinite(s))return '—';
+  if(s<3600)return Math.round(s/60)+'m';if(s<86400)return Math.round(s/3600)+'h';return Math.round(s/86400)+'d';};
+// ── the rows: every open stream this seat actually holds, read from the frame's own files ──
+const ROWS=[
+ {grp:'THREADS', g:'✉', n:'Gurio · telegram', place:'wire',
+  last:'"requested opus for the next run because of quota…"', at:'2026-09-17T09:02:32Z',
+  owed:'answered · his read owed on field3', kind:'his',
+  detail:['thread cloud:telegram:155783668: · 2,405 dialogue records','topic the-loom · this seat is his seat','owed by me: nothing — the reply went at 09:05Z','owed by him: a read of field3 + the merges below']},
+ {grp:'THREADS', g:'✉', n:'Alexandra · telegram', place:'wire',
+  last:'"How to title this video for YouTube" → answered, 3 titles', at:'2026-09-16T22:15:00Z',
+  owed:'quiet 11h · the 45-s short is unsent', kind:'',
+  detail:['thread telegram:313725712: · her own thread, isolated from his','delivered: the demo 1080p + 720p, the seventy-hour figures, three titles','unsent, ready: media/demo/demo-v6-short-1080p.mp4 (the 45-s cut) on brr/the-demo-for-her-page','I cannot open her thread unasked — a message rides an event: reply only']},
+ {grp:'HANDS', g:'▱', n:'no strand out', place:'crew',
+  last:'four ended in the night: gen 3 · the demo · the feed · the shelf', at:'2026-09-17T04:55:00Z',
+  owed:'nothing in flight', kind:'none',
+  detail:['5lmx gen 3 → §10, the premise that failed','md3c the demo → #2003, delivered to her','lhm3 the feed → #2004, merged','qmzg the shelf → #2005, his lane','spawn pool clear — a hand is one directive away']},
+ {grp:'HIS DOORS', g:'◆', n:'#2005 the shelf as an index', place:'forge',
+  last:'17 unannounced shelf pages → 0 · block 50.6 → 47.9 KB', at:'2026-09-17T04:55:00Z',
+  owed:'his merge — changes what a wake carries', kind:'his',
+  detail:['sonnet strand, parent read the diff whole','418 tests green in the k="surface or preflight or prompts" band','wake composition ⇒ his lane by the standing rule, not mine']},
+ {grp:'HIS DOORS', g:'◆', n:'#2003 the demo, masked', place:'forge',
+  last:'three files live; she has the two links', at:'2026-09-17T00:10:00Z',
+  owed:'his merge, or leave it on the branch', kind:'his',
+  detail:['his phone number masked in the phone\'s own coordinate space','two leaks the frame-by-frame caught: a banner sliding off-screen, 96 % opacity ghosting','the files are already public on the branch — the merge is tidiness, not delivery']},
+ {grp:'HIS DOORS', g:'◆', n:'#2001 the refill on the deadline', place:'forge',
+  last:'the re-read rides the 30-min zombie sweep, not reset_deadline', at:'2026-09-16T18:20:00Z',
+  owed:'one word and it is a small PR', kind:'his',
+  detail:['companion to #2000, which he merged','with the reading fixed, a wall whose reset is known to the minute still thaws up to 30 min late','the live menu has carried this option since last night, untouched']},
+ {grp:'HIS DOORS', g:'◆', n:'12 PRs open · oldest 18d', place:'forge',
+  last:'#1998 #1996 #1992 #1989 #1986 #1965 #1885 #1877 #1827 #1794 + the two above', at:'2026-08-30T00:00:00Z',
+  owed:'a sweep: merge, close, or say park', kind:'',
+  detail:['four are loom takes superseded by the dungeon line','#1885 / #1877 are seat-lifecycle work from before the seat stopped quitting','two are drafts of mine that should be closed if their successors landed','THE PARKED FLEET: nothing here is blocked on me, and nothing here is moving']},
+ {grp:'HIS DOORS', g:'◆', n:'25 ready decisions in the warp', place:'the warp',
+  last:'w-82 multi-user · w-72 the accepted receipt · w-18 where a run\'s future lives', at:'2026-09-17T00:00:00Z',
+  owed:'his signature, one at a time', kind:'his',
+  detail:['adoption 11 · the-clockwork 8 · legal 3 · the-loom 2 · the-post 1','w-82 was minted last night from his own ask about two equal users','w-83 (the WhatsApp page) is his hand, not his signature — I owe the copy when he asks']},
+ {grp:'PROMISES', g:'◇', n:'nothing owed', place:'wire',
+  last:'1 made, 1 released: the demo link to Alexandra', at:'2026-09-17T00:40:00Z',
+  owed:'—', kind:'none',
+  detail:['the owed chip reads 0','a promise is written when a reply says I will make something, and released when it exists']},
+ {grp:'THE CLOCK', g:'⏲', n:'the co-maintainer tick', place:'clock',
+  last:'every 5h · last fired 04:10Z', at:'2026-09-17T04:10:00Z',
+  owed:'next ~09:10Z — inside this seat', kind:'',
+  detail:['the only tick: three entries were collapsed into one because no single entry could see the sum','it lands in the live seat and folds into whatever is running']},
+ {grp:'THE CLOCK', g:'⏲', n:'the wire round', place:'clock',
+  last:'every 8h · deferred twice last night, once posted', at:'2026-09-17T01:00:00Z',
+  owed:'next ~09:00Z', kind:'',
+  detail:['the wall post went out at 23:1xZ: 2100362116729311715','deferred at 06:2xZ with the reason: nothing since was wire-worthy']},
+ {grp:'THE CLOCK', g:'⏲', n:'the boot cleanup pass', place:'clock',
+  last:'at: 2026-09-16T18:15:00Z — fired 15h ago, still listed', at:'2026-09-16T18:15:00Z',
+  owed:'retire it — a spent one-shot that wakes for nothing', kind:'cold',
+  detail:['the schedule lint flagged it in this wake\'s health block','a one-shot fires once; leaving it listed is the only kind of clock lie this frame can tell','THE SPENT ONE-SHOT: retired this run']},
+];
+const PLACES={wire:[300,60,'wire'],forge:[300,140,'forge'],crew:[120,140,'crew'],clock:[120,60,'clock'],'the warp':[210,240,'the warp'],shed:[210,100,'shed']};
+const FUEL=[{n:'session',pct:94,r:'resets in 4h54m',bind:false},{n:'week',pct:30,r:'resets Fri 14:00 Paris',bind:true},{n:'Fable week',pct:4,r:'thin — excluded, not spending',bind:false}];
+let sel=0;
+const heat=p=>p>=48?'#f2b134':p<=18?'#8fd3ff':`rgb(${Math.round(143+(242-143)*(p-18)/30)},${Math.round(211-(211-177)*(p-18)/30)},${Math.round(255-(255-52)*(p-18)/30)})`;
+function render(){
+  const b=$('#bridge');b.replaceChildren();
+  let last=null;
+  ROWS.forEach((r,i)=>{
+    if(r.grp!==last){last=r.grp;
+      const n=ROWS.filter(x=>x.grp===r.grp).length;
+      const h=document.createElement('div');h.className='grp';
+      h.innerHTML=`${r.grp} <i>${{'THREADS':'who is talking, and what each is owed','HANDS':'the boats out','HIS DOORS':'what waits on his word','PROMISES':'what I said I would make','THE CLOCK':'the future selves already specced'}[r.grp]||''}</i><b>${n}</b>`;
+      b.append(h);}
+    const d=document.createElement('div');d.className=`row ${r.kind} ${i===sel?'sel':''}`;
+    d.innerHTML=`<span class=g>${r.g}</span><span class=n>${r.n}</span><span class=l>${r.last}</span><span class=o>${r.owed}</span><span class=a>${ago(r.at)}</span>`;
+    d.onclick=()=>{sel=i;render();};
+    b.append(d);
+  });
+  const r=ROWS[sel];
+  // the place: the row's position on the ground, lit
+  const s=$('#svg');s.replaceChildren();
+  s.append(el('text',{x:12,y:16},'ITS PLACE ON THE GROUND'));
+  s.append(el('ellipse',{cx:210,cy:100,rx:120,ry:52,fill:'#0f0c07',stroke:'#3c2f1a'}));
+  s.append(el('line',{x1:210,y1:152,x2:210,y2:236,stroke:'#3c2f1a','stroke-dasharray':'3 5'}));
+  s.append(el('rect',{x:70,y:236,width:280,height:44,fill:'#0f0c0722',stroke:'#3c2f1a'}));
+  for(const [k,[x,y,label]] of Object.entries(PLACES)){
+    const on=r.place===k;
+    if(k==='the warp'){s.append(el('text',{x:82,y:y+18,class:on?'lit':''},'the warp — levels below'));
+      if(on)s.append(el('rect',{x:70,y:236,width:280,height:44,fill:'none',stroke:'#8fd3ff'}));continue;}
+    s.append(el('rect',{x:x-34,y:y-10,width:68,height:20,rx:3,fill:'#0b0906',stroke:on?(r.kind==='his'?'#8fd3ff':'#f2b134'):'#4e3c1f','stroke-width':on?1.4:.8}));
+    s.append(el('text',{x:x,y:y+4,'text-anchor':'middle',class:on?'lit':''},label));
+  }
+  s.append(el('text',{x:210,y:100+4,'text-anchor':'middle',class:'lit'},r.place==='shed'?'b·_·d':''));
+  s.append(el('text',{x:12,y:294},'the hub as the mouth · the warp below · a row lights where it lives'));
+  $('#detail').innerHTML=`<h3>${r.n}</h3><div class=m>${r.grp.toLowerCase()} · ${r.place} · last moved ${ago(r.at)} ago</div>`+
+    r.detail.map(x=>`<p>${x.startsWith('THE ')?'<span class=v>'+x+'</span>':x}</p>`).join('');
+  $('#fuel').innerHTML='<div style="color:var(--dim);font-size:10px;letter-spacing:2px;margin-bottom:8px">FUEL · the gauge, never a place</div>'+
+    FUEL.map(f=>`<div class=win><div class=h><span>${f.n}${f.bind?' · binding':''}</span><b style="color:${heat(f.pct)}">${f.pct} %</b></div><div class=bar><i style="width:${f.pct}%;background:${heat(f.pct)}"></i></div><div class=r>${f.r}</div></div>`).join('');
+  $('#gap').innerHTML='<b>What the feed would need to make this live:</b> threads with their last line and unread bytes (the daemon has them; <code>state.json</code> does not carry them) · promises (<code>.promises.jsonl</code>, per run) · the schedule\'s armed entries with their next firing · open PRs by age. Strands, fuel and the warp are already in the feed. Until then this page is a reading, stamped, not a live surface.';
+}
+document.addEventListener('keydown',e=>{if(e.key==='ArrowDown'){sel=Math.min(ROWS.length-1,sel+1);render();}if(e.key==='ArrowUp'){sel=Math.max(0,sel-1);render();}});
+render();
+</script>
