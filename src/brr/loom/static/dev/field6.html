@@ -398,6 +398,10 @@ function ingest(d){
   const live=new Set();
   for(const s of ((d.hud||{}).strands||[])){
     if(s.status&&!/live|running|await/.test(s.status))continue;
+    // a row with no `id` is not a pod: a pod IS its run, and two of them land
+    // on the same cell and print their labels through each other. Measured on
+    // the live feed 2026-09-17: one of two strand rows carries `id: null`.
+    if(!s.id)continue;
     live.add(s.id);
     const sp=podFor(s.id,'strand');
     const n=resolveIn(byPath,(s.places||[])[0]);
@@ -504,8 +508,8 @@ function L(name,g,fn){
   g.font=`10px ${MONO}`;
   try{fn();}
   finally{
-    while(LAYER.depth>d0){g.restore();LAYER.depth--;LAYER.leaks++;}
-    g.restore();LAYER.cur=null;
+    while(LAYER.depth>d0+1){g.restore();LAYER.leaks++;}   // a block that leaked a save()
+    g.restore();LAYER.cur=null;                           // back to where we came in
   }
 }
 // the water does not draw where a window covers: one even-odd clip, the screen
@@ -527,6 +531,23 @@ function dimUnder(g,wins){
   }
 }
 
+// a hover plaque is a window that follows the cursor, so it is the one window
+// that can land on top of another. It does not: it takes the first of four
+// corners around the cursor that clears every pane already standing, and the
+// least-overlapping one if none is clear.
+function placeClear(px,py,w,h,wins){
+  const over=(x,y)=>wins.reduce((a,q)=>a+Math.max(0,Math.min(x+w,q.x+q.w)-Math.max(x,q.x))
+                                       *Math.max(0,Math.min(y+h,q.y+q.h)-Math.max(y,q.y)),0);
+  let best=null;
+  for(const [dx,dy] of [[12,12],[-w-12,12],[12,-h-12],[-w-12,-h-12]]){
+    const x=clamp(px+dx,4,Math.max(4,W-w-4)), y=clamp(py+dy,4,Math.max(4,H-h-4));
+    const o=over(x,y);
+    if(o===0)return {x,y};
+    if(!best||o<best.o)best={x,y,o};
+  }
+  return best;
+}
+
 // ── the beat: the daemon's pulse, as a breath ──────────────────────────────
 // The glow only ever moved on a transition, so a scene with nothing happening
 // was a dead scene. `shuttle.tick` is a real number in the feed and the sweep
@@ -537,7 +558,9 @@ function dimUnder(g,wins){
 const BREATH_A=0.16;
 function breath(now){
   const ph=(typeof ACTOR!=='undefined'&&ACTOR.sweep)?ACTOR.sweep.phase(now):null;
-  return ph===null?0:0.5+0.5*Math.cos(ph*6.283185307);
+  // an inhale at the tick, a slow exhale, and a beat that is LATE rests dark
+  // rather than holding the crest: phase() clamps at 1, and 1 must mean rest.
+  return ph===null?0:0.5+0.5*Math.cos(ph*3.14159265);
 }
 
 // ── the glitch: it belongs to ARRIVAL, and to nothing else ─────────────────
@@ -581,13 +604,15 @@ function drawScene(x,now){
     RESERVE.card=card;
     RECORD.prepare(x,z,now);                  // derive · lay out · measure, no ink
     const wins=[RECORD.wireWindow(x,z),card,ACTOR.benchWindow(x,z),
-                RECORD.paneWindow(x),RECORD.hoverWindow(x),worldHoverWindow(x)].filter(Boolean);
+                RECORD.paneWindow(x)].filter(Boolean);
+    const hov=RECORD.hoverWindow(x,wins)||worldHoverWindow(x,wins);
+    if(hov)wins.push(hov);
     PANES.length=0;for(const w of wins)if(w.mask!==false)PANES.push({x:w.x,y:w.y,w:w.w,h:w.h});
     // 2 · the four layers, in order, and nothing outside them
     L('ground',x,()=>{
       drawSea(x,z);
       drawWarp(x,z);
-      RECORD.roots(x,z);
+      RECORD.ground(x,z);
       drawHome(x,z,step);
       drawIsland(x,z);
       drawCanopy(x,z,step,now);
@@ -869,13 +894,13 @@ function drawPings(x,z,now){
 // is a plaque now, in the windows layer, and [RECORD]'s cloth plaque wins when
 // both would stand.
 const HOVER={txt:null,x:0,y:0};
-function worldHoverWindow(g){
+function worldHoverWindow(g,wins){
   if(!HOVER.txt||(RECORD.hover&&RECORD.mouse))return null;
   g.save();g.font=`10px ${MONO}`;
   const ls=String(HOVER.txt).split('\n');
   const w=Math.max(...ls.map(l=>g.measureText(l).width))+16, h=ls.length*13+10;
   g.restore();
-  const bx=clamp(HOVER.x+12,4,W-w-4), by=clamp(HOVER.y+12,4,H-h-4);
+  const {x:bx,y:by}=placeClear(HOVER.x,HOVER.y,w,h,wins||[]);
   return {name:'world-hover',x:bx,y:by,w,h,dim:'none',draw(g){
     g.save();g.font=`10px ${MONO}`;
     g.fillStyle='rgba(11,9,6,0.93)';g.fillRect(bx,by,w,h);
@@ -1473,7 +1498,7 @@ const ACTOR={
 // And it must not be mistakable for the pod's ping: the pod throws an amber
 // line at one place when a boundary landed; the ship throws ice rings at every
 // room it can hear, on the beat. Same law, two bodies.
-const BEAT={tick:null,at:0,stamp:null,period:null,n:0};
+const BEAT={tick:null,at:0,stamp:null,period:null,n:0,src:null,rejected:0};
 const SWEEP_MS=1700, ECHO_MS=2600;
 const full=S=>(S&&S.hud&&S.hud.full)||null;
 const numOr=(v,d)=>num(v)?v:d;
@@ -1517,12 +1542,24 @@ ACTOR.sweep={
     const f=full(S);
     const t=S&&((S.shuttle&&S.shuttle.tick)||(f&&f.tick&&f.tick.n));
     if(!num(t))return;
-    const stamp=Date.parse((f&&f.tick&&f.tick.at)||'')||null;
+    // THE STAMP MUST NAME THIS TICK. Measured on the live daemon 2026-09-17:
+    // `shuttle.tick` moves every ~5 s but `hud.full.tick` is a cached snapshot
+    // that lags it — 42051 against {n: 42046, at: 21:49:35}. Pairing a fresh
+    // `n` with a stale `at` measured the beat at 65 s, which is a breath nobody
+    // would ever see. So the stamp is read only when it is a stamp for the very
+    // tick that just moved; otherwise the interval between two sightings is.
+    const stamp=(f&&f.tick&&f.tick.n===t)?(Date.parse(f.tick.at||'')||null):null;
     if(BEAT.tick===null){BEAT.tick=t;BEAT.at=now;BEAT.stamp=stamp;return;}
     if(t===BEAT.tick)return;
-    BEAT.period=(stamp&&BEAT.stamp&&stamp>BEAT.stamp)?(stamp-BEAT.stamp)
-               :(BEAT.at?now-BEAT.at:null);
-    BEAT.stamp=stamp;BEAT.tick=t;BEAT.at=now;BEAT.n++;
+    const measured=(stamp&&BEAT.stamp&&stamp>BEAT.stamp)?(stamp-BEAT.stamp)
+                  :(BEAT.at?now-BEAT.at:null);
+    BEAT.src=stamp&&BEAT.stamp&&stamp>BEAT.stamp?'stamp':'sighting';
+    // a reading outside the daemon's own plausible range keeps the last good
+    // one rather than handing the scene a clock it would be wrong to trust
+    if(num(measured)&&measured>=1200&&measured<=30000)BEAT.period=measured;
+    else BEAT.rejected=Math.round(measured||0);
+    if(stamp)BEAT.stamp=stamp;
+    BEAT.tick=t;BEAT.at=now;BEAT.n++;
     for(const r of RETURNS){
       const cell=hubBy.get(r.k);if(!cell)continue;
       let got=null;try{got=r.read(S);}catch(e){got=null;}
@@ -2632,7 +2669,7 @@ const RECORD=(()=>{
     geom();                       // reads RESERVE.card: the cloth's own width
     R.wireM=wireMetrics(z);       // sets R.wireTop, which rootDepth reads
   };
-  R.roots=(g,z)=>{if(R.ready)drawRoots(g,z);};
+  R.ground=(g,z)=>{if(R.ready)drawRoots(g,z);};   // NOT `R.roots`: that name is the array
   R.marks=(g,z)=>{
     if(!R.ready)return;
     drawLitRooms(g,z,typeof rooms!=='undefined'?rooms:[]);
@@ -2661,10 +2698,12 @@ const RECORD=(()=>{
     return {...rect,name:R.win,dim:'scene',
             draw:gg=>drawWindow(gg,rect,title,b.rows,b.note,b.gap)};
   };
-  R.hoverWindow=g=>{
+  R.hoverWindow=(g,wins)=>{
     if(!R.ready||R.win)return null;        // a hover is not a stop, and a stop wins
     const m=hoverPlaque(g);
     if(!m)return null;
+    const q=placeClear(R.mouse.x,R.mouse.y,m.w,m.h,wins||[]);
+    m.bx=q.x;m.by=q.y;
     return {name:'hover',x:m.bx,y:m.by,w:m.w,h:m.h,dim:'none',
             draw:gg=>drawHover(gg,m)};
   };
