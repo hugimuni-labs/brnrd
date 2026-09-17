@@ -423,6 +423,36 @@ def test_eviction_preview_survives_a_heading_that_carries_inline_code(monkeypatc
     assert targets == ["surface/plans/x/active.md", "surface/operator-checklist.md"]
 
 
+def test_eviction_preview_never_flags_an_indexed_shelf_page(tmp_path):
+    """#2002 — a shelf page rides the wake as a composed-index line by
+    default; it is not evicted, so it must not appear as an
+    eviction-preview finding even under a budget too small to fit it.
+
+    Drives the real builder end to end (no mock of
+    `_build_work_surface_block_scored`) — the check and the builder must
+    agree on what "indexed, not evicted" means, and a mocked-text test
+    (see the two above) cannot catch the two drifting apart.
+    """
+    home = tmp_path / "acct-home"
+    surface = home / "surface"
+    (surface / "shelf").mkdir(parents=True)
+    (tmp_path / ".brr").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".brr" / "config").write_text(
+        f"home.path={home}\nrepo.label=local/default\n"
+        "dominion.surface_inject_budget_bytes=2000\n",
+        encoding="utf-8",
+    )
+    (surface / "index.md").write_text("# Start", encoding="utf-8")
+    (surface / "shelf" / "big-artifact.md").write_text(
+        "keeps: until changed\n\n# Big artifact\n\n" + ("x" * 5000),
+        encoding="utf-8",
+    )
+
+    findings = notes_preflight.check_work_surface_eviction(tmp_path)
+
+    assert not any("shelf/big-artifact.md" in f.target for f in findings), findings
+
+
 # ── keeps-past-its-date ──────────────────────────────────────────────
 #
 # `surface/shelf/index.md`: "Every page declares a `keeps:`; expiry renders
