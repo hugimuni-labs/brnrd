@@ -314,7 +314,8 @@ function ingest(d){
     if(aim)pod.target=aim;
     const o=podXY(pod,CAM.z);
     pings.push({u:o.x/W,v:(o.y-waterAt(CAM.z))/H,aim,room,born:performance.now(),
-                act:b.act,kind:b.place_kind,detail:b.detail||''});
+                act:b.act,kind:b.place_kind,detail:b.detail||'',
+                topics:b.topics||[]}); /*[RECORD]*/
   }
   // §3: listening ⇒ the resident stands at its listening station in the shed
   if(pod.listening&&hubBy.get('shed'))pod.target={cell:hubBy.get('shed')};
@@ -565,7 +566,7 @@ function drawScene(x,now){
     x.save();x.globalCompositeOperation='lighter';
     if(to){
       const e=clamp(k,0,1), px=ox+(to.x-ox)*e, py=oy+(to.y-oy)*e;
-      x.strokeStyle=`rgba(242,177,52,${0.75*(1-e)})`;x.lineWidth=1.6;
+      x.strokeStyle=RECORD.tint(p.topics,0.75*(1-e));x.lineWidth=1.6; /*[RECORD]*/
       x.beginPath();x.moveTo(ox,oy);x.lineTo(px,py);x.stroke();
       x.fillStyle=`rgba(255,228,170,${1-e})`;x.beginPath();x.arc(px,py,3.4*(0.5+0.5*z),0,7);x.fill();
       if(e>=1&&!p.hit){p.hit=true;
@@ -573,7 +574,7 @@ function drawScene(x,now){
     }else{                           // no place, no room, no kind the feed could name: torn
       const e=clamp(k,0,1);
       for(let i=0;i<4;i++){const ang=hash(p.detail+i)*6.28, rr=40*e+i*4;
-        x.strokeStyle=`rgba(242,177,52,${0.16*(1-e)})`;x.lineWidth=1;
+        x.strokeStyle=RECORD.tint(p.topics,0.16*(1-e));x.lineWidth=1; /*[RECORD]*/
         x.beginPath();x.arc(ox,oy,rr,ang,ang+0.5+hash(p.detail+'b'+i));x.stroke();}
     }
     x.restore();
@@ -617,6 +618,7 @@ function drawScene(x,now){
     }
   }
   drawSounder(x,z);
+  RECORD.draw(x,now,{z,water,nodes,rooms,pods,S}); /*[RECORD]*/
 }
 
 // the depth sounder — the camera's own readout, in the world, because a
@@ -683,6 +685,451 @@ cv.addEventListener('mousemove',e=>{
     h.style.whiteSpace='pre';h.textContent=txt;}
   else h.style.display='none';
 });
+
+// ═══ [RECORD] ══════════════════════════════════════════════════════════════
+// The scene's memory: the cloth (one plaque per pass), the fold between a room
+// and the passes that walked it, the resident's hull as the body, the wire, and
+// the topic tint the indexing has been computing in silence.
+//
+// THE SEAM, as the dispatcher stated it after correcting his own steer:
+//   RECORD.draw(x, now, view)   called last inside drawScene.
+//                               view = {z, water, nodes, rooms, pods, S}
+//   RECORD.hit(x, y)            the cloth plaque under the cursor, or null
+//   SELECTED                    read, never written. [ACTOR] owns it and is
+//                               adding it; declared defensively here so this
+//                               block runs before that block exists.
+// Every crossing outside this fence is one marked line — the report lists them.
+//
+// WHAT THIS BLOCK OWNS AND WHAT IT BORROWS. It never writes SELECTED, so its
+// own pass selection is its own state (R.pass). While [ACTOR] has no select(),
+// clicking a room sets a LOCAL mirror (R.roomLocal) so the fold can be shown
+// from one branch; the moment SELECTED exists it wins and the mirror is unread.
+// It draws its own hover plaque on the canvas rather than touching #hover,
+// which the merge has already broken: there are two mousemove handlers, and the
+// second matches on `n.y` — a field no node carries — so it hides the tooltip
+// the first one just filled. Not this block's to fix; it is in the report.
+//
+// THE DISCIPLINE. One light source: acts. Four states — amber warm · ice his
+// and cold · black absent · torn unmeasured. A SELECTION IS NOT A READING, so
+// the fold marks what it lights in the interface's own ink (#e8dcc0 hairlines)
+// and never by making a thing look warmer than its reading says. The one
+// number the brief asked for that this feed does not carry — the size of the
+// context window — is drawn TORN with the occupancy said in full, not invented.
+globalThis.SELECTED ??= null;
+const RECORD=(()=>{
+  const INK='#e8dcc0', ABSENT_INK='#6b5f47', DAY=864e5;
+  const BOTTOM=56;          // the chrome's legend owns the last ~50 px of canvas;
+                            // lift it and this constant is the only change needed.
+  const R={
+    src:null, passes:[], byRun:new Map(), fpByRun:new Map(), tints:new Map(), runes:new Map(),
+    wire:[], body:null, geom:null, cursor:-1, pass:null, roomLocal:null,
+    hover:null, mouse:null, log:false, pack:false, view:null
+  };
+
+  // ── the tint: the deck a bead belonged to, as a bend in the same light ────
+  // Not a category palette — that would be a second light source. Every tint is
+  // the scene's amber rotated by a bounded, stable offset taken off the heddle
+  // order the feed itself publishes, so a tinted ping still reads as one light,
+  // bent. `topics: []` is the honest 'no deck measured' and keeps plain amber.
+  const HUE=38.3;
+  function tintsFrom(S){
+    const order=[...new Set([...((S.heddles||[]).map(h=>h.slug)),
+      ...((S.beads||[]).flatMap(b=>b.topics||[])),
+      ...(((S.cloth||{}).rows||[]).flatMap(r=>r.topics||[]))])].filter(Boolean);
+    R.tints=new Map(order.map((t,i)=>[t,-26+52*((i*0.6180339887)%1)]));
+    R.runes=new Map((S.heddles||[]).map(h=>[h.slug,h.rune||'']));
+  }
+  R.hue=t=>HUE+(R.tints.get(t)||0);
+  R.tint=(topics,a)=>{
+    const t=(topics||[])[0];
+    if(!t||!R.tints.has(t))return `rgba(242,177,52,${a})`;
+    return `hsla(${R.hue(t).toFixed(1)},84%,58%,${a})`;
+  };
+
+  // ── sync: everything below is derived from the reading, once per feed ─────
+  const T=s=>{const v=Date.parse(s||'');return isFinite(v)?v:null;};
+  function sync(S){
+    R.src=S;
+    tintsFrom(S);
+    const rows=((S.cloth||{}).rows||[]).filter(r=>r&&r.run);
+    R.passes=rows.map(r=>({...r,t0:T(r.started),t1:T(r.ended),live:!r.ended}))
+                 .sort((a,b)=>(a.t0||0)-(b.t0||0));
+    R.byRun=new Map(R.passes.map(p=>[p.run,p]));
+    // the fold's index, both directions, out of one field: footprints.
+    R.fpByRun=new Map();
+    for(const it of ((S.warp||{}).items||[]))
+      for(const f of (it.footprints||[])){
+        if(!R.fpByRun.has(f.run))R.fpByRun.set(f.run,new Map());
+        const m=R.fpByRun.get(f.run);
+        m.set(it.id,(m.get(it.id)||0)+1);
+      }
+    // the wire: two speakers, both measured. The world's, from the inbound
+    // events the daemon kept; mine, from the beads' own detail.
+    const inb=(((S.hud||{}).full||{}).inbound||{}).events||[];
+    const said=inb.map(e=>({at:T(e.created),who:e.source||'event',
+      text:String(e.body||'').replace(/\s+/g,' ').trim(),mine:false,topics:[]}));
+    const mine=(S.beads||[]).map(b=>({at:T(b.at),who:b.act,
+      text:String(b.detail||'').replace(/\s+/g,' ').trim(),mine:true,
+      topics:b.topics||[],kind:b.place_kind||''}));
+    R.wire=[...said,...mine].filter(l=>l.text).sort((a,b)=>(a.at||0)-(b.at||0));
+    if(R.cursor<0)R.cursor=R.passes.length-1;
+    // the hull's denominator, if a reading ever names one
+    const cw=((((S.hud||{}).full||{}).resources||{}).context_window)||{};
+    const occ=(S.hud||{}).ctx_tokens;
+    let win=cw.window_tokens||cw.window||null;
+    if(!win){const m=String(cw.summary||'').match(/of\s+([\d.]+)\s*([km])?/i);
+      if(m)win=+m[1]*(m[2]&&m[2].toLowerCase()==='m'?1e6:m[2]?1e3:1);}
+    R.body={occ:num(occ)?occ:null,win:num(win)?win:null,say:cw.summary||null};
+  }
+
+  // ── the fold ─────────────────────────────────────────────────────────────
+  // One field — footprints — read in three directions. SELECTED is [ACTOR]'s
+  // to write; this block reads it and tolerates every shape it might arrive in.
+  const sel=()=>{
+    const s=SELECTED;                 // the identifier, not the property: a
+                                      // sibling's `let SELECTED` would shadow
+                                      // globalThis and this read must follow it
+    if(s){
+      if(s.kind==='room'||s.kind==='deck')return s;
+      if(s.it)return {kind:'room',id:s.it.id};
+      if(s.room)return {kind:'room',id:s.room.it?s.room.it.id:s.room};
+      if(s.id)return {kind:(typeof byItem!=='undefined'&&byItem.has(s.id))?'room':'deck',id:s.id};
+    }
+    return R.roomLocal?{kind:'room',id:R.roomLocal,local:true}:null;
+  };
+  R.selection=sel;
+  const itemOf=id=>(typeof byItem!=='undefined'&&byItem.get(id))||null;
+  // room → the passes that walked it
+  R.passesOf=id=>{
+    const r=itemOf(id), m=new Map();
+    for(const f of ((r&&r.it.footprints)||[]))m.set(f.run,(m.get(f.run)||0)+1);
+    return m;
+  };
+  // deck → the passes that carried its topic
+  R.passesOfDeck=slug=>new Map(R.passes.filter(p=>(p.topics||[]).includes(slug))
+    .map(p=>[p.run,(p.topics||[]).length]));
+  // pass → the rooms it left a footprint in
+  R.roomsOf=run=>R.fpByRun.get(run)||new Map();
+  const litPasses=()=>{const s=sel();
+    return !s?new Map():s.kind==='deck'?R.passesOfDeck(s.id):R.passesOf(s.id);};
+  const litRooms=()=>R.pass?R.roomsOf(R.pass):new Map();
+
+  // ── geometry ─────────────────────────────────────────────────────────────
+  function geom(){
+    const n=R.passes.length||1;
+    const x0=W*0.045, x1=W*0.975, base=H-BOTTOM;
+    const pw=(x1-x0)/n, gap=Math.min(2.2,pw*0.22);
+    return R.geom={x0,x1,base,pw,gap,n};
+  }
+  const dur=p=>num(p.duration_s)?p.duration_s
+    :(p.t1&&p.t0?(p.t1-p.t0)/1000:(p.live&&p.t0?(Date.now()-p.t0)/1000:0));
+  const plaqueH=p=>5+16*clamp(Math.log10(1+Math.max(0,dur(p))/60)/Math.log10(4401),0,1);
+  const plaqueX=i=>{const g=R.geom;return {x:g.x0+i*g.pw+g.gap/2,w:Math.max(1.6,g.pw-g.gap)};};
+  // recency is a reading: the same week-long curve the rooms are lit by
+  const recency=p=>{const t=p.live?Date.now():(p.t1||p.t0);
+    return t?clamp(1-(Date.now()-t)/(7*DAY),0,1):null;};
+  const fmtDur=s=>s>=3600?`${(s/3600).toFixed(1)} h`:s>=60?`${Math.round(s/60)} min`:`${Math.round(s)} s`;
+
+  // ── 1 · the cloth: one plaque per pass, time left to right ───────────────
+  function drawCloth(g){
+    const G=geom(), lit=litPasses(), s=sel();
+    g.save();g.font=`9px ${MONO}`;
+    g.strokeStyle='rgba(90,77,60,0.30)';g.lineWidth=1;
+    g.beginPath();g.moveTo(G.x0,Math.round(G.base)+.5);g.lineTo(G.x1,Math.round(G.base)+.5);g.stroke();
+    g.fillStyle='#4a4336';g.textAlign='right';
+    g.fillText('THE CLOTH',G.x0-6,G.base-1);g.textAlign='left';
+    let lastDay=null;
+    R.passes.forEach((p,i)=>{
+      const {x:px,w:pw}=plaqueX(i), ph=plaqueH(p), rc=recency(p);
+      const y=G.base-(p.parent?3:0), top=y-ph;
+      const d=p.t0?Math.floor(p.t0/DAY):null;
+      if(d!==null&&d!==lastDay){          // the time axis, said where the day turns
+        lastDay=d;
+        g.strokeStyle='rgba(90,77,60,0.18)';g.lineWidth=1;
+        g.beginPath();g.moveTo(Math.round(px)+.5,G.base+1);g.lineTo(Math.round(px)+.5,G.base+9);g.stroke();
+        if(pw>3.2){g.fillStyle='#3f3a30';g.fillText(new Date(p.t0).toISOString().slice(5,10),px+2,G.base+9);}
+      }
+      const a=rc===null?0.22:0.20+0.62*rc;
+      g.fillStyle=R.tint(p.topics,a*0.55);g.fillRect(px,top,pw,ph);
+      g.strokeStyle=rc===null?'rgba(90,77,60,0.45)':R.tint(p.topics,Math.min(1,a+0.22));
+      g.lineWidth=0.8;
+      if(p.live){                         // the live run: a plaque with no right wall
+        g.beginPath();g.moveTo(px,y);g.lineTo(px,top);g.lineTo(px+pw,top);g.stroke();
+        g.fillStyle=A;g.beginPath();g.arc(px+pw/2,top-4,1.6,0,7);g.fill();
+      }else g.strokeRect(px,top,pw,Math.max(1,ph));
+      if((p.prs||[]).length&&pw>2.6){     // produce: a notch of his ice on the lip
+        g.fillStyle='rgba(143,211,255,0.55)';g.fillRect(px,top-2,Math.min(pw,2.2),1.6);}
+      if(!num(p.tokens)&&pw>3){           // torn: a pass whose spend was never read
+        g.strokeStyle='rgba(90,77,60,0.40)';g.lineWidth=0.6;
+        g.beginPath();g.moveTo(px,y+2.5);g.lineTo(px+pw,y+2.5);g.stroke();}
+      const k=lit.get(p.run);
+      if(k){                              // THE FOLD, inward: lit in interface ink
+        g.strokeStyle=INK;g.lineWidth=1;
+        g.beginPath();g.moveTo(px-0.5,top-4.5);g.lineTo(px-0.5,top-8.5);
+        g.lineTo(px+pw+0.5,top-8.5);g.lineTo(px+pw+0.5,top-4.5);g.stroke();
+        if(pw>5&&s&&s.kind==='room'){g.fillStyle=INK;g.textAlign='center';g.font=`8px ${MONO}`;
+          g.fillText(String(k),px+pw/2,top-10);g.textAlign='left';g.font=`9px ${MONO}`;}
+      }
+      if(R.pass===p.run){                 // the selected pass
+        g.strokeStyle=INK;g.lineWidth=1.2;g.strokeRect(px-1.5,top-2.5,pw+3,ph+4.5);
+        const j=p.parent?R.passes.findIndex(q=>q.run===p.parent):-1;
+        if(j>=0){                         // parentage, drawn only when asked for
+          const q=plaqueX(j);
+          g.strokeStyle='rgba(232,220,192,0.35)';g.lineWidth=0.8;g.setLineDash([2,2]);
+          g.beginPath();g.moveTo(px+pw/2,y+2);g.lineTo(px+pw/2,G.base+13);
+          g.lineTo(q.x+q.w/2,G.base+13);g.lineTo(q.x+q.w/2,G.base+2);g.stroke();g.setLineDash([]);
+        }
+      }
+      if(R.cursor===i&&R.pass!==p.run){
+        g.strokeStyle='rgba(232,220,192,0.45)';g.lineWidth=1;
+        g.beginPath();g.moveTo(px+pw/2,G.base+2);g.lineTo(px+pw/2,G.base+5);g.stroke();}
+    });
+    // the tint key: the decks, each in its own bent light
+    let kx=G.x0; const ky=G.base-30;
+    for(const t of [...R.tints.keys()].slice(0,8)){
+      const lab=`${R.runes.get(t)||''} ${t}`;
+      g.fillStyle=R.tint([t],0.85);g.fillRect(kx,ky-6,4,4);
+      g.fillStyle='rgba(122,108,82,0.9)';g.fillText(lab,kx+7,ky-2);
+      kx+=g.measureText(lab).width+18;
+      if(kx>G.x1-140)break;
+    }
+    const say=foldSay();
+    if(say){g.fillStyle=INK;g.globalAlpha=0.85;g.fillText(say,G.x0,G.base-44);g.globalAlpha=1;}
+    g.restore();
+  }
+  // the fold, said out loud — including the case the brief singled out: a room
+  // with no footprints must say so instead of reading as unvisited-by-choice.
+  function foldSay(){
+    if(R.pass){
+      const m=R.roomsOf(R.pass), n=[...m.values()].reduce((a,b)=>a+b,0), p=R.byRun.get(R.pass);
+      const who=p?`${p.name||p.title||R.pass} · ${p.shell||'?'}/${p.core||'?'}`:R.pass;
+      return m.size?`${who} → ${m.size} room${m.size>1?'s':''} · ${n} footprint${n>1?'s':''} · lit in the warp`
+        :`${who} — this pass left no footprint in any room · ${(p&&p.knots)||0} knots, ${(p&&p.pages)||0} pages`;
+    }
+    const s=sel();if(!s)return null;
+    if(s.kind==='deck'){
+      const m=R.passesOfDeck(s.id);
+      return `deck ${s.id} → ${m.size} of ${R.passes.length} passes carried it`;
+    }
+    const m=R.passesOf(s.id), n=[...m.values()].reduce((a,b)=>a+b,0);
+    const it=itemOf(s.id), v=it&&it.it.visited_at;
+    if(!m.size)return `${s.id} — no pass in the record's ${R.passes.length} left a footprint here`
+      +(v?` · the warp says visited ${v}, so the record is thinner than the warp`
+         :' · and the warp has no visit for it either: never entered, not un-drawn');
+    return `${s.id} → ${m.size} pass${m.size>1?'es':''} · ${n} footprint${n>1?'s':''} · lit on the cloth`;
+  }
+
+  // ── 2 · the fold outward, drawn over the warp ────────────────────────────
+  // The rooms are [WORLD]'s to draw and [ACTOR]'s to select; the fold only adds
+  // its own mark over them, so neither loop needs an edit. A bracket, not a
+  // glow: selection is interface, and the light in this scene means an act.
+  function drawLitRooms(g,z,rms){
+    const m=litRooms();if(!m.size||!rms||!rms.length)return;
+    const rs=roomAt(z);
+    g.save();g.strokeStyle=INK;g.lineWidth=1;g.font=`8px ${MONO}`;
+    for(const r of rms){
+      const k=m.get(r.it.id);if(!k)continue;
+      const {x:rx,y:ry}=roomXY(r,z);
+      const w=Math.max(3,r.rw*rs)/2+2.5, h=Math.max(3,r.rh*rs)/2+2.5;
+      for(const [sx,sy] of [[-1,-1],[1,-1],[-1,1],[1,1]]){
+        g.beginPath();
+        g.moveTo(rx+sx*w-sx*Math.min(4,w*0.6),ry+sy*h);
+        g.lineTo(rx+sx*w,ry+sy*h);
+        g.lineTo(rx+sx*w,ry+sy*h-sy*Math.min(4,h*0.6));
+        g.stroke();
+      }
+      if(rs>0.4){g.fillStyle=INK;g.globalAlpha=0.8;g.fillText(`×${k}`,rx+w+2,ry-h+3);g.globalAlpha=1;}
+    }
+    g.restore();
+  }
+
+  // ── 3 · the body: the hull as the window it is holding ───────────────────
+  // The dispatch asked for `pack` (wake blocks with bytes). This feed has no
+  // `pack`, and `resources.context_window` says in its own words: "665.3k tok
+  // occupied (no window size yet)". So the hull shows the occupancy it has and
+  // is TORN where the denominator is missing — the fill switches to a real
+  // level the moment a reading names a window, and not one hour earlier.
+  function podHull(pds){
+    const p=(pds||[]).find(q=>q.kind==='resident');
+    if(!p)return null;
+    if(typeof ACTOR!=='undefined'&&ACTOR&&typeof ACTOR.podMetrics==='function'){
+      try{const m=ACTOR.podMetrics(p);if(m&&num(m.rx))return {p,x:num(m.x)?m.x:p.x,y:num(m.y)?m.y:p.y,rx:m.rx,ry:m.ry};}catch(e){}
+    }
+    const sc=podAt(CAM.z);                 // [WORLD]'s own geometry, today
+    return {p,x:p.x,y:p.y,rx:11*sc,ry:6.5*sc};
+  }
+  function drawBody(g,pds){
+    const h=podHull(pds);if(!h||!R.body||R.body.occ===null)return;
+    const {occ,win}=R.body;
+    g.save();
+    g.beginPath();g.ellipse(h.x,h.y,h.rx,h.ry,0,0,7);g.clip();
+    if(win){                               // measured denominator ⇒ a real level
+      const f=clamp(occ/win,0,1), fy=h.y+h.ry-2*h.ry*f;
+      g.fillStyle='rgba(242,177,52,0.34)';g.fillRect(h.x-h.rx,fy,h.rx*2,2*h.ry*f);
+      g.strokeStyle='rgba(242,177,52,0.7)';g.lineWidth=1;
+      g.beginPath();g.moveTo(h.x-h.rx,fy);g.lineTo(h.x+h.rx,fy);g.stroke();
+    }else{                                 // TORN: occupied, against no window
+      g.strokeStyle='rgba(90,77,60,0.75)';g.lineWidth=1;
+      for(let k=-h.ry*2;k<h.rx*2+h.ry*2;k+=4){
+        g.beginPath();g.moveTo(h.x-h.rx+k,h.y+h.ry);g.lineTo(h.x-h.rx+k+h.ry*2,h.y-h.ry);g.stroke();}
+    }
+    g.restore();
+    g.save();g.font=`9px ${MONO}`;g.textAlign='center';g.fillStyle=win?'#8a7c5e':ABSENT_INK;
+    g.fillText(win?`${(occ/1000).toFixed(0)}k of ${(win/1000).toFixed(0)}k`
+                 :`${(occ/1000).toFixed(1)}k tok · window unmeasured`,h.x,h.y+h.ry+11);
+    g.fillStyle=ABSENT_INK;g.font=`8px ${MONO}`;
+    g.fillText('P',h.x,h.y+h.ry+20);g.textAlign='left';g.restore();
+  }
+  // the cutaway on P: what is in the window, from the only breakdown this feed
+  // carries — each boundary's own `delta`, grouped by the act that spent it.
+  function drawPack(g,pds){
+    const h=podHull(pds), S0=R.src||{}, b=S0.beads||[];
+    if(!b.length)return;
+    const base=(b[0].ctx_after||0)-(b[0].delta||0);
+    const byAct=new Map();
+    for(const q of b){const d=q.delta||0;if(d>0)byAct.set(q.act,(byAct.get(q.act)||0)+d);}
+    const acts=[...byAct.entries()].sort((a,c)=>c[1]-a[1]);
+    const tot=base+acts.reduce((a,c)=>a+c[1],0);
+    const px=16, py=176, pw=312, rowh=18, ph=40+rowh*(acts.length+1)+30;
+    g.save();
+    g.fillStyle='rgba(7,6,4,0.82)';g.fillRect(px,py,pw,ph);
+    g.strokeStyle='rgba(122,104,72,0.45)';g.lineWidth=1;g.strokeRect(px+.5,py+.5,pw-1,ph-1);
+    if(h){g.strokeStyle='rgba(122,104,72,0.30)';g.setLineDash([2,3]);
+      g.beginPath();g.moveTo(px+pw,py+14);g.lineTo(h.x-h.rx-4,h.y);g.stroke();g.setLineDash([]);}
+    g.font=`10px ${MONO}`;g.fillStyle='#8a7c5e';
+    g.fillText('THE BODY · what is in the window',px+10,py+17);
+    g.font=`9px ${MONO}`;
+    let y=py+36;
+    const bar=(lab,v,col)=>{
+      g.fillStyle=col;g.fillRect(px+10,y-8,(pw-116)*(tot?clamp(v/tot,0,1):0),7);
+      g.fillStyle='#4a4336';g.fillText(lab,px+10,y+8);
+      g.fillStyle='#d9cba9';g.textAlign='right';g.fillText(`${(v/1000).toFixed(1)}k`,px+pw-10,y+8);
+      g.textAlign='left';y+=rowh;
+    };
+    bar('the boot — in the window at the first boundary kept',base,'rgba(143,211,255,0.30)');
+    for(const [act,v] of acts)bar(`${act} — this run's own reads`,v,'rgba(242,177,52,0.34)');
+    const d=Math.abs(tot-(R.body.occ||0));
+    g.fillStyle='#8a7c5e';
+    g.fillText(`${(tot/1000).toFixed(1)}k stacked · the feed reads ${((R.body.occ||0)/1000).toFixed(1)}k`
+      +(d<1?' — they reconcile':` — ${(d/1000).toFixed(1)}k unaccounted`),px+10,y+4);
+    g.fillStyle=ABSENT_INK;
+    g.fillText('no `pack` in the feed: the wake’s own blocks are not published',px+10,y+17);
+    g.restore();
+  }
+
+  // ── 4 · the wire: the last things said, in the same ink ──────────────────
+  function drawWire(g){
+    const G=R.geom||geom();
+    const n=R.log?26:5, lh=R.log?15:13, lines=R.wire.slice(-n);
+    if(!lines.length)return;
+    const x0=W*0.045, bot=G.base-(R.log?52:36), wmax=R.log?W*0.62:W*0.44;
+    g.save();g.font=`${R.log?10:9}px ${MONO}`;
+    if(R.log){
+      g.fillStyle='rgba(7,6,4,0.72)';g.fillRect(x0-10,bot-lh*lines.length-16,wmax+20,lh*lines.length+26);
+      g.strokeStyle='rgba(122,104,72,0.35)';g.lineWidth=1;
+      g.strokeRect(x0-9.5,bot-lh*lines.length-15.5,wmax+19,lh*lines.length+25);
+      g.fillStyle='#8a7c5e';g.fillText('THE WIRE · who said what, oldest at the top',x0,bot-lh*lines.length-4);
+    }
+    lines.forEach((l,i)=>{
+      const age=(lines.length-1-i)/Math.max(1,lines.length-1);
+      const a=R.log?0.35+0.65*(1-age):clamp(0.95-age*0.78,0.12,0.95);
+      const y=bot-(lines.length-1-i)*lh;
+      g.fillStyle=`rgba(90,77,60,${a})`;
+      g.fillText(l.at?new Date(l.at).toISOString().slice(11,19):'  ·  ',x0,y);
+      const wx=x0+52, who=(l.mine?'':'⇐ ')+l.who;
+      // the world's voice is ice; mine is amber, bent by the deck it was on
+      g.fillStyle=l.mine?R.tint(l.topics,a):`rgba(143,211,255,${a})`;
+      g.fillText(who,wx,y);
+      const tw=g.measureText(who).width, room=wmax-(wx-x0)-tw-12;
+      let t=l.text;
+      while(t.length&&g.measureText(t).width>room)t=t.slice(0,-2);
+      g.fillStyle=`rgba(232,220,192,${a*0.82})`;g.fillText(t,wx+tw+8,y);
+    });
+    if(!R.log){g.fillStyle='rgba(74,67,54,0.9)';g.font=`9px ${MONO}`;g.fillText('L · the wire',x0,bot+11);}
+    g.restore();
+  }
+
+  // ── the hover plaque: this block's own, on the canvas ────────────────────
+  function drawHover(g){
+    if(!R.hover||!R.mouse)return;
+    const p=R.hover, m=R.roomsOf(p.run), fp=[...m.values()].reduce((a,b)=>a+b,0);
+    const ls=[`${p.run}${p.live?'  · live':''}`,
+      p.name||p.title||'—',
+      `${p.shell||'?'}/${p.core||'?'} · ${fmtDur(dur(p))}`,
+      `${p.knots||0} knots · ${p.pages||0} pages · ${(p.prs||[]).length} prs`,
+      num(p.tokens)?`${(p.tokens/1e6).toFixed(2)}m tokens`:'tokens unmeasured',
+      (p.topics||[]).length?`decks ${p.topics.join(', ')}`:'no deck measured',
+      m.size?`${m.size} rooms · ${fp} footprints · click to light them`:'no footprint in any room',
+      p.parent?`child of ${p.parent}`:'no parent'];
+    g.save();g.font=`9px ${MONO}`;
+    const w=Math.max(...ls.map(l=>g.measureText(l).width))+14, h=ls.length*12+10;
+    const bx=clamp(R.mouse.x+12,4,W-w-4);
+    let by=R.mouse.y-h-10; if(by<40)by=R.mouse.y+14;
+    g.fillStyle='rgba(11,9,6,0.93)';g.fillRect(bx,by,w,h);
+    g.strokeStyle='rgba(58,51,40,0.9)';g.lineWidth=1;g.strokeRect(bx+.5,by+.5,w-1,h-1);
+    ls.forEach((l,i)=>{g.fillStyle=i===0?INK:(i===1?'#d9cba9':'#8a7c5e');g.fillText(l,bx+7,by+16+i*12);});
+    g.restore();
+  }
+
+  // ── the hand ─────────────────────────────────────────────────────────────
+  R.hit=(mx,my)=>{                    // the seam: a plaque under the cursor, or null
+    const G=R.geom;if(!G)return null;
+    if(my<G.base-26||my>G.base+14)return null;
+    const i=Math.floor((mx-G.x0)/G.pw);
+    return (i>=0&&i<R.passes.length)?R.passes[i]:null;
+  };
+  // only while [ACTOR] has no select(): a local mirror, never a write to SELECTED
+  R.pickRoom=(mx,my)=>{
+    const rms=(R.view&&R.view.rooms)||(typeof rooms!=='undefined'?rooms:[]);
+    const rs=roomAt(CAM.z);
+    for(const r of rms){
+      const {x:rx,y:ry}=roomXY(r,CAM.z);
+      if(Math.abs(rx-mx)<=Math.max(6,r.rw*rs)/2&&Math.abs(ry-my)<=Math.max(6,r.rh*rs)/2){
+        R.roomLocal=r.it.id;R.pass=null;return true;}
+    }
+    return false;
+  };
+  cv.addEventListener('mousemove',e=>{R.mouse={x:e.clientX,y:e.clientY};R.hover=R.hit(e.clientX,e.clientY);});
+  cv.addEventListener('mouseleave',()=>{R.hover=null;R.mouse=null;});
+  cv.addEventListener('click',e=>{
+    const p=R.hit(e.clientX,e.clientY);
+    if(p){R.cursor=R.passes.indexOf(p);R.pass=p.run;R.roomLocal=null;return;}
+    if(typeof ACTOR!=='undefined'&&ACTOR&&typeof ACTOR.select==='function'){
+      try{if(ACTOR.select(e)){R.pass=null;return;}}catch(err){}
+    }
+    if(R.pickRoom(e.clientX,e.clientY))return;
+    R.pass=null;R.roomLocal=null;
+  });
+  addEventListener('keydown',e=>{     // field3's model: ← → scrub · L wire · P body · Esc
+    const k=e.key;
+    if(k==='ArrowLeft'||k==='ArrowRight'){
+      if(!R.passes.length)return;
+      R.cursor=clamp((R.cursor<0?R.passes.length-1:R.cursor)+(k==='ArrowRight'?1:-1),0,R.passes.length-1);
+      R.pass=R.passes[R.cursor].run;R.roomLocal=null;e.preventDefault();
+    }
+    else if(k==='l'||k==='L')R.log=!R.log;
+    else if(k==='p'||k==='P')R.pack=!R.pack;
+    else if(k==='Escape'){R.pass=null;R.roomLocal=null;R.log=false;R.pack=false;}
+  });
+
+  // ── the one entry point [WORLD] calls, last inside drawScene ─────────────
+  R.draw=(g,now,view)=>{
+    const S0=(view&&view.S)||(typeof S!=='undefined'?S:null);
+    if(!S0)return;
+    R.view=view||null;
+    if(R.src!==S0)sync(S0);
+    const z=(view&&num(view.z))?view.z:CAM.z;
+    drawLitRooms(g,z,(view&&view.rooms)||(typeof rooms!=='undefined'?rooms:[]));
+    const pds=(view&&view.pods)||(typeof pods!=='undefined'?pods:[]);
+    drawBody(g,pds);
+    drawCloth(g);
+    drawWire(g);
+    if(R.pack)drawPack(g,pds);
+    drawHover(g);
+  };
+  return R;
+})();
+// ═══ end [RECORD] ══════════════════════════════════════════════════════════
 
 // ═══ [FRAME] ═══════════════════════════════════════════════════════════════
 // ── the draw · the post-pass lives here ───
