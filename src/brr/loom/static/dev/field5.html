@@ -243,11 +243,327 @@ function drawScene(x,now){
     x.fillText((S&&S.run&&S.run.mood_glyph)||'b·_·d',p.x,p.y-13);x.textAlign='left';
   }
 }
+// ═══════════════════════════════════════════════════════════════════════════
+// [FRAME] · the loop · the buffers · the post-pass · the chrome
+//
+// One light source: acts. Four states — amber warm · ice his and cold ·
+// black absent · torn unmeasured. Nothing pulses on a timer. The pass is a
+// lens, never a light: it may bend, smear and dim what [WORLD] drew, and it
+// may not add a reading. If an effect makes an unmeasured thing look
+// measured, it is wrong however good it looks.
+//
+// Pipeline, per frame:
+//   wb   phosphor decay, then drawWorld() — the only buffer that remembers
+//   cv   bg · wb · chrome                 — the composed frame
+//   q*   bright-pass (square) · blur · 3 channel copies, scaled about centre
+//   ov   scanlines × vignette (static) + grain (moving) — darken only
+//
+// ?fx=off bypasses the whole pass (raw world + raw chrome).
+// Also: ?bloom=chain|filter|off · ?ab=off · ?grain=off · ?dither=off
+//       ?chrome=off|dom · ?perf=1 · ?tau=<ms> · ?bloomA= · ?abk=
+// ═══════════════════════════════════════════════════════════════════════════
+const Q=new URLSearchParams(location.search);
+const FX      = Q.get('fx')!=='off';
+const CHROME  = Q.get('chrome')!=='off' && Q.get('chrome')!=='dom';
+const BLOOM   = Q.get('bloom')||'chain';
+const AB      = Q.get('ab')!=='off';
+const GRAIN   = Q.get('grain')!=='off';
+const DITHER  = Q.get('dither')!=='off';
+const PERF    = Q.get('perf')==='1';
+const TAU     = +(Q.get('tau')||380);       // ms · a ghost reaches 2 % in ~1.5 s
+const BLOOM_A = +(Q.get('bloomA')||0.58);
+const AB_K    = +(Q.get('abk')||0.00085);   // ±0.6 px at the edge of a 1440 frame
+const BG='#070604', DIM='#6b5f47', INK='#e8dcc0', ABSENT='#5a4d3c', GLASS='#1b1610';
+const MONO='ui-monospace,SFMono-Regular,Menlo,monospace';
+
+const mk=()=>document.createElement('canvas');
+const wb=mk(), wx=wb.getContext('2d');                       // the phosphor
+const half=mk(), qA=mk(), qB=mk(), eA=mk(), sA=mk(), bt=mk();// the bloom ladder
+const ov=mk();                                               // scanlines × vignette
+const gr=mk();                                               // the grain tile
+const dz=mk();                                               // the dither tile
+const cx2=c=>c.getContext('2d');
+let grainPat=null, ditherPat=null, lastNow=0, BW=0,BH=0;
+
+function mkNoise(c,size,fn){c.width=c.height=size;const g=cx2(c),d=g.createImageData(size,size);
+  for(let i=0;i<size*size;i++){const a=fn();d.data[i*4]=0;d.data[i*4+1]=0;d.data[i*4+2]=0;d.data[i*4+3]=a;}
+  g.putImageData(d,0,0);}
+
+function ensureBuffers(){
+  if(wb.width===cv.width&&wb.height===cv.height&&cv.width)return;
+  wb.width=cv.width;wb.height=cv.height;
+  BW=Math.max(2,Math.round(cv.width/4));BH=Math.max(2,Math.round(cv.height/4));
+  half.width=Math.max(2,Math.round(cv.width/2));half.height=Math.max(2,Math.round(cv.height/2));
+  for(const c of [qA,qB,bt]){c.width=BW;c.height=BH;}
+  eA.width=Math.max(1,BW>>1);eA.height=Math.max(1,BH>>1);
+  sA.width=Math.max(1,BW>>2);sA.height=Math.max(1,BH>>2);
+  for(const c of [half,qA,qB,eA,sA,bt]){const g=cx2(c);g.imageSmoothingEnabled=true;g.imageSmoothingQuality='high';}
+  if(!grainPat){mkNoise(gr,180,()=>Math.random()*22|0);grainPat=cx2(ov).createPattern(gr,'repeat');}
+  if(!ditherPat){mkNoise(dz,64,()=>Math.random()<0.035?255:0);ditherPat=cx2(ov).createPattern(dz,'repeat');}
+  buildOverlay();
+}
+
+// ── the overlay: scanlines and vignette, built once per size ───────────────
+// Screen space, device-pixel aligned, never moved by the camera — a scanline
+// that travels with the world shimmers, and this one cannot travel.
+function buildOverlay(){
+  ov.width=cv.width;ov.height=cv.height;const g=cx2(ov);
+  g.clearRect(0,0,ov.width,ov.height);
+  const per=Math.max(2,Math.round(3*DPR)), dark=Math.max(1,Math.round(DPR));
+  g.fillStyle='rgba(0,0,0,0.15)';
+  for(let y=0;y<ov.height;y+=per)g.fillRect(0,y,ov.width,dark);
+  const cxp=ov.width/2, cyp=ov.height/2, r=Math.hypot(cxp,cyp);
+  const vg=g.createRadialGradient(cxp,cyp,r*0.35,cxp,cyp,r);
+  vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(0.72,'rgba(0,0,0,0.20)');vg.addColorStop(1,'rgba(0,0,0,0.52)');
+  g.fillStyle=vg;g.fillRect(0,0,ov.width,ov.height);
+  // the glass edge: the frame is a tube, and a tube has corners it cannot reach
+  g.strokeStyle='rgba(0,0,0,0.55)';g.lineWidth=Math.max(2,6*DPR);
+  g.strokeRect(g.lineWidth/2,g.lineWidth/2,ov.width-g.lineWidth,ov.height-g.lineWidth);
+  grainPat=cx2(ov).createPattern(gr,'repeat');
+  ditherPat=cx2(ov).createPattern(dz,'repeat');
+}
+
+// ── 1 · the phosphor ───────────────────────────────────────────────────────
+// Stop clearing. Erode what is there toward nothing, frame-rate independent,
+// so a ping that crossed the tree a second ago is still faintly on the glass.
+// The dither is the floor-breaker: an 8-bit alpha stops falling once the
+// per-frame step rounds below half a level (~4 % opacity), which would leave a
+// permanent smear where the pod has been. A sparse full-erase tile, offset at
+// random each frame, dissolves that residue instead of parking it.
+function phosphor(dt){
+  wx.save();wx.setTransform(1,0,0,1,0,0);wx.globalCompositeOperation='destination-out';
+  wx.globalAlpha=1;wx.fillStyle=`rgba(0,0,0,${1-Math.exp(-dt/TAU)})`;
+  wx.fillRect(0,0,wb.width,wb.height);
+  if(DITHER&&ditherPat){wx.globalAlpha=1;wx.fillStyle=ditherPat;
+    wx.translate(Math.random()*64|0,Math.random()*64|0);
+    wx.fillRect(-64,-64,wb.width+128,wb.height+128);}
+  wx.restore();
+}
+
+// ── 2 · bloom ──────────────────────────────────────────────────────────────
+// The bright-pass is a square, not a threshold: drawing the downsample onto
+// itself with 'multiply' maps v → v², which pushes the mid-dark toward nothing
+// and leaves the pod, a fresh ping and a warm place standing. No pixel is read
+// back into JS. The dark stays dark because v² says so.
+function bloomPass(){
+  if(BLOOM==='off')return null;
+  const h=cx2(half), a=cx2(qA), b=cx2(qB);
+  h.globalCompositeOperation='source-over';h.globalAlpha=1;
+  h.clearRect(0,0,half.width,half.height);h.drawImage(cv,0,0,half.width,half.height);
+  a.globalCompositeOperation='source-over';a.globalAlpha=1;
+  a.clearRect(0,0,BW,BH);a.drawImage(half,0,0,BW,BH);
+  b.globalCompositeOperation='source-over';b.globalAlpha=1;
+  b.clearRect(0,0,BW,BH);b.drawImage(qA,0,0);
+  b.globalCompositeOperation='multiply';b.drawImage(qA,0,0);
+  b.globalCompositeOperation='source-over';
+  if(BLOOM==='filter'){
+    a.clearRect(0,0,BW,BH);a.filter='blur(4px)';a.drawImage(qB,0,0);a.filter='none';
+    return qA;
+  }
+  const e=cx2(eA), s=cx2(sA);
+  e.clearRect(0,0,eA.width,eA.height);e.drawImage(qB,0,0,eA.width,eA.height);
+  s.clearRect(0,0,sA.width,sA.height);s.drawImage(eA,0,0,sA.width,sA.height);
+  a.clearRect(0,0,BW,BH);a.globalAlpha=1;a.drawImage(sA,0,0,BW,BH);
+  a.globalAlpha=0.5;a.drawImage(eA,0,0,BW,BH);
+  a.globalAlpha=0.34;a.drawImage(qB,0,0,BW,BH);
+  a.globalAlpha=1;
+  return qA;
+}
+
+// ── 3 · chromatic aberration ───────────────────────────────────────────────
+// Lateral, which is what a real lens does: the channels are the same image at
+// slightly different magnifications, so the error is zero at the centre and
+// grows to ±0.6 px at the edge. A constant offset would smear the middle of
+// the frame too, and that reads as "blurry", not as glass.
+const CHAN=[['#ff0000',1+AB_K],['#00ff00',1],['#0000ff',1-AB_K]];
+function composite(bloom){
+  if(!bloom)return;
+  x.save();x.setTransform(1,0,0,1,0,0);
+  x.globalCompositeOperation='lighter';x.globalAlpha=BLOOM_A;
+  if(!AB){x.drawImage(bloom,0,0,cv.width,cv.height);}
+  else{
+    const g=cx2(bt);
+    for(const [tint,s] of CHAN){
+      g.globalCompositeOperation='source-over';g.globalAlpha=1;
+      g.clearRect(0,0,BW,BH);g.drawImage(bloom,0,0);
+      g.globalCompositeOperation='multiply';g.fillStyle=tint;g.fillRect(0,0,BW,BH);
+      g.globalCompositeOperation='source-over';
+      const w=cv.width*s, hh=cv.height*s;
+      x.drawImage(bt,(cv.width-w)/2,(cv.height-hh)/2,w,hh);
+    }
+  }
+  x.restore();
+}
+
+// ── 4 · scanlines · grain · vignette ───────────────────────────────────────
+// One pass, all of it darkening only. Additive grain would light the black,
+// and the black is a reading: never touched. So the grain multiplies down.
+function overlayPass(){
+  x.save();x.setTransform(1,0,0,1,0,0);x.globalCompositeOperation='source-over';x.globalAlpha=1;
+  x.drawImage(ov,0,0);
+  if(GRAIN&&grainPat){x.globalAlpha=0.5;x.fillStyle=grainPat;
+    x.translate(Math.random()*180|0,Math.random()*180|0);
+    x.fillRect(-180,-180,cv.width+360,cv.height+360);}
+  x.restore();
+}
+
+// ── the chrome, made diegetic ──────────────────────────────────────────────
+// The readings are not mine to compute. [WORLD] renders them — today into the
+// hidden #state/#belt/#legend/#top panels, tomorrow through worldHud() when it
+// lands. Both are read, never recomputed: the vial's colour is the colour
+// heat() already chose, lifted off the element [WORLD] wrote it onto. This is
+// a renderer for [WORLD]'s HUD, not a second opinion about the numbers.
+function hudModel(){
+  if(typeof worldHud==='function'){
+    try{
+      const h=worldHud();
+      if(h) return {
+        title:'brnrd', sub:'/ THE PODS · scene one · above the water',
+        src:(($('#src')||{}).textContent)||'',
+        rows:[[{t:(h.pod&&h.pod.glyph)||'b·_·d',ink:'glyph'},{t:' '+(h.state||'unmeasured'),ink:'v'}],
+              [{t:'pod ',ink:'k'},{t:(h.pod&&h.pod.name)||'—',ink:'v'},{t:' · '+((h.pod&&h.pod.core)||''),ink:'k'}],
+              [{t:'last act ',ink:'k'},{t:(h.last&&h.last.act)||'—',ink:'v'},{t:' '+((h.last&&h.last.kind)||''),ink:'k'}],
+              [{t:'why ',ink:'k'},{t:h.why||'—',ink:'v'}]],
+        vials:(h.vials||[]).map(v=>({n:v.n+(v.src==='chip'?' · from the chip':''),
+          pct:typeof v.pct==='number'&&isFinite(v.pct)?v.pct:null,
+          text:typeof v.pct==='number'&&isFinite(v.pct)?v.pct+' %':'—',
+          color:heat(v.pct),torn:!(typeof v.pct==='number'&&isFinite(v.pct))})),
+        legend:legendFromDom()
+      };
+    }catch(e){}
+  }
+  return domHud();
+}
+const INKS={k:ABSENT,v:INK,amber:A,ice:I,glyph:A,b:DIM,'':ABSENT};
+function runsOf(el){
+  const out=[];
+  el.childNodes.forEach(n=>{
+    if(n.nodeType===3){const t=n.textContent;if(t.trim()||t===' ')out.push({t,ink:''});}
+    else if(n.tagName==='BR')out.push({br:true});
+    else out.push({t:n.textContent,ink:n.tagName==='B'?'b':(n.className||'')});
+  });
+  return out;
+}
+function legendFromDom(){
+  const el=$('#legend');if(!el)return [];
+  const lines=[[]];
+  for(const r of runsOf(el)){if(r.br)lines.push([]);else lines[lines.length-1].push(r);}
+  return lines;
+}
+function domHud(){
+  const st=$('#state'), belt=$('#belt');
+  const rows=st?[...st.children].map((d,i)=>runsOf(d).map(r=>i===0&&r.ink==='amber'?{...r,ink:'glyph'}:r)):[];
+  const vials=belt?[...belt.querySelectorAll('.vial')].map(v=>{
+    const b=v.querySelector('.h b'), i=v.querySelector('.h i'), f=v.querySelector('.bar i');
+    const torn=v.classList.contains('torn');
+    return {n:i?i.textContent:'', text:b?b.textContent:'—', color:b?b.style.color||DIM:DIM,
+            pct:torn?null:parseFloat((f&&f.style.width)||'0'), torn};
+  }):[];
+  return {title:($('#top b')||{}).textContent||'brnrd',
+          sub:(($('#top span')||{}).textContent)||'',
+          src:(($('#src')||{}).textContent)||'', rows, vials, legend:legendFromDom()};
+}
+function hair(g,x1,y1,x2,y2,a){g.strokeStyle=`rgba(154,133,94,${a})`;g.lineWidth=1;
+  g.beginPath();g.moveTo(Math.round(x1)+.5,Math.round(y1)+.5);g.lineTo(Math.round(x2)+.5,Math.round(y2)+.5);g.stroke();}
+function runLine(g,runs,px,py,size){
+  let cur=px;
+  for(const r of runs){
+    if(r.br||!r.t)continue;
+    const glyph=r.ink==='glyph';
+    g.font=`${glyph?size+3:size}px ${MONO}`;
+    g.fillStyle=INKS[r.ink]!==undefined?INKS[r.ink]:INK;
+    g.fillText(r.t,cur,py);cur+=g.measureText(r.t).width;
+  }
+  return cur;
+}
+function drawChrome(g){
+  const m=hudModel();
+  g.textAlign='left';g.textBaseline='alphabetic';
+  // ── the head rule ──
+  g.font=`650 13px ${MONO}`;g.fillStyle=INK;g.fillText(m.title,16,25);
+  const tw=g.measureText(m.title).width;
+  g.font=`10px ${MONO}`;g.fillStyle=DIM;g.fillText(m.sub,16+tw+8,25);
+  g.fillStyle=ABSENT;g.textAlign='right';g.fillText(m.src,W-16,25);g.textAlign='left';
+  hair(g,16,36,W-16,36,0.22);
+  hair(g,16,36,16,30,0.22);hair(g,W-16,36,W-16,30,0.22);        // the corner ticks
+  // ── the state block: a bracket, and the readings inside it ──
+  let y=60;
+  const bx=16, bw=300;
+  hair(g,bx,y-14,bx,y-14+(m.rows.length*19)+6,0.16);
+  hair(g,bx,y-14,bx+9,y-14,0.16);hair(g,bx,y-14+(m.rows.length*19)+6,bx+9,y-14+(m.rows.length*19)+6,0.16);
+  m.rows.forEach((r,i)=>{runLine(g,r,bx+12,y+i*19,11);});
+  // ── the belt: etched glass, and the fill is the reading's own colour ──
+  const vw=196, vx=W-16-vw;
+  let vy=54;
+  for(const v of m.vials){
+    g.font=`10px ${MONO}`;g.fillStyle=DIM;g.fillText(v.n,vx,vy);
+    g.font=`15px ${MONO}`;g.fillStyle=v.torn?ABSENT:v.color;g.textAlign='right';
+    g.fillText(v.text,vx+vw,vy+1);g.textAlign='left';
+    const gy=vy+9, gh=11;
+    // the glass: a body, two lips, a specular line
+    g.fillStyle=GLASS;g.fillRect(vx,gy,vw,gh);
+    if(v.torn){
+      g.save();g.beginPath();g.rect(vx,gy,vw,gh);g.clip();
+      g.strokeStyle='rgba(90,77,60,0.55)';g.lineWidth=1;
+      for(let hx=-gh;hx<vw+gh;hx+=6){g.beginPath();g.moveTo(vx+hx,gy+gh);g.lineTo(vx+hx+gh,gy);g.stroke();}
+      g.restore();
+    }else{
+      const fw=Math.max(0,Math.min(1,v.pct/100))*vw;
+      g.fillStyle=v.color;g.globalAlpha=0.85;g.fillRect(vx,gy,fw,gh);g.globalAlpha=1;
+      g.fillStyle='rgba(255,255,255,0.10)';g.fillRect(vx,gy+1,fw,1);
+      for(const f of [0.25,0.5,0.75]){hair(g,vx+vw*f,gy+gh-4,vx+vw*f,gy+gh,0.30);}
+    }
+    hair(g,vx,gy,vx+vw,gy,0.30);hair(g,vx,gy+gh,vx+vw,gy+gh,0.30);
+    hair(g,vx,gy,vx,gy+gh,0.42);hair(g,vx+vw,gy,vx+vw,gy+gh,0.42);
+    vy+=42;
+  }
+  // ── the legend, under its own rule ──
+  const ll=m.legend.filter(l=>l.length);
+  if(ll.length){
+    const ly=H-14-(ll.length-1)*16;
+    hair(g,16,ly-16,16+380,ly-16,0.14);
+    ll.forEach((l,i)=>runLine(g,l,16,ly+i*16,10));
+  }
+}
+
+// ── the loop ───────────────────────────────────────────────────────────────
+const RING=[]; let fpsWin=[], stat={frame:0,world:0,pass:0,chrome:0,fps:0};
+function perf(now,total,world,chromeMs,passMs){
+  RING.push([total,world,chromeMs,passMs]);if(RING.length>90)RING.shift();
+  fpsWin.push(now);while(fpsWin.length&&now-fpsWin[0]>1000)fpsWin.shift();
+  const n=RING.length,s=RING.reduce((a,r)=>[a[0]+r[0],a[1]+r[1],a[2]+r[2],a[3]+r[3]],[0,0,0,0]);
+  stat={frame:s[0]/n,world:s[1]/n,chrome:s[2]/n,pass:s[3]/n,fps:fpsWin.length};
+  window.__fx={on:FX,bloom:FX?BLOOM:'off',ab:FX&&AB,chrome:CHROME,dpr:DPR,w:W,h:H,
+    frameMs:+stat.frame.toFixed(3),worldMs:+stat.world.toFixed(3),
+    chromeMs:+stat.chrome.toFixed(3),passMs:+stat.pass.toFixed(3),fps:stat.fps,frames:RING.length};
+}
 function frame(now){        // [FRAME] owns this loop: buffers, effects, chrome
-  x.clearRect(0,0,W,H);
-  drawWorld(x,now);
+  const p0=performance.now();
+  ensureBuffers();
+  const dt=Math.max(1,Math.min(100,now-(lastNow||now-16)));lastNow=now;
+  // the world, on its own phosphor — the only buffer that remembers
+  if(FX)phosphor(dt);
+  else{wx.save();wx.setTransform(1,0,0,1,0,0);wx.clearRect(0,0,wb.width,wb.height);wx.restore();}
+  wx.save();wx.setTransform(DPR,0,0,DPR,0,0);wx.globalCompositeOperation='source-over';wx.globalAlpha=1;
+  drawWorld(wx,now);wx.restore();
+  const p1=performance.now();
+  // compose
+  x.save();x.setTransform(1,0,0,1,0,0);x.globalCompositeOperation='source-over';x.globalAlpha=1;
+  x.fillStyle=BG;x.fillRect(0,0,cv.width,cv.height);x.drawImage(wb,0,0);x.restore();
+  // chrome, in the same ink, under the same glass
+  if(CHROME){x.save();x.setTransform(DPR,0,0,DPR,0,0);x.globalCompositeOperation='source-over';x.globalAlpha=1;
+    drawChrome(x);x.restore();}
+  const p2=performance.now();
+  if(FX){composite(bloomPass());overlayPass();}
+  const p3=performance.now();
+  if(PERF){x.save();x.setTransform(DPR,0,0,DPR,0,0);x.font=`10px ${MONO}`;x.fillStyle=DIM;x.textAlign='right';
+    x.fillText(`${stat.fps} fps · frame ${stat.frame.toFixed(2)} ms · pass ${stat.pass.toFixed(2)} ms · chrome ${stat.chrome.toFixed(2)} ms · ${FX?BLOOM:'fx off'}`,W-16,H-6);
+    x.restore();}
+  perf(now,p3-p0,p1-p0,p2-p1,p3-p2);
   requestAnimationFrame(frame);
 }
+if(CHROME)for(const id of ['top','state','belt','legend']){const el=$('#'+id);if(el)el.style.display='none';}
+addEventListener('resize',()=>{wb.width=0;});
 cv.addEventListener('mousemove',e=>{
   const n=nodes.find(n=>!n.isLabel&&Math.hypot(n.x-e.clientX,n.y-e.clientY)<7);
   const h=$('#hover');
