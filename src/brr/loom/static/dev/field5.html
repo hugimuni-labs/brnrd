@@ -28,12 +28,29 @@ canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
 <div class="hud" id="legend"></div>
 <div id="hover"></div>
 <script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   TWO REGIONS, TWO HANDS — do not edit outside your own region.
+
+   [WORLD]  layout · ingest · drawWorld · the camera axis.        owner: camera strand
+   [FRAME]  the loop · offscreen buffers · the post-pass · chrome. owner: post-pass strand
+
+   The seam between them, and the only thing either may assume of the other:
+     drawWorld(ctx, now)   — draws the scene in CSS pixels into whatever context it
+                             is handed. Never clears. Never applies effects.
+     worldHud()            — {state,pod,last,why,vials:[{n,pct,src}],doors} for chrome.
+     CAM = {z}             — 1 = interior (the tree). Below 1 the world rises toward
+                             the schematic. [FRAME] may read CAM.z (e.g. to scale
+                             bloom); only [WORLD] writes it.
+   Both regions share the palette constants and `num/clamp/hash/heat` helpers below.
+   A change that needs the other region is a message to the parent, not an edit.
+   ═══════════════════════════════════════════════════════════════════════════ */
 const cv=document.getElementById('c'),x=cv.getContext('2d');
 const $=s=>document.querySelector(s);
 let W=0,H=0,DPR=1;
 function resize(){DPR=Math.min(2,devicePixelRatio||1);W=innerWidth;H=innerHeight;cv.width=W*DPR;cv.height=H*DPR;x.setTransform(DPR,0,0,DPR,0,0);layout();}
 addEventListener('resize',resize);
-// ── the feed ───────────────────────────────────────────────────────────────
+// ═══ [WORLD] ═══════════════════════════════════════════════════════════════
+// ── the feed ───
 const FEEDS=['/loom/state.json','http://127.0.0.1:7777/loom/state.json'];
 let S=null, nodes=[], byPath=new Map(), pods=[], pings=[], sonar=[], t0=performance.now(), seenBead=-1, water=0;
 const A='#f2b134', I='#8fd3ff';
@@ -129,9 +146,13 @@ function renderHud(d){
   $('#belt').innerHTML=vials.map(v=>`<div class="vial ${num(v.pct)?'':'torn'}"><div class=h><i>${v.n}${v.src==='chip'?' · from the chip':''}</i><b style="color:${heat(v.pct)}">${num(v.pct)?v.pct+' %':'—'}</b></div><div class=bar><i style="width:${num(v.pct)?v.pct:100}%;background:${heat(v.pct)}"></i></div></div>`).join('');
   $('#legend').innerHTML=`<b>light is an act</b> — a ping leaves the pod only when a boundary lands · <b>the ring with no return</b> is the await, on the daemon's own ~10 s beat<br><b>amber</b> warm, touched this week · <b>ice</b> his, and cold readings · <b>black</b> never touched · <b>torn</b> unmeasured`;
 }
-// ── the draw ───────────────────────────────────────────────────────────────
-function draw(now){
-  x.clearRect(0,0,W,H);
+let CAM={z:1};
+// ═══ [FRAME] ═══════════════════════════════════════════════════════════════
+// ── the draw · the post-pass lives here ───
+function drawWorld(x,now){  // [WORLD] draws; [FRAME] decides where
+  drawScene(x,now);
+}
+function drawScene(x,now){
   // water: a horizon, and the dark below it
   const g=x.createLinearGradient(0,water-180,0,H);
   g.addColorStop(0,'#07060400');g.addColorStop(0.62,'#0a0a10');g.addColorStop(1,'#05060b');
@@ -221,7 +242,11 @@ function draw(now){
     x.fillStyle=A;x.font='10px ui-monospace,Menlo,monospace';x.textAlign='center';
     x.fillText((S&&S.run&&S.run.mood_glyph)||'b·_·d',p.x,p.y-13);x.textAlign='left';
   }
-  requestAnimationFrame(draw);
+}
+function frame(now){        // [FRAME] owns this loop: buffers, effects, chrome
+  x.clearRect(0,0,W,H);
+  drawWorld(x,now);
+  requestAnimationFrame(frame);
 }
 cv.addEventListener('mousemove',e=>{
   const n=nodes.find(n=>!n.isLabel&&Math.hypot(n.x-e.clientX,n.y-e.clientY)<7);
@@ -230,5 +255,5 @@ cv.addEventListener('mousemove',e=>{
     h.textContent=`${n.path} · heat ${(n.heat||0).toFixed(2)} · ${n.knots||0} knots · last ${n.last||'—'}`;}
   else h.style.display='none';
 });
-resize();pull();setInterval(pull,3000);requestAnimationFrame(draw);
+resize();pull();setInterval(pull,3000);requestAnimationFrame(frame);
 </script>
