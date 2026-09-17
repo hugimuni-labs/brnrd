@@ -1,4 +1,10 @@
-<<<<<<< HEAD
+// Visual rehearsal for field6 — the layer pass, the record, the actor.
+// MERGED 2026-09-17 by the layer pass: `d156ea27` committed this file with its
+// conflict markers still in it, so it has not parsed — and therefore has not
+// run — since that merge. Both halves are kept whole; the [ACTOR] half runs
+// first on the top-level page, the [RECORD] half opens its own contexts, and
+// the layer sections are appended at the end.
+//
 // Visual rehearsal for field6's [ACTOR] block — the camera's detents, the
 // tiled face, and the room a hand can choose. Inspect every saved image.
 //
@@ -11,7 +17,7 @@
 // falls back to SwiftShader, every full-screen composite costs ~12 ms, and the
 // post-pass reads as a slideshow at ~15 fps. That is the renderer, not the
 // scene. headless:false + --use-angle=metal is what measured below.
-=======
+//
 // Visual rehearsal for field6's [RECORD] block — the cloth, the fold, the body,
 // the wire, the tint. Every direction of the fold is driven by a REAL click or
 // keypress, not by writing the block's state, so the shot is a receipt for the
@@ -24,31 +30,25 @@
 // full-screen composite costs ~12 ms and the post-pass reads as a slideshow.
 // That is the renderer, not the scene: headless:false + --use-angle=metal is
 // the only configuration whose frame numbers may be quoted.
->>>>>>> origin/brr/the-pods-cloth
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
 const { chromium } = await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE
   || '/Users/gurio/Source/Projects/brnrd/src/frontend/node_modules/playwright/index.mjs'));
-<<<<<<< HEAD
 const base = process.env.LOOM_URL || 'http://127.0.0.1:7797';   // the fixture feed
 // the sweep needs a feed whose tick MOVES, which only the live daemon's does:
 // serve the dev dir with no state.json of its own and the page falls through to
 // 127.0.0.1:7777 the way FEEDS already says it will.
 const live = process.env.LIVE_URL || 'http://127.0.0.1:7789';
 const out  = process.env.OUT || '/tmp/actorshots';
-=======
-const base = process.env.LOOM_URL || 'http://127.0.0.1:7796';
-const out  = process.env.OUT || '/tmp/recordshots';
->>>>>>> origin/brr/the-pods-cloth
 const page6 = q => `${base}/loom/dev/field6.html${q?'?'+q:''}`;
 await mkdir(out,{recursive:true});
 const browser = await chromium.launch({headless:false,args:['--use-angle=metal','--ignore-gpu-blocklist']});
 const errors=[], receipts={};
 const ctx = dsf => browser.newContext({viewport:{width:1440,height:900},deviceScaleFactor:dsf});
 const settle = p => p.waitForTimeout(4200);
-<<<<<<< HEAD
+const shot = (p,n) => p.screenshot({path:resolve(out,n+'.png')});
 const c = await ctx(1), p = await c.newPage();
 p.on('pageerror',e=>errors.push(e.message));
 await p.goto(page6(),{waitUntil:'load'}); await settle(p);
@@ -301,10 +301,6 @@ await c.close();
   }
   await c2.close();
 }
-await browser.close();
-assert.deepEqual(errors,[]);
-=======
-const shot = (p,n) => p.screenshot({path:resolve(out,n+'.png')});
 
 // ── 1 · frame cost, the pass on and off, at both densities ───────────────────
 // The honest number is the frame-to-frame delta the loop measures itself; the
@@ -531,5 +527,4 @@ receipts.frame_ms = [];
 }
 await browser.close();
 assert.deepEqual(errors,[],'the page must raise no errors');
->>>>>>> origin/brr/the-pods-cloth
 console.log(JSON.stringify({receipts,out},null,1));
