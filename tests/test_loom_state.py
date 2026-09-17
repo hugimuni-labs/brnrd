@@ -533,3 +533,37 @@ def test_beads_and_warp_items_join_on_bead_touches(tmp_path):
         {"run": run_id, "n": 0, "at": iso(NOW - 200), "act": "orient"},
         {"run": run_id, "n": 1, "at": iso(NOW - 100), "act": "reply"},
     ]
+
+
+def test_beads_carry_chunks_straight_through(tmp_path):
+    """Phase A: `record["chunks"]` (`hooks.record_boundary`) rides `beads[]`
+    unchanged — no aggregation, no relativizing, the same additive
+    treatment `items` got in #2004; a row that never carried one reads back
+    as `[]`, never a missing key."""
+    repo = tmp_path / "repo"
+    home = tmp_path / "home"
+    brr = repo / ".brr"
+    run_id = "run-260924-0900-chunk1"
+    outbox = brr / "outbox" / "evt-chunk"
+
+    _write(home / "shuttle.json", json.dumps({
+        "key": "acc", "state": "awake", "why": "event_dispatched", "run_id": run_id,
+        "repo_root": str(repo), "conversation_key": "cloud:x", "since": iso(NOW - 60),
+        "transitions": [],
+    }))
+    _run_md(brr, run_id, outbox, transitions=_transitions(NOW - 300))
+    _write(outbox / "portal-state.json", json.dumps({"run": {"id": run_id}}))
+
+    x_path = repo / "src" / "x.py"
+    _jsonl(brr / "runs" / run_id / "boundaries.jsonl", [
+        {"at": iso(NOW - 200), "act": "orient", "cwd": str(repo),
+         "place": {"path": str(x_path), "paths": [str(x_path)]},
+         "chunks": [{"path": str(x_path), "from": 1, "to": 20, "kind": "read"}]},
+        {"at": iso(NOW - 100), "act": "probe", "detail": "ls -la", "cwd": str(repo)},
+    ])
+
+    out = state.build(repo, home, now=NOW)
+    assert [b["chunks"] for b in out["beads"]] == [
+        [{"path": str(x_path), "from": 1, "to": 20, "kind": "read"}],
+        [],
+    ]

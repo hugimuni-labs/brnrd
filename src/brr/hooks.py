@@ -7633,6 +7633,34 @@ def _repo_root_for(cwd: str | None, hint: Path | None = None) -> Path | None:
     return None
 
 
+def _shell_candidate_path(
+    part: str, base: Path, root_resolved: Path, root: Path,
+) -> str | None:
+    """Resolve one shell-command token to an absolute, redacted path inside
+    *root*, or ``None`` — the existence-and-containment check
+    :func:`_shell_place_paths` and :func:`_shell_read_chunks` both need,
+    factored out so the range-flag parsing extends the same path parse
+    rather than growing a second one."""
+    candidate = Path(os.path.expanduser(part))
+    if not candidate.is_absolute():
+        candidate = base / candidate
+    try:
+        if not candidate.exists():
+            return None
+        resolved = Path(os.path.normpath(str(candidate)))
+    except OSError:
+        return None
+    text = str(resolved)
+    root_text = str(root_resolved)
+    if not (text == root_text or text.startswith(root_text + os.sep)):
+        alt = str(root).rstrip(os.sep)
+        if not (text == alt or text.startswith(alt + os.sep)):
+            return None
+    if text in (root_text, str(root).rstrip(os.sep)):
+        return None
+    return redact_detail(text[:_DETAIL_OTHER_MAX])
+
+
 def _shell_place_paths(
     tool_input: object, cwd: str | None, root: Path | None,
 ) -> list[str]:
@@ -7660,14 +7688,7 @@ def _shell_place_paths(
     except OSError:
         return []
     base = Path(cwd) if cwd else root_resolved
-    lines: list[str] = []
-    raw_lines = command.splitlines()
-    for index, line in enumerate(raw_lines):
-        lines.append(line)
-        if _HEREDOC_RE.search(line):
-            if index + 1 < len(raw_lines):
-                lines.append(raw_lines[index + 1])
-            break
+    lines = _shell_command_lines(command)
     found: list[str] = []
     stats = 0
     for line in lines:
@@ -7682,28 +7703,239 @@ def _shell_place_paths(
                         continue
                     if stats >= _SHELL_PLACE_STAT_MAX or len(found) >= SHELL_PLACE_PATHS_MAX:
                         return found
-                    candidate = Path(os.path.expanduser(part))
-                    if not candidate.is_absolute():
-                        candidate = base / candidate
                     stats += 1
-                    try:
-                        if not candidate.exists():
-                            continue
-                        resolved = Path(os.path.normpath(str(candidate)))
-                    except OSError:
+                    summary = _shell_candidate_path(part, base, root_resolved, root)
+                    if summary is None:
                         continue
-                    text = str(resolved)
-                    root_text = str(root_resolved)
-                    if not (text == root_text or text.startswith(root_text + os.sep)):
-                        alt = str(root).rstrip(os.sep)
-                        if not (text == alt or text.startswith(alt + os.sep)):
-                            continue
-                    if text in (root_text, str(root).rstrip(os.sep)):
-                        continue
-                    summary = redact_detail(text[:_DETAIL_OTHER_MAX])
                     if summary not in found:
                         found.append(summary)
     return found
+
+
+def _shell_command_lines(command: str) -> list[str]:
+    """The command text's own lines, trimmed at a heredoc opener plus its
+    first body line — the same trim :func:`_shell_place_paths` has always
+    applied, factored out so a second parser (:func:`_shell_read_chunks`)
+    reads the same command text instead of re-deriving its own slice."""
+    lines: list[str] = []
+    raw_lines = command.splitlines()
+    for index, line in enumerate(raw_lines):
+        lines.append(line)
+        if _HEREDOC_RE.search(line):
+            if index + 1 < len(raw_lines):
+                lines.append(raw_lines[index + 1])
+            break
+    return lines
+
+
+#: Phase A ("a boundary learns what it *read*, not just what it touched"):
+#: coordinates on top of ``place``'s coarse "where" — ranges for a read,
+#: hunks for a write, additive and never a guess where the hook cannot see
+#: the real extent.
+_GREP_LINE_RE = re.compile(r"^(?:(?P<path>[^\n:]+):)?(?P<line>\d+):")
+_SED_RANGE_RE = re.compile(r"\bsed\s+-n\s+['\"]?(\d+)(?:\s*,\s*(\d+))?p['\"]?\s+(\S+)")
+_HEAD_RANGE_RE = re.compile(r"\bhead\s+(?:-n\s*(\d+)|-(\d+))\s+(\S+)")
+_SHELL_WRITE_RE = re.compile(r"\bpython3?\s+-(?:\s|$)|\bsed\s+-i\b")
+_GIT_COMMIT_RE = re.compile(r"(?:^|[;&|]\s*)git\s+commit\b")
+_WRITE_TOOL_NAMES = ("edit", "write", "multiedit", "notebookedit")
+
+
+def _collapse_ranges(nums: list[int]) -> list[tuple[int, int]]:
+    """Sorted, deduplicated line numbers, collapsed into contiguous
+    ``(start, end)`` runs — ``[3, 4, 5, 9]`` becomes ``[(3, 5), (9, 9)]``."""
+    if not nums:
+        return []
+    ranges: list[tuple[int, int]] = []
+    start = prev = nums[0]
+    for n in nums[1:]:
+        if n == prev + 1:
+            prev = n
+            continue
+        ranges.append((start, prev))
+        start = prev = n
+    ranges.append((start, prev))
+    return ranges
+
+
+def _tool_read_chunk(
+    tool_name: object, tool_input: object, path: str,
+) -> dict[str, Any] | None:
+    """The line range a ``Read`` call's own ``offset``/``limit`` name, or an
+    explicit ``whole: true`` where neither was given — never an invented
+    ``1..N`` for a tool that did not say how far it went."""
+    if not isinstance(tool_name, str) or tool_name.strip().lower() != "read":
+        return None
+    offset = tool_input.get("offset") if isinstance(tool_input, dict) else None
+    limit = tool_input.get("limit") if isinstance(tool_input, dict) else None
+    offset_val = offset if isinstance(offset, int) and offset > 0 else None
+    limit_val = limit if isinstance(limit, int) and limit > 0 else None
+    if offset_val is None and limit_val is None:
+        return {"path": path, "whole": True, "kind": "read"}
+    from_line = offset_val or 1
+    chunk: dict[str, Any] = {"path": path, "from": from_line, "kind": "read"}
+    if limit_val is not None:
+        chunk["to"] = from_line + limit_val - 1
+    return chunk
+
+
+def _tool_write_chunk(
+    tool_name: object, tool_input: object, path: str,
+) -> dict[str, Any] | None:
+    """A file-write tool's changed span. Never knowable at this hook — there
+    is no read-before-write here and no second file read on the hot path —
+    so this is always the bare ``changed: true`` the spec calls for rather
+    than a guessed span; an unmeasured span is absent, never ``0``."""
+    if not isinstance(tool_name, str):
+        return None
+    name_lower = tool_name.strip().lower().replace("-", "_").replace(".", "_")
+    if name_lower not in _WRITE_TOOL_NAMES:
+        return None
+    return {"path": path, "changed": True, "kind": "write"}
+
+
+def _grep_read_chunks(
+    tool_name: object, tool_input: object, response: object,
+) -> list[dict[str, Any]]:
+    """The matched line numbers a ``Grep`` call's own response reported,
+    collapsed into per-file ranges.
+
+    Read only from the response text the hook already holds (never a second
+    read of the files matched). A response with no visible line numbers —
+    ``output_mode: "files_with_matches"`` names files, not lines — yields no
+    chunks rather than inventing one; that is the feature working, not a gap.
+    """
+    if not isinstance(tool_name, str) or tool_name.strip().lower() != "grep":
+        return []
+    if not isinstance(response, str) or not response.strip():
+        return []
+    fallback_path: str | None = None
+    if isinstance(tool_input, dict):
+        val = tool_input.get("path")
+        if isinstance(val, str) and val.strip():
+            fallback_path = redact_detail(val.strip()[:_DETAIL_OTHER_MAX])
+    by_path: dict[str, list[int]] = {}
+    order: list[str] = []
+    for line in response.splitlines():
+        match = _GREP_LINE_RE.match(line)
+        if not match:
+            continue
+        raw_path = match.group("path") or fallback_path
+        if not raw_path:
+            continue
+        path = redact_detail(raw_path.strip()[:_DETAIL_OTHER_MAX])
+        try:
+            num = int(match.group("line"))
+        except (TypeError, ValueError):
+            continue
+        if path not in by_path:
+            if len(order) >= SHELL_PLACE_PATHS_MAX:
+                continue
+            by_path[path] = []
+            order.append(path)
+        by_path[path].append(num)
+    chunks: list[dict[str, Any]] = []
+    for path in order:
+        for start, end in _collapse_ranges(sorted(set(by_path[path]))):
+            chunks.append({"path": path, "from": start, "to": end, "kind": "read"})
+            if len(chunks) >= SHELL_PLACE_PATHS_MAX:
+                return chunks
+    return chunks
+
+
+def _shell_read_chunks(
+    tool_input: object, cwd: str | None, root: Path | None,
+) -> list[dict[str, Any]]:
+    """The line ranges a Shell command's own flags name explicitly.
+
+    ``sed -n 'A,Bp' file`` and ``head -n N file`` say exactly what they
+    read; ``tail -n N`` does not — the total line count is unknown without
+    reading the file, which this hot path never does — so ``tail`` is
+    deliberately left unrecognised rather than guessed. Same command-text
+    slice and root-containment discipline as :func:`_shell_place_paths`
+    (:func:`_shell_command_lines`, :func:`_shell_candidate_path`).
+    """
+    if not isinstance(tool_input, dict) or root is None:
+        return []
+    command = tool_input.get("command", tool_input.get("cmd", ""))
+    if isinstance(command, list):
+        command = " ".join(str(part) for part in command)
+    if not isinstance(command, str) or not command.strip():
+        return []
+    try:
+        root_resolved = root.resolve()
+    except OSError:
+        return []
+    base = Path(cwd) if cwd else root_resolved
+    text = "\n".join(_shell_command_lines(command))
+    chunks: list[dict[str, Any]] = []
+    for match in _SED_RANGE_RE.finditer(text):
+        if len(chunks) >= SHELL_PLACE_PATHS_MAX:
+            return chunks
+        start = int(match.group(1))
+        end = int(match.group(2)) if match.group(2) else start
+        token = match.group(3).strip().strip("'\"").rstrip(",;")
+        path = _shell_candidate_path(token, base, root_resolved, root) if token else None
+        if path is not None:
+            chunks.append({"path": path, "from": start, "to": end, "kind": "read"})
+    for match in _HEAD_RANGE_RE.finditer(text):
+        if len(chunks) >= SHELL_PLACE_PATHS_MAX:
+            return chunks
+        n = int(match.group(1) or match.group(2))
+        token = match.group(3).strip().strip("'\"").rstrip(",;")
+        path = _shell_candidate_path(token, base, root_resolved, root) if token else None
+        if path is not None:
+            chunks.append({"path": path, "from": 1, "to": n, "kind": "read"})
+    return chunks
+
+
+def _commit_chunks(root: Path | None) -> list[dict[str, Any]]:
+    """The per-file hunks of the commit that just landed at ``HEAD``, via
+    ``git show --unified=0`` — the one case named as "derivable from git
+    diff and cheap; do that one properly" rather than left at
+    ``changed: true``. Best-effort: any failure (no repo, no commit yet,
+    ``git`` missing) yields no chunks, never a guess.
+    """
+    if root is None:
+        return []
+    try:
+        proc = subprocess.run(
+            ["git", "show", "--unified=0", "--format=", "HEAD"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0:
+        return []
+    chunks: list[dict[str, Any]] = []
+    current_path: str | None = None
+    for line in proc.stdout.splitlines():
+        if line.startswith("+++ "):
+            raw = line[4:].strip()
+            if raw == "/dev/null":
+                current_path = None
+                continue
+            if raw.startswith(("a/", "b/")):
+                raw = raw[2:]
+            try:
+                current_path = redact_detail(str((root / raw).resolve())[:_DETAIL_OTHER_MAX])
+            except OSError:
+                current_path = None
+            continue
+        if current_path is None or not line.startswith("@@"):
+            continue
+        match = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
+        if not match:
+            continue
+        start = int(match.group(1))
+        count = int(match.group(2)) if match.group(2) is not None else 1
+        end = start if count == 0 else start + count - 1
+        chunks.append({"path": current_path, "from": start, "to": end, "kind": "write"})
+        if len(chunks) >= SHELL_PLACE_PATHS_MAX:
+            break
+    return chunks
 
 
 def record_boundary(
@@ -7755,6 +7987,7 @@ def record_boundary(
     first_path: str | None = None
     first_name: str | None = None
     first_input: object = None
+    first_response: object = None
     total_out_bytes: int = 0
     has_out_bytes = False
     if phase == PHASE_POST_TOOL and isinstance(payload, dict):
@@ -7771,6 +8004,7 @@ def record_boundary(
                         first_act = classify_act(name, call.get("tool_input"))
                         first_detail = _tool_detail(name, call.get("tool_input"))
                         first_path = _tool_place_path(name, call.get("tool_input"))
+                        first_response = call.get("tool_response")
                 response = call.get("tool_response")
                 if response is not None:
                     total_out_bytes += _response_bytes(response)
@@ -7783,6 +8017,7 @@ def record_boundary(
                 first_act = classify_act(name, payload.get("tool_input"))
                 first_detail = _tool_detail(name, payload.get("tool_input"))
                 first_path = _tool_place_path(name, payload.get("tool_input"))
+                first_response = payload.get("tool_response")
             response = payload.get("tool_response")
             if response is not None:
                 total_out_bytes = _response_bytes(response)
@@ -7840,6 +8075,50 @@ def record_boundary(
             paths = []
         first_path = paths[0] if paths else None
     record["place"] = {"path": first_path, "paths": paths, "commit": None}
+    # Phase A: what this boundary actually *read* or *wrote*, at the
+    # coordinate the tool itself named — additive beside `place`, which
+    # stays the coarse "where". A `Read`'s offset/limit, a `Grep`'s matched
+    # line numbers, a shell `sed -n`/`head` range, an `Edit`/`Write`'s
+    # (unmeasured) changed span, a shell `python3 -`/`sed -i` mutation, and
+    # a just-landed commit's own hunks via `git show`. Never invented —
+    # absent when the hook cannot see the real extent.
+    chunks: list[dict[str, Any]] = []
+    try:
+        is_shell = isinstance(first_name, str) and (
+            first_name.strip().lower().replace("-", "_").replace(".", "_")
+            in _SHELL_TOOL_NAMES
+        )
+        if is_shell:
+            shell_cwd = cwd.strip() if isinstance(cwd, str) and cwd.strip() else None
+            repo_root = _repo_root_for(
+                cwd.strip() if isinstance(cwd, str) else None,
+                getattr(ctx, "repo_dir", None),
+            )
+            chunks.extend(_shell_read_chunks(first_input, shell_cwd, repo_root))
+            command_text = ""
+            if isinstance(first_input, dict):
+                raw_cmd = first_input.get("command", first_input.get("cmd", ""))
+                if isinstance(raw_cmd, list):
+                    command_text = " ".join(str(part) for part in raw_cmd)
+                elif isinstance(raw_cmd, str):
+                    command_text = raw_cmd
+            if command_text and _SHELL_WRITE_RE.search(command_text):
+                for touched in paths:
+                    chunks.append({"path": touched, "changed": True, "kind": "write"})
+            if command_text and _GIT_COMMIT_RE.search(command_text):
+                chunks.extend(_commit_chunks(repo_root))
+        elif first_path is not None:
+            read_chunk = _tool_read_chunk(first_name, first_input, first_path)
+            if read_chunk is not None:
+                chunks.append(read_chunk)
+            chunks.extend(_grep_read_chunks(first_name, first_input, first_response))
+            write_chunk = _tool_write_chunk(first_name, first_input, first_path)
+            if write_chunk is not None:
+                chunks.append(write_chunk)
+    except Exception:  # noqa: BLE001 - the row never sinks a boundary
+        chunks = []
+    if chunks:
+        record["chunks"] = chunks[:SHELL_PLACE_PATHS_MAX]
     # An in-process subagent's boundary is recorded (it happened, and a reader
     # asking "what did this run's environment say" wants it) but tagged, so
     # `derive_boundaries_summary` can keep the run's own verdict — which is
