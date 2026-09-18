@@ -5371,6 +5371,22 @@ def _queue_respawn_request(
         "runner", "proposed_runner", "shell", "core", "at", "defer_until",
         "carry_forward", "quality", "quality_escalation", "escalation",
         "worker", "strand",
+        # brnrd#2022. `meta` is a blanket copy of the *waking* event's
+        # frontmatter, and `Run.from_event` copies event frontmatter onto
+        # run meta just as blanketly — so any key left unreserved here is a
+        # fact this mint silently predicts about a run that has not booted.
+        # Two of them decide whether the successor is a successor at all:
+        # a seat woken by a native resume carries `resume_native_session_id`
+        # on its own waking event, and without these two lines the handover
+        # it queues inherits the very scroll it exists to end. Whether the
+        # successor wakes warm is the *releaser's* call, made in
+        # `_apply_resource_hold_resume` at release time against the live
+        # hold record — never guessed here, hours early.
+        # `handover` is reserved for the same reason in the other
+        # direction: it is decided below, per mint, not inherited from
+        # whatever woke us.
+        "resume_native_session_id", "resume_native_provider",
+        resource_hold.HANDOVER_KEY,
     }
     meta = {
         k: v for k, v in current.items()
@@ -5399,7 +5415,11 @@ def _queue_respawn_request(
     # ``_respawn_event_meta`` is the shared contract with the dashboard's
     # held-seat respawn (``_apply_run_respawn``) — both mint an event the
     # dispatch loop must recognise as a continuation, never a duplicate.
-    meta.update(_respawn_event_meta(task, event_id, shell=proposed, core=core))
+    # A `respawn: true` + `strand: true` request mints a *child*, not a
+    # successor — it must not release the seat's hold or claim its scroll.
+    meta.update(_respawn_event_meta(
+        task, event_id, shell=proposed, core=core, handover=not strand,
+    ))
     if reason:
         meta["respawn_reason"] = reason
     if quality_target:
@@ -14809,10 +14829,18 @@ def _undefer_held_event(
     ``resource_hold.accumulate_event`` recorded; the event's *current*
     on-disk state (still present, not yet delivered/noted by some other
     path) is what actually decides whether there's anything left to
-    un-defer. When a native resume is available, it is stamped onto
-    *every* un-deferred sibling, not just whichever event actually
-    triggered the release — an accumulated event could sort ahead of the
-    trigger and become the fresh dispatch lead instead.
+    un-defer.
+
+    *resume_native_session_id* is the seat's scroll, and it is the caller's
+    to hand over — never this function's to assume. It used to be passed for
+    every sibling in the drawer ("one of them might lead the dispatch"),
+    which made one release write N claims on one transcript, each surviving
+    on disk long past the release (brnrd#2022: a 2026-09-17 correspondent
+    message came out of a drawer carrying a session id minted the next day,
+    and was retried as a fresh `claude --resume`). Today
+    ``_apply_resource_hold_resume`` passes nothing — the releasing event is
+    the carrier — and the measured-refill path, which has no releasing
+    event, passes it for exactly one sibling.
     """
     if not event_id:
         return
@@ -14879,6 +14907,9 @@ def _apply_resource_hold_resume(
     # (brnrd#2012, kb/design-the-four-stops.md). So the *releaser's* intention
     # decides, here where it is known, rather than the arming site's guess.
     # Read before the release consumes the hold, so it reads the live record.
+    # brnrd#2022: what makes this fire is `resource_hold.HANDOVER_KEY` on the
+    # event. Keyed on `source == "respawn"` (as it shipped) it fired for
+    # nothing a daemon actually mints.
     wants_fresh = resource_hold.handover_event_releases(meta, event)
     arriving_conversation = conversations.conversation_key_for_event(event) or ""
     seat = _seat_conversation(held)
@@ -14915,9 +14946,21 @@ def _apply_resource_hold_resume(
     # the lead (a burst settle, a restart before claim) still lands home.
     if _rekey_to_seat(event, seat):
         stamps["conversation_key"] = seat
-    if (
-        not wants_fresh
-        and released.get("native_session_id")
+    if wants_fresh:
+        # brnrd#2022, the belt to #2016's brace: a handover release does not
+        # merely decline to *add* a stamp, it strips whatever the event is
+        # already carrying. The stamp is a cache and it heals — deleted from
+        # `evt-…-udee` by hand at 15:10Z on 2026-09-18, it was back at 15:14Z
+        # when the release re-derived it from the parked run's
+        # `resource_hold.native_session_id`. Declining to write covers the
+        # paths this daemon owns; stripping covers every path it does not
+        # (a mint before this fix, a hand-edited inbox, a future minter that
+        # copies frontmatter the way `_queue_respawn_request` did).
+        for key in ("resume_native_session_id", "resume_native_provider"):
+            event.pop(key, None)
+            stamps[key] = None
+    elif (
+        released.get("native_session_id")
         and released.get("resume_kind") == resource_hold.RESUME_NATIVE
     ):
         event["resume_native_session_id"] = released["native_session_id"]
@@ -14931,11 +14974,21 @@ def _apply_resource_hold_resume(
             pass
     drawers = _hold_undefer_inboxes(account_context, inbox_dir)
     for accumulated_id in released.get("accumulated_event_ids") or []:
+        # brnrd#2022: the releasing event carries the scroll; its accumulated
+        # siblings do not. This loop used to stamp every one of them, on the
+        # theory that a sibling could sort ahead of the trigger and lead the
+        # dispatch instead. The price, measured: `evt-…-2jb8` is a
+        # correspondent's message from 2026-09-17 that sat in this drawer
+        # through a host suspend and came out carrying a session id minted a
+        # *day later*; the daemon retried it as a fresh run and it did
+        # `claude --resume` onto a scroll it had no relation to. A stamp is a
+        # one-shot claim on one transcript — written onto N events it is N
+        # claims, each outliving the release that made it. The honest failure
+        # direction is a cold boot when a sibling leads, never a warm boot
+        # onto the wrong scroll.  `_rekey_to_seat` still runs: routing home
+        # is true of every letter in the drawer, which is why it stays.
         _undefer_held_event(
-            drawers, accumulated_id,
-            resume_native_session_id=event.get("resume_native_session_id"),
-            resume_native_provider=event.get("resume_native_provider"),
-            seat_conversation=seat,
+            drawers, accumulated_id, seat_conversation=seat,
         )
 
 
@@ -15072,11 +15125,30 @@ def _release_reset_holds_due(
                     by=released_by, run_id=held.id, repo_root=str(root),
                     conversation_key=_seat_conversation(held),
                 )
-            for accumulated_id in released_meta.get("accumulated_event_ids") or []:
+            # A measured release has no releasing *event* — the reading is
+            # the releaser, and the drawer is all there is to wake on. So
+            # unlike `_apply_resource_hold_resume` above, the scroll has to
+            # ride an accumulated sibling or the seat boots cold off its own
+            # refill. brnrd#2022 holds the invariant that matters instead of
+            # the whole spray: **at most one event ever carries the scroll**.
+            # The first accumulated id is the seat's own oldest queued
+            # letter, which is the one an ordinary pending sort leads with;
+            # if some later sibling leads anyway the seat boots cold, which
+            # is the direction this is allowed to fail in.
+            drawers = _hold_undefer_inboxes(account_context, inbox_dir)
+            for position, accumulated_id in enumerate(
+                released_meta.get("accumulated_event_ids") or []
+            ):
+                carries_scroll = position == 0
                 _undefer_held_event(
-                    _hold_undefer_inboxes(account_context, inbox_dir), accumulated_id,
-                    resume_native_session_id=released_meta.get("native_session_id"),
-                    resume_native_provider=released_meta.get("provider"),
+                    drawers, accumulated_id,
+                    resume_native_session_id=(
+                        released_meta.get("native_session_id")
+                        if carries_scroll else None
+                    ),
+                    resume_native_provider=(
+                        released_meta.get("provider") if carries_scroll else None
+                    ),
                     seat_conversation=_seat_conversation(held),
                 )
             released += 1
@@ -15139,6 +15211,7 @@ def _apply_run_release(
 
 def _respawn_event_meta(
     task: Run, event_id: str, *, shell: str = "", core: str = "",
+    handover: bool = True,
 ) -> dict[str, object]:
     """Meta fields every respawn-origin event this daemon mints must carry.
 
@@ -15156,6 +15229,16 @@ def _respawn_event_meta(
         "respawned_from_event": event_id,
         "respawned_by_run": task.id,
     }
+    if handover:
+        # brnrd#2022: the one fact that says "this replaces the seat".
+        # `respawned_from_event`/`respawned_by_run` cannot say it — the
+        # *strand* minter stamps both too (`_queue_spawn_request`), because
+        # a strand dispatch is the same system-to-system handoff shape; a
+        # child starting work must never release its parent's hold. And
+        # `source` cannot say it either: a respawn inherits the waking
+        # event's source, so #2016's `source == "respawn"` predicate
+        # matched close to nothing in production (resource_hold.HANDOVER_KEY).
+        meta[resource_hold.HANDOVER_KEY] = True
     if shell:
         meta["shell"] = shell
     if core:
@@ -15323,6 +15406,29 @@ def _handle_resource_held_events(
                 survivors.append(target)
                 continue
             source = str(target.event.get("source") or "")
+            if resource_hold.handover_event_releases(hold_meta, target.event):
+                # brnrd#2022. Checked *before* the source branches, and
+                # before `_HOLD_ACCUMULATE_ONLY_SOURCES`, because a real
+                # handover wears an inherited source: the one measured on
+                # 2026-09-18 reads `schedule`, which is in that very set.
+                # #2016 believed the post-arm filter "had this right all
+                # along" on the strength of `respawn` being absent from it
+                # — but a respawn is not spelled `respawn` here, so a
+                # handover queued while a seat was already parked was
+                # deferred as routine mail, exactly like the arm-time bug
+                # it was fixing. Ahead of `schedule_event_releases` so a
+                # handover through a *wall* releases too (that predicate
+                # refuses walls; this one does not).
+                _apply_resource_hold_resume(
+                    runs_dir, target.inbox_dir, held, target.event, by="respawn",
+                    account_context=account_context,
+                )
+                print(
+                    f"[brnrd] parked seat handed over by "
+                    f"{target.event.get('id')} ({source}): {held.id}"
+                )
+                survivors.append(target)
+                continue
             if resource_hold.schedule_event_releases(hold_meta, target.event):
                 _apply_resource_hold_resume(
                     runs_dir, target.inbox_dir, held, target.event, by="schedule",
