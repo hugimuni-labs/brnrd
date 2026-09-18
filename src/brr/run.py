@@ -37,6 +37,26 @@ _ENV_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _EVENT_META_FIELDS = {
     "id", "body", "source", "status", "_path", "created", "branch", "env",
     "environment", "conversation_key",
+    # brnrd#2023. `from_event`'s meta copy is blanket by design, which made
+    # `resume_native_session_id` **spellable from an event**: any file in
+    # `.brr/inbox` could claim a Shell transcript, and every event-minting
+    # path in the daemon was a fresh candidate for carrying one by accident.
+    # Four defects came out of that (see `pending_resume.py`). The resume
+    # claim is the daemon's now, held per seat and consumed once
+    # (`worker/prepare.py` sets these two on `task.meta` directly, after
+    # `pending_resume.consume`). Dropping them here is what makes a forged
+    # or inherited event inert rather than merely unlikely.
+    "resume_native_session_id", "resume_native_provider",
+    # The same key under the Shells' own names. `_native_session_id_for`
+    # reads exactly these two off run meta to decide what a park may resume
+    # into — so an event that spells `claude_session_id` (plus
+    # `runner_shell: claude`, `env: host`) arms a hold record pointing at a
+    # transcript it does not own, and the next honest release arms a
+    # `pending_resume` on it. Closing `resume_native_session_id` alone would
+    # have moved the forgery one name to the left. Both are written by
+    # `runner._extract_*` off the Shell's own stdout and belong to a run that
+    # has actually executed; nothing legitimately puts them on an event.
+    "claude_session_id", "codex_thread_id",
 }
 _RUN_FIELDS = {
     "id", "event_id", "branch", "env", "environment", "status", "source",

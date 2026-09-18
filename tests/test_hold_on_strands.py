@@ -392,17 +392,26 @@ class TestResumeAny:
         A `respawn:` queued at 22:31:59Z was deferred by the turn-end park
         armed at 22:35:14Z, landed in `accumulated_event_ids`, and never
         dispatched; a schedule tick woke the seat 95 minutes later, natively,
-        onto the very scroll the handover existed to end. The post-arm filter
-        had this right (`respawn` is absent from
-        `daemon._HOLD_ACCUMULATE_ONLY_SOURCES`); the arm-time defer never
-        asked.
+        onto the very scroll the handover existed to end.
+
+        #2016 believed the post-arm filter "had this right" because
+        `respawn` is absent from `daemon._HOLD_ACCUMULATE_ONLY_SOURCES`.
+        brnrd#2022: a handover is not spelled `respawn` there either — it
+        wears an inherited source, and `schedule` *is* in that set. Both
+        sides of the park consult this predicate now.
         """
         def meta(cond, reason="x"):
             return resource_hold.build(
                 reason=reason, provider="claude", resume_condition=cond,
             )
 
-        handover = {"source": "respawn"}
+        # brnrd#2022: an explicit marker, not the source. `source` is
+        # inherited from whatever woke the seat that queued the handover —
+        # the real one measured 2026-09-18 reads `schedule` — so the
+        # `source == "respawn"` this test shipped with described nothing the
+        # daemon produces, and #2016 was nearly inert in production while
+        # this assertion stayed green.
+        handover = {"source": "schedule", "handover": True}
         for cond in (
             resource_hold.RESUME_ANY,
             resource_hold.RESUME_STRANDS,
@@ -420,6 +429,7 @@ class TestResumeAny:
             meta(resource_hold.RESUME_OPERATOR, resource_hold.REASON_QUOTA_EXHAUSTED),
             handover,
         )
+        # An unmarked tick in the same clothes is still a tick.
         assert not resource_hold.handover_event_releases(
             meta(resource_hold.RESUME_ANY), {"source": "schedule"},
         )

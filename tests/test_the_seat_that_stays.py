@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from brr import conversations, daemon, protocol, resource_hold
+from brr import conversations, daemon, pending_resume, protocol, resource_hold
 from brr.run import Run
 
 SEAT_CONV = "cloud:telegram:1:"
@@ -96,10 +96,10 @@ def test_a_foreign_tick_resumes_the_seat_on_the_seats_own_thread(tmp_path, condi
     assert hold["released"] is True and hold["released_by"] == "schedule"
     # the one right piece of #1908: the resume is re-keyed to the seat
     assert conversations.conversation_key_for_event(tick.event) == SEAT_CONV
-    assert tick.event["resume_native_session_id"] == WARM
+    assert pending_resume.peek(_runs_dir(tmp_path).parent)["session_id"] == WARM
     on_disk = protocol._read_event(tick.inbox_dir / "evt-tick.md")
     assert on_disk.get("conversation_key") == SEAT_CONV
-    assert on_disk.get("resume_native_session_id") == WARM
+    assert pending_resume.peek(_runs_dir(tmp_path).parent)["session_id"] == WARM
 
 
 def test_the_next_message_finds_the_seat_not_a_fresh_run(tmp_path):
@@ -129,7 +129,7 @@ def test_the_next_message_finds_the_seat_not_a_fresh_run(tmp_path):
     msg = _target(tmp_path, eid="evt-msg", source="cloud", conversation_key=SEAT_CONV)
     assert daemon._handle_resource_held_events([msg], None) == [msg]
     assert _hold(tmp_path, "run-seat-A2")["released_by"] == "operator"
-    assert msg.event.get("resume_native_session_id") == WARM
+    assert pending_resume.peek(_runs_dir(tmp_path).parent)["session_id"] == WARM
 
 
 def test_a_telegram_message_resumes_a_seat_parked_on_the_schedule_thread(tmp_path):
@@ -156,7 +156,7 @@ def test_a_telegram_message_resumes_a_seat_parked_on_the_schedule_thread(tmp_pat
     assert conversations.conversation_key_for_event(telegram.event) == (
         "cloud:telegram:155783668:"
     )
-    assert telegram.event["resume_native_session_id"] == WARM
+    assert pending_resume.peek(_runs_dir(tmp_path).parent)["session_id"] == WARM
     assert [path.name for path in runs_dir.iterdir()] == ["run-seat-A"]
     assert persisted.meta["transitions"][-1]["from"] == "held"
     assert persisted.meta["transitions"][-1]["to"] == "done"
@@ -165,7 +165,17 @@ def test_a_telegram_message_resumes_a_seat_parked_on_the_schedule_thread(tmp_pat
 
 def test_a_tick_accumulated_under_a_wall_is_rekeyed_when_the_wall_lifts(tmp_path):
     """A wall's ticks un-defer on the measured refill; the one that leads the
-    resumed dispatch must still boot on the seat's thread."""
+    resumed dispatch must still boot on the seat's thread.
+
+    brnrd#2022 split the two facts this used to assert together. Routing
+    home is true of every letter in the drawer, so the re-key stays. The
+    *scroll* is not: this release has a releasing event (``evt-msg``) and
+    that event is the carrier. Stamping the drawer as well wrote N claims on
+    one transcript, each outliving the release on disk — measured on
+    ``evt-…-2jb8``, a correspondent's message that came out of a drawer a
+    day later still carrying a session id and was retried as a fresh
+    ``claude --resume``.
+    """
     _park(tmp_path, condition=resource_hold.RESUME_REFILL)
     tick = _target(tmp_path, eid="evt-tick", source="schedule", conversation_key=TICK_CONV)
     assert daemon._handle_resource_held_events([tick], None) == []
@@ -183,7 +193,9 @@ def test_a_tick_accumulated_under_a_wall_is_rekeyed_when_the_wall_lifts(tmp_path
     on_disk = protocol._read_event(tick.inbox_dir / "evt-tick.md")
     assert on_disk.get("defer_reason") is None
     assert on_disk.get("conversation_key") == SEAT_CONV
-    assert on_disk.get("resume_native_session_id") == WARM
+    assert on_disk.get("resume_native_session_id") is None
+    # The releaser keeps it — the fix cools the drawer, not the resume.
+    assert pending_resume.peek(_runs_dir(tmp_path).parent)["session_id"] == WARM
 
 
 def test_a_correspondent_from_another_thread_resumes_and_keeps_its_own_key(tmp_path):
@@ -195,7 +207,7 @@ def test_a_correspondent_from_another_thread_resumes_and_keeps_its_own_key(tmp_p
     assert _hold(tmp_path)["released"] is True
     assert _hold(tmp_path)["conversation_key"] == "github:o/r#7"
     assert conversations.conversation_key_for_event(other.event) == "github:o/r#7"
-    assert other.event["resume_native_session_id"] == WARM
+    assert pending_resume.peek(_runs_dir(tmp_path).parent)["session_id"] == WARM
 
 
 # ── walls: the seat cannot run, so ticks accumulate ─────────────────
@@ -218,7 +230,7 @@ def test_a_tick_under_a_wall_accumulates_and_wakes_nothing(tmp_path, condition, 
     assert "evt-tick" in hold["accumulated_event_ids"]
     on_disk = protocol._read_event(tick.inbox_dir / "evt-tick.md")
     assert on_disk.get("defer_reason") == "resource_hold"
-    assert "resume_native_session_id" not in tick.event
+    assert pending_resume.peek(_runs_dir(tmp_path).parent) is None
 
 
 def test_wall_predicate():
