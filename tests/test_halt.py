@@ -632,3 +632,44 @@ class TestThroughTheWorker:
         # than half-accepting: the seat is still here to be told again.
         assert task.status != HALTED_STATUS
         assert "halt" not in task.meta
+
+
+class TestAHaltedParentIsNotACollector:
+    """The one hazard the bounce can name but not fix: a seat halts while a
+    strand it dispatched is still working, and the strand's report comes
+    back to a run that is not there.
+
+    Checked rather than assumed (#1887: a strand's return read
+    ``delivered`` on disk and was dispatched to nothing). The answer is
+    that ``halted`` being a *terminal* status is load-bearing:
+    ``_spawn_parent_still_collecting`` reads liveness off the manifest's
+    status, so a halted parent stops claiming the dispatch edge and the
+    child's terminal route falls back to ``notify.gate`` — a chat message
+    a person actually reads — instead of an edge nobody owns.
+    """
+
+    def _parent(self, runs_dir: Path, status: str) -> Run:
+        task = Run(id="run-parent", event_id="evt-p", body="", status=status)
+        task.save(runs_dir)
+        return task
+
+    def test_a_running_parent_still_collects(self, tmp_path):
+        runs_dir = tmp_path / ".brr" / "runs"
+        runs_dir.mkdir(parents=True)
+        self._parent(runs_dir, "running")
+        assert daemon._spawn_parent_still_collecting("run-parent", runs_dir)
+
+    def test_a_halted_parent_does_not(self, tmp_path):
+        runs_dir = tmp_path / ".brr" / "runs"
+        runs_dir.mkdir(parents=True)
+        self._parent(runs_dir, HALTED_STATUS)
+        assert not daemon._spawn_parent_still_collecting("run-parent", runs_dir)
+
+    def test_a_parked_parent_still_collects(self, tmp_path):
+        # The contrast that makes the line above meaningful: a *park* keeps
+        # the edge, which is why a park is the right answer for live
+        # strands and a halt is the declared, announced exception.
+        runs_dir = tmp_path / ".brr" / "runs"
+        runs_dir.mkdir(parents=True)
+        self._parent(runs_dir, resource_hold.RUN_STATUS)
+        assert daemon._spawn_parent_still_collecting("run-parent", runs_dir)
