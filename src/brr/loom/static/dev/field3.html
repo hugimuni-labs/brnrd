@@ -1,0 +1,166 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>the field 3 — one list, four projections</title>
+<style>
+:root{--bg:#0b0906;--panel:#120e09;--line:#3a3328;--text:#e8dcc0;--dim:#8f8470;--ice:#8fd3ff;--amber:#f2b134;--ember:#7a5c27;--dark:#2b2318;font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);overflow:hidden}
+header{height:40px;display:flex;gap:10px;align-items:center;padding:0 14px;border-bottom:1px solid var(--line)}
+header b{font-size:15px}header span{color:var(--dim);letter-spacing:2px;font-size:10px}
+button{font:inherit;color:var(--text);background:#15110b;border:1px solid var(--line);padding:5px 9px;cursor:pointer}button.on{border-color:var(--amber);color:var(--amber)}
+#jump{display:flex;gap:6px}#menu{margin-left:auto;display:flex;gap:6px}
+#ground{position:absolute;inset:40px 0 46px 0}svg{width:100%;height:100%;display:block}
+text{font:11px ui-monospace,Menlo,monospace;fill:var(--text)}.t9{font-size:9px}.t10{font-size:10px}.dim{fill:var(--dim)}.ice{fill:var(--ice)}.amber{fill:var(--amber)}.absent{fill:#5a4d3c}
+/* the scrubber — the cloth as a control */
+#scrub{position:absolute;left:0;right:0;bottom:0;height:46px;border-top:1px solid var(--line);background:var(--panel);display:flex;align-items:center;gap:12px;padding:0 14px}
+#scrub .lab{color:var(--dim);font-size:10px;letter-spacing:2px;width:150px}
+#track{flex:1;position:relative;height:22px}#track .b{position:absolute;top:8px;width:6px;height:6px;border-radius:50%;background:var(--dark);cursor:pointer}
+#track .b.amber{background:var(--amber)}#track .b.ice{background:var(--ice)}#track .b.ember{background:var(--ember)}#track .b.user{width:8px;height:8px;top:7px;background:var(--ice);box-shadow:0 0 6px var(--ice)}
+#track .b.past{opacity:.9}#track .b.future{opacity:.25}#cursor{position:absolute;top:0;width:1px;height:22px;background:var(--amber)}
+#at{color:var(--amber);font-size:10px;width:170px;text-align:right}
+/* the console — collapsed, and as the overlay */
+#console{position:absolute;right:14px;bottom:58px;width:380px;border:1px solid var(--line);background:#120e09ee;padding:10px;font-size:11px;line-height:1.7;z-index:2}
+#console .eyebrow{font-size:10px;letter-spacing:2px;color:var(--dim);margin-bottom:6px;cursor:pointer}#console .eyebrow i{float:right;font-style:normal;letter-spacing:0}
+#clog{white-space:pre-wrap;color:var(--dim)}.row b{color:var(--text);font-weight:400}.row.user{color:var(--ice)}.row.user b{color:var(--ice)}.row.read b,.row.edit b{color:var(--text)}.row .k{color:var(--amber)}.row .p{color:var(--dim)}
+#say{width:100%;font:inherit;background:#0b0906;color:var(--text);border:1px solid var(--line);padding:6px;margin-top:6px}
+#overlay{position:absolute;inset:40px 0 46px 0;background:#0b0906e6;display:none;z-index:3;grid-template-columns:1fr 360px;gap:0}
+#overlay.open{display:grid}
+#ov-log{padding:20px 28px;overflow:auto}#ov-log h2,#ov-body h2{font-weight:400;font-size:12px;letter-spacing:2px;color:var(--dim);margin:0 0 12px}
+#ov-log .row{padding:2px 0;border-left:2px solid transparent;padding-left:8px}#ov-log .row.now{border-left-color:var(--amber);background:#f2b13410}#ov-log .row.future{opacity:.3}
+#ov-body{border-left:1px solid var(--line);padding:20px;overflow:auto;display:flex;flex-direction:column}
+#stack{display:flex;flex-direction:column-reverse;gap:2px;justify-content:flex-start;flex:1}
+.layer{border:1px solid var(--line);background:#0f0c07;padding:3px 8px;font-size:10px;display:flex;justify-content:space-between;gap:8px;color:var(--dim)}
+.layer.boot{border-color:#3a2d19;color:#7a6f5c}.layer.read{border-color:#5b4724;color:var(--text)}.layer.edit{border-color:var(--amber);color:var(--text)}.layer.user{border-color:var(--ice);color:var(--ice)}.layer.status{border-color:#2b2318}.layer.top{box-shadow:0 0 12px #f2b13433}
+.layer .kb{color:var(--amber)}.layer.user .kb{color:var(--ice)}
+#total{margin-top:10px;color:var(--dim);font-size:10px;border-top:1px solid var(--line);padding-top:8px}#total b{color:var(--text);font-weight:400}
+/* a room, entered */
+#room{position:absolute;left:60px;top:80px;width:560px;max-height:70%;overflow:auto;border:1px solid var(--ice);background:#120e09f2;padding:16px;display:none;z-index:4}
+#room.open{display:block}#room h2{font-weight:400;font-size:13px;margin:0 0 4px;color:var(--ice)}#room .m{color:var(--dim);font-size:10px;margin-bottom:10px}
+#room .foot{font-size:11px;line-height:1.7}#room .foot .row{padding-left:8px;border-left:2px solid var(--ember)}#room button{float:right}
+</style>
+<header><b>brnrd</b><span>/ THE FIELD 3 · one list, four projections · ← → scrub · L log · P pack · Esc</span>
+  <div id="jump"></div>
+  <div id="menu"><button id="logb">the log · L</button><button id="packb">the body · P</button></div></header>
+<div id="ground"><svg id="svg" viewBox="0 0 1440 800" preserveAspectRatio="xMidYMid meet"></svg></div>
+<div id="room"><button onclick="closeRoom()">close</button><h2 id="r-title"></h2><div class="m" id="r-meta"></div><div class="foot" id="r-foot"></div></div>
+<div id="console"><div class="eyebrow" onclick="toggleLog()">THE CONSOLE · you and the resident, one line each <i id="who">you · away</i></div><div id="clog"></div><input id="say" placeholder="say something — it lands on the top block of the body"></div>
+<div id="overlay"><div id="ov-log"><h2>THE LOG · the same list, by when · the cloth is this, drawn</h2><div id="ov-rows"></div></div><div id="ov-body"><h2>THE BODY · the same list, stacked · boot at the base, newest on top</h2><div id="stack"></div><div id="total"></div></div></div>
+<div id="scrub"><div class="lab">THE CLOTH · scrub</div><div id="track"></div><div id="at"></div></div>
+<script>
+const $=s=>document.querySelector(s);const NS='http://www.w3.org/2000/svg';
+function el(n,a={},t){const e=document.createElementNS(NS,n);for(const[k,v]of Object.entries(a))e.setAttribute(k,v);if(t!=null)e.textContent=t;return e;}
+// ── THE ONE LIST: boundaries. kind · place · bytes · text ──
+const BOOT=[['run.md',5.7],['weave.md',5.0],['register.md',4.5],['daemon-substrate.md',16.0],['portals',12.1],['identity-core.md',6.3],['dominion digest',21.1],['work surface',51.3],['knowledge sources',4.1],['kb/log tail',8.9],['last run',0.7],['notes health',12.5]];
+const B=[
+ {t:'18:07',k:'status',p:'shed',kb:.3,x:'forced awake · session 100 %'},
+ {t:'18:08',k:'user',p:'shed',kb:.4,x:'"your state used to be awaited and now it\'s parked … smth is broken"'},
+ {t:'18:09',k:'read',p:'src/brr/daemon.py',kb:2.1,x:'grep refill · starvation · thaw'},
+ {t:'18:10',k:'read',p:'src/brr/daemon.py',kb:3.9,x:'the sweep 14930–15000 · the forced-wake path'},
+ {t:'18:11',k:'weave',p:'wire',kb:.2,x:'→ him: forced awake, binding 22 %, chasing what the daemon measured'},
+ {t:'18:12',k:'read',p:'brr.out.log',kb:1.0,x:'18:06:41Z starved seat … binding quota unreadable'},
+ {t:'18:14',k:'read',p:'src/brr/claude_usage.py',kb:1.3,x:'load_or_refresh_snapshot(None) → None'},
+ {t:'18:15',k:'tool',p:'src/brr/daemon.py',kb:.9,x:'repro: outbox=None → None · latest outbox → 21.0'},
+ {t:'18:16',k:'edit',p:'src/brr/daemon.py',kb:1.4,x:'_collect_levels: hunt the freshest run cache when no run owns the read'},
+ {t:'18:17',k:'edit',p:'tests/test_starvation_hold.py',kb:1.1,x:'a test through the real reader'},
+ {t:'18:18',k:'tool',p:'tests/',kb:.6,x:'pytest · 81 passed'},
+ {t:'18:20',k:'tool',p:'forge',kb:.5,x:'PR #2000 · issue #2001'},
+ {t:'18:21',k:'weave',p:'wire',kb:.7,x:'→ him: THE WALL THAT COULD NOT READ — fixed on #2000; merge?'},
+ {t:'18:24',k:'spawn',p:'crew',kb:.9,x:'▱ gen 3 · opus · brr/the-dungeon'},
+ {t:'18:26',k:'edit',p:'surface/plans/active.md',kb:.8,x:'85,348 → 2,925 B'},
+ {t:'18:30',k:'edit',p:'surface/workflow.md',kb:.6,x:'26,363 → 22,930 B'},
+ {t:'18:45',k:'user',p:'wire',kb:.1,x:'"merged 2000"'},
+ {t:'18:47',k:'user',p:'wire',kb:.2,x:'"neither :7778/loom … dont work"'},
+ {t:'18:48',k:'tool',p:'clock',kb:.4,x:'serve gen 3 on :7778'},
+ {t:'19:00',k:'read',p:'w-18',kb:.3,x:'design-the-dungeon.md §9'},
+ {t:'19:03',k:'read',p:'.brr/reports/the-dungeon-gen3.md',kb:4.2,x:'the report, whole'},
+ {t:'19:04',k:'read',p:'src/brr/loom/static/loom.js',kb:9.8,x:'the diff, 365 lines'},
+ {t:'19:05',k:'tool',p:'w-18',kb:.4,x:'ring histogram {1: 71, 2: 10}'},
+ {t:'19:06',k:'weave',p:'wire',kb:.9,x:'→ him: the law\'s premise failed on the data'},
+ {t:'19:07',k:'edit',p:'kb/design-the-dungeon.md',kb:1.2,x:'§10 written'},
+ {t:'19:12',k:'user',p:'wire',kb:.7,x:'Alexandra: "create a good demo video"'},
+ {t:'19:16',k:'read',p:'media/demo/',kb:.9,x:'v6 exists · his number in the header'},
+ {t:'19:19',k:'spawn',p:'crew',kb:1.1,x:'▱ the demo, masked · opus'},
+ {t:'19:31',k:'user',p:'wire',kb:.6,x:'"how could we make the interface fit the periodic trims"'},
+ {t:'19:34',k:'weave',p:'wire',kb:.9,x:'→ him: stamps not formats; the frame sweeps, I mint'},
+ {t:'19:40',k:'edit',p:'src/brr/loom/static/dev/field.html',kb:3.1,x:'the first sketch'},
+ {t:'20:15',k:'user',p:'wire',kb:.4,x:'"okay let\'s look at it together … there is no space"'},
+ {t:'20:22',k:'edit',p:'src/brr/loom/static/dev/field2.html',kb:4.0,x:'one ground'},
+ {t:'20:36',k:'user',p:'wire',kb:.4,x:'Alexandra: "Link"'},
+ {t:'20:38',k:'weave',p:'wire',kb:.5,x:'→ her: the two files'},
+ {t:'21:10',k:'user',p:'wire',kb:3.9,x:'"the console reads very interesting … the list of your boundaries, really"'},
+ {t:'21:22',k:'weave',p:'wire',kb:1.0,x:'→ him: one list, four projections'},
+ {t:'21:35',k:'user',p:'wire',kb:.1,x:'"yeah, do it"'},
+];
+const TREE={n:'brnrd/',k:[{n:'src/brr/',k:[{n:'daemon.py'},{n:'claude_usage.py'},{n:'loom/',k:[{n:'static/',k:[{n:'loom.js'},{n:'dev/'}]}]}]},{n:'tests/',k:[{n:'test_starvation_hold.py'}]},{n:'kb/',k:[{n:'design-the-dungeon.md'},{n:'log.md'}]},{n:'surface/',k:[{n:'workflow.md'},{n:'plans/active.md'}]},{n:'media/',k:[{n:'demo/'}]},{n:'.brr/',k:[{n:'reports/'}]}]};
+const LEVELS=[
+ {t:'L1 · g-1 · the ignition pipeline',m:'door out: 8 build-log issues · 2 so far',rooms:[['w-45',1,'his'],['w-19',1,'his'],['w-50',2,''],['w-47',2,''],['w-61',3,'fog']]},
+ {t:'L2 · g-2 · the body that cannot end its turn',m:'door out: turn-ends with nothing armed / week = 0',rooms:[['w-20',1,'his'],['w-8',1,'his'],['w-31',2,''],['w-42',2,'done'],['w-32',3,'fog']]},
+ {t:'L3 · the loom',m:'door out: watched daily → a stranger → a clip',rooms:[['w-18',1,'his'],['w-72',1,'his'],['w-38',2,''],['w-39',2,''],['w-56',3,'fog']]},
+];
+const HUB=['shed','forge','wire','crew','clock','belt'];
+let at=B.length-1;  // the scrubber: which boundary is "now"
+const upto=()=>B.slice(0,at+1);
+const placeMatch=(p,name)=>p===name||p.endsWith('/'+name)||(name.endsWith('/')&&p.startsWith(name))||p.includes('/'+name.replace(/\/$/,'')+'/')||p.startsWith(name.replace(/\/$/,''));
+const svg=$('#svg');
+function layoutTree(node,depth,x0,x1,out){const y=300-depth*58,x=(x0+x1)/2;out.push({node,x,y});const kids=node.k||[];if(!kids.length)return;const w=(x1-x0)/kids.length;kids.forEach((k,i)=>{const cx0=x0+i*w,cx1=cx0+w;layoutTree(k,depth+1,cx0,cx1,out);out.push({edge:[x,y,(cx0+cx1)/2,300-(depth+1)*58]});});}
+function render(){
+  const L=upto(),last=L[L.length-1];svg.replaceChildren();
+  const touched=name=>L.filter(b=>(b.k==='read'||b.k==='edit'||b.k==='tool')&&b.p!=='wire'&&placeMatch(b.p,name));
+  const hisTouched=name=>L.filter(b=>b.k==='user'&&placeMatch(b.p,name));
+  svg.append(el('line',{x1:0,y1:352,x2:1440,y2:352,stroke:'#5b4724','stroke-width':1.2}));
+  svg.append(el('text',{x:18,y:22,class:'dim t10'},'THE SURFACE · the archive · lit by the list, as of the scrubber'));
+  svg.append(el('text',{x:18,y:378,class:'dim t10'},'UNDERGROUND · the warp as levels · a room holds its slice of the list — click one'));
+  const nodes=[];layoutTree(TREE,0,50,960,nodes);
+  for(const e of nodes.filter(n=>n.edge)){const[x1,y1,x2,y2]=e.edge;svg.append(el('path',{d:`M${x1},${y1-8} C${x1},${y1-36} ${x2},${y2+30} ${x2},${y2+8}`,fill:'none',stroke:'#3c2f1a'}));}
+  const pos={};
+  for(const n of nodes.filter(n=>n.node)){const name=n.node.n,hits=touched(name),lit=hits.length>0,edited=hits.some(b=>b.k==='edit'),dir=name.endsWith('/');pos[name]={x:n.x,y:n.y};
+    const w=Math.max(44,Math.min(name.length*6.6+10,150)),h=18;
+    svg.append(el('rect',{x:n.x-w/2,y:n.y-h/2,width:w,height:h,rx:3,fill:lit?'#1a1408':'#0b0906',stroke:edited?'#f2b134':lit?'#a87c36':dir?'#4e3c1f':'#2b2318','stroke-width':lit?1.3:.8}));
+    if(lit)svg.append(el('rect',{x:n.x-w/2,y:n.y+h/2-2,width:Math.min(w,w*hits.length/4),height:2,fill:'#f2b134'}));
+    svg.append(el('text',{x:n.x,y:n.y+4,'text-anchor':'middle',class:'t10 '+(lit?'':dir?'dim':'absent')},name.length>20?name.slice(0,19)+'…':name));
+    if(lit)svg.append(el('text',{x:n.x,y:n.y-13,'text-anchor':'middle',class:'t9 dim'},`${hits.length} ${hits.length===1?'act':'acts'}`));}
+  // hub
+  const hx=1170,hy=352;svg.append(el('ellipse',{cx:hx,cy:hy,rx:150,ry:42,fill:'#0f0c07',stroke:'#5b4724'}));
+  svg.append(el('text',{x:hx,y:hy-56,'text-anchor':'middle',class:'dim t9'},'THE HUB · the frame\'s state machine · the actor stands where the last act landed'));
+  const here=HUB.includes(last.p)?last.p:'shed';const strands=L.filter(b=>b.k==='spawn').length;
+  HUB.forEach((p,i)=>{const a=-Math.PI/2+i*Math.PI/3,x=hx+Math.cos(a)*112,y=hy+Math.sin(a)*28,on=here===p;pos[p]={x,y};
+    svg.append(el('rect',{x:x-26,y:y-9,width:52,height:18,rx:3,fill:'#0b0906',stroke:on?'#f2b134':'#4e3c1f','stroke-width':on?1.4:.9}));
+    svg.append(el('text',{x,y:y+4,'text-anchor':'middle',class:'t10 '+(on?'':'dim')},p));
+    if(on)svg.append(el('text',{x,y:y-13,'text-anchor':'middle',class:'amber',style:'font-size:14px'},'b·_·d'));
+    if(p==='crew'&&strands)svg.append(el('text',{x:x+34,y:y+4,class:'amber t10'},'▱'.repeat(strands)));});
+  svg.append(el('line',{x1:hx,y1:hy+42,x2:hx,y2:780,stroke:'#3c2f1a','stroke-dasharray':'3 5'}));
+  // levels
+  LEVELS.forEach((lv,li)=>{const y0=400+li*128;svg.append(el('rect',{x:40,y:y0,width:1020,height:112,fill:'#0f0c0722',stroke:'#3c2f1a'}));
+    svg.append(el('text',{x:52,y:y0+16,class:'t10'},lv.t));svg.append(el('text',{x:52,y:y0+30,class:'dim t9'},lv.m));
+    svg.append(el('line',{x1:hx,y1:y0+56,x2:1060,y2:y0+56,stroke:'#3c2f1a'}));svg.append(el('rect',{x:1054,y:y0+48,width:6,height:16,fill:'#0b0906',stroke:'#d4a357'}));
+    lv.rooms.forEach(([id,ring,kind],i)=>{const x=150+(ring-1)*300+(i%2)*140,y=y0+38+(ring-1)*24;const his=kind==='his',fog=kind==='fog',done=kind==='done';const hits=touched(id),hh=hisTouched(id);pos[id]={x:x+60,y:y+9};
+      const g=el('g',{style:'cursor:pointer'});g.onclick=()=>openRoom(id,lv,kind);
+      g.append(el('rect',{x,y,width:120,height:18,rx:2,fill:hits.length?'#1a1408':'#0b0906',stroke:fog?'#2b2318':hh.length?'#8fd3ff':hits.length?'#f2b134':his?'#8fd3ff':done?'#7a5c27':'#4e3c1f','stroke-dasharray':fog?'3 3':'none','stroke-width':his||hits.length?1.3:.8}));
+      g.append(el('text',{x:x+6,y:y+13,class:'t10 '+(fog?'absent':his?'ice':done?'dim':'dim')},fog?'▣ ···':id+(his?' · his':done?' · done':'')));
+      for(let f=0;f<Math.min(hits.length,6);f++)g.append(el('circle',{cx:x+100+f*3-6,cy:y+9,r:1.4,fill:'#f2b134'}));
+      if(ring<3&&!fog){g.append(el('line',{x1:x+120,y1:y+9,x2:x+300,y2:y+9,stroke:his?'#8fd3ff':'#3c2f1a','stroke-width':.8}));if(his)g.append(el('rect',{x:x+180,y:y+3,width:5,height:12,fill:'#0b0906',stroke:'#8fd3ff'}));}
+      svg.append(g);});});
+  // the trail: the cloth drawn on the ground — the last 12 places in order
+  const trail=L.slice(-12).map(b=>{const key=Object.keys(pos).find(k=>placeMatch(b.p,k)||b.p===k);return key?pos[key]:null;}).filter(Boolean);
+  if(trail.length>1){svg.append(el('path',{d:trail.map((p,i)=>`${i?'L':'M'}${p.x},${p.y}`).join(' '),fill:'none',stroke:'#f2b134','stroke-opacity':.35,'stroke-width':1,'stroke-dasharray':'2 4'}));}
+  // console (collapsed)
+  const inner=b=>`<b>${b.t}Z</b>  <span class=k>${b.k==='user'?'you':b.k}</span> <span class=p>${b.p}</span>  ${b.x}`;const row=b=>`<div class="row ${b.k}">${inner(b)}</div>`;
+  $('#clog').innerHTML=L.slice(-5).map(row).join('');$('#who').textContent=last.k==='user'?'you · here':'you · away';
+  // scrubber
+  $('#track').innerHTML=B.map((b,i)=>`<span class="b ${b.k==='user'?'user':b.k==='edit'?'amber':b.k==='read'||b.k==='tool'?'ember':b.k==='weave'?'amber':''} ${i<=at?'past':'future'}" style="left:${i/(B.length-1)*100}%" title="${b.t} ${b.k} ${b.p}" onclick="at=${i};render()"></span>`).join('')+`<span id=cursor style="left:${at/(B.length-1)*100}%"></span>`;
+  $('#at').textContent=`${last.t}Z · boundary ${at+1} of ${B.length}`;
+  // overlay: log + body
+  $('#ov-rows').innerHTML=B.map((b,i)=>`<div class="row ${b.k} ${i===at?'now':i>at?'future':''}" onclick="at=${i};render()">${inner(b)}</div>`).join('');
+  const boot=BOOT.reduce((n,b)=>n+b[1],0),run=L.reduce((n,b)=>n+b.kb,0);
+  $('#stack').innerHTML=BOOT.map(([n,kb])=>`<div class="layer boot"><span>${n}</span><span class=kb>${kb.toFixed(1)} KB</span></div>`).join('')+L.map((b,i)=>`<div class="layer ${b.k} ${i===at?'top':''}"><span>${b.t} ${b.k} · ${b.p}</span><span class=kb>+${b.kb.toFixed(1)} KB</span></div>`).join('');
+  $('#total').innerHTML=`boot <b>${boot.toFixed(1)} KB</b> + run <b>${run.toFixed(1)} KB</b> = <b>${(boot+run).toFixed(1)} KB</b> on the body at this boundary · a user line lands on the top layer and grows it`;
+  $('#jump').innerHTML=[['boot',0],['the wall found',12],['gen 3 read',23],['her ask',25],['now',B.length-1]].map(([l,i])=>`<button class="${at===i?'on':''}" onclick="at=${i};render()">${l}</button>`).join('');
+}
+function openRoom(id,lv,kind){const L=upto(),hits=L.filter(b=>b.p===id),his=L.filter(b=>b.k==='user'&&b.p===id);$('#r-title').textContent=`${id} — ${kind==='his'?'a decision of his':kind==='done'?'done':'a room'} in ${lv.t}`;$('#r-meta').textContent=`ring · needs · opens · stake ? — the item page opens here (the bench); below, this room's slice of the list`;
+  $('#r-foot').innerHTML=hits.length?hits.map(b=>`<div class="row ${b.k}"><b>${b.t}Z</b> ${b.k} · ${b.x}</div>`).join(''):'<div class="row" style="color:#5a4d3c">no footprints yet — nobody has entered this room in this run</div>';$('#room').classList.add('open');}
+function closeRoom(){$('#room').classList.remove('open');}
+function toggleLog(){$('#overlay').classList.toggle('open');}
+$('#logb').onclick=toggleLog;$('#packb').onclick=toggleLog;
+$('#say').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.value.trim()){B.splice(at+1,0,{t:'now',k:'user',p:'wire',kb:Math.max(.1,e.target.value.length/1000),x:`"${e.target.value.trim()}"`});at++;e.target.value='';render();}});
+document.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT')return;if(e.key==='ArrowLeft'){at=Math.max(0,at-1);render();}if(e.key==='ArrowRight'){at=Math.min(B.length-1,at+1);render();}if(e.key==='l'||e.key==='p')toggleLog();if(e.key==='Escape'){$('#overlay').classList.remove('open');closeRoom();}});
+render();
+</script>

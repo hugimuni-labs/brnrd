@@ -591,6 +591,46 @@ def test_beads_carry_chunks_straight_through(tmp_path):
     brr = repo / ".brr"
     run_id = "run-260924-0900-chunk1"
     outbox = brr / "outbox" / "evt-chunk"
+def test_chunks_carry_the_repo_place_the_tree_speaks(tmp_path):
+    """A chunk records the absolute path the tool saw; the tree row that
+    carries the file's ``lines`` is keyed by the repo place. Without a join key
+    the chunk ground cannot be normalised into a file's own height at all — so
+    ``rel`` rides beside the untouched ``path``, and only where it names a file
+    the tree would actually carry: an interpreter under ``.venv`` gets none,
+    and its absence is the reader's signal that there is no height to scale
+    against."""
+    repo = tmp_path / "repo"
+    home = tmp_path / "home"
+    brr = repo / ".brr"
+    run_id = "run-260924-0900-w21xx"
+    outbox = brr / "outbox" / "evt-w21"
+    _write(home / "shuttle.json", json.dumps({
+        "key": "acc", "state": "awake", "why": "event_dispatched", "run_id": run_id,
+        "repo_root": str(repo), "conversation_key": "cloud:x", "since": iso(NOW - 60),
+        "transitions": [],
+    }))
+    _run_md(brr, run_id, outbox, transitions=_transitions(NOW - 300))
+    _write(outbox / "portal-state.json", json.dumps({"run": {"id": run_id}}))
+    x_path = repo / "src" / "x.py"
+    _write(x_path, "\n".join(f"line {n}" for n in range(1, 41)) + "\n")
+    _jsonl(brr / "runs" / run_id / "boundaries.jsonl", [
+        {"at": iso(NOW - 200), "act": "mutate", "cwd": str(repo),
+         "place": {"path": str(x_path), "paths": [str(x_path)]},
+         "chunks": [
+             {"path": str(x_path), "from": 7, "to": 9, "kind": "write"},
+             {"path": str(repo / ".venv" / "bin" / "python"), "kind": "write"},
+             {"path": "/elsewhere/not/this/repo.py", "from": 1, "to": 2, "kind": "read"},
+         ]},
+    ])
+
+    out = state.build(repo, home, now=NOW)
+    chunks = out["beads"][0]["chunks"]
+    assert [c.get("rel") for c in chunks] == ["src/x.py", None, None]
+    assert chunks[0]["path"] == str(x_path)           # the raw path is untouched
+    row = next(r for r in out["tree"]["repo"] if r["path"] == "src/x.py")
+    assert row["lines"] == 40                          # and the join reaches the height
+
+
 def test_enrich_warp_and_footprints_both_land_in_merge_order(tmp_path):
     """#1996 × #2004's seam: ``dungeon.enrich_warp`` (``opens`` · ``stake`` ·
     ``receipt`` and an unconditional ``visited_at``) must run *before*
@@ -622,8 +662,11 @@ def test_enrich_warp_and_footprints_both_land_in_merge_order(tmp_path):
     ])
 
     out = state.build(repo, home, now=NOW)
+    # the row's chunk, straight through, with the one addition a reader needs:
+    # `rel` — the repo place the tree speaks, so a chunk and the file's own
+    # height can be joined without inventing a strip per reader.
     assert [b["chunks"] for b in out["beads"]] == [
-        [{"path": str(x_path), "from": 1, "to": 20, "kind": "read"}],
+        [{"path": str(x_path), "from": 1, "to": 20, "kind": "read", "rel": "src/x.py"}],
         [],
     ]
     _write(home / "surface" / "warp" / "w-20.md", "# Twenty\n\ntype: action\nstake: the merge order itself\n")

@@ -1,0 +1,103 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>the field — a primitive layout</title>
+<style>
+:root{--bg:#0b0906;--panel:#120e09;--line:#3a3328;--text:#e8dcc0;--dim:#8f8470;--ice:#8fd3ff;--amber:#f2b134;--ember:#7a5c27;--dark:#2b2318;font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text)}
+header{display:flex;gap:14px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line)}
+header b{font-size:16px}header span{color:var(--dim);letter-spacing:2px;font-size:10px}
+header button{margin-left:auto}button{font:inherit;color:var(--text);background:#15110b;border:1px solid var(--line);padding:5px 9px;cursor:pointer}
+button.on{border-color:var(--amber);color:var(--amber)}
+main{display:grid;grid-template-columns:300px 1fr 320px;grid-template-rows:64px 1fr;gap:10px;padding:10px;height:calc(100vh - 44px)}
+.p{border:1px solid var(--line);background:var(--panel);padding:10px;position:relative;overflow:hidden}
+.eyebrow{font-size:10px;letter-spacing:2px;color:var(--dim);margin-bottom:8px}.eyebrow i{float:right;font-style:normal;letter-spacing:0}
+/* the scroll — time, left to right */
+#scroll{grid-column:1/4;grid-row:1;display:flex;align-items:center;gap:0;padding:0 14px}
+#scroll .lab{width:110px;color:var(--dim);font-size:10px;letter-spacing:2px}
+#beads{flex:1;display:flex;align-items:center;gap:6px;height:100%;border-left:1px solid var(--line);padding-left:12px}
+.bead{width:10px;height:10px;border-radius:50%;background:var(--dark);flex:none}
+.bead.amber{background:var(--amber);box-shadow:0 0 8px #f2b13488}.bead.ice{background:var(--ice)}.bead.ember{background:var(--ember)}
+.bead.wide{width:22px;border-radius:5px}.tick{color:var(--dim);font-size:9px;margin:0 6px}
+#now{margin-left:auto;color:var(--amber);font-size:10px}
+/* the archive — the surface, a ship map */
+#archive{grid-column:1;grid-row:2}
+.ship{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:6px}
+.room{border:1px solid var(--dark);color:#5a4d3c;padding:8px 6px;min-height:52px;font-size:10px;position:relative}
+.room.lit{border-color:var(--amber);color:var(--text)}.room.warm{border-color:var(--ember);color:#b3a78e}
+.room.his{border-color:var(--ice);color:var(--ice)}.room .n{position:absolute;right:5px;bottom:4px;font-size:9px;color:var(--dim)}
+.room .heat{position:absolute;left:0;bottom:0;height:2px;background:var(--amber)}
+/* the hub + the dungeon levels */
+#field{grid-column:2;grid-row:2;display:grid;grid-template-rows:150px 1fr;gap:10px;padding:0;border:0;background:none;overflow:visible}
+#hub{display:flex;gap:8px;align-items:stretch}
+.place{flex:1;border:1px solid var(--line);background:var(--panel);padding:8px;position:relative;font-size:11px}
+.place small{display:block;color:var(--dim);font-size:9px;margin-top:6px}
+.place.here{border-color:var(--amber);box-shadow:0 0 18px #f2b13422}.place.cold{border-color:var(--ice)}.place.dark{border-color:var(--dark);color:#5a4d3c}
+.actor{position:absolute;right:8px;top:6px;color:var(--amber);font-size:15px;text-shadow:0 0 10px #f2b13488}
+.strand{position:absolute;right:8px;bottom:6px;color:var(--amber);font-size:11px}
+#levels{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.level{border:1px solid var(--line);background:var(--panel);padding:10px;position:relative}
+.level h3{margin:0 0 4px;font-weight:400;font-size:12px}.level .m{color:var(--dim);font-size:10px;margin-bottom:8px}
+.ring{display:flex;gap:6px;margin:4px 0 4px 0;align-items:center}.ring .d{width:44px;color:var(--dim);font-size:9px;letter-spacing:1px}
+.cell{border:1px solid var(--dark);color:#5a4d3c;padding:4px 6px;font-size:10px;min-width:56px;position:relative}
+.cell.door{border-color:var(--ice);color:var(--ice)}.cell.lit{border-color:var(--amber);color:var(--text)}.cell.done{border-color:var(--ember);color:#8d754a}.cell.fog{border-style:dashed;color:#3d3325}
+.cell .lock{position:absolute;right:-9px;top:6px;color:var(--ice);font-size:9px}
+.exit{margin-top:8px;border-top:1px dashed var(--dark);padding-top:6px;color:var(--dim);font-size:10px}
+/* the console — the operator */
+#console{grid-column:3;grid-row:2;display:flex;flex-direction:column}
+#readout{flex:1;font-size:11px;line-height:1.7;white-space:pre-wrap;color:var(--dim)}
+#readout b{color:var(--text);font-weight:400}#readout .ice{color:var(--ice)}#readout .amber{color:var(--amber)}
+#belt{border-top:1px solid var(--line);padding-top:8px;margin-top:8px;font-size:11px}
+.bar{height:4px;background:#18120b;margin:3px 0 8px}.bar i{display:block;height:100%}
+#input{display:flex;gap:6px;margin-top:8px}#input input{flex:1;font:inherit;background:#0b0906;color:var(--text);border:1px solid var(--line);padding:7px}
+.note{position:absolute;left:10px;bottom:8px;right:10px;color:var(--dim);font-size:10px}
+</style>
+<header><b>brnrd</b><span>/ THE FIELD · a primitive layout · four states</span>
+  <div id="states"></div></header>
+<main>
+  <section class="p" id="scroll"><div class="lab">THE SCROLL<br>time →</div><div id="beads"></div><div id="now"></div></section>
+  <section class="p" id="archive"><div class="eyebrow">THE ARCHIVE · the surface <i id="arch-i"></i></div><div class="ship" id="ship"></div><div class="note">rooms = directories · a file read opens a door · light = attention, fading over a week · dashed = never touched</div></section>
+  <section id="field">
+    <div id="hub"></div>
+    <div id="levels"></div>
+  </section>
+  <section class="p" id="console"><div class="eyebrow">THE CONSOLE · the operator <i id="con-i"></i></div><div id="readout"></div><div id="belt"></div><div id="input"><input placeholder="say something — the light moves where the act lands"><button>send</button></div></section>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+const PLACES=['shed','forge','wire','crew','clock','belt'];
+const ARCH=[['src/brr',12],['daemon.py',0],['loom/',0],['prompts/',0],['tests/',0],['kb/',0],['surface/',0],['dominion/',0],['docs/',0],['media/',0],['scripts/',0],['.brr/',0]];
+const GOALS=[
+ {t:'g-1 · the ignition pipeline',m:'8 build-log issues shipped · 2 so far',rings:[['w-45 analytics','w-19 framing'],['w-50 ignition run','w-47 publish lane'],['w-61 web chat']]},
+ {t:'g-2 · the body that cannot end its turn',m:'turn-ends with nothing armed / week · 0',rings:[['w-20 liveness','w-8 suspend clock'],['w-42 implement','w-31 closeout latch'],['w-32 finalizer']]},
+ {t:'the loom (no goal yet)',m:'watched daily → a stranger → a clip',rings:[['w-18 run future','w-72 accepted receipt'],['w-38 run-route','w-39 machine tense'],['w-56 replay bench']]},
+];
+const STATES={
+ quiet:{label:'quiet · nobody',here:null,strand:null,cold:false,beads:'dark',lit:[],his:[],doors:1,fog:true,
+   read:'<b>19:31Z</b>  seat listening · no act since 18:54Z\n<b>—</b>  nothing lit; the map is what was touched this week'},
+ working:{label:'working · a strand out',here:'forge',strand:'crew',cold:false,beads:'work',lit:['src/brr','daemon.py','tests/'],his:[],doors:1,fog:true,
+   read:'<b>19:31Z</b>  <span class=amber>▱ the demo cut</span> — strand at the crew, 2.7m spent\n<b>19:29Z</b>  read <b>daemon.py:14960</b> · edit <b>:14965</b>\n<b>19:20Z</b>  forge: PR #2000 opened\n<b>19:05Z</b>  wire: reply to Alexandra'},
+ wall:{label:'the wall · fuel cold',here:'shed',strand:null,cold:true,beads:'cold',lit:[],his:[],doors:1,fog:true,
+   read:'<b>17:59Z</b>  <span class=ice>parked — session 1 %, refill 18:00Z</span>\n<b>—</b>  messages kept, not answered · <b>force</b> · <b>respawn opus</b> · <b>stop</b>'},
+ read:{label:'his read · telepresence',here:'forge',strand:'crew',cold:false,beads:'work',lit:['src/brr','daemon.py'],his:['docs/','kb/'],doors:2,fog:true,
+   read:'<b>19:31Z</b>  <span class=ice>you are reading design-the-dungeon.md §9</span> — 4 min, 2 sections\n<b>19:31Z</b>  <span class=ice>you opened the door on w-18</span> (a decision of yours; nothing changed)\n<b>19:29Z</b>  read <b>daemon.py:14960</b>\n<b>—</b>  asymmetric: your light is ice and opens nothing; mine is amber and leaves a trace'},
+};
+let cur='working';
+function render(){
+  const s=STATES[cur];
+  $('#states').innerHTML=Object.entries(STATES).map(([k,v])=>`<button class="${k===cur?'on':''}" onclick="cur='${k}';render()">${v.label}</button>`).join('');
+  // scroll
+  const n=42,b=[];for(let i=0;i<n;i++){let c='bead';if(s.beads==='work'){if(i%7===0)c+=' wide amber';else if(i%5===0)c+=' ember';else if(i>n-6)c+=' amber';}if(s.beads==='cold'){if(i>n-8)c+=' ice';else if(i%6===0)c+=' ember';}if(cur==='read'&&(i===n-3||i===n-9))c+=' ice';b.push(`<span class="${c}"></span>`);if(i%14===13)b.push(`<span class=tick>${18+Math.floor(i/14)}:00Z</span>`);}
+  $('#beads').innerHTML=b.join('');$('#now').textContent=s.beads==='cold'?'held · refill':s.beads==='dark'?'listening':'now · 19:31Z';
+  // archive
+  $('#ship').innerHTML=ARCH.map(([r])=>{const lit=s.lit.includes(r),his=s.his.includes(r);const cls=lit?'lit':his?'his':(cur!=='quiet'&&['tests/','kb/'].includes(r))?'warm':'';return `<div class="room ${cls}">${r}${lit?'<span class=heat style="width:'+(r==='daemon.py'?'70%':'35%')+'"></span>':''}${his?'<span class=n>read by you · 4m</span>':lit?'<span class=n>read · edit</span>':'<span class=n>—</span>'}</div>`;}).join('');
+  $('#arch-i').textContent=s.lit.length?`${s.lit.length} lit · 9 dark`:'12 dark';
+  // hub
+  $('#hub').innerHTML=PLACES.map(p=>{const here=s.here===p,cold=s.cold&&p==='belt',dark=cur==='quiet'&&p!=='shed';return `<div class="place ${here?'here':''} ${cold?'cold':''} ${dark?'dark':''}">${p}<small>${{shed:s.beads==='cold'?'held':'listening',forge:here?'PR #2000':'last PR 70m ago',wire:'3 threads',crew:s.strand?'1 strand':'no strands',clock:'1 armed wake',belt:s.cold?'session 1 % · cold':'session 36 % · week 37 %'}[p]}</small>${here?'<span class=actor>b·_·d</span>':''}${s.strand===p?'<span class=strand>▱ the demo cut</span>':''}</div>`;}).join('');
+  // levels
+  $('#levels').innerHTML=GOALS.map((g,gi)=>`<div class=level><h3>${g.t}</h3><div class=m>${g.m}</div>${g.rings.map((r,ri)=>`<div class=ring><span class=d>ring ${ri+1}</span>${r.map((c,ci)=>{const door=ri===0&&ci<s.doors,fog=s.fog&&ri>=2,lit=cur!=='quiet'&&gi===0&&ri===1&&ci===0,done=gi===1&&ri===1&&ci===1;return `<span class="cell ${door?'door':''} ${fog?'fog':''} ${lit?'lit':''} ${done?'done':''}">${fog?'▣ ···':c}${door?'<span class=lock>◆ his</span>':''}</span>`}).join('')}</div>`).join('')}<div class=exit>door out: the metric · ${gi===0?'2 of 8':gi===1?'0 this week':'unmeasured'}</div></div>`).join('');
+  // console
+  $('#readout').innerHTML=s.read;$('#con-i').textContent=cur==='read'?'you · here':'you · away';
+  $('#belt').innerHTML=`session <span style="color:${s.cold?'#8fd3ff':'#f2b134'}">${s.cold?'1':'36'} %</span><div class=bar><i style="width:${s.cold?1:36}%;background:${s.cold?'#8fd3ff':'#f2b134'}"></i></div>week 37 %<div class=bar><i style="width:37%;background:#f2b134"></i></div>Fable week <span style="color:#8fd3ff">15 %</span><div class=bar><i style="width:15%;background:#8fd3ff"></i></div>`;
+}
+render();
+</script>

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#090e12">
+  <title>The dungeon · brnrd</title>
+  <link rel="stylesheet" href="/loom/loom.css">
+</head>
+<body>
+  <header><a class="wordmark" href="/loom/">brnrd<span> / THE DUNGEON</span></a><span id="source">connecting</span></header>
+  <main>
+    <section id="face" class="panel" aria-label="The resident"><div class="eyebrow">THE FACE</div><div class="face-line"><button id="glyph" aria-label="Locate resident">b·_·d</button><div><span id="state">unmeasured</span><p id="act">No resident reading</p></div></div><div id="since" class="muted"></div><div id="waiting"></div><button id="readings" aria-label="All measured readings" title="All measured readings (?)">?</button></section>
+    <section id="belt" class="panel" aria-label="Fuel and resets"><div class="eyebrow">THE BELT <span>remaining / returns</span></div><div id="fuel"></div></section>
+    <section id="ground" aria-label="The warp">
+      <nav aria-label="Map controls"><button id="hub">Recenter</button><button id="doors">His doors</button><select id="wing" aria-label="Go to wing"><option value="">Wings</option></select><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-in" aria-label="Zoom in">+</button><button id="overview">Map</button></nav>
+      <div id="viewport"><canvas id="map" tabindex="0" aria-label="Dungeon rooms. Arrows or hjkl move the hand; Enter opens a door or page. Drag to pan."></canvas><div id="map-caption"></div></div>
+      <div id="selection" aria-live="polite"><span>Ice is your hand.</span></div>
+      <footer><span>drag to explore · arrows / hjkl to walk · enter to open</span><span id="count"></span></footer>
+      <div id="access" class="sr-only" aria-label="Rooms"></div>
+    </section>
+    <section id="pack" class="panel" aria-label="Context pack"><div class="eyebrow">THE PACK</div><div id="inventory"></div></section>
+    <aside id="bench" class="panel" hidden aria-label="The bench"><div class="bench-head"><span class="eyebrow">THE BENCH</span><button id="back">← Back</button><button id="close" aria-label="Close bench">×</button></div><article id="page"></article></aside>
+  </main>
+  <script type="module" src="/loom/loom.js"></script>
+</body>
+</html>
