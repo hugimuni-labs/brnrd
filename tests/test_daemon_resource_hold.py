@@ -430,12 +430,15 @@ class TestHandleResourceHeldEvents:
             default_repo=next(iter(mapped.values())), home_root=home,
         )
 
-    def _target(self, tmp_path, *, source: str, eid: str) -> "daemon._DispatchTarget":
+    def _target(
+        self, tmp_path, *, source: str, eid: str, **fm,
+    ) -> "daemon._DispatchTarget":
         inbox_dir = tmp_path / ".brr" / "inbox"
         inbox_dir.mkdir(parents=True, exist_ok=True)
         path = inbox_dir / f"{eid}.md"
+        extra = "".join(f"{k}: {v}\n" for k, v in fm.items())
         path.write_text(
-            f"---\nid: {eid}\nsource: {source}\nstatus: pending\n---\nbody\n",
+            f"---\nid: {eid}\nsource: {source}\nstatus: pending\n{extra}---\nbody\n",
             encoding="utf-8",
         )
         event = protocol._read_event(path)
@@ -495,9 +498,19 @@ class TestHandleResourceHeldEvents:
         inheritance. `resume_kind` cannot say so — all seven arming sites
         derive it from "does a native session id exist", which on a claude
         seat is always yes — so the releaser's own intention decides.
+
+        brnrd#2022 re-keyed the trigger. This test used to write
+        `source: respawn`, which is why #2016 passed its suite and changed
+        almost nothing in production: `_queue_respawn_request` *inherits* the
+        waking event's source, so the real respawn minted the next afternoon
+        reads `source: schedule`. The marker is explicit now; the full
+        evidence, from a real event read off disk, is in
+        `tests/test_the_handover_that_hands_over.py`.
         """
         self._arm_held_run(tmp_path)
-        target = self._target(tmp_path, source="respawn", eid="evt-respawn")
+        target = self._target(
+            tmp_path, source="schedule", eid="evt-respawn", handover=True,
+        )
 
         survivors = daemon._handle_resource_held_events([target], None)
 
@@ -651,6 +664,17 @@ class TestHandleResourceHeldEvents:
         assert persisted.meta["resource_hold"]["released"] is True
 
     def test_accumulated_siblings_are_undeferred_on_resume(self, tmp_path):
+        """...and carry no scroll: the releasing event is the one carrier.
+
+        brnrd#2022. The stamp used to ride every sibling, on the theory that
+        one might sort ahead of the trigger and lead the dispatch. What it
+        actually bought: one release wrote N claims on one transcript, and
+        each survived on disk long past the release — ``evt-…-2jb8``, a
+        2026-09-17 correspondent message interrupted by a host suspend, came
+        out of this drawer carrying a session id minted the following day.
+        Cold when a sibling leads is the honest failure direction; warm onto
+        an unrelated scroll is not.
+        """
         self._arm_held_run(tmp_path)
         sched_target = self._target(tmp_path, source="schedule", eid="evt-sched-2")
         daemon._handle_resource_held_events([sched_target], None)
@@ -661,7 +685,8 @@ class TestHandleResourceHeldEvents:
         reread = protocol._read_event(sched_target.inbox_dir / "evt-sched-2.md")
         assert reread.get("defer_until") is None
         assert reread.get("defer_reason") is None
-        assert reread.get("resume_native_session_id") == "held-thread-1"
+        assert reread.get("resume_native_session_id") is None
+        assert human_target.event["resume_native_session_id"] == "held-thread-1"
 
     def test_operator_condition_is_never_released_by_reset_check(self, tmp_path):
         held = self._arm_held_run(
