@@ -907,6 +907,33 @@ def bead_items(row: Mapping[str, Any], where: Where, homes: Iterable[str]) -> li
     return out
 
 
+def _placed_chunks(chunks: Any, where: Where) -> list[dict[str, Any]]:
+    """A boundary row's chunks with a ``rel`` key: the same repo place the
+    bead's own ``places`` speak.
+
+    #2011 passed chunks through raw, absolute, deliberately. That leaves the
+    ground unjoinable: a chunk says
+    ``/Users/…/brnrd/src/brr/daemon.py:4650-4690`` and the tree row that owns
+    the file's height says ``src/brr/daemon.py`` — two vocabularies for one
+    file, so nothing downstream can ask *where in the file* without
+    re-implementing the strip (the failure :data:`TREE_SKIP_PREFIXES` was
+    written to end). ``path`` is left exactly as recorded; ``rel`` is added
+    beside it, and only when the path is a repo place that the tree would
+    actually carry — a chunk on ``.venv/bin/python`` gets none, and a reader
+    that needs a height knows by its absence that there is no file to scale
+    against."""
+    out: list[dict[str, Any]] = []
+    for chunk in chunks if isinstance(chunks, list) else ():
+        if not isinstance(chunk, dict):
+            continue
+        row = dict(chunk)
+        rel = heddles_mod.relative_place(str(chunk.get("path") or ""), where.roots)
+        if rel and not rel.startswith(TREE_SKIP_PREFIXES) and not rel.startswith(_NOT_TREE):
+            row["rel"] = rel
+        out.append(row)
+    return out
+
+
 def read_beads(
     rows: list[dict[str, Any]], where: Where, compiled: list[Any], run_id: str, *, source: str = "",
     first_n: int | None = 0,
@@ -920,13 +947,16 @@ def read_beads(
     act touched (:func:`bead_items`). ``chunks`` are the read ranges / write
     spans :func:`brr.hooks.record_boundary` recorded on the row, straight
     through — no aggregation, no relativizing, the same additive treatment
-    ``items`` got in #2004; absent on the row reads as ``[]`` here too."""
+    ``items`` got in #2004; absent on the row reads as ``[]`` here too — with
+    one addition, :func:`_placed_chunks`: a ``rel`` key beside the raw
+    ``path``, so a chunk and the tree row that carries the file's height can
+    be joined without every reader inventing its own strip."""
     out = []
     for index, row in enumerate(rows):
         ctx = row.get("ctx") if isinstance(row.get("ctx"), dict) else {}
         detail = row.get("detail") if isinstance(row.get("detail"), str) else ""
         places, homes = row_paths(row, where)
-        chunks = row.get("chunks")
+        chunks = _placed_chunks(row.get("chunks"), where)
         out.append({
             "n": first_n + index if first_n is not None else None,
             "at": row.get("at"),
@@ -939,7 +969,7 @@ def read_beads(
             "detail": detail[:DETAIL_CHARS] or None,
             "topics": match_topics(compiled, places=places, text=detail, run_id=run_id),
             "items": bead_items(row, where, homes),
-            "chunks": chunks if isinstance(chunks, list) else [],
+            "chunks": chunks,
         })
     return out
 

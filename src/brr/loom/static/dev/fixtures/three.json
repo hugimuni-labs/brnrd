@@ -1,0 +1,444 @@
+{
+  "at": "2026-09-16T15:54:06Z",
+  "repo": "fixture/three",
+  "run": {
+    "id": "run-fixture-seat",
+    "mood_glyph": "b\u00b7o\u00b7d",
+    "started": "2026-09-16T15:54:06Z",
+    "name": "A measured expedition"
+  },
+  "shuttle": {
+    "state": "awake",
+    "place": "forge",
+    "since": "2026-09-16T15:54:06Z",
+    "run_id": "run-fixture-seat"
+  },
+  "fuel": {
+    "buckets": [
+      {
+        "name": "claude",
+        "shell": "claude",
+        "plan": "Max",
+        "updated_at": "2026-09-16T15:54:05Z",
+        "windows": [
+          {
+            "name": "session",
+            "pct_left": 43,
+            "resets_at": 1789581600,
+            "resets_in_s": 7553,
+            "window_s": 18000,
+            "binding": false,
+            "forecast": {
+              "rate_pct_per_h": 14.95,
+              "source": "measured",
+              "span_s": 10593,
+              "dry_in_s": 10352,
+              "resets_in_s": 7553,
+              "pct_left_at_reset": 11.6,
+              "dries_first": false
+            }
+          },
+          {
+            "name": "week",
+            "pct_left": 44,
+            "resets_at": 1789819200,
+            "resets_in_s": 245153,
+            "window_s": 604800,
+            "binding": false,
+            "forecast": {
+              "rate_pct_per_h": 1.02,
+              "source": "measured",
+              "span_s": 10635,
+              "dry_in_s": 155980,
+              "resets_in_s": 245153,
+              "pct_left_at_reset": -25.2,
+              "dries_first": true
+            }
+          },
+          {
+            "name": "Fable week",
+            "pct_left": 27,
+            "resets_at": 1789819200,
+            "resets_in_s": 245153,
+            "window_s": 604800,
+            "binding": true,
+            "forecast": {
+              "rate_pct_per_h": 0.73,
+              "source": "window",
+              "span_s": null,
+              "dry_in_s": 133020,
+              "resets_in_s": 245153,
+              "pct_left_at_reset": -22.8,
+              "dries_first": true
+            }
+          }
+        ],
+        "seat": true
+      },
+      {
+        "name": "codex",
+        "shell": "codex",
+        "plan": "plus",
+        "updated_at": "2026-09-16T15:53:51Z",
+        "windows": [
+          {
+            "name": "5h",
+            "pct_left": 80,
+            "resets_at": 1789591490,
+            "resets_in_s": 17443,
+            "window_s": 18000,
+            "binding": false,
+            "forecast": {
+              "rate_pct_per_h": 6.72,
+              "source": "measured",
+              "span_s": 10707,
+              "dry_in_s": 42828,
+              "resets_in_s": 17443,
+              "pct_left_at_reset": 47.4,
+              "dries_first": false
+            }
+          },
+          {
+            "name": "7d",
+            "pct_left": 26,
+            "resets_at": 1789806374,
+            "resets_in_s": 232327,
+            "window_s": 604800,
+            "binding": true,
+            "forecast": {
+              "rate_pct_per_h": 1.01,
+              "source": "measured",
+              "span_s": 10707,
+              "dry_in_s": 92794,
+              "resets_in_s": 232327,
+              "pct_left_at_reset": -39.1,
+              "dries_first": true
+            }
+          }
+        ],
+        "seat": false
+      }
+    ]
+  },
+  "pack": {
+    "blocks": [
+      {
+        "name": "boot-kernel",
+        "label": "Boot kernel (action-first score)",
+        "bytes": 1989,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "daemon-live"
+      },
+      {
+        "name": "run-preamble",
+        "label": "Operational preamble (run.md)",
+        "bytes": 5696,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "product"
+      },
+      {
+        "name": "weave",
+        "label": "Working register (weave.md)",
+        "bytes": 4556,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "product"
+      },
+      {
+        "name": "register",
+        "label": "Working register, worked example (register.md)",
+        "bytes": 4451,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "product"
+      },
+      {
+        "name": "daemon-substrate",
+        "label": "Daemon mechanics (daemon-substrate.md)",
+        "bytes": 16017,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "product"
+      },
+      {
+        "name": "portal-verb-grammar",
+        "label": "Portal verb grammar (`brnrd await` / `brnrd do`, docs portals)",
+        "bytes": 12130,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "product"
+      },
+      {
+        "name": "identity-core",
+        "label": "Resident identity core",
+        "bytes": 6340,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "product"
+      },
+      {
+        "name": "relabelled-repo",
+        "label": "Stranded-memory warning (repo moved)",
+        "bytes": 0,
+        "budget_bytes": null,
+        "present": false,
+        "owner": "daemon-live"
+      },
+      {
+        "name": "dominion",
+        "label": "Dominion digest (self-inject)",
+        "bytes": 20567,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "resident"
+      },
+      {
+        "name": "hearth",
+        "label": "The hearth (personal space, index-shaped)",
+        "bytes": 423,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "resident"
+      },
+      {
+        "name": "work-surface",
+        "label": "Discovered work surface",
+        "bytes": 50648,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "resident"
+      },
+      {
+        "name": "runner-policy",
+        "label": "Stored runner policy (CS6)",
+        "bytes": 0,
+        "budget_bytes": null,
+        "present": false,
+        "owner": "resident"
+      },
+      {
+        "name": "pitfalls",
+        "label": "Task-matched pitfalls",
+        "bytes": 11593,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "resident"
+      },
+      {
+        "name": "knowledge-sources",
+        "label": "Knowledge sources (home+repo+docs)",
+        "bytes": 4201,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "project"
+      },
+      {
+        "name": "recent-activity",
+        "label": "Recent activity (kb/log.md tail)",
+        "bytes": 8864,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "daemon-live"
+      },
+      {
+        "name": "prior-run",
+        "label": "Your last run (node frame + Now + shape)",
+        "bytes": 1652,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "resident"
+      },
+      {
+        "name": "kb-health",
+        "label": "kb health (deterministic preflight)",
+        "bytes": 1292,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "daemon-live"
+      },
+      {
+        "name": "notes-health",
+        "label": "notes health (deterministic preflight)",
+        "bytes": 12051,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "daemon-live"
+      },
+      {
+        "name": "diffense",
+        "label": "diffense review-pack prompt",
+        "bytes": 0,
+        "budget_bytes": null,
+        "present": false,
+        "owner": "product"
+      },
+      {
+        "name": "introspection",
+        "label": "Introspection dev-mode invitation",
+        "bytes": 0,
+        "budget_bytes": null,
+        "present": false,
+        "owner": "product"
+      },
+      {
+        "name": "run-context-bundle",
+        "label": "Run Context Bundle (runtime facts)",
+        "bytes": 22665,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "daemon-live"
+      }
+    ],
+    "bytes": 185135,
+    "ctx_tokens": 244200,
+    "window_tokens": null
+  },
+  "warp": {
+    "items": [
+      {
+        "id": "w-1",
+        "title": "Pick the release channel",
+        "type": "decision",
+        "topics": [
+          "arrival"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [
+          "w-2"
+        ],
+        "stake": "1 afternoon \u00b7 reversible",
+        "receipt": null
+      },
+      {
+        "id": "w-2",
+        "title": "Cut the first tag",
+        "type": "action",
+        "topics": [
+          "arrival"
+        ],
+        "needs": [
+          "w-1"
+        ],
+        "state": "held",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-3",
+        "title": "Write the install line",
+        "type": "action",
+        "topics": [
+          "arrival"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      }
+    ],
+    "goals": [
+      {
+        "id": "g-1",
+        "type": "goal",
+        "title": "Anyone can install it in a minute",
+        "topics": [
+          "arrival"
+        ],
+        "metric": "install \u2192 first run < 60s"
+      }
+    ]
+  },
+  "relics": [
+    {
+      "kind": "issue",
+      "number": 12,
+      "ref": null,
+      "action": "opened",
+      "at": null,
+      "place": "forge"
+    }
+  ],
+  "tree": {
+    "repo": [
+      {
+        "path": "src/core.py",
+        "knots": 3,
+        "heat": 0.8
+      },
+      {
+        "path": "docs/arrival.md",
+        "knots": 1,
+        "heat": 0.3
+      },
+      {
+        "path": "node_modules/no.js",
+        "knots": 1,
+        "heat": 1
+      },
+      {
+        "path": "untouched.py",
+        "knots": 0,
+        "heat": 0
+      }
+    ],
+    "home": {
+      "places": []
+    }
+  },
+  "heddles": [
+    {
+      "slug": "arrival"
+    }
+  ],
+  "beads": [
+    {
+      "n": 8,
+      "at": "2026-09-16T15:54:06Z",
+      "act": "review",
+      "place_kind": "crew"
+    },
+    {
+      "n": 9,
+      "at": "2026-09-16T15:54:06Z",
+      "act": "orient",
+      "place_kind": "shed"
+    },
+    {
+      "n": 10,
+      "at": "2026-09-16T15:54:06Z",
+      "act": "mutate",
+      "place_kind": "archive"
+    },
+    {
+      "n": 11,
+      "at": "2026-09-16T15:54:06Z",
+      "act": "review",
+      "place_kind": "forge"
+    }
+  ],
+  "hud": {
+    "strands": [],
+    "spend": null,
+    "full": null
+  },
+  "bench": {
+    "folds": []
+  },
+  "cloth": {
+    "rows": []
+  },
+  "_fixture": {
+    "note": "Explicitly synthetic. Three rooms and one goal in one topic \u2014 the small end of the generative rule, against eighty at the other."
+  }
+}

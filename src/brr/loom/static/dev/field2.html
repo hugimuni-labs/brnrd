@@ -1,0 +1,112 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>the field — one ground: the tree above, the dungeon below</title>
+<style>
+:root{--bg:#0b0906;--panel:#120e09;--line:#3a3328;--text:#e8dcc0;--dim:#8f8470;--ice:#8fd3ff;--amber:#f2b134;--ember:#7a5c27;--dark:#2b2318;font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);overflow:hidden}
+header{height:40px;display:flex;gap:10px;align-items:center;padding:0 14px;border-bottom:1px solid var(--line)}
+header b{font-size:15px}header span{color:var(--dim);letter-spacing:2px;font-size:10px}
+button{font:inherit;color:var(--text);background:#15110b;border:1px solid var(--line);padding:5px 9px;cursor:pointer}button.on{border-color:var(--amber);color:var(--amber)}
+#menu{margin-left:auto;display:flex;gap:6px}
+#ground{position:absolute;inset:40px 0 0 0}
+svg{width:100%;height:100%;display:block}
+text{font:11px ui-monospace,Menlo,monospace;fill:var(--text)}.t9{font-size:9px}.t10{font-size:10px}.dim{fill:var(--dim)}.ice{fill:var(--ice)}.amber{fill:var(--amber)}.absent{fill:#5a4d3c}
+/* the overlay — a menu on top */
+#overlay{position:absolute;inset:40px 0 0 0;background:#0b0906cc;display:none;padding:26px 40px;overflow:auto}
+#overlay.open{display:block}
+#overlay h2{font-weight:400;font-size:13px;letter-spacing:2px;color:var(--dim);margin:0 0 14px}
+.blocks{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;max-width:1300px}
+.blk{border:1px solid var(--line);background:var(--panel);padding:10px;position:relative;min-height:74px}
+.blk b{font-weight:400;display:block;font-size:11px}.blk small{color:var(--dim);display:block;margin-top:5px;font-size:10px}
+.blk .kb{position:absolute;right:9px;top:9px;color:var(--amber);font-size:11px}
+.blk .bar{height:3px;background:#18120b;margin-top:8px}.blk .bar i{display:block;height:100%;background:var(--amber)}
+.blk.mem .kb{color:var(--ice)}.blk.mem .bar i{background:var(--ice)}.blk.off{opacity:.45}.blk.off .kb{color:#5a4d3c}
+.total{margin-top:14px;color:var(--dim);font-size:11px}.total b{color:var(--text);font-weight:400}
+#console{position:absolute;right:14px;bottom:14px;width:360px;border:1px solid var(--line);background:#120e09ee;padding:10px;font-size:11px;line-height:1.7}
+#console .eyebrow{font-size:10px;letter-spacing:2px;color:var(--dim);margin-bottom:6px}#console .eyebrow i{float:right;font-style:normal;letter-spacing:0}
+#console input{width:100%;font:inherit;background:#0b0906;color:var(--text);border:1px solid var(--line);padding:6px;margin-top:6px}
+#log{white-space:pre-wrap;color:var(--dim)}#log b{color:var(--text);font-weight:400}#log .ice{color:var(--ice)}#log .amber{color:var(--amber)}
+</style>
+<header><b>brnrd</b><span>/ THE FIELD · one ground · the tree above, the dungeon below</span>
+  <div id="states"></div>
+  <div id="menu"><button id="pack">⌘ the pack · context blocks</button><button id="hudb">the belt</button><button id="help">?</button></div></header>
+<div id="ground"><svg id="svg" viewBox="0 0 1440 860" preserveAspectRatio="xMidYMid meet"></svg></div>
+<div id="overlay"><h2>THE PACK · what this wake carries · press ⌘ or Esc to close</h2><div class="blocks" id="blocks"></div><div class="total" id="total"></div></div>
+<div id="console"><div class="eyebrow">THE CONSOLE · the operator <i id="who">you · away</i></div><div id="log"></div><input placeholder="say something — the light moves where the act lands"></div>
+<script>
+const $=s=>document.querySelector(s);const NS='http://www.w3.org/2000/svg';
+function el(n,a={},t){const e=document.createElementNS(NS,n);for(const[k,v]of Object.entries(a))e.setAttribute(k,v);if(t!=null)e.textContent=t;return e;}
+// ── the archive: an actual tree, rooted at the surface line, growing UP ──
+const TREE={n:'brnrd/',k:[
+ {n:'src/brr/',k:[{n:'daemon.py'},{n:'loom/',k:[{n:'state.py'},{n:'static/',k:[{n:'loom.js'},{n:'dev/'}]}]},{n:'prompts/',k:[{n:'run.md'},{n:'weave.md'}]},{n:'resource_hold.py'}]},
+ {n:'tests/',k:[{n:'test_starvation_hold.py'},{n:'test_daemon.py'}]},
+ {n:'kb/',k:[{n:'design-the-dungeon.md'},{n:'log.md'}]},
+ {n:'surface/',k:[{n:'workflow.md'},{n:'warp/'},{n:'shelf/'}]},
+ {n:'dominion/',k:[{n:'notebook.md'},{n:'playbook.md'}]},
+ {n:'media/',k:[{n:'demo/'}]},
+]};
+// ── the dungeon: levels per goal, descending ──
+const LEVELS=[
+ {t:'L1 · g-1 · the ignition pipeline',m:'door out: 8 build-log issues · 2 so far',rooms:[['w-45',1,'his'],['w-19',1,'his'],['w-50',2,''],['w-47',2,''],['w-61',3,'fog'],['w-64',3,'fog']]},
+ {t:'L2 · g-2 · the body that cannot end its turn',m:'door out: turn-ends with nothing armed / week = 0',rooms:[['w-20',1,'his'],['w-8',1,'his'],['w-31',2,''],['w-42',2,'done'],['w-32',3,'fog']]},
+ {t:'L3 · the loom',m:'door out: watched daily → a stranger → a clip',rooms:[['w-18',1,'his'],['w-72',1,'his'],['w-38',2,''],['w-39',2,''],['w-56',3,'fog']]},
+];
+const HUB=['shed','forge','wire','crew','clock','belt'];
+const STATES={
+ quiet:{label:'quiet',here:'shed',strand:false,cold:false,lit:[],his:[],read:'<b>20:40Z</b>  listening · nothing lit since 18:54Z'},
+ working:{label:'working',here:'forge',strand:true,cold:false,lit:['daemon.py','test_starvation_hold.py','resource_hold.py','src/brr/'],his:[],read:'<b>20:40Z</b>  <span class=amber>▱ the demo cut</span> at the crew\n<b>20:38Z</b>  edit <b>daemon.py:3868</b>\n<b>20:20Z</b>  forge: PR #2000\n<b>20:05Z</b>  wire: Alexandra'},
+ wall:{label:'the wall',here:'shed',strand:false,cold:true,lit:[],his:[],read:'<b>17:59Z</b>  <span class=ice>held — session 1 %, refill 18:00Z</span>\n<b>—</b>  wait · force · respawn opus · stop'},
+ read:{label:'his read',here:'forge',strand:true,cold:false,lit:['daemon.py','src/brr/'],his:['design-the-dungeon.md','kb/','w-18'],read:'<b>20:40Z</b>  <span class=ice>you are reading design-the-dungeon.md §9</span> · 4 min\n<b>20:40Z</b>  <span class=ice>you opened w-18</span> — nothing changed\n<b>20:38Z</b>  edit <b>daemon.py:3868</b>'},
+};
+let cur='working',svg=$('#svg');
+function layoutTree(node,depth,x0,x1,out){const y=330-depth*62;const x=(x0+x1)/2;out.push({node,x,y,depth});const kids=node.k||[];if(!kids.length)return;const w=(x1-x0)/kids.length;kids.forEach((k,i)=>{const cx0=x0+i*w,cx1=cx0+w;layoutTree(k,depth+1,cx0,cx1,out);out.push({edge:[x,y,(cx0+cx1)/2,330-(depth+1)*62]});});}
+function render(){
+  const s=STATES[cur];svg.replaceChildren();
+  $('#states').innerHTML=Object.entries(STATES).map(([k,v])=>`<button class="${k===cur?'on':''}" onclick="cur='${k}';render()">${v.label}</button>`).join('');
+  // ground line: the surface
+  svg.append(el('line',{x1:0,y1:392,x2:1440,y2:392,stroke:'#5b4724','stroke-width':1.2}));
+  svg.append(el('text',{x:18,y:24,class:'dim t10'},'THE SURFACE · the archive, a tree lit where it was read'));
+  svg.append(el('text',{x:18,y:420,class:'dim t10'},'UNDERGROUND · the warp as levels — one goal per level, doors down the needs chain, fog past ring 2'));
+  // the tree
+  const nodes=[];layoutTree(TREE,0,60,980,nodes);
+  for(const e of nodes.filter(n=>n.edge)){const[x1,y1,x2,y2]=e.edge;svg.append(el('path',{d:`M${x1},${y1-8} C${x1},${y1-40} ${x2},${y2+34} ${x2},${y2+8}`,fill:'none',stroke:'#3c2f1a','stroke-width':1}));}
+  for(const n of nodes.filter(n=>n.node)){const name=n.node.n,lit=s.lit.includes(name),his=s.his.includes(name),dir=name.endsWith('/');const w=Math.max(46,name.length*6.6+12),h=18;
+    const g=el('g');g.append(el('rect',{x:n.x-w/2,y:n.y-h/2,width:w,height:h,rx:3,fill:lit?'#1a1408':'#0b0906',stroke:lit?'#f2b134':his?'#8fd3ff':dir?'#4e3c1f':'#2b2318','stroke-width':lit||his?1.3:.8}));
+    if(lit)g.append(el('rect',{x:n.x-w/2,y:n.y+h/2-2,width:w*(name==='daemon.py'?.8:.4),height:2,fill:'#f2b134'}));
+    g.append(el('text',{x:n.x,y:n.y+4,'text-anchor':'middle',class:'t10 '+(lit?'':his?'ice':dir?'dim':'absent')},name));
+    if(his)g.append(el('text',{x:n.x,y:n.y-14,'text-anchor':'middle',class:'t9 ice'},'read by you · 4m'));
+    svg.append(g);}
+  // the hub: the mouth between surface and underground
+  const hx=1160,hy=392;svg.append(el('ellipse',{cx:hx,cy:hy,rx:150,ry:44,fill:'#0f0c07',stroke:'#5b4724'}));
+  svg.append(el('text',{x:hx,y:hy-58,'text-anchor':'middle',class:'dim t9'},'THE HUB · the mouth · where the resident stands between acts'));
+  HUB.forEach((p,i)=>{const a=-Math.PI/2+i*Math.PI/3,x=hx+Math.cos(a)*112,y=hy+Math.sin(a)*30;const here=s.here===p,cold=s.cold&&p==='belt',dark=cur==='quiet'&&p!=='shed';
+    svg.append(el('rect',{x:x-26,y:y-9,width:52,height:18,rx:3,fill:'#0b0906',stroke:here?'#f2b134':cold?'#8fd3ff':dark?'#2b2318':'#4e3c1f','stroke-width':here?1.4:.9}));
+    svg.append(el('text',{x,y:y+4,'text-anchor':'middle',class:'t10 '+(here?'':cold?'ice':dark?'absent':'dim')},p));
+    if(here)svg.append(el('text',{x,y:y-13,'text-anchor':'middle',class:'amber',style:'font-size:14px'},'b·_·d'));
+    if(s.strand&&p==='crew')svg.append(el('text',{x:x+34,y:y+4,class:'amber t10'},'▱'));});
+  // a shaft from the hub down into the levels
+  svg.append(el('line',{x1:hx,y1:hy+44,x2:hx,y2:830,stroke:'#3c2f1a','stroke-dasharray':'3 5'}));
+  // the levels, descending
+  LEVELS.forEach((L,li)=>{const y0=450+li*135;svg.append(el('rect',{x:40,y:y0,width:1020,height:118,fill:'#0f0c0722',stroke:'#3c2f1a'}));
+    svg.append(el('text',{x:52,y:y0+16,class:'t10'},L.t));svg.append(el('text',{x:52,y:y0+30,class:'dim t9'},L.m));
+    // corridor from the shaft into this level
+    svg.append(el('path',{d:`M${hx},${y0+60} L1060,${y0+60}`,stroke:'#3c2f1a','stroke-width':1,fill:'none'}));
+    svg.append(el('rect',{x:1054,y:y0+52,width:6,height:16,fill:'#0b0906',stroke:'#d4a357'}));  // the door into the level
+    const rings=[1,2,3];rings.forEach(r=>{svg.append(el('text',{x:70,y:y0+50+(r-1)*24,class:'dim t9'},`ring ${r}`));});
+    L.rooms.forEach(([id,ring,kind],i)=>{const x=150+(ring-1)*300+(i%2)*140,y=y0+38+(ring-1)*24;const his=kind==='his',fog=kind==='fog',done=kind==='done',open=cur==='read'&&s.his.includes(id);
+      const lit=cur!=='quiet'&&id==='w-50';
+      svg.append(el('rect',{x,y,width:120,height:18,rx:2,fill:'#0b0906',stroke:fog?'#2b2318':his?'#8fd3ff':lit?'#f2b134':done?'#7a5c27':'#4e3c1f','stroke-dasharray':fog?'3 3':'none','stroke-width':his||lit?1.3:.8}));
+      svg.append(el('text',{x:x+6,y:y+13,class:'t10 '+(fog?'absent':his?'ice':lit?'':done?'dim':'dim')},fog?'▣ ···':id+(his?' · his':done?' · done':'')));
+      if(ring<3&&!fog){svg.append(el('line',{x1:x+120,y1:y+9,x2:x+300-(i%2)*140+(i%2)*140,y2:y+9,stroke:his?'#8fd3ff':'#3c2f1a','stroke-width':.8}));if(his)svg.append(el('rect',{x:x+180,y:y+3,width:5,height:12,fill:'#0b0906',stroke:'#8fd3ff'}));}
+      if(open)svg.append(el('text',{x,y:y-4,class:'t9 ice'},'opened by you · nothing changed'));});});
+  // the console
+  $('#log').innerHTML=s.read;$('#who').textContent=cur==='read'?'you · here':'you · away';
+  // the pack overlay
+  const B=[['Operational preamble (run.md)',5.7,'product'],['Working register (weave.md)',5.0,'product'],['Worked example (register.md)',4.5,'product'],['Daemon mechanics',16.0,'product'],['Portal grammar',12.1,'product'],['Identity core',6.3,'product'],['Dominion digest (self-inject)',21.1,'mem'],['The hearth',0.4,'mem'],['Discovered work surface',51.3,'mem'],['Knowledge sources',4.1,'project'],['Recent activity (kb/log tail)',8.9,'live'],['Your last run',0.7,'mem'],['kb health',1.3,'live'],['notes health',12.5,'live'],['Task-matched pitfalls',0,'off'],['Runner policy',0,'off']];
+  const max=Math.max(...B.map(b=>b[1]));$('#blocks').innerHTML=B.map(([n,kb,k])=>`<div class="blk ${k==='mem'?'mem':''} ${k==='off'?'off':''}"><b>${n}</b><span class=kb>${kb?kb.toFixed(1)+' KB':'—'}</span><small>${k}</small><div class=bar><i style="width:${kb/max*100}%"></i></div></div>`).join('');
+  const total=B.reduce((n,b)=>n+b[1],0);$('#total').innerHTML=`<b>${total.toFixed(1)} KB</b> injected this wake · surface budget ~50 KB filled by four standing pages · <b>${B.filter(b=>b[2]==='mem').reduce((n,b)=>n+b[1],0).toFixed(1)} KB</b> is memory (ice) — the resident's own`;
+}
+$('#pack').onclick=()=>$('#overlay').classList.toggle('open');
+document.addEventListener('keydown',e=>{if(e.key==='Escape')$('#overlay').classList.remove('open');if(e.key==='p')$('#overlay').classList.toggle('open');});
+render();
+</script>

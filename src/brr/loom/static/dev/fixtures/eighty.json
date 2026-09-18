@@ -1,0 +1,1763 @@
+{
+  "at": "2026-09-16T15:54:06Z",
+  "repo": "fixture/eighty",
+  "run": {
+    "id": "run-fixture-seat",
+    "mood_glyph": "b·o·d",
+    "started": "2026-09-16T15:54:06Z",
+    "name": "A measured expedition"
+  },
+  "shuttle": {
+    "state": "listening",
+    "place": "shed",
+    "since": "2026-09-16T15:54:06Z",
+    "run_id": "run-fixture-seat"
+  },
+  "fuel": {
+    "buckets": [
+      {
+        "name": "claude",
+        "shell": "claude",
+        "plan": "Max",
+        "updated_at": "2026-09-16T15:54:05Z",
+        "windows": [
+          {
+            "name": "session",
+            "pct_left": 43,
+            "resets_at": 1789581600,
+            "resets_in_s": 7553,
+            "window_s": 18000,
+            "binding": false,
+            "forecast": {
+              "rate_pct_per_h": 14.95,
+              "source": "measured",
+              "span_s": 10593,
+              "dry_in_s": 10352,
+              "resets_in_s": 7553,
+              "pct_left_at_reset": 11.6,
+              "dries_first": false
+            }
+          },
+          {
+            "name": "week",
+            "pct_left": 44,
+            "resets_at": 1789819200,
+            "resets_in_s": 245153,
+            "window_s": 604800,
+            "binding": false,
+            "forecast": {
+              "rate_pct_per_h": 1.02,
+              "source": "measured",
+              "span_s": 10635,
+              "dry_in_s": 155980,
+              "resets_in_s": 245153,
+              "pct_left_at_reset": -25.2,
+              "dries_first": true
+            }
+          },
+          {
+            "name": "Fable week",
+            "pct_left": 27,
+            "resets_at": 1789819200,
+            "resets_in_s": 245153,
+            "window_s": 604800,
+            "binding": true,
+            "forecast": {
+              "rate_pct_per_h": 0.73,
+              "source": "window",
+              "span_s": null,
+              "dry_in_s": 133020,
+              "resets_in_s": 245153,
+              "pct_left_at_reset": -22.8,
+              "dries_first": true
+            }
+          }
+        ],
+        "seat": true
+      },
+      {
+        "name": "codex",
+        "shell": "codex",
+        "plan": "plus",
+        "updated_at": "2026-09-16T15:53:51Z",
+        "windows": [
+          {
+            "name": "5h",
+            "pct_left": 80,
+            "resets_at": 1789591490,
+            "resets_in_s": 17443,
+            "window_s": 18000,
+            "binding": false,
+            "forecast": {
+              "rate_pct_per_h": 6.72,
+              "source": "measured",
+              "span_s": 10707,
+              "dry_in_s": 42828,
+              "resets_in_s": 17443,
+              "pct_left_at_reset": 47.4,
+              "dries_first": false
+            }
+          },
+          {
+            "name": "7d",
+            "pct_left": 26,
+            "resets_at": 1789806374,
+            "resets_in_s": 232327,
+            "window_s": 604800,
+            "binding": true,
+            "forecast": {
+              "rate_pct_per_h": 1.01,
+              "source": "measured",
+              "span_s": 10707,
+              "dry_in_s": 92794,
+              "resets_in_s": 232327,
+              "pct_left_at_reset": -39.1,
+              "dries_first": true
+            }
+          }
+        ],
+        "seat": false
+      }
+    ]
+  },
+  "pack": {
+    "blocks": [
+      {
+        "name": "boot-kernel",
+        "label": "Boot kernel (action-first score)",
+        "bytes": 1989,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "daemon-live"
+      },
+      {
+        "name": "run-preamble",
+        "label": "Operational preamble (run.md)",
+        "bytes": 5696,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "product"
+      },
+      {
+        "name": "weave",
+        "label": "Working register (weave.md)",
+        "bytes": 4556,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "product"
+      },
+      {
+        "name": "register",
+        "label": "Working register, worked example (register.md)",
+        "bytes": 4451,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "product"
+      },
+      {
+        "name": "daemon-substrate",
+        "label": "Daemon mechanics (daemon-substrate.md)",
+        "bytes": 16017,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "product"
+      },
+      {
+        "name": "portal-verb-grammar",
+        "label": "Portal verb grammar (`brnrd await` / `brnrd do`, docs portals)",
+        "bytes": 12130,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "product"
+      },
+      {
+        "name": "identity-core",
+        "label": "Resident identity core",
+        "bytes": 6340,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "product"
+      },
+      {
+        "name": "relabelled-repo",
+        "label": "Stranded-memory warning (repo moved)",
+        "bytes": 0,
+        "budget_bytes": null,
+        "present": false,
+        "owner": "daemon-live"
+      },
+      {
+        "name": "dominion",
+        "label": "Dominion digest (self-inject)",
+        "bytes": 20567,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "resident"
+      },
+      {
+        "name": "hearth",
+        "label": "The hearth (personal space, index-shaped)",
+        "bytes": 423,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "resident"
+      },
+      {
+        "name": "work-surface",
+        "label": "Discovered work surface",
+        "bytes": 50648,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "resident"
+      },
+      {
+        "name": "runner-policy",
+        "label": "Stored runner policy (CS6)",
+        "bytes": 0,
+        "budget_bytes": null,
+        "present": false,
+        "owner": "resident"
+      },
+      {
+        "name": "pitfalls",
+        "label": "Task-matched pitfalls",
+        "bytes": 11593,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "resident"
+      },
+      {
+        "name": "knowledge-sources",
+        "label": "Knowledge sources (home+repo+docs)",
+        "bytes": 4201,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "project"
+      },
+      {
+        "name": "recent-activity",
+        "label": "Recent activity (kb/log.md tail)",
+        "bytes": 8864,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "daemon-live"
+      },
+      {
+        "name": "prior-run",
+        "label": "Your last run (node frame + Now + shape)",
+        "bytes": 1652,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "resident"
+      },
+      {
+        "name": "kb-health",
+        "label": "kb health (deterministic preflight)",
+        "bytes": 1292,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "daemon-live"
+      },
+      {
+        "name": "notes-health",
+        "label": "notes health (deterministic preflight)",
+        "bytes": 12051,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "daemon-live"
+      },
+      {
+        "name": "diffense",
+        "label": "diffense review-pack prompt",
+        "bytes": 0,
+        "budget_bytes": null,
+        "present": false,
+        "owner": "product"
+      },
+      {
+        "name": "introspection",
+        "label": "Introspection dev-mode invitation",
+        "bytes": 0,
+        "budget_bytes": null,
+        "present": false,
+        "owner": "product"
+      },
+      {
+        "name": "run-context-bundle",
+        "label": "Run Context Bundle (runtime facts)",
+        "bytes": 22665,
+        "budget_bytes": null,
+        "present": true,
+        "owner": "daemon-live"
+      }
+    ],
+    "bytes": 185135,
+    "ctx_tokens": 244200,
+    "window_tokens": null
+  },
+  "warp": {
+    "items": [
+      {
+        "id": "w-1",
+        "title": "Choose the migration route",
+        "type": "decision",
+        "topics": [
+          "arrival"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [
+          "w-2"
+        ],
+        "stake": "60k tokens · reversible",
+        "receipt": null
+      },
+      {
+        "id": "w-2",
+        "title": "Prepare the rollback kit",
+        "type": "preparation",
+        "topics": [
+          "arrival"
+        ],
+        "needs": [
+          "w-1"
+        ],
+        "state": "held",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-3",
+        "title": "Open the next release",
+        "type": "decision",
+        "topics": [
+          "arrival"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [
+          "w-4"
+        ],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-4",
+        "title": "Document the return path",
+        "type": "action",
+        "topics": [
+          "arrival"
+        ],
+        "needs": [
+          "w-3"
+        ],
+        "state": "held",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-5",
+        "title": "Measure the cold start",
+        "type": "action",
+        "topics": [
+          "arrival"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": "run-fixture-seat",
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-6",
+        "title": "Repair the cache boundary",
+        "type": "action",
+        "topics": [
+          "arrival"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-7",
+        "title": "Read the unanswered letter",
+        "type": "action",
+        "topics": [
+          "arrival"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-8",
+        "title": "Compare the two approaches",
+        "type": "decision",
+        "topics": [
+          "arrival"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-9",
+        "title": "Trace the missing receipt",
+        "type": "action",
+        "topics": [
+          "arrival"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-10",
+        "title": "Build the smallest proof",
+        "type": "action",
+        "topics": [
+          "arrival"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-11",
+        "title": "Review the release gate",
+        "type": "action",
+        "topics": [
+          "arrival"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-12",
+        "title": "Verify the recovery path",
+        "type": "action",
+        "topics": [
+          "arrival"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-13",
+        "title": "Connect the archive",
+        "type": "action",
+        "topics": [
+          "arrival"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-14",
+        "title": "Choose the migration route",
+        "type": "action",
+        "topics": [
+          "arrival"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-15",
+        "title": "Choose the migration route",
+        "type": "decision",
+        "topics": [
+          "engine"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [
+          "w-16"
+        ],
+        "stake": "60k tokens · reversible",
+        "receipt": null
+      },
+      {
+        "id": "w-16",
+        "title": "Prepare the rollback kit",
+        "type": "preparation",
+        "topics": [
+          "engine"
+        ],
+        "needs": [
+          "w-15"
+        ],
+        "state": "held",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-17",
+        "title": "Open the next release",
+        "type": "decision",
+        "topics": [
+          "engine"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [
+          "w-18"
+        ],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-18",
+        "title": "Document the return path",
+        "type": "action",
+        "topics": [
+          "engine"
+        ],
+        "needs": [
+          "w-17"
+        ],
+        "state": "held",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-19",
+        "title": "Measure the cold start",
+        "type": "action",
+        "topics": [
+          "engine"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-20",
+        "title": "Repair the cache boundary",
+        "type": "action",
+        "topics": [
+          "engine"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-21",
+        "title": "Read the unanswered letter",
+        "type": "action",
+        "topics": [
+          "engine"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": "run-fixture-one",
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-22",
+        "title": "Compare the two approaches",
+        "type": "decision",
+        "topics": [
+          "engine"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-23",
+        "title": "Trace the missing receipt",
+        "type": "action",
+        "topics": [
+          "engine"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-24",
+        "title": "Build the smallest proof",
+        "type": "action",
+        "topics": [
+          "engine"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-25",
+        "title": "Review the release gate",
+        "type": "action",
+        "topics": [
+          "engine"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-26",
+        "title": "Verify the recovery path",
+        "type": "action",
+        "topics": [
+          "engine"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-27",
+        "title": "Connect the archive",
+        "type": "action",
+        "topics": [
+          "engine"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-28",
+        "title": "Choose the migration route",
+        "type": "action",
+        "topics": [
+          "engine"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-29",
+        "title": "Choose the migration route",
+        "type": "decision",
+        "topics": [
+          "library"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [
+          "w-30"
+        ],
+        "stake": "60k tokens · reversible",
+        "receipt": null
+      },
+      {
+        "id": "w-30",
+        "title": "Prepare the rollback kit",
+        "type": "preparation",
+        "topics": [
+          "library"
+        ],
+        "needs": [
+          "w-29"
+        ],
+        "state": "held",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-31",
+        "title": "Open the next release",
+        "type": "decision",
+        "topics": [
+          "library"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [
+          "w-32"
+        ],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-32",
+        "title": "Document the return path",
+        "type": "action",
+        "topics": [
+          "library"
+        ],
+        "needs": [
+          "w-31"
+        ],
+        "state": "held",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-33",
+        "title": "Measure the cold start",
+        "type": "action",
+        "topics": [
+          "library"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-34",
+        "title": "Repair the cache boundary",
+        "type": "action",
+        "topics": [
+          "library"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-35",
+        "title": "Read the unanswered letter",
+        "type": "action",
+        "topics": [
+          "library"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-36",
+        "title": "Compare the two approaches",
+        "type": "decision",
+        "topics": [
+          "library"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-37",
+        "title": "Trace the missing receipt",
+        "type": "action",
+        "topics": [
+          "library"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-38",
+        "title": "Build the smallest proof",
+        "type": "action",
+        "topics": [
+          "library"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-39",
+        "title": "Review the release gate",
+        "type": "action",
+        "topics": [
+          "library"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-40",
+        "title": "Verify the recovery path",
+        "type": "action",
+        "topics": [
+          "library"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-41",
+        "title": "Connect the archive",
+        "type": "action",
+        "topics": [
+          "library"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": "run-fixture-two",
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-42",
+        "title": "Choose the migration route",
+        "type": "action",
+        "topics": [
+          "library"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-43",
+        "title": "Choose the migration route",
+        "type": "decision",
+        "topics": [
+          "delivery"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [
+          "w-44"
+        ],
+        "stake": "60k tokens · reversible",
+        "receipt": null
+      },
+      {
+        "id": "w-44",
+        "title": "Prepare the rollback kit",
+        "type": "preparation",
+        "topics": [
+          "delivery"
+        ],
+        "needs": [
+          "w-43"
+        ],
+        "state": "held",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-45",
+        "title": "Open the next release",
+        "type": "decision",
+        "topics": [
+          "delivery"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [
+          "w-46"
+        ],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-46",
+        "title": "Document the return path",
+        "type": "action",
+        "topics": [
+          "delivery"
+        ],
+        "needs": [
+          "w-45"
+        ],
+        "state": "held",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-47",
+        "title": "Measure the cold start",
+        "type": "action",
+        "topics": [
+          "delivery"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-48",
+        "title": "Repair the cache boundary",
+        "type": "action",
+        "topics": [
+          "delivery"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-49",
+        "title": "Read the unanswered letter",
+        "type": "action",
+        "topics": [
+          "delivery"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-50",
+        "title": "Compare the two approaches",
+        "type": "decision",
+        "topics": [
+          "delivery"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-51",
+        "title": "Trace the missing receipt",
+        "type": "action",
+        "topics": [
+          "delivery"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-52",
+        "title": "Build the smallest proof",
+        "type": "action",
+        "topics": [
+          "delivery"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-53",
+        "title": "Review the release gate",
+        "type": "action",
+        "topics": [
+          "delivery"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-54",
+        "title": "Verify the recovery path",
+        "type": "action",
+        "topics": [
+          "delivery"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-55",
+        "title": "Connect the archive",
+        "type": "action",
+        "topics": [
+          "delivery"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-56",
+        "title": "Choose the migration route",
+        "type": "action",
+        "topics": [
+          "delivery"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-57",
+        "title": "Choose the migration route",
+        "type": "decision",
+        "topics": [
+          "observatory"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [
+          "w-58"
+        ],
+        "stake": "60k tokens · reversible",
+        "receipt": null
+      },
+      {
+        "id": "w-58",
+        "title": "Prepare the rollback kit",
+        "type": "preparation",
+        "topics": [
+          "observatory"
+        ],
+        "needs": [
+          "w-57"
+        ],
+        "state": "held",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-59",
+        "title": "Open the next release",
+        "type": "decision",
+        "topics": [
+          "observatory"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [
+          "w-60"
+        ],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-60",
+        "title": "Document the return path",
+        "type": "action",
+        "topics": [
+          "observatory"
+        ],
+        "needs": [
+          "w-59"
+        ],
+        "state": "held",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-61",
+        "title": "Measure the cold start",
+        "type": "action",
+        "topics": [
+          "observatory"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-62",
+        "title": "Repair the cache boundary",
+        "type": "action",
+        "topics": [
+          "observatory"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-63",
+        "title": "Read the unanswered letter",
+        "type": "action",
+        "topics": [
+          "observatory"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-64",
+        "title": "Compare the two approaches",
+        "type": "decision",
+        "topics": [
+          "observatory"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-65",
+        "title": "Trace the missing receipt",
+        "type": "action",
+        "topics": [
+          "observatory"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-66",
+        "title": "Build the smallest proof",
+        "type": "action",
+        "topics": [
+          "observatory"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-67",
+        "title": "Review the release gate",
+        "type": "action",
+        "topics": [
+          "observatory"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-68",
+        "title": "Verify the recovery path",
+        "type": "action",
+        "topics": [
+          "observatory"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-69",
+        "title": "Connect the archive",
+        "type": "action",
+        "topics": [
+          "observatory"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-70",
+        "title": "Choose the migration route",
+        "type": "action",
+        "topics": [
+          "observatory"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-71",
+        "title": "Choose the migration route",
+        "type": "decision",
+        "topics": [
+          "workshop"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [
+          "w-72"
+        ],
+        "stake": "60k tokens · reversible",
+        "receipt": null
+      },
+      {
+        "id": "w-72",
+        "title": "Prepare the rollback kit",
+        "type": "preparation",
+        "topics": [
+          "workshop"
+        ],
+        "needs": [
+          "w-71"
+        ],
+        "state": "held",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-73",
+        "title": "Open the next release",
+        "type": "decision",
+        "topics": [
+          "workshop"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [
+          "w-74"
+        ],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-74",
+        "title": "Document the return path",
+        "type": "action",
+        "topics": [
+          "workshop"
+        ],
+        "needs": [
+          "w-73"
+        ],
+        "state": "held",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-75",
+        "title": "Measure the cold start",
+        "type": "action",
+        "topics": [
+          "workshop"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-76",
+        "title": "Repair the cache boundary",
+        "type": "action",
+        "topics": [
+          "workshop"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-77",
+        "title": "Read the unanswered letter",
+        "type": "action",
+        "topics": [
+          "workshop"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-78",
+        "title": "Compare the two approaches",
+        "type": "decision",
+        "topics": [
+          "workshop"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-79",
+        "title": "Trace the missing receipt",
+        "type": "action",
+        "topics": [
+          "workshop"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": "2026-09-16T15:54:06Z",
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      },
+      {
+        "id": "w-80",
+        "title": "Build the smallest proof",
+        "type": "action",
+        "topics": [
+          "workshop"
+        ],
+        "needs": [],
+        "state": "ready",
+        "taken": null,
+        "visited_at": null,
+        "opens": [],
+        "stake": null,
+        "receipt": null
+      }
+    ],
+    "goals": [
+      {
+        "id": "g-1",
+        "type": "goal",
+        "title": "A release anyone can recover",
+        "topics": [
+          "arrival"
+        ],
+        "metric": "0 lost releases / quarter"
+      },
+      {
+        "id": "g-2",
+        "type": "goal",
+        "title": "A quiet cold start",
+        "topics": [
+          "engine"
+        ],
+        "metric": "p95 < 2 seconds"
+      },
+      {
+        "id": "g-3",
+        "type": "goal",
+        "title": "An archive you can return to",
+        "topics": [
+          "library"
+        ],
+        "metric": "100% sources linked"
+      },
+      {
+        "id": "g-4",
+        "type": "goal",
+        "title": "Every shipment leaves a receipt",
+        "topics": [
+          "delivery"
+        ],
+        "metric": "0 missing receipts / week"
+      }
+    ]
+  },
+  "relics": [
+    {
+      "kind": "issue",
+      "number": 1995,
+      "ref": null,
+      "action": "opened",
+      "at": null,
+      "place": "forge"
+    },
+    {
+      "kind": "pr",
+      "number": 1996,
+      "ref": null,
+      "action": null,
+      "at": null,
+      "place": "forge"
+    },
+    {
+      "kind": "issue",
+      "number": 1997,
+      "ref": null,
+      "action": "opened",
+      "at": null,
+      "place": "forge"
+    }
+  ],
+  "tree": {
+    "repo": [
+      {
+        "path": "src/core.py",
+        "knots": 3,
+        "heat": 0.8
+      },
+      {
+        "path": "docs/arrival.md",
+        "knots": 1,
+        "heat": 0.3
+      },
+      {
+        "path": "node_modules/no.js",
+        "knots": 1,
+        "heat": 1
+      },
+      {
+        "path": "untouched.py",
+        "knots": 0,
+        "heat": 0
+      }
+    ],
+    "home": {
+      "places": []
+    }
+  },
+  "heddles": [
+    {
+      "slug": "arrival"
+    },
+    {
+      "slug": "engine"
+    },
+    {
+      "slug": "library"
+    },
+    {
+      "slug": "delivery"
+    },
+    {
+      "slug": "observatory"
+    },
+    {
+      "slug": "workshop"
+    }
+  ],
+  "beads": [
+    {
+      "n": 0,
+      "at": "2026-09-16T15:54:06Z",
+      "act": "orient",
+      "place_kind": "archive"
+    },
+    {
+      "n": 1,
+      "at": "2026-09-16T15:54:06Z",
+      "act": "mutate",
+      "place_kind": "forge"
+    },
+    {
+      "n": 2,
+      "at": "2026-09-16T15:54:06Z",
+      "act": "review",
+      "place_kind": "wire"
+    },
+    {
+      "n": 3,
+      "at": "2026-09-16T15:54:06Z",
+      "act": "orient",
+      "place_kind": "crew"
+    },
+    {
+      "n": 4,
+      "at": "2026-09-16T15:54:06Z",
+      "act": "mutate",
+      "place_kind": "shed"
+    },
+    {
+      "n": 5,
+      "at": "2026-09-16T15:54:06Z",
+      "act": "review",
+      "place_kind": "archive"
+    },
+    {
+      "n": 6,
+      "at": "2026-09-16T15:54:06Z",
+      "act": "orient",
+      "place_kind": "forge"
+    },
+    {
+      "n": 7,
+      "at": "2026-09-16T15:54:06Z",
+      "act": "mutate",
+      "place_kind": "wire"
+    },
+    {
+      "n": 8,
+      "at": "2026-09-16T15:54:06Z",
+      "act": "review",
+      "place_kind": "crew"
+    },
+    {
+      "n": 9,
+      "at": "2026-09-16T15:54:06Z",
+      "act": "orient",
+      "place_kind": "shed"
+    },
+    {
+      "n": 10,
+      "at": "2026-09-16T15:54:06Z",
+      "act": "mutate",
+      "place_kind": "archive"
+    },
+    {
+      "n": 11,
+      "at": "2026-09-16T15:54:06Z",
+      "act": "review",
+      "place_kind": "forge"
+    }
+  ],
+  "hud": {
+    "spend": null,
+    "strands": [
+      {
+        "id": "run-fixture-one",
+        "title": "The migration",
+        "status": "live",
+        "place": "w-21",
+        "bucket": "codex"
+      },
+      {
+        "id": "run-fixture-two",
+        "title": "The restore path",
+        "status": "live",
+        "place": "w-41",
+        "bucket": "claude"
+      }
+    ]
+  },
+  "bench": {
+    "folds": []
+  },
+  "cloth": {
+    "rows": []
+  },
+  "_fixture": {
+    "note": "Synthetic stress fixture: 80 items, six wings, 12 needs edges, four goals, three taken. Fuel windows copied from live capture."
+  }
+}

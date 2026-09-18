@@ -119,6 +119,46 @@ def test_pack_reads_the_wake_manifest(tmp_path):
     assert dungeon.read_pack(brr, None, None) is None
 
 
+def test_pack_carries_each_block_source_and_what_the_render_cut(tmp_path):
+    """The three readings the byte count alone cannot give, and their refusals.
+
+    ``source`` is verbatim because it is a join key against
+    ``beads[].chunks[].path``; ``source_rel`` is the display form and is
+    absent when the file is not under the checkout. ``cut`` is what the render
+    dropped, and 1 is the manifest's "nothing was cut" sentinel, not a cut.
+    A synthesized block gets ``None`` for both paths, and that ``None`` means
+    *unjoinable*, never *untouched* — the page draws no mark from it."""
+    brr = tmp_path / ".brr"
+    root = str(tmp_path)
+    _write(brr / "runs" / "run-1" / "wake-manifest.json", json.dumps({"blocks": [
+        {"name": "portals", "bytes_kept": 12130, "bytes_cut": 59752, "present": True,
+         "owner": "product", "authority": "substrate",
+         "sources": [{"path": root + "/src/brr/docs/portals.md", "store": "product-prompt"}]},
+        {"name": "weave", "bytes_kept": 4976, "bytes_cut": 1, "present": True,
+         "owner": "product", "sources": [{"path": root + "/src/brr/prompts/weave.md"}]},
+        {"name": "prior-run", "bytes_kept": 1126, "bytes_cut": 4701, "present": True,
+         "owner": "resident", "sources": [{"path": "/elsewhere/home/runs/body.md"}]},
+        {"name": "work-surface", "bytes_kept": 47917, "present": True, "owner": "resident",
+         "authority": "surface", "sources": [{"synthesized": True}]},
+    ]}))
+    blocks = {b["name"]: b for b in dungeon.read_pack(brr, "run-1", None)["blocks"]}
+
+    portals = blocks["portals"]
+    assert portals["cut"] == 59752 and portals["authority"] == "substrate"
+    assert portals["source"] == root + "/src/brr/docs/portals.md"   # verbatim: the join key
+    assert portals["source_rel"] == "src/brr/docs/portals.md"       # relative: the label
+
+    assert blocks["weave"]["cut"] is None                           # 1 is the sentinel
+    assert blocks["weave"]["source_rel"] == "src/brr/prompts/weave.md"
+
+    off = blocks["prior-run"]                                       # outside the checkout
+    assert off["cut"] == 4701 and off["source"] == "/elsewhere/home/runs/body.md"
+    assert off["source_rel"] is None
+
+    made = blocks["work-surface"]                                   # nothing to join
+    assert made["source"] is None and made["source_rel"] is None and made["cut"] is None
+
+
 # ── warp enrichment ──────────────────────────────────────────────────────
 
 
