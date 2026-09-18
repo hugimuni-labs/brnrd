@@ -791,6 +791,71 @@ def test_chunk_marks_a_shell_sed_i_mutation_changed_with_no_span(_tree, tmp_path
     assert row["chunks"] == [{"path": str(_tree / "src/brr/x.py"), "changed": True, "kind": "write"}]
 
 
+def test_chunk_a_write_in_a_real_repo_carries_gits_own_spans(tmp_path):
+    """His call, 2026-09-18: *"the writes are purely diff based, we do most of
+    the work in repos anyway, so we can derive that info from git."*
+
+    And it makes the data **better**, not merely smaller: an intercepted write
+    can only ever say `changed: true` — there is no read-before-write on this
+    hook — while git knows the exact lines. A write becomes a band, the same
+    shape a read already has.
+    """
+    root = tmp_path / "repo"
+    root.mkdir()
+    run = lambda *a: subprocess.run(["git", *a], cwd=root, check=True, capture_output=True)
+    run("init", "-q")
+    run("config", "user.email", "a@b.c")
+    run("config", "user.name", "a")
+    f = root / "x.py"
+    f.write_text("\n".join(f"line{i}" for i in range(1, 21)) + "\n", encoding="utf-8")
+    run("add", "x.py")
+    run("commit", "-q", "-m", "init")
+    f.write_text(
+        "\n".join(("line5 changed" if i == 5 else f"line{i}") for i in range(1, 21)) + "\n",
+        encoding="utf-8",
+    )
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    ctx = _boundary_ctx(run_dir)
+    payload = {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(f), "old_string": "line5", "new_string": "line5 changed"},
+        "cwd": str(root),
+    }
+    hooks.record_boundary(ctx, hooks.PHASE_POST_TOOL, {}, payload)
+    (row,) = _jsonl(run_dir / hooks.BOUNDARIES_NAME)
+    writes = [c for c in row["chunks"] if c["kind"] == "write"]
+    assert writes == [{"path": str(f.resolve()), "from": 5, "to": 5, "kind": "write"}]
+    assert all("changed" not in c for c in writes)
+
+
+def test_chunk_git_saying_nothing_is_not_git_being_unavailable(tmp_path):
+    """The tri-state that keeps a derived-data change from deleting data.
+
+    `None` means git could not speak (no repo, git missing) and the caller
+    falls back to the interception guess — that is why
+    `test_chunk_marks_a_shell_sed_i_mutation_changed_with_no_span` still
+    passes on a fixture whose `.git` is an empty directory. `[]` means git
+    spoke and reported no write, which is a real answer. Collapsing the two
+    would silently drop every write outside a repo.
+    """
+    root = tmp_path / "repo"
+    root.mkdir()
+    run = lambda *a: subprocess.run(["git", *a], cwd=root, check=True, capture_output=True)
+    run("init", "-q")
+    run("config", "user.email", "a@b.c")
+    run("config", "user.name", "a")
+    f = root / "x.py"
+    f.write_text("one\n", encoding="utf-8")
+    run("add", "x.py")
+    run("commit", "-q", "-m", "init")
+
+    assert hooks._dirty_chunks(root, [str(f)]) == []          # git spoke: nothing
+    assert hooks._dirty_chunks(tmp_path / "nowhere", [str(f)]) is None
+    assert hooks._dirty_chunks(root, []) is None
+
+
 def test_chunk_reads_a_just_landed_commits_own_hunks_via_git_diff(tmp_path):
     """"the hunks are derivable from git diff and are cheap; do that one
     properly" — a real two-commit repo, a real `git commit` boundary, hunks
