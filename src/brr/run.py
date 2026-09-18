@@ -37,6 +37,16 @@ _ENV_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _EVENT_META_FIELDS = {
     "id", "body", "source", "status", "_path", "created", "branch", "env",
     "environment", "conversation_key",
+    # brnrd#2023. `from_event`'s meta copy is blanket by design, which made
+    # `resume_native_session_id` **spellable from an event**: any file in
+    # `.brr/inbox` could claim a Shell transcript, and every event-minting
+    # path in the daemon was a fresh candidate for carrying one by accident.
+    # Four defects came out of that (see `pending_resume.py`). The resume
+    # claim is the daemon's now, held per seat and consumed once
+    # (`worker/prepare.py` sets these two on `task.meta` directly, after
+    # `pending_resume.consume`). Dropping them here is what makes a forged
+    # or inherited event inert rather than merely unlikely.
+    "resume_native_session_id", "resume_native_provider",
 }
 _RUN_FIELDS = {
     "id", "event_id", "branch", "env", "environment", "status", "source",

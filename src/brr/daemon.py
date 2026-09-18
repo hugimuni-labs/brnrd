@@ -64,6 +64,7 @@ from . import config as conf
 from . import connect_greeting
 from . import conversations
 from . import dev_reload as reload_mod
+from . import pending_resume
 from . import card
 from . import dominion
 from . import envs
@@ -14807,8 +14808,6 @@ def _undefer_held_event(
     inbox_dir: Path | Sequence[Path] | None,
     event_id: str,
     *,
-    resume_native_session_id: str | None = None,
-    resume_native_provider: str | None = None,
     seat_conversation: str = "",
 ) -> None:
     """Release one accumulated event back to ordinary pending eligibility.
@@ -14831,16 +14830,16 @@ def _undefer_held_event(
     path) is what actually decides whether there's anything left to
     un-defer.
 
-    *resume_native_session_id* is the seat's scroll, and it is the caller's
-    to hand over — never this function's to assume. It used to be passed for
-    every sibling in the drawer ("one of them might lead the dispatch"),
-    which made one release write N claims on one transcript, each surviving
-    on disk long past the release (brnrd#2022: a 2026-09-17 correspondent
-    message came out of a drawer carrying a session id minted the next day,
-    and was retried as a fresh `claude --resume`). Today
-    ``_apply_resource_hold_resume`` passes nothing — the releasing event is
-    the carrier — and the measured-refill path, which has no releasing
-    event, passes it for exactly one sibling.
+    This function has nothing to say about the seat's scroll, and as of
+    brnrd#2023 it cannot: the resume claim lives on the seat
+    (``pending_resume``), not on any letter in the drawer. It used to stamp
+    every sibling with the seat's native session id ("one of them might lead
+    the dispatch"), which made one release write N claims on one transcript,
+    each surviving on disk long past the release — a 2026-09-17
+    correspondent message came out of a drawer carrying a session id minted
+    the next day, and was retried as a fresh ``claude --resume``. Routing
+    home is still true of every letter here, which is why
+    *seat_conversation* stays.
     """
     if not event_id:
         return
@@ -14865,10 +14864,6 @@ def _undefer_held_event(
     updates: dict[str, object] = {
         "defer_until": None, "deferred_by_run": None, "defer_reason": None,
     }
-    if resume_native_session_id:
-        updates["resume_native_session_id"] = resume_native_session_id
-    if resume_native_provider:
-        updates["resume_native_provider"] = resume_native_provider
     if _rekey_to_seat(ev, seat_conversation):
         updates["conversation_key"] = seat_conversation
     try:
@@ -14946,16 +14941,24 @@ def _apply_resource_hold_resume(
     # the lead (a burst settle, a restart before claim) still lands home.
     if _rekey_to_seat(event, seat):
         stamps["conversation_key"] = seat
+    # brnrd#2023: the scroll no longer rides the event. This release arms one
+    # claim on the seat; the dispatch that actually leads consumes it once
+    # (`worker/prepare.py`). Stamping the event was how #2022 had to choose
+    # between "the releaser carries it" and "the drawer does" — with a claim
+    # there is nothing to choose: there is one, it belongs to the seat, and
+    # whichever letter leads picks it up.
     if wants_fresh:
-        # brnrd#2022, the belt to #2016's brace: a handover release does not
-        # merely decline to *add* a stamp, it strips whatever the event is
-        # already carrying. The stamp is a cache and it heals — deleted from
-        # `evt-…-udee` by hand at 15:10Z on 2026-09-18, it was back at 15:14Z
-        # when the release re-derived it from the parked run's
-        # `resource_hold.native_session_id`. Declining to write covers the
-        # paths this daemon owns; stripping covers every path it does not
-        # (a mint before this fix, a hand-edited inbox, a future minter that
-        # copies frontmatter the way `_queue_respawn_request` did).
+        # A handover asks for a successor. Unmake the claim rather than
+        # decline to add one: the stamp this replaces was a cache and it
+        # healed (`evt-…-udee`, two lines deleted by hand at 15:10Z and back
+        # at 15:14Z, re-derived from the parked run's hold record).
+        pending_resume.clear(
+            _shuttle_home(
+                account.context_home_root(account_context)
+                if account_context else None, runs_dir,
+            ),
+            why=f"handover {event.get('id') or ''}",
+        )
         for key in ("resume_native_session_id", "resume_native_provider"):
             event.pop(key, None)
             stamps[key] = None
@@ -14963,10 +14966,17 @@ def _apply_resource_hold_resume(
         released.get("native_session_id")
         and released.get("resume_kind") == resource_hold.RESUME_NATIVE
     ):
-        event["resume_native_session_id"] = released["native_session_id"]
-        event["resume_native_provider"] = released.get("provider")
-        stamps["resume_native_session_id"] = event["resume_native_session_id"]
-        stamps["resume_native_provider"] = event["resume_native_provider"]
+        pending_resume.arm(
+            _shuttle_home(
+                account.context_home_root(account_context)
+                if account_context else None, runs_dir,
+            ),
+            session_id=str(released["native_session_id"]),
+            provider=str(released.get("provider") or ""),
+            conversation_key=seat,
+            from_run=held.id,
+            why=f"released:{by}",
+        )
     if stamps and isinstance(event.get("_path"), Path):
         try:
             protocol.update_event_meta(event, **stamps)
@@ -14974,22 +14984,9 @@ def _apply_resource_hold_resume(
             pass
     drawers = _hold_undefer_inboxes(account_context, inbox_dir)
     for accumulated_id in released.get("accumulated_event_ids") or []:
-        # brnrd#2022: the releasing event carries the scroll; its accumulated
-        # siblings do not. This loop used to stamp every one of them, on the
-        # theory that a sibling could sort ahead of the trigger and lead the
-        # dispatch instead. The price, measured: `evt-…-2jb8` is a
-        # correspondent's message from 2026-09-17 that sat in this drawer
-        # through a host suspend and came out carrying a session id minted a
-        # *day later*; the daemon retried it as a fresh run and it did
-        # `claude --resume` onto a scroll it had no relation to. A stamp is a
-        # one-shot claim on one transcript — written onto N events it is N
-        # claims, each outliving the release that made it. The honest failure
-        # direction is a cold boot when a sibling leads, never a warm boot
-        # onto the wrong scroll.  `_rekey_to_seat` still runs: routing home
-        # is true of every letter in the drawer, which is why it stays.
-        _undefer_held_event(
-            drawers, accumulated_id, seat_conversation=seat,
-        )
+        # Un-deferred and routed home, carrying nothing about a transcript —
+        # `evt-…-2jb8` is what the alternative cost (brnrd#2022/#2023).
+        _undefer_held_event(drawers, accumulated_id, seat_conversation=seat)
 
 
 def release_held_run(run: Run, *, by: str, why: str) -> dict[str, object]:
@@ -15126,29 +15123,27 @@ def _release_reset_holds_due(
                     conversation_key=_seat_conversation(held),
                 )
             # A measured release has no releasing *event* — the reading is
-            # the releaser, and the drawer is all there is to wake on. So
-            # unlike `_apply_resource_hold_resume` above, the scroll has to
-            # ride an accumulated sibling or the seat boots cold off its own
-            # refill. brnrd#2022 holds the invariant that matters instead of
-            # the whole spray: **at most one event ever carries the scroll**.
-            # The first accumulated id is the seat's own oldest queued
-            # letter, which is the one an ordinary pending sort leads with;
-            # if some later sibling leads anyway the seat boots cold, which
-            # is the direction this is allowed to fail in.
+            # the releaser, and the drawer is all there is to wake on. Under
+            # the old stamp that forced a bad choice: spray the drawer (N
+            # claims on one transcript) or cool every refill. brnrd#2023
+            # dissolves it — the claim is armed on the seat, and whichever
+            # accumulated letter leads the dispatch picks it up.
+            if released_meta.get("native_session_id"):
+                pending_resume.arm(
+                    _shuttle_home(
+                        account.context_home_root(account_context)
+                        if account_context else None, runs_dir,
+                    ),
+                    session_id=str(released_meta["native_session_id"]),
+                    provider=str(released_meta.get("provider") or ""),
+                    conversation_key=_seat_conversation(held),
+                    from_run=held.id,
+                    why=f"measured_{released_by}",
+                )
             drawers = _hold_undefer_inboxes(account_context, inbox_dir)
-            for position, accumulated_id in enumerate(
-                released_meta.get("accumulated_event_ids") or []
-            ):
-                carries_scroll = position == 0
+            for accumulated_id in released_meta.get("accumulated_event_ids") or []:
                 _undefer_held_event(
                     drawers, accumulated_id,
-                    resume_native_session_id=(
-                        released_meta.get("native_session_id")
-                        if carries_scroll else None
-                    ),
-                    resume_native_provider=(
-                        released_meta.get("provider") if carries_scroll else None
-                    ),
                     seat_conversation=_seat_conversation(held),
                 )
             released += 1
@@ -15202,6 +15197,13 @@ def _apply_run_release(
             run_id=held.id, repo_root=str(_repo_root_for_runs(runs_dir)),
             conversation_key=_seat_conversation(held),
         )
+    pending_resume.clear(
+        _shuttle_home(
+            account.context_home_root(account_context) if account_context else None,
+            runs_dir,
+        ),
+        why=f"dashboard release of {held.id}",
+    )
     if inbox_dir is not None:
         drawers = _hold_undefer_inboxes(account_context, inbox_dir)
         for accumulated_id in released.get("accumulated_event_ids") or []:
@@ -15293,6 +15295,9 @@ def _apply_run_respawn(
     released = release_held_run(
         held, by="respawn", why="dashboard_respawn",
     )
+    # A dashboard respawn is a handover by definition — the user chose a new
+    # Core over waiting. Nothing inherits the parked seat's transcript.
+    pending_resume.clear(home, why=f"dashboard respawn of {held.id}")
     drawers = _hold_undefer_inboxes(account_context, inbox_dir)
     for accumulated_id in released.get("accumulated_event_ids") or []:
         _undefer_held_event(drawers, accumulated_id)
