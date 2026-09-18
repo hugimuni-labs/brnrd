@@ -9185,6 +9185,76 @@ def _pr_body_close_keyword_refusal(gate: str, fm: dict, body: str) -> str:
     return closekeyword.render(findings, channel=closekeyword.PR_BODY.label)
 
 
+#: The carrier half of a ``carrier:app`` destination name. A carrier says
+#: *who moves the bytes*, an app says *where it lands*: ``host:telegram`` is
+#: the bot token on this machine, ``cloud:telegram`` is the relay into the
+#: maintainer's thread. His call, 2026-09-18: "it should clearly explain to
+#: you by name what channel it is."
+#:
+#: This is the shape conversation keys have always had one layer down —
+#: ``cloud:telegram:155783668:`` is carrier, app, who. The bug it fixes is
+#: that the outbox ``gate:`` verb took only the first segment, so a resident
+#: could not *write* "cloud's telegram" and reached for ``telegram`` instead.
+#: Six overnight messages went to the wrong human through that gap.
+_GATE_CARRIERS = ("host", "cloud")
+
+
+def _split_gate_name(gate: str) -> tuple[str | None, str]:
+    """``carrier:app`` -> ``(carrier, app)``; anything else -> ``(None, gate)``."""
+    head, sep, rest = str(gate or "").partition(":")
+    if sep and head in _GATE_CARRIERS and rest and ":" not in rest:
+        return head, rest
+    return None, str(gate or "")
+
+
+def _resolve_gate_name(gate: str) -> tuple[str, str | None]:
+    """The delivery gate *gate* names, and the app it named explicitly.
+
+    ``host:telegram`` -> the standalone ``telegram`` transport. ``cloud:x`` ->
+    the ``cloud`` relay, with ``x`` carried alongside as the channel the
+    resident meant. A bare name resolves to itself and names no app, which is
+    exactly the ambiguity :func:`_ambiguous_bare_gate` refuses.
+    """
+    carrier, app = _split_gate_name(gate)
+    if carrier is None:
+        return gate, None
+    if carrier == "host":
+        return app, app
+    return carrier, app
+
+
+def _live_cloud_apps(brr_dir: Path) -> set[str]:
+    """The apps the cloud relay is measurably carrying on this account.
+
+    Read off the conversation store's own directory names
+    (``cloud__telegram__155783668__``), not a configured list — a channel that
+    has never spoken is not a collision anyone can hit.
+    """
+    apps: set[str] = set()
+    try:
+        entries = list((brr_dir / "conversations").iterdir())
+    except OSError:
+        return apps
+    for entry in entries:
+        parts = entry.name.split("__")
+        if len(parts) >= 2 and parts[0] == "cloud" and parts[1]:
+            apps.add(parts[1])
+    return apps
+
+
+def _ambiguous_bare_gate(brr_dir: Path, gate: str) -> str | None:
+    """The carrier a bare *gate* name is missing, when it names two things.
+
+    ``telegram`` is both a standalone gate on this machine and a channel the
+    cloud relay carries. Written bare it picks one of them silently, and the
+    one it picks is the one that is not the person you are talking to.
+    Returns the colliding app name, or ``None`` when the name is unambiguous.
+    """
+    if ":" in gate or gate not in _BUILTIN_GATES:
+        return None
+    return gate if gate in _live_cloud_apps(brr_dir) else None
+
+
 def _deliver_out_of_bound(
     emit: _WorkerEmit,
     task: Run,
@@ -9213,6 +9283,9 @@ def _deliver_out_of_bound(
     :func:`gate_dirs` — the resolver this function defers to — for when and
     why that default is overridden.
     """
+    # `carrier:app` before anything resolves a directory off the name.
+    requested_gate = gate
+    gate, gate_app = _resolve_gate_name(gate)
     inbox_dir, responses_dir = gate_dirs(
         gate,
         inbox_dir=inbox_dir,
@@ -9244,9 +9317,13 @@ def _deliver_out_of_bound(
             )
         else:
             configured = _configured_gate_names(emit.brr_dir)
+            named = (
+                f"{requested_gate!r} (resolved to {gate!r})"
+                if requested_gate != gate else f"{gate!r}"
+            )
             _record_outbox_notice(
                 outbox_dir,
-                f"gate message dropped: {gate!r} is not deliverable on this "
+                f"gate message dropped: {named} is not deliverable on this "
                 f"account (configured gates: "
                 f"{', '.join(configured) if configured else 'none'}); the "
                 f"message was NOT delivered",
@@ -9255,6 +9332,32 @@ def _deliver_out_of_bound(
                 kind="dropped",
                 lifetime="run",
             )
+        return False
+    ambiguous = _ambiguous_bare_gate(emit.brr_dir, gate)
+    if ambiguous is not None and not _gate_addressed(gate, fm):
+        # The bare name means two things and picks one silently. Its sibling
+        # guard above catches the case where *this run's* conversation is the
+        # other one; this catches the rest — a bare name is ambiguous whether
+        # or not you happen to be standing in the colliding thread.
+        if message_path is not None:
+            message_store.transition(
+                message_path,
+                message_store.UNDELIVERABLE,
+                reason=f"{ambiguous!r} names both a host gate and a cloud channel",
+            )
+        _record_outbox_notice(
+            outbox_dir,
+            f"gate message refused: {ambiguous!r} names two destinations — "
+            f"`host:{ambiguous}` (the standalone {ambiguous} transport on this "
+            f"machine, delivering to its own default) and `cloud:{ambiguous}` "
+            f"(the relay). A destination is written `carrier:app` so no name "
+            f"can mean two things; write whichever you meant. The message was "
+            f"NOT delivered.",
+            # A well-formed name refused by policy for being under-specified,
+            # not plumbing that is missing.
+            kind="refused",
+            lifetime="run",
+        )
         return False
     if not _gate_can_send_unaddressed(gate) and not _gate_addressed(gate, fm):
         # #1205: the drawer the courier never opens. A gate that declares
@@ -9351,6 +9454,11 @@ def _deliver_out_of_bound(
     # stray thought).
     reserved = {"gate", "event", "id", "source", "status", "created"}
     target_meta = {k: v for k, v in fm.items() if k not in reserved}
+    if gate_app:
+        # Recorded, not silently assumed: the resident named the channel, and
+        # a reader of this event can see which one was meant even where the
+        # gate's own fresh-send lane cannot route to it yet.
+        target_meta.setdefault("gate_app", gate_app)
     event_source = _delivery_source_for_gate(gate)
     if gate == "forge":
         target_meta.setdefault("github_action", "pull_request")
