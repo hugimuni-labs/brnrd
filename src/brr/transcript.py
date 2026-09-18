@@ -110,6 +110,50 @@ from typing import Any, Iterable
 COMPUTED = "computed"
 """``ContractEntry.location`` sentinel for a block that is live state, not a file."""
 
+NEVER_MOUNT = frozenset({"prior-run"})
+"""Block keys that stay prose even though a real file backs them.
+
+**The seed exists to teach a fresh body its environment** — where it is, what
+its verbs are, what it owes. That is the whole measured benefit: the mounted arm
+stayed in the worktree it woke in, 3/3, where the prose arm ``cd``'d out and
+committed onto ``main``. A wake that has *already acted from here* acts from
+here again.
+
+``prior-run`` is not that. It is the resident's **memory** — the previous run's
+``Now``, ``Plan``, ``Vector``, ``Ledger`` and its outgoing replies verbatim —
+and putting memory in the one grammatical position that means *"you have already
+done this"* is the mount doing a job nobody asked it to do. Measured
+(2026-09-18, ``tools/mount_inheritance.py``): across all 454 seeds ever forged
+on the maintainer's machine, the *only* non-product location ever mounted was a
+predecessor run's ``body.md`` — 41 of them — and mounting did not merely move
+that block out of the prose. It **substituted a larger text**
+(``prompts._MOUNTABLE_TEXT_BUILDERS``): the whole node page where the prose
+carried its map, a median **2.7x** and up to **6.7x** on a handover node, which
+is the longest kind of node there is.
+
+Handovers are where it stings — a successor exists to *escape* that seat, and
+was being handed its predecessor's notebook in action-position — but the defect
+is not a handover special case and must not be narrowed back into one. It is
+off-purpose on every seat wake.
+
+**What replaces it: nothing new.** The block does not leave the wake; it leaves
+the *seed*. ``prompts._build_prior_run_block`` renders the same memory as prose
+under ``## Your last run`` — the attested frame line, the predecessor's ``Now``,
+and the shape of the rest — which is exactly where it lived before ``boot.mount``
+existed and where every unmounted wake still has it. Nothing about carry-forward
+briefs (``halt:`` / ``respawn:``) is decided here, deliberately: this constant
+governs *grammatical position inside the seed*, never what a successor is handed.
+
+**Not a rejection of the builder.** ``_build_prior_run_mount_text`` stays, and
+so does its registry entry: it is what an honest ``Read`` of that page *would*
+return, and ``brnrd prompts mount`` and ``brnrd prompts replay`` still need it
+to reconstruct a wake forged before this clause. Dropping the builder instead
+of the key would be the subtly wrong fix — ``prompts._take`` falls back to the
+prose text, and the seed would then carry ``Read(<node>/body.md)`` returning a
+*summary of that file*: a forged perception that is false about the file it
+names, which is the one lie this module exists to refuse.
+"""
+
 MOUNTED_SHELLS = frozenset({"claude"})
 """Shells that can actually *resume* a transcript brnrd forged.
 
@@ -355,6 +399,9 @@ def build_orientation_transcript(
     the wake.  The rendered text, not the file's — a trimmed block is mounted as
     what the wake really received, with :func:`_trim_note` saying so.
 
+    Blocks in :data:`NEVER_MOUNT` are skipped — the seed teaches the
+    environment, and the resident's own memory is not that (see the constant).
+
     Blocks whose ``location`` is :data:`COMPUTED` are skipped: they are live
     state (the kernel, the run bundle, portal posture), they exist nowhere on
     disk, and a ``Read`` returning them would be fiction.  Callers keep rendering
@@ -373,6 +420,15 @@ def build_orientation_transcript(
 
     for entry in score.contracts:
         if not entry.present or entry.location == COMPUTED:
+            continue
+        # The seed teaches the environment; memory stays prose. Enforced here
+        # as well as in `prompts._build_mountable` because this is the choke
+        # point every caller passes through — the live wake, `brnrd prompts
+        # mount`, and `replay`. A block excluded upstream but seeded here would
+        # be subtracted from the prose and mounted anyway; a block excluded
+        # here but not upstream would be subtracted and mounted *nowhere*,
+        # which is the silent lobotomy `mount_claude_session` raises on.
+        if entry.block_key in NEVER_MOUNT:
             continue
         text = block_text.get(entry.block_key)
         if not text:
