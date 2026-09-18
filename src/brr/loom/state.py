@@ -1221,7 +1221,7 @@ def read_cloth(
                 if live_row.get(key):
                     row[key] = live_row[key]
         row["duration_s"] = _duration(row.get("started"), row.get("ended"))
-    return {"rows": rows}
+    return {"rows": rows, "trail_limit": TRAIL_PLACES}
 
 
 def _duration(started: Any, ended: Any) -> int | None:
@@ -1635,7 +1635,7 @@ def build(repo_root: Path | str, account_home: Path | str | None, *, now: object
     repo_label = _safe(lambda: _repo_label(live, brr_dir), None)
     cloth = _safe(
         lambda: read_cloth(brr_dir, home, compiled, live, (hud or {}).get("strands") or [], where, repo_label),
-        {"rows": []},
+        {"rows": [], "trail_limit": TRAIL_PLACES},
     )
     from . import dungeon
 
