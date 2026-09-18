@@ -917,12 +917,16 @@ def read_beads(
     position; ``GET /loom/page/bead?run=&n=`` takes it). ``places`` are repo
     places, ``home_places`` the account home's (:func:`row_paths`);
     ``place_kind`` is :func:`place_kind`. ``items`` are the warp/goal ids the
-    act touched (:func:`bead_items`)."""
+    act touched (:func:`bead_items`). ``chunks`` are the read ranges / write
+    spans :func:`brr.hooks.record_boundary` recorded on the row, straight
+    through — no aggregation, no relativizing, the same additive treatment
+    ``items`` got in #2004; absent on the row reads as ``[]`` here too."""
     out = []
     for index, row in enumerate(rows):
         ctx = row.get("ctx") if isinstance(row.get("ctx"), dict) else {}
         detail = row.get("detail") if isinstance(row.get("detail"), str) else ""
         places, homes = row_paths(row, where)
+        chunks = row.get("chunks")
         out.append({
             "n": first_n + index if first_n is not None else None,
             "at": row.get("at"),
@@ -935,6 +939,7 @@ def read_beads(
             "detail": detail[:DETAIL_CHARS] or None,
             "topics": match_topics(compiled, places=places, text=detail, run_id=run_id),
             "items": bead_items(row, where, homes),
+            "chunks": chunks if isinstance(chunks, list) else [],
         })
     return out
 
