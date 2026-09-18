@@ -310,3 +310,11 @@ def test_pass_page_names_its_own_bound(kid_contract):
     page, _ = pages.pass_page(kid_contract["repo"], kid_contract["home"], CHILD)
     assert page["bead_total"] is not None
     assert page["bead_total"] >= len(page["beads"])
+
+
+def test_pass_page_says_how_deep_its_place_scan_went(kid_contract):
+    page, _ = pages.pass_page(kid_contract["repo"], kid_contract["home"], CHILD)
+    assert page["places_scanned"] is not None
+    # the scan's bottom is a bound a reader compares to the run's whole life
+    assert page["places_scanned"] <= page["bead_total"]
+    assert all("path" in e and "touches" in e for e in page["places"])

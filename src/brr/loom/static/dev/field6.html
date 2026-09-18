@@ -3301,10 +3301,20 @@ const ZOOM=(()=>{
         measured:!!e,listed:seen.has(path)};
     }).sort((a,b)=>(b.m?b.m.touches:-1)-(a.m?a.m.touches:-1)||String(b.last||'').localeCompare(String(a.last||'')));
     const total=pg&&pg.state==='ok'?(num((pg.d||{}).bead_total)?pg.d.bead_total:null):null;
+    const scanned=pg&&pg.state==='ok'?(num((pg.d||{}).places_scanned)?pg.d.places_scanned:0):0;
     ROWS={list,measured:w.size,pass:pg,
       bound:live?(w.size?`measured across the ${((S&&S.beads)||[]).length} beads this beat carries`
             :`no chunk record in the ${((S&&S.beads)||[]).length} beads this beat carries — presence only`)
-        :pg&&pg.state==='ok'?`measured across ${total?total+' ':''}recorded act${total===1?'':'s'} of this pass`
+        :pg&&pg.state==='ok'?(w.size
+            // the scan has a bottom (`places_scanned`), and a run longer than
+            // it has early work this reading cannot see. Say so rather than
+            // presenting a tail's totals as a life's.
+            ?`measured across ${scanned}${total&&total>scanned?` of ${total}`:''} recorded act${scanned===1?'':'s'} of this pass`
+            // and the commonest zero on this page is not an idle pass: the
+            // hook has only recorded write hunks since 2026-09-18, so every
+            // pass older than that has presence and nothing to weigh. A
+            // reader must not have to guess which zero this is.
+            :`no chunk record in this pass’s ${scanned} recorded act${scanned===1?'':'s'} — hunks are recorded since 2026-09-18`)
         :pg&&pg.state==='loading'?'reading this pass’s own record…'
         :'this pass’s record could not be read — presence only, no weights'};
     return ROWS;
