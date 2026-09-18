@@ -332,6 +332,89 @@ class TestDrainOutbox:
         assert protocol.list_pending(inbox) == []
         assert not (outbox / "ping.md").exists()
 
+    def test_gate_carrier_app_resolves_the_host_transport(
+        self, tmp_path, monkeypatch,
+    ):
+        """`carrier:app` is the shape of a destination name, not a feature.
+
+        A carrier says who moves the bytes (`host` = this machine, `cloud` =
+        the relay); an app says where it lands. `host:telegram` is therefore
+        the standalone telegram transport, said in a way that cannot be
+        mistaken for `cloud:telegram`. His call, 2026-09-18: "it should
+        clearly explain to you by name what channel it is."
+        """
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        inbox.mkdir(parents=True)
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        (outbox / "ping.md").write_text(
+            "---\ngate: host:telegram\ntelegram_chat_id: 999\n---\nout of band\n")
+        monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A", meta={})
+        daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        done = protocol.list_done(inbox, "telegram")
+        assert len(done) == 1
+        assert str(done[0].get("telegram_chat_id")) == "999"
+        # the app the resident named is recorded, never silently dropped
+        assert done[0].get("gate_app") == "telegram"
+
+    def test_a_bare_name_that_means_two_destinations_is_refused(
+        self, tmp_path, monkeypatch,
+    ):
+        """`telegram` is both a gate on this machine and a channel the cloud
+        relay carries. Written bare it picks one silently — and the one it
+        picks is not the person you are talking to. Six overnight messages
+        went to the wrong human through exactly that gap.
+
+        Sibling of `test_gate_naming_the_conversations_own_platform_is_refused`
+        and deliberately wider: a bare name is ambiguous whether or not you
+        happen to be standing in the colliding thread.
+        """
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        inbox.mkdir(parents=True)
+        (brr_dir / "conversations" / "cloud__telegram__155783668__").mkdir(parents=True)
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        (outbox / "ping.md").write_text("---\ngate: telegram\n---\nout of band\n")
+        monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="schedule:tick", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A", meta={})
+        daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        assert protocol.list_done(inbox, "telegram") == []
+        notices = daemon._read_outbox_notices(outbox)
+        assert any(
+            n["kind"] == "refused" and "host:telegram" in n["text"]
+            and "cloud:telegram" in n["text"]
+            for n in notices
+        ), notices
+
+    def test_a_bare_name_the_cloud_does_not_carry_is_not_ambiguous(
+        self, tmp_path, monkeypatch,
+    ):
+        """A channel that has never spoken is not a collision anyone can hit.
+
+        The apps the relay carries are read off the conversation store's own
+        directory names, not a configured list — so `slack` stays a plain,
+        unambiguous name on an account where the relay has only ever carried
+        telegram.
+        """
+        brr_dir = tmp_path / ".brr"
+        (brr_dir / "conversations" / "cloud__telegram__155783668__").mkdir(parents=True)
+        assert daemon._ambiguous_bare_gate(brr_dir, "telegram") == "telegram"
+        assert daemon._ambiguous_bare_gate(brr_dir, "slack") is None
+        assert daemon._ambiguous_bare_gate(brr_dir, "host:telegram") is None
+
     def test_incapable_gate_with_no_addressing_is_refused_not_synthesized(
         self, tmp_path, monkeypatch,
     ):

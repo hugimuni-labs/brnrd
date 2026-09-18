@@ -692,6 +692,18 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     _save_state(brr_dir, state)
 
 
+def addressed(fm: dict[str, object]) -> bool:
+    """True when *fm* names the chat this send is for (a ``telegram_chat_id``).
+
+    The gate-owned half of "did the resident say where this goes" — mirroring
+    ``cloud.addressed``. Read by ``daemon._ambiguous_bare_gate``'s caller: a
+    send that names its own destination is deliberate, not a coincidence, and
+    is never refused for being under-specified.
+    """
+    value = fm.get("telegram_chat_id")
+    return value not in (None, "")
+
+
 def _deliver_responses(
     brr_dir: Path,
     inbox_dir: Path,
