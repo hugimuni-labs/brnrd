@@ -10,7 +10,8 @@ window) — because the page renders an absent instrument as *absent*.
   snapshots beside the portal and under ``.brr/``; ``usage-samples.jsonl`` for
   the measured rate, whole-window arithmetic as the fallback — the same two
   sources ``src/frontend/src/lib/tankForecast.ts`` reads, in the same order).
-- ``pack`` — the wake's context blocks (``runs/<id>/wake-manifest.json``).
+- ``pack`` — the wake's context blocks (``runs/<id>/wake-manifest.json``):
+  kept bytes, what the render cut, and the file each was rendered from.
 - ``warp`` enrichment — ``visited_at`` (the home tree's last touch of the
   item's own file), ``opens`` (reverse ``needs`` edges among open items),
   ``stake`` (an item file's ``stake:`` row, verbatim), ``receipt`` (``null``
@@ -239,26 +240,74 @@ def _window_tokens(full: Mapping[str, Any] | None) -> int | None:
     return None
 
 
+#: ``bytes_cut`` uses 1 as its "nothing was cut" sentinel (a trailing
+#: newline), so a cut is only a cut above it.
+_CUT_FLOOR = 1
+
+
+def _block_source(row: Mapping[str, Any], root: Path) -> tuple[str | None, str | None]:
+    """``(source, source_rel)`` for a manifest block: the first source that
+    names a real path, verbatim, and its repo-relative form when it is under
+    the checkout.
+
+    Verbatim because that is the vocabulary ``beads[].chunks[].path`` and
+    ``beads[].places`` already speak — the join a reader wants (*did anything
+    this run go back to this block's own file?*) is a string compare against
+    that, and relativizing the only copy would break it the way #2011 broke
+    the chunk ground. A synthesized block (``dominion``, ``work-surface``,
+    ``run-context-bundle`` — the three biggest) has no path at all, and its
+    ``None`` is load-bearing: it means *this stratum cannot be joined*, which
+    is a different fact from *nothing touched it*."""
+    for src in row.get("sources") or ():
+        if not isinstance(src, dict):
+            continue
+        path = src.get("path")
+        if not path:
+            continue
+        text = str(path)
+        try:
+            rel = str(Path(text).relative_to(root))
+        except (ValueError, OSError):
+            rel = None
+        return text, rel
+    return None, None
+
+
 def read_pack(brr_dir: Path, run_id: str | None, hud: Mapping[str, Any] | None) -> dict[str, Any] | None:
-    """``pack`` — the wake's blocks with their kept bytes, the total, and the
-    context occupancy; ``None`` when the run has no manifest."""
+    """``pack`` — the wake's blocks with their kept bytes, what the render cut
+    from each, the file each was rendered from, the total, and the context
+    occupancy; ``None`` when the run has no manifest.
+
+    ``source`` / ``cut`` are the two readings the byte count alone cannot
+    give. ``cut`` is what the wake budget already spent on this block
+    (``portal-verb-grammar`` keeps 12.1 KB of a 71.9 KB page); ``source`` is
+    the only join any reader gets between a stratum and the run's own acts.
+    Neither is a claim about whether the block was *used* — nothing measures
+    that — and the page that draws them has to say so."""
     if not run_id:
         return None
     manifest = _read_json(brr_dir / "runs" / run_id / "wake-manifest.json")
     if not manifest or not isinstance(manifest.get("blocks"), list):
         return None
+    root = brr_dir.parent
     blocks = []
     for row in manifest["blocks"]:
         if not isinstance(row, dict) or not row.get("name"):
             continue
         kept = _num(row.get("bytes_kept"))
+        cut = _num(row.get("bytes_cut"))
+        source, source_rel = _block_source(row, root)
         blocks.append({
             "name": str(row["name"]),
             "label": row.get("label") or str(row["name"]),
             "bytes": int(kept) if kept is not None else None,
+            "cut": int(cut) if cut is not None and cut > _CUT_FLOOR else None,
             "budget_bytes": int(_num(row.get("budget_bytes"))) if _num(row.get("budget_bytes")) is not None else None,
             "present": bool(row.get("present", True)),
             "owner": row.get("owner"),
+            "authority": row.get("authority"),
+            "source": source,
+            "source_rel": source_rel,
         })
     total = sum(b["bytes"] for b in blocks if b["bytes"] is not None)
     return {

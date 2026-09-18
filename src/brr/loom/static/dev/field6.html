@@ -2581,17 +2581,27 @@ const RECORD=(()=>{
   // So this is ONE window, drawn once and opened by anything worth stopping
   // for: `P` inspects the body, `Enter` inspects whatever is selected. If a
   // thing does not fit water, window or edge, that is the signal to ask.
+  // TWO ROW HEIGHTS, and only two. An act is a moment and gets the reading
+  // height it always had; a stratum is a layer, there are seventeen of them,
+  // and at 18 px they would evict the acts this panel was built for. 13 px is
+  // the thinnest that still reads at 1:1 in the 9 px mono, measured on the
+  // shot, and thin layers under thick ones is what strata look like anyway.
+  const LH_ACT=18, LH_STRATUM=13;
+  const rowH=r=>r&&r.found?LH_STRATUM:LH_ACT;
   function windowRect(rows,note,gap){
-    const w=Math.min(520,W*0.42), lh=18;
+    const w=Math.min(520,W*0.42);
     const foot=(note?30:10)+(gap?16:0);
-    const h=Math.min(H*0.80,58+lh*rows.length+foot);
+    const h=Math.min(H*0.80,58+rows.reduce((a,r)=>a+rowH(r),0)+foot);
     return {x:Math.round(W*0.5-w/2),y:Math.round(H*0.5-h/2),w,h};
   }
   function drawWindow(g,rect,title,rows,note,gap){
     // the base row is the one whose label names it; everything else is an act
-    const isBase=r=>/\bbase\b/i.test(String(r.k||r.l||r.label||''));
+    // foundation = the wake's own strata and the seam row above them; the
+    // flag is explicit now that there are seventeen instead of one, and the
+    // old label sniff is kept for any caller that still speaks that way.
+    const isBase=r=>r.found===true||/\bbase\b/i.test(String(r.k||r.l||r.label||''));
     const rowMax=Math.max(0,...rows.filter(r=>!isBase(r)).map(r=>num(r.v)?r.v:0));
-    const lh=18;
+    const lh=LH_ACT;
     const foot=(note?30:10)+(gap?16:0);
     const {x,y,w,h}=rect;
     g.save();
@@ -2609,18 +2619,24 @@ const RECORD=(()=>{
     // the pinned rows go last and are never dropped: the base is the point of
     // the panel, and a panel that silently drops the point is worse than a
     // shorter one. Everything above it is the newest that fit.
-    const pinned=rows.filter(r=>r.base||r.his);
-    const flow=rows.filter(r=>!r.base&&!r.his);
-    const room=Math.max(1,Math.floor((h-58-foot)/lh)-pinned.length);
+    const pinned=rows.filter(r=>r.base||r.his||r.found);
+    const flow=rows.filter(r=>!r.base&&!r.his&&!r.found);
+    const pinnedH=pinned.reduce((a,r)=>a+rowH(r),0);
+    const room=Math.max(1,Math.floor((h-58-foot-pinnedH)/lh));
     const cut=Math.max(0,flow.length-room);
     const show=[...rows.filter(r=>r.his),...flow.slice(0,room),
-                ...(cut?[{k:`\u2026 ${cut} older act${cut>1?'s':''} above the base, not shown`,t:''}]:[]),
-                ...rows.filter(r=>r.base)];
+                ...(cut?[{k:`\u2026 ${cut} older act${cut>1?'s':''} above the wake, not shown`,t:''}]:[]),
+                ...rows.filter(r=>!r.his&&(r.base||r.found))];
     let ry=y+50;
     for(const r of show){
       if(num(r.v)){
         // softer than a tick was, because the label now rides it
-        g.fillStyle=isBase(r)?'rgba(143,211,255,0.20)':'rgba(242,177,52,0.17)';
+        // a stratum's bar is a quarter of the panel's width at its very
+        // largest, where an act's runs most of it, so the foundation ink is
+        // carried up to where a 13 px bar still reads at 1:1. The seam keeps
+        // the old weight: it is a summary, not one of the seventeen.
+        g.fillStyle=r.seam?'rgba(143,211,255,0.20)'
+                   :isBase(r)?'rgba(143,211,255,0.30)':'rgba(242,177,52,0.17)';
         // His read, 2026-09-17: a per-row tick beside the text spends a column
         // to say what the row can say by itself. So THE ROW IS THE BAR — the
         // weight is a fill running the row's own width, behind the label, and
@@ -2630,20 +2646,29 @@ const RECORD=(()=>{
         // row keeps the total's scale (it *is* most of the body); an act row
         // scales against the largest act, so the stack is scannable and the
         // base still says plainly that it dominates.
-        const den=(isBase(r)?tot:(rowMax||tot))||1;
-        g.fillRect(x+10,ry-11,(w-20)*clamp(r.v/den,0,1),lh-3);
+        // a row may name its own denominator: a stratum is a share of the
+        // WAKE (so seventeen bars are comparable to each other and sum to the
+        // foundation), the seam row is a share of the whole body.
+        const den=(num(r.dv)?r.dv:(isBase(r)?tot:(rowMax||tot)))||1;
+        g.fillRect(x+10,ry-(rowH(r)-7),(w-20)*clamp(r.v/den,0,1),rowH(r)-3);
       }
       if(r.his){                       // his line, on the top layer, in his ice
         g.strokeStyle='rgba(143,211,255,0.5)';g.lineWidth=1;
         g.beginPath();g.moveTo(x+14,ry+3.5);g.lineTo(x+w-14,ry+3.5);g.stroke();
       }
+      if(r.seam){                      // THE LINE the foot line speaks of:
+        // above it the run's acts in tokens, below it the wake in bytes. The
+        // panel says "below the line" in words, so the line has to be drawn.
+        g.strokeStyle='rgba(143,211,255,0.38)';g.lineWidth=1;
+        g.beginPath();g.moveTo(x+10,ry-11.5);g.lineTo(x+w-10,ry-11.5);g.stroke();
+      }
       // the label must read over its own bar: brighter than the old dim ink
       g.fillStyle=r.his?'#cfe9fb':(isBase(r)?'#a8c4d6':'#c2b393');
       let lb=r.k; while(lb.length&&g.measureText(lb).width>w-150)lb=lb.slice(0,-2);
-      g.fillText(lb,x+14,ry+8);   // the label rides the fill (the row is the bar)
+      g.fillText(lb,x+14,ry+(r.found?5:8));  // the label rides the fill (the row is the bar)
       if(r.t!==undefined){g.fillStyle='#d9cba9';g.textAlign='right';
-        g.fillText(r.t,x+w-14,ry+8);g.textAlign='left';}
-      ry+=lh;
+        g.fillText(r.t,x+w-14,ry+(r.found?5:8));g.textAlign='left';}
+      ry+=rowH(r);
     }
     if(note){g.fillStyle='#8a7c5e';
       let nl=note; while(nl.length&&g.measureText(nl).width>w-28)nl=nl.slice(0,-2);
@@ -2687,9 +2712,70 @@ const RECORD=(()=>{
     for(const q of acts)rows.push({
       k:`${(q.at||'').slice(11,16)}  ${q.act}  ${(q.places||[])[0]||(q.home_places||[])[0]||q.place_kind||''}`,
       v:q.delta,t:`+${(q.delta/1000).toFixed(1)}k`});
-    // the base, at the bottom, oldest and heaviest
-    rows.push({k:'the base \u2014 the wake, as one row',v:base,
-               t:`${(base/1000).toFixed(1)}k`,base:true});
+    // THE STRATA — the base, opened. Everything below this line is the wake
+    // the run was booted with, one row per block, oldest foundation at the
+    // bottom exactly as field3 stacked it. The boot blocks are most of the
+    // body (38 % of it at this boundary) and until now this panel itemised
+    // every act on top of them while showing none of them, which made the
+    // periodic trim an argument with no instrument: the real question is
+    // always `work-surface` at 47.9K against `dominion` at 22.4K, and neither
+    // number had ever been on a screen.
+    //
+    // THREE RULES, because this is a trim instrument and a trim instrument
+    // that flatters is worse than none:
+    //   1. Bytes below the line, tokens above. The feed measures the wake in
+    //      bytes (`pack`) and the acts in context tokens (`ctx_after`/
+    //      `delta`). Converting either into the other would be arithmetic
+    //      dressed as a reading, so each half keeps its own unit and the
+    //      SEAM ROW carries the one figure that spans them — the measured
+    //      boot tokens as a share of the body.
+    //   2. A stratum's bar is its share of THE WAKE, not of the body, so the
+    //      seventeen are comparable to each other and visibly sum to the
+    //      foundation. That is the "what would I cut?" read.
+    //   3. Only measured marks. `cut N` is what the render already dropped
+    //      from this block's own file (`bytes_cut`). `re-read` means an act
+    //      of this run named that same file — the only join the manifest
+    //      affords. NOTHING says "unused": whether a block in the window was
+    //      *used* is not measured anywhere, and 14 of the 21 blocks are
+    //      synthesized with no file to join at all — including the three
+    //      largest. An unmeasured mark here would be worse than an absent one.
+    const pk=S0.pack, blocks=(pk&&Array.isArray(pk.blocks))?pk.blocks:[];
+    const strata=blocks.filter(q=>q.present&&num(q.bytes)&&q.bytes>0);
+    const pkb=num(pk&&pk.bytes)&&pk.bytes>0?pk.bytes
+             :strata.reduce((a,q)=>a+q.bytes,0);
+    const KB=n=>`${(n/1000).toFixed(1)}K`;
+    if(strata.length){
+      // every path this run's acts named, in both vocabularies the feed uses:
+      // `places` is repo-relative, `chunks[].path` is verbatim-absolute.
+      const seen=new Set();
+      for(const q of b){
+        for(const pl of q.places||[])seen.add(pl);
+        for(const ch of q.chunks||[])if(ch&&ch.path)seen.add(ch.path);
+      }
+      const owned={};
+      for(const q of strata)owned[q.owner||'?']=(owned[q.owner||'?']||0)+q.bytes;
+      const split=Object.entries(owned).sort((x,y)=>y[1]-x[1]).slice(0,3)
+        .map(([o,n])=>`${o.replace('daemon-live','daemon')} ${KB(n)}`).join(' \u00b7 ');
+      // the seam: the one row that spans both units, and the only bar in the
+      // panel scaled against the whole body
+      rows.push({k:`THE WAKE \u00b7 ${strata.length} strata \u00b7 ${split}`,
+                 v:base,dv:tot,found:true,seam:true,
+                 t:`${Math.round(100*base/(tot||1))}% of the body`});
+      // oldest at the bottom: the manifest is render order, so walk it back
+      for(let i=strata.length-1;i>=0;i--){
+        const q=strata[i], marks=[];
+        if(num(q.cut)&&q.cut>0)marks.push(`cut ${KB(q.cut)}`);
+        const src=q.source||q.source_rel;
+        if(src&&((q.source&&seen.has(q.source))||(q.source_rel&&seen.has(q.source_rel))))
+          marks.push('re-read');
+        rows.push({k:q.name+(marks.length?' \u00b7 '+marks.join(' \u00b7 '):''),
+                   v:q.bytes,dv:pkb,found:true,t:KB(q.bytes)});
+      }
+    }else{
+      // no manifest for this run: the base stays the one arithmetic row it was
+      rows.push({k:'the base \u2014 the wake, as one row (no `pack` for this run)',
+                 v:base,t:`${(base/1000).toFixed(1)}k`,base:true});
+    }
     // the total line, and the hour's price if this window has been open before
     let note=`boot ${(base/1000).toFixed(1)}k + run ${(run/1000).toFixed(1)}k = `
       +`${(tot/1000).toFixed(1)}k on the body at this boundary`;
@@ -2698,13 +2784,17 @@ const RECORD=(()=>{
       note+=` \u00b7 +${(d/1000).toFixed(1)}k since you last looked, ${mins} min ago`;
     }
     R.pendingOpen=tot;
-    return {rows,note,
-      // the two readings this panel cannot take, said inside it rather than
-      // faked: `pack.blocks` is not in this feed at all, so the base is one
-      // arithmetic row instead of `work surface 51.3k \u00b7 portals 12.1k \u2026`;
-      // and the feed prices ACTS, not arrivals, so his line has no number.
-      gap:'no `pack` in the feed: the base is one row, not its blocks \u00b7 '
+    const unjoinable=strata.filter(q=>!(q.source||q.source_rel)).length;
+    const out={rows,note,
+      // what this panel still cannot read, said inside it rather than faked.
+      gap:strata.length
+        ?`below the line: bytes \u00b7 ${unjoinable} strata carry no file, so only `
+         +`re-read is measurable \u2014 never unused`
+        :'no `pack` for this run: the base is one row, not its blocks \u00b7 '
          +'tokens, not bytes \u2014 the feed measures ctx_after/delta'};
+    window.BODY={base,run,tot,strata:strata.length,packBytes:pkb,
+                 rows:out.rows.map(r=>[r.k,r.t,r.v,!!r.found]),gap:out.gap,note};
+    return out;
   }
   // a pass, inspected — the window's second legitimate user
   function passRows(){
@@ -2959,7 +3049,7 @@ const RECORD=(()=>{
     if(!R.ready||!R.win)return null;
     const b=R.win==='body'?bodyRows():passRows();
     if(!b)return null;
-    const title=R.win==='body'?'THE BODY · every act, with its price'
+    const title=R.win==='body'?'THE BODY · what it was made of, and what it has done'
                               :`THE PASS · ${R.pass}`;
     const rect=windowRect(b.rows,b.note,b.gap);
     return {...rect,name:R.win,dim:'scene',
