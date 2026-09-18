@@ -224,38 +224,6 @@ def test_quota_window_pace_stays_absent_without_a_binding_window_clock():
     ) is None
 
 
-@pytest.mark.parametrize(
-    ("status", "expected"),
-    [(None, None), ({"floor": None}, None), ({"floor": "low"}, "low"),
-     ({"floor": "critical"}, "critical")],
-)
-def test_spawn_admission_uses_binding_quota_floor(
-    tmp_path, monkeypatch, status, expected,
-):
-    monkeypatch.setattr(daemon, "_collect_levels", lambda *_a, **_k: ({}, True))
-    monkeypatch.setattr(daemon, "_quota_pacing_status", lambda *_a, **_k: status)
-
-    assert daemon._spawn_admission_floor(
-        {}, {"shell": "codex", "core": "gpt"}, tmp_path / ".brr", tmp_path,
-    ) == expected
-
-
-def test_low_quota_emits_spawn_queued_once(tmp_path):
-    inbox = tmp_path / "inbox"
-    event_path = protocol.create_event(
-        inbox, "spawn", "work", spawn_immediate=True,
-        spawn_parent_run_id="run-parent",
-        spawn_parent_conversation_key="cloud:1:",
-    )
-    event = next(ev for ev in protocol.list_pending(inbox) if ev["id"] == event_path.stem)
-
-    daemon._notify_spawn_queued(inbox, event)
-    daemon._notify_spawn_queued(inbox, event)
-
-    queued = [ev for ev in protocol.list_pending(inbox) if ev["source"] == "spawn_queued"]
-    assert len(queued) == 1
-    assert queued[0]["spawn_parent_run_id"] == "run-parent"
-
 
 def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
@@ -7771,17 +7739,16 @@ def test_concurrent_spawn_admission_ignores_legacy_numeric_width(tmp_path, monke
 
 
 def _quota_admission_loop(tmp_path, monkeypatch, floors, *, events=1, ticks=6):
-    """Run the daemon loop for a bounded number of ticks with the spawn
-    admission floor driven from *floors* (a list consumed one entry per tick,
-    last entry repeating). Returns the ids of the events a worker actually
-    started, in order.
+    """Run the daemon loop for a bounded number of ticks and return the ids of
+    the events a worker actually started, in order.
 
-    Driving the *floor* rather than the quota readings behind it is deliberate:
-    `_spawn_admission_floor`'s own translation of levels → floor is unit-tested
-    above (`test_spawn_admission_uses_binding_quota_floor`); what these tests
-    are about is what the dispatch loop *does* with the answer, and stubbing a
-    whole quota stack to reach that is a mock of the thing under test wearing a
-    fixture's clothes.
+    *floors* drives ``_quota_pacing_status`` — one entry per tick, last entry
+    repeating. Since 2026-09-18 the dispatch loop does not consult it at all,
+    which is exactly what these tests pin: a floor that reads ``critical`` on
+    every tick must not change a single admission. Stubbing the function that
+    *produces* the floor (rather than a gate that no longer exists) is what
+    makes the test fail again if anyone reintroduces the gate — from this
+    source or any other reader of the same status.
     """
     write_repo_scaffold(tmp_path)
     started: list[str] = []
@@ -7789,10 +7756,9 @@ def _quota_admission_loop(tmp_path, monkeypatch, floors, *, events=1, ticks=6):
 
     def fake_run_worker(event, *_args, **_kwargs):
         eid = event["id"]
-        # Only the strand dispatches count. The notification events this path
-        # emits (`spawn_queued`) land in the same inbox and are dispatched to
-        # the *parent* as ordinary wakes — real behaviour, not noise, but a
-        # different question from "was the strand admitted".
+        # Only the strand dispatches count; ordinary parent wakes landing in
+        # the same inbox are real behaviour, but a different question from
+        # "was the strand admitted".
         if event.get("spawn_immediate"):
             started.append(eid)
         return Run(
@@ -7800,9 +7766,9 @@ def _quota_admission_loop(tmp_path, monkeypatch, floors, *, events=1, ticks=6):
             status="done", meta={"strand": True},
         )
 
-    def fake_floor(_cfg, _event, _brr_dir, _repo_root):
+    def fake_pacing_status(*_a, **_k):
         idx = min(tick["n"], len(floors) - 1)
-        return floors[idx]
+        return {"floor": floors[idx]}
 
     def fake_fire_due_schedules(*_a, **_k):
         tick["n"] += 1
@@ -7819,7 +7785,7 @@ def _quota_admission_loop(tmp_path, monkeypatch, floors, *, events=1, ticks=6):
     monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
     monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
     monkeypatch.setattr(daemon, "_notify_spawn_parent", lambda *_a, **_k: None)
-    monkeypatch.setattr(daemon, "_spawn_admission_floor", fake_floor)
+    monkeypatch.setattr(daemon, "_quota_pacing_status", fake_pacing_status)
     monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
 
     inbox = tmp_path / ".brr" / "inbox"
@@ -7836,63 +7802,50 @@ def _quota_admission_loop(tmp_path, monkeypatch, floors, *, events=1, ticks=6):
     return started, inbox
 
 
-def test_critical_quota_floor_refuses_the_spawn_and_tells_the_parent(
+def test_a_critical_quota_floor_no_longer_refuses_the_spawn(
     tmp_path, monkeypatch,
 ):
-    """`critical` is a refusal, not a delay: the child never starts, its event
-    is cancelled so no later tick resurrects it, and the parent gets a
-    `refused` notice on its own outbox. Silence here would be the worst arm —
-    a parent that dispatched a strand and heard nothing reads the empty
-    presence row as "still starting" for as long as it cares to wait."""
-    parent_outbox = tmp_path / ".brr" / "outbox" / "evt-parent"
-    parent_outbox.mkdir(parents=True)
+    """A floor is pace, not permission (2026-09-18, his call: "it should never
+    block you from acting").
 
-    def fake_from_file(_path):
-        return Run(
-            id="run-parent", event_id="evt-parent", body="",
-            meta={"outbox_path": str(parent_outbox)},
-        )
+    `critical` used to cancel the event and put a `refused` notice on the
+    parent; `low` used to hold it FIFO and emit one `spawn_queued` event. Both
+    read the same knob — `pacing.quota_low_floor_pct`, written to stretch
+    `every:` schedule intervals — and both bit backwards: at low quota they
+    closed the *cheap* lane (a strand with its own allowance and a fresh
+    context) while the *expensive* resident seat kept running. Live
+    2026-09-17: a night's delegation sat queued at week 19% against a 20%
+    mark, and the floor the maintainer actually set went unspent.
 
-    monkeypatch.setattr(daemon.Run, "from_file", staticmethod(fake_from_file))
+    The floor still reaches the resident, as `spawn_pool.floor` — something to
+    pace by. It reaches the dispatch loop nowhere at all."""
     started, inbox = _quota_admission_loop(
         tmp_path, monkeypatch, ["critical"], ticks=4,
     )
 
-    assert started == []
-    notices = daemon._read_outbox_notices(parent_outbox)
-    assert any(
-        n["kind"] == "refused" and "quota floor is critical" in n["text"]
-        for n in notices
-    ), notices
+    assert len(started) == 1, "a critical floor must not refuse a strand"
     assert not [
-        ev for ev in protocol.list_pending(inbox) if ev.get("spawn_immediate")
-    ], "a refused spawn must not stay dispatchable"
+        ev for ev in (protocol._read_event(f) for f in sorted(inbox.glob("*.md")))
+        if ev and ev.get("source") == "spawn_queued"
+    ], "nothing announces a queue that no longer exists"
 
 
-def test_low_quota_floor_queues_once_then_starts_when_the_floor_clears(
+def test_a_low_quota_floor_starts_the_spawn_on_the_first_tick(
     tmp_path, monkeypatch,
 ):
-    """`low` is FIFO backpressure, not a refusal. The event stays pending, one
-    `spawn_queued` event tells the parent why nothing is happening, and the
-    *next* tick that reads a clear floor starts the child — no re-dispatch by
-    the parent, no second announcement. Re-announcing every tick is the
-    failure mode this shape invites: a strand queued behind a week-long quota
-    dip would otherwise post a queue notice every ten seconds."""
+    """`low` used to be FIFO backpressure — the child waited for a tick that
+    read a clear floor. It waits for nothing now: six ticks of `low` start it
+    on the first, and the parent is told nothing because there is nothing to
+    tell."""
     started, inbox = _quota_admission_loop(
-        tmp_path, monkeypatch, ["low", "low", None], ticks=6,
+        tmp_path, monkeypatch, ["low"], ticks=6,
     )
 
-    assert len(started) == 1, "the child must start once the floor clears"
-    # Read every event on disk, not `list_pending`: a `spawn_queued` event is
-    # a wake for the parent, so the loop dispatches and *completes* it in the
-    # same run — filtering by pending status would count zero and pass this
-    # test for the wrong reason if the notice stopped being emitted at all.
-    queued = [
+    assert len(started) == 1
+    assert not [
         ev for ev in (protocol._read_event(f) for f in sorted(inbox.glob("*.md")))
         if ev and ev.get("source") == "spawn_queued"
     ]
-    assert len(queued) == 1, f"expected exactly one queue notice, got {queued}"
-    assert queued[0]["spawn_parent_run_id"] == "run-parent"
 
 
 def test_a_submitted_child_never_enters_the_admission_decision(
@@ -7902,9 +7855,9 @@ def test_a_submitted_child_never_enters_the_admission_decision(
     asking for anything* — it is parked on `brnrd await` waiting for its
     parent. Under the retired numeric pool it still consumed a slot, so a
     parent reviewing three submitted children could not dispatch a fourth.
-    Admission reads the quota floor and nothing about live children at all,
-    which is what makes that true; this pins it against a future that
-    reintroduces a headcount."""
+    Admission reads nothing about live children at all (nor, since
+    2026-09-18, about quota), which is what makes that true; this pins it
+    against a future that reintroduces a headcount."""
     daemon._register_run_control(
         "evt-submitted", "run-parent", parent_conversation_key="cloud:1:",
     )
@@ -9820,7 +9773,7 @@ def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path, mon
         outbox_dir, inbox_dir, "evt-1", task, phase="running",
     )
     assert _read_facet()["status"] == "unimplemented"
-    assert _read_facet()["spawn_pool"] == {"floor": None, "queued": 0}
+    assert _read_facet()["spawn_pool"] == {"floor": None}
 
     # brr_dir given, nobody else present → affirmative-absent; spawn_pool
     # unchanged (still nothing accepted).
@@ -9829,7 +9782,7 @@ def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path, mon
         brr_dir=brr_dir,
     )
     assert _read_facet()["status"] == "absent"
-    assert _read_facet()["spawn_pool"] == {"floor": None, "queued": 0}
+    assert _read_facet()["spawn_pool"] == {"floor": None}
 
     # A sibling registers itself (a concurrent spawn, an ad-hoc session) →
     # the sibling-list facet goes known, self excluded by run_id — but
@@ -9846,107 +9799,9 @@ def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path, mon
     facet = _read_facet()
     assert facet["status"] == "known"
     assert "fix the frontend build" in facet["summary"]
-    assert facet["spawn_pool"] == {"floor": None, "queued": 0}
+    assert facet["spawn_pool"] == {"floor": None}
 
 
-def test_write_live_portal_state_spawn_pool_counts_quota_queued(tmp_path, monkeypatch):
-    """``queued`` is what a resident reads to learn "my dispatch is real, it
-    is waiting on quota" — the one fact the numeric-headroom projection this
-    replaced could never carry, because a queued spawn was indistinguishable
-    from a slot nobody had claimed. Two spawns deferred by a low floor, both
-    still pending, neither started."""
-    brr_dir = tmp_path / ".brr"
-    outbox_dir = brr_dir / "outbox" / "evt-1"
-    inbox_dir = brr_dir / "inbox"
-    inbox_dir.mkdir(parents=True, exist_ok=True)
-    task = Run(id="run-self", event_id="evt-1", body="", source="telegram")
-
-    first = protocol.create_event(
-        inbox_dir, "spawn", "one", spawn_immediate=True,
-        spawn_quota_queued=True,
-    )
-    protocol.create_event(
-        inbox_dir, "spawn", "two", spawn_immediate=True,
-        spawn_quota_queued=True,
-    )
-
-    daemon._write_live_portal_state(
-        outbox_dir, inbox_dir, "evt-1", task, phase="running",
-        brr_dir=brr_dir,
-    )
-    payload = json.loads(
-        (outbox_dir / "portal-state.json").read_text(encoding="utf-8")
-    )
-    spawn_pool = payload["resources"]["coexisting_runs"]["spawn_pool"]
-    assert spawn_pool == {"floor": None, "queued": 2}
-
-    # One of them finishes — the count drops immediately.
-    protocol.set_status({"id": first.stem, "_path": first}, "done")
-    daemon._write_live_portal_state(
-        outbox_dir, inbox_dir, "evt-1", task, phase="running",
-        brr_dir=brr_dir,
-    )
-    payload = json.loads(
-        (outbox_dir / "portal-state.json").read_text(encoding="utf-8")
-    )
-    spawn_pool = payload["resources"]["coexisting_runs"]["spawn_pool"]
-    assert spawn_pool == {"floor": None, "queued": 1}
-
-
-def test_write_live_portal_state_spawn_pool_queued_excludes_a_started_spawn(tmp_path):
-    """The regression the projection invited. ``spawn_quota_queued`` is a
-    *once* guard — stamped the tick a low floor defers a spawn, deliberately
-    never cleared, so a spawn that waits three ticks still emits exactly one
-    ``spawn_queued`` event. That makes it useless as a state: ``list_pending``
-    returns ``processing`` events too (a running spawn survives its own
-    ``set_status(..., "processing")`` write), so counting the flag alone
-    reported a child that queued once and has been *running* for an hour as
-    still waiting — and a resident reading ``queued: 1`` while its strand is
-    three commits deep has been told the opposite of what is true.
-
-    Status answers "is it still waiting"; the flag only answers "did it ever
-    wait". Both events below carry the flag; only the pending one is queued."""
-    brr_dir = tmp_path / ".brr"
-    outbox_dir = brr_dir / "outbox" / "evt-1"
-    inbox_dir = brr_dir / "inbox"
-    inbox_dir.mkdir(parents=True, exist_ok=True)
-    task = Run(id="run-self", event_id="evt-1", body="", source="telegram")
-
-    still_waiting = protocol.create_event(
-        inbox_dir, "spawn", "waiting", spawn_immediate=True,
-        spawn_quota_queued=True,
-    )
-    started = protocol.create_event(
-        inbox_dir, "spawn", "running now", spawn_immediate=True,
-        spawn_quota_queued=True,
-    )
-    protocol.set_status({"id": started.stem, "_path": started}, "processing")
-
-    daemon._write_live_portal_state(
-        outbox_dir, inbox_dir, "evt-1", task, phase="running", brr_dir=brr_dir,
-    )
-    payload = json.loads(
-        (outbox_dir / "portal-state.json").read_text(encoding="utf-8")
-    )
-    assert payload["resources"]["coexisting_runs"]["spawn_pool"]["queued"] == 1
-
-    # The once-guard survives on the started event — which is exactly why the
-    # status filter has to exist rather than the flag being cleared on admit.
-    running = protocol._read_event(started)
-    assert running["spawn_quota_queued"] is True
-    assert running["status"] == "processing"
-
-    # The last waiter starting takes the count to zero, not to one.
-    protocol.set_status(
-        {"id": still_waiting.stem, "_path": still_waiting}, "processing",
-    )
-    daemon._write_live_portal_state(
-        outbox_dir, inbox_dir, "evt-1", task, phase="running", brr_dir=brr_dir,
-    )
-    payload = json.loads(
-        (outbox_dir / "portal-state.json").read_text(encoding="utf-8")
-    )
-    assert payload["resources"]["coexisting_runs"]["spawn_pool"]["queued"] == 0
 
 
 def test_write_live_portal_state_spawn_pool_floor_unknown_without_quota(tmp_path, monkeypatch):
@@ -9970,7 +9825,7 @@ def test_write_live_portal_state_spawn_pool_floor_unknown_without_quota(tmp_path
         (outbox_dir / "portal-state.json").read_text(encoding="utf-8")
     )
     spawn_pool = payload["resources"]["coexisting_runs"]["spawn_pool"]
-    assert spawn_pool == {"floor": None, "queued": 0}
+    assert spawn_pool == {"floor": None}
 
 
 def test_write_live_portal_state_projects_owned_children_from_run_controls(tmp_path):

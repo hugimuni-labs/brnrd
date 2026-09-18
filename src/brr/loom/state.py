@@ -917,12 +917,16 @@ def read_beads(
     position; ``GET /loom/page/bead?run=&n=`` takes it). ``places`` are repo
     places, ``home_places`` the account home's (:func:`row_paths`);
     ``place_kind`` is :func:`place_kind`. ``items`` are the warp/goal ids the
-    act touched (:func:`bead_items`)."""
+    act touched (:func:`bead_items`). ``chunks`` are the read ranges / write
+    spans :func:`brr.hooks.record_boundary` recorded on the row, straight
+    through — no aggregation, no relativizing, the same additive treatment
+    ``items`` got in #2004; absent on the row reads as ``[]`` here too."""
     out = []
     for index, row in enumerate(rows):
         ctx = row.get("ctx") if isinstance(row.get("ctx"), dict) else {}
         detail = row.get("detail") if isinstance(row.get("detail"), str) else ""
         places, homes = row_paths(row, where)
+        chunks = row.get("chunks")
         out.append({
             "n": first_n + index if first_n is not None else None,
             "at": row.get("at"),
@@ -935,6 +939,7 @@ def read_beads(
             "detail": detail[:DETAIL_CHARS] or None,
             "topics": match_topics(compiled, places=places, text=detail, run_id=run_id),
             "items": bead_items(row, where, homes),
+            "chunks": chunks if isinstance(chunks, list) else [],
         })
     return out
 
@@ -1602,27 +1607,44 @@ def build(repo_root: Path | str, account_home: Path | str | None, *, now: object
         lambda: read_cloth(brr_dir, home, compiled, live, (hud or {}).get("strands") or [], where, repo_label),
         {"rows": []},
     )
+    from . import dungeon
+
+    tree = _safe(
+        lambda: read_tree(brr_dir, where, compiled, beads, cloth, now_epoch),
+        {"repo": [], "places": [], "home": {"places": []}},
+    )
     warp = _safe(lambda: read_warp(home), {"goals": [], "items": []})
+    warp = _safe(lambda: dungeon.enrich_warp(warp, home, tree), warp)
     footprints = _safe(lambda: warp_footprints(brr_dir, where, live, cloth), {})
     warp = _safe(lambda: apply_warp_footprints(warp, footprints), warp)
+    run_id = live.run_id if live is not None else None
+    if shuttle is not None:
+        # design-the-dungeon.md §3/§5: the room the actor stands in.
+        shuttle = dict(shuttle)
+        shuttle["place"] = _safe(lambda: dungeon.shuttle_place(shuttle, run_id, warp, beads), None)
+    run_facet = _safe(lambda: read_run(live, now_epoch), None)
+    seat_shell = (run_facet or {}).get("shell") if isinstance(run_facet, dict) else None
+    outbox_dir = live.outbox_dir if live is not None else None
     return {
         "at": _iso(now_epoch),
         "beat_ms": BEAT_MS,
         "repo": repo_label,
         "shuttle": shuttle,
-        "run": _safe(lambda: read_run(live, now_epoch), None),
+        "run": run_facet,
         "hud": hud,
         "heddles": _safe(lambda: read_heddles(compiled, live.portal if live else None), []),
         "warp": warp,
         "beads": beads,
         "cloth": cloth,
-        "tree": _safe(
-            lambda: read_tree(brr_dir, where, compiled, beads, cloth, now_epoch),
-            {"repo": [], "places": [], "home": {"places": []}},
-        ),
+        "tree": tree,
         "bench": _safe(lambda: read_bench(home), {"folds": []}),
+        # design-the-dungeon.md §5 — the dungeon's facts.
+        "fuel": _safe(lambda: dungeon.read_fuel(brr_dir, outbox_dir, seat_shell, now_epoch), {"buckets": []}),
+        "pack": _safe(lambda: dungeon.read_pack(brr_dir, run_id, hud), None),
+        "relics": _safe(lambda: dungeon.read_relics(outbox_dir), []),
     }
 
 
 #: The contract's top-level keys, in order (the tests pin them).
-KEYS = ("at", "beat_ms", "repo", "shuttle", "run", "hud", "heddles", "warp", "beads", "cloth", "tree", "bench")
+KEYS = ("at", "beat_ms", "repo", "shuttle", "run", "hud", "heddles", "warp", "beads", "cloth", "tree", "bench",
+        "fuel", "pack", "relics")

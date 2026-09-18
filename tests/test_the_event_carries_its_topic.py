@@ -658,6 +658,169 @@ def test_record_boundary_fills_place_for_a_shell_call(_tree, tmp_path, monkeypat
     assert "place" in lit.matched_by
 
 
+# ── the chunk a boundary read or wrote (Phase A) ─────────────────────
+
+
+def _boundary_ctx(run_dir):
+    ctx = hooks.HookContext.__new__(hooks.HookContext)
+    ctx.boot_score_path = run_dir / "boot-score.json"
+    ctx.repo_dir = None
+    return ctx
+
+
+def test_chunk_records_a_reads_offset_and_limit(_tree, tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    ctx = _boundary_ctx(run_dir)
+    payload = {
+        "tool_name": "Read",
+        "tool_input": {"file_path": str(_tree / "src/brr/x.py"), "offset": 40, "limit": 20},
+        "cwd": str(_tree),
+    }
+    hooks.record_boundary(ctx, hooks.PHASE_POST_TOOL, {}, payload)
+    (row,) = _jsonl(run_dir / hooks.BOUNDARIES_NAME)
+    assert row["chunks"] == [
+        {"path": str(_tree / "src/brr/x.py"), "from": 40, "to": 59, "kind": "read"},
+    ]
+
+
+def test_chunk_names_a_whole_file_read_explicitly_never_1_to_n(_tree, tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    ctx = _boundary_ctx(run_dir)
+    payload = {
+        "tool_name": "Read",
+        "tool_input": {"file_path": str(_tree / "src/brr/x.py")},
+        "cwd": str(_tree),
+    }
+    hooks.record_boundary(ctx, hooks.PHASE_POST_TOOL, {}, payload)
+    (row,) = _jsonl(run_dir / hooks.BOUNDARIES_NAME)
+    assert row["chunks"] == [{"path": str(_tree / "src/brr/x.py"), "whole": True, "kind": "read"}]
+
+
+def test_chunk_collapses_a_greps_matched_lines_into_ranges(_tree, tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    ctx = _boundary_ctx(run_dir)
+    response = (
+        f"{_tree / 'src/brr/x.py'}:12:def foo():\n"
+        f"{_tree / 'src/brr/x.py'}:13:    pass\n"
+        f"{_tree / 'src/brr/x.py'}:14:\n"
+        f"{_tree / 'src/brr/x.py'}:40:def bar():\n"
+    )
+    payload = {
+        "tool_name": "Grep",
+        "tool_input": {"pattern": "def ", "path": str(_tree / "src/brr/x.py"), "output_mode": "content", "-n": True},
+        "tool_response": response,
+        "cwd": str(_tree),
+    }
+    hooks.record_boundary(ctx, hooks.PHASE_POST_TOOL, {}, payload)
+    (row,) = _jsonl(run_dir / hooks.BOUNDARIES_NAME)
+    assert row["chunks"] == [
+        {"path": str(_tree / "src/brr/x.py"), "from": 12, "to": 14, "kind": "read"},
+        {"path": str(_tree / "src/brr/x.py"), "from": 40, "to": 40, "kind": "read"},
+    ]
+
+
+def test_chunk_names_no_range_when_grep_reported_no_line_numbers(_tree, tmp_path):
+    """`output_mode: "files_with_matches"` names files, not lines — no
+    invented range, no `chunks` key at all."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    ctx = _boundary_ctx(run_dir)
+    payload = {
+        "tool_name": "Grep",
+        "tool_input": {"pattern": "def ", "path": str(_tree), "output_mode": "files_with_matches"},
+        "tool_response": str(_tree / "src/brr/x.py") + "\n",
+        "cwd": str(_tree),
+    }
+    hooks.record_boundary(ctx, hooks.PHASE_POST_TOOL, {}, payload)
+    (row,) = _jsonl(run_dir / hooks.BOUNDARIES_NAME)
+    assert "chunks" not in row
+
+
+def test_chunk_reads_a_seds_n_address_range_from_a_shell_call(_tree, tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    ctx = _boundary_ctx(run_dir)
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {"command": "sed -n '1,5p' src/brr/x.py"},
+        "cwd": str(_tree),
+    }
+    hooks.record_boundary(ctx, hooks.PHASE_POST_TOOL, {}, payload)
+    (row,) = _jsonl(run_dir / hooks.BOUNDARIES_NAME)
+    assert row["chunks"] == [
+        {"path": str(_tree / "src/brr/x.py"), "from": 1, "to": 5, "kind": "read"},
+    ]
+
+
+def test_chunk_an_edit_carries_changed_true_with_no_invented_span(_tree, tmp_path):
+    """The span an Edit touched is not knowable at this hook (no
+    read-before-write) — `changed: true`, never a guessed `0` or a guessed
+    range."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    ctx = _boundary_ctx(run_dir)
+    payload = {
+        "tool_name": "Edit",
+        "tool_input": {
+            "file_path": str(_tree / "src/brr/x.py"),
+            "old_string": "a",
+            "new_string": "b",
+        },
+        "cwd": str(_tree),
+    }
+    hooks.record_boundary(ctx, hooks.PHASE_POST_TOOL, {}, payload)
+    (row,) = _jsonl(run_dir / hooks.BOUNDARIES_NAME)
+    assert row["chunks"] == [{"path": str(_tree / "src/brr/x.py"), "changed": True, "kind": "write"}]
+    assert "from" not in row["chunks"][0] and "to" not in row["chunks"][0]
+
+
+def test_chunk_marks_a_shell_sed_i_mutation_changed_with_no_span(_tree, tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    ctx = _boundary_ctx(run_dir)
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {"command": "sed -i '' 's/a/b/' src/brr/x.py"},
+        "cwd": str(_tree),
+    }
+    hooks.record_boundary(ctx, hooks.PHASE_POST_TOOL, {}, payload)
+    (row,) = _jsonl(run_dir / hooks.BOUNDARIES_NAME)
+    assert row["chunks"] == [{"path": str(_tree / "src/brr/x.py"), "changed": True, "kind": "write"}]
+
+
+def test_chunk_reads_a_just_landed_commits_own_hunks_via_git_diff(tmp_path):
+    """"the hunks are derivable from git diff and are cheap; do that one
+    properly" — a real two-commit repo, a real `git commit` boundary, hunks
+    read back from `git show`, never hand-written."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    run = lambda *args: subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    run("init", "-q")
+    run("config", "user.email", "a@b.c")
+    run("config", "user.name", "a")
+    f = root / "x.py"
+    f.write_text("line1\nline2\nline3\n", encoding="utf-8")
+    run("add", "x.py")
+    run("commit", "-q", "-m", "init")
+    f.write_text("line1\nline2 changed\nline3\nline4\n", encoding="utf-8")
+    run("add", "x.py")
+    run("commit", "-q", "-m", "change")
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    ctx = _boundary_ctx(run_dir)
+    payload = {"tool_name": "Bash", "tool_input": {"command": "git commit -q -m change"}, "cwd": str(root)}
+    hooks.record_boundary(ctx, hooks.PHASE_POST_TOOL, {}, payload)
+    (row,) = _jsonl(run_dir / hooks.BOUNDARIES_NAME)
+    assert row["chunks"] == [
+        {"path": str(root / "x.py"), "from": 2, "to": 2, "kind": "write"},
+        {"path": str(root / "x.py"), "from": 4, "to": 4, "kind": "write"},
+    ]
+
+
 # ── the HUD's two keys ───────────────────────────────────────────────
 
 
