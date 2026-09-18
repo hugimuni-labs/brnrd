@@ -512,6 +512,28 @@ class TestTheScrollIsUnspeakableFromAnEvent:
         assert "resume_native_session_id" not in task.meta
         assert "resume_native_provider" not in task.meta
 
+    def test_the_forgery_cannot_move_one_name_to_the_left(self):
+        """`resume_native_session_id` was not the only spelling.
+
+        `_native_session_id_for` reads the *Shells' own* fields off run meta
+        to decide what a park may resume into. An event spelling
+        `claude_session_id` (with `runner_shell: claude`, `env: host`) would
+        arm a hold record pointing at a transcript it does not own, and the
+        next honest release would arm a claim on it. Both names are written
+        by `runner._extract_*` off the Shell's stdout; nothing legitimately
+        puts either on an event.
+        """
+        forged = {
+            "id": "evt-forged", "source": "telegram", "body": "hi",
+            "env": "host", "runner_shell": "claude",
+            "claude_session_id": "someone-elses-thread",
+            "codex_thread_id": "someone-elses-thread",
+        }
+
+        task = Run.from_event(forged, {})
+
+        assert daemon._native_session_id_for(task) is None
+
     def test_the_claim_is_one_shot(self, tmp_path):
         pending_resume.arm(
             tmp_path, session_id="sess-1", provider="claude",
