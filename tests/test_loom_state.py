@@ -351,7 +351,17 @@ def test_warp_state_is_derived(machine):
     assert by["w-3"]["taken"] == "run-260922-0930-bbbb" and by["w-4"]["taken"] is None
     assert by["w-2"] == {"id": "w-2", "type": "decision", "title": "Two", "topics": ["the-loom"],
                          "needs": ["w-1"], "state": "ready", "taken": None,
-                         "visited_at": None, "footprints": []}
+                         # design-the-dungeon.md §5
+                         "visited_at": None, "opens": [], "stake": None, "receipt": None, "footprints": []}
+    assert by["w-4"]["opens"] == ["w-3"]          # the reverse edge: deciding w-4 opens w-3
+
+
+def test_the_dungeon_keys_ride_the_contract(machine):
+    out = state.build(machine["repo"], machine["home"], now=NOW)
+    assert out["fuel"] == {"buckets": []}         # no usage snapshot in this machine ⇒ no vial, no zero
+    assert out["pack"] is None                    # no wake manifest ⇒ no pack
+    assert out["relics"] == []
+    assert out["shuttle"]["place"] in ("shed", "archive", "forge", "wire", "crew", "clock") or out["shuttle"]["place"].startswith("w-")
 
 
 def test_beads_carry_places_and_topics(machine):
@@ -569,3 +579,74 @@ def test_beads_and_warp_items_join_on_bead_touches(tmp_path):
         {"run": run_id, "n": 0, "at": iso(NOW - 200), "act": "orient"},
         {"run": run_id, "n": 1, "at": iso(NOW - 100), "act": "reply"},
     ]
+
+
+def test_beads_carry_chunks_straight_through(tmp_path):
+    """Phase A: `record["chunks"]` (`hooks.record_boundary`) rides `beads[]`
+    unchanged — no aggregation, no relativizing, the same additive
+    treatment `items` got in #2004; a row that never carried one reads back
+    as `[]`, never a missing key."""
+    repo = tmp_path / "repo"
+    home = tmp_path / "home"
+    brr = repo / ".brr"
+    run_id = "run-260924-0900-chunk1"
+    outbox = brr / "outbox" / "evt-chunk"
+def test_enrich_warp_and_footprints_both_land_in_merge_order(tmp_path):
+    """#1996 × #2004's seam: ``dungeon.enrich_warp`` (``opens`` · ``stake`` ·
+    ``receipt`` and an unconditional ``visited_at``) must run *before*
+    :func:`state.apply_warp_footprints` (``footprints`` and a newer-wins
+    ``visited_at``) — reversed, ``enrich_warp``'s own, older read would
+    clobber the footprint's later touch instead of losing to it. Through the
+    real :func:`state.build`, both fields' contributions survive together on
+    one item."""
+    repo = tmp_path / "repo"
+    home = tmp_path / "home"
+    brr = repo / ".brr"
+    run_id = "run-260924-0900-w20xx"
+    outbox = brr / "outbox" / "evt-w20"
+
+    _write(home / "shuttle.json", json.dumps({
+        "key": "acc", "state": "awake", "why": "event_dispatched", "run_id": run_id,
+        "repo_root": str(repo), "conversation_key": "cloud:x", "since": iso(NOW - 60),
+        "transitions": [],
+    }))
+    _run_md(brr, run_id, outbox, transitions=_transitions(NOW - 300))
+    _write(outbox / "portal-state.json", json.dumps({"run": {"id": run_id}}))
+
+    x_path = repo / "src" / "x.py"
+    _jsonl(brr / "runs" / run_id / "boundaries.jsonl", [
+        {"at": iso(NOW - 200), "act": "orient", "cwd": str(repo),
+         "place": {"path": str(x_path), "paths": [str(x_path)]},
+         "chunks": [{"path": str(x_path), "from": 1, "to": 20, "kind": "read"}]},
+        {"at": iso(NOW - 100), "act": "probe", "detail": "ls -la", "cwd": str(repo)},
+    ])
+
+    out = state.build(repo, home, now=NOW)
+    assert [b["chunks"] for b in out["beads"]] == [
+        [{"path": str(x_path), "from": 1, "to": 20, "kind": "read"}],
+        [],
+    ]
+    _write(home / "surface" / "warp" / "w-20.md", "# Twenty\n\ntype: action\nstake: the merge order itself\n")
+    _write(home / "surface" / "warp" / "w-21.md", "# Twenty-one\n\ntype: action\nneeds: w-20\n")
+
+    w20_path = home / "surface" / "warp" / "w-20.md"
+    _jsonl(brr / "runs" / run_id / "boundaries.jsonl", [
+        # a direct touch of w-20's own file: enrich_warp's only source, at NOW-200
+        {"at": iso(NOW - 200), "act": "orient", "cwd": str(repo),
+         "place": {"path": str(w20_path), "paths": [str(w20_path)]}},
+        # a later bead naming w-20 by detail only: footprints sees it, enrich_warp's tree does not
+        {"at": iso(NOW - 100), "act": "reply", "detail": "reply: w-20 unblocked", "cwd": str(repo)},
+    ])
+
+    out = state.build(repo, home, now=NOW)
+    by = {i["id"]: i for i in out["warp"]["items"]}
+    w20 = by["w-20"]
+    assert w20["stake"] == "the merge order itself"  # enrich_warp field, survives past apply_warp_footprints
+    assert w20["opens"] == ["w-21"]                  # enrich_warp field, survives
+    assert w20["receipt"] is None                    # enrich_warp field, not joined yet
+    assert w20["footprints"] == [                     # apply_warp_footprints field, survives
+        {"run": run_id, "n": 0, "at": iso(NOW - 200), "act": "orient"},
+        {"run": run_id, "n": 1, "at": iso(NOW - 100), "act": "reply"},
+    ]
+    # the newer of the two sources — enrich_warp alone would freeze this at NOW-200
+    assert w20["visited_at"] == iso(NOW - 100)
