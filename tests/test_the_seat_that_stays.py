@@ -165,7 +165,17 @@ def test_a_telegram_message_resumes_a_seat_parked_on_the_schedule_thread(tmp_pat
 
 def test_a_tick_accumulated_under_a_wall_is_rekeyed_when_the_wall_lifts(tmp_path):
     """A wall's ticks un-defer on the measured refill; the one that leads the
-    resumed dispatch must still boot on the seat's thread."""
+    resumed dispatch must still boot on the seat's thread.
+
+    brnrd#2022 split the two facts this used to assert together. Routing
+    home is true of every letter in the drawer, so the re-key stays. The
+    *scroll* is not: this release has a releasing event (``evt-msg``) and
+    that event is the carrier. Stamping the drawer as well wrote N claims on
+    one transcript, each outliving the release on disk — measured on
+    ``evt-…-2jb8``, a correspondent's message that came out of a drawer a
+    day later still carrying a session id and was retried as a fresh
+    ``claude --resume``.
+    """
     _park(tmp_path, condition=resource_hold.RESUME_REFILL)
     tick = _target(tmp_path, eid="evt-tick", source="schedule", conversation_key=TICK_CONV)
     assert daemon._handle_resource_held_events([tick], None) == []
@@ -183,7 +193,9 @@ def test_a_tick_accumulated_under_a_wall_is_rekeyed_when_the_wall_lifts(tmp_path
     on_disk = protocol._read_event(tick.inbox_dir / "evt-tick.md")
     assert on_disk.get("defer_reason") is None
     assert on_disk.get("conversation_key") == SEAT_CONV
-    assert on_disk.get("resume_native_session_id") == WARM
+    assert on_disk.get("resume_native_session_id") is None
+    # The releaser keeps it — the fix cools the drawer, not the resume.
+    assert msg.event["resume_native_session_id"] == WARM
 
 
 def test_a_correspondent_from_another_thread_resumes_and_keeps_its_own_key(tmp_path):
