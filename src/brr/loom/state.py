@@ -1241,7 +1241,11 @@ def trail(brr_dir: Path, run_id: str, where: Where) -> list[dict[str, Any]]:
     if not run_id or "/" in run_id or run_id.startswith("."):
         return []
     places = scan_places(brr_dir / "runs" / run_id / "boundaries.jsonl", where)
-    rows = [(key[1], seen[0]) for key, seen in places.items() if key[0] == "repo" and seen[0] is not None]
+    rows = [
+        (key[1], seen[0]) for key, seen in places.items()
+        if key[0] == "repo" and seen[0] is not None
+        and not str(key[1]).startswith(TREE_SKIP_PREFIXES)
+    ]
     rows.sort(key=lambda kv: (-kv[1], kv[0]))
     return [{"path": path, "at": _iso(at)} for path, at in rows[:TRAIL_PLACES]]
 
@@ -1303,6 +1307,60 @@ def _scan(
         return dict(scan.places), scan.beads, dict(scan.items)
 
 
+#: Repo paths no reader wants on the island. The scene filtered
+#: ``node_modules`` in its own layout, which is the wrong layer — every
+#: reader had to re-implement it, and none of them filtered the rest. Live
+#: 2026-09-18: ``.venv/bin/python`` was the **hottest row in the whole tree**
+#: (heat 0.986, 18 knots), because a ``python - <<'PY'`` heredoc names its own
+#: interpreter as a place. The hottest thing on the island was the interpreter.
+TREE_SKIP_PREFIXES = (".venv/", "node_modules/", ".git/", "venv/")
+
+#: path -> ((mtime_ns, size), line count). A feed build on the ~10s beat must
+#: not re-read 500 files; a file whose stat has not moved has not changed its
+#: line count either.
+_LINE_COUNT_CACHE: dict[str, tuple[tuple[int, int], int]] = {}
+
+
+def _line_count(roots: tuple[Path, ...], place: str) -> int | None:
+    """The file's current line count, for the chunk ground to normalise against.
+
+    A chunk says "lines 7845–7890 of hooks.py"; without the file's own height
+    that is a span with no scale — the whole point of a column is that a slab
+    lands *somewhere in the file*, and 7845 means nothing until you know
+    whether the file ends at 7900 or 17000. Best-effort and stat-cached:
+    unreadable, binary-ish or missing yields ``None``, never a guessed 0.
+    """
+    path = None
+    st = None
+    for root in roots:
+        try:
+            candidate = root / place
+            stat_result = candidate.stat()
+        except OSError:
+            continue
+        if candidate.is_file():
+            path, st = candidate, stat_result
+            break
+    if path is None or st is None:
+        return None
+    key = (st.st_mtime_ns, st.st_size)
+    cached = _LINE_COUNT_CACHE.get(place)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    if st.st_size > 8_000_000:
+        return None
+    try:
+        with path.open("rb") as fh:
+            blob = fh.read()
+    except OSError:
+        return None
+    if b"\0" in blob[:4096]:
+        return None
+    count = blob.count(b"\n") + (1 if blob and not blob.endswith(b"\n") else 0)
+    _LINE_COUNT_CACHE[place] = (key, count)
+    return count
+
+
 def read_tree(
     brr_dir: Path,
     where: Where,
@@ -1343,18 +1401,27 @@ def read_tree(
                 knots.setdefault(key, set()).add(run_id)
 
     def tree(kind: str) -> list[dict[str, Any]]:
-        rows = [(key[1], at) for key, at in last.items() if key[0] == kind]
+        rows = [
+            (key[1], at) for key, at in last.items()
+            if key[0] == kind
+            and not str(key[1]).startswith(TREE_SKIP_PREFIXES)
+        ]
         ordered = sorted(rows, key=lambda kv: (-(kv[1] or 0.0), kv[0]))[:TREE_MAX]
-        return [
-            {
+        out: list[dict[str, Any]] = []
+        for place, at in ordered:
+            row: dict[str, Any] = {
                 "path": place,
                 "heat": heddles_mod.brightness(at, now_epoch),
                 "last": _iso(at),
                 "knots": len(knots.get((kind, place), ())),
                 "topics": match_topics(compiled, places=[place]) if kind == "repo" else [],
             }
-            for place, at in ordered
-        ]
+            if kind == "repo":
+                lines = _line_count(where.roots, place)
+                if lines is not None:
+                    row["lines"] = lines
+            out.append(row)
+        return out
 
     repo = tree("repo")
     return {"repo": repo, "places": repo, "home": {"places": tree("home")}}
