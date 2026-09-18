@@ -332,6 +332,79 @@ class TestDrainOutbox:
         assert protocol.list_pending(inbox) == []
         assert not (outbox / "ping.md").exists()
 
+    def test_gate_naming_the_conversations_own_platform_is_refused(
+        self, tmp_path, monkeypatch,
+    ):
+        """Two gates speak the same app and only one of them is the person.
+
+        This run's conversation is ``cloud:telegram:155783668:`` — the
+        maintainer is on Telegram, reached through the *cloud* gate. Writing
+        ``gate: telegram`` names the platform and misses him: the local gate
+        delivers to its own default destination.
+
+        Live 2026-09-16..18: six chatless sends written that way — a night of
+        merge announcements and status — reached a second collaborator's DM,
+        each closing ``status: delivered``, because they were. Refuse at
+        synthesis and name the lane that works.
+        """
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        inbox.mkdir(parents=True)
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        (outbox / "ping.md").write_text(
+            "---\ngate: telegram\n---\nthe night's report\n")
+        monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir,
+            conversation_key="cloud:telegram:155783668:",
+            event_id="evt-A",
+        )
+        task = types.SimpleNamespace(id="task-A", meta={})
+        daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        assert protocol.list_done(inbox, "telegram") == []
+        notices = daemon._read_outbox_notices(outbox)
+        assert any(
+            n["kind"] == "refused"
+            and "already reaches 'telegram' through the 'cloud' gate" in n["text"]
+            for n in notices
+        ), notices
+
+    def test_gate_naming_that_platform_still_sends_when_it_is_addressed(
+        self, tmp_path, monkeypatch,
+    ):
+        """The refusal above is about an *ambiguous* send, not a forbidden one.
+
+        Naming the chat says "I mean that gate, and I mean this reader" — the
+        one case where reaching a different human through the standalone
+        transport is deliberate rather than a coincidence. It goes.
+        """
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        inbox.mkdir(parents=True)
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        (outbox / "ping.md").write_text(
+            "---\ngate: telegram\ntelegram_chat_id: 313725712\n---\n"
+            "a note to someone else\n")
+        monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir,
+            conversation_key="cloud:telegram:155783668:",
+            event_id="evt-A",
+        )
+        task = types.SimpleNamespace(id="task-A", meta={})
+        daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        done = protocol.list_done(inbox, "telegram")
+        assert len(done) == 1
+        assert str(done[0].get("telegram_chat_id")) == "313725712"
+
     def test_incapable_gate_with_no_addressing_is_refused_not_synthesized(
         self, tmp_path, monkeypatch,
     ):

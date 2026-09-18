@@ -680,6 +680,19 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     _save_state(brr_dir, state)
 
 
+def addressed(fm: dict[str, object]) -> bool:
+    """True when *fm* names the chat this send is for (a ``telegram_chat_id``).
+
+    The gate-owned half of "did the resident say where this goes". Without it
+    a send resolves to the gate's own default destination, which is the right
+    behaviour for a bound principal and the wrong one when the run's own
+    conversation already reaches that human through a different gate — see
+    ``daemon._conversation_gate_shadowed_by``.
+    """
+    value = fm.get("telegram_chat_id")
+    return value not in (None, "")
+
+
 def _deliver_responses(
     brr_dir: Path,
     inbox_dir: Path,

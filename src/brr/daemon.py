@@ -9185,6 +9185,32 @@ def _pr_body_close_keyword_refusal(gate: str, fm: dict, body: str) -> str:
     return closekeyword.render(findings, channel=closekeyword.PR_BODY.label)
 
 
+def _conversation_gate_shadowed_by(
+    conversation_key: str | None, gate: str,
+) -> str | None:
+    """The gate this run's own conversation runs through, when *gate* is that
+    conversation's **platform** rather than its carrier.
+
+    A conversation key is ``<gate>:<platform>:<id>:`` — e.g.
+    ``cloud:telegram:155783668:``: the maintainer is on Telegram, but this run
+    reaches him through the *cloud* gate, not the local ``telegram`` one. Two
+    gates speak the same app and only one of them is the person.
+
+    Live 2026-09-16..18: a night of status written `gate: telegram` — the word
+    matched the platform — went out through the local bot to its own default
+    chat, which was a second collaborator, while the run's conversation sat
+    one key away. Returns the carrying gate's name when that shadowing is what
+    is happening, ``None`` otherwise.
+    """
+    parts = [p for p in str(conversation_key or "").split(":") if p]
+    if len(parts) < 2:
+        return None
+    carrier, platform = parts[0], parts[1]
+    if carrier == gate or platform != gate:
+        return None
+    return carrier
+
+
 def _deliver_out_of_bound(
     emit: _WorkerEmit,
     task: Run,
@@ -9255,6 +9281,38 @@ def _deliver_out_of_bound(
                 kind="dropped",
                 lifetime="run",
             )
+        return False
+    shadowed = _conversation_gate_shadowed_by(emit.conversation_key, gate)
+    if shadowed is not None and not _gate_addressed(gate, fm):
+        # The ambiguity is in the names: `gate:` takes a *transport*, and the
+        # transport is usually called after the app the correspondent is on.
+        # So the most tempting value is the one that names the platform and
+        # misses the person. Refuse, and name both lanes — a silent reroute is
+        # how six messages reached the wrong reader before anyone noticed.
+        if message_path is not None:
+            message_store.transition(
+                message_path,
+                message_store.UNDELIVERABLE,
+                reason=(
+                    f"this run's conversation reaches {gate} through the "
+                    f"{shadowed!r} gate"
+                ),
+            )
+        _record_outbox_notice(
+            outbox_dir,
+            f"gate message refused: this run's conversation "
+            f"({emit.conversation_key}) already reaches {gate!r} through the "
+            f"{shadowed!r} gate — a plain outbox file (no frontmatter) goes "
+            f"there, and `event: <id>` replies to a pending one. `gate: "
+            f"{gate}` is the standalone {gate} transport and would deliver to "
+            f"its own default destination, which is a different reader. The "
+            f"message was NOT delivered. To mean that gate deliberately, "
+            f"address it (e.g. `telegram_chat_id:`).",
+            # A well-formed, deliverable target refused by policy, same shape
+            # as the #1205 refusal below.
+            kind="refused",
+            lifetime="run",
+        )
         return False
     if not _gate_can_send_unaddressed(gate) and not _gate_addressed(gate, fm):
         # #1205: the drawer the courier never opens. A gate that declares
