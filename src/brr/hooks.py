@@ -7906,12 +7906,41 @@ def _commit_chunks(root: Path | None) -> list[dict[str, Any]]:
             timeout=5,
         )
     except (OSError, subprocess.SubprocessError):
-        return []
+        return None
     if proc.returncode != 0:
-        return []
+        return None
+    return _parse_unified_zero(proc.stdout, root)
+
+
+def _is_write_tool(tool_name: object) -> bool:
+    """Whether *tool_name* is one of the file-write tools."""
+    if not isinstance(tool_name, str):
+        return False
+    name = tool_name.strip().lower().replace("-", "_").replace(".", "_")
+    return name in _WRITE_TOOL_NAMES
+
+
+def _git_can_see(root: Path | None, path: str) -> bool:
+    """Whether *path* lies inside *root*, i.e. git had its chance to speak.
+
+    A path git covers and did not report is a path that was *not written* —
+    that is the whole value of deriving writes from the diff. Only a path no
+    repo covers falls back to the interception guess.
+    """
+    if root is None:
+        return False
+    try:
+        Path(path).resolve().relative_to(root.resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _parse_unified_zero(stdout: str, root: Path) -> list[dict[str, Any]]:
+    """``--unified=0`` output -> write chunks with real spans, per file."""
     chunks: list[dict[str, Any]] = []
     current_path: str | None = None
-    for line in proc.stdout.splitlines():
+    for line in stdout.splitlines():
         if line.startswith("+++ "):
             raw = line[4:].strip()
             if raw == "/dev/null":
@@ -7936,6 +7965,62 @@ def _commit_chunks(root: Path | None) -> list[dict[str, Any]]:
         if len(chunks) >= SHELL_PLACE_PATHS_MAX:
             break
     return chunks
+
+
+def _dirty_chunks(
+    root: Path | None, paths: "list[str] | tuple[str, ...]",
+) -> list[dict[str, Any]] | None:
+    """The uncommitted hunks of *paths*, via ``git diff --unified=0``.
+
+    The maintainer's call, 2026-09-18: *"the writes are purely diff based, we
+    do most of the work in repos anyway, so we can derive that info from git,
+    without a need to engineer too much here."* He is right, and it makes the
+    data **better** rather than merely smaller: an intercepted write can only
+    ever say ``changed: true`` — there is no read-before-write on this hook —
+    while git knows the exact lines. A write stops being a flag and becomes a
+    band, the same shape a read already has.
+
+    Semantics, stated rather than implied: this is the file's *uncommitted
+    change set as of this act*, not the delta of this one act. Successive
+    edits therefore re-report an overlapping set that converges on the
+    commit's own hunks — which is correct for a reader that unions a file's
+    bands, and would be wrong for one that sums them. Nothing that draws
+    these sums them.
+
+    Tri-state on purpose. ``None`` means *git could not speak here* (no repo,
+    git missing, the command failed) and the caller must fall back to the
+    interception guess; ``[]`` means *git spoke and reported no write*, which
+    is a real answer and must not be overridden. Collapsing the two is how a
+    derived-data change quietly deletes data.
+    """
+    if root is None or not paths:
+        return None
+    inside: list[str] = []
+    try:
+        root_resolved = root.resolve()
+    except OSError:
+        return None
+    for path in paths:
+        try:
+            rel = Path(path).resolve().relative_to(root_resolved)
+        except (OSError, ValueError):
+            continue
+        inside.append(str(rel))
+    if not inside:
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "diff", "--unified=0", "--", *inside],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return _parse_unified_zero(proc.stdout, root)
 
 
 def record_boundary(
@@ -8103,7 +8188,20 @@ def record_boundary(
                 elif isinstance(raw_cmd, str):
                     command_text = raw_cmd
             if command_text and _SHELL_WRITE_RE.search(command_text):
+                # Git first, and interception only where git cannot see. A
+                # shell command does not say which of its paths it wrote, so
+                # the old arm marked *every* path `place` found — which is how
+                # `.venv/bin/python` (the interpreter that matched `python -`)
+                # and an outbox *directory* became writes. Git reports neither,
+                # so both artefacts end with the guess that produced them.
+                dirty = _dirty_chunks(repo_root, paths)
+                chunks.extend(dirty or ())
+                measured = {c["path"] for c in (dirty or ())}
                 for touched in paths:
+                    if dirty is not None and (
+                        touched in measured or _git_can_see(repo_root, touched)
+                    ):
+                        continue
                     chunks.append({"path": touched, "changed": True, "kind": "write"})
             if command_text and _GIT_COMMIT_RE.search(command_text):
                 chunks.extend(_commit_chunks(repo_root))
@@ -8112,7 +8210,15 @@ def record_boundary(
             if read_chunk is not None:
                 chunks.append(read_chunk)
             chunks.extend(_grep_read_chunks(first_name, first_input, first_response))
-            write_chunk = _tool_write_chunk(first_name, first_input, first_path)
+            dirty = _dirty_chunks(_repo_root_for(
+                cwd.strip() if isinstance(cwd, str) else None,
+                getattr(ctx, "repo_dir", None),
+            ), [first_path]) if _is_write_tool(first_name) else None
+            chunks.extend(dirty or ())
+            write_chunk = (
+                None if dirty
+                else _tool_write_chunk(first_name, first_input, first_path)
+            )
             if write_chunk is not None:
                 chunks.append(write_chunk)
     except Exception:  # noqa: BLE001 - the row never sinks a boundary
