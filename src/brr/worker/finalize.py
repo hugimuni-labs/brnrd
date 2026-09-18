@@ -32,6 +32,8 @@ def finalize(p: Prepared, b: Boundary) -> Finalized:
         return _finalize_completed(p, b)
     if b.kind == "hold":
         return _finalize_hold(p, b)
+    if b.kind == "halt":
+        return _finalize_halt(p, b)
     if b.kind == "stopped":
         return _finalize_stopped(p, b)
     if b.kind == "exhausted":
@@ -90,6 +92,32 @@ def _finalize_hold(p: Prepared, b: Boundary) -> Finalized:
             repo_root=repo_root,
         ),
         "held",
+    )
+
+
+def _finalize_halt(p: Prepared, b: Boundary) -> Finalized:
+    """``halt:`` — the seat's own ending (design-the-four-stops.md).
+
+    Shaped like ``_finalize_hold`` and landing somewhere else entirely: the
+    same worktree-preservation sequence, because in-flight edits must
+    survive an ending exactly as they survive a park, and then a
+    **terminal** status rather than ``held``. Nothing resumes a halted run;
+    the next message mints a new seat, which is precisely what makes
+    ending cheap enough to be allowed without an approval gate.
+    """
+    return Finalized(
+        daemon._finalize_halt(
+            p.emit, p.task, p.event, p.eid, p.runs_dir, p.env_backend, p.env_ctx,
+            p.branch_plan, p.cfg, p.inbox_dir, p.responses_dir, p.resp_path,
+            b.halt_spec or {}, conversation_key=p.task.conversation_key,
+            account_context=p.account_context,
+            account_home=(
+                account.context_home_root(p.account_context)
+                if p.account_context is not None else p.brr_dir
+            ),
+            repo_root=p.repo_root,
+        ),
+        "halted",
     )
 
 

@@ -31,6 +31,7 @@ from .. import await_verb
 from .. import config as conf
 from .. import conversations
 from .. import cut_verb
+from .. import halt_verb
 from .. import daemon
 from .. import hold_verb
 from .. import hooks as hooks_mod
@@ -134,6 +135,157 @@ def handle_config_change(f: OutboxFile) -> Handled:
                 stats["config_change"] = stats.get("config_change", 0) + 1
         daemon._retire_outbox_staging(fpath)
     return _handled(f, 'config_change', promoted)
+
+
+#: Keys the halt file carries for its own sake. Popped before the
+#: announcement falls through to the delivery rows, so what reaches
+#: ``gate``/``event`` is a plain reply and nothing downstream has to know
+#: this verb exists.
+_HALT_KEYS = ("halt", "reason", "carry", "resumable", "shell", "core")
+
+
+def handle_halt(f: OutboxFile) -> Handled:
+    """`halt:` — the seat ends (design-the-four-stops.md §The two verbs).
+
+    The only outbox verb that ends a seat rather than parking it, and the
+    reason it exists: every exit was closed, each for a good reason, and
+    together they built a seat that **cannot leave** — invisible, and
+    measured at 778,000 tokens re-read per boundary for a day and a half.
+
+    Shaped like ``handle_cut``, deliberately, because the precaution is the
+    same one: a declaration the resident writes, diffed against facts the
+    daemon already attests, bounced once with the diff named. What differs
+    is what it declares — not *what this stretch produced* but *why this
+    body ends, and what happens to the work*.
+
+    Also like ``cut:``, it **falls through**: the accepted halt pops its own
+    keys and hands the announcement to the delivery rows after it, so *"it
+    announces itself with its reason as a message"* rides the reply lane
+    that already works rather than a second one grown here.
+    """
+    fpath = f.path
+    fm = f.frontmatter
+    body = f.body
+    task = f.run
+    account_context = f.ctx.account_context
+    emit = f.ctx.emit
+    event_id = f.ctx.event_id
+    inbox_dir = f.ctx.inbox_dir
+    outbox_dir = f.ctx.outbox_dir
+    repo_root = f.ctx.repo_root
+    stats = f.ctx.stats
+    promoted = 0
+    halt_guard = daemon._OutboxEntryGuard(outbox_dir, fpath)
+    with halt_guard:
+        declaration, parse_error = halt_verb.parse_halt(fm)
+        if parse_error:
+            daemon._record_outbox_notice(
+                outbox_dir, f"halt dropped: {parse_error}",
+                kind="dropped", lifetime="run", source_file=fpath.name,
+            )
+            daemon._retire_outbox_staging(fpath)
+            return _handled(f, 'halt', promoted)
+        if daemon._is_strand(task.meta):
+            # A strand is a thought; the seat is a life. #1991's rule, at
+            # the one verb where confusing the two would end somebody
+            # else's run: a strand ends by finishing, and its produce
+            # reaches its parent through `submit:`, not by halting a seat
+            # it does not own.
+            daemon._record_outbox_notice(
+                outbox_dir,
+                "halt refused: a strand is a thought, not the seat — it ends "
+                "by finishing. `submit: true` attests your branch and report "
+                "to your parent; the parent's `stop:` releases you.",
+                kind="refused", lifetime="run", source_file=fpath.name,
+            )
+            daemon._retire_outbox_staging(fpath)
+            return _handled(f, 'halt', promoted)
+        pending_events = (
+            daemon._pending_events_for_agent(
+                inbox_dir, event_id,
+                strand=False,
+                account_context=account_context,
+                repo_label=task.meta.get("repo_label"),
+                observer_run_id=task.id,
+            )
+            if inbox_dir is not None else []
+        )
+        open_items = daemon._halt_open_items(
+            task,
+            pending_events=pending_events,
+            repo_root=repo_root,
+            outbox_dir=outbox_dir,
+        )
+        unnamed = daemon._halt_bounce_lines(declaration, open_items)
+        if unnamed:
+            bounces = int(task.meta.get("halt_bounces") or 0)
+            if bounces + 1 < daemon._HALT_BOUNCE_CAP:
+                task.meta["halt_bounces"] = bounces + 1
+                daemon._record_outbox_notice(
+                    outbox_dir,
+                    daemon._halt_bounce_notice(declaration, unnamed),
+                    kind="refused", lifetime="run", source_file=fpath.name,
+                )
+                daemon._retire_outbox_staging(fpath)
+                return _handled(f, 'halt', promoted)
+            # The cap is spent. Accept — a verb that could be blocked
+            # forever rebuilds the seat that cannot leave with a guard's
+            # face on it — and carry what it went ahead over, permanently,
+            # as the record's own dissent.
+            task.meta["halt_bounces"] = bounces + 1
+        task.meta["pending_halt"] = daemon._halt_spec(
+            task, declaration, open_items, dissent=unnamed,
+        )
+        # A halt outranks any park staged this same turn, including the
+        # bolt's own park-on-live-strands: the seat said it is ending, and
+        # a park would silently convert that into staying.
+        if task.meta.pop("pending_resource_hold", None) is not None:
+            daemon._record_outbox_notice(
+                outbox_dir,
+                "halt: a park staged this turn was dropped — a seat that "
+                "halts does not park instead",
+                kind="advisory", lifetime="run", source_file=fpath.name,
+            )
+        promoted += 1
+        if stats is not None:
+            stats["halt"] = stats.get("halt", 0) + 1
+        emit(
+            "halt_accepted",
+            run_id=task.id,
+            event_id=event_id,
+            kind=declaration.kind,
+            reason=declaration.reason,
+            unnamed=len(unnamed),
+        )
+        for key in _HALT_KEYS:
+            fm.pop(key, None)
+        if not body.strip():
+            body = daemon._halt_body(
+                daemon._halt_spec(
+                    task, declaration, open_items, dissent=unnamed,
+                )["declaration"]
+            )
+        fm.pop("event", None)
+        fm.pop("gate", None)
+        halt_source = str(getattr(task, "source", "") or "")
+        if halt_source and not daemon._gate_owns_source(halt_source):
+            # Same fallback `cut:` uses, same reason: a gate-less wake has
+            # no reply lane of its own, and this is the one message that
+            # must not sit readable only on a run node — it says the seat
+            # is gone.
+            try:
+                halt_cfg = conf.load_config(repo_root or emit.brr_dir.parent)
+                notify_gate = daemon._cached_notify_gate(
+                    task, halt_cfg, emit.brr_dir,
+                    conversation_key=str(getattr(task, "conversation_key", "") or ""),
+                )
+            except Exception:  # noqa: BLE001 - never lose the delivery we have
+                notify_gate = ""
+            if notify_gate:
+                fm["gate"] = notify_gate
+    if halt_guard.tripped:
+        return _handled(f, 'halt', promoted)
+    return _handled(f, 'halt', promoted, then=f.rewritten(fm, body))
 
 
 def handle_respawn(f: OutboxFile) -> Handled:
