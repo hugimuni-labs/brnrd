@@ -49,6 +49,7 @@ the brief is what the bounce checks. Approval would gate the wrong thing.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -130,19 +131,30 @@ class OpenItem:
     def named_by(self, brief: str) -> bool:
         """Whether *brief* names this item, case-insensitively.
 
-        Substring, not identity, and deliberately: a brief is prose, and
+        Containment, not identity, and deliberately: a brief is prose, and
         the point of the check is that the claim **collides with the
         ledger** instead of floating beside it — not that it be written in
-        a form language. A token this short can be named by accident; the
-        residual is named in the report rather than patched around with a
-        stricter grammar nobody would write.
+        a form language.
+
+        Bounded containment, though. An event's short tail is four
+        alphanumeric characters, and a plain substring test would let
+        ``cu80`` inside a longer token count as naming it. The boundary
+        below costs nothing and removes the whole accidental-prefix class.
+        What it does **not** remove, named rather than patched around: a
+        tail that happens to spell an English word a brief would use
+        anyway. A stricter grammar would buy that back at the price of a
+        field nobody writes honestly, which is the worse trade.
         """
         haystack = (brief or "").casefold()
         if not haystack:
             return False
         for token in (self.handle, *self.aliases):
             token = str(token or "").strip().casefold()
-            if token and token in haystack:
+            if not token:
+                continue
+            if re.search(
+                r"(?<![0-9a-z])" + re.escape(token) + r"(?![0-9a-z])", haystack,
+            ):
                 return True
         return False
 
