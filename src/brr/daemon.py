@@ -8575,7 +8575,12 @@ def _halt_open_items(
         items.append(halt_verb.OpenItem(
             kind="event",
             handle=short,
-            aliases=(eid, _short_id_tail(eid)),
+            # Three spellings of one event, because a brief is written by
+            # hand: the chrome form the bounce printed, the id verbatim,
+            # and the bare tail a resident naturally types. `_short_id_tail`
+            # strips the `evt-` chrome, not the timestamp, so the bare tail
+            # is taken off the id directly.
+            aliases=(eid, eid.rsplit("-", 1)[-1], _short_id_tail(eid)),
             line=f"{short} is pending and unanswered",
         ))
 
