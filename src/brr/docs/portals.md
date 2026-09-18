@@ -206,6 +206,73 @@ the bolt arms it for you: a `cut:` whose `strands:` rows disposition a *live* ch
 
 a hold is invisible to the resident that cannot write it: the verb is parsed by the *running* daemon, the table above is the checkout's — a daemon older than the verb drops the file with `unknown key`. the boot's `stale:` line is the tell
 
+### `halt:` — the seat's own ending (kb `design-the-four-stops.md` §The two verbs)
+
+the verb that did not exist, and the failure that bought it: a seat **could not end**. `cut:` is the phase commit and says so in its own docs (*never an exit*) · `hold:` is refused unless the daemon measures a wall · `respawn:` replaced the body in intent and resumed the predecessor in fact (three mechanisms, #2012/#2016/#2020) · a turn that ends with nothing armed is parked by `seat.park_on_turn_end`. each closure was right about its own failure. together they replaced *premature quitting* with *a seat that cannot leave* — worse, because it is invisible: measured 2026-09-18, **778,000 tokens re-read on every boundary for a day and a half**, announcing itself nowhere
+
+**two verbs, not four** — `park` (the seat stays, the scroll stays warm; costs nothing while blocked) and `halt` (the seat ends; costs one boot for whatever comes next). `respawn:` retires into `halt:`, on the maintainer's own line: *"respawn and quit carry the same potential damage, so they should have the same precautions"* — the damage is everything unwritten, and it does not care whether a successor follows
+
+```
+---
+halt: true
+reason:    why this body ends                          # required, non-empty
+carry:     the successor's brief                       # optional
+resumable: what it would take to pick this up, and who # required when carry is absent
+shell: / core:                                         # the next body, only with carry:
+---
+the announcement — what a person reads; absent ⇒ the daemon writes the reason
+```
+
+**why it is `halt` and not `stop`.** `stop:` is already a verb in this grammar and means *kill a strand this run dispatched*. a seat-ending `stop:` would have put two blast radii on one word in one frontmatter namespace — the exact family of defect this design exists to end. `halt` also carries the right weight: *stop* is what you do to something else; *halt* is what a thing does to itself, and it sounds like it costs something
+
+**the two fields are two questions, not one field and a decoration**
+
+| | what it actually asks |
+|---|---|
+| `halt:` **with** `carry:` | *why is this **body** spent?* cost, drift, a better core for what follows. the work continues; the brief covers it |
+| `halt:` **without** | *why does the **work** stop here?* a claim about the work, not the vessel |
+
+`resumable:` over a generic "explain further" (which grows boilerplate inside a week) on three counts: it is answerable from facts the bounce has just listed · it is **checkable** — answer *"nothing, it is finished"* and the open items had better be empty, so the claim collides with the ledger instead of floating beside it · it produces something a later reader wants. a reason is archaeology; a `resumable:` is a handle
+
+#### the four refusals, and nothing happens on any of them
+
+1. **`reason:` missing or blank** ⇒ dropped. a body that ends says why
+2. **no `carry:` and no `resumable:`** ⇒ dropped. the bare ending is allowed; the *silent* one is not
+3. **`shell:`/`core:` with no `carry:`** ⇒ dropped. a next body *is* a successor, and a successor with no brief is the handover that loses everything
+4. **any field outside the grammar**, by name — including another verb's key. `halt:` sits near the top of the verb table, so a file saying `halt:` beside `spawn:` is refused **whole** rather than silently swallowing the spawn
+
+a strand is refused too: a strand is a thought, the seat is a life. it ends by finishing — `submit:` attests its branch and report; the parent's `stop:` releases it
+
+#### the bounce — made of facts, not willpower
+
+a reason like *"context is large"* passes a non-empty check and prevents nothing. so the halt **bounces once**, exactly like the bolt, carrying what the daemon already attests is open:
+
+| open item | read off | the handle a brief names it by |
+|---|---|---|
+| a pending event | `_pending_events_for_agent` — the same projection `cut:` diffs `asks:` against | `evt-…tail`, the id verbatim, or the bare tail |
+| commits with no PR | `relics.collect` — fires on `commit` only, never on a kb page | the branch name |
+| an unticked course row | `course.parse` over your own `.card` `## Plan` | `course:<n>`, or the row's own text |
+| a live strand | `_owned_child_controls`, the one live-child registry | the child's run id |
+
+with `carry:` the brief must name them; without it each must be dispositioned or declared owed in `resumable:`. same rule, one predicate, two fields · naming is bounded containment, case-insensitive — a handle inside a longer token does not count · stage the same declaration again and **it stands**, annotated permanently with exactly what it went ahead over (`dissent`). the cap is two for one reason: a verb that could be blocked forever would rebuild the seat that cannot leave with a guard's face on it
+
+#### what it leaves behind
+
+- **`Run.meta["halt"]`**, riding the manifest round-trip: reason, kind, carry/resumable, the open items, the dissent, the successor's event id
+- **status `halted`** — terminal, beside `stopped` and `released`, *not* `held`. nothing resumes a halted run; the next message mints a new seat, and that cheapness is what makes ending defensible with no approval gate. **the risk was never that the seat ended; it is that the brief was never written**, and the bounce is what checks that. approval would gate the wrong thing
+- **one row in the account ledger** (`<account home>/account/halts.jsonl`): `kind` (`carried` / `stopped`), reason, resumable, open items, successor. **counted per account, with-carry apart from without** — a body wearing out is metabolism; work stopping is not. one halt is a decision, four in a week is a pattern, and a pattern is what no approval dialog could ever have shown
+- **the announcement, immediately** — the file's body rides the ordinary reply lane (the halt row falls through to `gate`/`event` exactly as an accepted `cut:` does); a bare `halt:` gets `halt — "<reason>"` plus the brief, written by the daemon. a record is something a person has to go looking for, and the failure this verb ends was measured precisely because nothing announced it
+
+what a halt does **not** do: defer its pending siblings. a park holds its mail because the same seat will read it; a halt will not be here. the mail stays pending for whoever comes next
+
+#### the successor, and the scroll it must not inherit
+
+`carry:` mints it, through `_queue_respawn_request` — so every property that verb paid for carries over and cannot drift into a second copy: the reserved-key discipline (#2022), the `handover` stamp that says *this replaces the seat* where `source` could not (#2016/#2020), trust-tier inheritance (#517). `shell:`/`core:` choose the next body; absent, it lands on the one this run is using
+
+it wakes **fresh by construction**, which is where the three measured mechanisms all failed: a halted run is terminal, so there is no hold record to release, no `native_session_id` to re-derive at release time, and no drawer for `_undefer_held_event` to spray a stamp across. *a halt that carries a successor must not hand it the predecessor's scroll* — here it cannot, rather than being asked not to
+
+`halt:` is invisible to a daemon older than the verb: the table is parsed by the **running** daemon, and an older image drops the file with `unknown key`. the boot's `stale:` line is the tell
+
 ### `brnrd cut` — the bolt (kb `design-the-bolt.md`)
 
 The closeout guard's machinery is entirely negative: latches that spend,
