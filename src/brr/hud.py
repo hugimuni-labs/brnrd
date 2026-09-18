@@ -1020,28 +1020,16 @@ def build(inputs: HUDInputs) -> HUD:
                 "note": "account-home runs have no forge lane",
             }
         )
-    # Spawn admission is quota-shaped. The old numeric headroom projection
-    # invited callers to make a second admission decision from a stale cap.
-    #
-    # ``spawn_quota_queued`` is a *once* guard, not a state: it is stamped
-    # the tick a low floor defers a spawn and deliberately never cleared,
-    # so a spawn that waits three ticks still emits exactly one
-    # ``spawn_queued`` event. That makes it useless on its own here —
-    # ``list_pending`` returns ``processing`` events too (a still-running
-    # spawn survives its own ``set_status(..., "processing")`` write), so
-    # counting the flag alone reports a child that queued once and has
-    # been *running* for an hour as still waiting. Status is what answers
-    # "is it still waiting"; the flag only answers "did it ever wait".
+    # Spawn admission is *not* quota-shaped (2026-09-18). The floor below is
+    # published as scarcity a resident paces by, never as an admission
+    # decision — the daemon's dispatch loop no longer consults it, and the
+    # ``queued`` count that rode beside it is gone with the gate that
+    # produced it. The earlier numeric headroom projection was retired for
+    # the same family of reason: a facet shaped like a capacity invites a
+    # caller to make a second admission decision out of it.
     coexisting_facet = resources["coexisting_runs"]
-    queued_spawns = sum(
-        1 for ev in protocol.list_pending(inbox_dir)
-        if ev.get("spawn_immediate")
-        and ev.get("spawn_quota_queued")
-        and ev.get("status") == "pending"
-    ) if inbox_dir is not None else 0
     coexisting_facet["spawn_pool"] = {
         "floor": pacing_status.get("floor") if pacing_status else None,
-        "queued": queued_spawns,
     }
     coexisting_facet["owned_children"] = daemon._owned_child_controls(task.id)
     return dataclasses.replace(hud, change_token=daemon._change_token(hud.to_dict()))

@@ -83,9 +83,11 @@ def test_portals_manual_defines_post_delivery_linger():
     assert "post-delivery linger" in text
     assert "cap at ~240s" in text
     assert "Any other pending event ends" in text
-    # The spawn row's own admission rule, which replaced the numeric
-    # `spawn.max_concurrent` pool this line used to name (2026-09-03).
-    assert "emits one `spawn_queued` event" in text
+    # The spawn row's own admission rule. It named a numeric
+    # `spawn.max_concurrent` pool (until 2026-09-03), then a quota floor
+    # that queued or refused (until 2026-09-18, when the floor stopped
+    # deciding admission at all).
+    assert "Admission is **never a quota decision**" in text
     assert "queue never starves" in text
     assert "10–15 minutes past the last delivery" in text
 
