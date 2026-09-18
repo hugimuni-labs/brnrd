@@ -325,6 +325,16 @@ function indexChunks(d){
       const hi=clamp(Math.floor((s.b-1)/e.height*CHUNK_BANDS),0,CHUNK_BANDS-1);
       for(let i=lo;i<=hi;i++)(s.w?wr:rd)[i]++;
     }
+    const band=new Array(CHUNK_BANDS).fill(null);
+    for(const sp of e.spans){
+      const lo=clamp(Math.floor((sp.a-1)/e.height*CHUNK_BANDS),0,CHUNK_BANDS-1);
+      const hi=clamp(Math.floor((sp.b-1)/e.height*CHUNK_BANDS),0,CHUNK_BANDS-1);
+      for(let i=lo;i<=hi;i++){
+        const b=band[i]||(band[i]={a:sp.a,b:sp.b,r:0,w:0});
+        b.a=Math.min(b.a,sp.a);b.b=Math.max(b.b,sp.b);sp.w?b.w++:b.r++;
+      }
+    }
+    e.band=band;
     e.rd=rd;e.wr=wr;
     e.deep=Math.max(0,...rd,...wr);
     const lo=Math.min(...e.spans.map(s=>s.a)), hi=Math.max(...e.spans.map(s=>s.b));
@@ -685,6 +695,7 @@ function drawScene(x,now){
       drawIsland(x,z);
       drawCanopy(x,z,step,now);
       drawChunkGround(x,z,step,now);
+      drawLens(x,z,now);
       drawHub(x,z,step);
       RECORD.marks(x,z);
       ACTOR.marks(x,z);
@@ -972,6 +983,94 @@ function drawChunkGround(x,z,step,now){
   }
 }
 
+// ── the lens: the column is what a file becomes when a hand reaches for it ─
+// Generation 1 drew every measured file's column at once and called it a
+// ground. Two readings killed that, and the second one cannot be tuned away:
+// the stranger's glance found no centre in a field of 21 shafts, and the
+// canopy arcs and heat dots are still drawn UNDERNEATH those shafts, so the
+// frame carries two grounds at once and argues with itself. One file at a
+// time dissolves both, and every objection with them — the label always fits,
+// the bars have room to be legible at 1:1, path-depth-as-height survives for
+// every file not currently in hand, and nothing claims to be the ground.
+// `?ground=chunks` is kept exactly as it was: it is the control that made
+// this decidable, and deleting your own evidence is not an improvement.
+const LENS={path:null,pin:null,geom:null};
+let _lensMode=null;
+const lensMode=()=>_lensMode===null
+  ?(_lensMode=new URLSearchParams(location.search).get('lens')||''):_lensMode;
+const com=n=>String(n).replace(/\B(?=(\d{3})+(?!\d))/g,',');
+
+function drawLens(x,z,now){
+  LENS.geom=null;
+  if(groundMode()==='chunks')return;      // the ground is the control; the lens is the default view's
+  const path=LENS.pin||LENS.path;if(!path)return;
+  const e=CHUNKS.get(path), n=byPath.get(path);if(!e||!n)return;
+  const ny=treeY(n,z), cx=n.x;
+  // the dot does not move: the file unfolds UPWARD out of its own place, so
+  // the island keeps saying what it said — height is depth in the path
+  const colH=clamp(ny-92,110,320), base=ny-7, top=base-colH;
+  const bh=colH/CHUNK_BANDS, unit=5;      // room to be read at 1:1, not at 2×
+  const wmax=Math.max(1,...e.wr), rmax=Math.max(1,...e.rd);
+  const padR=Math.max(54,unit*wmax+16), padL=Math.max(54,unit*rmax+16);
+  // the plate — the maintainer's standing note: more rendered as overlays and
+  // windows where it fits. It is what stops the canopy behind the column from
+  // reading as part of it. `?lens=bare` drops it, which is the control for
+  // exactly that claim.
+  if(lensMode()!=='bare'){
+    x.fillStyle='rgba(7,6,4,0.80)';x.fillRect(cx-padL,top-38,padL+padR,colH+50);
+    x.strokeStyle='rgba(110,94,64,0.42)';x.lineWidth=1;
+    x.strokeRect(cx-padL+0.5,top-37.5,padL+padR-1,colH+49);
+  }
+  // the file in hand is named where it stands
+  x.textAlign='left';x.font=`10px ${MONO}`;x.fillStyle='rgba(232,220,192,0.92)';
+  x.fillText(path,cx-padL+7,top-24);
+  x.font=`9px ${MONO}`;x.fillStyle='rgba(150,133,100,0.95)';
+  x.fillText(e.lines?`${com(e.lines)} lines · ×${e.touches} · ${e.reads} read · ${e.writes} write`
+                    :`height unmeasured · ×${e.touches} · ${e.reads} read · ${e.writes} write`,cx-padL+7,top-13);
+  if(e.density!==null)x.fillText(`${com(e.covered)} lines touched across a ${com(e.span)}-line reach · ${e.density.toFixed(2)}`,cx-padL+7,top-3);
+  // the shaft, the ladder, the torn cap — the same law generation 1 measured
+  x.strokeStyle=`rgba(110,94,64,${e.torn?0.30:0.55})`;x.lineWidth=1.2;
+  x.beginPath();x.moveTo(cx,base);x.lineTo(cx,top);x.stroke();
+  if(e.torn){x.strokeStyle='rgba(110,94,64,0.6)';
+    for(let i=0;i<4;i++){const y=top+i*3.2,w=4.5-i*0.9;
+      x.beginPath();x.moveTo(cx-w,y-3);x.lineTo(cx+w,y-6);x.stroke();}
+  }else{
+    x.fillStyle='rgba(150,130,96,0.5)';
+    const rungs=Math.min(60,Math.floor(e.lines/1000));
+    for(let k=1;k<=rungs;k++){const y=base-(k*1000/e.lines)*colH;x.fillRect(cx-4,y,8,0.9);}
+  }
+  if(e.whole){x.fillStyle=`rgba(242,177,52,${clamp(0.06*e.whole,0,0.24)})`;x.fillRect(cx,top,unit*2,colH);}
+  x.save();x.globalCompositeOperation='lighter';
+  for(let i=0;i<CHUNK_BANDS;i++){
+    const y=base-(i+1)*bh, h=Math.max(1.6,bh-0.5);
+    if(e.wr[i]){x.fillStyle=`rgba(242,177,52,${clamp(0.46+0.10*e.wr[i],0,0.95)})`;x.fillRect(cx+1.5,y,unit*e.wr[i],h);}
+    if(e.rd[i]){x.fillStyle=`rgba(143,211,255,${clamp(0.38+0.09*e.rd[i],0,0.9)})`;x.fillRect(cx-1.5-unit*e.rd[i],y,unit*e.rd[i],h);}
+  }
+  for(const sp of e.spans){
+    const y=base-clamp((sp.a-1)/e.height,0,1)*colH;
+    x.fillStyle=sp.w?'rgba(255,214,140,0.8)':'rgba(190,231,255,0.7)';
+    x.fillRect(cx-4,y-0.4,8,0.8);
+  }
+  x.restore();
+  // the dot itself, ringed: this is the one in hand, and a pin says so twice
+  x.strokeStyle=LENS.pin?'rgba(242,177,52,0.85)':'rgba(232,220,192,0.45)';
+  x.lineWidth=LENS.pin?1.4:1;x.beginPath();x.arc(cx,ny,7,0,7);x.stroke();
+  x.textAlign='left';
+  LENS.geom={path,cx,base,top,colH,bh,padL,padR,band:e.band,height:e.height};
+}
+
+// the hover the column exists for: the grain the question is asked at
+function lensHover(mx,my){
+  const g=LENS.geom;if(!g)return null;
+  if(mx<g.cx-g.padL||mx>g.cx+g.padR||my<g.top-38||my>g.base+8)return null;
+  const i=Math.floor((g.base-my)/g.bh);
+  if(i<0||i>=CHUNK_BANDS)return `${g.path}\nin hand — no act measured at this height`;
+  const b=g.band[i];
+  if(!b)return `${g.path}\nlines ${com(Math.floor(i*g.height/CHUNK_BANDS)+1)}–${com(Math.ceil((i+1)*g.height/CHUNK_BANDS))} · untouched`;
+  const kind=b.w&&b.r?`${b.w} write · ${b.r} read`:b.w?`write · ×${b.w}`:`read · ×${b.r}`;
+  return `${g.path}\nlines ${com(b.a)}–${com(b.b)} · ${kind}`;
+}
+
 function drawHub(x,z,step){
   const ho=hubAt(z);
   x.font=`10px ${MONO}`;
@@ -1088,9 +1187,26 @@ function tickCam(){ACTOR.camera.settle(performance.now());
   CAM.z+=(CAM.tz-CAM.z)*0.14;if(Math.abs(CAM.tz-CAM.z)<0.0008)CAM.z=CAM.tz;}
 
 // ── the hand: hit-testing is the world's, at every altitude ────────────────
+// a measured file wins the pick over an unmeasured neighbour inside the same
+// few pixels — `nodes.find` returns the first in layout order, not the nearest,
+// and on a crowded bough that silently picked a file with nothing to show
+const lensPick=(mx,my,z,r)=>{
+  const near=n=>Math.hypot(n.x-mx,treeY(n,z)-my)<r;
+  return nodes.find(n=>near(n)&&CHUNKS.has(n.path))||null;
+};
+cv.addEventListener('click',e=>{
+  const n=lensPick(e.clientX,e.clientY,CAM.z,9);
+  if(n)LENS.pin=LENS.pin===n.path?null:n.path;
+  else if(LENS.pin&&!lensHover(e.clientX,e.clientY))LENS.pin=null;
+});
 cv.addEventListener('mousemove',e=>{
   const z=CAM.z;let txt=null;
   const n=nodes.find(n=>Math.hypot(n.x-e.clientX,treeY(n,z)-e.clientY)<7);
+  // the lens follows the hand unless a click has pinned one file down
+  const inside=lensHover(e.clientX,e.clientY);
+  const ln=lensPick(e.clientX,e.clientY,z,7);
+  if(ln)LENS.path=ln.path;else if(!inside)LENS.path=null;
+  if(inside&&!n){HOVER.txt=inside;HOVER.x=e.clientX;HOVER.y=e.clientY;return;}
   if(n)txt=`${n.path} · heat ${(n.heat||0).toFixed(2)} · ${n.knots||0} knots · last ${n.last||'—'}`;
   if(!txt){const hn=homeNodes.find(n=>Math.hypot(n.x-e.clientX,homeY(n,z)-e.clientY)<6);
     if(hn)txt=`home / ${hn.path} · ${hn.knots||0} knots · last ${hn.last||'—'}`;}
