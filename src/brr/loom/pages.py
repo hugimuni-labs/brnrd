@@ -31,6 +31,9 @@ from . import state as st
 BEAD_ROWS_CAP_BYTES = 64 * 1024 * 1024
 CONTRACT_CHARS = 600
 PAGE_BEADS = 12
+# a place's bands, kept per pass: enough to draw where the work landed in a
+# file, bounded so one long run cannot make this page unbounded.
+PLACE_SPANS = 60
 HEDDLE_ROWS = 24
 COMMITS_MAX = 50
 _RUN_ID_RE = re.compile(r"^run-[A-Za-z0-9-]+$")
@@ -176,6 +179,62 @@ def _git_commits(repo_dir: Path, branch: str, read: list[str]) -> list[dict[str,
     return None
 
 
+def pass_places(boundaries: Path, where: Any, *, rows: int = 4000) -> list[dict[str, Any]]:
+    """One run's repo places with its **own measured weight** on each —
+    ``{path, touches, reads, writes, covered, deepest, whole, lines_known,
+    spans, last}``, heaviest first.
+
+    ``cloth.rows[].trail`` is eight places and a timestamp
+    (:data:`brr.loom.state.TRAIL_PLACES`) — enough to say *where*, never
+    enough to say *how hard*, which is why every place in the per-run view
+    used to be drawn at one brightness. The measurement that answers it has
+    been sitting on the boundary rows since #2011: ``chunks``, with ``rel``
+    already joined to the tree's own vocabulary (#2023). This reads the run's
+    boundaries once and totals them per place.
+
+    ``spans`` is kept (capped at :data:`PLACE_SPANS`) because a band's
+    POSITION is the reading, not its count: forty reads of one function and
+    one read of forty files are the same number and a different morning. What
+    is deliberately *not* here is any aggregate that would hide that — the
+    caller unions bands, it never sums them (the same rule ``_dirty_chunks``
+    states about its own overlapping sets).
+
+    A place with no chunk record is simply absent: this is the measured half,
+    and a caller that also wants presence joins it to the trail. Absence of a
+    record is not a weight of zero.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for row in st.tail_rows(boundaries, rows, st._is_bead):
+        at = row.get("at")
+        for chunk in row.get("chunks") or ():
+            if not isinstance(chunk, dict):
+                continue
+            rel = chunk.get("rel")
+            if not isinstance(rel, str) or not rel:
+                rel = heddles_mod.relative_place(str(chunk.get("path") or ""), where.roots)
+            if not rel or str(rel).startswith(st.TREE_SKIP_PREFIXES):
+                continue
+            entry = out.setdefault(rel, {"path": rel, "touches": 0, "reads": 0, "writes": 0,
+                                         "covered": 0, "deepest": 0, "whole": 0, "spans": [],
+                                         "last": None})
+            entry["touches"] += 1
+            write = str(chunk.get("kind") or "") == "write"
+            entry["writes" if write else "reads"] += 1
+            if at and (entry["last"] is None or str(at) > str(entry["last"])):
+                entry["last"] = at
+            start, end = st._int(chunk.get("from")), st._int(chunk.get("to"))
+            if start is None:
+                entry["whole"] += 1
+                continue
+            end = start if end is None else end
+            low, high = min(start, end), max(start, end)
+            entry["covered"] += high - low + 1
+            entry["deepest"] = max(entry["deepest"], high)
+            if len(entry["spans"]) < PLACE_SPANS:
+                entry["spans"].append({"from": low, "to": high, "kind": "write" if write else "read"})
+    return sorted(out.values(), key=lambda e: (-e["touches"], e["path"]))
+
+
 def pass_page(repo_root: Path | str, account_home: Path | str | None, run_id: str) -> Page:
     """``{id, title, name, mood, status, contract, shell, core, started, ended,
     duration_s, parent, topics, branch, card, produce: {prs, commits, pages},
@@ -186,6 +245,11 @@ def pass_page(repo_root: Path | str, account_home: Path | str | None, run_id: st
     presenting a tail as a life. It was already counted here and thrown away,
     which is the cheapest way there is to turn a bound into a false whole.
     ``None`` means the count could not be taken.
+
+    ``places`` is :func:`pass_places` — this run's own repo places with the
+    weight it measured on each, over all its boundaries rather than the
+    twelve beads above. It is what makes a per-run view able to say *how
+    hard*, not only *where*.
 
     Sources: ``<brr>/runs/<id>/run.md``, its outbox (``.name``, ``.mood``,
     ``.card``, ``portal-state.json``, ``.relics.jsonl``), the run's
@@ -297,6 +361,7 @@ def pass_page(repo_root: Path | str, account_home: Path | str | None, run_id: st
         "strands": strands,
         "beads": beads,
         "bead_total": total,
+        "places": pass_places(boundaries, where),
     }, read
 
 
