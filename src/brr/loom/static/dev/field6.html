@@ -3302,7 +3302,8 @@ const ZOOM=(()=>{
     }).sort((a,b)=>(b.m?b.m.touches:-1)-(a.m?a.m.touches:-1)||String(b.last||'').localeCompare(String(a.last||'')));
     const total=pg&&pg.state==='ok'?(num((pg.d||{}).bead_total)?pg.d.bead_total:null):null;
     ROWS={list,measured:w.size,pass:pg,
-      bound:live?`measured across the ${((S&&S.beads)||[]).length} beads this beat carries`
+      bound:live?(w.size?`measured across the ${((S&&S.beads)||[]).length} beads this beat carries`
+            :`no chunk record in the ${((S&&S.beads)||[]).length} beads this beat carries — presence only`)
         :pg&&pg.state==='ok'?`measured across ${total?total+' ':''}recorded act${total===1?'':'s'} of this pass`
         :pg&&pg.state==='loading'?'reading this pass’s own record…'
         :'this pass’s record could not be read — presence only, no weights'};
@@ -3373,7 +3374,7 @@ const ZOOM=(()=>{
     const open=Z.row;
     for(const r of R.list){
       const chosen=r.path===open;
-      const need=chosen?G.lh+26:G.lh;
+      const need=chosen?G.lh+50:G.lh;
       if(y+need>G.botY){
         const left=R.list.length-hit.length;
         if(left>0){g.font=`9px ${MONO}`;g.fillStyle=FAINT;
@@ -3398,7 +3399,7 @@ const ZOOM=(()=>{
       g.textAlign='right';
       const m=r.m;
       g.fillStyle=m?DIM:'#4a4336';
-      g.fillText(m?`×${m.touches}${m.writes?' · '+m.writes+'w':''}`:'—',G.x0+G.w-58,y-3);
+      g.fillText(m?`×${m.touches}${m.writes?' · '+m.writes+'w':''}`:'—',G.x0+G.w-78,y-3);
       g.fillStyle=FAINT;g.fillText(at(r.last)||'no time',G.x0+G.w-4,y-3);
       g.textAlign='left';
       if(r.hands&&r.hands.length){         // a hand's place keeps #2025's diamond
@@ -3408,7 +3409,7 @@ const ZOOM=(()=>{
       }
       hit.push({path:r.path,x0:G.x0-12,x1:G.x0+G.w,y0:y-G.lh+2,y1:y+4});
       y+=G.lh;
-      if(chosen)y=drawStrip(g,r,G.x0+4,y+2,G.w-8)+4;
+      if(chosen)y=drawStrip(g,r,G.x0+4,y+14,G.w-8)+12;
     }
     Z.hits=hit;
     if(!R.list.length){
@@ -3539,18 +3540,32 @@ const ZOOM=(()=>{
     const gw=g.measureText('0000').width+8;
     for(let i=0;i<Math.min(fit,lines.length-start);i++){
       const n=first+start+i, ly=ty+i*lh+9;
-      const band=bands.find(b=>n>=b.from&&n<=b.to);
+      // A LINE CAN BE IN TWO BANDS AT ONCE, and the commonest shape there is
+      // — read it, then change it — is exactly that. Taking the first match
+      // drew "read" over a line git says was rewritten. Both are drawn: the
+      // wash is the write's, the inner rail is the read's, and the outer rail
+      // says which claim is measured and which was parsed off a command line.
+      const on=bands.filter(b=>n>=b.from&&n<=b.to);
+      const ed=on.find(b=>b.kind==='edit'), rd=on.find(b=>b.kind==='read');
+      const band=ed||rd;
       if(band){
         const measured=band.src==='measured';
-        g.fillStyle=band.kind==='edit'
-          ?(measured?'rgba(242,177,52,0.16)':'rgba(242,177,52,0.07)')
-          :(measured?'rgba(143,211,255,0.13)':'rgba(143,211,255,0.06)');
+        // measured on the shot: a 0.16 wash on #070604 is a difference a
+        // reader has to hunt for, and the whole rung exists to make the change
+        // findable in one glance. The wash carries the kind, the 3 px rail
+        // carries it again at the edge, and the line NUMBER takes the ink too
+        // — three redundant channels, because one of them is a wash.
+        g.fillStyle=ed
+          ?(measured?'rgba(242,177,52,0.22)':'rgba(242,177,52,0.09)')
+          :(band.src==='measured'?'rgba(143,211,255,0.15)':'rgba(143,211,255,0.07)');
         g.fillRect(x+pad,ly-9,w-pad*2,lh);
-        g.fillStyle=band.kind==='edit'?'rgba(242,177,52,0.95)':'rgba(143,211,255,0.9)';
-        if(measured)g.fillRect(x+pad,ly-9,2,lh);
-        else for(let k=0;k<lh;k+=3)g.fillRect(x+pad,ly-9+k,2,1.4);   // hatched: a guess
+        if(ed&&rd){g.fillStyle='rgba(143,211,255,0.8)';g.fillRect(x+pad+3,ly-9,1.5,lh);}
+        g.fillStyle=ed?'rgba(242,177,52,0.95)':'rgba(143,211,255,0.9)';
+        if(measured)g.fillRect(x+pad,ly-9,3,lh);
+        else for(let k=0;k<lh;k+=3)g.fillRect(x+pad,ly-9+k,3,1.4);   // hatched: a guess
       }
-      g.fillStyle=FAINT;g.textAlign='right';g.fillText(String(n),x+pad+gw-6,ly);
+      g.fillStyle=band?(ed?'rgba(242,177,52,0.75)':'rgba(143,211,255,0.7)'):FAINT;
+      g.textAlign='right';g.fillText(String(n),x+pad+gw-6,ly);
       g.textAlign='left';g.fillStyle=band?INK:'#b9a582';
       const s=lines[start+i]==null?'':lines[start+i].replace(/\t/g,'  ');
       g.fillText(s.length>150?s.slice(0,150)+'…':s,x+pad+gw,ly);
@@ -3562,7 +3577,7 @@ const ZOOM=(()=>{
         +(txt.binary?' · binary':'')
       :'no text — the file could not be read here',x+pad,y+h-10);
     g.textAlign='right';g.fillStyle=DIM;
-    g.fillText('amber = write · ice = read · hatched = parsed from a command, not measured',x+w-pad,y+h-10);
+    g.fillText('amber write · ice read · both = read then written · hatched = parsed, not measured',x+w-pad,y+h-10);
     g.textAlign='left';
     g.restore();
   }
