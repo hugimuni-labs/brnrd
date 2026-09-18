@@ -34,7 +34,7 @@
       }
     ],
     ".brr/inbox/<EVT1>.md": "---\nid: <EVT1>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
-    ".brr/inbox/<EVT2>.md": "---\nid: <EVT2>\nsource: telegram\nstatus: pending\ntelegram_user_id: 42\ntelegram_chat_id: 42\nrespawned_from_event: <EVT1>\nrespawned_by_run: run-parent\nshell: claude\ncreated: <TS>\n---\ncarry on\n",
+    ".brr/inbox/<EVT2>.md": "---\nid: <EVT2>\nsource: telegram\nstatus: pending\ntelegram_user_id: 42\ntelegram_chat_id: 42\nrespawned_from_event: <EVT1>\nrespawned_by_run: run-parent\nhandover: True\nshell: claude\ncreated: <TS>\n---\ncarry on\n",
     ".brr/outbox/<EVT1>/.processed/respawn.md": "---\nrespawn: true\nshell: claude\n---\ncarry on\n"
   }
 }
