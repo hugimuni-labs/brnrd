@@ -13809,60 +13809,6 @@ def _quota_window_pace(
     }
 
 
-def _spawn_admission_floor(
-    cfg: dict, event: dict, brr_dir: Path, repo_root: Path,
-) -> str | None:
-    """Return the binding quota floor for a spawn dispatch decision."""
-    runner_name = str(
-        event.get("shell") or event.get("runner") or cfg.get("shell")
-        or cfg.get("runner") or ""
-    ).strip() or None
-    levels, _ = _collect_levels(
-        runner_name, None, repo_root, refresh=False, shared_dir=brr_dir,
-    )
-    status = _quota_pacing_status(
-        cfg, levels, model=str(event.get("core") or "").strip() or None,
-    )
-    return str(status.get("floor") or "") or None if status else None
-
-
-def _notify_spawn_queued(inbox_dir: Path, event: dict) -> None:
-    """Emit the once-per-queue admission fact to the spawning parent."""
-    if event.get("spawn_quota_queued"):
-        return
-    parent = str(event.get("spawn_parent_run_id") or "").strip()
-    if not parent:
-        return
-    conv = str(event.get("spawn_parent_conversation_key") or "").strip()
-    protocol.create_event(
-        inbox_dir, "spawn_queued",
-        f"concurrent spawn {event.get('id')} queued: quota floor is low",
-        conversation_key=conv or f"run:{parent}",
-        spawned_by_event=str(event.get("id") or ""),
-        spawn_parent_run_id=parent,
-    )
-    protocol.update_event_meta(event, spawn_quota_queued=True)
-    event["spawn_quota_queued"] = True
-
-
-def _refuse_spawn_for_quota(
-    event: dict, inbox_dir: Path, runs_dir: Path,
-) -> None:
-    """Refuse a critical-floor spawn and put the notice on its parent run."""
-    protocol.set_status(event, "cancelled")
-    parent_id = str(event.get("spawn_parent_run_id") or "").strip()
-    parent = Run.from_file(run_manifest_path(runs_dir, parent_id)) if parent_id else None
-    parent_outbox = (
-        Path(str(parent.meta.get("outbox_path")))
-        if parent is not None and parent.meta.get("outbox_path") else None
-    )
-    _record_outbox_notice(
-        parent_outbox,
-        f"spawn refused: {event.get('id')} — binding quota floor is critical",
-        kind="refused", lifetime="run",
-    )
-
-
 def _failure_reason(
     last_failure: dict[str, object] | None,
     attempts: int,
@@ -16947,15 +16893,28 @@ def start(
                 eid = t.event.get("id")
                 if eid in active_spawn_ids:
                     continue
-                floor = _spawn_admission_floor(
-                    cfg, t.event, brr_dir, t.repo_root,
-                )
-                if floor == "critical":
-                    _refuse_spawn_for_quota(t.event, t.inbox_dir, brr_dir / "runs")
-                    continue
-                if floor == "low":
-                    _notify_spawn_queued(t.inbox_dir, t.event)
-                    continue
+                # No quota gate here, deliberately (2026-09-18, his call:
+                # "the logic is accidental I believe, it should never block
+                # you from acting").
+                #
+                # Admission used to consult `pacing.quota_low_floor_pct` — a
+                # number written for a different job entirely: stretching
+                # `every:` schedule intervals when quota runs low. Borrowed
+                # here it stopped being pace and became permission, and it
+                # bit backwards: at low quota it closed the *cheap* lane (a
+                # strand with its own allowance and a fresh context) while
+                # leaving the *expensive* one wide open (the resident seat,
+                # ~900k of context, ~83k a boundary). Live 2026-09-17 night:
+                # the delegation the night's plan was built on sat queued at
+                # week 19% against a 20% mark while the seat that costs four
+                # times as much kept running, and the floor the maintainer
+                # actually set (14%) went unspent.
+                #
+                # The floor governs *how much* is spent, never *which lane*
+                # spends it. Scarcity still reaches the resident — the
+                # `spawn_pool` facet publishes the live floor every boundary
+                # — as information to pace by, not as a locked door.
+                # `spawn.max_concurrent` remains the only width gate.
                 active_spawn_ids.add(eid)
                 spawn_candidates.append(t)
             for target in spawn_candidates:
