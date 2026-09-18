@@ -108,6 +108,51 @@ def list_messages(messages_dir: Path, *, status: str | None = None) -> list[dict
     return result
 
 
+def answered_event(
+    ctx: account.HomeContext,
+    *,
+    repo_label: str,
+    run_id: str,
+    target_event: str,
+) -> dict[str, Any] | None:
+    """The newest *receipted* reply *run_id* delivered for *target_event*.
+
+    The store is the only durable record of what a run actually said to a
+    correspondent, and it is the one a boot-time sweep can read after the
+    process that spoke is gone — the run manifest's status, the event's
+    status and the card all record intent or projection, and 2026-09-18
+    cost a full boot to the difference (a seat's return read
+    ``status: delivered`` on disk while nothing had been dispatched to
+    anything). ``daemon._park_seat_on_daemon_restart`` asks this question
+    of a run whose daemon died: *was the person's ask answered?*
+
+    Deliberately strict: only :data:`_RECEIPTED` counts — a platform (or
+    the dispatch edge) acknowledged this row. Not :data:`CARRIED`, whose
+    whole definition is *content that left custody without this row
+    earning a receipt*, and not :data:`PENDING`/:data:`UNDELIVERABLE`. The
+    caller's error budget is asymmetric: reading "answered" off an
+    unreceipted row retires a question a person is still waiting on, while
+    reading "unanswered" off a receipted one costs at worst the retry that
+    already happens today. Every ambiguity therefore resolves to ``None``.
+    """
+    if not run_id or not target_event:
+        return None
+    try:
+        messages_dir = run_messages_dir(ctx, repo_label, run_id)
+    except Exception:  # noqa: BLE001 - a malformed label is not an answer
+        return None
+    answered: dict[str, Any] | None = None
+    for message in list_messages(messages_dir):
+        if str(message.get("direction") or "out") != "out":
+            continue
+        if str(message.get("target_event") or "") != target_event:
+            continue
+        if str(message.get("status") or "") not in _RECEIPTED:
+            continue
+        answered = message
+    return answered
+
+
 def _existing_by_source(messages_dir: Path, source_ref: str) -> Path | None:
     if not source_ref:
         return None

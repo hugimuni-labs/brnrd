@@ -132,6 +132,17 @@ RESUME_CONDITIONS = frozenset({
 
 REASON_WAITING_ON_STRANDS = "waiting_on_strands"
 REASON_TURN_ENDED = "turn_ended"
+#: The daemon itself went away under a seat that had already answered its
+#: waking event. Not a failure of the work and not a question left open: the
+#: ask was answered, and what the restart interrupted was only the seat
+#: standing in ``await``. Re-dispatching the event instead (the behaviour
+#: before ``daemon._park_seat_on_daemon_restart``) starts a new life on a
+#: stale ask — THE STALE SUMMONS, 2026-09-09: a retry re-woke a resident on
+#: an already-answered 5h-old ask and it had to read its own node to learn
+#: it owed nothing, one whole boot spent discovering there was nothing to
+#: do. The seat parks on :data:`RESUME_ANY` instead; anything addressed to
+#: it resumes it, which is the mechanism the turn-end park already uses.
+REASON_DAEMON_RESTARTED = "daemon_restarted"
 
 #: The child-event sources that release a ``strands``-condition hold. Not
 #: ``spawn_queued`` (admission, nothing to read yet) and never
