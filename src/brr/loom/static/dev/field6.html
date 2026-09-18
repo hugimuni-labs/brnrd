@@ -268,6 +268,73 @@ function layoutWarp(x0,w){
   }
 }
 
+// ── the chunk ground: what a column is, and why the tree cannot say it ─────
+// The tree gives a file one dot whose brightness is its heat. That renders
+// "ranged across a 12,000-line file hunting for one call" and "went back into
+// the same 104 lines four times" IDENTICALLY — measured on one real morning:
+//   src/brr/daemon.py   26 touches   span 12,268   covered   683   density 0.06
+//   tests/test_outbox.py 4 touches   span    114   covered   271   density 2.38
+// Two readings a brightness ramp cannot hold apart. A column holds both:
+// POSITION along the shaft is where in the file the act landed, LENGTH out
+// from the shaft is how many times that band was touched. Ranging draws a
+// scatter of stubs up a tall shaft; digging draws one deep bar.
+//
+// The sides are the kinds, so read/write survives a greyscale print and a
+// ten-second glance alike: ice LEFT is a read, amber RIGHT is a write (§9's
+// law — amber is his warmth, ice is cold and his own). The notches ON the
+// shaft are the file's own height, one per 1,000 lines: a 17k-line file wears
+// a crammed ladder, a 300-line file wears none. So one shape carries three
+// readings — how big the file is, where the work landed in it, how hard.
+//
+// Nothing draws that was not measured (§1): a file the feed gave chunks but no
+// `lines` for cannot be normalised, so it gets no ladder and a TORN cap — its
+// shaft ends at the deepest line actually seen, and says so by being broken.
+const CHUNKS=new Map();               // repo place → the file's measured column
+const CHUNK_BANDS=48;                 // the shaft's resolution; a band is a slab
+let CHUNK_TOP=0, _groundMode=null;
+// read at draw time, never at module top: `Q` is declared ~1,800 lines below
+// this fence and a top-level read of it here throws before it exists — the
+// line then silently does nothing, which reads as "my premise was wrong".
+const groundMode=()=>_groundMode===null
+  ?(_groundMode=new URLSearchParams(location.search).get('ground')||''):_groundMode;
+
+function indexChunks(d){
+  CHUNKS.clear();CHUNK_TOP=0;
+  for(const b of (d.beads||[])){
+    for(const c of (b.chunks||[])){
+      const path=c&&c.rel;            // `rel` is the join the raw absolute `path` cannot make
+      if(!path)continue;
+      let e=CHUNKS.get(path);
+      if(!e){e={spans:[],touches:0,reads:0,writes:0,whole:0,deepest:0};CHUNKS.set(path,e);}
+      e.touches++;const w=c.kind==='write';w?e.writes++:e.reads++;
+      const f=num(c.from)?c.from:null, t=num(c.to)?c.to:f;
+      if(f===null){e.whole++;continue;}
+      const a=Math.max(1,Math.min(f,t)), z=Math.max(a,Math.max(f,t));
+      e.spans.push({a,b:z,w});if(z>e.deepest)e.deepest=z;
+    }
+  }
+  for(const [path,e] of [...CHUNKS]){
+    if(!e.spans.length&&!e.whole){CHUNKS.delete(path);continue;}
+    const n=byPath.get(path);
+    e.lines=n&&num(n.lines)&&n.lines>0?n.lines:null;   // the file's own height, or nothing
+    e.height=e.lines||e.deepest||1;                    // what the slabs normalise into
+    e.torn=!e.lines;                                   // unmeasured: no ladder, broken cap
+    const rd=new Array(CHUNK_BANDS).fill(0), wr=new Array(CHUNK_BANDS).fill(0);
+    for(const s of e.spans){
+      const lo=clamp(Math.floor((s.a-1)/e.height*CHUNK_BANDS),0,CHUNK_BANDS-1);
+      const hi=clamp(Math.floor((s.b-1)/e.height*CHUNK_BANDS),0,CHUNK_BANDS-1);
+      for(let i=lo;i<=hi;i++)(s.w?wr:rd)[i]++;
+    }
+    e.rd=rd;e.wr=wr;
+    e.deep=Math.max(0,...rd,...wr);
+    const lo=Math.min(...e.spans.map(s=>s.a)), hi=Math.max(...e.spans.map(s=>s.b));
+    e.span=e.spans.length?hi-lo+1:0;
+    e.covered=e.spans.reduce((n,s)=>n+(s.b-s.a+1),0);
+    e.density=e.span?e.covered/e.span:null;            // 0.06 ranging · 2.38 digging
+    CHUNK_TOP=Math.max(CHUNK_TOP,e.deep);
+  }
+}
+
 // ── projection: world → screen, the only place z is spent ──────────────────
 const treeY=(n,z)=>waterAt(z)-7*z-n.e*canopyAt(z);
 const homeY=(n,z)=>waterAt(z)+6+n.e*(bandAt(z)-12);
@@ -379,6 +446,7 @@ function polyAt(route,u,z){
 function ingest(d){
   const first=!S;S=d;
   if(first||!nodes.length)layout();else layoutWarp(W*0.03,W*0.94);
+  indexChunks(d);                      // cheap: the feed carries ~240 beads
   $('#src').textContent=`${d.repo||'local'} · live · ${rows(d.tree&&d.tree.repo).length} places · ${rows(d.tree&&d.tree.home).length} home · ${((d.warp&&d.warp.items)||[]).length} items`;
   const pod=podFor('resident','resident');
   pod.label=(d.run&&d.run.mood_glyph)||'b·_·d';
@@ -616,6 +684,7 @@ function drawScene(x,now){
       drawHome(x,z,step);
       drawIsland(x,z);
       drawCanopy(x,z,step,now);
+      drawChunkGround(x,z,step,now);
       drawHub(x,z,step);
       RECORD.marks(x,z);
       ACTOR.marks(x,z);
@@ -791,23 +860,31 @@ function drawIsland(x,z){
       x.globalAlpha=1;
     }
     x.fillStyle='#8a7c5e';x.font=`10px ${MONO}`;x.textAlign='center';
-    x.fillText(`${island.label} · ${island.n} of ${island.total} places`,island.x,water+12);x.textAlign='left';
+    x.fillText(`${island.label} · ${island.n} of ${island.total} places`,island.x,water+12);
+    if(groundMode()==='chunks'){x.fillStyle='#4a4336';x.font=`9px ${MONO}`;
+      x.fillText(`chunk ground · ${CHUNKS.size} files measured · ice ← read · write → amber`,island.x,water+24);}
+    x.textAlign='left';
   }
 
 }
 
 function drawCanopy(x,z,step,now){
   const br=breath(now);
+  const column=groundMode()==='chunks';   // the branch still moors it; the dot yields
   // ── the canopy: it compresses onto its island; nothing fades out ─────────
   for(const n of nodes){
     // the breath rides what an act already lit: a place at heat 0 cannot breathe
     const ny=treeY(n,z), hv=clamp(clamp(n.heat||0,0,1)*(1+BREATH_A*br),0,1), a=n.up;
     const gk=glitchK(n.born,now);
-    x.strokeStyle=`rgba(110,94,64,${(0.12+hv*0.5)*(0.45+0.55*z)})`;x.lineWidth=(a?0.7:1.1)*(0.5+0.5*z);
+    // a column's own branch is a moor, not a reading: at full weight the bezier
+    // crowd crosses every shaft and the slabs read as noise on a cobweb
+    const moor=column&&CHUNKS.has(n.path)?0.22:1;
+    x.strokeStyle=`rgba(110,94,64,${(0.12+hv*0.5)*(0.45+0.55*z)*moor})`;x.lineWidth=(a?0.7:1.1)*(0.5+0.5*z);
     x.beginPath();x.moveTo(n.x,ny);
     if(a){const ay=treeY(a,z);x.bezierCurveTo(n.x,(ny+ay)/2,a.x,(ny+ay)/2,a.x,ay);}
     else x.bezierCurveTo(n.x,(ny+water)/2,n.x,(ny+water)/2,n.bough?n.bough.x:n.x,water-4);
     x.stroke();
+    if(column&&CHUNKS.has(n.path)){if(step)n.flare*=0.955;continue;}
     const rr=Math.max(0.7,n.r*(0.42+0.58*z)), lum=hv+n.flare;
     if(lum>0.02){x.save();x.globalCompositeOperation='lighter';
       const R=rr+14*lum*(0.4+0.6*z), rg=x.createRadialGradient(n.x,ny,0,n.x,ny,R);
@@ -819,6 +896,80 @@ function drawCanopy(x,z,step,now){
     if(step)n.flare*=0.955;
   }
 
+}
+
+// ── the chunk ground, drawn ────────────────────────────────────────────────
+// One column per measured file, rooted where its canopy dot stood, so the
+// island's own layout (`layoutIsland`'s x, the bough it belongs to) is reused
+// unchanged — this is the same place, read at a finer grain, not a second map.
+function drawChunkGround(x,z,step,now){
+  if(groundMode()!=='chunks'||!CHUNKS.size)return;
+  const base=waterAt(z)-7*z;                 // the canopy's own root
+  const colH=Math.max(24,canopyAt(z)*0.92);  // ONE height for every file, so a
+                                             // position is comparable file to file;
+                                             // the file's own size is the ladder.
+  const bh=colH/CHUNK_BANDS, unit=2.0+1.4*z; // px per touch: length IS the density
+  const rank=[...CHUNKS.entries()].sort((a,b)=>b[1].touches-a[1].touches);
+  for(const [path,e] of rank){
+    const n=byPath.get(path);if(!n)continue; // a file the island did not draw is not here
+    const cx=n.x, top=base-colH;
+    // the shaft — the file, whole, faint
+    x.strokeStyle=`rgba(110,94,64,${e.torn?0.22:0.42})`;x.lineWidth=1;
+    x.beginPath();x.moveTo(cx,base);x.lineTo(cx,top);x.stroke();
+    if(e.torn){                              // no height was measured: say so
+      x.strokeStyle='rgba(110,94,64,0.5)';
+      for(let i=0;i<4;i++){const y=top+i*3.2, w=3.5-i*0.7;
+        x.beginPath();x.moveTo(cx-w,y-3);x.lineTo(cx+w,y-6);x.stroke();}
+    }else{                                   // the ladder: one notch per 1,000 lines
+      x.fillStyle='rgba(150,130,96,0.46)';
+      const rungs=Math.min(60,Math.floor(e.lines/1000));
+      for(let k=1;k<=rungs;k++){const y=base-(k*1000/e.lines)*colH;x.fillRect(cx-3,y,6,0.9);}
+    }
+    // the whole-file acts: a wash over the entire shaft, on the write side
+    if(e.whole){x.fillStyle=`rgba(242,177,52,${clamp(0.05*e.whole,0,0.22)})`;
+      x.fillRect(cx,top,unit*1.6,colH);}
+    // the slabs — position along the shaft, LENGTH out from it
+    x.save();x.globalCompositeOperation='lighter';
+    for(let i=0;i<CHUNK_BANDS;i++){
+      const y=base-(i+1)*bh, h=Math.max(1.1,bh-0.35);
+      if(e.wr[i]){x.fillStyle=`rgba(242,177,52,${clamp(0.42+0.10*e.wr[i],0,0.95)})`;
+        x.fillRect(cx+1,y,unit*e.wr[i],h);}
+      if(e.rd[i]){x.fillStyle=`rgba(143,211,255,${clamp(0.34+0.09*e.rd[i],0,0.88)})`;
+        x.fillRect(cx-1-unit*e.rd[i],y,unit*e.rd[i],h);}
+    }
+    // the exact spans, hairline on the shaft: the bands are derived, these are
+    // the measurement itself, and a one-line chunk must not vanish into a band
+    for(const sp of e.spans){
+      const y=base-clamp((sp.a-1)/e.height,0,1)*colH;
+      x.fillStyle=sp.w?'rgba(255,214,140,0.75)':'rgba(190,231,255,0.65)';
+      x.fillRect(cx-3,y-0.4,6,0.8);
+    }
+    x.restore();
+  }
+  // the deepest name themselves — the rest answer on hover. A label is drawn
+  // only where one FITS: two names through each other is the failure the pods
+  // measured on 2026-09-17, and a column crowd is exactly where it returns.
+  if(z>0.5){
+    x.font=`9px ${MONO}`;x.textAlign='center';
+    const taken=[];
+    for(const [path,e] of rank){
+      const n=byPath.get(path);if(!n)continue;
+      const name=path.split('/').pop();
+      const foot=e.lines?`${e.lines} lines · ×${e.touches}`:`unmeasured · ×${e.touches}`;
+      // the WIDER of the two lines decides the reservation — the foot is
+      // usually the longer one, and reserving on the name alone is how two
+      // labels still print through each other
+      const half=Math.max(32,Math.max(name.length,foot.length)*2.85);
+      if(taken.some(t=>Math.abs(t.x-n.x)<t.half+half))continue;
+      taken.push({x:n.x,half});if(taken.length>7)break;
+      x.strokeStyle='rgba(110,94,64,0.35)';x.lineWidth=0.7;
+      x.beginPath();x.moveTo(n.x,base-colH);x.lineTo(n.x,base-colH-9);x.stroke();
+      x.fillStyle='rgba(232,220,192,0.70)';x.fillText(name,n.x,base-colH-21);
+      x.fillStyle='rgba(122,108,82,0.90)';
+      x.fillText(foot,n.x,base-colH-12);
+    }
+    x.textAlign='left';
+  }
 }
 
 function drawHub(x,z,step){
