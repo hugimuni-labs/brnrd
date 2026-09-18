@@ -1235,6 +1235,35 @@ def _deliver_event(f: OutboxFile) -> Handled:
         # only about a source we can actually see: an absent one is unknown,
         # not impossible.
         deliverable = not target_source or daemon._gate_owns_source(target_source)
+        if not deliverable:
+            # "No run left unheard" was built for the *terminal* reply and
+            # never wired to the interim, so a schedule-woken seat could
+            # deliver its last word and not one word before it.
+            #
+            # Live 2026-09-18: ten plain outbox messages — every PR
+            # announcement, an audit report, a measurement, a stopping note —
+            # died here across one morning, because the run's own waking event
+            # was the co-maintainer tick. `_resolve_notify_gate`'s docstring
+            # names `schedule` as the case it exists for; the fallback simply
+            # did not reach this staging site. Worse, `resources.delivery`
+            # reported `would_land: true` throughout, because it models the
+            # terminal route — the facet whose whole job is this question was
+            # answering about the other path.
+            #
+            # The dispatch-tree sources this branch was written for (`spawn`,
+            # `spawn_completed`, `dispatch_message`) are unaffected: nothing
+            # resolves a notify gate for a strand's own thread, so they still
+            # stage undeliverable with the same reason.
+            fallback_cfg = conf.load_config(
+                f.ctx.repo_root or emit.brr_dir.parent,
+            ) if emit.brr_dir else {}
+            fallback_gate = daemon._resolve_notify_gate(
+                fallback_cfg, emit.brr_dir,
+                conversation_key=str(getattr(task, "conversation_key", "") or ""),
+            ) if emit.brr_dir else ""
+            if fallback_gate:
+                target_source = fallback_gate
+                deliverable = True
         undeliverable_reason = (
             f"no gate owns {target_source or 'unknown'} events; route via "
             "gate:<name> if a person must read it"

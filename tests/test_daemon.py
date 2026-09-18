@@ -14268,6 +14268,71 @@ def test_drain_outbox_cut_on_gateless_wake_uses_notify_gate_fallback(
     assert promoted == 1
 
 
+def _drain_plain(tmp_path, body, *, source="schedule", filename="say.md"):
+    """Stage one plain (frontmatter-less) outbox message and drain it."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True, exist_ok=True)
+    path = protocol.create_event(inbox, source, "original", status="processing")
+    event_id = path.stem
+    (outbox / filename).write_text(body, encoding="utf-8")
+    task = Run(
+        id="run-parent", event_id=event_id, body="original", source=source, meta={},
+    )
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task, responses, event_id, outbox, inbox,
+    )
+    return promoted, outbox
+
+
+def test_a_plain_message_on_a_schedule_wake_rides_the_notify_gate(
+    tmp_path, monkeypatch,
+):
+    """"No run left unheard" was built for the terminal and never wired here.
+
+    A schedule-woken seat could deliver its *last* word through the
+    `notify.gate` fallback and not one word before it: an interim rode the
+    target event's own gate, and no gate owns `schedule`, so it staged
+    undeliverable and died quietly.
+
+    Live 2026-09-18: ten plain outbox messages across one morning — every PR
+    announcement, an audit report, a measurement, a stopping note — were lost
+    that way, while `resources.delivery` reported `would_land: true`
+    throughout, because that facet models the terminal route.
+    """
+    monkeypatch.setattr(
+        daemon.conf, "load_config", lambda _root: {"notify.gate": "telegram"},
+    )
+    monkeypatch.setattr(daemon, "_gate_can_deliver", lambda _brr, _gate: True)
+
+    _promoted, outbox = _drain_plain(tmp_path, "The morning's five PRs.\n")
+
+    assert not [
+        n for n in daemon._read_outbox_notices(outbox)
+        if "staged undeliverable" in n["text"]
+    ], "a fallback gate exists; nothing here is undeliverable"
+
+
+def test_a_plain_message_with_no_fallback_gate_still_says_so(
+    tmp_path, monkeypatch,
+):
+    """The other half, unchanged: with no gate able to carry it, the message
+    is still staged undeliverable and still says why. The fix routes around a
+    gap, it does not paper over one."""
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {})
+    monkeypatch.setattr(daemon, "_gate_can_deliver", lambda _brr, _gate: False)
+
+    _promoted, outbox = _drain_plain(tmp_path, "Nobody can carry this.\n")
+
+    assert [
+        n for n in daemon._read_outbox_notices(outbox)
+        if "no gate owns schedule events" in n["text"]
+    ]
+
+
 def test_drain_outbox_cut_on_gate_owned_wake_stays_on_current_event(
     tmp_path, monkeypatch,
 ):
