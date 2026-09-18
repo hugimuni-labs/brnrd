@@ -91,7 +91,10 @@ from . import presence
 from . import prompts
 from . import codex_status
 from . import codex_usage
+from . import course as course_mod
 from . import cut_verb
+from . import halt_verb
+from . import halts as halts_mod
 from . import protocol
 from . import promises
 from . import relics
@@ -118,7 +121,10 @@ from . import resource_hold
 from . import usage_samples
 from . import weld
 from . import worktree
-from .run import STATUSES, TERMINAL_STATUSES, Run, list_runs, run_manifest_path
+from .run import (
+    HALTED_STATUS, STATUSES, TERMINAL_STATUSES, Run, list_runs,
+    run_manifest_path,
+)
 
 class _RunnerRuntime(NamedTuple):
     """What resolving a runner profile yields for one attempt.
@@ -5448,6 +5454,12 @@ def _queue_respawn_request(
         meta["stake_carried_spent"] = str(int(armed_stake.get("spent") or 0))
         meta["stake_carried_from"] = task.id
     new_path = protocol.create_event(inbox_dir, source, new_body, **meta)
+    # The minted id, readable by the caller. `emit` carries it to the
+    # ledger and nowhere a *caller* can reach; `halt:`'s record needs to
+    # name the successor it handed the work to, and a record that says
+    # "a successor exists somewhere" is not a handle.
+    if hasattr(task, "meta"):
+        task.meta["respawn_event_id"] = new_path.stem
     print(f"[brnrd] outbox: queued respawn request ({new_path.stem})")
     if emit.conversation_key:
         conversations.append_artifact(
@@ -8506,6 +8518,176 @@ def _cut_bounce_kinds(mismatches: list[str]) -> list[str]:
         if kind not in kinds:
             kinds.append(kind)
     return kinds
+
+
+#: How many times one run's ``halt:`` may bounce before the daemon accepts
+#: it anyway, annotated with its own dissent. **Two: it bounces once.**
+#: (design-the-four-stops.md: *"It bounces once, exactly like the bolt"*.)
+#: The cap is not decoration — a verb that could be blocked forever would
+#: rebuild the exact failure it exists to end, a seat that cannot leave,
+#: with a guard's face on it. The bolt's own rule applies unchanged: a
+#: guard may only assert what an artifact proves, and it must never hold a
+#: run hostage. What the second attempt costs is honesty — the open items
+#: it went ahead over ride the permanent record as ``dissent``.
+_HALT_BOUNCE_CAP = 2
+
+
+def _halt_open_items(
+    task: Run,
+    *,
+    pending_events: list[dict[str, Any]],
+    repo_root: Path | None,
+    outbox_dir: Path | None,
+) -> list[halt_verb.OpenItem]:
+    """What the daemon itself attests is open at halt time.
+
+    The four the design names, each read off a source that already exists
+    and is already trusted by another guard — no new bookkeeping, and no
+    fact here is the resident's own claim about itself:
+
+    - **pending events** — :func:`_pending_events_for_agent`, the same
+      projection ``cut:`` diffs ``asks:`` against.
+    - **produce with no PR** — ``relics.collect``: commits attributed to
+      this run with no ``pr`` relic anywhere in the collection. Fires only
+      on ``commit`` (not a branch, not a kb page): a run whose produce is a
+      knowledge page owes no pull request, and a guard that demanded one
+      would teach residents to route around it.
+    - **unticked course rows** — ``course.parse`` over the run's own
+      ``.card``, the same ``## Plan`` checkboxes the boundary bar and the
+      Stop fold-in read. Each row is handled ``course:<n>`` *and* by its own
+      text, so a brief may name it either way.
+    - **live strands** — :func:`_owned_child_controls`, the one live-child
+      registry (``hooks._live_child_handover_line`` and portal-state's
+      ``owned_children`` project the same rows).
+
+    Unavailable source ⇒ fewer items, never an assumed violation — the
+    posture every other best-effort reader here takes. "Cannot tell" is
+    unknown, and a halt refused over a fact nobody can read would be a
+    seat that cannot leave for a reason nobody can fix.
+    """
+    items: list[halt_verb.OpenItem] = []
+
+    for ev in pending_events or ():
+        eid = str(ev.get("id") or "")
+        if not eid:
+            continue
+        short = hooks_mod._short_event_id(eid)
+        items.append(halt_verb.OpenItem(
+            kind="event",
+            handle=short,
+            aliases=(eid, _short_id_tail(eid)),
+            line=f"{short} is pending and unanswered",
+        ))
+
+    probe_root, collect_root = relics.scope_roots(task.meta, repo_root)
+    if collect_root is not None:
+        try:
+            live_branch, live_seed = relics.collection_scope(task.meta, probe_root)
+            commit_run_id = task.id if not task.meta.get("branch_name") else None
+            relics_list = relics.collect(
+                collect_root, branch=live_branch, seed_ref=live_seed,
+                outbox_dir=outbox_dir, commit_run_id=commit_run_id,
+                seed_oid=(
+                    relics.seed_oid_of(task.meta) if commit_run_id is None else None
+                ),
+            )
+        except Exception:  # noqa: BLE001 - a relics read never blocks an ending
+            relics_list = []
+        counts = relics.counts_by_kind(relics_list)
+        commits = int(counts.get("commit") or 0)
+        if commits and not counts.get("pr"):
+            branch = str(live_branch or task.meta.get("branch_name") or "").strip()
+            handle = branch or task.id
+            plural = "s" if commits != 1 else ""
+            items.append(halt_verb.OpenItem(
+                kind="produce",
+                handle=handle,
+                aliases=(task.id,) if branch else (),
+                line=(
+                    f"produce: {commits} commit{plural} on {handle} with no PR "
+                    "— nobody can review what nobody opened"
+                ),
+            ))
+
+    if outbox_dir is not None:
+        try:
+            card_text = (outbox_dir / _CARD_CONTROL_NAME).read_text(encoding="utf-8")
+        except OSError:
+            card_text = ""
+        route = course_mod.parse(card_text)
+        if route is not None:
+            for index, row in enumerate(route.rows, start=1):
+                if row.done:
+                    continue
+                handle = f"course:{index}"
+                items.append(halt_verb.OpenItem(
+                    kind="course",
+                    handle=handle,
+                    aliases=(row.text,),
+                    line=f"{handle} unticked — [ ] {row.text}",
+                ))
+
+    for entry in _owned_child_controls(task.id):
+        child_id = str(entry.get("run_id") or entry.get("event_id") or "").strip()
+        if not child_id:
+            continue
+        title = str(entry.get("title") or "").strip()
+        items.append(halt_verb.OpenItem(
+            kind="strand",
+            handle=child_id,
+            aliases=(_short_id_tail(child_id),),
+            line=(
+                f"strand {child_id} is live"
+                + (f" ({title})" if title else "")
+                + " — its return lands on a seat that will not be here"
+            ),
+        ))
+
+    return items
+
+
+def _halt_bounce_lines(
+    declaration: halt_verb.HaltDeclaration,
+    open_items: list[halt_verb.OpenItem],
+) -> list[str]:
+    """The bounce, as a person reads it: every open item the brief misses."""
+    return [item.line for item in halt_verb.unnamed(declaration, open_items)]
+
+
+def _halt_bounce_notice(
+    declaration: halt_verb.HaltDeclaration, lines: list[str],
+) -> str:
+    """The refusal text — the facts, then the exact tokens that answer them."""
+    field = "carry:" if declaration.carried else "resumable:"
+    return (
+        f"halt bounced: {len(lines)} open item(s) your {field} does not name "
+        "— " + " · ".join(lines)
+        + f" · name each one in {field} (its handle is enough), or stage the "
+        "halt again unchanged and it stands, annotated with what it left open"
+    )
+
+
+def _halt_spec(
+    task: Run,
+    declaration: halt_verb.HaltDeclaration,
+    open_items: list[halt_verb.OpenItem],
+    *,
+    dissent: list[str],
+) -> dict[str, Any]:
+    """The ``pending_halt`` shape the worker tail routes to ``_finalize_halt``.
+
+    Mirrors ``pending_resource_hold``'s contract deliberately: staged by
+    the outbox drain, acted on when this attempt's worker loop unwinds, so
+    the verb's effect lands at the same seam every other terminal outcome
+    does — never mid-drain, with half a turn's replies unsent.
+    """
+    return {
+        "declaration": halt_verb.durable_declaration(declaration, dissent=dissent),
+        "open_items": [item.line for item in open_items],
+        "unnamed": list(dissent),
+        "shell": declaration.shell,
+        "core": declaration.core,
+    }
 
 
 #: THE SAID BLOCK — the interaction updates the card (research-continuity-as-
@@ -14621,6 +14803,236 @@ def _finalize_resource_hold(
         resume_kind=meta["resume_kind"],
     )
     return task
+
+
+def _halt_body(record: dict[str, Any]) -> str:
+    """The announcement a halt writes when the turn left no reply of its own.
+
+    *It takes effect immediately and announces itself with its reason as a
+    message, not merely a record.* A record is something a person has to go
+    looking for; the failure this verb exists to end was measured precisely
+    because nothing announced it. The negotiation happens after and costs
+    one sentence: *come back*.
+    """
+    reason = str(record.get("reason") or "").strip() or "no reason given"
+    lines = [f'halt — "{reason}"']
+    if record.get("kind") == halt_verb.KIND_CARRIED:
+        lines.append("")
+        lines.append("The work continues; a successor carries this brief:")
+        lines.append(str(record.get("carry") or ""))
+    else:
+        lines.append("")
+        lines.append("The work stops here. What would pick it back up:")
+        lines.append(str(record.get("resumable") or ""))
+    dissent = [str(row) for row in (record.get("dissent") or ()) if row]
+    if dissent:
+        lines.append("")
+        lines.append(
+            "Left open, unnamed by the brief — " + " · ".join(dissent)
+        )
+    lines.append("")
+    lines.append("Send a message any time; it mints a fresh seat on this thread.")
+    return "\n".join(lines).strip() + "\n"
+
+
+def _queue_halt_successor(
+    emit: _WorkerEmit,
+    task: Run,
+    repo_root: Path | None,
+    inbox_dir: Path | None,
+    event_id: str,
+    record: dict[str, Any],
+    outbox_dir: Path | None = None,
+) -> str:
+    """Mint the successor a ``carry:`` brief is written for. Returns its event id.
+
+    **This is where ``respawn:`` retires into ``halt:``** — not by deleting
+    the older verb's machinery but by becoming its caller, so every
+    hard-won property of :func:`_queue_respawn_request` carries over
+    unchanged and cannot drift into a second copy: the reserved-key
+    discipline that stops a mint from predicting facts about a run that has
+    not booted (#2022), the ``handover`` stamp that says *this replaces the
+    seat* where ``source`` could not (#2016/#2020), the trust-tier
+    inheritance (#517), and the conversation artifact.
+
+    The successor wakes **fresh** by construction, which is the one thing
+    the three measured mechanisms all failed at: a halted run is terminal,
+    so there is no hold record to release, no ``native_session_id`` to
+    re-derive at release time, and nothing to spray a session stamp across
+    (`_undefer_held_event`'s drawer). *A halt that carries a successor must
+    not hand it the predecessor's scroll* — here it cannot, rather than
+    being asked not to.
+
+    Body absent ⇒ no successor: :func:`halt_verb.parse_halt` has already
+    refused a ``shell:``/``core:`` with no ``carry:``, so reaching this
+    function without a brief is a caller bug, not a state to paper over.
+    """
+    carry = str(record.get("carry") or "").strip()
+    if not carry or inbox_dir is None:
+        return ""
+    fm = {
+        "respawn": "true",
+        "shell": str(record.get("shell") or "") or str(
+            task.meta.get("runner_shell") or ""
+        ),
+        "core": str(record.get("core") or "") or str(
+            task.meta.get("runner_core") or ""
+        ),
+        "reason": str(record.get("reason") or ""),
+    }
+    try:
+        dispatched = _queue_respawn_request(
+            emit, task, repo_root, inbox_dir, event_id, fm, carry, outbox_dir,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # The halt already happened — it is a *terminal* act staged a turn
+        # ago, and the seat's process is unwinding. A successor that fails
+        # to mint must therefore degrade to the halt's other honest shape
+        # ("the work stops here, and here is what it would take"), never
+        # to an exception that strands the run mid-finalize with its
+        # status unwritten.
+        print(f"[brnrd] halt: successor mint failed ({exc}) — halting without one")
+        return ""
+    if not dispatched:
+        return ""
+    return str(task.meta.get("respawn_event_id") or "")
+
+
+def _finalize_halt(
+    emit: _WorkerEmit,
+    task: Run,
+    event: dict,
+    eid: str,
+    runs_dir: Path,
+    env_backend,
+    env_ctx,
+    branch_plan,
+    cfg: dict,
+    inbox_dir: Path,
+    responses_dir: Path,
+    resp_path: Path,
+    halt_fields: dict[str, Any],
+    *,
+    conversation_key: str,
+    account_context: "account.AccountContext | None" = None,
+    account_home: Path | None = None,
+    repo_root: Path | None = None,
+) -> Run:
+    """End *task*: the seat halts (design-the-four-stops.md §The two verbs).
+
+    Three differences from :func:`_finalize_resource_hold`, and they are the
+    whole verb:
+
+    1. **The status is terminal.** ``halted`` sits with ``stopped`` and
+       ``released``, not with ``held`` — nothing resumes this run. The next
+       message mints a new seat, and that cheapness is the reason ending
+       needs no approval gate: the risk was never *that the seat ended*, it
+       was *that the brief was never written*, and the bounce checked that
+       before this function was ever reached.
+    2. **Siblings are not deferred.** A park holds its mail because the
+       same seat will read it; a halt does not, because it will not be
+       here. Pending events stay pending for whoever comes next — the one
+       place where "the seat ends" and "the work ends" must not be
+       conflated.
+    3. **The record is permanent and public**: ``Run.meta["halt"]`` rides
+       the manifest round-trip, and one row lands in the account ledger
+       (:mod:`brr.halts`) where a halt *with* carry is counted apart from a
+       halt *without*.
+
+    Unchanged from every other ending: the worktree-preservation sequence.
+    A halted run's in-flight edits survive exactly as a failed or parked
+    run's do.
+    """
+    declaration = dict(halt_fields.get("declaration") or {})
+    record: dict[str, Any] = {
+        **declaration,
+        "halted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "open_items": list(halt_fields.get("open_items") or ()),
+        "conversation_key": conversation_key,
+    }
+    successor = _queue_halt_successor(
+        emit, task, repo_root, inbox_dir, eid, record, None,
+    )
+    if successor:
+        record["successor_event"] = successor
+    task.meta["halt"] = record
+    task.meta.pop("pending_halt", None)
+    _write_terminal_halt_response(emit, task, event, responses_dir, resp_path, record)
+    halts_mod.record(
+        account_home,
+        run_id=task.id,
+        repo_label=str(task.meta.get("repo_label") or ""),
+        conversation_key=conversation_key,
+        kind=str(record.get("kind") or halt_verb.KIND_STOPPED),
+        reason=str(record.get("reason") or ""),
+        carry=record.get("carry"),
+        resumable=record.get("resumable"),
+        successor_event=successor,
+        open_items=record.get("open_items") or (),
+        at=str(record.get("halted_at") or ""),
+    )
+    if not _is_strand(task.meta):
+        # The seat is gone, not parked: the Shuttle is released the way a
+        # completed run releases it, never transitioned to ``parked``.
+        try:
+            entity = shuttle.Shuttle.load(_shuttle_home(account_home, runs_dir))
+            if entity.state in ("awake", "listening"):
+                entity.transition(
+                    "released", why="halted", by="daemon", run_id=task.id,
+                    repo_root=str(repo_root or _repo_root_for_runs(runs_dir)),
+                    conversation_key=conversation_key,
+                )
+        except Exception as exc:  # noqa: BLE001 - bookkeeping never blocks an ending
+            print(f"[brnrd] halt: shuttle release skipped ({exc})")
+    task.update_status(HALTED_STATUS, runs_dir)
+    _set_event_status_if_present(event, "done")
+    print(
+        f"[brnrd] worker {eid}: halted ({record.get('kind')}) — "
+        f"{str(record.get('reason') or '')[:80]}"
+    )
+    _capture_worktree(task, env_ctx, branch_plan, cfg, runs_dir)
+    emit("finalizing", run_id=task.id, stage="halted")
+    with _branch_lock(branch_plan.target_branch):
+        task = env_backend.finalize(env_ctx, task, runs_dir)
+    _emit_preserved_containers(emit, task)
+    emit(
+        "halted",
+        run_id=task.id,
+        event_id=eid,
+        kind=str(record.get("kind") or ""),
+        reason=str(record.get("reason") or ""),
+        successor_event=successor or None,
+        unnamed=len(record.get("dissent") or ()),
+    )
+    return task
+
+
+def _write_terminal_halt_response(
+    emit: _WorkerEmit,
+    task: Run,
+    event: dict,
+    responses_dir: Path,
+    response_path: Path,
+    record: dict[str, Any],
+) -> bool:
+    """Make sure the halt's reason reaches the thread, not only the ledger.
+
+    The announcement is normally the halt file's own body, delivered at
+    drain time through the ordinary reply lane — *immediately*, as the
+    design requires, not at this tail. This is the backstop for the turn
+    that staged a bare ``halt:`` with no body: same addressed-delivery
+    guards as :func:`_write_terminal_hold_response`, halt-shaped prose.
+    """
+    if not _event_requires_thread_delivery(event) and not _crash_requires_notice(event):
+        return False
+    if _response_has_body(response_path):
+        return False
+    body = _halt_body(record)
+    task.terminal_reply = body
+    protocol.write_response(responses_dir, event["id"], body)
+    _record_response_artifact(emit, task, response_path)
+    _set_event_run_outcome(event, _run_outcome_word(task))
+    return True
 
 
 def _native_session_id_for(task: Run) -> str | None:
