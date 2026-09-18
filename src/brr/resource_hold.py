@@ -394,10 +394,44 @@ def schedule_event_releases(meta: dict[str, Any] | None, event: dict[str, Any] |
     return bool(event) and str(event.get("source") or "") == "schedule"
 
 
+#: Frontmatter key a daemon-minted handover carries — the one fact that says
+#: "this event exists to *replace* the seat", set by
+#: ``daemon._respawn_event_meta`` on both minting paths (the ``respawn:``
+#: outbox verb and the dashboard's held-seat respawn).
+#:
+#: It is deliberately **not** ``source``. A respawn inherits the waking
+#: event's source (``daemon._queue_respawn_request``: ``fm.get("source") or
+#: current.get("source") or task.source or "respawn"``), so a real handover
+#: minted from a schedule-woken seat reads ``source: schedule`` and one
+#: minted from a chat message reads ``source: telegram``. The literal
+#: ``"respawn"`` is reached only when nothing upstream has a source at all.
+#: Measured 2026-09-18 on ``evt-1789741124175027000-udee``, a hand-made
+#: respawn: ``source: schedule`` (brnrd#2022). Keying on the source would
+#: also break delivery if we *set* it — no gate owns ``respawn`` (brnrd#2020).
+HANDOVER_KEY = "handover"
+
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def is_handover(event: dict[str, Any] | None) -> bool:
+    """Whether *event* is a daemon-minted seat handover.
+
+    Reads :data:`HANDOVER_KEY` tolerantly: event frontmatter round-trips
+    through a text file, so the same fact arrives as ``True`` in memory and
+    ``"true"`` off disk.
+    """
+    if not event:
+        return False
+    value = event.get(HANDOVER_KEY)
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in _TRUTHY
+
+
 def handover_event_releases(
     meta: dict[str, Any] | None, event: dict[str, Any] | None,
 ) -> bool:
-    """Whether a queued ``respawn`` wakes this hold — every hold but a wall.
+    """Whether a queued handover wakes this hold — every hold, walls included.
 
     A handover is the opposite of routine mail: it is the seat asking to be
     replaced. It must survive a park armed *after* it was queued, or the park
@@ -407,22 +441,24 @@ def handover_event_releases(
     turn-end park armed at 22:35:14Z, landed in ``accumulated_event_ids``, and
     never dispatched; an unrelated schedule tick woke the seat 95 minutes
     later — natively, onto the very scroll the handover existed to end
-    (brnrd#2012). The post-arm filter had this right all along
-    (``respawn`` is deliberately absent from
-    ``daemon._HOLD_ACCUMULATE_ONLY_SOURCES``); the arm-time defer simply never
-    asked.
+    (brnrd#2012).
 
-    Unlike a tick, a wall does **not** stop it. The post-arm filter already
-    passes a respawn through a ``quota_exhausted`` hold (``respawn`` is absent
-    from ``daemon._HOLD_ACCUMULATE_ONLY_SOURCES``, which has no wall clause),
-    and a handover can name a different ``shell:``/``core:`` — it is one of
-    the two documented ways off a wall. Deferring it only at arm time would
-    make the same event mean two different things three minutes apart, which
-    is the family of bug this predicate exists to end.
+    brnrd#2022 corrects this predicate's key. It shipped in #2016 asking
+    ``source == "respawn"``, which nothing in the system produces — the real
+    respawn event measured the next afternoon reads ``source: schedule``
+    (see :data:`HANDOVER_KEY`), so the fix was nearly inert in production
+    while its own suite passed on a hand-written fixture. The marker is
+    explicit now, and the tests read a real event's shape off disk.
+
+    Unlike a tick, a wall does **not** stop it. A handover may name a
+    different ``shell:``/``core:`` — it is one of the two documented ways off
+    a wall — and deferring it only at arm time would make the same event mean
+    two different things three minutes apart, which is the family of bug this
+    predicate exists to end.
     """
     if not is_active(meta):
         return False
-    return bool(event) and str(event.get("source") or "") == "respawn"
+    return is_handover(event)
 
 
 def strand_event_releases(
