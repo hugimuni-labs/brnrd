@@ -181,8 +181,8 @@ def _git_commits(repo_dir: Path, branch: str, read: list[str]) -> list[dict[str,
 
 def pass_places(boundaries: Path, where: Any, *, rows: int = 4000) -> list[dict[str, Any]]:
     """One run's repo places with its **own measured weight** on each —
-    ``{path, touches, reads, writes, covered, deepest, whole, lines_known,
-    spans, last}``, heaviest first.
+    ``({path, touches, reads, writes, covered, deepest, whole, spans, last}
+    heaviest first, rows_scanned)``.
 
     ``cloth.rows[].trail`` is eight places and a timestamp
     (:data:`brr.loom.state.TRAIL_PLACES`) — enough to say *where*, never
@@ -204,7 +204,8 @@ def pass_places(boundaries: Path, where: Any, *, rows: int = 4000) -> list[dict[
     record is not a weight of zero.
     """
     out: dict[str, dict[str, Any]] = {}
-    for row in st.tail_rows(boundaries, rows, st._is_bead):
+    scanned = st.tail_rows(boundaries, rows, st._is_bead)
+    for row in scanned:
         at = row.get("at")
         for chunk in row.get("chunks") or ():
             if not isinstance(chunk, dict):
@@ -232,7 +233,7 @@ def pass_places(boundaries: Path, where: Any, *, rows: int = 4000) -> list[dict[
             entry["deepest"] = max(entry["deepest"], high)
             if len(entry["spans"]) < PLACE_SPANS:
                 entry["spans"].append({"from": low, "to": high, "kind": "write" if write else "read"})
-    return sorted(out.values(), key=lambda e: (-e["touches"], e["path"]))
+    return sorted(out.values(), key=lambda e: (-e["touches"], e["path"])), len(scanned)
 
 
 def pass_page(repo_root: Path | str, account_home: Path | str | None, run_id: str) -> Page:
@@ -337,6 +338,7 @@ def pass_page(repo_root: Path | str, account_home: Path | str | None, run_id: st
         tail, where, compiled, run_id, source=str(getattr(run, "source", "") or ""),
         first_n=max(0, total - len(tail)) if total is not None else None,
     )
+    places, scanned = pass_places(boundaries, where)
     event_id = str(getattr(run, "event_id", "") or ledger.get("event_id") or "")
     name = st._first_line(st._read_text(outbox / ".name")) if outbox else None
     return {
@@ -361,7 +363,12 @@ def pass_page(repo_root: Path | str, account_home: Path | str | None, run_id: st
         "strands": strands,
         "beads": beads,
         "bead_total": total,
-        "places": pass_places(boundaries, where),
+        "places": places,
+        # the scan's own bottom, said: `places` is taken off the last
+        # `places_scanned` bead rows, and a run with more beads than that has
+        # early work this page cannot see. A reader compares it to
+        # `bead_total` rather than assuming the sum is the whole life.
+        "places_scanned": scanned,
     }, read
 
 
