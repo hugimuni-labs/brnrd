@@ -5324,7 +5324,15 @@ def _queue_respawn_request(
     fm: dict,
     body: str,
     outbox_dir: Path | None = None,
-) -> bool:
+) -> str | bool:
+    """Mint the successor event. Returns its **id**, or ``False``.
+
+    The id, not a bare ``True``: every caller that only asked "did it
+    dispatch" still reads it as truthy, and ``halt:`` — which mints its
+    successor through this same function so the reserved-key discipline
+    cannot drift into a second copy — needs a *handle* for its permanent
+    record. "A successor exists somewhere" is not a handle.
+    """
     if inbox_dir is None:
         _record_outbox_notice(
             outbox_dir, "respawn dropped: no inbox to queue into", kind="dropped",
@@ -5454,12 +5462,6 @@ def _queue_respawn_request(
         meta["stake_carried_spent"] = str(int(armed_stake.get("spent") or 0))
         meta["stake_carried_from"] = task.id
     new_path = protocol.create_event(inbox_dir, source, new_body, **meta)
-    # The minted id, readable by the caller. `emit` carries it to the
-    # ledger and nowhere a *caller* can reach; `halt:`'s record needs to
-    # name the successor it handed the work to, and a record that says
-    # "a successor exists somewhere" is not a handle.
-    if hasattr(task, "meta"):
-        task.meta["respawn_event_id"] = new_path.stem
     print(f"[brnrd] outbox: queued respawn request ({new_path.stem})")
     if emit.conversation_key:
         conversations.append_artifact(
@@ -5482,7 +5484,7 @@ def _queue_respawn_request(
         defer_until=defer_until,
         reason=reason or None,
     )
-    return True
+    return new_path.stem
 
 
 NOTICES_FILE = _outbox_notices.NOTICES_FILE
@@ -14898,9 +14900,7 @@ def _queue_halt_successor(
         # status unwritten.
         print(f"[brnrd] halt: successor mint failed ({exc}) — halting without one")
         return ""
-    if not dispatched:
-        return ""
-    return str(task.meta.get("respawn_event_id") or "")
+    return str(dispatched) if dispatched else ""
 
 
 def _finalize_halt(
