@@ -112,6 +112,62 @@ const hubRoomFor=b=>{
 // Screen coordinates are derived at draw time from CAM.z; the layout below is
 // the same at every altitude, which is why the zoom cannot reshuffle anything.
 const rows=t=>Array.isArray(t)?t:((t&&t.places)||[]);
+// A trail is a bounded per-run reading. The repo tree supplies file sizes only;
+// its heat and knots belong to other runs and must not leak into this view.
+let TREE=null;
+function treeScope(d, selected){
+  const run=selected||(d.run||{}).id||null, all=(d.cloth||{}).rows||[];
+  const own=all.find(r=>r.run===run), hands=run?all.filter(r=>r.parent===run):[];
+  const meta=new Map(rows(d.tree&&d.tree.repo).map(p=>[p.path,p]));
+  const places=new Map();
+  for(const r of [own,...hands].filter(Boolean))for(const t of r.trail||[]){
+    if(!t.path)continue;
+    let p=places.get(t.path);
+    if(!p){p={path:t.path,lines:(meta.get(t.path)||{}).lines,own:false,hands:[],
+              last:t.at,topics:[],heat:0.65,knots:1};places.set(t.path,p);}
+    if(r===own)p.own=true;else p.hands.push(r.run);
+    if((t.at||'')>(p.last||''))p.last=t.at;
+    p.topics=[...new Set([...p.topics,...(r.topics||[])])];
+  }
+  // Older daemon images omit the bound. Do not invent a limit for those feeds.
+  const limit=(d.cloth||{}).trail_limit;
+  return {run,selected:!!selected,replay:!!run&&run!==(d.run||{}).id,ended:own?.ended||null,
+    name:(own&&(own.name||own.title))||((d.run||{}).id===run&&(d.run||{}).name)||run||'No current run',
+    ownCount:((own||{}).trail||[]).length,hands: hands.length,
+    emptyHands:hands.filter(r=>!(r.trail||[]).length).length,
+    limit:Number.isInteger(limit)&&limit>0?limit:null,places:[...places.values()]};
+}
+function refreshTree(){
+  const selected=RECORD.pass;
+  const changed=TREE&&TREE.run!==(selected||(S.run||{}).id||null);
+  TREE=treeScope(S,selected);
+  layout();
+  indexChunks(S);
+  if(changed){
+    LENS.pin=null;LENS.path=null;HOVER.txt=null;pings=[];
+    for(const p of pods){
+      p.route=null;p.routeTo=null;
+      if(!TREE.replay){
+        // Returning to live restores the latest measured destination. It must
+        // not require a new boundary (or replay old beads as fresh pings).
+        if(p.kind==='resident'){
+          p.target=p.listening?{cell:hubBy.get('shed')}
+            :[...(S.beads||[])].reverse().map(aimAt).find(Boolean)||{cell:hubBy.get('shed')};
+        }else{
+          const row=((S.hud||{}).strands||[]).find(s=>s.id===p.id)||{};
+          const n=resolveIn(byPath,(row.places||[])[0]);
+          p.target=n?{node:n}:{cell:hubBy.get(row.last_place_kind)||hubBy.get('crew')};
+        }
+        p.placed=false;
+      }
+    }
+  }
+  // Rebind the live actor to the new node objects after a feed refresh.
+  for(const p of pods)if(p.target&&p.target.node){
+    const n=byPath.get(p.target.node.path);
+    p.target=n?{node:n}:{cell:hubBy.get('shed')};
+  }
+}
 function layout(){
   water=waterAt(CAM.z);
   if(!S)return;
@@ -167,7 +223,7 @@ function layoutGround(x0,w){
 // label. (The mount table names two more checkouts — the feed carries one, so
 // one is what is drawn. §1: nothing draws that was not measured.)
 function layoutIsland(x0,w){
-  const ps=rows(S.tree&&S.tree.repo).filter(p=>!p.path.includes('node_modules')).slice(0,220);
+  const ps=TREE?TREE.places:[];
   const prev=byPath;                       // a path already standing is not an arrival
   nodes=[];byPath=new Map();
   const g=new Map();
@@ -195,7 +251,7 @@ function layoutIsland(x0,w){
     for(let k=parts.length-1;k>0;k--){const a=byPath.get(parts.slice(0,k).join('/'));if(a&&a!==n){n.up=a;break;}}
   }
   island={label:(S.repo||'repo'),x:x0+w/2,w,boughs,n:ps.length,
-          total:rows(S.tree&&S.tree.repo).length};
+          total:ps.length};
 }
 
 // ── the warp: §10 way (a), depth-then-lifecycle ────────────────────────────
@@ -300,10 +356,11 @@ const groundMode=()=>_groundMode===null
 
 function indexChunks(d){
   CHUNKS.clear();CHUNK_TOP=0;
+  if(!TREE||TREE.replay)return;
   for(const b of (d.beads||[])){
     for(const c of (b.chunks||[])){
       const path=c&&c.rel;            // `rel` is the join the raw absolute `path` cannot make
-      if(!path)continue;
+      if(!path||!byPath.get(path)?.own)continue;
       let e=CHUNKS.get(path);
       if(!e){e={spans:[],touches:0,reads:0,writes:0,whole:0,deepest:0};CHUNKS.set(path,e);}
       e.touches++;const w=c.kind==='write';w?e.writes++:e.reads++;
@@ -394,7 +451,9 @@ const aimAt=b=>{
 // at altitude, along the corridor between two rooms where the feed carries the
 // edge, else up to the deck line, along it, and down. Every waypoint resolves
 // at draw time, so the camera can move under a pod in flight.
-const sameTarget=(a,b)=>(!a&&!b)||!!(a&&b&&a.node===b.node&&a.home===b.home&&a.cell===b.cell&&a.room===b.room);
+const targetKey=t=>!t?null:t.node?`repo:${t.node.path}`:t.home?`home:${t.home.path}`
+  :t.cell?`hub:${t.cell.k}`:t.room?`room:${t.room.it.id}`:null;
+const sameTarget=(a,b)=>targetKey(a)===targetKey(b);
 const shoreY=z=>waterAt(z)-10-14*z;
 function ptOf(a,z){
   if(a.free)return a.free;
@@ -454,10 +513,9 @@ function polyAt(route,u,z){
 }
 
 function ingest(d){
-  const first=!S;S=d;
-  if(first||!nodes.length)layout();else layoutWarp(W*0.03,W*0.94);
-  indexChunks(d);                      // cheap: the feed carries ~240 beads
-  $('#src').textContent=`${d.repo||'local'} · live · ${rows(d.tree&&d.tree.repo).length} places · ${rows(d.tree&&d.tree.home).length} home · ${((d.warp&&d.warp.items)||[]).length} items`;
+  S=d;
+  refreshTree();                      // cheap: the feed carries ~240 beads
+  $('#src').textContent=`${d.repo||'local'} · live · ${rows(d.tree&&d.tree.home).length} home · ${((d.warp&&d.warp.items)||[]).length} items`;
   const pod=podFor('resident','resident');
   pod.label=(d.run&&d.run.mood_glyph)||'b·_·d';
   pod.listening=/listen|await|held/.test((d.shuttle||{}).state||'');
@@ -702,8 +760,7 @@ function drawScene(x,now){
       dimUnder(x,wins);
     });
     L('water',x,()=>clipOut(x,wins,()=>{
-      drawPings(x,z,now);
-      ACTOR.drawPods(x,z,step,now);
+      if(!TREE?.replay){drawPings(x,z,now);ACTOR.drawPods(x,z,step,now);}
       RECORD.water(x,z,now);
     }));
     L('windows',x,()=>{for(const w of wins)w.draw(x);});
@@ -871,7 +928,22 @@ function drawIsland(x,z){
       x.globalAlpha=1;
     }
     x.fillStyle='#8a7c5e';x.font=`10px ${MONO}`;x.textAlign='center';
-    x.fillText(`${island.label} · ${island.n} of ${island.total} places`,island.x,water+12);
+    x.fillText(`${island.label} · ${island.n} recent places`,island.x,water+12);
+    const ty=Math.max(160,water-canopyAt(z)-34);
+    const title=`${TREE.replay?(TREE.ended?'PAST RUN':'SELECTED RUN'):TREE.selected?'CURRENT RUN':'LIVE RUN'} · ${TREE.name}`;
+    x.font=`12px ${MONO}`;x.fillStyle='#e8dcc0';
+    const titleLines=wrapText(x,title,island.w-24);
+    titleLines.slice(0,2).forEach((l,i)=>x.fillText(l,island.x,ty+i*15));
+    const sy=ty+titleLines.slice(0,2).length*15;
+    x.font=`10px ${MONO}`;x.fillStyle='#b9a582';
+    const cap=TREE.limit?`last ${TREE.limit} places per run`:'recent places · feed bound unspecified';
+    x.fillText(`● run ${TREE.ownCount} · ◇ ${TREE.hands} direct strand${TREE.hands===1?'':'s'} · ${cap}`,island.x,sy);
+    x.fillStyle='#8a7c5e';
+    x.fillText(TREE.replay?'repo trail only · home and warp remain live · Esc returns to live'
+      :TREE.emptyHands?`${TREE.emptyHands} strand${TREE.emptyHands===1?'':'s'} without a recorded repo trail`:'',island.x,sy+14);
+    if(!nodes.length){x.fillStyle='#b9a582';x.font=`12px ${MONO}`;
+      x.fillText('No repo trail recorded',island.x,water-canopyAt(z)*0.45);}
+
     if(groundMode()==='chunks'){x.fillStyle='#4a4336';x.font=`9px ${MONO}`;
       x.fillText(`chunk ground · ${CHUNKS.size} files measured · ice ← read · write → amber`,island.x,water+24);}
     x.textAlign='left';
@@ -902,9 +974,32 @@ function drawCanopy(x,z,step,now){
       rg.addColorStop(0,`rgba(242,177,52,${0.30*lum+n.flare*0.5})`);rg.addColorStop(1,'rgba(242,177,52,0)');
       x.fillStyle=rg;x.beginPath();x.arc(n.x,ny,R,0,7);x.fill();x.restore();}
     x.fillStyle=lum>0.02?A:'#2b2318';x.globalAlpha=lum>0.02?clamp(0.35+lum,0,1):0.55;
-    x.beginPath();x.arc(n.x,ny,rr,0,7);x.fill();x.globalAlpha=1;
+    if(n.own){x.beginPath();x.arc(n.x,ny,rr,0,7);x.fill();}
+    if(n.hands.length){
+      const dr=rr+3;x.strokeStyle=A;x.lineWidth=1;
+      x.beginPath();x.moveTo(n.x,ny-dr);x.lineTo(n.x+dr,ny);x.lineTo(n.x,ny+dr);
+      x.lineTo(n.x-dr,ny);x.closePath();x.stroke();
+    }
+    x.globalAlpha=1;
     if(gk!==null)glitchSlices(x,n.x-rr*3,ny-rr*2,rr*6,rr*4,gk,lum>0.02?A:'#4a4336');
     if(step)n.flare*=0.955;
+  }
+  // Names stay beside their places, with own work winning a crowded label slot.
+  // The complete path and attribution remain available on hover.
+  if(z>0.62&&!column){
+    const occupied=[];x.font=`10px ${MONO}`;
+    for(const n of [...nodes].sort((a,b)=>Number(b.own)-Number(a.own)||(b.last||'').localeCompare(a.last||''))){
+      const name=n.path.split('/').pop(), text=name.length>30?name.slice(0,27)+'…':name;
+      const tw=x.measureText(text).width, ny=treeY(n,z);
+      for(const side of [1,-1]){
+        const px=side===1?n.x+10:n.x-10-tw, py=ny-7;
+        const rect={x:px,y:py-10,w:tw+4,h:15};
+        if(px<island.x-island.w/2||px+tw>island.x+island.w/2)continue;
+        if(occupied.some(r=>rect.x<r.x+r.w&&rect.x+rect.w>r.x&&rect.y<r.y+r.h&&rect.y+rect.h>r.y))continue;
+        x.textAlign='left';x.fillStyle=n.own?'#d9cba9':'#8a7c5e';x.fillText(text,px,py);
+        occupied.push(rect);break;
+      }
+    }
   }
 
 }
@@ -1207,7 +1302,7 @@ cv.addEventListener('mousemove',e=>{
   const ln=lensPick(e.clientX,e.clientY,z,7);
   if(ln)LENS.path=ln.path;else if(!inside)LENS.path=null;
   if(inside&&!n){HOVER.txt=inside;HOVER.x=e.clientX;HOVER.y=e.clientY;return;}
-  if(n)txt=`${n.path} · heat ${(n.heat||0).toFixed(2)} · ${n.knots||0} knots · last ${n.last||'—'}`;
+  if(n)txt=`${n.path}\n${n.own?'this run':''}${n.own&&n.hands.length?' + ':''}${n.hands.length?`${n.hands.length} direct strand(s)`:''} · last ${n.last||'—'}${n.hands.length?'\n'+n.hands.join(', '):''}`;
   if(!txt){const hn=homeNodes.find(n=>Math.hypot(n.x-e.clientX,homeY(n,z)-e.clientY)<6);
     if(hn)txt=`home / ${hn.path} · ${hn.knots||0} knots · last ${hn.last||'—'}`;}
   if(!txt&&hub)for(const c of hub.cells){
@@ -1687,13 +1782,7 @@ const ACTOR={
       rows.push(['warm',`${lit} touched this week · ${dk.n-lit} dark`]);
       rows.push(['anchor',dk.anchor?`${dk.anchor.n} files on the island`:'no files measured']);
       foot=['↓ or click a room','a topic is a deck · an item is a room on it'];
-    }else{
-      head='NOTHING CHOSEN';
-      rows.push(['','click a room or a deck']);
-      rows.push(['keys','← → along a lane · ↑ ↓ across lanes']);
-      rows.push(['','[ ] between decks · ⏎ chooses · esc clears']);
-      if(SELECTED.hint)rows.push(['',SELECTED.hint]);
-    }
+    }else return null;
     const pw=360, px=W-16-pw;
     g.save();g.font=`10px ${MONO}`;
     const nlines=rows.reduce((n,[k,v])=>n+(k==='*'?wrapText(g,String(v),pw-20).length:1),0);
@@ -2026,6 +2115,7 @@ ACTOR.bench={
 // keep their own, and this block never rewrites them.
 cv.addEventListener('mousedown',e=>{
   const z=CAM.z;
+  if(RECORD.hit(e.clientX,e.clientY))return;
   if(inBtn(e.clientX,e.clientY)){ACTOR.select.choose();return;}   // the offer
   const hit=ACTOR.select.at(e.clientX,e.clientY,z);
   if(hit&&hit.room){
@@ -2048,6 +2138,7 @@ addEventListener('keydown',e=>{
   if(k==='Enter'){e.preventDefault();
     if(SELECTED.open)ACTOR.bench.close();else ACTOR.bench.open(SELECTED.id);return;}
   if(k==='d'||k==='D'){ACTOR.select.choose();return;}       // the verb, off ⏎
+  if((k==='ArrowLeft'||k==='ArrowRight')&&(!SELECTED.kind||RECORD.pass))return;
   if(k==='ArrowLeft'||k==='ArrowRight'){e.preventDefault();ACTOR.select.walk(k==='ArrowRight'?1:-1,0);}
   else if(k==='ArrowUp'||k==='ArrowDown'){e.preventDefault();ACTOR.select.walk(0,k==='ArrowDown'?1:-1);}
   else if(k==='['||k===']'){e.preventDefault();
@@ -2509,11 +2600,9 @@ const RECORD=(()=>{
 
   // ── 2b · the fold onto the canopy: the files a pass touched ──────────────
   // Same mark as the rooms get, for the same reason: interface ink, never
-  // warmth. `trail` is ordered newest-first, so the pass's own last touch gets
-  // the one label — the rest are rings.
+  // warmth. File names are drawn by the canopy for live and past runs alike.
   function drawLitFiles(g,z,nds){
     const s=litPlaces(); if(!s.size||!nds||!nds.length)return;
-    const p=R.byRun.get(R.pass), newest=((p&&p.trail)||[])[0];
     g.save();g.strokeStyle=INK;g.lineWidth=1;g.font=`8px ${MONO}`;
     let hit=0;
     for(const n of nds){
@@ -2521,12 +2610,7 @@ const RECORD=(()=>{
       hit++;
       const ny=treeY(n,z), rr=Math.max(2.2,n.r*(0.42+0.58*z))+3.5;
       g.beginPath();g.arc(n.x,ny,rr,0,7);g.stroke();
-      if(newest&&n.path===newest.path){
-        g.fillStyle=INK;g.globalAlpha=0.9;
-        g.textAlign=n.x>W*0.8?'right':'left';
-        g.fillText(n.path.split('/').pop(),n.x+(n.x>W*0.8?-rr-3:rr+3),ny+3);
-        g.textAlign='left';g.globalAlpha=1;
-      }
+
     }
     R.litFiles={of:s.size,drawn:hit};
     g.restore();
@@ -2941,7 +3025,7 @@ const RECORD=(()=>{
     const z=CAM.z;
     const nds=(R.view&&R.view.nodes)||(typeof nodes!=='undefined'?nodes:[]);
     const near=(px,py)=>Math.hypot(px-mx,py-my)<7;
-    for(const n of nds)if(near(n.x,treeY(n,z))){R.place=n.path;R.pass=null;R.roomLocal=null;return true;}
+    for(const n of nds)if(near(n.x,treeY(n,z))){R.place=n.path;R.roomLocal=null;return true;}
     for(const n of (R.roots||[]))if(near(n.x,rootY(n,z))){R.place=n.path;R.pass=null;R.roomLocal=null;return true;}
     return false;
   };
@@ -2953,7 +3037,7 @@ const RECORD=(()=>{
   cv.addEventListener('mouseleave',()=>{R.hover=null;R.mouse=null;});
   cv.addEventListener('click',e=>{
     const p=R.hit(e.clientX,e.clientY);
-    if(p){R.cursor=R.passes.indexOf(p);R.pass=p.run;R.roomLocal=null;R.place=null;return;}
+    if(p){ACTOR.select.clear();R.cursor=R.passes.indexOf(p);R.pass=p.run;R.roomLocal=null;R.place=null;return;}
     if(typeof ACTOR!=='undefined'&&ACTOR&&typeof ACTOR.select==='function'){
       try{if(ACTOR.select(e)){R.pass=null;return;}}catch(err){}
     }
@@ -2964,7 +3048,9 @@ const RECORD=(()=>{
   addEventListener('keydown',e=>{     // field3's model: ← → scrub · L wire · P body · Esc
     const k=e.key;
     if(k==='ArrowLeft'||k==='ArrowRight'){
+      if(SELECTED.kind&&!R.pass)return;
       if(!R.passes.length)return;
+      ACTOR.select.clear();
       R.cursor=clamp((R.cursor<0?R.passes.length-1:R.cursor)+(k==='ArrowRight'?1:-1),0,R.passes.length-1);
       R.pass=R.passes[R.cursor].run;R.roomLocal=null;R.place=null;e.preventDefault();
     }
@@ -3022,6 +3108,7 @@ const RECORD=(()=>{
     const S0=(typeof S!=='undefined'?S:null);
     R.ready=!!S0; if(!S0)return;
     if(R.src!==S0)sync(S0);
+    if(!TREE||TREE.run!==(R.pass||(S0.run||{}).id||null)||TREE.selected!==!!R.pass)refreshTree();
     if(R.rootsFor!==S0){layoutRoots(S0);R.rootsFor=S0;}
     geom();                       // reads RESERVE.card: the cloth's own width
     R.wireM=wireMetrics(z);       // sets R.wireTop, which rootDepth reads
@@ -3034,7 +3121,7 @@ const RECORD=(()=>{
   };
   R.water=(g,z,now)=>{
     if(!R.ready)return;
-    drawBody(g,typeof pods!=='undefined'?pods:[]);
+    if(!TREE.replay)drawBody(g,typeof pods!=='undefined'?pods:[]);
     drawCloth(g);
     if(!R.log)drawWire(g,z,R.wireM);       // the corner. `L` is a window.
   };
@@ -3400,38 +3487,7 @@ function drawChrome(g){
   hair(g,bx,y-14,bx,y-14+(m.rows.length*19)+6,0.24);
   hair(g,bx,y-14,bx+9,y-14,0.24);hair(g,bx,y-14+(m.rows.length*19)+6,bx+9,y-14+(m.rows.length*19)+6,0.24);
   m.rows.forEach((r,i)=>{runLine(g,r,bx+12,y+i*19,11);});
-  // ── the belt: etched glass, and the fill is the reading's own colour ──
-  const vw=196, vx=W-16-vw;
-  let vy=54;
-  for(const v of m.vials){
-    g.font=`10px ${MONO}`;g.fillStyle=DIM;g.fillText(v.n,vx,vy);
-    g.font=`15px ${MONO}`;g.fillStyle=v.torn?ABSENT:v.color;g.textAlign='right';
-    g.fillText(v.text,vx+vw,vy+1);g.textAlign='left';
-    const gy=vy+9, gh=11;
-    // the glass: a body, two lips, a specular line
-    g.fillStyle=GLASS;g.fillRect(vx,gy,vw,gh);
-    if(v.torn){
-      g.save();g.beginPath();g.rect(vx,gy,vw,gh);g.clip();
-      g.strokeStyle='rgba(90,77,60,0.55)';g.lineWidth=1;
-      for(let hx=-gh;hx<vw+gh;hx+=6){g.beginPath();g.moveTo(vx+hx,gy+gh);g.lineTo(vx+hx+gh,gy);g.stroke();}
-      g.restore();
-    }else{
-      const fw=Math.max(0,Math.min(1,v.pct/100))*vw;
-      g.fillStyle=v.color;g.globalAlpha=0.85;g.fillRect(vx,gy,fw,gh);g.globalAlpha=1;
-      g.fillStyle='rgba(255,255,255,0.10)';g.fillRect(vx,gy+1,fw,1);
-      for(const f of [0.25,0.5,0.75]){hair(g,vx+vw*f,gy+gh-4,vx+vw*f,gy+gh,0.30);}
-    }
-    hair(g,vx,gy,vx+vw,gy,0.30);hair(g,vx,gy+gh,vx+vw,gy+gh,0.30);
-    hair(g,vx,gy,vx,gy+gh,0.42);hair(g,vx+vw,gy,vx+vw,gy+gh,0.42);
-    vy+=42;
-  }
-  // ── the legend, under its own rule ──
-  const ll=m.legend.filter(l=>l.length);
-  if(ll.length){
-    const ly=H-14-(ll.length-1)*16;
-    hair(g,16,ly-16,16+380,ly-16,0.14);
-    ll.forEach((l,i)=>runLine(g,l,16,ly+i*16,10));
-  }
+
 }
 
 // The plate is redrawn when [WORLD]'s HUD changes, not sixty times a second:

@@ -227,7 +227,7 @@ def test_absence_is_null_or_empty_never_a_guess(tmp_path):
     assert out["repo"] is None and out["shuttle"] is None and out["run"] is None and out["hud"] is None
     assert out["heddles"] == [] and out["beads"] == []
     assert out["warp"] == {"goals": [], "items": []}
-    assert out["cloth"] == {"rows": []} and out["bench"] == {"folds": []}
+    assert out["cloth"] == {"rows": [], "trail_limit": state.TRAIL_PLACES} and out["bench"] == {"folds": []}
     assert out["tree"] == {"repo": [], "places": [], "home": {"places": []}}
     assert not (tmp_path / "nohome" / "shuttle.json").exists()  # the loader would have minted one
 
