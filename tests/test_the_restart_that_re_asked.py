@@ -1,30 +1,37 @@
-"""A daemon restart leaves the seat standing instead of re-asking its question.
+"""A daemon restart leaves the seat standing and the question standing too.
 
 ``_mark_interrupted_runs`` recovers runs a dead daemon left frozen, and its
-recovery for the *event* was always the same one: flip it back to dispatchable
-so the main loop re-runs it. For a strand that is right — a parent is waiting
-on a contract. For a seat it produced THE STALE SUMMONS (2026-09-09): a full
-boot spent re-reading an ask the seat had answered five hours earlier.
+recovery for the *event* was always the same one: make it dispatchable so the
+main loop runs it again — as a **new run**. That is THE STALE SUMMONS
+(2026-09-09): a stranger booting cold on an ask the seat was already carrying,
+one whole boot spent learning it owed nothing.
 
-The rule these tests pin is drawn on one fact, and it is read off the durable
-message store rather than any status field: **did this run's waking event get
-a receipted answer?**
+The fix is not a smarter decision about which orphaned events deserve a retry.
+It is the removal of a decision:
 
-- answered ⇒ the event is retired and the run parks (``held`` / ``resume:
-  any``), so the next thing addressed to the seat resumes it;
-- not answered, or not provably answered ⇒ byte-for-byte today's path, because
-  retiring a question nobody answered trades a wasted boot for a dropped
-  question, which is strictly the worse trade.
+- the **run** parks (``held`` / ``resume: any``) — a seat is a life, not a
+  work item, and a restart is not a reason to end one;
+- the **event** stays exactly what it was: someone's open question, pending,
+  the seat's own mail. It is folded into the hold so nothing dispatches it in
+  the meantime, and the seat's own resume hands it back as ordinary mail — to
+  a *resident*, who can say "answered five hours ago" in one line, or answer
+  it if nobody ever did;
+- **strands are untouched**: a strand's orphan has a parent waiting on a
+  contract.
+
+Nothing in the recovery path guesses whether the ask was answered. An earlier
+draft of this branch did (a receipted-reply probe against ``message_store``)
+and it was deleted on his steer: to draw that line the sweep must guess, and a
+wrong guess drops a person's question silently — not guessing and not saying
+are the same act.
 """
 
 from __future__ import annotations
 
-import os
 import subprocess
-import time
 from pathlib import Path
 
-from brr import account, conversations, daemon, message_store, protocol, resource_hold
+from brr import account, conversations, daemon, protocol, resource_hold
 from brr.run import Run
 
 from _helpers import write_repo_scaffold
@@ -64,29 +71,16 @@ def _seat(tmp_path, *, conv_key="telegram:600:", strand=False, label="Gurio/brr"
     return repo, home, ctx, event, task
 
 
-def _say(ctx, task, event, *, status=message_store.DELIVERED, label="Gurio/brr"):
-    """Record what the run said to its correspondent, in the durable store."""
-    path = message_store.stage(
-        ctx, repo_label=label, run_id=task.id, body="on it — here is the answer",
-        kind="terminal", target_event=str(event["id"]),
-        source_ref=f"/tmp/{task.id}-{status}.md",
-    )
-    if status != message_store.PENDING:
-        message_store.transition(
-            path, status, gate="telegram", platform_message_id=7,
-            reason="test",
-        )
-    return path
-
-
-def _status(event) -> str:
-    return protocol.parse_frontmatter(
-        Path(event["_path"]).read_text(encoding="utf-8")
-    ).get("status")
-
-
 def _reload(repo, task) -> Run:
     return Run.from_file(repo / ".brr" / "runs" / task.id / "run.md")
+
+
+def _inbox(repo) -> Path:
+    return repo / ".brr" / "inbox"
+
+
+def _ids(events) -> set[str]:
+    return {str(e.get("id")) for e in events}
 
 
 def _failed_records(repo, conv_key):
@@ -96,10 +90,10 @@ def _failed_records(repo, conv_key):
     ]
 
 
-def test_answered_seat_parks_and_its_question_is_retired(tmp_path):
-    """The whole change, end to end, on the shape that measured it."""
+def test_the_seat_parks_and_its_question_stays_pending_mail(tmp_path):
+    """The whole change in one test: the run parks, the ask survives, and
+    nothing is queued to boot for it."""
     repo, _home, ctx, event, task = _seat(tmp_path)
-    _say(ctx, task, event)
 
     assert daemon._mark_interrupted_runs(ctx, repo, {}) == 1
 
@@ -108,79 +102,78 @@ def test_answered_seat_parks_and_its_question_is_retired(tmp_path):
     assert resource_hold.run_is_held(parked.status, parked.meta)
     assert hold.get("reason") == resource_hold.REASON_DAEMON_RESTARTED
     assert hold.get("resume_condition") == resource_hold.RESUME_ANY
-    assert resource_hold.is_active(hold)
-    # the ask is answered: nothing re-dispatches it
-    assert _status(event) == "done"
-    # and the seat is not a failure — no `host_interrupted` story is told
+    # the seat is not a failure: no `host_interrupted` story, no error status
     assert parked.meta.get("failure_kind") is None
     assert _failed_records(repo, "telegram:600:") == []
-    # the receipt that proved it rides the hold, so a reader can audit the call
-    assert "answered" in str(hold.get("detail"))
 
+    # the ask is *not* retired — it is the seat's mail …
+    reread = protocol._read_event(Path(event["_path"]))
+    assert reread["status"] == "pending"
+    assert str(event["id"]) in _ids(protocol.list_pending(_inbox(repo)))
+    # … and it carries the provenance of the attempt that died under it
+    assert reread.get("retry_of") == task.id
+    assert reread.get("retry_failure_kind") == "host_interrupted"
 
-def test_unanswered_seat_keeps_the_retry_exactly_as_it_was(tmp_path):
-    """The case that must not regress: nobody replied, so the person's
-    question goes back on the queue and the run tells its interrupted story."""
-    repo, _home, ctx, event, task = _seat(tmp_path, conv_key="telegram:601:")
-
-    assert daemon._mark_interrupted_runs(ctx, repo, {}) == 1
-
-    marked = _reload(repo, task)
-    assert marked.status == "error"
-    assert marked.meta.get("failure_kind") == "host_interrupted"
-    assert marked.meta.get("resource_hold") is None
-    assert _status(event) == "pending"
-    assert len(_failed_records(repo, "telegram:601:")) == 1
-
-
-def test_only_a_receipted_row_counts_as_an_answer(tmp_path):
-    """Staged-but-never-delivered, blocked, and carried rows are not answers.
-
-    The error budget is asymmetric — a false "answered" retires a live
-    question, a false "unanswered" costs the retry that happens today — so
-    every unreceipted shape resolves to the retry.
-    """
-    for i, status in enumerate((
-        message_store.PENDING,
-        message_store.UNDELIVERABLE,
-        message_store.CARRIED,
-    )):
-        conv = f"telegram:61{i}:"
-        repo, _home, ctx, event, task = _seat(tmp_path / f"case{i}", conv_key=conv)
-        _say(ctx, task, event, status=status)
-
-        assert daemon._mark_interrupted_runs(ctx, repo, {}) == 1
-
-        assert _reload(repo, task).status == "error", status
-        assert _status(event) == "pending", status
-
-
-def test_a_reply_to_another_event_is_not_an_answer_to_this_one(tmp_path):
-    """A seat talks on one thread about many events; only its own waking
-    event's receipt retires its own waking event."""
-    repo, _home, ctx, event, task = _seat(tmp_path, conv_key="telegram:620:")
-    message_store.stage(
-        ctx, repo_label="Gurio/brr", run_id=task.id, body="about something else",
-        kind="interim", target_event="evt-some-other-ask",
+    # … while nothing will mint a new run for it: not dispatchable, and
+    # folded into the hold the seat's own resume un-defers.
+    assert str(event["id"]) not in _ids(
+        protocol.list_dispatchable(_inbox(repo))
     )
-    other = message_store.list_messages(
-        message_store.run_messages_dir(ctx, "Gurio/brr", task.id)
-    )[0]["_path"]
-    message_store.transition(other, message_store.DELIVERED, gate="telegram")
+    assert reread.get("defer_reason") == "resource_hold"
+    assert reread.get("deferred_by_run") == task.id
+    assert hold.get("accumulated_event_ids") == [str(event["id"])]
 
+
+def test_the_orphaned_ask_comes_back_as_mail_with_no_run_of_its_own(tmp_path):
+    """His measurement, exactly: a seat woken later finds the old event in
+    its pending mail, and no new run was ever minted for it."""
+    repo, _home, ctx, event, task = _seat(tmp_path, conv_key="telegram:680:")
     assert daemon._mark_interrupted_runs(ctx, repo, {}) == 1
 
-    assert _reload(repo, task).status == "error"
-    assert _status(event) == "pending"
+    # something reaches the seat later — here, the next message
+    next_path = protocol.create_event(
+        _inbox(repo), "telegram", "and one more thing",
+        conversation_key="telegram:680:", trust_tier="owner",
+    )
+    next_event = next(
+        e for e in protocol.list_pending(_inbox(repo))
+        if Path(e["_path"]) == next_path
+    )
+    target = daemon._DispatchTarget(
+        event=next_event, repo_root=repo, inbox_dir=_inbox(repo),
+        responses_dir=repo / ".brr" / "responses", repo_label="Gurio/brr",
+    )
+
+    survivors = daemon._handle_resource_held_events([target], ctx)
+
+    # the new message is the resume …
+    assert [t.event["id"] for t in survivors] == [next_event["id"]]
+    resumed = _reload(repo, task)
+    assert not resource_hold.is_active(resumed.meta.get("resource_hold") or {})
+    # … and the old ask is back to ordinary pending eligibility, in the
+    # resident's own view, for a resident to resolve
+    reread = protocol._read_event(Path(event["_path"]))
+    assert reread.get("defer_until") is None
+    assert reread.get("defer_reason") is None
+    visible = daemon._pending_events_for_agent(
+        _inbox(repo), str(next_event["id"]),
+    )
+    assert str(event["id"]) in _ids(visible)
+    # no run was minted for the orphaned ask: the only manifest naming it is
+    # the one the restart interrupted
+    runs = [
+        r for r in daemon.list_runs(repo / ".brr" / "runs")
+        if r.event_id == str(event["id"])
+    ]
+    assert [r.id for r in runs] == [task.id]
 
 
-def test_a_strand_is_never_parked_however_much_it_said(tmp_path):
-    """A strand is a thought with a parent waiting on a contract, not a seat:
-    its recovery path is untouched."""
+def test_a_strand_is_not_a_seat(tmp_path):
+    """A strand's orphan has a parent waiting on a contract: its recovery is
+    the retry, exactly as before."""
     repo, _home, ctx, event, task = _seat(
         tmp_path, conv_key="telegram:630:", strand=True,
     )
-    _say(ctx, task, event)
 
     assert daemon._mark_interrupted_runs(ctx, repo, {}) == 1
 
@@ -188,41 +181,43 @@ def test_a_strand_is_never_parked_however_much_it_said(tmp_path):
     assert marked.status == "error"
     assert marked.meta.get("failure_kind") == "host_interrupted"
     assert marked.meta.get("resource_hold") is None
-    assert _status(event) == "pending"
+    reread = protocol._read_event(Path(event["_path"]))
+    assert reread["status"] == "pending"
+    assert reread.get("defer_reason") is None
+    # the strand's event is dispatchable again — the retry is its recovery
+    assert str(event["id"]) in _ids(protocol.list_dispatchable(_inbox(repo)))
+    assert len(_failed_records(repo, "telegram:630:")) == 1
 
 
 def test_seat_park_disabled_restores_the_retry(tmp_path):
-    """Same flag the turn-end park honours: one switch turns both off."""
+    """One switch turns off the turn-end park and this one together."""
     repo, _home, ctx, event, task = _seat(tmp_path, conv_key="telegram:640:")
-    _say(ctx, task, event)
 
     cfg = {daemon.SEAT_PARK_ON_TURN_END_KEY: False}
     assert daemon._mark_interrupted_runs(ctx, repo, cfg) == 1
 
     assert _reload(repo, task).status == "error"
-    assert _status(event) == "pending"
+    assert str(event["id"]) in _ids(protocol.list_dispatchable(_inbox(repo)))
 
 
 def test_an_already_retired_event_still_parks_its_seat(tmp_path):
-    """The bolted seat (#1877's shape): the ask was answered *and* marked, so
-    there is nothing to retire — but the seat is still what the restart
-    interrupted, and it still parks rather than ending."""
+    """Nothing to keep as mail (the ask was answered *and* marked) — the seat
+    is still what the restart interrupted, and it still stands."""
     repo, _home, ctx, event, task = _seat(tmp_path, conv_key="telegram:650:")
-    _say(ctx, task, event)
     protocol.set_status(event, "done")
 
     assert daemon._mark_interrupted_runs(ctx, repo, {}) == 1
 
     parked = _reload(repo, task)
     assert resource_hold.run_is_held(parked.status, parked.meta)
-    assert _status(event) == "done"
+    assert protocol._read_event(Path(event["_path"]))["status"] == "done"
+    assert (parked.meta["resource_hold"].get("accumulated_event_ids") or []) == []
 
 
 def test_the_park_is_idempotent_across_a_second_boot(tmp_path):
     """A parked seat is not an unfinished run: the next sweep passes it by,
-    and the hold keeps its first generation."""
+    the hold keeps its first generation, and the mail is folded once."""
     repo, _home, ctx, event, task = _seat(tmp_path, conv_key="telegram:660:")
-    _say(ctx, task, event)
 
     assert daemon._mark_interrupted_runs(ctx, repo, {}) == 1
     first = _reload(repo, task).meta["resource_hold"]
@@ -232,21 +227,21 @@ def test_the_park_is_idempotent_across_a_second_boot(tmp_path):
 
     assert second.get("generation") == first.get("generation") == 1
     assert second.get("armed_at") == first.get("armed_at")
+    assert second.get("accumulated_event_ids") == [str(event["id"])]
 
 
-def test_no_account_store_means_no_park(tmp_path):
-    """No durable store is not proof of an answer: with nothing to read, the
-    sweep keeps the retry it has always done."""
+def test_the_park_needs_no_account_store(tmp_path):
+    """The rule reads nothing but the run: no home, no message store, no
+    lookup that could fail — a seat is a seat."""
     repo = tmp_path / "repo"
-    repo.mkdir()
+    repo.mkdir(parents=True)
     write_repo_scaffold(repo)
-    inbox = repo / ".brr" / "inbox"
     path = protocol.create_event(
-        inbox, "telegram", "the ask", conversation_key="telegram:670:",
-        trust_tier="owner",
+        _inbox(repo), "telegram", "the ask",
+        conversation_key="telegram:670:", trust_tier="owner",
     )
     event = next(
-        e for e in protocol.list_pending(inbox) if Path(e["_path"]) == path
+        e for e in protocol.list_pending(_inbox(repo)) if Path(e["_path"]) == path
     )
     protocol.set_status(event, "processing")
     task = Run.from_event(event)
@@ -255,68 +250,8 @@ def test_no_account_store_means_no_park(tmp_path):
     ctx = account.resolve_context(repo, {})
 
     assert daemon._mark_interrupted_runs(ctx, repo, {}) == 1
-    assert _reload(repo, task).status == "error"
-    assert _status(event) == "pending"
 
-
-def test_answered_event_reads_the_newest_receipt(tmp_path):
-    """The store helper itself: newest receipted row wins, unreceipted rows
-    never do."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    home = tmp_path / "home"
-    ctx = account.resolve_context(
-        repo, {"home.path": str(home), "repo.label": "Gurio/brr"},
-    )
-    first = message_store.stage(
-        ctx, repo_label="Gurio/brr", run_id="run-x", body="one",
-        kind="interim", target_event="evt-1", source_ref="a",
-    )
-    message_store.transition(first, message_store.DELIVERED, gate="telegram")
-    message_store.stage(
-        ctx, repo_label="Gurio/brr", run_id="run-x", body="two",
-        kind="terminal", target_event="evt-1", source_ref="b",
-    )
-
-    answered = message_store.answered_event(
-        ctx, repo_label="Gurio/brr", run_id="run-x", target_event="evt-1",
-    )
-    assert answered is not None and answered["body"] == "one"
-    assert message_store.answered_event(
-        ctx, repo_label="Gurio/brr", run_id="run-x", target_event="evt-2",
-    ) is None
-    assert message_store.answered_event(
-        ctx, repo_label="Gurio/brr", run_id="", target_event="evt-1",
-    ) is None
-
-
-def test_a_seat_parked_by_the_sweep_is_resumed_by_the_next_message(tmp_path):
-    """The park is only worth taking if the seat comes back — end to end
-    through the real release path, with the real account context whose home
-    the sweep stamped into the hold's ``seat_key``."""
-    repo, _home, ctx, event, task = _seat(tmp_path, conv_key="telegram:680:")
-    _say(ctx, task, event)
-    assert daemon._mark_interrupted_runs(ctx, repo, {}) == 1
     parked = _reload(repo, task)
     assert resource_hold.run_is_held(parked.status, parked.meta)
-
-    inbox = repo / ".brr" / "inbox"
-    next_path = protocol.create_event(
-        inbox, "telegram", "and one more thing",
-        conversation_key="telegram:680:", trust_tier="owner",
-    )
-    next_event = next(
-        e for e in protocol.list_pending(inbox) if Path(e["_path"]) == next_path
-    )
-    target = daemon._DispatchTarget(
-        event=next_event, repo_root=repo, inbox_dir=inbox,
-        responses_dir=repo / ".brr" / "responses", repo_label="Gurio/brr",
-    )
-
-    survivors = daemon._handle_resource_held_events([target], ctx)
-
-    # the message is the resume: it survives to be dispatched …
-    assert [t.event["id"] for t in survivors] == [next_event["id"]]
-    # … and the hold it released is no longer active
-    resumed = _reload(repo, task)
-    assert not resource_hold.is_active(resumed.meta.get("resource_hold") or {})
+    assert str(event["id"]) not in _ids(protocol.list_dispatchable(_inbox(repo)))
+    assert str(event["id"]) in _ids(protocol.list_pending(_inbox(repo)))
