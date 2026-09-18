@@ -288,3 +288,35 @@ def test_answered_event_reads_the_newest_receipt(tmp_path):
     assert message_store.answered_event(
         ctx, repo_label="Gurio/brr", run_id="", target_event="evt-1",
     ) is None
+
+
+def test_a_seat_parked_by_the_sweep_is_resumed_by_the_next_message(tmp_path):
+    """The park is only worth taking if the seat comes back — end to end
+    through the real release path, with the real account context whose home
+    the sweep stamped into the hold's ``seat_key``."""
+    repo, _home, ctx, event, task = _seat(tmp_path, conv_key="telegram:680:")
+    _say(ctx, task, event)
+    assert daemon._mark_interrupted_runs(ctx, repo, {}) == 1
+    parked = _reload(repo, task)
+    assert resource_hold.run_is_held(parked.status, parked.meta)
+
+    inbox = repo / ".brr" / "inbox"
+    next_path = protocol.create_event(
+        inbox, "telegram", "and one more thing",
+        conversation_key="telegram:680:", trust_tier="owner",
+    )
+    next_event = next(
+        e for e in protocol.list_pending(inbox) if Path(e["_path"]) == next_path
+    )
+    target = daemon._DispatchTarget(
+        event=next_event, repo_root=repo, inbox_dir=inbox,
+        responses_dir=repo / ".brr" / "responses", repo_label="Gurio/brr",
+    )
+
+    survivors = daemon._handle_resource_held_events([target], ctx)
+
+    # the message is the resume: it survives to be dispatched …
+    assert [t.event["id"] for t in survivors] == [next_event["id"]]
+    # … and the hold it released is no longer active
+    resumed = _reload(repo, task)
+    assert not resource_hold.is_active(resumed.meta.get("resource_hold") or {})
