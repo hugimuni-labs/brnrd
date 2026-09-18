@@ -791,6 +791,42 @@ def test_chunk_marks_a_shell_sed_i_mutation_changed_with_no_span(_tree, tmp_path
     assert row["chunks"] == [{"path": str(_tree / "src/brr/x.py"), "changed": True, "kind": "write"}]
 
 
+def test_chunk_never_writes_the_interpreter_or_a_directory(_tree, tmp_path):
+    """The first real reading of the chunk ground (2026-09-18) had 8 of 80
+    chunks naming something the command never wrote.
+
+    `_SHELL_WRITE_RE` recognises `python -` and `sed -i`, then marks every
+    path `place` found as written, because a shell command does not say which
+    of its paths it touched. Two of them are never the output: the
+    **interpreter** that matched `python -`, and a **directory** used as a
+    shell variable (recorded as a write with zero lines). An unmeasured span
+    is honestly absent; a file the command never touched is simply wrong.
+    """
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    ctx = _boundary_ctx(run_dir)
+    (_tree / ".venv" / "bin").mkdir(parents=True)
+    (_tree / ".venv" / "bin" / "python").write_text("", encoding="utf-8")
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {
+            "command": (
+                ".venv/bin/python - <<'PY'\n"
+                "open('src/brr/x.py', 'w')\n"
+                "open('docs')\n"
+                "PY"
+            ),
+        },
+        "cwd": str(_tree),
+    }
+    hooks.record_boundary(ctx, hooks.PHASE_POST_TOOL, {}, payload)
+    (row,) = _jsonl(run_dir / hooks.BOUNDARIES_NAME)
+    written = [c["path"] for c in row.get("chunks", []) if c.get("kind") == "write"]
+    assert str(_tree / "src/brr/x.py") in written
+    assert str(_tree / ".venv/bin/python") not in written
+    assert str(_tree / "docs") not in written
+
+
 def test_chunk_reads_a_just_landed_commits_own_hunks_via_git_diff(tmp_path):
     """"the hunks are derivable from git diff and are cheap; do that one
     properly" — a real two-commit repo, a real `git commit` boundary, hunks

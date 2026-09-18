@@ -7888,6 +7888,33 @@ def _shell_read_chunks(
     return chunks
 
 
+def _written_by_a_write_shaped_command(path: str) -> bool:
+    """Whether *path* is plausibly a file that command actually wrote.
+
+    ``_SHELL_WRITE_RE`` recognises the two shapes that usually write —
+    ``python -`` (a heredoc script) and ``sed -i`` — and the site below then
+    marks every path ``place`` found as written, because a shell command does
+    not say which of its paths it touched. Two of those paths are never the
+    output, and both showed up in the first real reading of the chunk ground
+    (2026-09-18: 8 of 80 chunks):
+
+    * the **interpreter itself** — ``.venv/bin/python`` is what matched
+      ``python -``, not what it produced;
+    * a **directory** — an outbox path used as a shell variable, recorded as
+      a write with zero lines.
+
+    Everything else stays a write: an unmeasured span is honestly absent, but
+    a file the command never touched is not unmeasured, it is wrong.
+    """
+    name = path.rsplit("/", 1)[-1]
+    if name == "python" or name.startswith("python3"):
+        return False
+    try:
+        return not Path(path).is_dir()
+    except OSError:
+        return True
+
+
 def _commit_chunks(root: Path | None) -> list[dict[str, Any]]:
     """The per-file hunks of the commit that just landed at ``HEAD``, via
     ``git show --unified=0`` — the one case named as "derivable from git
@@ -8104,6 +8131,8 @@ def record_boundary(
                     command_text = raw_cmd
             if command_text and _SHELL_WRITE_RE.search(command_text):
                 for touched in paths:
+                    if not _written_by_a_write_shaped_command(touched):
+                        continue
                     chunks.append({"path": touched, "changed": True, "kind": "write"})
             if command_text and _GIT_COMMIT_RE.search(command_text):
                 chunks.extend(_commit_chunks(repo_root))
