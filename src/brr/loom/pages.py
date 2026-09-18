@@ -179,7 +179,13 @@ def _git_commits(repo_dir: Path, branch: str, read: list[str]) -> list[dict[str,
 def pass_page(repo_root: Path | str, account_home: Path | str | None, run_id: str) -> Page:
     """``{id, title, name, mood, status, contract, shell, core, started, ended,
     duration_s, parent, topics, branch, card, produce: {prs, commits, pages},
-    report_path, report_exists, strands, beads}``.
+    report_path, report_exists, strands, beads, bead_total}``.
+
+    ``beads`` is the last :data:`PAGE_BEADS`; ``bead_total`` is how many the
+    run actually has, so a reader can say *"the last 12 of 340"* instead of
+    presenting a tail as a life. It was already counted here and thrown away,
+    which is the cheapest way there is to turn a bound into a false whole.
+    ``None`` means the count could not be taken.
 
     Sources: ``<brr>/runs/<id>/run.md``, its outbox (``.name``, ``.mood``,
     ``.card``, ``portal-state.json``, ``.relics.jsonl``), the run's
@@ -290,6 +296,7 @@ def pass_page(repo_root: Path | str, account_home: Path | str | None, run_id: st
         "report_exists": Path(report).is_file() if report else None,
         "strands": strands,
         "beads": beads,
+        "bead_total": total,
     }, read
 
 
@@ -460,6 +467,56 @@ def _names_place(token: str, cwd: str, place: str, where: Any) -> bool:
     return heddles_mod.relative_place(value, where.roots) == place
 
 
+def chunk_ranges(row: Mapping[str, Any], place: str, where: Any) -> tuple[list[dict], dict] | None:
+    """The spans *row* **measured** in *place*, from the ``chunks`` the hook
+    recorded — or ``None`` when this row's chunks say nothing about this place.
+
+    #2021 made a write stop being a flag: ``git diff --unified=0`` puts the
+    real hunks on the boundary row, beside the reads the shell parser already
+    ranged. :func:`attention_of_row` was written before that and never looked:
+    it re-derived every range by parsing ``detail`` as text, so an ``Edit`` on
+    a file whose exact changed lines were sitting in ``row["chunks"]`` landed
+    in ``unranged["edit"]`` — *twelve* of them on ``src/brr/loom/state.py`` in
+    the live feed the day this was written, a file whose read bands were drawn
+    to the line. The zoom's innermost level was being fed a guess while the
+    measurement lay one key away.
+
+    Precedence is **per place, not per row**: chunks are capped
+    (:data:`brr.hooks.SHELL_PLACE_PATHS_MAX`) and best-effort, so a row whose
+    chunks name ``a.py`` may still have read ``b.py`` in a ``grep`` the cap
+    cut off. When this row's chunks name *this* place, they are the account of
+    it and the text parser is not consulted; when they do not, ``None`` hands
+    the question back.
+
+    A write with no span (``changed: true`` — git could not speak, so the
+    interception guess is all there is) is the honest ``unranged`` it always
+    was: counted, never drawn as a line.
+    """
+    chunks = row.get("chunks")
+    if not isinstance(chunks, list):
+        return None
+    found: list[dict] = []
+    unranged = {"read": 0, "edit": 0}
+    named = False
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
+        rel = chunk.get("rel")
+        if not isinstance(rel, str) or not rel:
+            rel = heddles_mod.relative_place(str(chunk.get("path") or ""), where.roots)
+        if rel != place:
+            continue
+        named = True
+        kind = "edit" if str(chunk.get("kind") or "") == "write" else "read"
+        start, end = st._int(chunk.get("from")), st._int(chunk.get("to"))
+        if start is None:
+            unranged[kind] += 1
+            continue
+        end = start if end is None else end
+        found.append({"from": min(start, end), "to": max(start, end), "kind": kind, "src": "measured"})
+    return (found, unranged) if named else None
+
+
 def attention_of_row(row: Mapping[str, Any], place: str, where: Any, total: int | None) -> tuple[list[dict], dict]:
     """The line ranges one boundary row read or edited in *place*, and the
     touches it made that name no range (``{read: n, edit: n}``).
@@ -470,7 +527,20 @@ def attention_of_row(row: Mapping[str, Any], place: str, where: Any, total: int 
     the path, no offset recorded) reads the whole file; an edit tool row
     (Edit/Write/MultiEdit/apply_patch) records no range — counted, not drawn.
     ``git diff``/``show`` hunk headers in ``detail`` (``+++ b/<path>`` then
-    ``@@ … +C,D @@``) are edits."""
+    ``@@ … +C,D @@``) are edits.
+
+    All of that is the fallback. When the row's own ``chunks`` name this place
+    the measurement wins outright (:func:`chunk_ranges`) and nothing here
+    runs; every range this function returns therefore carries
+    ``src: "parsed"`` and is a reading of a *command line*, not of the file.
+    """
+    measured = chunk_ranges(row, place, where)
+    if measured is not None:
+        found, missed = measured
+        if total:
+            found = [{**r, "from": min(r["from"], total), "to": min(r["to"], total)}
+                     for r in found if r["from"] <= total]
+        return found, missed
     detail = row.get("detail") if isinstance(row.get("detail"), str) else ""
     cwd = str(row.get("cwd") or "")
     tools = [str(t) for t in row.get("tools") or () if isinstance(t, str)]
@@ -479,7 +549,7 @@ def attention_of_row(row: Mapping[str, Any], place: str, where: Any, total: int 
     whole = (1, total) if total else None
     if tools and tools[0] in ("Read",) and _names_place(detail.strip(), cwd, place, where):
         if whole:
-            ranges.append({"from": whole[0], "to": whole[1], "kind": "read", "whole": True})
+            ranges.append({"from": whole[0], "to": whole[1], "kind": "read", "whole": True, "src": "parsed"})
         else:
             unranged["read"] += 1
         return ranges, unranged
@@ -527,6 +597,7 @@ def attention_of_row(row: Mapping[str, Any], place: str, where: Any, total: int 
                 ranges.append({"from": whole[0], "to": whole[1], "kind": "read", "whole": True})
             else:
                 unranged["read"] += 1
+    ranges = [{**r, "src": "parsed"} for r in ranges]
     if total:
         ranges = [
             {**r, "from": min(r["from"], total), "to": min(r["to"], total)} for r in ranges if r["from"] <= total
@@ -549,7 +620,13 @@ def merge_ranges(ranges: list[dict]) -> list[dict]:
     """Per kind, overlapping or touching ranges merge: ``count`` sums, ``last``
     is the newest. Whole-file touches (``whole: true`` — a grep, a cat, a Read
     with no offset) merge only with each other, so one ``grep`` never swallows
-    the ranges a ``sed -n`` actually looked at. Sorted by kind, ranged first."""
+    the ranges a ``sed -n`` actually looked at. Sorted by kind, ranged first.
+
+    ``src`` survives the merge and is the band's *weakest* claim: a measured
+    git hunk merged with a range parsed out of a shell command reads
+    ``mixed``, never ``measured``. The zoom's whole risk is drawing a guess in
+    the same ink as a measurement — a band that is partly guessed must not be
+    able to launder itself by touching one that is not."""
     out: list[dict] = []
     for kind, whole in (("read", False), ("edit", False), ("read", True), ("edit", True)):
         rows = sorted(
@@ -558,14 +635,17 @@ def merge_ranges(ranges: list[dict]) -> list[dict]:
         )
         merged: list[dict] = []
         for row in rows:
+            src = row.get("src")
             if merged and row["from"] <= merged[-1]["to"] + 1:
                 top = merged[-1]
                 top["to"] = max(top["to"], row["to"])
                 top["count"] += row.get("count", 1)
                 top["last"] = max(filter(None, (top["last"], row.get("last"))), default=None)
+                if top.get("src") != src:
+                    top["src"] = "mixed"
             else:
                 entry = {"from": row["from"], "to": row["to"], "kind": kind,
-                         "count": row.get("count", 1), "last": row.get("last")}
+                         "count": row.get("count", 1), "last": row.get("last"), "src": src}
                 if whole:
                     entry["whole"] = True
                 merged.append(entry)
@@ -575,7 +655,7 @@ def merge_ranges(ranges: list[dict]) -> list[dict]:
 
 def place_page(
     repo_root: Path | str, account_home: Path | str | None, path: str, state: Mapping[str, Any] | None = None,
-    *, text_from: int | None = None, text_to: int | None = None,
+    *, text_from: int | None = None, text_to: int | None = None, run: str | None = None,
 ) -> Page:
     """``{path, kind, tree, heat, last, knots, topics, gh_url, text, attention,
     unranged, beads, passes, folds, fold}``.
@@ -591,7 +671,18 @@ def place_page(
     that resolves inside the repo or the home. ``attention``: every range the
     beads touching it read or edited, across the live run and those passes
     (:func:`attention_of_row`), merged (:func:`merge_ranges`); ``unranged``
-    the touches that named no lines."""
+    the touches that named no lines.
+
+    ``run`` **scopes the page to one pass**: its beads, its passes row, its
+    attention, and nobody else's. Unscoped, this page is a union over every
+    run that ever touched the file — the right answer to *"what is this
+    file"* and the wrong one to *"what did that run do here"*. The frozen
+    inspection frame asks the second, and a union answering it is exactly the
+    misattribution "a past tree in a present world" named: yesterday
+    inspected, today's bands lit over it. ``scope`` echoes the run back so a
+    caller cannot mistake which question it asked; ``scope_known`` is false
+    when that run left no boundaries to read, so an empty page reads as *no
+    record* rather than *no work*."""
     where = st.locate(repo_root, account_home)
     place = _clean_place(path)
     if place is None:
@@ -606,8 +697,9 @@ def place_page(
     entry = next((e for e in entries or () if e.get("path") == place), None)
     beads_key = "home_places" if is_home else "places"
     beads: list[dict[str, Any]] = []
+    scope = run if _RUN_ID_RE.match(run or "") else None
     run = (state.get("run") or {}).get("id")
-    for bead in reversed(state.get("beads") or []):
+    for bead in (reversed(state.get("beads") or []) if not scope or scope == run else ()):
         if place in (bead.get(beads_key) or ()):
             beads.append({**bead, "run": run})
             if len(beads) >= PAGE_BEADS:
@@ -616,7 +708,7 @@ def place_page(
     rows = list(reversed((state.get("cloth") or {}).get("rows") or []))
     for row in rows:
         run_id = str(row.get("run") or "")
-        if not _RUN_ID_RE.match(run_id):
+        if not _RUN_ID_RE.match(run_id) or (scope and run_id != scope):
             continue
         boundaries = where.brr_dir / "runs" / run_id / "boundaries.jsonl"
         seen = st.scan_places(boundaries, where).get((tree_kind, place))
@@ -650,8 +742,10 @@ def place_page(
     total = (text or {}).get("total")
     ranges: list[dict] = []
     unranged = {"read": 0, "edit": 0}
-    runs_rows = [(run, None)] if run else []
+    runs_rows = [(run, None)] if run and (not scope or scope == run) else []
     runs_rows += [(p["run"], None) for p in passes if p["run"] != run]
+    if scope:
+        runs_rows = [r for r in runs_rows if r[0] == scope]
     for run_id, _ in runs_rows:
         boundaries = where.brr_dir / "runs" / str(run_id) / "boundaries.jsonl"
         for bead_row in st.tail_rows(boundaries, 4000, st._is_bead):
@@ -668,10 +762,13 @@ def place_page(
         text_path = home / "bench" / f"{newest['path']}.md"
         read.append(_rel(text_path))
         fold = {"path": newest["path"], "marks": newest.get("marks") or [], "text": st._read_text(text_path)}
-    if entry is None and not passes and not beads and not folds and not inside:
+    scope_known = (where.brr_dir / "runs" / scope / "boundaries.jsonl").is_file() if scope else None
+    if entry is None and not passes and not beads and not folds and not inside and not scope:
         return None, read
     return {
         "path": place,
+        "scope": scope,
+        "scope_known": scope_known,
         "kind": "home" if is_home else "file",
         "tree": tree_kind,
         "heat": (entry or {}).get("heat"),
