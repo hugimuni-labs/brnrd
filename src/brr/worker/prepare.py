@@ -27,9 +27,11 @@ from .. import hooks as hooks_mod
 from .. import hud
 from .. import knowledge
 from .. import menus
+from .. import pending_resume
 from .. import presence
 from .. import prompts
 from .. import protocol
+from .. import resource_hold
 from .. import run_context
 from .. import run_ledger
 from .. import run_topic
@@ -248,6 +250,24 @@ def prepare(
         branch_plan = branching.resolve_publish_plan(repo_root, event, cfg)
 
     task = Run.from_event(event, cfg)
+    # brnrd#2023: the seat's scroll, claimed here and nowhere else. A release
+    # arms it; this dispatch — the one that actually leads — takes it, by
+    # rename, exactly once. `Run.from_event` can no longer carry it off the
+    # event, so this is the only way a run wakes warm.
+    seat_home = daemon._shuttle_home(
+        account.context_home_root(account_context) if account_context else None,
+        runs_dir,
+    )
+    if resource_hold.is_handover(event):
+        # A handover asks for a *successor*. Its carry-forward body is the
+        # whole inheritance, and the claim the parked seat armed is not its
+        # to take — unmake it rather than leave it for the next dispatch.
+        pending_resume.clear(seat_home, why=f"handover {eid}")
+    else:
+        claim = pending_resume.consume(seat_home, conversation_key=conv_key)
+        if claim:
+            task.meta["resume_native_session_id"] = claim["session_id"]
+            task.meta["resume_native_provider"] = claim.get("provider") or ""
     if is_home_root:
         task.meta["root_kind"] = "home"
         task.meta["forge_lane"] = False

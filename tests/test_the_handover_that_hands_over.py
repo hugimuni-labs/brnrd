@@ -16,11 +16,12 @@ anything a test author invented.
 from __future__ import annotations
 
 import shutil
+import time
 from pathlib import Path
 
 import pytest
 
-from brr import daemon, protocol, resource_hold
+from brr import daemon, pending_resume, protocol, resource_hold
 from brr.run import Run
 
 FIXTURE = Path(__file__).parent / "fixtures" / "handover" / "respawn_event_from_disk.md"
@@ -249,8 +250,10 @@ class TestOnlyTheReleasingEventCarriesTheScroll:
         releaser = self._target(tmp_path, source="telegram", eid="evt-human")
         daemon._handle_resource_held_events([releaser], None)
 
-        # The releaser is the carrier.
-        assert releaser.event["resume_native_session_id"] == "held-thread-1"
+        # brnrd#2023: nothing is the carrier. The seat holds one claim and
+        # the event says nothing about a transcript at all.
+        assert "resume_native_session_id" not in releaser.event
+        assert pending_resume.peek(tmp_path / ".brr")["session_id"] == "held-thread-1"
         # The sibling is undeferred, re-keyed home, and carries nothing.
         reread = protocol._read_event(sibling.inbox_dir / "evt-sibling.md")
         assert reread.get("defer_until") is None
@@ -258,13 +261,14 @@ class TestOnlyTheReleasingEventCarriesTheScroll:
         assert reread.get("resume_native_session_id") is None
         assert reread.get("resume_native_provider") is None
 
-    def test_a_measured_refill_hands_the_scroll_to_exactly_one_sibling(self, tmp_path, monkeypatch):
-        """The one release with no releasing event — so a sibling must carry it.
+    def test_a_measured_refill_arms_the_claim_and_stamps_no_letter(self, tmp_path, monkeypatch):
+        """The one release with no releasing event — and it no longer needs one.
 
         The reading is the releaser here; the drawer is all there is to wake
-        on, and killing the stamp outright would make every refill a cold
-        boot. The invariant kept instead is the one that matters: **at most
-        one event ever carries the scroll.**
+        on. Under the stamp that forced a choice between spraying the drawer
+        and cooling every refill (#2022 took the middle: stamp exactly one).
+        brnrd#2023 dissolves the choice — the claim is on the seat, and
+        whichever letter leads picks it up.
         """
         held = self._seat(
             tmp_path,
@@ -285,9 +289,11 @@ class TestOnlyTheReleasingEventCarriesTheScroll:
         inbox = tmp_path / ".brr" / "inbox"
         lead = protocol._read_event(inbox / "evt-aaa.md")
         rest = protocol._read_event(inbox / "evt-bbb.md")
-        assert lead.get("resume_native_session_id") == "held-thread-1"
-        assert rest.get("defer_until") is None  # released all the same
+        assert lead.get("defer_until") is None
+        assert rest.get("defer_until") is None
+        assert lead.get("resume_native_session_id") is None
         assert rest.get("resume_native_session_id") is None
+        assert pending_resume.peek(tmp_path / ".brr")["session_id"] == "held-thread-1"
 
 
 # ── mechanism 3: the stamp is a cache, and it heals ─────────────────
@@ -383,7 +389,7 @@ class TestAHandoverReleaseCarriesNoScroll:
 
         daemon._handle_resource_held_events([target], None)
 
-        assert target.event["resume_native_session_id"] == (
+        assert pending_resume.peek(tmp_path / ".brr")["session_id"] == (
             "5196fef7-a011-4ebd-87ab-b70193b3ba44"
         )
 
@@ -468,3 +474,112 @@ class TestAHandoverSurvivesTheParkOnEitherSide:
         assert reread.get("resume_native_session_id") is None
         persisted = Run.from_file(runs_dir / "run-held-1" / "run.md")
         assert persisted.meta["resource_hold"]["released"] is True
+
+
+# ── brnrd#2023: the claim the daemon owns ───────────────────────────
+
+
+class TestTheScrollIsUnspeakableFromAnEvent:
+    """The structural half. Four defects, one surface.
+
+    M1/M3 and the mint leak were three *writers* of one frontmatter key. The
+    surface was that the key could be written onto an event at all:
+    ``Run.from_event`` copies every unreserved key onto run meta, so every
+    event-minting path in the daemon was a fresh candidate for the same bug,
+    and the enumeration that closes them is a grep. It had already failed
+    twice — #2016 closed one, #2022 found three more.
+
+    So the claim moved off the event: one record per seat, armed by a
+    release, consumed once by the dispatch that leads.
+    """
+
+    def test_a_forged_event_cannot_claim_a_transcript(self):
+        """The whole point, in one assertion.
+
+        Anything with write access to `.brr/inbox` — which is every run
+        environment — could previously drop a file naming a session id and be
+        handed that Shell transcript. The key does not survive
+        `Run.from_event` any more.
+        """
+        forged = {
+            "id": "evt-forged", "source": "telegram", "body": "hi",
+            "resume_native_session_id": "someone-elses-thread",
+            "resume_native_provider": "claude",
+        }
+
+        task = Run.from_event(forged, {})
+
+        assert "resume_native_session_id" not in task.meta
+        assert "resume_native_provider" not in task.meta
+
+    def test_the_claim_is_one_shot(self, tmp_path):
+        pending_resume.arm(
+            tmp_path, session_id="sess-1", provider="claude",
+            conversation_key="cloud:telegram:1:", from_run="run-a",
+        )
+
+        first = pending_resume.consume(tmp_path, conversation_key="cloud:telegram:1:")
+        second = pending_resume.consume(tmp_path, conversation_key="cloud:telegram:1:")
+
+        assert first["session_id"] == "sess-1"
+        assert second is None
+        assert pending_resume.peek(tmp_path) is None
+
+    def test_a_second_arm_replaces_rather_than_queues(self, tmp_path):
+        """One seat, one claim — the invariant the spray could not express."""
+        pending_resume.arm(
+            tmp_path, session_id="old", provider="claude",
+            conversation_key="seat",
+        )
+        pending_resume.arm(
+            tmp_path, session_id="new", provider="claude",
+            conversation_key="seat",
+        )
+
+        assert pending_resume.consume(tmp_path, conversation_key="seat")["session_id"] == "new"
+        assert pending_resume.consume(tmp_path, conversation_key="seat") is None
+
+    def test_a_strand_cannot_take_the_seats_scroll(self, tmp_path):
+        """A child shares the repo's `.brr`; it does not share the thread.
+
+        Its dispatch runs under `run:<parent>`, so the guard is the
+        conversation key — and the claim is *left armed*, because taking it
+        away from the seat that is owed it would turn a mis-route into a
+        silent cold boot for somebody else.
+        """
+        pending_resume.arm(
+            tmp_path, session_id="sess-seat", provider="claude",
+            conversation_key="cloud:telegram:1:", from_run="run-seat",
+        )
+
+        stolen = pending_resume.consume(tmp_path, conversation_key="run:run-seat")
+
+        assert stolen is None
+        assert pending_resume.peek(tmp_path)["session_id"] == "sess-seat"
+        assert pending_resume.consume(
+            tmp_path, conversation_key="cloud:telegram:1:",
+        )["session_id"] == "sess-seat"
+
+    def test_an_unconsumed_claim_expires(self, tmp_path, monkeypatch):
+        """A claim nobody took names a process that is long gone.
+
+        This is `evt-…-2jb8`'s shape with the event removed: the stamp that
+        sat in a drawer through a host suspend and fired a day later. A claim
+        cannot sit that long.
+        """
+        pending_resume.arm(
+            tmp_path, session_id="sess-old", provider="claude",
+            conversation_key="seat",
+        )
+        later = time.time() + pending_resume.MAX_AGE_SECONDS + 1
+        monkeypatch.setattr(pending_resume.time, "time", lambda: later)
+
+        assert pending_resume.consume(tmp_path, conversation_key="seat") is None
+
+    def test_nothing_to_arm_is_not_an_error(self, tmp_path):
+        """No session id is an honest cold boot, and needs no record."""
+        assert pending_resume.arm(
+            tmp_path, session_id="", provider="claude", conversation_key="seat",
+        ) is None
+        assert pending_resume.peek(tmp_path) is None
+        assert pending_resume.clear(tmp_path) is False

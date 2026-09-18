@@ -18,7 +18,9 @@ from pathlib import Path
 
 import pytest
 
-from brr import account, daemon, envs, protocol, resource_hold, shuttle
+from brr import (
+    account, daemon, envs, pending_resume, protocol, resource_hold, shuttle,
+)
 from brr.run import Run
 from brr.runner import RunnerResult
 
@@ -528,8 +530,11 @@ class TestHandleResourceHeldEvents:
 
         assert len(survivors) == 1
         assert survivors[0] is target
-        assert target.event["resume_native_session_id"] == "held-thread-1"
-        assert target.event["resume_native_provider"] == "codex"
+        # brnrd#2023: the scroll is the seat's claim now, not the event's.
+        claim = pending_resume.peek(tmp_path / ".brr")
+        assert claim["session_id"] == "held-thread-1"
+        assert claim["provider"] == "codex"
+        assert "resume_native_session_id" not in target.event
         persisted = Run.from_file(tmp_path / ".brr" / "runs" / "run-held-1" / "run.md")
         assert persisted.meta["resource_hold"]["released"] is True
         assert persisted.meta["resource_hold"]["released_by"] == "operator"
@@ -561,7 +566,7 @@ class TestHandleResourceHeldEvents:
         survivors = daemon._handle_resource_held_events([target], None)
 
         assert len(survivors) == 1
-        assert survivors[0].event["resume_native_session_id"] == "held-thread-1"
+        assert pending_resume.peek(tmp_path / ".brr")["session_id"] == "held-thread-1"
         persisted = Run.from_file(tmp_path / ".brr" / "runs" / "run-held-1" / "run.md")
         assert persisted.meta["resource_hold"]["released"] is True
         assert persisted.meta["resource_hold"]["released_by"] == "operator"
@@ -584,7 +589,7 @@ class TestHandleResourceHeldEvents:
         )
         survivors = daemon._handle_resource_held_events([target], None)
         assert len(survivors) == 1
-        assert survivors[0].event["resume_native_session_id"] == "held-thread-1"
+        assert pending_resume.peek(tmp_path / ".brr")["session_id"] == "held-thread-1"
         persisted = Run.from_file(tmp_path / ".brr" / "runs" / "run-held-1" / "run.md")
         assert persisted.meta["resource_hold"]["released"] is True
         assert persisted.meta["resource_hold"]["conversation_key"] == (
@@ -617,7 +622,12 @@ class TestHandleResourceHeldEvents:
             repo_a / ".brr" / "runs" / "run-held-1" / "run.md",
         )
         assert persisted.meta["resource_hold"]["released"] is True
-        assert target.event["resume_native_session_id"] == "held-thread-1"
+        # brnrd#2023: one seat spans the repos an account serves, so the
+        # claim is keyed on the account home — not on repo A's `.brr`, where
+        # the parked seat happens to live, and not on repo B's, where the
+        # resuming dispatch runs. Keyed per-repo this resume would arm in one
+        # place and look in another: a silent cold boot.
+        assert pending_resume.peek(context.home_root)["session_id"] == "held-thread-1"
         assert shuttle.Shuttle.load(context.home_root).state == "awake"
 
     def test_misrouted_hold_with_another_account_key_does_not_release(self, tmp_path):
@@ -686,7 +696,7 @@ class TestHandleResourceHeldEvents:
         assert reread.get("defer_until") is None
         assert reread.get("defer_reason") is None
         assert reread.get("resume_native_session_id") is None
-        assert human_target.event["resume_native_session_id"] == "held-thread-1"
+        assert pending_resume.peek(tmp_path / ".brr")["session_id"] == "held-thread-1"
 
     def test_operator_condition_is_never_released_by_reset_check(self, tmp_path):
         held = self._arm_held_run(
@@ -723,7 +733,7 @@ class TestHandleResourceHeldEvents:
         inbox_dir = tmp_path / ".brr" / "inbox"
         reread = protocol._read_event(inbox_dir / "evt-sched-3.md")
         assert reread.get("defer_until") is None
-        assert reread.get("resume_native_session_id") == "held-thread-1"
+        assert pending_resume.peek(tmp_path / ".brr")["session_id"] == "held-thread-1"
 
     def test_reset_condition_before_deadline_does_not_release(self, tmp_path, monkeypatch):
         self._arm_held_run(
