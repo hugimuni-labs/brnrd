@@ -394,6 +394,37 @@ def schedule_event_releases(meta: dict[str, Any] | None, event: dict[str, Any] |
     return bool(event) and str(event.get("source") or "") == "schedule"
 
 
+def handover_event_releases(
+    meta: dict[str, Any] | None, event: dict[str, Any] | None,
+) -> bool:
+    """Whether a queued ``respawn`` wakes this hold — every hold but a wall.
+
+    A handover is the opposite of routine mail: it is the seat asking to be
+    replaced. It must survive a park armed *after* it was queued, or the park
+    swallows the succession.
+
+    Live 2026-09-17: a ``respawn:`` queued at 22:31:59Z was deferred by the
+    turn-end park armed at 22:35:14Z, landed in ``accumulated_event_ids``, and
+    never dispatched; an unrelated schedule tick woke the seat 95 minutes
+    later — natively, onto the very scroll the handover existed to end
+    (brnrd#2012). The post-arm filter had this right all along
+    (``respawn`` is deliberately absent from
+    ``daemon._HOLD_ACCUMULATE_ONLY_SOURCES``); the arm-time defer simply never
+    asked.
+
+    Unlike a tick, a wall does **not** stop it. The post-arm filter already
+    passes a respawn through a ``quota_exhausted`` hold (``respawn`` is absent
+    from ``daemon._HOLD_ACCUMULATE_ONLY_SOURCES``, which has no wall clause),
+    and a handover can name a different ``shell:``/``core:`` — it is one of
+    the two documented ways off a wall. Deferring it only at arm time would
+    make the same event mean two different things three minutes apart, which
+    is the family of bug this predicate exists to end.
+    """
+    if not is_active(meta):
+        return False
+    return bool(event) and str(event.get("source") or "") == "respawn"
+
+
 def strand_event_releases(
     meta: dict[str, Any] | None,
     event: dict[str, Any] | None,

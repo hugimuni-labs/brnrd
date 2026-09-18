@@ -486,6 +486,27 @@ class TestHandleResourceHeldEvents:
         reread = protocol._read_event(target.inbox_dir / "evt-child.md")
         assert reread.get("defer_reason") == "resource_hold"
 
+    def test_a_handover_releases_the_hold_and_wakes_fresh(self, tmp_path):
+        """brnrd#2012, the other half: a respawn wakes a *successor*.
+
+        Every other releaser wants the scroll the seat parked on, and gets it
+        via `resume_native_session_id` -> `claude --resume <id>`. A handover
+        exists to end that scroll: its carry-forward body is the whole
+        inheritance. `resume_kind` cannot say so — all seven arming sites
+        derive it from "does a native session id exist", which on a claude
+        seat is always yes — so the releaser's own intention decides.
+        """
+        self._arm_held_run(tmp_path)
+        target = self._target(tmp_path, source="respawn", eid="evt-respawn")
+
+        survivors = daemon._handle_resource_held_events([target], None)
+
+        assert len(survivors) == 1
+        assert "resume_native_session_id" not in target.event
+        assert "resume_native_provider" not in target.event
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / "run-held-1" / "run.md")
+        assert persisted.meta["resource_hold"]["released"] is True
+
     def test_correspondent_message_passes_through_and_releases(self, tmp_path):
         self._arm_held_run(tmp_path)
         target = self._target(tmp_path, source="telegram", eid="evt-human")
