@@ -192,6 +192,10 @@ def machine(tmp_path: Path) -> dict:
     _jsonl(brr / "runs" / OLD / "boundaries.jsonl", [
         {"at": iso(NOW - 5 * 3600), "act": "mutate", "place": {"path": "src/brr/old.py", "paths": ["src/brr/old.py"]}},
         {"at": iso(NOW - 5 * 3600), "act": "probe", "place": {"path": str(repo / "src/brr/hud.py"), "paths": []}},
+        # a `python - <<'PY'` heredoc names its own interpreter as a place;
+        # the tree must not put it on the island (TREE_SKIP_PREFIXES)
+        {"at": iso(NOW - 60), "act": "mutate",
+         "place": {"path": ".venv/bin/python", "paths": [".venv/bin/python"]}},
     ])
 
     # ── the bench ──
@@ -410,6 +414,38 @@ def test_tree_heat_decays_by_the_hour(machine):
     assert places["src/brr/hud.py"]["topics"] == ["the-loom"]
     later = {p["path"]: p for p in state.build(machine["repo"], machine["home"], now=NOW + 3600)["tree"]["places"]}
     assert later["src/brr/old.py"]["heat"] == pytest.approx(0.5 ** 6, abs=1e-4)
+
+
+def test_tree_carries_the_files_own_height_and_drops_the_venv(machine):
+    """The chunk ground needs a scale, and the island needs to not be an
+    interpreter.
+
+    A chunk says "lines 7845-7890 of hooks.py"; without the file's own height
+    that is a span with no scale — 7845 means nothing until you know whether
+    the file ends at 7900 or 17000. So a repo row carries `lines` when the
+    file is readable, and omits it (never a guessed 0) when it is a directory,
+    a binary, or gone.
+
+    And 2026-09-18, live: `.venv/bin/python` was the **hottest row in the
+    whole tree** (heat 0.986, 18 knots) because a `python - <<'PY'` heredoc
+    names its own interpreter as a place. The scene filtered `node_modules` in
+    its own layout — the wrong layer, since every reader had to re-implement
+    it and none filtered the rest.
+    """
+    repo = machine["repo"]
+    (repo / "src" / "brr" / "hud.py").write_text("a\nb\nc\n", encoding="utf-8")
+    (repo / ".venv" / "bin").mkdir(parents=True)
+    (repo / ".venv" / "bin" / "python").write_text("", encoding="utf-8")
+    places = {p["path"]: p for p in state.build(repo, machine["home"], now=NOW)["tree"]["repo"]}
+
+    assert places["src/brr/hud.py"]["lines"] == 3
+    # a place with no file behind it is unmeasured, and says so by absence
+    assert "lines" not in places["src/brr/old.py"]
+    assert not [p for p in places if p.startswith(".venv/")]
+    # …and the same constant keeps it out of a run's trail, so one filter
+    # answers for every reader instead of each one re-implementing it
+    rows = {r["run"]: r for r in state.build(repo, machine["home"], now=NOW)["cloth"]["rows"]}
+    assert not [t for t in rows[OLD]["trail"] if t["path"].startswith(".venv/")]
 
 
 def test_bench_folds(machine):
