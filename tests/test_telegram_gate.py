@@ -471,7 +471,7 @@ def test_pick_image_file_id_rejects_non_image_document():
     assert telegram._pick_image_file_id(msg) is None
 
 
-def test_delivery_loop_falls_back_to_last_chat_id_for_chatless_event(
+def test_delivery_loop_falls_back_to_the_bound_principal_for_chatless_event(
     tmp_path, monkeypatch,
 ):
     # A schedule-originated event (e.g. a director tick) carries no
@@ -480,10 +480,15 @@ def test_delivery_loop_falls_back_to_last_chat_id_for_chatless_event(
     # delivery-loop tick forever (nothing marks a failed delivery done) —
     # caught live 2026-07-06 via two director-tick responses stuck
     # spamming the daemon log.
+    #
+    # The fallback is the *bound principal*, not the last speaker — see
+    # test_delivery_loop_refuses_rather_than_guessing_a_reader below.
     brr_dir = tmp_path / ".brr"
     inbox_dir = brr_dir / "inbox"
     responses_dir = brr_dir / "responses"
-    telegram._save_state(brr_dir, {"token": "secret", "last_chat_id": 155783668})
+    telegram._save_state(
+        brr_dir, {"token": "secret", "paired_user_id": 155783668},
+    )
     protocol.create_event(inbox_dir, source="telegram", body="")
     event = protocol.list_pending(inbox_dir)[0]
     protocol.set_status(event, "done")
@@ -499,6 +504,49 @@ def test_delivery_loop_falls_back_to_last_chat_id_for_chatless_event(
     telegram._delivery_loop_once(brr_dir, inbox_dir, responses_dir)
 
     assert sent == [("secret", 155783668, None, "director tick report", None)]
+    # …and the record says where it went, so `status: delivered` is a receipt
+    # a later reader can check rather than take on faith.
+    closed = protocol._read_event(inbox_dir / f"{event['id']}.md")
+    assert int(closed["telegram_chat_id"]) == 155783668
+
+
+def test_delivery_loop_refuses_rather_than_guessing_a_reader(
+    tmp_path, monkeypatch,
+):
+    """An unaddressed send never goes to "whoever spoke most recently".
+
+    Live 2026-09-16..18: the fallback was ``state["last_chat_id"]``. A second
+    collaborator asked the bot one question, became ``last_chat_id``, and the
+    next six chatless sends — a night of merge announcements and status
+    reports meant for the maintainer — were delivered to her DM. All six came
+    back ``status: delivered``, because they were: to the wrong human.
+
+    With no bound chat and no paired principal there is no destination, so the
+    delivery is abandoned (``PermanentDeliveryError`` -> event closed
+    ``error``) instead of addressed by coincidence.
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    telegram._save_state(brr_dir, {"token": "secret", "last_chat_id": 313725712})
+    protocol.create_event(inbox_dir, source="telegram", body="")
+    event = protocol.list_pending(inbox_dir)[0]
+    eid = event["id"]
+    protocol.set_status(event, "done")
+    protocol.write_response(responses_dir, eid, "the night's report")
+    sent = []
+
+    def fake_send_with_overflow(
+        token, chat_id, topic_id, text, *, reply_to_message_id=None, **_kw,
+    ):
+        sent.append((token, chat_id, topic_id, text, reply_to_message_id))
+
+    monkeypatch.setattr(telegram, "_send_with_overflow", fake_send_with_overflow)
+    telegram._delivery_loop_once(brr_dir, inbox_dir, responses_dir)
+
+    assert sent == []
+    closed = protocol._read_event(inbox_dir / f"{eid}.md")
+    assert closed["status"] == "error"
 
 
 def test_replies_are_sent_to_originating_chat(tmp_path, monkeypatch):
