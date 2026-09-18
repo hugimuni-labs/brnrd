@@ -2631,7 +2631,12 @@ const RECORD=(()=>{
     for(const r of show){
       if(num(r.v)){
         // softer than a tick was, because the label now rides it
-        g.fillStyle=isBase(r)?'rgba(143,211,255,0.20)':'rgba(242,177,52,0.17)';
+        // a stratum's bar is a quarter of the panel's width at its very
+        // largest, where an act's runs most of it, so the foundation ink is
+        // carried up to where a 13 px bar still reads at 1:1. The seam keeps
+        // the old weight: it is a summary, not one of the seventeen.
+        g.fillStyle=r.seam?'rgba(143,211,255,0.20)'
+                   :isBase(r)?'rgba(143,211,255,0.30)':'rgba(242,177,52,0.17)';
         // His read, 2026-09-17: a per-row tick beside the text spends a column
         // to say what the row can say by itself. So THE ROW IS THE BAR — the
         // weight is a fill running the row's own width, behind the label, and
@@ -2650,6 +2655,12 @@ const RECORD=(()=>{
       if(r.his){                       // his line, on the top layer, in his ice
         g.strokeStyle='rgba(143,211,255,0.5)';g.lineWidth=1;
         g.beginPath();g.moveTo(x+14,ry+3.5);g.lineTo(x+w-14,ry+3.5);g.stroke();
+      }
+      if(r.seam){                      // THE LINE the foot line speaks of:
+        // above it the run's acts in tokens, below it the wake in bytes. The
+        // panel says "below the line" in words, so the line has to be drawn.
+        g.strokeStyle='rgba(143,211,255,0.38)';g.lineWidth=1;
+        g.beginPath();g.moveTo(x+10,ry-11.5);g.lineTo(x+w-10,ry-11.5);g.stroke();
       }
       // the label must read over its own bar: brighter than the old dim ink
       g.fillStyle=r.his?'#cfe9fb':(isBase(r)?'#a8c4d6':'#c2b393');
@@ -3038,7 +3049,7 @@ const RECORD=(()=>{
     if(!R.ready||!R.win)return null;
     const b=R.win==='body'?bodyRows():passRows();
     if(!b)return null;
-    const title=R.win==='body'?'THE BODY · every act, with its price'
+    const title=R.win==='body'?'THE BODY · what it was made of, and what it has done'
                               :`THE PASS · ${R.pass}`;
     const rect=windowRect(b.rows,b.note,b.gap);
     return {...rect,name:R.win,dim:'scene',
