@@ -423,15 +423,27 @@ def _delivery_loop_once(
     state = _load_state(brr_dir)
     token = state["token"]
     # An explicit `bind` sets state["chat_id"]; absent that, fall back to
-    # the most recently seen inbound chat (state["last_chat_id"], updated
-    # in _loop_once) so a self-originated event (schedule/director-tick —
-    # no telegram_chat_id of its own) still has somewhere to deliver.
+    # the *bound principal* — the one human this gate is paired with — so a
+    # self-originated event (schedule/director-tick — no telegram_chat_id of
+    # its own) still has somewhere to deliver.
+    #
+    # It used to fall back to state["last_chat_id"]: whoever spoke to the bot
+    # most recently. That is not a destination, it is a coincidence. Live
+    # 2026-09-16..18: a second collaborator asked the bot one question at
+    # 20:29, became `last_chat_id`, and the next six unaddressed sends — a
+    # night's merge announcements and status reports meant for the maintainer
+    # — were delivered to her DM instead. Every one came back `status:
+    # delivered`, because they were: to the wrong human.
+    #
+    # Deliberately no third fallback. `_deliver_responses` raises a permanent
+    # delivery error when it cannot resolve a chat, and a gate that cannot
+    # name its destination must refuse to send rather than guess a reader.
     _deliver_responses(
         brr_dir,
         inbox_dir,
         responses_dir,
         token,
-        state.get("chat_id", state.get("last_chat_id")),
+        state.get("chat_id", state.get("paired_user_id")),
         state.get("topic_id"),
     )
 
@@ -696,7 +708,21 @@ def _deliver_responses(
             # There is no chat to send to and no later poll will invent one.
             raise runtime.PermanentDeliveryError(
                 "the event carries no telegram chat id and this gate has no "
-                "default chat configured"
+                "default chat or bound principal configured"
+            )
+        if not event.get("telegram_chat_id"):
+            # The other half of the wrong-human bug: an unaddressed send used
+            # to close ``status: delivered`` while the record stayed silent
+            # about *where*, so a true receipt answered a question nobody
+            # asked and the misroute was invisible to every later reader.
+            # Stamp the resolved destination onto the event before sending.
+            try:
+                protocol.update_event_meta(event, telegram_chat_id=chat_id)
+            except (KeyError, OSError):
+                pass
+            print(
+                f"[brnrd:telegram] {event.get('id')}: no chat of its own — "
+                f"routed to the gate's default chat {chat_id}"
             )
         topic_id = _event_int(event, "telegram_topic_id", default_topic_id)
         reply_to = _event_int(event, "telegram_message_id")
