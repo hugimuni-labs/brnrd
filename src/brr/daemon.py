@@ -14518,6 +14518,7 @@ def _finalize_resource_hold(
         reason="resource_hold",
         keep_pending=lambda pending: (
             resource_hold.schedule_event_releases(meta, pending)
+            or resource_hold.handover_event_releases(meta, pending)
             or resource_hold.strand_event_releases(
                 meta, pending,
                 held_run_id=task.id,
@@ -14816,6 +14817,15 @@ def _apply_resource_hold_resume(
     meta = held.meta.get("resource_hold") or {}
     if not resource_hold.is_active(meta):
         return
+    # A handover asks for a *successor*, not a continuation. Every other
+    # releaser wants the scroll it parked on; this one exists to end it, and
+    # its carry-forward body is the whole inheritance. `resume_kind` cannot
+    # express that — it is derived identically at all seven arming sites from
+    # "does a native session id exist", which on a claude seat is always yes
+    # (brnrd#2012, kb/design-the-four-stops.md). So the *releaser's* intention
+    # decides, here where it is known, rather than the arming site's guess.
+    # Read before the release consumes the hold, so it reads the live record.
+    wants_fresh = resource_hold.handover_event_releases(meta, event)
     arriving_conversation = conversations.conversation_key_for_event(event) or ""
     seat = _seat_conversation(held)
     if str(event.get("source") or "") not in _HOLD_ACCUMULATE_ONLY_SOURCES:
@@ -14829,6 +14839,11 @@ def _apply_resource_hold_resume(
             held.meta["resource_hold"] = updated_meta
             held.conversation_key = seat
     released = release_held_run(held, by=by, why="resume")
+    if wants_fresh:
+        print(
+            f"[brnrd] resume {held.id}: handover — fresh boot, the native "
+            f"session is deliberately not carried forward"
+        )
     entity = shuttle.Shuttle.load(_shuttle_home(
         account.context_home_root(account_context) if account_context else None,
         runs_dir,
@@ -14847,7 +14862,8 @@ def _apply_resource_hold_resume(
     if _rekey_to_seat(event, seat):
         stamps["conversation_key"] = seat
     if (
-        released.get("native_session_id")
+        not wants_fresh
+        and released.get("native_session_id")
         and released.get("resume_kind") == resource_hold.RESUME_NATIVE
     ):
         event["resume_native_session_id"] = released["native_session_id"]
