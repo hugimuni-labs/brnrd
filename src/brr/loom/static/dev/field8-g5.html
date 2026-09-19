@@ -198,7 +198,7 @@ onkeydown=e=>{ if(e.target===q){ if(e.key==='Escape'){q.value='';QUERY='';srch.s
   if(dir){ e.preventDefault(); walk(dir); } };
 // walk the selection: the nearest room or street in that direction, along this street first, then anywhere
 function walk([dx,dy]){ const from=SEL||(drones.get('resident')&&drones.get('resident').node); if(!from){ const first=ALL.find(n=>!n.dir&&n.heat>0)||ALL.find(n=>!n.dir); if(first)selectNode(first); return; } const [fx,fy]=center(from); let best=null,bd=1e18;
-  for(const n of ALL){ if(n===from||(n.dir&&n.depth===0))continue; if(n.dir&&!(n.lit>0)&&n.depth>1)continue; const [x,y]=center(n); const vx=x-fx,vy=y-fy; const along=vx*dx+vy*dy; if(along<=0.5)continue; const across=Math.abs(vx*dy-vy*dx); const d=along+across*3+(n.parent===from.parent?0:300)+(rootOf2(n)===rootOf2(from)?0:5000); // a step stays on the street when it can, never leaves the island by accident if(d<bd){bd=d;best=n;} }
+  for(const n of ALL){ if(n===from||(n.dir&&n.depth===0))continue; if(n.dir&&!(n.lit>0)&&n.depth>1)continue; const [x,y]=center(n); const vx=x-fx,vy=y-fy; const along=vx*dx+vy*dy; if(along<=0.5)continue; const across=Math.abs(vx*dy-vy*dx); const d=along+across*3+(n.parent===from.parent?0:300)+(rootOf2(n)===rootOf2(from)?0:5000); /* a step stays on the street when it can, never leaves the island by accident */ if(d<bd){bd=d;best=n;} }
   if(best){ selectNode(best); const [x,y]=center(best); if(x*CAM.z+CAM.x<60||x*CAM.z+CAM.x>W-60||y*CAM.z+CAM.y<80||y*CAM.z+CAM.y>H-80){ CAM.tx=W/2-x*CAM.z; CAM.ty=H/2-y*CAM.z; } } }
 q.oninput=()=>{QUERY=q.value.trim().toLowerCase();};
 function click(sx,sy){ const [x,y]=toWorld(sx,sy); let hit=null; let _sel=null;
