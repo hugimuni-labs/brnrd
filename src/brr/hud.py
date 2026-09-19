@@ -1028,8 +1028,25 @@ def build(inputs: HUDInputs) -> HUD:
     # the same family of reason: a facet shaped like a capacity invites a
     # caller to make a second admission decision out of it.
     coexisting_facet = resources["coexisting_runs"]
+    # `floor` is scarcity named; `priced` is scarcity *counted* — the same
+    # window in weighted tokens, net of what live runs may still draw
+    # (`daemon._priced_spawn_pool`). The two are not redundant: a floor says
+    # "quota is low", a pool says "an 8m allowance does not fit", and only the
+    # second is in the unit a `spawn:` is declared in. Neither is an admission
+    # decision — the dispatch loop consults neither.
+    #
+    # `commitments` (the per-run breakdown) is dropped here deliberately: it
+    # carries dispatcher-authored titles, and this facet's standing rule
+    # (#585) is that it emits handles and counts, never free text. The counts
+    # survive; a caller wanting the rows reads the run controls.
+    priced_pool = daemon._priced_spawn_pool(
+        brr_dir, runner_name, run_levels, model=binding_model,
+    )
+    if isinstance(priced_pool, dict):
+        priced_pool = {k: v for k, v in priced_pool.items() if k != "commitments"}
     coexisting_facet["spawn_pool"] = {
         "floor": pacing_status.get("floor") if pacing_status else None,
+        "priced": priced_pool,
     }
     coexisting_facet["owned_children"] = daemon._owned_child_controls(task.id)
     return dataclasses.replace(hud, change_token=daemon._change_token(hud.to_dict()))

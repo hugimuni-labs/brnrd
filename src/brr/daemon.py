@@ -97,6 +97,7 @@ from . import halt_verb
 from . import halts as halts_mod
 from . import protocol
 from . import promises
+from . import quota_rate
 from . import relics
 from . import run_context
 from . import run_ledger
@@ -3995,6 +3996,13 @@ def _collect_allowance_facet(
         if control is not None:
             with _run_controls_lock:
                 control["allowance_spent"] = spent
+                # And the Shell this child actually landed on, which the
+                # dispatcher could only propose. Attested beats predicted:
+                # a substitution (quota, provider error) moves the draw to a
+                # different account window, and a pool that kept believing
+                # the proposal would debit the wrong one.
+                if runner_name:
+                    control["shell"] = runner_name
         return {"tokens": tokens, "spent": spent, "scope": "strand"}
     live_spent = allowance.collect_spent(
         runner_name, work_dir,
@@ -4051,6 +4059,118 @@ def _collect_quota_draws(
     if self_spent is None and not strands:
         return None
     return {"self": self_spent, "strands": strands}
+
+
+def _live_run_commitments(shell: str | None = None) -> list[dict[str, object]]:
+    """Every live run control, as :func:`brr.quota_rate.commitments` wants them.
+
+    *All* live strands, not just one parent's children: a quota window is an
+    account fact, and a sibling dispatched by a different seat eats the same
+    percent. :func:`_owned_child_controls` answers a different question (who
+    may I steer?) and is deliberately not reused — narrowing a pool to the
+    runs one parent happens to own is how a pool over-promises.
+
+    A control with no attested Shell yet (dispatched this tick, first
+    heartbeat not landed, and no ``shell:`` on the directive) carries
+    ``shell: None`` and is dropped by the caller's family filter. That is an
+    under-count of at most one tick's dispatches, and it is the honest
+    direction: a commitment debited to a window it may not draw on would
+    shrink the wrong pool.
+    """
+    family = quota_rate.shell_family(shell) if shell else None
+    rows: list[dict[str, object]] = []
+    with _run_controls_lock:
+        for control in _run_controls.values():
+            if control.get("stopped"):
+                continue
+            row = {
+                "run_id": control.get("run_id") or control.get("event_id"),
+                "title": control.get("title") or None,
+                "shell": control.get("shell"),
+                "allowance_tokens": control.get("allowance_tokens"),
+                "allowance_spent": control.get("allowance_spent"),
+            }
+            if family is not None and quota_rate.shell_family(row["shell"]) != family:
+                continue
+            rows.append(row)
+    rows.sort(key=lambda row: str(row.get("run_id") or ""))
+    return rows
+
+
+def _priced_spawn_pool(
+    brr_dir: Path | None,
+    shell: str | None,
+    levels: "dict[str, object] | None",
+    *,
+    model: str | None = None,
+    now: float | None = None,
+) -> "dict[str, object] | None":
+    """The dispatchable pool on *shell*, in weighted tokens, net of live runs.
+
+    The one place the two halves meet: :func:`runner_quota.binding_quota_window`
+    supplies the window that binds (remaining percent *plus* a duration, or
+    nothing at all), :mod:`brr.quota_rate` prices it off the closed-run ledger,
+    and :func:`_live_run_commitments` subtracts what is already promised.
+
+    ``None`` when there is no repo ledger to read — not a zero pool, which
+    would read as "spend nothing" to every caller.
+    """
+    if brr_dir is None:
+        return None
+    ledger = Path(brr_dir) / run_ledger.LEDGER_NAME
+    return quota_rate.pool(
+        ledger,
+        shell,
+        window=runner_quota.binding_quota_window(levels, model=model),
+        live_runs=_live_run_commitments(shell),
+        now=now,
+    )
+
+
+def _spawn_allowance_warning(
+    pool: "dict[str, object] | None", allowance_tokens: int | None, shell: str | None,
+) -> str | None:
+    """One line naming an allowance that outruns the priced pool, or ``None``.
+
+    **A warning, never a gate** — his ruling, and the reason the sentence ends
+    the way it does. Spawn admission was quota-gated once (``pacing.
+    quota_low_floor_pct``, torn out 2026-09-18) and it bit backwards: the floor
+    governs *how much* is spent, never *which lane* spends it, so gating the
+    cheap lane while the expensive seat kept running closed delegation at
+    exactly the moment delegation was the answer. Nothing in this function's
+    caller returns ``False``.
+
+    Silent unless the pool is ``measured`` **and** the ask exceeds the free
+    remainder. An unmeasured pool says nothing here: the reading itself rides
+    every boundary as ``spawn_pool.priced`` with its own ``reason``, and a
+    dispatch-time notice reading "pool unknown" would be noise on the one path
+    that must stay quiet to stay readable.
+    """
+    if not isinstance(pool, dict) or pool.get("status") != "measured":
+        return None
+    ask = allowance_tokens if isinstance(allowance_tokens, int) else None
+    free = pool.get("free_tokens")
+    if ask is None or not isinstance(free, int) or ask <= free:
+        return None
+    rate = pool.get("rate") if isinstance(pool.get("rate"), dict) else {}
+    window_minutes = pool.get("window_minutes")
+    window = "week" if window_minutes == 10080 else (
+        f"{int(window_minutes / 60)}h" if window_minutes else "window"
+    )
+    committed = pool.get("committed_tokens") or 0
+    pieces = [
+        f"spawn dispatched: allowance {allowance.format_tokens(ask)} on "
+        f"{quota_rate.shell_family(shell) or shell} exceeds the priced free pool "
+        f"({allowance.format_tokens(free)})",
+        f"{window} {pool.get('remaining_percent')}% left prices at "
+        f"{allowance.format_tokens(pool.get('pool_tokens'))} weighted "
+        f"({rate.get('pct_per_mtok')} %/Mtok, n={rate.get('samples')} runs over "
+        f"{rate.get('span_hours')}h)",
+        f"{pool.get('committed_runs')} live run(s) hold "
+        f"{allowance.format_tokens(committed)} undrawn",
+        "dispatched anyway — this is a reading to pace by, not an admission gate",
+    ]
+    return " · ".join(pieces)
 
 
 def _record_boot_cost(
@@ -6038,6 +6158,7 @@ def _register_run_control(
     repo_label: str = "",
     allowance_tokens: int | None = None,
     title: str = "",
+    shell: str = "",
 ) -> None:
     with _run_controls_lock:
         _run_controls[spawn_event_id] = {
@@ -6067,6 +6188,14 @@ def _register_run_control(
             # own heartbeat (`_collect_allowance_facet`'s strand branch) —
             # `None` until that child's first boundary reads something.
             "allowance_spent": None,
+            # The Shell whose account window this child will draw on — the
+            # dispatcher's proposed `shell:` here, overwritten with the
+            # *attested* runner name by the child's own first heartbeat
+            # (`_collect_allowance_facet`). Kept because a commitment is only
+            # meaningful against a named window: `quota_rate.commitments`
+            # sums undrawn allowances per Shell, and a control with no Shell
+            # is a token count belonging to no pool.
+            "shell": (shell or "").strip() or None,
         }
 
 
@@ -7401,7 +7530,35 @@ def _queue_spawn_request(
         repo_label=str(task.meta.get("repo_label") or ""),
         allowance_tokens=allowance_tokens,
         title=title,
+        shell=proposed,
     )
+    # Point 3 of the quota fix: price the ask against the window it will draw
+    # on, and say so *in the dispatch path* — after the control exists, so the
+    # child being dispatched counts itself among the commitments it is being
+    # measured against. Best-effort throughout: a pool reading is telemetry
+    # about the work, and nothing here may fail a spawn.
+    try:
+        warn_shell = proposed or str(
+            (conf.load_config(emit.brr_dir.parent) or {}).get("runner.default") or ""
+        )
+        if quota_rate.shell_family(warn_shell):
+            warn_levels, _slots = _collect_levels(
+                warn_shell, None, None, refresh=False, shared_dir=emit.brr_dir,
+            )
+            warning = _spawn_allowance_warning(
+                _priced_spawn_pool(
+                    emit.brr_dir, warn_shell, warn_levels, model=core or None,
+                ),
+                allowance_tokens,
+                warn_shell,
+            )
+            if warning:
+                _record_outbox_notice(
+                    outbox_dir, warning, kind="advisory", lifetime="run",
+                    verb="spawn", run=task.id,
+                )
+    except Exception:  # noqa: BLE001 - a pool reading never blocks a dispatch
+        pass
     print(f"[brnrd] outbox: queued concurrent spawn ({new_path.stem})")
     # A schedule entry can opt in (`reset_on: spawn`) to treat this dispatch
     # as if it had just fired itself, rather than firing redundantly right
