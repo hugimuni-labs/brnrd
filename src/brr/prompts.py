@@ -3384,12 +3384,23 @@ def _build_injected_blocks_with_contracts(
         keyed.append(("recent-activity", context))
 
     # 8b. The resident's own last run node (wyrd §5). Its *location* is the
-    # node's own body.md — a real file — so under `boot.mount` the block is
-    # seeded as a Read of that page (the past self's notebook, whole) and,
-    # being the last mounted block, carries the snapshot seam. Unmounted, the
-    # prose keeps the compiled map (`_build_prior_run_block`); mounted, the
-    # territory (`_build_prior_run_mount_text`). The two are one block_key on
-    # purpose: a wake pays for the past self once, in one grammatical position.
+    # node's own body.md — a real file — which for a while meant `boot.mount`
+    # seeded it as a Read of that page (the past self's notebook, whole) with
+    # the snapshot seam riding on it as the last mounted block.
+    #
+    # It no longer does: `transcript.NEVER_MOUNT` keeps this block in prose on
+    # every wake. The seed exists to teach a fresh body its *environment*, and
+    # the resident's own memory is not that — measured 2026-09-18, the mount
+    # was not relocating this block but substituting a 2.7x larger text for it
+    # (up to 6.7x on a handover node), in the one grammatical position that
+    # says "you have already acted". The constant carries the numbers.
+    #
+    # Both texts survive and both are still reachable: the prose map
+    # (`_build_prior_run_block`) is what a wake receives, and the territory
+    # (`_build_prior_run_mount_text`, still in `_MOUNTABLE_TEXT_BUILDERS`) is
+    # what an honest Read of the page would return — which `brnrd prompts
+    # mount` and `replay` need to reconstruct wakes forged before the clause.
+    # They remain one block_key on purpose: a wake pays for the past self once.
     prior_run = _build_prior_run_block(repo_root)
     prior_node = _prior_run_node(repo_root) if prior_run else None
     contracts.append(ContractEntry(
@@ -3727,7 +3738,14 @@ def _prior_run_boot_line(repo_root: Path, run_id: str) -> str:
 
 
 def _build_prior_run_mount_text(repo_root: Path) -> str:
-    """The past self's page, whole — what a seeded ``Read`` of the node carries.
+    """The past self's page, whole — what an honest ``Read`` of the node returns.
+
+    **No live wake seeds this any more** (:data:`brr.transcript.NEVER_MOUNT`,
+    2026-09-18): memory stays prose, and the wake gets
+    :func:`_build_prior_run_block`'s map. This survives because the offline
+    readers — ``brnrd prompts mount``, ``brnrd prompts replay`` — must still be
+    able to reconstruct a seed forged before that clause, and because it is the
+    only text that would be *true* if this block were ever mounted again.
 
     ``body.md`` byte for byte (a Read that returned a summary would be the
     lie the mount exists to refuse), then, in brnrd's own bracketed voice —
@@ -4617,12 +4635,19 @@ def build_daemon_prompt_with_score(
     # the contracts, is what stops a computed block from being subtracted from the
     # prose and then silently not mounted: dropped from the wake entirely, by a
     # boot that was trying to be clever.
-    from .transcript import COMPUTED
+    from .transcript import COMPUTED, NEVER_MOUNT
 
     mountable = frozenset(
         c.block_key
         for c in (preamble_contracts + inject_contracts)
         if c.present and c.location and c.location != COMPUTED
+        # The seed exists to teach a fresh body its environment; the
+        # resident's own memory is not the environment and stays in prose.
+        # `transcript.NEVER_MOUNT` carries the measurement and the reasoning.
+        # Excluded *here*, where the prose subtraction is decided, so the
+        # block is never taken out of `prompt.md` in the first place — the
+        # symmetric half of the same skip in `build_orientation_transcript`.
+        and c.block_key not in NEVER_MOUNT
     ) if mount_sink is not None else frozenset()
 
     # The prompt and its inspection score now share the same injected blocks
