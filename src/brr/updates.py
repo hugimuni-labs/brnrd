@@ -44,6 +44,12 @@ PACKET_TYPES = (
     "push_started",
     "push_done",
     "done",
+    # A seat parked rather than ended (`_arm_resource_hold`'s callers,
+    # including the boot sweep's restart park). Absent until 2026-09-18,
+    # which made `emit("held", ...)` a line that returned at the type
+    # check below — every hold since holds existed, silently unlogged,
+    # and a frozen chat card with no packet left to correct it.
+    "held",
     "failed",
     "conflict",
     # Wyrd §3 (dispatch-edge verbs): a parent stopping or messaging its
