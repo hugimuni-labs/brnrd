@@ -241,6 +241,15 @@ def parse_outbox_message(text: str) -> tuple[dict[str, Any], str]:
     return meta, ""
 
 
+#: YAML block-scalar indicators a field value may be, instead of inline text:
+#: ``|`` literal, ``>`` folded, each with an optional chomping suffix.
+#: Recognised so a field documented as prose (``halt:``'s ``carry:``, a
+#: ``reason:``) can actually be written as prose — before this, the lines
+#: under such a key were parsed as sibling keys and the directive was
+#: refused by name for fields its author never wrote.
+_BLOCK_SCALAR_MARKERS = frozenset({"|", "|-", "|+", ">", ">-", ">+"})
+
+
 def _parse_block(lines: list[str], base_indent: int) -> tuple[dict[str, Any], int]:
     result: dict[str, Any] = {}
     i = 0
@@ -259,6 +268,53 @@ def _parse_block(lines: list[str], base_indent: int) -> tuple[dict[str, Any], in
         key, _, val = stripped.partition(":")
         key = key.strip()
         val = val.strip()
+        if val in _BLOCK_SCALAR_MARKERS:
+            # YAML block scalar (``carry: |``). Without this, every line of
+            # a multi-line field is re-parsed as a *sibling key* — which is
+            # how `halt:`'s own brief, the one precaution that verb has,
+            # came back "unrecognised field(s)" listing its own prose
+            # (measured 2026-09-19, run-260919-1802-6zeq, the verb's first
+            # real use). A field whose documented content is a paragraph
+            # must be writable as a paragraph.
+            block_lines: list[str] = []
+            j = i + 1
+            while j < len(lines):
+                raw = lines[j].rstrip("\n")
+                if not raw.strip():
+                    block_lines.append("")
+                    j += 1
+                    continue
+                raw_indent = len(raw) - len(raw.lstrip())
+                if raw_indent <= indent:
+                    break
+                block_lines.append(raw)
+                j += 1
+            # Dedent by the least-indented non-empty line, so the field's
+            # own text is preserved with its internal structure intact.
+            widths = [
+                len(ln) - len(ln.lstrip()) for ln in block_lines if ln.strip()
+            ]
+            cut = min(widths) if widths else 0
+            text = "\n".join(
+                ln[cut:] if ln.strip() else "" for ln in block_lines
+            )
+            while text.endswith("\n"):
+                text = text[:-1]
+            if val.startswith(">"):
+                # Folded: blank lines separate paragraphs, single newlines
+                # become spaces — YAML's own rule, kept because a caller
+                # who writes ``>`` means it.
+                paragraphs = [
+                    " ".join(part.split()) for part in text.split("\n\n")
+                ]
+                text = "\n\n".join(p for p in paragraphs)
+            if val.endswith("-"):
+                text = text.rstrip("\n")
+            elif val.endswith("+"):
+                text = text + "\n"
+            result[key] = text
+            i = j
+            continue
         if val:
             result[key] = _coerce(val)
             i += 1
