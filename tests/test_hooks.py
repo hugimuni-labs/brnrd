@@ -4235,14 +4235,17 @@ def _portal_payload(*, resources=None, pending=0):
     }
 
 
-def test_allowance_chip_replaces_quota_chip_for_a_strand():
-    """design-the-allowance.md §2: a strand's own metered allowance renders
-    `spend 38k/120k` on the bar instead of the shared `q S…` chip; a run
-    with no allowance facet (the resident, slice 1) keeps the quota chip."""
+def test_a_strand_bar_carries_its_allowance_and_the_quota_chip():
+    """2026-09-19: the allowance chip no longer *replaces* the quota chip at
+    strand scope. An allowance is what the child was allocated; quota is the
+    wall the provider stops it at. Four codex strands died in two days
+    against a 5h window their bar never showed them, so both ride every bar
+    — the same pairing the resident seat has had since slice 2."""
     resources = {
         "quota": {"status": "known", "summary": "session 57% left"},
         "allowance": {
             "status": "known", "tokens": 120_000, "spent": 38_000, "pct": 31.7,
+            "scope": "strand",
         },
     }
     payload = _portal_payload(resources=resources)
@@ -4250,7 +4253,7 @@ def test_allowance_chip_replaces_quota_chip_for_a_strand():
     line = hooks.format_delta(payload, rendered_chips=rendered)
     assert line is not None
     assert "spend 38k/120k" in line
-    assert "q S57" not in line
+    assert "q S57" in line
 
 
 def test_quota_chip_still_renders_without_an_allowance_facet():
@@ -6249,7 +6252,54 @@ def test_boundary_row_carries_quota_by_the_chips_own_letters(tmp_path):
         "quota": {"status": "unknown", "summary": summary},
     })
     hooks.run_hook(hooks.PHASE_STOP, "{}", env)
-    assert _transcript(run_dir)[-1]["quota"] == {"S": None, "W": None, "F": None}
+    # Nothing measured is an empty reading — not a claude-shaped skeleton of
+    # nulls, which reads like three buckets someone looked at.
+    assert _transcript(run_dir)[-1]["quota"] == {}
+
+
+def test_boundary_row_keeps_a_codex_runs_own_buckets(tmp_path):
+    """The row used to be seeded `{"S","W","F"}` and filled only from that
+    set, so a *codex* run recorded three null claude slots while holding a
+    perfectly good `5h`/`7d` reading (measured 2026-09-19 across every
+    `codex-gpt-6-astra` row on this account). The summary here is built by
+    codex's own parser from a `token_count` payload in the shape the Shell
+    emits — not a hand-written string that could drift from production's."""
+    from brr import codex_status, facets
+
+    levels = codex_status.parse_token_count({
+        "type": "token_count",
+        "rate_limits": {
+            "primary": {
+                "used_percent": 100.0, "window_minutes": 300,
+                "resets_in_seconds": 9000,
+            },
+            "secondary": {
+                "used_percent": 16.0, "window_minutes": 10080,
+                "resets_in_seconds": 600000,
+            },
+        },
+        "info": {
+            "total_token_usage": {"input_tokens": 140090, "output_tokens": 504},
+            "model_context_window": 272000,
+        },
+    }, "2026-09-19T10:09:26Z")
+    resources = facets.build(
+        levels=levels,
+        levels_collector=codex_status.COLLECTED_SLOTS,
+        runner_name="codex-gpt-6-astra",
+        allowance={"tokens": 5_000_000, "spent": 495_141, "scope": "strand"},
+    )
+    assert resources["quota"]["status"] == "known"
+
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", resources=resources)
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+
+    row = _transcript(run_dir)[-1]["quota"]
+    # H = the 5h window, D = the 7d one — the chip's own letters, and the
+    # 0 is the number four codex strands died without ever being shown.
+    assert row == {"H": 0, "D": 84}
+    assert "S" not in row and "W" not in row and "F" not in row
 
 
 def test_boundary_row_place_names_the_file_a_tool_touched(tmp_path):
@@ -6289,7 +6339,7 @@ def test_boundary_row_readings_are_null_shaped_without_a_portal(tmp_path):
     for record in records:
         assert record["ctx"] == {"tokens_after": None, "delta": None}
         assert record["spend"] == {"allowance_used": None, "allowance": None}
-        assert record["quota"] == {"S": None, "W": None, "F": None}
+        assert record["quota"] == {}
         assert record["place"] == {"path": None, "paths": [], "commit": None}
 
 
