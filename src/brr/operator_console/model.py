@@ -285,6 +285,10 @@ def _boot_evidence(
             "class": str(entry.get("runner_class") or ""),
         },
         "session_start": native,
+        "inheritance": [
+            record for path in sorted(run_dir.glob("boot-inheritance-*.json"))
+            if isinstance(record := _read_json(path, {}), dict) and record
+        ],
         "model_envelope": {
             "provenance": "opaque",
             "status": "not-attested",

@@ -351,19 +351,9 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
             expected_core=runner_choice.model,
             selected_runner=runner_choice,
             codex_events_path=codex_events_path,
-            # design-the-allowance.md's resource hold: a fresh dispatch
-            # resuming a held conversation carries the preserved
-            # native session id (stamped onto the triggering event by
-            # `_apply_resource_hold_resume`, copied onto `task.meta`
-            # by `Run.from_event` for free). First attempt only — a
-            # retry of *this same* dispatch must not re-resume the
-            # native session a second time with the same prompt, which
-            # `codex exec resume` would read as a genuinely new turn
-            # rather than a retry.
-            resume_native_session_id=(
-                daemon._resume_session_for_runner(task, runner_choice)
-                if attempt == 1 else None
-            ),
+            # Dispatch resolved this attempt's in-memory claim before deciding
+            # whether to mount. Never recover invocation authority from Run.meta.
+            resume_native_session_id=dx.resume_native_session_id,
         ),
         cfg=cfg,
         trace=True,
