@@ -79,7 +79,7 @@ def _mount_prepared(tmp_path, monkeypatch):
     real_build = prompts.build_daemon_prompt
     p = _prepared(tmp_path, monkeypatch)
     monkeypatch.setattr(prompts, "build_daemon_prompt", real_build)
-    monkeypatch.setattr(p.env_backend, "session_seed_home", lambda _ctx: tmp_path / "seed-home")
+    monkeypatch.setattr(p.env_backend, "session_seed_home", lambda _ctx: tmp_path / "seed-home", raising=False)
     choice = runner.runner_profile("claude", tmp_path)
     p.task.meta.update(runner_shell="claude", runner_core="haiku")
     return replace(p, lane=replace(p.lane, choice=choice, name=choice.name))
@@ -123,7 +123,7 @@ def test_pinned_command_keeps_prose_and_notices_its_resume_once(tmp_path, monkey
         dx = dispatch(p, Attempt(attempt, p.lane))
         assert not dx.attempt.lane.resume_args
         assert "# Resident Identity Core" in dx.prompt
-    notices = [n for n in daemon._read_outbox_notices(p.outbox_dir) if "runner_cmd" in n["message"]]
+    notices = [n for n in daemon._read_outbox_notices(p.outbox_dir) if "runner_cmd" in n["text"]]
     assert len(notices) == 1
     assert notices[0]["kind"] == "advisory"
     assert "--continue" in _render_receipts(p)
@@ -149,3 +149,42 @@ def test_shell_mismatch_mounts_and_failed_retry_keeps_its_own_receipt(tmp_path, 
     assert "attempt 1 · mount:" in rendered
     assert "attempt 2 · mount: none — prose (mount failed)" in rendered
     assert "seed storage unavailable" in rendered
+
+
+def test_non_product_seeded_read_is_named_even_without_source_file(tmp_path):
+    from brr import run_context
+    path = tmp_path / "predecessor-body.md"
+    score = SimpleNamespace(contracts=[SimpleNamespace(
+        present=True, location=str(path), block_key="unexpected-memory", bytes=8,
+    )])
+    receipt = {}
+    transcript.mount_claude_session(
+        score, block_text={"unexpected-memory": "mémoire"}, cwd=str(tmp_path),
+        home=tmp_path, receipt=receipt,
+    )
+    assert receipt["reads"][0]["product_file"] is False
+    task = Run(id="run-extra", event_id="evt-extra", body="")
+    run_context.write_boot_inheritance(tmp_path, task, 1, {"mode": "mount", "seed": receipt})
+    rendered = _render_receipts(SimpleNamespace(runs_dir=tmp_path / "runs", task=task))
+    assert "includes non-product files" in rendered
+    assert f"+ {path}" in rendered
+    assert "product files only" not in rendered
+
+
+def test_missing_receipt_does_not_claim_no_mount(tmp_path):
+    task = Run(id="run-old", event_id="evt-old", body="")
+    rendered = _render_receipts(SimpleNamespace(runs_dir=tmp_path / "runs", task=task))
+    assert "no inheritance receipt" in rendered
+    assert "mount: none" not in rendered
+
+
+@pytest.mark.parametrize("seed", [[], {"reads": "wrong"}, {"seed_bytes": "wrong"}])
+def test_malformed_receipt_is_unknown_not_a_console_crash(tmp_path, seed):
+    task = Run(id="run-broken", event_id="evt-broken", body="")
+    run_dir = tmp_path / "runs" / task.id
+    run_dir.mkdir(parents=True)
+    (run_dir / "boot-inheritance-1.json").write_text(json.dumps({
+        "attempt": 1, "mode": "mount", "seed": seed,
+    }))
+    rendered = _render_receipts(SimpleNamespace(runs_dir=tmp_path / "runs", task=task))
+    assert "no inheritance receipt" in rendered

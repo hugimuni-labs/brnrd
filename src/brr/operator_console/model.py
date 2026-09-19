@@ -219,6 +219,37 @@ def _phase_key(value: str) -> str:
     return re.sub(r"[^a-z]", "", value.lower())
 
 
+def _read_boot_inheritance(run_dir: Path) -> list[dict[str, Any]]:
+    """Read captured attempt receipts; malformed/older records remain unknown."""
+    records = []
+    for path in run_dir.glob("boot-inheritance-*.json"):
+        record = _read_json(path, {})
+        if not isinstance(record, dict) or type(record.get("attempt")) is not int:
+            continue
+        if record.get("mode") == "mount":
+            seed = record.get("seed")
+            if not isinstance(seed, dict):
+                continue
+            if any(type(seed.get(key)) is not int or seed[key] < 0
+                   for key in ("seed_bytes", "seed_rows", "read_bytes")):
+                continue
+            reads = seed.get("reads")
+            if not isinstance(reads, list) or any(
+                not isinstance(read, dict)
+                or not isinstance(read.get("path"), str)
+                or type(read.get("bytes")) is not int or read["bytes"] < 0
+                or type(read.get("product_file")) is not bool
+                for read in reads
+            ):
+                continue
+        if record.get("mode") == "runner_cmd":
+            flags = record.get("resume_flags")
+            if not isinstance(flags, list) or not all(isinstance(flag, str) for flag in flags):
+                continue
+        records.append(record)
+    return sorted(records, key=lambda record: record["attempt"])
+
+
 def _boot_evidence(
     *,
     run_dir: Path,
@@ -232,9 +263,11 @@ def _boot_evidence(
     Profiles can change after a run starts, and a reconstructed argv would then
     answer "what would launch now?" rather than "what launched this run?".
 
-    Today two durable facts cross that honesty bar:
+    Durable facts that cross that honesty bar:
 
     * ``prompt.md`` — exact brnrd-owned bytes handed to the runner invocation;
+    * ``boot-inheritance-*.json`` — per-attempt prepared inheritance and exact
+      seed measurements, not a claim of Shell consumption;
     * a ``session-start`` boundary — native runner lifecycle evidence that the
       selected Shell started and called the brnrd hook endpoint.
 
@@ -285,10 +318,7 @@ def _boot_evidence(
             "class": str(entry.get("runner_class") or ""),
         },
         "session_start": native,
-        "inheritance": [
-            record for path in sorted(run_dir.glob("boot-inheritance-*.json"))
-            if isinstance(record := _read_json(path, {}), dict) and record
-        ],
+        "inheritance": _read_boot_inheritance(run_dir),
         "model_envelope": {
             "provenance": "opaque",
             "status": "not-attested",

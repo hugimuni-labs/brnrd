@@ -693,8 +693,10 @@ def _inheritance_rows(boot: dict[str, Any]) -> list[str]:
         elif mode == "runner_cmd":
             flags = ", ".join(record.get("resume_flags") or [])
             lines.append(prefix + "none — runner_cmd owns inheritance" + (f" ({flags})" if flags else ""))
-        else:
+        elif mode == "prose":
             lines.append(prefix + f"none — prose ({record.get('reason') or 'unrecorded reason'})")
+        else:
+            lines.append(prefix + "inheritance receipt unavailable or unrecognized")
         if record.get("cold_reason"):
             lines.append(f"           {record['cold_reason']}")
         if record.get("error"):
