@@ -4045,6 +4045,20 @@ def _collect_quota_draws(
             "run_id": row.get("run_id") or None,
             "title": row.get("title") or None,
             "weighted": row.get("weighted"),
+            # A parked child still counts here: the tokens it spent were
+            # really drawn off the shared gauge, and dropping the row would
+            # re-attribute them to the seat — the exact misreading this
+            # block exists to end. `status` is what lets a renderer say
+            # "parked" without a second lookup.
+            **({"status": row["status"]} if row.get("status") else {}),
+            **(
+                {"waiting_on": row["waiting_on"]}
+                if row.get("waiting_on") else {}
+            ),
+            **(
+                {"hold_reason": row["hold_reason"]}
+                if row.get("hold_reason") else {}
+            ),
         }
         for row in _owned_child_controls(task.id)
     ]
@@ -15894,6 +15908,16 @@ def release_held_run(run: Run, *, by: str, why: str) -> dict[str, object]:
     )
     run.meta["resource_hold"] = released
     run.transition("done", why=f"released:{why}", by=by)
+    # A parked child's edge outlives its process on purpose
+    # (`_park_run_control`), so the one thing that must not outlive the
+    # hold is the *word* "parked" on its parent's row. Without this, a
+    # refill sweep thawing a strand left the seat reading `⏸ strand
+    # parked:` for a run that had since been released — stale, and stale
+    # on the surface the seat is meant to act from.
+    control = _find_run_control(run.id)
+    if control is not None and control.get("parked"):
+        with _run_controls_lock:
+            control["parked"] = None
     return released
 
 
