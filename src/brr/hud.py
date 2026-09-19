@@ -672,6 +672,15 @@ def build(inputs: HUDInputs) -> HUD:
         int(time.monotonic() - start_monotonic)
         if start_monotonic is not None else None
     )
+    # The same start, as wall-clock epoch seconds, for every reader that
+    # has to pick *this run's* Claude transcript out of a work dir other
+    # runs share (`env: host` — see `allowance.latest_claude_transcript`).
+    # Derived from the monotonic stamp rather than kept as a second field
+    # so there is one start, not two that can disagree.
+    started_wall = (
+        time.time() - (time.monotonic() - start_monotonic)
+        if start_monotonic is not None else None
+    )
     # Card age: seconds since the note last changed (write *or*
     # withdrawal), falling back to the run's own start when the card
     # has never been touched — a wake that never writes a note is, from
@@ -752,10 +761,15 @@ def build(inputs: HUDInputs) -> HUD:
     run_ledger.record_boundary_levels(task, run_levels)
     allowance_facet_input = daemon._collect_allowance_facet(
         task, runner_name, work_dir, cfg=cfg, levels=run_levels,
+        not_before=started_wall,
     )
     draws_facet_input = daemon._collect_quota_draws(task, allowance_facet_input)
-    daemon._record_boot_cost(task, runner_name, work_dir, outbox_dir)
-    daemon._record_context_window(runner_name, work_dir, outbox_dir)
+    daemon._record_boot_cost(
+        task, runner_name, work_dir, outbox_dir, not_before=started_wall,
+    )
+    daemon._record_context_window(
+        runner_name, work_dir, outbox_dir, not_before=started_wall,
+    )
     # design-the-seat-that-never-quits.md §machinery slice 3: needs both
     # numbers `_record_boot_cost` and `_collect_allowance_facet` just
     # computed, so it runs after both — may resolve `await_state` with a
