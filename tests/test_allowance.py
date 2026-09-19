@@ -204,6 +204,66 @@ def test_latest_claude_transcript_finds_the_newest_under_the_cwd_slug(tmp_path):
     assert found == newer
 
 
+def test_latest_claude_transcript_skips_a_predecessor_on_a_shared_cwd(tmp_path):
+    """The host-seat defect measured on run-260919-1802-6zeq.
+
+    Two runs, one shared checkout: the retired seat's transcript is the
+    newest thing in the slug until this run's own overtakes it, so a bare
+    newest-mtime scan hands a fresh seat the *previous* seat's occupancy.
+    ``not_before`` — this run's own start — is what makes the two
+    distinguishable.
+    """
+    import os
+    import time
+
+    root = tmp_path / "projects"
+    cwd = "/Users/x/Source/Projects/brnrd"  # the shared host checkout
+    slug_dir = root / cwd.replace("/", "-")
+    slug_dir.mkdir(parents=True)
+    predecessor = slug_dir / "predecessor.jsonl"
+    mine = slug_dir / "mine.jsonl"
+    predecessor.write_text("{}\n", encoding="utf-8")
+    mine.write_text("{}\n", encoding="utf-8")
+
+    now = time.time()
+    started = now - 60  # this run booted a minute ago
+    os.utime(predecessor, (started - 120, started - 120))
+    os.utime(mine, (now, now))
+
+    # Unfloored, both are candidates and the newest wins — which is only
+    # correct once this run has actually written a turn.
+    assert allowance.latest_claude_transcript(cwd, projects_root=root) == mine
+    assert allowance.latest_claude_transcript(
+        cwd, projects_root=root, not_before=started,
+    ) == mine
+
+    # The window the defect lived in: before this seat has spoken, the only
+    # file in the slug is the predecessor's. Honest absence, never its number.
+    mine.unlink()
+    assert allowance.latest_claude_transcript(
+        cwd, projects_root=root,
+    ) == predecessor
+    assert allowance.latest_claude_transcript(
+        cwd, projects_root=root, not_before=started,
+    ) is None
+
+
+def test_collect_spent_passes_the_floor_through_to_the_transcript_scan(
+    tmp_path, monkeypatch,
+):
+    seen = {}
+
+    def _fake(cwd, projects_root=None, *, not_before=None):
+        seen["not_before"] = not_before
+        return None
+
+    monkeypatch.setattr(allowance, "latest_claude_transcript", _fake)
+    assert allowance.collect_spent(
+        "claude", tmp_path, not_before=1234.5,
+    ) is None
+    assert seen["not_before"] == 1234.5
+
+
 def test_latest_claude_transcript_none_with_no_projects_dir(tmp_path):
     assert allowance.latest_claude_transcript(
         "/some/cwd", projects_root=tmp_path / "absent",
