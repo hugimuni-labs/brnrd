@@ -15723,3 +15723,33 @@ def test_capture_exit_quota_survives_a_collector_that_raises(tmp_path, monkeypat
     note = protocol.list_pending(inbox)[0]
     assert "spawn_quota_remaining_pct" not in note
     assert "fuel at exit" not in note["body"]
+
+
+def test_merge_level_snapshots_dates_a_quota_block_that_has_no_stamp():
+    """The whitelist used to drop a snapshot's own `updated_at`, so a claude
+    reading reached `_capture_exit_quota` with nothing to date it by while
+    codex's (stated inside its own quota block) arrived stamped. A cached
+    reading presented as "at death" with no way to tell its age is the same
+    lie the capture exists to end."""
+    usage = {
+        "source": "claude /usage PTY",
+        "updated_at": "2026-09-19T12:47:49Z",
+        "quota": {"summary": "session 84% left", "buckets": {}},
+    }
+    merged = daemon._merge_level_snapshots(usage, None)
+    assert daemon._levels_measured_at(merged) == "2026-09-19T12:47:49Z"
+    # The cached snapshot dict is shared; the merge copies, never mutates.
+    assert "updated_at" not in usage["quota"]
+
+    # A collector that states its own never gets overwritten — and the
+    # quota block's stamp outranks the snapshot's, because a merged codex
+    # snapshot dates itself by "the freshest thing in it", which can be a
+    # rollout write later than the probe that produced these buckets.
+    codex = {
+        "source": "codex app-server",
+        "updated_at": "2026-09-19T12:00:00Z",
+        "quota": {"summary": "5h 0% left", "updated_at": "2026-09-19T10:09:26Z"},
+    }
+    assert daemon._levels_measured_at(
+        daemon._merge_level_snapshots(codex)
+    ) == "2026-09-19T10:09:26Z"
