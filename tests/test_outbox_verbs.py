@@ -78,7 +78,8 @@ def _verbs(results: list[Handled]) -> list[str]:
 
 def test_rows_are_the_precedence_main_applied():
     assert [row.key for row in table.ROWS] == [
-        "runner_policy", "config_change", "respawn", "spawn", "ask", "submit",
+        "runner_policy", "config_change", "halt", "respawn", "spawn", "ask",
+        "submit",
         "to", "stop", "note", "await", "hold",
         "land", "fold", "topic", "mark", "stake", "cut-at",
         "cut", "gate", "event",

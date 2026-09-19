@@ -334,6 +334,23 @@ def boundary(p: Prepared, s: Streamed) -> Boundary:
         # carrier now stays on disk too, but synthetic/older gates can
         # still race the transition during deploy skew.
         terminal_reply = protocol.read_response(responses_dir, eid)
+        pending_halt = task.meta.pop("pending_halt", None)
+        if pending_halt is not None:
+            # `halt:` outranks every park, including one this same turn
+            # staged and including the daemon's own turn-end net below: a
+            # seat that chose to end does not get parked instead. This is
+            # the whole point of the verb (design-the-four-stops.md §The
+            # two verbs) — every other exit was closed, so the seat could
+            # not leave, and the cost of that was invisible.
+            task.meta.pop("pending_resource_hold", None)
+            return Boundary(
+                kind="halt",
+                attempt=ended,
+                halt_spec=pending_halt,
+                terminal_reply=terminal_reply,
+                success_signal=signal,
+                has_new_commit=has_new_commit,
+            )
         pending_hold = task.meta.pop("pending_resource_hold", None)
         if pending_hold is None:
             pending_hold = daemon._park_seat_on_turn_end(task, cfg)

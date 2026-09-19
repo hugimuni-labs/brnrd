@@ -181,7 +181,9 @@ class Streamed:
     result: RunnerResult
 
 
-BoundaryKind = Literal["completed", "hold", "stopped", "retry", "fallback", "exhausted"]
+BoundaryKind = Literal[
+    "completed", "hold", "halt", "stopped", "retry", "fallback", "exhausted",
+]
 
 
 @dataclass(frozen=True)
@@ -197,6 +199,10 @@ class Boundary:
     next_attempt: Attempt | None = None
     stop_control: dict | None = None
     hold_spec: dict[str, object] | None = None
+    #: ``halt:``'s accepted declaration (``daemon._halt_spec``). A halt is
+    #: not a park: the seat ends, so this routes to ``_finalize_halt``,
+    #: never to the hold-shaped finalizer.
+    halt_spec: dict[str, object] | None = None
     terminal_reply: str | None = None
     success_signal: str | None = None
     has_new_commit: bool = False
