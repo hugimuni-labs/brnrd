@@ -874,3 +874,75 @@ def test_pending_order_is_total_when_created_and_mtime_both_tie(tmp_path):
     order = [ev["id"] for ev in protocol.list_pending(inbox)]
 
     assert order == ["evt-s00", "evt-s01", "evt-s02", "evt-s03"]
+
+
+def test_block_scalar_keeps_a_multi_line_field_out_of_the_key_space():
+    """`halt:`'s `carry:` is a brief — prose, with colons in it.
+
+    Measured 2026-09-19 (run-260919-1802-6zeq), the verb's first real use:
+    every line of the brief was re-parsed as a sibling key and the halt came
+    back `unrecognised field(s)` listing its own prose. The verb's entire
+    precaution is that a brief gets written; a parser that cannot carry one
+    disarms it.
+    """
+    text = (
+        "---\n"
+        "halt: true\n"
+        "core: fable\n"
+        "reason: |\n"
+        "  He asked for a fresh seat.\n"
+        "  Second line, with a colon: here.\n"
+        "carry: |\n"
+        "  ## Your first act\n"
+        "\n"
+        "  Check the cloth: is run-260919-1802-6zeq on it?\n"
+        "\n"
+        "  - a bullet: with a colon\n"
+        "---\n"
+        "body text\n"
+    )
+    fm, body = protocol.parse_outbox_message(text)
+
+    assert sorted(fm) == ["carry", "core", "halt", "reason"]
+    assert fm["reason"] == (
+        "He asked for a fresh seat.\nSecond line, with a colon: here."
+    )
+    assert fm["carry"] == (
+        "## Your first act\n\n"
+        "Check the cloth: is run-260919-1802-6zeq on it?\n\n"
+        "- a bullet: with a colon"
+    )
+    assert body.strip() == "body text"
+
+
+def test_block_scalar_folded_and_chomping_indicators():
+    text = (
+        "---\n"
+        "gate: cloud\n"
+        "note: >\n"
+        "  one long sentence\n"
+        "  wrapped over lines\n"
+        "\n"
+        "  and a second paragraph\n"
+        "---\n"
+    )
+    fm, _ = protocol.parse_outbox_message(text)
+    assert fm["note"] == (
+        "one long sentence wrapped over lines\n\nand a second paragraph"
+    )
+
+    stripped = protocol.parse_outbox_message(
+        "---\nspawn: true\nreason: |-\n  no trailing newline\n---\n"
+    )[0]
+    assert stripped["reason"] == "no trailing newline"
+
+
+def test_a_plain_pipe_value_is_still_a_block_scalar_not_a_string():
+    """Guards the one ambiguity this adds: a field whose value is literally
+    ``|`` now opens a block instead of holding the character. Nothing in the
+    verb grammar takes ``|`` as a value, and the alternative — requiring a
+    quoted form for every prose field — is the failure this fixes."""
+    fm, _ = protocol.parse_outbox_message(
+        "---\nevent: evt-1\nreason: |\n  body\n---\n"
+    )
+    assert fm["reason"] == "body"
