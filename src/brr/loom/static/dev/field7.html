@@ -1,0 +1,486 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>the derelict — field7, the place made like a game</title>
+<style>
+:root{--bg:#070604}
+*{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--bg);overflow:hidden;cursor:crosshair}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+</style>
+<canvas id="c"></canvas>
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   FIELD7 — THE DERELICT.  A text-mode screen, one cell grid, drawn on canvas
+   and run through a phosphor post-pass.  Nothing on it is decoration: every
+   glyph is a reading from /loom/state.json, and a reading that is absent is
+   black, torn, or labelled — never invented.
+
+   The game, mechanically:
+     the DERELICT  = the holding — repo decks moored above the home ground
+                     (knowledge · dominion · surface).  A directory is a ROOM.
+                     A room nobody has ever entered is dark.  A room is lit by
+                     the heat of the last visit; a file read is a ping.
+     the SHIP      = the seat (the resident's run), moored top-left.  Power is
+                     fuel.  What came back from the drones docks on its keel.
+     the DRONES    = strands.  Each stands in the room of its last trail entry
+                     and drags its trail (the last 8 places) behind it.
+     the OBJECTIVES= warp items, standing in the rooms their topic's signature
+                     names.  His ready decisions are ice — the cold thing on
+                     the map that only his hand can warm.  Held = a locked door.
+     the CONSOLE   = the operator's only instrument.  You never go in.  You
+                     type, the sonar answers, the drones move on their own.
+
+   Three altitudes, three renderings of one map — not a zoom, a text screen
+   redraws at scale and the phosphor carries the old frame into the new one:
+     3  the derelict     every deck in one frame, rooms as small as the frame
+                         needs, names only where the frame can afford them
+     2  a deck           one deck fills the frame; rooms open, files are glyphs
+     1  a room           its files as rows, and what was read of each, as
+                         ranges on a ruler — the chunk ground, per room
+
+   Regions, in file order:  [GRID] the cell screen · [FEED] pull + model ·
+   [MAP] layout at each altitude · [DRAW] the three views + ship + console ·
+   [CONSOLE] the command language · [INPUT] keys, mouse, wheel · [PASS] the
+   phosphor loop.  A change that crosses a region says so in its commit.
+   ═══════════════════════════════════════════════════════════════════════════ */
+'use strict';
+const Q=new URLSearchParams(location.search);            // declared FIRST — read anywhere below
+const cv=document.getElementById('c');
+const FEEDS=['/loom/state.json','http://127.0.0.1:7777/loom/state.json'];
+const MONO='ui-monospace,Menlo,SFMono-Regular,monospace';
+const FONT_PX=+(Q.get('px')||13);
+const FX=Q.get('fx')!=='off', PERF=Q.get('perf')==='1';
+
+// ── the colour law ── amber warm · ice his-and-cold · black absent · torn unmeasured
+const A='#f2b134', AH='#ffd166', I='#8fd3ff', INK='#e8dcc0', DIM='#8f8470', ABS='#4a3f30', BLK='#2a2218', TORN='#6e4b2a', RED='#ff6b4a';
+const num=v=>typeof v==='number'&&isFinite(v);
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const hash=s=>{let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}return (h>>>0)/4294967296;};
+// heat 0..1 → a warm ramp that stays dark at the bottom (a cold ember, not grey)
+const warm=h=>{if(!num(h)||h<=0)return BLK;const t=Math.pow(clamp(h,0,1),.6);
+  const r=Math.round(60+(242-60)*t),g=Math.round(45+(177-45)*t),b=Math.round(28+(52-28)*t);return `rgb(${r},${g},${b})`;};
+// a quota window's temperature: warm above its floor, ice below — the sharp knee field6 keeps
+const tempCol=p=>!num(p)?TORN:p<18?I:p<48?'#c9b27a':A;
+
+// ═══ [GRID] ═══════════════════════════════════════════════════════════════
+// The screen is cells.  put() writes glyphs; flush() paints runs of one colour.
+let W=0,H=0,DPR=1,CW=8,CH=16,COLS=0,ROWS=0;
+let CELLS=[];   // ROWS × COLS of {ch,fg,bg,b}
+const world=document.createElement('canvas'), wg=world.getContext('2d');
+const meas=document.createElement('canvas').getContext('2d');
+function metrics(){meas.font=`${FONT_PX}px ${MONO}`;CW=Math.ceil(meas.measureText('M').width*100)/100;CH=Math.round(FONT_PX*1.28);}
+function resize(){DPR=Math.min(2,devicePixelRatio||1);W=innerWidth;H=innerHeight;
+  cv.width=W*DPR;cv.height=H*DPR;world.width=W*DPR;world.height=H*DPR;
+  metrics();COLS=Math.floor(W/CW);ROWS=Math.floor(H/CH);
+  CELLS=Array.from({length:ROWS},()=>Array.from({length:COLS},()=>({ch:' ',fg:INK,bg:null,b:false})));
+  ensureBuffers();dirty=true;}
+addEventListener('resize',resize);
+function clearCells(){for(const row of CELLS)for(const c of row){c.ch=' ';c.fg=INK;c.bg=null;c.b=false;}}
+function put(x,y,s,fg=INK,opt){x=Math.round(x);y=Math.round(y);if(y<0||y>=ROWS)return;
+  const b=!!(opt&&opt.b),bg=(opt&&opt.bg)||null,max=opt&&num(opt.max)?opt.max:1e9;
+  let n=0;for(const ch of s){if(n>=max)break;const cx=x+n;n++;if(cx<0||cx>=COLS)continue;const c=CELLS[y][cx];c.ch=ch;c.fg=fg;c.bg=bg;c.b=b;}
+  return n;}
+function fill(x,y,w,h,ch,fg,bg){for(let j=0;j<h;j++)for(let i=0;i<w;i++){const cx=x+i,cy=y+j;if(cx<0||cy<0||cx>=COLS||cy>=ROWS)continue;const c=CELLS[cy][cx];c.ch=ch;c.fg=fg;c.bg=bg||null;c.b=false;}}
+const BOX={s:'┌┐└┘─│',d:'╔╗╚╝═║',r:'╭╮╰╯─│'};
+function box(x,y,w,h,fg,style='s'){const k=BOX[style];if(w<2||h<2)return;
+  put(x,y,k[0]+k[4].repeat(w-2)+k[1],fg);put(x,y+h-1,k[2]+k[4].repeat(w-2)+k[3],fg);
+  for(let j=1;j<h-1;j++){put(x,y+j,k[5],fg);put(x+w-1,y+j,k[5],fg);}}
+function cut(s,n){s=String(s);return s.length<=n?s:n<=1?'…':s.slice(0,n-1)+'…';}
+function flush(){const g=wg;g.setTransform(DPR,0,0,DPR,0,0);g.clearRect(0,0,W,H);g.textBaseline='top';
+  for(let y=0;y<ROWS;y++){const row=CELLS[y];
+    for(let x=0;x<COLS;x++){const c=row[x];if(c.bg){g.fillStyle=c.bg;g.fillRect(x*CW,y*CH,CW+.5,CH);}}
+    let x=0;while(x<COLS){const c=row[x];if(c.ch===' '){x++;continue;}
+      let e=x+1,s=c.ch;while(e<COLS&&row[e].fg===c.fg&&row[e].b===c.b&&row[e].ch!==' '){s+=row[e].ch;e++;}
+      g.font=`${c.b?'600 ':''}${FONT_PX}px ${MONO}`;g.fillStyle=c.fg;
+      for(let i=0;i<s.length;i++)g.fillText(s[i],(x+i)*CW,y*CH+1);   // per cell: a proportional glyph never drifts the grid
+      x=e;}}}
+
+// ═══ [FEED] ═══════════════════════════════════════════════════════════════
+let S=null, M=null, FEED_OK=false, lastBeadN=-1, lastTick=null, POLL_MS=2000;
+const LOG=[];            // the console's log: {t,txt,fg}
+function say(txt,fg=DIM){LOG.push({t:Date.now(),txt,fg});if(LOG.length>400)LOG.shift();dirty=true;}
+async function pull(){for(const u of FEEDS){try{const r=await fetch(u,{cache:'no-store'});if(!r.ok)continue;const d=await r.json();ingest(d);FEED_OK=true;return;}catch(e){}}
+  if(FEED_OK)say('⟵ feed torn — the last reading stands, older every second',TORN);FEED_OK=false;dirty=true;}
+setInterval(pull,POLL_MS);
+
+const hhmm=iso=>{if(!iso)return '--:--';const d=new Date(iso);return isNaN(d)?'--:--':d.toISOString().slice(11,16);};
+const short=id=>String(id||'').replace(/^run-/,'').split('-').pop()||'';
+const dirOf=p=>p.includes('/')?p.slice(0,p.lastIndexOf('/')):'';
+const baseOf=p=>p.slice(p.lastIndexOf('/')+1);
+
+// The model: one tree of rooms (directories) and things (files) for the whole
+// holding.  Repo paths as given; home places under `~/`.  Only what the feed
+// measured exists here — a room the feed never listed is not a dark room, it
+// is no room, and the deck's caption says how much of it was measured.
+function ingest(d){S=d;const m={rooms:new Map(),files:new Map(),decks:[],drones:[],docked:[],objectives:new Map()};
+  const root={path:'',name:'',kids:[],files:[],heat:0,last:null,knots:0,depth:0,home:false};m.rooms.set('',root);
+  const room=(p,home)=>{if(m.rooms.has(p))return m.rooms.get(p);const par=room(dirOf(p),home);
+    const r={path:p,name:baseOf(p),kids:[],files:[],heat:0,last:null,knots:0,depth:par.depth+1,home,lines:0,objs:[],lit:0,measured:0};
+    m.rooms.set(p,r);par.kids.push(r);return r;};
+  const add=(e,home)=>{const p=(home?'~/':'')+e.path;const isFile=num(e.lines)||(home&&/\.[a-z]+$/i.test(e.path))||(!home&&/\.[A-Za-z0-9]+$/.test(baseOf(e.path))&&!e.path.endsWith('.tmp')&&baseOf(e.path)!=='.tmp');
+    if(isFile){const r=room(dirOf(p),home);const f={path:p,name:baseOf(p),room:r,heat:e.heat||0,last:e.last||null,knots:e.knots||0,lines:e.lines,topics:e.topics||[],mine:false,chunks:[]};
+      m.files.set(p,f);r.files.push(f);}
+    else{const r=room(p,home);r.heat=Math.max(r.heat,e.heat||0);r.last=e.last||r.last;r.knots+=e.knots||0;}};
+  for(const e of (d.tree&&d.tree.repo)||[])add(e,false);
+  for(const e of (d.tree&&d.tree.home&&d.tree.home.places)||[])add(e,true);
+  for(const e of (d.tree&&d.tree.places)||[]){const p=e.path;const f=m.files.get(p);if(f)f.mine=true;else if(m.rooms.has(p))m.rooms.get(p).mine=true;}
+  // fold: heat/lines/measured climb to the room; a room is lit by its hottest thing
+  const fold=r=>{let heat=r.heat,last=r.last,lines=0,n=0,measured=0;
+    for(const f of r.files){n++;lines+=f.lines||0;if(f.heat>0){measured++;if(f.heat>heat){heat=f.heat;last=f.last;}}}
+    for(const k of r.kids){fold(k);n+=k.count;lines+=k.lines;measured+=k.measured;if(k.lit>heat){heat=k.lit;last=k.last;}}
+    r.lit=heat;r.last=last;r.lines=lines;r.count=n;r.measured=measured;};
+  fold(root);
+  // decks: the repo's top-level rooms + a `/` deck for the loose root files; home roots below the waterline
+  const home=m.rooms.get('~');if(home){home.name='home';for(const k of home.kids)k.home=true;}
+  const rootFiles={path:'/',name:'/',kids:[],files:root.files,heat:0,last:null,knots:0,depth:1,home:false,lines:0,objs:[],lit:0,count:root.files.length,measured:0};
+  for(const f of root.files){f.room=rootFiles;if(f.heat>rootFiles.lit){rootFiles.lit=f.heat;rootFiles.last=f.last;}rootFiles.lines+=f.lines||0;if(f.heat>0)rootFiles.measured++;}
+  m.rooms.set('/',rootFiles);
+  m.decks=root.kids.filter(k=>k!==home);if(rootFiles.files.length)m.decks.push(rootFiles);
+  m.decks.sort((a,b)=>b.count-a.count);
+  m.ground=home?home.kids:[];
+  // objectives: a topic's signature places name the rooms its items stand in
+  const hed=Array.isArray(d.heddles)?d.heddles:[];const items=(d.warp&&d.warp.items)||[];
+  const roomFor=glob=>{const g=glob.replace(/\/?\*\*$/,'').replace(/\/\*$/,'');const f=m.files.get(g);if(f)return f.room;if(m.rooms.has(g))return m.rooms.get(g);return null;};
+  for(const h of hed){const rs=new Set();for(const g of (h.signature&&h.signature.places)||[]){const r=roomFor(g);if(r)rs.add(r);}
+    const its=items.filter(i=>(i.topics||[]).includes(h.slug));
+    m.objectives.set(h.slug,{heddle:h,rooms:[...rs],items:its});
+    for(const r of rs)for(const i of its)r.objs.push({item:i,topic:h.slug,rune:h.rune});}
+  m.manifest=items.filter(i=>!(i.topics||[]).some(t=>{const o=m.objectives.get(t);return o&&o.rooms.length;}));
+  // drones: the seat + live strands; docked: the last few that came back
+  const rows=(d.cloth&&d.cloth.rows)||[];const runId=d.run&&d.run.id;
+  const where=row=>{const t=row.trail&&row.trail[0];if(!t)return null;const f=m.files.get(t.path);return f?f.room:(m.rooms.get(t.path)||null);};
+  const trailRooms=row=>{const out=[];for(const t of (row.trail||[])){const f=m.files.get(t.path);const r=f?f.room:m.rooms.get(t.path);if(r&&!out.includes(r))out.push(r);}return out;};
+  for(const row of rows){const live=!row.ended;const seat=row.run===runId;
+    const dr={row,id:row.run,tag:short(row.run),seat,live,room:where(row),path:trailRooms(row),glyph:seat?'b·_·d':'b·:·d',name:row.name||row.title||''};
+    if(live)m.drones.push(dr);else m.docked.push(dr);}
+  if(!m.drones.some(x=>x.seat)&&runId){m.drones.unshift({id:runId,tag:short(runId),seat:true,live:true,room:null,path:[],glyph:'b·_·d',name:d.run.name||'',row:null});}
+  m.docked.sort((a,b)=>String(b.row.ended).localeCompare(String(a.row.ended)));m.docked=m.docked.slice(0,6);
+  // chunks: what was read of each file, from the beads — matched by path suffix; off-map reads are counted, not placed
+  m.offmap=0;let matched=0;
+  for(const b of d.beads||[])for(const c of b.chunks||[]){let f=null;const cp=c.path||'';
+    for(const cand of [cp,cp.replace(/^.*?\/brnrd\//,''),'~/'+cp.replace(/^.*?\/home\//,'')]){if(m.files.has(cand)){f=m.files.get(cand);break;}}
+    if(!f){for(const [p,ff] of m.files){if(cp.endsWith('/'+p)){f=ff;break;}}}
+    if(f){f.chunks.push({from:c.from,to:c.to,kind:c.kind,n:b.n,at:b.at});matched++;}else m.offmap++;}
+  m.chunkCount=matched;
+  // events → the console log: each new bead is a sonar return; each heartbeat tick is the scan
+  const beads=d.beads||[];const newest=beads.length?beads[beads.length-1]:null;
+  if(newest&&lastBeadN>=0&&newest.n>lastBeadN){for(const b of beads){if(b.n<=lastBeadN)continue;
+      const pl=(b.places&&b.places[0])||(b.home_places&&('~/'+b.home_places[0]))||'';const ch=(b.chunks&&b.chunks[0]);
+      say(`${hhmm(b.at)} seat ${b.act||'?'}${pl?' '+pl:''}${ch&&num(ch.from)?':'+ch.from+'-'+ch.to:''}${b.place_kind&&!pl?' · '+b.place_kind:''}`,b.act==='mutate'?AH:A);
+      PINGS.push({t:performance.now(),room:pl?(m.files.get(pl)?m.files.get(pl).room:m.rooms.get(pl)):null});}}
+  if(newest)lastBeadN=newest.n;
+  const tick=d.shuttle&&d.shuttle.tick;if(lastTick!==null&&tick!==lastTick)SCAN.t=performance.now();lastTick=tick;
+  // strands out / back, by diffing the live set
+  const liveNow=new Set(m.drones.filter(x=>!x.seat).map(x=>x.id));
+  if(M){for(const id of liveNow)if(!M._live.has(id)){const dr=m.drones.find(x=>x.id===id);say(`${hhmm(new Date().toISOString())} drone ${dr.tag} out${dr.room?' → '+dr.room.path:''}${dr.name?' · '+cut(dr.name,40):''}`,A);}
+    for(const id of M._live)if(!liveNow.has(id)){const dk=m.docked.find(x=>x.id===id);say(`${hhmm(new Date().toISOString())} drone ${short(id)} ↩ back${dk?' · '+(dk.row.prs||[]).length+' pr · '+(dk.row.knots||0)+' knots':''}`,AH);}}
+  m._live=liveNow;
+  M=m;if(!SEL.deck&&m.decks.length)SEL.deck=m.decks[0];
+  if(!LOG.length)say(`⟵ the derelict · ${m.decks.length} decks moored · ${m.ground.length} home grounds · ${m.files.size} things measured · type help`,DIM);
+  relayout();dirty=true;}
+
+// ═══ [MAP] ════════════════════════════════════════════════════════════════
+// Layout is a pure function of (model, altitude, frame size).  A room's cells
+// are proportional to what is in it; a room the frame cannot afford at this
+// altitude collapses into its parent, which then says `+n rooms` — that is the
+// fog: you descend to see, you do not squint.
+const ALT={z:3};                          // 3 derelict · 2 deck · 1 room
+const SEL={deck:null,room:null,file:null};// where the camera stands
+let LAY=null, MAPR=null;                  // rects for this frame; MAPR = the map's own rect
+const PINGS=[], SCAN={t:-1e9};
+const CONSOLE_ROWS=9, SHIP_W=34, SHIP_H=9;
+function frameRects(){MAPR={x:0,y:1,w:COLS,h:ROWS-1-CONSOLE_ROWS};}
+// slice-and-dice treemap in cells: children get bands proportional to weight
+function treemap(rooms,x,y,w,h,depth,out,minW,minH){
+  const list=rooms.filter(r=>r.count>0||r.files.length>0);if(!list.length)return;
+  const horiz=(w/h>1.6)||(depth%2===0&&w/h>0.8);
+  const total=list.reduce((s,r)=>s+Math.sqrt(r.count||1),0);let off=0;
+  const span=horiz?w:h;const n=list.length;
+  const fits=list.map(r=>Math.max(horiz?minW:minH,Math.floor(span*Math.sqrt(r.count||1)/total)));
+  let need=fits.reduce((a,b)=>a+b,0);
+  if(need>span){out.collapsed.push(...list);return;}  // the frame cannot afford these rooms
+  for(let i=0;i<n;i++){const r=list[i];let sz=fits[i];if(i===n-1)sz=span-off;
+    const rx=horiz?x+off:x,ry=horiz?y:y+off,rw=horiz?sz:w,rh=horiz?h:sz;off+=sz;
+    out.rects.set(r.path,{x:rx,y:ry,w:rw,h:rh,room:r,depth});
+    if(rw-2>=minW&&rh-2>=minH&&r.kids.length)treemap(r.kids,rx+1,ry+1,rw-2,rh-2,depth+1,out,minW,minH);
+    else if(r.kids.length)out.collapsed.push(...r.kids);}}
+function relayout(){if(!M||!COLS)return;frameRects();const L={rects:new Map(),collapsed:[],alt:ALT.z};LAY=L;
+  const mx=MAPR.x+1,my=MAPR.y+1,mw=MAPR.w-2,mh=MAPR.h-2;
+  if(ALT.z===3){
+    // the ship top-left; the ground (home) a band along the bottom; decks fill the rest
+    const gh=Math.max(6,Math.min(9,Math.floor(mh*.22)));const gy=my+mh-gh;
+    L.ground={x:mx,y:gy,w:mw,h:gh};
+    const gs=M.ground.length;if(gs){const gw=Math.floor(mw/gs);M.ground.forEach((r,i)=>{L.rects.set(r.path,{x:mx+i*gw,y:gy,w:i===gs-1?mw-i*gw:gw,h:gh,room:r,depth:0,ground:true});});}
+    const dx=mx+SHIP_W+1,dy=my,dw=mw-SHIP_W-1,dh=gy-my-1;
+    treemap(M.decks,dx,dy,dw,dh,0,L,9,4);
+    L.ship={x:mx,y:my,w:SHIP_W,h:SHIP_H};
+  }else if(ALT.z===2){const d=SEL.deck;if(!d)return;
+    L.rects.set(d.path,{x:mx,y:my,w:mw,h:mh,room:d,depth:0});
+    if(d.kids.length)treemap(d.kids,mx+1,my+2,mw-2,mh-3,1,L,12,4);
+  }else{const r=SEL.room||SEL.deck;if(!r)return;L.rects.set(r.path,{x:mx,y:my,w:mw,h:mh,room:r,depth:0});}
+  dirty=true;}
+function roomAt(cx,cy){if(!LAY)return null;let best=null;for(const rc of LAY.rects.values()){if(cx>=rc.x&&cx<rc.x+rc.w&&cy>=rc.y&&cy<rc.y+rc.h){if(!best||rc.depth>best.depth)best=rc;}}return best;}
+
+// ═══ [DRAW] ═══════════════════════════════════════════════════════════════
+let dirty=true, HOVER={cx:-1,cy:-1,rc:null,file:null};
+const CORNERS={tl:[],tr:[],bl:[],br:[]};
+function corner(k,txt,fg){CORNERS[k].push({txt,fg});}
+function drawCorners(){ // each corner is a stack: a label claims its line, the next starts below — nothing collides by construction
+  const y0=MAPR.y+MAPR.h-1;
+  CORNERS.tr.forEach((l,i)=>put(COLS-l.txt.length-1,1+i,l.txt,l.fg));
+  CORNERS.br.forEach((l,i)=>put(COLS-l.txt.length-1,y0-i,l.txt,l.fg));
+  CORNERS.bl.forEach((l,i)=>put(1,y0-i,l.txt,l.fg));
+  for(const k in CORNERS)CORNERS[k].length=0;}
+function roomInk(r,now){let c=warm(r.lit);const p=PINGS.find(p=>p.room===r&&now-p.t<1600);if(p)c=AH;return c;}
+function drawRoomBox(rc,now,label=true){const r=rc.room;const ink=r.lit>0?roomInk(r,now):ABS;const sel=(SEL.room===r||(ALT.z===3&&SEL.deck===r&&!SEL.room));
+  const hot=HOVER.rc&&HOVER.rc.room===r;
+  box(rc.x,rc.y,rc.w,rc.h,sel?I:hot?INK:ink,r.home?'r':rc.depth===0?'d':'s');
+  if(!label)return;
+  const locked=r.objs.some(o=>o.item.state==='held'),ready=r.objs.filter(o=>o.item.state==='ready').length;
+  let name=r.name||'/';const tagW=rc.w-4;
+  // the door: the room's name set into its top wall
+  const title=cut(name,Math.max(1,tagW));put(rc.x+2,rc.y,title,r.lit>0?(sel?I:INK):DIM,{b:rc.depth===0});
+  let tx=rc.x+2+title.length;
+  if(locked&&tx+2<rc.x+rc.w-1){put(tx+1,rc.y,'◆',I);tx+=2;}
+  else if(ready&&tx+3<rc.x+rc.w-1){put(tx+1,rc.y,'◇'+(ready>1?ready:''),I);tx+=3;}
+  // the room's own line: what it holds and when it was last lit
+  if(rc.h>=3&&rc.w>=10){const inner=rc.w-2;let s='';
+    if(r.count>0)s+=`${r.count} things`;if(r.measured)s+=` · ${r.measured} lit`;
+    if(r.last)s+=` · ${hhmm(r.last)}`;
+    put(rc.x+1,rc.y+1,cut(s,inner),r.lit>0?DIM:ABS);}
+  // collapsed kids: the fog, named
+  const hidden=r.kids.filter(k=>!LAY.rects.has(k.path));
+  if(hidden.length&&rc.h>=4&&rc.w>=10)put(rc.x+1,rc.y+rc.h-2,cut(`+${hidden.length} rooms · ${hidden.reduce((s,k)=>s+k.count,0)} things`,rc.w-2),ABS);}
+// files in a room, at deck altitude: one glyph per thing, laid on the floor
+function drawFloor(rc,now){const r=rc.room;const x0=rc.x+1,y0=rc.y+2,w=rc.w-2,h=rc.h-3;if(w<3||h<1)return;
+  const hidden=r.kids.filter(k=>!LAY.rects.has(k.path)).length;const rowsAvail=h-(hidden?1:0);if(rowsAvail<1)return;
+  const files=r.files.slice().sort((a,b)=>(b.heat-a.heat)||(b.lines||0)-(a.lines||0));
+  // wide rooms list names; narrow rooms lay glyphs
+  const perRow=Math.max(1,Math.floor(w/14));const listMode=w>=16;
+  let i=0;for(let y=0;y<rowsAvail&&i<files.length;y++){
+    if(listMode){for(let k=0;k<perRow&&i<files.length;k++,i++){const f=files[i];const cx=x0+k*14;
+        const g=f.chunks.length?'▮':f.heat>0?'●':'·';const c=f.mine?AH:f.heat>0?warm(f.heat):ABS;
+        put(cx,y0+y,g,c);put(cx+1,y0+y,cut(f.name,12),f.heat>0?(f.mine?INK:DIM):ABS);}}
+    else{let s='';for(let k=0;k<w&&i<files.length;k++,i++){const f=files[i];put(x0+k,y0+y,f.chunks.length?'▮':f.heat>0?'●':'·',f.mine?AH:f.heat>0?warm(f.heat):ABS);}}}
+  if(i<files.length&&rowsAvail>0)put(x0+w-6,y0+rowsAvail-1,cut(`+${files.length-i}`,6),ABS);}
+function drawDrones(now){if(!M||!LAY)return;
+  for(const dr of M.drones){const rc=dr.room&&LAY.rects.get(nearestDrawn(dr.room));
+    // the trail: room centres joined by a dotted line, oldest faintest
+    const pts=dr.path.map(r=>LAY.rects.get(nearestDrawn(r))).filter(Boolean);
+    for(let i=pts.length-1;i>=1;i--){const a=centre(pts[i]),b=centre(pts[i-1]);const k=1-i/pts.length;line(a,b,'·',`rgba(242,177,52,${(.25+.6*k).toFixed(2)})`);}
+    if(!rc){if(!dr.seat)continue;}
+    const c=rc?centre(rc):{x:LAY.ship.x+SHIP_W/2,y:LAY.ship.y+3};
+    const g=dr.glyph;const gx=Math.round(c.x-g.length/2);
+    put(gx-1,c.y,'┤'+g+'├',dr.seat?AH:A,{b:true});
+    if(!dr.seat)put(gx,c.y+1,cut(dr.tag+(dr.row&&dr.row.core?' '+dr.row.core.slice(0,5):''),g.length+2),DIM);}}
+function nearestDrawn(r){let p=r.path;while(p!==undefined){if(LAY.rects.has(p))return p;if(p===''||p==='/')break;p=p.startsWith('~')&&!p.includes('/')?'':dirOf(p);}
+  // a room off this frame: the deck it belongs to, if drawn
+  const top=r.path.split('/')[0];if(LAY.rects.has(top))return top;return r.home?'~/'+r.path.split('/')[1]:null;}
+const centre=rc=>({x:Math.floor(rc.x+rc.w/2),y:Math.floor(rc.y+rc.h/2)});
+function line(a,b,ch,fg){const n=Math.max(Math.abs(b.x-a.x),Math.abs(b.y-a.y)*2);for(let i=1;i<n;i++){const t=i/n;const x=Math.round(a.x+(b.x-a.x)*t),y=Math.round(a.y+(b.y-a.y)*t);
+  if(x<0||y<0||x>=COLS||y>=ROWS)continue;const c=CELLS[y][x];if(c.ch===' '||c.ch==='·'){c.ch=ch;c.fg=fg;c.b=false;}}}
+function drawShip(now){const s=LAY.ship;if(!s||!M)return;const d=S;const x=s.x,y=s.y;
+  const scanning=now-SCAN.t<260;
+  put(x,y,  '╭─▲'+'─'.repeat(SHIP_W-8)+'▲─╮',A);
+  const face=(d.run&&d.run.mood_glyph)||'b·_·d';const st=(d.shuttle&&d.shuttle.state)||'?';
+  put(x,y+1,'┤',A);put(x+1,y+1,' '+face+' ',AH,{b:true});put(x+2+face.length+1,y+1,cut(st+(d.shuttle&&d.shuttle.why?' · '+d.shuttle.why:''),SHIP_W-face.length-6),st==='awake'?AH:st==='listening'?A:I);put(x+SHIP_W-1,y+1,'├',A);
+  const nm=(d.run&&d.run.name)||'';put(x,y+2,'│',A);put(x+2,y+2,cut(nm||'run unnamed',SHIP_W-4),nm?INK:TORN);put(x+SHIP_W-1,y+2,'│',A);
+  // power: the fuel windows as bars — binding window first, the rest after; unmeasured is torn
+  const seat=((d.fuel&&d.fuel.buckets)||[]).find(b=>b.seat)||((d.fuel&&d.fuel.buckets)||[])[0];
+  const wins=(seat&&seat.windows)||[];const bw=8;
+  let row=y+3;for(const w of wins.slice(0,2)){const pct=w.pct_left;const k=num(pct)?Math.round(bw*pct/100):0;
+    put(x,row,'│',A);put(x+2,row,cut(w.name,7),DIM);
+    put(x+10,row,num(pct)?'▮'.repeat(k)+'▯'.repeat(bw-k):'░'.repeat(bw),num(pct)?tempCol(pct):TORN);
+    put(x+19,row,num(pct)?(pct+'%').padStart(4):'torn',num(pct)?tempCol(pct):TORN);
+    if(num(w.resets_in_s))put(x+24,row,cut('↻'+dur(w.resets_in_s),SHIP_W-26),ABS);
+    put(x+SHIP_W-1,row,'│',A);row++;}
+  if(!wins.length){put(x,row,'│',A);put(x+2,row,'power unmeasured',TORN);put(x+SHIP_W-1,row,'│',A);row++;}
+  // the crew line: drones out
+  const out=M.drones.filter(x=>!x.seat);put(x,row,'│',A);put(x+2,row,cut(`crew ${out.length} out`+(out.length?' · '+out.map(o=>o.tag).join(' '):''),SHIP_W-4),out.length?A:DIM);put(x+SHIP_W-1,row,'│',A);row++;
+  // the manifest: his ready decisions that stand nowhere on the map
+  const ready=M.manifest.filter(i=>i.state==='ready').length,held=M.manifest.filter(i=>i.state==='held').length;
+  put(x,row,'│',A);put(x+2,row,cut(`manifest ◇${ready} his · ◆${held} held · ${M.offmap} reads off-map`,SHIP_W-4),ready?I:DIM);put(x+SHIP_W-1,row,'│',A);row++;
+  while(row<y+SHIP_H-1){put(x,row,'│',A);put(x+SHIP_W-1,row,'│',A);row++;}
+  put(x,y+SHIP_H-1,'╰──╥─'+(scanning?'◉':'○')+'─╥'+'─'.repeat(SHIP_W-9)+'╯',scanning?AH:A);
+  // docked: what came back, on the keel
+  let ky=y+SHIP_H;for(const dk of M.docked.slice(0,3)){if(ky>=LAY.ground.y-1)break;
+    const prs=(dk.row.prs||[]).length;put(x+1,ky,cut(`↩ ${dk.tag} ${hhmm(dk.row.ended)} · ${prs?prs+' pr · ':''}${dk.row.knots||0} knots${dk.name?' · '+dk.name:''}`,SHIP_W-1),DIM);ky++;}}
+const dur=s=>s>=86400?Math.round(s/86400)+'d':s>=3600?Math.round(s/3600)+'h':Math.max(1,Math.round(s/60))+'m';
+
+function drawDerelict(now){
+  // decks (the island), deepest rooms first so labels of parents stay legible
+  const rcs=[...LAY.rects.values()].sort((a,b)=>a.depth-b.depth);
+  for(const rc of rcs){if(rc.ground)continue;drawRoomBox(rc,now,rc.w>=6);}
+  // the ground: home grounds along the waterline
+  const g=LAY.ground;put(g.x,g.y-1,'~'.repeat(g.w),'#3a3f4a');
+  for(const rc of rcs){if(!rc.ground)continue;drawRoomBox(rc,now,true);
+    // inside a home ground at this altitude: its hottest few places
+    const files=[...rc.room.files,...rc.room.kids.flatMap(k=>k.files)].sort((a,b)=>b.heat-a.heat).slice(0,rc.h-4);
+    files.forEach((f,i)=>{put(rc.x+2,rc.y+2+i,(f.mine?'▮ ':f.heat>0?'● ':'· ')+cut(f.path.replace(/^~\/[^/]+\//,''),rc.w-5),f.heat>0?(f.mine?INK:warm(Math.max(f.heat,.35))):ABS);});
+    if(!rc.room.count)put(rc.x+2,rc.y+2,'nothing measured here',TORN);}
+  drawShip(now);drawDrones(now);}
+function drawDeck(now){const rcs=[...LAY.rects.values()].sort((a,b)=>a.depth-b.depth);
+  for(const rc of rcs){drawRoomBox(rc,now,true);}
+  for(const rc of rcs){if(rc.room.files.length)drawFloor(rc,now);}
+  // objectives standing in rooms: the items, by state, on the room's last free rows
+  for(const rc of rcs){const r=rc.room;if(!r.objs.length||rc.h<5)continue;const ys=rc.y+rc.h-2;
+    const ready=r.objs.filter(o=>o.item.state==='ready'),held=r.objs.filter(o=>o.item.state==='held');
+    const s=[...ready.slice(0,2).map(o=>'◇ '+o.item.id+' '+cut(o.item.title,18)),...held.slice(0,1).map(o=>'◆ '+o.item.id)].join('  ');
+    if(s)put(rc.x+1,ys,cut(s,rc.w-2),I);}
+  drawDrones(now);}
+function drawRoom(now){const rc=[...LAY.rects.values()][0];if(!rc)return;const r=rc.room;drawRoomBox(rc,now,true);
+  const x0=rc.x+2,y0=rc.y+2,w=rc.w-4,h=rc.h-3;
+  const files=r.files.slice().sort((a,b)=>(b.chunks.length-a.chunks.length)||(b.heat-a.heat)||(b.lines||0)-(a.lines||0));
+  const kids=r.kids;let y=y0;
+  if(kids.length&&h>2){put(x0,y,cut('rooms: '+kids.map(k=>k.name+(k.lit>0?'●':'·')).join('  '),w),DIM);y+=2;}
+  if(!files.length){put(x0,y,'no things measured in this room',TORN);drawDrones(now);return;}
+  // the ruler: a file's lines across `rw` cells; every chunk read lands as a segment, stacked by count
+  const nameW=Math.min(28,Math.max(12,...files.map(f=>f.name.length))),rw=Math.max(10,w-nameW-16);
+  put(x0,y,'thing'.padEnd(nameW),ABS);put(x0+nameW,y,'lines'.padStart(6),ABS);put(x0+nameW+8,y,'what was read, by line — ▮ read · ▰ written · ░ never',ABS);y++;
+  for(const f of files){if(y>=y0+h-1){put(x0,y,cut(`+${files.length-files.indexOf(f)} more things — the frame is out of room, not the record`,w),ABS);break;}
+    const sel=SEL.file===f;put(x0,y,cut(f.name,nameW),sel?I:f.heat>0?(f.mine?INK:DIM):ABS,{b:sel});
+    put(x0+nameW,y,num(f.lines)?String(f.lines).padStart(6):'  torn',num(f.lines)?DIM:TORN);
+    if(num(f.lines)&&f.lines>0){const cells=new Array(rw).fill(0),wr=new Array(rw).fill(false);
+      for(const c of f.chunks){if(!num(c.from))continue;const a=clamp(Math.floor((c.from-1)/f.lines*rw),0,rw-1),b=clamp(Math.floor(((num(c.to)?c.to:c.from)-1)/f.lines*rw),0,rw-1);
+        for(let i=a;i<=b;i++){cells[i]++;if(c.kind==='write')wr[i]=true;}}
+      let s='';for(let i=0;i<rw;i++)s+=cells[i]?(wr[i]?'▰':'▮'):'░';
+      // colour by count: once dim amber, many bright — forty reads of one function are visible now
+      for(let i=0;i<rw;i++){const n=cells[i];put(x0+nameW+8+i,y,s[i],n?(n>=4?AH:n>=2?A:warm(.55)):BLK);}
+      const reads=f.chunks.length;put(x0+nameW+9+rw,y,reads?`×${reads}`:(f.heat>0?'visited':''),reads?A:ABS);}
+    else put(x0+nameW+8,y,'░'.repeat(rw),BLK);
+    y++;}
+  drawDrones(now);}
+
+function drawStatus(){ // the map's own last line: what the cursor is over, in one row
+  const y=MAPR.y+MAPR.h;let s='';
+  if(HOVER.file){const f=HOVER.file;s=`${f.path} · ${num(f.lines)?f.lines+' lines':'lines torn'} · ${f.chunks.length?f.chunks.length+' reads':f.heat>0?'visited '+hhmm(f.last):'never opened'}${f.topics.length?' · '+f.topics.join(','):''}`;}
+  else if(HOVER.rc){const r=HOVER.rc.room;s=`${r.path||'/'} · ${r.count} things · ${r.measured} lit${r.last?' · last '+hhmm(r.last):' · never entered'}${r.objs.length?' · '+r.objs.length+' objectives':''}${r.kids.length?' · '+r.kids.length+' rooms':''}`;}
+  else{const where=ALT.z===3?'the derelict':ALT.z===2?'deck '+(SEL.deck&&SEL.deck.path):'room '+((SEL.room||SEL.deck)||{}).path;s=`${where} · 1 2 3 altitude · click a room · ⏎ in · esc out · type to the console`;}
+  fill(0,y,COLS,1,' ',DIM,null);put(1,y,cut(s,COLS-2),HOVER.rc||HOVER.file?INK:ABS);}
+function drawConsole(){const y0=ROWS-CONSOLE_ROWS;put(0,y0,'─'.repeat(COLS),'#3a3020');
+  const n=CONSOLE_ROWS-2;const lines=LOG.slice(-n);const off=n-lines.length;
+  lines.forEach((l,i)=>put(1,y0+1+off+i,cut(l.txt,COLS-2),l.fg));
+  put(1,ROWS-1,'> '+CMD.buf,INK);put(3+CMD.buf.length,ROWS-1,(performance.now()/500|0)%2?'▮':' ',A);}
+function drawTop(){const d=S;fill(0,0,COLS,1,' ',INK,null);
+  put(1,0,'brnrd',INK,{b:true});put(7,0,'/ THE DERELICT · field7',DIM);
+  const alt=ALT.z===3?'③ the derelict':ALT.z===2?'② deck '+(SEL.deck?SEL.deck.path:''):'① room '+((SEL.room||SEL.deck)||{path:''}).path;
+  put(32,0,cut(alt,40),A);
+  const right=`${(d&&d.repo)||'?'} · ${FEED_OK?'live':'feed torn'} · ${M?M.files.size:0} things · ${M?M.drones.length-1:0} drones out · ${M?M.chunkCount:0} reads placed`;
+  put(COLS-right.length-1,0,right,FEED_OK?DIM:TORN);}
+function drawWorld(now){clearCells();if(!M){put(2,2,'no feed — the derelict is dark, and that is honest',TORN);drawConsole();return;}
+  if(!LAY||LAY.alt!==ALT.z)relayout();
+  drawTop();
+  if(ALT.z===3)drawDerelict(now);else if(ALT.z===2)drawDeck(now);else drawRoom(now);
+  if(PERF)corner('br',perfLine,ABS);
+  drawCorners();drawStatus();drawConsole();}
+
+// ═══ [CONSOLE] ════════════════════════════════════════════════════════════
+// The operator's language.  Every verb reads; none writes to the work graph.
+const CMD={buf:'',hist:[],hi:-1};
+const findRoom=q=>{if(!M||!q)return null;q=q.replace(/\/$/,'');if(M.rooms.has(q))return M.rooms.get(q);if(M.rooms.has('~/'+q))return M.rooms.get('~/'+q);
+  let best=null;for(const r of M.rooms.values()){if(r.name===q||r.path.endsWith('/'+q)){if(!best||r.depth<best.depth)best=r;}}return best;};
+const findFile=q=>{if(!M||!q)return null;if(M.files.has(q))return M.files.get(q);let best=null;for(const f of M.files.values()){if(f.name===q||f.path.endsWith('/'+q)){if(!best||f.heat>best.heat)best=f;}}return best;};
+const findDrone=q=>M&&M.drones.find(d=>d.tag===q||d.id===q||(q==='seat'&&d.seat));
+function goTo(target){ // the camera moves to a room at the altitude that shows it
+  if(!target)return;let deck=target;while(deck.depth>1&&!deck.home)deck=M.rooms.get(dirOf(deck.path));if(target.home){deck=M.rooms.get('~/'+target.path.split('/')[1])||target;}
+  SEL.deck=deck;SEL.room=target===deck?null:target;SEL.file=null;ALT.z=target===deck?2:1;relayout();}
+function run(line){const [v,...rest]=line.trim().split(/\s+/);const arg=rest.join(' ');if(!v)return;say('> '+line,INK);
+  if(!M){say('⟵ no feed',TORN);return;}
+  switch(v){
+    case 'help':case '?':say('⟵ look [room|file] · go 1|2|3|<room> · scan · trail <drone>|seat · crew · items [topic] · power · where · back · clear',DIM);break;
+    case 'clear':LOG.length=0;break;
+    case 'where':{const r=SEL.room||SEL.deck;say(`⟵ altitude ${ALT.z} · ${r?r.path:'—'} · ${M.drones.length-1} drones out`,DIM);break;}
+    case 'back':case 'up':stepOut();break;
+    case 'go':{if(/^[123]$/.test(arg)){setAlt(+arg);break;}const r=findRoom(arg);if(r){goTo(r);say(`⟵ camera → ${r.path}`,DIM);}else{const f=findFile(arg);if(f){goTo(f.room);SEL.file=f;say(`⟵ camera → ${f.path}`,DIM);}else say(`⟵ no room or thing named ${arg} in the reading`,TORN);}break;}
+    case 'look':{const r=arg?findRoom(arg):(SEL.room||SEL.deck);const f=arg&&!r?findFile(arg):null;
+      if(f){say(`⟵ ${f.path} · ${num(f.lines)?f.lines+' lines':'lines torn'} · heat ${f.heat.toFixed(2)} · ${f.chunks.length} reads placed · ${f.heat>0?'last '+hhmm(f.last):'never opened'}`,DIM);
+        for(const c of f.chunks.slice(-6))say(`   ${hhmm(c.at)} ${c.kind} ${c.from}-${c.to}`,c.kind==='write'?AH:A);break;}
+      if(!r){say('⟵ nothing by that name',TORN);break;}
+      say(`⟵ ${r.path||'/'} · ${r.kids.length} rooms · ${r.files.length} things here (${r.count} below) · ${r.measured} lit · ${r.last?'last '+hhmm(r.last):'never entered'}`,DIM);
+      if(r.kids.length)say('   rooms: '+cut(r.kids.map(k=>k.name+(k.lit>0?'●':'·')).join(' '),COLS-12),DIM);
+      const hot=r.files.filter(x=>x.heat>0).sort((a,b)=>b.heat-a.heat).slice(0,6);if(hot.length)say('   lit: '+hot.map(x=>x.name+(x.chunks.length?'×'+x.chunks.length:'')).join(' '),A);
+      if(r.objs.length)say('   objectives: '+r.objs.slice(0,5).map(o=>(o.item.state==='ready'?'◇':o.item.state==='held'?'◆':'✓')+o.item.id+' '+cut(o.item.title,22)).join(' · '),I);
+      break;}
+    case 'scan':{const b=(S.beads||[]).slice().reverse().find(x=>x.chunks&&x.chunks.length)||(S.beads||[]).slice(-1)[0];if(!b){say('⟵ no bead in the reading',TORN);break;}
+      say(`⟵ bead ${b.n} ${hhmm(b.at)} ${b.act||'?'} · ${b.chunks.length} chunks · ctx ${num(b.ctx_after)?(b.ctx_after/1000).toFixed(0)+'k':'torn'}`,DIM);
+      for(const c of b.chunks.slice(0,6))say(`   ${c.kind} ${cut(String(c.path).replace(/^.*?\/brnrd\//,''),COLS-24)}:${c.from}-${c.to}`,c.kind==='write'?AH:A);
+      if(b.detail)say('   '+cut(b.detail,COLS-6),ABS);break;}
+    case 'trail':{const d=findDrone(arg||'seat');if(!d){say('⟵ no such drone out',TORN);break;}
+      say(`⟵ ${d.seat?'seat':'drone '+d.tag} · ${d.row&&d.row.core||''} · ${d.name||'unnamed'} · ${d.room?'in '+d.room.path:'no repo trail recorded'}`,DIM);
+      for(const t of ((d.row&&d.row.trail)||[]).slice(0,8))say(`   ${hhmm(t.at)} ${t.path}`,A);break;}
+    case 'crew':{const out=M.drones.filter(x=>!x.seat);say(`⟵ ${out.length} drone${out.length===1?'':'s'} out · ${M.docked.length} recently back`,DIM);
+      for(const d of out)say(`   ${d.tag} ${d.row.core||''} ${hhmm(d.row.started)} → ${d.room?d.room.path:'no trail'} · ${cut(d.name,40)}`,A);
+      for(const d of M.docked)say(`   ↩ ${d.tag} ${hhmm(d.row.ended)} · ${(d.row.prs||[]).length} pr · ${d.row.knots||0} knots · ${cut(d.name,36)}`,DIM);break;}
+    case 'items':{const slugs=arg?[arg]:[...M.objectives.keys()];for(const s of slugs){const o=M.objectives.get(s);if(!o){say(`⟵ no topic ${s}`,TORN);continue;}
+        const its=o.items;const c=st=>its.filter(i=>i.state===st).length;
+        say(`⟵ ${o.heddle.rune||''} ${s} · ◇${c('ready')} ◆${c('held')} ✓${c('done')} · ${o.rooms.length?'in '+o.rooms.map(r=>r.path).join(' '):'stands nowhere on the map'}`,o.rooms.length?I:DIM);
+        if(arg)for(const i of its.filter(i=>i.state!=='done').slice(0,8))say(`   ${i.state==='ready'?'◇':'◆'} ${i.id} ${cut(i.title,50)}${i.needs&&i.needs.length?' needs '+i.needs.join(','):''}`,i.state==='ready'?I:DIM);}
+      break;}
+    case 'power':{for(const b of (S.fuel&&S.fuel.buckets)||[]){say(`⟵ ${b.name} ${b.plan||''}${b.seat?' · the seat':''}`,DIM);
+        for(const w of b.windows||[])say(`   ${w.name} ${num(w.pct_left)?w.pct_left+'%':'torn'}${w.binding?' binding':''}${num(w.resets_in_s)?' · resets in '+dur(w.resets_in_s):''}${w.forecast&&num(w.forecast.rate_pct_per_h)?' · '+w.forecast.rate_pct_per_h+'%/h':''}`,num(w.pct_left)?tempCol(w.pct_left):TORN);}
+      break;}
+    default:say(`⟵ unknown verb ${v} — help`,TORN);}}
+function setAlt(z){z=clamp(z,1,3);if(z===ALT.z)return;if(z<=2&&!SEL.deck)SEL.deck=M.decks[0];if(z===1&&!SEL.room)SEL.room=SEL.deck;ALT.z=z;relayout();}
+function stepIn(){if(ALT.z===3){if(HOVER.rc&&!HOVER.rc.ground){let d=HOVER.rc.room;while(d.depth>1)d=M.rooms.get(dirOf(d.path));SEL.deck=d;SEL.room=HOVER.rc.room===d?null:HOVER.rc.room;}
+    else if(HOVER.rc&&HOVER.rc.ground){SEL.deck=HOVER.rc.room;SEL.room=null;}
+    ALT.z=SEL.room?1:2;}
+  else if(ALT.z===2){SEL.room=(HOVER.rc&&HOVER.rc.room)||SEL.room||SEL.deck;ALT.z=1;}
+  relayout();}
+function stepOut(){if(ALT.z===1){if(SEL.room&&SEL.room!==SEL.deck&&SEL.room.depth>1&&!SEL.room.home){SEL.room=null;}else SEL.room=null;ALT.z=2;}
+  else if(ALT.z===2){ALT.z=3;}
+  SEL.file=null;relayout();}
+
+// ═══ [INPUT] ══════════════════════════════════════════════════════════════
+addEventListener('keydown',e=>{
+  if(e.metaKey||e.ctrlKey||e.altKey)return;
+  const typing=CMD.buf.length>0;
+  if(e.key==='Enter'){if(typing){run(CMD.buf);CMD.hist.push(CMD.buf);CMD.buf='';CMD.hi=-1;}else stepIn();dirty=true;e.preventDefault();return;}
+  if(e.key==='Escape'){if(typing)CMD.buf='';else stepOut();dirty=true;return;}
+  if(e.key==='Backspace'){CMD.buf=CMD.buf.slice(0,-1);dirty=true;return;}
+  if(e.key==='ArrowUp'&&!typing){CMD.hi=Math.min(CMD.hist.length-1,CMD.hi+1);CMD.buf=CMD.hist[CMD.hist.length-1-CMD.hi]||'';dirty=true;return;}
+  if(!typing&&/^[123]$/.test(e.key)){setAlt(+e.key);dirty=true;return;}
+  if(!typing&&(e.key==='+'||e.key==='=')){setAlt(ALT.z-1);dirty=true;return;}
+  if(!typing&&(e.key==='-'||e.key==='_')){setAlt(ALT.z+1);dirty=true;return;}
+  if(e.key.length===1){CMD.buf+=e.key;dirty=true;}});
+addEventListener('mousemove',e=>{const cx=Math.floor(e.clientX/CW),cy=Math.floor(e.clientY/CH);if(cx===HOVER.cx&&cy===HOVER.cy)return;HOVER.cx=cx;HOVER.cy=cy;
+  const rc=roomAt(cx,cy);HOVER.rc=rc;HOVER.file=null;
+  if(rc&&ALT.z<=2&&LAY){ // which thing is under the cursor, by the floor's own layout
+    const r=rc.room;if(ALT.z===1){const y0=rc.y+2+(r.kids.length?3:1);const files=r.files.slice().sort((a,b)=>(b.chunks.length-a.chunks.length)||(b.heat-a.heat)||(b.lines||0)-(a.lines||0));const i=cy-y0;if(i>=0&&i<files.length)HOVER.file=files[i];}
+    else{const w=rc.w-2,listMode=w>=16,perRow=Math.max(1,Math.floor(w/14));const files=r.files.slice().sort((a,b)=>(b.heat-a.heat)||(b.lines||0)-(a.lines||0));
+      const ry=cy-(rc.y+2),rx=cx-(rc.x+1);if(ry>=0&&rx>=0){const i=listMode?ry*perRow+Math.floor(rx/14):ry*w+rx;if(i>=0&&i<files.length&&(listMode?rx%14<13:true))HOVER.file=files[i];}}}
+  dirty=true;});
+addEventListener('click',e=>{const rc=roomAt(Math.floor(e.clientX/CW),Math.floor(e.clientY/CH));if(!rc)return;
+  if(ALT.z===3){stepIn();}
+  else if(ALT.z===2){if(HOVER.file){SEL.file=HOVER.file;SEL.room=rc.room;ALT.z=1;relayout();}else if(rc.room!==SEL.deck){SEL.room=rc.room;ALT.z=1;relayout();}}
+  else if(ALT.z===1&&HOVER.file){SEL.file=HOVER.file;run('look '+HOVER.file.path);}
+  dirty=true;});
+let wheelAcc=0;addEventListener('wheel',e=>{wheelAcc+=e.deltaY;if(Math.abs(wheelAcc)>140){setAlt(ALT.z+(wheelAcc>0?1:-1));wheelAcc=0;dirty=true;}},{passive:true});
+
+// ═══ [PASS] ═══════════════════════════════════════════════════════════════
+// Phosphor: the world is drawn only when dirty; every frame the screen decays
+// toward black and the new world is added on top, so a frame that changed
+// leaves the old one as an afterimage for ~400 ms.  That is the whole motion
+// budget of this page — the fade of a fact that was true a moment ago.
+let persist,pg,bloomC,bg2,scan;
+function ensureBuffers(){if(!persist){persist=document.createElement('canvas');pg=persist.getContext('2d');bloomC=document.createElement('canvas');bg2=bloomC.getContext('2d');scan=document.createElement('canvas');}
+  persist.width=W*DPR;persist.height=H*DPR;bloomC.width=Math.ceil(W/4);bloomC.height=Math.ceil(H/4);
+  scan.width=4;scan.height=CH*DPR;const sg=scan.getContext('2d');sg.clearRect(0,0,4,scan.height);sg.fillStyle='rgba(0,0,0,.22)';sg.fillRect(0,Math.floor(scan.height*.55),4,Math.max(1,Math.floor(scan.height*.2)));}
+let lastT=0,perfLine='',fpsN=0,fpsT=0,drawMs=0;
+function frame(now){const dt=Math.min(100,now-(lastT||now));lastT=now;
+  const t0=performance.now();
+  if(dirty||PINGS.some(p=>now-p.t<1600)||now-SCAN.t<300||(now/500|0)!==((now-dt)/500|0)){drawWorld(now);flush();dirty=false;}
+  const g=cv.getContext('2d');g.setTransform(1,0,0,1,0,0);
+  if(FX){ // decay, then add the world
+    pg.setTransform(1,0,0,1,0,0);pg.globalCompositeOperation='destination-in';pg.fillStyle=`rgba(0,0,0,${Math.pow(0.5,dt/140).toFixed(3)})`;pg.fillRect(0,0,persist.width,persist.height);
+    pg.globalCompositeOperation='lighter';pg.globalAlpha=1;pg.drawImage(world,0,0);pg.globalCompositeOperation='source-over';
+    g.fillStyle='#070604';g.fillRect(0,0,cv.width,cv.height);
+    bg2.setTransform(1,0,0,1,0,0);bg2.clearRect(0,0,bloomC.width,bloomC.height);bg2.drawImage(persist,0,0,bloomC.width,bloomC.height);
+    g.globalCompositeOperation='lighter';g.globalAlpha=.55;g.filter='blur(6px)';g.drawImage(bloomC,0,0,cv.width,cv.height);g.filter='none';g.globalAlpha=1;
+    g.drawImage(persist,0,0);g.globalCompositeOperation='source-over';
+    g.fillStyle=g.createPattern(scan,'repeat');g.fillRect(0,0,cv.width,cv.height);
+    const v=g.createRadialGradient(cv.width/2,cv.height/2,cv.height*.35,cv.width/2,cv.height/2,cv.height*.95);v.addColorStop(0,'rgba(0,0,0,0)');v.addColorStop(1,'rgba(0,0,0,.55)');g.fillStyle=v;g.fillRect(0,0,cv.width,cv.height);
+  }else{g.fillStyle='#070604';g.fillRect(0,0,cv.width,cv.height);g.drawImage(world,0,0);}
+  const ms=performance.now()-t0;drawMs=drawMs*.9+ms*.1;fpsN++;if(now-fpsT>1000){perfLine=`${fpsN} fps · frame ${drawMs.toFixed(2)} ms · ${COLS}×${ROWS} cells`;fpsN=0;fpsT=now;if(PERF)dirty=true;}
+  window.__loomFrame={fps:perfLine,cols:COLS,rows:ROWS,alt:ALT.z};
+  requestAnimationFrame(frame);}
+resize();pull();requestAnimationFrame(frame);
+</script>
