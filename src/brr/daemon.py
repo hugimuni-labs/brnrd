@@ -9093,15 +9093,32 @@ def _render_said_section(rows: list[dict[str, str]]) -> str:
 
 
 def _splice_said_section(card_text: str, section: str) -> str:
-    """Replace the existing `## Said` section (to the next `## `) or append."""
+    """Replace the existing `## Said` section (to the next `## `) or append.
+
+    Locates the heading through :func:`card_frame._section_span` — the
+    *line-anchored* reader the frame's other block (`## Ledger`) already
+    uses — rather than a second, substring-based one of its own.
+
+    The second reader is what broke, measured on run-260919-1802-6zeq
+    (2026-09-19): a card whose prose contained the words ``## Said`` inside
+    backticks made ``text.find`` return that mention, whose preceding
+    character is not a newline, so the not-at-a-line-start guard fired and
+    **appended a whole new block — on every delivery**. Three stacked up in
+    one run, and the splice could never collapse them again, because the
+    next ``\n## `` it scanned for was the duplicate it had just made.
+
+    The guard had the right suspicion and the wrong remedy: a match that is
+    not at a line start is not "no section", it is "keep looking". Deleting
+    the duplicate parser is the repair — one fact about where a section
+    lives, read one way.
+    """
     text = card_text or ""
-    start = text.find(_SAID_HEADING)
-    if start == -1 or (start > 0 and text[start - 1] != "\n"):
+    span = card_frame._section_span(text, _SAID_HEADING)
+    if span is None:
         base = text.rstrip("\n")
         return (base + "\n\n" if base else "") + section + "\n"
-    nxt = text.find("\n## ", start + len(_SAID_HEADING))
-    tail = text[nxt + 1:] if nxt != -1 else ""
-    head = text[:start].rstrip("\n")
+    head = text[: span[0]].rstrip("\n")
+    tail = text[span[1]:].lstrip("\n")
     joined = (head + "\n\n" if head else "") + section + "\n"
     return joined + ("\n" + tail if tail else "")
 
