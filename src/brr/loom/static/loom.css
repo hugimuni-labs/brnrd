@@ -11,3 +11,6 @@
 
 /* The colour law: an unmeasured reading is black, never a grey placeholder. */
 .unmeasured{color:#5a4d3c}#state.unmeasured{color:#5a4d3c}.reset.unmeasured{color:#5a4d3c}#glyph.unmeasured{color:#5a4d3c;text-shadow:none}
+
+/* The one header state that must not read as ordinary. */
+#source.stale{color:var(--amber);font-weight:650}
