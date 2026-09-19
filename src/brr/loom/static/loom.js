@@ -405,7 +405,40 @@ function renderPanels(){
   if(state.hud?.spend && (state.run?.source==='spawn'||state.run?.parent||state.hud?.full?.run?.source==='spawn')){
     const spend=state.hud.spend;$('fuel').append(element('p',`Allowance ${compact(spend.tokens)} / ${compact(spend.allowance_tokens)}`,'muted'));
   }
+  renderHalts();
   renderPack($('inventory'),false);
+}
+// design-the-four-stops.md: the maintainer allowed a carry-less exit on one
+// condition — that the dashboard shows it. A halt with no carry and open
+// items is abandoned work *with a stated revival path*: a queue, not a
+// graveyard, and the `resumable:` line is the whole return on the field.
+function renderHalts(){
+  const halts=state.halts||{},queue=array(halts.queue),counts=halts.counts||{};
+  // Hidden when empty on purpose: a standing panel reading "nothing
+  // abandoned" trains a reader to stop looking at it.
+  $('halts').hidden=!queue.length;
+  $('halt-counts').textContent=number(counts.total)?`${counts.stopped||0} stopped · ${counts.carried||0} carried`:'';
+  const target=$('halt-queue');target.replaceChildren();
+  if(!queue.length)return;
+  for(const halt of queue){
+    const block=element('div',null,'halt'),head=element('div',null,'halt-head');
+    head.append(element('span',halt.run||'run unmeasured','halt-run'));
+    if(halt.at)head.append(element('small',String(halt.at).slice(0,10)));
+    block.append(head);
+    if(halt.reason)block.append(element('div',halt.reason,'halt-reason'));
+    // The one line a reader needs to pick the work back up.
+    block.append(element('div',halt.resumable||'no revival path stated','halt-resumable'+(halt.resumable?'':' unmeasured')));
+    const total=number(halt.open_items_total)?halt.open_items_total:array(halt.open_items).length;
+    if(total){
+      const shown=array(halt.open_items),list=element('ul',null,'halt-items');
+      for(const item of shown)list.append(element('li',item));
+      if(total>shown.length)list.append(element('li',`+${total-shown.length} more`,'muted'));
+      block.append(list);
+    }
+    target.append(block);
+  }
+  if(number(halts.queue_total)&&halts.queue_total>queue.length)
+    target.append(element('p',`+${halts.queue_total-queue.length} older`,'muted'));
 }
 function renderPack(target,all){
   target.replaceChildren();const pack=state.pack;
