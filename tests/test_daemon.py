@@ -3509,6 +3509,82 @@ def test_record_context_window_writes_a_token_reading_beside_boot(
     assert "updated_at" in snap["context_window"]
 
 
+def test_record_context_window_ignores_a_predecessors_transcript_on_a_shared_cwd(
+    tmp_path, monkeypatch,
+):
+    """run-260919-1802-6zeq: a seat that had not yet spoken reported 445.7k.
+
+    Deliberately does **not** stub ``latest_claude_transcript`` — the defect
+    lived in that selector, reached through this exact caller, so a stub here
+    would test the fix's shape and none of its substance. Builds the real
+    ``~/.claude/projects`` layout the host path walks: one shared checkout,
+    two runs, the retired one's transcript the newest file in the slug.
+    """
+    import os
+    import time
+
+    from brr import claude_status
+
+    home = tmp_path / "home"
+    work_dir = tmp_path / "shared-checkout"  # env: host — every run shares it
+    slug = str(work_dir).rstrip("/").replace("/", "-").replace(".", "-")
+    slug_dir = home / ".claude" / "projects" / slug
+    slug_dir.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+    predecessor = slug_dir / "predecessor.jsonl"
+    _write_claude_transcript(
+        predecessor,
+        {"input_tokens": 700, "output_tokens": 0,
+         "cache_read_input_tokens": 445_000, "cache_creation_input_tokens": 0},
+    )
+    now = time.time()
+    started = now - 30  # this run booted half a minute ago
+    os.utime(predecessor, (started - 600, started - 600))
+
+    outbox_dir = tmp_path / "outbox"
+    daemon._record_context_window(
+        "claude", work_dir, outbox_dir, not_before=started,
+    )
+    assert claude_status.load_snapshot(outbox_dir) in (None, {}) or (
+        "context_window" not in claude_status.load_snapshot(outbox_dir)
+    )
+
+    # Once this seat writes its own turn, its own number lands.
+    mine = slug_dir / "mine.jsonl"
+    _write_claude_transcript(
+        mine,
+        {"input_tokens": 100, "output_tokens": 0,
+         "cache_read_input_tokens": 86_600, "cache_creation_input_tokens": 0},
+    )
+    os.utime(mine, (now, now))
+    daemon._record_context_window(
+        "claude", work_dir, outbox_dir, not_before=started,
+    )
+    snap = claude_status.load_snapshot(outbox_dir)
+    assert snap["context_window"]["tokens_used"] == 86_700
+
+
+def test_record_boot_cost_ignores_a_predecessors_transcript_on_a_shared_cwd(
+    tmp_path, monkeypatch,
+):
+    """Same shared-cwd hazard, the other reader: a boot cost is a *this run*
+    number, and the predecessor's first turn is not it."""
+    seen = {}
+
+    def _fake(cwd, projects_root=None, *, not_before=None):
+        seen["not_before"] = not_before
+        return None
+
+    monkeypatch.setattr(daemon.allowance, "latest_claude_transcript", _fake)
+    task = types.SimpleNamespace(meta={})
+    daemon._record_boot_cost(
+        task, "claude", tmp_path / "work", tmp_path / "outbox",
+        not_before=4321.0,
+    )
+    assert seen["not_before"] == 4321.0
+
+
 def test_record_context_window_never_regresses_a_known_percentage(tmp_path, monkeypatch):
     """The final envelope already produced the honest ``contextWindow``-
     derived percentage (this run's own, or the cross-run fallback) — a
