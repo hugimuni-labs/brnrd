@@ -6067,6 +6067,12 @@ def _register_run_control(
             # own heartbeat (`_collect_allowance_facet`'s strand branch) —
             # `None` until that child's first boundary reads something.
             "allowance_spent": None,
+            # `None` while the child works; a projection of its own
+            # ``resource_hold`` record once it parks (`_park_run_control`).
+            # A parked child is still an edge this parent owns — that is
+            # the whole point of keeping the control instead of retiring
+            # it (`_reap_parked_or_retire`).
+            "parked": None,
         }
 
 
@@ -6102,6 +6108,52 @@ def _retire_run_control(spawn_event_id: str) -> None:
         _run_controls.pop(spawn_event_id, None)
 
 
+#: What a parked child is waiting on, said in the words the seat can act on.
+#: Keyed by ``resume_condition``; an unknown condition degrades to the bare
+#: word rather than a confident wrong sentence.
+_PARKED_CHILD_WAITING_ON = {
+    resource_hold.RESUME_REFILL: "a measured quota refill on its own bucket",
+    resource_hold.RESUME_RESET: "a measured provider reset",
+    resource_hold.RESUME_OPERATOR: "an addressed reply",
+    resource_hold.RESUME_ANY: "anything addressed to it",
+    resource_hold.RESUME_STRANDS: "one of its own children",
+    resource_hold.RESUME_RAISE: "the user raising its stake",
+}
+
+
+def _parked_child_projection(task: Run) -> dict[str, Any] | None:
+    """The parked facts of a reaped child, or ``None`` when it really ended.
+
+    Read off the child's own hold record — the same
+    :func:`resource_hold.run_is_held` derivation every other reader uses,
+    never the ``held`` status word.
+    """
+    meta = getattr(task, "meta", None) or {}
+    hold = meta.get("resource_hold")
+    if not resource_hold.run_is_held(getattr(task, "status", None), meta):
+        return None
+    condition = str((hold or {}).get("resume_condition") or "").strip()
+    return {
+        "reason": str((hold or {}).get("reason") or "").strip() or "unknown",
+        "resume": condition or "unknown",
+        "provider": str((hold or {}).get("provider") or "").strip(),
+        "waiting_on": _PARKED_CHILD_WAITING_ON.get(condition, condition or "unknown"),
+        "detail": str((hold or {}).get("detail") or "").strip(),
+        "armed_at": str((hold or {}).get("armed_at") or "").strip(),
+        "wall": bool(resource_hold.is_resource_wall(hold)),
+    }
+
+
+def _park_run_control(spawn_event_id: str, parked: dict[str, Any]) -> bool:
+    """Mark a child's edge parked instead of retiring it. ``True`` if marked."""
+    with _run_controls_lock:
+        control = _run_controls.get(spawn_event_id)
+        if control is None:
+            return False
+        control["parked"] = dict(parked)
+        return True
+
+
 def _retire_child_messages(inbox_dir: Path | None, spawn_event_id: str) -> None:
     """Retire unconsumed parent→child messages once the child is over.
 
@@ -6118,7 +6170,33 @@ def _retire_child_messages(inbox_dir: Path | None, spawn_event_id: str) -> None:
 
 
 def _owned_child_controls(run_id: str) -> list[dict[str, str]]:
-    """Return the live child edges the current run still owns."""
+    """Return the child edges the current run still owns — working *and* parked.
+
+    A row's ``status`` says which:
+
+    ``"submitted"``
+        working. A ``submit:`` is a *boundary*, not an end — the strand
+        attested produce and stayed alive for ``brnrd await``, so it is
+        still spending, still steerable, and still something a seat should
+        wait for. (Measured the other way on 2026-09-14: a parent that read
+        a submit as a convergence and answered ``stop:`` killed a thread
+        that had submitted early precisely to be steered.)
+    ``"parked"``
+        not working. The child's process has ended on a ``resource_hold``;
+        it spends nothing and will not move until its own release condition
+        fires. ``parked`` carries the reason, the resume condition and what
+        it is waiting on (:func:`_parked_child_projection`).
+    absent
+        working, nothing attested yet.
+
+    A parked child stays on this list deliberately. It is still an edge
+    this parent owns and the only run allowed to ``stop:`` or ``to:`` it
+    (THE ORPHANED EDGE — ``daemon.py``'s parentage check), so retiring the
+    control would take the seat's verbs away at the exact moment the
+    maintainer's rule says it should have them: *the seat can close the
+    strands if they draw too much, or the shell behind it dried up.*
+    Callers that mean *working* want :func:`_working_child_controls`.
+    """
     owner = str(run_id or "").strip()
     if not owner:
         return []
@@ -6138,7 +6216,21 @@ def _owned_child_controls(run_id: str) -> list[dict[str, str]]:
                 "event_id": event_id,
                 "run_id": child_run_id,
             }
-            if control.get("submitted"):
+            parked = control.get("parked")
+            if isinstance(parked, dict) and parked:
+                # Outranks `submitted`: a child that submitted and then
+                # parked is not working, whatever it attested on the way.
+                row["status"] = "parked"
+                row["hold_reason"] = str(parked.get("reason") or "")
+                row["hold_resume"] = str(parked.get("resume") or "")
+                row["waiting_on"] = str(parked.get("waiting_on") or "")
+                if parked.get("provider"):
+                    row["hold_provider"] = str(parked["provider"])
+                if parked.get("wall"):
+                    row["hold_wall"] = True
+                if parked.get("armed_at"):
+                    row["parked_at"] = str(parked["armed_at"])
+            elif control.get("submitted"):
                 row["status"] = "submitted"
             adopted_from = str(control.get("adopted_from_run_id") or "").strip()
             if adopted_from:
@@ -6152,6 +6244,29 @@ def _owned_child_controls(run_id: str) -> list[dict[str, str]]:
             rows.append(row)
     rows.sort(key=lambda row: (row.get("run_id") or "", row.get("event_id") or ""))
     return rows
+
+
+def _working_child_controls(run_id: str) -> list[dict[str, str]]:
+    """The owned child edges that are actually *working* — parked ones dropped.
+
+    The maintainer's rule, and the whole predicate this branch turns on:
+    *"the seat should never hold the execution because of parked children.
+    Holding it on the living strands makes sense."* Working vs parked, not
+    which provider owns the wall — one predicate instead of a table of
+    whose bucket is whose.
+    """
+    return [
+        row for row in _owned_child_controls(run_id)
+        if row.get("status") != "parked"
+    ]
+
+
+def _parked_child_controls(run_id: str) -> list[dict[str, str]]:
+    """The complement: owned child edges parked on a hold of their own."""
+    return [
+        row for row in _owned_child_controls(run_id)
+        if row.get("status") == "parked"
+    ]
 
 
 _ALLOWANCE_ASK_RE = re.compile(
@@ -6835,6 +6950,31 @@ def _apply_run_stop(
                 run_id=str(control.get("run_id") or spawn_event_id),
             )
     child_run_id = control.get("run_id")
+    if (
+        not already_stopped
+        and isinstance(control.get("parked"), dict)
+        and control["parked"]
+        and child_run_id
+        and inbox_dir is not None
+    ):
+        # A parked child has no process to kill and no future left to
+        # reap, so the ordinary arm below would report "running", change
+        # nothing, and leave the run `held` forever with its parent still
+        # holding the edge. The maintainer's second act — *the seat can
+        # close the strands if they draw too much, or the shell behind it
+        # dried up* — has to mean something here, so the kill is a real
+        # release: the hold is consumed, the run lands `stopped`, and the
+        # completion note is posted right here (same shape as the
+        # never-dispatched arm, for the same reason).
+        stage = _stop_parked_child(
+            control, inbox_dir,
+            child_run_id=str(child_run_id),
+            stopped_by=stopped_by,
+            reason=reason,
+            conversation_key=conversation_key,
+        )
+        if stage is not None:
+            return stage
     if child_run_id is None and inbox_dir is not None:
         pending = _find_pending_event(inbox_dir, spawn_event_id)
         if pending is not None:
@@ -6872,6 +7012,75 @@ def _apply_run_stop(
             return "cancelled-before-start"
     runner.kill_matching(f"{spawn_event_id}-attempt-")
     return "running"
+
+
+def _stop_parked_child(
+    control: dict,
+    inbox_dir: Path,
+    *,
+    child_run_id: str,
+    stopped_by: str,
+    reason: str,
+    conversation_key: str,
+) -> str | None:
+    """Close a child parked on its own hold. Returns a stage, or ``None``.
+
+    ``None`` means "not handled here" — the run manifest is unreadable or
+    its hold is no longer active — and the caller falls through to the
+    ordinary kill, which is the conservative arm: it can only be too
+    gentle, never too violent.
+    """
+    runs_dir = inbox_dir.parent / "runs"
+    if not runs_dir.is_dir():
+        return None
+    try:
+        child = Run.from_file(runs_dir / child_run_id / "run.md")
+    except Exception:  # noqa: BLE001 — a stop must never raise at the caller
+        return None
+    if child is None or not resource_hold.run_is_held(child.status, child.meta):
+        return None
+    hold_meta = child.meta.get("resource_hold") or {}
+    # One transition, not two: `release_held_run` would land `done` first
+    # and a stopped child is not a done one. The hold's own receipt is
+    # still consumed, so `run_is_held` reads False from either side.
+    child.meta["resource_hold"] = resource_hold.mark_released(
+        hold_meta, by=stopped_by,
+    )
+    child.meta["stopped_by"] = stopped_by
+    if reason:
+        child.meta["stop_reason"] = reason
+    child.transition("stopped", why="parent_closed_parked_child", by=stopped_by)
+    spawn_event_id = str(control["event_id"])
+    _retire_run_control(spawn_event_id)
+    _retire_child_messages(inbox_dir, spawn_event_id)
+    detail = str(hold_meta.get("reason") or "").strip() or "a hold"
+    try:
+        owner_run_id, owner_conv = _child_owner_route(
+            spawn_event_id,
+            fallback_parent_run_id=stopped_by,
+            fallback_conversation_key=conversation_key or f"run:{stopped_by}",
+        )
+        protocol.create_event(
+            inbox_dir,
+            "spawn_completed",
+            f"concurrent spawn {child_run_id} was parked on {detail} and "
+            f"has been closed by {stopped_by}"
+            + (f": {reason}" if reason else ""),
+            conversation_key=owner_conv,
+            spawned_by_run=child_run_id,
+            spawned_by_event=spawn_event_id,
+            spawn_parent_run_id=owner_run_id,
+            spawn_stopped=True,
+            spawn_status="stopped",
+            spawn_was_parked=True,
+        )
+    except OSError as exc:
+        print(f"[brnrd] parked-child stop notify failed for {child_run_id}: {exc}")
+    print(
+        f"[brnrd] parked strand closed by {stopped_by}: {child_run_id} "
+        f"({detail})"
+    )
+    return "stopped-parked"
 
 
 def _queue_stop_request(
@@ -7773,7 +7982,18 @@ def _cut_mismatches(
         if not child_id:
             continue
         if child_id not in declared_strands:
-            mismatches.append(f"strands: {child_id} is live and undispositioned")
+            if entry.get("status") == "parked":
+                # Still an open edge the bolt must name — a parked child
+                # does not vanish just because it stopped spending — but
+                # the accusation has to be true: it is not *live*.
+                waiting = str(entry.get("waiting_on") or "").strip()
+                tail = f", waiting on {waiting}" if waiting else ""
+                mismatches.append(
+                    f"strands: {child_id} is parked and undispositioned"
+                    f"{tail}"
+                )
+            else:
+                mismatches.append(f"strands: {child_id} is live and undispositioned")
 
     # ── allowance overrun (design-the-allowance.md §2, slice 1) ──────────
     # A strand that spent past its `spawn:`-declared ceiling without ever
@@ -8420,9 +8640,11 @@ def _hold_ratio_facet(
                 return await_state, hold_facet
         except (TypeError, ValueError):
             pass
-    if _owned_child_controls(task.id):
+    if _working_child_controls(task.id):
         # `resume: strands`'s job — nothing spends while a live child works,
         # and that hold cost is the strand's, not this seat's idle one.
+        # A *parked* child is not that: it spends nothing and owes this
+        # seat no wait (`_working_child_controls`).
         return await_state, hold_facet
     armed = task.meta.get("await")
     if isinstance(armed, dict):
@@ -8525,13 +8747,35 @@ def _park_bolt_on_live_strands(
         return []
     live = {
         str(entry.get("run_id") or entry.get("event_id") or "").strip()
-        for entry in _owned_child_controls(task.id)
+        for entry in _working_child_controls(task.id)
     }
     live.discard("")
-    parked = [
+    asleep = {
+        str(entry.get("run_id") or entry.get("event_id") or "").strip(): entry
+        for entry in _parked_child_controls(task.id)
+    }
+    asleep.pop("", None)
+    handoffs = [
         row.run for row in declaration.strands
-        if row.run in live and row.disposition.strip().lower().startswith("handoff")
+        if row.disposition.strip().lower().startswith("handoff")
     ]
+    parked = [run for run in handoffs if run in live]
+    slept_through = [run for run in handoffs if run in asleep]
+    if slept_through and not parked:
+        # The maintainer's rule: *the seat should never hold the execution
+        # because of parked children.* A handoff naming only sleeping
+        # children is an ordinary close — the seat keeps its quota and the
+        # child keeps its wall, and the two are not the same bucket.
+        _record_outbox_notice(
+            outbox_dir,
+            "cut: " + ", ".join(slept_through) + (
+                " is parked on a hold of its own, not working — the seat "
+                "closes normally rather than sleeping behind a wall it does "
+                "not draw from; `stop:` it, steer it, or let its own resume "
+                "condition fire"
+            ),
+            kind="advisory", lifetime="run", source_file=source_file,
+        )
     if not parked:
         return []
     native_session_id = _native_session_id_for(task)
@@ -8697,15 +8941,29 @@ def _halt_open_items(
         if not child_id:
             continue
         title = str(entry.get("title") or "").strip()
+        if entry.get("status") == "parked":
+            # Open, and open *differently*: nothing is coming back on its
+            # own, so the brief owes the successor a decision (release it,
+            # `stop:` it, or say why it stays asleep), not a warning about
+            # a return that will miss the seat.
+            waiting = str(entry.get("waiting_on") or "").strip()
+            line = (
+                f"strand {child_id} is parked"
+                + (f" ({title})" if title else "")
+                + (f" — waiting on {waiting}" if waiting else "")
+                + "; nothing wakes it for this seat"
+            )
+        else:
+            line = (
+                f"strand {child_id} is live"
+                + (f" ({title})" if title else "")
+                + " — its return lands on a seat that will not be here"
+            )
         items.append(halt_verb.OpenItem(
             kind="strand",
             handle=child_id,
             aliases=(_short_id_tail(child_id),),
-            line=(
-                f"strand {child_id} is live"
-                + (f" ({title})" if title else "")
-                + " — its return lands on a seat that will not be here"
-            ),
+            line=line,
         ))
 
     return items
@@ -14743,10 +15001,14 @@ def _arm_resource_hold(
         generation=generation,
         **hold_fields,
     )
-    for other in _held_runs_for_repo(runs_dir):
-        if other.id == task.id:
-            continue
-        meta = _supersede_hold(runs_dir, other, meta, by_run=task.id)
+    # Only a run that may *be* the seat supersedes the seat. A strand
+    # parking on its own wall is one thread going quiet, not a succession
+    # — see :func:`_seat_held_runs_for_repo` for what it used to cost.
+    if not _is_strand(task.meta):
+        for other in _seat_held_runs_for_repo(runs_dir):
+            if other.id == task.id:
+                continue
+            meta = _supersede_hold(runs_dir, other, meta, by_run=task.id)
     task.meta["resource_hold"] = meta
     task.update_status(resource_hold.RUN_STATUS, runs_dir)
     if _is_strand(task.meta):
@@ -14755,6 +15017,12 @@ def _arm_resource_hold(
         # `_resident_hold_refusal` whenever its own boundary measured the
         # starvation wall (`quota_binding_pct` is stamped before the
         # facet's seat-only return).
+        #
+        # The supersession loop above skips a strand for the same reason
+        # (:func:`_seat_held_runs_for_repo`) — and that half is newer and
+        # load-bearing: before it, this early-return fired one step *too
+        # late*, after the strand had already released its own parent's
+        # hold and swallowed its mail.
         return meta
     home = _shuttle_home(account_home, runs_dir)
     entity = shuttle.Shuttle.load(home)
@@ -15258,6 +15526,36 @@ def _held_runs_for_repo(runs_dir: Path) -> list[Run]:
     return held
 
 
+def _seat_held_runs_for_repo(runs_dir: Path) -> list[Run]:
+    """The held runs eligible to *be the seat* — every hold but a strand's.
+
+    **A strand is a thread, never the seat** (#1991), and until now that
+    rule was enforced one step too late: ``_arm_resource_hold``'s
+    ``_is_strand`` early-return sits *after* the supersession loop, so a
+    strand parking on its own provider wall released its own parent's
+    ``resume: strands`` hold as ``superseded``, inherited the parent's
+    accumulated mail, and became ``_repo_seat``. Measured on this branch
+    (``tests/test_the_parked_child_releases.py``): parent ``held`` →
+    ``done``, the parent's letter folded into the child's ``refill``
+    record, and from then on every routine event for the repo — including
+    the child's own ``spawn_completed`` return, which is in
+    ``_HOLD_ACCUMULATE_ONLY_SOURCES`` — deferred for the five-year horizon
+    against a bucket the parent does not even draw from.
+
+    That is the maintainer's symptom exactly ("a codex strand that hits its
+    5h wall would hold its parent asleep for up to five hours behind a
+    bucket the parent does not draw from"), reached by a mechanism nobody
+    had named: not the seat *waiting* on a parked child, the parked child
+    *taking the seat*.
+
+    Deliberately **not** applied to :func:`_held_runs_for_repo` itself: the
+    refill/reset sweep reads that list and must keep releasing a parked
+    strand's own hold when its bucket comes back. What a strand may not do
+    is stand in the one chair.
+    """
+    return [run for run in _held_runs_for_repo(runs_dir) if not _is_strand(run.meta)]
+
+
 def _repo_root_for_runs(runs_dir: Path) -> Path:
     """Best-effort repository root for a shared ``.brr/runs`` directory."""
     return runs_dir.parent.parent
@@ -15282,7 +15580,7 @@ def _repo_seat(runs_dir: Path, *, account_home: Path | None = None) -> Run | Non
     it here, its mail folded — so the guarantee holds at read time too, not
     only after the next arm.
     """
-    held_runs = _held_runs_for_repo(runs_dir)
+    held_runs = _seat_held_runs_for_repo(runs_dir)
     if not held_runs:
         return None
     seat = held_runs[0]
@@ -17465,6 +17763,7 @@ def start(
                         str(spawn["event"].get("id") or "")
                         if spawn["event"] is not None else ""
                     )
+                    parked: dict[str, Any] | None = None
                     try:
                         try:
                             spawn_task = future.result()
@@ -17476,12 +17775,34 @@ def start(
                                 )
                         else:
                             _notify_spawn_parent(spawn["inbox_dir"], spawn_task)
+                            parked = _parked_child_projection(spawn_task)
                         if spawn["event"] is not None:
-                            # The child is over; its dispatch-edge control (and
-                            # with it, stoppability) retires with it, as does any
-                            # unconsumed parent→child message traffic.
-                            _retire_run_control(spawn_eid)
-                            _retire_child_messages(spawn["inbox_dir"], spawn_eid)
+                            if parked is not None and _park_run_control(
+                                spawn_eid, parked,
+                            ):
+                                # Parked, not over. The process ended and the
+                                # spawn-pool slot is free, but the *edge* is
+                                # not: this parent is still the only run that
+                                # may `stop:` or steer it, and the seat needs
+                                # to see it at its boundary to use either.
+                                # Its unconsumed `to:` traffic stays pending
+                                # for the same reason — a steer written to a
+                                # child that parks is not addressed to a
+                                # corpse, it is addressed to a run that may
+                                # yet be released.
+                                print(
+                                    f"[brnrd] strand parked, edge kept: "
+                                    f"{spawn_task.id} "
+                                    f"({parked['reason']}/{parked['resume']}) "
+                                    f"— parent may stop: or steer it"
+                                )
+                            else:
+                                # The child is over; its dispatch-edge control
+                                # (and with it, stoppability) retires with it,
+                                # as does any unconsumed parent→child message
+                                # traffic.
+                                _retire_run_control(spawn_eid)
+                                _retire_child_messages(spawn["inbox_dir"], spawn_eid)
                     finally:
                         spawn_executor = spawn.get("executor")
                         if spawn_executor is not None:

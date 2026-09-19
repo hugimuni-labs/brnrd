@@ -4658,6 +4658,7 @@ def format_delta(
     )
     if live_children:
         lines.append(live_children)
+    lines.extend(_parked_child_lines({"run": run, "resources": resources}))
     lines.extend(_render_armed_rows(armed))
     replied_current = outbound.get("replies_current")
     any_delivery = (
@@ -5465,6 +5466,11 @@ def _spawn_child_armed(portal: dict[str, Any], run_id: str | None) -> bool | Non
         for entry in owned:
             if not isinstance(entry, dict):
                 continue
+            if entry.get("status") == "parked":
+                # Parked is not running: its process ended on a hold of
+                # its own. Counting it as an armed child made a seat wait
+                # for a return that is not coming.
+                continue
             if str(entry.get("parent_run_id") or "").strip() == run_id:
                 return True
         return False
@@ -5501,6 +5507,10 @@ def _live_child_handover_line(payload: dict[str, Any]) -> str | None:
                 continue
             if str(entry.get("parent_run_id") or "").strip() != run_id:
                 continue
+            if entry.get("status") == "parked":
+                # `_parked_child_lines` owns this row — a parked child is
+                # a decision the seat may take, not a handover it owes.
+                continue
             child_id = str(entry.get("run_id") or entry.get("event_id") or "").strip()
             if child_id:
                 rows.append(child_id)
@@ -5523,6 +5533,91 @@ def _live_child_handover_line(payload: dict[str, Any]) -> str | None:
         "here needs a `strands:` row per child (handoff / converged / "
         "stopped / abandoned), or the bolt bounces on it."
     )
+
+
+def _parked_child_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """This run's own owned children whose ``status`` reads ``parked``."""
+    run = payload.get("run") if isinstance(payload.get("run"), dict) else {}
+    run_id = str(run.get("id") or "").strip()
+    if not run_id:
+        return []
+    resources = (
+        payload.get("resources")
+        if isinstance(payload.get("resources"), dict) else {}
+    )
+    facet = (
+        resources.get("coexisting_runs")
+        if isinstance(resources.get("coexisting_runs"), dict) else {}
+    )
+    owned = facet.get("owned_children")
+    if not isinstance(owned, list):
+        return []
+    rows = []
+    for entry in owned:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("parent_run_id") or "").strip() != run_id:
+            continue
+        if entry.get("status") != "parked":
+            continue
+        rows.append(entry)
+    return rows
+
+
+def _parked_child_lines(payload: dict[str, Any]) -> list[str]:
+    """What the seat sees at its boundary when one of its children is parked.
+
+    The maintainer's rule has two halves and this renders the second: *the
+    seat should never hold the execution because of parked children* — the
+    machinery below already stopped it from waiting — and *the seat can
+    close the strands if they draw too much, or the shell behind it dried
+    up*, which is an **act**, and an act nobody is told about is not
+    available. So the row names the three overrides he named, in the order
+    of what they cost:
+
+    ``to: <id>``   the steer — free, and honest about its reach: it queues
+                   on the child's own edge and is read *if* the child's
+                   release condition fires. It does not itself wake a
+                   parked run.
+    ``stop: <id>`` closes it — the child's hold is consumed, its run lands
+                   ``stopped``, its partial work is salvaged, the edge
+                   retires. Cheap and final.
+    ``respawn``    a fresh body for the same work. **A boot**, priced here
+                   rather than left to look free: the successor pays a
+                   full cold read of everything this run already holds,
+                   and across Shells it cannot reopen the old transcript
+                   at all.
+
+    Nothing here executes; the resident operates the machinery, not the
+    other way around.
+    """
+    rows = _parked_child_rows(payload)
+    if not rows:
+        return []
+    lines: list[str] = []
+    for entry in rows:
+        child_id = str(entry.get("run_id") or entry.get("event_id") or "").strip()
+        title = " ".join(str(entry.get("title") or "").split())
+        reason = str(entry.get("hold_reason") or "").strip()
+        waiting = str(entry.get("waiting_on") or "").strip()
+        head = f"- ⏸ strand parked: {child_id}"
+        if title:
+            head += f" — {title}"
+        if reason:
+            head += f" · {reason}"
+        if waiting:
+            head += f" · waiting on {waiting}"
+        head += (
+            " — it is spending nothing and this seat is not waiting on it. "
+            "Three acts are yours: `to: " + child_id + "` steers it (free, "
+            "read only if its own release fires) · `stop: " + child_id + "` "
+            "closes it and salvages what it published · a respawn gives the "
+            "work a fresh body and is **a boot** — the successor pays a full "
+            "cold read, and across Shells it cannot reopen the transcript at "
+            "all. Nothing happens unless you say so."
+        )
+        lines.append(head)
+    return lines
 
 
 def _vigil_closeout_clause(
