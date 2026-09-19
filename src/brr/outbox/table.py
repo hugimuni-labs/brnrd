@@ -6,7 +6,8 @@ every later row is skipped — ``spawn: true`` beside ``to:`` and ``note:`` is a
 spawn, and nothing else. This is exactly the order ``_drain_outbox`` applied on
 ``main`` as a flat run of ``if <selector>: … continue``:
 
-    runner_policy › config_change › respawn › spawn › ask › submit › to › stop
+    runner_policy › config_change › halt › respawn › spawn › ask › submit › to
+    › stop
     › note › await › hold › [land › fold › topic › mark › stake › cut-at] › cut
     › gate › event
 
@@ -17,7 +18,18 @@ Two properties of that order are kept on purpose and named here:
 - **``topic:`` is a verb only as an op** (``new`` · ``split`` · ``merge`` ·
   ``retire`` · ``show`` · ``assign``). A bare slug is the act's topic
   (move 5c) and the file falls through to the rows that deliver it.
-- **``cut:`` falls through.** An accepted bolt pops ``event``/``gate``, may set
+- **``halt:`` outranks every other verb but the two policy proposals**, and
+  it is strict about its own keys: ``halt_verb.parse_halt`` refuses any field
+  outside its grammar *by name*, so a file that says ``halt:`` beside
+  ``spawn:`` or ``event:`` is refused whole rather than silently swallowing
+  the other verb's request. ``respawn:`` sits directly below it because
+  ``respawn:`` retires **into** it (design-the-four-stops.md) — the older
+  verb still routes for the dashboard tap and the strand mint, and
+  ``halt:``'s successor is minted through its machinery.
+
+- **``cut:`` falls through.** So does an accepted ``halt:``, for the same
+  reason and through the same seam: it pops its own keys and hands the
+  announcement to the delivery rows below. An accepted bolt pops ``event``/``gate``, may set
   ``gate`` to the notify fallback, and hands the rewritten file to the rows
   after it (``gate``, then ``event``) — the handler returns ``then=``.
 
@@ -61,6 +73,10 @@ def _selects_runner_policy(fm: dict) -> object:
 
 def _selects_config_change(fm: dict) -> object:
     return daemon._config_change_requested(fm)
+
+
+def _selects_halt(fm: dict) -> object:
+    return "halt" in fm
 
 
 def _selects_respawn(fm: dict) -> object:
@@ -145,6 +161,7 @@ def _selects_gate(fm: dict) -> object:
 ROWS: tuple[Row, ...] = (
     Row("runner_policy", _selects_runner_policy, verbs.handle_runner_policy),
     Row("config_change", _selects_config_change, verbs.handle_config_change),
+    Row("halt", _selects_halt, verbs.handle_halt),
     Row("respawn", _selects_respawn, verbs.handle_respawn),
     Row("spawn", _selects_spawn, verbs.handle_spawn),
     Row("ask", _selects_ask, verbs.handle_ask),

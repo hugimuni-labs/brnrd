@@ -2,7 +2,7 @@
 
 import pytest
 
-from brr.run import STATUSES, TERMINAL_STATUSES, Run, list_runs
+from brr.run import HALTED_STATUS, STATUSES, TERMINAL_STATUSES, Run, list_runs
 
 
 class TestRunFromEvent:
@@ -75,8 +75,22 @@ class TestPersistence:
     def test_status_vocabulary_and_terminal_subset(self):
         assert STATUSES == (
             "pending", "running", "done", "error", "held", "stopped", "released",
+            "halted",
         )
-        assert TERMINAL_STATUSES == {"done", "error", "stopped", "released"}
+        assert TERMINAL_STATUSES == {
+            "done", "error", "stopped", "released", "halted",
+        }
+
+    def test_halted_is_terminal_and_held_is_not(self):
+        """`halted` (design-the-four-stops.md §The two verbs) is the seat's
+        own ending, and the difference from `held` is the whole verb:
+        nothing resumes a halted run, so every reader that asks "can this
+        still collect / should a janitor touch it" gets the right answer
+        from the status word alone — `_spawn_parent_still_collecting` and
+        `resource_hold.run_is_held` both key on exactly this membership."""
+        assert HALTED_STATUS in TERMINAL_STATUSES
+        assert HALTED_STATUS in STATUSES
+        assert "held" not in TERMINAL_STATUSES
 
     def test_save_and_load(self, tmp_path):
         run = Run(

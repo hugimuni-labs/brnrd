@@ -31,8 +31,23 @@ from typing import Any
 #: outcome the way ``done``/``error`` are: a held run resumes
 #: (an explicit operator message, or a measured provider reset) rather
 #: than ending.
-STATUSES = ("pending", "running", "done", "error", "held", "stopped", "released")
-TERMINAL_STATUSES = frozenset({"done", "error", "stopped", "released"})
+#: ``"halted"`` (design-the-four-stops.md §"The two verbs") is the seat's
+#: own ending: a run that chose to stop being, with a reason on record and
+#: either a successor's brief or a ``resumable:`` note saying what would
+#: pick the work back up. Terminal in the full sense ``"held"`` is not —
+#: nothing resumes a halted run; the next message mints a new seat, which
+#: is exactly what makes ending cheap enough to allow. It joins ``stopped``
+#: and ``released`` as a terminal outcome that is not ``done``: the run
+#: ended on purpose, and whether its work was finished is a separate
+#: question the record answers.
+STATUSES = (
+    "pending", "running", "done", "error", "held", "stopped", "released",
+    "halted",
+)
+HALTED_STATUS = "halted"
+TERMINAL_STATUSES = frozenset({
+    "done", "error", "stopped", "released", HALTED_STATUS,
+})
 _ENV_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _EVENT_META_FIELDS = {
     "id", "body", "source", "status", "_path", "created", "branch", "env",
