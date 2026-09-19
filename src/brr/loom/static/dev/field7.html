@@ -58,6 +58,14 @@ const FEEDS=['/loom/state.json','http://127.0.0.1:7777/loom/state.json'];
 const MONO='ui-monospace,Menlo,SFMono-Regular,monospace';
 const FONT_PX=+(Q.get('px')||13);
 const FX=Q.get('fx')!=='off', PERF=Q.get('perf')==='1';
+// The pass is weighted, not just on/off. The maintainer, 2026-09-19: *"I
+// really like the fx, but it is waaaay too heavy."* He likes it — so this
+// dims it rather than removing it, and `?fx=heavy` restores the original.
+// The run's own §5.11 already conceded the pass makes nothing faster; that
+// is the argument for keeping it *cheap*, not for keeping it loud.
+const HEAVY=Q.get('fx')==='heavy';
+const GHOST_PEAK=HEAVY?0.7:0.34, GHOST_HALFLIFE=HEAVY?160:110;
+const BLOOM_ALPHA=HEAVY?0.55:0.26, BLOOM_BLUR=HEAVY?6:4;
 
 // ── the colour law ── amber warm · ice his-and-cold · black absent · torn unmeasured
 const A='#f2b134', AH='#ffd166', I='#8fd3ff', INK='#e8dcc0', DIM='#8f8470', ABS='#4a3f30', BLK='#2a2218', TORN='#6e4b2a', RED='#ff6b4a';
@@ -174,7 +182,11 @@ function ingest(d){S=d;const m={rooms:new Map(),files:new Map(),decks:[],drones:
   // events → the console log: each new bead is a sonar return; each heartbeat tick is the scan
   const beads=d.beads||[];const newest=beads.length?beads[beads.length-1]:null;
   if(newest&&lastBeadN>=0&&newest.n>lastBeadN){for(const b of beads){if(b.n<=lastBeadN)continue;
-      const pl=(b.places&&b.places[0])||(b.home_places&&('~/'+b.home_places[0]))||'';const ch=(b.chunks&&b.chunks[0]);
+      // `[]` is truthy in JS, so an empty `home_places` used to render as the
+      // string `~/undefined` — and 238 of 240 beads in a live feed carry an
+      // empty one, so this was the *dominant* path, not an edge case. Test the
+      // element, never the array.
+      const pl=(b.places&&b.places[0])||(b.home_places&&b.home_places[0]&&('~/'+b.home_places[0]))||'';const ch=(b.chunks&&b.chunks[0]);
       say(`${hhmm(b.at)} seat ${b.act||'?'}${pl?' '+pl:''}${ch&&num(ch.from)?':'+ch.from+'-'+ch.to:''}${b.place_kind&&!pl?' · '+b.place_kind:''}`,b.act==='mutate'?AH:A);
       PINGS.push({t:performance.now(),room:pl?(m.files.get(pl)?m.files.get(pl).room:m.rooms.get(pl)):null});}}
   if(newest)lastBeadN=newest.n;
@@ -503,11 +515,11 @@ function frame(now){const dt=Math.min(100,now-(lastT||now));lastT=now;
   if(FX){ // decay, then add the world; after 900 ms of stillness the phosphor is exactly the world (8-bit alpha never reaches zero on its own)
     pg.setTransform(1,0,0,1,0,0);
     pg.globalCompositeOperation='copy';pg.globalAlpha=1;pg.drawImage(world,0,0);pg.globalCompositeOperation='lighter';
-    for(let i=GHOSTS.length-1;i>=0;i--){const gh=GHOSTS[i];const a=0.7*Math.pow(0.5,(now-gh.t)/160);if(a<0.02){GHOSTS.splice(i,1);continue;}pg.globalAlpha=a;pg.drawImage(gh.c,0,0);}
+    for(let i=GHOSTS.length-1;i>=0;i--){const gh=GHOSTS[i];const a=GHOST_PEAK*Math.pow(0.5,(now-gh.t)/GHOST_HALFLIFE);if(a<0.02){GHOSTS.splice(i,1);continue;}pg.globalAlpha=a;pg.drawImage(gh.c,0,0);}
     pg.globalAlpha=1;pg.globalCompositeOperation='source-over';
     g.fillStyle='#070604';g.fillRect(0,0,cv.width,cv.height);
     bg2.setTransform(1,0,0,1,0,0);bg2.clearRect(0,0,bloomC.width,bloomC.height);bg2.drawImage(persist,0,0,bloomC.width,bloomC.height);
-    g.globalCompositeOperation='lighter';g.globalAlpha=.55;g.filter='blur(6px)';g.drawImage(bloomC,0,0,cv.width,cv.height);g.filter='none';g.globalAlpha=1;
+    g.globalCompositeOperation='lighter';g.globalAlpha=BLOOM_ALPHA;g.filter=`blur(${BLOOM_BLUR}px)`;g.drawImage(bloomC,0,0,cv.width,cv.height);g.filter='none';g.globalAlpha=1;
     g.drawImage(persist,0,0);g.globalCompositeOperation='source-over';
     g.fillStyle=g.createPattern(scan,'repeat');g.fillRect(0,0,cv.width,cv.height);
     const v=g.createRadialGradient(cv.width/2,cv.height/2,cv.height*.35,cv.width/2,cv.height/2,cv.height*.95);v.addColorStop(0,'rgba(0,0,0,0)');v.addColorStop(1,'rgba(0,0,0,.55)');g.fillStyle=v;g.fillRect(0,0,cv.width,cv.height);
