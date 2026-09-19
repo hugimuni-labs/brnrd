@@ -302,8 +302,11 @@ def test_place_page_scoped_to_one_run_carries_only_that_run(machine):
     empty, _ = pages.place_page(machine["repo"], machine["home"], "src/brr/real.py", snapshot, run=stranger)
     assert empty["scope"] == stranger and empty["scope_known"] is False
     assert empty["attention"] == [] and empty["beads"] == [] and empty["passes"] == []
-    # the file itself is still the file: scoping the record does not blank the text
-    assert empty["text"] == whole["text"]
+    assert whole["text"]["text"] == "print('real')"
+    assert mine["text"] == whole["text"]  # positive control: current source remains readable
+    assert mine["text_basis"] == "current-checkout"
+    assert empty["text"] is None
+    assert empty["text_basis"] == "unavailable-for-pass"
 
 
 def test_pass_page_names_its_own_bound(kid_contract):
@@ -318,3 +321,18 @@ def test_pass_page_says_how_deep_its_place_scan_went(kid_contract):
     # the scan's bottom is a bound a reader compares to the run's whole life
     assert page["places_scanned"] <= page["bead_total"]
     assert all("path" in e and "touches" in e for e in page["places"])
+
+
+def test_historical_place_never_reads_current_text(machine, monkeypatch):
+    snapshot = state.build(machine["repo"], machine["home"], now=NOW)
+    current, _ = pages.place_page(machine["repo"], machine["home"], "src/brr/real.py", snapshot, run=RUN)
+    assert current["text"]["text"]  # a real, readable source exists
+    snapshot["run"]["id"] = OLD
+    def forbidden(*args):
+        pytest.fail("historical inspection must not read the current checkout")
+    monkeypatch.setattr(pages, "file_text", forbidden)
+    past, _ = pages.place_page(machine["repo"], machine["home"], "src/brr/real.py", snapshot, run=RUN)
+    assert past["scope_known"] is True
+    assert past["attention"]
+    assert past["text"] is None
+    assert past["text_basis"] == "unavailable-for-pass"

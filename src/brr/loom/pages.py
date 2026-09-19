@@ -754,7 +754,11 @@ def place_page(
     inspected, today's bands lit over it. ``scope`` echoes the run back so a
     caller cannot mistake which question it asked; ``scope_known`` is false
     when that run left no boundaries to read, so an empty page reads as *no
-    record* rather than *no work*."""
+    record* rather than *no work*. Text is current-checkout only: a scope
+    other than the live run returns ``text=None`` and
+    ``text_basis="unavailable-for-pass"``. Recorded attention remains
+    available, without a present-day file length supplied for whole-file
+    ranges. No verified historical source snapshot is stored here."""
     where = st.locate(repo_root, account_home)
     place = _clean_place(path)
     if place is None:
@@ -809,7 +813,12 @@ def place_page(
             inside = file_path.is_file()
         except (OSError, ValueError):
             inside = False
-    text = file_text(file_path, text_from, text_to) if inside else None
+    historical = bool(scope and scope != (state.get("run") or {}).get("id"))
+    # A run scopes the attention, not a source snapshot. The recorded ranges
+    # span edits and revisions; HEAD (even a commit made during the run) is
+    # not a verified version of those lines. Do not read live text as history.
+    text = file_text(file_path, text_from, text_to) if inside and not historical else None
+    text_basis = "unavailable-for-pass" if historical else "current-checkout"
     url = gh_url(file_path, root, read) if inside else None
     total = (text or {}).get("total")
     ranges: list[dict] = []
@@ -841,6 +850,7 @@ def place_page(
         "path": place,
         "scope": scope,
         "scope_known": scope_known,
+        "text_basis": text_basis,
         "kind": "home" if is_home else "file",
         "tree": tree_kind,
         "heat": (entry or {}).get("heat"),

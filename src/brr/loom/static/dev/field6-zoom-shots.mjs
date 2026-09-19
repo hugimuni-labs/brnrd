@@ -91,43 +91,16 @@ try{
 
   // ── rung 3 · the lines ─────────────────────────────────────────────────
   await p.keyboard.press('Enter');
-  // the leaf fetches twice by design (the file's record, then the band's
-  // window); wait for the window rather than guessing at a sleep
-  await p.waitForFunction(()=>ZOOM.leaf&&ZOOM.win&&ZOOM.PLACE.size>=2&&
-    [...ZOOM.PLACE.values()].every(v=>v.state==='ok'),null,{timeout:25000});
+  // A historical pass has no verified source snapshot. The leaf refuses
+  // before requesting text, including against an older daemon that would
+  // return today's checkout. Current text is exercised by readings-shots.
   await settle(900);
-  R.lines=await p.evaluate(()=>{
-    const w=ZOOM.win||{}, key=[...ZOOM.PLACE.keys()].find(k=>k.endsWith(`|${w.a||''}|${w.b||''}`));
-    const pg=ZOOM.PLACE.get(key)||{};
-    const d=pg.d||{};
-    return {rung:ZOOM.rung(),leaf:ZOOM.leaf,state:pg.state,key,
-      scope:d.scope,scope_known:d.scope_known,
-      bands:(d.attention||[]).length,
-      measured:(d.attention||[]).filter(b=>b.src==='measured').length,
-      parsed:(d.attention||[]).filter(b=>b.src==='parsed').length,
-      mixed:(d.attention||[]).filter(b=>b.src==='mixed').length,
-      unranged:d.unranged,total:(d.text||{}).total,
-      text:((d.text||{}).text||'').split('\n').length};});
+  R.lines=await p.evaluate(()=>({rung:ZOOM.rung(),leaf:ZOOM.leaf,
+    frozen:ZOOM.frozen(),requests:ZOOM.PLACE.size}));
   assert.equal(R.lines.rung,3);
-  assert.equal(R.lines.state,'ok','the leaf must actually reach /loom/page/place');
-  assert.equal(R.lines.scope,R.frozen.pass,'the leaf is scoped to the pass in the frame');
-  assert.ok(R.lines.text>1,'positive control: the leaf must have real lines to draw');
-  // it opens WHERE THE WORK IS, not at the file's first page
-  R.opened=await p.evaluate(()=>({win:ZOOM.win,bands:(ZOOM.bands||[]).length,
-    band:ZOOM.band,kind:(ZOOM.bands||[])[ZOOM.band]?.kind}));
-  assert.ok(R.opened.win&&R.opened.win.a>1,'the leaf opens on a band, not on line 1');
-  assert.equal(R.opened.kind,'edit','it opens on a write band when the pass has one');
-  assert.ok(R.opened.bands>1,'the rail keeps the whole file\'s bands while a window is open');
-  await p.screenshot({path:out+'/04-lines.png'});
-  await p.keyboard.press(']');
-  await p.waitForFunction(()=>ZOOM.PLACE.size>=3&&
-    [...ZOOM.PLACE.values()].every(v=>v.state==='ok'),null,{timeout:25000});
-  await settle(900);
-  R.band=await p.evaluate(()=>({band:ZOOM.band,win:ZOOM.win,keys:[...ZOOM.PLACE.keys()].length,
-    bands:(ZOOM.bands||[]).length}));
-  assert.notDeepEqual(R.band.win,R.opened.win,'] moves the window to another band');
-  assert.equal(R.band.bands,R.opened.bands,'and the rail it walks does not shrink');
-  await p.screenshot({path:out+'/05-lines-band.png'});
+  assert.equal(R.lines.frozen,true);
+  assert.equal(R.lines.requests,0,'historical text is refused before fetch');
+  await p.screenshot({path:out+'/04-lines-unavailable.png'});
 
   // ── esc steps out exactly one rung, four times ─────────────────────────
   R.ladder=[];
