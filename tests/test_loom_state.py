@@ -696,10 +696,38 @@ def test_enrich_warp_and_footprints_both_land_in_merge_order(tmp_path):
 
 
 def test_body_origin_records_resume_intent_without_inventing_a_token_split(machine):
+    # The source is dispatch's own receipt, not `run.md`: brnrd#2038 strips the
+    # resume claim from the manifest, so a meta reader would be permanently
+    # blind here (and, while the keys existed, forgeable by whoever could write
+    # the file). `mode: native` is the door dispatch actually took.
     first = state.build(machine["repo"], machine["home"], now=NOW)
     assert first["run"]["body_origin"]["native_resume_requested"] is None
-    md = machine["brr"] / "runs" / RUN / "run.md"
-    md.write_text(md.read_text().replace("runner_name: claude-fable", "runner_name: claude-fable\nresume_native_session_id: private-session\nresume_native_provider: claude"))
+    # Written through dispatch's own writer, never by hand: the receipt only
+    # exists because `worker/dispatch` writes it, and a hand-forged fixture
+    # would keep this test green if that writer were ever removed.
+    from types import SimpleNamespace
+
+    from brr import run_context
+    run_dir = machine["brr"] / "runs" / RUN
+    run_context.write_boot_inheritance(
+        machine["brr"], SimpleNamespace(id=RUN), 1,
+        {"mode": "native", "provider": "claude"},
+    )
+    assert (run_dir / "boot-inheritance-1.json").is_file()
     resumed = state.build(machine["repo"], machine["home"], now=NOW)
     assert resumed["run"]["body_origin"] == {"native_resume_requested": True, "provider": "claude"}
-    assert "private-session" not in json.dumps(resumed["run"])
+    # positive control: a prose wake is not a resume, and says so as `None`
+    run_context.write_boot_inheritance(
+        machine["brr"], SimpleNamespace(id=RUN), 1,
+        {"mode": "prose", "reason": "no mountable blocks"},
+    )
+    prose = state.build(machine["repo"], machine["home"], now=NOW)
+    assert prose["run"]["body_origin"] == {"native_resume_requested": None, "provider": None}
+    # no session address reaches the feed by any path
+    md = machine["brr"] / "runs" / RUN / "run.md"
+    md.write_text(md.read_text().replace(
+        "runner_name: claude-fable",
+        "runner_name: claude-fable\nresume_native_session_id: private-session",
+    ))
+    leaked = state.build(machine["repo"], machine["home"], now=NOW)
+    assert "private-session" not in json.dumps(leaked["run"])
