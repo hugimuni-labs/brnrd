@@ -258,6 +258,8 @@ def prepare(
         account.context_home_root(account_context) if account_context else None,
         runs_dir,
     )
+    resume_session_id = None
+    resume_provider = ""
     if resource_hold.is_handover(event):
         # A handover asks for a *successor*. Its carry-forward body is the
         # whole inheritance, and the claim the parked seat armed is not its
@@ -266,8 +268,8 @@ def prepare(
     else:
         claim = pending_resume.consume(seat_home, conversation_key=conv_key)
         if claim:
-            task.meta["resume_native_session_id"] = claim["session_id"]
-            task.meta["resume_native_provider"] = claim.get("provider") or ""
+            resume_session_id = claim["session_id"]
+            resume_provider = claim.get("provider") or ""
     if is_home_root:
         task.meta["root_kind"] = "home"
         task.meta["forge_lane"] = False
@@ -1077,6 +1079,8 @@ def prepare(
         trace_dirs=trace_dirs,
         seen_containers=seen_containers,
         run_started_monotonic=run_started_monotonic,
+        resume_native_session_id=resume_session_id,
+        resume_native_provider=resume_provider,
         lane=Lane(
             choice=runner_choice,
             name=runner_name,

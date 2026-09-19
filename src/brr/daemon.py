@@ -14562,7 +14562,10 @@ _HOLD_ACCUMULATE_ONLY_SOURCES = frozenset({
 _HOLD_DEFER_SECONDS = 60.0 * 60.0 * 24.0 * 365.0 * 5.0
 
 
-def _resume_session_for_runner(task: Run, runner_choice: Any) -> str | None:
+def _resume_session_for_runner(
+    task: Run, runner_choice: Any, *, session_id: str | None = None,
+    provider: str = "",
+) -> str | None:
     """The held session this dispatch may hand its Shell — or ``None``.
 
     A hold records the *provider* that owns its session. A resume that
@@ -14574,10 +14577,10 @@ def _resume_session_for_runner(task: Run, runner_choice: Any) -> str | None:
     ``resume_cold_reason`` so the card can say why the seat did not wake
     warm.
     """
-    session_id = task.meta.get("resume_native_session_id")
+    # Only the in-memory claim consumed by prepare can authorize a resume.
+    # Run manifests are observations, never invocation authority.
     if not session_id:
         return None
-    provider = str(task.meta.get("resume_native_provider") or "")
     chosen = _resource_hold_provider_for_runner(
         getattr(runner_choice, "shell", None) or getattr(runner_choice, "name", None)
     )

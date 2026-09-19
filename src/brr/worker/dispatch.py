@@ -18,6 +18,7 @@ from .. import prompts
 from .. import protocol
 from .. import release_availability
 from .. import run_context
+from .. import runner
 from .. import runner_auth_health
 from .. import runner_quota
 from .. import transcript
@@ -176,12 +177,45 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
     # The flag survives, and it is not vestigial: it is the control arm. Every
     # future claim about the boot is measured against `boot.mount=false`,
     # which is also why the prose path must keep working, byte for byte.
+    # Resolve once, before choosing the inheritance door. A refused claim must
+    # not suppress the environment mount, nor reappear from mutable run meta.
+    native_session_id = (
+        daemon._resume_session_for_runner(
+            task, runner_choice, session_id=p.resume_native_session_id,
+            provider=p.resume_native_provider,
+        ) if attempt == 1 and not cfg.get("runner_cmd") else None
+    )
+    configured_flags = runner.configured_resume_flags(cfg)
+    if attempt == 1 and configured_flags:
+        daemon._record_outbox_notice(
+            outbox_dir, kind="advisory", lifetime="standing",
+            text=(
+                "runner_cmd carries its own resume syntax ("
+                + ", ".join(configured_flags)
+                + "); the configured command is honored. brnrd does not "
+                  "control its transcript inheritance."
+            ),
+        )
+    inheritance: dict[str, Any] = {"mode": "prose"}
+    if cfg.get("runner_cmd"):
+        # Pinned commands ignore extra_runner_args, including mount argv.
+        # Subtracting mounted blocks here would silently lose the environment.
+        inheritance.update(mode="runner_cmd", resume_flags=configured_flags)
+    elif native_session_id:
+        inheritance.update(mode="native", provider=p.resume_native_provider)
+    elif p.resume_native_session_id and attempt == 1:
+        inheritance["cold_reason"] = task.meta.get("resume_cold_reason", "")
+    if native_session_id:
+        task.meta["native_resume_requested"] = True
+    elif attempt == 1:
+        task.meta.pop("native_resume_requested", None)
     boot_mount = bool(cfg.get("boot.mount", True))
     mount_shell = str(task.meta.get("runner_shell") or "")
     mount_sink: dict[str, str] | None = (
-        {} if boot_mount and mount_shell in transcript.MOUNTED_SHELLS else None
+        {} if boot_mount and mount_shell in transcript.MOUNTED_SHELLS
+        and not cfg.get("runner_cmd") else None
     )
-    if task.meta.get("resume_native_session_id"):
+    if native_session_id:
         # A native resume *is* the transcript: the Shell reopens the
         # parked session itself (`runner._insert_claude_resume`), so
         # forging and `--fork-session`-mounting a second one would
@@ -288,6 +322,7 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
     )
 
     if mount_sink:
+        seed_receipt: dict[str, Any] = {}
         try:
             session_id = transcript.mount_claude_session(
                 boot_score,
@@ -299,8 +334,10 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
                 # `EnvBackend.session_seed_home`); `SandboxEnv` relocates
                 # the seed into the VM's real HOME at invoke time.
                 home=env_backend.session_seed_home(env_ctx),
+                receipt=seed_receipt,
             )
             resume_args = transcript.resume_argv(session_id)
+            inheritance.update(mode="mount", seed=seed_receipt)
             print(f"[brnrd] boot mounted as transcript: session {session_id}")
         except Exception as exc:  # noqa: BLE001 — fail closed, never silently
             # The mounted blocks have already left the prose. If the mount did
@@ -309,6 +346,7 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
             # boot*. Rebuild the prose prompt. A boot that cannot mount must
             # degrade to the boot that always worked, out loud.
             print(f"[brnrd] boot transcript mount failed ({exc}) — prose boot")
+            inheritance.update(mode="prose", reason="mount failed", error=str(exc))
             # Same `block_text_sink` object, deliberately: this rebuild
             # re-runs every `_take` call with `_mount_sink=None`, so every
             # key it touches overwrites the first pass's mounted-text
@@ -323,6 +361,14 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
                 _block_text_sink=block_text_sink,
                 **_prompt_kwargs,
             )
+
+    if inheritance["mode"] == "prose" and "reason" not in inheritance:
+        inheritance["reason"] = (
+            "disabled" if not boot_mount else
+            "unsupported Shell" if mount_shell not in transcript.MOUNTED_SHELLS else
+            "no mountable blocks"
+        )
+    run_context.write_boot_inheritance(brr_dir, task, attempt, inheritance)
 
     if attempt == 1:
         # Persist the assembled prompt so "what did this wake see?" has
@@ -414,4 +460,5 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
         prompt=prompt,
         started_monotonic=attempt_started_monotonic,
         started_wall=attempt_started_wall,
+        resume_native_session_id=native_session_id,
     )
