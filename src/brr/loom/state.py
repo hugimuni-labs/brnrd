@@ -237,11 +237,13 @@ def read_shuttle(account_home: Path | None) -> dict[str, Any] | None:
 class _Live:
     """What the live run resolves to: its manifest, outbox and portal."""
 
-    def __init__(self, run_id: str, run: Any, outbox_dir: Path | None, portal: dict[str, Any]):
+    def __init__(self, run_id: str, run: Any, outbox_dir: Path | None, portal: dict[str, Any],
+                 run_dir: Path | None = None):
         self.run_id = run_id
         self.run = run
         self.outbox_dir = outbox_dir
         self.portal = portal
+        self.run_dir = run_dir
 
     @property
     def meta(self) -> dict[str, Any]:
@@ -297,7 +299,7 @@ def find_live(brr_dir: Path, shuttle: Mapping[str, Any] | None) -> _Live | None:
     outbox_dir, portal = find_outbox(brr_dir, run_id, run)
     if run is None and outbox_dir is None:
         return None
-    return _Live(run_id, run, outbox_dir, portal)
+    return _Live(run_id, run, outbox_dir, portal, run_dir=brr_dir / "runs" / run_id)
 
 
 def _started(run: Any) -> str | None:
@@ -368,6 +370,36 @@ def read_card(outbox_dir: Path | None) -> dict[str, Any] | None:
     }
 
 
+def _body_origin(run_dir: Path | None) -> dict[str, Any]:
+    """Whether this run's dispatch asked its Shell to reopen a native scroll.
+
+    Read from the per-attempt ``boot-inheritance-*.json`` receipts, whose
+    ``mode`` records the door dispatch actually chose. ``None`` is *unknown* —
+    an older run wrote no receipt, and absence is never proof of a fresh body.
+    No session identifier is published, and no token split is implied.
+    """
+    if run_dir is None:
+        return {"native_resume_requested": None, "provider": None}
+    native = None
+    try:
+        paths = sorted(run_dir.glob("boot-inheritance-*.json"))
+    except OSError:
+        paths = []
+    for path in paths:
+        record = _read_json(path)
+        if not isinstance(record, dict) or not record.get("mode"):
+            continue
+        if record.get("mode") == "native":
+            native = record
+            break
+    if native is None:
+        return {"native_resume_requested": None, "provider": None}
+    return {
+        "native_resume_requested": True,
+        "provider": str(native.get("provider") or "") or None,
+    }
+
+
 def read_run(live: _Live | None, now_epoch: float) -> dict[str, Any] | None:
     """``run`` — the live run's facet. Name/mood/topic are its outbox control
     files (``.name``, ``.mood``'s first line, ``.topic``); the topic falls back
@@ -401,10 +433,15 @@ def read_run(live: _Live | None, now_epoch: float) -> dict[str, Any] | None:
         # This is invocation intent, not an attestation of what the Shell
         # reopened. No token measurement separates inherited scroll from the
         # new prompt. Absence is unknown, never proof of a fresh body.
-        "body_origin": {
-            "native_resume_requested": bool(meta.get("resume_native_session_id")) or None,
-            "provider": meta.get("resume_native_provider") or None,
-        },
+        #
+        # The source is `boot-inheritance-<attempt>.json`, the receipt
+        # `worker/dispatch` writes at the moment it chooses the inheritance
+        # door — never run meta. brnrd#2038 removed the resume claim from
+        # `run.md` on purpose (`run._RESUME_CLAIM_FIELDS`): a manifest is an
+        # observation, and a *writable* one, so a reader that trusted it both
+        # went blind when the keys left and could be made to lie while they
+        # were there. The receipt carries the decision and no address.
+        "body_origin": _body_origin(live.run_dir),
     }
 
 
