@@ -367,6 +367,19 @@ function selection(){
   $('map-caption').textContent=width<620?`RING ${roomById.get(selected)?.ring??0}`:`THE WARP / RING ${roomById.get(selected)?.ring??0} · DEPTH IS DEPENDENCY, ANGLE IS TOPIC`;
 }
 function receiptText(receipt){if(typeof receipt==='string')return receipt;return [receipt.kind,receipt.number!=null?`#${receipt.number}`:null,receipt.action,receipt.commit?.slice(0,8)].filter(Boolean).join(' ')||'receipt recorded';}
+// The header's own honesty: which code is being served, and whether a newer
+// one is already on disk. A long-running loom server holds the modules it
+// imported at start — editing a file changes nothing it serves. The
+// maintainer hit exactly that ("field6.html serves the old version
+// apparently"), and so did I, on a server running out of a worktree git had
+// already unregistered. A restart is the whole remedy, so the word says it.
+function buildLine(){
+  const where = state.repo || 'local', build = state.build;
+  if (!build) return `${where} · live`;
+  const commit = build.commit ? ` · ${String(build.commit).slice(0,7)}` : '';
+  return build.stale ? `${where}${commit} · STALE — restart to serve your changes`
+                     : `${where}${commit} · live`;
+}
 function renderPanels(){
   const shuttle=state.shuttle||{},last=array(state.beads).at(-1), place=shuttle.state==='listening'?'shed':shuttle.place||placeOf(last)||'shed';
   $('glyph').textContent=state.run?.mood_glyph||'b·_·d';$('glyph').title=`Locate resident: ${place}`;$('state').textContent=shuttle.state||'unmeasured';
@@ -548,7 +561,10 @@ function ingest(next){state=next;const first=!initialized;if(first)resize();buil
   if(first){initialized=true;const door=rooms.find(r=>r.item?.type==='decision'&&r.item.state==='ready');choose(door?.id||'shed',false);frameFirstView();selection();
     // The glass settles after the panels take their text: frame once more on the layout that exists.
     requestAnimationFrame(()=>{resize();frameFirstView();});}
-  $('source').textContent=fixture?`${fixture.toUpperCase()} FIXTURE · frozen`:`${state.repo||'local'} · live`;
+  $('source').textContent=fixture?`${fixture.toUpperCase()} FIXTURE · frozen`:buildLine();
+  // A stale server is the one state the header must not render as ordinary:
+  // everything below it is drawn from code the reader already replaced.
+  $('source').classList.toggle('stale',!fixture&&state.build?.stale===true);
   canvas.dataset.ready='true';canvas.dataset.actor=actor;canvas.dataset.rooms=String(rooms.length);requestDraw();
 }
 let drag=null;

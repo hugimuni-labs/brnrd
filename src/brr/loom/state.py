@@ -1595,6 +1595,76 @@ def locate(repo_root: Path | str, account_home: Path | str | None) -> Where:
     return Where(_roots(Path(repo_root), brr_dir), home, brr_dir)
 
 
+#: When this process imported its code. A long-running loom server holds the
+#: modules it imported at start: editing a source file changes nothing it
+#: serves until it restarts. The maintainer hit exactly this on 2026-09-19
+#: — *"where do we serve the updated ui? field6.html serves the old version
+#: apparently"* — and the honest repair is not hot-reload (a daemon that
+#: swaps its own code mid-beat is a worse problem) but **saying so**.
+_PROCESS_STARTED = time.time()
+
+#: The trees whose mtimes decide staleness: the Python that builds the feed
+#: and the assets the browser is handed. Static files are served from disk
+#: per request, so they are *never* stale — they are here because a reader
+#: asking "is my change live?" does not care which half was the problem.
+_BUILD_WATCH = ("loom", "hooks.py", "hud.py", "daemon.py")
+
+
+def _newest_source_mtime(package_root: Path) -> float:
+    """Newest mtime under the watched trees, or ``0.0`` if nothing reads."""
+    newest = 0.0
+    for name in _BUILD_WATCH:
+        target = package_root / name
+        try:
+            if target.is_dir():
+                for child in target.rglob("*.py"):
+                    newest = max(newest, child.stat().st_mtime)
+                for child in (target / "static").rglob("*"):
+                    if child.is_file():
+                        newest = max(newest, child.stat().st_mtime)
+            elif target.exists():
+                newest = max(newest, target.stat().st_mtime)
+        except OSError:
+            continue
+    return newest
+
+
+def read_build(repo_root: Path) -> dict[str, Any]:
+    """``build`` — which code this process is actually serving.
+
+    ``stale`` is not a guess: it is *a source file on disk is newer than the
+    moment this process imported its code*, which is precisely the condition
+    under which what you are reading is not what you wrote. ``commit`` is the
+    checkout's HEAD, which answers the other half — *is my merge live?*
+    """
+    package_root = Path(__file__).resolve().parent.parent
+    # Explicit try/except, not _safe: a missing .git is the ordinary case for
+    # an account-home screen, and _safe re-raises under BRNRD_LOOM_STRICT,
+    # which every test run sets. An expected absence must not need a strict
+    # mode turned off to stay expected.
+    try:
+        newest = _newest_source_mtime(package_root)
+    except OSError:
+        newest = 0.0
+
+    def _read(rel: str) -> str:
+        try:
+            return (repo_root / rel).read_text(encoding="utf-8").strip()
+        except (OSError, ValueError):
+            return ""
+
+    commit = _read(".git/HEAD")
+    if commit.startswith("ref: "):
+        commit = _read(f".git/{commit[5:].strip()}")
+    return {
+        "commit": (commit[:12] or None),
+        "started": _iso(_PROCESS_STARTED),
+        "source_at": _iso(newest) if newest else None,
+        # A restart is the whole remedy, so the word says it.
+        "stale": bool(newest and newest > _PROCESS_STARTED),
+    }
+
+
 def build(repo_root: Path | str, account_home: Path | str | None, *, now: object = None) -> dict[str, Any]:
     """The loom screen's state — see the module docstring for every source.
 
@@ -1672,9 +1742,11 @@ def build(repo_root: Path | str, account_home: Path | str | None, *, now: object
         "fuel": _safe(lambda: dungeon.read_fuel(brr_dir, outbox_dir, seat_shell, now_epoch), {"buckets": []}),
         "pack": _safe(lambda: dungeon.read_pack(brr_dir, run_id, hud), None),
         "relics": _safe(lambda: dungeon.read_relics(outbox_dir), []),
+        # Which code this process is serving — see read_build.
+        "build": _safe(lambda: read_build(repo_root), {"stale": False}),
     }
 
 
 #: The contract's top-level keys, in order (the tests pin them).
 KEYS = ("at", "beat_ms", "repo", "shuttle", "run", "hud", "heddles", "warp", "beads", "cloth", "tree", "bench",
-        "fuel", "pack", "relics")
+        "fuel", "pack", "relics", "build")
