@@ -50,6 +50,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
+from .. import halts
 from .. import heddles as heddles_mod
 
 #: The screen's beat: one state per beat, never two.
@@ -57,6 +58,13 @@ BEAT_MS = 600
 TRANSITIONS_LAST = 12
 BEADS_LAST = 240
 CLOTH_LAST = 80
+#: How many open-queue halts the feed carries, and how many open items per
+#: row. The queue is a *worklist a reader works from the top*, not an
+#: archive — an uncapped one would make the feed grow without bound for a
+#: surface nobody scrolls. ``queue_total`` always reports the true length,
+#: so a truncated list is never mistaken for a short one.
+HALT_QUEUE_MAX = 12
+HALT_ITEMS_MAX = 8
 DETAIL_CHARS = 160
 TREE_MAX = 500
 BENCH_MAX = 200
@@ -1158,6 +1166,7 @@ def read_cloth(
     where = where or Where(_roots(brr_dir.parent, brr_dir), account_home, brr_dir)
     topics_by_run = _safe(lambda: run_topics(account_home, compiled), {})
     names = _safe(lambda: heddles_mod._topic_names(account_home), {}) if account_home else {}
+    halted = _safe(lambda: _halts_by_run(account_home), {})
     ledger = tail_rows(brr_dir / "run-ledger.jsonl", CLOTH_LAST * 2, lambda r: bool(r.get("run_id")))
     latest: dict[str, dict[str, Any]] = {}
     for row in ledger:
@@ -1221,7 +1230,37 @@ def read_cloth(
                 if live_row.get(key):
                     row[key] = live_row[key]
         row["duration_s"] = _duration(row.get("started"), row.get("ended"))
+        # A run that *halted* did not merely stop being live. `ended` cannot
+        # carry that: it is a timestamp, and three outcomes share it — ran
+        # out, handed over, or was ended with the work declared unfinished.
+        # `null` here means no halt was recorded, never "ended normally".
+        row["halt"] = halted.get(row["run"])
     return {"rows": rows, "trail_limit": TRAIL_PLACES}
+
+
+def _halts_by_run(account_home: Path | None) -> dict[str, dict[str, Any]]:
+    """run id → its halt, newest wins. Only the fields a row renders.
+
+    ``kind`` is the state word the dashboard keys on: ``carried`` (the work
+    continues under a brief) vs ``stopped`` (the work stops here). Read off
+    the ledger rather than the run record because a halt is an account-level
+    fact — the body it ended belongs to one repo, the queue it leaves does
+    not.
+    """
+    index: dict[str, dict[str, Any]] = {}
+    for row in halts.read(account_home):
+        run_id = str(row.get("run") or "")
+        if not run_id:
+            continue
+        index[run_id] = {
+            "kind": row.get("kind") or None,
+            "at": row.get("at") or None,
+            "reason": row.get("reason") or None,
+            "resumable": row.get("resumable") or None,
+            "carry": bool(row.get("carry")),
+            "open_items": len(row.get("open_items") or ()),
+        }
+    return index
 
 
 def _duration(started: Any, ended: Any) -> int | None:
@@ -1595,6 +1634,41 @@ def locate(repo_root: Path | str, account_home: Path | str | None) -> Where:
     return Where(_roots(Path(repo_root), brr_dir), home, brr_dir)
 
 
+def read_halts(account_home: Path | None) -> dict[str, Any]:
+    """``halts`` — the account's ended seats, counted and queued.
+
+    Two numbers and one list, because *a body wearing out* and *work
+    stopping* are different events (``halts.counts``), and a halt with no
+    carry whose open items were not empty is **abandoned work with a stated
+    revival path** — a queue, not a graveyard (``halts.open_queue``). That
+    queue is the whole return on requiring ``resumable:``, and the
+    maintainer made displaying it the condition on allowing a carry-less
+    exit at all (2026-09-19): *"as long as we clearly display it on the
+    main dashboard."*
+
+    Never raises: the ledger is the display's dependency, not the verb's.
+    """
+    rows = halts.read(account_home)
+    queue = halts.open_queue(rows)
+    return {
+        "counts": halts.counts(rows),
+        "queue": [
+            {
+                "run": str(row.get("run") or ""),
+                "at": row.get("at") or None,
+                "repo": row.get("repo") or None,
+                "reason": row.get("reason") or None,
+                "resumable": row.get("resumable") or None,
+                "open_items": [str(item) for item in (row.get("open_items") or ())][:HALT_ITEMS_MAX],
+                "open_items_total": len(row.get("open_items") or ()),
+            }
+            for row in queue[:HALT_QUEUE_MAX]
+        ],
+        "queue_total": len(queue),
+        "queue_limit": HALT_QUEUE_MAX,
+    }
+
+
 def build(repo_root: Path | str, account_home: Path | str | None, *, now: object = None) -> dict[str, Any]:
     """The loom screen's state — see the module docstring for every source.
 
@@ -1672,9 +1746,12 @@ def build(repo_root: Path | str, account_home: Path | str | None, *, now: object
         "fuel": _safe(lambda: dungeon.read_fuel(brr_dir, outbox_dir, seat_shell, now_epoch), {"buckets": []}),
         "pack": _safe(lambda: dungeon.read_pack(brr_dir, run_id, hud), None),
         "relics": _safe(lambda: dungeon.read_relics(outbox_dir), []),
+        # design-the-four-stops.md — halted-without-carry is its own
+        # state, and the queue it leaves is the point of `resumable:`.
+        "halts": _safe(lambda: read_halts(home), {"counts": {}, "queue": [], "queue_total": 0}),
     }
 
 
 #: The contract's top-level keys, in order (the tests pin them).
 KEYS = ("at", "beat_ms", "repo", "shuttle", "run", "hud", "heddles", "warp", "beads", "cloth", "tree", "bench",
-        "fuel", "pack", "relics")
+        "fuel", "pack", "relics", "halts")
