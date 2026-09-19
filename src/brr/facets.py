@@ -595,11 +595,14 @@ def build(
         tokens = allowance.get("tokens")
         spent = allowance.get("spent")
         # "strand" (a `spawn:`-declared ceiling) vs "resident" (the seat's
-        # own standing allowance, slice 2) — carried through so a renderer
-        # can decide whether this facet *replaces* the quota chip (a
-        # strand's shared, lagging quota is not worth a second chip) or
-        # sits *beside* it (the resident's own quota reading is the fact
-        # design-the-continuous-seat.md says must stay separately visible).
+        # own standing allowance, slice 2). It no longer decides whether the
+        # quota chip renders — since 2026-09-19 both chips ride every bar,
+        # a strand's included (:func:`brr.hooks.format_delta`); "a strand's
+        # shared, lagging quota is not worth a second chip" is the rule that
+        # left four codex strands to die against a 5h window their bar never
+        # showed them. `scope` still carries, because the *directive* wording
+        # and the resident's unconfigured-ceiling case both branch on it
+        # (:func:`brr.hooks._allowance_directive`, `_allowance_chip`).
         # Missing/unrecognised defaults to "strand" — every allowance input
         # before slice 2 was a strand's, so this preserves that rendering
         # exactly for any caller that doesn't pass the new key yet.
@@ -651,6 +654,27 @@ def build(
         if stake_projection is not None:
             allowance_facet["stake"] = stake_projection
             allowance_facet["stake_summary"] = stake_mod.chip(allowance.get("stake"))
+
+    # `spend` is dollars — an estimated session cost the Shell hands over —
+    # and Codex exposes no such gauge, so `unimplemented` is the schema's
+    # correct answer there and stays. What was wrong is what that answer
+    # *told the reader*: a run with no dollar gauge read "no spend collector
+    # for this Shell yet" and concluded it could not know what it had
+    # consumed, while `allowance` sat in the same capsule carrying an exact,
+    # live token count off `allowance.collect_spent` (2026-09-19 — four codex
+    # strands died believing this). So when this slot is empty and the
+    # allowance meter is not, the note names the meter that *is* reading.
+    # One meter, never a second: nothing is copied across, only pointed at.
+    if spend_facet.get("status") in (UNIMPLEMENTED, ABSENT):
+        metered = allowance_facet.get("spent") if isinstance(allowance_facet, dict) else None
+        if metered is not None:
+            spend_facet["note"] = (
+                f"{spend_facet['note']} — consumption this run is metered in "
+                f"tokens on the `allowance` facet "
+                f"({allowance_metering.format_tokens(metered)} so far), "
+                "not in dollars here"
+            )
+            spend_facet["metered_by"] = "allowance"
 
     return {
         "runner": _runner_block(

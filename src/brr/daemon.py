@@ -10992,6 +10992,155 @@ def _spawn_strand_ran(task: Run) -> bool:
     return False
 
 
+#: Keys :func:`_capture_exit_quota` stamps, in the order a reader wants them.
+#: Flat scalars on purpose — they ride an event's frontmatter, where a nested
+#: dict is a serialization question nobody should have to ask at reap time.
+EXIT_QUOTA_KEYS = (
+    "spawn_quota_remaining_pct",
+    "spawn_quota_summary",
+    "spawn_quota_shell",
+    "spawn_quota_read_at",
+    "spawn_quota_measured_at",
+    "spawn_quota_source",
+)
+
+
+def _levels_measured_at(levels: "dict[str, object] | None") -> str | None:
+    """The collector's *own* stamp on a level snapshot, or ``None``.
+
+    Not a fallback chain down to "now" — the whole point of carrying this
+    beside :data:`spawn_quota_read_at` is that a reader can tell a reading
+    the collector dated from one the daemon merely *fetched* at reap time.
+    Codex's merged snapshot dates itself (``codex_usage.merge_levels``
+    picks the fresher of probe and rollout); Claude's ``/usage`` scrape
+    does not survive ``_merge_level_snapshots`` with a stamp, so this
+    returns ``None`` there rather than borrowing the context-window
+    collector's clock, which measures a different thing.
+    """
+    if not isinstance(levels, dict):
+        return None
+    for holder in (levels, levels.get("quota")):
+        if isinstance(holder, dict):
+            stamp = str(holder.get("updated_at") or "").strip()
+            if stamp:
+                return stamp
+    return None
+
+
+def _capture_exit_quota(task: Run) -> dict[str, object]:
+    """The binding quota reading for *task*'s own Shell, at the moment it
+    finalized — stamped onto ``task.meta`` and returned for the completion
+    event.
+
+    The measurement this exists for (2026-09-19): a `codex-gpt-6-astra`
+    strand started at 09:55 against a window its boot seed read as
+    ``5h 100% left`` and failed at 10:09:42 with ``failed to record rollout
+    items: thread … not found``. Either it burned a full 5h window in
+    fourteen minutes or it hit an unrelated bug — **and nothing recorded
+    the provider reading at the moment of death**, so "crashed" and "ran
+    out" were the same-looking event. One number, at one moment, and they
+    stop being indistinguishable. (The reading is recorded, never acted
+    on: the maintainer's ruling is "warn but not block", so nothing here
+    refuses, halts, or retries anything.)
+
+    Three properties that are the whole design:
+
+    - **This child's own Shell.** ``_collect_levels`` dispatches on the
+      run's ``runner_name``, so a codex strand's 5h/7d buckets are read
+      from codex and a claude strand's session/week from claude — never
+      the reaping daemon's own bucket, which is a different account
+      window entirely.
+    - **Cache-only** (``refresh=False``). This runs on the daemon's reap
+      path; a blocking ``/usage`` PTY scrape there would stall every other
+      child's completion behind one dead one. The heartbeat keeps both
+      caches warm on a 30s cadence, so "cached" is seconds old in the
+      ordinary case.
+    - **Two clocks, not one.** ``spawn_quota_read_at`` is when the daemon
+      read the gauge; ``spawn_quota_measured_at`` is when the collector
+      says it measured, and is *absent* when the collector states none.
+      A cached reading presented as "at death" with no way to tell its age
+      would be the same lie in a new place.
+
+    Returns ``{}`` for a non-strand, a run with no runner name, or a read
+    that proved nothing — absent stays absent, like every other produce
+    key on this path.
+    """
+    if not _is_strand(getattr(task, "meta", None) or {}):
+        return {}
+    runner_name = str(task.meta.get("runner_name") or "").strip()
+    if not runner_name:
+        return {}
+
+    work_dir = task.meta.get("worktree_path")
+    work_dir = Path(work_dir) if work_dir else None
+    shared_dir: Path | None = None
+    for candidate in (task.meta.get("outbox_path"), task.meta.get("worktree_path")):
+        if not candidate:
+            continue
+        # `<brr>/outbox/<evt>` and `<brr>/worktrees/<run>` are both two
+        # levels under the shared dir; the codex probe cache lives there.
+        parent = Path(str(candidate)).parent.parent
+        if parent.is_dir():
+            shared_dir = parent
+            break
+
+    try:
+        levels, _slots = _collect_levels(
+            runner_name, None, work_dir,
+            refresh=False, shared_dir=shared_dir,
+            codex_thread_id=task.meta.get("codex_thread_id"),
+        )
+    except Exception as exc:  # noqa: BLE001 - a reading is never worth a reap
+        print(f"[brnrd] exit-quota read failed for {task.id}: {exc}")
+        return {}
+    if not isinstance(levels, dict):
+        return {}
+
+    core = str(task.meta.get("runner_core") or task.meta.get("core") or "").strip()
+    pct = runner_quota.binding_quota_remaining_pct(levels, core or None)
+    summary = runner_quota.summary_from_levels(levels)
+    if pct is None and not summary:
+        return {}
+
+    captured: dict[str, object] = {
+        "spawn_quota_read_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    if pct is not None:
+        # Truncated to a whole percent, the same convention the boundary
+        # chip uses (`_quota_buckets` takes `pct.split(".")[0]`) — one
+        # reading should not render two ways. It is also the only shape
+        # that survives the event's frontmatter as a *number*: the parser
+        # round-trips ints and leaves a float as text, and a parent
+        # comparing `spawn_quota_remaining_pct` against a floor should
+        # never have to discover that by hand.
+        captured["spawn_quota_remaining_pct"] = int(float(pct))
+    if summary:
+        captured["spawn_quota_summary"] = " ".join(str(summary).split())
+    shell = "codex" if codex_status.supported(runner_name) else (
+        "claude" if claude_status.supported(runner_name) else ""
+    )
+    if shell:
+        captured["spawn_quota_shell"] = shell
+    measured_at = _levels_measured_at(levels)
+    if measured_at:
+        captured["spawn_quota_measured_at"] = measured_at
+    source = str(levels.get("source") or "").strip()
+    if source:
+        captured["spawn_quota_source"] = source
+
+    task.meta.update(captured)
+    # run.md is the durable half. The completion event is consumed and
+    # retired; the run record is what a post-mortem opens weeks later —
+    # and "nothing recorded the reading at the moment of death" is the
+    # whole defect this closes, so the reading has to outlive the event.
+    if shared_dir is not None:
+        try:
+            task.save(shared_dir / "runs")
+        except Exception as exc:  # noqa: BLE001 - the event still carries it
+            print(f"[brnrd] exit-quota save failed for {task.id}: {exc}")
+    return captured
+
+
 def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     """Land a completion note in the spawning parent's own thread.
 
@@ -11361,6 +11510,40 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
         )
         thin_block = f"\nproduce: {commits_fact} · no branch · {reply_fact}"
 
+    # The reading at death (2026-09-19). Captured for every terminal
+    # strand, because a failure reading is only legible against the ones
+    # that came back fine — but *stated in the prose* only on `error`,
+    # where it is the whole question: did this child run out, or did it
+    # break? Costs one cached read on the reap path.
+    exit_quota = _capture_exit_quota(task)
+    fuel_block = ""
+    if exit_quota and task.status == "error":
+        pct = exit_quota.get("spawn_quota_remaining_pct")
+        parts = [
+            "fuel at exit:",
+            (
+                f"binding quota {pct}% left"
+                if pct is not None
+                else "binding quota unreadable"
+            ),
+        ]
+        if exit_quota.get("spawn_quota_summary"):
+            parts.append(f"({exit_quota['spawn_quota_summary']})")
+        spent = task.meta.get("spawn_allowance_spent")
+        ceiling = task.meta.get("spawn_allowance_tokens")
+        if spent is not None and ceiling:
+            parts.append(
+                f"· allowance {allowance.format_tokens(int(spent))}/"
+                f"{allowance.format_tokens(int(ceiling))}"
+            )
+        read_at = exit_quota.get("spawn_quota_read_at")
+        measured_at = exit_quota.get("spawn_quota_measured_at")
+        parts.append(
+            f"· read {read_at}"
+            + (f", measured {measured_at}" if measured_at else ", collector stated no measure time")
+        )
+        fuel_block = "\n" + " ".join(str(p) for p in parts)
+
     if runner_failed:
         # #633: the provider's own message is the finding here — promote
         # it ahead of the status line rather than burying it in the tail,
@@ -11370,11 +11553,11 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
             if text
             else f"concurrent spawn {task.id} finished: status=runner-failed"
         )
-        summary = f"{summary}{thin_block}"
+        summary = f"{summary}{thin_block}{fuel_block}"
     else:
         summary = (
             f"concurrent spawn {task.id} finished: status={status_label}"
-            f"{stray_block}{contract_block}{thin_block}"
+            f"{stray_block}{contract_block}{thin_block}{fuel_block}"
         )
         if text:
             summary = f"{summary}\n\n{text}"
@@ -11449,6 +11632,12 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     # so the parent's heddles light again at the moment it lands.
     if str(task.meta.get("spawn_topics") or "").strip():
         produce_kwargs["spawn_topics"] = " ".join(str(task.meta["spawn_topics"]).split())
+    # The fuel reading, as flat keys the parent can read without prose —
+    # `_capture_exit_quota` already stamped the same values onto
+    # `task.meta`, so run.md and the event carry one reading, not two.
+    for key in EXIT_QUOTA_KEYS:
+        if exit_quota.get(key) is not None:
+            produce_kwargs[key] = exit_quota[key]
     try:
         completion = protocol.create_event(
             inbox_dir,
