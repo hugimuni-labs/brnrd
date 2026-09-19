@@ -10349,6 +10349,41 @@
   "cloth": {
     "rows": []
   },
+  "halts": {
+    "counts": {
+      "carried": 3,
+      "stopped": 2,
+      "total": 5
+    },
+    "queue": [
+      {
+        "run": "run-260919-0412-k9wq",
+        "at": "2026-09-19T04:58:11Z",
+        "repo": "hugimuni-labs/brnrd",
+        "reason": "the shape was wrong and a successor should not inherit it",
+        "resumable": "re-read design-the-four-stops \u00a74, then start at the drain \u2014 the verb is right, the ledger is not",
+        "open_items": [
+          "the drain's second golden",
+          "the mount's predecessor block",
+          "#2031"
+        ],
+        "open_items_total": 3
+      },
+      {
+        "run": "run-260918-2211-3vtz",
+        "at": "2026-09-18T23:40:02Z",
+        "repo": "hugimuni-labs/brnrd",
+        "reason": "out of quota with the question still open",
+        "resumable": "the measurement stands; pick it up at test_transcript and price the mount",
+        "open_items": [
+          "price the mount"
+        ],
+        "open_items_total": 1
+      }
+    ],
+    "queue_total": 2,
+    "queue_limit": 12
+  },
   "_fixture": {
     "source": "127.0.0.1:7779/loom/state.json",
     "captured_at": "2026-09-16T15:54:06Z",
