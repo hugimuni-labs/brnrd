@@ -190,7 +190,8 @@
     },
     "spend": {
       "kind": "level",
-      "note": "no spend collector for this Shell yet",
+      "metered_by": "allowance",
+      "note": "no spend collector for this Shell yet \u2014 consumption this run is metered in tokens on the `allowance` facet (0 so far), not in dollars here",
       "required": true,
       "status": "unimplemented",
       "summary": null
