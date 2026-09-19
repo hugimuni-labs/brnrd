@@ -450,13 +450,23 @@ def _strand_lines(
         ident = str(child.get("run_id") or child.get("event_id") or "").strip()
         if not ident or ident in finished_ids or str(child.get("event_id") or "") in finished_ids:
             continue
-        line = f"- strand live: {ident}"
+        parked = child.get("status") == "parked"
+        line = f"- strand {'parked' if parked else 'live'}: {ident}"
         title = " ".join(str(child.get("title") or "").split())
         if len(title) > _LEDGER_TITLE_CHARS:
             title = title[:_LEDGER_TITLE_CHARS].rsplit(" ", 1)[0].rstrip(" —-·:,") + "…"
         if title:
             line += f" — {title}"
-        if child.get("status") == "submitted":
+        if parked:
+            # The ledger's own honesty rule: a row that says "live" about a
+            # run whose process has ended is the reading a seat acts on.
+            reason = " ".join(str(child.get("hold_reason") or "").split())
+            waiting = " ".join(str(child.get("waiting_on") or "").split())
+            if reason:
+                line += f" ({reason})"
+            if waiting:
+                line += f", waiting on {waiting}"
+        elif child.get("status") == "submitted":
             line += " (submitted)"
         live.append(line)
 
