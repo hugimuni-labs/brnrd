@@ -1,0 +1,11 @@
+import { chromium } from '/tmp/shotwork/node_modules/playwright/index.mjs';
+const URL=process.env.LOOM_URL||'http://127.0.0.1:7778/loom/dev/field8.html';
+const b=await chromium.launch(); const p=await b.newPage({viewport:{width:1440,height:900},deviceScaleFactor:1});
+const errs=[]; p.on('pageerror',e=>errs.push(String(e))); p.on('console',m=>{ if(m.type()==='error')errs.push(m.text()); });
+await p.goto(URL); await p.waitForTimeout(4500);
+await p.screenshot({path:'/tmp/f8shots/1-schematic.png'});
+await p.keyboard.press('2'); await p.waitForTimeout(900); await p.screenshot({path:'/tmp/f8shots/2-lit.png'});
+await p.keyboard.press('3'); await p.waitForTimeout(900); await p.screenshot({path:'/tmp/f8shots/3-interior.png'});
+const hud=await p.evaluate(()=>document.getElementById('hud').innerText);
+console.log(hud); console.log('errors:',errs);
+await b.close();

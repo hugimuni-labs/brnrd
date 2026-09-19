@@ -46,3 +46,18 @@ black is absent, paused or unknown — an unvisited room is dark, never dim ambe
 and an unmeasured value takes `.unmeasured`, never a grey placeholder. The
 temperature ramp (`temperature`/`tempColor`) has a sharp knee at 18–48 %, so a
 window reads warm or reads cold and the muddy middle is a band, not a resting place.
+
+## field 8 — the streets (greybox)
+
+`field8.html` lays the ground out as the *whole* filesystem tree at real scale:
+a directory is a street (a spine you walk, with a sign), files are rooms in
+rows beside it, subdirectories are streets off it. A drone's walk is a route
+along spines and gutters; the feed's `beads` give this run's hops and every
+cloth row's `trail` wears the corridors. Light is the feed's `heat`; the rest
+is the black silhouette of what nobody visited. The tree itself is not in the
+feed — `python3 src/brr/loom/static/dev/tree-fixture.py <repo> <account-home>`
+writes `fixtures/tree.json` from `git ls-files` (repo · dominion/ surface/ ·
+the knowledge repo as `knowledge/`). Serve from the checkout whose `.brr` you
+want to watch: `PYTHONPATH=<worktree>/src python3 -m brr loom --port 7778`,
+open `/loom/dev/field8.html`. `1 2 3` = all · lit · the resident; `/` = search.
+`node src/brr/loom/static/dev/field8-shots.mjs` captures the three.
