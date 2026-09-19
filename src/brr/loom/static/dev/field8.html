@@ -1,0 +1,219 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>field 8 · the streets — greybox</title>
+<style>
+html,body{margin:0;height:100%;background:#0b0b0a;color:#bdb9ae;font:12px/1.35 ui-monospace,Menlo,monospace;overflow:hidden}
+canvas{display:block}
+#hud{position:fixed;left:14px;top:12px;pointer-events:none;white-space:pre;color:#8d897d}
+#hud b{color:#d9d3c2;font-weight:600}
+#plaque{position:fixed;left:14px;bottom:14px;max-width:520px;border:1px dashed #4a4741;padding:8px 10px;background:rgba(11,11,10,.85);display:none;white-space:pre}
+#plaque b{color:#f0a020;font-weight:600}
+#search{position:fixed;right:14px;top:12px;border:1px dashed #4a4741;padding:6px 8px;background:rgba(11,11,10,.85);display:none}
+#search input{background:none;border:none;color:#8fd0ff;font:inherit;outline:none;width:260px}
+#legend{position:fixed;right:14px;bottom:14px;color:#5e5b53;white-space:pre;text-align:right;pointer-events:none}
+</style>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<div id="plaque"></div>
+<div id="search">/ <input id="q" placeholder="a heddle you have not kept"></div>
+<div id="legend">solid = in the world · dashed = HUD
+amber = a visit, decaying · ice = your hand · black = never visited
+drag · wheel · 1 2 3 zoom · click a room · / search · esc</div>
+<script>
+// ---------- the greybox: the ground is the tree ----------
+// law 1 one ground · law 2 light is a visit · law 3 a drone is never lost
+// law 4 rooms don't move: the layout is a function of the whole tree (fixtures/tree.json),
+//        the fog only lifts — nothing moves when a room is first seen
+// streets: a directory is a spine (its corridor) with a sign; files are rooms in rows
+//        beside it; subdirectories are streets off it. a walk = a route along spines.
+const FEEDS=['/loom/state.json','http://127.0.0.1:7791/loom/state.json','http://127.0.0.1:7777/loom/state.json'];
+const TREE='/loom/dev/fixtures/tree.json';
+const U=10,G=3,SP=6,SIGN=11,ROWMAX=10;          // room unit · gutter · spine width · sign height · rooms per row
+const AMBER='#f0a020',ICE='#8fd0ff',BG='#0b0b0a';
+const cv=document.getElementById('c'),cx=cv.getContext('2d');
+const hud=document.getElementById('hud'),plaque=document.getElementById('plaque'),srch=document.getElementById('search'),q=document.getElementById('q');
+let W=0,H=0,DPR=1; const CAM={x:0,y:0,z:1,tz:1,tx:0,ty:0};
+let S=null,T=null,ROOT=null,BY=new Map(),ALL=[],SEL=null,QUERY='',seen=-1,beatAt=0,BEAT=600;
+const drones=new Map(); const trail=[]; const wear=new Map();
+
+// ---------- tree ----------
+function buildTree(files,rootName,rootPath){
+  const root={name:rootName,path:rootPath,dir:true,dirs:[],files:[],depth:0};
+  const dirs=new Map([[rootPath,root]]);
+  const dirFor=p=>{ if(dirs.has(p))return dirs.get(p); const i=p.lastIndexOf('/'); const parent=dirFor(i<0?rootPath:p.slice(0,i));
+    const n={name:p.slice(i+1),path:p,dir:true,dirs:[],files:[],parent,depth:parent.depth+1}; parent.dirs.push(n); dirs.set(p,n); return n; };
+  for(const f of files){ const i=f.lastIndexOf('/'); const parent=dirFor(i<0?rootPath:f.slice(0,i));
+    parent.files.push({name:f.slice(i+1),path:f,dir:false,parent,depth:parent.depth+1}); }
+  for(const d of dirs.values()){ d.dirs.sort((a,b)=>a.name<b.name?-1:1); d.files.sort((a,b)=>a.name<b.name?-1:1); }
+  return root;
+}
+// layout a street: returns {w,h}; children get x,y relative to the street's top-left
+function layoutDir(n){
+  let y=SIGN+G, x0=SP+G, w=x0, x=x0;
+  for(const f of n.files){ if(x+U>x0+ROWMAX*(U+G)){x=x0;y+=U+G;} f.x=x;f.y=y;f.w=U;f.h=U; x+=U+G; w=Math.max(w,x); }
+  if(n.files.length) y+=U+G;
+  const kids=n.dirs.map(d=>(layoutDir(d),d));
+  let area=0; for(const d of kids) area+=d.w*d.h;
+  const limit=Math.max(ROWMAX*(U+G)+x0, ...kids.map(d=>d.w+x0), Math.sqrt(area)*1.35+x0);
+  x=x0; let shelf=0;
+  for(const d of kids){ if(x+d.w>limit&&x>x0){x=x0;y+=shelf+G;shelf=0;} d.x=x;d.y=y; x+=d.w+G; shelf=Math.max(shelf,d.h); w=Math.max(w,x); }
+  if(kids.length) y+=shelf+G;
+  n.w=Math.max(w,SP+G+U*2)+G; n.h=y+G; n.count=n.files.length+kids.reduce((a,d)=>a+d.count,0);
+  return n;
+}
+function place(n,ox,oy){ n.ax=ox+(n.x||0); n.ay=oy+(n.y||0); ALL.push(n); BY.set(n.path,n);
+  if(n.dir){ for(const f of n.files)place(f,n.ax,n.ay); for(const d of n.dirs)place(d,n.ax,n.ay); } }
+
+async function loadTree(){
+  T=await (await fetch(TREE,{cache:'no-store'})).json();
+  const repo=layoutDir(buildTree(T.repo.files,T.repo.name,'')); repo.island='repo';
+  const home=layoutDir(buildTree(T.home.files,'home','~')); home.island='home';
+  // moor: home on the left, the deck between, the repo on the right; both signs on one shore line
+  home.x=0;home.y=0; ROOT={home,repo,deck:{name:'the deck',path:'@deck',dir:false,x:home.w+40,y:0,w:120,h:SIGN+G+U*3}};
+  repo.x=home.w+40+120+40; repo.y=0;
+  ALL=[];BY=new Map(); place(home,0,0); place(repo,0,0); ROOT.deck.ax=ROOT.deck.x;ROOT.deck.ay=ROOT.deck.y;BY.set('@deck',ROOT.deck);
+  ROOT.w=repo.x+repo.w; ROOT.h=Math.max(home.h,repo.h);
+  fitAll();
+}
+// ---------- light ----------
+function lightFrom(d){
+  for(const n of ALL){n.heat=0;n.last=null;n.knots=0;n.lines=n.lines;}
+  const put=(rows,prefix)=>{ for(const r of rows||[]){ const n=BY.get(prefix+r.path); if(!n)continue; n.heat=Math.max(n.heat,r.heat||0); n.last=r.last; n.knots=r.knots||0; if(r.lines)n.lines=r.lines; if(r.topics&&r.topics.length)n.topics=r.topics; } };
+  put(d.tree&&d.tree.repo,''); put(d.tree&&d.tree.home&&d.tree.home.places,'');
+  // a street is as lit as its brightest room; the fog lifts on the whole street
+  const up=n=>{ if(!n.dir)return n.heat; let m=n.heat; for(const f of n.files)m=Math.max(m,f.heat); for(const c of n.dirs)m=Math.max(m,up(c)); n.lit=m; n.litCount=n.files.filter(f=>f.heat>0).length+n.dirs.reduce((a,c)=>a+c.litCount,0); return m; };
+  up(ROOT.home); up(ROOT.repo);
+}
+// ---------- routes: a walk goes to the spine, up the street, out the door ----------
+const spineX=n=>n.ax+SP/2, signY=n=>n.ay+SIGN/2, gutterY=n=>n.ay-G/2;
+// a room's point is its middle; a street's point is on its sign — a drone in a directory stands in its corridor, not among its rooms
+const center=n=>n.dir?[n.ax+SP+G+Math.min(18,n.w*0.25),signY(n)]:[n.ax+n.w/2,n.ay+n.h/2];
+function upPath(n){ // points from n's centre up to its island root's sign
+  const pts=[center(n)]; let cur=n;
+  while(cur.parent){ const P=cur.parent; pts.push([center(cur)[0],gutterY(cur)],[spineX(P),gutterY(cur)],[spineX(P),signY(P)]); cur=P; }
+  return pts; // last point = root sign on the spine
+}
+function route(a,b){
+  if(a===b)return [center(a)];
+  const A=a.path==='@deck'?null:upPath(a), B=b.path==='@deck'?null:upPath(b);
+  const deck=[ROOT.deck.ax+ROOT.deck.w/2,signY(ROOT.deck)];
+  const rootOf=n=>{while(n.parent)n=n.parent;return n;};
+  if(!A||!B||rootOf(a)!==rootOf(b)){ // through the deck along the shore
+    const shore=y=>y; const out=[]; if(A)out.push(...A,[A[A.length-1][0],-G*2]); else out.push(deck);
+    out.push([deck[0],-G*2]); if(B){ const R=B.slice().reverse(); out.push([R[0][0],-G*2],...R);} else out.push(deck);
+    return out;
+  }
+  // same island: climb until the streets meet
+  const chainA=[a],chainB=[b]; for(let n=a;n.parent;n=n.parent)chainA.push(n.parent); for(let n=b;n.parent;n=n.parent)chainB.push(n.parent);
+  let lca=null; for(const n of chainA)if(chainB.includes(n)){lca=n;break;}
+  const upTo=(n,stop)=>{ const pts=[center(n)]; let cur=n; while(cur!==stop&&cur.parent){ const P=cur.parent; pts.push([center(cur)[0],gutterY(cur)],[spineX(P),gutterY(cur)]); if(P===stop)break; pts.push([spineX(P),signY(P)]); cur=P; } return pts; };
+  const pa=upTo(a,lca), pb=upTo(b,lca).reverse();
+  if(a===lca)return [center(a),[spineX(lca),center(a)[1]],...pb.slice(0)];
+  if(b===lca)return [...pa,[spineX(lca),center(b)[1]],center(b)];
+  return [...pa,...pb];
+}
+// ---------- feed ----------
+function resolvePlace(b){ for(const p of b.places||[]){const n=BY.get(p);if(n)return n;} for(const p of b.home_places||[]){const n=BY.get(p);if(n)return n;} return null; }
+function ingest(d){
+  S=d; BEAT=d.beat_ms||600; lightFrom(d);
+  // the resident's walk: every bead with a place, in order; the deck when it is not at a file
+  const beads=d.beads||[]; let last=null;
+  for(const b of beads){ if(b.n<=seen)continue; seen=b.n; const n=resolvePlace(b)||(b.place_kind==='file'||b.place_kind==='home'?null:ROOT.deck);
+    if(!n)continue; if(last&&last.node===n)continue; trail.push({node:n,at:b.at,act:b.act,n:b.n}); last=trail[trail.length-1]; }
+  if(trail.length>60)trail.splice(0,trail.length-60);
+  const me=trail[trail.length-1]; drones.set('resident',{node:me?me.node:ROOT.deck,state:d.shuttle&&d.shuttle.state,run:d.run&&d.run.id,glyph:'b·_·d',pingAt:me?performance.now():0});
+  for(const s of (d.hud&&d.hud.strands)||[]){ if(!s.id)continue; const p=(s.places||[])[0]; const n=p&&BY.get(p); drones.set(s.id,{node:n||ROOT.deck,state:s.state,run:s.id,glyph:'b·w·d',strand:true}); }
+  // wear: the week's worn corridors, from every finished run's trail (newest first in the feed)
+  wear.clear();
+  for(const r of (d.cloth&&d.cloth.rows)||[]){ const seq=(r.trail||[]).slice().reverse().map(t=>BY.get(t.path)).filter(Boolean);
+    for(let i=1;i<seq.length;i++){ const pts=route(seq[i-1],seq[i]); for(let k=1;k<pts.length;k++){ const key=pts[k-1].join(',')+'|'+pts[k].join(','); wear.set(key,(wear.get(key)||0)+1); } } }
+}
+async function pull(){ for(const u of FEEDS){ try{ const r=await fetch(u,{cache:'no-store'}); if(!r.ok)continue; ingest(await r.json()); return; }catch(e){} } }
+// ---------- camera ----------
+function resize(){ DPR=devicePixelRatio||1; W=innerWidth;H=innerHeight; cv.width=W*DPR;cv.height=H*DPR;cv.style.width=W+'px';cv.style.height=H+'px'; }
+function fitAll(){ if(!ROOT)return; const z=Math.min((W-80)/ROOT.w,(H-120)/ROOT.h); CAM.tz=z; CAM.tx=(W-ROOT.w*z)/2; CAM.ty=(H-ROOT.h*z)/2+20; }
+function fitLit(){ let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9,any=false; for(const n of ALL){ if(!n.dir&&n.heat>0){any=true;x0=Math.min(x0,n.ax);y0=Math.min(y0,n.ay);x1=Math.max(x1,n.ax+n.w);y1=Math.max(y1,n.ay+n.h);} }
+  if(!any)return fitAll(); const z=Math.min((W-120)/(x1-x0),(H-160)/(y1-y0),4); CAM.tz=z; CAM.tx=(W-(x0+x1)*z)/2; CAM.ty=(H-(y0+y1)*z)/2; }
+function zoomOn(n,z){ const [x,y]=center(n); CAM.tz=z; CAM.tx=W/2-x*z; CAM.ty=H/2-y*z; }
+const toWorld=(sx,sy)=>[(sx-CAM.x)/CAM.z,(sy-CAM.y)/CAM.z];
+let drag=null;
+cv.onmousedown=e=>{drag={x:e.clientX,y:e.clientY,cx:CAM.tx,cy:CAM.ty,moved:false};};
+onmousemove=e=>{ if(!drag)return; const dx=e.clientX-drag.x,dy=e.clientY-drag.y; if(Math.abs(dx)+Math.abs(dy)>3)drag.moved=true; CAM.tx=drag.cx+dx;CAM.ty=drag.cy+dy;CAM.x=CAM.tx;CAM.y=CAM.ty; };
+onmouseup=e=>{ if(drag&&!drag.moved)click(e.clientX,e.clientY); drag=null; };
+cv.onwheel=e=>{ e.preventDefault(); const f=Math.exp(-e.deltaY*0.0015); const [wx,wy]=toWorld(e.clientX,e.clientY); const z=Math.max(0.05,Math.min(12,CAM.tz*f)); CAM.tz=z; CAM.tx=e.clientX-wx*z; CAM.ty=e.clientY-wy*z; };
+onkeydown=e=>{ if(e.target===q){ if(e.key==='Escape'){q.value='';QUERY='';srch.style.display='none';q.blur();} if(e.key==='Enter')q.blur(); return; }
+  if(e.key==='1')fitAll(); if(e.key==='2')fitLit(); if(e.key==='3'){const me=drones.get('resident'); zoomOn(me?me.node:ROOT.deck,6);} 
+  if(e.key==='/'){e.preventDefault();srch.style.display='block';q.focus();} if(e.key==='Escape'){SEL=null;plaque.style.display='none';} };
+q.oninput=()=>{QUERY=q.value.trim().toLowerCase();};
+function click(sx,sy){ const [x,y]=toWorld(sx,sy); let hit=null;
+  for(const n of ALL){ if(n.dir)continue; if(x>=n.ax&&x<=n.ax+n.w&&y>=n.ay&&y<=n.ay+n.h){hit=n;break;} }
+  if(!hit){ let best=null; for(const n of ALL){ if(!n.dir)continue; if(x>=n.ax&&x<=n.ax+n.w&&y>=n.ay&&y<=n.ay+n.h&&(!best||n.depth>best.depth))best=n; } hit=best; }
+  SEL=hit; if(!hit){plaque.style.display='none';return;}
+  const rows=[`<b>${hit.path||hit.name}</b>`];
+  if(hit.dir)rows.push(`street · ${hit.count} things · ${hit.litCount||0} lit`); else rows.push(hit.heat>0?`lit ${(hit.heat*100).toFixed(0)}% · last ${hit.last||'?'} · ${hit.knots||0} knots${hit.lines?' · '+hit.lines+' lines':''}`:'never visited');
+  const visits=trail.filter(t=>t.node===hit); if(visits.length)rows.push(`this run: ${visits.map(v=>v.act).join(' → ')}`);
+  rows.push('open · dispatch here — not wired: the verb is offered, never faked');
+  plaque.innerHTML=rows.join('\n'); plaque.style.display='block';
+}
+// ---------- draw ----------
+function heatColor(h,a=1){ return `rgba(240,160,32,${(0.18+0.82*h)*a})`; }
+function matches(n){ return !QUERY||n.path.toLowerCase().includes(QUERY); }
+function drawStreet(n,z){
+  const dim=QUERY&&!matches(n)&&!n.dirs.some(matches)&&!n.files.some(matches)?0.25:1;
+  if(!(n.lit>0)){ // fog: the black silhouette of a street nobody walked
+    cx.fillStyle='#0e0e0d'; cx.fillRect(n.ax,n.ay,n.w,n.h); cx.strokeStyle=`rgba(70,68,62,${0.5*dim})`; cx.lineWidth=1/z; cx.strokeRect(n.ax,n.ay,n.w,n.h);
+    if(z*n.w>28){ cx.save(); cx.beginPath(); cx.rect(n.ax,n.ay,n.w,SIGN); cx.clip(); cx.fillStyle=`rgba(90,88,80,${dim})`; cx.font=`${Math.max(9/z,3)}px ui-monospace,Menlo,monospace`; cx.fillText(`${n.name}/ · ${n.count}`,n.ax+3,n.ay+SIGN-3); cx.restore(); }
+    return;
+  }
+  cx.fillStyle='#111110'; cx.fillRect(n.ax,n.ay,n.w,n.h);
+  cx.strokeStyle=`rgba(120,116,104,${0.7*dim})`; cx.lineWidth=1/z; cx.strokeRect(n.ax,n.ay,n.w,n.h);
+  // spine + sign: the corridor you walk
+  cx.fillStyle=`rgba(40,39,36,${dim})`; cx.fillRect(n.ax,n.ay,SP,n.h); cx.fillRect(n.ax,n.ay,n.w,SIGN);
+  if(n.heat>0){ cx.fillStyle=heatColor(n.heat,0.55*dim); cx.fillRect(n.ax,n.ay,n.w,SIGN); } // the street itself was visited (a directory read)
+  cx.save(); cx.beginPath(); cx.rect(n.ax,n.ay,n.w,SIGN); cx.clip();
+  if(z*n.w>24){ cx.fillStyle=`rgba(200,195,180,${dim})`; cx.font=`${Math.max(8.5/z,2.5)}px ui-monospace,Menlo,monospace`; cx.fillText(`${n.name}/`,n.ax+SP+2,n.ay+SIGN-3);
+    if(z*n.w>90){ cx.fillStyle=`rgba(120,116,104,${dim})`; cx.textAlign='right'; cx.fillText(`${n.litCount}/${n.count} lit`,n.ax+n.w-3,n.ay+SIGN-3); cx.textAlign='left'; } }
+  cx.restore();
+  for(const f of n.files){ const m=matches(f)?1:(QUERY?0.2:1);
+    if(f.heat>0){ cx.fillStyle=heatColor(f.heat,m*dim); cx.fillRect(f.ax,f.ay,f.w,f.h); }
+    else { cx.fillStyle='#0b0b0a'; cx.fillRect(f.ax,f.ay,f.w,f.h); cx.strokeStyle=`rgba(60,58,52,${dim})`; cx.strokeRect(f.ax+.5/z,f.ay+.5/z,f.w-1/z,f.h-1/z); }
+    if(z>3.2&&(f.heat>0||z>7)){ cx.fillStyle=f.heat>0?`rgba(20,16,8,${dim})`:`rgba(90,88,80,${dim})`; cx.font=`${Math.min(3.4,9/z)}px ui-monospace,Menlo,monospace`; cx.save(); cx.beginPath(); cx.rect(f.ax,f.ay,f.w,f.h); cx.clip(); cx.fillText(f.name,f.ax+1,f.ay+f.h-2.2); cx.restore(); }
+  }
+  for(const d of n.dirs)drawStreet(d,z);
+  if(SEL&&(SEL===n)){ cx.strokeStyle=ICE; cx.lineWidth=1.5/z; cx.strokeRect(n.ax-1/z,n.ay-1/z,n.w+2/z,n.h+2/z); }
+}
+function poly(pts){ cx.beginPath(); pts.forEach((p,i)=>i?cx.lineTo(p[0],p[1]):cx.moveTo(p[0],p[1])); cx.stroke(); }
+function frame(now){
+  CAM.z+=(CAM.tz-CAM.z)*0.18; CAM.x+=(CAM.tx-CAM.x)*0.18; CAM.y+=(CAM.ty-CAM.y)*0.18;
+  cx.setTransform(DPR,0,0,DPR,0,0); cx.fillStyle=BG; cx.fillRect(0,0,W,H);
+  if(!ROOT){ requestAnimationFrame(frame); return; }
+  cx.setTransform(DPR*CAM.z,0,0,DPR*CAM.z,DPR*CAM.x,DPR*CAM.y); const z=CAM.z;
+  // the shore: one line both islands moor to; nothing exists above it
+  cx.strokeStyle='rgba(80,110,130,.5)'; cx.lineWidth=1/z; cx.setLineDash([4/z,4/z]); poly([[-20,-G*2],[ROOT.w+20,-G*2]]); cx.setLineDash([]);
+  drawStreet(ROOT.home,z); drawStreet(ROOT.repo,z);
+  const dk=ROOT.deck; cx.fillStyle='#111110'; cx.fillRect(dk.ax,dk.ay,dk.w,dk.h); cx.strokeStyle='rgba(120,116,104,.7)'; cx.strokeRect(dk.ax,dk.ay,dk.w,dk.h);
+  cx.fillStyle='rgba(200,195,180,1)'; cx.font=`${Math.max(8.5/z,2.5)}px ui-monospace,Menlo,monospace`; cx.fillText('the deck',dk.ax+3,dk.ay+SIGN-3);
+  cx.fillStyle='rgba(120,116,104,1)'; cx.font=`${Math.max(7/z,2)}px ui-monospace,Menlo,monospace`; cx.fillText('shed forge wire crew',dk.ax+3,dk.ay+SIGN+9); cx.fillText('clock belt pack archive',dk.ax+3,dk.ay+SIGN+17);
+  // wear: corridors the week walked
+  cx.lineCap='round'; for(const [key,c] of wear){ const [a,b]=key.split('|').map(s=>s.split(',').map(Number)); cx.strokeStyle=`rgba(240,160,32,${Math.min(0.16,0.03*c)})`; cx.lineWidth=Math.min(1.4,0.6+c*0.12)/z; poly([a,b]); }
+  // the resident's trail this run: amber, fading behind the drone
+  for(let i=1;i<trail.length;i++){ const age=(trail.length-i)/trail.length; const pts=route(trail[i-1].node,trail[i].node); cx.strokeStyle=`rgba(240,160,32,${0.15+0.75*(1-age)})`; cx.lineWidth=(1.2+1.2*(1-age))/z; poly(pts); }
+  // drones: never lost
+  const pulse=(now%BEAT)/BEAT;
+  for(const [id,d] of drones){ const [x,y]=center(d.node); const r=(d.strand?3:4)/Math.sqrt(z);
+    cx.strokeStyle=d.strand?'rgba(240,160,32,.6)':AMBER; cx.lineWidth=1.2/z; cx.beginPath(); cx.arc(x,y,r*(1+pulse*0.6),0,Math.PI*2); cx.globalAlpha=1-pulse; cx.stroke(); cx.globalAlpha=1;
+    cx.fillStyle=BG; cx.fillRect(x-r*2.2,y-r*0.9,r*4.4,r*1.8); cx.strokeStyle=AMBER; cx.strokeRect(x-r*2.2,y-r*0.9,r*4.4,r*1.8);
+    cx.fillStyle=AMBER; cx.font=`${r*1.4}px ui-monospace,Menlo,monospace`; cx.textAlign='center'; cx.fillText(d.glyph,x,y+r*0.5); cx.textAlign='left';
+    if(z>1.5){ cx.fillStyle='rgba(240,160,32,.8)'; cx.font=`${Math.max(7/z,2)}px ui-monospace,Menlo,monospace`; cx.fillText(`${d.state||''} · ${d.node.path||d.node.name}`,x+r*2.6,y+r*0.4); }
+  }
+  if(SEL&&!SEL.dir){ cx.strokeStyle=ICE; cx.lineWidth=1.5/z; cx.strokeRect(SEL.ax-1.5/z,SEL.ay-1.5/z,SEL.w+3/z,SEL.h+3/z); }
+  // HUD (dashed = over the world)
+  const lit=ALL.filter(n=>!n.dir&&n.heat>0).length, rooms=ALL.filter(n=>!n.dir).length;
+  const me=drones.get('resident'); const run=S&&S.run;
+  hud.innerHTML=`<b>brnrd · field 8 · the streets</b> — greybox, no art on purpose\n${rooms} rooms · ${lit} lit · ${ALL.filter(n=>n.dir).length} streets · tree ${T?T.captured_at:'…'}\n`+
+    (run?`<b>${run.id}</b> · ${run.shell||''}/${run.core||''} · ${S.shuttle&&S.shuttle.state||''} · at <b>${me&&me.node.path||'the deck'}</b> · ${trail.length} hops this run · ${wear.size} worn corridors`:'no feed');
+  requestAnimationFrame(frame);
+}
+onresize=()=>{resize();};
+resize(); loadTree().then(()=>{pull();setInterval(pull,3000);}); requestAnimationFrame(frame);
+</script>
