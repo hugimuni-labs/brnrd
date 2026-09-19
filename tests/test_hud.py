@@ -104,7 +104,22 @@ def test_each_fixed_field_reads_back_typed(tmp_path, monkeypatch):
     # No ``queued`` count: spawn admission stopped being quota-shaped (#2014),
     # and the count that rode beside the floor went with the gate that produced
     # it. The floor survives as scarcity to pace by, never an admission verdict.
-    assert current.resources["coexisting_runs"]["spawn_pool"] == {"floor": None}
+    # `priced` (the token-denominated pool, brr/the-pool-the-daemon-can-price)
+    # rides beside the floor. This scenario has no run ledger, so it renders as
+    # the compact unmeasured form: status, the reason that names what is
+    # missing, and the commitments it *can* count.
+    assert current.resources["coexisting_runs"]["spawn_pool"] == {
+        "floor": None,
+        "priced": {
+            "status": "unmeasured",
+            "reason": (
+                "no binding quota window with both a remaining percent "
+                "and a duration"
+            ),
+            "committed_tokens": 0,
+            "committed_runs": 0,
+        },
+    }
     assert current.tick is None and current.shuttle is None
     assert current.resource_hold is None
     assert len(current.change_token) > 0

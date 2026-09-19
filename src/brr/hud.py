@@ -1039,11 +1039,26 @@ def build(inputs: HUDInputs) -> HUD:
     # carries dispatcher-authored titles, and this facet's standing rule
     # (#585) is that it emits handles and counts, never free text. The counts
     # survive; a caller wanting the rows reads the run controls.
+    #
+    # An *unmeasured* pool renders down to its status and its reason. The
+    # evidence block behind an unmeasured reading is all zeros and nulls by
+    # construction, and a dozen empty keys on every boundary of every run is
+    # how a facet stops being read. The reason is the whole message: "0
+    # joinable run(s) in the last 14d; 5 needed" tells a reader both that the
+    # pool is unknown and exactly what would make it known.
     priced_pool = daemon._priced_spawn_pool(
         brr_dir, runner_name, run_levels, model=binding_model,
     )
     if isinstance(priced_pool, dict):
-        priced_pool = {k: v for k, v in priced_pool.items() if k != "commitments"}
+        if priced_pool.get("status") == "measured":
+            priced_pool = {k: v for k, v in priced_pool.items() if k != "commitments"}
+        else:
+            priced_pool = {
+                "status": "unmeasured",
+                "reason": priced_pool.get("reason"),
+                "committed_tokens": priced_pool.get("committed_tokens"),
+                "committed_runs": priced_pool.get("committed_runs"),
+            }
     coexisting_facet["spawn_pool"] = {
         "floor": pacing_status.get("floor") if pacing_status else None,
         "priced": priced_pool,
