@@ -77,8 +77,7 @@
       "owned_children": [],
       "required": false,
       "spawn_pool": {
-        "floor": null,
-        "queued": 0
+        "floor": null
       },
       "status": "absent",
       "summary": null
