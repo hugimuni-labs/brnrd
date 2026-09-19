@@ -398,6 +398,13 @@ def read_run(live: _Live | None, now_epoch: float) -> dict[str, Any] | None:
         "shell": shell,
         "core": core,
         "card": _safe(lambda: read_card(outbox), None),
+        # This is invocation intent, not an attestation of what the Shell
+        # reopened. No token measurement separates inherited scroll from the
+        # new prompt. Absence is unknown, never proof of a fresh body.
+        "body_origin": {
+            "native_resume_requested": bool(meta.get("resume_native_session_id")) or None,
+            "provider": meta.get("resume_native_provider") or None,
+        },
     }
 
 
