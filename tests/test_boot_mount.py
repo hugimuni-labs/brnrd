@@ -275,10 +275,22 @@ def test_the_mounted_line_is_derived_from_the_render_not_the_request(repo: Path)
         assert "<snapshot restored>" not in prompt
 
 
-def test_the_past_self_mounts_as_the_last_seeded_read(repo: Path, tmp_path: Path):
-    """The prior run's node is a real file, so under the mount it is a Read —
-    the whole page, not the prose map — and it is the last perception, where
-    the snapshot seam rides: the resident wakes reading its own last notebook."""
+def test_the_past_self_never_mounts_it_stays_prose(repo: Path, tmp_path: Path):
+    """The predecessor's node is a real file and is *still* not seeded.
+
+    This test used to assert the opposite, and the reversal is the point:
+    `prior-run` was the one block whose mounted form was a *different, larger*
+    text than its prose form, so mounting it was not a change of position but a
+    change of content — measured at a median 2.7x, up to 6.7x on a handover
+    node (`tools/mount_inheritance.py blocks`). The seed exists to teach a fresh
+    body its environment; a previous run's `Now`, `Plan`, `Vector` and its
+    outgoing replies are memory, and memory in tool-result position tells a wake
+    it has already acted as somebody else.
+
+    Read off the wake production actually builds — the sink and the prompt, not
+    a hand-made contract list — because the defect this file's header warns
+    about is a subtraction that disagrees with a seeding.
+    """
     from brr import prompts, transcript
 
     (repo / ".brr").mkdir(exist_ok=True)
@@ -297,24 +309,60 @@ def test_the_past_self_mounts_as_the_last_seeded_read(repo: Path, tmp_path: Path
     (node / "messages" / "000003-terminal.md").write_text("done — committed abc1234", encoding="utf-8")
     (node / "mood").write_text("fo.cus\n", encoding="utf-8")
 
-    prose, score = _wake(repo)
-    assert "A long story." not in prose  # unmounted: the map, not the territory
-
     sink: dict[str, str] = {}
     mounted_prose, score_m = _wake(repo, _mount_sink=sink)
-    entry = next(c for c in score_m.contracts if c.block_key == "prior-run")
-    assert entry.location == str(node / "body.md")
-    assert "## Your last run" not in mounted_prose
-    seeded = sink["prior-run"]
-    assert seeded.startswith("## Now")
-    assert "A long story." in seeded            # the territory
-    assert "frame: run-prior · done · finished · claude-opus · pushed" in seeded
-    assert "done — committed abc1234" in seeded  # the last message, as sent
-    assert "mood: fo.cus" in seeded
-    # Offline reconstruction agrees with the live seed.
-    assert prompts.mountable_block_text(entry, repo) == seeded
 
-    t = transcript.build_orientation_transcript(score_m, block_text=sink, cwd=str(repo))
+    # The block is present, file-backed, and mountable-looking in every way
+    # that used to qualify it — which is why the exclusion has to be explicit.
+    entry = next(c for c in score_m.contracts if c.block_key == "prior-run")
+    assert entry.present and entry.location == str(node / "body.md")
+    assert entry.location != tx.COMPUTED
+
+    # 1. It never reaches the seed.
+    assert "prior-run" not in sink
+    # 2. And it was therefore never subtracted: the wake still has the memory,
+    #    as the prose map. Both halves matter — a block excluded from the seed
+    #    but still taken out of the prose is the silent lobotomy.
+    assert "## Your last run" in mounted_prose
+    assert "Landing the edge writer." in mounted_prose
+    assert "A long story." not in mounted_prose  # the map, never the territory
+
+    # 3. The choke point refuses it too, even handed a sink that names it —
+    #    `brnrd prompts mount` and `replay` build their own block_text.
+    forced = dict(sink)
+    forced["prior-run"] = prompts.mountable_block_text(entry, repo)
+    t = transcript.build_orientation_transcript(score_m, block_text=forced, cwd=str(repo))
+    assert all(str(node / "body.md") != c.location for c in t.perceptions())
+    # The seam therefore rides some product contract, never the past self.
     last = list(t.perceptions())[-1]
-    assert last.location == str(node / "body.md")
     assert transcript.SNAPSHOT_SEAM.strip() in last.result
+    assert "A long story." not in last.result
+
+    # 4. The builder is not deleted: it is what an honest Read *would* return,
+    #    and the offline readers still reconstruct pre-clause seeds with it.
+    territory = prompts.mountable_block_text(entry, repo)
+    assert "A long story." in territory
+    assert "frame: run-prior · done · finished · claude-opus · pushed" in territory
+
+
+def test_never_mount_is_enforced_at_the_transcript_choke_point():
+    """`NEVER_MOUNT` must hold for any caller, not only the daemon's wake.
+
+    Positive control first: an ordinary file-backed block with the same shape
+    *does* mount. Without it this test would pass on a transcript builder that
+    seeds nothing at all — the failure mode `tools/mount_inheritance.py`'s own
+    first run had, and the one this repo has paid for before.
+    """
+    score = BootScore(contracts=[
+        ContractEntry(block_key="identity-core", label="identity", owner="product",
+                      authority="identity", freshness=None, location="/tmp/identity.md",
+                      present=True, bytes=10),
+        ContractEntry(block_key="prior-run", label="last run", owner="resident",
+                      authority="memory", freshness=None, location="/tmp/body.md",
+                      present=True, bytes=10),
+    ])
+    block_text = {"identity-core": "who you are", "prior-run": "what you did last time"}
+    t = tx.build_orientation_transcript(score, block_text=block_text, cwd="/tmp")
+    seeded = [c.location for c in t.perceptions()]
+    assert seeded == ["/tmp/identity.md"]  # positive control + the exclusion
+    assert "prior-run" in tx.NEVER_MOUNT
