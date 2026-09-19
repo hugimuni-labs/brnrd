@@ -15563,3 +15563,193 @@ def test_composing_is_false_for_a_run_with_no_portal(tmp_path):
     from brr.gates import cloud_publisher
 
     assert cloud_publisher._composing(tmp_path / ".brr", {}) is False
+
+
+# ── the reading at death (_capture_exit_quota) ───────────────────────
+# 2026-09-19: a codex strand started at 09:55 against a window its boot
+# seed read as `5h 100% left` and failed at 10:09:42 with `failed to
+# record rollout items: thread … not found`. Either it burned a full 5h
+# window in fourteen minutes or it hit an unrelated bug — and nothing
+# recorded the provider reading at the moment of death, so "crashed" and
+# "ran out" were the same-looking event.
+
+def _codex_levels_like_production():
+    """A levels snapshot built by codex's own parser from a `token_count`
+    payload in the shape the Shell emits — never a hand-shaped dict."""
+    from brr import codex_status
+
+    return codex_status.parse_token_count({
+        "type": "token_count",
+        "rate_limits": {
+            "primary": {
+                "used_percent": 100.0, "window_minutes": 300,
+                "resets_in_seconds": 9000,
+            },
+            "secondary": {
+                "used_percent": 16.0, "window_minutes": 10080,
+                "resets_in_seconds": 600000,
+            },
+        },
+        "info": {
+            "total_token_usage": {"input_tokens": 140090, "output_tokens": 504},
+            "model_context_window": 272000,
+        },
+    }, "2026-09-19T10:09:26Z")
+
+
+def _dead_strand(tmp_path, *, status="error", runner="codex-gpt-6-astra"):
+    brr = tmp_path / ".brr"
+    (brr / "runs").mkdir(parents=True, exist_ok=True)
+    (brr / "outbox" / "evt-child").mkdir(parents=True, exist_ok=True)
+    return Run(
+        id="run-child", event_id="evt-child",
+        body="do the bounded thing",
+        source="telegram", status=status,
+        meta={
+            "strand": True,
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "runner_name": runner,
+            "runner_core": "gpt-6-astra",
+            "outbox_path": str(brr / "outbox" / "evt-child"),
+            "trace_dirs": "t1",
+            "has_new_commit": True,
+            "spawn_allowance_tokens": 5_000_000,
+            "spawn_allowance_spent": 495_141,
+        },
+    )
+
+
+def test_capture_exit_quota_reads_the_childs_own_shell(tmp_path, monkeypatch):
+    levels = _codex_levels_like_production()
+    seen = {}
+
+    def fake_collect(runner_name, outbox_dir, work_dir, **kwargs):
+        seen["runner_name"] = runner_name
+        seen["refresh"] = kwargs.get("refresh")
+        seen["shared_dir"] = kwargs.get("shared_dir")
+        return levels, frozenset({"quota", "context_window"})
+
+    monkeypatch.setattr(daemon, "_collect_levels", fake_collect)
+    task = _dead_strand(tmp_path)
+
+    captured = daemon._capture_exit_quota(task)
+
+    # The child's own Shell, not the reaping daemon's — a different
+    # account window entirely.
+    assert seen["runner_name"] == "codex-gpt-6-astra"
+    # Cache-only: a blocking PTY scrape on the reap path would stall every
+    # other child's completion behind one dead one.
+    assert seen["refresh"] is False
+    assert seen["shared_dir"] == tmp_path / ".brr"
+
+    assert captured["spawn_quota_remaining_pct"] == 0
+    assert captured["spawn_quota_shell"] == "codex"
+    assert "5h 0% left" in captured["spawn_quota_summary"]
+    # Two clocks, never one: when the daemon read it, and when the
+    # collector says it measured.
+    assert captured["spawn_quota_read_at"].endswith("Z")
+    assert captured["spawn_quota_measured_at"] == "2026-09-19T10:09:26Z"
+
+    # Durable: the event is consumed and retired; run.md is what a
+    # post-mortem opens weeks later.
+    saved = (tmp_path / ".brr" / "runs" / "run-child" / "run.md").read_text()
+    assert "spawn_quota_remaining_pct: 0" in saved
+
+
+def test_capture_exit_quota_is_absent_for_a_non_strand(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        daemon, "_collect_levels",
+        lambda *a, **k: (_codex_levels_like_production(), frozenset()),
+    )
+    task = _dead_strand(tmp_path)
+    task.meta.pop("strand")
+
+    assert daemon._capture_exit_quota(task) == {}
+
+
+def test_spawn_completion_states_the_fuel_reading_on_a_failure(tmp_path, monkeypatch):
+    """The two failure modes stop being indistinguishable: the parent's
+    completion note carries the binding reading beside the allowance, so
+    "ran out" and "broke" read differently on the first screen."""
+    monkeypatch.setattr(
+        daemon, "_collect_levels",
+        lambda *a, **k: (_codex_levels_like_production(), frozenset()),
+    )
+    inbox = tmp_path / ".brr" / "inbox"
+    task = _dead_strand(tmp_path, status="error")
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert note["spawn_quota_remaining_pct"] == 0
+    assert note["spawn_quota_shell"] == "codex"
+    assert "fuel at exit: binding quota 0% left" in note["body"]
+    assert "5h 0% left" in note["body"]
+    assert "allowance 495.1k/5m" in note["body"]
+    assert "read " in note["body"] and "measured 2026-09-19T10:09:26Z" in note["body"]
+
+
+def test_spawn_completion_carries_the_reading_but_stays_quiet_when_done(tmp_path, monkeypatch):
+    """Captured for every terminal strand — a failure reading is only
+    legible against the ones that came back fine — but stated in the prose
+    only on `error`, where it is the whole question."""
+    monkeypatch.setattr(
+        daemon, "_collect_levels",
+        lambda *a, **k: (_codex_levels_like_production(), frozenset()),
+    )
+    inbox = tmp_path / ".brr" / "inbox"
+    task = _dead_strand(tmp_path, status="done")
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert note["spawn_quota_remaining_pct"] == 0
+    assert "fuel at exit" not in note["body"]
+
+
+def test_capture_exit_quota_survives_a_collector_that_raises(tmp_path, monkeypatch):
+    """A reading is never worth a reap: one dead child must not take the
+    completion notice for itself or its siblings down with it."""
+    def boom(*a, **k):
+        raise RuntimeError("app-server not on PATH")
+
+    monkeypatch.setattr(daemon, "_collect_levels", boom)
+    inbox = tmp_path / ".brr" / "inbox"
+    task = _dead_strand(tmp_path, status="error")
+
+    assert daemon._capture_exit_quota(task) == {}
+    daemon._notify_spawn_parent(inbox, task)
+    note = protocol.list_pending(inbox)[0]
+    assert "spawn_quota_remaining_pct" not in note
+    assert "fuel at exit" not in note["body"]
+
+
+def test_merge_level_snapshots_dates_a_quota_block_that_has_no_stamp():
+    """The whitelist used to drop a snapshot's own `updated_at`, so a claude
+    reading reached `_capture_exit_quota` with nothing to date it by while
+    codex's (stated inside its own quota block) arrived stamped. A cached
+    reading presented as "at death" with no way to tell its age is the same
+    lie the capture exists to end."""
+    usage = {
+        "source": "claude /usage PTY",
+        "updated_at": "2026-09-19T12:47:49Z",
+        "quota": {"summary": "session 84% left", "buckets": {}},
+    }
+    merged = daemon._merge_level_snapshots(usage, None)
+    assert daemon._levels_measured_at(merged) == "2026-09-19T12:47:49Z"
+    # The cached snapshot dict is shared; the merge copies, never mutates.
+    assert "updated_at" not in usage["quota"]
+
+    # A collector that states its own never gets overwritten — and the
+    # quota block's stamp outranks the snapshot's, because a merged codex
+    # snapshot dates itself by "the freshest thing in it", which can be a
+    # rollout write later than the probe that produced these buckets.
+    codex = {
+        "source": "codex app-server",
+        "updated_at": "2026-09-19T12:00:00Z",
+        "quota": {"summary": "5h 0% left", "updated_at": "2026-09-19T10:09:26Z"},
+    }
+    assert daemon._levels_measured_at(
+        daemon._merge_level_snapshots(codex)
+    ) == "2026-09-19T10:09:26Z"

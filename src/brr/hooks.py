@@ -3840,23 +3840,30 @@ def _render_bar(
     budget_chip = _budget_chip(budget, frame_tick)
     if budget_chip:
         segments.append(("budget", budget_chip))
-    # A strand's own metered allowance replaces the shared, lagging quota
-    # chip on its bar (design-the-allowance.md §2, slice 1) — a strand has
-    # a poor view of shared provider quota anyway ("the percentage doesn't
-    # mean anything and is hard to derive" from inside a concurrent
-    # child). The resident seat's own standing allowance (slice 2) is the
-    # opposite case: design-the-continuous-seat.md's "Boundaries" section
-    # and design-the-allowance.md both insist provider headroom and
-    # allocated work stay *separate, simultaneously visible* facts — so
-    # the resident's bar shows both chips rather than one replacing the
-    # other.
+    # Both chips, on every bar — a strand's and the seat's alike.
+    #
+    # This used to suppress the quota chip whenever an allowance chip
+    # rendered at strand scope (design-the-allowance.md §2, slice 1: "a
+    # strand has a poor view of shared provider quota anyway"). The
+    # measurement that retired that rule, 2026-09-19: every
+    # `codex-gpt-6-astra` strand's boundary line from 09-15 on carried
+    # `spend <n>/<ceiling>` and **no `q` chip at all**, while the same
+    # Shell's *seat* runs carried `q H8↻15:42Z·D86↻10:42Z` throughout.
+    # Four codex strands died in two days against a 5h window the bar
+    # never showed them. An allowance is what this child was *allocated*;
+    # quota is the wall the provider will actually stop it at — and they
+    # are different numbers with different owners. The resident seat has
+    # shown both side by side since slice 2 for exactly that reason
+    # (design-the-continuous-seat.md §"Boundaries": provider headroom and
+    # allocated work stay *separate, simultaneously visible* facts); a
+    # strand is the case where the distinction bites hardest, since it is
+    # the run with no way to ask.
     allowance_chip = _allowance_chip(resources)
     if allowance_chip:
         segments.append(("allowance", allowance_chip))
-    if not allowance_chip or _allowance_scope(resources) == "resident":
-        quota_chip = _quota_chip(resources)
-        if quota_chip:
-            segments.append(("quota", quota_chip))
+    quota_chip = _quota_chip(resources)
+    if quota_chip:
+        segments.append(("quota", quota_chip))
     context_chip = _context_window_chip(resources)
     if context_chip:
         segments.append(("context_window", context_chip))
@@ -7623,7 +7630,11 @@ def _boundary_readings(
     """The row's ``ctx`` / ``spend`` / ``quota`` from what
     :func:`compute_neutral` already holds — the portal it read and the
     context readings it compared. Unknown is ``None``, never a conversion:
-    a ``%`` context reading is not a token count."""
+    a ``%`` context reading is not a token count. ``quota`` is the one
+    variable-keyed reading: it carries exactly the buckets the Shell in
+    hand produced, letter-keyed by :func:`_quota_buckets` (claude ⇒
+    ``S``/``W``/``F``, codex ⇒ ``H``/``D``), and ``{}`` when nothing was
+    measured — never a fixed skeleton of one Shell's letters."""
     resources = portal.get("resources") if isinstance(portal, dict) else None
     resources = resources if isinstance(resources, dict) else {}
 
@@ -7640,13 +7651,24 @@ def _boundary_readings(
     facet = resources.get("allowance")
     facet = facet if isinstance(facet, dict) else {}
 
-    quota: dict[str, int | None] = {"S": None, "W": None, "F": None}
+    # The row carries the buckets the chip actually parsed, under the
+    # chip's own letters — whatever Shell produced them. It used to be
+    # seeded `{"S": None, "W": None, "F": None}` and only ever filled
+    # from that claude-shaped set, so a *codex* run recorded three null
+    # claude slots while holding a perfectly good reading: `5h 0% left
+    # (resets 14:55Z); 7d 84% left` parses to `H`/`D`, neither of which
+    # is in {S, W, F}, and both were dropped on the floor (measured
+    # 2026-09-19 across every `codex-gpt-6-astra` row on this account).
+    # Nothing measured is now `{}` — an empty reading, not a claude
+    # skeleton of nulls that reads like three buckets someone looked at.
+    quota: dict[str, int] = {}
     for letter, pct, _part in _quota_buckets(resources):
-        if letter in quota and quota[letter] is None:
-            try:
-                quota[letter] = int(pct)
-            except ValueError:
-                pass
+        if letter in quota:
+            continue
+        try:
+            quota[letter] = int(pct)
+        except ValueError:
+            pass
 
     spend: dict[str, Any] = {
         "allowance_used": _facet_int(facet.get("spent")),
@@ -8230,7 +8252,7 @@ def record_boundary(
     record["spend"] = dict(
         readings.get("spend") or {"allowance_used": None, "allowance": None}
     )
-    record["quota"] = dict(readings.get("quota") or {"S": None, "W": None, "F": None})
+    record["quota"] = dict(readings.get("quota") or {})
     # `commit` stays null: nothing the hook holds at this moment means "the
     # checkout's current HEAD" — `produce.latest_commit` is the newest commit
     # the run *produced* (absent before the first one) and the gate receipt's
