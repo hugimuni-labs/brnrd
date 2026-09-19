@@ -101,7 +101,10 @@ def test_each_fixed_field_reads_back_typed(tmp_path, monkeypatch):
     assert current.knowledge == hud.Knowledge("https://example.invalid/kb/")
     assert current.name == hud.Name(True)
     assert current.bolt == hud.Bolt(True, 2, "2026-09-14T16:20:00Z")
-    assert current.resources["coexisting_runs"]["spawn_pool"] == {"floor": None, "queued": 1}
+    # No ``queued`` count: spawn admission stopped being quota-shaped (#2014),
+    # and the count that rode beside the floor went with the gate that produced
+    # it. The floor survives as scarcity to pace by, never an admission verdict.
+    assert current.resources["coexisting_runs"]["spawn_pool"] == {"floor": None}
     assert current.tick is None and current.shuttle is None
     assert current.resource_hold is None
     assert len(current.change_token) > 0
