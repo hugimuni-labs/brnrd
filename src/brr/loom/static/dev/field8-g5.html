@@ -75,7 +75,7 @@ const cv=document.getElementById('c'),cx=cv.getContext('2d');
 const hud=document.getElementById('hud'),plaque=document.getElementById('plaque'),srch=document.getElementById('search'),q=document.getElementById('q');
 let W=0,H=0,DPR=1,FOLLOW=false,TRAIL=true; const CAM={x:0,y:0,z:1,tz:1,tx:0,ty:0};
 let firstIngest=true,PAGE=null,S=null,T=null,ROOT=null,BY=new Map(),ALL=[],SEL=null,QUERY='',seen=-1,beatAt=0,BEAT=600;
-const drones=new Map(); const trail=[]; const wear=new Map(); const pings=[]; // {node,at} const CHUNKS=new Map(); // path → [{from,to,kind,n}] this run
+const drones=new Map(); const trail=[]; const wear=new Map(); const pings=[]; /* {node,t} */ const CHUNKS=new Map(); /* path → [{from,to,kind,n}] this run */
 
 // ---------- tree ----------
 function buildTree(files,rootName,rootPath){
