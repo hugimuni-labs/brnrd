@@ -9773,7 +9773,10 @@ def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path, mon
         outbox_dir, inbox_dir, "evt-1", task, phase="running",
     )
     assert _read_facet()["status"] == "unimplemented"
-    assert _read_facet()["spawn_pool"] == {"floor": None}
+    # `priced` rides beside the floor now. This call site wires no `brr_dir`,
+    # so there is no ledger to price against and the pool reads `None` — not an
+    # empty pool, which every caller would read as "spend nothing".
+    assert _read_facet()["spawn_pool"] == {"floor": None, "priced": None}
 
     # brr_dir given, nobody else present → affirmative-absent; spawn_pool
     # unchanged (still nothing accepted).
@@ -9782,7 +9785,21 @@ def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path, mon
         brr_dir=brr_dir,
     )
     assert _read_facet()["status"] == "absent"
-    assert _read_facet()["spawn_pool"] == {"floor": None}
+    # `priced` rides beside the floor now. This act *does* wire a `brr_dir`, so
+    # the pool is attempted and reports what it is missing — there is no quota
+    # reading here, hence no identified window to price.
+    assert _read_facet()["spawn_pool"] == {
+        "floor": None,
+        "priced": {
+            "status": "unmeasured",
+            "reason": (
+                "no binding quota window with both a remaining percent "
+                "and a duration"
+            ),
+            "committed_tokens": 0,
+            "committed_runs": 0,
+        },
+    }
 
     # A sibling registers itself (a concurrent spawn, an ad-hoc session) →
     # the sibling-list facet goes known, self excluded by run_id — but
@@ -9799,7 +9816,21 @@ def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path, mon
     facet = _read_facet()
     assert facet["status"] == "known"
     assert "fix the frontend build" in facet["summary"]
-    assert facet["spawn_pool"] == {"floor": None}
+    # Unchanged by the sibling, `priced` included: presence is identity, and a
+    # *commitment* comes from a run control with a declared allowance, which a
+    # presence registration is not.
+    assert facet["spawn_pool"] == {
+        "floor": None,
+        "priced": {
+            "status": "unmeasured",
+            "reason": (
+                "no binding quota window with both a remaining percent "
+                "and a duration"
+            ),
+            "committed_tokens": 0,
+            "committed_runs": 0,
+        },
+    }
 
 
 
@@ -9825,7 +9856,21 @@ def test_write_live_portal_state_spawn_pool_floor_unknown_without_quota(tmp_path
         (outbox_dir / "portal-state.json").read_text(encoding="utf-8")
     )
     spawn_pool = payload["resources"]["coexisting_runs"]["spawn_pool"]
-    assert spawn_pool == {"floor": None}
+    assert spawn_pool == {
+        "floor": None,
+        # No quota reading ⇒ no identified window ⇒ the pool cannot be priced,
+        # and says which of its two operands is missing rather than showing a
+        # number. The commitments it *can* count still ride along.
+        "priced": {
+            "status": "unmeasured",
+            "reason": (
+                "no binding quota window with both a remaining percent "
+                "and a duration"
+            ),
+            "committed_tokens": 0,
+            "committed_runs": 0,
+        },
+    }
 
 
 def test_write_live_portal_state_projects_owned_children_from_run_controls(tmp_path):

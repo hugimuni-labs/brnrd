@@ -126,7 +126,13 @@
       "owned_children": [],
       "required": false,
       "spawn_pool": {
-        "floor": null
+        "floor": null,
+        "priced": {
+          "committed_runs": 0,
+          "committed_tokens": 0,
+          "reason": "no binding quota window with both a remaining percent and a duration",
+          "status": "unmeasured"
+        }
       },
       "status": "absent",
       "summary": null
