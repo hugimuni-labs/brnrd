@@ -7870,6 +7870,64 @@ def _park_seat_on_turn_end(task: Run, cfg: "dict | None") -> dict[str, object] |
     }
 
 
+def _park_seat_on_daemon_restart(
+    task: Run,
+    cfg: "dict | None",
+) -> dict[str, object] | None:
+    """The boot sweep's park for a seat a dead daemon left standing.
+
+    A restart should leave the seat standing, not start a new life on the
+    ask it was already carrying. ``_mark_interrupted_runs`` used to flip
+    every orphaned ``processing`` event back to ``pending`` so the main
+    loop would **re-dispatch it as a fresh run** — THE STALE SUMMONS,
+    2026-09-09: one full boot spent re-reading a question the seat had
+    answered five hours earlier, and 2026-09-18: 482,800 tokens booted on
+    a day-old body.
+
+    The defect was never the event staying alive; it was the *new run*.
+    So the event stays exactly where it is — pending, the resident's own
+    mail — and the run parks (``held`` / ``resume: any``, the shape
+    :func:`_park_seat_on_turn_end` already arms), with the orphaned event
+    folded into the hold as accumulated mail so nothing dispatches it in
+    the meantime. Whatever wakes the seat next — a message, one of its own
+    strands, a schedule firing, a tick — un-defers that mail and hands it
+    to a *resident*, in context, who can say "answered five hours ago" in
+    one line or actually answer it.
+
+    **No recovery code decides whether the ask was answered.** That
+    distinction was built and then deleted (2026-09-18, his steer): to
+    draw it, the sweep must guess, and a wrong guess drops a person's
+    question silently — not guessing and not saying are the same act.
+    This shape never guesses.
+
+    Same gates as the turn-end park, and no others: a seat, never a
+    strand (a strand's orphan has a parent waiting on a contract);
+    ``seat.park_on_turn_end`` on.
+    """
+    if not hasattr(task, "meta") or _is_strand(task.meta):
+        return None
+    if not _seat_park_enabled(cfg):
+        return None
+    native_session_id = _native_session_id_for(task)
+    return {
+        "reason": resource_hold.REASON_DAEMON_RESTARTED,
+        "provider": _resource_hold_provider_for_runner(
+            task.meta.get("runner_shell") or task.meta.get("runner_name")
+        ),
+        "detail": (
+            "the daemon restarted under this seat — the seat parks and its "
+            "open mail waits for it; anything addressed to it resumes it"
+        ),
+        "native_session_id": native_session_id,
+        "resume_kind": (
+            resource_hold.RESUME_NATIVE if native_session_id
+            else resource_hold.RESUME_UNSUPPORTED
+        ),
+        "resume_condition": resource_hold.RESUME_ANY,
+        "reset_deadline": None,
+    }
+
+
 #: Config key: whether an idling ``await:`` may park itself at all once it
 #: crosses ``seat.park_after_boot_ratio``. **Opt-in, default off**
 #: (2026-09-08, his repeated instruction, evt-…-gaoy: the process stays open
@@ -13336,6 +13394,63 @@ def _record_retry_provenance(event: dict, run_id: str, failure_kind: str) -> Non
     )
 
 
+def _hold_the_orphaned_event(
+    event: dict,
+    task: Run,
+    runs_dir: Path,
+    *,
+    proof: str,
+    timestamp: float,
+) -> None:
+    """Keep an orphaned event as a parked seat's mail instead of a new run.
+
+    The three writes that make one sentence true — *the ask stays open, and
+    nothing boots for it*:
+
+    1. **provenance** (#1491, additive): the resident that eventually reads
+       this ask should know its first attempt died, and of what, rather
+       than answering cold as if nothing had happened.
+    2. **``pending``** (#1496, "the event nobody could see"): the
+       resident's own pending view filters strictly on ``status ==
+       "pending"``, so an event left at ``processing`` is mail nobody can
+       read. Dispatch-eligibility is unchanged by the flip — both statuses
+       are dispatchable — which is precisely why (3) is needed.
+    3. **deferred into the hold**: a deferred event is not dispatchable
+       (``protocol.list_dispatchable`` filters it) while ``list_pending``
+       still returns it, which is exactly the shape wanted here — visible
+       mail, no lead, no fresh run. Its id joins the hold's
+       ``accumulated_event_ids``, so the seat's own release un-defers it
+       back to ordinary eligibility along with every other letter it
+       collected while parked.
+
+    Unreachable for an orphaned *spawn dispatch* (the shape
+    ``_reconcile_orphaned_spawn_dispatches`` owns and needs left at
+    ``processing``): that event's run is a strand, and the caller's park
+    never fires for one.
+    """
+    eid = str(event.get("id") or "")
+    try:
+        _record_retry_provenance(event, task.id, runner_failures.HOST_INTERRUPTED)
+    except Exception as exc:  # noqa: BLE001 - provenance never blocks the park
+        print(f"[brnrd] interrupt provenance stamp failed for {eid}: {exc}")
+    try:
+        if str(event.get("status") or "") == "processing":
+            protocol.set_status(event, "pending")
+        protocol.update_event_meta(
+            event,
+            defer_until=_format_utc_after(_HOLD_DEFER_SECONDS, now=timestamp),
+            deferred_by_run=task.id,
+            defer_reason="resource_hold",
+        )
+    except OSError as exc:
+        # The event is still pending and still someone's question; the
+        # worst case here is that it dispatches a run of its own, which is
+        # the behaviour this branch improves on, not a loss.
+        print(f"[brnrd] could not hold orphaned event {eid} ({proof}): {exc}")
+        return
+    _accumulate_held_event(runs_dir, task, eid)
+
+
 def _mark_interrupted_runs(
     account_context: account.AccountContext,
     repo_root: Path,
@@ -13477,6 +13592,66 @@ def _mark_interrupted_runs(
                     "safety horizon"
                 )
             retry_event = retry_eligible.get(task.event_id or "")
+            park_fields = _park_seat_on_daemon_restart(task, cfg)
+            if park_fields is not None:
+                # A SEAT IS NOT A JOB. What the restart interrupted is a
+                # life, not a work item: parking it (`held` / `resume:
+                # any`) is the recovery, and re-dispatching its event as a
+                # fresh run is the defect — a stranger booting cold on an
+                # ask the standing seat is already holding.
+                #
+                # The event itself is left alone on purpose. It stays
+                # `pending`: the resident's own mail, which the parked seat
+                # reads in context when something wakes it — and which a
+                # *resident* resolves ("answered five hours ago" is one
+                # line; never answered gets answered). Nothing here decides
+                # whether the ask was already answered, because deciding it
+                # means guessing, and a wrong guess drops a person's
+                # question silently.
+                #
+                # Folding it into the hold as accumulated mail is what
+                # keeps it from minting that fresh run in the meantime:
+                # deferred events are not dispatchable, `list_pending`
+                # still returns them (so they are visible mail), and the
+                # hold's own release un-defers every accumulated id.
+                try:
+                    hold_meta = _arm_resource_hold(
+                        task, runs_dir,
+                        conversation_key=task.conversation_key or "",
+                        account_home=account.context_home_root(account_context),
+                        repo_root=root,
+                        **park_fields,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    # Arming is the whole park; without a standing seat
+                    # there is nothing to hold the mail, so fall through to
+                    # the ordinary interrupted-and-retry path.
+                    print(
+                        f"[brnrd] interrupted-run marker: park failed for "
+                        f"{task.id} ({exc}) — falling back to retry"
+                    )
+                else:
+                    if retry_event is not None:
+                        _hold_the_orphaned_event(
+                            retry_event, task, runs_dir,
+                            proof=proof, timestamp=timestamp,
+                        )
+                    _WorkerEmit(brr_dir, task.conversation_key, task.event_id)(
+                        "held",
+                        run_id=task.id,
+                        event_id=task.event_id,
+                        reason=hold_meta["reason"],
+                        provider=hold_meta["provider"],
+                        resume_condition=hold_meta["resume_condition"],
+                        resume_kind=hold_meta["resume_kind"],
+                    )
+                    marked += 1
+                    print(
+                        f"[brnrd] interrupted-run marker: {task.id} parked "
+                        f"({proof}) — event {task.event_id} kept as the "
+                        f"seat's own mail, no new run"
+                    )
+                    continue
             will_retry = bool(retry_event)
             if will_retry:
                 # #1491: the retry path already recovers the *work* (the
