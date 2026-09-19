@@ -56,6 +56,31 @@ def write_boot_score(brr_dir: Path, task: Run, score: Any) -> Path | None:
         return None
 
 
+def write_boot_inheritance(
+    brr_dir: Path, task: Run, attempt: int, evidence: dict[str, Any],
+) -> Path | None:
+    """Persist each attempt's prepared inheritance, not claimed Shell consumption.
+
+    One immutable-by-convention receipt per attempt avoids mixing a retry's seed
+    with the first attempt's prompt.md. No native resume address belongs here.
+    """
+    import json
+
+    path = brr_dir / "runs" / task.id / f"boot-inheritance-{attempt}.json"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps({
+            "schema_version": "1", "run_id": task.id, "attempt": attempt,
+            **evidence,
+        }, indent=2, sort_keys=True), encoding="utf-8")
+        temporary.replace(path)
+        return path
+    except (OSError, TypeError) as exc:
+        print(f"[brnrd] boot inheritance receipt unavailable: {exc}")
+        return None
+
+
 def write_mounted_blocks(brr_dir: Path, task: Run, mount_sink: dict[str, str]) -> Path | None:
     """Write the wake's mounted-out block text to `.brr/runs/<run-id>/prompt-mounted.json`.
 

@@ -662,6 +662,48 @@ def _wake(run: RunView | None) -> str:
     return f"{header}\n{no_manifest_note}\n\n{run.prompt}"
 
 
+def _inheritance_rows(boot: dict[str, Any]) -> list[str]:
+    """Prepared handoff evidence, separate from native consumption evidence."""
+    records = boot.get("inheritance")
+    if not isinstance(records, list) or not records:
+        return ["  [opaque] mount      no inheritance receipt (older or uncaptured run)"]
+    lines = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        prefix = f"  [daemon] attempt {record.get('attempt', '?')} · mount: "
+        mode = record.get("mode")
+        if mode == "mount":
+            seed = record.get("seed") or {}
+            reads = seed.get("reads") or []
+            if not seed:
+                lines.append(prefix + "seed prepared; measurement unavailable")
+                continue
+            extra = [read for read in reads if not read.get("product_file")]
+            scope = "product files only" if not extra else "includes non-product files"
+            lines.append(prefix + f"{len(reads)} reads · {seed.get('read_bytes', 0):,} B payload · {scope}")
+            lines.append(f"  [exact]  seed       {seed.get('seed_rows', 0)} rows · {seed.get('seed_bytes', 0):,} B JSONL")
+            lines.append(f"  [exact]  seed id    {seed.get('session_id', '—')}")
+            for read in reads:
+                label = "+" if not read.get("product_file") else " "
+                lines.append(f"           {label} {read.get('path', '?')} · {read.get('bytes', 0):,} B")
+            lines.append("           Seed prepared for --resume --fork-session; Shell consumption is not attested.")
+        elif mode == "native":
+            lines.append(prefix + f"none — native resume requested ({record.get('provider') or '?'})")
+        elif mode == "runner_cmd":
+            flags = ", ".join(record.get("resume_flags") or [])
+            lines.append(prefix + "none — runner_cmd owns inheritance" + (f" ({flags})" if flags else ""))
+        elif mode == "prose":
+            lines.append(prefix + f"none — prose ({record.get('reason') or 'unrecorded reason'})")
+        else:
+            lines.append(prefix + "inheritance receipt unavailable or unrecognized")
+        if record.get("cold_reason"):
+            lines.append(f"           {record['cold_reason']}")
+        if record.get("error"):
+            lines.append(f"           {record['error']}")
+    return lines
+
+
 def _boot(run: RunView | None) -> str:
     """Render the runner side of wake-up without claiming unknowable context."""
     if run is None:
@@ -701,6 +743,9 @@ def _boot(run: RunView | None) -> str:
         f"  [exact]  wake       {int(wake.get('bytes') or 0):,} B",
         f"  [exact]  wake sha   {sha[:16] + '…' if sha else '—'}",
         f"  [exact]  source     {wake.get('path') or '—'}",
+        "",
+        "INHERITANCE",
+        *_inheritance_rows(boot),
         "",
         "SESSION",
     ]

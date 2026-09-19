@@ -58,9 +58,8 @@ _EVENT_META_FIELDS = {
     # path in the daemon was a fresh candidate for carrying one by accident.
     # Four defects came out of that (see `pending_resume.py`). The resume
     # claim is the daemon's now, held per seat and consumed once
-    # (`worker/prepare.py` sets these two on `task.meta` directly, after
-    # `pending_resume.consume`). Dropping them here is what makes a forged
-    # or inherited event inert rather than merely unlikely.
+    # (`worker/prepare.py` carries the consumed claim in memory only).
+    # Dropping them here makes a forged or inherited event inert.
     "resume_native_session_id", "resume_native_provider",
     # The same key under the Shells' own names. `_native_session_id_for`
     # reads exactly these two off run meta to decide what a park may resume
@@ -73,6 +72,7 @@ _EVENT_META_FIELDS = {
     # has actually executed; nothing legitimately puts them on an event.
     "claude_session_id", "codex_thread_id",
 }
+_RESUME_CLAIM_FIELDS = frozenset({"resume_native_session_id", "resume_native_provider"})
 _RUN_FIELDS = {
     "id", "event_id", "branch", "env", "environment", "status", "source",
     "conversation_key",
@@ -287,6 +287,8 @@ class Run:
         if self.conversation_key:
             lines.append(f"conversation_key: {self.conversation_key}")
         for k, v in self.meta.items():
+            if k in _RESUME_CLAIM_FIELDS:
+                continue
             lines.append(f"{k}: {_format_run_meta_value(v)}")
         lines.append("---")
         lines.append(self.body)
@@ -307,7 +309,8 @@ class Run:
         body = protocol.frontmatter_body(text).strip()
         meta = {
             k: _decode_run_meta_value(k, v)
-            for k, v in fm.items() if k not in _RUN_FIELDS
+            for k, v in fm.items()
+            if k not in _RUN_FIELDS and k not in _RESUME_CLAIM_FIELDS
         }
         return cls(
             id=fm["id"],
