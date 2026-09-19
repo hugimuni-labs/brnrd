@@ -3814,8 +3814,21 @@ def _merge_level_snapshots(
         if isinstance(source, str) and source.strip():
             sources.append(source.strip())
         for key in ("quota", "spend", "context_window", "plan_type"):
-            if key in snapshot:
-                merged[key] = snapshot[key]
+            if key not in snapshot:
+                continue
+            value = snapshot[key]
+            # A snapshot's own ``updated_at`` is the only age its quota
+            # reading carries, and this whitelist used to drop it — which
+            # is how a *claude* reading reached :func:`_capture_exit_quota`
+            # with nothing to date it by while codex's (which states one
+            # inside its own quota block) arrived stamped. Copied, never
+            # mutated in place: the cached snapshot dict is shared. Never
+            # overwrites a collector's own stamp.
+            if key == "quota" and isinstance(value, dict) and not value.get("updated_at"):
+                stamp = str(snapshot.get("updated_at") or "").strip()
+                if stamp:
+                    value = {**value, "updated_at": stamp}
+            merged[key] = value
     if sources:
         merged["source"] = " + ".join(dict.fromkeys(sources))
     return merged or None
@@ -11019,7 +11032,11 @@ def _levels_measured_at(levels: "dict[str, object] | None") -> str | None:
     """
     if not isinstance(levels, dict):
         return None
-    for holder in (levels, levels.get("quota")):
+    # The quota block's own stamp outranks the snapshot's. A merged codex
+    # snapshot dates itself by "the freshest thing in it" — which can be a
+    # rollout ``token_count`` written after the rate-limit probe that
+    # produced these buckets. This reading is about the buckets.
+    for holder in (levels.get("quota"), levels):
         if isinstance(holder, dict):
             stamp = str(holder.get("updated_at") or "").strip()
             if stamp:
