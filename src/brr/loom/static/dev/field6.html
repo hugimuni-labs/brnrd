@@ -574,12 +574,13 @@ function renderHud(d){
 
 // the seam: [FRAME] reads this for its chrome; [WORLD] is the only writer.
 function worldHud(){
-  const sh=(S&&S.shuttle)||{}, last=((S&&S.beads)||[]).slice(-1)[0]||{};
+  const sh=(S&&S.shuttle)||{}, run=(S&&S.run)||{}, last=((S&&S.beads)||[]).slice(-1)[0]||{};
   const me=pods.find(p=>p.kind==='resident')||null;
   const where=p=>!p||!p.target?null:(p.target.cell?p.target.cell.k:(p.target.home?p.target.home.path
     :(p.target.room?p.target.room.it.id:(p.target.node?p.target.node.path:null))));
-  return {state:sh.state||null,why:sh.why||null,last:last.act||null,vials:lastVials,
-    pod:me?{x:me.x,y:me.y,listening:!!me.listening,place:where(me)}:null,
+  return {state:sh.state||null,why:sh.why||null,last:{act:last.act||null,kind:last.place_kind||null,at:last.at||null},vials:lastVials,
+    pod:me?{x:me.x,y:me.y,listening:!!me.listening,place:where(me),
+      name:run.name,core:run.core,glyph:run.mood_glyph}:null,
     strands:pods.filter(p=>p.kind==='strand').map(p=>({id:p.id,label:p.label,place:where(p),fill:p.fill})),
     doors:rooms.filter(r=>r.lane===0).length,shut:corridors.filter(c=>c.shut).length,
     rooms:rooms.length,dark:rooms.filter(r=>r.lit===null).length,
@@ -2785,7 +2786,7 @@ const RECORD=(()=>{
     //   1. every act carries its price ON the act — the cost sits beside the
     //      decision, never in a status bar
     //   2. the base is the oldest and heaviest row, at the bottom
-    //   3. one total line: boot + run = what is on the body at this boundary
+    //   3. entry + net change = the last measured context
     //   4. his line lands on the top layer and grows it — kept, and made
     //      honest: see the note on the row
     //   5. the delta since P was last opened, in memory only, no storage
@@ -2794,9 +2795,16 @@ const RECORD=(()=>{
     // window adds is the price, and a price reads best beside its own act.
     const S0=R.src||{}, b=S0.beads||[];
     if(!b.length)return null;
-    const base=(b[0].ctx_after||0)-(b[0].delta||0);
-    const run=b.reduce((a,q)=>a+Math.max(0,q.delta||0),0);
-    const tot=base+run;
+    const measured=b.filter(q=>num(q.ctx_after));
+    if(!measured.length)return {rows:[],note:'body size unmeasured',gap:'no context token reading in this feed'};
+    const first=measured[0], last=measured[measured.length-1];
+    // The entry reading can contain a predecessor. Net change is a
+    // difference of measurements; summing positive deltas hides compaction.
+    const base=first.ctx_after-(num(first.delta)?first.delta:0);
+    const tot=last.ctx_after, run=tot-base;
+    const origin=(S0.run||{}).body_origin||{};
+    const inherited=origin.native_resume_requested===true;
+    const originLabel=inherited?'native resume requested':'body origin unrecorded';
     const rows=[];
     // his arrival, on the top layer, when it is newer than my last act
     const inb=(((S0.hud||{}).full||{}).inbound||{}).events||[];
@@ -2811,33 +2819,9 @@ const RECORD=(()=>{
     for(const q of acts)rows.push({
       k:`${(q.at||'').slice(11,16)}  ${q.act}  ${(q.places||[])[0]||(q.home_places||[])[0]||q.place_kind||''}`,
       v:q.delta,t:`+${(q.delta/1000).toFixed(1)}k`});
-    // THE STRATA — the base, opened. Everything below this line is the wake
-    // the run was booted with, one row per block, oldest foundation at the
-    // bottom exactly as field3 stacked it. The boot blocks are most of the
-    // body (38 % of it at this boundary) and until now this panel itemised
-    // every act on top of them while showing none of them, which made the
-    // periodic trim an argument with no instrument: the real question is
-    // always `work-surface` at 47.9K against `dominion` at 22.4K, and neither
-    // number had ever been on a screen.
-    //
-    // THREE RULES, because this is a trim instrument and a trim instrument
-    // that flatters is worse than none:
-    //   1. Bytes below the line, tokens above. The feed measures the wake in
-    //      bytes (`pack`) and the acts in context tokens (`ctx_after`/
-    //      `delta`). Converting either into the other would be arithmetic
-    //      dressed as a reading, so each half keeps its own unit and the
-    //      SEAM ROW carries the one figure that spans them — the measured
-    //      boot tokens as a share of the body.
-    //   2. A stratum's bar is its share of THE WAKE, not of the body, so the
-    //      seventeen are comparable to each other and visibly sum to the
-    //      foundation. That is the "what would I cut?" read.
-    //   3. Only measured marks. `cut N` is what the render already dropped
-    //      from this block's own file (`bytes_cut`). `re-read` means an act
-    //      of this run named that same file — the only join the manifest
-    //      affords. NOTHING says "unused": whether a block in the window was
-    //      *used* is not measured anywhere, and 14 of the 21 blocks are
-    //      synthesized with no file to join at all — including the three
-    //      largest. An unmeasured mark here would be worse than an absent one.
+    // Rendered wake blocks are bytes, not a token breakdown of the entry
+    // body. Native resume can put a predecessor beneath this new prompt.
+    // File joins prove re-reading only; they cannot prove unused context.
     const pk=S0.pack, blocks=(pk&&Array.isArray(pk.blocks))?pk.blocks:[];
     const strata=blocks.filter(q=>q.present&&num(q.bytes)&&q.bytes>0);
     const pkb=num(pk&&pk.bytes)&&pk.bytes>0?pk.bytes
@@ -2851,15 +2835,14 @@ const RECORD=(()=>{
         for(const pl of q.places||[])seen.add(pl);
         for(const ch of q.chunks||[])if(ch&&ch.path)seen.add(ch.path);
       }
-      const owned={};
-      for(const q of strata)owned[q.owner||'?']=(owned[q.owner||'?']||0)+q.bytes;
-      const split=Object.entries(owned).sort((x,y)=>y[1]-x[1]).slice(0,3)
-        .map(([o,n])=>`${o.replace('daemon-live','daemon')} ${KB(n)}`).join(' \u00b7 ');
+
       // the seam: the one row that spans both units, and the only bar in the
       // panel scaled against the whole body
-      rows.push({k:`THE WAKE \u00b7 ${strata.length} strata \u00b7 ${split}`,
-                 v:base,dv:tot,found:true,seam:true,
-                 t:`${Math.round(100*base/(tot||1))}% of the body`});
+      rows.push({k:`ENTRY BODY · ${originLabel}`,v:base,dv:tot,found:true,seam:true,
+                 t:`${(base/1000).toFixed(1)}k`});
+      rows.push({k:'inherited scroll / new wake · token split unmeasured',found:true,t:'—'});
+      rows.push({k:`NEW WAKE · ${strata.length} rendered strata · bytes only`,
+                 found:true,t:KB(pkb)});
       // oldest at the bottom: the manifest is render order, so walk it back
       for(let i=strata.length-1;i>=0;i--){
         const q=strata[i], marks=[];
@@ -2872,12 +2855,13 @@ const RECORD=(()=>{
       }
     }else{
       // no manifest for this run: the base stays the one arithmetic row it was
-      rows.push({k:'the base \u2014 the wake, as one row (no `pack` for this run)',
+      rows.push({k:`entry body · ${originLabel} · wake/inheritance split unknown`,
                  v:base,t:`${(base/1000).toFixed(1)}k`,base:true});
     }
     // the total line, and the hour's price if this window has been open before
-    let note=`boot ${(base/1000).toFixed(1)}k + run ${(run/1000).toFixed(1)}k = `
-      +`${(tot/1000).toFixed(1)}k on the body at this boundary`;
+    let note=`entry ${(base/1000).toFixed(1)}k ${run<0?'−':'+'} net ${(Math.abs(run)/1000).toFixed(1)}k = `
+      +`${(tot/1000).toFixed(1)}k · ${(last.at||'').slice(11,19)} UTC`;
+    if(first.n!==0)note+=' · visible tail, not the whole run';
     if(num(R.lastOpen)&&R.lastOpen!==tot){
       const d=tot-R.lastOpen, mins=Math.max(1,Math.round((Date.now()-R.lastOpenAt)/60000));
       note+=` \u00b7 +${(d/1000).toFixed(1)}k since you last looked, ${mins} min ago`;
@@ -2889,9 +2873,9 @@ const RECORD=(()=>{
       gap:strata.length
         ?`below the line: bytes \u00b7 ${unjoinable} strata carry no file, so only `
          +`re-read is measurable \u2014 never unused`
-        :'no `pack` for this run: the base is one row, not its blocks \u00b7 '
+        :'no wake manifest · inherited / new wake tokens unmeasured \u00b7 '
          +'tokens, not bytes \u2014 the feed measures ctx_after/delta'};
-    window.BODY={base,run,tot,strata:strata.length,packBytes:pkb,
+    window.BODY={base,run,tot,origin:originLabel,splitKnown:false,strata:strata.length,packBytes:pkb,
                  rows:out.rows.map(r=>[r.k,r.t,r.v,!!r.found]),gap:out.gap,note};
     return out;
   }
@@ -3236,7 +3220,7 @@ const ZOOM=(()=>{
   const runOf=()=>Z.island?null:(RECORD.pass||((S&&S.run)||{}).id||null);
   const rung=()=>Z.island?0:Z.leaf?3:Z.row?2:1;
   const RUNG_SAY=['island · what this repo is','run · what one resident did',
-                  'file · where in the file the work landed','lines · the exact changes'];
+                  'file · where in the file the work landed','lines · current source; historical text unavailable'];
   Z.frozen=()=>!!(TREE&&TREE.replay);          // a past run selected: the world is stopped
 
   // ── the run's page: its own acts, and the chunk record under them ────────
@@ -3340,7 +3324,7 @@ const ZOOM=(()=>{
   // law, and it survives a greyscale print. A band with no measured height to
   // normalise against is TORN, not stretched to fit.
   function drawStrip(g,r,x0,y,w){
-    const e=r.m, lines=num(r.lines)&&r.lines>0?r.lines:null, h=lines||e&&e.deepest||null;
+    const e=r.m, lines=!Z.frozen()&&num(r.lines)&&r.lines>0?r.lines:null, h=lines||e&&e.deepest||null;
     g.strokeStyle='rgba(110,94,64,0.45)';g.lineWidth=1;
     g.beginPath();g.moveTo(x0,y+0.5);g.lineTo(x0+w,y+0.5);g.stroke();
     if(!h||!e){
@@ -3446,6 +3430,9 @@ const ZOOM=(()=>{
   function leafData(){
     const path=Z.leaf; if(!path)return null;
     const run=runOf(), win=Z.win||{};
+    // Guard before fetch AND before cache lookup: an older server returns
+    // live text even when `run` is supplied. It cannot satisfy this reading.
+    if(Z.frozen())return {state:'historical',path,run};
     const key=KEY(path,run,win.a,win.b);
     const q=`/loom/page/place?path=${encodeURIComponent(path)}`
       +(run?`&run=${encodeURIComponent(run)}`:'')
@@ -3472,7 +3459,7 @@ const ZOOM=(()=>{
   }
   Z.leafWindow=g=>{
     if(!Z.leaf)return null;
-    const w=Math.min(760,Math.round(W*0.62)), h=Math.round(H*0.74);
+    const w=Math.min(760,Math.round(W*0.62)), h=Z.frozen()?180:Math.round(H*0.74);
     const x=Math.round(W*0.5-w/2), y=Math.round(H*0.5-h/2);
     return {x,y,w,h,name:'leaf',dim:'scene',draw:gg=>drawLeaf(gg,x,y,w,h)};
   };
@@ -3485,10 +3472,20 @@ const ZOOM=(()=>{
     g.font=`10px ${MONO}`;g.fillStyle=DIM;g.textAlign='left';
     g.fillText(`${pg.path}`,x+pad,ty);
     g.textAlign='right';g.fillStyle='rgba(74,67,54,0.9)';
-    g.fillText('esc · [ ] bands · ↑↓ scroll',x+w-pad,ty);
+    g.fillText(pg.state==='historical'?'esc':'esc · [ ] bands · ↑↓ scroll',x+w-pad,ty);
     g.textAlign='left';ty+=8;
     g.strokeStyle='rgba(122,104,72,0.28)';g.beginPath();
     g.moveTo(x+pad,ty+0.5);g.lineTo(x+w-pad,ty+0.5);g.stroke();ty+=16;
+    if(pg.state==='historical'){
+      g.font=`12px ${MONO}`;g.fillStyle=ICE;
+      g.fillText('Historical source unavailable',x+pad,ty+6);
+      g.font=`10px ${MONO}`;g.fillStyle=INK;
+      g.fillText('This pass recorded line ranges, but no verified source snapshot.',x+pad,ty+30);
+      g.fillStyle=DIM;
+      g.fillText('Today’s checkout cannot tell you what those lines said then.',x+pad,ty+49);
+      g.fillText('The file rung retains the recorded ranges. No text is substituted here.',x+pad,ty+68);
+      g.restore();return;
+    }
     if(pg.state!=='ok'){
       g.font=`11px ${MONO}`;g.fillStyle=pg.state==='fail'?A:DIM;
       g.fillText(pg.state==='fail'?'the lines could not be read':'reading the file…',x+pad,ty+4);
@@ -3504,10 +3501,12 @@ const ZOOM=(()=>{
     const un=d.unranged||{read:0,edit:0};
     // the caption: the scope, the bound, and what is NOT drawn
     g.font=`9px ${MONO}`;g.fillStyle=DIM;
-    const scope=d.scope?`this pass only${d.scope_known===false?' · no boundaries recorded for it':''}`:'every pass that touched it';
+    const scope=d.scope?`this pass’s ranges${d.scope_known===false?' · no boundaries recorded':''}`:'every pass’s ranges';
     g.fillText(`${scope} · ${bands.length} band${bands.length===1?'':'s'}`
       +` · ${bands.filter(b=>b.src==='measured').length} measured · ${bands.filter(b=>b.src!=='measured').length} parsed`
       +(whole.length?` · ${whole.length} whole-file touch${whole.length===1?'':'es'}`:''),x+pad,ty);
+    ty+=12;
+    g.fillStyle=DIM;g.fillText('CURRENT CHECKOUT · ranges record earlier acts; this is not a diff',x+pad,ty);
     ty+=12;
     if(un.edit||un.read){
       g.fillStyle=FAINT;
@@ -3991,6 +3990,16 @@ function runLine(g,runs,px,py,size){
   }
   return cur;
 }
+function activityReading(d){
+  if(!d)return 'ACTIVITY UNMEASURED · no feed';
+  const sh=d.shuttle||{}, b=(d.beads||[]).slice(-1)[0];
+  const stamp=s=>String(s||'').replace('T',' ').replace('Z','').slice(5,19);
+  const waiting=sh.state==='listening'&&sh.why==='await_armed';
+  const prefix=ZOOM.frozen()?'CURRENT SEAT':'SEAT';
+  if(waiting)return `${prefix} · waiting for an event · observed ${stamp(d.at)} UTC`;
+  if(!b)return `${prefix} · current act unmeasured · no recorded boundary`;
+  return `${prefix} · last recorded: ${b.act||'unnamed act'} · ${b.place_kind||'place unmeasured'} · ${stamp(b.at)} UTC`;
+}
 function drawChrome(g){
   const m=hudModel();
   g.textAlign='left';g.textBaseline='alphabetic';
@@ -4006,7 +4015,11 @@ function drawChrome(g){
   const bx=16, bw=300;
   hair(g,bx,y-14,bx,y-14+(m.rows.length*19)+6,0.24);
   hair(g,bx,y-14,bx+9,y-14,0.24);hair(g,bx,y-14+(m.rows.length*19)+6,bx+9,y-14+(m.rows.length*19)+6,0.24);
-  m.rows.forEach((r,i)=>{runLine(g,r,bx+12,y+i*19,11);});
+  // Bound the long run title to its own line, never into the world beside it.
+  g.save();g.beginPath();g.rect(bx+10,y-15,Math.max(300,W*0.55),m.rows.length*19+5);g.clip();
+  m.rows.forEach((r,i)=>{if(i)runLine(g,r,bx+12,y+i*19,11);});g.restore();
+  g.font=`11px ${MONO}`;g.fillStyle=I;
+  g.fillText(activityReading(S),28,y);
 
 }
 
@@ -4015,7 +4028,7 @@ function drawChrome(g){
 // the chrome and a reading that stands still costs one drawImage.
 function chromePlate(g0){
   const key=[($('#state')||{}).innerHTML,($('#belt')||{}).innerHTML,
-             ($('#legend')||{}).innerHTML,($('#src')||{}).textContent,W,H].join('\u0001');
+             ($('#legend')||{}).innerHTML,($('#src')||{}).textContent,activityReading(S),W,H].join('\u0001');
   if(key!==chromeKey){
     chromeKey=key;const g=cx2(cb);
     g.setTransform(1,0,0,1,0,0);g.clearRect(0,0,cb.width,cb.height);
