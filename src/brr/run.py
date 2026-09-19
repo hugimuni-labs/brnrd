@@ -110,7 +110,14 @@ def _format_run_meta_value(value: Any) -> str:
 #: actually needs cross-process dict fidelity belongs here.
 #: ``stake`` (move 4b): a seat parked at its cut-at is read back from disk
 #: when the user's raise arrives — the spend it carries must be a number.
-_JSON_META_KEYS = frozenset({"resource_hold", "transitions", "stake"})
+#: ``bolt`` joined on 2026-09-19 (#2031). It was written as a JSON object by
+#: ``outbox.verbs`` and read back with ``isinstance(..., dict)`` by five call
+#: sites, none of which was in the process that wrote it — so every one took
+#: its empty branch on a reloaded manifest. Nothing raised: a no-op and a
+#: silent failure were byte-identical. The decode is double-gated (allowlisted
+#: key *and* the value actually parsing to a dict/list), so a manifest whose
+#: ``bolt`` is not JSON round-trips through unchanged.
+_JSON_META_KEYS = frozenset({"resource_hold", "transitions", "stake", "bolt"})
 
 
 def _decode_run_meta_value(key: str, value: Any) -> Any:
