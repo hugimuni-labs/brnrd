@@ -3959,6 +3959,7 @@ def _collect_levels(
 def _collect_allowance_facet(
     task: Run, runner_name: str | None, work_dir: Path | None,
     *, cfg: "dict | None" = None, levels: "dict[str, object] | None" = None,
+    not_before: float | None = None,
 ) -> dict[str, object] | None:
     """A strand's or the resident seat's live ``{"tokens": N, "spent": M}``.
 
@@ -3997,6 +3998,7 @@ def _collect_allowance_facet(
         spent = allowance.collect_spent(
             runner_name, work_dir,
             codex_thread_id=task.meta.get("codex_thread_id"),
+            not_before=not_before,
         )
         task.meta["spawn_allowance_tokens"] = tokens
         task.meta["spawn_allowance_spent"] = spent
@@ -4012,6 +4014,7 @@ def _collect_allowance_facet(
     live_spent = allowance.collect_spent(
         runner_name, work_dir,
         codex_thread_id=task.meta.get("codex_thread_id"),
+        not_before=not_before,
     )
     reset_epoch = runner_quota.binding_quota_reset_epoch(levels)
     return allowance.resident_allowance_state(
@@ -4085,6 +4088,8 @@ def _record_boot_cost(
     runner_name: str | None,
     work_dir: Path | None,
     outbox_dir: Path | None,
+    *,
+    not_before: float | None = None,
 ) -> None:
     """Stamp this run's boot cost onto its own ``spend.json`` control file, once.
 
@@ -4117,7 +4122,7 @@ def _record_boot_cost(
     if not claude_status.supported(runner_name):
         return
     tokens = allowance.claude_first_turn_boot_tokens(
-        allowance.latest_claude_transcript(work_dir)
+        allowance.latest_claude_transcript(work_dir, not_before=not_before)
     )
     if tokens is None:
         return
@@ -4140,6 +4145,8 @@ def _record_context_window(
     runner_name: str | None,
     work_dir: Path | None,
     outbox_dir: Path | None,
+    *,
+    not_before: float | None = None,
 ) -> None:
     """Feed a live, transcript-derived ``context_window`` reading every
     heartbeat, instead of leaving the facet ``absent`` for a run's entire
@@ -4174,7 +4181,7 @@ def _record_context_window(
     if not claude_status.supported(runner_name):
         return
     tokens = allowance.claude_last_turn_context_tokens(
-        allowance.latest_claude_transcript(work_dir)
+        allowance.latest_claude_transcript(work_dir, not_before=not_before)
     )
     if tokens is None:
         return

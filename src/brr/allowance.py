@@ -47,7 +47,11 @@ than reusing either existing collector:
   read a sibling's session the way a bare newest-mtime scan over the whole
   projects root would (the exact hazard ``codex_status.
   _latest_rollout_fallback`` documents and defends against for codex's
-  *shared* sessions root).
+  *shared* sessions root). **The resident seat on ``env: host`` is the case
+  that premise does not cover** — its cwd is the one checkout every run of
+  the repo shares — so every caller on that path passes ``not_before`` (the
+  run's own start) and the scan skips anything a predecessor left behind;
+  see :func:`latest_claude_transcript`.
 - **codex** — ``info.total_token_usage.total_tokens`` off the last
   ``token_count`` event, via the same exact ``thread_id`` correlation
   :func:`brr.codex_status.load_levels` already uses.
@@ -360,6 +364,7 @@ def claude_last_turn_context_tokens(path: "Path | str | None") -> "int | None":
 
 def latest_claude_transcript(
     cwd: "str | Path | None", projects_root: "str | Path | None" = None,
+    *, not_before: "float | None" = None,
 ) -> "Path | None":
     """The newest session transcript under *cwd*'s own projects slug.
 
@@ -368,6 +373,23 @@ def latest_claude_transcript(
     shared/resident cwd multiple runs share, for the same reason
     :func:`brr.codex_status._latest_rollout_fallback` names for codex's
     shared sessions root.
+
+    *not_before* is how a caller that **must** use a shared cwd stays honest
+    anyway: an epoch-seconds floor (a run's own start), below which a
+    candidate is not this run's. On ``env: host`` the work dir *is* the one
+    checkout every run of the repo shares, so "newest by mtime" is the
+    **predecessor's** transcript from boot until this run's own overtakes it
+    — a window that is exactly the dashboard's ``preparing`` state. Measured
+    2026-09-19 (``run-260919-1802-6zeq``): a seat that had not yet spoken
+    reported ``445.7k tok occupied``; the retired seat's last reading was
+    443.1k, and this seat's own first boundary read 86.7k.
+
+    The floor works because a dead seat's transcript stops being written when
+    its process dies, so its mtime is frozen below any later run's start,
+    while a natively-resumed session keeps writing into its own file and
+    stays above it. Nothing left above the floor ⇒ ``None`` — the honest
+    absence #1178 already chose for this facet, never a stale number wearing
+    this run's name.
     """
     if not cwd:
         return None
@@ -391,6 +413,8 @@ def latest_claude_transcript(
             mtime = candidate.stat().st_mtime
         except OSError:
             continue
+        if not_before is not None and mtime < not_before:
+            continue
         if mtime > newest_mtime:
             newest, newest_mtime = candidate, mtime
     return newest
@@ -401,17 +425,24 @@ def collect_spent(
     work_dir: "str | Path | None",
     *,
     codex_thread_id: "str | None" = None,
+    not_before: "float | None" = None,
 ) -> "int | None":
     """A strand's own live cumulative token spend, per-Shell (step zero).
 
     ``None`` when the Shell has no reader wired, or the reader found nothing
     yet (a run's very first boundary, before either Shell has written
     anything to read) — never a fabricated zero.
+
+    *not_before* rides straight through to :func:`latest_claude_transcript`:
+    on a shared work dir it is what keeps a retired seat's cumulative tokens
+    from being metered as this one's spend.
     """
     if codex_status.supported(runner_name):
         return codex_status.total_tokens_used(thread_id=codex_thread_id)
     if claude_status.supported(runner_name):
-        return claude_transcript_tokens(latest_claude_transcript(work_dir))
+        return claude_transcript_tokens(
+            latest_claude_transcript(work_dir, not_before=not_before)
+        )
     return None
 
 

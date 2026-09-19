@@ -405,3 +405,57 @@ def test_hud_verb_produce_on_a_pre_move_5_portal(tmp_path, capsys):
         "ledger: absent (a portal written before move 5)",
         "relics: unknown (no work tree measured)",
     ]
+
+
+def test_build_hands_every_transcript_reader_this_runs_own_start(
+    tmp_path, monkeypatch,
+):
+    """The floor `allowance.latest_claude_transcript` needs on `env: host`.
+
+    `hud.build` is the one place that holds the run's start, so it is the one
+    place that can tell a reader which transcripts are this run's. Pins the
+    wiring: all three readers get the same wall-clock start, derived from the
+    monotonic stamp (one start, never two that can disagree).
+    """
+    import time as _time
+
+    from brr.run import Run
+
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(
+        daemon, "_record_context_window",
+        lambda *_a, not_before=None, **_k: seen.__setitem__("ctx", not_before),
+    )
+    monkeypatch.setattr(
+        daemon, "_record_boot_cost",
+        lambda *_a, not_before=None, **_k: seen.__setitem__("boot", not_before),
+    )
+    monkeypatch.setattr(
+        daemon, "_collect_allowance_facet",
+        lambda *_a, not_before=None, **_k: seen.__setitem__("allowance", not_before),
+    )
+    monkeypatch.setattr(
+        daemon, "_collect_levels", lambda *_a, **_k: ({}, frozenset()),
+    )
+
+    inbox_dir = tmp_path / "inbox"
+    inbox_dir.mkdir()
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    started_ago = 600.0
+    before = _time.time() - started_ago
+    hud.build(hud.HUDInputs(
+        outbox_dir=tmp_path / "outbox",
+        inbox_dir=inbox_dir,
+        current_event_id="evt-1",
+        task=task,
+        phase="running",
+        runner_name="claude",
+        work_dir=tmp_path / "work",
+        start_monotonic=_time.monotonic() - started_ago,
+        brr_dir=tmp_path / ".brr",
+    ))
+
+    assert set(seen) == {"ctx", "boot", "allowance"}
+    assert len({round(float(v), 3) for v in seen.values()}) == 1
+    # The run's own start, in wall-clock seconds — not "now", not None.
+    assert before - 2 <= float(seen["ctx"]) <= before + 2
