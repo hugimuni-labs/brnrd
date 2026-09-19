@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>the derelict — field7, the place made like a game</title>
+<title>the console — field7, the place made like a game</title>
 <style>
 :root{--bg:#070604}
 *{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--bg);overflow:hidden;cursor:crosshair}
@@ -9,29 +9,38 @@ canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
 <canvas id="c"></canvas>
 <script>
 /* ═══════════════════════════════════════════════════════════════════════════
-   FIELD7 — THE DERELICT.  A text-mode screen, one cell grid, drawn on canvas
+   FIELD7 — THE CONSOLE.  A text-mode screen, one cell grid, drawn on canvas
    and run through a phosphor post-pass.  Nothing on it is decoration: every
    glyph is a reading from /loom/state.json, and a reading that is absent is
    black, torn, or labelled — never invented.
 
-   The game, mechanically:
-     the DERELICT  = the holding — repo decks moored above the home ground
-                     (knowledge · dominion · surface).  A directory is a ROOM.
-                     A room nobody has ever entered is dark.  A room is lit by
-                     the heat of the last visit; a file read is a ping.
-     the SHIP      = the seat (the resident's run), moored top-left.  Power is
-                     fuel.  What came back from the drones docks on its keel.
-     the DRONES    = strands.  Each stands in the room of its last trail entry
-                     and drags its trail (the last 8 places) behind it.
+   Who is who (the maintainer's correction, 2026-09-19):
+     the OPERATOR  = the user.  This screen is HIS console.  The hull top-left
+                     is his: his power (the account's quota), his crew, what is
+                     his to decide.
+     the SEAT      = the resident's run — a drone to him AND an operator to its
+                     own strands, both at once.  It stands on the map like any
+                     drone, marked ▸n for the drones it has out.
+     the DRONES    = strands, beneath the seat.  Each stands in the doorway of
+                     its last trail entry.
+   Duskers is a reference, not the target: the core is an efficient agentic
+   dev environment, and a mechanic stays only if an operator dispatches, reads
+   or decides faster because of it.
+
+   The mechanics:
+     the HOLDING   = repo decks moored above the home ground (knowledge ·
+                     dominion · surface).  A directory is a ROOM.  A room
+                     nobody has entered is dark; a room is lit by the heat of
+                     the last visit; a file read is a ping.
      the OBJECTIVES= warp items, standing in the rooms their topic's signature
                      names.  His ready decisions are ice — the cold thing on
-                     the map that only his hand can warm.  Held = a locked door.
-     the CONSOLE   = the operator's only instrument.  You never go in.  You
-                     type, the sonar answers, the drones move on their own.
+                     the map only his hand can warm.  Held = a locked door.
+     the CONSOLE   = his prompt.  Every verb reads (the write verbs are the
+                     next build and an authority question first).
 
    Three altitudes, three renderings of one map — not a zoom, a text screen
    redraws at scale and the phosphor carries the old frame into the new one:
-     3  the derelict     every deck in one frame, rooms as small as the frame
+     3  the holding      every deck in one frame, rooms as small as the frame
                          needs, names only where the frame can afford them
      2  a deck           one deck fills the frame; rooms open, files are glyphs
      1  a room           its files as rows, and what was read of each, as
@@ -150,9 +159,10 @@ function ingest(d){S=d;const m={rooms:new Map(),files:new Map(),decks:[],drones:
   const where=row=>{const t=row.trail&&row.trail[0];if(!t)return null;const f=m.files.get(t.path);return f?f.room:(m.rooms.get(t.path)||null);};
   const trailRooms=row=>{const out=[];for(const t of (row.trail||[])){const f=m.files.get(t.path);const r=f?f.room:m.rooms.get(t.path);if(r&&!out.includes(r))out.push(r);}return out;};
   for(const row of rows){const live=!row.ended;const seat=row.run===runId;
-    const dr={row,id:row.run,tag:short(row.run),seat,live,room:where(row),path:trailRooms(row),glyph:seat?'b·_·d':'b·:·d',name:row.name||row.title||''};
+    const dr={row,id:row.run,tag:short(row.run),seat,live,room:where(row),path:trailRooms(row),glyph:seat?((d.run&&d.run.mood_glyph)||'b·_·d'):'b·:·d',name:row.name||row.title||'',kids:0};
     if(live)m.drones.push(dr);else m.docked.push(dr);}
   if(!m.drones.some(x=>x.seat)&&runId){m.drones.unshift({id:runId,tag:short(runId),seat:true,live:true,room:null,path:[],glyph:'b·_·d',name:d.run.name||'',row:null});}
+  for(const dr of m.drones){if(!dr.seat)continue;dr.kids=m.drones.filter(x=>!x.seat&&x.row&&x.row.parent===dr.id).length;}
   m.docked.sort((a,b)=>String(b.row.ended).localeCompare(String(a.row.ended)));m.docked=m.docked.slice(0,6);
   // chunks: what was read of each file, from the beads — matched by path suffix; off-map reads are counted, not placed
   m.offmap=0;let matched=0;
@@ -177,7 +187,7 @@ function ingest(d){S=d;const m={rooms:new Map(),files:new Map(),decks:[],drones:
   if(SEL.drone)SEL.drone=m.drones.find(x=>x.id===SEL.drone.id)||null;
   for(const k of ['deck','room'])if(SEL[k])SEL[k]=m.rooms.get(SEL[k].path)||null;if(SEL.file)SEL.file=m.files.get(SEL.file.path)||null;
   M=m;if(!SEL.deck&&m.decks.length)SEL.deck=m.decks[0];
-  if(!LOG.length)say(`⟵ the derelict · ${m.decks.length} decks moored · ${m.ground.length} home grounds · ${m.files.size} things measured · type help`,DIM);
+  if(!LOG.length)say(`⟵ your console · ${m.decks.length} decks moored · ${m.ground.length} home grounds · ${m.files.size} things measured · type help`,DIM);
   relayout();dirty=true;}
 
 // ═══ [MAP] ════════════════════════════════════════════════════════════════
@@ -274,16 +284,17 @@ function drawFloor(rc,now){const r=rc.room;const x0=rc.x+1,y0=rc.y+2,w=rc.w-2;if
         put(cx,y0+y,g,c);put(cx+1,y0+y,cut(f.name,12),f.heat>0?(f.mine?INK:DIM):ABS);}}
     else{let s='';for(let k=0;k<w&&i<files.length;k++,i++){const f=files[i];put(x0+k,y0+y,f.chunks.length?'▮':f.heat>0?'●':'·',f.mine?AH:f.heat>0?warm(f.heat):ABS);}}}
   if(i<files.length&&rowsAvail>0)put(x0+w-6,y0+rowsAvail-1,cut(`+${files.length-i}`,6),ABS);}
-function drawDrones(now){if(!M||!LAY)return;
+function drawDrones(now){if(!M||!LAY)return;const doorUse=new Map();
   for(const dr of M.drones){const rc=dr.room&&LAY.rects.get(nearestDrawn(dr.room));
     // the trail: room centres joined by a dotted line, oldest faintest
     if(SEL.drone===dr){const pts=dr.path.map(r=>LAY.rects.get(nearestDrawn(r))).filter(Boolean);
       for(let i=pts.length-1;i>=1;i--){const a=door(pts[i]),b=door(pts[i-1]);const k=1-i/pts.length;line(a,b,'·',`rgba(242,177,52,${(.25+.6*k).toFixed(2)})`);}}
     if(!rc)continue;
-    const c=door(rc);
-    const g=dr.glyph;const gx=Math.round(c.x-g.length/2);
-    put(gx-1,c.y,'┤'+g+'├',SEL.drone===dr?I:dr.seat?AH:A,{b:true});
-    if(!dr.seat&&c.y+1<ROWS-CONSOLE_ROWS-1)put(gx,c.y+1,cut(dr.tag+(dr.row&&dr.row.core?' '+dr.row.core.slice(0,5):''),g.length+2),DIM);}}
+    // drones stand in the doorway from the right end of the bottom wall, tag beside the glyph, so two in one room never overprint
+    const k=(doorUse.get(rc)||0);doorUse.set(rc,k+1);
+    const g=dr.glyph,tag=cut(dr.tag+(dr.row&&dr.row.core?' '+dr.row.core.slice(0,5):'')+(dr.seat?' ▸'+dr.kids:''),14);
+    const wdt=g.length+3+tag.length;const gx=rc.x+rc.w-2-wdt-k*(wdt+1);if(gx<rc.x+1)continue;
+    put(gx,rc.y+rc.h-1,'┤'+g+'├',SEL.drone===dr?I:dr.seat?AH:A,{b:true});put(gx+g.length+3,rc.y+rc.h-1,tag,dr.seat?A:DIM);}}
 const door=rc=>({x:Math.floor(rc.x+rc.w/2),y:rc.y+rc.h-1});   // a drone stands in the doorway of its room, set into the wall
 function nearestDrawn(r){let p=r.path;while(p!==undefined){if(LAY.rects.has(p))return p;if(p===''||p==='/')break;p=p.startsWith('~')&&!p.includes('/')?'':dirOf(p);}
   // a room off this frame: the deck it belongs to, if drawn
@@ -294,27 +305,27 @@ function line(a,b,ch,fg){const n=Math.max(Math.abs(b.x-a.x),Math.abs(b.y-a.y)*2)
 function drawShip(now){const s=LAY.ship;if(!s||!M||ALT.z!==3)return;const d=S;const x=s.x,y=s.y;
   const scanning=now-SCAN.t<260;
   put(x,y,  '╭─▲'+'─'.repeat(SHIP_W-8)+'▲─╮',A);
-  const face=(d.run&&d.run.mood_glyph)||'b·_·d';const st=(d.shuttle&&d.shuttle.state)||'?';
-  put(x,y+1,'┤',A);put(x+1,y+1,' '+face+' ',AH,{b:true});put(x+2+face.length+1,y+1,cut(st+(d.shuttle&&d.shuttle.why?' · '+d.shuttle.why:''),SHIP_W-face.length-6),st==='awake'?AH:st==='listening'?A:I);put(x+SHIP_W-1,y+1,'├',A);
-  const nm=(d.run&&d.run.name)||'';put(x,y+2,'│',A);put(x+2,y+2,cut(nm||'run unnamed',SHIP_W-4),nm?INK:TORN);put(x+SHIP_W-1,y+2,'│',A);
-  // power: the fuel windows as bars — binding window first, the rest after; unmeasured is torn
+  put(x,y+1,'┤',A);put(x+2,y+1,'operator · you',INK,{b:true});put(x+17,y+1,cut((d.repo||''),SHIP_W-19),DIM);put(x+SHIP_W-1,y+1,'├',A);
+  // power: the account's fuel windows as bars — the binding window first; unmeasured is torn
   const seat=((d.fuel&&d.fuel.buckets)||[]).find(b=>b.seat)||((d.fuel&&d.fuel.buckets)||[])[0];
-  const wins=(seat&&seat.windows)||[];const bw=8;
-  let row=y+3;for(const w of wins.slice(0,2)){const pct=w.pct_left;const k=num(pct)?Math.round(bw*pct/100):0;
+  const wins=(seat&&seat.windows||[]).slice().sort((a,b)=>(b.binding?1:0)-(a.binding?1:0));const bw=8;
+  let row=y+2;for(const w of wins.slice(0,2)){const pct=w.pct_left;const k=num(pct)?Math.round(bw*pct/100):0;
     put(x,row,'│',A);put(x+2,row,cut(w.name,7),DIM);
     put(x+10,row,num(pct)?'▮'.repeat(k)+'▯'.repeat(bw-k):'░'.repeat(bw),num(pct)?tempCol(pct):TORN);
     put(x+19,row,num(pct)?(pct+'%').padStart(4):'torn',num(pct)?tempCol(pct):TORN);
     if(num(w.resets_in_s))put(x+24,row,cut('↻'+dur(w.resets_in_s),SHIP_W-26),ABS);
     put(x+SHIP_W-1,row,'│',A);row++;}
   if(!wins.length){put(x,row,'│',A);put(x+2,row,'power unmeasured',TORN);put(x+SHIP_W-1,row,'│',A);row++;}
-  // the crew line: drones out
-  const out=M.drones.filter(x=>!x.seat);put(x,row,'│',A);put(x+2,row,cut(`crew ${out.length} out`+(out.length?' · '+out.map(o=>o.tag).join(' '):''),SHIP_W-4),out.length?A:DIM);put(x+SHIP_W-1,row,'│',A);row++;
-  // the manifest: his ready decisions that stand nowhere on the map
+  // the crew: the seat first — a drone to you, an operator to its own — then what it has out
+  const st=M.drones.find(x=>x.seat);const out=M.drones.filter(x=>!x.seat);
+  put(x,row,'│',A);if(st){const state=(d.shuttle&&d.shuttle.state)||'?';put(x+2,row,cut(`${st.glyph} ${st.tag} · ${state}`,SHIP_W-4),state==='awake'?AH:A);}else put(x+2,row,'no seat on this repo',TORN);put(x+SHIP_W-1,row,'│',A);row++;
+  put(x,row,'│',A);put(x+2,row,cut(`  ▸ ${out.length} out`+(out.length?' · '+out.map(o=>o.tag).join(' '):''),SHIP_W-4),out.length?A:DIM);put(x+SHIP_W-1,row,'│',A);row++;
+  // yours: his ready decisions that stand nowhere on the map, and what the record could not place
   const ready=M.manifest.filter(i=>i.state==='ready').length,held=M.manifest.filter(i=>i.state==='held').length;
-  put(x,row,'│',A);put(x+2,row,cut(`manifest ◇${ready} ◆${held} · ${M.chunkCount} reads placed · ${M.offmap} off-map`,SHIP_W-4),ready?I:DIM);put(x+SHIP_W-1,row,'│',A);row++;
+  put(x,row,'│',A);put(x+2,row,cut(`◇${ready} yours off-map · ◆${held} held · ${M.offmap} reads off-map`,SHIP_W-4),ready?I:DIM);put(x+SHIP_W-1,row,'│',A);row++;
   while(row<y+SHIP_H-1){put(x,row,'│',A);put(x+SHIP_W-1,row,'│',A);row++;}
   put(x,y+SHIP_H-1,'╰──╥─'+(scanning?'◉':'○')+'─╥'+'─'.repeat(SHIP_W-9)+'╯',scanning?AH:A);
-  // docked: what came back, on the keel
+  // docked: what came back, to whom
   let ky=y+SHIP_H;for(const dk of M.docked.slice(0,3)){if(!LAY.ground||ky>=LAY.ground.y-1)break;
     const prs=(dk.row.prs||[]).length;put(x+1,ky,cut(`↩ ${dk.tag} ${hhmm(dk.row.ended)} · ${prs?prs+' pr · ':''}${dk.row.knots||0} knots${dk.name?' · '+dk.name:''}`,SHIP_W-1),DIM);ky++;}}
 const dur=s=>s>=86400?Math.round(s/86400)+'d':s>=3600?Math.round(s/3600)+'h':Math.max(1,Math.round(s/60))+'m';
@@ -369,21 +380,21 @@ function drawStatus(){ // the map's own last line: what the cursor is over, in o
   const y=MAPR.y+MAPR.h;let s='';
   if(HOVER.file){const f=HOVER.file;s=`${f.path} · ${num(f.lines)?f.lines+' lines':'lines torn'} · ${f.chunks.length?f.chunks.length+' reads':f.heat>0?'visited '+hhmm(f.last):'never opened'}${f.topics.length?' · '+f.topics.join(','):''}`;}
   else if(HOVER.rc){const r=HOVER.rc.room;s=`${r.path||'/'} · ${r.count} things · ${r.measured} lit${r.last?' · last '+hhmm(r.last):' · never entered'}${r.objs.length?' · '+r.objs.length+' objectives':''}${r.kids.length?' · '+r.kids.length+' rooms':''}`;}
-  else{const where=ALT.z===3?'the derelict':ALT.z===2?'deck '+(SEL.deck&&SEL.deck.path):'room '+((SEL.room||SEL.deck)||{}).path;s=`${where} · ${M.decks.length} decks · ${M.ground.length} grounds · ${M.drones.length-1} drones out${SEL.drone?' · trail: '+SEL.drone.tag:''}`;}
+  else{const where=ALT.z===3?'the holding':ALT.z===2?'deck '+(SEL.deck&&SEL.deck.path):'room '+((SEL.room||SEL.deck)||{}).path;s=`${where} · ${M.decks.length} decks · ${M.ground.length} grounds · ${M.drones.length-1} drones out${SEL.drone?' · trail: '+SEL.drone.tag:''}`;}
   fill(0,y,COLS,1,' ',DIM,null);put(1,y,cut(s,COLS-2),HOVER.rc||HOVER.file?INK:ABS);}
 function drawConsole(){const y0=ROWS-CONSOLE_ROWS;put(0,y0,'─'.repeat(COLS),'#3a3020');
   const n=CONSOLE_ROWS-2;const lines=LOG.slice(-n);const off=n-lines.length;
   lines.forEach((l,i)=>put(1,y0+1+off+i,cut(l.txt,COLS-2),l.fg));
   put(1,ROWS-1,'> '+CMD.buf,INK);put(3+CMD.buf.length,ROWS-1,'▮',A);}
 function drawTop(){const d=S;fill(0,0,COLS,1,' ',INK,null);
-  put(1,0,'brnrd',INK,{b:true});put(7,0,'/ THE DERELICT · field7',DIM);
-  const alt=ALT.z===3?'③ the derelict':ALT.z===2?'② deck '+(SEL.deck?SEL.deck.path:''):'① room '+((SEL.room||SEL.deck)||{path:''}).path;
+  put(1,0,'brnrd',INK,{b:true});put(7,0,'/ THE CONSOLE · field7',DIM);
+  const alt=ALT.z===3?'③ the holding':ALT.z===2?'② deck '+(SEL.deck?SEL.deck.path:''):'① room '+((SEL.room||SEL.deck)||{path:''}).path;
   put(32,0,cut(alt,40),A);
-  const right=`${(d&&d.repo)||'?'} · ${FEED_OK?'live':'feed torn'} · ${M?M.files.size:0} things · ${M?M.drones.length-1:0} drones out · ${M?M.chunkCount:0} reads placed · ${M?M.offmap:0} off-map`;
+  const right=`${(d&&d.repo)||'?'} · ${FEED_OK?'live':'feed torn'} · ${M?M.files.size:0} things · crew 1 ▸ ${M?M.drones.length-1:0} · ${M?M.chunkCount:0} reads placed · ${M?M.offmap:0} off-map`;
   put(COLS-right.length-1,0,right,FEED_OK?DIM:TORN);
   const seat=((d&&d.fuel&&d.fuel.buckets)||[]).find(b=>b.seat);const bind=seat&&(seat.windows||[]).find(w=>w.binding);
   if(bind&&ALT.z!==3){const pw=`⚡ ${bind.name} ${num(bind.pct_left)?bind.pct_left+'%':'torn'}`;put(COLS-right.length-3-pw.length,0,pw,num(bind.pct_left)?tempCol(bind.pct_left):TORN);}}
-function drawWorld(now){clearCells();if(!M){put(2,2,'no feed — the derelict is dark, and that is honest',TORN);drawConsole();return;}
+function drawWorld(now){clearCells();if(!M){put(2,2,'no feed — the holding is dark, and that is honest',TORN);drawConsole();return;}
   if(!LAY||LAY.alt!==ALT.z)relayout();
   drawTop();
   if(ALT.z===3)drawDerelict(now);else if(ALT.z===2)drawDeck(now);else drawRoom(now);
@@ -424,9 +435,11 @@ function run(line){const [v,...rest]=line.trim().split(/\s+/);const arg=rest.joi
     case 'trail':{const d=findDrone(arg||'seat');if(!d){say('⟵ no such drone out',TORN);break;}SEL.drone=d;
       say(`⟵ ${d.seat?'seat':'drone '+d.tag} · ${d.row&&d.row.core||''} · ${d.name||'unnamed'} · ${d.room?'in '+d.room.path:'no repo trail recorded'}`,DIM);
       for(const t of ((d.row&&d.row.trail)||[]).slice(0,8))say(`   ${hhmm(t.at)} ${t.path}`,A);break;}
-    case 'crew':{const out=M.drones.filter(x=>!x.seat);say(`⟵ ${out.length} drone${out.length===1?'':'s'} out · ${M.docked.length} recently back`,DIM);
-      for(const d of out)say(`   ${d.tag} ${d.row.core||''} ${hhmm(d.row.started)} → ${d.room?d.room.path:'no trail'} · ${cut(d.name,40)}`,A);
-      for(const d of M.docked)say(`   ↩ ${d.tag} ${hhmm(d.row.ended)} · ${(d.row.prs||[]).length} pr · ${d.row.knots||0} knots · ${cut(d.name,36)}`,DIM);break;}
+    case 'crew':{const st=M.drones.find(x=>x.seat);const out=M.drones.filter(x=>!x.seat);
+      say(`⟵ your crew · 1 seat ▸ ${out.length} out · ${M.docked.length} recently back`,DIM);
+      if(st)say(`   ${st.glyph} ${st.tag} ${st.row&&st.row.core||S.run.core||''} · ${(S.shuttle&&S.shuttle.state)||'?'} · ${st.room?'in '+st.room.path:'no repo trail'} · ${cut(st.name,40)}`,AH);
+      out.forEach((dr,i)=>say(`   ${i===out.length-1?'└':'├'} ${dr.tag} ${dr.row.core||''} ${hhmm(dr.row.started)} → ${dr.room?dr.room.path:'no trail'} · ${cut(dr.name,40)}${dr.row.parent&&st&&dr.row.parent!==st.id?' · parent '+short(dr.row.parent):''}`,A));
+      for(const dr of M.docked)say(`   ↩ ${dr.tag} ${hhmm(dr.row.ended)} → ${short(dr.row.parent)||'—'} · ${(dr.row.prs||[]).length} pr · ${dr.row.knots||0} knots · ${cut(dr.name,36)}`,DIM);break;}
     case 'items':{const slugs=arg?[arg]:[...M.objectives.keys()];for(const s of slugs){const o=M.objectives.get(s);if(!o){say(`⟵ no topic ${s}`,TORN);continue;}
         const its=o.items;const c=st=>its.filter(i=>i.state===st).length;
         say(`⟵ ${o.heddle.rune||''} ${s} · ◇${c('ready')} ◆${c('held')} ✓${c('done')} · ${o.rooms.length?'in '+o.rooms.map(r=>r.path).join(' '):'stands nowhere on the map'}`,o.rooms.length?I:DIM);
