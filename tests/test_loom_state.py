@@ -693,3 +693,13 @@ def test_enrich_warp_and_footprints_both_land_in_merge_order(tmp_path):
     ]
     # the newer of the two sources — enrich_warp alone would freeze this at NOW-200
     assert w20["visited_at"] == iso(NOW - 100)
+
+
+def test_body_origin_records_resume_intent_without_inventing_a_token_split(machine):
+    first = state.build(machine["repo"], machine["home"], now=NOW)
+    assert first["run"]["body_origin"]["native_resume_requested"] is None
+    md = machine["brr"] / "runs" / RUN / "run.md"
+    md.write_text(md.read_text().replace("runner_name: claude-fable", "runner_name: claude-fable\nresume_native_session_id: private-session\nresume_native_provider: claude"))
+    resumed = state.build(machine["repo"], machine["home"], now=NOW)
+    assert resumed["run"]["body_origin"] == {"native_resume_requested": True, "provider": "claude"}
+    assert "private-session" not in json.dumps(resumed["run"])
