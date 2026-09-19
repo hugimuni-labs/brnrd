@@ -59,8 +59,7 @@ _EVENT_META_FIELDS = {
     # Four defects came out of that (see `pending_resume.py`). The resume
     # claim is the daemon's now, held per seat and consumed once
     # (`worker/prepare.py` carries the consumed claim in memory only).
-    # Dropping them here is what makes a forged
-    # or inherited event inert rather than merely unlikely.
+    # Dropping them here makes a forged or inherited event inert.
     "resume_native_session_id", "resume_native_provider",
     # The same key under the Shells' own names. `_native_session_id_for`
     # reads exactly these two off run meta to decide what a park may resume

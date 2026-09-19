@@ -189,10 +189,12 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
     if attempt == 1 and configured_flags:
         daemon._record_outbox_notice(
             outbox_dir, kind="advisory", lifetime="standing",
-            text=("runner_cmd carries its own resume syntax ("
-                     + ", ".join(configured_flags)
-                     + "); the configured command is honored. brnrd does not "
-                       "control its transcript inheritance."),
+            text=(
+                "runner_cmd carries its own resume syntax ("
+                + ", ".join(configured_flags)
+                + "); the configured command is honored. brnrd does not "
+                  "control its transcript inheritance."
+            ),
         )
     inheritance: dict[str, Any] = {"mode": "prose"}
     if cfg.get("runner_cmd"):
