@@ -755,15 +755,8 @@ class RunnerInvocation:
     # The heartbeat reads only ``thread.started`` from it while the child is
     # alive, then :func:`invoke_runner` removes it after capturing the result.
     codex_events_path: Path | None = None
-    # A native session id to resume into rather than starting a fresh
-    # conversation — design-the-allowance.md's resource hold: a held run's
-    # own preserved ``codex_thread_id``, carried forward by the daemon's
-    # dispatch-time resume stamp onto the triggering event
-    # (``daemon.py``'s ``_apply_resource_hold_resume``). Only meaningful
-    # alongside a codex Shell (``_uses_codex_shell``); ignored otherwise —
-    # see the ``codex_correlation`` block in ``invoke_runner`` for where
-    # this becomes ``codex exec resume <id> ...`` instead of
-    # ``codex exec ...``.
+    # A consumed, in-memory daemon claim; never sourced from event/run meta.
+    # The runner translates it into the selected Shell's native resume argv.
     resume_native_session_id: str | None = None
 
     @property
@@ -2209,6 +2202,36 @@ def _cmd_template(
         return cmd
 
     return [str(runner_name), *extra]
+
+
+def configured_resume_flags(cfg: dict[str, Any]) -> list[str]:
+    """Notice explicit resume syntax in the user's argv, without validating it.
+
+    Inspect tokens before prompt substitution, never echo ids or the command.
+    Shell scripts/wrappers may hide other resume behaviour; this is an advisory,
+    not a security boundary or a claim that commands without these tokens are cold.
+    """
+    custom = cfg.get("runner_cmd")
+    if not custom:
+        return []
+    try:
+        tokens = [str(s) for s in custom] if isinstance(custom, list) else shlex.split(str(custom))
+    except ValueError:
+        return []  # Command parsing keeps its existing error behaviour.
+    found = []
+    shell = Path(tokens[0]).name if tokens else ""
+    flags = {"--resume", "--continue"}
+    if shell == "claude":
+        flags.update({"-r", "-c"})
+    if shell == "codex":
+        flags.add("resume")
+    for token in tokens[1:]:
+        if token == "--":
+            break
+        flag = token.split("=", 1)[0]
+        if flag in flags and flag not in found:
+            found.append(flag)
+    return found
 
 
 def _fill_prompt(

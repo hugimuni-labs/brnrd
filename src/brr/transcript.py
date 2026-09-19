@@ -578,6 +578,7 @@ def mount_claude_session(
     git_branch: str = "",
     model: str = "",
     home: Path | None = None,
+    receipt: dict[str, Any] | None = None,
 ) -> str:
     """Forge the session this wake will resume, and return its id.
 
@@ -598,7 +599,32 @@ def mount_claude_session(
         )
     path = claude_session_path(cwd, t.session_id, home=home)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_claude_jsonl(t), encoding="utf-8")
+    encoded = render_claude_jsonl(t).encode("utf-8")
+    path.write_bytes(encoded)
+    if receipt is not None:
+        # Measure the bytes actually written, including JSON envelopes, trim
+        # notes and the seam. Keep payload bytes distinct from seed-file bytes.
+        import hashlib
+
+        product = Path(__file__).resolve().parent
+        reads = []
+        for perception in t.perceptions():
+            location = Path(perception.location).resolve()
+            reads.append({
+                "path": perception.location,
+                "bytes": len(perception.result.encode("utf-8")),
+                "product_file": any(location.is_relative_to(product / part)
+                                    for part in ("prompts", "docs")),
+            })
+        receipt.update({
+            "session_id": t.session_id,
+            "seed_path": str(path),
+            "seed_bytes": len(encoded),
+            "seed_rows": len(encoded.splitlines()),
+            "seed_sha256": hashlib.sha256(encoded).hexdigest(),
+            "reads": reads,
+            "read_bytes": sum(row["bytes"] for row in reads),
+        })
     return t.session_id
 
 

@@ -58,12 +58,15 @@ def test_resume_session_refused_across_a_shell_switch():
     task = _task("claude", resume_native_session_id="codex-thread",
                  resume_native_provider="codex")
     choice = SimpleNamespace(shell="claude", name="claude-fable")
-    assert daemon._resume_session_for_runner(task, choice) is None
+    assert daemon._resume_session_for_runner(
+        task, choice, session_id="codex-thread", provider="codex",
+    ) is None
     assert "Shell changed" in task.meta["resume_cold_reason"]
     same = _task("codex", resume_native_session_id="codex-thread",
                  resume_native_provider="codex")
     assert daemon._resume_session_for_runner(
-        same, SimpleNamespace(shell="codex", name="codex")
+        same, SimpleNamespace(shell="codex", name="codex"),
+        session_id="codex-thread", provider="codex",
     ) == "codex-thread"
 
 

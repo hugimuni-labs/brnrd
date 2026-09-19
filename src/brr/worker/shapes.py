@@ -122,6 +122,9 @@ class Prepared:
     run_started_monotonic: float
     # the first attempt's runner
     lane: Lane
+    # Consumed daemon claim: never serialized onto the Run or read from it.
+    resume_native_session_id: str | None = field(default=None, repr=False)
+    resume_native_provider: str = ""
 
 
 @dataclass(frozen=True)
@@ -168,6 +171,7 @@ class Dispatched:
     prompt: str
     started_monotonic: float
     started_wall: float
+    resume_native_session_id: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
