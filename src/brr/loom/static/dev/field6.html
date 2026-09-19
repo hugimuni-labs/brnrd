@@ -115,6 +115,7 @@ const rows=t=>Array.isArray(t)?t:((t&&t.places)||[]);
 // A trail is a bounded per-run reading. The repo tree supplies file sizes only;
 // its heat and knots belong to other runs and must not leak into this view.
 let TREE=null;
+let ISLAND_CAP=0;      // [ZOOM] reads it: the island's caption owns the top of the canopy
 function treeScope(d, selected){
   const run=selected||(d.run||{}).id||null, all=(d.cloth||{}).rows||[];
   const own=all.find(r=>r.run===run), hands=run?all.filter(r=>r.parent===run):[];
@@ -145,6 +146,7 @@ function refreshTree(){
   indexChunks(S);
   if(changed){
     LENS.pin=null;LENS.path=null;HOVER.txt=null;pings=[];
+    if(typeof ZOOM!=='undefined')ZOOM.clearRow();
     for(const p of pods){
       p.route=null;p.routeTo=null;
       if(!TREE.replay){
@@ -693,6 +695,10 @@ function placeClear(px,py,w,h,wins){
 // that has no reading behind it.
 const BREATH_A=0.16;
 function breath(now){
+  // A FROZEN FRAME DOES NOT BREATHE. The live daemon's tick is a reading about
+  // NOW; riding it while a past pass is in the frame would animate yesterday
+  // on today's pulse — the one animation on this page that would be a lie.
+  if(typeof ZOOM!=='undefined'&&ZOOM.frozen&&ZOOM.frozen())return 0;
   const ph=(typeof ACTOR!=='undefined'&&ACTOR.sweep)?ACTOR.sweep.phase(now):null;
   // an inhale at the tick, a slow exhale, and a beat that is LATE rests dark
   // rather than holding the crest: phase() clamps at 1, and 1 must mean rest.
@@ -740,7 +746,7 @@ function drawScene(x,now){
     RESERVE.card=card;
     RECORD.prepare(x,z,now);                  // derive · lay out · measure, no ink
     const wins=[RECORD.wireWindow(x,z),card,ACTOR.benchWindow(x,z),
-                RECORD.paneWindow(x)].filter(Boolean);
+                RECORD.paneWindow(x),ZOOM.leafWindow(x)].filter(Boolean);
     const hov=RECORD.hoverWindow(x,wins)||worldHoverWindow(x,wins);
     if(hov)wins.push(hov);
     PANES.length=0;for(const w of wins)if(w.mask!==false)PANES.push({x:w.x,y:w.y,w:w.w,h:w.h});
@@ -754,6 +760,8 @@ function drawScene(x,now){
       drawCanopy(x,z,step,now);
       drawChunkGround(x,z,step,now);
       drawLens(x,z,now);
+      ZOOM.rows(x,z,now);
+      ZOOM.caption(x,z);
       drawHub(x,z,step);
       RECORD.marks(x,z);
       ACTOR.marks(x,z);
@@ -939,9 +947,10 @@ function drawIsland(x,z){
     const cap=TREE.limit?`last ${TREE.limit} places per run`:'recent places · feed bound unspecified';
     x.fillText(`● run ${TREE.ownCount} · ◇ ${TREE.hands} direct strand${TREE.hands===1?'':'s'} · ${cap}`,island.x,sy);
     x.fillStyle='#8a7c5e';
-    x.fillText(TREE.replay?'repo trail only · home and warp remain live · Esc returns to live'
+    x.fillText(TREE.replay?'a past pass — its repo record only'
       :TREE.emptyHands?`${TREE.emptyHands} strand${TREE.emptyHands===1?'':'s'} without a recorded repo trail`:'',island.x,sy+14);
-    if(!nodes.length){x.fillStyle='#b9a582';x.font=`12px ${MONO}`;
+    ISLAND_CAP=sy+20;                 // where the island stops talking and the rows begin
+    if(!nodes.length&&ZOOM.island){x.fillStyle='#b9a582';x.font=`12px ${MONO}`;
       x.fillText('No repo trail recorded',island.x,water-canopyAt(z)*0.45);}
 
     if(groundMode()==='chunks'){x.fillStyle='#4a4336';x.font=`9px ${MONO}`;
@@ -952,6 +961,10 @@ function drawIsland(x,z){
 }
 
 function drawCanopy(x,z,step,now){
+  // The canopy is the ISLAND rung's shape: what this repo is. The run rung
+  // stopped being a canopy ([ZOOM]) because eight places cannot make geography
+  // — it is rows with measured weights there, and this draws nothing.
+  if(!ZOOM.island)return;
   const br=breath(now);
   const column=groundMode()==='chunks';   // the branch still moors it; the dot yields
   // ── the canopy: it compresses onto its island; nothing fades out ─────────
@@ -1098,6 +1111,7 @@ const com=n=>String(n).replace(/\B(?=(\d{3})+(?!\d))/g,',');
 function drawLens(x,z,now){
   LENS.geom=null;
   if(groundMode()==='chunks')return;      // the ground is the control; the lens is the default view's
+  if(!ZOOM.island)return;                 // the run rung unfolds its row instead ([ZOOM])
   const path=LENS.pin||LENS.path;if(!path)return;
   const e=CHUNKS.get(path), n=byPath.get(path);if(!e||!n)return;
   const ny=treeY(n,z), cx=n.x;
@@ -2133,6 +2147,7 @@ cv.addEventListener('mousemove',e=>{
 });
 addEventListener('keydown',e=>{
   const k=e.key;
+  if(typeof ZOOM!=='undefined'&&ZOOM.leaf)return;           // the leaf owns the keyboard
   if(SELECTED.open&&(k==='ArrowUp'||k==='ArrowDown')){      // the bench scrolls
     e.preventDefault();ACTOR.bench.scroll(k==='ArrowDown'?3:-3);return;}
   if(k==='Enter'){e.preventDefault();
@@ -3036,6 +3051,8 @@ const RECORD=(()=>{
   cv.addEventListener('mousemove',e=>{R.mouse={x:e.clientX,y:e.clientY};R.hover=R.hit(e.clientX,e.clientY);});
   cv.addEventListener('mouseleave',()=>{R.hover=null;R.mouse=null;});
   cv.addEventListener('click',e=>{
+    if(ZOOM.pickRung(e.clientX,e.clientY))return;
+    if(ZOOM.pick(e.clientX,e.clientY))return;
     const p=R.hit(e.clientX,e.clientY);
     if(p){ACTOR.select.clear();R.cursor=R.passes.indexOf(p);R.pass=p.run;R.roomLocal=null;R.place=null;return;}
     if(typeof ACTOR!=='undefined'&&ACTOR&&typeof ACTOR.select==='function'){
@@ -3047,6 +3064,8 @@ const RECORD=(()=>{
   });
   addEventListener('keydown',e=>{     // field3's model: ← → scrub · L wire · P body · Esc
     const k=e.key;
+    if(ZOOM.key(e))return;            // the ladder answers first, and the leaf owns the keys
+    if(k==='Escape'&&!R.win&&ZOOM.out())return;
     if(k==='ArrowLeft'||k==='ArrowRight'){
       if(SELECTED.kind&&!R.pass)return;
       if(!R.passes.length)return;
@@ -3156,6 +3175,507 @@ const RECORD=(()=>{
 // ═══ end [RECORD] ══════════════════════════════════════════════════════════
 
 // ═══ [FRAME] ═══════════════════════════════════════════════════════════════
+
+// ═══ [ZOOM] · THE ABSTRACTION IS ZOOM ══════════════════════════════════════
+// His words, and they are the design: *"the goal was never to show the path as
+// trees … we should show the resident's actions, and you kinda do stuff around
+// filesystem … but the current shape with parts of the file lit delivers
+// nothing, UNTIL WE CAN INSPECT ITS EXACT CHANGES AS LINES, when we need to
+// zoom in"* — and *"the selected run should change the whole frame into frozen
+// inspection view (to a degree)."*
+//
+// FOUR RUNGS, ONE LADDER. Each one is a different question, and every one of
+// them has measured data today:
+//
+//   0 island … what this repo IS ............ tree.repo, the whole union
+//   1 run ..... what one resident DID ........ cloth.rows[].trail + its strands
+//   2 file .... WHERE in the file it landed .. chunks[] from/to + tree lines
+//   3 lines ... the EXACT changes ............ /loom/page/place → text+attention
+//
+// One gesture in (click · ⏎), one gesture out (Esc steps out exactly one rung).
+// A rung is not a mode to be taught: the frame says which rung it stands on,
+// in words, at every moment.
+//
+// WHY THE RUN RUNG IS NOT A CANOPY ANY MORE. #2025 scoped the canopy to one
+// run and then measured its own result honestly: eight places cannot make
+// geography, a curve between two dots is path hierarchy and not a transition,
+// and every dot has the same brightness because per-run effort was never in
+// the reading. Rows are the answer his north star already named — named things
+// with weights. The weight is the file's own measured chunk record, and a
+// place with no chunk record gets NO BAR AND A DASH, never a zero-length bar:
+// absence of a record is not absence of work (§the empty trail, same law).
+//
+// WHAT FROZEN MEANS HERE, EXACTLY. #2025 left "a past tree in a present
+// world": the canopy was yesterday's while home, wire, warp and the body panel
+// stayed current, so a reader who clicked yesterday could infer yesterday
+// everywhere. Freezing means three things, all of them visible: the breath
+// stops (the world is not running), the wire carries THAT RUN'S OWN ACTS
+// instead of the live stream, and every reading still current is named as
+// current rather than left to be mistaken. The parts that have no historical
+// reading — the hull, the fuel, the warp's state — say so instead of showing
+// today's number under yesterday's title.
+const ZOOM=(()=>{
+  const A='#f2b134', ICE='#8fd3ff', INK='#e8dcc0', DIM='#8a7c5e', FAINT='#5a4d3c';
+  const Z={island:false,row:null,leaf:null,band:0,scroll:0};
+  const PASS=new Map();          // run id → the run's own page
+  const PLACE=new Map();         // path|run|from|to → the file's lines
+  const at=s=>String(s||'').replace('T',' ').replace('Z','').slice(5,16);
+
+  const urls=p=>[p,`http://127.0.0.1:7777${p}`];
+  async function pull(store,key,path,why){
+    if(store.has(key))return;
+    store.set(key,{state:'loading'});
+    for(const u of urls(path)){
+      try{const r=await fetch(u,{cache:'no-store'});if(!r.ok)continue;
+        store.set(key,{state:'ok',d:await r.json(),born:performance.now()});return;}catch(e){}
+    }
+    store.set(key,{state:'fail',why});
+  }
+
+  // ── the rung ─────────────────────────────────────────────────────────────
+  const runOf=()=>Z.island?null:(RECORD.pass||((S&&S.run)||{}).id||null);
+  const rung=()=>Z.island?0:Z.leaf?3:Z.row?2:1;
+  const RUNG_SAY=['island · what this repo is','run · what one resident did',
+                  'file · where in the file the work landed','lines · the exact changes'];
+  Z.frozen=()=>!!(TREE&&TREE.replay);          // a past run selected: the world is stopped
+
+  // ── the run's page: its own acts, and the chunk record under them ────────
+  function passOf(){
+    const run=runOf(); if(!run)return null;
+    const live=((S&&S.run)||{}).id===run;
+    if(!PASS.has(run))pull(PASS,run,`/loom/page/pass?id=${encodeURIComponent(run)}`,
+      'the daemon did not answer /loom/page/pass');
+    const pg=PASS.get(run)||{state:'loading'};
+    return {...pg,run,live};
+  }
+  // A PASS'S OWN WEIGHTS. `cloth.rows[].trail` is eight places and a time —
+  // enough to say WHERE, never enough to say HOW HARD, which is why every
+  // place in #2025's canopy was drawn at one brightness and its own §5 said
+  // so. `/loom/page/pass` now carries `places`: the run's whole measured chunk
+  // record, per place, over all its boundaries (33 places and 38 touches on
+  // daemon.py for one real night, against a trail of 8 and no weight at all).
+  // The trail is still read — for PRESENCE, and for the strand attribution it
+  // is the only source of. Measured ∪ present, and which is which is drawn.
+  function weigh(pg){
+    const m=new Map();
+    if(pg&&pg.state==='ok')for(const e of ((pg.d||{}).places||[]))m.set(e.path,{
+      touches:e.touches,reads:e.reads,writes:e.writes,whole:e.whole,
+      covered:e.covered,deepest:e.deepest,
+      spans:(e.spans||[]).map(sp=>({a:sp.from,b:sp.to,w:sp.kind==='write'})),last:e.last});
+    return m;
+  }
+  // the live run's places are in the feed's own beads: the same totals, taken
+  // from the beat rather than from a page, so rung 1 is measured with no fetch
+  function weighLive(){
+    const m=new Map();
+    for(const b of ((S&&S.beads)||[]))for(const c of (b.chunks||[])){
+      const p=c&&c.rel; if(!p)continue;
+      let e=m.get(p); if(!e){e={touches:0,reads:0,writes:0,whole:0,covered:0,deepest:0,spans:[],last:null};m.set(p,e);}
+      e.touches++; c.kind==='write'?e.writes++:e.reads++;
+      if(b.at&&(!e.last||b.at>e.last))e.last=b.at;
+      const fr=num(c.from)?c.from:null, to=num(c.to)?c.to:fr;
+      if(fr===null){e.whole++;continue;}
+      const a=Math.max(1,Math.min(fr,to)), z=Math.max(a,Math.max(fr,to));
+      e.covered+=z-a+1; if(z>e.deepest)e.deepest=z; e.spans.push({a,b:z,w:c.kind==='write'});
+    }
+    return m;
+  }
+
+  // ── the rows: named things with weights ──────────────────────────────────
+  // Heaviest first. A run is a sequence, and time is the ordering #2025 used,
+  // but the complaint the rows exist to answer is that every place looked the
+  // same: rank BY THE MEASUREMENT, and the eye lands on the file the run
+  // actually worked. Time is still on every row, at its right edge.
+  let ROWS=null;
+  function build(){
+    const pg=passOf(), live=pg&&pg.live;
+    const w=live?weighLive():weigh(pg);
+    const meta=new Map(rows(S&&S.tree&&S.tree.repo).map(p=>[p.path,p]));
+    const seen=new Map(((TREE&&TREE.places)||[]).map(p=>[p.path,p]));
+    const top=Math.max(1,...[...w.values()].map(e=>e.touches));
+    const list=[...new Set([...w.keys(),...seen.keys()])].map(path=>{
+      const t=seen.get(path)||{path,own:true,hands:[],last:null,topics:[]};
+      const e=w.get(path)||null;
+      return {...t,lines:(meta.get(path)||{}).lines,m:e,
+        weight:e?e.touches/top:null,last:(e&&e.last)||t.last||null,
+        measured:!!e,listed:seen.has(path)};
+    }).sort((a,b)=>(b.m?b.m.touches:-1)-(a.m?a.m.touches:-1)||String(b.last||'').localeCompare(String(a.last||'')));
+    const total=pg&&pg.state==='ok'?(num((pg.d||{}).bead_total)?pg.d.bead_total:null):null;
+    const scanned=pg&&pg.state==='ok'?(num((pg.d||{}).places_scanned)?pg.d.places_scanned:0):0;
+    ROWS={list,measured:w.size,pass:pg,
+      bound:live?(w.size?`measured across the ${((S&&S.beads)||[]).length} beads this beat carries`
+            :`no chunk record in the ${((S&&S.beads)||[]).length} beads this beat carries — presence only`)
+        :pg&&pg.state==='ok'?(w.size
+            // the scan has a bottom (`places_scanned`), and a run longer than
+            // it has early work this reading cannot see. Say so rather than
+            // presenting a tail's totals as a life's.
+            ?`measured across ${scanned}${total&&total>scanned?` of ${total}`:''} recorded act${scanned===1?'':'s'} of this pass`
+            // and the commonest zero on this page is not an idle pass: the
+            // hook has only recorded write hunks since 2026-09-18, so every
+            // pass older than that has presence and nothing to weigh. A
+            // reader must not have to guess which zero this is.
+            :`no chunk record in this pass’s ${scanned} recorded act${scanned===1?'':'s'} — hunks are recorded since 2026-09-18`)
+        :pg&&pg.state==='loading'?'reading this pass’s own record…'
+        :'this pass’s record could not be read — presence only, no weights'};
+    return ROWS;
+  }
+  Z.rowOf=path=>((ROWS&&ROWS.list)||[]).find(r=>r.path===path)||null;
+
+  // geometry, derived at draw time like everything else on this page
+  function geom(z){
+    if(!island)return null;
+    const w=Math.min(island.w,560), x0=Math.round(island.x-w/2);
+    // under the island's own caption, never over it: drawIsland publishes where
+    // it stops talking, so the two never have to guess at each other's height.
+    const topY=Math.max(ISLAND_CAP||0,Math.max(150,water-canopyAt(z)-8)), botY=water-46;
+    const room=Math.max(0,botY-topY);
+    const lh=Math.round(clamp(13+9*z,13,22));
+    return {x0,w,topY,botY,room,lh,fit:Math.max(1,Math.floor(room/lh))};
+  }
+
+  // ── the strip: a row, unfolded into the file's own height (rung 2) ────────
+  // The same reading the lens draws as a column, laid along the row it belongs
+  // to: LEFT is line 1, RIGHT is the last line, a band is where an act landed.
+  // Ice above the rule is a read, amber below it is a write — the scene's own
+  // law, and it survives a greyscale print. A band with no measured height to
+  // normalise against is TORN, not stretched to fit.
+  function drawStrip(g,r,x0,y,w){
+    const e=r.m, lines=num(r.lines)&&r.lines>0?r.lines:null, h=lines||e&&e.deepest||null;
+    g.strokeStyle='rgba(110,94,64,0.45)';g.lineWidth=1;
+    g.beginPath();g.moveTo(x0,y+0.5);g.lineTo(x0+w,y+0.5);g.stroke();
+    if(!h||!e){
+      g.font=`9px ${MONO}`;g.fillStyle=FAINT;
+      g.fillText(!e?'no chunk record for this file in the acts read':'height unmeasured — no ruler to place a band on',x0,y+12);
+      return y+16;
+    }
+    for(const s of e.spans){
+      const a=clamp((s.a-1)/h,0,1)*w, b=clamp(s.b/h,0,1)*w;
+      const bw=Math.max(1.5,b-a);
+      g.fillStyle=s.w?'rgba(242,177,52,0.85)':'rgba(143,211,255,0.75)';
+      g.fillRect(x0+a,s.w?y+1.5:y-6.5,bw,5);
+    }
+    if(lines){                                  // the file's own ladder, per 1000 lines
+      g.fillStyle='rgba(150,130,96,0.45)';
+      for(let k=1;k*1000<lines;k++)g.fillRect(x0+(k*1000/lines)*w,y-1.5,0.8,3);
+    }else{                                      // torn: the ruler is the deepest line seen
+      g.strokeStyle='rgba(110,94,64,0.6)';
+      for(let i=0;i<3;i++){const px=x0+w-i*3.2;
+        g.beginPath();g.moveTo(px,y-4);g.lineTo(px-3,y+4);g.stroke();}
+    }
+    g.font=`9px ${MONO}`;g.fillStyle=DIM;
+    const say=`${lines?com(lines)+' lines':'height unmeasured · deepest line seen '+com(e.deepest)}`
+      +` · ${e.reads} read · ${e.writes} write`+(e.whole?` · ${e.whole} whole-file`:'')
+      +(e.covered?` · ${com(e.covered)} lines touched`:'');
+    g.fillText(say,x0,y+14);
+    return y+18;
+  }
+
+  // ── the rows, drawn (ground layer) ───────────────────────────────────────
+  Z.rows=(g,z,now)=>{
+    if(Z.island||!island||!TREE)return;
+    const G=geom(z); if(!G||G.room<40)return;
+    const R=build();
+    let y=G.topY+12;
+    g.textAlign='left';
+    g.font=`10px ${MONO}`;g.fillStyle=DIM;
+    g.fillText(`${R.list.length} place${R.list.length===1?'':'s'} · heaviest first · ${R.measured} measured · ${R.bound}`,G.x0,y);
+    y+=14;
+    const hit=[];
+    const open=Z.row;
+    for(const r of R.list){
+      const chosen=r.path===open;
+      const need=chosen?G.lh+50:G.lh;
+      if(y+need>G.botY){
+        const left=R.list.length-hit.length;
+        if(left>0){g.font=`9px ${MONO}`;g.fillStyle=FAINT;
+          g.fillText(`+${left} more — the frame is out of room, not the record`,G.x0,y+10);}
+        break;
+      }
+      const name=r.path.split('/').pop(), dir=r.path.slice(0,r.path.length-name.length);
+      // the weight, as the row's own ground — a measured bar, never a decoration
+      if(r.weight!==null){
+        g.fillStyle=`rgba(242,177,52,${0.10+0.16*r.weight})`;
+        g.fillRect(G.x0,y-G.lh+4,G.w*clamp(r.weight,0.02,1),G.lh-3);
+      }
+      if(chosen){g.strokeStyle='rgba(232,220,192,0.55)';g.lineWidth=1;
+        g.strokeRect(G.x0-3.5,y-G.lh+3.5,G.w+7,need-2);}
+      g.font=`${Math.round(clamp(9+3*z,9,12))}px ${MONO}`;
+      g.fillStyle=r.own?INK:DIM;
+      g.fillText(name,G.x0+4,y-3);
+      const nw=g.measureText(name).width;
+      g.font=`9px ${MONO}`;g.fillStyle=FAINT;
+      if(dir&&G.w>300)g.fillText(dir.replace(/\/$/,''),G.x0+10+nw,y-3);
+      // the right edge: what happened, and when
+      g.textAlign='right';
+      const m=r.m;
+      g.fillStyle=m?DIM:'#4a4336';
+      g.fillText(m?`×${m.touches}${m.writes?' · '+m.writes+'w':''}`:'—',G.x0+G.w-78,y-3);
+      g.fillStyle=FAINT;g.fillText(at(r.last)||'no time',G.x0+G.w-4,y-3);
+      g.textAlign='left';
+      if(r.hands&&r.hands.length){         // a hand's place keeps #2025's diamond
+        g.strokeStyle=A;g.lineWidth=1;const cx=G.x0-9,cy=y-6;
+        g.beginPath();g.moveTo(cx,cy-3.5);g.lineTo(cx+3.5,cy);g.lineTo(cx,cy+3.5);g.lineTo(cx-3.5,cy);
+        g.closePath();g.stroke();
+      }
+      hit.push({path:r.path,x0:G.x0-12,x1:G.x0+G.w,y0:y-G.lh+2,y1:y+4});
+      y+=G.lh;
+      if(chosen)y=drawStrip(g,r,G.x0+4,y+14,G.w-8)+12;
+    }
+    Z.hits=hit;
+    if(!R.list.length){
+      g.font=`12px ${MONO}`;g.fillStyle='#b9a582';g.textAlign='center';
+      g.fillText('No repo trail recorded',island.x,G.topY+G.room*0.4);
+      g.font=`9px ${MONO}`;g.fillStyle=FAINT;
+      g.fillText('absence of a record — not evidence of an idle run',island.x,G.topY+G.room*0.4+16);
+      g.textAlign='left';
+    }
+  };
+
+  // ── the leaf: the exact changes, as lines (rung 3) ───────────────────────
+  // THE PAYOFF, and the one rung that had no data until this morning. The text
+  // and the bands both come from `/loom/page/place`, which reads the file on
+  // disk and every boundary that ever touched it; `run=` scopes the record to
+  // the pass in hand, so yesterday's inspection cannot be lit by today's acts.
+  //
+  // PROVENANCE IS DRAWN, because this is the rung where a guess would do the
+  // most damage. A band the hook MEASURED (git's own hunk, or a ranged read)
+  // is solid; a band PARSED out of a command line is hatched and says so. The
+  // difference is the difference between "these lines changed" and "a command
+  // that mentioned this file went by".
+  const KEY=(p,run,a,b)=>`${p}|${run||''}|${a||''}|${b||''}`;
+  function leafData(){
+    const path=Z.leaf; if(!path)return null;
+    const run=runOf(), win=Z.win||{};
+    const key=KEY(path,run,win.a,win.b);
+    const q=`/loom/page/place?path=${encodeURIComponent(path)}`
+      +(run?`&run=${encodeURIComponent(run)}`:'')
+      +(win.a?`&from=${win.a}&to=${win.b}`:'');
+    pull(PLACE,key,q,'the daemon did not answer /loom/page/place');
+    const pg=PLACE.get(key)||{state:'loading'};
+    // OPEN WHERE THE WORK IS. The file's first 200 lines are where a file
+    // starts, not where this pass touched it: daemon.py's bands begin at 4650
+    // and the header of the leaf was a page of imports. The first window is
+    // the first WRITE band (the exact changes he asked to inspect), falling
+    // back to the first band of any kind, and only then to the file's head.
+    if(!Z.win&&pg.state==='ok'){
+      const bands=((pg.d||{}).attention||[]).filter(b=>!b.whole)
+        .sort((a,b)=>a.from-b.from);
+      const first=bands.find(b=>b.kind==='edit')||bands[0];
+      if(first){
+        Z.band=Math.max(0,bands.indexOf(first));
+        Z.win={a:Math.max(1,first.from-6),b:first.to+6};
+        Z.bands=bands;
+        return {...pg,key,path,run,rail:bands};
+      }
+    }
+    return {...pg,key,path,run,rail:Z.bands||null};
+  }
+  Z.leafWindow=g=>{
+    if(!Z.leaf)return null;
+    const w=Math.min(760,Math.round(W*0.62)), h=Math.round(H*0.74);
+    const x=Math.round(W*0.5-w/2), y=Math.round(H*0.5-h/2);
+    return {x,y,w,h,name:'leaf',dim:'scene',draw:gg=>drawLeaf(gg,x,y,w,h)};
+  };
+  function drawLeaf(g,x,y,w,h){
+    const pg=leafData(); if(!pg)return;
+    g.save();
+    g.fillStyle='#070604';g.fillRect(x,y,w,h);
+    g.strokeStyle='rgba(122,104,72,0.55)';g.lineWidth=1;g.strokeRect(x+.5,y+.5,w-1,h-1);
+    const pad=14;let ty=y+20;
+    g.font=`10px ${MONO}`;g.fillStyle=DIM;g.textAlign='left';
+    g.fillText(`${pg.path}`,x+pad,ty);
+    g.textAlign='right';g.fillStyle='rgba(74,67,54,0.9)';
+    g.fillText('esc · [ ] bands · ↑↓ scroll',x+w-pad,ty);
+    g.textAlign='left';ty+=8;
+    g.strokeStyle='rgba(122,104,72,0.28)';g.beginPath();
+    g.moveTo(x+pad,ty+0.5);g.lineTo(x+w-pad,ty+0.5);g.stroke();ty+=16;
+    if(pg.state!=='ok'){
+      g.font=`11px ${MONO}`;g.fillStyle=pg.state==='fail'?A:DIM;
+      g.fillText(pg.state==='fail'?'the lines could not be read':'reading the file…',x+pad,ty+4);
+      if(pg.state==='fail'){g.font=`9px ${MONO}`;g.fillStyle=FAINT;
+        g.fillText(pg.why||'no reason given',x+pad,ty+20);}
+      g.restore();return;
+    }
+    const d=pg.d||{}, txt=d.text||{};
+    // the rail is the WHOLE FILE's bands, kept from the unwindowed read, so
+    // stepping into a window never shrinks the map you are stepping through
+    const bands=(pg.rail&&pg.rail.length?pg.rail:(d.attention||[]).filter(b=>!b.whole));
+    const whole=(d.attention||[]).filter(b=>b.whole);
+    const un=d.unranged||{read:0,edit:0};
+    // the caption: the scope, the bound, and what is NOT drawn
+    g.font=`9px ${MONO}`;g.fillStyle=DIM;
+    const scope=d.scope?`this pass only${d.scope_known===false?' · no boundaries recorded for it':''}`:'every pass that touched it';
+    g.fillText(`${scope} · ${bands.length} band${bands.length===1?'':'s'}`
+      +` · ${bands.filter(b=>b.src==='measured').length} measured · ${bands.filter(b=>b.src!=='measured').length} parsed`
+      +(whole.length?` · ${whole.length} whole-file touch${whole.length===1?'':'es'}`:''),x+pad,ty);
+    ty+=12;
+    if(un.edit||un.read){
+      g.fillStyle=FAINT;
+      g.fillText(`${un.edit} edit${un.edit===1?'':'s'} and ${un.read} read${un.read===1?'':'s'} named no lines — counted, not drawn`,x+pad,ty);
+      ty+=12;
+    }
+    // the band rail: every measured band of the file, [ and ] walk them
+    if(bands.length){
+      const rw=w-pad*2, total=num(txt.total)?txt.total:Math.max(...bands.map(b=>b.to));
+      g.strokeStyle='rgba(110,94,64,0.4)';g.beginPath();
+      g.moveTo(x+pad,ty+4.5);g.lineTo(x+pad+rw,ty+4.5);g.stroke();
+      bands.forEach((b,i)=>{
+        const a0=clamp((b.from-1)/total,0,1)*rw, a1=clamp(b.to/total,0,1)*rw;
+        g.fillStyle=b.kind==='edit'?(b.src==='measured'?'rgba(242,177,52,0.9)':'rgba(242,177,52,0.35)')
+                                   :(b.src==='measured'?'rgba(143,211,255,0.8)':'rgba(143,211,255,0.3)');
+        g.fillRect(x+pad+a0,ty,Math.max(1.5,a1-a0),9);
+        if(i===Z.band%bands.length){g.strokeStyle=INK;g.lineWidth=1;
+          g.strokeRect(x+pad+a0-1.5,ty-1.5,Math.max(1.5,a1-a0)+3,12);}
+      });
+      ty+=20;
+    }
+    // A PLACE IS NOT ALWAYS A FILE. A trail carries whatever a boundary named:
+    // `docs`, `src`, `tests` are real rows and there is nothing to open in
+    // them. Say which it is, rather than drawing an empty page and letting a
+    // reader conclude the file is empty.
+    if(txt.binary||txt.text==null){
+      g.font=`11px ${MONO}`;g.fillStyle=DIM;
+      g.fillText(txt.binary?'binary \u2014 there are no lines to show here'
+        :'no text here \u2014 this place is a directory, or not a readable file in this checkout',x+pad,ty+6);
+      g.font=`9px ${MONO}`;g.fillStyle=FAINT;
+      g.fillText(`kind: ${d.kind||'unknown'}${num(txt.total)?' \u00b7 '+com(txt.total)+' lines':''}`,x+pad,ty+22);
+      g.restore();return;
+    }
+    // the lines themselves
+    const lines=String(txt.text||'').split('\n');
+    const first=num(txt.from)?txt.from:1;
+    const lh=13, fit=Math.max(1,Math.floor((y+h-ty-24)/lh));
+    const start=clamp(Z.scroll,0,Math.max(0,lines.length-fit));
+    g.font=`10px ${MONO}`;
+    const gw=g.measureText('0000').width+8;
+    for(let i=0;i<Math.min(fit,lines.length-start);i++){
+      const n=first+start+i, ly=ty+i*lh+9;
+      // A LINE CAN BE IN TWO BANDS AT ONCE, and the commonest shape there is
+      // — read it, then change it — is exactly that. Taking the first match
+      // drew "read" over a line git says was rewritten. Both are drawn: the
+      // wash is the write's, the inner rail is the read's, and the outer rail
+      // says which claim is measured and which was parsed off a command line.
+      const on=bands.filter(b=>n>=b.from&&n<=b.to);
+      const ed=on.find(b=>b.kind==='edit'), rd=on.find(b=>b.kind==='read');
+      const band=ed||rd;
+      if(band){
+        const measured=band.src==='measured';
+        // measured on the shot: a 0.16 wash on #070604 is a difference a
+        // reader has to hunt for, and the whole rung exists to make the change
+        // findable in one glance. The wash carries the kind, the 3 px rail
+        // carries it again at the edge, and the line NUMBER takes the ink too
+        // — three redundant channels, because one of them is a wash.
+        g.fillStyle=ed
+          ?(measured?'rgba(242,177,52,0.22)':'rgba(242,177,52,0.09)')
+          :(band.src==='measured'?'rgba(143,211,255,0.15)':'rgba(143,211,255,0.07)');
+        g.fillRect(x+pad,ly-9,w-pad*2,lh);
+        if(ed&&rd){g.fillStyle='rgba(143,211,255,0.8)';g.fillRect(x+pad+3,ly-9,1.5,lh);}
+        g.fillStyle=ed?'rgba(242,177,52,0.95)':'rgba(143,211,255,0.9)';
+        if(measured)g.fillRect(x+pad,ly-9,3,lh);
+        else for(let k=0;k<lh;k+=3)g.fillRect(x+pad,ly-9+k,3,1.4);   // hatched: a guess
+      }
+      g.fillStyle=band?(ed?'rgba(242,177,52,0.75)':'rgba(143,211,255,0.7)'):FAINT;
+      g.textAlign='right';g.fillText(String(n),x+pad+gw-6,ly);
+      g.textAlign='left';g.fillStyle=band?INK:'#b9a582';
+      const s=lines[start+i]==null?'':lines[start+i].replace(/\t/g,'  ');
+      g.fillText(s.length>150?s.slice(0,150)+'…':s,x+pad+gw,ly);
+    }
+    g.font=`9px ${MONO}`;g.fillStyle=FAINT;
+    const shown=Math.min(fit,Math.max(0,lines.length-start));
+    g.fillText(num(txt.total)
+      ?`lines ${com(first+start)}–${com(first+start+shown-1)} of ${com(txt.total)}`
+        +(txt.binary?' · binary':'')
+      :'no text — the file could not be read here',x+pad,y+h-10);
+    g.textAlign='right';g.fillStyle=DIM;
+    g.fillText('amber write · ice read · both = read then written · hatched = parsed, not measured',x+w-pad,y+h-10);
+    g.textAlign='left';
+    g.restore();
+  }
+
+  // ── the frame says which rung it is on ───────────────────────────────────
+  // THE RAIL, NOT A MANUAL. The three condemned instruction lines are not
+  // coming back: this prints no keys. It is the ladder itself, drawn — four
+  // names, the one you stand on lit, and each one CLICKABLE, so the way up and
+  // the way down are the same object you are already reading. The only prose
+  // is what the rung you stand on shows you, and — when it applies — the one
+  // fact a frozen frame must never leave implicit.
+  const RAIL=['island','run','file','lines'];
+  const railBox=i=>({x:18+i*84,y:148,w:64,h:16});
+  Z.caption=(g,z)=>{
+    const r=rung();
+    g.save();g.textAlign='left';
+    for(let i=0;i<4;i++){
+      const on=i===r, reach=i<=r, b=railBox(i);
+      g.font=`10px ${MONO}`;
+      g.fillStyle=on?INK:reach?DIM:'#3a3328';
+      g.fillText(RAIL[i],b.x,b.y+11);
+      g.fillStyle=on?'rgba(242,177,52,0.85)':reach?'rgba(90,77,60,0.9)':'rgba(58,51,40,0.9)';
+      g.fillRect(b.x,b.y+15,on?30:14,on?2:1);
+    }
+    g.font=`9px ${MONO}`;g.fillStyle=DIM;
+    g.fillText(RUNG_SAY[r],18,180);
+    if(Z.frozen()){
+      g.fillStyle=ICE;
+      g.fillText('FROZEN · a past pass is in the frame',18,194);
+      g.fillStyle=FAINT;
+      g.fillText('home · warp · fuel · the hull are still CURRENT',18,206);
+      g.fillText('— no pass-scoped reading exists for them',18,218);
+    }
+    g.restore();
+  };
+  Z.pickRung=(mx,my)=>{
+    for(let i=0;i<4;i++){
+      const b=railBox(i);
+      if(mx<b.x-4||mx>b.x+b.w||my<b.y||my>b.y+b.h)continue;
+      if(i===0){Z.island=true;Z.row=null;Z.leaf=null;return true;}
+      if(i===1){Z.island=false;Z.row=null;Z.leaf=null;LENS.pin=null;return true;}
+      if(i===2)return Z.row?(Z.island=false,Z.leaf=null,true):false;
+      if(i===3)return Z.row?(Z.island=false,Z.leaf=Z.row,Z.win=null,Z.bands=null,Z.band=0,Z.scroll=0,true):false;
+    }
+    return false;
+  };
+
+  // ── the hand and the keys ────────────────────────────────────────────────
+  Z.pick=(mx,my)=>{
+    if(Z.leaf)return false;
+    for(const h of (Z.hits||[]))if(mx>=h.x0&&mx<=h.x1&&my>=h.y0&&my<=h.y1){
+      if(Z.row===h.path){Z.leaf=h.path;Z.win=null;Z.bands=null;Z.band=0;Z.scroll=0;}
+      else{Z.row=h.path;LENS.pin=h.path;}
+      return true;
+    }
+    return false;
+  };
+  Z.out=()=>{                               // esc: exactly one rung, never all of them
+    if(Z.leaf){Z.leaf=null;Z.win=null;Z.bands=null;return true;}
+    if(Z.row){Z.row=null;LENS.pin=null;return true;}
+    if(!Z.island){Z.island=true;return true;}
+    return false;
+  };
+  Z.key=e=>{
+    const k=e.key;
+    if(Z.leaf){
+      if(k==='ArrowUp'||k==='ArrowDown'){Z.scroll=Math.max(0,Z.scroll+(k==='ArrowDown'?3:-3));e.preventDefault();return true;}
+      if(k==='['||k===']'){
+        const bands=Z.bands||[];
+        if(bands.length){
+          Z.band=(Z.band+(k===']'?1:-1)+bands.length)%bands.length;
+          const b=bands[Z.band];
+          Z.win={a:Math.max(1,b.from-6),b:b.to+6};Z.scroll=0;
+        }
+        e.preventDefault();return true;
+      }
+      if(k==='Escape'){Z.out();e.preventDefault();return true;}
+      return true;                          // the leaf owns the keyboard while it is open
+    }
+    if(k==='0'){Z.island=!Z.island;e.preventDefault();return true;}
+    if(k==='Enter'&&Z.row){Z.leaf=Z.row;Z.win=null;Z.bands=null;Z.band=0;Z.scroll=0;e.preventDefault();return true;}
+    return false;
+  };
+  Z.clearRow=()=>{Z.row=null;Z.leaf=null;Z.win=null;Z.bands=null;};
+  Z.rung=rung;Z.runOf=runOf;Z.PASS=PASS;Z.PLACE=PLACE;Z.railBox=railBox;Z.rows_=()=>ROWS;
+  return Z;
+})();
+
 // ── the draw · the post-pass lives here ───
 function drawWorld(x,now){  // [WORLD] draws; [FRAME] decides where
   drawScene(x,now);

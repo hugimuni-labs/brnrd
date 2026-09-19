@@ -192,7 +192,9 @@ def test_place_page_attention_from_the_beads(machine):
     snapshot = state.build(machine["repo"], machine["home"], now=NOW)
     page, _ = pages.place_page(machine["repo"], machine["home"], "src/brr/real.py", snapshot)
     # `sed -n 1,9p` on a one-line file: clamped to the file as it is
-    assert page["attention"] == [{"from": 1, "to": 1, "kind": "read", "count": 1, "last": iso(NOW - 90)}]
+    assert page["attention"] == [
+        {"from": 1, "to": 1, "kind": "read", "count": 1, "last": iso(NOW - 90), "src": "parsed"},
+    ]
 
 
 @pytest.fixture
@@ -209,15 +211,16 @@ def _attention(machine, detail, tools=("Bash",)):
 
 def test_attention_three_command_shapes_three_ranges(long_file):
     m = long_file
-    assert _attention(m, "sed -n '10,20p' src/brr/long.py")[0] == [{"from": 10, "to": 20, "kind": "read"}]
-    assert _attention(m, "head -n 5 src/brr/long.py")[0] == [{"from": 1, "to": 5, "kind": "read"}]
-    assert _attention(m, "tail -n 10 src/brr/long.py")[0] == [{"from": 91, "to": 100, "kind": "read"}]  # the last 10 as it is now
-    assert _attention(m, "grep -n needle src/brr/long.py")[0] == [{"from": 1, "to": 100, "kind": "read", "whole": True}]
+    P = "parsed"  # every range this path returns is read off a command line, not the file
+    assert _attention(m, "sed -n '10,20p' src/brr/long.py")[0] == [{"from": 10, "to": 20, "kind": "read", "src": P}]
+    assert _attention(m, "head -n 5 src/brr/long.py")[0] == [{"from": 1, "to": 5, "kind": "read", "src": P}]
+    assert _attention(m, "tail -n 10 src/brr/long.py")[0] == [{"from": 91, "to": 100, "kind": "read", "src": P}]  # the last 10 as it is now
+    assert _attention(m, "grep -n needle src/brr/long.py")[0] == [{"from": 1, "to": 100, "kind": "read", "whole": True, "src": P}]
     absolute = str(m["repo"] / "src" / "brr" / "long.py")
-    assert _attention(m, absolute, tools=("Read",))[0] == [{"from": 1, "to": 100, "kind": "read", "whole": True}]
+    assert _attention(m, absolute, tools=("Read",))[0] == [{"from": 1, "to": 100, "kind": "read", "whole": True, "src": P}]
     assert _attention(m, absolute, tools=("Edit",)) == ([], {"read": 0, "edit": 1})  # no range recorded: counted
     diff = "git diff src/brr/long.py\n+++ b/src/brr/long.py\n@@ -40,3 +40,6 @@ def f():"
-    assert _attention(m, diff)[0] == [{"from": 40, "to": 45, "kind": "edit"}]
+    assert _attention(m, diff)[0] == [{"from": 40, "to": 45, "kind": "edit", "src": P}]
     assert _attention(m, "sed -n 1,5p src/brr/other.py")[0] == []  # another file
 
 
@@ -229,7 +232,89 @@ def test_attention_overlapping_ranges_merge(long_file):
         found, _ = _attention(long_file, detail)
         ranges += [{**r, "last": at} for r in found]
     assert pages.merge_ranges(ranges) == [
-        {"from": 10, "to": 33, "kind": "read", "count": 3, "last": "t3"},  # overlapping and touching merge
-        {"from": 60, "to": 70, "kind": "read", "count": 1, "last": "t4"},
-        {"from": 1, "to": 100, "kind": "read", "count": 1, "last": "t5", "whole": True},  # a grep swallows nothing
+        {"from": 10, "to": 33, "kind": "read", "count": 3, "last": "t3", "src": "parsed"},  # overlapping and touching merge
+        {"from": 60, "to": 70, "kind": "read", "count": 1, "last": "t4", "src": "parsed"},
+        {"from": 1, "to": 100, "kind": "read", "count": 1, "last": "t5", "whole": True, "src": "parsed"},  # a grep swallows nothing
     ]
+
+
+# ── the measured spans: git's hunks outrank the command line ─────────────
+
+
+def test_attention_prefers_the_row_s_measured_chunks(long_file):
+    """#2021 put git's real hunks on the row; this page used to parse the
+    command text instead and file every edit under ``unranged``."""
+    m = long_file
+    where = state.locate(m["repo"], m["home"])
+    absolute = str(m["repo"] / "src" / "brr" / "long.py")
+    row = {
+        "act": "mutate", "detail": absolute, "cwd": str(m["repo"]), "tools": ["Edit"],
+        "chunks": [{"path": absolute, "rel": "src/brr/long.py", "from": 40, "to": 45, "kind": "write"}],
+    }
+    assert pages.attention_of_row(row, "src/brr/long.py", where, 100) == (
+        [{"from": 40, "to": 45, "kind": "edit", "src": "measured"}], {"read": 0, "edit": 0},
+    )
+    # the positive control for the precedence: the SAME row without chunks is
+    # the old answer — an unranged edit. Without this, the assertion above
+    # could be passing on a path that never looked at `chunks` at all.
+    assert pages.attention_of_row({k: v for k, v in row.items() if k != "chunks"},
+                                  "src/brr/long.py", where, 100) == ([], {"read": 0, "edit": 1})
+    # a write git could not span stays counted, never drawn as a line
+    flagged = {**row, "chunks": [{"path": absolute, "rel": "src/brr/long.py", "changed": True, "kind": "write"}]}
+    assert pages.attention_of_row(flagged, "src/brr/long.py", where, 100) == ([], {"read": 0, "edit": 1})
+    # chunks that name another file do not speak for this one: the parser runs
+    other = {**row, "detail": "sed -n '10,20p' src/brr/long.py", "tools": ["Bash"],
+             "chunks": [{"path": str(m["repo"] / "src" / "brr" / "other.py"),
+                         "rel": "src/brr/other.py", "from": 1, "to": 9, "kind": "read"}]}
+    assert pages.attention_of_row(other, "src/brr/long.py", where, 100)[0] == [
+        {"from": 10, "to": 20, "kind": "read", "src": "parsed"},
+    ]
+    # measured spans are clamped to the file as it is now, like parsed ones
+    past_end = {**row, "chunks": [{"path": absolute, "rel": "src/brr/long.py",
+                                   "from": 300, "to": 400, "kind": "write"}]}
+    assert pages.attention_of_row(past_end, "src/brr/long.py", where, 100) == ([], {"read": 0, "edit": 0})
+
+
+def test_merged_band_cannot_launder_a_guess_into_a_measurement():
+    ranges = [
+        {"from": 10, "to": 20, "kind": "edit", "src": "measured", "last": "t1"},
+        {"from": 21, "to": 30, "kind": "edit", "src": "parsed", "last": "t2"},
+        {"from": 60, "to": 70, "kind": "edit", "src": "measured", "last": "t3"},
+    ]
+    assert pages.merge_ranges(ranges) == [
+        {"from": 10, "to": 30, "kind": "edit", "count": 2, "last": "t2", "src": "mixed"},
+        {"from": 60, "to": 70, "kind": "edit", "count": 1, "last": "t3", "src": "measured"},
+    ]
+
+
+def test_place_page_scoped_to_one_run_carries_only_that_run(machine):
+    snapshot = state.build(machine["repo"], machine["home"], now=NOW)
+    whole, _ = pages.place_page(machine["repo"], machine["home"], "src/brr/real.py", snapshot)
+    assert whole["scope"] is None and whole["scope_known"] is None
+    assert whole["attention"], "control: the unscoped page has attention to lose"
+
+    mine, _ = pages.place_page(machine["repo"], machine["home"], "src/brr/real.py", snapshot, run=RUN)
+    assert mine["scope"] == RUN and mine["scope_known"] is True
+    assert {p["run"] for p in mine["passes"]} <= {RUN}
+    assert {b["run"] for b in mine["beads"]} <= {RUN}
+
+    stranger = "run-260101-0000-zzzz"
+    empty, _ = pages.place_page(machine["repo"], machine["home"], "src/brr/real.py", snapshot, run=stranger)
+    assert empty["scope"] == stranger and empty["scope_known"] is False
+    assert empty["attention"] == [] and empty["beads"] == [] and empty["passes"] == []
+    # the file itself is still the file: scoping the record does not blank the text
+    assert empty["text"] == whole["text"]
+
+
+def test_pass_page_names_its_own_bound(kid_contract):
+    page, _ = pages.pass_page(kid_contract["repo"], kid_contract["home"], CHILD)
+    assert page["bead_total"] is not None
+    assert page["bead_total"] >= len(page["beads"])
+
+
+def test_pass_page_says_how_deep_its_place_scan_went(kid_contract):
+    page, _ = pages.pass_page(kid_contract["repo"], kid_contract["home"], CHILD)
+    assert page["places_scanned"] is not None
+    # the scan's bottom is a bound a reader compares to the run's whole life
+    assert page["places_scanned"] <= page["bead_total"]
+    assert all("path" in e and "touches" in e for e in page["places"])

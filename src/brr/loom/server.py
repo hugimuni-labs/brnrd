@@ -12,6 +12,8 @@ nothing else, read-only in v1. Routes:
 - ``GET /loom/bench?path=<repo>/<place>/<commit>`` → one bench file's text,
   resolved inside ``<account_home>/bench`` only;
 - ``GET /loom/page/<bead|pass|item|place|heddle>?…`` → one bench page
+  (``place`` takes ``path`` and optionally ``from``/``to`` and ``run``: the
+  line window, and the one pass to scope the record to)
   (:mod:`brr.loom.pages`), JSON with the files it ``read``;
 - ``GET /loom/events`` → Server-Sent Events: one ``state`` frame per beat while
   the client stays connected;
@@ -254,7 +256,8 @@ class LoomHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.BAD_REQUEST, {"error": "from/to must be integers", "read": []}, head=head)
                 return
             payload, read = pages.place_page(
-                repo_root, home, arg("path"), self.server.cache.payload(), text_from=text_from, text_to=text_to
+                repo_root, home, arg("path"), self.server.cache.payload(),
+                text_from=text_from, text_to=text_to, run=arg("run") or None,
             )
         elif kind == "heddle":
             payload, read = pages.heddle_page(home, arg("slug"), self.server.cache.payload())
