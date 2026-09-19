@@ -11,3 +11,17 @@
 
 /* The colour law: an unmeasured reading is black, never a grey placeholder. */
 .unmeasured{color:#5a4d3c}#state.unmeasured{color:#5a4d3c}.reset.unmeasured{color:#5a4d3c}#glyph.unmeasured{color:#5a4d3c;text-shadow:none}
+
+/* THE QUEUE — halted-without-carry work with a stated revival path.
+   Its own row so it never competes with the pack for height; `hidden`
+   collapses the auto row to nothing, so an empty queue costs no space. */
+@media(min-width:721px){main{grid-template-rows:auto minmax(0,1fr) auto auto}#ground{grid-row:1/5}#halts{grid-column:2;grid-row:3;font-size:11px;max-height:20vh;overflow:auto;padding:12px 16px}#halts .eyebrow{margin-bottom:9px}#pack{grid-column:2;grid-row:4}}
+@media(max-width:720px){#halts{display:none}}
+.halt+.halt{border-top:1px solid var(--line);margin-top:11px;padding-top:11px}
+.halt-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.halt-run{color:var(--ice);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.halt-head small{color:var(--dim);font-size:9px;white-space:nowrap}
+.halt-reason{color:var(--dim);font-size:10px;margin-top:4px;line-height:1.5}
+/* The one line a reader picks the work back up from — it gets the ink. */
+.halt-resumable{color:var(--amber);font-size:11px;margin-top:5px;line-height:1.5}
+.halt-items{margin:6px 0 0;padding-left:15px;color:var(--dim);font-size:10px;line-height:1.6}
