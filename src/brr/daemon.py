@@ -4466,6 +4466,31 @@ def _change_token(payload: dict[str, object]) -> str:
             key: value for key, value in card.items()
             if key not in {"age_seconds", "state_moved_seconds"}
         }
+    # ``heddles[].brightness`` is a *decay curve*: it moves every heartbeat
+    # for as long as a heddle has ever been lit, whether or not anything
+    # happened. Folding it in put a self-moving value back inside the token
+    # the whole exclusion list above exists to keep still — the third face
+    # of #282, measured 2026-09-19 on run-260919-1802-6zeq: four heartbeats
+    # with the resident idle produced four different tokens, so the Stop
+    # hook's "unchanged token ⇒ bare {} ⇒ stop cleanly" gate could never
+    # latch, and a seat with an *accepted* `halt:` re-fired Stop a dozen
+    # times without ever reaching the worker seam that finalizes it.
+    #
+    # Dropped per-field rather than by excluding ``heddles`` whole: which
+    # heddles exist, and which ones a boundary newly *matched*, is real
+    # attention-worthy change — a topic lighting up for the first time
+    # should still move the token. Only the continuous glow and its
+    # timestamp are the clock in disguise.
+    heddles = stable.get("heddles")
+    if isinstance(heddles, list):
+        stable["heddles"] = [
+            {
+                key: value for key, value in row.items()
+                if key not in {"brightness", "last_match_at"}
+            }
+            if isinstance(row, dict) else row
+            for row in heddles
+        ]
     encoded = json.dumps(
         stable,
         sort_keys=True,
