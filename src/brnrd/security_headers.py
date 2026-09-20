@@ -125,11 +125,14 @@ CSP_HEADER = b"content-security-policy-report-only"
 
 # Widen only for a real, observed violation — this is deliberately the
 # narrowest policy that still lets the current app run.
+_GOATCOUNTER_SCRIPT_SRC = "https://gc.zgo.at"
+_GOATCOUNTER_CONNECT_SRC = "https://gurio.goatcounter.com/count"
+
 _BASE_DIRECTIVES: tuple[tuple[str, str], ...] = (
     ("default-src", "'self'"),
     ("style-src", "'self' 'unsafe-inline'"),
     ("img-src", "'self' data:"),
-    ("connect-src", "'self'"),
+    ("connect-src", f"'self' {_GOATCOUNTER_CONNECT_SRC}"),
     ("font-src", "'self'"),
     ("object-src", "'none'"),
     ("base-uri", "'self'"),
@@ -153,7 +156,7 @@ def inline_script_hashes(html: bytes) -> list[str]:
 
 def build_csp_report_only(script_hashes: Iterable[str]) -> str:
     """Assemble the ``Content-Security-Policy-Report-Only`` header value."""
-    script_src = " ".join(("'self'", *script_hashes))
+    script_src = " ".join(("'self'", _GOATCOUNTER_SCRIPT_SRC, *script_hashes))
     directives = [("script-src", script_src), *_BASE_DIRECTIVES]
     return "; ".join(f"{name} {value}" for name, value in directives)
 
