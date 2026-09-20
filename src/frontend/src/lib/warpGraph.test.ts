@@ -316,6 +316,23 @@ describe('the graph', () => {
 		assert.deepEqual(index.get('run-260810-0001-aaaa'), ['post']);
 	});
 
+	it('card runes == heddles lit: a live run with three claims resolves one set for both readers', () => {
+		const g = graphOf(
+			TOPIC_LOOM,
+			TOPIC_POST,
+			file('surface/topics/dungeon.md', '# The dungeon\n\nRooms.')
+		);
+		// `mail` is an alias of `post`, `loom` is claimed twice, `ghost` is
+		// unknown: raw, that is four slugs; resolved, three canonical threads.
+		const live = [{ run_id: 'run-live', topics: ['loom', 'mail', 'post', 'dungeon', 'ghost'] }];
+		const index = runTopicIndex(g, [], live);
+		const cardRunes = index.get('run-live') ?? [];
+		// The heddle rail's lit set is the union of the same index over live runs.
+		const heddlesLit = new Set(live.flatMap((run) => index.get(run.run_id) ?? []));
+		assert.equal(cardRunes.length, 3);
+		assert.deepEqual([...heddlesLit].sort(), [...cardRunes].sort());
+	});
+
 	it('runTopicIndex: an unknown topic id in a topics.md is dropped silently', () => {
 		const claimFiles = [
 			...files,
