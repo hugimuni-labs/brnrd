@@ -15,10 +15,11 @@ seed files, and resolving the self-inject index into a wake-time digest
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+import os
 import re
 from pathlib import Path
-
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from . import gitops
 
@@ -54,6 +55,186 @@ FOUNDING_COMMIT_COUNT_FILE = "dominion.founding-commits"
 # 22528 (2026-08: "the instrument is not exempt" §Environment shaping grew
 # the seed to 19204 bytes, past the prior 18393-byte ceiling).
 DEFAULT_INJECT_BUDGET_BYTES = 22528
+
+
+@dataclass(frozen=True)
+class MountReport:
+    """Outcome of deriving the home dominion's place mounts.
+
+    The report deliberately names paths relative to *home*, so daemon boot
+    and ``brnrd dominion places`` can give the operator the same account of a
+    dry run and an apply without handing callers a second rendering policy.
+    """
+
+    created: tuple[str, ...] = ()
+    repaired: tuple[str, ...] = ()
+    unchanged: tuple[str, ...] = ()
+    blocked: tuple[str, ...] = ()
+    dangling: tuple[str, ...] = ()
+    ignored: tuple[str, ...] = ()
+    refusal: str | None = None
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.created or self.repaired or self.ignored)
+
+    def lines(self, *, applying: bool) -> list[str]:
+        """Render a compact, stable operator-facing account of this pass."""
+
+        if self.refusal:
+            return [f"refused: {self.refusal}"]
+        prefix = "mounted" if applying else "would mount"
+        lines: list[str] = []
+        for path in self.created:
+            lines.append(f"{prefix}: {path}")
+        for path in self.repaired:
+            lines.append(f"{prefix} (repair): {path}")
+        for path in self.unchanged:
+            lines.append(f"unchanged: {path}")
+        for path in self.blocked:
+            lines.append(f"left alone (real path): {path}")
+        for path in self.dangling:
+            lines.append(f"dangling until its kb exists: {path}")
+        for path in self.ignored:
+            lines.append(f"{prefix} gitignore: {path}")
+        return lines or ["nothing to mount"]
+
+
+_PLACE_IGNORE_RULES = (
+    "/dominion/places/*/repo",
+    "/dominion/places/*/kb",
+    "/dominion/kb",
+)
+
+
+def registered_place_repos(home: Path) -> list[dict[str, Any]]:
+    """Read raw registry entries for the places mount pass.
+
+    This intentionally stays at the registry boundary rather than accepting
+    ``HomeContext.repos``: the room layout is derived from
+    ``account/repos.json`` alone, including its explicit ``kind`` field.
+    Bad or absent registry data simply yields no rooms at startup.
+    """
+
+    try:
+        raw = json.loads((home / "account" / "repos.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    entries = raw.get("repos", []) if isinstance(raw, dict) else []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def _place_short_name(label: str) -> str:
+    return label.rsplit("/", 1)[-1]
+
+
+def _absolute_target(value: object) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    path = Path(os.path.expandvars(text)).expanduser()
+    return str(path if path.is_absolute() else path.absolute())
+
+
+def _write_place_ignore_rules(home: Path, *, apply: bool) -> tuple[str, ...]:
+    """Add only missing derived-mount ignore rules, preserving user content."""
+
+    ignore = home / ".gitignore"
+    try:
+        current = ignore.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        current = ""
+    except OSError:
+        return ()
+    existing = set(current.splitlines())
+    missing = tuple(rule for rule in _PLACE_IGNORE_RULES if rule not in existing)
+    if missing and apply:
+        suffix = "" if not current or current.endswith("\n") else "\n"
+        ignore.write_text(current + suffix + "\n".join(missing) + "\n", encoding="utf-8")
+    return missing
+
+
+def mount_places(home: Path, repos: list[dict[str, Any]], *, apply: bool) -> MountReport:
+    """Derive home-dominion place links from registered repository entries.
+
+    Only ``kind: repo`` entries make rooms.  Duplicate short names refuse the
+    whole pass before even a directory or ignore rule is created.  Existing
+    symlinks are repaired; real paths are reports, never overwrite targets.
+    """
+
+    registered: list[tuple[str, str, str]] = []
+    shorts: dict[str, str] = {}
+    for item in repos:
+        if str(item.get("kind") or "").casefold() != "repo":
+            continue
+        label = str(item.get("label") or "").strip()
+        target = _absolute_target(item.get("path"))
+        if not label or target is None:
+            continue
+        short = _place_short_name(label)
+        prior = shorts.get(short)
+        if prior is not None:
+            return MountReport(
+                refusal=(
+                    f"registered labels {prior!r} and {label!r} both map to "
+                    f"place {short!r}; mounted nothing"
+                )
+            )
+        shorts[short] = label
+        registered.append((label, short, target))
+
+    created: list[str] = []
+    repaired: list[str] = []
+    unchanged: list[str] = []
+    blocked: list[str] = []
+    dangling: list[str] = []
+    root = home / "dominion"
+
+    def record_link(path: Path, target: str) -> None:
+        relpath = str(path.relative_to(home))
+        if path.is_symlink():
+            if os.readlink(path) == target:
+                unchanged.append(relpath)
+                return
+            repaired.append(relpath)
+            if apply:
+                path.unlink()
+                path.symlink_to(target)
+            return
+        if path.exists():
+            blocked.append(relpath)
+            return
+        created.append(relpath)
+        if apply:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.symlink_to(target)
+
+    for label, short, repo_target in registered:
+        room = root / "places" / short
+        # A place is a room, never a link.  ``Path.is_dir`` follows a
+        # symlink, so check it separately before we could create children in
+        # an arbitrary destination.
+        if room.is_symlink() or (room.exists() and not room.is_dir()):
+            blocked.append(str(room.relative_to(home)))
+            continue
+        if apply:
+            room.mkdir(parents=True, exist_ok=True)
+        record_link(room / "repo", repo_target)
+        kb_target = f"../../../knowledge/repos/{label.replace('/', '__')}"
+        record_link(room / "kb", kb_target)
+        if not (home / "knowledge" / "repos" / label.replace("/", "__")).is_dir():
+            dangling.append(str((room / "kb").relative_to(home)))
+
+    record_link(root / "kb", "../knowledge/global")
+    ignored = _write_place_ignore_rules(home, apply=apply)
+    return MountReport(
+        created=tuple(created),
+        repaired=tuple(repaired),
+        unchanged=tuple(unchanged),
+        blocked=tuple(blocked),
+        dangling=tuple(dangling),
+        ignored=ignored,
+    )
 
 
 def inject_budget_bytes(cfg: dict | None) -> int:

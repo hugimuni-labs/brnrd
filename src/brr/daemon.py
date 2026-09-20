@@ -17764,6 +17764,22 @@ def start(
         print(line)
     if migration_logs:
         cfg = conf.load_config(repo_root)
+    # Move 2(a): once consolidation has made the one standing dominion, its
+    # rooms are derived at every boot from the account registry.  This is
+    # intentionally before seeding and dispatch: mounts are standing context,
+    # not worker roots or a dispatch concern.
+    home_dominion = account.home_dominion_path(account_context)
+    if account_context.enabled and home_dominion.is_dir():
+        try:
+            places = dominion.mount_places(
+                account.context_home_root(account_context),
+                dominion.registered_place_repos(account.context_home_root(account_context)),
+                apply=True,
+            )
+            for line in places.lines(applying=True):
+                print(f"[brnrd] dominion places: {line}")
+        except Exception as exc:  # noqa: BLE001 - a derived mount must not sink boot
+            print(f"[brnrd] dominion places skipped: {exc}")
     # #316: mark runs the previous daemon process left frozen mid-flight
     # so their chat cards read "interrupted" instead of stale running
     # text. Must run before the zombie janitors (which would silently
