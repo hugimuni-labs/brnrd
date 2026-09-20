@@ -82,7 +82,7 @@ def test_rows_are_the_precedence_main_applied():
         "submit",
         "to", "stop", "note", "await", "hold",
         "land", "fold", "topic", "mark", "stake", "cut-at",
-        "cut", "gate", "event",
+        "cut", "gate", "thread", "event",
     ]
     # exactly one fallback, and it is last
     assert [row.key for row in table.ROWS if row.selects is None] == ["event"]
@@ -109,6 +109,8 @@ def test_rows_are_the_precedence_main_applied():
         ({"cut-at": "5"}, "cut-at"),
         ({"cut": True}, "cut"),
         ({"gate": "telegram"}, "gate"),
+        ({"thread": "telegram:42:"}, "thread"),
+        ({"event": "evt-1", "thread": "telegram:42:"}, "event"),
         ({"event": "evt-1"}, "event"),
         ({}, "event"),
         ({"label": "x"}, "event"),

@@ -77,7 +77,7 @@ def frontmatter_body(text: str) -> str:
 # only to gate the lenient (missing-opening-fence) parse below — see
 # ``parse_outbox_message``.
 _OUTBOX_ROUTING_KEYS = (
-    "event", "gate", "respawn", "spawn", "submit", "stop", "to", "runner_policy",
+    "event", "gate", "thread", "respawn", "spawn", "submit", "stop", "to", "runner_policy",
     "config_change", "note", "await", "cut", "ask", "hold",
     # design-the-four-stops.md §The two verbs: the seat's own ending.
     "halt",
