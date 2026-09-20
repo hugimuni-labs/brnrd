@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import './layout.css';
 	import { markBooted } from '$lib/boot';
+	import { countPublicPageview, isAnalyticsPath } from '$lib/analytics';
 	import favicon from '$lib/assets/favicon.svg';
 	import { canonicalUrl, hasCanonicalMeta, isIndexablePath, normalizePathname } from '$lib/seo';
 
@@ -12,6 +14,21 @@
 	let indexable = $derived(isIndexablePath(currentPath));
 	let canonicalMeta = $derived(hasCanonicalMeta(currentPath));
 	let canonical = $derived(canonicalUrl(currentPath));
+
+	afterNavigate(({ from }) => {
+		const pathname = normalizePathname(page.url.pathname);
+		if (!isAnalyticsPath(pathname)) return;
+
+		// Initial loads keep the browser's real external referrer. SPA hops use
+		// only a sanitized public pathname, and a hop from any private route
+		// deliberately sends an empty referrer rather than leaking that route.
+		const referrer = from
+			? isAnalyticsPath(from.url.pathname)
+				? normalizePathname(from.url.pathname)
+				: ''
+			: undefined;
+		void countPublicPageview(pathname, { title: document.title, referrer });
+	});
 
 	// Boot glitch (kb/design-brand-visual-language.md §3): a real spec,
 	// named in enough detail to be checkable, never built until this pass.
