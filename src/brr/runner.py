@@ -1431,6 +1431,13 @@ SHELL_HELP: dict[str, ShellHelp] = {
         docs_url="https://developers.openai.com/codex/cli/",
         install_hint="npm install -g @openai/codex",
     ),
+    "opencode": ShellHelp(
+        shell="opencode",
+        label="OpenCode",
+        blurb="Open-source terminal agent; bring any provider's model or key.",
+        docs_url="https://opencode.ai/docs/",
+        install_hint="npm install -g opencode-ai",
+    ),
 }
 
 
