@@ -450,6 +450,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="repo label whose dominion becomes the one dominion "
                         "(default: the account's default repo)")
     p.set_defaults(func=cmd_dominion_consolidate)
+    p = dominion_sub.add_parser(
+        "places",
+        help="show (or, with --apply, repair) derived dominion place mounts",
+    )
+    p.add_argument("--dry-run", action="store_true",
+                   help="show the mount pass without changing files (the default)")
+    p.add_argument("--apply", action="store_true",
+                   help="create or repair derived place mounts")
+    p.set_defaults(func=cmd_dominion_places)
 
     # Hidden per HIDDEN_COMMANDS above (help ceiling, not obscurity) — omit
     # `help=` here too, or it leaks into the listing despite the constant.
@@ -6154,6 +6163,25 @@ def cmd_dominion_consolidate(args):
         print(f"[brnrd dominion consolidate] refused: {exc}")
         return 1
     return 0
+
+
+def cmd_dominion_places(args):
+    """``brnrd dominion places [--dry-run | --apply]`` — move 2(a)."""
+
+    from . import account
+    from . import config as conf
+    from . import dominion
+
+    repo_root = _repo_root()
+    cfg = conf.load_config(repo_root)
+    ctx = account.resolve_context(repo_root, cfg, create=False)
+    home = account.context_home_root(ctx)
+    applying = bool(args.apply) and not bool(args.dry_run)
+    report = dominion.mount_places(
+        home, dominion.registered_place_repos(home), apply=applying)
+    for line in report.lines(applying=applying):
+        print(f"[brnrd dominion places] {line}")
+    return 1 if report.refusal else 0
 
 
 def cmd_home_sweep_orphans(args):
