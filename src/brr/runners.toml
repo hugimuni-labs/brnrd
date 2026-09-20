@@ -27,6 +27,16 @@ class = "balanced"
 cost_rank = 25
 quota_source = "codex-local"
 
+# Third Shell: no ``hooks`` flavour, no ``quota_source``. Prompt rides argv
+# (``opencode run [message..]`` — https://opencode.ai/docs/cli/), so the
+# whole-argument ``{prompt}`` placeholder opts out of stdin delivery.
+[profiles.opencode]
+cmd = "opencode run --auto {prompt}"
+provider = "opencode"
+owner = "user"
+class = "economy"
+cost_rank = 20
+
 [aliases]
 codex-mini = "codex-gpt-5.6-luna"
 codex-terra = "codex-gpt-5.6-terra"
