@@ -1118,7 +1118,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("kb", help="search home/repo knowledge; omit query to print graph shape")
     p.add_argument("query", nargs="?", default=None,
-                   help="search term (omit to print the kb graph shape)")
+                   help="search term, or 'mount' to derive the project's kb link")
+    p.add_argument("--apply", action="store_true",
+                   help="apply 'kb mount' (dry-run by default)")
     p.add_argument("--limit", type=int, default=20,
                    help="maximum matching lines to print")
     p.set_defaults(func=cmd_kb)
@@ -4225,8 +4227,22 @@ def cmd_kb(args):
     # silently mint an empty project home and then report cleanly on it,
     # indistinguishable from a genuinely empty, real kb.
     resolved_ctx = account_mod.resolve_context(repo_root, cfg, create=False)
+    if args.query == "mount":
+        applying = bool(getattr(args, "apply", False))
+        report = knowledge.ensure_mount(
+            repo_root, account_mod.context_home_root(resolved_ctx),
+            account_mod.repo_label(repo_root, cfg), apply=applying,
+        )
+        for line in report.lines(applying=applying):
+            print(f"[brnrd kb mount] {line}")
+        return 1 if report.refusal else 0
+    if getattr(args, "apply", False):
+        print("[brnrd kb] --apply requires 'kb mount'")
+        return 1
     reason = account_mod.resolution_reason(resolved_ctx, repo_root)
-    checkout = knowledge.ensure_checkout(repo_root, cfg, create=False)
+    checkout = knowledge.mounted_kb_dir(repo_root)
+    if checkout is None:
+        checkout = knowledge.ensure_checkout(repo_root, cfg, create=False)
 
     if not args.query:
         from . import kb_health

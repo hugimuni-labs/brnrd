@@ -47,6 +47,86 @@ class SearchHit:
 
 
 @dataclass(frozen=True)
+class MountReport:
+    """A project knowledge mount plan, shared by the CLI and daemon boot."""
+
+    path: Path
+    target: Path
+    status: str
+    seed: bool = False
+    ignore: bool = False
+    refusal: str | None = None
+
+    def lines(self, *, applying: bool) -> list[str]:
+        if self.refusal:
+            return [f"refused: {self.path}: {self.refusal}"]
+        if self.status == "blocked":
+            return [f"real kb/, left alone: {self.path}"]
+        verb = "mounted" if applying else "would mount"
+        prefix = "unchanged" if self.status == "unchanged" else verb
+        rows = [f"{prefix}: {self.path} -> {self.target}"]
+        if self.seed:
+            rows.append(f"{'created' if applying else 'would create'}: {self.target}/index.md (empty kb)")
+        if self.ignore:
+            rows.append(f"{'excluded' if applying else 'would exclude'}: /kb in .git/info/exclude")
+        return rows
+
+
+def mounted_kb_dir(repo_root: Path) -> Path | None:
+    """Return a live kb mount; real directories retain legacy precedence."""
+
+    path = repo_root / "kb"
+    return path if path.is_symlink() and path.is_dir() else None
+
+
+def ensure_mount(repo_root: Path, home: Path, label: str, *, apply: bool) -> MountReport:
+    """Plan or derive a project kb link without replacing authored paths.
+
+    Only an existing home knowledge tree can receive a new, empty repo kb.
+    Dry runs inspect Git's exclude path but never create files or directories.
+    The old checkout is deliberately neither removed nor migrated here.
+    """
+
+    path = repo_root / "kb"
+    tree = home.resolve() / "knowledge"
+    target = tree / "repos" / account.slug_repo_label(label)
+    if not path.is_symlink() and path.exists():
+        return MountReport(path, target, "blocked")
+    if not tree.is_dir():
+        return MountReport(path, target, "refused", refusal="home knowledge tree does not exist")
+    if target.exists() and not target.is_dir():
+        return MountReport(path, target, "refused", refusal="knowledge target is not a directory")
+
+    result = subprocess.run(
+        ["git", "rev-parse", "--git-path", "info/exclude"], cwd=repo_root,
+        env=gitops.explicit_repo_env(), capture_output=True, text=True, check=False,
+    )
+    if result.returncode != 0:
+        return MountReport(path, target, "refused", refusal="project is not a Git checkout")
+    exclude = Path(result.stdout.strip())
+    if not exclude.is_absolute():
+        exclude = repo_root / exclude
+    rules = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+    ignore = "/kb" not in {line.strip() for line in rules.splitlines()}
+    seed = not target.is_dir()
+    status = "created"
+    if path.is_symlink():
+        status = "unchanged" if path.resolve() == target.resolve() else "repaired"
+    if apply:
+        # Ignore the link itself, not `kb/`: Git does not match a trailing
+        # slash directory pattern against a symlink.
+        gitops.exclude_from_git(repo_root, "/kb")
+        if seed:
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "index.md").write_text("# Knowledge base\n\nNo pages yet.\n", encoding="utf-8")
+        if status != "unchanged":
+            if path.is_symlink():
+                path.unlink()
+            path.symlink_to(target, target_is_directory=True)
+    return MountReport(path, target, status, seed=seed, ignore=ignore)
+
+
+@dataclass(frozen=True)
 class KnowledgeForgeLocation:
     """A knowledge scope projected through its local remotes to a forge."""
 
@@ -168,6 +248,9 @@ def _knowledge_forge_location(
 def _knowledge_repo_and_scope(
     repo_root: Path, cfg: dict,
 ) -> tuple[Path | None, Path | None]:
+    mount = mounted_kb_dir(repo_root)
+    if mount is not None:
+        return mount.resolve(), mount.resolve()
     checkout = repo_root / CHECKOUT_DIRNAME
     try:
         ctx = account.resolve_context(repo_root, cfg, create=False)
@@ -225,7 +308,7 @@ def _split_scope(ctx: "account.HomeContext", repo_root: Path, label: str) -> Pat
 def _git_toplevel(path: Path) -> Path | None:
     result = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"], cwd=path,
-        capture_output=True, text=True, check=False,
+        env=gitops.explicit_repo_env(), capture_output=True, text=True, check=False,
     )
     return Path(result.stdout.strip()) if result.returncode == 0 else None
 
@@ -268,7 +351,7 @@ def _path_matches_pushed_ref(
 def _object_id(repo_root: Path, spec: str) -> str | None:
     result = subprocess.run(
         ["git", "rev-parse", "--verify", spec], cwd=repo_root,
-        capture_output=True, text=True, check=False,
+        env=gitops.explicit_repo_env(), capture_output=True, text=True, check=False,
     )
     value = result.stdout.strip()
     return value if result.returncode == 0 and value else None
@@ -279,6 +362,9 @@ def sources(repo_root: Path, cfg: dict | None = None) -> list[KnowledgeSource]:
 
     cfg = cfg if cfg is not None else conf.load_config(repo_root)
     result: list[KnowledgeSource] = []
+    mount = mounted_kb_dir(repo_root)
+    if mount is not None:
+        result.append(KnowledgeSource("repo KB (mount)", mount, "mount"))
     try:
         ctx = account.resolve_context(repo_root, cfg, create=False)
         if ctx.kind == "account" and account.knowledge_split_mode(cfg) == "per-repo":
@@ -307,23 +393,32 @@ def sources(repo_root: Path, cfg: dict | None = None) -> list[KnowledgeSource]:
         pass
 
     checkout = repo_root / CHECKOUT_DIRNAME
-    if checkout.is_dir():
+    if mount is None and checkout.is_dir():
         result.append(KnowledgeSource("knowledge checkout", checkout, "checkout"))
 
     repo_kb = repo_root / "kb"
-    if repo_kb.is_dir():
+    if mount is None and repo_kb.is_dir():
         result.append(KnowledgeSource("repo KB", repo_kb, "repo-kb"))
 
     repo_docs = repo_root / "docs"
     if repo_docs.is_dir():
         result.append(KnowledgeSource("repo docs", repo_docs, "repo-docs"))
-    return result
+    # The home source and mount can name the same tree. Include its pages
+    # once, at the mount, while retaining the account-wide source.
+    seen: set[Path] = set()
+    unique = []
+    for source in result:
+        resolved = source.root.resolve()
+        if resolved not in seen:
+            seen.add(resolved)
+            unique.append(source)
+    return unique
 
 
 def active_kb_dir(repo_root: Path, cfg: dict | None = None) -> Path | None:
     """Return the one directory a maintenance scan should treat as *the* kb.
 
-    Mirrors :func:`sources`' priority (home knowledge first, repo-committed
+    Mirrors :func:`sources`' priority (mount first, then home knowledge, repo-committed
     ``kb/`` as the legacy fallback) but narrows to the single directory
     that actually holds authored kb pages — not the ``.brnrd-kb/``
     checkout clone or repo ``docs/``, neither of which the deterministic
@@ -332,7 +427,7 @@ def active_kb_dir(repo_root: Path, cfg: dict | None = None) -> Path | None:
     has no kb at all yet (fresh checkout, `brnrd init` not run).
     """
     for source in sources(repo_root, cfg):
-        if source.kind in ("home", "repo-kb"):
+        if source.kind in ("mount", "home", "repo-kb"):
             return source.root
     return None
 
@@ -739,6 +834,9 @@ def mirror_state(
 
     Never raises: a wake prompt must not die because a git subprocess did.
     """
+
+    if mounted_kb_dir(repo_root) is not None:
+        return MirrorState(MIRROR_ABSENT, absent_reason="project kb is mounted directly")
 
     checkout = repo_root / CHECKOUT_DIRNAME
     try:

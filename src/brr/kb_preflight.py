@@ -31,6 +31,7 @@ scanner's job — they need synthesis the resident does directly.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -842,10 +843,12 @@ def _resolve_relative(
     primary = (page.parent / target).resolve()
     if primary.exists() or repo_root is None or kb_dir is None:
         return primary
-    legacy_kb_dir = (repo_root / "kb").resolve()
+    legacy_kb_dir = repo_root / "kb"
     if kb_dir == legacy_kb_dir or not target.startswith(".."):
         return primary
-    return (legacy_kb_dir / target).resolve()
+    # Collapse the historical kb/../src spelling before resolving links:
+    # kb may now be a mount, whose physical parent is the knowledge tree.
+    return Path(os.path.normpath(legacy_kb_dir / target)).resolve()
 
 
 def _is_external(raw: str) -> bool:
