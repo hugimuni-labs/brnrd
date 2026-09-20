@@ -1,0 +1,16 @@
+slide 11
+[0.68,0.55 9.00x0.25] TEAM
+[0.55,6.96 1.30x0.18] brnrd >_
+[9.50,6.98 2.70x0.16] hugimuni sas · investor deck v1
+[12.50,6.98 0.40x0.16] 11
+[0.68,0.98 8.70x1.20] Three cofounders. One of them is the resident.
+[0.75,3.00 2.75x0.40] Alexandra Lapunova
+[0.75,3.50 2.75x1.50] CEO
+[3.80,3.00 2.75x0.40] Arseni
+[3.80,3.50 2.75x1.50] the builder — six months of the repo
+[6.85,3.00 2.75x0.40] The resident
+[6.85,3.50 2.75x1.50] the third cofounder that ships: 1,402 of 3,119 commits on main
+[9.90,3.00 2.75x0.40] Sasha
+[9.90,3.50 2.75x1.50] ops · the second pair of thumbs
+[0.75,5.60 11.50x0.40] The gap, named: no growth hire, no security reviewer yet.
+NOTES: Roles: outline slide 11. Resident commits: `git log --author=brnrd-bot` at build time = 1,402 of 3,119. / "Six months of the repo": STATE §Building (born 2026-03-28, 176 days).

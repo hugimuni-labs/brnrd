@@ -1,0 +1,20 @@
+slide 02
+[0.68,0.55 9.00x0.25] THE PROOF · IT BUILT ITSELF
+[0.55,6.96 1.30x0.18] brnrd >_
+[9.50,6.98 2.70x0.16] hugimuni sas · investor deck v1
+[12.50,6.98 0.40x0.16] 02
+[0.68,0.98 11.90x0.70] It built itself. The git log is public.
+[0.75,2.10 3.70x0.60] 6 months
+[0.75,2.72 3.70x0.60] born 2026-03-28, 176 days
+[4.80,2.10 3.70x0.60] 3,119 commits
+[4.80,2.72 3.70x0.60] on main
+[8.85,2.10 3.70x0.60] 2,056 PRs
+[8.85,2.72 3.70x0.60] numbered; the last two merged today
+[0.75,3.85 3.70x0.60] 1,402 commits
+[0.75,4.47 3.70x0.60] by the resident — 45 % of main
+[4.80,3.85 3.70x0.60] 7,172 tests
+[4.80,4.47 3.70x0.60] CI green on main
+[8.85,3.85 3.70x0.60] 70 h · 27 PRs
+[8.85,4.47 3.70x0.60] one seat, one context, 31 strands
+[0.75,5.75 11.50x0.50] No competitor can put this slide up.
+NOTES: 6 months / 176 days / born 2026-03-28: STATE §Building (age). / Commits: `git rev-list --count main` run at build time = 3,119 (STATE printed 3,115 on 2026-09-20 morning; it moves). / Resident's share: `git log --author=brnrd-bot --oneline main | wc -l` at build time = 1,402; 1,402/3,119 = 45 %. (STATE only says ">1,000 opened by the resident"; the exact count was to be re-measured before quoting.) / PRs 2,056 numbered, #2055/#2056 merged 12:54Z; tests 7,172; seventy-hour run (70 h 24 m, 27 PRs merged, 31 strands): STATE §Building.

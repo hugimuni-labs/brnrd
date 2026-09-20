@@ -1,0 +1,18 @@
+slide 04
+[0.68,0.55 9.00x0.25] THE WEDGE · WHAT THEIR DOCS CONCEDE
+[0.55,6.96 1.30x0.18] brnrd >_
+[9.50,6.98 2.70x0.16] hugimuni sas · investor deck v1
+[12.50,6.98 0.40x0.16] 04
+[0.68,0.98 7.00x0.70] Five things the native platform does not do.
+[0.97,1.93 7.00x0.36] Survives the reboot and owns the seat.
+[0.97,2.25 7.00x0.50] brnrd is the process the vendors' docs ask you to bring.
+[0.97,2.91 7.00x0.36] Both subscriptions, one seat, one gauge.
+[0.97,3.23 7.00x0.50] Receipt, 5 Sep 2026: Codex hit its weekly wall at 18:16; the seat continued on Claude — same thread, same memory.
+[0.97,3.89 7.00x0.36] Memory that is a self, in git.
+[0.97,4.21 7.00x0.50] Not notes about your repo: the agent's own playbook, pitfalls, schedule, identity.
+[0.97,4.87 7.00x0.36] Judgement with a contract.
+[0.97,5.19 7.00x0.50] Forks handed over with options, self-merge under stated conditions, a work graph, a card that says what it is doing now.
+[0.97,5.85 7.00x0.36] Your disk. No vendor relay.
+[0.97,6.17 7.00x0.50] No transcripts held by a vendor; credentials never leave your machine.
+[8.35,4.90 4.50x0.30] quota wall, 5 Sep 18:16 — core flipped, same thread
+NOTES: The five lines: PLAN §What we sell — "What the docs say the platform does not do" items 1–5, condensed. / 5 Sep 18:16 Codex wall receipt: carried from the v11 deck slide 4 (outline §What carries over); v11 build cites "Receipt, 5 Sep 2026". / Media: loop-2-the-wall.

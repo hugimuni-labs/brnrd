@@ -1,0 +1,8 @@
+slide 14
+[0.68,0.55 9.00x0.25] BACKUP · Q&A
+[0.55,6.96 1.30x0.18] brnrd >_
+[9.50,6.98 2.70x0.16] hugimuni sas · investor deck v1
+[12.50,6.98 0.40x0.16] B2
+[0.68,1.08 8.40x1.40] Same category, a different axis — that, but running your subscriptions.
+[0.72,2.75 8.20x2.50] Others sell a hosted agent on their credits. brnrd runs the Claude and Codex subscriptions you already pay for, on your machine, under your login. No credentials are handed to us.
+NOTES: B2 per the outline ("that, but running your subscriptions"; user quote carried in v11 slide 3). The v11 B2 card body was "Your machine. Your login. Your repo." — the headline here follows the outline's title for B2; body text is the v11 card's sentence, condensed.

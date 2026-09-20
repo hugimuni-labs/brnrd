@@ -1,0 +1,10 @@
+slide 01
+[0.68,0.55 9.00x0.25] THE SENTENCE
+[0.55,6.96 1.30x0.18] brnrd >_
+[9.50,6.98 2.70x0.16] hugimuni sas · investor deck v1
+[12.50,6.98 0.40x0.16] 01
+[0.68,1.35 7.60x1.70] A resident — a seat, not a session.
+[0.72,3.55 7.00x1.80] An agent that lives on your machine. It survives reboots, remembers who it is, works both your Claude and your Codex subscriptions, and leaves receipts.
+[0.72,5.50 6.00x0.30] brnrd · open source · HugiMuni SAS
+[8.35,3.90 4.50x0.30] the seat's uptime, and a Telegram line
+NOTES: Sentence: outline slide 1 (investor-deck-outline-2026-09-20.md) / STATE §The sentence. / Media: loop-3-stage (a request from the phone; the PR 76 seconds after) — the Telegram line. Receipt 1 Sep 2026, carried from the v11 deck.

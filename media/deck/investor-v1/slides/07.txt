@@ -1,0 +1,15 @@
+slide 07
+[0.68,0.55 9.00x0.25] BUSINESS MODEL
+[0.55,6.96 1.30x0.18] brnrd >_
+[9.50,6.98 2.70x0.16] hugimuni sas · investor deck v1
+[12.50,6.98 0.40x0.16] 07
+[0.68,0.98 11.90x0.70] Zero COGS today. Margin tomorrow.
+[1.00,1.93 1.60x0.35] Today
+[2.70,1.93 9.30x0.90] the user's own subscriptions carry the inference. $7/mo hosted relay is the filter.
+[1.00,2.98 1.60x0.35] The money
+[2.70,2.98 9.30x0.90] fallback intelligence and compute with a margin: hosted execution (the seat on our box) · local agents as runners (Ollama, OpenHands, OpenCode) as models go compact · eventually our own models.
+[1.00,4.03 11.00x0.40] Tiers by seat; team seats after multi-user.
+[1.00,4.73 1.60x0.35] The yardstick
+[2.70,4.73 9.30x0.90] A 70-hour run at API list price: $433–$1,159. The plan it ran on: $100 a month.
+[0.75,6.20 11.50x0.40] a layer on every harness — and a runner of its own when the market goes local
+NOTES: $7/mo hosted, Stripe live: STATE §Building (offer). / $433 (Fable 5.1) – $1,159 (Fable 5), $100/mo Max 5×, 70 h, 977 M tokens for 40 points of the weekly window: PRICE Table 2 and §The sentence. A yardstick, not a saving (PRICE: a subscription limit is a window that refills, not a bill). / Business model text: outline slide 7; local-runner bet: STATE §The bets (3).

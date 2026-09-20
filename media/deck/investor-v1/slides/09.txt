@@ -1,0 +1,21 @@
+slide 09
+[0.68,0.55 9.00x0.25] GO-TO-MARKET
+[0.55,6.96 1.30x0.18] brnrd >_
+[9.50,6.98 2.70x0.16] hugimuni sas · investor deck v1
+[12.50,6.98 0.40x0.16] 09
+[0.68,0.98 11.90x0.70] The install is the seller.
+[0.98,1.95 4.00x0.30] channel
+[8.60,1.95 4.00x0.30] its row in the funnel
+[0.98,2.38 7.30x0.36] Founder-face video and dogfooding streams
+[0.98,2.74 7.30x0.30] the person is the moat
+[8.60,2.42 4.20x0.40] viewers → installs
+[0.98,3.40 7.30x0.36] Replies in the trackers where the demand already sits
+[0.98,3.76 7.30x0.30] claude-code and codex threads
+[8.60,3.44 4.20x0.40] reply → click → install
+[0.98,4.42 7.30x0.36] Show HN · r/ClaudeAI
+[0.98,4.78 7.30x0.30] one post each, founder's own hand
+[8.60,4.46 4.20x0.40] post → install
+[0.98,5.44 7.30x0.36] The install itself
+[0.98,5.80 7.30x0.30] one command; every stumble filed and fixed
+[8.60,5.48 4.20x0.40] install → first task → second task
+NOTES: Four rows and their funnel columns: outline slide 9; PLAN §The seller: the install; STATE §The bets (2) — X replies measured dead at 3 followers, streams are the untested channel. / No numbers on this slide.

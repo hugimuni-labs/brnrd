@@ -1,0 +1,25 @@
+slide 03
+[0.68,0.55 9.00x0.25] WHY NOW
+[0.55,6.96 1.30x0.18] brnrd >_
+[9.50,6.98 2.70x0.16] hugimuni sas · investor deck v1
+[12.50,6.98 0.40x0.16] 03
+[0.68,0.98 11.60x1.00] Both platforms shipped "runs while you're away". Their docs say where it stops.
+[0.75,2.05 5.00x0.30] Their own docs
+[0.97,2.48 5.60x0.36] does not survive shutdown
+[0.97,2.80 5.60x0.50] Claude Code background agents, their own docs
+[0.97,3.43 5.60x0.36] routines start amnesiac
+[0.97,3.75 5.60x0.50] every run, a fresh clone
+[0.97,4.38 5.60x0.36] channels need "a persistent terminal"
+[0.97,4.70 5.60x0.50] bring your own daemon
+[0.97,5.33 5.60x0.36] remote control transcripts sit on the vendor's servers
+[0.97,5.65 5.60x0.50] and refuse API keys and gateways
+[7.00,2.05 5.00x0.30] Their own trackers
+[7.00,2.50 5.60x0.60] 835
+[7.00,3.12 5.60x0.60] "background restart" threads on claude-code
+[7.00,3.62 5.60x0.60] 512
+[7.00,4.24 5.60x0.60] "persistent memory sessions" threads
+[7.00,4.74 5.60x0.60] 411 👍
+[7.00,5.36 5.60x0.60] the most-reacted Codex request: control my desktop CLI from my phone
+[0.75,6.20 8.00x0.40] The vendors prove the category. They stay a session.
+[8.60,6.30 4.00x0.30] 1M weekly Claude Code users
+NOTES: Doc concessions ("does not survive shutdown", "persistent terminal", transcripts on Anthropic's servers): PLAN §What we sell items 1 and 5 (quoting the vendors' docs, verified 2026-09-07 in residency-competitive-scan-2026-09-07.md) / STATE §The field. / 835 = claude-code `background restart`, 512 = `persistent memory sessions`: ISSUES §Counts table (GitHub full-text search hits, an upper bound on noise, not a count of complainers). 411 👍 = openai/codex#9224, ISSUES §Top 20 row 1. / 1M weekly Claude Code users: outline slide 3 only — not on the four state pages; unverified here (see report ## Open). / "The vendors prove the category but stay a session": outline §What carries over (v10 slide 3).

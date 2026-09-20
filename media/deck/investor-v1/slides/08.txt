@@ -1,0 +1,18 @@
+slide 08
+[0.68,0.55 9.00x0.25] TRACTION · THE HONEST SLIDE
+[0.55,6.96 1.30x0.18] brnrd >_
+[9.50,6.98 2.70x0.16] hugimuni sas · investor deck v1
+[12.50,6.98 0.40x0.16] 08
+[0.68,0.98 11.90x0.80] Users: 3. Paid: 0.
+[0.75,2.15 2.90x0.60] 3
+[0.75,2.77 2.90x0.60] users — the two founders and the intern
+[3.85,2.15 2.90x0.60] 0 recorded
+[3.85,2.77 2.90x0.60] external installs (the counter shipped 2026-09-20)
+[6.95,2.15 2.90x0.60] 0
+[6.95,2.77 2.90x0.60] external first tasks · 0 paid
+[10.05,2.15 2.90x0.60] 8 · 4
+[10.05,2.77 2.90x0.60] GitHub stars · forks
+[0.75,4.30 4.00x0.35] What the next 90 days measure
+[0.75,4.75 11.40x0.50] installs → first task → second-task return ≤ 7 days → fifth task, weekly rows.
+[0.75,5.65 11.40x0.50] We are showing you the instrument, not the number.
+NOTES: Users 3, external installs 0 recorded, first task 0, paid 0, 8 stars / 4 forks: STATE §Using. "Absence = nothing recorded, never zero-by-measurement" (STATE): hence "0 recorded". / Counter shipped 2026-09-20 and the second-task return metric: outline slide 8 / PLAN §The metric.

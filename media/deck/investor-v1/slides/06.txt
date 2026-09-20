@@ -1,0 +1,11 @@
+slide 06
+[0.68,0.55 9.00x0.25] THE PLACE · IN THE WORKSHOP
+[0.55,6.96 1.30x0.18] brnrd >_
+[9.50,6.98 2.70x0.16] hugimuni sas · investor deck v1
+[12.50,6.98 0.40x0.16] 06
+[0.68,0.98 5.60x1.30] The resident is an actor in a place.
+[0.75,2.45 4.90x1.60] The streets: the whole tree at real scale. The drone walks its route. Skins are the fork-and-PR lane.
+[0.75,4.10 4.90x1.50] Every feature on the previous slides will be copied. A place, and a life in git, are harder to copy.
+[0.75,5.95 4.90x0.30] IN THE WORKSHOP — NOT THE PRODUCT YET
+[6.00,5.40 6.90x0.30] field 8 — the streets: the tree as a place, one frame
+NOTES: Content: outline slide 6. The frame is media/fields/field8-lit.png (field 8, "the streets"; 1,956 rooms, 137 lit, 162 streets printed in the image header — kb/log.md 2026-09-19 night entry, #2050). / Not a claim of shipped product: the deck says "in the workshop" (outline).

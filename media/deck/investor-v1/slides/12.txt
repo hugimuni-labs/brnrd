@@ -1,0 +1,20 @@
+slide 12
+[0.68,0.55 9.00x0.25] THE ASK AND THE PATH
+[0.55,6.96 1.30x0.18] brnrd >_
+[9.50,6.98 2.70x0.16] hugimuni sas · investor deck v1
+[12.50,6.98 0.40x0.16] 12
+[0.68,0.98 11.90x0.70] Options on the page, not one number.
+[1.00,1.90 0.60x0.40] (a)
+[1.60,1.88 5.00x0.70] $1–2M pre-seed
+[6.70,1.90 6.00x0.90] 18 months of runway plus the distribution experiments. The obvious way to fund the 90 days.
+[1.00,2.95 0.60x0.40] (b)
+[1.60,2.93 5.00x0.70] $10M on a category thesis
+[6.70,2.95 6.00x0.90] Needs the 90-day curve, or a strategic — a harness vendor, a model lab — who wants the layer.
+[1.00,4.00 0.60x0.40] (c)
+[1.60,3.98 5.00x0.70] No raise
+[6.70,4.00 6.00x0.90] Until the curve exists.
+[0.75,5.40 5.00x0.30] 90 DAYS
+[0.75,5.75 5.70x0.90] install in one command · funnel rows · the first stream
+[6.85,5.40 5.00x0.30] 12 MONTHS
+[6.85,5.75 5.70x0.90] hosted execution GA · local runner · team seats · the place
+NOTES: Three options and the roadmap: outline slide 12 and §The two paragraphs ("On the $10M"). No TAM number anywhere. / STATE §The bets (4) records the founders' current posture as "Not raising" — the options above are the outline's, not a decision.

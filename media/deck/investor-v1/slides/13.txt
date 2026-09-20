@@ -1,0 +1,8 @@
+slide 13
+[0.68,0.55 9.00x0.25] BACKUP · Q&A
+[0.55,6.96 1.30x0.18] brnrd >_
+[9.50,6.98 2.70x0.16] hugimuni sas · investor deck v1
+[12.50,6.98 0.40x0.16] B1
+[0.68,1.08 8.40x1.40] Their cloud moves the hands. The memory has to live somewhere.
+[0.72,2.75 8.20x2.50] Codex and Claude now run tasks remotely. Each run is still a session inside one vendor's walled garden. Whatever decides what to do next, remembers last week and collects the result has to live above the vendors. That layer is brnrd, on your machine, on the subscription you already pay for.
+NOTES: Verbatim from v10/v11 backup card B1 (build_v11.py SLIDES[9]).

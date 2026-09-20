@@ -1,0 +1,22 @@
+slide 10
+[0.68,0.55 9.00x0.25] COMPETITION · THE TABLE WE'D HAND A SKEPTIC
+[0.55,6.96 1.30x0.18] brnrd >_
+[9.50,6.98 2.70x0.16] hugimuni sas · investor deck v1
+[12.50,6.98 0.40x0.16] 10
+[0.68,0.98 11.90x0.70] Exclusive, parity, worse. In that order of honesty.
+[0.75,2.12 3.60x0.40] EXCLUSIVE
+[0.75,2.75 3.60x0.80] Owns the seat across reboots
+[0.75,3.60 3.60x0.80] Two subscriptions, one gauge
+[0.75,4.45 3.60x0.80] Memory that is a self, in git
+[0.75,5.30 3.60x0.80] Graph-shaped execution and contracts
+[4.85,2.12 3.60x0.40] PARITY
+[4.85,2.75 3.60x0.80] Telegram · Slack · GitHub lanes
+[4.85,3.60 3.60x0.80] Scheduled and background runs
+[4.85,4.45 3.60x0.80] Memory, on by default natively
+[4.85,5.30 3.60x0.80] Quota views (/usage, read from the same endpoints)
+[8.95,2.12 3.60x0.40] WORSE
+[8.95,2.75 3.60x0.80] Install: a daemon, a git repo, an always-on box
+[8.95,3.60 3.60x0.80] Phone: a chat bot, no first-party app UI
+[8.95,4.45 3.60x0.80] No cloud runs
+[8.95,5.30 3.60x0.80] No security audit of an always-on agent
+NOTES: Exclusive: PLAN §What we sell items 1–5; STATE §What we claim nobody did holistically ("claims, not yet validated by a user"). / Parity: STATE §The field ("runs while you're away is native on both platforms"; memory on by default); ISSUES §What we do worse (/usage built in). / Worse: ISSUES §What we do worse (memory zero setup, background needs no host natively, phone UI, cost) + outline slide 10 (install, phone UI, no cloud runs, no security audit).
