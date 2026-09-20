@@ -14,6 +14,7 @@ from .db import Base, make_engine, make_session_factory
 from .inbox import Forwarder, make_default_forwarder
 from .migrations import run_startup_migrations
 from .pack_relay import PackRelayStore
+from .page_views import PageViewMiddleware
 from .routers import accounts, billing, config_approval, daemons, dev, github_app, pairing, render, stats, webhooks
 from .routers import dashboard as dashboard_router
 from .routers import machines as machines_router
@@ -132,6 +133,9 @@ def create_app(
     app.state.settings = settings
     app.state.engine = engine
     app.state.SessionLocal = make_session_factory(engine)
+    # Server-side funnel counters — see page_views.py. A counter table, no
+    # tracker, no PII; public marketing routes only.
+    app.add_middleware(PageViewMiddleware, factory=app.state.SessionLocal)
     # The forwarder is the seam where a response body leaves brnrd
     # without being persisted. Default dispatches through a per-platform
     # routing table (``inbox.make_default_forwarder``, keyed on
