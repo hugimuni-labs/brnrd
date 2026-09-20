@@ -1645,3 +1645,10 @@ def handle_cut_at(f: OutboxFile) -> Handled:
     from . import stake
 
     return _guarded(f, "cut-at", stake.handle_cut_at)
+
+
+def handle_thread(f: OutboxFile) -> Handled:
+    """`thread:` — originate a message on a known account user's thread."""
+    from . import thread
+
+    return _guarded(f, "thread", thread.handle)

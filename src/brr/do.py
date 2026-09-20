@@ -236,6 +236,16 @@ def stage_reply(
     )
 
 
+def stage_thread(
+    outbox_dir: Path, conversation_key: str, body: str, *, index: int = 0,
+) -> Path:
+    """Stage a message to a known account user's conversation."""
+    return stage_message(
+        outbox_dir, stage_filename("thread", index),
+        meta={"thread": conversation_key}, body=body,
+    )
+
+
 def stage_gate(
     outbox_dir: Path, gate_name: str, body: str, *, index: int = 0,
 ) -> Path:
