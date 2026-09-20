@@ -541,7 +541,8 @@ class HUDInputs:
     card_state: dict[str, object] | None = None
     output_stats: dict[str, int] | None = None
     start_monotonic: float | None = None
-    work_dir: Path | None = None
+    work_dir: Path | None = None  # Runner cwd: transcript, quota, context.
+    place_root: Path | None = None  # Prepared project tree: SCM and produce.
     quota_summary: str | None = None
     refresh_levels: bool = True
     cfg: dict | None = None
@@ -609,6 +610,7 @@ def build(inputs: HUDInputs) -> HUD:
     output_stats = inputs.output_stats
     start_monotonic = inputs.start_monotonic
     work_dir = inputs.work_dir
+    place_root = inputs.place_root if inputs.place_root is not None else work_dir
     quota_summary = inputs.quota_summary
     refresh_levels = inputs.refresh_levels
     cfg = inputs.cfg
@@ -694,15 +696,15 @@ def build(inputs: HUDInputs) -> HUD:
         if isinstance(card_written_monotonic, (int, float)) else None
     )
     live_branch, live_seed = (
-        relics.collection_scope(task.meta, Path(work_dir))
-        if work_dir else (None, None)
+        relics.collection_scope(task.meta, Path(place_root))
+        if place_root else (None, None)
     )
     # collection_scope is rename-aware (#1293): once a mid-run
     # ``git branch -m`` moves the worktree off the prepare-time
     # placeholder, this is the live name, not the stale stamp — so the
     # SCM facet's branch label tracks the same ground truth the produce
     # facet below derives commits against, instead of disagreeing with it.
-    scm_facet = daemon._scm_facet(work_dir, live_branch or task.meta.get("branch_name"))
+    scm_facet = daemon._scm_facet(place_root, live_branch or task.meta.get("branch_name"))
     # A host run's scope is the shared checkout (relics.collection_scope's
     # host_start_oid fallback); gate it by run identity so the live
     # facet never flashes a concurrent sibling's commits as this run's
@@ -712,7 +714,7 @@ def build(inputs: HUDInputs) -> HUD:
     )
     produce_facet = (
         relics.live_summary(
-            work_dir,
+            place_root,
             branch=live_branch,
             seed_ref=live_seed,
             outbox_dir=outbox_dir,
@@ -729,7 +731,7 @@ def build(inputs: HUDInputs) -> HUD:
                 if live_commit_run_id is None else None
             ),
         )
-        if work_dir else {"known": False}
+        if place_root else {"known": False}
     )
     # Staleness is measured against the run's *movement*, not the wall
     # clock (maintainer, 2026-07-19, agreeing with the run that raised it:

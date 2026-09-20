@@ -123,6 +123,19 @@ class Prepared:
     # the first attempt's runner
     lane: Lane
 
+    @property
+    def execution_root(self) -> Path:
+        return self.env_ctx.cwd
+
+    @property
+    def place_root(self) -> Path:
+        """The registered checkout; run_root is its prepared project tree."""
+        return self.repo_root
+
+    @property
+    def place_label(self) -> str:
+        return self.repo_label
+
 
 @dataclass(frozen=True)
 class Attempt:
