@@ -535,18 +535,17 @@
 	// The live-runs packet carries `.topics` alongside its bounded boundary
 	// ledger; resolve its raw slug through this graph so aliases light the one
 	// canonical thread, and unknown/stale slugs do not mint phantom heddles.
+	let crossingIndex = $derived(
+		runTopicIndex(warpGraphData, surfaceData?.files ?? [], liveRuns ?? [])
+	);
 	let liveTopicCallSigns = $derived(
 		new Set(
-			(liveRuns ?? [])
-				.flatMap((run) => run.topics ?? [])
-				.map((slug) => warpGraphData.topicByAlias.get(slug)?.canonicalId)
-				.filter((slug): slug is string => Boolean(slug))
+			(liveRuns ?? []).flatMap((run) => crossingIndex.get(run.run_id || run.id) ?? [])
 		)
 	);
 	let weavingCallSigns = $derived(
 		new Set([...weaving.map((row) => row.callSign).filter(Boolean), ...liveTopicCallSigns])
 	);
-	let crossingIndex = $derived(runTopicIndex(warpGraphData, surfaceData?.files ?? []));
 	let topicFaceMap = $derived(topicFaces(warpGraphData));
 
 	// The loom is the page (#972): the tenses replace the numbered panels.

@@ -256,13 +256,11 @@
 		)
 	);
 	let cornerLabel = $derived([identity?.age, 'run node'].filter(Boolean).join(' · '));
-	// A live run can claim topics before the warp graph has caught up, while a
-	// closed run is known only through the run→topic index. Union both sources
-	// in source order: the expanded card must show the same complete topic set
-	// as the live pick, never just the first rune.
-	let topicIds = $derived([
-		...new Set([...(crossingIndex.get(runId) ?? []), ...(liveRun?.topics ?? [])])
-	]);
+	// The run's topic set is `crossingIndex.get(runId)` — the same join the
+	// heddle rail lights from (live `.topics` claims are folded into it,
+	// alias-resolved, in `runTopicIndex`). Never a second union here: a raw
+	// slug that is an alias or unknown would wear a rune no heddle answers to.
+	let topicIds = $derived(crossingIndex.get(runId) ?? []);
 	let runnerLine = $derived.by(() => {
 		const runner = identity?.runner || digest?.runner || '';
 		return runner ? `runner: ${runner}` : null;
