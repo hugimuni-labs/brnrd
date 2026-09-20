@@ -30,7 +30,8 @@ test('GoatCounter is limited to public acquisition and content pages', () => {
 	}
 });
 
-test('analytics path matching ignores query-string-looking suffixes by construction', () => {
+test('analytics path matching normalizes slashes and refuses query-bearing input', () => {
 	ok(isAnalyticsPath('/pricing/'));
-	ok(!isAnalyticsPath('/login'));
+	ok(!isAnalyticsPath('/pricing?token=secret'));
+	ok(!isAnalyticsPath('/login?state=secret'));
 });
