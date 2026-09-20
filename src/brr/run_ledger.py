@@ -185,10 +185,13 @@ def build_closed_run_row(
     task.meta["ended_at"] = ended_at
 
     if after_levels is None:
+        # Session meters follow the standing root; produce below retains
+        # work_dir as its project anchor.
+        execution_root = task.meta.get("execution_root")
         after_levels = load_quota_levels(
             runner_name,
             outbox_dir,
-            work_dir,
+            Path(execution_root) if execution_root else work_dir,
             force_claude_refresh=True,
         )
     after_levels = _prefer_last_boundary_levels(

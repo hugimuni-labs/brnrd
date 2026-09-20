@@ -72,6 +72,8 @@ _EVENT_META_FIELDS = {
     # `runner._extract_*` off the Shell's own stdout and belong to a run that
     # has actually executed; nothing legitimately puts them on an event.
     "claude_session_id", "codex_thread_id",
+    # Standing/place roots are derived by worker.prepare, never by a sender.
+    "execution_root", "place_root", "place_label", "place_work_root",
 }
 _RUN_FIELDS = {
     "id", "event_id", "branch", "env", "environment", "status", "source",
