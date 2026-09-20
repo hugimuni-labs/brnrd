@@ -28,14 +28,14 @@ from .shapes import Dispatched, Prepared, Streamed
 
 
 def stream(p: Prepared, dx: Dispatched) -> Streamed:
-    repo_root = p.repo_root
+    repo_root = p.place_root
     responses_dir = p.responses_dir
     cfg = p.cfg
     account_context = p.account_context
     inbox_dir = p.inbox_dir
     eid = p.eid
     brr_dir = p.brr_dir
-    repo_label = p.repo_label
+    repo_label = p.place_label
     is_strand_run = p.is_strand_run
     emit = p.emit
     task = p.task
@@ -44,6 +44,7 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
     env_backend = p.env_backend
     env_ctx = p.env_ctx
     run_root = p.run_root
+    execution_root = p.execution_root
     outbox_dir = p.outbox_dir
     card_path = p.card_path
     menu_path = p.menu_path
@@ -178,7 +179,8 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
             card_state=card_state,
             output_stats=output_stats,
             start_monotonic=run_started_monotonic,
-            work_dir=run_root,
+            work_dir=execution_root,
+            place_root=run_root,
             quota_summary=quota_summary,
             cfg=cfg,
             brr_dir=brr_dir,
@@ -262,7 +264,8 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
             card_state=card_state,
             output_stats=output_stats,
             start_monotonic=run_started_monotonic,
-            work_dir=run_root,
+            work_dir=execution_root,
+            place_root=run_root,
             quota_summary=quota_summary,
             cfg=cfg,
             brr_dir=brr_dir,
@@ -341,7 +344,7 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
             kind="daemon-run",
             label=f"{eid}-attempt-{attempt}",
             prompt=prompt,
-            cwd=run_root,
+            cwd=execution_root,
             repo_root=repo_root,
             publishing_brr_dir=repo_root / ".brr",
             repo_full_name=repo_label,
@@ -459,7 +462,8 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
         card_state=card_state,
         output_stats=output_stats,
         start_monotonic=run_started_monotonic,
-        work_dir=run_root,
+        work_dir=execution_root,
+        place_root=run_root,
         quota_summary=quota_summary,
         cfg=cfg,
         brr_dir=brr_dir,

@@ -35,7 +35,7 @@ from .shapes import Attempt, Boundary, Lane, Prepared, Streamed
 
 def boundary(p: Prepared, s: Streamed) -> Boundary:
     event = p.event
-    repo_root = p.repo_root
+    repo_root = p.place_root
     responses_dir = p.responses_dir
     cfg = p.cfg
     max_retries = p.max_retries
@@ -49,6 +49,7 @@ def boundary(p: Prepared, s: Streamed) -> Boundary:
     branch_plan = p.branch_plan
     env_ctx = p.env_ctx
     run_root = p.run_root
+    execution_root = p.execution_root
     context_path = p.context_path
     resp_path = p.resp_path
     outbox_dir = p.outbox_dir
@@ -526,7 +527,7 @@ def boundary(p: Prepared, s: Streamed) -> Boundary:
         daemon._enrich_catalog_quota(runner_catalog, brr_dir)
         quality_escalation = daemon._quality_escalation_meta(repo_root, runner_name)
         daemon._record_task_runner(task, runner_choice)
-        run_ledger.mark_run_started(task, runner_name, outbox_dir, run_root)
+        run_ledger.mark_run_started(task, runner_name, outbox_dir, execution_root)
         task.save(runs_dir)
         reason = f"fallback after {failure_kind}"
         fallback_notice = (
