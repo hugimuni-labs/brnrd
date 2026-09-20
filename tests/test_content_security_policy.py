@@ -82,11 +82,11 @@ def test_multiple_inline_scripts_each_get_their_own_hash():
 def test_build_csp_report_only_keeps_the_agreed_baseline_and_folds_in_hashes():
     value = build_csp_report_only(["'sha256-AAAA'"])
     assert value == (
-        "script-src 'self' 'sha256-AAAA'; "
+        "script-src 'self' https://gc.zgo.at 'sha256-AAAA'; "
         "default-src 'self'; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data:; "
-        "connect-src 'self'; "
+        "connect-src 'self' https://gurio.goatcounter.com/count; "
         "font-src 'self'; "
         "object-src 'none'; "
         "base-uri 'self'; "
