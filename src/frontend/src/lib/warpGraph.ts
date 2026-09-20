@@ -692,10 +692,12 @@ export function parseRunTopics(markdown: string): string[] {
  *  This is the join the cloth's sigils and the topic filter read — a run
  *  wears the topics of the work it did, never a hue of its own.
  *  `files` defaults empty so a caller that hasn't wired the corpus feed
- *  through yet still gets the item-derived half, unchanged. */
+ *  through yet still gets the item-derived half, unchanged. `liveRuns` adds
+ *  each live run's `.topics` claim, alias-resolved the same way. */
 export function runTopicIndex(
 	graph: WarpGraph,
-	files: readonly SurfaceFile[] = []
+	files: readonly SurfaceFile[] = [],
+	liveRuns: readonly { run_id?: string; id?: string; topics?: string[] | null }[] = []
 ): Map<string, string[]> {
 	const order = new Map(graph.topics.map((topic, index) => [topic.canonicalId, index]));
 	const seen = new Map<string, Set<string>>();
@@ -716,6 +718,20 @@ export function runTopicIndex(
 		for (const raw of parseRunTopics(file.markdown)) {
 			// An id the graph doesn't recognize is dropped silently here —
 			// the drift audit's job to name, not this join's to guess at.
+			const topic = graph.topicByAlias.get(raw);
+			if (topic) set.add(topic.canonicalId);
+		}
+		seen.set(runId, set);
+	}
+	// A live run's `.topics` claim (presence heartbeat) is the third door —
+	// resolved through the same alias gate as `topics.md`, so an alias lights
+	// the one canonical thread and an unknown slug mints nothing. The card's
+	// runes and the heddle rail both read this set: one source, one truth.
+	for (const run of liveRuns) {
+		const runId = run.run_id || run.id || '';
+		if (!runId) continue;
+		const set = seen.get(runId) ?? new Set<string>();
+		for (const raw of run.topics ?? []) {
 			const topic = graph.topicByAlias.get(raw);
 			if (topic) set.add(topic.canonicalId);
 		}
