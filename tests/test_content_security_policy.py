@@ -105,8 +105,11 @@ def test_served_response_carries_the_hash_of_the_real_shipped_script(tmp_path):
         response = client.get("/")
     assert response.status_code == 200
     header = response.headers[HEADER]
-    assert "script-src 'self' " + _sha256_source(_INLINE_SCRIPT) in header
-    assert "'unsafe-inline'" not in header.split("script-src", 1)[1].split(";", 1)[0]
+    script_src = header.split("script-src ", 1)[1].split(";", 1)[0]
+    assert "'self'" in script_src
+    assert "https://gc.zgo.at" in script_src
+    assert _sha256_source(_INLINE_SCRIPT) in script_src
+    assert "'unsafe-inline'" not in script_src
 
 
 def test_no_enforcing_csp_header_is_ever_set(tmp_path):
@@ -129,7 +132,7 @@ def test_a_build_with_no_inline_script_still_forbids_unsafe_inline(tmp_path):
     build = _build_dir(tmp_path, script=None)
     with _app_client(build) as client:
         header = client.get("/").headers[HEADER]
-    assert header.startswith("script-src 'self';") or header.split(";", 1)[0] == "script-src 'self'"
+    assert header.split(";", 1)[0] == "script-src 'self' https://gc.zgo.at"
 
 
 def test_missing_build_directory_emits_no_csp_header(tmp_path):
