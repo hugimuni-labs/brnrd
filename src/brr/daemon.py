@@ -12652,6 +12652,29 @@ def _push_ahead_repos_if_due(
     return dispatched
 
 
+def _protected_branch(task: Run, branch_plan: Any, run_root: Path) -> str:
+    """The branch the operator is standing on — never the floor commit's target.
+
+    #2054: the diversion below was keyed on ``task.meta["host_context_branch"]``,
+    a field the daemon never writes (only the test fixture did). Production
+    read ``""``, no branch ever matched, and a halted host run's floor commit
+    landed on ``main`` and was pushed. The plan carries the value the dispatch
+    resolved; the run meta is honoured if anything ever sets it; and with
+    neither, the repo's own default branch is the protected one — absence
+    reads as *protected*, not as *free*.
+    """
+    for candidate in (
+        getattr(branch_plan, "host_context_branch", None),
+        task.meta.get("host_context_branch"),
+    ):
+        if candidate and str(candidate).strip():
+            return str(candidate).strip()
+    try:
+        return str(gitops.default_branch(run_root) or "").strip()
+    except Exception:  # noqa: BLE001 - best-effort probe on the salvage path
+        return ""
+
+
 def _capture_worktree(
     task: Run,
     ctx,
@@ -12721,7 +12744,7 @@ def _capture_worktree(
         # Detached HEAD — no branch to publish; finalize keeps the worktree
         # for forensic inspection.
         return
-    protected = str(task.meta.get("host_context_branch") or "").strip()
+    protected = _protected_branch(task, branch_plan, run_root)
     # #1302: ``worktree.has_uncommitted_changes`` here, never
     # ``gitops.worktree_dirty`` — both run the same ``git status
     # --porcelain`` probe, but ``worktree_dirty`` answers a git failure
