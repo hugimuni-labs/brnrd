@@ -27,6 +27,7 @@ class _Ctx:
 @dataclass
 class _Plan:
     seed_ref: str
+    host_context_branch: str | None = None
 
 
 def _seed_repo(tmp_path: Path) -> tuple[Path, str]:
@@ -217,3 +218,56 @@ def test_detached_head_is_skipped(tmp_path):
     daemon._capture_worktree(task, _Ctx(repo), _Plan(seed), {}, runs_dir)
 
     assert "publish_branch" not in task.meta
+
+
+def _operator_branch(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "symbolic-ref", "--short", "HEAD"],
+        cwd=repo, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def _tip_subject(repo: Path, ref: str = "HEAD") -> str:
+    return subprocess.run(
+        ["git", "log", "-1", "--pretty=%s", ref], cwd=repo,
+        capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def test_plan_carries_the_operator_branch_when_meta_does_not(tmp_path):
+    """#2054 — the path production actually takes.
+
+    The daemon never writes ``task.meta["host_context_branch"]``; the value
+    lives on the publish plan resolved at dispatch. With an empty meta the
+    diversion must still key on the plan's branch, or the floor commit lands
+    on the operator's branch (2026-09-20: ``9f5b0cd4`` on ``main``, pushed).
+    """
+    repo, seed = _seed_repo(tmp_path)
+    operator_branch = _operator_branch(repo)
+    (repo / "half.py").write_text("print('mid-edit')\n", encoding="utf-8")
+    task, runs_dir = _run(tmp_path)
+    assert "host_context_branch" not in task.meta
+
+    daemon._capture_worktree(
+        task, _Ctx(repo), _Plan(seed, host_context_branch=operator_branch),
+        {}, runs_dir,
+    )
+
+    assert _operator_branch(repo) == operator_branch
+    assert _tip_subject(repo) == "seed"
+    assert task.meta["publish_branch"] == f"brr/salvage-{task.id}"
+
+
+def test_no_field_anywhere_protects_the_default_branch(tmp_path):
+    """Neither plan nor meta names the operator's branch ⇒ the repo's own
+    default branch is protected. Absence reads as protected, never as free."""
+    repo, seed = _seed_repo(tmp_path)
+    operator_branch = _operator_branch(repo)
+    (repo / "half.py").write_text("print('mid-edit')\n", encoding="utf-8")
+    task, runs_dir = _run(tmp_path)
+
+    daemon._capture_worktree(task, _Ctx(repo), _Plan(seed), {}, runs_dir)
+
+    assert _operator_branch(repo) == operator_branch
+    assert _tip_subject(repo) == "seed"
+    assert task.meta["publish_branch"] == f"brr/salvage-{task.id}"
