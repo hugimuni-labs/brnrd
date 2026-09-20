@@ -40,6 +40,7 @@ from .. import runner_quota
 from .. import shuttle
 from .. import stake as stake_mod
 from .. import sync
+from dataclasses import replace
 import os
 import time
 from pathlib import Path
@@ -49,6 +50,41 @@ from ..run import Run
 
 from .. import daemon
 from .shapes import Finalized, Lane, Prepared
+
+
+def execution_context(
+    ctx: envs.RunContext,
+    task: Run,
+    cfg: dict,
+    account_context: account.AccountContext | None,
+) -> envs.RunContext:
+    """Move only a trusted resident's cwd; retain the place environment.
+
+    Strands and collaborator/untrusted runs must never acquire the household
+    as cwd: this is a trust boundary, not a convenience fallback. Explicit
+    container/VM isolation also remains authoritative.
+    """
+    if (
+        not cfg.get("seat.spawn_at_home", False)
+        or daemon._is_strand(task.meta)
+        or task.meta.get("trust_tier") != "owner"
+        or ctx.name not in {"host", "worktree"}
+        or account_context is None
+        or not account_context.enabled
+    ):
+        return ctx
+    dominion = account.home_dominion_path(account_context)
+    if not dominion.is_dir():
+        return ctx
+    task.meta.update(
+        execution_root=str(dominion),
+        place_root=str(ctx.repo_root),
+        place_label=task.meta.get("repo_label"),
+        place_work_root=str(ctx.cwd),
+    )
+    return replace(ctx, cwd=dominion, env_state={
+        **ctx.env_state, "place_work_root": str(ctx.cwd),
+    })
 
 
 def prepare(
@@ -729,7 +765,9 @@ def prepare(
     # (#575). Idempotent and best-effort — see gitops.ensure_run_id_hook.
     gitops.ensure_run_id_hook(repo_root)
 
-    run_root = env_ctx.cwd
+    run_root = env_ctx.cwd  # The prepared project tree, retained for all project reads.
+    env_ctx = execution_context(env_ctx, task, cfg, account_context)
+    execution_root = env_ctx.cwd
     branch_name = env_ctx.branch_name
     if branch_name:
         task.meta["branch_name"] = branch_name
@@ -1007,7 +1045,7 @@ def prepare(
     runner_catalog = runner.available_runner_catalog(repo_root, selected=runner_name)
     daemon._enrich_catalog_quota(runner_catalog, brr_dir)
     daemon._record_task_runner(task, runner_choice)
-    run_ledger.mark_run_started(task, runner_name, outbox_dir, run_root)
+    run_ledger.mark_run_started(task, runner_name, outbox_dir, execution_root)
     task.save(runs_dir)
     hud.write_live(hud.HUDInputs(
         outbox_dir=outbox_dir,
@@ -1022,7 +1060,8 @@ def prepare(
         card_state=card_state,
         output_stats=output_stats,
         start_monotonic=run_started_monotonic,
-        work_dir=run_root,
+        work_dir=execution_root,
+        place_root=run_root,
         quota_summary=quota_summary,
         cfg=cfg,
         brr_dir=brr_dir,
@@ -1398,6 +1437,10 @@ def runner_runtime(
             declared_hooks_flavour, run_root
         )
         if hook_config_path is not None:
+            if env_ctx.cwd != run_root and declared_hooks_flavour == "claude":
+                # Keep the project's hook file, but load it explicitly when
+                # native discovery starts in the household instead.
+                extra_args.extend(["--settings", str(hook_config_path)])
             hooks_installed = True
             emit(
                 "hooks_installed",

@@ -4857,6 +4857,7 @@ def _write_live_portal_state(
     output_stats: dict[str, int] | None = None,
     start_monotonic: float | None = None,
     work_dir: Path | None = None,
+    place_root: Path | None = None,
     quota_summary: str | None = None,
     refresh_levels: bool = True,
     cfg: dict | None = None,
@@ -4912,6 +4913,7 @@ def _write_live_portal_state(
         output_stats=output_stats,
         start_monotonic=start_monotonic,
         work_dir=work_dir,
+        place_root=place_root,
         quota_summary=quota_summary,
         refresh_levels=refresh_levels,
         cfg=cfg,
@@ -12694,7 +12696,9 @@ def _capture_worktree(
         return
     if not bool(cfg.get("salvage.enabled", cfg.get("salvage_enabled", True))):
         return
-    run_root = getattr(ctx, "cwd", None)
+    # The prepared environment, never event-carried metadata, owns this path.
+    run_root = (getattr(ctx, "env_state", None) or {}).get("place_work_root")
+    run_root = run_root or getattr(ctx, "cwd", None)
     if run_root is None:
         return
     run_root = Path(run_root)

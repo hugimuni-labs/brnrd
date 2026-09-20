@@ -167,7 +167,7 @@ _WRITER_PARAMS = [
     "outbox_dir", "inbox_dir", "current_event_id", "task", "phase", "attempt",
     "runner_name", "runner_meta", "runner_catalog", "quality_escalation",
     "relay_consent", "card_state", "output_stats", "start_monotonic", "work_dir",
-    "quota_summary", "refresh_levels", "cfg", "brr_dir", "account_context",
+    "place_root", "quota_summary", "refresh_levels", "cfg", "brr_dir", "account_context",
     "repo_label", "shuttle_home",
 ]
 

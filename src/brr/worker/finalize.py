@@ -65,7 +65,7 @@ def _finalize_stopped(p: Prepared, b: Boundary) -> Finalized:
 
 def _finalize_hold(p: Prepared, b: Boundary) -> Finalized:
     event = p.event
-    repo_root = p.repo_root
+    repo_root = p.place_root
     responses_dir = p.responses_dir
     cfg = p.cfg
     account_context = p.account_context
@@ -123,7 +123,7 @@ def _finalize_halt(p: Prepared, b: Boundary) -> Finalized:
 
 def _finalize_completed(p: Prepared, b: Boundary) -> Finalized:
     event = p.event
-    repo_root = p.repo_root
+    repo_root = p.place_root
     account_context = p.account_context
     eid = p.eid
     brr_dir = p.brr_dir

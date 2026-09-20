@@ -31,13 +31,13 @@ from .shapes import Attempt, Boundary, Dispatched, Prepared
 
 def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
     event = p.event
-    repo_root = p.repo_root
+    repo_root = p.place_root
     cfg = p.cfg
     account_context = p.account_context
     inbox_dir = p.inbox_dir
     eid = p.eid
     brr_dir = p.brr_dir
-    repo_label = p.repo_label
+    repo_label = p.place_label
     emit = p.emit
     task = p.task
     presence_id = p.presence_id
@@ -46,6 +46,7 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
     env_backend = p.env_backend
     env_ctx = p.env_ctx
     run_root = p.run_root
+    execution_root = p.execution_root
     branch_name = p.branch_name
     branch_setup_notice = p.branch_setup_notice
     context_path = p.context_path
@@ -142,7 +143,7 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
 
     if attempt == 1:
         run_levels, _ = daemon._collect_levels(
-            runner_name, outbox_dir, run_root,
+            runner_name, outbox_dir, execution_root,
             refresh=False, shared_dir=brr_dir,
         )
         level_quota = runner_quota.summary_from_levels(run_levels)
@@ -277,6 +278,9 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
         hooks_installed=run_hooks_installed,
     )
 
+    if execution_root != run_root:
+        _prompt_kwargs["execution_root"] = execution_root
+
     prompt, boot_score = prompts.build_daemon_prompt_with_score(
         prompt_instruction,
         eid,
@@ -292,7 +296,7 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
             session_id = transcript.mount_claude_session(
                 boot_score,
                 block_text=mount_sink,
-                cwd=str(run_root),
+                cwd=str(execution_root),
                 git_branch=branch_name or "",
                 model=str(task.meta.get("runner_core") or ""),
                 # None for every backend but sandbox (see
@@ -390,7 +394,8 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
         card_state=card_state,
         output_stats=output_stats,
         start_monotonic=run_started_monotonic,
-        work_dir=run_root,
+        work_dir=execution_root,
+        place_root=run_root,
         quota_summary=quota_summary,
         cfg=cfg,
         brr_dir=brr_dir,

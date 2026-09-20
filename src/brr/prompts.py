@@ -4098,6 +4098,7 @@ def _build_orientation_set(
     *,
     task_text: str | None = None,
     runner_shell: str | None = None,
+    execution_root: Path | None = None,
     injected_whole: "frozenset[Path] | set[Path] | None" = None,
 ) -> list[Any]:
     """The orientation *ledger*'s file set (#513 Slice 9) — never the kernel's
@@ -4145,7 +4146,10 @@ def _build_orientation_set(
     whole = injected_whole or frozenset()
 
     candidates: list[Path] = []
-    if not shell_reads_agents_md_natively(runner_shell):
+    # Native discovery from the household cannot attest a place contract.
+    if (
+        execution_root is not None and execution_root != repo_root
+    ) or not shell_reads_agents_md_natively(runner_shell):
         candidates.append(repo_root / "AGENTS.md")
 
     try:
@@ -4320,6 +4324,7 @@ def build_boot_score(
     hooks_installed: bool | None = None,
     hook_stamps: dict[str, str] | None = None,
     mounted: bool = False,
+    execution_root: Path | None = None,
 ) -> "BootScore":
     """Assemble a :class:`BootScore` for inspection without building the full prompt.
 
@@ -4450,6 +4455,7 @@ def build_boot_score(
         effective_root,
         task_text=task_text,
         runner_shell=runner_shell,
+        execution_root=execution_root,
         injected_whole=injected_whole,
     )
 
@@ -4673,6 +4679,7 @@ def build_daemon_prompt_with_score(
 
     score = build_boot_score(
         repo_root,
+        execution_root=kwargs.get("execution_root"),
         is_daemon=True,
         is_strand=strand,
         runner_name=str(runner_name) if runner_name else None,
@@ -5164,6 +5171,7 @@ def build_daemon_prompt(
     response_path: str,
     repo_root: Path,
     *,
+    execution_root: Path | None = None,
     stage: str = "brnrd daemon run",
     outbox_path: str | None = None,
     run_id: str | None = None,
@@ -5296,6 +5304,7 @@ def build_daemon_prompt(
         runner_shell=runner_shell,
         runner_catalog=runner_catalog,
         repo_root=repo_root,
+        execution_root=execution_root,
         run_id=run_id,
         source=source,
         environment=environment,
@@ -5379,6 +5388,7 @@ def build_daemon_prompt(
 
     kernel = format_kernel(build_boot_score(
         repo_root,
+        execution_root=execution_root,
         is_daemon=True,
         is_strand=strand,
         runner_name=runner_name,
@@ -5716,6 +5726,7 @@ def _build_run_context_bundle(
     runner_shell: str | None = None,
     runner_catalog: list[dict[str, Any]] | None = None,
     repo_root: Path,
+    execution_root: Path | None = None,
     run_id: str | None,
     source: str | None,
     environment: str | None,
@@ -5844,7 +5855,12 @@ def _build_run_context_bundle(
     sections.extend(_topic_bundle_lines(event_meta))
     if run_id:
         sections.append(f"- Run ID: {run_id}")
-    sections.append(f"- Execution root: {repo_root}")
+    sections.append(f"- Execution root: {execution_root or repo_root}")
+    if execution_root is not None and execution_root != repo_root:
+        short = (repo_label or repo_root.name).rsplit("/", 1)[-1]
+        sections.append(f"- Place: {repo_label or repo_root.name} → places/{short}/")
+        sections.append(f"- Place working tree: {repo_root}")
+        sections.append(f"- Place contract (read explicitly): {repo_root / 'AGENTS.md'}")
     if repo_label:
         sections.append(f"- Repo: {repo_label}")
     if seed_ref:
