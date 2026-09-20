@@ -17661,6 +17661,42 @@ def _install_log_stamps() -> None:
 # ── Main loop ────────────────────────────────────────────────────────
 
 
+def _mount_home_knowledge(account_context: account.HomeContext) -> None:
+    """Derive standing place and project kb mounts before startup dispatch."""
+
+    home = account.context_home_root(account_context)
+    if not account_context.enabled or not account.home_dominion_path(account_context).is_dir():
+        return
+    registered = dominion.registered_place_repos(home)
+    try:
+        places = dominion.mount_places(home, registered, apply=True)
+        for line in places.lines(applying=True):
+            print(f"[brnrd] dominion places: {line}")
+    except Exception as exc:  # noqa: BLE001 - a derived mount must not sink boot
+        print(f"[brnrd] dominion places skipped: {exc}")
+    for item in registered:
+        if str(item.get("kind") or "").casefold() != "repo":
+            continue
+        label = str(item.get("label") or "").strip()
+        raw_path = str(item.get("path") or "").strip()
+        if not label or not raw_path:
+            continue
+        try:
+            target = home / "knowledge" / "repos" / account.slug_repo_label(label)
+            if not target.is_dir():
+                print(
+                    f"[brnrd] kb mount: skipped: no kb for {label} yet — "
+                    "brnrd kb mount --apply seeds it"
+                )
+                continue
+            root = Path(os.path.expandvars(raw_path)).expanduser().resolve()
+            report = knowledge.ensure_mount(root, home, label, apply=True)
+            for line in report.lines(applying=True):
+                print(f"[brnrd] kb mount: {line}")
+        except Exception as exc:  # noqa: BLE001 - one broken place must not sink boot
+            print(f"[brnrd] kb mount skipped ({label}): {exc}")
+
+
 def start(
     repo_root: Path,
     *,
@@ -17791,22 +17827,7 @@ def start(
         print(line)
     if migration_logs:
         cfg = conf.load_config(repo_root)
-    # Move 2(a): once consolidation has made the one standing dominion, its
-    # rooms are derived at every boot from the account registry.  This is
-    # intentionally before seeding and dispatch: mounts are standing context,
-    # not worker roots or a dispatch concern.
-    home_dominion = account.home_dominion_path(account_context)
-    if account_context.enabled and home_dominion.is_dir():
-        try:
-            places = dominion.mount_places(
-                account.context_home_root(account_context),
-                dominion.registered_place_repos(account.context_home_root(account_context)),
-                apply=True,
-            )
-            for line in places.lines(applying=True):
-                print(f"[brnrd] dominion places: {line}")
-        except Exception as exc:  # noqa: BLE001 - a derived mount must not sink boot
-            print(f"[brnrd] dominion places skipped: {exc}")
+    _mount_home_knowledge(account_context)
     # #316: mark runs the previous daemon process left frozen mid-flight
     # so their chat cards read "interrupted" instead of stale running
     # text. Must run before the zombie janitors (which would silently
