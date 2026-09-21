@@ -17,6 +17,7 @@ Lines on ``main`` (``3def7ad6``): ``daemon.py:3234–4468``.
 
 from __future__ import annotations
 
+from .. import actions
 from .. import await_verb
 from .. import branching
 from .. import config as conf
@@ -456,6 +457,19 @@ def prepare(
         presence_id = None
 
     task.update_status("running", runs_dir)
+    if event.get("spawn_immediate") and event.get("respawned_from_event"):
+        # Action ledger: the daemon admitted this strand — the dispatch the
+        # parent staged as `requested` is now `attempted`, keyed to the run
+        # that exists for it. The parent's ledger is its own outbox dir.
+        try:
+            parent_outbox = brr_dir / "outbox" / str(event["respawned_from_event"])
+            act_id = actions.find(parent_outbox, "spawn", eid, states=("requested",))
+            if act_id:
+                actions.transition(
+                    parent_outbox, act_id, "attempted", target=task.id, evidence=eid,
+                )
+        except Exception:  # noqa: BLE001 - a receipt never costs the run
+            pass
     shuttle_home = (
         account.context_home_root(account_context)
         if account_context is not None else brr_dir

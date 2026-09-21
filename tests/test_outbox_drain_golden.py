@@ -39,6 +39,10 @@ GOLDEN_DIR = Path(
 )
 WRITE = os.environ.get("BRR_OUTBOX_GOLDEN_WRITE") == "1"
 
+# The action ledger (``actions.py``) is a file ``main`` never wrote; the capture
+# skips it for the same reason it strips the added notice fields, and
+# ``test_actions.py`` pins the rows.
+_ADDED_LEDGER_FILE = ".actions.jsonl"
 _ADDED_NOTICE_FIELDS = frozenset({"source_file", "verb", "run"})
 
 _EVT_RE = re.compile(r"evt-\d{10,}-[a-z0-9]{4}")
@@ -118,6 +122,8 @@ def _norm(value: Any, root: str, ids: _Ids, *, key: str = "") -> Any:
 def _read_tree(root: Path) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        if path.name == _ADDED_LEDGER_FILE:
+            continue
         if ".git" in path.relative_to(root).parts:
             continue  # object hashes carry commit clocks; the refs are git's
         rel = str(path.relative_to(root))
