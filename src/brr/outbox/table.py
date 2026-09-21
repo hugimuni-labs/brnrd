@@ -9,7 +9,7 @@ spawn, and nothing else. This is exactly the order ``_drain_outbox`` applied on
     runner_policy › config_change › halt › respawn › spawn › ask › submit › to
     › stop
     › note › await › hold › [land › fold › topic › mark › stake › cut-at] › cut
-    › gate › event
+    › gate › thread › event
 
 Two properties of that order are kept on purpose and named here:
 
@@ -158,6 +158,11 @@ def _selects_gate(fm: dict) -> object:
     return str(fm.get("gate") or "").strip()
 
 
+def _selects_thread(fm: dict) -> object:
+    # Preserve event/also addressing and gate:'s existing thread modifier.
+    return "thread" in fm and not any(key in fm for key in ("event", "also"))
+
+
 ROWS: tuple[Row, ...] = (
     Row("runner_policy", _selects_runner_policy, verbs.handle_runner_policy),
     Row("config_change", _selects_config_change, verbs.handle_config_change),
@@ -179,6 +184,7 @@ ROWS: tuple[Row, ...] = (
     Row("cut-at", _selects_cut_at, verbs.handle_cut_at),
     Row("cut", _selects_cut, verbs.handle_cut),
     Row("gate", _selects_gate, verbs.handle_gate),
+    Row("thread", _selects_thread, verbs.handle_thread),
     Row("event", None, verbs.handle_event),
 )
 
