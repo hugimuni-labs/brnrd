@@ -4500,12 +4500,47 @@ def _change_token(payload: dict[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()[:16]
 
 
+def _initiative_timeout(
+    task: Run, cfg: dict | None, pacing_status: dict | None, now: float,
+) -> tuple[float, float] | None:
+    """The bare await's ceiling and pace lead, when initiative is eligible.
+
+    Reuse the boundary's measured binding window; unknown pace never grants
+    a timeout. This is a default on an existing wait, not another wake source.
+    """
+    cfg = cfg or {}
+    if (
+        _is_strand(task.meta)
+        or not _seat_initiative_enabled(cfg)
+        or task.meta.get("pending_resource_hold")
+        or _working_child_controls(task.id)
+    ):
+        return None
+    correspondent_at = task.meta.get("hold_correspondent_at")
+    if correspondent_at is not None:
+        try:
+            if now - float(correspondent_at) < _seat_live_window_seconds(cfg):
+                return None
+        except (ValueError, TypeError):
+            return None
+    pace = (pacing_status or {}).get("pace") or {}
+    try:
+        ahead = float(pace["elapsed_share_pct"]) - float(pace["consumed_share_pct"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not 0 < ahead <= 100:
+        return None
+    return _seat_initiative_after_seconds(cfg), ahead
+
+
 def _resolve_await_state(
     task: Run,
     pending_events: list[dict[str, object]],
     *,
     outbox_dir: Path | None,
     shuttle_home: Path | None = None,
+    cfg: dict | None = None,
+    pacing_status: dict | None = None,
 ) -> dict[str, object]:
     """Evaluate an armed ``await:`` against this tick's pending events.
 
@@ -4523,6 +4558,17 @@ def _resolve_await_state(
     armed wait from the *previous* call's sticky-resolved outcome sitting in
     a portal-state file the heartbeat has not rewritten yet.
 
+    An arm staged with ``initiative-default`` (a bare ``brnrd await``, no
+    explicit ``--timeout``) carries no deadline of its own: *cfg* and
+    *pacing_status* are re-read every tick and :func:`_initiative_timeout`
+    decides, from this tick's live reading, whether the wait gets a computed
+    ceiling at all. So eligibility can come and go under a standing wait —
+    a correspondent arriving, a strand starting, the pace falling behind all
+    put the wait back to open-ended without re-arming it. The ceiling runs
+    from ``idle_since`` (the start of the idle stretch, which survives every
+    re-arm), not from this arm's ``armed_at``; ``deadline`` is the
+    authoritative field, ``timeout_seconds`` the ceiling's own length.
+
     Returns the projection this tick's ``portal-state.json`` should carry.
     ``{"armed": False}`` when no ``await:`` was ever staged this run.
     """
@@ -4535,10 +4581,23 @@ def _resolve_await_state(
             "file": armed.get("file"),
             "armed_at": _iso_utc(float(armed["armed_at"])),
             "generation": armed.get("generation"),
-            "timeout_seconds": armed.get("timeout_seconds"),
+            # The initiative ceiling is computed per tick, never stored as
+            # the arm's own `timeout_seconds` (the CLI must not turn it into
+            # an explicit timeout on re-arm) — so the tick that fired it
+            # stamps the effective number here, and every later tick reads
+            # the same one instead of flipping back to `None`.
+            "timeout_seconds": armed.get(
+                "initiative_timeout_seconds", armed.get("timeout_seconds"),
+            ),
             "resolved": True,
             "outcome": armed.get("outcome"),
             "which": armed.get("which"),
+            **({"initiative_default": True} if armed.get("initiative_default") else {}),
+            **({
+                "initiative": True,
+                "initiative_pace_ahead_pts": armed["initiative_pace_ahead_pts"],
+                "initiative_idle_seconds": armed["initiative_idle_seconds"],
+            } if armed.get("initiative") else {}),
         }
 
     now = time.time()
@@ -4579,6 +4638,13 @@ def _resolve_await_state(
             seen_at = _event_created_epoch(ev) or now
             if seen_at > float(task.meta.get("hold_correspondent_at") or 0):
                 task.meta["hold_correspondent_at"] = seen_at
+    initiative = None
+    if armed.get("initiative_default"):
+        initiative = _initiative_timeout(task, cfg, pacing_status, now)
+        requested_deadline = (
+            float(armed.get("idle_since", armed["armed_at"])) + initiative[0]
+            if initiative is not None else None
+        )
     outcome, which = await_verb.evaluate(armed.get("file"), fresh_events)
     if outcome is None and requested_deadline is not None and now >= requested_deadline:
         outcome = "timeout"
@@ -4593,6 +4659,19 @@ def _resolve_await_state(
         "deadline": _iso_utc(requested_deadline) if requested_deadline is not None else None,
         "resolved": outcome is not None,
     }
+    if armed.get("initiative_default"):
+        result["initiative_default"] = True
+    if initiative is not None and outcome in (None, "timeout"):
+        result["timeout_seconds"] = initiative[0]
+        result["initiative_pace_ahead_pts"] = round(initiative[1], 1)
+        result["initiative_idle_seconds"] = max(
+            0, now - float(armed.get("idle_since", armed["armed_at"]))
+        )
+        if outcome == "timeout":
+            armed["initiative"] = result["initiative"] = True
+            armed["initiative_timeout_seconds"] = initiative[0]
+            armed["initiative_pace_ahead_pts"] = result["initiative_pace_ahead_pts"]
+            armed["initiative_idle_seconds"] = result["initiative_idle_seconds"]
     if outcome is not None:
         armed["resolved"] = True
         armed["outcome"] = outcome
@@ -8269,6 +8348,19 @@ def _seat_park_on_hold_cost_enabled(cfg: "dict | None") -> bool:
 #: (2026-09-08, his ask: "a user cannot wake you up when there is <2% of
 #: either quota available"). The hold it arms (`quota_starved`,
 #: `resume: refill`) is the one a correspondent message does not release.
+#: The initiative default (design-the-initiative-wake.md §The mechanism):
+#: a bare ``brnrd await`` — no explicit ``--timeout`` — gets a *computed*
+#: ceiling instead of standing open, but only while the seat is idle, owns
+#: no working strand, has no hold armed, and the binding quota's pace runs
+#: ahead of the clock. Never for a strand: a strand's allowance contract
+#: owns its own lifecycle, and its wait belongs to its parent.
+SEAT_INITIATIVE_KEY = "seat.initiative"
+_SEAT_INITIATIVE_DEFAULT = True
+#: How long that idle stretch runs before the computed ceiling fires. The
+#: clock is the *idle stretch* (``await.idle_since``), not the latest arm —
+#: a Shell lease ending is not the end of the idle stretch.
+SEAT_INITIATIVE_AFTER_MINUTES_KEY = "seat.initiative_after_minutes"
+_SEAT_INITIATIVE_AFTER_MINUTES_DEFAULT = 20.0
 SEAT_STARVE_FLOOR_PCT_KEY = "seat.starve_floor_pct"
 _SEAT_STARVE_FLOOR_PCT_DEFAULT = 2.0
 #: Config key: the binding remaining-percent at or above which a starved
@@ -8611,6 +8703,29 @@ def _seat_live_window_seconds(cfg: "dict | None") -> float:
     except (TypeError, ValueError):
         minutes = _SEAT_LIVE_WINDOW_MINUTES_DEFAULT
     return max(0.0, minutes) * 60.0
+
+
+def _seat_initiative_enabled(cfg: "dict | None") -> bool:
+    return _truthy(
+        (cfg or {}).get(SEAT_INITIATIVE_KEY, _SEAT_INITIATIVE_DEFAULT)
+    )
+
+
+def _seat_initiative_after_seconds(cfg: "dict | None") -> float:
+    """The computed ceiling, in seconds. A nonsense setting reads as the
+    default rather than as "never" — this is a pacing default, not a gate."""
+    try:
+        minutes = float(
+            (cfg or {}).get(
+                SEAT_INITIATIVE_AFTER_MINUTES_KEY,
+                _SEAT_INITIATIVE_AFTER_MINUTES_DEFAULT,
+            )
+        )
+    except (TypeError, ValueError):
+        minutes = _SEAT_INITIATIVE_AFTER_MINUTES_DEFAULT
+    if not 0 < minutes < float("inf"):
+        minutes = _SEAT_INITIATIVE_AFTER_MINUTES_DEFAULT
+    return minutes * 60.0
 
 
 def _hold_ratio_facet(

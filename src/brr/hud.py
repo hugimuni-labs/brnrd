@@ -627,11 +627,6 @@ def build(inputs: HUDInputs) -> HUD:
         repo_label=repo_label,
         observer_run_id=task.id,
     )
-    await_state = daemon._resolve_await_state(
-        task, events,
-        outbox_dir=outbox_dir,
-        shuttle_home=shuttle_home,
-    )
     # The bolt (design-the-bolt.md): absent until a `cut:` is accepted
     # this run — sibling work reads exactly this shape, so the key
     # itself is omitted rather than carrying a `None`/`accepted: false`
@@ -772,13 +767,6 @@ def build(inputs: HUDInputs) -> HUD:
     daemon._record_context_window(
         runner_name, work_dir, outbox_dir, not_before=started_wall,
     )
-    # design-the-seat-that-never-quits.md §machinery slice 3: needs both
-    # numbers `_record_boot_cost` and `_collect_allowance_facet` just
-    # computed, so it runs after both — may resolve `await_state` with a
-    # new "park" outcome and stamp `pending_resource_hold` for the
-    # ordinary worker-tail routing (`_finalize_resource_hold`) to pick up
-    # once this turn actually ends.
-
     # design-the-continuous-seat.md §Presence: how long the person on
     # the other end has been quiet. Measured off this run's own inbox,
     # so it costs one directory scan per heartbeat and never a platform
@@ -790,9 +778,6 @@ def build(inputs: HUDInputs) -> HUD:
         correspondent_key=daemon._task_correspondent_key(task),
         brr_dir=brr_dir,
     )
-    await_state, hold_facet_input = daemon._hold_ratio_facet(
-        task, await_state, cfg, outbox_dir, allowance_facet_input,
-    )
     # The run boundary knows its own Core (the resolved profile's
     # `model`, e.g. "opus"/"fable") — pass it so a thin week_models
     # bucket for a *different* Core doesn't bind this run's pacing (#561).
@@ -802,6 +787,23 @@ def build(inputs: HUDInputs) -> HUD:
     if pace is not None:
         pacing_status = dict(pacing_status or {})
         pacing_status["pace"] = pace
+    # Resolved here rather than beside the other projections above because
+    # the initiative default (design-the-initiative-wake.md) judges a bare
+    # await against `pacing_status` — the pace reading computed two lines
+    # up. Everything downstream of `await_state` already lived here.
+    await_state = daemon._resolve_await_state(
+        task, events, outbox_dir=outbox_dir, shuttle_home=shuttle_home,
+        cfg=cfg, pacing_status=pacing_status,
+    )
+    # design-the-seat-that-never-quits.md §machinery slice 3: needs both
+    # numbers `_record_boot_cost` and `_collect_allowance_facet` just
+    # computed, so it runs after both — may resolve `await_state` with a
+    # new "park" outcome and stamp `pending_resource_hold` for the
+    # ordinary worker-tail routing (`_finalize_resource_hold`) to pick up
+    # once this turn actually ends.
+    await_state, hold_facet_input = daemon._hold_ratio_facet(
+        task, await_state, cfg, outbox_dir, allowance_facet_input,
+    )
     # The starvation park: same reading the pacing facet just proved,
     # judged against `seat.starve_floor_pct` — stamps the hold the
     # worker tail finalizes, resolves an idle await with `park`.

@@ -262,6 +262,7 @@ def stage_await(
     timeout_seconds: float | None,
     file_path: str | None = None,
     index: int = 0,
+    initiative_default: bool = False,
 ) -> Path:
     """Stage an ``await:`` directive — hold this run until the daemon has something.
 
@@ -282,6 +283,8 @@ def stage_await(
         else f"{int(max(1, round(timeout_seconds)))}s"
     )
     meta = {"await": "true", "timeout": timeout_text}
+    if initiative_default:
+        meta["initiative-default"] = "true"
     if file_path:
         meta["file"] = file_path
     return stage_message(
