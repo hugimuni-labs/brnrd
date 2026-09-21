@@ -1,0 +1,16 @@
+{
+  "_comment": "Not a Railway file. Railway's config-as-code has no volume or variable fields, so the template composer (dashboard) is where these are declared; this file is the one list the README, the composer steps and tests/test_railway_template.py all read.",
+  "service": {
+    "name": "brnrd-daemon",
+    "source_dockerfile": "deploy/railway/Dockerfile",
+    "public_networking": false,
+    "volume_mount_path": "/data"
+  },
+  "variables": {
+    "BRNRD_REPO_URL": "https clone URL of the repo the resident works in; start.sh clones it into /data/repo on first boot (required)",
+    "GH_TOKEN": "GitHub token so the daemon can clone a private repo and publish branches; runners receive it as their publishing identity (src/brr/docs/envs.md) (recommended)",
+    "CLAUDE_CODE_OAUTH_TOKEN": "Claude login for headless boxes, from `claude setup-token` on your laptop [verify on first deploy]; alternative to the login-through-shell step (optional)",
+    "ANTHROPIC_API_KEY": "API-key alternative to a Claude subscription login; forwarded to runners (src/brr/envs/__init__.py) (optional)",
+    "BRNRD_URL": "brnrd base URL for pairing; default https://brnrd.dev, set only for a self-hosted backend (optional)"
+  }
+}
