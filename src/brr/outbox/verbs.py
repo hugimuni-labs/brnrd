@@ -691,6 +691,7 @@ def handle_await(f: OutboxFile) -> Handled:
             )
             if inbox_dir is not None else []
         )
+        previous = task.meta.get("await") or {}
         task.meta["await"] = {
             "file": file_path,
             "timeout_seconds": timeout_seconds,
@@ -713,6 +714,14 @@ def handle_await(f: OutboxFile) -> Handled:
                 }
             ),
         }
+        if daemon._truthy(fm.get("initiative-default")) and timeout_seconds is None:
+            task.meta["await"]["initiative_default"] = True
+            # A Shell lease ending is not the end of the idle stretch.
+            task.meta["await"]["idle_since"] = (
+                previous.get("idle_since", previous.get("armed_at", time.time()))
+                if previous.get("initiative_default") and not previous.get("resolved")
+                else time.time()
+            )
         # design-the-seat-that-never-quits.md §machinery slice 3: a
         # proxy for "a correspondent just reached this seat" — the
         # first-ever arm is, ordinarily, the resident replying to

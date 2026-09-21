@@ -100,7 +100,8 @@ class _Clock:
 class _Seat:
     """A resident seat with a real inbox/outbox, Shuttle and heartbeat."""
 
-    def __init__(self, tmp_path, monkeypatch, *, stamped_cap_ms=None):
+    def __init__(self, tmp_path, monkeypatch, *, stamped_cap_ms=None, cfg=None):
+        self.cfg = cfg
         self.brr_dir = tmp_path / ".brr"
         self.inbox = self.brr_dir / "inbox"
         self.responses = self.brr_dir / "responses"
@@ -136,7 +137,7 @@ class _Seat:
             )
         daemon._write_live_portal_state(
             self.outbox, self.inbox, self.eid, self.task,
-            phase="running", shuttle_home=self.brr_dir,
+            phase="running", shuttle_home=self.brr_dir, cfg=self.cfg,
         )
         self.states.append((self.clock.now, shuttle.Shuttle.load(self.brr_dir).state))
 
@@ -390,3 +391,101 @@ def test_the_first_boundary_after_a_lease_says_how_long_and_why_once(tmp_path):
 
 def test_the_lease_chip_is_a_documented_delta_segment():
     assert hooks.SEGMENT_CLASS["lease_wake"] == hooks.DELTA
+
+
+# The initiative default uses the same drain, heartbeat and CLI as the lease.
+def _initiative_seat(tmp_path, monkeypatch, *, cfg=None):
+    seat = _Seat(tmp_path, monkeypatch, stamped_cap_ms=_FULL_CAP, cfg=cfg)
+    wall = time.time()
+    monkeypatch.setattr(time, "time", lambda: wall + seat.clock.now)
+    seat.task.meta["hold_correspondent_at"] = wall - 3600
+    monkeypatch.setattr(daemon, "_working_child_controls", lambda _: [])
+    monkeypatch.setattr(daemon, "_collect_levels", lambda *a, **k: ({
+        "quota": {"primary_remaining_percent": 80.0,
+                  "primary_resets_at": wall + 9000,
+                  "primary_window_minutes": 300.0},
+    }, frozenset()))
+    return seat
+
+
+def test_initiative_default_times_out_and_marks_json_and_portal(tmp_path, monkeypatch, capsys):
+    seat = _initiative_seat(tmp_path, monkeypatch)
+    result = seat.run(capsys)
+    assert result["outcome"] == "timeout"
+    assert result["initiative"] is True
+    assert 1200 <= seat.clock.now < 1320
+    payload = json.loads((seat.outbox / "portal-state.json").read_text())
+    state = payload["await"]
+    assert state["initiative"] is True
+    assert state["timeout_seconds"] == 1200
+    assert "initiative: pace ahead by" in hooks.format_delta(payload)
+    assert seat.shuttle_state() == "awake"
+    seat.beat()  # sticky, including after the resolving tick
+    assert json.loads((seat.outbox / "portal-state.json").read_text())["await"]["initiative"]
+
+
+@pytest.mark.parametrize("block", ["live", "child", "behind", "unknown", "hold", "strand", "off"])
+def test_initiative_ineligible_stays_open(tmp_path, monkeypatch, capsys, block):
+    seat = _initiative_seat(tmp_path, monkeypatch)
+    if block == "live":
+        seat.task.meta["hold_correspondent_at"] = time.time()
+    elif block == "child":
+        monkeypatch.setattr(daemon, "_working_child_controls", lambda _: [{"run_id": "child"}])
+    elif block in {"behind", "unknown"}:
+        monkeypatch.setattr(daemon, "_collect_levels", lambda *a, **k: ({
+            "quota": {"primary_remaining_percent": 10.0,
+                      "primary_resets_at": time.time() + 9000,
+                      "primary_window_minutes": 300.0},
+        } if block == "behind" else {}, frozenset()))
+    elif block == "hold":
+        seat.task.meta["pending_resource_hold"] = {"reason": "test"}
+    elif block == "strand":
+        seat.task.meta["strand"] = True
+    else:
+        seat.cfg = {"seat.initiative": False}
+    result = seat.run(capsys, "--ceiling", "21m")
+    assert result["outcome"] == "pending"
+    assert "initiative" not in result
+    payload = json.loads((seat.outbox / "portal-state.json").read_text())
+    assert payload["await"]["deadline"] is None
+    assert payload["await"]["timeout_seconds"] is None
+    assert "initiative:" not in hooks.format_delta(payload)
+
+
+def test_explicit_timeout_wins_over_initiative(tmp_path, monkeypatch, capsys):
+    seat = _initiative_seat(tmp_path, monkeypatch)
+    result = seat.run(capsys, "--timeout", "25m")
+    assert result["outcome"] == "timeout"
+    assert "initiative" not in result
+    assert 1500 <= seat.clock.now < 1620
+    assert "initiative_default" not in seat.task.meta["await"]
+
+
+def test_initiative_rearm_continues_idle_stretch(tmp_path, monkeypatch, capsys):
+    seat = _initiative_seat(tmp_path, monkeypatch)
+    first = seat.run(capsys, "--ceiling", "10m")
+    assert first["outcome"] == "pending"
+    idle_since = seat.task.meta["await"]["idle_since"]
+    result = seat.run(capsys)
+    assert result["outcome"] == "timeout"
+    assert result["initiative"] is True
+    assert seat.task.meta["await"]["idle_since"] == idle_since
+    assert 1200 <= seat.clock.now < 1320
+
+
+def test_initiative_rechecks_pace_before_timeout(tmp_path, monkeypatch, capsys):
+    seat = _initiative_seat(tmp_path, monkeypatch)
+    seat.at(600, lambda: monkeypatch.setattr(
+        daemon, "_collect_levels", lambda *a, **k: ({}, frozenset()),
+    ))
+    result = seat.run(capsys, "--ceiling", "21m")
+    assert result["outcome"] == "pending"
+    assert json.loads((seat.outbox / "portal-state.json").read_text())["await"]["deadline"] is None
+
+
+def test_initiative_configured_delay_and_event_priority(tmp_path, monkeypatch, capsys):
+    seat = _initiative_seat(tmp_path, monkeypatch, cfg={"seat.initiative_after_minutes": 5})
+    seat.at(300, lambda: _inject_message(seat))
+    result = seat.run(capsys)
+    assert result["outcome"] == "event"
+    assert "initiative" not in result

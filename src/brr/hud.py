@@ -627,11 +627,6 @@ def build(inputs: HUDInputs) -> HUD:
         repo_label=repo_label,
         observer_run_id=task.id,
     )
-    await_state = daemon._resolve_await_state(
-        task, events,
-        outbox_dir=outbox_dir,
-        shuttle_home=shuttle_home,
-    )
     # The bolt (design-the-bolt.md): absent until a `cut:` is accepted
     # this run — sibling work reads exactly this shape, so the key
     # itself is omitted rather than carrying a `None`/`accepted: false`
@@ -790,9 +785,6 @@ def build(inputs: HUDInputs) -> HUD:
         correspondent_key=daemon._task_correspondent_key(task),
         brr_dir=brr_dir,
     )
-    await_state, hold_facet_input = daemon._hold_ratio_facet(
-        task, await_state, cfg, outbox_dir, allowance_facet_input,
-    )
     # The run boundary knows its own Core (the resolved profile's
     # `model`, e.g. "opus"/"fable") — pass it so a thin week_models
     # bucket for a *different* Core doesn't bind this run's pacing (#561).
@@ -802,6 +794,13 @@ def build(inputs: HUDInputs) -> HUD:
     if pace is not None:
         pacing_status = dict(pacing_status or {})
         pacing_status["pace"] = pace
+    await_state = daemon._resolve_await_state(
+        task, events, outbox_dir=outbox_dir, shuttle_home=shuttle_home,
+        cfg=cfg, pacing_status=pacing_status,
+    )
+    await_state, hold_facet_input = daemon._hold_ratio_facet(
+        task, await_state, cfg, outbox_dir, allowance_facet_input,
+    )
     # The starvation park: same reading the pacing facet just proved,
     # judged against `seat.starve_floor_pct` — stamps the hold the
     # worker tail finalizes, resolves an idle await with `park`.
