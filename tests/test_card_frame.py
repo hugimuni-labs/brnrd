@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -44,8 +45,16 @@ class Harness:
         self.notices: list[tuple[str, str]] = []
         self.forge: list[dict] = []
 
+    clock: float = T0 - 1  # the weaver's last write, on the test's own clock
+
     def card(self, text: str) -> None:
-        (self.outbox / ".card").write_text(text, encoding="utf-8")
+        # The frame cuts finished strands at the card's mtime — the weaver's
+        # last write. Pin it to the harness clock, not the wall clock: T0 is
+        # 2026-09-21T14:13:20Z, and from that minute on the real mtime sat
+        # *after* every T0+n event and the ledger went silent (CI red 14:38Z).
+        path = self.outbox / ".card"
+        path.write_text(text, encoding="utf-8")
+        os.utime(path, (self.clock, self.clock))
 
     def read_card(self) -> str:
         return (self.outbox / ".card").read_text(encoding="utf-8")
@@ -64,6 +73,7 @@ class Harness:
                 fh.write(json.dumps(row) + "\n")
 
     def run(self, now: float, **kw):
+        self.clock = now
         return card_frame.frame_pass(
             self.meta, outbox_dir=self.outbox, run_dir=self.run_dir, repo_root=self.repo,
             stats=self.stats, events=self.events, now=now,
