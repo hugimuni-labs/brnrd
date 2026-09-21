@@ -5,8 +5,9 @@
 <h1 align="center">brnrd</h1>
 
 <p align="center">
-  <strong>Local agents go brr. From anywhere.</strong><br>
-  A co-maintainer that lives on your machine: survives reboots, remembers who it is, works both your Claude and Codex subscriptions, and leaves receipts — commits, PRs, a card you can read.
+  <strong>Keep your Claude Code or Codex agent running 24/7 — on a machine that never sleeps.</strong><br>
+  brnrd is a daemon for a Mac mini, a home server or a small VPS. It keeps one agent alive across reboots, lets you drive it from Telegram, Slack or WhatsApp, remembers everything as files in git, and when your Claude weekly window runs out it moves the work to your Codex subscription — both under one seat, no API key. It leaves receipts: commits, PRs, a card you can read.<br>
+  <em>Local agents go brr. From anywhere.</em>
 </p>
 
 <p align="center">
