@@ -1016,6 +1016,10 @@ def build(inputs: HUDInputs) -> HUD:
             draws=draws_facet_input,
             hold=hold_facet_input,
             correspondent=correspondent_facet_input,
+            other_shells=daemon._other_shells_fuel(
+                str((runner_meta or {}).get("shell") or runner_name or ""),
+                runner_catalog, brr_dir,
+            ),
         ),
         heddles=[
             dict(h) for h in ((card_state or {}).get("heddles") or [])

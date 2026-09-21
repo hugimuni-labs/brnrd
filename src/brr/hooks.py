@@ -48,6 +48,7 @@ from . import await_verb
 from . import card as card_rule
 from . import conversations
 from . import course
+from . import other_fuel
 from . import facets
 from . import gate_receipt
 from . import heddles as heddles_mod
@@ -1935,7 +1936,14 @@ def _quota_chip(resources: dict[str, Any]) -> str | None:
             when = reset.group("when").strip()
             chip += f"↻{_relative_reset(when) or when}"
         chips.append(chip)
-    return "q " + "·".join(chips) if chips else None
+    own = "·".join(chips)
+    # The other Shells' pools (other_fuel.py) ride the same chip: `q S93↻4h·W75
+    # · codex S12↻2h00m·W82` — the seat plans across Shells, so it reads them
+    # beside its own. Stale ⇒ `codex ?`, never a stale number unmarked.
+    quota = resources.get("quota") if isinstance(resources, dict) else None
+    others = other_fuel.chip(quota.get("others")) if isinstance(quota, dict) else None
+    parts = [part for part in (own, others) if part]
+    return "q " + " · ".join(parts) if parts else None
 
 
 #: Matches ``claude_status.parse_result``'s existing summary shape
