@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -234,13 +235,20 @@ class Harness:
         self.notices: list[tuple[str, str]] = []
         self.hud = hud_fixture()
 
+    clock: float = T0 - 1  # the weaver's last write, on the test's own clock
+
     def card(self, text: str) -> None:
-        (self.outbox / ".card").write_text(text, encoding="utf-8")
+        # See test_card_frame.py: the frame cuts finished strands at the
+        # card's mtime; pin it to the harness clock, not the wall clock.
+        path = self.outbox / ".card"
+        path.write_text(text, encoding="utf-8")
+        os.utime(path, (self.clock, self.clock))
 
     def read_card(self) -> str:
         return (self.outbox / ".card").read_text(encoding="utf-8")
 
     def run(self, now: float, **kw):
+        self.clock = now
         kw.setdefault("hud", self.hud)
         return card_frame.frame_pass(
             self.meta, outbox_dir=self.outbox, run_dir=self.run_dir, repo_root=None,
