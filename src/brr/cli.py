@@ -937,6 +937,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="send to a destination with no waiting event; pair with "
              "--body-file (repeatable)")
     do_p.add_argument(
+        "--to-thread", dest="to_thread", action=_OrderedAppend, default=None,
+        metavar="CONVERSATION-KEY",
+        help="send to a known account user's thread; pair with --body-file "
+             "(repeatable)")
+    do_p.add_argument(
         "--item", dest="item", action=_OrderedAppend, default=None,
         metavar="ITEM-ID",
         help="bind the immediately preceding --reply to a warp item that "
@@ -948,7 +953,7 @@ def build_parser() -> argparse.ArgumentParser:
     do_p.add_argument(
         "--body-file", dest="body_file", action=_OrderedAppend, default=None,
         metavar="FILE",
-        help="body for the immediately preceding --reply or --gate")
+        help="body for the immediately preceding --reply, --gate or --to-thread")
     do_p.add_argument(
         "--body", dest="body", action=_OrderedAppend, default=None,
         metavar="TEXT",
@@ -2938,13 +2943,13 @@ def cmd_relic_file(args):
 
 
 def _reconstruct_do_ops(ordered_ops):
-    """Pair ``--reply``/``--gate`` with the ``--item``/``--body-file``/
+    """Pair ``--reply``/``--gate``/``--to-thread`` with ``--item``/``--body-file``/
     ``--body`` that immediately follow them in ``ordered_ops`` (command-line
-    order, from ``_OrderedAppend`` — only ``reply``/``gate``/``item``/
+    order, from ``_OrderedAppend`` — only ``reply``/``gate``/``to_thread``/``item``/
     ``body_file``/``body`` entries, ``--note`` is not routed through this
     list).
 
-    Returns ``(replies, gates, error)``: ``gates`` is a list of
+    Returns ``(replies, gates, threads, error)``: ``gates`` and ``threads`` are lists of
     ``(target, body_text)``; ``replies`` is a list of
     ``(target, body_text, item_ids)`` — ``item_ids`` is every ``--item``
     that landed between this ``--reply`` and its body, in command-line
@@ -2955,57 +2960,60 @@ def _reconstruct_do_ops(ordered_ops):
     """
     replies: list[tuple[str, str, list[str]]] = []
     gates: list[tuple[str, str]] = []
+    threads: list[tuple[str, str]] = []
     pending: tuple[str, str] | None = None
     pending_items: list[str] = []
     for dest, value in ordered_ops:
-        if dest in ("reply", "gate"):
+        if dest in ("reply", "gate", "to_thread"):
             if pending is not None:
                 kind, target = pending
-                return replies, gates, (
-                    f"--{kind} {target} has no --body-file/--body before "
-                    f"the next --{dest}"
+                return replies, gates, threads, (
+                    f"--{kind.replace('_', '-')} {target} has no --body-file/--body before "
+                    f"the next --{dest.replace('_', '-')}"
                 )
             pending = (dest, value)
             pending_items = []
             continue
         if dest == "item":
             if pending is None:
-                return replies, gates, (
+                return replies, gates, threads, (
                     "--item given with no preceding --reply. There is no "
                     "reply to bind"
                 )
             kind, target = pending
-            if kind == "gate":
-                return replies, gates, (
-                    f"--item {value} follows --gate {target}, not --reply "
-                    "— a gate send has no event to bind"
+            if kind != "reply":
+                return replies, gates, threads, (
+                    f"--item {value} follows --{kind.replace('_', '-')} {target}, not --reply "
+                    "— this send has no event to bind"
                 )
             pending_items.append(value)
             continue
         # dest in ("body_file", "body")
         if pending is None:
             flag = "--body-file" if dest == "body_file" else "--body"
-            return replies, gates, f"{flag} given with no preceding --reply/--gate"
+            return replies, gates, threads, f"{flag} given with no preceding --reply/--gate/--to-thread"
         kind, target = pending
         if dest == "body_file":
             try:
                 text = Path(value).read_text(encoding="utf-8")
             except OSError as exc:
-                return replies, gates, f"could not read {value!r}: {exc}"
+                return replies, gates, threads, f"could not read {value!r}: {exc}"
         else:
-            if kind == "gate":
-                return replies, gates, "--gate only pairs with --body-file, not --body"
+            if kind != "reply":
+                return replies, gates, threads, f"--{kind.replace('_', '-')} only pairs with --body-file, not --body"
             text = value
         if kind == "reply":
             replies.append((target, text, pending_items))
-        else:
+        elif kind == "gate":
             gates.append((target, text))
+        else:
+            threads.append((target, text))
         pending = None
         pending_items = []
     if pending is not None:
         kind, target = pending
-        return replies, gates, f"--{kind} {target} has no --body-file/--body"
-    return replies, gates, None
+        return replies, gates, threads, f"--{kind.replace('_', '-')} {target} has no --body-file/--body"
+    return replies, gates, threads, None
 
 
 def _do_render(verb: str, label: str, status: str, detail: str) -> tuple[str, bool]:
@@ -3103,6 +3111,11 @@ def _do_stage_reply(do_mod, outbox_dir: Path, event_id: str, body: str, index: i
     short = hooks_mod._short_event_id(event_id)
     path = do_mod.stage_reply(outbox_dir, event_id, body, index=index)
     return "reply", short, do_mod.Directive(path, ("reply", event_id))
+
+
+def _do_stage_thread(do_mod, outbox_dir: Path, key: str, body: str, index: int):
+    path = do_mod.stage_thread(outbox_dir, key, body, index=index)
+    return "thread", key, do_mod.Directive(path, ("thread", key))
 
 
 def _do_stage_gate(do_mod, outbox_dir: Path, gate_name: str, body: str, index: int):
@@ -3390,7 +3403,7 @@ def cmd_do(args):
         return 1
 
     ordered_ops = getattr(args, "_do_ops", None) or []
-    replies, gates, pairing_error = _reconstruct_do_ops(ordered_ops)
+    replies, gates, threads, pairing_error = _reconstruct_do_ops(ordered_ops)
     if pairing_error:
         print(f"[brnrd do] {pairing_error}. Nothing was staged.", file=sys.stderr)
         return 1
@@ -3506,7 +3519,7 @@ def cmd_do(args):
         return 1
 
     has_verbs = bool(
-        args.mood or notes or replies or gates or args.card
+        args.mood or notes or replies or gates or threads or args.card
         or link_open or link_close
     )
 
@@ -3628,7 +3641,7 @@ def cmd_do(args):
         # taken before the *first* stage — re-snapshotting per verb, the
         # way the old sequential calls did, would make an earlier verb's
         # own drain invisible to a later verb's notices diff.
-        if notes or replies or gates:
+        if notes or replies or gates or threads:
             before = do_mod.notices_of(do_mod.read_portal_state(outbox_dir))
             waitable = [
                 _do_stage_note(do_mod, outbox_dir, event_id, i)
@@ -3641,6 +3654,10 @@ def cmd_do(args):
             waitable += [
                 _do_stage_gate(do_mod, outbox_dir, gate_name, body, i)
                 for i, (gate_name, body) in enumerate(gates)
+            ]
+            waitable += [
+                _do_stage_thread(do_mod, outbox_dir, key, body, i)
+                for i, (key, body) in enumerate(threads)
             ]
             verdicts = do_mod.await_verdict_batch(
                 outbox_dir, [entry[2] for entry in waitable], before,
