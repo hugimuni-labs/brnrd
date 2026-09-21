@@ -97,6 +97,7 @@ from . import cut_verb
 from . import halt_verb
 from . import halts as halts_mod
 from . import protocol
+from . import actions
 from . import promises
 from . import relics
 from . import run_context
@@ -3726,11 +3727,36 @@ def _pending_events_for_agent(
                     )
                 except OSError:
                     pass
+                # Action ledger: the one place the completion reaches the
+                # parent is the one place the dispatch is `observed`.
+                _ledger_spawn_observed(inbox_dir, current_event_id, ev)
             events.append(ev)
     return [
         _pending_event_record(ev)
         for ev in sorted(events, key=_event_queue_sort_key)
     ]
+
+
+def _ledger_spawn_observed(
+    inbox_dir: Path, current_event_id: str, completion: dict,
+) -> None:
+    """Move the ``spawn`` act a ``spawn_completed`` answers to ``observed``.
+
+    The parent's ledger is its own outbox dir, ``<brr>/outbox/<its event>``;
+    the act is found by the dispatch event id the completion carries. Never
+    raises — an unledgered observation costs a row, never the wake.
+    """
+    try:
+        outbox_dir = inbox_dir.parent / "outbox" / current_event_id
+        key = str(completion.get("spawned_by_event") or "")
+        act_id = actions.find(outbox_dir, "spawn", key)
+        if act_id:
+            actions.transition(
+                outbox_dir, act_id, "observed",
+                evidence=str(completion.get("id") or ""),
+            )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _write_live_inbox(
@@ -7778,6 +7804,14 @@ def _queue_spawn_request(
     if assigned_topic:
         meta["topic"] = assigned_topic
     new_path = protocol.create_event(inbox_dir, source, new_body, **meta)
+    # Action ledger (design-the-action-ledger.md): the dispatch is `requested`
+    # the moment its event exists; `worker.prepare` moves it to `attempted`
+    # when the daemon admits it and `_pending_events_for_agent` to `observed`
+    # when the parent renders the completion. Keyed by the dispatch event id.
+    actions.append(
+        outbox_dir, verb="spawn", target=new_path.stem, state="requested",
+        by="seat", why=title or reason or " ".join(new_body.split())[:120],
+    )
     if assigned_topic:
         run_topic.assign(
             run_topic.act_home(account_context), assigned_topic, kind="strand",

@@ -59,6 +59,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import actions
+
 CONTROL_NAME = ".promises.jsonl"
 
 #: What a promise may name. Deliberately the produce vocabulary and nothing
@@ -169,6 +171,15 @@ def append(
             handle.write(line + "\n")
     except OSError:
         pass
+    if not released:
+        # Action ledger: a promise is exactly a `requested` act that has not
+        # reached `attempted` (design-the-action-ledger.md). One row per unit
+        # promised, so the ledger's owed count can be read without this file.
+        for _ in range(max(1, min(int(count), 50))):
+            actions.append(
+                outbox_dir, verb=what, target=ref or "", state="requested",
+                why=why or "",
+            )
 
 
 @dataclass(frozen=True)
