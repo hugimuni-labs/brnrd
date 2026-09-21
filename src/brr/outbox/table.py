@@ -189,6 +189,58 @@ ROWS: tuple[Row, ...] = (
 )
 
 
+#: The rows that put a message in front of a person. ``note:``, ``spawn:``,
+#: ``await:`` and the control verbs are not messages and write no ledger row
+#: here; a ``cut:`` that falls through reaches ``gate``/``event`` below it and
+#: is ledgered by whichever of those delivers its announcement.
+CHAT_BOUND = frozenset({"gate", "thread", "event"})
+
+
+def _message_target(row: Row, f: OutboxFile) -> str:
+    """The destination a chat-bound file addresses, as one coordinate."""
+    fm = f.frontmatter
+    if row.key == "gate":
+        gate = str(fm.get("gate") or "").strip()
+        thread = str(fm.get("thread") or "").strip()
+        return f"gate:{gate}" + (f" thread:{thread}" if thread else "")
+    if row.key == "thread":
+        return f"thread:{str(fm.get('thread') or '').strip()}"
+    return f"event:{str(fm.get('event') or '').strip() or f.ctx.event_id}"
+
+
+def _ledgered_message(row: Row, f: OutboxFile) -> Handled:
+    """Run a chat-bound handler with its ``message`` row (``actions.py``).
+
+    ``attempted`` before the handler fires; then the handler's own derived
+    outcome names the second state — ``accepted`` (it promoted the reply) is
+    ``confirmed`` with the delivery's coordinate as evidence, ``refused`` or
+    ``deferred`` (nothing promoted) is ``failed`` with the notice that names
+    the file. A handler that raises leaves the row ``attempted``: the closeout
+    stamps that ``ambiguous``, which is what a send with no answer *is*.
+    """
+    from .. import actions
+
+    outbox_dir = f.ctx.outbox_dir
+    target = _message_target(row, f)
+    meta = getattr(f.run, "meta", None)
+    run_id = str(getattr(f.run, "id", "") or "")
+    by = f"strand:{run_id}" if isinstance(meta, dict) and daemon._is_strand(meta) else "seat"
+    act_id = actions.append(
+        outbox_dir, verb="message", target=target, state="attempted", by=by,
+        why=f.path.name,
+    )
+    result = row.handler(f)
+    if act_id:
+        if result.outcome == "accepted":
+            actions.transition(outbox_dir, act_id, "confirmed", evidence=target)
+        else:
+            actions.transition(
+                outbox_dir, act_id, "failed",
+                evidence=result.notice or "nothing promoted",
+            )
+    return result
+
+
 def dispatch(f: OutboxFile) -> list[Handled]:
     """Run *f* through the table: the first matching row, and — when that
     handler falls through — the first matching row after it, and so on.
@@ -254,7 +306,10 @@ def _dispatch(f: OutboxFile) -> list[Handled]:
                 verb=row.key,
                 run=str(getattr(f.run, "id", "") or ""),
             ):
-                result = row.handler(f)
+                if row.key in CHAT_BOUND:
+                    result = _ledgered_message(row, f)
+                else:
+                    result = row.handler(f)
             results.append(result)
             if result.then is None:
                 return results
