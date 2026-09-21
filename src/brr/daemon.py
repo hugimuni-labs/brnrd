@@ -56,6 +56,7 @@ from . import account
 from . import allowance
 from . import runner_auth_health
 from . import await_verb
+from . import other_fuel
 from .outbox import notices as _outbox_notices
 from . import branching
 from .cli import brnrd_cmd
@@ -3956,6 +3957,54 @@ def _collect_levels(
     return None, False
 
 
+#: Cache for :func:`_other_shells_fuel` — it runs on every tool boundary, and
+#: the codex read scans rollout files; the readings themselves only move on the
+#: publisher's 2–4 minute cadence (a read on the boundary path is a read on
+#: every boundary — pitfalls.md).
+_OTHER_FUEL_TTL_SECONDS = 15.0
+_other_fuel_cache: dict[tuple[str, str], tuple[float, dict[str, object] | None]] = {}
+
+
+def _other_shells_fuel(
+    own_shell: str | None,
+    catalog: "list[dict[str, object]] | None",
+    shared_dir: Path | None,
+) -> list[dict[str, object]]:
+    """Fuel rows for every Shell in *catalog* other than *own_shell*.
+
+    Cache-only: never refreshes a probe (``refresh=False``) — the publisher
+    keeps the caches warm; a cache nobody warmed reads stale ⇒ ``codex ?``
+    (:mod:`other_fuel`). A Shell with no collector or no reading is omitted.
+    """
+    if shared_dir is None:
+        return []
+    own = str(own_shell or "").strip().lower()
+    rows: list[dict[str, object]] = []
+    seen: set[str] = set()
+    now = time.monotonic()
+    for entry in catalog or []:
+        shell = str(entry.get("shell") or "").strip().lower()
+        if not shell or shell == own or shell in seen:
+            continue
+        seen.add(shell)
+        key = (shell, str(shared_dir))
+        hit = _other_fuel_cache.get(key)
+        if hit is not None and now - hit[0] < _OTHER_FUEL_TTL_SECONDS:
+            row = hit[1]
+        else:
+            try:
+                levels, _slots = _collect_levels(
+                    shell, None, None, refresh=False, shared_dir=shared_dir,
+                )
+                row = other_fuel.fuel_row(shell, levels)
+            except Exception:
+                row = None
+            _other_fuel_cache[key] = (now, row)
+        if row is not None:
+            rows.append(dict(row))
+    return rows
+
+
 def _collect_allowance_facet(
     task: Run, runner_name: str | None, work_dir: Path | None,
     *, cfg: "dict | None" = None, levels: "dict[str, object] | None" = None,
@@ -4218,6 +4267,7 @@ def _resources_facet(
     draws: "dict[str, object] | None" = None,
     hold: "dict[str, object] | None" = None,
     correspondent: "dict[str, object] | None" = None,
+    other_shells: "list[dict[str, object]] | None" = None,
 ) -> dict[str, object]:
     """Operator-facing 'work status' the running resident can read.
 
@@ -4257,6 +4307,7 @@ def _resources_facet(
         draws=draws,
         hold=hold,
         correspondent=correspondent,
+        other_shells=other_shells,
     )
 
 

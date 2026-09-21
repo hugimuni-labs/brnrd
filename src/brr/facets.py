@@ -383,6 +383,7 @@ def build(
     draws: "dict[str, object] | None" = None,
     hold: "dict[str, object] | None" = None,
     correspondent: "dict[str, object] | None" = None,
+    other_shells: "list[dict[str, object]] | None" = None,
 ) -> dict[str, object]:
     """Build the live ``resources`` facet dict from the collected inputs.
 
@@ -507,6 +508,20 @@ def build(
         quota_facet["draws"] = draws
     if hold is not None:
         quota_facet["hold"] = hold
+    if other_shells:
+        # The fuel of every *other* Shell in the catalog (other_fuel.py) —
+        # `quota.others[]`, so a seat reads it without parsing the chip.
+        quota_facet["others"] = [
+            {
+                "shell": row.get("shell"),
+                "binding_remaining_pct": row.get("binding_remaining_pct"),
+                "resets_in": row.get("resets_in"),
+                "read_at": row.get("read_at"),
+                "stale": bool(row.get("stale")),
+                "buckets": row.get("buckets") or [],
+            }
+            for row in other_shells
+        ]
     spend_facet = _level_record(
         FACETS_BY_KEY["spend"], _level_summary("spend"),
         has_collector="spend" in wired_slots,
