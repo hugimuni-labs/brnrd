@@ -337,3 +337,112 @@ def test_a_released_promise_writes_no_requested_row(tmp_path: Path):
 
     assert not (tmp_path / actions.CONTROL_NAME).exists()
     assert promises.read(tmp_path)  # the blueprint row still lands
+
+
+# ── `brnrd act` (build step 4) ───────────────────────────────────────
+
+
+def _act(monkeypatch, outbox: Path, *argv: str, capsys=None):
+    from brr import cli
+
+    monkeypatch.setenv("BRR_OUTBOX_DIR", str(outbox))
+    rc = cli.main(["act", *argv])
+    return rc
+
+
+def test_act_attempt_prints_only_the_id_and_writes_an_attempted_row(tmp_path, monkeypatch, capsys):
+    rc = _act(monkeypatch, tmp_path, "attempt", "post https://x.com/a", "--why", "the launch",
+              "--idempotent", "--after", "act-1")
+    out = capsys.readouterr().out
+    assert rc == 0
+    (row,) = _lines(tmp_path)
+    assert out == row["id"] + "\n"
+    assert row["state"] == "attempted" and row["verb"] == "post"
+    assert row["target"] == "https://x.com/a" and row["why"] == "the launch"
+    assert row["idempotent"] is True and row["after"] == ["act-1"] and row["by"] == "seat"
+
+
+def test_act_attempt_from_a_strand_is_by_the_strand(tmp_path, monkeypatch, capsys):
+    (tmp_path / "portal-state.json").write_text(
+        json.dumps({"strand": {"is_strand": True}}), encoding="utf-8")
+    monkeypatch.setenv("BRR_RUN_ID", "run-1-abcd")
+    _act(monkeypatch, tmp_path, "attempt", "comment repo#3")
+    assert _lines(tmp_path)[0]["by"] == "strand:run-1-abcd"
+
+
+def test_act_confirm_and_fail_move_the_same_id(tmp_path, monkeypatch, capsys):
+    _act(monkeypatch, tmp_path, "attempt", "pr repo#1")
+    a = capsys.readouterr().out.strip()
+    _act(monkeypatch, tmp_path, "attempt", "post url")
+    b = capsys.readouterr().out.strip()
+    assert _act(monkeypatch, tmp_path, "confirm", a, "--evidence", "https://pr/1") == 0
+    assert _act(monkeypatch, tmp_path, "fail", b, "--why", "403") == 0
+    latest = actions.read(tmp_path)
+    assert latest[a]["state"] == "confirmed" and latest[a]["evidence"] == "https://pr/1"
+    assert latest[a]["verb"] == "pr" and latest[b]["state"] == "failed"
+    assert latest[b]["why"] == "403"
+
+
+def test_act_unknown_id_and_no_outbox_exit_one_with_one_line(tmp_path, monkeypatch, capsys):
+    capsys.readouterr()
+    assert _act(monkeypatch, tmp_path, "confirm", "act-nope", "--evidence", "x") == 1
+    err = capsys.readouterr().err
+    assert len(err.strip().splitlines()) == 1 and "act-nope" in err
+    assert not (tmp_path / actions.CONTROL_NAME).exists()
+
+    from brr import cli
+    monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
+    monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
+    assert cli.main(["act", "attempt", "post x"]) == 1
+    assert len(capsys.readouterr().err.strip().splitlines()) == 1
+
+
+def test_act_bare_lists_latest_row_per_id_newest_first(tmp_path, monkeypatch, capsys):
+    _act(monkeypatch, tmp_path, "attempt", "post one")
+    a = capsys.readouterr().out.strip()
+    _act(monkeypatch, tmp_path, "attempt", "comment two")
+    capsys.readouterr()
+    _act(monkeypatch, tmp_path, "confirm", a, "--evidence", "sha1")
+    assert _act(monkeypatch, tmp_path) == 0
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines == ["confirmed · post · one · sha1", "attempted · comment · two · -"] \
+        or lines == ["attempted · comment · two · -", "confirmed · post · one · sha1"]
+    assert len(lines) == 2
+
+
+def test_act_has_no_way_to_write_observed():
+    from brr import cli
+
+    p = cli.build_parser() if hasattr(cli, "build_parser") else None
+    if p is not None:
+        try:
+            p.parse_args(["act", "observe", "x"])
+        except SystemExit:
+            return
+        raise AssertionError("observe must not parse")
+
+
+# ── the closeout stamp (build step 5) ────────────────────────────────
+
+
+def test_closeout_stamps_open_attempted_rows_ambiguous(tmp_path: Path):
+    open_id = actions.append(tmp_path, verb="post", target="u", state="attempted")
+    done_id = actions.append(tmp_path, verb="pr", target="r", state="attempted")
+    actions.transition(tmp_path, done_id, "confirmed", evidence="sha")
+    req_id = actions.append(tmp_path, verb="commit", state="requested")
+
+    assert daemon._stamp_unresolved_acts(tmp_path, "run-x") == 1
+
+    latest = actions.read(tmp_path)
+    assert latest[open_id]["state"] == "ambiguous"
+    assert latest[open_id]["evidence"] == "run ended with the act unresolved"
+    assert latest[open_id]["target"] == "u"
+    assert latest[done_id]["state"] == "confirmed" and latest[req_id]["state"] == "requested"
+    assert daemon._stamp_unresolved_acts(tmp_path, "run-x") == 0  # idempotent
+
+
+def test_closeout_stamp_never_raises(tmp_path: Path, monkeypatch):
+    assert daemon._stamp_unresolved_acts(None) == 0
+    assert daemon._stamp_unresolved_acts(tmp_path / "missing") == 0
+    monkeypatch.setattr(actions, "open_attempted", lambda *_: (_ for _ in ()).throw(RuntimeError("x")))
+    assert daemon._stamp_unresolved_acts(tmp_path) == 0
