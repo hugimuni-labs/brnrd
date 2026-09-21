@@ -523,3 +523,29 @@ def test_hud_card_prints_both_halves(tmp_path, capsys, monkeypatch):
     assert "spend 1k" not in frame  # rebuilt, not read back
     assert frame.rstrip("\n").endswith("## Said\n- 17:00Z → abcd: hi")
     assert (outbox / ".card").read_text(encoding="utf-8") == before  # read-only
+
+
+# ── the acts line (action ledger, step 5) ────────────────────────────────
+
+
+def test_acts_line_counts_states_and_omits_zeros():
+    acts = [{"state": "confirmed"}, {"state": "confirmed"}, {"state": "attempted"},
+            {"state": "ambiguous"}, {"state": "observed"}]
+    assert card_frame.build_ledger({}, acts=acts) == [
+        "- acts: 2 confirmed · 1 attempted · 1 ambiguous"]
+    assert card_frame.build_ledger({}, acts=[{"state": "failed"}]) == ["- acts: 1 failed"]
+    assert card_frame.build_ledger({}, acts=[]) == []
+
+
+def test_frame_pass_reads_the_actions_file(h):
+    from brr import actions
+
+    h.card(WEAVER)
+    a = actions.append(h.outbox, verb="post", target="u", state="attempted")
+    actions.transition(h.outbox, a, "confirmed", evidence="e")
+    actions.append(h.outbox, verb="post", target="v", state="attempted")
+    assert h.run(T0).ledger_written
+    card = h.read_card()
+    assert "- acts: 1 confirmed · 1 attempted" in card
+    # the line rides the strand lines, before merges/spend
+    assert card.index("- strand") < card.index("- acts:") < card.index("- spend:")

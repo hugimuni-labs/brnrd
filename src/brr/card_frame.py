@@ -585,6 +585,19 @@ def _spend_line(hud: Mapping[str, Any]) -> list[str]:
     return ["- spend: " + " · ".join(parts)] if parts else []
 
 
+_ACT_STATES = ("confirmed", "attempted", "failed", "ambiguous")
+
+
+def _acts_line(acts: Iterable[Mapping[str, Any]] | None) -> list[str]:
+    """``- acts: <n> confirmed · <m> attempted · …`` — zero counts omitted."""
+    counts = {state: 0 for state in _ACT_STATES}
+    for row in acts or ():
+        if isinstance(row, Mapping) and row.get("state") in counts:
+            counts[str(row["state"])] += 1
+    parts = [f"{n} {state}" for state, n in counts.items() if n]
+    return ["- acts: " + " · ".join(parts)] if parts else []
+
+
 def _heddle_line(heddles: Iterable[Mapping[str, Any]] | None) -> list[str]:
     from . import heddles as heddles_mod
 
@@ -601,6 +614,7 @@ def build_ledger(
     heddles: Iterable[Mapping[str, Any]] | None = None,
     since: float | None = None,
     merged: Mapping[int, float | None] | None = None,
+    acts: Iterable[Mapping[str, Any]] = (),
 ) -> list[str]:
     """The ``## Ledger`` block's lines, heading and legend excluded — each part
     only when it has something to say, oldest → newest within a part.
@@ -619,6 +633,8 @@ def build_ledger(
     spend     ``hud.resources.allowance``: the seat's or strand's reading,
               and the stake when one is on (``stake 1.1m/5% · 22%``)
     heddles   *heddles* (else ``hud.heddles``) as the chip prints them
+    acts      *acts* — the latest row per id of ``.actions.jsonl`` — as one
+              count line, ``- acts: 2 confirmed · 1 attempted``
     ========  ==========================================================
     """
     hud = _mapping(hud)
@@ -627,6 +643,7 @@ def build_ledger(
     lines = (
         _produce_lines(hud)
         + _strand_lines(hud, events, since)
+        + _acts_line(acts)
         + _merge_line(produce_rows, relics, merged)
         + _spend_line(hud)
         + _heddle_line(heddles)
@@ -696,7 +713,8 @@ def _write_card_if_unchanged(path: Path, base: str, text: str) -> bool:
 
 
 def _project_ledger(state, result, *, card_path, card_text, outbox_dir, hud, heddles,
-                    produce_rows, relics, events, since, merged, notice, notices_mod) -> str:
+                    produce_rows, relics, events, since, merged, notice, notices_mod,
+                    acts=()) -> str:
     """Splice the rebuilt ledger into the card; returns the card text now on disk."""
     if not card_text.strip():
         return card_text  # no card yet: the weaver writes it first
@@ -704,7 +722,7 @@ def _project_ledger(state, result, *, card_path, card_text, outbox_dir, hud, hed
         hud = read_portal(outbox_dir)
     lines = build_ledger(
         hud, produce_rows=produce_rows, relics=relics, events=events,
-        heddles=heddles, since=since or None, merged=merged,
+        heddles=heddles, since=since or None, merged=merged, acts=acts,
     )
     present = _section_span(card_text, LEDGER_HEADING) is not None
     readding = False
@@ -857,6 +875,8 @@ def _frame_pass(meta, result, *, outbox_dir, run_dir, repo_root, stats, events, 
     now = float(now) if now is not None else _dt.datetime.now(tz=_dt.timezone.utc).timestamp()
     state = meta.get(META_KEY) if isinstance(meta.get(META_KEY), dict) else {}
     state = dict(state)
+    from . import actions as actions_mod
+
     card_path = outbox_dir / CARD_NAME
     try:
         card_text = card_path.read_text(encoding="utf-8", errors="replace")
@@ -927,6 +947,7 @@ def _frame_pass(meta, result, *, outbox_dir, run_dir, repo_root, stats, events, 
         state, result, card_path=card_path, card_text=card_text, outbox_dir=outbox_dir,
         hud=hud, heddles=heddles, produce_rows=produce_rows, relics=relics,
         events=events, since=weaver_at, notice=notice, notices_mod=notices_mod,
+        acts=list(actions_mod.read(outbox_dir).values()),
         merged=ledger_merges(facts, card_text=card_text, produce_rows=produce_rows,
                              relics=relics, meta=meta, run_id=run_id),
     )
