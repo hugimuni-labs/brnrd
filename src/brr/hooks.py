@@ -3767,6 +3767,7 @@ def _render_bar(
     armed: list[Any] | None = None,
     gate_receipt_data: dict[str, Any] | None = None,
     context_prior: dict[str, Any] | None = None,
+    why: str | None = None,
     room: str | None = None,
     paused: str | None = None,
     plan: "promises.Blueprint | None" = None,
@@ -3889,6 +3890,12 @@ def _render_bar(
         segments.append(("context_window", context_chip))
         delta_chip = _context_delta_chip(resources, context_prior)
         if delta_chip:
+            # The bill beside the reason: ``Δctx +4.2k ⇐ read the seat's
+            # last reply`` — the price of the act just taken, next to the
+            # one line the act was taken for. Read *after* is the eval; a
+            # nag before the act is a costume (his ask, evt-…-qv79).
+            if why:
+                delta_chip = f"{delta_chip} ⇐ {why[:72]}"
             segments.append(("context_delta", delta_chip))
     if room:
         # The room pin (`.room`): the resident's own reading of how to talk
@@ -4428,6 +4435,7 @@ def format_delta(
     route_prompt: bool = False,
     bolt_asks_total: int | None = None,
     context_prior: dict[str, Any] | None = None,
+    why: str | None = None,
     room: str | None = None,
     paused: str | None = None,
     bolt_edge: bool = False,
@@ -4617,6 +4625,7 @@ def format_delta(
             shuttle_state=shuttle_state, run_name=run_name,
             initiative_state=portal_await,
             context_prior=context_prior,
+            why=why,
             room=room,
             paused=paused,
             mood=mood, surprise=surprise,
@@ -6650,6 +6659,7 @@ def compute_neutral(
                 bolt_asks_total=bolt_asks_total, bolt_edge=bolt_edge,
                 repeat_streaks=repeat_streaks,
                 context_prior=context_prior, room=room, paused=paused,
+                why=_first_tool_why(phase, payload),
                 pending_set_changed=pending_set_changed,
                 last_chips=last_chips, rendered_chips=rendered_chips,
                 route_drift=route_drift,
@@ -7721,6 +7731,48 @@ def _boundary_readings(
 _SHELL_TOOL_NAMES = ("bash", "shell", "exec", "exec_command", "functions_exec")
 
 
+_WHY_MAX = 160
+_WHY_COMMENT = re.compile(r"^\s*#\s*why:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def _tool_why(tool_name: object, tool_input: object) -> str | None:
+    """The act's own one line of *why* — the reasoning's residue, kept.
+
+    His ask (evt-…-qv79, 2026-09-21): each act grows the body; keep the
+    justification for the spend beside the act, not the whole thinking.
+    Claude already writes it — every Bash call carries a ``description``
+    (what → why) that the hook used to drop on the floor. Codex has no such
+    field, so there the same line rides as a leading ``# why: …`` comment in
+    the command. One field, two Shells; redacted and capped like ``detail``.
+    """
+    if not isinstance(tool_name, str) or not isinstance(tool_input, dict):
+        return None
+    why = tool_input.get("description")
+    if not (isinstance(why, str) and why.strip()):
+        cmd = tool_input.get("command") or tool_input.get("cmd")
+        m = _WHY_COMMENT.search(cmd) if isinstance(cmd, str) else None
+        why = m.group(1) if m else None
+    if not (isinstance(why, str) and why.strip()):
+        return None
+    why = re.sub(r"\s+", " ", why.strip())
+    if len(why) > _WHY_MAX:
+        why = why[:_WHY_MAX] + "…"
+    return redact_detail(why)
+
+
+def _first_tool_why(phase: str, payload: object) -> str | None:
+    """``why`` of the first act in a post-tool payload (batch or single)."""
+    if phase != PHASE_POST_TOOL or not isinstance(payload, dict):
+        return None
+    calls = payload.get("tool_calls")
+    if isinstance(calls, list):
+        for call in calls:
+            if isinstance(call, dict) and isinstance(call.get("tool_name"), str):
+                return _tool_why(call.get("tool_name"), call.get("tool_input"))
+        return None
+    return _tool_why(payload.get("tool_name"), payload.get("tool_input"))
+
+
 def _tool_place_path(tool_name: object, tool_input: object) -> str | None:
     """The file path one tool call touched, normalised and redacted exactly
     as :func:`_tool_detail` treats a path; ``None`` for a shell tool or a
@@ -8253,6 +8305,9 @@ def record_boundary(
         record["act"] = first_act
     if first_detail is not None:
         record["detail"] = first_detail
+    first_why = _tool_why(first_name, first_input)
+    if first_why is not None:
+        record["why"] = first_why
     if has_out_bytes:
         record["out_bytes"] = total_out_bytes
     # Where the act ran. The hook payload carries the runner's cwd at this

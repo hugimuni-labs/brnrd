@@ -6071,6 +6071,47 @@ def test_boundary_detail_for_bash_command(tmp_path):
     assert "tool_input" not in record
 
 
+def test_boundary_why_from_bash_description(tmp_path):
+    """The act's one line of why rides the row beside its price (evt-…-qv79)."""
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=0, events=[])
+    payload = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {
+            "command": "git status --short",
+            "description": "Check the tree before branching — is it dirty?",
+        },
+    })
+    hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
+
+    record = _transcript(run_dir)[0]
+    assert record.get("detail") == "git status --short"
+    assert record.get("why") == "Check the tree before branching — is it dirty?"
+
+
+def test_boundary_why_from_codex_comment(tmp_path):
+    """Codex has no description field: a leading ``# why:`` comment is the same line."""
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=0, events=[])
+    payload = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": "# why: size the diff before reading it whole\ngit diff --stat"},
+    })
+    hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
+
+    record = _transcript(run_dir)[0]
+    assert record.get("why") == "size the diff before reading it whole"
+    assert record.get("detail", "").endswith("git diff --stat")  # detail keeps the command
+
+
+def test_boundary_why_absent_when_nothing_written(tmp_path):
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=0, events=[])
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls"}})
+    hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
+    assert "why" not in _transcript(run_dir)[0]
+
+
 def test_boundary_detail_for_file_tool(tmp_path):
     """Read records the file path in ``detail``."""
     env, run_dir = _transcript_env(tmp_path)
@@ -8093,6 +8134,22 @@ def test_post_tool_bar_carries_the_context_delta_beside_ctx():
     assert "Δctx +3.2k" in line
     quiet = hooks.format_delta(payload, rendered_chips={})
     assert quiet is not None and "Δctx" not in quiet
+
+
+def test_post_tool_bar_prices_the_act_beside_its_why():
+    """``Δctx +3.2k ⇐ <why>`` — the bill next to the reason (evt-…-qv79)."""
+    resources = {"context_window": {"status": "known", "summary": "148.2k tok occupied"}}
+    payload = _portal_payload(resources=resources)
+    line = hooks.format_delta(
+        payload, rendered_chips={}, context_prior={"value": 145_000.0, "unit": "tok"},
+        why="read the seat's last reply — was alqn answered?",
+    )
+    assert line is not None
+    assert "Δctx +3.2k ⇐ read the seat's last reply — was alqn answered?" in line
+    bare = hooks.format_delta(
+        payload, rendered_chips={}, context_prior={"value": 145_000.0, "unit": "tok"},
+    )
+    assert bare is not None and "Δctx +3.2k" in bare and "⇐" not in bare
 
 
 # ── The correspondent's presence on the bar (design-the-continuous-seat
