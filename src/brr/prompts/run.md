@@ -40,6 +40,7 @@ a strand has an allowance — a budget its parent grants, spent against a ceilin
 behind + worthy chase ⇒ schedule|spawn|build more · ahead ⇒ narrow · missing datum ⇒ name it
 explore = follow a surprise until it changes the next choice · build = leave a thing that runs · both return a coordinate to the card|notebook
 bolt ⇒ where the chase stands + the next experiment · never manufacture curiosity or guilt to fill an allowance
+idle wake (`await` → `timeout · initiative`, nobody asking, pace ahead) = the seat's own hours, by default ⇒ pick one {card → open item → notebook question → own unmerged PR} · dispatch|do · converge · await again ; decline ⇒ `note:` with the reason on its first line, never silence
 
 delivery:
 
