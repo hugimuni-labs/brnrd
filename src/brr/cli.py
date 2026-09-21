@@ -1118,9 +1118,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("kb", help="search home/repo knowledge; omit query to print graph shape")
     p.add_argument("query", nargs="?", default=None,
-                   help="search term, or 'mount' to derive the project's kb link")
+                   help="search term, 'mount', or 'migrate'")
+    p.add_argument("repo_path", nargs="?", help="source checkout for kb migrate")
     p.add_argument("--apply", action="store_true",
-                   help="apply 'kb mount' (dry-run by default)")
+                   help="apply kb mount or migrate (dry-run by default)")
     p.add_argument("--limit", type=int, default=20,
                    help="maximum matching lines to print")
     p.set_defaults(func=cmd_kb)
@@ -4218,6 +4219,25 @@ def cmd_kb(args):
     from . import config as conf
     from . import knowledge
 
+    if args.query == "migrate":
+        from . import kb_migrate
+
+        if not getattr(args, "repo_path", None):
+            print("[brnrd kb migrate] requires a source repo path")
+            return 1
+        repo_root = Path(args.repo_path).expanduser().resolve()
+        cfg = conf.load_config(repo_root)
+        ctx = account_mod.resolve_context(repo_root, cfg, create=False)
+        report = kb_migrate.migrate(
+            repo_root, account_mod.context_home_root(ctx),
+            account_mod.repo_label(repo_root, cfg), apply=bool(getattr(args, "apply", False)),
+        )
+        for line in report.lines():
+            print(f"[brnrd kb migrate] {line}")
+        return 1 if report.conflicts else 0
+    if getattr(args, "repo_path", None):
+        print("[brnrd kb] a repo path requires 'kb migrate'")
+        return 1
     repo_root = _repo_root()
     cfg = conf.load_config(repo_root)
     # Resolve read-only first: `brnrd kb` is a read, never an act that means
@@ -4237,7 +4257,7 @@ def cmd_kb(args):
             print(f"[brnrd kb mount] {line}")
         return 1 if report.refusal else 0
     if getattr(args, "apply", False):
-        print("[brnrd kb] --apply requires 'kb mount'")
+        print("[brnrd kb] --apply requires 'kb mount' or 'kb migrate'")
         return 1
     reason = account_mod.resolution_reason(resolved_ctx, repo_root)
     checkout = knowledge.mounted_kb_dir(repo_root)
