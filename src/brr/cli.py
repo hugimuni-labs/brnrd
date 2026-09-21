@@ -5501,6 +5501,10 @@ def cmd_await(args):
                 file=sys.stderr,
             )
             return 1
+    elif previous.get("initiative_default"):
+        # The heartbeat recomputes this default against live pace and activity.
+        # Do not turn its projected deadline into an explicit timeout on re-arm.
+        timeout_seconds = None
     elif (
         previous.get("armed")
         and not previous.get("resolved")
@@ -5527,6 +5531,7 @@ def cmd_await(args):
     call_started = time.monotonic()
     staged = do_mod.stage_await(
         outbox_dir, timeout_seconds=timeout_seconds, file_path=args.file,
+        initiative_default=args.timeout is None and timeout_seconds is None,
     )
     status, detail = do_mod.await_verdict(
         outbox_dir, staged, before, ("await",),
@@ -5559,6 +5564,8 @@ def cmd_await(args):
             "which": state.get("which"),
             "deadline": state.get("deadline"),
         }
+        if outcome == "timeout" and state.get("initiative"):
+            result["initiative"] = True
         if outcome == "pending":
             # Why this call returned without an answer: `ceiling` = the lease
             # ran its full length; `shell_cap` = the Shell would have killed
@@ -5602,6 +5609,8 @@ def cmd_await(args):
         else:
             tail = f" ({result['which']})" if result["which"] else ""
             note = " — call again" if outcome == "pending" else ""
+            if result.get("initiative"):
+                note = " — initiative"
             print(f"[brnrd await] {outcome}{tail}{note}")
         return 0
 

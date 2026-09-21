@@ -1765,6 +1765,7 @@ SEGMENT_CLASS: dict[str, str] = {
     # emits. Classified here beside `pending_unknown` for the same reason.
     "allowance": VITAL,  # a meter — the strand/seat's own spend-vs-ceiling reading.
     "context_delta": VITAL,  # a meter — cost of this stretch since the last boundary.
+    "initiative": DELTA,  # the computed await ceiling, while eligible.
     "room": AMBIENT,  # the resident's own tempo note, echoed verbatim, never parsed.
     # Forced never-suppressed via `edge_due["paused"] = True` below — a
     # frozen process is the world waiting (w-34, 2026-09-11: renamed from
@@ -2084,6 +2085,16 @@ def _allowance_chip(resources: dict[str, Any]) -> str | None:
     if _allowance_scope(resources) == "resident" and not facet.get("explicit"):
         return f"spend {allowance.format_tokens(spent)} · {_resident_pace(resources)}"
     return f"spend {allowance.format_tokens(spent)}/{allowance.format_tokens(tokens)}"
+
+
+def _initiative_chip(state: dict[str, Any] | None) -> str | None:
+    if not state or not state.get("armed"):
+        return None
+    ahead = state.get("initiative_pace_ahead_pts")
+    idle = state.get("initiative_idle_seconds")
+    if not isinstance(ahead, (float, int)) or not isinstance(idle, (float, int)):
+        return None
+    return f"initiative: pace ahead by {ahead:g} pts · idle {int(idle // 60)}m"
 
 
 def _resident_pace(resources: dict[str, Any]) -> str:
@@ -3736,6 +3747,7 @@ def _render_bar(
     # caller-touching change out of scope for this fix.
     run_name: dict[str, Any],
     mood: str | None,
+    initiative_state: dict[str, Any] | None = None,
     shuttle_state: dict[str, Any] | None = None,
     surprise: str | None = None,
     census: str | None = None,
@@ -3898,6 +3910,9 @@ def _render_bar(
     # The ratio the daemon acts on while `brnrd await` sits armed and idle
     # (design-the-seat-that-never-quits.md §machinery slice 3) — visible
     # before it acts, same as `draws` above.
+    initiative_chip = _initiative_chip(initiative_state)
+    if initiative_chip:
+        segments.append(("initiative", initiative_chip))
     hold_chip = _hold_chip(resources, shuttle_state)
     if hold_chip:
         segments.append(("hold", hold_chip))
@@ -4592,6 +4607,7 @@ def format_delta(
             budget=budget, outbound=outbound, produce=produce, card=card,
             card_stale=card_stale, resources=resources,
             shuttle_state=shuttle_state, run_name=run_name,
+            initiative_state=portal_await,
             context_prior=context_prior,
             room=room,
             paused=paused,

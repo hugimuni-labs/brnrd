@@ -4500,12 +4500,53 @@ def _change_token(payload: dict[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()[:16]
 
 
+def _initiative_timeout(
+    task: Run, cfg: dict | None, pacing_status: dict | None, now: float,
+) -> tuple[float, float] | None:
+    """The bare await's ceiling and pace lead, when initiative is eligible.
+
+    Reuse the boundary's measured binding window; unknown pace never grants
+    a timeout. This is a default on an existing wait, not another wake source.
+    """
+    cfg = cfg or {}
+    if (
+        _is_strand(task.meta)
+        or not _truthy(cfg.get("seat.initiative", True))
+        or task.meta.get("pending_resource_hold")
+        or _working_child_controls(task.id)
+    ):
+        return None
+    correspondent_at = task.meta.get("hold_correspondent_at")
+    if correspondent_at is not None:
+        try:
+            if now - float(correspondent_at) < _seat_live_window_seconds(cfg):
+                return None
+        except (ValueError, TypeError):
+            return None
+    pace = (pacing_status or {}).get("pace") or {}
+    try:
+        ahead = float(pace["elapsed_share_pct"]) - float(pace["consumed_share_pct"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not 0 < ahead <= 100:
+        return None
+    try:
+        minutes = float(cfg.get("seat.initiative_after_minutes", 20))
+    except (ValueError, TypeError):
+        minutes = 20.0
+    if not 0 < minutes < float("inf"):
+        minutes = 20.0
+    return minutes * 60, ahead
+
+
 def _resolve_await_state(
     task: Run,
     pending_events: list[dict[str, object]],
     *,
     outbox_dir: Path | None,
     shuttle_home: Path | None = None,
+    cfg: dict | None = None,
+    pacing_status: dict | None = None,
 ) -> dict[str, object]:
     """Evaluate an armed ``await:`` against this tick's pending events.
 
@@ -4539,6 +4580,12 @@ def _resolve_await_state(
             "resolved": True,
             "outcome": armed.get("outcome"),
             "which": armed.get("which"),
+            **({"initiative_default": True} if armed.get("initiative_default") else {}),
+            **({
+                "initiative": True,
+                "initiative_pace_ahead_pts": armed["initiative_pace_ahead_pts"],
+                "initiative_idle_seconds": armed["initiative_idle_seconds"],
+            } if armed.get("initiative") else {}),
         }
 
     now = time.time()
@@ -4579,6 +4626,13 @@ def _resolve_await_state(
             seen_at = _event_created_epoch(ev) or now
             if seen_at > float(task.meta.get("hold_correspondent_at") or 0):
                 task.meta["hold_correspondent_at"] = seen_at
+    initiative = None
+    if armed.get("initiative_default"):
+        initiative = _initiative_timeout(task, cfg, pacing_status, now)
+        requested_deadline = (
+            float(armed.get("idle_since", armed["armed_at"])) + initiative[0]
+            if initiative is not None else None
+        )
     outcome, which = await_verb.evaluate(armed.get("file"), fresh_events)
     if outcome is None and requested_deadline is not None and now >= requested_deadline:
         outcome = "timeout"
@@ -4593,6 +4647,18 @@ def _resolve_await_state(
         "deadline": _iso_utc(requested_deadline) if requested_deadline is not None else None,
         "resolved": outcome is not None,
     }
+    if armed.get("initiative_default"):
+        result["initiative_default"] = True
+    if initiative is not None and outcome in (None, "timeout"):
+        result["timeout_seconds"] = initiative[0]
+        result["initiative_pace_ahead_pts"] = round(initiative[1], 1)
+        result["initiative_idle_seconds"] = max(
+            0, now - float(armed.get("idle_since", armed["armed_at"]))
+        )
+        if outcome == "timeout":
+            armed["initiative"] = result["initiative"] = True
+            armed["initiative_pace_ahead_pts"] = result["initiative_pace_ahead_pts"]
+            armed["initiative_idle_seconds"] = result["initiative_idle_seconds"]
     if outcome is not None:
         armed["resolved"] = True
         armed["outcome"] = outcome
