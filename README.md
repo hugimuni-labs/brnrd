@@ -6,7 +6,7 @@
 <p align="center"><strong>Local agents go brr. From anywhere.</strong></p>
 
 <p align="center">
-  <strong>Keep your Claude Code or Codex agent running 24/7 on a machine that never sleeps</strong> — a Mac mini, a home server, <a href="https://hugimuni-labs.github.io/brnrd/guides/vps-install/">a small VPS</a>.<br>
+  <strong>Keep your Claude Code or Codex agent running 24/7 on a machine you leave on</strong> — the Mac on your desk, a Mac mini, a home server, <a href="https://hugimuni-labs.github.io/brnrd/guides/vps-install/">a small VPS</a>.<br>
   brnrd is the daemon: it keeps the agent alive across reboots, lets you drive it from Telegram, Slack or WhatsApp, remembers everything as files in git, and moves work between your Claude and Codex subscriptions when one hits its window. No API key. It leaves receipts — commits, PRs, a card you can read.
 </p>
 
