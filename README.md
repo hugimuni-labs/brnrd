@@ -3,19 +3,15 @@
 </p>
 
 <h1 align="center">brnrd</h1>
+<p align="center"><strong>Local agents go brr. From anywhere.</strong></p>
 
 <p align="center">
-  <strong>Local agents go brr. From anywhere.</strong><br>
-  A co-maintainer that lives on your machine: survives reboots, remembers who it is, works both your Claude and Codex subscriptions, and leaves receipts — commits, PRs, a card you can read.
+  <strong>Keep your Claude Code or Codex agent running 24/7 on a machine that never sleeps</strong> — a Mac mini, a home server, <a href="https://hugimuni-labs.github.io/brnrd/guides/vps-install/">a small VPS</a>.<br>
+  brnrd is the daemon: it keeps the agent alive across reboots, lets you drive it from Telegram, Slack or WhatsApp, remembers everything as files in git, and moves work between your Claude and Codex subscriptions when one hits its window. No API key. It leaves receipts — commits, PRs, a card you can read.
 </p>
 
 <p align="center">
-  <sub>Needs a machine that's on: a laptop that doesn't sleep, a Mac mini, a home server, or <a href="https://hugimuni-labs.github.io/brnrd/guides/vps-install/">a $5 VPS</a> (about ten minutes to set up).</sub>
-</p>
-
-<p align="center">
-  <strong>1,941 commits on main · 1,360 by the resident · 1,115 merged PRs · since March 2026 · as of 2026-09-06.</strong><br>
-  This repo is built with brnrd, by brnrd. The git log is the demo.
+  <sub>3,125 commits on main · 1,405 by the resident (45 %) · 2,056 PRs · since March 2026 · as of 2026-09-21. This repo is built with brnrd, by brnrd; the git log is the demo.</sub>
 </p>
 
 https://github.com/user-attachments/assets/2357758c-fa35-47ba-92b1-f02d51c338e3
