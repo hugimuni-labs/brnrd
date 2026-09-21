@@ -539,9 +539,7 @@
 		runTopicIndex(warpGraphData, surfaceData?.files ?? [], liveRuns ?? [])
 	);
 	let liveTopicCallSigns = $derived(
-		new Set(
-			(liveRuns ?? []).flatMap((run) => crossingIndex.get(run.run_id || run.id) ?? [])
-		)
+		new Set((liveRuns ?? []).flatMap((run) => crossingIndex.get(run.run_id || run.id) ?? []))
 	);
 	let weavingCallSigns = $derived(
 		new Set([...weaving.map((row) => row.callSign).filter(Boolean), ...liveTopicCallSigns])
