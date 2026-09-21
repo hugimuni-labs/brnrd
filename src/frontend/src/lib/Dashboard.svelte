@@ -118,6 +118,8 @@
 	import { NewsAuthError, fetchNews, type NewsItem } from '$lib/news';
 	import NewsLane from '$lib/NewsLane.svelte';
 	import { BenchAuthError, fetchBench, type BenchFile } from '$lib/bench';
+	import AskList from '$lib/AskList.svelte';
+	import { AsksAuthError, fetchAsks, type AsksResponse } from '$lib/asks';
 	import BenchLane from '$lib/BenchLane.svelte';
 	import { sectionFrameLit } from '$lib/collapse';
 	import { machineTapVerdict } from '$lib/machineDock';
@@ -410,6 +412,8 @@
 
 	let benchFiles = $state<BenchFile[] | null>(null);
 	let benchError = $state<string | null>(null);
+	let asksData = $state<AsksResponse | null>(null);
+	let asksError = $state<string | null>(null);
 
 	let surfaceData = $state<SurfaceResponse | null>(null);
 	let surfaceError = $state<string | null>(null);
@@ -1425,6 +1429,14 @@
 			}
 		}
 		try {
+			asksData = await fetchAsks();
+			asksError = null;
+		} catch (e) {
+			if (!(e instanceof AsksAuthError)) {
+				asksError = e instanceof Error ? e.message : 'asks fetch failed';
+			}
+		}
+		try {
 			const surface = await fetchSurface();
 			surfaceData = surface;
 			surfaceError = null;
@@ -2137,6 +2149,16 @@
 					onAll={allHeddles}
 				/>
 			</div>
+			<!-- The list of asks (design-the-ask.md §Build cut 3): what the user
+			     asked, LRU, lensed by the same heddles as everything below. -->
+			<AskList
+				data={asksData}
+				error={asksError}
+				{now}
+				{liveRunIds}
+				selected={heddleSelection}
+				resolveTopic={(slug) => warpGraphData.topicByAlias.get(slug)?.canonicalId ?? null}
+			/>
 			<!-- Config-change approvals waiting on the account owner — the PR
 			     review half retired 2026-09-01 (GitHub already lists open PRs;
 			     the strip read poorly on a phone) and the authored half moved

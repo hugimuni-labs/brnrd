@@ -225,6 +225,122 @@ export const benchFile = {
 	body: '# The bench\n\nOne markdown file per fold, keyed to a commit.\n'
 };
 
+// The console's list of asks (`GET /v1/dashboard/warp/asks.json`, the home is
+// the list — design-the-ask.md §Build cut 3). LRU order, stale rows last,
+// done apart; `touched_at` is relative to `now` so shots never rot.
+const ago = (hours) => new Date(Date.now() - hours * 3600 * 1000).toISOString();
+export const asks = {
+	stale_after_days: 60,
+	asks: [
+		{
+			id: 'w-201',
+			title: 'The home is the list — one row per ask, done rows below a rule',
+			type: 'action',
+			return: 'in git',
+			stage: 'making',
+			touched_at: ago(0.4),
+			says: [
+				{
+					event: 'evt-1790033328745535000-kmse',
+					at: ago(0.5),
+					excerpt: 'slick ui to inspect the done things'
+				},
+				{ event: 'evt-1790033000000000000-aa01', at: ago(3), excerpt: null }
+			],
+			attempts: ['run-fallback-receipt'],
+			receipt: 'https://github.com/hugimuni-labs/brnrd/pull/2080',
+			topics: ['the-loom'],
+			live: true,
+			stale: false,
+			done: false,
+			after: null
+		},
+		{
+			id: 'w-198',
+			title: 'A live LRU of my asks, tracked across the runs',
+			type: 'decision',
+			return: 'in chat',
+			stage: 'understood',
+			touched_at: ago(9),
+			says: [{ event: 'evt-1789990000000000000-dmnu', at: ago(9), excerpt: null }],
+			attempts: [],
+			receipt: null,
+			topics: ['the-loom'],
+			live: false,
+			stale: false,
+			done: false,
+			after: null
+		},
+		{
+			id: 'w-190',
+			title: 'Book the ferry for the 14th, authenticated browser',
+			type: 'action',
+			return: 'in the world',
+			stage: 'shaped',
+			touched_at: ago(60),
+			says: [],
+			attempts: ['run-260919-1802-6zeq', 'run-260920-0910-abcd'],
+			receipt: null,
+			topics: ['errands'],
+			live: false,
+			stale: false,
+			done: false,
+			after: 'w-188'
+		},
+		{
+			id: 'w-96',
+			title: 'Tell me when the licence renewal window opens',
+			type: 'preparation',
+			return: 'in time',
+			stage: 'delivered',
+			touched_at: ago(24 * 75),
+			says: [{ event: 'evt-1780000000000000000-old1', at: ago(24 * 75), excerpt: null }],
+			attempts: [],
+			receipt: null,
+			topics: ['errands'],
+			live: false,
+			stale: true,
+			done: false,
+			after: null
+		}
+	],
+	done: [
+		{
+			id: 'w-150',
+			title: 'A design page for the ask',
+			type: 'action',
+			return: 'in git',
+			stage: 'accepted',
+			touched_at: ago(30),
+			says: [{ event: 'evt-1789900000000000000-dmnu', at: ago(31), excerpt: null }],
+			attempts: ['run-260921-1447-srsg'],
+			receipt: 'kb/design-the-ask.md',
+			topics: ['the-loom'],
+			live: false,
+			stale: false,
+			done: true,
+			after: null
+		},
+		{
+			id: 'w-140',
+			title: 'Weekly weave-up of merged PRs',
+			type: 'preparation',
+			return: 'in chat',
+			stage: 'accepted',
+			touched_at: ago(50),
+			says: [],
+			attempts: [],
+			receipt: null,
+			topics: ['ops'],
+			live: false,
+			stale: false,
+			done: true,
+			after: null
+		}
+	],
+	goals: [{ id: 'g-3', title: 'Talk to one entity; it sorts the workstreams', touched_at: ago(12) }]
+};
+
 export const ROUTES = {
 	'/v1/dashboard/quota': quota,
 	'/v1/dashboard/runners': runners,
@@ -242,7 +358,8 @@ export const ROUTES = {
 	'/v1/dashboard/config-requests': configRequests,
 	'/v1/dashboard/run-ledger': runLedger,
 	'/v1/dashboard/surface': surface,
-	'/v1/dashboard/bench': bench
+	'/v1/dashboard/bench': bench,
+	'/v1/dashboard/warp/asks.json': asks
 };
 
 // --- Scale-parameterized fixtures (repro/measure-rail.mjs) --------------
