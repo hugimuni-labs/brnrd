@@ -105,7 +105,7 @@ PUBLIC_COMMANDS = (
 # in shape and reasoning: a live-wake verb, not an operator's terminal.
 HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "emotes",
-    "relic", "gate-run", "close-check", "promise", "mood", "do", "notes",
+    "relic", "gate-run", "close-check", "promise", "act", "mood", "do", "notes",
     "await", "cut", "legend", "item", "goal", "queue", "envoy",
     "dominion", "hud", "loom",
 )
@@ -683,6 +683,30 @@ def build_parser() -> argparse.ArgumentParser:
              "--release; rides the row for the units this call releases, "
              "not a statement about every promise of this kind)")
     promise_p.set_defaults(func=cmd_promise)
+
+    # The action ledger's front door — `.actions.jsonl`, the world-facing
+    # acts a seam cannot see (design-the-action-ledger.md §The one verb).
+    # Hidden like `promise`: a live-wake verb. `observed` is deliberately not
+    # offered — it is the daemon's alone.
+    act_p = sub.add_parser("act")
+    act_p.set_defaults(func=cmd_act, act_command=None)
+    act_sub = act_p.add_subparsers(dest="act_command")
+    p = act_sub.add_parser("attempt")
+    p.add_argument("act", help='"<verb> <target>" — written BEFORE the act')
+    p.add_argument("--why", default="", metavar="TEXT")
+    p.add_argument("--idempotent", action="store_true",
+                   help="re-firing the act is harmless")
+    p.add_argument("--after", action="append", default=[], metavar="ID",
+                   help="an act this one follows (repeatable)")
+    p.set_defaults(func=cmd_act)
+    p = act_sub.add_parser("confirm")
+    p.add_argument("id")
+    p.add_argument("--evidence", required=True, metavar="URL|SHA|PATH")
+    p.set_defaults(func=cmd_act)
+    p = act_sub.add_parser("fail")
+    p.add_argument("id")
+    p.add_argument("--why", required=True, metavar="TEXT")
+    p.set_defaults(func=cmd_act)
 
     # The mood seam's front door: collapses the lookup-then-write round trip
     # `brnrd emotes <query>` then a hand-written `.mood` used to leave to the
@@ -2545,6 +2569,82 @@ def cmd_relic_merge(args):
     where = f" in {repo}" if repo else ""
     print(f"[brnrd relic] merge {label}{where}")
     return 0
+
+
+def _act_by(outbox_dir: Path) -> str:
+    """``strand:<run>`` when this run is a strand, else ``seat``.
+
+    Read from the daemon's own ``portal-state.json`` (``strand.is_strand``),
+    the fact the strand hold clause trusts — never from a flag the model types.
+    """
+    import json
+
+    try:
+        portal = json.loads((outbox_dir / "portal-state.json").read_text(encoding="utf-8"))
+        strand = portal.get("strand") if isinstance(portal, dict) else None
+        if isinstance(strand, dict) and strand.get("is_strand"):
+            run_id = (os.environ.get("BRR_RUN_ID") or "").strip()
+            return f"strand:{run_id}" if run_id else "strand"
+    except (OSError, ValueError):
+        pass
+    return "seat"
+
+
+def cmd_act(args):
+    """``brnrd act`` — the action ledger's verb: attempt / confirm / fail / list.
+
+    Writes ``.actions.jsonl`` in this run's outbox. ``attempt`` goes *before*
+    the act and prints only the id; ``confirm`` / ``fail`` resolve it. Never
+    writes ``observed`` (the daemon's alone).
+    """
+    import sys
+
+    from . import actions
+
+    def _die(msg: str) -> int:
+        print(f"[brnrd act] {msg}", file=sys.stderr)
+        return 1
+
+    outbox_dir = _wake_outbox_dir()
+    if outbox_dir is None or not Path(outbox_dir).is_dir():
+        return _die("no run outbox in this environment — nothing written.")
+    sub = getattr(args, "act_command", None)
+
+    if sub is None:
+        latest = actions.read(outbox_dir)
+        rows = sorted(latest.values(), key=lambda r: str(r.get("ts") or ""), reverse=True)
+        # Same-second rows keep file order newest-first (dict order = file order).
+        order = {k: i for i, k in enumerate(latest)}
+        rows.sort(key=lambda r: (str(r.get("ts") or ""), order.get(str(r["id"]), 0)), reverse=True)
+        for row in rows:
+            print(" · ".join([
+                str(row.get("state") or ""), str(row.get("verb") or ""),
+                str(row.get("target") or "-"), str(row.get("evidence") or "-"),
+            ]))
+        return 0
+
+    if sub == "attempt":
+        parts = str(args.act or "").strip().split(None, 1)
+        if not parts:
+            return _die('want "<verb> <target>" — nothing written.')
+        act_id = actions.append(
+            outbox_dir, verb=parts[0], target=parts[1] if len(parts) > 1 else "",
+            state="attempted", by=_act_by(Path(outbox_dir)),
+            why=str(args.why or ""), idempotent=bool(args.idempotent),
+            after=list(args.after or []) or None,
+        )
+        if not act_id:
+            return _die("could not write the row — nothing recorded.")
+        print(act_id)
+        return 0
+
+    if str(args.id) not in actions.read(outbox_dir):
+        return _die(f"unknown act id {args.id!r}.")
+    if sub == "confirm":
+        ok = actions.transition(outbox_dir, args.id, "confirmed", evidence=str(args.evidence))
+    else:  # fail
+        ok = actions.transition(outbox_dir, args.id, "failed", why=str(args.why))
+    return 0 if ok else _die("could not write the row — nothing recorded.")
 
 
 def cmd_promise(args):

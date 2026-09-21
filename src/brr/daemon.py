@@ -13342,6 +13342,27 @@ def _write_dispatch_edge(path: Path, child_run_id: str) -> Path | None:
     return path
 
 
+def _stamp_unresolved_acts(outbox_dir: Path | None, run_id: str = "") -> int:
+    """Closeout: every act still ``attempted`` becomes ``ambiguous``.
+
+    A POST whose reply was never read is exactly that (design-the-action-
+    ledger.md §The row). Runs where ``relics.collect`` does — before the run
+    ledger and the control-file capture — so the captured file carries the
+    stamp. Never raises; returns how many rows it stamped.
+    """
+    stamped = 0
+    try:
+        for row in actions.open_attempted(outbox_dir):
+            if actions.transition(
+                outbox_dir, str(row["id"]), "ambiguous",
+                evidence="run ended with the act unresolved",
+            ):
+                stamped += 1
+    except Exception as exc:  # noqa: BLE001 - a receipt never blocks the closeout
+        print(f"[brnrd] run {run_id}: ambiguous-act stamp failed: {exc}")
+    return stamped
+
+
 def _persist_run_state_doc(
     account_context: account.AccountContext | None,
     task: Run,
@@ -17438,6 +17459,7 @@ def _run_worker_and_finalize(
             outbox_dir=outbox_path,
             terminal_reply=task.terminal_reply,
         )
+        _stamp_unresolved_acts(outbox_path, task.id)
         # #1776: relics.scope_roots (called inside append_closed_run /
         # _weld_capture / _persist_run_state_doc below) resolves the tree
         # each actually reads — this run's own worktree/clone while it's
