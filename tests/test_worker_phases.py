@@ -186,108 +186,29 @@ def test_boundary_fallback_swaps_the_lane(tmp_path, monkeypatch):
     assert nxt.attempted_runners == ["codex"]
 
 
-def test_boundary_core_refusal_retries_once_as_a_fresh_session(tmp_path, monkeypatch):
-    """#2076 rung 1: a Core-refusal failure is not `retry_reason()`-retryable
-    by the ordinary mechanism, so it must be intercepted and retried anyway —
-    once, on the same Shell+Core, tagged so dispatch never confuses it with
-    an artifact/transport retry."""
+@pytest.mark.parametrize("stderr", ["", "connection reset by peer"])
+def test_boundary_core_refusal_is_terminal(tmp_path, monkeypatch, stderr):
     def invoke(_ctx, runner_name, invocation, _cfg, *, trace=False):
         return _result(
-            invocation, runner_name, code=1,
-            stdout="API Error: Fable 5.1's safeguards flagged this message. "
-                   "Details: [reasoning_extraction]",
+            invocation, runner_name, code=1, stderr=stderr,
+            stdout="API Error: safeguards flagged this message [reasoning_extraction]",
         )
 
-    p = _prepared(tmp_path, monkeypatch, invoke, max_retries=0)
+    def fallback(*args, **kwargs):
+        pytest.fail("a safeguards refusal must not switch providers")
+
+    p = _prepared(tmp_path, monkeypatch, invoke, max_retries=2, fallback=fallback)
     reached = _to_boundary(p, Attempt(n=1, lane=p.lane))
-
-    assert reached.kind == "retry"
+    assert reached.kind == "exhausted"
+    assert reached.next_attempt is None
     assert reached.attempt.last_failure["failure_kind"] == "core_refusal"
-    nxt = reached.next_attempt
-    assert nxt is not None and nxt.n == 2
-    assert nxt.retries_used == 1
-    assert nxt.prompt_mode == "core_refusal_retry"
-    assert nxt.lane.name == p.lane.name  # same Shell+Core
-    assert p.task.meta["core_refusal_retried_at"] > 0
-
-
-def test_boundary_core_refusal_reroutes_after_a_second_hit_in_the_window(tmp_path, monkeypatch):
-    """#2076 rung 2: a second Core refusal inside the ~10-minute window is
-    not retried again — it falls through to the ordinary
-    AUTO_FALLBACK_FAILURES reroute, now that `core_refusal` is a member."""
-    def invoke(_ctx, runner_name, invocation, _cfg, *, trace=False):
-        return _result(
-            invocation, runner_name, code=1,
-            stdout="API Error: Fable 5.1's safeguards flagged this message. "
-                   "Details: [reasoning_extraction]",
-        )
-
-    p = _prepared(
-        tmp_path, monkeypatch, invoke, max_retries=0,
-        fallback=lambda _repo, _cur, kind, *, tried=(), **_kw: (
-            daemon.runner.runner_profile("claude", _repo)
-            if kind == "core_refusal" else None
-        ),
-    )
-    first = _to_boundary(p, Attempt(n=1, lane=p.lane))
-    assert first.kind == "retry"
-
-    second = _to_boundary(p, first.next_attempt)
-
-    assert second.kind == "fallback"
-    assert second.attempt.last_failure["failure_kind"] == "core_refusal"
-    nxt = second.next_attempt
-    assert nxt is not None and nxt.lane.name == "claude" and nxt.lane is not p.lane
-    # The ladder's own stamp is consumed on the "no" verdict, not left
-    # dangling to deny a third refusal its own retry after a fresh reroute.
-    assert "core_refusal_retried_at" not in p.task.meta
-
-
-def test_boundary_core_refusal_gives_up_clean_when_no_shell_has_quota(tmp_path, monkeypatch):
-    """#2076 rung 3: no reroute candidate ⇒ give up — and the terminal
-    reply never carries the vendor's own refusal text."""
-    def invoke(_ctx, runner_name, invocation, _cfg, *, trace=False):
-        return _result(
-            invocation, runner_name, code=1,
-            stdout="API Error: Fable 5.1's safeguards flagged this message. "
-                   "Details: [reasoning_extraction]",
-        )
-
-    p = _prepared(tmp_path, monkeypatch, invoke, max_retries=0)  # fallback=None
-    first = _to_boundary(p, Attempt(n=1, lane=p.lane))
-    second = _to_boundary(p, first.next_attempt)
-
-    assert second.kind == "exhausted"
-    ended = worker.finalize(p, second)
+    ended = worker.finalize(p, reached)
     assert ended.stage == "failed"
-
     from brr import protocol
-
     response = protocol.read_response(p.responses_dir, p.eid) or ""
     assert "safeguards" in response
     assert "reasoning_extraction" not in response
     assert "API Error" not in response
-
-
-def test_core_refusal_should_retry_fresh_resets_after_the_window(tmp_path, monkeypatch):
-    """Direct unit coverage of the ladder's own clock, independent of the
-    boundary plumbing: within the window it denies a second retry; past it,
-    the ladder starts over."""
-    write_repo_scaffold(tmp_path)
-    event = make_event(tmp_path, eid="evt-ladder")
-    task = Run.from_event(event, {})
-
-    assert daemon._core_refusal_should_retry_fresh(task, now=1000.0) is True
-    assert task.meta["core_refusal_retried_at"] == 1000.0
-    # Inside the ~10-minute window: no second retry, and the stamp clears.
-    assert daemon._core_refusal_should_retry_fresh(task, now=1500.0) is False
-    assert "core_refusal_retried_at" not in task.meta
-    # A fresh spree after a clean reroute gets its own retry again.
-    assert daemon._core_refusal_should_retry_fresh(task, now=1600.0) is True
-    # Past the window: treated as a new spree, not a denied second hit.
-    assert daemon._core_refusal_should_retry_fresh(
-        task, now=1600.0 + daemon.CORE_REFUSAL_RETRY_WINDOW_SECONDS + 1,
-    ) is True
 
 
 def test_boundary_exhausted_then_finalize_failed(tmp_path, monkeypatch):

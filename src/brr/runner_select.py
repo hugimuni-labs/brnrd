@@ -55,12 +55,6 @@ AUTO_FALLBACK_FAILURES = frozenset(
         runner_failures.QUOTA_EXHAUSTED,
         runner_failures.AUTH_ERROR,
         runner_failures.PROVIDER_ERROR,
-        # #2076: only ever reached on a *second* Core-refusal within the
-        # ladder's ~10-minute window (`daemon._core_refusal_should_retry_fresh`
-        # intercepts the first one for a same-Shell fresh-session retry
-        # instead) — at that point this is exactly an operational failure
-        # that wants a different domain, same as the three above.
-        runner_failures.CORE_REFUSAL,
     }
 )
 
