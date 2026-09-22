@@ -26,7 +26,9 @@ from brr.worker import (
     Streamed,
 )
 
-from _helpers import StubWorktreeEnv, make_event, succeed_invoke, write_repo_scaffold
+from _helpers import (
+    StubWorktreeEnv, make_event, stub_daemon_prompt, succeed_invoke, write_repo_scaffold,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -48,8 +50,8 @@ def _wire(monkeypatch, invoke=None, *, fallback=None):
         daemon.runner, "fallback_runner_profile", fallback or (lambda *_a, **_k: None),
     )
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts, "build_daemon_prompt", lambda task, eid, rp, _root, **kw: "PROMPT",
+    stub_daemon_prompt(
+        monkeypatch, lambda task, eid, rp, _root, **kw: "PROMPT",
     )
     monkeypatch.setattr(
         daemon.envs, "get_env",
