@@ -289,6 +289,11 @@ export const asks = {
 		},
 		{
 			id: 'w-96',
+			// His callsign steer (the-panel-third-pass: "not w-45 but
+			// w-[45|anltcs]") — `sign` is the one row in this fixture that
+			// carries it, so the id cell and the accept/reroute chips both
+			// have something real to render for the shots.
+			sign: 'anltcs',
 			title: 'Tell me when the licence renewal window opens',
 			type: 'preparation',
 			return: 'in time',
@@ -304,6 +309,9 @@ export const asks = {
 			after: null
 		}
 	],
+	// Five rows (the-panel-third-pass: done moves to the top, its newest
+	// three visible by default, a `▸ 2 done` toggle for the rest) —
+	// newest-touch first, matching `asks.py::build_asks`'s own sort.
 	done: [
 		{
 			id: 'w-150',
@@ -332,6 +340,54 @@ export const asks = {
 			attempts: [],
 			receipt: null,
 			topics: ['ops'],
+			live: false,
+			stale: false,
+			done: true,
+			after: null
+		},
+		{
+			id: 'w-131',
+			title: 'The warp panel, per ask — four buckets in his order',
+			type: 'action',
+			return: 'in git',
+			stage: 'accepted',
+			touched_at: ago(70),
+			says: [],
+			attempts: ['run-260922-1145-nw37'],
+			receipt: 'https://github.com/hugimuni-labs/brnrd/pull/2088',
+			topics: ['the-loom'],
+			live: false,
+			stale: false,
+			done: true,
+			after: null
+		},
+		{
+			id: 'w-120',
+			title: 'The ask panel, second pass — four distinct blocks, lit',
+			type: 'action',
+			return: 'in git',
+			stage: 'accepted',
+			touched_at: ago(90),
+			says: [],
+			attempts: ['run-260922-1702-w4qm'],
+			receipt: 'https://github.com/hugimuni-labs/brnrd/pull/2089',
+			topics: ['the-loom'],
+			live: false,
+			stale: false,
+			done: true,
+			after: null
+		},
+		{
+			id: 'w-110',
+			title: 'Rung 2 — the asks lane, `--item` binds a reply to a warp item',
+			type: 'action',
+			return: 'in git',
+			stage: 'accepted',
+			touched_at: ago(120),
+			says: [],
+			attempts: [],
+			receipt: 'kb/design-the-water-line.md',
+			topics: ['the-loom'],
 			live: false,
 			stale: false,
 			done: true,

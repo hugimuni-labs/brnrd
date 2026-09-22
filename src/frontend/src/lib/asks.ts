@@ -11,6 +11,11 @@ export interface AskSay {
 
 export interface AskRow {
 	id: string;
+	/** A short memorable handle a sibling PR may attach to the row
+	 *  (design-the-ask.md, his "not w-45 but w-[45|anltcs]") — read when
+	 *  present, never synthesized here; the field may simply not exist yet
+	 *  on a given payload. */
+	sign?: string | null;
 	title: string;
 	type: string | null;
 	return: string | null;
@@ -68,12 +73,13 @@ export function splitAlive(rows: AskRow[]): { alive: AskRow[]; stale: AskRow[] }
 	return { alive: rows.filter((row) => !row.stale), stale: rows.filter((row) => row.stale) };
 }
 
-/** The four buckets the console renders in place of the warp's item graph
+/** The three open buckets the console renders alongside the done bucket
  *  (design-the-ask.md §Done, reopened, linked, "the console = the warp
- *  panel, per ask" — his order): **in hand** (a strand or the seat is
- *  working it right now) · **yours to judge** (delivered, not yet accepted)
- *  · **unaddressed** (not yet even shaped) · done/accepted rides apart as
- *  `data.done` already (see `AskList.svelte`, unchanged). `rows` is expected
+ *  panel, per ask"): **in hand** (a strand or the seat is working it right
+ *  now) · **yours to judge** (delivered, not yet accepted) · **unaddressed**
+ *  (not yet even shaped) · done/accepted rides apart as `data.done` (see
+ *  `AskList.svelte`, which renders it first, per his third-pass steer: "the
+ *  done block should be collapsible but on top"). `rows` is expected
  *  pre-sorted LRU (the server already does this — `asks.py::build_asks`),
  *  and filtering it into buckets preserves that order within each one. */
 export interface AskBuckets {
@@ -97,6 +103,28 @@ export function bucketAsks(rows: AskRow[]): AskBuckets {
 		// three — never silently duplicated into one by a fallback guess.
 	}
 	return { inHand, toJudge, unaddressed };
+}
+
+/** The id cell's display text — `w-45` normally, `w-45 · anltcs` once a row
+ *  carries a `sign` (design-the-ask.md, his "not w-45 but w-[45|anltcs]"):
+ *  read when present, never invented when it isn't. */
+export function askLabel(row: AskRow): string {
+	return row.sign ? `${row.id} · ${row.sign}` : row.id;
+}
+
+/** The token the accept/reroute chips address — the sign when the row
+ *  carries one (shorter, easier to say back), else the bare id. */
+export function askHandle(row: AskRow): string {
+	return row.sign || row.id;
+}
+
+/** The done bucket's default window (his "on top, showing a few last
+ *  items"): the newest `limit` rows visible already; the rest counted for
+ *  the toggle. Rows arrive newest-first from the server
+ *  (`asks.py::build_asks` sorts `done` descending) — this only slices, it
+ *  never re-sorts. */
+export function doneWindow(rows: AskRow[], limit = 3): { visible: AskRow[]; restCount: number } {
+	return { visible: rows.slice(0, limit), restCount: Math.max(0, rows.length - limit) };
 }
 
 /** A row is lit by the heddle filter when it wears a lit topic; a row with no
