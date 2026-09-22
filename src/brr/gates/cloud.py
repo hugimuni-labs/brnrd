@@ -1219,6 +1219,45 @@ def _reconcile_grown_attachments(
     return bool(added)
 
 
+def _apply_ask_directive(brr_dir: Path, event_id: str, body: str) -> None:
+    """The two words (design-the-ask.md §Build cut, step 1): an inbound
+    message whose first line reads ``accept w-N`` / ``reroute w-N: <why>``
+    (or the callsign form) is parsed and applied to the warp item right
+    here, at ingestion — before any run wakes on this event, so the row
+    moves even when nobody is awake to fold it in. The event still reaches
+    the resident as a normal pending event afterward; this is a side
+    effect on the item file, not a substitute for that reply.
+
+    Best-effort, never raises: an unconfigured/disabled account home, an
+    unreadable item file, or any other surprise here must not cost the
+    event its own ingestion, which has already succeeded by the time this
+    runs. An unresolved target (unknown ``w-N``, unrecognized callsign) is
+    the one case the design calls out by name — "unknown ⇒ no-op + a
+    notice" — surfaced the same way this loop already surfaces an ingestion
+    oddity nobody else is watching for (#1154's "loud, not silent"):
+    ``print`` to the daemon's own log, since no run — and so no run outbox
+    — exists yet for this event to carry a `portal-state.json` notice on.
+    """
+    from .. import account as account_mod
+    from .. import asks as asks_mod
+    from .. import items as items_mod
+
+    try:
+        ctx = account_mod.resolve_context(brr_dir.parent, create=False)
+        warp_root = items_mod.warp_dir(ctx)
+        result = asks_mod.apply_inbound_directive(warp_root, event_id, body)
+    except Exception as exc:  # best-effort: ingestion already succeeded
+        print(f"[brnrd:cloud] accept/reroute parse failed for {event_id}: {exc}")
+        return
+    if result is None:
+        return  # an ordinary message — the overwhelmingly common case
+    if result.get("error"):
+        print(
+            f"[brnrd:cloud] {result['verb']} {result['target']!r}: {result['error']} "
+            f"— event {event_id} still reaches the resident normally"
+        )
+
+
 def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     state = _load_state(brr_dir)
     since = state.get("since", 0)
@@ -1272,15 +1311,17 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
                     f"this daemon could not read — {unrecognised}"
                 )
             origin = _origin_meta(ev.get("reply_to") or {})
-            protocol.create_event(
+            body_text = _annotate_failures(ev.get("body") or "", failed, unrecognised)
+            event_path = protocol.create_event(
                 inbox_dir,
                 source="cloud",
-                body=_annotate_failures(ev.get("body") or "", failed, unrecognised),
+                body=body_text,
                 attachment_files=attachment_files or None,
                 cloud_event_id=ev["event_id"],
                 repo_label=ev.get("repo_label") or "",
                 **origin,
             )
+            _apply_ask_directive(brr_dir, event_path.stem, body_text)
             notice = _silence_notice_for_event(
                 brr_dir, state, {"source": "cloud", **origin}
             )
