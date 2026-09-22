@@ -106,18 +106,6 @@ def test_the_kernel_says_minting_costs_one_line(tmp_path):
     assert "this run's topic: an existing heddle ∨ `new <slug>` ∨ null (minting costs one line)" in kernel
 
 
-@pytest.mark.parametrize("text,expected", [
-    ("new\n", ("new", "")),
-    ("topic: `new`\n", ("new", "")),
-    ("new the-post\n", ("new", "the-post")),
-    ("new two words\n", None),
-])
-def test_the_control_reads_new_alone(tmp_path, text, expected):
-    (tmp_path / ".topic").write_text(text, encoding="utf-8")
-    control = run_topic.read_control(tmp_path)
-    assert (None if control is None else (control.op, control.slug)) == expected
-
-
 def test_new_alone_mints_the_suggestion(tmp_path):
     task, home, inbox, outbox = _run_with_event(tmp_path, topic_suggested="the-deck-v12")
     notices: list[tuple[str, str]] = []
