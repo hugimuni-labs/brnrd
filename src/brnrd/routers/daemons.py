@@ -545,13 +545,32 @@ def put_surface(payload: schemas.SurfaceReport, principal: Principal = Depends(r
         )
         accepted.append(item)
 
+    # Files have account-wide slice consent; each base names its own repo.
+    bases = publish_scope.permitted_rows(
+        db,
+        [base.model_copy(update={"repo_label": label}) for label, base in payload.bases.items()],
+        account_id=principal.account_id,
+        publisher_repo_id=principal.repo_id,
+        lane="corpus",
+    )
+
     now = datetime.now(timezone.utc)
     account = db.get(Account, principal.account_id)
     if account is not None:
         account.surface_json = json.dumps(files, separators=(",", ":"))
         account.surface_updated_at = now
+        account.bases_json = json.dumps(
+            {
+                base.repo_label: base.model_dump(exclude={"repo_label"})
+                for base in bases
+                if base.repo_label
+            },
+            separators=(",", ":"),
+        )
     db.commit()
-    return schemas.SurfaceOut(files=accepted, surface_updated_at=now)
+    return schemas.SurfaceOut(
+        files=accepted, bases={base.repo_label: base for base in bases}, surface_updated_at=now,
+    )
 
 
 @router.put("/quota", response_model=schemas.QuotaOut)

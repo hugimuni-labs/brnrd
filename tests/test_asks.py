@@ -134,3 +134,66 @@ def test_list_asks_folds_in_runs_dir_and_outbox_bindings(tmp_path):
     assert row["id"] == "w-1"
     assert {s["event"] for s in row["says"]} == {"evt-1", "evt-2"}
     assert row["touched_at"] is not None  # no git repo here — the binding files' own mtime carries it
+
+
+_GITHUB_BASES = {
+    "gurio/brr": {"forge": "https://github.com/gurio/brr", "forge_kind": "github", "kb": "https://github.com/gurio/brr-kb/blob/main/knowledge/"},
+}
+
+
+def test_resolve_receipts_reads_both_return_and_receipt_rows_deduped():
+    row = {"return": "#123 in git", "receipt": "#123 design-the-ask.md"}
+    receipts = asks.resolve_receipts(row, _GITHUB_BASES)
+    assert [r["ref"] for r in receipts] == ["#123", "design-the-ask.md"]
+
+
+def test_resolve_receipts_pr_number_resolves_against_the_one_connected_repo():
+    receipts = asks.resolve_receipts({"receipt": "#123"}, _GITHUB_BASES)
+    assert receipts == [{"ref": "#123", "url": "https://github.com/gurio/brr/pull/123"}]
+
+
+def test_resolve_receipts_md_name_resolves_against_the_kb_base():
+    receipts = asks.resolve_receipts({"receipt": "design-the-ask.md"}, _GITHUB_BASES)
+    assert receipts == [
+        {"ref": "design-the-ask.md", "url": "https://github.com/gurio/brr-kb/blob/main/knowledge/design-the-ask.md"},
+    ]
+
+
+def test_resolve_receipts_warp_item_ref_has_no_url_yet():
+    """No dashboard page resolves one warp item to a URL today — same
+    discipline `_enrich_ask_says` already applies to a say's own `url`."""
+    receipts = asks.resolve_receipts({"receipt": "w-7"}, _GITHUB_BASES)
+    assert receipts == [{"ref": "w-7", "url": None}]
+
+
+def test_resolve_receipts_prose_in_return_is_not_a_receipt():
+    """`return:` usually names the return's *kind* (design-the-ask.md's "in
+    git"/"in the world"/… table), not a reference — a prose word there must
+    not masquerade as a receipt."""
+    receipts = asks.resolve_receipts({"return": "in the world", "receipt": "#5"}, _GITHUB_BASES)
+    assert [r["ref"] for r in receipts] == ["#5"]
+
+
+def test_resolve_receipts_unknown_forge_kind_never_guesses_github():
+    """#852's lesson: an unresolved forge kind must not default to GitHub."""
+    bases = {"g/r": {"forge": "https://internal.example/g/r", "forge_kind": None, "kb": None}}
+    receipts = asks.resolve_receipts({"receipt": "#5"}, bases)
+    assert receipts == [{"ref": "#5", "url": None}]
+
+
+def test_resolve_receipts_multi_repo_account_does_not_guess_which_repo():
+    """A bare `#123` carries no repo of its own — ambiguous across more than
+    one connected repo, so it resolves to no url rather than a plausible
+    wrong one (the same ambiguity the-panel-third-pass.md's `runRepoLabel`
+    already declined to guess across)."""
+    bases = {
+        "a/x": {"forge": "https://github.com/a/x", "forge_kind": "github"},
+        "b/y": {"forge": "https://github.com/b/y", "forge_kind": "github"},
+    }
+    receipts = asks.resolve_receipts({"receipt": "#9"}, bases)
+    assert receipts == [{"ref": "#9", "url": None}]
+
+
+def test_resolve_receipts_empty_row_and_no_bases():
+    assert asks.resolve_receipts({}, {}) == []
+    assert asks.resolve_receipts({"return": "in chat"}, {}) == []

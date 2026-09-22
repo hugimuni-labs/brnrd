@@ -6,7 +6,7 @@ import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
@@ -44,7 +44,7 @@ from brnrd.models import (
     TgPairCode,
 )
 from brnrd import schemas
-from brr.asks import asks_from_files
+from brr.asks import asks_from_files, resolve_receipts
 
 from ._session import (
     _account_id,
@@ -1925,6 +1925,21 @@ def _enrich_ask_says(payload: dict[str, Any], db: Session, repo_ids: set[str]) -
                     say["excerpt"] = _say_excerpt(body)
 
 
+def _account_bases(account: Account) -> dict[str, Any]:
+    """Malformed cached bases degrade to an empty mapping."""
+    try:
+        bases = json.loads(account.bases_json or "{}")
+    except ValueError:
+        return {}
+    return bases if isinstance(bases, dict) else {}
+
+
+def _enrich_ask_receipts(payload: dict[str, Any], bases: Mapping[str, Any]) -> None:
+    """Resolve receipt references on both open and completed asks."""
+    for row in (*payload.get("asks", []), *payload.get("done", [])):
+        row["receipts"] = resolve_receipts(row, bases)
+
+
 @router.get("/v1/dashboard/warp/asks.json")
 def dashboard_warp_asks_api(request: Request, db: Session = Depends(get_db)) -> Response:
     """The console's list of asks — the warp read as the user's LRU.
@@ -1950,6 +1965,9 @@ def dashboard_warp_asks_api(request: Request, db: Session = Depends(get_db)) -> 
         payload = asks_from_files(files if isinstance(files, list) else [])
         repo_ids = {repo.id for repo in _repos(db, account_id)}
         _enrich_ask_says(payload, db, repo_ids)
+        bases = _account_bases(account)
+        payload["bases"] = bases
+        _enrich_ask_receipts(payload, bases)
         _ASKS_CACHE[str(account_id)] = (etag, time.monotonic(), payload)
     return JSONResponse(payload, headers={"Cache-Control": "private, max-age=30"})
 
