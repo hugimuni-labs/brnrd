@@ -379,12 +379,19 @@ class SurfaceFileIn(BaseModel):
     places it in the authored surface, the knowledge base, or the durable run
     nodes; ``truncated`` marks a mirror capped for payload size (the file
     still appears in the listing — see the cloud gate's corpus publisher).
+    ``committed_at`` is the file's last git commit time in the daemon's own
+    surface repo (uncommitted ⇒ its mtime), stamped by the publisher so the
+    hosted asks reader can order by real touch time the same way the disk
+    door (``brr.asks.list_asks``) already does (design-the-ask.md §Done,
+    reopened, linked — "the hosted order needs the publisher to stamp each
+    surface file's last commit time").
     """
 
     path: str = Field(min_length=1, max_length=512)
     markdown: str = Field(default="", max_length=300_000)
     layer: str = Field(default="authored", max_length=32)
     truncated: bool = False
+    committed_at: str | None = Field(default=None, max_length=40)
 
 
 class SurfaceReport(BaseModel):

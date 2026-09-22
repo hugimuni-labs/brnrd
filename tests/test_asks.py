@@ -71,6 +71,34 @@ def test_non_item_files_are_skipped():
     assert payload["asks"] == [] and payload["done"] == []
 
 
+def test_asks_from_files_orders_by_committed_at_the_publisher_stamps():
+    """design-the-ask.md §Done, reopened, linked: "the hosted order needs the
+    publisher to stamp each surface file's last commit time" — the reader's
+    half of that contract. `w-1` has no `touched:`/says/attempts/done row at
+    all, so without `committed_at` it would read as unknown and sink; the
+    publisher's stamp alone should be enough to put it on top.
+    """
+    payload = asks.asks_from_files(
+        [
+            {"path": "surface/warp/w-1.md", "markdown": "# New\n", "committed_at": "2026-09-21T12:00:00Z"},
+            {"path": "surface/warp/w-2.md", "markdown": "# Old\n\ntouched: 2026-09-01\n"},
+        ],
+        now=NOW,
+    )
+    assert [r["id"] for r in payload["asks"]] == ["w-1", "w-2"]
+    assert payload["asks"][0]["touched_at"].startswith("2026-09-21T12:00")
+
+
+def test_asks_from_files_ignores_committed_at_off_the_warp():
+    """A stray ``committed_at`` on a non-warp/non-.md path must not raise or
+    get folded in under a bogus item id."""
+    payload = asks.asks_from_files(
+        [{"path": "knowledge/repos/x/foo.md", "markdown": "# K", "committed_at": "2026-09-21T12:00:00Z"}],
+        now=NOW,
+    )
+    assert payload["asks"] == [] and payload["done"] == []
+
+
 def test_list_asks_reads_disk_with_git_touch_times(tmp_path):
     surface = tmp_path / "surface"
     (surface / "warp").mkdir(parents=True)

@@ -304,13 +304,29 @@ def asks_from_files(
     stale_after_days: int = DEFAULT_STALE_AFTER_DAYS,
     now: _dt.datetime | None = None,
 ) -> dict[str, Any]:
-    """The hosted door: the corpus mirror's ``{path, markdown}`` file list."""
-    pairs = [
-        (str(f.get("path", "")), str(f.get("markdown", "")))
-        for f in surface_files
-        if isinstance(f, Mapping)
-    ]
-    return build_asks(pairs, stale_after_days=stale_after_days, now=now)
+    """The hosted door: the corpus mirror's ``{path, markdown, committed_at}``
+    file list.
+
+    ``committed_at`` (the publisher's git-time stamp, ``cloud_publisher.py``
+    §``_corpus_payload``) becomes the same ``touched`` rung :func:`list_asks`
+    already feeds :func:`build_asks` from its own ``git log`` — the one
+    difference between the two doors is *who* runs git, not what the row
+    means, so the hosted order matches ``brnrd asks`` on disk.
+    """
+    pairs: list[tuple[str, str]] = []
+    touched: dict[str, str] = {}
+    for f in surface_files:
+        if not isinstance(f, Mapping):
+            continue
+        path = str(f.get("path", ""))
+        pairs.append((path, str(f.get("markdown", ""))))
+        committed_at = f.get("committed_at")
+        if not committed_at or not path.startswith(_WARP_PREFIX) or not path.endswith(".md"):
+            continue
+        item_id = path[len(_WARP_PREFIX):-3]
+        if _ITEM_RE.fullmatch(item_id):
+            touched[item_id] = str(committed_at)
+    return build_asks(pairs, touched=touched, stale_after_days=stale_after_days, now=now)
 
 
 def _git_touch_times(target_dir: Path) -> dict[str, str]:

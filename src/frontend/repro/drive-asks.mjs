@@ -1,8 +1,12 @@
-// Drives the home's list of asks (design-the-ask.md §Build cut 3: "the home
-// *is* the list"). `--tag before` captures the home on a tree without the
-// list (shots only); `--tag after` also asserts behaviour first, screenshots
-// second — a shot that never exercised the component is a green tick meaning
-// nothing looked (the 2026-08-26 room lesson).
+// Drives the home's list of asks, in place of the warp's item graph
+// (design-the-ask.md §Done, reopened, linked, "the console = the warp panel,
+// per ask"). `--tag before` captures the home on a tree without the four-
+// bucket list (shots only); `--tag after` also asserts behaviour first,
+// screenshots second — a shot that never exercised the component is a green
+// tick meaning nothing looked (the 2026-08-26 room lesson). The fixture
+// (`fixtures.mjs::asks`) already carries one row per bucket: w-201 (stage
+// making, a live strand) → in hand; w-96 (stage delivered, stale) → yours to
+// judge; w-198/w-190 (understood/shaped) → unaddressed; w-150/w-140 → done.
 //
 // Usage: node repro/drive-asks.mjs [--out DIR] [--port N] [--tag before|after]
 import { spawn } from 'node:child_process';
@@ -97,18 +101,53 @@ async function main() {
 			if (TAG === 'after') {
 				const list = page.locator('[aria-label="your asks"]');
 				await list.waitFor({ state: 'visible', timeout: 15000 });
+
+				// Goals stay goals, above the buckets.
+				const goalsLine = list.locator('[data-goals]');
+				assert.ok(
+					(await goalsLine.innerText()).includes('Talk to one entity'),
+					'the one goal renders above the buckets'
+				);
+
+				// The four buckets, his order, each headed and counted — replacing
+				// the item-number graph that used to sit here.
+				const inHand = list.locator('[data-bucket-heading="in-hand"]');
+				const toJudge = list.locator('[data-bucket-heading="to-judge"]');
+				const unaddressed = list.locator('[data-bucket-heading="unaddressed"]');
+				const done = list.locator('[data-bucket-heading="done"]');
+				// `uppercase` is a CSS transform (`text-transform`), and Playwright's
+				// `innerText` reflects rendered casing (unlike `textContent`) — lower
+				// both sides rather than pin a rendering detail these headings don't
+				// own semantically.
+				const lower = async (locator) => (await locator.innerText()).toLowerCase();
+				assert.ok((await lower(inHand)).includes('in hand · 1'), 'one row in hand');
+				assert.ok((await lower(toJudge)).includes('yours to judge · 1'), 'one row to judge');
+				assert.ok((await lower(unaddressed)).includes('unaddressed · 2'), 'two unaddressed rows');
+				assert.ok((await lower(done)).includes('done & accepted · 2'), 'two done rows');
+
 				const rows = list.locator('[data-ask]');
-				assert.equal(await rows.count(), 4, 'three alive rows + one stale, done collapsed');
+				assert.equal(await rows.count(), 4, 'in hand + to judge + unaddressed, done collapsed');
 				const first = (await rows.first().innerText()).replace(/\s+/g, ' ');
-				assert.ok(first.includes('w-201'), `LRU: newest touch first (${first})`);
-				assert.ok(first.includes('in git'), `row wears its return (${first})`);
-				assert.ok(first.includes('2'), `row wears its says count (${first})`);
+				assert.ok(first.includes('w-201'), `in hand leads (${first})`);
+				assert.ok(first.includes('▷ run-fallback-receipt'), `wears its live strand (${first})`);
 				assert.ok(await rows.first().locator('[data-drone]').count(), 'live drone mark');
-				assert.equal(await list.locator('[data-stale-rule]').count(), 1, 'a rule above stale rows');
-				assert.equal(await list.locator('[data-ask-stale]').count(), 1, 'one stale row');
+
+				// The stale "yours to judge" row: dimmed in place, not sunk under a
+				// rule — and it carries its receipt-free accept/reroute hints.
+				const w96 = list.locator('[data-ask="w-96"]');
+				assert.equal(await w96.getAttribute('data-ask-stale'), '', 'w-96 stays marked stale');
+				const w96Li = w96.locator('xpath=..');
+				assert.ok(
+					(await w96Li.getAttribute('class')).includes('opacity-60'),
+					'a stale row dims in its own bucket, not below a rule'
+				);
+				const hints = w96Li.locator('[data-to-judge-hints]');
+				const hintsText = await hints.innerText();
+				assert.ok(hintsText.includes('accept w-96'), `copyable accept hint (${hintsText})`);
+				assert.ok(hintsText.includes('reroute w-96'), `copyable reroute hint (${hintsText})`);
+
 				// done is collapsed to a count with a toggle
-				const toggle = list.getByRole('button', { name: /\d+ done$/ });
-				assert.ok(/2/.test(await toggle.innerText()), 'done toggle carries its count');
+				const toggle = list.getByRole('button', { name: /done & accepted/i });
 				assert.equal(await list.locator('[data-ask-done]').count(), 0, 'done rows collapsed');
 				await toggle.click();
 				assert.equal(await list.locator('[data-ask-done]').count(), 2, 'done rows open');

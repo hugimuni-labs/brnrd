@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
 	AsksAuthError,
 	askInTopics,
+	bucketAsks,
 	fetchAsks,
 	liveAttempt,
 	moveFocus,
@@ -63,6 +64,36 @@ test('askInTopics: null lights all; topicless rows are never hidden; alias resol
 	assert.equal(askInTopics(row({ topics: ['loom'] }), new Set(['the-loom']), resolve), true);
 	assert.equal(askInTopics(row({ topics: ['loom'] }), new Set(['other']), resolve), false);
 	assert.equal(askInTopics(row({ topics: ['unknown'] }), new Set(['other']), resolve), false);
+});
+
+test('bucketAsks: making/delivered/unaddressed sort into their buckets, in order', () => {
+	const rows = [
+		row({ id: 'a', stage: 'making' }),
+		row({ id: 'b', stage: 'delivered' }),
+		row({ id: 'c', stage: null }),
+		row({ id: 'd', stage: 'heard' }),
+		row({ id: 'e', stage: 'understood' }),
+		row({ id: 'f', stage: 'shaped' }),
+		row({ id: 'g', stage: 'making' })
+	];
+	const { inHand, toJudge, unaddressed } = bucketAsks(rows);
+	assert.deepEqual(
+		inHand.map((r) => r.id),
+		['a', 'g']
+	);
+	assert.deepEqual(
+		toJudge.map((r) => r.id),
+		['b']
+	);
+	assert.deepEqual(
+		unaddressed.map((r) => r.id),
+		['c', 'd', 'e', 'f']
+	);
+});
+
+test('bucketAsks: a stage past the open lifecycle (accepted/reshaped/sprouted) lands in no bucket', () => {
+	const { inHand, toJudge, unaddressed } = bucketAsks([row({ id: 'a', stage: 'accepted' })]);
+	assert.deepEqual([...inHand, ...toJudge, ...unaddressed], []);
 });
 
 test('liveAttempt finds the run wearing the ask', () => {

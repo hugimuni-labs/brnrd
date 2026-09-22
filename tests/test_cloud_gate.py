@@ -1024,6 +1024,49 @@ def test_corpus_fingerprint_tolerates_missing_knowledge_root(tmp_path):
     assert digest
 
 
+def test_corpus_payload_stamps_committed_at_from_git_and_falls_back_to_mtime(tmp_path):
+    """design-the-ask.md §Done, reopened, linked: "the hosted order needs the
+    publisher to stamp each surface file's last commit time" — one ``git
+    log`` call over the account home, per file. A committed file gets the
+    commit's own ``%cI``; an uncommitted one still gets a stamp (its mtime),
+    never ``None`` — the hosted reader treats a missing stamp as "unknown"
+    and sinks the row, which an ordinary unpublished edit should not do.
+    """
+    from brr.account import CorpusFile
+
+    home = tmp_path / "home"
+    init_git_repo(home)
+    commit_files(home, {"surface/warp/w-1.md": "# Committed\n"}, message="w-1")
+    uncommitted = home / "surface" / "warp" / "w-2.md"
+    uncommitted.write_text("# New\n", encoding="utf-8")
+
+    files = [
+        CorpusFile(layer="authored", path="surface/warp/w-1.md", abspath=home / "surface/warp/w-1.md"),
+        CorpusFile(layer="authored", path="surface/warp/w-2.md", abspath=uncommitted),
+    ]
+    payload = cloud._corpus_payload(files, home_root=home)
+    by_path = {p["path"]: p for p in payload}
+    head_time = subprocess.run(
+        ["git", "-C", str(home), "log", "-1", "--format=%cI"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert by_path["surface/warp/w-1.md"]["committed_at"] == head_time
+    assert by_path["surface/warp/w-2.md"]["committed_at"] is not None
+    assert by_path["surface/warp/w-2.md"]["committed_at"] != head_time
+
+
+def test_corpus_payload_with_no_home_root_mtime_stamps_every_file(tmp_path):
+    """No account home to point git at (``home_root=None``) — the default
+    ``_corpus_resolve`` never actually passes, but the fallback must still
+    hold for any caller that does."""
+    from brr.account import CorpusFile
+
+    f = tmp_path / "x.md"
+    f.write_text("# X\n", encoding="utf-8")
+    payload = cloud._corpus_payload([CorpusFile(layer="authored", path="surface/x.md", abspath=f)])
+    assert payload[0]["committed_at"] is not None
+
+
 def test_hearth_never_reaches_the_dashboard_corpus_resolve(tmp_path):
     """#1332 privacy pin, driven at the actual publish-lane boundary:
     ``_corpus_resolve`` is the one function ``_publish_corpus`` calls to
