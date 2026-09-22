@@ -2161,6 +2161,7 @@
 				error={asksError}
 				{now}
 				{liveRunIds}
+				{liveRuns}
 				selected={heddleSelection}
 				resolveTopic={(slug) => warpGraphData.topicByAlias.get(slug)?.canonicalId ?? null}
 				glyphForTopic={(slug) =>

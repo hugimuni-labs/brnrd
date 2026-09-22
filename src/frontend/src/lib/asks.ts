@@ -3,6 +3,8 @@
 // Rows come from `GET /v1/dashboard/warp/asks.json` (`src/brr/asks.py`);
 // everything here is plain TS so node's test runner reaches it.
 
+import type { LiveRun } from './liveRuns.ts';
+
 export interface AskSay {
 	event: string;
 	at: string | null;
@@ -14,6 +16,18 @@ export interface AskSay {
 	 *  for the day one lands) and older payloads may omit the field
 	 *  entirely, so this reads optional. */
 	url?: string | null;
+}
+
+/** One delivered receipt (design-the-row-you-can-judge, his 19:46Z steer
+ *  evt-…-c7c3): a sibling strand (`brr/the-bases-the-dashboard-needs`) adds
+ *  this array to the hosted payload, sourced from whatever forge/kb record
+ *  the daemon can name for the ask. `title` may simply not be there yet —
+ *  read when present, never resolved client-side (his steer, verbatim: "do
+ *  not build a resolver yourself"). */
+export interface AskReceipt {
+	ref: string;
+	url?: string | null;
+	title?: string | null;
 }
 
 export interface AskRow {
@@ -31,6 +45,10 @@ export interface AskRow {
 	says: AskSay[];
 	attempts: string[];
 	receipt: string | null;
+	/** Plural, structured receipts — absent on a payload predating the
+	 *  sibling PR, in which case every reader here falls back to `receipt` /
+	 *  `return`. Never assume non-empty even when present. */
+	receipts?: AskReceipt[] | null;
 	topics: string[];
 	stale: boolean;
 	done: boolean;
@@ -129,9 +147,80 @@ export function askHandle(row: AskRow): string {
  *  items"): the newest `limit` rows visible already; the rest counted for
  *  the toggle. Rows arrive newest-first from the server
  *  (`asks.py::build_asks` sorts `done` descending) — this only slices, it
- *  never re-sorts. */
+ *  never re-sorts. Reused for the unaddressed bucket's own preview (same
+ *  "newest N, rest behind a toggle" shape). */
 export function doneWindow(rows: AskRow[], limit = 3): { visible: AskRow[]; restCount: number } {
 	return { visible: rows.slice(0, limit), restCount: Math.max(0, rows.length - limit) };
+}
+
+/** A collapsed bucket bar's preview text (the-row-you-can-judge, his roast:
+ *  "when collapsed it should show three last items but occupy one bar"):
+ *  the newest `limit` titles, `·`-joined — the bar's own truncation clips
+ *  the rest, this never does. `''` when the bucket is empty (caller skips
+ *  the em dash rather than print a trailing one). */
+export function previewNames(rows: AskRow[], limit = 3): string {
+	return doneWindow(rows, limit)
+		.visible.map((row) => row.title)
+		.join(' · ');
+}
+
+/** The judge row's one derived line (the-row-you-can-judge §2, his "how much
+ *  can you really judge from here?"): the newest receipt's title when the
+ *  row carries one, else the plain `return:` text. Never resolves a title
+ *  itself — his 19:46Z steer is explicit that a sibling strand owns filling
+ *  `receipts[].title`, this only reads it. `null` when neither exists. */
+export function deliveryLine(row: Pick<AskRow, 'receipts' | 'return'>): string | null {
+	const title = row.receipts?.[0]?.title;
+	return title || row.return || null;
+}
+
+/** One receipt chip, normalized for rendering: a label and an optional link. */
+export interface ReceiptChip {
+	label: string;
+	url: string | null;
+}
+
+const HTTP_URL_RE = /^https?:\/\//;
+
+/** The judge row's receipts, once (his roast: "the receipt data kinda
+ *  repeats three times" — this is the single place it now renders):
+ *  `receipts[]` when the row carries it, else a synthetic one-chip list from
+ *  the legacy singular `receipt` field so an older payload still shows
+ *  something, else `[]` (no receipts row at all). */
+export function receiptChips(row: Pick<AskRow, 'receipts' | 'receipt'>): ReceiptChip[] {
+	// `receipts` present (even `[]`) is the server's own word: an explicit
+	// empty list means "none", never "ask the legacy field instead" — only
+	// `null`/`undefined` (a payload predating the sibling PR) falls through.
+	if (row.receipts != null) {
+		return row.receipts.map((r) => ({
+			label: r.title ? `${r.ref} · ${r.title}` : r.ref,
+			url: r.url ?? null
+		}));
+	}
+	if (row.receipt) {
+		return [{ label: row.receipt, url: HTTP_URL_RE.test(row.receipt) ? row.receipt : null }];
+	}
+	return [];
+}
+
+/** The seat's own current live run (the-row-you-can-judge §4, his 19:46Z:
+ *  "an in-hand `seat` row shows what the seat is doing") — the first
+ *  non-strand row in the same live-runs payload the MACHINE block already
+ *  reads (`Dashboard.svelte`'s `liveRuns`, joined here by `is_subspawn`
+ *  rather than fetched again). `null` when no live run is known (no daemon
+ *  awake, or the payload lags a beat behind the ask list's own poll). */
+export function seatRun(liveRuns: readonly LiveRun[] | null | undefined): LiveRun | null {
+	return (liveRuns ?? []).find((run) => !run.is_subspawn) ?? null;
+}
+
+/** The seat run's own `## Now`, first line only — `card_text` is already
+ *  that section's projection, daemon-side (`liveRuns.ts`'s own note on the
+ *  field), so this only takes the first line, never re-projects. `null` on
+ *  an empty/whitespace-only card (a seat that hasn't written `## Now` yet). */
+export function seatNowLine(run: Pick<LiveRun, 'card_text'> | null | undefined): string | null {
+	const text = run?.card_text?.trim();
+	if (!text) return null;
+	return text.split('\n')[0]?.trim() || null;
 }
 
 /** A say line's own text — the excerpt when the server resolved one, else
