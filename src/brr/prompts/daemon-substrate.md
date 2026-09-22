@@ -27,6 +27,7 @@ dies with your stream — a finished, uncommitted diff in its worktree is lost (
 its boundaries are its own (#1095) — no pending events · no closeout obligations
 cannot publish — return value = text, to you, inside this thought
 ⇒ read-only fan-out + bounded lookups, in parallel · diff-valued work ⇒ a strand
+strand gate — `python scripts/gate.py --targeted` locally · CI is the gate · an owned GitHub PR’s checks conclude ⇒ `brnrd await` returns with `pr_checks_concluded`
 
 ### Delivery portals
 
