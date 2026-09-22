@@ -1,12 +1,16 @@
 // Drives the home's list of asks, in place of the warp's item graph
 // (design-the-ask.md §Done, reopened, linked, "the console = the warp panel,
-// per ask"). `--tag before` captures the home on a tree without the four-
-// bucket list (shots only); `--tag after` also asserts behaviour first,
-// screenshots second — a shot that never exercised the component is a green
-// tick meaning nothing looked (the 2026-08-26 room lesson). The fixture
-// (`fixtures.mjs::asks`) already carries one row per bucket: w-201 (stage
-// making, a live strand) → in hand; w-96 (stage delivered, stale) → yours to
-// judge; w-198/w-190 (understood/shaped) → unaddressed; w-150/w-140 → done.
+// per ask"; the-panel-third-pass for the reorder + collapse + sign). `--tag
+// before` captures the home on a tree without the four-bucket list (shots
+// only); `--tag after` also asserts behaviour first, screenshots second — a
+// shot that never exercised the component is a green tick meaning nothing
+// looked (the 2026-08-26 room lesson). The fixture (`fixtures.mjs::asks`)
+// carries: w-201 (stage making, a live strand) → in hand; w-96 (stage
+// delivered, stale, carrying a `sign`) → yours to judge; w-198/w-190
+// (understood/shaped, non-stale) plus four stale rows (w-80/w-72/w-68/w-61)
+// → unaddressed, so its nested stale sub-block has something to hide too;
+// five done rows (w-150 newest .. w-110 oldest) → done, so the default
+// "last three + toggle" actually has something to hide.
 //
 // Usage: node repro/drive-asks.mjs [--out DIR] [--port N] [--tag before|after]
 import { spawn } from 'node:child_process';
@@ -109,8 +113,9 @@ async function main() {
 					'the one goal renders above the buckets'
 				);
 
-				// The four buckets, his order, each headed and counted — replacing
-				// the item-number graph that used to sit here.
+				// The four buckets, his third-pass order — done leads, then the
+				// two live buckets, unaddressed sinks to the quiet bottom —
+				// each headed and counted.
 				const inHand = list.locator('[data-bucket-heading="in-hand"]');
 				const toJudge = list.locator('[data-bucket-heading="to-judge"]');
 				const unaddressed = list.locator('[data-bucket-heading="unaddressed"]');
@@ -120,22 +125,90 @@ async function main() {
 				// both sides rather than pin a rendering detail these headings don't
 				// own semantically.
 				const lower = async (locator) => (await locator.innerText()).toLowerCase();
+				assert.ok((await lower(done)).includes('done & accepted · 5'), 'five done rows total');
 				assert.ok((await lower(inHand)).includes('in hand · 1'), 'one row in hand');
 				assert.ok((await lower(toJudge)).includes('yours to judge · 1'), 'one row to judge');
-				assert.ok((await lower(unaddressed)).includes('unaddressed · 2'), 'two unaddressed rows');
-				assert.ok((await lower(done)).includes('done & accepted · 2'), 'two done rows');
+				assert.ok(
+					(await lower(unaddressed)).includes('unaddressed · 6'),
+					'six unaddressed rows total (2 non-stale + 4 stale)'
+				);
 
+				// Order on the page: done first (his "on top"), then the two live
+				// buckets, unaddressed last.
+				const bucketOrder = await list
+					.locator('[data-bucket]')
+					.evaluateAll((els) => els.map((el) => el.getAttribute('data-bucket')));
+				assert.deepEqual(
+					bucketOrder,
+					['done', 'in-hand', 'to-judge', 'unaddressed'],
+					`buckets render done-first (${bucketOrder})`
+				);
+
+				// Done shows its newest three by default (his "showing a few last
+				// items"); the other two — five total, minus the three visible —
+				// wait behind the `▸ 2 done` toggle. `in hand` + `to judge` render
+				// unconditionally; `unaddressed` starts fully collapsed.
 				const rows = list.locator('[data-ask]');
-				assert.equal(await rows.count(), 4, 'in hand + to judge + unaddressed, done collapsed');
-				const first = (await rows.first().innerText()).replace(/\s+/g, ' ');
-				assert.ok(first.includes('w-201'), `in hand leads (${first})`);
-				assert.ok(first.includes('▷ run-fallback-receipt'), `wears its live strand (${first})`);
-				assert.ok(await rows.first().locator('[data-drone]').count(), 'live drone mark');
+				assert.equal(
+					await rows.count(),
+					5,
+					'done×3 + in-hand×1 + to-judge×1, unaddressed collapsed'
+				);
+				assert.equal(
+					await list.locator('[data-ask-done]').count(),
+					3,
+					'only the newest three done rows render'
+				);
+
+				const inHandRow = list.locator('[data-ask="w-201"]');
+				const inHandText = (await inHandRow.innerText()).replace(/\s+/g, ' ');
+				assert.ok(
+					inHandText.includes('▷ run-fallback-receipt'),
+					`wears its live strand (${inHandText})`
+				);
+				assert.ok(await inHandRow.locator('[data-drone]').count(), 'live drone mark');
+
+				// The 17:51Z steer ("the evt-say lines say nothing"): expand w-201
+				// and check its says + attempts detail speaks now — a say with a
+				// resolved excerpt + route renders time · excerpt · a real ↗ link;
+				// one with neither falls back to its bare event id (`sayText`'s
+				// floor, never a blank); the attempt run id links to its run page
+				// with the ask's own topic glyph beside.
+				await inHandRow.click();
+				const inHandDetail = inHandRow.locator('xpath=..');
+				const sayWithExcerpt = inHandDetail.getByText('slick ui to inspect the done things');
+				assert.ok(await sayWithExcerpt.count(), 'the resolved excerpt renders');
+				const sayLink = inHandDetail.locator('a[aria-label="open this message"]');
+				assert.equal(await sayLink.count(), 1, 'the say with a url gets a real ↗ link');
+				assert.equal(await sayLink.getAttribute('href'), 'https://t.me/c/loom/42');
+				assert.ok(
+					await inHandDetail.getByText('evt-1790033000000000000-aa01').count(),
+					'the excerpt-less say falls back to its event id, not a blank'
+				);
+				const attemptLink = inHandDetail.locator('a[href*="run-fallback-receipt"]');
+				assert.equal(await attemptLink.count(), 1, 'the attempt links to its run page');
+				assert.ok(
+					(await attemptLink.getAttribute('href')).includes('hugimuni-labs__brnrd'),
+					'the one connected repo resolves the run link'
+				);
+				const attemptLine = (await attemptLink.locator('xpath=..').innerText()).replace(
+					/\s+/g,
+					' '
+				);
+				assert.notEqual(
+					attemptLine.trim(),
+					'run-fallback-receipt',
+					`a topic glyph rides beside the run id (${attemptLine})`
+				);
+				await inHandRow.click(); // collapse it back
 
 				// The stale "yours to judge" row: dimmed in place, not sunk under a
-				// rule — and it carries its receipt-free accept/reroute hints.
+				// rule — carries a `sign`, so both the id cell and the
+				// receipt-free accept/reroute hints speak it back.
 				const w96 = list.locator('[data-ask="w-96"]');
 				assert.equal(await w96.getAttribute('data-ask-stale'), '', 'w-96 stays marked stale');
+				const w96Text = (await w96.innerText()).replace(/\s+/g, ' ');
+				assert.ok(w96Text.includes('w-96 · anltcs'), `id cell speaks the sign (${w96Text})`);
 				const w96Li = w96.locator('xpath=..');
 				assert.ok(
 					(await w96Li.getAttribute('class')).includes('opacity-60'),
@@ -145,19 +218,81 @@ async function main() {
 				// body text") and wear the same `uppercase` transform the bucket
 				// headings above already do — same reason, same fix: lower both
 				// sides rather than pin a rendering detail these chips don't own
-				// semantically.
+				// semantically. The sign, not the id, is what they address.
 				const hints = w96Li.locator('[data-to-judge-hints]');
 				const hintsText = (await hints.innerText()).toLowerCase();
-				assert.ok(hintsText.includes('accept w-96'), `copyable accept hint (${hintsText})`);
-				assert.ok(hintsText.includes('reroute w-96'), `copyable reroute hint (${hintsText})`);
+				assert.ok(
+					hintsText.includes('accept anltcs'),
+					`copyable accept hint uses the sign (${hintsText})`
+				);
+				assert.ok(
+					hintsText.includes('reroute anltcs'),
+					`copyable reroute hint uses the sign (${hintsText})`
+				);
+				assert.ok(
+					!hintsText.includes('w-96'),
+					`the sign replaces the id in the chips (${hintsText})`
+				);
 
-				// done is collapsed to a count with a toggle
-				const toggle = list.getByRole('button', { name: /done & accepted/i });
-				assert.equal(await list.locator('[data-ask-done]').count(), 0, 'done rows collapsed');
-				await toggle.click();
-				assert.equal(await list.locator('[data-ask-done]').count(), 2, 'done rows open');
-				await toggle.click();
-				// keyboard: j moves, enter expands
+				// done's rest toggle: closed by default, opens to all five, closes
+				// back down. Same `uppercase` transform as the headings above —
+				// lower before comparing.
+				const doneToggle = list.locator('[data-bucket-toggle="done"]');
+				assert.equal(
+					(await doneToggle.innerText()).trim().toLowerCase(),
+					'▸ 2 done',
+					'names what the toggle hides'
+				);
+				await doneToggle.click();
+				assert.equal(await list.locator('[data-ask-done]').count(), 5, 'the toggle opens the rest');
+				await doneToggle.click();
+				assert.equal(
+					await list.locator('[data-ask-done]').count(),
+					3,
+					'and closes back to the window'
+				);
+
+				// unaddressed: the quiet block, collapsed to a bare count until
+				// asked — the old done toggle's own shape, moved here.
+				const unaddressedRows = list.locator('[data-bucket="unaddressed"] [data-ask]');
+				const unaddressedToggle = list.getByRole('button', { name: /unaddressed/i });
+				assert.equal(await unaddressedRows.count(), 0, 'unaddressed starts collapsed');
+				await unaddressedToggle.click();
+				assert.equal(await unaddressedRows.count(), 2, 'the toggle opens the two non-stale rows');
+
+				// His 18:27Z follow-up: the stale rows inside unaddressed get
+				// their own nested collapse — a bare count, then the newest
+				// three, then the rest — the non-stale two above untouched.
+				const staleHeading = list.locator('[data-bucket-heading="unaddressed-stale"]');
+				assert.equal(
+					(await staleHeading.innerText()).trim().toLowerCase(),
+					'▸ stale · 4',
+					'the stale sub-block starts as a bare count'
+				);
+				await staleHeading.click();
+				assert.equal(await unaddressedRows.count(), 5, '2 non-stale + the stale window of 3');
+				const staleToggle = list.locator('[data-bucket-toggle="unaddressed-stale"]');
+				assert.equal(
+					(await staleToggle.innerText()).trim().toLowerCase(),
+					'▸ 1 stale',
+					'names the one stale row still hidden'
+				);
+				await staleToggle.click();
+				assert.equal(await unaddressedRows.count(), 6, '2 non-stale + all 4 stale');
+				await staleToggle.click();
+				assert.equal(await unaddressedRows.count(), 5, 'the rest toggle closes back to the window');
+				await staleHeading.click();
+				assert.equal(
+					await unaddressedRows.count(),
+					2,
+					'the stale sub-block closes back to its count'
+				);
+
+				await unaddressedToggle.click();
+				assert.equal(await unaddressedRows.count(), 0, 'and the whole bucket closes back down');
+
+				// keyboard: j moves, enter expands — done's visible window leads
+				// now, so the first walk lands on its newest row.
 				await page.keyboard.press('j');
 				await page.keyboard.press('Enter');
 				const open = list.locator('[data-ask][aria-expanded="true"]');
@@ -166,8 +301,12 @@ async function main() {
 				assert.ok(openText.includes('evt-'), `expanded row shows its says (${openText})`);
 				await page.keyboard.press('Enter');
 				assert.equal(await list.locator('[data-ask][aria-expanded="true"]').count(), 0);
-				// expand the first row for the shot
+				// expand the first row (done's newest, w-150) for the shot, and
+				// w-201 alongside it so the say-excerpt/↗-link/attempt-link work
+				// above actually shows in the frame, not just in the assertions.
+				const first = (await rows.first().innerText()).replace(/\s+/g, ' ');
 				await rows.first().click();
+				await inHandRow.click();
 				report[vp.name] = { first, openText };
 			}
 			await page.screenshot({ path: `${OUT}/${TAG}-${vp.name}.png`, fullPage: false });

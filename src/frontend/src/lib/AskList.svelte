@@ -2,11 +2,17 @@
 	import { onMount } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import {
+		askHandle,
 		askInTopics,
+		askLabel,
+		attemptGlyph,
 		bucketAsks,
+		doneWindow,
 		keymapIgnores,
 		liveAttempt,
 		moveFocus,
+		sayText,
+		splitAlive,
 		touchedLabel,
 		type AskGoal,
 		type AskRow,
@@ -18,6 +24,10 @@
 	// machine's own lane (`PickLane.svelte`) uses for its picking-row block —
 	// reused here rather than a second amber invented for this panel.
 	import { glowFor, STATUS_BURNING } from './statusPalette';
+	// The 17:51Z steer on the-panel-third-pass: run ids in `attempts` link
+	// to the run page — same builder `LiveRuns.svelte`/`RunLedgerReceipt.svelte`
+	// already call, never a second URL scheme invented here.
+	import { runNodeHref } from './runNode';
 
 	interface Props {
 		data: AsksResponse | null;
@@ -28,6 +38,16 @@
 		/** The heddle filter's lit set (`null` = all lit) and slug → canonical id. */
 		selected?: ReadonlySet<string> | null;
 		resolveTopic?: (slug: string) => string | null;
+		/** Topic id/alias → rendered glyph (the heddle rail's own map, e.g.
+		 *  `(id) => topicFace(warpGraphData.topicByAlias.get(id)).glyph`) —
+		 *  beside an `attempts` run link. `null`/unset ⇒ no glyph, never a
+		 *  placeholder. */
+		glyphForTopic?: (topic: string) => string | null;
+		/** The account's one connected repo, when it has exactly one — an
+		 *  `attempts` run id has no repo of its own in this payload, so a
+		 *  run link only renders when the repo is unambiguous; `null` ⇒ the
+		 *  run id renders as plain text, same as before this landed. */
+		runRepoLabel?: string | null;
 	}
 
 	let {
@@ -36,31 +56,58 @@
 		now,
 		liveRunIds = new Set<string>(),
 		selected = null,
-		resolveTopic = () => null
+		resolveTopic = () => null,
+		glyphForTopic = () => null,
+		runRepoLabel = null
 	}: Props = $props();
 
 	const lit = (row: AskRow) => askInTopics(row, selected, resolveTopic);
 	// design-the-ask.md §Done, reopened, linked, "the console = the warp
-	// panel, per ask" — his bucket order: in hand · yours to judge ·
-	// unaddressed · done & accepted (apart, already: `data.done`). Rows
-	// arrive LRU-sorted from the server; filtering into buckets keeps that
-	// order inside each one, so a live-strand ask does not have to also be
-	// the most recently touched to sit on top of its own bucket.
+	// panel, per ask"; reordered the-panel-third-pass (his: "the done
+	// block should be … on top"): done & accepted · in hand · yours to
+	// judge · unaddressed. `buckets` here is still the three open ones —
+	// done rides apart, already: `data.done`. Rows arrive LRU-sorted from
+	// the server; filtering into buckets keeps that order inside each one,
+	// so a live-strand ask does not have to also be the most recently
+	// touched to sit on top of its own bucket.
 	let buckets = $derived(bucketAsks((data?.asks ?? []).filter(lit)));
 	let doneRows = $derived((data?.done ?? []).filter(lit));
 	let goals = $derived((data?.goals ?? []) as AskGoal[]);
+	// The panel-third-pass steer (his: "the done block should be
+	// collapsible but on top, and showing a few last items"): done moves
+	// to the top, its newest three rows already visible, `doneOpen` reveals
+	// the rest. `unaddressedOpen` is the mirror of the *old* done toggle —
+	// the quiet block, collapsed to a bare count until asked.
+	let doneWin = $derived(doneWindow(doneRows));
 	let doneOpen = $state(false);
+	let doneVisible = $derived(doneOpen ? doneRows : doneWin.visible);
+	let unaddressedOpen = $state(false);
+	// His 18:27Z follow-up: inside unaddressed, the stale rows (past the
+	// horizon) get their own nested collapse — a bare count first
+	// (`staleOpen`), the newest three once opened (`doneWindow` reused —
+	// same "window + rest toggle" shape as the done bucket above, `splitAlive`
+	// already orders stale rows the same newest-first way `done` arrives in),
+	// `staleRestOpen` for what's past the window. Non-stale unaddressed rows
+	// render as they always have, unaffected.
+	let unaddressedSplit = $derived(splitAlive(buckets.unaddressed));
+	let staleWin = $derived(doneWindow(unaddressedSplit.stale));
+	let staleOpen = $state(false);
+	let staleRestOpen = $state(false);
+	let staleVisible = $derived(
+		!staleOpen ? [] : staleRestOpen ? unaddressedSplit.stale : staleWin.visible
+	);
 	let expanded = new SvelteSet<string>();
 	let focus = $state<number | null>(null);
 	let root: HTMLElement | undefined = $state();
 
-	// The order `j`/`k` walk: in hand, to judge, unaddressed, then done when
-	// its toggle is open — the same order the buckets render in.
+	// The order `j`/`k` walk: done's visible window, in hand, to judge, then
+	// unaddressed's non-stale rows + its stale sub-window, both gated on the
+	// outer unaddressed toggle — the same order the buckets render in.
 	let visible = $derived([
+		...doneVisible,
 		...buckets.inHand,
 		...buckets.toJudge,
-		...buckets.unaddressed,
-		...(doneOpen ? doneRows : [])
+		...(unaddressedOpen ? [...unaddressedSplit.alive, ...staleVisible] : [])
 	]);
 
 	// The pulse's two box-shadow stops, taken directly off `glowFor` (the
@@ -99,14 +146,18 @@
 
 <!-- The console's list of asks, replacing the warp's item graph in place
      (design-the-ask.md §Done, reopened, linked, "the console = the warp
-     panel, per ask" — his order): four buckets, one column — **in hand**
-     (a strand or the seat is working it now) · **yours to judge**
-     (delivered, waiting on accept/reroute) · **unaddressed** (not yet even
-     shaped) · **done & accepted** (collapsed to a count). Rows arrive
-     LRU-sorted from the server; a stale row stays in its bucket, dimmed,
-     rather than sinking below a rule — the bucket already says what stage
-     it is in, so a second sort axis inside it would just be noise. A row
-     opens in place: its says, its attempts, its receipt. `j`/`k` walk the
+     panel, per ask"; reordered the-panel-third-pass): four buckets, one
+     column, done-first — **done & accepted** (its newest three open, a
+     toggle for the rest) · **in hand** (a strand or the seat is working it
+     now) · **yours to judge** (delivered, waiting on accept/reroute) ·
+     **unaddressed** (not yet even shaped, collapsed to a count; its own
+     stale rows nest one collapse deeper — the 18:27Z follow-up). A stale
+     row inside in-hand/to-judge stays dimmed in place, not pulled out —
+     only unaddressed's stale rows get the nested block. A row opens in
+     place: its says (`<relative time> · <excerpt> · ↗`, the 17:51Z
+     steer), its attempts (a run link + topic glyph, same steer), its
+     receipt; a `sign` (when a row carries one) speaks in the id cell and
+     the accept/reroute chips in place of the bare id. `j`/`k` walk the
      rows in bucket order, Enter opens one (a row is a real button, so
      Enter/Space are the browser's own). -->
 <div class="panel mt-2 p-3" aria-label="your asks" bind:this={root}>
@@ -157,7 +208,12 @@
 							}}
 						>
 							<span class="flex items-baseline gap-2">
-								<span class="w-12 shrink-0 font-mono text-[10px] text-ink-mute">{row.id}</span>
+								<span
+									class="shrink-0 truncate font-mono text-[10px] text-ink-mute {row.sign
+										? 'max-w-[10rem]'
+										: 'w-12'}"
+									title={askLabel(row)}>{askLabel(row)}</span
+								>
 								<span class="min-w-0 flex-1 truncate text-sm text-amber-100" title={row.title}
 									>{row.title}</span
 								>
@@ -216,14 +272,17 @@
 								<!-- His roast: the two words as "a small chip pair, not body
 								     text". Still neither a status color (statusPalette.ts: no
 								     green family, red reserved for a broken contract) — just
-								     the sky link tone and the base ink, boxed rather than bare. -->
+								     the sky link tone and the base ink, boxed rather than bare.
+								     `askHandle` speaks the sign back when the row carries one
+								     (the-panel-third-pass: "the chip words use the sign when
+								     present") — same fallback to the bare id as the id cell. -->
 								<span
 									class="cursor-text select-all border border-sky-900/60 bg-sky-950/40 px-1.5 py-0.5 tracking-wide text-sky-300 uppercase"
-									>accept {row.id}</span
+									>accept {askHandle(row)}</span
 								>
 								<span
 									class="cursor-text select-all border border-stone-700/60 bg-stone-900/40 px-1.5 py-0.5 tracking-wide text-stone-300 uppercase"
-									>reroute {row.id}: &lt;why&gt;</span
+									>reroute {askHandle(row)}: &lt;why&gt;</span
 								>
 							</div>
 						{/if}
@@ -232,13 +291,28 @@
 								{#if row.after}<p>after <span class="text-stone-300">{row.after}</span></p>{/if}
 								<div>
 									<p class="text-[10px] tracking-wide text-ink-mute uppercase">says</p>
+									<!-- 17:51Z steer (the-panel-third-pass): "the evt-say lines say
+									     nothing" — `<relative time> · <excerpt> · ↗`, never the raw
+									     event id as the lead (`sayText` falls back to it only when
+									     no excerpt resolved); ↗ only when the server sent a `url`
+									     (no route exists yet, so never today — see asks.ts). -->
 									{#each row.says as say (say.event)}
 										<p class="truncate">
-											<span class="text-stone-400">{say.event.slice(0, 30)}</span>
-											{#if say.at}<span class="text-ink-mute">
-													· {touchedLabel(say.at, now)}</span
-												>{/if}
-											{#if say.excerpt}<span class="text-stone-300"> · “{say.excerpt}”</span>{/if}
+											<span class="text-ink-mute">{touchedLabel(say.at, now) || '—'}</span>
+											<span class="text-stone-300"> · {sayText(say)}</span>
+											{#if say.url}
+												<!-- eslint-disable svelte/no-navigation-without-resolve -->
+												<a
+													href={say.url}
+													class="text-sky-200 hover:text-sky-100"
+													target="_blank"
+													rel="noopener noreferrer"
+													aria-label="open this message"
+												>
+													· ↗</a
+												>
+												<!-- eslint-enable svelte/no-navigation-without-resolve -->
+											{/if}
 										</p>
 									{:else}
 										<p class="text-ink-mute">none recorded yet</p>
@@ -246,9 +320,20 @@
 								</div>
 								<div>
 									<p class="text-[10px] tracking-wide text-ink-mute uppercase">attempts</p>
+									<!-- 17:51Z steer: a run id links to its run page (`runNodeHref`,
+									     same builder LiveRuns/RunLedgerReceipt use) with the ask's
+									     own topic glyph beside — the run itself carries no topic in
+									     this payload, `attemptGlyph` names that stand-in. No known
+									     repo (an account with 0 or >1 connected, `runRepoLabel` null)
+									     ⇒ plain text, same as before this landed. -->
 									{#each row.attempts as run (run)}
+										{@const glyph = attemptGlyph(row, glyphForTopic)}
 										<p class="truncate">
-											<span class="text-stone-300">{run}</span>
+											{#if runRepoLabel}<a
+													class="text-stone-300 underline decoration-stone-700 hover:text-amber-100"
+													href={runNodeHref(runRepoLabel, run)}>{run}</a
+												>{:else}<span class="text-stone-300">{run}</span>{/if}
+											{#if glyph}<span class="text-ink-mute"> {glyph}</span>{/if}
 											{#if liveRunIds.has(run)}<span class="text-amber-300"> · live</span>{/if}
 										</p>
 									{:else}
@@ -278,20 +363,45 @@
 			</ul>
 		{/snippet}
 
-		<!-- The four buckets, his order, each its own block now (the roast:
-		     "not just a different header in the same table") — a stale row
-		     inside one is still dimmed in place (`opacity-60` on its `<li>`,
-		     above), never moved to a fifth place: the bucket already says
-		     what stage the ask is in. Framing carries the weight, top to
-		     bottom: **in hand** wears the machine's own live-amber block
-		     (`PickLane.svelte`'s picking row, same tokens); **yours to judge**
-		     gets `.subpanel`'s quieter hairline (`layout.css`) — waiting, not
-		     burning; **unaddressed** stays plain rows, no frame — nothing has
-		     happened yet; **done** sits behind a rule, dimmed, collapsed. The
-		     wider gap between them (`space-y-4`, up from `space-y-3`) is what
-		     lets four framed things read as four things at a glance rather
-		     than four sections of one. -->
+		<!-- The panel, third pass (his: "the done block should be
+		     collapsible but on top, and showing a few last items" —
+		     "the quiet items blocks should be collapsed"): **done & accepted**
+		     leads now, its newest three rows already open (`doneWindow`,
+		     asks.ts) so a glance at the top answers "what did I finish" —
+		     `doneWin.restCount` rides a `▸ N done` toggle for the rest, never
+		     the whole bucket's own heading (that stays a static count: the
+		     visible three are not what the toggle hides). **in hand** and
+		     **yours to judge** are unchanged, still framed to read as
+		     distinct blocks (the roast: "not just a different header in the
+		     same table") — live-amber for in hand (`PickLane.svelte`'s
+		     picking-row tokens), `.subpanel`'s quieter hairline for to-judge.
+		     **unaddressed** sinks to the bottom, now the collapsed-to-a-count
+		     block in its place — nothing has happened on these yet, so a
+		     bare count is the whole story until asked. A stale row inside any
+		     bucket is still dimmed in place (`opacity-60` on its `<li>`,
+		     above), never moved to a fifth place. A bucket with nothing in it
+		     renders its heading and stops — no empty frame, no dead toggle. -->
 		<div class="space-y-4">
+			<div class="border-b border-stone-800/60 pb-2 opacity-80" data-bucket="done">
+				<p
+					class="mb-1 font-mono text-[10px] tracking-wide text-ink-mute uppercase"
+					data-bucket-heading="done"
+				>
+					done &amp; accepted · {doneRows.length}
+				</p>
+				{#if doneRows.length}
+					{@render rows(doneVisible)}
+					{#if doneWin.restCount > 0}
+						<button
+							type="button"
+							class="mt-1 flex items-baseline gap-1.5 font-mono text-[10px] tracking-wide text-ink-mute uppercase hover:text-stone-300"
+							aria-expanded={doneOpen}
+							onclick={() => (doneOpen = !doneOpen)}
+							data-bucket-toggle="done">{doneOpen ? '▾' : '▸'} {doneWin.restCount} done</button
+						>
+					{/if}
+				{/if}
+			</div>
 			<div class="border border-amber-700/50 bg-stone-950/60 p-2" data-bucket="in-hand">
 				<p
 					class="mb-1 font-mono text-[10px] tracking-wide text-amber-300 uppercase"
@@ -299,7 +409,7 @@
 				>
 					in hand · {buckets.inHand.length}
 				</p>
-				{@render rows(buckets.inHand, 'inHand')}
+				{#if buckets.inHand.length}{@render rows(buckets.inHand, 'inHand')}{/if}
 			</div>
 			<div class="subpanel p-2" data-bucket="to-judge">
 				<p
@@ -308,27 +418,56 @@
 				>
 					yours to judge · {buckets.toJudge.length}
 				</p>
-				{@render rows(buckets.toJudge, 'toJudge')}
+				{#if buckets.toJudge.length}{@render rows(buckets.toJudge, 'toJudge')}{/if}
 			</div>
 			<div data-bucket="unaddressed">
-				<p
-					class="mb-1 font-mono text-[10px] tracking-wide text-ink-mute uppercase"
-					data-bucket-heading="unaddressed"
-				>
-					unaddressed · {buckets.unaddressed.length}
-				</p>
-				{@render rows(buckets.unaddressed)}
-			</div>
-			<div class="border-t border-stone-800/60 pt-2 opacity-80" data-bucket="done">
-				<button
-					type="button"
-					class="mb-1 flex w-full items-baseline gap-1.5 font-mono text-[10px] tracking-wide text-ink-mute uppercase hover:text-stone-300"
-					aria-expanded={doneOpen}
-					onclick={() => (doneOpen = !doneOpen)}
-					data-bucket-heading="done"
-					>{doneOpen ? '▾' : '▸'} done &amp; accepted · {doneRows.length}</button
-				>
-				{#if doneOpen}{@render rows(doneRows)}{/if}
+				{#if buckets.unaddressed.length}
+					<button
+						type="button"
+						class="mb-1 flex w-full items-baseline gap-1.5 font-mono text-[10px] tracking-wide text-ink-mute uppercase hover:text-stone-300"
+						aria-expanded={unaddressedOpen}
+						onclick={() => (unaddressedOpen = !unaddressedOpen)}
+						data-bucket-heading="unaddressed"
+						>{unaddressedOpen ? '▾' : '▸'} unaddressed · {buckets.unaddressed.length}</button
+					>
+					{#if unaddressedOpen}
+						{@render rows(unaddressedSplit.alive)}
+						<!-- His 18:27Z follow-up: stale unaddressed rows get their own
+						     nested block — a bare count, then (opened) the newest three,
+						     then (opened further) the rest. Non-stale rows above are
+						     unaffected. -->
+						{#if unaddressedSplit.stale.length}
+							<button
+								type="button"
+								class="mt-1 flex items-baseline gap-1.5 font-mono text-[10px] tracking-wide text-ink-mute uppercase hover:text-stone-300"
+								aria-expanded={staleOpen}
+								onclick={() => (staleOpen = !staleOpen)}
+								data-bucket-heading="unaddressed-stale"
+								>{staleOpen ? '▾' : '▸'} stale · {unaddressedSplit.stale.length}</button
+							>
+							{#if staleOpen}
+								{@render rows(staleVisible)}
+								{#if staleWin.restCount > 0}
+									<button
+										type="button"
+										class="mt-1 flex items-baseline gap-1.5 font-mono text-[10px] tracking-wide text-ink-mute uppercase hover:text-stone-300"
+										aria-expanded={staleRestOpen}
+										onclick={() => (staleRestOpen = !staleRestOpen)}
+										data-bucket-toggle="unaddressed-stale"
+										>{staleRestOpen ? '▾' : '▸'} {staleWin.restCount} stale</button
+									>
+								{/if}
+							{/if}
+						{/if}
+					{/if}
+				{:else}
+					<p
+						class="mb-1 font-mono text-[10px] tracking-wide text-ink-mute uppercase"
+						data-bucket-heading="unaddressed"
+					>
+						unaddressed · 0
+					</p>
+				{/if}
 			</div>
 		</div>
 	{/if}

@@ -3,14 +3,20 @@ import test from 'node:test';
 
 import {
 	AsksAuthError,
+	askHandle,
 	askInTopics,
+	askLabel,
+	attemptGlyph,
 	bucketAsks,
+	doneWindow,
 	fetchAsks,
 	liveAttempt,
 	moveFocus,
+	sayText,
 	splitAlive,
 	touchedLabel,
-	type AskRow
+	type AskRow,
+	type AskSay
 } from './asks.ts';
 
 const row = (over: Partial<AskRow> = {}): AskRow => ({
@@ -94,6 +100,55 @@ test('bucketAsks: making/delivered/unaddressed sort into their buckets, in order
 test('bucketAsks: a stage past the open lifecycle (accepted/reshaped/sprouted) lands in no bucket', () => {
 	const { inHand, toJudge, unaddressed } = bucketAsks([row({ id: 'a', stage: 'accepted' })]);
 	assert.deepEqual([...inHand, ...toJudge, ...unaddressed], []);
+});
+
+test('askLabel/askHandle: the sign wins the chip, the id wins the cell fallback', () => {
+	assert.equal(askLabel(row({ id: 'w-45' })), 'w-45');
+	assert.equal(askLabel(row({ id: 'w-45', sign: 'anltcs' })), 'w-45 · anltcs');
+	assert.equal(askHandle(row({ id: 'w-45' })), 'w-45');
+	assert.equal(askHandle(row({ id: 'w-45', sign: 'anltcs' })), 'anltcs');
+	// present but empty ⇒ no sign to speak, same as absent
+	assert.equal(askLabel(row({ id: 'w-45', sign: '' })), 'w-45');
+	assert.equal(askHandle(row({ id: 'w-45', sign: '' })), 'w-45');
+});
+
+test('doneWindow: the newest three show, the rest count for the toggle', () => {
+	const rows = ['a', 'b', 'c', 'd', 'e'].map((id) => row({ id }));
+	const win = doneWindow(rows);
+	assert.deepEqual(
+		win.visible.map((r) => r.id),
+		['a', 'b', 'c']
+	);
+	assert.equal(win.restCount, 2);
+	// nothing hidden when the bucket is already small
+	const small = doneWindow(rows.slice(0, 2));
+	assert.deepEqual(
+		small.visible.map((r) => r.id),
+		['a', 'b']
+	);
+	assert.equal(small.restCount, 0);
+});
+
+test('sayText: the excerpt leads, the event id is only the last resort', () => {
+	const say = (over: Partial<AskSay> = {}): AskSay => ({
+		event: 'evt-abc',
+		at: null,
+		excerpt: null,
+		...over
+	});
+	assert.equal(
+		sayText(say({ excerpt: 'slick ui to inspect the done things' })),
+		'slick ui to inspect the done things'
+	);
+	assert.equal(sayText(say()), 'evt-abc');
+	assert.equal(sayText(say({ excerpt: '' })), 'evt-abc'); // present but empty ⇒ still the floor
+});
+
+test("attemptGlyph: the row's first topic stands in, topicless resolves nothing", () => {
+	const glyphFor = (topic: string) => (topic === 'the-loom' ? 'ᚠ' : null);
+	assert.equal(attemptGlyph(row({ topics: ['the-loom', 'ops'] }), glyphFor), 'ᚠ');
+	assert.equal(attemptGlyph(row({ topics: ['ops'] }), glyphFor), null); // resolver misses it
+	assert.equal(attemptGlyph(row({ topics: [] }), glyphFor), null); // nothing to resolve
 });
 
 test('liveAttempt finds the run wearing the ask', () => {
