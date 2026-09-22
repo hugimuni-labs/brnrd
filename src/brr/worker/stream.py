@@ -100,8 +100,6 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
         )
 
     def _emit_heartbeat() -> None:
-        _sweep_pause_cap()
-        daemon._refresh_codex_thread_id(task, codex_events_path)
         # Drain first: promoting an interim response is the resident's
         # mid-run check-in, and the partial should reach the gate as
         # promptly as the heartbeat that observed the agent is alive.
@@ -111,6 +109,8 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
             account_context=account_context,
             stats=output_stats,
         )
+        _sweep_pause_cap()
+        daemon._refresh_codex_thread_id(task, codex_events_path)
         daemon._drain_agent_card(
             emit, task, eid, card_path, card_state,
             account_context=account_context,
@@ -206,17 +206,6 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
 
     def _emit_flush() -> None:
         nonlocal auth_health_cleared
-        if not auth_health_cleared:
-            # This attempt's Shell just proved it authenticated (it
-            # reached a live tool boundary) — clear a stale auth-error
-            # mark for its domain now rather than waiting for the
-            # process to exit. A long-lived seat (`await` / `hold:`)
-            # can run for hours after a relogin while the catalog still
-            # read the domain dead for the whole span (the defect this
-            # closes).
-            runner_auth_health.clear_success(repo_root, runner_choice)
-            auth_health_cleared = True
-        daemon._refresh_codex_thread_id(task, codex_events_path)
         # Event-driven drain fired by the boundary back channel's .flush signal
         # (chunk 3 of the back channel): push the just-written outbox
         # file / card to the gate promptly, then refresh the live inbox
@@ -232,6 +221,17 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
             account_context=account_context,
             stats=output_stats,
         )
+        if not auth_health_cleared:
+            # This attempt's Shell just proved it authenticated (it
+            # reached a live tool boundary) — clear a stale auth-error
+            # mark for its domain now rather than waiting for the
+            # process to exit. A long-lived seat (`await` / `hold:`)
+            # can run for hours after a relogin while the catalog still
+            # read the domain dead for the whole span (the defect this
+            # closes).
+            runner_auth_health.clear_success(repo_root, runner_choice)
+            auth_health_cleared = True
+        daemon._refresh_codex_thread_id(task, codex_events_path)
         daemon._drain_agent_card(
             emit, task, eid, card_path, card_state,
             account_context=account_context,
