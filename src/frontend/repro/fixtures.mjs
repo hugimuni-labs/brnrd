@@ -239,13 +239,17 @@ export const asks = {
 			return: 'in git',
 			stage: 'making',
 			touched_at: ago(0.4),
+			// One say with a resolved excerpt + a route (exercises the 17:51Z
+			// steer's `<relative time> · <excerpt> · ↗`); one with neither
+			// (falls back to the bare event id, `sayText`'s floor, asks.ts).
 			says: [
 				{
 					event: 'evt-1790033328745535000-kmse',
 					at: ago(0.5),
-					excerpt: 'slick ui to inspect the done things'
+					excerpt: 'slick ui to inspect the done things',
+					url: 'https://t.me/c/loom/42'
 				},
-				{ event: 'evt-1790033000000000000-aa01', at: ago(3), excerpt: null }
+				{ event: 'evt-1790033000000000000-aa01', at: ago(3), excerpt: null, url: null }
 			],
 			attempts: ['run-fallback-receipt'],
 			receipt: 'https://github.com/hugimuni-labs/brnrd/pull/2080',
@@ -286,6 +290,73 @@ export const asks = {
 			stale: false,
 			done: false,
 			after: 'w-188'
+		},
+		// His 18:27Z follow-up: four stale, unaddressed rows so the nested
+		// "top three + toggle for the rest" sub-block actually has something
+		// to hide (mirrors why `done` grew to five, above).
+		{
+			id: 'w-80',
+			title: 'Ping the printer vendor about the January renewal',
+			type: 'action',
+			return: 'in the world',
+			stage: 'heard',
+			touched_at: ago(24 * 80),
+			says: [],
+			attempts: [],
+			receipt: null,
+			topics: ['errands'],
+			live: false,
+			stale: true,
+			done: false,
+			after: null
+		},
+		{
+			id: 'w-72',
+			title: 'A second opinion on the export questionnaire wording',
+			type: 'decision',
+			return: 'in chat',
+			stage: 'understood',
+			touched_at: ago(24 * 95),
+			says: [],
+			attempts: [],
+			receipt: null,
+			topics: ['ops'],
+			live: false,
+			stale: true,
+			done: false,
+			after: null
+		},
+		{
+			id: 'w-68',
+			title: 'Sketch the quarterly numbers before the board call',
+			type: 'preparation',
+			return: 'in git',
+			stage: 'shaped',
+			touched_at: ago(24 * 110),
+			says: [],
+			attempts: [],
+			receipt: null,
+			topics: ['ops'],
+			live: false,
+			stale: true,
+			done: false,
+			after: null
+		},
+		{
+			id: 'w-61',
+			title: 'Look into the payment processor rate change notice',
+			type: 'decision',
+			return: 'in chat',
+			stage: 'heard',
+			touched_at: ago(24 * 130),
+			says: [],
+			attempts: [],
+			receipt: null,
+			topics: ['ops'],
+			live: false,
+			stale: true,
+			done: false,
+			after: null
 		},
 		{
 			id: 'w-96',

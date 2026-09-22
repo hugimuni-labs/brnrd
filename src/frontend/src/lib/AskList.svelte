@@ -5,11 +5,14 @@
 		askHandle,
 		askInTopics,
 		askLabel,
+		attemptGlyph,
 		bucketAsks,
 		doneWindow,
 		keymapIgnores,
 		liveAttempt,
 		moveFocus,
+		sayText,
+		splitAlive,
 		touchedLabel,
 		type AskGoal,
 		type AskRow,
@@ -21,6 +24,10 @@
 	// machine's own lane (`PickLane.svelte`) uses for its picking-row block —
 	// reused here rather than a second amber invented for this panel.
 	import { glowFor, STATUS_BURNING } from './statusPalette';
+	// The 17:51Z steer on the-panel-third-pass: run ids in `attempts` link
+	// to the run page — same builder `LiveRuns.svelte`/`RunLedgerReceipt.svelte`
+	// already call, never a second URL scheme invented here.
+	import { runNodeHref } from './runNode';
 
 	interface Props {
 		data: AsksResponse | null;
@@ -31,6 +38,16 @@
 		/** The heddle filter's lit set (`null` = all lit) and slug → canonical id. */
 		selected?: ReadonlySet<string> | null;
 		resolveTopic?: (slug: string) => string | null;
+		/** Topic id/alias → rendered glyph (the heddle rail's own map, e.g.
+		 *  `(id) => topicFace(warpGraphData.topicByAlias.get(id)).glyph`) —
+		 *  beside an `attempts` run link. `null`/unset ⇒ no glyph, never a
+		 *  placeholder. */
+		glyphForTopic?: (topic: string) => string | null;
+		/** The account's one connected repo, when it has exactly one — an
+		 *  `attempts` run id has no repo of its own in this payload, so a
+		 *  run link only renders when the repo is unambiguous; `null` ⇒ the
+		 *  run id renders as plain text, same as before this landed. */
+		runRepoLabel?: string | null;
 	}
 
 	let {
@@ -39,7 +56,9 @@
 		now,
 		liveRunIds = new Set<string>(),
 		selected = null,
-		resolveTopic = () => null
+		resolveTopic = () => null,
+		glyphForTopic = () => null,
+		runRepoLabel = null
 	}: Props = $props();
 
 	const lit = (row: AskRow) => askInTopics(row, selected, resolveTopic);
@@ -63,18 +82,32 @@
 	let doneOpen = $state(false);
 	let doneVisible = $derived(doneOpen ? doneRows : doneWin.visible);
 	let unaddressedOpen = $state(false);
+	// His 18:27Z follow-up: inside unaddressed, the stale rows (past the
+	// horizon) get their own nested collapse — a bare count first
+	// (`staleOpen`), the newest three once opened (`doneWindow` reused —
+	// same "window + rest toggle" shape as the done bucket above, `splitAlive`
+	// already orders stale rows the same newest-first way `done` arrives in),
+	// `staleRestOpen` for what's past the window. Non-stale unaddressed rows
+	// render as they always have, unaffected.
+	let unaddressedSplit = $derived(splitAlive(buckets.unaddressed));
+	let staleWin = $derived(doneWindow(unaddressedSplit.stale));
+	let staleOpen = $state(false);
+	let staleRestOpen = $state(false);
+	let staleVisible = $derived(
+		!staleOpen ? [] : staleRestOpen ? unaddressedSplit.stale : staleWin.visible
+	);
 	let expanded = new SvelteSet<string>();
 	let focus = $state<number | null>(null);
 	let root: HTMLElement | undefined = $state();
 
 	// The order `j`/`k` walk: done's visible window, in hand, to judge, then
-	// unaddressed when its toggle is open — the same order the buckets
-	// render in.
+	// unaddressed's non-stale rows + its stale sub-window, both gated on the
+	// outer unaddressed toggle — the same order the buckets render in.
 	let visible = $derived([
 		...doneVisible,
 		...buckets.inHand,
 		...buckets.toJudge,
-		...(unaddressedOpen ? buckets.unaddressed : [])
+		...(unaddressedOpen ? [...unaddressedSplit.alive, ...staleVisible] : [])
 	]);
 
 	// The pulse's two box-shadow stops, taken directly off `glowFor` (the
@@ -117,15 +150,16 @@
      column, done-first — **done & accepted** (its newest three open, a
      toggle for the rest) · **in hand** (a strand or the seat is working it
      now) · **yours to judge** (delivered, waiting on accept/reroute) ·
-     **unaddressed** (not yet even shaped, collapsed to a count). Rows
-     arrive LRU-sorted from the server; a stale row stays in its bucket,
-     dimmed, rather than sinking below a rule — the bucket already says what
-     stage it is in, so a second sort axis inside it would just be noise. A
-     row opens in place: its says, its attempts, its receipt; a `sign`
-     (when a row carries one) speaks in the id cell and the accept/reroute
-     chips in place of the bare id. `j`/`k` walk the rows in bucket order,
-     Enter opens one (a row is a real button, so Enter/Space are the
-     browser's own). -->
+     **unaddressed** (not yet even shaped, collapsed to a count; its own
+     stale rows nest one collapse deeper — the 18:27Z follow-up). A stale
+     row inside in-hand/to-judge stays dimmed in place, not pulled out —
+     only unaddressed's stale rows get the nested block. A row opens in
+     place: its says (`<relative time> · <excerpt> · ↗`, the 17:51Z
+     steer), its attempts (a run link + topic glyph, same steer), its
+     receipt; a `sign` (when a row carries one) speaks in the id cell and
+     the accept/reroute chips in place of the bare id. `j`/`k` walk the
+     rows in bucket order, Enter opens one (a row is a real button, so
+     Enter/Space are the browser's own). -->
 <div class="panel mt-2 p-3" aria-label="your asks" bind:this={root}>
 	<div class="mb-2 flex items-baseline justify-between gap-3">
 		<span class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">your asks</span>
@@ -257,13 +291,28 @@
 								{#if row.after}<p>after <span class="text-stone-300">{row.after}</span></p>{/if}
 								<div>
 									<p class="text-[10px] tracking-wide text-ink-mute uppercase">says</p>
+									<!-- 17:51Z steer (the-panel-third-pass): "the evt-say lines say
+									     nothing" — `<relative time> · <excerpt> · ↗`, never the raw
+									     event id as the lead (`sayText` falls back to it only when
+									     no excerpt resolved); ↗ only when the server sent a `url`
+									     (no route exists yet, so never today — see asks.ts). -->
 									{#each row.says as say (say.event)}
 										<p class="truncate">
-											<span class="text-stone-400">{say.event.slice(0, 30)}</span>
-											{#if say.at}<span class="text-ink-mute">
-													· {touchedLabel(say.at, now)}</span
-												>{/if}
-											{#if say.excerpt}<span class="text-stone-300"> · “{say.excerpt}”</span>{/if}
+											<span class="text-ink-mute">{touchedLabel(say.at, now) || '—'}</span>
+											<span class="text-stone-300"> · {sayText(say)}</span>
+											{#if say.url}
+												<!-- eslint-disable svelte/no-navigation-without-resolve -->
+												<a
+													href={say.url}
+													class="text-sky-200 hover:text-sky-100"
+													target="_blank"
+													rel="noopener noreferrer"
+													aria-label="open this message"
+												>
+													· ↗</a
+												>
+												<!-- eslint-enable svelte/no-navigation-without-resolve -->
+											{/if}
 										</p>
 									{:else}
 										<p class="text-ink-mute">none recorded yet</p>
@@ -271,9 +320,20 @@
 								</div>
 								<div>
 									<p class="text-[10px] tracking-wide text-ink-mute uppercase">attempts</p>
+									<!-- 17:51Z steer: a run id links to its run page (`runNodeHref`,
+									     same builder LiveRuns/RunLedgerReceipt use) with the ask's
+									     own topic glyph beside — the run itself carries no topic in
+									     this payload, `attemptGlyph` names that stand-in. No known
+									     repo (an account with 0 or >1 connected, `runRepoLabel` null)
+									     ⇒ plain text, same as before this landed. -->
 									{#each row.attempts as run (run)}
+										{@const glyph = attemptGlyph(row, glyphForTopic)}
 										<p class="truncate">
-											<span class="text-stone-300">{run}</span>
+											{#if runRepoLabel}<a
+													class="text-stone-300 underline decoration-stone-700 hover:text-amber-100"
+													href={runNodeHref(runRepoLabel, run)}>{run}</a
+												>{:else}<span class="text-stone-300">{run}</span>{/if}
+											{#if glyph}<span class="text-ink-mute"> {glyph}</span>{/if}
 											{#if liveRunIds.has(run)}<span class="text-amber-300"> · live</span>{/if}
 										</p>
 									{:else}
@@ -370,7 +430,36 @@
 						data-bucket-heading="unaddressed"
 						>{unaddressedOpen ? '▾' : '▸'} unaddressed · {buckets.unaddressed.length}</button
 					>
-					{#if unaddressedOpen}{@render rows(buckets.unaddressed)}{/if}
+					{#if unaddressedOpen}
+						{@render rows(unaddressedSplit.alive)}
+						<!-- His 18:27Z follow-up: stale unaddressed rows get their own
+						     nested block — a bare count, then (opened) the newest three,
+						     then (opened further) the rest. Non-stale rows above are
+						     unaffected. -->
+						{#if unaddressedSplit.stale.length}
+							<button
+								type="button"
+								class="mt-1 flex items-baseline gap-1.5 font-mono text-[10px] tracking-wide text-ink-mute uppercase hover:text-stone-300"
+								aria-expanded={staleOpen}
+								onclick={() => (staleOpen = !staleOpen)}
+								data-bucket-heading="unaddressed-stale"
+								>{staleOpen ? '▾' : '▸'} stale · {unaddressedSplit.stale.length}</button
+							>
+							{#if staleOpen}
+								{@render rows(staleVisible)}
+								{#if staleWin.restCount > 0}
+									<button
+										type="button"
+										class="mt-1 flex items-baseline gap-1.5 font-mono text-[10px] tracking-wide text-ink-mute uppercase hover:text-stone-300"
+										aria-expanded={staleRestOpen}
+										onclick={() => (staleRestOpen = !staleRestOpen)}
+										data-bucket-toggle="unaddressed-stale"
+										>{staleRestOpen ? '▾' : '▸'} {staleWin.restCount} stale</button
+									>
+								{/if}
+							{/if}
+						{/if}
+					{/if}
 				{:else}
 					<p
 						class="mb-1 font-mono text-[10px] tracking-wide text-ink-mute uppercase"

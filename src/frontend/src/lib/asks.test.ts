@@ -6,14 +6,17 @@ import {
 	askHandle,
 	askInTopics,
 	askLabel,
+	attemptGlyph,
 	bucketAsks,
 	doneWindow,
 	fetchAsks,
 	liveAttempt,
 	moveFocus,
+	sayText,
 	splitAlive,
 	touchedLabel,
-	type AskRow
+	type AskRow,
+	type AskSay
 } from './asks.ts';
 
 const row = (over: Partial<AskRow> = {}): AskRow => ({
@@ -124,6 +127,28 @@ test('doneWindow: the newest three show, the rest count for the toggle', () => {
 		['a', 'b']
 	);
 	assert.equal(small.restCount, 0);
+});
+
+test('sayText: the excerpt leads, the event id is only the last resort', () => {
+	const say = (over: Partial<AskSay> = {}): AskSay => ({
+		event: 'evt-abc',
+		at: null,
+		excerpt: null,
+		...over
+	});
+	assert.equal(
+		sayText(say({ excerpt: 'slick ui to inspect the done things' })),
+		'slick ui to inspect the done things'
+	);
+	assert.equal(sayText(say()), 'evt-abc');
+	assert.equal(sayText(say({ excerpt: '' })), 'evt-abc'); // present but empty ⇒ still the floor
+});
+
+test("attemptGlyph: the row's first topic stands in, topicless resolves nothing", () => {
+	const glyphFor = (topic: string) => (topic === 'the-loom' ? 'ᚠ' : null);
+	assert.equal(attemptGlyph(row({ topics: ['the-loom', 'ops'] }), glyphFor), 'ᚠ');
+	assert.equal(attemptGlyph(row({ topics: ['ops'] }), glyphFor), null); // resolver misses it
+	assert.equal(attemptGlyph(row({ topics: [] }), glyphFor), null); // nothing to resolve
 });
 
 test('liveAttempt finds the run wearing the ask', () => {
