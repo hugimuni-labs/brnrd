@@ -682,8 +682,47 @@ def _corpus_fingerprint(files: list, knowledge_dir: Path) -> str:
     return h.hexdigest()
 
 
-def _corpus_payload(files: list) -> list[dict]:
-    """Read each corpus file for the PUT, capping oversized mirrors."""
+def _git_committed_times(home_root: Path) -> dict[str, str]:
+    """``home-relative path -> newest commit time`` under ``surface/``, one call.
+
+    The account home is its own git repo (``account._init_git_repo``); this
+    scopes to the authored surface because that is the one slice the hosted
+    asks reader needs ordered like the disk door already orders it
+    (``brr.asks.list_asks`` §``_git_touch_times`` — same idiom, run here
+    instead, since the hosted server has no git access to this machine).
+    A path this call does not name (new, uncommitted, outside the scoped
+    subtree) is not an error — the caller falls back to the file's mtime.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(home_root), "log", "--name-only", "--format=@@%cI", "--", "surface"],
+            capture_output=True, text=True, timeout=30, check=False,
+            env={"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "HOME": str(Path.home())},
+        ).stdout
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {}
+    times: dict[str, str] = {}
+    current = ""
+    for line in out.splitlines():
+        if line.startswith("@@"):
+            current = line[2:]
+        elif line.strip() and current:
+            times.setdefault(line.strip(), current)  # log is newest-first
+    return times
+
+
+def _corpus_payload(files: list, home_root: Path | None = None) -> list[dict]:
+    """Read each corpus file for the PUT, capping oversized mirrors.
+
+    Each entry also carries ``committed_at`` (design-the-ask.md §Done,
+    reopened, linked — "the hosted order needs the publisher to stamp each
+    surface file's last commit time"): the file's newest git commit time in
+    the daemon's own surface repo, one ``git log`` call for the whole batch,
+    falling back to the file's own mtime when git names nothing for it.
+    ``home_root=None`` (no account home to point git at) skips the lookup
+    and mtime-stamps every file, same as a file git does not name.
+    """
+    committed = _git_committed_times(home_root) if home_root is not None else {}
     payload: list[dict] = []
     for f in files:
         try:
@@ -696,7 +735,23 @@ def _corpus_payload(files: list) -> list[dict]:
             # Cut on a byte boundary, then drop any partial trailing char.
             raw = encoded[:_CORPUS_FILE_CAP_BYTES].decode("utf-8", "ignore")
             truncated = True
-        payload.append({"path": f.path, "markdown": raw, "layer": f.layer, "truncated": truncated})
+        committed_at = committed.get(f.path)
+        if not committed_at:
+            try:
+                committed_at = datetime.fromtimestamp(
+                    f.abspath.stat().st_mtime, tz=timezone.utc
+                ).isoformat()
+            except OSError:
+                committed_at = None
+        payload.append(
+            {
+                "path": f.path,
+                "markdown": raw,
+                "layer": f.layer,
+                "truncated": truncated,
+                "committed_at": committed_at,
+            }
+        )
     return payload
 
 
@@ -715,7 +770,10 @@ def _publish_corpus(brr_dir: Path, inbox_dir: Path | None, state: dict, response
     key = str(brr_dir)
     if _corpus_publish_hash.get(key) == fingerprint:
         return  # unchanged since the last publish — skip the network round-trip
-    payload = _corpus_payload(files)
+    # ``knowledge_dir`` is always ``<home>/knowledge`` (account.knowledge_path)
+    # — its parent is the account home, the git repo ``_git_committed_times``
+    # scopes to, with no extra resolve/import needed here.
+    payload = _corpus_payload(files, home_root=knowledge_dir.parent)
     try:
         out = _context().request(
             state["brnrd_url"],
