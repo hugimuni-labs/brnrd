@@ -15,6 +15,7 @@ from sqlalchemy import event  # noqa: E402
 
 from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
+from brnrd.models import Event  # noqa: E402
 from brnrd.oauth import GitHubIdentity  # noqa: E402
 from brnrd.routers.accounts import account_for_github_identity, issue_session_token  # noqa: E402
 from _helpers import PUBLISH_EVERYTHING, brnrd_account_headers  # noqa: E402
@@ -361,3 +362,71 @@ def test_dashboard_warp_asks_serves_lru_rows_stale_and_done_apart():
 
 def test_dashboard_warp_asks_requires_session():
     assert _client().get("/v1/dashboard/warp/asks.json").status_code == 401
+
+
+def test_dashboard_warp_asks_resolves_say_excerpts_from_the_message_store():
+    """The 17:51Z steer on the-panel-third-pass: a say line with no
+    excerpt of its own resolves one server-side, joined on the event id
+    against the cloud's own message store (``Event.body``) — scoped to
+    this account's own repos, and never fabricating a placeholder for an
+    id that matches nothing."""
+    client = _client()
+    account_headers, daemon_headers = _repo_and_daemon(client)
+    repo_id = client.post(
+        "/v1/accounts/repos",
+        json={"repo_full_name": "Gurio/brr", "default_branch": "main", "publish_layers": PUBLISH_EVERYTHING},
+        headers=account_headers,
+    ).json()["repo_id"]
+    with client.app.state.SessionLocal() as db:
+        db.add(Event(event_id="evt-with-body", repo_id=repo_id, source="dev", body="  slick ui   to inspect the done things  ", reply_to="{}"))
+        db.add(Event(event_id="evt-long-body", repo_id=repo_id, source="dev", body="x" * 200, reply_to="{}"))
+        db.commit()
+    files = [
+        {
+            "path": "surface/warp/w-1.md",
+            "markdown": (
+                "# Has a say\n\n"
+                "type: action\n"
+                "touched: 2026-09-22T00:00:00Z\n"
+                "says: evt-with-body evt-long-body evt-unknown\n"
+            ),
+        },
+    ]
+    client.put("/v1/daemons/surface", json={"files": files}, headers=daemon_headers)
+    _login_cookie(client)
+
+    body = client.get("/v1/dashboard/warp/asks.json").json()
+
+    says = {say["event"]: say for say in body["asks"][0]["says"]}
+    assert says["evt-with-body"]["excerpt"] == "slick ui to inspect the done things"
+    assert says["evt-long-body"]["excerpt"] == "x" * 120 + "…"
+    assert says["evt-unknown"]["excerpt"] is None  # matches nothing: stays blank, not a lie
+    assert all(say["url"] is None for say in says.values())  # no message route exists yet
+
+
+def test_dashboard_warp_asks_excerpt_scoped_to_the_account_own_repos():
+    """A same-named event id on a repo the account does not own must not
+    leak that other account's message body into this account's list."""
+    client = _client()
+    account_headers, daemon_headers = _repo_and_daemon(client)
+    other_headers = brnrd_account_headers(client.app, github_id="999", login="other", email="c@d.com")
+    other_repo_id = client.post(
+        "/v1/accounts/repos",
+        json={"repo_full_name": "Other/repo", "default_branch": "main", "publish_layers": PUBLISH_EVERYTHING},
+        headers=other_headers,
+    ).json()["repo_id"]
+    with client.app.state.SessionLocal() as db:
+        db.add(Event(event_id="evt-shared-id", repo_id=other_repo_id, source="dev", body="the other account's own words", reply_to="{}"))
+        db.commit()
+    files = [
+        {
+            "path": "surface/warp/w-1.md",
+            "markdown": "# Has a say\n\ntype: action\ntouched: 2026-09-22T00:00:00Z\nsays: evt-shared-id\n",
+        },
+    ]
+    client.put("/v1/daemons/surface", json={"files": files}, headers=daemon_headers)
+    _login_cookie(client)
+
+    body = client.get("/v1/dashboard/warp/asks.json").json()
+
+    assert body["asks"][0]["says"][0]["excerpt"] is None

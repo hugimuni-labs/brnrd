@@ -7,6 +7,13 @@ export interface AskSay {
 	event: string;
 	at: string | null;
 	excerpt: string | null;
+	/** A link to the thread/message this say came from, when a route
+	 *  exists (the-panel-third-pass's 17:51Z steer) — the server sends
+	 *  `null` today (no dashboard page resolves a specific message yet;
+	 *  `dashboard.py::_enrich_ask_says` writes the key regardless, wired
+	 *  for the day one lands) and older payloads may omit the field
+	 *  entirely, so this reads optional. */
+	url?: string | null;
 }
 
 export interface AskRow {
@@ -125,6 +132,26 @@ export function askHandle(row: AskRow): string {
  *  never re-sorts. */
 export function doneWindow(rows: AskRow[], limit = 3): { visible: AskRow[]; restCount: number } {
 	return { visible: rows.slice(0, limit), restCount: Math.max(0, rows.length - limit) };
+}
+
+/** A say line's own text — the excerpt when the server resolved one, else
+ *  the event id as a last resort. The 17:51Z steer's complaint ("the
+ *  evt-say lines say nothing") was about every row degrading to the bare
+ *  id; this keeps that as the floor, not the default. */
+export function sayText(say: AskSay): string {
+	return say.excerpt || say.event;
+}
+
+/** The glyph beside a run link in `attempts` — the ask's own first topic
+ *  stands in for "the run's topic" (a run id carries no topic of its own
+ *  in this payload; the-panel-third-pass's report names this choice).
+ *  `glyphFor` resolves a topic id/alias to its rendered glyph; `null`
+ *  when unresolved or the row is topicless. */
+export function attemptGlyph(
+	row: AskRow,
+	glyphFor: (topic: string) => string | null
+): string | null {
+	return row.topics.length ? glyphFor(row.topics[0]) : null;
 }
 
 /** A row is lit by the heddle filter when it wears a lit topic; a row with no
