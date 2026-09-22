@@ -5833,7 +5833,13 @@ def _build_run_context_bundle(
     sections.append("")
     sections.append("### Run")
     from . import parked_branches
-    parked_line = parked_branches.render(parked_branches.detect(repo_root))
+    # `read_cached`, never `detect` directly: the walk it would otherwise run
+    # inline measured 130.9s over 453 branches on this account (2026-09-22)
+    # — every dispatched run's boot prompt paying that synchronously is the
+    # tick-that-breathes bug (see kb + the report this shipped with). The
+    # cache is warmed by the daemon's own main-loop tick (`warn_new`) and by
+    # this call itself; a cold cache just renders no line for this boot.
+    parked_line = parked_branches.render(parked_branches.read_cached(repo_root))
     if parked_line:
         sections.append(f"- {parked_line}")
     sections.append(f"- Event: {event_id}")
