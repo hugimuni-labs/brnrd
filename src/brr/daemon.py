@@ -11533,6 +11533,7 @@ def _spawn_strand_ran(task: Run) -> bool:
 #: dict is a serialization question nobody should have to ask at reap time.
 EXIT_QUOTA_KEYS = (
     "spawn_quota_remaining_pct",
+    "spawn_quota_bucket",
     "spawn_quota_summary",
     "spawn_quota_shell",
     "spawn_quota_read_at",
@@ -11638,6 +11639,7 @@ def _capture_exit_quota(task: Run) -> dict[str, object]:
 
     core = str(task.meta.get("runner_core") or task.meta.get("core") or "").strip()
     pct = runner_quota.binding_quota_remaining_pct(levels, core or None)
+    bucket = runner_quota.binding_quota_bucket(levels, core or None)
     summary = runner_quota.summary_from_levels(levels)
     if pct is None and not summary:
         return {}
@@ -11654,6 +11656,12 @@ def _capture_exit_quota(task: Run) -> dict[str, object]:
         # comparing `spawn_quota_remaining_pct` against a floor should
         # never have to discover that by hand.
         captured["spawn_quota_remaining_pct"] = int(float(pct))
+    if bucket:
+        # #2084's third ask: a kill on a quota reading names *which*
+        # bucket it read — "credits" vs "session"/"week"/"primary" —
+        # so the next reader isn't left guessing what a bare percentage
+        # meant.
+        captured["spawn_quota_bucket"] = bucket[0]
     if summary:
         captured["spawn_quota_summary"] = " ".join(str(summary).split())
     shell = "codex" if codex_status.supported(runner_name) else (
@@ -12059,10 +12067,13 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     fuel_block = ""
     if exit_quota and task.status == "error":
         pct = exit_quota.get("spawn_quota_remaining_pct")
+        bucket = exit_quota.get("spawn_quota_bucket")
         parts = [
             "fuel at exit:",
             (
-                f"binding quota {pct}% left"
+                f"binding quota ({bucket}) {pct}% left"
+                if pct is not None and bucket
+                else f"binding quota {pct}% left"
                 if pct is not None
                 else "binding quota unreadable"
             ),
