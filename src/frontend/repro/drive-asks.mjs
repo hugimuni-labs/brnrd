@@ -197,10 +197,11 @@ async function main() {
 				);
 
 				// done's rest toggle: closed by default, opens to all five, closes
-				// back down.
+				// back down. Same `uppercase` transform as the headings above —
+				// lower before comparing.
 				const doneToggle = list.locator('[data-bucket-toggle="done"]');
 				assert.equal(
-					(await doneToggle.innerText()).trim(),
+					(await doneToggle.innerText()).trim().toLowerCase(),
 					'▸ 2 done',
 					'names what the toggle hides'
 				);
