@@ -101,14 +101,15 @@ def _fresh_sweep_state():
     Four globals now, all added or repurposed when the walk moved off the
     caller's own thread (2026-09-22, the-tick-that-breathes): `_WARNED`
     (which branches have been announced), `_cached_at` / `_cached_items`
-    (the async-refreshed cache `read_cached` and `warn_new` both read
-    instead of calling `detect` themselves), and `_refreshing` (the
-    in-flight guard `refresh_if_stale_async` uses to avoid starting a
-    second walk while one is still running). The TTL fixture this replaces
-    was added 2026-09-11 after a pre-existing test cleared only `_WARNED`,
-    passed alone, and failed in a full run — a second sweep inside the
-    window returned before it could print anything. Same failure shape
-    would recur here with any one of the four left dirty.
+    (per-repo dicts backing the async-refreshed cache `read_cached` and
+    `warn_new` both read instead of calling `detect` themselves), and
+    `_refreshing` (the per-repo in-flight set `refresh_if_stale_async` uses
+    to avoid starting a second walk for the same repo while one is still
+    running). The TTL fixture this replaces was added 2026-09-11 after a
+    pre-existing test cleared only `_WARNED`, passed alone, and failed in a
+    full run — a second sweep inside the window returned before it could
+    print anything. Same failure shape would recur here with any one of the
+    four left dirty.
 
     Autouse rather than another `monkeypatch.setattr` line per test, because
     the failure mode is "a future test forgets one of them", and a fixture
@@ -116,9 +117,9 @@ def _fresh_sweep_state():
     """
     def _reset():
         parked_branches._WARNED.clear()
-        parked_branches._cached_at = None
-        parked_branches._cached_items = []
-        parked_branches._refreshing = False
+        parked_branches._cached_at.clear()
+        parked_branches._cached_items.clear()
+        parked_branches._refreshing.clear()
 
     _reset()
     yield
@@ -365,3 +366,34 @@ def test_the_two_wiring_points_read_the_cache_not_the_walk():
         "the boot bundle calls detect() directly again — every dispatched "
         "run's boot would pay the full walk synchronously"
     )
+
+
+def test_cache_is_keyed_per_repo_not_shared_across_them(tmp_path, monkeypatch):
+    """One daemon process dispatches against more than one repo.
+
+    `spawn:`'s own `repo:` targeting sends a strand into a sibling repo from
+    the *same* process (`account_context.repos`) — an unkeyed cache would
+    serve repo A's parked-branch list to repo B's boot prompt the first time
+    both have swept in one process lifetime. `.resolve()`'d, distinct
+    `tmp_path` children are enough to prove the two never collide.
+    """
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+
+    def _fake_detect(root):
+        name = "brr/from-a" if root == repo_a else "brr/from-b"
+        return [parked_branches.ParkedBranch(name, 1, None)]
+
+    monkeypatch.setattr(parked_branches, "detect", _fake_detect)
+
+    assert parked_branches.refresh_if_stale_async(repo_a) is True
+    assert parked_branches.refresh_if_stale_async(repo_b) is True
+    _join_sweep()
+
+    assert [item.name for item in parked_branches.read_cached(repo_a)] == ["brr/from-a"]
+    assert [item.name for item in parked_branches.read_cached(repo_b)] == ["brr/from-b"]
+
+    # A fresh sweep for repo_a alone must not touch repo_b's own TTL clock.
+    assert parked_branches.refresh_if_stale_async(repo_b) is False
