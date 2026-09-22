@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,7 @@ from brnrd.models import (
     TgPairCode,
 )
 from brnrd import schemas
+from brr.asks import asks_from_files
 
 from ._session import (
     _account_id,
@@ -1860,6 +1862,40 @@ def dashboard_surface_api(request: Request, db: Session = Depends(get_db)) -> Re
         },
         headers={"ETag": etag, "Cache-Control": "no-cache"},
     )
+
+
+#: Served asks per account: ``account_id -> (surface etag, monotonic stamp,
+#: payload)``. 30 s, and never past a fresher publish — the etag is the
+#: surface row's own publish stamp, so a new mirror invalidates at once.
+_ASKS_CACHE: dict[str, tuple[str, float, dict[str, Any]]] = {}
+_ASKS_CACHE_SECONDS = 30.0
+
+
+@router.get("/v1/dashboard/warp/asks.json")
+def dashboard_warp_asks_api(request: Request, db: Session = Depends(get_db)) -> Response:
+    """The console's list of asks — the warp read as the user's LRU.
+
+    Same auth as the surface feed; rows are computed from the mirrored warp
+    item files (``brr.asks``), so nothing here needs the daemon's disk.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    account = db.get(Account, account_id)
+    if account is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    etag = _surface_etag(account)
+    cached = _ASKS_CACHE.get(str(account_id))
+    if cached and cached[0] == etag and time.monotonic() - cached[1] < _ASKS_CACHE_SECONDS:
+        payload = cached[2]
+    else:
+        try:
+            files = json.loads(account.surface_json or "[]")
+        except ValueError:
+            files = []
+        payload = asks_from_files(files if isinstance(files, list) else [])
+        _ASKS_CACHE[str(account_id)] = (etag, time.monotonic(), payload)
+    return JSONResponse(payload, headers={"Cache-Control": "private, max-age=30"})
 
 
 def _activity_row_out(view: dict[str, Any]) -> dict[str, Any]:
