@@ -209,6 +209,48 @@ def latest_claude_spend_outbox_dir(brr_dir: Path) -> Path | None:
     return best_path
 
 
+#: Known Codex subscription tiers (case-insensitive) — plans with a
+#: *fixed* window quota and no pay-per-use credits wallet. `has_credits:
+#: false` on one of these means "this plan has no second bucket," never
+#: "the plan is exhausted" (#2084).
+_KNOWN_SUBSCRIPTION_PLAN_TYPES = frozenset(
+    {"plus", "pro", "max", "team", "enterprise", "free", "business"}
+)
+
+
+def _credits_bucket_binds(levels: Mapping[str, Any]) -> bool:
+    """Whether a ``buckets.credits`` zero reading should count as a wall.
+
+    2026-09-22, #2084: three strands died at 01:37Z reading ``credits:
+    balance 0`` as the binding quota while the account's real window
+    buckets — read moments before and after — were healthy (5h/7d well
+    above zero). The rollout event that produced the zero carried no
+    window data at all (a transient shape Codex's own API is documented
+    to emit, see the module docstring's 2026-07-24 incident), so the
+    ``credits`` block was the *only* fact in that one reading — and on a
+    subscription account, ``has_credits: false`` there says "no wallet,"
+    not "empty wallet."
+
+    Binds (returns ``True``) only when ``plan_type`` is known and is
+    *not* one of the recognised subscription tiers — i.e. the plan
+    plausibly bills per token, so a reported balance is a real fact about
+    real headroom. A ``plan_type`` this reading never carried (``None`` /
+    empty) is treated as unproven and does **not** bind: the safer read
+    when the plan is unknown is the one every other guard in this module
+    already takes — refuse to assert what cannot be shown.
+
+    What this does **not** do: remember a *positive* credits reading from
+    an earlier heartbeat to corroborate a later zero (the account's own
+    non-zero credits history the issue also asks for). That needs
+    persisted per-account state this module doesn't keep today; scoped out
+    here and named in the report's Doubts rather than guessed at.
+    """
+    plan_type = str(levels.get("plan_type") or "").strip().lower()
+    if not plan_type:
+        return False
+    return plan_type not in _KNOWN_SUBSCRIPTION_PLAN_TYPES
+
+
 def binding_quota_remaining_pct(
     levels: Mapping[str, Any] | None,
     model: str | None = None,
@@ -239,6 +281,14 @@ def binding_quota_remaining_pct(
     buckets stay fully visible in the collector's own ``summary`` string, and
     :func:`excluded_week_model_buckets` surfaces them for a caller that wants
     to mention a thin one without acting on it.
+
+    A ``buckets.credits`` reading is excluded from the ``min()`` unless
+    :func:`_credits_bucket_binds` proves it should count (#2084) — a
+    subscription account's exhausted-credits reading is not a wall, and
+    excluding it here means the binding percent falls through to whatever
+    *is* proven this reading (a window bucket, if one rode along; ``None``
+    when nothing else is present) — the same floor a seat's own reading
+    would land on, never a fabricated zero.
     """
     if not isinstance(levels, Mapping):
         return None
@@ -266,6 +316,11 @@ def binding_quota_remaining_pct(
                     if isinstance(model_bucket, Mapping):
                         _add(model_bucket.get("remaining_percentage"))
                 continue
+            if key == "credits" and isinstance(bucket, Mapping):
+                if not _credits_bucket_binds(levels):
+                    continue
+                _add(bucket.get("remaining_percentage"))
+                continue
             if isinstance(bucket, Mapping):
                 _add(bucket.get("remaining_percentage"))
 
@@ -273,6 +328,69 @@ def binding_quota_remaining_pct(
     _add(quota.get("secondary_remaining_percent"))
 
     return min(found) if found else None
+
+
+def binding_quota_bucket(
+    levels: Mapping[str, Any] | None,
+    model: str | None = None,
+) -> "tuple[str, float] | None":
+    """``(label, remaining_pct)`` for the bucket :func:`binding_quota_remaining_pct`
+    actually bound on, or ``None`` when nothing bound.
+
+    Same rules, same exclusions (a non-binding ``credits`` reading is never
+    named here either) — this just also says *which* proven bucket was the
+    lowest, so a caller reporting a kill can name the bucket instead of a
+    bare percentage (#2084's third ask: "the next reader sees `credits` and
+    not just `0%`"). Ties resolve to the first bucket found in the fixed
+    read order below, which is deterministic but otherwise arbitrary.
+    """
+    pct = binding_quota_remaining_pct(levels, model)
+    if pct is None:
+        return None
+    if not isinstance(levels, Mapping):
+        return None
+    quota = levels.get("quota")
+    if not isinstance(quota, Mapping):
+        return None
+
+    def _matches(value: Any) -> bool:
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and float(value) == pct
+        )
+
+    model_key = _slug(model) if model else None
+    buckets = quota.get("buckets")
+    if isinstance(buckets, Mapping):
+        for key, bucket in buckets.items():
+            if key == "week_models" and isinstance(bucket, Mapping):
+                if model_key is None:
+                    continue
+                for label, model_bucket in bucket.items():
+                    if _slug(str(label)) != model_key:
+                        continue
+                    if isinstance(model_bucket, Mapping) and _matches(
+                        model_bucket.get("remaining_percentage")
+                    ):
+                        return (str(label), pct)
+                continue
+            if key == "credits" and isinstance(bucket, Mapping):
+                if not _credits_bucket_binds(levels):
+                    continue
+                if _matches(bucket.get("remaining_percentage")):
+                    return ("credits", pct)
+                continue
+            if isinstance(bucket, Mapping) and _matches(
+                bucket.get("remaining_percentage")
+            ):
+                return (str(key), pct)
+
+    if _matches(quota.get("primary_remaining_percent")):
+        return ("primary", pct)
+    if _matches(quota.get("secondary_remaining_percent")):
+        return ("secondary", pct)
+    return None
 
 
 def binding_quota_reset_epoch(levels: Mapping[str, Any] | None) -> float | None:
