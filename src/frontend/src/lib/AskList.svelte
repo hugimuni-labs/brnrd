@@ -12,6 +12,12 @@
 		type AskRow,
 		type AsksResponse
 	} from './asks';
+	// The roast (evt-…-m7n6): "make it more visually distinct, not just a
+	// different header in the same table… I want the active items sort of
+	// visually lit." `glowFor`/`STATUS_BURNING` are the exact tokens the
+	// machine's own lane (`PickLane.svelte`) uses for its picking-row block —
+	// reused here rather than a second amber invented for this panel.
+	import { glowFor, STATUS_BURNING } from './statusPalette';
 
 	interface Props {
 		data: AsksResponse | null;
@@ -56,6 +62,17 @@
 		...buckets.unaddressed,
 		...(doneOpen ? doneRows : [])
 	]);
+
+	// The pulse's two box-shadow stops, taken directly off `glowFor` (the
+	// same call `PickLane.svelte` makes for a burning row) rather than a
+	// hand-tuned glow — `glowFor` returns a full `box-shadow: …;` CSS
+	// declaration, so only the value survives the strip; the keyframes below
+	// reference the pair through CSS custom properties (a component style
+	// block is static markup, it cannot close over these).
+	const shadowValue = (declaration: string) =>
+		declaration.replace(/^box-shadow:\s*/, '').replace(/;\s*$/, '');
+	const pulseLow = shadowValue(glowFor('calm', STATUS_BURNING, 'bar'));
+	const pulseHigh = shadowValue(glowFor('attention', STATUS_BURNING, 'bar'));
 
 	function toggle(id: string) {
 		if (expanded.has(id)) expanded.delete(id);
@@ -115,17 +132,21 @@
 			</p>
 		{/if}
 		{#snippet rows(list: AskRow[], kind: 'inHand' | 'toJudge' | 'plain' = 'plain')}
-			<ul class="space-y-px">
+			{@const boxed = kind === 'inHand'}
+			<ul class={boxed ? 'space-y-1' : 'space-y-px'}>
 				{#each list as row (row.id)}
 					{@const open = expanded.has(row.id)}
 					{@const drone = liveAttempt(row, liveRunIds)}
-					<li
-						class="border-l-2 {drone ? 'border-amber-500/70' : 'border-transparent'}"
-						class:opacity-60={row.stale}
-					>
+					<li class:opacity-60={row.stale}>
 						<button
 							type="button"
-							class="ask-row block w-full px-2 py-1.5 text-left hover:bg-stone-800/40 focus-visible:bg-stone-800/50"
+							class="ask-row block w-full px-2 py-1.5 text-left {boxed
+								? `border ${drone ? 'border-amber-400/80' : 'border-amber-700/40'} bg-stone-950/70 hover:bg-stone-900/70 focus-visible:bg-stone-900/70`
+								: `border-l-2 ${drone ? 'border-amber-500/70' : 'border-transparent'} hover:bg-stone-800/40 focus-visible:bg-stone-800/50`}"
+							class:ask-live-pulse={boxed && Boolean(drone)}
+							style={boxed && drone
+								? `--ask-pulse-low: ${pulseLow}; --ask-pulse-high: ${pulseHigh};`
+								: undefined}
 							data-ask={row.id}
 							data-ask-stale={row.stale ? '' : undefined}
 							data-ask-done={row.done ? '' : undefined}
@@ -174,7 +195,7 @@
 							     the ledger. Outside the `<button>` so its receipt link stays
 							     valid HTML (no interactive content nested in a button). -->
 							<div
-								class="flex flex-wrap items-baseline gap-x-3 pb-1.5 pl-16 font-mono text-[10px] text-stone-400"
+								class="flex flex-wrap items-center gap-x-2 gap-y-1 pb-1.5 pl-16 font-mono text-[10px] text-stone-400"
 								data-to-judge-hints
 							>
 								{#if row.receipt}
@@ -192,11 +213,16 @@
 										{:else}{row.receipt}{/if}</span
 									>
 								{/if}
-								<!-- Neither word is a status color (statusPalette.ts: no green
-								     family, red reserved for a broken contract) — just the
-								     sky link tone and the base ink, same as the rest of the row. -->
-								<span class="cursor-text select-all text-sky-200/80">accept {row.id}</span>
-								<span class="cursor-text select-all text-stone-300"
+								<!-- His roast: the two words as "a small chip pair, not body
+								     text". Still neither a status color (statusPalette.ts: no
+								     green family, red reserved for a broken contract) — just
+								     the sky link tone and the base ink, boxed rather than bare. -->
+								<span
+									class="cursor-text select-all border border-sky-900/60 bg-sky-950/40 px-1.5 py-0.5 tracking-wide text-sky-300 uppercase"
+									>accept {row.id}</span
+								>
+								<span
+									class="cursor-text select-all border border-stone-700/60 bg-stone-900/40 px-1.5 py-0.5 tracking-wide text-stone-300 uppercase"
 									>reroute {row.id}: &lt;why&gt;</span
 								>
 							</div>
@@ -252,21 +278,30 @@
 			</ul>
 		{/snippet}
 
-		<!-- The four buckets, his order, each headed and counted
-		     (design-the-ask.md) — a stale row inside one is dimmed
-		     (`opacity-60` on its `<li>`, above), never moved to a fifth
-		     place: the bucket already says what stage the ask is in. -->
-		<div class="space-y-3">
-			<div>
+		<!-- The four buckets, his order, each its own block now (the roast:
+		     "not just a different header in the same table") — a stale row
+		     inside one is still dimmed in place (`opacity-60` on its `<li>`,
+		     above), never moved to a fifth place: the bucket already says
+		     what stage the ask is in. Framing carries the weight, top to
+		     bottom: **in hand** wears the machine's own live-amber block
+		     (`PickLane.svelte`'s picking row, same tokens); **yours to judge**
+		     gets `.subpanel`'s quieter hairline (`layout.css`) — waiting, not
+		     burning; **unaddressed** stays plain rows, no frame — nothing has
+		     happened yet; **done** sits behind a rule, dimmed, collapsed. The
+		     wider gap between them (`space-y-4`, up from `space-y-3`) is what
+		     lets four framed things read as four things at a glance rather
+		     than four sections of one. -->
+		<div class="space-y-4">
+			<div class="border border-amber-700/50 bg-stone-950/60 p-2" data-bucket="in-hand">
 				<p
-					class="mb-1 font-mono text-[10px] tracking-wide text-ink-mute uppercase"
+					class="mb-1 font-mono text-[10px] tracking-wide text-amber-300 uppercase"
 					data-bucket-heading="in-hand"
 				>
 					in hand · {buckets.inHand.length}
 				</p>
 				{@render rows(buckets.inHand, 'inHand')}
 			</div>
-			<div>
+			<div class="subpanel p-2" data-bucket="to-judge">
 				<p
 					class="mb-1 font-mono text-[10px] tracking-wide text-ink-mute uppercase"
 					data-bucket-heading="to-judge"
@@ -275,7 +310,7 @@
 				</p>
 				{@render rows(buckets.toJudge, 'toJudge')}
 			</div>
-			<div>
+			<div data-bucket="unaddressed">
 				<p
 					class="mb-1 font-mono text-[10px] tracking-wide text-ink-mute uppercase"
 					data-bucket-heading="unaddressed"
@@ -284,7 +319,7 @@
 				</p>
 				{@render rows(buckets.unaddressed)}
 			</div>
-			<div>
+			<div class="border-t border-stone-800/60 pt-2 opacity-80" data-bucket="done">
 				<button
 					type="button"
 					class="mb-1 flex w-full items-baseline gap-1.5 font-mono text-[10px] tracking-wide text-ink-mute uppercase hover:text-stone-300"
@@ -298,3 +333,35 @@
 		</div>
 	{/if}
 </div>
+
+<style>
+	/* The live row's pulse — the roast's "visually lit", moving. `--ask-pulse-low`
+	   / `--ask-pulse-high` are set inline per row from `glowFor` (statusPalette.ts,
+	   the same call `PickLane.svelte` makes for a burning pick), so the two stops
+	   this animates between are the machine's own tokens, not a value invented
+	   here. A `seat` in-hand row (no live attempt) never gets this class — it
+	   wears the static amber border only, per the roast: "seat rows: lit, no
+	   pulse." Reduced motion holds the high stop rather than dropping to the low
+	   one silently zeroing the glow: honest with the animation off, same as
+	   `.panel`'s own idle breathe just above it in `layout.css`. */
+	.ask-live-pulse {
+		animation: ask-pulse 2.4s ease-in-out infinite;
+	}
+
+	@keyframes ask-pulse {
+		0%,
+		100% {
+			box-shadow: var(--ask-pulse-low);
+		}
+		50% {
+			box-shadow: var(--ask-pulse-high);
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.ask-live-pulse {
+			animation: none;
+			box-shadow: var(--ask-pulse-high);
+		}
+	}
+</style>
