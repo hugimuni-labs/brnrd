@@ -42,7 +42,24 @@ HOST_INTERRUPTED = "host_interrupted"
 # (#1485; the exact string measured 2026-08-18: "API Error: Your computer
 # went to sleep mid-response.").
 HOST_SUSPENDED = "host_suspended"
+# A Core's own safeguards refused the turn outright — the exact text a
+# provider's safety classifier leaves behind, distinct from every other
+# kind here because there is no reliable way to tell "this Core refused"
+# apart from "this Shell's session had gone stale" from text alone (his
+# ruling, 2026-09-21, evt-...-mqx3) — both get the same recovery: reboot
+# the same Shell+Core as a fresh session once, then, if it happens again
+# within the same short window, reroute to a different Shell entirely
+# (#2076). Four sightings in two weeks, always the first message of a
+# forked/resumed session, and a same-boot fresh session went through
+# clean minutes later — a per-request classifier sample, not a property
+# of the prompt.
+CORE_REFUSAL = "core_refusal"
 
+
+_CORE_REFUSAL_PATTERNS = (
+    r"safeguards flagged",
+    r"\[reasoning_extraction\]",
+)
 
 _QUOTA_PATTERNS = (
     r"\bsession limit\b",
@@ -158,6 +175,18 @@ def looks_like_host_suspend(text: str | None) -> bool:
     return bool(text) and _matches_any(text, _HOST_SUSPEND_PATTERNS)
 
 
+def looks_like_core_refusal(text: str | None) -> bool:
+    """Whether *text* carries a Core safeguards-refusal signature (#2076).
+
+    Deliberately the two exact strings the incidents printed — not folded
+    into a broader provider/auth bucket, because those get the ordinary
+    fallback policy and this gets its own three-step ladder
+    (``daemon._core_refusal_should_retry_fresh`` + the ordinary
+    ``AUTO_FALLBACK_FAILURES`` reroute once ``CORE_REFUSAL`` is a member).
+    """
+    return bool(text) and _matches_any(str(text).lower(), _CORE_REFUSAL_PATTERNS)
+
+
 def looks_like_transport_failure(text: str | None) -> bool:
     """Whether *text* carries a transport signature (case-insensitive).
 
@@ -194,6 +223,8 @@ def classify_failure(
     if text:
         if "turn interrupted" in text:
             return INTERRUPTED
+        if _matches_any(text, _CORE_REFUSAL_PATTERNS):
+            return CORE_REFUSAL
         if _matches_any(text, _HOST_SUSPEND_PATTERNS):
             return HOST_SUSPENDED
         if _matches_any(text, _QUOTA_PATTERNS):
@@ -232,6 +263,7 @@ def reason_prefix(kind: str) -> str:
         RUNNER_ERROR: "runner failed",
         NO_OUTPUT: "runner produced no reply",
         CORE_MISMATCH: "runner Core attestation failed",
+        CORE_REFUSAL: "the Core's own safeguards refused this turn",
         INTERRUPTED: "runner was interrupted (external kill or shell interrupt)",
         HOST_INTERRUPTED: (
             "run was interrupted by a host/daemon restart mid-flight"

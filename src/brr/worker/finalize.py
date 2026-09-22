@@ -310,7 +310,13 @@ def _cite_earlier_failure(
     kind = str(earlier.get("failure_kind") or "")
     detail = str(earlier.get("error") or "").strip()
     cited = runner_failures.reason_prefix(kind) if kind else "runner failed"
-    if detail and kind != runner_failures.INTERRUPTED:
+    # #2076: same suppression as the ending attempt's own reason
+    # (`daemon._failure_reason`) — a Core refusal's exact vendor wording
+    # never rides the reply, whether it is the ending attempt's cause or
+    # one cited from an earlier attempt in the same run's history.
+    if detail and kind not in (
+        runner_failures.INTERRUPTED, runner_failures.CORE_REFUSAL,
+    ):
         cited = f"{cited}: {detail}"
     return f"{reason}; attempt {earlier.get('attempt')} before it: {cited}"
 
