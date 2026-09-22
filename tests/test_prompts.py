@@ -3717,8 +3717,16 @@ class TestWorkSurfaceInjection:
     def test_parked_branches_render_in_bundle_only_when_present(self, tmp_path, monkeypatch):
         from brr import parked_branches
 
+        # `read_cached`, not `detect`: the boot-time bundle must never run the
+        # walk itself (measured 130.9s over 453 branches, 2026-09-22 — see
+        # the report this shipped with) — it only ever reads whatever the
+        # background-refreshed cache already holds. Monkeypatching at this
+        # layer is what pins that contract; patching `detect` here would
+        # pass even if `prompts.py` regressed back to calling it directly, as
+        # long as *something* eventually refreshed the cache in the
+        # background before the assertion ran.
         monkeypatch.setattr(
-            parked_branches, "detect",
+            parked_branches, "read_cached",
             lambda _repo: [parked_branches.ParkedBranch("brr/lost", 2, None)],
         )
         prompt = build_daemon_prompt("fix it", "evt-1", "/tmp/r.md", tmp_path)
@@ -3726,7 +3734,7 @@ class TestWorkSurfaceInjection:
             _says(prompt, "parked branches: brr/lost (2 unmerged commits, pushed age unknown)")
         )
 
-        monkeypatch.setattr(parked_branches, "detect", lambda _repo: [])
+        monkeypatch.setattr(parked_branches, "read_cached", lambda _repo: [])
         prompt = build_daemon_prompt("fix it", "evt-1", "/tmp/r.md", tmp_path)
         assert "parked branches:" not in prompt
 

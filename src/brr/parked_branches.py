@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,31 +13,42 @@ from .run import TERMINAL_STATUSES as RUN_TERMINAL_STATUSES, list_runs
 TERMINAL_RUN_STATUSES = RUN_TERMINAL_STATUSES
 _WARNED: set[str] = set()
 
-#: How long one :func:`warn_new` sweep's verdict stands before the walk runs
-#: again. The walk is one ``git cherry`` per local ``brr/*`` branch —
-#: **15.3s measured** over 346 branches on this account's own checkout
-#: (2026-09-11) — and it runs on the daemon's *main loop thread*, immediately
-#: in front of the dispatch scan that decides whether a waiting chat message
-#: becomes a run. Every neighbour in that same tick
-#: (``forge_pr_cache``, ``lane_liveness``, ``forge_workflow_cache``,
-#: ``forge_issue_cache``, ``release_availability``) is already TTL-gated and
-#: threaded off the loop for exactly this reason; this one was not, so the
-#: loop paid the full walk per tick.
+#: How long one sweep's verdict stands before the walk runs again. The walk
+#: is one ``git cherry`` per local ``brr/*`` branch — **15.3s measured** over
+#: 346 branches on this account's own checkout (2026-09-11), **130.9s
+#: measured over 453 branches** on the same checkout (2026-09-22): branch
+#: count grew 1.3x, walk time grew 8.5x, because ``gitops
+#: .unmerged_commit_count``'s per-branch patch-id diff does not scale
+#: linearly against a repo whose history keeps growing underneath it.
 #:
 #: The cost bought nothing after the first pass: the *output* is already
 #: deduped for the process's lifetime (``_WARNED``), so sweep two onward spent
-#: 15s of CPU-bound git to print nothing. A TTL is what makes the spend match
+#: the whole walk to print nothing. A TTL is what makes the spend match
 #: the value — a branch that parks is now announced within this window instead
 #: of within one tick, which is the right trade for a note nobody acts on in
 #: the same minute.
 _SWEEP_TTL_SECONDS = 300.0
 
-#: Monotonic stamp of the last completed :func:`warn_new` sweep, or ``None``
-#: when this process has never swept. Deliberately monotonic, not wall-clock:
-#: a TTL that reads ``time.time()`` skips or repeats a sweep when the host
-#: clock steps (a suspend/resume, an NTP correction), and this daemon runs
-#: across laptop sleeps every day.
-_last_sweep_at: float | None = None
+#: Monotonic stamp of the last completed sweep (successful or not — see
+#: :func:`refresh_if_stale_async`), or ``None`` when this process has never
+#: swept. Deliberately monotonic, not wall-clock: a TTL that reads
+#: ``time.time()`` skips or repeats a sweep when the host clock steps (a
+#: suspend/resume, an NTP correction), and this daemon runs across laptop
+#: sleeps every day.
+_cached_at: float | None = None
+
+#: The last completed walk's result. Empty until the first sweep lands —
+#: a cold cache renders no ``parked branches:`` line and warns of nothing for
+#: up to one TTL window after a fresh daemon boot, which is the honest cost
+#: of never blocking a caller on the walk (see :func:`read_cached`).
+_cached_items: list["ParkedBranch"] = []
+
+#: Guards ``_cached_at`` / ``_cached_items`` and the "already refreshing"
+#: check in :func:`refresh_if_stale_async` — the same shape as
+#: ``forge_pr_cache._refresh_lock`` / ``lane_liveness``'s own, so a reader of
+#: one of those modules already knows how to read this one.
+_cache_lock = threading.Lock()
+_refreshing = False
 
 
 @dataclass(frozen=True)
@@ -133,6 +145,81 @@ def render(items: list[ParkedBranch], *, now: float | None = None) -> str | None
     return "parked branches: " + " · ".join(rows)
 
 
+def refresh_if_stale_async(
+    repo_root: Path,
+    *,
+    ttl: float = _SWEEP_TTL_SECONDS,
+    now: float | None = None,
+) -> bool:
+    """Refresh the cached parked-branch list on a daemon thread if it's stale.
+
+    Never blocks the caller. The walk this refreshes (:func:`detect`) measured
+    **130.9s over 453 branches** on this account's own checkout (2026-09-22)
+    — up from 15.3s over 346 branches on 2026-09-11 (see the module-level
+    docstring above :data:`_SWEEP_TTL_SECONDS`). Two callers used to run that
+    walk inline on their own thread: the daemon's main-loop tick (via
+    :func:`warn_new`) and, with **no TTL at all**, every dispatched run's own
+    boot-prompt assembly (``prompts.py``'s ``Run Context Bundle``, via
+    :func:`read_cached`) — the second one is what actually reproduces "the
+    daemon's tick fell to minutes": every strand spawned during a busy window
+    paid the full walk before its wake prompt was even finished. Both now only
+    ever read the cache; this function is the only thing that still calls
+    :func:`detect`, same shape as ``forge_pr_cache.refresh_if_stale_async`` /
+    ``lane_liveness``'s own.
+
+    Returns whether a refresh thread was actually started — ``False`` when one
+    is already in flight, or the cache is still within *ttl*.
+    """
+    global _refreshing, _cached_at
+    stamp = time.monotonic() if now is None else now
+    with _cache_lock:
+        if _refreshing:
+            return False
+        if _cached_at is not None and stamp - _cached_at < ttl:
+            return False
+        # Stamped before the walk, not after: a sweep that raises (a git
+        # failure, a cache read error) must not become a retry-every-tick
+        # loop — mirrors the pre-async gate's own reasoning, now guarding a
+        # background thread instead of the caller.
+        _cached_at = stamp
+        _refreshing = True
+
+    def _work() -> None:
+        global _refreshing, _cached_items
+        try:
+            items = detect(repo_root)
+            with _cache_lock:
+                _cached_items = items
+        except Exception as exc:  # noqa: BLE001 - a background sweep must never surface here
+            print(f"[brnrd] parked-branch sweep failed (ignored): {exc}")
+        finally:
+            with _cache_lock:
+                _refreshing = False
+
+    threading.Thread(target=_work, name="parked-branches", daemon=True).start()
+    return True
+
+
+def read_cached(
+    repo_root: Path,
+    *,
+    ttl: float = _SWEEP_TTL_SECONDS,
+    now: float | None = None,
+) -> list[ParkedBranch]:
+    """The last-computed parked-branch list — never walks branches here.
+
+    Triggers :func:`refresh_if_stale_async` as a side effect (so the cache
+    keeps itself warm across callers) and returns whatever is cached *right
+    now*: empty on a cold cache (a fresh daemon process, or the first *ttl*
+    window of one), up to *ttl* old otherwise. This is the call every hot
+    path wants — ``prompts.py``'s boot-time render and :func:`warn_new`'s own
+    sweep both read this instead of calling :func:`detect` directly.
+    """
+    refresh_if_stale_async(repo_root, ttl=ttl, now=now)
+    with _cache_lock:
+        return list(_cached_items)
+
+
 def warn_new(
     repo_root: Path,
     *,
@@ -141,21 +228,11 @@ def warn_new(
 ) -> None:
     """Emit the daemon's ergo warning once per branch per process lifetime.
 
-    Rate-limited to one sweep per *ttl* seconds (:data:`_SWEEP_TTL_SECONDS`),
-    because the sweep itself is the expensive part and the daemon calls this
-    every main-loop tick, right before dispatch. *now* is a monotonic reading,
-    injectable for tests; ``None`` reads :func:`time.monotonic`.
+    Reads :func:`read_cached` — never walks branches on the caller's own
+    thread. A cold or stale cache simply has nothing new to warn about on
+    this tick; the background refresh it triggers catches up within *ttl*.
     """
-    global _last_sweep_at
-    stamp = time.monotonic() if now is None else now
-    if _last_sweep_at is not None and stamp - _last_sweep_at < ttl:
-        return
-    # Stamped before the walk, not after: a sweep that raises (a git failure,
-    # a cache read error) must not become a retry-every-tick loop — the caller
-    # in `daemon.py` swallows the exception and would otherwise arrive back
-    # here, unthrottled, in a few seconds.
-    _last_sweep_at = stamp
-    for item in detect(repo_root):
+    for item in read_cached(repo_root, ttl=ttl, now=now):
         if item.name in _WARNED:
             continue
         _WARNED.add(item.name)
