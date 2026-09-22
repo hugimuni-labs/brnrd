@@ -29,7 +29,9 @@ from brr import daemon, prompts, protocol, resource_hold, transcript
 from brr.run import Run
 from brr.runner import RunnerArtifactRecord, RunnerResult
 
-from _helpers import StubWorktreeEnv, make_event, succeed_invoke, write_repo_scaffold
+from _helpers import (
+    StubWorktreeEnv, make_event, stub_daemon_prompt, succeed_invoke, write_repo_scaffold,
+)
 
 GOLDEN_DIR = Path(__file__).parent / "fixtures" / "worker_golden"
 WRITE = os.environ.get("BRR_WORKER_GOLDEN_WRITE") == "1"
@@ -101,8 +103,8 @@ def _patch_runner(monkeypatch, *, fallback: Callable[..., Any] | None = None) ->
         fallback or (lambda *_a, **_k: None),
     )
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts, "build_daemon_prompt",
+    stub_daemon_prompt(
+        monkeypatch,
         lambda task, eid, rp, _root, **kw: f"RUN {eid} -> {rp}",
     )
     monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)

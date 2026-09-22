@@ -198,6 +198,23 @@ def make_event(
     return event
 
 
+def stub_daemon_prompt(monkeypatch, render):
+    """Stub the worker's prompt boundary, including its discovery wrapper.
+
+    A stub of build_daemon_prompt alone still lets the scored wrapper build
+    home knowledge and run Git discovery hundreds of times. Worker tests
+    that already supply their own prompt do not exercise that builder;
+    test_prompts and test_boot_replay cover real assembly and persistence.
+    """
+    from brr import prompts
+    from brr.bootscore import BootScore
+
+    def build(*args, **kwargs):
+        return render(*args, **kwargs), BootScore()
+
+    monkeypatch.setattr(prompts, "build_daemon_prompt_with_score", build)
+
+
 InvokeFn = Callable[..., RunnerResult]
 
 
