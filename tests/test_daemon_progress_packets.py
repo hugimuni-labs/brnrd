@@ -17,6 +17,7 @@ from brr.runner import RunnerArtifactRecord, RunnerResult
 from _helpers import (
     StubWorktreeEnv,
     make_event,
+    stub_daemon_prompt,
     succeed_invoke,
     write_repo_scaffold,
 )
@@ -44,9 +45,8 @@ def _patch_runner(monkeypatch):
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts, "build_daemon_prompt",
-        lambda task, eid, rp, _root, **kw: f"RUN {eid}: {task} -> {rp}",
+    stub_daemon_prompt(
+        monkeypatch, lambda task, eid, rp, _root, **kw: f"RUN {eid}: {task} -> {rp}",
     )
 
 

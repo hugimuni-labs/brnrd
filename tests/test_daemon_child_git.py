@@ -26,7 +26,7 @@ from brr import cli, daemon, envs, gitops, worktree
 from brr.run import Run
 from brr.runner import RunnerResult
 
-from _helpers import init_git_repo, make_event, write_repo_scaffold
+from _helpers import init_git_repo, make_event, stub_daemon_prompt, write_repo_scaffold
 
 
 # ── scaffolding ─────────────────────────────────────────────────────
@@ -250,9 +250,7 @@ def _drive_run_worker(tmp_path, monkeypatch, *, strand: bool, during=None,
             return task
 
     monkeypatch.setattr(daemon.envs, "get_env", lambda _name: StubEnv())
-    monkeypatch.setattr(
-        daemon.prompts, "build_daemon_prompt", lambda *a, **k: "PROMPT",
-    )
+    stub_daemon_prompt(monkeypatch, lambda *a, **k: "PROMPT")
     driver = (
         daemon._run_worker_and_finalize if finalize else daemon._run_worker
     )

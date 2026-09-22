@@ -23,7 +23,7 @@ import pytest
 
 from brr import daemon, envs
 
-from _helpers import make_event, write_repo_scaffold
+from _helpers import make_event, stub_daemon_prompt, write_repo_scaffold
 from test_config_trust import _stub_worktree_env
 
 
@@ -42,10 +42,7 @@ def _profiles_in_sequence(monkeypatch, names):
 
 def _stub_rest(monkeypatch):
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts, "build_daemon_prompt",
-        lambda task, eid, rp, root, **kw: "PROMPT",
-    )
+    stub_daemon_prompt(monkeypatch, lambda task, eid, rp, root, **kw: "PROMPT")
 
 
 def test_runner_changed_between_resolution_and_spawn_is_adopted_and_surfaced(

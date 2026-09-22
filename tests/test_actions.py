@@ -13,7 +13,9 @@ from brr import actions, daemon, promises, protocol, worker
 from brr.outbox import table
 from brr.run import Run
 
-from _helpers import StubWorktreeEnv, make_event, succeed_invoke, write_repo_scaffold
+from _helpers import (
+    StubWorktreeEnv, make_event, stub_daemon_prompt, succeed_invoke, write_repo_scaffold,
+)
 
 
 def _lines(outbox: Path) -> list[dict]:
@@ -251,9 +253,7 @@ def test_spawn_attempted_when_the_daemon_admits_the_child(tmp_path: Path, monkey
     )
     monkeypatch.setattr(daemon.runner, "fallback_runner_profile", lambda *_a, **_k: None)
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts, "build_daemon_prompt", lambda task, eid, rp, _root, **kw: "PROMPT",
-    )
+    stub_daemon_prompt(monkeypatch, lambda task, eid, rp, _root, **kw: "PROMPT")
     monkeypatch.setattr(
         daemon.envs, "get_env", lambda _n: StubWorktreeEnv(invoke_fn=succeed_invoke()),
     )
