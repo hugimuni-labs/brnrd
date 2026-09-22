@@ -134,3 +134,244 @@ def test_list_asks_folds_in_runs_dir_and_outbox_bindings(tmp_path):
     assert row["id"] == "w-1"
     assert {s["event"] for s in row["says"]} == {"evt-1", "evt-2"}
     assert row["touched_at"] is not None  # no git repo here — the binding files' own mtime carries it
+
+
+def test_run_node_asks_row_with_part_surfaces_as_excerpt():
+    """design-the-ask.md §Build cut, step 2 (rung 3): a `--part` bound
+    alongside `--item` rides the same `.asks.jsonl` row as `part`; the
+    reader surfaces it as that say's `excerpt`. A row with no `part` keeps
+    `excerpt: None`, unchanged from before this existed."""
+    files = _pairs(w_5="# T\n\ntouched: 2026-09-01\n") + [
+        (
+            "runs/x/run-260920-1000-abcd/asks.jsonl",
+            '{"event":"evt-a","item":"w-5","part":"the fuel gauge bit"}\n'
+            '{"event":"evt-b","item":"w-5"}\n',
+        ),
+    ]
+    row = asks.build_asks(files, now=NOW)["asks"][0]
+    says_by_event = {s["event"]: s for s in row["says"]}
+    assert says_by_event["evt-a"]["excerpt"] == "the fuel gauge bit"
+    assert says_by_event["evt-b"]["excerpt"] is None
+
+
+def test_sign_row_rides_the_regular_row_dict():
+    payload = asks.build_asks(_pairs(w_1="# T\n\nsign: mira\n"), now=NOW)
+    assert payload["asks"][0]["sign"] == "mira"
+    no_sign = asks.build_asks(_pairs(w_2="# T\n\ntype: action\n"), now=NOW)
+    assert no_sign["asks"][0]["sign"] is None
+
+
+def test_public_row_carries_sign():
+    payload = asks.build_asks(_pairs(w_1="# T\n\nsign: mira\n"), now=NOW)
+    assert asks.public_row(payload["asks"][0])["sign"] == "mira"
+
+
+# ── the inbound directive: "accept w-N" / "reroute w-N: <why>" ────────────
+
+
+def test_parse_accept_reroute_grammar():
+    assert asks.parse_accept_reroute("accept w-1") == ("accept", "w-1", None)
+    assert asks.parse_accept_reroute("Reroute w-3: too broad, split it") == (
+        "reroute", "w-3", "too broad, split it",
+    )
+    assert asks.parse_accept_reroute("ACCEPT mira") == ("accept", "mira", None)
+    assert asks.parse_accept_reroute("I accept your offer") is None
+    assert asks.parse_accept_reroute("just a normal message") is None
+    assert asks.parse_accept_reroute("") is None
+    # a leading blank line doesn't hide the directive on the next one
+    assert asks.parse_accept_reroute("\n\naccept w-2") == ("accept", "w-2", None)
+
+
+def _item(root, item_id, text):
+    (root / f"{item_id}.md").write_text(text, encoding="utf-8")
+
+
+def test_resolve_sign_case_insensitive_and_unmatched(tmp_path):
+    root = tmp_path / "warp"
+    root.mkdir()
+    _item(root, "w-1", "# T\n\nsign: Mira\n")
+    assert asks.resolve_sign(root, "mira") == "w-1"
+    assert asks.resolve_sign(root, "MIRA") == "w-1"
+    assert asks.resolve_sign(root, "nope") is None
+    assert asks.resolve_sign(None, "mira") is None
+    assert asks.resolve_sign(root, "") is None
+
+
+def test_apply_inbound_directive_accept_writes_stage_done_and_says(tmp_path):
+    root = tmp_path / "warp"
+    root.mkdir()
+    _item(root, "w-1", "# Ship the thing\n\ntype: action\n")
+    result = asks.apply_inbound_directive(root, "evt-1", "accept w-1", date="2026-09-22")
+    assert result == {"verb": "accept", "target": "w-1", "item": "w-1", "why": None}
+    text = (root / "w-1.md").read_text()
+    assert "done: 2026-09-22" in text
+    assert "stage: accepted" in text
+    assert "says: evt-1" in text
+    rows = [
+        json.loads(line) for line in (root / ".asks.jsonl").read_text().splitlines()
+    ]
+    assert rows == [{"event": "evt-1", "item": "w-1", "verb": "accept"}]
+
+
+def test_apply_inbound_directive_reroute_writes_stage_and_why(tmp_path):
+    root = tmp_path / "warp"
+    root.mkdir()
+    _item(root, "w-2", "# Ship the thing\n\ntype: action\n")
+    result = asks.apply_inbound_directive(
+        root, "evt-2", "reroute w-2: too broad, split it", date="2026-09-22",
+    )
+    assert result == {
+        "verb": "reroute", "target": "w-2", "item": "w-2", "why": "too broad, split it",
+    }
+    text = (root / "w-2.md").read_text()
+    assert "stage: reshaped" in text
+    assert "reroute: too broad, split it" in text
+    assert "says: evt-2" in text
+    assert "done:" not in text
+
+
+def test_apply_inbound_directive_resolves_a_callsign(tmp_path):
+    root = tmp_path / "warp"
+    root.mkdir()
+    _item(root, "w-3", "# T\n\ntype: action\nsign: mira\n")
+    result = asks.apply_inbound_directive(root, "evt-3", "accept mira")
+    assert result["item"] == "w-3"
+    assert "stage: accepted" in (root / "w-3.md").read_text()
+
+
+def test_apply_inbound_directive_unknown_target_is_a_no_op_with_error(tmp_path):
+    root = tmp_path / "warp"
+    root.mkdir()
+    _item(root, "w-1", "# T\n\ntype: action\n")
+    result = asks.apply_inbound_directive(root, "evt-9", "accept w-999")
+    assert result["item"] is None and result["error"]
+    # nothing mutated, nothing recorded
+    assert "says:" not in (root / "w-1.md").read_text()
+    assert not (root / ".asks.jsonl").exists()
+
+    result2 = asks.apply_inbound_directive(root, "evt-10", "accept zzzznope")
+    assert result2["item"] is None and result2["error"]
+
+
+def test_apply_inbound_directive_ordinary_message_is_none(tmp_path):
+    root = tmp_path / "warp"
+    root.mkdir()
+    _item(root, "w-1", "# T\n\ntype: action\n")
+    assert asks.apply_inbound_directive(root, "evt-1", "just checking in") is None
+
+
+def test_apply_inbound_directive_idempotent_on_redelivery(tmp_path):
+    root = tmp_path / "warp"
+    root.mkdir()
+    _item(root, "w-1", "# T\n\ntype: action\n")
+    first = asks.apply_inbound_directive(root, "evt-1", "accept w-1", date="2026-09-22")
+    assert first.get("idempotent") is not True
+    second = asks.apply_inbound_directive(root, "evt-1", "accept w-1", date="2026-09-22")
+    assert second["idempotent"] is True
+    text = (root / "w-1.md").read_text()
+    assert text.count("evt-1") == 1  # says: row stamped once, not twice
+    rows = (root / ".asks.jsonl").read_text().splitlines()
+    assert len(rows) == 1  # the jsonl row was written once, not twice
+
+
+def test_apply_inbound_directive_through_the_real_event_creation_path(tmp_path):
+    """"Through the real event-creation path" — the task's own words: mint
+    the event with `protocol.create_event` (the function every inbound
+    gate calls) rather than a hand-built id/body, then apply the directive
+    against the id and body it actually produced."""
+    from brr import protocol
+
+    inbox_dir = tmp_path / "inbox"
+    root = tmp_path / "warp"
+    root.mkdir()
+    _item(root, "w-1", "# T\n\ntype: action\n")
+    event_path = protocol.create_event(inbox_dir, source="cloud", body="accept w-1\n")
+    result = asks.apply_inbound_directive(root, event_path.stem, "accept w-1\n")
+    assert result["item"] == "w-1"
+    assert f"says: {event_path.stem}" in (root / "w-1.md").read_text()
+
+
+def test_list_asks_folds_in_the_account_level_directive_row(tmp_path):
+    """The inbound `accept`/`reroute` hook's own row (`asks.apply_inbound_directive`,
+    written straight to `warp/.asks.jsonl` since no run owns the event yet)
+    reaches the LRU the same way a run's own `.asks.jsonl` binding does."""
+    surface = tmp_path / "surface"
+    (surface / "warp").mkdir(parents=True)
+    (surface / "warp" / "w-1.md").write_text("# On disk\n\ntype: action\n")
+    (surface / "warp" / ".asks.jsonl").write_text(
+        json.dumps({"event": "evt-9", "item": "w-1", "verb": "accept"}) + "\n"
+    )
+    payload = asks.list_asks(surface)
+    row = payload["asks"][0]
+    assert {s["event"] for s in row["says"]} == {"evt-9"}
+    assert row["touched_at"] is not None  # the binding file's own mtime carries it
+
+
+# ── derived, not written: mark_in_hand / mark_delivered ────────────────
+
+
+def _make_item(tmp_path, item_id: str, text: str):
+    from brr import items as items_mod
+
+    root = tmp_path / "surface" / "warp"
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / f"{item_id}.md"
+    path.write_text(text, encoding="utf-8")
+    return root, path
+
+
+def test_mark_in_hand_stamps_attempts_and_advances_to_making(tmp_path):
+    root, path = _make_item(tmp_path, "w-1", "# T\n\ntype: action\n")
+    assert asks.mark_in_hand(root, "w-1", run_id="run-a")
+    text = path.read_text(encoding="utf-8")
+    assert "attempts: run-a" in text and "stage: making" in text
+    # idempotent: a second stamp with the same run id is a no-op
+    assert not asks.mark_in_hand(root, "w-1", run_id="run-a")
+    # a second run's attempt appends, stage stays making
+    assert asks.mark_in_hand(root, "w-1", run_id="run-b")
+    assert "attempts: run-a run-b" in path.read_text(encoding="utf-8")
+
+
+def test_mark_in_hand_never_moves_stage_backward(tmp_path):
+    root, path = _make_item(tmp_path, "w-1", "# T\n\ntype: action\nstage: delivered\n")
+    assert asks.mark_in_hand(root, "w-1", run_id="run-a")  # attempts: still stamps
+    text = path.read_text(encoding="utf-8")
+    assert "stage: delivered" in text and "stage: making" not in text
+
+
+def test_mark_in_hand_unresolvable_or_blank_run_id_is_false(tmp_path):
+    root, _path = _make_item(tmp_path, "w-1", "# T\n\ntype: action\n")
+    assert not asks.mark_in_hand(root, "w-999", run_id="run-a")
+    assert not asks.mark_in_hand(root, "w-1", run_id="")
+    assert not asks.mark_in_hand(None, "w-1", run_id="run-a")
+
+
+def test_mark_delivered_sets_stage_and_first_return(tmp_path):
+    root, path = _make_item(tmp_path, "w-1", "# T\n\ntype: action\n")
+    assert asks.mark_delivered(root, "w-1", receipt="owner/repo#42")
+    text = path.read_text(encoding="utf-8")
+    assert "stage: delivered" in text and "return: owner/repo#42" in text
+
+
+def test_mark_delivered_never_overwrites_an_existing_return(tmp_path):
+    root, path = _make_item(tmp_path, "w-1", "# T\n\ntype: action\nreturn: in chat\n")
+    assert asks.mark_delivered(root, "w-1", receipt="owner/repo#42")
+    text = path.read_text(encoding="utf-8")
+    assert "stage: delivered" in text
+    assert "return: in chat" in text and "owner/repo#42" not in text
+
+
+def test_mark_delivered_blank_receipt_or_unresolvable_is_false(tmp_path):
+    root, _path = _make_item(tmp_path, "w-1", "# T\n\ntype: action\n")
+    assert not asks.mark_delivered(root, "w-1", receipt="")
+    assert not asks.mark_delivered(root, "w-999", receipt="owner/repo#1")
+
+
+def test_stage_rank_orders_the_lifecycle_and_ranks_terminals_equal():
+    assert asks.STAGE_RANK[None] == 0
+    assert asks.STAGE_RANK["heard"] < asks.STAGE_RANK["making"]
+    assert asks.STAGE_RANK["making"] < asks.STAGE_RANK["delivered"]
+    assert (
+        asks.STAGE_RANK["accepted"] == asks.STAGE_RANK["reshaped"]
+        == asks.STAGE_RANK["sprouted"]
+    )

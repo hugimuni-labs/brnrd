@@ -367,11 +367,21 @@ def new_item_text(
     horizon: str | None = None,
     prompt: str | None = None,
     refs: str | None = None,
+    sign: str | None = None,
     body: str | None = None,
 ) -> str:
     """Serialize a fresh item file in the canonical row order. ``metric``/
     ``target``/``horizon`` are the goal-only rows (free text, no parsing);
-    ``advances`` is legal on any item type, including a goal (sub-goals)."""
+    ``advances`` is legal on any item type, including a goal (sub-goals).
+
+    ``sign`` (design-the-ask.md §Build cut, step 3) is an ask-only row —
+    not part of this module's own ``_ROW_RE`` grammar (kept in lockstep
+    with the frontend's ``warpGraph.ts``; see the module docstring), so it
+    is written last, after every row this parser does recognize: a row
+    this parser doesn't know about ends its recognized-row block, so
+    anything placed *after* it would otherwise be read back as body text.
+    ``asks.py``'s own row grammar is the one that reads it back.
+    """
     lines = [f"# {headline}", ""]
     lines.append(f"type: {item_type}")
     if topics:
@@ -390,6 +400,8 @@ def new_item_text(
         lines.append(f"refs: {refs}")
     if prompt:
         lines.append(f"prompt: {prompt}")
+    if sign:
+        lines.append(f"sign: {sign}")
     if body:
         lines.extend(["", body.strip()])
     return "\n".join(lines) + "\n"

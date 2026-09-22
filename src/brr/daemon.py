@@ -81,6 +81,7 @@ from . import claude_usage
 from . import gitops
 from . import heddles
 from . import run_topic
+from . import run_item
 from . import card_frame
 from . import hooks as hooks_mod
 from . import knowledge
@@ -4967,6 +4968,16 @@ def _frame_heartbeat(
         ),
         is_strand=_is_strand(task.meta),
     )
+    # design-the-ask.md §Build cut step 4 (his 2026-09-22 steer): `.item`
+    # read the same way `.topic` is — once per heartbeat, never per
+    # boundary. Folding it in derives `attempts:`/`stage: making` on the
+    # named item so a resident never hand-types either row.
+    run_item.settle(
+        task, outbox_dir=outbox_dir, warp_root=weld.warp_dir(account_context),
+        notice=lambda kind, text: _record_outbox_notice(
+            outbox_dir, text, kind=kind, lifetime="run", verb="item", run=task.id,
+        ),
+    )
     try:
         lit = heddles.light(
             home, run_dir,
@@ -7803,6 +7814,16 @@ def _queue_spawn_request(
         assigned_topic = None
     if assigned_topic:
         meta["topic"] = assigned_topic
+    # design-the-ask.md §Build cut step 4 (his 2026-09-22 steer): a strand
+    # wears its ask through `item:` on its own `spawn:` directive — the raw
+    # target rides the dispatch event's own frontmatter (generic event-meta
+    # inheritance, `Run.from_event`, the same mechanism a strand's assigned
+    # `topic:` rides above) and `run_item.settle` resolves + derives from it
+    # at the child's first heartbeat, the same as a resident-authored
+    # `.item` line would.
+    spawn_item = str(fm.get("item") or "").strip()
+    if spawn_item:
+        meta["item"] = spawn_item
     new_path = protocol.create_event(inbox_dir, source, new_body, **meta)
     # Action ledger (design-the-action-ledger.md): the dispatch is `requested`
     # the moment its event exists; `worker.prepare` moves it to `attempted`
@@ -12603,6 +12624,91 @@ def _weld_capture(
         print(
             f"[brnrd] run {task.id}: weld — {', '.join(added)} -> {address}"
         )
+    # design-the-ask.md's steer (2026-09-22), (c): "at run end, if the run's
+    # produce names the item … the daemon sets stage: delivered and adds
+    # the PR to return:". Reuses the exact `records`/`origin` this function
+    # already collected — no second git walk.
+    _ask_delivery_capture(layers_root, records=records, origin_repo=origin, run_id=task.id)
+
+
+def _ask_commit_ref(record: dict[str, Any], origin_repo: str | None) -> str | None:
+    """The one receipt address a commit/merge relic carries: a merged PR's
+    qualified ``owner/repo#N`` when the record names one, else the
+    commit's own URL. ``None`` when neither is attested — never guessed."""
+    if record.get("kind") == "merge" and record.get("pr"):
+        try:
+            number = int(record["pr"])
+        except (TypeError, ValueError):
+            number = None
+        repo = (
+            str(record.get("repo") or "").strip().strip("/")
+            or str(origin_repo or "").strip().strip("/")
+        )
+        if number and "/" in repo:
+            return f"{repo}#{number}"
+    return str(record.get("url") or "") or None
+
+
+def _ask_delivery_capture(
+    warp_root: Path | None,
+    *,
+    records: list[dict[str, Any]],
+    origin_repo: str | None,
+    run_id: str,
+) -> None:
+    """design-the-ask.md's steer (2026-09-22), (c): a run's own commit/merge
+    messages are read for a ``w-N`` mention the same way an inbound event's
+    body already is (``weld.annotate_ignition``) — never typed as a
+    separate act. Unlike THE WELD's ``refs:`` weld just above (which only
+    ever touches an item the run's manifest already *declared*), this
+    derives ``stage: delivered`` + a first ``return:`` for **any** item a
+    commit/merge subject happens to name — "the daemon reads the produce",
+    not "the daemon reads what was already claimed".
+
+    Scoped to commit/merge *subjects* — text ``relics.collect`` already
+    gathered for this same closeout, zero extra I/O. A PR's own title/body
+    is a live forge fetch this pass does not make (see this change's
+    report, §Derived, not written, for why); a commit message naming the
+    item (``git commit -m "w-42: …"``) is the receipt this derives from
+    instead. Never raises past this function — a derivation here must not
+    cost the closeout that carries it.
+    """
+    if warp_root is None:
+        return
+    try:
+        from . import asks as asks_mod
+        from . import items as items_mod
+
+        for record in records:
+            if not isinstance(record, dict) or record.get("kind") not in ("commit", "merge"):
+                continue
+            subject = str(record.get("subject") or "")
+            if not subject:
+                continue
+            ids = weld.scan_item_addresses(subject)
+            if not ids:
+                continue
+            receipt = _ask_commit_ref(record, origin_repo)
+            if not receipt:
+                continue
+            for item_id in ids:
+                path = items_mod.resolve_item(warp_root, item_id)
+                if path is None:
+                    continue
+                # Not `run_item.resolve`'s open-only guard: a `done:` item
+                # (a run's own receipt, not yet accepted) can still
+                # legitimately gain `stage: delivered` from a later commit
+                # naming it — "done" and "delivered" are not in tension.
+                # Only `retired:` (abandoned, never releasing) is excluded —
+                # confirming delivery on withdrawn work would contradict
+                # the retirement, not confirm it.
+                item = items_mod.parse_item(path)
+                if item is not None and item.state == "retired":
+                    continue
+                if asks_mod.mark_delivered(warp_root, item_id, receipt=receipt):
+                    print(f"[brnrd] run {run_id}: ask delivered — {item_id} <- {receipt}")
+    except Exception as exc:  # noqa: BLE001 - a derivation must not block closeout
+        print(f"[brnrd] run {run_id}: ask delivery capture failed: {exc}")
 
 
 def _capture_dominion(
