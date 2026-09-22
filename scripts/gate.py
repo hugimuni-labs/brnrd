@@ -49,7 +49,10 @@ used to carry its own copy of `tree_referents`/`untracked_digest`, and that
 copy is the reason #917 had to be fixed in two places: two implementations of
 one fingerprint agree with each other and are wrong together (#722).
 
-Usage:  python scripts/gate.py [--list] [--job backend]
+Strands default to --targeted: lint, affected frontend type checks and mapped
+pytest files. --full explicitly retains the complete local CI rehearsal.
+
+Usage:  python scripts/gate.py [--targeted | --full] [--list] [--job backend]
 Exit:   0 iff every executed leg exited 0.
 """
 
@@ -61,6 +64,7 @@ import datetime
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import threading
@@ -246,6 +250,9 @@ def write_receipt(
     verdict: str,
     results: list[tuple[str, str, float]],
     tree: dict | None = None,
+    *,
+    mode: str = "full",
+    test_selection: list[str] | None = None,
 ) -> Path | None:
     """Record the verdict and the tree it was reached on. Best-effort.
 
@@ -258,6 +265,14 @@ def write_receipt(
     Omitted (a caller that never captured a "before"), this samples the end
     state alone and the receipt stays silent about stillness rather than
     claiming it.
+
+    *mode* names which invocation shape produced this receipt (`"full"` |
+    `"changed-only"` | `"targeted"`) and *test_selection* is the exact
+    pytest file list `--targeted` ran, when it narrowed one — both written
+    so a reader of the receipt never has to guess what "GREEN" actually
+    covered. `test_selection` is omitted (not `null`) when unset, so an
+    older reader that doesn't know the key still sees a receipt shaped the
+    way it always was.
 
     Writes `REPO_ROOT`'s own slot of the outbox's receipts map
     (`gate_receipt.merge_entry`) rather than the whole file — one run that
@@ -277,11 +292,14 @@ def write_receipt(
         "workflow": str(WORKFLOW.relative_to(REPO_ROOT)),
         "run_id": os.environ.get("BRR_RUN_ID", ""),
         "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "mode": mode,
         "legs": [
             {"label": label, "verdict": leg_verdict, "seconds": round(elapsed, 1)}
             for label, leg_verdict, elapsed in results
         ],
     }
+    if test_selection is not None:
+        entry["test_selection"] = test_selection
     return gate_receipt.merge_entry(path.parent, REPO_ROOT, entry)
 
 
@@ -670,6 +688,93 @@ def jobs_to_run(workflow: dict, changed: list[str]) -> set[str] | None:
     return run
 
 
+# Targeted checks are deliberately incomplete: GitHub owns the full gate.
+# Unmapped paths are reported, never widened into a local full-suite run.
+_PYTEST_COMMAND_RE = re.compile(r"(?:^|[\s;&|])(?:python3?\s+-m\s+)?pytest\b")
+
+
+def _is_pytest_command(command: str) -> bool:
+    return bool(_PYTEST_COMMAND_RE.search(command))
+
+
+def _is_direct_test_file(path: str) -> bool:
+    return path.startswith("tests/") and Path(path).name.startswith("test_") and path.endswith(".py")
+
+
+def _python_module_stem(path: str) -> str | None:
+    if not path.startswith(("src/", "scripts/")) or not path.endswith(".py"):
+        return None
+    return Path(path).stem
+
+
+def _tests_importing(repo_root: Path, module: str) -> set[str]:
+    """Grep imports, including parenthesized imports; no dependency cache."""
+    pattern = re.compile(
+        r"\b(?:import|from)\b[^\n]*\b" + re.escape(module) + r"\b"
+        r"|\bfrom\s+[\w.]+\s+import\s*\([^)]*\b" + re.escape(module) + r"\b"
+    )
+    return {
+        str(path.relative_to(repo_root))
+        for path in (repo_root / "tests").rglob("test_*.py")
+        if pattern.search(path.read_text(encoding="utf-8", errors="replace"))
+    }
+
+
+def targeted_test_selection(repo_root: Path, changed: list[str]) -> list[str]:
+    """Touched existing tests plus tests named for or importing changed modules."""
+    selection: set[str] = set()
+    for path in changed:
+        if _is_direct_test_file(path):
+            if (repo_root / path).is_file():
+                selection.add(path)
+            continue
+        module = _python_module_stem(path)
+        if module is not None:
+            mapped = {
+                str(p.relative_to(repo_root))
+                for p in (repo_root / "tests").rglob(f"test_{module}*.py")
+            } | _tests_importing(repo_root, module)
+            if not mapped:
+                print(f"gate: no mapped tests for {path}; full coverage belongs to CI")
+            selection |= mapped
+    return sorted(selection)
+
+
+def _strand_default() -> bool:
+    from brr.run import Run
+
+    run_id = os.environ.get("BRR_RUN_ID", "")
+    if not run_id:
+        return False
+    task = Run.from_file(gitops.shared_brr_dir(REPO_ROOT) / "runs" / run_id / "run.md")
+    return bool(task and (task.source == "spawn" or task.meta.get("spawn_parent_run_id")))
+
+
+def targeted_legs(all_legs: list[dict], changed: list[str], selection: list[str]) -> list[dict]:
+    """Retain lint and affected frontend setup/checks; replace pytest with a bounded call."""
+    frontend_changed = any(path.startswith("src/frontend/") for path in changed)
+    selected = []
+    for original in all_legs:
+        leg = dict(original)
+        if leg["kind"] != "run":
+            continue
+        command = leg["command"]
+        if _is_pytest_command(command):
+            if not selection:
+                continue
+            # Do not inherit CI's worker count or a positional suite directory.
+            leg["command"] = "pytest -q " + " ".join(shlex.quote(p) for p in selection)
+        elif leg["job"] == "lint":
+            pass
+        elif str(leg["cwd"]).startswith("src/frontend") and frontend_changed:
+            if not any(part in command for part in ("npm ci", "npm run lint", "npm run check", "svelte-check", "svelte-kit sync")):
+                continue
+        else:
+            continue
+        selected.append(leg)
+    return selected
+
+
 #: Default-branch names tried, in order, when looking for a merge-base.
 #: `origin/*` first — the remote-tracking ref reflects the branch's actual
 #: state even when the local `main` is stale or absent (a fresh worktree
@@ -738,7 +843,25 @@ def main(argv: list[str] | None = None) -> int:
             "— see the module comment above default_gate_workers)"
         ),
     )
+    parser.add_argument(
+        "--targeted", action="store_true",
+        help=(
+            "--changed-only, plus narrow the backend pytest leg to the touched "
+            "test files and the tests mapped to touched modules — the strand "
+            "default; unmapped changes are left to GitHub CI"
+        ),
+    )
+    parser.add_argument(
+        "--full", action="store_true",
+        help="run everything — today's default, spelled out explicitly for a human",
+    )
     args = parser.parse_args(argv)
+
+    if args.full and (args.changed_only or args.targeted):
+        parser.error("--full is incompatible with --changed-only/--targeted")
+
+    if not (args.full or args.changed_only or args.targeted) and _strand_default():
+        args.targeted = True
 
     if not WORKFLOW.exists():
         sys.exit(f"no workflow at {WORKFLOW}")
@@ -749,19 +872,21 @@ def main(argv: list[str] | None = None) -> int:
 
     skip_jobs: set[str] = set()
     base = None
+    changed: list[str] | None = None
+    mode_label = "--targeted" if args.targeted else "--changed-only"
     if args.changed_only:
         base = diff_base(REPO_ROOT)
         changed = changed_paths(REPO_ROOT, base) if base else None
         if changed is None:
             print(
-                "gate: --changed-only could not read a diff (no merge-base, no "
+                f"gate: {mode_label} could not read a diff (no merge-base, no "
                 "HEAD~1, or git failed) — running every leg, unaffected either way"
             )
         else:
             run_jobs = jobs_to_run(workflow, changed)
             if run_jobs is None:
                 print(
-                    f"gate: --changed-only vs {base}: shared config touched, or "
+                    f"gate: {mode_label} vs {base}: shared config touched, or "
                     "nothing changed — running every leg"
                 )
             else:
@@ -770,14 +895,26 @@ def main(argv: list[str] | None = None) -> int:
                 shown = ", ".join(changed[:8]) + (" …" if len(changed) > 8 else "")
                 if skip_jobs:
                     print(
-                        f"gate: --changed-only vs {base}: diff touches [{shown}] — "
+                        f"gate: {mode_label} vs {base}: diff touches [{shown}] — "
                         f"skipping {', '.join(sorted(skip_jobs))} (provably unaffected)"
                     )
                 else:
                     print(
-                        f"gate: --changed-only vs {base}: diff touches [{shown}] — "
+                        f"gate: {mode_label} vs {base}: diff touches [{shown}] — "
                         "no job provably unaffected, running everything"
                     )
+
+    test_selection: list[str] | None = None
+    if args.targeted:
+        base = diff_base(REPO_ROOT)
+        changed = changed_paths(REPO_ROOT, base) if base else None
+        if changed is None:
+            parser.error("cannot read a diff for targeted checks; supply a usable git base")
+        test_selection = targeted_test_selection(REPO_ROOT, changed)
+        print(f"gate: --targeted: pytest restricted to {len(test_selection)} file(s): "
+              + ", ".join(test_selection))
+        print("gate: targeted local checks only; GitHub CI is the full gate")
+        all_legs = targeted_legs(all_legs, changed, test_selection)
 
     runnable = [leg for leg in all_legs if leg["kind"] == "run"]
     provided = [leg for leg in all_legs if leg["kind"] == "uses"]
@@ -917,7 +1054,8 @@ def main(argv: list[str] | None = None) -> int:
             f"{gate_receipt.moved_sentence(tree)}. {verdict} does not cover "
             f"it; re-run on a still tree."
         )
-    receipt = write_receipt(verdict, results, tree)
+    mode = "targeted" if args.targeted else ("changed-only" if args.changed_only else "full")
+    receipt = write_receipt(verdict, results, tree, mode=mode, test_selection=test_selection)
     if receipt is not None:
         print(f"gate: receipt {receipt}")
     return 1 if failed else 0
