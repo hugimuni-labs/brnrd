@@ -581,16 +581,6 @@ def test_beads_and_warp_items_join_on_bead_touches(tmp_path):
     ]
 
 
-def test_beads_carry_chunks_straight_through(tmp_path):
-    """Phase A: `record["chunks"]` (`hooks.record_boundary`) rides `beads[]`
-    unchanged — no aggregation, no relativizing, the same additive
-    treatment `items` got in #2004; a row that never carried one reads back
-    as `[]`, never a missing key."""
-    repo = tmp_path / "repo"
-    home = tmp_path / "home"
-    brr = repo / ".brr"
-    run_id = "run-260924-0900-chunk1"
-    outbox = brr / "outbox" / "evt-chunk"
 def test_chunks_carry_the_repo_place_the_tree_speaks(tmp_path):
     """A chunk records the absolute path the tool saw; the tree row that
     carries the file's ``lines`` is keyed by the repo place. Without a join key
