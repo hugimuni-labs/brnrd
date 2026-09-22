@@ -3945,7 +3945,7 @@ def cmd_asks(args):
     import json as _json
 
     from . import account as account_mod
-    from . import asks_screen as asks_mod
+    from . import asks as asks_mod
     from . import config as conf
 
     warp_root, err = _item_context()
@@ -3955,17 +3955,18 @@ def cmd_asks(args):
     repo_root = _repo_root()
     cfg = conf.load_config(repo_root)
     days = asks_mod.stale_after_days(cfg)
-    rows = asks_mod.build_rows(
-        warp_root,
+    show_all = bool(getattr(args, "all", False))
+    payload = asks_mod.list_asks(
+        warp_root.parent,
         runs_dir=warp_root.parent.parent / account_mod.RUNS_PATH,
         outbox_root=repo_root / ".brr" / "outbox",
-        stale_days=days,
-        include_all=bool(getattr(args, "all", False)),
+        stale_after_days=days,
     )
     if getattr(args, "json", False):
+        rows = asks_mod.ordered_rows(payload, include_done=show_all)
         print(_json.dumps([asks_mod.public_row(r) for r in rows], indent=2))
     else:
-        print(asks_mod.render(rows, stale_days=days))
+        print(asks_mod.render(payload, include_done=show_all))
     return 0
 
 
