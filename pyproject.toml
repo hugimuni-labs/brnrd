@@ -92,7 +92,7 @@ console = [
 # `pyyaml` is not a runtime dependency: `scripts/gate.py` reads
 # `.github/workflows/ci.yml` so the local gate cannot drift from CI's
 # own leg list. A hardcoded copy is the bug that script exists to prevent.
-dev = ["pytest>=7.0", "pyyaml>=6", "ruff>=0.16", "brnrd[backend]", "brnrd[console]"]
+dev = ["pytest>=7.0", "pytest-xdist>=3.6,<4", "pyyaml>=6", "ruff>=0.16", "brnrd[backend]", "brnrd[console]"]
 
 [project.scripts]
 brnrd = "brr.cli:main"
@@ -100,6 +100,8 @@ brnrd-console = "brr.operator_console:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The gate reads CI, and both use this default. Use -n 0 for a serial diagnosis.
+addopts = "-n auto"
 pythonpath = ["src"]
 
 [tool.ruff]
