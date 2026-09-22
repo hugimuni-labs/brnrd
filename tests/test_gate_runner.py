@@ -207,20 +207,43 @@ def _drive(gate, monkeypatch, repo: Path, outbox: Path, argv: list[str]) -> int:
 
 
 def test_independent_jobs_run_concurrently_not_serially(tmp_path, monkeypatch):
-    """CI's three jobs carry no `needs:` between them — the local gate must
-    not serialize what CI itself runs in parallel. Three jobs each sleeping
-    ~0.6s: serial would take >=1.8s; concurrent finishes well under that."""
+    """All three jobs must reach the rendezvous before any can finish.
+
+    A serial runner breaks the barrier. No elapsed-time assertion confuses
+    a loaded host (or xdist worker) with incorrect job scheduling.
+    """
     gate = _gate()
     repo = _repo(tmp_path)
-    sleeper = "python3 -c \"import time; time.sleep(0.6)\""
-    _fake_ci_jobs(repo, {"backend": [sleeper], "frontend": [sleeper], "launcher": [sleeper]})
+    command = "rendezvous"
+    _fake_ci_jobs(repo, {"backend": [command], "frontend": [command], "launcher": [command]})
     outbox = tmp_path / "outbox"
     outbox.mkdir()
+    barrier = threading.Barrier(3)
+    finished = []
+    real_popen = subprocess.Popen
 
-    started = time.monotonic()
+    class Job:
+        returncode = 0
+
+        def __init__(self):
+            self.stdout = self.lines()
+
+        def lines(self):
+            barrier.wait(timeout=10)
+            finished.append(threading.get_ident())
+            yield "ready\n"
+
+        def wait(self):
+            return self.returncode
+
+    def popen(args, *a, **kw):
+        if args == command:
+            return Job()
+        return real_popen(args, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
     assert _drive(gate, monkeypatch, repo, outbox, []) == 0
-    elapsed = time.monotonic() - started
-    assert elapsed < 1.5, f"three 0.6s jobs took {elapsed:.2f}s — not running concurrently"
+    assert len(finished) == len(set(finished)) == 3
 
 
 def test_one_failing_job_does_not_affect_siblings_and_receipt_attributes_it_alone(
@@ -513,6 +536,40 @@ def test_two_trees_gated_via_the_real_runner_both_survive(tmp_path, monkeypatch)
 
 
 # ── #1195 rec 1 + rec 4: one gate at a time, and say so while queued ──────
+
+
+@pytest.mark.parametrize("local_runtime", [False, True])
+def test_linked_worktrees_share_the_gate_lock(tmp_path, monkeypatch, local_runtime):
+    """A task-local .brr must not give a sibling gate its own lock."""
+    gate = _gate()
+    repo = _repo(tmp_path)
+    (repo / ".brr").mkdir()
+    linked = tmp_path / "linked"
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "--detach", str(linked)],
+        check=True, capture_output=True,
+    )
+    if local_runtime:
+        (linked / ".brr").mkdir()
+    monkeypatch.setattr(gate, "REPO_ROOT", repo)
+    host_lock = gate.gate_lock_path()
+    monkeypatch.setattr(gate, "REPO_ROOT", linked)
+    assert gate.gate_lock_path() == host_lock == repo.resolve() / ".brr" / "gate.lock"
+
+
+
+def test_shared_clone_uses_its_host_gate_lock(tmp_path, monkeypatch):
+    gate = _gate()
+    repo = _repo(tmp_path)
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "--shared", str(repo), str(clone)],
+        check=True, capture_output=True,
+    )
+    (clone / ".git" / gate.gitops._CLONE_HOST_ROOT_MARKER).write_text(str(repo))
+    (clone / ".brr").mkdir()
+    monkeypatch.setattr(gate, "REPO_ROOT", clone)
+    assert gate.gate_lock_path() == repo / ".brr" / "gate.lock"
 
 
 def test_two_concurrent_gate_runs_on_one_tree_serialize(tmp_path):

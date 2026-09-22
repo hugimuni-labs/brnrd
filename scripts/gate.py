@@ -237,32 +237,23 @@ _TERMINAL_RUN_GRACE_SECONDS = 600.0
 
 
 def gate_lock_path() -> Path:
-    """The machine-wide gate lock's path, in the *shared* `.brr` dir.
+    """Share one lock even when each worktree has its own runtime directory.
 
-    Not `REPO_ROOT / ".gate.lock"` — that is exactly the bug #1195 reports.
-    Every worktree gate.py runs from (`.brr/worktrees/run-*`, a scratch
-    `/tmp/brr-wt-*` checkout) has its *own* `REPO_ROOT`, so a lock file
-    anchored there would give every worktree its own lock and never contend,
-    the same way `.gate-receipts.json` would if it were not already keyed
-    off the outbox instead.
-
-    `gitops.shared_brr_dir` is the resolver `_child_git_pin` (`daemon.py`)
-    already relies on to find the one location every dispatch mode treats as
-    shared: a plain checkout's own `.brr`, or — from a linked worktree —
-    `git rev-parse --git-common-dir`'s parent, which is the *host*
-    checkout's `.brr` regardless of which worktree asks. That covers the
-    host checkout, `.brr/worktrees/run-*`, and a scratch
-    `/tmp/brr-wt-*` worktree alike, because all three are `git worktree`
-    checkouts of the same repository and resolve the same common git dir.
-    A containerized strand reaches the identical path for a different
-    reason: the docker backend bind-mounts `repo_root` (the host checkout)
-    at the same absolute path inside the container
-    (`src/brr/envs/__init__.py`, `_docker_git_config_env_args`'s docstring:
-    "the repo is bind-mounted at the same absolute path it has on the
-    host"), so `.brr` — and this lock file under it — rides the mount
-    unchanged. One physical file, four dispatch shapes, no configuration.
+    shared_brr_dir deliberately prefers an existing local .brr for runtime
+    routing. That is the wrong precedence for a lock: linked worktrees must
+    resolve through their common Git directory first. brnrd's shared clones
+    instead carry an explicit host marker because their Git dir is separate.
     """
-    return gitops.shared_brr_dir(REPO_ROOT) / GATE_LOCK_NAME
+    host = gitops.clone_host_root(REPO_ROOT)
+    if host is not None:
+        return host / ".brr" / GATE_LOCK_NAME
+    common = gate_receipt.git_out(REPO_ROOT, ["rev-parse", "--git-common-dir"])
+    if common:
+        common_dir = Path(common.strip())
+        if not common_dir.is_absolute():
+            common_dir = REPO_ROOT / common_dir
+        return common_dir.resolve().parent / ".brr" / GATE_LOCK_NAME
+    return REPO_ROOT / ".brr" / GATE_LOCK_NAME
 
 
 def _lock_status_path(lock: Path) -> Path:
