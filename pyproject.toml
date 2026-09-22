@@ -92,7 +92,14 @@ console = [
 # `pyyaml` is not a runtime dependency: `scripts/gate.py` reads
 # `.github/workflows/ci.yml` so the local gate cannot drift from CI's
 # own leg list. A hardcoded copy is the bug that script exists to prevent.
-dev = ["pytest>=7.0", "pyyaml>=6", "ruff>=0.16", "brnrd[backend]", "brnrd[console]"]
+# `pytest-xdist` likewise: CI's own `run:` text (`python -m pytest -q`) never
+# passes `-n`, so CI is unaffected by its presence — it exists so
+# `scripts/gate.py` can inject a *bounded* `-n <GATE_WORKERS>` on the local
+# machine (never `-n auto`; see the script's own comment) instead of a
+# strand hand-rolling unbounded parallelism against the gate lock's back
+# (the-tick-that-breathes, 2026-09-22: three such runs put ~123 python
+# workers on one shared machine).
+dev = ["pytest>=7.0", "pytest-xdist>=3", "pyyaml>=6", "ruff>=0.16", "brnrd[backend]", "brnrd[console]"]
 
 [project.scripts]
 brnrd = "brr.cli:main"

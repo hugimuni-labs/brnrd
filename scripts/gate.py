@@ -60,6 +60,7 @@ import contextlib
 import datetime
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -99,6 +100,89 @@ REFUSED = {
         "a .pth into the shared venv (#762). Assumed already done in this checkout."
     ),
 }
+
+
+# ── the-tick-that-breathes, 2026-09-22: a bounded local `-n`, never `auto` ──
+#
+# CI's own `run:` text for pytest (`python -m pytest -q`) carries no `-n` at
+# all, and this script never edits `.github/workflows/ci.yml` or the text it
+# parses out of it — the whole point of this file is running exactly what CI
+# runs. What changed here is local-only: `scripts/gate.py` already serializes
+# itself machine-wide (`held_gate_lock`, `#1195` rec 1, above), but nothing
+# bounded a *strand* that skips this script and hand-runs `pytest -n auto`
+# directly. Measured live: three strands doing exactly that put ~123 python
+# workers on one shared 8-core dev machine (load 45-62) while the daemon
+# sharing it — dispatch, per-run heartbeats, outbox drains — stalled behind
+# the contention for minutes. `-n auto` sizes itself to the *box*, not to
+# what else is running on it; a bounded default is the fix a strand's own
+# spec can point at instead of reaching for the unbounded one.
+#
+# `GATE_WORKERS` (env) or `--workers N` (CLI, wins over the env) name the
+# worker count directly; neither given, `default_gate_workers()` picks a
+# fraction of *this* machine's own core count. Requires `pytest-xdist`
+# (added to the `dev` extra) — CI installs it as a side effect of
+# `pip install -e ".[dev]"` but never passes `-n`, so its presence there is
+# inert.
+def default_gate_workers() -> int:
+    """`min(4, cpu//2)`, floored at 1 — never 0, never unbounded `auto`."""
+    cpu = os.cpu_count() or 4
+    return max(1, min(4, cpu // 2))
+
+
+def gate_workers(explicit: int | None = None) -> int:
+    """Resolve the worker count: `--workers` > `GATE_WORKERS` env > default.
+
+    Always >= 1. A caller that wants *no* parallelism gets that through
+    ``inject_workers``'s own `workers <= 1` no-op, not through a worker count
+    of ``0`` — `pytest -n 0` is a different, also-legal thing (xdist loaded,
+    running in-process) from never passing `-n` at all, which is what
+    "sequential, exactly as CI runs it" has to mean here.
+    """
+    if explicit is not None:
+        return max(1, explicit)
+    raw = (os.environ.get("GATE_WORKERS") or "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            print(
+                f"gate: GATE_WORKERS={raw!r} is not an integer — using the default",
+                file=sys.stderr,
+            )
+    return default_gate_workers()
+
+
+#: Matches a line that invokes pytest directly — `python -m pytest`, a bare
+#: `pytest`, or either prefixed by `uv run` / `poetry run` / similar — so a
+#: future rewording of the workflow's `run:` text does not silently stop
+#: being bounded. Deliberately content-based rather than "the backend job's
+#: only run step": CI's own leg list is this script's whole contract
+#: (module docstring), and pinning this to today's *job name* instead of
+#: today's *command* would be exactly the kind of copy this file exists not
+#: to keep.
+_PYTEST_INVOCATION = re.compile(r"(^|[\s/])pytest\b")
+
+
+def inject_workers(command: str, *, workers: int) -> str:
+    """Append a bounded ``-n <workers>`` to any bare pytest invocation line.
+
+    ``workers <= 1`` returns *command* unchanged — sequential, exactly CI's
+    own text, xdist never involved. A line that already names its own `-n`
+    is left alone (an explicit choice in the workflow text outranks this
+    default). Every other line in a multi-line `run:` block (an install
+    step, a `mkdir`) passes through untouched — this only ever touches a
+    line pytest itself will read as its own argv.
+    """
+    if workers <= 1:
+        return command
+    lines = command.splitlines()
+    changed = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if _PYTEST_INVOCATION.search(stripped) and " -n " not in stripped:
+            lines[i] = f"{line} -n {workers}"
+            changed = True
+    return "\n".join(lines) if changed else command
 
 
 def _load_workflow() -> dict:
@@ -646,11 +730,20 @@ def main(argv: list[str] | None = None) -> int:
             "merge-base with main (or HEAD~1) — opt-in; CI still runs everything"
         ),
     )
+    parser.add_argument(
+        "--workers", type=int, default=None,
+        help=(
+            "bounded pytest-xdist worker count for any pytest leg this runs "
+            "(default: GATE_WORKERS env, else min(4, cpu//2); never -n auto "
+            "— see the module comment above default_gate_workers)"
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not WORKFLOW.exists():
         sys.exit(f"no workflow at {WORKFLOW}")
 
+    workers = gate_workers(args.workers)
     workflow = _load_workflow()
     all_legs = legs(workflow, args.job)
 
@@ -693,6 +786,8 @@ def main(argv: list[str] | None = None) -> int:
         f"gate: {WORKFLOW.relative_to(REPO_ROOT)} -> {len(runnable)} run steps, "
         f"{len(provided)} runner-provided steps skipped by design"
     )
+    if workers > 1:
+        print(f"gate: local-only -n {workers} on any pytest leg (GATE_WORKERS/--workers; never auto)")
     if args.list:
         for leg in runnable:
             if leg["job"] in skip_jobs:
@@ -732,8 +827,11 @@ def main(argv: list[str] | None = None) -> int:
                 with print_lock:
                     print(f"\n=== SKIP  {label}\n    {reason}")
                 return (label, "SKIPPED", 0.0)
+            command = inject_workers(leg["command"], workers=workers)
             with print_lock:
                 print(f"\n=== RUN   {label}  (cwd {leg['cwd']})", flush=True)
+                if command != leg["command"]:
+                    print(f"    local-only: -n {workers} added (GATE_WORKERS/--workers)")
             started = time.monotonic()
             # Piped (not inherited) so concurrent jobs' output doesn't tear
             # mid-line on the shared terminal fd; merged stderr->stdout so
@@ -743,7 +841,7 @@ def main(argv: list[str] | None = None) -> int:
             # that guards the `=== RUN`/`=== SKIP` bookkeeping lines, so a
             # reader can always tell which job printed which line.
             proc = subprocess.Popen(
-                leg["command"],
+                command,
                 shell=True,
                 cwd=REPO_ROOT / leg["cwd"],
                 stdout=subprocess.PIPE,

@@ -126,6 +126,112 @@ def test_the_real_workflow_has_no_unrefused_editable_install():
         assert gate.refusal(leg["command"]) is not None
 
 
+# ── GATE_WORKERS: bounded local parallelism, never `-n auto` ───────────────
+#
+# the-tick-that-breathes, 2026-09-22: three strands hand-running
+# `pytest -n auto` (bypassing this script's own machine-wide lock entirely)
+# put ~123 python workers on one shared 8-core box while the daemon sharing
+# it stalled behind the contention for minutes. These tests pin the two
+# properties that make a local, bounded `-n` safe to default to: it never
+# exceeds a small fraction of *this* machine's own cores, and it is never
+# `auto`.
+
+def test_default_gate_workers_is_bounded_not_auto(monkeypatch):
+    gate = _gate()
+    monkeypatch.setattr(gate.os, "cpu_count", lambda: 64)
+    assert gate.default_gate_workers() == 4  # min(4, 64 // 2), never 32
+
+    monkeypatch.setattr(gate.os, "cpu_count", lambda: 4)
+    assert gate.default_gate_workers() == 2  # min(4, 4 // 2)
+
+    monkeypatch.setattr(gate.os, "cpu_count", lambda: 1)
+    assert gate.default_gate_workers() == 1  # floored at 1, never 0
+
+    monkeypatch.setattr(gate.os, "cpu_count", lambda: None)
+    assert gate.default_gate_workers() >= 1  # a host that won't say must not crash this
+
+
+def test_gate_workers_precedence_cli_over_env_over_default(monkeypatch):
+    gate = _gate()
+    monkeypatch.setattr(gate, "default_gate_workers", lambda: 2)
+
+    monkeypatch.delenv("GATE_WORKERS", raising=False)
+    assert gate.gate_workers() == 2  # falls through to the default
+
+    monkeypatch.setenv("GATE_WORKERS", "6")
+    assert gate.gate_workers() == 6  # env overrides the default
+
+    assert gate.gate_workers(explicit=3) == 3  # --workers overrides the env too
+
+
+def test_gate_workers_env_ignores_garbage_rather_than_crashing(monkeypatch, capsys):
+    gate = _gate()
+    monkeypatch.setattr(gate, "default_gate_workers", lambda: 2)
+    monkeypatch.setenv("GATE_WORKERS", "not-a-number")
+    assert gate.gate_workers() == 2
+    assert "not an integer" in capsys.readouterr().err
+
+
+def test_gate_workers_never_returns_zero(monkeypatch):
+    gate = _gate()
+    assert gate.gate_workers(explicit=0) >= 1
+    monkeypatch.setenv("GATE_WORKERS", "0")
+    assert gate.gate_workers() >= 1
+
+
+def test_inject_workers_is_a_noop_below_two():
+    gate = _gate()
+    command = "python -m pytest -q"
+    assert gate.inject_workers(command, workers=1) == command
+    assert gate.inject_workers(command, workers=0) == command
+
+
+def test_inject_workers_appends_bounded_n_never_auto():
+    gate = _gate()
+    out = gate.inject_workers("python -m pytest -q", workers=4)
+    assert out == "python -m pytest -q -n 4"
+    assert "auto" not in out
+
+
+def test_inject_workers_leaves_an_explicit_n_alone():
+    """The workflow text choosing its own `-n` outranks this default."""
+    gate = _gate()
+    command = "python -m pytest -q -n 2"
+    assert gate.inject_workers(command, workers=8) == command
+
+
+def test_inject_workers_only_touches_the_pytest_line(monkeypatch):
+    """A multi-line install-then-test step must not get `-n` on its install."""
+    gate = _gate()
+    command = "python -m pip install --upgrade pip\npython -m pytest -q"
+    out = gate.inject_workers(command, workers=4)
+    lines = out.splitlines()
+    assert lines[0] == "python -m pip install --upgrade pip"
+    assert lines[1] == "python -m pytest -q -n 4"
+
+
+def test_inject_workers_ignores_a_command_with_no_pytest():
+    gate = _gate()
+    command = "npm ci"
+    assert gate.inject_workers(command, workers=4) == command
+
+
+def test_the_real_backend_leg_gains_a_bounded_worker_flag():
+    """End-to-end against the actual `ci.yml` text, not a hand-written stand-in."""
+    gate = _gate()
+    workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    backend_test_legs = [
+        leg
+        for leg in gate.legs(workflow, "backend")
+        if leg["kind"] == "run" and "pytest" in leg["command"]
+    ]
+    assert backend_test_legs, "ci.yml's backend job no longer runs pytest directly"
+    for leg in backend_test_legs:
+        augmented = gate.inject_workers(leg["command"], workers=3)
+        assert " -n 3" in augmented
+        assert "auto" not in augmented
+
+
 # ── The receipt: what makes "did the gate run" a fact instead of a memory ──
 
 
