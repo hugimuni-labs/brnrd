@@ -34,7 +34,7 @@ from brr.outbox.shapes import DrainContext, OutboxFile
 from brr.run import HALTED_STATUS, Run
 from brr.runner import RunnerResult
 
-from _helpers import make_event, write_repo_scaffold
+from _helpers import make_event, stub_daemon_prompt, write_repo_scaffold
 
 
 @pytest.fixture(autouse=True)
@@ -524,10 +524,7 @@ def _wire_common(monkeypatch):
         lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
     )
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts, "build_daemon_prompt",
-        lambda task, eid, rp, root, **kw: "PROMPT",
-    )
+    stub_daemon_prompt(monkeypatch, lambda task, eid, rp, root, **kw: "PROMPT")
     monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
 
 

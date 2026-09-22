@@ -10,6 +10,7 @@ from brr.runner import RunnerResult
 from _helpers import (
     StubWorktreeEnv,
     make_event,
+    stub_daemon_prompt,
     succeed_invoke,
     write_repo_scaffold,
 )
@@ -52,7 +53,7 @@ def _patch_runner_minimal(monkeypatch, captured_prompts=None):
         ))
         return f"RUN {eid}: {task} -> {rp}"
 
-    monkeypatch.setattr(daemon.prompts, "build_daemon_prompt", _build_daemon)
+    stub_daemon_prompt(monkeypatch, _build_daemon)
     monkeypatch.setattr(
         daemon.runner,
         "invoke_runner",

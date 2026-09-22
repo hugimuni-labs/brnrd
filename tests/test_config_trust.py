@@ -25,7 +25,7 @@ from brr import daemon, envs, gitops, trust
 from brr.cli import main
 from brr.runner import RunnerResult
 
-from _helpers import init_git_repo, make_event, write_repo_scaffold
+from _helpers import init_git_repo, make_event, stub_daemon_prompt, write_repo_scaffold
 
 
 @pytest.fixture(autouse=True)
@@ -314,10 +314,7 @@ def test_ignored_repo_security_key_surfaces_as_a_run_notice_and_warning(
         lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
     )
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts, "build_daemon_prompt",
-        lambda task, eid, rp, root, **kw: "PROMPT",
-    )
+    stub_daemon_prompt(monkeypatch, lambda task, eid, rp, root, **kw: "PROMPT")
 
     daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
@@ -342,10 +339,7 @@ def test_no_notice_when_no_security_key_is_set(tmp_path, monkeypatch):
         lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
     )
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts, "build_daemon_prompt",
-        lambda task, eid, rp, root, **kw: "PROMPT",
-    )
+    stub_daemon_prompt(monkeypatch, lambda task, eid, rp, root, **kw: "PROMPT")
 
     daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
@@ -1110,10 +1104,7 @@ def _drive_repo_profile_notice(tmp_path, monkeypatch, profile_text, eid):
         lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
     )
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts, "build_daemon_prompt",
-        lambda task, eid, rp, root, **kw: "PROMPT",
-    )
+    stub_daemon_prompt(monkeypatch, lambda task, eid, rp, root, **kw: "PROMPT")
 
     daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
@@ -1229,10 +1220,7 @@ def test_no_profile_notice_when_the_repo_has_no_runners_file(tmp_path, monkeypat
         lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
     )
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts, "build_daemon_prompt",
-        lambda task, eid, rp, root, **kw: "PROMPT",
-    )
+    stub_daemon_prompt(monkeypatch, lambda task, eid, rp, root, **kw: "PROMPT")
 
     daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
@@ -1385,10 +1373,7 @@ def test_unreachable_profile_catalog_surfaces_as_a_run_notice_and_warning(
         lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
     )
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts, "build_daemon_prompt",
-        lambda task, eid, rp, root, **kw: "PROMPT",
-    )
+    stub_daemon_prompt(monkeypatch, lambda task, eid, rp, root, **kw: "PROMPT")
 
     daemon._run_worker(event, linked, linked / ".brr" / "responses", {}, 0)
 
