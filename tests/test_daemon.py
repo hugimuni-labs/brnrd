@@ -11915,6 +11915,9 @@ def test_capture_control_files_copies_preserved_names_dot_stripped(tmp_path):
         '{"id": "act-1", "verb": "message", "state": "ambiguous"}\n',
         encoding="utf-8",
     )
+    (outbox / ".asks.jsonl").write_text(
+        '{"event": "evt-ctrl", "item": "w-87"}\n', encoding="utf-8",
+    )
     (outbox / ".mood").write_text("focused\nnarration line\n", encoding="utf-8")
     (outbox / ".claude-result-levels.json").write_text(
         '{"spend": {"total_cost_usd": 1.2}}', encoding="utf-8",
@@ -11939,6 +11942,9 @@ def test_capture_control_files_copies_preserved_names_dot_stripped(tmp_path):
     ).read_text(encoding="utf-8") == (
         '{"id": "act-1", "verb": "message", "state": "ambiguous"}\n'
     )
+    assert (
+        run_dir / "asks.jsonl"
+    ).read_text(encoding="utf-8") == '{"event": "evt-ctrl", "item": "w-87"}\n'
     assert (run_dir / "mood").read_text(encoding="utf-8") == "focused\nnarration line\n"
     assert (
         run_dir / "spend.json"
@@ -11947,7 +11953,7 @@ def test_capture_control_files_copies_preserved_names_dot_stripped(tmp_path):
     assert not (run_dir / "card").exists()
     assert not (run_dir / ".card").exists()
     assert {p.name for p in written} == {
-        "relics.jsonl", "actions.jsonl", "mood", "spend.json",
+        "relics.jsonl", "actions.jsonl", "asks.jsonl", "mood", "spend.json",
     }
 
 
