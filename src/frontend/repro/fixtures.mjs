@@ -363,7 +363,12 @@ export const asks = {
 			// His callsign steer (the-panel-third-pass: "not w-45 but
 			// w-[45|anltcs]") — `sign` is the one row in this fixture that
 			// carries it, so the id cell and the accept/reroute chips both
-			// have something real to render for the shots.
+			// have something real to render for the shots. The-row-you-can-
+			// judge §2 fixture: two receipts, one carrying a title (the
+			// derived delivery line reads it) and one that doesn't yet (the
+			// sibling PR's field landing gradually) — so the receipts chip
+			// row and the "still resolving" case both have something real
+			// to render.
 			sign: 'anltcs',
 			title: 'Tell me when the licence renewal window opens',
 			type: 'preparation',
@@ -373,9 +378,39 @@ export const asks = {
 			says: [{ event: 'evt-1780000000000000000-old1', at: ago(24 * 75), excerpt: null }],
 			attempts: [],
 			receipt: null,
+			receipts: [
+				{
+					ref: '#2082',
+					title: 'ledger step 6a — a hold never stamps ambiguous',
+					url: 'https://github.com/hugimuni-labs/brnrd/pull/2082'
+				},
+				{ ref: '#2081', title: null, url: null }
+			],
 			topics: ['errands'],
 			live: false,
 			stale: true,
+			done: false,
+			after: null
+		},
+		{
+			// The-row-you-can-judge §4 fixture (his 19:46Z: "an in-hand seat
+			// row shows what the seat is doing"): a second in-hand ask with
+			// no live attempt of its own (`attempts: []`, no drone) — the
+			// bare "seat" case, now joined against the seat's own live run
+			// (added below, alongside the strand fixture on w-201) instead
+			// of the plain static word.
+			id: 'w-205',
+			title: 'Reconcile the November invoice against the PO',
+			type: 'action',
+			return: null,
+			stage: 'making',
+			touched_at: ago(0.2),
+			says: [],
+			attempts: [],
+			receipt: null,
+			topics: ['ops'],
+			live: false,
+			stale: false,
 			done: false,
 			after: null
 		}

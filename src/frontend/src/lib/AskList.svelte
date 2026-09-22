@@ -7,17 +7,23 @@
 		askLabel,
 		attemptGlyph,
 		bucketAsks,
+		deliveryLine,
 		doneWindow,
 		keymapIgnores,
 		liveAttempt,
 		moveFocus,
+		previewNames,
+		receiptChips,
 		sayText,
+		seatNowLine,
+		seatRun,
 		splitAlive,
 		touchedLabel,
 		type AskGoal,
 		type AskRow,
 		type AsksResponse
 	} from './asks';
+	import type { LiveRun } from './liveRuns';
 	// The roast (evt-…-m7n6): "make it more visually distinct, not just a
 	// different header in the same table… I want the active items sort of
 	// visually lit." `glowFor`/`STATUS_BURNING` are the exact tokens the
@@ -48,6 +54,12 @@
 		 *  run link only renders when the repo is unambiguous; `null` ⇒ the
 		 *  run id renders as plain text, same as before this landed. */
 		runRepoLabel?: string | null;
+		/** The same live-runs payload the MACHINE block reads (Dashboard.svelte's
+		 *  `liveRuns`) — passed through, not refetched, so an in-hand row with
+		 *  no live attempt of its own can still name what the seat is doing
+		 *  right now (the-row-you-can-judge §4, his 19:46Z steer). `null`/unset
+		 *  ⇒ no seat known, the bare "seat" word, same as before this landed. */
+		liveRuns?: readonly LiveRun[] | null;
 	}
 
 	let {
@@ -58,7 +70,8 @@
 		selected = null,
 		resolveTopic = () => null,
 		glyphForTopic = () => null,
-		runRepoLabel = null
+		runRepoLabel = null,
+		liveRuns = null
 	}: Props = $props();
 
 	const lit = (row: AskRow) => askInTopics(row, selected, resolveTopic);
@@ -73,14 +86,14 @@
 	let buckets = $derived(bucketAsks((data?.asks ?? []).filter(lit)));
 	let doneRows = $derived((data?.done ?? []).filter(lit));
 	let goals = $derived((data?.goals ?? []) as AskGoal[]);
-	// The panel-third-pass steer (his: "the done block should be
-	// collapsible but on top, and showing a few last items"): done moves
-	// to the top, its newest three rows already visible, `doneOpen` reveals
-	// the rest. `unaddressedOpen` is the mirror of the *old* done toggle —
-	// the quiet block, collapsed to a bare count until asked.
-	let doneWin = $derived(doneWindow(doneRows));
+	// The-row-you-can-judge §1 (his roast: "when collapsed it should show
+	// three last items but occupy one bar … you gotta expand to interact
+	// with either of them, the block is only a preview"): collapsed, done
+	// shows a bar, not rows — `doneVisible` (the `j`/`k` walk order below)
+	// is empty until `doneOpen`, matching what actually has a click target.
+	// `unaddressedOpen` is the same shape for the bucket below it.
 	let doneOpen = $state(false);
-	let doneVisible = $derived(doneOpen ? doneRows : doneWin.visible);
+	let doneVisible = $derived(doneOpen ? doneRows : []);
 	let unaddressedOpen = $state(false);
 	// His 18:27Z follow-up: inside unaddressed, the stale rows (past the
 	// horizon) get their own nested collapse — a bare count first
@@ -97,8 +110,32 @@
 		!staleOpen ? [] : staleRestOpen ? unaddressedSplit.stale : staleWin.visible
 	);
 	let expanded = new SvelteSet<string>();
+	// The judge row's own sub-fold (§2 below): says/attempts nest behind a
+	// `▸ history` toggle now that the receipts chip row carries the delivered
+	// fact up front — a second `SvelteSet`, not a third state shape, mirrors
+	// `expanded` on purpose (row-scoped, id-keyed, same toggle idiom).
+	let historyOpen = new SvelteSet<string>();
 	let focus = $state<number | null>(null);
 	let root: HTMLElement | undefined = $state();
+
+	// The-row-you-can-judge §1 (his roast: "when collapsed it should show
+	// three last items but occupy one bar"): the newest three titles behind
+	// each collapsed bucket bar, reusing `doneWindow`'s own "newest N" slice
+	// rather than a second window shape.
+	let donePreview = $derived(previewNames(doneRows));
+	let unaddressedPreview = $derived(previewNames(buckets.unaddressed));
+
+	// §4 (his 19:46Z: "an in-hand seat row shows what the seat is doing"):
+	// the seat's own live run, joined out of the same payload the MACHINE
+	// block already holds — `null` when no daemon is awake to report one.
+	let seat = $derived(seatRun(liveRuns));
+	let seatRunId = $derived(seat ? seat.run_id || seat.id : null);
+	let seatNow = $derived(seatNowLine(seat));
+
+	function toggleHistory(id: string) {
+		if (historyOpen.has(id)) historyOpen.delete(id);
+		else historyOpen.add(id);
+	}
 
 	// The order `j`/`k` walk: done's visible window, in hand, to judge, then
 	// unaddressed's non-stale rows + its stale sub-window, both gated on the
@@ -175,19 +212,86 @@
 	{:else}
 		{#if goals.length}
 			<!-- His order (design-the-ask.md): goals stay goals, above the buckets
-			     that track the asks working toward them — two lines, clamped, so a
-			     long goal list never pushes "in hand" below the fold. -->
-			<p class="mb-2 line-clamp-2 font-mono text-[10px] text-ink-quiet" data-goals>
-				<span class="tracking-wide text-ink-mute uppercase">goals</span>
-				· {goals.map((g) => g.title).join(' · ')}
-			</p>
+			     that track the asks working toward them. His 19:46Z steer (§5):
+			     one goal per line, title only — no metric text, no tooltip; each
+			     line truncates rather than wraps, so a long title clips instead of
+			     pushing the next goal (or "in hand" below it) down. -->
+			<div class="mb-2" data-goals>
+				<span class="font-mono text-[10px] tracking-wide text-ink-mute uppercase">goals</span>
+				{#each goals as goal (goal.id)}
+					<p class="truncate font-mono text-[10px] text-ink-quiet">{goal.title}</p>
+				{/each}
+			</div>
 		{/if}
+		{#snippet sayAttempts(row: AskRow)}
+			<div>
+				<p class="text-[10px] tracking-wide text-ink-mute uppercase">says</p>
+				<!-- 17:51Z steer (the-panel-third-pass): "the evt-say lines say
+				     nothing" — `<relative time> · <excerpt> · ↗`, never the raw
+				     event id as the lead (`sayText` falls back to it only when
+				     no excerpt resolved); ↗ only when the server sent a `url`
+				     (no route exists yet, so never today — see asks.ts). -->
+				{#each row.says as say (say.event)}
+					<p class="truncate">
+						<span class="text-ink-mute">{touchedLabel(say.at, now) || '—'}</span>
+						<span class="text-stone-300"> · {sayText(say)}</span>
+						{#if say.url}
+							<!-- eslint-disable svelte/no-navigation-without-resolve -->
+							<a
+								href={say.url}
+								class="text-sky-200 hover:text-sky-100"
+								target="_blank"
+								rel="noopener noreferrer"
+								aria-label="open this message"
+							>
+								· ↗</a
+							>
+							<!-- eslint-enable svelte/no-navigation-without-resolve -->
+						{/if}
+					</p>
+				{:else}
+					<p class="text-ink-mute">none recorded yet</p>
+				{/each}
+			</div>
+			<div>
+				<p class="text-[10px] tracking-wide text-ink-mute uppercase">attempts</p>
+				<!-- 17:51Z steer: a run id links to its run page (`runNodeHref`,
+				     same builder LiveRuns/RunLedgerReceipt use) with the ask's
+				     own topic glyph beside — the run itself carries no topic in
+				     this payload, `attemptGlyph` names that stand-in. No known
+				     repo (an account with 0 or >1 connected, `runRepoLabel` null)
+				     ⇒ plain text, same as before this landed. -->
+				{#each row.attempts as run (run)}
+					{@const glyph = attemptGlyph(row, glyphForTopic)}
+					<p class="truncate">
+						{#if runRepoLabel}<a
+								class="text-stone-300 underline decoration-stone-700 hover:text-amber-100"
+								href={runNodeHref(runRepoLabel, run)}>{run}</a
+							>{:else}<span class="text-stone-300">{run}</span>{/if}
+						{#if glyph}<span class="text-ink-mute"> {glyph}</span>{/if}
+						{#if liveRunIds.has(run)}<span class="text-amber-300"> · live</span>{/if}
+					</p>
+				{:else}
+					<p class="text-ink-mute">none yet</p>
+				{/each}
+			</div>
+		{/snippet}
 		{#snippet rows(list: AskRow[], kind: 'inHand' | 'toJudge' | 'plain' = 'plain')}
 			{@const boxed = kind === 'inHand'}
 			<ul class={boxed ? 'space-y-1' : 'space-y-px'}>
 				{#each list as row (row.id)}
 					{@const open = expanded.has(row.id)}
 					{@const drone = liveAttempt(row, liveRunIds)}
+					<!-- §2, the-row-you-can-judge (his "how much can you really
+					     judge from here?"): a judge row's one derived line — the
+					     newest receipt's title when the row carries one, else the
+					     plain `return:` text — rides the always-visible button, so
+					     it reads the same collapsed or open. `chips`/`historyIsOpen`
+					     feed the expanded detail only, computed here so the `{#if
+					     open}` block below stays a pure render. -->
+					{@const delivery = kind === 'toJudge' ? deliveryLine(row) : null}
+					{@const chips = kind === 'toJudge' ? receiptChips(row) : []}
+					{@const historyIsOpen = historyOpen.has(row.id)}
 					<li class:opacity-60={row.stale}>
 						<button
 							type="button"
@@ -214,6 +318,15 @@
 										: 'w-12'}"
 									title={askLabel(row)}>{askLabel(row)}</span
 								>
+								<!-- Title and delivery are both prose (a human sentence, not a
+								     token), so both get `flex-1` rather than one greedy `flex-1`
+								     against the other's fixed `max-w` — a fixed cap on the
+								     delivery span left the title truncating far short of the
+								     room actually available (measured: "Tell me when the licence
+								     rene…" with the delivery line still eating its own cap's
+								     worth of space beyond it). Equal `flex: 1 1 0%` splits
+								     whatever room is left after the fixed cells evenly, so
+								     neither one-sidedly starves the other. -->
 								<span class="min-w-0 flex-1 truncate text-sm text-amber-100" title={row.title}
 									>{row.title}</span
 								>
@@ -223,138 +336,131 @@
 										title="a live strand wears this ask: {drone}"
 										aria-label="a live strand is working this ask">⌁</span
 									>{/if}
+								{#if delivery}<span
+										class="min-w-0 flex-1 truncate font-mono text-[10px] text-sky-200/90"
+										data-delivery-line>{delivery}</span
+									>{/if}
 								<span class="shrink-0 font-mono text-[10px] text-ink-quiet tabular-nums"
 									>{touchedLabel(row.touched_at, now) || '—'}</span
 								>
 							</span>
-							<span
-								class="mt-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 pl-14 font-mono text-[10px] text-ink-quiet"
-							>
-								{#if row.type}<span class="uppercase tracking-wide text-sky-200/80">{row.type}</span
-									>{/if}
-								{#if kind === 'inHand'}
-									<!-- "in hand" needs no design beyond this (design-the-ask.md):
-									     who's holding it right now. -->
-									<span class="text-amber-300" data-in-hand>{drone ? `▷ ${drone}` : 'seat'}</span>
-								{:else}
-									{#if row.return}<span>{row.return}</span>{/if}
-									{#if row.stage}<span class="text-ink-mute">· {row.stage}</span>{/if}
-								{/if}
-								<span class="text-ink-mute"
-									>· {row.says.length} say{row.says.length === 1 ? '' : 's'}</span
+							{#if kind !== 'toJudge'}
+								<!-- The judge row drops this whole line (§2): its one fact
+								     — what got delivered — already rides the line above, and
+								     his roast was exactly this line repeating it a second and
+								     third time. -->
+								<span
+									class="mt-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 pl-14 font-mono text-[10px] text-ink-quiet"
 								>
-							</span>
-						</button>
-						{#if kind === 'toJudge'}
-							<!-- accept/reroute are chat words first (design-the-ask.md): a
-							     copyable hint, never a button — parsed by the seat, kept by
-							     the ledger. Outside the `<button>` so its receipt link stays
-							     valid HTML (no interactive content nested in a button). -->
-							<div
-								class="flex flex-wrap items-center gap-x-2 gap-y-1 pb-1.5 pl-16 font-mono text-[10px] text-stone-400"
-								data-to-judge-hints
-							>
-								{#if row.receipt}
-									<span
-										>receipt:
-										{#if isLink(row.receipt)}
-											<!-- eslint-disable svelte/no-navigation-without-resolve -->
-											<a
-												href={row.receipt}
-												class="text-sky-200 hover:text-sky-100"
-												target="_blank"
-												rel="noopener noreferrer">{row.receipt.replace(/^https?:\/\//, '')}</a
-											>
-											<!-- eslint-enable svelte/no-navigation-without-resolve -->
-										{:else}{row.receipt}{/if}</span
+									{#if row.type}<span class="uppercase tracking-wide text-sky-200/80"
+											>{row.type}</span
+										>{/if}
+									{#if kind === 'inHand'}
+										<!-- §4, his 19:46Z: "an in-hand seat row shows what the
+										     seat is doing" — a live drone still wins (a strand
+										     wearing the ask is the more specific fact); absent
+										     that, the seat's own current run + its `## Now` first
+										     line stand in for the bare "seat" word, when either is
+										     known. No live run known at all ⇒ the original bare
+										     word, unchanged. -->
+										<span class="text-amber-300" data-in-hand>
+											{#if drone}▷ {drone}
+											{:else if seat}
+												{#if runRepoLabel && seatRunId}<a
+														class="underline decoration-amber-700/60 hover:text-amber-100"
+														href={runNodeHref(runRepoLabel, seatRunId)}>seat</a
+													>{:else}seat{/if}{#if seatNow}<span class="text-ink-mute">
+														· {seatNow}</span
+													>{/if}
+											{:else}
+												seat
+											{/if}
+										</span>
+									{:else}
+										{#if row.return}<span>{row.return}</span>{/if}
+										{#if row.stage}<span class="text-ink-mute">· {row.stage}</span>{/if}
+									{/if}
+									<span class="text-ink-mute"
+										>· {row.says.length} say{row.says.length === 1 ? '' : 's'}</span
 									>
-								{/if}
-								<!-- His roast: the two words as "a small chip pair, not body
-								     text". Still neither a status color (statusPalette.ts: no
-								     green family, red reserved for a broken contract) — just
-								     the sky link tone and the base ink, boxed rather than bare.
-								     `askHandle` speaks the sign back when the row carries one
-								     (the-panel-third-pass: "the chip words use the sign when
-								     present") — same fallback to the bare id as the id cell. -->
-								<span
-									class="cursor-text select-all border border-sky-900/60 bg-sky-950/40 px-1.5 py-0.5 tracking-wide text-sky-300 uppercase"
-									>accept {askHandle(row)}</span
-								>
-								<span
-									class="cursor-text select-all border border-stone-700/60 bg-stone-900/40 px-1.5 py-0.5 tracking-wide text-stone-300 uppercase"
-									>reroute {askHandle(row)}: &lt;why&gt;</span
-								>
-							</div>
-						{/if}
+								</span>
+							{/if}
+						</button>
 						{#if open}
 							<div class="space-y-1.5 pb-2 pl-16 pr-2 font-mono text-[11px] text-ink-quiet">
 								{#if row.after}<p>after <span class="text-stone-300">{row.after}</span></p>{/if}
-								<div>
-									<p class="text-[10px] tracking-wide text-ink-mute uppercase">says</p>
-									<!-- 17:51Z steer (the-panel-third-pass): "the evt-say lines say
-									     nothing" — `<relative time> · <excerpt> · ↗`, never the raw
-									     event id as the lead (`sayText` falls back to it only when
-									     no excerpt resolved); ↗ only when the server sent a `url`
-									     (no route exists yet, so never today — see asks.ts). -->
-									{#each row.says as say (say.event)}
-										<p class="truncate">
-											<span class="text-ink-mute">{touchedLabel(say.at, now) || '—'}</span>
-											<span class="text-stone-300"> · {sayText(say)}</span>
-											{#if say.url}
+								{#if kind === 'toJudge'}
+									{#if chips.length}
+										<!-- The one place a judge row's receipts render (his roast:
+										     "the receipt data kinda repeats three times") — a chip
+										     per receipt, linked when it carries a `url`. -->
+										<div class="flex flex-wrap items-center gap-x-2 gap-y-1" data-receipts>
+											<span class="text-[10px] tracking-wide text-ink-mute uppercase">receipts</span
+											>
+											{#each chips as chip (chip.label)}
+												{#if chip.url}
+													<!-- eslint-disable svelte/no-navigation-without-resolve -->
+													<a
+														href={chip.url}
+														class="border border-sky-900/60 bg-sky-950/40 px-1.5 py-0.5 text-sky-300 hover:text-sky-100"
+														target="_blank"
+														rel="noopener noreferrer">{chip.label}</a
+													>
+													<!-- eslint-enable svelte/no-navigation-without-resolve -->
+												{:else}
+													<span
+														class="border border-stone-700/60 bg-stone-900/40 px-1.5 py-0.5 text-stone-300"
+														>{chip.label}</span
+													>
+												{/if}
+											{/each}
+										</div>
+									{/if}
+									<!-- accept/reroute are chat words first (design-the-ask.md): a
+									     copyable hint, never a button — parsed by the seat, kept by
+									     the ledger. `askHandle` speaks the sign back when the row
+									     carries one (the-panel-third-pass). -->
+									<div class="flex flex-wrap items-center gap-x-2 gap-y-1" data-to-judge-hints>
+										<span
+											class="cursor-text select-all border border-sky-900/60 bg-sky-950/40 px-1.5 py-0.5 tracking-wide text-sky-300 uppercase"
+											>accept {askHandle(row)}</span
+										>
+										<span
+											class="cursor-text select-all border border-stone-700/60 bg-stone-900/40 px-1.5 py-0.5 tracking-wide text-stone-300 uppercase"
+											>reroute {askHandle(row)}: &lt;why&gt;</span
+										>
+									</div>
+									<!-- says/attempts fold behind their own toggle now (§2): the
+									     receipts chips above already answer "what shipped"; says
+									     and attempts are history, one level further down. -->
+									<button
+										type="button"
+										class="flex items-baseline gap-1.5 font-mono text-[10px] tracking-wide text-ink-mute uppercase hover:text-stone-300"
+										aria-expanded={historyIsOpen}
+										onclick={() => toggleHistory(row.id)}
+										data-history-toggle>{historyIsOpen ? '▾' : '▸'} history</button
+									>
+									{#if historyIsOpen}
+										{@render sayAttempts(row)}
+									{/if}
+								{:else}
+									{@render sayAttempts(row)}
+									{#if row.receipt}
+										<p>
+											<span class="text-[10px] tracking-wide text-ink-mute uppercase">receipt</span>
+											{#if isLink(row.receipt)}
+												<!-- an external forge URL (`isLink` gates it), never an app route -->
 												<!-- eslint-disable svelte/no-navigation-without-resolve -->
 												<a
-													href={say.url}
+													href={row.receipt}
 													class="text-sky-200 hover:text-sky-100"
 													target="_blank"
-													rel="noopener noreferrer"
-													aria-label="open this message"
-												>
-													· ↗</a
+													rel="noopener noreferrer">{row.receipt.replace(/^https?:\/\//, '')}</a
 												>
 												<!-- eslint-enable svelte/no-navigation-without-resolve -->
-											{/if}
+											{:else}<span class="text-stone-300">{row.receipt}</span>{/if}
 										</p>
-									{:else}
-										<p class="text-ink-mute">none recorded yet</p>
-									{/each}
-								</div>
-								<div>
-									<p class="text-[10px] tracking-wide text-ink-mute uppercase">attempts</p>
-									<!-- 17:51Z steer: a run id links to its run page (`runNodeHref`,
-									     same builder LiveRuns/RunLedgerReceipt use) with the ask's
-									     own topic glyph beside — the run itself carries no topic in
-									     this payload, `attemptGlyph` names that stand-in. No known
-									     repo (an account with 0 or >1 connected, `runRepoLabel` null)
-									     ⇒ plain text, same as before this landed. -->
-									{#each row.attempts as run (run)}
-										{@const glyph = attemptGlyph(row, glyphForTopic)}
-										<p class="truncate">
-											{#if runRepoLabel}<a
-													class="text-stone-300 underline decoration-stone-700 hover:text-amber-100"
-													href={runNodeHref(runRepoLabel, run)}>{run}</a
-												>{:else}<span class="text-stone-300">{run}</span>{/if}
-											{#if glyph}<span class="text-ink-mute"> {glyph}</span>{/if}
-											{#if liveRunIds.has(run)}<span class="text-amber-300"> · live</span>{/if}
-										</p>
-									{:else}
-										<p class="text-ink-mute">none yet</p>
-									{/each}
-								</div>
-								{#if row.receipt}
-									<p>
-										<span class="text-[10px] tracking-wide text-ink-mute uppercase">receipt</span>
-										{#if isLink(row.receipt)}
-											<!-- an external forge URL (`isLink` gates it), never an app route -->
-											<!-- eslint-disable svelte/no-navigation-without-resolve -->
-											<a
-												href={row.receipt}
-												class="text-sky-200 hover:text-sky-100"
-												target="_blank"
-												rel="noopener noreferrer">{row.receipt.replace(/^https?:\/\//, '')}</a
-											>
-											<!-- eslint-enable svelte/no-navigation-without-resolve -->
-										{:else}<span class="text-stone-300">{row.receipt}</span>{/if}
-									</p>
+									{/if}
 								{/if}
 							</div>
 						{/if}
@@ -363,43 +469,53 @@
 			</ul>
 		{/snippet}
 
-		<!-- The panel, third pass (his: "the done block should be
-		     collapsible but on top, and showing a few last items" —
-		     "the quiet items blocks should be collapsed"): **done & accepted**
-		     leads now, its newest three rows already open (`doneWindow`,
-		     asks.ts) so a glance at the top answers "what did I finish" —
-		     `doneWin.restCount` rides a `▸ N done` toggle for the rest, never
-		     the whole bucket's own heading (that stays a static count: the
-		     visible three are not what the toggle hides). **in hand** and
-		     **yours to judge** are unchanged, still framed to read as
-		     distinct blocks (the roast: "not just a different header in the
-		     same table") — live-amber for in hand (`PickLane.svelte`'s
-		     picking-row tokens), `.subpanel`'s quieter hairline for to-judge.
-		     **unaddressed** sinks to the bottom, now the collapsed-to-a-count
-		     block in its place — nothing has happened on these yet, so a
-		     bare count is the whole story until asked. A stale row inside any
-		     bucket is still dimmed in place (`opacity-60` on its `<li>`,
-		     above), never moved to a fifth place. A bucket with nothing in it
-		     renders its heading and stops — no empty frame, no dead toggle. -->
+		<!-- The panel, third + fourth pass (his: "the done block should be
+		     collapsible but on top" — "the quiet items blocks should be
+		     collapsed" — the-row-you-can-judge §1, his roast: "when
+		     collapsed it should show three last items but occupy one bar, so
+		     you gotta expand to interact with either of them, the block is
+		     only a preview. The unaddressed should behave the same way"):
+		     **done & accepted** and **not started** (renamed from
+		     "unaddressed" §6, "the count must not read as neglect") now
+		     share one collapsed shape — a single non-interactive bar naming
+		     the count and the newest three titles (`previewNames`, asks.ts)
+		     — and one expanded shape, the full interactive row list. Nothing
+		     under a collapsed bar is a row: no click target but the bar
+		     itself. **in hand** and **yours to judge** are unchanged in
+		     frame — live-amber for in hand (`PickLane.svelte`'s picking-row
+		     tokens), `.subpanel`'s quieter hairline for to-judge. A stale row
+		     inside any bucket is still dimmed in place (`opacity-60` on its
+		     `<li>`, in the `rows` snippet), never moved to a fifth place. A
+		     bucket with nothing in it renders its heading and stops — no
+		     empty frame, no dead toggle. -->
 		<div class="space-y-4">
 			<div class="border-b border-stone-800/60 pb-2 opacity-80" data-bucket="done">
-				<p
-					class="mb-1 font-mono text-[10px] tracking-wide text-ink-mute uppercase"
-					data-bucket-heading="done"
-				>
-					done &amp; accepted · {doneRows.length}
-				</p>
-				{#if doneRows.length}
-					{@render rows(doneVisible)}
-					{#if doneWin.restCount > 0}
-						<button
-							type="button"
-							class="mt-1 flex items-baseline gap-1.5 font-mono text-[10px] tracking-wide text-ink-mute uppercase hover:text-stone-300"
-							aria-expanded={doneOpen}
-							onclick={() => (doneOpen = !doneOpen)}
-							data-bucket-toggle="done">{doneOpen ? '▾' : '▸'} {doneWin.restCount} done</button
-						>
-					{/if}
+				{#if doneRows.length === 0}
+					<p
+						class="font-mono text-[10px] tracking-wide text-ink-mute uppercase"
+						data-bucket-heading="done"
+					>
+						done &amp; accepted · 0
+					</p>
+				{:else if !doneOpen}
+					<button
+						type="button"
+						class="flex w-full items-baseline gap-1.5 truncate font-mono text-[10px] tracking-wide text-ink-mute uppercase hover:text-stone-300"
+						aria-expanded={doneOpen}
+						onclick={() => (doneOpen = true)}
+						data-bucket-heading="done"
+						data-bucket-preview="done"
+						>▸ done &amp; accepted · {doneRows.length} — {donePreview}</button
+					>
+				{:else}
+					<button
+						type="button"
+						class="mb-1 flex items-baseline gap-1.5 font-mono text-[10px] tracking-wide text-ink-mute uppercase hover:text-stone-300"
+						aria-expanded={doneOpen}
+						onclick={() => (doneOpen = false)}
+						data-bucket-heading="done">▾ done &amp; accepted · {doneRows.length}</button
+					>
+					{@render rows(doneRows)}
 				{/if}
 			</div>
 			<div class="border border-amber-700/50 bg-stone-950/60 p-2" data-bucket="in-hand">
@@ -421,52 +537,59 @@
 				{#if buckets.toJudge.length}{@render rows(buckets.toJudge, 'toJudge')}{/if}
 			</div>
 			<div data-bucket="unaddressed">
-				{#if buckets.unaddressed.length}
+				{#if buckets.unaddressed.length === 0}
+					<p
+						class="font-mono text-[10px] tracking-wide text-ink-mute uppercase"
+						data-bucket-heading="unaddressed"
+					>
+						not started · 0
+					</p>
+				{:else if !unaddressedOpen}
+					<button
+						type="button"
+						class="flex w-full items-baseline gap-1.5 truncate font-mono text-[10px] tracking-wide text-ink-mute uppercase hover:text-stone-300"
+						aria-expanded={unaddressedOpen}
+						onclick={() => (unaddressedOpen = true)}
+						data-bucket-heading="unaddressed"
+						data-bucket-preview="unaddressed"
+						>▸ not started · {buckets.unaddressed.length} — {unaddressedPreview}</button
+					>
+				{:else}
 					<button
 						type="button"
 						class="mb-1 flex w-full items-baseline gap-1.5 font-mono text-[10px] tracking-wide text-ink-mute uppercase hover:text-stone-300"
 						aria-expanded={unaddressedOpen}
-						onclick={() => (unaddressedOpen = !unaddressedOpen)}
-						data-bucket-heading="unaddressed"
-						>{unaddressedOpen ? '▾' : '▸'} unaddressed · {buckets.unaddressed.length}</button
+						onclick={() => (unaddressedOpen = false)}
+						data-bucket-heading="unaddressed">▾ not started · {buckets.unaddressed.length}</button
 					>
-					{#if unaddressedOpen}
-						{@render rows(unaddressedSplit.alive)}
-						<!-- His 18:27Z follow-up: stale unaddressed rows get their own
-						     nested block — a bare count, then (opened) the newest three,
-						     then (opened further) the rest. Non-stale rows above are
-						     unaffected. -->
-						{#if unaddressedSplit.stale.length}
-							<button
-								type="button"
-								class="mt-1 flex items-baseline gap-1.5 font-mono text-[10px] tracking-wide text-ink-mute uppercase hover:text-stone-300"
-								aria-expanded={staleOpen}
-								onclick={() => (staleOpen = !staleOpen)}
-								data-bucket-heading="unaddressed-stale"
-								>{staleOpen ? '▾' : '▸'} stale · {unaddressedSplit.stale.length}</button
-							>
-							{#if staleOpen}
-								{@render rows(staleVisible)}
-								{#if staleWin.restCount > 0}
-									<button
-										type="button"
-										class="mt-1 flex items-baseline gap-1.5 font-mono text-[10px] tracking-wide text-ink-mute uppercase hover:text-stone-300"
-										aria-expanded={staleRestOpen}
-										onclick={() => (staleRestOpen = !staleRestOpen)}
-										data-bucket-toggle="unaddressed-stale"
-										>{staleRestOpen ? '▾' : '▸'} {staleWin.restCount} stale</button
-									>
-								{/if}
+					{@render rows(unaddressedSplit.alive)}
+					<!-- His 18:27Z follow-up: stale unaddressed rows get their own
+					     nested block — a bare count, then (opened) the newest three,
+					     then (opened further) the rest. Non-stale rows above are
+					     unaffected. -->
+					{#if unaddressedSplit.stale.length}
+						<button
+							type="button"
+							class="mt-1 flex items-baseline gap-1.5 font-mono text-[10px] tracking-wide text-ink-mute uppercase hover:text-stone-300"
+							aria-expanded={staleOpen}
+							onclick={() => (staleOpen = !staleOpen)}
+							data-bucket-heading="unaddressed-stale"
+							>{staleOpen ? '▾' : '▸'} stale · {unaddressedSplit.stale.length}</button
+						>
+						{#if staleOpen}
+							{@render rows(staleVisible)}
+							{#if staleWin.restCount > 0}
+								<button
+									type="button"
+									class="mt-1 flex items-baseline gap-1.5 font-mono text-[10px] tracking-wide text-ink-mute uppercase hover:text-stone-300"
+									aria-expanded={staleRestOpen}
+									onclick={() => (staleRestOpen = !staleRestOpen)}
+									data-bucket-toggle="unaddressed-stale"
+									>{staleRestOpen ? '▾' : '▸'} {staleWin.restCount} stale</button
+								>
 							{/if}
 						{/if}
 					{/if}
-				{:else}
-					<p
-						class="mb-1 font-mono text-[10px] tracking-wide text-ink-mute uppercase"
-						data-bucket-heading="unaddressed"
-					>
-						unaddressed · 0
-					</p>
 				{/if}
 			</div>
 		</div>
