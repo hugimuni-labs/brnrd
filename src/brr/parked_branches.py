@@ -29,26 +29,33 @@ _WARNED: set[str] = set()
 #: the same minute.
 _SWEEP_TTL_SECONDS = 300.0
 
-#: Monotonic stamp of the last completed sweep (successful or not — see
-#: :func:`refresh_if_stale_async`), or ``None`` when this process has never
-#: swept. Deliberately monotonic, not wall-clock: a TTL that reads
+#: Per-repo cache, keyed on *repo_root* — one daemon process dispatches
+#: against more than one repo (`spawn:`'s own `repo:` targeting; ``account
+#: _context.repos``), and a single unkeyed cache would serve repo A's parked
+#: branches to repo B's boot prompt the first time both are live in the same
+#: process. Same shape as ``presence._account_dirs_cache``.
+#:
+#: Monotonic stamp of the last completed sweep per repo (successful or not —
+#: see :func:`refresh_if_stale_async`); a repo absent from this dict has
+#: never swept. Deliberately monotonic, not wall-clock: a TTL that reads
 #: ``time.time()`` skips or repeats a sweep when the host clock steps (a
 #: suspend/resume, an NTP correction), and this daemon runs across laptop
 #: sleeps every day.
-_cached_at: float | None = None
+_cached_at: "dict[Path, float]" = {}
 
-#: The last completed walk's result. Empty until the first sweep lands —
-#: a cold cache renders no ``parked branches:`` line and warns of nothing for
-#: up to one TTL window after a fresh daemon boot, which is the honest cost
-#: of never blocking a caller on the walk (see :func:`read_cached`).
-_cached_items: list["ParkedBranch"] = []
+#: The last completed walk's result per repo. A repo absent from this dict
+#: renders no ``parked branches:`` line and warns of nothing until its first
+#: sweep lands — the honest cost of never blocking a caller on the walk (see
+#: :func:`read_cached`).
+_cached_items: "dict[Path, list[ParkedBranch]]" = {}
 
-#: Guards ``_cached_at`` / ``_cached_items`` and the "already refreshing"
-#: check in :func:`refresh_if_stale_async` — the same shape as
-#: ``forge_pr_cache._refresh_lock`` / ``lane_liveness``'s own, so a reader of
-#: one of those modules already knows how to read this one.
+#: Repos with a sweep currently in flight — the "already refreshing" check
+#: in :func:`refresh_if_stale_async`. Guarded by ``_cache_lock`` along with
+#: the two dicts above, same shape as ``forge_pr_cache._refresh_lock`` /
+#: ``lane_liveness``'s own, so a reader of one of those modules already
+#: knows how to read this one.
+_refreshing: "set[Path]" = set()
 _cache_lock = threading.Lock()
-_refreshing = False
 
 
 @dataclass(frozen=True)
@@ -168,33 +175,34 @@ def refresh_if_stale_async(
     ``lane_liveness``'s own.
 
     Returns whether a refresh thread was actually started — ``False`` when one
-    is already in flight, or the cache is still within *ttl*.
+    is already in flight for *repo_root*, or that repo's cache is still
+    within *ttl*.
     """
-    global _refreshing, _cached_at
+    root = repo_root.resolve()
     stamp = time.monotonic() if now is None else now
     with _cache_lock:
-        if _refreshing:
+        if root in _refreshing:
             return False
-        if _cached_at is not None and stamp - _cached_at < ttl:
+        cached_at = _cached_at.get(root)
+        if cached_at is not None and stamp - cached_at < ttl:
             return False
         # Stamped before the walk, not after: a sweep that raises (a git
         # failure, a cache read error) must not become a retry-every-tick
         # loop — mirrors the pre-async gate's own reasoning, now guarding a
         # background thread instead of the caller.
-        _cached_at = stamp
-        _refreshing = True
+        _cached_at[root] = stamp
+        _refreshing.add(root)
 
     def _work() -> None:
-        global _refreshing, _cached_items
         try:
             items = detect(repo_root)
             with _cache_lock:
-                _cached_items = items
+                _cached_items[root] = items
         except Exception as exc:  # noqa: BLE001 - a background sweep must never surface here
             print(f"[brnrd] parked-branch sweep failed (ignored): {exc}")
         finally:
             with _cache_lock:
-                _refreshing = False
+                _refreshing.discard(root)
 
     threading.Thread(target=_work, name="parked-branches", daemon=True).start()
     return True
@@ -206,18 +214,23 @@ def read_cached(
     ttl: float = _SWEEP_TTL_SECONDS,
     now: float | None = None,
 ) -> list[ParkedBranch]:
-    """The last-computed parked-branch list — never walks branches here.
+    """The last-computed parked-branch list for *repo_root* — never walks here.
 
     Triggers :func:`refresh_if_stale_async` as a side effect (so the cache
     keeps itself warm across callers) and returns whatever is cached *right
-    now*: empty on a cold cache (a fresh daemon process, or the first *ttl*
-    window of one), up to *ttl* old otherwise. This is the call every hot
-    path wants — ``prompts.py``'s boot-time render and :func:`warn_new`'s own
-    sweep both read this instead of calling :func:`detect` directly.
+    now* for this repo: empty on a cold cache (a fresh daemon process, or the
+    first *ttl* window for a repo it has never swept), up to *ttl* old
+    otherwise. This is the call every hot path wants — ``prompts.py``'s
+    boot-time render and :func:`warn_new`'s own sweep both read this instead
+    of calling :func:`detect` directly. Keyed on *repo_root* because one
+    daemon process dispatches against more than one repo (`spawn:`'s
+    `repo:` targeting) — a single unkeyed cache would serve one repo's
+    branches to another's boot prompt.
     """
     refresh_if_stale_async(repo_root, ttl=ttl, now=now)
+    root = repo_root.resolve()
     with _cache_lock:
-        return list(_cached_items)
+        return list(_cached_items.get(root, []))
 
 
 def warn_new(
