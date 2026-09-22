@@ -13760,6 +13760,10 @@ PRESERVED: dict[str, str] = {
     # will resolve to this same literal and ``_discover_control_file_names``
     # will find it already classified — no red test, no forgotten decision.
     ".promises.jsonl": "promises.jsonl",
+    # The run's world-facing acts, preserved beside its produce and promises.
+    # Terminal runs stamp unresolved attempts before capture; held runs keep
+    # their current states because a park is not a run ending.
+    actions.CONTROL_NAME: "actions.jsonl",
 }
 
 #: Control files deliberately *not* copied, each with the reason. Every
@@ -17459,7 +17463,10 @@ def _run_worker_and_finalize(
             outbox_dir=outbox_path,
             terminal_reply=task.terminal_reply,
         )
-        _stamp_unresolved_acts(outbox_path, task.id)
+        # All finalizers converge here, after their own writes and before
+        # capture. A parked seat has not ended, so leave its attempts open.
+        if not resource_hold.run_is_held(task.status, task.meta):
+            _stamp_unresolved_acts(outbox_path, task.id)
         # #1776: relics.scope_roots (called inside append_closed_run /
         # _weld_capture / _persist_run_state_doc below) resolves the tree
         # each actually reads — this run's own worktree/clone while it's
