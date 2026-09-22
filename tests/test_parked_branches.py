@@ -334,3 +334,34 @@ def test_read_cached_is_empty_before_the_first_sweep_lands(tmp_path, monkeypatch
 
     release.set()
     _join_sweep()
+
+
+def test_the_two_wiring_points_read_the_cache_not_the_walk():
+    """A structural guard — neither call site is reachable from a unit test.
+
+    Both live inside `daemon.start()`'s main loop and `prompts.py`'s boot
+    bundle assembly, neither driven directly here. An edit to either that
+    quietly went back to calling `detect(...)` inline would restore the
+    130.9s synchronous walk this report exists to remove, and the suite
+    would stay green without this pin — same shape as
+    `test_lane_liveness.py`'s own `test_the_two_wiring_points_exist_in_the_daemon`.
+    """
+    from brr import daemon, prompts
+
+    daemon_source = Path(daemon.__file__).read_text(encoding="utf-8")
+    assert "parked_branches.warn_new(repo_root)" in daemon_source, (
+        "the daemon's main loop no longer sweeps parked branches at all"
+    )
+    assert "parked_branches.detect(repo_root)" not in daemon_source, (
+        "the daemon's main loop calls detect() directly again — that is the "
+        "130.9s synchronous walk this module's cache exists to prevent"
+    )
+
+    prompts_source = Path(prompts.__file__).read_text(encoding="utf-8")
+    assert "parked_branches.read_cached(repo_root)" in prompts_source, (
+        "the boot bundle no longer reads the parked-branches cache"
+    )
+    assert "parked_branches.detect(repo_root)" not in prompts_source, (
+        "the boot bundle calls detect() directly again — every dispatched "
+        "run's boot would pay the full walk synchronously"
+    )
