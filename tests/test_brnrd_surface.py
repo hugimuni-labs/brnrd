@@ -330,3 +330,34 @@ def test_surface_rejects_a_traversal_path_even_in_an_unconsented_layer():
 
     assert posted.status_code == 422, posted.text
     assert "invalid surface path" in posted.json()["detail"]
+
+
+def test_dashboard_warp_asks_serves_lru_rows_stale_and_done_apart():
+    client = _client()
+    _, daemon_headers = _repo_and_daemon(client)
+    files = [
+        {"path": "surface/warp/w-1.md", "markdown": "# Older\n\ntype: action\nreturn: in git\ntouched: 2026-09-01T00:00:00Z\nsays: evt-a evt-b\n"},
+        {"path": "surface/warp/w-2.md", "markdown": "# Newer\n\ntype: decision\ntouched: 2026-09-20T00:00:00Z\nattempts: run-260921-2330-3low\n"},
+        {"path": "surface/warp/w-3.md", "markdown": "# Ancient\n\ntype: action\ntouched: 2025-01-01T00:00:00Z\n"},
+        {"path": "surface/warp/w-4.md", "markdown": "# Shipped\n\ntype: action\ndone: 2026-09-10\n"},
+        {"path": "surface/warp/g-1.md", "markdown": "# A goal\n\ntype: goal\n"},
+    ]
+    client.put("/v1/daemons/surface", json={"files": files}, headers=daemon_headers)
+    _login_cookie(client)
+
+    response = client.get("/v1/dashboard/warp/asks.json")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [row["id"] for row in body["asks"]] == ["w-2", "w-1", "w-3"]  # LRU, stale last
+    assert [row["stale"] for row in body["asks"]] == [False, False, True]
+    assert body["asks"][1]["return"] == "in git" and len(body["asks"][1]["says"]) == 2
+    assert body["asks"][0]["touched_at"].startswith("2026-09-21T23:30")  # newest evidence: the run id
+    assert [row["id"] for row in body["done"]] == ["w-4"]
+    assert [row["id"] for row in body["goals"]] == ["g-1"]
+    assert body["stale_after_days"] == 60
+    assert response.headers["cache-control"] == "private, max-age=30"
+
+
+def test_dashboard_warp_asks_requires_session():
+    assert _client().get("/v1/dashboard/warp/asks.json").status_code == 401
