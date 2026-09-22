@@ -1,0 +1,107 @@
+// The console's list of asks (design-the-ask.md §The list, §Build cut 3):
+// the home *is* the list — one row per ask, LRU, done rows below a rule.
+// Rows come from `GET /v1/dashboard/warp/asks.json` (`src/brr/asks.py`);
+// everything here is plain TS so node's test runner reaches it.
+
+export interface AskSay {
+	event: string;
+	at: string | null;
+	excerpt: string | null;
+}
+
+export interface AskRow {
+	id: string;
+	title: string;
+	type: string | null;
+	return: string | null;
+	stage: string | null;
+	touched_at: string | null;
+	says: AskSay[];
+	attempts: string[];
+	receipt: string | null;
+	topics: string[];
+	stale: boolean;
+	done: boolean;
+	after: string | null;
+}
+
+export interface AskGoal {
+	id: string;
+	title: string;
+	touched_at: string | null;
+}
+
+export interface AsksResponse {
+	asks: AskRow[];
+	done: AskRow[];
+	goals: AskGoal[];
+	stale_after_days: number;
+}
+
+export class AsksAuthError extends Error {}
+
+/** Account-scoped list of asks. Throws `AsksAuthError` on a 401, same shape
+ * as the other dashboard fetchers. */
+export async function fetchAsks(fetchImpl: typeof fetch = fetch): Promise<AsksResponse> {
+	const res = await fetchImpl('/v1/dashboard/warp/asks.json', { credentials: 'include' });
+	if (res.status === 401) throw new AsksAuthError('not signed in');
+	if (!res.ok) throw new Error(`asks fetch failed: ${res.status}`);
+	return (await res.json()) as AsksResponse;
+}
+
+/** Compact relative time: `now`, `5m`, `3h`, `4d`, `9w`. Empty when unknown. */
+export function touchedLabel(at: string | null, now: number = Date.now()): string {
+	if (!at) return '';
+	const then = Date.parse(at);
+	if (Number.isNaN(then)) return '';
+	const minutes = Math.max(0, Math.floor((now - then) / 60000));
+	if (minutes < 1) return 'now';
+	if (minutes < 60) return `${minutes}m`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 48) return `${hours}h`;
+	const days = Math.floor(hours / 24);
+	return days < 70 ? `${days}d` : `${Math.floor(days / 7)}w`;
+}
+
+/** The alive rows the list shows: a stale row stays listed, below the rule. */
+export function splitAlive(rows: AskRow[]): { alive: AskRow[]; stale: AskRow[] } {
+	return { alive: rows.filter((row) => !row.stale), stale: rows.filter((row) => row.stale) };
+}
+
+/** A row is lit by the heddle filter when it wears a lit topic; a row with no
+ *  topics is always shown (a filter never hides what it cannot place).
+ *  `resolve` maps a topic slug/alias to its canonical id (`null` = unknown). */
+export function askInTopics(
+	row: AskRow,
+	selected: ReadonlySet<string> | null,
+	resolve: (slug: string) => string | null
+): boolean {
+	if (selected === null || row.topics.length === 0) return true;
+	return row.topics.some((slug) => {
+		const id = resolve(slug);
+		return id !== null && selected.has(id);
+	});
+}
+
+/** The drone mark: a run on this ask's `attempts` is live right now. */
+export function liveAttempt(row: AskRow, liveRunIds: ReadonlySet<string>): string | null {
+	return row.attempts.find((run) => liveRunIds.has(run)) ?? null;
+}
+
+/** `j`/`k` step over `count` rows; from no focus `j` lands on the first row
+ *  and `k` on the last. Clamped, never wrapping. */
+export function moveFocus(current: number | null, key: 'j' | 'k', count: number): number | null {
+	if (count === 0) return null;
+	if (current === null) return key === 'j' ? 0 : count - 1;
+	return Math.min(count - 1, Math.max(0, current + (key === 'j' ? 1 : -1)));
+}
+
+/** Keys the list must leave alone (typing in a field, chords). */
+export function keymapIgnores(target: EventTarget | null, event: KeyboardEvent): boolean {
+	if (event.metaKey || event.ctrlKey || event.altKey) return true;
+	const el = target as HTMLElement | null;
+	const tag = el?.tagName?.toLowerCase();
+	return (
+		tag === 'input' || tag === 'textarea' || tag === 'select' || Boolean(el?.isContentEditable)
+	);
+}
