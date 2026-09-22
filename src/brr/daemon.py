@@ -13764,6 +13764,11 @@ PRESERVED: dict[str, str] = {
     # Terminal runs stamp unresolved attempts before capture; held runs keep
     # their current states because a park is not a run ending.
     actions.CONTROL_NAME: "actions.jsonl",
+    # Rung 2 of the asks lane (design-the-ask.md §The list): the rows that
+    # bind this run's replies to warp items ride the node too, so the list
+    # of asks can count says from finished runs. Literal on purpose, like
+    # ``.promises.jsonl`` above — ``do.ASKS_CONTROL_NAME`` is the same string.
+    ".asks.jsonl": "asks.jsonl",
 }
 
 #: Control files deliberately *not* copied, each with the reason. Every
