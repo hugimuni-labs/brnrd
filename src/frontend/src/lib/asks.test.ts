@@ -8,16 +8,41 @@ import {
 	askLabel,
 	attemptGlyph,
 	bucketAsks,
+	deliveryLine,
 	doneWindow,
 	fetchAsks,
 	liveAttempt,
 	moveFocus,
+	previewNames,
+	receiptChips,
 	sayText,
+	seatNowLine,
+	seatRun,
 	splitAlive,
 	touchedLabel,
 	type AskRow,
 	type AskSay
 } from './asks.ts';
+import type { LiveRun } from './liveRuns.ts';
+
+const liveRun = (over: Partial<LiveRun> = {}): LiveRun => ({
+	id: 'l1',
+	kind: 'daemon',
+	stream: 'default',
+	label: '',
+	name: '',
+	run_id: 'run-1',
+	repo_label: 'hugimuni-labs/brnrd',
+	started_at: null,
+	last_seen: null,
+	parent_run_id: null,
+	is_subspawn: false,
+	runner: {},
+	phase: null,
+	card_text: null,
+	card_updated_at: null,
+	...over
+});
 
 const row = (over: Partial<AskRow> = {}): AskRow => ({
 	id: 'w-1',
@@ -163,6 +188,73 @@ test('moveFocus clamps and enters from either end', () => {
 	assert.equal(moveFocus(0, 'k', 3), 0);
 	assert.equal(moveFocus(1, 'j', 3), 2);
 	assert.equal(moveFocus(0, 'j', 0), null);
+});
+
+test('previewNames: the newest three titles, dot-joined; empty bucket is the empty string', () => {
+	const rows = ['a', 'b', 'c', 'd'].map((id) => row({ id, title: `title ${id}` }));
+	assert.equal(previewNames(rows), 'title a · title b · title c');
+	assert.equal(previewNames(rows.slice(0, 1)), 'title a');
+	assert.equal(previewNames([]), '');
+});
+
+test('deliveryLine: the newest receipt title wins, else return:, else nothing', () => {
+	assert.equal(
+		deliveryLine(row({ receipts: [{ ref: '#2082', title: 'ledger step 6a' }], return: 'in git' })),
+		'ledger step 6a'
+	);
+	// a receipt with no title yet ⇒ falls through to return:, never a blank
+	assert.equal(
+		deliveryLine(row({ receipts: [{ ref: '#2082', title: null }], return: 'in git' })),
+		'in git'
+	);
+	assert.equal(deliveryLine(row({ receipts: null, return: 'in git' })), 'in git');
+	assert.equal(deliveryLine(row({ receipts: [], return: null })), null);
+});
+
+test('receiptChips: plural receipts win, else the legacy singular field, else none', () => {
+	assert.deepEqual(
+		receiptChips(
+			row({
+				receipts: [
+					{ ref: '#2082', title: 'ledger step 6a', url: 'https://github.com/x/y/pull/2082' },
+					{ ref: '#2081', title: null, url: null }
+				]
+			})
+		),
+		[
+			{ label: '#2082 · ledger step 6a', url: 'https://github.com/x/y/pull/2082' },
+			{ label: '#2081', url: null }
+		]
+	);
+	assert.deepEqual(
+		receiptChips(row({ receipts: null, receipt: 'https://github.com/x/y/pull/2080' })),
+		[{ label: 'https://github.com/x/y/pull/2080', url: 'https://github.com/x/y/pull/2080' }]
+	);
+	assert.deepEqual(receiptChips(row({ receipts: null, receipt: 'kb/design-the-ask.md' })), [
+		{ label: 'kb/design-the-ask.md', url: null }
+	]);
+	assert.deepEqual(receiptChips(row({ receipts: null, receipt: null })), []);
+	// receipts present but empty ⇒ no fallback to the legacy field — the
+	// server said "none", not "nothing new to say"
+	assert.deepEqual(receiptChips(row({ receipts: [], receipt: 'kb/design-the-ask.md' })), []);
+});
+
+test('seatRun/seatNowLine: the first non-strand live run stands for the seat', () => {
+	const strand: LiveRun = { ...liveRun(), id: 's1', run_id: 'run-strand', is_subspawn: true };
+	const seat: LiveRun = {
+		...liveRun(),
+		id: 's2',
+		run_id: 'run-seat',
+		is_subspawn: false,
+		card_text: 'checking the printer vendor renewal\n\nmore detail below'
+	};
+	assert.equal(seatRun([strand, seat]), seat);
+	assert.equal(seatRun([strand]), null);
+	assert.equal(seatRun(null), null);
+	assert.equal(seatNowLine(seat), 'checking the printer vendor renewal');
+	assert.equal(seatNowLine({ card_text: '  ' }), null);
+	assert.equal(seatNowLine({ card_text: null }), null);
+	assert.equal(seatNowLine(null), null);
 });
 
 test('fetchAsks: 200 returns the payload, 401 is an auth error, other statuses throw', async () => {
