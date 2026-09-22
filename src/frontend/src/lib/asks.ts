@@ -68,6 +68,37 @@ export function splitAlive(rows: AskRow[]): { alive: AskRow[]; stale: AskRow[] }
 	return { alive: rows.filter((row) => !row.stale), stale: rows.filter((row) => row.stale) };
 }
 
+/** The four buckets the console renders in place of the warp's item graph
+ *  (design-the-ask.md §Done, reopened, linked, "the console = the warp
+ *  panel, per ask" — his order): **in hand** (a strand or the seat is
+ *  working it right now) · **yours to judge** (delivered, not yet accepted)
+ *  · **unaddressed** (not yet even shaped) · done/accepted rides apart as
+ *  `data.done` already (see `AskList.svelte`, unchanged). `rows` is expected
+ *  pre-sorted LRU (the server already does this — `asks.py::build_asks`),
+ *  and filtering it into buckets preserves that order within each one. */
+export interface AskBuckets {
+	inHand: AskRow[];
+	toJudge: AskRow[];
+	unaddressed: AskRow[];
+}
+
+const UNADDRESSED_STAGES = new Set(['heard', 'understood', 'shaped']);
+
+export function bucketAsks(rows: AskRow[]): AskBuckets {
+	const inHand: AskRow[] = [];
+	const toJudge: AskRow[] = [];
+	const unaddressed: AskRow[] = [];
+	for (const row of rows) {
+		if (row.stage === 'making') inHand.push(row);
+		else if (row.stage === 'delivered') toJudge.push(row);
+		else if (!row.stage || UNADDRESSED_STAGES.has(row.stage)) unaddressed.push(row);
+		// any other stage (accepted/reshaped/sprouted on a still-open row,
+		// which `done` should already have claimed) renders in none of the
+		// three — never silently duplicated into one by a fallback guess.
+	}
+	return { inHand, toJudge, unaddressed };
+}
+
 /** A row is lit by the heddle filter when it wears a lit topic; a row with no
  *  topics is always shown (a filter never hides what it cannot place).
  *  `resolve` maps a topic slug/alias to its canonical id (`null` = unknown). */

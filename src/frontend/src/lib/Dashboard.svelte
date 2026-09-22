@@ -2149,8 +2149,13 @@
 					onAll={allHeddles}
 				/>
 			</div>
-			<!-- The list of asks (design-the-ask.md §Build cut 3): what the user
-			     asked, LRU, lensed by the same heddles as everything below. -->
+			<!-- The list of asks replaces the item graph below it in this section
+			     (design-the-ask.md §Done, reopened, linked, "the console = the
+			     warp panel, per ask" — his morning read: "doesn't look like much
+			     tbh… the placement is basically instead of warp"): what the user
+			     asked, in hand / to judge / unaddressed / done, lensed by the same
+			     heddles as everything else on the page. The graph itself still
+			     lives at `/warp` — the link below still points there. -->
 			<AskList
 				data={asksData}
 				error={asksError}
@@ -2182,21 +2187,6 @@
 			{#if (benchFiles && benchFiles.length > 0) || benchError}
 				<BenchLane files={benchFiles ?? []} error={benchError} />
 			{/if}
-			<!-- The graph: unblocked items colorful on top — glance, decide or
-			     do — blocked ones greyed below, live-held ones framed in place. -->
-			<div class="mt-2">
-				{#if surfaceData === null}
-					<p class="text-sm text-ink-quiet">stringing…</p>
-				{:else}
-					<WarpGraphView
-						graph={warpGraphData}
-						selected={heddleSelection}
-						{liveRunIds}
-						knownPaths={surfaceKnownPaths}
-						onOpenPage={openInLibrary}
-					/>
-				{/if}
-			</div>
 			<p class="mt-2 font-mono text-[10px] text-ink-mute">
 				<a href={resolve('/warp')} class="hover:text-stone-300"
 					>all items · live &amp; completed →</a
