@@ -3,8 +3,11 @@ import test from 'node:test';
 
 import {
 	AsksAuthError,
+	askHandle,
 	askInTopics,
+	askLabel,
 	bucketAsks,
+	doneWindow,
 	fetchAsks,
 	liveAttempt,
 	moveFocus,
@@ -94,6 +97,33 @@ test('bucketAsks: making/delivered/unaddressed sort into their buckets, in order
 test('bucketAsks: a stage past the open lifecycle (accepted/reshaped/sprouted) lands in no bucket', () => {
 	const { inHand, toJudge, unaddressed } = bucketAsks([row({ id: 'a', stage: 'accepted' })]);
 	assert.deepEqual([...inHand, ...toJudge, ...unaddressed], []);
+});
+
+test('askLabel/askHandle: the sign wins the chip, the id wins the cell fallback', () => {
+	assert.equal(askLabel(row({ id: 'w-45' })), 'w-45');
+	assert.equal(askLabel(row({ id: 'w-45', sign: 'anltcs' })), 'w-45 · anltcs');
+	assert.equal(askHandle(row({ id: 'w-45' })), 'w-45');
+	assert.equal(askHandle(row({ id: 'w-45', sign: 'anltcs' })), 'anltcs');
+	// present but empty ⇒ no sign to speak, same as absent
+	assert.equal(askLabel(row({ id: 'w-45', sign: '' })), 'w-45');
+	assert.equal(askHandle(row({ id: 'w-45', sign: '' })), 'w-45');
+});
+
+test('doneWindow: the newest three show, the rest count for the toggle', () => {
+	const rows = ['a', 'b', 'c', 'd', 'e'].map((id) => row({ id }));
+	const win = doneWindow(rows);
+	assert.deepEqual(
+		win.visible.map((r) => r.id),
+		['a', 'b', 'c']
+	);
+	assert.equal(win.restCount, 2);
+	// nothing hidden when the bucket is already small
+	const small = doneWindow(rows.slice(0, 2));
+	assert.deepEqual(
+		small.visible.map((r) => r.id),
+		['a', 'b']
+	);
+	assert.equal(small.restCount, 0);
 });
 
 test('liveAttempt finds the run wearing the ask', () => {
