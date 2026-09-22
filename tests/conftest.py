@@ -11,6 +11,42 @@ import pytest
 from brr import gitops
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _direct_xcode_git(tmp_path_factory):
+    """Use the same Apple Git without paying the xcrun launcher per call.
+
+    On macOS /usr/bin/git is a developer-tool shim. Resolving it once cut a
+    worker test's 542 subprocess calls from 22.1s to 7.9s on the maintainer's
+    machine. A directory containing only this symlink leaves every other
+    command's PATH resolution alone. Respect an explicitly selected Git.
+    """
+    import shutil
+    import subprocess
+    import sys
+
+    if sys.platform != "darwin" or shutil.which("git") != "/usr/bin/git":
+        yield
+        return
+    try:
+        result = subprocess.run(
+            ["/usr/bin/xcrun", "--find", "git"],
+            capture_output=True, text=True, check=True, timeout=5,
+        )
+        from pathlib import Path
+        executable = Path(result.stdout.strip())
+        if not executable.is_file() or executable == Path("/usr/bin/git"):
+            yield
+            return
+    except (OSError, subprocess.SubprocessError):
+        yield
+        return
+    bin_dir = tmp_path_factory.mktemp("direct-git")
+    (bin_dir / "git").symlink_to(executable)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
+        yield
+
+
 @pytest.fixture(autouse=True)
 def _hermetic_git_env(tmp_path_factory, monkeypatch):
     """Pin git's ambient environment — machine-independence *and* containment.
