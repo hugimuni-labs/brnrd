@@ -233,6 +233,24 @@ def test_new_item_text_round_trips(tmp_path: Path):
     assert item.body == "The tree cannot hold multi-blockers."
 
 
+def test_new_item_text_sign_row_is_written_last_and_reads_as_body_here(tmp_path: Path):
+    """``sign:`` (design-the-ask.md §Build cut, step 3) is deliberately not
+    part of this module's own ``_ROW_RE`` — asks.py's row grammar is the one
+    that recognizes it (kept off items.py/warpGraph.ts's shared lockstep on
+    purpose, per this module's docstring). Written last so it never eats a
+    row this parser *does* recognize into the body; from this parser's own
+    point of view it is simply the first line of body text, which is the
+    documented, correct-by-this-module's-own-rules shape."""
+    root = _warp(tmp_path)
+    text = items.new_item_text(
+        "Ship the digest", item_type="action", prompt="Ship it.", sign="mira",
+    )
+    item = items.parse_item(_write(root, "w-9", text))
+    assert item is not None
+    assert item.prompt == "Ship it."
+    assert item.body == "sign: mira"
+
+
 # ── the wake index ────────────────────────────────────────────────────────
 
 

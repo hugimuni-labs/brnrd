@@ -344,3 +344,33 @@ def test_goal_withdraw_requires_reason_and_exact_target(tmp_path, monkeypatch, c
         "--why", "",
     ]) == 1
     assert "withdraw needs --why" in capsys.readouterr().err
+
+
+def test_item_new_sign_writes_the_row(tmp_path, monkeypatch, capsys):
+    _repo_with_home(tmp_path, monkeypatch)
+    rc = main(["item", "new", "Ship the digest", "--type", "action", "--sign", "mira"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    path = Path(out.split(" — ", 1)[1].strip())
+    assert "sign: mira" in path.read_text(encoding="utf-8")
+
+
+def test_item_new_sign_collision_is_refused(tmp_path, monkeypatch, capsys):
+    _repo_with_home(tmp_path, monkeypatch)
+    assert main(["item", "new", "First", "--type", "action", "--sign", "mira"]) == 0
+    capsys.readouterr()
+    rc = main(["item", "new", "Second", "--type", "action", "--sign", "MIRA"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "w-1" in err and "already" in err
+
+
+def test_item_new_sign_unreachable_shape_is_refused(tmp_path, monkeypatch, capsys):
+    """A sign `accept`/`reroute` could never match (too short, has a digit)
+    is refused before it is ever written — a mint that's unreachable through
+    the chat door it exists for is worse than no sign at all."""
+    _repo_with_home(tmp_path, monkeypatch)
+    rc = main(["item", "new", "First", "--type", "action", "--sign", "m1"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "not a callsign" in err

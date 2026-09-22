@@ -801,6 +801,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--horizon", default=None, help="goal-only: the timeframe")
     p.add_argument("--prompt", default=None, help="the dispatch mandate, one line")
     p.add_argument("--refs", default=None, help="refs row, `·`-separated")
+    p.add_argument(
+        "--sign", default=None, metavar="SLUG",
+        help="a callsign short enough to say in chat (`accept <sign>`); "
+             "must be unique across the warp — refused against a sign "
+             "already in use, nothing written")
     p.add_argument("--body", default=None, help="free markdown body")
     p.set_defaults(func=cmd_item_new)
     p = item_sub.add_parser("done", help="stamp an item's completion receipt")
@@ -982,6 +987,15 @@ def build_parser() -> argparse.ArgumentParser:
              "unknown id or with no preceding --reply. Records the join "
              "in .asks.jsonl once that reply's own drain verdict is "
              "accepted")
+    do_p.add_argument(
+        "--part", dest="part", action=_OrderedAppend, default=None,
+        metavar="TEXT",
+        help="a quoted excerpt of the reply binding the immediately "
+             "preceding --item to that specific part of it; repeatable "
+             "per --item (several --part after one --item write several "
+             "excerpt rows for it). Refused (nothing staged) with no "
+             "preceding --item. Rides the same .asks.jsonl row as `part`; "
+             "the asks reader surfaces it as that say's `excerpt`")
     do_p.add_argument(
         "--body-file", dest="body_file", action=_OrderedAppend, default=None,
         metavar="FILE",
@@ -3052,26 +3066,31 @@ def cmd_relic_file(args):
 
 
 def _reconstruct_do_ops(ordered_ops):
-    """Pair ``--reply``/``--gate``/``--to-thread`` with ``--item``/``--body-file``/
-    ``--body`` that immediately follow them in ``ordered_ops`` (command-line
-    order, from ``_OrderedAppend`` — only ``reply``/``gate``/``to_thread``/``item``/
-    ``body_file``/``body`` entries, ``--note`` is not routed through this
-    list).
+    """Pair ``--reply``/``--gate``/``--to-thread`` with ``--item``/``--part``/
+    ``--body-file``/``--body`` that immediately follow them in
+    ``ordered_ops`` (command-line order, from ``_OrderedAppend`` — only
+    ``reply``/``gate``/``to_thread``/``item``/``part``/``body_file``/``body``
+    entries, ``--note`` is not routed through this list).
 
-    Returns ``(replies, gates, threads, error)``: ``gates`` and ``threads`` are lists of
-    ``(target, body_text)``; ``replies`` is a list of
-    ``(target, body_text, item_ids)`` — ``item_ids`` is every ``--item``
-    that landed between this ``--reply`` and its body, in command-line
-    order, ``[]`` when none did. ``error`` is a human string naming the
-    first unpaired/misplaced flag, or ``None``. A ``--body-file`` reads its
-    file eagerly here so a bad path fails before anything is staged, not
+    Returns ``(replies, gates, threads, error)``: ``gates`` and ``threads``
+    are lists of ``(target, body_text)``; ``replies`` is a list of
+    ``(target, body_text, item_bindings)`` — ``item_bindings`` is a list of
+    ``(item_id, parts)`` pairs, one per ``--item`` that landed between this
+    ``--reply`` and its body, in command-line order (``[]`` when none did);
+    ``parts`` is every ``--part`` that landed between that ``--item`` and
+    whatever follows it (another ``--item``, or the body), also in order —
+    design-the-water-line.md §The asks lane rung 3's ``--part``, repeatable
+    per ``--item`` the same way ``--item`` itself is repeatable per
+    ``--reply``. ``error`` is a human string naming the first
+    unpaired/misplaced flag, or ``None``. A ``--body-file`` reads its file
+    eagerly here so a bad path fails before anything is staged, not
     mid-batch.
     """
-    replies: list[tuple[str, str, list[str]]] = []
+    replies: list[tuple[str, str, list[tuple[str, list[str]]]]] = []
     gates: list[tuple[str, str]] = []
     threads: list[tuple[str, str]] = []
     pending: tuple[str, str] | None = None
-    pending_items: list[str] = []
+    pending_items: list[list] = []  # each entry: [item_id, parts]
     for dest, value in ordered_ops:
         if dest in ("reply", "gate", "to_thread"):
             if pending is not None:
@@ -3095,7 +3114,26 @@ def _reconstruct_do_ops(ordered_ops):
                     f"--item {value} follows --{kind.replace('_', '-')} {target}, not --reply "
                     "— this send has no event to bind"
                 )
-            pending_items.append(value)
+            pending_items.append([value, []])
+            continue
+        if dest == "part":
+            if pending is None:
+                return replies, gates, threads, (
+                    "--part given with no preceding --reply. There is no "
+                    "reply to bind"
+                )
+            kind, target = pending
+            if kind != "reply":
+                return replies, gates, threads, (
+                    f"--part {value!r} follows --{kind.replace('_', '-')} {target}, not "
+                    "--reply — this send has no event to bind"
+                )
+            if not pending_items:
+                return replies, gates, threads, (
+                    f"--part {value!r} given with no preceding --item. There is no "
+                    "item to bind it to"
+                )
+            pending_items[-1][1].append(value)
             continue
         # dest in ("body_file", "body")
         if pending is None:
@@ -3112,7 +3150,7 @@ def _reconstruct_do_ops(ordered_ops):
                 return replies, gates, threads, f"--{kind.replace('_', '-')} only pairs with --body-file, not --body"
             text = value
         if kind == "reply":
-            replies.append((target, text, pending_items))
+            replies.append((target, text, [(item_id, parts) for item_id, parts in pending_items]))
         elif kind == "gate":
             gates.append((target, text))
         else:
@@ -3480,6 +3518,15 @@ def cmd_do(args):
     one refused reply in a multi-``--reply`` batch never blocks another
     reply's bindings.
 
+    **Rung 3, the inbound stamp** (design-the-water-line.md §The asks lane
+    rung 3). ``--part <text>``, repeatable, binds the immediately preceding
+    ``--item`` to a specific excerpt of the reply — several ``--part`` after
+    one ``--item`` write several excerpt rows for it, and an ``--item`` with
+    none keeps the plain two-field row rung 2 already writes. Same pairing
+    discipline as ``--item``/``--reply``: a ``--part`` with no preceding
+    ``--item``, or trailing a verb that isn't ``--reply``, is a pairing
+    error before anything is staged.
+
     ``-- <command> [args…]`` (split out of argv in ``main`` before this
     parser ever sees it) runs after the verbs are staged: verdict lines move
     to stderr (so the command's own stdout stays pipeable) and the command
@@ -3545,7 +3592,9 @@ def cmd_do(args):
     # headline match here, unlike `_resolve_item_arg`, since a caller typing
     # a wrong id should be told the id is wrong, not have it silently
     # resolved to something else it happens to fuzzy-match.
-    all_item_ids = [item_id for _e, _b, item_ids in replies for item_id in item_ids]
+    all_item_ids = [
+        item_id for _e, _b, item_bindings in replies for item_id, _parts in item_bindings
+    ]
     if all_item_ids:
         from . import items as items_mod
 
@@ -3787,11 +3836,21 @@ def cmd_do(args):
                     # reply's own drain verdict gates its own item rows, so
                     # one refused reply in a multi-`--reply` batch does not
                     # block another reply's bindings from being recorded.
-                    event_id, _body, item_ids = replies[reply_index]
-                    if item_ids and do_mod.accepted(status):
-                        for item_id in item_ids:
-                            do_mod.append_ask(outbox_dir, event_id, item_id)
-                            segments.append(f"item {item_id} ✓")
+                    event_id, _body, item_bindings = replies[reply_index]
+                    if item_bindings and do_mod.accepted(status):
+                        # rung 3 (design-the-water-line.md §The asks lane):
+                        # a `--part` bound to this `--item` writes its own
+                        # row (one row per excerpt) so several quotes
+                        # against one item are several says, not one; an
+                        # item with no `--part` keeps the old two-field row.
+                        for item_id, parts in item_bindings:
+                            if parts:
+                                for part in parts:
+                                    do_mod.append_ask(outbox_dir, event_id, item_id, part=part)
+                                segments.append(f"item {item_id} part×{len(parts)} ✓")
+                            else:
+                                do_mod.append_ask(outbox_dir, event_id, item_id)
+                                segments.append(f"item {item_id} ✓")
                     if do_mod.accepted(status):
                         # #1914: the pile echo at the moment of sending — the
                         # boundary where the choice about length is still
@@ -3979,6 +4038,26 @@ def cmd_item_new(args):
     if err:
         print(f"[brnrd item] {err}", file=sys.stderr)
         return 1
+    sign = (getattr(args, "sign", None) or "").strip() or None
+    if sign:
+        from . import asks as asks_mod
+
+        if not asks_mod.SIGN_RE.fullmatch(sign):
+            print(
+                f"[brnrd item] --sign {sign!r} is not a callsign `accept`/"
+                "`reroute` can ever match (3-8 letters, no digits or "
+                "hyphens). Nothing was written.",
+                file=sys.stderr,
+            )
+            return 1
+        colliding = asks_mod.resolve_sign(warp_root, sign)
+        if colliding is not None:
+            print(
+                f"[brnrd item] --sign {sign!r} is already {colliding}'s — "
+                "signs are unique across the warp. Nothing was written.",
+                file=sys.stderr,
+            )
+            return 1
     item_id = items_mod.allocate_id(warp_root, args.item_type)
     text = items_mod.new_item_text(
         args.headline.strip(),
@@ -3991,6 +4070,7 @@ def cmd_item_new(args):
         horizon=(args.horizon or None),
         prompt=(args.prompt or None),
         refs=(args.refs or None),
+        sign=sign,
         body=(args.body or None),
     )
     path = warp_root / f"{item_id}.md"
