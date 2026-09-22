@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import subprocess
 
 from brr import asks
@@ -80,8 +81,28 @@ def test_list_asks_reads_disk_with_git_touch_times(tmp_path):
            "GIT_AUTHOR_DATE": "2026-09-21T12:00:00Z", "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"}
     for cmd in (["init", "-q"], ["add", "."], ["commit", "-qm", "x"]):
         subprocess.run(["git", "-C", str(tmp_path), *cmd], check=True, env=env)
-    rows = asks.list_asks(surface)
-    assert [r["id"] for r in rows] == ["w-1"]
-    assert rows[0]["touched_at"].startswith("2026-09-21T12:00")
-    assert [r["id"] for r in asks.list_asks(surface, include_done=True)] == ["w-1", "w-2"]
-    assert asks.list_asks(tmp_path / "nowhere") == []
+    payload = asks.list_asks(surface)
+    assert [r["id"] for r in payload["asks"]] == ["w-1"]
+    assert payload["asks"][0]["touched_at"].startswith("2026-09-21T12:00")
+    assert [r["id"] for r in payload["done"]] == ["w-2"]
+    empty = asks.list_asks(tmp_path / "nowhere")
+    assert empty == {"asks": [], "done": [], "goals": [], "stale_after_days": asks.DEFAULT_STALE_AFTER_DAYS}
+
+
+def test_list_asks_folds_in_runs_dir_and_outbox_bindings(tmp_path):
+    surface = tmp_path / "surface"
+    (surface / "warp").mkdir(parents=True)
+    (surface / "warp" / "w-1.md").write_text("# On disk\n\ntype: action\n")
+    run = tmp_path / "runs" / "repo" / "run-1"
+    run.mkdir(parents=True)
+    (run / "asks.jsonl").write_text(json.dumps({"event": "evt-1", "item": "w-1"}) + "\n")
+    outbox = tmp_path / "outbox" / "evt-2"
+    outbox.mkdir(parents=True)
+    (outbox / ".asks.jsonl").write_text(json.dumps({"event": "evt-2", "item": "w-1"}) + "\n")
+    payload = asks.list_asks(
+        surface, runs_dir=tmp_path / "runs", outbox_root=tmp_path / "outbox",
+    )
+    row = payload["asks"][0]
+    assert row["id"] == "w-1"
+    assert {s["event"] for s in row["says"]} == {"evt-1", "evt-2"}
+    assert row["touched_at"] is not None  # no git repo here — the binding files' own mtime carries it

@@ -150,7 +150,7 @@ def test_title_clipped_and_optional_rows_never_required(tmp_path, monkeypatch, c
 
 
 def test_stale_horizon_reads_config(tmp_path, monkeypatch, capsys):
-    from brr import asks_screen as asks
+    from brr import asks
     assert asks.stale_after_days({"asks.stale_after_days": "14"}) == 14
     assert asks.stale_after_days({"asks.stale_after_days": "nope"}) == 60
     assert asks.stale_after_days({}) == 60
