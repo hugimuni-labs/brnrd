@@ -534,7 +534,15 @@ def put_surface(payload: schemas.SurfaceReport, principal: Principal = Depends(r
         seen.add(normalized)
         if allowed_slices is not None and item.layer not in allowed_slices:
             continue
-        files.append({"path": normalized, "markdown": item.markdown, "layer": item.layer, "truncated": item.truncated})
+        files.append(
+            {
+                "path": normalized,
+                "markdown": item.markdown,
+                "layer": item.layer,
+                "truncated": item.truncated,
+                "committed_at": item.committed_at,
+            }
+        )
         accepted.append(item)
 
     now = datetime.now(timezone.utc)
