@@ -1871,6 +1871,60 @@ _ASKS_CACHE: dict[str, tuple[str, float, dict[str, Any]]] = {}
 _ASKS_CACHE_SECONDS = 30.0
 
 
+def _say_excerpt(body: str, *, limit: int = 120) -> str:
+    """Whitespace-collapsed, clipped — the say line's own "first 120
+    chars", never `_compact`'s "untitled activity" fallback: that filler
+    is right for an activity-feed row with no summary, wrong for a quoted
+    utterance that simply has none (an aged-out `Event.body`, #502's 14-day
+    sweep nulls it) — a blank excerpt there should stay blank, not lie."""
+    text = " ".join(body.split())
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
+def _enrich_ask_says(payload: dict[str, Any], db: Session, repo_ids: set[str]) -> None:
+    """The 17:51Z steer on the-panel-third-pass (his: "all the evt-say
+    lines say nothing"): a say's `excerpt` already rides the payload when
+    an `.asks.jsonl` binding row carried one (none do yet, but the field
+    is honored first — never overwritten); the rest resolve here, joining
+    `says[].event` against the cloud's own message store (`Event.body`,
+    keyed by `event_id`) the same way `_outbound_event_views` above does.
+    Account-scoped by `repo_ids` — asks are account-wide (`Account.
+    surface_json`), a bare event id is not proof it is this account's.
+
+    `url` rides every say too, always `None` today: the steer also wants
+    "links to the thread/message when a route exists" — none does (no
+    dashboard page resolves a specific `Event` to a URL; confirmed by
+    survey, not assumed). Writing the key now, always `None`, means the
+    day a message route lands this is a one-line change here, not a new
+    field the frontend has to learn about."""
+    rows = (*payload.get("asks", []), *payload.get("done", []))
+    missing: set[str] = set()
+    for row in rows:
+        for say in row.get("says") or []:
+            say["url"] = None
+            if not say.get("excerpt") and say.get("event"):
+                missing.add(say["event"])
+    if not missing or not repo_ids:
+        return
+    bodies: dict[str, str] = {
+        event_id: body
+        for event_id, body in db.execute(
+            select(Event.event_id, Event.body).where(
+                Event.repo_id.in_(repo_ids), Event.event_id.in_(missing)
+            )
+        )
+        if body
+    }
+    if not bodies:
+        return
+    for row in rows:
+        for say in row.get("says") or []:
+            if not say.get("excerpt"):
+                body = bodies.get(say.get("event") or "")
+                if body:
+                    say["excerpt"] = _say_excerpt(body)
+
+
 @router.get("/v1/dashboard/warp/asks.json")
 def dashboard_warp_asks_api(request: Request, db: Session = Depends(get_db)) -> Response:
     """The console's list of asks — the warp read as the user's LRU.
@@ -1894,6 +1948,8 @@ def dashboard_warp_asks_api(request: Request, db: Session = Depends(get_db)) -> 
         except ValueError:
             files = []
         payload = asks_from_files(files if isinstance(files, list) else [])
+        repo_ids = {repo.id for repo in _repos(db, account_id)}
+        _enrich_ask_says(payload, db, repo_ids)
         _ASKS_CACHE[str(account_id)] = (etag, time.monotonic(), payload)
     return JSONResponse(payload, headers={"Cache-Control": "private, max-age=30"})
 

@@ -2163,6 +2163,10 @@
 				{liveRunIds}
 				selected={heddleSelection}
 				resolveTopic={(slug) => warpGraphData.topicByAlias.get(slug)?.canonicalId ?? null}
+				glyphForTopic={(slug) =>
+					topicFaceMap.get(warpGraphData.topicByAlias.get(slug)?.canonicalId ?? slug)?.glyph ??
+					null}
+				runRepoLabel={connectedRepos?.length === 1 ? connectedRepos[0].repo_full_name : null}
 			/>
 			<!-- Config-change approvals waiting on the account owner — the PR
 			     review half retired 2026-09-01 (GitHub already lists open PRs;
