@@ -209,46 +209,16 @@ def latest_claude_spend_outbox_dir(brr_dir: Path) -> Path | None:
     return best_path
 
 
-#: Known Codex subscription tiers (case-insensitive) — plans with a
-#: *fixed* window quota and no pay-per-use credits wallet. `has_credits:
-#: false` on one of these means "this plan has no second bucket," never
-#: "the plan is exhausted" (#2084).
-_KNOWN_SUBSCRIPTION_PLAN_TYPES = frozenset(
-    {"plus", "pro", "max", "team", "enterprise", "free", "business"}
-)
+_PAY_PER_USE_PLAN_TYPES = frozenset({"usage_based", "pay_per_use", "pay-as-you-go"})
 
 
 def _credits_bucket_binds(levels: Mapping[str, Any]) -> bool:
-    """Whether a ``buckets.credits`` zero reading should count as a wall.
-
-    2026-09-22, #2084: three strands died at 01:37Z reading ``credits:
-    balance 0`` as the binding quota while the account's real window
-    buckets — read moments before and after — were healthy (5h/7d well
-    above zero). The rollout event that produced the zero carried no
-    window data at all (a transient shape Codex's own API is documented
-    to emit, see the module docstring's 2026-07-24 incident), so the
-    ``credits`` block was the *only* fact in that one reading — and on a
-    subscription account, ``has_credits: false`` there says "no wallet,"
-    not "empty wallet."
-
-    Binds (returns ``True``) only when ``plan_type`` is known and is
-    *not* one of the recognised subscription tiers — i.e. the plan
-    plausibly bills per token, so a reported balance is a real fact about
-    real headroom. A ``plan_type`` this reading never carried (``None`` /
-    empty) is treated as unproven and does **not** bind: the safer read
-    when the plan is unknown is the one every other guard in this module
-    already takes — refuse to assert what cannot be shown.
-
-    What this does **not** do: remember a *positive* credits reading from
-    an earlier heartbeat to corroborate a later zero (the account's own
-    non-zero credits history the issue also asks for). That needs
-    persisted per-account state this module doesn't keep today; scoped out
-    here and named in the report's Doubts rather than guessed at.
-    """
+    """Require explicit paid-wallet evidence; unfamiliar plans prove nothing."""
     plan_type = str(levels.get("plan_type") or "").strip().lower()
-    if not plan_type:
-        return False
-    return plan_type not in _KNOWN_SUBSCRIPTION_PLAN_TYPES
+    quota = levels.get("quota")
+    return plan_type in _PAY_PER_USE_PLAN_TYPES or (
+        isinstance(quota, Mapping) and quota.get("credits_positive_history") is True
+    )
 
 
 def binding_quota_remaining_pct(

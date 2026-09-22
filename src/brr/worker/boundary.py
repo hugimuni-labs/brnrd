@@ -129,6 +129,18 @@ def boundary(p: Prepared, s: Streamed) -> Boundary:
                     "codex_task_error": result.codex_task_error,
                 }
                 attempt_failure_kind = str(last_failure["failure_kind"])
+    if runner_failures.looks_like_core_refusal(result._failure_text()) and not result.ok:
+        last_failure = {
+            "exit_code": result.returncode, "error": "The Core refused this turn.",
+            "timed_out": False, "failure_kind": runner_failures.CORE_REFUSAL,
+        }
+        # A safeguards refusal is terminal, including mixed captures that
+        # also mention transport errors. Do not retry or switch providers.
+        return Boundary(
+            kind="exhausted",
+            attempt=replace(a, last_failure=last_failure,
+                            failures=[*a.failures, {"attempt": attempt, **last_failure}]),
+        )
     daemon._record_runner_auth_health(repo_root, runner_choice, attempt_failure_kind)
     failures = (
         [*a.failures, {"attempt": attempt, **last_failure}]
@@ -394,43 +406,6 @@ def boundary(p: Prepared, s: Streamed) -> Boundary:
             kind="hold",
             attempt=ended,
             hold_spec=hold_spec,
-        )
-    if (
-        last_failure is not None
-        and last_failure.get("failure_kind") == runner_failures.CORE_REFUSAL
-        and daemon._core_refusal_should_retry_fresh(task)
-    ):
-        # #2076's ladder, rung 1: the same Shell+Core, rebooted as a fresh
-        # session. `retry_reason()` never fires for this text (it is not a
-        # timeout/transport/host-suspend signature), so this intercepts
-        # ahead of the ordinary retry/fallback logic below rather than
-        # trying to make that machinery recognise a fourth retryable
-        # shape. The "fresh session" half is free: `worker/prepare.py`
-        # only ever resumes this run's native session at `attempt == 1`,
-        # so attempt N+1 is a new session by construction. A *second*
-        # refusal inside the window (`_core_refusal_should_retry_fresh`
-        # returning False) falls through unchanged to the ordinary
-        # `AUTO_FALLBACK_FAILURES` reroute just below, which now includes
-        # this kind — same "no other Shell/quota ⇒ give up" ending every
-        # other operational failure already gets.
-        retries_used += 1
-        daemon._announce_core_refusal_retry(responses_dir, eid, runner_name)
-        print(
-            f"[brnrd] worker {eid}: Core refusal on {runner_name}, "
-            "rebooting as a fresh session..."
-        )
-        emit(
-            "retrying", run_id=task.id, event_id=eid, attempt=attempt + 1,
-            reason="core refusal: fresh-session reboot on the same Shell+Core",
-        )
-        return Boundary(
-            kind="retry",
-            attempt=ended,
-            next_attempt=replace(
-                a, n=attempt + 1, retries_used=retries_used,
-                prompt_mode="core_refusal_retry", last_failure=None,
-                failures=failures,
-            ),
         )
     retry_reason = result.retry_reason()
     will_retry = bool(retry_reason and retries_used < max_retries)
