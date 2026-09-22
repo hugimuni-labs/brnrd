@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 
 import pytest
@@ -83,6 +84,71 @@ def test_daemon_surface_carries_corpus_layer_and_truncation():
     assert by_path["knowledge/repos/Gurio__brr/log.md"]["truncated"] is True
     assert by_path["runs/Gurio__brr/run-x.md"]["layer"] == "runs"
     assert by_path["surface/index.md"]["truncated"] is False
+
+
+def test_daemon_surface_bases_round_trip():
+    """design-the-bases-the-dashboard-needs.md: the per-repo forge + kb
+    bases ride the same publish call as `files`, keyed by repo label on
+    the way back out."""
+    client = _client()
+    _, daemon_headers = _repo_and_daemon(client)
+    posted = client.put(
+        "/v1/daemons/surface",
+        json={
+            "files": [],
+            "bases": {
+                "Gurio/brr": {"forge": "https://github.com/Gurio/brr", "forge_kind": "github", "kb": "https://github.com/Gurio/brr-kb/blob/main/knowledge/"},
+            },
+        },
+        headers=daemon_headers,
+    )
+    assert posted.status_code == 200, posted.text
+    assert posted.json()["bases"] == [
+        {"repo_label": "Gurio/brr", "forge": "https://github.com/Gurio/brr", "forge_kind": "github", "kb": "https://github.com/Gurio/brr-kb/blob/main/knowledge/"},
+    ]
+
+    from brnrd.models import Account
+
+    with client.app.state.SessionLocal() as db:
+        account = db.query(Account).one()
+        stored = json.loads(account.bases_json)
+    assert stored == {
+        "Gurio/brr": {"forge": "https://github.com/Gurio/brr", "forge_kind": "github", "kb": "https://github.com/Gurio/brr-kb/blob/main/knowledge/"},
+    }
+
+
+def test_daemon_surface_bases_gated_per_repo_not_by_the_publishing_tokens_repo():
+    """A base names its own repo (#714) — an opted-out sibling's base must
+    not ship just because the publishing token belongs to a consenting one."""
+    from brnrd.models import Repo
+
+    client = _client()
+    account_headers, daemon_headers = _repo_and_daemon(client)  # Gurio/brr, everything
+    client.post(
+        "/v1/accounts/repos",
+        json={"repo_full_name": "Gurio/silent", "publish_layers": "none"},
+        headers=account_headers,
+    )
+
+    posted = client.put(
+        "/v1/daemons/surface",
+        json={
+            "files": [],
+            "bases": {
+                "Gurio/brr": {"forge": "https://github.com/Gurio/brr", "forge_kind": "github"},
+                "Gurio/silent": {"forge": "https://github.com/Gurio/silent", "forge_kind": "github"},
+            },
+        },
+        headers=daemon_headers,
+    )
+
+    assert posted.status_code == 200, posted.text
+    assert list(posted.json()["bases"]) == ["Gurio/brr"]
+    from brnrd.models import Account
+
+    with client.app.state.SessionLocal() as db:
+        account = db.query(Account).one()
+        assert list(json.loads(account.bases_json).keys()) == ["Gurio/brr"]
 
 
 @pytest.mark.parametrize("path", ["../secret.md", "/absolute.md", ".hidden.md"])
@@ -430,3 +496,64 @@ def test_dashboard_warp_asks_excerpt_scoped_to_the_account_own_repos():
     body = client.get("/v1/dashboard/warp/asks.json").json()
 
     assert body["asks"][0]["says"][0]["excerpt"] is None
+
+
+def test_dashboard_warp_asks_resolves_receipts_from_the_published_bases():
+    """design-the-bases-the-dashboard-needs.md: `bases` rides the same
+    payload, at the top level, and every row's `receipt:` tokens resolve
+    against it (the-panel-third-pass.md's "not built" doubt, closed)."""
+    client = _client()
+    _, daemon_headers = _repo_and_daemon(client)
+    files = [
+        {
+            "path": "surface/warp/w-1.md",
+            "markdown": "# Shipped\n\ntype: action\ntouched: 2026-09-22T00:00:00Z\nreceipt: #42 design-the-ask.md w-9\n",
+        },
+    ]
+    client.put(
+        "/v1/daemons/surface",
+        json={
+            "files": files,
+            "bases": {
+                "Gurio/brr": {
+                    "forge": "https://github.com/Gurio/brr",
+                    "forge_kind": "github",
+                    "kb": "https://github.com/Gurio/brr-kb/blob/main/knowledge/",
+                },
+            },
+        },
+        headers=daemon_headers,
+    )
+    _login_cookie(client)
+
+    body = client.get("/v1/dashboard/warp/asks.json").json()
+
+    assert body["bases"] == {
+        "Gurio/brr": {"forge": "https://github.com/Gurio/brr", "forge_kind": "github", "kb": "https://github.com/Gurio/brr-kb/blob/main/knowledge/"},
+    }
+    receipts = {r["ref"]: r["url"] for r in body["asks"][0]["receipts"]}
+    assert receipts == {
+        "#42": "https://github.com/Gurio/brr/pull/42",
+        "design-the-ask.md": "https://github.com/Gurio/brr-kb/blob/main/knowledge/design-the-ask.md",
+        "w-9": None,  # no dashboard item route exists yet
+    }
+
+
+def test_dashboard_warp_asks_receipts_empty_with_no_published_bases():
+    """No bases published yet ⇒ every receipt token still lists, url `None`
+    throughout — never a guess, never a missing key."""
+    client = _client()
+    _, daemon_headers = _repo_and_daemon(client)
+    files = [
+        {
+            "path": "surface/warp/w-1.md",
+            "markdown": "# Shipped\n\ntype: action\ntouched: 2026-09-22T00:00:00Z\nreceipt: #42\n",
+        },
+    ]
+    client.put("/v1/daemons/surface", json={"files": files}, headers=daemon_headers)
+    _login_cookie(client)
+
+    body = client.get("/v1/dashboard/warp/asks.json").json()
+
+    assert body["bases"] == {}
+    assert body["asks"][0]["receipts"] == [{"ref": "#42", "url": None}]
