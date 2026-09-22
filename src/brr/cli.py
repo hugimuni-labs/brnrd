@@ -106,7 +106,7 @@ PUBLIC_COMMANDS = (
 HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "emotes",
     "relic", "gate-run", "close-check", "promise", "act", "mood", "do", "notes",
-    "await", "cut", "legend", "item", "goal", "queue", "envoy",
+    "await", "cut", "legend", "item", "asks", "goal", "queue", "envoy",
     "dominion", "hud", "loom",
 )
 
@@ -768,6 +768,14 @@ def build_parser() -> argparse.ArgumentParser:
     # `item` is hidden for the same reason as `relic`: it is the resident's
     # maintenance verb over the account's warp (`surface/warp/`), pointed at
     # from the wake's own warp-index block, not an operator's daily noun.
+    # `asks` (design-the-ask.md §Build cut, step 1): the LRU list of the
+    # warp's open items, read-only. Hidden like `item` — the resident's
+    # verb over the account's warp, until the console draws the same rows.
+    asks_p = sub.add_parser("asks")
+    asks_p.add_argument("--json", action="store_true", help="rows as a JSON list")
+    asks_p.add_argument(
+        "--all", action="store_true", help="include done/retired items")
+    asks_p.set_defaults(func=cmd_asks)
     item_p = sub.add_parser("item")
     item_sub = item_p.add_subparsers(dest="item_cmd", required=True)
     p = item_sub.add_parser("list", help="the open-items index (--all for everything)")
@@ -3929,6 +3937,35 @@ def cmd_item_list(args):
     # engineering.md §"the wake's composed open-items index").
     index = items_mod.render_index(warp_root)
     print(index if index else "[brnrd item] the warp is bare")
+    return 0
+
+
+def cmd_asks(args):
+    """One screen: goals, then open warp items by last touch, stale below."""
+    import json as _json
+
+    from . import account as account_mod
+    from . import asks_screen as asks_mod
+    from . import config as conf
+
+    warp_root, err = _item_context()
+    if err:
+        print("[]" if getattr(args, "json", False) else f"[brnrd asks] {err}")
+        return 0
+    repo_root = _repo_root()
+    cfg = conf.load_config(repo_root)
+    days = asks_mod.stale_after_days(cfg)
+    rows = asks_mod.build_rows(
+        warp_root,
+        runs_dir=warp_root.parent.parent / account_mod.RUNS_PATH,
+        outbox_root=repo_root / ".brr" / "outbox",
+        stale_days=days,
+        include_all=bool(getattr(args, "all", False)),
+    )
+    if getattr(args, "json", False):
+        print(_json.dumps([asks_mod.public_row(r) for r in rows], indent=2))
+    else:
+        print(asks_mod.render(rows, stale_days=days))
     return 0
 
 
