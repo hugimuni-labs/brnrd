@@ -141,8 +141,13 @@ async function main() {
 					(await w96Li.getAttribute('class')).includes('opacity-60'),
 					'a stale row dims in its own bucket, not below a rule'
 				);
+				// The two words are chips now (the-lit-rows: "a small chip pair, not
+				// body text") and wear the same `uppercase` transform the bucket
+				// headings above already do — same reason, same fix: lower both
+				// sides rather than pin a rendering detail these chips don't own
+				// semantically.
 				const hints = w96Li.locator('[data-to-judge-hints]');
-				const hintsText = await hints.innerText();
+				const hintsText = (await hints.innerText()).toLowerCase();
 				assert.ok(hintsText.includes('accept w-96'), `copyable accept hint (${hintsText})`);
 				assert.ok(hintsText.includes('reroute w-96'), `copyable reroute hint (${hintsText})`);
 
