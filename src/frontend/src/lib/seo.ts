@@ -7,6 +7,7 @@ export const SOCIAL_IMAGE = `${SITE_ORIGIN}/brr-banner.png`;
 const INDEXABLE_EXACT_PATHS = new Set([
 	'/',
 	'/pricing',
+	'/websummit',
 	'/terms',
 	'/privacy',
 	'/legal-notice',
