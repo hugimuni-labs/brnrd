@@ -145,3 +145,14 @@ def test_state_cache_rebuilds_after_a_beat():
 def test_unknown_route_is_404(served):
     assert get(served["server"], "/")[0] == 404
     assert get(served["server"], "/loom/nope.css")[0] == 404
+
+
+def test_tree_json_is_the_whole_tracked_tree_or_honestly_empty(served, tmp_path: Path):
+    # the served fixture's repo root is not a git checkout: the tree is empty, never an error
+    status, headers, body = get(served["server"], "/loom/tree.json")
+    assert status == 200
+    assert headers.get("Content-Type", "").startswith("application/json")
+    tree = json.loads(body)
+    assert tree["repo"]["files"] == []
+    assert tree["home"]["files"] == []
+    assert tree["captured_at"].endswith("Z")

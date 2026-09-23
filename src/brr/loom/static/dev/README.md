@@ -54,10 +54,12 @@ a directory is a street (a spine you walk, with a sign), files are rooms in
 rows beside it, subdirectories are streets off it. A drone's walk is a route
 along spines and gutters; the feed's `beads` give this run's hops and every
 cloth row's `trail` wears the corridors. Light is the feed's `heat`; the rest
-is the black silhouette of what nobody visited. The tree itself is not in the
-feed — `python3 src/brr/loom/static/dev/tree-fixture.py <repo> <account-home>`
-writes `fixtures/tree.json` from `git ls-files` (repo · dominion/ surface/ ·
-the knowledge repo as `knowledge/`). Serve from the checkout whose `.brr` you
+is the black silhouette of what nobody visited. From g7 the tree is served —
+`GET /loom/tree.json` (`brr/loom/tree.py`: `git ls-files` of the repo and the
+home's own trees, rebuilt at most every 30 s); the fixture written by
+`python3 src/brr/loom/static/dev/tree-fixture.py <repo> <account-home>` stays
+as the fallback, and the HUD names which one the ground came from. Serve from the checkout whose `.brr` you
 want to watch: `PYTHONPATH=<worktree>/src python3 -m brr loom --port 7778`,
-open `/loom/dev/field8.html`. `1 2 3` = all · lit · the resident; `/` = search.
+open `/loom/dev/field8.html` (generations: `field8-gens.html`). `1 2 3` = all · lit · the
+resident; `/` = search; `f` follow; hjkl walk; `o` open at the last chunk read.
 `node src/brr/loom/static/dev/field8-shots.mjs` captures the three.
