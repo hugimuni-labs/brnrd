@@ -32,6 +32,15 @@
     ".brr/inbox/<EVT2>.md": "---\nid: <EVT2>\nsource: spawn_completed\nstatus: pending\nspawn_parent_run_id: run-parent\nobserved_by: run-parent\ncreated: <TS>\n---\nchild finished\n",
     ".brr/inbox/<EVT3>.md": "---\nid: <EVT3>\nsource: telegram\nstatus: pending\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\nstill here?\n",
     ".brr/outbox/<EVT1>/.processed/await.md": "---\nawait: true\ntimeout: 20m\n---\n",
+    ".brr/outbox/<EVT1>/portal-state.json": {
+      "await": {
+        "armed": true,
+        "file": null,
+        "generation": "<V>",
+        "resolved": false,
+        "timeout_seconds": "<F>"
+      }
+    },
     ".brr/shuttle.json": {
       "conversation_key": "",
       "key": "<TMP>/.brr",

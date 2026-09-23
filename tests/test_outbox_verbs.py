@@ -212,6 +212,52 @@ def test_await_armed_is_accepted_and_a_malformed_one_refused(tmp_path, monkeypat
     assert bad.notice.startswith("await dropped:")
 
 
+def test_handle_await_publishes_the_arm_to_portal_state_itself(tmp_path, monkeypatch):
+    """the-tick-that-breathes: a slow HUD build (`_drain_agent_card`, the
+    next thing the caller runs after `_drain_outbox`) must not turn an
+    accepted `await:` into a client-visible non-arm — so `handle_await`
+    writes `portal-state.json`'s `await` key itself, synchronously, before
+    returning, rather than waiting for the next full HUD pass
+    (`_write_live_portal_state`) to get around to it. Pinned here at the
+    verb level, independent of the stream-level ordering
+    `test_worker_phases.py::test_stream_arms_await_before_slow_tick_work`
+    pins.
+    """
+    import json
+
+    file, outbox, *_ = _setup(tmp_path, monkeypatch)
+    of = file("await.md", "---\nawait: true\ntimeout: 5m\n---\n")
+    (armed,) = table.dispatch(of)
+    assert (armed.verb, armed.outcome) == ("await", "accepted")
+
+    portal = json.loads((outbox / "portal-state.json").read_text(encoding="utf-8"))
+    assert portal["await"] == {
+        "armed": True,
+        "generation": of.run.meta["await"]["generation"],
+        "resolved": False,
+        "file": None,
+        "timeout_seconds": 300,
+    }
+
+
+def test_handle_await_early_write_preserves_the_rest_of_portal_state(tmp_path, monkeypatch):
+    """The early write is a targeted patch of the `await` key, not a wipe
+    of whatever else the last full HUD pass already published there."""
+    import json
+
+    file, outbox, *_ = _setup(tmp_path, monkeypatch)
+    (outbox / "portal-state.json").write_text(
+        json.dumps({"change_token": "prior-tick", "notices": ["kept"]}),
+        encoding="utf-8",
+    )
+    table.dispatch(file("await.md", "---\nawait: true\ntimeout: 5m\n---\n"))
+
+    portal = json.loads((outbox / "portal-state.json").read_text(encoding="utf-8"))
+    assert portal["change_token"] == "prior-tick"
+    assert portal["notices"] == ["kept"]
+    assert portal["await"]["armed"] is True
+
+
 def test_hold_by_choice_is_refused(tmp_path, monkeypatch):
     file, *_ = _setup(tmp_path, monkeypatch)
     (result,) = table.dispatch(file("hold.md", "---\nhold: true\nresume: operator\n---\n"))
