@@ -1929,6 +1929,20 @@ class TestPromptBuilding:
         run_section = prompt.split("### Run", 1)[1].split("###", 1)[0]
         assert _says(run_section, "retry of run-260818-1834-lcu3 (host interrupt)")
 
+    def test_daemon_prompt_bundle_names_a_carry_next_to_the_inherited_source(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "the brief", "evt-9gal", "/tmp/resp.md", tmp_path,
+            run_id="task-9",
+            source="spawn_completed",
+            event_carry_of="run-260923-0008-88ed",
+            event_carry_reason="the scroll is at ~310k tokens",
+        )
+        run_section = prompt.split("### Run", 1)[1].split("###", 1)[0]
+        assert _says(run_section, "carry ⇐ run-260923-0008-88ed (the scroll is at ~310k tokens)")
+        assert _says(run_section, "the Source above is inherited")
+        # And the kernel's attention line carries the same fact.
+        assert "carry ⇐ run-260923-0008-88ed" in prompt.split("### Run", 1)[0]
+
     def test_daemon_prompt_kernel_and_bundle_report_the_same_age(self, tmp_path):
         """The #638-class drift this issue's coordinates warn about: the
         persisted score (the kernel's own numbers) and the rendered bundle

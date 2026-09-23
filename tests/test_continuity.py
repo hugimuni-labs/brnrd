@@ -33,6 +33,7 @@ from brr.bootscore import (
     BootScore,
     ContractEntry,
     event_age_seconds,
+    format_carry_note,
     format_event_age,
     format_kernel,
     format_retry_note,
@@ -186,6 +187,37 @@ def test_attention_line_missing_created_degrades_quietly() -> None:
     )
     att = next(ln for ln in out.splitlines() if ln.lstrip().startswith("attention:"))
     assert att.strip() == "attention: evt-x ←telegram"
+
+
+def test_format_carry_note_names_the_predecessor_and_cuts_the_reason() -> None:
+    assert format_carry_note(None, None) is None
+    assert format_carry_note("", "why") is None
+    assert format_carry_note("run-260923-0008-88ed", None) == "carry ⇐ run-260923-0008-88ed"
+    assert (
+        format_carry_note("run-260923-0008-88ed", "the scroll is at ~310k\n after six hours")
+        == "carry ⇐ run-260923-0008-88ed (the scroll is at ~310k after six hours)"
+    )
+    long = "x" * 200
+    note = format_carry_note("run-A", long)
+    assert note is not None and note.endswith("…)") and len(note) < 140
+
+
+def test_attention_line_names_a_carry_beside_the_inherited_source() -> None:
+    """2026-09-23: a seat minted by its predecessor's ``halt:`` woke to
+    ``attention: evt-… ←spawn_completed`` — the source a carry inherits by
+    construction — and spent its first minutes looking for a strand that had
+    finished. The speaker on a carry is the halted seat; the line says so."""
+    out = _kernel(
+        attention=BootAttention(
+            event_ids=("evt-1790144370611246000-9gal",),
+            source_gate="spawn_completed",
+            carry_of="run-260923-0008-88ed",
+            carry_reason="the scroll is at ~310k tokens after six hours",
+        ),
+    )
+    att = next(ln for ln in out.splitlines() if ln.lstrip().startswith("attention:"))
+    assert "←spawn_completed" in att
+    assert "carry ⇐ run-260923-0008-88ed (the scroll is at ~310k tokens after six hours)" in att
 
 
 def test_attention_line_renders_retry_provenance() -> None:

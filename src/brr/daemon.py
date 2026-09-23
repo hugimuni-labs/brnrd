@@ -5698,7 +5698,18 @@ def _queue_respawn_request(
     }
     meta = {
         k: v for k, v in current.items()
-        if k not in reserved and not str(k).startswith("_")
+        if k not in reserved and not str(k).startswith(("_", "spawn"))
+        # `spawn*` is a *prefix*, not a list, on purpose: every key that
+        # begins with it describes a strand — the contract of the one this
+        # event dispatched, or the produce of the one that just finished
+        # (`spawn_status`, `spawned_by_run`, `spawn_reply_bytes`,
+        # `spawn_quota_*` …), and each minter stamps its own. Measured
+        # 2026-09-23: a seat woken by a strand's `spawn_completed` halted
+        # with a carry, and its successor's waking event read
+        # `spawned_by_run: run-…` / `spawn_status: nothing-published` — a
+        # finished strand's obituary, copied onto a seat that had not
+        # booted. Same species as #2022's `resume_native_session_id`;
+        # listing the members would meet the one nobody listed.
     }
     explicit_repo = str(
         fm.get("repo") or fm.get("repo_label") or fm.get("repo_id") or ""

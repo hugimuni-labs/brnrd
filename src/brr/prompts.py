@@ -4308,6 +4308,8 @@ def build_boot_score(
     event_created: str | None = None,
     event_retry_of: str | None = None,
     event_retry_failure_kind: str | None = None,
+    event_carry_of: str | None = None,
+    event_carry_reason: str | None = None,
     body_provenance: str | None = None,
     source_gate: str | None = None,
     continuity: "BootContinuity | None" = None,
@@ -4498,6 +4500,8 @@ def build_boot_score(
             age_seconds=event_age_seconds(event_created),
             retry_of=event_retry_of,
             retry_failure_kind=event_retry_failure_kind,
+            carry_of=event_carry_of,
+            carry_reason=event_carry_reason,
         ),
         posture=BootPosture(
             pending_count=pending_count,
@@ -4552,6 +4556,8 @@ def build_daemon_prompt_with_score(
     event_created = kwargs.get("event_created")
     event_retry_of = kwargs.get("event_retry_of")
     event_retry_failure_kind = kwargs.get("event_retry_failure_kind")
+    event_carry_of = kwargs.get("event_carry_of")
+    event_carry_reason = kwargs.get("event_carry_reason")
     continuity = kwargs.get("continuity")
     environment = kwargs.get("environment")
     strand = bool(kwargs.get("strand", False))
@@ -4693,6 +4699,8 @@ def build_daemon_prompt_with_score(
         event_created=str(event_created) if event_created else None,
         event_retry_of=str(event_retry_of) if event_retry_of else None,
         event_retry_failure_kind=str(event_retry_failure_kind) if event_retry_failure_kind else None,
+        event_carry_of=str(event_carry_of) if event_carry_of else None,
+        event_carry_reason=str(event_carry_reason) if event_carry_reason else None,
         pending_count=len(pending_events),
         budget=f"{budget_seconds // 60}m" if budget_seconds else None,
         quota=str(runner_quota) if runner_quota else None,
@@ -5195,6 +5203,8 @@ def build_daemon_prompt(
     event_created: str | None = None,
     event_retry_of: str | None = None,
     event_retry_failure_kind: str | None = None,
+    event_carry_of: str | None = None,
+    event_carry_reason: str | None = None,
     event_meta: dict[str, Any] | None = None,
     budget_seconds: int | None = None,
     runner_medium: str | None = None,
@@ -5326,6 +5336,8 @@ def build_daemon_prompt(
         event_created=event_created,
         event_retry_of=event_retry_of,
         event_retry_failure_kind=event_retry_failure_kind,
+        event_carry_of=event_carry_of,
+        event_carry_reason=event_carry_reason,
         event_meta=event_meta,
         diffense=diffense,
     )
@@ -5402,6 +5414,8 @@ def build_daemon_prompt(
         event_created=event_created,
         event_retry_of=event_retry_of,
         event_retry_failure_kind=event_retry_failure_kind,
+        event_carry_of=event_carry_of,
+        event_carry_reason=event_carry_reason,
         pending_count=len(pending_events or []),
         budget=f"{budget_seconds // 60}m" if budget_seconds else None,
         quota=runner_quota,
@@ -5748,6 +5762,8 @@ def _build_run_context_bundle(
     event_created: str | None = None,
     event_retry_of: str | None = None,
     event_retry_failure_kind: str | None = None,
+    event_carry_of: str | None = None,
+    event_carry_reason: str | None = None,
     event_meta: dict[str, Any] | None = None,
     diffense: bool = False,
 ) -> str:
@@ -5849,7 +5865,9 @@ def _build_run_context_bundle(
     # able to find the same fact here. Same helpers as `format_kernel`'s
     # attention line, so the two surfaces cannot report a different age for
     # the same event.
-    from .bootscore import event_age_seconds, format_event_age, format_retry_note
+    from .bootscore import (
+        event_age_seconds, format_carry_note, format_event_age, format_retry_note,
+    )
 
     age_seconds = event_age_seconds(event_created)
     age_note = format_event_age(event_created, age_seconds)
@@ -5858,6 +5876,13 @@ def _build_run_context_bundle(
     retry_note = format_retry_note(event_retry_of, event_retry_failure_kind)
     if retry_note:
         sections.append(f"- Event {retry_note}")
+    carry_note = format_carry_note(event_carry_of, event_carry_reason)
+    if carry_note:
+        sections.append(
+            f"- Event {carry_note} — a seat minted by its predecessor's halt; "
+            "the Source above is inherited from what woke *that* seat, and "
+            "the event body is its brief"
+        )
     sections.extend(_topic_bundle_lines(event_meta))
     if run_id:
         sections.append(f"- Run ID: {run_id}")
