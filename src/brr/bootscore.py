@@ -105,6 +105,33 @@ def format_age_short(age_seconds: float) -> str:
     return f"{hours}h{minutes:02d}m"
 
 
+def format_carry_note(carry_of: str | None, carry_reason: str | None) -> str | None:
+    """``"carry ⇐ run-X"`` for a seat minted by a predecessor's ``halt:`` /
+    ``respawn:`` — the fact the ``attention:`` line used to omit.
+
+    A carry's event *inherits* its predecessor's ``source`` by construction
+    (``_queue_respawn_request``: ``source`` is reserved and then re-derived
+    from the waking event), so the first line of the successor's wake read
+    ``←spawn_completed`` on 2026-09-23 — three tool calls spent looking for
+    a strand that had finished, when the truth was one line away on the
+    event: ``handover: True`` · ``respawned_by_run: run-…`` ·
+    ``respawn_reason: …``. The speaker on a carry is the halted seat; this
+    renders it as such, next to the inherited source rather than instead of
+    it (the source still governs routing). The reason is the predecessor's
+    own words, cut to one line — the brief itself is the event body.
+    """
+    run = str(carry_of or "").strip()
+    if not run:
+        return None
+    note = f"carry ⇐ {run}"
+    reason = " ".join(str(carry_reason or "").split())
+    if reason:
+        if len(reason) > 120:
+            reason = reason[:117].rstrip() + "…"
+        note += f" ({reason})"
+    return note
+
+
 def format_event_age(created: str | None, age_seconds: float | None) -> str | None:
     """Render an event's age for a wake surface, or ``None`` when unknown.
 
@@ -452,6 +479,17 @@ class BootAttention:
     same "ask where the assembling happens" shape as ``BootHost.image_stale``
     next door). ``None`` when ``created`` was missing or unparseable, never a
     guess."""
+
+    carry_of: str | None = None
+    """The predecessor seat's run id when this event is a daemon-minted
+    handover (``resource_hold.is_handover``) — the ``respawned_by_run`` of a
+    ``halt:``/``respawn:`` carry. ``None`` on every other wake, including a
+    strand dispatch (which stamps ``respawned_by_run`` too, without the
+    handover mark)."""
+
+    carry_reason: str | None = None
+    """The predecessor's ``respawn_reason``, verbatim; rendered cut to one
+    line by :func:`format_carry_note`."""
 
     retry_of: str | None = None
     """Comma-joined prior run id(s) this event was already attempted by,
@@ -903,6 +941,11 @@ def format_kernel(score: BootScore) -> str:
         att_line = "attention: " + ", ".join(att.event_ids)
         if att.source_gate:
             att_line += f" ←{att.source_gate}"
+        carry_note = format_carry_note(att.carry_of, att.carry_reason)
+        if carry_note:
+            # Before the age: *who is speaking* outranks *when* — and on a
+            # carry the inherited source_gate just named the wrong speaker.
+            att_line += f" · {carry_note}"
         age_note = format_event_age(att.created, att.age_seconds)
         if age_note:
             att_line += f" · {age_note}"

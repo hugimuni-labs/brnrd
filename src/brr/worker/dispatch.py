@@ -17,6 +17,7 @@ from .. import presence
 from .. import prompts
 from .. import protocol
 from .. import release_availability
+from .. import resource_hold
 from .. import run_context
 from .. import runner_auth_health
 from .. import runner_quota
@@ -230,6 +231,19 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
         event_created=event.get("created"),
         event_retry_of=event.get("retry_of"),
         event_retry_failure_kind=event.get("retry_failure_kind"),
+        # A seat minted by its predecessor's `halt:`/`respawn:` inherits
+        # that predecessor's `source` (reserved, then re-derived in
+        # `_queue_respawn_request`), so the source alone names the wrong
+        # speaker on a carry. The handover mark is the fact that says
+        # "this replaces the seat" (#2022); a strand dispatch stamps
+        # `respawned_by_run` too, without it — so the mark, not the key,
+        # gates this.
+        event_carry_of=(
+            event.get("respawned_by_run") if resource_hold.is_handover(event) else None
+        ),
+        event_carry_reason=(
+            event.get("respawn_reason") if resource_hold.is_handover(event) else None
+        ),
         # The waking event's own raw record (correspondent/thread
         # fields) — #128 step 3: lets the bundle recognise still-pending
         # burst siblings in `pending_events_snapshot` and list them
