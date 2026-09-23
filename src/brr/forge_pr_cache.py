@@ -259,6 +259,7 @@ def _shape(row: dict[str, Any]) -> dict[str, Any] | None:
         "title": str(row.get("title") or "").strip(),
         "state": str(row.get("state") or "").strip().upper() or "UNKNOWN",
         "branch": branch,
+        **({"head_sha": row["headRefOid"]} if row.get("headRefOid") else {}),
         # The base this PR merges *into* (#1140) — ``None`` when ``gh``
         # didn't say (older cache, or a row shaped by a test that omits it),
         # which every reader treats as "unknown, don't claim a mismatch"
@@ -331,7 +332,7 @@ def refresh(repo_root: Path, *, timeout: float = _GH_TIMEOUT_SECONDS) -> dict[st
         "gh", "pr", "list",
         "--state", "all",
         "--limit", str(FETCH_LIMIT),
-        "--json", "number,title,state,headRefName,baseRefName,mergedAt,closedAt,url,isDraft",
+        "--json", "number,title,state,headRefName,headRefOid,baseRefName,mergedAt,closedAt,url,isDraft",
     ]
     if label:
         cmd += ["--repo", label]
@@ -376,6 +377,9 @@ def refresh(repo_root: Path, *, timeout: float = _GH_TIMEOUT_SECONDS) -> dict[st
             payload["prs"] = previous["prs"]
             payload["fetched_at"] = previous.get("fetched_at")
         payload["last_attempt_at"] = _utc_now_iso()
+    if kind == "github" and label and not payload["error"]:
+        from . import pr_checks
+        pr_checks.refresh(repo_root, label, payload["prs"] or [], timeout)
     _write(repo_root, payload)
     return payload
 
