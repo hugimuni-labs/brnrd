@@ -10,7 +10,16 @@ import { canonicalUrl, hasCanonicalMeta, isIndexablePath, normalizePathname } fr
 const here = dirname(fileURLToPath(import.meta.url));
 const staticDir = join(here, '..', '..', 'static');
 
-const publicPaths = ['/', '/pricing', '/terms', '/privacy', '/legal-notice', '/learn', '/log'];
+const publicPaths = [
+	'/',
+	'/pricing',
+	'/websummit',
+	'/terms',
+	'/privacy',
+	'/legal-notice',
+	'/learn',
+	'/log'
+];
 
 test('canonical paths are normalized to the brnrd.dev origin', () => {
 	equal(normalizePathname('/learn//agent-orchestration/'), '/learn/agent-orchestration');
