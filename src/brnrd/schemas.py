@@ -394,10 +394,21 @@ class SurfaceFileIn(BaseModel):
     committed_at: str | None = Field(default=None, max_length=40)
 
 
+class RepoBaseIn(BaseModel):
+    """Forge and knowledge URLs, keyed by repo label in the surface report."""
+
+    # Filled from the map key before the shared per-repo consent filter.
+    repo_label: str = Field(default="", max_length=256, exclude=True)
+    forge: str | None = Field(default=None, max_length=512)
+    forge_kind: str | None = Field(default=None, max_length=32)
+    kb: str | None = Field(default=None, max_length=512)
+
+
 class SurfaceReport(BaseModel):
     """The complete corpus (surface + knowledge + runs) from one daemon."""
 
     files: list[SurfaceFileIn] = Field(default_factory=list, max_length=4000)
+    bases: dict[str, RepoBaseIn] = Field(default_factory=dict, max_length=500)
 
 
 class SurfaceOut(SurfaceReport):

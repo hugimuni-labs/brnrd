@@ -68,6 +68,8 @@ _PUBLISHER_COMPAT_NAMES = (
     "_run_file_date",
     "_publish_selection",
     "_corpus_resolve",
+    "_repo_forge_base",
+    "_corpus_bases",
     "_corpus_fingerprint",
     "_corpus_payload",
     "_corpus_publish_hash",

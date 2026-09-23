@@ -72,6 +72,12 @@ class Account(Base):
         info=_publish_store("corpus", "slice"),
     )
     surface_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Repo-keyed URL bases ride the corpus mirror but support per-repo withdrawal.
+    bases_json: Mapped[str] = mapped_column(
+        Text,
+        default="{}",
+        info=_publish_store("corpus", "corpus_repo"),
+    )
     # Billing (#53, kb design-billing.md). ``tier`` flips only from Stripe
     # webhook state transitions; the Stripe subscription is source of truth.
     TIER_FREE = "free"
