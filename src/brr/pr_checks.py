@@ -56,6 +56,18 @@ def _json(repo_root: Path, args: list[str], timeout: float):
     # gh pr checks uses 1 for failed checks and 8 for pending checks.
     if result.returncode not in (0, 1, 8):
         raise ValueError(result.stderr.strip() or "GitHub check query failed")
+    if not result.stdout.strip():
+        # `gh pr checks --required` on a branch with no required checks
+        # configured (gh 2.97: every repo without branch protection) exits 1
+        # with *empty* stdout and the verdict on stderr. That is the
+        # documented "no required checks → wait for every observed check"
+        # case, not a failure — and `json.loads("")` turned it into
+        # `Expecting value: line 1 column 1`, so no `pr_checks_concluded`
+        # ever fired on this repo (2026-09-23, #2105 green at 14:55Z, the
+        # owning seat woken by an unrelated tick 16 min later).
+        if "no required checks" in result.stderr:
+            return [], result
+        raise ValueError(result.stderr.strip() or "empty GitHub check response")
     return json.loads(result.stdout), result
 
 
