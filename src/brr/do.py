@@ -964,7 +964,64 @@ def await_bolt_facet(
 # ── The bare snapshot ────────────────────────────────────────────────
 
 
-def format_snapshot(payload: dict[str, Any]) -> str:
+def owned_pr_checks(outbox_dir: Path | None) -> list[dict[str, Any]]:
+    """This run's claimed PRs joined to the forge cache's ``checks`` verdict,
+    network-free.
+
+    The verdict lived only in ``.brr/forge-pr-state.json → prs[].checks``
+    until 2026-09-23: every owned-PR read on this host had landed there as
+    ``{status: error, error: "Expecting value…"}`` for a day (#2106) and no
+    surface a person reads said so — the seat waited on an event that could
+    not come. The outbox sits at ``<shared .brr>/outbox/<event>`` by
+    construction (the daemon's delivery contract), so the cache is two
+    levels up; absent or unreadable ⇒ ``cache: absent`` rows, never silence.
+    """
+    if outbox_dir is None:
+        return []
+    from . import forge_pr_cache, pr_checks
+
+    numbers = sorted(pr_checks.claimed_numbers(Path(outbox_dir)))
+    if not numbers:
+        return []
+    try:
+        cache = json.loads(
+            (Path(outbox_dir).parent.parent / forge_pr_cache.CACHE_NAME).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        cache = None
+    rows = cache.get("prs") if isinstance(cache, dict) else None
+    by_number = {
+        int(r["number"]): r
+        for r in (rows or [])
+        if isinstance(r, dict) and r.get("number") is not None
+    }
+    out: list[dict[str, Any]] = []
+    for number in numbers:
+        row = by_number.get(number)
+        if row is None:
+            out.append({"number": number, "state": None, "checks": None,
+                        "cache": "absent" if cache is None else "unlisted"})
+            continue
+        out.append({"number": number, "state": row.get("state"),
+                    "checks": row.get("checks"), "cache": "row"})
+    return out
+
+
+def _format_checks(checks: Any) -> str:
+    if not isinstance(checks, dict):
+        return "unread"
+    status = str(checks.get("status") or "unread")
+    if status == "completed":
+        return f"completed {checks.get('conclusion') or '?'}"
+    if status == "error":
+        return f"error {str(checks.get('error') or '')[:80]}"
+    reason = checks.get("reason")
+    return f"{status} ({reason})" if reason else status
+
+
+def format_snapshot(
+    payload: dict[str, Any], owned_prs: list[dict[str, Any]] | None = None,
+) -> str:
     """The one-screen portal read for a bare `brnrd do` — no verbs given.
 
     Deliberately narrower than `cli._format_portal_state` (the full `brnrd
@@ -1037,5 +1094,14 @@ def format_snapshot(payload: dict[str, Any]) -> str:
             f"{pool.get('active')}/{pool.get('max_concurrent')} used, "
             f"{pool.get('available')} available"
         )
+
+    if owned_prs:
+        rendered = " | ".join(
+            f"#{r['number']} {r.get('state') or '-'} · checks: {_format_checks(r.get('checks'))}"
+            if r.get("cache") == "row"
+            else f"#{r['number']} · forge cache {r.get('cache')}"
+            for r in owned_prs
+        )
+        lines.append(f"owned PRs ({len(owned_prs)}): {rendered}")
 
     return "\n".join(lines)
