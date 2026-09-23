@@ -155,6 +155,44 @@ def test_the_minter_reproduces_the_real_shape_and_marks_it(tmp_path, monkeypatch
     assert resource_hold.is_handover(child)
 
 
+def test_the_mint_never_inherits_a_finished_strands_obituary(tmp_path, monkeypatch):
+    """2026-09-23: the seat that halted with a carry had itself been woken by a
+    strand's ``spawn_completed``. Its successor's waking event read
+    ``spawned_by_run: run-…`` / ``spawn_status: nothing-published`` /
+    ``spawn_quota_summary: … 7d 0% left`` — a finished strand's produce,
+    copied onto a seat that had not booted. Every ``spawn*`` key describes a
+    strand (the one dispatched, or the one that finished) and is stamped by
+    the minter that owns it; a carry inherits none."""
+    waking = _real_respawn_event(tmp_path / ".brr" / "inbox")
+    # On disk, not only in memory: the minter re-reads the waking event by id.
+    protocol.update_event_meta(
+        waking,
+        source="spawn_completed",
+        spawned_by_run="run-260922-2103-ascm",
+        spawned_by_event="evt-child",
+        spawn_parent_run_id="run-260921-1447-srsg",
+        spawn_status="nothing-published",
+        spawn_reply_bytes=125,
+        spawn_quota_summary="5h 31% left; 7d 0% left",
+        spawn_topics="the-loom",
+    )
+    waking = protocol._read_event(waking["_path"])
+    assert waking["spawn_status"] == "nothing-published"
+
+    child = _mint(
+        tmp_path, monkeypatch,
+        "---\nrespawn: true\ncore: opus\nreason: the scroll is full\n---\ncarry this forward\n",
+        waking=waking,
+    )
+
+    assert not [k for k in child if str(k).startswith("spawn")], sorted(child)
+    # The facts a carry *does* carry are still there.
+    assert child["source"] == "spawn_completed"
+    assert child["respawned_by_run"] == "run-seat"
+    assert child["respawn_reason"] == "the scroll is full"
+    assert resource_hold.is_handover(child)
+
+
 def test_the_mint_never_predicts_the_successors_scroll(tmp_path, monkeypatch):
     """Mechanism 2's quieter half: ``meta`` is a blanket copy of the waking event.
 
