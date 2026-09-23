@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { ARMED_ROW_CAP, armedOverflow, pickRows } from './pickLane.ts';
+import { ARMED_ROW_CAP, PICKING_ROW_CAP, armedOverflow, pickRows } from './pickLane.ts';
 import type { LiveRun } from './liveRuns.ts';
 import type { ScheduledWake } from './scheduledWakes.ts';
 import type { WeavingRow } from './warpGraph.ts';
@@ -244,6 +244,109 @@ test('every picking run stale ⇒ nothing burning, not a dead one shown as live'
 		now: NOW
 	});
 	assert.deepEqual(rows, []);
+});
+
+// THE SEAT PINNED (the-seat-stays-on-top): the seat is the burning run the
+// daemon did not mark a dispatched child; it always leads `picking`, and
+// strands sort behind it, newest first, regardless of the cap that used to
+// treat every burning run as one undifferentiated list.
+
+test('the seat leads the picking rows even when it did not start first', () => {
+	const rows = pickRows({
+		liveRuns: [
+			run({
+				id: 'strand-old',
+				run_id: 'strand-old',
+				started_at: at(-20 * MINUTE),
+				is_subspawn: true
+			}),
+			run({ id: 'seat', run_id: 'seat', started_at: at(-5 * MINUTE), is_subspawn: false })
+		],
+		scheduledWakes: null,
+		now: NOW
+	});
+	assert.deepEqual(
+		rows.map((row) => row.id),
+		['seat', 'strand-old']
+	);
+	assert.equal(rows[0].isSeat, true);
+	assert.equal(rows[1].isSeat, false);
+	assert.equal(rows[1].isStrand, true);
+});
+
+test('strands behind the seat sort newest first', () => {
+	const rows = pickRows({
+		liveRuns: [
+			run({ id: 'seat', run_id: 'seat', started_at: at(-30 * MINUTE), is_subspawn: false }),
+			run({ id: 'old', run_id: 'old', started_at: at(-20 * MINUTE), is_subspawn: true }),
+			run({ id: 'new', run_id: 'new', started_at: at(-2 * MINUTE), is_subspawn: true })
+		],
+		scheduledWakes: null,
+		now: NOW
+	});
+	assert.deepEqual(
+		rows.map((row) => row.id),
+		['seat', 'new', 'old']
+	);
+});
+
+test('several non-strand runs burning at once: the newest is the seat, the rest fold into the queue', () => {
+	const rows = pickRows({
+		liveRuns: [
+			run({
+				id: 'older-seat',
+				run_id: 'older-seat',
+				started_at: at(-40 * MINUTE),
+				is_subspawn: false
+			}),
+			run({
+				id: 'newer-seat',
+				run_id: 'newer-seat',
+				started_at: at(-1 * MINUTE),
+				is_subspawn: false
+			})
+		],
+		scheduledWakes: null,
+		now: NOW
+	});
+	assert.deepEqual(
+		rows.map((row) => row.id),
+		['newer-seat', 'older-seat']
+	);
+	assert.equal(rows[0].isSeat, true);
+	assert.equal(rows[1].isSeat, false);
+	// Not a strand by the daemon's own record — just not the pinned one.
+	assert.equal(rows[1].isStrand, false);
+});
+
+test('no non-strand run burning: no seat, strands alone form the queue', () => {
+	const rows = pickRows({
+		liveRuns: [run({ id: 'strand-only', run_id: 'strand-only', is_subspawn: true })],
+		scheduledWakes: null,
+		now: NOW
+	});
+	assert.equal(rows[0].isSeat, false);
+	assert.equal(rows[0].isStrand, true);
+});
+
+test('a strand row carries its runner core label', () => {
+	const rows = pickRows({
+		liveRuns: [
+			run({
+				id: 'strand',
+				run_id: 'strand',
+				is_subspawn: true,
+				runner: { shell: 'claude', core: 'sonnet' }
+			})
+		],
+		scheduledWakes: null,
+		now: NOW
+	});
+	assert.equal(rows[0].core, 'claude · sonnet');
+});
+
+test('PICKING_ROW_CAP is unchanged by the seat split — still 4', () => {
+	assert.equal(PICKING_ROW_CAP, 4);
 });
 
 test("a burning run's live topic claim rides the row's crosses (the-run-that-claims-its-thread)", () => {
