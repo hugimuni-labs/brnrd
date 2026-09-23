@@ -334,9 +334,7 @@ def test_binding_quota_remaining_pct_credits_excluded_on_a_known_subscription_pl
 
 
 def test_binding_quota_remaining_pct_credits_binds_on_a_non_subscription_plan():
-    # A plan_type that is *not* one of the recognised subscription tiers is
-    # the only positive evidence this module has for "this account really
-    # does bill per token" — only then does a reported zero count.
+    # Only an explicit usage-based plan is evidence of a paid wallet.
     levels = {
         "plan_type": "usage_based",
         "quota": {
@@ -517,3 +515,18 @@ def test_latest_claude_usage_outbox_dir_none_when_no_snapshot_cached(tmp_path):
     (brr_dir / "outbox" / "evt-empty").mkdir(parents=True)
     assert runner_quota.latest_claude_usage_outbox_dir(brr_dir) is None
     assert runner_quota.latest_claude_usage_outbox_dir(tmp_path / "missing" / ".brr") is None
+
+
+def test_unknown_plan_does_not_prove_a_paid_wallet():
+    levels = {"plan_type": "new_subscription", "quota": {
+        "buckets": {"credits": {"remaining_percentage": 0}},
+    }}
+    assert runner_quota.binding_quota_remaining_pct(levels) is None
+
+
+def test_observed_positive_credit_history_proves_a_paid_wallet():
+    levels = {"plan_type": "plus", "quota": {
+        "credits_positive_history": True,
+        "buckets": {"credits": {"remaining_percentage": 0}},
+    }}
+    assert runner_quota.binding_quota_bucket(levels) == ("credits", 0.0)
