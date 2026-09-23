@@ -1043,3 +1043,82 @@ def test_a_queued_gate_breaks_a_live_lock_owned_by_a_finished_run(
     assert str(os.getpid()) in err
     assert "finished-run" in err
     assert "terminal" in err
+
+
+# ── `--targeted`: pytest narrowed to the touched test files ──────────────
+
+
+def test_python_module_stem_maps_src_python_files_only():
+    gate = _gate()
+    assert gate._python_module_stem("src/brr/gate_receipt.py") == "gate_receipt"
+    assert gate._python_module_stem("src/brr/__init__.py") == "__init__"
+    assert gate._python_module_stem("scripts/gate.py") == "gate"
+    assert gate._python_module_stem("src/brr/gate_receipt.txt") is None
+
+
+def test_is_direct_test_file_only_matches_tests_dir_test_files():
+    gate = _gate()
+    assert gate._is_direct_test_file("tests/test_gate_runner.py") is True
+    assert gate._is_direct_test_file("tests/conftest.py") is False
+    assert gate._is_direct_test_file("src/brr/test_gate_runner.py") is False
+
+
+def test_is_pytest_command_matches_the_real_ci_invocation_and_bare_pytest():
+    gate = _gate()
+    assert gate._is_pytest_command("python -m pytest -q") is True
+    assert gate._is_pytest_command("pytest tests/test_x.py") is True
+    assert gate._is_pytest_command("npm test") is False
+    assert gate._is_pytest_command("npm run check") is False
+
+
+def test_targeted_selection_runs_a_touched_test_file_itself(tmp_path):
+    gate = _gate()
+    repo = tmp_path / "r"
+    (repo / "tests").mkdir(parents=True)
+    (repo / "tests/test_foo.py").touch()
+    assert gate.targeted_test_selection(repo, ["tests/test_foo.py"]) == ["tests/test_foo.py"]
+
+
+def test_targeted_selection_maps_a_module_to_its_named_test_and_its_importers(tmp_path):
+    gate = _gate()
+    repo = tmp_path / "r"
+    (repo / "tests").mkdir(parents=True)
+    (repo / "tests" / "test_widget.py").write_text("from brr import widget\n", encoding="utf-8")
+    (repo / "tests" / "test_other.py").write_text(
+        "from brr.widget import Thing\n", encoding="utf-8"
+    )
+    (repo / "tests" / "test_unrelated.py").write_text("from brr import gizmo\n", encoding="utf-8")
+    selection = gate.targeted_test_selection(repo, ["src/brr/widget.py"])
+    assert selection == ["tests/test_other.py", "tests/test_widget.py"]
+
+
+def test_write_receipt_records_mode_and_omits_test_selection_when_absent(tmp_path, monkeypatch):
+    from brr import gate_receipt
+
+    gate = _gate()
+    monkeypatch.setenv("BRR_OUTBOX_DIR", str(tmp_path))
+    gate.write_receipt("GREEN", [], mode="changed-only")
+    entry = gate_receipt.read_receipt(tmp_path, gate.REPO_ROOT)
+    assert entry["mode"] == "changed-only"
+    assert "test_selection" not in entry
+
+
+def test_write_receipt_records_the_exact_targeted_selection(tmp_path, monkeypatch):
+    from brr import gate_receipt
+
+    gate = _gate()
+    monkeypatch.setenv("BRR_OUTBOX_DIR", str(tmp_path))
+    gate.write_receipt("GREEN", [], mode="targeted", test_selection=["tests/test_x.py"])
+    entry = gate_receipt.read_receipt(tmp_path, gate.REPO_ROOT)
+    assert entry["mode"] == "targeted"
+    assert entry["test_selection"] == ["tests/test_x.py"]
+
+
+def test_full_flag_refuses_to_combine_with_changed_only_or_targeted():
+    gate = _gate()
+    with pytest.raises(SystemExit):
+        gate.main(["--full", "--targeted"])
+    with pytest.raises(SystemExit):
+        gate.main(["--full", "--changed-only"])
+
+

@@ -19,6 +19,7 @@ pause — a live tool child SIGSTOPped so an interruption can reach you mid-call
 pitfall re-match — the failure-memory store matches the waking text once (#789) · topic shift ⇒ `brnrd agent inject --task "<topic>"`
 capture net — thought ends ⇒ daemon commits your dominion · the capture = insurance ; commit what you mean to keep, with a message
 self-wake — dominion `schedule.md` · `at:` fires once · `every:` repeats · `shell:`/`core:` name the Runner each entry costs (unset ⇒ default) · firings thread as one conversation · entries = your specs — retire a wake that wakes for nothing · quota bends `every:` cadence, never an `at:` deadline or a waiting reply
+the gate — a strand runs `python scripts/gate.py --targeted` locally (its default) · never the full suite on this machine · CI on the PR is the gate · a PR this run owns (`.pr` / `brnrd relic pr`) concluding its checks ⇒ `pr_checks_concluded` lands as a pending event, so `brnrd await` returns on it
 
 ### The other limb — your Shell's own subagent
 
