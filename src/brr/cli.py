@@ -988,6 +988,27 @@ def build_parser() -> argparse.ArgumentParser:
              "in .asks.jsonl once that reply's own drain verdict is "
              "accepted")
     do_p.add_argument(
+        "--new-item", dest="new_item", action=_OrderedAppend, default=None,
+        metavar="HEADLINE",
+        help="mint a new warp item for an ask the immediately preceding "
+             "--reply answers, and bind the reply to it — the ask heard in "
+             "this event is new, not a say on an existing one (repeatable; "
+             "several distinct asks in one event mint several items). "
+             "Minted only once that reply's own drain verdict is accepted, "
+             "so a refused reply leaves no item for a message nobody got; "
+             "`refs:`/`says:` carry the event id. Type: --new-item-type "
+             "(default action)")
+    do_p.add_argument(
+        "--new-item-type", dest="new_item_type", default="action",
+        choices=("decision", "preparation", "action"),
+        help="the type every --new-item in this call mints (default action)")
+    do_p.add_argument(
+        "--no-ask", dest="no_ask", default=None, metavar="WHY",
+        help="with --reply, when the account has a warp: this call's "
+             "reply(ies) extract no ask — the deliberate zero, recorded "
+             "with its reason in .asks.jsonl. Never a default: a reply "
+             "with neither --item/--new-item nor --no-ask is refused")
+    do_p.add_argument(
         "--part", dest="part", action=_OrderedAppend, default=None,
         metavar="TEXT",
         help="a quoted excerpt of the reply binding the immediately "
@@ -3086,7 +3107,9 @@ def _reconstruct_do_ops(ordered_ops):
     eagerly here so a bad path fails before anything is staged, not
     mid-batch.
     """
-    replies: list[tuple[str, str, list[tuple[str, list[str]]]]] = []
+    from . import do as do_mod
+
+    replies: list[tuple[str, str, list[tuple[object, list[str]]]]] = []
     gates: list[tuple[str, str]] = []
     threads: list[tuple[str, str]] = []
     pending: tuple[str, str] | None = None
@@ -3102,19 +3125,24 @@ def _reconstruct_do_ops(ordered_ops):
             pending = (dest, value)
             pending_items = []
             continue
-        if dest == "item":
+        if dest in ("item", "new_item"):
+            flag = "--item" if dest == "item" else "--new-item"
             if pending is None:
                 return replies, gates, threads, (
-                    "--item given with no preceding --reply. There is no "
+                    f"{flag} given with no preceding --reply. There is no "
                     "reply to bind"
                 )
             kind, target = pending
             if kind != "reply":
                 return replies, gates, threads, (
-                    f"--item {value} follows --{kind.replace('_', '-')} {target}, not --reply "
+                    f"{flag} {value} follows --{kind.replace('_', '-')} {target}, not --reply "
                     "— this send has no event to bind"
                 )
-            pending_items.append([value, []])
+            # A new ask rides the same binding list as an existing one —
+            # `NewItem` marks it so the two use sites (existence check,
+            # post-drain binding) can tell a headline from an id without a
+            # second list to keep in step.
+            pending_items.append([do_mod.NewItem(value) if dest == "new_item" else value, []])
             continue
         if dest == "part":
             if pending is None:
@@ -3278,6 +3306,38 @@ def _do_card(do_mod, outbox_dir: Path, filename: str) -> tuple[str, bool]:
         return f"card ✗ could not read {filename}: {exc}", False
     do_mod.write_card(outbox_dir, text)
     return "card ✓", True
+
+
+def _do_mint_item(headline: str, event_id: str, item_type: str) -> str | None:
+    """Mint one warp item for an ask heard in *event_id* — the exact write
+    ``brnrd item new`` makes (``items.allocate_id`` + ``items.new_item_text``,
+    one file), plus the say: ``refs:`` and ``says:`` carry the event id, so
+    the item is born already joined to the message that asked for it.
+    Returns the new id, or ``None`` (printed) when the warp is unreachable
+    or the write fails — the caller renders the miss; nothing else moves."""
+    import sys
+
+    from . import asks as asks_mod
+    from . import items as items_mod
+
+    warp_root, err = _item_context(create_dir=True)
+    if err:
+        print(f"[brnrd do] --new-item: {err}", file=sys.stderr)
+        return None
+    headline = " ".join(headline.split()).strip()
+    if not headline:
+        print("[brnrd do] --new-item: empty headline", file=sys.stderr)
+        return None
+    item_id = items_mod.allocate_id(warp_root, item_type)
+    text = items_mod.new_item_text(headline, item_type=item_type, refs=event_id)
+    path = warp_root / f"{item_id}.md"
+    try:
+        path.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        print(f"[brnrd do] --new-item: could not write {path}: {exc}", file=sys.stderr)
+        return None
+    asks_mod.stamp_say(warp_root, item_id, event_id)
+    return item_id
 
 
 def _do_promise(outbox_dir: Path, what: str, count: int) -> tuple[str, bool]:
@@ -3592,13 +3652,20 @@ def cmd_do(args):
     # headline match here, unlike `_resolve_item_arg`, since a caller typing
     # a wrong id should be told the id is wrong, not have it silently
     # resolved to something else it happens to fuzzy-match.
+    from . import do as do_mod
+
     all_item_ids = [
         item_id for _e, _b, item_bindings in replies for item_id, _parts in item_bindings
+        if not isinstance(item_id, do_mod.NewItem)
     ]
-    if all_item_ids:
+    any_new_items = any(
+        isinstance(item_id, do_mod.NewItem)
+        for _e, _b, item_bindings in replies for item_id, _parts in item_bindings
+    )
+    if all_item_ids or any_new_items:
         from . import items as items_mod
 
-        warp_root, warp_err = _item_context()
+        warp_root, warp_err = _item_context(create_dir=any_new_items)
         # Two failures, and only one of them is the caller's typo. With no
         # warp resolvable, `resolve_item(None, …)` answers None for *every*
         # id — so the unknown-id branch below would tell a caller its
@@ -3644,6 +3711,30 @@ def cmd_do(args):
             "Nothing was staged.",
             file=sys.stderr,
         )
+        return 1
+    # The ask contract (his 2026-09-23 steer, design-the-ask.md §The ask at
+    # the reply): every correspondent event yields at least one ask, and
+    # each is a say on an existing item (`--item`) or a new one
+    # (`--new-item`) — never defaulting to existing, never silently none.
+    # `--no-ask <why>` is the deliberate zero, recorded. Structural gate,
+    # not a config: an account with no warp has nothing to bind to, so the
+    # contract does not fire there (and ad-hoc callers stay unchanged).
+    if replies and not args.no_ask:
+        unbound = [event_id for event_id, _b, bindings in replies if not bindings]
+        if unbound:
+            _warp_root, warp_err = _item_context()
+            if warp_err is None:
+                print(
+                    "[brnrd do] --reply " + ", ".join(unbound) + " carries no ask: "
+                    "bind it with --item <id> (a say on an existing item) or "
+                    "--new-item \"<headline>\" (a new ask — several per event "
+                    "are fine), or state the deliberate zero with --no-ask "
+                    "\"<why>\". Never a default. Nothing was staged.",
+                    file=sys.stderr,
+                )
+                return 1
+    if args.no_ask and not replies:
+        print("[brnrd do] --no-ask only applies to --reply. Nothing was staged.", file=sys.stderr)
         return 1
 
     notes = args.note or []
@@ -3844,13 +3935,35 @@ def cmd_do(args):
                         # against one item are several says, not one; an
                         # item with no `--part` keeps the old two-field row.
                         for item_id, parts in item_bindings:
+                            minted = False
+                            if isinstance(item_id, do_mod.NewItem):
+                                # The mint rides the accepted reply, never
+                                # the staging: the acknowledgment *is* the
+                                # `understood` stage (design-the-ask.md),
+                                # so an item exists exactly when the
+                                # correspondent was told it was heard.
+                                new_id = _do_mint_item(
+                                    item_id.headline, event_id, args.new_item_type,
+                                )
+                                if new_id is None:
+                                    segments.append(
+                                        f"item {item_id.headline!r} ✗ mint failed"
+                                    )
+                                    any_failed = True
+                                    continue
+                                item_id, minted = new_id, True
                             if parts:
                                 for part in parts:
                                     do_mod.append_ask(outbox_dir, event_id, item_id, part=part)
-                                segments.append(f"item {item_id} part×{len(parts)} ✓")
+                                segments.append(
+                                    f"item {item_id}{' minted' if minted else ''} part×{len(parts)} ✓"
+                                )
                             else:
                                 do_mod.append_ask(outbox_dir, event_id, item_id)
-                                segments.append(f"item {item_id} ✓")
+                                segments.append(f"item {item_id}{' minted' if minted else ''} ✓")
+                    if not item_bindings and args.no_ask and do_mod.accepted(status):
+                        do_mod.append_no_ask(outbox_dir, event_id, args.no_ask)
+                        segments.append("no ask ✓")
                     if do_mod.accepted(status):
                         # #1914: the pile echo at the moment of sending — the
                         # boundary where the choice about length is still

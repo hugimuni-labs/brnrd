@@ -408,6 +408,42 @@ def stage_cut(
 ASKS_CONTROL_NAME = ".asks.jsonl"
 
 
+class NewItem:
+    """A ``--new-item`` headline riding a reply's item-binding list in place
+    of an id — minted only after that reply's drain verdict is accepted
+    (``cli._do_mint_item``), so the two use sites test ``isinstance`` rather
+    than guessing whether a string is an id or a headline."""
+
+    __slots__ = ("headline",)
+
+    def __init__(self, headline: str) -> None:
+        self.headline = headline
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"NewItem({self.headline!r})"
+
+
+def append_no_ask(outbox_dir: Path | None, event_id: str, why: str) -> None:
+    """Append the deliberate-zero row — ``{"event", "no_ask": why}`` — to
+    ``.asks.jsonl``. No ``item`` key, on purpose: every reader of this file
+    joins on ``event`` + ``item`` and skips rows without both, so the zero
+    is recorded without ever rendering as a say. Same never-raise shape as
+    :func:`append_ask`."""
+    if outbox_dir is None or not event_id:
+        return
+    record = {"event": event_id, "no_ask": " ".join(str(why or "").split()) or "unstated"}
+    try:
+        line = json.dumps(record, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return
+    path = outbox_dir / ASKS_CONTROL_NAME
+    try:
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except OSError:
+        pass
+
+
 def append_ask(
     outbox_dir: Path | None, event_id: str, item_id: str, *, part: str | None = None,
 ) -> None:

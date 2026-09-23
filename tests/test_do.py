@@ -1951,3 +1951,124 @@ def test_a_reply_accepted_with_an_advisory_still_owes_its_promise(
     rows = (outbox / ".promises.jsonl")
     assert rows.exists(), "an accepted reply owes its promise row"
     assert "commit" in rows.read_text(encoding="utf-8")
+
+
+# ── The ask at the reply (his 2026-09-23 steer): every correspondent event
+# yields ≥ 1 ask — a say on an existing item or a new one, never a default ──
+
+
+def test_do_new_item_mints_after_the_reply_is_accepted_and_binds_it(tmp_path, monkeypatch, capsys):
+    repo = _repo_with_warp_item(tmp_path, monkeypatch)
+    capsys.readouterr()
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
+
+    assert main([
+        "do", "--reply", "evt-9", "--new-item", "The reset is an advisory, measured",
+        "--body", "heard", "--no-follow-up",
+    ]) == 0
+    out = capsys.readouterr().out.strip()
+    assert out == "reply evt-9 ✓ · item w-2 minted ✓"
+    rows = [
+        json.loads(line)
+        for line in (outbox / ".asks.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows == [{"event": "evt-9", "item": "w-2"}]
+    from brr import account, items as items_mod
+
+    ctx = account.resolve_context(repo, {}, create=False)
+    warp_root = account.work_surface_path(ctx) / "warp"
+    text = (warp_root / "w-2.md").read_text(encoding="utf-8")
+    assert text.startswith("# The reset is an advisory, measured")
+    assert "type: action" in text
+    assert "refs: evt-9" in text
+    assert "says: evt-9" in text
+    assert items_mod.resolve_item(warp_root, "w-2") is not None
+
+
+def test_do_new_item_is_not_minted_when_the_reply_is_refused(tmp_path, monkeypatch, capsys):
+    repo = _repo_with_warp_item(tmp_path, monkeypatch)
+    capsys.readouterr()
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    monkeypatch.setattr(
+        time, "sleep",
+        _consume_after_one_sleep(
+            outbox, "do-*-reply-*.md",
+            notice={"at": "2026-09-23T00:00:00Z", "kind": "refused",
+                    "text": "reply refused: event evt-9 not pending"},
+        ),
+    )
+
+    assert main([
+        "do", "--reply", "evt-9", "--new-item", "Never minted", "--body", "x", "--no-follow-up",
+    ]) == 1
+    from brr import account
+
+    ctx = account.resolve_context(repo, {}, create=False)
+    warp_root = account.work_surface_path(ctx) / "warp"
+    assert not (warp_root / "w-2.md").exists()
+    assert not (outbox / ".asks.jsonl").exists()
+
+
+def test_do_reply_with_a_warp_and_no_ask_disposition_is_refused_before_staging(tmp_path, monkeypatch, capsys):
+    _repo_with_warp_item(tmp_path, monkeypatch)
+    capsys.readouterr()
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+
+    assert main(["do", "--reply", "evt-9", "--body", "hi", "--no-follow-up"]) == 1
+    err = capsys.readouterr().err
+    assert "--reply evt-9 carries no ask" in err
+    assert "--new-item" in err and "--no-ask" in err and "Never a default" in err
+    assert not list(outbox.glob("do-*")), "nothing staged"
+
+
+def test_do_no_ask_records_the_deliberate_zero(tmp_path, monkeypatch, capsys):
+    _repo_with_warp_item(tmp_path, monkeypatch)
+    capsys.readouterr()
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
+
+    assert main([
+        "do", "--reply", "evt-9", "--body", "thanks", "--no-follow-up",
+        "--no-ask", "a thank-you, no ask in it",
+    ]) == 0
+    out = capsys.readouterr().out.strip()
+    assert out == "reply evt-9 ✓ · no ask ✓"
+    rows = [
+        json.loads(line)
+        for line in (outbox / ".asks.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows == [{"event": "evt-9", "no_ask": "a thank-you, no ask in it"}]
+    # The zero never renders as a say.
+    from brr import do as do_mod
+
+    assert do_mod.read_asks(outbox) == []
+
+
+def test_do_several_asks_in_one_event_mint_several_items(tmp_path, monkeypatch, capsys):
+    _repo_with_warp_item(tmp_path, monkeypatch)
+    capsys.readouterr()
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
+
+    assert main([
+        "do", "--reply", "evt-9", "--item", "w-1", "--new-item", "Ask two", "--new-item", "Ask three",
+        "--body", "heard all three", "--no-follow-up",
+    ]) == 0
+    out = capsys.readouterr().out.strip()
+    assert out == "reply evt-9 ✓ · item w-1 ✓ · item w-2 minted ✓ · item w-3 minted ✓"
