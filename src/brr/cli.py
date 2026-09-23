@@ -3340,6 +3340,19 @@ def _do_mint_item(headline: str, event_id: str, item_type: str) -> str | None:
     return item_id
 
 
+def _do_stamp_say(item_id: str, event_id: str) -> None:
+    """Best-effort ``asks.stamp_say`` for an existing item bound with
+    ``--item`` — the file write that makes the say visible where the
+    dashboard reads. Silent on any failure: the ``.asks.jsonl`` row already
+    landed and is the run's own record."""
+    from . import asks as asks_mod
+
+    warp_root, err = _item_context()
+    if err:
+        return
+    asks_mod.stamp_say(warp_root, item_id, event_id)
+
+
 def _do_promise(outbox_dir: Path, what: str, count: int) -> tuple[str, bool]:
     """Append one blueprint row for ``do --reply --promise`` — through
     :func:`promises.append`, the same writer ``brnrd promise`` uses, never a
@@ -3961,6 +3974,15 @@ def cmd_do(args):
                             else:
                                 do_mod.append_ask(outbox_dir, event_id, item_id)
                                 segments.append(f"item {item_id}{' minted' if minted else ''} ✓")
+                            if not minted:
+                                # The say reaches the item *file*, not only
+                                # this run's `.asks.jsonl`: the dashboard
+                                # reads the pushed item files and never the
+                                # run's disk, so a say bound mid-thought was
+                                # invisible until closeout captured the run
+                                # (measured 2026-09-23: three items bound over
+                                # eight hours, `says: 0` on the console).
+                                _do_stamp_say(item_id, event_id)
                     if not item_bindings and args.no_ask and do_mod.accepted(status):
                         do_mod.append_no_ask(outbox_dir, event_id, args.no_ask)
                         segments.append("no ask ✓")

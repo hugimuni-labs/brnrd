@@ -664,6 +664,14 @@ def test_do_item_binds_reply_and_writes_asks_jsonl_row(tmp_path, monkeypatch, ca
         for line in (outbox / ".asks.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert rows == [{"event": "evt-1", "item": "w-1"}]
+    # And the say reached the item file itself — the surface the dashboard
+    # reads — not only the run's own binding file.
+    from brr import account
+
+    ctx = account.resolve_context(tmp_path / "repo", {}, create=False)
+    text = (account.work_surface_path(ctx) / "warp" / "w-1.md").read_text(encoding="utf-8")
+    assert "says: evt-1" in text
+    assert "stage: understood" in text
 
 
 def test_do_item_unknown_item_is_refused_before_staging(tmp_path, monkeypatch, capsys):
@@ -1986,6 +1994,9 @@ def test_do_new_item_mints_after_the_reply_is_accepted_and_binds_it(tmp_path, mo
     assert "type: action" in text
     assert "refs: evt-9" in text
     assert "says: evt-9" in text
+    # Born understood: the acknowledgment is the second stage, so the
+    # console's buckets never file a just-minted ask as unaddressed.
+    assert "stage: understood" in text
     assert items_mod.resolve_item(warp_root, "w-2") is not None
 
 

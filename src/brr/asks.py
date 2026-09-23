@@ -673,7 +673,13 @@ def stamp_say(warp_root: Path | None, item_id: str, event_id: str) -> bool:
     lines = items_mod._edit_lines(path)
     if lines is None:
         return False
-    if not _append_to_ask_list_row(lines, "says", event_id):
+    changed = _append_to_ask_list_row(lines, "says", event_id)
+    # A say is the acknowledgment: an item with no stage yet has just been
+    # *understood* (design-the-ask.md's second stage). Never lowers a stage
+    # already set — `making`/`delivered` stay where the work put them.
+    if not _ask_row_value(lines, "stage"):
+        changed = _set_ask_row(lines, "stage", "understood") or changed
+    if not changed:
         return False
     items_mod._write_lines(path, lines)
     return True
