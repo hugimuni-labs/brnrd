@@ -317,6 +317,36 @@ def purge_removed_scope(
                 surface_changed = True
             continue
 
+        if purge == "corpus_repo":
+            # Bases name their repo, so withdrawal can preserve sibling bases.
+            # Retaining any corpus slice retains the repo's base metadata.
+            if lane != "corpus" or "corpus" not in removed_lanes:
+                continue
+            account = db.get(Account, repo.account_id)
+            if account is None:
+                continue
+            raw = getattr(account, field)
+            try:
+                stored_bases = json.loads(raw or "{}")
+            except (TypeError, ValueError):
+                stored_bases = None
+            if not isinstance(stored_bases, dict):
+                # Same rule as `_json_list`: cannot tell whose entries
+                # these are ⇒ erase the whole field. On a withdrawal the
+                # safe error is always to delete more.
+                setattr(account, field, _column_reset_value(column))
+                surface_changed = True
+                continue
+            kept_bases = {
+                key: value
+                for key, value in stored_bases.items()
+                if str(key).casefold() != wanted_label
+            }
+            if kept_bases != stored_bases:
+                setattr(account, field, json.dumps(kept_bases, separators=(",", ":")))
+                surface_changed = True
+            continue
+
         raise RuntimeError(f"unknown publish purge strategy {purge!r}")
 
     if surface_changed:

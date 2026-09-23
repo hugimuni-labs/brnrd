@@ -872,6 +872,53 @@ def public_row(row: dict[str, Any]) -> dict[str, Any]:
     )}
 
 
+# Receipt fields can also contain prose; only these shapes denote references.
+_HASH_NUMBER_RE = re.compile(r"^#([1-9]\d*)$")
+_MD_NAME_RE = re.compile(r"^[\w.-]+\.md$")
+_WARP_ITEM_REF_RE = re.compile(r"^w-\d+$")
+
+
+def resolve_receipts(row: Mapping[str, Any], bases: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Resolve recognized return/receipt tokens; missing or ambiguous bases stay unlinked.
+
+    Ask rows carry no repo attribution. Forge refs need one repo; knowledge
+    refs need one distinct base (several repos can share the same knowledge).
+    """
+    from . import forges
+
+    base = next(iter(bases.values())) if len(bases) == 1 else None
+    kb_bases = {
+        value["kb"].rstrip("/") for value in bases.values()
+        if isinstance(value, Mapping) and isinstance(value.get("kb"), str) and value["kb"]
+    }
+    kb_base = next(iter(kb_bases)) if len(kb_bases) == 1 else None
+    tokens = dict.fromkeys(
+        token for raw in (row.get("return"), row.get("receipt"))
+        for token in _split(raw or "")
+    )
+    receipts = []
+    for token in tokens:
+        url = None
+        if match := _HASH_NUMBER_RE.fullmatch(token):
+            if isinstance(base, Mapping) and base.get("forge") and base.get("forge_kind"):
+                forge = forges.detect_forge(base["forge"], override_kind=base["forge_kind"])
+                if forge is not None:
+                    # A repo label may be an alias; the remote owns the URL path.
+                    url = forges.pull_request_url(
+                        base["forge"], f"{forge.owner}/{forge.repo}", match.group(1),
+                        override_kind=forge.kind,
+                    )
+        elif _MD_NAME_RE.fullmatch(token):
+            url = f"{kb_base}/{token}" if kb_base else None
+        elif _WARP_ITEM_REF_RE.fullmatch(token):
+            # There is no dashboard route for an individual warp item yet.
+            pass
+        else:
+            continue
+        receipts.append({"ref": token, "url": url})
+    return receipts
+
+
 def relative(then: str | None, now: _dt.datetime) -> str:
     parsed = _parse_iso(then) if then else None
     if parsed is None:

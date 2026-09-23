@@ -380,6 +380,108 @@ def test_narrowing_purges_only_removed_scope_and_keeps_the_other_repo():
                 ]
 
 
+def test_corpus_repo_purge_scopes_to_the_repo_whose_consent_narrowed_to_nothing():
+    """design-the-bases-the-dashboard-needs.md: `bases_json` carries real
+    per-repo attribution (`surface_json` cannot), so its purge scopes to
+    exactly the narrowing repo — narrower than `surface_json`'s own
+    account-wide "no repo can be named" erasure, and correctly so."""
+    client = _client()
+    _login(client)
+    everything = ",".join(cloud._PUBLISH_TICK_ORDER)
+    for name in ("Gurio/victim", "Gurio/survivor"):
+        assert client.post(
+            "/v1/repos/connect",
+            json={"repo_full_name": name, "publish_layers": everything},
+        ).status_code == 200
+
+    with client.app.state.SessionLocal() as db:
+        victim = db.query(Repo).filter(Repo.repo_full_name == "Gurio/victim").one()
+        account = db.get(Account, victim.account_id)
+        account.bases_json = json.dumps(
+            {
+                "Gurio/victim": {"forge": "https://github.com/Gurio/victim", "forge_kind": "github", "kb": None},
+                "Gurio/survivor": {"forge": "https://github.com/Gurio/survivor", "forge_kind": "github", "kb": None},
+            }
+        )
+        victim_id, account_id = victim.id, victim.account_id
+        db.commit()
+
+    # Full withdrawal — every corpus slice this repo had is gone.
+    response = client.post(f"/v1/repos/{victim_id}/publish-layers", json={"publish_layers": "quota"})
+    assert response.status_code == 200, response.text
+
+    with client.app.state.SessionLocal() as db:
+        bases = json.loads(db.get(Account, account_id).bases_json)
+        assert list(bases.keys()) == ["Gurio/survivor"]
+
+
+def test_corpus_repo_purge_case_insensitive_and_does_not_fire_on_a_partial_slice_narrowing():
+    """A repo that keeps *any* corpus slice still consents to "corpus" as a
+    lane (`lane_permitted`'s own reading) — a base has no slice of its own
+    to narrow, so it must survive a narrowing that leaves the repo with
+    at least one slice. Matched case-insensitively, mirroring every other
+    repo-label comparison in this module (`_subject_repos`)."""
+    client = _client()
+    _login(client)
+    everything = ",".join(cloud._PUBLISH_TICK_ORDER)
+    assert client.post(
+        "/v1/repos/connect",
+        json={"repo_full_name": "gurio/Both-Slices", "publish_layers": everything},
+    ).status_code == 200
+
+    with client.app.state.SessionLocal() as db:
+        repo = db.query(Repo).filter(Repo.repo_full_name == "gurio/Both-Slices").one()
+        account = db.get(Account, repo.account_id)
+        account.bases_json = json.dumps(
+            {"Gurio/Both-Slices": {"forge": "https://github.com/Gurio/Both-Slices", "forge_kind": "github", "kb": None}}
+        )
+        repo_id, account_id = repo.id, repo.account_id
+        db.commit()
+
+    # Narrows `authored`/`runs` away but keeps `knowledge` — corpus stays a
+    # permitted lane for this repo, so its base must survive.
+    response = client.post(f"/v1/repos/{repo_id}/publish-layers", json={"publish_layers": "knowledge"})
+    assert response.status_code == 200, response.text
+
+    with client.app.state.SessionLocal() as db:
+        bases = json.loads(db.get(Account, account_id).bases_json)
+        assert list(bases.keys()) == ["Gurio/Both-Slices"]
+
+    # Now drop the last slice — corpus leaves this repo's lanes entirely.
+    response = client.post(f"/v1/repos/{repo_id}/publish-layers", json={"publish_layers": "quota"})
+    assert response.status_code == 200, response.text
+
+    with client.app.state.SessionLocal() as db:
+        assert json.loads(db.get(Account, account_id).bases_json) == {}
+
+
+def test_corpus_repo_purge_malformed_stored_bases_erases_the_whole_field():
+    """Same "the safe error is always to delete more" rule as
+    `_json_list`'s own malformed-mirror handling — an unparseable
+    `bases_json` cannot be filtered by label, so it is erased outright
+    rather than left standing or blocking the withdrawal."""
+    client = _client()
+    _login(client)
+    everything = ",".join(cloud._PUBLISH_TICK_ORDER)
+    assert client.post(
+        "/v1/repos/connect",
+        json={"repo_full_name": "Gurio/corrupt-bases", "publish_layers": everything},
+    ).status_code == 200
+
+    with client.app.state.SessionLocal() as db:
+        repo = db.query(Repo).filter(Repo.repo_full_name == "Gurio/corrupt-bases").one()
+        account = db.get(Account, repo.account_id)
+        account.bases_json = "not json at all"
+        repo_id, account_id = repo.id, repo.account_id
+        db.commit()
+
+    response = client.post(f"/v1/repos/{repo_id}/publish-layers", json={"publish_layers": "none"})
+    assert response.status_code == 200, response.text
+
+    with client.app.state.SessionLocal() as db:
+        assert db.get(Account, account_id).bases_json == "{}"
+
+
 def test_publish_purge_coverage_is_derived_from_the_lane_vocabulary(monkeypatch):
     assert publish_scope.purge_storage_lanes() == frozenset(cloud._PUBLISH_TICK_ORDER)
 
