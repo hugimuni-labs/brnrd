@@ -662,6 +662,23 @@ def mark_in_hand(warp_root: Path | None, item_id: str, *, run_id: str) -> bool:
     return changed
 
 
+def stamp_say(warp_root: Path | None, item_id: str, event_id: str) -> bool:
+    """Append *event_id* to the item's ``says:`` row, idempotently — the
+    same row ``accept``/``reroute`` stamp (:func:`apply_inbound_directive`)
+    and the one ``build_asks`` reads first. Returns whether the file
+    changed; ``False`` (never raises) when the item is unresolvable."""
+    path = items_mod.resolve_item(warp_root, item_id) if warp_root else None
+    if path is None or not event_id:
+        return False
+    lines = items_mod._edit_lines(path)
+    if lines is None:
+        return False
+    if not _append_to_ask_list_row(lines, "says", event_id):
+        return False
+    items_mod._write_lines(path, lines)
+    return True
+
+
 def mark_delivered(warp_root: Path | None, item_id: str, *, receipt: str) -> bool:
     """The derived half of "delivered" (his 2026-09-22 steer: "at run end,
     if the run's produce names the item … the daemon sets `stage:
