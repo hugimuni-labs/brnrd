@@ -648,13 +648,67 @@ def _corpus_resolve(brr_dir: Path):
         return None
 
 
-def _corpus_fingerprint(files: list, knowledge_dir: Path) -> str:
+def _repo_forge_base(repo_root: Path, cfg: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Resolve the remote's web home, including configured forge overrides."""
+    try:
+        remote = gitops.default_remote(repo_root) or "origin"
+        url = gitops.remote_url(repo_root, remote)
+    except Exception:  # noqa: BLE001 - a missing/unreadable remote is not an error here
+        return None, None
+    if not url:
+        return None, None
+    from .. import forges
+
+    match = forges.detect_forge(
+        url,
+        override_kind=cfg.get("forge.kind") or None,
+        override_url_base=cfg.get("forge.url_base") or None,
+    )
+    if match is None:
+        return None, None
+    return f"https://{match.host}/{match.owner}/{match.repo}", match.kind
+
+
+def _corpus_bases(brr_dir: Path) -> dict[str, dict[str, Any]]:
+    """Publish the local forge and knowledge bases the hosted reader lacks."""
+    from .. import account as account_mod, config as conf, knowledge
+
+    repo_root = brr_dir.parent
+    try:
+        cfg = conf.load_config(repo_root)
+        ctx = account_mod.resolve_context(repo_root, cfg, create=False)
+    except Exception:
+        return {}
+
+    bases: dict[str, dict[str, Any]] = {}
+    for label, repo in sorted(ctx.repos.items()):
+        if account_mod.is_home_label(label):
+            continue
+        try:
+            cfg = conf.load_config(repo.root)
+        except Exception:
+            cfg = {}
+        forge_url, forge_kind = _repo_forge_base(repo.root, cfg)
+        try:
+            kb_url = knowledge.kb_base_url(repo.root, cfg)
+        except Exception:
+            kb_url = None
+        if forge_url is not None or kb_url is not None:
+            bases[label] = {"forge": forge_url, "forge_kind": forge_kind, "kb": kb_url}
+    return bases
+
+
+def _corpus_fingerprint(
+    files: list, knowledge_dir: Path, bases: dict[str, dict[str, Any]] | None = None,
+) -> str:
     """A cheap change signal for the corpus — no full reads of the large layer.
 
     Authored pages are few, so their content is hashed directly. Knowledge and
     run pages are many and large, so they contribute only (path, size,
     mtime) plus the knowledge repo HEAD sha — enough to notice a curate or a
-    sync without reading the 890KB log on every heartbeat.
+    sync without reading the 890KB log on every heartbeat. ``bases`` folds
+    in too (small, so hashed whole) — a forge remote or kb link changing
+    with no file touched must still trigger a republish.
     """
     h = hashlib.sha256()
     for f in files:
@@ -679,6 +733,8 @@ def _corpus_fingerprint(files: list, knowledge_dir: Path) -> str:
     head = gitops.rev_parse(knowledge_dir, "HEAD") if knowledge_dir.is_dir() else None
     if head:
         h.update(head.encode("utf-8"))
+    if bases:
+        h.update(json.dumps(bases, sort_keys=True, separators=(",", ":")).encode("utf-8"))
     return h.hexdigest()
 
 
@@ -766,7 +822,8 @@ def _publish_corpus(brr_dir: Path, inbox_dir: Path | None, state: dict, response
     # #502: bound the mirror *before* fingerprinting so a window slide (a run
     # aging past the cutoff) reads as a change and triggers the trimming PUT.
     files = _publish_selection(files, _publish_config(brr_dir))
-    fingerprint = _corpus_fingerprint(files, knowledge_dir)
+    bases = _corpus_bases(brr_dir)
+    fingerprint = _corpus_fingerprint(files, knowledge_dir, bases)
     key = str(brr_dir)
     if _corpus_publish_hash.get(key) == fingerprint:
         return  # unchanged since the last publish — skip the network round-trip
@@ -780,7 +837,7 @@ def _publish_corpus(brr_dir: Path, inbox_dir: Path | None, state: dict, response
             "PUT",
             "/v1/daemons/surface",
             token=state["token"],
-            json={"files": payload},
+            json={"files": payload, "bases": bases},
             timeout=15,
         )
         # Mark clean only after a successful PUT so a failed publish retries.

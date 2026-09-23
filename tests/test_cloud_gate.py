@@ -1024,6 +1024,95 @@ def test_corpus_fingerprint_tolerates_missing_knowledge_root(tmp_path):
     assert digest
 
 
+def test_corpus_fingerprint_changes_with_bases_alone(tmp_path):
+    """A forge remote or kb link changing with no file touched must still
+    trigger a republish — `bases` folds into the change signal even when
+    `files`/`knowledge_dir` are identical."""
+    missing_knowledge = tmp_path / "missing-knowledge"
+    without = cloud._corpus_fingerprint([], missing_knowledge)
+    with_bases = cloud._corpus_fingerprint(
+        [], missing_knowledge, bases={"g/r": {"forge": "https://github.com/g/r"}},
+    )
+    assert without != with_bases
+
+
+def test_corpus_bases_resolves_forge_and_kind_from_the_remote(tmp_path):
+    """The common case: a bare github.com remote, no `.brr/config` override —
+    `forge_kind` comes from the host pattern alone."""
+    brr_dir = tmp_path / ".brr"
+    repo_root = brr_dir.parent
+    repo_root.mkdir(parents=True, exist_ok=True)
+    init_git_repo(repo_root)
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:gurio/brr.git"],
+        cwd=repo_root, check=True,
+    )
+    from brr import account
+
+    account.resolve_context(repo_root, create=True)
+
+    bases = cloud._corpus_bases(brr_dir)
+
+    assert bases == {
+        "gurio/brr": {"forge": "https://github.com/gurio/brr", "forge_kind": "github", "kb": None},
+    }
+
+
+def test_corpus_bases_honours_the_forge_kind_and_url_base_override(tmp_path):
+    """#852's lesson, applied here: a self-hosted remote reached only by a
+    bare internal hostname must not silently read as an unknown/guessed
+    kind — the `.brr/config` `[forge]` override is authoritative, exactly
+    as `forge_pr_cache._forge_kind_and_label` already honours it."""
+    brr_dir = tmp_path / ".brr"
+    repo_root = brr_dir.parent
+    repo_root.mkdir(parents=True, exist_ok=True)
+    init_git_repo(repo_root)
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@code.internal:group/proj.git"],
+        cwd=repo_root, check=True,
+    )
+    (repo_root / ".brr").mkdir(exist_ok=True)
+    (repo_root / ".brr" / "config").write_text(
+        "forge.kind=gitlab\nforge.url_base=git.example.com\n", encoding="utf-8",
+    )
+    from brr import account
+
+    from brr import config
+
+    ctx = account.resolve_context(repo_root, config.load_config(repo_root), create=True)
+    [repo_label] = ctx.repos.keys()
+
+    bases = cloud._corpus_bases(brr_dir)
+
+    assert bases == {
+        repo_label: {
+            "forge": "https://git.example.com/group/proj",
+            "forge_kind": "gitlab",
+            "kb": None,
+        },
+    }
+
+
+def test_corpus_bases_omits_a_repo_that_resolves_neither_forge_nor_kb(tmp_path):
+    """A repo with no remote at all contributes nothing — never an all-null row."""
+    brr_dir = tmp_path / ".brr"
+    repo_root = brr_dir.parent
+    repo_root.mkdir(parents=True, exist_ok=True)
+    init_git_repo(repo_root)  # no remote added
+    from brr import account
+
+    account.resolve_context(repo_root, create=True)
+
+    assert cloud._corpus_bases(brr_dir) == {}
+
+
+def test_corpus_bases_empty_when_no_account_context_resolves(tmp_path):
+    """Same posture as `_corpus_resolve`: a failure to resolve an account
+    context is a normal shape, not an error — empty, not a raise."""
+    brr_dir = tmp_path / "nowhere" / ".brr"
+    assert cloud._corpus_bases(brr_dir) == {}
+
+
 def test_corpus_payload_stamps_committed_at_from_git_and_falls_back_to_mtime(tmp_path):
     """design-the-ask.md §Done, reopened, linked: "the hosted order needs the
     publisher to stamp each surface file's last commit time" — one ``git

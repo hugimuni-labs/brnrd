@@ -138,6 +138,9 @@ def _migrate_accounts(conn: Connection) -> None:
     conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS surface_json TEXT DEFAULT '[]'"))
     conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS surface_updated_at TIMESTAMP"))
 
+    # Additive cache column; the next surface publish fills it, no backfill.
+    conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS bases_json TEXT DEFAULT '{}'"))
+
     # Billing (#53) — tier + Stripe customer link; new billing tables come
     # from create_all.
     conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS tier VARCHAR(32) DEFAULT 'free'"))
