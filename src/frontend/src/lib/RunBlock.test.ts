@@ -25,6 +25,12 @@ function pick(overrides: Partial<PickRow> & Pick<PickRow, 'id' | 'label'>): Pick
 		note: null,
 		color: '#f59e0b',
 		urgency: 'calm',
+		// the-seat-stays-on-top: fixtures default to "the ordinary lead" —
+		// a seat, no strand badge, no runner label — same as every row this
+		// file's older fixtures already stood for before the split existed.
+		isSeat: true,
+		isStrand: false,
+		core: null,
 		serves: [],
 		crosses: [],
 		...overrides

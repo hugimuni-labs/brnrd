@@ -80,6 +80,11 @@
 		crossingIndex = new Map(),
 		topicFaces = new Map()
 	}: Props = $props();
+	// the-seat-stays-on-top: `pickRows` (pickLane.ts) orders `burning` with
+	// the pinned seat row first, strands behind it — so `burning[0]` is the
+	// seat whenever one is live, not whichever run happened to sort first on
+	// the wire. This head never draws more than the lead, so that ordering
+	// guarantee is the whole fix on this side of the dock.
 	let lead = $derived(burning[0] ?? null);
 	// The identity the head wears. `machineHeadRun` picks the id; falling back
 	// to `lead` itself (not merely its id) covers the one gap between them —
