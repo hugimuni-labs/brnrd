@@ -5,6 +5,20 @@
 	const contactHref =
 		'mailto:alexandra@hugimuni.fr?subject=Meet%20brnrd%20at%20Web%20Summit%20Lisbon%202026';
 	const discountCode = 'HUGIMUNISAS_LIS26';
+	let copyState = $state<'idle' | 'copied' | 'failed'>('idle');
+
+	async function copyDiscountCode() {
+		try {
+			await navigator.clipboard.writeText(discountCode);
+			copyState = 'copied';
+		} catch {
+			copyState = 'failed';
+		}
+
+		window.setTimeout(() => {
+			copyState = 'idle';
+		}, 1800);
+	}
 </script>
 
 <svelte:head>
@@ -82,12 +96,20 @@
 			<p class="mt-4 text-sm leading-relaxed text-stone-400">
 				Use this code at checkout:
 			</p>
-			<div
-				class="mt-4 overflow-x-auto border border-stone-700 bg-black/20 px-4 py-4 font-mono text-lg font-semibold tracking-wide text-amber-200 md:text-xl"
-				aria-label="Web Summit discount code"
+			<button
+				type="button"
+				onclick={copyDiscountCode}
+				class="group mt-4 flex w-full items-center justify-between gap-4 overflow-x-auto border border-stone-700 bg-black/20 px-4 py-4 text-left font-mono text-lg font-semibold tracking-wide text-amber-200 transition-colors hover:border-amber-700/70 hover:bg-amber-950/20 focus-visible:border-amber-600 focus-visible:outline-none md:text-xl"
+				aria-label="Copy Web Summit discount code"
 			>
-				{discountCode}
-			</div>
+				<span>{discountCode}</span>
+				<span
+					class="shrink-0 text-[10px] font-normal tracking-wider text-ink-quiet uppercase group-hover:text-stone-300"
+					aria-live="polite"
+				>
+					{copyState === 'copied' ? 'copied ✓' : copyState === 'failed' ? 'copy failed' : 'copy'}
+				</span>
+			</button>
 			<p class="mt-3 text-xs leading-relaxed text-ink-quiet">
 				Network code provided by Web Summit. Discount applies to General Admission tickets.
 			</p>
