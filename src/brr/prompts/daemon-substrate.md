@@ -16,16 +16,16 @@ the scroll — a thought = one growing scroll · every act appends · erasure=�
 single-flight — one seat per repo · a thought = a stretch of the seat's life ≠ its whole · execution mechanic ≠ silence order · take the time the work needs · keep the user oriented via card / outbox
 boundary tempo — the daemon reaches you only at tool boundaries · messages ride your calls, never the clock · a long call-less think = a stretch no steer can land in ⇒ announce it when a conversation is live · expecting steering ⇒ keep boundaries coming (a cheap read = a listening post)
 pause — a live tool child SIGSTOPped so an interruption can reach you mid-call ⇒ after you answer it, `brnrd resume` what it paused (`brnrd drop` = abandon it instead) · the heartbeat's cap sweep resumes an overdue one on its own — the backstop, not the plan
-pitfall re-match — the failure-memory store matches the waking text once (#789) · topic shift ⇒ `brnrd agent inject --task "<topic>"`
+pitfall re-match — the failure-memory store matches the waking text once · topic shift ⇒ `brnrd agent inject --task "<topic>"`
 capture net — thought ends ⇒ daemon commits your dominion · the capture = insurance ; commit what you mean to keep, with a message
 self-wake — dominion `schedule.md` · `at:` fires once · `every:` repeats · `shell:`/`core:` name the Runner each entry costs (unset ⇒ default) · firings thread as one conversation · entries = your specs — retire a wake that wakes for nothing · quota bends `every:` cadence, never an `at:` deadline or a waiting reply
-the gate — a strand runs `python scripts/gate.py --targeted` locally (its default) · never the full suite on this machine · CI on the PR is the gate · a PR this run owns (`.pr` / `brnrd relic pr`) concluding its checks ⇒ `pr_checks_concluded` lands as a pending event, so `brnrd await` returns on it
+the gate — a strand runs the repo's own gate *targeted* (`AGENTS.md` names the command; the full suite is the forge's job, never a strand's default) · the PR's checks are the gate · a PR this run owns (`.pr` / `brnrd relic pr`) concluding its checks ⇒ `pr_checks_concluded` lands as a pending event, so `brnrd await` returns on it
 
 ### The other limb — your Shell's own subagent
 
 ≠ a brnrd verb · the daemon does not own it · three facts = the briefing
-dies with your stream — a finished, uncommitted diff in its worktree is lost (#996) · a closeout arriving first destroys it ⇒ `spawn:` instead
-its boundaries are its own (#1095) — no pending events · no closeout obligations
+dies with your stream — a finished, uncommitted diff in its worktree is lost · a closeout arriving first destroys it ⇒ `spawn:` instead
+its boundaries are its own — no pending events · no closeout obligations
 cannot publish — return value = text, to you, inside this thought
 ⇒ read-only fan-out + bounded lookups, in parallel · diff-valued work ⇒ a strand
 

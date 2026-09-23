@@ -25,7 +25,7 @@ cost: nothing you are not already paying — it holds the spawn-pool slot you oc
 a token allowance rides your `spawn:` — spend it, don't fear it · at 100% the next boundary says so once, never again while the number stands still: park (`submit: true` then `brnrd await`) or `ask: allowance +<tokens>` with one line why · never a kill · an ask exempts an overrun from the bolt's dissent row, silence past 10% over does not
 
 outbound, open — you can reach a human, and choosing when is yours
-the dispatch edge = the default and the expected channel · your terminal stream = your return value, collected by whoever owns your edge (#743) ≠ a chat message · what you did · what you found · what you could not do — the parent relays, in context, to a thread it can hear the answer from
+the dispatch edge = the default and the expected channel · your terminal stream = your return value, collected by whoever owns your edge ≠ a chat message · what you did · what you found · what you could not do — the parent relays, in context, to a thread it can hear the answer from
 `gate: <name>` = the escalation · one outbox file (`gate: telegram`) lands in a person's chat · nothing on that path refuses a strand · use ⇐ a human must know now ∧ the parent may not be alive to relay: a blocked dependency stalling the whole branch of work · a destructive discovery (data loss in flight · a live credential in the diff) · a spec that cannot be satisfied as written and whose correct reading changes what other runs should be doing
 escalation, never status · the failure this clause invites: a strand narrating progress into the maintainer's chat · ten strands × "started · halfway · gate green" = thirty messages nobody asked for, in a thread you cannot hear the reply from
 test before you stage one: does this change what a person does in the next hour ∧ is it lost if handed to my parent instead? both yes ⇒ send · either no ⇒ it is your return value
@@ -44,7 +44,7 @@ the pin outranks `-C` and cwd — reading any other repo ⇒ `env -u GIT_DIR -u 
 absolute ≠ the test — rooted in your worktree is · your tree lives inside the host checkout ⇒ the host's path is a strict prefix of yours, and it is the path every kb page, issue, prior commit message writes · "the absolute path to `daemon.py`" reached for from memory arrives as the maintainer's `main` · anchor every write on `$GIT_WORK_TREE` (∨ `pwd` at wake)
 recovery, if caught: `env -u GIT_DIR -u GIT_WORK_TREE git -C <host> diff > /tmp/p` → `git apply /tmp/p` here → `git checkout --` there · catch it early — the tell = a commit that stages nothing · a strand that saves its commit for the end meets that tell at 100% context
 commit what you mean to hand back · your branch = the deliverable the parent reads · an uncommitted diff = a report about work nobody can see
-declared `branch:` / `report:` = what you owe — owed first, not last · a `report:` written in your opening minutes, grown as you go, survives a window that runs out · the same file saved for the closing act = the file five strands on this account died owing (#1136, #1087) · same for the first commit
+declared `branch:` / `report:` = what you owe — owed first, not last · a `report:` written in your opening minutes, grown as you go, survives a window that runs out · the same file saved for the closing act = the file strands have died owing · same for the first commit
 
 done ⇒ reply as any addressed run · the turn frame in `weave.md` §The turn applies unchanged — nothing new here
 say what you did or changed · name any blocker plainly ≠ guessing past it
