@@ -120,7 +120,7 @@ def test_json_shape(tmp_path, monkeypatch, capsys):
     _five(tmp_path, monkeypatch)
     rows = json.loads(_asks(capsys, "--json"))
     assert [r["id"] for r in rows] == ["g-1", "w-1", "w-2", "w-3", "w-4"]
-    keys = {"id", "title", "type", "return", "stage", "touched_at", "says", "stale"}
+    keys = {"id", "title", "type", "return", "stage", "touched_at", "says", "stale", "sign"}
     assert keys == set(rows[0])
     by = {r["id"]: r for r in rows}
     assert by["w-2"]["return"] == "a page" and by["w-2"]["stage"] == "making"
