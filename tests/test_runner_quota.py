@@ -293,6 +293,103 @@ def test_binding_quota_remaining_pct_ignores_missing_fields_in_mix():
     assert runner_quota.binding_quota_remaining_pct(levels) == 60.0
 
 
+# ── #2084: an unproven `credits` exhaustion must not bind ───────────────
+
+
+def test_binding_quota_remaining_pct_run_ledger_sv6h_reading_must_not_kill():
+    # The exact `run_ledger_last_levels` shape recorded on run-260921-2312-sv6h
+    # at 01:36:21Z (#2084): a transient rollout event with no window data at
+    # all, only a `credits` block claiming exhaustion on what is, by every
+    # other reading that account ever produced, a subscription (window-quota)
+    # plan. No `plan_type` rode this particular reading either. Absent proof
+    # this account's credits are real, the binding percent must come back
+    # unproven — never a fabricated 0%.
+    levels = {
+        "quota": {
+            "buckets": {"credits": {"remaining_percentage": 0.0}},
+            "credits_balance": "0",
+            "credits_exhausted": True,
+            "summary": "credits exhausted (balance 0)",
+        },
+        "tokens": {
+            "context_window_used_percent": 36.071207,
+            "input_tokens": 93208,
+            "output_tokens": 115,
+        },
+        "updated_at": "2026-09-22T01:36:21Z",
+    }
+    assert runner_quota.binding_quota_remaining_pct(levels) is None
+    assert runner_quota.binding_quota_bucket(levels) is None
+
+
+def test_binding_quota_remaining_pct_credits_excluded_on_a_known_subscription_plan():
+    levels = {
+        "plan_type": "plus",
+        "quota": {
+            "buckets": {"credits": {"remaining_percentage": 0.0}},
+            "credits_exhausted": True,
+        },
+    }
+    assert runner_quota.binding_quota_remaining_pct(levels) is None
+
+
+def test_binding_quota_remaining_pct_credits_binds_on_a_non_subscription_plan():
+    # Only an explicit usage-based plan is evidence of a paid wallet.
+    levels = {
+        "plan_type": "usage_based",
+        "quota": {
+            "buckets": {"credits": {"remaining_percentage": 0.0}},
+            "credits_exhausted": True,
+        },
+    }
+    assert runner_quota.binding_quota_remaining_pct(levels) == 0.0
+    assert runner_quota.binding_quota_bucket(levels) == ("credits", 0.0)
+
+
+def test_binding_quota_remaining_pct_credits_excluded_still_falls_back_to_windows():
+    # #2084's second ask: absent a proven credits signal, the binding bucket
+    # for this reading is whatever a seat's own reading would use — here, the
+    # real (and much healthier) window buckets riding alongside.
+    levels = {
+        "quota": {
+            "buckets": {
+                "session": {"remaining_percentage": 86.0},
+                "week": {"remaining_percentage": 70.0},
+                "credits": {"remaining_percentage": 0.0},
+            },
+            "credits_exhausted": True,
+        },
+    }
+    assert runner_quota.binding_quota_remaining_pct(levels) == 70.0
+    assert runner_quota.binding_quota_bucket(levels) == ("week", 70.0)
+
+
+def test_binding_quota_remaining_pct_a_real_session_zero_still_kills():
+    # The other half of #2084's test ask: a *proven* window reading of 0% —
+    # unrelated to the credits carve-out — must still bind. Claude shape:
+    levels = {"quota": {"buckets": {"session": {"remaining_percentage": 0.0}}}}
+    assert runner_quota.binding_quota_remaining_pct(levels) == 0.0
+    assert runner_quota.binding_quota_bucket(levels) == ("session", 0.0)
+    # Codex shape:
+    codex_levels = {"quota": {"primary_remaining_percent": 0.0}}
+    assert runner_quota.binding_quota_remaining_pct(codex_levels) == 0.0
+    assert runner_quota.binding_quota_bucket(codex_levels) == ("primary", 0.0)
+
+
+def test_binding_quota_bucket_names_the_binding_week_models_bucket():
+    levels = {
+        "quota": {
+            "buckets": {
+                "session": {"remaining_percentage": 90.0},
+                "week": {"remaining_percentage": 55.0},
+                "week_models": {"Fable": {"remaining_percentage": 14.2}},
+            },
+        }
+    }
+    assert runner_quota.binding_quota_bucket(levels, model="fable") == ("Fable", 14.2)
+    assert runner_quota.binding_quota_bucket(levels) == ("week", 55.0)
+
+
 # ── binding_quota_reset_epoch (design-the-allowance.md §2, slice 2's
 # window-roll clock for the resident's own standing allowance) ──────────
 
@@ -418,3 +515,18 @@ def test_latest_claude_usage_outbox_dir_none_when_no_snapshot_cached(tmp_path):
     (brr_dir / "outbox" / "evt-empty").mkdir(parents=True)
     assert runner_quota.latest_claude_usage_outbox_dir(brr_dir) is None
     assert runner_quota.latest_claude_usage_outbox_dir(tmp_path / "missing" / ".brr") is None
+
+
+def test_unknown_plan_does_not_prove_a_paid_wallet():
+    levels = {"plan_type": "new_subscription", "quota": {
+        "buckets": {"credits": {"remaining_percentage": 0}},
+    }}
+    assert runner_quota.binding_quota_remaining_pct(levels) is None
+
+
+def test_observed_positive_credit_history_proves_a_paid_wallet():
+    levels = {"plan_type": "plus", "quota": {
+        "credits_positive_history": True,
+        "buckets": {"credits": {"remaining_percentage": 0}},
+    }}
+    assert runner_quota.binding_quota_bucket(levels) == ("credits", 0.0)

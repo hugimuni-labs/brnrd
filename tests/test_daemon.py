@@ -15777,7 +15777,10 @@ def test_spawn_completion_states_the_fuel_reading_on_a_failure(tmp_path, monkeyp
     note = protocol.list_pending(inbox)[0]
     assert note["spawn_quota_remaining_pct"] == 0
     assert note["spawn_quota_shell"] == "codex"
-    assert "fuel at exit: binding quota 0% left" in note["body"]
+    # #2084's third ask: the fuel line names *which* bucket bound, not just
+    # a bare percentage — here the real, proven 5h window.
+    assert note["spawn_quota_bucket"] == "primary"
+    assert "fuel at exit: binding quota (primary) 0% left" in note["body"]
     assert "5h 0% left" in note["body"]
     assert "allowance 495.1k/5m" in note["body"]
     assert "read " in note["body"] and "measured 2026-09-19T10:09:26Z" in note["body"]

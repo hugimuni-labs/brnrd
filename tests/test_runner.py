@@ -2128,6 +2128,35 @@ class TestFailureDetailRedaction:
         assert "went to sleep" in prefix
         assert "API Error" not in prefix
 
+    def test_core_refusal_signature_is_named_not_a_generic_runner_error(self):
+        """#2076: the exact two strings the incidents printed —
+        ``"...safeguards flagged this message..."`` and its
+        ``[reasoning_extraction]`` detail tag — must classify distinctly
+        from the generic ``runner_error`` bucket they used to fall into
+        (``retry_reason() is None`` for this text, so a generic classification
+        went straight to the give-up path with the vendor's own wording as
+        the reply). Never the vendor boilerplate in the prefix either."""
+        from brr import runner_failures
+
+        assert runner_failures.classify_failure(
+            exit_code=1,
+            detail=(
+                "API Error: Fable 5.1's safeguards flagged this message. "
+                "Details: [reasoning_extraction]"
+            ),
+        ) == runner_failures.CORE_REFUSAL
+        assert runner_failures.classify_failure(
+            exit_code=1, detail="something something [reasoning_extraction]",
+        ) == runner_failures.CORE_REFUSAL
+        prefix = runner_failures.reason_prefix(runner_failures.CORE_REFUSAL)
+        assert "safeguards" in prefix
+        assert "API Error" not in prefix
+        assert "reasoning_extraction" not in prefix
+        # An unrelated failure keeps its ordinary classification.
+        assert runner_failures.classify_failure(
+            exit_code=1, detail="upstream returned 503",
+        ) == runner_failures.PROVIDER_ERROR
+
     def test_a_proxy_403_is_an_egress_denial_not_an_auth_failure(self):
         """#1118: the sentence that named the wrong cause.
 
