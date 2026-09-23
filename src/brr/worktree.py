@@ -374,7 +374,22 @@ def land_clone_branch(repo_root: Path, clone_path: Path, branch: str) -> gitops.
     if fetch.returncode != 0:
         detail = fetch.stderr.strip() or fetch.stdout.strip()
         return gitops.BranchUpdateResult(success=False, branch=branch, detail=detail)
-    return gitops.fast_forward_branch(repo_root, branch, "FETCH_HEAD")
+    # Never read the result back through ``FETCH_HEAD``: it is one file per
+    # repository, and two clones landing into the same host checkout in the
+    # same second (a quota wall kills every strand at once) overwrite it
+    # between one run's fetch and its fast-forward — 2026-09-22 23:05:39,
+    # the tick strand's branch came out pointing at the walls strand's
+    # commit and was pushed under the wrong name. The fetch above is what
+    # guarantees the objects are in *repo_root*; the oid itself is read
+    # from the clone's own ref, which nobody else writes.
+    oid = gitops.rev_parse(clone_path, f"refs/heads/{branch}")
+    if oid is None:
+        return gitops.BranchUpdateResult(
+            success=False,
+            branch=branch,
+            detail=f"{branch} does not resolve in clone {clone_path}",
+        )
+    return gitops.fast_forward_branch(repo_root, branch, oid)
 
 
 def switch_to(worktree_path: Path, branch: str) -> None:
