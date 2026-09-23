@@ -53,7 +53,12 @@ import { THERMAL_STOPS, type GlowUrgency } from './statusPalette.ts';
  */
 export const ARMED_ROW_CAP = 6;
 
-/** How many picking rows draw in full before the lane folds the rest to a count. */
+/**
+ * How many *queue* rows (strands, and any burning run that isn't the pinned
+ * seat) draw in full before the lane folds the rest to a count. The seat's
+ * own row (`PickRow.isSeat`) is never subject to this cap — see THE SEAT
+ * PINNED below.
+ */
 export const PICKING_ROW_CAP = 4;
 
 export type PickPhase = 'armed' | 'picking';
@@ -89,6 +94,23 @@ export interface PickRow {
 	 * opinion about what a mood is.
 	 */
 	mood: MoodFace | null;
+	/**
+	 * THE SEAT PINNED (the-seat-stays-on-top): true for exactly one picking
+	 * row when a seat is burning — the pinned slot at the top of the lane
+	 * that `PICKING_ROW_CAP` never touches. An armed wake is never a seat.
+	 */
+	isSeat: boolean;
+	/**
+	 * The daemon's own `LiveRun.is_subspawn` — a dispatched child, drawn in
+	 * the lane's quieter queue register with the "↳ strand" badge. False for
+	 * an armed wake (it has no such wire field to be true from) and for a
+	 * resident thought that dispatched none.
+	 */
+	isStrand: boolean;
+	/** Shell+core label ("claude · sonnet"), the same join `LiveRuns.svelte`'s
+	 *  own `runnerLabel` computes — null pre-upgrade, ad-hoc, or for an armed
+	 *  wake (nothing has selected a Runner for a pick that hasn't fired). */
+	core: string | null;
 	serves: PickServes[];
 	/**
 	 * Warp threads this pick crosses, for `crossing.ts` — the forward weld.
@@ -194,7 +216,10 @@ export function pickRows(input: {
 			crosses: servesThreads(row.wake),
 			// Armed: not yet fired, nothing to have felt. See the field's own
 			// doc — the future gets no face, by construction.
-			mood: null
+			mood: null,
+			isSeat: false,
+			isStrand: false,
+			core: null
 		}))
 		.slice(0, ARMED_ROW_CAP);
 
@@ -211,7 +236,36 @@ export function pickRows(input: {
 	// filtered list too, so a merge-survivor can't manufacture a false
 	// "several runs competing for attention" reading on its own.
 	const freshRuns = (liveRuns ?? []).filter((run) => run.daemon_stale !== true);
-	const picking: PickRow[] = freshRuns.map((run) => {
+
+	// THE SEAT PINNED (the-seat-stays-on-top, #2091's dashboard half): the
+	// lane used to treat every burning run as one undifferentiated list
+	// capped at PICKING_ROW_CAP — so a seat sharing the screen with four or
+	// more strands could itself be the row the cap folded away, and "who is
+	// the machine" stopped being answerable at a glance. The seat is the run
+	// the daemon did *not* mark a dispatched child (`is_subspawn`); this lane
+	// is account-scoped (several repos' worth of runs share one feed), so on
+	// the rare chance more than one non-strand run is burning at once, the
+	// newest wins the pinned slot — the others fold into the queue below
+	// exactly like a strand would, still real, never dropped.
+	const startedAtMs = (run: LiveRun): number => {
+		const t = run.started_at ? Date.parse(run.started_at) : NaN;
+		return Number.isFinite(t) ? t : -Infinity;
+	};
+	let seatRun: LiveRun | null = null;
+	for (const run of freshRuns) {
+		if (run.is_subspawn) continue;
+		if (!seatRun || startedAtMs(run) > startedAtMs(seatRun)) seatRun = run;
+	}
+	const seatId = seatRun ? seatRun.run_id || seatRun.id : null;
+	const queueRuns = freshRuns
+		.filter((run) => (run.run_id || run.id) !== seatId)
+		.sort((a, b) => startedAtMs(b) - startedAtMs(a)); // newest first
+
+	const runnerCoreLabel = (run: LiveRun): string | null => {
+		const bits = [run.runner?.shell, run.runner?.core].filter(Boolean);
+		return bits.length ? bits.join(' · ') : null;
+	};
+	const toPickRow = (run: LiveRun, isSeat: boolean): PickRow => {
 		const id = run.run_id || run.id;
 		return {
 			id,
@@ -222,6 +276,9 @@ export function pickRows(input: {
 			note: run.stop_requested ? 'stopping…' : null,
 			color: THERMAL_STOPS.amber,
 			urgency: freshRuns.length > 1 ? ('attention' as const) : ('calm' as const),
+			isSeat,
+			isStrand: run.is_subspawn === true,
+			core: runnerCoreLabel(run),
 			serves: servesByRun.get(id) ?? [],
 			// A live run's threads: its own claimed topics off the wire
 			// (`.topics` → presence heartbeat → live-runs payload), fresher
@@ -231,7 +288,12 @@ export function pickRows(input: {
 			crosses: run.topics ?? [],
 			mood: moodFace(run.mood, run.mood_glyph, run.mood_pitch, run.mood_frames, run.mood_rest)
 		};
-	});
+	};
+
+	const picking: PickRow[] = [
+		...(seatRun ? [toPickRow(seatRun, true)] : []),
+		...queueRuns.map((run) => toPickRow(run, false))
+	];
 
 	return [...picking, ...armed];
 }

@@ -80,7 +80,21 @@
 	let overflow = $derived(armedOverflow(scheduledWakes, now));
 	let picking = $derived(rows.filter((row) => row.phase === 'picking'));
 	let armed = $derived(rows.filter((row) => row.phase === 'armed'));
-	let shownPicking = $derived(picking.slice(0, PICKING_ROW_CAP));
+	// THE SEAT PINNED: the seat's own row is drawn once, unconditionally,
+	// never subject to PICKING_ROW_CAP — see pickLane.ts. Everything else
+	// burning (strands, and the rare second non-strand run) is the queue
+	// beneath it, capped like the lane always capped picking rows.
+	let seatRow = $derived(picking.find((row) => row.isSeat) ?? null);
+	let queueRows = $derived(picking.filter((row) => !row.isSeat));
+	let shownQueue = $derived(queueRows.slice(0, PICKING_ROW_CAP));
+	let queueOverflow = $derived(queueRows.length - shownQueue.length);
+
+	function goToRunsList(event: MouseEvent) {
+		event.preventDefault();
+		document
+			.getElementById('cloth-heading')
+			?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+	}
 	let restingFace = $derived(daemonMood ? moodFace(daemonMood.name, daemonMood.glyph) : null);
 	let clockLabel = $derived(
 		new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -118,22 +132,26 @@
 			</div>
 		{:else}
 			<div class="flex flex-col gap-1">
-				{#each shownPicking as row, index (row.id)}
-					<!-- Picking: the same object, lit. `|global` (#970) because the
-					     0→1 case creates this whole branch, and a local intro inside
-					     a freshly-born each block never fires — the most common
-					     ignition was the one that didn't play. -->
+				{#if seatRow}
+					<!-- THE SEAT PINNED (the-seat-stays-on-top): the seat's row,
+					     always — this is the one thing PICKING_ROW_CAP never
+					     touches, so "who is the machine" answers in the same
+					     glance whether one strand is burning beside it or ten.
+					     `|global` (#970) because the 0→1 case creates this whole
+					     branch, and a local intro inside a freshly-born each block
+					     never fires — the most common ignition was the one that
+					     didn't play. -->
 					<button
 						type="button"
 						class="w-full cursor-pointer border bg-stone-950/90 px-1.5 py-1 text-left font-mono leading-tight text-amber-100 {selectedId ===
-						row.id
+						seatRow.id
 							? 'border-amber-400/80 brightness-125'
 							: 'border-amber-700/50'}"
-						style={glowFor(row.urgency, STATUS_BURNING)}
-						title={row.label}
-						aria-expanded={selectedId === row.id}
-						onclick={() => select(row)}
-						in:glitchReveal|global={{ duration: 260, delay: 35 + index * 38 }}
+						style={glowFor(seatRow.urgency, STATUS_BURNING)}
+						title={seatRow.label}
+						aria-expanded={selectedId === seatRow.id}
+						onclick={() => select(seatRow)}
+						in:glitchReveal|global={{ duration: 260, delay: 35 }}
 					>
 						<span class="flex min-w-0 items-baseline gap-1.5">
 							<span
@@ -141,16 +159,63 @@
 								aria-hidden="true">↯</span
 							>
 							<!-- Topic runes are the lane's one topic mark at every heat. -->
-							<TopicRunes topicIds={rowTopics(row)} {topicFaces} className="text-[9px]" />
-							<span class="min-w-0 flex-1 truncate text-[9px]">{row.label}</span>
-							{#if row.clock || row.note}
-								<span class="shrink-0 text-[8px] text-amber-500/80">{row.note ?? row.clock}</span>
+							<TopicRunes topicIds={rowTopics(seatRow)} {topicFaces} className="text-[9px]" />
+							<span class="min-w-0 flex-1 truncate text-[9px]">{seatRow.label}</span>
+							{#if seatRow.clock || seatRow.note}
+								<span class="shrink-0 text-[8px] text-amber-500/80"
+									>{seatRow.note ?? seatRow.clock}</span
+								>
 							{/if}
 						</span>
-						{#if row.serves.length > 0}
+						{#if seatRow.serves.length > 0}
 							<!-- The weld, on the object: which warp items this pick lifted.
 							     This is what retires the `from the warp · weaving` list —
 							     the same fact, carried by the thing it is a fact about. -->
+							<span class="mt-0.5 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+								{#each seatRow.serves as item (item.callSign + item.headline)}
+									<span class="truncate text-[8px] text-amber-400/70">
+										⟶ {item.headline}
+										<span class="text-ink-quiet">{item.callSign}</span>
+									</span>
+								{/each}
+							</span>
+						{/if}
+					</button>
+				{/if}
+				{#each shownQueue as row, index (row.id)}
+					<!-- The queue beneath the seat: strands, quieter — thinner
+					     edge, no amber fill (`subpanel`'s own tokens, the same
+					     register the strand cards in the runs list below already
+					     speak), so the seat stays the one bright thing in the
+					     frame. -->
+					<button
+						type="button"
+						class="subpanel w-full cursor-pointer px-1.5 py-1 text-left font-mono leading-tight text-stone-300 {selectedId ===
+						row.id
+							? 'border-amber-500/60 brightness-125'
+							: ''}"
+						title={row.label}
+						aria-expanded={selectedId === row.id}
+						onclick={() => select(row)}
+						in:glitchReveal|global={{ duration: 240, delay: 60 + index * 32 }}
+					>
+						<span class="flex min-w-0 items-baseline gap-1.5">
+							<TopicRunes topicIds={rowTopics(row)} {topicFaces} className="text-[9px]" />
+							<span class="min-w-0 flex-1 truncate text-[9px]">{row.label}</span>
+							{#if row.isStrand}
+								<span
+									class="shrink-0 border border-amber-900/60 bg-amber-950/40 px-1 py-0.5 font-mono text-[8px] tracking-wide text-amber-300 uppercase"
+									aria-hidden="true">↳ strand</span
+								>
+							{/if}
+							{#if row.core}
+								<span class="shrink-0 text-[8px] text-ink-mute">{row.core}</span>
+							{/if}
+							{#if row.clock || row.note}
+								<span class="shrink-0 text-[8px] text-ink-quiet">{row.note ?? row.clock}</span>
+							{/if}
+						</span>
+						{#if row.serves.length > 0}
 							<span class="mt-0.5 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
 								{#each row.serves as item (item.callSign + item.headline)}
 									<span class="truncate text-[8px] text-amber-400/70">
@@ -162,9 +227,15 @@
 						{/if}
 					</button>
 				{/each}
-				{#if picking.length > shownPicking.length}
-					<span class="text-center font-mono text-[8px] text-amber-500/70"
-						>+{picking.length - shownPicking.length} more picking</span
+				{#if queueOverflow > 0}
+					<!-- Links to the runs list below (the cloth's own root-run
+					     trees already carry a strand count per row) rather than
+					     just naming a number nothing on screen answers. -->
+					<a
+						href="#cloth-heading"
+						onclick={goToRunsList}
+						class="text-center font-mono text-[8px] text-amber-500/70 hover:text-amber-300"
+						>+{queueOverflow} more picking</a
 					>
 				{/if}
 			</div>
