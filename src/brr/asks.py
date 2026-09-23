@@ -61,8 +61,17 @@ _TITLE_RE = re.compile(r"^#[ \t]+(.*)$")
 #: The ask-only rows — everything else recognized comes from reusing
 #: ``items_mod._ROW_RE`` directly (see the module docstring): a superset
 #: kept by composition, not by hand-copying items.py's field list.
+#:
+#: ``sign`` (design-the-ask.md §Build cut, step 3) — a callsign short
+#: enough to say in chat (``accept mira``), resolved through
+#: :func:`resolve_sign`. ``reroute`` (step 1) — the why text an inbound
+#: ``reroute w-N: <why>`` directive stamps, written by
+#: :func:`apply_inbound_directive`. Neither joins ``items_mod._ROW_RE``
+#: (the frontend's ``warpGraph.ts`` grammar stays in lockstep with that one
+#: alone — see items.py's module docstring); both are ask-only, same as
+#: ``stage``/``says`` before them.
 _ASK_ROW_RE = re.compile(
-    r"^(return|stage|touched|says|attempts|after|receipt):[ \t]*(.*)$"
+    r"^(return|stage|touched|says|attempts|after|receipt|sign|reroute):[ \t]*(.*)$"
 )
 _RUN_ID_RE = re.compile(r"^run-(\d{2})(\d{2})(\d{2})-(\d{2})(\d{2})")
 _ITEM_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -158,11 +167,14 @@ def _parse_markdown(item_id: str, text: str) -> dict[str, Any]:
 def _says_from_run_files(files: Iterable[tuple[str, str]]) -> dict[str, list[dict[str, Any]]]:
     """``item id -> says`` from say-binding files mixed into *files*: a
     captured run node (``runs/<repo>/<run>/{asks,.asks}.jsonl``, whose path
-    names the run so each say's ``at`` is the run's own start time) or a
+    names the run so each say's ``at`` is the run's own start time), a
     live, uncaptured outbox (``outbox/<event>/.asks.jsonl``, whose path
     names no run — its say carries no ``at`` of its own; the disk door
     folds the binding file's mtime into ``touched`` instead, see
-    ``list_asks`` / ``_read_binding_files``).
+    ``list_asks`` / ``_read_binding_files``), or the account-level
+    ``warp/.asks.jsonl`` an inbound ``accept``/``reroute`` directive writes
+    (``asks.apply_inbound_directive``) — no run owns that row either, same
+    ``at: None`` + mtime-touch treatment as the outbox case.
     """
     out: dict[str, list[dict[str, Any]]] = {}
     for path, text in files:
@@ -170,6 +182,8 @@ def _says_from_run_files(files: Iterable[tuple[str, str]]) -> dict[str, list[dic
         if len(parts) == 4 and parts[0] == "runs" and parts[3] in ASKS_NAMES:
             at = _iso(_run_time(parts[2]))
         elif len(parts) == 3 and parts[0] == "outbox" and parts[2] == ".asks.jsonl":
+            at = None
+        elif path == f"warp/{DIRECTIVES_CONTROL_NAME}":
             at = None
         else:
             continue
@@ -179,8 +193,19 @@ def _says_from_run_files(files: Iterable[tuple[str, str]]) -> dict[str, list[dic
             except ValueError:
                 continue
             if isinstance(record, dict) and record.get("event") and record.get("item"):
+                # Rung 3 (design-the-ask.md §Build cut, step 2): a `--part`
+                # bound alongside `--item` at reply time rides this same
+                # `.asks.jsonl` row as `part`; the reader surfaces it as
+                # `excerpt` — the wire word the console reads, the file word
+                # the CLI writes, one join, no renaming pass over old rows
+                # (a row with no `part` simply carries `excerpt: None`, same
+                # as before this existed).
+                part = record.get("part")
                 out.setdefault(str(record["item"]), []).append(
-                    {"event": str(record["event"]), "at": at, "excerpt": None}
+                    {
+                        "event": str(record["event"]), "at": at,
+                        "excerpt": str(part) if part else None,
+                    }
                 )
     return out
 
@@ -255,6 +280,7 @@ def build_asks(
             "says": says,
             "attempts": attempts,
             "receipt": rows.get("receipt") or rows.get("refs") or None,
+            "sign": rows.get("sign") or None,
             "topics": _split(rows.get("topics", "")),
             "stale": bool(not is_done and (last is None or last < horizon)),
             "done": is_done,
@@ -329,6 +355,343 @@ def asks_from_files(
     return build_asks(pairs, touched=touched, stale_after_days=stale_after_days, now=now)
 
 
+# ── the inbound directive: "accept w-N" / "reroute w-N: <why>" ────────────
+#
+# design-the-ask.md §Build cut, step 1. Parsed by the daemon at the point an
+# inbound message becomes a pending event (``gates/cloud.py``'s ingest loop
+# — the parse belongs where the event is *created*, so the row moves even
+# when no run is awake to fold it in), never by a resident reading the
+# event later — by the time a resident sees the event it has already
+# reached the item file, and the resident's own reply is a second, ordinary
+# act on top.
+
+#: `accept w-N` / `reroute w-N: <why>` / the callsign form (`accept mira`),
+#: first line only, case-insensitive. A bare `w-\d+` needs no existence
+#: check to *parse* — that's :func:`resolve_item`'s job, applied by the
+#: caller; a lowercase-letter run of 3-8 chars is read as a callsign and
+#: resolved through :func:`resolve_sign` instead. Anything else on the
+#: first line (a normal message, "I accept your offer", "reroute the
+#: server") simply doesn't match — :func:`parse_accept_reroute` returns
+#: ``None``, the common case, silently.
+_ACCEPT_REROUTE_RE = re.compile(
+    r"^(accept|reroute)\s+(w-\d+|[a-z]{3,8})(?::\s*(.+))?$", re.IGNORECASE,
+)
+
+#: The callsign shape a `sign:` row must have to ever be reachable through
+#: the directive grammar above — its own callsign alternative
+#: (``[a-z]{3,8}``), lifted out so ``brnrd item new --sign`` can refuse an
+#: unreachable one (``w-1``, too short, a hyphen) before it is ever written,
+#: rather than minting a row `accept`/`reroute` can never match.
+SIGN_RE = re.compile(r"^[a-z]{3,8}$", re.IGNORECASE)
+
+
+def parse_accept_reroute(body: str) -> tuple[str, str, str | None] | None:
+    """The first non-blank line of *body*, matched against the accept/
+    reroute grammar. Returns ``(verb, target, why)`` — *verb* lowercased
+    (``"accept"``/``"reroute"``), *target* exactly as typed (a `w-N` id or a
+    callsign, case preserved so :func:`resolve_sign` can fold case itself),
+    *why* the text after the colon (``None`` when absent — legal for
+    either verb, though only ``reroute`` writes it anywhere). ``None`` when
+    the first line isn't this grammar at all."""
+    first_line = next((ln.strip() for ln in (body or "").splitlines() if ln.strip()), "")
+    match = _ACCEPT_REROUTE_RE.match(first_line)
+    if not match:
+        return None
+    why = match.group(3).strip() if match.group(3) else None
+    return match.group(1).lower(), match.group(2), (why or None)
+
+
+def resolve_sign(warp_root: Path | None, sign: str) -> str | None:
+    """The item id whose ``sign:`` row equals *sign*, case-insensitive exact
+    match — never guessed, never fuzzy, same stance as
+    ``items_mod.resolve_item``. The door ``accept <sign>``/``reroute
+    <sign>: …`` resolves a callsign through. ``None`` when *warp_root* has
+    no such row, doesn't exist, or *sign* is blank."""
+    needle = (sign or "").strip().lower()
+    if warp_root is None or not needle or not warp_root.is_dir():
+        return None
+    for path in sorted(warp_root.glob("*.md")):
+        if path.is_symlink():
+            continue
+        item_id = path.stem
+        if item_id == "index" or not _ITEM_RE.fullmatch(item_id):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        candidate = (_parse_markdown(item_id, text)["rows"].get("sign") or "").strip().lower()
+        if candidate and candidate == needle:
+            return item_id
+    return None
+
+
+def _combined_rows_span(lines: list[str]) -> tuple[int, int]:
+    """Like ``items_mod._rows_span``, but the recognized set is the union of
+    items.py's own row grammar and the ask-only rows (:data:`_ASK_ROW_RE`)
+    — the same superset :func:`_parse_markdown` already reads. Needed
+    because ``items_mod._rows_span`` alone stops at the first ask-only row
+    (``stage:``, ``says:``, …), which would misplace an inserted row ahead
+    of an item's existing ask rows instead of after them."""
+    i = 0
+    while i < len(lines) and lines[i].strip() == "":
+        i += 1
+    if i < len(lines) and _TITLE_RE.match(lines[i]):
+        i += 1
+    while i < len(lines) and lines[i].strip() == "":
+        i += 1
+    start = i
+    while i < len(lines) and (_ASK_ROW_RE.match(lines[i]) or items_mod._ROW_RE.match(lines[i])):
+        i += 1
+    return start, i
+
+
+def _ask_row_value(lines: list[str], key: str) -> str | None:
+    row_re = re.compile(rf"^{key}:[ \t]*(.*)$")
+    start, end = _combined_rows_span(lines)
+    for i in range(start, end):
+        match = row_re.match(lines[i])
+        if match:
+            return match.group(1).strip()
+    return None
+
+
+def _insert_ask_row(lines: list[str], row: str) -> None:
+    _, end = _combined_rows_span(lines)
+    block = [row]
+    if end < len(lines) and lines[end].strip():
+        block.append("")
+    lines[end:end] = block
+
+
+def _set_ask_row(lines: list[str], key: str, value: str) -> bool:
+    """Set (overwrite) a single-value row, inserting it when absent.
+    Returns whether the file changed."""
+    row_re = re.compile(rf"^{key}:[ \t]*(.*)$")
+    start, end = _combined_rows_span(lines)
+    for i in range(start, end):
+        if row_re.match(lines[i]):
+            new_line = f"{key}: {value}"
+            if lines[i] == new_line:
+                return False
+            lines[i] = new_line
+            return True
+    _insert_ask_row(lines, f"{key}: {value}")
+    return True
+
+
+def _append_to_ask_list_row(lines: list[str], key: str, value: str) -> bool:
+    """Append *value* to the ``<key>:`` row's space-separated list,
+    idempotently — same grammar ``items_mod._append_to_list_row`` uses for
+    ``taken:``/``needs:``, reimplemented against :func:`_combined_rows_span`
+    so it never lands ahead of an existing ask row."""
+    row_re = re.compile(rf"^{key}:[ \t]*(.*)$")
+    start, end = _combined_rows_span(lines)
+    for i in range(start, end):
+        match = row_re.match(lines[i])
+        if match:
+            parts = match.group(1).split()
+            if value in parts:
+                return False
+            lines[i] = f"{key}: " + " ".join([*parts, value])
+            return True
+    _insert_ask_row(lines, f"{key}: {value}")
+    return True
+
+
+#: Same control filename ``do.ASKS_CONTROL_NAME`` uses for a run's own
+#: outbox binding file — the inbound directive's rung-2 row lands beside
+#: it, at the account level (``surface/warp/.asks.jsonl``), because at
+#: ingestion time no run outbox exists yet to own it: the event has not
+#: been dispatched to anyone, so "the run's `.asks.jsonl`" is not a
+#: resolvable address yet — the account-level file is the only address
+#: that already exists (design-the-ask.md §Build cut, step 1, "pick one and
+#: say why").
+DIRECTIVES_CONTROL_NAME = ".asks.jsonl"
+
+
+def _append_directive_row(path: Path, event_id: str, item_id: str, verb: str) -> None:
+    """Append one ``{"event", "item", "verb"}`` row, best-effort — same
+    never-raise shape as ``do.append_ask``'s sibling writer for the run-side
+    file; a bug here must not cost the item mutation that already landed."""
+    record = {"event": event_id, "item": item_id, "verb": verb}
+    try:
+        line = json.dumps(record, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return
+    try:
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except OSError:
+        pass
+
+
+def apply_inbound_directive(
+    warp_root: Path | None,
+    event_id: str,
+    body: str,
+    *,
+    asks_jsonl_path: Path | None = None,
+    date: str | None = None,
+) -> dict[str, Any] | None:
+    """Parse *body*'s first line as an accept/reroute directive and, when it
+    resolves to a real item, apply it — the whole of design-the-ask.md
+    §Build cut, step 1.
+
+    Returns ``None`` when the first line isn't the grammar at all (an
+    ordinary message — the overwhelmingly common case; no-op, silently, no
+    caller-visible distinction from "nothing to do here"). Otherwise a
+    dict: ``{"verb", "target", "item", "why"}`` on success (``item`` the
+    resolved id), or ``{"verb", "target", "item": None, "error": "..."}``
+    when the target doesn't resolve — an unknown ``w-N`` or an unrecognized
+    callsign — which the caller turns into a daemon-side notice per the
+    design ("unknown ⇒ no-op + a notice"); the item file is untouched
+    either way in that branch.
+
+    Idempotent (design's own requirement — a redelivered event must not
+    double-stamp): detected via *event_id* already present in the item's
+    ``says:`` row, in which case this returns the same success shape with
+    ``idempotent: True`` and writes nothing further.
+
+    Both verbs stamp *event_id* into ``says:``. ``accept`` additionally
+    writes ``stage: accepted`` and ``done: <date>`` — the same write
+    ``brnrd item done`` (``items_mod.mark_done``) makes; best-effort (an
+    already-done/retired item simply keeps its existing receipt — the
+    acceptance itself, ``stage: accepted``, still lands). ``reroute``
+    writes ``stage: reshaped`` and, when *why* was given, a ``reroute:``
+    row carrying it.
+    """
+    parsed = parse_accept_reroute(body)
+    if parsed is None:
+        return None
+    verb, target, why = parsed
+    if warp_root is None:
+        return {"verb": verb, "target": target, "item": None, "error": "no warp"}
+    item_id = (
+        target if items_mod.ALLOCATED_ID_RE.fullmatch(target)
+        else resolve_sign(warp_root, target)
+    )
+    path = items_mod.resolve_item(warp_root, item_id) if item_id else None
+    if path is None:
+        return {
+            "verb": verb, "target": target, "item": None,
+            "error": f"no item resolves {target!r} (not a known w-N id or sign)",
+        }
+
+    lines = items_mod._edit_lines(path)
+    if lines is None:
+        return {
+            "verb": verb, "target": target, "item": item_id,
+            "error": "item file unreadable",
+        }
+    already = event_id in (_ask_row_value(lines, "says") or "").split()
+    if already:
+        return {"verb": verb, "target": target, "item": item_id, "why": why, "idempotent": True}
+
+    if verb == "accept":
+        items_mod.mark_done(path, date=date or _today())
+        lines = items_mod._edit_lines(path)  # re-read: mark_done wrote its own draft
+        if lines is None:
+            return {
+                "verb": verb, "target": target, "item": item_id,
+                "error": "item file unreadable after done: write",
+            }
+        _set_ask_row(lines, "stage", "accepted")
+    else:
+        _set_ask_row(lines, "stage", "reshaped")
+        if why:
+            _set_ask_row(lines, "reroute", why)
+    _append_to_ask_list_row(lines, "says", event_id)
+    items_mod._write_lines(path, lines)
+
+    jsonl_path = asks_jsonl_path or (warp_root / DIRECTIVES_CONTROL_NAME)
+    _append_directive_row(jsonl_path, event_id, item_id, verb)
+    return {"verb": verb, "target": target, "item": item_id, "why": why}
+
+
+def _today() -> str:
+    return _dt.date.today().isoformat()
+
+
+# ── Derived, not written: `stage:`/`attempts:`/`return:` folded from a
+# run's own claim, never hand-typed (his 2026-09-22 steer, folding design-
+# the-ask.md §Build cut step 4 in: "make in-hand derived, never typed —
+# hand-written `stage: making` is a poor resident-facing design, prone to
+# forgetfulness errors"). ``run_item.py`` is the read side (the `.item`
+# control file, at the daemon's heartbeat cadence); these two functions are
+# the write side, shared by both derivations below so the row grammar has
+# one owner. ──────────────────────────────────────────────────────────────
+
+#: The ask lifecycle, ranked (design-the-ask.md §The stages: heard →
+#: understood → shaped → making → delivered → accepted | reshaped |
+#: sprouted). ``None``/absent ranks below every named stage. Used only to
+#: answer "has this ask reached at least X" so a derived write never moves
+#: a stage *backward* — never to render a progress bar, and the three
+#: terminal siblings rank equal since none of them is "ahead" of another.
+STAGE_RANK: dict[str | None, int] = {
+    None: 0, "": 0, "heard": 1, "understood": 2, "shaped": 3, "making": 4,
+    "delivered": 5, "accepted": 6, "reshaped": 6, "sprouted": 6,
+}
+
+
+def mark_in_hand(warp_root: Path | None, item_id: str, *, run_id: str) -> bool:
+    """The derived half of "in hand" (design-the-ask.md's console spec:
+    "'in hand' needs no design — only the seat's discipline: `stage:
+    making` + the attempt written the moment work starts"). Stamps
+    *run_id* into ``attempts:`` (idempotent — the list-row grammar already
+    dedupes) and advances ``stage:`` to ``making`` only when it hadn't
+    reached that far yet (never backward, never past ``making`` from here
+    — delivery is :func:`mark_delivered`, a separate act at close).
+    ``True`` when anything changed; ``False`` on an unresolvable item, a
+    blank *run_id*, or a genuine no-op."""
+    from . import items as items_mod
+
+    path = items_mod.resolve_item(warp_root, item_id) if warp_root else None
+    if path is None or not run_id:
+        return False
+    lines = items_mod._edit_lines(path)
+    if lines is None:
+        return False
+    changed = _append_to_ask_list_row(lines, "attempts", run_id)
+    current = _ask_row_value(lines, "stage")
+    if STAGE_RANK.get(current, 0) < STAGE_RANK["making"]:
+        if _set_ask_row(lines, "stage", "making"):
+            changed = True
+    if changed:
+        items_mod._write_lines(path, lines)
+    return changed
+
+
+def mark_delivered(warp_root: Path | None, item_id: str, *, receipt: str) -> bool:
+    """The derived half of "delivered" (his 2026-09-22 steer: "at run end,
+    if the run's produce names the item … the daemon sets `stage:
+    delivered` and adds the PR to `return:`"). Advances ``stage:`` to
+    ``delivered`` only when it hadn't reached that far, and gives
+    ``return:`` its first value only when the row is still unset — a
+    hand-authored return *type* (``in chat``, ``a page``, …) is never
+    overwritten by a receipt address; the row only ever fills once.
+    ``True`` when anything changed."""
+    from . import items as items_mod
+
+    path = items_mod.resolve_item(warp_root, item_id) if warp_root else None
+    if path is None or not receipt:
+        return False
+    lines = items_mod._edit_lines(path)
+    if lines is None:
+        return False
+    changed = False
+    current = _ask_row_value(lines, "stage")
+    if STAGE_RANK.get(current, 0) < STAGE_RANK["delivered"]:
+        if _set_ask_row(lines, "stage", "delivered"):
+            changed = True
+    if not _ask_row_value(lines, "return"):
+        if _set_ask_row(lines, "return", receipt):
+            changed = True
+    if changed:
+        items_mod._write_lines(path, lines)
+    return changed
+
+
 def _git_touch_times(target_dir: Path) -> dict[str, str]:
     """Newest commit ISO time per item id, from one ``git log`` over
     *target_dir* (e.g. the warp directory) — git auto-discovers the repo
@@ -375,13 +738,15 @@ def _load_warp_files(warp: Path) -> list[tuple[str, str]]:
 
 
 def _read_binding_files(
-    runs_dir: Path | None, outbox_root: Path | None
+    runs_dir: Path | None, outbox_root: Path | None, warp_dir: Path | None = None,
 ) -> tuple[list[tuple[str, str]], dict[str, str]]:
-    """Say-binding files under *runs_dir* (captured run nodes) and
-    *outbox_root* (live, uncaptured) as ``(synthetic path, text)`` pairs
+    """Say-binding files under *runs_dir* (captured run nodes),
+    *outbox_root* (live, uncaptured) and *warp_dir* (the account-level
+    ``.asks.jsonl`` an inbound ``accept``/``reroute`` directive writes —
+    :func:`apply_inbound_directive`) as ``(synthetic path, text)`` pairs
     for :func:`_says_from_run_files`, plus an item id -> ISO mtime map —
-    the touch evidence a live outbox binding carries when its path names
-    no run (a captured run node's own start time already rides its path).
+    the touch evidence a binding with no run of its own carries (a
+    captured run node's own start time already rides its path).
     """
     pairs: list[tuple[str, str]] = []
     touch: dict[str, _dt.datetime] = {}
@@ -414,6 +779,10 @@ def _read_binding_files(
         for path in sorted(outbox_root.glob("*/.asks.jsonl")):
             if path.is_file() and not path.is_symlink():
                 _add(path, f"outbox/{path.parent.name}/.asks.jsonl")
+    if warp_dir is not None:
+        directive_path = warp_dir / DIRECTIVES_CONTROL_NAME
+        if directive_path.is_file() and not directive_path.is_symlink():
+            _add(directive_path, f"warp/{DIRECTIVES_CONTROL_NAME}")
 
     return pairs, {item: _iso(stamp) for item, stamp in touch.items()}
 
@@ -443,10 +812,13 @@ def list_asks(
     now: _dt.datetime | None = None,
 ) -> dict[str, Any]:
     """The disk door: a surface repo's warp items, folded with say
-    bindings from a captured run node (*runs_dir*) and a live, uncaptured
+    bindings from a captured run node (*runs_dir*), a live, uncaptured
     outbox (*outbox_root*) — both optional, since a bare warp read (no
-    runs, no live outbox) is still legal. *surface_root* is the account's
-    ``surface/`` directory; item files live in ``<surface_root>/warp/``.
+    runs, no live outbox) is still legal — and the account-level
+    ``warp/.asks.jsonl`` an inbound ``accept``/``reroute`` directive writes
+    (always read when present; no run or outbox owns that row).
+    *surface_root* is the account's ``surface/`` directory; item files live
+    in ``<surface_root>/warp/``.
 
     Returns the same ``{"asks", "done", "goals", "stale_after_days"}``
     payload :func:`build_asks` / :func:`asks_from_files` do — this is the
@@ -457,7 +829,7 @@ def list_asks(
     if not warp.is_dir():
         return {"asks": [], "done": [], "goals": [], "stale_after_days": stale_after_days}
     files = _load_warp_files(warp)
-    binding_pairs, say_touch = _read_binding_files(runs_dir, outbox_root)
+    binding_pairs, say_touch = _read_binding_files(runs_dir, outbox_root, warp)
     files += binding_pairs
     touched = _merge_touch(_git_touch_times(warp), say_touch)
     return build_asks(files, touched=touched, stale_after_days=stale_after_days, now=now)
@@ -494,8 +866,9 @@ def public_row(row: dict[str, Any]) -> dict[str, Any]:
     every field they share without being forced onto one wire shape."""
     row = dict(row)
     row["says"] = len(row.get("says") or [])
+    row.setdefault("sign", None)
     return {k: row[k] for k in (
-        "id", "title", "type", "return", "stage", "touched_at", "says", "stale"
+        "id", "title", "type", "return", "stage", "touched_at", "says", "stale", "sign"
     )}
 
 

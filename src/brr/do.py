@@ -408,7 +408,9 @@ def stage_cut(
 ASKS_CONTROL_NAME = ".asks.jsonl"
 
 
-def append_ask(outbox_dir: Path | None, event_id: str, item_id: str) -> None:
+def append_ask(
+    outbox_dir: Path | None, event_id: str, item_id: str, *, part: str | None = None,
+) -> None:
     """Append one ``.asks.jsonl`` row binding *event_id* to *item_id*.
 
     Same best-effort append-only JSONL shape :func:`relics.append` already
@@ -420,13 +422,23 @@ def append_ask(outbox_dir: Path | None, event_id: str, item_id: str) -> None:
     a bug producing an unserialisable payload should not corrupt the file
     for every later reader.
 
+    *part* (design-the-ask.md §Build cut, step 2 — rung 3's inbound stamp)
+    is the quoted excerpt a ``--part`` flag bound to this ``--item``; when
+    given, it rides the row as ``"part"`` and the reader (``asks.py``'s
+    ``_says_from_run_files``) surfaces it as that say's ``excerpt``. Absent
+    when ``None`` — a plain binding stays the same two-field row it always
+    was, so a call with several ``--item``s and only some carrying
+    ``--part`` writes a mixed batch of rows, not a padded one.
+
     Caller's responsibility to call this only once the binding's own reply
     has a drain verdict :func:`accepted` — see ``cli.cmd_do``, which is the
     only caller today.
     """
     if outbox_dir is None or not event_id or not item_id:
         return
-    record = {"event": event_id, "item": item_id}
+    record: dict[str, str] = {"event": event_id, "item": item_id}
+    if part:
+        record["part"] = part
     try:
         line = json.dumps(record, sort_keys=True, separators=(",", ":"))
     except (TypeError, ValueError):

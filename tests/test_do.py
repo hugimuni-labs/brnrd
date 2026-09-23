@@ -810,6 +810,122 @@ def test_do_item_writes_no_row_when_reply_drain_fails(tmp_path, monkeypatch, cap
     assert not (outbox / ".asks.jsonl").exists()
 
 
+# ── --part: rung 3's inbound stamp (design-the-water-line.md §The asks lane) ──
+
+
+def test_do_part_binds_an_excerpt_to_the_item(tmp_path, monkeypatch, capsys):
+    _repo_with_warp_item(tmp_path, monkeypatch)
+    capsys.readouterr()
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
+
+    assert main([
+        "do", "--reply", "evt-1", "--item", "w-1", "--part", "the fuel gauge bit",
+        "--body", "hi", "--no-follow-up",
+    ]) == 0
+    out = capsys.readouterr().out.strip()
+    assert out == "reply evt-1 ✓ · item w-1 part×1 ✓"
+    rows = [
+        json.loads(line)
+        for line in (outbox / ".asks.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows == [{"event": "evt-1", "item": "w-1", "part": "the fuel gauge bit"}]
+
+
+def test_do_part_repeatable_per_item_writes_one_row_each(tmp_path, monkeypatch, capsys):
+    _repo_with_warp_item(tmp_path, monkeypatch)
+    capsys.readouterr()
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
+
+    assert main([
+        "do", "--reply", "evt-1", "--item", "w-1", "--part", "first bit", "--part", "second bit",
+        "--body", "hi", "--no-follow-up",
+    ]) == 0
+    out = capsys.readouterr().out.strip()
+    assert out == "reply evt-1 ✓ · item w-1 part×2 ✓"
+    rows = [
+        json.loads(line)
+        for line in (outbox / ".asks.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows == [
+        {"event": "evt-1", "item": "w-1", "part": "first bit"},
+        {"event": "evt-1", "item": "w-1", "part": "second bit"},
+    ]
+
+
+def test_do_part_mixed_with_a_plain_item_writes_a_mixed_batch(tmp_path, monkeypatch, capsys):
+    """One item carries a `--part`, a sibling `--item` on the same reply
+    carries none — the plain one keeps the old two-field row."""
+    _repo_with_warp_item(tmp_path, monkeypatch)
+    capsys.readouterr()
+    assert main(["item", "new", "A second ask", "--type", "action"]) == 0
+    capsys.readouterr()
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
+
+    assert main([
+        "do", "--reply", "evt-1", "--item", "w-1", "--part", "quoted bit",
+        "--item", "w-2", "--body", "answers both", "--no-follow-up",
+    ]) == 0
+    out = capsys.readouterr().out.strip()
+    assert out == "reply evt-1 ✓ · item w-1 part×1 ✓ · item w-2 ✓"
+    rows = [
+        json.loads(line)
+        for line in (outbox / ".asks.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows == [
+        {"event": "evt-1", "item": "w-1", "part": "quoted bit"},
+        {"event": "evt-1", "item": "w-2"},
+    ]
+
+
+def test_do_part_with_no_preceding_item_is_refused(tmp_path, monkeypatch, capsys):
+    _repo_with_warp_item(tmp_path, monkeypatch)
+    capsys.readouterr()
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+
+    assert main([
+        "do", "--reply", "evt-1", "--part", "x", "--body", "hi", "--no-follow-up",
+    ]) == 1
+    err = capsys.readouterr().err
+    assert "no preceding --item" in err
+    assert "Nothing was staged" in err
+    assert not list(outbox.glob("do-*.md"))
+
+
+def test_do_part_after_gate_is_refused(tmp_path, monkeypatch, capsys):
+    _repo_with_warp_item(tmp_path, monkeypatch)
+    capsys.readouterr()
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    body_file = tmp_path / "gate-body.md"
+    body_file.write_text("hi", encoding="utf-8")
+
+    assert main([
+        "do", "--gate", "telegram", "--part", "x", "--body-file", str(body_file),
+    ]) == 1
+    err = capsys.readouterr().err
+    assert "--gate" in err
+    assert "not --reply" in err
+    assert "Nothing was staged" in err
+    assert not list(outbox.glob("do-*.md"))
+
+
 def test_stage_note_writes_a_body_less_directive(tmp_path):
     """brnrd#1693, half 2. ``note:`` means "close this event without
     speaking" — staging a body and then having the daemon flag it back as

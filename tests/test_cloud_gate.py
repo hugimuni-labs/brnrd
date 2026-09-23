@@ -5237,3 +5237,64 @@ def test_silence_notice_stays_quiet_for_a_run_holding_an_await(tmp_path, monkeyp
         encoding="utf-8",
     )
     assert "silent since" in cloud._silence_notice_for_event(source, state, event)
+
+
+# ── _apply_ask_directive: the inbound "accept"/"reroute" hook ─────────────
+# design-the-ask.md §Build cut, step 1 — parsed where the event is
+# created (this gate's own ingest loop), independent of any run being awake.
+
+
+def test_apply_ask_directive_accepts_a_resolvable_target(tmp_path, monkeypatch, capsys):
+    from brr import account as account_mod
+    from brr import items as items_mod
+
+    warp_root = tmp_path / "surface" / "warp"
+    warp_root.mkdir(parents=True)
+    (warp_root / "w-1.md").write_text("# Ship the digest\n\ntype: action\n", encoding="utf-8")
+    monkeypatch.setattr(account_mod, "resolve_context", lambda *a, **k: object())
+    monkeypatch.setattr(items_mod, "warp_dir", lambda ctx: warp_root)
+
+    cloud._apply_ask_directive(tmp_path / "brr", "evt-1", "accept w-1")
+    text = (warp_root / "w-1.md").read_text(encoding="utf-8")
+    assert "stage: accepted" in text and "says: evt-1" in text
+    assert capsys.readouterr().out == ""  # a resolved target prints nothing
+
+
+def test_apply_ask_directive_unresolved_target_is_logged_not_raised(tmp_path, monkeypatch, capsys):
+    from brr import account as account_mod
+    from brr import items as items_mod
+
+    warp_root = tmp_path / "surface" / "warp"
+    warp_root.mkdir(parents=True)
+    monkeypatch.setattr(account_mod, "resolve_context", lambda *a, **k: object())
+    monkeypatch.setattr(items_mod, "warp_dir", lambda ctx: warp_root)
+
+    cloud._apply_ask_directive(tmp_path / "brr", "evt-1", "accept w-999")
+    out = capsys.readouterr().out
+    assert "[brnrd:cloud]" in out and "accept" in out and "w-999" in out
+    assert "evt-1" in out
+
+
+def test_apply_ask_directive_ordinary_message_is_silent(tmp_path, monkeypatch, capsys):
+    from brr import account as account_mod
+    from brr import items as items_mod
+
+    warp_root = tmp_path / "surface" / "warp"
+    warp_root.mkdir(parents=True)
+    monkeypatch.setattr(account_mod, "resolve_context", lambda *a, **k: object())
+    monkeypatch.setattr(items_mod, "warp_dir", lambda ctx: warp_root)
+
+    cloud._apply_ask_directive(tmp_path / "brr", "evt-1", "just checking in")
+    assert capsys.readouterr().out == ""
+
+
+def test_apply_ask_directive_is_best_effort_on_a_broken_account_context(tmp_path, monkeypatch, capsys):
+    from brr import account as account_mod
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("no account home")
+
+    monkeypatch.setattr(account_mod, "resolve_context", _boom)
+    cloud._apply_ask_directive(tmp_path / "brr", "evt-1", "accept w-1")  # must not raise
+    out = capsys.readouterr().out
+    assert "[brnrd:cloud]" in out and "accept/reroute parse failed" in out
