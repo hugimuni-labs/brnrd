@@ -324,17 +324,30 @@ def test_exhausted_credits_produce_a_quota_slot_not_silence():
     assert quota["credits_balance"] == "0"
 
 
-def test_exhausted_credits_bind_pacing_at_zero():
-    """The verdict has to reach the seam that acts on it.
+def test_exhausted_credits_without_a_proven_plan_reads_unmeasured_not_zero():
+    """Superseded by #2084 (2026-09-22) — was
+    ``test_exhausted_credits_bind_pacing_at_zero``, asserting ``== 0.0``.
 
-    ``runner_quota.binding_quota_remaining_pct`` is what pacing, the
-    schedule cadence, and the wake's posture line read. A ``quota`` slot
-    that no consumer can turn into a number is a meter shipped dark.
+    ``_EXHAUSTED_CREDITS`` carries ``"plan_type": None`` — the exact same
+    shape (only a ``credits`` block, no window, no provable plan) that three
+    subscription-account strands died on in September, while their real
+    session/week buckets read healthy moments before and after. Nothing in
+    *this one reading* tells the two incidents apart: the April/July "two
+    workers died on their first token" case and the September false wall are
+    byte-identical once parsed — the discriminator #2084 asks for (bucket
+    history, or the parent seat's own concurrent window reading) is cross-
+    reading state this module does not keep yet (`runner_quota`'s own
+    Doubts). Given that, binding on an unrecognised plan is the worse
+    failure to ship twice: a truly exhausted pay-per-use account with no
+    reported ``plan_type`` now reads "unmeasured" and pays one wasted
+    dispatch attempt (caught immediately by the ordinary
+    ``quota_exhausted`` failure path on the real API call) instead of
+    incorrectly killing a healthy subscription account outright.
     """
     from brr import runner_quota
 
     levels = codex_status.parse_token_count({"rate_limits": _EXHAUSTED_CREDITS})
-    assert runner_quota.binding_quota_remaining_pct(levels) == 0.0
+    assert runner_quota.binding_quota_remaining_pct(levels) is None
 
 
 def test_exhausted_credits_are_not_filed_under_a_window_slot():
