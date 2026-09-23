@@ -12,6 +12,7 @@
 	import { deliveryToneClass } from '$lib/deliveryTone';
 	import { resolve } from '$app/paths';
 	import MarkdownContent from './MarkdownContent.svelte';
+	import StopRunControl from './StopRunControl.svelte';
 	import RunLedgerReceipt from './RunLedgerReceipt.svelte';
 	import BoltCompletionCard from './BoltCompletionCard.svelte';
 	import { boltCardDataFromLedgerRows } from './bolts';
@@ -134,6 +135,27 @@
 			</p>
 		{/if}
 	</header>
+
+	<!-- The exit, where the URL points. This page had no stop control at all
+	     until 2026-09-19: the only copy lived in `RunNodeInline.svelte`, which
+	     renders solely in the dashboard's selected-run panel behind the `▸ more`
+	     expand. A maintainer standing on this very page reported the button as
+	     "gone" while a run he could not end burned for three hours (#2047).
+	     Deliberately NOT behind a disclosure here — the lesson of that night is
+	     that an exit one click deep on one surface of three is an exit nobody
+	     can find when they need it. Still last in tab order after the header,
+	     and still two-step, because it is destructive. -->
+	{#if running}
+		<section class="panel mt-6 p-4" aria-labelledby="stop-heading">
+			<div class="flex items-baseline justify-between gap-3 border-b border-stone-800 pb-2">
+				<h2 id="stop-heading" class="font-mono text-xs tracking-wide text-amber-200 uppercase">
+					this run is live
+				</h2>
+				<span class="shrink-0 font-mono text-[10px] text-ink-mute">yours to end</span>
+			</div>
+			<StopRunControl {runId} class="mt-3" />
+		</section>
+	{/if}
 
 	<!-- The ledger receipt carries what the mirror does not: spend, tokens, and
 	     the relic manifest. It is the one part that survives an unmirrored node,

@@ -9,6 +9,7 @@
 	import { deliveryToneClass } from '$lib/deliveryTone';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import MoodChip from './MoodChip.svelte';
+	import StopRunControl from './StopRunControl.svelte';
 	import TopicRunes from './TopicRunes.svelte';
 	import {
 		LiveRunsAuthError,
@@ -140,33 +141,6 @@
 	// 20px target in a dense band — and that constraint is exactly what moving
 	// the control removed. A visible `cancel` beside a visible `confirm stop`
 	// says what a self-disarming glyph could only imply.
-	let confirmingStop = $state(false);
-	let stopPending = $state(false);
-	let stopped = $state(false);
-	let stopNote = $state<string | null>(null);
-
-	async function commitStop() {
-		confirmingStop = false;
-		stopPending = true;
-		try {
-			await stopRun(runId);
-			stopped = true;
-			// Deliberately not "stopped": the daemon has not consumed it yet.
-			stopNote = 'stopping — ends on the next daemon sync, partial work kept';
-		} catch (e) {
-			// A swallowed stop must be loud (the 2026-07-11 lesson): the reader
-			// just tried to kill a burning run and nothing visible happened.
-			stopNote =
-				e instanceof LiveRunsAuthError
-					? 'session expired — sign in again, then retry'
-					: e instanceof Error
-						? e.message
-						: 'stop request failed';
-		} finally {
-			stopPending = false;
-		}
-	}
-
 	// A held seat (the-parked-seat-has-two-buttons): no process, so `liveLevel`
 	// is never set for it — the parked block below gates on the row's own
 	// `status` instead, same as the daemon publishes it.
@@ -718,41 +692,10 @@
 				{#if liveLevel && !held}
 					<!-- The stop, at the bottom of the expand: destructive, so it sits
 					     past everything a reader came here to read, and only exists
-					     while the run is actually live. A closed run has nothing to
-					     stop, and rendering a dead control is how a surface teaches
-					     people to ignore it. -->
-					<div
-						class="flex flex-wrap items-center gap-2 border-t border-stone-800/70 pt-3 font-mono text-[10px]"
-					>
-						{#if stopped}
-							<span class="tracking-wide text-amber-500 uppercase">stopping</span>
-						{:else if confirmingStop}
-							<button
-								type="button"
-								class="cursor-pointer border border-red-900/60 bg-stone-950/70 px-2 py-1 tracking-wide text-red-300 uppercase hover:bg-red-950/40 disabled:cursor-wait disabled:opacity-50"
-								disabled={stopPending}
-								onclick={commitStop}>{stopPending ? 'stopping' : 'confirm stop'}</button
-							>
-							<button
-								type="button"
-								class="cursor-pointer border border-stone-800 px-2 py-1 tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-								disabled={stopPending}
-								onclick={() => (confirmingStop = false)}>cancel</button
-							>
-							<span class="text-ink-mute">partial work is kept; the thought does not resume</span>
-						{:else}
-							<button
-								type="button"
-								class="cursor-pointer border border-stone-800 px-2 py-1 tracking-wide text-ink-quiet uppercase hover:text-red-300"
-								onclick={() => (confirmingStop = true)}>stop run</button
-							>
-						{/if}
-						{#if stopNote}
-							<!-- Receipt line: a tap that gets swallowed must never be silent
-							     (found live 2026-07-11 on the spool rack's own taps). -->
-							<span class="text-amber-400/90">{stopNote}</span>
-						{/if}
-					</div>
+					     while the run is actually live. Shared with the run page via
+					     `StopRunControl.svelte`, so this stops being the only place a
+					     user can end a run. -->
+					<StopRunControl {runId} {stopRun} class="border-t border-stone-800/70 pt-3" />
 				{/if}
 				{#each node?.messages ?? [] as message (message.file.path)}
 					{@const tone = messageTone(message.metadata.status)}
