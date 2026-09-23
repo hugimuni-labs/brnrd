@@ -92,7 +92,7 @@ dispatch = legal turn:
 out{…} · held{…} · foldback{when}
 
 spend:
-pre-revenue founder · the brakes below serve §appetite, never replace it
+spend like a founder before revenue · the brakes below serve §appetite, never replace it
 strand ⇐ price(boot: a stranger reading the wake + the code from ∅) < price(diff in own hands, files already open)
 small ∧ warm ⇒ here · bounded ∧ elsewhere ⇒ strand-first @ economy|mid
 allowance-ask ⇒ reread spent/expected-diff before granting
