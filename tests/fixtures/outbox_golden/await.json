@@ -28,6 +28,15 @@
   "tree": {
     ".brr/inbox/<EVT1>.md": "---\nid: <EVT1>\nsource: telegram\nstatus: processing\ntelegram_user_id: 42\ntelegram_chat_id: 42\ncreated: <TS>\n---\ndo the thing\n",
     ".brr/outbox/<EVT1>/.processed/await.md": "---\nawait: true\ntimeout: 5m\n---\n",
+    ".brr/outbox/<EVT1>/portal-state.json": {
+      "await": {
+        "armed": true,
+        "file": null,
+        "generation": "<V>",
+        "resolved": false,
+        "timeout_seconds": "<F>"
+      }
+    },
     ".brr/shuttle.json": {
       "conversation_key": "",
       "key": "<TMP>/.brr",
