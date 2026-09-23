@@ -156,6 +156,40 @@ class TestRead:
         monkeypatch.setattr(pr_checks.subprocess, "run", dispatch)
         assert pr_checks.read(tmp_path, "acme/widget", 5, "deadbeef", 5.0) == {"status": "pending"}
 
+    def test_no_required_checks_as_gh_actually_reports_it_falls_back_to_observed_runs(self, tmp_path, monkeypatch):
+        """Production's shape for "no required checks", verbatim (gh 2.97.0,
+        2026-09-23): exit 1, **empty stdout**, the verdict on stderr. The
+        `required=[]` fake above fed `"[]"` — a body gh never writes — so the
+        fallback was covered and the path to it never ran; on a repo with no
+        branch protection every read landed as `status: error` and no
+        `pr_checks_concluded` ever fired."""
+        def dispatch(cmd, **kwargs):
+            if cmd[1] == "api":
+                return subprocess.CompletedProcess(cmd, 0, json.dumps(_pages(
+                    {"name": "backend", "status": "completed", "conclusion": "success"},
+                    {"name": "frontend", "status": "completed", "conclusion": "skipped"},
+                )), "")
+            if cmd[1:3] == ["pr", "checks"]:
+                return subprocess.CompletedProcess(
+                    cmd, 1, "", "no required checks reported on the 'brr/x' branch\n",
+                )
+            if cmd[1:3] == ["pr", "view"]:
+                return subprocess.CompletedProcess(cmd, 0, json.dumps({"headRefOid": "deadbeef"}), "")
+            raise AssertionError(cmd)
+        monkeypatch.setattr(pr_checks.subprocess, "run", dispatch)
+        result = pr_checks.read(tmp_path, "acme/widget", 5, "deadbeef", 5.0)
+        assert result["status"] == "completed"
+        assert result["conclusion"] == "success"
+
+    def test_an_empty_gh_body_with_no_verdict_names_stderr_not_the_json_decoder(self, tmp_path, monkeypatch):
+        def dispatch(cmd, **kwargs):
+            if cmd[1] == "api":
+                return subprocess.CompletedProcess(cmd, 1, "", "HTTP 502: bad gateway")
+            raise AssertionError(cmd)
+        monkeypatch.setattr(pr_checks.subprocess, "run", dispatch)
+        with pytest.raises(ValueError, match="502"):
+            pr_checks.read(tmp_path, "acme/widget", 5, "deadbeef", 5.0)
+
     def test_the_pr_moved_during_the_refresh_reads_pending_not_the_old_verdict(self, tmp_path, monkeypatch):
         self._fake(
             monkeypatch,
