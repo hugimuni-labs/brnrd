@@ -22,6 +22,7 @@ The verbs move 4 adds (``land``, ``fold``) and move 4b's (``mark``,
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -772,6 +773,23 @@ def handle_await(f: OutboxFile) -> Handled:
             file=file_path,
             timeout_seconds=timeout_seconds,
         )
+        # Publish the arm before card, SCM, quota or presence collection.
+        # The CLI watches this generation; a slow HUD build must not turn an
+        # accepted directive into a thirty-second arming timeout. The normal
+        # HUD pass will evaluate resolution and replace the full snapshot.
+        portal_path = outbox_dir / "portal-state.json"
+        try:
+            portal = json.loads(portal_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            portal = {}
+        portal["await"] = {
+            "armed": True,
+            "generation": task.meta["await"]["generation"],
+            "resolved": False,
+            "file": file_path,
+            "timeout_seconds": timeout_seconds,
+        }
+        daemon._write_text_atomic(portal_path, json.dumps(portal))
         daemon._retire_outbox_staging(fpath)
     return _handled(f, 'await', promoted)
 

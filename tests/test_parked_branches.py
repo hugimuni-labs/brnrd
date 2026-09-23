@@ -1,11 +1,28 @@
 import json
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
 from brr import forge_pr_cache, gitops, parked_branches
 from brr.run import Run
+
+
+def _join_sweep(timeout: float = 5.0) -> None:
+    """Wait for any in-flight background sweep to land before asserting.
+
+    ``refresh_if_stale_async`` (the only thing that still calls ``detect``)
+    always runs on a thread named ``"parked-branches"`` — same idiom as
+    ``test_lane_liveness.py``'s own ``for thread in threading.enumerate()``
+    join, because a test that reads the cache before its refresh thread
+    finishes is racing the very asynchrony this module now provides on
+    purpose.
+    """
+    for thread in threading.enumerate():
+        if thread.name == "parked-branches":
+            thread.join(timeout=timeout)
 
 
 def _git(repo, *args):
@@ -79,24 +96,35 @@ def test_render_is_present_only_for_nonempty_detector_result():
 
 @pytest.fixture(autouse=True)
 def _fresh_sweep_state():
-    """Both pieces of this module's process-lifetime state, reset per test.
+    """This module's process-lifetime state, reset per test.
 
-    `warn_new` carries two: `_WARNED` (which branches have been announced)
-    and `_last_sweep_at` (when the expensive walk last ran). The TTL was
-    added on 2026-09-11 with its own tests resetting the new one — and the
-    *pre-existing* test below still cleared only `_WARNED`. It passed alone
-    and failed in a full run, which is how `main` went red: a second sweep
-    inside the 300s window returns before it can print anything.
+    Four globals now, all added or repurposed when the walk moved off the
+    caller's own thread (2026-09-22, the-tick-that-breathes): `_WARNED`
+    (which branches have been announced), `_cached_at` / `_cached_items`
+    (per-repo dicts backing the async-refreshed cache `read_cached` and
+    `warn_new` both read instead of calling `detect` themselves), and
+    `_refreshing` (the per-repo in-flight set `refresh_if_stale_async` uses
+    to avoid starting a second walk for the same repo while one is still
+    running). The TTL fixture this replaces was added 2026-09-11 after a
+    pre-existing test cleared only `_WARNED`, passed alone, and failed in a
+    full run — a second sweep inside the window returned before it could
+    print anything. Same failure shape would recur here with any one of the
+    four left dirty.
 
     Autouse rather than another `monkeypatch.setattr` line per test, because
-    the failure mode is "a future test forgets the second one", and a fixture
+    the failure mode is "a future test forgets one of them", and a fixture
     is the only version of this that a new test cannot omit.
     """
-    parked_branches._WARNED.clear()
-    parked_branches._last_sweep_at = None
+    def _reset():
+        parked_branches._WARNED.clear()
+        parked_branches._cached_at.clear()
+        parked_branches._cached_items.clear()
+        parked_branches._refreshing.clear()
+
+    _reset()
     yield
-    parked_branches._WARNED.clear()
-    parked_branches._last_sweep_at = None
+    _join_sweep()
+    _reset()
 
 
 def test_ergo_warning_is_once_per_branch_per_daemon_lifetime(tmp_path, monkeypatch, capsys):
@@ -105,7 +133,9 @@ def test_ergo_warning_is_once_per_branch_per_daemon_lifetime(tmp_path, monkeypat
         lambda _repo: [parked_branches.ParkedBranch("brr/x", 2, None)],
     )
     parked_branches.warn_new(tmp_path)
+    _join_sweep()
     parked_branches.warn_new(tmp_path)
+    _join_sweep()
     assert capsys.readouterr().out.count("[brnrd:ergo]") == 1
 
 
@@ -190,46 +220,180 @@ def test_unmerged_count_is_none_not_zero_when_git_refuses(tmp_path):
 
 
 def test_warn_new_sweeps_at_most_once_per_ttl(tmp_path, monkeypatch):
-    """The walk is the expensive half, and it sits in front of dispatch.
+    """The walk is the expensive half, and it must never run twice per window.
 
-    ``warn_new`` runs on the daemon's main loop thread every tick, immediately
-    before the scan that turns a waiting chat message into a run, and one sweep
-    is a ``git cherry`` per local ``brr/*`` branch — 15.3s over 346 branches,
-    measured on the author's checkout 2026-09-11. Its output was already
-    deduped per process (``_WARNED``), so every sweep after the first bought
-    nothing at all. Pinned on ``detect`` call count, not on printed text: the
-    defect was the *walk*, so the walk is what this has to count.
+    One sweep is a ``git cherry`` per local ``brr/*`` branch — 15.3s over 346
+    branches (2026-09-11), 130.9s over 453 branches (2026-09-22, the walk's
+    cost has grown 8.5x while the branch count grew 1.3x). Its output was
+    already deduped per process (``_WARNED``), so every sweep after the first
+    bought nothing at all. Pinned on ``detect`` call count, not on printed
+    text: the defect was the *walk*, so the walk is what this has to count.
+    Each ``warn_new`` call is joined before the next one fires, so the
+    ``now=`` values below still pin the TTL boundary exactly the way the
+    synchronous version of this test did — only the walk itself moved to a
+    background thread, not the accounting.
     """
     calls: list[Path] = []
     monkeypatch.setattr(parked_branches, "detect", lambda root: calls.append(root) or [])
-    monkeypatch.setattr(parked_branches, "_last_sweep_at", None)
 
     parked_branches.warn_new(tmp_path, ttl=300.0, now=1_000.0)
+    _join_sweep()
     parked_branches.warn_new(tmp_path, ttl=300.0, now=1_001.0)
+    _join_sweep()
     parked_branches.warn_new(tmp_path, ttl=300.0, now=1_299.9)
+    _join_sweep()
     assert len(calls) == 1, "a tick inside the TTL must not re-walk the branches"
 
     parked_branches.warn_new(tmp_path, ttl=300.0, now=1_300.0)
+    _join_sweep()
     assert len(calls) == 2, "the sweep must resume once the TTL has elapsed"
 
 
-def test_warn_new_throttles_even_when_a_sweep_raises(tmp_path, monkeypatch):
+def test_warn_new_throttles_even_when_a_sweep_raises(tmp_path, capsys, monkeypatch):
     """A failing sweep must not become a retry-every-tick loop.
 
-    ``daemon.py`` swallows this function's exceptions (an ergonomics note may
-    never sink the loop) and comes back in a few seconds. If the TTL were
-    stamped only on success, a git failure would restore exactly the per-tick
-    walk this throttle exists to stop — the pathological case, since a broken
-    sweep is also the one most likely to be slow.
+    The walk now runs on its own background thread (`refresh_if_stale_async`),
+    so a raising `detect` no longer propagates out of `warn_new` at all — it is
+    caught and printed inside the thread, the same "an ergonomics note must
+    never sink the caller" contract `daemon.py`'s own guard used to provide
+    from the outside. What must still hold: the TTL is stamped *before* the
+    walk runs, so a git failure does not restore the per-tick walk this
+    throttle exists to stop — the pathological case, since a broken sweep is
+    also the one most likely to be slow.
     """
-    def _boom(_root):
+    calls: list[Path] = []
+
+    def _boom(root):
+        calls.append(root)
         raise RuntimeError("git said no")
 
     monkeypatch.setattr(parked_branches, "detect", _boom)
-    monkeypatch.setattr(parked_branches, "_last_sweep_at", None)
 
-    with pytest.raises(RuntimeError):
-        parked_branches.warn_new(tmp_path, ttl=300.0, now=2_000.0)
+    parked_branches.warn_new(tmp_path, ttl=300.0, now=2_000.0)
+    _join_sweep()
+    assert len(calls) == 1
+    assert "parked-branch sweep failed" in capsys.readouterr().out
+    assert not parked_branches._refreshing, "a raised sweep must clear the in-flight guard"
+
     # Second call inside the TTL returns without reaching `detect` at all —
-    # if it did, this would raise again.
+    # if it did, `calls` would grow to 2.
     parked_branches.warn_new(tmp_path, ttl=300.0, now=2_010.0)
+    _join_sweep()
+    assert len(calls) == 1
+
+
+def test_refresh_if_stale_async_returns_before_the_walk_completes(tmp_path, monkeypatch):
+    """The whole point of this module's rewrite: the caller never waits.
+
+    Before 2026-09-22 this walk ran inline in two hot paths — the daemon's
+    main-loop tick and every dispatched run's own boot-prompt assembly — and
+    measured 130.9s over 453 branches on this account. A fix that still
+    blocks the caller until the walk finishes has fixed nothing; this test
+    pins the actual property that matters.
+    """
+    started = threading.Event()
+    release = threading.Event()
+
+    def _slow_detect(_root):
+        started.set()
+        assert release.wait(timeout=5), "test setup: release was never signalled"
+        return [parked_branches.ParkedBranch("brr/slow", 1, None)]
+
+    monkeypatch.setattr(parked_branches, "detect", _slow_detect)
+
+    t0 = time.monotonic()
+    assert parked_branches.refresh_if_stale_async(tmp_path) is True
+    elapsed = time.monotonic() - t0
+    assert elapsed < 1.0, "refresh_if_stale_async must return before the walk completes"
+    assert started.wait(timeout=5), "the background thread never started the walk"
+
+    # A second call while the first is still in flight starts nothing new —
+    # two concurrent walks would double-pay a cost this exists to spend once.
+    assert parked_branches.refresh_if_stale_async(tmp_path) is False
+
+    release.set()
+    _join_sweep()
+    assert [item.name for item in parked_branches.read_cached(tmp_path)] == ["brr/slow"]
+
+
+def test_read_cached_is_empty_before_the_first_sweep_lands(tmp_path, monkeypatch):
+    """A cold cache renders nothing rather than blocking the caller for it.
+
+    This is the honest cost `read_cached`'s own docstring names: a fresh
+    daemon process (or a test) that has never swept yet gets an empty list
+    for up to one TTL window, never a wait for the walk to finish.
+    """
+    release = threading.Event()
+
+    def _slow_detect(_root):
+        assert release.wait(timeout=5), "test setup: release was never signalled"
+        return [parked_branches.ParkedBranch("brr/slow", 1, None)]
+
+    monkeypatch.setattr(parked_branches, "detect", _slow_detect)
+
+    assert parked_branches.read_cached(tmp_path) == []
+
+    release.set()
+    _join_sweep()
+
+
+def test_the_two_wiring_points_read_the_cache_not_the_walk():
+    """A structural guard — neither call site is reachable from a unit test.
+
+    Both live inside `daemon.start()`'s main loop and `prompts.py`'s boot
+    bundle assembly, neither driven directly here. An edit to either that
+    quietly went back to calling `detect(...)` inline would restore the
+    130.9s synchronous walk this report exists to remove, and the suite
+    would stay green without this pin — same shape as
+    `test_lane_liveness.py`'s own `test_the_two_wiring_points_exist_in_the_daemon`.
+    """
+    from brr import daemon, prompts
+
+    daemon_source = Path(daemon.__file__).read_text(encoding="utf-8")
+    assert "parked_branches.warn_new(repo_root)" in daemon_source, (
+        "the daemon's main loop no longer sweeps parked branches at all"
+    )
+    assert "parked_branches.detect(repo_root)" not in daemon_source, (
+        "the daemon's main loop calls detect() directly again — that is the "
+        "130.9s synchronous walk this module's cache exists to prevent"
+    )
+
+    prompts_source = Path(prompts.__file__).read_text(encoding="utf-8")
+    assert "parked_branches.read_cached(repo_root)" in prompts_source, (
+        "the boot bundle no longer reads the parked-branches cache"
+    )
+    assert "parked_branches.detect(repo_root)" not in prompts_source, (
+        "the boot bundle calls detect() directly again — every dispatched "
+        "run's boot would pay the full walk synchronously"
+    )
+
+
+def test_cache_is_keyed_per_repo_not_shared_across_them(tmp_path, monkeypatch):
+    """One daemon process dispatches against more than one repo.
+
+    `spawn:`'s own `repo:` targeting sends a strand into a sibling repo from
+    the *same* process (`account_context.repos`) — an unkeyed cache would
+    serve repo A's parked-branch list to repo B's boot prompt the first time
+    both have swept in one process lifetime. `.resolve()`'d, distinct
+    `tmp_path` children are enough to prove the two never collide.
+    """
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+
+    def _fake_detect(root):
+        name = "brr/from-a" if root == repo_a else "brr/from-b"
+        return [parked_branches.ParkedBranch(name, 1, None)]
+
+    monkeypatch.setattr(parked_branches, "detect", _fake_detect)
+
+    assert parked_branches.refresh_if_stale_async(repo_a) is True
+    assert parked_branches.refresh_if_stale_async(repo_b) is True
+    _join_sweep()
+
+    assert [item.name for item in parked_branches.read_cached(repo_a)] == ["brr/from-a"]
+    assert [item.name for item in parked_branches.read_cached(repo_b)] == ["brr/from-b"]
+
+    # A fresh sweep for repo_a alone must not touch repo_b's own TTL clock.
+    assert parked_branches.refresh_if_stale_async(repo_b) is False

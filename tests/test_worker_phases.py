@@ -367,3 +367,37 @@ def test_daemon_run_worker_is_a_call_into_worker_run(monkeypatch):
         ({"id": "evt"}, Path("/repo"), Path("/responses"), {"k": 1}, 2),
         {"account_context": None, "inbox_dir": Path("/inbox")},
     )]
+
+
+@pytest.mark.parametrize("callback", ["on_heartbeat", "on_flush"])
+def test_stream_arms_await_before_slow_tick_work(tmp_path, monkeypatch, callback):
+    import importlib
+    import json
+    stream_mod = importlib.import_module("brr.worker.stream")
+    p = _prepared(tmp_path, monkeypatch)
+    dx = worker.dispatch(p, Attempt(n=1, lane=p.lane))
+    directive = p.outbox_dir / "wait.md"
+    directive.write_text("---\nawait: true\ntimeout: none\n---\n")
+    reached = []
+
+    class StopTick(Exception):
+        pass
+
+    def slow(*args, **kwargs):
+        portal = json.loads((p.outbox_dir / "portal-state.json").read_text())
+        assert portal["await"]["armed"] is True
+        assert portal["await"]["generation"] == p.task.meta["await"]["generation"]
+        assert not directive.exists()
+        reached.append(True)
+        raise StopTick
+
+    monkeypatch.setattr(stream_mod.pause, "overdue_records", slow)
+    monkeypatch.setattr(stream_mod.runner_auth_health, "clear_success", slow)
+
+    def invoke(*args, **kwargs):
+        kwargs[callback]()
+
+    monkeypatch.setattr(daemon, "_invoke_with_heartbeat", invoke)
+    with pytest.raises(StopTick):
+        worker.stream(p, dx)
+    assert reached == [True]
