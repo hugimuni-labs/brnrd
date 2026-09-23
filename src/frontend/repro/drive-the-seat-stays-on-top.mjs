@@ -35,7 +35,12 @@ function liveRun(over) {
 		last_seen: now,
 		parent_run_id: over.parent_run_id ?? null,
 		is_subspawn: !!over.parent_run_id,
-		runner: over.runner ?? { name: 'claude-sonnet', shell: 'claude', core: 'sonnet', class: 'balanced' },
+		runner: over.runner ?? {
+			name: 'claude-sonnet',
+			shell: 'claude',
+			core: 'sonnet',
+			class: 'balanced'
+		},
 		phase: over.phase ?? 'working',
 		card_text: over.card_text ?? null,
 		card_updated_at: now,
