@@ -3150,7 +3150,72 @@ _SUBSTITUTION_CAUSE = {
     "quota_exhausted": "ran out of quota",
     "auth_error": "lost its credential",
     "provider_error": "hit a provider outage",
+    "core_refusal": "was refused twice by its Core's safeguards",
 }
+
+#: #2076's ladder: how long a second Core-refusal counts as "the same
+#: spree" as the first, rather than a fresh occurrence starting the ladder
+#: over. His figure ("~10 minutes"), named once here rather than repeated.
+CORE_REFUSAL_RETRY_WINDOW_SECONDS = 600.0
+
+
+def _core_refusal_should_retry_fresh(task: Run, *, now: float | None = None) -> bool:
+    """Whether this Core-refusal failure earns the ladder's one fresh-session
+    retry, or should instead fall through to the ordinary reroute policy.
+
+    #2076 (his spec, evt-...-mqx3): the first hit reboots the *same*
+    Shell+Core as a brand-new session — cheap, and it already happens for
+    free the moment this returns ``True``: a retry attempt never carries
+    this run's native session resume (that is only consulted at
+    ``attempt == 1``, see ``worker/prepare.py``'s ``resume_native_session_id``
+    wiring), so the next attempt is a fresh sample by construction. A
+    *second* refusal inside the same ~10-minute window means the reboot
+    did not help, so this returns ``False`` and lets
+    ``runner_select.AUTO_FALLBACK_FAILURES`` (which now includes
+    ``CORE_REFUSAL``) reroute to a different Shell — or give up, if none
+    has quota — instead of paying for a second identical sample.
+
+    Stamps ``task.meta["core_refusal_retried_at"]`` so the run's very next
+    boundary can read it back, and **clears it** the moment a "no" verdict
+    consumes it — a third refusal after a successful reroute starts the
+    ladder over rather than being permanently denied its own retry.
+    """
+    wall = time.time() if now is None else now
+    stamped = task.meta.get("core_refusal_retried_at")
+    if isinstance(stamped, (int, float)) and not isinstance(stamped, bool):
+        elapsed = wall - float(stamped)
+        if 0 <= elapsed <= CORE_REFUSAL_RETRY_WINDOW_SECONDS:
+            task.meta.pop("core_refusal_retried_at", None)
+            return False
+    task.meta["core_refusal_retried_at"] = wall
+    return True
+
+
+def _announce_core_refusal_retry(
+    responses_dir: Path, event_id: str, runner_name: str | None,
+) -> None:
+    """Tell the correspondent a Core refusal is getting one fresh-session
+    retry before anything else is tried (#2076).
+
+    Same reasoning as :func:`_announce_runner_substitution`: the ladder's
+    first rung recovers silently more often than not, and a silent recovery
+    reads, from the chat, like nothing happened. Never the vendor's own
+    refusal text — a clean, one-line cause (his rule: never the boilerplate
+    as the reply).
+    """
+    message = (
+        f"⚙ **{runner_name}** refused this turn (its own safeguards) — "
+        "rebooting the same Shell+Core as a fresh session before trying "
+        "anything else."
+    )
+    try:
+        protocol.write_partial(responses_dir, event_id, message)
+    except Exception:  # noqa: BLE001 — an announcement must never sink a retry
+        import sys as _sys
+        print(
+            f"[brnrd] core-refusal retry announce failed for {event_id}",
+            file=_sys.stderr,
+        )
 
 
 def _record_runner_substitution(
@@ -11554,6 +11619,7 @@ def _spawn_strand_ran(task: Run) -> bool:
 #: dict is a serialization question nobody should have to ask at reap time.
 EXIT_QUOTA_KEYS = (
     "spawn_quota_remaining_pct",
+    "spawn_quota_bucket",
     "spawn_quota_summary",
     "spawn_quota_shell",
     "spawn_quota_read_at",
@@ -11659,6 +11725,7 @@ def _capture_exit_quota(task: Run) -> dict[str, object]:
 
     core = str(task.meta.get("runner_core") or task.meta.get("core") or "").strip()
     pct = runner_quota.binding_quota_remaining_pct(levels, core or None)
+    bucket = runner_quota.binding_quota_bucket(levels, core or None)
     summary = runner_quota.summary_from_levels(levels)
     if pct is None and not summary:
         return {}
@@ -11675,6 +11742,12 @@ def _capture_exit_quota(task: Run) -> dict[str, object]:
         # comparing `spawn_quota_remaining_pct` against a floor should
         # never have to discover that by hand.
         captured["spawn_quota_remaining_pct"] = int(float(pct))
+    if bucket:
+        # #2084's third ask: a kill on a quota reading names *which*
+        # bucket it read — "credits" vs "session"/"week"/"primary" —
+        # so the next reader isn't left guessing what a bare percentage
+        # meant.
+        captured["spawn_quota_bucket"] = bucket[0]
     if summary:
         captured["spawn_quota_summary"] = " ".join(str(summary).split())
     shell = "codex" if codex_status.supported(runner_name) else (
@@ -12080,10 +12153,13 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     fuel_block = ""
     if exit_quota and task.status == "error":
         pct = exit_quota.get("spawn_quota_remaining_pct")
+        bucket = exit_quota.get("spawn_quota_bucket")
         parts = [
             "fuel at exit:",
             (
-                f"binding quota {pct}% left"
+                f"binding quota ({bucket}) {pct}% left"
+                if pct is not None and bucket
+                else f"binding quota {pct}% left"
                 if pct is not None
                 else "binding quota unreadable"
             ),
@@ -15208,7 +15284,11 @@ def _failure_reason(
             )
         )
         prefix = runner_failures.reason_prefix(kind)
-        if kind == runner_failures.INTERRUPTED:
+        if kind in (runner_failures.INTERRUPTED, runner_failures.CORE_REFUSAL):
+            # #2076: never the vendor's own refusal boilerplate as the
+            # reply — same suppression INTERRUPTED already earned, for the
+            # same reason (the correspondent needs the cause, not a
+            # provider's exact wording quoted back at them).
             return f"{prefix} after {attempts} attempt(s)"
         if detail:
             return f"{prefix} after {attempts} attempt(s): {detail}"

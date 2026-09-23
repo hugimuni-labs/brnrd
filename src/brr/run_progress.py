@@ -976,6 +976,7 @@ _ATTEMPT_STATUS_LABELS: dict[str, str] = {
     "interrupted": "interrupted",
     "host_interrupted": "host interrupted",
     "host_suspended": "host went to sleep",
+    "core_refusal": "Core refused",
 }
 
 
