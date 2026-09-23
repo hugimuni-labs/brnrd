@@ -2083,3 +2083,68 @@ def test_do_several_asks_in_one_event_mint_several_items(tmp_path, monkeypatch, 
     ]) == 0
     out = capsys.readouterr().out.strip()
     assert out == "reply evt-9 ✓ · item w-1 ✓ · item w-2 minted ✓ · item w-3 minted ✓"
+
+
+# ── owned PRs · checks (the verdict that reaches the screen) ────────
+
+
+def test_bare_do_shows_each_owned_prs_checks_verdict_from_the_forge_cache(tmp_path, monkeypatch, capsys):
+    """2026-09-23: every owned-PR row in `forge-pr-state.json` had read
+    `checks: {status: error}` for a day (#2106) and no surface said so. The
+    bare screen now joins this run's claims (`.pr` + `.relics.jsonl`) to the
+    cache — the same claim walk the refresh worker uses (`claimed_numbers`),
+    so what a person sees is exactly what the daemon watches."""
+    import json as _json
+
+    shared = tmp_path / ".brr"
+    outbox = shared / "outbox" / "evt-1"
+    outbox.mkdir(parents=True)
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    (outbox / ".pr").write_text("https://github.com/acme/widget/pull/7\n", encoding="utf-8")
+    (outbox / ".relics.jsonl").write_text(
+        # the shape `brnrd relic pr N` actually writes — a bare number, no ref
+        _json.dumps({"kind": "pr", "number": 9}) + "\n"
+        + _json.dumps({"kind": "pr", "number": 11}) + "\n",
+        encoding="utf-8",
+    )
+    (shared / "forge-pr-state.json").write_text(_json.dumps({
+        "schema": 1, "repo": "acme/widget", "error": None, "fetched_at": "now",
+        "prs": [
+            {"number": 7, "state": "OPEN", "head_sha": "a",
+             "checks": {"status": "error", "error": "Expecting value: line 1 column 1 (char 0)"}},
+            {"number": 9, "state": "OPEN", "head_sha": "b",
+             "checks": {"status": "completed", "conclusion": "success", "signature": "s"}},
+            {"number": 8, "state": "OPEN", "head_sha": "c", "checks": None},
+        ],
+    }), encoding="utf-8")
+
+    assert main(["do"]) == 0
+    out = capsys.readouterr().out
+    assert _says(
+        out,
+        "owned PRs (3): #7 OPEN · checks: error Expecting value: line 1 column 1 (char 0)"
+        " | #9 OPEN · checks: completed success | #11 · forge cache unlisted",
+    )
+    assert "#8" not in out  # not this run's — never rendered as owned
+
+
+def test_bare_do_names_an_absent_forge_cache_instead_of_dropping_the_owned_line(tmp_path, monkeypatch, capsys):
+    shared = tmp_path / ".brr"
+    outbox = shared / "outbox" / "evt-1"
+    outbox.mkdir(parents=True)
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    (outbox / ".pr").write_text("https://github.com/acme/widget/pull/7\n", encoding="utf-8")
+
+    assert main(["do"]) == 0
+    assert _says(capsys.readouterr().out, "owned PRs (1): #7 · forge cache absent")
+
+
+def test_bare_do_with_no_claimed_pr_has_no_owned_line(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    assert main(["do"]) == 0
+    assert "owned PRs" not in capsys.readouterr().out
