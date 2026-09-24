@@ -21,31 +21,41 @@ def owners(repo_root: Path, label: str) -> dict[int, list]:
     runtime = gitops.shared_brr_dir(repo_root)
     for task in list_runs(runtime / "runs", status="running"):
         outbox = Path(task.meta.get("outbox_path") or runtime / "outbox" / task.event_id)
-        claims = relics.read_reported(outbox)
-        try:
-            control = (outbox / relics.PR_CONTROL_NAME).read_text().strip()
-        except OSError:
-            control = ""
-        if control:
-            claims.append({"kind": "pr", "ref": control})
-        numbers = set()
-        for claim in claims:
-            if claim.get("kind") != "pr":
-                continue
-            parsed = forges.parse_pull_request_ref(str(
-                claim.get("url") or claim.get("ref") or claim.get("number") or ""
-            ))
-            if not parsed:
-                continue
-            claim_repo, number = parsed
-            if (claim_repo and claim_repo.lower() != label.lower()) or (
-                claim.get("repo") and str(claim["repo"]).lower() != label.lower()
-            ):
-                continue
-            numbers.add(int(number))
-        for number in numbers:
+        for number in claimed_numbers(outbox, label):
             found.setdefault(number, []).append((task, outbox))
     return found
+
+
+def claimed_numbers(outbox: Path, label: str | None = None) -> set[int]:
+    """PR numbers one run claims: `.relics.jsonl` rows of kind ``pr`` plus the
+    `.pr` control file. *label* given ⇒ claims naming another repo are
+    dropped. The one definition of "this run's PRs" — the refresh worker and
+    the bare ``brnrd do`` screen both read it, so the checks verdict a person
+    sees is for exactly the PRs the daemon watches."""
+    claims = relics.read_reported(outbox)
+    try:
+        control = (outbox / relics.PR_CONTROL_NAME).read_text().strip()
+    except OSError:
+        control = ""
+    if control:
+        claims.append({"kind": "pr", "ref": control})
+    numbers: set[int] = set()
+    for claim in claims:
+        if claim.get("kind") != "pr":
+            continue
+        parsed = forges.parse_pull_request_ref(str(
+            claim.get("url") or claim.get("ref") or claim.get("number") or ""
+        ))
+        if not parsed:
+            continue
+        claim_repo, number = parsed
+        if label and (
+            (claim_repo and claim_repo.lower() != label.lower())
+            or (claim.get("repo") and str(claim["repo"]).lower() != label.lower())
+        ):
+            continue
+        numbers.add(int(number))
+    return numbers
 
 
 def _json(repo_root: Path, args: list[str], timeout: float):
