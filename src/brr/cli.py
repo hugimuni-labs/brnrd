@@ -3809,7 +3809,10 @@ def cmd_do(args):
                 file=sys.stderr,
             )
             return 1
-        print(do_mod.format_snapshot(payload), file=out)
+        print(
+            do_mod.format_snapshot(payload, owned_prs=do_mod.owned_pr_checks(outbox_dir)),
+            file=out,
+        )
         if not passthrough:
             return 0
     else:
