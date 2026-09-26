@@ -18538,6 +18538,7 @@ def start(
                         if spawn["event"] is not None else ""
                     )
                     parked: dict[str, Any] | None = None
+                    _edge_resolved = False
                     try:
                         try:
                             spawn_task = future.result()
@@ -18577,7 +18578,26 @@ def start(
                                 # traffic.
                                 _retire_run_control(spawn_eid)
                                 _retire_child_messages(spawn["inbox_dir"], spawn_eid)
+                        _edge_resolved = True
                     finally:
+                        # #1994 (Case 2): if _notify_spawn_parent or
+                        # _parked_child_projection threw, _edge_resolved is
+                        # still False and the control was never retired —
+                        # it would linger as a phantom "owned child" on every
+                        # future boundary. Retire it here; _retire_run_control
+                        # is a pop so it is safe to call even when the normal
+                        # path already ran it (returns None, no-op). Skip
+                        # parked controls — those are kept deliberately.
+                        if not _edge_resolved and spawn_eid:
+                            with _run_controls_lock:
+                                ctrl = _run_controls.get(spawn_eid)
+                            if ctrl is not None and not isinstance(
+                                ctrl.get("parked"), dict
+                            ):
+                                _retire_run_control(spawn_eid)
+                                _retire_child_messages(
+                                    spawn.get("inbox_dir"), spawn_eid,
+                                )
                         spawn_executor = spawn.get("executor")
                         if spawn_executor is not None:
                             spawn_executor.shutdown(wait=False)

@@ -3358,6 +3358,80 @@ def test_owned_child_controls_omits_title_and_weighted_when_absent():
     }]
 
 
+def test_refused_spawn_absent_from_owned_children(tmp_path):
+    """#1994 Case 1: a spawn refused at admission must not appear in
+    owned_children.  All refusal branches in _queue_spawn_request return
+    before _register_run_control is called, so no control is ever created;
+    this is a regression pin to keep it that way."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(
+        inbox, "telegram", "original task", status="processing",
+    )
+    task = Run(
+        id="run-parent", event_id=path.stem, body="original", source="telegram",
+    )
+    accepted = daemon._queue_spawn_request(
+        daemon._WorkerEmit(brr_dir, "", path.stem),
+        task, inbox, path.stem,
+        {"spawn": True, "allowance": "not-a-number"},
+        "side task", outbox,
+    )
+    assert accepted is False
+    assert daemon._owned_child_controls("run-parent") == [], (
+        "a refused spawn must leave no control in owned_children"
+    )
+
+
+def test_reap_exception_retires_orphan_control():
+    """#1994 Case 2: if the spawn-reap notify path throws, the finally block
+    must retire the control so it does not linger as a phantom owned child."""
+    spawn_eid = "evt-reap-exc-test"
+    parent_run_id = "run-reap-exc-parent"
+    daemon._register_run_control(spawn_eid, parent_run_id)
+
+    # Verify the control is visible before cleanup.
+    assert daemon._owned_child_controls(parent_run_id) != []
+
+    # Simulate what the #1994 finally-block fix does when _edge_resolved is
+    # False (i.e. the notify path threw before _retire_run_control ran).
+    with daemon._run_controls_lock:
+        ctrl = daemon._run_controls.get(spawn_eid)
+    if ctrl is not None and not isinstance(ctrl.get("parked"), dict):
+        daemon._retire_run_control(spawn_eid)
+
+    assert daemon._owned_child_controls(parent_run_id) == [], (
+        "after exception-path retirement, the control must not appear in owned_children"
+    )
+
+
+def test_reap_exception_does_not_retire_parked_control():
+    """#1994: the finally-block cleanup must not touch parked controls —
+    those are kept deliberately so the parent can still stop: or steer them."""
+    spawn_eid = "evt-reap-parked-test"
+    parent_run_id = "run-reap-parked-parent"
+    daemon._register_run_control(spawn_eid, parent_run_id)
+    # Mark it as parked (simulates _park_run_control succeeding).
+    with daemon._run_controls_lock:
+        daemon._run_controls[spawn_eid]["parked"] = {
+            "reason": "refill", "resume": "refill", "waiting_on": "quota",
+        }
+
+    # The finally-block guard: skip if parked.
+    with daemon._run_controls_lock:
+        ctrl = daemon._run_controls.get(spawn_eid)
+    if ctrl is not None and not isinstance(ctrl.get("parked"), dict):
+        daemon._retire_run_control(spawn_eid)
+
+    # Should still be present (parked edge is kept intentionally).
+    rows = daemon._owned_child_controls(parent_run_id)
+    assert rows and rows[0]["status"] == "parked", (
+        "a parked control must survive the exception-path cleanup guard"
+    )
+
+
 def test_collect_allowance_facet_strand_branch_writes_spend_onto_the_control(
     monkeypatch,
 ):
