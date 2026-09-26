@@ -103,6 +103,57 @@ def _inject_text(out):
     return (out.get("hookSpecificOutput") or {}).get("additionalContext") or ""
 
 
+def test_item_answer_state_next_accepts_one_or_two_physical_lines():
+    assert hooks._item_answer_state_next(
+        "## Asked\n**State:** old **Next:** old\n"
+        "## Answer\n**State:** ready **Next:** ship\n"
+        "## Done\n**State:** stale\n"
+    ) == ("ready", "ship")
+    assert hooks._item_answer_state_next(
+        "## Answer\n**State:** testing\n**Next:** review\n"
+    ) == ("testing", "review")
+    assert hooks._item_answer_state_next("## Answer\n**State:** incomplete\n") is None
+
+
+def test_post_tool_delivers_in_scope_item_state_even_without_bar(tmp_path, monkeypatch):
+    warp_root = tmp_path / "warp"
+    warp_root.mkdir()
+    (warp_root / "w-1.md").write_text(
+        "# Claimed\n\ntype: action\nattempts: run-1\n\n"
+        "## Answer\n**State:** claimed **Next:** implement\n",
+        encoding="utf-8",
+    )
+    (warp_root / "g-1.md").write_text(
+        "# Bound goal\n\ntype: goal\n\n"
+        "## Answer\n**State:** measured\n**Next:** continue\n",
+        encoding="utf-8",
+    )
+    (warp_root / "w-2.md").write_text(
+        "# Unrelated\n\ntype: action\n\n"
+        "## Answer\n**State:** unrelated **Next:** wait\n",
+        encoding="utf-8",
+    )
+    hooks.do.append_ask(tmp_path, "evt-1", "g-1")
+    monkeypatch.setattr(hooks.config, "load_config", lambda _repo: {})
+    monkeypatch.setattr(
+        hooks.account, "resolve_context", lambda _repo, _cfg, create=False: object(),
+    )
+    monkeypatch.setattr(hooks.items, "warp_dir", lambda _home: warp_root)
+    # Isolate the delivery from the ambient bar's own gates and dedup.
+    monkeypatch.setattr(hooks, "format_delta", lambda *_args, **_kwargs: None)
+    _portal(tmp_path, token="unchanged", card={"stale": False})
+    env = _env(tmp_path)
+    env["BRR_SHARED_DIR"] = str(tmp_path / "repo" / ".brr")
+
+    for _ in range(2):
+        out, code = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+        assert code == 0
+        text = _inject_text(out)
+        assert "w-1 State: claimed Next: implement" in text
+        assert "g-1 State: measured Next: continue" in text
+        assert "w-2" not in text
+
+
 def test_post_tool_touches_flush_and_injects_on_change(tmp_path):
     _portal(tmp_path, token="t1", pending=1,
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
@@ -4581,7 +4632,7 @@ def test_hold_chip_none_without_a_hold_facet():
 
 
 @pytest.mark.parametrize(("state", "why", "expected"), [
-    ("awake", "event_dispatched", "awake"),
+    ("awake", "event_dispatched", None),
     ("listening", "await_armed", "listening"),
     ("parked", "quota_exhausted", "parked·quota_exhausted"),
 ])
