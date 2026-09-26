@@ -130,6 +130,8 @@ def test_scan_item_ids_two_doors():
         # slash-enumeration must not lose everything after the first id.
         ("the w-14/w-45/w-46/w-47 cluster", ["w-14", "w-45", "w-46", "w-47"]),
         ("w-45/w-46", ["w-45", "w-46"]),
+        ("g-1/g-2", ["g-1", "g-2"]),
+        ("w-1/g-2", ["w-1", "g-2"]),
         # The rest of the separator set the issue named — none of these
         # were ever broken, but they're asserted alongside the slash so
         # the whole set lives in one table.
@@ -150,10 +152,13 @@ def test_scan_item_ids_two_doors():
         # The pre-existing (pass-1-independent) filename case — resolved
         # here as "never an id", not left as pass 1's inherited behavior.
         ("w-45.md", []),
+        ("surface/warp/g-1.md", []),
+        ("g-1.md", []),
         # Untouched negatives from the original spec: embedded in a
         # longer token or a hyphen-suffixed path segment.
         ("docs/w-45-notes.md", []),
         ("xw-45", []),
+        ("xg-1", []),
         ("w-450", ["w-450"]),
     ],
 )
