@@ -93,9 +93,7 @@
 			>
 				Our network gets 20% off General Admission.
 			</h2>
-			<p class="mt-4 text-sm leading-relaxed text-stone-400">
-				Use this code at checkout:
-			</p>
+			<p class="mt-4 text-sm leading-relaxed text-stone-400">Use this code at checkout:</p>
 			<button
 				type="button"
 				onclick={copyDiscountCode}
@@ -116,7 +114,9 @@
 		</section>
 
 		<section class="mt-10 max-w-2xl">
-			<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">HugiMuni SAS × brnrd</p>
+			<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
+				HugiMuni SAS × brnrd
+			</p>
 			<p class="mt-2 text-sm leading-relaxed text-stone-400">
 				Come say hi, show us what you’re building, or ask us why a coding agent should still be
 				there tomorrow morning.

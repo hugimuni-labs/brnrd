@@ -131,7 +131,7 @@ _ROW_RE = re.compile(
 #: acceptance list asks for it, and guessing a prefix onto a bare number
 #: is exactly the kind of guess this module's docstring says an id is
 #: never subject to.
-_SCAN_CANDIDATE_RE = re.compile(r"w-\d+")
+_SCAN_CANDIDATE_RE = re.compile(r"[wg]-\d+")
 _SCAN_LINE_RE = re.compile(r"^item:[ \t]*([a-z0-9][a-z0-9-]*)[ \t]*$", re.MULTILINE)
 #: A trailing filename-extension shape: dot, a letter, then a short
 #: alnum run, not itself followed by more word chars or another dot (so
@@ -141,7 +141,7 @@ _FILENAME_EXT_RE = re.compile(r"^\.[A-Za-z][A-Za-z0-9]{0,7}(?![\w.])")
 
 
 def _scan_bare_tokens(text: str) -> list[str]:
-    """Bare ``w-<N>`` ids in *text*, unique, first-mention order — the
+    """Bare ``w-<N>``/``g-<N>`` ids in *text*, unique, first-mention order — the
     boundary-aware half of :func:`scan_item_ids`. See the comment above
     ``_SCAN_CANDIDATE_RE`` for the discriminator this implements; a single
     lookaround regex cannot express it because whether a leading ``/`` is
@@ -327,7 +327,7 @@ def resolve_item(warp_root: Path | None, item_id: str) -> Path | None:
 def scan_item_ids(text: str) -> list[str]:
     """Candidate item ids in free text, unique, first-mention order.
 
-    Two doors: bare ``w-<N>`` tokens anywhere, and explicit ``item: <id>``
+    Two doors: bare ``w-<N>``/``g-<N>`` tokens anywhere, and explicit ``item: <id>``
     lines (any legal id — the address line the copy-prompt affordance
     appends). Grammar-level only; resolution is the caller's second gate.
     """
