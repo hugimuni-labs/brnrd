@@ -755,7 +755,7 @@ def build(inputs: HUDInputs) -> HUD:
     )
     # The closeout collector can have less evidence than this heartbeat
     # after a seat holds or awaits. Retain this already-observed reading.
-    run_ledger.record_boundary_levels(task, run_levels)
+    run_ledger.record_boundary_levels(task, run_levels, work_dir=work_dir)
     allowance_facet_input = daemon._collect_allowance_facet(
         task, runner_name, work_dir, cfg=cfg, levels=run_levels,
         not_before=started_wall,
