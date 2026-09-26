@@ -16745,12 +16745,8 @@ def _release_reset_holds_due(
                     by=released_by, run_id=held.id, repo_root=str(root),
                     conversation_key=_seat_conversation(held),
                 )
-            # A measured release has no releasing *event* — the reading is
-            # the releaser, and the drawer is all there is to wake on. Under
-            # the old stamp that forced a bad choice: spray the drawer (N
-            # claims on one transcript) or cool every refill. brnrd#2023
-            # dissolves it — the claim is armed on the seat, and whichever
-            # accumulated letter leads the dispatch picks it up.
+            # The native resume claim belongs to the seat, so whichever
+            # pending letter leads the next dispatch can consume it.
             if released_meta.get("native_session_id"):
                 pending_resume.arm(
                     _shuttle_home(
@@ -16768,6 +16764,21 @@ def _release_reset_holds_due(
                 _undefer_held_event(
                     drawers, accumulated_id,
                     seat_conversation=_seat_conversation(held),
+                )
+            if (
+                resource_hold.refuses_correspondent(meta)
+                and not _is_strand(held.meta)
+                and not released_meta.get("accumulated_event_ids")
+            ):
+                # A quiet refill has no letter to lead the resumed dispatch.
+                # Give the resident seat one internal wake; a parked strand
+                # is never the seat, and accumulated mail already supplies
+                # the lead when present.
+                protocol.create_event(
+                    inbox_dir, "schedule",
+                    f"The quota wall released {held.id} after a measured "
+                    f"{released_by}. Continue the parked seat's work.",
+                    conversation_key=_seat_conversation(held),
                 )
             released += 1
             print(
