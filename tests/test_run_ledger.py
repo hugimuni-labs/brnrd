@@ -873,3 +873,130 @@ def test_the_claude_envelope_outranks_the_dispatch_reason(monkeypatch):
     }]
     row = run_ledger.build_closed_run_row(task, {}, after_levels=_levels())
     assert row["substitution_reason"] == "envelope says so"
+
+
+def test_carried_claude_quota_survives_heartbeat_and_sparse_closeout():
+    from brr import daemon
+
+    task = _task()
+    # Shape retained by claude_usage.carry_forward_sections when the fresh
+    # scrape omitted primary rows; no top-level used percentages survive.
+    before = {"quota": {"buckets": {
+        "session": {"remaining_percentage": 80},
+        "week": {"remaining_percentage": 60},
+    }}}
+    weekly, five_hour = run_ledger.quota_used_percentages(before)
+    task.meta["run_ledger_weekly_used_before"] = weekly
+    task.meta["run_ledger_five_hour_used_before"] = five_hour
+    after = daemon._merge_level_snapshots({"quota": {"buckets": {
+        "session": {"remaining_percentage": 75},
+        "week": {"remaining_percentage": 58},
+    }}})
+    run_ledger.record_boundary_levels(task, after)
+    row = run_ledger.build_closed_run_row(task, after_levels={})
+    assert row["weekly_pct_delta"] == 2
+    assert row["five_hour_pct_delta"] == 5
+
+
+def test_sparse_boundaries_do_not_erase_measured_tokens():
+    task = _task()
+    run_ledger.record_boundary_levels(task, _levels(tokens={"input_tokens": 123}))
+    run_ledger.record_boundary_levels(task, _levels(weekly=45))
+    run_ledger.record_boundary_levels(task, _levels(tokens={"input_tokens": None}))
+    row = run_ledger.build_closed_run_row(task, after_levels={})
+    assert row["tokens_input"] == 123
+    assert row["tokens_output"] is None
+
+
+def _write_usage(path, rows):
+    path.write_text("\n".join(json.dumps({
+        "type": "assistant", "timestamp": stamp,
+        "message": {"id": ident, "usage": usage},
+    }) for stamp, ident, usage in rows) + "\n")
+
+
+def test_released_claude_recovers_own_usage_without_a_terminal_envelope(tmp_path, monkeypatch):
+    from brr import daemon
+
+    task = _task()
+    task.meta.update(runner_name="claude", runner_shell="claude",
+                     started_at="2026-09-20T10:00:00Z",
+                     ended_at="2026-09-20T10:00:05Z")
+    path = tmp_path / "own.jsonl"
+    usage = dict(input_tokens=100, output_tokens=20,
+                 cache_read_input_tokens=200, cache_creation_input_tokens=40)
+    _write_usage(path, [
+        ("2026-09-19T10:00:00Z", "older-resumed-turn", usage),
+        ("2026-09-20T10:00:01Z", "one", {**usage, "output_tokens": 1}),
+        ("2026-09-20T10:00:02Z", "one", usage),
+        ("2026-09-20T10:00:05.500Z", "two", usage),
+        ("2026-09-20T10:00:07Z", "future-resume", usage),
+    ])
+    calls = []
+    def locate(cwd, *, not_before):
+        calls.append((cwd, not_before))
+        return path
+    monkeypatch.setattr(run_ledger.allowance, "latest_claude_transcript", locate)
+    # Actual display merge drops tokens, so terminal absence cannot depend
+    # on the UI snapshot growing a token field. Pin the run's source instead.
+    display = daemon._merge_level_snapshots({"spend": {"total_cost_usd": 99}})
+    run_ledger.record_boundary_levels(task, display, work_dir=tmp_path)
+    assert calls == [(tmp_path, 1789898400.0)]
+    monkeypatch.setattr(run_ledger.allowance, "latest_claude_transcript",
+                        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("late hunt")))
+    row = run_ledger.build_closed_run_row(task, after_levels={})
+    assert [row[f] for f in ("tokens_input", "tokens_output", "tokens_cache_read",
+                            "tokens_cache_creation")] == [200, 40, 400, 80]
+
+
+def test_no_transcript_or_usage_remains_unknown(tmp_path):
+    task = _task()
+    task.meta.update(runner_name="claude", started_at="2026-09-20T10:00:00Z")
+    path = tmp_path / "empty.jsonl"
+    path.write_text('[]\n{"type":"assistant","timestamp":17}\n')
+    task.meta["run_ledger_claude_transcripts"] = [str(path)]
+    row = run_ledger.build_closed_run_row(task, after_levels={})
+    assert row["tokens_input"] is None
+    assert row["tokens_output"] is None
+
+
+def test_shared_claude_display_is_not_run_token_accounting():
+    from brr import daemon
+
+    task = _task()
+    task.meta.update(runner_name="claude", started_at="2026-09-20T10:00:00Z")
+    shared = run_ledger.claude_status.mark_cross_run({
+        "tokens": {"input_tokens": 99999}, "spend": {"total_cost_usd": 7},
+    })
+    run_ledger.record_boundary_levels(task, daemon._merge_level_snapshots(shared))
+    row = run_ledger.build_closed_run_row(task, after_levels={})
+    assert row["tokens_input"] is None
+
+
+def test_runner_switch_clears_old_boundary_and_transcript(monkeypatch):
+    task = _task()
+    task.meta.update(run_ledger_baseline_runner="claude",
+                     run_ledger_last_levels={"tokens": {"input_tokens": 999}},
+                     run_ledger_claude_transcripts=["old.jsonl"])
+    monkeypatch.setattr(run_ledger, "load_quota_levels", lambda *a, **k: None)
+    run_ledger.mark_run_started(task, "codex", None, None)
+    assert "run_ledger_last_levels" not in task.meta
+    assert "run_ledger_claude_transcripts" not in task.meta
+
+
+def test_released_claude_retry_keeps_both_attempt_transcripts(tmp_path, monkeypatch):
+    task = _task()
+    task.meta.update(runner_name="claude", started_at="2026-09-20T10:00:00Z",
+                     ended_at="2026-09-20T10:00:05Z")
+    paths = [tmp_path / "first.jsonl", tmp_path / "retry.jsonl"]
+    for index, path in enumerate(paths):
+        _write_usage(path, [("2026-09-20T10:00:01Z", str(index),
+                             {"input_tokens": 10, "output_tokens": 2})])
+    found = iter(paths)
+    monkeypatch.setattr(run_ledger.allowance, "latest_claude_transcript",
+                        lambda *a, **k: next(found))
+    for _ in paths:
+        run_ledger.record_boundary_levels(task, None, work_dir=tmp_path)
+    row = run_ledger.build_closed_run_row(task, after_levels={})
+    assert row["tokens_input"] == 20
+    assert row["tokens_output"] == 4
