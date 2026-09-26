@@ -674,6 +674,24 @@ def test_do_item_binds_reply_and_writes_asks_jsonl_row(tmp_path, monkeypatch, ca
     assert "stage: understood" in text
 
 
+def test_do_item_accepts_goal_id(tmp_path, monkeypatch, capsys):
+    _repo_with_warp_item(tmp_path, monkeypatch)
+    assert main(["item", "new", "Keep ignition healthy", "--type", "goal"]) == 0
+    capsys.readouterr()
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
+
+    assert main([
+        "do", "--reply", "evt-1", "--item", "g-1", "--body", "hi", "--no-follow-up",
+    ]) == 0
+    assert "item g-1 ✓" in capsys.readouterr().out
+    rows = [json.loads(line) for line in (outbox / ".asks.jsonl").read_text().splitlines()]
+    assert rows == [{"event": "evt-1", "item": "g-1"}]
+
+
 def test_do_item_unknown_item_is_refused_before_staging(tmp_path, monkeypatch, capsys):
     _repo_with_warp_item(tmp_path, monkeypatch)
     capsys.readouterr()

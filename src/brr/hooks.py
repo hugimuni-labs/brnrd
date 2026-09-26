@@ -43,15 +43,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import account
 from . import allowance
+from . import asks
 from . import await_verb
 from . import card as card_rule
+from . import config
 from . import conversations
 from . import course
+from . import do
 from . import other_fuel
 from . import facets
 from . import gate_receipt
 from . import heddles as heddles_mod
+from . import items
 from . import portals
 from . import promises
 from . import protocol
@@ -573,6 +578,8 @@ class HookContext:
         self.host_root = Path(host_root) if host_root else None
         work_tree = env.get("BRR_WORK_TREE")
         self.git_work_tree = Path(work_tree) if work_tree else None
+        shared_dir = env.get("BRR_SHARED_DIR")
+        self.shared_dir = Path(shared_dir) if shared_dir else None
         portal = env.get("BRR_PORTAL_STATE")
         self.portal_state_path = Path(portal) if portal else None
         # The wake's persisted BootScore (`boot-score.json`), armed by the
@@ -624,6 +631,84 @@ def _read_json(path: Path | None) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _item_answer_state_next(text: str) -> tuple[str, str] | None:
+    """Read the two current progress lines from an item's Answer section.
+
+    Authors sometimes put both labels on one physical line. Stop at the next
+    level-two heading so a later Done section cannot supply either value.
+    """
+    answer = re.search(r"(?m)^##[ \t]+Answer[ \t]*\r?$", text)
+    if answer is None:
+        return None
+    section = text[answer.end():]
+    next_heading = re.search(r"(?m)^##[ \t]+", section)
+    if next_heading is not None:
+        section = section[:next_heading.start()]
+    state = next_step = ""
+    for line in section.splitlines():
+        if "**State:**" in line and not state:
+            state = line.split("**State:**", 1)[1].split("**Next:**", 1)[0].strip()
+        if "**Next:**" in line and not next_step:
+            next_step = line.split("**Next:**", 1)[1].strip()
+        if state and next_step:
+            return state, next_step
+    return None
+
+
+def _item_state_lines(ctx: HookContext, portal: dict[str, Any]) -> list[str]:
+    """State/Next for items claimed by this run or bound with ``--item``.
+
+    The portal's run facet supplies the run id, but not its item attempts.
+    Those are authored on each warp item; accepted reply bindings are in this
+    run's ``.asks.jsonl``. The daemon exports ``BRR_SHARED_DIR`` for every
+    runner, including strands, so its parent locates the repo whose config
+    resolves the account work surface. A missing home degrades to no lines.
+    """
+    run = portal.get("run") if isinstance(portal.get("run"), dict) else {}
+    run_id = str(run.get("id") or ctx.run_id or "").strip()
+    if not run_id or ctx.shared_dir is None:
+        return []
+    try:
+        repo_root = ctx.shared_dir.parent
+        home = account.resolve_context(
+            repo_root, config.load_config(repo_root), create=False,
+        )
+        warp_root = items.warp_dir(home)
+    except (OSError, ValueError):
+        return []
+    if warp_root is None:
+        return []
+
+    in_scope: dict[str, str] = {}
+    for path in warp_root.glob("*.md"):
+        if path.is_symlink() or not items.ITEM_ID_RE.fullmatch(path.stem):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        rows = asks._parse_markdown(path.stem, text)["rows"]
+        if run_id in asks._split(rows.get("attempts", "")):
+            in_scope[path.stem] = text
+    for binding in do.read_asks(ctx.outbox_dir):
+        item_id = binding.get("item")
+        if not isinstance(item_id, str) or item_id in in_scope:
+            continue
+        path = items.resolve_item(warp_root, item_id)
+        if path is not None:
+            try:
+                in_scope[item_id] = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+
+    lines = []
+    for item_id, text in sorted(in_scope.items()):
+        pair = _item_answer_state_next(text)
+        if pair is not None:
+            lines.append(f"{item_id} State: {pair[0]} Next: {pair[1]}")
+    return lines
 
 
 def _read_card_body(ctx: HookContext) -> str | None:
@@ -2268,7 +2353,9 @@ def _hold_chip(
         why = str(shuttle_state.get("why") or "").strip()
         if state == "parked":
             return f"parked·{why}" if why else "parked"
-        if state in {"awake", "listening", "handing-off", "released"}:
+        if state == "awake":
+            return None  # the default, even if an old hold ratio is still present
+        if state in {"listening", "handing-off", "released"}:
             return state
     quota = resources.get("quota") if isinstance(resources, dict) else None
     quota = quota if isinstance(quota, dict) else {}
@@ -6776,6 +6863,15 @@ def compute_neutral(
         if folded_event_id:
             shown_ids.add(folded_event_id)
         _commit_event_seen(state, event_decisions, shown_ids)
+
+    # Item progress is a delivery, not an ambient bar chip: it rides each
+    # post-tool boundary even when the portal token and bar are unchanged.
+    # Append after the event-seen commit so an item-only line never claims a
+    # pending correspondent event was also shown on this boundary.
+    if not portal_unavailable and phase in (PHASE_SESSION_START, PHASE_POST_TOOL):
+        item_lines = _item_state_lines(ctx, portal)
+        if item_lines:
+            inject = f"{inject}\n" + "\n".join(item_lines) if inject else "\n".join(item_lines)
 
     _write_hook_state(ctx, state)
     return {"inject": inject, "block": block, "block_reason": block_reason}
