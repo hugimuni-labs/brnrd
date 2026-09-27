@@ -817,6 +817,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", help="item id, or a unique fragment of its headline")
     p.add_argument("--why", default=None, help="one line on why")
     p.set_defaults(func=cmd_item_retire)
+    p = item_sub.add_parser(
+        "stamp",
+        help="hash the item's prose body and write body-version: to frontmatter "
+             "(run after updating State/Next to silence the staleness notice)",
+    )
+    p.add_argument("id", help="item id, or a unique fragment of its headline")
+    p.set_defaults(func=cmd_item_stamp)
 
     # `brnrd goal` (design-goal-oriented-engineering.md §"a metrics block in
     # the wake"): the readings store's maintenance verbs, mirroring `item`'s
@@ -4271,6 +4278,28 @@ def cmd_item_retire(args):
         )
         return 1
     print(f"{item.id} retired — {item.headline}")
+    return 0
+
+
+def cmd_item_stamp(args):
+    """Hash the item's prose body and write ``body-version:`` to frontmatter."""
+    import sys
+
+    from . import asks as asks_mod
+
+    warp_root, err = _item_context()
+    if err:
+        print(f"[brnrd item] {err}", file=sys.stderr)
+        return 1
+    item, err = _resolve_item_arg(warp_root, args.id)
+    if err:
+        print(f"[brnrd item] {err}", file=sys.stderr)
+        return 1
+    digest = asks_mod.stamp_body_version(warp_root, item.id)
+    if digest is None:
+        print(f"[brnrd item] {item.id} — stamp failed (read error)", file=sys.stderr)
+        return 1
+    print(f"{item.id} body-version: {digest} — {item.headline}")
     return 0
 
 
