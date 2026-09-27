@@ -3935,6 +3935,7 @@ def _collect_levels(
     refresh: bool = True,
     shared_dir: Path | None = None,
     codex_thread_id: str | None = None,
+    quota_max_age_seconds: float | None = None,
 ) -> tuple[dict[str, object] | None, "frozenset[str] | bool"]:
     """Pick the level snapshot + wired-slot set for *runner_name*'s Shell.
 
@@ -3983,10 +3984,15 @@ def _collect_levels(
     is the set of level slots whose collector exists (so an empty slot reads
     ``absent`` not ``unimplemented``); Shells with no collector return ``False``.
     """
+    # A reset-deadline probe must not reuse a pre-reset cached reading.
+    probe_options = (
+        {"max_age_seconds": quota_max_age_seconds}
+        if quota_max_age_seconds is not None else {}
+    )
     if codex_status.supported(runner_name):
         cache_dir = shared_dir or outbox_dir
         probe = (
-            codex_usage.load_or_refresh_snapshot(cache_dir)
+            codex_usage.load_or_refresh_snapshot(cache_dir, **probe_options)
             if refresh else codex_usage.load_snapshot(cache_dir)
         )
         merged = codex_usage.merge_levels(
@@ -4012,7 +4018,7 @@ def _collect_levels(
             outbox_dir = runner_quota.latest_claude_usage_outbox_dir(shared_dir)
         if refresh:
             usage_levels = claude_usage.load_or_refresh_snapshot(
-                outbox_dir, cwd=work_dir
+                outbox_dir, cwd=work_dir, **probe_options
             )
         else:
             usage_levels = claude_usage.load_snapshot(outbox_dir)
@@ -16665,17 +16671,14 @@ def _reconcile_stale_held_status(runs_dir: Path) -> int:
 def _release_reset_holds_due(
     account_context: account.AccountContext | None,
     repo_root: Path,
+    *,
+    deadline_only: bool = False,
 ) -> int:
-    """Release every ``resume: reset`` hold whose measured deadline passed.
+    """Release reset/refill holds when their own condition is proven.
 
-    Rides the existing zombie-sweep cadence
-    (``_ZOMBIE_SWEEP_INTERVAL_SECONDS``) deliberately — another repair on
-    an existing slow clock, not a new scheduler. An ``operator``-condition
-    hold is never a candidate here at all
-    (``resource_hold.reset_condition_met`` returns ``False`` for one by
-    construction); only a hold that itself chose ``resume: reset`` can be
-    released this way, and only by the *measured* deadline captured once
-    at arm time — never a fresh poll.
+    The slow sweep retries all refill holds, including unreadable quotas and
+    holds without a deadline. The heartbeat selects only crossed deadlines
+    not yet probed; both paths share the same release and resume bookkeeping.
     """
     released = 0
     roots: dict[Path, Path] = {}
@@ -16695,15 +16698,23 @@ def _release_reset_holds_due(
         if not runs_dir.is_dir():
             continue
         inbox_dir = _repo_inbox(root)
-        _reconcile_stale_held_status(runs_dir)
+        if not deadline_only:
+            _reconcile_stale_held_status(runs_dir)
         for held in _held_runs_for_repo(runs_dir):
             meta = held.meta.get("resource_hold") or {}
+            if deadline_only:
+                deadline = _crossed_reset_deadline(meta)
+                if deadline is None:
+                    continue
+                if (resource_hold.refuses_correspondent(meta)
+                        and meta.get("reset_deadline_probed") == deadline):
+                    continue
             released_by = "reset"
             if resource_hold.refuses_correspondent(meta):
                 # The starvation park thaws on a *measured* refill, read
                 # fresh each sweep — a window reset, or a manual reset
-                # the provider now reports. The arm-time deadline is
-                # informative only; the number decides.
+                # the provider now reports. The arm-time deadline schedules
+                # one early probe; only the measured number permits release.
                 pct = _held_run_binding_pct(root, held, refresh=True)
                 if pct is None:
                     # Say so: a silent ``continue`` here rendered as "still
@@ -16716,6 +16727,8 @@ def _release_reset_holds_due(
                 if resource_hold.refill_condition_met(meta, pct):
                     released_by = "refill"
                 else:
+                    if deadline_only:
+                        continue
                     # #1934: a wall armed on an auto-fallback body must not
                     # outlive the reason it was armed for. The substitute's
                     # empty bucket says nothing about the body the next wake
@@ -16786,6 +16799,23 @@ def _release_reset_holds_due(
                 f"{held.id} ({released_meta.get('provider')})"
             )
     return released
+
+
+def _crossed_reset_deadline(meta: dict) -> float | None:
+    """Return a passed deadline, or None for absent/malformed/future values."""
+    try:
+        deadline = float(meta.get("reset_deadline"))
+    except (TypeError, ValueError):
+        return None
+    return deadline if deadline < time.time() else None
+
+
+def _probe_reset_deadline_holds(
+    account_context: account.AccountContext | None,
+    repo_root: Path,
+) -> int:
+    """Probe each crossed deadline once, independently of the zombie sweep."""
+    return _release_reset_holds_due(account_context, repo_root, deadline_only=True)
 
 
 def _find_held_run(runs_dir: Path, run_id: str) -> Run | None:
@@ -17301,13 +17331,39 @@ def _held_run_binding_pct(
     )
     model = str(quota.get("model") or held.meta.get("runner_core") or "").strip() or None
     brr_dir = gitops.shared_brr_dir(repo_root)
+    deadline = _crossed_reset_deadline(meta) if refresh else None
+    probe_deadline = (
+        deadline is not None and meta.get("reset_deadline_probed") != deadline
+    )
+    options = {"quota_max_age_seconds": 0.0} if probe_deadline else {}
     try:
         levels, _slots = _collect_levels(
             runner_name, None, repo_root, refresh=refresh, shared_dir=brr_dir,
+            **options,
         )
     except Exception as exc:  # noqa: BLE001 — a probe failure is "unproven", never a thaw
         print(f"[brnrd] starved seat {held.id}: quota read failed ({exc})")
         return None
+    finally:
+        if probe_deadline:
+            # An attempt, not proof of refill. Persist even an unavailable
+            # read so every heartbeat cannot launch another blocking probe.
+            # The normal sweep and correspondent path still retry as before.
+            meta["reset_deadline_probed"] = deadline
+            held.save()
+    if probe_deadline:
+        # Collectors may fall back to old quota when a forced probe fails.
+        # A carried/pre-deadline snapshot cannot prove this reset refilled.
+        reading = levels.get("quota") if isinstance(levels, dict) else None
+        if not isinstance(reading, dict):
+            return None
+        stamp = reading.get("carried_from") or reading.get("updated_at") or levels.get("updated_at")
+        try:
+            observed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if observed < deadline:
+            return None
     return runner_quota.binding_quota_remaining_pct(levels, model=model)
 
 
@@ -18476,6 +18532,13 @@ def start(
                     _release_reset_holds_due(account_context, repo_root)
                 except Exception as exc:  # noqa: BLE001 — a janitor must never sink the loop
                     print(f"[brnrd] resource-hold reset sweep skipped: {exc}")
+            # #2001: a known reset deadline gets one immediate measured
+            # check. Unreadable/below-floor/no-deadline holds retain the slow
+            # sweep as their retry path, rather than probing on every beat.
+            try:
+                _probe_reset_deadline_holds(account_context, repo_root)
+            except Exception as exc:  # noqa: BLE001 — a janitor must never sink the loop
+                print(f"[brnrd] reset-deadline hold probe skipped: {exc}")
             if time.monotonic() >= next_auth_health_sweep:
                 next_auth_health_sweep = (
                     time.monotonic() + _AUTH_HEALTH_SWEEP_INTERVAL_SECONDS)
