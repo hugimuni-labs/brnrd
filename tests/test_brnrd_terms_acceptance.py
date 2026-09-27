@@ -26,11 +26,10 @@ pytest.importorskip("fastapi")
 pytest.importorskip("sqlalchemy")
 pytest.importorskip("multipart")
 
-from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
-from brnrd import create_app, migrations, terms  # noqa: E402
-from brnrd.config import Settings  # noqa: E402
+from _helpers import brnrd_client  # noqa: E402
+from brnrd import migrations, terms  # noqa: E402
 from brnrd.models import TermsAcceptance  # noqa: E402
 from brnrd.oauth import GitHubIdentity  # noqa: E402
 
@@ -40,18 +39,11 @@ _LOGIN = "octocat"
 
 @pytest.fixture()
 def client():
-    app = create_app(
-        Settings(
-            database_url="sqlite:///:memory:",
-            public_base_url="https://brnrd.example",
-            github_oauth_client_id="gh-client",
-            github_oauth_client_secret="gh-secret",
-            github_oauth_authorize_url="https://github.example/login/oauth/authorize",
-            github_oauth_token_url="https://github.example/login/oauth/access_token",
-            github_api_base_url="https://api.github.example",
-        )
+    return brnrd_client(
+        github_oauth_authorize_url="https://github.example/login/oauth/authorize",
+        github_oauth_token_url="https://github.example/login/oauth/access_token",
+        github_api_base_url="https://api.github.example",
     )
-    return TestClient(app, base_url="https://testserver")
 
 
 def _login(client, monkeypatch, *, next="/"):

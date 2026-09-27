@@ -1,9 +1,7 @@
 """Tests for `GET /v1/machines` (design-machines-and-guests.md R1, #1365).
 
-Same test-client harness as `test_brnrd_dashboard.py` — copied rather than
-imported, matching this suite's existing convention of one self-contained
-`_client`/`_login`/`_create_repo` trio per test file instead of a shared
-fixture module.
+Uses the shared test-client harness; cookie login and repo setup stay local
+to this suite.
 """
 
 from __future__ import annotations
@@ -16,24 +14,12 @@ pytest.importorskip("multipart")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from _helpers import PUBLISH_EVERYTHING  # noqa: E402
-from brnrd import create_app  # noqa: E402
-from brnrd.config import Settings  # noqa: E402
+from _helpers import PUBLISH_EVERYTHING, brnrd_client  # noqa: E402
 from brnrd.models import Account, Daemon  # noqa: E402
 from brnrd.oauth import GitHubIdentity  # noqa: E402
 from brnrd.routers.accounts import account_for_github_identity, issue_session_token  # noqa: E402
 
-
-def _client(**settings_overrides) -> TestClient:
-    kwargs = dict(
-        database_url="sqlite:///:memory:",
-        public_base_url="https://brnrd.example",
-        github_oauth_client_id="gh-client",
-        github_oauth_client_secret="gh-secret",
-    )
-    kwargs.update(settings_overrides)
-    app = create_app(Settings(**kwargs))
-    return TestClient(app, base_url="https://testserver")
+_client = brnrd_client
 
 
 def _login(client: TestClient, *, github_id: str = "12345", login: str = "Gurio") -> str:

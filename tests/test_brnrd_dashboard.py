@@ -12,26 +12,12 @@ pytest.importorskip("multipart")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from _helpers import PUBLISH_EVERYTHING  # noqa: E402
-from brnrd import create_app  # noqa: E402
-from brnrd.config import Settings  # noqa: E402
+from _helpers import PUBLISH_EVERYTHING, brnrd_client  # noqa: E402
 from brnrd.models import Account, GitHubInstallation, GitHubInstalledRepo, Repo  # noqa: E402
 from brnrd.oauth import GitHubIdentity  # noqa: E402
 from brnrd.routers.accounts import account_for_github_identity, issue_session_token  # noqa: E402
 
-
-def _client(**settings_overrides) -> TestClient:
-    kwargs = dict(
-        database_url="sqlite:///:memory:",
-        public_base_url="https://brnrd.example",
-        github_oauth_client_id="gh-client",
-        github_oauth_client_secret="gh-secret",
-    )
-    kwargs.update(settings_overrides)
-    app = create_app(
-        Settings(**kwargs)
-    )
-    return TestClient(app, base_url="https://testserver")
+_client = brnrd_client
 
 
 def _login(client: TestClient, *, github_id: str = "12345", login: str = "Gurio") -> str:

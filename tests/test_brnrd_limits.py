@@ -26,7 +26,7 @@ from sqlalchemy import select  # noqa: E402
 from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.models import Account, Event  # noqa: E402
-from _helpers import brnrd_account_headers  # noqa: E402
+from _helpers import brnrd_account_headers, brnrd_client  # noqa: E402
 
 WEBHOOK_SECRET = "whsec_test"
 
@@ -36,15 +36,20 @@ def _client(**overrides) -> TestClient:
     # pytest bootstrap. This module is the product-contract boundary, so its
     # default remains the actual Free offer and individual tests override it
     # only when the scenario explicitly calls for another cap.
-    kwargs = {"limit_free_repos": 1}
+    kwargs = dict(
+        public_base_url=Settings.public_base_url,
+        github_oauth_client_id=Settings.github_oauth_client_id,
+        github_oauth_client_secret=Settings.github_oauth_client_secret,
+        limit_free_repos=1,
+    )
     kwargs.update(overrides)
-    settings = Settings(
+    return brnrd_client(
+        base_url="http://testserver",
         database_url="sqlite:///:memory:",
         stripe_webhook_secret=WEBHOOK_SECRET,
         stripe_price_supporter_monthly="price_sup_m",
         **kwargs,
     )
-    return TestClient(create_app(settings))
 
 
 def _account(client: TestClient, github_id: str = "123", login: str = "octocat"):
