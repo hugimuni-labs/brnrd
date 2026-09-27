@@ -102,6 +102,10 @@ SECURITY_CONFIG_FILENAME = "security.config"
 CLOUD_TOKEN_FILENAME = "cloud.token"
 _CLOUD_TOKEN_RELPATH = f"{ACCOUNT_GATES_PATH}/{CLOUD_TOKEN_FILENAME}"
 
+# Derived from the inbox poll, including a local fetched_at on every response.
+# Keep the cache readable on disk without capturing poll timestamps as memory.
+_CLOUD_SERVER_RELPATH = f"{ACCOUNT_GATES_PATH}/cloud.server.json"
+
 # The X browser envoy's persistent Chromium profile (``envoy_x_browser.
 # Paths.profile_dir``, installed at ``account/x-browser-profile/`` beside
 # the ``x-browser.py`` shim — see ``examples/envoy/README.md``). It holds
@@ -121,6 +125,7 @@ GITIGNORE = f"""\
 /.brr/
 /{SECURITY_CONFIG_FILENAME}
 /{_CLOUD_TOKEN_RELPATH}
+/{_CLOUD_SERVER_RELPATH}
 /{_BROWSER_PROFILE_RELPATH}/
 *.tmp
 """
@@ -133,15 +138,18 @@ GITIGNORE = f"""\
 # commit_all`` runs ``git add -A`` on the whole home root and cannot tell a
 # secret from a note (issue: the account daemon token committed 107 times
 # in a tracked ``cloud.json`` before this file existed).
-NEVER_TRACKED_FILES = (SECURITY_CONFIG_FILENAME, _CLOUD_TOKEN_RELPATH)
+NEVER_TRACKED_FILES = (
+    SECURITY_CONFIG_FILENAME, _CLOUD_TOKEN_RELPATH, _CLOUD_SERVER_RELPATH,
+)
 
 # Of those, which ones a *pre-existing* home's git index might already
 # track from before its ``.gitignore`` rule existed, and therefore need
 # ``git rm --cached`` rather than just the new line (which never untracks a
 # file already in the index). ``cloud.token`` never existed before this same
 # change introduced it, so no install has ever tracked it — nothing to
-# untrack there, only ``security.config``.
-_UNTRACK_ON_GITIGNORE_MIGRATION = (SECURITY_CONFIG_FILENAME,)
+# untrack there. The server fingerprint predates its ignore rule and needs
+# the same index-only migration as ``security.config``.
+_UNTRACK_ON_GITIGNORE_MIGRATION = (SECURITY_CONFIG_FILENAME, _CLOUD_SERVER_RELPATH)
 
 
 @dataclass(frozen=True)

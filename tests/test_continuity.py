@@ -22,7 +22,10 @@ from __future__ import annotations
 import json
 import subprocess
 import time as _time
+from datetime import datetime, timezone
 from pathlib import Path
+
+import pytest
 
 from brr import continuity as cont_mod
 from brr.bootscore import (
@@ -563,6 +566,66 @@ def test_daemon_gate_state_is_not_drift(tmp_path: Path) -> None:
     c = cont_mod.build_continuity(brr_dir, dominion_repo=dom)
     assert c.mount == "✓"          # exercise the real path, not an early return
     assert c.drift == ()
+
+
+@pytest.mark.parametrize("tracked", [False, True])
+def test_server_fingerprint_poll_stays_untracked_without_memory_drift(
+    tmp_path: Path, monkeypatch, tracked: bool,
+) -> None:
+    """New and legacy homes keep poll freshness without capturing it (#1947)."""
+    from brr import account
+    from brr.gates import runtime
+
+    brr_dir = _brr_with_prior_wake(tmp_path)
+    dom = tmp_path / "dominion"
+    _git_repo(dom)
+    state_dir = dom / "account"
+    server = {"build": {"commit": "abc123"}}
+    polled_at = datetime(2026, 9, 27, 12, tzinfo=timezone.utc)
+
+    class PollClock:
+        @staticmethod
+        def now(tz):
+            return polled_at
+
+    monkeypatch.setattr(runtime, "datetime", PollClock)
+    runtime.save_server_fingerprint(state_dir, "cloud", server)
+    fingerprint = runtime.server_fingerprint_path(state_dir, "cloud")
+    relpath = fingerprint.relative_to(dom).as_posix()
+    original = fingerprint.read_bytes()
+    if tracked:
+        subprocess.run(["git", "-C", str(dom), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(dom), "commit", "-qm", "old capture"], check=True)
+        assert cont_mod._run_git(dom, "ls-files", relpath) == relpath + "\n"
+
+    cfg = {"home.kind": "account", "home.path": str(dom), "account.id": "acct-1"}
+    account.resolve_context(tmp_path, cfg)
+    assert fingerprint.read_bytes() == original  # index-only migration
+    assert cont_mod._run_git(dom, "ls-files", relpath) == ""
+    assert cont_mod._run_git(dom, "check-ignore", relpath) == relpath + "\n"
+    ignore = (dom / ".gitignore").read_bytes()
+    account.resolve_context(tmp_path, cfg)
+    assert (dom / ".gitignore").read_bytes() == ignore
+
+    # Capture the migration, then run the real poll writer again.
+    subprocess.run(["git", "-C", str(dom), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(dom), "commit", "-qm", "capture migration"], check=True)
+    polled_at = datetime(2026, 9, 27, 13, tzinfo=timezone.utc)
+    runtime.save_server_fingerprint(state_dir, "cloud", server)
+    assert runtime.load_server_fingerprint(state_dir, "cloud") == {
+        **server, "fetched_at": polled_at.isoformat(),
+    }
+    assert fingerprint.read_bytes() != original  # freshness really advanced
+    assert cont_mod._run_git(dom, "status", "--porcelain", "--untracked-files=all") == ""
+    c = cont_mod.build_continuity(brr_dir, dominion_repo=dom)
+    assert c.mount == "✓"
+    assert c.drift == ()
+
+    # Positive control: the same wake must still detect uncaptured memory.
+    (dom / "surface" / "notes.md").write_text("uncaptured memory", encoding="utf-8")
+    c = cont_mod.build_continuity(brr_dir, dominion_repo=dom)
+    assert len(c.drift) == 1
+    assert "capture net did not close" in c.drift[0]
 
 
 def test_resident_memory_under_daemon_adjacent_roots_still_fires(
