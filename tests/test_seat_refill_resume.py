@@ -41,27 +41,27 @@ def _create_parked_refill_seat(tmp_path):
 
     # Arm a refill hold on this run
     hold_meta = {
-        "resume_condition": resource_hold.RESUME_REFILL,
-        "seat_key": "cloud:telegram:1:",
+        "reason": resource_hold.REASON_QUOTA_STARVED,
         "provider": "claude",
         "native_session_id": "native-session-123",
-        "refill_floor_pct": 10.0,
-        "armed_at": time.time(),
+        "resume_kind": resource_hold.RESUME_NATIVE,
+        "resume_condition": resource_hold.RESUME_REFILL,
+        "reset_deadline": None,
+        "quota": {
+            "binding_remaining_pct": 1.5,
+            "starve_floor_pct": 2.0,
+            "refill_floor_pct": 10.0,
+            "runner": "claude-sonnet",
+            "model": "sonnet",
+        },
     }
+    # _arm_resource_hold persists the run (via update_status → save) and
+    # transitions the shuttle to parked — no separate write or shuttle call needed.
     daemon._arm_resource_hold(
         task, runs_dir,
         conversation_key=task.conversation_key,
         repo_root=tmp_path,
         **hold_meta,
-    )
-
-    # Persist the run to disk
-    runs_dir.mkdir(parents=True, exist_ok=True)
-    task.write(runs_dir / task.id / "run.md")
-
-    # Update shuttle to parked
-    shuttle.Shuttle.load(brr_dir).transition(
-        "parked", why="hold_armed", run_id=task.id,
     )
 
     return brr_dir, inbox, runs_dir, task
@@ -128,7 +128,7 @@ def test_held_refill_resume_undefers_accumulated_events(tmp_path, monkeypatch):
     hold_meta = held_run.meta.get("resource_hold") or {}
     hold_meta["accumulated_event_ids"] = [accumulated_id]
     held_run.meta["resource_hold"] = hold_meta
-    held_run.write(runs_dir / task.id / "run.md")
+    held_run.save()
 
     # Mock the quota reading
     def mock_binding_pct(*args, **kwargs):
