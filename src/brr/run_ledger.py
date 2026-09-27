@@ -11,10 +11,11 @@ from __future__ import annotations
 import json
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from . import allowance
 from . import claude_status
 from . import claude_usage
 from . import codex_status
@@ -52,6 +53,7 @@ _BEFORE_WEEKLY_KEY = "run_ledger_weekly_used_before"
 _BEFORE_FIVE_HOUR_KEY = "run_ledger_five_hour_used_before"
 _BASELINE_RUNNER_KEY = "run_ledger_baseline_runner"
 _LAST_LEVELS_KEY = "run_ledger_last_levels"
+_CLAUDE_TRANSCRIPTS_KEY = "run_ledger_claude_transcripts"
 
 _ROW_FIELDS = (
     "run_id",
@@ -110,6 +112,8 @@ def mark_run_started(
     if task.meta.get(_BASELINE_RUNNER_KEY) == runner_name:
         return
     task.meta[_BASELINE_RUNNER_KEY] = runner_name or ""
+    task.meta.pop(_LAST_LEVELS_KEY, None)
+    task.meta.pop(_CLAUDE_TRANSCRIPTS_KEY, None)
     levels = load_quota_levels(
         runner_name,
         outbox_dir,
@@ -127,7 +131,9 @@ def mark_run_started(
         task.meta.pop(_BEFORE_FIVE_HOUR_KEY, None)
 
 
-def record_boundary_levels(task: Run, levels: Mapping[str, Any] | None) -> None:
+def record_boundary_levels(
+    task: Run, levels: Mapping[str, Any] | None, *, work_dir: Path | None = None,
+) -> None:
     """Keep the latest observed quota/token reading for closeout.
 
     A held or awaited seat can end before its Shell emits a final envelope.
@@ -135,11 +141,29 @@ def record_boundary_levels(task: Run, levels: Mapping[str, Any] | None) -> None:
     snapshot on the run so closeout can use it rather than turning a known
     token reading into a null merely because the final read is absent.
     """
+    # A released Claude process never emits its final result envelope. Pin
+    # its transcript while the execution root still belongs to this run;
+    # closeout must not hunt for the newest session in a shared cwd later.
+    if (
+        claude_status.supported(task.meta.get("runner_name"))
+        and work_dir is not None
+    ):
+        started = _parse_iso(task.meta.get("started_at"))
+        if started is not None:
+            path = allowance.latest_claude_transcript(
+                work_dir, not_before=started.timestamp(),
+            )
+            if path is not None:
+                paths = task.meta.setdefault(_CLAUDE_TRANSCRIPTS_KEY, [])
+                if str(path) not in paths:
+                    paths.append(str(path))
     if not isinstance(levels, Mapping):
         return
     snapshot = _level_snapshot(levels)
     if snapshot:
-        task.meta[_LAST_LEVELS_KEY] = snapshot
+        task.meta[_LAST_LEVELS_KEY] = _prefer_last_boundary_levels(
+            snapshot, task.meta.get(_LAST_LEVELS_KEY),
+        )
 
 
 def append_closed_run(
@@ -260,6 +284,16 @@ def build_closed_run_row(
     )
 
     tokens = token_fields(after_levels)
+    if claude_status.supported(runner_name) and any(
+        tokens[key] is None for key in (
+            "tokens_input", "tokens_output", "tokens_cache_read", "tokens_cache_creation"
+        )
+    ):
+        recovered = token_fields({"tokens": _claude_transcript_tokens(task)})
+        tokens = {
+            key: value if value is not None else recovered[key]
+            for key, value in tokens.items()
+        }
     started_at = _str_or_none(task.meta.get("started_at"))
     # Run relics (#200/#317, kb/design-run-relics.md): commits/branch/PR are
     # auto-derived from git + the ``.pr`` control file, captured kb pages and
@@ -475,7 +509,80 @@ def quota_used_percentages(
         five_hour = five_hour if five_hour is not None else _num(
             quota.get("primary_used_percent")
         )
+        # Claude's carried /usage readings and heartbeat snapshots retain
+        # named buckets, even when the top-level used percentages are absent.
+        buckets = quota.get("buckets")
+        if isinstance(buckets, Mapping):
+            def used(name: str) -> float | None:
+                bucket = buckets.get(name)
+                remaining = _num(bucket.get("remaining_percentage")) if isinstance(
+                    bucket, Mapping
+                ) else None
+                return 100.0 - remaining if remaining is not None else None
+
+            weekly = weekly if weekly is not None else used("week")
+            five_hour = five_hour if five_hour is not None else used("session")
     return weekly, five_hour
+
+
+def _claude_transcript_tokens(task: Run) -> dict[str, int]:
+    """Recover measured usage when release/stop prevented a result envelope.
+
+    Only an attested session id or a path pinned during this run may be read.
+    Resumed transcripts can predate the run; timestamp bounds exclude that
+    history. Streaming writes can repeat a message id; its last usage wins.
+    """
+    session_id = task.meta.get("claude_session_id")
+    paths = [Path(path) for path in task.meta.get(_CLAUDE_TRANSCRIPTS_KEY, [])]
+    if session_id:
+        path = claude_status.session_transcript_path(session_id)
+        if path is not None and path not in paths:
+            paths.append(path)
+    started = _parse_iso(task.meta.get("started_at"))
+    ended = _parse_iso(task.meta.get("ended_at"))
+    # Ledger stamps have second precision; include usage in that final second.
+    if ended is not None and ended.microsecond == 0:
+        ended += timedelta(seconds=1)
+    if not paths or started is None:
+        return {}
+    messages: dict[str, dict[str, int]] = {}
+    for path in paths:
+        try:
+            with path.open(encoding="utf-8", errors="replace") as handle:
+                for index, line in enumerate(handle):
+                    try:
+                        row = json.loads(line)
+                    except (ValueError, TypeError):
+                        continue
+                    if not isinstance(row, dict) or row.get("type") != "assistant":
+                        continue
+                    stamp = _parse_iso(row.get("timestamp"))
+                    if stamp is None or stamp < started or (ended and stamp >= ended):
+                        continue
+                    message = row.get("message")
+                    if not isinstance(message, dict) or not isinstance(message.get("usage"), dict):
+                        continue
+                    usage = message["usage"]
+                    measured = {}
+                    for snake, camel in (
+                        ("input_tokens", "inputTokens"),
+                        ("output_tokens", "outputTokens"),
+                        ("cache_read_input_tokens", "cacheReadInputTokens"),
+                        ("cache_creation_input_tokens", "cacheCreationInputTokens"),
+                    ):
+                        value = _int_or_none(usage.get(camel, usage.get(snake)))
+                        if value is not None:
+                            measured[snake] = value
+                    if measured:
+                        key = str(message.get("id") or f"{path}:{index}")
+                        messages.setdefault(key, {}).update(measured)
+        except OSError:
+            continue
+    totals: dict[str, int] = {}
+    for usage in messages.values():
+        for key, value in usage.items():
+            totals[key] = totals.get(key, 0) + value
+    return totals
 
 
 def _level_snapshot(levels: Mapping[str, Any]) -> dict[str, Any]:
@@ -509,7 +616,7 @@ def _prefer_last_boundary_levels(
             merged[key] = dict(prior_value)
             continue
         combined = dict(prior_value)
-        combined.update(now_value)
+        combined.update({key: value for key, value in now_value.items() if value is not None})
         merged[key] = combined
     for key in ("updated_at", "model_ids"):
         if merged.get(key) is None and last.get(key) is not None:
@@ -723,10 +830,11 @@ def _delta(after: Any, before: Any) -> float | None:
 
 
 def _parse_iso(value: str | None) -> datetime | None:
-    if not value:
+    if not isinstance(value, str) or not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     except ValueError:
         return None
 
@@ -742,7 +850,10 @@ def _num(value: Any) -> float | None:
 
 def _int_or_none(value: Any) -> int | None:
     number = _num(value)
-    return int(number) if number is not None else None
+    try:
+        return int(number) if number is not None else None
+    except (ValueError, OverflowError):
+        return None
 
 
 def _str_or_none(value: Any) -> str | None:
