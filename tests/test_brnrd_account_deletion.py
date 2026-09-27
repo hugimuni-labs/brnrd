@@ -22,8 +22,9 @@ pytest.importorskip("multipart")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from brnrd import account_deletion, billing, create_app, ids, stripe_api  # noqa: E402
+from brnrd import account_deletion, billing, ids, stripe_api  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
+from _helpers import brnrd_client  # noqa: E402
 from brnrd.models import (  # noqa: E402
     Account,
     ActivityRecord,
@@ -50,12 +51,12 @@ from brnrd.routers.accounts import account_for_github_identity, issue_session_to
 
 def _client(**overrides) -> TestClient:
     kwargs = dict(
-        database_url="sqlite:///:memory:",
-        public_base_url="https://brnrd.example",
         stripe_api_key="sk_test_x",
+        github_oauth_client_id=Settings.github_oauth_client_id,
+        github_oauth_client_secret=Settings.github_oauth_client_secret,
     )
     kwargs.update(overrides)
-    return TestClient(create_app(Settings(**kwargs)), base_url="https://testserver")
+    return brnrd_client(**kwargs)
 
 
 def _login(client: TestClient, *, github_id: str = "1", login: str = "octocat") -> tuple[str, str]:

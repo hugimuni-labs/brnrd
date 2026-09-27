@@ -14,17 +14,12 @@ pytest.importorskip("multipart")
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import event  # noqa: E402
 
-from brnrd import create_app  # noqa: E402
-from brnrd.config import Settings  # noqa: E402
 from brnrd.models import Event  # noqa: E402
 from brnrd.oauth import GitHubIdentity  # noqa: E402
 from brnrd.routers.accounts import account_for_github_identity, issue_session_token  # noqa: E402
-from _helpers import PUBLISH_EVERYTHING, brnrd_account_headers  # noqa: E402
+from _helpers import PUBLISH_EVERYTHING, brnrd_account_headers, brnrd_client  # noqa: E402
 
-
-def _client() -> TestClient:
-    app = create_app(Settings(database_url="sqlite:///:memory:", public_base_url="https://brnrd.example", github_oauth_client_id="gh-client", github_oauth_client_secret="gh-secret"))
-    return TestClient(app, base_url="https://testserver")
+_client = brnrd_client
 
 
 def _repo_and_daemon(client: TestClient) -> tuple[dict[str, str], dict[str, str]]:
