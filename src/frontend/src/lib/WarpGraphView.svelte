@@ -2,6 +2,7 @@
 	import { tick } from 'svelte';
 	import { fade } from 'svelte/transition';
 	import type { ResolvedPathname } from '$app/types';
+	import { resolve } from '$app/paths';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import { repoRunSlug, runIdSlug, runNodeHref } from './runNode';
 	import { STATUS_BURNING, STATUS_COOLING, STATUS_UNKNOWN, STATUS_WARN } from './statusPalette';
@@ -195,7 +196,11 @@
 			>
 				{item.headline}
 			</button>
-			<span class="shrink-0 font-mono text-[9px] text-ink-mute">{item.id}</span>
+			<a
+				href={resolve('/warp/[id]', { id: item.id })}
+				class="shrink-0 font-mono text-[9px] text-ink-mute hover:text-stone-400"
+				title="open item page">{item.id}</a
+			>
 			{#if item.type}
 				<span
 					class="shrink-0 font-mono text-[9px] tracking-wide uppercase"
