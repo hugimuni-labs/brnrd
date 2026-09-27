@@ -11,15 +11,13 @@ pytest.importorskip("fastapi")
 pytest.importorskip("sqlalchemy")
 pytest.importorskip("multipart")
 
-from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
-from brnrd import create_app, terms  # noqa: E402
-from brnrd.config import Settings  # noqa: E402
+from brnrd import terms  # noqa: E402
 from brnrd.models import Account, PairRequest, Repo, TermsAcceptance, TgPairCode  # noqa: E402
 from brnrd.oauth import GitHubIdentity, OAuthError  # noqa: E402
 from brnrd.routers.accounts import account_for_github_identity  # noqa: E402
-from _helpers import brnrd_account_headers  # noqa: E402
+from _helpers import brnrd_account_headers, brnrd_client  # noqa: E402
 
 _EMAIL = "owner@example.com"
 _GITHUB_ID = "12345"
@@ -28,22 +26,15 @@ _LOGIN = "octocat"
 
 def _make_client(**settings_overrides):
     kwargs = dict(
-        database_url="sqlite:///:memory:",
-        public_base_url="https://brnrd.example",
-        github_oauth_client_id="gh-client",
-        github_oauth_client_secret="gh-secret",
         github_oauth_authorize_url="https://github.example/login/oauth/authorize",
         github_oauth_token_url="https://github.example/login/oauth/access_token",
         github_api_base_url="https://api.github.example",
     )
     kwargs.update(settings_overrides)
-    app = create_app(
-        Settings(**kwargs)
-    )
     # brnrd is served over HTTPS in production (public_base_url is https),
     # so the session/OAuth cookies carry the Secure flag. Model that here
     # so a Secure cookie round-trips back to the app on follow-up requests.
-    return TestClient(app, base_url="https://testserver")
+    return brnrd_client(**kwargs)
 
 
 @pytest.fixture()

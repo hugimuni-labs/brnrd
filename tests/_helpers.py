@@ -297,29 +297,30 @@ def brnrd_account_headers(
     return {"Authorization": f"Bearer {token}"}
 
 
-def brnrd_client() -> "TestClient":
+def brnrd_client(*, base_url: str = "https://testserver", **overrides) -> "TestClient":
     """A bare-minimum brnrd app + GitHub-oauth-configured ``TestClient``.
 
-    The byte-identical copy shared (as of 2026-09-11) by
-    ``test_brnrd_{config_approval,activity,run_ledger,quota,runners}.py``.
-    Modules whose scenario needs different ``Settings`` (billing's Stripe
-    keys, limits' repo cap, stats' cohort size, dashboard/machines/
-    account_deletion's per-test overrides) still build their own — this is
-    the one every one of those diverges *from*, not a replacement for them.
+    Accepts ``**overrides`` merged into the base ``Settings`` kwargs, so
+    modules that need a small delta (e.g. Stripe keys, a custom URL) can
+    delegate here rather than duplicating the whole body.
+
+    ``base_url`` configures the client rather than Settings. HTTPS lets
+    Secure session/OAuth cookies round-trip; HTTP-only suites can opt out.
+    Scenario-specific setup, such as stats' cache reset, stays local.
     """
     from brnrd import create_app
     from brnrd.config import Settings
     from fastapi.testclient import TestClient
 
-    app = create_app(
-        Settings(
-            database_url="sqlite:///:memory:",
-            public_base_url="https://brnrd.example",
-            github_oauth_client_id="gh-client",
-            github_oauth_client_secret="gh-secret",
-        )
+    kwargs: dict = dict(
+        database_url="sqlite:///:memory:",
+        public_base_url="https://brnrd.example",
+        github_oauth_client_id="gh-client",
+        github_oauth_client_secret="gh-secret",
     )
-    return TestClient(app, base_url="https://testserver")
+    kwargs.update(overrides)
+    app = create_app(Settings(**kwargs))
+    return TestClient(app, base_url=base_url)
 
 
 def brnrd_repo_and_daemon(client: "TestClient") -> tuple[dict[str, str], dict[str, str], str]:
