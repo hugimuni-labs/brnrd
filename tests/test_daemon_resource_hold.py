@@ -1015,3 +1015,284 @@ class TestFindHeldRun:
         runs_dir.mkdir(parents=True)
         assert daemon._find_held_run(runs_dir, "run-nope") is None
         assert daemon._find_held_run(runs_dir, "") is None
+
+
+class TestProbeResetDeadlineHolds:
+    """brnrd#2001: a refill/reset hold with a passed reset_deadline thaws
+    within one heartbeat tick rather than waiting up to 30 minutes for the
+    zombie sweep.
+
+    The behavioral assertion: ``_probe_reset_deadline_holds`` releases the hold
+    immediately when the deadline has passed and the condition is met — the
+    30-minute zombie sweep has not yet fired.
+    """
+
+    def _refill_held_run(self, tmp_path, *, reset_deadline: float) -> Run:
+        """A RESUME_REFILL hold with a known reset_deadline (the starvation park)."""
+        runs_dir = tmp_path / ".brr" / "runs"
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        task = Run(id="run-refill-deadline", event_id="evt-starved", body="",
+                   status=resource_hold.RUN_STATUS)
+        task.meta["runner_name"] = "claude"
+        task.meta["runner_shell"] = "claude"
+        task.meta["runner_core"] = "sonnet"
+        meta = resource_hold.build(
+            reason=resource_hold.REASON_QUOTA_STARVED,
+            provider="claude",
+            resume_condition=resource_hold.RESUME_REFILL,
+            reset_deadline=reset_deadline,
+            native_session_id="session-refill-1",
+            resume_kind=resource_hold.RESUME_NATIVE,
+            quota={
+                "binding_remaining_pct": 1.0,
+                "starve_floor_pct": 2.0,
+                "refill_floor_pct": 10.0,
+                "runner": "claude",
+                "model": "sonnet",
+            },
+        )
+        task.meta["resource_hold"] = meta
+        task.save(runs_dir)
+        return task
+
+    def _reset_held_run(self, tmp_path, *, reset_deadline: float) -> Run:
+        """A RESUME_RESET hold (resident-staged ``hold: true, resume: reset``)."""
+        runs_dir = tmp_path / ".brr" / "runs"
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        task = Run(id="run-reset-deadline", event_id="evt-reset", body="",
+                   status=resource_hold.RUN_STATUS)
+        meta = resource_hold.build(
+            reason=resource_hold.REASON_RESIDENT_REQUESTED,
+            provider="codex",
+            resume_condition=resource_hold.RESUME_RESET,
+            reset_deadline=reset_deadline,
+            native_session_id="session-reset-1",
+            resume_kind=resource_hold.RESUME_NATIVE,
+        )
+        task.meta["resource_hold"] = meta
+        task.save(runs_dir)
+        return task
+
+    # ── RESUME_REFILL + reset_deadline ─────────────────────────────────
+
+    def test_refill_hold_with_passed_deadline_and_refilled_quota_is_released(
+        self, tmp_path, monkeypatch,
+    ):
+        """The primary case for brnrd#2001.
+
+        A seat parked on ``resume: refill`` with a ``reset_deadline`` in the
+        past is released by ``_probe_reset_deadline_holds`` — before the
+        30-minute zombie sweep would have fired.
+        """
+        held = self._refill_held_run(tmp_path, reset_deadline=1000.0)
+        monkeypatch.setattr(daemon.time, "time", lambda: 2000.0)
+        # Quota has refilled — the probe returns above the 10% floor.
+        monkeypatch.setattr(daemon, "_held_run_binding_pct", lambda *a, **k: 50.0)
+
+        released = daemon._probe_reset_deadline_holds(None, tmp_path)
+
+        assert released == 1
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / held.id / "run.md")
+        assert persisted.meta["resource_hold"]["released"] is True
+        assert persisted.meta["resource_hold"]["released_by"] == "refill"
+
+    def test_refill_hold_with_passed_deadline_but_not_yet_refilled_is_not_released(
+        self, tmp_path, monkeypatch,
+    ):
+        """Deadline passed but quota still below the refill floor — the seat
+        stays parked (another tick or the zombie sweep will retry)."""
+        self._refill_held_run(tmp_path, reset_deadline=1000.0)
+        monkeypatch.setattr(daemon.time, "time", lambda: 2000.0)
+        # Quota still at 3% — below the 10% refill floor.
+        monkeypatch.setattr(daemon, "_held_run_binding_pct", lambda *a, **k: 3.0)
+
+        released = daemon._probe_reset_deadline_holds(None, tmp_path)
+
+        assert released == 0
+        persisted = Run.from_file(
+            tmp_path / ".brr" / "runs" / "run-refill-deadline" / "run.md",
+        )
+        assert persisted.meta["resource_hold"]["released"] is False
+
+    def test_refill_hold_with_future_deadline_is_not_probed(
+        self, tmp_path, monkeypatch,
+    ):
+        """A deadline that has not yet passed must not trigger a probe."""
+        self._refill_held_run(tmp_path, reset_deadline=9999999999.0)
+        monkeypatch.setattr(daemon.time, "time", lambda: 1000.0)
+        probed = []
+        monkeypatch.setattr(
+            daemon, "_held_run_binding_pct",
+            lambda *a, **k: probed.append(True) or 100.0,
+        )
+
+        released = daemon._probe_reset_deadline_holds(None, tmp_path)
+
+        assert released == 0
+        assert probed == []  # never reached the probe
+
+    def test_refill_hold_with_no_deadline_is_ignored(self, tmp_path, monkeypatch):
+        """A hold with no reset_deadline is left for the zombie sweep."""
+        runs_dir = tmp_path / ".brr" / "runs"
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        task = Run(id="run-no-deadline", event_id="evt-nd", body="",
+                   status=resource_hold.RUN_STATUS)
+        meta = resource_hold.build(
+            reason=resource_hold.REASON_QUOTA_STARVED, provider="claude",
+            resume_condition=resource_hold.RESUME_REFILL,
+            quota={"binding_remaining_pct": 1.0, "starve_floor_pct": 2.0,
+                   "refill_floor_pct": 10.0, "runner": "claude", "model": "sonnet"},
+        )
+        task.meta["resource_hold"] = meta
+        task.save(runs_dir)
+        monkeypatch.setattr(daemon, "_held_run_binding_pct", lambda *a, **k: 100.0)
+
+        released = daemon._probe_reset_deadline_holds(None, tmp_path)
+
+        assert released == 0
+
+    # ── RESUME_RESET ────────────────────────────────────────────────────
+
+    def test_reset_hold_with_passed_deadline_is_released_without_a_quota_probe(
+        self, tmp_path, monkeypatch,
+    ):
+        """RESUME_RESET is a pure clock check — no I/O needed to release it."""
+        held = self._reset_held_run(tmp_path, reset_deadline=1000.0)
+        monkeypatch.setattr(daemon.time, "time", lambda: 2000.0)
+        probed = []
+        monkeypatch.setattr(
+            daemon, "_held_run_binding_pct",
+            lambda *a, **k: probed.append(True) or 100.0,
+        )
+
+        released = daemon._probe_reset_deadline_holds(None, tmp_path)
+
+        assert released == 1
+        assert probed == []  # reset holds never touch the quota reader
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / held.id / "run.md")
+        assert persisted.meta["resource_hold"]["released"] is True
+
+    def test_reset_hold_with_future_deadline_is_not_released(
+        self, tmp_path, monkeypatch,
+    ):
+        self._reset_held_run(tmp_path, reset_deadline=9999999999.0)
+        monkeypatch.setattr(daemon.time, "time", lambda: 1000.0)
+
+        released = daemon._probe_reset_deadline_holds(None, tmp_path)
+
+        assert released == 0
+
+
+    @pytest.mark.parametrize("pct", [3.0, None])
+    def test_crossed_deadline_is_probed_once_and_slow_sweep_retries(
+        self, tmp_path, monkeypatch, pct,
+    ):
+        held = self._refill_held_run(tmp_path, reset_deadline=1000.0)
+        monkeypatch.setattr(daemon.time, "time", lambda: 2000.0)
+        calls = []
+
+        def collect(*args, **kwargs):
+            calls.append(kwargs)
+            return {"quota": {"primary_remaining_percent": pct}}, True
+
+        monkeypatch.setattr(daemon, "_collect_levels", collect)
+        for _ in range(3):
+            assert daemon._probe_reset_deadline_holds(None, tmp_path) == 0
+        assert len(calls) == 1
+        assert calls[0]["quota_max_age_seconds"] == 0.0
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / held.id / "run.md")
+        assert persisted.meta["resource_hold"]["reset_deadline_probed"] == 1000.0
+        assert not persisted.meta["resource_hold"]["released"]
+        assert daemon._release_reset_holds_due(None, tmp_path) == 0
+        assert len(calls) == 2
+
+    def test_early_release_does_not_probe_unrelated_account_holds(
+        self, tmp_path, monkeypatch,
+    ):
+        from types import SimpleNamespace
+
+        due = tmp_path / "due"
+        future = tmp_path / "future"
+        no_deadline = tmp_path / "no-deadline"
+        self._refill_held_run(due, reset_deadline=1000.0)
+        self._refill_held_run(future, reset_deadline=3000.0)
+        self._refill_held_run(no_deadline, reset_deadline=None)
+        context = SimpleNamespace(repos={
+            "due": SimpleNamespace(root=due),
+            "future": SimpleNamespace(root=future),
+            "no-deadline": SimpleNamespace(root=no_deadline),
+        })
+        monkeypatch.setattr(daemon.account, "context_home_root", lambda _ctx: None)
+        monkeypatch.setattr(daemon, "_repo_inbox", lambda root: root / ".brr" / "inbox")
+        monkeypatch.setattr(daemon, "_hold_undefer_inboxes", lambda _ctx, inbox: [inbox])
+        monkeypatch.setattr(daemon.time, "time", lambda: 2000.0)
+        calls = []
+        monkeypatch.setattr(
+            daemon, "_held_run_binding_pct",
+            lambda root, *a, **kw: calls.append(root) or 50.0,
+        )
+        assert daemon._probe_reset_deadline_holds(context, due) == 1
+        assert calls == [due]
+
+    def test_heartbeat_releases_refill_before_zombie_sweep(self, tmp_path, monkeypatch):
+        """Run the actual loop; the slow sweep remains 30 minutes away."""
+        write_repo_scaffold(tmp_path)
+        held = self._refill_held_run(tmp_path, reset_deadline=1000.0)
+        monkeypatch.setattr(daemon.time, "time", lambda: 2000.0)
+        monkeypatch.setattr(daemon.time, "monotonic", lambda: 2000.0)
+        monkeypatch.setattr(daemon, "read_pid", lambda _root: None)
+        monkeypatch.setattr(daemon, "_write_pid", lambda _root: None)
+        monkeypatch.setattr(daemon, "_clear_pid", lambda _root: None)
+        monkeypatch.setattr(daemon.signal, "signal", lambda *a: None)
+        monkeypatch.setattr(daemon, "_start_account_gates", lambda *a: [])
+        monkeypatch.setattr(daemon, "_mount_home_knowledge", lambda *a: None)
+        monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {"dominion.enabled": False})
+        monkeypatch.setattr(daemon.release_availability, "refresh_if_stale_async", lambda *a, **kw: None)
+        sweeps = []
+        monkeypatch.setattr(daemon, "_sweep_zombie_runs", lambda *a: sweeps.append(True))
+        probes = []
+        monkeypatch.setattr(
+            daemon, "_held_run_binding_pct",
+            lambda *a, **kw: probes.append(kw) or 50.0,
+        )
+        ticks = []
+
+        def finish_first_tick(*a, **kw):
+            ticks.append(True)
+            raise StopIteration
+
+        monkeypatch.setattr(daemon, "_fire_due_schedules", finish_first_tick)
+        with pytest.raises(StopIteration):
+            daemon.start(tmp_path)
+
+        assert len(ticks) == 1
+        assert len(sweeps) == 1  # boot only; the timed sweep never fired
+        assert len(probes) == 1
+        assert probes[0]["refresh"] is True
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / held.id / "run.md")
+        assert persisted.meta["resource_hold"]["released_by"] == "refill"
+        assert persisted.status == "done"
+
+
+    @pytest.mark.parametrize("stamp,carried,pct", [
+        ("1970-01-01T00:33:20Z", None, 50.0),
+        ("1970-01-01T00:15:00Z", None, None),
+        ("1970-01-01T00:33:20Z", "1970-01-01T00:15:00Z", None),
+    ])
+    def test_deadline_read_requires_post_reset_evidence(
+        self, tmp_path, monkeypatch, stamp, carried, pct,
+    ):
+        held = self._refill_held_run(tmp_path, reset_deadline=1000.0)
+        monkeypatch.setattr(daemon.time, "time", lambda: 2000.0)
+        options = []
+
+        def collect(*args, **kwargs):
+            options.append(kwargs)
+            return {"quota": {"primary_remaining_percent": 50.0,
+                              "updated_at": stamp, "carried_from": carried}}, True
+
+        monkeypatch.setattr(daemon, "_collect_levels", collect)
+        assert daemon._held_run_binding_pct(tmp_path, held, refresh=True) == pct
+        assert options[0]["quota_max_age_seconds"] == 0.0
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / held.id / "run.md")
+        assert persisted.meta["resource_hold"]["reset_deadline_probed"] == 1000.0
