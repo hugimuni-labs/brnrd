@@ -44,6 +44,7 @@ never in the LRU — but a *closed* goal is a done row like any other item's:
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
 import json
 import os
 import re
@@ -70,9 +71,19 @@ _TITLE_RE = re.compile(r"^#[ \t]+(.*)$")
 #: (the frontend's ``warpGraph.ts`` grammar stays in lockstep with that one
 #: alone — see items.py's module docstring); both are ask-only, same as
 #: ``stage``/``says`` before them.
+#:
+#: ``body-version`` — SHA-256 prefix of the item's prose body (the
+#: sections below the frontmatter rows), stamped by ``brnrd item stamp``
+#: whenever the resident updates State/Next. The daemon compares the live
+#: hash to this value at heartbeat and emits a staleness notice when the
+#: body has changed without a corresponding stamp.
 _ASK_ROW_RE = re.compile(
-    r"^(return|stage|touched|says|attempts|after|receipt|sign|reroute):[ \t]*(.*)$"
+    r"^(return|stage|touched|says|attempts|after|receipt|sign|reroute|body-version):[ \t]*(.*)$"
 )
+
+#: Number of hex chars in a body hash — 12 chars = 48 bits, enough to
+#: distinguish edits within one file without storing a full digest.
+_BODY_HASH_LEN = 12
 _RUN_ID_RE = re.compile(r"^run-(\d{2})(\d{2})(\d{2})-(\d{2})(\d{2})")
 _ITEM_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _WARP_PREFIX = "surface/warp/"
@@ -683,6 +694,62 @@ def stamp_say(warp_root: Path | None, item_id: str, event_id: str) -> bool:
         return False
     items_mod._write_lines(path, lines)
     return True
+
+
+def _body_hash(lines: list[str]) -> str:
+    """SHA-256 prefix of the prose body (lines after the combined rows span)."""
+    _, end = _combined_rows_span(lines)
+    body = "\n".join(lines[end:]).strip()
+    return hashlib.sha256(body.encode()).hexdigest()[:_BODY_HASH_LEN]
+
+
+def stamp_body_version(warp_root: Path | None, item_id: str) -> str | None:
+    """Hash the item's prose body and write ``body-version:`` to frontmatter.
+
+    The stamp captures the body at the moment the resident acknowledges
+    State/Next — typically right after editing the Answer section. The
+    daemon then has a baseline to detect edits that changed the body
+    without updating State/Next (see :func:`body_version_stale`).
+
+    Returns the hash that was written, or ``None`` on any failure. Never
+    raises — a stamp miss is annoying, not fatal.
+    """
+    path = items_mod.resolve_item(warp_root, item_id) if warp_root else None
+    if path is None:
+        return None
+    try:
+        lines = items_mod._edit_lines(path)
+        if lines is None:
+            return None
+        digest = _body_hash(lines)
+        if _set_ask_row(lines, "body-version", digest):
+            items_mod._write_lines(path, lines)
+        return digest
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def body_version_stale(warp_root: Path | None, item_id: str) -> bool:
+    """``True`` when ``body-version:`` is set and the prose body has changed
+    since the stamp was written.
+
+    A missing ``body-version:`` field is not considered stale — it simply
+    means the resident has not opted into the check yet. Returns ``False``
+    on any read failure. Never raises.
+    """
+    path = items_mod.resolve_item(warp_root, item_id) if warp_root else None
+    if path is None:
+        return False
+    try:
+        lines = items_mod._edit_lines(path)
+        if lines is None:
+            return False
+        stored = _ask_row_value(lines, "body-version")
+        if not stored:
+            return False  # No stamp → not stale
+        return _body_hash(lines) != stored
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def mark_delivered(warp_root: Path | None, item_id: str, *, receipt: str) -> bool:

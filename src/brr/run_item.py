@@ -46,6 +46,10 @@ _CONTROL_READ_CAP = 512
 #: so the two sibling controls read the same way in a debugger or a test.
 META_CONTROL_STAMP = "run_item_control"
 META_RUN_ITEM = "run_item"
+#: Tracks whether the item's body-version was stale at the last check —
+#: used to emit a notice on transition (stale → not stale, or first stale)
+#: rather than on every heartbeat.
+META_BODY_STALE = "run_item_body_stale"
 
 Notice = Callable[[str, str], None]
 
@@ -133,21 +137,39 @@ def settle(
             raw = str(meta.get("item") or "").strip() or None
         if raw is None:
             return meta.get(META_RUN_ITEM) or None
-        if meta.get(META_CONTROL_STAMP) == raw:
-            return meta.get(META_RUN_ITEM) or None
-        meta[META_CONTROL_STAMP] = raw
         say = notice or (lambda _kind, _text: None)
-        item_id = resolve(warp_root, raw)
-        if item_id is None:
-            say(
-                "refused",
-                f".item refused: {raw!r} is not a known open w-N id or sign",
+        if meta.get(META_CONTROL_STAMP) != raw:
+            meta[META_CONTROL_STAMP] = raw
+            item_id = resolve(warp_root, raw)
+            if item_id is None:
+                say(
+                    "refused",
+                    f".item refused: {raw!r} is not a known open w-N id or sign",
+                )
+                return meta.get(META_RUN_ITEM) or None
+            meta[META_RUN_ITEM] = item_id
+            asks_mod.mark_in_hand(
+                warp_root, item_id, run_id=str(getattr(task, "id", "") or ""),
             )
-            return meta.get(META_RUN_ITEM) or None
-        meta[META_RUN_ITEM] = item_id
-        asks_mod.mark_in_hand(
-            warp_root, item_id, run_id=str(getattr(task, "id", "") or ""),
-        )
+        item_id = meta.get(META_RUN_ITEM) or None
+        # Body-version staleness check: once the item is known, tell the
+        # resident when the prose body changed without a `brnrd item stamp`
+        # acknowledgement. Fire on *transition* only (stale→not or first-stale)
+        # so the notice doesn't spam every heartbeat.
+        if item_id and warp_root:
+            is_stale = asks_mod.body_version_stale(warp_root, item_id)
+            was_stale = bool(meta.get(META_BODY_STALE, {}).get(item_id))
+            if is_stale != was_stale:
+                stale_map = dict(meta.get(META_BODY_STALE) or {})
+                stale_map[item_id] = is_stale
+                meta[META_BODY_STALE] = stale_map
+                if is_stale:
+                    say(
+                        "advisory",
+                        f"{item_id} body changed since last stamp — "
+                        f"run `brnrd item stamp {item_id}` after updating "
+                        f"State/Next to acknowledge",
+                    )
         return item_id
     except Exception:  # noqa: BLE001 - a control read must never sink a heartbeat
         return meta.get(META_RUN_ITEM) or None
