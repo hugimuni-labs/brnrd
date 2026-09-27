@@ -16745,12 +16745,8 @@ def _release_reset_holds_due(
                     by=released_by, run_id=held.id, repo_root=str(root),
                     conversation_key=_seat_conversation(held),
                 )
-            # A measured release has no releasing *event* — the reading is
-            # the releaser, and the drawer is all there is to wake on. Under
-            # the old stamp that forced a bad choice: spray the drawer (N
-            # claims on one transcript) or cool every refill. brnrd#2023
-            # dissolves it — the claim is armed on the seat, and whichever
-            # accumulated letter leads the dispatch picks it up.
+            # The native resume claim belongs to the seat, so whichever
+            # pending letter leads the next dispatch can consume it.
             if released_meta.get("native_session_id"):
                 pending_resume.arm(
                     _shuttle_home(
@@ -16764,10 +16760,25 @@ def _release_reset_holds_due(
                     why=f"measured_{released_by}",
                 )
             drawers = _hold_undefer_inboxes(account_context, inbox_dir)
-            for accumulated_id in released_meta.get("accumulated_event_ids") or []:
+            accumulated_ids = released_meta.get("accumulated_event_ids") or []
+            for accumulated_id in accumulated_ids:
                 _undefer_held_event(
                     drawers, accumulated_id,
                     seat_conversation=_seat_conversation(held),
+                )
+            # If there are no accumulated events, create a synthetic dispatch
+            # trigger so the released seat wakes up on the next scan (not only
+            # when unrelated mail arrives). The pending_resume claim is armed
+            # above; whichever dispatch leads will consume it, resuming the
+            # native session. A strand is not the seat — dispatching for it
+            # from the repo inbox would start a new seat run, not resume the
+            # strand. brnrd#2119.
+            if not accumulated_ids and not _is_strand(held.meta):
+                protocol.create_event(
+                    inbox_dir, "measured-refill",
+                    f"Quota refill: {released_by}",
+                    conversation_key=_seat_conversation(held),
+                    released_seat=held.id,
                 )
             released += 1
             print(
