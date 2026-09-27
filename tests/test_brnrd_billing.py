@@ -16,28 +16,25 @@ pytest.importorskip("multipart")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from brnrd import account_deletion, billing, create_app, ids, stripe_api  # noqa: E402
+from brnrd import account_deletion, billing, ids, stripe_api  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
-from _helpers import brnrd_account_headers  # noqa: E402
+from _helpers import brnrd_account_headers, brnrd_client  # noqa: E402
 
 WEBHOOK_SECRET = "whsec_test"
 
 
 def _client() -> TestClient:
-    app = create_app(
-        Settings(
-            database_url="sqlite:///:memory:",
-            public_base_url="https://brnrd.example",
-            stripe_api_key="sk_test_x",
-            stripe_webhook_secret=WEBHOOK_SECRET,
-            stripe_price_supporter_monthly="price_sup_m",
-            stripe_price_supporter_annual="price_sup_y",
-            stripe_price_public_monthly="price_pub_m",
-            stripe_price_public_annual="price_pub_y",
-            supporter_cohort_size=2,
-        )
+    return brnrd_client(
+        github_oauth_client_id=Settings.github_oauth_client_id,
+        github_oauth_client_secret=Settings.github_oauth_client_secret,
+        stripe_api_key="sk_test_x",
+        stripe_webhook_secret=WEBHOOK_SECRET,
+        stripe_price_supporter_monthly="price_sup_m",
+        stripe_price_supporter_annual="price_sup_y",
+        stripe_price_public_monthly="price_pub_m",
+        stripe_price_public_annual="price_pub_y",
+        supporter_cohort_size=2,
     )
-    return TestClient(app, base_url="https://testserver")
 
 
 def _account(client: TestClient, github_id: str = "123", login: str = "octocat"):
