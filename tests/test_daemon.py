@@ -16,6 +16,7 @@ from brr import portals
 from brr import runner_failures
 from brr import schedule as schedule_mod
 from brr import worktree
+from brr.bootscore import BootScore
 from brr.run import Run
 from brr.runner import RunnerResult
 
@@ -8733,6 +8734,17 @@ def test_status_done_race_still_dispatches_follow_up_promptly(tmp_path, monkeypa
     monkeypatch.setattr(
         daemon.prompts, "build_daemon_prompt",
         lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+    # `dispatch()` calls `build_daemon_prompt_with_score` (not the plain
+    # variant above).  Without this stub the full prompt-assembly path
+    # runs — reading context files, knowledge slices, etc. — and the 20+s
+    # it takes on a loaded host pushes the finalize tail past the 30s
+    # `reached_tail.wait()` window, causing a spurious timeout failure.
+    # The race under test lives in the finalize/wake machinery, not in
+    # prompt assembly, so a fast stub is correct here.
+    monkeypatch.setattr(
+        daemon.prompts, "build_daemon_prompt_with_score",
+        lambda *_a, **_k: ("PROMPT", BootScore()),
     )
     monkeypatch.setattr(
         daemon.sync, "refresh_before_run",
