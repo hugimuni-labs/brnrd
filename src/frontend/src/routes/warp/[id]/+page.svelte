@@ -118,7 +118,7 @@
 		</header>
 
 		<!-- Metadata panel: says, attempts, refs, taken, prompt -->
-		{#if item.says.length > 0 || item.attempts.length > 0 || item.taken.length > 0 || item.refs.length > 0}
+		{#if item.says.length > 0 || item.attempts.length > 0 || item.taken.length > 0 || item.refs.length > 0 || item.prompt}
 			<section class="panel space-y-2 p-3 font-mono text-[11px]" aria-label="item metadata">
 				{#if item.says.length > 0}
 					<div>
