@@ -322,6 +322,33 @@
 						{/each}
 					</p>
 				{/if}
+				{#if item.attempts.length > 0}
+					<p class="font-mono text-[10px] text-ink-quiet">
+						attempts:
+						{#each item.attempts as runId (runId)}
+							{@const href = takenHref(item, runId)}
+							{#if href}
+								<a class="ml-1 text-amber-300/90 hover:text-amber-100" {href}>{runId}</a>
+							{:else}
+								<span class="ml-1">{runId}</span>
+							{/if}
+						{/each}
+					</p>
+				{/if}
+				{#if item.says.length > 0}
+					<p class="font-mono text-[10px] text-ink-quiet">
+						says ({item.says.length}):
+						{#each item.says as evtId (evtId)}
+							{@const short = evtId.slice(evtId.lastIndexOf('-') + 1)}
+							<span class="ml-1 font-mono text-[9px] text-stone-400" title={evtId}>{short}</span>
+						{/each}
+					</p>
+				{/if}
+				{#if item.stage}
+					<p class="font-mono text-[10px] text-ink-quiet">
+						stage: <span class="text-amber-300/80">{item.stage}</span>
+					</p>
+				{/if}
 				{#if item.prompt}
 					<p class="flex flex-wrap items-baseline gap-x-2 font-mono text-[10px]">
 						<span class="text-ink-quiet">{item.prompt}</span>

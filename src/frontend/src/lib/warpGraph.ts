@@ -109,6 +109,18 @@ export interface WarpItem {
 	metric: string | null;
 	target: string | null;
 	horizon: string | null;
+	/** Event ids that recorded something said about this item. */
+	says: string[];
+	/** Run ids that attempted work on this item (resident-authored). */
+	attempts: string[];
+	/** Current work stage (e.g. `making`, `understanding`). */
+	stage: string | null;
+	/** ISO timestamp of last touch. */
+	touched: string | null;
+	/** The item's short callsign (for dispatch event matching). */
+	sign: string | null;
+	/** Expected return / deliverable, authored. */
+	returnNote: string | null;
 	bodyMarkdown: string;
 }
 
@@ -141,7 +153,7 @@ export interface WarpGraph {
 }
 
 const ROW_RE =
-	/^(type|topics|needs|advances|done|retired|refs|prompt|taken|metric|target|horizon):[ \t]*(.*)$/;
+	/^(type|topics|needs|advances|done|retired|refs|prompt|taken|metric|target|horizon|says|attempts|stage|touched|sign|return):[ \t]*(.*)$/;
 const TITLE_RE = /^#[ \t]+(.*)$/;
 
 function basename(path: string): string {
@@ -279,6 +291,12 @@ export function parseWarpItem(path: string, markdown: string): WarpItem {
 		metric: rows.get('metric') || null,
 		target: rows.get('target') || null,
 		horizon: rows.get('horizon') || null,
+		says: splitIds(rows.get('says') ?? ''),
+		attempts: splitIds(rows.get('attempts') ?? ''),
+		stage: rows.get('stage') || null,
+		touched: rows.get('touched') || null,
+		sign: rows.get('sign') || null,
+		returnNote: rows.get('return') || null,
 		bodyMarkdown: body
 	};
 }
