@@ -216,10 +216,10 @@ def test_build_injected_context_matches_runner_injection(tmp_path):
 
     # It carries the product-owned identity core and the resident-owned
     # dominion digest (playbook + self-inject)...
-    assert "Resident Identity Core" in context
+    assert "owner := product" in context
     assert _says(context, "Your dominion (working memory)")
     assert _says(context, "Playbook — your standing orientation")
-    assert context.index("Resident Identity Core") < context.index(
+    assert context.index("owner := product") < context.index(
         "Your dominion (working memory)"
     )
     # ...and is verbatim what the runner path embeds into a full prompt, so

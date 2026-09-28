@@ -971,15 +971,15 @@ class TestPromptBuilding:
 
         prompt = build_run_prompt("do something", tmp_path)
 
-        assert "Resident Identity Core" in prompt
-        assert "product-owned identity contract" in prompt
-        assert _says(prompt, "Voice And The Seam")
-        assert _says(prompt, "fluency: weave | prose")
+        assert "owner := product" in prompt
+        assert "core := durable identity" in prompt
+        assert _says(prompt, "SEAMS")
+        assert _says(prompt, "Fluency :=")
         assert _says(prompt, "Your dominion (working memory)")
-        assert prompt.index("Resident Identity Core") < prompt.index(
+        assert prompt.index("owner := product") < prompt.index(
             "Your dominion (working memory)"
         )
-        assert prompt.index("Resident Identity Core") < prompt.index("Task:")
+        assert prompt.index("owner := product") < prompt.index("Task:")
 
     def test_identity_core_ignores_runtime_prompt_override(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
@@ -989,7 +989,7 @@ class TestPromptBuilding:
         )
 
         block = _build_identity_core_block(tmp_path)
-        assert "Resident Identity Core" in block
+        assert "owner := product" in block
         assert "Runtime override" not in block
 
     def test_run_prompt_includes_context(self, tmp_path):
@@ -1193,7 +1193,7 @@ class TestPromptBuilding:
             run_id="task-9",
             strand=True,
         )
-        assert "Resident Identity Core" in prompt
+        assert "owner := product" in prompt
         assert _says(prompt, "Pitfalls that match this task")
         assert "Blind retry" in prompt
         assert _says(prompt, "Rebuild the image before you trust the cache.")
@@ -1221,7 +1221,7 @@ class TestPromptBuilding:
             run_id="task-9",
             strand=True,
         )
-        assert "Resident Identity Core" in prompt
+        assert "owner := product" in prompt
         assert "Work surface" in prompt
 
     def test_daemon_prompt_worker_omits_pitfalls_when_nothing_matches(
@@ -1243,7 +1243,7 @@ class TestPromptBuilding:
         )
         assert not _says(prompt, "Pitfalls that match this task")
         assert "Blind retry" not in prompt
-        assert "Resident Identity Core" in prompt
+        assert "owner := product" in prompt
 
     def test_daemon_prompt_worker_still_sees_web_capability(self, tmp_path):
         # Workers skip the resident inject stack but still get the bundle —
@@ -1261,7 +1261,7 @@ class TestPromptBuilding:
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
             run_id="task-9",
         )
-        assert "Resident Identity Core" in prompt
+        assert "owner := product" in prompt
         assert "bounded, single-purpose thought" not in prompt
 
     def test_daemon_prompt_surfaces_runner_medium(self, tmp_path):
@@ -1624,27 +1624,27 @@ class TestPromptBuilding:
         """Both runner paths carry the working-register contract (weave.md):
         the resident's dense native notation for the surfaces only it and
         the machinery read. Host-agnostic, so the one-shot path gets it too."""
-        assert "your working register" in build_run_prompt("ship it", tmp_path)
+        assert "this is a working register" in build_run_prompt("ship it", tmp_path)
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path, run_id="task-9",
         )
-        assert "your working register" in prompt
+        assert "this is a working register" in prompt
 
     def test_prompts_carry_the_turn_grammar(self, tmp_path):
-        """The reply-as-turn contract (weave.md → "The turn") rides both
-        runner paths: menu closes the turn, empty menu legal, free text
-        overrides. Issue #777 — a content pin so a refactor or trim that
-        drops the section is caught here, not by a reader."""
+        """The reply-as-turn contract (weave.md → # TURN) rides both
+        runner paths: empty slots collapse, bold scene-verdict, free text
+        overrides the menu. Issue #777 — a content pin so a refactor or
+        trim that drops the section is caught here, not by a reader."""
         for prompt in (
             build_run_prompt("ship it", tmp_path),
             build_daemon_prompt(
                 "ship it", "evt-1", "/tmp/resp.md", tmp_path, run_id="task-9",
             ),
         ):
-            assert _says(prompt, "The menu closes the turn")
-            assert _says(prompt, "An empty menu is legal")
-            assert _says(prompt, "Free text always overrides")
-            assert "Scene-verdict line" in prompt
+            assert _says(prompt, "empty slots collapse")
+            assert _says(prompt, "bold scene-verdict")
+            assert _says(prompt, "free text overrides the menu")
+            assert "bold scene-verdict" in prompt
 
     def test_daemon_prompt_lists_pending_events_and_fold_in_contract(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -2561,7 +2561,7 @@ class TestPromptBuilding:
             "blocked — what's needed",
         ):
             assert state in prompt
-        assert _says(prompt.lower(), "manufactured options are the failure mode")
+        assert _says(prompt, "manufactured options fail the turn")
         assert "linger" in prompt
         assert "await:" in prompt
         assert "brnrd await" in prompt
