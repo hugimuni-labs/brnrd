@@ -37,7 +37,10 @@ different things the resident must not conflate:
 The level collectors are **per-Shell** (§8): Codex exposes live quota/context
 through session-rollout ``token_count`` events, while Claude exposes terminal
 spend/context through result JSON and cached subscription quota through the
-interactive ``/usage`` PTY collector. A Shell with no collector for a slot reads
+interactive ``/usage`` PTY collector. Vibe exposes no quota number at all — its
+``quota`` slot renders the measured plan facts from Vibe's own whoami cache
+with the monthly allowance stated as unknown (:mod:`vibe_status`), never a
+guessed percent. A Shell with no collector for a slot reads
 ``unimplemented``. That asymmetry is the design, surfaced honestly, not a bug.
 """
 

@@ -93,6 +93,7 @@ from . import presence
 from . import prompts
 from . import codex_status
 from . import codex_usage
+from . import vibe_status
 from . import course as course_mod
 from . import cut_verb
 from . import halt_verb
@@ -3965,6 +3966,13 @@ def _collect_levels(
       result normalized by :mod:`claude_status` carries spend + context
       accounting. The TUI scrape is intentionally throttled; hooks read the
       portal-state snapshot, they do not run the scrape themselves.
+    - **vibe** — no key-authenticated quota endpoint exists for the monthly
+      allowance, so there is no number to probe for: :mod:`vibe_status`
+      passively reads Vibe's own whoami cache for the plan facts it already
+      measured and renders the allowance as explicitly unknown. No network,
+      no completion probe, nothing to refresh — the *refresh* flag is
+      meaningless on this seam, and the reading never blocks anything
+      (``binding_quota_remaining_pct`` finds no numeric field in it).
 
     When *refresh* is ``False`` only the on-disk cache is read — the blocking
     probe (Claude's PTY scrape, Codex's app-server spawn) is skipped entirely.
@@ -4052,6 +4060,11 @@ def _collect_levels(
         return merged, frozenset(
             claude_usage.COLLECTED_SLOTS | claude_status.COLLECTED_SLOTS
         )
+    if vibe_status.supported(runner_name):
+        # Passive by construction: the reading is a file Vibe itself keeps
+        # current, so there is no probe to run or skip and both *refresh*
+        # paths share one behaviour. No outbox/shared dir is involved.
+        return vibe_status.load_levels(), frozenset(vibe_status.COLLECTED_SLOTS)
     return None, False
 
 
@@ -11772,7 +11785,9 @@ def _capture_exit_quota(task: Run) -> dict[str, object]:
     if summary:
         captured["spawn_quota_summary"] = " ".join(str(summary).split())
     shell = "codex" if codex_status.supported(runner_name) else (
-        "claude" if claude_status.supported(runner_name) else ""
+        "claude" if claude_status.supported(runner_name) else (
+            "vibe" if vibe_status.supported(runner_name) else ""
+        )
     )
     if shell:
         captured["spawn_quota_shell"] = shell

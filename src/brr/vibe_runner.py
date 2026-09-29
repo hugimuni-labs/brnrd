@@ -2,7 +2,9 @@
 
 Prompts travel on stdin; the system prompt is an invocation-scoped file. Vibe
 keeps its own authentication and model selection. No native hooks, quota
-collector or session-resume support is claimed by this adapter.
+collector or session-resume support is claimed by this adapter; the
+daemon-side plan-facts collector (whoami cache, allowance explicitly unknown)
+lives in :mod:`brr.vibe_status`, not here.
 """
 
 import json
