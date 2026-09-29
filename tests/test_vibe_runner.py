@@ -85,14 +85,13 @@ print(json.dumps([{'type':'message', 'role':'assistant',
 
 
 # ── Tier 2: native hooks ────────────────────────────────────────────────
-import tomllib as _tomllib
-
 from brr import hooks as _hooks
 from brr import vibe_runner as _vr
 
 
 def test_vibe_hooks_toml_parses_and_routes_each_native_type_to_brnrd():
-    doc = _tomllib.loads(_hooks.vibe_hooks_toml("brnrd"))
+    tomllib = pytest.importorskip("tomllib")  # stdlib from 3.11; brnrd supports 3.10
+    doc = tomllib.loads(_hooks.vibe_hooks_toml("brnrd"))
     got = {h["type"]: h["command"] for h in doc["hooks"]}
     assert got == {
         "pre_tool": "brnrd hook pre-tool",
@@ -134,3 +133,25 @@ def test_vibe_hook_dir_armed_only_in_a_daemon_run(monkeypatch):
     finally:
         import shutil
         shutil.rmtree(root)
+
+
+def _vibe_pre_tool(tool_name, file_path, cwd):
+    return json.dumps({
+        "hook_event_name": "pre_tool", "session_id": "s", "transcript_path": "",
+        "cwd": str(cwd), "tool_name": tool_name, "tool_call_id": "c",
+        "tool_input": {"file_path": str(file_path), "content": "x"},
+    })
+
+
+def test_vibe_write_into_host_checkout_is_denied_through_run_hook(tmp_path):
+    host = tmp_path / "host"
+    wt = host / ".brr" / "worktrees" / "run-x"
+    wt.mkdir(parents=True)
+    env = {"BRR_RUNNER": "vibe", "BRR_HOST_ROOT": str(host), "GIT_WORK_TREE": str(wt)}
+    for tool in ("write_file", "edit"):
+        out, rc = _hooks.run_hook("pre-tool", _vibe_pre_tool(tool, host / "stray.txt", wt), env)
+        assert rc == 0 and out["decision"] == "deny" and out["reason"], (tool, out)
+    ok, rc = _hooks.run_hook("pre-tool", _vibe_pre_tool("write_file", wt / "ok.txt", wt), env)
+    assert (ok, rc) == ({}, 0)
+    other, _ = _hooks.run_hook("pre-tool", _vibe_pre_tool("read_file", host / "stray.txt", wt), env)
+    assert other == {}

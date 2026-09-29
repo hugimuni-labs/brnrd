@@ -7472,6 +7472,26 @@ def subagent_neutral(
 # this predicate unblocked, same as any tool this list doesn't name.
 _ROOTED_WRITE_TOOLS = frozenset({"Edit", "Write"})
 
+#: Vibe 2.25.5 builtin file-writing tools -> the claude names the pre-tool
+#: predicates key on. Both take ``file_path`` (``write_file.WriteFileArgs``,
+#: ``edit``). ``bash`` is deliberately absent: the await lease rewrites claude's
+#: millisecond ``timeout`` and Vibe's ``BashArgs.timeout`` is a different
+#: contract — mapping it would be a guess.
+_VIBE_TOOL_ALIASES = {"write_file": "Write", "edit": "Edit", "search_replace": "Edit"}
+
+
+def _vibe_as_claude_tool(payload: dict[str, Any]) -> dict[str, Any]:
+    """A Vibe ``pre_tool`` payload renamed onto the predicates' vocabulary."""
+    name = payload.get("tool_name")
+    alias = _VIBE_TOOL_ALIASES.get(name) if isinstance(name, str) else None
+    if alias is None:
+        return payload
+    out = dict(payload, tool_name=alias, vibe_tool_name=name)
+    tool_input = payload.get("tool_input")
+    if isinstance(tool_input, dict) and "file_path" not in tool_input and "path" in tool_input:
+        out["tool_input"] = dict(tool_input, file_path=tool_input["path"])
+    return out
+
 #: Tools that wait by *returning* — the Shell ends the model's turn to sit on
 #: the condition. Fine at a keyboard; in a daemon-hosted ``-p`` run a turn
 #: that ends is a run that ends (design-the-seat-that-never-quits.md §The tool
@@ -7768,6 +7788,8 @@ def run_hook(
         return {}, 0
     ctx = HookContext(env)
     payload = _safe_json(stdin_text)
+    if phase == PHASE_PRE_TOOL and ctx.flavour == "vibe":
+        payload = _vibe_as_claude_tool(payload)
     if phase == PHASE_PRE_TOOL:
         # #1184: a filesystem-safety predicate, not a correspondence one —
         # unlike every other phase it never touches the portal or hook state,
