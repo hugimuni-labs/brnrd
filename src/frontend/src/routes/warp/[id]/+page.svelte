@@ -15,7 +15,15 @@
 	import MarkdownContent from '$lib/MarkdownContent.svelte';
 	import WithheldNotice from '$lib/WithheldNotice.svelte';
 	import { SurfaceAuthError, fetchSurface, type SurfaceResponse } from '$lib/surface';
-	import { buildWarpGraph, resolveTopics, topicFaces } from '$lib/warpGraph';
+	import type { ResolvedPathname } from '$app/types';
+	import {
+		buildWarpGraph,
+		itemRepos,
+		resolveTopics,
+		topicFaces,
+		type WarpItem
+	} from '$lib/warpGraph';
+	import { repoRunSlug, runIdSlug, runNodeHref } from '$lib/runNode';
 
 	let data = $state<SurfaceResponse | null>(null);
 	let error = $state<string | null>(null);
@@ -28,6 +36,13 @@
 	let faces = $derived(topicFaces(graph));
 	/** Corpus paths in this surface — needed for MarkdownContent's link resolver. */
 	let knownPaths = $derived(new Set((data?.files ?? []).map((f) => f.path)));
+
+	function runHref(itemVal: WarpItem | null, runId: string): ResolvedPathname | null {
+		if (!itemVal) return null;
+		const repos = itemRepos(itemVal);
+		if (repos.length !== 1) return null;
+		return runNodeHref(repoRunSlug(repos[0]), runIdSlug(runId)) ?? null;
+	}
 
 	onMount(async () => {
 		try {
@@ -66,22 +81,29 @@
 		</p>
 	</div>
 {:else}
-	<div class="mx-auto flex max-w-2xl flex-col gap-5 p-6">
-		<header>
-			<p class="eyebrow">
+	<div class="mx-auto flex max-w-2xl flex-col gap-6 p-6">
+		<!-- Header: identity + navigation -->
+		<header class="border-b border-stone-800 pb-4">
+			<p class="eyebrow mb-1">
 				{item.type ?? 'item'} · {item.id}
 				<span
 					class="ml-1 font-mono text-[9px] uppercase {item.state === 'open'
 						? 'text-amber-300/70'
 						: 'text-ink-mute'}">{item.state}</span
 				>
+				{#if item.stage}
+					<span class="ml-2 font-mono text-[9px] text-amber-300/60 uppercase">{item.stage}</span>
+				{/if}
 			</p>
-			<h1 class="font-mono text-lg font-semibold text-amber-100">{item.headline}</h1>
-			<p class="mt-1 font-mono text-[10px] text-ink-quiet">
+			<h1 class="font-mono text-xl font-semibold leading-tight text-amber-100">{item.headline}</h1>
+			{#if item.returnNote}
+				<p class="mt-1.5 font-mono text-[11px] text-stone-400 italic">{item.returnNote}</p>
+			{/if}
+			<p class="mt-2 font-mono text-[10px] text-ink-quiet">
 				<a href={resolve('/warp')} class="hover:text-stone-300">← the warp</a>
 			</p>
 			{#if topics.length > 0}
-				<p class="mt-2 flex flex-wrap gap-x-2 gap-y-1 font-mono text-[11px] text-ink-quiet">
+				<p class="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-ink-quiet">
 					{#each topics as topic (topic.canonicalId)}
 						{@const face = faces.get(topic.canonicalId)}
 						<span class="flex items-center gap-1">
@@ -95,8 +117,82 @@
 			{/if}
 		</header>
 
-		<!-- Prose body: Asked / Answer / Done rendered via the shared MarkdownContent
-		     renderer — same typographic register as run nodes and the corpus browser. -->
+		<!-- Metadata panel: says, attempts, refs, taken, prompt -->
+		{#if item.says.length > 0 || item.attempts.length > 0 || item.taken.length > 0 || item.refs.length > 0 || item.prompt}
+			<section class="panel space-y-2 p-3 font-mono text-[11px]" aria-label="item metadata">
+				{#if item.says.length > 0}
+					<div>
+						<span class="font-mono text-[9px] tracking-wide text-ink-mute uppercase"
+							>says · {item.says.length}</span
+						>
+						<div class="mt-1 flex flex-wrap gap-x-2 gap-y-1">
+							{#each item.says as evtId (evtId)}
+								{@const short = evtId.slice(evtId.lastIndexOf('-') + 1)}
+								<span
+									class="rounded border border-stone-800 bg-stone-950 px-1.5 py-0.5 font-mono text-[10px] text-stone-400"
+									title={evtId}>— {short}</span
+								>
+							{/each}
+						</div>
+					</div>
+				{/if}
+				{#if item.attempts.length > 0 || item.taken.length > 0}
+					{@const allRuns = [...new Set([...item.attempts, ...item.taken])]}
+					<div>
+						<span class="font-mono text-[9px] tracking-wide text-ink-mute uppercase"
+							>runs · {allRuns.length}</span
+						>
+						<div class="mt-1 flex flex-wrap gap-x-2 gap-y-1">
+							{#each allRuns as runId (runId)}
+								{@const href = runHref(item, runId)}
+								{#if href}
+									<a
+										{href}
+										class="rounded border border-stone-700 bg-stone-950 px-1.5 py-0.5 font-mono text-[10px] text-amber-300/80 hover:border-stone-500 hover:text-amber-100"
+										>{runId}</a
+									>
+								{:else}
+									<span
+										class="rounded border border-stone-800 bg-stone-950 px-1.5 py-0.5 font-mono text-[10px] text-stone-400"
+										>{runId}</span
+									>
+								{/if}
+							{/each}
+						</div>
+					</div>
+				{/if}
+				{#if item.refs.length > 0}
+					<div>
+						<span class="font-mono text-[9px] tracking-wide text-ink-mute uppercase">refs</span>
+						<p class="mt-0.5">
+							{#each item.refs as ref, index (index)}
+								{#if index > 0}<span class="text-ink-mute"> · </span>{/if}
+								{#if ref.href}
+									<a
+										href={ref.href}
+										target="_blank"
+										rel="noopener external"
+										class="text-amber-300/90 hover:text-amber-100">{ref.label}</a
+									>
+								{:else}
+									<span class="text-stone-400">{ref.label}</span>
+								{/if}
+							{/each}
+						</p>
+					</div>
+				{/if}
+				{#if item.prompt}
+					<div class="border-t border-stone-800 pt-2">
+						<span class="font-mono text-[9px] tracking-wide text-ink-mute uppercase"
+							>dispatch prompt</span
+						>
+						<p class="mt-0.5 text-stone-300">{item.prompt}</p>
+					</div>
+				{/if}
+			</section>
+		{/if}
+
+		<!-- Prose body: Asked / Answer / Done — the actual warp document -->
 		<section aria-label="item body">
 			{#if item.bodyMarkdown.trim()}
 				<MarkdownContent markdown={item.bodyMarkdown} sourcePath={item.path} {knownPaths} />
@@ -104,5 +200,12 @@
 				<p class="font-mono text-[11px] text-ink-quiet italic">no prose body yet.</p>
 			{/if}
 		</section>
+
+		<!-- Touched timestamp — footer -->
+		{#if item.touched}
+			<footer class="border-t border-stone-800 pt-2">
+				<p class="font-mono text-[9px] text-ink-mute">touched {item.touched}</p>
+			</footer>
+		{/if}
 	</div>
 {/if}
