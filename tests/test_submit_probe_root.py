@@ -80,8 +80,9 @@ def _notices(outbox: Path) -> list[str]:
     return [n.get("text", "") for n in json.loads(state.read_text()).get("notices", [])]
 
 
+@pytest.mark.parametrize("local_main", [True, False])
 def test_pushed_clone_branch_submits_even_though_the_parent_never_saw_it(
-    repos, tmp_path, monkeypatch,
+    repos, tmp_path, monkeypatch, local_main,
 ):
     host, clone = repos
     _git(clone, "push", "-q", "-u", "origin", "brr/strand-work")
@@ -95,6 +96,10 @@ def test_pushed_clone_branch_submits_even_though_the_parent_never_saw_it(
     outbox = tmp_path / "outbox"
     outbox.mkdir()
     task = _strand(clone, report)
+    if not local_main:
+        task.meta["seed_oid"] = _git(clone, "rev-parse", "main")
+        _git(clone, "branch", "-D", "main")
+        assert daemon.gitops.rev_parse(clone, "main") is None
     created: list[dict] = []
     monkeypatch.setattr(
         daemon.protocol, "create_event",
@@ -104,6 +109,7 @@ def test_pushed_clone_branch_submits_even_though_the_parent_never_saw_it(
     assert created and created[0]["spawn_published_branch"] == "brr/strand-work"
     assert created[0]["spawn_commits"] == 1
     assert task.meta["submitted"] is True
+    assert _notices(outbox) == []
 
 
 def test_unpushed_clone_branch_is_still_refused(repos, tmp_path, monkeypatch):
