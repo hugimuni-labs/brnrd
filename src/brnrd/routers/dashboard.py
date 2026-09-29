@@ -39,12 +39,14 @@ from brnrd.models import (
     ConfigChangeRequest,
     Daemon,
     Event,
+    GitHubInstallation,
     GitHubInstalledRepo,
     Repo,
     TgPairCode,
 )
 from brnrd import schemas
 from brr.asks import asks_from_files, resolve_receipts
+from brr import says as says_mod
 
 from ._session import (
     _account_id,
@@ -1972,6 +1974,107 @@ def dashboard_warp_asks_api(request: Request, db: Session = Depends(get_db)) -> 
         _enrich_ask_receipts(payload, bases)
         _ASKS_CACHE[str(account_id)] = (etag, time.monotonic(), payload)
     return JSONResponse(payload, headers={"Cache-Control": "private, max-age=30"})
+
+
+def _fetch_home_say(settings: Any, installation_id: str, full_name: str, branch: str, event_id: str) -> str | None:
+    """Read one say file off the home repo through the GitHub App — in passing.
+
+    A repo-scoped installation credential, one contents read, the bytes handed
+    straight back. Nothing is written, cached, or logged: his 2026-09-29 line
+    is that his messages are *shown* on brnrd.dev and never *kept* there.
+    """
+    import httpx
+
+    from brnrd.platforms import github_app
+
+    credential = github_app.installation_access_credential(
+        settings, installation_id, repositories=[full_name.split("/", 1)[1]]
+    )
+    url = (
+        f"{settings.github_api_base_url.rstrip('/')}/repos/{full_name}/contents/"
+        f"{says_mod.SAYS_PREFIX}{event_id}.md"
+    )
+    with httpx.Client(timeout=15) as client:
+        response = client.get(
+            url,
+            params={"ref": branch},
+            headers={
+                "Authorization": f"Bearer {credential['token']}",
+                "Accept": "application/vnd.github.raw+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    return response.text
+
+
+def _home_installation(db: Session, account_id: str, full_name: str) -> str | None:
+    """This account's App installation that can see *full_name*, if any."""
+    row = db.execute(
+        select(GitHubInstallation.installation_id)
+        .join(GitHubInstalledRepo, GitHubInstalledRepo.github_installation_id == GitHubInstallation.id)
+        .where(
+            GitHubInstallation.account_id == account_id,
+            GitHubInstalledRepo.repo_full_name.ilike(full_name),
+        )
+        .limit(1)
+    ).first()
+    return str(row[0]) if row else None
+
+
+@router.get("/v1/dashboard/warp/says/{event_id}")
+def dashboard_warp_say(event_id: str, request: Request, db: Session = Depends(get_db)) -> Response:
+    """A say's words, read from the home repo at request time (never stored).
+
+    Only an id the account's own mirrored ``says/index.md`` lists can be read,
+    and only from the home repo that index names — the path is built here from
+    a validated event id, never taken from the client.
+    """
+    no_store = {"Cache-Control": "no-store"}
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401, headers=no_store)
+    account = db.get(Account, account_id)
+    if account is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401, headers=no_store)
+    if not says_mod.is_event_id(event_id):
+        return JSONResponse({"detail": "not a say"}, status_code=404, headers=no_store)
+    try:
+        files = json.loads(account.surface_json or "[]")
+    except ValueError:
+        files = []
+    index_text = next(
+        (
+            str(f.get("markdown", ""))
+            for f in files if isinstance(f, dict) and f.get("path") == says_mod.INDEX_PATH
+        ),
+        None,
+    )
+    index = says_mod.parse_index(index_text or "")
+    url = says_mod.say_url(index, event_id)
+    if url is None:
+        return JSONResponse({"detail": "not kept at home"}, status_code=404, headers=no_store)
+    full_name = str(index["home"]).removeprefix("https://github.com/")
+    if full_name == index["home"] or full_name.count("/") != 1:
+        return JSONResponse({"detail": "home is not on github", "url": url}, status_code=404, headers=no_store)
+    installation_id = _home_installation(db, str(account_id), full_name)
+    if installation_id is None:
+        return JSONResponse(
+            {"detail": "the GitHub App cannot see the home repo", "url": url},
+            status_code=404,
+            headers=no_store,
+        )
+    try:
+        markdown = _fetch_home_say(
+            request.app.state.settings, installation_id, full_name, index["branch"], event_id
+        )
+    except Exception:  # noqa: BLE001 - the link still works; say so, keep no trace
+        return JSONResponse({"detail": "home read failed", "url": url}, status_code=502, headers=no_store)
+    if markdown is None:
+        return JSONResponse({"detail": "not on the home branch yet", "url": url}, status_code=404, headers=no_store)
+    return JSONResponse({"event": event_id, "url": url, "markdown": markdown}, headers=no_store)
 
 
 def _activity_row_out(view: dict[str, Any]) -> dict[str, Any]:

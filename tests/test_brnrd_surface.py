@@ -552,3 +552,81 @@ def test_dashboard_warp_asks_receipts_empty_with_no_published_bases():
 
     assert body["bases"] == {}
     assert body["asks"][0]["receipts"] == [{"ref": "#42", "url": None}]
+
+
+_SAY = "evt-1790354596107625000-vz0z"
+
+
+def _say_setup(client, *, install: bool = True):
+    from brnrd.models import Account, GitHubInstallation, GitHubInstalledRepo
+
+    _, daemon_headers = _repo_and_daemon(client)
+    files = [
+        {"path": "surface/warp/w-1.md", "markdown": f"# One\n\ntype: action\nsays: {_SAY}\n"},
+        {
+            "path": "surface/warp/says/index.md",
+            "markdown": f"home: https://github.com/acme/acme-home\nbranch: main\nsays: {_SAY}\n",
+        },
+    ]
+    client.put("/v1/daemons/surface", json={"files": files}, headers=daemon_headers)
+    _login_cookie(client)
+    if install:
+        with client.app.state.SessionLocal() as db:
+            account = db.query(Account).first()
+            db.add(GitHubInstallation(id="gi-1", account_id=account.id, installation_id="42", target_login="acme"))
+            db.add(GitHubInstalledRepo(id="gr-1", github_installation_id="gi-1", repo_full_name="acme/acme-home"))
+            db.commit()
+
+
+def test_dashboard_warp_say_reads_the_home_repo_in_passing(monkeypatch):
+    """His 2026-09-29 line: messages shown on brnrd.dev, never kept there —
+    the say is read off the home repo per request and handed back no-store."""
+    from brnrd.routers import dashboard
+
+    calls = []
+
+    def fake_fetch(settings, installation_id, full_name, branch, event_id):
+        calls.append((installation_id, full_name, branch, event_id))
+        return "# evt\n\n---\n\nthe warp body is just nowhere\n"
+
+    monkeypatch.setattr(dashboard, "_fetch_home_say", fake_fetch)
+    client = _client()
+    _say_setup(client)
+
+    response = client.get(f"/v1/dashboard/warp/says/{_SAY}")
+
+    assert response.status_code == 200, response.text
+    assert "just nowhere" in response.json()["markdown"]
+    assert response.headers["cache-control"] == "no-store"
+    assert calls == [("42", "acme/acme-home", "main", _SAY)]
+    asks = client.get("/v1/dashboard/warp/asks.json").json()
+    assert asks["asks"][0]["says"][0]["url"].endswith(f"/surface/warp/says/{_SAY}.md")
+    with client.app.state.SessionLocal() as db:  # nothing of the words was kept
+        from brnrd.models import Account
+
+        assert "just nowhere" not in (db.query(Account).first().surface_json or "")
+
+
+def test_dashboard_warp_say_refuses_what_the_index_does_not_list(monkeypatch):
+    from brnrd.routers import dashboard
+
+    monkeypatch.setattr(dashboard, "_fetch_home_say", lambda *a: pytest.fail("must not fetch"))
+    client = _client()
+    _say_setup(client)
+    assert client.get("/v1/dashboard/warp/says/evt-1790449929122436000-mrqh").status_code == 404
+    assert client.get("/v1/dashboard/warp/says/..%2Fsecret").status_code == 404
+
+
+def test_dashboard_warp_say_without_the_app_on_home_falls_back_to_the_link(monkeypatch):
+    from brnrd.routers import dashboard
+
+    monkeypatch.setattr(dashboard, "_fetch_home_say", lambda *a: pytest.fail("must not fetch"))
+    client = _client()
+    _say_setup(client, install=False)
+    response = client.get(f"/v1/dashboard/warp/says/{_SAY}")
+    assert response.status_code == 404
+    assert response.json()["url"].startswith("https://github.com/acme/acme-home/blob/main/")
+
+
+def test_dashboard_warp_say_requires_session():
+    assert _client().get(f"/v1/dashboard/warp/says/{_SAY}").status_code == 401
