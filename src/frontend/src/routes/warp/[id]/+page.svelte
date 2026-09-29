@@ -24,7 +24,7 @@
 		type WarpItem
 	} from '$lib/warpGraph';
 	import { repoRunSlug, runIdSlug, runNodeHref } from '$lib/runNode';
-	import { eventTime, touchedLabel } from '$lib/asks';
+	import { SAYS_INDEX_PATH, eventTime, parseSaysIndex, sayHomeUrl, touchedLabel } from '$lib/asks';
 
 	let data = $state<SurfaceResponse | null>(null);
 	let error = $state<string | null>(null);
@@ -37,6 +37,10 @@
 	let faces = $derived(topicFaces(graph));
 	/** Corpus paths in this surface — needed for MarkdownContent's link resolver. */
 	let knownPaths = $derived(new Set((data?.files ?? []).map((f) => f.path)));
+	/** Says kept at home (brr/says.py) — ids + home URL only; the words stay in git. */
+	let saysIndex = $derived(
+		parseSaysIndex((data?.files ?? []).find((f) => f.path === SAYS_INDEX_PATH)?.markdown)
+	);
 
 	function runHref(itemVal: WarpItem | null, runId: string): ResolvedPathname | null {
 		if (!itemVal) return null;
@@ -130,10 +134,25 @@
 							{#each item.says as evtId (evtId)}
 								{@const short = evtId.slice(evtId.lastIndexOf('-') + 1)}
 								{@const at = eventTime(evtId)}
-								<span
-									class="rounded border border-stone-800 bg-stone-950 px-1.5 py-0.5 font-mono text-[10px] text-stone-400"
-									title={at ? `${evtId} · ${at}` : evtId}>{touchedLabel(at) || '—'} · {short}</span
-								>
+								{@const home = sayHomeUrl(saysIndex, evtId)}
+								{#if home}
+									<!-- the message lives in the home repo, never on the server -->
+									<!-- eslint-disable svelte/no-navigation-without-resolve -->
+									<a
+										href={home}
+										target="_blank"
+										rel="noopener noreferrer"
+										class="rounded border border-sky-900/60 bg-stone-950 px-1.5 py-0.5 font-mono text-[10px] text-sky-300 hover:text-sky-100"
+										title={at ? `${evtId} · ${at}` : evtId}>{touchedLabel(at) || '—'} · {short} ↗</a
+									>
+									<!-- eslint-enable svelte/no-navigation-without-resolve -->
+								{:else}
+									<span
+										class="rounded border border-stone-800 bg-stone-950 px-1.5 py-0.5 font-mono text-[10px] text-stone-400"
+										title={at ? `${evtId} · ${at}` : evtId}
+										>{touchedLabel(at) || '—'} · {short}</span
+									>
+								{/if}
 							{/each}
 						</div>
 					</div>

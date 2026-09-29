@@ -1202,6 +1202,12 @@ class CorpusFile:
     abspath: Path
 
 
+def _says_mirrored(rel: str) -> bool:
+    from .says import is_mirrored
+
+    return is_mirrored(rel)
+
+
 def corpus_files(ctx: AccountContext) -> list[CorpusFile]:
     """Enumerate the navigable corpus across the authored + knowledge layers.
 
@@ -1226,6 +1232,10 @@ def corpus_files(ctx: AccountContext) -> list[CorpusFile]:
                 rel = abspath.relative_to(home).as_posix()
             except ValueError:
                 continue  # a root outside home (never expected) is not corpus
+            if layer == "authored" and not _says_mirrored(rel):
+                # A say's words stay home (brr/says.py): from surface/warp/says/
+                # only the id index leaves the machine.
+                continue
             entries.append(CorpusFile(layer=layer, path=rel, abspath=abspath))
         if layer == "authored":
             # Goal readings ride the same authored-layer mirror as their
