@@ -18623,8 +18623,12 @@ def start(
                                     spawn["inbox_dir"], spawn["event"], exc,
                                 )
                         else:
-                            _notify_spawn_parent(spawn["inbox_dir"], spawn_task)
+                            # Project the park before notifying: a held child
+                            # whose notification raises must keep its edge
+                            # (the finally below re-parks it) — the parent is
+                            # still the only run that may stop: or steer it.
                             parked = _parked_child_projection(spawn_task)
+                            _notify_spawn_parent(spawn["inbox_dir"], spawn_task)
                         if spawn["event"] is not None:
                             if parked is not None and _park_run_control(
                                 spawn_eid, parked,
@@ -18665,7 +18669,14 @@ def start(
                         if not _edge_resolved and spawn_eid:
                             with _run_controls_lock:
                                 ctrl = _run_controls.get(spawn_eid)
-                            if ctrl is not None and not isinstance(
+                            if (
+                                ctrl is not None
+                                and parked is not None
+                                and not isinstance(ctrl.get("parked"), dict)
+                                and _park_run_control(spawn_eid, parked)
+                            ):
+                                pass  # held child: edge kept despite the throw
+                            elif ctrl is not None and not isinstance(
                                 ctrl.get("parked"), dict
                             ):
                                 _retire_run_control(spawn_eid)
