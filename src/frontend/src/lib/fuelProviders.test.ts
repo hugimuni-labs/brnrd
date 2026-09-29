@@ -205,3 +205,27 @@ test('an unreadable percentage still names a window rather than falling silent',
 	assert.equal(groups[0].primary?.windowName, 'week');
 	assert.equal(groups[0].primary?.percent, null);
 });
+
+test('a usable catalog shell without a quota report keeps its picker and invents no meter', () => {
+	const profiles = [{ name: 'vibe-glm-5-3', shell: 'vibe', available: true }];
+	const [vibe] = fuelProviderGroups([], Date.now(), profiles);
+	assert.deepEqual(vibe, { provider: 'vibe', primary: null, secondary: [], meters: [] });
+	assert.deepEqual(
+		fuelProviderGroups([], Date.now(), [{ name: 'dead', shell: 'gone', available: false }]),
+		[]
+	);
+});
+
+test('catalog cores do not duplicate an existing provider or hide an authentication lock', () => {
+	const shells: QuotaShell[] = [{ shell: 'vibe', status: 'unknown', windows: [] }];
+	const profiles = [
+		{ name: 'vibe-medium', shell: 'vibe', available: true },
+		{ name: 'vibe-glm', shell: 'vibe', available: true }
+	];
+	assert.equal(fuelProviderGroups(shells, Date.now(), profiles).length, 1);
+	const [locked] = fuelProviderGroups([], Date.now(), [
+		{ name: 'locked', shell: 'vibe', available: false, availability: 'auth-error' }
+	]);
+	assert.equal(locked.provider, 'vibe');
+	assert.deepEqual(locked.meters, []);
+});
