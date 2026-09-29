@@ -15,7 +15,10 @@ import {
 	moveFocus,
 	previewNames,
 	receiptChips,
+	sayAt,
+	saySummary,
 	sayText,
+	eventTime,
 	seatNowLine,
 	seatRun,
 	splitAlive,
@@ -264,4 +267,33 @@ test('fetchAsks: 200 returns the payload, 401 is an auth error, other statuses t
 	assert.deepEqual(await fetchAsks(stub(200, payload)), payload);
 	await assert.rejects(fetchAsks(stub(401, {})), AsksAuthError);
 	await assert.rejects(fetchAsks(stub(500, {})), /500/);
+});
+
+test('eventTime: an evt id carries its own nanosecond timestamp', () => {
+	assert.equal(eventTime('evt-1790354596107625000-vz0z'), '2026-09-25T16:43:16.107Z');
+	assert.equal(eventTime('evt-abc'), null); // not the minted shape ⇒ no time, never a guess
+	assert.equal(eventTime(null), null);
+});
+
+test("sayAt: the server's at wins, the id's own time is the floor", () => {
+	const ev = 'evt-1790354596107625000-vz0z';
+	assert.equal(sayAt({ at: '2026-09-01T00:00:00Z', event: ev }), '2026-09-01T00:00:00Z');
+	assert.equal(sayAt({ at: null, event: ev }), '2026-09-25T16:43:16.107Z');
+	assert.equal(sayAt({ at: null, event: 'evt-abc' }), null);
+});
+
+test('saySummary: text-less says fold into one line; any excerpt keeps the list', () => {
+	const now = Date.parse('2026-09-29T15:00:00Z');
+	const s = (event: string, excerpt: string | null = null): AskSay => ({
+		event,
+		at: null,
+		excerpt
+	});
+	const older = 'evt-1790354596107625000-vz0z'; // 2026-09-25
+	const newer = 'evt-1790449929122436000-mrqh'; // 2026-09-26
+	assert.equal(saySummary([s(newer), s(older)], now), '2 messages · 3d → 2d');
+	assert.equal(saySummary([s(older)], now), '1 message · 3d');
+	assert.equal(saySummary([s('evt-abc')], now), '1 message'); // no time ⇒ no invented span
+	assert.equal(saySummary([s(older, 'the body is nowhere')], now), null);
+	assert.equal(saySummary([], now), null);
 });

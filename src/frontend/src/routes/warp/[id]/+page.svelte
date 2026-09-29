@@ -24,6 +24,7 @@
 		type WarpItem
 	} from '$lib/warpGraph';
 	import { repoRunSlug, runIdSlug, runNodeHref } from '$lib/runNode';
+	import { eventTime, touchedLabel } from '$lib/asks';
 
 	let data = $state<SurfaceResponse | null>(null);
 	let error = $state<string | null>(null);
@@ -128,9 +129,10 @@
 						<div class="mt-1 flex flex-wrap gap-x-2 gap-y-1">
 							{#each item.says as evtId (evtId)}
 								{@const short = evtId.slice(evtId.lastIndexOf('-') + 1)}
+								{@const at = eventTime(evtId)}
 								<span
 									class="rounded border border-stone-800 bg-stone-950 px-1.5 py-0.5 font-mono text-[10px] text-stone-400"
-									title={evtId}>— {short}</span
+									title={at ? `${evtId} · ${at}` : evtId}>{touchedLabel(at) || '—'} · {short}</span
 								>
 							{/each}
 						</div>

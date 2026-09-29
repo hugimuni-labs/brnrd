@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { resolve } from '$app/paths';
 	import { SvelteSet } from 'svelte/reactivity';
 	import {
 		askHandle,
@@ -14,6 +15,8 @@
 		moveFocus,
 		previewNames,
 		receiptChips,
+		sayAt,
+		saySummary,
 		sayText,
 		seatNowLine,
 		seatRun,
@@ -231,27 +234,35 @@
 				     event id as the lead (`sayText` falls back to it only when
 				     no excerpt resolved); ↗ only when the server sent a `url`
 				     (no route exists yet, so never today — see asks.ts). -->
-				{#each row.says as say (say.event)}
-					<p class="truncate">
-						<span class="text-ink-mute">{touchedLabel(say.at, now) || '—'}</span>
-						<span class="text-stone-300"> · {sayText(say)}</span>
-						{#if say.url}
-							<!-- eslint-disable svelte/no-navigation-without-resolve -->
-							<a
-								href={say.url}
-								class="text-sky-200 hover:text-sky-100"
-								target="_blank"
-								rel="noopener noreferrer"
-								aria-label="open this message"
-							>
-								· ↗</a
-							>
-							<!-- eslint-enable svelte/no-navigation-without-resolve -->
-						{/if}
+				{#if saySummary(row.says, now)}
+					<p class="truncate text-stone-300" title={row.says.map((say) => say.event).join('\n')}>
+						{saySummary(row.says, now)}
 					</p>
 				{:else}
-					<p class="text-ink-mute">none recorded yet</p>
-				{/each}
+					{#each row.says as say (say.event)}
+						<p class="truncate">
+							<span class="text-ink-mute" title={sayAt(say) ?? undefined}
+								>{touchedLabel(sayAt(say), now) || '—'}</span
+							>
+							<span class="text-stone-300"> · {sayText(say)}</span>
+							{#if say.url}
+								<!-- eslint-disable svelte/no-navigation-without-resolve -->
+								<a
+									href={say.url}
+									class="text-sky-200 hover:text-sky-100"
+									target="_blank"
+									rel="noopener noreferrer"
+									aria-label="open this message"
+								>
+									· ↗</a
+								>
+								<!-- eslint-enable svelte/no-navigation-without-resolve -->
+							{/if}
+						</p>
+					{:else}
+						<p class="text-ink-mute">none recorded yet</p>
+					{/each}
+				{/if}
 			</div>
 			<div>
 				<p class="text-[10px] tracking-wide text-ink-mute uppercase">attempts</p>
@@ -388,6 +399,15 @@
 						</button>
 						{#if open}
 							<div class="space-y-1.5 pb-2 pl-16 pr-2 font-mono text-[11px] text-ink-quiet">
+								<!-- The item's own page (/warp/[id], #2127) carries the body —
+								     Asked / Answer / Done. Before this link nothing on the home
+								     reached it (his 2026-09-29: "the warp body is just nowhere,
+								     neither linked nor shown"). -->
+								<a
+									href={resolve('/warp/[id]', { id: row.id })}
+									class="inline-block border border-amber-800/60 bg-stone-950/60 px-1.5 py-0.5 text-amber-200 hover:text-amber-100"
+									data-ask-page>open {row.id} — asked · answer · done →</a
+								>
 								{#if row.after}<p>after <span class="text-stone-300">{row.after}</span></p>{/if}
 								{#if kind === 'toJudge'}
 									{#if chips.length}
