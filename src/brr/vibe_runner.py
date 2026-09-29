@@ -4,7 +4,9 @@ Prompts travel on stdin; the system prompt is an invocation-scoped file. Vibe
 keeps its own authentication and model selection. Inside a daemon run the
 adapter installs brnrd's hooks through Vibe's native protocol (a per-invocation
 ``--add-dir`` root carrying ``.vibe/hooks.toml``; see ``hooks.vibe_hooks_toml``).
-No quota collector or session-resume support is claimed by this adapter.
+Usage for the exact invocation is collected into a run sidecar by
+:mod:`brr.vibe_usage` (no quota, allowance or session-resume support is
+claimed by this adapter).
 """
 
 import json
@@ -123,5 +125,12 @@ def main() -> int:
     if error:
         print(error, file=sys.stderr)
         return 1
+    # Usage telemetry on the same boundary that unwraps the reply: the
+    # journal is complete exactly now. The capture is defensive by
+    # contract (an honest unavailable payload, never a raise), so the
+    # reply's shape and exit code are unchanged.
+    from . import vibe_usage
+
+    vibe_usage.capture_stdout(result.stdout, env)
     print(reply, end="")
     return 0
