@@ -400,11 +400,10 @@ def test_resolve_receipts_md_name_resolves_against_the_kb_base():
     ]
 
 
-def test_resolve_receipts_warp_item_ref_has_no_url_yet():
-    """No dashboard page resolves one warp item to a URL today — same
-    discipline `_enrich_ask_says` already applies to a say's own `url`."""
+def test_resolve_receipts_warp_item_ref_links_the_item_page():
+    """`/warp/[id]` exists since #2127, so a `w-N` receipt links to it."""
     receipts = asks.resolve_receipts({"receipt": "w-7"}, _GITHUB_BASES)
-    assert receipts == [{"ref": "w-7", "url": None}]
+    assert receipts == [{"ref": "w-7", "url": "/warp/w-7"}]
 
 
 def test_resolve_receipts_prose_in_return_is_not_a_receipt():

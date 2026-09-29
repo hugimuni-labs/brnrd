@@ -23,7 +23,7 @@
 		topicFaces,
 		type WarpItem
 	} from '$lib/warpGraph';
-	import { repoRunSlug, runIdSlug, runNodeHref } from '$lib/runNode';
+	import { repoRunSlug, runIdSlug, runNodeHref, runRepoSlugs } from '$lib/runNode';
 	import { SAYS_INDEX_PATH, eventTime, parseSaysIndex, sayHomeUrl, touchedLabel } from '$lib/asks';
 
 	let data = $state<SurfaceResponse | null>(null);
@@ -37,6 +37,7 @@
 	let faces = $derived(topicFaces(graph));
 	/** Corpus paths in this surface — needed for MarkdownContent's link resolver. */
 	let knownPaths = $derived(new Set((data?.files ?? []).map((f) => f.path)));
+	let runSlugs = $derived(runRepoSlugs((data?.files ?? []).map((f) => f.path)));
 	// Step 2: a say kept at home is read through the server *in passing*
 	// (`/v1/dashboard/warp/says/<evt>`, no-store) and rendered here; the ↗
 	// beside it is the fallback when that read cannot happen.
@@ -79,8 +80,10 @@
 	function runHref(itemVal: WarpItem | null, runId: string): ResolvedPathname | null {
 		if (!itemVal) return null;
 		const repos = itemRepos(itemVal);
-		if (repos.length !== 1) return null;
-		return runNodeHref(repoRunSlug(repos[0]), runIdSlug(runId)) ?? null;
+		if (repos.length === 1) return runNodeHref(repoRunSlug(repos[0]), runIdSlug(runId)) ?? null;
+		// No single repo on the item's refs: the mirrored run node names it.
+		const slug = runSlugs.get(runId);
+		return slug ? runNodeHref(slug, runIdSlug(runId)) : null;
 	}
 
 	onMount(async () => {
@@ -229,6 +232,8 @@
 								{#if href}
 									<a
 										{href}
+										target="_blank"
+										rel="noopener"
 										class="rounded border border-stone-700 bg-stone-950 px-1.5 py-0.5 font-mono text-[10px] text-amber-300/80 hover:border-stone-500 hover:text-amber-100"
 										>{runId}</a
 									>
