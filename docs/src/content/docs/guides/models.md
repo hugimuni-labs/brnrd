@@ -5,7 +5,7 @@ description: Pin, select, escalate, and downshift local Shell and Core profiles.
 
 brnrd separates the CLI process from the model it runs:
 
-- **Shell**: the CLI on `PATH` — `claude` or `codex`.
+- **Shell**: the CLI on `PATH` — `claude`, `codex`, or `vibe`.
 - **Core**: the model and its cost, capability, and quota metadata.
 
 Together they form the Runner for one wake. The resident remains the same when
@@ -70,6 +70,19 @@ operates in the supplied working directory, and exits with a status code.
 Printing a final reply on stdout adds response delivery; declaring `hooks`
 adds live tool-boundary injection. Profile commands and `runner_cmd` remain in
 the daemon-owned home because both decide which host command executes.
+
+## Mistral Vibe
+
+Install Vibe with `uv tool install mistral-vibe` and sign in using Vibe's own
+setup. Select `vibe` as a runner profile, or dispatch a strand with `shell: vibe`.
+The adapter pipes the wake on stdin, installs an invocation-specific system
+prompt without replacing your settings, and returns the final assistant reply.
+It uses Vibe's configured model and saved credentials (including `VIBE_HOME`).
+
+This is a Tier 1 integration, verified with Vibe 2.25.5: native boundary hooks,
+session resume, model attestation, and quota/spend collection are not wired.
+An absent quota reading means unknown capacity. Mistral subscriptions include
+a monthly usage allowance; they do not imply unlimited Vibe usage.
 
 ## Escalate and downshift
 

@@ -1292,6 +1292,9 @@ def build_parser() -> argparse.ArgumentParser:
     runners_sub = runners_p.add_subparsers(dest="runners_command")
     runners_p.set_defaults(func=cmd_runners_list, json=False, all=False)
 
+    p = runners_sub.add_parser("_vibe", help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_vibe_runner)
+
     p = runners_sub.add_parser(
         "list",
         help="list runner profiles from the unified catalog projection")
@@ -5161,6 +5164,12 @@ def _format_portal_state(payload: dict) -> str:
     if isinstance(pending_files, list) and pending_files:
         lines.append("pending outbox files: " + ", ".join(map(str, pending_files)))
     return "\n".join(lines)
+
+
+def cmd_vibe_runner(args):
+    from . import vibe_runner
+
+    raise SystemExit(vibe_runner.main())
 
 
 def cmd_runners_list(args):
