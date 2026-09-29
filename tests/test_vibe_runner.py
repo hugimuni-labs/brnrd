@@ -156,3 +156,19 @@ def test_vibe_write_into_host_checkout_is_denied_through_run_hook(tmp_path):
     assert (ok, rc) == ({}, 0)
     other, _ = _hooks.run_hook("pre-tool", _vibe_pre_tool("file_system.read_file", host / "stray.txt", wt), env)
     assert other == {}
+
+
+def test_hook_setup_failure_cleans_scoped_system_prompt(tmp_path, monkeypatch):
+    source = tmp_path / "system.md"
+    source.write_text("runtime")
+    home = tmp_path / "vibe-home"
+    monkeypatch.setenv("VIBE_HOME", str(home))
+    monkeypatch.setattr(runner, "protonucleus_path", lambda: source)
+
+    def fail_setup(_env):
+        raise OSError("hook directory unavailable")
+
+    monkeypatch.setattr(vibe_runner, "hook_dir", fail_setup)
+    with pytest.raises(OSError, match="hook directory unavailable"):
+        vibe_runner.main()
+    assert list((home / "prompts").iterdir()) == []
