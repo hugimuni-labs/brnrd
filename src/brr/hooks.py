@@ -7472,12 +7472,21 @@ def subagent_neutral(
 # this predicate unblocked, same as any tool this list doesn't name.
 _ROOTED_WRITE_TOOLS = frozenset({"Edit", "Write"})
 
-#: Vibe 2.25.5 builtin file-writing tools -> the claude names the pre-tool
-#: predicates key on. Both take ``file_path`` (``write_file.WriteFileArgs``,
-#: ``edit``). ``bash`` is deliberately absent: the await lease rewrites claude's
-#: millisecond ``timeout`` and Vibe's ``BashArgs.timeout`` is a different
-#: contract — mapping it would be a guess.
-_VIBE_TOOL_ALIASES = {"write_file": "Write", "edit": "Edit", "search_replace": "Edit"}
+#: Vibe 2.25.5's file-writing tools, by the exact names its pre_tool payload
+#: carries -> the claude names the pre-tool predicates key on. Captured live
+#: 2026-09-29: ``tool_name: "file_system.write_file"`` with
+#: ``tool_input.path`` (not the ``WriteFileArgs.file_path`` the args class
+#: suggests). Bare names are kept for the non-namespaced surface. ``bash`` is
+#: deliberately absent: the await lease rewrites claude's millisecond
+#: ``timeout``, and Vibe's ``BashArgs.timeout`` is a different contract.
+_VIBE_TOOL_ALIASES = {
+    "file_system.write_file": "Write",
+    "file_system.edit": "Edit",
+    "file_system.search_replace": "Edit",
+    "write_file": "Write",
+    "edit": "Edit",
+    "search_replace": "Edit",
+}
 
 
 def _vibe_as_claude_tool(payload: dict[str, Any]) -> dict[str, Any]:

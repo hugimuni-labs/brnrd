@@ -139,7 +139,8 @@ def _vibe_pre_tool(tool_name, file_path, cwd):
     return json.dumps({
         "hook_event_name": "pre_tool", "session_id": "s", "transcript_path": "",
         "cwd": str(cwd), "tool_name": tool_name, "tool_call_id": "c",
-        "tool_input": {"file_path": str(file_path), "content": "x"},
+        # The wire shape captured from installed Vibe 2.25.5 (namespaced name, `path`).
+        "tool_input": {"content": "x", "path": str(file_path)},
     })
 
 
@@ -148,10 +149,10 @@ def test_vibe_write_into_host_checkout_is_denied_through_run_hook(tmp_path):
     wt = host / ".brr" / "worktrees" / "run-x"
     wt.mkdir(parents=True)
     env = {"BRR_RUNNER": "vibe", "BRR_HOST_ROOT": str(host), "BRR_WORK_TREE": str(wt)}
-    for tool in ("write_file", "edit"):
+    for tool in ("file_system.write_file", "file_system.edit", "write_file"):
         out, rc = _hooks.run_hook("pre-tool", _vibe_pre_tool(tool, host / "stray.txt", wt), env)
         assert rc == 0 and out["decision"] == "deny" and out["reason"], (tool, out)
-    ok, rc = _hooks.run_hook("pre-tool", _vibe_pre_tool("write_file", wt / "ok.txt", wt), env)
+    ok, rc = _hooks.run_hook("pre-tool", _vibe_pre_tool("file_system.write_file", wt / "ok.txt", wt), env)
     assert (ok, rc) == ({}, 0)
-    other, _ = _hooks.run_hook("pre-tool", _vibe_pre_tool("read_file", host / "stray.txt", wt), env)
+    other, _ = _hooks.run_hook("pre-tool", _vibe_pre_tool("file_system.read_file", host / "stray.txt", wt), env)
     assert other == {}
