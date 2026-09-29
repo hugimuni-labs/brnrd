@@ -99,6 +99,32 @@ def test_no_reading_is_omitted():
     assert other_fuel.chip([]) is None
 
 
+def test_quota_stamp_wins_over_fresh_spend_capture():
+    levels = _claude_levels()
+    levels["quota"]["updated_at"] = OLD
+    row = other_fuel.fuel_row("claude", levels, now=NOW)
+    assert row["read_at"] == OLD
+    assert row["stale"] is True
+
+
+def test_claude_fuel_is_dated_through_real_collector(tmp_path, monkeypatch):
+    from brr import claude_usage
+
+    monkeypatch.setattr(daemon, "_other_fuel_cache", {})
+    shared = tmp_path / ".brr"
+    outbox = shared / "outbox" / "evt-test"
+    outbox.mkdir(parents=True)
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    levels = _claude_levels()
+    levels["updated_at"] = stamp
+    claude_usage.write_snapshot(outbox, levels)
+    rows = daemon._other_shells_fuel("codex", [{"shell": "claude"}], shared)
+    assert len(rows) == 1
+    assert rows[0]["stale"] is False
+    assert rows[0]["read_at"] == stamp
+    assert "claude S93" in other_fuel.chip(rows)
+
+
 def test_portal_state_others_row_shape():
     row = other_fuel.fuel_row("codex", _codex_levels(), now=NOW)
     facet = facets.build(other_shells=[row])["quota"]
