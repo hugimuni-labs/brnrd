@@ -8067,6 +8067,116 @@ def test_concurrent_spawn_reap_surfaces_notify_crash(tmp_path, monkeypatch):
 
 
 
+def test_refused_spawn_leaves_no_owned_child_edge(tmp_path):
+    """Current validation refusals must never register a phantom child."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-parent"
+    outbox.mkdir(parents=True)
+    task = Run(id="run-parent", event_id="evt-parent", body="", source="telegram")
+    (outbox / "spawn.md").write_text(
+        "---\nspawn: true\nenvironment: host\n---\nRefuse this child.\n",
+        encoding="utf-8",
+    )
+
+    assert daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, task.event_id), task,
+        brr_dir / "responses", task.event_id, outbox, inbox,
+    ) == 0
+    assert any(
+        "spawn refused:" in notice["text"]
+        for notice in daemon._read_outbox_notices(outbox)
+    )
+    assert daemon._owned_child_controls(task.id) == []
+    assert not daemon._run_controls
+
+
+@pytest.mark.parametrize("child_status", ["done", "crashed", "held"])
+@pytest.mark.parametrize("notify_fails", [False, True])
+def test_spawn_reap_settles_owned_edge_even_if_notification_fails(
+    tmp_path, monkeypatch, child_status, notify_fails,
+):
+    """Completion cleanup cannot depend on successfully notifying the parent."""
+    write_repo_scaffold(tmp_path)
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-parent"
+    outbox.mkdir(parents=True)
+    parent = Run(
+        id="run-parent", event_id="evt-parent", body="", source="telegram",
+        conversation_key="telegram:99:",
+    )
+    assert daemon._queue_spawn_request(
+        daemon._WorkerEmit(brr_dir, parent.conversation_key, parent.event_id),
+        parent, inbox, parent.event_id, {}, "A bounded task", outbox,
+    )
+    [child] = protocol.list_pending(inbox)
+    child_id = child["id"]
+    daemon._bind_run_control(child_id, "run-child")
+    steer = protocol.create_event(
+        inbox, "dispatch_message", "A pending steer",
+        spawn_message_for_event=child_id,
+    )
+    assert daemon._owned_child_controls(parent.id)
+    notified = []
+
+    def worker(event, *_args, **_kwargs):
+        if child_status == "crashed":
+            raise RuntimeError("worker failed")
+        task = Run.from_event(event, {})
+        task.status = child_status
+        if child_status == "held":
+            task.meta["resource_hold"] = {
+                "armed": True, "reason": "quota_starved",
+                "resume_condition": resource_hold.RESUME_REFILL,
+            }
+        return task
+
+    def notify(*_args, **_kwargs):
+        notified.append(True)
+        if notify_fails:
+            raise RuntimeError("notify failed")
+
+    ticks = 0
+
+    def tick(*_args, **_kwargs):
+        nonlocal ticks
+        ticks += 1
+        if notified or ticks > 100:
+            raise StopIteration
+
+    monkeypatch.setattr(daemon, "read_pid", lambda _root: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _root: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _root: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {})
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.01)
+    monkeypatch.setattr(daemon, "_run_worker_and_finalize", worker)
+    monkeypatch.setattr(daemon, "_notify_spawn_parent", notify)
+    monkeypatch.setattr(daemon, "_notify_spawn_parent_of_crash", notify)
+    monkeypatch.setattr(daemon, "_fire_due_schedules", tick)
+
+    with pytest.raises(RuntimeError if notify_fails else StopIteration):
+        daemon.start(tmp_path)
+
+    assert notified
+    daemon._write_live_portal_state(
+        outbox, inbox, parent.event_id, parent, phase="running", brr_dir=brr_dir,
+    )
+    payload = json.loads((outbox / "portal-state.json").read_text())
+    owned = payload["resources"]["coexisting_runs"]["owned_children"]
+    if child_status == "held":
+        assert len(owned) == 1
+        assert owned[0]["status"] == "parked"
+        assert daemon._find_run_control(child_id) is not None
+        assert protocol.parse_frontmatter(steer.read_text())["status"] == "pending"
+    else:
+        assert owned == []
+        assert daemon._find_run_control(child_id) is None
+        assert protocol.parse_frontmatter(steer.read_text())["status"] == "done"
+
+
 def test_concurrent_spawn_does_not_duplicate_dispatch_of_same_event(
     tmp_path, monkeypatch,
 ):
