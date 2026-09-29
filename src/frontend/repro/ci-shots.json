@@ -26,5 +26,9 @@
 	{
 		"driver": "drive-bench-view.mjs",
 		"shots": ["1-list.png", "2-file.png", "3-missing.png"]
+	},
+	{
+		"driver": "drive-warp-item.mjs",
+		"shots": ["1-full-item.png", "2-prompt-only.png"]
 	}
 ]
