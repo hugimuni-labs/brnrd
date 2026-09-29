@@ -1901,7 +1901,9 @@ def _enrich_ask_says(payload: dict[str, Any], db: Session, repo_ids: set[str]) -
     missing: set[str] = set()
     for row in rows:
         for say in row.get("says") or []:
-            say["url"] = None
+            # A say kept at home (brr/says.py) arrives with its forge link
+            # already derived from the mirrored id index; the rest stay None.
+            say.setdefault("url", None)
             if not say.get("excerpt") and say.get("event"):
                 missing.add(say["event"])
     if not missing or not repo_ids:

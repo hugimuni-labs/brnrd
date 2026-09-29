@@ -824,6 +824,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("id", help="item id, or a unique fragment of its headline")
     p.set_defaults(func=cmd_item_stamp)
+    p = item_sub.add_parser(
+        "says",
+        help="keep every stamped say's message at home (surface/warp/says/), "
+             "copied from the local conversation stores; ids-only index for the mirror",
+    )
+    p.set_defaults(func=cmd_item_says)
 
     # `brnrd goal` (design-goal-oriented-engineering.md §"a metrics block in
     # the wake"): the readings store's maintenance verbs, mirroring `item`'s
@@ -3343,11 +3349,29 @@ def _do_mint_item(headline: str, event_id: str, item_type: str) -> str | None:
     except OSError as exc:
         print(f"[brnrd do] --new-item: could not write {path}: {exc}", file=sys.stderr)
         return None
-    asks_mod.stamp_say(warp_root, item_id, event_id)
+    asks_mod.stamp_say(warp_root, item_id, event_id, repo_roots=_say_repo_roots())
     return item_id
 
 
-def _do_stamp_say(item_id: str, event_id: str) -> None:
+def _say_repo_roots() -> list[Path]:
+    """Where conversation stores live: this repo plus every repo the account
+    knows — a say's words are copied home from there (``brr.says``)."""
+    from . import account as account_mod
+    from . import config as conf
+    from . import says as says_mod
+
+    roots: list[Path] = []
+    try:
+        repo_root = _repo_root()
+        roots.append(repo_root)
+        ctx = account_mod.resolve_context(repo_root, conf.load_config(repo_root), create=False)
+        roots.extend(r for r in says_mod.account_repo_roots(ctx) if r not in roots)
+    except Exception:  # noqa: BLE001 - no roots ⇒ the say row still lands, the file waits for backfill
+        pass
+    return roots
+
+
+def _do_stamp_say(item_id: str, event_id: str, part: str | None = None) -> None:
     """Best-effort ``asks.stamp_say`` for an existing item bound with
     ``--item`` — the file write that makes the say visible where the
     dashboard reads. Silent on any failure: the ``.asks.jsonl`` row already
@@ -3357,7 +3381,7 @@ def _do_stamp_say(item_id: str, event_id: str) -> None:
     warp_root, err = _item_context()
     if err:
         return
-    asks_mod.stamp_say(warp_root, item_id, event_id)
+    asks_mod.stamp_say(warp_root, item_id, event_id, repo_roots=_say_repo_roots(), part=part)
 
 
 def _do_promise(outbox_dir: Path, what: str, count: int) -> tuple[str, bool]:
@@ -3992,7 +4016,8 @@ def cmd_do(args):
                                 # invisible until closeout captured the run
                                 # (measured 2026-09-23: three items bound over
                                 # eight hours, `says: 0` on the console).
-                                _do_stamp_say(item_id, event_id)
+                                for part in parts or [None]:
+                                    _do_stamp_say(item_id, event_id, part)
                     if not item_bindings and args.no_ask and do_mod.accepted(status):
                         do_mod.append_no_ask(outbox_dir, event_id, args.no_ask)
                         segments.append("no ask ✓")
@@ -4278,6 +4303,24 @@ def cmd_item_retire(args):
         )
         return 1
     print(f"{item.id} retired — {item.headline}")
+    return 0
+
+
+def cmd_item_says(args):
+    """Backfill ``surface/warp/says/<evt>.md`` for every say already stamped."""
+    import sys
+
+    from . import says as says_mod
+
+    warp_root, err = _item_context()
+    if err:
+        print(f"[brnrd item] {err}", file=sys.stderr)
+        return 1
+    counts = says_mod.backfill(warp_root, _say_repo_roots())
+    print(
+        f"[brnrd item says] written {counts['written']} · already home {counts['present']}"
+        f" · not in any local store {counts['missing']}"
+    )
     return 0
 
 
