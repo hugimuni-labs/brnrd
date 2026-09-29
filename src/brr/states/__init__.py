@@ -33,8 +33,11 @@ def render_mermaid(machine: str) -> str:
     spec = load()["machines"][machine]
     lines = ["flowchart LR"]
     for state in spec["states"]:
-        label = _mermaid_text(state["summary"])
-        brackets = ("[[", "]]" ) if state["terminal"] else ('["', '"]')
+        # The id leads (it is the name the table, the code and the user say);
+        # the summary rides under it. Always quoted: an unquoted `;` or `(`
+        # in a summary ends a Mermaid statement.
+        label = f"<b>{_mermaid_text(state['id'])}</b><br/>{_mermaid_text(state['summary'])}"
+        brackets = ('[["', '"]]') if state["terminal"] else ('["', '"]')
         lines.append(f"  {state['id']}{brackets[0]}{label}{brackets[1]}")
     for transition in spec["transitions"]:
         trigger = _mermaid_text(transition["trigger"])
