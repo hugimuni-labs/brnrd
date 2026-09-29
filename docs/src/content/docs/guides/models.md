@@ -54,7 +54,7 @@ Each `[profiles.<name>]` table may contain:
 - `cmd`: the headless command. The assembled prompt is piped on stdin unless
   `{prompt}` appears as its own argument.
 - `binary`: the executable to probe when the profile name is an alias.
-- `hooks`: the runner-specific Tier 2 hook adapter (`claude` or `codex`).
+- `hooks`: the runner-specific Tier 2 hook adapter (`claude`, `codex`, or `vibe`).
 - `provider`, `owner`, `class`, `cost_rank`, and `quota_source`: selection and
   quota metadata.
 - `model`: an optional pinned Core. The bundled Core registry also materializes
@@ -79,10 +79,13 @@ The adapter pipes the wake on stdin, installs an invocation-specific system
 prompt without replacing your settings, and returns the final assistant reply.
 It uses Vibe's configured model and saved credentials (including `VIBE_HOME`).
 
-This is a Tier 1 integration, verified with Vibe 2.25.5: native boundary hooks,
-session resume, model attestation, and quota/spend collection are not wired.
-An absent quota reading means unknown capacity. Mistral subscriptions include
-a monthly usage allowance; they do not imply unlimited Vibe usage.
+Native boundary hooks are verified with Vibe 2.25.5: post-tool notices reach
+the model, file writes use the rooted-write guard, and post-agent denial requests
+a turn revision (Vibe caps retries at three). Each daemon invocation installs
+hooks in a temporary additional directory; `BRR_VIBE_HOOKS=0` disables them.
+Session resume, model attestation and monthly quota/spend collection remain
+unavailable. Unknown capacity does not imply unlimited usage; Mistral
+subscriptions include a monthly usage allowance.
 
 ## Escalate and downshift
 

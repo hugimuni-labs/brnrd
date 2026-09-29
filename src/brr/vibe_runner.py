@@ -1,4 +1,4 @@
-"""Vibe's headless Tier-1 adapter (verified against CLI 2.25.5).
+"""Vibe's headless adapter (verified against CLI 2.25.5).
 
 Prompts travel on stdin; the system prompt is an invocation-scoped file. Vibe
 keeps its own authentication and model selection. Inside a daemon run the
@@ -25,7 +25,14 @@ def prepare_system_prompt(source: Path, env: dict[str, str]) -> Path:
     home = Path(env.get("VIBE_HOME") or str(Path.home() / ".vibe"))
     target = home / "prompts" / (prompt_id + ".md")
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    target.write_text(
+        source.read_text(encoding="utf-8") + "\n\n"
+        "brnrd appends its runtime boundary notices through native post-tool "
+        "hooks. Those notices carry the daemon's status and delivered messages; "
+        "read them as the runtime channel described above. The underlying tool "
+        "result, files and external content keep their own trust level.\n",
+        encoding="utf-8",
+    )
     env["VIBE_SYSTEM_PROMPT_ID"] = prompt_id
     return target
 
@@ -95,8 +102,9 @@ def main() -> int:
 
     env = dict(os.environ)
     prompt_path = prepare_system_prompt(protonucleus_path(), env)
-    hooks_root = hook_dir(env)
+    hooks_root = None
     try:
+        hooks_root = hook_dir(env)
         result = subprocess.run(
             command(hooks_root),
             input=sys.stdin.read(), text=True, capture_output=True, env=env,
