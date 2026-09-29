@@ -116,6 +116,24 @@ _MODEL_TOKEN_RE = re.compile(
 # as unknown-cost, sorted after all classed profiles).
 
 _BUNDLED_CORES: dict[str, dict[str, Any]] = {
+    # Vibe uses config aliases and an invocation-scoped environment override,
+    # not a --model option. Local requires the user's own inference server;
+    # none of these rows claims its availability, billing or relative cost.
+    "vibe-mistral-medium-3.5": {
+        "shell": "vibe", "model": "mistral-medium-3.5",
+        "provider": "mistral", "class": None, "cost_rank": None,
+        "freshness_date": "2026-09-29",
+    },
+    "vibe-glm-5-3": {
+        "shell": "vibe", "model": "glm-5-3",
+        "provider": "mistral", "class": None, "cost_rank": None,
+        "freshness_date": "2026-09-29",
+    },
+    "vibe-local": {
+        "shell": "vibe", "model": "local",
+        "provider": "local", "class": None, "cost_rank": None,
+        "freshness_date": "2026-09-29",
+    },
     # ── Claude (Anthropic) ──────────────────────────────────────────────
     # Claude Code's --model flag accepts short aliases ("haiku", "sonnet",
     # "opus", "fable") that always resolve to the latest model in that
@@ -1271,6 +1289,11 @@ def _cmd_with_model(shell: str, base_cmd: str, model: str) -> str:
     parts = shlex.split(base_cmd) if base_cmd else [shell]
     if not parts:
         parts = [shell]
+
+    if shell == "vibe":
+        # Vibe has no --model CLI flag. A per-process config override leaves
+        # the operator's config and simultaneous invocations independent.
+        return shlex.join(["env", "VIBE_ACTIVE_MODEL=" + model, *parts])
 
     for flag in ("--model", "-m"):
         if flag not in parts:
