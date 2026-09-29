@@ -6914,6 +6914,8 @@ def render_native(
     block = bool(neutral.get("block"))
     reason = neutral.get("block_reason")
 
+    if flavour == "vibe":
+        return _render_vibe(phase, inject, block, reason), 0
     if flavour in ("claude", "codex"):
         event_name = native_event_name(flavour, phase)
         out: dict[str, Any] = {}
@@ -6990,6 +6992,71 @@ def render_native(
 
 # Flavours brr writes a native hook *settings file* for. Codex installs via
 # argv (:func:`codex_hook_args`).
+def _render_vibe(
+    phase: str, inject: Any, block: bool, reason: Any
+) -> dict[str, Any]:
+    """Vibe's native hook response (CLI 2.25.5, ``vibe/core/hooks``).
+
+    Exit 0 + one JSON object; ``{}`` is a passthrough. Per Vibe's handlers:
+
+    - ``pre_tool`` ``decision: deny`` => ``reason`` is the tool error the model
+      reads; the call never runs (``_pre_tool.py``).
+    - ``post_tool`` ``hook_specific_output.additional_context`` => appended to
+      the LLM-bound tool result: the boundary injection. ``deny`` there would
+      *replace* the tool's output, so a block rides as appended context,
+      never as a deny (``_post_tool.py``).
+    - ``post_agent`` ``deny`` => ``reason`` is injected as a retry user message
+      (<=3 retries per hook): Vibe's equivalent of claude's ``Stop`` block.
+    - no session-start event exists; that phase renders a passthrough.
+    ``updated_input`` (claude's ``Bash`` await lease) has no Vibe mapping yet.
+    """
+    if phase == PHASE_PRE_TOOL:
+        if block:
+            return {"decision": "deny", "reason": reason or "refused (#1184)"}
+        return {}
+    if phase == PHASE_POST_TOOL:
+        parts = [str(x) for x in (reason if block else None, inject) if x]
+        if not parts:
+            return {}
+        return {"hook_specific_output": {"additional_context": "\n\n".join(parts)}}
+    if phase == PHASE_STOP and block:
+        return {"decision": "deny", "reason": reason or "blocked"}
+    return {}
+
+
+#: Vibe hook type -> brnrd phase. ``post_agent`` fires when the agent turn ends.
+VIBE_HOOK_PHASES = (
+    ("pre_tool", PHASE_PRE_TOOL),
+    ("post_tool", PHASE_POST_TOOL),
+    ("post_agent", PHASE_STOP),
+)
+
+
+def vibe_hooks_toml(brr_bin: str = "brnrd", *, timeout: float = 30.0) -> str:
+    """The ``.vibe/hooks.toml`` body routing Vibe's native hooks to brnrd.
+
+    :mod:`brr.vibe_runner` writes it into a per-invocation directory passed as
+    ``--add-dir``; Vibe discovers ``<root>/.vibe/hooks.toml`` for every add-dir
+    root, so neither the run's worktree nor the user's ``$VIBE_HOME`` is
+    written. ``BRR_RUNNER=vibe`` rides the env the hook process inherits.
+    """
+    rows = []
+    for vibe_type, phase in VIBE_HOOK_PHASES:
+        rows.append(
+            "[[hooks]]\n"
+            f'name = "brnrd-{phase}"\n'
+            f'type = "{vibe_type}"\n'
+            f"command = {json.dumps(hook_command(phase, brr_bin))}\n"
+            f"timeout = {timeout}\n"
+        )
+    return "\n".join(rows)
+
+
+def vibe_hook_capability(*, brr_bin: str = "brnrd") -> bool:
+    """Vibe installs per invocation (temp add-dir); needs only brnrd on PATH."""
+    return shutil.which(brr_bin) is not None
+
+
 _FILE_CONFIG_FLAVOURS = {"claude"}
 
 
@@ -7405,6 +7472,35 @@ def subagent_neutral(
 # this predicate unblocked, same as any tool this list doesn't name.
 _ROOTED_WRITE_TOOLS = frozenset({"Edit", "Write"})
 
+#: Vibe 2.25.5's file-writing tools, by the exact names its pre_tool payload
+#: carries -> the claude names the pre-tool predicates key on. Captured live
+#: 2026-09-29: ``tool_name: "file_system.write_file"`` with
+#: ``tool_input.path`` (not the ``WriteFileArgs.file_path`` the args class
+#: suggests). Bare names are kept for the non-namespaced surface. ``bash`` is
+#: deliberately absent: the await lease rewrites claude's millisecond
+#: ``timeout``, and Vibe's ``BashArgs.timeout`` is a different contract.
+_VIBE_TOOL_ALIASES = {
+    "file_system.write_file": "Write",
+    "file_system.edit": "Edit",
+    "file_system.search_replace": "Edit",
+    "write_file": "Write",
+    "edit": "Edit",
+    "search_replace": "Edit",
+}
+
+
+def _vibe_as_claude_tool(payload: dict[str, Any]) -> dict[str, Any]:
+    """A Vibe ``pre_tool`` payload renamed onto the predicates' vocabulary."""
+    name = payload.get("tool_name")
+    alias = _VIBE_TOOL_ALIASES.get(name) if isinstance(name, str) else None
+    if alias is None:
+        return payload
+    out = dict(payload, tool_name=alias, vibe_tool_name=name)
+    tool_input = payload.get("tool_input")
+    if isinstance(tool_input, dict) and "file_path" not in tool_input and "path" in tool_input:
+        out["tool_input"] = dict(tool_input, file_path=tool_input["path"])
+    return out
+
 #: Tools that wait by *returning* — the Shell ends the model's turn to sit on
 #: the condition. Fine at a keyboard; in a daemon-hosted ``-p`` run a turn
 #: that ends is a run that ends (design-the-seat-that-never-quits.md §The tool
@@ -7701,6 +7797,8 @@ def run_hook(
         return {}, 0
     ctx = HookContext(env)
     payload = _safe_json(stdin_text)
+    if phase == PHASE_PRE_TOOL and ctx.flavour == "vibe":
+        payload = _vibe_as_claude_tool(payload)
     if phase == PHASE_PRE_TOOL:
         # #1184: a filesystem-safety predicate, not a correspondence one —
         # unlike every other phase it never touches the portal or hook state,
