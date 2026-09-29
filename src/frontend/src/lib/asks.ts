@@ -231,6 +231,45 @@ export function sayText(say: AskSay): string {
 	return say.excerpt || say.event;
 }
 
+// A brnrd event id is `evt-<unix nanoseconds>-<4 chars>` (`evt-1790354596107625000-vz0z`),
+// so a say's time is recoverable from its id alone — no lookup, no store.
+const EVENT_NS_RE = /^evt-(\d{16,20})-/;
+
+/** When an event was minted, read off its own id; `null` for any id that is
+ *  not the nanosecond shape (a test fixture, a future id format). */
+export function eventTime(eventId: string | null | undefined): string | null {
+	const match = EVENT_NS_RE.exec(eventId ?? '');
+	if (!match) return null;
+	const ms = Number(BigInt(match[1]) / 1_000_000n);
+	const date = new Date(ms);
+	return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+/** A say's time: the server's `at` when it sent one, else the time its
+ *  event id carries. The live payload (2026-09-29) had `at: null` on all
+ *  55 says, so every line read `— · evt-…`. */
+export function sayAt(say: Pick<AskSay, 'at' | 'event'>): string | null {
+	return say.at || eventTime(say.event);
+}
+
+/** One line for a row whose says carry no text at all — `16 messages · 3d → 2d`
+ *  instead of sixteen event hashes. The cloud nulls a message body once it is
+ *  answered (`brnrd/inbox.py`), so an answered say has no excerpt to resolve;
+ *  a list of ids then says nothing sixteen times. `null` when any say has an
+ *  excerpt (those rows render per say) or there are none. */
+export function saySummary(says: readonly AskSay[], now: number = Date.now()): string | null {
+	if (says.length === 0 || says.some((say) => say.excerpt)) return null;
+	const times = says
+		.map((say) => sayAt(say))
+		.filter((at): at is string => Boolean(at))
+		.sort();
+	const noun = says.length === 1 ? 'message' : 'messages';
+	if (times.length === 0) return `${says.length} ${noun}`;
+	const first = touchedLabel(times[0], now);
+	const last = touchedLabel(times[times.length - 1], now);
+	return `${says.length} ${noun} · ${first === last ? first : `${first} → ${last}`}`;
+}
+
 /** The glyph beside a run link in `attempts` — the ask's own first topic
  *  stands in for "the run's topic" (a run id carries no topic of its own
  *  in this payload; the-panel-third-pass's report names this choice).
