@@ -4,7 +4,8 @@ Prompts travel on stdin; the system prompt is an invocation-scoped file. Vibe
 keeps its own authentication and model selection. Inside a daemon run the
 adapter installs brnrd's hooks through Vibe's native protocol (a per-invocation
 ``--add-dir`` root carrying ``.vibe/hooks.toml``; see ``hooks.vibe_hooks_toml``).
-No quota collector or session-resume support is claimed by this adapter.
+Cached plan metadata is collected separately by :mod:`brr.vibe_status`;
+monthly allowance and session resume are not yet instrumented.
 """
 
 import json
