@@ -108,7 +108,12 @@ def fuel_row(
     if not buckets:
         return None
     now = time.time() if now is None else now
-    read_at = levels.get("updated_at")
+    # Merged levels date each slot independently. A spend/context capture
+    # must not lend its freshness to an older quota reading.
+    quota = levels.get("quota")
+    read_at = (
+        quota.get("updated_at") if isinstance(quota, Mapping) else None
+    ) or levels.get("updated_at")
     read_epoch = _epoch(read_at)
     limit = STALE_AFTER_SECONDS.get(shell, _DEFAULT_STALE_AFTER)
     # An unparseable capture time is unprovable freshness ⇒ stale, not fresh.
