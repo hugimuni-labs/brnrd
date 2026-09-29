@@ -635,3 +635,16 @@ export function nodeDigest(node: RunNode): NodeDigest {
 		hasMore: node.messages.length > 0 || hasSectionsBeyondNow(body)
 	};
 }
+
+/** `run id -> repo slug` from the mirrored run-node paths (`runs/<slug>/<run>/…`):
+ *  an `attempts` run id carries no repo of its own, and with more than one
+ *  connected repo nothing else names it. The mirror keeps ~14 days of runs,
+ *  so an older run id resolves to nothing — plain text, never a guessed link. */
+export function runRepoSlugs(paths: Iterable<string>): Map<string, string> {
+	const out = new Map<string, string>();
+	for (const path of paths) {
+		const match = /^runs\/([^/]+)\/(run-[^/]+)\//.exec(path);
+		if (match && !out.has(match[2])) out.set(match[2], match[1]);
+	}
+	return out;
+}

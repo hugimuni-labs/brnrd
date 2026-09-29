@@ -63,6 +63,9 @@
 		 *  right now (the-row-you-can-judge §4, his 19:46Z steer). `null`/unset
 		 *  ⇒ no seat known, the bare "seat" word, same as before this landed. */
 		liveRuns?: readonly LiveRun[] | null;
+		/** Run id → repo slug from the mirrored run nodes (`runRepoSlugs`) — names
+		 *  an attempt's repo when `runRepoLabel` can't (more than one repo). */
+		runRepoFor?: (runId: string) => string | null;
 	}
 
 	let {
@@ -74,7 +77,8 @@
 		resolveTopic = () => null,
 		glyphForTopic = () => null,
 		runRepoLabel = null,
-		liveRuns = null
+		liveRuns = null,
+		runRepoFor = () => null
 	}: Props = $props();
 
 	const lit = (row: AskRow) => askInTopics(row, selected, resolveTopic);
@@ -274,10 +278,13 @@
 				     ⇒ plain text, same as before this landed. -->
 				{#each row.attempts as run (run)}
 					{@const glyph = attemptGlyph(row, glyphForTopic)}
+					{@const repo = runRepoFor(run) ?? runRepoLabel}
 					<p class="truncate">
-						{#if runRepoLabel}<a
+						{#if repo}<a
 								class="text-stone-300 underline decoration-stone-700 hover:text-amber-100"
-								href={runNodeHref(runRepoLabel, run)}>{run}</a
+								href={runNodeHref(repo, run)}
+								target="_blank"
+								rel="noopener">{run}</a
 							>{:else}<span class="text-stone-300">{run}</span>{/if}
 						{#if glyph}<span class="text-ink-mute"> {glyph}</span>{/if}
 						{#if liveRunIds.has(run)}<span class="text-amber-300"> · live</span>{/if}
@@ -405,6 +412,8 @@
 								     neither linked nor shown"). -->
 								<a
 									href={resolve('/warp/[id]', { id: row.id })}
+									target="_blank"
+									rel="noopener"
 									class="inline-block border border-amber-800/60 bg-stone-950/60 px-1.5 py-0.5 text-amber-200 hover:text-amber-100"
 									data-ask-page>open {row.id} — asked · answer · done →</a
 								>

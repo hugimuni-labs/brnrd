@@ -63,6 +63,7 @@
 		runIdSlug,
 		runNodeFromSurface,
 		runNodeHref,
+		runRepoSlugs,
 		type NodeIdentity
 	} from '$lib/runNode';
 	import { ageSince, durationLabel } from '$lib/runLedger';
@@ -431,6 +432,7 @@
 	// derived from the `needs:` edges; the runes now hash from canonical
 	// topic ids, so every mark on this page is stable across set changes.
 	let warpGraphData = $derived(buildWarpGraph(surfaceData?.files ?? []));
+	let runSlugs = $derived(runRepoSlugs((surfaceData?.files ?? []).map((f) => f.path)));
 	let topicThreadList = $derived(topicThreads(warpGraphData));
 	let topicCountsMap = $derived(topicCounts(warpGraphData));
 	let warpReadyCount = $derived(readyItems(warpGraphData).length);
@@ -2168,6 +2170,7 @@
 					topicFaceMap.get(warpGraphData.topicByAlias.get(slug)?.canonicalId ?? slug)?.glyph ??
 					null}
 				runRepoLabel={connectedRepos?.length === 1 ? connectedRepos[0].repo_full_name : null}
+				runRepoFor={(run) => runSlugs.get(run) ?? null}
 			/>
 			<!-- Config-change approvals waiting on the account owner — the PR
 			     review half retired 2026-09-01 (GitHub already lists open PRs;
