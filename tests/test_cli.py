@@ -95,6 +95,21 @@ def test_legend_is_hidden_but_still_parses():
     assert "legend" in HIDDEN_COMMANDS
 
 
+def test_states_is_hidden_and_renders_all_machines(capsys):
+    from brr.cli import HIDDEN_COMMANDS
+
+    assert "states" in HIDDEN_COMMANDS
+    assert main(["states"]) == 0
+    out = capsys.readouterr().out
+    assert out.count("flowchart LR") == 3
+    assert "held_refill" in out
+
+
+def test_states_check_reports_clean_tree(capsys):
+    assert main(["states", "check"]) == 0
+    assert capsys.readouterr().out == "states: ok\n"
+
+
 def test_legend_prints_waiting_not_obligation(capsys):
     # w-34 (2026-09-11): the class formerly named OBLIGATION is WAITING —
     # someone or something in the world is waiting, not a performance note
