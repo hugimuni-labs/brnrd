@@ -228,7 +228,11 @@ export function seatNowLine(run: Pick<LiveRun, 'card_text'> | null | undefined):
  *  evt-say lines say nothing") was about every row degrading to the bare
  *  id; this keeps that as the floor, not the default. */
 export function sayText(say: AskSay): string {
-	return say.excerpt || say.event;
+	if (say.excerpt) return say.excerpt;
+	// Kept at home (brr/says.py): the words are one click away on the forge,
+	// the id is noise beside the link.
+	if (say.url) return 'the message, kept at home';
+	return say.event;
 }
 
 // A brnrd event id is `evt-<unix nanoseconds>-<4 chars>` (`evt-1790354596107625000-vz0z`),
@@ -256,9 +260,9 @@ export function sayAt(say: Pick<AskSay, 'at' | 'event'>): string | null {
  *  instead of sixteen event hashes. The cloud nulls a message body once it is
  *  answered (`brnrd/inbox.py`), so an answered say has no excerpt to resolve;
  *  a list of ids then says nothing sixteen times. `null` when any say has an
- *  excerpt (those rows render per say) or there are none. */
+ *  excerpt or a link home (those rows render per say) or there are none. */
 export function saySummary(says: readonly AskSay[], now: number = Date.now()): string | null {
-	if (says.length === 0 || says.some((say) => say.excerpt)) return null;
+	if (says.length === 0 || says.some((say) => say.excerpt || say.url)) return null;
 	const times = says
 		.map((say) => sayAt(say))
 		.filter((at): at is string => Boolean(at))
@@ -318,4 +322,34 @@ export function keymapIgnores(target: EventTarget | null, event: KeyboardEvent):
 	return (
 		tag === 'input' || tag === 'textarea' || tag === 'select' || Boolean(el?.isContentEditable)
 	);
+}
+
+/** The mirrored `surface/warp/says/index.md` (brr/says.py): the home repo's
+ *  web URL, its branch, and the ids of says kept there — never their words. */
+export interface SaysIndex {
+	home: string | null;
+	branch: string;
+	says: Set<string>;
+}
+
+export const SAYS_INDEX_PATH = 'surface/warp/says/index.md';
+
+export function parseSaysIndex(text: string | null | undefined): SaysIndex | null {
+	if (!text) return null;
+	const out: SaysIndex = { home: null, branch: 'main', says: new Set() };
+	for (const raw of text.split('\n')) {
+		const match = /^(home|branch|says):[ \t]*(.*)$/.exec(raw.trim());
+		if (!match) continue;
+		const value = match[2].trim();
+		if (match[1] === 'says') out.says = new Set(value.split(/\s+/).filter((v) => eventTime(v)));
+		else if (match[1] === 'home' && /^https:\/\//.test(value)) out.home = value;
+		else if (match[1] === 'branch' && value) out.branch = value;
+	}
+	return out;
+}
+
+/** The link to a say's file on the home repo's forge; `null` when it is not kept there. */
+export function sayHomeUrl(index: SaysIndex | null, eventId: string): string | null {
+	if (!index?.home || !index.says.has(eventId)) return null;
+	return `${index.home}/blob/${index.branch}/surface/warp/says/${eventId}.md`;
 }

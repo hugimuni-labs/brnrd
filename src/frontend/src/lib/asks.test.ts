@@ -17,6 +17,8 @@ import {
 	receiptChips,
 	sayAt,
 	saySummary,
+	parseSaysIndex,
+	sayHomeUrl,
 	sayText,
 	eventTime,
 	seatNowLine,
@@ -170,6 +172,10 @@ test('sayText: the excerpt leads, the event id is only the last resort', () => {
 	);
 	assert.equal(sayText(say()), 'evt-abc');
 	assert.equal(sayText(say({ excerpt: '' })), 'evt-abc'); // present but empty ⇒ still the floor
+	assert.equal(
+		sayText(say({ url: 'https://github.com/a/b/blob/main/x.md' })),
+		'the message, kept at home'
+	);
 });
 
 test("attemptGlyph: the row's first topic stands in, topicless resolves nothing", () => {
@@ -296,4 +302,25 @@ test('saySummary: text-less says fold into one line; any excerpt keeps the list'
 	assert.equal(saySummary([s('evt-abc')], now), '1 message'); // no time ⇒ no invented span
 	assert.equal(saySummary([s(older, 'the body is nowhere')], now), null);
 	assert.equal(saySummary([], now), null);
+});
+
+test('parseSaysIndex + sayHomeUrl: ids and a home URL, never words', () => {
+	const ev = 'evt-1790354596107625000-vz0z';
+	const index = parseSaysIndex(
+		`# Says\n\nhome: https://github.com/acme/home\nbranch: main\nsays: ${ev} junk\n`
+	);
+	assert.ok(index);
+	assert.equal(
+		sayHomeUrl(index, ev),
+		`https://github.com/acme/home/blob/main/surface/warp/says/${ev}.md`
+	);
+	assert.equal(sayHomeUrl(index, 'evt-1790449929122436000-mrqh'), null); // not kept ⇒ no link
+	assert.equal(index.says.has('junk'), false);
+	assert.equal(sayHomeUrl(parseSaysIndex('home: http://evil\nsays: ' + ev), ev), null); // https only
+	assert.equal(parseSaysIndex(null), null);
+});
+
+test('saySummary: a say with a link home keeps the per-say list', () => {
+	const ev = 'evt-1790354596107625000-vz0z';
+	assert.equal(saySummary([{ event: ev, at: null, excerpt: null, url: 'https://x/y' }]), null);
 });
