@@ -164,9 +164,14 @@ def heartbeat(
     mood: str | None = None,
     topics: list[str] | None = None,
     runner_model_observed: str | None = None,
+    registered_entry: dict[str, Any] | None = None,
     now: float | None = None,
 ) -> bool:
     """Refresh a participant's ``last_seen``. Returns False if it's gone.
+
+    A live owner may supply its original ``registered_entry`` to recover
+    after a reader pruned a stale heartbeat. Only this process's own entry
+    can be restored; registration identity and start time stay unchanged.
 
     *runner_model_observed* names the model a live run's own telemetry has
     actually confirmed (`daemon.py`'s ``result.observed_core``, known only
@@ -181,7 +186,14 @@ def heartbeat(
     path = _presence_dir(brr_dir) / f"{entry_id}.json"
     entry = _read(path)
     if entry is None:
-        return False
+        if (
+            not registered_entry
+            or registered_entry.get("id") != entry_id
+            or registered_entry.get("pid") != os.getpid()
+            or registered_entry.get("host") != _host()
+        ):
+            return False
+        entry = dict(registered_entry)
     entry["last_seen"] = now if now is not None else time.time()
     if name is not None:
         entry["name"] = name

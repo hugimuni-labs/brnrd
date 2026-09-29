@@ -318,3 +318,25 @@ def test_account_dirs_cache_is_keyed_per_checkout(tmp_path, monkeypatch):
 
     assert presence.account_dirs(a, now=1000.0) == [a]
     assert presence.account_dirs(b, now=1000.0) == [b]
+
+
+def test_live_owner_restores_pruned_entry_without_resetting_identity(tmp_path):
+    brr = tmp_path / ".brr"
+    entry = presence.register(
+        brr, kind="daemon", run_id="parent", stream="telegram:1:",
+        runner_name="codex", runner_shell="codex", now=100,
+    )
+    assert presence.list_active(brr, now=401) == []
+    assert presence.heartbeat(
+        brr, entry["id"], registered_entry=entry, name="Still working", now=402,
+    )
+    restored, = presence.list_active(brr, now=403)
+    assert restored == {**entry, "last_seen": 402, "name": "Still working"}
+
+
+def test_heartbeat_cannot_restore_another_process_entry(tmp_path):
+    brr = tmp_path / ".brr"
+    entry = presence.register(brr, kind="daemon", pid=999999999, now=100)
+    presence.deregister(brr, entry["id"])
+    assert not presence.heartbeat(brr, entry["id"], registered_entry=entry)
+    assert presence.list_active(brr) == []
