@@ -505,3 +505,34 @@ def test_stream_arms_await_before_slow_tick_work(tmp_path, monkeypatch, callback
     with pytest.raises(StopTick):
         worker.stream(p, dx)
     assert reached == [True]
+
+
+def test_live_worker_heartbeat_restores_presence_pruned_by_reader(tmp_path, monkeypatch):
+    from brr import presence
+
+    p = _prepared(tmp_path, monkeypatch)
+    dx = worker.dispatch(p, Attempt(n=1, lane=p.lane))
+    original, = presence.list_active(p.brr_dir)
+    assert original["id"] == p.presence_id
+    current, = presence.list_active(p.brr_dir)
+    assert presence.list_active(
+        p.brr_dir, now=current["last_seen"] + presence.DEFAULT_STALE_AFTER_S + 1,
+    ) == []
+    (p.outbox_dir / ".name").write_text("Still here\n")
+
+    class EndProbe(Exception):
+        pass
+
+    def invoke(*args, **kwargs):
+        kwargs["on_heartbeat"]()
+        restored, = presence.list_active(p.brr_dir)
+        assert restored["id"] == original["id"]
+        assert restored["started_at"] == original["started_at"]
+        assert restored["runner_shell"] == original["runner_shell"]
+        assert restored["run_id"] == p.task.id
+        assert restored["name"] == "Still here"
+        raise EndProbe
+
+    monkeypatch.setattr(daemon, "_invoke_with_heartbeat", invoke)
+    with pytest.raises(EndProbe):
+        worker.stream(p, dx)

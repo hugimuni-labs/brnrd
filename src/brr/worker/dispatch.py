@@ -94,7 +94,10 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
     runner_meta = {k: v for k, v in runner_meta.items() if k not in ("model_observed", "core_mismatch")}
     if presence_id:
         try:
-            presence.heartbeat(brr_dir, presence_id, runner_model_observed="")
+            presence.heartbeat(
+                brr_dir, presence_id, registered_entry=p.presence_entry,
+                runner_model_observed="",
+            )
         except OSError:
             pass
     try:

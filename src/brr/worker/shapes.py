@@ -122,6 +122,7 @@ class Prepared:
     run_started_monotonic: float
     # the first attempt's runner
     lane: Lane
+    presence_entry: dict[str, Any] | None = None
 
     @property
     def execution_root(self) -> Path:
