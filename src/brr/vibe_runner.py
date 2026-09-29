@@ -105,6 +105,12 @@ def main() -> int:
     env = dict(os.environ)
     prompt_path = prepare_system_prompt(protonucleus_path(), env)
     hooks_root = None
+    # A retry must not inherit the previous attempt's usage sidecar: a
+    # fresh invocation with no session id would otherwise leave stale
+    # tokens standing as if they were current.
+    from . import vibe_usage
+
+    vibe_usage.clear_sidecars(env)
     try:
         hooks_root = hook_dir(env)
         result = subprocess.run(
@@ -129,8 +135,6 @@ def main() -> int:
     # journal is complete exactly now. The capture is defensive by
     # contract (an honest unavailable payload, never a raise), so the
     # reply's shape and exit code are unchanged.
-    from . import vibe_usage
-
     vibe_usage.capture_stdout(result.stdout, env)
     print(reply, end="")
     return 0

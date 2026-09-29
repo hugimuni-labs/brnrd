@@ -152,7 +152,8 @@ def test_collect_legacy_reads_stats_prices_and_list_price_cost(tmp_path):
     )
     assert payload["available"] is True
     assert payload["source"] == "legacy"
-    assert payload["model"] == "mistral-medium-3.5"
+    # meta.json's active_model is configured, not observed: no model claim.
+    assert payload["model"] is None
     assert payload["session_tokens"] == {
         "input": 362298, "cached": 294656, "output": 4027, "total": 366325,
     }
@@ -204,6 +205,41 @@ def test_missing_runtime_state_keeps_tokens_and_degrades_model(tmp_path):
     assert payload["model"] is None  # absent, never a fake model
 
 
+# ── numeric defenses ───────────────────────────────────────────────────
+
+def test_inconsistent_tokens_degrade_to_absent(tmp_path):
+    unified_session(tmp_path, "session-a", token_usage={
+        # cached over input: not usage, corruption.
+        "cachedInputTokens": 9000, "inputTokens": 100,
+        "outputTokens": 3, "totalTokens": 103,
+    })
+    payload = vibe_usage.collect("session-a", {"VIBE_HOME": str(tmp_path)})
+    # The model still proves the session; the corrupted tokens stay absent.
+    assert payload["session_tokens"] is None
+    unified_session(tmp_path, "session-b", token_usage={
+        # total off the input+output sum: same verdict.
+        "cachedInputTokens": 10, "inputTokens": 100,
+        "outputTokens": 3, "totalTokens": 999,
+    })
+    payload = vibe_usage.collect("session-b", {"VIBE_HOME": str(tmp_path)})
+    assert payload["session_tokens"] is None
+
+
+def test_nonfinite_prices_and_costs_are_absent(tmp_path):
+    legacy_session(tmp_path, "session-a", stats={
+        "session_prompt_tokens": 100, "session_cached_tokens": 10,
+        "session_completion_tokens": 5, "context_tokens": 50,
+        "input_price_per_million": float("nan"),
+        "output_price_per_million": float("inf"),
+        "cached_input_price_per_million": -1.0,
+        "session_cost": -0.5,
+    })
+    payload = vibe_usage.collect("session-a", {"VIBE_HOME": str(tmp_path)})
+    assert payload["available"] is True  # tokens still usable
+    assert payload["pricing"] is None
+    assert payload["list_price_cost_usd"] is None
+
+
 # ── sidecar persistence ─────────────────────────────────────────────────
 
 def test_capture_stdout_writes_outbox_and_shared_sidecars(tmp_path):
@@ -218,11 +254,72 @@ def test_capture_stdout_writes_outbox_and_shared_sidecars(tmp_path):
         "BRR_RUN_ID": "run-x",
     })
     assert payload is not None and payload["run_id"] == "run-x"
-    for directory in (outbox, shared):
-        loaded = vibe_usage.load_sidecar(directory)
-        assert loaded["session_id"] == "session-1"
-        assert loaded["available"] is True
-        assert loaded["session_tokens"]["total"] == 7249
+    # The outbox keeps the fixed name; the shared copy is run-scoped and
+    # a reader must pass the matching run_id.
+    loaded = vibe_usage.load_sidecar(outbox)
+    assert loaded["session_id"] == "session-1"
+    assert loaded["available"] is True
+    assert loaded["session_tokens"]["total"] == 7249
+    assert (shared / vibe_usage.SIDECAR_NAME).exists() is False
+    shared_loaded = vibe_usage.load_sidecar(shared, run_id="run-x")
+    assert shared_loaded["session_id"] == "session-1"
+    assert shared_loaded["run_id"] == "run-x"
+
+
+def test_concurrent_runs_keep_their_own_shared_records(tmp_path):
+    """Two children, one shared dir: each keeps its own run-scoped fact."""
+    home = tmp_path / "vibe-home"
+    unified_session(home, "session-a", token_usage={
+        "cachedInputTokens": 10, "inputTokens": 100,
+        "outputTokens": 5, "totalTokens": 105,
+    }, model="model-a")
+    unified_session(home, "session-b", token_usage={
+        "cachedInputTokens": 20, "inputTokens": 200,
+        "outputTokens": 6, "totalTokens": 206,
+    }, model="model-b")
+    shared = tmp_path / "shared"
+    for run_id, sid in (("run-a", "session-a"), ("run-b", "session-b")):
+        payload = vibe_usage.capture_stdout(history(sid), {
+            "VIBE_HOME": str(home),
+            "BRR_SHARED_DIR": str(shared),
+            "BRR_RUN_ID": run_id,
+        })
+        assert payload is not None
+    a = vibe_usage.load_sidecar(shared, run_id="run-a")
+    b = vibe_usage.load_sidecar(shared, run_id="run-b")
+    assert a["model"] == "model-a" and a["session_tokens"]["total"] == 105
+    assert b["model"] == "model-b" and b["session_tokens"]["total"] == 206
+    # A reader with the wrong run_id gets nothing, not someone else's fact.
+    assert vibe_usage.load_sidecar(shared, run_id="run-c") is None
+
+
+def test_clear_sidecars_removes_this_run_stale_snapshot(tmp_path):
+    outbox = tmp_path / "outbox"
+    shared = tmp_path / "shared"
+    stale = {"session_id": "old", "run_id": "run-x", "available": True}
+    vibe_usage.write_sidecar(outbox, stale)
+    vibe_usage.write_sidecar(
+        shared, stale, name=vibe_usage.shared_sidecar_name("run-x"))
+    vibe_usage.clear_sidecars({
+        "BRR_OUTBOX_DIR": str(outbox),
+        "BRR_SHARED_DIR": str(shared),
+        "BRR_RUN_ID": "run-x",
+    })
+    assert not (outbox / vibe_usage.SIDECAR_NAME).exists()
+    assert not (shared / vibe_usage.shared_sidecar_name("run-x")).exists()
+
+
+def test_session_id_rejects_path_traversal(tmp_path):
+    """A hostile coordinate never reaches the filesystem."""
+    evil = json.dumps([{"sessionId": "../../etc", "type": "message"}])
+    assert vibe_usage.extract_session_id(evil) is None
+    assert vibe_usage.capture_stdout(evil, {
+        "BRR_OUTBOX_DIR": str(tmp_path / "outbox"),
+    }) is None
+    payload = vibe_usage.collect("../escape")
+    assert payload["available"] is False
+    assert payload["reason"] == "no valid session id"
+    assert not (tmp_path / "escape").exists()
 
 
 def test_capture_without_a_session_id_writes_nothing(tmp_path):
@@ -275,3 +372,63 @@ def test_main_captures_usage_without_touching_the_reply(
     assert sidecar["session_id"] == "session-1"
     assert sidecar["available"] is True
     assert sidecar["session_tokens"]["total"] == 7249
+
+
+def test_main_clears_stale_sidecar_before_invoking(tmp_path, monkeypatch):
+    """A retry that yields no session id must not serve the last attempt."""
+    from brr import runner, vibe_runner
+
+    source = tmp_path / "system.md"
+    source.write_text("runtime")
+    outbox = tmp_path / "outbox"
+    stale = {"session_id": "previous-attempt", "available": True,
+             "session_tokens": {"input": 1, "cached": 1, "output": 1, "total": 2}}
+    vibe_usage.write_sidecar(outbox, stale)
+    monkeypatch.setenv("VIBE_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("BRR_OUTBOX_DIR", str(outbox))
+    monkeypatch.setenv("BRR_VIBE_HOOKS", "0")
+    monkeypatch.setattr(runner, "protonucleus_path", lambda: source)
+    monkeypatch.setattr(sys, "stdin", type("Stdin", (), {"read": lambda self: "wake"})())
+
+    def fake_run(cmd, input, text, capture_output, env):  # noqa: ANN001
+        # A completed reply that declares no session id: the invocation
+        # succeeds, there is just no exact coordinate to persist.
+        return subprocess.CompletedProcess(
+            cmd, 0,
+            stdout=json.dumps([{"type": "message", "role": "assistant",
+                                "generationStatus": "completed",
+                                "content": [{"type": "text", "text": "done"}]}]),
+            stderr="",
+        )
+
+    monkeypatch.setattr(vibe_runner.subprocess, "run", fake_run)
+    assert vibe_runner.main() == 0
+    assert not (outbox / vibe_usage.SIDECAR_NAME).exists()
+
+
+def test_telemetry_failure_never_breaks_a_good_reply(tmp_path, monkeypatch, capsys):
+    """collect raising OSError must not change the adapter's exit code."""
+    from brr import runner, vibe_runner
+
+    source = tmp_path / "system.md"
+    source.write_text("runtime")
+    outbox = tmp_path / "outbox"
+    monkeypatch.setenv("VIBE_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("BRR_OUTBOX_DIR", str(outbox))
+    monkeypatch.setenv("BRR_VIBE_HOOKS", "0")
+    monkeypatch.setattr(runner, "protonucleus_path", lambda: source)
+    monkeypatch.setattr(sys, "stdin", type("Stdin", (), {"read": lambda self: "wake"})())
+
+    def fake_run(cmd, input, text, capture_output, env):  # noqa: ANN001
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout=history("session-1", "done"), stderr="",
+        )
+
+    def exploding_collect(session_id, env=None):  # noqa: ANN001
+        raise OSError("journal dir vanished mid-scan")
+
+    monkeypatch.setattr(vibe_runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(vibe_usage, "collect", exploding_collect)
+    assert vibe_runner.main() == 0
+    assert capsys.readouterr().out == "done\n"
+    assert not (outbox / vibe_usage.SIDECAR_NAME).exists()
