@@ -1010,20 +1010,62 @@ _MD_NAME_RE = re.compile(r"^[\w.-]+\.md$")
 _WARP_ITEM_REF_RE = re.compile(r"^w-\d+$")
 
 
-def resolve_receipts(row: Mapping[str, Any], bases: Mapping[str, Any]) -> list[dict[str, Any]]:
+_RUN_PATH_RE = re.compile(r"^runs/([^/]+)/(run-[^/]+)/")
+
+
+def run_repo_slugs(paths: Iterable[str]) -> dict[str, str]:
+    """``run id -> repo slug`` from mirrored run-node paths (``runs/<slug>/<run>/…``)."""
+    out: dict[str, str] = {}
+    for path in paths:
+        match = _RUN_PATH_RE.match(path)
+        if match:
+            out.setdefault(match.group(2), match.group(1))
+    return out
+
+
+def repo_hint(
+    row: Mapping[str, Any], bases: Mapping[str, Any], run_slugs: Mapping[str, str]
+) -> str | None:
+    """Which base a bare ``#N`` on *row* belongs to, when the data says so.
+
+    First the row's own ``attempts`` (a run lives under exactly one repo);
+    else, when every mirrored run belongs to one repo, that repo — the one
+    the resident actually works in. Two repos with runs and no attempt to
+    decide ⇒ ``None``: still unlinked, never a guess.
+    """
+    from .account import _slug
+
+    by_slug = {_slug(str(label).replace("/", "__")): str(label) for label in bases}
+    for run in row.get("attempts") or []:
+        label = by_slug.get(run_slugs.get(str(run), ""))
+        if label:
+            return label
+    active = {slug for slug in run_slugs.values() if slug in by_slug}
+    return by_slug[next(iter(active))] if len(active) == 1 else None
+
+
+def resolve_receipts(
+    row: Mapping[str, Any], bases: Mapping[str, Any], *, hint: str | None = None
+) -> list[dict[str, Any]]:
     """Resolve recognized return/receipt tokens; missing or ambiguous bases stay unlinked.
 
-    Ask rows carry no repo attribution. Forge refs need one repo; knowledge
+    Ask rows carry no repo attribution. Forge refs need one repo — the only
+    base, or *hint* (:func:`repo_hint`) when there are several; knowledge
     refs need one distinct base (several repos can share the same knowledge).
     """
     from . import forges
 
-    base = next(iter(bases.values())) if len(bases) == 1 else None
+    if len(bases) == 1:
+        base = next(iter(bases.values()))
+    else:
+        base = bases.get(hint) if hint else None
     kb_bases = {
         value["kb"].rstrip("/") for value in bases.values()
         if isinstance(value, Mapping) and isinstance(value.get("kb"), str) and value["kb"]
     }
     kb_base = next(iter(kb_bases)) if len(kb_bases) == 1 else None
+    if kb_base is None and isinstance(base, Mapping) and isinstance(base.get("kb"), str) and base["kb"]:
+        kb_base = base["kb"].rstrip("/")
     tokens = dict.fromkeys(
         token for raw in (row.get("return"), row.get("receipt"))
         for token in _split(raw or "")
@@ -1043,8 +1085,7 @@ def resolve_receipts(row: Mapping[str, Any], bases: Mapping[str, Any]) -> list[d
         elif _MD_NAME_RE.fullmatch(token):
             url = f"{kb_base}/{token}" if kb_base else None
         elif _WARP_ITEM_REF_RE.fullmatch(token):
-            # There is no dashboard route for an individual warp item yet.
-            pass
+            url = f"/warp/{token}"  # the item's own page (#2127)
         else:
             continue
         receipts.append({"ref": token, "url": url})

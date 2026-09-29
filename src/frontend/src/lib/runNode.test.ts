@@ -17,6 +17,7 @@ import {
 	runIdSlug,
 	runNodeFromSurface,
 	runNodeHref,
+	runRepoSlugs,
 	runNodeHrefForPath
 } from './runNode.ts';
 import type { SurfaceResponse } from './surface.ts';
@@ -495,4 +496,16 @@ test("the body's ## Bolt section heads the node, ahead of ## Now", () => {
 	const withoutBolt = node('## Now\n\nstill going');
 	assert.equal(withoutBolt.boltLead, '');
 	assert.equal(withoutBolt.now, 'still going');
+});
+
+test('runRepoSlugs: a mirrored run node names its repo; the first path wins', () => {
+	const map = runRepoSlugs([
+		'runs/hugimuni-labs__brnrd/run-260925-0424-tfzb/state.md',
+		'runs/hugimuni-labs__brnrd/run-260925-0424-tfzb/body.md',
+		'runs/acme__other/run-260926-2222-adds/state.md',
+		'surface/warp/w-1.md'
+	]);
+	assert.equal(map.get('run-260925-0424-tfzb'), 'hugimuni-labs__brnrd');
+	assert.equal(map.get('run-260926-2222-adds'), 'acme__other');
+	assert.equal(map.size, 2);
 });

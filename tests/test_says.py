@@ -123,3 +123,31 @@ def test_stamp_say_keeps_the_message_and_backfill_fills_the_rest(tmp_path):
     counts = says.backfill(warp, [repo])
     assert counts == {"written": 1, "present": 1, "missing": 0}
     assert "items: w-2" in (warp / "says" / f"{EVT2}.md").read_text()
+
+
+def test_receipts_find_their_repo_among_several():
+    """Measured 2026-09-29: two connected repos, 0 of 41 receipts linked."""
+    bases = {
+        "hugimuni-labs/brnrd": {"forge": "https://github.com/hugimuni-labs/brnrd", "forge_kind": "github",
+                                "kb": "https://kb.example/brnrd/"},
+        "hugimuni-labs/hugimuni": {"forge": "https://github.com/hugimuni-labs/hugimuni", "forge_kind": "github",
+                                   "kb": "https://kb.example/hugimuni/"},
+    }
+    only_brnrd = asks.run_repo_slugs(["runs/hugimuni-labs__brnrd/run-260925-0424-tfzb/state.md"])
+    row = {"return": "#2088 · design-the-ask.md · w-87", "receipt": None, "attempts": []}
+    hint = asks.repo_hint(row, bases, only_brnrd)
+    assert hint == "hugimuni-labs/brnrd"  # every mirrored run is brnrd's
+    by_ref = {r["ref"]: r["url"] for r in asks.resolve_receipts(row, bases, hint=hint)}
+    assert by_ref["#2088"] == "https://github.com/hugimuni-labs/brnrd/pull/2088"
+    assert by_ref["design-the-ask.md"] == "https://kb.example/brnrd/design-the-ask.md"
+    assert by_ref["w-87"] == "/warp/w-87"
+
+    both = asks.run_repo_slugs([
+        "runs/hugimuni-labs__brnrd/run-260925-0424-tfzb/state.md",
+        "runs/hugimuni-labs__hugimuni/run-260926-2222-adds/state.md",
+    ])
+    assert asks.repo_hint(row, bases, both) is None  # two repos, no attempt: no guess
+    row_on_hugimuni = {**row, "attempts": ["run-260926-2222-adds"]}
+    assert asks.repo_hint(row_on_hugimuni, bases, both) == "hugimuni-labs/hugimuni"
+    unlinked = {r["ref"]: r["url"] for r in asks.resolve_receipts(row, bases, hint=None)}
+    assert unlinked["#2088"] is None

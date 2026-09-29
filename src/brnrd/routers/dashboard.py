@@ -45,7 +45,7 @@ from brnrd.models import (
     TgPairCode,
 )
 from brnrd import schemas
-from brr.asks import asks_from_files, resolve_receipts
+from brr.asks import asks_from_files, repo_hint, resolve_receipts, run_repo_slugs
 from brr import says as says_mod
 
 from ._session import (
@@ -1938,10 +1938,20 @@ def _account_bases(account: Account) -> dict[str, Any]:
     return bases if isinstance(bases, dict) else {}
 
 
-def _enrich_ask_receipts(payload: dict[str, Any], bases: Mapping[str, Any]) -> None:
-    """Resolve receipt references on both open and completed asks."""
+def _enrich_ask_receipts(
+    payload: dict[str, Any], bases: Mapping[str, Any], files: list[Any] | None = None
+) -> None:
+    """Resolve receipt references on both open and completed asks.
+
+    With several connected repos a bare ``#N`` needs a repo: the row's own
+    runs name it, or the one repo every mirrored run belongs to
+    (``brr.asks.repo_hint``) — measured 2026-09-29: two repos, 0 of 41
+    receipts linked."""
+    run_slugs = run_repo_slugs(
+        str(f.get("path", "")) for f in (files or []) if isinstance(f, dict)
+    )
     for row in (*payload.get("asks", []), *payload.get("done", [])):
-        row["receipts"] = resolve_receipts(row, bases)
+        row["receipts"] = resolve_receipts(row, bases, hint=repo_hint(row, bases, run_slugs))
 
 
 @router.get("/v1/dashboard/warp/asks.json")
@@ -1971,7 +1981,7 @@ def dashboard_warp_asks_api(request: Request, db: Session = Depends(get_db)) -> 
         _enrich_ask_says(payload, db, repo_ids)
         bases = _account_bases(account)
         payload["bases"] = bases
-        _enrich_ask_receipts(payload, bases)
+        _enrich_ask_receipts(payload, bases, files if isinstance(files, list) else [])
         _ASKS_CACHE[str(account_id)] = (etag, time.monotonic(), payload)
     return JSONResponse(payload, headers={"Cache-Control": "private, max-age=30"})
 
