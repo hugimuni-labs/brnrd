@@ -27,6 +27,14 @@ class = "balanced"
 cost_rank = 25
 quota_source = "codex-local"
 
+[profiles.vibe]
+cmd = "brnrd runners _vibe"
+binary = "vibe"
+provider = "mistral"
+owner = "user"
+class = "economy"
+cost_rank = 18
+
 [aliases]
 codex-mini = "codex-gpt-5.6-luna"
 codex-terra = "codex-gpt-5.6-terra"
