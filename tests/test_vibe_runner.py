@@ -28,12 +28,14 @@ def test_reply_excludes_user_and_tool_history():
 
 
 @pytest.mark.parametrize("failure", [False, True])
-def test_profile_invocation_delivers_stdin_system_prompt_and_exit(tmp_path, monkeypatch, failure):
+@pytest.mark.parametrize("model", [None, "mistral-medium-3.5", "glm-5-3", "local"])
+def test_profile_invocation_delivers_stdin_system_prompt_and_exit(tmp_path, monkeypatch, failure, model):
     binary = tmp_path / "vibe"
     binary.write_text("#!" + sys.executable + "\n" + '''
 import json, os, sys
 from pathlib import Path
 assert sys.argv[1:] == ['-p', '--auto-approve', '--trust', '--output', 'json']
+assert os.environ.get('VIBE_ACTIVE_MODEL') == os.environ.get('EXPECTED_VIBE_MODEL')
 assert sys.stdin.read() == 'the wake'
 home = Path(os.environ['VIBE_HOME'])
 path = home / 'prompts' / (os.environ['VIBE_SYSTEM_PROMPT_ID'] + '.md')
@@ -60,12 +62,20 @@ print(json.dumps([{'type':'message', 'role':'assistant',
     sentinel.write_text("# operator config\n")
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     monkeypatch.delenv("VIBE_TEST_FAILURE", raising=False)
+    monkeypatch.delenv("VIBE_ACTIVE_MODEL", raising=False)
+    monkeypatch.delenv("EXPECTED_VIBE_MODEL", raising=False)
     monkeypatch.setenv("BRR_VIBE_HOOKS", "0")  # this suite may itself run inside a daemon run
+    from brr import runner_cores
+    cmd = "brnrd runners _vibe"
+    if model:
+        cmd = runner_cores._cmd_with_model("vibe", cmd, model)
     profile = runner_select.runner_from_profile("vibe", {
-        "cmd": "brnrd runners _vibe", "binary": "vibe", "provider": "mistral",
+        "cmd": cmd, "binary": "vibe", "provider": "mistral",
         "class": "economy", "cost_rank": 18,
     })
     env = {"VIBE_HOME": str(home)}
+    if model:
+        env["EXPECTED_VIBE_MODEL"] = model
     if failure:
         env["VIBE_TEST_FAILURE"] = "1"
     response = tmp_path / "response.md"
@@ -172,3 +182,21 @@ def test_hook_setup_failure_cleans_scoped_system_prompt(tmp_path, monkeypatch):
     with pytest.raises(OSError, match="hook directory unavailable"):
         vibe_runner.main()
     assert list((home / "prompts").iterdir()) == []
+
+
+def test_vibe_core_catalog_uses_alias_pins_without_cli_model_flag():
+    import shlex
+    from brr import runner_cores
+
+    entries = runner_cores.generated_profile_entries({
+        "vibe": {"cmd": "brnrd runners _vibe", "binary": "vibe"},
+    }, probe=False)
+    for name, alias in (("vibe-local", "local"),
+                        ("vibe-glm-5-3", "glm-5-3"),
+                        ("vibe-mistral-medium-3.5", "mistral-medium-3.5")):
+        row = entries[name]
+        assert row["model"] == alias
+        assert shlex.split(row["cmd"]) == [
+            "env", "VIBE_ACTIVE_MODEL=" + alias, "brnrd", "runners", "_vibe",
+        ]
+        assert row["cost_rank"] is None

@@ -17,9 +17,11 @@ def test_all_cores_entries_have_required_fields():
         assert "shell" in entry, f"{name} missing 'shell'"
         assert "model" in entry, f"{name} missing 'model'"
         assert "class" in entry, f"{name} missing 'class'"
-        assert entry["class"] in ("economy", "balanced", "strong"), (
+        assert entry["class"] in ("economy", "balanced", "strong", None), (
             f"{name} has unknown class {entry['class']!r}"
         )
+        if entry["class"] is None:
+            assert entry.get("cost_rank") is None, f"{name} invents cost without a class"
         assert "freshness_date" in entry, f"{name} missing 'freshness_date'"
 
 
