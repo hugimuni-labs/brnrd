@@ -530,7 +530,7 @@ def test_dashboard_warp_asks_resolves_receipts_from_the_published_bases():
     assert receipts == {
         "#42": "https://github.com/Gurio/brr/pull/42",
         "design-the-ask.md": "https://github.com/Gurio/brr-kb/blob/main/knowledge/design-the-ask.md",
-        "w-9": None,  # no dashboard item route exists yet
+        "w-9": "/warp/w-9",  # the item page (#2127)
     }
 
 
