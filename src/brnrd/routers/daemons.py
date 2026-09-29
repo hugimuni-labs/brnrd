@@ -312,8 +312,11 @@ def publishing_credential(
             Repo.account_id == principal.account_id,
             Repo.repo_full_name == payload.repo_full_name,
         )).scalar_one_or_none()
-    if repo is None or repo.forge != "github":
+    if (repo is None and payload is None) or (repo is not None and repo.forge != "github"):
         raise HTTPException(status_code=404, detail="GitHub repo not found")
+    # The App grant can predate a cloud connection. A named checkout must
+    # select its account's installation without first becoming a relay Repo.
+    requested_name = repo.repo_full_name if repo is not None else payload.repo_full_name
     # Match by forge repo id first: it is stable across transfers and renames,
     # where the name is not. Order by installed-row freshness (last_seen_at)
     # rather than installation sync time — a stale row's last_seen_at freezes
@@ -330,7 +333,7 @@ def publishing_credential(
         .order_by(GitHubInstalledRepo.last_seen_at.desc())
     )
     installed = None
-    if repo.forge_repo_id:
+    if repo is not None and repo.forge_repo_id:
         installed = db.execute(
             base_query.where(
                 GitHubInstalledRepo.forge_repo_id == repo.forge_repo_id
@@ -339,13 +342,15 @@ def publishing_credential(
     if installed is None:
         installed = db.execute(
             base_query.where(
-                GitHubInstalledRepo.repo_full_name == repo.repo_full_name
+                GitHubInstalledRepo.repo_full_name == requested_name
             )
         ).first()
     if installed is None:
+        if repo is None:
+            raise HTTPException(status_code=404, detail="GitHub repo not found")
         raise HTTPException(status_code=409, detail="GitHub App is not installed for this repo")
     installed_repo, installation = installed
-    if installed_repo.repo_full_name != repo.repo_full_name:
+    if repo is not None and installed_repo.repo_full_name != repo.repo_full_name:
         # forge_repo_id matched under a different name ⇒ the repo was
         # transferred or renamed. Self-heal the Repo row so name-keyed paths
         # (webhook routing included) recover without operator surgery.

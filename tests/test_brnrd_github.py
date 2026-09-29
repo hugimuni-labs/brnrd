@@ -296,6 +296,52 @@ def test_daemon_mints_credential_for_named_sibling_repo(env, monkeypatch):
     assert seen["repositories"] is None
 
 
+@pytest.mark.parametrize("grant", ["same-account", "other-account", "none"])
+def test_named_unconnected_repo_uses_only_its_accounts_app_grant(env, monkeypatch, grant):
+    app, client, _ = env
+    acc = _account(client)
+    default_id = _repo(client, acc)
+    daemon_headers = _daemon_headers(client, acc, default_id)
+    owner_id = default_id
+    if grant == "other-account":
+        other = brnrd_account_headers(
+            app, github_id="999", login="other", email="other@example.test",
+        )
+        owner_id = _repo(client, other, "other/principal")
+    with app.state.SessionLocal() as db:
+        if grant != "none":
+            installation = GitHubInstallation(
+                id=ids.github_installation_id(),
+                account_id=db.get(Repo, owner_id).account_id,
+                installation_id="99", target_login="personal", target_type="User",
+            )
+            db.add(installation)
+            db.flush()
+            db.add(GitHubInstalledRepo(
+                id=ids.github_installed_repo_id(),
+                github_installation_id=installation.id,
+                repo_full_name="personal/fresh-fork", forge_repo_id="6262",
+            ))
+            db.commit()
+        assert db.execute(select(Repo).where(
+            Repo.repo_full_name == "personal/fresh-fork",
+        )).scalar_one_or_none() is None
+
+    seen = _capture_credential(monkeypatch)
+    response = client.post(
+        "/v1/daemons/publishing-credential",
+        json={"repo_full_name": "personal/fresh-fork"}, headers=daemon_headers,
+    )
+    if grant == "same-account":
+        assert response.status_code == 200, response.text
+        assert seen == {"installation_id": "99", "repository_ids": None,
+                        "repositories": None}
+        assert response.headers["Cache-Control"] == "no-store"
+    else:
+        assert response.status_code == 404, response.text
+        assert seen == {}
+
+
 def _payload(*, repo="owner/repo", body="@brr-bot do the thing",
              installation_id=42, number=17, comment_id=100, is_pr=False,
              action="created", association="COLLABORATOR", author="alice"):
