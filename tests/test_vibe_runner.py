@@ -147,7 +147,7 @@ def test_vibe_write_into_host_checkout_is_denied_through_run_hook(tmp_path):
     host = tmp_path / "host"
     wt = host / ".brr" / "worktrees" / "run-x"
     wt.mkdir(parents=True)
-    env = {"BRR_RUNNER": "vibe", "BRR_HOST_ROOT": str(host), "GIT_WORK_TREE": str(wt)}
+    env = {"BRR_RUNNER": "vibe", "BRR_HOST_ROOT": str(host), "BRR_WORK_TREE": str(wt)}
     for tool in ("write_file", "edit"):
         out, rc = _hooks.run_hook("pre-tool", _vibe_pre_tool(tool, host / "stray.txt", wt), env)
         assert rc == 0 and out["decision"] == "deny" and out["reason"], (tool, out)
