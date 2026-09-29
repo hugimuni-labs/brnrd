@@ -4208,6 +4208,8 @@ def probe_shell_hook_capability(shell: str | None) -> bool | None:
     base = shell.split()[0].strip()
     if base == "codex":
         return _hooks.codex_hook_capability()
+    if base == "vibe":
+        return _hooks.vibe_hook_capability()
     return _hooks.hook_capability(base or None, Path.cwd())
 
 

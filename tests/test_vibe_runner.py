@@ -60,6 +60,7 @@ print(json.dumps([{'type':'message', 'role':'assistant',
     sentinel.write_text("# operator config\n")
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     monkeypatch.delenv("VIBE_TEST_FAILURE", raising=False)
+    monkeypatch.setenv("BRR_VIBE_HOOKS", "0")  # this suite may itself run inside a daemon run
     profile = runner_select.runner_from_profile("vibe", {
         "cmd": "brnrd runners _vibe", "binary": "vibe", "provider": "mistral",
         "class": "economy", "cost_rank": 18,
@@ -81,3 +82,55 @@ print(json.dumps([{'type':'message', 'role':'assistant',
         assert "authentication failed" in result.stderr
     assert list((home / "prompts").glob("brnrd-*.md")) == []
     assert sentinel.read_text() == "# operator config\n"
+
+
+# ── Tier 2: native hooks ────────────────────────────────────────────────
+import tomllib as _tomllib
+
+from brr import hooks as _hooks
+from brr import vibe_runner as _vr
+
+
+def test_vibe_hooks_toml_parses_and_routes_each_native_type_to_brnrd():
+    doc = _tomllib.loads(_hooks.vibe_hooks_toml("brnrd"))
+    got = {h["type"]: h["command"] for h in doc["hooks"]}
+    assert got == {
+        "pre_tool": "brnrd hook pre-tool",
+        "post_tool": "brnrd hook post-tool",
+        "post_agent": "brnrd hook stop",
+    }
+    assert all("match" not in h and h["timeout"] > 0 for h in doc["hooks"])
+
+
+def test_vibe_post_tool_inject_is_additional_context_never_a_deny():
+    out, rc = _hooks.render_native(
+        "vibe", _hooks.PHASE_POST_TOOL,
+        {"inject": "steer: stop", "block": True, "block_reason": "owed a card"},
+    )
+    assert rc == 0 and "decision" not in out
+    assert out["hook_specific_output"]["additional_context"] == "owed a card\n\nsteer: stop"
+    assert _hooks.render_native("vibe", _hooks.PHASE_POST_TOOL, {"inject": None})[0] == {}
+
+
+def test_vibe_pre_tool_block_denies_and_stop_block_retries():
+    neutral = {"inject": None, "block": True, "block_reason": "rooted write"}
+    assert _hooks.render_native("vibe", _hooks.PHASE_PRE_TOOL, neutral)[0] == {
+        "decision": "deny", "reason": "rooted write"}
+    assert _hooks.render_native("vibe", _hooks.PHASE_STOP, neutral)[0]["decision"] == "deny"
+    assert _hooks.render_native("vibe", _hooks.PHASE_SESSION_START, neutral)[0] == {}
+
+
+def test_vibe_hook_dir_armed_only_in_a_daemon_run(monkeypatch):
+    monkeypatch.setattr(_hooks, "vibe_hook_capability", lambda **_: True)
+    assert _vr.hook_dir({}) is None
+    assert _vr.hook_dir({"BRR_RUN_ID": "r", "BRR_VIBE_HOOKS": "0"}) is None
+    env = {"BRR_RUN_ID": "r"}
+    root = _vr.hook_dir(env)
+    try:
+        assert env["BRR_RUNNER"] == "vibe"
+        assert (root / ".vibe" / "hooks.toml").read_text() == _hooks.vibe_hooks_toml()
+        assert _vr.command(root)[-2:] == ["--add-dir", str(root)]
+        assert "--add-dir" not in _vr.command(None)
+    finally:
+        import shutil
+        shutil.rmtree(root)
