@@ -6765,7 +6765,11 @@ def _queue_submit_request(
             kind="refused", lifetime="run",
         )
         return False
-    seed = str(task.meta.get("seed_ref") or task.meta.get("base_branch") or "")
+    # A clone can have no local seed branch; the recorded object names the
+    # actual starting point and cannot move while the strand is working.
+    seed = relics.seed_oid_of(task.meta) or str(
+        task.meta.get("seed_ref") or task.meta.get("base_branch") or ""
+    )
     probe_root = _strand_probe_root(task, repo_root)
     commits = len(_commits_between(probe_root, seed, branch)) if seed else None
     generation = int(control.get("submit_generation") or 0) + 1
