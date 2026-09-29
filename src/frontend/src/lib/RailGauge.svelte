@@ -88,7 +88,7 @@
 	// see `fuelProviders.ts`' own note — three near-coincident bars with no
 	// key made the headline number and the longest fill read as different
 	// answers to the same question.)
-	let providerGroups = $derived(fuelProviderGroups(availableShells));
+	let providerGroups = $derived(fuelProviderGroups(availableShells, now, runners?.profiles));
 	let slots = $derived(activeSpawns === null ? null : slotChip(activeSpawns, maxSpawns));
 	let tanks = $derived(readTanks(availableShells, ledgerRows, scheduledWakes, now));
 	let lead = $derived(tanks[0] ?? null);
@@ -141,7 +141,7 @@
 		{/if}
 	</div>
 	<div data-measure="fuel" class="fuel-deck" aria-label="quota fuel, by provider">
-		{#if shells === null}
+		{#if shells === null && providerGroups.length === 0}
 			<span class="fuel-empty">loading quota…</span>
 		{:else if providerGroups.length === 0}
 			<span class="fuel-empty">no quota report</span>
