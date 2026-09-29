@@ -1099,6 +1099,31 @@ def register_repo(
     return repo
 
 
+def repo_is_registered(home_root: Path, repo_root: Path) -> bool:
+    """Whether *repo_root* is listed in the registry under *home_root*.
+
+    The registry read behind "is this repo already in this account" — asked
+    *before* resolving the context that would add it, because
+    ``resolve_context`` returns the current repo inside ``ctx.repos`` even
+    with ``create=False`` (``repos.setdefault``), so asking a context is
+    always told "yes" on a genuinely fresh folder.
+    """
+    repos, _default = _load_registry(home_root / REGISTRY_PATH)
+    try:
+        resolved = repo_root.resolve()
+    except OSError:
+        resolved = repo_root.absolute()
+    for repo in repos.values():
+        if repo.root is None:
+            continue
+        try:
+            if Path(repo.root).resolve() == resolved:
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def repo_dominion_path(ctx: AccountContext, repo_label: str) -> Path:
     """Return the resident-memory directory for one repo inside an account home."""
 

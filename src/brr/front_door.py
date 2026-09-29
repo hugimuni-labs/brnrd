@@ -228,7 +228,7 @@ def _step_runner(repo_root: Path) -> bool:
 
 
 def _step_account(repo_root: Path, brr_dir: Path, *, tty: bool) -> bool:
-    """Pair this machine to a brnrd account.
+    """Connect this repo to a brnrd account — pairing only when needed.
 
     **One step, and it is a bundle** — ``account connect`` pairs, installs
     the background service, and queues the first-wake setup event in one
@@ -237,7 +237,10 @@ def _step_account(repo_root: Path, brr_dir: Path, *, tty: bool) -> bool:
     ``pair`` / ``daemon install`` / ``gate configure`` verbs is a real
     change to that command, deferred out of this increment on purpose. A
     narrated step that announced ``$ brnrd daemon install`` and then ran
-    something else would break the one promise this door makes.
+    something else would break the one promise this door makes. On a
+    machine that already has a paired account, ``connect`` reuses it and
+    registers this repo into it — pairing is only what a genuinely
+    unpaired machine sees.
     """
     from .gates import cloud
 
@@ -246,8 +249,31 @@ def _step_account(repo_root: Path, brr_dir: Path, *, tty: bool) -> bool:
         _ok("already connected")
         return True
 
-    _note("pairs this machine, installs the background service, "
-          "and queues your setup run — one command")
+    # `is_configured` above is repo-level: a new folder resolves no account
+    # even on a paired machine. Discover machine-side, with the same URL the
+    # command below targets, so the narration cannot promise a reuse the
+    # command will not perform.
+    import os
+
+    target_url = os.environ.get("BRNRD_URL", "https://brnrd.dev")
+    machine = cloud.machine_account(brnrd_url=target_url)
+    if machine is not None and "ambiguous" not in machine:
+        _note(f"this machine is already paired to account "
+              f"{style.accent(machine['account_id'])} — connecting adds "
+              "this repo to it, no new pairing")
+    elif machine is not None:
+        _note("this machine has several paired accounts — connecting "
+              "names them and asks you to pick")
+    else:
+        elsewhere = cloud.machine_account()
+        if elsewhere is not None and "ambiguous" not in elsewhere:
+            _note(f"this machine's account is paired to "
+                  f"{style.accent(elsewhere['brnrd_url'])}, not "
+                  f"{style.accent(target_url)} — connecting pairs a new "
+                  "account there")
+        else:
+            _note("pairs this machine, installs the background service, "
+                  "and queues your setup run — one command")
     if not tty:
         _command(["account", "connect"])
         return False
