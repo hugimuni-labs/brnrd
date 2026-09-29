@@ -186,6 +186,182 @@ def test_a_finished_repo_is_a_receipt_not_a_setup(repo, capsys, monkeypatch):
     assert code == 0
 
 
+def test_a_paired_machine_is_not_read_as_unpaired_from_a_new_folder(
+    repo, capsys, monkeypatch,
+):
+    """2026-09-29, pinned: a new folder on a machine that already has an
+    account must not be narrated into a pairing it doesn't need. The
+    repo-level `is_configured` read can't see a pairing that lives in the
+    account home, so the step looks machine-side and says what connect will
+    actually do — reuse — while the per-repo consent stays a question and
+    the command behind it stays `account connect` (the caller the repair
+    lives in, so the door and the CLI cannot drift)."""
+    from brr.gates import cloud
+
+    monkeypatch.setattr(front_door, "interactive", lambda: False)
+    monkeypatch.setattr(
+        front_door, "_invoke",
+        lambda argv: pytest.fail(f"ran {argv} with no terminal behind it"),
+    )
+    monkeypatch.setattr(cloud, "is_configured", lambda _brr_dir: False)
+    monkeypatch.setattr(
+        cloud, "machine_account",
+        lambda **_kw: {
+            "account_id": "acc_pair",
+            "brnrd_url": "https://brnrd.dev",
+            "home_root": repo / "home",
+            "state_dir": repo / "home" / "account",
+        },
+    )
+
+    ok = front_door._step_account(repo, repo / ".brr", tty=False)
+
+    out = capsys.readouterr().out
+    assert "already paired to account acc_pair" in out
+    assert "no new pairing" in out
+    assert "pairs this machine" not in out
+    assert "$ brnrd account connect" in out
+    assert ok is False
+
+
+def test_a_paired_machine_still_asks_before_connecting_this_repo(
+    repo, capsys, monkeypatch,
+):
+    """Reuse is not consent: the per-repo question stays, and a yes runs the
+    real command — one entrance to the repair, not a door-side copy of it."""
+    from brr.gates import cloud
+
+    monkeypatch.setattr(front_door, "interactive", lambda: True)
+    monkeypatch.setattr(builtins, "input", _answering("y"))
+    monkeypatch.setattr(cloud, "is_configured", lambda _brr_dir: False)
+    monkeypatch.setattr(
+        cloud, "machine_account",
+        lambda **_kw: {
+            "account_id": "acc_pair",
+            "brnrd_url": "https://brnrd.dev",
+            "home_root": repo / "home",
+            "state_dir": repo / "home" / "account",
+        },
+    )
+    invoked = []
+    monkeypatch.setattr(
+        front_door, "_invoke",
+        lambda argv: invoked.append(list(argv)) or None,
+    )
+    # The command's own receipt: connect (mocked at the verb boundary) says
+    # the account is wired, and the step believes its own command.
+    monkeypatch.setattr(cloud, "is_configured", lambda _brr_dir: bool(invoked))
+
+    ok = front_door._step_account(repo, repo / ".brr", tty=True)
+
+    out = capsys.readouterr().out
+    assert invoked == [["account", "connect"]]
+    assert "connect this repo to your brnrd account now?" in out
+    assert ok is True
+
+
+def test_step_account_discovers_with_the_url_the_command_targets(
+    repo, capsys, monkeypatch,
+):
+    """The narration must not promise a reuse the command will not perform:
+    discovery is filtered by the same URL `account connect` below would
+    target (BRNRD_URL, else the default), not by nothing."""
+    from brr.gates import cloud
+
+    monkeypatch.setattr(front_door, "interactive", lambda: False)
+    monkeypatch.setattr(
+        front_door, "_invoke",
+        lambda argv: pytest.fail(f"ran {argv} with no terminal behind it"),
+    )
+    monkeypatch.setattr(cloud, "is_configured", lambda _brr_dir: False)
+    seen = []
+
+    def _fake(*, brnrd_url=None):
+        seen.append(brnrd_url)
+        return {
+            "account_id": "acc_pair",
+            "brnrd_url": brnrd_url,
+            "home_root": repo / "home",
+            "state_dir": repo / "home" / "account",
+        }
+
+    monkeypatch.setattr(cloud, "machine_account", _fake)
+    monkeypatch.setenv("BRNRD_URL", "https://custom.example")
+
+    front_door._step_account(repo, repo / ".brr", tty=False)
+
+    assert seen[0] == "https://custom.example"
+    out = capsys.readouterr().out
+    assert "already paired to account acc_pair" in out
+    assert "$ brnrd account connect" in out
+
+
+def test_step_account_narrates_pairing_when_the_account_is_elsewhere(
+    repo, capsys, monkeypatch,
+):
+    """An account paired to another server is not the account a connect
+    aimed at this URL wants — the door must not read the machine as
+    reusable, and should say where the existing pairing lives instead."""
+    from brr.gates import cloud
+
+    monkeypatch.setattr(front_door, "interactive", lambda: False)
+    monkeypatch.setattr(
+        front_door, "_invoke",
+        lambda argv: pytest.fail(f"ran {argv} with no terminal behind it"),
+    )
+    monkeypatch.setattr(cloud, "is_configured", lambda _brr_dir: False)
+
+    def _fake(*, brnrd_url=None):
+        if brnrd_url is not None:
+            return None
+        return {
+            "account_id": "acc_far",
+            "brnrd_url": "https://other.example",
+            "home_root": repo / "home",
+            "state_dir": repo / "home" / "account",
+        }
+
+    monkeypatch.setattr(cloud, "machine_account", _fake)
+    monkeypatch.setenv("BRNRD_URL", "https://target.example")
+
+    front_door._step_account(repo, repo / ".brr", tty=False)
+
+    out = capsys.readouterr().out
+    assert "paired to https://other.example, not https://target.example" in out
+    assert "no new pairing" not in out
+    assert "$ brnrd account connect" in out
+
+
+def test_step_account_names_an_ambiguous_machine(repo, capsys, monkeypatch):
+    """Several accounts on one machine are a choice connect will put to the
+    human; the door says that rather than naming a winner it has no right
+    to pick."""
+    from brr.gates import cloud
+
+    monkeypatch.setattr(front_door, "interactive", lambda: False)
+    monkeypatch.setattr(
+        front_door, "_invoke",
+        lambda argv: pytest.fail(f"ran {argv} with no terminal behind it"),
+    )
+    monkeypatch.setattr(cloud, "is_configured", lambda _brr_dir: False)
+    monkeypatch.setattr(
+        cloud, "machine_account",
+        lambda **_kw: {"ambiguous": [
+            {"account_id": "acc_a", "brnrd_url": "https://brnrd.dev",
+             "home_root": repo / "a", "state_dir": repo / "a" / "account"},
+            {"account_id": "acc_b", "brnrd_url": "https://brnrd.dev",
+             "home_root": repo / "b", "state_dir": repo / "b" / "account"},
+        ]},
+    )
+
+    front_door._step_account(repo, repo / ".brr", tty=False)
+
+    out = capsys.readouterr().out
+    assert "several paired accounts" in out
+    assert "no new pairing" not in out
+    assert "$ brnrd account connect" in out
+
+
 # ── The closing offer ───────────────────────────────────────────────
 
 
