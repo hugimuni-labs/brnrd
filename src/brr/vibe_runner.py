@@ -4,7 +4,8 @@ Prompts travel on stdin; the system prompt is an invocation-scoped file. Vibe
 keeps its own authentication and model selection. Inside a daemon run the
 adapter installs brnrd's hooks through Vibe's native protocol (a per-invocation
 ``--add-dir`` root carrying ``.vibe/hooks.toml``; see ``hooks.vibe_hooks_toml``).
-No quota collector or session-resume support is claimed by this adapter.
+Usage for the exact invocation is collected by :mod:`brr.vibe_usage`.
+Monthly subscription allowance and session resume are not yet instrumented.
 """
 
 import json
@@ -103,6 +104,12 @@ def main() -> int:
     env = dict(os.environ)
     prompt_path = prepare_system_prompt(protonucleus_path(), env)
     hooks_root = None
+    # A retry must not inherit the previous attempt's usage sidecar: a
+    # fresh invocation with no session id would otherwise leave stale
+    # tokens standing as if they were current.
+    from . import vibe_usage
+
+    vibe_usage.clear_sidecars(env)
     try:
         hooks_root = hook_dir(env)
         result = subprocess.run(
@@ -123,5 +130,10 @@ def main() -> int:
     if error:
         print(error, file=sys.stderr)
         return 1
+    # Usage telemetry on the same boundary that unwraps the reply: the
+    # journal is complete exactly now. The capture is defensive by
+    # contract (an honest unavailable payload, never a raise), so the
+    # reply's shape and exit code are unchanged.
+    vibe_usage.capture_stdout(result.stdout, env)
     print(reply, end="")
     return 0
