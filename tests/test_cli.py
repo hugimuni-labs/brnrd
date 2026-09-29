@@ -1548,6 +1548,268 @@ def test_account_connect_pairs_installs_and_starts_service(
     assert _says(capsys.readouterr().out, "Connected and listening in the background")
 
 
+def _pair_a_machine_account(
+    tmp_path, *, url: str = "https://brnrd.example", account_id: str = "acc_reuse",
+):
+    """A valid machine-level pairing, the shape `account connect` leaves one.
+
+    Built the way a real machine got it: paired from a *first* repo, so the
+    account home is created by resolving that repo with an explicit account
+    id, and the gate state lands in the account-owned state dir with its
+    token in the sibling file — exactly what `cloud.machine_account`
+    validates. No network, no daemon, no credential mutation.
+    """
+    from brr import account
+    from brr.gates import cloud
+
+    first = tmp_path / "the-first-repo"
+    init_git_repo(first)
+    ctx = account.resolve_context(
+        first, {"account.id": account_id, "home.kind": "account"}, create=True,
+    )
+    home = account.context_home_root(ctx)
+    cloud._save_state_to_dir(home / "account", {
+        "brnrd_url": url,
+        "account_id": account_id,
+        "repo_id": "r-first",
+        "token": "tok-reuse",
+    })
+    return home
+
+
+def test_account_connect_reuses_a_machine_account_without_pairing(
+    monkeypatch, tmp_path, capsys,
+):
+    """2026-09-29, pinned: a new folder on a machine that already has a
+    connected account must not print a pairing code. `connect` looks
+    machine-side first and registers this repo through the same
+    `account register_repo` path `account add` walks. Not one request may
+    leave the machine: no pair POST, no poll, nothing. The account's
+    `default_repo` is preserved — an ordinary connect must not redirect
+    unrelated incoming chat (`account add` may flip it deliberately).
+
+    `--local-memory` is test isolation, not a behaviour choice: with the
+    repo registered, the tail's memory step resolves the *account* home and
+    would reach for `gh` on a developer machine."""
+    home = _pair_a_machine_account(tmp_path)
+    repo = tmp_path / "the-new-folder"
+    init_git_repo(repo)
+    (repo / "AGENTS.md").write_text("# Project\n", encoding="utf-8")
+    monkeypatch.chdir(repo)
+
+    requests = []
+    monkeypatch.setattr(
+        "brr.gates.cloud._request",
+        lambda _url, method, path, **_kw: requests.append((method, path)) or {},
+    )
+    monkeypatch.setattr(
+        "brr.gates.cloud.connect",
+        lambda *_a, **_k: pytest.fail(
+            "connect re-paired a machine that already has an account"
+        ),
+    )
+    installed = []
+    monkeypatch.setattr("brr.daemon_install.service_alive", lambda: None)
+    monkeypatch.setattr(
+        "brr.daemon_install.install",
+        lambda **kw: installed.append(kw) or 0,
+    )
+
+    assert main([
+        "account", "connect", "https://brnrd.example", "--local-memory",
+    ]) is None
+
+    assert requests == [], "the reuse path must not touch the network"
+    assert installed, "the shared tail must still install the service"
+    out = capsys.readouterr().out
+    assert _says(out, "already paired to account acc_reuse")
+    assert _says(out, "no new pairing needed")
+    assert _says(out, "Connected and listening in the background")
+
+    # Registration went through the existing path, but the account's
+    # default repo is preserved: the new folder is listed, the old default
+    # still routes.
+    registry = json.loads((home / "account" / "repos.json").read_text(encoding="utf-8"))
+    labels = {entry["label"] for entry in registry["repos"]}
+    assert "the-new-folder" in labels
+    assert registry["default_repo"] == "the-first-repo"
+    # And the repo now resolves the machine account's own gate state — the
+    # daemon reading `is_configured` from this folder sees the account.
+    from brr.gates import cloud
+
+    assert cloud.is_configured(repo / ".brr") is True
+
+
+def test_account_connect_stops_when_several_accounts_could_be_reused(
+    monkeypatch, tmp_path, capsys,
+):
+    """Two valid accounts on one machine are a choice the human owns: never
+    silently pick the first sorted one — stop, before registering or
+    pairing, and name the way to pick (BRNRD_HOME + re-run)."""
+    _pair_a_machine_account(tmp_path, account_id="acc_one")
+    _pair_a_machine_account(tmp_path, account_id="acc_two")
+    repo = tmp_path / "the-new-folder"
+    init_git_repo(repo)
+    (repo / "AGENTS.md").write_text("# Project\n", encoding="utf-8")
+    monkeypatch.chdir(repo)
+
+    monkeypatch.setattr(
+        "brr.gates.cloud.connect",
+        lambda *_a, **_k: pytest.fail(
+            "an ambiguous machine must not reach pairing either"
+        ),
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(["account", "connect", "https://brnrd.example", "--local-memory"])
+
+    assert excinfo.value.code == 2
+    out = capsys.readouterr().out
+    assert "several accounts on this machine are already paired" in out
+    assert "acc_one" in out and "acc_two" in out
+    assert "BRNRD_HOME=<home> brnrd account connect" in out
+    # Nothing was registered anywhere: both registries still list only the
+    # repo they were built from.
+    accounts_root = (
+        Path(os.environ["XDG_STATE_HOME"]) / "brnrd" / "accounts"
+    )
+    for account_dir in ("acc_one", "acc_two"):
+        registry = json.loads(
+            (accounts_root / account_dir / "home" / "account" / "repos.json")
+            .read_text(encoding="utf-8")
+        )
+        labels = {entry["label"] for entry in registry["repos"]}
+        assert "the-new-folder" not in labels
+
+
+def test_account_connect_brnrd_home_resolves_an_ambiguous_machine(
+    monkeypatch, tmp_path, capsys,
+):
+    """BRNRD_HOME is the explicit pick: with two valid accounts, it names
+    the one to reuse without asking. An explicit home that holds no valid
+    pairing is the whole candidate set — no silent fall-through to the
+    scan."""
+    _pair_a_machine_account(tmp_path, account_id="acc_one")
+    home_two = _pair_a_machine_account(tmp_path, account_id="acc_two")
+    repo = tmp_path / "the-new-folder"
+    init_git_repo(repo)
+    (repo / "AGENTS.md").write_text("# Project\n", encoding="utf-8")
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("BRNRD_HOME", str(home_two))
+
+    monkeypatch.setattr(
+        "brr.gates.cloud.connect",
+        lambda *_a, **_k: pytest.fail("the explicit account was not reused"),
+    )
+    monkeypatch.setattr(
+        "brr.daemon_install.service_alive",
+        lambda: (4242, tmp_path / "elsewhere"),
+    )
+
+    assert main([
+        "account", "connect", "https://brnrd.example", "--local-memory",
+    ]) is None
+
+    out = capsys.readouterr().out
+    assert _says(out, "already paired to account acc_two")
+    registry = json.loads(
+        (home_two / "account" / "repos.json").read_text(encoding="utf-8")
+    )
+    labels = {entry["label"] for entry in registry["repos"]}
+    assert "the-new-folder" in labels
+
+
+def test_account_connect_pair_flag_forces_a_fresh_pairing(
+    monkeypatch, tmp_path, capsys,
+):
+    """`--pair` is the explicit opt-out: a machine account exists and is
+    valid, and the caller asked to pair anyway (a second account on the
+    same server). Discovery must not turn an explicit request into a
+    silent reuse."""
+    _pair_a_machine_account(tmp_path)
+    repo = tmp_path / "the-second-folder"
+    init_git_repo(repo)
+    (repo / "AGENTS.md").write_text("# Project\n", encoding="utf-8")
+    monkeypatch.chdir(repo)
+
+    paired = []
+    monkeypatch.setattr(
+        "brr.gates.cloud.connect",
+        lambda _brr_dir, **kw: paired.append(kw) or {},
+    )
+    # A running daemon keeps the tail off the service install — this test
+    # is about the pairing fork, not the install.
+    monkeypatch.setattr(
+        "brr.daemon_install.service_alive",
+        lambda: (4242, tmp_path / "the-first-repo"),
+    )
+
+    assert main([
+        "account", "connect", "https://brnrd.example", "--pair", "--local-memory",
+    ]) is None
+
+    assert paired and paired[0]["brnrd_url"] == "https://brnrd.example"
+
+
+def test_account_connect_still_pairs_on_an_unpaired_machine(
+    monkeypatch, tmp_path, capsys,
+):
+    """The reuse look is a read, never a wall: a machine with no account
+    pairs exactly as it always did."""
+    repo = tmp_path / "the-only-repo"
+    init_git_repo(repo)
+    (repo / "AGENTS.md").write_text("# Project\n", encoding="utf-8")
+    monkeypatch.chdir(repo)
+
+    paired = []
+    monkeypatch.setattr(
+        "brr.gates.cloud.connect",
+        lambda _brr_dir, **kw: paired.append(kw) or {},
+    )
+    monkeypatch.setattr(
+        "brr.daemon_install.service_alive",
+        lambda: (4242, tmp_path / "elsewhere"),
+    )
+
+    assert main([
+        "account", "connect", "https://brnrd.example", "--local-memory",
+    ]) is None
+
+    assert paired, "a genuinely unpaired machine must still pair"
+
+
+def test_account_connect_pairs_rather_than_join_another_server(
+    monkeypatch, tmp_path, capsys,
+):
+    """An account paired to one server is not the account a connect aimed at
+    another server wants: joining it would leave the daemon polling a URL
+    its caller never named."""
+    home = _pair_a_machine_account(tmp_path, url="https://brnrd.example")
+    repo = tmp_path / "the-other-server-folder"
+    init_git_repo(repo)
+    (repo / "AGENTS.md").write_text("# Project\n", encoding="utf-8")
+    monkeypatch.chdir(repo)
+
+    paired = []
+    monkeypatch.setattr(
+        "brr.gates.cloud.connect",
+        lambda _brr_dir, **kw: paired.append(kw) or {},
+    )
+    monkeypatch.setattr(
+        "brr.daemon_install.service_alive",
+        lambda: (4242, tmp_path / "elsewhere"),
+    )
+
+    assert main([
+        "account", "connect", "https://other.example", "--local-memory",
+    ]) is None
+
+    assert paired and paired[0]["brnrd_url"] == "https://other.example"
+    registry = json.loads((home / "account" / "repos.json").read_text(encoding="utf-8"))
+    labels = {entry["label"] for entry in registry["repos"]}
+    assert "the-other-server-folder" not in labels
+
+
 def test_account_connect_leaves_a_running_daemon_alone(
     monkeypatch, tmp_path, capsys,
 ):

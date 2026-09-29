@@ -372,6 +372,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="linux: skip the linger prompt",
     )
+    p.add_argument(
+        "--pair",
+        action="store_true",
+        help=(
+            "pair a fresh account even when this machine already has one; "
+            "by default connect reuses the existing machine account and "
+            "only adds this repo to it"
+        ),
+    )
     p.set_defaults(func=cmd_brnrd_connect)
 
     p = account_sub.add_parser(
@@ -7371,6 +7380,14 @@ def cmd_brnrd_connect(args):
     url = args.url_option or args.url or os.environ.get("BRNRD_URL", "https://brnrd.dev")
     daemon_name = args.daemon_name or socket.gethostname()
     local_memory = bool(args.local_memory)
+    # Machine pairing ≠ adding a project: with a valid machine account for
+    # this URL, reuse it and register this repo instead of pairing again.
+    # `--pair` is the explicit opt-out; an unpaired machine pairs as before.
+    if not args.pair and not cloud.is_configured(brr_dir):
+        if _connect_join_machine_account(repo_root, brr_dir, url):
+            return _connect_after_pairing_tail(
+                args, repo_root, brr_dir, local_memory,
+            )
     try:
         cloud.connect(brr_dir, brnrd_url=url, daemon_name=daemon_name)
     except (cloud.CloudUnavailableError, TimeoutError) as exc:
@@ -7381,6 +7398,21 @@ def cmd_brnrd_connect(args):
         # during the pairing-approval poll leaves the pending pair code to
         # expire server-side on its own TTL and this machine untouched.
         raise _connect_interrupted("pairing approval") from None
+    return _connect_after_pairing_tail(args, repo_root, brr_dir, local_memory)
+
+
+def _connect_after_pairing_tail(
+    args,
+    repo_root: Path,
+    brr_dir: Path,
+    local_memory: bool,
+):
+    """Everything `account connect` does once the repo *has* an account —
+    memory durability, the background service, first-run setup — shared
+    verbatim by the pairing and the reuse paths. `local_memory` arrives as
+    the parsed flag; the durability question below may still flip it.
+    """
+    import sys
     # The durability question, asked *after* pairing and only when the
     # answer can still change something.
     #
@@ -7419,7 +7451,7 @@ def cmd_brnrd_connect(args):
     _connect_memory(repo_root, local_only=local_memory)
     if args.no_service:
         print(
-            "[brnrd] Paired without a background service. "
+            "[brnrd] Connected without a background service. "
             f"Run `{brnrd_cmd()} up --foreground` to begin draining the brnrd inbox."
         )
         return
@@ -7479,18 +7511,93 @@ def cmd_brnrd_connect(args):
         print("[brnrd] Connected and listening in the background.")
     else:
         print(
-            "[brnrd] Paired, but the background service did not come up.\n"
+            "[brnrd] Connected, but the background service did not come up.\n"
             "  The error above names the cause.  Common next steps:\n"
             "    1. If the error mentions a missing or deleted working "
             "directory, re-run `brnrd daemon install` from your project "
             "checkout to refresh the service, then restart it.\n"
             "    2. Run `brnrd daemon status` to see the current service "
             "state and any recent error output.\n"
-            "  Your account is paired — only the local service needs "
+            "  Your account is connected — only the local service needs "
             "attention."
         )
 
     _connect_finish_setup(repo_root, brr_dir, defaults=bool(args.defaults))
+
+
+def _connect_join_machine_account(
+    repo_root: Path, brr_dir: Path, url: str,
+) -> bool:
+    """Reuse this machine's existing account instead of pairing a new one.
+
+    Discovers the account machine-side (``cloud.machine_account``) and
+    registers this repo into it through the same ``register_repo`` path
+    ``account add`` walks — the repair is the flow itself, not a printed
+    workaround. Several valid accounts are never silently chosen: the
+    command stops and names the way to pick. Registration preserves the
+    account's ``default_repo`` (``account add`` may flip it deliberately;
+    an ordinary connect must not redirect unrelated incoming chat).
+
+    Returns ``True`` when the repo now resolves the machine account (the
+    caller continues with connect's shared tail), ``False`` when there is
+    nothing valid to reuse or the join could not be verified — the caller
+    pairs, exactly as before.
+    """
+    from . import account, config as conf
+    from .gates import cloud
+
+    machine = cloud.machine_account(brnrd_url=url)
+    if machine is None:
+        return False
+    if "ambiguous" in machine:
+        print("[brnrd] several accounts on this machine are already paired:")
+        for candidate in machine["ambiguous"]:
+            print(
+                f"[brnrd]   {candidate['account_id']} — {candidate['home_root']}"
+            )
+        print("[brnrd] pick one and re-run:")
+        print(
+            f"[brnrd]   BRNRD_HOME=<home> {brnrd_cmd()} account connect"
+        )
+        print(
+            f"[brnrd] or pair a fresh account with `{brnrd_cmd()} account "
+            "connect --pair`"
+        )
+        raise SystemExit(2)
+    account_id = machine["account_id"]
+    # Resolve with an explicit id + account kind so the registry write lands
+    # in the home that owns this machine's pairing, not a project fallback.
+    cfg = dict(conf.load_config(repo_root))
+    cfg["account.id"] = account_id
+    cfg["home.kind"] = "account"
+    # Probe before creating: `resolve_context` writes this repo into the
+    # registry as a side effect and even returns it from a `create=False`
+    # read (`repos.setdefault`), so only the registry itself answers "is
+    # this repo already in the account" truthfully on a fresh folder.
+    already = account.repo_is_registered(machine["home_root"], repo_root)
+    ctx = account.resolve_context(repo_root, cfg, create=True)
+    label = account.repo_label(repo_root, conf.load_config(repo_root))
+    print(
+        f"[brnrd] this machine is already paired to account {account_id} "
+        "— reusing it"
+    )
+    if already:
+        print(f"[brnrd] {label} is already registered with that account")
+    else:
+        account.register_repo(ctx, repo_root, label=label, make_default=False)
+        print(
+            f"[brnrd] added {label} to the account home — no new pairing needed"
+        )
+        print(
+            f"to pair a different account instead: `{brnrd_cmd()} account "
+            "connect --pair`"
+        )
+    if not cloud.is_configured(brr_dir):
+        # Registration landed but this repo still resolves no cloud state —
+        # say nothing here and let the caller pair rather than report a
+        # wiring we could not verify.
+        return False
+    return True
 
 
 def _connect_memory(repo_root: Path, *, local_only: bool) -> None:
