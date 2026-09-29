@@ -1,0 +1,109 @@
+{
+  "machines": {
+    "seat": {
+      "start": "undispatched",
+      "states": [
+        {"id":"undispatched","summary":"No resident process owns the seat.","alive":["none"],"cost_to_stay":"zero","user_exits":["dispatch"],"terminal":false},
+        {"id":"running","summary":"The resident process is executing a turn.","alive":["process","context"],"cost_to_stay":"tokens-while-thinking","user_exits":["release","stop","halt"],"terminal":false},
+        {"id":"awaiting","summary":"The live process is blocked on an armed await lease.","alive":["process","context","lease"],"cost_to_stay":"zero","user_exits":["any message","release"],"terminal":false},
+        {"id":"held_operator","summary":"The process ended and an addressed reply is required.","alive":["context","hold"],"cost_to_stay":"zero","user_exits":["any message","release","respawn <core>"],"terminal":false},
+        {"id":"held_reset","summary":"The process ended until a measured reset or user reply.","alive":["context","hold"],"cost_to_stay":"zero","user_exits":["any message","release","respawn <core>"],"terminal":false},
+        {"id":"held_refill","summary":"Starvation parks the process until quota measurably refills.","alive":["context","hold"],"cost_to_stay":"zero","user_exits":["wait","stop","respawn <core>","force"],"terminal":false},
+        {"id":"held_strands","summary":"The process ended while a live owned strand works.","alive":["context","hold"],"cost_to_stay":"zero","user_exits":["any message","release"],"terminal":false},
+        {"id":"held_any","summary":"The resting seat waits for any addressed event.","alive":["context","hold"],"cost_to_stay":"zero","user_exits":["any message","release"],"terminal":false},
+        {"id":"held_raise","summary":"A stake cut parks the process until the user raises it.","alive":["context","hold"],"cost_to_stay":"zero","user_exits":["raise stake","stop","respawn <core>"],"terminal":false},
+        {"id":"successor_queued","summary":"A carried halt ended this seat and queued a fresh successor.","alive":["none"],"cost_to_stay":"zero","user_exits":["stop"],"terminal":false},
+        {"id":"released","summary":"The user ended the seat; later mail starts a new seat.","alive":["none"],"cost_to_stay":"zero","user_exits":[],"terminal":true},
+        {"id":"halted","summary":"An accepted halt permanently ended this run.","alive":["none"],"cost_to_stay":"zero","user_exits":[],"terminal":true}
+      ],
+      "transitions": [
+        {"from":"undispatched","to":"running","trigger":"dispatch/start","actor":"user","guard":"pending event admitted","cost":"cold-boot","code":"src/brr/daemon.py::_run_worker"},
+        {"from":"undispatched","to":"undispatched","trigger":"dev_reload","actor":"daemon","guard":"current is None and not active_spawns","cost":"free","code":"src/brr/daemon.py::start"},
+        {"from":"running","to":"awaiting","trigger":"await: true accepted","actor":"resident","guard":"directive parses and arms","cost":"tokens","code":"src/brr/daemon.py::_drain_outbox"},
+        {"from":"awaiting","to":"running","trigger":"await outcome:event","actor":"daemon","guard":"pending event exists","cost":"warm-resume","code":"src/brr/daemon.py::_resolve_await_state"},
+        {"from":"awaiting","to":"running","trigger":"await outcome:condition","actor":"daemon","guard":"optional file exists","cost":"warm-resume","code":"src/brr/await_verb.py::evaluate"},
+        {"from":"awaiting","to":"running","trigger":"await outcome:timeout","actor":"daemon","guard":"explicit deadline passed","cost":"warm-resume","code":"src/brr/daemon.py::_resolve_await_state"},
+        {"from":"awaiting","to":"running","trigger":"await outcome:timeout+initiative","actor":"daemon","guard":"idle, no live strand, and pacing ahead","cost":"warm-resume","code":"src/brr/daemon.py::_initiative_timeout"},
+        {"from":"awaiting","to":"awaiting","trigger":"await outcome:pending","actor":"resident","guard":"one call lease reached its ceiling","cost":"tokens","code":"src/brr/cli.py::cmd_await"},
+        {"from":"awaiting","to":"held_refill","trigger":"await outcome:park","actor":"provider","guard":"binding quota below starvation floor","cost":"free","code":"src/brr/daemon.py::_starvation_facet"},
+        {"from":"awaiting","to":"held_any","trigger":"await outcome:park","actor":"daemon","guard":"hold-cost parking opted in and cost ratio reached","cost":"free","code":"src/brr/daemon.py::_hold_ratio_facet"},
+        {"from":"running","to":"held_operator","trigger":"resume: operator","actor":"provider","guard":"usage limit ends the process","cost":"free","code":"src/brr/daemon.py::_maybe_arm_resource_hold_on_failure"},
+        {"from":"running","to":"held_reset","trigger":"resume: reset","actor":"resident","guard":"hold: true accepted on measured wall","cost":"free","code":"src/brr/daemon.py::_resident_hold_refusal"},
+        {"from":"running","to":"held_refill","trigger":"resume: refill","actor":"provider","guard":"binding quota below starvation floor","cost":"free","code":"src/brr/daemon.py::_starvation_facet"},
+        {"from":"running","to":"held_strands","trigger":"cut: accepted with live handoff","actor":"daemon","guard":"live child disposition is handoff","cost":"free","code":"src/brr/daemon.py::_park_bolt_on_live_strands"},
+        {"from":"running","to":"held_any","trigger":"cut: accepted","actor":"daemon","guard":"no live handoff and seat park-on-turn-end enabled","cost":"free","code":"src/brr/daemon.py::_park_seat_on_turn_end"},
+        {"from":"running","to":"held_any","trigger":"turn-end safety-net park","actor":"daemon","guard":"clean user-woken turn ends with no other hold","cost":"free","code":"src/brr/daemon.py::_park_seat_on_turn_end"},
+        {"from":"running","to":"held_raise","trigger":"resume: raise","actor":"daemon","guard":"stake reaches cut-at","cost":"free","code":"src/brr/daemon.py::_stake_hold_spec"},
+        {"from":"held_operator","to":"running","trigger":"release: operator","actor":"user","guard":"any addressed reply","cost":"warm-resume","code":"src/brr/daemon.py::_apply_resource_hold_resume"},
+        {"from":"held_reset","to":"running","trigger":"release: reset","actor":"daemon","guard":"measured reset deadline passed","cost":"warm-resume","code":"src/brr/daemon.py::_release_reset_holds_due"},
+        {"from":"held_reset","to":"running","trigger":"release: operator","actor":"user","guard":"any addressed reply","cost":"warm-resume","code":"src/brr/daemon.py::_apply_resource_hold_resume"},
+        {"from":"held_refill","to":"running","trigger":"release: refill","actor":"daemon","guard":"binding quota at or above refill floor","cost":"warm-resume","code":"src/brr/daemon.py::_release_reset_holds_due"},
+        {"from":"held_refill","to":"held_refill","trigger":"wait","actor":"user","guard":"starvation park remains armed","cost":"free","code":"src/brr/daemon.py::_refuse_starved_wake"},
+        {"from":"held_refill","to":"released","trigger":"stop","actor":"user","guard":"-","cost":"free","code":"src/brr/daemon.py::_apply_run_release"},
+        {"from":"held_refill","to":"running","trigger":"respawn <core>","actor":"user","guard":"different runner selected","cost":"cold-boot","code":"src/brr/daemon.py::_apply_run_respawn"},
+        {"from":"held_refill","to":"running","trigger":"force","actor":"user","guard":"exact word on the held conversation","cost":"warm-resume","code":"src/brr/daemon.py::_refuse_starved_wake"},
+        {"from":"held_strands","to":"running","trigger":"release: strands","actor":"strand","guard":"owned child emits submitted, completed, or allowance-requested","cost":"warm-resume","code":"src/brr/daemon.py::_strand_return_resumes_held_parent"},
+        {"from":"held_strands","to":"running","trigger":"release: operator","actor":"user","guard":"any addressed reply","cost":"warm-resume","code":"src/brr/daemon.py::_apply_resource_hold_resume"},
+        {"from":"held_any","to":"running","trigger":"release: any","actor":"daemon","guard":"message, owned strand return, or schedule event","cost":"warm-resume","code":"src/brr/daemon.py::_handle_resource_held_events"},
+        {"from":"held_any","to":"held_any","trigger":"dev_reload","actor":"daemon","guard":"current is None and not active_spawns","cost":"free","code":"src/brr/daemon.py::start"},
+        {"from":"held_raise","to":"running","trigger":"release: raise","actor":"user","guard":"new stake cut-at exceeds spent","cost":"warm-resume","code":"src/brr/daemon.py::_raise_stake_at_cut"},
+        {"from":"held_raise","to":"released","trigger":"stop","actor":"user","guard":"-","cost":"free","code":"src/brr/daemon.py::_apply_run_release"},
+        {"from":"held_raise","to":"running","trigger":"respawn <core>","actor":"user","guard":"different runner selected","cost":"cold-boot","code":"src/brr/daemon.py::_apply_run_respawn"},
+        {"from":"running","to":"running","trigger":"halt: true bounced","actor":"daemon","guard":"first attempt leaves open items unnamed","cost":"tokens","code":"src/brr/daemon.py::_halt_open_items"},
+        {"from":"running","to":"successor_queued","trigger":"halt: true accepted with carry","actor":"resident","guard":"reason and carry supplied; bounce satisfied or capped","cost":"free","code":"src/brr/daemon.py::_queue_halt_successor"},
+        {"from":"successor_queued","to":"running","trigger":"successor dispatch/start","actor":"daemon","guard":"carried event admitted","cost":"cold-boot","code":"src/brr/daemon.py::_run_worker"},
+        {"from":"running","to":"halted","trigger":"halt: true accepted without carry","actor":"resident","guard":"reason and resumable supplied; bounce satisfied or capped","cost":"free","code":"src/brr/daemon.py::_finalize_halt"},
+        {"from":"running","to":"released","trigger":"release by user","actor":"user","guard":"-","cost":"free","code":"src/brr/daemon.py::_apply_run_release"}
+      ]
+    },
+    "strand": {
+      "start": "admitted",
+      "states": [
+        {"id":"admitted","summary":"The spawn contract passed admission.","alive":["none"],"cost_to_stay":"zero","user_exits":["stop"],"terminal":false},
+        {"id":"queued","summary":"The child event waits for a spawn-pool slot.","alive":["none"],"cost_to_stay":"zero","user_exits":["stop"],"terminal":false},
+        {"id":"running","summary":"The strand process is executing its bounded task.","alive":["process","context"],"cost_to_stay":"tokens-while-thinking","user_exits":["stop"],"terminal":false},
+        {"id":"allowance_requested","summary":"The strand asked its parent to enlarge its token allowance.","alive":["process","context"],"cost_to_stay":"per-boundary-warm-read","user_exits":["stop","allowance: +N"],"terminal":false},
+        {"id":"submitted","summary":"Produce is attested while the strand stays alive for review.","alive":["process","context"],"cost_to_stay":"zero","user_exits":["stop"],"terminal":false},
+        {"id":"stopped","summary":"The parent or user ended the strand.","alive":["none"],"cost_to_stay":"zero","user_exits":[],"terminal":true},
+        {"id":"completed","summary":"The strand ended and its completion event was emitted.","alive":["none"],"cost_to_stay":"zero","user_exits":[],"terminal":true}
+      ],
+      "transitions": [
+        {"from":"admitted","to":"queued","trigger":"spawn: true admitted","actor":"daemon","guard":"contract and concurrency checks pass","cost":"free","code":"src/brr/daemon.py::_queue_spawn_request"},
+        {"from":"admitted","to":"stopped","trigger":"stop: <id>","actor":"user","guard":"child not dispatched yet","cost":"free","code":"src/brr/daemon.py::_apply_run_stop"},
+        {"from":"queued","to":"running","trigger":"spawn dispatch/start","actor":"daemon","guard":"spawn-pool slot available","cost":"cold-boot","code":"src/brr/daemon.py::_run_worker"},
+        {"from":"queued","to":"stopped","trigger":"stop: <id>","actor":"user","guard":"child not dispatched yet","cost":"free","code":"src/brr/daemon.py::_apply_run_stop"},
+        {"from":"running","to":"allowance_requested","trigger":"ask: allowance +N","actor":"strand","guard":"one-line reason and positive delta","cost":"tokens","code":"src/brr/daemon.py::_queue_allowance_ask"},
+        {"from":"allowance_requested","to":"running","trigger":"allowance: +N","actor":"user","guard":"parent sends to: grant","cost":"warm-resume","code":"src/brr/daemon.py::_apply_allowance_grant"},
+        {"from":"allowance_requested","to":"stopped","trigger":"stop: <id>","actor":"user","guard":"-","cost":"free","code":"src/brr/daemon.py::_apply_run_stop"},
+        {"from":"running","to":"submitted","trigger":"submit: true","actor":"strand","guard":"declared branch and report are stat-able","cost":"tokens","code":"src/brr/daemon.py::_queue_submit_request"},
+        {"from":"submitted","to":"running","trigger":"to: <id>","actor":"user","guard":"parent steers follow-up work","cost":"warm-resume","code":"src/brr/daemon.py::_queue_child_message"},
+        {"from":"submitted","to":"stopped","trigger":"stop: <id>","actor":"user","guard":"parent releases submitted strand","cost":"free","code":"src/brr/daemon.py::_apply_run_stop"},
+        {"from":"running","to":"stopped","trigger":"stop: <id>","actor":"user","guard":"owned child control matches","cost":"free","code":"src/brr/daemon.py::_apply_run_stop"},
+        {"from":"running","to":"completed","trigger":"spawn_completed","actor":"strand","guard":"worker finalizes normally","cost":"free","code":"src/brr/daemon.py::_notify_spawn_parent"},
+        {"from":"submitted","to":"completed","trigger":"spawn_completed","actor":"strand","guard":"worker exits after submission","cost":"free","code":"src/brr/daemon.py::_notify_spawn_parent"}
+      ]
+    },
+    "await": {
+      "start": "unarmed",
+      "states": [
+        {"id":"unarmed","summary":"No wait generation is armed.","alive":["process","context"],"cost_to_stay":"tokens-while-thinking","user_exits":["brnrd await"],"terminal":false},
+        {"id":"armed","summary":"The daemon evaluates events, file, and deadline each heartbeat.","alive":["process","context","lease"],"cost_to_stay":"zero","user_exits":["any message","release"],"terminal":false},
+        {"id":"pending","summary":"The call lease ended while the daemon-side wait remains armed.","alive":["process","context"],"cost_to_stay":"per-boundary-warm-read","user_exits":["brnrd await","release"],"terminal":false},
+        {"id":"resolved_event","summary":"A pending event won and returned control to the resident.","alive":["none"],"cost_to_stay":"zero","user_exits":[],"terminal":true},
+        {"id":"resolved_condition","summary":"The optional file appeared with no event ahead of it.","alive":["none"],"cost_to_stay":"zero","user_exits":[],"terminal":true},
+        {"id":"resolved_timeout","summary":"An explicit or initiative deadline elapsed.","alive":["none"],"cost_to_stay":"zero","user_exits":[],"terminal":true},
+        {"id":"parked","summary":"A resource wall or opted-in hold-cost rule ended the lease.","alive":["hold"],"cost_to_stay":"zero","user_exits":[],"terminal":true}
+      ],
+      "transitions": [
+        {"from":"unarmed","to":"armed","trigger":"await: true","actor":"resident","guard":"timeout present or explicitly none","cost":"tokens","code":"src/brr/await_verb.py::parse_await"},
+        {"from":"armed","to":"resolved_event","trigger":"outcome:event","actor":"daemon","guard":"pending event exists; outranks file","cost":"warm-resume","code":"src/brr/await_verb.py::evaluate"},
+        {"from":"armed","to":"resolved_condition","trigger":"outcome:condition","actor":"daemon","guard":"optional file exists and no event is pending","cost":"warm-resume","code":"src/brr/await_verb.py::evaluate"},
+        {"from":"armed","to":"resolved_timeout","trigger":"outcome:timeout","actor":"daemon","guard":"explicit deadline elapsed","cost":"warm-resume","code":"src/brr/daemon.py::_resolve_await_state"},
+        {"from":"armed","to":"resolved_timeout","trigger":"outcome:timeout+initiative","actor":"daemon","guard":"bare wait is idle, strandless, and pacing ahead","cost":"warm-resume","code":"src/brr/daemon.py::_initiative_timeout"},
+        {"from":"armed","to":"parked","trigger":"outcome:park","actor":"provider","guard":"starvation or opted-in hold-cost park","cost":"free","code":"src/brr/daemon.py::_starvation_facet"},
+        {"from":"armed","to":"pending","trigger":"outcome:pending","actor":"daemon","guard":"call ceiling or Shell cap reached before resolution","cost":"warm-resume","code":"src/brr/cli.py::cmd_await"},
+        {"from":"pending","to":"armed","trigger":"brnrd await (call again)","actor":"resident","guard":"daemon wait still stands","cost":"tokens","code":"src/brr/cli.py::cmd_await"}
+      ]
+    }
+  }
+}
