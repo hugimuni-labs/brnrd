@@ -1,5 +1,7 @@
 import { fuelRows, type FuelRow } from './railGauge.ts';
 import type { QuotaShell } from './quota.ts';
+import type { RunnerProfile } from './runners.ts';
+import { groupByShell } from './spoolRack.ts';
 
 // design-resident-field.md §"Settings, fuel, and the next dispatch": fuel
 // groups by **harness provider** (`claude`, `codex` — the Shell family a
@@ -121,9 +123,10 @@ function bindingIndex(meters: FuelMeter[]): number {
  */
 export function fuelProviderGroups(
 	shells: QuotaShell[],
-	nowMs: number = Date.now()
+	nowMs: number = Date.now(),
+	profiles: RunnerProfile[] = []
 ): FuelProviderGroup[] {
-	return shells.map((shell) => {
+	const groups = shells.map((shell) => {
 		const provider = shell.shell;
 		const rows = fuelRows([shell], nowMs);
 		const meters: FuelMeter[] = rows.map((row) => ({ ...row, ...meterScope(row, provider) }));
@@ -141,4 +144,11 @@ export function fuelProviderGroups(
 
 		return { provider, primary, secondary, meters };
 	});
+	// The row also opens the model picker. Missing quota cannot remove a
+	// runnable shell's only dispatch control; no meter is invented for it.
+	for (const group of groupByShell(profiles)) {
+		if (group.allUnavailable || groups.some((row) => row.provider === group.shell)) continue;
+		groups.push({ provider: group.shell, primary: null, secondary: [], meters: [] });
+	}
+	return groups;
 }

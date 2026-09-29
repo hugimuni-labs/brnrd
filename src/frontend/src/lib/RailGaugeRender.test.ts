@@ -18,7 +18,7 @@ const generated = join(here, '.railGauge.generated.mjs');
 // a provider row — since 2026-08-28 the bench's handle lives with the bench,
 // above the rail, not on this footline.
 async function renderGauge(props: {
-	runners: null;
+	runners: null | { profiles: Array<Record<string, unknown>> };
 	shells: null | Array<Record<string, unknown>>;
 
 	openProvider?: string | null;
@@ -268,4 +268,16 @@ test('the row reads the window that binds, not the one that happens to be weekly
 		/class="fuel-fill[^"]*" style="width: 4%/u.test(body),
 		'and the bar draws the same number the row prints'
 	);
+});
+
+test('Vibe dispatch remains reachable without a quota response or quota window', async () => {
+	for (const shells of [null, []]) {
+		const html = await renderGauge({
+			runners: { profiles: [{ name: 'vibe-glm-5-3', shell: 'vibe', available: true }] },
+			shells
+		});
+		ok(html.includes('vibe — open its windows and cores'));
+		ok(html.includes('vibe: no quota report'));
+		ok(!html.includes('fuel-fill'), 'unknown allowance must not become a zero-percent bar');
+	}
 });

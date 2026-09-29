@@ -629,9 +629,11 @@
 	let openProviderGroup = $derived(
 		openProvider === null
 			? null
-			: (fuelProviderGroups(availableQuotaShells(shells ?? [], runnersData?.profiles)).find(
-					(group) => group.provider === openProvider
-				) ?? null)
+			: (fuelProviderGroups(
+					availableQuotaShells(shells ?? [], runnersData?.profiles),
+					Date.now(),
+					runnersData?.profiles
+				).find((group) => group.provider === openProvider) ?? null)
 	);
 	function onProviderToggle(provider: string) {
 		// One open at a time — several would grow the page the way the fixed
