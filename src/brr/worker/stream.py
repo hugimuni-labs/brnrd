@@ -191,6 +191,7 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
         if presence_id:
             presence.heartbeat(
                 brr_dir, presence_id,
+                registered_entry=p.presence_entry,
                 name=run_ledger.read_run_name_control(outbox_dir) or "",
                 mood=run_ledger.read_run_mood_control(outbox_dir) or "",
                 topics=run_ledger.read_run_topics_control(outbox_dir) or [],
@@ -397,6 +398,7 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
             try:
                 presence.heartbeat(
                     brr_dir, presence_id,
+                    registered_entry=p.presence_entry,
                     runner_model_observed=result.observed_core,
                 )
             except OSError:
