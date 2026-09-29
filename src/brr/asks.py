@@ -221,6 +221,24 @@ def _says_from_run_files(files: Iterable[tuple[str, str]]) -> dict[str, list[dic
     return out
 
 
+def _says_index(files: list[tuple[str, str]]) -> dict[str, Any] | None:
+    """The mirrored ``surface/warp/says/index.md`` (ids + home URL, no text)."""
+    from . import says as says_mod
+
+    for path, text in files:
+        if path == says_mod.INDEX_PATH:
+            return says_mod.parse_index(text)
+    return None
+
+
+def _say_url(index: dict[str, Any] | None, event_id: str) -> str | None:
+    if not index:
+        return None
+    from . import says as says_mod
+
+    return says_mod.say_url(index, event_id)
+
+
 def build_asks(
     files: Iterable[tuple[str, str]],
     *,
@@ -242,6 +260,7 @@ def build_asks(
     now = now or _dt.datetime.now(_dt.timezone.utc)
     horizon = now - _dt.timedelta(days=stale_after_days)
     run_says = _says_from_run_files(files)
+    say_index = _says_index(files)
     asks: list[dict[str, Any]] = []
     done: list[dict[str, Any]] = []
     goals: list[dict[str, Any]] = []
@@ -260,13 +279,17 @@ def build_asks(
         parsed = _parse_markdown(item_id, text)
         rows = parsed["rows"]
         events = _split(rows.get("says", ""))
-        says = [{"event": e, "at": None, "excerpt": None} for e in events]
+        says = [
+            {"event": e, "at": None, "excerpt": None, "url": _say_url(say_index, e)}
+            for e in events
+        ]
         header_events = set(events)
         for extra in run_says.get(item_id, []):
             # Only dedupe against what the header already declares — two
             # binding rows naming the same event (a repeated `--item`
             # bind) are two says, not one; `brnrd asks` counts the acts.
             if extra["event"] not in header_events:
+                extra.setdefault("url", _say_url(say_index, extra["event"]))
                 says.append(extra)
         attempts = list(dict.fromkeys(_split(rows.get("attempts", "")) + _split(rows.get("taken", ""))))
         stamps = [
@@ -673,14 +696,33 @@ def mark_in_hand(warp_root: Path | None, item_id: str, *, run_id: str) -> bool:
     return changed
 
 
-def stamp_say(warp_root: Path | None, item_id: str, event_id: str) -> bool:
+def stamp_say(
+    warp_root: Path | None,
+    item_id: str,
+    event_id: str,
+    *,
+    repo_roots: Iterable[Path] = (),
+    part: str | None = None,
+) -> bool:
     """Append *event_id* to the item's ``says:`` row, idempotently — the
     same row ``accept``/``reroute`` stamp (:func:`apply_inbound_directive`)
     and the one ``build_asks`` reads first. Returns whether the file
-    changed; ``False`` (never raises) when the item is unresolvable."""
+    changed; ``False`` (never raises) when the item is unresolvable.
+
+    With *repo_roots* (where conversation stores live), the message itself
+    is kept at home too — ``surface/warp/says/<evt>.md`` (:mod:`brr.says`),
+    the words the cloud stops holding once the message is answered."""
     path = items_mod.resolve_item(warp_root, item_id) if warp_root else None
     if path is None or not event_id:
         return False
+    roots = list(repo_roots)
+    if roots:
+        from . import says as says_mod
+
+        try:
+            says_mod.write_say(warp_root, event_id, roots, item_id=item_id, part=part)
+        except Exception:  # noqa: BLE001 - the say row below is the contract; the file is best-effort
+            pass
     lines = items_mod._edit_lines(path)
     if lines is None:
         return False
