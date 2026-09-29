@@ -430,6 +430,7 @@ def prepare(
     # Best-effort: presence is a hint, never a gate. Deregistered in
     # _run_worker_and_finalize's finally; the heartbeat closure refreshes it.
     presence_id: str | None = None
+    presence_entry: dict | None = None
     try:
         live_run_label = daemon._presence_label_for_event(event)
         # Same fields, same derivation as the closed-run ledger row
@@ -438,7 +439,7 @@ def prepare(
         # it (not the parent-id truthiness alone) is the ledger's own
         # is_subspawn source of truth; mirrored here rather than
         # re-derived differently.
-        presence_id = presence.register(
+        presence_entry = presence.register(
             brr_dir, kind="daemon", stream=conv_key, run_id=task.id,
             repo_label=repo_label, label=live_run_label,
             parent_run_id=task.meta.get("spawn_parent_run_id") or None,
@@ -451,7 +452,8 @@ def prepare(
             runner_shell=task.meta.get("runner_shell") or None,
             runner_core=task.meta.get("runner_core") or None,
             runner_class=task.meta.get("runner_class") or None,
-        )["id"]
+        )
+        presence_id = presence_entry["id"]
         task.meta["presence_id"] = presence_id
     except OSError:
         presence_id = None
@@ -1104,6 +1106,7 @@ def prepare(
         emit=emit,
         task=task,
         presence_id=presence_id,
+        presence_entry=presence_entry,
         shuttle_home=shuttle_home,
         branch_plan=branch_plan,
         env_backend=env_backend,
