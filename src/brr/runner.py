@@ -1417,6 +1417,13 @@ class ShellHelp:
 #: selection, and the product's first-impression surface must not recommend
 #: installing an integration the catalog no longer treats as first-class.
 SHELL_HELP: dict[str, ShellHelp] = {
+    "vibe": ShellHelp(
+        shell="vibe",
+        label="Mistral Vibe",
+        blurb="Mistral's terminal agent; uses Vibe's saved login or an API key.",
+        docs_url="https://github.com/mistralai/mistral-vibe",
+        install_hint="uv tool install mistral-vibe",
+    ),
     "claude": ShellHelp(
         shell="claude",
         label="Claude Code",
