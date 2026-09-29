@@ -590,6 +590,64 @@ def is_configured(brr_dir: Path) -> bool:
     )
 
 
+def machine_account(*, brnrd_url: str | None = None) -> dict | None:
+    """A valid already-paired account on this machine, or ``None``.
+
+    Machine-level pairing lives in the account homes under the state root,
+    invisible to the repo-level reads a new folder makes — this is the
+    machine-side discovery behind account reuse. ``BRNRD_HOME`` wins
+    outright when set: that home is the only candidate, valid or not.
+    Otherwise each account home is read through the lawful state path and
+    validity is ``is_configured``'s own shape (token + ``brnrd_url`` +
+    ``account_id``), so "valid" cannot drift from "configured".
+
+    Exactly one valid account is returned. Several are never silently
+    chosen: the return carries ``{"ambiguous": [...]}`` naming each
+    candidate so the caller can stop and let the human pick
+    (``BRNRD_HOME=<path> brnrd account connect``). ``brnrd_url`` narrows
+    discovery to accounts paired to that server — an account on another
+    server is not the account a connect aimed at this one wants.
+    """
+    from .. import account as account_mod
+
+    raw_home = os.environ.get("BRNRD_HOME", "").strip()
+    if raw_home:
+        candidates = [Path(os.path.expandvars(raw_home)).expanduser()]
+    else:
+        try:
+            candidates = sorted(
+                path / "home"
+                for path in (account_mod.state_root() / "accounts").iterdir()
+            )
+        except OSError:
+            return None
+
+    valid: list[dict] = []
+    for home_root in candidates:
+        state_dir = home_root / "account"
+        state = _load_state_from_dir(state_dir)
+        if not (
+            state.get("token")
+            and state.get("brnrd_url")
+            and state.get("account_id")
+        ):
+            continue
+        if brnrd_url is not None and state["brnrd_url"] != brnrd_url.rstrip("/"):
+            continue
+        valid.append({
+            "account_id": str(state["account_id"]),
+            "brnrd_url": str(state["brnrd_url"]),
+            "home_root": home_root,
+            "state_dir": state_dir,
+        })
+
+    if not valid:
+        return None
+    if len(valid) == 1:
+        return valid[0]
+    return {"ambiguous": valid}
+
+
 def addressed(fm: Mapping[str, object]) -> bool:
     """True when *fm* carries a reply-shaped cloud address (a ``cloud_event_id``).
 

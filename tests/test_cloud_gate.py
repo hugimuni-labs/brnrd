@@ -711,6 +711,102 @@ def test_connect_never_lowers_the_poll_cursor(tmp_path, monkeypatch):
     assert cloud._load_state(brr_dir)["since"] == 4211
 
 
+def _machine_account_home(tmp_path, monkeypatch, account_id="acct_x"):
+    """An account home with a valid machine-level pairing in it."""
+    from brr import account as account_mod
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    first = tmp_path / "first-repo"
+    init_git_repo(first)
+    ctx = account_mod.resolve_context(
+        first, {"account.id": account_id, "home.kind": "account"}, create=True,
+    )
+    home = account_mod.context_home_root(ctx)
+    cloud._save_state_to_dir(home / "account", {
+        "brnrd_url": "http://brnrd",
+        "account_id": account_id,
+        "repo_id": "proj_x",
+        "token": "bd_tok",
+    })
+    return home
+
+
+def test_machine_account_finds_a_paired_account_a_new_folder_cannot_see(
+    tmp_path, monkeypatch,
+):
+    """The reader behind account reuse (2026-09-29): a new folder resolved no
+    account — the registry reverse lookup only matches *registered* repos —
+    so the machine's own valid pairing was invisible to every repo-level
+    read (`is_configured` included). Discovery is machine-side and validates
+    the same shape `is_configured` does, so "valid" cannot drift from
+    "configured"."""
+    home = _machine_account_home(tmp_path, monkeypatch)
+
+    found = cloud.machine_account()
+
+    assert found is not None
+    assert found["account_id"] == "acct_x"
+    assert found["brnrd_url"] == "http://brnrd"
+    assert found["home_root"] == home
+    assert (found["state_dir"] / "gates" / "cloud.json").exists()
+
+
+def test_machine_account_returns_none_on_an_unpaired_machine(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    assert cloud.machine_account() is None
+
+
+def test_machine_account_never_picks_one_of_several_silently(
+    tmp_path, monkeypatch,
+):
+    """Two valid accounts on one machine are the human's choice: discovery
+    returns `ambiguous` naming both, and the caller decides — never the
+    first sorted one."""
+    _machine_account_home(tmp_path, monkeypatch, account_id="acct_x")
+    _machine_account_home(tmp_path, monkeypatch, account_id="acct_y")
+
+    found = cloud.machine_account()
+
+    assert "ambiguous" in found
+    ids = {cand["account_id"] for cand in found["ambiguous"]}
+    assert ids == {"acct_x", "acct_y"}
+
+
+def test_machine_account_brnrd_home_wins_over_the_scan(tmp_path, monkeypatch):
+    """An explicit BRNRD_HOME is the whole candidate set: it resolves the
+    ambiguity itself, and holds even when it points at no valid pairing —
+    no silent fall-through to the scan."""
+    home_x = _machine_account_home(tmp_path, monkeypatch, account_id="acct_x")
+    _machine_account_home(tmp_path, monkeypatch, account_id="acct_y")
+
+    monkeypatch.setenv("BRNRD_HOME", str(home_x))
+    assert cloud.machine_account()["account_id"] == "acct_x"
+
+    monkeypatch.setenv("BRNRD_HOME", str(tmp_path / "nowhere"))
+    assert cloud.machine_account() is None
+
+
+def test_machine_account_skips_invalid_and_mismatched_accounts(
+    tmp_path, monkeypatch,
+):
+    """A home without a token is a restore, not a pairing — and an account
+    paired to another server is not the account a connect aimed at this
+    one wants."""
+    home = _machine_account_home(tmp_path, monkeypatch, account_id="acct_other")
+    # strip the token: the identity survives in cloud.json, the pairing does not
+    cloud._token_path(home / "account").unlink()
+
+    assert cloud.machine_account() is None
+
+    # restored token, but a different server: visible unfiltered, invisible
+    # through the URL filter a caller with a target server passes.
+    cloud._write_token(home / "account", "bd_tok")
+    assert cloud.machine_account() is not None
+    assert cloud.machine_account(brnrd_url="http://other") is None
+
+
 def test_loop_persists_the_server_fingerprint(tmp_path, monkeypatch):
     """What prod is actually running rides the inbox long-poll the gate
     already drains (2026-07-30 task) — no new request, and the daemon
@@ -5099,7 +5195,7 @@ def _connect_args(**over):
     base = dict(
         url_option=None, url="http://brnrd.example", daemon_name="testbox",
         local_memory=False, no_service=True, defaults=False,
-        no_linger=True, yes_linger=False,
+        no_linger=True, yes_linger=False, pair=False,
     )
     base.update(over)
     return SimpleNamespace(**base)
