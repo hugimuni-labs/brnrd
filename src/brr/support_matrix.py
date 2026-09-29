@@ -215,20 +215,15 @@ def hosted_status(target: Door | str, settings: _SettingsLike) -> str:
 # Shells
 # ---------------------------------------------------------------------------
 
-# Not exposed over an endpoint the way doors are: both bundled shells are
-# always live (no live/soon axis, unlike doors — every Shell that ships in
-# the registry is immediately runnable by anyone with that CLI on PATH), and
-# they are already asserted as static prose two lines above the shelf in
-# ``Landing.svelte`` ("runs on Claude Code and Codex"). Re-deriving that at
-# request time would add a fetch + loading state for two names that do not
-# drift the way door status does. What *can* drift is the roster itself —
-# a third bundled shell provider landing with no shelf entry — so this map
-# is what a test pins against instead: ``test_support_matrix.py`` asserts
-# it covers every shell id ``runner_cores`` actually bundles, and fails
-# loudly (not silently) the day that stops being true.
+# Shell availability is local (the CLI must be on PATH); the landing lists
+# bundled integrations, not a claim about a visitor's installed tools. Keep
+# this label map and the frontend shelf aligned with the Core registry.
+# test_bundled_shells_are_all_labeled catches a newly bundled shell that
+# has not reached the support surface yet.
 SHELL_LABELS: dict[str, str] = {
     "claude": "Claude Code",
     "codex": "Codex",
+    "vibe": "Mistral Vibe",
 }
 
 
