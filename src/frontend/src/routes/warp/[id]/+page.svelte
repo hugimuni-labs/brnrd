@@ -37,6 +37,40 @@
 	let faces = $derived(topicFaces(graph));
 	/** Corpus paths in this surface — needed for MarkdownContent's link resolver. */
 	let knownPaths = $derived(new Set((data?.files ?? []).map((f) => f.path)));
+	// Step 2: a say kept at home is read through the server *in passing*
+	// (`/v1/dashboard/warp/says/<evt>`, no-store) and rendered here; the ↗
+	// beside it is the fallback when that read cannot happen.
+	let openSay = $state<string | null>(null);
+	let sayBodies = $state<Record<string, { markdown?: string; error?: string }>>({});
+
+	/** The say file's words only — its provenance head (`at · from · items`)
+	 *  is already on the chip, and rendered as prose it read as one mashed line. */
+	function sayBodyOnly(markdown: string): string {
+		const cut = markdown.indexOf('\n---\n');
+		return cut === -1 ? markdown : markdown.slice(cut + 5).trim();
+	}
+
+	async function toggleSay(evtId: string) {
+		if (openSay === evtId) {
+			openSay = null;
+			return;
+		}
+		openSay = evtId;
+		if (sayBodies[evtId]?.markdown) return;
+		try {
+			const res = await fetch(`/v1/dashboard/warp/says/${encodeURIComponent(evtId)}`, {
+				credentials: 'include',
+				cache: 'no-store'
+			});
+			const body = await res.json();
+			sayBodies[evtId] = res.ok
+				? { markdown: String(body.markdown ?? '') }
+				: { error: String(body.detail ?? `read failed: ${res.status}`) };
+		} catch (e) {
+			sayBodies[evtId] = { error: e instanceof Error ? e.message : 'read failed' };
+		}
+	}
+
 	/** Says kept at home (brr/says.py) — ids + home URL only; the words stay in git. */
 	let saysIndex = $derived(
 		parseSaysIndex((data?.files ?? []).find((f) => f.path === SAYS_INDEX_PATH)?.markdown)
@@ -136,16 +170,28 @@
 								{@const at = eventTime(evtId)}
 								{@const home = sayHomeUrl(saysIndex, evtId)}
 								{#if home}
-									<!-- the message lives in the home repo, never on the server -->
-									<!-- eslint-disable svelte/no-navigation-without-resolve -->
-									<a
-										href={home}
-										target="_blank"
-										rel="noopener noreferrer"
-										class="rounded border border-sky-900/60 bg-stone-950 px-1.5 py-0.5 font-mono text-[10px] text-sky-300 hover:text-sky-100"
-										title={at ? `${evtId} · ${at}` : evtId}>{touchedLabel(at) || '—'} · {short} ↗</a
-									>
-									<!-- eslint-enable svelte/no-navigation-without-resolve -->
+									<span class="inline-flex items-baseline">
+										<button
+											type="button"
+											class="rounded-l border border-sky-900/60 bg-stone-950 px-1.5 py-0.5 font-mono text-[10px] {openSay ===
+											evtId
+												? 'text-sky-100'
+												: 'text-sky-300'} hover:text-sky-100"
+											title={at ? `${evtId} · ${at}` : evtId}
+											aria-expanded={openSay === evtId}
+											onclick={() => toggleSay(evtId)}
+											data-say-toggle>{touchedLabel(at) || '—'} · {short}</button
+										>
+										<!-- eslint-disable svelte/no-navigation-without-resolve -->
+										<a
+											href={home}
+											target="_blank"
+											rel="noopener noreferrer"
+											class="rounded-r border border-l-0 border-sky-900/60 bg-stone-950 px-1 py-0.5 font-mono text-[10px] text-sky-300 hover:text-sky-100"
+											aria-label="open this message on the home repo">↗</a
+										>
+										<!-- eslint-enable svelte/no-navigation-without-resolve -->
+									</span>
 								{:else}
 									<span
 										class="rounded border border-stone-800 bg-stone-950 px-1.5 py-0.5 font-mono text-[10px] text-stone-400"
@@ -155,6 +201,20 @@
 								{/if}
 							{/each}
 						</div>
+						{#if openSay}
+							{@const said = sayBodies[openSay]}
+							<div class="mt-2 border-l-2 border-sky-900/60 pl-3 font-sans text-sm" data-say-body>
+								{#if said?.markdown}
+									<MarkdownContent markdown={sayBodyOnly(said.markdown)} />
+								{:else if said?.error}
+									<p class="font-mono text-[11px] text-ink-quiet">
+										{said.error} — the ↗ opens it on the home repo.
+									</p>
+								{:else}
+									<p class="font-mono text-[11px] text-ink-quiet">reading it from home…</p>
+								{/if}
+							</div>
+						{/if}
 					</div>
 				{/if}
 				{#if item.attempts.length > 0 || item.taken.length > 0}
