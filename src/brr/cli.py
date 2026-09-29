@@ -107,7 +107,7 @@ HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "emotes",
     "relic", "gate-run", "close-check", "promise", "act", "mood", "do", "notes",
     "await", "cut", "legend", "item", "asks", "goal", "queue", "envoy",
-    "dominion", "hud", "loom",
+    "dominion", "hud", "loom", "states",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -604,6 +604,12 @@ def build_parser() -> argparse.ArgumentParser:
     # calls this instead of grepping `hooks.py` for `BAR_SEGMENTS`.
     p = sub.add_parser("legend")
     p.set_defaults(func=cmd_legend)
+
+    # Hidden: an inspectable engineering artifact, not an everyday operator
+    # verb. Bare renders all machines; ``check`` verifies it against source.
+    p = sub.add_parser("states")
+    p.add_argument("machine", nargs="?", choices=("seat", "strand", "await", "check"))
+    p.set_defaults(func=cmd_states)
 
     # Hidden per HIDDEN_COMMANDS — the resident's front door onto the
     # `.relics.jsonl` produce manifest, the same "control file with a command
@@ -2209,6 +2215,26 @@ def cmd_legend(args):
     for segment in hooks.BAR_SEGMENTS:
         print(f"{segment.glyph} · {segment.key} · {segment.klass} — {segment.meaning}")
     print(f"✉? · pending_unknown · {hooks.WAITING} — {_PENDING_UNKNOWN_MEANING}")
+    return 0
+
+
+def cmd_states(args):
+    """Render or check the checked seat/strand/await state artifact."""
+    from . import states
+
+    if args.machine == "check":
+        problems = states.check(_repo_root())
+        if problems:
+            for problem in problems:
+                print(problem)
+            return 1
+        print("states: ok")
+        return 0
+    names = (args.machine,) if args.machine else tuple(states.load()["machines"])
+    for index, name in enumerate(names):
+        if index:
+            print()
+        print(states.render_mermaid(name), end="")
     return 0
 
 
