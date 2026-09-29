@@ -45,7 +45,7 @@ def test_supported_rejects_other_shells(name):
     assert not vibe_status.supported(name)
 
 
-def test_load_levels_reports_measured_plan_and_unknown_allowance(tmp_path, monkeypatch):
+def test_load_levels_reports_cached_plan_and_unavailable_allowance(tmp_path, monkeypatch):
     monkeypatch.setenv("VIBE_HOME", str(tmp_path))
     at = int(time.time()) - 60
     _write_cache(tmp_path, {"2f966a92630978610867251fc16b30ab": _entry(at)})
@@ -54,7 +54,9 @@ def test_load_levels_reports_measured_plan_and_unknown_allowance(tmp_path, monke
     quota = levels["quota"]
     summary = quota["summary"]
     assert "INDIVIDUAL" in summary and "chat" in summary
-    assert "unknown" in summary
+    # Cached metadata, explicitly not an active-billing claim.
+    assert "cached" in summary and "not active billing" in summary
+    assert "unavailable from this cache" in summary
     # No guessed number: no percent, no reset, no "unlimited".
     assert "%" not in summary and "unlimited" not in summary
     # The measurement date is the cache entry's own clock.
@@ -62,15 +64,25 @@ def test_load_levels_reports_measured_plan_and_unknown_allowance(tmp_path, monke
     assert levels["source"] == "vibe-whoami-cache"
 
 
-def test_load_levels_picks_the_freshest_entry(tmp_path, monkeypatch):
+def test_load_levels_two_unrelated_cached_keys_read_ambiguous(tmp_path, monkeypatch):
+    """Regression for the parent's review (2026-09-29): the cache is keyed by
+    a credential hash, and the active credential cannot be proven passively —
+    so two unrelated cached keys must never resolve to "the freshest entry is
+    this account". Plan facts of either entry are claimed for neither."""
     monkeypatch.setenv("VIBE_HOME", str(tmp_path))
     _write_cache(tmp_path, {
-        "aaa": _entry(1000, plan_name="OLD"),
-        "bbb": _entry(2000, plan_name="NEW"),
+        "2f966a92630978610867251fc16b30ab": _entry(1000, plan_name="OLDKEY"),
+        "f00dcafef00dcafef00dcafef00dcafe": _entry(int(time.time()), plan_name="NEWKEY"),
     })
     levels = vibe_status.load_levels()
-    assert "NEW" in levels["quota"]["summary"]
-    assert "OLD" not in levels["quota"]["summary"]
+    summary = levels["quota"]["summary"]
+    assert "ambiguous" in summary and "2 cached credentials" in summary
+    assert "unavailable from this cache" in summary
+    # Neither entry's plan is claimed — not even the freshest one's.
+    assert "NEWKEY" not in summary and "OLDKEY" not in summary
+    assert "unproven" in summary
+    # The ambiguous reading binds nothing, same as the unknown one.
+    assert runner_quota.binding_quota_remaining_pct(levels) is None
 
 
 def test_load_levels_stale_entry_is_marked_not_served_fresh(tmp_path, monkeypatch):
@@ -130,7 +142,7 @@ def test_daemon_collect_supported_renders_known_quota_and_unimplemented_rest(
     assert slots == frozenset({"quota"})
     res = facets.build(levels=levels, levels_collector=slots)
     assert res["quota"]["status"] == "known"
-    assert "unknown" in res["quota"]["summary"]
+    assert "unavailable from this cache" in res["quota"]["summary"]
     assert res["spend"]["status"] == "unimplemented"
     assert res["context_window"]["status"] == "unimplemented"
 
@@ -175,5 +187,5 @@ def test_quota_summary_parses_to_no_chip_bucket():
     from brr import hooks
 
     facet = {"quota": {"status": "known",
-                       "summary": "vibe plan INDIVIDUAL / chat; monthly allowance unknown — no key-authenticated quota endpoint; measured 2026-09-29T20:35:11Z"}}
+                       "summary": "vibe cached plan INDIVIDUAL / chat (cached metadata, not active billing); remaining allowance unavailable from this cache; cached 2026-09-29T20:35:11Z"}}
     assert hooks._quota_buckets(facet) == []

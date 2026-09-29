@@ -1,29 +1,38 @@
 """Vibe whoami-cache plan collector — the level-facet source for the Vibe Shell.
 
-**No key-authenticated quota endpoint exists for Vibe's monthly allowance.**
-Measured 2026-09-29 (``.brr/reports/vibe-quota-wire-1d0h.md``): the whoami
-route answers the saved API key with plan facts only — no usage, allowance,
+**The monthly allowance is not readable from any route probed.** Measured
+2026-09-29 (``.brr/reports/vibe-quota-wire-1d0h.md``): the whoami route
+answers the saved API key with plan facts only — no usage, allowance,
 remaining, or reset field anywhere in the raw response — and every guessed
 console sibling (``/api/vibe/{usage,quota,subscription,allowance,limits,plans}``)
-returns 401 from auth middleware before routing, so no key-authenticated
-access exists at any of those paths either. The only authenticated quota
+returned 401 from auth middleware before routing, so no key-authenticated
+endpoint was identified among the routes tried. What this collector states is
+the honest, cache-scoped claim: **the remaining allowance is unavailable from
+this cache** — never that no endpoint exists anywhere.
+
+The only authenticated quota
 fields found anywhere on the wire are per-minute RPM/TPM headers on a chat
 completion, which (a) cost a real completion to read and (b) measure
 headroom against a 500k tokens/minute transport limit, not the monthly
 pool — collecting them here would spend the subscription to mislabel a
 rate limit as quota. So this collector is deliberately **passive**: it reads
-the plan facts Vibe already measured, and renders the monthly allowance as
-explicitly unknown — never a percent, never a reset, never "unlimited".
+the cached plan facts and states the remaining allowance as unavailable from
+this cache — never a percent, never a reset, never "unlimited".
 
 The reading is Vibe's own whoami cache (``$VIBE_HOME/whoami_cache.json``,
 default ``~/.vibe``), which the CLI refreshes on its own 6h TTL, keyed by a
-hash of the API key. That key and the payload's ``customer_id`` are read
-past and **never copied into the snapshot** — the levels carry plan facts
-only.
+hash of the API key (``sha256(api_key)`` — ``setup/auth/whoami.py``), so a
+cache entry identifies a *credential*, and the collector cannot prove which
+keyed entry is the active one without reading the keychain secret — which it
+will never do just for telemetry. Consequence, held here: **a single cached
+entry's plan facts are stated as cached metadata, not active billing**, and
+**multiple keyed entries read as ambiguous** — the active credential is
+unproven, so no entry's plan is claimed. The hashed keys and the payload's
+``customer_id`` are read past and **never copied into the snapshot**.
 
 Honesty rules, matching the shared levels contract:
 
-- **measured and dated** — the chosen entry's ``stored_at_timestamp`` is the
+- **measured and dated** — the cached entry's ``stored_at_timestamp`` is the
   reading's own clock, carried as ``quota.updated_at`` (the stamp
   ``daemon._levels_measured_at`` prefers), not the moment brnrd read it;
 - **stale vs missing** — an entry older than Vibe's own TTL renders a
@@ -97,8 +106,9 @@ def load_levels(
     Never touches the network and never raises: a missing, malformed, or
     plan-less cache is "no reading" (the collector is wired, so the facet
     reads ``absent``), never a crash and never a fabricated summary.
-    Multiple keyed entries can exist (one per hashed API key); the freshest
-    by ``stored_at_timestamp`` wins.
+    Multiple keyed entries can exist (one per hashed API key); the active
+    credential cannot be proven passively, so more than one entry renders
+    an explicit ambiguous reading rather than claiming any entry's plan.
     """
     try:
         raw = json.loads(cache_path(env).read_text(encoding="utf-8"))
@@ -107,35 +117,48 @@ def load_levels(
     if not isinstance(raw, dict) or not raw:
         return None
 
-    best: tuple[float, str | None, str | None] | None = None
-    for entry in raw.values():
-        if not isinstance(entry, dict):
-            continue
-        payload = entry.get("payload")
-        if not isinstance(payload, dict):
-            continue
-        plan_type = str(payload.get("plan_type") or "").strip().lower() or None
-        plan_name = str(payload.get("plan_name") or "").strip() or None
-        if not plan_type and not plan_name:
-            continue
-        at = _epoch(entry.get("stored_at_timestamp"))
-        key = at if at is not None else -1.0
-        if best is None or key > best[0]:
-            best = (key, plan_type, plan_name)
-    if best is None:
+    # The active credential cannot be proven passively (proving it would
+    # mean reading the keychain secret just for telemetry), so more than one
+    # keyed entry is an explicit ambiguous reading: no entry's plan facts
+    # are claimed — including not "the freshest one".
+    if len(raw) > 1:
+        return {
+            "source": SOURCE,
+            "quota": {
+                "summary": (
+                    f"vibe plan ambiguous — {len(raw)} cached credentials, "
+                    "active one unproven; remaining allowance unavailable "
+                    "from this cache"
+                ),
+            },
+        }
+
+    entry = next(iter(raw.values()))
+    if not isinstance(entry, dict):
+        return None
+    payload = entry.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    plan_type = str(payload.get("plan_type") or "").strip().lower() or None
+    plan_name = str(payload.get("plan_name") or "").strip() or None
+    if not plan_type and not plan_name:
         return None
 
-    measured_at, plan_type, plan_name = best
     plan = " / ".join(part for part in (plan_name, plan_type) if part)
-    summary = f"vibe plan {plan}; monthly allowance unknown — no key-authenticated quota endpoint"
+    summary = (
+        f"vibe cached plan {plan} "
+        "(cached metadata, not active billing); "
+        "remaining allowance unavailable from this cache"
+    )
     levels: dict[str, object] = {"source": SOURCE}
     quota: dict[str, object] = {"summary": summary}
-    if measured_at > 0:
+    measured_at = _epoch(entry.get("stored_at_timestamp"))
+    if measured_at is not None:
         stamp = _iso(measured_at)
         quota["updated_at"] = stamp
         levels["updated_at"] = stamp
         age = (time.time() if now is None else now) - measured_at
         stale = " (stale)" if age > WHOAMI_TTL_SECONDS else ""
-        quota["summary"] = f"{summary}; measured {stamp}{stale}"
+        quota["summary"] = f"{summary}; cached {stamp}{stale}"
     levels["quota"] = quota
     return levels

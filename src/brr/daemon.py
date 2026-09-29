@@ -3966,11 +3966,13 @@ def _collect_levels(
       result normalized by :mod:`claude_status` carries spend + context
       accounting. The TUI scrape is intentionally throttled; hooks read the
       portal-state snapshot, they do not run the scrape themselves.
-    - **vibe** — no key-authenticated quota endpoint exists for the monthly
-      allowance, so there is no number to probe for: :mod:`vibe_status`
-      passively reads Vibe's own whoami cache for the plan facts it already
-      measured and renders the allowance as explicitly unknown. No network,
-      no completion probe, nothing to refresh — the *refresh* flag is
+    - **vibe** — the monthly allowance is not readable from any route probed,
+      so there is no number to probe for: :mod:`vibe_status` passively reads
+      Vibe's own whoami cache and renders the cached plan facts (dated,
+      stale-marked past the CLI's own TTL; ambiguous when more than one
+      credential is cached and the active one is unproven) with the remaining
+      allowance stated as unavailable from this cache. No network, no
+      completion probe, nothing to refresh — the *refresh* flag is
       meaningless on this seam, and the reading never blocks anything
       (``binding_quota_remaining_pct`` finds no numeric field in it).
 
