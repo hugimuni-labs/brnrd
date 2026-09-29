@@ -4052,6 +4052,12 @@ def _collect_levels(
         return merged, frozenset(
             claude_usage.COLLECTED_SLOTS | claude_status.COLLECTED_SLOTS
         )
+    from . import vibe_usage
+
+    if vibe_usage.supported(runner_name):
+        # Terminal per-session tokens feed the ledger. Subscription allowance,
+        # dollar spend and context capacity have no collector on this seam.
+        return vibe_usage.load_levels(outbox_dir), frozenset()
     return None, False
 
 

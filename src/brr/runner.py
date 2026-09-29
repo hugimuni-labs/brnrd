@@ -2699,8 +2699,12 @@ def _process_runner_stdout(
     (``claude_status.supported``); a plain-text runner has no envelope to
     read this from, and this never invents one.
     """
-    from . import claude_status
+    from . import claude_status, vibe_usage
 
+    if vibe_usage.supported(runner_name):
+        payload = vibe_usage.load_invocation(env)
+        model = payload.get("model") if payload else None
+        return stdout, model if isinstance(model, str) and model else None, False
     if not claude_status.supported(runner_name):
         return stdout, None, False
     reply, observed_core = claude_status.capture_stdout_with_model(stdout, env)
