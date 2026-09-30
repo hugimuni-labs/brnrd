@@ -215,6 +215,52 @@ class TestRefusedWake:
         partial = _partials(target.responses_dir, "evt-human")
         assert "1.7%" in partial and "`respawn <core>`" in partial and "`force`" in partial
 
+    @pytest.mark.parametrize("alternate_pct, expected", [(42.0, True), (0.0, False), (None, False)])
+    def test_pending_dashboard_tap_is_judged_before_the_starvation_bounce(
+        self, tmp_path, monkeypatch, alternate_pct, expected,
+    ):
+        from brr import wake_request
+        from brr.gates import cloud
+
+        held = self._starved_run(tmp_path)
+        held.meta.update({"runner": "codex", "runner_name": "codex", "runner_shell": "codex"})
+        held.meta["resource_hold"]["quota"]["runner"] = "codex"
+        held.save()
+        target = self._target(tmp_path, "evt-human-tap")
+        home = tmp_path / "home"
+        ctx = daemon.account.AccountContext(
+            account_id="test", dominion_repo=home,
+            dispatch_inbox=target.inbox_dir, responses_dir=target.responses_dir,
+            runs_dir=home / "runs", repos={},
+            default_repo=daemon.account.AccountRepo(label="test/repo", root=tmp_path),
+        )
+        wake_request.store_pending(tmp_path / ".brr", {"request_id": "wake_new_opus"})
+        claims = []
+        def claim(*args, **kwargs):
+            claims.append(kwargs)
+            return {"request_id": "wake_new_opus", "status": "consumed",
+                    "apply": True, "profile": "claude-opus"}
+        monkeypatch.setattr(cloud, "claim_wake_request", claim)
+        monkeypatch.setattr(daemon.conf, "write_daemon_config", lambda *a, **k: home / "daemon.config")
+        monkeypatch.setattr(daemon, "_held_run_binding_pct", lambda *a, **k: 0.0)
+        row = daemon.runner.runner_profile("claude-opus", tmp_path).portal_metadata()
+        row["availability"] = "available"
+        monkeypatch.setattr(daemon.runner, "available_runner_catalog", lambda *a, **k: [row])
+        monkeypatch.setattr(daemon, "_collect_levels", lambda *a, **k: ({
+            "quota": {"buckets": {"session": {"remaining_percentage": alternate_pct}}},
+        }, True))
+
+        survivors = daemon._handle_resource_held_events([target], ctx)
+
+        assert len(claims) == 1
+        assert target.event["runner"] == "claude-opus"
+        assert bool(survivors) is expected
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / held.id / "run.md")
+        assert persisted.meta["resource_hold"]["released"] is expected
+        # The ordinary dispatch seam must not spend this tap twice.
+        daemon._apply_dashboard_wake_request(target, ctx, tmp_path)
+        assert len(claims) == 1
+
     def test_the_gate_delivers_the_kept_answer_while_the_event_stays_pending(
         self, tmp_path, monkeypatch,
     ):
