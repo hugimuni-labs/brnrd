@@ -579,6 +579,25 @@ def _publish_config(brr_dir: Path) -> dict:
         return {}
 
 
+def _state_dir_for_cloud(brr_dir: Path) -> Path:
+    """Resolve the account-owned gate-state directory for cloud, matching
+    ``cloud._state_dir`` so health/wake-request files land beside cloud.json."""
+    from .. import account as account_mod, config as conf
+
+    if (brr_dir / "account" / "gates" / "cloud.json").exists():
+        return brr_dir / "account"
+
+    repo_root = brr_dir.parent
+    cfg = conf.load_config(repo_root)
+    try:
+        ctx = account_mod.resolve_context(repo_root, cfg, create=False)
+    except Exception:
+        return brr_dir
+    if ctx.kind != "account":
+        return brr_dir
+    return account_mod.context_home_root(ctx) / "account"
+
+
 def _run_file_date(path: str) -> datetime | None:
     """The run-dir date encoded in a runs-layer corpus path, if any."""
     for part in path.split("/"):
@@ -1520,7 +1539,7 @@ def _runners_snapshot(brr_dir: Path) -> dict[str, Any]:
     # can never advertise a promise dispatch no longer honours. None when
     # absent/expired — the mirror clears on the next publish tick.
     sticky = wake_request.live_sticky_view(
-        brr_dir, wake_request.sticky_ttl_seconds(cfg)
+        _state_dir_for_cloud(brr_dir), wake_request.sticky_ttl_seconds(cfg)
     )
     return {
         "profiles": profiles,
@@ -1555,14 +1574,14 @@ def _publish_runners(brr_dir: Path, inbox_dir: Path | None, state: dict, respons
     # decides anything about a tap. See src/brr/wake_request.py.
     pending = body.get("pending_wake_request") if isinstance(body, dict) else None
     wake_request.store_pending(
-        brr_dir, pending if isinstance(pending, dict) else None,
+        _state_dir_for_cloud(brr_dir), pending if isinstance(pending, dict) else None,
     )
     # #932's exit tap: the dashboard asked for the conversation-sticky to be
     # dropped. Tense-guarded (a sticky claimed after the ask survives it);
     # the next publish tick reports sticky=None, which is what retires the
     # ask server-side — no second ack channel.
     release_at = body.get("sticky_release_at") if isinstance(body, dict) else None
-    if release_at and wake_request.release_sticky(brr_dir, release_at):
+    if release_at and wake_request.release_sticky(_state_dir_for_cloud(brr_dir), release_at):
         print("[brnrd:cloud] conversation-sticky released by dashboard ask")
 
 

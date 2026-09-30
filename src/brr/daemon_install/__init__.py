@@ -315,6 +315,29 @@ def _print_gate_health(brr_dir: Path | None) -> None:
     if not rows:
         print("[brnrd] gates: none configured")
         return
+    # In account mode, cloud gate health is written to the account home,
+    # not to the repo's .brr/gates/ — merge the two reads so the status
+    # reflects the actual inbox polling health (#cloud-poll-health-recovery).
+    # The gate_health_rows above reads repo-local; account health lives at
+    # <account-home>/account/gates/cloud.health.json.
+    from brr import account as account_mod, config as conf, gitops
+    try:
+        repo_root = brr_dir.parent
+        cfg = conf.load_config(repo_root)
+        ctx = account_mod.resolve_context(repo_root, cfg, create=False)
+        if ctx.kind == "account":
+            account_brr_dir = account_mod.context_home_root(ctx) / "account"
+            account_rows = runtime.gate_health_rows(account_brr_dir)
+            # Build a map for quick lookup
+            merged: dict[str, dict] = {row["gate"]: row for row in rows}
+            for row in account_rows:
+                if row["gate"] in merged:
+                    # Account health takes precedence for the cloud gate
+                    if row["gate"] == "cloud":
+                        merged[row["gate"]] = row
+            rows = list(merged.values())
+    except Exception:
+        pass
     print("[brnrd] gates:")
     for row in rows:
         age = "never" if row["age_seconds"] is None else f'{row["age_seconds"]}s ago'

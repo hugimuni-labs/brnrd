@@ -957,7 +957,7 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         try:
             _try_refresh_publishing_credential(_load_state(brr_dir), brr_dir=brr_dir)  # noqa: F821 — bound by the _COMPAT_NAMES re-export above
             _loop_once(brr_dir, inbox_dir, responses_dir)
-            runtime.record_loop_health(brr_dir, "cloud", ok=True)
+            runtime.record_loop_health(_state_dir(brr_dir), "cloud", ok=True)
             backoff = 1
             auth_backoff = _AUTH_RETRY_MIN_S
             if not registered:
@@ -976,12 +976,12 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             # daemon. Retrying at a slow cadence costs one request per five
             # minutes and keeps a genuinely bad token loudly visible instead
             # of silently terminal.
-            runtime.record_loop_health(brr_dir, "cloud", ok=False, error=str(e))
+            runtime.record_loop_health(_state_dir(brr_dir), "cloud", ok=False, error=str(e))
             print(f"[brnrd:cloud] auth failed: {e}, retrying in {auth_backoff}s")
             time.sleep(auth_backoff)
             auth_backoff = min(auth_backoff * 2, _AUTH_RETRY_CAP_S)
         except Exception as e:
-            runtime.record_loop_health(brr_dir, "cloud", ok=False, error=str(e))
+            runtime.record_loop_health(_state_dir(brr_dir), "cloud", ok=False, error=str(e))
             print(f"[brnrd:cloud] error: {e}, retrying in {backoff}s")
             time.sleep(backoff)
             backoff = min(backoff * 2, 120)
