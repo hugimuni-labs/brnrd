@@ -1,0 +1,647 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>brnrd — first hire</title>
+<!--
+  "Your first hire doesn't have to be a hire." A 55 s, 1080x1920, 30 fps
+  motion piece for small-business owners. Every frame is a pure function of
+  time: window.render(t) poses the whole stage, render.mjs screenshots it
+  frame by frame. Open with ?t=23.4 to inspect a single moment.
+-->
+<style>
+:root{
+  --butter:#F6E7A7; --powder:#BFDDF2; --ice:#EEF7FC; --off:#FFFDF5; --ink:#36576A;
+  --ink2:#6F8C9C; --pale:#E3ECF1; --coral:#E7765F; --leaf:#7DAE8B; --bar:#8EC3E6;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1080px;height:1920px;overflow:hidden;background:var(--off)}
+body{font-family:"Avenir Next","Avenir",system-ui,sans-serif;color:var(--ink);-webkit-font-smoothing:antialiased}
+#stage{position:absolute;inset:0;overflow:hidden}
+.layer{position:absolute;inset:0}
+.a{position:absolute;left:0;top:0;transform-origin:50% 50%}
+.txt{white-space:nowrap;text-align:center;line-height:1.05;letter-spacing:-.005em}
+.lbl{font-weight:800;letter-spacing:.14em;color:var(--ink2)}
+.hl{background-image:linear-gradient(var(--butter),var(--butter));background-repeat:no-repeat;
+    background-position:0 90%;background-size:0% 40%;padding:0 .06em;border-radius:.08em}
+.hl.w{background-image:linear-gradient(var(--off),var(--off))}
+.card{background:#fff;border-radius:28px;
+      box-shadow:0 14px 34px rgba(54,87,106,.11),0 2px 6px rgba(54,87,106,.07)}
+svg{display:block}
+.ic svg,.pi svg,.ti svg{width:60%;height:60%;fill:none;stroke:var(--ink);stroke-width:3.2;stroke-linecap:round;stroke-linejoin:round}
+
+/* the face: brnrd set as type, awake frame b^n^d */
+.face{font-weight:800;letter-spacing:.02em;white-space:nowrap;color:var(--ink);line-height:1}
+
+/* pill: a job */
+.pill{display:flex;align-items:center;gap:16px;padding:14px 30px 14px 16px;min-height:92px;
+      border-radius:26px;font-size:30px;font-weight:800;letter-spacing:.04em;white-space:nowrap;line-height:1.05}
+.pill .pi{width:60px;height:60px;border-radius:18px;background:var(--ice);display:grid;place-items:center;flex:none}
+.nd{position:absolute;right:-14px;top:-14px;min-width:42px;height:42px;border-radius:21px;background:var(--coral);
+    color:#fff;font-size:21px;font-weight:800;display:grid;place-items:center;border:4px solid var(--off);
+    padding:0 7px;transform:scale(0);letter-spacing:0}
+.nd.ok{background:var(--butter);color:var(--ink)}
+.nd svg{width:22px;height:22px;fill:none;stroke:var(--ink);stroke-width:5;stroke-linecap:round;stroke-linejoin:round}
+
+/* task card: a piece of work with state */
+.task{display:flex;align-items:center;gap:22px;padding:0 28px 0 22px;overflow:visible}
+.task .glow{position:absolute;inset:0;border-radius:inherit;background:var(--butter);opacity:0}
+.task>*:not(.glow){position:relative}
+.task .ti{width:64px;height:64px;border-radius:18px;background:var(--ice);display:grid;place-items:center;flex:none}
+.task .t1{font-size:30px;font-weight:800;letter-spacing:.04em;white-space:nowrap}
+.task .t2{font-size:23px;font-weight:600;color:var(--ink2);margin-top:3px;white-space:nowrap}
+.task .ts{margin-left:auto;display:grid;justify-items:end}
+.task .ts span{grid-area:1/1;height:42px;padding:0 16px;border-radius:21px;font-size:19px;font-weight:800;
+      letter-spacing:.1em;display:flex;align-items:center;white-space:nowrap}
+.task .p{background:var(--ice);color:var(--ink2)}
+.task .f{background:var(--butter);color:var(--ink)}
+.task .bar{position:absolute!important;left:108px;right:28px;bottom:12px;height:6px;border-radius:3px;background:var(--ice);overflow:hidden;opacity:0}
+.task .bar i{display:block;height:100%;width:0;background:var(--bar);border-radius:3px}
+.task .ck{position:absolute!important;right:-14px;top:-14px;width:46px;height:46px;border-radius:50%;background:var(--butter);
+      box-shadow:0 4px 10px rgba(54,87,106,.15);display:grid;place-items:center;transform:scale(0)}
+.task .ck svg{width:26px;height:26px;fill:none;stroke:var(--ink);stroke-width:5;stroke-linecap:round;stroke-linejoin:round}
+.task.sm{flex-direction:column;align-items:flex-start;justify-content:center;gap:6px;padding:0 22px}
+.task.sm .t1{font-size:26px}
+.task.sm .ts{margin-left:0;justify-items:start}
+.task.sm .ts span{height:32px;font-size:16px;padding:0 12px}
+.task.sm .bar{left:150px;right:22px;bottom:25px}
+
+/* profile + chip: the coworker */
+.prof{display:flex;align-items:center;gap:34px;padding:0 44px}
+.prof .av{width:200px;height:200px;border-radius:44px;background:var(--ice);display:grid;place-items:center;flex:none}
+.prof .av .face{font-size:46px}
+.prof .nm{font-size:84px;font-weight:800;letter-spacing:-.01em;line-height:.95}
+.prof .rl{font-size:30px;font-weight:800;letter-spacing:.16em;color:var(--ink2);margin-top:10px}
+.stat{display:inline-flex;align-items:center;gap:10px;margin-top:16px;background:var(--ice);border-radius:22px;
+      padding:6px 18px 6px 14px;font-size:22px;font-weight:800;letter-spacing:.12em}
+.stat i{width:14px;height:14px;border-radius:50%;background:var(--leaf);display:block}
+.chip{display:flex;align-items:center;gap:18px;padding:0 26px 0 16px}
+.chip .av{width:96px;height:84px;border-radius:22px;background:var(--ice);display:grid;place-items:center;flex:none}
+.chip .av .face{font-size:21px}
+.chip .nm{font-size:40px;font-weight:800;line-height:1}
+.chip .stat{margin-top:6px;font-size:16px;padding:4px 12px 4px 10px;gap:8px}
+.chip .stat i{width:10px;height:10px}
+.chip .deck{position:absolute;left:18px;right:18px;height:100%;top:0;border-radius:28px;background:#fff;
+      box-shadow:0 6px 16px rgba(54,87,106,.10);z-index:-1;opacity:0}
+
+.counter{background:var(--powder);border-radius:10px 10px 0 0}
+.counter .lip{position:absolute;left:-24px;right:-24px;top:-16px;height:32px;border-radius:16px;background:var(--ink)}
+.msg{padding:34px 44px}
+.msg .h{font-size:22px;font-weight:800;letter-spacing:.14em;color:var(--ink2);margin-bottom:14px}
+.msg::before{content:"";position:absolute;left:54px;top:-14px;width:30px;height:30px;background:#fff;transform:rotate(45deg);border-radius:6px}
+.price{display:flex;align-items:center;gap:30px;padding:0 44px 0 34px}
+.price .ic{width:112px;height:112px;border-radius:32px;background:var(--ice);display:grid;place-items:center;flex:none}
+.price .n{font-size:40px;font-weight:800;letter-spacing:.03em}
+.price .s{font-size:25px;font-weight:600;color:var(--ink2);margin-top:4px}
+.price .v{margin-left:auto;text-align:right;white-space:nowrap}
+.price .v b{font-size:66px;font-weight:800;letter-spacing:-.01em}
+.price .v span{display:block;font-size:24px;font-weight:800;letter-spacing:.14em;color:var(--ink2);margin-top:-4px}
+.row{display:flex;align-items:center;gap:18px;font-size:29px;font-weight:700;white-space:nowrap;width:440px}
+.row .dotc{width:38px;height:38px;border-radius:50%;background:var(--butter);display:grid;place-items:center;flex:none}
+.row .dotc svg{width:22px;height:22px;fill:none;stroke:var(--ink);stroke-width:5;stroke-linecap:round;stroke-linejoin:round}
+.row .arr{width:38px;height:38px;border-radius:50%;background:var(--powder);display:grid;place-items:center;flex:none;font-size:24px}
+.buyers{display:flex}
+.buyers .b{width:54px;height:54px;border-radius:50%;border:4px solid var(--butter);margin-left:-14px;overflow:hidden;display:block}
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<script>
+// ───────────────────────── maths ─────────────────────────
+const clamp=(x,a=0,b=1)=>x<a?a:x>b?b:x;
+const E={
+  lin:x=>x,
+  out:x=>1-Math.pow(1-x,3),
+  in:x=>x*x*x,
+  io:x=>x<.5?4*x*x*x:1-Math.pow(-2*x+2,3)/2,
+  back:x=>{const c1=1.35,c3=c1+1;return 1+c3*Math.pow(x-1,3)+c1*Math.pow(x-1,2)},
+};
+const P=(u,a,d,e=E.out)=>e(clamp((u-a)/d));
+const L=(a,b,k)=>a+(b-a)*k;
+const hex=h=>[1,3,5].map(i=>parseInt(h.slice(i,i+2),16));
+const mix=(a,b,k)=>{const A=hex(a),B=hex(b);return `rgb(${A.map((v,i)=>Math.round(L(v,B[i],k))).join(',')})`};
+
+// ───────────────────────── dom ─────────────────────────
+const stage=document.getElementById('stage');
+function mk(parent,cls,html='',css={}){const e=document.createElement('div');e.className=cls;e.innerHTML=html;Object.assign(e.style,css);parent.appendChild(e);return e}
+function T(parent,html,size,weight=800,css={}){return mk(parent,'a txt',html,Object.assign({fontSize:size+'px',fontWeight:weight},css))}
+function fit(e,max){const w=e.offsetWidth;if(w>max)e.style.fontSize=parseFloat(e.style.fontSize)*max/w+'px';return e}
+function put(e,x,y,s=1,o=1,r=0,sy){
+  e.style.transform=`translate(${x.toFixed(2)}px,${y.toFixed(2)}px) translate(-50%,-50%) rotate(${r.toFixed(2)}deg) scale(${s.toFixed(4)},${(sy??s).toFixed(4)})`;
+  e.style.opacity=clamp(o).toFixed(3);e.style.visibility=o<=0.002?'hidden':'visible';
+}
+function hl(e,k,sel='.hl'){e.querySelectorAll(sel).forEach(h=>h.style.backgroundSize=`${(k*100).toFixed(1)}% 40%`)}
+function setText(e,s){if(e.textContent!==s)e.textContent=s}
+const layer=()=>mk(stage,'layer');
+
+// ───────────────────────── drawings ─────────────────────────
+const I=(d)=>`<svg viewBox="0 0 48 48">${d}</svg>`;
+const ICON={
+  post:I('<rect x="8" y="8" width="32" height="32" rx="9"/><circle cx="24" cy="24" r="7"/><circle cx="33" cy="15" r="1.6" fill="currentColor"/>'),
+  web:I('<rect x="6" y="9" width="36" height="30" rx="5"/><path d="M6 17h36"/><circle cx="11.5" cy="13" r="1" /><circle cx="16" cy="13" r="1"/>'),
+  mail:I('<rect x="6" y="11" width="36" height="26" rx="5"/><path d="M8 14l16 12 16-12"/>'),
+  bag:I('<path d="M10 16h28l-2 24H12z"/><path d="M18 16v-3a6 6 0 0 1 12 0v3"/>'),
+  ask:I('<path d="M8 12a4 4 0 0 1 4-4h24a4 4 0 0 1 4 4v16a4 4 0 0 1-4 4H22l-8 7v-7h-2a4 4 0 0 1-4-4z"/><path d="M20 16a4 4 0 1 1 5 4c-1 .5-1 1.5-1 2.5"/><circle cx="24" cy="27" r=".8"/>'),
+  folder:I('<path d="M6 14a4 4 0 0 1 4-4h9l4 4h15a4 4 0 0 1 4 4v16a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4z"/>'),
+  invoice:I('<path d="M12 6h18l8 8v28H12z"/><path d="M30 6v8h8"/><path d="M18 24h12M18 31h12"/>'),
+  box:I('<path d="M8 16l16-8 16 8v18l-16 8-16-8z"/><path d="M8 16l16 8 16-8M24 24v18"/>'),
+  star:I('<path d="M24 7l5 10.5 11.5 1.5-8.5 8 2 11.5L24 33l-10 5.5 2-11.5-8.5-8L19 17.5z"/>'),
+  news:I('<rect x="7" y="8" width="34" height="32" rx="5"/><path d="M14 17h20M14 24h20M14 31h12"/>'),
+  truck:I('<path d="M4 14h24v18H4zM28 20h8l6 6v6H28"/><circle cx="12" cy="35" r="3.5"/><circle cx="34" cy="35" r="3.5"/>'),
+  cal:I('<rect x="7" y="10" width="34" height="30" rx="5"/><path d="M7 18h34M16 6v8M32 6v8"/>'),
+  pen:I('<path d="M30 8l10 10-20 20H10V28z"/><path d="M26 12l10 10"/>'),
+  tart:I('<path d="M8 28h32l-3 10a3 3 0 0 1-3 2H14a3 3 0 0 1-3-2z"/><circle cx="17" cy="22" r="4"/><circle cx="26" cy="20" r="4"/><circle cx="33" cy="23" r="3.5"/>'),
+  people:I('<circle cx="18" cy="17" r="6"/><path d="M7 38c0-7 5-11 11-11s11 4 11 11"/><circle cx="33" cy="19" r="5"/><path d="M31 27c6 0 10 4 10 10"/>'),
+  brush:I('<path d="M38 8L21 25"/><path d="M20 26c-5 0-8 3-8 8s-3 6-6 6c8 3 18 1 18-7z"/>'),
+  flag:I('<path d="M12 42V8"/><path d="M12 9h22l-4 7 4 7H12"/>'),
+  bell:I('<path d="M14 32V22a10 10 0 0 1 20 0v10l3 4H11z"/><path d="M21 40a3 3 0 0 0 6 0"/>'),
+  home:I('<path d="M8 22L24 9l16 13"/><path d="M12 19v20h24V19"/><path d="M21 39v-9h6v9"/>'),
+  list:I('<rect x="9" y="6" width="30" height="36" rx="5"/><path d="M16 16h16M16 24h16M16 32h10"/>'),
+  bread:I('<path d="M8 26c0-9 7-14 16-14s16 5 16 14v10H8z"/><path d="M17 20l3 5M24 18l2 6M31 20l1 5"/>'),
+  cro:I('<path d="M6 30c4-10 12-16 18-16s14 6 18 16l-7 3-5-9-6 11-6-11-5 9z"/>'),
+};
+const CHECK='<svg viewBox="0 0 48 48"><path d="M13 25l7 7 15-16"/></svg>';
+
+function person({apron=true,skin='#EFC8A6',hair='#8A6F5E',shirt='#36576A',bun=false}={}){
+  const hairPath=bun
+    ?`<circle cx="150" cy="44" r="24" fill="${hair}"/><path d="M90 108 Q88 48 150 46 Q212 48 210 108 Q196 76 150 74 Q104 76 90 108Z" fill="${hair}"/>`
+    :`<path d="M88 106 Q90 42 150 42 Q212 42 212 106 Q192 70 150 70 Q108 70 88 106Z" fill="${hair}"/>`;
+  const front=apron
+    ?`<path d="M100 214 H200 V360 H100 Z" fill="#F6E7A7"/><path d="M108 216 Q150 150 192 216" stroke="#F6E7A7" stroke-width="10" fill="none"/><rect x="126" y="272" width="48" height="30" rx="8" fill="#EBD686"/>`
+    :`<path d="M122 182 L150 250 L178 182Z" fill="#FFFDF5"/><path d="M112 186 L150 262 L136 360 M188 186 L150 262 L164 360" stroke="#2C4757" stroke-width="5" fill="none" opacity=".45"/>`;
+  return `<svg viewBox="0 0 300 360" width="100%" height="100%">
+    <path d="M38 360 V252 Q38 186 104 178 H196 Q262 186 262 252 V360Z" fill="${shirt}"/>
+    <rect x="132" y="148" width="36" height="42" rx="12" fill="${skin}"/>
+    ${front}
+    <circle cx="150" cy="110" r="62" fill="${skin}"/>
+    ${hairPath}
+    <circle cx="116" cy="130" r="9" fill="#E7765F" opacity=".22"/><circle cx="184" cy="130" r="9" fill="#E7765F" opacity=".22"/>
+    <g class="eyes"><circle cx="129" cy="114" r="5.5" fill="#36576A"/><circle cx="171" cy="114" r="5.5" fill="#36576A"/></g>
+    <path d="M136 137 Q150 148 164 137" stroke="#36576A" stroke-width="4.5" fill="none" stroke-linecap="round"/>
+  </svg>`;
+}
+const BAKER=person();
+const REALTOR=person({apron:false,skin:'#C99A7A',hair:'#5F5A6A',shirt:'#6F8C9C',bun:true});
+function avatarCircle(parent,svg,bg,size=132){
+  return mk(parent,'a',`<div style="width:${size}px;height:${size}px;border-radius:50%;background:${bg};overflow:hidden;position:relative">
+     <div style="position:absolute;left:${-size*.19}px;top:${size*.1}px;width:${size*1.38}px;height:${size*1.66}px">${svg}</div></div>`);
+}
+const STRAWBERRY=`<svg viewBox="0 0 120 120" width="100%" height="100%">
+  <path d="M60 30 C95 30 108 52 100 76 C92 100 72 112 60 112 C48 112 28 100 20 76 C12 52 25 30 60 30Z" fill="#E7765F"/>
+  <g fill="#FFE9A8">${[[44,52],[62,48],[80,54],[38,72],[56,68],[74,70],[88,74],[48,88],[66,88],[58,102]].map(([x,y])=>`<ellipse cx="${x}" cy="${y}" rx="2.4" ry="3.6"/>`).join('')}</g>
+  <path d="M60 36 L42 20 L57 26 L60 8 L64 26 L80 18 L66 36Z" fill="#7DAE8B"/></svg>`;
+const PIN=`<svg viewBox="0 0 80 96" width="100%" height="100%"><path d="M40 4C20 4 6 18 6 38c0 24 34 54 34 54s34-30 34-54C74 18 60 4 40 4z" fill="#E7765F"/><circle cx="40" cy="37" r="13" fill="#FFFDF5"/></svg>`;
+const HOUSE=`<svg viewBox="0 0 320 300" width="100%" height="100%">
+  <rect width="320" height="300" rx="26" fill="#BFDDF2"/><circle cx="252" cy="70" r="30" fill="#F6E7A7"/>
+  <path d="M0 238 Q160 206 320 238 V274 a26 26 0 0 1-26 26 H26 A26 26 0 0 1 0 274Z" fill="#9CCBEA"/>
+  <path d="M84 136 L160 78 L236 136 V238 H84Z" fill="#FFFDF5"/>
+  <path d="M70 146 L160 76 L250 146" stroke="#36576A" stroke-width="9" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="140" y="176" width="40" height="62" rx="6" fill="#36576A"/>
+  <rect x="100" y="152" width="30" height="30" rx="5" fill="#BFDDF2"/><rect x="190" y="152" width="30" height="30" rx="5" fill="#BFDDF2"/></svg>`;
+const LOOP=`<svg viewBox="0 0 48 48" width="100%" height="100%" fill="none" stroke="#6F8C9C" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"><path d="M38 24a14 14 0 1 1-4.1-9.9"/><path d="M36 6v9h-9"/></svg>`;
+const buyerHead=(bg,skin,hair)=>`<svg viewBox="0 0 60 60" width="100%" height="100%"><rect width="60" height="60" fill="${bg}"/><circle cx="30" cy="25" r="11" fill="${skin}"/><path d="M19 22 Q20 11 30 11 Q40 11 41 22 Q36 16 30 16 Q24 16 19 22Z" fill="${hair}"/><path d="M10 60 Q12 40 30 40 Q48 40 50 60Z" fill="#36576A"/></svg>`;
+const BUYERS=`<div class="buyers">${[['#BFDDF2','#EFC8A6','#8A6F5E'],['#EEF7FC','#C99A7A','#5F5A6A'],['#FFFDF5','#E2B48F','#B08A60']].map((c,i)=>`<span class="b" style="${i?'':'margin-left:0'}">${buyerHead(...c)}</span>`).join('')}</div>`;
+
+// the coworker's face is type, not a picture: the awake frame b^n^d, blinking to b-n-d
+const FACE='<span class="face">b^n^d</span>';
+
+// ───────────────────────── shared components ─────────────────────────
+function pill(parent,label,icon,css={}){return mk(parent,'a card pill',`<span class="pi">${ICON[icon]}</span><span>${label}</span><span class="nd"></span>`,css)}
+function badge(e,k,text){const d=e.querySelector('.nd');if(text!==undefined)setText(d,text);d.style.transform=`scale(${Math.max(0,k).toFixed(3)})`}
+function badgeOk(e,k){const d=e.querySelector('.nd');if(!d.classList.contains('ok')){d.classList.add('ok');d.innerHTML=CHECK}d.style.transform=`scale(${Math.max(0,k).toFixed(3)})`}
+function task(parent,{title,sub='',icon,fin,w=820,h=108,sm=false}){
+  return mk(parent,'a card task'+(sm?' sm':''),`<div class="glow"></div>
+    ${sm?'':`<div class="ti">${ICON[icon]}</div>`}
+    <div class="tt"><div class="t1">${title}</div>${sub?`<div class="t2">${sub}</div>`:''}</div>
+    <div class="ts"><span class="p">TO DO</span><span class="f">${fin}</span></div>
+    <div class="bar"><i></i></div><div class="ck">${CHECK}</div>`,{width:w+'px',height:h+'px'});
+}
+// s < 0: to do · 0..1: working · >= 1: done (1 → 1.25 animates the landing)
+function setTask(e,s){
+  const q=e._q||(e._q={p:e.querySelector('.p'),f:e.querySelector('.f'),bar:e.querySelector('.bar'),i:e.querySelector('.bar i'),ck:e.querySelector('.ck')});
+  const done=clamp((s-1)/.25);
+  setText(q.p,s<0?'TO DO':'WORKING');
+  q.p.style.opacity=1-done;
+  q.f.style.opacity=done;q.f.style.transform=`scale(${L(.7,1,E.back(done)).toFixed(3)})`;
+  q.bar.style.opacity=(s>=0?1:0)*(1-done);q.i.style.width=(clamp(s)*100).toFixed(1)+'%';
+  q.ck.style.transform=`scale(${E.back(done).toFixed(3)})`;
+}
+const stageAt=(u,a,b,c=b)=>u<a?-1:u<b?(u-a)/(b-a):u<c?.999:1+(u-c);
+const glow=(e,k)=>{e.querySelector('.glow').style.opacity=k.toFixed(3)};
+
+// ───────────────────────── the scenes ─────────────────────────
+// Global time t in seconds. Each scene poses its own layer from u = t - t0,
+// and is only laid out inside its window.
+const SC=[];
+function scene(t0,win,init,update){const s={t0,win,init,update};SC.push(s);return s}
+
+// background colour, keyed on global time
+const BG=[[0,'#FFFDF5'],[5.8,'#FFFDF5'],[6.3,'#BFDDF2'],[12.2,'#BFDDF2'],[12.7,'#F6E7A7'],[16.1,'#F6E7A7'],[16.6,'#FFFDF5'],
+          [26.5,'#FFFDF5'],[27.0,'#EEF7FC'],[37.3,'#EEF7FC'],[37.8,'#FFFDF5'],[44.4,'#FFFDF5'],[44.9,'#BFDDF2'],[49.8,'#BFDDF2'],[50.2,'#FFFDF5']];
+function bgAt(t){for(let i=1;i<BG.length;i++){if(t<=BG[i][0]){const[a,ca]=BG[i-1],[b,cb]=BG[i];return mix(ca,cb,E.io(clamp((t-a)/(b-a))))}}return BG[BG.length-1][1]}
+
+// ── S1 · too many jobs (0–6) ──
+const S1C=[
+  ['INSTAGRAM','post',250,800,.45,23],['WEBSITE','web',835,785,.65,0],['EMAILS','mail',185,985,.85,12],
+  ['ORDERS','bag',895,975,1.05,4],['CUSTOMER<br>QUESTIONS','ask',215,1185,1.25,7],['ADMIN','folder',880,1170,1.45,0],
+  ['INVOICES','invoice',320,718,2.35,0],['SUPPLIERS','box',775,712,2.7,2],['REVIEWS','star',175,1400,3.05,0],
+  ['NEWSLETTER','news',880,1392,3.35,0],['DELIVERIES','truck',320,1545,3.65,3],['SCHEDULE','cal',780,1550,3.9,0],
+];
+const s1=scene(0,[-1,6.4],function(){
+  const R=this.R=layer();
+  this.owner=mk(R,'a',BAKER,{width:'300px',height:'360px'});
+  this.counter=mk(R,'a counter','<div class="lip"></div>',{width:'640px',height:'190px'});
+  this.loaf=mk(R,'a','<div class="ic" style="width:120px;height:120px;display:grid;place-items:center">'+ICON.bread+'</div>');
+  this.cro=mk(R,'a','<div class="ic" style="width:110px;height:110px;display:grid;place-items:center">'+ICON.cro+'</div>');
+  this.A1=T(R,'RUNNING A',92);this.A2=fit(T(R,'SMALL BUSINESS',92),960);
+  this.B1=T(R,'MEANS DOING',54,700);
+  this.B2=T(R,'<span class="hl">6 JOBS</span>',200);
+  this.B3=T(R,'AT ONCE.',78);
+  this.cards=S1C.map(c=>pill(R,c[0],c[1]));
+},function(u){
+  const kO=P(u,0,.6),kX=P(u,4.95,.45,E.io);
+  put(this.owner,540,1150+30*(1-kO),1.05*L(1,.9,kX),kO*(1-kX));
+  put(this.counter,540,1435+40*(1-P(u,0,.5)),1,P(u,0,.5)*(1-kX));
+  put(this.loaf,735,1296,E.back(P(u,.35,.45))*.9,P(u,.35,.2)*(1-kX));
+  put(this.cro,360,1300,E.back(P(u,.5,.45))*.9,P(u,.5,.2)*(1-kX));
+  const aX=P(u,2.2,.4,E.io);
+  put(this.A1,540,395+40*(1-P(u,.1,.6))-60*aX,1,P(u,.1,.5)*(1-aX));
+  put(this.A2,540,500+40*(1-P(u,.25,.6))-60*aX,1,P(u,.25,.5)*(1-aX));
+  const bX=P(u,5.0,.4,E.io);
+  put(this.B1,540,300+30*(1-P(u,2.45,.5))-50*bX,1,P(u,2.45,.4)*(1-bX));
+  put(this.B2,540,452-50*bX,L(.82,1,P(u,2.65,.6,E.back)),P(u,2.65,.3)*(1-bX));hl(this.B2,P(u,3.0,.55,E.io));
+  put(this.B3,540,592+30*(1-P(u,2.95,.5))-50*bX,1,P(u,2.95,.4)*(1-bX));
+  // the workload grows: cards arrive, neighbours get nudged, the ring tightens
+  const cx=540,cy=1120,tight=P(u,2.2,3,E.io);
+  this.cards.forEach((e,i)=>{
+    const [,,bx,by,ta,n]=S1C[i];
+    let x=cx+(bx-cx)*(1-.06*tight),y=cy+(by-cy)*(1-.06*tight);
+    for(let j=6;j<S1C.length;j++){const dt=u-S1C[j][4]-.3;if(j===i||dt<=0)continue;
+      const dx=bx-S1C[j][2],dy=by-S1C[j][3],d=Math.hypot(dx,dy)||1;
+      const amp=18*Math.exp(-5*dt)*Math.sin(12*dt)/(1+d/260);x+=dx/d*amp;y+=dy/d*amp}
+    const k=P(u,ta,.55,E.back);let r=((i*37)%7-3)*.9*tight;
+    y+=30*(1-P(u,ta,.55));
+    const kt=P(u,5.0+i*.025,.6,E.io);
+    x=L(x,540,kt);y=L(y,962+(i-5.5)*5,kt);r=L(r,0,kt);
+    put(e,x,y,L(.85,1,k)*L(1,.9,kt),P(u,ta,.25)*(1-P(u,5.95,.3)),r);
+    if(n){const grow=i===2?Math.round(L(n,n+7,P(u,2,3,E.lin))):i===0?Math.round(L(n,n+8,P(u,2.2,3,E.lin))):n;
+      badge(e,P(u,ta+.6,.35,E.back)*(1-kt),String(grow))}else badge(e,0);
+  });
+});
+
+// ── S2 · what that work costs (6–12.5) ──
+const PRICES=[['SOCIAL MEDIA','Community manager','post',406],['WEBMASTER','Site updates & fixes','web',467],['WEB COPY','Copywriter','pen',372]];
+const s2=scene(6,[5.8,12.6],function(){
+  const R=this.R=layer();
+  this.H1=fit(T(R,'WHAT THAT WORK COSTS',62),960);
+  this.H2=T(R,'IF YOU OUTSOURCE IT',30,800,{letterSpacing:'.14em',color:'var(--ink2)'});
+  this.cards=PRICES.map(([n,s,ic])=>mk(R,'a card price',`<div class="ic">${ICON[ic]}</div><div class="bd"><div class="n">${n}</div><div class="s">${s}</div></div><div class="v"><b>€0</b><span>/ DAY</span></div>`,{width:'880px',height:'190px'}));
+  this.C1=T(R,'3–4 FREELANCE DAYS',58);
+  this.C2=mk(R,'a','<svg viewBox="0 0 40 60" width="40" height="60" fill="none" stroke="#36576A" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6v46M8 40l12 12 12-12"/></svg>');
+  this.C3=T(R,'≈ <span class="hl">€1,700–€1,700</span>',104);fit(this.C3,960);
+  this.D=T(R,'Indicative 2026 freelance day rates in France.<br>Source: Malt. Actual costs vary.',25,600,{lineHeight:1.35,opacity:.75});
+},function(u){
+  const x=P(u,5.45,.4);
+  put(this.H1,540,365+30*(1-P(u,.35,.5)),1,P(u,.35,.4)*(1-x));
+  put(this.H2,540,440+20*(1-P(u,.55,.5)),1,P(u,.55,.4)*(1-x));
+  const Y=[660,880,1100],Yc=[615,780,945];
+  const kc=P(u,2.4,.6,E.io);
+  this.cards.forEach((e,i)=>{
+    const k=P(u,.05+.14*i,.75);
+    let y=L(962,Y[i],k),s=L(.5,1,k);
+    y=L(y,Yc[i],kc);s*=L(1,.8,kc);
+    const km=P(u,5.55,.55,E.io);
+    y=L(y,1000,km);const sx=L(s,.7,km),sy=L(s,.7,km);
+    put(e,540,y,sx,P(u,.05+.14*i,.3)*(1-P(u,5.95,.12)),0,sy);
+    const kn=P(u,.4+.14*i,1.0);
+    setText(e.querySelector('b'),'€'+Math.round(L(PRICES[i][3]*.78,PRICES[i][3],kn)));
+    [...e.children].forEach(c=>c.style.opacity=1-P(u,5.45,.3));
+  });
+  put(this.C1,540,1150+30*(1-P(u,3.0,.5)),1,P(u,3.0,.4)*(1-x));
+  put(this.C2,540,1240+20*(1-P(u,3.3,.4)),1,P(u,3.3,.35)*(1-x));
+  const kn=P(u,3.55,1.0),r10=v=>(Math.round(v/10)*10).toLocaleString('en-US');
+  this.C3.innerHTML=`≈ <span class="hl">€${r10(L(900,1200,kn))}–€${r10(L(1300,1700,kn))}</span>`;
+  hl(this.C3,P(u,4.45,.5,E.io));
+  put(this.C3,540,1350+30*(1-P(u,3.55,.5)),1,P(u,3.55,.4)*(1-x));
+  put(this.D,540,1548,1,P(u,.9,.5)*.75*(1-x));
+});
+
+// ── S3 · the new idea (12.5–16.5) ──
+const s3=scene(12.5,[11.8,17],function(){
+  const R=this.R=layer();
+  this.Q1=T(R,'WHAT IF YOUR',92);this.Q2=T(R,'FIRST HIRE',92);
+  this.Q3=fit(T(R,'<span class="hl w">WASN’T A HIRE?</span>',100),980);
+  this.P=mk(R,'a card prof',`<div class="av">${FACE}</div><div><div class="nm">brnrd</div><div class="rl">AI COWORKER</div><div class="stat"><i></i>ACTIVE</div></div>`,{width:'760px',height:'300px',borderRadius:'44px'});
+},function(u,t){
+  const x=P(u,3.3,.4,E.io);
+  put(this.Q1,540,520+30*(1-P(u,.15,.55))-60*x,1,P(u,.15,.45)*(1-x));
+  put(this.Q2,540,625+30*(1-P(u,.3,.55))-60*x,1,P(u,.3,.45)*(1-x));
+  put(this.Q3,540,790-60*x,L(.88,1,P(u,1.0,.6,E.back)),P(u,1.0,.35)*(1-x));hl(this.Q3,P(u,1.35,.5,E.io));
+  // the three price cards became one plain card; it shrinks, waits, then becomes someone
+  const m0=P(t,11.9,.15),mS=P(t,12.1,.5,E.io),grow=P(u,1.9,.6,E.io),toChip=P(u,3.3,.65,E.io);
+  let px=540,py=L(1000,1230,mS),sx=L(.81,.5,mS),sy=L(.44,.5,mS);
+  py=L(py,1190,grow);sx=L(sx,1,grow);sy=L(sy,1,grow);
+  px=L(px,805,toChip);py=L(py,250,toChip);sx=L(sx,.51,toChip);sy=L(sy,.39,toChip);
+  put(this.P,px,py,sx,m0*(1-P(u,3.8,.15)),0,sy);
+  [...this.P.children].forEach(c=>c.style.opacity=P(u,2.15,.35));
+  this.P.querySelector('.stat i').style.transform=`scale(${1+.25*Math.sin(t*5)})`;
+});
+
+// ── the coworker chip: brnrd's one persistent identity (16.2–50) ──
+const chip={};
+function initChip(){
+  chip.R=layer();chip.R.style.zIndex=5;
+  chip.e=mk(chip.R,'a card chip',`<div class="deck"></div><div class="av">${FACE}</div><div><div class="nm">brnrd</div><div class="stat"><i></i><span>ACTIVE</span></div></div>`,{width:'390px',height:'116px',borderRadius:'30px'});
+  chip.st=chip.e.querySelector('.stat span');chip.dot=chip.e.querySelector('.stat i');chip.deck=chip.e.querySelector('.deck');
+}
+function chipPose(t){
+  // position keys: top-right in the examples → right panel in the comparison → centred over the
+  // three lines → beside the owner in the payoff
+  let x=805,y=250,s=1,o=P(t,16.2,.25);
+  const a=P(t,37.3,.8,E.io);x=L(x,810,a);y=L(y,470,a);
+  const b=P(t,41.7,.5,E.io);x=L(x,540,b);y=L(y,620,b);
+  o*=1-P(t,44.3,.3);
+  if(t>45.5){x=790;y=700;o=P(t,45.7,.4);s=L(.85,1,P(t,45.7,.5,E.back))}
+  o*=1-P(t,49.7,.3);
+  return{x,y,s,o};
+}
+function updateChip(t){
+  const c=chipPose(t);put(chip.e,c.x,c.y,c.s,c.o);
+  const working=(t>19.0&&t<22.8)||(t>28.4&&t<32.8)||(t>46.0&&t<47.0);
+  setText(chip.st,working?'WORKING':'ACTIVE');
+  chip.dot.style.background=working?'var(--bar)':'var(--leaf)';
+  chip.dot.style.transform=`scale(${1+(working?.35:.2)*Math.sin(t*(working?9:4))})`;
+  // cards the coworker has absorbed stay with it, as a deck under the chip
+  const d=P(t,26.6,.4)*(1-P(t,44.2,.3));
+  chip.deck.style.opacity=d;chip.deck.style.transform=`translateY(${(12*d).toFixed(1)}px) scale(.94)`;
+}
+
+// ── S4 · bakery request (16.5–27) ──
+const BTASKS=[
+  ['WEEKEND SPECIAL','Strawberry tart','tart','CREATED'],['INSTAGRAM POST','Tart photo + caption','post','READY'],
+  ['WEBSITE','Specials page','web','UPDATED'],['NEWSLETTER','Saturday edition','news','DRAFTED'],
+  ['TOMORROW','Check what sold','bell','FOLLOW-UP ADDED'],
+];
+const s4=scene(16.5,[16,27.6],function(){
+  const R=this.R=layer();
+  const svgL=this.svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svgL.setAttribute('width',1080);svgL.setAttribute('height',1920);svgL.style.position='absolute';R.appendChild(svgL);
+  const path=d=>{const p=document.createElementNS('http://www.w3.org/2000/svg','path');p.setAttribute('d',d);p.setAttribute('fill','none');
+    p.setAttribute('stroke','#9CCBEA');p.setAttribute('stroke-width','4');p.setAttribute('stroke-linecap','round');p.setAttribute('pathLength','1');
+    p.setAttribute('stroke-dasharray','1 1');svgL.appendChild(p);return p};
+  this.Y=[965,1090,1215,1340,1465];
+  this.link=path('M540 531 V636');
+  this.lines=this.Y.map(y=>path(`M540 885 V900 Q540 922 518 922 H132 Q110 922 110 944 V${y-22} Q110 ${y} 132 ${y} H170`));
+  this.OA=avatarCircle(R,BAKER,'var(--butter)');
+  this.you=T(R,'YOU',22,800,{letterSpacing:'.16em',color:'var(--ink2)'});
+  this.props=['bread','cro','bag'].map(k=>mk(R,'a',`<div class="ic" style="width:66px;height:66px;border-radius:50%;background:var(--ice);display:grid;place-items:center">${ICON[k]}</div>`));
+  this.RQ=mk(R,'a card msg',`<div class="h">YOU → brnrd</div><div class="txt" style="font-size:58px;font-weight:800;text-align:left">WE HAVE EXTRA<br>STRAWBERRIES TODAY.</div><div class="txt l2" style="font-size:66px;font-weight:800;text-align:left;margin-top:16px"><span class="hl">LET’S SELL THEM.</span></div>`,{width:'900px'});
+  this.SRC=mk(R,'a card','',{width:'330px',height:'250px',borderRadius:'36px'});
+  this.SRCl=T(R,'EXTRA STRAWBERRIES',22,800,{letterSpacing:'.08em'});
+  this.T=BTASKS.map(([title,sub,icon,fin])=>task(R,{title,sub,icon,fin}));
+  this.X1=T(R,'ONE REQUEST.',100);this.X2=fit(T(R,'MULTIPLE PIECES OF WORK.',62,700),960);
+  this.X3=fit(T(R,'THE WORK <span class="hl">CONTINUES.</span>',84),980);
+  this.BERRY=mk(R,'a',STRAWBERRY,{width:'150px',height:'150px'});
+  this.DOT=mk(R,'a','',{width:'96px',height:'96px',borderRadius:'50%',background:'var(--coral)'});
+},function(u,t){
+  const out=P(u,9.9,.4);
+  put(this.OA,150,255,L(.6,1,P(u,0,.45,E.back)),P(u,0,.3)*(1-out));
+  put(this.you,150,350,1,P(u,.2,.3)*(1-out));
+  this.props.forEach((e,i)=>put(e,272+78*i,255,E.back(P(u,.25+.1*i,.4)),P(u,.25+.1*i,.2)*(1-out)));
+  // the instruction, given like to a colleague
+  const up=P(u,2.4,.55,E.io),gone=P(u,6.4,.45);
+  put(this.RQ,L(L(200,540,P(u,.2,.6)),540,up),L(L(330,560,P(u,.2,.6)),420,up)-60*gone,L(L(.3,1,P(u,.2,.6)),.62,up),P(u,.2,.25)*(1-gone));
+  const l2=this.RQ.querySelector('.l2');l2.style.opacity=P(u,1.15,.4);l2.style.transform=`translateY(${(16*(1-P(u,1.15,.5))).toFixed(1)}px)`;
+  hl(this.RQ,P(u,1.45,.5,E.io));
+  // one source object…
+  const sum=P(u,6.5,.7,E.io),fly=P(u,9.8,.25);
+  const sy=L(760,655,sum),ss=L(E.back(P(u,2.7,.55)),.72,sum);
+  put(this.SRC,540,sy,ss,P(u,2.7,.25)*(1-fly));
+  put(this.SRCl,540,sy+88*ss,ss,P(u,2.9,.3)*(1-fly));
+  this.link.setAttribute('stroke-dashoffset',1-P(u,2.8,.3,E.io));this.link.style.opacity=1-P(u,6.3,.3);
+  // …branching into the work around it
+  this.T.forEach((e,i)=>{
+    const ts=3.25+.35*i,k=P(u,ts,.55);
+    let x=L(540,580,k),y=L(760,this.Y[i],k),s=L(.25,1,k),o=P(u,ts,.2);
+    this.lines[i].setAttribute('stroke-dashoffset',1-P(u,ts-.1,.45,E.io));this.lines[i].style.opacity=1-P(u,6.3,.3);
+    setTask(e,stageAt(u,ts+.45,ts+1.5));
+    // done: gather into a stack — the tomorrow card steps out, still live
+    x=L(x,540,sum);y=L(y,842+94*i,sum);s=L(s,.85,sum);
+    if(i===4){const nx=P(u,8.7,.55,E.io);y=L(y,1360,nx);x=L(x,540,nx);s=L(s,.95,nx);glow(e,.9*nx)}
+    // then the whole lot goes to the coworker, who keeps it
+    const f=P(u,9.65+.07*i,.55,E.in);
+    x=L(x,805,f);y=L(y,250,f);s=L(s,.12,f);o*=1-P(u,9.95+.07*i,.25);
+    put(e,x,y,s,o);
+  });
+  put(this.X1,540,395+30*(1-P(u,6.8,.5)),1,P(u,6.8,.4)*(1-P(u,8.5,.3)));
+  put(this.X2,540,500+30*(1-P(u,7.1,.5)),1,P(u,7.1,.4)*(1-P(u,8.5,.3)));
+  put(this.X3,540,450+30*(1-P(u,8.75,.5)),1,P(u,8.75,.4)*(1-P(u,9.8,.3)));hl(this.X3,P(u,9.0,.5,E.io));
+  // strawberry → red circle → map pin (the pin itself lives in S5)
+  const c=P(u,9.95,.25,E.io),mv=P(u,10.15,.4,E.io);
+  put(this.BERRY,540,sy-18*ss,ss*L(1,.64,c),P(u,2.8,.3)*(1-P(u,10.05,.15)));
+  put(this.DOT,L(540,290,mv),L(sy-18*ss,690,mv),L(.9,.7,mv),P(u,9.98,.12)*(1-P(u,10.45,.12)));
+});
+
+// ── S5 · realtor request (27–37.5) ──
+const RTASKS=[['LISTING','PREPARED'],['WEBSITE','UPDATED'],['SOCIAL','READY'],['LEADS','ORGANISED'],['FOLLOW-UPS','QUEUED']];
+const s5=scene(27,[26.5,38.2],function(){
+  const R=this.R=layer();
+  this.RA=avatarCircle(R,REALTOR,'var(--powder)');
+  this.you=T(R,'YOU',22,800,{letterSpacing:'.16em',color:'var(--ink2)'});
+  this.cols=[0,1,2].map(()=>mk(R,'a','',{width:'320px',height:'560px',borderRadius:'30px',background:'rgba(255,255,255,.55)'}));
+  this.clabels=['TO DO','WORKING','DONE'].map(s=>T(R,s,24,800,{letterSpacing:'.16em',color:'var(--ink2)'}));
+  this.MS=mk(R,'a card msg',`<div class="h">YOU → brnrd</div><div class="txt" style="font-size:66px;font-weight:800;text-align:left"><span class="hl">GET IT READY.</span></div>`,{width:'600px'});
+  this.PC=mk(R,'a card',`<div style="position:absolute;left:30px;top:30px;width:320px;height:320px">${HOUSE}</div>
+    <div style="position:absolute;left:390px;top:78px">
+      <div class="lbl" style="font-size:26px">NEW PROPERTY</div>
+      <div style="font-size:78px;font-weight:800;letter-spacing:-.01em;margin-top:6px">€420,000</div>
+      <div style="display:flex;gap:12px;align-items:center;margin-top:22px"><span style="width:22px;height:22px;border-radius:50%;background:var(--coral);display:block"></span>
+        <span style="width:230px;height:18px;border-radius:9px;background:var(--pale);display:block"></span></div>
+      <div style="width:170px;height:18px;border-radius:9px;background:var(--pale);margin:14px 0 0 34px"></div>
+    </div>`,{width:'880px',height:'380px',borderRadius:'36px'});
+  this.PIN=mk(R,'a',PIN,{width:'80px',height:'96px'});
+  this.TL=mk(R,'a','',{width:'6px',height:'420px',borderRadius:'3px',background:'var(--powder)'});
+  this.dots=RTASKS.map(()=>mk(R,'a','',{width:'22px',height:'22px',borderRadius:'50%',background:'var(--bar)',border:'4px solid var(--ice)'}));
+  this.leadLine=mk(R,'a','',{width:'0',height:'150px',borderLeft:'4px dashed var(--bar)'});
+  this.T=RTASKS.map(([title,fin])=>task(R,{title,fin,w:300,h:88,sm:true}));
+  this.BY=mk(R,'a card',`<div style="display:flex;align-items:center;gap:14px">
+      <span style="width:64px;height:64px;border-radius:18px;background:var(--off);display:grid;place-items:center">${FACE.replace('face','face" style="font-size:20px')}</span>
+      <span style="font-size:30px;font-weight:800">brnrd</span><span style="margin-left:auto">${BUYERS}</span></div>
+    <div style="font-size:48px;font-weight:800;line-height:1.08;margin-top:20px">3 BUYERS LOOK<br>ESPECIALLY PROMISING.</div>
+    <div class="q" style="font-size:36px;font-weight:700;margin-top:14px;color:var(--ink)">CONTACT THEM PERSONALLY?</div>`,
+    {width:'900px',padding:'30px 40px',background:'var(--butter)',borderRadius:'36px'});
+},function(u,t){
+  const ex=P(u,10.15,.65,E.io);this.R.style.transform=`translateX(${(760*ex).toFixed(1)}px)`;this.R.style.opacity=1-P(u,10.4,.4);
+  put(this.RA,150,255,L(.6,1,P(u,.1,.45,E.back)),P(u,.1,.3));
+  put(this.you,150,350,1,P(u,.3,.3));
+  const tl=P(u,6.0,.7,E.io),bf=P(u,5.9,.4);
+  // the property is the source object
+  const pcx=540,pcy=L(740,535,tl),pcs=L(E.back(P(u,-.1,.55))*.08+.92,.74,tl);
+  put(this.PC,pcx,pcy,pcs,P(u,-.1,.35));
+  const pinArrive=P(t,26.95,.2,E.back);
+  put(this.PIN,pcx+(290-540)*pcs,pcy+(700-740)*pcs,L(.6,1,pinArrive)*L(1,.8,tl),P(t,26.9,.12));
+  put(this.MS,560,440,L(.3,1,P(u,.8,.55,E.back)),P(u,.8,.2)*(1-bf));
+  hl(this.MS,P(u,1.2,.45,E.io));
+  const X=[195,540,885];
+  this.cols.forEach((e,i)=>put(e,X[i],1255,1,P(u,1.6+.08*i,.4)*(1-bf)));
+  this.clabels.forEach((e,i)=>put(e,X[i],1010,1,P(u,1.7+.08*i,.4)*(1-bf)));
+  // five pieces of work move left to right: to do → working → done
+  const rows=i=>1080+98*i,tlY=i=>775+90*i;
+  this.T.forEach((e,i)=>{
+    const ts=1.9+.25*i,tw=2.6+.38*i,td=tw+1.2;
+    let x=L(540,195,P(u,ts,.5)),y=L(pcy,rows(i),P(u,ts,.5)),s=L(.3,1,P(u,ts,.5));
+    x=L(x,540,P(u,tw,.35,E.io));x=L(x,885,P(u,td,.35,E.io));
+    setTask(e,stageAt(u,tw+.35,tw+1.15,td+.3));
+    // completed items settle into a timeline beneath the property
+    x=L(x,610,tl);y=L(y,tlY(i),tl);e.style.width=L(300,560,tl).toFixed(1)+'px';
+    put(e,x,y,s,P(u,ts,.2));
+    glow(e,i===3?.9*P(u,6.9,.35):0);
+    put(this.dots[i],290,tlY(i),E.back(P(u,6.45+.06*i,.3)),P(u,6.45+.06*i,.15));
+  });
+  put(this.TL,290,955,1,P(u,6.35,.4),0,P(u,6.35,.6,E.io));
+  // the coworker brings something back to the human
+  put(this.leadLine,292,1120,1,P(u,7.15,.3),0,P(u,7.15,.4,E.io));
+  const by=P(u,7.3,.65);
+  put(this.BY,L(805,540,by),L(250,1345,by),L(.3,1,by),P(u,7.3,.25));
+  const q=this.BY.querySelector('.q');q.style.opacity=P(u,8.1,.4);q.style.transform=`translateY(${(12*(1-P(u,8.1,.5))).toFixed(1)}px)`;
+});
+
+// ── S6 · chatbot vs coworker (37.5–44.5) ──
+const BRIEF=['BUSINESS CONTEXT','PRODUCTS','CUSTOMERS','PRICES','PAST DECISIONS'];
+const s6=scene(37.5,[37,44.8],function(){
+  const R=this.R=layer();
+  this.panel=mk(R,'a','',{width:'1080px',height:'1920px'});
+  this.Lbg=mk(this.panel,'a','',{width:'540px',height:'1920px',background:'var(--pale)',transform:'none'});
+  this.Rbg=mk(this.panel,'a','',{width:'540px',height:'1920px',background:'var(--off)',left:'540px',transform:'none'});
+  const P_=this.panel;
+  this.lt=T(P_,'CHATBOT',46,800,{color:'var(--ink2)'});
+  this.cv=mk(P_,'a card',`<div style="position:absolute;left:34px;top:40px;width:230px;height:26px;border-radius:13px;background:var(--pale)"></div>
+     <div style="position:absolute;left:34px;top:84px;width:160px;height:26px;border-radius:13px;background:var(--pale)"></div>
+     <div style="position:absolute;left:34px;bottom:34px;right:34px;height:62px;border-radius:31px;border:3px solid var(--pale)"></div>
+     <div class="cur" style="position:absolute;left:60px;bottom:52px;width:4px;height:26px;background:var(--ink2)"></div>`,{width:'440px',height:'240px',background:'rgba(255,255,255,.8)'});
+  this.em=T(P_,'EVERY MORNING:',28,800,{letterSpacing:'.14em',color:'var(--ink2)'});
+  this.qt=T(P_,'“Here’s my<br>business again…”',42,600,{fontStyle:'italic',lineHeight:1.15});
+  this.bf=BRIEF.map(s=>mk(P_,'a card',s,{width:'420px',height:'66px',borderRadius:'20px',display:'grid',placeItems:'center',fontSize:'25px',fontWeight:800,letterSpacing:'.08em'}));
+  this.loop=mk(P_,'a',LOOP,{width:'92px',height:'92px'});
+  this.rt=T(P_,'COWORKER',46,800);
+  this.line=mk(P_,'a','',{width:'4px',height:'430px',borderRadius:'2px',background:'var(--powder)'});
+  this.yl=T(P_,'YESTERDAY',26,800,{letterSpacing:'.16em',color:'var(--ink2)',width:'440px',textAlign:'left'});
+  this.yr=['Website updated','Newsletter drafted','3 leads added'].map(s=>mk(P_,'a row',`<span class="dotc">${CHECK}</span>${s}`));
+  this.tl=T(P_,'TODAY',26,800,{letterSpacing:'.16em',color:'var(--ink2)',width:'440px',textAlign:'left'});
+  this.tr=[mk(P_,'a row',`${BUYERS.replace(/54px/g,'40px')}<span style="margin-left:-4px">Follow up with buyers</span>`,{fontSize:'27px'}),
+           mk(P_,'a row',`<span class="arr">→</span>Check campaign results`,{fontSize:'27px'})];
+  this.tr[0].querySelectorAll('.b').forEach(b=>{b.style.width=b.style.height='40px';b.style.borderColor='var(--off)';b.style.borderWidth='3px'});
+  this.L1=fit(T(R,'IT KNOWS THE WORK.',72),960);
+  this.L2=fit(T(R,'IT REMEMBERS <span class="hl">YESTERDAY.</span>',72),960);
+  this.L3=fit(T(R,'IT KEEPS GOING.',72),960);
+},function(u,t){
+  const inn=P(u,-.3,.75,E.io),sx=P(u,4.2,.45);
+  put(this.panel,540-1080*(1-inn),960,1,1);
+  this.Lbg.style.opacity=1-sx;
+  const co=1-sx;
+  put(this.lt,270,300,1,P(u,.3,.4)*co);
+  put(this.cv,270,505,1,P(u,.4,.4)*co);
+  this.cv.querySelector('.cur').style.opacity=Math.sin(t*7)>0?1:0;
+  put(this.em,270,690,1,P(u,.7,.4)*co);
+  put(this.qt,270,780,1,P(u,.9,.4)*co);
+  // the same briefing, dropped in again and again
+  this.bf.forEach((e,j)=>{
+    const y0=880+80*j;let y,o;
+    const r1=P(u,1.2+.22*j,.45,E.back),fall=P(u,2.75+.04*j,.45,E.in),r2=P(u,3.25+.14*j,.4,E.back);
+    if(u<3.25+.14*j){y=L(640,y0,r1)+760*fall;o=P(u,1.2+.22*j,.15)*(1-fall)}
+    else{y=L(640,y0,r2);o=P(u,3.25+.14*j,.15)}
+    put(e,270,y,1,o*co);
+  });
+  put(this.loop,270,1330,1,P(u,2.45,.3)*co,-360*E.io(P(u,2.6,.8))-360*E.io(P(u,3.9,.6)));
+  // the coworker's side carries on from yesterday
+  put(this.rt,810,300,1,P(u,.3,.4)*co);
+  put(this.line,608,870,1,P(u,1.0,.3)*co,0,P(u,1.0,1.6,E.io));
+  put(this.yl,810,615,1,P(u,.8,.4)*co);
+  this.yr.forEach((e,i)=>put(e,810,690+66*i+20*(1-P(u,1.0+.2*i,.45)),1,P(u,1.0+.2*i,.35)*co));
+  put(this.tl,810,925,1,P(u,1.9,.4)*co);
+  this.tr.forEach((e,i)=>put(e,810,1000+70*i+20*(1-P(u,2.15+.3*i,.45)),1,P(u,2.15+.3*i,.35)*co));
+  const lx=P(u,6.85,.3);
+  put(this.L1,540,800+24*(1-P(u,4.6,.45)),1,P(u,4.6,.35)*(1-lx));
+  put(this.L2,540,915+24*(1-P(u,5.2,.45)),1,P(u,5.2,.35)*(1-lx));hl(this.L2,P(u,5.5,.45,E.io));
+  put(this.L3,540,1030+24*(1-P(u,5.8,.45)),1,P(u,5.8,.35)*(1-lx));
+});
+
+// ── S7 · economic payoff (44.5–50) ──
+const PAY=[ // label, icon, scatter x,y, busywork?
+  ['SOCIAL','post',235,650,1],['WEB','web',850,640,1],['COPY','pen',190,860,1],['ADMIN','folder',885,845,1],['FOLLOW-UPS','bell',225,1075,1],
+  ['CUSTOMERS','people',860,1065,0],['CREATIVE<br>DIRECTION','brush',320,1275,0],['FINAL<br>DECISIONS','flag',770,1270,0]];
+const s7=scene(44.5,[44.1,50.2],function(){
+  const R=this.R=layer();
+  this.G1=fit(T(R,'WORK YOU HANDLE YOURSELF',62),960);this.G2=T(R,'OR OUTSOURCE',62);
+  this.G3=T(R,'DELEGATE MORE',92);this.G4=fit(T(R,'BEFORE YOU <span class="hl">NEED TO HIRE.</span>',60),960);
+  this.OW=mk(R,'a',BAKER,{width:'300px',height:'360px'});
+  this.you=T(R,'YOU',22,800,{letterSpacing:'.16em',color:'var(--ink2)'});
+  this.K=PAY.map(([l,ic])=>pill(R,l,ic,{minWidth:'330px'}));
+  this.K1=T(R,'KEEP YOUR TIME',50);this.K2=fit(T(R,'FOR THE WORK <span class="hl">ONLY YOU</span> CAN DO.',42,700),960);
+},function(u){
+  const x1=P(u,2.3,.3),xa=P(u,5.25,.25);
+  put(this.G1,540,330+24*(1-P(u,.2,.45)),1,P(u,.2,.35)*(1-x1));
+  put(this.G2,540,412+24*(1-P(u,.35,.45)),1,P(u,.35,.35)*(1-x1));
+  put(this.G3,540,318+24*(1-P(u,2.5,.45)),1,P(u,2.5,.35)*(1-xa));
+  put(this.G4,540,420+24*(1-P(u,2.7,.45)),1,P(u,2.7,.35)*(1-xa));hl(this.G4,P(u,3.0,.5,E.io));
+  const mv=P(u,1.1,.6,E.io);
+  put(this.OW,L(540,290,mv),L(880,800,mv),L(.72,.62,mv),P(u,.2,.35)*(1-xa));
+  put(this.you,290,945,1,P(u,1.6,.3)*(1-xa));
+  // the busywork goes to the coworker; the human work stays with the human
+  let bi=0,hi=0;const HY=[1025,1150,1280];
+  this.K.forEach((e,i)=>{
+    const [,,sx,sy,busy]=PAY[i];const k=P(u,.25+.07*i,.45,E.back);
+    const s=P(u,1.5+.09*i,.6,E.io);
+    const tx=busy?790:290,ty=busy?870+88*(bi++):HY[hi++];
+    put(e,L(sx,tx,s),L(sy,ty,s),L(.85,1,k)*L(1,busy?.86:1,s),P(u,.25+.07*i,.2)*(1-xa));
+    if(busy)badgeOk(e,P(u,2.25+.12*i,.3,E.back));else badge(e,0);
+  });
+  put(this.K1,540,1440+24*(1-P(u,3.1,.45)),1,P(u,3.1,.35)*(1-xa));
+  put(this.K2,540,1505+24*(1-P(u,3.3,.45)),1,P(u,3.3,.35)*(1-xa));hl(this.K2,P(u,3.6,.5,E.io));
+});
+
+// ── S8 · end frame (50–55) ──
+const s8=scene(50,[49.8,56],function(){
+  const R=this.R=layer();
+  this.E1=fit(T(R,'YOU RUN THE BUSINESS.',80),960);
+  this.E2=fit(T(R,'brnrd RUNS THE <span class="hl">BUSYWORK.</span>',80),960);
+  this.WM=T(R,'<span class="nmw">brnrd</span>',190,800,{letterSpacing:'-.02em'});
+  this.E3=fit(T(R,'AN AI COWORKER THAT STAYS.',54),940);
+  this.E4=fit(T(R,'DO MORE BEFORE YOU NEED TO HIRE.',28,800,{letterSpacing:'.14em',color:'var(--ink2)'}),900);
+  this.bar=mk(R,'a','',{width:'380px',height:'14px',borderRadius:'7px',background:'var(--butter)'});
+},function(u){
+  const x=P(u,2.5,.4,E.io);
+  put(this.E1,540,835+30*(1-P(u,.25,.5))-50*x,1,P(u,.25,.4)*(1-x));
+  put(this.E2,540,950+30*(1-P(u,.8,.5))-50*x,1,P(u,.8,.4)*(1-x));hl(this.E2,P(u,1.15,.5,E.io));
+  // the name, then what it is
+  put(this.WM,540,830+30*(1-P(u,2.85,.6)),L(.94,1,P(u,2.85,.7)),P(u,2.85,.45));
+  put(this.bar,540,955,1,P(u,3.1,.3),0,1);this.bar.style.transform+=` scaleX(${P(u,3.1,.6,E.io).toFixed(3)})`;
+  put(this.E3,540,1060+24*(1-P(u,3.3,.5)),1,P(u,3.3,.4));
+  put(this.E4,540,1140+20*(1-P(u,3.6,.5)),1,P(u,3.6,.4));
+});
+
+// ───────────────────────── render ─────────────────────────
+const BLINKS=[15.3,19.6,24.9,30.4,34.9,40.9,43.6,47.8];
+function render(t){
+  stage.style.background=bgAt(t);document.body.style.background=bgAt(t);
+  for(const s of SC){const on=t>=s.win[0]&&t<=s.win[1];s.R.style.display=on?'block':'none';if(on)s.update.call(s,t-s.t0,t)}
+  updateChip(t);
+  // the coworker's face blinks: b^n^d → b-n-d → b^n^d
+  const blink=BLINKS.some(b=>t>=b&&t<b+.16);
+  document.querySelectorAll('.face').forEach(f=>setText(f,blink?'b-n-d':'b^n^d'));
+  // people blink too
+  const pb=[2.1,4.4,18.4,29.6,46.2].some(b=>t>=b&&t<b+.14);
+  document.querySelectorAll('.eyes').forEach(g=>{g.style.transformBox='fill-box';g.style.transformOrigin='center';g.style.transform=`scaleY(${pb?.15:1})`});
+}
+window.DURATION=55;
+(async()=>{
+  await document.fonts.load('800 50px "Avenir Next"');await document.fonts.load('600 50px "Avenir Next"');await document.fonts.load('italic 600 50px "Avenir Next"');
+  for(const s of SC)s.init.call(s);initChip();
+  window.render=render;
+  const q=new URLSearchParams(location.search).get('t');
+  render(q?parseFloat(q):0);
+  window.__ready=true;
+})();
+</script>
+</body>
+</html>
