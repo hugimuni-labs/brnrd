@@ -2248,7 +2248,7 @@ def _apply_dashboard_wake_request(
     default_repo_root: Path,
     cfg: dict | None = None,
 ) -> _DispatchTarget:
-    """Claim the parked spool-rack tap for this wake — the one claim point.
+    """Claim the parked spool-rack tap for this wake — the sole claim function.
 
     #733: dispatch asks the server, once, and does what it is told. Every
     rung of the old guard ladder — expiry, the non-``schedule``-source rule
@@ -2266,7 +2266,9 @@ def _apply_dashboard_wake_request(
       has already been chosen;
     - it is literally "at dispatch", the ~4s window the spec's ~2s call is
       noise against;
-    - it runs once, for the lead event of a settled burst. ``_run_worker``
+    - it runs for the lead event of a settled burst, or before a starvation
+      wall judges a correspondent's new runner selection. An applied pin
+      makes the later call a no-op. ``_run_worker``
       also runs for concurrent ``spawn:`` children (which never pass through
       here) and for crash re-dispatch — neither is "the next wake the
       account owner is about to cause", and the old duplicated ladder let a
@@ -17040,6 +17042,8 @@ def _strand_return_resumes_held_parent(target: "_DispatchTarget") -> bool:
 def _handle_resource_held_events(
     pending: list["_DispatchTarget"],
     account_context: account.AccountContext | None,
+    *,
+    cfg: dict | None = None,
 ) -> list["_DispatchTarget"]:
     """Divert dispatch candidates for a repo currently parked on a hold.
 
@@ -17184,6 +17188,16 @@ def _handle_resource_held_events(
                 # a message is the cheapest moment to check for a
                 # refill — and either thaw on the measured number or
                 # keep the message and answer it with the reading.
+                # Select the body before judging the wall. The ordinary
+                # dispatch claim is downstream of this filter; without
+                # this, a tap for a healthy runner never reaches it.
+                # The same claim function stamps the event's pin, so the
+                # later dispatch call cannot spend the request twice.
+                if account_context is not None:
+                    target = _apply_dashboard_wake_request(
+                        target, account_context, seat_repo_root, cfg,
+                    )
+                selected = str(target.event.get("runner") or "").strip() or None
                 pct = _held_run_binding_pct(seat_repo_root, held, refresh=True)
                 thawed_by: str | None = None
                 reading = pct
@@ -17194,7 +17208,7 @@ def _handle_resource_held_events(
                     # about the body it was armed on, which after a fallback
                     # is not the body this message would be answered by.
                     alternate = _seat_alternate_binding_pct(
-                        seat_repo_root, held, refresh=True,
+                        target.repo_root, held, refresh=True, intended=selected,
                     )
                     if alternate is not None and resource_hold.refill_condition_met(
                         hold_meta, alternate[1],
@@ -17395,9 +17409,12 @@ def _seat_intended_runner(held: Run) -> str | None:
 
 
 def _seat_alternate_binding_pct(
-    repo_root: Path, held: Run, *, refresh: bool,
+    repo_root: Path, held: Run, *, refresh: bool, intended: str | None = None,
 ) -> "tuple[str, float] | None":
     """``(runner, pct)`` for a *different* body this seat could run on (#1934).
+
+    ``intended`` is the current event's selected body when a dashboard
+    claim or sticky preference supersedes the held run's historical pin.
 
     A wall's claim is "the seat cannot run". When the hold was armed on a
     fallback body that claim is about the substitute: measured 2026-09-11,
@@ -17411,7 +17428,7 @@ def _seat_alternate_binding_pct(
     unavailable in the catalog, or cannot be proven — "no evidence" is not
     a thaw, the same rule :func:`_held_run_binding_pct` follows.
     """
-    intended = _seat_intended_runner(held)
+    intended = intended or _seat_intended_runner(held)
     if not intended:
         return None
     meta = held.meta.get("resource_hold") or {}
@@ -19025,7 +19042,7 @@ def start(
                     # continues down the ordinary pipeline below, becoming
                     # the resume.
                     pending = _handle_resource_held_events(
-                        pending, account_context,
+                        pending, account_context, cfg=cfg,
                     )
                 if pending:
                     # brnrd#1388: retire anything already past the staleness
