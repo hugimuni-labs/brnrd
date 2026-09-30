@@ -187,6 +187,32 @@ def configured_gates(brr_dir: Path) -> list[str]:
     return configured
 
 
+def _cloud_health(brr_dir: Path) -> dict:
+    """Read the account cloud loop and delivery facts at their own paths."""
+    from .. import account, config, gitops
+
+    try:
+        ctx = account.resolve_context(
+            brr_dir.parent, config.load_config(brr_dir.parent), create=False,
+        )
+    except (OSError, ValueError):
+        return load_health(brr_dir, "cloud")
+    if not ctx.enabled or ctx.kind != "account":
+        return load_health(brr_dir, "cloud")
+    # _start_account_gates anchors the account-wide poller at the default
+    # repo. Delivery state remains account-owned; a poll cannot heal it.
+    health = load_health(gitops.shared_brr_dir(ctx.default_repo.root), "cloud")
+    delivery = load_health(account.context_home_root(ctx) / "account", "cloud")
+    for key in (
+        "delivery_error", "delivery_error_at", "delivery_error_event",
+        "delivery_attempts", "last_delivery_ok",
+    ):
+        health.pop(key, None)
+        if key in delivery:
+            health[key] = delivery[key]
+    return health
+
+
 def gate_health_rows(
     brr_dir: Path,
     *,
@@ -200,7 +226,7 @@ def gate_health_rows(
         now = now.replace(tzinfo=timezone.utc)
     rows: list[dict] = []
     for gate in gates if gates is not None else configured_gates(brr_dir):
-        health = load_health(brr_dir, gate)
+        health = _cloud_health(brr_dir) if gate == "cloud" else load_health(brr_dir, gate)
         last_poll_ok = health.get("last_poll_ok")
         polled_at: datetime | None = None
         age_seconds: int | None = None
