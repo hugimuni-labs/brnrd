@@ -145,13 +145,36 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
     else:
         prompt_instruction = task.body
 
-    if attempt == 1:
-        run_levels, _ = daemon._collect_levels(
-            runner_name, outbox_dir, execution_root,
-            refresh=False, shared_dir=brr_dir,
+    # A released seat can still have an empty bucket. Judge the selected
+    # lane before building a boot or invoking its Shell, including retries
+    # and fallbacks. The active probe spends no model quota; cached-only
+    # reads can miss the operator's manual refill.
+    run_levels, _ = daemon._collect_levels(
+        runner_name, outbox_dir, execution_root,
+        refresh=True, shared_dir=brr_dir,
+    )
+    level_quota = runner_quota.summary_from_levels(run_levels)
+    quota_summary = level_quota or quota_summary
+    pct = runner_quota.binding_quota_remaining_pct(
+        run_levels, model=runner_choice.model,
+    )
+    if pct is not None:
+        pending = task.meta.get("pending_resource_hold")
+        if (
+            isinstance(pending, dict)
+            and pending.get("reason") == resource_hold.REASON_QUOTA_STARVED
+        ):
+            # Preparation may have armed this from a pre-refill cache.
+            # Replace that claim with the fresh reading of this lane.
+            task.meta.pop("pending_resource_hold")
+        _, starvation = daemon._starvation_facet(
+            task, None, cfg, {"binding_remaining_pct": pct}, run_levels,
         )
-        level_quota = runner_quota.summary_from_levels(run_levels)
-        quota_summary = level_quota or quota_summary
+        if starvation and starvation.get("parking"):
+            return Boundary(
+                kind="hold", attempt=a,
+                hold_spec=task.meta.pop("pending_resource_hold"),
+            )
 
     # ── Boot mount (`boot.mount`, default ON) ────────────────────────
     # On: the file-backed contracts leave the prose and are seeded as `Read`

@@ -361,6 +361,21 @@ class TestWallArmedOnAFallbackBody:
         persisted = Run.from_file(tmp_path / ".brr" / "runs" / held.id / "run.md")
         assert persisted.meta["resource_hold"]["released_by"] == "alternate"
 
+    def test_alternate_uses_the_models_own_quota_from_real_profile_metadata(self, tmp_path, monkeypatch):
+        held = self._starved_on_the_fallback(tmp_path)
+        held.meta["runner"] = "claude-opus"
+        held.meta.pop("dashboard_wake_sticky_profile", None)
+        row = daemon.runner.runner_profile("claude-opus", tmp_path).portal_metadata()
+        row["availability"] = "available"
+        monkeypatch.setattr(daemon.runner, "available_runner_catalog", lambda *a, **k: [row])
+        monkeypatch.setattr(daemon, "_collect_levels", lambda *a, **k: ({
+            "quota": {"buckets": {
+                "session": {"remaining_percentage": 80.0},
+                "week_models": {"Opus": {"remaining_percentage": 0.0}},
+            }},
+        }, True))
+        assert daemon._seat_alternate_binding_pct(tmp_path, held, refresh=False) == ("claude-opus", 0.0)
+
     def test_the_sweep_thaws_the_seat_when_the_intended_body_can_pay(
         self, tmp_path, monkeypatch,
     ):
@@ -488,7 +503,7 @@ class TestBounceVerbs:
         monkeypatch.setattr(daemon, "_held_run_binding_pct", lambda *a, **k: 0.8)
         monkeypatch.setattr(
             daemon.runner, "available_runner_catalog",
-            lambda *a, **k: [{"name": "claude-opus", "shell": "claude", "core": "opus"}],
+            lambda *a, **k: [{"name": "claude-opus", "shell": "claude", "model": "opus"}],
         )
         replies: list[str] = []
         monkeypatch.setattr(daemon, "_write_control_response", lambda t, b: replies.append(b))
@@ -502,6 +517,12 @@ class TestBounceVerbs:
         ]
         assert len(minted) == 1
         assert replies and "Respawning on claude / opus" in replies[0]
+
+    @pytest.mark.parametrize("requested", ["opus", "claude opus", "claude-opus"])
+    def test_respawn_preserves_the_core_from_real_profile_metadata(self, tmp_path, monkeypatch, requested):
+        row = daemon.runner.runner_profile("claude-opus", tmp_path).portal_metadata()
+        monkeypatch.setattr(daemon.runner, "available_runner_catalog", lambda *a, **k: [row])
+        assert daemon._resolve_bounce_runner(tmp_path, requested) == ("claude", "opus", None)
 
     def test_respawn_on_an_unknown_core_refuses_with_the_names(self, tmp_path, monkeypatch):
         TestRefusedWake._starved_run(TestRefusedWake(), tmp_path)

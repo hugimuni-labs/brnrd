@@ -17317,11 +17317,11 @@ def _resolve_bounce_runner(
     for row in rows:
         name = str(row.get("name") or "").lower()
         shell = str(row.get("shell") or "").lower()
-        core = str(row.get("core") or "").lower()
+        core = str(row.get("model") or row.get("core") or "").lower()
         if wanted == name or wanted == f"{shell} {core}" or (wanted == core and core):
             if str(row.get("availability") or "") == "retired":
                 return "", "", f"{row.get('name')} is retired; nothing respawned. Available: {', '.join(names)}."
-            return str(row.get("shell") or ""), str(row.get("core") or ""), None
+            return str(row.get("shell") or ""), str(row.get("model") or row.get("core") or ""), None
     return "", "", f"No runner named '{requested}'; nothing respawned. Available: {', '.join(names)}."
 
 
@@ -17429,7 +17429,7 @@ def _seat_alternate_binding_pct(
             continue
         if str(row.get("availability") or "") != "available":
             return None
-        core = str(row.get("core") or "").strip() or None
+        core = str(row.get("model") or row.get("core") or "").strip() or None
         try:
             levels, _slots = _collect_levels(
                 intended, None, repo_root,
