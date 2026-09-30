@@ -336,6 +336,60 @@ def test_dispatch_refuses_a_stopped_run_as_a_boundary(tmp_path, monkeypatch):
     assert isinstance(ended, Finalized) and ended.stage == "stopped"
 
 
+def test_starved_dispatch_parks_before_building_or_invoking_the_runner(tmp_path, monkeypatch):
+    monkeypatch.setattr(daemon, "_collect_levels", lambda *a, **kw: (None, False))
+    p = _prepared(tmp_path, monkeypatch)
+    readings = []
+
+    def levels(name, outbox, root, **kw):
+        readings.append((name, kw["refresh"]))
+        return {"quota": {"primary_remaining_percent": 0.0}}, True
+
+    monkeypatch.setattr(daemon, "_collect_levels", levels)
+    monkeypatch.setattr(
+        daemon.prompts, "build_daemon_prompt_with_score",
+        lambda *a, **kw: pytest.fail("an empty bucket must not build a boot"),
+    )
+    reached = worker.dispatch(p, Attempt(n=1, lane=p.lane))
+    assert isinstance(reached, Boundary) and reached.kind == "hold"
+    assert readings == [("codex", True)]
+    ended = worker.finalize(p, reached)
+    assert ended.task.status == "held"
+    assert ended.task.meta["resource_hold"]["resume_condition"] == "refill"
+    assert "Hibernating" in p.resp_path.read_text()
+
+
+@pytest.mark.parametrize("mode", ["healthy", "unknown", "forced", "strand", "refilled"])
+def test_dispatch_preserves_permitted_or_unmeasured_wakes(tmp_path, monkeypatch, mode):
+    monkeypatch.setattr(daemon, "_collect_levels", lambda *a, **kw: (None, False))
+    p = _prepared(tmp_path, monkeypatch)
+    if mode == "forced":
+        p.task.meta["starvation_forced"] = True
+    elif mode == "strand":
+        p.task.meta["spawn_parent_run_id"] = "run-parent"
+    elif mode == "refilled":
+        p.task.meta["pending_resource_hold"] = daemon._starvation_hold_spec(
+            p.task, {}, 0.0, detail="pre-refill cache",
+        )
+    levels = None if mode == "unknown" else {
+        "quota": {"primary_remaining_percent": 50.0 if mode in ("healthy", "refilled") else 0.0},
+    }
+    monkeypatch.setattr(daemon, "_collect_levels", lambda *a, **kw: (levels, True))
+    assert isinstance(worker.dispatch(p, Attempt(n=1, lane=p.lane)), Dispatched)
+    if mode == "refilled":
+        assert "pending_resource_hold" not in p.task.meta
+
+
+def test_starved_retry_is_checked_on_its_current_lane(tmp_path, monkeypatch):
+    monkeypatch.setattr(daemon, "_collect_levels", lambda *a, **kw: (None, False))
+    p = _prepared(tmp_path, monkeypatch)
+    monkeypatch.setattr(daemon, "_collect_levels", lambda *a, **kw: (
+        {"quota": {"primary_remaining_percent": 0.0}}, True,
+    ))
+    reached = worker.dispatch(p, Attempt(n=2, lane=p.lane))
+    assert isinstance(reached, Boundary) and reached.kind == "hold"
+
+
 # ── move 3b: the loop quirks ─────────────────────────────────────────
 
 
