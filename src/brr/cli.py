@@ -331,6 +331,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = account_sub.add_parser("add", help="add a repo to the connected account home")
     p.add_argument("repo", help="repo path to add")
+    p.add_argument("--default", action="store_true",
+                   help="also make it the account default (where schedules fire)")
     p.set_defaults(func=cmd_add)
 
     p = account_sub.add_parser("connect", help="link this daemon to brnrd")
@@ -6537,8 +6539,21 @@ def cmd_add(args):
     repo_root = _repo_root_from_arg(args.repo)
     target_cfg = conf.load_config(repo_root)
     label = account.repo_label(repo_root, target_cfg)
-    account.register_repo(ctx, repo_root, label=label)
+    make_default = bool(getattr(args, "default", False))
+    # Adding a repo used to make it the account default as a side effect.
+    # The default decides where every schedule fires and which runtime the
+    # cloud loop reads, so a strand registering a sibling checkout
+    # (2026-09-29, Gurio/mistral-vibe) silently moved the whole residency
+    # there. Moving the default is now its own explicit act.
+    account.register_repo(ctx, repo_root, label=label, make_default=make_default)
     print(f"[brnrd] added {label} to account home {ctx.dominion_repo}")
+    if make_default:
+        print(f"[brnrd] {label} is now the account default")
+    else:
+        print(
+            f"[brnrd] account default unchanged: {ctx.default_repo.label} "
+            f"(`{brnrd_cmd()} account add --default` moves it)"
+        )
 
 
 def _print_link_ceremony(owner: str, dominion_name: str, knowledge_name: str) -> None:
