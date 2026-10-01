@@ -2256,6 +2256,27 @@ def _label_has_memory(ctx: HomeContext, label: str) -> bool:
 # behaviour.
 
 
+def current_default_label(ctx: "HomeContext") -> str:
+    """The account's default repo label as the registry says it *now*.
+
+    A daemon resolves its :class:`HomeContext` once, at boot, so its
+    ``default_repo`` is a snapshot. ``brnrd account add`` and hand repairs
+    change the registry on disk underneath it — on 2026-10-01 a default
+    restored by hand at ~14:00Z kept firing every schedule entry into the
+    pre-repair repo until the daemon restarted, because the firing read the
+    boot snapshot. Re-reading costs one small JSON read; a label the live
+    context doesn't know (registered after boot, or garbage) falls back to
+    the snapshot rather than inventing a repo the daemon can't serve.
+    """
+    snapshot = ctx.default_repo.label
+    if not ctx.enabled or ctx.home_root is None:
+        return snapshot
+    label = _home_registry_default_label(ctx.home_root)
+    if label and label in ctx.repos:
+        return label
+    return snapshot
+
+
 def _home_registry_default_label(home_root: Path) -> str | None:
     """Return the ``default_repo`` label recorded in *home_root*'s registry.
 
