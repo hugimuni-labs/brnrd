@@ -2478,19 +2478,29 @@ def _extract_codex_thread_id(stdout: str) -> str | None:
 
 
 def _extract_codex_task_error(stdout: str) -> dict[str, str] | None:
-    """Pull a terminal ``task_complete`` error out of codex's JSONL stream.
+    """Pull a terminal failure out of codex's JSONL stream.
 
     A completed turn's ``task_complete`` event carries no ``error`` key; a
     turn that died in-flight (quota exhaustion mid-response, the incident
     this exists for: ``task_complete.error.codex_error_info ==
-    "usage_limit_exceeded"``) does. That structured record is the *only*
-    place the real cause lives — codex's own ``-o`` last-message file is
-    never written for a failed turn (see the ``codex_correlation`` comment
-    in ``invoke_runner``), so the swap that follows this function's call
-    site turns ``stdout`` into ``""`` and the caller then deletes the raw
-    JSONL entirely. Called on the *pre-swap* stream, same as
-    ``_extract_codex_thread_id``, for the same reason: after the swap there
-    is nothing left to read.
+    "usage_limit_exceeded"``) does. ``codex exec --json`` documents the
+    same terminal failure as a ``turn.failed`` event (2026-10-01, #2151:
+    a ``server_overloaded`` run left only the later tool-teardown stderr).
+    Both envelopes are read; ``turn.failed`` wins when both appear, and
+    within a type the first occurrence is kept, as before.
+
+    A top-level ``{"type": "error"}`` event is deliberately *not* read:
+    codex emits it for recoverable conditions too (stream reconnects), and
+    this function's result is folded into ``stderr`` whether or not the
+    process failed, so a nonterminal notice would be reported as a cause.
+
+    That structured record is the *only* place the real cause lives — codex's
+    own ``-o`` last-message file is never written for a failed turn (see the
+    ``codex_correlation`` comment in ``invoke_runner``), so the swap that
+    follows this function's call site turns ``stdout`` into ``""`` and the
+    caller then deletes the raw JSONL entirely. Called on the *pre-swap*
+    stream, same as ``_extract_codex_thread_id``, for the same reason: after
+    the swap there is nothing left to read.
 
     Returns ``{"kind": ..., "message": ...}`` or ``None`` — never raises. A
     string ``error`` becomes both fields verbatim; a dict ``error`` prefers
@@ -2503,37 +2513,47 @@ def _extract_codex_task_error(stdout: str) -> dict[str, str] | None:
     """
     if not stdout:
         return None
+    turn_failed_error = None
+    task_complete_error = None
     for line in stdout.splitlines():
         line = line.strip()
-        if not line or '"task_complete"' not in line:
+        if not line or ('"task_complete"' not in line and '"turn.failed"' not in line):
             continue
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if not isinstance(record, dict) or record.get("type") != "task_complete":
+        if not isinstance(record, dict):
             continue
         error = record.get("error")
         if error is None:
             continue
-        if isinstance(error, str):
-            text = error.strip()
-            return {"kind": text, "message": text} if text else None
-        if isinstance(error, dict):
-            kind = None
-            for key in ("codex_error_info", "kind", "code", "type", "reason"):
-                value = error.get(key)
-                if isinstance(value, str) and value.strip():
-                    kind = value.strip()
-                    break
-            message = error.get("message")
-            message = message.strip() if isinstance(message, str) and message.strip() else None
-            return {
-                "kind": kind or "codex_task_error",
-                "message": message or kind or json.dumps(error, sort_keys=True),
-            }
-        return {"kind": "codex_task_error", "message": str(error)}
-    return None
+        record_type = record.get("type")
+        if record_type == "turn.failed" and turn_failed_error is None:
+            turn_failed_error = error
+        elif record_type == "task_complete" and task_complete_error is None:
+            task_complete_error = error
+
+    error = turn_failed_error if turn_failed_error is not None else task_complete_error
+    if error is None:
+        return None
+    if isinstance(error, str):
+        text = error.strip()
+        return {"kind": text, "message": text} if text else None
+    if isinstance(error, dict):
+        kind = None
+        for key in ("codex_error_info", "kind", "code", "type", "reason"):
+            value = error.get(key)
+            if isinstance(value, str) and value.strip():
+                kind = value.strip()
+                break
+        message = error.get("message")
+        message = message.strip() if isinstance(message, str) and message.strip() else None
+        return {
+            "kind": kind or "codex_task_error",
+            "message": message or kind or json.dumps(error, sort_keys=True),
+        }
+    return {"kind": "codex_task_error", "message": str(error)}
 
 
 def _extract_claude_session_id(runner_name: str, stdout: str) -> str | None:
