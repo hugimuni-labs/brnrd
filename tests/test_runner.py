@@ -3182,6 +3182,8 @@ class TestCodexTaskCompleteError:
         # ... and reaches the generic text-based classifier too
         assert "server overloaded" in result.stderr
         # ... and a capacity failure is not read as quota starvation
+        from brr import runner_failures
+
         assert (
             runner_failures.classify_failure(detail=result.error_detail())
             != runner_failures.QUOTA_EXHAUSTED
