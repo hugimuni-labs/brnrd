@@ -11344,7 +11344,7 @@ def _fire_due_schedules(
                 schedule_id=entry.id,
                 conversation_key=conv,
                 repo_label=(
-                    account_context.default_repo.label
+                    account.current_default_label(account_context)
                     if account_context is not None and account_context.enabled
                     else _repo_label(repo_root, {}, cfg)
                 ),
