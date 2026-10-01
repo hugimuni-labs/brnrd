@@ -565,6 +565,59 @@ def test_daemon_gate_state_is_not_drift(tmp_path: Path) -> None:
     assert c.drift == ()
 
 
+def test_waking_runs_own_node_and_seat_state_are_not_drift(tmp_path: Path) -> None:
+    """#1947's residue: the waking run's own node and root-level seat state.
+
+    Measured on run-261001-2212-1wou: the boot said three uncommitted changes
+    and blamed a prior wake.  They were ``shuttle.json`` and ``tick.json``
+    (daemon live state, rewritten after every capture) and this run's own
+    ``request.md``, which the daemon writes at run start and the capture net
+    commits at run end.
+    """
+    brr_dir = _brr_with_prior_wake(tmp_path)
+    dom = tmp_path / "dominion"
+    _git_repo(dom)
+    for name in ("shuttle.json", "tick.json"):
+        (dom / name).write_text("{}", encoding="utf-8")
+    subprocess.run(["git", "-C", str(dom), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(dom), "commit", "-qm", "capture"], check=True)
+    for name in ("shuttle.json", "tick.json"):
+        (dom / name).write_text('{"n": 2}', encoding="utf-8")
+    node = dom / "runs" / "Gurio__brr" / "run-261001-2212-1wou"
+    node.mkdir(parents=True)
+    (node / "request.md").write_text("the ask", encoding="utf-8")
+    (node / "body.md").write_text("the card", encoding="utf-8")
+    topics = dom / "surface" / "topics"
+    topics.mkdir(parents=True)
+    (topics / "the-post.index.jsonl").write_text("{}\n", encoding="utf-8")
+    (topics / "threads.json").write_text("{}", encoding="utf-8")
+
+    c = cont_mod.build_continuity(
+        brr_dir, current_run_id="run-261001-2212-1wou", dominion_repo=dom
+    )
+    assert c.mount == "✓"          # exercise the real path, not an early return
+    assert c.drift == ()
+
+
+def test_a_prior_runs_uncommitted_node_still_fires(tmp_path: Path) -> None:
+    """Positive control: the exemption is the *waking* run's node only."""
+    brr_dir = _brr_with_prior_wake(tmp_path)
+    dom = tmp_path / "dominion"
+    _git_repo(dom)
+    node = dom / "runs" / "Gurio__brr" / "run-260930-0000-prev"
+    node.mkdir(parents=True)
+    (node / "body.md").write_text("a card nobody captured", encoding="utf-8")
+    # An authored topic page is memory, beside the frame's ledgers:
+    (dom / "surface" / "topics").mkdir(parents=True)
+    (dom / "surface" / "topics" / "the-post.md").write_text("x", encoding="utf-8")
+
+    c = cont_mod.build_continuity(
+        brr_dir, current_run_id="run-261001-2212-1wou", dominion_repo=dom
+    )
+    assert len(c.drift) == 1
+    assert "2 uncommitted" in c.drift[0]
+
+
 def test_resident_memory_under_daemon_adjacent_roots_still_fires(
     tmp_path: Path,
 ) -> None:
