@@ -3150,8 +3150,9 @@ class TestCodexTaskCompleteError:
     def test_server_overloaded_turn_failed_survives_swap(
         self, tmp_path, monkeypatch,
     ):
-        """Issue #2151: turn.failed server_overloaded must survive the stdout
-        swap when it arrives during an armed await."""
+        """Issue #2151: a ``turn.failed`` server_overloaded cause survives
+        the stdout swap (envelope shape from the exec docs; the incident's
+        own raw stream was deleted, so this is not a recorded stream)."""
         def _fake_popen(cmd, **kwargs):
             # No last-message file: codex never writes one for a failed turn
             jsonl = "\n".join([
@@ -3180,8 +3181,11 @@ class TestCodexTaskCompleteError:
         }
         # ... and reaches the generic text-based classifier too
         assert "server overloaded" in result.stderr
-        # The stderr should use the generic "codex terminal error" prefix now
-        assert "codex terminal error" in result.stderr
+        # ... and a capacity failure is not read as quota starvation
+        assert (
+            runner_failures.classify_failure(detail=result.error_detail())
+            != runner_failures.QUOTA_EXHAUSTED
+        )
 
     def test_completed_turn_carries_no_task_error(self, tmp_path, monkeypatch):
         def _fake_popen(cmd, **kwargs):
@@ -3280,26 +3284,18 @@ class TestExtractCodexTaskError:
         assert result["kind"] == "server_overloaded"
         assert result["message"] == "model at capacity"
 
-    def test_top_level_error_event(self):
+    def test_top_level_error_event_is_not_a_terminal_cause(self):
+        """#2151: codex emits top-level ``error`` for recoverable notices
+        (reconnects) on runs that then succeed; reading one as the cause
+        would fold a false failure into a healthy run's stderr."""
         from brr.runner import _extract_codex_task_error
 
-        stdout = '{"type":"error","error":{"codex_error_info":"rate_limit_exceeded","message":"Too many requests"}}'
-        assert _extract_codex_task_error(stdout) == {
-            "kind": "rate_limit_exceeded",
-            "message": "Too many requests",
-        }
-
-    def test_task_complete_takes_priority_over_top_level_error(self):
-        from brr.runner import _extract_codex_task_error
-
-        # task_complete should take priority over top-level error
         stdout = "\n".join([
-            '{"type":"error","error":{"codex_error_info":"rate_limit_exceeded","message":"Too many requests"}}',
-            '{"type":"task_complete","error":{"codex_error_info":"usage_limit_exceeded","message":"quota gone"}}',
+            '{"type":"error","message":"Reconnecting... 1/5"}',
+            '{"type":"error","error":{"message":"stream disconnected"}}',
+            '{"type":"turn.completed"}',
         ])
-        result = _extract_codex_task_error(stdout)
-        assert result["kind"] == "usage_limit_exceeded"
-        assert result["message"] == "quota gone"
+        assert _extract_codex_task_error(stdout) is None
 
     def test_no_terminal_error_when_no_error_in_events(self):
         from brr.runner import _extract_codex_task_error
