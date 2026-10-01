@@ -2287,7 +2287,14 @@ def _apply_dashboard_wake_request(
     event = target.event
     if any(event.get(key) for key in ("shell", "core", "runner")):
         return target
-    brr_dir = gitops.shared_brr_dir(default_repo_root)
+    # The cloud publisher follows the account default, which may differ
+    # from the checkout that launched this daemon. Read its actual mirror.
+    cloud_root = (
+        account_context.default_repo.root
+        if account_context is not None and account_context.enabled
+        else default_repo_root
+    )
+    brr_dir = gitops.shared_brr_dir(cloud_root)
     request_id = wake_request_mod.pending_id(brr_dir)
     if request_id is None:
         # The overwhelmingly common dispatch, and every local-only account:
