@@ -3147,6 +3147,42 @@ class TestCodexTaskCompleteError:
             != runner_failures.QUOTA_EXHAUSTED
         )
 
+    def test_server_overloaded_turn_failed_survives_swap(
+        self, tmp_path, monkeypatch,
+    ):
+        """Issue #2151: turn.failed server_overloaded must survive the stdout
+        swap when it arrives during an armed await."""
+        def _fake_popen(cmd, **kwargs):
+            # No last-message file: codex never writes one for a failed turn
+            jsonl = "\n".join([
+                '{"type":"thread.started","thread_id":"capacity-thread-1"}',
+                '{"type":"turn.failed","error":'
+                '{"codex_error_info":"server_overloaded",'
+                '"message":"Selected model is at capacity. Please try a different model."}}',
+            ])
+            return _fake_proc(kwargs, out=jsonl, code=1)
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        invocation = RunnerInvocation(
+            kind="daemon-run", label="codex-capacity", prompt="hi",
+            cwd=tmp_path, repo_root=tmp_path, selected_runner=self._CODEX,
+        )
+
+        result = invoke_runner(self._CODEX, invocation, cfg={})
+
+        # The raw JSONL is gone from stdout
+        assert result.stdout == ""
+        assert "turn.failed" not in result.stdout
+        # ... but the structured cause rides the result unmangled
+        assert result.codex_task_error == {
+            "kind": "server_overloaded",
+            "message": "Selected model is at capacity. Please try a different model.",
+        }
+        # ... and reaches the generic text-based classifier too
+        assert "server overloaded" in result.stderr
+        # The stderr should use the generic "codex terminal error" prefix now
+        assert "codex terminal error" in result.stderr
+
     def test_completed_turn_carries_no_task_error(self, tmp_path, monkeypatch):
         def _fake_popen(cmd, **kwargs):
             last_message_path = self._last_message_path(cmd)
@@ -3210,6 +3246,71 @@ class TestExtractCodexTaskError:
         assert _extract_codex_task_error("") is None
         assert _extract_codex_task_error("not json at all") is None
         assert _extract_codex_task_error('{"type":"turn.started"}') is None
+
+    def test_turn_failed_string_error(self):
+        from brr.runner import _extract_codex_task_error
+
+        stdout = '{"type":"turn.failed","error":"server_overloaded"}'
+        assert _extract_codex_task_error(stdout) == {
+            "kind": "server_overloaded",
+            "message": "server_overloaded",
+        }
+
+    def test_turn_failed_dict_error_with_codex_error_info(self):
+        from brr.runner import _extract_codex_task_error
+
+        stdout = (
+            '{"type":"turn.failed","error":{"codex_error_info":'
+            '"server_overloaded","message":"Selected model is at capacity. Please try a different model."}}'
+        )
+        assert _extract_codex_task_error(stdout) == {
+            "kind": "server_overloaded",
+            "message": "Selected model is at capacity. Please try a different model.",
+        }
+
+    def test_turn_failed_takes_priority_over_task_complete(self):
+        from brr.runner import _extract_codex_task_error
+
+        # Both turn.failed and task_complete have errors, turn.failed should win
+        stdout = "\n".join([
+            '{"type":"task_complete","error":{"codex_error_info":"usage_limit_exceeded","message":"quota gone"}}',
+            '{"type":"turn.failed","error":{"codex_error_info":"server_overloaded","message":"model at capacity"}}',
+        ])
+        result = _extract_codex_task_error(stdout)
+        assert result["kind"] == "server_overloaded"
+        assert result["message"] == "model at capacity"
+
+    def test_top_level_error_event(self):
+        from brr.runner import _extract_codex_task_error
+
+        stdout = '{"type":"error","error":{"codex_error_info":"rate_limit_exceeded","message":"Too many requests"}}'
+        assert _extract_codex_task_error(stdout) == {
+            "kind": "rate_limit_exceeded",
+            "message": "Too many requests",
+        }
+
+    def test_task_complete_takes_priority_over_top_level_error(self):
+        from brr.runner import _extract_codex_task_error
+
+        # task_complete should take priority over top-level error
+        stdout = "\n".join([
+            '{"type":"error","error":{"codex_error_info":"rate_limit_exceeded","message":"Too many requests"}}',
+            '{"type":"task_complete","error":{"codex_error_info":"usage_limit_exceeded","message":"quota gone"}}',
+        ])
+        result = _extract_codex_task_error(stdout)
+        assert result["kind"] == "usage_limit_exceeded"
+        assert result["message"] == "quota gone"
+
+    def test_no_terminal_error_when_no_error_in_events(self):
+        from brr.runner import _extract_codex_task_error
+
+        # Events without error fields should not be treated as terminal failures
+        stdout = "\n".join([
+            '{"type":"turn.started","thread_id":"123"}',
+            '{"type":"task_complete"}',
+            '{"type":"turn.completed"}',
+        ])
+        assert _extract_codex_task_error(stdout) is None
 
 
 class TestExtractCodexThreadId:
