@@ -3722,7 +3722,20 @@ def _pending_events_for_agent(
         for ev in protocol.list_pending(source_inbox):
             event_label = account.event_repo_label(ev)
             if repo_label and event_label and event_label != repo_label:
-                continue
+                # THE ROOM NEXT DOOR (2026-10-01): one resident slot serves
+                # every repo, so a person writing to repo B while the live
+                # seat sits in repo A waits behind that seat — and if the
+                # seat cannot see the message, its `await` never resolves
+                # and nothing ever frees the slot. Two schedule seats in
+                # Gurio/mistral-vibe sat deaf to four brnrd-thread messages
+                # until the maintainer killed both by hand. A person's
+                # message therefore stays visible across the repo boundary
+                # (marked, so the seat knows it is not standing in that
+                # checkout); internal traffic — schedules, strand returns —
+                # stays scoped to its own repo, and a strand sees none of it.
+                if strand or not _event_requires_thread_delivery(ev):
+                    continue
+                ev["foreign_repo"] = event_label
             if (
                 repo_label
                 and not event_label

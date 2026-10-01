@@ -3046,6 +3046,9 @@ def _event_header(
     topic_line = run_topic.event_topic_line(ev)
     if topic_line:
         parts.append(topic_line)
+    foreign_repo = str(ev.get("foreign_repo") or "").strip()
+    if foreign_repo:
+        parts.append(f"for {foreign_repo} — not this checkout")
     if changed:
         parts.append("Δ changed")
     if _reaches_nobody(source):

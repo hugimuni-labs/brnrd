@@ -2003,8 +2003,13 @@ def test_schedule_run_live_portals_read_repo_scoped_account_union(tmp_path):
         repo_label=repo_a_label,
     )
 
-    expected_ids = {same_repo.stem, unlabeled.stem}
-    excluded_ids = {other_repo.stem, other_drawer_unlabeled.stem}
+    # THE ROOM NEXT DOOR (2026-10-01): a person's message labelled for the
+    # other repo is visible too — the one resident slot is blocked on this
+    # seat, so hiding it left the await unresolvable. It is marked so the
+    # seat knows it is not standing in that checkout. The other repo's own
+    # internal traffic stays out.
+    expected_ids = {same_repo.stem, unlabeled.stem, other_repo.stem}
+    excluded_ids = {other_drawer_unlabeled.stem}
     live_inbox = json.loads(inbox_path.read_text(encoding="utf-8"))
     portal = json.loads(portal_path.read_text(encoding="utf-8"))
     inbox_ids = {event["id"] for event in live_inbox["events"]}
@@ -2012,7 +2017,12 @@ def test_schedule_run_live_portals_read_repo_scoped_account_union(tmp_path):
     assert inbox_ids == expected_ids
     assert portal_ids == expected_ids
     assert excluded_ids.isdisjoint(inbox_ids | portal_ids)
-    assert portal["attention"]["pending_event_count"] == 2
+    assert portal["attention"]["pending_event_count"] == 3
+    foreign = {
+        event["id"]: event.get("foreign_repo") for event in live_inbox["events"]
+    }
+    assert foreign[other_repo.stem] == repo_b_label
+    assert foreign[same_repo.stem] is None
 
 
 def test_pending_events_union_keeps_unregistered_run_repo_inbox(tmp_path):
