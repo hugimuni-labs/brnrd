@@ -9443,6 +9443,12 @@ def _halt_spec(
     """
     return {
         "declaration": halt_verb.durable_declaration(declaration, dissent=dissent),
+        # The successor's brief, unclipped. The public record above is
+        # bounded at ``halt_verb._MAX_TEXT_CHARS``; the mint must not be —
+        # the bounce checked handles against the *whole* carry, so minting
+        # from the clipped copy let a handle pass the check and then vanish
+        # (run-261002-1511-6uxm's carry lost its watch-outs at 2,048 chars).
+        "brief": declaration.carry,
         "open_items": [item.line for item in open_items],
         "unnamed": list(dissent),
         "shell": declaration.shell,
@@ -16200,8 +16206,10 @@ def _finalize_halt(
         "open_items": list(halt_fields.get("open_items") or ()),
         "conversation_key": conversation_key,
     }
+    brief = str(halt_fields.get("brief") or "").strip()
     successor = _queue_halt_successor(
-        emit, task, repo_root, inbox_dir, eid, record, None,
+        emit, task, repo_root, inbox_dir, eid,
+        {**record, "carry": brief} if brief else record, None,
     )
     if successor:
         record["successor_event"] = successor
