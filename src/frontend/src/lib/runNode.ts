@@ -21,6 +21,7 @@
 // not a bypass — `svelte/no-navigation-without-resolve` only cares that the
 // *type* the caller receives is `ResolvedPathname`.
 import type { ResolvedPathname } from '$app/types';
+import type { LiveRun } from './liveRuns';
 import type { RunLedgerRow } from './runLedger';
 import type { SurfaceFile, SurfaceResponse } from './surface';
 
@@ -98,9 +99,6 @@ export function runLedgerRowsForNode(
 	);
 }
 
-// Live run matching helpers for the run route
-import type { LiveRun } from './liveRuns';
-
 /** Match a live run from the live-runs feed to this route's repoSlug + runId.
  * Uses the same sanitization logic the daemon uses for directory names to ensure
  * the match is precise and doesn't bleed across repos with similar names. */
@@ -109,19 +107,12 @@ export function findLiveRunForRoute(
 	repoSlug: string,
 	runId: string
 ): LiveRun | null {
-	const wantedRepoSlug = repoSlug;
-	const wantedRunId = runIdSlug(runId);
-	
-	for (const run of runs) {
-		const runRepoSlug = repoRunSlug(run.repo_label);
-		const runRunId = runIdSlug(run.run_id);
-		
-		if (runRepoSlug === wantedRepoSlug && runRunId === wantedRunId) {
-			return run;
-		}
-	}
-	
-	return null;
+	const wantedRun = runIdSlug(runId);
+	return (
+		runs.find(
+			(run) => repoRunSlug(run.repo_label) === repoSlug && runIdSlug(run.run_id) === wantedRun
+		) ?? null
+	);
 }
 
 /**
