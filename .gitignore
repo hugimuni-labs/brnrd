@@ -49,3 +49,9 @@ build/
 /.card
 /.mood
 /.name
+
+# Run control files a capture can sweep into a commit (e9149082)
+/.pr
+/.topics
+# PR screenshots ride the PR body, not the tree
+/docs/pr-assets/
