@@ -30,9 +30,13 @@ audio/score.py     score derived from the EDL
 ## Run
 
 ```bash
-pip install -r requirements.txt     # numpy scipy opencv-python-headless pillow; ffmpeg on PATH
-./render.sh                         # ~15 min on 4 cores; outputs land in out/ (gitignored)
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+./render.sh
 ```
+
+You also need `ffmpeg` on PATH. A full render takes about 15 min on 4 cores, and
+the outputs land in `out/` (gitignored).
 
 `GP_OUT=/some/dir` relocates the output. `python3 src/film.py render crack chl`
 re-renders single shots, but delete `out/frames/<shot>` first because frames

@@ -2,6 +2,9 @@
 # Full pipeline: frames → cut (with score) → web weight → contact sheet → atlas.
 set -euo pipefail
 cd "$(dirname "$0")/src"
+python3 -c "import numpy, scipy, cv2, PIL" 2>/dev/null || {
+  echo "missing Python deps — run: pip install -r requirements.txt" >&2; exit 1; }
+command -v ffmpeg >/dev/null || { echo "ffmpeg not on PATH (brew install ffmpeg)" >&2; exit 1; }
 OUT="${GP_OUT:-../out}"
 python3 film.py render
 python3 film.py cut
