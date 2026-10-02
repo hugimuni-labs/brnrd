@@ -1020,8 +1020,16 @@ def set_status(event: dict[str, Any], status: str) -> None:
     """Update the status field of an event file atomically."""
     path: Path = event["_path"]
     text = path.read_text(encoding="utf-8")
-    old_status = event.get("status", "pending")
-    new_text = text.replace(f"status: {old_status}", f"status: {status}", 1)
+    # Rewrite the frontmatter's own ``status:`` line, whatever it currently
+    # says on disk. Matching the caller's *cached* old value silently wrote
+    # nothing when another writer had moved the file first, while the cached
+    # dict still claimed the new status.
+    m = re.match(r"^---\n(.*?\n)---\n?", text, re.DOTALL)
+    head_end = m.end(1) if m else 0
+    new_head, n = re.subn(
+        r"(?m)^status:[^\n]*$", f"status: {status}", text[:head_end], count=1,
+    )
+    new_text = (new_head + text[head_end:]) if n else text
     _atomic_write(path, new_text)
     event["status"] = status
 
