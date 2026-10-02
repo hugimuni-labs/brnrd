@@ -1,0 +1,12 @@
+{"at": "2026-10-02T11:04:02Z", "ctx": {"delta": null, "tokens_after": null}, "phase": "session-start", "quota": {"S": 100, "W": 52}, "spend": {"allowance": 200000, "allowance_used": 0}}
+{"at": "2026-10-02T11:04:16Z", "ctx": {"delta": null, "tokens_after": null}, "phase": "post-tool", "quota": {"S": 100, "W": 52}, "spend": {"allowance": 200000, "allowance_used": 0}}
+{"at": "2026-10-02T11:04:25Z", "ctx": {"delta": null, "tokens_after": null}, "phase": "post-tool", "quota": {"S": 100, "W": 52}, "spend": {"allowance": 200000, "allowance_used": 0}}
+{"at": "2026-10-02T11:04:36Z", "ctx": {"delta": null, "tokens_after": 0}, "phase": "post-tool", "quota": {"S": 100, "W": 52}, "spend": {"allowance": 200000, "allowance_used": 202833}}
+{"at": "2026-10-02T11:04:48Z", "ctx": {"delta": 0, "tokens_after": 0}, "phase": "post-tool", "quota": {"S": 100, "W": 52}, "spend": {"allowance": 200000, "allowance_used": 202833}}
+{"at": "2026-10-02T11:05:00Z", "ctx": {"delta": 0, "tokens_after": 0}, "phase": "post-tool", "quota": {"S": 100, "W": 52}, "spend": {"allowance": 200000, "allowance_used": 202833}}
+{"at": "2026-10-02T11:05:12Z", "ctx": {"delta": 57700, "tokens_after": 57700}, "phase": "post-tool", "quota": {"S": 100, "W": 52}, "spend": {"allowance": 200000, "allowance_used": 268383}}
+{"at": "2026-10-02T11:05:23Z", "ctx": {"delta": 0, "tokens_after": 57700}, "phase": "post-tool", "quota": {"S": 100, "W": 52}, "spend": {"allowance": 200000, "allowance_used": 268383}}
+{"at": "2026-10-02T11:05:37Z", "ctx": {"delta": 0, "tokens_after": 57700}, "phase": "post-tool", "quota": {"S": 100, "W": 52}, "spend": {"allowance": 200000, "allowance_used": 268383}}
+{"at": "2026-10-02T11:05:51Z", "ctx": {"delta": 0, "tokens_after": 57700}, "phase": "post-tool", "quota": {"S": 100, "W": 52}, "spend": {"allowance": 200000, "allowance_used": 268383}}
+{"at": "2026-10-02T11:06:02Z", "ctx": {"delta": 0, "tokens_after": 57700}, "phase": "post-tool", "quota": {"S": 100, "W": 52}, "spend": {"allowance": 200000, "allowance_used": 268383}}
+{"at": "2026-10-02T11:06:21Z", "ctx": {"delta": 0, "tokens_after": 57700}, "phase": "post-tool", "quota": {"S": 100, "W": 52}, "spend": {"allowance": 200000, "allowance_used": 268383}}

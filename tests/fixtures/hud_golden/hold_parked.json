@@ -85,6 +85,22 @@
       "summary": "spend 0/20m \u00b7 0%",
       "tokens": 20000000
     },
+    "breakeven": {
+      "B": null,
+      "baseline_samples": 0,
+      "boot_samples": 0,
+      "c0": null,
+      "core": null,
+      "ct": null,
+      "fresh_boundaries": 3,
+      "history_limit": 10,
+      "latest": null,
+      "n": null,
+      "runs_considered": 0,
+      "shell": null,
+      "state": "unknown",
+      "unit": "weighted_tokens"
+    },
     "coexisting_runs": {
       "kind": "state",
       "note": "no sibling runs active right now",

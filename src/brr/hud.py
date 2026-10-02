@@ -764,6 +764,27 @@ def build(inputs: HUDInputs) -> HUD:
     daemon._record_boot_cost(
         task, runner_name, work_dir, outbox_dir, not_before=started_wall,
     )
+    from . import breakeven
+
+    native_cost = getattr(task, "_breakeven_measurement", {})
+    cost_shell, cost_core = native_cost.get("shell"), native_cost.get("core")
+    # Historical reads are a once-per-minute task-local cache, not an account
+    # resolution or an unbounded directory scan on every tool boundary.
+    cost_key = (cost_shell, cost_core)
+    cost_cache = getattr(task, "_breakeven_cohort", {})
+    if cost_cache.get("key") != cost_key or time.monotonic() - cost_cache.get("at", 0) >= 60:
+        history_dir = None
+        if account_context is not None and repo_label and cost_shell and cost_core:
+            from . import account as account_mod
+            history_dir = account_mod.run_dir(account_context, repo_label, task.id).parent
+        terms = breakeven.cohort(history_dir, cost_shell, cost_core,
+                                exclude=task.id,
+                                local_runs_dir=brr_dir / "runs" if brr_dir else None)
+        cost_cache = {"key": cost_key, "at": time.monotonic(), "terms": terms}
+        task._breakeven_cohort = cost_cache
+    break_even_facet = breakeven.project(cost_cache.get("terms", {}),
+                                       native_cost.get("latest"),
+                                       shell=cost_shell, core=cost_core)
     daemon._record_context_window(
         runner_name, work_dir, outbox_dir, not_before=started_wall,
     )
@@ -986,7 +1007,7 @@ def build(inputs: HUDInputs) -> HUD:
         ),
         knowledge=Knowledge(kb_base_url=task.meta.get("kb_base_url")),
         name=Name(written=bool(run_ledger.read_run_name_control(outbox_dir))),
-        resources=daemon._resources_facet(
+        resources={"breakeven": break_even_facet, **daemon._resources_facet(
             quota_summary,
             # Per-Shell level source (see _collect_levels): Codex reads its
             # subscription quota + context window live from the session
@@ -1022,7 +1043,7 @@ def build(inputs: HUDInputs) -> HUD:
                 str((runner_meta or {}).get("shell") or runner_name or ""),
                 runner_catalog, brr_dir,
             ),
-        ),
+        )},
         heddles=[
             dict(h) for h in ((card_state or {}).get("heddles") or [])
             if isinstance(h, dict)
