@@ -6478,6 +6478,7 @@ def _parked_child_projection(task: Run) -> dict[str, Any] | None:
         "waiting_on": _PARKED_CHILD_WAITING_ON.get(condition, condition or "unknown"),
         "detail": str((hold or {}).get("detail") or "").strip(),
         "armed_at": str((hold or {}).get("armed_at") or "").strip(),
+        "generation": (hold or {}).get("generation"),
         "wall": bool(resource_hold.is_resource_wall(hold)),
     }
 
@@ -6490,6 +6491,256 @@ def _park_run_control(spawn_event_id: str, parked: dict[str, Any]) -> bool:
             return False
         control["parked"] = dict(parked)
         return True
+
+
+#: The daemon-owned record of a parked strand's control edge, beside (never
+#: inside) the child's ``run.md``: no child process writes this file, so a
+#: worker's own ``Run.save`` cannot clobber it or be clobbered by it.
+_PARKED_EDGE_FILE = "edge.json"
+
+
+def _parked_edge_path(inbox_dir: Path | None, control: dict) -> Path | None:
+    child_run_id = str(control.get("run_id") or "").strip()
+    if inbox_dir is None or not child_run_id:
+        return None
+    return inbox_dir.parent / "runs" / child_run_id / _PARKED_EDGE_FILE
+
+
+def _write_parked_edge(path: Path, record: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    protocol._atomic_write(path, json.dumps(record, sort_keys=True) + "\n")
+
+
+def _persist_parked_edge(
+    inbox_dir: Path | None, control: dict, *, unlink_on_failure: bool = True,
+) -> bool:
+    """Snapshot a **parked** child's edge to its daemon-owned record (#2160).
+
+    Written only while the control is parked — at the reap that parks it,
+    and when an adoption or an allowance grant changes a parked edge — so
+    no child process is alive to race it. A working child's adoption or
+    grant lives in memory until the reap snapshots it on park.
+
+    Fail-closed: when a park-time write fails the stale record is removed,
+    so the next image recovers *no* edge rather than an older owner's. An
+    adoption keeps the old record instead (``unlink_on_failure=False``):
+    :func:`_commit_child_adoption` refuses and reverts it, so the old record
+    is the truth again.
+    """
+    path = _parked_edge_path(inbox_dir, control)
+    if path is None:
+        return False
+    with _run_controls_lock:
+        parked = control.get("parked")
+        if not isinstance(parked, dict):
+            return False
+        record = {
+            # Binds the record to the one hold it describes: a child released
+            # and parked again under a new hold must not be recovered from
+            # the previous park's record if this one was never written.
+            "hold_generation": parked.get("generation"),
+            "hold_armed_at": str(parked.get("armed_at") or ""),
+            "event_id": str(control.get("event_id") or ""),
+            "run_id": str(control.get("run_id") or ""),
+            "owner_run_id": str(control.get("parent_run_id") or ""),
+            "owner_conversation_key": str(control.get("parent_conversation_key") or ""),
+            "repo_label": str(control.get("repo_label") or ""),
+            "adopted_from_run_id": str(control.get("adopted_from_run_id") or ""),
+            "allowance_tokens": control.get("allowance_tokens"),
+            "allowance_asked": bool(control.get("allowance_asked")),
+            "title": str(control.get("title") or ""),
+        }
+    try:
+        _write_parked_edge(path, record)
+        return True
+    except Exception as exc:  # noqa: BLE001 — a verb must never raise here
+        print(f"[brnrd] parked edge record not written for {record['run_id']}: {exc}")
+        if not unlink_on_failure:
+            return False
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as unlink_exc:
+            print(f"[brnrd] parked edge record could not be removed: {unlink_exc}")
+        return False
+
+
+def _commit_child_adoption(
+    inbox_dir: Path | None,
+    control: dict,
+    auth: dict,
+    outbox_dir: Path | None,
+    *,
+    verb: str,
+    target: str,
+) -> bool:
+    """Make an accepted adoption of a parked edge durable, or undo it (#2160).
+
+    A parked edge's owner is recovered from its daemon-owned record, so an
+    adoption that cannot be written must not stand in memory: the next image
+    would recover the previous owner after this one was told it adopted.
+    Refused explicitly, and the in-memory edge restored to match the record
+    still on disk. A working child's adoption stands; the reap that parks it
+    writes the record.
+    """
+    with _run_controls_lock:
+        parked = isinstance(control.get("parked"), dict)
+    if not parked or _persist_parked_edge(inbox_dir, control, unlink_on_failure=False):
+        return True
+    with _run_controls_lock:
+        control["parent_run_id"] = str(auth.get("previous_parent_run_id") or "")
+        control["parent_conversation_key"] = str(
+            auth.get("previous_conversation_key") or ""
+        )
+        control["repo_label"] = str(auth.get("previous_repo_label") or "")
+        if auth.get("previous_adopted_from_run_id"):
+            control["adopted_from_run_id"] = str(auth["previous_adopted_from_run_id"])
+        else:
+            control.pop("adopted_from_run_id", None)
+    _record_outbox_notice(
+        outbox_dir,
+        f"{verb} refused: adopting {target!r} could not be recorded durably; "
+        "the edge is unchanged — try again",
+        kind="refused", lifetime="run",
+    )
+    return False
+
+
+def _recover_parked_child_controls(
+    account_context: account.AccountContext | None,
+    repo_root: Path,
+) -> int:
+    """Rebuild the dispatch-edge controls of parked strands at boot (#2160).
+
+    ``_run_controls`` lives in memory. A strand parked on its own hold keeps
+    its edge on purpose (:func:`_park_run_control`), but once its process is
+    reaped it is out of ``active_spawns``, so the quiescent re-exec guard
+    does not protect it and a fresh image woke unable to ``to:``/``stop:``
+    it.
+
+    Evidence, all daemon-written: the child's manifest says it is a strand
+    whose hold is still active (:func:`resource_hold.run_is_held`, so
+    released, stopped and terminal runs never qualify) with a dispatch
+    parent and spawn event id; and its :data:`_PARKED_EDGE_FILE` record —
+    written at park and on every later change to the parked edge — names the
+    edge's **current** owner, including an adoption, plus its allowance
+    facts, bound to the hold generation and ``armed_at`` it was written
+    under. A historical graph link is never read.
+
+    Fail-closed: no record, a record from a different hold, or one that
+    disagrees with the manifest's lineage or is not a shape the adoption fence could produce (owner
+    conversation equal to the dispatch conversation, repo unchanged or
+    filled, a non-dispatcher owner only with ``adopted_from_run_id``),
+    recovers nothing — never the dispatch parent by default, whose exact-id
+    match would otherwise outrank a live adopter.
+
+    Idempotent: an edge already registered is left exactly as it is.
+    """
+    roots: dict[Path, Path] = {}
+    for candidate in [repo_root] + [
+        registered.root for registered in (
+            account_context.repos.values() if account_context else []
+        )
+    ]:
+        try:
+            key = candidate.resolve()
+        except OSError:
+            key = candidate
+        roots.setdefault(key, candidate)
+    recovered = 0
+    for root in roots.values():
+        runs_dir = gitops.shared_brr_dir(root) / "runs"
+        if not runs_dir.is_dir():
+            continue
+        for child in _held_runs_for_repo(runs_dir):
+            meta = child.meta or {}
+            if not _is_strand(meta):
+                continue
+            spawn_event_id = str(child.event_id or "").strip()
+            dispatch_parent = str(meta.get("spawn_parent_run_id") or "").strip()
+            if not spawn_event_id or not dispatch_parent:
+                continue
+            parked = _parked_child_projection(child)
+            if parked is None:
+                continue
+            if (
+                _find_run_control(spawn_event_id) is not None
+                or _find_run_control(child.id) is not None
+            ):
+                continue
+            try:
+                record = json.loads(
+                    (runs_dir / child.id / _PARKED_EDGE_FILE).read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError):
+                print(
+                    f"[brnrd] parked-control recovery: {child.id} has no "
+                    "readable edge record; not recovered"
+                )
+                continue
+            if not isinstance(record, dict):
+                continue
+            dispatch_conv = str(meta.get("spawn_parent_conversation_key") or "").strip()
+            child_repo = str(meta.get("repo_label") or "").strip()
+            owner = str(record.get("owner_run_id") or "").strip()
+            owner_conv = str(record.get("owner_conversation_key") or "").strip()
+            owner_repo = str(record.get("repo_label") or "").strip()
+            adopted_from = str(record.get("adopted_from_run_id") or "").strip()
+            if (
+                record.get("hold_generation") != parked.get("generation")
+                or str(record.get("hold_armed_at") or "") != parked["armed_at"]
+                or str(record.get("event_id") or "") != spawn_event_id
+                or str(record.get("run_id") or "") != child.id
+                or not owner
+                or owner_conv != dispatch_conv
+                or (child_repo and owner_repo and owner_repo != child_repo)
+                or (owner != dispatch_parent and (not adopted_from or not owner_conv))
+            ):
+                print(
+                    f"[brnrd] parked-control recovery: {child.id} skipped — its "
+                    "edge record is not one the dispatch/adoption fence produces"
+                )
+                continue
+            allowance_tokens = record.get("allowance_tokens")
+            if not isinstance(allowance_tokens, int):
+                allowance_tokens = None
+            _register_run_control(
+                spawn_event_id,
+                owner,
+                parent_conversation_key=owner_conv,
+                repo_label=owner_repo or child_repo,
+                allowance_tokens=allowance_tokens,
+                title=str(record.get("title") or meta.get("title") or "").strip(),
+            )
+            _bind_run_control(spawn_event_id, child.id)
+            produce = meta.get("submitted_produce")
+            if isinstance(produce, str):
+                # The manifest stores nested dicts as JSON text.
+                try:
+                    produce = json.loads(produce)
+                except ValueError:
+                    produce = None
+            with _run_controls_lock:
+                control = _run_controls[spawn_event_id]
+                control["allowance_asked"] = bool(record.get("allowance_asked"))
+                spent = meta.get("spawn_allowance_spent")
+                if isinstance(spent, (int, float)):
+                    control["allowance_spent"] = int(spent)
+                if meta.get("submitted"):
+                    control["submitted"] = True
+                    if isinstance(produce, dict):
+                        control["submitted_produce"] = dict(produce)
+                        try:
+                            control["submit_generation"] = int(
+                                produce.get("spawn_submit_generation") or 0
+                            )
+                        except (TypeError, ValueError):
+                            pass
+                control["recovered_at_boot"] = True
+                if adopted_from:
+                    control["adopted_from_run_id"] = adopted_from
+            _park_run_control(spawn_event_id, parked)
+            recovered += 1
+    return recovered
 
 
 def _retire_child_messages(inbox_dir: Path | None, spawn_event_id: str) -> None:
@@ -6871,6 +7122,9 @@ def _authorize_child_control(task: Run, control: dict) -> dict[str, object]:
                 "reason": "orphan-out-of-scope",
                 "parent_run_id": parent_run_id,
             }
+        previous_conversation_key = str(control.get("parent_conversation_key") or "")
+        previous_repo_label = str(control.get("repo_label") or "")
+        previous_adopted_from = str(control.get("adopted_from_run_id") or "")
         control["parent_run_id"] = task_id
         control["parent_conversation_key"] = task_conv
         if task_repo:
@@ -6880,6 +7134,9 @@ def _authorize_child_control(task: Run, control: dict) -> dict[str, object]:
             "allowed": True,
             "adopted": True,
             "previous_parent_run_id": parent_run_id,
+            "previous_conversation_key": previous_conversation_key,
+            "previous_repo_label": previous_repo_label,
+            "previous_adopted_from_run_id": previous_adopted_from,
         }
 
 
@@ -7036,6 +7293,10 @@ def _queue_child_message(
         )
         return False
     if auth.get("adopted"):
+        if not _commit_child_adoption(
+            inbox_dir, control, auth, outbox_dir, verb="message", target=target,
+        ):
+            return False
         _emit_child_adoption(
             emit,
             task,
@@ -7058,7 +7319,28 @@ def _queue_child_message(
     # live run-control record so the child's very next boundary reads it —
     # the ordinary steer delivery below still carries the same body, so the
     # child sees in prose what just happened to its own budget.
-    _apply_allowance_grant(control, body)
+    with _run_controls_lock:
+        prior_allowance = control.get("allowance_tokens")
+        prior_asked = control.get("allowance_asked")
+        parked_edge = isinstance(control.get("parked"), dict)
+    granted = _apply_allowance_grant(control, body)
+    if (
+        granted is not None
+        and parked_edge
+        and not _persist_parked_edge(inbox_dir, control, unlink_on_failure=False)
+    ):
+        # A parked child has no heartbeat to carry the new ceiling; a grant
+        # that cannot be recorded would be forgotten by the next image.
+        with _run_controls_lock:
+            control["allowance_tokens"] = prior_allowance
+            control["allowance_asked"] = prior_asked
+        _record_outbox_notice(
+            outbox_dir,
+            f"message refused: the allowance grant to parked {target!r} could "
+            "not be recorded durably; nothing changed — try again",
+            kind="refused", lifetime="run",
+        )
+        return False
     if inbox_dir is None:
         _record_outbox_notice(
             outbox_dir, "message dropped: no inbox to queue into", kind="dropped",
@@ -7487,6 +7769,10 @@ def _queue_stop_request(
         _record_outbox_notice(outbox_dir, notice, kind="refused", lifetime="run")
         return False
     if auth.get("adopted"):
+        if not _commit_child_adoption(
+            inbox_dir, control, auth, outbox_dir, verb="stop", target=target,
+        ):
+            return False
         _emit_child_adoption(
             emit,
             task,
@@ -18395,6 +18681,19 @@ def start(
             print(f"[brnrd] wyrd: recovered dispatch edges for {backfilled} run(s)")
     except Exception as exc:  # noqa: BLE001 - backfill must not block boot
         print(f"[brnrd] dispatch-edge backfill skipped: {exc}")
+    # #2160: a parked strand's control edge lives in memory and is not
+    # covered by the reload guard once its process is reaped. Rebuild it
+    # from the child's own held manifest, after the janitors (so nothing
+    # they settle is revived) and before the first dispatch or outbox drain.
+    try:
+        recovered = _recover_parked_child_controls(account_context, repo_root)
+        if recovered:
+            print(
+                "[brnrd] parked-control recovery: restored "
+                f"{recovered} parked strand edge(s)"
+            )
+    except Exception as exc:  # noqa: BLE001 - recovery must not block boot
+        print(f"[brnrd] parked-control recovery skipped: {exc}")
     # #311: reconcile spawn dispatches orphaned by a daemon death — must run
     # before the main loop's first dispatch scan, because list_dispatchable
     # treats "processing" as still-eligible and the spawn slot would
@@ -18680,6 +18979,12 @@ def start(
                             if parked is not None and _park_run_control(
                                 spawn_eid, parked,
                             ):
+                                # #2160: the daemon-owned edge record a
+                                # fresh image recovers this edge from.
+                                _persist_parked_edge(
+                                    spawn["inbox_dir"],
+                                    _find_run_control(spawn_eid) or {},
+                                )
                                 # Parked, not over. The process ended and the
                                 # spawn-pool slot is free, but the *edge* is
                                 # not: this parent is still the only run that
@@ -18722,7 +19027,9 @@ def start(
                                 and not isinstance(ctrl.get("parked"), dict)
                                 and _park_run_control(spawn_eid, parked)
                             ):
-                                pass  # held child: edge kept despite the throw
+                                # held child: edge kept despite the throw, and
+                                # its record written like the normal park's.
+                                _persist_parked_edge(spawn.get("inbox_dir"), ctrl)
                             elif ctrl is not None and not isinstance(
                                 ctrl.get("parked"), dict
                             ):
