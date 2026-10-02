@@ -339,21 +339,51 @@ class TestAdoptionIsCurrentOwnership:
 
         assert daemon._run_controls == {}
 
-    def test_a_failed_adoption_write_fails_closed(self, tmp_path, monkeypatch):
+    def test_an_adoption_that_cannot_be_recorded_is_refused(self, tmp_path, monkeypatch):
         _held_strand(tmp_path)
         _boot(tmp_path, monkeypatch)
+        writer = daemon._write_parked_edge
+
+        def disk_full(*a, **kw):
+            raise OSError("disk full")
+
+        # Never ``monkeypatch.undo()`` here: it would also undo conftest's
+        # XDG_STATE_HOME isolation and the next boot would write a real home.
+        monkeypatch.setattr(daemon, "_write_parked_edge", disk_full)
+        assert not _steer(tmp_path, _asker("run-next-seat"))
+        assert not _stop(tmp_path, _asker("run-next-seat"))
+        control = daemon._find_run_control("evt-kid")
+        assert control["parent_run_id"] == "run-parent"
+        assert "adopted_from_run_id" not in control
+        record = json.loads((_runs_dir(tmp_path) / "run-kid" / "edge.json").read_text())
+        assert record["owner_run_id"] == "run-parent"
+        monkeypatch.setattr(daemon, "_write_parked_edge", writer)
+
+        _fresh_process(monkeypatch)
+        _boot(tmp_path, monkeypatch)
+        _live_resident("run-next-seat", "evt-next-seat")
+
+        # The refused adopter never owned it; the dispatcher still does.
+        assert daemon._find_run_control("evt-kid")["parent_run_id"] == "run-parent"
+        assert _steer(tmp_path, _asker("run-parent"))
+
+    def test_a_failed_park_time_write_recovers_nothing(self, tmp_path, monkeypatch):
+        _held_strand(tmp_path)
+        _boot(tmp_path, monkeypatch)
+        assert _steer(tmp_path, _asker("run-next-seat"))  # adopted, recorded
+        writer = daemon._write_parked_edge
 
         def disk_full(*a, **kw):
             raise OSError("disk full")
 
         monkeypatch.setattr(daemon, "_write_parked_edge", disk_full)
-        assert _steer(tmp_path, _asker("run-next-seat"))  # adopted in memory
-        assert not (_runs_dir(tmp_path) / "run-kid" / "edge.json").exists()
-        monkeypatch.undo()
+        assert not daemon._persist_parked_edge(
+            tmp_path / ".brr" / "inbox", daemon._find_run_control("evt-kid"),
+        )
+        monkeypatch.setattr(daemon, "_write_parked_edge", writer)
         _fresh_process(monkeypatch)
         _boot(tmp_path, monkeypatch)
 
-        # Nothing recovered: never the original dispatcher by default.
         assert daemon._run_controls == {}
         assert not _steer(tmp_path, _asker("run-parent"))
 

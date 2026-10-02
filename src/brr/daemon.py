@@ -6510,7 +6510,9 @@ def _write_parked_edge(path: Path, record: dict) -> None:
     protocol._atomic_write(path, json.dumps(record, sort_keys=True) + "\n")
 
 
-def _persist_parked_edge(inbox_dir: Path | None, control: dict) -> bool:
+def _persist_parked_edge(
+    inbox_dir: Path | None, control: dict, *, unlink_on_failure: bool = True,
+) -> bool:
     """Snapshot a **parked** child's edge to its daemon-owned record (#2160).
 
     Written only while the control is parked — at the reap that parks it,
@@ -6518,8 +6520,11 @@ def _persist_parked_edge(inbox_dir: Path | None, control: dict) -> bool:
     no child process is alive to race it. A working child's adoption or
     grant lives in memory until the reap snapshots it on park.
 
-    Fail-closed: when the write fails the stale record is removed, so the
-    next image recovers *no* edge rather than an older owner's.
+    Fail-closed: when a park-time write fails the stale record is removed,
+    so the next image recovers *no* edge rather than an older owner's. An
+    adoption keeps the old record instead (``unlink_on_failure=False``):
+    :func:`_commit_child_adoption` refuses and reverts it, so the old record
+    is the truth again.
     """
     path = _parked_edge_path(inbox_dir, control)
     if path is None:
@@ -6543,11 +6548,51 @@ def _persist_parked_edge(inbox_dir: Path | None, control: dict) -> bool:
         return True
     except Exception as exc:  # noqa: BLE001 — a verb must never raise here
         print(f"[brnrd] parked edge record not written for {record['run_id']}: {exc}")
+        if not unlink_on_failure:
+            return False
         try:
             path.unlink(missing_ok=True)
         except OSError as unlink_exc:
             print(f"[brnrd] parked edge record could not be removed: {unlink_exc}")
         return False
+
+
+def _commit_child_adoption(
+    inbox_dir: Path | None,
+    control: dict,
+    auth: dict,
+    outbox_dir: Path | None,
+    *,
+    verb: str,
+    target: str,
+) -> bool:
+    """Make an accepted adoption of a parked edge durable, or undo it (#2160).
+
+    A parked edge's owner is recovered from its daemon-owned record, so an
+    adoption that cannot be written must not stand in memory: the next image
+    would recover the previous owner after this one was told it adopted.
+    Refused explicitly, and the in-memory edge restored to match the record
+    still on disk. A working child's adoption stands; the reap that parks it
+    writes the record.
+    """
+    with _run_controls_lock:
+        parked = isinstance(control.get("parked"), dict)
+    if not parked or _persist_parked_edge(inbox_dir, control, unlink_on_failure=False):
+        return True
+    with _run_controls_lock:
+        control["parent_run_id"] = str(auth.get("previous_parent_run_id") or "")
+        control["parent_conversation_key"] = str(
+            auth.get("previous_conversation_key") or ""
+        )
+        control["repo_label"] = str(auth.get("previous_repo_label") or "")
+        control.pop("adopted_from_run_id", None)
+    _record_outbox_notice(
+        outbox_dir,
+        f"{verb} refused: adopting {target!r} could not be recorded durably; "
+        "the edge is unchanged — try again",
+        kind="refused", lifetime="run",
+    )
+    return False
 
 
 def _recover_parked_child_controls(
@@ -7064,6 +7109,8 @@ def _authorize_child_control(task: Run, control: dict) -> dict[str, object]:
                 "reason": "orphan-out-of-scope",
                 "parent_run_id": parent_run_id,
             }
+        previous_conversation_key = str(control.get("parent_conversation_key") or "")
+        previous_repo_label = str(control.get("repo_label") or "")
         control["parent_run_id"] = task_id
         control["parent_conversation_key"] = task_conv
         if task_repo:
@@ -7073,6 +7120,8 @@ def _authorize_child_control(task: Run, control: dict) -> dict[str, object]:
             "allowed": True,
             "adopted": True,
             "previous_parent_run_id": parent_run_id,
+            "previous_conversation_key": previous_conversation_key,
+            "previous_repo_label": previous_repo_label,
         }
 
 
@@ -7229,6 +7278,10 @@ def _queue_child_message(
         )
         return False
     if auth.get("adopted"):
+        if not _commit_child_adoption(
+            inbox_dir, control, auth, outbox_dir, verb="message", target=target,
+        ):
+            return False
         _emit_child_adoption(
             emit,
             task,
@@ -7238,7 +7291,6 @@ def _queue_child_message(
             previous_parent_run_id=str(auth.get("previous_parent_run_id") or ""),
             outbox_dir=outbox_dir,
         )
-        _persist_parked_edge(inbox_dir, control)
     if control.get("stopped"):
         _record_outbox_notice(
             outbox_dir,
@@ -7682,6 +7734,10 @@ def _queue_stop_request(
         _record_outbox_notice(outbox_dir, notice, kind="refused", lifetime="run")
         return False
     if auth.get("adopted"):
+        if not _commit_child_adoption(
+            inbox_dir, control, auth, outbox_dir, verb="stop", target=target,
+        ):
+            return False
         _emit_child_adoption(
             emit,
             task,
@@ -7691,7 +7747,6 @@ def _queue_stop_request(
             previous_parent_run_id=str(auth.get("previous_parent_run_id") or ""),
             outbox_dir=outbox_dir,
         )
-        _persist_parked_edge(inbox_dir, control)
     reason = str(fm.get("reason") or "").strip() or body.strip()
     spawn_event_id = str(control["event_id"])
     stage = _apply_run_stop(
