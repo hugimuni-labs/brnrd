@@ -149,7 +149,7 @@ if (command === 'capture') {
 	const sha = value('--sha');
 	const urlBase = value(
 		'--url-base',
-		'https://raw.githubusercontent.com/hugimuni-labs/brnrd/shots/pr-PLACEHOLDER/SHA'
+		'https://raw.githubusercontent.com/hugimuni-labs/shots/main/pr-PLACEHOLDER/SHA'
 	);
 	const url = (path) => `${urlBase}/${path.split('/').map(encodeURIComponent).join('/')}`;
 
