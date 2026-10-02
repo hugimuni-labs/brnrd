@@ -248,11 +248,72 @@ class TestNothingIsRevived:
 
         assert daemon._run_controls == {}
 
-    def test_a_second_boot_adds_nothing_and_keeps_the_adopter(self, tmp_path, monkeypatch):
+    def test_a_second_boot_in_the_same_image_adds_nothing(self, tmp_path, monkeypatch):
         _held_strand(tmp_path)
         _boot(tmp_path, monkeypatch)
-        assert _steer(tmp_path, _asker("run-next-seat"))
         _boot(tmp_path, monkeypatch)
 
         assert list(daemon._run_controls) == ["evt-kid"]
+
+
+def _fresh_process(monkeypatch) -> None:
+    monkeypatch.setattr(daemon, "_run_controls", {})
+
+
+def _live_resident(run_id: str, event_id: str) -> None:
+    """Register a running resident thought exactly as the dispatch loop does."""
+    daemon._register_run_control(
+        event_id, None, parent_conversation_key=CONV, repo_label=REPO,
+    )
+    daemon._bind_run_control(event_id, run_id)
+
+
+class TestAdoptionIsCurrentOwnership:
+    def test_the_adopter_owns_the_edge_after_a_fresh_image(self, tmp_path, monkeypatch):
+        _held_strand(tmp_path)
+        _boot(tmp_path, monkeypatch)
+        assert _steer(tmp_path, _asker("run-next-seat"))
+        child = _child(tmp_path)
+        assert child.meta["spawn_parent_run_id"] == "run-parent"  # lineage kept
+        assert child.meta["spawn_owner_run_id"] == "run-next-seat"
+
+        _fresh_process(monkeypatch)
+        _boot(tmp_path, monkeypatch)
+        _boot(tmp_path, monkeypatch)
+
+        assert list(daemon._run_controls) == ["evt-kid"]
+        control = daemon._find_run_control("evt-kid")
+        assert control["parent_run_id"] == "run-next-seat"
+        assert control["adopted_from_run_id"] == "run-parent"
+        assert _steer(tmp_path, _asker("run-next-seat"))
+
+    def test_the_old_dispatcher_cannot_bypass_a_live_adopter(self, tmp_path, monkeypatch):
+        _held_strand(tmp_path)
+        _boot(tmp_path, monkeypatch)
+        assert _steer(tmp_path, _asker("run-next-seat"))
+        _fresh_process(monkeypatch)
+        _boot(tmp_path, monkeypatch)
+        _live_resident("run-next-seat", "evt-next-seat")
+
+        # Exact-id equality would have let the original dispatcher straight
+        # back in had recovery reinstated it; the live adopter holds the edge.
+        assert not _steer(tmp_path, _asker("run-parent"))
+        assert not _stop(tmp_path, _asker("run-parent"))
         assert daemon._find_run_control("evt-kid")["parent_run_id"] == "run-next-seat"
+        assert resource_hold.run_is_held(_child(tmp_path).status, _child(tmp_path).meta)
+        assert _stop(tmp_path, _asker("run-next-seat"))
+        assert _child(tmp_path).status == "stopped"
+
+    def test_an_owner_record_the_fence_could_not_produce_recovers_nothing(
+        self, tmp_path, monkeypatch,
+    ):
+        child = _held_strand(tmp_path)
+        child.meta["spawn_owner_run_id"] = "run-elsewhere"
+        child.meta["spawn_owner_conversation_key"] = "cloud:telegram:2:"
+        child.meta["spawn_owner_repo_label"] = REPO
+        child.meta["spawn_owner_adopted_from_run_id"] = "run-parent"
+        child.save(_runs_dir(tmp_path))
+        _boot(tmp_path, monkeypatch)
+
+        assert daemon._run_controls == {}
+        assert not _steer(tmp_path, _asker("run-elsewhere", conversation_key="cloud:telegram:2:"))
