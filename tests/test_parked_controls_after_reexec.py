@@ -388,6 +388,43 @@ class TestAdoptionIsCurrentOwnership:
         assert not _steer(tmp_path, _asker("run-parent"))
 
 
+class TestTheRecordIsBoundToItsHold:
+    def test_a_record_from_a_previous_hold_recovers_nothing(self, tmp_path, monkeypatch):
+        _held_strand(tmp_path)  # parked under hold generation 1, recorded
+        child = _child(tmp_path)
+        # Released, worked, adopted in memory, parked again under a new hold
+        # whose snapshot never landed (failed write and failed unlink).
+        hold = dict(child.meta["resource_hold"])
+        hold["generation"] = int(hold.get("generation") or 1) + 1
+        hold["armed_at"] = "2099-01-01T00:00:00Z"
+        child.meta["resource_hold"] = hold
+        child.save(_runs_dir(tmp_path))
+        _boot(tmp_path, monkeypatch)
+
+        assert daemon._run_controls == {}
+        assert not _steer(tmp_path, _asker("run-parent"))
+
+    def test_a_failed_second_adoption_restores_the_first(self, tmp_path, monkeypatch):
+        _held_strand(tmp_path)
+        _boot(tmp_path, monkeypatch)
+        assert _steer(tmp_path, _asker("run-next-seat"))
+        writer = daemon._write_parked_edge
+
+        def disk_full(*a, **kw):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(daemon, "_write_parked_edge", disk_full)
+        assert not _steer(tmp_path, _asker("run-third-seat"))
+        monkeypatch.setattr(daemon, "_write_parked_edge", writer)
+        control = daemon._find_run_control("evt-kid")
+        assert control["parent_run_id"] == "run-next-seat"
+        assert control["adopted_from_run_id"] == "run-parent"
+        notices = "".join(
+            p.read_text() for p in (tmp_path / "outbox").rglob("*") if p.is_file()
+        )
+        assert "could not be recorded durably" in notices
+
+
 class TestTheAllowanceRidesThePark:
     def test_a_grant_to_a_parked_child_survives_a_fresh_image(self, tmp_path, monkeypatch):
         _held_strand(tmp_path)
@@ -399,6 +436,27 @@ class TestTheAllowanceRidesThePark:
         _boot(tmp_path, monkeypatch)
 
         assert daemon._find_run_control("run-kid")["allowance_tokens"] == 500_000
+
+    def test_an_unrecordable_grant_is_refused_and_an_ordinary_steer_writes_nothing(
+        self, tmp_path, monkeypatch,
+    ):
+        _held_strand(tmp_path)
+        _boot(tmp_path, monkeypatch)
+        writes = []
+        writer = daemon._write_parked_edge
+        monkeypatch.setattr(
+            daemon, "_write_parked_edge", lambda *a, **kw: writes.append(a),
+        )
+        assert _steer_body(tmp_path, _asker(), "just a steer")
+        assert writes == []
+
+        def disk_full(*a, **kw):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(daemon, "_write_parked_edge", disk_full)
+        assert not _steer_body(tmp_path, _asker(), "allowance: +100k\nmore")
+        monkeypatch.setattr(daemon, "_write_parked_edge", writer)
+        assert daemon._find_run_control("run-kid")["allowance_tokens"] == 400_000
 
 
 def _steer_body(root: Path, task: Run, body: str) -> bool:

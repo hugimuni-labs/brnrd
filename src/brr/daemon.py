@@ -6478,6 +6478,7 @@ def _parked_child_projection(task: Run) -> dict[str, Any] | None:
         "waiting_on": _PARKED_CHILD_WAITING_ON.get(condition, condition or "unknown"),
         "detail": str((hold or {}).get("detail") or "").strip(),
         "armed_at": str((hold or {}).get("armed_at") or "").strip(),
+        "generation": (hold or {}).get("generation"),
         "wall": bool(resource_hold.is_resource_wall(hold)),
     }
 
@@ -6530,9 +6531,15 @@ def _persist_parked_edge(
     if path is None:
         return False
     with _run_controls_lock:
-        if not isinstance(control.get("parked"), dict):
+        parked = control.get("parked")
+        if not isinstance(parked, dict):
             return False
         record = {
+            # Binds the record to the one hold it describes: a child released
+            # and parked again under a new hold must not be recovered from
+            # the previous park's record if this one was never written.
+            "hold_generation": parked.get("generation"),
+            "hold_armed_at": str(parked.get("armed_at") or ""),
             "event_id": str(control.get("event_id") or ""),
             "run_id": str(control.get("run_id") or ""),
             "owner_run_id": str(control.get("parent_run_id") or ""),
@@ -6585,7 +6592,10 @@ def _commit_child_adoption(
             auth.get("previous_conversation_key") or ""
         )
         control["repo_label"] = str(auth.get("previous_repo_label") or "")
-        control.pop("adopted_from_run_id", None)
+        if auth.get("previous_adopted_from_run_id"):
+            control["adopted_from_run_id"] = str(auth["previous_adopted_from_run_id"])
+        else:
+            control.pop("adopted_from_run_id", None)
     _record_outbox_notice(
         outbox_dir,
         f"{verb} refused: adopting {target!r} could not be recorded durably; "
@@ -6613,10 +6623,11 @@ def _recover_parked_child_controls(
     parent and spawn event id; and its :data:`_PARKED_EDGE_FILE` record —
     written at park and on every later change to the parked edge — names the
     edge's **current** owner, including an adoption, plus its allowance
-    facts. A historical graph link is never read.
+    facts, bound to the hold generation and ``armed_at`` it was written
+    under. A historical graph link is never read.
 
-    Fail-closed: no record, or a record that disagrees with the manifest's
-    lineage or is not a shape the adoption fence could produce (owner
+    Fail-closed: no record, a record from a different hold, or one that
+    disagrees with the manifest's lineage or is not a shape the adoption fence could produce (owner
     conversation equal to the dispatch conversation, repo unchanged or
     filled, a non-dispatcher owner only with ``adopted_from_run_id``),
     recovers nothing — never the dispatch parent by default, whose exact-id
@@ -6675,7 +6686,9 @@ def _recover_parked_child_controls(
             owner_repo = str(record.get("repo_label") or "").strip()
             adopted_from = str(record.get("adopted_from_run_id") or "").strip()
             if (
-                str(record.get("event_id") or "") != spawn_event_id
+                record.get("hold_generation") != parked.get("generation")
+                or str(record.get("hold_armed_at") or "") != parked["armed_at"]
+                or str(record.get("event_id") or "") != spawn_event_id
                 or str(record.get("run_id") or "") != child.id
                 or not owner
                 or owner_conv != dispatch_conv
@@ -7111,6 +7124,7 @@ def _authorize_child_control(task: Run, control: dict) -> dict[str, object]:
             }
         previous_conversation_key = str(control.get("parent_conversation_key") or "")
         previous_repo_label = str(control.get("repo_label") or "")
+        previous_adopted_from = str(control.get("adopted_from_run_id") or "")
         control["parent_run_id"] = task_id
         control["parent_conversation_key"] = task_conv
         if task_repo:
@@ -7122,6 +7136,7 @@ def _authorize_child_control(task: Run, control: dict) -> dict[str, object]:
             "previous_parent_run_id": parent_run_id,
             "previous_conversation_key": previous_conversation_key,
             "previous_repo_label": previous_repo_label,
+            "previous_adopted_from_run_id": previous_adopted_from,
         }
 
 
@@ -7304,8 +7319,28 @@ def _queue_child_message(
     # live run-control record so the child's very next boundary reads it —
     # the ordinary steer delivery below still carries the same body, so the
     # child sees in prose what just happened to its own budget.
-    _apply_allowance_grant(control, body)
-    _persist_parked_edge(inbox_dir, control)
+    with _run_controls_lock:
+        prior_allowance = control.get("allowance_tokens")
+        prior_asked = control.get("allowance_asked")
+        parked_edge = isinstance(control.get("parked"), dict)
+    granted = _apply_allowance_grant(control, body)
+    if (
+        granted is not None
+        and parked_edge
+        and not _persist_parked_edge(inbox_dir, control, unlink_on_failure=False)
+    ):
+        # A parked child has no heartbeat to carry the new ceiling; a grant
+        # that cannot be recorded would be forgotten by the next image.
+        with _run_controls_lock:
+            control["allowance_tokens"] = prior_allowance
+            control["allowance_asked"] = prior_asked
+        _record_outbox_notice(
+            outbox_dir,
+            f"message refused: the allowance grant to parked {target!r} could "
+            "not be recorded durably; nothing changed — try again",
+            kind="refused", lifetime="run",
+        )
+        return False
     if inbox_dir is None:
         _record_outbox_notice(
             outbox_dir, "message dropped: no inbox to queue into", kind="dropped",
