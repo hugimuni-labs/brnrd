@@ -1,127 +1,147 @@
-"""Tests for durable-frame exposure of ending attempt failure (issue #2151).
+"""Drive ending-failure persistence through real worker phases and cold reload.
 
-Proves that the durable account run state.md includes the exact structured
-cause/exit from the ending attempt's failure, distinguishable from cleanup error.
+Runner/profile/environment/prompt inputs use the worker test scaffold; this
+is downstream proof, not a recorded native exec or await/restart incident.
 """
-
-import sys
 import json
 from pathlib import Path
-from dataclasses import replace
 
 import pytest
 
-from brr import daemon, worker, runner
+from brr import daemon, runner_failures, worker
+from brr.run import Run, run_manifest_path
+from brr.runner import RunnerArtifactRecord
 from brr.worker import Attempt
-
-sys.path.insert(0, str(Path(__file__).parent))
-import test_worker_phases as phases
+from _helpers import succeed_invoke
 from test_daemon import _account_context_for_policy
+import test_worker_phases as phases
 
 
-def test_structured_failure_reaches_durable_frame(tmp_path, monkeypatch):
-    """Ending attempt's codex_task_error and exit code appear in state.md frontmatter."""
-    cause = {"kind": "server_overloaded", "message": "Selected model is at capacity. Please try a different model."}
-    def invoke(ctx, runner_name, invocation, cfg, *, trace=False):
-        return phases._result(invocation, runner_name, code=1,
-            stderr="Unknown process id 30097\ncodex task_complete error (server overloaded): " + cause["message"],
-            codex_task_error=cause)
-    
-    p = phases._prepared(tmp_path, monkeypatch, invoke)
+@pytest.fixture(autouse=True)
+def _clean_controls(monkeypatch):
     monkeypatch.setattr(daemon, "SEAT_PARK_ON_TURN_END_DEFAULT", False)
-    
-    records = []
-    original = p.emit
-    def emit(packet_type, **data):
-        records.append({"kind": "update", "type": packet_type, "conversation_key": p.task.conversation_key, **data})
-        original(packet_type, **data)
-    for key in ("conversation_key", "brr_dir", "event_id"):
-        setattr(emit, key, getattr(original, key))
-    p = replace(p, emit=emit)
-    
-    b = phases._to_boundary(p, Attempt(n=1, lane=p.lane))
-    assert b.kind == "exhausted"
-    assert b.attempt.last_failure["codex_task_error"] == cause
-    assert b.attempt.last_failure["exit_code"] == 1
-    assert cause["message"] in b.attempt.last_failure["error"]
-    
-    ended = worker.finalize(p, b)
-    assert ended.task.status == "error"
-    
-    frame_path = daemon._persist_run_state_doc(
-        _account_context_for_policy(tmp_path), 
-        ended.task,
-        repo_label="Gurio/brr",
-        stage="failed",
-        work_dir=tmp_path,
-        outbox_dir=p.outbox_dir
+    with daemon._run_controls_lock:
+        daemon._run_controls.clear()
+    yield
+    with daemon._run_controls_lock:
+        daemon._run_controls.clear()
+
+
+def _cold(p, boundary):
+    ended = worker.finalize(p, boundary)
+    cold = Run.from_file(run_manifest_path(p.runs_dir, ended.task.id))
+    assert cold is not None
+    assert cold.status == ended.task.status
+    return cold
+
+
+def _frame(tmp_path, task, p=None):
+    path = daemon._persist_run_state_doc(
+        _account_context_for_policy(tmp_path), task, repo_label="Gurio/brr",
+        stage="finished", work_dir=tmp_path,
+        outbox_dir=p.outbox_dir if p else None,
     )
-    assert frame_path is not None
-    frame = frame_path.read_text()
-    
-    # The durable frame should now contain the structured failure
-    assert "status: error" in frame
-    assert "ending_failure:" in frame
-    assert "server_overloaded" in frame
-    assert cause["message"] in frame
-    assert '"exit_code": 1' in frame
-    assert "codex_task_error:" in frame
-    
-    # Verify the JSON structure is valid by finding and parsing the complete JSON
-    ending_failure_start = frame.find("ending_failure: ")
-    if ending_failure_start != -1:
-        # Find the start of the JSON object
-        json_start = frame.find("{", ending_failure_start)
-        if json_start != -1:
-            # Count braces to find the matching closing brace
-            brace_count = 0
-            json_end = json_start
-            for i, char in enumerate(frame[json_start:]):
-                if char == '{':
-                    brace_count += 1
-                elif char == '}':
-                    brace_count -= 1
-                    if brace_count == 0:
-                        json_end = json_start + i + 1
-                        break
-            
-            ending_failure_json = frame[json_start:json_end]
-            ending_failure_data = json.loads(ending_failure_json)
-            assert ending_failure_data["codex_task_error"] == cause
-            assert ending_failure_data["exit_code"] == 1
-            assert cause["message"] in ending_failure_data["error"]
+    assert path is not None
+    return path.read_text()
 
 
-def test_clean_completion_has_no_ending_failure(tmp_path, monkeypatch):
-    """A successful run does not have ending_failure in its durable frame."""
+def _record(frame):
+    section = frame.split("## Ending failure\n", 1)[1]
+    return json.loads(section.split("```json\n", 1)[1].split("\n```", 1)[0])
+
+
+def test_structured_cause_survives_producer_save_reload_and_frame(tmp_path, monkeypatch):
+    cause = {"kind": "server_overloaded", "message": "Capacity } cause\n---\n```\nindependent of teardown"}
+    teardown = "Unknown process id 30097"
+
     def invoke(ctx, runner_name, invocation, cfg, *, trace=False):
-        return phases._result(invocation, runner_name, code=0, stdout="Task completed successfully")
-    
+        return phases._result(invocation, runner_name, code=1, stderr=teardown,
+                              codex_task_error=cause)
+
     p = phases._prepared(tmp_path, monkeypatch, invoke)
-    monkeypatch.setattr(daemon, "SEAT_PARK_ON_TURN_END_DEFAULT", False)
-    
-    b = phases._to_boundary(p, Attempt(n=1, lane=p.lane))
-    assert b.kind == "completed"
-    
-    ended = worker.finalize(p, b)
-    assert ended.task.status == "done"
-    
-    frame_path = daemon._persist_run_state_doc(
-        _account_context_for_policy(tmp_path), 
-        ended.task,
-        repo_label="Gurio/brr",
-        stage="done",
-        work_dir=tmp_path,
-        outbox_dir=p.outbox_dir
-    )
-    assert frame_path is not None
-    frame = frame_path.read_text()
-    
-    # Clean runs should not have ending failure info
-    assert "ending_failure:" not in frame
-    assert "ending_codex_task_error:" not in frame
-    assert "status: done" in frame
+    boundary = phases._to_boundary(p, Attempt(n=1, lane=p.lane))
+    assert boundary.kind == "exhausted"
+    cold = _cold(p, boundary)
+    record = cold.meta["ending_failure"]
+    assert isinstance(record, dict)
+    assert record["codex_task_error"] == cause
+    assert record["error"] == teardown
+    assert record["exit_code"] == 1
+    assert record["attempt"] == 1
+    assert _record(_frame(tmp_path, cold, p)) == record
+    assert "ending_codex_task_error" not in cold.meta
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+@pytest.mark.parametrize("recovered", [True, False])
+def test_retry_history_is_not_the_ending_failure(tmp_path, monkeypatch, recovered):
+    earlier = {"kind": "server_overloaded", "message": "earlier cause"}
+
+    def invoke(ctx, runner_name, invocation, cfg, *, trace=False):
+        if invocation.label.endswith("attempt-1"):
+            return phases._result(
+                invocation, runner_name, code=1,
+                stdout="API Error: Connection closed mid-response. The response above may be incomplete.",
+                codex_task_error=earlier,
+            )
+        if recovered:
+            return succeed_invoke()(ctx, runner_name, invocation, cfg, trace=trace)
+        return phases._result(invocation, runner_name, artifacts=[
+            RunnerArtifactRecord(path=Path("out.md"), label="out.md", exists=False),
+        ])
+
+    p = phases._prepared(tmp_path, monkeypatch, invoke, max_retries=1)
+    first = phases._to_boundary(p, Attempt(n=1, lane=p.lane))
+    assert first.kind == "retry"
+    ending = phases._to_boundary(p, first.next_attempt)
+    assert ending.attempt.last_failure is None
+    assert ending.attempt.failures[0]["codex_task_error"] == earlier
+    cold = _cold(p, ending)
+    frame = _frame(tmp_path, cold, p)
+    if recovered:
+        assert cold.status == "done"
+        assert "ending_failure" not in cold.meta
+        assert "## Ending failure" not in frame
+    else:
+        assert cold.status == "error"
+        assert _record(frame) == {"attempt": 2, "failure_kind": runner_failures.NO_OUTPUT}
+        assert "earlier cause" not in frame
+
+
+@pytest.mark.parametrize("kind", [runner_failures.CORE_REFUSAL, runner_failures.INTERRUPTED])
+def test_rendered_frame_applies_wording_policy_without_destroying_private_evidence(tmp_path, kind):
+    private = {"attempt": 1, "failure_kind": kind, "exit_code": 1,
+               "error": "private vendor wording", "codex_task_error": {
+                   "kind": "vendor_kind", "message": "private vendor wording"}}
+    task = Run(id="run-policy", event_id="evt-policy", body="synthetic", status="error",
+               meta={"ending_failure": private})
+    cold = Run.from_file(task.save(tmp_path / "runs"))
+    assert cold.meta["ending_failure"] == private
+    frame = _frame(tmp_path, cold)
+    assert "private vendor wording" not in frame
+    surfaced = _record(frame)
+    assert surfaced["failure_kind"] == kind
+    assert surfaced["exit_code"] == 1
+    assert surfaced["codex_task_error"] == {"kind": "vendor_kind"}
+    assert cold.meta["ending_failure"] == private
+
+
+def test_ordinary_clean_finish_and_absent_account(tmp_path, monkeypatch):
+    p = phases._prepared(tmp_path, monkeypatch)
+    ending = phases._to_boundary(p, Attempt(n=1, lane=p.lane))
+    assert ending.kind == "completed"
+    cold = _cold(p, ending)
+    assert "ending_failure" not in cold.meta
+    assert "## Ending failure" not in _frame(tmp_path, cold, p)
+    assert daemon._persist_run_state_doc(None, cold, repo_label="Gurio/brr", stage="finished") is None
+
+
+def test_new_record_decode_does_not_change_other_json_strings(tmp_path):
+    record = {"attempt": 1, "failure_kind": "runner_error", "exit_code": 1}
+    task = Run(id="run-decode", event_id="evt-decode", body="synthetic",
+               meta={"ending_failure": record, "run_state_digest": '{"keep": "string"}'})
+    cold = Run.from_file(task.save(tmp_path / "runs"))
+    assert cold.meta["ending_failure"] == record
+    assert cold.meta["run_state_digest"] == '{"keep": "string"}'
+    task.meta["ending_failure"] = "malformed record"
+    cold = Run.from_file(task.save())
+    assert cold.meta["ending_failure"] == "malformed record"

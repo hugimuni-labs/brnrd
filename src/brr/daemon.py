@@ -13688,23 +13688,6 @@ def _persist_run_state_doc(
         value = task.meta.get(key)
         if value not in (None, ""):
             lines.append(f"{key}: {value}")
-    # Ending attempt's structured failure for the durable frame (issue #2151).
-    # Carried from the boundary's last_failure via finalize._finalize_exhausted
-    # and stored on task.meta so the run state document can surface it.
-    ending_failure = task.meta.get("ending_failure")
-    if isinstance(ending_failure, dict):
-        # The exact structured dict from the runner result, JSON-serialised
-        # to survive the frontmatter round-trip. This is the canonical
-        # failure evidence, including codex_task_error when present.
-        import json
-        lines.append(f"ending_failure: {json.dumps(ending_failure, sort_keys=True)}")
-    ending_codex_error = task.meta.get("ending_codex_task_error")
-    if isinstance(ending_codex_error, dict):
-        # The extracted codex envelope alone, for readers that want only the
-        # vendor-supplied shape. Kept separate so a structured consumer
-        # can pick this one field without parsing the larger failure dict.
-        import json
-        lines.append(f"ending_codex_task_error: {json.dumps(ending_codex_error, sort_keys=True)}")
     branch = (
         task.meta.get("branch_name") or task.meta.get("publish_branch")
     ) if has_new_commit else None
@@ -13764,6 +13747,26 @@ def _persist_run_state_doc(
         # earns no link; anything else does.
         if summary != task.body:
             lines.extend(["", "[Read the full request](request.md)"])
+    ending_failure = task.meta.get("ending_failure")
+    if task.status == "error" and isinstance(ending_failure, dict):
+        surfaced_failure = dict(ending_failure)
+        if surfaced_failure.get("failure_kind") in (
+            runner_failures.CORE_REFUSAL, runner_failures.INTERRUPTED,
+        ):
+            # Same wording policy as _failure_reason: private manifest evidence
+            # remains intact, while the rendered frame keeps cause/exit without
+            # quoting provider refusal or interruption boilerplate.
+            surfaced_failure.pop("error", None)
+            codex_error = surfaced_failure.get("codex_task_error")
+            if isinstance(codex_error, dict):
+                surfaced_failure["codex_task_error"] = {
+                    key: value for key, value in codex_error.items() if key != "message"
+                }
+        lines.extend([
+            "", "## Ending failure", "", "```json",
+            json.dumps(surfaced_failure, indent=2, sort_keys=True),
+            "```",
+        ])
     # The complete bounded declaration lives on the durable run node as one
     # JSON value.  Keeping the object whole makes omission detectable and
     # avoids inventing a second, lossy Markdown grammar.  ``produce`` is not
