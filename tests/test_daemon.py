@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from brr import claude_status, daemon, envs, news_lane, presence, promises, protocol
+from brr import claude_status, daemon, envs, letters, news_lane, presence, promises, protocol
 from brr import release_availability, resource_hold
 from brr import portals
 from brr import runner_failures
@@ -4695,6 +4695,7 @@ def test_stop_sweep_survives_dispatch_mtime_drift(tmp_path):
         "burst sibling survived the sweep — the stale-mtime comparison "
         "excluded it from its own burst"
     )
+    assert letters.fold(sibling_path) == "retired"
     assert sibling_event.get("swept_by_run") == "run-anchor"
 
 
@@ -5485,9 +5486,25 @@ def test_interrupted_marker_resets_retry_eligible_event_to_pending(tmp_path):
     fm = protocol.parse_frontmatter(
         Path(event["_path"]).read_text(encoding="utf-8"))
     assert fm.get("status") == "pending"
+    assert letters.fold(Path(event["_path"])) == "pending"
+    facts = letters.sidecar(Path(event["_path"])).read_text().splitlines()
+    assert json.loads(facts[-1])["data"]["why"] == "interrupted retry"
     assert event["id"] in {e["id"] for e in protocol.list_dispatchable(inbox)}
     visible = daemon._pending_events_for_agent(inbox, "evt-someone-elses-wake")
     assert event["id"] in {e["id"] for e in visible}
+
+
+def test_orphan_return_writes_released_fact(tmp_path):
+    event, task = _frozen_run(tmp_path)
+    daemon._hold_the_orphaned_event(
+        event, task, tmp_path / ".brr" / "runs",
+        proof="test dead owner", timestamp=time.time(),
+    )
+    path = Path(event["_path"])
+    assert protocol._read_event(path)["status"] == "pending"
+    assert letters.fold(path) == "pending"
+    fact = json.loads(letters.sidecar(path).read_text().splitlines()[-1])
+    assert fact["kind"] == "released" and fact["data"]["why"] == "orphan return"
 
 
 def test_interrupted_marker_stamps_retry_provenance_on_the_event(tmp_path):
@@ -6579,6 +6596,7 @@ def test_run_worker_writes_terminal_failure_response_on_runner_error(
 
     assert task.status == "error"
     assert event["status"] == "done"
+    assert letters.fold(Path(event["_path"])) == "answered"
     # design-the-post.md §THE FIELD TWO MACHINES WRITE: the run's outcome
     # goes in its own key now — the letter's own status stays "done".
     assert event.get("run_outcome") == "error"

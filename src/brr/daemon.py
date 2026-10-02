@@ -14680,7 +14680,7 @@ def _hold_the_orphaned_event(
         print(f"[brnrd] interrupt provenance stamp failed for {eid}: {exc}")
     try:
         if str(event.get("status") or "") == "processing":
-            protocol.set_status(event, "pending")
+            protocol.set_status(event, "pending", fact_data={"why": "orphan return"})
         protocol.update_event_meta(
             event,
             defer_until=_format_utc_after(_HOLD_DEFER_SECONDS, now=timestamp),
@@ -14933,7 +14933,7 @@ def _mark_interrupted_runs(
                 )
                 if not is_orphaned_spawn_dispatch:
                     try:
-                        protocol.set_status(retry_event, "pending")
+                        protocol.set_status(retry_event, "pending", fact_data={"why": "interrupted retry"})
                     except OSError:
                         pass
             # Status first, packet after — same order as the spawn
@@ -16560,6 +16560,10 @@ def _undefer_held_event(
         updates["conversation_key"] = seat_conversation
     try:
         protocol.update_event_meta(ev, **updates)
+        from . import letters
+        if ev.get("status") == "pending":
+            letters.shadow(Path(ev["_path"]), "pending", by="daemon._undefer_held_event",
+                           old_status="pending", data={"why": "undefer"})
     except OSError:
         pass
 

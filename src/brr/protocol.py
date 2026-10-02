@@ -27,6 +27,7 @@ import threading
 import time
 import random
 import string
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -547,6 +548,8 @@ def create_event(
     lines.append(body)
     path = inbox_dir / f"{eid}.md"
     _atomic_write(path, "\n".join(lines) + "\n")
+    from . import letters
+    letters.shadow(path, status, by=f"create_event:{source}")
     if status == "pending":
         # Nudge a waiting daemon loop so it reacts to this event without
         # waiting out a full poll tick. Outbound-only (``done``) events
@@ -1016,7 +1019,7 @@ def list_noted(inbox_dir: Path, source: str) -> list[dict[str, Any]]:
     return events
 
 
-def set_status(event: dict[str, Any], status: str) -> None:
+def set_status(event: dict[str, Any], status: str, *, fact_data: dict | None = None) -> None:
     """Update the status field of an event file atomically."""
     path: Path = event["_path"]
     text = path.read_text(encoding="utf-8")
@@ -1024,6 +1027,10 @@ def set_status(event: dict[str, Any], status: str) -> None:
     new_text = text.replace(f"status: {old_status}", f"status: {status}", 1)
     _atomic_write(path, new_text)
     event["status"] = status
+    from . import letters
+    caller = sys._getframe(1)
+    letters.shadow(path, status, by=f"{caller.f_globals.get('__name__')}.{caller.f_code.co_name}",
+                   old_status=str(old_status), data=fact_data)
 
 
 def update_event_meta(event: dict[str, Any], **updates: object) -> None:
@@ -1033,6 +1040,7 @@ def update_event_meta(event: dict[str, Any], **updates: object) -> None:
     today; nested blocks are preserved if present but not edited.
     """
     path: Path = event["_path"]
+    old_status = event.get("status")
     text = path.read_text(encoding="utf-8")
     m = re.match(r"^---\n(.*?\n)---\n?", text, re.DOTALL)
     if not m:
@@ -1074,6 +1082,19 @@ def update_event_meta(event: dict[str, Any], **updates: object) -> None:
             event.pop(key, None)
         else:
             event[key] = value
+    if "status" in updates and updates["status"] is not None:
+        from . import letters
+        caller = sys._getframe(1)
+        letters.shadow(path, str(updates["status"]),
+                       by=f"{caller.f_globals.get('__name__')}.{caller.f_code.co_name}",
+                       old_status=str(old_status) if old_status is not None else None)
+    elif updates.get("run_id") and event.get("status") == "processing":
+        # Dispatch stamps the actual run only after changing status to
+        # processing. Enrich the claim then, without guessing a run id at
+        # the earlier status write.
+        from . import letters
+        letters.shadow(path, "processing", by="protocol.update_event_meta",
+                       data={"run": str(updates["run_id"])})
 
 
 # ── Response files ───────────────────────────────────────────────────

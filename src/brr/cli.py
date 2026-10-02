@@ -107,7 +107,7 @@ HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "emotes",
     "relic", "gate-run", "close-check", "promise", "act", "mood", "do", "notes",
     "await", "cut", "legend", "item", "asks", "goal", "queue", "envoy",
-    "dominion", "hud", "loom", "states",
+    "dominion", "hud", "loom", "states", "letters",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -621,6 +621,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("states")
     p.add_argument("machine", nargs="?", choices=("seat", "strand", "await", "check"))
     p.set_defaults(func=cmd_states)
+
+    p = sub.add_parser("letters")
+    p.add_argument("action", choices=("check",))
+    p.set_defaults(func=cmd_letters)
 
     # Hidden per HIDDEN_COMMANDS — the resident's front door onto the
     # `.relics.jsonl` produce manifest, the same "control file with a command
@@ -2250,6 +2254,25 @@ def cmd_states(args):
             print()
         print(states.render_mermaid(name), end="")
     return 0
+
+
+def cmd_letters(args):
+    """Read both live inboxes and the shadow drift logs."""
+    from . import account, letters
+
+    brr_dir = _brr_dir()
+    inboxes = [brr_dir / "inbox"]
+    logs = [brr_dir / "letters-drift.jsonl"]
+    ctx = account.resolve_context(_repo_root(), create=False)
+    if ctx is not None:
+        inboxes.append(ctx.dispatch_inbox)
+        logs.append(ctx.dispatch_inbox.parent / "letters-drift.jsonl")
+    counts, disagreements, historical = letters.check(inboxes, logs)
+    print("letters: " + " ".join(f"{key}={counts[key]}" for key in ("agree", "disagree", "unknown")))
+    for line in disagreements:
+        print(line)
+    print(f"drift log: {historical} row(s)")
+    return 0 if counts["disagree"] == 0 else 1
 
 
 def _wake_outbox_dir() -> Path | None:
