@@ -1,0 +1,11 @@
+import {loadFont as lMono} from '@remotion/google-fonts/GeistMono';
+import {loadFont as lSerif} from '@remotion/google-fonts/InstrumentSerif';
+import {loadFont as lPix} from '@remotion/google-fonts/Silkscreen';
+import {loadFont as lSans} from '@remotion/google-fonts/InterTight';
+const mono = lMono('normal', {weights: ['400', '500', '600'], subsets: ['latin']});
+const serif = lSerif('normal', {weights: ['400'], subsets: ['latin']});
+const serifI = lSerif('italic', {weights: ['400'], subsets: ['latin']});
+const pix = lPix('normal', {weights: ['400'], subsets: ['latin']});
+const sans = lSans('normal', {weights: ['300', '500', '600', '700', '800'], subsets: ['latin']});
+export const F = {MONO: `"${mono.fontFamily}"`, SERIF: `"${serif.fontFamily}"`, PIX: `"${pix.fontFamily}"`, SANS: `"${sans.fontFamily}"`};
+export const FONTS_READY = Promise.all([mono, serif, serifI, pix, sans].map((f) => f.waitUntilDone())).then(() => document.fonts.ready);
