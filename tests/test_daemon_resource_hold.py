@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from brr import (
-    account, daemon, envs, pending_resume, protocol, resource_hold, shuttle,
+    account, daemon, envs, letters, pending_resume, protocol, resource_hold, shuttle,
 )
 from brr.run import Run
 from brr.runner import RunnerResult
@@ -695,6 +695,9 @@ class TestHandleResourceHeldEvents:
         reread = protocol._read_event(sched_target.inbox_dir / "evt-sched-2.md")
         assert reread.get("defer_until") is None
         assert reread.get("defer_reason") is None
+        facts = letters.sidecar(sched_target.inbox_dir / "evt-sched-2.md")
+        assert json.loads(facts.read_text().splitlines()[-1])["data"]["why"] == "undefer"
+        assert letters.fold(sched_target.inbox_dir / "evt-sched-2.md") == "pending"
         assert reread.get("resume_native_session_id") is None
         assert pending_resume.peek(tmp_path / ".brr")["session_id"] == "held-thread-1"
 

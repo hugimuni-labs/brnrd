@@ -20,6 +20,7 @@ from brr import (
     daemon,
     do as do_mod,
     hooks,
+    letters,
     message_store,
     portals,
     protocol,
@@ -1481,6 +1482,7 @@ class TestDrainOutboxCrossInbox:
         assert protocol.list_pending(ctx.dispatch_inbox) == []
         assert [e["id"] for e in
                 protocol.list_done(ctx.dispatch_inbox, "telegram")] == [bid]
+        assert letters.fold(ctx.dispatch_inbox / f"{bid}.md") == "answered"
         assert daemon._read_outbox_notices(outbox) == []
 
     def test_cross_inbox_short_id_resolves(self, tmp_path, monkeypatch):
@@ -1576,6 +1578,7 @@ class TestDrainOutboxNote:
         fm = protocol.parse_frontmatter(
             (inbox / f"{bid}.md").read_text(encoding="utf-8"))
         assert fm.get("status") == "noted"
+        assert letters.fold(inbox / f"{bid}.md") == "retired"
         # Provenance: who closed the letter, and when.
         assert fm.get("noted_by") == "task-A"
         assert fm.get("noted_at")

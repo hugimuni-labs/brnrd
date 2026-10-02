@@ -339,9 +339,10 @@ def test_inbox_collects_every_terminal_status_not_just_done(tmp_path):
 
     for status, path in terminal_paths.items():
         assert not path.exists(), f"status={status} should have been collected"
+        assert not path.with_suffix(".facts.jsonl").exists()
     assert pending.exists()      # still unhandled work
     assert processing.exists()   # crash-recovery treats this as still-eligible
-    assert reports["inbox"].items == len(terminal_paths)
+    assert reports["inbox"].items == 2 * len(terminal_paths)
 
 
 def test_inbox_collects_noted_exactly_like_done(tmp_path):
@@ -361,8 +362,9 @@ def test_inbox_collects_noted_exactly_like_done(tmp_path):
 
     assert not noted.exists()
     assert not done.exists()
+    assert not done.with_suffix(".facts.jsonl").exists()
     assert fresh_noted.exists()   # inside the window, exactly like done
-    assert reports["inbox"].items == 2
+    assert reports["inbox"].items == 4
 
 
 # ── repo inbox (self-hosted gates, never swept before) ──────────────
@@ -388,10 +390,11 @@ def test_repo_inbox_swept_independent_of_account_context(tmp_path):
         repo, None, _windows(inbox=90), dry_run=False, now=NOW)
 
     assert not done.exists()
+    assert not done.with_suffix(".facts.jsonl").exists()
     assert pending.exists()
     assert fresh.exists()
     assert not orphan_response.exists()
-    assert reports["inbox"].items == 2
+    assert reports["inbox"].items == 3
 
 
 def test_repo_inbox_and_account_inbox_both_swept_in_one_pass(tmp_path):
@@ -405,7 +408,19 @@ def test_repo_inbox_and_account_inbox_both_swept_in_one_pass(tmp_path):
 
     assert not repo_done.exists()
     assert not account_done.exists()
-    assert reports["inbox"].items == 2
+    assert reports["inbox"].items == 4
+
+
+def test_orphaned_letter_facts_age_out_with_inbox(tmp_path):
+    repo = _repo(tmp_path)
+    inbox = gitops.shared_brr_dir(repo) / "inbox"
+    event = protocol.create_event(inbox, "telegram", "gone")
+    facts = event.with_suffix(".facts.jsonl")
+    event.unlink()
+    os.utime(facts, (NOW - 120 * DAY, NOW - 120 * DAY))
+
+    retention.gc(repo, None, _windows(inbox=90), dry_run=False, now=NOW)
+    assert not facts.exists()
 
 
 # ── account-home run state (#320) ──────────────────────────────────

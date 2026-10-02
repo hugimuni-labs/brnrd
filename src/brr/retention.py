@@ -423,6 +423,11 @@ def _plan_inbox_dir(
             actions.append(Action(
                 store="inbox", kind=FILE, path=path, bytes=_size(path),
             ))
+            facts = path.with_suffix(".facts.jsonl")
+            if facts.is_file():
+                actions.append(Action(
+                    store="inbox", kind=FILE, path=facts, bytes=_size(facts),
+                ))
             attachments = inbox_dir / f"{event_id}.attachments"
             if attachments.is_dir():
                 files, size, _ = _tree_stats(attachments)
@@ -441,6 +446,18 @@ def _plan_inbox_dir(
                 actions.append(Action(
                     store="inbox", kind=TREE, path=partials,
                     bytes=size, items=max(files, 1),
+                ))
+
+        # A gate may remove an event outside GC. Its sidecar still has the
+        # same retention window and must not become an immortal orphan.
+        for facts in sorted(inbox_dir.glob("*.facts.jsonl")):
+            event = inbox_dir / f"{facts.name[:-len('.facts.jsonl')]}.md"
+            if event.exists():
+                continue
+            mtime = _mtime(facts)
+            if mtime is not None and mtime < cutoff:
+                actions.append(Action(
+                    store="inbox", kind=FILE, path=facts, bytes=_size(facts),
                 ))
 
     # Orphaned responses: the event file is gone, nothing will ever read
