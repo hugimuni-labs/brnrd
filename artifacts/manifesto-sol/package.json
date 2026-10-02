@@ -1,0 +1,21 @@
+{
+  "name": "brnrd-manifesto-sol",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "render": "node render.mjs",
+    "stills": "node render.mjs --stills",
+    "score": "python3 score.py"
+  },
+  "dependencies": {
+    "@remotion/bundler": "4.0.529",
+    "@remotion/renderer": "4.0.529",
+    "remotion": "4.0.529",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "@types/react": "19.3.0"
+  }
+}
