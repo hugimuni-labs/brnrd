@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>brnrd — brand film</title>
+<style>
+  @font-face { font-family: 'IT'; src: url(fonts/intertight.woff2) format('woff2'); font-weight: 100 900; }
+  @font-face { font-family: 'JB'; src: url(fonts/jbmono.woff2) format('woff2'); font-weight: 100 800; }
+  html, body { margin: 0; background: #000; }
+  body { display: grid; place-items: center; min-height: 100vh; }
+  canvas { display: block; width: min(1080px, 100vmin); height: min(1080px, 100vmin); }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<!-- Open with #play to preview in real time; render.js drives frameAt(t) for the master. -->
+<script src="film.js"></script>
+</body>
+</html>
