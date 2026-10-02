@@ -467,3 +467,107 @@ def _steer_body(root: Path, task: Run, body: str) -> bool:
         task, root / ".brr" / "inbox", task.event_id, {"to": "run-kid"},
         body, outbox,
     )
+
+
+@pytest.mark.parametrize("notify_raises", [False, True], ids=["normal-park", "fallback-park"])
+def test_the_real_reap_writes_the_edge_record(tmp_path, monkeypatch, notify_raises):
+    """The producer: ``start``'s own dispatch + reap loop over a finished future.
+
+    Adapted from the parent's review fixture. Only the provider executor and
+    unrelated background duties are stubbed; the reap logic runs as-is, both
+    the normal park and the ``finally`` fallback when notifying raises.
+    """
+    import concurrent.futures
+
+    from brr import forge_issue_cache, forge_workflow_cache, parked_branches
+
+    write_repo_scaffold(tmp_path)
+    child = _held_strand(tmp_path)
+    edge = tmp_path / ".brr" / "runs" / "run-kid" / "edge.json"
+    edge.unlink()
+    event = protocol._read_event(protocol.create_event(
+        tmp_path / ".brr" / "inbox", "spawn", "fixture",
+        spawn_immediate=True, spawn_parent_run_id="run-parent",
+    ))
+    child.event_id = event["id"]
+    child.save(_runs_dir(tmp_path))
+    daemon._register_run_control(
+        event["id"], "run-parent", parent_conversation_key=CONV,
+        repo_label=REPO, allowance_tokens=400_000,
+    )
+    daemon._bind_run_control(event["id"], child.id)
+    target = daemon._DispatchTarget(
+        event, tmp_path, tmp_path / ".brr" / "inbox",
+        tmp_path / ".brr" / "responses", REPO,
+    )
+    state = {"supplied": False, "notified": False, "ticks": 0}
+
+    def candidates(*a, **kw):
+        if state["ticks"] == 0 or state["supplied"]:
+            return []
+        state["supplied"] = True
+        return [target]
+
+    class FinishedExecutor:
+        def __init__(self, *a, **kw):
+            pass
+
+        def submit(self, *a, **kw):
+            future = concurrent.futures.Future()
+            future.set_result(child)
+            return future
+
+        def shutdown(self, *a, **kw):
+            pass
+
+    class Wake:
+        def clear(self):
+            pass
+
+        def wait(self, *a):
+            pass
+
+    def notify(*a):
+        state["notified"] = True
+        if notify_raises:
+            raise OSError("notify failed")
+
+    def second_tick(*a, **kw):
+        state["ticks"] += 1
+        if state["notified"] or state["ticks"] > 10:
+            raise StopIteration
+
+    monkeypatch.setattr(daemon, "_dispatchable_targets", candidates)
+    monkeypatch.setattr(daemon.concurrent.futures, "ThreadPoolExecutor", FinishedExecutor)
+    monkeypatch.setattr(daemon.protocol, "inbox_wake", lambda: Wake())
+    monkeypatch.setattr(daemon, "_notify_spawn_parent", notify)
+    for owner, name in [
+        (daemon.lane_liveness, "refresh_if_stale_async"),
+        (forge_workflow_cache, "refresh_if_stale_async"),
+        (forge_issue_cache, "refresh_if_stale_async"),
+        (parked_branches, "warn_new"),
+        (daemon, "_push_ahead_repos_if_due"),
+        (daemon, "_announce_pending_news"),
+    ]:
+        monkeypatch.setattr(owner, name, lambda *a, **kw: None)
+    # `_boot` installs its own first-tick stop; swap in one that lets the
+    # loop reach the reap before stopping.
+    setter = monkeypatch.setattr
+
+    def intercept(*args, **kw):
+        if len(args) >= 3 and args[0] is daemon and args[1] == "_fire_due_schedules":
+            return setter(daemon, "_fire_due_schedules", second_tick)
+        return setter(*args, **kw)
+
+    setter(monkeypatch, "setattr", intercept)
+    if notify_raises:
+        with pytest.raises(OSError, match="notify failed"):
+            _boot(tmp_path, monkeypatch)
+    else:
+        _boot(tmp_path, monkeypatch)
+
+    assert state["supplied"]
+    assert edge.exists(), "the daemon's reap left the held child's edge memory-only"
+    record = json.loads(edge.read_text())
+    assert record["owner_run_id"] == "run-parent"
+    assert record["allowance_tokens"] == 400_000

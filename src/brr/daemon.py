@@ -19027,7 +19027,9 @@ def start(
                                 and not isinstance(ctrl.get("parked"), dict)
                                 and _park_run_control(spawn_eid, parked)
                             ):
-                                pass  # held child: edge kept despite the throw
+                                # held child: edge kept despite the throw, and
+                                # its record written like the normal park's.
+                                _persist_parked_edge(spawn.get("inbox_dir"), ctrl)
                             elif ctrl is not None and not isinstance(
                                 ctrl.get("parked"), dict
                             ):
