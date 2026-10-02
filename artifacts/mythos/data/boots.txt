@@ -1,0 +1,149 @@
+run-260924-2112-vpyj
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260924-1612-svpy @ -4h · dominion +2
+  drift: dominion has 2 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260924-2211-si2i
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260924-2112-vpyj @ -57m · dominion +2
+  drift: dominion has 2 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260924-2249-u4rl
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260924-2211-si2i @ -38m · dominion +2
+  drift: dominion has 3 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260924-2300-ccge
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260924-2249-u4rl @ -10m · dominion +2
+  drift: dominion has 2 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260925-0212-6di2
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260924-2300-ccge @ -3h · dominion +3
+  drift: dominion has 2 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260925-0424-tfzb
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260925-0212-6di2 @ -2h · dominion +4
+  drift: dominion has 3 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260926-1326-phf4
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260925-0424-tfzb @ -33h · dominion +13
+  drift: dominion has 6 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260926-2358-u4s1
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260926-2301-af14 @ -56m · dominion +9
+  drift: dominion has 6 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260927-0945-g2pi
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260926-2301-af14 @ -10h · dominion +11
+  drift: dominion has 10 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260927-0946-6zw2
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260926-2301-af14 @ -10h · dominion +11
+  drift: dominion has 12 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260927-1053-d13l
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260927-1046-63xp @ -6m · dominion +2
+  drift: dominion has 2 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260927-1100-go0b
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260927-1053-d13l @ -6m · dominion +2
+  drift: dominion has 2 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260927-1106-msa5
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260927-1100-go0b @ -6m · dominion +2
+  drift: dominion has 2 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260927-1113-nlc4
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260927-1106-msa5 @ -6m · dominion +2
+  drift: dominion has 2 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260927-1939-z45p
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260927-1913-kr08 @ -26m · dominion +2
+  drift: dominion has 6 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260927-1940-tqg2
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260927-1913-kr08 @ -26m · dominion +2
+  drift: dominion has 7 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260927-2144-fmzh
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260927-1913-kr08 @ -2h · shipped #2121 #2122 #2120 #2124 #2123 #2125 #2114 #2113 #2112 · dominion +10
+  drift: dominion has 3 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260928-1343-t8gf
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260927-2144-fmzh @ -15h · dominion +1
+  drift: dominion has 3 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260928-1444-y9jv
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260928-1343-t8gf @ -60m · dominion +3
+  drift: dominion has 4 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260928-1831-1bta
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260928-1444-y9jv @ -3h · dominion +3
+  drift: dominion has 3 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260928-1842-a6lu
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260928-1831-1bta @ -10m · dominion +2
+  drift: dominion has 3 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260928-2243-5mfn
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260928-2143-ui4x @ -59m · dominion +2
+  drift: dominion has 2 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260928-2341-davt
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260928-2243-5mfn @ -57m · dominion +2
+  drift: dominion has 4 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260929-1439-vadz
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260928-2341-davt @ -14h · shipped #2127 #2128 · dominion +11
+  drift: dominion has 2 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260929-2026-wd2q
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260929-1936-1d0h @ -50m · dominion +4
+  drift: dominion has 6 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-260930-2221-ah2b
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260930-2215-0c47 @ -6m
+  drift: dominion has 16 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-261001-1411-wrh5
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-260930-2215-0c47 @ -15h · shipped #2147 #2148 #2149 · dominion +35
+  drift: dominion has 3 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-261001-1416-vc7a
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-261001-1411-wrh5 @ -5m
+  drift: dominion has 8 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-261001-2125-3e63
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-261001-1411-wrh5 @ -7h · shipped #2153 · dominion +13
+  drift: dominion has 2 uncommitted change(s) — the capture net did not close on a prior wake
+---
+run-261001-2136-ryub
+memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not given, it predates this run, not you; acts *here*: none yet
+continuity: ✓ run-261001-2125-3e63 @ -10m · dominion +2
+  drift: dominion has 3 uncommitted change(s) — the capture net did not close on a prior wake
