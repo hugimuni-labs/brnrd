@@ -88,7 +88,7 @@ failure, duplicates and late mail behave. Cost is zero for all rows.
   only its own event or a parent steer (`_strand_may_address`, daemon.py:5227).
 - Persists: `status: done`, partial under `responses/`.
 - Ambiguous, unknown or foreign target: notice `refused`, row staged
-  `undeliverable`, no status change. Proof: schema (`tests/test_outbox.py`).
+  `undeliverable`, no status change. Proof: existing behavioral outbox cases; not independently re-run for this row.
 
 ### T6 reply to a source no gate owns
 - Writer: `_deliver_event`, branch `retires_target`.
@@ -109,7 +109,7 @@ failure, duplicates and late mail behave. Cost is zero for all rows.
   (daemon.py:5407).
 - Persists: `noted_by`, `noted_at`, then `status: noted`.
 - A meta `OSError` is swallowed and the status write still runs. A failed
-  status write gives a `dropped` notice. Proof: schema + read.
+  status write gives a `dropped` notice. Proof: existing behavioral note cases and source read; not independently re-run for this row.
 
 ### T9 `done` → `delivered`
 - Writer: `deliver_stream` (runtime.py:601). Precondition: `done`, due,
@@ -119,15 +119,16 @@ failure, duplicates and late mail behave. Cost is zero for all rows.
   ceiling sets `error`. Proof: read; `tests/test_delivery_retry.py` drives
   retry.
 
-### T10 park accumulates mail (limited)
+### T10 park accumulates mail
 - Writers: `_handle_resource_held_events` (existing, driven by
   `tests/test_the_seat_that_stays.py`) → `accumulate_event`;
   `_apply_resource_hold_resume` → `_undefer_held_event`.
 - Persists: hold `accumulated_event_ids`; letter defer keys.
 - `status` stays `pending` while held. Only the release clears the defer
   keys. Proof: driven from the held handler through release into the fresh
-  selector. **Limited:** the arming producer `_finalize_resource_hold`
-  (daemon.py:15936) and a real wake or await are not run.
+  selector. The parent also drives `_finalize_resource_hold` with two pending
+  letters and one letter created by the environment finalizer. Capture is
+  mocked, and the backend saves the real Run. No provider or actual restart runs.
 
 ### T11 `observed_by` and retirement
 - Stamp: the selector sets `observed_by`/`observed_at` when
@@ -175,13 +176,13 @@ All in `tests/test_event_delivery_seams.py`.
 | Case | Status | Limit |
 | --- | --- | --- |
 | 1 cross-repo person vs child edge | driven | selector only; no `inbox.json` writer or await |
-| 2 park accumulates mail | driven (limited) | arming path and real wake not run |
+| 2 park accumulates mail | driven | actual arming/save/release; external capture/backend fixture; no native wake |
 | 3 invalid `also:` burst | driven | recorder is `deliver_stream`; no real platform |
 | 4 mail during finalization | **open** | only the outcome write is driven; the worker tail is not |
 
 ## 6. Next experiments
 
-- Drive `_finalize_resource_hold` with a real failing worker.
+- Record a native failing worker and provider restart; the downstream finalizer is driven by an isolated fixture.
 - Drive the finalizer tail (case 4) if a scaffold exists.
 - Delivery of a `done` event whose partial write failed: not driven.
 - No claim of general soundness is made.

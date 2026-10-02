@@ -227,15 +227,12 @@ def test_only_a_rendered_completion_is_retired_with_its_parent(tmp_path):
     seen = protocol.create_event(
         inbox, "spawn_completed", "a", spawn_parent_run_id="run-P",
     )
+    daemon._pending_events_for_agent(inbox, lead.stem, observer_run_id="run-P")
+    assert protocol._read_event(seen)["observed_by"] == "run-P"
     unseen = protocol.create_event(
         inbox, "spawn_completed", "b", spawn_parent_run_id="run-P",
     )
-    # Render only `seen`: stamp it the way the selector does, by running the
-    # selector before `unseen` exists on disk is not possible, so render both
-    # and then clear the stamp on `unseen` to model a tail-of-run arrival.
-    daemon._pending_events_for_agent(inbox, lead.stem, observer_run_id="run-P")
-    assert protocol._read_event(seen)["observed_by"] == "run-P"
-    protocol.update_event_meta(protocol._read_event(unseen), observed_by=None)
+    assert "observed_by" not in protocol._read_event(unseen)
 
     daemon._retire_internal_event(
         protocol._read_event(lead), responses, inbox_dir=inbox, run_id="run-P",
@@ -272,3 +269,71 @@ def test_set_status_on_missing_or_odd_status_lines(tmp_path):
     protocol.set_status(protocol._read_event(odd), "noted")
     assert protocol._read_event(odd)["status"] == "noted"
     assert odd.read_text().endswith("---\nstatus: body\n")   # body untouched
+
+
+def test_hold_finalizer_keeps_two_letters_and_late_mail_through_release(
+    tmp_path, monkeypatch,
+):
+    from types import SimpleNamespace
+    from brr import resource_hold
+
+    brr = tmp_path / ".brr"
+    inbox, responses, runs = brr / "inbox", brr / "responses", brr / "runs"
+    lead = protocol.create_event(inbox, "cloud", "lead", status="processing")
+    person = protocol.create_event(inbox, "cloud", "person")
+    child = protocol.create_event(
+        inbox, "spawn_completed", "child done", spawn_parent_run_id="run-P",
+    )
+    task = Run(id="run-P", event_id=lead.stem, body="lead", source="cloud",
+               conversation_key="cloud:telegram:1:", env="host")
+    daemon._pending_events_for_agent(inbox, lead.stem, observer_run_id=task.id)
+    assert protocol._read_event(child)["observed_by"] == task.id
+    late = []
+
+    class Backend:
+        def finalize(self, env, current, runs_dir):
+            late.append(protocol.create_event(inbox, "cloud", "during finalize"))
+            current.save(runs_dir)
+            return current
+
+    monkeypatch.setattr(daemon, "_capture_worktree", lambda *a, **kw: None)
+    fields = dict(
+        reason=resource_hold.REASON_QUOTA_STARVED, provider="codex",
+        native_session_id="session-P", resume_kind=resource_hold.RESUME_NATIVE,
+        resume_condition=resource_hold.RESUME_REFILL, reset_deadline=None,
+        quota={"binding_remaining_pct": 1, "starve_floor_pct": 2,
+               "refill_floor_pct": 10},
+    )
+    held = daemon._finalize_resource_hold(
+        daemon._WorkerEmit(brr, task.conversation_key, lead.stem),
+        task, protocol._read_event(lead), lead.stem,
+        runs, Backend(), None, SimpleNamespace(target_branch=None), {},
+        inbox, responses, responses / f"{lead.stem}.md", fields,
+        conversation_key=task.conversation_key, repo_root=tmp_path,
+    )
+    assert held.status == resource_hold.RUN_STATUS
+    assert set(held.meta["resource_hold"]["accumulated_event_ids"]) == {person.stem, child.stem}
+    daemon._retire_internal_event(
+        protocol._read_event(lead), responses, inbox_dir=inbox,
+        run_id=task.id, parked=True,
+    )
+    assert protocol._read_event(child)["status"] == "pending"
+    target = daemon._DispatchTarget(
+        event=protocol._read_event(late[0]), repo_root=tmp_path, inbox_dir=inbox,
+        responses_dir=responses, repo_label="home",
+    )
+    assert daemon._handle_resource_held_events([target], None) == []
+    held = Run.from_file(runs / task.id / "run.md")
+    assert set(held.meta["resource_hold"]["accumulated_event_ids"]) == {
+        person.stem, child.stem, late[0].stem,
+    }
+    assert not protocol.list_dispatchable(inbox)
+    daemon._apply_resource_hold_resume(
+        runs, inbox, held, target.event, by="refill",
+    )
+    expected = {person.stem, child.stem, late[0].stem}
+    assert expected <= {e["id"] for e in protocol.list_dispatchable(inbox)}
+    view = daemon._pending_events_for_agent(inbox, lead.stem, observer_run_id="run-next")
+    assert expected <= {e["id"] for e in view}
+    assert all(protocol._read_event(path)["status"] == "pending"
+               for path in (person, child, late[0]))
