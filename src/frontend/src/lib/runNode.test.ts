@@ -18,8 +18,10 @@ import {
 	runNodeFromSurface,
 	runNodeHref,
 	runRepoSlugs,
-	runNodeHrefForPath
+	runNodeHrefForPath,
+	findLiveRunForRoute
 } from './runNode.ts';
+import type { LiveRun } from './liveRuns.ts';
 import type { SurfaceResponse } from './surface.ts';
 
 function surface(files: SurfaceResponse['files']): SurfaceResponse {
@@ -508,4 +510,85 @@ test('runRepoSlugs: a mirrored run node names its repo; the first path wins', ()
 	assert.equal(map.get('run-260925-0424-tfzb'), 'hugimuni-labs__brnrd');
 	assert.equal(map.get('run-260926-2222-adds'), 'acme__other');
 	assert.equal(map.size, 2);
+});
+
+// Live run matching tests for the run route implementation (issue #2162)
+test('findLiveRunForRoute matches live run by repo slug and run id with proper sanitization', () => {
+	const runs: LiveRun[] = [
+		{
+			id: 'run-1',
+			kind: 'strand',
+			stream: 'stream-1',
+			label: 'Test Run 1',
+			name: 'test-run-1',
+			run_id: 'run-261002-0423-tjju',
+			repo_label: 'hugimuni-labs/brnrd',
+			started_at: '2026-10-02T04:00:00Z',
+			last_seen: '2026-10-02T04:15:00Z',
+			parent_run_id: null,
+			is_subspawn: false,
+			runner: {},
+			phase: 'running',
+			card_text: '## Now\nWorking on issue #2162',
+			course: null,
+			card_updated_at: null
+		},
+		{
+			id: 'run-2',
+			kind: 'resident',
+			stream: 'stream-2',
+			label: 'Test Run 2',
+			name: 'test-run-2',
+			run_id: 'run-261002-0423-tjju',
+			repo_label: 'hugimuni-labs/other-repo',
+			started_at: '2026-10-02T03:00:00Z',
+			last_seen: '2026-10-02T03:15:00Z',
+			parent_run_id: null,
+			is_subspawn: false,
+			runner: {},
+			phase: 'running',
+			card_text: 'Different repo, same run id',
+			course: null,
+			card_updated_at: null
+		},
+		{
+			id: 'run-3',
+			kind: 'strand',
+			stream: 'stream-3',
+			label: 'Test Run 3',
+			name: 'test-run-3',
+			run_id: 'run-different-id',
+			repo_label: 'hugimuni-labs/brnrd',
+			started_at: '2026-10-02T02:00:00Z',
+			last_seen: '2026-10-02T02:15:00Z',
+			parent_run_id: null,
+			is_subspawn: false,
+			runner: {},
+			phase: 'running',
+			card_text: 'Same repo, different run id',
+			course: null,
+			card_updated_at: null
+		}
+	];
+	
+	// Test matching the correct run
+	const matchedRun = findLiveRunForRoute(runs, 'hugimuni-labs__brnrd', 'run-261002-0423-tjju');
+	assert.equal(matchedRun?.run_id, 'run-261002-0423-tjju');
+	assert.equal(matchedRun?.repo_label, 'hugimuni-labs/brnrd');
+	
+	// Test that same run id but different repo doesn't match
+	const noMatchDifferentRepo = findLiveRunForRoute(runs, 'hugimuni-labs__brnrd', 'run-261002-0423-tjju');
+	assert.notEqual(noMatchDifferentRepo?.repo_label, 'hugimuni-labs/other-repo');
+	
+	// Test that same repo but different run id doesn't match
+	const noMatchDifferentRun = findLiveRunForRoute(runs, 'hugimuni-labs__brnrd', 'run-different-id');
+	assert.notEqual(noMatchDifferentRun?.run_id, 'run-261002-0423-tjju');
+	
+	// Test no match returns null
+	const noMatch = findLiveRunForRoute(runs, 'nonexistent__repo', 'nonexistent-run');
+	assert.equal(noMatch, null);
+	
+	// Test empty runs list
+	const emptyMatch = findLiveRunForRoute([], 'hugimuni-labs__brnrd', 'run-261002-0423-tjju');
+	assert.equal(emptyMatch, null);
 });

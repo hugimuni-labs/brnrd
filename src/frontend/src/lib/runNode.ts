@@ -98,6 +98,32 @@ export function runLedgerRowsForNode(
 	);
 }
 
+// Live run matching helpers for the run route
+import type { LiveRun } from './liveRuns';
+
+/** Match a live run from the live-runs feed to this route's repoSlug + runId.
+ * Uses the same sanitization logic the daemon uses for directory names to ensure
+ * the match is precise and doesn't bleed across repos with similar names. */
+export function findLiveRunForRoute(
+	runs: LiveRun[],
+	repoSlug: string,
+	runId: string
+): LiveRun | null {
+	const wantedRepoSlug = repoSlug;
+	const wantedRunId = runIdSlug(runId);
+	
+	for (const run of runs) {
+		const runRepoSlug = repoRunSlug(run.repo_label);
+		const runRunId = runIdSlug(run.run_id);
+		
+		if (runRepoSlug === wantedRepoSlug && runRunId === wantedRunId) {
+			return run;
+		}
+	}
+	
+	return null;
+}
+
 /**
  * Split the deliberately-flat YAML header `state.md` and message records use.
  *
