@@ -375,18 +375,20 @@ def test_another_seats_strand_does_not_release_the_hold(tmp_path):
 
 
 def test_a_schedule_tick_wakes_a_strands_hold_though_the_child_still_works(tmp_path):
-    """Pins the guard the spec leaves out.
+    """Drives the schedule release while a child control remains live.
 
     ``schedule_event_releases`` wakes every hold that is not a wall, and a
-    ``strands`` hold is not one. ``seat.yaml`` lists only a message and a
-    strand return as exits of ``held_strands``.
+    ``strands`` hold is not one. The source specification now names this edge.
     """
     brr_dir, inbox, task = _held_on_child(tmp_path)
+    _live_child(task)
+    assert [r["run_id"] for r in daemon._working_child_controls(task.id)] == ["run-child"]
     tick = protocol.create_event(inbox, "schedule", "every: tick")
     target, survivors = _handle(tmp_path, brr_dir, inbox, tick)
     assert survivors == [target]
     meta = Run.from_file(brr_dir / "runs" / task.id / "run.md").meta["resource_hold"]
     assert meta["released_by"] == "schedule"
+    assert [r["run_id"] for r in daemon._working_child_controls(task.id)] == ["run-child"]
     # The next strand return finds no active hold and is not deferred.
     later = _submitted(inbox, task.id, generation=2)
     target2, survivors2 = _handle(tmp_path, brr_dir, inbox, later)
