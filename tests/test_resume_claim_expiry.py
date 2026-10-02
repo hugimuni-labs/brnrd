@@ -35,3 +35,40 @@ def test_a_new_claim_armed_during_restore_wins(tmp_path, monkeypatch):
     assert pending_resume.consume(tmp_path, conversation_key='owner')['session_id'] == 'new'
     assert pending_resume.peek(tmp_path) is None
     assert not list(tmp_path.glob('*.claimed-*'))
+
+
+def test_two_consumers_in_one_process_keep_separate_claim_files(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from pathlib import Path
+    import threading
+
+    pending_resume.arm(tmp_path, session_id='first', provider='codex',
+                       conversation_key='owner')
+    reading = threading.Event()
+    proceed = threading.Event()
+    first_thread = []
+    real_read = Path.read_text
+
+    def pause_first_read(path, *args, **kwargs):
+        if '.claimed-' in path.name and threading.get_ident() in first_thread:
+            reading.set()
+            assert proceed.wait(5)
+        return real_read(path, *args, **kwargs)
+
+    def first_consume():
+        first_thread.append(threading.get_ident())
+        return pending_resume.consume(tmp_path, conversation_key='owner')
+
+    monkeypatch.setattr(Path, 'read_text', pause_first_read)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        first = pool.submit(first_consume)
+        try:
+            assert reading.wait(5)
+            pending_resume.arm(tmp_path, session_id='second', provider='codex',
+                               conversation_key='owner')
+            assert pending_resume.consume(tmp_path, conversation_key='owner')['session_id'] == 'second'
+        finally:
+            proceed.set()
+        assert first.result()['session_id'] == 'first'
+    assert pending_resume.peek(tmp_path) is None
+    assert not list(tmp_path.glob('*.claimed-*'))
