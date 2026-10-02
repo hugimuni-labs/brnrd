@@ -6492,6 +6492,120 @@ def _park_run_control(spawn_event_id: str, parked: dict[str, Any]) -> bool:
         return True
 
 
+def _recover_parked_child_controls(
+    account_context: account.AccountContext | None,
+    repo_root: Path,
+) -> int:
+    """Rebuild the dispatch-edge controls of parked strands at boot (#2160).
+
+    ``_run_controls`` lives in memory. A strand parked on its own hold keeps
+    its edge on purpose (:func:`_park_run_control`) — but once its process is
+    reaped it is no longer in ``active_spawns``, so the quiescent re-exec
+    guard does not protect it, and the fresh image wakes with a held child
+    manifest whose parent can no longer ``to:`` or ``stop:`` it (nor can the
+    child, once thawed, ``submit:`` or ``ask:``).
+
+    The only evidence read is the child's own daemon-written manifest: it
+    must be a strand, its hold must still be active
+    (:func:`resource_hold.run_is_held` — the same derivation
+    :func:`_parked_child_projection` uses, so released, stopped and terminal
+    runs never qualify), and it must carry the spawn parent the dispatcher
+    stamped (``spawn_parent_run_id``) and a spawn event id. The edge is
+    rebuilt for **that dispatch parent** only. A historical graph link
+    (``parent_run_id`` on a state doc, ``_backfill_dispatch_edges``) is not
+    evidence and is never read here.
+
+    Authority rule. An adoption (:func:`_authorize_child_control`) mutates
+    the in-memory control alone and is not persisted, so it is *not*
+    restored: the recovered edge names the original dispatcher, and every
+    other asker goes back through the unchanged fence — a same-conversation,
+    same-repo resident may adopt again, anything else is refused. Adoption
+    never changes the conversation (the fence requires it equal) and only
+    fills an empty repo label, so this loses no authority a legitimate
+    adopter could not re-earn, and grants none it could not.
+
+    Idempotent: an edge already registered (by event id or child run id) is
+    left exactly as it is, so a repeat boot — or a call racing a live
+    registration — never duplicates or overwrites one.
+    """
+    roots: dict[Path, Path] = {}
+    for candidate in [repo_root] + [
+        registered.root for registered in (
+            account_context.repos.values() if account_context else []
+        )
+    ]:
+        try:
+            key = candidate.resolve()
+        except OSError:
+            key = candidate
+        roots.setdefault(key, candidate)
+    recovered = 0
+    for root in roots.values():
+        runs_dir = gitops.shared_brr_dir(root) / "runs"
+        if not runs_dir.is_dir():
+            continue
+        for child in _held_runs_for_repo(runs_dir):
+            meta = child.meta or {}
+            if not _is_strand(meta):
+                continue
+            spawn_event_id = str(child.event_id or "").strip()
+            parent_run_id = str(meta.get("spawn_parent_run_id") or "").strip()
+            if not spawn_event_id or not parent_run_id:
+                continue
+            parked = _parked_child_projection(child)
+            if parked is None:
+                continue
+            if (
+                _find_run_control(spawn_event_id) is not None
+                or _find_run_control(child.id) is not None
+            ):
+                continue
+            try:
+                allowance_tokens = (
+                    int(meta["spawn_allowance_tokens"])
+                    if meta.get("spawn_allowance_tokens") is not None else None
+                )
+            except (TypeError, ValueError):
+                allowance_tokens = None
+            _register_run_control(
+                spawn_event_id,
+                parent_run_id,
+                parent_conversation_key=str(
+                    meta.get("spawn_parent_conversation_key") or ""
+                ).strip(),
+                repo_label=str(meta.get("repo_label") or "").strip(),
+                allowance_tokens=allowance_tokens,
+                title=str(meta.get("title") or "").strip(),
+            )
+            _bind_run_control(spawn_event_id, child.id)
+            produce = meta.get("submitted_produce")
+            if isinstance(produce, str):
+                # The manifest stores nested dicts as JSON text.
+                try:
+                    produce = json.loads(produce)
+                except ValueError:
+                    produce = None
+            with _run_controls_lock:
+                control = _run_controls[spawn_event_id]
+                spent = meta.get("spawn_allowance_spent")
+                if isinstance(spent, (int, float)):
+                    control["allowance_spent"] = int(spent)
+                if meta.get("submitted"):
+                    control["submitted"] = True
+                    if isinstance(produce, dict):
+                        control["submitted_produce"] = dict(produce)
+                        try:
+                            control["submit_generation"] = int(
+                                produce.get("spawn_submit_generation") or 0
+                            )
+                        except (TypeError, ValueError):
+                            pass
+                control["recovered_at_boot"] = True
+            _park_run_control(spawn_event_id, parked)
+            recovered += 1
+    return recovered
+
+
 def _retire_child_messages(inbox_dir: Path | None, spawn_event_id: str) -> None:
     """Retire unconsumed parent→child messages once the child is over.
 
@@ -18395,6 +18509,19 @@ def start(
             print(f"[brnrd] wyrd: recovered dispatch edges for {backfilled} run(s)")
     except Exception as exc:  # noqa: BLE001 - backfill must not block boot
         print(f"[brnrd] dispatch-edge backfill skipped: {exc}")
+    # #2160: a parked strand's control edge lives in memory and is not
+    # covered by the reload guard once its process is reaped. Rebuild it
+    # from the child's own held manifest, after the janitors (so nothing
+    # they settle is revived) and before the first dispatch or outbox drain.
+    try:
+        recovered = _recover_parked_child_controls(account_context, repo_root)
+        if recovered:
+            print(
+                "[brnrd] parked-control recovery: restored "
+                f"{recovered} parked strand edge(s)"
+            )
+    except Exception as exc:  # noqa: BLE001 - recovery must not block boot
+        print(f"[brnrd] parked-control recovery skipped: {exc}")
     # #311: reconcile spawn dispatches orphaned by a daemon death — must run
     # before the main loop's first dispatch scan, because list_dispatchable
     # treats "processing" as still-eligible and the spawn slot would
