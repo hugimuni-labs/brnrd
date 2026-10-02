@@ -1,0 +1,409 @@
+function	start_line	lines	family	verdict	why	native_feature	callers_outside_daemon
+_RunnerRuntime	132	16	runner-quota	keep	Carries selected body credentials and hook capability across attempts	-	0
+_DispatchTarget	301	8	mail	collapse	Couples event address to repo; replace with conversation dispatch envelope	-	0
+_branch_lock	324	8	git-project	project	Serializes competing branch pushes in work placement	-	0
+_WorkerEmit	338	21	mail	keep	Emits event-scoped continuity updates	-	0
+_pid_path	364	2	startup	keep	Names daemon process marker	-	0
+_write_pid	368	2	startup	keep	Records daemon liveness PID	-	0
+_clear_pid	372	2	startup	keep	Removes daemon liveness marker	-	0
+read_pid	376	12	startup	keep	Checks daemon process existence	-	1
+stop	390	11	startup	keep	Stops continuity service on operator command	-	139
+_start_gates	406	28	startup	keep	Runs ingress and delivery gates	-	0
+_publish_tree_mismatch	451	66	git-project	project	Rejects writes against repointed git tree	-	1
+_publish_tree_cause_note	519	26	git-project	project	Explains work-placement tree mismatch	-	0
+_refuse_publish	547	43	git-project	project	Records publication refusal before unsafe git writes	-	0
+publish	592	190	git-project	project	Publishes work branch with measured push receipt	-	57
+publish_default_branch	784	92	git-project	project	Publishes reviewed default-branch work	-	0
+_push_command	878	32	git-project	project	Builds lease-safe branch push command	-	0
+_forge_view_url	912	24	git-project	project	Links published project branch	-	0
+_CommitProbeUnresolvable	938	14	git-project	project	Separates failed commit measurement from empty branch	-	0
+_commits_between	954	17	git-project	project	Measures unpublished branch commits	-	3
+_commits_since_seed	973	31	git-project	project	Measures work since seed reference	-	7
+_cleanup_traces_on_success	1006	22	other	keep	Retains failure traces while reclaiming successful run storage	-	0
+_branches_to_refresh	1033	22	git-project	project	Refreshes project seed and structured work branches	-	0
+_record_task_runner	1060	20	runner-quota	keep	Attests selected Shell and Core on durable run	-	2
+_enrich_catalog_quota	1082	21	runner-quota	keep	Displays measured pool levels for body choices	-	0
+_attach_lane_liveness_facet	1105	10	mail	keep	Reports communication lane liveness	-	0
+_quality_escalation_meta	1117	27	runner-quota	keep	Names stronger available body for explicit handover	-	0
+_repo_label	1146	32	git-project	project	Labels work repository from event and forge	-	7
+_utc_now	1180	2	other	keep	Supplies continuity timestamps	-	6
+_write_text_atomic	1184	5	other	keep	Atomically persists continuity records	-	0
+_frontmatter_doc	1191	10	other	keep	Serializes durable letter metadata	-	0
+_runner_policy_proposal_requested	1203	6	runner-quota	keep	Recognizes account preference proposal directive	-	0
+_runner_policy_scope	1211	5	runner-quota	keep	Resolves preference scope without selecting seat	-	0
+_runner_policy_target_path	1218	9	runner-quota	keep	Locates account or project preference record	-	0
+_relative_to_account	1229	5	other	keep	Renders account-relative artifact location	-	0
+_runner_policy_proposal_id	1236	6	runner-quota	keep	Mints durable preference proposal identity	-	0
+_runner_policy_proposal_message	1244	20	runner-quota	keep	Explains proposal and required approval	-	0
+_read_runner_policy_proposal	1266	17	runner-quota	keep	Reads validated preference proposal file	-	0
+_commit_account_policy_update	1285	22	runner-quota	keep	Commits approved account preference changes	-	0
+_queue_runner_policy_proposal	1309	84	runner-quota	keep	Persists body-selection proposal pending account approval	-	0
+_runner_policy_reply	1395	7	runner-quota	keep	Parses explicit preference approval or rejection	-	0
+_write_control_response	1404	3	mail	keep	Completes control letter with durable reply	-	0
+_handle_runner_policy_control_event	1415	122	runner-quota	keep	(skim) Applies approved body preference with owner and conversation checks	-	0
+_config_change_requested	1555	3	runner-quota	keep	Recognizes account configuration proposal	-	0
+_config_change_proposal_id	1560	6	runner-quota	keep	Mints configuration approval identity	-	0
+_read_config_change_proposal	1568	17	runner-quota	keep	Reads validated pending configuration proposal	-	0
+_commit_account_config_update	1587	22	runner-quota	keep	Commits account configuration decisions	-	0
+_queue_config_change_proposal	1611	143	runner-quota	keep	(skim) Persists configuration request for owner approval	-	0
+_config_change_reply	1756	7	runner-quota	keep	Parses configuration approval response	-	0
+_handle_config_change_control_event	1765	101	runner-quota	keep	(skim) Applies validated owner configuration decision	-	0
+_handle_daemon_control_events	1868	12	mail	keep	Handles account control letters before model dispatch	-	0
+_stale_event_horizon_seconds	1882	18	mail	keep	Resolves account mail-retention preference	-	0
+_format_stale_cutoff	1902	3	mail	keep	Renders stale-mail cutoff	-	0
+_handle_stale_events	1907	70	mail	keep	Retires aged correspondent letters with aggregated receipt	-	0
+_event_files_present	1979	6	mail	keep	Avoids parsing empty mail drawers	-	0
+_repo_inbox	1987	2	mail	collapse	Repo-keyed inbox path becomes conversation mail storage	-	0
+_repo_responses	1991	2	mail	collapse	Repo-keyed response path becomes conversation delivery storage	-	0
+_repo_for_event	1995	61	mail	collapse	Infers seat execution repo before conversation routing	-	0
+_unserved_repo_label	2058	35	git-project	project	Rejects unknown requested work repository	-	0
+_dispatchable_inbox_sources	2095	62	mail	collapse	Enumerates repo mail drawers; converge on account conversation store	-	0
+_dispatchable_targets	2159	43	mail	collapse	Builds repo dispatch targets before selecting conversation seat	-	1
+_wake_reason	2204	12	runner-quota	keep	Sanitizes server-authored wake refusal metadata	-	0
+_stamp_wake_request	2218	25	runner-quota	keep	Persists dashboard body-choice verdict	-	0
+_apply_dashboard_wake_request	2245	167	runner-quota	collapse	Dashboard body selection also retargets repo-bound seat	-	1
+_sticky_ttl_seconds	2414	8	runner-quota	keep	Reads preference inheritance lifetime	-	0
+_parse_utc_stamp	2424	12	other	keep	Parses durable timestamp	-	0
+_apply_sticky_wake_profile	2438	90	runner-quota	collapse	Correspondent-level inheritance becomes seat conversation body preference	-	2
+_sticky_wake_note	2530	19	wake-prompt	keep	Explains inherited body choice in wake	-	0
+gate_dirs	2561	36	mail	keep	Selects account-scoped delivery storage for gate	-	0
+_start_account_gates	2599	57	startup	keep	Starts account and project ingress gates	-	0
+_build_continuity_facet	2658	48	wake-prompt	keep	Summarizes durable memory continuity at boot	-	0
+_is_strand	2708	22	strands	keep	Recognizes strand metadata including legacy spelling	-	5
+_presence_label_for_event	2732	41	strands	keep	Publishes bounded strand presence label	-	0
+_child_git_pin	2775	60	git-project	project	Pins strand git commands to assigned worktree	-	4
+_stamp_host_start_oid	2844	45	git-project	project	Pins host work provenance baseline	-	0
+_record_host_baseline	2899	39	git-project	project	Measures shared checkout before isolated work	-	0
+_stray_host_write	2940	111	git-project	project	Detects work escaping assigned tree	-	0
+_weld_ignition_body	3053	29	mail	keep	Prevents system prose from claiming correspondent work	-	1
+_weld_ignite	3084	32	mail	keep	Binds addressed work item to run identity	-	0
+_uninitialized_first_wake_applies	3118	35	git-project	project	Routes unadopted work ground through setup	-	0
+_core_refusal_should_retry_fresh	3171	30	runner-quota	keep	Retries explicit Core refusal once before alternative body	-	2
+_announce_core_refusal_retry	3203	25	runner-quota	keep	Announces fresh-body retry to waiting correspondent	-	0
+_record_runner_substitution	3230	32	runner-quota	keep	Persists actual body substitution history	-	0
+_announce_runner_substitution	3264	46	runner-quota	keep	Announces changed author and cold-file recovery	-	0
+_run_worker	3312	32	runner-quota	keep	Delegates one body invocation to worker orchestration	-	7
+_refresh_codex_thread_id	3346	18	runner-quota	keep	Captures native Codex thread identity for continuation	-	0
+_invoke_with_heartbeat	3366	131	schedule-heartbeat	keep	(skim) Ticks mail and continuity while native body invocation blocks	-	0
+_emit_new_containers	3499	26	git-project	project	Reports launched execution containers	-	0
+_emit_preserved_containers	3527	17	git-project	project	Records preserved failure containers	-	0
+_pending_event_record	3546	36	mail	keep	Exposes pending letter and attachment content	-	2
+_processing_event_is_orphaned	3584	54	mail	keep	Detects abandoned processing claims	-	0
+_pending_events_for_agent	3640	186	mail	collapse	Filters pending letters by repo instead of conversation seat	-	7
+_ledger_spawn_observed	3828	20	strands	keep	Records parent observation of strand completion	-	0
+_write_live_inbox	3850	36	mail	collapse	Publishes inbox from repo-filtered event selection	-	1
+_iso_utc	3888	7	other	keep	Renders resource measurement timestamp	-	0
+_outbox_message_files	3897	21	outbox	keep	Lists staged messages excluding controls	-	2
+_merge_level_snapshots	3920	30	runner-quota	keep	Merges measured Shell resource snapshots	-	1
+_collect_levels	3952	132	runner-quota	keep	Collects native usage and context gauges	-	4
+_other_shells_fuel	4094	38	runner-quota	keep	Reports alternative body fuel without new probes	-	2
+_collect_allowance_facet	4134	64	runner-quota	keep	Measures strand allowance and seat stake usage	-	5
+_collect_quota_draws	4200	59	runner-quota	keep	Measures per-boundary quota draw	-	1
+_record_boot_cost	4261	56	runner-quota	keep	Records cold-wake cost in boot units	-	5
+_record_context_window	4319	56	runner-quota	keep	Records measured native context-window gauge	-	3
+_resources_facet	4377	61	runner-quota	keep	Builds shared measured-resource facet	-	2
+_task_thread_key	4440	14	mail	keep	Resolves conversation address independently of repo	-	1
+_task_correspondent_key	4456	12	mail	keep	Resolves correspondent identity separately from conversation	-	1
+_correspondent_event_ids	4470	17	mail	keep	Distinguishes human messages from internal completions	-	0
+_scm_facet	4489	22	git-project	project	Measures local work publication posture	-	1
+_read_pr_control	4513	15	git-project	project	Reads declared work PR identity	-	8
+_note_run_state_movement	4530	48	outbox	keep	Tracks observable progress for card freshness	-	1
+_card_is_stale	4580	26	outbox	keep	Detects card lag behind actual work	-	1
+_change_token	4608	70	outbox	keep	Hashes meaningful portal changes	-	2
+_initiative_timeout	4680	31	schedule-heartbeat	keep	Implements account preference for idle initiative deadline	-	0
+_resolve_await_state	4713	160	holds	collapse	(skim) Evaluates awaiting wake triggers using one seat record	-	3
+_cached_notify_gate	4883	24	mail	keep	Caches conversation delivery gate	-	0
+_forget_notify_gate	4909	6	mail	keep	Retires completed-run delivery cache	-	0
+_live_delivery_projection	4917	92	mail	keep	Projects whether terminal reply can reach its destination	-	2
+_frame_heartbeat	5011	96	schedule-heartbeat	keep	Refreshes durable work and topic projections	-	2
+_write_live_portal_state	5109	82	outbox	keep	Delegates continuity and resource portal rendering	-	8
+_find_pending_event	5193	8	mail	keep	Resolves still-open addressed letter	-	0
+_short_id_tail	5203	13	mail	keep	Expands shortened event handle safely	-	1
+_strand_may_address	5218	34	strands	keep	Enforces isolated strand inbound address boundary	-	0
+_outbox_address_sources	5254	40	mail	collapse	Unifies repo drawers into conversation address resolver	-	0
+_resolve_event_target	5296	42	mail	keep	Resolves full or unique abbreviated pending letter ID	-	1
+_locate_event_any_status	5340	37	mail	keep	Locates closed letters for honest refusal evidence	-	1
+_event_refusal_cause	5379	17	mail	keep	Distinguishes closed letter from missing address	-	0
+_note_event_closed	5398	94	mail	keep	Closes owned letter without sending reply	-	1
+_resolve_also_targets	5494	113	mail	keep	(skim) Atomically validates same-conversation reply burst	-	1
+_truthy	5609	4	other	keep	Parses portal boolean directive	-	5
+_respawn_defer_until	5615	8	holds	collapse	Deferred handover becomes parked timer wake trigger	-	0
+_respawn_quality_target	5625	18	runner-quota	keep	Resolves explicit stronger-body preference	-	0
+_queue_respawn_request	5645	181	holds	collapse	(skim) Replaces legacy respawn event copying with explicit carry handover	-	3
+_record_outbox_notice	5886	50	outbox	keep	Writes delivery refusal and advisory receipts	-	6
+_retire_outbox_staging	5938	12	outbox	keep	Archives processed directive without replay	-	3
+_quarantine_poison_outbox_file	5952	24	outbox	keep	Quarantines malformed directive without wedging mail	-	0
+_OutboxEntryGuard	5978	59	outbox	keep	Isolates poison message failure from drain tick	-	0
+_stage_outbound	6039	62	outbox	keep	Persists outbound message and blocks routing text leakage	-	1
+_assign_message_topic	6103	46	mail	keep	Binds messages and addressed letters to durable topics	-	0
+_first_nonempty_line	6156	2	outbox	keep	Reads first substantive body line	-	0
+_declaration_shaped_cut_body	6160	7	outbox	keep	Detects machine declaration sent as human closeout	-	0
+_block_directive_shaped_chat_body	6169	14	outbox	keep	Rejects machine directive body at delivery seam	-	0
+_stage_terminal_response	6185	57	mail	keep	Stages durable terminal reply with suppression receipt	-	0
+_strand_reply_label	6244	31	strands	keep	Resolves strand identity for relayed reply	-	0
+_label_strand_relay_body	6277	12	strands	keep	Labels strand message independently from seat voice	-	0
+_notify_parent_of_relayed_strand_message	6291	35	strands	keep	Records strand direct escalation for parent continuity	-	0
+_read_outbox_notices	6328	16	outbox	keep	Reads bounded outbox refusal history	-	1
+_register_run_control	6371	44	strands	keep	Registers parent-owned strand control and allowance	-	0
+_bind_run_control	6417	5	strands	keep	Binds dispatch event to live strand run	-	0
+_find_run_control	6424	10	strands	keep	Resolves strand control by event or run identity	-	0
+_stopped_run_control	6436	6	strands	keep	Reads explicit strand stop instruction	-	0
+_retire_run_control	6444	3	strands	keep	Retires completed strand control	-	0
+_parked_child_projection	6462	21	holds	collapse	Projects parked strand through generic reason and wake triggers	-	0
+_park_run_control	6485	8	holds	collapse	Stores strand parking in common lifecycle record	-	0
+_retire_child_messages	6495	13	strands	keep	Retires obsolete steer letters for finished strand	-	0
+_owned_child_controls	6510	75	strands	keep	Reports parent-owned strands including parked work	-	1
+_working_child_controls	6587	13	strands	keep	Distinguishes active from parked strands	-	0
+_parked_child_controls	6602	6	strands	keep	Lists parked parent-owned strands	-	0
+_allowance_ask_spec	6615	6	strands	keep	Recognizes strand allowance negotiation	-	0
+_queue_allowance_ask	6623	82	strands	keep	Sends priced allowance request to owning parent	-	1
+_strand_probe_root	6707	18	git-project	project	Locates strand worktree for publication measurement	-	0
+_strand_branch_is_published	6727	18	git-project	project	Verifies declared work branch reached remote tracking ref	-	0
+_queue_submit_request	6747	86	strands	keep	(skim) Attests published branch and report without ending strand	-	0
+_authorize_child_control	6835	49	strands	collapse	Orphan adoption requires same repo; key ownership by conversation instead	-	0
+_child_owner_route	6886	18	strands	keep	Routes strand return through current owning parent	-	0
+_emit_child_adoption	6906	32	strands	keep	Records orphan strand ownership transfer	-	0
+_apply_allowance_grant	6943	29	strands	keep	Applies parent-authorized strand allowance adjustment	-	0
+_queue_child_message	6974	124	strands	keep	(skim) Delivers authorized parent steer to isolated strand	-	0
+_utterance_sibling_events	7100	79	mail	keep	Finds one correspondent utterance across burst letters	-	0
+_sweep_utterance_siblings	7181	54	mail	keep	Cancels sibling utterance letters with explicit receipt	-	0
+_apply_run_stop	7237	120	strands	keep	Stops owned process or cancels undispatched strand	-	0
+_stop_parked_child	7359	67	holds	collapse	Ends parked strand using generic parked lifecycle transition	-	0
+_queue_stop_request	7428	91	strands	keep	Authorizes parent-owned strand stop request	-	0
+_render_seeded_report_skeleton	7521	22	strands	keep	Seeds checkable strand handoff skeleton	-	0
+_seed_declared_report	7545	54	strands	keep	Creates declared report early without overwriting existing work	-	0
+_queue_spawn_request	7601	400	strands	keep	(skim) Dispatches isolated bounded work with branch and report contract	-	5
+_short_event_summary	8003	11	mail	keep	Renders bounded letter summary	-	0
+_stranded_strands	8016	43	git-project	project	Detects disappeared declared strand branches	-	0
+_issue_filing_claims	8091	20	git-project	project	Extracts claimed issue receipts for project verification	-	0
+_cut_mismatches	8113	270	outbox	keep	(skim) Checks phase attestation against open mail and actual produce	-	1
+_seat_pause_on_message	8401	5	mail	keep	Reads account preference for interrupting tools on human mail	-	0
+_seat_pause_cap_seconds	8408	7	mail	keep	Bounds paused-tool interruption lease	-	0
+_seat_park_enabled	8427	6	holds	collapse	Account park preference belongs to generic lifecycle policy	-	1
+_park_seat_on_turn_end	8435	30	holds	collapse	Unexpected process end becomes parked wake-on-addressed record	-	0
+_park_seat_on_daemon_restart	8467	56	holds	collapse	Restart interruption becomes parked wake-on-addressed record	-	1
+_seat_park_on_hold_cost_enabled	8558	6	holds	delete	Cost-based process exit contradicts target warm-wall rule	-	0
+_seat_starve_floor_pct	8594	7	runner-quota	keep	Reads measured resource-wall threshold	-	0
+_seat_refill_floor_pct	8603	10	runner-quota	keep	Reads refill hysteresis for wall gauge	-	0
+_starvation_hold_spec	8615	27	holds	collapse	Starvation maps to parked with measured-refill wake trigger	-	0
+_starvation_facet	8644	70	holds	collapse	Gauge and wall enforcement become generic parked transition	-	1
+_stake_hold_spec	8716	17	holds	delete	Constructs held-raise state explicitly removed by target	-	0
+_stake_arm	8735	78	runner-quota	keep	(skim) Validates account stake preference and measured spend	-	0
+_stake_facet	8815	88	holds	collapse	(skim) Preserve stake meter; remove automatic held-raise transition	-	1
+_seat_park_after_boot_ratio	8905	9	holds	delete	Cost-ratio parking threshold has no target policy caller	-	0
+_seat_live_window_seconds	8916	10	schedule-heartbeat	keep	Reads human-activity window for initiative scheduling	-	0
+_seat_initiative_enabled	8928	4	schedule-heartbeat	keep	Reads account initiative preference	-	0
+_seat_initiative_after_seconds	8934	15	schedule-heartbeat	keep	Reads idle initiative timer duration	-	0
+_hold_ratio_facet	8951	124	holds	collapse	Retain idle-cost gauge; remove independent cost-based parking branch	-	2
+_resident_hold_refusal	9077	38	holds	collapse	Confirmed-wall park validation belongs to common parked transition	-	2
+_park_bolt_on_live_strands	9117	85	holds	collapse	Live-strand handoff parks on owned-strand return wake trigger	-	0
+_cut_bounce_kinds	9204	17	outbox	keep	Classifies phase attestation discrepancies	-	0
+_halt_open_items	9235	131	holds	keep	(skim) Enumerates obligations explicit carry must preserve	-	0
+_halt_bounce_lines	9368	6	holds	keep	Checks carry names outstanding continuity obligations	-	0
+_halt_bounce_notice	9376	11	holds	keep	Explains omitted obligations before ending body	-	0
+_halt_spec	9389	21	holds	keep	Serializes explicit handover declaration and dissent	-	0
+_said_lead	9428	16	outbox	keep	Extracts bounded reply lead for durable card	-	0
+_render_said_section	9446	9	outbox	keep	Renders message receipt section	-	0
+_splice_said_section	9457	29	outbox	keep	Updates message receipt section without overwriting card	-	0
+_project_said	9488	24	outbox	keep	Projects accepted messages onto run card	-	0
+_drain_outbox	9514	64	outbox	keep	Delegates message and directive draining to outbox protocol	-	10
+_gate_is_configured	9580	18	mail	keep	Checks configured delivery transport	-	0
+_gate_can_deliver	9600	9	mail	keep	Validates concrete gate can deliver	-	1
+_gate_can_send_unaddressed	9611	21	mail	keep	Checks transport permits explicitly unaddressed send	-	0
+_gate_addressed	9634	22	mail	keep	Validates destination fields supplied to gate	-	0
+_gate_can_route_thread	9658	25	mail	keep	Checks transport thread-addressing capability	-	0
+_gate_thread_destination	9692	23	mail	keep	Names actual unaddressed delivery destination	-	0
+_unroutable_thread	9717	25	mail	keep	Detects unsupported thread address	-	0
+_unrouted_thread_reason	9744	14	mail	keep	Explains route destination mismatch	-	0
+_configured_gate_names	9760	18	mail	keep	Lists configured communication gates	-	0
+_notify_gate_for_conversation_key	9788	13	mail	keep	Derives gate from conversation address	-	0
+_conversation_activity	9803	15	mail	delete	Latest file activity no longer selects another conversation transport	-	0
+_notify_gate_by_recent_activity	9820	19	mail	delete	Infers destination from unrelated recent repo conversation activity	-	0
+_resolve_notify_gate	9841	62	mail	collapse	Resolve addressed conversation or explicit account notification route	-	1
+_gate_owns_source	9905	13	mail	keep	Recognizes transport-owned waking source	-	2
+_spawn_parent_still_collecting	9920	31	strands	keep	Determines whether dispatch parent can collect return	-	2
+_terminal_reply_lands	9953	36	mail	keep	Checks dispatch-edge or gate delivery viability	-	1
+_terminal_route	10000	73	mail	keep	Chooses terminal delivery receipt route	-	0
+_delivery_source_for_gate	10075	3	mail	keep	Normalizes forge delivery transport alias	-	0
+_is_pr_body_delivery	10080	18	git-project	project	Recognizes PR-body publication action	-	0
+_pr_body_close_keyword_refusal	10100	25	git-project	project	Validates issue-closing claims at PR publication seam	-	0
+_split_gate_name	10141	6	mail	keep	Parses explicit carrier and application destination	-	0
+_resolve_gate_name	10149	14	mail	keep	Resolves concrete communication carrier	-	0
+_live_cloud_apps	10165	17	mail	keep	Discovers relay apps for destination ambiguity check	-	0
+_ambiguous_bare_gate	10184	11	mail	keep	Refuses ambiguous host-versus-cloud gate address	-	0
+_deliver_out_of_bound	10197	241	mail	keep	(skim) Sends explicit escalation through validated concrete transport	-	2
+_news_record_or_disable	10454	18	mail	keep	Prevents unrecorded news send repeating	-	1
+_news_lane_send	10474	30	mail	collapse	News notification needs explicit conversation destination, not repo recency	-	0
+_announce_pending_news	10506	54	schedule-heartbeat	keep	Delivers scheduled account news with send receipts	-	0
+_drain_agent_card	10562	108	outbox	keep	Publishes composed run card and durable body	-	1
+_drain_live_menu	10672	95	mail	keep	Validates and promotes conversation-owned choice menu	-	1
+_card_now_projection	10769	16	outbox	keep	Projects current card narration	-	1
+_emit_mirror_cards	10790	103	mail	delete	Cross-conversation mirror cards compensate for repo single-flight blocking	-	2
+_remove_outbox	10895	4	outbox	keep	Removes drained ephemeral run outbox	-	1
+_schedule_enabled	10901	2	schedule-heartbeat	keep	Reads schedule enable preference	-	0
+_primary_dominion_candidate	10950	31	wake-prompt	keep	Locates resident memory used by schedule authoring	-	0
+_run_dominion_commits	10983	29	schedule-heartbeat	keep	Attributes schedule changes to memory commits	-	0
+_schedule_at_commit	11014	11	schedule-heartbeat	keep	Reads schedule fingerprints from git history	-	0
+_schedule_entries_touched_by_run	11027	41	schedule-heartbeat	keep	Identifies schedule entries authored by run	-	0
+_attribute_schedule_entries	11070	32	schedule-heartbeat	keep	Preserves schedule author trust tier	-	0
+_fire_due_schedules	11104	279	schedule-heartbeat	collapse	(skim) Schedule firing addresses repo seat; route conversation and place work separately	-	5
+_retire_internal_event	11385	64	mail	keep	Retires consumed internal letters while preserving parked mail	-	0
+_extract_spawn_contract	11473	16	strands	keep	Extracts legacy strand deliverable declaration	-	0
+_spawn_contract_check	11491	91	strands	keep	Checks branch identity and report existence	-	0
+_unstattable_report_note	11584	51	strands	keep	Explains invalid report-path declaration	-	0
+_spawn_strand_ran	11637	27	strands	keep	Distinguishes executed strand from empty pre-run failure	-	0
+_levels_measured_at	11680	24	runner-quota	keep	Reads resource-gauge measurement freshness	-	0
+_capture_exit_quota	11706	119	runner-quota	keep	Captures strand exit fuel for parent accounting	-	0
+_notify_spawn_parent	11827	537	strands	keep	(skim) Delivers strand outcome, produce, contract and spend to parent	-	1
+_mark_report_collected	12366	20	strands	keep	Records dispatch-edge collection of strand reply	-	1
+_notify_spawn_parent_of_crash	12388	55	strands	keep	Reports crashed dispatch before strand receipt exists	-	0
+_finalize_stopped_run	12445	70	strands	keep	Finalizes stopped work while preserving previously submitted produce	-	0
+_outermost_live_ancestor_run_id	12517	37	strands	keep	Attributes shared memory capture to live owning ancestor	-	0
+_capture_knowledge	12556	122	wake-prompt	keep	Captures durable knowledge and publication receipts	-	0
+_knowledge_repo_label	12680	18	wake-prompt	keep	Resolves knowledge archive identity	-	0
+_weld_capture	12700	57	git-project	project	Binds actual project produce to durable work items	-	0
+_ask_commit_ref	12759	16	git-project	project	Builds committed work receipt reference	-	0
+_ask_delivery_capture	12777	60	git-project	project	Marks addressed work delivered by commit receipt	-	1
+_capture_dominion	12839	93	wake-prompt	keep	Commits continuing resident memory across bodies	-	3
+_push_repo_if_ahead	12951	49	wake-prompt	keep	Pushes ahead memory archive with explicit rejection marker	-	0
+_push_ahead_repos_if_due	13002	82	schedule-heartbeat	keep	Schedules memory publication retries without blocking seat	-	0
+_protected_branch	13086	21	git-project	project	Resolves protected project branch before salvage	-	0
+_capture_worktree	13109	149	git-project	project	(skim) Salvages interrupted work onto publishable branch	-	0
+_record_response_artifact	13260	29	mail	keep	Records durable terminal response artifact	-	0
+_backfill_dispatch_edges	13291	58	strands	keep	Repairs historical parent-child dispatch edges	-	0
+_existing_child_run_ids	13351	10	strands	keep	Reads durable child-run links	-	0
+_existing_produce_lines	13363	23	git-project	project	Preserves previously captured work receipts	-	0
+_run_state_produce_changed	13388	38	git-project	project	Detects changed project produce	-	0
+_produce_lines_regressed	13428	19	git-project	project	Prevents receipt projection regression	-	0
+_run_state_produce_lines	13449	53	git-project	project	Rebuilds project produce while preserving prior evidence	-	0
+_record_dispatch_edge	13504	37	strands	keep	Serializes durable parent-child edge updates	-	0
+_write_dispatch_edge	13543	31	strands	keep	Adds idempotent child edge to parent record	-	0
+_stamp_unresolved_acts	13576	19	outbox	keep	Marks unacknowledged acts ambiguous after process end	-	0
+_persist_run_state_doc	13597	192	outbox	keep	(skim) Persists durable run outcome, handoff links and produce	-	1
+_persist_run_body	13791	27	outbox	keep	Captures composed run story beyond process lifetime	-	0
+_persist_run_topics	13820	26	outbox	keep	Persists run topic associations	-	0
+_discover_control_file_names	13880	30	outbox	keep	Inventories preserved portal controls	-	5
+_capture_control_files	14090	76	outbox	keep	Captures bounded regular-file controls without symlink publication	-	0
+_persist_boundaries_summary	14168	42	runner-quota	keep	Archives observed tool-boundary summary	-	2
+_closed_ledger_run_ids	14212	18	other	keep	Reads durable completed-run ledger identities	-	0
+_run_unfinished	14244	11	holds	collapse	Unfinished-body predicate must distinguish parked conversation from failed attempt	-	0
+_reaped_run_state_text	14257	29	other	keep	Marks provably dead projected run with evidence	-	0
+_retention_sweep	14288	38	other	keep	Enforces configured raw-artifact retention	-	0
+_sweep_zombie_runs	14328	34	startup	keep	Reconciles stale run projections at boot	-	0
+_reap_zombie_run_state_docs	14364	54	startup	keep	Reaps dead run projection using presence and PID evidence	-	0
+_reap_zombie_run_manifests	14420	59	startup	keep	Reaps dead body manifests using ledger evidence	-	0
+_repo_ledger_run_ids	14481	23	other	keep	Reads completed project-run ledger identities	-	0
+_live_run_ids	14506	17	runner-quota	keep	Measures live body identities	-	0
+_live_run_ids_cache	14525	21	runner-quota	keep	Caches liveness readings within one sweep	-	0
+_recorded_pid_alive	14548	13	runner-quota	keep	Checks recorded process liveness	-	0
+_record_retry_provenance	14563	36	mail	keep	Preserves letter retry provenance	-	0
+_hold_the_orphaned_event	14601	55	holds	collapse	Orphan mail accumulation becomes parked-seat queue without defer ritual	-	0
+_mark_interrupted_runs	14658	270	holds	collapse	(skim) Interrupted bodies recover into generic parked seat with owned mail	-	1
+_reconcile_orphaned_spawn_dispatches	14930	187	strands	keep	(skim) Repairs abandoned strand dispatch and informs owning parent	-	0
+_event_requires_thread_delivery	15119	3	mail	keep	Distinguishes internal return from human delivery obligation	-	0
+_response_has_body	15124	7	mail	keep	Checks response contains substantive body	-	0
+_terminal_stream_duplicates_delivered	15133	24	mail	keep	Suppresses terminal stream already delivered mid-turn	-	0
+_result_satisfied_delivery	15159	38	mail	keep	Attests actual delivery or durable produce success	-	1
+_seconds_config	15199	17	other	keep	Resolves bounded numeric account settings	-	0
+_quota_low_floor_pct	15218	5	runner-quota	keep	Reads low-resource preference threshold	-	0
+_quota_critical_floor_pct	15225	6	runner-quota	keep	Reads critical-resource preference threshold	-	0
+_quota_stretch_factor	15233	5	schedule-heartbeat	keep	Reads account schedule pacing preference	-	0
+_quota_pacing_status	15240	46	runner-quota	keep	Reports binding quota and preference thresholds	-	2
+_quota_window_pace	15288	30	runner-quota	keep	Measures elapsed-versus-consumed provider window pace	-	2
+_failure_reason	15320	27	runner-quota	keep	Explains classified body invocation failure	-	0
+_record_runner_auth_health	15349	12	runner-quota	keep	Records credential health for future body selection	-	1
+_terminal_failure_body	15363	29	mail	keep	Renders operational failure with priced relay option	-	0
+_deduplicated_event_body	15394	5	mail	keep	Explains duplicate source message without another invocation	-	0
+_trust_refused_event_body	15401	12	mail	keep	Explains refused untrusted work placement	-	0
+_crash_requires_notice	15415	18	mail	keep	Identifies autonomous failures requiring notification	-	0
+_write_terminal_failure_response	15435	34	mail	keep	Writes failure reply without overwriting substantive response	-	0
+_format_utc_after	15471	6	other	keep	Computes durable trigger deadline	-	0
+_defer_pending_siblings_after_failure	15479	75	mail	collapse	Inbox-wide failure deferral becomes conversation queue plus resource wake trigger	-	2
+_resume_session_for_runner	15584	25	runner-quota	keep	Calls native resume only for compatible Shell identity	-	0
+_resource_hold_provider_for_runner	15611	8	runner-quota	keep	Names Shell capability owner for session handle	-	0
+_codex_reset_deadline	15621	28	runner-quota	keep	Reads provider reset deadline from native usage gauge	-	0
+_maybe_arm_resource_hold_on_failure	15651	76	holds	collapse	Operational usage-limit failure parks on measured wall or explicit operator trigger	-	0
+_arm_resource_hold	15729	83	holds	collapse	Arms single parked record; remove repo-wide supersession and duplicate shuttle state	-	2
+_supersede_hold	15814	17	holds	collapse	Merge queue by same conversation, never supersede unrelated repo seat	-	0
+_hold_body	15833	47	holds	collapse	Render parked reason and wake triggers without hold-kind branches	-	0
+_refill_terms	15882	25	holds	keep	Explains measured wall and explicit owner overrides	-	0
+_write_terminal_hold_response	15909	25	holds	collapse	Writes generic parking receipt instead of hold-specific response	-	0
+_finalize_resource_hold	15936	81	holds	collapse	Shared parking finalizer retains mail and work without inbox-wide deferral	-	1
+_halt_body	16019	28	holds	keep	Renders explicit end or carry handover receipt	-	0
+_queue_halt_successor	16049	59	holds	keep	Queues successor from authored carry and selected body	-	0
+_finalize_halt	16110	107	holds	collapse	(skim) Ends conversation seat through common transition with explicit carry	-	0
+_write_terminal_halt_response	16219	26	holds	keep	Records ended-seat reply and body outcome separately	-	0
+_native_session_id_for	16247	19	runner-quota	keep	Reads native session handle with current capability restrictions	-	1
+_held_runs_for_repo	16268	20	holds	collapse	Finds parked conversation by identity instead of repo manifests	-	0
+_seat_held_runs_for_repo	16290	28	holds	collapse	Selects resident parked seat by conversation ownership	-	0
+_repo_root_for_runs	16320	3	git-project	project	Resolves work ground from run storage	-	0
+_shuttle_home	16325	3	holds	collapse	Continuity home storage becomes conversation-keyed seat location	-	1
+_shuttle_key	16330	3	holds	collapse	Account-home shuttle key must include conversation identity	-	0
+_repo_seat	16335	33	holds	collapse	Latest repo hold selection becomes exact conversation seat lookup	-	0
+_seat_conversation	16370	5	holds	keep	Reads persisted seat conversation address	-	0
+_rekey_to_seat	16377	21	mail	collapse	Rekeys generic schedule mail; replace with explicit conversation address at creation	-	0
+_accumulate_held_event	16400	8	holds	collapse	Stores addressed mail in generic parked queue	-	0
+_hold_undefer_inboxes	16410	46	mail	collapse	Multi-repo undefer scan disappears with conversation mail queue	-	0
+_undefer_held_event	16458	66	holds	collapse	Releases parked mail without restamping conversation or defer metadata	-	0
+_apply_resource_hold_resume	16526	115	holds	collapse	(skim) Wakes exact conversation seat with capability-checked native resume or carry	-	2
+release_held_run	16643	26	holds	collapse	Releases parked body without declaring continuing seat done	-	0
+_reconcile_stale_held_status	16671	30	holds	collapse	Repairs legacy hold projection during parked-record migration	-	1
+_release_reset_holds_due	16703	131	holds	collapse	One trigger evaluator replaces separate reset and refill sweeps	-	0
+_crossed_reset_deadline	16836	7	runner-quota	keep	Reads measured reset deadline crossing	-	0
+_probe_reset_deadline_holds	16845	6	holds	collapse	Deadline probe becomes timed parked wake trigger	-	0
+_find_held_run	16853	9	holds	collapse	Resolves parked seat by stable conversation-owned identity	-	0
+_apply_run_release	16864	44	holds	collapse	Dashboard release ends generic seat and retains owned mail	-	1
+_respawn_event_meta	16910	37	holds	keep	Marks fresh carry handover distinct from native session resume	-	1
+_apply_run_respawn	16949	83	holds	collapse	(skim) Dashboard handover requires authored carry instead of generic recovery prose	-	0
+_strand_return_resumes_held_parent	17034	26	holds	collapse	Resolves owned strand return by parent conversation, not target repo	-	0
+_handle_resource_held_events	17062	237	holds	collapse	Repo-grouped hold router becomes conversation wake-trigger evaluator	-	0
+_bounce_verb	17308	22	holds	keep	Parses explicit wall commands without accidental force	-	0
+_resolve_bounce_runner	17332	28	runner-quota	keep	Validates requested alternate body against live catalog	-	0
+_held_run_binding_pct	17362	50	runner-quota	keep	Proves refill from fresh provider gauge rather than elapsed clock	-	0
+_seat_intended_runner	17414	15	runner-quota	keep	Reads explicitly intended body preference	-	0
+_seat_alternate_binding_pct	17431	53	runner-quota	keep	Measures available alternate body before releasing wall	-	0
+_raise_stake_at_cut	17486	64	holds	delete	Raise-only held-seat release has no target caller	-	0
+_keep_at_stake_cut	17552	22	holds	delete	Defers addressed mail behind deleted held-raise state	-	1
+_refuse_starved_wake	17576	34	holds	collapse	Retain wall refusal receipt; queue mail on generic parked seat	-	0
+_set_event_status_if_present	17612	8	mail	keep	Updates letter status defensively if file still exists	-	0
+_run_outcome_word	17622	7	holds	collapse	Maps body outcome from legacy hold status to generic parked record	-	0
+_set_event_run_outcome	17631	24	mail	keep	Stores body outcome separately from letter delivery lifecycle	-	3
+_run_worker_and_finalize	17660	275	holds	collapse	(skim) Shared body closeout must preserve continuing conversation identity	-	1
+_capture_pr_handle	17937	13	git-project	project	Captures explicitly declared work PR receipt	-	0
+_events_share_thread	17955	25	mail	keep	Groups messages by conversation before correspondent fallback	-	0
+_weave_burst_siblings_into_body	17982	79	mail	keep	Folds settled same-thread burst into one invocation	-	2
+_burst_settle_delay	18076	27	mail	collapse	Debounce per conversation rather than global pending mail	-	0
+_StampedStream	18124	66	startup	keep	Adds timestamps to continuity-service diagnostics	-	0
+_install_log_stamps	18192	12	startup	keep	Installs line-stamped daemon diagnostics	-	0
+_mount_home_knowledge	18209	34	wake-prompt	keep	Mounts durable memory and knowledge at registered work grounds	-	0
+start/signature-and-orientation	18245	47	startup	keep	Documents continuity service and resolves initial runtime surface	-	0
+start/log-buffering	18292	9	startup	keep	Flushes service diagnostics before crash or reexec	-	0
+start/process-guard	18301	44	startup	keep	Prevents duplicate daemon and records exact process image	-	0
+start/_handle_signal	18345	3	startup	keep	Turns operator signals into orderly service shutdown	-	0
+start/signal-and-config	18348	6	startup	keep	Registers shutdown handlers and loads account settings	-	0
+start/_report_update	18354	3	schedule-heartbeat	keep	Renders observed release availability	-	0
+start/account-config	18357	25	startup	keep	Resolves account and migrates legacy configuration	-	0
+start/boot-recovery	18382	59	startup	keep	Repairs interrupted bodies, dispatch edges and stranded messages	-	0
+start/runtime-options	18441	14	startup	keep	Loads retry, burst and development reload settings	-	0
+start/memory-bootstrap	18455	35	wake-prompt	keep	Seeds persistent resident memory independently of body	-	0
+start/gates-and-announcements	18490	12	startup	keep	Starts configured mail transports and reports service capability	-	0
+start/single-flight-slot	18502	41	mail	collapse	Associate global execution lease with conversation; preserve independent seat records	-	0
+start/loop-clocks	18543	22	schedule-heartbeat	keep	Initializes sweep clocks and persistent tick context	-	0
+start/tick	18565	10	schedule-heartbeat	keep	Advances shared continuity clock	-	0
+start/hold-sweeps	18575	14	holds	collapse	Reset and refill checks become parked wake-trigger evaluation	-	0
+start/credential-sweep	18589	20	runner-quota	keep	Refreshes measured credential health	-	0
+start/retention-sweep	18609	9	other	keep	Reclaims expired raw continuity artifacts	-	0
+start/reload-observation	18618	11	startup	keep	Observes changed service image while preserving live bodies	-	0
+start/resident-reap	18629	21	mail	collapse	Reaps one global current slot instead of conversation-owned body	-	0
+start/strand-reap	18650	104	strands	keep	Collects strand returns while retaining parked parent edges	-	0
+start/dev-reexec	18754	14	startup	keep	Reloads continuity service only after active bodies drain	-	0
+start/schedule-fire	18768	13	schedule-heartbeat	collapse	Repo-directed schedule call becomes explicitly addressed conversation trigger	-	0
+start/project-observation	18781	44	git-project	project	Refreshes forge and work-branch observations at project ground	-	0
+start/news	18825	19	schedule-heartbeat	keep	Publishes account release news with durable receipt	-	0
+start/memory-push	18844	18	schedule-heartbeat	keep	Retries durable memory publication independently of body closeout	-	0
+start/mail-scan	18862	4	mail	collapse	Builds repo targets before conversation seat selection	-	0
+start/strand-admission-and-dispatch	18866	164	strands	keep	Dispatches deduplicated bounded work independently of resident slot	-	0
+start/resident-dispatch	19030	117	mail	collapse	Global idle gate routes repo targets through held-seat resolver	-	0
+start/idle-wait	19147	5	schedule-heartbeat	keep	Waits interruptibly for mail or timed continuity work	-	0
+start/gate-liveness	19152	3	schedule-heartbeat	keep	Reports dead ingress threads	-	0
+start/shutdown	19155	22	startup	keep	Stops active bodies and drains executors before clearing process marker	-	0
