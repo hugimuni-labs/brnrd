@@ -10,7 +10,7 @@ process. Electrical breakdown finds `r`. Field lines between two poles find
 reversing it gives `^`. [`LEXICON.md`](LEXICON.md) is the deliverable that
 matters: etymologies, operations between glyphs, materials and motion rules.
 
-The film (48 s, 1080p24, diegetic score; `media/video/glyph-physics/`) is that lexicon in motion. Physics
+The film (48 s, 1080p24, diegetic score) is that lexicon in motion; renders live outside this repo since the 2026-10-02 media rewrite (`hugimuni-labs/animations`), so `./render.sh` is how you get one here. Physics
 shots tremble, intercut by 1–4-frame inserts, flashes, negatives,
 magnification jumps and shape-matching ripple cuts. It ends on `brnrd`, each
 letter found by its own law, keyed out as Morse on a wire.
