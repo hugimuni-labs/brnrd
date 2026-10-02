@@ -104,6 +104,39 @@
         {"from":"armed","to":"pending","trigger":"outcome:pending","actor":"daemon","guard":"call ceiling or Shell cap reached before resolution","cost":"warm-resume","code":"src/brr/cli.py::cmd_await"},
         {"from":"pending","to":"armed","trigger":"brnrd await (call again)","actor":"resident","guard":"daemon wait still stands","cost":"tokens","code":"src/brr/cli.py::cmd_await"}
       ]
+    },
+    "event": {
+      "start": "unwritten",
+      "states": [
+        {"id":"unwritten","summary":"Something happened in the world; no letter file exists yet.","alive":["none"],"cost_to_stay":"zero","user_exits":["send a message"],"terminal":false},
+        {"id":"pending","summary":"The letter is a file in the inbox; nobody holds it. Defer keys may hide it from dispatch without changing status.","alive":["file"],"cost_to_stay":"zero","user_exits":["stop"],"terminal":false},
+        {"id":"processing","summary":"A Run holds the letter as its lead.","alive":["file","process"],"cost_to_stay":"tokens-while-thinking","user_exits":["stop"],"terminal":false},
+        {"id":"done","summary":"Handled: answered, closed by its Run, or born outbound. The transport may still owe a send.","alive":["file"],"cost_to_stay":"zero","user_exits":[],"terminal":true},
+        {"id":"noted","summary":"Retired deliberately with no reply owed.","alive":["file"],"cost_to_stay":"zero","user_exits":[],"terminal":true},
+        {"id":"delivered","summary":"The transport sent or settled the response, or a gateless letter was closed in place.","alive":["file"],"cost_to_stay":"zero","user_exits":[],"terminal":true},
+        {"id":"cancelled","summary":"A stop ended the letter's Run, or a sibling was swept. Legacy run-outcome value that two writers still use.","alive":["file"],"cost_to_stay":"zero","user_exits":[],"terminal":true},
+        {"id":"error","summary":"The gate abandoned delivery; the message is kept as undeliverable. Legacy run-outcome value still written here.","alive":["file"],"cost_to_stay":"zero","user_exits":[],"terminal":true}
+      ],
+      "transitions": [
+        {"from":"unwritten","to":"pending","trigger":"letter written","actor":"daemon","guard":"a gate, schedule, strand or proposal creates an inbound event","cost":"free","code":"src/brr/protocol.py::create_event"},
+        {"from":"unwritten","to":"done","trigger":"outbound letter written","actor":"resident","guard":"gate: send with no waiting event (born done)","cost":"free","code":"src/brr/daemon.py::_deliver_out_of_bound"},
+        {"from":"pending","to":"processing","trigger":"dispatch claims the lead","actor":"daemon","guard":"eligible: no defer key, slot free","cost":"cold-boot","code":"src/brr/daemon.py::start"},
+        {"from":"pending","to":"pending","trigger":"defer","actor":"daemon","guard":"a sibling's run failed or a hold accumulated it","cost":"free","code":"src/brr/daemon.py::_defer_pending_siblings_after_failure"},
+        {"from":"pending","to":"pending","trigger":"release: undefer","actor":"daemon","guard":"the hold that deferred it releases","cost":"free","code":"src/brr/daemon.py::_undefer_held_event"},
+        {"from":"processing","to":"pending","trigger":"orphan kept for a parked seat","actor":"daemon","guard":"the holding run is gone and its seat is parked; nothing boots","cost":"free","code":"src/brr/daemon.py::_hold_the_orphaned_event"},
+        {"from":"processing","to":"pending","trigger":"interrupted run retried","actor":"daemon","guard":"boot finds a run interrupted mid-letter","cost":"free","code":"src/brr/daemon.py::_mark_interrupted_runs"},
+        {"from":"processing","to":"done","trigger":"run outcome written","actor":"daemon","guard":"finalization saves run_outcome and settles the lead","cost":"free","code":"src/brr/daemon.py::_set_event_run_outcome"},
+        {"from":"pending","to":"done","trigger":"event: reply","actor":"resident","guard":"a reply addresses this letter from another run","cost":"free","code":"src/brr/init_wake.py::_retire"},
+        {"from":"pending","to":"done","trigger":"control response","actor":"daemon","guard":"an approval or policy control answered in place","cost":"free","code":"src/brr/daemon.py::_write_control_response"},
+        {"from":"pending","to":"noted","trigger":"note: accepted","actor":"resident","guard":"deliberate retirement, provenance stamped","cost":"free","code":"src/brr/daemon.py::_note_event_closed"},
+        {"from":"pending","to":"noted","trigger":"stale horizon","actor":"daemon","guard":"letter older than the stale horizon; the lead gets one resend notice","cost":"free","code":"src/brr/daemon.py::_handle_stale_events"},
+        {"from":"pending","to":"delivered","trigger":"observed completion retired","actor":"daemon","guard":"spawn_completed stamped observed_by this parent, parent not parked","cost":"free","code":"src/brr/daemon.py::_retire_internal_event"},
+        {"from":"done","to":"delivered","trigger":"transport sent","actor":"daemon","guard":"gate delivered the terminal response, or a gateless lead closed in place","cost":"free","code":"src/brr/gates/runtime.py::deliver_stream"},
+        {"from":"done","to":"error","trigger":"delivery abandoned","actor":"daemon","guard":"gate gives up; message kept undeliverable","cost":"free","code":"src/brr/gates/runtime.py::_abandon_delivery"},
+        {"from":"pending","to":"cancelled","trigger":"stop","actor":"user","guard":"the user stops the run this letter would start","cost":"free","code":"src/brr/daemon.py::_apply_run_stop"},
+        {"from":"processing","to":"cancelled","trigger":"stop","actor":"user","guard":"the user stops the run holding this letter","cost":"free","code":"src/brr/daemon.py::_apply_run_stop"},
+        {"from":"pending","to":"cancelled","trigger":"utterance sibling swept","actor":"daemon","guard":"a killed run's earlier utterance siblings","cost":"free","code":"src/brr/daemon.py::_sweep_utterance_siblings"}
+      ]
     }
   }
 }

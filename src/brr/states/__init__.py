@@ -11,7 +11,7 @@ from typing import Any
 _SPEC = Path(__file__).with_name("seat.yaml")
 _STATE_FIELDS = {"id", "summary", "alive", "cost_to_stay", "user_exits", "terminal"}
 _TRANSITION_FIELDS = {"from", "to", "trigger", "actor", "guard", "cost", "code"}
-_ALIVE = {"process", "context", "lease", "hold", "none"}
+_ALIVE = {"process", "context", "lease", "hold", "file", "none"}
 _STAY_COSTS = {"zero", "per-boundary-warm-read", "tokens-while-thinking"}
 _ACTORS = {"user", "daemon", "resident", "provider", "strand"}
 _LEAVE_COSTS = {"free", "warm-resume", "cold-boot", "tokens"}
@@ -179,7 +179,54 @@ def _check_completeness(machines: dict[str, Any], root: Path) -> list[str]:
     for outcome in sorted(_await_outcomes(root)):
         if f"outcome:{outcome}" not in await_text:
             problems.append(f"await: code writes outcome {outcome!r} but the spec does not name it")
+    event_states = {
+        str(state.get("id"))
+        for state in machines.get("event", {}).get("states", ())
+        if isinstance(state, dict)
+    }
+    for status in sorted(_event_statuses_written(root)):
+        if status not in event_states:
+            problems.append(f"event: code writes status {status!r} but the spec does not name it")
+    for status in sorted(_letter_statuses(root / "src/brr/protocol.py")):
+        if status not in event_states:
+            problems.append(f"event: protocol.LETTER_STATUSES has {status!r} but the spec does not name it")
     return problems
+
+
+def _event_statuses_written(root: Path) -> set[str]:
+    # Every literal an event file's `status:` can receive: the two writers
+    # (protocol.set_status and daemon._set_event_status_if_present) and the
+    # birth status create_event is given. A new literal anywhere in the
+    # package fails the check until the event machine names it.
+    pattern = re.compile(
+        r'(?:set_status|_set_event_status_if_present)\(\s*[^,()]+,\s*"([a-z_]+)"\s*\)'
+        r'|create_event\([^)]*?\bstatus="([a-z_]+)"',
+        re.S,
+    )
+    found: set[str] = set()
+    for path in sorted((root / "src/brr").rglob("*.py")):
+        for match in pattern.finditer(path.read_text(encoding="utf-8")):
+            found.add(match.group(1) or match.group(2))
+    return found
+
+
+def _letter_statuses(path: Path) -> set[str]:
+    # Source of truth: protocol.py::LETTER_STATUSES (a frozenset literal).
+    if not path.is_file():
+        return set()
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "LETTER_STATUSES"
+            for target in node.targets
+        ):
+            call = node.value
+            if isinstance(call, ast.Call) and call.args and isinstance(call.args[0], ast.Set):
+                return {
+                    item.value for item in call.args[0].elts
+                    if isinstance(item, ast.Constant) and isinstance(item.value, str)
+                }
+    return set()
 
 
 def _resume_kinds(path: Path) -> set[str]:
