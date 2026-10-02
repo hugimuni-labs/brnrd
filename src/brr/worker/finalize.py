@@ -271,6 +271,21 @@ def _finalize_exhausted(p: Prepared, b: Boundary) -> Finalized:
     failure_kind = str(
         (last_failure or {}).get("failure_kind") or runner_failures.NO_OUTPUT
     )
+    
+    # Persist the ending attempt's structured failure for the durable frame.
+    # The ``last_failure`` dict carries the exact structured cause (including
+    # ``codex_task_error`` when present) that ``boundary`` captured from the
+    # runner result; store it on the task so ``_persist_run_state_doc`` can
+    # read it and include it in the account run state.md frontmatter.
+    if last_failure:
+        task.meta["ending_failure"] = dict(last_failure)
+        # Also carry the structured codex envelope directly for readers that
+        # want only the exact vendor shape without the surrounding daemon
+        # annotations.
+        codex_error = last_failure.get("codex_task_error")
+        if codex_error is not None:
+            task.meta["ending_codex_task_error"] = codex_error
+    
     failed_payload: dict[str, object] = {
         "run_id": task.id,
         "event_id": eid,

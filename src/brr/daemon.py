@@ -13688,6 +13688,23 @@ def _persist_run_state_doc(
         value = task.meta.get(key)
         if value not in (None, ""):
             lines.append(f"{key}: {value}")
+    # Ending attempt's structured failure for the durable frame (issue #2151).
+    # Carried from the boundary's last_failure via finalize._finalize_exhausted
+    # and stored on task.meta so the run state document can surface it.
+    ending_failure = task.meta.get("ending_failure")
+    if isinstance(ending_failure, dict):
+        # The exact structured dict from the runner result, JSON-serialised
+        # to survive the frontmatter round-trip. This is the canonical
+        # failure evidence, including codex_task_error when present.
+        import json
+        lines.append(f"ending_failure: {json.dumps(ending_failure, sort_keys=True)}")
+    ending_codex_error = task.meta.get("ending_codex_task_error")
+    if isinstance(ending_codex_error, dict):
+        # The extracted codex envelope alone, for readers that want only the
+        # vendor-supplied shape. Kept separate so a structured consumer
+        # can pick this one field without parsing the larger failure dict.
+        import json
+        lines.append(f"ending_codex_task_error: {json.dumps(ending_codex_error, sort_keys=True)}")
     branch = (
         task.meta.get("branch_name") or task.meta.get("publish_branch")
     ) if has_new_commit else None
