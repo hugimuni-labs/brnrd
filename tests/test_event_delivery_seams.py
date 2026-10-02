@@ -227,15 +227,20 @@ def test_only_a_rendered_completion_is_retired_with_its_parent(tmp_path):
     seen = protocol.create_event(
         inbox, "spawn_completed", "a", spawn_parent_run_id="run-P",
     )
+    daemon._pending_events_for_agent(inbox, lead.stem, observer_run_id="run-P")
+    # Tail-of-run arrival: this completion lands after the last render.
     unseen = protocol.create_event(
         inbox, "spawn_completed", "b", spawn_parent_run_id="run-P",
     )
-    # Render only `seen`: stamp it the way the selector does, by running the
-    # selector before `unseen` exists on disk is not possible, so render both
-    # and then clear the stamp on `unseen` to model a tail-of-run arrival.
-    daemon._pending_events_for_agent(inbox, lead.stem, observer_run_id="run-P")
     assert protocol._read_event(seen)["observed_by"] == "run-P"
-    protocol.update_event_meta(protocol._read_event(unseen), observed_by=None)
+    assert "observed_by" not in protocol._read_event(unseen)
+
+    # A parked run retires nothing, even a rendered completion.
+    daemon._retire_internal_event(
+        protocol._read_event(lead), responses, inbox_dir=inbox,
+        run_id="run-P", parked=True,
+    )
+    assert protocol._read_event(seen)["status"] == "pending"
 
     daemon._retire_internal_event(
         protocol._read_event(lead), responses, inbox_dir=inbox, run_id="run-P",
@@ -243,16 +248,96 @@ def test_only_a_rendered_completion_is_retired_with_its_parent(tmp_path):
     assert protocol._read_event(seen)["status"] == "delivered"
     assert protocol._read_event(unseen)["status"] == "pending"   # survives
 
-    # A parked run retires nothing, even a rendered completion.
-    again = protocol.create_event(
-        inbox, "spawn_completed", "c", spawn_parent_run_id="run-P",
+
+# ── 2b. the real hold producer, two letters, a late letter ───────────────
+# Drives the actual daemon._finalize_resource_hold on a disposable Run. Fakes:
+# env_backend.finalize (creates a late letter *inside* finalization, then
+# returns the Run), _capture_worktree (external capture boundary), the
+# emitter. No Shell, no provider, no worker loop. Then: parked retirement,
+# the held handler, the real release, the fresh seat's selector.
+
+def test_real_hold_producer_defers_two_letters_and_a_late_letter_stays_eligible(
+    tmp_path, monkeypatch,
+):
+    import types
+    from test_the_seat_that_stays import _hold, _runs_dir, _target
+    from brr import resource_hold
+
+    monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+    monkeypatch.setattr(daemon, "_capture_worktree", lambda *a, **k: None)
+    runs_dir = _runs_dir(tmp_path)
+    inbox = tmp_path / ".brr" / "inbox"
+    responses = tmp_path / ".brr" / "responses"
+    conv = "cloud:telegram:1:"
+
+    lead = protocol.create_event(inbox, "cloud", "lead", status="processing",
+                                 conversation_key=conv)
+    person = protocol.create_event(inbox, "cloud", "person letter",
+                                   conversation_key=conv)
+    child = protocol.create_event(inbox, "spawn_completed", "child done",
+                                  spawn_parent_run_id="run-seat-A")
+    task = Run(id="run-seat-A", event_id=lead.stem, body="", source="cloud")
+    task.conversation_key = conv
+    task.save(runs_dir)
+    # The parent rendered the child's completion before the park.
+    daemon._pending_events_for_agent(inbox, lead.stem, observer_run_id="run-seat-A")
+    assert protocol._read_event(child)["observed_by"] == "run-seat-A"
+
+    late_path: list[Path] = []
+
+    def fake_finalize(env_ctx, run, runs):
+        late_path.append(protocol.create_event(
+            inbox, "cloud", "arrived during finalization", conversation_key=conv,
+        ))
+        return run
+
+    emit = daemon._WorkerEmit(brr_dir=tmp_path / ".brr", conversation_key=conv,
+                              event_id=lead.stem)
+    daemon._finalize_resource_hold(
+        emit, task, protocol._read_event(lead), lead.stem, runs_dir,
+        types.SimpleNamespace(finalize=fake_finalize), object(),
+        types.SimpleNamespace(target_branch=None), {}, inbox, responses,
+        protocol.response_path(responses, lead.stem),
+        {
+            "reason": resource_hold.REASON_QUOTA_EXHAUSTED, "provider": "claude",
+            "resume_condition": resource_hold.RESUME_OPERATOR,
+            "native_session_id": "sess-1",
+            "resume_kind": resource_hold.RESUME_NATIVE,
+        },
+        conversation_key=conv,
     )
-    daemon._pending_events_for_agent(inbox, lead.stem, observer_run_id="run-P")
+
+    # Producer receipts: both pending letters deferred and accumulated, still pending.
+    assert set(_hold(tmp_path)["accumulated_event_ids"]) == {person.stem, child.stem}
+    for path in (person, child):
+        ev = protocol._read_event(path)
+        assert ev["status"] == "pending" and ev["defer_reason"] == "resource_hold"
+    # The late letter arrived after the deferral sweep: pending, not deferred.
+    late = protocol._read_event(late_path[0])
+    assert late["status"] == "pending" and "defer_reason" not in late
+    assert [e["id"] for e in protocol.list_dispatchable(inbox)] == [late["id"]]
+
+    # A parked run retires nothing, though the child completion was rendered.
     daemon._retire_internal_event(
         protocol._read_event(lead), responses, inbox_dir=inbox,
-        run_id="run-P", parked=True,
+        run_id="run-seat-A", parked=True,
     )
-    assert protocol._read_event(again)["status"] == "pending"
+    assert protocol._read_event(child)["status"] == "pending"
+
+    # The held handler: the late person letter releases the operator hold.
+    target = daemon._DispatchTarget(
+        event=late, repo_root=tmp_path, inbox_dir=inbox,
+        responses_dir=responses, repo_label="home",
+    )
+    assert daemon._handle_resource_held_events([target], None) == [target]
+    assert _hold(tmp_path)["released"] is True
+
+    # Fresh seat: accumulated letters are undeferred and visible.
+    view = {e["id"] for e in daemon._pending_events_for_agent(inbox, late["id"])}
+    assert {person.stem, child.stem} <= view
+    assert {e["id"] for e in protocol.list_dispatchable(inbox)} >= {
+        late["id"], person.stem, child.stem,
+    }
 
 
 # ── set_status compatibility: missing / malformed status ─────────────────
