@@ -4279,10 +4279,9 @@ def _record_boot_cost(
     envelope :mod:`brr.claude_status` otherwise depends on (which may be
     hours away on a long-held seat).
 
-    Claude-only for now — Codex's analogous first-request cost is a gap
-    this leaves open, named rather than guessed at (no ``TOKEN_WEIGHTS``-
-    style price table has been validated against Codex's own accounting
-    yet).
+    Codex and Vibe use their exact-session first-request counters via
+    breakeven.collect; no session identity means no reading. Native resumes
+    are excluded. The same allowance weights apply to all Shells.
 
     Retried every heartbeat until the transcript actually has a first
     ``usage`` row to read (``task.meta["boot_cost_recorded"]`` only flips
@@ -4292,13 +4291,48 @@ def _record_boot_cost(
     :func:`brr.claude_status.write_snapshot` preserves it across every
     later overwrite of the same control file.
     """
-    if not hasattr(task, "meta") or task.meta.get("boot_cost_recorded"):
+    if not hasattr(task, "meta"):
         return
-    if not claude_status.supported(runner_name):
+    from . import breakeven
+
+    cost_state = getattr(task, "_breakeven_cache", {})
+    for key in ("claude_session_id", "codex_thread_id"):
+        cost_state[key] = task.meta.get(key)
+    measured = breakeven.collect(cost_state, runner_name, work_dir, outbox_dir,
+                                not_before=not_before)
+    task._breakeven_cache = cost_state
+    task._breakeven_measurement = measured
+    if cost_state.get("break_even_multiple_sessions"):
+        task.meta["break_even_multiple_sessions"] = True
+    if task.meta.get("boot_cost_recorded"):
+        # Keep the growing first-few-request baseline beside the immutable boot.
+        snapshot = claude_status.load_snapshot(outbox_dir) or {}
+        boot = snapshot.get("boot") or {}
+        if task.meta.get("break_even_multiple_sessions"):
+            boot = {**boot, "accounting_version": None, "resumed": True}
+            claude_status.write_snapshot(outbox_dir, {**snapshot, "boot": boot})
+            return
+        if measured and boot.get("accounting_version") != 1 and not task.meta.get("resume_native_session_id"):
+            # The legacy meter can stamp a zero placeholder before billed
+            # usage arrives. Upgrade only the new measurement, retaining the
+            # old hold denominator byte-for-byte.
+            boot = {**boot, "weighted": measured["boot"],
+                    "hold_weighted": boot.get("hold_weighted", boot.get("weighted")),
+                    "accounting_version": 1}
+            claude_status.write_snapshot(outbox_dir, {**snapshot, "boot": boot})
+        if measured and boot.get("baseline") != measured.get("baseline"):
+            boot = {**boot, "baseline": measured.get("baseline"),
+                    "request": measured.get("boot_request"),
+                    "shell": measured.get("shell"), "core": measured.get("core")}
+            claude_status.write_snapshot(outbox_dir, {**snapshot, "boot": boot})
         return
-    tokens = allowance.claude_first_turn_boot_tokens(
-        allowance.latest_claude_transcript(work_dir, not_before=not_before)
-    )
+    resumed = bool(task.meta.get("resume_native_session_id"))
+    hold_tokens = None
+    if claude_status.supported(runner_name):
+        hold_tokens = allowance.claude_first_turn_boot_tokens(
+            allowance.latest_claude_transcript(work_dir, not_before=not_before)
+        )
+    tokens = measured.get("boot", hold_tokens) if not resumed else hold_tokens
     if tokens is None:
         return
     # Merge onto whatever this control file already holds — usually
@@ -4309,6 +4343,12 @@ def _record_boot_cost(
     payload = dict(existing) if isinstance(existing, dict) else {}
     payload["boot"] = {
         "weighted": tokens,
+        "hold_weighted": hold_tokens,
+        "shell": measured.get("shell"), "core": measured.get("core"),
+        "accounting_version": 1 if measured and not resumed else None,
+        "resumed": resumed,
+        "request": measured.get("boot_request"),
+        "baseline": measured.get("baseline", []),
         "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     written = claude_status.write_snapshot(outbox_dir, payload)
@@ -9018,7 +9058,8 @@ def _hold_ratio_facet(
     hold_so_far = max(0, int(self_spent) - int(baseline))
     boot_snapshot = claude_status.load_snapshot(outbox_dir) if outbox_dir else None
     boot = (boot_snapshot or {}).get("boot") if isinstance(boot_snapshot, dict) else None
-    boot_cost = boot.get("weighted") if isinstance(boot, dict) else None
+    # New Shell accounting must not enable/change the existing hold policy.
+    boot_cost = boot.get("hold_weighted", boot.get("weighted")) if isinstance(boot, dict) else None
     ratio = resource_hold.hold_boot_ratio(hold_so_far, boot_cost)
     hold_facet = {"ratio": ratio, "known": ratio is not None}
     if not _seat_park_on_hold_cost_enabled(cfg):

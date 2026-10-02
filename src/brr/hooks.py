@@ -1585,6 +1585,13 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         klass=DELTA,
     ),
     _BarSegment(
+        "breakeven", "n*",
+        "Measured respawn payback in further model-request boundaries. "
+        "B / (c(t) - c₀) for the exact Shell+Core cohort; unknown inputs "
+        "render n* ?, and c(t) ≤ c₀ renders n* ∞. Never a seat directive.",
+        klass=VITAL,
+    ),
+    _BarSegment(
         "hold", "hold",
         "design-the-seat-that-never-quits.md §machinery slice 3: the "
         "hold-cost-vs-boot-cost ratio the daemon acts on while `brnrd "
@@ -4021,6 +4028,9 @@ def _render_bar(
     hold_chip = _hold_chip(resources, shuttle_state)
     if hold_chip:
         segments.append(("hold", hold_chip))
+    from . import breakeven
+    if "breakeven" in resources:
+        segments.append(("breakeven", breakeven.chip(resources.get("breakeven"))))
     # Beside `hold`: the other half of the same wait — `hold` while it
     # stands, this once it has ended (move 2c).
     if lease_wake:
@@ -7922,6 +7932,7 @@ def _boundary_readings(
         "ctx": {"tokens_after": tokens_after, "delta": delta},
         "spend": spend,
         "quota": quota,
+        "cost": (resources.get("breakeven") or {}).get("latest"),
     }
 
 
@@ -8529,6 +8540,8 @@ def record_boundary(
         readings.get("spend") or {"allowance_used": None, "allowance": None}
     )
     record["quota"] = dict(readings.get("quota") or {})
+    if isinstance(readings.get("cost"), dict):
+        record["cost"] = readings["cost"]
     # `commit` stays null: nothing the hook holds at this moment means "the
     # checkout's current HEAD" — `produce.latest_commit` is the newest commit
     # the run *produced* (absent before the first one) and the gate receipt's

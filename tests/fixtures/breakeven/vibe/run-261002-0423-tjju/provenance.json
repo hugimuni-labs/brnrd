@@ -1,0 +1,19 @@
+{
+  "run": "run-261002-0423-tjju",
+  "shell": "vibe",
+  "core": "mistral-medium-3.5",
+  "source_files": [
+    "0000000000000005.jsonl",
+    "0000000000001402.jsonl"
+  ],
+  "state": {
+    "id": "run-261002-0423-tjju",
+    "runner_shell": "vibe",
+    "core_observed": "mistral-medium-3.5",
+    "started_at": "2026-10-02T04:24:06Z"
+  },
+  "measured": {
+    "B": 39900,
+    "c0": 5640
+  }
+}

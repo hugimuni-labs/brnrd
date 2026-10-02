@@ -1,0 +1,19 @@
+{
+  "run": "run-261002-1102-dr7r",
+  "shell": "claude",
+  "core": "claude-sonnet-5-5",
+  "source_files": [
+    "8180d958-afaa-4998-a2a7-2e1c4b0a7d24.jsonl"
+  ],
+  "state": {
+    "id": "run-261002-1102-dr7r",
+    "runner_shell": "claude",
+    "runner_core": "claude-sonnet-5-5",
+    "core_observed": "claude-sonnet-5-5",
+    "started_at": "2026-10-02T11:03:21Z"
+  },
+  "measured": {
+    "B": 46567,
+    "c0": 8128
+  }
+}

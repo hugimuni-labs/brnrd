@@ -1,0 +1,19 @@
+{
+  "run": "run-261001-1411-wrh5",
+  "shell": "claude",
+  "core": "claude-opus-5-5",
+  "source_files": [
+    "26238599-c771-418e-b399-f13d2c9b5745.jsonl"
+  ],
+  "state": {
+    "id": "run-261001-1411-wrh5",
+    "runner_shell": "claude",
+    "runner_core": "opus",
+    "core_observed": "claude-opus-5-5",
+    "started_at": "2026-10-01T14:11:44Z"
+  },
+  "measured": {
+    "B": 108151,
+    "c0": 11020
+  }
+}
