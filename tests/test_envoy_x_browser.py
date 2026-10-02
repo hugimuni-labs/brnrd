@@ -1312,3 +1312,20 @@ def test_profile_dir_is_gitignored_and_uncommittable_in_a_real_account_home(tmp_
         ["git", "status", "--porcelain"], cwd=home, capture_output=True, text=True, check=True,
     )
     assert envoy_x_browser.PROFILE_DIRNAME not in status.stdout
+
+
+@pytest.mark.parametrize("url", [
+    "https://x.com/i/status/2105873529963229452",
+    "https://twitter.com/someone/status/2105873529963229452?s=20",
+    "https://x.com/someone/status/2105873529963229452/photo/1",
+])
+def test_status_identity_uses_numeric_id_not_handle(url):
+    assert envoy_x_browser._status_id(url) == "2105873529963229452"
+
+
+@pytest.mark.parametrize("url", [
+    "https://x.com/profile", "https://x.com/name/status/not-a-number",
+    "https://x.com.evil.example/name/status/123", "javascript:status/123",
+])
+def test_read_identity_refuses_non_status_urls(url):
+    assert envoy_x_browser._status_id(url) is None
