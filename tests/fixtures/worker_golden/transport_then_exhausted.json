@@ -209,6 +209,10 @@
    "branch_name": "brr/<RUN>",
    "branch_source": "fallback:preserve",
    "context_path": "<TMP>/.brr/runs/<RUN>/context.md",
+   "ending_failure": {
+    "attempt": 2,
+    "failure_kind": "no_output"
+   },
    "has_new_commit": false,
    "host_context_branch": "main",
    "host_dirty_at_dispatch": "[]",

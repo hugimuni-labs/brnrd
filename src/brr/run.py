@@ -119,7 +119,7 @@ def _format_run_meta_value(value: Any) -> str:
 #: silent failure were byte-identical. The decode is double-gated (allowlisted
 #: key *and* the value actually parsing to a dict/list), so a manifest whose
 #: ``bolt`` is not JSON round-trips through unchanged.
-_JSON_META_KEYS = frozenset({"resource_hold", "transitions", "stake", "bolt"})
+_JSON_META_KEYS = frozenset({"resource_hold", "transitions", "stake", "bolt", "ending_failure"})
 
 
 def _decode_run_meta_value(key: str, value: Any) -> Any:
