@@ -16,6 +16,7 @@ recovery helper by hand.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -74,6 +75,15 @@ def _held_strand(
         resume_condition=resource_hold.RESUME_REFILL,
     )
     child.save(_runs_dir(root))
+    # Parked by the previous image, through the real writers the reap uses.
+    daemon._register_run_control(
+        event_id, parent_run_id, parent_conversation_key=conversation_key,
+        repo_label=repo_label, allowance_tokens=400_000, title="the parked one",
+    )
+    daemon._bind_run_control(event_id, run_id)
+    daemon._park_run_control(event_id, daemon._parked_child_projection(child))
+    daemon._persist_parked_edge(root / ".brr" / "inbox", daemon._find_run_control(event_id))
+    daemon._run_controls.clear()  # ...and that image is gone.
     return child
 
 
@@ -275,7 +285,9 @@ class TestAdoptionIsCurrentOwnership:
         assert _steer(tmp_path, _asker("run-next-seat"))
         child = _child(tmp_path)
         assert child.meta["spawn_parent_run_id"] == "run-parent"  # lineage kept
-        assert child.meta["spawn_owner_run_id"] == "run-next-seat"
+        record = json.loads((_runs_dir(tmp_path) / "run-kid" / "edge.json").read_text())
+        assert record["owner_run_id"] == "run-next-seat"
+        assert record["adopted_from_run_id"] == "run-parent"
 
         _fresh_process(monkeypatch)
         _boot(tmp_path, monkeypatch)
@@ -304,16 +316,66 @@ class TestAdoptionIsCurrentOwnership:
         assert _stop(tmp_path, _asker("run-next-seat"))
         assert _child(tmp_path).status == "stopped"
 
-    def test_an_owner_record_the_fence_could_not_produce_recovers_nothing(
+    def test_an_edge_record_the_fence_could_not_produce_recovers_nothing(
         self, tmp_path, monkeypatch,
     ):
-        child = _held_strand(tmp_path)
-        child.meta["spawn_owner_run_id"] = "run-elsewhere"
-        child.meta["spawn_owner_conversation_key"] = "cloud:telegram:2:"
-        child.meta["spawn_owner_repo_label"] = REPO
-        child.meta["spawn_owner_adopted_from_run_id"] = "run-parent"
-        child.save(_runs_dir(tmp_path))
+        _held_strand(tmp_path)
+        path = _runs_dir(tmp_path) / "run-kid" / "edge.json"
+        record = json.loads(path.read_text())
+        record.update(owner_run_id="run-elsewhere",
+                      owner_conversation_key="cloud:telegram:2:",
+                      adopted_from_run_id="run-parent")
+        path.write_text(json.dumps(record))
         _boot(tmp_path, monkeypatch)
 
         assert daemon._run_controls == {}
         assert not _steer(tmp_path, _asker("run-elsewhere", conversation_key="cloud:telegram:2:"))
+        assert not _steer(tmp_path, _asker("run-parent"))
+
+    def test_a_held_strand_with_no_edge_record_is_not_recovered(self, tmp_path, monkeypatch):
+        _held_strand(tmp_path)
+        (_runs_dir(tmp_path) / "run-kid" / "edge.json").unlink()
+        _boot(tmp_path, monkeypatch)
+
+        assert daemon._run_controls == {}
+
+    def test_a_failed_adoption_write_fails_closed(self, tmp_path, monkeypatch):
+        _held_strand(tmp_path)
+        _boot(tmp_path, monkeypatch)
+
+        def disk_full(*a, **kw):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(daemon, "_write_parked_edge", disk_full)
+        assert _steer(tmp_path, _asker("run-next-seat"))  # adopted in memory
+        assert not (_runs_dir(tmp_path) / "run-kid" / "edge.json").exists()
+        monkeypatch.undo()
+        _fresh_process(monkeypatch)
+        _boot(tmp_path, monkeypatch)
+
+        # Nothing recovered: never the original dispatcher by default.
+        assert daemon._run_controls == {}
+        assert not _steer(tmp_path, _asker("run-parent"))
+
+
+class TestTheAllowanceRidesThePark:
+    def test_a_grant_to_a_parked_child_survives_a_fresh_image(self, tmp_path, monkeypatch):
+        _held_strand(tmp_path)
+        _boot(tmp_path, monkeypatch)
+        assert _steer_body(tmp_path, _asker(), "allowance: +100k\nmore room")
+        assert daemon._find_run_control("run-kid")["allowance_tokens"] == 500_000
+
+        _fresh_process(monkeypatch)
+        _boot(tmp_path, monkeypatch)
+
+        assert daemon._find_run_control("run-kid")["allowance_tokens"] == 500_000
+
+
+def _steer_body(root: Path, task: Run, body: str) -> bool:
+    outbox = root / "outbox"
+    outbox.mkdir(exist_ok=True)
+    return daemon._queue_child_message(
+        daemon._WorkerEmit(root / ".brr", task.conversation_key, task.event_id),
+        task, root / ".brr" / "inbox", task.event_id, {"to": "run-kid"},
+        body, outbox,
+    )
