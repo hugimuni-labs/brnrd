@@ -619,7 +619,7 @@ def build_parser() -> argparse.ArgumentParser:
     # Hidden: an inspectable engineering artifact, not an everyday operator
     # verb. Bare renders all machines; ``check`` verifies it against source.
     p = sub.add_parser("states")
-    p.add_argument("machine", nargs="?", choices=("seat", "strand", "await", "check"))
+    p.add_argument("machine", nargs="?", choices=("seat", "strand", "await", "event", "check"))
     p.set_defaults(func=cmd_states)
 
     # Hidden per HIDDEN_COMMANDS — the resident's front door onto the

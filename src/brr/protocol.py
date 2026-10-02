@@ -730,12 +730,15 @@ LETTER_STATUSES = frozenset({
 #: Values a run's *outcome* used to write straight into ``status:`` before
 #: the split above — including the retired run-axis ``conflict`` and event
 #: translation ``cancelled`` values alongside ``error``/``stopped``
-#: translation for a parent- or dashboard-initiated stop. No current writer
-#: puts these in ``status:`` (see ``daemon.py``'s ``_set_event_run_outcome``
-#: — the outcome lands in ``run_outcome:`` and the letter settles at
-#: ``"done"`` instead), but event files written before the split still carry
-#: them, and they must stay terminal for retention and every "already
-#: handled?" reader.
+#: translation for a parent- or dashboard-initiated stop. The run-outcome
+#: path no longer puts these in ``status:`` (``daemon.py``'s
+#: ``_set_event_run_outcome`` records ``run_outcome:`` and settles the letter
+#: at ``"done"``), but three writers still do: ``_apply_run_stop`` and
+#: ``_sweep_utterance_siblings`` write ``"cancelled"``, and
+#: ``gates/runtime.py``'s ``_abandon_delivery`` writes ``"error"`` (found
+#: 2026-10-02 when ``brnrd states check`` began holding the event machine to
+#: its writers). Old event files carry them too; they must stay terminal for
+#: retention and every "already handled?" reader.
 _LEGACY_RUN_OUTCOME_STATUSES = frozenset({
     "error", "conflict", "stopped", "cancelled",
 })
