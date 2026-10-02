@@ -6,6 +6,9 @@ nothing else, read-only in v1. Routes:
 
 - ``GET /loom``, ``/loom/`` → ``static/index.html`` (the page is a sibling
   hand's; this only serves it);
+- ``GET /loom/tree.json`` → :func:`brr.loom.tree.build`, the whole tracked
+  tree (repo + the home's own trees), rebuilt at most every 30 s — the
+  ground a map lays out at real scale, with light coming from ``state.json``;
 - ``GET /loom/state.json`` → :func:`brr.loom.state.build`, rebuilt at most
   once per beat (:class:`StateCache`) so a page polling on the beat — or
   several — never doubles the work;
@@ -38,6 +41,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import state as state_mod
+from . import tree as tree_mod
 
 BIND_HOST = "127.0.0.1"
 DEFAULT_PORT = 7777
@@ -129,6 +133,9 @@ class LoomServer(ThreadingHTTPServer):
         self.repo_root = Path(repo_root) if repo_root else None
         self.account_home = Path(account_home) if account_home else None
         self.static_dir = Path(static_dir)
+        self.tree_cache = StateCache(
+            lambda: tree_mod.build(self.repo_root or Path.cwd(), self.account_home), beat_ms=tree_mod.TREE_BEAT_MS
+        )
         self.beat_ms = beat_ms
         self.stopping = threading.Event()
         super().__init__((BIND_HOST, port), LoomHandler)
@@ -193,6 +200,8 @@ class LoomHandler(BaseHTTPRequestHandler):
                 self._static("index.html", head=head)
             elif path == "/loom/state.json":
                 self._send(HTTPStatus.OK, self.server.cache.get(), "application/json; charset=utf-8", head=head)
+            elif path == "/loom/tree.json":
+                self._send(HTTPStatus.OK, self.server.tree_cache.get(), "application/json; charset=utf-8", head=head)
             elif path == "/loom/bench":
                 self._bench(parse_qs(url.query).get("path", [""])[0], head=head)
             elif path.startswith("/loom/page/"):
