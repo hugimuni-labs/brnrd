@@ -369,8 +369,31 @@ class Daemon2:
                     state["claims"].pop(also_claim.letter, None)
         elif verb == "note":
             target = str(fm["note"]).strip()
-            event = self.door.get(target)
-            if event is None or self.router.route_or_triage(event).conversation != state["conversation"]:
+            pending = self.door.pending()
+            event = next((row for row in pending if row["id"] == target), None)
+            if event is None:
+                tail = target.rsplit("-", 1)[-1]
+                matches = [row for row in pending
+                           if row["id"].rsplit("-", 1)[-1] == tail]
+                if len(matches) == 1:
+                    event = matches[0]
+                elif len(matches) > 1:
+                    self._notice(state, f"note dropped: event {target} is ambiguous — "
+                                 f"matches {len(matches)} pending events; address the "
+                                 "full id — nothing was retired",
+                                 source_file=path.name, verb="note")
+                    return
+            if event is None:
+                located = self.door.get(target)
+                cause = (f"event {target} found in {self.door.inbox}, but "
+                         f"status={located['status']} (not pending)" if located else
+                         f"event {target} not found in any inbox "
+                         "(the id is wrong, or the event is gone)")
+                self._notice(state, f"note dropped: {cause} — nothing was retired",
+                             source_file=path.name, verb="note")
+                return
+            target = str(event["id"])
+            if self.router.route_or_triage(event).conversation != state["conversation"]:
                 raise ValueError("note target does not belong to this conversation")
             claim = state["claim"] if target == event_id else self.letters.claim(
                 target, state["run_id"], self.lease_ttl_seconds, now=time.time())
@@ -382,6 +405,11 @@ class Daemon2:
                 state["claims"].pop(target, None)
             if target == event_id:
                 state["answered"] = True
+            if body:
+                self._notice(
+                    state, f"note: body text ignored — a note closes event {target} "
+                    "without speaking; use event: to reply", kind="advisory",
+                    source_file=path.name, verb="note")
         elif verb == "await":
             file_path, seconds, error = await_verb.parse_await(fm)
             if error:

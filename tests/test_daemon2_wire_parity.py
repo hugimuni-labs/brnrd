@@ -69,6 +69,40 @@ def test_also_replays_existing_golden(tmp_path: Path, name: str) -> None:
         _notice_text(text) for text in expected_notices]
 
 
+@pytest.mark.parametrize("name", ["note", "note_unknown"])
+def test_note_replays_existing_golden(tmp_path: Path, name: str) -> None:
+    brr_dir, inbox, responses, outbox, own_id = _base(tmp_path)
+    SCENARIOS[name]["stage"](inbox, outbox, own_id)
+    golden = json.loads((GOLDEN_DIR / f"{name}.json").read_text())
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    runtime = Daemon2(repo, tmp_path / "home", runtime_dir=brr_dir)
+    runtime.door = FileDoor(inbox, responses, runtime.letters)
+    own = runtime.door.get(own_id)
+    assert own is not None
+    address = runtime.router.route_or_triage(own)
+    state = {
+        "event": own, "conversation": address.conversation,
+        "ask": address.ask, "parent": None, "edge": None,
+        "claim": None, "seat": None, "run_id": "run-parent", "outbox": outbox,
+        "await": None, "notices": [], "answered": False,
+        "runner_name": "fake", "is_child": False,
+        "claims": {}, "claim_lock": threading.Lock(),
+    }
+    runtime._tick(state)
+
+    assert len(list(responses.glob("*.md"))) == 0
+    expected = [row for key, rows in golden["tree"].items()
+                if key.endswith("/.notices.jsonl") for row in rows]
+    assert [(row["kind"], _notice_text(row["text"]))
+            for row in state["notices"]] == [
+                (row["kind"], _notice_text(row["text"])) for row in expected]
+    if name == "note":
+        target = next(path.stem for path in inbox.glob("*.md")
+                      if path.stem != own_id)
+        assert runtime.door.get(target)["status"] == "noted"
+
+
 def test_halt_replays_old_bounce_fixture(tmp_path: Path, monkeypatch) -> None:
     """The old TestDrain input bounces once, then the same file stands."""
     file, outbox, inbox, task, _ = halt_setup(tmp_path, monkeypatch)
