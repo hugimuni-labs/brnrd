@@ -49,7 +49,8 @@ class FileDoor:
         return self._project(protocol._read_event(self.inbox / f"{event_id}.md"))
 
     def send(self, event: dict[str, Any], body: str,
-             key: str, gen: int) -> dict[str, Any]:
+             key: str, gen: int, *,
+             message_path: Path | None = None) -> dict[str, Any]:
         """Local response queue; a remote gate consumes its own file.
 
         The queue is deterministic by event id, so retrying the same body
@@ -60,7 +61,14 @@ class FileDoor:
         old = protocol.read_response(self.responses, str(event["id"]))
         if old is not None and old != body.strip():
             raise ValueError("response key already carries different body")
-        protocol.write_response(self.responses, str(event["id"]), body)
+        protocol.write_response(self.responses, str(event["id"]), body,
+                                message_path=message_path)
+        # Today's gate delivery organ selects terminal carriers from the
+        # event file. This is a compatibility projection of the letter fact;
+        # daemon2 still reads the fact as authority on restart.
+        raw = protocol._read_event(self.inbox / f"{event['id']}.md")
+        if raw is not None and raw.get("status") not in {"done", "delivered"}:
+            protocol.set_status(raw, "done")
         return {"path": str(target), "key": key, "gen": gen}
 
     @staticmethod

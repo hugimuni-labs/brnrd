@@ -15,6 +15,7 @@ from pathlib import Path
 from brr import conversations, protocol, runner
 from brr.daemon2.runtime import Daemon2
 from brr.daemon2.doors import FileDoor
+from brr.daemon2.transport import GateTransport
 
 
 def _fake_shell(path: Path, *, await_first: bool = False) -> None:
@@ -1201,3 +1202,93 @@ def test_two_serve_processes_share_one_self_and_take_over_after_kill9(
                 process.terminate()
         for process in processes:
             process.wait(timeout=8)
+
+
+def test_gate_transport_sends_once_across_restart_and_fences_stale_gen(
+        tmp_path: Path, monkeypatch) -> None:
+    from brr.gates import runtime as gate_runtime, telegram
+
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    binary = tmp_path / "fake-shell"
+    _fake_shell(binary)
+    event_path = protocol.create_event(home / "dispatch" / "inbox", "telegram",
+                                       "reply to me", conversation_key="telegram:owner",
+                                       telegram_chat_id=123)
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]})
+    assert runtime.once() is not None
+    raw = protocol._read_event(event_path)
+    assert raw is not None and raw["status"] == "done"
+    holder = runtime.leases.acquire("self", "host:1", 30)
+    assert holder is not None
+    transport = GateTransport(runtime.leases, runtime.facts, lambda: holder)
+    transport.install(runtime.door.inbox, runtime.door.responses)
+    sent: list[str] = []
+
+    def fake_api(_token, method, _params=None, **_kwargs):
+        sent.append(method)
+        return {"ok": True, "result": {"message_id": 77}}
+
+    monkeypatch.setattr(telegram, "_api_call", fake_api)
+    try:
+        telegram._deliver_responses(repo / ".brr", runtime.door.inbox,
+                                    runtime.door.responses, "secret")
+        assert sent == ["sendMessage"]
+        send_key = "transport:telegram:" + event_path.stem + ":terminal"
+        facts = runtime.facts.read("sends", send_key)
+        assert any(f.kind == "sent" and f.data["gen"] == holder.gen
+                   for f in facts)
+
+        # Reopen the compatibility carrier to simulate a crash before its
+        # delivered status was persisted. The send fact still deduplicates it.
+        protocol.set_status(protocol._read_event(event_path), "done")
+        assert runtime.leases.release(holder)
+        successor = runtime.leases.acquire("self", "host:2", 30)
+        assert successor is not None and successor.gen > holder.gen
+        gate_runtime._delivery_retry.clear()
+        telegram._deliver_responses(repo / ".brr", runtime.door.inbox,
+                                    runtime.door.responses, "secret")
+        assert sent == ["sendMessage"]  # stale holder was fenced
+        replacement = GateTransport(runtime.leases, runtime.facts,
+                                    lambda: successor)
+        replacement.install(runtime.door.inbox, runtime.door.responses)
+        gate_runtime._delivery_retry.clear()
+        telegram._deliver_responses(repo / ".brr", runtime.door.inbox,
+                                    runtime.door.responses, "secret")
+        assert sent == ["sendMessage"]  # recorded send key survives restart
+        assert protocol._read_event(event_path)["status"] == "delivered"
+    finally:
+        gate_runtime.set_delivery_hook(runtime.door.inbox, runtime.door.responses,
+                                       None)
+        gate_runtime._delivery_retry.clear()
+
+
+def test_gate_transport_records_undeliverable_with_generation(tmp_path: Path) -> None:
+    from brr.gates import runtime as gate_runtime
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    runtime = Daemon2(repo, tmp_path / "home")
+    event_path = protocol.create_event(runtime.door.inbox, "telegram", "",
+                                       status="done")
+    protocol.write_response(runtime.door.responses, event_path.stem, "reply")
+    holder = runtime.leases.acquire("self", "host:1", 30)
+    assert holder is not None
+    transport = GateTransport(runtime.leases, runtime.facts, lambda: holder)
+    transport.install(runtime.door.inbox, runtime.door.responses)
+    try:
+        def refuse(_event, _body):
+            raise gate_runtime.PermanentDeliveryError("no address")
+
+        gate_runtime.deliver_stream(runtime.door.inbox, runtime.door.responses,
+                                    "telegram", refuse)
+        facts = runtime.facts.read(
+            "sends", "transport:telegram:" + event_path.stem + ":terminal")
+        assert any(f.kind == "undeliverable" and f.data["gen"] == holder.gen
+                   and f.data["reason"] == "no address" for f in facts)
+        assert protocol._read_event(event_path)["status"] == "error"
+    finally:
+        transport.remove(runtime.door.inbox, runtime.door.responses)

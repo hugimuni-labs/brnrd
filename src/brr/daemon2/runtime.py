@@ -29,6 +29,7 @@ from . import placement as _placement
 from .router import Router, UnaddressedLetter
 from .seat import Seat, SeatStore, Signal, WakePredicate, legacy_wake_on
 from .supervisor import Supervisor
+from .transport import GateTransport
 
 
 @dataclass(frozen=True)
@@ -170,10 +171,27 @@ class Daemon2:
         if claim is None:
             raise ValueError("reply target is already claimed")
         self._track_claim(state, claim)
+        def queue(key: str, gen: int) -> dict[str, Any]:
+            message_path = None
+            if self._account_ctx is not None:
+                try:
+                    message_path = message_store.stage(
+                        self._account_ctx,
+                        repo_label=str(event.get("repo_label") or
+                                       self._account_ctx.default_repo.label),
+                        run_id=state["run_id"], body=body, kind="terminal",
+                        target_event=target_id,
+                        target_gate=str(event.get("source") or ""),
+                        target_thread=state["conversation"],
+                        source_ref="reply:" + target_id)
+                except Exception as exc:
+                    self._notice(state, f"response queued without message record: {exc}",
+                                 kind="advisory", verb="event")
+            return self.door.send(event, body, key, gen,
+                                  message_path=message_path)
         with state["claim_lock"]:
             self.letters.answer(
-                claim, body,
-                send=lambda key, gen: self.door.send(event, body, key, gen))
+                claim, body, send=queue)
             state["claims"].pop(target_id, None)
         if target_id == state["event"]["id"]:
             state["answered"] = True
@@ -957,6 +975,14 @@ class Daemon2:
             return []
         self_lease: Lease | None = None
         lease_lock = threading.Lock()
+        transport = GateTransport(self.leases, self.facts, lambda: self_lease)
+        delivery_pairs = [(self.door.inbox, self.door.responses)]
+        if self._account_ctx is not None and self._account_ctx.enabled:
+            for repo in self._account_ctx.repos.values():
+                brr_dir = gitops.shared_brr_dir(repo.root)
+                delivery_pairs.append((brr_dir / "inbox", brr_dir / "responses"))
+        for inbox, responses in delivery_pairs:
+            transport.install(inbox, responses)
 
         def _renew_serve() -> None:
             interval = max(0.01, self.lease_ttl_seconds / 3)
@@ -973,6 +999,7 @@ class Daemon2:
         renew_thread = threading.Thread(target=_renew_serve, daemon=True)
         renew_thread.start()
         results: list[RunResult] = []
+        gate_threads_started = False
         try:
             while not self._stop_serve.is_set():
                 with lease_lock:
@@ -980,6 +1007,17 @@ class Daemon2:
                         self_lease = self.leases.acquire(
                             "self", machine, self.lease_ttl_seconds)
                     held_self = self_lease
+                if held_self is not None and not gate_threads_started:
+                    # The old gate loops own polling, cloud fetch and platform
+                    # sends. Their delivery callback is fenced by transport.
+                    from .. import daemon as legacy_daemon
+                    if self._account_ctx is not None and self._account_ctx.enabled:
+                        legacy_daemon._start_account_gates(
+                            self._account_ctx, self.repo_root)
+                    else:
+                        legacy_daemon._start_gates(
+                            self.runtime_dir, self.door.inbox, self.door.responses)
+                    gate_threads_started = True
                 # A follower can still run its own strands. It cannot start
                 # a resident body until the account's self lease lapses.
                 dispatch_role = role if held_self is not None or role == "strand" else "strand"
@@ -993,6 +1031,8 @@ class Daemon2:
         finally:
             self._stop_serve.set()
             renew_thread.join(timeout=2)
+            for inbox, responses in delivery_pairs:
+                transport.remove(inbox, responses)
             if self_lease is not None:
                 self.leases.release(self_lease)
             self.leases.release(machine_lease)
