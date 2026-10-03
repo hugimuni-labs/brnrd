@@ -50,6 +50,20 @@ class Supervisor:
                         prior.generation)
         return result
 
+    def conversation_children(self, conversation: str) -> dict[str, Child]:
+        """Children dispatched in *conversation*, across every ask.
+
+        A seat may spawn under an ``item:`` that is not its own ask; keying
+        parent-side views on the seat's ask alone hid those children from
+        ``to:``, ``stop:``, ``owned_children`` and the halt/cut checks.
+        """
+        result: dict[str, Child] = {}
+        for ask in self.facts.entities("asks"):
+            for edge, child in self.children(ask).items():
+                if child.conversation == conversation:
+                    result[edge] = child
+        return result
+
     def register(self, ask: str, conversation: str, parent: str,
                  edge: str, run: str) -> Child:
         if not all((ask, conversation, parent, edge, run)):

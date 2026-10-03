@@ -1908,3 +1908,48 @@ stage("reply.md", "---\\nevent: " + event_id + "\\n---\\nchild returned while I 
     assert argv[argv.index("--inbox") + 1] == str(inbox)
     assert strand_worker_count({}) == 3
     assert strand_worker_count({"daemon2.strand_workers": 0}) == 0
+
+
+def test_parent_sees_and_steers_a_child_spawned_under_another_item(tmp_path: Path) -> None:
+    """A seat with no ask of its own spawns with `item:`; owned_children and `to:` still find it."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test repo\n", encoding="utf-8")
+    shell = tmp_path / "parent-shell"
+    shell.write_text(r"""#!/usr/bin/env python3
+import json, os, time
+from pathlib import Path
+outbox = Path(os.environ["BRR_OUTBOX_DIR"])
+portal = Path(os.environ["BRR_PORTAL_STATE"])
+event_id = os.environ["BRR_EVENT_ID"]
+def stage(name, body):
+    (outbox / (name + ".tmp")).write_text(body)
+    (outbox / (name + ".tmp")).rename(outbox / name)
+def wait_for(pred, what):
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        state = json.loads(portal.read_text())
+        if pred(state):
+            return state
+        time.sleep(0.05)
+    raise SystemExit(what)
+stage("spawn.md", "---\nspawn: true\nitem: w-77\nbranch: brr/x\nreport: /tmp/x.md\n---\nwork\n")
+state = wait_for(lambda s: s["resources"]["coexisting_runs"].get("owned_children"),
+                 "child under item: w-77 never showed as owned")
+run = state["resources"]["coexisting_runs"]["owned_children"][0]["run"]
+stage("steer.md", "---\nto: " + run + "\n---\nsharper\n")
+time.sleep(0.5)
+stage("reply.md", "---\nevent: " + event_id + "\n---\nsteered\n")
+""")
+    shell.chmod(shell.stat().st_mode | stat.S_IXUSR)
+    protocol.create_event(home / "dispatch" / "inbox", "telegram", "Spawn under an item",
+                          conversation_key="telegram:owner", trust_tier="owner")
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime", runner_name="fake",
+                      runner_config={"runner_cmd": [str(shell)]}, tick_seconds=0.02)
+    result = runtime.once(role="resident")
+    assert result is not None and result.returncode == 0 and result.answered
+    capsule = json.loads((result.outbox / "portal-state.json").read_text())
+    texts = [n.get("text", "") for n in capsule["notices"]]
+    assert not [t for t in texts if "fact address" in t or "not a child" in t], texts
+    assert runtime.supervisor.conversation_children("telegram:owner")

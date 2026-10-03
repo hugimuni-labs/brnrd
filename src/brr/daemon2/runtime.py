@@ -162,9 +162,8 @@ class Daemon2:
         ))
         # The old helper reads old-daemon child controls; daemon2 owns these
         # edges in Supervisor. Adapt this one projection at the seam.
-        owned = ([vars(child) for child in self.supervisor.children(state["ask"]).values()
-                  if child.parent == state["run_id"] and child.status == "running"]
-                 if state.get("ask") else [])
+        owned = [vars(child) for child in self._seat_children(state).values()
+                 if child.parent == state["run_id"] and child.status == "running"]
         live.resources["coexisting_runs"]["owned_children"] = owned
         pacing = live.resources["quota"].get("pacing") or {}
         pct = pacing.get("binding_remaining_pct")
@@ -349,13 +348,12 @@ class Daemon2:
                     (state["run_id"],)))
         except Exception:
             pass  # A missing git scope cannot prove an open item.
-        if state["ask"]:
-            for child in self.supervisor.children(state["ask"]).values():
-                if child.parent == state["run_id"] and child.status == "running":
-                    items.append(halt_verb.OpenItem(
-                        "strand", child.run,
-                        f"strand {child.run} is live — its return needs a successor",
-                        (child.run.rsplit("-", 1)[-1],)))
+        for child in self._seat_children(state).values():
+            if child.parent == state["run_id"] and child.status == "running":
+                items.append(halt_verb.OpenItem(
+                    "strand", child.run,
+                    f"strand {child.run} is live — its return needs a successor",
+                    (child.run.rsplit("-", 1)[-1],)))
         return items
 
     def _cut_mismatches(self, state: dict[str, Any],
@@ -413,8 +411,7 @@ class Daemon2:
                 norm = label.strip().lower()
                 if not any(norm in ref or ref in norm for ref in refs):
                     mismatches.append(f"owed: {label!r} has no carried row naming it")
-        children = (self.supervisor.children(state["ask"]).values()
-                    if state["ask"] else ())
+        children = self._seat_children(state).values()
         named_children = {row.run for row in declaration.strands}
         for child in children:
             if (child.parent == state["run_id"] and child.status == "running"
@@ -741,7 +738,7 @@ class Daemon2:
                 self._notice(state, "stop dropped: no target run/event id",
                              kind="dropped", source_file=path.name, verb="stop")
                 return
-            children = self.supervisor.children(state["ask"]) if state["ask"] else {}
+            children = self._seat_children(state)
             child = children.get(target) or next(
                 (row for row in children.values() if row.run == target), None)
             child_event = next((event for event in (
@@ -786,7 +783,7 @@ class Daemon2:
             target = str(fm.get("to") or "").strip()
             if not target:
                 raise ValueError("to: requires a child edge or run id")
-            children = self.supervisor.children(state["ask"] or "")
+            children = self._seat_children(state)
             child = (children.get(target)
                      or next((c for c in children.values() if c.run == target), None))
             if child is None or child.conversation != state["conversation"]:
@@ -1185,6 +1182,15 @@ class Daemon2:
                                      "during a live seat; restart requires a "
                                      "lease-safe handoff", kind="advisory",
                                      verb="dev_reload")
+
+    def _seat_children(self, state: dict[str, Any]) -> dict[str, Any]:
+        """This conversation's strands, across the seat's ask and every item: ask."""
+        children = (dict(self.supervisor.children(state["ask"]))
+                    if state.get("ask") else {})
+        conversation = str(state.get("conversation") or "")
+        if conversation:
+            children.update(self.supervisor.conversation_children(conversation))
+        return children
 
     def serve(self, *, stop_when_empty: bool = False,
               role: str = "any") -> list[RunResult]:

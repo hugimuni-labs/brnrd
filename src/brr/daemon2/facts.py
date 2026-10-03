@@ -115,6 +115,15 @@ class FactStore:
             raise ValueError("invalid fact address")
         return self.root / scope / (quote(entity, safe="") + ".jsonl")
 
+    def entities(self, scope: str) -> list[str]:
+        """Every entity with a fact file under *scope* (sorted, unquoted)."""
+        from urllib.parse import unquote
+        self.path(scope, "_")  # validates the scope
+        folder = self.root / scope
+        if not folder.is_dir():
+            return []
+        return sorted(unquote(p.name[:-len(".jsonl")]) for p in folder.glob("*.jsonl"))
+
     def read(self, scope: str, entity: str) -> list[Fact]:
         path = self.path(scope, entity)
         try:
