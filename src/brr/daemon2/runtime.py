@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import account, await_verb, closekeyword, config as conf, conversations, course, cut_verb, gates, halt_verb, halts, message_store, promises, prompts, protocol, relics, run_ledger, runner, trust
+from .. import account, await_verb, closekeyword, config as conf, conversations, course, cut_verb, gates, halt_verb, halts, hold_verb, message_store, promises, prompts, protocol, relics, run_ledger, runner, trust
 from .authority import SignalAuthority
 from .doors import FileDoor, public_event
 from .facts import FactStore
@@ -410,6 +410,30 @@ class Daemon2:
                     state, f"note: body text ignored — a note closes event {target} "
                     "without speaking; use event: to reply", kind="advisory",
                     source_file=path.name, verb="note")
+        elif verb == "hold":
+            spec, error = hold_verb.parse_hold(fm)
+            if error:
+                self._notice(state, f"hold dropped: {error}", kind="dropped",
+                             source_file=path.name, verb="hold")
+                return
+            assert spec is not None
+            resume = str(spec["resume_condition"])
+            rest = ("`brnrd await` is the resting state — a message, an own strand, "
+                    "or a tick resolves it, and the seat stays warm")
+            if resume not in {"refill", "reset"}:
+                refusal = (f"hold refused: resume: {resume} is not a resource wall — "
+                           f"{rest}. `hold:` parks only on a wall the daemon can "
+                           "confirm: `resume: refill` (or `reset`) with the binding "
+                           "quota measured under the starvation floor")
+            else:
+                floor = float(conf.load_config(self.repo_root).get(
+                    "seat.starve_floor_pct", 2))
+                pct = state.get("quota_binding_pct")
+                reading = (f"last read {float(pct):.1f}%"
+                           if isinstance(pct, (int, float)) else "not measured this run")
+                refusal = (f"hold refused: resume: {resume} needs a measured wall — "
+                           f"the binding quota is {reading} (floor {floor:g}%) — {rest}")
+            self._notice(state, refusal, source_file=path.name, verb="hold")
         elif verb == "await":
             file_path, seconds, error = await_verb.parse_await(fm)
             if error:
