@@ -93,3 +93,10 @@ class LetterService:
         self.facts.record("letters", claim.letter, "retired", by,
                           {"gen": claim.lease.gen, "why": why})
         self.leases.release(claim.lease)
+
+    def release(self, claim: Claim, *, why: str) -> None:
+        if not self.leases.authorize(claim.lease):
+            raise StaleLease(f"letter lease expired: {claim.letter}")
+        self.facts.record("letters", claim.letter, "released", claim.lease.holder,
+                          {"gen": claim.lease.gen, "why": why})
+        self.leases.release(claim.lease)

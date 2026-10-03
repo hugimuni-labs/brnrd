@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import account, await_verb, config as conf, cut_verb, halt_verb, message_store, prompts, runner
+from .. import account, await_verb, config as conf, conversations, cut_verb, halt_verb, message_store, prompts, runner
 from .authority import SignalAuthority
 from .doors import FileDoor, public_event
 from .facts import FactStore
@@ -69,6 +69,7 @@ class Daemon2:
         self.authority = SignalAuthority(self.facts, self.seats)
         self.router = Router(event_lookup=self.door.get)
         self.letters = LetterService(self.facts, self.leases)
+        self.door.letters = self.letters
         self.supervisor = Supervisor(self.facts)
         self._tick_lock = threading.Lock()
         try:
@@ -181,30 +182,52 @@ class Daemon2:
         event_id = state["event"]["id"]
         seat: Seat = state["seat"]
         if verb == "event":
-            self._reply(state, str(fm.get("event") or event_id), body)
-            # also: <id>, <id> — same-correspondent events retired by this reply
+            target = str(fm.get("event") or event_id)
+            primary = self.door.get(target)
+            # Validate and claim the entire burst before any outward send.
+            # A partial reply would claim to have handled mail it did not.
             also_raw = str(fm.get("also") or "").strip()
-            for also_id in (s.strip() for s in also_raw.split(",") if s.strip()):
-                also_event = self.door.get(also_id)
-                if also_event is None:
-                    self._notice(state, f"also: event {also_id!r} not found",
-                                 source_file=path.name)
-                    continue
-                if self.router.route_or_triage(also_event).conversation != state["conversation"]:
-                    self._notice(state, f"also: event {also_id!r} is not in this conversation",
-                                 source_file=path.name)
-                    continue
-                also_claim = self.letters.claim(also_id, state["run_id"],
-                                                self.lease_ttl_seconds, now=time.time())
-                if also_claim is None:
-                    self._notice(state, f"also: event {also_id!r} could not be claimed",
-                                 source_file=path.name)
-                    continue
+            siblings: list[tuple[dict[str, Any], Claim]] = []
+            seen = {target}
+            try:
+                for also_id in (s.strip() for s in also_raw.split(",") if s.strip()):
+                    if also_id in seen:
+                        continue
+                    seen.add(also_id)
+                    also_event = self.door.get(also_id)
+                    if also_event is None:
+                        raise ValueError(
+                            f"also dropped: event {also_id} not found in any inbox "
+                            "(the id is wrong, or the event is gone) — nothing was delivered")
+                    if also_event.get("status") != "pending":
+                        raise ValueError(f"also dropped: event {also_id} is not pending — nothing was delivered")
+                    if (primary is None
+                            or self.router.route_or_triage(also_event).conversation
+                            != self.router.route_or_triage(primary).conversation
+                            or not conversations.correspondent_key_for_event(primary)
+                            or conversations.correspondent_key_for_event(also_event)
+                            != conversations.correspondent_key_for_event(primary)):
+                        raise ValueError(f"also dropped: event {also_id} is not the same thread/correspondent as the event: target — nothing was delivered")
+                    if state["is_child"] and also_id != event_id:
+                        raise ValueError(f"also refused: event {also_id} belongs to another thread — nothing was delivered")
+                    self.letters.ingest(also_id, str(also_event["status"]))
+                    also_claim = self.letters.claim(also_id, state["run_id"],
+                                                    self.lease_ttl_seconds, now=time.time())
+                    if also_claim is None:
+                        raise ValueError(f"also dropped: event {also_id} could not be claimed — nothing was delivered")
+                    self._track_claim(state, also_claim)
+                    siblings.append((also_event, also_claim))
+                self._reply(state, target, body)
+            except Exception:
+                for _, held in siblings:
+                    self.letters.release(held, why="burst_refused")
+                    with state["claim_lock"]:
+                        state["claims"].pop(held.letter, None)
+                raise
+            for also_event, also_claim in siblings:
                 with state["claim_lock"]:
                     self.letters.retire(also_claim, by=state["run_id"], why="also")
-                    state["claims"].pop(also_id, None)
-                from .. import protocol as _proto
-                _proto.set_status(also_event, "done")
+                    state["claims"].pop(also_claim.letter, None)
         elif verb == "note":
             target = str(fm["note"]).strip()
             event = self.door.get(target)
@@ -218,8 +241,6 @@ class Daemon2:
             with state["claim_lock"]:
                 self.letters.retire(claim, by=state["run_id"], why="noted")
                 state["claims"].pop(target, None)
-            from .. import protocol
-            protocol.set_status(event, "noted")
             if target == event_id:
                 state["answered"] = True
         elif verb == "await":
@@ -394,7 +415,7 @@ class Daemon2:
                 try:
                     self._handle_outbox(state, path)
                 except Exception as exc:
-                    self._notice(state, f"{path.name}: {exc}", source_file=path.name)
+                    self._notice(state, str(exc), source_file=path.name)
                 finally:
                     path.unlink(missing_ok=True)
             wait = state.get("await")
@@ -486,7 +507,6 @@ class Daemon2:
             from .. import protocol
             if not self.leases.authorize(claim.lease):
                 return None
-            protocol.set_status(event, "processing")
             seat_address = (f"{address.conversation}#strand:{run_id}"
                             if is_child else address.conversation)
             seat = Seat(self.seats, seat_address,

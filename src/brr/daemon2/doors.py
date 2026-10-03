@@ -27,12 +27,26 @@ def public_event(event: dict[str, Any]) -> dict[str, Any]:
 class FileDoor:
     inbox: Path
     responses: Path
+    letters: Any = None
+
+    def _project(self, event: dict[str, Any] | None) -> dict[str, Any] | None:
+        if event is None or self.letters is None:
+            return event
+        state = self.letters.state(str(event["id"]))
+        if state is None:
+            return event
+        status = {"pending": "pending", "claimed": "processing",
+                  "answered": "done", "retired": ("done" if state.retirement
+                  and state.retirement.get("why") == "also" else "noted")}[state.state]
+        return {**event, "status": status}
 
     def pending(self) -> list[dict[str, Any]]:
-        return protocol.list_dispatchable(self.inbox)
+        return [projected for event in protocol.list_dispatchable(self.inbox)
+                if (projected := self._project(event)) is not None
+                and projected["status"] in {"pending", "processing"}]
 
     def get(self, event_id: str) -> dict[str, Any] | None:
-        return protocol._read_event(self.inbox / f"{event_id}.md")
+        return self._project(protocol._read_event(self.inbox / f"{event_id}.md"))
 
     def send(self, event: dict[str, Any], body: str,
              key: str, gen: int) -> dict[str, Any]:
@@ -47,7 +61,6 @@ class FileDoor:
         if old is not None and old != body.strip():
             raise ValueError("response key already carries different body")
         protocol.write_response(self.responses, str(event["id"]), body)
-        protocol.set_status(event, "done")
         return {"path": str(target), "key": key, "gen": gen}
 
     @staticmethod

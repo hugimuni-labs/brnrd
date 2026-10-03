@@ -65,7 +65,7 @@ def test_once_invokes_real_shell_and_drains_reply(tmp_path: Path) -> None:
     assert result is not None and result.returncode == 0 and result.answered
     assert protocol.read_response(home / "dispatch" / "responses",
                                   event_path.stem) == "hello from fake Shell"
-    assert protocol._read_event(event_path)["status"] == "done"
+    assert runtime.door.get(event_path.stem)["status"] == "done"
     assert runtime.letters.state(event_path.stem).state == "answered"
     assert any(f.kind == "sent" for f in runtime.facts.read(
         "sends", "reply:" + event_path.stem))
@@ -169,7 +169,7 @@ def test_pending_unaddressed_letter_gets_visible_triage_seat(tmp_path: Path) -> 
                       runner_name="fake", runner_config={"runner_cmd": [str(binary)]})
     result = runtime.once()
     assert result is not None and result.answered
-    assert protocol._read_event(event)["status"] == "done"
+    assert runtime.door.get(event.stem)["status"] == "done"
     assert runtime.seats.read(f"triage:telegram:{event.stem}").state == "parked"
     portal = json.loads((result.outbox / "portal-state.json").read_text())
     assert any("unaddressed letter retained" in notice["text"]
@@ -307,10 +307,10 @@ def _sleep_shell(path: Path, *, seconds: float = 1) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
-def _wait_processing(path: Path, timeout: float = 5) -> None:
+def _wait_processing(runtime: Daemon2, path: Path, timeout: float = 5) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if protocol._read_event(path)["status"] == "processing":
+        if runtime.door.get(path.stem)["status"] == "processing":
             return
         time.sleep(0.02)
     raise AssertionError("letter was never claimed")
@@ -332,7 +332,7 @@ def test_long_shell_renews_letter_claim_and_blocks_second_holder(tmp_path: Path)
     thread = threading.Thread(target=lambda: output.append(runtime.once()))
     thread.start()
     try:
-        _wait_processing(event)
+        _wait_processing(runtime, event)
         time.sleep(0.6)
         assert runtime.letters.claim(event.stem, "rival", 0.3,
                                      now=time.time()) is None
@@ -361,7 +361,7 @@ def test_lapsed_self_lease_kills_shell_and_leaves_recoverable_seat(tmp_path: Pat
     thread = threading.Thread(target=lambda: output.append(runtime.once()))
     thread.start()
     try:
-        _wait_processing(event)
+        _wait_processing(runtime, event)
         run_id = runtime.seats.read("c").run_id
         deadline = time.monotonic() + 10
         while runner.live_pid_for_label(run_id) is None and time.monotonic() < deadline:
@@ -374,7 +374,7 @@ def test_lapsed_self_lease_kills_shell_and_leaves_recoverable_seat(tmp_path: Pat
         assert output[0].returncode != 0
         assert runner.live_pid_for_label(run_id) is None
         assert runtime.seats.read("c").state == "running"
-        assert protocol._read_event(event)["status"] == "processing"
+        assert runtime.door.get(event.stem)["status"] == "processing"
     finally:
         if thread.is_alive():
             runner.kill_matching(runtime.seats.read("c").run_id)
@@ -416,11 +416,11 @@ def test_also_retires_burst_events(tmp_path: Path) -> None:
     (repo / "AGENTS.md").write_text("# Test\n")
     inbox = home / "dispatch" / "inbox"
     primary = protocol.create_event(inbox, "telegram", "primary",
-                                    conversation_key="c", trust_tier="owner")
+                                    conversation_key="c", trust_tier="owner", telegram_user_id="42")
     also1 = protocol.create_event(inbox, "telegram", "sibling 1",
-                                  conversation_key="c", trust_tier="owner")
+                                  conversation_key="c", trust_tier="owner", telegram_user_id="42")
     also2 = protocol.create_event(inbox, "telegram", "sibling 2",
-                                  conversation_key="c", trust_tier="owner")
+                                  conversation_key="c", trust_tier="owner", telegram_user_id="42")
     reply = (
         "---\n"
         f"event: {primary.stem}\n"
@@ -434,9 +434,34 @@ def test_also_retires_burst_events(tmp_path: Path) -> None:
                       tick_seconds=0.02)
     result = runtime.once()
     assert result is not None and result.answered
-    assert protocol._read_event(primary)["status"] == "done"
-    assert protocol._read_event(also1)["status"] == "done"
-    assert protocol._read_event(also2)["status"] == "done"
+    assert runtime.door.get(primary.stem)["status"] == "done"
+    assert runtime.door.get(also1.stem)["status"] == "done"
+    assert runtime.door.get(also2.stem)["status"] == "done"
+
+
+def test_also_late_refusal_releases_preclaimed_sibling(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    inbox = home / "dispatch" / "inbox"
+    primary = protocol.create_event(inbox, "telegram", "primary",
+                                    conversation_key="c", telegram_user_id="42")
+    sibling = protocol.create_event(inbox, "telegram", "sibling",
+                                    conversation_key="c", telegram_user_id="42")
+    binary = tmp_path / "shell"
+    _verb_shell(binary, ("reply.md",
+                         f"---\nevent: {primary.stem}\n"
+                         f"also: {sibling.stem}, evt-1234567890123-nope\n"
+                         "---\nBoth handled.\n"))
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    result = runtime.once()
+    assert result is not None and not result.answered
+    assert protocol.read_response(home / "dispatch" / "responses", primary.stem) is None
+    assert runtime.letters.state(sibling.stem).state == "pending"
+    assert runtime.door.get(sibling.stem)["status"] == "pending"
 
 
 def test_to_delivers_steer_to_child(tmp_path: Path) -> None:
