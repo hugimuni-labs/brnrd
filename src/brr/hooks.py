@@ -6356,6 +6356,10 @@ def compute_neutral(
     state = _read_hook_state(ctx)
     _ack_previous_inject(state, phase)
     _record_fired(state, phase)
+    # One value for both the visible attribution and the transcript row. A
+    # second read from the payload in record_boundary could drift from what
+    # the resident actually saw on this boundary.
+    boundary_why = _first_tool_why(phase, payload)
     inject: str | None = None
     block = False
     block_reason: str | None = None
@@ -6759,7 +6763,7 @@ def compute_neutral(
                 bolt_asks_total=bolt_asks_total, bolt_edge=bolt_edge,
                 repeat_streaks=repeat_streaks,
                 context_prior=context_prior, room=room, paused=paused,
-                why=_first_tool_why(phase, payload),
+                why=boundary_why,
                 pending_set_changed=pending_set_changed,
                 last_chips=last_chips, rendered_chips=rendered_chips,
                 route_drift=route_drift,
@@ -6887,7 +6891,10 @@ def compute_neutral(
             inject = f"{inject}\n" + "\n".join(item_lines) if inject else "\n".join(item_lines)
 
     _write_hook_state(ctx, state)
-    return {"inject": inject, "block": block, "block_reason": block_reason}
+    return {
+        "inject": inject, "block": block, "block_reason": block_reason,
+        "boundary_why": boundary_why,
+    }
 
 
 # ── Native rendering (neutral → runner flavour) ──────────────────────────
@@ -7939,7 +7946,7 @@ def _boundary_readings(
 _SHELL_TOOL_NAMES = ("bash", "shell", "exec", "exec_command", "functions_exec")
 
 
-_WHY_MAX = 160
+_WHY_MAX = 240
 _WHY_COMMENT = re.compile(r"^\s*#\s*why:\s*(.+?)\s*$", re.MULTILINE)
 
 
@@ -7962,15 +7969,15 @@ def _tool_why(tool_name: object, tool_input: object) -> str | None:
         why = m.group(1) if m else None
     if not (isinstance(why, str) and why.strip()):
         return None
-    why = re.sub(r"\s+", " ", why.strip())
+    why = redact_detail(re.sub(r"\s+", " ", why.strip()))
     if len(why) > _WHY_MAX:
-        why = why[:_WHY_MAX] + "…"
-    return redact_detail(why)
+        why = why[:_WHY_MAX - 1] + "…"
+    return why
 
 
 def _first_tool_why(phase: str, payload: object) -> str | None:
-    """``why`` of the first act in a post-tool payload (batch or single)."""
-    if phase != PHASE_POST_TOOL or not isinstance(payload, dict):
+    """``why`` of the first act in a tool payload (batch or single)."""
+    if phase not in (PHASE_PRE_TOOL, PHASE_POST_TOOL) or not isinstance(payload, dict):
         return None
     calls = payload.get("tool_calls")
     if isinstance(calls, list):
@@ -8513,8 +8520,13 @@ def record_boundary(
         record["act"] = first_act
     if first_detail is not None:
         record["detail"] = first_detail
-    first_why = _tool_why(first_name, first_input)
-    if first_why is not None:
+    # The normal hook path already extracted this for the bar. Direct callers
+    # of record_boundary still derive from their payload once.
+    first_why = (
+        neutral["boundary_why"] if "boundary_why" in neutral
+        else _first_tool_why(phase, payload)
+    )
+    if isinstance(first_why, str) and first_why:
         record["why"] = first_why
     if has_out_bytes:
         record["out_bytes"] = total_out_bytes

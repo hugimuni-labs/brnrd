@@ -6122,22 +6122,56 @@ def test_boundary_detail_for_bash_command(tmp_path):
     assert "tool_input" not in record
 
 
-def test_boundary_why_from_bash_description(tmp_path):
-    """The act's one line of why rides the row beside its price (evt-…-qv79)."""
+def test_boundary_why_from_bash_description(tmp_path, monkeypatch):
+    """A real Claude Bash input reaches the row through one extraction.
+
+    Source: ~/.claude/projects/.../e4074cc4-8918-40c6-b140-5f201ab03a3d.jsonl.
+    """
     env, run_dir = _transcript_env(tmp_path)
     _portal(tmp_path, token="t1", pending=0, events=[])
     payload = json.dumps({
+        "hook_event_name": "PostToolUse",
         "tool_name": "Bash",
         "tool_input": {
             "command": "git status --short",
-            "description": "Check the tree before branching — is it dirty?",
+            "description": "Check what file is modified/untracked",
         },
     })
+    extract = hooks._first_tool_why
+    calls = []
+    rendered_reasons = []
+    render = hooks.format_delta
+
+    def extract_once(phase, tool_payload):
+        calls.append(phase)
+        return extract(phase, tool_payload)
+
+    def render_with_reason(*args, **kwargs):
+        rendered_reasons.append(kwargs.get("why"))
+        return render(*args, **kwargs)
+
+    monkeypatch.setattr(hooks, "_first_tool_why", extract_once)
+    monkeypatch.setattr(hooks, "format_delta", render_with_reason)
     hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
 
     record = _transcript(run_dir)[0]
     assert record.get("detail") == "git status --short"
-    assert record.get("why") == "Check the tree before branching — is it dirty?"
+    assert record.get("why") == "Check what file is modified/untracked"
+    assert calls == [hooks.PHASE_POST_TOOL]
+    assert rendered_reasons == [record["why"]]
+
+
+def test_pre_tool_boundary_keeps_the_supplied_reason(tmp_path):
+    env, run_dir = _transcript_env(tmp_path)
+    payload = {
+        "hook_event_name": "PreToolUse", "tool_name": "Bash",
+        "tool_input": {
+            "command": "git status --short",
+            "description": "Check what file is modified/untracked",
+        },
+    }
+    hooks.record_boundary(hooks.HookContext(env), hooks.PHASE_PRE_TOOL, {}, payload)
+    assert _transcript(run_dir)[0]["why"] == "Check what file is modified/untracked"
 
 
 def test_boundary_why_from_codex_comment(tmp_path):
@@ -6158,9 +6192,40 @@ def test_boundary_why_from_codex_comment(tmp_path):
 def test_boundary_why_absent_when_nothing_written(tmp_path):
     env, run_dir = _transcript_env(tmp_path)
     _portal(tmp_path, token="t1", pending=0, events=[])
-    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls"}})
+    payload = json.dumps({
+        "hook_event_name": "PostToolUse", "tool_name": "functions.exec",
+        "tool_input": {"cmd": "ls"},
+    })
     hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
     assert "why" not in _transcript(run_dir)[0]
+
+
+def test_boundary_why_is_trimmed_and_capped(tmp_path):
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=0, events=[])
+    payload = json.dumps({
+        "hook_event_name": "PostToolUse", "tool_name": "Bash",
+        "tool_input": {"command": "pwd", "description": "  " + "a" * 241 + "  "},
+    })
+    hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
+    assert _transcript(run_dir)[0]["why"] == "a" * 239 + "…"
+
+
+def test_boundary_why_redacts_before_capping(tmp_path):
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=0, events=[])
+    payload = json.dumps({
+        "hook_event_name": "PostToolUse", "tool_name": "Bash",
+        "tool_input": {
+            "command": "pwd",
+            "description": "a" * 220 + " token=secret_value_that_must_not_appear " + "b" * 40,
+        },
+    })
+    hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
+    serialized = (run_dir / "boundaries.jsonl").read_text(encoding="utf-8")
+    assert "secret_value_that_must_not_appear" not in serialized
+    assert "token=<redacted>" in _transcript(run_dir)[0]["why"]
+    assert _transcript(run_dir)[0]["why"].endswith("…")
 
 
 def test_boundary_detail_for_file_tool(tmp_path):
