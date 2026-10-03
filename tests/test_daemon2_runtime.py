@@ -1498,6 +1498,57 @@ def test_gate_transport_records_undeliverable_with_generation(tmp_path: Path) ->
         transport.remove(runtime.door.inbox, runtime.door.responses)
 
 
+def test_concurrent_gate_delivery_paths_send_one_terminal(tmp_path: Path) -> None:
+    from brr.gates import runtime as gate_runtime
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    runtime = Daemon2(repo, tmp_path / "home")
+    event_path = protocol.create_event(runtime.door.inbox, "telegram", "",
+                                       status="done")
+    protocol.write_response(runtime.door.responses, event_path.stem, "reply")
+    holder = runtime.leases.acquire("self", "host:1", 30)
+    assert holder is not None
+    transport = GateTransport(runtime.leases, runtime.facts, lambda: holder)
+    transport.install(runtime.door.inbox, runtime.door.responses)
+    entered = threading.Event()
+    release = threading.Event()
+    sent: list[str] = []
+
+    def deliver(_event, body):
+        sent.append(body)
+        entered.set()
+        assert release.wait(30)
+        return {"message_id": 77}
+
+    def path():
+        gate_runtime.deliver_stream(runtime.door.inbox, runtime.door.responses,
+                                    "telegram", deliver)
+
+    first = threading.Thread(target=path)
+    second = threading.Thread(target=path)
+    try:
+        first.start()
+        assert entered.wait(15)
+        second.start()
+        second.join(timeout=15)
+        concurrent_path_finished = not second.is_alive()
+    finally:
+        release.set()
+        first.join(timeout=15)
+        if second.ident is not None:
+            second.join(timeout=15)
+        transport.remove(runtime.door.inbox, runtime.door.responses)
+        gate_runtime._delivery_retry.clear()
+    assert concurrent_path_finished
+    assert not first.is_alive() and not second.is_alive()
+    assert sent == ["reply"]
+    assert protocol._read_event(event_path)["status"] == "delivered"
+    facts = runtime.facts.read(
+        "sends", "transport:telegram:" + event_path.stem + ":terminal")
+    assert sum(f.kind == "sent" for f in facts) == 1
+
+
 def test_recorded_telegram_inbound_routes_and_answers_through_serve(
         tmp_path: Path, monkeypatch) -> None:
     from brr.gates import telegram
@@ -1512,7 +1563,16 @@ def test_recorded_telegram_inbound_routes_and_answers_through_serve(
     runtime = Daemon2(repo, tmp_path / "home", runtime_dir=brr_dir,
                       runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
                       tick_seconds=0.02)
-    sent: list[str] = []
+    tick = runtime.controls.tick
+
+    def tick_with_card(state):
+        card = state["outbox"] / ".card"
+        if not card.exists():
+            card.write_text("## Now\nworking\n", encoding="utf-8")
+        return tick(state)
+
+    runtime.controls.tick = tick_with_card
+    sent: list[tuple[str, dict]] = []
 
     def fake_api(_token, method, _params=None, **_kwargs):
         if method == "getUpdates":
@@ -1520,7 +1580,7 @@ def test_recorded_telegram_inbound_routes_and_answers_through_serve(
                 "message_id": 501, "chat": {"id": 123},
                 "from": {"id": 41, "first_name": "Ada"},
                 "text": "recorded inbound"}}]}
-        sent.append(method)
+        sent.append((method, _params or {}))
         return {"ok": True, "result": {"message_id": 77}}
 
     monkeypatch.setattr(telegram, "_api_call", fake_api)
@@ -1541,9 +1601,12 @@ def test_recorded_telegram_inbound_routes_and_answers_through_serve(
     thread.start()
     deadline = time.monotonic() + 30
     try:
-        while not sent and time.monotonic() < deadline:
+        terminal = lambda: [params for method, params in sent
+                            if method == "sendMessage"
+                            and params.get("text") == "hello from fake Shell"]
+        while not terminal() and time.monotonic() < deadline:
             time.sleep(0.02)
-        assert sent == ["sendMessage"]
+        assert len(terminal()) == 1
         events = list(runtime.door.event_paths())
         assert len(events) == 1
         event = runtime.door.get(events[0].stem)
@@ -1558,6 +1621,17 @@ def test_recorded_telegram_inbound_routes_and_answers_through_serve(
         runtime.stop()
         thread.join(timeout=30)
         assert not thread.is_alive()
+        # A run card may also use sendMessage; count the terminal reply by
+        # its payload so that a card cannot masquerade as a duplicate reply.
+        assert len([params for method, params in sent
+                    if method == "sendMessage"
+                    and params.get("text") == "hello from fake Shell"]) == 1
+        assert all(method != "sendMessage" or
+                   params.get("text") == "hello from fake Shell" or
+                   params.get("parse_mode") == "HTML"
+                   for method, params in sent)
+        assert sum(method == "sendMessage" and params.get("parse_mode") == "HTML"
+                   for method, params in sent) == 1
 
 
 def test_repo_scoped_inbox_uses_its_matching_response_queue(tmp_path: Path) -> None:
@@ -1605,6 +1679,9 @@ def test_at_schedule_fires_once_across_serve_restart(tmp_path: Path,
     past = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60))
     (dom / "schedule.md").write_text(
         f"## Followup\nat: {past}\ncheck the work\n", encoding="utf-8")
+    # once() scanned before this entry existed; serve must start a new scan
+    # even when the earlier tick's throttle has not expired.
+    runtime._next_schedule_check = time.monotonic() + 60
     results = runtime.serve(stop_when_empty=True)
     assert len(results) == 1 and results[0].answered
     scheduled = [protocol._read_event(path) for path in runtime.door.event_paths()

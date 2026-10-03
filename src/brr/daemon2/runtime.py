@@ -1196,6 +1196,10 @@ class Daemon2:
         """
         if role not in {"any", "resident", "strand"}:
             raise ValueError("role must be any, resident or strand")
+        # A direct once() may have checked schedules before a new entry was
+        # written. Starting the serve loop is a fresh scan boundary, even
+        # when stop_when_empty would otherwise exit inside the old throttle.
+        self._next_schedule_check = 0.0
         self._stop_serve = threading.Event()
         machine = f"{socket.gethostname()}:{os.getpid()}"
         machine_lease = self.leases.acquire(
@@ -1500,6 +1504,11 @@ class Daemon2:
                     )
                     result = runner.invoke_runner(
                         runner_choice, invocation, self.runner_config)
+                    if strand_alloc is not None:
+                        # The pump may not have seen a last-moment submit.
+                        # Drain it while branch validation can still read
+                        # the clone; publish() may remove that directory.
+                        self._tick(state)
                 finally:
                     if strand_alloc is not None:
                         try:

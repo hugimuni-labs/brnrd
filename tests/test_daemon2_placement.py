@@ -164,7 +164,7 @@ def test_runtime_publishes_child_branch_before_clone_cleanup(tmp_path: Path,
     binary.chmod(0o755)
     runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
                       runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
-                      tick_seconds=0.02)
+                      tick_seconds=60.0)
     runtime.supervisor.register("ask-1", "c", "run-parent", "edge-1", "run-child")
     returned = runtime.supervisor.returned
     def checked_returned(*args, **kwargs):
