@@ -8,6 +8,7 @@ caller imports this package until the integration switch.
 from __future__ import annotations
 
 import os
+import json
 import socket
 import threading
 import time
@@ -39,7 +40,7 @@ class RunResult:
 
 class Daemon2:
     def __init__(self, repo_root: Path, home: Path, *,
-                 runtime_dir: Path | None = None, runner_name: str = "codex",
+                 runtime_dir: Path | None = None, runner_name: str | None = None,
                  runner_config: dict[str, Any] | None = None,
                  tick_seconds: float = 0.1):
         self.repo_root = Path(repo_root).resolve()
@@ -51,13 +52,30 @@ class Daemon2:
         self.door = FileDoor(self.home / "dispatch" / "inbox",
                              self.home / "dispatch" / "responses")
         self.facts = FactStore(self.home / "daemon2" / "facts")
-        self.leases = LocalLeaseAuthority(self.home / "daemon2" / "leases")
+        self.leases = LocalLeaseAuthority(self.home / "daemon2" / "leases",
+                                          facts=self.facts)
         self.seats = SeatStore(self.home / "daemon2" / "seats")
         self.authority = SignalAuthority(self.facts, self.seats)
-        self.router = Router()
+        self.router = Router(event_lookup=self.door.get)
         self.letters = LetterService(self.facts, self.leases)
         self.supervisor = Supervisor(self.facts)
         self._tick_lock = threading.Lock()
+
+    def _runner_for(self, event: dict[str, Any]) -> runner.RunnerProfile:
+        # A pinned command is the operator/test override path; it has no
+        # catalog Core. Normal dispatch resolves afresh for every letter.
+        if self.runner_config.get("runner_cmd"):
+            return runner.runner_profile(self.runner_name or "custom", self.repo_root)
+        overrides: dict[str, Any] = {}
+        requested = (event.get("dashboard_wake_request_profile")
+                     or event.get("dashboard_wake_sticky_profile")
+                     or event.get("runner") or self.runner_name)
+        if requested:
+            overrides["runner"] = requested
+        for key in ("shell", "core"):
+            if event.get(key):
+                overrides[key] = event[key]
+        return runner.resolve_runner_profile(self.repo_root, overrides or None)
 
     def _run_id(self) -> str:
         return "run-" + time.strftime("%y%m%d-%H%M", time.gmtime()) + "-" + uuid.uuid4().hex[:4]
@@ -75,9 +93,13 @@ class Daemon2:
         return visible
 
     def _notice(self, state: dict[str, Any], text: str, *, kind: str = "refused",
-                source_file: str | None = None) -> None:
-        state["notices"].append({"kind": kind, "message": text,
-                                  "source_file": source_file})
+                source_file: str | None = None, verb: str | None = None) -> None:
+        row = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "kind": kind, "text": text, "lifetime": "run",
+               "run": state["run_id"], "verb": verb or "event"}
+        if source_file:
+            row["source_file"] = source_file
+        state["notices"].append(row)
 
     def _reply(self, state: dict[str, Any], target_id: str, body: str) -> None:
         if not body:
@@ -196,7 +218,11 @@ class Daemon2:
             self.door.write_views(outbox_dir, state["event"]["id"], visible,
                                   phase="awaiting" if wait and wait["armed"]
                                         and not wait["resolved"] else "running",
-                                  notices=state["notices"], await_state=wait)
+                                  notices=state["notices"], await_state=wait,
+                                  run_id=state["run_id"], repo=str(self.repo_root),
+                                  runner_name=state["runner_name"],
+                                  branch=str(state["event"].get("branch") or ""),
+                                  current_replyable=not state["answered"])
 
     def once(self) -> RunResult | None:
         events = self.door.pending()
@@ -204,6 +230,8 @@ class Daemon2:
             return None
         event = events[0]
         address = self.router.route(event)
+        runner_choice = self._runner_for(event)
+        selected_runner = runner_choice.name
         machine = f"{socket.gethostname()}:{os.getpid()}"
         self_lease = self.leases.acquire("self", machine, 60)
         if self_lease is None:
@@ -226,16 +254,21 @@ class Daemon2:
             seat = Seat(self.seats, address.conversation,
                         authorize=self.authority.allowed)
             record = seat.read()
+            resumed = None
             if record.state == "parked":
                 if record.wake_on:
-                    wake = seat.wake(record.generation,
-                                     Signal("mail", address.conversation,
-                                            ask=address.ask, letter_id=event["id"]),
-                                     shell=self.runner_name, capabilities=set())
-                    if wake is None:
+                    resumed = seat.wake(record.generation,
+                                        Signal("mail", address.conversation,
+                                               ask=address.ask, letter_id=event["id"]),
+                                        shell=selected_runner, capabilities=set(),
+                                        run_id=run_id)
+                    if resumed is None:
                         return None
                 else:
                     seat.start(record.generation, run_id=run_id)
+            elif record.state in {"running", "awaiting"}:
+                resumed = seat.recover(record.generation, shell=selected_runner,
+                                       capabilities=set(), run_id=run_id)
             elif record.state == "ended":
                 raise ValueError("ended conversation needs a new seat identity")
             outbox = self.runtime_dir / "outbox" / str(event["id"])
@@ -244,15 +277,25 @@ class Daemon2:
             run_dir.mkdir(parents=True, exist_ok=True)
             response = protocol.response_path(self.door.responses, str(event["id"]))
             context = run_dir / "context.md"
+            task_text = str(event.get("body") or "")
+            if resumed is not None and resumed.mode == "checkpoint":
+                recovered = seat.read()
+                task_text += ("\n\nRecovery checkpoint (previous Shell stopped):\n"
+                              + json.dumps({
+                                  "checkpoint": recovered.checkpoint,
+                                  "carry": recovered.carry,
+                                  "obligations": recovered.obligations,
+                                  "queued_letters": recovered.queued_letters,
+                              }, sort_keys=True))
             prompt = prompts.build_daemon_prompt(
-                str(event.get("body") or ""), str(event["id"]), str(response),
+                task_text, str(event["id"]), str(response),
                 self.repo_root, execution_root=self.repo_root,
                 outbox_path=str(outbox), run_id=run_id,
                 source=str(event.get("source") or ""), environment="host",
                 runtime_dir=str(self.runtime_dir), context_path=str(context),
                 pending_events=[public_event(e) for e in events],
                 event_body=str(event.get("body") or ""),
-                event_meta=public_event(event), runner_name=self.runner_name,
+                event_meta=public_event(event), runner_name=selected_runner,
             )
             context.write_text(prompt, encoding="utf-8")
             state: dict[str, Any] = {
@@ -260,6 +303,7 @@ class Daemon2:
                 "ask": address.ask, "parent": address.parent, "edge": address.edge,
                 "claim": claim, "seat": seat, "run_id": run_id, "outbox": outbox,
                 "await": None, "notices": [], "answered": False,
+                "runner_name": selected_runner,
             }
             self._tick(state)
             done = threading.Event()
@@ -276,14 +320,18 @@ class Daemon2:
                 invocation = runner.RunnerInvocation(
                     kind="daemon", label=run_id, prompt=prompt,
                     repo_root=self.repo_root, cwd=self.repo_root,
+                    selected_runner=runner_choice,
                     env={"BRR_OUTBOX_DIR": str(outbox),
                          "BRR_PORTAL_STATE": str(outbox / "portal-state.json"),
                          "BRR_CONVERSATION_ID": address.conversation,
                          "BRR_EVENT_ID": str(event["id"]),
                          "BRR_RUN_ID": run_id},
+                    resume_native_session_id=(
+                        resumed.session_id if resumed and resumed.mode == "native"
+                        else None),
                 )
                 result = runner.invoke_runner(
-                    self.runner_name, invocation, self.runner_config)
+                    runner_choice, invocation, self.runner_config)
             finally:
                 done.set()
                 thread.join(timeout=5)

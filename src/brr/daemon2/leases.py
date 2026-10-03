@@ -53,10 +53,11 @@ class EffectInFlight(RuntimeError):
 
 
 class LocalLeaseAuthority:
-    def __init__(self, root: Path, *, clock: Callable[[], float] = time.time):
+    def __init__(self, root: Path, *, facts: FactStore | None = None,
+                 clock: Callable[[], float] = time.time):
         self.root = Path(root)
         self.clock = clock
-        self.sends = FactStore(self.root / "facts")
+        self.sends = facts if facts is not None else FactStore(self.root / "facts")
 
     def _paths(self, what: str) -> tuple[Path, Path]:
         if not what or "/" in what or "\x00" in what:

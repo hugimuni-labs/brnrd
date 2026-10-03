@@ -7,10 +7,12 @@ import os
 import stat
 import subprocess
 import sys
+from unittest.mock import patch
 from pathlib import Path
 
 from brr import protocol
 from brr.daemon2.runtime import Daemon2
+from brr.daemon2.doors import FileDoor
 
 
 def _fake_shell(path: Path, *, await_first: bool = False) -> None:
@@ -63,12 +65,10 @@ def test_once_invokes_real_shell_and_drains_reply(tmp_path: Path) -> None:
                                   event_path.stem) == "hello from fake Shell"
     assert protocol._read_event(event_path)["status"] == "done"
     assert runtime.letters.state(event_path.stem).state == "answered"
-    assert any(f.kind == "sent" for f in runtime.facts.read("sends",
-                                                            "reply:" + event_path.stem)) is False
-    assert any(f.kind == "sent" for f in runtime.leases.sends.read(
+    assert any(f.kind == "sent" for f in runtime.facts.read(
         "sends", "reply:" + event_path.stem))
     capsule = json.loads((result.outbox / "portal-state.json").read_text())
-    assert capsule["current_event"] == event_path.stem
+    assert capsule["inbound"]["current_event"] == event_path.stem
     assert (result.outbox / "inbox.json").exists()
     assert (tmp_path / "runtime" / "runs" / result.run_id / "context.md").exists()
 
@@ -115,3 +115,40 @@ def test_module_entrypoint_runs_the_same_wire(tmp_path: Path) -> None:
     result = json.loads(proc.stdout)
     assert result["event_id"] == event.stem
     assert result["answered"] is True
+
+
+def test_portal_capsule_matches_redacted_live_shape_and_notice_wire(tmp_path: Path) -> None:
+    reference = json.loads(
+        (Path(__file__).parent / "fixtures" /
+         "daemon2_portal_state_redacted.json").read_text(encoding="utf-8"))
+    notice = {"at": "2026-10-03T00:00:00Z", "kind": "refused",
+              "text": "event refused: target absent", "lifetime": "run",
+              "run": "r1", "verb": "event"}
+    FileDoor.write_views(tmp_path, "evt-test", [], phase="running",
+                         notices=[notice], run_id="r1",
+                         repo="org/repo", runner_name="fake")
+    actual = json.loads((tmp_path / "portal-state.json").read_text())
+    assert set(actual) == set(reference)
+    for key, value in reference.items():
+        if isinstance(value, dict):
+            assert set(actual[key]) == set(value), key
+    assert set(actual["notices"][0]) == set(reference["notices"][0])
+    assert actual["notices"][0]["text"] == notice["text"]
+    assert actual["inbound"]["current_event"] == "evt-test"
+    assert actual["run"]["id"] == "r1"
+
+
+def test_runner_resolved_from_each_letter_before_dispatch(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    runtime = Daemon2(repo, tmp_path / "home")
+    with patch("brr.daemon2.runtime.runner.resolve_runner_profile") as resolve:
+        resolve.return_value.name = "codex-gpt-6-sol"
+        assert runtime._runner_for({
+            "runner": "claude-sonnet",
+            "dashboard_wake_request_profile": "codex-gpt-6-sol",
+            "core": "gpt-6-sol",
+        }).name == "codex-gpt-6-sol"
+        assert resolve.call_args.args[0] == repo
+        assert resolve.call_args.args[1] == {
+            "runner": "codex-gpt-6-sol", "core": "gpt-6-sol"}

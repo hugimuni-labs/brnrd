@@ -15,7 +15,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--home", type=Path, required=True)
     parser.add_argument("--runtime-dir", type=Path)
-    parser.add_argument("--runner", default="codex")
+    parser.add_argument("--runner")
     parser.add_argument("--runner-cmd", type=Path)
     args = parser.parse_args(argv)
     config = {"runner_cmd": [str(args.runner_cmd)]} if args.runner_cmd else None

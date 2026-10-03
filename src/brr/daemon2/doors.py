@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
 from .. import portals, protocol
 from ..outbox import table
+
+
+_PORTAL_SHAPE = json.loads(
+    resources.files("brr.daemon2").joinpath("portal_shape.json").read_text(
+        encoding="utf-8"))
 
 
 def public_event(event: dict[str, Any]) -> dict[str, Any]:
@@ -67,24 +74,33 @@ class FileDoor:
     def write_views(outbox_dir: Path, current_event: str,
                     events: list[dict[str, Any]], *,
                     phase: str, notices: list[dict[str, Any]],
-                    await_state: dict[str, Any] | None = None) -> None:
+                    await_state: dict[str, Any] | None = None,
+                    run_id: str = "", repo: str = "",
+                    runner_name: str = "", branch: str = "",
+                    current_replyable: bool = True) -> None:
         visible = [public_event(event) for event in events
                    if event.get("id") != current_event]
         portals.write_live_inbox(outbox_dir, current_event, visible)
-        capsule = {
-            "version": 1,
-            "stage": "brnrd daemon run",
-            "phase": phase,
-            "current_event": current_event,
-            "events": visible,
-            "notices": notices,
-            "await": await_state or {"armed": False, "resolved": False},
-            "resources": {
-                "quota": "unimplemented", "spend": "unimplemented",
-                "context_window": "unimplemented",
-                "coexisting_runs": "unimplemented",
-                "remote_scm": "unimplemented",
-            },
-        }
+        capsule = copy.deepcopy(_PORTAL_SHAPE)
+        capsule["version"] = 1
+        capsule["run"].update(id=run_id, event_id=current_event,
+                              phase=phase, status=phase, repo=repo,
+                              runner=runner_name, branch=branch)
+        capsule["inbound"].update(current_event=current_event,
+                                  current_event_replyable=current_replyable,
+                                  events=visible)
+        capsule["attention"].update(
+            pending_event_count=len(visible),
+            pending_outbox_file_count=len(FileDoor.outbox_entries(outbox_dir)),
+            needs_attention=bool(visible or notices))
+        capsule["notices"] = notices
+        capsule["await"] = await_state or {"armed": False}
+        capsule["resources"]["runner"]["name"] = runner_name
+        capsule["outbound"]["pending_outbox_files"] = [
+            path.name for path in FileDoor.outbox_entries(outbox_dir)]
+        card = outbox_dir / ".card"
+        if card.exists():
+            capsule["card"].update(active=True, text=card.read_text(encoding="utf-8"))
+        capsule["name"]["written"] = (outbox_dir / ".name").exists()
         capsule["change_token"] = portals.content_token(capsule)
         portals.write_portal_state(outbox_dir, capsule)

@@ -24,7 +24,7 @@ LETTER_KINDS = frozenset({"pending", "claimed", "released", "answered", "retired
 LEGACY_STATUS = {
     "pending": "pending", "processing": "claimed",
     "done": "answered", "delivered": "answered",
-    "noted": "retired", "cancelled": "retired",
+    "noted": "retired", "retired": "retired", "cancelled": "retired",
     "stopped": "retired", "error": "retired", "conflict": "retired",
 }
 

@@ -283,7 +283,8 @@ class Seat:
         return self.store.change(self.conversation, expected, update)
 
     def wake(self, expected: int, signal: Signal, *,
-             shell: str, capabilities: set[str]) -> Wake | None:
+             shell: str, capabilities: set[str],
+             run_id: str = "") -> Wake | None:
         current = self.read()
         if current.generation != expected:
             raise StaleSeat("stale resume generation")
@@ -298,7 +299,25 @@ class Seat:
                  and float(native.get("valid_until", 0)) > self.clock()
                  and set(native.get("valid_for", ())) <= capabilities)
         updated = self._transition(expected, "wake", wake_on=(),
-                                   resume_generation=current.resume_generation + 1)
+                                   resume_generation=current.resume_generation + 1,
+                                   run_id=run_id or current.run_id)
+        return Wake(updated, "native" if valid else "checkpoint",
+                    str(native["id"]) if valid else None)
+
+    def recover(self, expected: int, *, shell: str,
+                capabilities: set[str], run_id: str) -> Wake:
+        """A new process recovers a killed runner from the last quiet write."""
+        current = self.read()
+        if current.generation != expected or current.state not in {"running", "awaiting"}:
+            raise StaleSeat("no interrupted seat at this generation")
+        native = current.native_session or {}
+        valid = (native.get("shell") == shell and native.get("id")
+                 and float(native.get("valid_until", 0)) > self.clock()
+                 and set(native.get("valid_for", ())) <= capabilities)
+        updated = self._transition(
+            expected, "recover", run_id=run_id,
+            resume_generation=current.resume_generation + 1,
+            wake_on=())
         return Wake(updated, "native" if valid else "checkpoint",
                     str(native["id"]) if valid else None)
 
