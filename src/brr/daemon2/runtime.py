@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import account, await_verb, config as conf, conversations, course, cut_verb, halt_verb, halts, message_store, promises, prompts, relics, run_ledger, runner
+from .. import account, await_verb, config as conf, conversations, course, cut_verb, halt_verb, halts, message_store, promises, prompts, protocol, relics, run_ledger, runner, trust
 from .authority import SignalAuthority
 from .doors import FileDoor, public_event
 from .facts import FactStore
@@ -283,6 +283,28 @@ class Daemon2:
                     and child.run not in named_children):
                 mismatches.append(f"strands: {child.run} is live and undispositioned")
         return mismatches
+
+    def _thread_target(self, key: str) -> tuple[dict[str, Any] | None, str | None]:
+        """Resolve the latest recorded inbound, including a closed letter."""
+        if not key:
+            return None, "unknown conversation"
+        incoming = []
+        for path in self.door.inbox.glob("*.md"):
+            event = protocol._read_event(path)
+            if (event is not None
+                    and event.get("source") not in protocol.INTERNAL_SOURCES
+                    and conversations.conversation_key_for_event(event) == key):
+                incoming.append(event)
+        if not incoming:
+            return None, "unknown conversation"
+        latest = max(incoming, key=lambda event: str(event["id"]))
+        if trust.resolve_tier(latest) != trust.OWNER:
+            return None, "correspondent is not an account user"
+        if (conversations.gate_thread_key(latest) != key
+                or (latest.get("source") == "cloud"
+                    and not latest.get("cloud_event_id"))):
+            return None, "conversation has no usable gate address"
+        return latest, None
 
     def _handle_outbox(self, state: dict[str, Any], path: Path) -> None:
         verb, fm, body = self.door.parse_outbox(path)
@@ -566,8 +588,15 @@ class Daemon2:
             )
         elif verb == "thread":
             key = str(fm.get("thread") or "").strip()
-            if not key:
-                raise ValueError("thread: requires a conversation key")
+            event, refusal = self._thread_target(key)
+            if refusal:
+                self._notice(state, f"thread refused: {refusal} ({key!r})",
+                             source_file=path.name, verb="thread")
+                return
+            if not body:
+                self._notice(state, f"thread refused: message has no body ({key!r})",
+                             source_file=path.name, verb="thread")
+                return
             if self._account_ctx is None:
                 raise ValueError("thread: requires an account context")
             message_store.stage(
@@ -576,6 +605,7 @@ class Daemon2:
                 run_id=state["run_id"],
                 body=body,
                 kind="outbound",
+                target_gate=str(event["source"]),
                 target_thread=key,
                 source_ref=path.name,
             )

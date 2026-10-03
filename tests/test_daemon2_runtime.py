@@ -12,7 +12,7 @@ import time
 from unittest.mock import patch
 from pathlib import Path
 
-from brr import protocol, runner
+from brr import conversations, protocol, runner
 from brr.daemon2.runtime import Daemon2
 from brr.daemon2.doors import FileDoor
 
@@ -788,10 +788,11 @@ def test_gate_and_thread_stage_via_message_store(tmp_path: Path) -> None:
     repo.mkdir()
     (repo / "AGENTS.md").write_text("# Test\n")
     inbox = home / "dispatch" / "inbox"
-    protocol.create_event(inbox, "telegram", "Gate and thread test",
-                          conversation_key="gt-conv")
+    inbound = protocol.create_event(inbox, "telegram", "Gate and thread test",
+                                    telegram_chat_id="owner", trust_tier="owner")
+    key = conversations.conversation_key_for_event(protocol._read_event(inbound))
     gate_md = "---\ngate: telegram\n---\nHello from the gate.\n"
-    thread_md = "---\nthread: telegram:owner\n---\nHello on thread.\n"
+    thread_md = f"---\nthread: {key}\n---\nHello on thread.\n"
     gate_script = (
         "#!/usr/bin/env python3\n"
         "import os\nfrom pathlib import Path\n"
@@ -827,8 +828,66 @@ def test_gate_and_thread_stage_via_message_store(tmp_path: Path) -> None:
         result = runtime.once()
     assert result is not None and result.answered
     gates = [s for s in staged if s["gate"] == "telegram"]
-    threads = [s for s in staged if s["thread"] == "telegram:owner"]
+    threads = [s for s in staged if s["thread"] == key]
     assert gates, "gate: did not call message_store.stage"
     assert threads, "thread: did not call message_store.stage"
     assert "Hello from the gate" in gates[0]["body"]
     assert "Hello on thread" in threads[0]["body"]
+
+
+def test_thread_refuses_when_latest_correspondent_is_not_owner(tmp_path: Path) -> None:
+    from unittest.mock import MagicMock, patch as _patch
+
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    inbox = home / "dispatch" / "inbox"
+    first = protocol.create_event(inbox, "telegram", "owner request",
+                                  telegram_chat_id="42", trust_tier="owner")
+    key = conversations.conversation_key_for_event(protocol._read_event(first))
+    protocol.create_event(inbox, "telegram", "collaborator reply",
+                          telegram_chat_id="42", trust_tier="collaborator")
+    binary = tmp_path / "shell"
+    _verb_shell(binary, ("thread.md", f"---\nthread: {key}\n---\nDo not send.\n"))
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    runtime._account_ctx = MagicMock()
+    with _patch("brr.daemon2.runtime.message_store.stage") as stage:
+        result = runtime.once()
+    assert result is not None and not result.answered
+    stage.assert_not_called()
+    notices = json.loads((result.outbox / "portal-state.json").read_text())["notices"]
+    assert any("thread refused: correspondent is not an account user" in row["text"]
+               for row in notices)
+
+
+def test_thread_targets_closed_owner_inbound(tmp_path: Path) -> None:
+    from unittest.mock import MagicMock, patch as _patch
+
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    inbox = home / "dispatch" / "inbox"
+    closed = protocol.create_event(
+        inbox, "cloud", "original owner message", status="delivered",
+        trust_tier="owner", cloud_platform="telegram", cloud_chat_id="2",
+        cloud_topic_id="7", cloud_event_id="remote-event")
+    key = conversations.conversation_key_for_event(protocol._read_event(closed))
+    protocol.create_event(inbox, "schedule", "send the result",
+                          conversation_key=key)
+    binary = tmp_path / "shell"
+    _verb_shell(binary, ("thread.md", f"---\nthread: {key}\n---\nThe result.\n"))
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    runtime._account_ctx = MagicMock()
+    with _patch("brr.daemon2.runtime.message_store.stage") as stage:
+        result = runtime.once()
+    assert result is not None
+    assert stage.call_count == 1
+    assert stage.call_args.kwargs["target_thread"] == key
+    assert stage.call_args.kwargs["target_gate"] == "cloud"
+    assert protocol._read_event(closed)["status"] == "delivered"
