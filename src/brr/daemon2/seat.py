@@ -30,8 +30,10 @@ class Signal:
     pool: str | None = None
     remaining_pct: float | None = None
     measured_at: float | None = None
-    authorized: bool = False
     control: str | None = None
+    letter_id: str | None = None
+    from_run: str | None = None
+    from_generation: int | None = None
 
 
 @dataclass(frozen=True)
@@ -39,7 +41,8 @@ class WakePredicate:
     kind: str
     params: dict[str, Any] = field(default_factory=dict)
 
-    def matches(self, signal: Signal, *, now: float, conversation: str) -> bool:
+    def matches(self, signal: Signal, *, now: float, conversation: str,
+                authorize: Callable[[Signal], bool] | None = None) -> bool:
         if signal.conversation != conversation:
             return False
         p = self.params
@@ -51,7 +54,8 @@ class WakePredicate:
             return (signal.kind == "child" and p.get("parent") == signal.parent
                     and p.get("edge") == signal.edge)
         if self.kind == "H":
-            return signal.kind == "handover" and signal.authorized
+            return (signal.kind == "handover" and authorize is not None
+                    and authorize(signal))
         if self.kind == "R":
             return (signal.kind == "resource"
                     and p.get("pool") == signal.pool
@@ -62,7 +66,8 @@ class WakePredicate:
         if self.kind == "T":
             return signal.kind == "timer" and now >= float(p["deadline"])
         if self.kind == "U":
-            return (signal.kind == "control" and signal.authorized
+            return (signal.kind == "control" and authorize is not None
+                    and authorize(signal)
                     and (not p.get("actions") or signal.control in p["actions"]))
         raise ValueError(f"unknown wake predicate: {self.kind}")
 
@@ -114,6 +119,8 @@ class SeatRecord:
     obligations: tuple[str, ...] = ()
     carry: dict[str, Any] | None = None
     asks: tuple[str, ...] = ()
+    run_id: str = ""
+    handover_from: dict[str, Any] | None = None
 
     def row(self) -> dict[str, Any]:
         return {**self.__dict__, "wake_on": [p.row() for p in self.wake_on],
@@ -130,7 +137,9 @@ class SeatRecord:
                    native_session=row.get("native_session"),
                    queued_letters=tuple(row.get("queued_letters", ())),
                    obligations=tuple(row.get("obligations", ())),
-                   carry=row.get("carry"), asks=tuple(row.get("asks", ())))
+                   carry=row.get("carry"), asks=tuple(row.get("asks", ())),
+                   run_id=row.get("run_id", ""),
+                   handover_from=row.get("handover_from"))
 
 
 class StaleSeat(RuntimeError):
@@ -197,11 +206,13 @@ class Wake:
 
 class Seat:
     def __init__(self, store: SeatStore, conversation: str,
-                 *, clock: Callable[[], float] = time.time):
+                 *, clock: Callable[[], float] = time.time,
+                 authorize: Callable[[Signal], bool] | None = None):
         self.store = store
         self.conversation = conversation
         self.clock = clock
         self.machine = load("seat")
+        self.authorize = authorize
 
     def read(self) -> SeatRecord:
         return self.store.read(self.conversation)
@@ -212,8 +223,8 @@ class Seat:
             return replace(current, state=state, **changes)
         return self.store.change(self.conversation, expected, update)
 
-    def start(self, expected: int) -> SeatRecord:
-        return self._transition(expected, "dispatch")
+    def start(self, expected: int, *, run_id: str = "") -> SeatRecord:
+        return self._transition(expected, "dispatch", run_id=run_id)
 
     def await_signal(self, expected: int, predicates: tuple[WakePredicate, ...]) -> SeatRecord:
         return self._transition(expected, "await", wake_on=predicates)
@@ -222,9 +233,15 @@ class Seat:
         current = self.read()
         if current.generation != expected:
             raise StaleSeat("stale await generation")
-        if not any(p.matches(signal, now=self.clock(), conversation=self.conversation)
+        if not any(p.matches(signal, now=self.clock(), conversation=self.conversation,
+                             authorize=self.authorize)
                    for p in current.wake_on):
             return None
+        return self._transition(expected, "signal", wake_on=())
+
+    def resolve_await(self, expected: int, outcome: str) -> SeatRecord:
+        if outcome not in {"event", "condition", "timeout"}:
+            raise ValueError("unknown await outcome")
         return self._transition(expected, "signal", wake_on=())
 
     def checkpoint(self, expected: int, *, data: dict[str, Any],
@@ -249,8 +266,13 @@ class Seat:
                  wake_on: tuple[WakePredicate, ...]) -> SeatRecord:
         if not carry or not wake_on:
             raise ValueError("handover requires carry and wake predicates")
+        current = self.read()
+        if current.generation != expected or not current.run_id:
+            raise StaleSeat("handover requires the active run generation")
         return self._transition(expected, "handover", carry=carry,
-                                why="handover", wake_on=wake_on)
+                                why="handover", wake_on=wake_on,
+                                handover_from={"run": current.run_id,
+                                               "generation": expected})
 
     def queue_letter(self, expected: int, letter_id: str) -> SeatRecord:
         def update(current: SeatRecord) -> SeatRecord:
@@ -267,7 +289,8 @@ class Seat:
             raise StaleSeat("stale resume generation")
         if current.state != "parked":
             raise ValueError("only a parked seat can wake")
-        if not any(p.matches(signal, now=self.clock(), conversation=self.conversation)
+        if not any(p.matches(signal, now=self.clock(), conversation=self.conversation,
+                             authorize=self.authorize)
                    for p in current.wake_on):
             return None
         native = current.native_session or {}
