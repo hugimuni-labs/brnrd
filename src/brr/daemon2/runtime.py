@@ -24,6 +24,7 @@ from .doors import FileDoor, public_event
 from .facts import FactStore
 from .leases import Lease, LocalLeaseAuthority
 from .letters import Claim, LetterService
+from . import placement as _placement
 from .router import Router, UnaddressedLetter
 from .seat import Seat, SeatStore, Signal, WakePredicate, legacy_wake_on
 from .supervisor import Supervisor
@@ -44,7 +45,8 @@ class Daemon2:
                  runtime_dir: Path | None = None, runner_name: str | None = None,
                  runner_config: dict[str, Any] | None = None,
                  tick_seconds: float = 0.1,
-                 lease_ttl_seconds: float | None = None):
+                 lease_ttl_seconds: float | None = None,
+                 worktree_env: bool = True):
         self.repo_root = Path(repo_root).resolve()
         self.home = Path(home).resolve()
         self.runtime_dir = Path(runtime_dir or self.repo_root / ".brr").resolve()
@@ -57,6 +59,7 @@ class Daemon2:
             configured_ttl if lease_ttl_seconds is None else lease_ttl_seconds)
         if self.lease_ttl_seconds <= 0:
             raise ValueError("daemon2 lease ttl must be positive")
+        self.worktree_env = worktree_env
         self.door = FileDoor(self.home / "dispatch" / "inbox",
                              self.home / "dispatch" / "responses")
         self.facts = FactStore(self.home / "daemon2" / "facts")
@@ -442,26 +445,45 @@ class Daemon2:
                 if heartbeat_lost.is_set():
                     return RunResult(str(event["id"]), run_id, 125,
                                      False, outbox, response)
-                invocation = runner.RunnerInvocation(
-                    kind="strand" if is_child else "daemon",
-                    label=run_id, prompt=prompt,
-                    repo_root=self.repo_root, cwd=self.repo_root,
-                    selected_runner=runner_choice,
-                    env={"BRR_OUTBOX_DIR": str(outbox),
-                         "BRR_PORTAL_STATE": str(outbox / "portal-state.json"),
-                         "BRR_CONVERSATION_ID": address.conversation,
-                         "BRR_EVENT_ID": str(event["id"]),
-                         "BRR_RUN_ID": run_id,
-                         "BRR_IS_STRAND": "1" if is_child else "0",
-                         "BRR_SOURCE": str(event.get("source") or ""),
-                         "BRR_REPORT_PATH": str(event.get("report") or ""),
-                         "BRR_BRANCH": str(event.get("branch") or "")},
-                    resume_native_session_id=(
-                        resumed.session_id if resumed and resumed.mode == "native"
-                        else None),
-                )
-                result = runner.invoke_runner(
-                    runner_choice, invocation, self.runner_config)
+                strand_alloc: _placement.Allocation | None = None
+                if is_child and self.worktree_env:
+                    try:
+                        strand_alloc = _placement.allocate(self.repo_root, run_id)
+                    except _placement.PlacementError as exc:
+                        self._notice(state, f"worktree allocation failed: {exc}",
+                                     kind="advisory")
+                strand_root = (strand_alloc.path
+                               if strand_alloc is not None else self.repo_root)
+                strand_git_env: dict[str, str] = (strand_alloc.env()
+                                                   if strand_alloc is not None else {})
+                try:
+                    invocation = runner.RunnerInvocation(
+                        kind="strand" if is_child else "daemon",
+                        label=run_id, prompt=prompt,
+                        repo_root=strand_root, cwd=strand_root,
+                        selected_runner=runner_choice,
+                        env={**strand_git_env,
+                             "BRR_OUTBOX_DIR": str(outbox),
+                             "BRR_PORTAL_STATE": str(outbox / "portal-state.json"),
+                             "BRR_CONVERSATION_ID": address.conversation,
+                             "BRR_EVENT_ID": str(event["id"]),
+                             "BRR_RUN_ID": run_id,
+                             "BRR_IS_STRAND": "1" if is_child else "0",
+                             "BRR_SOURCE": str(event.get("source") or ""),
+                             "BRR_REPORT_PATH": str(event.get("report") or ""),
+                             "BRR_BRANCH": str(event.get("branch") or "")},
+                        resume_native_session_id=(
+                            resumed.session_id if resumed and resumed.mode == "native"
+                            else None),
+                    )
+                    result = runner.invoke_runner(
+                        runner_choice, invocation, self.runner_config)
+                finally:
+                    if strand_alloc is not None:
+                        try:
+                            _placement.release(strand_alloc)
+                        except _placement.PlacementError:
+                            pass  # best-effort; removal failure is not fatal
             finally:
                 done.set()
                 thread.join(timeout=5)
