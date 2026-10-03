@@ -39,6 +39,12 @@ class Supervisor:
                     result[data["edge"]] = Child(
                         ask, prior.conversation, prior.parent, prior.edge,
                         prior.run, "returned", data.get("report"), data.get("branch"))
+            elif fact.kind == "child_stopped":
+                prior = result.get(data["edge"])
+                if prior and prior.run == data["run"]:
+                    result[data["edge"]] = Child(
+                        ask, prior.conversation, prior.parent, prior.edge,
+                        prior.run, "stopped", prior.report, prior.branch)
         return result
 
     def register(self, ask: str, conversation: str, parent: str,

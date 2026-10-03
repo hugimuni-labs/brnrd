@@ -152,3 +152,23 @@ def test_runner_resolved_from_each_letter_before_dispatch(tmp_path: Path) -> Non
         assert resolve.call_args.args[0] == repo
         assert resolve.call_args.args[1] == {
             "runner": "codex-gpt-6-sol", "core": "gpt-6-sol"}
+
+
+def test_pending_unaddressed_letter_gets_visible_triage_seat(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test repo\n", encoding="utf-8")
+    binary = tmp_path / "fake-shell"
+    _fake_shell(binary)
+    event = protocol.create_event(home / "dispatch" / "inbox",
+                                  "telegram", "Old letter without a chat id")
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]})
+    result = runtime.once()
+    assert result is not None and result.answered
+    assert protocol._read_event(event)["status"] == "done"
+    assert runtime.seats.read(f"triage:telegram:{event.stem}").state == "parked"
+    portal = json.loads((result.outbox / "portal-state.json").read_text())
+    assert any("unaddressed letter retained" in notice["text"]
+               for notice in portal["notices"])

@@ -19,6 +19,8 @@ class Address:
     repo_hint: str | None
     parent: str | None = None
     edge: str | None = None
+    routable: bool = True
+    reason: str | None = None
 
 
 class Router:
@@ -70,3 +72,19 @@ class Router:
                        ask=str(ask) if ask else None,
                        repo_hint=str(letter.get("repo_label") or "") or None,
                        parent=parent or None, edge=edge or None)
+
+    def route_or_triage(self, letter: dict[str, Any]) -> Address:
+        try:
+            return self.route(letter)
+        except UnaddressedLetter as exc:
+            # A missing historical address does not make a pending letter
+            # disappear. Its own transport/event identity is a visible seat,
+            # never whichever unrelated account seat happens to be running.
+            event_id = str(letter.get("id") or "").strip()
+            source = str(letter.get("source") or "unknown").strip()
+            if not event_id:
+                raise
+            return Address(conversation=f"triage:{source}:{event_id}",
+                           ask=f"triage:{event_id}",
+                           repo_hint=str(letter.get("repo_label") or "") or None,
+                           routable=False, reason=str(exc))

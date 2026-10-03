@@ -86,7 +86,7 @@ class Daemon2:
             if event["id"] == current_event:
                 continue
             try:
-                if self.router.route(event).conversation == conversation:
+                if self.router.route_or_triage(event).conversation == conversation:
                     visible.append(event)
             except UnaddressedLetter:
                 continue
@@ -107,7 +107,7 @@ class Daemon2:
         event = self.door.get(target_id)
         if event is None or event.get("status") not in {"pending", "processing"}:
             raise ValueError(f"event {target_id} is not pending")
-        if self.router.route(event).conversation != state["conversation"]:
+        if self.router.route_or_triage(event).conversation != state["conversation"]:
             raise ValueError("reply target belongs to another conversation")
         claim = state["claim"] if target_id == state["event"]["id"] else None
         if claim is None:
@@ -133,7 +133,7 @@ class Daemon2:
         elif verb == "note":
             target = str(fm["note"]).strip()
             event = self.door.get(target)
-            if event is None or self.router.route(event).conversation != state["conversation"]:
+            if event is None or self.router.route_or_triage(event).conversation != state["conversation"]:
                 raise ValueError("note target does not belong to this conversation")
             claim = state["claim"] if target == event_id else self.letters.claim(
                 target, state["run_id"], 60, now=time.time())
@@ -229,7 +229,7 @@ class Daemon2:
         if not events:
             return None
         event = events[0]
-        address = self.router.route(event)
+        address = self.router.route_or_triage(event)
         runner_choice = self._runner_for(event)
         selected_runner = runner_choice.name
         machine = f"{socket.gethostname()}:{os.getpid()}"
@@ -305,6 +305,9 @@ class Daemon2:
                 "await": None, "notices": [], "answered": False,
                 "runner_name": selected_runner,
             }
+            if not address.routable:
+                self._notice(state, f"unaddressed letter retained on triage seat: {address.reason}",
+                             kind="advisory", verb="route")
             self._tick(state)
             done = threading.Event()
             def pump() -> None:
