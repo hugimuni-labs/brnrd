@@ -611,6 +611,26 @@ class TestThroughTheWorker:
         assert not event.get("resume_native_session_id")
         assert "resource_hold" not in task.meta
 
+    def test_a_long_carry_reaches_the_successor_whole(self, tmp_path, monkeypatch):
+        # run-261002-1511-6uxm: a 2.4k-char carry minted a successor whose
+        # brief stopped at "my brnrd-…" — the mint read the public record,
+        # which is clipped. The record may clip; the brief may not.
+        head = "State: " + "x" * (halt_verb._MAX_TEXT_CHARS + 200)
+        tail = "Watch-outs: the tail that used to vanish"
+        task = _run_with_halt_file(
+            tmp_path, monkeypatch, eid="evt-halt-long", halt_text=(
+                "---\nhalt: true\nreason: measured handover\n"
+                f"carry: {head} {tail}\n---\nHanding over.\n"
+            ),
+        )
+        record = task.meta["halt"]
+        assert len(record["carry"]) == halt_verb._MAX_TEXT_CHARS
+        assert record["carry"].endswith("…")
+        path = tmp_path / ".brr" / "inbox" / f"{record['successor_event']}.md"
+        body = str(protocol._read_event(path).get("body") or "")
+        assert tail in body
+        assert "…" not in body
+
     def test_a_halt_with_no_carry_mints_nothing(self, tmp_path, monkeypatch):
         task = _run_with_halt_file(
             tmp_path, monkeypatch, eid="evt-halt-4", halt_text=(
