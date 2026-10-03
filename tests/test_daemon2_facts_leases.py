@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import multiprocessing
-import time
 from pathlib import Path
 
 import pytest
@@ -89,3 +88,23 @@ def test_capability_filter_and_release(tmp_path: Path) -> None:
     assert not authority.authorize(lease)
     next_lease = authority.acquire("self", "box-b", 10)
     assert next_lease is not None and next_lease.gen == lease.gen + 1
+
+
+def test_causal_order_survives_skew_and_conflicts_are_visible(tmp_path: Path) -> None:
+    store = FactStore(tmp_path)
+    pending = Fact("pending", "home", at="2026-01-01T00:00:20+00:00",
+                   hlc=(20_000, 0, "home"))
+    claim = Fact("claimed", "failover", {"gen": 2, "until": 100},
+                 at="2026-01-01T00:00:10+00:00", hlc=(10_000, 0, "failover"),
+                 after=(pending.id,))
+    answer = Fact("answered", "failover", {"gen": 2, "response": "yes"},
+                  at="2026-01-01T00:00:11+00:00", hlc=(11_000, 0, "failover"),
+                  after=(claim.id,))
+    late = Fact("retired", "home", {"why": "stale"},
+                at="2026-01-01T00:00:21+00:00", hlc=(21_000, 0, "home"),
+                after=(answer.id,))
+    store.merge("letters", "skew", [late, answer, claim, pending])
+    projection = fold_letter(store.read("letters", "skew"))
+    assert projection is not None and projection.state == "answered"
+    assert projection.answer == {"gen": 2, "response": "yes"}
+    assert any("after terminal" in anomaly for anomaly in projection.anomalies)

@@ -12,10 +12,13 @@ import json
 import os
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol, TypeVar
 from urllib.parse import quote
+
+from .facts import FactStore
 
 
 T = TypeVar("T")
@@ -45,10 +48,15 @@ class StaleLease(RuntimeError):
     pass
 
 
+class EffectInFlight(RuntimeError):
+    pass
+
+
 class LocalLeaseAuthority:
     def __init__(self, root: Path, *, clock: Callable[[], float] = time.time):
         self.root = Path(root)
         self.clock = clock
+        self.sends = FactStore(self.root / "facts")
 
     def _paths(self, what: str) -> tuple[Path, Path]:
         if not what or "/" in what or "\x00" in what:
@@ -107,6 +115,8 @@ class LocalLeaseAuthority:
             if row["until"] > now and row["holder"] == holder:
                 # A live holder renews without changing the generation.
                 row["until"] = now + ttl
+                if capabilities is not None:
+                    row["capabilities"] = sorted(offered)
             else:
                 row.update(holder=holder, gen=row["gen"] + 1,
                            until=now + ttl, capabilities=sorted(offered))
@@ -149,7 +159,7 @@ class LocalLeaseAuthority:
 
     def effect_once(self, lease: Lease, key: str,
                     effect: Callable[[str, int], T]) -> T | Any:
-        """Execute under the fence and retain the receipt.
+        """Record intent, run outside the lock, then append a send receipt.
 
         The effect must pass `key` and `gen` to a remote endpoint that
         enforces idempotency. A process crash after the remote effect and
@@ -157,17 +167,29 @@ class LocalLeaseAuthority:
         """
         if not key:
             raise ValueError("effect idempotency key required")
-
-        def action(path: Path, row: dict[str, Any]) -> T | Any:
-            if not self._valid(row, lease):
+        if not self.authorize(lease):
+            raise StaleLease(f"stale generation for {lease.what}")
+        prior = [fact for fact in self.sends.read("sends", key) if fact.kind == "sent"]
+        if prior:
+            return prior[0].data["receipt"]
+        # A separate per-send lease keeps concurrent local calls from
+        # entering the effect together. A remote transport must still dedupe
+        # the key if this process dies after the effect and before the receipt.
+        send_lease = self.acquire("send:" + key, uuid.uuid4().hex, 300)
+        if send_lease is None:
+            raise EffectInFlight(key)
+        try:
+            prior = [fact for fact in self.sends.read("sends", key) if fact.kind == "sent"]
+            if prior:
+                return prior[0].data["receipt"]
+            self.sends.record("sends", key, "intended", lease.holder,
+                              {"key": key, "gen": lease.gen, "what": lease.what})
+            if not self.authorize(lease):
                 raise StaleLease(f"stale generation for {lease.what}")
-            effects = row.setdefault("effects", {})
-            if key in effects:
-                return effects[key]
             result = effect(key, lease.gen)
-            json.dumps(result)  # receipts must survive restart
-            effects[key] = result
-            self._write(path, row)
+            json.dumps(result)  # a receipt must survive restart
+            self.sends.record("sends", key, "sent", lease.holder,
+                              {"key": key, "gen": lease.gen, "receipt": result})
             return result
-
-        return self._locked(lease.what, action)
+        finally:
+            self.release(send_lease)

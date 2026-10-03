@@ -1,0 +1,13 @@
+{
+  "start": "pending",
+  "states": ["pending", "claimed", "answered", "retired"],
+  "transitions": [
+    {"from": "pending", "on": "claim", "to": "claimed"},
+    {"from": "claimed", "on": "release", "to": "pending"},
+    {"from": "claimed", "on": "expire", "to": "pending"},
+    {"from": "pending", "on": "answer", "to": "answered"},
+    {"from": "claimed", "on": "answer", "to": "answered"},
+    {"from": "pending", "on": "retire", "to": "retired"},
+    {"from": "claimed", "on": "retire", "to": "retired"}
+  ]
+}

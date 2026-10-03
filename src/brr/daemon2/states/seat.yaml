@@ -1,0 +1,16 @@
+{
+  "start": "parked",
+  "states": ["running", "awaiting", "parked", "ended"],
+  "transitions": [
+    {"from": "parked", "on": "dispatch", "to": "running"},
+    {"from": "running", "on": "await", "to": "awaiting"},
+    {"from": "awaiting", "on": "signal", "to": "running"},
+    {"from": "awaiting", "on": "park", "to": "parked"},
+    {"from": "running", "on": "park", "to": "parked"},
+    {"from": "parked", "on": "wake", "to": "running"},
+    {"from": "running", "on": "handover", "to": "parked"},
+    {"from": "running", "on": "end", "to": "ended"},
+    {"from": "awaiting", "on": "end", "to": "ended"},
+    {"from": "parked", "on": "end", "to": "ended"}
+  ]
+}
