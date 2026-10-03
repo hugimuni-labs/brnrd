@@ -489,3 +489,33 @@ def test_initiative_configured_delay_and_event_priority(tmp_path, monkeypatch, c
     result = seat.run(capsys)
     assert result["outcome"] == "event"
     assert "initiative" not in result
+
+
+def test_delayed_drain_does_not_end_the_wait_at_the_porcelain_timeout(
+    tmp_path, monkeypatch, capsys,
+):
+    seat = _Seat(tmp_path, monkeypatch, stamped_cap_ms=_FULL_CAP)
+    seat.clock.hooks.clear()
+
+    def delayed_beat():
+        if seat.clock.now >= 40:
+            seat.beat()
+
+    seat.clock.hooks.append(delayed_beat)
+    seat.at(60, lambda: _inject_message(seat))
+    result = seat.run(capsys, '--ceiling', '2m')
+    assert result['outcome'] == 'event'
+    assert seat.clock.now >= 60
+    assert not list(seat.outbox.glob('*.md'))
+
+
+def test_arming_still_queued_at_the_call_bound_returns_without_cancelling_it(
+    tmp_path, monkeypatch, capsys,
+):
+    seat = _Seat(tmp_path, monkeypatch, stamped_cap_ms=_FULL_CAP)
+    seat.clock.hooks.clear()
+    assert main(['await', '--outbox', str(seat.outbox), '--json', '--ceiling', '2s']) == 1
+    result = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert result['outcome'] == 'unarmed'
+    assert seat.clock.now <= 2
+    assert len(list(seat.outbox.glob('*.md'))) == 1

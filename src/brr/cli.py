@@ -6040,13 +6040,22 @@ def cmd_await(args):
 
     before = do_mod.notices_of(payload)
     call_started = time.monotonic()
+    stamped_cap = await_verb.call_cap_seconds(dict(os.environ))
+    call_bound = (
+        max(1.0, stamped_cap - await_verb.CALL_CAP_MARGIN_SECONDS)
+        if stamped_cap is not None else _await_slice_ceiling_seconds()
+    )
+    # Arming and resolution share this call's existing bound. A busy drain
+    # can consume the directive after the ordinary porcelain's 30s verdict.
+    # Returning then would spend a model boundary while that wait can still arm.
     staged = do_mod.stage_await(
         outbox_dir, timeout_seconds=timeout_seconds, file_path=args.file,
         initiative_default=args.timeout is None and timeout_seconds is None,
     )
     status, detail = do_mod.await_verdict(
         outbox_dir, staged, before, ("await",),
-        timeout_seconds=do_mod.DEFAULT_TIMEOUT_SECONDS,
+        timeout_seconds=min(lease_seconds, call_bound),
+        source_file=staged.name,
     )
     if status == do_mod.ADVISORY:
         # The directive armed — e.g. the daemon capped the requested
@@ -6058,9 +6067,9 @@ def cmd_await(args):
     elif not do_mod.accepted(status):
         # The arming verdict, in the call that armed it. `failed` = the
         # daemon refused/dropped the directive and named it in a notice;
-        # `unarmed` = the drain never consumed the file, so nothing is
-        # waiting on anything. Neither is a wait, and neither is reported as
-        # one.
+        # `unarmed` = the file was still queued when this call reached its
+        # bound. It can still arm on a later daemon tick; this result does
+        # not cancel the staged directive.
         outcome = "failed" if status == do_mod.FAILED else "unarmed"
         result = {"outcome": outcome, "detail": detail or "still queued"}
         if args.json:
@@ -6137,13 +6146,6 @@ def cmd_await(args):
     # + a 30s drain wait = the claude Bash tool killing the call at 10m
     # instead of it returning `pending`.
     lease_started = time.monotonic()
-    stamped_cap = await_verb.call_cap_seconds(dict(os.environ))
-    if stamped_cap is not None:
-        call_bound = max(
-            1.0, stamped_cap - await_verb.CALL_CAP_MARGIN_SECONDS,
-        )
-    else:
-        call_bound = _await_slice_ceiling_seconds()
     if lease_seconds <= call_bound:
         deadline, returned_on = call_started + lease_seconds, "ceiling"
     else:
