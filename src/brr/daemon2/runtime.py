@@ -499,8 +499,25 @@ class Daemon2:
                 conversation_key=child.conversation,
                 spawn_message_for_run=child.run,
             )
-        elif verb == "halt":
-            declaration, error = halt_verb.parse_halt(fm)
+        elif verb in {"halt", "respawn"}:
+            # The older respawn spelling is a carried halt: both retire this
+            # body, so both must account for its open work before handover.
+            if verb == "respawn":
+                marker = str(fm.get("respawn") or "").strip().lower()
+                if marker not in {"", "true", "1", "yes", "on"}:
+                    raise ValueError("respawn: use `respawn: true`")
+                if not body:
+                    raise ValueError("respawn: a successor needs a carry brief")
+                unsupported = sorted(set(fm) - {"respawn", "reason", "shell", "core", "topic"})
+                if unsupported:
+                    raise ValueError("respawn: unsupported field(s) " + ", ".join(unsupported))
+                halt_fm = {"halt": "true", "reason": str(fm.get("reason") or "respawn requested"),
+                           "carry": body, "shell": fm.get("shell"), "core": fm.get("core")}
+                announcement_body = ""
+            else:
+                halt_fm = fm
+                announcement_body = body
+            declaration, error = halt_verb.parse_halt(halt_fm)
             if error:
                 raise ValueError(error)
             if state["is_child"]:
@@ -517,7 +534,7 @@ class Daemon2:
                     f"— {lines} · name each one in {field} (its handle is enough), "
                     "or stage the halt again unchanged and it stands, annotated with what it left open")
             record = seat.read()
-            announcement = body or (
+            announcement = announcement_body or (
                 f'halt — "{declaration.reason}"\n\n'
                 + (f"The work continues; a successor carries this brief:\n{declaration.carry}"
                    if declaration.carry else

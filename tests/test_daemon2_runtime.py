@@ -611,6 +611,33 @@ def test_halt_carry_mints_fenced_successor_with_unclipped_brief(tmp_path: Path) 
     assert runtime.letters.state(successor[0]["id"]).state == "answered"
 
 
+def test_respawn_legacy_file_retires_through_carried_halt(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    inbox = home / "dispatch" / "inbox"
+    original = protocol.create_event(inbox, "telegram", "first",
+                                     conversation_key="c", telegram_user_id="42")
+    binary = tmp_path / "respawn-shell"
+    _verb_shell(binary, ("respawn.md", "---\nrespawn: true\nshell: claude\n"
+                         "---\ncarry on\n"))
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    result = runtime.once()
+    assert result is not None and result.answered
+    successors = [event for event in runtime.door.pending()
+                  if event["id"] != original.stem]
+    assert len(successors) == 1
+    assert successors[0]["body"] == "carry on"
+    assert successors[0]["handover_from_run"] == result.run_id
+    assert successors[0]["shell"] == "claude"
+    assert runtime.seats.read("c").state == "parked"
+    reply = protocol.read_response(home / "dispatch" / "responses", original.stem)
+    assert reply is not None and "respawn requested" in reply
+
+
 def test_halt_bounces_open_mail_once_before_ending(tmp_path: Path) -> None:
     home = tmp_path / "home"
     repo = tmp_path / "repo"
