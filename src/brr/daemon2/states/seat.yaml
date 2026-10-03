@@ -3,6 +3,7 @@
   "states": ["running", "awaiting", "parked", "ended"],
   "transitions": [
     {"from": "parked", "on": "dispatch", "to": "running"},
+    {"from": "ended", "on": "dispatch", "to": "running"},
     {"from": "running", "on": "await", "to": "awaiting"},
     {"from": "awaiting", "on": "signal", "to": "running"},
     {"from": "awaiting", "on": "park", "to": "parked"},

@@ -575,7 +575,96 @@ def test_halt_ends_seat_and_replies(tmp_path: Path) -> None:
     assert result is not None and result.answered
     reply = protocol.read_response(home / "dispatch" / "responses", event.stem)
     assert reply is not None and "Body ends here" in reply, f"reply={reply!r}"
-    assert runtime.seats.read("halt-conv").state in {"ended", "parked"}
+    assert runtime.seats.read("halt-conv").state == "ended"
+
+
+def test_halt_carry_mints_fenced_successor_with_unclipped_brief(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    inbox = home / "dispatch" / "inbox"
+    original = protocol.create_event(inbox, "telegram", "first",
+                                     conversation_key="c", telegram_user_id="42")
+    carry = "continue " + "x" * 3000
+    binary = tmp_path / "halt-shell"
+    _verb_shell(binary, ("halt.md", "---\nhalt: true\nreason: fresh body\n"
+                         f"carry: {carry}\n---\nTaking a new body.\n"))
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    first = runtime.once()
+    assert first is not None and first.answered
+    successor = [event for event in runtime.door.pending()
+                 if event["id"] != original.stem]
+    assert len(successor) == 1
+    assert successor[0]["body"] == carry
+    assert successor[0]["handover_from_run"] == first.run_id
+    assert runtime.seats.read("c").state == "parked"
+
+    reply_binary = tmp_path / "reply-shell"
+    _fake_shell(reply_binary)
+    runtime.runner_config = {"runner_cmd": [str(reply_binary)]}
+    second = runtime.once()
+    assert second is not None and second.event_id == successor[0]["id"]
+    assert second.answered
+    assert runtime.letters.state(successor[0]["id"]).state == "answered"
+
+
+def test_halt_bounces_open_mail_once_before_ending(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    inbox = home / "dispatch" / "inbox"
+    primary = protocol.create_event(inbox, "telegram", "first",
+                                    conversation_key="c", telegram_user_id="42")
+    sibling = protocol.create_event(inbox, "telegram", "second",
+                                    conversation_key="c", telegram_user_id="42")
+    halt = "---\nhalt: true\nreason: spent\nresumable: read report\n---\nBye.\n"
+    binary = tmp_path / "shell"
+    _verb_shell(binary, ("first.md", halt), ("second.md", halt))
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    result = runtime.once()
+    assert result is not None and result.answered
+    assert runtime.seats.read("c").state == "ended"
+    notices = json.loads((result.outbox / "portal-state.json").read_text())["notices"]
+    assert any("halt bounced" in row["text"] and sibling.stem[-4:] in row["text"]
+               for row in notices)
+    assert protocol.read_response(home / "dispatch" / "responses", primary.stem) == "Bye."
+    assert runtime.door.get(sibling.stem)["status"] == "pending"
+
+
+def test_halt_without_carry_allows_a_later_message_new_seat(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    inbox = home / "dispatch" / "inbox"
+    first = protocol.create_event(inbox, "telegram", "first",
+                                  conversation_key="c", telegram_user_id="42")
+    binary = tmp_path / "halt-shell"
+    _verb_shell(binary, ("halt.md", "---\nhalt: true\nreason: blocked\n"
+                         "resumable: user sends a new request\n---\n"))
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    ended = runtime.once()
+    assert ended is not None and ended.answered
+    assert "blocked" in protocol.read_response(home / "dispatch" / "responses",
+                                               first.stem)
+    assert runtime.seats.read("c").state == "ended"
+
+    later = protocol.create_event(inbox, "telegram", "second",
+                                  conversation_key="c", telegram_user_id="42")
+    reply_binary = tmp_path / "reply-shell"
+    _fake_shell(reply_binary)
+    runtime.runner_config = {"runner_cmd": [str(reply_binary)]}
+    resumed = runtime.once()
+    assert resumed is not None and resumed.event_id == later.stem
+    assert resumed.answered
 
 
 def test_cut_parks_seat_and_replies(tmp_path: Path) -> None:

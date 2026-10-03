@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import account, await_verb, config as conf, conversations, cut_verb, halt_verb, message_store, prompts, runner
+from .. import account, await_verb, config as conf, conversations, course, cut_verb, halt_verb, halts, message_store, prompts, relics, runner
 from .authority import SignalAuthority
 from .doors import FileDoor, public_event
 from .facts import FactStore
@@ -176,6 +176,49 @@ class Daemon2:
             state["claims"].pop(target_id, None)
         if target_id == state["event"]["id"]:
             state["answered"] = True
+
+    def _halt_open_items(self, state: dict[str, Any]) -> list[halt_verb.OpenItem]:
+        """Attest the open mail, course, produce and children before ending."""
+        items: list[halt_verb.OpenItem] = []
+        for event in self._visible(state["conversation"], state["event"]["id"],
+                                   is_child=False):
+            eid = str(event["id"])
+            tail = eid.rsplit("-", 1)[-1]
+            items.append(halt_verb.OpenItem(
+                "event", f"evt-…{tail}", f"evt-…{tail} is pending and unanswered",
+                (eid, tail)))
+        card = state["outbox"] / ".card"
+        parsed = course.parse(card.read_text(encoding="utf-8") if card.exists() else "")
+        if parsed is not None:
+            for index, row in enumerate(parsed.rows, start=1):
+                if not row.done:
+                    items.append(halt_verb.OpenItem(
+                        "course", f"course:{index}",
+                        f"course:{index} unticked — [ ] {row.text}", (row.text,)))
+        try:
+            branch = str(state["event"].get("branch") or "") or None
+            seed = str(state["event"].get("seed_ref") or "") or None
+            produce = relics.collect(
+                self.repo_root, branch=branch, seed_ref=seed,
+                outbox_dir=state["outbox"], commit_run_id=state["run_id"])
+            counts = relics.counts_by_kind(produce)
+            commits = int(counts.get("commit") or 0)
+            if commits and not counts.get("pr"):
+                handle = branch or state["run_id"]
+                items.append(halt_verb.OpenItem(
+                    "produce", handle,
+                    f"produce: {commits} commit(s) on {handle} with no PR",
+                    (state["run_id"],)))
+        except Exception:
+            pass  # A missing git scope cannot prove an open item.
+        if state["ask"]:
+            for child in self.supervisor.children(state["ask"]).values():
+                if child.parent == state["run_id"] and child.status == "running":
+                    items.append(halt_verb.OpenItem(
+                        "strand", child.run,
+                        f"strand {child.run} is live — its return needs a successor",
+                        (child.run.rsplit("-", 1)[-1],)))
+        return items
 
     def _handle_outbox(self, state: dict[str, Any], path: Path) -> None:
         verb, fm, body = self.door.parse_outbox(path)
@@ -339,20 +382,52 @@ class Daemon2:
             declaration, error = halt_verb.parse_halt(fm)
             if error:
                 raise ValueError(error)
+            if state["is_child"]:
+                raise ValueError("halt: a strand cannot end the resident seat; use submit: true")
+            open_items = self._halt_open_items(state)
+            unnamed = halt_verb.unnamed(declaration, open_items)
+            signature = (declaration.reason, declaration.carry, declaration.resumable)
+            if unnamed and state.get("halt_bounced") != signature:
+                state["halt_bounced"] = signature
+                field = "carry:" if declaration.carried else "resumable:"
+                lines = " · ".join(item.line for item in unnamed)
+                raise ValueError(
+                    f"halt bounced: {len(unnamed)} open item(s) your {field} does not name "
+                    f"— {lines} · name each one in {field} (its handle is enough), "
+                    "or stage the halt again unchanged and it stands, annotated with what it left open")
             record = seat.read()
-            if not body:
-                raise ValueError("halt: requires a reason in the body")
-            # Announce via the normal reply lane; the body is the message.
+            announcement = body or (
+                f'halt — "{declaration.reason}"\n\n'
+                + (f"The work continues; a successor carries this brief:\n{declaration.carry}"
+                   if declaration.carry else
+                   f"The work stops here. What would pick it back up:\n{declaration.resumable}"))
             if not state["answered"]:
-                self._reply(state, event_id, body)
+                self._reply(state, event_id, announcement)
+            successor = ""
             if declaration.carry:
-                seat.handover(record.generation,
-                              carry={"text": declaration.carry,
-                                     "shell": declaration.shell or "",
-                                     "core": declaration.core or ""},
-                              wake_on=())
+                handed = seat.handover(
+                    record.generation,
+                    carry={"text": declaration.carry, "reason": declaration.reason,
+                           "shell": declaration.shell, "core": declaration.core},
+                    wake_on=(WakePredicate("H"), WakePredicate("M")))
+                from .. import protocol
+                successor = protocol.create_event(
+                    self.door.inbox, "respawn", declaration.carry,
+                    conversation_key=state["conversation"], ask_id=state["ask"] or "",
+                    handover_from_run=state["run_id"],
+                    handover_from_generation=record.generation,
+                    shell=declaration.shell, core=declaration.core,
+                ).stem
+                seat.queue_letter(handed.generation, successor)
             else:
                 seat.end(record.generation)
+            halts.record(
+                self.home, run_id=state["run_id"],
+                conversation_key=state["conversation"],
+                kind=declaration.kind, reason=declaration.reason,
+                carry=declaration.carry, resumable=declaration.resumable,
+                successor_event=successor,
+                open_items=[item.line for item in open_items])
             state["halted"] = True
         elif verb == "cut":
             declaration, error = cut_verb.parse_cut(fm)
@@ -515,9 +590,15 @@ class Daemon2:
             resumed = None
             if record.state == "parked":
                 if record.wake_on:
-                    resumed = seat.wake(record.generation,
-                                        Signal("mail", seat_address,
-                                               ask=address.ask, letter_id=event["id"]),
+                    from_run = str(event.get("handover_from_run") or "")
+                    from_generation = event.get("handover_from_generation")
+                    signal = (Signal("handover", seat_address,
+                                     from_run=from_run,
+                                     from_generation=int(from_generation))
+                              if from_run and from_generation is not None else
+                              Signal("mail", seat_address, ask=address.ask,
+                                     letter_id=event["id"]))
+                    resumed = seat.wake(record.generation, signal,
                                         shell=selected_runner, capabilities=set(),
                                         run_id=run_id)
                     if resumed is None:
@@ -528,7 +609,7 @@ class Daemon2:
                 resumed = seat.recover(record.generation, shell=selected_runner,
                                        capabilities=set(), run_id=run_id)
             elif record.state == "ended":
-                raise ValueError("ended conversation needs a new seat identity")
+                seat.start(record.generation, run_id=run_id)
             outbox = self.runtime_dir / "outbox" / str(event["id"])
             outbox.mkdir(parents=True, exist_ok=True)
             run_dir = self.runtime_dir / "runs" / run_id
