@@ -274,7 +274,7 @@ def test_spawn_to_submit_end_to_end(tmp_path: Path) -> None:
     child_runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
                             runner_name="fake",
                             runner_config={"runner_cmd": [str(child_shell)]},
-                            tick_seconds=0.02)
+                            tick_seconds=0.02, worktree_env=False)
     child_result = child_runtime.once(role="strand")
     assert child_result is not None and child_result.answered, (
         f"child not answered; returncode={child_result and child_result.returncode}")
@@ -293,6 +293,34 @@ def test_spawn_to_submit_end_to_end(tmp_path: Path) -> None:
     assert child_rec.status == "returned"
     assert child_rec.branch == branch
     assert child_rec.report == report_path
+
+
+def test_child_can_resubmit_a_new_generation_without_ending(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    report = tmp_path / "report.md"
+    report.write_text("Status: in progress\n")
+    protocol.create_event(home / "dispatch" / "inbox", "spawn", "work",
+                          conversation_key="c", ask_id="ask-1",
+                          parent_run_id="run-parent", spawn_edge="edge-1",
+                          child_run_id="run-child", branch="brr/child",
+                          report=str(report))
+    binary = tmp_path / "child-shell"
+    _verb_shell(binary,
+                ("submit-1.md", "---\nsubmit: true\n---\nfirst\n"),
+                ("submit-2.md", "---\nsubmit: true\n---\nsecond\n"))
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02, worktree_env=False)
+    runtime.supervisor.register("ask-1", "c", "run-parent", "edge-1", "run-child")
+    result = runtime.once(role="strand")
+    assert result is not None and result.answered
+    events = [event for event in runtime.door.pending()
+              if event["source"] == "spawn_submitted"]
+    assert sorted(event["spawn_submit_generation"] for event in events) == [1, 2]
+    assert runtime.supervisor.children("ask-1")["edge-1"].generation == 2
 
 
 def test_child_allowance_ask_mints_parent_letter(tmp_path: Path) -> None:

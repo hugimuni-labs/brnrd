@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import account, allowance, await_verb, closekeyword, config as conf, conversations, course, cut_verb, gates, halt_verb, halts, hold_verb, message_store, promises, prompts, protocol, relics, run_ledger, runner, trust
+from .. import account, allowance, await_verb, closekeyword, config as conf, conversations, course, cut_verb, gates, gitops, halt_verb, halts, hold_verb, message_store, promises, prompts, protocol, relics, run_ledger, runner, trust, worktree
 from .authority import SignalAuthority
 from .doors import FileDoor, public_event
 from .facts import FactStore
@@ -536,10 +536,26 @@ class Daemon2:
             branch = str(state["event"].get("branch") or "")
             if not report or not Path(report).is_file() or not branch:
                 raise ValueError("submit requires its declared branch and stat-able report")
+            allocation = state.get("allocation")
+            if allocation is not None:
+                actual = worktree.current_branch(allocation.path)
+                if actual != branch:
+                    raise ValueError(f"submit requires declared branch {branch!r}; "
+                                     f"clone is on {actual!r}")
+                landed = _placement.land(self.repo_root, allocation, branch=branch)
+                if not landed.success:
+                    raise ValueError(f"submit could not land branch: {landed.detail}")
+                if gitops.remote_url(self.repo_root, "origin"):
+                    pushed = gitops.push_branch(self.repo_root, "origin", branch)
+                    if not pushed:
+                        raise ValueError(f"submit could not publish branch: {pushed.detail}")
+            elif self.worktree_env:
+                raise ValueError("submit requires a placed strand worktree")
             self.supervisor.returned(
                 state["ask"], state["conversation"], state["parent"],
                 state["edge"], state["run_id"],
                 report=report, branch=branch)
+            generation = self.supervisor.children(state["ask"])[state["edge"]].generation
             protocol.create_event(
                 self.door.inbox, "spawn_submitted", body or "Strand submitted",
                 conversation_key=state["conversation"], ask_id=state["ask"],
@@ -548,14 +564,16 @@ class Daemon2:
                 spawned_by_run=state["run_id"],
                 spawn_report_path=report,
                 spawn_published_branch=branch,
+                spawn_submit_generation=generation,
             )
-            with state["claim_lock"]:
-                self.letters.answer(
-                    state["claim"], body or "Strand submitted",
-                    send=lambda key, gen: self.door.send(
-                        state["event"], body or "Strand submitted", key, gen))
-                state["claims"].pop(state["event"]["id"], None)
-            state["answered"] = True
+            if not state["answered"]:
+                with state["claim_lock"]:
+                    self.letters.answer(
+                        state["claim"], body or "Strand submitted",
+                        send=lambda key, gen: self.door.send(
+                            state["event"], body or "Strand submitted", key, gen))
+                    state["claims"].pop(state["event"]["id"], None)
+                state["answered"] = True
         elif verb == "stop":
             target = str(fm.get("stop") or "").strip()
             if not target:
@@ -1039,6 +1057,7 @@ class Daemon2:
                     except _placement.PlacementError as exc:
                         self._notice(state, f"worktree allocation failed: {exc}",
                                      kind="advisory")
+                state["allocation"] = strand_alloc
                 strand_root = (strand_alloc.path
                                if strand_alloc is not None else self.repo_root)
                 strand_git_env: dict[str, str] = (strand_alloc.env()

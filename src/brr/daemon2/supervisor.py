@@ -19,6 +19,7 @@ class Child:
     status: str
     report: str | None = None
     branch: str | None = None
+    generation: int = 0
 
 
 class Supervisor:
@@ -38,13 +39,15 @@ class Supervisor:
                 if prior and prior.run == data["run"]:
                     result[data["edge"]] = Child(
                         ask, prior.conversation, prior.parent, prior.edge,
-                        prior.run, "returned", data.get("report"), data.get("branch"))
+                        prior.run, "returned", data.get("report"), data.get("branch"),
+                        int(data.get("generation") or prior.generation + 1))
             elif fact.kind == "child_stopped":
                 prior = result.get(data["edge"])
                 if prior and prior.run == data["run"]:
                     result[data["edge"]] = Child(
                         ask, prior.conversation, prior.parent, prior.edge,
-                        prior.run, "stopped", prior.report, prior.branch)
+                        prior.run, "stopped", prior.report, prior.branch,
+                        prior.generation)
         return result
 
     def register(self, ask: str, conversation: str, parent: str,
@@ -65,8 +68,10 @@ class Supervisor:
         if child is None or (child.conversation, child.parent, child.run) != (
                 conversation, parent, run):
             raise ValueError("foreign or unknown child return")
-        if child.status != "returned":
-            self.facts.record("asks", ask, "child_returned", run,
-                              {"edge": edge, "run": run, "report": report,
-                               "branch": branch})
+        if child.status == "stopped":
+            raise ValueError("stopped child cannot submit")
+        self.facts.record("asks", ask, "child_returned", run,
+                          {"edge": edge, "run": run, "report": report,
+                           "branch": branch,
+                           "generation": child.generation + 1})
         return Signal("child", conversation, ask=ask, parent=parent, edge=edge)

@@ -132,7 +132,8 @@ def test_publish_keeps_dirty_clone_for_salvage(tmp_path: Path) -> None:
     release(alloc)
 
 
-def test_runtime_publishes_child_branch_before_clone_cleanup(tmp_path: Path) -> None:
+def test_runtime_publishes_child_branch_before_clone_cleanup(tmp_path: Path,
+                                                              monkeypatch) -> None:
     repo = _make_git_repo(tmp_path / "repo")
     remote = tmp_path / "remote.git"
     subprocess.run(["git", "init", "--bare", str(remote)], env=_git_env(),
@@ -148,18 +149,31 @@ def test_runtime_publishes_child_branch_before_clone_cleanup(tmp_path: Path) -> 
     binary = tmp_path / "child-shell"
     binary.write_text(
         "#!/usr/bin/env python3\n"
-        "import os, subprocess\nfrom pathlib import Path\n"
+        "import os, subprocess, time\nfrom pathlib import Path\n"
         "os.environ.update(GIT_AUTHOR_NAME='Test', GIT_AUTHOR_EMAIL='t@t.com', "
         "GIT_COMMITTER_NAME='Test', GIT_COMMITTER_EMAIL='t@t.com')\n"
         "subprocess.run(['git', 'switch', '-c', 'brr/the-child'], check=True)\n"
         "Path('child.txt').write_text('saved\\n')\n"
         "subprocess.run(['git', 'add', 'child.txt'], check=True)\n"
-        "subprocess.run(['git', 'commit', '-m', 'child work'], check=True)\n")
+        "subprocess.run(['git', 'commit', '-m', 'child work'], check=True)\n"
+        f"Path({str(tmp_path / 'report.md')!r}).write_text('Status: done\\n')\n"
+        "outbox = Path(os.environ['BRR_OUTBOX_DIR'])\n"
+        "(outbox / 'submit.md.tmp').write_text('---\\nsubmit: true\\n---\\nready\\n')\n"
+        "(outbox / 'submit.md.tmp').rename(outbox / 'submit.md')\n"
+        "time.sleep(0.1)\n")
     binary.chmod(0o755)
     runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
                       runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
                       tick_seconds=0.02)
     runtime.supervisor.register("ask-1", "c", "run-parent", "edge-1", "run-child")
+    returned = runtime.supervisor.returned
+    def checked_returned(*args, **kwargs):
+        published = subprocess.run(
+            ["git", "--git-dir", str(remote), "rev-parse", "refs/heads/brr/the-child"],
+            env=_git_env(), capture_output=True)
+        assert published.returncode == 0, "submit reported before branch publication"
+        return returned(*args, **kwargs)
+    monkeypatch.setattr(runtime.supervisor, "returned", checked_returned)
     result = runtime.once(role="strand")
     assert result is not None and result.returncode == 0
     assert not (repo / ".brr" / "worktrees" / "run-child").exists()
@@ -170,3 +184,7 @@ def test_runtime_publishes_child_branch_before_clone_cleanup(tmp_path: Path) -> 
                                "refs/heads/brr/the-child"], env=_git_env(),
                               capture_output=True, text=True, check=True).stdout.strip()
     assert remote_ref == host_ref
+    submissions = [event for event in runtime.door.pending()
+                   if event["source"] == "spawn_submitted"]
+    assert len(submissions) == 1
+    assert submissions[0]["spawn_submit_generation"] == 1
