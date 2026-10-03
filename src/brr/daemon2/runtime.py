@@ -30,6 +30,7 @@ from .router import Router, UnaddressedLetter
 from .seat import Seat, SeatStore, Signal, WakePredicate, legacy_wake_on
 from .supervisor import Supervisor
 from .transport import GateTransport
+from .controls import ControlMirror
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,7 @@ class Daemon2:
                 (gitops.shared_brr_dir(repo.root) / "inbox",
                  gitops.shared_brr_dir(repo.root) / "responses", repo.label)
                 for repo in self._account_ctx.repos.values())
+        self.controls = ControlMirror(self.runtime_dir, self._account_ctx)
 
     @staticmethod
     def _terminate_runner(run_id: str, *, grace: float = 0.5) -> None:
@@ -944,6 +946,7 @@ class Daemon2:
                     wait.update(resolved=True, outcome=outcome, which=which)
                     state["seat"].resolve_await(
                         state["seat"].read().generation, outcome)
+            control_snapshot = self.controls.tick(state)
             visible = self._visible(
                 state["conversation"], state["event"]["id"],
                 is_child=state["is_child"], run_id=state["run_id"])
@@ -954,7 +957,8 @@ class Daemon2:
                                   run_id=state["run_id"], repo=str(self.repo_root),
                                   runner_name=state["runner_name"],
                                   branch=str(state["event"].get("branch") or ""),
-                                  current_replyable=not state["answered"])
+                                  current_replyable=not state["answered"],
+                                  controls=control_snapshot)
 
     def serve(self, *, stop_when_empty: bool = False,
               role: str = "any") -> list[RunResult]:
@@ -1306,6 +1310,7 @@ class Daemon2:
                 record = seat.read()
                 seat.park(record.generation, why="turn_ended",
                           wake_on=legacy_wake_on("any"))
+            self.controls.finish(state, result.returncode)
             return RunResult(str(event["id"]), run_id, result.returncode,
                              state["answered"], outbox, response)
         finally:

@@ -129,7 +129,8 @@ class FileDoor:
                     await_state: dict[str, Any] | None = None,
                     run_id: str = "", repo: str = "",
                     runner_name: str = "", branch: str = "",
-                    current_replyable: bool = True) -> None:
+                    current_replyable: bool = True,
+                    controls: dict[str, Any] | None = None) -> None:
         visible = [public_event(event) for event in events
                    if event.get("id") != current_event]
         portals.write_live_inbox(outbox_dir, current_event, visible)
@@ -141,6 +142,10 @@ class FileDoor:
         capsule["inbound"].update(current_event=current_event,
                                   current_event_replyable=current_replyable,
                                   events=visible)
+        controls = controls or {}
+        if controls.get("topic"):
+            capsule["inbound"]["current_event_topic"]["confirmed"] = controls["topic"]
+            capsule["run"]["topic"] = controls["topic"]
         capsule["attention"].update(
             pending_event_count=len(visible),
             pending_outbox_file_count=len(FileDoor.outbox_entries(outbox_dir)),
@@ -151,8 +156,10 @@ class FileDoor:
         capsule["outbound"]["pending_outbox_files"] = [
             path.name for path in FileDoor.outbox_entries(outbox_dir)]
         card = outbox_dir / ".card"
-        if card.exists():
+        if card.is_file() and not card.is_symlink():
             capsule["card"].update(active=True, text=card.read_text(encoding="utf-8"))
-        capsule["name"]["written"] = (outbox_dir / ".name").exists()
+        capsule["name"]["written"] = bool(controls.get("name"))
+        if controls.get("pr"):
+            capsule["produce"]["pr"] = controls["pr"]
         capsule["change_token"] = portals.content_token(capsule)
         portals.write_portal_state(outbox_dir, capsule)

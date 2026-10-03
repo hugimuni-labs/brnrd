@@ -1414,3 +1414,55 @@ def test_at_schedule_fires_once_across_serve_restart(tmp_path: Path,
     assert restarted.serve(stop_when_empty=True) == []
     assert len([path for path in restarted.door.event_paths()
                 if protocol._read_event(path)["source"] == "schedule"]) == 1
+
+
+def test_control_card_and_menu_generations_use_retained_mirrors(tmp_path: Path) -> None:
+    from brr import menus, run_progress
+    from brr.run import Run, run_manifest_path
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    runtime = Daemon2(repo, tmp_path / "home", runtime_dir=repo / ".brr")
+    event_path = protocol.create_event(runtime.door.inbox, "telegram", "task",
+                                       conversation_key="telegram:owner")
+    event = runtime.door.get(event_path.stem)
+    outbox = repo / ".brr" / "outbox" / event_path.stem
+    outbox.mkdir(parents=True)
+    (outbox / ".card").write_text("## Now\nWorking\n")
+    (outbox / ".name").write_text("A short name\n")
+    (outbox / ".mood").write_text("thinking\n")
+    (outbox / ".room").write_text("quiet thread\n")
+    (outbox / ".topic").write_text("null\n")
+    (outbox / ".topics").write_text("topics: the-clockwork\n")
+    (outbox / ".promises.jsonl").write_text('{"what":"commit","count":1}\n')
+    (outbox / ".relics.jsonl").write_text('{"kind":"summary","text":"done"}\n')
+    (outbox / ".pr").write_text("https://github.com/org/repo/pull/42\n")
+    menu = {"menu_id": "choice-1", "thread": "telegram:owner",
+            "options": [{"handle": "yes", "label": "Yes"}]}
+    (outbox / "menu.json").write_text(json.dumps(menu))
+    state = {"event": event, "conversation": "telegram:owner",
+             "run_id": "run-control", "outbox": outbox, "is_child": False,
+             "notices": []}
+    controls = runtime.controls.tick(state)
+    assert "## Ledger" in (outbox / ".card").read_text()
+    assert controls["name"] == "A short name"
+    assert controls["mood"] == "thinking"
+    assert controls["room"] == "quiet thread"
+    assert controls["topics"] == ["the-clockwork"]
+    assert controls["pr"] == "42"
+    assert len(controls["promises"]) == len(controls["relics"]) == 1
+    assert Run.from_file(run_manifest_path(repo / ".brr" / "runs",
+                                                "run-control")) is not None
+    assert menus.load_live_menu(repo / ".brr", "telegram:owner")["menu_id"] == "choice-1"
+    view = run_progress.project_run(repo / ".brr", "telegram:owner", "run-control")
+    assert view is not None and "Working" in (view.agent_card_text or "")
+    runtime.controls.tick(state)
+    assert state["notices"] == []
+    menu["options"][0]["label"] = "Changed"
+    (outbox / "menu.json").write_text(json.dumps(menu))
+    runtime.controls.tick(state)
+    assert any("already used for different content" in row["text"]
+               for row in state["notices"])
+    runtime.controls.finish(state, 0)
+    view = run_progress.project_run(repo / ".brr", "telegram:owner", "run-control")
+    assert view is not None and view.state == "succeeded"
