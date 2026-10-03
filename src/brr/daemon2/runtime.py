@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import account, await_verb, config as conf, conversations, course, cut_verb, halt_verb, halts, message_store, prompts, relics, runner
+from .. import account, await_verb, config as conf, conversations, course, cut_verb, halt_verb, halts, message_store, promises, prompts, relics, run_ledger, runner
 from .authority import SignalAuthority
 from .doors import FileDoor, public_event
 from .facts import FactStore
@@ -219,6 +219,70 @@ class Daemon2:
                         f"strand {child.run} is live — its return needs a successor",
                         (child.run.rsplit("-", 1)[-1],)))
         return items
+
+    def _cut_mismatches(self, state: dict[str, Any],
+                        declaration: cut_verb.CutDeclaration) -> list[str]:
+        """Check a bolt against facts the daemon can observe at this drain."""
+        mismatches: list[str] = []
+        declared: dict[str, cut_verb.AskDisposition] = {}
+        for row in declaration.asks:
+            declared.setdefault(row.event, row)
+            declared.setdefault(row.event.rsplit("-", 1)[-1], row)
+        for event in self._visible(state["conversation"], state["event"]["id"],
+                                   is_child=state["is_child"],
+                                   run_id=state["run_id"]):
+            eid = str(event["id"])
+            tail = eid.rsplit("-", 1)[-1]
+            short = f"evt-…{tail}"
+            disposition = declared.get(eid) or declared.get(tail)
+            if disposition is None:
+                mismatches.append(f"{short} undispositioned")
+            elif disposition.disposition == "answered":
+                mismatches.append(f"{short} declared answered but is still pending")
+
+        reported = relics.read_reported(state["outbox"])
+        if not run_ledger.read_run_topics_control(state["outbox"]):
+            if not any(row.get("kind") == "item" for row in reported):
+                mismatches.append(
+                    "topicless: no topic claimed and no item taken — write "
+                    ".topics or take an item")
+        produce: list[dict[str, Any]] | None = None
+        try:
+            produce = relics.collect(
+                self.repo_root,
+                branch=str(state["event"].get("branch") or "") or None,
+                seed_ref=str(state["event"].get("seed_ref") or "") or None,
+                outbox_dir=state["outbox"], commit_run_id=state["run_id"])
+        except Exception:
+            pass  # Unavailable git scope is unknown, not a failed attestation.
+        if produce is not None:
+            if declaration.produce == "none" and produce:
+                counts = relics.counts_by_kind(produce)
+                phrase = ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
+                mismatches.append(f"produce: none declared but {phrase} exist")
+            elif declaration.produce == "attested" and not produce:
+                mismatches.append(
+                    "produce: attested declared but the manifest is empty and "
+                    "nothing auto-derived")
+        shipped = relics.counts_by_kind(produce) if produce is not None else {}
+        plan = promises.blueprint(promises.read(state["outbox"]), shipped)
+        refs = [row.ref.strip().lower() for row in declaration.owed if row.ref]
+        for what, count in sorted(plan.owed.items()):
+            labels = plan.labels.get(what) or []
+            if not labels and not declaration.owed:
+                mismatches.append(f"owed {count} {what}(s) with no carried row")
+            for label in labels:
+                norm = label.strip().lower()
+                if not any(norm in ref or ref in norm for ref in refs):
+                    mismatches.append(f"owed: {label!r} has no carried row naming it")
+        children = (self.supervisor.children(state["ask"]).values()
+                    if state["ask"] else ())
+        named_children = {row.run for row in declaration.strands}
+        for child in children:
+            if (child.parent == state["run_id"] and child.status == "running"
+                    and child.run not in named_children):
+                mismatches.append(f"strands: {child.run} is live and undispositioned")
+        return mismatches
 
     def _handle_outbox(self, state: dict[str, Any], path: Path) -> None:
         verb, fm, body = self.door.parse_outbox(path)
@@ -435,23 +499,55 @@ class Daemon2:
         elif verb == "cut":
             declaration, error = cut_verb.parse_cut(fm)
             if error:
-                raise ValueError(error)
-            if not body:
-                raise ValueError("cut: body is the reply the correspondent reads — must be non-empty")
-            # The body is the reply for this stretch.
-            if not state["answered"]:
+                self._notice(state, f"cut dropped: {error}", kind="dropped",
+                             source_file=path.name, verb="cut")
+                return
+            mismatches = self._cut_mismatches(state, declaration)
+            if mismatches:
+                attempts = int(state.get("cut_bounces") or 0) + 1
+                state["cut_bounces"] = attempts
+                if attempts < 3:
+                    self._notice(state, "cut bounced: " + " · ".join(mismatches),
+                                 source_file=path.name, verb="cut")
+                    return
+                plural = "s" if len(mismatches) != 1 else ""
+                body = ((body.rstrip("\n") + "\n\n") if body else "") + (
+                    f"---\ndaemon: {len(mismatches)} check{plural} unresolved — "
+                    + " · ".join(mismatches))
+            self.facts.record(
+                "seats", state["conversation"], "cut_accepted", state["run_id"],
+                {"run": state["run_id"],
+                 "attempts": int(state.get("cut_bounces") or 0)
+                 + (0 if mismatches else 1),
+                 "declaration": cut_verb.durable_declaration(declaration,
+                                                               dissent=mismatches)})
+            if body and not state["answered"]:
                 self._reply(state, event_id, body)
-            # Stage via message_store if we have an account context.
             record = seat.read()
             if record.state == "running":
+                handoffs: list[Any] = []
+                if state["ask"]:
+                    children = self.supervisor.children(state["ask"])
+                    for row in declaration.strands:
+                        child = next((c for c in children.values()
+                                      if c.run == row.run), None)
+                        if (child and child.parent == state["run_id"]
+                                and child.status == "running"
+                                and row.disposition.lower().startswith("handoff")):
+                            handoffs.append(child)
                 seat.checkpoint(record.generation,
                                 data={"run": state["run_id"],
                                       "last_event": event_id},
-                                obligations=(),
+                                obligations=tuple(f"strand:{c.run}" for c in handoffs),
                                 native_session=None)
                 record = seat.read()
-                seat.park(record.generation, why="cut",
-                          wake_on=legacy_wake_on("any"))
+                seat.park(
+                    record.generation,
+                    why="strands" if handoffs else "cut",
+                    wake_on=(legacy_wake_on(
+                        "strands", parent=state["run_id"],
+                        edges=tuple(c.edge for c in handoffs))
+                        if handoffs else legacy_wake_on("any")))
             state["cut"] = True
         elif verb == "gate":
             gate_name = str(fm.get("gate") or "").strip()

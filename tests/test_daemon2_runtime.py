@@ -708,6 +708,7 @@ def test_cut_parks_seat_and_replies(tmp_path: Path) -> None:
         "#!/usr/bin/env python3\n"
         "import os\nfrom pathlib import Path\n"
         "outbox = Path(os.environ['BRR_OUTBOX_DIR'])\n"
+        "(outbox / '.topics').write_text('daemon\\n')\n"
         "def stage(name, body):\n"
         "    tmp = outbox / (name + '.tmp')\n"
         "    tmp.write_text(body, encoding='utf-8')\n"
@@ -726,6 +727,57 @@ def test_cut_parks_seat_and_replies(tmp_path: Path) -> None:
     assert reply is not None and "Phase complete" in reply
     seat = runtime.seats.read("cut-conv")
     assert seat.state == "parked"
+
+
+def test_cut_third_bounce_accepts_with_dissent(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    event = protocol.create_event(home / "dispatch" / "inbox", "telegram",
+                                  "cut", conversation_key="c")
+    cut = "---\ncut: true\n---\nDone.\n"
+    binary = tmp_path / "shell"
+    _verb_shell(binary, ("cut-1.md", cut), ("cut-2.md", cut), ("cut-3.md", cut))
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    result = runtime.once()
+    assert result is not None and result.answered
+    response = protocol.read_response(home / "dispatch" / "responses", event.stem)
+    assert "daemon: 1 check unresolved" in response
+    notices = json.loads((result.outbox / "portal-state.json").read_text())["notices"]
+    assert sum("cut bounced:" in row["text"] for row in notices) == 2
+    accepted = [fact for fact in runtime.facts.read("seats", "c")
+                if fact.kind == "cut_accepted"]
+    assert len(accepted) == 1 and accepted[0].data["attempts"] == 3
+
+
+def test_cut_handoff_parks_on_live_child_edge(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    event = protocol.create_event(home / "dispatch" / "inbox", "telegram",
+                                  "cut", conversation_key="c", ask_id="ask-1")
+    binary = tmp_path / "shell"
+    _verb_shell(binary,
+                (".topics", "the-clockwork\n"),
+                ("cut.md", "---\ncut: true\nstrands:\n  run-child: handoff\n"
+                 "---\nChild remains live.\n"))
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    runtime._run_id = lambda: "run-parent"
+    runtime.supervisor.register("ask-1", "c", "run-parent", "edge-1", "run-child")
+    result = runtime.once()
+    assert result is not None and result.answered
+    seat = runtime.seats.read("c")
+    assert seat.state == "parked" and seat.why == "strands"
+    assert any(p.kind == "C" and p.params["edge"] == "edge-1"
+               for p in seat.wake_on)
+    assert "strand:run-child" in seat.obligations
+    assert runtime.door.get(event.stem)["status"] == "done"
 
 
 def test_gate_and_thread_stage_via_message_store(tmp_path: Path) -> None:

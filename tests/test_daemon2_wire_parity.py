@@ -109,3 +109,38 @@ def test_halt_replays_old_bounce_fixture(tmp_path: Path, monkeypatch) -> None:
     assert state["answered"]
     assert seat.read().state == "ended"
     assert protocol.read_response(runtime.door.responses, task.event_id) == "bye"
+
+
+@pytest.mark.parametrize("name", [
+    "cut_minimal_bolt", "cut_bounced_topicless", "cut_parse_error",
+])
+def test_cut_replays_existing_golden(tmp_path: Path, name: str) -> None:
+    brr_dir, inbox, responses, outbox, own_id = _base(tmp_path)
+    SCENARIOS[name]["stage"](inbox, outbox, own_id)
+    golden = json.loads((GOLDEN_DIR / f"{name}.json").read_text())
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    runtime = Daemon2(repo, tmp_path / "home", runtime_dir=brr_dir)
+    runtime.door = FileDoor(inbox, responses, runtime.letters)
+    own = runtime.door.get(own_id)
+    assert own is not None
+    address = runtime.router.route_or_triage(own)
+    seat = Seat(runtime.seats, address.conversation,
+                authorize=runtime.authority.allowed)
+    seat.start(0, run_id="run-parent")
+    runtime.letters.ingest(own_id, "pending")
+    claim = runtime.letters.claim(own_id, "run-parent", 60, now=time.time())
+    assert claim is not None
+    state = {
+        "event": runtime.door.get(own_id), "conversation": address.conversation,
+        "ask": address.ask, "parent": None, "edge": None,
+        "claim": claim, "seat": seat, "run_id": "run-parent", "outbox": outbox,
+        "await": None, "notices": [], "answered": False,
+        "runner_name": "fake", "is_child": False,
+        "claims": {own_id: claim}, "claim_lock": threading.Lock(), "cut": False,
+    }
+    runtime._tick(state)
+    assert len(list(responses.glob("*.md"))) == golden["promoted"]
+    expected = [row["text"] for key, rows in golden["tree"].items()
+                if key.endswith("/.notices.jsonl") for row in rows]
+    assert [row["text"] for row in state["notices"]] == expected
