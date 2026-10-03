@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from brr.daemon2.placement import Allocation, PlacementError, allocate, release
+from brr import protocol
+from brr.daemon2.placement import Allocation, PlacementError, allocate, publish, release
+from brr.daemon2.runtime import Daemon2
 
 
 def _git_env() -> dict[str, str]:
@@ -88,3 +90,83 @@ def test_git_env_pins_to_clone_not_host(tmp_path: Path) -> None:
         assert "strand work" in clone_log.stdout
     finally:
         release(alloc)
+
+
+def test_publish_lands_actual_branch_and_pushes_before_release(tmp_path: Path) -> None:
+    repo = _make_git_repo(tmp_path / "repo")
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], env=_git_env(),
+                   capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", str(remote)],
+                   env=_git_env(), capture_output=True, check=True)
+    alloc = allocate(repo, "run-publish")
+    env = {**_git_env(), **alloc.env()}
+    subprocess.run(["git", "switch", "-c", "brr/the-child"], env=env,
+                   cwd=alloc.path, capture_output=True, check=True)
+    (alloc.path / "work.txt").write_text("kept\n")
+    subprocess.run(["git", "add", "work.txt"], env=env, cwd=alloc.path,
+                   capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "child work"], env=env, cwd=alloc.path,
+                   capture_output=True, check=True)
+    result = publish(repo, alloc)
+    assert (result.branch, result.landed, result.pushed, result.released) == (
+        "brr/the-child", True, True, True)
+    assert not alloc.path.exists()
+    remote_ref = subprocess.run(["git", "--git-dir", str(remote), "rev-parse",
+                                 "refs/heads/brr/the-child"], env=_git_env(),
+                                capture_output=True, text=True, check=True).stdout.strip()
+    host_ref = subprocess.run(["git", "-C", str(repo), "rev-parse",
+                               "refs/heads/brr/the-child"], env=_git_env(),
+                              capture_output=True, text=True, check=True).stdout.strip()
+    assert remote_ref == host_ref
+
+
+def test_publish_keeps_dirty_clone_for_salvage(tmp_path: Path) -> None:
+    repo = _make_git_repo(tmp_path / "repo")
+    alloc = allocate(repo, "run-dirty")
+    (alloc.path / "unsaved.txt").write_text("partial work\n")
+    result = publish(repo, alloc)
+    assert result.landed and not result.released
+    assert "uncommitted" in result.detail
+    assert (alloc.path / "unsaved.txt").read_text() == "partial work\n"
+    release(alloc)
+
+
+def test_runtime_publishes_child_branch_before_clone_cleanup(tmp_path: Path) -> None:
+    repo = _make_git_repo(tmp_path / "repo")
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], env=_git_env(),
+                   capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", str(remote)],
+                   env=_git_env(), capture_output=True, check=True)
+    home = tmp_path / "home"
+    protocol.create_event(home / "dispatch" / "inbox", "spawn", "work",
+                          conversation_key="c", ask_id="ask-1",
+                          parent_run_id="run-parent", spawn_edge="edge-1",
+                          child_run_id="run-child", branch="brr/the-child",
+                          report=str(tmp_path / "report.md"))
+    binary = tmp_path / "child-shell"
+    binary.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, subprocess\nfrom pathlib import Path\n"
+        "os.environ.update(GIT_AUTHOR_NAME='Test', GIT_AUTHOR_EMAIL='t@t.com', "
+        "GIT_COMMITTER_NAME='Test', GIT_COMMITTER_EMAIL='t@t.com')\n"
+        "subprocess.run(['git', 'switch', '-c', 'brr/the-child'], check=True)\n"
+        "Path('child.txt').write_text('saved\\n')\n"
+        "subprocess.run(['git', 'add', 'child.txt'], check=True)\n"
+        "subprocess.run(['git', 'commit', '-m', 'child work'], check=True)\n")
+    binary.chmod(0o755)
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    runtime.supervisor.register("ask-1", "c", "run-parent", "edge-1", "run-child")
+    result = runtime.once(role="strand")
+    assert result is not None and result.returncode == 0
+    assert not (repo / ".brr" / "worktrees" / "run-child").exists()
+    remote_ref = subprocess.run(["git", "--git-dir", str(remote), "rev-parse",
+                                 "refs/heads/brr/the-child"], env=_git_env(),
+                                capture_output=True, text=True, check=True).stdout.strip()
+    host_ref = subprocess.run(["git", "-C", str(repo), "rev-parse",
+                               "refs/heads/brr/the-child"], env=_git_env(),
+                              capture_output=True, text=True, check=True).stdout.strip()
+    assert remote_ref == host_ref

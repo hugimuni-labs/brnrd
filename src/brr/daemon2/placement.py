@@ -46,6 +46,15 @@ class PlacementError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class Publication:
+    branch: str
+    landed: bool
+    pushed: bool
+    released: bool
+    detail: str = ""
+
+
 def allocate(repo_root: Path, run_id: str, *, base_ref: str = "HEAD") -> Allocation:
     """Create a fresh clone worktree for *run_id* branched from *base_ref*.
 
@@ -73,14 +82,43 @@ def release(allocation: Allocation) -> None:
             f"failed to release worktree {allocation.path}: {exc}") from exc
 
 
-def land(repo_root: Path, allocation: Allocation) -> gitops.BranchUpdateResult:
+def land(repo_root: Path, allocation: Allocation, *,
+         branch: str | None = None) -> gitops.BranchUpdateResult:
     """Merge the strand's branch back into the host checkout.
 
     Returns the organ's own ``BranchUpdateResult``; callers interpret it
     (fast-forward vs conflict vs already-merged).
     """
     try:
-        return worktree.land_clone_branch(repo_root, allocation.path, allocation.branch)
+        return worktree.land_clone_branch(repo_root, allocation.path,
+                                          branch or allocation.branch)
     except Exception as exc:
         raise PlacementError(
             f"failed to land branch {allocation.branch}: {exc}") from exc
+
+
+def publish(repo_root: Path, allocation: Allocation) -> Publication:
+    """Land the clone's actual HEAD branch before any destructive cleanup.
+
+    A dirty clone or failed land/push stays on disk for salvage. A successful
+    local land is sufficient when the checkout has no remote.
+    """
+    branch = worktree.current_branch(allocation.path)
+    if not branch:
+        return Publication("", False, False, False, "clone has no branch")
+    dirty = worktree.has_uncommitted_changes(allocation.path)
+    result = land(repo_root, allocation, branch=branch)
+    if not result.success:
+        return Publication(branch, False, False, False, result.detail)
+    remote = gitops.remote_url(repo_root, "origin")
+    pushed = False
+    if remote:
+        push = gitops.push_branch(repo_root, "origin", branch)
+        if not push:
+            return Publication(branch, True, False, False, str(push.detail))
+        pushed = True
+    if dirty:
+        return Publication(branch, True, pushed, False,
+                           "clone has uncommitted changes")
+    release(allocation)
+    return Publication(branch, True, pushed, True)

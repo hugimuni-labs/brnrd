@@ -1068,9 +1068,15 @@ class Daemon2:
                 finally:
                     if strand_alloc is not None:
                         try:
-                            _placement.release(strand_alloc)
-                        except _placement.PlacementError:
-                            pass  # best-effort; removal failure is not fatal
+                            publication = _placement.publish(self.repo_root, strand_alloc)
+                            if not publication.landed or not publication.released:
+                                self._notice(
+                                    state, f"strand clone retained at {strand_alloc.path}: "
+                                    f"{publication.detail or 'branch publication incomplete'}",
+                                    kind="advisory", verb="placement")
+                        except _placement.PlacementError as exc:
+                            self._notice(state, f"strand clone retained: {exc}",
+                                         kind="advisory", verb="placement")
             finally:
                 done.set()
                 thread.join(timeout=5)
