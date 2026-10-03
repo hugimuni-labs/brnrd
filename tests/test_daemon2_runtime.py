@@ -176,6 +176,125 @@ def test_pending_unaddressed_letter_gets_visible_triage_seat(tmp_path: Path) -> 
                for notice in portal["notices"])
 
 
+def _spawn_shell(path: Path, branch: str, report: str) -> None:
+    """A fake Shell that stages a spawn: directive and replies."""
+    script = f"""#!/usr/bin/env python3
+import os, time
+from pathlib import Path
+
+outbox = Path(os.environ["BRR_OUTBOX_DIR"])
+event_id = os.environ["BRR_EVENT_ID"]
+
+def stage(name, body):
+    tmp = outbox / (name + ".tmp")
+    tmp.write_text(body, encoding="utf-8")
+    tmp.rename(outbox / name)
+
+# Stage a spawn: directive (item/ask left empty — no ask in this simple test)
+stage("spawn.md", (
+    "---\\n"
+    "spawn: true\\n"
+    f"branch: {branch}\\n"
+    f"report: {report}\\n"
+    "---\\n"
+    "Please do the child work.\\n"
+))
+time.sleep(0.1)
+stage("reply.md", "---\\nevent: " + event_id + "\\n---\\nParent sent spawn.\\n")
+"""
+    path.write_text(script, encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+def _submit_shell(path: Path, report_path: str, branch: str) -> None:
+    """A fake child Shell that creates the report file and stages submit:."""
+    script = f"""#!/usr/bin/env python3
+import os, time
+from pathlib import Path
+
+outbox = Path(os.environ["BRR_OUTBOX_DIR"])
+
+def stage(name, body):
+    tmp = outbox / (name + ".tmp")
+    tmp.write_text(body, encoding="utf-8")
+    tmp.rename(outbox / name)
+
+# Create the report file so submit: can stat it
+report = Path("{report_path}")
+report.parent.mkdir(parents=True, exist_ok=True)
+report.write_text("Status: done\\nGeneration 1 child work.\\n", encoding="utf-8")
+
+stage("submit.md", "---\\nsubmit: true\\n---\\nChild work complete.\\n")
+time.sleep(0.1)
+"""
+    path.write_text(script, encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+def test_spawn_to_submit_end_to_end(tmp_path: Path) -> None:
+    """Parent stages spawn: → child event created → child runs and submits → spawn_submitted."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test repo\n", encoding="utf-8")
+
+    report_path = str(tmp_path / "reports" / "child-report.md")
+    branch = "brr/child-test"
+
+    parent_shell = tmp_path / "parent-shell"
+    child_shell = tmp_path / "child-shell"
+    _spawn_shell(parent_shell, branch, report_path)
+    _submit_shell(child_shell, report_path, branch)
+
+    inbox = home / "dispatch" / "inbox"
+    parent_event = protocol.create_event(
+        inbox, "telegram", "Spawn a child",
+        conversation_key="telegram:owner", trust_tier="owner", ask_id="ask-main")
+
+    # Runtime with no item: the parent shell stages spawn: without an item—
+    # override to permit an empty ask address by using ask_id from the event.
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake",
+                      runner_config={"runner_cmd": [str(parent_shell)]},
+                      tick_seconds=0.02)
+
+    parent_result = runtime.once()
+    assert parent_result is not None and parent_result.answered, (
+        f"parent not answered; returncode={parent_result and parent_result.returncode}")
+
+    # A child spawn: event should now be pending.
+    pending = runtime.door.pending()
+    child_events = [e for e in pending if e.get("source") == "spawn"]
+    assert child_events, "no child spawn event created after parent staged spawn:"
+    child_event = child_events[0]
+    assert child_event.get("branch") == branch
+    assert child_event.get("report") == report_path
+
+    # Run the child strand.
+    child_runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                            runner_name="fake",
+                            runner_config={"runner_cmd": [str(child_shell)]},
+                            tick_seconds=0.02)
+    child_result = child_runtime.once(role="strand")
+    assert child_result is not None and child_result.answered, (
+        f"child not answered; returncode={child_result and child_result.returncode}")
+
+    # spawn_submitted event should exist in the inbox.
+    all_events = list(inbox.glob("*.md"))
+    submitted = [e for e in all_events
+                 if protocol._read_event(e).get("source") == "spawn_submitted"]
+    assert submitted, "no spawn_submitted event after child submit:"
+
+    # Supervisor should record the return.
+    ask_id = child_event.get("ask_id") or ""
+    children = runtime.supervisor.children(ask_id)
+    assert children, f"supervisor has no children for ask={ask_id!r}"
+    child_rec = next(iter(children.values()))
+    assert child_rec.status == "returned"
+    assert child_rec.branch == branch
+    assert child_rec.report == report_path
+
+
 def _sleep_shell(path: Path, *, seconds: float = 1) -> None:
     path.write_text(
         "#!/usr/bin/env python3\n"
