@@ -441,7 +441,9 @@ def _sleep_shell(path: Path, *, seconds: float = 1) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
-def _wait_processing(runtime: Daemon2, path: Path, timeout: float = 5) -> None:
+# Full gate runs several subprocess-heavy tests in parallel; prompt assembly
+# can take longer there than a fake Shell's own execution.
+def _wait_processing(runtime: Daemon2, path: Path, timeout: float = 30) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if runtime.door.get(path.stem)["status"] == "processing":
@@ -470,7 +472,7 @@ def test_long_shell_renews_letter_claim_and_blocks_second_holder(tmp_path: Path)
         time.sleep(0.6)
         assert runtime.letters.claim(event.stem, "rival", 0.3,
                                      now=time.time()) is None
-        thread.join(timeout=10)
+        thread.join(timeout=30)
         assert not thread.is_alive()
         assert output[0] is not None and output[0].answered
     finally:
@@ -497,12 +499,12 @@ def test_lapsed_self_lease_kills_shell_and_leaves_recoverable_seat(tmp_path: Pat
     try:
         _wait_processing(runtime, event)
         run_id = runtime.seats.read("c").run_id
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 30
         while runner.live_pid_for_label(run_id) is None and time.monotonic() < deadline:
             time.sleep(0.02)
         assert runner.live_pid_for_label(run_id) is not None
         runtime.leases.clock = lambda: time.time() + 10
-        thread.join(timeout=10)
+        thread.join(timeout=30)
         assert not thread.is_alive()
         assert output[0] is not None and not output[0].answered
         assert output[0].returncode != 0
@@ -1171,7 +1173,7 @@ def test_two_serve_processes_share_one_self_and_take_over_after_kill9(
                                   stderr=subprocess.DEVNULL) for _ in range(2)]
     self_path = home / "daemon2" / "leases" / "self.json"
 
-    def until(predicate, timeout: float = 8) -> None:
+    def until(predicate, timeout: float = 30) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if predicate():
@@ -1201,7 +1203,7 @@ def test_two_serve_processes_share_one_self_and_take_over_after_kill9(
             if process.poll() is None:
                 process.terminate()
         for process in processes:
-            process.wait(timeout=8)
+            process.wait(timeout=30)
 
 
 def test_gate_transport_sends_once_across_restart_and_fences_stale_gen(
@@ -1323,7 +1325,7 @@ def test_recorded_telegram_inbound_routes_and_answers_through_serve(
 
     def one_gate_turn(gate_brr, inbox, responses):
         telegram._loop_once(gate_brr, inbox, responses)
-        deadline = time.monotonic() + 8
+        deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             events = list(inbox.glob("*.md"))
             if events and protocol.read_response(responses, events[0].stem):
@@ -1335,7 +1337,7 @@ def test_recorded_telegram_inbound_routes_and_answers_through_serve(
     monkeypatch.setattr(telegram, "run_loop", one_gate_turn)
     thread = threading.Thread(target=runtime.serve, daemon=True)
     thread.start()
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 30
     try:
         while not sent and time.monotonic() < deadline:
             time.sleep(0.02)
@@ -1352,7 +1354,7 @@ def test_recorded_telegram_inbound_routes_and_answers_through_serve(
             "sends", "transport:telegram:" + events[0].stem + ":terminal"))
     finally:
         runtime.stop()
-        thread.join(timeout=8)
+        thread.join(timeout=30)
         assert not thread.is_alive()
 
 
