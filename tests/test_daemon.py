@@ -7448,7 +7448,6 @@ def test_start_settles_event_done_and_records_run_outcome_on_error(
     event["_path"].write_text(
         "---\nid: evt-err\nstatus: pending\n---\nhelp\n", encoding="utf-8",
     )
-    statuses: list[str] = []
     pending_calls: list[int] = []
 
     monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
@@ -7475,7 +7474,6 @@ def test_start_settles_event_done_and_records_run_outcome_on_error(
         raise StopIteration
 
     monkeypatch.setattr(daemon.protocol, "list_pending", fake_list_pending)
-    monkeypatch.setattr(daemon.protocol, "set_status", lambda _ev, status: statuses.append(status))
     monkeypatch.setattr(
         daemon,
         "_run_worker",
@@ -7487,8 +7485,9 @@ def test_start_settles_event_done_and_records_run_outcome_on_error(
     with pytest.raises(StopIteration):
         daemon.start(tmp_path)
 
-    assert statuses == ["processing", "done"]
-    assert event.get("run_outcome") == "error"
+    settled = protocol._read_event(event["_path"])
+    assert settled["status"] == "done"
+    assert settled["run_outcome"] == "error"
 
 
 def _seed_trace_dir(brr_dir: Path, rel: str) -> Path:

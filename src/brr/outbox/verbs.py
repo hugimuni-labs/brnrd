@@ -234,6 +234,24 @@ def handle_halt(f: OutboxFile) -> Handled:
             # face on it — and carry what it went ahead over, permanently,
             # as the record's own dissent.
             task.meta["halt_bounces"] = bounces + 1
+        # Acceptance survives the Shell/daemon dying before the worker tail.
+        # Only this seat's lead letter is marked; pending siblings belong to
+        # the next seat. Keep status processing until the announcement is
+        # queued, so the gate cannot close its delivery lane ahead of it.
+        halt_event, _responses, _ambiguous = daemon._resolve_event_target(
+            f.ctx.address_sources, event_id,
+        )
+        if halt_event is not None:
+            try:
+                protocol.update_event_meta(halt_event, run_outcome=daemon.HALTED_STATUS)
+            except OSError:
+                daemon._record_outbox_notice(
+                    outbox_dir,
+                    "halt refused: could not mark the seat's letter — retry the halt",
+                    kind="refused", lifetime="run", source_file=fpath.name,
+                )
+                daemon._retire_outbox_staging(fpath)
+                return _handled(f, 'halt', promoted)
         task.meta["pending_halt"] = daemon._halt_spec(
             task, declaration, open_items, dissent=unnamed,
         )
