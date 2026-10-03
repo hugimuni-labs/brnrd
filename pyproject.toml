@@ -56,6 +56,7 @@ include = ["brr*", "brnrd*"]
 
 [tool.setuptools.package-data]
 brr = ["AGENTS.md", "LICENSE", "Dockerfile", "prompts/*.md", "templates/*.md", "docs/*.md", "gates/README.md", "diffense/template.html", "data/*.json", "states/*.yaml"]
+"brr.self" = ["README.md", "templates/*", "templates/*/*.md"]
 "brr.daemon2" = ["portal_shape.json", "states/*.yaml"]
 # `legal/*.txt` is not documentation: it is the byte-exact text a
 # `terms_acceptances.sha256` resolves back to (#735). Ship it or an installed
@@ -105,6 +106,7 @@ dev = ["pytest>=7.0", "pytest-xdist>=3", "pyyaml>=6", "ruff>=0.16", "brnrd[backe
 [project.scripts]
 brnrd = "brr.cli:main"
 brnrd-console = "brr.operator_console:main"
+self = "brr.self.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
