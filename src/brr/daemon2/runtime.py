@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import account, await_verb, config as conf, conversations, course, cut_verb, halt_verb, halts, message_store, promises, prompts, protocol, relics, run_ledger, runner, trust
+from .. import account, await_verb, closekeyword, config as conf, conversations, course, cut_verb, gates, halt_verb, halts, message_store, promises, prompts, protocol, relics, run_ledger, runner, trust
 from .authority import SignalAuthority
 from .doors import FileDoor, public_event
 from .facts import FactStore
@@ -306,6 +306,16 @@ class Daemon2:
             return None, "conversation has no usable gate address"
         return latest, None
 
+    def _gate_available(self, gate: str) -> bool:
+        source = "github" if gate == "forge" else gate
+        if source not in gates.BUILTIN_GATES:
+            return False
+        try:
+            configured = getattr(gates.import_gate(source), "is_configured", None)
+            return bool(configured and configured(self.runtime_dir))
+        except (ImportError, OSError):
+            return False
+
     def _handle_outbox(self, state: dict[str, Any], path: Path) -> None:
         verb, fm, body = self.door.parse_outbox(path)
         event_id = state["event"]["id"]
@@ -399,7 +409,6 @@ class Daemon2:
             child_run = self._run_id()
             self.supervisor.register(ask, state["conversation"], state["run_id"],
                                      edge, child_run)
-            from .. import protocol
             protocol.create_event(
                 self.door.inbox, "spawn", body,
                 conversation_key=state["conversation"], ask_id=ask,
@@ -420,7 +429,6 @@ class Daemon2:
                 state["ask"], state["conversation"], state["parent"],
                 state["edge"], state["run_id"],
                 report=report, branch=branch)
-            from .. import protocol
             protocol.create_event(
                 self.door.inbox, "spawn_submitted", body or "Strand submitted",
                 conversation_key=state["conversation"], ask_id=state["ask"],
@@ -458,8 +466,7 @@ class Daemon2:
                 raise ValueError(f"to: {target!r} is not a child of this conversation")
             if child.status != "running":
                 raise ValueError(f"to: child {target!r} is not running (status={child.status!r})")
-            from .. import protocol as _proto
-            _proto.create_event(
+            protocol.create_event(
                 self.door.inbox, "dispatch_message", body,
                 conversation_key=child.conversation,
                 spawn_message_for_run=child.run,
@@ -489,7 +496,6 @@ class Daemon2:
                    f"The work stops here. What would pick it back up:\n{declaration.resumable}"))
             successor = ""
             if declaration.carry:
-                from .. import protocol
                 # Mint before parking: after a crash at any later instruction
                 # the brief is still a pending letter, not an unwakeable seat.
                 successor = protocol.create_event(
@@ -575,6 +581,50 @@ class Daemon2:
             gate_name = str(fm.get("gate") or "").strip()
             if not gate_name:
                 raise ValueError("gate: requires a gate name")
+            if gate_name == "forge":
+                if not self._gate_available(gate_name):
+                    self._notice(state, "gate message dropped: 'forge' (resolved to "
+                                 "'github') is not deliverable on this account; "
+                                 "the message was NOT delivered",
+                                 kind="dropped", source_file=path.name, verb="gate")
+                    return
+                head = str(fm.get("head") or "").strip()
+                base = str(fm.get("base") or "").strip()
+                title = str(fm.get("title") or "").strip()
+                if not all((head, base, title, body)):
+                    raise ValueError("gate: forge requires head, base, title and body")
+                findings = closekeyword.check(
+                    body, channel=closekeyword.PR_BODY.label)
+                if findings:
+                    self._notice(state, closekeyword.render(
+                        findings, channel=closekeyword.PR_BODY.label),
+                        source_file=path.name, verb="gate")
+                    return
+                prior = next((event for event in (
+                    protocol._read_event(p) for p in self.door.inbox.glob("*.md"))
+                    if event and event.get("source") == "github"
+                    and event.get("run_id") == state["run_id"]
+                    and event.get("source_ref") == path.name), None)
+                if prior is None:
+                    synthetic = protocol.create_event(
+                        self.door.inbox, "github", "", status="done",
+                        github_action="pull_request", head=head, base=base,
+                        title=title, run_id=state["run_id"],
+                        source_ref=path.name,
+                        repo_label=str(state["event"].get("repo_label") or ""))
+                    target = synthetic.stem
+                else:
+                    target = str(prior["id"])
+                protocol.write_response(self.door.responses, target, body)
+                (state["outbox"] / ".forge-handoff").write_text(
+                    f"event: {target}\nhead: {head}\n", encoding="utf-8")
+                if self._account_ctx is not None:
+                    message_store.stage(
+                        self._account_ctx,
+                        repo_label=str(state["event"].get("repo_label") or ""),
+                        run_id=state["run_id"], body=body, kind="outbound",
+                        target_gate="forge", source_ref=path.name)
+                return
             if self._account_ctx is None:
                 raise ValueError("gate: requires an account context — no account configured")
             message_store.stage(
@@ -708,7 +758,6 @@ class Daemon2:
         heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
         heartbeat_thread.start()
         try:
-            from .. import protocol
             if not self.leases.authorize(claim.lease):
                 return None
             seat_address = (f"{address.conversation}#strand:{run_id}"

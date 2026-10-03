@@ -891,3 +891,28 @@ def test_thread_targets_closed_owner_inbound(tmp_path: Path) -> None:
     assert stage.call_args.kwargs["target_thread"] == key
     assert stage.call_args.kwargs["target_gate"] == "cloud"
     assert protocol._read_event(closed)["status"] == "delivered"
+
+
+def test_forge_handoff_uses_existing_github_event_wire(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    protocol.create_event(home / "dispatch" / "inbox", "telegram", "open PR",
+                          conversation_key="c", repo_label="org/repo")
+    binary = tmp_path / "shell"
+    _verb_shell(binary, ("pr.md", "---\ngate: forge\nhead: brr/feat-x\n"
+                         "base: main\ntitle: Review feat-x\n---\nprojected body\n"))
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    runtime._gate_available = lambda gate: gate == "forge"
+    result = runtime.once()
+    assert result is not None
+    done = protocol.list_done(home / "dispatch" / "inbox", "github")
+    assert len(done) == 1
+    assert done[0]["github_action"] == "pull_request"
+    assert done[0]["head"] == "brr/feat-x"
+    assert protocol.read_response(home / "dispatch" / "responses",
+                                  done[0]["id"]) == "projected body"
+    assert done[0]["id"] in (result.outbox / ".forge-handoff").read_text()
