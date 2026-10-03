@@ -934,7 +934,7 @@ class Daemon2:
 
     def serve(self, *, stop_when_empty: bool = False,
               role: str = "any") -> list[RunResult]:
-        """Dispatch letters in a loop under a machine-level self-lease.
+        """Dispatch letters while holding the account self lease.
 
         The lease TTL is the kill-9 recovery window: if this process dies
         unexpectedly, a new process can re-acquire the lease after at most
@@ -951,25 +951,39 @@ class Daemon2:
             raise ValueError("role must be any, resident or strand")
         self._stop_serve = threading.Event()
         machine = f"{socket.gethostname()}:{os.getpid()}"
-        self_lease = self.leases.acquire(
-            "machine", machine, self.lease_ttl_seconds)
-        if self_lease is None:
-            # Another process already holds the machine lease.
+        machine_lease = self.leases.acquire(
+            "machine:" + machine, machine, self.lease_ttl_seconds)
+        if machine_lease is None:
             return []
+        self_lease: Lease | None = None
+        lease_lock = threading.Lock()
 
-        def _renew_self() -> None:
+        def _renew_serve() -> None:
             interval = max(0.01, self.lease_ttl_seconds / 3)
             while not self._stop_serve.wait(interval):
-                if self.leases.renew(self_lease, self.lease_ttl_seconds) is None:
+                if self.leases.renew(machine_lease, self.lease_ttl_seconds) is None:
                     self._stop_serve.set()
                     return
+                with lease_lock:
+                    if (self_lease is not None
+                            and self.leases.renew(self_lease, self.lease_ttl_seconds) is None):
+                        self._stop_serve.set()
+                        return
 
-        renew_thread = threading.Thread(target=_renew_self, daemon=True)
+        renew_thread = threading.Thread(target=_renew_serve, daemon=True)
         renew_thread.start()
         results: list[RunResult] = []
         try:
             while not self._stop_serve.is_set():
-                result = self.once(role=role)
+                with lease_lock:
+                    if self_lease is None and role != "strand":
+                        self_lease = self.leases.acquire(
+                            "self", machine, self.lease_ttl_seconds)
+                    held_self = self_lease
+                # A follower can still run its own strands. It cannot start
+                # a resident body until the account's self lease lapses.
+                dispatch_role = role if held_self is not None or role == "strand" else "strand"
+                result = self.once(role=dispatch_role, self_lease=held_self)
                 if result is not None:
                     results.append(result)
                 else:
@@ -978,7 +992,10 @@ class Daemon2:
                     self._stop_serve.wait(self.tick_seconds)
         finally:
             self._stop_serve.set()
-            self.leases.release(self_lease)
+            renew_thread.join(timeout=2)
+            if self_lease is not None:
+                self.leases.release(self_lease)
+            self.leases.release(machine_lease)
         return results
 
     def stop(self) -> None:
@@ -986,7 +1003,8 @@ class Daemon2:
         if hasattr(self, "_stop_serve"):
             self._stop_serve.set()
 
-    def once(self, *, role: str = "any") -> RunResult | None:
+    def once(self, *, role: str = "any",
+             self_lease: Lease | None = None) -> RunResult | None:
         if role not in {"any", "resident", "strand"}:
             raise ValueError("role must be any, resident or strand")
         events = self.door.pending()
@@ -1003,8 +1021,12 @@ class Daemon2:
             selected_runner = runner_choice.name
             run_id = str(event.get("child_run_id") or self._run_id())
             execution_key = ("strand:" + str(event["id"])) if is_child else "self"
-            execution_lease = self.leases.acquire(
-                execution_key, machine, self.lease_ttl_seconds)
+            if not is_child and self_lease is not None:
+                execution_lease = (self_lease if self.leases.authorize(self_lease)
+                                   else None)
+            else:
+                execution_lease = self.leases.acquire(
+                    execution_key, machine, self.lease_ttl_seconds)
             if execution_lease is None:
                 continue
             self.letters.ingest(str(event["id"]), str(event["status"]), metadata={
@@ -1015,13 +1037,15 @@ class Daemon2:
             claim = self.letters.claim(str(event["id"]), run_id, self.lease_ttl_seconds,
                                        now=time.time())
             if claim is None:
-                self.leases.release(execution_lease)
+                if execution_lease is not self_lease:
+                    self.leases.release(execution_lease)
                 continue
             if is_child:
                 child = self.supervisor.children(address.ask or "").get(address.edge or "")
                 if child is not None and child.status == "stopped":
                     self.letters.retire(claim, by=child.parent, why="stopped_before_start")
-                    self.leases.release(execution_lease)
+                    if execution_lease is not self_lease:
+                        self.leases.release(execution_lease)
                     continue
             selected = (event, address, runner_choice, selected_runner,
                         run_id, execution_lease, claim, is_child)
@@ -1230,4 +1254,5 @@ class Daemon2:
         finally:
             heartbeat_done.set()
             heartbeat_thread.join(timeout=2)
-            self.leases.release(execution_lease)
+            if execution_lease is not self_lease:
+                self.leases.release(execution_lease)

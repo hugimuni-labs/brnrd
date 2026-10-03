@@ -1148,3 +1148,56 @@ def test_serve_kill9_recovery_via_lease_expiry(tmp_path: Path) -> None:
     assert result is not None and result.answered, (
         "new daemon could not reclaim expired lease and dispatch the letter")
     assert runtime_b.door.get(event_path.stem)["status"] == "done"
+
+
+def test_two_serve_processes_share_one_self_and_take_over_after_kill9(
+        tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    (repo / ".brr").mkdir()
+    (repo / ".brr" / "config").write_text("daemon2.lease_ttl_seconds=0.6\n")
+    binary = tmp_path / "fake-shell"
+    _fake_shell(binary)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(Path(__file__).parents[1] / "src")
+    command = [sys.executable, "-m", "brr.daemon2", "--serve",
+               "--repo", str(repo), "--home", str(home),
+               "--runtime-dir", str(tmp_path / "runtime"),
+               "--runner", "fake", "--runner-cmd", str(binary)]
+    processes = [subprocess.Popen(command, env=env, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL) for _ in range(2)]
+    self_path = home / "daemon2" / "leases" / "self.json"
+
+    def until(predicate, timeout: float = 8) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(0.04)
+        raise AssertionError("serve processes did not reach expected state")
+
+    try:
+        until(lambda: self_path.exists())
+        holder = int(json.loads(self_path.read_text())["holder"].split(":")[-1])
+        assert holder in {process.pid for process in processes}
+        follower = next(process for process in processes if process.pid != holder)
+        assert follower.poll() is None
+        first = protocol.create_event(home / "dispatch" / "inbox", "telegram",
+                                      "first", conversation_key="telegram:a")
+        until(lambda: protocol.read_response(home / "dispatch" / "responses",
+                                             first.stem) is not None)
+        assert int(json.loads(self_path.read_text())["holder"].split(":")[-1]) == holder
+        next(process for process in processes if process.pid == holder).kill()
+        second = protocol.create_event(home / "dispatch" / "inbox", "telegram",
+                                       "second", conversation_key="telegram:b")
+        until(lambda: protocol.read_response(home / "dispatch" / "responses",
+                                             second.stem) is not None)
+        assert int(json.loads(self_path.read_text())["holder"].split(":")[-1]) == follower.pid
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.terminate()
+        for process in processes:
+            process.wait(timeout=8)
