@@ -932,6 +932,60 @@ class Daemon2:
                                   branch=str(state["event"].get("branch") or ""),
                                   current_replyable=not state["answered"])
 
+    def serve(self, *, stop_when_empty: bool = False,
+              role: str = "any") -> list[RunResult]:
+        """Dispatch letters in a loop under a machine-level self-lease.
+
+        The lease TTL is the kill-9 recovery window: if this process dies
+        unexpectedly, a new process can re-acquire the lease after at most
+        ``lease_ttl_seconds`` and reclaim any pending letters.
+
+        ``stop_when_empty=True`` exits after one empty poll — useful for
+        tests and one-shot sweeps.  The default runs until ``stop()`` is
+        called or until the self-lease renewal fails (indicating another
+        process has taken over or the lease store is unreadable).
+
+        Returns the list of RunResult values collected during the run.
+        """
+        if role not in {"any", "resident", "strand"}:
+            raise ValueError("role must be any, resident or strand")
+        self._stop_serve = threading.Event()
+        machine = f"{socket.gethostname()}:{os.getpid()}"
+        self_lease = self.leases.acquire(
+            "machine", machine, self.lease_ttl_seconds)
+        if self_lease is None:
+            # Another process already holds the machine lease.
+            return []
+
+        def _renew_self() -> None:
+            interval = max(0.01, self.lease_ttl_seconds / 3)
+            while not self._stop_serve.wait(interval):
+                if self.leases.renew(self_lease, self.lease_ttl_seconds) is None:
+                    self._stop_serve.set()
+                    return
+
+        renew_thread = threading.Thread(target=_renew_self, daemon=True)
+        renew_thread.start()
+        results: list[RunResult] = []
+        try:
+            while not self._stop_serve.is_set():
+                result = self.once(role=role)
+                if result is not None:
+                    results.append(result)
+                else:
+                    if stop_when_empty:
+                        break
+                    self._stop_serve.wait(self.tick_seconds)
+        finally:
+            self._stop_serve.set()
+            self.leases.release(self_lease)
+        return results
+
+    def stop(self) -> None:
+        """Signal the serve loop to exit after the current dispatch completes."""
+        if hasattr(self, "_stop_serve"):
+            self._stop_serve.set()
+
     def once(self, *, role: str = "any") -> RunResult | None:
         if role not in {"any", "resident", "strand"}:
             raise ValueError("role must be any, resident or strand")

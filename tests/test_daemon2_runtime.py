@@ -986,10 +986,12 @@ def test_gate_and_thread_stage_via_message_store(tmp_path: Path) -> None:
                       runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
                       tick_seconds=0.02)
     runtime._account_ctx = mock_ctx
+    # Allow telegram gate without real configuration (same pattern as forge tests).
+    runtime._gate_available = lambda gate: gate == "telegram"
     with _patch("brr.daemon2.runtime.message_store.stage", side_effect=_fake_stage):
         result = runtime.once()
     assert result is not None and result.answered
-    gates = [s for s in staged if s["gate"] == "telegram"]
+    gates = [s for s in staged if s["gate"] == "telegram" and not s["thread"]]
     threads = [s for s in staged if s["thread"] == key]
     assert gates, "gate: did not call message_store.stage"
     assert threads, "thread: did not call message_store.stage"
@@ -1078,3 +1080,71 @@ def test_forge_handoff_uses_existing_github_event_wire(tmp_path: Path) -> None:
     assert protocol.read_response(home / "dispatch" / "responses",
                                   done[0]["id"]) == "projected body"
     assert done[0]["id"] in (result.outbox / ".forge-handoff").read_text()
+
+
+def test_serve_dispatches_two_letters_on_separate_conversations(
+        tmp_path: Path) -> None:
+    """serve() processes two pending letters in order under the machine lease."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    binary = tmp_path / "fake-shell"
+    _fake_shell(binary)
+    inbox = home / "dispatch" / "inbox"
+    ev1 = protocol.create_event(inbox, "telegram", "First letter",
+                                conversation_key="telegram:user-a",
+                                trust_tier="owner")
+    ev2 = protocol.create_event(inbox, "telegram", "Second letter",
+                                conversation_key="telegram:user-b",
+                                trust_tier="owner")
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      lease_ttl_seconds=2.0)
+    results = runtime.serve(stop_when_empty=True)
+    assert len(results) == 2
+    ids = {r.event_id for r in results}
+    assert ev1.stem in ids
+    assert ev2.stem in ids
+    assert all(r.answered for r in results)
+    assert runtime.door.get(ev1.stem)["status"] == "done"
+    assert runtime.door.get(ev2.stem)["status"] == "done"
+
+
+def test_serve_kill9_recovery_via_lease_expiry(tmp_path: Path) -> None:
+    """After the machine/execution lease expires a new process can re-dispatch."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    binary = tmp_path / "fake-shell"
+    _fake_shell(binary)
+    inbox = home / "dispatch" / "inbox"
+    event_path = protocol.create_event(inbox, "telegram", "Recover me",
+                                       conversation_key="telegram:owner",
+                                       trust_tier="owner")
+    # Create a daemon2 instance and manually acquire the self-execution lease
+    # as if a previous process had claimed it (simulating kill-9 of that process).
+    runtime_a = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                        runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                        lease_ttl_seconds=0.5)
+    dead_machine = "dead-host:99999"
+    dead_lease = runtime_a.leases.acquire("self", dead_machine, 0.5)
+    assert dead_lease is not None, "could not pre-claim execution lease"
+    # Letter claim too (simulates the in-flight claim that expired)
+    from brr.daemon2.letters import LetterService
+    runtime_a.letters.ingest(event_path.stem, "pending",
+                              metadata={"conversation": "telegram:owner"})
+    dead_claim = runtime_a.letters.claim(event_path.stem, "dead-run", 0.5,
+                                          now=time.time())
+    assert dead_claim is not None
+    # Wait for both leases to expire.
+    time.sleep(1.0)
+    # A new daemon should now be able to dispatch the event.
+    runtime_b = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                        runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                        lease_ttl_seconds=2.0)
+    result = runtime_b.once()
+    assert result is not None and result.answered, (
+        "new daemon could not reclaim expired lease and dispatch the letter")
+    assert runtime_b.door.get(event_path.stem)["status"] == "done"
