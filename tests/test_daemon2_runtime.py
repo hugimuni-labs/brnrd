@@ -295,6 +295,32 @@ def test_spawn_to_submit_end_to_end(tmp_path: Path) -> None:
     assert child_rec.report == report_path
 
 
+def test_child_allowance_ask_mints_parent_letter(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    inbox = home / "dispatch" / "inbox"
+    child = protocol.create_event(
+        inbox, "spawn", "work", conversation_key="c", ask_id="ask-1",
+        parent_run_id="run-parent", spawn_edge="edge-1",
+        child_run_id="run-child", branch="brr/child", report=str(tmp_path / "report.md"))
+    binary = tmp_path / "child-shell"
+    _verb_shell(binary, ("ask.md", "---\nask: allowance +50k\n---\nNeed more tests\n"))
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02, worktree_env=False)
+    runtime.supervisor.register("ask-1", "c", "run-parent", "edge-1", "run-child")
+    result = runtime.once(role="strand")
+    assert result is not None and result.event_id == child.stem
+    requests = [event for event in runtime.door.pending()
+                if event["source"] == "spawn_allowance_requested"]
+    assert len(requests) == 1
+    assert requests[0]["spawn_parent_run_id"] == "run-parent"
+    assert requests[0]["spawn_allowance_request_tokens"] == 50_000
+    assert "Need more tests" in requests[0]["body"]
+
+
 def _sleep_shell(path: Path, *, seconds: float = 1) -> None:
     path.write_text(
         "#!/usr/bin/env python3\n"
@@ -515,7 +541,7 @@ def test_to_delivers_steer_to_child(tmp_path: Path) -> None:
         "    tmp = outbox / (name + '.tmp')\n"
         "    tmp.write_text(body, encoding='utf-8')\n"
         "    tmp.rename(outbox / name)\n"
-        f"stage('to.md', '---\\nto: {edge}\\n---\\nHere is the steer.\\n')\n"
+        f"stage('to.md', '---\\nto: {edge}\\n---\\nallowance: +50k\\nHere is the steer.\\n')\n"
         "time.sleep(0.05)\n"
         "stage('reply.md', '---\\nevent: ' + eid + '\\n---\\nSteer sent.\\n')\n"
     )
@@ -538,6 +564,8 @@ def test_to_delivers_steer_to_child(tmp_path: Path) -> None:
                   and e.get("spawn_message_for_run") == child.run]
     assert steer_msgs, "no dispatch_message created for child by to: verb"
     assert "Here is the steer" in steer_msgs[0].get("body", "")
+    assert steer_msgs[0]["allowance_tokens"] == 20_050_000
+    assert runtime2._child_allowance("ask1", child.run, edge) == 20_050_000
 
 
 def test_halt_ends_seat_and_replies(tmp_path: Path) -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 import signal
 import socket
 import threading
@@ -18,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import account, await_verb, closekeyword, config as conf, conversations, course, cut_verb, gates, halt_verb, halts, hold_verb, message_store, promises, prompts, protocol, relics, run_ledger, runner, trust
+from .. import account, allowance, await_verb, closekeyword, config as conf, conversations, course, cut_verb, gates, halt_verb, halts, hold_verb, message_store, promises, prompts, protocol, relics, run_ledger, runner, trust
 from .authority import SignalAuthority
 from .doors import FileDoor, public_event
 from .facts import FactStore
@@ -316,6 +317,18 @@ class Daemon2:
         except (ImportError, OSError):
             return False
 
+    def _child_allowance(self, ask: str, child_run: str, edge: str) -> int:
+        initial = allowance.DEFAULT_ALLOWANCE_TOKENS
+        for path in self.door.inbox.glob("*.md"):
+            event = protocol._read_event(path)
+            if event and event.get("source") == "spawn" and event.get("child_run_id") == child_run:
+                initial = int(event.get("allowance_tokens") or initial)
+                break
+        for fact in self.facts.read("asks", ask):
+            if fact.kind == "allowance_granted" and fact.data.get("edge") == edge:
+                initial = int(fact.data["total"])
+        return initial
+
     def _handle_outbox(self, state: dict[str, Any], path: Path) -> None:
         verb, fm, body = self.door.parse_outbox(path)
         event_id = state["event"]["id"]
@@ -457,6 +470,11 @@ class Daemon2:
             report = str(fm.get("report") or "").strip()
             if not branch or not report:
                 raise ValueError("spawn requires branch and report paths")
+            raw_allowance = str(fm.get("allowance") or "").strip()
+            tokens = (allowance.parse_tokens(raw_allowance) if raw_allowance
+                      else allowance.DEFAULT_ALLOWANCE_TOKENS)
+            if tokens is None:
+                raise ValueError(f"spawn refused: allowance: {raw_allowance!r} is not a valid token count")
             edge = uuid.uuid4().hex[:12]
             child_run = self._run_id()
             self.supervisor.register(ask, state["conversation"], state["run_id"],
@@ -467,9 +485,50 @@ class Daemon2:
                 parent_run_id=state["run_id"], spawn_edge=edge,
                 child_run_id=child_run,
                 branch=branch, report=report,
+                allowance_tokens=tokens,
                 shell=str(fm.get("shell") or ""),
                 core=str(fm.get("core") or ""),
             )
+        elif verb == "ask":
+            if not state["is_child"]:
+                self._notice(state, "ask refused: allowance asks are a strand's own verb",
+                             source_file=path.name, verb="ask")
+                return
+            spec = str(fm.get("ask") or "").strip()
+            match = re.match(r"^allowance\s+([+-]?[0-9][0-9.]*[km]?)\b(.*)$",
+                             spec, re.IGNORECASE)
+            delta = allowance.parse_signed_tokens(match.group(1)) if match else None
+            if delta is None or delta <= 0:
+                self._notice(state,
+                             f"ask refused: {spec!r} does not name a positive token "
+                             "delta (e.g. `ask: allowance +50k`)",
+                             source_file=path.name, verb="ask")
+                return
+            if not body:
+                self._notice(state,
+                             "ask refused: `ask: allowance +N` needs a one-line why in the body",
+                             source_file=path.name, verb="ask")
+                return
+            if not state.get("parent") or not state.get("edge"):
+                self._notice(state, "ask refused: spawning parent is missing",
+                             source_file=path.name, verb="ask")
+                return
+            current = self._child_allowance(state["ask"], state["run_id"],
+                                            state["edge"])
+            protocol.create_event(
+                self.door.inbox, "spawn_allowance_requested",
+                f"{state['run_id']} asks +{allowance.format_tokens(delta)} allowance "
+                f"(spent ?/{allowance.format_tokens(current)}): {body}",
+                conversation_key=state["conversation"],
+                spawned_by_run=state["run_id"],
+                spawned_by_event=event_id,
+                spawn_parent_run_id=state["parent"],
+                spawn_allowance_request_tokens=delta,
+                spawn_allowance_tokens=current,
+            )
+            self.facts.record("asks", state["ask"], "allowance_requested",
+                              state["run_id"], {"edge": state["edge"],
+                                                "tokens": delta, "why": body})
         elif verb == "submit":
             if not state.get("is_child") or not state.get("parent") or not state.get("edge"):
                 raise ValueError("submit belongs to a strand")
@@ -518,10 +577,24 @@ class Daemon2:
                 raise ValueError(f"to: {target!r} is not a child of this conversation")
             if child.status != "running":
                 raise ValueError(f"to: child {target!r} is not running (status={child.status!r})")
+            first = body.splitlines()[0].strip() if body else ""
+            grant = re.fullmatch(r"allowance:\s*([+-]?[0-9][0-9.]*[km]?)",
+                                 first, re.IGNORECASE)
+            total = None
+            if grant:
+                raw = grant.group(1)
+                value = allowance.parse_signed_tokens(raw)
+                if value is not None:
+                    current = self._child_allowance(state["ask"], child.run, child.edge)
+                    total = max(0, current + value if raw[0] in "+-" else value)
+                    self.facts.record("asks", state["ask"], "allowance_granted",
+                                      state["run_id"], {"edge": child.edge,
+                                                        "run": child.run, "total": total})
             protocol.create_event(
                 self.door.inbox, "dispatch_message", body,
                 conversation_key=child.conversation,
                 spawn_message_for_run=child.run,
+                allowance_tokens=total if total is not None else "",
             )
         elif verb in {"halt", "respawn"}:
             # The older respawn spelling is a carried halt: both retire this

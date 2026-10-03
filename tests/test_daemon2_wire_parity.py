@@ -130,6 +130,33 @@ def test_hold_parse_error_replays_existing_golden(tmp_path: Path) -> None:
     assert not list(responses.glob("*.md"))
 
 
+def test_resident_allowance_ask_replays_existing_golden(tmp_path: Path) -> None:
+    brr_dir, inbox, responses, outbox, own_id = _base(tmp_path)
+    SCENARIOS["ask_allowance_from_resident"]["stage"](inbox, outbox, own_id)
+    golden = json.loads((GOLDEN_DIR / "ask_allowance_from_resident.json").read_text())
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    runtime = Daemon2(repo, tmp_path / "home", runtime_dir=brr_dir)
+    runtime.door = FileDoor(inbox, responses, runtime.letters)
+    own = runtime.door.get(own_id)
+    assert own is not None
+    address = runtime.router.route_or_triage(own)
+    state = {
+        "event": own, "conversation": address.conversation,
+        "ask": address.ask, "parent": None, "edge": None,
+        "claim": None, "seat": None, "run_id": "run-parent", "outbox": outbox,
+        "await": None, "notices": [], "answered": False,
+        "runner_name": "fake", "is_child": False,
+        "claims": {}, "claim_lock": threading.Lock(),
+    }
+    runtime._tick(state)
+    expected = next(row for key, rows in golden["tree"].items()
+                    if key.endswith("/.notices.jsonl") for row in rows)
+    assert [(row["kind"], row["text"]) for row in state["notices"]] == [
+        (expected["kind"], expected["text"])]
+    assert not list(responses.glob("*.md"))
+
+
 def test_halt_replays_old_bounce_fixture(tmp_path: Path, monkeypatch) -> None:
     """The old TestDrain input bounces once, then the same file stands."""
     file, outbox, inbox, task, _ = halt_setup(tmp_path, monkeypatch)
