@@ -1850,3 +1850,61 @@ def test_claude_runner_gets_the_await_lease_bash_cap(monkeypatch) -> None:
     assert _await_lease_env(SimpleNamespace(name="codex", hooks="codex")) == {}
     monkeypatch.setenv("BASH_MAX_TIMEOUT_MS", "1000")
     assert _await_lease_env(claude) == {}
+
+
+def test_strand_runs_while_its_parent_seat_is_still_alive(tmp_path: Path) -> None:
+    """The parent waits for its child's submit before replying: a serial loop deadlocks."""
+    from brr.daemon2.runtime import strand_worker_argv, strand_worker_count
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test repo\n", encoding="utf-8")
+    inbox = home / "dispatch" / "inbox"
+    report_path = str(tmp_path / "reports" / "child.md")
+    branch = "brr/child-concurrent"
+    parent_shell = tmp_path / "parent-shell"
+    parent_shell.write_text(f"""#!/usr/bin/env python3
+import os, time
+from pathlib import Path
+outbox = Path(os.environ["BRR_OUTBOX_DIR"])
+event_id = os.environ["BRR_EVENT_ID"]
+inbox = Path({str(inbox)!r})
+def stage(name, body):
+    (outbox / (name + ".tmp")).write_text(body)
+    (outbox / (name + ".tmp")).rename(outbox / name)
+stage("spawn.md", "---\\nspawn: true\\nbranch: {branch}\\nreport: {report_path}\\n---\\nchild work\\n")
+deadline = time.monotonic() + 20
+while time.monotonic() < deadline:
+    if any("source: spawn_submitted" in p.read_text() for p in inbox.glob("*.md")):
+        break
+    time.sleep(0.05)
+else:
+    raise SystemExit("child never ran while the parent was alive")
+stage("reply.md", "---\\nevent: " + event_id + "\\n---\\nchild returned while I waited\\n")
+""")
+    parent_shell.chmod(parent_shell.stat().st_mode | stat.S_IXUSR)
+    child_shell = tmp_path / "child-shell"
+    _submit_shell(child_shell, report_path, branch)
+    protocol.create_event(inbox, "telegram", "Spawn and wait",
+                          conversation_key="telegram:owner", trust_tier="owner",
+                          ask_id="ask-main")
+    parent = Daemon2(repo, home, runtime_dir=tmp_path / "runtime", runner_name="fake",
+                     runner_config={"runner_cmd": [str(parent_shell)]}, tick_seconds=0.02)
+    follower = Daemon2(repo, home, runtime_dir=tmp_path / "runtime", runner_name="fake",
+                       runner_config={"runner_cmd": [str(child_shell)]},
+                       tick_seconds=0.02, worktree_env=False)
+    worker = threading.Thread(target=lambda: follower.serve(role="strand"), daemon=True)
+    worker.start()
+    try:
+        result = parent.once(role="resident")
+    finally:
+        follower.stop()
+        worker.join(timeout=10)
+    assert result is not None and result.returncode == 0 and result.answered
+    # The CLI's follower command line targets the same queues as the resident.
+    argv = strand_worker_argv(repo, home, tmp_path / "runtime", inbox,
+                              home / "dispatch" / "responses", python="py")
+    assert argv[:6] == ["py", "-m", "brr.daemon2", "--serve", "--role", "strand"]
+    assert argv[argv.index("--inbox") + 1] == str(inbox)
+    assert strand_worker_count({}) == 3
+    assert strand_worker_count({"daemon2.strand_workers": 0}) == 0

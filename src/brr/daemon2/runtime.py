@@ -1604,3 +1604,31 @@ def _await_lease_env(runner_choice: Any) -> dict[str, str]:
     if flavour != "claude" or os.environ.get("BASH_MAX_TIMEOUT_MS"):
         return {}
     return {"BASH_MAX_TIMEOUT_MS": str(await_verb.CLAUDE_BASH_MAX_TIMEOUT_MS)}
+
+
+#: Strand-only follower processes ``brnrd daemon up --engine 2`` keeps beside
+#: the resident loop. ``serve()`` dispatches one body at a time and a seat
+#: that never quits never returns, so without followers a spawned strand
+#: waits for its parent's turn to end (found live, run-261003-2323-ffd9).
+#: Each follower serves strands serially; the ``strand:<id>`` execution lease
+#: and the letter claim keep two followers off one strand.
+DEFAULT_STRAND_WORKERS = 3
+
+
+def strand_worker_argv(repo_root: Path, home: Path, runtime_dir: Path,
+                       inbox_dir: Path, responses_dir: Path,
+                       python: str | None = None) -> list[str]:
+    """The command line for one strand-only follower of this daemon."""
+    import sys
+    return [python or sys.executable, "-m", "brr.daemon2", "--serve",
+            "--role", "strand", "--repo", str(repo_root), "--home", str(home),
+            "--runtime-dir", str(runtime_dir), "--inbox", str(inbox_dir),
+            "--responses", str(responses_dir)]
+
+
+def strand_worker_count(config: dict[str, Any]) -> int:
+    raw = config.get("daemon2.strand_workers", DEFAULT_STRAND_WORKERS)
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_STRAND_WORKERS

@@ -7328,9 +7328,27 @@ def cmd_up(args):
         daemon_mod._write_pid(brr_dir)
         engine_marker = brr_dir / "daemon2.active"
         engine_marker.write_text(str(os.getpid()) + "\n")
+        import subprocess
+        from .daemon2.runtime import strand_worker_argv, strand_worker_count
+        log_path = brr_dir / "daemon2-strand-workers.log"
+        workers: list[subprocess.Popen] = []
         try:
+            with open(log_path, "ab") as worker_log:
+                for _ in range(strand_worker_count(conf.load_config(root))):
+                    workers.append(subprocess.Popen(
+                        strand_worker_argv(root, home, brr_dir, inbox, responses),
+                        stdin=subprocess.DEVNULL, stdout=worker_log,
+                        stderr=worker_log))
             replacement.serve()
         finally:
+            for worker in workers:
+                if worker.poll() is None:
+                    worker.terminate()
+            for worker in workers:
+                try:
+                    worker.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    worker.kill()
             if daemon_mod.read_pid(brr_dir) == os.getpid():
                 daemon_mod._clear_pid(brr_dir)
                 engine_marker.unlink(missing_ok=True)
