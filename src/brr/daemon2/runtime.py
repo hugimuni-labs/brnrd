@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import account, allowance, await_verb, closekeyword, config as conf, conversations, course, cut_verb, dev_reload, gates, gitops, halt_verb, halts, hold_verb, message_store, promises, prompts, protocol, relics, run_ledger, runner, trust, worktree
+from .. import account, allowance, await_verb, closekeyword, config as conf, conversations, course, cut_verb, dev_reload, gates, gitops, halt_verb, halts, hold_verb, message_store, promises, prompts, protocol, relics, run_ledger, runner, trust, updates, worktree
 from .authority import SignalAuthority
 from .doors import FileDoor, public_event
 from .facts import FactStore
@@ -210,6 +210,40 @@ class Daemon2:
         if target_id == state["event"]["id"]:
             state["answered"] = True
 
+    def _interim(self, state: dict[str, Any], body: str, path: Path) -> None:
+        """Queue a mid-thought message without settling the waking letter."""
+        if not body:
+            return
+        event = state["event"]
+        from .. import daemon as legacy_daemon
+        if not legacy_daemon._gate_owns_source(str(event.get("source") or "")):
+            self._notice(state, "reply text staged undeliverable — no gate owns "
+                         "the waking event", kind="dropped",
+                         source_file=path.name, verb="event")
+            return
+        message_path = None
+        if self._account_ctx is not None:
+            try:
+                message_path = message_store.stage(
+                    self._account_ctx,
+                    repo_label=str(event.get("repo_label") or
+                                   self._account_ctx.default_repo.label),
+                    run_id=state["run_id"], body=body, kind="interim",
+                    target_event=str(event["id"]),
+                    target_gate=str(event.get("source") or ""),
+                    target_thread=state["conversation"],
+                    source_ref=path.name)
+            except Exception as exc:
+                self._notice(state, f"interim queued without message record: {exc}",
+                             kind="advisory", source_file=path.name, verb="event")
+        partial = protocol.write_partial(
+            self.door.response_dir(event), str(event["id"]), body,
+            message_path=message_path)
+        updates.emit(self.runtime_dir, updates.UpdatePacket(
+            "interim_response", state["conversation"], str(event["id"]),
+            {"run_id": state["run_id"], "event_id": str(event["id"]),
+             "path": str(partial)}))
+
     def _halt_open_items(self, state: dict[str, Any]) -> list[halt_verb.OpenItem]:
         """Attest the open mail, course, produce and children before ending."""
         items: list[halt_verb.OpenItem] = []
@@ -366,6 +400,9 @@ class Daemon2:
         event_id = state["event"]["id"]
         seat: Seat = state["seat"]
         if verb == "event":
+            if "event" not in fm:
+                self._interim(state, body, path)
+                return
             target = str(fm.get("event") or event_id)
             primary = self.door.get(target)
             # Validate and claim the entire burst before any outward send.

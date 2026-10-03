@@ -76,6 +76,44 @@ def test_once_invokes_real_shell_and_drains_reply(tmp_path: Path) -> None:
     assert (tmp_path / "runtime" / "runs" / result.run_id / "context.md").exists()
 
 
+def test_plain_outbox_messages_stream_before_terminal_stdout(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test repo\n")
+    responses = home / "dispatch" / "responses"
+    binary = tmp_path / "stream-shell"
+    binary.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os,time\nfrom pathlib import Path\n"
+        "outbox=Path(os.environ['BRR_OUTBOX_DIR'])\n"
+        "event_id=os.environ['BRR_EVENT_ID']\n"
+        f"responses=Path({str(responses)!r})\n"
+        "partials=responses/(event_id+'.partials')\n"
+        "for index,body in enumerate(('first interim','second interim'),1):\n"
+        "    (outbox/f'{index:03d}.md').write_text(body+'\\n')\n"
+        "    deadline=time.monotonic()+10\n"
+        "    while len(list(partials.glob('*.md')))<index:\n"
+        "        if time.monotonic()>deadline: raise SystemExit('interim not streamed')\n"
+        "        time.sleep(.02)\n"
+        "print('terminal answer')\n")
+    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+    event = protocol.create_event(home / "dispatch" / "inbox", "telegram",
+                                  "Stream then answer", conversation_key="telegram:owner")
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    result = runtime.once()
+    assert result is not None and result.returncode == 0 and result.answered
+    assert [protocol.read_partial(path) for path in
+            protocol.list_partials(responses, event.stem)] == [
+                "first interim", "second interim"]
+    assert protocol.read_response(responses, event.stem) == "terminal answer"
+    assert [fact.kind for fact in runtime.facts.read("letters", event.stem)] == [
+        "pending", "claimed", "answered"]
+    assert not json.loads((result.outbox / "portal-state.json").read_text())["notices"]
+
+
 def test_await_arms_and_resolves_while_shell_stays_alive(tmp_path: Path) -> None:
     home = tmp_path / "home"
     repo = tmp_path / "repo"
