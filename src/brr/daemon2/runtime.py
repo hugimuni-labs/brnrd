@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import await_verb, config as conf, prompts, runner
+from .. import account, await_verb, config as conf, cut_verb, halt_verb, message_store, prompts, runner
 from .authority import SignalAuthority
 from .doors import FileDoor, public_event
 from .facts import FactStore
@@ -71,6 +71,11 @@ class Daemon2:
         self.letters = LetterService(self.facts, self.leases)
         self.supervisor = Supervisor(self.facts)
         self._tick_lock = threading.Lock()
+        try:
+            self._account_ctx = account.resolve_context(self.repo_root,
+                                                        conf.load_config(self.repo_root))
+        except Exception:
+            self._account_ctx = None
 
     @staticmethod
     def _terminate_runner(run_id: str, *, grace: float = 0.5) -> None:
@@ -177,6 +182,29 @@ class Daemon2:
         seat: Seat = state["seat"]
         if verb == "event":
             self._reply(state, str(fm.get("event") or event_id), body)
+            # also: <id>, <id> — same-correspondent events retired by this reply
+            also_raw = str(fm.get("also") or "").strip()
+            for also_id in (s.strip() for s in also_raw.split(",") if s.strip()):
+                also_event = self.door.get(also_id)
+                if also_event is None:
+                    self._notice(state, f"also: event {also_id!r} not found",
+                                 source_file=path.name)
+                    continue
+                if self.router.route_or_triage(also_event).conversation != state["conversation"]:
+                    self._notice(state, f"also: event {also_id!r} is not in this conversation",
+                                 source_file=path.name)
+                    continue
+                also_claim = self.letters.claim(also_id, state["run_id"],
+                                                self.lease_ttl_seconds, now=time.time())
+                if also_claim is None:
+                    self._notice(state, f"also: event {also_id!r} could not be claimed",
+                                 source_file=path.name)
+                    continue
+                with state["claim_lock"]:
+                    self.letters.retire(also_claim, by=state["run_id"], why="also")
+                    state["claims"].pop(also_id, None)
+                from .. import protocol as _proto
+                _proto.set_status(also_event, "done")
         elif verb == "note":
             target = str(fm["note"]).strip()
             event = self.door.get(target)
@@ -266,6 +294,96 @@ class Daemon2:
                 raise ValueError("stop target is not an owned child")
             self.facts.record("asks", state["ask"], "child_stopped",
                               state["run_id"], {"edge": target, "run": child.run})
+        elif verb == "to":
+            # to: <edge-or-run-id> — steer a child in this conversation
+            # A strand belongs to the conversation that dispatched it; any run
+            # in that conversation may steer it, not just the spawning run.
+            target = str(fm.get("to") or "").strip()
+            if not target:
+                raise ValueError("to: requires a child edge or run id")
+            children = self.supervisor.children(state["ask"] or "")
+            child = (children.get(target)
+                     or next((c for c in children.values() if c.run == target), None))
+            if child is None or child.conversation != state["conversation"]:
+                raise ValueError(f"to: {target!r} is not a child of this conversation")
+            if child.status != "running":
+                raise ValueError(f"to: child {target!r} is not running (status={child.status!r})")
+            from .. import protocol as _proto
+            _proto.create_event(
+                self.door.inbox, "dispatch_message", body,
+                conversation_key=child.conversation,
+                spawn_message_for_run=child.run,
+            )
+        elif verb == "halt":
+            declaration, error = halt_verb.parse_halt(fm)
+            if error:
+                raise ValueError(error)
+            record = seat.read()
+            if not body:
+                raise ValueError("halt: requires a reason in the body")
+            # Announce via the normal reply lane; the body is the message.
+            if not state["answered"]:
+                self._reply(state, event_id, body)
+            if declaration.carry:
+                seat.handover(record.generation,
+                              carry={"text": declaration.carry,
+                                     "shell": declaration.shell or "",
+                                     "core": declaration.core or ""},
+                              wake_on=())
+            else:
+                seat.end(record.generation)
+            state["halted"] = True
+        elif verb == "cut":
+            declaration, error = cut_verb.parse_cut(fm)
+            if error:
+                raise ValueError(error)
+            if not body:
+                raise ValueError("cut: body is the reply the correspondent reads — must be non-empty")
+            # The body is the reply for this stretch.
+            if not state["answered"]:
+                self._reply(state, event_id, body)
+            # Stage via message_store if we have an account context.
+            record = seat.read()
+            if record.state == "running":
+                seat.checkpoint(record.generation,
+                                data={"run": state["run_id"],
+                                      "last_event": event_id},
+                                obligations=(),
+                                native_session=None)
+                record = seat.read()
+                seat.park(record.generation, why="cut",
+                          wake_on=legacy_wake_on("any"))
+            state["cut"] = True
+        elif verb == "gate":
+            gate_name = str(fm.get("gate") or "").strip()
+            if not gate_name:
+                raise ValueError("gate: requires a gate name")
+            if self._account_ctx is None:
+                raise ValueError("gate: requires an account context — no account configured")
+            message_store.stage(
+                self._account_ctx,
+                repo_label=self._account_ctx.default_repo.label,
+                run_id=state["run_id"],
+                body=body,
+                kind="outbound",
+                target_gate=gate_name,
+                source_ref=path.name,
+            )
+        elif verb == "thread":
+            key = str(fm.get("thread") or "").strip()
+            if not key:
+                raise ValueError("thread: requires a conversation key")
+            if self._account_ctx is None:
+                raise ValueError("thread: requires an account context")
+            message_store.stage(
+                self._account_ctx,
+                repo_label=self._account_ctx.default_repo.label,
+                run_id=state["run_id"],
+                body=body,
+                kind="outbound",
+                target_thread=key,
+                source_ref=path.name,
+            )
         else:
             raise ValueError(f"daemon2 wire verb not yet implemented: {verb}")
 
@@ -427,7 +545,7 @@ class Daemon2:
                 "runner_name": selected_runner,
                 "is_child": is_child,
                 "claims": held_claims, "claim_lock": claim_lock,
-                "crashed": False,
+                "crashed": False, "halted": False, "cut": False,
             }
             if not address.routable:
                 self._notice(state, f"unaddressed letter retained on triage seat: {address.reason}",
@@ -496,7 +614,9 @@ class Daemon2:
             if result.stdout.strip() and not state["answered"]:
                 self._reply(state, str(event["id"]), result.stdout.strip())
             record = seat.read()
-            if record.state == "awaiting":
+            if state["halted"] or state["cut"]:
+                pass  # seat already transitioned inside _handle_outbox
+            elif record.state == "awaiting":
                 seat.park(record.generation, why="turn_ended",
                           wake_on=legacy_wake_on("any"))
             elif record.state == "running":

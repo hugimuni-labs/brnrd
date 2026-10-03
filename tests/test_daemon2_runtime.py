@@ -379,3 +379,263 @@ def test_lapsed_self_lease_kills_shell_and_leaves_recoverable_seat(tmp_path: Pat
         if thread.is_alive():
             runner.kill_matching(runtime.seats.read("c").run_id)
             thread.join(timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# Tests for individual outbox verbs staged by a fake Shell.
+# ---------------------------------------------------------------------------
+
+def _verb_shell(path: Path, *verb_files: tuple[str, str]) -> None:
+    """Create a fake Shell that stages *verb_files* (name, content) then exits."""
+    # Each call must be at module level, not indented inside the def block.
+    stages = "\n".join(
+        f"stage({name!r}, {content!r})"
+        for name, content in verb_files
+    )
+    script = (
+        "#!/usr/bin/env python3\n"
+        "import os, time\nfrom pathlib import Path\n"
+        "outbox = Path(os.environ['BRR_OUTBOX_DIR'])\n"
+        "def stage(name, body):\n"
+        "    tmp = outbox / (name + '.tmp')\n"
+        "    tmp.write_text(body, encoding='utf-8')\n"
+        "    tmp.rename(outbox / name)\n"
+        + stages + "\n"
+        "time.sleep(0.05)\n"
+    )
+    path.write_text(script, encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+def test_also_retires_burst_events(tmp_path: Path) -> None:
+    """also: in an event: reply marks additional events handled atomically."""
+    binary = tmp_path / "shell"
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    inbox = home / "dispatch" / "inbox"
+    primary = protocol.create_event(inbox, "telegram", "primary",
+                                    conversation_key="c", trust_tier="owner")
+    also1 = protocol.create_event(inbox, "telegram", "sibling 1",
+                                  conversation_key="c", trust_tier="owner")
+    also2 = protocol.create_event(inbox, "telegram", "sibling 2",
+                                  conversation_key="c", trust_tier="owner")
+    reply = (
+        "---\n"
+        f"event: {primary.stem}\n"
+        f"also: {also1.stem}, {also2.stem}\n"
+        "---\n"
+        "Handled the burst.\n"
+    )
+    _verb_shell(binary, ("reply.md", reply))
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    result = runtime.once()
+    assert result is not None and result.answered
+    assert protocol._read_event(primary)["status"] == "done"
+    assert protocol._read_event(also1)["status"] == "done"
+    assert protocol._read_event(also2)["status"] == "done"
+
+
+def test_to_delivers_steer_to_child(tmp_path: Path) -> None:
+    """to: <edge> creates a dispatch_message for the named child strand."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    inbox = home / "dispatch" / "inbox"
+    report_path = str(tmp_path / "reports" / "child.md")
+    (tmp_path / "reports").mkdir(parents=True, exist_ok=True)
+
+    spawn_md = (
+        "---\nspawn: true\nbranch: brr/child-steer-test\n"
+        f"report: {report_path}\n---\nChild task.\n"
+    )
+    parent_script = (
+        "#!/usr/bin/env python3\n"
+        "import os, time\nfrom pathlib import Path\n"
+        "outbox = Path(os.environ['BRR_OUTBOX_DIR'])\n"
+        "eid = os.environ['BRR_EVENT_ID']\n"
+        "def stage(name, body):\n"
+        "    tmp = outbox / (name + '.tmp')\n"
+        "    tmp.write_text(body, encoding='utf-8')\n"
+        "    tmp.rename(outbox / name)\n"
+        f"stage('spawn.md', {spawn_md!r})\n"
+        "time.sleep(0.05)\n"
+        "stage('reply.md', '---\\nevent: ' + eid + '\\n---\\nSpawned.\\n')\n"
+    )
+    parent_shell = tmp_path / "parent-shell"
+    parent_shell.write_text(parent_script, encoding="utf-8")
+    parent_shell.chmod(parent_shell.stat().st_mode | stat.S_IXUSR)
+
+    protocol.create_event(
+        inbox, "telegram", "Spawn a child",
+        conversation_key="c", trust_tier="owner", ask_id="ask1")
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(parent_shell)]},
+                      tick_seconds=0.02)
+    runtime.once()
+
+    children = runtime.supervisor.children("ask1")
+    assert children, "no child registered"
+    edge, child = next(iter(children.items()))
+    to_script = (
+        "#!/usr/bin/env python3\n"
+        "import os, time\nfrom pathlib import Path\n"
+        "outbox = Path(os.environ['BRR_OUTBOX_DIR'])\n"
+        "eid = os.environ['BRR_EVENT_ID']\n"
+        "def stage(name, body):\n"
+        "    tmp = outbox / (name + '.tmp')\n"
+        "    tmp.write_text(body, encoding='utf-8')\n"
+        "    tmp.rename(outbox / name)\n"
+        f"stage('to.md', '---\\nto: {edge}\\n---\\nHere is the steer.\\n')\n"
+        "time.sleep(0.05)\n"
+        "stage('reply.md', '---\\nevent: ' + eid + '\\n---\\nSteer sent.\\n')\n"
+    )
+    to_shell = tmp_path / "to-shell"
+    to_shell.write_text(to_script, encoding="utf-8")
+    to_shell.chmod(to_shell.stat().st_mode | stat.S_IXUSR)
+
+    protocol.create_event(
+        inbox, "telegram", "Steer the child",
+        conversation_key="c", trust_tier="owner", ask_id="ask1")
+    runtime2 = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                       runner_name="fake", runner_config={"runner_cmd": [str(to_shell)]},
+                       tick_seconds=0.02)
+    result2 = runtime2.once()
+    assert result2 is not None and result2.answered
+
+    pending = runtime2.door.pending()
+    steer_msgs = [e for e in pending
+                  if e.get("source") == "dispatch_message"
+                  and e.get("spawn_message_for_run") == child.run]
+    assert steer_msgs, "no dispatch_message created for child by to: verb"
+    assert "Here is the steer" in steer_msgs[0].get("body", "")
+
+
+def test_halt_ends_seat_and_replies(tmp_path: Path) -> None:
+    """halt: ends the seat and uses the body as the reply."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    inbox = home / "dispatch" / "inbox"
+    event = protocol.create_event(inbox, "telegram", "Please halt",
+                                  conversation_key="halt-conv")
+    halt_md = (
+        "---\nhalt: true\nreason: Context window saturated.\n"
+        "resumable: Refill quota and dispatch a fresh seat with this carry.\n"
+        "---\n"
+        "Body ends here.\n"
+    )
+    halt_script = (
+        "#!/usr/bin/env python3\n"
+        "import os\nfrom pathlib import Path\n"
+        "outbox = Path(os.environ['BRR_OUTBOX_DIR'])\n"
+        "def stage(name, body):\n"
+        "    tmp = outbox / (name + '.tmp')\n"
+        "    tmp.write_text(body, encoding='utf-8')\n"
+        "    tmp.rename(outbox / name)\n"
+        f"stage('halt.md', {halt_md!r})\n"
+    )
+    binary = tmp_path / "shell"
+    binary.write_text(halt_script, encoding="utf-8")
+    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    result = runtime.once()
+    assert result is not None and result.answered
+    reply = protocol.read_response(home / "dispatch" / "responses", event.stem)
+    assert reply is not None and "Body ends here" in reply, f"reply={reply!r}"
+    assert runtime.seats.read("halt-conv").state in {"ended", "parked"}
+
+
+def test_cut_parks_seat_and_replies(tmp_path: Path) -> None:
+    """cut: answers the current event and parks the seat."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    inbox = home / "dispatch" / "inbox"
+    event = protocol.create_event(inbox, "telegram", "Please cut",
+                                  conversation_key="cut-conv")
+    cut_md = "---\ncut: true\n---\nPhase complete — commit for this stretch.\n"
+    cut_script = (
+        "#!/usr/bin/env python3\n"
+        "import os\nfrom pathlib import Path\n"
+        "outbox = Path(os.environ['BRR_OUTBOX_DIR'])\n"
+        "def stage(name, body):\n"
+        "    tmp = outbox / (name + '.tmp')\n"
+        "    tmp.write_text(body, encoding='utf-8')\n"
+        "    tmp.rename(outbox / name)\n"
+        f"stage('cut.md', {cut_md!r})\n"
+    )
+    binary = tmp_path / "shell"
+    binary.write_text(cut_script, encoding="utf-8")
+    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    result = runtime.once()
+    assert result is not None and result.answered
+    reply = protocol.read_response(home / "dispatch" / "responses", event.stem)
+    assert reply is not None and "Phase complete" in reply
+    seat = runtime.seats.read("cut-conv")
+    assert seat.state == "parked"
+
+
+def test_gate_and_thread_stage_via_message_store(tmp_path: Path) -> None:
+    """gate: and thread: call message_store.stage when an account context exists."""
+    from unittest.mock import MagicMock, patch as _patch
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    inbox = home / "dispatch" / "inbox"
+    protocol.create_event(inbox, "telegram", "Gate and thread test",
+                          conversation_key="gt-conv")
+    gate_md = "---\ngate: telegram\n---\nHello from the gate.\n"
+    thread_md = "---\nthread: telegram:owner\n---\nHello on thread.\n"
+    gate_script = (
+        "#!/usr/bin/env python3\n"
+        "import os\nfrom pathlib import Path\n"
+        "outbox = Path(os.environ['BRR_OUTBOX_DIR'])\n"
+        "eid = os.environ['BRR_EVENT_ID']\n"
+        "def stage(name, body):\n"
+        "    tmp = outbox / (name + '.tmp')\n"
+        "    tmp.write_text(body, encoding='utf-8')\n"
+        "    tmp.rename(outbox / name)\n"
+        f"stage('gate.md', {gate_md!r})\n"
+        f"stage('thread.md', {thread_md!r})\n"
+        "stage('reply.md', '---\\nevent: ' + eid + '\\n---\\nDone.\\n')\n"
+    )
+    binary = tmp_path / "shell"
+    binary.write_text(gate_script, encoding="utf-8")
+    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+
+    mock_ctx = MagicMock()
+    mock_ctx.default_repo.label = "org/repo"
+    staged: list[dict] = []
+
+    def _fake_stage(ctx, *, repo_label, run_id, body, kind,
+                    target_gate="", target_thread="", **kw):
+        staged.append({"gate": target_gate, "thread": target_thread,
+                        "body": body, "kind": kind})
+        return None
+
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    runtime._account_ctx = mock_ctx
+    with _patch("brr.daemon2.runtime.message_store.stage", side_effect=_fake_stage):
+        result = runtime.once()
+    assert result is not None and result.answered
+    gates = [s for s in staged if s["gate"] == "telegram"]
+    threads = [s for s in staged if s["thread"] == "telegram:owner"]
+    assert gates, "gate: did not call message_store.stage"
+    assert threads, "thread: did not call message_store.stage"
+    assert "Hello from the gate" in gates[0]["body"]
+    assert "Hello on thread" in threads[0]["body"]
