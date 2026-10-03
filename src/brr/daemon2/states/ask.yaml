@@ -1,0 +1,12 @@
+{
+  "start": "open",
+  "states": ["open", "working", "delivered", "accepted", "retired"],
+  "transitions": [
+    {"from": "open", "on": "start", "to": "working"},
+    {"from": "working", "on": "deliver", "to": "delivered"},
+    {"from": "delivered", "on": "accept", "to": "accepted"},
+    {"from": "open", "on": "retire", "to": "retired"},
+    {"from": "working", "on": "retire", "to": "retired"},
+    {"from": "delivered", "on": "retire", "to": "retired"}
+  ]
+}

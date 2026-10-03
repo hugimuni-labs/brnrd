@@ -1,0 +1,256 @@
+{
+  "attention": {
+    "needs_attention": false,
+    "pending_event_count": 0,
+    "pending_outbox_file_count": 0
+  },
+  "await": {
+    "armed": false
+  },
+  "budget": {
+    "elapsed_seconds": 0
+  },
+  "card": {
+    "active": false,
+    "age_seconds": 0,
+    "delta": null,
+    "stale": false,
+    "state_moved_seconds": 0,
+    "text": "unimplemented"
+  },
+  "change_token": "unimplemented",
+  "delivery": {
+    "already_delivered": false,
+    "gate": null,
+    "known": false,
+    "reason": null,
+    "route": "unimplemented",
+    "would_land": false
+  },
+  "generated_at": "unimplemented",
+  "heddles": [],
+  "inbound": {
+    "current_event": "unimplemented",
+    "current_event_replyable": false,
+    "current_event_topic": {
+      "confirmed": "unimplemented",
+      "proposed": null
+    },
+    "events": [],
+    "unstamped": []
+  },
+  "knowledge": {
+    "kb_base_url": "unimplemented"
+  },
+  "name": {
+    "written": false
+  },
+  "notices": [],
+  "outbound": {
+    "any_sent": false,
+    "oldest_pending_age_seconds": null,
+    "outbound_messages": 0,
+    "pending_outbox_files": [],
+    "replies_current": 0,
+    "replies_other": 0
+  },
+  "produce": {
+    "branch": "unimplemented",
+    "counts": {
+      "branch": 0,
+      "commit": 0,
+      "pr": 0
+    },
+    "issue_actions": {
+      "completed": 0,
+      "created": 0,
+      "unattributed": 0
+    },
+    "known": false,
+    "latest_commit": "unimplemented",
+    "ledger": {
+      "counts": {
+        "card": 0,
+        "heddle": 0,
+        "knot": 0,
+        "page": 0
+      },
+      "last": [],
+      "sources": {
+        "frame": 0,
+        "relic": 0
+      },
+      "unmapped": 0
+    },
+    "pr": 0,
+    "records": []
+  },
+  "resource_hold": null,
+  "resources": {
+    "allowance": {
+      "explicit": false,
+      "kind": "unimplemented",
+      "note": null,
+      "pct": 0,
+      "required": false,
+      "scope": "unimplemented",
+      "spent": 0,
+      "status": "unimplemented",
+      "summary": "unimplemented",
+      "tokens": 0
+    },
+    "coexisting_runs": {
+      "kind": "unimplemented",
+      "note": null,
+      "owned_children": [],
+      "required": false,
+      "siblings": [],
+      "spawn_pool": {
+        "floor": null
+      },
+      "status": "unimplemented",
+      "summary": "unimplemented"
+    },
+    "context_window": {
+      "kind": "unimplemented",
+      "note": null,
+      "required": false,
+      "status": "unimplemented",
+      "summary": "unimplemented"
+    },
+    "correspondent": {
+      "kind": "unimplemented",
+      "note": "unimplemented",
+      "quiet_seconds": null,
+      "read": null,
+      "required": false,
+      "status": "unimplemented",
+      "summary": null,
+      "unread_bytes": null,
+      "unread_count": null
+    },
+    "quota": {
+      "draws": {
+        "self": 0,
+        "strands": []
+      },
+      "kind": "unimplemented",
+      "note": null,
+      "others": [],
+      "pacing": {
+        "binding_remaining_pct": 0,
+        "critical_floor_pct": 0,
+        "floor": null,
+        "low_floor_pct": 0,
+        "pace": {
+          "consumed_share_pct": 0,
+          "elapsed_share_pct": 0,
+          "ratio": 0,
+          "recommendation": "unimplemented",
+          "resets_at": 0,
+          "window_minutes": 0
+        },
+        "starvation": {
+          "binding_remaining_pct": 0,
+          "refill_floor_pct": 0,
+          "starve_floor_pct": 0,
+          "starved": false
+        },
+        "stretch_factor": 0
+      },
+      "required": false,
+      "status": "unimplemented",
+      "summary": "unimplemented"
+    },
+    "remote_scm": {
+      "branch": "unimplemented",
+      "kind": "unimplemented",
+      "note": null,
+      "pr_number": "unimplemented",
+      "pr_state": "unimplemented",
+      "required": false,
+      "status": "unimplemented",
+      "summary": "unimplemented"
+    },
+    "runner": {
+      "attestation": "unimplemented",
+      "capability_freshness": null,
+      "capability_score": null,
+      "capability_source": null,
+      "catalog": [],
+      "class": "unimplemented",
+      "core_mismatch": null,
+      "cost_rank": 0,
+      "hooks": "unimplemented",
+      "model": "unimplemented",
+      "model_observed": null,
+      "model_requested": "unimplemented",
+      "name": "unimplemented",
+      "owner": "unimplemented",
+      "provider": "unimplemented",
+      "quality_escalation": {
+        "capability_freshness": null,
+        "capability_score": null,
+        "capability_source": null,
+        "class": "unimplemented",
+        "cost_rank": 0,
+        "model": "unimplemented",
+        "name": "unimplemented",
+        "owner": "unimplemented",
+        "provider": "unimplemented",
+        "status": "unimplemented"
+      },
+      "quota_source": "unimplemented",
+      "status": "unimplemented",
+      "substitution_reason": null,
+      "summary": "unimplemented"
+    },
+    "spend": {
+      "kind": "unimplemented",
+      "metered_by": "unimplemented",
+      "note": "unimplemented",
+      "required": false,
+      "status": "unimplemented",
+      "summary": null
+    }
+  },
+  "run": {
+    "attempt": 0,
+    "branch": "unimplemented",
+    "env": "unimplemented",
+    "event_id": "unimplemented",
+    "id": "unimplemented",
+    "phase": "unimplemented",
+    "repo": "unimplemented",
+    "runner": "unimplemented",
+    "status": "unimplemented",
+    "topic": "unimplemented"
+  },
+  "schedule": {
+    "armed": []
+  },
+  "scm": {
+    "branch": "unimplemented",
+    "known": false,
+    "modified_files": 0,
+    "unpushed_commits": 0
+  },
+  "seat": {
+    "parks_on_turn_end": false
+  },
+  "shuttle": {
+    "run_id": "unimplemented",
+    "since": "unimplemented",
+    "state": "unimplemented",
+    "why": "unimplemented"
+  },
+  "strand": {
+    "is_strand": false,
+    "submitted": false
+  },
+  "tick": {
+    "at": "unimplemented",
+    "n": 0
+  },
+  "version": 0
+}

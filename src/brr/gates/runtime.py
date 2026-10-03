@@ -12,10 +12,11 @@ import json
 import os
 import re
 import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Protocol
 
 from .. import message_store, protocol
 from . import BUILTIN_GATES as _BUILTIN_GATES
@@ -490,6 +491,35 @@ _DELIVERY_FAILURE_CEILING = 10
 _delivery_retry: dict[tuple[str, str], tuple[int, float]] = {}
 
 
+class DeliveryHook(Protocol):
+    """Optional fence around a gate's existing platform send."""
+
+    def send(self, key: str, event: dict, body: str,
+             deliver: Callable[[dict, str], object]) -> object: ...
+
+    def undeliverable(self, key: str, reason: str) -> None: ...
+
+
+_delivery_hooks: dict[tuple[Path, Path], DeliveryHook] = {}
+_delivery_hooks_lock = threading.Lock()
+
+
+def set_delivery_hook(inbox_dir: Path, responses_dir: Path,
+                      hook: DeliveryHook | None) -> None:
+    """Install a transport fence for one queue without changing gate APIs."""
+    pair = (inbox_dir.resolve(), responses_dir.resolve())
+    with _delivery_hooks_lock:
+        if hook is None:
+            _delivery_hooks.pop(pair, None)
+        else:
+            _delivery_hooks[pair] = hook
+
+
+def _delivery_hook(inbox_dir: Path, responses_dir: Path) -> DeliveryHook | None:
+    with _delivery_hooks_lock:
+        return _delivery_hooks.get((inbox_dir.resolve(), responses_dir.resolve()))
+
+
 class PermanentDeliveryError(Exception):
     """A delivery that no future attempt can complete.
 
@@ -640,6 +670,7 @@ def deliver_stream(
     """
     if deliver_terminal is None:
         deliver_terminal = deliver_partial
+    hook = _delivery_hook(inbox_dir, responses_dir)
     now = time.monotonic()
     for event in _deliverable(inbox_dir, responses_dir, source):
         eid = event["id"]
@@ -653,7 +684,10 @@ def deliver_stream(
                 message = message_store.read(message_path) if message_path else None
                 if message and message.get("status") != message_store.PENDING:
                     continue
-                receipt = deliver_partial(event, body) if body else None
+                send_key = f"{source}:{eid}:partial:{ppath.name}"
+                receipt = (hook.send(send_key, event, body, deliver_partial)
+                           if hook and body else deliver_partial(event, body)
+                           if body else None)
                 if message_path:
                     message_store.transition(
                         message_path,
@@ -675,7 +709,9 @@ def deliver_stream(
                 if body is not None and not suppressed and (
                     message is None or message.get("status") == message_store.PENDING
                 ):
-                    receipt = deliver_terminal(event, body)
+                    send_key = f"{source}:{eid}:terminal"
+                    receipt = (hook.send(send_key, event, body, deliver_terminal)
+                               if hook else deliver_terminal(event, body))
                     if message_path:
                         message_store.transition(
                             message_path,
@@ -687,6 +723,8 @@ def deliver_stream(
             _delivery_settled(source, eid)
             record_delivery_health(brr_dir, source, event_id=eid, error=None)
         except PermanentDeliveryError as e:
+            if hook is not None:
+                hook.undeliverable(f"{source}:{eid}:terminal", str(e))
             # Nothing about a future attempt would differ. Close it, say why —
             # and retire the durable message row that was in flight, or it
             # sits ``pending`` forever wearing a status nothing will ever
@@ -701,6 +739,8 @@ def deliver_stream(
         except Exception as e:  # noqa: BLE001 - one bad event must not stall the rest
             attempts = _delivery_failed(source, eid, now=now)
             if attempts >= _DELIVERY_FAILURE_CEILING:
+                if hook is not None:
+                    hook.undeliverable(f"{source}:{eid}:terminal", str(e))
                 # Enough tries. Backing off further only stretches the same
                 # flood over a longer clock; treat it like a permanent
                 # failure from here.
@@ -724,4 +764,3 @@ def deliver_stream(
                 brr_dir, source, event_id=eid, error=str(e), attempts=attempts
             )
             continue
-
