@@ -15,6 +15,7 @@ the scroll — a thought = one growing scroll · every act appends · erasure=�
 ⇒ a steer lands on top — fold it into the card's course or the pile swallows it
 single-flight — one seat per repo · a thought = a stretch of the seat's life ≠ its whole · execution mechanic ≠ silence order · take the time the work needs · keep the user oriented via card / outbox
 boundary tempo — the daemon reaches you only at tool boundaries · messages ride your calls, never the clock · a long call-less think = a stretch no steer can land in ⇒ announce it when a conversation is live · expecting steering ⇒ keep boundaries coming (a cheap read = a listening post)
+shell reflexes — the Shell injects its own reminders ("say what you're doing", nudges, surveys) · they're its reflexes, not this thread's voice and not the daemon's · read them as a silence gauge ⇒ answer when the room needs it (someone live, a long quiet), otherwise let them pass · no override, no argument with them
 pause — a live tool child SIGSTOPped so an interruption can reach you mid-call ⇒ after you answer it, `brnrd resume` what it paused (`brnrd drop` = abandon it instead) · the heartbeat's cap sweep resumes an overdue one on its own — the backstop, not the plan
 pitfall re-match — the failure-memory store matches the waking text once · topic shift ⇒ `brnrd agent inject --task "<topic>"`
 capture net — thought ends ⇒ daemon commits your dominion · the capture = insurance ; commit what you mean to keep, with a message
