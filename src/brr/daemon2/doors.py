@@ -28,6 +28,27 @@ class FileDoor:
     inbox: Path
     responses: Path
     letters: Any = None
+    other_queues: tuple[tuple[Path, Path, str], ...] = ()
+
+    def queues(self) -> tuple[tuple[Path, Path, str], ...]:
+        return ((self.inbox, self.responses, ""), *self.other_queues)
+
+    def event_paths(self):
+        for inbox, _responses, _label in self.queues():
+            yield from inbox.glob("*.md")
+
+    def response_dir(self, event: dict[str, Any]) -> Path:
+        path = Path(event.get("_path") or self.inbox / f"{event['id']}.md")
+        for inbox, responses, _label in self.queues():
+            if path.parent == inbox:
+                return responses
+        return self.responses
+
+    @staticmethod
+    def _label(event: dict[str, Any] | None, label: str) -> dict[str, Any] | None:
+        if event is not None and label and not event.get("repo_label"):
+            return {**event, "repo_label": label}
+        return event
 
     def _project(self, event: dict[str, Any] | None) -> dict[str, Any] | None:
         if event is None or self.letters is None:
@@ -41,12 +62,21 @@ class FileDoor:
         return {**event, "status": status}
 
     def pending(self) -> list[dict[str, Any]]:
-        return [projected for event in protocol.list_dispatchable(self.inbox)
-                if (projected := self._project(event)) is not None
-                and projected["status"] in {"pending", "processing"}]
+        pending = []
+        for inbox, _responses, label in self.queues():
+            for event in protocol.list_dispatchable(inbox):
+                projected = self._project(self._label(event, label))
+                if projected is not None and projected["status"] in {"pending", "processing"}:
+                    pending.append(projected)
+        pending.sort(key=protocol._event_queue_sort_key)
+        return pending
 
     def get(self, event_id: str) -> dict[str, Any] | None:
-        return self._project(protocol._read_event(self.inbox / f"{event_id}.md"))
+        for inbox, _responses, label in self.queues():
+            event = protocol._read_event(inbox / f"{event_id}.md")
+            if event is not None:
+                return self._project(self._label(event, label))
+        return None
 
     def send(self, event: dict[str, Any], body: str,
              key: str, gen: int, *,
@@ -57,16 +87,17 @@ class FileDoor:
         after a crash leaves the same carrier. A remote gate must still
         validate the idempotency key and generation at delivery.
         """
-        target = protocol.response_path(self.responses, str(event["id"]))
-        old = protocol.read_response(self.responses, str(event["id"]))
+        responses = self.response_dir(event)
+        target = protocol.response_path(responses, str(event["id"]))
+        old = protocol.read_response(responses, str(event["id"]))
         if old is not None and old != body.strip():
             raise ValueError("response key already carries different body")
-        protocol.write_response(self.responses, str(event["id"]), body,
+        protocol.write_response(responses, str(event["id"]), body,
                                 message_path=message_path)
         # Today's gate delivery organ selects terminal carriers from the
         # event file. This is a compatibility projection of the letter fact;
         # daemon2 still reads the fact as authority on restart.
-        raw = protocol._read_event(self.inbox / f"{event['id']}.md")
+        raw = protocol._read_event(Path(event["_path"]))
         if raw is not None and raw.get("status") not in {"done", "delivered"}:
             protocol.set_status(raw, "done")
         return {"path": str(target), "key": key, "gen": gen}

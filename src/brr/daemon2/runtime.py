@@ -79,6 +79,11 @@ class Daemon2:
                                                         conf.load_config(self.repo_root))
         except Exception:
             self._account_ctx = None
+        if self._account_ctx is not None and self._account_ctx.enabled:
+            self.door.other_queues = tuple(
+                (gitops.shared_brr_dir(repo.root) / "inbox",
+                 gitops.shared_brr_dir(repo.root) / "responses", repo.label)
+                for repo in self._account_ctx.repos.values())
 
     @staticmethod
     def _terminate_runner(run_id: str, *, grace: float = 0.5) -> None:
@@ -308,7 +313,7 @@ class Daemon2:
         if not key:
             return None, "unknown conversation"
         incoming = []
-        for path in self.door.inbox.glob("*.md"):
+        for path in self.door.event_paths():
             event = protocol._read_event(path)
             if (event is not None
                     and event.get("source") not in protocol.INTERNAL_SOURCES
@@ -976,11 +981,8 @@ class Daemon2:
         self_lease: Lease | None = None
         lease_lock = threading.Lock()
         transport = GateTransport(self.leases, self.facts, lambda: self_lease)
-        delivery_pairs = [(self.door.inbox, self.door.responses)]
-        if self._account_ctx is not None and self._account_ctx.enabled:
-            for repo in self._account_ctx.repos.values():
-                brr_dir = gitops.shared_brr_dir(repo.root)
-                delivery_pairs.append((brr_dir / "inbox", brr_dir / "responses"))
+        delivery_pairs = [(inbox, responses)
+                          for inbox, responses, _label in self.door.queues()]
         for inbox, responses in delivery_pairs:
             transport.install(inbox, responses)
 
@@ -1157,7 +1159,8 @@ class Daemon2:
             outbox.mkdir(parents=True, exist_ok=True)
             run_dir = self.runtime_dir / "runs" / run_id
             run_dir.mkdir(parents=True, exist_ok=True)
-            response = protocol.response_path(self.door.responses, str(event["id"]))
+            response = protocol.response_path(self.door.response_dir(event),
+                                              str(event["id"]))
             context = run_dir / "context.md"
             task_text = str(event.get("body") or "")
             if resumed is not None and resumed.mode == "checkpoint":

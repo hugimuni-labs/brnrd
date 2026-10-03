@@ -1292,3 +1292,86 @@ def test_gate_transport_records_undeliverable_with_generation(tmp_path: Path) ->
         assert protocol._read_event(event_path)["status"] == "error"
     finally:
         transport.remove(runtime.door.inbox, runtime.door.responses)
+
+
+def test_recorded_telegram_inbound_routes_and_answers_through_serve(
+        tmp_path: Path, monkeypatch) -> None:
+    from brr.gates import telegram
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    brr_dir = repo / ".brr"
+    telegram._save_state(brr_dir, {"token": "secret", "paired_user_id": 41})
+    binary = tmp_path / "fake-shell"
+    _fake_shell(binary)
+    runtime = Daemon2(repo, tmp_path / "home", runtime_dir=brr_dir,
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    sent: list[str] = []
+
+    def fake_api(_token, method, _params=None, **_kwargs):
+        if method == "getUpdates":
+            return {"result": [{"update_id": 1, "message": {
+                "message_id": 501, "chat": {"id": 123},
+                "from": {"id": 41, "first_name": "Ada"},
+                "text": "recorded inbound"}}]}
+        sent.append(method)
+        return {"ok": True, "result": {"message_id": 77}}
+
+    monkeypatch.setattr(telegram, "_api_call", fake_api)
+
+    def one_gate_turn(gate_brr, inbox, responses):
+        telegram._loop_once(gate_brr, inbox, responses)
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            events = list(inbox.glob("*.md"))
+            if events and protocol.read_response(responses, events[0].stem):
+                telegram._deliver_responses(gate_brr, inbox, responses, "secret")
+                return
+            time.sleep(0.02)
+        raise AssertionError("daemon2 did not answer recorded gate letter")
+
+    monkeypatch.setattr(telegram, "run_loop", one_gate_turn)
+    thread = threading.Thread(target=runtime.serve, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 10
+    try:
+        while not sent and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert sent == ["sendMessage"]
+        events = list(runtime.door.event_paths())
+        assert len(events) == 1
+        event = runtime.door.get(events[0].stem)
+        assert event is not None and event["status"] == "done"
+        assert runtime.letters.state(events[0].stem).state == "answered"
+        assert runtime.router.route_or_triage(event).conversation
+        assert protocol.read_response(runtime.door.response_dir(event),
+                                      events[0].stem) == "hello from fake Shell"
+        assert any(f.kind == "sent" for f in runtime.facts.read(
+            "sends", "transport:telegram:" + events[0].stem + ":terminal"))
+    finally:
+        runtime.stop()
+        thread.join(timeout=8)
+        assert not thread.is_alive()
+
+
+def test_repo_scoped_inbox_uses_its_matching_response_queue(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    binary = tmp_path / "fake-shell"
+    _fake_shell(binary)
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]})
+    repo_inbox = repo / ".brr" / "inbox"
+    repo_responses = repo / ".brr" / "responses"
+    runtime.door.other_queues = ((repo_inbox, repo_responses, "org/repo"),)
+    event_path = protocol.create_event(repo_inbox, "telegram", "from repo",
+                                       conversation_key="telegram:repo")
+    assert runtime.door.pending()[0]["repo_label"] == "org/repo"
+    result = runtime.once()
+    assert result is not None and result.answered
+    assert result.response.parent == repo_responses
+    assert protocol.read_response(repo_responses, event_path.stem) == "hello from fake Shell"
