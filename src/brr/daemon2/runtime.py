@@ -816,11 +816,17 @@ class Daemon2:
                 (state["outbox"] / ".forge-handoff").write_text(
                     f"event: {target}\nhead: {head}\n", encoding="utf-8")
                 if self._account_ctx is not None:
-                    message_store.stage(
-                        self._account_ctx,
-                        repo_label=str(state["event"].get("repo_label") or ""),
-                        run_id=state["run_id"], body=body, kind="outbound",
-                        target_gate="forge", source_ref=path.name)
+                    try:
+                        message_store.stage(
+                            self._account_ctx,
+                            repo_label=str(state["event"].get("repo_label") or ""),
+                            run_id=state["run_id"], body=body, kind="outbound",
+                            target_gate="forge", source_ref=path.name)
+                    except Exception as exc:
+                        self._notice(state, f"gate 'forge': carrier queued, but "
+                                     f"message record failed: {exc}",
+                                     kind="advisory", source_file=path.name,
+                                     verb="gate")
                 return
             if not body:
                 self._notice(state, f"gate message dropped: gate {gate_name!r} "
@@ -856,11 +862,16 @@ class Daemon2:
                 **target_meta)
             protocol.write_response(self.door.responses, carrier.stem, body)
             if self._account_ctx is not None:
-                message_store.stage(
-                    self._account_ctx,
-                    repo_label=str(state["event"].get("repo_label") or ""),
-                    run_id=state["run_id"], body=body, kind="outbound",
-                    target_gate=gate_name, source_ref=path.name)
+                try:
+                    message_store.stage(
+                        self._account_ctx,
+                        repo_label=str(state["event"].get("repo_label") or ""),
+                        run_id=state["run_id"], body=body, kind="outbound",
+                        target_gate=gate_name, source_ref=path.name)
+                except Exception as exc:
+                    self._notice(state, f"gate {gate_name!r}: carrier queued, but "
+                                 f"message record failed: {exc}", kind="advisory",
+                                 source_file=path.name, verb="gate")
         elif verb == "thread":
             key = str(fm.get("thread") or "").strip()
             event, refusal = self._thread_target(key)
