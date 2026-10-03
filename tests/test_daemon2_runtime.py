@@ -667,6 +667,33 @@ def test_halt_without_carry_allows_a_later_message_new_seat(tmp_path: Path) -> N
     assert resumed.answered
 
 
+def test_halt_bounces_unticked_course_and_live_child(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    event = protocol.create_event(home / "dispatch" / "inbox", "telegram",
+                                  "work", conversation_key="c", ask_id="ask-1",
+                                  telegram_user_id="42")
+    report = tmp_path / "child-report.md"
+    spawn = ("---\nspawn: true\nbranch: brr/child\n"
+             f"report: {report}\n---\nchild task\n")
+    halt = "---\nhalt: true\nreason: spent\nresumable: read report\n---\nbye\n"
+    binary = tmp_path / "shell"
+    _verb_shell(binary,
+                (".card", "## Plan\n- [ ] fix the parser\n"),
+                ("spawn.md", spawn), ("halt.md", halt))
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    result = runtime.once()
+    assert result is not None and not result.answered
+    assert protocol.read_response(home / "dispatch" / "responses", event.stem) is None
+    notices = json.loads((result.outbox / "portal-state.json").read_text())["notices"]
+    bounce = [row["text"] for row in notices if "halt bounced" in row["text"]]
+    assert bounce and "course:1" in bounce[0] and "strand " in bounce[0]
+
+
 def test_cut_parks_seat_and_replies(tmp_path: Path) -> None:
     """cut: answers the current event and parks the seat."""
     home = tmp_path / "home"

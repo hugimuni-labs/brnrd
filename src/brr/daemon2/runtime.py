@@ -401,16 +401,11 @@ class Daemon2:
                 + (f"The work continues; a successor carries this brief:\n{declaration.carry}"
                    if declaration.carry else
                    f"The work stops here. What would pick it back up:\n{declaration.resumable}"))
-            if not state["answered"]:
-                self._reply(state, event_id, announcement)
             successor = ""
             if declaration.carry:
-                handed = seat.handover(
-                    record.generation,
-                    carry={"text": declaration.carry, "reason": declaration.reason,
-                           "shell": declaration.shell, "core": declaration.core},
-                    wake_on=(WakePredicate("H"), WakePredicate("M")))
                 from .. import protocol
+                # Mint before parking: after a crash at any later instruction
+                # the brief is still a pending letter, not an unwakeable seat.
                 successor = protocol.create_event(
                     self.door.inbox, "respawn", declaration.carry,
                     conversation_key=state["conversation"], ask_id=state["ask"] or "",
@@ -418,6 +413,14 @@ class Daemon2:
                     handover_from_generation=record.generation,
                     shell=declaration.shell, core=declaration.core,
                 ).stem
+            if not state["answered"]:
+                self._reply(state, event_id, announcement)
+            if declaration.carry:
+                handed = seat.handover(
+                    record.generation,
+                    carry={"text": declaration.carry, "reason": declaration.reason,
+                           "shell": declaration.shell, "core": declaration.core},
+                    wake_on=(WakePredicate("H"), WakePredicate("M")))
                 seat.queue_letter(handed.generation, successor)
             else:
                 seat.end(record.generation)
