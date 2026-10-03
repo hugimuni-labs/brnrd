@@ -321,6 +321,85 @@ def test_child_allowance_ask_mints_parent_letter(tmp_path: Path) -> None:
     assert "Need more tests" in requests[0]["body"]
 
 
+def test_stop_cancels_pending_child_and_preserves_submitted_produce(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    inbox = home / "dispatch" / "inbox"
+    protocol.create_event(inbox, "telegram", "stop child",
+                          conversation_key="c", ask_id="ask-1")
+    child_event = protocol.create_event(
+        inbox, "spawn", "work", conversation_key="c", ask_id="ask-1",
+        parent_run_id="run-parent", spawn_edge="edge-1",
+        child_run_id="run-child", branch="brr/child", report=str(tmp_path / "report.md"))
+    binary = tmp_path / "parent-shell"
+    _verb_shell(binary, ("stop.md", "---\nstop: edge-1\nreason: contract changed\n---\n"))
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02, worktree_env=False)
+    runtime.supervisor.register("ask-1", "c", "run-parent", "edge-1", "run-child")
+    runtime.supervisor.returned("ask-1", "c", "run-parent", "edge-1", "run-child",
+                                report=str(tmp_path / "report.md"), branch="brr/child")
+    # A resumed parent thought owns the original edge.
+    runtime._run_id = lambda: "run-parent"
+    result = runtime.once(role="resident")
+    assert result is not None
+    stopped = runtime.supervisor.children("ask-1")["edge-1"]
+    assert stopped.status == "stopped"
+    assert (stopped.report, stopped.branch) == (str(tmp_path / "report.md"), "brr/child")
+    completed = [event for event in runtime.door.pending()
+                 if event["source"] == "spawn_completed"]
+    assert len(completed) == 1
+    assert completed[0]["spawn_report_path"] == str(tmp_path / "report.md")
+    assert completed[0]["spawn_published_branch"] == "brr/child"
+    assert runtime.once(role="strand") is None
+    assert runtime.door.get(child_event.stem)["status"] == "noted"
+
+
+def test_stop_terminates_running_child_shell(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    inbox = home / "dispatch" / "inbox"
+    child_event = protocol.create_event(
+        inbox, "spawn", "work", conversation_key="c", ask_id="ask-1",
+        parent_run_id="run-parent", spawn_edge="edge-1",
+        child_run_id="run-child", branch="brr/child", report=str(tmp_path / "report.md"))
+    child_shell = tmp_path / "child-shell"
+    _sleep_shell(child_shell, seconds=30)
+    child_runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                            runner_name="fake",
+                            runner_config={"runner_cmd": [str(child_shell)]},
+                            tick_seconds=0.02, worktree_env=False)
+    child_runtime.supervisor.register("ask-1", "c", "run-parent", "edge-1", "run-child")
+    outcome = []
+    thread = threading.Thread(target=lambda: outcome.append(child_runtime.once(role="strand")))
+    thread.start()
+    try:
+        _wait_processing(child_runtime, child_event)
+        protocol.create_event(inbox, "telegram", "stop child",
+                              conversation_key="c", ask_id="ask-1")
+        parent_shell = tmp_path / "parent-shell"
+        _verb_shell(parent_shell, ("stop.md", "---\nstop: run-child\n---\n"))
+        parent_runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                                 runner_name="fake",
+                                 runner_config={"runner_cmd": [str(parent_shell)]},
+                                 tick_seconds=0.02, worktree_env=False)
+        parent_runtime._run_id = lambda: "run-parent"
+        parent_runtime.once(role="resident")
+        thread.join(timeout=8)
+        assert not thread.is_alive(), "stop did not terminate the running child"
+        assert outcome and outcome[0] is not None
+        assert child_runtime.door.get(child_event.stem)["status"] == "noted"
+        assert child_runtime.seats.read("c#strand:run-child").state == "ended"
+    finally:
+        if thread.is_alive():
+            child_runtime._terminate_runner("run-child")
+            thread.join(timeout=5)
+
+
 def _sleep_shell(path: Path, *, seconds: float = 1) -> None:
     path.write_text(
         "#!/usr/bin/env python3\n"

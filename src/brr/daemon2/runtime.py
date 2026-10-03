@@ -557,12 +557,49 @@ class Daemon2:
                 state["claims"].pop(state["event"]["id"], None)
             state["answered"] = True
         elif verb == "stop":
-            target = str(fm.get("stop") or "")
-            child = self.supervisor.children(state["ask"]).get(target)
-            if child is None or child.parent != state["run_id"]:
+            target = str(fm.get("stop") or "").strip()
+            if not target:
+                self._notice(state, "stop dropped: no target run/event id",
+                             kind="dropped", source_file=path.name, verb="stop")
+                return
+            children = self.supervisor.children(state["ask"]) if state["ask"] else {}
+            child = children.get(target) or next(
+                (row for row in children.values() if row.run == target), None)
+            child_event = next((event for event in (
+                protocol._read_event(p) for p in self.door.inbox.glob("*.md"))
+                if event and event.get("source") == "spawn"
+                and event.get("id") == target), None)
+            if child is None and child_event is not None:
+                child = children.get(str(child_event.get("spawn_edge") or ""))
+            if child is None:
+                self._notice(
+                    state, f"stop refused: {target!r} matches no live concurrent spawn "
+                    "(already finished, never dispatched here, or the id is wrong)",
+                    source_file=path.name, verb="stop")
+                return
+            if child.parent != state["run_id"] or child.conversation != state["conversation"]:
                 raise ValueError("stop target is not an owned child")
+            if child.status == "stopped":
+                raise ValueError("stop target is already stopped")
+            if child_event is None:
+                child_event = next((event for event in (
+                    protocol._read_event(p) for p in self.door.inbox.glob("*.md"))
+                    if event and event.get("source") == "spawn"
+                    and event.get("child_run_id") == child.run), None)
             self.facts.record("asks", state["ask"], "child_stopped",
-                              state["run_id"], {"edge": target, "run": child.run})
+                              state["run_id"], {"edge": child.edge, "run": child.run,
+                                                "reason": str(fm.get("reason") or body)})
+            self._terminate_runner(child.run)
+            protocol.create_event(
+                self.door.inbox, "spawn_completed",
+                f"concurrent spawn {child.run} stopped by {state['run_id']}",
+                conversation_key=state["conversation"], ask_id=state["ask"],
+                spawn_parent_run_id=state["run_id"], spawned_by_run=child.run,
+                spawned_by_event=str(child_event["id"] if child_event else child.edge),
+                spawn_stopped=True, spawn_status="stopped",
+                spawn_report_path=child.report or "",
+                spawn_published_branch=child.branch or "",
+            )
         elif verb == "to":
             # to: <edge-or-run-id> — steer a child in this conversation
             # A strand belongs to the conversation that dispatched it; any run
@@ -869,6 +906,12 @@ class Daemon2:
             if claim is None:
                 self.leases.release(execution_lease)
                 continue
+            if is_child:
+                child = self.supervisor.children(address.ask or "").get(address.edge or "")
+                if child is not None and child.status == "stopped":
+                    self.letters.retire(claim, by=child.parent, why="stopped_before_start")
+                    self.leases.release(execution_lease)
+                    continue
             selected = (event, address, runner_choice, selected_runner,
                         run_id, execution_lease, claim, is_child)
             break
@@ -883,6 +926,11 @@ class Daemon2:
         def heartbeat() -> None:
             interval = max(0.01, self.lease_ttl_seconds / 3)
             while not heartbeat_done.wait(interval):
+                if is_child:
+                    child = self.supervisor.children(address.ask or "").get(address.edge or "")
+                    if child is not None and child.status == "stopped":
+                        self._terminate_runner(run_id)
+                        return
                 if self.leases.renew(execution_lease, self.lease_ttl_seconds) is None:
                     heartbeat_lost.set()
                     self._terminate_runner(run_id)
@@ -1031,6 +1079,16 @@ class Daemon2:
                 # the seat checkpoint and letter claim for expiry/recovery.
                 return RunResult(str(event["id"]), run_id, result.returncode,
                                  False, outbox, response)
+            if is_child:
+                child = self.supervisor.children(address.ask or "").get(address.edge or "")
+                if child is not None and child.status == "stopped":
+                    held = held_claims.get(str(event["id"]))
+                    if held is not None and self.letters.state(str(event["id"])).state == "claimed":
+                        self.letters.retire(held, by=child.parent, why="stopped")
+                        held_claims.pop(str(event["id"]), None)
+                    seat.end(seat.read().generation)
+                    return RunResult(str(event["id"]), run_id, result.returncode,
+                                     state["answered"], outbox, response)
             self._tick(state)
             if result.stdout.strip() and not state["answered"]:
                 self._reply(state, str(event["id"]), result.stdout.strip())
