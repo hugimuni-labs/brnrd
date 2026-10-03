@@ -2484,6 +2484,60 @@ def test_daemon_up_foreground_uses_existing_daemon_start(monkeypatch, tmp_path):
     assert calls == [(tmp_path, True)]
 
 
+def test_daemon_up_engine2_uses_account_paths_and_direct_serve(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    calls = []
+    home = tmp_path / "home"
+    inbox = home / "dispatch" / "inbox"
+    responses = home / "dispatch" / "responses"
+    monkeypatch.setattr("brr.cli._repo_root", lambda: tmp_path)
+    monkeypatch.setattr("brr.dev_reload.clear_reexec_marker", lambda: None)
+    monkeypatch.setattr("brr.dev_reload.capture_image_fingerprint", lambda: None)
+    monkeypatch.setattr(
+        "brr.account.resolve_context",
+        lambda _root, _cfg: SimpleNamespace(
+            enabled=True, home_root=home, dispatch_inbox=inbox,
+            responses_dir=responses))
+
+    class FakeDaemon2:
+        def __init__(self, *args, **kwargs):
+            calls.append((args, kwargs))
+
+        def serve(self):
+            calls.append("serve")
+
+        def stop(self):
+            calls.append("stop")
+
+    monkeypatch.setattr("brr.daemon2.runtime.Daemon2", FakeDaemon2)
+    main(["daemon", "up", "--engine", "2"])
+
+    assert calls == [
+        ((tmp_path, home), {"runtime_dir": tmp_path / ".brr",
+                            "inbox_dir": inbox, "responses_dir": responses,
+                            "dev_reload_enabled": None}),
+        "serve",
+    ]
+    assert not (tmp_path / ".brr" / "daemon.pid").exists()
+    assert not (tmp_path / ".brr" / "daemon2.active").exists()
+
+
+def test_daemon_down_prefers_active_engine2_over_installed_service(
+        monkeypatch, tmp_path):
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+    (brr_dir / "daemon2.active").write_text("123\n")
+    calls = []
+    monkeypatch.setattr("brr.cli._maybe_brr_dir", lambda: brr_dir)
+    monkeypatch.setattr("brr.daemon.stop", lambda _brr: calls.append("direct") or True)
+    monkeypatch.setattr("brr.daemon_install.stop_service",
+                        lambda: calls.append("service") or 0)
+
+    assert main(["daemon", "down"]) == 0
+    assert calls == ["direct"]
+
+
 def test_daemon_install_dispatches_to_native_installer(monkeypatch):
     calls = []
 

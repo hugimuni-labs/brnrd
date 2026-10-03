@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import account, allowance, await_verb, closekeyword, config as conf, conversations, course, cut_verb, gates, gitops, halt_verb, halts, hold_verb, message_store, promises, prompts, protocol, relics, run_ledger, runner, trust, worktree
+from .. import account, allowance, await_verb, closekeyword, config as conf, conversations, course, cut_verb, dev_reload, gates, gitops, halt_verb, halts, hold_verb, message_store, promises, prompts, protocol, relics, run_ledger, runner, trust, worktree
 from .authority import SignalAuthority
 from .doors import FileDoor, public_event
 from .facts import FactStore
@@ -47,6 +47,9 @@ class Daemon2:
     def __init__(self, repo_root: Path, home: Path, *,
                  runtime_dir: Path | None = None, runner_name: str | None = None,
                  runner_config: dict[str, Any] | None = None,
+                 inbox_dir: Path | None = None,
+                 responses_dir: Path | None = None,
+                 dev_reload_enabled: bool | None = None,
                  tick_seconds: float = 0.1,
                  lease_ttl_seconds: float | None = None,
                  worktree_env: bool = True):
@@ -57,6 +60,8 @@ class Daemon2:
         self.runner_config = runner_config or {}
         self.tick_seconds = tick_seconds
         self._config = conf.load_config(self.repo_root)
+        self.dev_reload_enabled = (bool(self._config.get("dev_reload", False))
+                                   if dev_reload_enabled is None else dev_reload_enabled)
         configured_ttl = self._config.get(
             "daemon2.lease_ttl_seconds", 60)
         self.lease_ttl_seconds = float(
@@ -64,8 +69,9 @@ class Daemon2:
         if self.lease_ttl_seconds <= 0:
             raise ValueError("daemon2 lease ttl must be positive")
         self.worktree_env = worktree_env
-        self.door = FileDoor(self.home / "dispatch" / "inbox",
-                             self.home / "dispatch" / "responses")
+        self.door = FileDoor(
+            Path(inbox_dir) if inbox_dir is not None else self.home / "dispatch" / "inbox",
+            Path(responses_dir) if responses_dir is not None else self.home / "dispatch" / "responses")
         self.facts = FactStore(self.home / "daemon2" / "facts")
         self.leases = LocalLeaseAuthority(self.home / "daemon2" / "leases",
                                           facts=self.facts)
@@ -1008,6 +1014,9 @@ class Daemon2:
         results: list[RunResult] = []
         gate_threads_started = False
         next_schedule_check = 0.0
+        next_retention_sweep = time.monotonic() + 3600.0
+        reload_watcher = (dev_reload.DevReloadWatcher.for_repo(self.repo_root)
+                          if self.dev_reload_enabled else None)
         try:
             while not self._stop_serve.is_set():
                 with lease_lock:
@@ -1033,6 +1042,15 @@ class Daemon2:
                         self.door.inbox, self._config,
                         account_context=self._account_ctx)
                     next_schedule_check = time.monotonic() + max(1.0, self.tick_seconds)
+                if held_self is not None and time.monotonic() >= next_retention_sweep:
+                    from .. import daemon as legacy_daemon
+                    interval = legacy_daemon._retention_sweep(
+                        self.repo_root, self._account_ctx)
+                    next_retention_sweep = time.monotonic() + max(interval, 3600.0)
+                if reload_watcher is not None and reload_watcher.changed():
+                    print("[brnrd] " + dev_reload.format_dev_reload_breadcrumb(
+                        reload_watcher.last_changed))
+                    dev_reload.reexec()
                 # A follower can still run its own strands. It cannot start
                 # a resident body until the account's self lease lapses.
                 dispatch_role = role if held_self is not None or role == "strand" else "strand"

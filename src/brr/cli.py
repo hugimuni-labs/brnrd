@@ -522,6 +522,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="run the foreground daemon instead of the installed service")
         q.add_argument("--dev-reload", action="store_true", default=None,
                        help="developer: re-exec daemon when brnrd package files change")
+        q.add_argument("--engine", choices=("1", "2"), default="1",
+                       help="daemon engine (default: 1; 2 is the opt-in replacement)")
         q.set_defaults(func=cmd_daemon_up)
         return q
 
@@ -7297,6 +7299,44 @@ def cmd_up(args):
             "`brnrd daemon install` from the repo to refresh the pinned "
             "working directory"
         )
+    if getattr(args, "engine", "1") == "2":
+        import os
+        import signal
+        from . import account, config as conf, dev_reload
+        from .daemon2.runtime import Daemon2
+
+        brr_dir = gitops.shared_brr_dir(root)
+        if daemon_mod.read_pid(brr_dir):
+            raise SystemExit("[brnrd] daemon already running")
+        ctx = account.resolve_context(root, conf.load_config(root))
+        if ctx.enabled:
+            home = ctx.home_root or ctx.dispatch_inbox.parent.parent
+            inbox, responses = ctx.dispatch_inbox, ctx.responses_dir
+        else:
+            home = brr_dir
+            inbox, responses = brr_dir / "inbox", brr_dir / "responses"
+        replacement = Daemon2(root, home, runtime_dir=brr_dir,
+                              inbox_dir=inbox, responses_dir=responses,
+                              dev_reload_enabled=args.dev_reload)
+        dev_reload.clear_reexec_marker()
+        dev_reload.capture_image_fingerprint()
+        previous_term = signal.getsignal(signal.SIGTERM)
+        previous_int = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGTERM, lambda _sig, _frame: replacement.stop())
+        signal.signal(signal.SIGINT, lambda _sig, _frame: replacement.stop())
+        brr_dir.mkdir(parents=True, exist_ok=True)
+        daemon_mod._write_pid(brr_dir)
+        engine_marker = brr_dir / "daemon2.active"
+        engine_marker.write_text(str(os.getpid()) + "\n")
+        try:
+            replacement.serve()
+        finally:
+            if daemon_mod.read_pid(brr_dir) == os.getpid():
+                daemon_mod._clear_pid(brr_dir)
+                engine_marker.unlink(missing_ok=True)
+            signal.signal(signal.SIGTERM, previous_term)
+            signal.signal(signal.SIGINT, previous_int)
+        return 0
     daemon_mod.start(root, dev_reload=args.dev_reload)
 
 
@@ -7319,6 +7359,8 @@ def cmd_daemon_up(args):
     ``--dev-reload`` is a foreground concept the service cannot carry, and
     delegating would silently drop it.
     """
+    if getattr(args, "engine", "1") == "2":
+        return cmd_up(args)
     if not args.foreground and args.dev_reload is None:
         from . import daemon_install
         code = daemon_install.start_service()
@@ -7333,6 +7375,13 @@ def cmd_daemon_up(args):
 
 
 def cmd_daemon_down(args):
+    from . import daemon as daemon_mod
+    brr_dir = _maybe_brr_dir()
+    if brr_dir is not None and (brr_dir / "daemon2.active").exists():
+        if daemon_mod.stop(brr_dir):
+            print("[brnrd] daemon2 stopping")
+            return 0
+        (brr_dir / "daemon2.active").unlink(missing_ok=True)
     from . import daemon_install
     code = daemon_install.stop_service()
     if code is not None:
@@ -7341,6 +7390,14 @@ def cmd_daemon_down(args):
 
 
 def cmd_daemon_status(args):
+    from . import daemon as daemon_mod
+    brr_dir = _maybe_brr_dir()
+    if brr_dir is not None and (brr_dir / "daemon2.active").exists():
+        pid = daemon_mod.read_pid(brr_dir)
+        if pid is not None:
+            print(f"[brnrd] daemon2 running (pid {pid})")
+            return 0
+        (brr_dir / "daemon2.active").unlink(missing_ok=True)
     from . import daemon_install
     return daemon_install.status(direct_brr_dir=_maybe_brr_dir())
 
