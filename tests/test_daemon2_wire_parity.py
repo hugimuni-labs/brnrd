@@ -184,6 +184,41 @@ def test_stop_unknown_replays_existing_golden(tmp_path: Path) -> None:
     assert not list(responses.glob("*.md"))
 
 
+@pytest.mark.parametrize("name", ["gate_delivered", "gate_undeliverable"])
+def test_gate_replays_existing_golden_carrier(tmp_path: Path, name: str) -> None:
+    brr_dir, inbox, responses, outbox, own_id = _base(tmp_path)
+    SCENARIOS[name]["stage"](inbox, outbox, own_id)
+    golden = json.loads((GOLDEN_DIR / f"{name}.json").read_text())
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    runtime = Daemon2(repo, tmp_path / "home", runtime_dir=brr_dir)
+    runtime.door = FileDoor(inbox, responses, runtime.letters)
+    runtime._gate_available = lambda gate: name == "gate_delivered" and gate == "telegram"
+    own = runtime.door.get(own_id)
+    assert own is not None
+    address = runtime.router.route_or_triage(own)
+    state = {
+        "event": own, "conversation": address.conversation,
+        "ask": address.ask, "parent": None, "edge": None,
+        "claim": None, "seat": None, "run_id": "run-parent", "outbox": outbox,
+        "await": None, "notices": [], "answered": False,
+        "runner_name": "fake", "is_child": False,
+        "claims": {}, "claim_lock": threading.Lock(),
+    }
+    runtime._tick(state)
+    expected = [row for key, rows in golden["tree"].items()
+                if key.endswith("/.notices.jsonl") for row in rows]
+    assert [(row["kind"], row["text"]) for row in state["notices"]] == [
+        (row["kind"], row["text"]) for row in expected]
+    if name == "gate_delivered":
+        carriers = [event for event in protocol.list_done(inbox, "telegram")
+                    if event["id"] != own_id]
+        assert len(carriers) == 1
+        assert protocol.read_response(responses, carriers[0]["id"]) == "heads up"
+    else:
+        assert not list(responses.glob("*.md"))
+
+
 def test_halt_replays_old_bounce_fixture(tmp_path: Path, monkeypatch) -> None:
     """The old TestDrain input bounces once, then the same file stands."""
     file, outbox, inbox, task, _ = halt_setup(tmp_path, monkeypatch)

@@ -822,17 +822,45 @@ class Daemon2:
                         run_id=state["run_id"], body=body, kind="outbound",
                         target_gate="forge", source_ref=path.name)
                 return
-            if self._account_ctx is None:
-                raise ValueError("gate: requires an account context — no account configured")
-            message_store.stage(
-                self._account_ctx,
-                repo_label=self._account_ctx.default_repo.label,
+            if not body:
+                self._notice(state, f"gate message dropped: gate {gate_name!r} "
+                             "had no body/inbox", kind="dropped",
+                             source_file=path.name, verb="gate")
+                return
+            if not self._gate_available(gate_name):
+                configured = [name for name in gates.BUILTIN_GATES
+                              if self._gate_available(name)]
+                self._notice(
+                    state, f"gate message dropped: {gate_name!r} is not "
+                    "deliverable on this account (configured gates: "
+                    f"{', '.join(configured) if configured else 'none'}); "
+                    "the message was NOT delivered",
+                    kind="dropped", source_file=path.name, verb="gate")
+                return
+            gate_module = gates.import_gate(gate_name)
+            if not getattr(gate_module, "CAN_SEND_UNADDRESSED", True):
+                addressed = getattr(gate_module, "addressed", None)
+                if not addressed or not addressed(fm):
+                    self._notice(
+                        state, f"gate message dropped: {gate_name!r} cannot "
+                        "originate an unaddressed send and this message carries "
+                        "no addressing it can use; the message was NOT delivered",
+                        source_file=path.name, verb="gate")
+                    return
+            target_meta = {key: value for key, value in fm.items()
+                           if key not in {"gate", "event", "id", "source", "status", "created"}}
+            carrier = protocol.create_event(
+                self.door.inbox, gate_name, "", status="done",
                 run_id=state["run_id"],
-                body=body,
-                kind="outbound",
-                target_gate=gate_name,
-                source_ref=path.name,
-            )
+                repo_label=str(state["event"].get("repo_label") or ""),
+                **target_meta)
+            protocol.write_response(self.door.responses, carrier.stem, body)
+            if self._account_ctx is not None:
+                message_store.stage(
+                    self._account_ctx,
+                    repo_label=str(state["event"].get("repo_label") or ""),
+                    run_id=state["run_id"], body=body, kind="outbound",
+                    target_gate=gate_name, source_ref=path.name)
         elif verb == "thread":
             key = str(fm.get("thread") or "").strip()
             event, refusal = self._thread_target(key)
