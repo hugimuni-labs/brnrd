@@ -217,41 +217,70 @@ def test_portal_capsule_with_resources_populates_quota_and_coexisting(tmp_path: 
     assert actual["resources"]["coexisting_runs"]["siblings"][0]["run_id"] == "sibling1"
 
 
-def test_gather_resources_populates_coexisting_and_quota(tmp_path: Path) -> None:
-    """Test that _gather_resources correctly populates coexisting runs and quota data."""
-    from brr.daemon2.runtime import Daemon2
-    
-    # Create a Daemon2 instance
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    daemon2 = Daemon2(repo, tmp_path / "home")
-    
-    # Mock state with minimal required data
-    state = {
-        "runner_name": "test-runner",
-        "run_id": "test-run-123",
-        "levels": {},  # Empty levels will result in None binding_pct
-        "runner_meta": {"model": None},
-        "branch": "test-branch"
-    }
-    
-    resources = daemon2._gather_resources(state)
-    
-    # Verify resources structure exists (the method returns the resources dict directly)
-    assert "quota" in resources
-    assert "coexisting_runs" in resources
-    
-    # Verify quota.pacing.starvation exists (the key part for hold: walls)
-    assert "pacing" in resources["quota"]
-    assert "starvation" in resources["quota"]["pacing"]
-    assert "binding_remaining_pct" in resources["quota"]["pacing"]["starvation"]
-    assert "starve_floor_pct" in resources["quota"]["pacing"]["starvation"]
-    assert "refill_floor_pct" in resources["quota"]["pacing"]["starvation"]
-    assert "starved" in resources["quota"]["pacing"]["starvation"]
-    
-    # Verify coexisting_runs structure exists
-    assert "siblings" in resources["coexisting_runs"]
-    assert "owned_children" in resources["coexisting_runs"]
+def test_once_uses_recorded_quota_levels_for_hud_and_hold(tmp_path: Path) -> None:
+    """The Shell sees measured pacing and the hold wall uses that reading."""
+    from brr import account, daemon as legacy_daemon, presence
+    from brr.run import Run, run_manifest_path
+
+    for pct in (50.0, 1.0):
+        root = tmp_path / str(int(pct))
+        repo, home = root / "repo", root / "home"
+        repo.mkdir(parents=True)
+        (repo / "AGENTS.md").write_text("# Test\n")
+        (repo / ".brr").mkdir()
+        (repo / ".brr" / "config").write_text(
+            f"home.path={home}\nrepo.label=org/repo\n")
+        binary = root / "shell"
+        _verb_shell(binary, ("hold.md", "hold: true\nresume: refill\n"))
+        event = protocol.create_event(home / "dispatch" / "inbox", "telegram",
+                                      "Quota wall", conversation_key="owner")
+        runtime = Daemon2(repo, home, runtime_dir=repo / ".brr",
+                          runner_name="fake",
+                          runner_config={"runner_cmd": [str(binary)]},
+                          tick_seconds=0.02)
+        sibling = presence.register(repo / ".brr", kind="session",
+                                    run_id="sibling-run", stream="other")
+        levels = {"quota": {
+            "primary_remaining_percent": pct,
+            "primary_resets_at": time.time() + 9000,
+            "primary_window_minutes": 300.0,
+            "summary": f"5h {pct:g}% left",
+        }}
+        with patch("brr.daemon._collect_levels",
+                   return_value=(levels, frozenset({"quota"}))):
+            result = runtime.once()
+        assert result is not None
+        portal = json.loads((result.outbox / "portal-state.json").read_text())
+        quota = portal["resources"]["quota"]
+        assert quota["pacing"]["binding_remaining_pct"] == pct
+        assert quota["pacing"]["pace"]["window_minutes"] == 300.0
+        assert quota["pacing"]["starvation"]["starved"] is (pct < 2)
+        assert any(row["run_id"] == "sibling-run" for row in
+                   portal["resources"]["coexisting_runs"]["siblings"])
+        assert (repo / ".brr" / "presence").is_dir()
+        assert sorted(path.stem for path in (repo / ".brr" / "presence").glob("*.json")) == [sibling["id"]]
+        task = Run.from_file(run_manifest_path(repo / ".brr" / "runs",
+                                                result.run_id))
+        assert task is not None and task.meta["runner_name"] == "fake"
+        run_state = account.run_dir(runtime._account_ctx, "org/repo",
+                                    result.run_id) / "state.md"
+        frame = run_state.read_text()
+        for key in ("run_id", "event_id", "status", "stage", "repo_label",
+                    "source", "started_at", "ended_at", "conversation_key",
+                    "runner_name", "pid"):
+            assert f"{key}:" in frame
+        assert f"run_id: {result.run_id}" in frame
+        assert "stage: finished" in frame and "repo_label: org/repo" in frame
+        if pct < 2:
+            assert runtime.seats.read("owner").state == "parked"
+            assert task.status == "held"
+            assert portal["resource_hold"]["quota"]["binding_remaining_pct"] == pct
+            assert not any("hold refused" in n["text"] for n in portal["notices"])
+        else:
+            task.meta["quota_binding_pct"] = pct
+            expected = legacy_daemon._resident_hold_refusal(
+                task, "refill", runtime._config)
+            assert any(n["text"] == expected for n in portal["notices"])
 
 
 def test_hold_with_measured_binding_quota_under_floor_parks_seat(tmp_path: Path) -> None:
@@ -261,6 +290,9 @@ def test_hold_with_measured_binding_quota_under_floor_parks_seat(tmp_path: Path)
     # Create a Daemon2 instance
     repo = tmp_path / "repo"
     repo.mkdir()
+    (repo / ".brr").mkdir()
+    (repo / ".brr" / "config").write_text(
+        f"home.path={tmp_path / 'home'}\nrepo.label=local/hold-test\n")
     daemon2 = Daemon2(repo, tmp_path / "home")
     
     # Create minimal state for a running seat
@@ -1586,6 +1618,46 @@ def test_at_schedule_fires_once_across_serve_restart(tmp_path: Path,
     assert restarted.serve(stop_when_empty=True) == []
     assert len([path for path in restarted.door.event_paths()
                 if protocol._read_event(path)["source"] == "schedule"]) == 1
+
+
+def test_due_schedule_reaches_inbox_while_shell_is_running(tmp_path: Path,
+                                                         monkeypatch) -> None:
+    from types import SimpleNamespace
+    from brr import dominion
+
+    repo, home, dom = tmp_path / "repo", tmp_path / "home", tmp_path / "dominion"
+    repo.mkdir()
+    dom.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    monkeypatch.setattr(dominion, "resident_dominion_candidates",
+                        lambda *_args, **_kwargs: [SimpleNamespace(path=dom)])
+    binary = tmp_path / "shell"
+    binary.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json,os,time\nfrom pathlib import Path\n"
+        "out=Path(os.environ['BRR_OUTBOX_DIR'])\n"
+        "deadline=time.monotonic()+4\n"
+        "while time.monotonic()<deadline:\n"
+        "    inbox=json.loads((out/'inbox.json').read_text())\n"
+        "    if any(e.get('source')=='schedule' for e in inbox.get('events',[])):\n"
+        "        (out/'.saw-schedule.marker').write_text('yes')\n"
+        "        break\n"
+        "    time.sleep(.05)\n"
+        "time.sleep(.1)\n")
+    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+    runtime = Daemon2(repo, home, runtime_dir=repo / ".brr",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    protocol.create_event(runtime.door.inbox, "telegram", "wait for schedule",
+                          conversation_key="schedule:followup")
+    due = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 2))
+    (dom / "schedule.md").write_text(
+        f"## Followup\nat: {due}\ncheck the work\n", encoding="utf-8")
+    result = runtime.once()
+    assert result is not None
+    assert (result.outbox / ".saw-schedule.marker").read_text() == "yes"
+    assert any(e.get("source") == "schedule" for e in
+               json.loads((result.outbox / "inbox.json").read_text())["events"])
 
 
 def test_control_card_and_menu_generations_use_retained_mirrors(tmp_path: Path) -> None:

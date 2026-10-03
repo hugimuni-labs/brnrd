@@ -134,7 +134,7 @@ class ControlMirror:
         task = state.get("control_run")
         if task is None:
             return
-        kind = ("held" if state.get("cut") else
+        kind = ("held" if state.get("cut") or task.status == "held" else
                 "stopped" if state.get("halted") else
                 "done" if returncode == 0 else "failed")
         task.status = "held" if kind == "held" else "done" if kind == "done" else "error"

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import sys
 from pathlib import Path
 
 from .runtime import Daemon2
@@ -26,7 +28,8 @@ def main(argv: list[str] | None = None) -> int:
     daemon = Daemon2(args.repo, args.home, runtime_dir=args.runtime_dir,
                      runner_name=args.runner, runner_config=config)
     if args.once:
-        result = daemon.once(role=args.role)
+        with contextlib.redirect_stdout(sys.stderr):
+            result = daemon.once(role=args.role)
         print(json.dumps(result.__dict__ if result else None, default=str))
     else:
         import signal as _signal
@@ -36,7 +39,8 @@ def main(argv: list[str] | None = None) -> int:
 
         _signal.signal(_signal.SIGTERM, _handler)
         _signal.signal(_signal.SIGINT, _handler)
-        results = daemon.serve(role=args.role)
+        with contextlib.redirect_stdout(sys.stderr):
+            results = daemon.serve(role=args.role)
         print(json.dumps([r.__dict__ for r in results], default=str))
     return 0
 

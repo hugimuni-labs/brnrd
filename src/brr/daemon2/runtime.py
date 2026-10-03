@@ -15,11 +15,11 @@ import socket
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from .. import account, allowance, await_verb, closekeyword, config as conf, conversations, course, cut_verb, dev_reload, gates, gitops, halt_verb, halts, hold_verb, message_store, promises, prompts, protocol, relics, run_ledger, runner, trust, updates, worktree
+from .. import account, allowance, await_verb, closekeyword, config as conf, conversations, course, cut_verb, dev_reload, gates, gitops, halt_verb, halts, hold_verb, hud, message_store, portals, presence, promises, prompts, protocol, relics, run_ledger, runner, trust, updates, worktree
 from .authority import SignalAuthority
 from .doors import FileDoor, public_event
 from .facts import FactStore
@@ -93,6 +93,12 @@ class Daemon2:
                  gitops.shared_brr_dir(repo.root) / "responses", repo.label)
                 for repo in self._account_ctx.repos.values())
         self.controls = ControlMirror(self.runtime_dir, self._account_ctx)
+        self._periphery_lock = threading.Lock()
+        self._next_schedule_check = 0.0
+        self._next_retention_sweep = time.monotonic() + 3600.0
+        self._reload_watcher = None
+        self._reload_pending = False
+        self._next_reload_check = 0.0
 
     @staticmethod
     def _terminate_runner(run_id: str, *, grace: float = 0.5) -> None:
@@ -117,132 +123,59 @@ class Daemon2:
                 state["claim"] = claim
         return claim
 
-    def _gather_resources(self, state: dict[str, Any]) -> dict[str, Any]:
-        """Gather resources facet data from existing organs."""
-        from .. import daemon as legacy_daemon, presence, gitops
-        from ..runner_quota import binding_quota_remaining_pct
-        
-        # Get levels and pacing data
-        runner_name = state.get("runner_name", "")
-        run_id = state.get("run_id", "")
-        
-        # Get binding quota percentage
-        levels = state.get("levels") or {}
-        runner_meta = state.get("runner_meta") or {}
-        model = runner_meta.get("model")
-        binding_pct = binding_quota_remaining_pct(levels, model)
-        
-        # Store binding percentage in state for hold handler to use
-        if binding_pct is not None:
-            state["quota_binding_pct"] = binding_pct
-        
-        # Get coexisting runs from presence registry
-        brr_dir = gitops.shared_brr_dir(self.repo_root)
-        coexisting_snapshot = []
-        try:
-            coexisting_snapshot = [
-                e for e in presence.list_active_account(brr_dir)
-                if e.get("run_id") != run_id
-            ]
-        except OSError:
-            pass  # Keep snapshot empty if presence registry is unavailable
-        
-        # Build resources structure matching the expected fixture shape
-        resources = {
-            "allowance": {
-                "explicit": False,
-                "kind": "unimplemented",
-                "note": None,
-                "pct": 0,
-                "required": False,
-                "scope": "unimplemented", 
-                "spent": 0,
-                "status": "unimplemented",
-                "summary": "unimplemented",
-                "tokens": 0
-            },
-            "coexisting_runs": {
-                "kind": "known" if coexisting_snapshot else "unimplemented",
-                "note": None,
-                "owned_children": [],  # Would be populated by daemon._owned_child_controls if available
-                "required": False,
-                "siblings": coexisting_snapshot,
-                "spawn_pool": {"floor": None},
-                "status": "known" if coexisting_snapshot else "unimplemented",
-                "summary": None
-            },
-            "context_window": {
-                "kind": "unimplemented",
-                "note": None,
-                "required": False,
-                "status": "unimplemented",
-                "summary": "unimplemented"
-            },
-            "correspondent": {
-                "kind": "unimplemented", 
-                "note": "unimplemented",
-                "quiet_seconds": None,
-                "read": None,
-                "required": False,
-                "status": "unimplemented",
-                "summary": None,
-                "unread_bytes": None,
-                "unread_count": None
-            },
-            "quota": {
-                "draws": {"self": 0, "strands": []},
-                "kind": "known" if binding_pct is not None else "unimplemented",
-                "note": None,
-                "others": [],
-                "pacing": {
-                    "binding_remaining_pct": binding_pct or 0,
-                    "critical_floor_pct": 0,
-                    "floor": None,
-                    "low_floor_pct": 0,
-                    "pace": {
-                        "consumed_share_pct": 0,
-                        "elapsed_share_pct": 0, 
-                        "ratio": 0,
-                        "recommendation": "unimplemented",
-                        "resets_at": 0,
-                        "window_minutes": 0
-                    },
-                    "starvation": {
-                        "binding_remaining_pct": binding_pct or 0,
-                        "refill_floor_pct": legacy_daemon._seat_refill_floor_pct(self._config) if self._config else 10,
-                        "starve_floor_pct": legacy_daemon._seat_starve_floor_pct(self._config) if self._config else 2,
-                        "starved": (binding_pct or 100) < (legacy_daemon._seat_starve_floor_pct(self._config) if self._config else 2)
-                    },
-                    "stretch_factor": 0
-                },
-                "required": False,
-                "status": "known" if binding_pct is not None else "unimplemented",
-                "summary": None
-            },
-            "remote_scm": {
-                "branch": state.get("branch", ""),
-                "kind": "unimplemented",
-                "note": None,
-                "pr_number": None,
-                "pr_state": "unimplemented",
-                "required": False,
-                "status": "unimplemented",
-                "summary": "unimplemented"
-            },
-            "runner": {
-                "name": runner_name,
-                "status": "unimplemented"
-            },
-            "spend": {
-                "kind": "unimplemented",
-                "metered_by": "unimplemented", 
-                "note": "unimplemented",
-                "required": False,
-                "status": "unimplemented",
-                "summary": None
-            }
-        }
-        return resources
+    def _build_hud(self, state: dict[str, Any], *, refresh_levels: bool) -> hud.HUD:
+        """Give the retained HUD this seat's run, collector and controls."""
+        task = self.controls._run(state)
+        profile = state["runner_profile"]
+        task.meta.update(
+            runner_name=state["runner_name"], runner_shell=profile.shell,
+            runner_core=profile.model, repo_label=state["repo_label"],
+            runner_class=profile.cost_class,
+            pid=os.getpid(),
+        )
+        task.meta.setdefault("started_at", time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(state["started_wall"])))
+        # Daemon2's seat owns await resolution. The old HUD resolver must not
+        # reinterpret its wire record (the two generations have different
+        # arming fields), so project the seat's result after the build.
+        task.meta.pop("await", None)
+        live = hud.build(hud.HUDInputs(
+            outbox_dir=state["outbox"], inbox_dir=self.door.inbox,
+            current_event_id=str(state["event"]["id"]), task=task,
+            phase="awaiting" if state.get("await") and not state["await"]["resolved"] else "running",
+            runner_name=state["runner_name"],
+            runner_meta=profile.portal_metadata(),
+            runner_catalog=state.get("runner_catalog"),
+            card_state=state.get("card_state"),
+            output_stats=state.get("output_stats"),
+            start_monotonic=state["start_monotonic"],
+            work_dir=state.get("work_dir", self.repo_root),
+            place_root=state.get("work_dir", self.repo_root),
+            refresh_levels=refresh_levels, cfg=self._config,
+            brr_dir=self.runtime_dir,
+            account_context=(self._account_ctx if isinstance(
+                self._account_ctx, account.AccountContext) else None),
+            repo_label=state["repo_label"],
+            shuttle_home=(account.context_home_root(self._account_ctx)
+                          if isinstance(self._account_ctx, account.AccountContext)
+                          else self.runtime_dir),
+        ))
+        # The old helper reads old-daemon child controls; daemon2 owns these
+        # edges in Supervisor. Adapt this one projection at the seam.
+        owned = ([vars(child) for child in self.supervisor.children(state["ask"]).values()
+                  if child.parent == state["run_id"] and child.status == "running"]
+                 if state.get("ask") else [])
+        live.resources["coexisting_runs"]["owned_children"] = owned
+        pacing = live.resources["quota"].get("pacing") or {}
+        pct = pacing.get("binding_remaining_pct")
+        state["quota_binding_pct"] = pct if isinstance(pct, (int, float)) else None
+        if task.meta.get("pending_resource_hold"):
+            state["pending_resource_hold"] = task.meta["pending_resource_hold"]
+        if state.get("await") is not None:
+            from .. import daemon as legacy_daemon
+            live = replace(live, await_=state["await"])
+            live = replace(live, change_token=legacy_daemon._change_token(live.to_dict()))
+        return live
 
     def _runner_for(self, event: dict[str, Any]) -> runner.RunnerProfile:
         # A pinned command is the operator/test override path; it has no
@@ -286,12 +219,18 @@ class Daemon2:
 
     def _notice(self, state: dict[str, Any], text: str, *, kind: str = "refused",
                 source_file: str | None = None, verb: str | None = None) -> None:
+        from .. import daemon as legacy_daemon
+
         row = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                "kind": kind, "text": text, "lifetime": "run",
                "run": state["run_id"], "verb": verb or "event"}
         if source_file:
             row["source_file"] = source_file
         state["notices"].append(row)
+        legacy_daemon._record_outbox_notice(
+            state["outbox"], text, kind=kind, lifetime="run",
+            source_file=source_file or "", verb=verb or "event",
+            run=state["run_id"])
 
     def _reply(self, state: dict[str, Any], target_id: str, body: str) -> None:
         if not body:
@@ -336,6 +275,11 @@ class Daemon2:
             state["claims"].pop(target_id, None)
         if target_id == state["event"]["id"]:
             state["answered"] = True
+            state.setdefault("output_stats", {}).setdefault("current", 0)
+            state["output_stats"]["current"] += 1
+        else:
+            state.setdefault("output_stats", {}).setdefault("other", 0)
+            state["output_stats"]["other"] += 1
 
     def _interim(self, state: dict[str, Any], body: str, path: Path) -> None:
         """Queue a mid-thought message without settling the waking letter."""
@@ -626,57 +570,37 @@ class Daemon2:
                              source_file=path.name, verb="hold")
                 return
             assert spec is not None
+            from .. import daemon as legacy_daemon
+            task = self.controls._run(state)
+            task.meta["quota_binding_pct"] = state.get("quota_binding_pct")
             resume = str(spec["resume_condition"])
-            rest = ("`brnrd await` is the resting state — a message, an own strand, "
-                    "or a tick resolves it, and the seat stays warm")
-            if resume not in {"refill", "reset"}:
-                refusal = (f"hold refused: resume: {resume} is not a resource wall — "
-                           f"{rest}. `hold:` parks only on a wall the daemon can "
-                           "confirm: `resume: refill` (or `reset`) with the binding "
-                           "quota measured under the starvation floor")
-            else:
-                from .seat import legacy_wake_on
-                config = conf.load_config(self.repo_root)
-                floor = float(config.get("seat.starve_floor_pct", 2))
-                refill_floor = float(config.get("seat.refill_floor_pct", 10))
-                pct = state.get("quota_binding_pct")
-                
-                if pct is not None and isinstance(pct, (int, float)):
-                    # We have a measured binding quota percentage
-                    if resume == "refill":
-                        if pct < floor:
-                            # Under starvation floor - accept the hold
-                            wake_on = legacy_wake_on("refill", pool="binding", floor=refill_floor)
-                            seat.park(seat.read().generation, why=f"quota_starved ({pct:.1f}% < {floor:g}%)",
-                                     wake_on=wake_on)
-                            state["pending_resource_hold"] = True
-                            return
-                        else:
-                            reading = f"{pct:.1f}%"
-                            refusal = (f"hold refused: resume: refill requires wall — "
-                                       f"binding quota is {reading} (≥ floor {floor:g}%) — {rest}")
-                    elif resume == "reset":
-                        if pct < floor:
-                            # Under starvation floor - accept the hold
-                            wake_on = legacy_wake_on("reset")
-                            seat.park(seat.read().generation, why=f"quota_starved ({pct:.1f}% < {floor:g}%)",
-                                     wake_on=wake_on)
-                            state["pending_resource_hold"] = True
-                            return
-                        else:
-                            reading = f"{pct:.1f}%"
-                            refusal = (f"hold refused: resume: reset requires wall — "
-                                       f"binding quota is {reading} (≥ floor {floor:g}%) — {rest}")
-                    else:
-                        refusal = (f"hold refused: resume: {resume} is not a resource wall — "
-                                   f"{rest}. `hold:` parks only on a wall the daemon can "
-                                   "confirm: `resume: refill` (or `reset`) with the binding "
-                                   "quota measured under the starvation floor")
-                else:
-                    reading = "not measured this run"
-                    refusal = (f"hold refused: resume: {resume} needs a measured wall — "
-                               f"the binding quota is {reading} (floor {floor:g}%) — {rest}")
-            self._notice(state, refusal, source_file=path.name, verb="hold")
+            refusal = legacy_daemon._resident_hold_refusal(
+                task, resume, self._config)
+            if refusal is not None:
+                self._notice(state, refusal, source_file=path.name, verb="hold")
+                return
+            pct = float(state["quota_binding_pct"])
+            floor = legacy_daemon._seat_starve_floor_pct(self._config)
+            hold_fields = task.meta.get("pending_resource_hold")
+            if not isinstance(hold_fields, dict):
+                hold_fields = legacy_daemon._starvation_hold_spec(
+                    task, self._config, pct,
+                    detail=f"binding quota at {pct:.1f}% — below the {floor:g}% starvation floor",
+                    reset_deadline=None)
+            legacy_daemon._arm_resource_hold(
+                task, self.runtime_dir / "runs",
+                conversation_key=state["conversation"],
+                account_home=(self._account_ctx.home_root
+                              if isinstance(self._account_ctx, account.AccountContext)
+                              else None),
+                repo_root=self.repo_root, **hold_fields)
+            wake_on = (legacy_wake_on("refill", pool="binding",
+                                      floor=legacy_daemon._seat_refill_floor_pct(self._config))
+                       if resume == "refill" else legacy_wake_on("reset"))
+            seat.park(seat.read().generation,
+                      why=f"quota_starved ({pct:.1f}% < {floor:g}%)",
+                      wake_on=wake_on)
+            state["pending_resource_hold"] = hold_fields
         elif verb == "await":
             file_path, seconds, error = await_verb.parse_await(fm)
             if error:
@@ -996,7 +920,6 @@ class Daemon2:
                                 obligations=tuple(f"strand:{c.run}" for c in handoffs),
                                 native_session=None)
                 record = seat.read()
-                from .seat import legacy_wake_on
                 seat.park(
                     record.generation,
                     why="strands" if handoffs else "cut",
@@ -1131,6 +1054,7 @@ class Daemon2:
 
     def _tick(self, state: dict[str, Any]) -> None:
         with self._tick_lock:
+            self._periphery_tick(state=state)
             outbox_dir: Path = state["outbox"]
             for path in self.door.outbox_entries(outbox_dir):
                 try:
@@ -1155,17 +1079,105 @@ class Daemon2:
             visible = self._visible(
                 state["conversation"], state["event"]["id"],
                 is_child=state["is_child"], run_id=state["run_id"])
-            resources = self._gather_resources(state)
-            self.door.write_views(outbox_dir, state["event"]["id"], visible,
-                                  phase="awaiting" if wait and wait["armed"]
-                                        and not wait["resolved"] else "running",
-                                  notices=state["notices"], await_state=wait,
-                                  run_id=state["run_id"], repo=str(self.repo_root),
-                                  runner_name=state["runner_name"],
-                                  branch=str(state["event"].get("branch") or ""),
-                                  current_replyable=not state["answered"],
-                                  controls=control_snapshot,
-                                  resources=resources)
+            portals.write_live_inbox(outbox_dir, state["event"]["id"],
+                                     [public_event(event) for event in visible])
+            if "runner_profile" not in state:
+                # Wire-parity fixtures exercise a drain without a dispatched
+                # Shell. Only a dispatched run has the inputs for a live HUD.
+                self.door.write_views(
+                    outbox_dir, state["event"]["id"], visible,
+                    phase="running", notices=state["notices"],
+                    await_state=wait, run_id=state["run_id"],
+                    repo=str(self.repo_root), runner_name=state["runner_name"],
+                    controls=control_snapshot)
+                return
+            movement = (len(state["notices"]), repr(wait), repr(control_snapshot),
+                        tuple(event["id"] for event in visible), state["answered"],
+                        state["seat"].read().state,
+                        bool(state.get("pending_resource_hold")))
+            now = time.monotonic()
+            if (movement == state.get("last_hud_movement")
+                    and now < state.get("next_hud", 0.0)):
+                return
+            state["last_hud_movement"] = movement
+            state["next_hud"] = now + 1.0
+            from .. import daemon as legacy_daemon
+            card_state = state.setdefault("card_state", {})
+            task = self.controls._run(state)
+            legacy_daemon._frame_heartbeat(
+                task, outbox_dir=outbox_dir, card_state=card_state,
+                output_stats=state.get("output_stats"), brr_dir=self.runtime_dir,
+                account_context=(self._account_ctx if isinstance(
+                    self._account_ctx, account.AccountContext) else None),
+                repo_label=state["repo_label"],
+                work_dir=state.get("work_dir", self.repo_root),
+                repo_root=self.repo_root, inbox_dir=self.door.inbox)
+            card_path = outbox_dir / ".card"
+            if card_path.is_file() and not card_path.is_symlink():
+                card_text = card_path.read_text(encoding="utf-8").strip()
+                if card_text != card_state.get("last"):
+                    card_state["last"] = card_text
+                    card_state["written_monotonic"] = now
+            # A fast outbox pump need not spawn a quota probe each 100ms.
+            refresh = time.monotonic() >= state.get("next_levels_refresh", 0.0)
+            if refresh:
+                state["next_levels_refresh"] = time.monotonic() + 30.0
+            live = self._build_hud(state, refresh_levels=refresh)
+            hud.write(live, outbox_dir)
+            task = state["control_run"]
+            if time.monotonic() >= state.get("next_state_doc", 0.0):
+                legacy_daemon._persist_run_state_doc(
+                    (self._account_ctx if isinstance(
+                        self._account_ctx, account.AccountContext) else None),
+                    task, repo_label=state["repo_label"],
+                    stage="running", cfg=self._config,
+                    work_dir=state.get("work_dir", self.repo_root),
+                    outbox_dir=outbox_dir)
+                state["next_state_doc"] = time.monotonic() + 5.0
+            entry = state.get("presence_entry")
+            if entry is not None:
+                presence.heartbeat(
+                    self.runtime_dir, entry["id"],
+                    name=control_snapshot.get("name"),
+                    mood=control_snapshot.get("mood"),
+                    topics=control_snapshot.get("topics"),
+                    registered_entry=entry)
+
+    def _periphery_tick(self, *, state: dict[str, Any] | None = None) -> None:
+        """Keep time-based organs alive even while once() runs a Shell."""
+        from .. import daemon as legacy_daemon
+
+        with self._periphery_lock:
+            now = time.monotonic()
+            # Only the resident self lease may fire account schedules or reap
+            # account history. A follower's strand heartbeat has no authority.
+            resident = state is None or not state["is_child"]
+            if resident and now >= self._next_schedule_check:
+                legacy_daemon._fire_due_schedules(
+                    self.repo_root, gitops.shared_brr_dir(self.repo_root),
+                    self.door.inbox, self._config,
+                    account_context=self._account_ctx)
+                self._next_schedule_check = now + max(1.0, self.tick_seconds)
+            if resident and now >= self._next_retention_sweep:
+                interval = legacy_daemon._retention_sweep(
+                    self.repo_root, self._account_ctx)
+                self._next_retention_sweep = now + max(interval, 3600.0)
+            if self.dev_reload_enabled and now >= self._next_reload_check:
+                self._next_reload_check = now + 1.0
+                if self._reload_watcher is None:
+                    self._reload_watcher = dev_reload.DevReloadWatcher.for_repo(self.repo_root)
+                if self._reload_watcher.changed():
+                    self._reload_pending = True
+                    changed = self._reload_watcher.last_changed
+                    protocol._atomic_write(
+                        self.runtime_dir / "reload-pending.json",
+                        json.dumps({"detected_at": time.time(),
+                                    "changed": changed}) + "\n")
+                    if state is not None:
+                        self._notice(state, "dev_reload pending: source changed "
+                                     "during a live seat; restart requires a "
+                                     "lease-safe handoff", kind="advisory",
+                                     verb="dev_reload")
 
     def serve(self, *, stop_when_empty: bool = False,
               role: str = "any") -> list[RunResult]:
@@ -1214,10 +1226,6 @@ class Daemon2:
         renew_thread.start()
         results: list[RunResult] = []
         gate_threads_started = False
-        next_schedule_check = 0.0
-        next_retention_sweep = time.monotonic() + 3600.0
-        reload_watcher = (dev_reload.DevReloadWatcher.for_repo(self.repo_root)
-                          if self.dev_reload_enabled else None)
         try:
             while not self._stop_serve.is_set():
                 with lease_lock:
@@ -1236,22 +1244,8 @@ class Daemon2:
                         legacy_daemon._start_gates(
                             self.runtime_dir, self.door.inbox, self.door.responses)
                     gate_threads_started = True
-                if held_self is not None and time.monotonic() >= next_schedule_check:
-                    from .. import daemon as legacy_daemon
-                    legacy_daemon._fire_due_schedules(
-                        self.repo_root, gitops.shared_brr_dir(self.repo_root),
-                        self.door.inbox, self._config,
-                        account_context=self._account_ctx)
-                    next_schedule_check = time.monotonic() + max(1.0, self.tick_seconds)
-                if held_self is not None and time.monotonic() >= next_retention_sweep:
-                    from .. import daemon as legacy_daemon
-                    interval = legacy_daemon._retention_sweep(
-                        self.repo_root, self._account_ctx)
-                    next_retention_sweep = time.monotonic() + max(interval, 3600.0)
-                if reload_watcher is not None and reload_watcher.changed():
-                    print("[brnrd] " + dev_reload.format_dev_reload_breadcrumb(
-                        reload_watcher.last_changed))
-                    dev_reload.reexec()
+                if held_self is not None:
+                    self._periphery_tick()
                 # A follower can still run its own strands. It cannot start
                 # a resident body until the account's self lease lapses.
                 dispatch_role = role if held_self is not None or role == "strand" else "strand"
@@ -1356,6 +1350,7 @@ class Daemon2:
                         held_claims[letter_id] = fresh
         heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
         heartbeat_thread.start()
+        presence_entry = None
         try:
             if not self.leases.authorize(claim.lease):
                 return None
@@ -1421,16 +1416,39 @@ class Daemon2:
                 strand=is_child,
             )
             context.write_text(prompt, encoding="utf-8")
+            from .. import daemon as legacy_daemon
+            repo_label = legacy_daemon._repo_label(self.repo_root, event, self._config)
             state: dict[str, Any] = {
                 "event": event, "conversation": address.conversation,
                 "ask": address.ask, "parent": address.parent, "edge": address.edge,
                 "claim": claim, "seat": seat, "run_id": run_id, "outbox": outbox,
                 "await": None, "notices": [], "answered": False,
                 "runner_name": selected_runner,
+                "runner_profile": runner_choice,
+                "runner_catalog": runner.available_runner_catalog(
+                    self.repo_root, selected=selected_runner),
+                "repo_label": repo_label,
+                "start_monotonic": time.monotonic(),
+                "started_wall": time.time(),
+                "output_stats": {"current": 0, "other": 0, "outbound": 0},
                 "is_child": is_child,
                 "claims": held_claims, "claim_lock": claim_lock,
                 "crashed": False, "halted": False, "cut": False,
             }
+            try:
+                presence_entry = presence.register(
+                    self.runtime_dir, kind="daemon",
+                    stream=address.conversation, run_id=run_id,
+                    repo_label=repo_label,
+                    label=legacy_daemon._presence_label_for_event(event),
+                    parent_run_id=str(event.get("parent_run_id") or ""),
+                    is_subspawn=is_child, runner_name=selected_runner,
+                    runner_shell=runner_choice.shell,
+                    runner_core=runner_choice.model,
+                    runner_class=runner_choice.cost_class)
+                state["presence_entry"] = presence_entry
+            except OSError:
+                pass
             if not address.routable:
                 self._notice(state, f"unaddressed letter retained on triage seat: {address.reason}",
                              kind="advisory", verb="route")
@@ -1457,6 +1475,7 @@ class Daemon2:
                 state["allocation"] = strand_alloc
                 strand_root = (strand_alloc.path
                                if strand_alloc is not None else self.repo_root)
+                state["work_dir"] = strand_root
                 strand_git_env: dict[str, str] = (strand_alloc.env()
                                                    if strand_alloc is not None else {})
                 try:
@@ -1514,6 +1533,7 @@ class Daemon2:
             self._tick(state)
             if result.stdout.strip() and not state["answered"]:
                 self._reply(state, str(event["id"]), result.stdout.strip())
+                self._tick(state)
             record = seat.read()
             if state["halted"] or state["cut"]:
                 pass  # seat already transitioned inside _handle_outbox
@@ -1529,11 +1549,27 @@ class Daemon2:
                 record = seat.read()
                 seat.park(record.generation, why="turn_ended",
                           wake_on=legacy_wake_on("any"))
+            task = state.get("control_run")
+            if task is not None:
+                task.meta["ended_at"] = time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             self.controls.finish(state, result.returncode)
+            task = state.get("control_run")
+            if task is not None:
+                from .. import daemon as legacy_daemon
+                legacy_daemon._persist_run_state_doc(
+                    (self._account_ctx if isinstance(
+                        self._account_ctx, account.AccountContext) else None),
+                    task, repo_label=state["repo_label"], stage="finished",
+                    cfg=self._config,
+                    work_dir=state.get("work_dir", self.repo_root),
+                    outbox_dir=outbox)
             return RunResult(str(event["id"]), run_id, result.returncode,
                              state["answered"], outbox, response)
         finally:
             heartbeat_done.set()
             heartbeat_thread.join(timeout=2)
+            if presence_entry is not None:
+                presence.deregister(self.runtime_dir, presence_entry["id"])
             if execution_lease is not self_lease:
                 self.leases.release(execution_lease)
