@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import json
+import signal
 import socket
 import threading
 import time
@@ -17,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import await_verb, prompts, runner
+from .. import await_verb, config as conf, prompts, runner
 from .authority import SignalAuthority
 from .doors import FileDoor, public_event
 from .facts import FactStore
@@ -42,13 +43,20 @@ class Daemon2:
     def __init__(self, repo_root: Path, home: Path, *,
                  runtime_dir: Path | None = None, runner_name: str | None = None,
                  runner_config: dict[str, Any] | None = None,
-                 tick_seconds: float = 0.1):
+                 tick_seconds: float = 0.1,
+                 lease_ttl_seconds: float | None = None):
         self.repo_root = Path(repo_root).resolve()
         self.home = Path(home).resolve()
         self.runtime_dir = Path(runtime_dir or self.repo_root / ".brr").resolve()
         self.runner_name = runner_name
         self.runner_config = runner_config or {}
         self.tick_seconds = tick_seconds
+        configured_ttl = conf.load_config(self.repo_root).get(
+            "daemon2.lease_ttl_seconds", 60)
+        self.lease_ttl_seconds = float(
+            configured_ttl if lease_ttl_seconds is None else lease_ttl_seconds)
+        if self.lease_ttl_seconds <= 0:
+            raise ValueError("daemon2 lease ttl must be positive")
         self.door = FileDoor(self.home / "dispatch" / "inbox",
                              self.home / "dispatch" / "responses")
         self.facts = FactStore(self.home / "daemon2" / "facts")
@@ -60,6 +68,29 @@ class Daemon2:
         self.letters = LetterService(self.facts, self.leases)
         self.supervisor = Supervisor(self.facts)
         self._tick_lock = threading.Lock()
+
+    @staticmethod
+    def _terminate_runner(run_id: str, *, grace: float = 0.5) -> None:
+        pid = runner.live_pid_for_label(run_id)
+        if pid is None:
+            return
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline:
+            if runner.live_pid_for_label(run_id) is None:
+                return
+            time.sleep(0.02)
+        runner.kill_matching(run_id)
+
+    def _track_claim(self, state: dict[str, Any], claim: Claim) -> Claim:
+        with state["claim_lock"]:
+            state["claims"][claim.letter] = claim
+            if claim.letter == state["event"]["id"]:
+                state["claim"] = claim
+        return claim
 
     def _runner_for(self, event: dict[str, Any]) -> runner.RunnerProfile:
         # A pinned command is the operator/test override path; it has no
@@ -80,10 +111,19 @@ class Daemon2:
     def _run_id(self) -> str:
         return "run-" + time.strftime("%y%m%d-%H%M", time.gmtime()) + "-" + uuid.uuid4().hex[:4]
 
-    def _visible(self, conversation: str, current_event: str) -> list[dict[str, Any]]:
+    def _visible(self, conversation: str, current_event: str, *,
+                 is_child: bool = False, run_id: str = "") -> list[dict[str, Any]]:
         visible = []
         for event in self.door.pending():
             if event["id"] == current_event:
+                continue
+            if is_child:
+                if (event.get("source") != "dispatch_message"
+                        or event.get("spawn_message_for_run") != run_id):
+                    continue
+            elif (event.get("source") == "spawn"
+                  or (event.get("source") == "dispatch_message"
+                      and event.get("spawn_message_for_run"))):
                 continue
             try:
                 if self.router.route_or_triage(event).conversation == conversation:
@@ -115,12 +155,16 @@ class Daemon2:
                 "conversation": state["conversation"],
                 "trust_tier": event.get("trust_tier"),
             })
-            claim = self.letters.claim(target_id, state["run_id"], 60, now=time.time())
+            claim = self.letters.claim(
+                target_id, state["run_id"], self.lease_ttl_seconds, now=time.time())
         if claim is None:
             raise ValueError("reply target is already claimed")
-        self.letters.answer(
-            claim, body,
-            send=lambda key, gen: self.door.send(event, body, key, gen))
+        self._track_claim(state, claim)
+        with state["claim_lock"]:
+            self.letters.answer(
+                claim, body,
+                send=lambda key, gen: self.door.send(event, body, key, gen))
+            state["claims"].pop(target_id, None)
         if target_id == state["event"]["id"]:
             state["answered"] = True
 
@@ -136,10 +180,13 @@ class Daemon2:
             if event is None or self.router.route_or_triage(event).conversation != state["conversation"]:
                 raise ValueError("note target does not belong to this conversation")
             claim = state["claim"] if target == event_id else self.letters.claim(
-                target, state["run_id"], 60, now=time.time())
+                target, state["run_id"], self.lease_ttl_seconds, now=time.time())
             if claim is None:
                 raise ValueError("note target is already claimed")
-            self.letters.retire(claim, by=state["run_id"], why="noted")
+            self._track_claim(state, claim)
+            with state["claim_lock"]:
+                self.letters.retire(claim, by=state["run_id"], why="noted")
+                state["claims"].pop(target, None)
             from .. import protocol
             protocol.set_status(event, "noted")
             if target == event_id:
@@ -163,6 +210,10 @@ class Daemon2:
             ask = str(fm.get("item") or state["ask"] or "").strip()
             if not ask:
                 raise ValueError("spawn needs an ask address")
+            branch = str(fm.get("branch") or "").strip()
+            report = str(fm.get("report") or "").strip()
+            if not branch or not report:
+                raise ValueError("spawn requires branch and report paths")
             edge = uuid.uuid4().hex[:12]
             child_run = self._run_id()
             self.supervisor.register(ask, state["conversation"], state["run_id"],
@@ -173,17 +224,38 @@ class Daemon2:
                 conversation_key=state["conversation"], ask_id=ask,
                 parent_run_id=state["run_id"], spawn_edge=edge,
                 child_run_id=child_run,
-                branch=str(fm.get("branch") or ""),
-                report=str(fm.get("report") or ""),
+                branch=branch, report=report,
+                shell=str(fm.get("shell") or ""),
+                core=str(fm.get("core") or ""),
             )
         elif verb == "submit":
-            if not state.get("parent") or not state.get("edge"):
+            if not state.get("is_child") or not state.get("parent") or not state.get("edge"):
                 raise ValueError("submit belongs to a strand")
+            report = str(state["event"].get("report") or "")
+            branch = str(state["event"].get("branch") or "")
+            if not report or not Path(report).is_file() or not branch:
+                raise ValueError("submit requires its declared branch and stat-able report")
             self.supervisor.returned(
                 state["ask"], state["conversation"], state["parent"],
                 state["edge"], state["run_id"],
-                report=str(state["event"].get("report") or "") or None,
-                branch=str(state["event"].get("branch") or "") or None)
+                report=report, branch=branch)
+            from .. import protocol
+            protocol.create_event(
+                self.door.inbox, "spawn_submitted", body or "Strand submitted",
+                conversation_key=state["conversation"], ask_id=state["ask"],
+                spawn_parent_run_id=state["parent"],
+                spawned_by_event=state["edge"],
+                spawned_by_run=state["run_id"],
+                spawn_report_path=report,
+                spawn_published_branch=branch,
+            )
+            with state["claim_lock"]:
+                self.letters.answer(
+                    state["claim"], body or "Strand submitted",
+                    send=lambda key, gen: self.door.send(
+                        state["event"], body or "Strand submitted", key, gen))
+                state["claims"].pop(state["event"]["id"], None)
+            state["answered"] = True
         elif verb == "stop":
             target = str(fm.get("stop") or "")
             child = self.supervisor.children(state["ask"]).get(target)
@@ -206,7 +278,9 @@ class Daemon2:
                     path.unlink(missing_ok=True)
             wait = state.get("await")
             if wait and wait["armed"] and not wait["resolved"]:
-                pending = self._visible(state["conversation"], state["event"]["id"])
+                pending = self._visible(
+                    state["conversation"], state["event"]["id"],
+                    is_child=state["is_child"], run_id=state["run_id"])
                 outcome, which = await_verb.evaluate(wait["file"], pending)
                 if outcome is None and wait["deadline"] is not None and time.time() >= wait["deadline"]:
                     outcome = "timeout"
@@ -214,7 +288,9 @@ class Daemon2:
                     wait.update(resolved=True, outcome=outcome, which=which)
                     state["seat"].resolve_await(
                         state["seat"].read().generation, outcome)
-            visible = self._visible(state["conversation"], state["event"]["id"])
+            visible = self._visible(
+                state["conversation"], state["event"]["id"],
+                is_child=state["is_child"], run_id=state["run_id"])
             self.door.write_views(outbox_dir, state["event"]["id"], visible,
                                   phase="awaiting" if wait and wait["armed"]
                                         and not wait["resolved"] else "running",
@@ -224,41 +300,82 @@ class Daemon2:
                                   branch=str(state["event"].get("branch") or ""),
                                   current_replyable=not state["answered"])
 
-    def once(self) -> RunResult | None:
+    def once(self, *, role: str = "any") -> RunResult | None:
+        if role not in {"any", "resident", "strand"}:
+            raise ValueError("role must be any, resident or strand")
         events = self.door.pending()
         if not events:
             return None
-        event = events[0]
-        address = self.router.route_or_triage(event)
-        runner_choice = self._runner_for(event)
-        selected_runner = runner_choice.name
         machine = f"{socket.gethostname()}:{os.getpid()}"
-        self_lease = self.leases.acquire("self", machine, 60)
-        if self_lease is None:
-            return None
-        run_id = str(event.get("child_run_id") or self._run_id())
-        try:
+        selected = None
+        for event in events:
+            is_child = event.get("source") == "spawn"
+            if role == "resident" and is_child or role == "strand" and not is_child:
+                continue
+            address = self.router.route_or_triage(event)
+            runner_choice = self._runner_for(event)
+            selected_runner = runner_choice.name
+            run_id = str(event.get("child_run_id") or self._run_id())
+            execution_key = ("strand:" + str(event["id"])) if is_child else "self"
+            execution_lease = self.leases.acquire(
+                execution_key, machine, self.lease_ttl_seconds)
+            if execution_lease is None:
+                continue
             self.letters.ingest(str(event["id"]), str(event["status"]), metadata={
                 "conversation": address.conversation,
                 "trust_tier": event.get("trust_tier"),
                 "ask": address.ask,
             })
-            claim = self.letters.claim(str(event["id"]), run_id, 60,
+            claim = self.letters.claim(str(event["id"]), run_id, self.lease_ttl_seconds,
                                        now=time.time())
             if claim is None:
-                return None
+                self.leases.release(execution_lease)
+                continue
+            selected = (event, address, runner_choice, selected_runner,
+                        run_id, execution_lease, claim, is_child)
+            break
+        if selected is None:
+            return None
+        (event, address, runner_choice, selected_runner,
+         run_id, execution_lease, claim, is_child) = selected
+        held_claims = {str(event["id"]): claim}
+        claim_lock = threading.Lock()
+        heartbeat_done = threading.Event()
+        heartbeat_lost = threading.Event()
+        def heartbeat() -> None:
+            interval = max(0.01, self.lease_ttl_seconds / 3)
+            while not heartbeat_done.wait(interval):
+                if self.leases.renew(execution_lease, self.lease_ttl_seconds) is None:
+                    heartbeat_lost.set()
+                    self._terminate_runner(run_id)
+                    return
+                with claim_lock:
+                    for letter_id, held in list(held_claims.items()):
+                        renewed_claim = self.leases.renew(
+                            held.lease, self.lease_ttl_seconds)
+                        if renewed_claim is None:
+                            heartbeat_lost.set()
+                            self._terminate_runner(run_id)
+                            return
+                        fresh = Claim(letter_id, renewed_claim)
+                        held_claims[letter_id] = fresh
+        heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
+        heartbeat_thread.start()
+        try:
             from .. import protocol
             if not self.leases.authorize(claim.lease):
                 return None
             protocol.set_status(event, "processing")
-            seat = Seat(self.seats, address.conversation,
+            seat_address = (f"{address.conversation}#strand:{run_id}"
+                            if is_child else address.conversation)
+            seat = Seat(self.seats, seat_address,
                         authorize=self.authority.allowed)
             record = seat.read()
             resumed = None
             if record.state == "parked":
                 if record.wake_on:
                     resumed = seat.wake(record.generation,
-                                        Signal("mail", address.conversation,
+                                        Signal("mail", seat_address,
                                                ask=address.ask, letter_id=event["id"]),
                                         shell=selected_runner, capabilities=set(),
                                         run_id=run_id)
@@ -296,6 +413,7 @@ class Daemon2:
                 pending_events=[public_event(e) for e in events],
                 event_body=str(event.get("body") or ""),
                 event_meta=public_event(event), runner_name=selected_runner,
+                strand=is_child,
             )
             context.write_text(prompt, encoding="utf-8")
             state: dict[str, Any] = {
@@ -304,6 +422,9 @@ class Daemon2:
                 "claim": claim, "seat": seat, "run_id": run_id, "outbox": outbox,
                 "await": None, "notices": [], "answered": False,
                 "runner_name": selected_runner,
+                "is_child": is_child,
+                "claims": held_claims, "claim_lock": claim_lock,
+                "crashed": False,
             }
             if not address.routable:
                 self._notice(state, f"unaddressed letter retained on triage seat: {address.reason}",
@@ -312,23 +433,29 @@ class Daemon2:
             done = threading.Event()
             def pump() -> None:
                 while not done.wait(self.tick_seconds):
-                    renewed = self.leases.renew(self_lease, 60)
-                    if renewed is None:
-                        self._notice(state, "self lease lapsed during runner invocation")
-                        break
+                    if heartbeat_lost.is_set():
+                        return
                     self._tick(state)
             thread = threading.Thread(target=pump, daemon=True)
             thread.start()
             try:
+                if heartbeat_lost.is_set():
+                    return RunResult(str(event["id"]), run_id, 125,
+                                     False, outbox, response)
                 invocation = runner.RunnerInvocation(
-                    kind="daemon", label=run_id, prompt=prompt,
+                    kind="strand" if is_child else "daemon",
+                    label=run_id, prompt=prompt,
                     repo_root=self.repo_root, cwd=self.repo_root,
                     selected_runner=runner_choice,
                     env={"BRR_OUTBOX_DIR": str(outbox),
                          "BRR_PORTAL_STATE": str(outbox / "portal-state.json"),
                          "BRR_CONVERSATION_ID": address.conversation,
                          "BRR_EVENT_ID": str(event["id"]),
-                         "BRR_RUN_ID": run_id},
+                         "BRR_RUN_ID": run_id,
+                         "BRR_IS_STRAND": "1" if is_child else "0",
+                         "BRR_SOURCE": str(event.get("source") or ""),
+                         "BRR_REPORT_PATH": str(event.get("report") or ""),
+                         "BRR_BRANCH": str(event.get("branch") or "")},
                     resume_native_session_id=(
                         resumed.session_id if resumed and resumed.mode == "native"
                         else None),
@@ -338,6 +465,11 @@ class Daemon2:
             finally:
                 done.set()
                 thread.join(timeout=5)
+            if heartbeat_lost.is_set():
+                # A lapsed execution/letter lease is the crash path. Leave
+                # the seat checkpoint and letter claim for expiry/recovery.
+                return RunResult(str(event["id"]), run_id, result.returncode,
+                                 False, outbox, response)
             self._tick(state)
             if result.stdout.strip() and not state["answered"]:
                 self._reply(state, str(event["id"]), result.stdout.strip())
@@ -357,4 +489,6 @@ class Daemon2:
             return RunResult(str(event["id"]), run_id, result.returncode,
                              state["answered"], outbox, response)
         finally:
-            self.leases.release(self_lease)
+            heartbeat_done.set()
+            heartbeat_thread.join(timeout=2)
+            self.leases.release(execution_lease)

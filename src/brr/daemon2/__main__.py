@@ -17,10 +17,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--runtime-dir", type=Path)
     parser.add_argument("--runner")
     parser.add_argument("--runner-cmd", type=Path)
+    parser.add_argument("--role", choices=("any", "resident", "strand"),
+                        default="any")
     args = parser.parse_args(argv)
     config = {"runner_cmd": [str(args.runner_cmd)]} if args.runner_cmd else None
     result = Daemon2(args.repo, args.home, runtime_dir=args.runtime_dir,
-                     runner_name=args.runner, runner_config=config).once()
+                     runner_name=args.runner, runner_config=config).once(role=args.role)
     print(json.dumps(result.__dict__ if result else None, default=str))
     return 0
 

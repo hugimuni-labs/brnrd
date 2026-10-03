@@ -7,10 +7,12 @@ import os
 import stat
 import subprocess
 import sys
+import threading
+import time
 from unittest.mock import patch
 from pathlib import Path
 
-from brr import protocol
+from brr import protocol, runner
 from brr.daemon2.runtime import Daemon2
 from brr.daemon2.doors import FileDoor
 
@@ -172,3 +174,89 @@ def test_pending_unaddressed_letter_gets_visible_triage_seat(tmp_path: Path) -> 
     portal = json.loads((result.outbox / "portal-state.json").read_text())
     assert any("unaddressed letter retained" in notice["text"]
                for notice in portal["notices"])
+
+
+def _sleep_shell(path: Path, *, seconds: float = 1) -> None:
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os,time\nfrom pathlib import Path\n"
+        f"time.sleep({seconds})\n"
+        "d=Path(os.environ['BRR_OUTBOX_DIR'])\n"
+        "e=os.environ['BRR_EVENT_ID']\n"
+        "(d/'reply.md').write_text('---\\nevent: '+e+'\\n---\\nafter sleep\\n')\n",
+        encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+def _wait_processing(path: Path, timeout: float = 5) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if protocol._read_event(path)["status"] == "processing":
+            return
+        time.sleep(0.02)
+    raise AssertionError("letter was never claimed")
+
+
+def test_long_shell_renews_letter_claim_and_blocks_second_holder(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test repo\n", encoding="utf-8")
+    binary = tmp_path / "slow-shell"
+    _sleep_shell(binary)
+    event = protocol.create_event(home / "dispatch" / "inbox", "telegram",
+                                  "Slow task", conversation_key="c")
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02, lease_ttl_seconds=0.3)
+    output = []
+    thread = threading.Thread(target=lambda: output.append(runtime.once()))
+    thread.start()
+    try:
+        _wait_processing(event)
+        time.sleep(0.6)
+        assert runtime.letters.claim(event.stem, "rival", 0.3,
+                                     now=time.time()) is None
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+        assert output[0] is not None and output[0].answered
+    finally:
+        if thread.is_alive():
+            runner.kill_matching(runtime.seats.read("c").run_id)
+            thread.join(timeout=5)
+
+
+def test_lapsed_self_lease_kills_shell_and_leaves_recoverable_seat(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test repo\n", encoding="utf-8")
+    binary = tmp_path / "slow-shell"
+    _sleep_shell(binary, seconds=3)
+    event = protocol.create_event(home / "dispatch" / "inbox", "telegram",
+                                  "Slow task", conversation_key="c")
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02, lease_ttl_seconds=0.3)
+    output = []
+    thread = threading.Thread(target=lambda: output.append(runtime.once()))
+    thread.start()
+    try:
+        _wait_processing(event)
+        run_id = runtime.seats.read("c").run_id
+        deadline = time.monotonic() + 10
+        while runner.live_pid_for_label(run_id) is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert runner.live_pid_for_label(run_id) is not None
+        runtime.leases.clock = lambda: time.time() + 10
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+        assert output[0] is not None and not output[0].answered
+        assert output[0].returncode != 0
+        assert runner.live_pid_for_label(run_id) is None
+        assert runtime.seats.read("c").state == "running"
+        assert protocol._read_event(event)["status"] == "processing"
+    finally:
+        if thread.is_alive():
+            runner.kill_matching(runtime.seats.read("c").run_id)
+            thread.join(timeout=5)
