@@ -1787,3 +1787,66 @@ def test_control_card_and_menu_generations_use_retained_mirrors(tmp_path: Path) 
     runtime.controls.finish(state, 0)
     view = run_progress.project_run(repo / ".brr", "telegram:owner", "run-control")
     assert view is not None and view.state == "succeeded"
+
+
+def test_await_recall_while_awaiting_rearms_instead_of_refusing(tmp_path: Path) -> None:
+    """A lease that returned `pending` is re-called; the seat is still awaiting."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test repo\n", encoding="utf-8")
+    binary = tmp_path / "recall-shell"
+    binary.write_text(r"""#!/usr/bin/env python3
+import json, os, time
+from pathlib import Path
+outbox = Path(os.environ["BRR_OUTBOX_DIR"])
+portal = Path(os.environ["BRR_PORTAL_STATE"])
+event_id = os.environ["BRR_EVENT_ID"]
+def stage(name, body):
+    (outbox / (name + ".tmp")).write_text(body)
+    (outbox / (name + ".tmp")).rename(outbox / name)
+def wait_for(pred, what):
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        state = json.loads(portal.read_text())
+        if pred(state):
+            return state
+        time.sleep(0.05)
+    raise SystemExit(what)
+stage("wait1.md", "---\nawait: true\ntimeout: none\n---\n")
+first = wait_for(lambda s: s.get("await", {}).get("armed"), "first never armed")
+stage("wait2.md", "---\nawait: true\ntimeout: 1s\n---\n")
+gen = first["await"]["generation"]
+wait_for(lambda s: s.get("await", {}).get("generation") not in (None, gen)
+         or s.get("notices"), "re-call never drained")
+wait_for(lambda s: s.get("await", {}).get("resolved") or s.get("notices"),
+         "re-armed wait never resolved")
+stage("reply.md", "---\nevent: " + event_id + "\n---\nheld twice\n")
+""")
+    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+    event_path = protocol.create_event(
+        home / "dispatch" / "inbox", "telegram", "Wait, re-call, reply",
+        conversation_key="telegram:owner", trust_tier="owner")
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    result = runtime.once()
+    assert result is not None and result.returncode == 0 and result.answered
+    capsule = json.loads((result.outbox / "portal-state.json").read_text())
+    assert not [n for n in capsule["notices"] if "running seat" in n.get("text", "")]
+    assert capsule["await"]["resolved"] is True
+    assert capsule["await"]["outcome"] == "timeout"
+    assert runtime.letters.state(event_path.stem).state == "answered"
+
+
+def test_claude_runner_gets_the_await_lease_bash_cap(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from brr import await_verb
+    from brr.daemon2.runtime import _await_lease_env
+    monkeypatch.delenv("BASH_MAX_TIMEOUT_MS", raising=False)
+    claude = SimpleNamespace(name="claude-opus", hooks="claude")
+    assert _await_lease_env(claude) == {
+        "BASH_MAX_TIMEOUT_MS": str(await_verb.CLAUDE_BASH_MAX_TIMEOUT_MS)}
+    assert _await_lease_env(SimpleNamespace(name="codex", hooks="codex")) == {}
+    monkeypatch.setenv("BASH_MAX_TIMEOUT_MS", "1000")
+    assert _await_lease_env(claude) == {}

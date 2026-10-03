@@ -605,9 +605,16 @@ class Daemon2:
             file_path, seconds, error = await_verb.parse_await(fm)
             if error:
                 raise ValueError(error)
-            if seat.read().state != "running":
+            current = seat.read()
+            if current.state == "awaiting" and (state.get("await") or {}).get("armed"):
+                # A lease that returned `pending` (its call cap) is re-called
+                # by the CLI; the seat is still awaiting. Re-arm in place with
+                # a fresh generation so the new call sees its own arming.
+                armed = current
+            elif current.state != "running":
                 raise ValueError("await needs a running seat")
-            armed = seat.await_signal(seat.read().generation, (WakePredicate("M"),))
+            else:
+                armed = seat.await_signal(current.generation, (WakePredicate("M"),))
             state["await"] = {
                 "armed": True, "resolved": False,
                 "generation": uuid.uuid4().hex,
@@ -1497,7 +1504,8 @@ class Daemon2:
                              "BRR_IS_STRAND": "1" if is_child else "0",
                              "BRR_SOURCE": str(event.get("source") or ""),
                              "BRR_REPORT_PATH": str(event.get("report") or ""),
-                             "BRR_BRANCH": str(event.get("branch") or "")},
+                             "BRR_BRANCH": str(event.get("branch") or ""),
+                             **_await_lease_env(runner_choice)},
                         resume_native_session_id=(
                             resumed.session_id if resumed and resumed.mode == "native"
                             else None),
@@ -1582,3 +1590,17 @@ class Daemon2:
                 presence.deregister(self.runtime_dir, presence_entry["id"])
             if execution_lease is not self_lease:
                 self.leases.release(execution_lease)
+
+
+def _await_lease_env(runner_choice: Any) -> dict[str, str]:
+    """Widen claude's Bash cap so one ``brnrd await`` call can hold its lease.
+
+    Engine 1 does this in ``worker.prepare`` (move 2c); without it the call is
+    killed at claude's 600 s default and the lease returns ``pending`` early.
+    An operator's own value is left alone.
+    """
+    flavour = (getattr(runner_choice, "hooks", None)
+               or getattr(runner_choice, "name", None) or "")
+    if flavour != "claude" or os.environ.get("BASH_MAX_TIMEOUT_MS"):
+        return {}
+    return {"BASH_MAX_TIMEOUT_MS": str(await_verb.CLAUDE_BASH_MAX_TIMEOUT_MS)}
