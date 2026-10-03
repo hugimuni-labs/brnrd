@@ -130,7 +130,8 @@ class FileDoor:
                     run_id: str = "", repo: str = "",
                     runner_name: str = "", branch: str = "",
                     current_replyable: bool = True,
-                    controls: dict[str, Any] | None = None) -> None:
+                    controls: dict[str, Any] | None = None,
+                    resources: dict[str, Any] | None = None) -> None:
         visible = [public_event(event) for event in events
                    if event.get("id") != current_event]
         portals.write_live_inbox(outbox_dir, current_event, visible)
@@ -153,6 +154,8 @@ class FileDoor:
         capsule["notices"] = notices
         capsule["await"] = await_state or {"armed": False}
         capsule["resources"]["runner"]["name"] = runner_name
+        if resources:
+            capsule["resources"].update(resources)
         capsule["outbound"]["pending_outbox_files"] = [
             path.name for path in FileDoor.outbox_entries(outbox_dir)]
         card = outbox_dir / ".card"

@@ -12,10 +12,11 @@ import time
 from unittest.mock import patch
 from pathlib import Path
 
-from brr import conversations, protocol, runner
+from brr import conversations, config as conf, protocol, runner
 from brr.daemon2.runtime import Daemon2
 from brr.daemon2.doors import FileDoor
 from brr.daemon2.transport import GateTransport
+from brr.daemon2.seat import Seat
 
 
 def _fake_shell(path: Path, *, await_first: bool = False) -> None:
@@ -177,6 +178,137 @@ def test_portal_capsule_matches_redacted_live_shape_and_notice_wire(tmp_path: Pa
     assert actual["notices"][0]["text"] == notice["text"]
     assert actual["inbound"]["current_event"] == "evt-test"
     assert actual["run"]["id"] == "r1"
+
+
+def test_portal_capsule_with_resources_populates_quota_and_coexisting(tmp_path: Path) -> None:
+    """Test that resources (quota + coexisting runs) are wired into portal-state."""
+    from brr.daemon2.doors import FileDoor
+    
+    # Test with resources parameter passed
+    resources = {
+        "quota": {
+            "pacing": {
+                "starvation": {
+                    "binding_remaining_pct": 50.0,
+                    "starve_floor_pct": 2.0,
+                    "refill_floor_pct": 10.0,
+                    "starved": False,
+                }
+            }
+        },
+        "coexisting_runs": {
+            "siblings": [{"run_id": "sibling1", "kind": "daemon"}]
+        }
+    }
+    
+    FileDoor.write_views(tmp_path, "evt-test", [], phase="running",
+                         notices=[], run_id="r1", repo="org/repo", runner_name="fake",
+                         resources=resources)
+    
+    actual = json.loads((tmp_path / "portal-state.json").read_text())
+    
+    # Verify resources are populated
+    assert "resources" in actual
+    assert actual["resources"]["quota"]["pacing"]["starvation"]["binding_remaining_pct"] == 50.0
+    assert actual["resources"]["quota"]["pacing"]["starvation"]["starve_floor_pct"] == 2.0
+    assert actual["resources"]["quota"]["pacing"]["starvation"]["refill_floor_pct"] == 10.0
+    assert actual["resources"]["quota"]["pacing"]["starvation"]["starved"] is False
+    assert len(actual["resources"]["coexisting_runs"]["siblings"]) == 1
+    assert actual["resources"]["coexisting_runs"]["siblings"][0]["run_id"] == "sibling1"
+
+
+def test_gather_resources_populates_coexisting_and_quota(tmp_path: Path) -> None:
+    """Test that _gather_resources correctly populates coexisting runs and quota data."""
+    from brr.daemon2.runtime import Daemon2
+    
+    # Create a Daemon2 instance
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    daemon2 = Daemon2(repo, tmp_path / "home")
+    
+    # Mock state with minimal required data
+    state = {
+        "runner_name": "test-runner",
+        "run_id": "test-run-123",
+        "levels": {},  # Empty levels will result in None binding_pct
+        "runner_meta": {"model": None},
+        "branch": "test-branch"
+    }
+    
+    resources = daemon2._gather_resources(state)
+    
+    # Verify resources structure exists (the method returns the resources dict directly)
+    assert "quota" in resources
+    assert "coexisting_runs" in resources
+    
+    # Verify quota.pacing.starvation exists (the key part for hold: walls)
+    assert "pacing" in resources["quota"]
+    assert "starvation" in resources["quota"]["pacing"]
+    assert "binding_remaining_pct" in resources["quota"]["pacing"]["starvation"]
+    assert "starve_floor_pct" in resources["quota"]["pacing"]["starvation"]
+    assert "refill_floor_pct" in resources["quota"]["pacing"]["starvation"]
+    assert "starved" in resources["quota"]["pacing"]["starvation"]
+    
+    # Verify coexisting_runs structure exists
+    assert "siblings" in resources["coexisting_runs"]
+    assert "owned_children" in resources["coexisting_runs"]
+
+
+def test_hold_with_measured_binding_quota_under_floor_parks_seat(tmp_path: Path) -> None:
+    """Test that hold: with resume: refill parks the seat when binding quota is under floor."""
+    from brr.daemon2.runtime import Daemon2
+    
+    # Create a Daemon2 instance
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    daemon2 = Daemon2(repo, tmp_path / "home")
+    
+    # Create minimal state for a running seat
+    state = {
+        "runner_name": "test-runner",
+        "run_id": "test-run-123",
+        "event": {"id": "evt-test", "body": "test"},
+        "conversation": "test-conv",
+        "is_child": False,
+        "runner_meta": {"model": None},
+        "levels": {},  # This will result in None binding_pct
+        "branch": "test-branch",
+        "outbox": tmp_path / "outbox",
+        "claims": {},
+        "claim_lock": threading.Lock(),
+        "notices": [],
+        "answered": False,
+        "await": None,
+        "control_run": None,
+    }
+    
+    # Create outbox and seat structures
+    outbox_dir = tmp_path / "outbox"
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Initialize seat
+    seat = Seat(daemon2.seats, state["conversation"])
+    seat.start(0, run_id=state["run_id"])
+    state["seat"] = seat
+    
+    # Set a binding percentage under the floor to trigger the hold
+    config = conf.load_config(repo)
+    floor = float(config.get("seat.starve_floor_pct", 2))
+    state["quota_binding_pct"] = floor - 1.0  # Just under the floor
+    
+    # Create a hold file
+    hold_file = outbox_dir / "hold.md"
+    hold_file.write_text("hold: true\nresume: refill\n")
+    
+    # Process the hold
+    daemon2._handle_outbox(state, hold_file)
+    
+    # Check that the seat was parked
+    record = seat.read()
+    assert record.state == "parked"
+    
+    # Check that the reason contains quota_starved
+    assert "quota_starved" in record.why
 
 
 def test_runner_resolved_from_each_letter_before_dispatch(tmp_path: Path) -> None:

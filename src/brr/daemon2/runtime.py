@@ -117,6 +117,133 @@ class Daemon2:
                 state["claim"] = claim
         return claim
 
+    def _gather_resources(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Gather resources facet data from existing organs."""
+        from .. import daemon as legacy_daemon, presence, gitops
+        from ..runner_quota import binding_quota_remaining_pct
+        
+        # Get levels and pacing data
+        runner_name = state.get("runner_name", "")
+        run_id = state.get("run_id", "")
+        
+        # Get binding quota percentage
+        levels = state.get("levels") or {}
+        runner_meta = state.get("runner_meta") or {}
+        model = runner_meta.get("model")
+        binding_pct = binding_quota_remaining_pct(levels, model)
+        
+        # Store binding percentage in state for hold handler to use
+        if binding_pct is not None:
+            state["quota_binding_pct"] = binding_pct
+        
+        # Get coexisting runs from presence registry
+        brr_dir = gitops.shared_brr_dir(self.repo_root)
+        coexisting_snapshot = []
+        try:
+            coexisting_snapshot = [
+                e for e in presence.list_active_account(brr_dir)
+                if e.get("run_id") != run_id
+            ]
+        except OSError:
+            pass  # Keep snapshot empty if presence registry is unavailable
+        
+        # Build resources structure matching the expected fixture shape
+        resources = {
+            "allowance": {
+                "explicit": False,
+                "kind": "unimplemented",
+                "note": None,
+                "pct": 0,
+                "required": False,
+                "scope": "unimplemented", 
+                "spent": 0,
+                "status": "unimplemented",
+                "summary": "unimplemented",
+                "tokens": 0
+            },
+            "coexisting_runs": {
+                "kind": "known" if coexisting_snapshot else "unimplemented",
+                "note": None,
+                "owned_children": [],  # Would be populated by daemon._owned_child_controls if available
+                "required": False,
+                "siblings": coexisting_snapshot,
+                "spawn_pool": {"floor": None},
+                "status": "known" if coexisting_snapshot else "unimplemented",
+                "summary": None
+            },
+            "context_window": {
+                "kind": "unimplemented",
+                "note": None,
+                "required": False,
+                "status": "unimplemented",
+                "summary": "unimplemented"
+            },
+            "correspondent": {
+                "kind": "unimplemented", 
+                "note": "unimplemented",
+                "quiet_seconds": None,
+                "read": None,
+                "required": False,
+                "status": "unimplemented",
+                "summary": None,
+                "unread_bytes": None,
+                "unread_count": None
+            },
+            "quota": {
+                "draws": {"self": 0, "strands": []},
+                "kind": "known" if binding_pct is not None else "unimplemented",
+                "note": None,
+                "others": [],
+                "pacing": {
+                    "binding_remaining_pct": binding_pct or 0,
+                    "critical_floor_pct": 0,
+                    "floor": None,
+                    "low_floor_pct": 0,
+                    "pace": {
+                        "consumed_share_pct": 0,
+                        "elapsed_share_pct": 0, 
+                        "ratio": 0,
+                        "recommendation": "unimplemented",
+                        "resets_at": 0,
+                        "window_minutes": 0
+                    },
+                    "starvation": {
+                        "binding_remaining_pct": binding_pct or 0,
+                        "refill_floor_pct": legacy_daemon._seat_refill_floor_pct(self._config) if self._config else 10,
+                        "starve_floor_pct": legacy_daemon._seat_starve_floor_pct(self._config) if self._config else 2,
+                        "starved": (binding_pct or 100) < (legacy_daemon._seat_starve_floor_pct(self._config) if self._config else 2)
+                    },
+                    "stretch_factor": 0
+                },
+                "required": False,
+                "status": "known" if binding_pct is not None else "unimplemented",
+                "summary": None
+            },
+            "remote_scm": {
+                "branch": state.get("branch", ""),
+                "kind": "unimplemented",
+                "note": None,
+                "pr_number": None,
+                "pr_state": "unimplemented",
+                "required": False,
+                "status": "unimplemented",
+                "summary": "unimplemented"
+            },
+            "runner": {
+                "name": runner_name,
+                "status": "unimplemented"
+            },
+            "spend": {
+                "kind": "unimplemented",
+                "metered_by": "unimplemented", 
+                "note": "unimplemented",
+                "required": False,
+                "status": "unimplemented",
+                "summary": None
+            }
+        }
+        return resources
+
     def _runner_for(self, event: dict[str, Any]) -> runner.RunnerProfile:
         # A pinned command is the operator/test override path; it has no
         # catalog Core. Normal dispatch resolves afresh for every letter.
@@ -508,13 +635,47 @@ class Daemon2:
                            "confirm: `resume: refill` (or `reset`) with the binding "
                            "quota measured under the starvation floor")
             else:
-                floor = float(conf.load_config(self.repo_root).get(
-                    "seat.starve_floor_pct", 2))
+                from .seat import legacy_wake_on
+                config = conf.load_config(self.repo_root)
+                floor = float(config.get("seat.starve_floor_pct", 2))
+                refill_floor = float(config.get("seat.refill_floor_pct", 10))
                 pct = state.get("quota_binding_pct")
-                reading = (f"last read {float(pct):.1f}%"
-                           if isinstance(pct, (int, float)) else "not measured this run")
-                refusal = (f"hold refused: resume: {resume} needs a measured wall — "
-                           f"the binding quota is {reading} (floor {floor:g}%) — {rest}")
+                
+                if pct is not None and isinstance(pct, (int, float)):
+                    # We have a measured binding quota percentage
+                    if resume == "refill":
+                        if pct < floor:
+                            # Under starvation floor - accept the hold
+                            wake_on = legacy_wake_on("refill", pool="binding", floor=refill_floor)
+                            seat.park(seat.read().generation, why=f"quota_starved ({pct:.1f}% < {floor:g}%)",
+                                     wake_on=wake_on)
+                            state["pending_resource_hold"] = True
+                            return
+                        else:
+                            reading = f"{pct:.1f}%"
+                            refusal = (f"hold refused: resume: refill requires wall — "
+                                       f"binding quota is {reading} (≥ floor {floor:g}%) — {rest}")
+                    elif resume == "reset":
+                        if pct < floor:
+                            # Under starvation floor - accept the hold
+                            wake_on = legacy_wake_on("reset")
+                            seat.park(seat.read().generation, why=f"quota_starved ({pct:.1f}% < {floor:g}%)",
+                                     wake_on=wake_on)
+                            state["pending_resource_hold"] = True
+                            return
+                        else:
+                            reading = f"{pct:.1f}%"
+                            refusal = (f"hold refused: resume: reset requires wall — "
+                                       f"binding quota is {reading} (≥ floor {floor:g}%) — {rest}")
+                    else:
+                        refusal = (f"hold refused: resume: {resume} is not a resource wall — "
+                                   f"{rest}. `hold:` parks only on a wall the daemon can "
+                                   "confirm: `resume: refill` (or `reset`) with the binding "
+                                   "quota measured under the starvation floor")
+                else:
+                    reading = "not measured this run"
+                    refusal = (f"hold refused: resume: {resume} needs a measured wall — "
+                               f"the binding quota is {reading} (floor {floor:g}%) — {rest}")
             self._notice(state, refusal, source_file=path.name, verb="hold")
         elif verb == "await":
             file_path, seconds, error = await_verb.parse_await(fm)
@@ -835,6 +996,7 @@ class Daemon2:
                                 obligations=tuple(f"strand:{c.run}" for c in handoffs),
                                 native_session=None)
                 record = seat.read()
+                from .seat import legacy_wake_on
                 seat.park(
                     record.generation,
                     why="strands" if handoffs else "cut",
@@ -993,6 +1155,7 @@ class Daemon2:
             visible = self._visible(
                 state["conversation"], state["event"]["id"],
                 is_child=state["is_child"], run_id=state["run_id"])
+            resources = self._gather_resources(state)
             self.door.write_views(outbox_dir, state["event"]["id"], visible,
                                   phase="awaiting" if wait and wait["armed"]
                                         and not wait["resolved"] else "running",
@@ -1001,7 +1164,8 @@ class Daemon2:
                                   runner_name=state["runner_name"],
                                   branch=str(state["event"].get("branch") or ""),
                                   current_replyable=not state["answered"],
-                                  controls=control_snapshot)
+                                  controls=control_snapshot,
+                                  resources=resources)
 
     def serve(self, *, stop_when_empty: bool = False,
               role: str = "any") -> list[RunResult]:
