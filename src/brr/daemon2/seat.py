@@ -49,7 +49,8 @@ class WakePredicate:
         if self.kind == "M":
             return signal.kind == "mail" and (not p.get("ask") or p["ask"] == signal.ask)
         if self.kind == "S":
-            return signal.kind == "schedule" and p.get("name") == signal.schedule
+            return (signal.kind == "schedule" and
+                    (not p.get("name") or p["name"] == signal.schedule))
         if self.kind == "C":
             return (signal.kind == "child" and p.get("parent") == signal.parent
                     and p.get("edge") == signal.edge)
@@ -99,7 +100,7 @@ def legacy_wake_on(reason: str, *, parent: str | None = None,
                                     "freshness": freshness}), handover,
                 WakePredicate("U", {"actions": ["force", "stop", "respawn"]}))
     if reason in {"strands", "any", "daemon_restarted"}:
-        return children + schedule + (mail, handover, control)
+        return children + (schedule or (WakePredicate("S"),)) + (mail, handover, control)
     if reason == "raise":
         raise ValueError("held_raise is retired")
     raise ValueError(f"unknown legacy hold: {reason}")

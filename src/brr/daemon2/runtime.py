@@ -55,7 +55,8 @@ class Daemon2:
         self.runner_name = runner_name
         self.runner_config = runner_config or {}
         self.tick_seconds = tick_seconds
-        configured_ttl = conf.load_config(self.repo_root).get(
+        self._config = conf.load_config(self.repo_root)
+        configured_ttl = self._config.get(
             "daemon2.lease_ttl_seconds", 60)
         self.lease_ttl_seconds = float(
             configured_ttl if lease_ttl_seconds is None else lease_ttl_seconds)
@@ -76,7 +77,7 @@ class Daemon2:
         self._tick_lock = threading.Lock()
         try:
             self._account_ctx = account.resolve_context(self.repo_root,
-                                                        conf.load_config(self.repo_root))
+                                                        self._config)
         except Exception:
             self._account_ctx = None
         if self._account_ctx is not None and self._account_ctx.enabled:
@@ -1002,6 +1003,7 @@ class Daemon2:
         renew_thread.start()
         results: list[RunResult] = []
         gate_threads_started = False
+        next_schedule_check = 0.0
         try:
             while not self._stop_serve.is_set():
                 with lease_lock:
@@ -1020,6 +1022,13 @@ class Daemon2:
                         legacy_daemon._start_gates(
                             self.runtime_dir, self.door.inbox, self.door.responses)
                     gate_threads_started = True
+                if held_self is not None and time.monotonic() >= next_schedule_check:
+                    from .. import daemon as legacy_daemon
+                    legacy_daemon._fire_due_schedules(
+                        self.repo_root, gitops.shared_brr_dir(self.repo_root),
+                        self.door.inbox, self._config,
+                        account_context=self._account_ctx)
+                    next_schedule_check = time.monotonic() + max(1.0, self.tick_seconds)
                 # A follower can still run its own strands. It cannot start
                 # a resident body until the account's self lease lapses.
                 dispatch_role = role if held_self is not None or role == "strand" else "strand"
@@ -1137,12 +1146,17 @@ class Daemon2:
                 if record.wake_on:
                     from_run = str(event.get("handover_from_run") or "")
                     from_generation = event.get("handover_from_generation")
-                    signal = (Signal("handover", seat_address,
-                                     from_run=from_run,
-                                     from_generation=int(from_generation))
-                              if from_run and from_generation is not None else
-                              Signal("mail", seat_address, ask=address.ask,
-                                     letter_id=event["id"]))
+                    if from_run and from_generation is not None:
+                        signal = Signal("handover", seat_address,
+                                        from_run=from_run,
+                                        from_generation=int(from_generation))
+                    elif event.get("source") == "schedule":
+                        signal = Signal("schedule", seat_address,
+                                        schedule=str(event.get("schedule_id") or ""),
+                                        letter_id=event["id"])
+                    else:
+                        signal = Signal("mail", seat_address, ask=address.ask,
+                                        letter_id=event["id"])
                     resumed = seat.wake(record.generation, signal,
                                         shell=selected_runner, capabilities=set(),
                                         run_id=run_id)

@@ -1375,3 +1375,42 @@ def test_repo_scoped_inbox_uses_its_matching_response_queue(tmp_path: Path) -> N
     assert result is not None and result.answered
     assert result.response.parent == repo_responses
     assert protocol.read_response(repo_responses, event_path.stem) == "hello from fake Shell"
+
+
+def test_at_schedule_fires_once_across_serve_restart(tmp_path: Path,
+                                                     monkeypatch) -> None:
+    from types import SimpleNamespace
+    from brr import dominion
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    dom = tmp_path / "dominion"
+    dom.mkdir()
+    monkeypatch.setattr(dominion, "resident_dominion_candidates",
+                        lambda *_args, **_kwargs: [SimpleNamespace(path=dom)])
+    binary = tmp_path / "fake-shell"
+    _fake_shell(binary)
+    home = tmp_path / "home"
+    runtime = Daemon2(repo, home, runtime_dir=repo / ".brr",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]})
+    # Park a conversation first, so the schedule must use the S predicate.
+    protocol.create_event(runtime.door.inbox, "telegram", "first",
+                          conversation_key="schedule:followup")
+    assert runtime.once() is not None
+    past = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60))
+    (dom / "schedule.md").write_text(
+        f"## Followup\nat: {past}\ncheck the work\n", encoding="utf-8")
+    results = runtime.serve(stop_when_empty=True)
+    assert len(results) == 1 and results[0].answered
+    scheduled = [protocol._read_event(path) for path in runtime.door.event_paths()
+                 if protocol._read_event(path)["source"] == "schedule"]
+    assert len(scheduled) == 1
+    assert scheduled[0]["conversation_key"] == "schedule:followup"
+    assert runtime.seats.read("schedule:followup").state == "parked"
+
+    restarted = Daemon2(repo, home, runtime_dir=repo / ".brr",
+                        runner_name="fake", runner_config={"runner_cmd": [str(binary)]})
+    assert restarted.serve(stop_when_empty=True) == []
+    assert len([path for path in restarted.door.event_paths()
+                if protocol._read_event(path)["source"] == "schedule"]) == 1
