@@ -112,8 +112,9 @@ def test_wake_reuses_selector_and_names_omissions(home, monkeypatch):
     assert 'full missing.md (missing' in text
     assert 'exec nope (missing' in text
     assert 'Deployment guard' in text and 'Check rollback first.' in text
-    assert 'Other (trigger did not match)' in text
-    assert 'kb/index.md (outside situational slice' in text
+    assert '1 trigger misses' in text
+    assert 'Other (trigger did not match)' not in text
+    assert 'kb/: 1 pages outside situational slice' in text
     assert 'kb/rollout.md:1: deploy rollback safely' in text
     assert 'brnrd agent inject' not in text
     assert (home / 'wake.md').read_text() == text
@@ -321,3 +322,18 @@ def test_reinit_removes_only_its_generated_import(home):
     assert (project / 'CLAUDE.md').read_text() == f'# User instructions\n{own}\n{marker}\n{other}\nKeep this.\n'
     init_home(home, project)
     assert (project / 'CLAUDE.md').read_text().endswith('Keep this.\n')
+
+
+def test_wake_omissions_scale_with_situation_not_home(home):
+    for i in range(300):
+        (home / 'kb' / f'page-{i}.md').write_text('unrelated information')
+    (home / 'pitfalls.md').write_text('\n'.join(
+        f'## Lesson {i}\ntrigger: deploy safely {i}\nCheck it.' for i in range(70)))
+    text = wake(home, 'deploy safely', budget_bytes=0)
+    outside = text.split('## Outside this wake')[1]
+    assert 'kb/: 301 pages' in outside
+    assert '70 trigger misses' in outside
+    assert outside.count('pitfalls.md: Lesson') == 10
+    assert 'Lesson 10 (' not in outside
+    assert 'page-299.md' not in outside
+    assert len(outside) < 1600

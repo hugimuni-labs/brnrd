@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timezone
 import json
 import os
+import re
 from pathlib import Path
 import uuid
 
@@ -38,7 +40,8 @@ def wake(home: Path, situation: str = "", *, budget_bytes: int = 16384) -> str:
     situation = redact_detail(situation.strip())
     # Identity is the always-on floor. Remaining content shares a budget.
     digest = dominion.resolve_self_inject(home, budget_bytes=budget_bytes * 2 // 3)
-    matched = pitfalls.match(pitfalls.parse_pitfalls(home), situation)
+    all_pitfalls = pitfalls.parse_pitfalls(home)
+    matched = pitfalls.match(all_pitfalls, situation)
     pit_block = pitfalls.format_block(matched, budget_bytes=budget_bytes // 6)
     # The shared renderer's daemon directions aren't useful on a foreign body.
     pit_block = pit_block.replace("dominion `pitfalls.md`", "home `pitfalls.md`").replace(
@@ -47,6 +50,7 @@ def wake(home: Path, situation: str = "", *, budget_bytes: int = 16384) -> str:
     recall_lines = []
     used = 0
     selected = set()
+    selected_hits = set()
     for hit in hits:
         line = f"- {hit.path.relative_to(home)}:{hit.line_no}: {hit.line}"
         size = len(line.encode("utf-8")) + 1
@@ -54,22 +58,39 @@ def wake(home: Path, situation: str = "", *, budget_bytes: int = 16384) -> str:
             recall_lines.append(line)
             used += size
             selected.add(hit.path.resolve())
-    omitted = []
-    for hit in hits:
-        if hit.path.resolve() not in selected:
-            omitted.append(f"{hit.path.relative_to(home)} (recall budget)")
+            selected_hits.add((hit.path, hit.line_no))
+    # Accounting grows with directories, not page count. Only situational
+    # near misses earn individual coordinates, with one shared ten-row cap.
+    counts = Counter()
     for path in sorted((home / "kb").rglob("*.md")):
-        if path.resolve() not in selected:
-            name = str(path.relative_to(home))
-            if not any(entry.startswith(name + " ") for entry in omitted):
-                omitted.append(f"{name} (outside situational slice; use recall)")
+        if path.resolve().is_relative_to(home.resolve()) and path.resolve() not in selected:
+            counts[str(path.parent.relative_to(home))] += 1
+    omitted = [f"{directory}/: {count} pages outside situational slice (use recall)"
+               for directory, count in sorted(counts.items())]
+    words = set(re.findall(r"\w+", situation.casefold()))
+    near = []
+    for hit in hits:
+        if (hit.path, hit.line_no) not in selected_hits:
+            score = len(words & set(re.findall(r"\w+", hit.line.casefold())))
+            near.append((score, f"{hit.path.relative_to(home)}:{hit.line_no} (recall budget)"))
     kept_titles = {line[3:] for line in pit_block.splitlines() if line.startswith("## ")}
-    for pitfall in matched:
-        if pitfall.title not in kept_titles:
-            omitted.append(f"pitfalls.md: {pitfall.title} (pitfall budget)")
-    for pitfall in pitfalls.parse_pitfalls(home):
-        if not pitfall.matches(situation):
-            omitted.append(f"pitfalls.md: {pitfall.title} (trigger did not match)")
+    budget_misses = 0
+    trigger_misses = 0
+    for pitfall in all_pitfalls:
+        if pitfall.title in kept_titles:
+            continue
+        reason = "pitfall budget" if pitfall.matches(situation) else "trigger did not match"
+        budget_misses += reason == "pitfall budget"
+        trigger_misses += reason == "trigger did not match"
+        trigger_words = set(re.findall(r"\w+", " ".join(pitfall.triggers).casefold()))
+        score = len(words & trigger_words)
+        if score:
+            near.append((score, f"pitfalls.md: {pitfall.title} ({reason})"))
+    if budget_misses or trigger_misses:
+        omitted.append(f"pitfalls.md: {budget_misses} budget misses; {trigger_misses} trigger misses")
+    if near:
+        omitted.append("Nearest situational misses (up to 10):")
+        omitted.extend(text for _, text in sorted(near, key=lambda row: -row[0])[:10])
     # The selector reports budget losses inline; name missing or unsupported
     # manifest entries too, which the shared resolver deliberately skips.
     for line in _read(home / "self-inject").splitlines():
