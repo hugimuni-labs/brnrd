@@ -1538,7 +1538,10 @@ class TestPromptBuilding:
         assert _says(prompt, "plan / todo boundaries")
         assert _says(prompt, "immediately before a terminal closeout")
         assert _says(prompt, "after the runner has returned")
-        assert _says(prompt, "dispatched by the daemon at turn end")
+        assert _says(prompt, "dispatched at turn end")
+        # a seat's turn end is its exit: the pin that says so must ride every wake
+        assert _says(prompt, "lives exactly as long as its turn")
+        assert _says(prompt, "stdout = last words")
         assert _says(prompt, "nobody re-runs you to extract a sentence")
         assert _says(prompt, "`gate: forge` = the explicit PR handoff")
         assert _says(prompt, "never owns PR creation")
