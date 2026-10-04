@@ -660,19 +660,22 @@ def test_long_shell_renews_letter_claim_and_blocks_second_holder(tmp_path: Path)
     repo.mkdir()
     (repo / "AGENTS.md").write_text("# Test repo\n", encoding="utf-8")
     binary = tmp_path / "slow-shell"
-    _sleep_shell(binary)
+    # Scales sized for a loaded CI runner: a 0.3 s TTL lost its lease to
+    # scheduler stalls there and the Shell was killed (-15). The rival claim
+    # still lands past one full TTL, so only a renewal can block it.
+    _sleep_shell(binary, seconds=4)
     event = protocol.create_event(home / "dispatch" / "inbox", "telegram",
                                   "Slow task", conversation_key="c")
     runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
                       runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
-                      tick_seconds=0.02, lease_ttl_seconds=0.3)
+                      tick_seconds=0.02, lease_ttl_seconds=1.2)
     output = []
     thread = threading.Thread(target=lambda: output.append(runtime.once()))
     thread.start()
     try:
         _wait_processing(runtime, event)
-        time.sleep(0.6)
-        assert runtime.letters.claim(event.stem, "rival", 0.3,
+        time.sleep(2.0)
+        assert runtime.letters.claim(event.stem, "rival", 1.2,
                                      now=time.time()) is None
         thread.join(timeout=30)
         assert not thread.is_alive()
