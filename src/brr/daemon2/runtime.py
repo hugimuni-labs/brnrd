@@ -123,7 +123,8 @@ class Daemon2:
                 state["claim"] = claim
         return claim
 
-    def _build_hud(self, state: dict[str, Any], *, refresh_levels: bool) -> hud.HUD:
+    def _build_hud(self, state: dict[str, Any], *, refresh_levels: bool,
+                   visible: list[dict[str, Any]] | None = None) -> hud.HUD:
         """Give the retained HUD this seat's run, collector and controls."""
         task = self.controls._run(state)
         profile = state["runner_profile"]
@@ -156,6 +157,12 @@ class Daemon2:
             account_context=(self._account_ctx if isinstance(
                 self._account_ctx, account.AccountContext) else None),
             repo_label=state["repo_label"],
+            # The door's projection, never the engine-1 rescan of raw
+            # ``status:`` — one daemon, one pending list (#2187 item 1).
+            events=[public_event(event) for event in (
+                visible if visible is not None else self._visible(
+                    state["conversation"], state["event"]["id"],
+                    is_child=state["is_child"], run_id=state["run_id"]))],
             shuttle_home=(account.context_home_root(self._account_ctx)
                           if isinstance(self._account_ctx, account.AccountContext)
                           else self.runtime_dir),
@@ -1126,7 +1133,7 @@ class Daemon2:
             refresh = time.monotonic() >= state.get("next_levels_refresh", 0.0)
             if refresh:
                 state["next_levels_refresh"] = time.monotonic() + 30.0
-            live = self._build_hud(state, refresh_levels=refresh)
+            live = self._build_hud(state, refresh_levels=refresh, visible=visible)
             hud.write(live, outbox_dir)
             task = state["control_run"]
             if time.monotonic() >= state.get("next_state_doc", 0.0):

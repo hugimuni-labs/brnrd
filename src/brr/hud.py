@@ -550,6 +550,10 @@ class HUDInputs:
     account_context: "account.AccountContext | None" = None
     repo_label: str | None = None
     shuttle_home: Path | None = None
+    #: The caller's already-projected pending list. ``None`` keeps engine 1's
+    #: raw ``status:`` scan; daemon2 passes its door's view (letters as facts)
+    #: so ``portal-state.json`` cannot disagree with ``inbox.json`` (#2187).
+    events: list[dict[str, Any]] | None = None
 
 
 def _unstamped(task: Any, events: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -620,7 +624,7 @@ def build(inputs: HUDInputs) -> HUD:
     shuttle_home = inputs.shuttle_home
 
     outbox_dir.mkdir(parents=True, exist_ok=True)
-    events = daemon._pending_events_for_agent(
+    events = list(inputs.events) if inputs.events is not None else daemon._pending_events_for_agent(
         inbox_dir, current_event_id,
         strand=daemon._is_strand(task.meta) if hasattr(task, "meta") else False,
         account_context=account_context,
