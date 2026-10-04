@@ -7550,7 +7550,18 @@ def _await_lease_input(
     with no outbox (an editor session), a backgrounded call (no timeout
     applies to it), or a command already carrying the stamp.
     """
-    if ctx.outbox_dir is None or ctx.flavour != "claude":
+    if ctx.outbox_dir is None:
+        return None
+    # #2194: a daemon2 seat reaches this phase with no ``BRR_RUNNER`` stamp
+    # (engine 1 writes it in ``worker/prepare.py``; daemon2's invocation env
+    # does not), and reading "no stamp" as "another Shell" here left the
+    # seat's ``brnrd await`` Bash calls un-rewritten — the CLI fell back to
+    # its ~8-minute slice and returned ``pending`` far short of the lease.
+    # Claude is the only Shell that installs the pre-tool phase at all —
+    # codex covers PostToolUse/Stop/SessionStart only (``codex_hook_args``)
+    # and vibe stamps its own ``BRR_RUNNER=vibe`` — so a daemon-hosted (an
+    # outbox is present) pre-tool fire with no stamp is a claude seat.
+    if ctx.flavour not in (None, "claude"):
         return None
     if payload.get("tool_name") != "Bash":
         return None
@@ -7840,7 +7851,11 @@ def run_hook(
                 "updated_input": updated,
             }
             record_boundary(ctx, phase, neutral, payload)
-            return render_native(ctx.flavour, phase, neutral)
+            # An unstamped flavour (a daemon2 seat, #2194) is a claude seat
+            # on this path — `_await_lease_input` refuses every other
+            # flavour — so the rewrite renders through claude's
+            # ``updatedInput`` envelope even without the stamp.
+            return render_native(ctx.flavour or "claude", phase, neutral)
         neutral = _wait_by_returning_neutral(ctx, payload) or _rooted_write_neutral(ctx, payload)
         record_boundary(ctx, phase, neutral, payload)
         return render_native(ctx.flavour, phase, neutral)

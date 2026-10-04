@@ -8064,6 +8064,29 @@ def test_pre_tool_lets_monitor_through_without_a_portal(tmp_path):
     assert out == {}
 
 
+def test_pre_tool_rewrites_the_await_lease_for_an_unstamped_daemon2_seat(tmp_path):
+    # #2194: daemon2's runner env carries no BRR_RUNNER stamp (engine 1
+    # writes it in worker/prepare.py; daemon2's invocation env does not), and
+    # the pre-tool await-lease rewrite read "no stamp" as "another Shell" —
+    # so the seat's `brnrd await` Bash call never got its timeout widened or
+    # BRNRD_AWAIT_CALL_CAP_MS stamped, and the CLI fell back to its
+    # ~8-minute slice instead of holding the ~50-minute lease. Claude is
+    # the only Shell that installs this phase, so an unstamped daemon-hosted
+    # fire is a claude seat and must be rewritten.
+    env = _env(tmp_path)
+    env.pop("BRR_RUNNER")  # the daemon2 shape: every handle but the flavour
+    env["BASH_MAX_TIMEOUT_MS"] = "22200000"
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        json.dumps({"tool_name": "Bash", "tool_input": {"command": "brnrd await"}}),
+        env,
+    )
+    assert code == 0
+    updated = out["hookSpecificOutput"]["updatedInput"]
+    assert updated["timeout"] == 22200000
+    assert updated["command"].startswith("export BRNRD_AWAIT_CALL_CAP_MS=22200000;")
+
+
 # ── the seat that never quits: a turn end is a park, not a close ──────────
 
 
