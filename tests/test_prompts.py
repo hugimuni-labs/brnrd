@@ -971,15 +971,15 @@ class TestPromptBuilding:
 
         prompt = build_run_prompt("do something", tmp_path)
 
-        assert "owner := product" in prompt
+        assert "owner ~ product" in prompt
         assert "core := durable identity" in prompt
         assert _says(prompt, "SEAMS")
         assert _says(prompt, "Fluency :=")
         assert _says(prompt, "Your dominion (working memory)")
-        assert prompt.index("owner := product") < prompt.index(
+        assert prompt.index("owner ~ product") < prompt.index(
             "Your dominion (working memory)"
         )
-        assert prompt.index("owner := product") < prompt.index("Task:")
+        assert prompt.index("owner ~ product") < prompt.index("Task:")
 
     def test_identity_core_ignores_runtime_prompt_override(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
@@ -989,7 +989,7 @@ class TestPromptBuilding:
         )
 
         block = _build_identity_core_block(tmp_path)
-        assert "owner := product" in block
+        assert "owner ~ product" in block
         assert "Runtime override" not in block
 
     def test_run_prompt_includes_context(self, tmp_path):
@@ -1193,7 +1193,7 @@ class TestPromptBuilding:
             run_id="task-9",
             strand=True,
         )
-        assert "owner := product" in prompt
+        assert "owner ~ product" in prompt
         assert _says(prompt, "Pitfalls that match this task")
         assert "Blind retry" in prompt
         assert _says(prompt, "Rebuild the image before you trust the cache.")
@@ -1221,7 +1221,7 @@ class TestPromptBuilding:
             run_id="task-9",
             strand=True,
         )
-        assert "owner := product" in prompt
+        assert "owner ~ product" in prompt
         assert "Work surface" in prompt
 
     def test_daemon_prompt_worker_omits_pitfalls_when_nothing_matches(
@@ -1243,7 +1243,7 @@ class TestPromptBuilding:
         )
         assert not _says(prompt, "Pitfalls that match this task")
         assert "Blind retry" not in prompt
-        assert "owner := product" in prompt
+        assert "owner ~ product" in prompt
 
     def test_daemon_prompt_worker_still_sees_web_capability(self, tmp_path):
         # Workers skip the resident inject stack but still get the bundle —
@@ -1261,7 +1261,7 @@ class TestPromptBuilding:
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
             run_id="task-9",
         )
-        assert "owner := product" in prompt
+        assert "owner ~ product" in prompt
         assert "bounded, single-purpose thought" not in prompt
 
     def test_daemon_prompt_surfaces_runner_medium(self, tmp_path):

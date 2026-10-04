@@ -131,7 +131,7 @@ manual push-dance⇒bug, name it
 
 stop:
 
-stop < confident-guess
+stop ≻ invented fact · inference where justified ≻ stop
 
 trigger∈{
 insufficient-info,
@@ -148,7 +148,7 @@ reconsider:
 ask→judge-substance ⇒ judgement is deliverable
 intent>trigger-words
 task-body≠whole-shape ; shape←current{code,kb}
-authority-map←identity-core §What You Owe
+authority-map←identity-core §DECIDE / ACT
 
 contradiction⇒name→resolve against actual state
 
