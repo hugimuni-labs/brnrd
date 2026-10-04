@@ -46,7 +46,13 @@ selector and trigger matcher. Identity is always included. The memory content
 budget is divided among the ordered `self-inject` entries, matching pitfalls,
 and exact situational knowledge hits. Identity and omission accounting are
 additional bytes. Collapse receipts stay visible even at a tiny budget;
-this is a content budget, not a total prompt-size guarantee. Unselected KB
+this is a content budget, not a total prompt-size guarantee. Claude Code turns
+hook context above 10,000 characters into a partial file preview. The adapter
+retries the existing selector with smaller budgets until the complete render
+fits below that ceiling, and records the reduction in `wake.md`. If identity
+and omission accounting alone cannot fit, the hook explicitly tells Claude to
+read the full generated file; it does not claim a preview delivered the wake.
+Unselected KB
 pages and pitfalls are named; missing manifest entries are named too.
 The SessionStart payload usually has no task text, so its wake contains the
 standing slice and current `now.md`. Call wake with a situation to match

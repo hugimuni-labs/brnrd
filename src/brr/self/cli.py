@@ -7,8 +7,35 @@ import json
 from pathlib import Path
 import sys
 
-from .home import init_home, resolve_home, require_home
+from .home import init_home, resolve_home, require_home, write_text
 from .memory import checkpoint, encode, wake
+
+
+# Claude converts hook context above 10,000 characters into a file preview.
+# Leave headroom for the adapter's receipt; reuse the selector at smaller
+# budgets instead of silently cutting its rendered text a second time.
+CLAUDE_CONTEXT_UNITS = 9000
+
+
+def _hook_wake(home: Path, situation: str, requested_budget: int) -> str:
+    for budget in dict.fromkeys((requested_budget, min(requested_budget, 8192),
+                                min(requested_budget, 4096), 0)):
+        text = wake(home, situation, budget_bytes=budget)
+        # Match JavaScript string length, including astral surrogate pairs.
+        if len(text.encode("utf-16-le")) // 2 <= CLAUDE_CONTEXT_UNITS:
+            if budget != requested_budget:
+                text = (f"> Claude hook context cap: memory budget reduced from "
+                        f"{requested_budget} to {budget} bytes; omissions named below.\n\n" + text)
+                write_text(home / "wake.md", text)
+            return text
+    # Identity and accounting are not disposable memory. If they alone exceed
+    # the body ceiling, preserve the full file and make the need to pull it
+    # explicit; a prefix preview must never claim it delivered a whole wake.
+    return (f"Fresh self wake is at {home / 'wake.md'}. Its identity and omission "
+            "receipts exceed Claude's direct hook context cap. Read that file "
+            "before acting on this session's task; it contains the full identity "
+            "and names what is outside the memory slice. This pointer is not "
+            "the wake's full content.")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -41,7 +68,8 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("Hook payload must be a JSON object")
         if args.command == "wake":
             situation = args.situation or str(payload.get("prompt") or payload.get("situation") or "")
-            text = wake(home, situation, budget_bytes=args.budget)
+            text = (_hook_wake(home, situation, args.budget) if args.hook else
+                    wake(home, situation, budget_bytes=args.budget))
             if args.hook:
                 print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}))
             else:

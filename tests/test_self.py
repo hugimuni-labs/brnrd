@@ -273,3 +273,39 @@ def test_mcp_real_subprocess_stdio(home):
     replies = [json.loads(s) for s in result.stdout.splitlines()]
     assert [r['id'] for r in replies] == [1, 2, 3]
     assert replies[2]['result']['content'][0]['text'] == '[]'
+
+
+def test_hook_caps_via_existing_selector_with_visible_omissions(home, monkeypatch, capsys):
+    (home / 'notebook.md').write_text('# Notebook\n\n' + 'filler ' * 1335 + '\n\nLate fact\n')
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))
+    assert main(['wake', '--home', str(home), '--hook']) == 0
+    text = json.loads(capsys.readouterr().out)['hookSpecificOutput']['additionalContext']
+    assert len(text) < 10000
+    assert 'memory budget reduced from 16384 to 8192' in text
+    assert 'notebook.md' in text and 'self-inject overflow' in text
+    assert 'Use recall for the long tail.' in text
+    assert text == (home / 'wake.md').read_text()
+
+
+def test_hook_oversized_identity_points_to_full_file(home, monkeypatch, capsys):
+    identity = '# Identity\n' + 'identity ' * 2000
+    (home / 'identity.md').write_text(identity)
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))
+    assert main(['wake', '--home', str(home), '--hook']) == 0
+    text = json.loads(capsys.readouterr().out)['hookSpecificOutput']['additionalContext']
+    assert len(text) < 10000 and 'Read that file before acting' in text
+    assert 'This pointer is not' in text
+    assert identity in (home / 'wake.md').read_text()
+
+
+def test_hook_ceiling_counts_astral_characters_as_two_units(home, monkeypatch, capsys):
+    # JavaScript strings count astral glyphs as surrogate pairs. Python len
+    # alone would admit this oversized floor even though the native hook
+    # cannot receive it intact.
+    (home / 'identity.md').write_text('# Identity\n' + '🌱' * 5000)
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))
+    assert main(['wake', '--home', str(home), '--hook']) == 0
+    text = json.loads(capsys.readouterr().out)['hookSpecificOutput']['additionalContext']
+    assert 'Read that file before acting' in text
+    assert len(text.encode('utf-16-le')) // 2 < 10000
+    assert '🌱' * 5000 in (home / 'wake.md').read_text()
