@@ -700,8 +700,13 @@ def test_lapsed_self_lease_kills_shell_and_leaves_recoverable_seat(tmp_path: Pat
     thread.start()
     try:
         _wait_processing(runtime, event)
-        run_id = runtime.seats.read("c").run_id
+        # The letter turns `processing` before seat.start stamps the run id;
+        # reading it in that window returned "" under CI load.
         deadline = time.monotonic() + 30
+        while not runtime.seats.read("c").run_id and time.monotonic() < deadline:
+            time.sleep(0.02)
+        run_id = runtime.seats.read("c").run_id
+        assert run_id
         while runner.live_pid_for_label(run_id) is None and time.monotonic() < deadline:
             time.sleep(0.02)
         assert runner.live_pid_for_label(run_id) is not None
