@@ -19,6 +19,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--home", type=Path, required=True)
     parser.add_argument("--runtime-dir", type=Path)
+    parser.add_argument("--inbox", type=Path)
+    parser.add_argument("--responses", type=Path)
     parser.add_argument("--runner")
     parser.add_argument("--runner-cmd", type=Path)
     parser.add_argument("--role", choices=("any", "resident", "strand"),
@@ -26,7 +28,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     config = {"runner_cmd": [str(args.runner_cmd)]} if args.runner_cmd else None
     daemon = Daemon2(args.repo, args.home, runtime_dir=args.runtime_dir,
-                     runner_name=args.runner, runner_config=config)
+                     runner_name=args.runner, runner_config=config,
+                     inbox_dir=args.inbox, responses_dir=args.responses)
     if args.once:
         with contextlib.redirect_stdout(sys.stderr):
             result = daemon.once(role=args.role)
