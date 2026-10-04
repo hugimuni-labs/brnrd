@@ -89,6 +89,45 @@ they exist. **Read it after any `spawn:` / `respawn:` / `event:`-addressed
 write.** A dropped directive that nobody reads is a request that silently
 never happened.
 
+### `brnrd do` — at a glance
+
+the wake's copy · the full section below keeps the reasoning · porcelain over the outbox grammar ≠ a new channel: each verb stages the same file a hand-written directive would, waits for the daemon's drain, and reports the verdict in the same call
+
+```
+brnrd do [--outbox DIR] [--timeout SECONDS] \
+  [--mood <feeling> [--mood-note "…"]] \
+  [--note <event-id>]... \
+  [--reply <event-id> [--item <id> [--part "…"]]... [--new-item "<headline>"]... [--no-ask "<why>"] \
+     --body-file FILE | --body "…"]... \
+  (--promise <what> [--promise-count N] | --no-follow-up) \
+  [--gate <name> --body-file FILE]... [--card FILE] [-- <command> [args…]]
+```
+
+verdict: `✓` consumed · `✓ (advisory: …)` consumed, FYI notice · `✗ <kind>: <text>` refused / dropped / redirected · `? still queued` at the timeout, never a hang
+- any `--reply` ⇒ exactly one of `--promise <what>` (commit · branch · pr · merge · kb · issue · comment · message · file) or `--no-follow-up`, per call · the promise row lands only after every reply drains `✓`
+- every reply names its ask: `--item <id>` (existing; `--part` tags the excerpt) · `--new-item "<headline>"` (mints one on the reply's verdict) · `--no-ask "<why>"` (the recorded zero) · none of the three ⇒ refused before staging when the account has a warp · existing is never the default
+- `--reply` reaches only a *pending* event · refused as non-pending (e.g. the waking letter, already claimed) ⇒ stage a bare outbox file: no frontmatter ⇒ the waking thread
+- a same-thread burst gets one body: outbox `event:` + `also: <id>, <id>` (no `--also` flag yet) · byte-identical replies to several events land as duplicates
+- `--mood` resolves through the emote index; a near-miss lists candidates instead of writing nothing
+- bare `brnrd do` = one screen: pending events · outbound · notices · quota · spawn headroom
+- `-- <command>` runs after staging (execvp, no shell); verdicts move to stderr, the command's output and exit code become the call's
+
+### `brnrd await` — at a glance
+
+the wake's copy · the full section below keeps the reasoning · hold this run until the daemon has something for you · a message, a strand finishing, a schedule firing all arrive as pending events ⇒ all resolve it without being named · a shell `sleep` loop is a wait nobody can interrupt — never that
+
+```
+brnrd await [--timeout <duration>] [--ceiling <duration>] [--file <path>] [--json]
+```
+
+- `--timeout` = the wait's ceiling · default: the run's remaining budget; none configured ⇒ open-ended · a re-call stages a new generation, so restate an explicit `--timeout` every time
+- `--file <path>` adds a trigger the daemon can't see (a local gate's done-marker, an external CI file) · never narrows the wait
+- outcome (`portal-state.json` → `await`): `event` · `condition` (the file; a pending event outranks it) · `timeout` · `park`
+- `timeout` + `initiative: true` = the seat's own hours: an idle seat's bare await (nobody inside `seat.live_window_minutes`, no live strand, pace ahead) gets a `seat.initiative_after_minutes` ceiling ⇒ act from card → open item → notebook, or `note:` why not (run.md §appetite)
+- `park` = the binding quota read under `seat.starve_floor_pct` (the starvation park, see `hold:`), or — only when `seat.park_on_hold_cost` is opted in — holding has cost `seat.park_after_boot_ratio` boots ⇒ end the turn; that park is the daemon's
+- `pending` = the *call's* lease ran out first (claude: ~50m by default, `--ceiling` up to 6h; the hook sets the tool timeout) ⇒ call again, that is the whole instruction · the next boundary says `slept <d> · woke: <outcome>`
+- blocked = zero tokens · each return = one boundary at full context
+
 ### `brnrd do` — the verdict rides the act
 
 porcelain over the grammar above ≠ a new channel · every write = one of the same outbox files, staged and drained the way a hand-written `note.md` / `event: <id>` reply is

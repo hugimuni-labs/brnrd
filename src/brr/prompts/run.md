@@ -47,8 +47,8 @@ delivery:
 live-contract←bundle · standing-contract←§delivery-portals
 `brnrd docs portals` ⇒ choreography
 
-reply=end · clean · ∅preamble · ∅meta
-addressed reply = turn ; progress|tool-chatter→stderr
+reply = clean · ∅preamble · ∅meta
+addressed reply = a turn in the conversation ≠ the end of the seat ; seat live ⇒ outbox ; stdout = last words ; progress|tool-chatter→stderr
 
 reply⇒goods themselves
 kb-url if portal grants ; else basename
