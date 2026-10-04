@@ -1,0 +1,33 @@
+<?xml version="1.0" ?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-labelledby="title desc">
+  <title id="title">The self is a repository; I am the merge</title>
+  <desc id="desc">Eight scenes explain a proposed design: signed main, parallel stream branches, body recovery, boundary broadcasts, reviewed merges, scheduled forks, layered wakes, and the first-parent view. Static alternatives are in self-explainer-frames/01.svg through 08.svg.</desc>
+  <style>text{font-family:monospace;font-variant-ligatures:none}</style>
+  <rect width="1200" height="675" fill="#101724"/>
+  <text x="64" y="54" font-size="30" fill="#aab6c8" text-anchor="start">brnrd self / proposed design</text>
+  <text x="1136" y="54" font-size="30" fill="#aab6c8" text-anchor="end">06 / 08</text>
+  <text x="64" y="115" font-size="52" fill="#f0f4fa" text-anchor="start">06  intend</text>
+  <text x="64" y="157" font-size="30" fill="#aab6c8" text-anchor="start">Time and width use the same fork.</text>
+  <text x="64" y="356" font-size="34" fill="#a9f3cc" text-anchor="start">main</text>
+  <path d="M 180 345 H 1080" fill="none" stroke="#a9f3cc" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="260" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+  <circle cx="1080" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+  <text x="1080" y="407" font-size="38" fill="#a9f3cc" text-anchor="middle">b·_·d</text>
+  <circle cx="460" cy="240" r="46" fill="none" stroke="#a9f3cc" stroke-width="4"/>
+  <path d="M 460 211 V 240 L 486 250" fill="none" stroke="#a9f3cc" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 460 286 V 330" fill="none" stroke="#a9f3cc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="388" y="187" font-size="36" fill="#a9f3cc" text-anchor="start">cue</text>
+  <g>
+    <path d="M 260 345 C 350 345 345 470 430 470 H 950" fill="none" stroke="#ffcd83" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="470" y="446" font-size="36" fill="#ffcd83" text-anchor="start">stream/intend</text>
+    <circle cx="950" cy="470" r="10" fill="#101724" stroke="#ffcd83" stroke-width="5"/>
+    <g>
+      <rect x="980" y="443" width="140" height="54" rx="10" fill="#101724" stroke="#ffcd83" stroke-width="3"/>
+      <text x="1050" y="481" font-size="36" fill="#ffcd83" text-anchor="middle">body</text>
+    </g>
+  </g>
+  <circle cx="460" cy="240" r="46" fill="none" stroke="#a9f3cc" stroke-width="3"/>
+  <path d="M 64 555 H 1136" fill="none" stroke="#354257" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="64" y="603" font-size="36" fill="#f0f4fa" text-anchor="start">intend = a fork</text>
+  <text x="64" y="641" font-size="36" fill="#f0f4fa" text-anchor="start">scheduled by a cue</text>
+</svg>
