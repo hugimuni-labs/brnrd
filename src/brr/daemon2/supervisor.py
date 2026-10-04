@@ -48,6 +48,13 @@ class Supervisor:
                         ask, prior.conversation, prior.parent, prior.edge,
                         prior.run, "stopped", prior.report, prior.branch,
                         prior.generation)
+            elif fact.kind == "child_completed":
+                prior = result.get(data["edge"])
+                if prior and prior.run == data["run"] and prior.status != "stopped":
+                    result[data["edge"]] = Child(
+                        ask, prior.conversation, prior.parent, prior.edge,
+                        prior.run, data["status"], data.get("report"),
+                        data.get("branch"), prior.generation)
         return result
 
     def conversation_children(self, conversation: str) -> dict[str, Child]:

@@ -16,6 +16,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -99,6 +100,7 @@ class Daemon2:
         self._reload_watcher = None
         self._reload_pending = False
         self._next_reload_check = 0.0
+        self._next_delivery_check = 0.0
 
     @staticmethod
     def _terminate_runner(run_id: str, *, grace: float = 0.5) -> None:
@@ -320,6 +322,125 @@ class Daemon2:
             "interim_response", state["conversation"], str(event["id"]),
             {"run_id": state["run_id"], "event_id": str(event["id"]),
              "path": str(partial)}))
+
+    def _queue_outbound(self, state: dict[str, Any], event: dict[str, Any],
+                        body: str, path: Path, *, thread: str = "") -> None:
+        """Attach the durable row to the same gate carrier as a reply."""
+        message_path = None
+        if self._account_ctx is not None:
+            message_path = message_store.stage(
+                self._account_ctx, repo_label=str(state.get("repo_label") or
+                                                event.get("repo_label") or
+                                                self._account_ctx.default_repo.label),
+                run_id=state["run_id"], body=body, kind="outbound",
+                target_event=str(event["id"]), target_gate=str(event["source"]),
+                target_thread=thread, source_ref=path.name)
+        protocol.write_response(self.door.response_dir(event), str(event["id"]),
+                                body, message_path=message_path)
+
+    @staticmethod
+    def _report_path(state: dict[str, Any]) -> str:
+        report = str(state["event"].get("report") or "")
+        if not report:
+            return ""
+        path = Path(report)
+        if path.is_absolute():
+            return str(path)
+        allocation = state.get("allocation")
+        root = allocation.path if allocation is not None else state["work_dir"]
+        return str(root / path)
+
+    def _strand_completed(self, state: dict[str, Any], status: str) -> None:
+        """An unsubmitted exit is a return too, including invocation failures."""
+        if not state["is_child"] or state.get("submitted"):
+            return
+        child = self.supervisor.children(state["ask"] or "").get(state["edge"] or "")
+        if child is not None and child.status == "stopped":
+            return  # stop: already emitted this edge's completion
+        publication = state.get("publication")
+        branch = str(state["event"].get("branch") or "")
+        if publication is not None and publication.landed:
+            branch = publication.branch
+        published = (publication is not None and publication.landed
+                     and (publication.pushed or not gitops.remote_url(self.repo_root, "origin")))
+        # Keep the declared branch-relative coordinate usable after clone
+        # cleanup. Only validation resolves it to the allocated filesystem.
+        report = str(state["event"].get("report") or "")
+        if child is not None:
+            self.facts.record("asks", child.ask, "child_completed", state["run_id"],
+                              {"edge": child.edge, "run": child.run, "status": status,
+                               "report": report, "branch": branch})
+        protocol.create_event(
+            self.door.inbox, "spawn_completed",
+            f"concurrent spawn {state['run_id']} exited: {status}",
+            conversation_key=state["conversation"], ask_id=state["ask"],
+            spawn_parent_run_id=state["parent"], spawned_by_run=state["run_id"],
+            spawned_by_event=str(state["event"]["id"]), spawn_status=status,
+            spawn_report_path=report, spawn_branch=branch,
+            spawn_published_branch=branch if published else "")
+        # An ended child must not be redispatched as an expired claim.
+        with state["claim_lock"]:
+            held = state["claims"].get(str(state["event"]["id"]))
+            if held is not None and self.leases.authorize(held.lease):
+                self.letters.retire(held, by=state["run_id"], why="strand_exited")
+                state["claims"].pop(held.letter, None)
+        seat = state["seat"]
+        if seat.read().state != "ended":
+            seat.end(seat.read().generation)
+
+    def _check_delivery(self, state: dict[str, Any] | None = None) -> None:
+        """Warn once per overdue row, even after its producing body exits."""
+        if self._account_ctx is None:
+            return
+        from .. import daemon as legacy_daemon
+        now = datetime.now(timezone.utc)
+        horizon = now.timestamp() - _DELIVERY_WINDOW_SECONDS
+        # History is not this sweep's business: an account carries thousands
+        # of rows and over a thousand pre-daemon2 `pending` ones (measured
+        # 2026-10-04: 8,010 rows, 1,165 pending). Only message dirs touched
+        # inside the window are opened, and only rows created inside it count.
+        for messages_dir in self._account_ctx.runs_dir.glob("*/*/messages"):
+            try:
+                if messages_dir.stat().st_mtime < horizon:
+                    continue
+            except OSError:
+                continue
+            for path in messages_dir.glob("*.md"):
+                self._check_delivery_row(path, now, horizon, state, legacy_daemon)
+
+    def _check_delivery_row(self, path: Path, now: datetime, horizon: float,
+                            state: dict[str, Any] | None, legacy_daemon: Any) -> None:
+        message = message_store.read(path)
+        if message is None or message.get("status") not in {
+                message_store.PENDING, message_store.UNDELIVERABLE}:
+            return
+        try:
+            created = datetime.fromisoformat(str(message["created_at"]).replace("Z", "+00:00"))
+            age = (now - created).total_seconds()
+        except (KeyError, ValueError, TypeError):
+            age = now.timestamp() - path.stat().st_mtime
+        if age <= 60 or now.timestamp() - age < horizon:
+            return
+        entity = "delivery-overdue:" + str(path)
+        if self.facts.read("sends", entity):
+            return
+        run_id = path.parent.parent.name
+        text = (f"message {run_id}/{path.name} undelivered for more than a minute "
+                f"(status: {message['status']}, gate: {message.get('target_gate', '')})")
+        if state is not None and state["run_id"] == run_id:
+            self._notice(state, text, kind="advisory", verb="delivery")
+        else:
+            # Prefer the producer's waking event. Archived orphan rows
+            # still earn a notice when their manifest no longer exists.
+            task = legacy_daemon.Run.from_file(
+                legacy_daemon.run_manifest_path(self.runtime_dir / "runs", run_id))
+            event_id = task.event_id if task is not None else str(message.get("target_event") or "")
+            outbox = (self.runtime_dir / "outbox" / event_id if event_id else
+                      state["outbox"] if state is not None else
+                      self.runtime_dir / "outbox" / "delivery")
+            legacy_daemon._record_outbox_notice(
+                outbox, text, kind="advisory", lifetime="run", verb="delivery", run=run_id)
+        self.facts.record("sends", entity, "overdue", "delivery_sweep", {"run": run_id})
 
     def _halt_open_items(self, state: dict[str, Any]) -> list[halt_verb.OpenItem]:
         """Attest the open mail, course, produce and children before ending."""
@@ -699,7 +820,7 @@ class Daemon2:
                 raise ValueError("submit belongs to a strand")
             report = str(state["event"].get("report") or "")
             branch = str(state["event"].get("branch") or "")
-            if not report or not Path(report).is_file() or not branch:
+            if not report or not Path(self._report_path(state)).is_file() or not branch:
                 raise ValueError("submit requires its declared branch and stat-able report")
             allocation = state.get("allocation")
             if allocation is not None:
@@ -731,6 +852,7 @@ class Daemon2:
                 spawn_published_branch=branch,
                 spawn_submit_generation=generation,
             )
+            state["submitted"] = True
             if not state["answered"]:
                 with state["claim_lock"]:
                     self.letters.answer(
@@ -977,21 +1099,9 @@ class Daemon2:
                     target = synthetic.stem
                 else:
                     target = str(prior["id"])
-                protocol.write_response(self.door.responses, target, body)
+                self._queue_outbound(state, self.door.get(target), body, path)
                 (state["outbox"] / ".forge-handoff").write_text(
                     f"event: {target}\nhead: {head}\n", encoding="utf-8")
-                if self._account_ctx is not None:
-                    try:
-                        message_store.stage(
-                            self._account_ctx,
-                            repo_label=str(state["event"].get("repo_label") or ""),
-                            run_id=state["run_id"], body=body, kind="outbound",
-                            target_gate="forge", source_ref=path.name)
-                    except Exception as exc:
-                        self._notice(state, f"gate 'forge': carrier queued, but "
-                                     f"message record failed: {exc}",
-                                     kind="advisory", source_file=path.name,
-                                     verb="gate")
                 return
             if not body:
                 self._notice(state, f"gate message dropped: gate {gate_name!r} "
@@ -1025,18 +1135,7 @@ class Daemon2:
                 run_id=state["run_id"],
                 repo_label=str(state["event"].get("repo_label") or ""),
                 **target_meta)
-            protocol.write_response(self.door.responses, carrier.stem, body)
-            if self._account_ctx is not None:
-                try:
-                    message_store.stage(
-                        self._account_ctx,
-                        repo_label=str(state["event"].get("repo_label") or ""),
-                        run_id=state["run_id"], body=body, kind="outbound",
-                        target_gate=gate_name, source_ref=path.name)
-                except Exception as exc:
-                    self._notice(state, f"gate {gate_name!r}: carrier queued, but "
-                                 f"message record failed: {exc}", kind="advisory",
-                                 source_file=path.name, verb="gate")
+            self._queue_outbound(state, protocol._read_event(carrier), body, path)
         elif verb == "thread":
             key = str(fm.get("thread") or "").strip()
             event, refusal = self._thread_target(key)
@@ -1050,16 +1149,15 @@ class Daemon2:
                 return
             if self._account_ctx is None:
                 raise ValueError("thread: requires an account context")
-            message_store.stage(
-                self._account_ctx,
-                repo_label=self._account_ctx.default_repo.label,
-                run_id=state["run_id"],
-                body=body,
-                kind="outbound",
-                target_gate=str(event["source"]),
-                target_thread=key,
-                source_ref=path.name,
-            )
+            # Preserve gate addressing, not the old letter's lifecycle. A
+            # fresh carrier can deliver even when that letter is closed.
+            metadata = {key: value for key, value in event.items()
+                        if key not in {"id", "source", "status", "created", "attachments",
+                                       "body", "_path", "run_id", "terminal_suppressed"}}
+            carrier = protocol.create_event(
+                self.door.inbox, str(event["source"]), "", status="done",
+                run_id=state["run_id"], **metadata)
+            self._queue_outbound(state, protocol._read_event(carrier), body, path, thread=key)
         else:
             raise ValueError(f"daemon2 wire verb not yet implemented: {verb}")
 
@@ -1163,6 +1261,9 @@ class Daemon2:
             # Only the resident self lease may fire account schedules or reap
             # account history. A follower's strand heartbeat has no authority.
             resident = state is None or not state["is_child"]
+            if resident and now >= self._next_delivery_check:
+                self._check_delivery(state)
+                self._next_delivery_check = now + _DELIVERY_SWEEP_SECONDS
             if resident and now >= self._next_schedule_check:
                 legacy_daemon._fire_due_schedules(
                     self.repo_root, gitops.shared_brr_dir(self.repo_root),
@@ -1231,8 +1332,7 @@ class Daemon2:
         transport = GateTransport(self.leases, self.facts, lambda: self_lease)
         delivery_pairs = [(inbox, responses)
                           for inbox, responses, _label in self.door.queues()]
-        for inbox, responses in delivery_pairs:
-            transport.install(inbox, responses)
+        installed_pairs = []
 
         def _renew_serve() -> None:
             interval = max(0.01, self.lease_ttl_seconds / 3)
@@ -1260,6 +1360,9 @@ class Daemon2:
                 if held_self is not None and not gate_threads_started:
                     # The old gate loops own polling, cloud fetch and platform
                     # sends. Their delivery callback is fenced by transport.
+                    for inbox, responses in delivery_pairs:
+                        transport.install(inbox, responses)
+                        installed_pairs.append((inbox, responses))
                     from .. import daemon as legacy_daemon
                     if self._account_ctx is not None and self._account_ctx.enabled:
                         legacy_daemon._start_account_gates(
@@ -1283,7 +1386,7 @@ class Daemon2:
         finally:
             self._stop_serve.set()
             renew_thread.join(timeout=2)
-            for inbox, responses in delivery_pairs:
+            for inbox, responses in installed_pairs:
                 transport.remove(inbox, responses)
             if self_lease is not None:
                 self.leases.release(self_lease)
@@ -1375,9 +1478,15 @@ class Daemon2:
         heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
         heartbeat_thread.start()
         presence_entry = None
+        state = None
+        result = None
+        exit_status = "crash"
         try:
             if not self.leases.authorize(claim.lease):
                 return None
+            # Gate delivery sweeps the raw file. The fact projection alone
+            # does not expose a live letter's interim carriers to that organ.
+            protocol.set_status(event, "processing")
             seat_address = (f"{address.conversation}#strand:{run_id}"
                             if is_child else address.conversation)
             seat = Seat(self.seats, seat_address,
@@ -1456,6 +1565,7 @@ class Daemon2:
                 "started_wall": time.time(),
                 "output_stats": {"current": 0, "other": 0, "outbound": 0},
                 "is_child": is_child,
+                "work_dir": self.repo_root,
                 "claims": held_claims, "claim_lock": claim_lock,
                 "crashed": False, "halted": False, "cut": False,
             }
@@ -1525,15 +1635,16 @@ class Daemon2:
                     )
                     result = runner.invoke_runner(
                         runner_choice, invocation, self.runner_config)
-                    if strand_alloc is not None:
-                        # The pump may not have seen a last-moment submit.
-                        # Drain it while branch validation can still read
-                        # the clone; publish() may remove that directory.
-                        self._tick(state)
+                    # Drain last-moment submits before publication can
+                    # remove the clone (also needed by unplaced fixtures).
+                    self._tick(state)
+                    exit_status = ("done" if result.returncode == 0 else
+                                   "crash" if result.returncode < 0 else "error")
                 finally:
                     if strand_alloc is not None:
                         try:
                             publication = _placement.publish(self.repo_root, strand_alloc)
+                            state["publication"] = publication
                             if not publication.landed or not publication.released:
                                 self._notice(
                                     state, f"strand clone retained at {strand_alloc.path}: "
@@ -1597,12 +1708,24 @@ class Daemon2:
             return RunResult(str(event["id"]), run_id, result.returncode,
                              state["answered"], outbox, response)
         finally:
-            heartbeat_done.set()
-            heartbeat_thread.join(timeout=2)
-            if presence_entry is not None:
-                presence.deregister(self.runtime_dir, presence_entry["id"])
-            if execution_lease is not self_lease:
-                self.leases.release(execution_lease)
+            try:
+                if state is not None and is_child:
+                    self._strand_completed(
+                        state, "crash" if heartbeat_lost.is_set() else exit_status)
+            finally:
+                heartbeat_done.set()
+                heartbeat_thread.join(timeout=2)
+                if presence_entry is not None:
+                    presence.deregister(self.runtime_dir, presence_entry["id"])
+                if execution_lease is not self_lease:
+                    self.leases.release(execution_lease)
+
+
+#: The overdue-delivery sweep's cadence and reach: every 30 s, rows from the
+#: last day only. A per-second scan of every row in an account's history cost
+#: more than the resident tick it rode on.
+_DELIVERY_SWEEP_SECONDS = 30.0
+_DELIVERY_WINDOW_SECONDS = 24 * 3600.0
 
 
 def _await_lease_env(runner_choice: Any) -> dict[str, str]:
