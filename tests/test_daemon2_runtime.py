@@ -1961,3 +1961,58 @@ stage("reply.md", "---\nevent: " + event_id + "\n---\nsteered\n")
     texts = [n.get("text", "") for n in capsule["notices"]]
     assert not [t for t in texts if "fact address" in t or "not a child" in t], texts
     assert runtime.supervisor.conversation_children("telegram:owner")
+
+
+def test_portal_state_reads_the_door_not_raw_status(tmp_path: Path) -> None:
+    """#2187 item 1: a noted sibling leaves ``portal-state.json`` in the same
+    tick it leaves ``inbox.json``. The note retires the letter (a fact) and
+    leaves the event file's raw ``status:`` alone, so a HUD that rescans raw
+    status lists a ghost the door already retired."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test repo\n", encoding="utf-8")
+    inbox = home / "dispatch" / "inbox"
+    waking = protocol.create_event(inbox, "telegram", "First",
+                                   conversation_key="telegram:owner", trust_tier="owner")
+    sibling = protocol.create_event(inbox, "telegram", "Second",
+                                    conversation_key="telegram:owner", trust_tier="owner")
+    seen = tmp_path / "seen.json"
+    binary = tmp_path / "note-shell"
+    binary.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json,os,time\nfrom pathlib import Path\n"
+        "outbox=Path(os.environ['BRR_OUTBOX_DIR'])\n"
+        "portal=Path(os.environ['BRR_PORTAL_STATE'])\n"
+        "event_id=os.environ['BRR_EVENT_ID']\n"
+        f"sibling={sibling.stem!r}\nseen=Path({str(seen)!r})\n"
+        "def stage(name,body):\n"
+        "    (outbox/(name+'.tmp')).write_text(body); (outbox/(name+'.tmp')).rename(outbox/name)\n"
+        "def read(name):\n"
+        "    try: return json.loads((outbox/name).read_text())\n"
+        "    except Exception: return None\n"
+        "deadline=time.monotonic()+10\n"
+        "while time.monotonic()<deadline:\n"
+        "    s=read('portal-state.json')\n"
+        "    if s and s['attention']['pending_event_count']==1: break\n"
+        "    time.sleep(.02)\n"
+        "else: raise SystemExit('sibling never pending')\n"
+        "stage('n.md','---\\nnote: '+sibling+'\\n---\\n')\n"
+        "deadline=time.monotonic()+10\n"
+        "while time.monotonic()<deadline:\n"
+        "    i=read('inbox.json'); s=read('portal-state.json')\n"
+        "    if i is not None and not i['events'] and s and s['attention']['pending_event_count']==0:\n"
+        "        seen.write_text(json.dumps(s['attention'])); break\n"
+        "    time.sleep(.02)\n"
+        "else: seen.write_text(json.dumps(read('portal-state.json')['attention']))\n"
+        "stage('r.md','---\\nevent: '+event_id+'\\n---\\ndone\\n')\n")
+    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    result = runtime.once()
+    assert result is not None and result.answered
+    assert runtime.letters.state(sibling.stem).state == "retired"
+    attention = json.loads(seen.read_text())
+    assert attention["pending_event_count"] == 0, attention
+    assert waking.stem != sibling.stem

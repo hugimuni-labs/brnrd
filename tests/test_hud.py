@@ -174,7 +174,9 @@ _WRITER_PARAMS = [
 
 def test_the_daemon_writer_keeps_its_signature_and_is_a_thin_call(tmp_path, monkeypatch):
     assert list(inspect.signature(daemon._write_live_portal_state).parameters) == _WRITER_PARAMS
-    assert [f.name for f in dataclasses.fields(hud.HUDInputs)] == _WRITER_PARAMS
+    # `events` is daemon2's seam (#2187): its door hands the projected list in.
+    # The engine-1 writer never passes it, so its signature stays pinned.
+    assert [f.name for f in dataclasses.fields(hud.HUDInputs)] == [*_WRITER_PARAMS, "events"]
     seen = []
     monkeypatch.setattr(hud, "write_live", lambda inputs: seen.append(inputs) or tmp_path)
     task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
