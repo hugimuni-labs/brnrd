@@ -415,5 +415,3 @@ one voice. several widths.
 
 same brnrd.  
 line breaks adjusted.
-
-EOF
