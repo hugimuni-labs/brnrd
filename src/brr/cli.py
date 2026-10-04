@@ -7339,7 +7339,10 @@ def cmd_up(args):
                         strand_worker_argv(root, home, brr_dir, inbox, responses),
                         stdin=subprocess.DEVNULL, stdout=worker_log,
                         stderr=worker_log))
-            replacement.serve()
+            # With followers carrying strands, the resident loop serves only
+            # resident letters: a strand it picked up would hold the self
+            # seat (and every message) for the strand's whole life.
+            replacement.serve(role="resident" if workers else "any")
         finally:
             for worker in workers:
                 if worker.poll() is None:
