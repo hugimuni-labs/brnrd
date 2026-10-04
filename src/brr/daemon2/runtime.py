@@ -394,38 +394,53 @@ class Daemon2:
             return
         from .. import daemon as legacy_daemon
         now = datetime.now(timezone.utc)
-        for path in self._account_ctx.runs_dir.glob("*/*/messages/*.md"):
-            message = message_store.read(path)
-            if message is None or message.get("status") not in {
-                    message_store.PENDING, message_store.UNDELIVERABLE}:
-                continue
+        horizon = now.timestamp() - _DELIVERY_WINDOW_SECONDS
+        # History is not this sweep's business: an account carries thousands
+        # of rows and over a thousand pre-daemon2 `pending` ones (measured
+        # 2026-10-04: 8,010 rows, 1,165 pending). Only message dirs touched
+        # inside the window are opened, and only rows created inside it count.
+        for messages_dir in self._account_ctx.runs_dir.glob("*/*/messages"):
             try:
-                created = datetime.fromisoformat(str(message["created_at"]).replace("Z", "+00:00"))
-                age = (now - created).total_seconds()
-            except (KeyError, ValueError, TypeError):
-                age = now.timestamp() - path.stat().st_mtime
-            if age <= 60:
+                if messages_dir.stat().st_mtime < horizon:
+                    continue
+            except OSError:
                 continue
-            entity = "delivery-overdue:" + str(path)
-            if self.facts.read("sends", entity):
-                continue
-            run_id = path.parent.parent.name
-            text = (f"message {run_id}/{path.name} undelivered for more than a minute "
-                    f"(status: {message['status']}, gate: {message.get('target_gate', '')})")
-            if state is not None and state["run_id"] == run_id:
-                self._notice(state, text, kind="advisory", verb="delivery")
-            else:
-                # Prefer the producer's waking event. Archived orphan rows
-                # still earn a notice when their manifest no longer exists.
-                task = legacy_daemon.Run.from_file(
-                    legacy_daemon.run_manifest_path(self.runtime_dir / "runs", run_id))
-                event_id = task.event_id if task is not None else str(message.get("target_event") or "")
-                outbox = (self.runtime_dir / "outbox" / event_id if event_id else
-                          state["outbox"] if state is not None else
-                          self.runtime_dir / "outbox" / "delivery")
-                legacy_daemon._record_outbox_notice(
-                    outbox, text, kind="advisory", lifetime="run", verb="delivery", run=run_id)
-            self.facts.record("sends", entity, "overdue", "delivery_sweep", {"run": run_id})
+            for path in messages_dir.glob("*.md"):
+                self._check_delivery_row(path, now, horizon, state, legacy_daemon)
+
+    def _check_delivery_row(self, path: Path, now: datetime, horizon: float,
+                            state: dict[str, Any] | None, legacy_daemon: Any) -> None:
+        message = message_store.read(path)
+        if message is None or message.get("status") not in {
+                message_store.PENDING, message_store.UNDELIVERABLE}:
+            return
+        try:
+            created = datetime.fromisoformat(str(message["created_at"]).replace("Z", "+00:00"))
+            age = (now - created).total_seconds()
+        except (KeyError, ValueError, TypeError):
+            age = now.timestamp() - path.stat().st_mtime
+        if age <= 60 or now.timestamp() - age < horizon:
+            return
+        entity = "delivery-overdue:" + str(path)
+        if self.facts.read("sends", entity):
+            return
+        run_id = path.parent.parent.name
+        text = (f"message {run_id}/{path.name} undelivered for more than a minute "
+                f"(status: {message['status']}, gate: {message.get('target_gate', '')})")
+        if state is not None and state["run_id"] == run_id:
+            self._notice(state, text, kind="advisory", verb="delivery")
+        else:
+            # Prefer the producer's waking event. Archived orphan rows
+            # still earn a notice when their manifest no longer exists.
+            task = legacy_daemon.Run.from_file(
+                legacy_daemon.run_manifest_path(self.runtime_dir / "runs", run_id))
+            event_id = task.event_id if task is not None else str(message.get("target_event") or "")
+            outbox = (self.runtime_dir / "outbox" / event_id if event_id else
+                      state["outbox"] if state is not None else
+                      self.runtime_dir / "outbox" / "delivery")
+            legacy_daemon._record_outbox_notice(
+                outbox, text, kind="advisory", lifetime="run", verb="delivery", run=run_id)
+        self.facts.record("sends", entity, "overdue", "delivery_sweep", {"run": run_id})
 
     def _halt_open_items(self, state: dict[str, Any]) -> list[halt_verb.OpenItem]:
         """Attest the open mail, course, produce and children before ending."""
@@ -1248,7 +1263,7 @@ class Daemon2:
             resident = state is None or not state["is_child"]
             if resident and now >= self._next_delivery_check:
                 self._check_delivery(state)
-                self._next_delivery_check = now + 1.0
+                self._next_delivery_check = now + _DELIVERY_SWEEP_SECONDS
             if resident and now >= self._next_schedule_check:
                 legacy_daemon._fire_due_schedules(
                     self.repo_root, gitops.shared_brr_dir(self.repo_root),
@@ -1704,6 +1719,13 @@ class Daemon2:
                     presence.deregister(self.runtime_dir, presence_entry["id"])
                 if execution_lease is not self_lease:
                     self.leases.release(execution_lease)
+
+
+#: The overdue-delivery sweep's cadence and reach: every 30 s, rows from the
+#: last day only. A per-second scan of every row in an account's history cost
+#: more than the resident tick it rode on.
+_DELIVERY_SWEEP_SECONDS = 30.0
+_DELIVERY_WINDOW_SECONDS = 24 * 3600.0
 
 
 def _await_lease_env(runner_choice: Any) -> dict[str, str]:

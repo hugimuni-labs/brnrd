@@ -283,3 +283,25 @@ def test_overdue_delivery_notice_survives_restart_and_finished_producer(tmp_path
     restarted._check_delivery()
     orphan_notices = repo / ".brr" / "outbox" / "delivery" / ".notices.jsonl"
     assert "run-orphan" in orphan_notices.read_text()
+
+
+def test_delivery_sweep_never_opens_history(tmp_path: Path, monkeypatch) -> None:
+    """Rows outside the window are neither parsed nor flagged (8,010 rows on the live account)."""
+    import os
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    home = tmp_path / "home"
+    (repo / ".brr").mkdir()
+    (repo / ".brr" / "config").write_text(f"home.path={home}\nrepo.label=org/repo\n")
+    runtime = _runtime(repo, home, _shell(tmp_path / "shell", 'print("terminal")\n'))
+    two_days = datetime.now(timezone.utc) - timedelta(days=2)
+    for n in range(40):
+        row = message_store.stage(runtime._account_ctx, repo_label="org/repo", run_id=f"run-old-{n}",
+                                  body="history", kind="interim", created_at=two_days.isoformat())
+        os.utime(Path(row).parent, (two_days.timestamp(), two_days.timestamp()))
+    reads = []
+    real_read = message_store.read
+    monkeypatch.setattr(message_store, "read", lambda p: reads.append(p) or real_read(p))
+    runtime._check_delivery()
+    assert reads == []
+    assert not (repo / ".brr" / "outbox" / "delivery" / ".notices.jsonl").exists()
