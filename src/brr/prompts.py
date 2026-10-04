@@ -3657,8 +3657,11 @@ def _extract_markdown_sections(text: str, headings: list[str]) -> str:
 #: makes this extract quietly empty rather than silently wrong — a diff a
 #: reviewer sees, not a drift nobody notices.
 _PORTAL_VERB_GRAMMAR_HEADINGS = [
-    "### `brnrd do` — the verdict rides the act",
-    "### `brnrd await` — the wait with nothing to forget (#959, #1187)",
+    # The compact "at a glance" pair (2026-10-04): the full sections below
+    # them in the manual (~14 KB) rode every wake; the glance keeps every act
+    # a resident can take and leaves the reasoning to `brnrd docs portals`.
+    "### `brnrd do` — at a glance",
+    "### `brnrd await` — at a glance",
 ]
 
 
