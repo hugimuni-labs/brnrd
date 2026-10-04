@@ -254,7 +254,7 @@ def test_mcp_lifecycle_tools_and_errors(home):
     assert len(replies) == 12
     assert replies[0]['error']['code'] == -32000
     assert replies[1]['result']['protocolVersion'] == '2025-06-18'
-    assert {t['name'] for t in replies[2]['result']['tools']} == {'recall', 'note', 'obligations'}
+    assert {t['name'] for t in replies[2]['result']['tools']} == {'recall', 'note', 'obligations', 'consolidate', 'proposals'}
     assert json.loads(replies[4]['result']['content'][0]['text'])[0]['path'] == 'kb/notes.md'
     assert replies[6]['result']['isError'] and replies[7]['result']['isError']
     assert replies[8]['error']['code'] == -32601
@@ -337,3 +337,144 @@ def test_wake_omissions_scale_with_situation_not_home(home):
     assert 'Lesson 10 (' not in outside
     assert 'page-299.md' not in outside
     assert len(outside) < 1600
+
+
+def limb(home, tmp_path, files=None, raw=None):
+    """A real command checks stdin framing, without standing in for model quality."""
+    script = tmp_path / 'limb.py'
+    response = raw if raw is not None else json.dumps({
+        'files': files or {'notebook.md': '# Notebook\n\nKeep calls with their reasons.\n'},
+        'rationale': 'Keep supported calls inside the wake budget\nThe journal gives reasons, not inferred successes.'})
+    script.write_text('import json, sys\n'
+                      'value = sys.stdin.read()\n'
+                      'assert "journal" in value and "standing_memory_budget_bytes" in value\n'
+                      f'print({response!r})\n')
+    (home / '.self.json').write_text(json.dumps({'consolidate': {
+        'command': shlex.join([sys.executable, str(script)])}}))
+
+
+def test_consolidation_proposes_and_explicit_curation_marks_input(home, tmp_path):
+    from brr.self import consolidate, curate, proposals
+    encode(home, {'tool_name': 'Bash', 'tool_input': {'command': 'printf first', 'description': 'Verify one receipt'}})
+    checkpoint(home)
+    original = (home / 'notebook.md').read_text()
+    limb(home, tmp_path)
+    proposal = consolidate(home)
+    manifest = json.loads((proposal / 'input.json').read_text())
+    assert manifest['journal'][0]['why'] == 'Verify one receipt'
+    assert len(manifest['checkpoints']) == 1
+    assert manifest['sizes_bytes']['notebook.md'] == len(original.encode())
+    assert (home / 'notebook.md').read_text() == original
+    assert [p['path'] for p in proposals(home)] == [str(proposal)]
+    # A boundary landing after consolidation must survive the curation mark.
+    encode(home, {'tool_name': 'Bash', 'tool_input': {'command': 'printf later', 'description': 'Later boundary'}})
+    row = curate(home, proposal, accept=True, files=['notebook.md'])
+    assert row['through'] == manifest['through']
+    assert (home / 'notebook.md').read_text() == '# Notebook\n\nKeep calls with their reasons.\n'
+    assert proposals(home) == []
+    second = consolidate(home)
+    replay = json.loads((second / 'input.json').read_text())
+    assert [r['why'] for r in replay['journal']] == ['Later boundary']
+    assert replay['checkpoints'] == []
+    with pytest.raises(ValueError, match='already curated'):
+        curate(home, proposal, accept=True)
+
+
+def test_curate_identity_requires_explicit_choice_and_reject_keeps_mark(home, tmp_path):
+    from brr.self import consolidate, curate, proposals
+    limb(home, tmp_path, {'identity.md': '# New identity', 'notebook.md': '# Rewritten notebook'})
+    first = consolidate(home)
+    before = (home / 'identity.md').read_text()
+    with pytest.raises(ValueError, match='--identity'):
+        curate(home, first, accept=True)
+    assert (home / 'identity.md').read_text() == before
+    assert len(proposals(home)) == 1
+    curate(home, first, accept=True, files=['notebook.md'])
+    assert (home / 'identity.md').read_text() == before
+    second = consolidate(home)
+    curate(home, second, accept=True, files=['identity.md'], identity=True)
+    assert (home / 'identity.md').read_text() == '# New identity'
+    third = consolidate(home)
+    with pytest.raises(ValueError, match='Reject requires'):
+        curate(home, third)
+    curate(home, third, why='The evidence does not justify another rewrite')
+    fourth = consolidate(home)
+    manifests = [json.loads((p / 'input.json').read_text()) for p in (third, fourth)]
+    assert manifests[0]['since'] == manifests[1]['since']
+
+
+@pytest.mark.parametrize('files,raw', [
+    ({'../outside.md': 'bad'}, None), ({'journal/overwrite.md': 'bad'}, None),
+    ({'./identity.md': 'bad'}, None), ({'notebook.md': 17}, None),
+    (None, 'not JSON'), (None, '{"files": {}, "rationale": ""}'),
+])
+def test_bad_limb_outputs_cannot_change_authored_files(home, tmp_path, files, raw):
+    from brr.self import consolidate, proposals
+    before = (home / 'notebook.md').read_text()
+    limb(home, tmp_path, files, raw)
+    with pytest.raises(ValueError):
+        consolidate(home)
+    assert (home / 'notebook.md').read_text() == before
+    assert proposals(home) == []
+    assert len(list((home / 'proposals').glob('*/input.json'))) == 1
+
+
+def test_stale_and_escaping_acceptance_is_refused_before_any_writes(home, tmp_path):
+    from brr.self import consolidate, curate
+    limb(home, tmp_path, {'playbook.md': '# New playbook', 'notebook.md': '# New notebook'})
+    proposal = consolidate(home)
+    old = (home / 'playbook.md').read_text()
+    (home / 'notebook.md').write_text('A newer authored call')
+    with pytest.raises(ValueError, match='changed since proposal'):
+        curate(home, proposal, accept=True)
+    assert (home / 'playbook.md').read_text() == old
+    assert not (home / 'journal/curation.jsonl').exists()
+    with pytest.raises(ValueError, match='directory in this home'):
+        curate(home, tmp_path, accept=True)
+
+
+def test_curate_commits_only_selected_produce_in_home_despite_git_pin(home, tmp_path, monkeypatch):
+    from brr.self import consolidate, curate
+    from brr.self.consolidation import _git
+    assert _git(home, 'init').returncode == 0
+    assert _git(home, 'config', 'user.name', 'Test self').returncode == 0
+    assert _git(home, 'config', 'user.email', 'test@example.invalid').returncode == 0
+    assert _git(home, 'add', '.').returncode == 0
+    assert _git(home, 'commit', '-m', 'Seed authored home').returncode == 0
+    limb(home, tmp_path)
+    proposal = consolidate(home)
+    (home / 'unrelated.md').write_text('Do not commit this')
+    assert _git(home, 'add', 'unrelated.md').returncode == 0
+    monkeypatch.setenv('GIT_DIR', str(tmp_path / 'wrong.git'))
+    monkeypatch.setenv('GIT_WORK_TREE', str(tmp_path / 'wrong-tree'))
+    row = curate(home, proposal.name, accept=True)
+    assert row['commit'] == _git(home, 'rev-parse', 'HEAD').stdout.strip()
+    changed = _git(home, 'show', '--format=', '--name-only', 'HEAD').stdout.splitlines()
+    assert set(changed) == {'notebook.md', 'journal/curation.jsonl'}
+    assert 'Accepted: notebook.md' in _git(home, 'log', '-1', '--format=%B').stdout
+    assert 'A  unrelated.md' in _git(home, 'status', '--porcelain').stdout
+
+
+def test_consolidate_mcp_and_curate_cli_are_distinct(home, tmp_path, capsys):
+    from brr.self.mcp import call_tool, TOOLS
+    limb(home, tmp_path)
+    result = call_tool(home, 'consolidate', {'since': 'last'})
+    proposal = json.loads(result['content'][0]['text'])['path']
+    assert len(json.loads(call_tool(home, 'proposals', {})['content'][0]['text'])) == 1
+    assert 'curate' not in {tool['name'] for tool in TOOLS}
+    assert main(['curate', '--home', str(home), proposal, '--accept', 'notebook.md']) == 0
+    assert json.loads(capsys.readouterr().out)['decision'] == 'accept'
+    assert main(['consolidate', '--home', str(home), '--since', 'not ISO']) == 1
+    assert 'ISO timestamp' in capsys.readouterr().err
+
+
+def test_wake_and_consolidation_share_configured_budget(home, tmp_path, capsys):
+    from brr.self import consolidate
+    limb(home, tmp_path)
+    config = json.loads((home / '.self.json').read_text())
+    config['wake_budget_bytes'] = 0
+    (home / '.self.json').write_text(json.dumps(config))
+    assert main(['wake', '--home', str(home)]) == 0
+    assert 'self-inject budget exhausted' in capsys.readouterr().out
+    proposal = consolidate(home)
+    assert json.loads((proposal / 'input.json').read_text())['wake_budget_bytes'] == 0

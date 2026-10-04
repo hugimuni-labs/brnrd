@@ -30,7 +30,7 @@ Init merges these entries into existing configuration:
 | PostToolUse | `self encode --hook`: journal act and reason |
 | PreCompact + Stop | `self checkpoint --hook`: preserve authored orientation |
 | `CLAUDE.md` | Remove the exact generated wake import from earlier init; SessionStart is the wake |
-| `.mcp.json` | Register `self` stdio server: `recall`, `note`, `obligations` |
+| `.mcp.json` | Register `self` stdio server: `recall`, `note`, `obligations`, `consolidate`, `proposals` |
 
 Approve project MCP servers when Claude asks. Init leaves other hooks, imports
 and servers in place and refuses a conflicting server/home. Its hook commands
@@ -81,9 +81,73 @@ claimed. `note(kind, text)` appends authored text to notebook, playbook, pitfall
 knowledge, obligation or now. `obligations()` returns authored commitment
 files and their text, without inferring their states. Notes are not auto-curated.
 
+## Consolidate and curate
+
+`self consolidate --since last` (the default) gathers journal acts/reasons and
+checkpoints after the last accepted proposal's input cutoff. An explicit
+`--since 2026-10-03T00:00:00Z` selects a timezone-aware ISO boundary. It includes
+current authored Markdown, now.md, self-inject and notebook/playbook/pitfall
+sizes against the wake budget. The cutoff is captured before the model call;
+new boundaries arriving while it runs remain eligible for the next proposal.
+
+The home's `.self.json` configures the cheap limb:
+
+```json
+{
+  "wake_budget_bytes": 16384,
+  "consolidate": {
+    "command": "claude -p --model haiku",
+    "timeout_seconds": 180
+  }
+}
+```
+
+The default adds switches disabling built-in tools, slash commands and MCP,
+and starts a separate session. A custom command is a **trusted local program**,
+not an OS sandbox; configure it with the same proposal-only discipline. The
+command is split into argv without shell evaluation; optional `{home}` and
+`{proposal}` placeholders are substituted within each argument. The prompt goes
+on stdin. Return JSON `{"files": {"notebook.md": "full replacement text"},
+"rationale": "Commit subject\nReasons"}`. Fenced JSON is accepted too.
+
+Each completed `proposals/<stamp>/` contains `files/` full-text replacements,
+`rationale.md`, `input.json` (source texts/hashes, journal, checkpoint and budget
+manifest), and `proposal.json`. Invalid responses leave the input for diagnosis
+but never become open proposals or replace authored files. Notebook proposals
+rewrite current knowledge; they do not append a changelog. A long form can move
+to another linked Markdown file. MCP `consolidate(since?)` returns the path and
+`proposals()` lists open ones. Model calls have a configurable bounded timeout.
+
+Review the rationale and diff, then decide explicitly:
+
+```sh
+self proposals
+self curate STAMP --accept notebook.md
+self curate OTHER_STAMP --reject --why 'The proposed lesson lacks evidence'
+self curate IDENTITY_STAMP --accept identity.md --identity
+```
+
+Accept with no file list selects all proposed files; an identity edit always
+requires `--identity`. Unselected replacements are discarded by that decision.
+Curation checks the original hashes before changing anything and refuses a
+stale proposal. It replaces only selected files, records the decision in
+`journal/curation.jsonl`, and advances the mark to the **input cutoff** on accept.
+Reject records why without advancing the mark. Curate is deliberately absent
+from MCP: the owner chooses it through CLI, whether human or agent.
+
+If the home has its own `.git`, curation commits accepted files and the decision
+record with the rationale's first line and accepted file list. Unrelated staged
+or dirty files are excluded. A rejected decision gets its own commit. Configure
+Git author identity beforehand. If a Git hook/commit fails, the decision remains
+recorded and the CLI reports the failure; repair the commit explicitly. The
+library never pushes. Journal/checkpoint retention and proposals are not pruned
+in this spike. Input manifests contain authored home text; keep them private
+with the home. See [the consolidation bench](bench/consolidation.md) for scoring
+quality separately from transport correctness.
+
 ## Next
 
-Consolidate, curate, semantic seed migrations, other harness adapters, limbs
-and daemon integration are deliberately outside this spike. Git history and
-cross-machine synchronization are user-managed here. This adds a portable
-home and capture path; it does not replace the daemon's scheduling or authority.
+Semantic seed migrations, other harness adapters, daemon integration, journal
+retention and automated Git synchronization remain outside this spike. The
+home stays authored data; the library adds capture and explicit curation to the
+agent you already use.

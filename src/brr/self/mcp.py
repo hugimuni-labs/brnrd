@@ -11,8 +11,13 @@ from typing import TextIO
 from .. import __version__
 from .memory import note, obligations
 from .recall import recall
+from .consolidation import consolidate, proposals
 
 TOOLS = [
+    {"name": "consolidate", "description": "Ask a configured cheap limb for proposed full-file edits; never applies them.",
+     "inputSchema": {"type": "object", "properties": {"since": {"type": "string"}}, "additionalProperties": False}},
+    {"name": "proposals", "description": "List open consolidation proposals for explicit curation outside MCP.",
+     "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
     {"name": "recall", "description": "Search authored home knowledge; returns paths, lines and provenance.",
      "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"], "additionalProperties": False}},
     {"name": "note", "description": "Append an authored note; now records orientation and checked advancement.",
@@ -42,6 +47,10 @@ def call_tool(home: Path, name: str, args: dict) -> dict:
                   for hit in recall(home, args["query"])]
     elif name == "note":
         result = {"path": str(note(home, args["kind"], args["text"]).relative_to(home))}
+    elif name == "consolidate":
+        result = {"path": str(consolidate(home, args.get("since", "last")))}
+    elif name == "proposals":
+        result = proposals(home)
     else:
         result = obligations(home)
     return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}

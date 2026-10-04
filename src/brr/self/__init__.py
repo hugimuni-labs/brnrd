@@ -2,5 +2,6 @@
 
 from .home import init_home
 from .memory import checkpoint, encode, wake
+from .consolidation import consolidate, curate, proposals
 
-__all__ = ["init_home", "wake", "encode", "checkpoint"]
+__all__ = ["init_home", "wake", "encode", "checkpoint", "consolidate", "curate", "proposals"]

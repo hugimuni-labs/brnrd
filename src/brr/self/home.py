@@ -35,6 +35,13 @@ def read_json(path: Path) -> dict:
     return value
 
 
+def wake_budget(home: Path) -> int:
+    value = read_json(home / CONFIG).get("wake_budget_bytes", 16384)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError("wake_budget_bytes must be a nonnegative integer")
+    return value
+
+
 def resolve_home(home: str | Path | None = None, project: Path | None = None) -> Path:
     project = (project or Path.cwd()).resolve()
     configured = read_json(project / ".claude" / CONFIG).get("home")
