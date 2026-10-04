@@ -9438,8 +9438,9 @@ def _halt_spec(
 
     Mirrors ``pending_resource_hold``'s contract deliberately: staged by
     the outbox drain, acted on when this attempt's worker loop unwinds, so
-    the verb's effect lands at the same seam every other terminal outcome
-    does — never mid-drain, with half a turn's replies unsent.
+    run/environment finalization lands at the same seam as every other
+    terminal outcome. The letter's halt receipt is written at acceptance,
+    so a crash before this tail cannot reclaim it as unfinished mail.
     """
     return {
         "declaration": halt_verb.durable_declaration(declaration, dissent=dissent),
@@ -16216,6 +16217,9 @@ def _finalize_halt(
     task.meta["halt"] = record
     task.meta.pop("pending_halt", None)
     _write_terminal_halt_response(emit, task, event, responses_dir, resp_path, record)
+    # The announcement is queued. Settle before publishing the terminal run
+    # or preserving its worktree, so a crash cannot replay this old brief.
+    _set_event_run_outcome(event, HALTED_STATUS)
     halts_mod.record(
         account_home,
         run_id=task.id,
@@ -16243,7 +16247,6 @@ def _finalize_halt(
         except Exception as exc:  # noqa: BLE001 - bookkeeping never blocks an ending
             print(f"[brnrd] halt: shuttle release skipped ({exc})")
     task.update_status(HALTED_STATUS, runs_dir)
-    _set_event_status_if_present(event, "done")
     print(
         f"[brnrd] worker {eid}: halted ({record.get('kind')}) — "
         f"{str(record.get('reason') or '')[:80]}"
@@ -17696,11 +17699,12 @@ def _set_event_run_outcome(event: dict, outcome: str) -> bool:
     (``gates/runtime.py``'s poll loop).
     """
     try:
-        protocol.update_event_meta(event, run_outcome=outcome)
+        # One frontmatter write: a stale in-memory status must not turn the
+        # disposition into a silent no-op, or expose an outcome without it.
+        protocol.update_event_meta(event, status="done", run_outcome=outcome)
     except OSError:
         return False
-    event["run_outcome"] = outcome
-    return _set_event_status_if_present(event, "done")
+    return True
 
 
 # ── Worker-tail housekeeping ────────────────────────────────────────

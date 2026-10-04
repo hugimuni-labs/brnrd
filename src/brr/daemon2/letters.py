@@ -24,17 +24,24 @@ class LetterService:
         return fold_letter(self.facts.read("letters", letter_id), now=now)
 
     def ingest(self, letter_id: str, status: str, *, by: str = "legacy",
-               metadata: dict[str, Any] | None = None) -> Letter:
-        """Read an old status once. No legacy event file is rewritten."""
+               metadata: dict[str, Any] | None = None,
+               run_outcome: str | None = None) -> Letter:
+        """Import an old disposition idempotently. No legacy event file is rewritten."""
         current = self.state(letter_id)
-        if current is not None:
+        if current is not None and (
+                run_outcome != "halted" or current.state in {"answered", "retired"}):
             return current
-        legacy = legacy_letter(status)
-        self.facts.record("letters", letter_id, "pending", by,
-                          {"legacy_status": status, **(metadata or {})})
+        legacy = legacy_letter(status, run_outcome=run_outcome)
+        receipt = {"legacy_status": status}
+        if run_outcome is not None:
+            receipt["run_outcome"] = run_outcome
+        if current is None:
+            self.facts.record("letters", letter_id, "pending", by,
+                              {**receipt, **(metadata or {})})
+        # A crash may have committed pending before the terminal import fact.
+        # The accepted halt receipt must finish that import on the next boot.
         if legacy.state != "pending":
-            self.facts.record("letters", letter_id, legacy.state, by,
-                              {"legacy_status": status})
+            self.facts.record("letters", letter_id, legacy.state, by, receipt)
         result = self.state(letter_id)
         assert result is not None
         return result

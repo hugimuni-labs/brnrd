@@ -256,8 +256,15 @@ def fold_letter(facts: Iterable[Fact], *, now: float | None = None) -> Letter | 
     return state
 
 
-def legacy_letter(status: str) -> Letter:
-    """Read-only migration adapter for an old event's mutable status."""
+def legacy_letter(status: str, *, run_outcome: str | None = None) -> Letter:
+    """Read-only migration adapter for an old event's mutable status.
+
+    Engine 1 records an accepted halt before its worker tail settles status.
+    That deliberate ending is terminal even if the process died in between;
+    processing without that receipt remains eligible for crash recovery.
+    """
+    if run_outcome == "halted":
+        return Letter("retired")
     try:
         state = LEGACY_STATUS[status]
     except KeyError as exc:
