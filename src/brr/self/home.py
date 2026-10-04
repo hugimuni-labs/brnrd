@@ -48,7 +48,7 @@ def require_home(home: Path) -> None:
 
 
 def init_home(home: Path, project: Path) -> list[str]:
-    """Copy seeds once, then merge hooks, memory import, and MCP registration.
+    """Copy seeds once, then merge hooks and MCP registration.
 
     Read and validate existing integration files before writing anything.
     A different home on the same project is an explicit conflict, not a
@@ -105,10 +105,20 @@ def init_home(home: Path, project: Path) -> list[str]:
     write_text(claude_dir / CONFIG, json.dumps({"home": str(home)}, indent=2) + "\n")
     memory = project / "CLAUDE.md"
     text = memory.read_text(encoding="utf-8") if memory.exists() else ""
-    # Imports escape spaces; quoted paths are not recognized by Claude Code.
+    # Remove only the exact pair installed by earlier versions. SessionStart
+    # supplies the fresh wake; an import would load a second, stale copy.
     line = '@' + str(home / 'wake.md').replace(' ', r'\ ')
-    if line not in text.splitlines():
-        with memory.open("a", encoding="utf-8") as stream:
-            stream.write(("\n" if text and not text.endswith("\n") else "") +
-                         "\n<!-- brnrd self: generated wake, authored home -->\n" + line + "\n")
+    marker = "<!-- brnrd self: generated wake, authored home -->"
+    lines = text.splitlines(keepends=True)
+    cleaned = []
+    i = 0
+    while i < len(lines):
+        if (lines[i].rstrip("\r\n") == marker and i + 1 < len(lines)
+                and lines[i + 1].rstrip("\r\n") == line):
+            i += 2
+        else:
+            cleaned.append(lines[i])
+            i += 1
+    if "".join(cleaned) != text:
+        write_text(memory, "".join(cleaned))
     return created

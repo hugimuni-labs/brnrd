@@ -29,13 +29,13 @@ Init merges these entries into existing configuration:
 | `.claude/settings.json` SessionStart | `self wake --hook`: fresh wake through `additionalContext` |
 | PostToolUse | `self encode --hook`: journal act and reason |
 | PreCompact + Stop | `self checkpoint --hook`: preserve authored orientation |
-| `CLAUDE.md` | Import the generated home's `wake.md` |
+| `CLAUDE.md` | Remove the exact generated wake import from earlier init; SessionStart is the wake |
 | `.mcp.json` | Register `self` stdio server: `recall`, `note`, `obligations` |
 
 Approve project MCP servers when Claude asks. Init leaves other hooks, imports
 and servers in place and refuses a conflicting server/home. Its hook commands
 use the installing Python's absolute path, so keep that environment available.
-To detach, remove the self entries from those three files and
+To detach, remove the self entries from settings and MCP configuration and
 `.claude/.self.json`; your home data remains. Config contains absolute local
 paths: decide whether it belongs in your project's Git history.
 

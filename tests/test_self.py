@@ -52,8 +52,7 @@ def test_init_preserves_seeds_and_foreign_configuration(tmp_path):
     assert len(merged['hooks']['Stop']) == 2
     imports = (project / 'CLAUDE.md').read_text()
     assert imports.startswith('# Existing instructions\n')
-    assert imports.count('@') == 1
-    assert '@' + str(home / 'wake.md').replace(' ', r'\ ') in imports
+    assert imports == '# Existing instructions\n'
     assert 'other' in json.loads((project / '.mcp.json').read_text())['mcpServers']
     command = merged['hooks']['SessionStart'][0]['hooks'][0]['command']
     assert shlex.split(command)[-3:] == ['--home', str(home), '--hook']
@@ -309,3 +308,16 @@ def test_hook_ceiling_counts_astral_characters_as_two_units(home, monkeypatch, c
     assert 'Read that file before acting' in text
     assert len(text.encode('utf-16-le')) // 2 < 10000
     assert '🌱' * 5000 in (home / 'wake.md').read_text()
+
+
+def test_reinit_removes_only_its_generated_import(home):
+    project = home.parent / 'project'
+    marker = '<!-- brnrd self: generated wake, authored home -->'
+    own = '@' + str(home / 'wake.md').replace(' ', r'\ ')
+    other = '@other/wake.md'
+    text = f'# User instructions\n{own}\n{marker}\n{other}\n{marker}\n{own}\nKeep this.\n'
+    (project / 'CLAUDE.md').write_text(text)
+    init_home(home, project)
+    assert (project / 'CLAUDE.md').read_text() == f'# User instructions\n{own}\n{marker}\n{other}\nKeep this.\n'
+    init_home(home, project)
+    assert (project / 'CLAUDE.md').read_text().endswith('Keep this.\n')
