@@ -660,19 +660,22 @@ def test_long_shell_renews_letter_claim_and_blocks_second_holder(tmp_path: Path)
     repo.mkdir()
     (repo / "AGENTS.md").write_text("# Test repo\n", encoding="utf-8")
     binary = tmp_path / "slow-shell"
-    _sleep_shell(binary)
+    # Scales sized for a loaded CI runner: a 0.3 s TTL lost its lease to
+    # scheduler stalls there and the Shell was killed (-15). The rival claim
+    # still lands past one full TTL, so only a renewal can block it.
+    _sleep_shell(binary, seconds=4)
     event = protocol.create_event(home / "dispatch" / "inbox", "telegram",
                                   "Slow task", conversation_key="c")
     runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
                       runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
-                      tick_seconds=0.02, lease_ttl_seconds=0.3)
+                      tick_seconds=0.02, lease_ttl_seconds=1.2)
     output = []
     thread = threading.Thread(target=lambda: output.append(runtime.once()))
     thread.start()
     try:
         _wait_processing(runtime, event)
-        time.sleep(0.6)
-        assert runtime.letters.claim(event.stem, "rival", 0.3,
+        time.sleep(2.0)
+        assert runtime.letters.claim(event.stem, "rival", 1.2,
                                      now=time.time()) is None
         thread.join(timeout=30)
         assert not thread.is_alive()
@@ -700,8 +703,13 @@ def test_lapsed_self_lease_kills_shell_and_leaves_recoverable_seat(tmp_path: Pat
     thread.start()
     try:
         _wait_processing(runtime, event)
-        run_id = runtime.seats.read("c").run_id
+        # The letter turns `processing` before seat.start stamps the run id;
+        # reading it in that window returned "" under CI load.
         deadline = time.monotonic() + 30
+        while not runtime.seats.read("c").run_id and time.monotonic() < deadline:
+            time.sleep(0.02)
+        run_id = runtime.seats.read("c").run_id
+        assert run_id
         while runner.live_pid_for_label(run_id) is None and time.monotonic() < deadline:
             time.sleep(0.02)
         assert runner.live_pid_for_label(run_id) is not None
@@ -1787,3 +1795,169 @@ def test_control_card_and_menu_generations_use_retained_mirrors(tmp_path: Path) 
     runtime.controls.finish(state, 0)
     view = run_progress.project_run(repo / ".brr", "telegram:owner", "run-control")
     assert view is not None and view.state == "succeeded"
+
+
+def test_await_recall_while_awaiting_rearms_instead_of_refusing(tmp_path: Path) -> None:
+    """A lease that returned `pending` is re-called; the seat is still awaiting."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test repo\n", encoding="utf-8")
+    binary = tmp_path / "recall-shell"
+    binary.write_text(r"""#!/usr/bin/env python3
+import json, os, time
+from pathlib import Path
+outbox = Path(os.environ["BRR_OUTBOX_DIR"])
+portal = Path(os.environ["BRR_PORTAL_STATE"])
+event_id = os.environ["BRR_EVENT_ID"]
+def stage(name, body):
+    (outbox / (name + ".tmp")).write_text(body)
+    (outbox / (name + ".tmp")).rename(outbox / name)
+def wait_for(pred, what):
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        state = json.loads(portal.read_text())
+        if pred(state):
+            return state
+        time.sleep(0.05)
+    raise SystemExit(what)
+stage("wait1.md", "---\nawait: true\ntimeout: none\n---\n")
+first = wait_for(lambda s: s.get("await", {}).get("armed"), "first never armed")
+stage("wait2.md", "---\nawait: true\ntimeout: 1s\n---\n")
+gen = first["await"]["generation"]
+wait_for(lambda s: s.get("await", {}).get("generation") not in (None, gen)
+         or s.get("notices"), "re-call never drained")
+wait_for(lambda s: s.get("await", {}).get("resolved") or s.get("notices"),
+         "re-armed wait never resolved")
+stage("reply.md", "---\nevent: " + event_id + "\n---\nheld twice\n")
+""")
+    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+    event_path = protocol.create_event(
+        home / "dispatch" / "inbox", "telegram", "Wait, re-call, reply",
+        conversation_key="telegram:owner", trust_tier="owner")
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    result = runtime.once()
+    assert result is not None and result.returncode == 0 and result.answered
+    capsule = json.loads((result.outbox / "portal-state.json").read_text())
+    assert not [n for n in capsule["notices"] if "running seat" in n.get("text", "")]
+    assert capsule["await"]["resolved"] is True
+    assert capsule["await"]["outcome"] == "timeout"
+    assert runtime.letters.state(event_path.stem).state == "answered"
+
+
+def test_claude_runner_gets_the_await_lease_bash_cap(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from brr import await_verb
+    from brr.daemon2.runtime import _await_lease_env
+    monkeypatch.delenv("BASH_MAX_TIMEOUT_MS", raising=False)
+    claude = SimpleNamespace(name="claude-opus", hooks="claude")
+    assert _await_lease_env(claude) == {
+        "BASH_MAX_TIMEOUT_MS": str(await_verb.CLAUDE_BASH_MAX_TIMEOUT_MS)}
+    assert _await_lease_env(SimpleNamespace(name="codex", hooks="codex")) == {}
+    monkeypatch.setenv("BASH_MAX_TIMEOUT_MS", "1000")
+    assert _await_lease_env(claude) == {}
+
+
+def test_strand_runs_while_its_parent_seat_is_still_alive(tmp_path: Path) -> None:
+    """The parent waits for its child's submit before replying: a serial loop deadlocks."""
+    from brr.daemon2.runtime import strand_worker_argv, strand_worker_count
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test repo\n", encoding="utf-8")
+    inbox = home / "dispatch" / "inbox"
+    report_path = str(tmp_path / "reports" / "child.md")
+    branch = "brr/child-concurrent"
+    parent_shell = tmp_path / "parent-shell"
+    parent_shell.write_text(f"""#!/usr/bin/env python3
+import os, time
+from pathlib import Path
+outbox = Path(os.environ["BRR_OUTBOX_DIR"])
+event_id = os.environ["BRR_EVENT_ID"]
+inbox = Path({str(inbox)!r})
+def stage(name, body):
+    (outbox / (name + ".tmp")).write_text(body)
+    (outbox / (name + ".tmp")).rename(outbox / name)
+stage("spawn.md", "---\\nspawn: true\\nbranch: {branch}\\nreport: {report_path}\\n---\\nchild work\\n")
+deadline = time.monotonic() + 20
+while time.monotonic() < deadline:
+    if any("source: spawn_submitted" in p.read_text() for p in inbox.glob("*.md")):
+        break
+    time.sleep(0.05)
+else:
+    raise SystemExit("child never ran while the parent was alive")
+stage("reply.md", "---\\nevent: " + event_id + "\\n---\\nchild returned while I waited\\n")
+""")
+    parent_shell.chmod(parent_shell.stat().st_mode | stat.S_IXUSR)
+    child_shell = tmp_path / "child-shell"
+    _submit_shell(child_shell, report_path, branch)
+    protocol.create_event(inbox, "telegram", "Spawn and wait",
+                          conversation_key="telegram:owner", trust_tier="owner",
+                          ask_id="ask-main")
+    parent = Daemon2(repo, home, runtime_dir=tmp_path / "runtime", runner_name="fake",
+                     runner_config={"runner_cmd": [str(parent_shell)]}, tick_seconds=0.02)
+    follower = Daemon2(repo, home, runtime_dir=tmp_path / "runtime", runner_name="fake",
+                       runner_config={"runner_cmd": [str(child_shell)]},
+                       tick_seconds=0.02, worktree_env=False)
+    worker = threading.Thread(target=lambda: follower.serve(role="strand"), daemon=True)
+    worker.start()
+    try:
+        result = parent.once(role="resident")
+    finally:
+        follower.stop()
+        worker.join(timeout=10)
+    assert result is not None and result.returncode == 0 and result.answered
+    # The CLI's follower command line targets the same queues as the resident.
+    argv = strand_worker_argv(repo, home, tmp_path / "runtime", inbox,
+                              home / "dispatch" / "responses", python="py")
+    assert argv[:6] == ["py", "-m", "brr.daemon2", "--serve", "--role", "strand"]
+    assert argv[argv.index("--inbox") + 1] == str(inbox)
+    assert strand_worker_count({}) == 3
+    assert strand_worker_count({"daemon2.strand_workers": 0}) == 0
+
+
+def test_parent_sees_and_steers_a_child_spawned_under_another_item(tmp_path: Path) -> None:
+    """A seat with no ask of its own spawns with `item:`; owned_children and `to:` still find it."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test repo\n", encoding="utf-8")
+    shell = tmp_path / "parent-shell"
+    shell.write_text(r"""#!/usr/bin/env python3
+import json, os, time
+from pathlib import Path
+outbox = Path(os.environ["BRR_OUTBOX_DIR"])
+portal = Path(os.environ["BRR_PORTAL_STATE"])
+event_id = os.environ["BRR_EVENT_ID"]
+def stage(name, body):
+    (outbox / (name + ".tmp")).write_text(body)
+    (outbox / (name + ".tmp")).rename(outbox / name)
+def wait_for(pred, what):
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        state = json.loads(portal.read_text())
+        if pred(state):
+            return state
+        time.sleep(0.05)
+    raise SystemExit(what)
+stage("spawn.md", "---\nspawn: true\nitem: w-77\nbranch: brr/x\nreport: /tmp/x.md\n---\nwork\n")
+state = wait_for(lambda s: s["resources"]["coexisting_runs"].get("owned_children"),
+                 "child under item: w-77 never showed as owned")
+run = state["resources"]["coexisting_runs"]["owned_children"][0]["run"]
+stage("steer.md", "---\nto: " + run + "\n---\nsharper\n")
+time.sleep(0.5)
+stage("reply.md", "---\nevent: " + event_id + "\n---\nsteered\n")
+""")
+    shell.chmod(shell.stat().st_mode | stat.S_IXUSR)
+    protocol.create_event(home / "dispatch" / "inbox", "telegram", "Spawn under an item",
+                          conversation_key="telegram:owner", trust_tier="owner")
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime", runner_name="fake",
+                      runner_config={"runner_cmd": [str(shell)]}, tick_seconds=0.02)
+    result = runtime.once(role="resident")
+    assert result is not None and result.returncode == 0 and result.answered
+    capsule = json.loads((result.outbox / "portal-state.json").read_text())
+    texts = [n.get("text", "") for n in capsule["notices"]]
+    assert not [t for t in texts if "fact address" in t or "not a child" in t], texts
+    assert runtime.supervisor.conversation_children("telegram:owner")

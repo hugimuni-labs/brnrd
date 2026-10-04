@@ -54,6 +54,12 @@ class FileDoor:
         if event is None or self.letters is None:
             return event
         state = self.letters.state(str(event["id"]))
+        if (event.get("run_outcome") == "halted"
+                and (state is None or state.state in {"pending", "claimed"})):
+            # Acceptance can outlive engine 1's worker without reaching its
+            # final status write. Import that receipt before boot dispatch.
+            state = self.letters.ingest(str(event["id"]), str(event["status"]),
+                                         run_outcome="halted")
         if state is None:
             return event
         status = {"pending": "pending", "claimed": "processing",

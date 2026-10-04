@@ -2504,21 +2504,50 @@ def test_daemon_up_engine2_uses_account_paths_and_direct_serve(monkeypatch, tmp_
         def __init__(self, *args, **kwargs):
             calls.append((args, kwargs))
 
-        def serve(self):
-            calls.append("serve")
+        def serve(self, role="any"):
+            calls.append(("serve", role))
 
         def stop(self):
             calls.append("stop")
 
+    import subprocess
+    workers = []
+    real_popen = subprocess.Popen
+
+    class FakePopen:
+        def __new__(cls, argv, *args, **kwargs):
+            if "brr.daemon2" not in list(argv):
+                return real_popen(argv, *args, **kwargs)  # git and friends
+            return super().__new__(cls)
+
+        def __init__(self, argv, **_kwargs):
+            self.argv, self.terminated = argv, False
+            workers.append(self)
+
+        def poll(self):
+            return 0 if self.terminated else None
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            return 0
+
     monkeypatch.setattr("brr.daemon2.runtime.Daemon2", FakeDaemon2)
+    monkeypatch.setattr("subprocess.Popen", FakePopen)
     main(["daemon", "up", "--engine", "2"])
 
     assert calls == [
         ((tmp_path, home), {"runtime_dir": tmp_path / ".brr",
                             "inbox_dir": inbox, "responses_dir": responses,
                             "dev_reload_enabled": None}),
-        "serve",
+        ("serve", "resident"),
     ]
+    # Strand followers carry strands beside the resident loop, then stop with it.
+    assert len(workers) == 3
+    assert all(w.argv[w.argv.index("--role") + 1] == "strand" for w in workers)
+    assert all(w.argv[w.argv.index("--inbox") + 1] == str(inbox) for w in workers)
+    assert all(w.terminated for w in workers)
     assert not (tmp_path / ".brr" / "daemon.pid").exists()
     assert not (tmp_path / ".brr" / "daemon2.active").exists()
 

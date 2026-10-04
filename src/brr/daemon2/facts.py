@@ -115,6 +115,15 @@ class FactStore:
             raise ValueError("invalid fact address")
         return self.root / scope / (quote(entity, safe="") + ".jsonl")
 
+    def entities(self, scope: str) -> list[str]:
+        """Every entity with a fact file under *scope* (sorted, unquoted)."""
+        from urllib.parse import unquote
+        self.path(scope, "_")  # validates the scope
+        folder = self.root / scope
+        if not folder.is_dir():
+            return []
+        return sorted(unquote(p.name[:-len(".jsonl")]) for p in folder.glob("*.jsonl"))
+
     def read(self, scope: str, entity: str) -> list[Fact]:
         path = self.path(scope, entity)
         try:
@@ -247,8 +256,15 @@ def fold_letter(facts: Iterable[Fact], *, now: float | None = None) -> Letter | 
     return state
 
 
-def legacy_letter(status: str) -> Letter:
-    """Read-only migration adapter for an old event's mutable status."""
+def legacy_letter(status: str, *, run_outcome: str | None = None) -> Letter:
+    """Read-only migration adapter for an old event's mutable status.
+
+    Engine 1 records an accepted halt before its worker tail settles status.
+    That deliberate ending is terminal even if the process died in between;
+    processing without that receipt remains eligible for crash recovery.
+    """
+    if run_outcome == "halted":
+        return Letter("retired")
     try:
         state = LEGACY_STATUS[status]
     except KeyError as exc:

@@ -162,9 +162,8 @@ class Daemon2:
         ))
         # The old helper reads old-daemon child controls; daemon2 owns these
         # edges in Supervisor. Adapt this one projection at the seam.
-        owned = ([vars(child) for child in self.supervisor.children(state["ask"]).values()
-                  if child.parent == state["run_id"] and child.status == "running"]
-                 if state.get("ask") else [])
+        owned = [vars(child) for child in self._seat_children(state).values()
+                 if child.parent == state["run_id"] and child.status == "running"]
         live.resources["coexisting_runs"]["owned_children"] = owned
         pacing = live.resources["quota"].get("pacing") or {}
         pct = pacing.get("binding_remaining_pct")
@@ -349,13 +348,12 @@ class Daemon2:
                     (state["run_id"],)))
         except Exception:
             pass  # A missing git scope cannot prove an open item.
-        if state["ask"]:
-            for child in self.supervisor.children(state["ask"]).values():
-                if child.parent == state["run_id"] and child.status == "running":
-                    items.append(halt_verb.OpenItem(
-                        "strand", child.run,
-                        f"strand {child.run} is live — its return needs a successor",
-                        (child.run.rsplit("-", 1)[-1],)))
+        for child in self._seat_children(state).values():
+            if child.parent == state["run_id"] and child.status == "running":
+                items.append(halt_verb.OpenItem(
+                    "strand", child.run,
+                    f"strand {child.run} is live — its return needs a successor",
+                    (child.run.rsplit("-", 1)[-1],)))
         return items
 
     def _cut_mismatches(self, state: dict[str, Any],
@@ -413,8 +411,7 @@ class Daemon2:
                 norm = label.strip().lower()
                 if not any(norm in ref or ref in norm for ref in refs):
                     mismatches.append(f"owed: {label!r} has no carried row naming it")
-        children = (self.supervisor.children(state["ask"]).values()
-                    if state["ask"] else ())
+        children = self._seat_children(state).values()
         named_children = {row.run for row in declaration.strands}
         for child in children:
             if (child.parent == state["run_id"] and child.status == "running"
@@ -605,9 +602,16 @@ class Daemon2:
             file_path, seconds, error = await_verb.parse_await(fm)
             if error:
                 raise ValueError(error)
-            if seat.read().state != "running":
+            current = seat.read()
+            if current.state == "awaiting" and (state.get("await") or {}).get("armed"):
+                # A lease that returned `pending` (its call cap) is re-called
+                # by the CLI; the seat is still awaiting. Re-arm in place with
+                # a fresh generation so the new call sees its own arming.
+                armed = current
+            elif current.state != "running":
                 raise ValueError("await needs a running seat")
-            armed = seat.await_signal(seat.read().generation, (WakePredicate("M"),))
+            else:
+                armed = seat.await_signal(current.generation, (WakePredicate("M"),))
             state["await"] = {
                 "armed": True, "resolved": False,
                 "generation": uuid.uuid4().hex,
@@ -734,7 +738,7 @@ class Daemon2:
                 self._notice(state, "stop dropped: no target run/event id",
                              kind="dropped", source_file=path.name, verb="stop")
                 return
-            children = self.supervisor.children(state["ask"]) if state["ask"] else {}
+            children = self._seat_children(state)
             child = children.get(target) or next(
                 (row for row in children.values() if row.run == target), None)
             child_event = next((event for event in (
@@ -779,7 +783,7 @@ class Daemon2:
             target = str(fm.get("to") or "").strip()
             if not target:
                 raise ValueError("to: requires a child edge or run id")
-            children = self.supervisor.children(state["ask"] or "")
+            children = self._seat_children(state)
             child = (children.get(target)
                      or next((c for c in children.values() if c.run == target), None))
             if child is None or child.conversation != state["conversation"]:
@@ -1179,6 +1183,15 @@ class Daemon2:
                                      "lease-safe handoff", kind="advisory",
                                      verb="dev_reload")
 
+    def _seat_children(self, state: dict[str, Any]) -> dict[str, Any]:
+        """This conversation's strands, across the seat's ask and every item: ask."""
+        children = (dict(self.supervisor.children(state["ask"]))
+                    if state.get("ask") else {})
+        conversation = str(state.get("conversation") or "")
+        if conversation:
+            children.update(self.supervisor.conversation_children(conversation))
+        return children
+
     def serve(self, *, stop_when_empty: bool = False,
               role: str = "any") -> list[RunResult]:
         """Dispatch letters while holding the account self lease.
@@ -1497,7 +1510,8 @@ class Daemon2:
                              "BRR_IS_STRAND": "1" if is_child else "0",
                              "BRR_SOURCE": str(event.get("source") or ""),
                              "BRR_REPORT_PATH": str(event.get("report") or ""),
-                             "BRR_BRANCH": str(event.get("branch") or "")},
+                             "BRR_BRANCH": str(event.get("branch") or ""),
+                             **_await_lease_env(runner_choice)},
                         resume_native_session_id=(
                             resumed.session_id if resumed and resumed.mode == "native"
                             else None),
@@ -1582,3 +1596,45 @@ class Daemon2:
                 presence.deregister(self.runtime_dir, presence_entry["id"])
             if execution_lease is not self_lease:
                 self.leases.release(execution_lease)
+
+
+def _await_lease_env(runner_choice: Any) -> dict[str, str]:
+    """Widen claude's Bash cap so one ``brnrd await`` call can hold its lease.
+
+    Engine 1 does this in ``worker.prepare`` (move 2c); without it the call is
+    killed at claude's 600 s default and the lease returns ``pending`` early.
+    An operator's own value is left alone.
+    """
+    flavour = (getattr(runner_choice, "hooks", None)
+               or getattr(runner_choice, "name", None) or "")
+    if flavour != "claude" or os.environ.get("BASH_MAX_TIMEOUT_MS"):
+        return {}
+    return {"BASH_MAX_TIMEOUT_MS": str(await_verb.CLAUDE_BASH_MAX_TIMEOUT_MS)}
+
+
+#: Strand-only follower processes ``brnrd daemon up --engine 2`` keeps beside
+#: the resident loop. ``serve()`` dispatches one body at a time and a seat
+#: that never quits never returns, so without followers a spawned strand
+#: waits for its parent's turn to end (found live, run-261003-2323-ffd9).
+#: Each follower serves strands serially; the ``strand:<id>`` execution lease
+#: and the letter claim keep two followers off one strand.
+DEFAULT_STRAND_WORKERS = 3
+
+
+def strand_worker_argv(repo_root: Path, home: Path, runtime_dir: Path,
+                       inbox_dir: Path, responses_dir: Path,
+                       python: str | None = None) -> list[str]:
+    """The command line for one strand-only follower of this daemon."""
+    import sys
+    return [python or sys.executable, "-m", "brr.daemon2", "--serve",
+            "--role", "strand", "--repo", str(repo_root), "--home", str(home),
+            "--runtime-dir", str(runtime_dir), "--inbox", str(inbox_dir),
+            "--responses", str(responses_dir)]
+
+
+def strand_worker_count(config: dict[str, Any]) -> int:
+    raw = config.get("daemon2.strand_workers", DEFAULT_STRAND_WORKERS)
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_STRAND_WORKERS
