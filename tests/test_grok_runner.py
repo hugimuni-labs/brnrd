@@ -5,7 +5,9 @@ import sys
 
 import pytest
 
-from brr import hooks, runner, runner_cores, runner_select, grok_runner
+from brr import hooks, runner, runner_cores, runner_select, grok_runner, grok_status
+
+_SESSION = "018f6b3c-7c3a-7d2e-8f01-aabbccddeeff"
 
 
 def test_reply_is_the_text_field_only():
@@ -86,6 +88,154 @@ print('{"text":"done","sessionId":"s"}')
         assert response.read_text() == "done\n"
     else:
         assert "authentication failed" in result.stderr
+
+
+def _envelope(**extra):
+    payload = {
+        "text": "done",
+        "sessionId": _SESSION,
+        "usage": {
+            "input_tokens": 10,
+            "cache_read_input_tokens": 4,
+            "cache_creation_input_tokens": 0,
+            "output_tokens": 3,
+        },
+        "modelUsage": {"grok-4.7": {"inputTokens": 10, "outputTokens": 3}},
+        "total_cost_usd": 0.012689,
+        "total_cost_usd_ticks": 126890500,
+    }
+    payload.update(extra)
+    return json.dumps(payload)
+
+
+def test_envelope_keeps_tokens_cost_and_model_and_drops_a_partial_bill():
+    levels = grok_status.parse_result(json.loads(_envelope()))
+    assert levels["tokens"] == {
+        "input_tokens": 10,
+        "cache_read_input_tokens": 4,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 3,
+    }
+    assert levels["spend"]["total_cost_usd"] == 0.012689
+    assert levels["spend"]["total_cost_usd_ticks"] == 126890500
+    assert "quota" not in levels and "context_window" not in levels
+    assert grok_status.resolved_model_id(levels) == "grok-4.7"
+    del_missing = json.loads(_envelope())
+    del del_missing["total_cost_usd"]
+    assert "spend" not in grok_status.parse_result(del_missing)
+    partial = grok_status.parse_result(json.loads(_envelope(cost_is_partial=True)))
+    assert "spend" not in partial and partial["tokens"]["output_tokens"] == 3
+    incomplete = grok_status.parse_result(json.loads(_envelope(usage_is_incomplete=True)))
+    assert "tokens" not in incomplete and "spend" not in incomplete
+    assert grok_status.session_id(_envelope()) == _SESSION
+    assert grok_status.session_id('{"text":"x","sessionId":"abc123"}') is None
+    assert grok_status.supported("grok-4.7")
+    assert not grok_status.supported("claude")
+    assert not grok_status.supported("grokking")
+
+
+def test_invocation_reads_the_envelope_and_resumes_by_uuid(tmp_path, monkeypatch):
+    binary = tmp_path / "grok"
+    binary.write_text("#!" + sys.executable + "\n" + r'''
+import os, sys
+from pathlib import Path
+args = sys.argv[1:]
+assert args[:2] == ["--resume", os.environ["EXPECTED_RESUME"]]
+args = args[2:]
+assert args[0] == "--prompt-file"
+assert Path(args[1]).read_text() == "the wake"
+assert "GROK_RESUME_SESSION" not in os.environ
+print(os.environ["GROK_ENVELOPE"])
+''')
+    binary.chmod(0o755)
+    launcher = tmp_path / "brnrd"
+    source_root = str(__import__("pathlib").Path(runner.__file__).resolve().parent.parent)
+    launcher.write_text(
+        "#!" + sys.executable + "\nimport sys\n"
+        + f"sys.path.insert(0, {source_root!r})\n"
+        + "from brr.cli import main\nmain()\n"
+    )
+    launcher.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    outbox = tmp_path / "outbox"
+    response = tmp_path / "response.md"
+    result = runner.invoke_runner(
+        runner_select.runner_from_profile("grok-4.7", {
+            "cmd": "brnrd runners _grok", "binary": "grok", "hooks": "grok",
+        }),
+        runner.RunnerInvocation(
+            kind="test", label="grok", prompt="the wake", cwd=tmp_path,
+            repo_root=tmp_path, response_path=str(response), timeout_seconds=15,
+            resume_native_session_id=_SESSION,
+            expected_core="grok-4.7",
+            env={
+                "EXPECTED_RESUME": _SESSION,
+                "GROK_ENVELOPE": _envelope(),
+                "BRR_OUTBOX_DIR": str(outbox),
+                "BRR_RUN_ID": "run-grok",
+            },
+        ),
+    )
+    assert result.returncode == 0, result.stderr
+    assert response.read_text() == "done\n"
+    assert result.grok_session_id == _SESSION
+    assert result.observed_core == "grok-4.7"
+    assert result.core_mismatch is False
+    assert _SESSION not in result.command
+    assert "the wake" not in result.command
+    from brr import daemon, run_ledger
+
+    levels, slots = daemon._collect_levels("grok-4.7", outbox, refresh=False)
+    assert slots == frozenset({"spend"})
+    assert "quota" not in levels
+    assert run_ledger.token_fields(levels)["tokens_input"] == 10
+    assert run_ledger.token_fields(levels)["tokens_output"] == 3
+    assert levels["spend"]["summary"].endswith("this session")
+    assert levels["run_id"] == "run-grok"
+
+
+def test_a_title_is_not_a_resume_target(tmp_path, monkeypatch):
+    binary = tmp_path / "grok"
+    binary.write_text("#!" + sys.executable + "\n" + r'''
+import sys
+args = sys.argv[1:]
+assert "--resume" not in args
+print('{"text":"done","sessionId":"not-a-uuid"}')
+''')
+    binary.chmod(0o755)
+    launcher = tmp_path / "brnrd"
+    source_root = str(__import__("pathlib").Path(runner.__file__).resolve().parent.parent)
+    launcher.write_text(
+        "#!" + sys.executable + "\nimport sys\n"
+        + f"sys.path.insert(0, {source_root!r})\n"
+        + "from brr.cli import main\nmain()\n"
+    )
+    launcher.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    result = runner.invoke_runner(
+        runner_select.runner_from_profile("grok", {
+            "cmd": "brnrd runners _grok", "binary": "grok",
+        }),
+        runner.RunnerInvocation(
+            kind="test", label="grok", prompt="the wake", cwd=tmp_path,
+            repo_root=tmp_path, timeout_seconds=15,
+            resume_native_session_id="yesterday's chat",
+        ),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "done\n"
+    assert result.grok_session_id is None
+
+
+def test_shared_fallback_keeps_spend_and_drops_the_other_run_tokens(tmp_path):
+    from brr import daemon
+
+    shared = tmp_path / "shared"
+    grok_status.write_snapshot(shared, grok_status.parse_result(json.loads(_envelope())))
+    levels, slots = daemon._collect_levels("grok", None, shared_dir=shared, refresh=False)
+    assert slots == frozenset({"spend"})
+    assert "tokens" not in levels
+    assert "previous Grok session" in levels["spend"]["summary"]
 
 
 def test_grok_core_catalog_pins_the_model_through_the_adapter_env():

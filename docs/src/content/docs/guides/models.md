@@ -102,10 +102,17 @@ Headless runs use `--permission-mode bypassPermissions` and `--trust`. Grok
 loads the per-run `.claude/settings.local.json` (it treats that file as
 Claude-compatible hooks) and skips event names it does not know, so the
 post-tool seam is `PostToolUse` rather than Claude's `PostToolBatch`. Pre-tool
-denies and stop blocks use Claude's hook JSON, which Grok accepts. Quota,
-spend, and session resume are not collected. Unknown capacity does not mean
-unlimited, and brnrd will not move a wake onto or off Grok because of a
-window it cannot see.
+denies and stop blocks use Claude's hook JSON.
+
+The adapter prints Grok's JSON envelope through. The runner reads it the way
+it reads Claude's: the reply, the session id, the model that ran, the token
+totals, and the cost when Grok stamps one. A cost Grok omits stays omitted
+(pool and OAuth traffic often omit it; absence is not free, and per-model
+rows are not summed into one). A host-env seat resumes that session with
+`--resume`. Grok stores sessions under the working directory they ran in, so
+a worktree run does not arm a native resume. Quota and context-window
+headroom are not collected, and brnrd will not move a wake onto or off Grok
+because of a window it cannot see.
 
 ## Escalate and downshift
 

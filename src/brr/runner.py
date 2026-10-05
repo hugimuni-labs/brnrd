@@ -763,7 +763,10 @@ class RunnerInvocation:
     # alongside a codex Shell (``_uses_codex_shell``); ignored otherwise —
     # see the ``codex_correlation`` block in ``invoke_runner`` for where
     # this becomes ``codex exec resume <id> ...`` instead of
-    # ``codex exec ...``.
+    # ``codex exec ...``. For Claude it becomes ``claude --resume <id>``.
+    # For Grok the profile command is the stdin adapter, so the id is
+    # handed across as ``GROK_RESUME_SESSION`` and the adapter adds
+    # ``grok --resume <id>``.
     resume_native_session_id: str | None = None
 
     @property
@@ -804,6 +807,10 @@ class RunnerResult:
     #: it and ``claude --resume <id>`` continues the very transcript
     #: instead of a fresh boot (the codex half is ``codex_thread_id``).
     claude_session_id: str | None = None
+    #: Grok's ``sessionId`` from ``--output-format json``, when it is a
+    #: UUID. A parked host seat resumes it with ``grok --resume``. A
+    #: non-UUID is discarded: ``--resume`` would treat it as a title.
+    grok_session_id: str | None = None
     # A structured ``task_complete.error`` this invocation's own raw JSONL
     # proved (see ``_extract_codex_task_error``) — ``{"kind", "message"}``,
     # or ``None`` when the Shell isn't codex, the turn completed cleanly, or
@@ -2729,8 +2736,10 @@ def _process_runner_stdout(
     (``claude_status.supported``); a plain-text runner has no envelope to
     read this from, and this never invents one.
     """
-    from . import claude_status, vibe_usage
+    from . import claude_status, grok_status, vibe_usage
 
+    if grok_status.supported(runner_name):
+        return grok_status.capture_stdout_with_model(stdout, env)
     if vibe_usage.supported(runner_name):
         payload = vibe_usage.load_invocation(env)
         model = payload.get("model") if payload else None
@@ -2878,6 +2887,7 @@ def invoke_runner(
     # separate lifecycle. Skipped under a pinned `runner_cmd` override: that
     # argv is the user's, verbatim, the same rule `extra_runner_args`
     # already follows.
+    grok_resume_id: str | None = None
     codex_correlation = (
         _uses_codex_shell(selected, selected_name, cmd_template)
         and not cfg.get("runner_cmd")
@@ -2895,10 +2905,15 @@ def invoke_runner(
             out_path = invocation.codex_events_path
     elif invocation.resume_native_session_id and not cfg.get("runner_cmd"):
         from . import claude_status as _cs
+        from . import grok_status as _gs
 
         if _cs.supported(selected_name):
             cmd_template = _insert_claude_resume(
                 cmd_template, invocation.resume_native_session_id,
+            )
+        elif _gs.supported(selected_name):
+            grok_resume_id = _gs.valid_session_id(
+                invocation.resume_native_session_id,
             )
     cmd = _fill_prompt(cmd_template, invocation.prompt, cfg)
     cmd = _spill_oversized_argv(cmd, invocation.repo_root)
@@ -2916,6 +2931,11 @@ def invoke_runner(
     )
     if invocation.env:
         proc_env.update({str(k): str(v) for k, v in invocation.env.items()})
+    if grok_resume_id:
+        # After the caller's env, so a stale GROK_RESUME_SESSION cannot
+        # override the session this dispatch actually holds. The adapter
+        # reads it and puts ``--resume`` on the grok argv.
+        proc_env["GROK_RESUME_SESSION"] = grok_resume_id
     stdout = ""
     stderr = ""
     returncode = 0
@@ -3034,6 +3054,12 @@ def invoke_runner(
     # Raw envelope first: `_process_runner_stdout` swaps `stdout` for the
     # unwrapped reply, and the session id lives only in the envelope.
     claude_session_id = _extract_claude_session_id(selected_name, stdout)
+    from . import grok_status as _grok_status
+
+    grok_session_id = (
+        _grok_status.session_id(stdout)
+        if _grok_status.supported(selected_name) else None
+    )
     stdout, observed_core, api_error = _process_runner_stdout(
         selected_name, stdout, invocation.env,
     )
@@ -3090,6 +3116,7 @@ def invoke_runner(
         codex_thread_id=codex_thread_id,
         codex_task_error=codex_task_error,
         claude_session_id=claude_session_id,
+        grok_session_id=grok_session_id,
     )
     if trace:
         result.trace_dir = _write_trace(result)

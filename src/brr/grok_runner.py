@@ -15,8 +15,14 @@ Hook config is the ``.claude/settings.local.json`` the worker writes for the
 ``grok`` flavour. Grok loads that Claude-compatible project file when the
 folder is trusted, so the adapter passes ``--trust``. ``--permission-mode
 bypassPermissions`` keeps a headless wake from stopping on a permission
-prompt; deny rules and hooks still apply. Quota and session resume are not
-instrumented. Unknown capacity is not unlimited.
+prompt; deny rules and hooks still apply.
+
+On success this process prints Grok's JSON envelope unchanged. The runner
+reads ``sessionId``, ``usage``, ``modelUsage``, and ``total_cost_usd`` from
+that object the way it reads Claude's result JSON. A held host seat resumes
+by setting ``GROK_RESUME_SESSION`` to the UUID this envelope reported; the
+adapter forwards it as ``--resume`` and does not put it on its own argv.
+Quota is not read. Unknown capacity is not unlimited.
 """
 
 import json
@@ -52,12 +58,21 @@ def final_reply(stdout: str) -> tuple[str, str | None]:
     return text, None
 
 
-def command(prompt_path: Path, *, model: str | None, rules: str) -> list[str]:
+def command(
+    prompt_path: Path,
+    *,
+    model: str | None,
+    rules: str,
+    resume: str | None = None,
+) -> list[str]:
     """Argv for one headless Grok invocation. The prompt is a file, not argv."""
-    cmd = ["grok", "--prompt-file", str(prompt_path)]
+    cmd = ["grok"]
+    if resume:
+        cmd += ["--resume", resume]
     if model:
-        cmd[1:1] = ["-m", model]
+        cmd += ["-m", model]
     cmd += [
+        "--prompt-file", str(prompt_path),
         "--output-format", "json",
         "--permission-mode", "bypassPermissions",
         "--trust",
@@ -69,17 +84,19 @@ def command(prompt_path: Path, *, model: str | None, rules: str) -> list[str]:
 
 def main() -> int:
     """Fresh-process adapter so a catalog update works without daemon reload."""
+    from .grok_status import valid_session_id
     from .runner import protonucleus_path
 
     env = dict(os.environ)
-    model = (env.get("GROK_ACTIVE_MODEL") or "").strip() or None
+    model = (env.pop("GROK_ACTIVE_MODEL", "") or "").strip() or None
+    resume = valid_session_id(env.pop("GROK_RESUME_SESSION", None))
     rules = protonucleus_path().read_text(encoding="utf-8").strip()
     root = Path(tempfile.mkdtemp(prefix="brnrd-grok-"))
     prompt_path = root / "prompt.txt"
     prompt_path.write_text(sys.stdin.read(), encoding="utf-8")
     try:
         result = subprocess.run(
-            command(prompt_path, model=model, rules=rules),
+            command(prompt_path, model=model, rules=rules, resume=resume),
             text=True, capture_output=True, env=env,
         )
     finally:
@@ -90,9 +107,11 @@ def main() -> int:
         if result.stdout:
             print(result.stdout, file=sys.stderr, end="")
         return result.returncode if result.returncode > 0 else 128 - result.returncode
-    reply, error = final_reply(result.stdout)
+    _reply, error = final_reply(result.stdout)
     if error:
         print(error, file=sys.stderr)
         return 1
-    print(reply, end="")
+    # The runner reads the envelope. Printing the unwrapped reply here would
+    # drop the session id, the model, and the token totals.
+    sys.stdout.write(result.stdout if result.stdout.endswith("\n") else result.stdout + "\n")
     return 0

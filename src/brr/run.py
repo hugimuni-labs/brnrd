@@ -63,15 +63,15 @@ _EVENT_META_FIELDS = {
     # or inherited event inert rather than merely unlikely.
     "resume_native_session_id", "resume_native_provider",
     # The same key under the Shells' own names. `_native_session_id_for`
-    # reads exactly these two off run meta to decide what a park may resume
+    # reads exactly these off run meta to decide what a park may resume
     # into — so an event that spells `claude_session_id` (plus
     # `runner_shell: claude`, `env: host`) arms a hold record pointing at a
     # transcript it does not own, and the next honest release arms a
     # `pending_resume` on it. Closing `resume_native_session_id` alone would
-    # have moved the forgery one name to the left. Both are written by
-    # `runner._extract_*` off the Shell's own stdout and belong to a run that
-    # has actually executed; nothing legitimately puts them on an event.
-    "claude_session_id", "codex_thread_id",
+    # have moved the forgery one name to the left. They are written off the
+    # Shell's own stdout and belong to a run that has actually executed;
+    # nothing legitimately puts them on an event.
+    "claude_session_id", "codex_thread_id", "grok_session_id",
     # Standing/place roots are derived by worker.prepare, never by a sender.
     "execution_root", "place_root", "place_label", "place_work_root",
 }

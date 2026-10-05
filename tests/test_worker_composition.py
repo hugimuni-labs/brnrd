@@ -48,7 +48,7 @@ _VOLATILE_KEYS = frozenset({
     "presence_id", "last_heartbeat", "elapsed", "runtime_seconds",
     "attempt_elapsed_seconds", "run_elapsed_seconds", "n", "tick",
     "started", "finished", "heartbeat_at", "expires_at", "mtime",
-    "session_id", "claude_session_id", "age_seconds",
+    "session_id", "claude_session_id", "grok_session_id", "age_seconds",
 })
 # Subtrees assembled from the *host* — which Shells and cores this machine
 # has, its quota/context/spend caches. Neither their numbers nor their shape is

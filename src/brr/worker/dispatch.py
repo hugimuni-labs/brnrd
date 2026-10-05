@@ -84,6 +84,7 @@ def dispatch(p: Prepared, a: Attempt) -> Dispatched | Boundary:
     # replacement process returned and overwrote it.
     task.meta.pop("codex_thread_id", None)
     task.meta.pop("claude_session_id", None)
+    task.meta.pop("grok_session_id", None)
     # Same reasoning as the thread id above, for the model a previous
     # attempt observed: a retry that escalates to a different runner
     # must not leave attempt 1's `model_observed` reading in place, on

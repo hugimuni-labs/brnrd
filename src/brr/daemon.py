@@ -4074,8 +4074,18 @@ def _collect_levels(
         return merged, frozenset(
             claude_usage.COLLECTED_SLOTS | claude_status.COLLECTED_SLOTS
         )
-    from . import vibe_usage
+    from . import grok_status, vibe_usage
 
+    if grok_status.supported(runner_name):
+        # The envelope's own tokens and, when Grok stamped one, its cost.
+        # No quota probe. A shared-dir fallback is a previous session's
+        # spend only — its token totals are not this run's.
+        levels = grok_status.load_snapshot(outbox_dir)
+        if levels is None:
+            levels = grok_status.mark_cross_run(
+                grok_status.load_snapshot(shared_dir)
+            )
+        return levels, grok_status.COLLECTED_SLOTS
     if vibe_usage.supported(runner_name):
         # Terminal per-session tokens feed the ledger. Subscription allowance,
         # dollar spend and context capacity have no collector on this seam.
@@ -15663,6 +15673,8 @@ def _resource_hold_provider_for_runner(runner_name: str | None) -> str:
         return "codex"
     if name.startswith("claude"):
         return "claude"
+    if name == "grok" or name.startswith("grok-"):
+        return "grok"
     return name or "unknown"
 
 
@@ -16299,12 +16311,13 @@ def _write_terminal_halt_response(
 def _native_session_id_for(task: Run) -> str | None:
     """The Shell-native session a parked *task* can be resumed into, if any.
 
-    codex ⇒ its ``codex_thread_id``; claude ⇒ its ``claude_session_id``,
-    **host env only** — Claude Code keys sessions by the cwd they ran in,
-    and a worktree / sandbox root is gone (or elsewhere) by the time a
-    resume dispatches, so recording one there would arm a ``native`` hold
-    that resumes into nothing. Anything else ⇒ ``None`` and the hold is
-    honestly ``unsupported``.
+    codex ⇒ its ``codex_thread_id``; claude ⇒ its ``claude_session_id``;
+    grok ⇒ its ``grok_session_id``. Claude and Grok are **host env only** —
+    both key sessions by the cwd they ran in, and a worktree / sandbox
+    root is gone (or elsewhere) by the time a resume dispatches, so
+    recording one there would arm a ``native`` hold that resumes into
+    nothing. Anything else ⇒ ``None`` and the hold is honestly
+    ``unsupported``.
     """
     meta = task.meta if hasattr(task, "meta") else {}
     shell = str(meta.get("runner_shell") or meta.get("runner_name") or "").lower()
@@ -16314,6 +16327,13 @@ def _native_session_id_for(task: Run) -> str | None:
         if str(getattr(task, "env", "") or meta.get("env") or "") != "host":
             return None
         return meta.get("claude_session_id") or None
+    if shell == "grok" or shell.startswith("grok-"):
+        # Grok keys sessions by the working directory they ran in, the same
+        # constraint Claude has: a worktree root is gone by the time a hold
+        # resumes, so only a host run arms a native resume.
+        if str(getattr(task, "env", "") or meta.get("env") or "") != "host":
+            return None
+        return meta.get("grok_session_id") or None
     return None
 
 
