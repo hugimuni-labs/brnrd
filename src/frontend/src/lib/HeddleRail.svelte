@@ -59,7 +59,7 @@
 				<span class="font-mono text-[10px] text-ink-quiet" aria-hidden="true"
 					>{open ? '▾' : '▸'}</span
 				>
-				<span class="font-mono text-[11px] tracking-wide text-amber-200 uppercase">heddles</span>
+				<span class="font-mono text-[11px] tracking-wide text-amber-200 uppercase">topics</span>
 			</button>
 			<!-- The collapsed strip — chip, runes, `all` reset — is the legend:
 			     every topic's rune, lit or dim, each a working toggle. Shared
@@ -79,10 +79,8 @@
 							class="flex min-w-0 flex-1 cursor-pointer items-baseline gap-x-2 text-left"
 							class:heddle-weaving={isWeaving}
 							aria-pressed={lit}
-							aria-label={isWeaving ? 'weaving now' : undefined}
-							title={isWeaving
-								? `${thread.title} · weaving now — held by a live run`
-								: thread.title}
+							aria-label={isWeaving ? `${thread.title}, running now` : undefined}
+							title={isWeaving ? `${thread.title} · running now` : thread.title}
 							onclick={() => onToggle?.(thread.canonicalId)}
 						>
 							<!-- The layer-eye (his read: lean into the Photoshop-layers

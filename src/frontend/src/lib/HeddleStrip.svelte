@@ -59,32 +59,35 @@
 	class:text-amber-300={filtered}
 	class:text-ink-quiet={!filtered}
 	title={filtered
-		? 'filtering — press a lit rune to add, a dim one to clear'
-		: 'lens · press a rune to filter'}
+		? 'showing some topics. press one to change which show.'
+		: 'topics. press one to show only that topic.'}
 >
-	<span aria-hidden="true">◒</span>
-	{litCount}/{threads.length} lit
+	{litCount} of {threads.length}
 </span>
-<!-- Every topic's rune, lit or dim, each a working toggle — the Photoshop
-     layer eyes at their smallest. A lit rune also wears a bottom ring so
-     the on/off read survives two topics landing on close hues. -->
-<span class="ml-auto flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[16px]">
+<!-- Every topic by name. Color is the on/off mark; the name is the control.
+     Width stays put on press: every topic stays mounted, and `all` below
+     stays mounted too (`invisible` when there is nothing to reset). -->
+<span class="flex flex-wrap items-center gap-x-2 gap-y-1">
 	{#each threads as thread (thread.canonicalId)}
 		{@const lit = isLit(thread.canonicalId)}
 		{@const isWeaving = weaving.has(thread.canonicalId)}
 		<button
 			type="button"
-			class="cursor-pointer rounded-sm leading-none"
+			class="cursor-pointer rounded-sm font-mono text-[11px] leading-none"
 			style={`${lit ? `color: ${thread.face.color}; box-shadow: 0 1.5px 0 0 ${thread.face.color};` : ''}${isWeaving ? ` color: ${thread.face.color}; text-shadow: 0 0 5px ${thread.face.color}, 0 0 10px ${thread.face.color};` : ''}`}
 			class:text-ink-mute={!lit && !isWeaving}
 			class:opacity-40={!lit && !isWeaving}
 			class:heddle-weaving={isWeaving}
 			aria-pressed={lit}
-			aria-label={isWeaving ? 'weaving now' : undefined}
-			title={`${thread.title} · ${isWeaving ? 'weaving now — held by a live run' : lit ? 'lit — filtering it in' : 'off — press to filter to it'}`}
+			aria-label={isWeaving ? `${thread.title}, running now` : thread.title}
+			title={isWeaving
+				? `${thread.title} · running now`
+				: lit
+					? `${thread.title} · showing`
+					: `${thread.title} · hidden — press to show it`}
 			onclick={() => onToggle?.(thread.canonicalId)}
 		>
-			{thread.face.glyph}
+			{thread.title}
 		</button>
 	{/each}
 	<button

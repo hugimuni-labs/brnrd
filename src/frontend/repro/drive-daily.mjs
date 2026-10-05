@@ -125,7 +125,7 @@ async function openPage(browser, spec) {
 
 /** The sections that make this the main dashboard and not something else. */
 async function assertWearsTheHouse(page, where) {
-	check(await page.getByText('resident dashboard').first().isVisible(), `${where}: the masthead`);
+	check(await page.getByText('Your work').first().isVisible(), `${where}: the masthead`);
 	check(await page.locator('#warp-heading').isVisible(), `${where}: the warp section`);
 	check(await page.locator('#cloth-heading').isVisible(), `${where}: the cloth section`);
 	check(await page.locator('#corpus-heading').isVisible(), `${where}: the library section`);

@@ -222,7 +222,7 @@
 
 {#if allDoors.length > 0}
 	<section class={embedded ? 'mt-4' : 'panel mt-6 p-4'} aria-labelledby="messenger-doors-heading">
-		<p class="eyebrow">messenger doors</p>
+		<p class="eyebrow">chats</p>
 		<h2
 			id="messenger-doors-heading"
 			class="font-mono text-lg font-semibold tracking-tight text-amber-100"
@@ -230,7 +230,7 @@
 			{heading}
 		</h2>
 		<p class="mt-1 max-w-2xl text-sm text-ink-quiet">
-			Connect another chat to this account. Each link lives for a few minutes; re-mint it any time.
+			Connect a chat to this account. A link lasts a few minutes. Make a new one any time.
 		</p>
 
 		<div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -371,7 +371,7 @@
 										disabled={mintingPlatform === door.platform}
 										>{mintingPlatform === door.platform
 											? 'opening…'
-											: `re-mint ${doorLabel(door.platform).toLowerCase()} link`}</button
+											: `new ${doorLabel(door.platform).toLowerCase()} link`}</button
 									>
 								{:else}
 									<div class="flex items-center gap-2">
@@ -415,7 +415,7 @@
 											class="cursor-pointer font-mono text-[11px] tracking-wide text-ink-quiet uppercase underline hover:text-stone-300 disabled:cursor-not-allowed disabled:opacity-60"
 											onclick={() => mint(door.platform)}
 											disabled={mintingPlatform === door.platform}
-											>{mintingPlatform === door.platform ? 'minting…' : 're-mint'}</button
+											>{mintingPlatform === door.platform ? 'connecting…' : 'new link'}</button
 										>
 									</div>
 									{#if !outcome.deep_link}

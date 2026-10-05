@@ -58,6 +58,13 @@ test('produce shape names the furthest a run got, not everything it touched', ()
 	assert.equal(produceShape([relic('message')]), 'bare');
 });
 
+test('a run started by another run says so in words', () => {
+	const lens = availableLenses([row({ source_system: 'spawn' })]).find(
+		(candidate) => candidate.id === 'origin:spawn'
+	);
+	assert.equal(lens?.label, 'from a run');
+});
+
 test('the origin vocabulary is read off the data, never declared', () => {
 	// The point of the whole module: a dispatch source nothing in the frontend
 	// has ever heard of shows up as a lens the moment it appears in a row.

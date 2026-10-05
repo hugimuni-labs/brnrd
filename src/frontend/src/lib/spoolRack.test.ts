@@ -272,7 +272,7 @@ test('orderRows: shell default first, then economy · balanced · strong · uncl
 		}),
 		'Fable 5.1'
 	);
-	assert.equal(tierLabel(rows[0]), 'unclassed');
+	assert.equal(tierLabel(rows[0]), 'unrated');
 	// a build-date suffix is a snapshot stamp, not a version: off the row
 	assert.equal(
 		headline({

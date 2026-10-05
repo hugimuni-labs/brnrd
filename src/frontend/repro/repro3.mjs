@@ -104,7 +104,7 @@ async function main() {
 				let sampling = true;
 				function sample() {
 					const rail = stack.firstElementChild;
-					const heddles = document.querySelector('[aria-label="the heddles · lens"]');
+					const heddles = document.querySelector('[aria-label="topics"]');
 					frames.push({
 						t: performance.now(),
 						scrollY: window.scrollY,

@@ -84,7 +84,7 @@ test("the rack lists one shell's cores and offers no way to change the shell", a
 	ok(!body.includes('>codex<'), "another shell's cores never leak in");
 	// The header says which shell it is listing, since the tab strip that
 	// used to answer that is gone.
-	ok(body.includes('claude · cores') || body.includes('>claude<'), 'the rack names its shell');
+	ok(body.includes('claude · models') || body.includes('>claude<'), 'the rack names its shell');
 });
 
 test('the shell it lists is the one it was given, not one it resolved', async () => {
@@ -312,8 +312,8 @@ test('rows sit in tier order with the shell default first, and a missing tier sa
 		m[1].trim()
 	);
 	deepEqual(headlines, ['codex', 'gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-6-astra']);
-	ok(body.includes('picks its own core'), 'the shell-decides row says what it is');
-	ok(body.includes('unclassed'), 'a tier the catalog cannot place is said, not blank');
+	ok(body.includes('picks its own model'), 'the shell-decides row says what it is');
+	ok(body.includes('unrated'), 'a tier the catalog cannot place is said, not blank');
 });
 
 // The roast, cut 6: "the dead take full rows". Counted, not listed.

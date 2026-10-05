@@ -110,7 +110,7 @@
 		<div class="panel p-4 text-sm text-red-400">{error}</div>
 	</div>
 {:else if data === null}
-	<div class="mx-auto max-w-xl p-6 font-mono text-sm text-ink-quiet">stringing the warp…</div>
+	<div class="mx-auto max-w-xl p-6 font-mono text-sm text-ink-quiet">loading…</div>
 {:else if data.files.length === 0 && data.withheld}
 	<div class="mx-auto max-w-xl p-6">
 		<div class="panel p-4"><WithheldNotice withheld={data.withheld} /></div>
@@ -119,7 +119,9 @@
 	<div class="mx-auto max-w-xl p-6">
 		<p class="font-mono text-sm text-ink-quiet">
 			no item named <span class="text-stone-300">{itemId}</span> —
-			<a href={resolve('/warp')} class="text-amber-300 hover:text-amber-100">back to the warp</a>
+			<a href={resolve('/warp')} class="text-amber-300 hover:text-amber-100"
+				>back to what you're working on</a
+			>
 		</p>
 	</div>
 {:else}
@@ -142,7 +144,7 @@
 				<p class="mt-1.5 font-mono text-[11px] text-stone-400 italic">{item.returnNote}</p>
 			{/if}
 			<p class="mt-2 font-mono text-[10px] text-ink-quiet">
-				<a href={resolve('/warp')} class="hover:text-stone-300">← the warp</a>
+				<a href={resolve('/warp')} class="hover:text-stone-300">← what you're working on</a>
 			</p>
 			{#if topics.length > 0}
 				<p class="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-ink-quiet">
@@ -165,7 +167,7 @@
 				{#if item.says.length > 0}
 					<div>
 						<span class="font-mono text-[9px] tracking-wide text-ink-mute uppercase"
-							>says · {item.says.length}</span
+							>comments · {item.says.length}</span
 						>
 						<div class="mt-1 flex flex-wrap gap-x-2 gap-y-1">
 							{#each item.says as evtId (evtId)}

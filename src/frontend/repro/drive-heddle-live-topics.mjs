@@ -68,13 +68,13 @@ async function capture(page, routes, name) {
 		});
 	});
 	await page.goto(`http://localhost:${PORT}/warp`, { waitUntil: 'networkidle' });
-	const rail = page.locator('.subpanel', { hasText: 'heddles' });
+	const rail = page.locator('.subpanel', { hasText: 'topics' });
 	await rail.waitFor({ state: 'visible', timeout: 15_000 });
 	await rail.locator('button').first().click();
 	await delay(150);
 	await rail.screenshot({ path: `${OUT}/${name}.png` });
 	return {
-		glows: await page.locator('button.heddle-weaving[aria-label="weaving now"]').count(),
+		glows: await page.locator('button.heddle-weaving').count(),
 		text: (await rail.innerText()).replace(/\s+/g, ' ').trim()
 	};
 }

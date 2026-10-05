@@ -105,7 +105,7 @@
 	}
 </script>
 
-<div class="panel px-3 py-2" aria-label="the pick lane">
+<div class="panel px-3 py-2" aria-label="runs">
 	{#if liveRuns === null && scheduledWakes === null}
 		<p class="font-mono text-[9px] text-ink-mute">acquiring</p>
 	{:else}
@@ -128,7 +128,7 @@
 						aria-hidden="true"
 					></span>
 				{/if}
-				<span class="ml-auto font-mono text-[9px] text-ink-mute">nothing weaving</span>
+				<span class="ml-auto font-mono text-[9px] text-ink-mute">nothing running</span>
 			</div>
 		{:else}
 			<div class="flex flex-col gap-1">
@@ -205,7 +205,7 @@
 							{#if row.isStrand}
 								<span
 									class="shrink-0 border border-amber-900/60 bg-amber-950/40 px-1 py-0.5 font-mono text-[8px] tracking-wide text-amber-300 uppercase"
-									aria-hidden="true">↳ strand</span
+									aria-hidden="true">↳ run</span
 								>
 							{/if}
 							{#if row.core}
@@ -306,7 +306,7 @@
 		     it is not showing — a hidden burning run rendered as silence would
 		     be the filter lying about the machine. -->
 		<p class="mt-1 font-mono text-[9px] text-ink-mute">
-			+{hiddenByTopics} pick{hiddenByTopics === 1 ? '' : 's'} outside lit topics
+			+{hiddenByTopics} more outside these topics
 		</p>
 	{/if}
 </div>

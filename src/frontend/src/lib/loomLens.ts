@@ -88,9 +88,16 @@ const SHAPE_LABELS: Record<ProduceShape, string> = {
 	bare: 'bare'
 };
 
-/** Origin label: the daemon's own `source_system`, normalised for the chip. */
+/** Origin label: the daemon's own `source_system`, normalised for the chip.
+ *  A source the page has not met stays that word. `spawn` is the one that
+ *  read as machinery on the finished-work row. */
+const PLAIN_ORIGINS: Record<string, string> = {
+	spawn: 'from a run'
+};
+
 function originLabel(source: string): string {
-	return source.toLowerCase().replaceAll('_', ' ');
+	const plain = source.toLowerCase().replaceAll('_', ' ');
+	return PLAIN_ORIGINS[plain] ?? plain;
 }
 
 /**
@@ -163,7 +170,7 @@ export function availableLenses(rows: RunLedgerRow[]): Lens[] {
 	if (strands > 0) {
 		// "Strands" is the loom vocabulary for daemon-dispatched sub-spawn runs
 		// (the maintainer's 08-02 naming steer, now the id's name too).
-		lenses.push({ id: 'stack:strand', label: '↳ strands', facet: 'stack', count: strands });
+		lenses.push({ id: 'stack:strand', label: '↳ runs', facet: 'stack', count: strands });
 	}
 
 	return lenses;

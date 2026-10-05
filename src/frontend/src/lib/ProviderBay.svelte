@@ -75,7 +75,7 @@
 	     because it has 12px; this surface has the room, so it spends it on
 	     the breakdown rather than on the same one number again. -->
 	<section data-measure="resources" class="resource-bay mb-3">
-		<div class="workshop-label">{group.provider} · windows</div>
+		<div class="workshop-label">{group.provider} · limits</div>
 		{#if group.meters.length === 0}
 			<p class="font-mono text-xs text-ink-quiet">No quota report for {group.provider}.</p>
 		{:else}
@@ -111,11 +111,12 @@
 							{#if meter.resetShort}<span class="resource-reset">↻{meter.resetShort}</span>{/if}
 							{#if binding}
 								<span class="resource-tag is-binding" title="the ceiling that stops a run first"
-									>binding</span
+									>stops first</span
 								>
 							{:else if meter.scope === 'core'}
-								<span class="resource-tag" title="gates this core only, not the whole shell"
-									>core allowance</span
+								<span
+									class="resource-tag"
+									title="applies to this model only, not the whole provider">this model</span
 								>
 							{/if}
 						</span>

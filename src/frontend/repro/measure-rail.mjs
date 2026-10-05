@@ -194,7 +194,7 @@ async function main() {
 			// `{#if benchOpen}` in +page.svelte. At scrollY 0 this never touches
 			// the gauge's own render (it has exactly one form now), so nothing
 			// about this click changes what `out.gaugeWrapperHeight` measures.
-			await page.getByRole('button', { name: /open the bench/ }).click();
+			await page.getByRole('button', { name: /open where the next run lands/ }).click();
 			await page.waitForSelector('[data-measure="spool-rack"]', { timeout: 15000 });
 			await delay(300); // glitchReveal's own transition window
 

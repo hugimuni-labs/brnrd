@@ -109,14 +109,14 @@
 		type="button"
 		data-role="bench-handle"
 		aria-expanded={open}
-		aria-label={open ? 'fold the bench' : 'open the bench — project and environment'}
+		aria-label={open ? 'fold where the next run lands' : 'open where the next run lands'}
 		title={handleTitle}
 		onclick={onToggle}
 		class="bench-handle"
 		class:is-open={open}
 	>
 		<span class="bench-caret" aria-hidden="true">{open ? '▾' : '▸'}</span>
-		<span class="bench-title">bench</span>
+		<span class="bench-title">where</span>
 		<!-- Stating the settings is the whole point of the folded form: a
 		     handle that only said "settings" made the reader open it to learn
 		     the one thing they usually wanted. -->

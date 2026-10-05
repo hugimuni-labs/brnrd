@@ -117,8 +117,8 @@
 	function providerTooltip(group: FuelProviderGroup): string {
 		const parts = group.meters.map((meter) => {
 			const reading = meter.percent === null ? 'unknown' : `${Math.round(meter.percent)}% left`;
-			if (meter.id === group.primary?.id) return `${meter.label}: ${reading} — binding`;
-			if (meter.scope === 'core') return `${meter.label}: ${reading} (core allowance)`;
+			if (meter.id === group.primary?.id) return `${meter.label}: ${reading} — stops a run first`;
+			if (meter.scope === 'core') return `${meter.label}: ${reading} (this model only)`;
 			return `${meter.label}: ${reading}`;
 		});
 		return parts.length > 0 ? parts.join(' · ') : `${group.provider}: no quota report`;
@@ -131,7 +131,7 @@
 
 <div data-measure="gauge" class="gauge font-mono">
 	<div class="gauge-topline">
-		<span class="gauge-title">fuel</span>
+		<span class="gauge-title">usage</span>
 		{#if slots}
 			<span
 				title={slots.title}
@@ -140,7 +140,7 @@
 			>
 		{/if}
 	</div>
-	<div data-measure="fuel" class="fuel-deck" aria-label="quota fuel, by provider">
+	<div data-measure="fuel" class="fuel-deck" aria-label="usage by provider">
 		{#if shells === null && providerGroups.length === 0}
 			<span class="fuel-empty">loading quota…</span>
 		{:else if providerGroups.length === 0}
@@ -158,7 +158,7 @@
 					aria-expanded={open}
 					aria-label={`${group.provider} — ${
 						open ? 'fold' : 'open'
-					} its windows and cores. ${providerTooltip(group)}`}
+					} its limits and models. ${providerTooltip(group)}`}
 					title={providerTooltip(group)}
 					onclick={() => toggleProvider(group.provider)}
 				>
@@ -172,7 +172,7 @@
 							<span class="fuel-reading">
 								<span class="fuel-window">{primary.windowName}</span>
 								<strong style={`color: ${LEVEL_COLOR[level]}`}
-									>{primary.percent === null ? '?' : `${Math.round(primary.percent)}%`}</strong
+									>{primary.percent === null ? '?' : `${Math.round(primary.percent)}% left`}</strong
 								>
 							</span>
 						{:else}
@@ -248,8 +248,8 @@
 	</div>
 	<div class="gauge-footline">
 		{#if lead}
-			<span data-measure="tank" class="tank-reading" aria-label="tank forecast">
-				<span class="gauge-key">tank</span>
+			<span data-measure="tank" class="tank-reading" aria-label="when usage runs out">
+				<span class="gauge-key">limit</span>
 				<span class="truncate" style={`color: ${VERDICT_COLOR[lead.verdict]}`}>{lead.headline}</span
 				>
 			</span>

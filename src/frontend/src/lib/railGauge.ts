@@ -98,9 +98,9 @@ export interface SlotChip {
 export function slotChip(activeSpawns: number, maxSpawns: number | null): SlotChip {
 	if (maxSpawns === null || maxSpawns <= 0) {
 		return {
-			label: `${activeSpawns} strand${activeSpawns === 1 ? '' : 's'}`,
+			label: `${activeSpawns} running`,
 			level: null,
-			title: 'concurrent strand-stack children — no configured ceiling to measure against'
+			title: 'how many runs are going right now'
 		};
 	}
 	const title = 'spawn slots — concurrent strand-stack children (spawn.max_concurrent)';

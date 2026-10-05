@@ -242,7 +242,7 @@
 		     as two different rooms). Amber stays reserved for the DEFAULT
 		     badge and selection marks, per the selection-vs-action split. -->
 		<span class="font-mono font-bold tracking-[0.14em] uppercase" style="color: rgb(214 211 209)"
-			>{shell} · cores</span
+			>{shell} · models</span
 		>
 		{#if stale}
 			<span
@@ -323,7 +323,7 @@
 							{#if isShellDefault(profile)}
 								<span
 									class="font-mono text-[11px] text-ink-quiet"
-									title="no core pinned — {profile.shell} picks its own">picks its own core</span
+									title="no model pinned — {profile.shell} picks its own">picks its own model</span
 								>
 							{/if}
 							<span
@@ -412,7 +412,7 @@
 							{#if requested}
 								<span
 									class="border border-l-2 border-l-stone-100 border-stone-800/60 bg-stone-800/50 px-1.5 py-0.5 text-[10px] tracking-wide text-stone-100 uppercase"
-									>next wake · requested</span
+									>next run · requested</span
 								>
 							{:else if pinned}
 								<span
@@ -435,7 +435,7 @@
 								     until hovered, and a touch screen never hovers. A tap
 								     here only ever parks a one-shot next wake — it never
 								     touches whatever is running right now. -->
-								<span class="text-ink-quiet normal-case">tap → default (next wake here)</span>
+								<span class="text-ink-quiet normal-case">use for the next run</span>
 							{/if}
 							{#if profile.class || profile.cost_rank !== null || profile.quota_source || profile.capability_score !== null || profile.feed_state}
 								<button
