@@ -153,6 +153,21 @@ test('grouping preserves cost-rank order within a shell and puts available shell
 	);
 });
 
+test('shell tabs follow the shelf: claude, codex, grok, then vibe', () => {
+	const profiles: RunnerProfile[] = [
+		{ name: 'vibe', shell: 'vibe', available: true, cost_rank: 18 },
+		{ name: 'local-model', shell: 'local', available: true },
+		{ name: 'grok-4.7', shell: 'grok', available: true },
+		{ name: 'codex', shell: 'codex', available: true, cost_rank: 25 },
+		{ name: 'claude', shell: 'claude', available: true, cost_rank: 30 }
+	];
+	assert.deepEqual(
+		groupByShell(profiles).map((group) => group.shell),
+		['claude', 'codex', 'grok', 'vibe', 'local'],
+		'the shelf order leads, and a shell it does not name stays after, in first-seen order'
+	);
+});
+
 test('a verified-unavailable core sorts to the end of its own shell, not its old cost-rank slot', () => {
 	// Live shape from the account this shipped against: `codex-gpt-5.4-mini`
 	// (retired, cost_rank 23) used to render between `codex-mini` (20) and

@@ -36,8 +36,8 @@ brnrd --help
 ```
 
 brnrd also needs **git**, and at least one coding-agent CLI on your `PATH` —
-Claude Code (`claude`), Codex (`codex`), Mistral Vibe (`vibe`), or Grok Build
-(`grok`) — authenticated with your own subscription or API key. brnrd drives
+Claude Code (`claude`), Codex (`codex`), Grok Build (`grok`), or Mistral Vibe
+(`vibe`) — authenticated with your own subscription or API key. brnrd drives
 that CLI; it never asks you for a model key of its own.
 
 Self-hosted gates and local execution are free. No brnrd account is needed to

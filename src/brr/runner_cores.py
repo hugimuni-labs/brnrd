@@ -116,24 +116,6 @@ _MODEL_TOKEN_RE = re.compile(
 # as unknown-cost, sorted after all classed profiles).
 
 _BUNDLED_CORES: dict[str, dict[str, Any]] = {
-    # Vibe uses config aliases and an invocation-scoped environment override,
-    # not a --model option. Local requires the user's own inference server;
-    # none of these rows claims its availability, billing or relative cost.
-    "vibe-mistral-medium-3.5": {
-        "shell": "vibe", "model": "mistral-medium-3.5",
-        "provider": "mistral", "class": None, "cost_rank": None,
-        "freshness_date": "2026-09-29",
-    },
-    "vibe-glm-5-3": {
-        "shell": "vibe", "model": "glm-5-3",
-        "provider": "mistral", "class": None, "cost_rank": None,
-        "freshness_date": "2026-09-29",
-    },
-    "vibe-local": {
-        "shell": "vibe", "model": "local",
-        "provider": "local", "class": None, "cost_rank": None,
-        "freshness_date": "2026-09-29",
-    },
     # Grok Build selects with `-m`. These ids are the menu shipped with the
     # CLI (headless guide examples plus grok-4.5 / grok-4.7 / the build-fast
     # variant). No row claims a price: quota is not instrumented, and an
@@ -157,6 +139,24 @@ _BUNDLED_CORES: dict[str, dict[str, Any]] = {
         "shell": "grok", "model": "grok-4.7-build-fast",
         "provider": "xai", "class": None, "cost_rank": None,
         "freshness_date": "2026-10-05",
+    },
+    # Vibe uses config aliases and an invocation-scoped environment override,
+    # not a --model option. Local requires the user's own inference server;
+    # none of these rows claims its availability, billing or relative cost.
+    "vibe-mistral-medium-3.5": {
+        "shell": "vibe", "model": "mistral-medium-3.5",
+        "provider": "mistral", "class": None, "cost_rank": None,
+        "freshness_date": "2026-09-29",
+    },
+    "vibe-glm-5-3": {
+        "shell": "vibe", "model": "glm-5-3",
+        "provider": "mistral", "class": None, "cost_rank": None,
+        "freshness_date": "2026-09-29",
+    },
+    "vibe-local": {
+        "shell": "vibe", "model": "local",
+        "provider": "local", "class": None, "cost_rank": None,
+        "freshness_date": "2026-09-29",
     },
     # ── Claude (Anthropic) ──────────────────────────────────────────────
     # Claude Code's --model flag accepts short aliases ("haiku", "sonnet",

@@ -5,7 +5,7 @@ description: Pin, select, escalate, and downshift local Shell and Core profiles.
 
 brnrd separates the CLI process from the model it runs:
 
-- **Shell**: the CLI on `PATH` — `claude`, `codex`, `vibe`, or `grok`.
+- **Shell**: the CLI on `PATH` — `claude`, `codex`, `grok`, or `vibe`.
 - **Core**: the model and its cost, capability, and quota metadata.
 
 Together they form the Runner for one wake. The resident remains the same when
@@ -54,7 +54,7 @@ Each `[profiles.<name>]` table may contain:
 - `cmd`: the headless command. The assembled prompt is piped on stdin unless
   `{prompt}` appears as its own argument.
 - `binary`: the executable to probe when the profile name is an alias.
-- `hooks`: the runner-specific Tier 2 hook adapter (`claude`, `codex`, `vibe`, or `grok`).
+- `hooks`: the runner-specific Tier 2 hook adapter (`claude`, `codex`, `grok`, or `vibe`).
 - `provider`, `owner`, `class`, `cost_rank`, and `quota_source`: selection and
   quota metadata.
 - `model`: an optional pinned Core. The bundled Core registry also materializes
@@ -70,22 +70,6 @@ operates in the supplied working directory, and exits with a status code.
 Printing a final reply on stdout adds response delivery; declaring `hooks`
 adds live tool-boundary injection. Profile commands and `runner_cmd` remain in
 the daemon-owned home because both decide which host command executes.
-
-## Mistral Vibe
-
-Install Vibe with `uv tool install mistral-vibe` and sign in using Vibe's own
-setup. Select `vibe` as a runner profile, or dispatch a strand with `shell: vibe`.
-The adapter pipes the wake on stdin, installs an invocation-specific system
-prompt without replacing your settings, and returns the final assistant reply.
-It uses Vibe's configured model and saved credentials (including `VIBE_HOME`).
-
-Native boundary hooks are verified with Vibe 2.25.5: post-tool notices reach
-the model, file writes use the rooted-write guard, and post-agent denial requests
-a turn revision (Vibe caps retries at three). Each daemon invocation installs
-hooks in a temporary additional directory; `BRR_VIBE_HOOKS=0` disables them.
-Session resume, model attestation and monthly quota/spend collection remain
-unavailable. Unknown capacity does not imply unlimited usage; Mistral
-subscriptions include a monthly usage allowance.
 
 ## Grok Build
 
@@ -113,6 +97,22 @@ rows are not summed into one). A host-env seat resumes that session with
 a worktree run does not arm a native resume. Quota and context-window
 headroom are not collected, and brnrd will not move a wake onto or off Grok
 because of a window it cannot see.
+
+## Mistral Vibe
+
+Install Vibe with `uv tool install mistral-vibe` and sign in using Vibe's own
+setup. Select `vibe` as a runner profile, or dispatch a strand with `shell: vibe`.
+The adapter pipes the wake on stdin, installs an invocation-specific system
+prompt without replacing your settings, and returns the final assistant reply.
+It uses Vibe's configured model and saved credentials (including `VIBE_HOME`).
+
+Native boundary hooks are verified with Vibe 2.25.5: post-tool notices reach
+the model, file writes use the rooted-write guard, and post-agent denial requests
+a turn revision (Vibe caps retries at three). Each daemon invocation installs
+hooks in a temporary additional directory; `BRR_VIBE_HOOKS=0` disables them.
+Session resume, model attestation and monthly quota/spend collection remain
+unavailable. Unknown capacity does not imply unlimited usage; Mistral
+subscriptions include a monthly usage allowance.
 
 ## Escalate and downshift
 

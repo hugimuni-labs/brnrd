@@ -223,8 +223,8 @@ def hosted_status(target: Door | str, settings: _SettingsLike) -> str:
 SHELL_LABELS: dict[str, str] = {
     "claude": "Claude Code",
     "codex": "Codex",
-    "vibe": "Mistral Vibe",
     "grok": "Grok Build",
+    "vibe": "Mistral Vibe",
 }
 
 

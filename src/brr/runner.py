@@ -1424,20 +1424,6 @@ class ShellHelp:
 #: selection, and the product's first-impression surface must not recommend
 #: installing an integration the catalog no longer treats as first-class.
 SHELL_HELP: dict[str, ShellHelp] = {
-    "grok": ShellHelp(
-        shell="grok",
-        label="Grok Build",
-        blurb="xAI's terminal agent; uses a Grok subscription or an API key.",
-        docs_url="https://x.ai/cli",
-        install_hint="curl -fsSL https://x.ai/cli/install.sh | bash",
-    ),
-    "vibe": ShellHelp(
-        shell="vibe",
-        label="Mistral Vibe",
-        blurb="Mistral's terminal agent; uses Vibe's saved login or an API key.",
-        docs_url="https://github.com/mistralai/mistral-vibe",
-        install_hint="uv tool install mistral-vibe",
-    ),
     "claude": ShellHelp(
         shell="claude",
         label="Claude Code",
@@ -1451,6 +1437,20 @@ SHELL_HELP: dict[str, ShellHelp] = {
         blurb="OpenAI's terminal agent; needs a ChatGPT plan with Codex or an API key.",
         docs_url="https://developers.openai.com/codex/cli/",
         install_hint="npm install -g @openai/codex",
+    ),
+    "grok": ShellHelp(
+        shell="grok",
+        label="Grok Build",
+        blurb="xAI's terminal agent; uses a Grok subscription or an API key.",
+        docs_url="https://x.ai/cli",
+        install_hint="curl -fsSL https://x.ai/cli/install.sh | bash",
+    ),
+    "vibe": ShellHelp(
+        shell="vibe",
+        label="Mistral Vibe",
+        blurb="Mistral's terminal agent; uses Vibe's saved login or an API key.",
+        docs_url="https://github.com/mistralai/mistral-vibe",
+        install_hint="uv tool install mistral-vibe",
     ),
 }
 

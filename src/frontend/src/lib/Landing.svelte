@@ -122,7 +122,7 @@
 			</h1>
 			<p class="mt-5 max-w-2xl text-base leading-relaxed text-stone-300 sm:text-lg">
 				A co-maintainer that lives on your machine: survives reboots, remembers who it is, works
-				your Claude, Codex, Mistral Vibe, and Grok subscriptions, and leaves receipts — a commit, a
+				your Claude, Codex, Grok, and Mistral Vibe subscriptions, and leaves receipts — a commit, a
 				pull request, or a reply you can actually check.
 			</p>
 			<p class="mt-2 max-w-2xl text-xs leading-relaxed text-ink-mute">
@@ -384,7 +384,7 @@
 				</h2>
 				<p class="mt-3 text-sm leading-relaxed text-stone-400">
 					The full resident engine is open source. Install it, point it at a checkout, use your own
-					Claude Code, Codex, Mistral Vibe, or Grok subscription, and wire local gates with
+					Claude Code, Codex, Grok, or Mistral Vibe subscription, and wire local gates with
 					credentials you control. No brnrd account, payment, phone-home, or feature gate is
 					required for that path.
 				</p>

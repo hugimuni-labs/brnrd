@@ -4,7 +4,7 @@ description: The repo-aware continuity that survives across Runner processes and
 ---
 
 A resident is the repo-aware coworker behind the remote door. Claude Code,
-Codex, Mistral Vibe, or Grok Build is the medium for a particular run; the
+Codex, Grok Build, or Mistral Vibe is the medium for a particular run; the
 resident is the continuity that survives when that process exits and another
 one starts.
 
