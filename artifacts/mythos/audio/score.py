@@ -139,6 +139,21 @@ def write(E, path):
     pol = ((lp >= 196) & (lp < 224)).astype(np.float32)
     add(0, (np.sin(2 * np.pi * 2093 * t) * np.sin(2 * np.pi * 0.7 * t) ** 2 * 0.03) * _lp(pol, 2400) * g)
 
+    # Belt: ice and dust grinding at orbital speed — a fine, wide hiss.
+    g = gate("belt")
+    add(0, ((noise - _lp(noise, 3)) * 0.06 + _lp(noise, 60) * 0.3) * g, 0.1)
+    # The observed Sun: a lower, older drone than the disk's, and the EUV
+    # detector's own faint whine.
+    g = gate("sun", "sun_ha", "sun_uv")
+    add(0, (np.sin(2 * np.pi * 27.5 * t) * 0.2 + np.sin(2 * np.pi * 27.5 * 3.01 * t) * 0.05
+            + np.sin(2 * np.pi * 7400 * t) * 0.006) * g)
+    # Mask: the UV lamp's ballast hum. Etch: fizz.
+    g = gate("mask")
+    add(0, (np.sin(2 * np.pi * 120 * t) * 0.05 + np.sin(2 * np.pi * 240 * t) * 0.02) * g)
+    g = gate("etch")
+    fizz = (rng.random(n) < 0.02).astype(np.float32) * rng.normal(0, 1, n).astype(np.float32)
+    add(0, (_lp(fizz, 2) * 0.35 + _lp(noise, 200) * 0.4) * g)
+
     # Capture: the developer, a slow liquid movement.
     g = gate("capture")
     slosh = _lp(noise, 300) * (0.6 + 0.4 * np.sin(2 * np.pi * 0.6 * t)) * 0.8
@@ -200,6 +215,23 @@ def write(E, path):
         if nm == "conduct" and 8 <= k < 18 and k % 2 == 0:
             m = int(0.02 * SR)  # lithographic snap: relays
             add(i0, rng.normal(0, 1, m).astype(np.float32) * _env(m, 0.0002, 0.003), rng.uniform(-0.7, 0.7), 0.4)
+        if nm in ("raw", "raw_eit"):
+            m = int(0.04 * SR)  # a detector readout: a digital click
+            add(i0, np.sign(np.sin(2 * np.pi * 2000 * np.arange(m) / SR)).astype(np.float32) * _env(m, 0.0002, 0.01), 0.5, 0.25)
+        rec = e.get("rec")
+        if rec and (prev is None or prev[0] != nm or E[i - 1].get("rec") is None):
+            if rec["mode"] == "replace" and rec.get("carrier") == "type":
+                m = int(0.25 * SR)  # lead on a stone: a dense clack
+                tt = np.arange(m) / SR
+                add(i0, (np.sin(2 * np.pi * 1800 * tt) * _env(m, 0.0002, 0.02) * 0.5
+                         + rng.normal(0, 1, m) * _env(m, 0.0002, 0.006)).astype(np.float32), 0.2, 0.7)
+            elif rec["mode"] == "replace":
+                m = int(0.35 * SR)  # a chisel scrape
+                add(i0, (_lp(rng.normal(0, 1, m).astype(np.float32), 3) * _env(m, 0.01, 0.12)), -0.2, 0.6)
+        if rec and rec["mode"] == "ghost":
+            m = int(0.05 * SR)  # a guess: the faintest tick, a different pitch each time
+            f = 3200 + 500 * rec.get("j", 0)
+            add(i0, (np.sin(2 * np.pi * f * np.arange(m) / SR) * _env(m, 0.0003, 0.012)).astype(np.float32), 0.0, 0.12)
         if nm == "wire" and k == 0:
             wire0 = i0
         prev = (nm, k, e.get("zoom"))

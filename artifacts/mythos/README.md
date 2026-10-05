@@ -1,13 +1,18 @@
 # mythos
 
 The opening of the manifesto film (#2158), rebuilt around a causal
-cosmology. About 32 s, 1080p24, with a diegetic score. It runs from a random
+cosmology. About 40 s, 1080p24, with a diegetic score. It runs from a random
 potential collapsing into filaments, through a lensed disk, coronal arches,
 a crystal seam and a lightning strike across a membrane. Vibration then
 shakes the membrane into near-forms around the scar the strike left. An
 instrument observes the result and captures one form, which is pressed, laid
 out as a circuit, and woven into a thread. The film ends on the first pulse
 transmitted down a wire.
+
+Letters return as brief *recognition events* — a rune in stone, a metal
+sort, wax on film — placed where the observer found the matching operator in
+the physics, never as text and never as an input. Real Solar Orbiter and SDO
+data anchor the plasma act ([`SOURCES.md`](SOURCES.md)).
 
 No glyph is ever an input. The generators know forces, frequencies and seeds.
 `observe.py` finds the forms afterwards, and `world.py` passes each act's
@@ -18,15 +23,19 @@ pass could not verify.
 ## Layout
 
 ```
-src/lab/         generators, glyph-free: web, disk, plasma, breakdown, membrane,
-                 develop, relief, weave
+src/lab/         generators, glyph-free: web, disk, rings, plasma, breakdown,
+                 membrane, develop, relief, weave
+src/sources.py   real solar data (from the SunPy wheel on PyPI), or visible slots
+src/recognize.py letters as made objects, placed on what the observer found
 src/observe.py   generate → observe → classify → select: skeleton topology,
                  enclosure pockets, composites, capture, Douglas–Peucker, manhattan
 src/world.py     the causal spine: discharge selection, the plate simulation,
                  the found form, the die, the layout
 src/optics.py    the instrument: lens + emulsion, and the observation
                  modalities (defocus, slit, occulter, polariser, raster, film edge)
-src/shots/       cosmos.py · plate.py · inherit.py
+src/shots/       cosmos.py (web, disk, belt, corona, sun, raw, crystal)
+                 plate.py (strike → stare → membrane → observation)
+                 inherit.py (capture, press, mask, etch, board, thread, wire)
 src/film.py      the EDL, parallel render, operator-aligned inserts, assembly
 audio/score.py   the score, derived from the EDL and from the plate's drive
 ```

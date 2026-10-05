@@ -71,8 +71,21 @@ def _rest_cam():
     return [(x + dx, y + dy) for x, y in CAM_REST]
 
 
+def _vib_cam():
+    """Too close: the membrane fills the frame, the found region low in it and
+    the whipping free edge crossing the top. Built by magnifying CAM_VIB
+    about the found form."""
+    F = Wd.found()
+    sc = F["scale"]
+    fx, fy = F["form"][1] / sc * Wd.PX + MG, F["form"][2] / sc * Wd.PX + MG
+    M = _M(CAM_VIB)
+    p = cv2.perspectiveTransform(np.float32([[[fx, fy]]]), M)[0, 0]
+    z, tx, ty = 1.75, 980.0, 700.0
+    return [(tx + (x - p[0]) * z, ty + (y - p[1]) * z) for x, y in CAM_VIB]
+
+
 def camera(k):
-    S, R, V = CAM_STRIKE, _rest_cam(), CAM_VIB
+    S, R, V = CAM_STRIKE, _rest_cam(), _vib_cam()
     Fr, _ = _frontal()
     drift = lambda c, a: [(x + a * math.sin(k * 0.021 + i), y + a * math.cos(k * 0.017 + i)) for i, (x, y) in enumerate(c)]
     if k < Wd.REST[0]:
@@ -196,6 +209,11 @@ def plate(need, seed=7):
                 r = (row if row is not None else Wd.NY + 10) * Wd.PX + MG
                 m_ = O.raster(hdr[..., 0], r, width=5, ahead_dim=0.08, trail=0.6)
                 hdr = hdr * m_[..., None]
+                # What has been acquired is no longer light from the plate but
+                # a reading of it: monochrome, on a phosphor.
+                acq = (yy < r).astype(np.float32)[..., None] * plate_mask[..., None]
+                lum = hdr.mean(-1, keepdims=True)
+                hdr = hdr * (1 - acq) + acq * lum * 1.6 * PHOS_SCAN
                 hdr += tint(np.exp(-((yy - r) / 2.5) ** 2) * plate_mask * 0.5, PHOS_SCAN)
         # ── to the screen ─────────────────────────────────────────────────
         M = _M(camera(k))
@@ -206,7 +224,7 @@ def plate(need, seed=7):
             fy_c = Lt["fork"][1] + MG
             img = O.defocus(img, depth / CH, fy_c / CH, aperture=16.0)
         elif k < 206 and k >= Wd.VIBRATE[0]:
-            img = O.defocus(img, depth / CH, 0.45 + 0.08 * math.sin(k * 0.04), aperture=7.0)
+            img = O.defocus(img, depth / CH, 0.45 + 0.08 * math.sin(k * 0.04), aperture=4.0)
         if k >= 246:
             # The slit closes on the found form; everything else goes dark.
             t = smoothstep(246, 258, k)
@@ -215,7 +233,8 @@ def plate(need, seed=7):
             img = img * mask[..., None]
         ex = ex if k < Wd.REST[0] else 1.5
         yield k, develop(img, exposure=ex, frame=k, seed=seed, grain=0.065, bloom_k=0.5,
-                         negative=neg, vignette=0.5, star=0.01 if k < Wd.REST[0] else 0.0)
+                         negative=neg, neg_tint=O.CYAN_NEG, ca=9.0 if neg else 1.0,
+                         vignette=0.5, star=0.01 if k < Wd.REST[0] else 0.0)
 
 
-PHOS_SCAN = np.array([0.6, 1.0, 0.7], np.float32)
+PHOS_SCAN = np.array([0.35, 1.0, 0.45], np.float32)  # P1 phosphor

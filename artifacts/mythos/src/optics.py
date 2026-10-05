@@ -32,6 +32,8 @@ PHOSPHOR = np.array([0.35, 1.00, 0.45], np.float32)
 STEEL = np.array([0.55, 0.62, 0.70], np.float32)
 UV = np.array([0.55, 0.30, 1.00], np.float32)
 HALPHA = np.array([1.00, 0.20, 0.10], np.float32)    # 656 nm, the chromosphere
+CYAN_NEG = (0.55, 0.92, 1.05)                         # a blue-sensitive plate, pushed
+SOLDER = np.array([0.05, 0.42, 0.18], np.float32)    # solder-mask green
 
 
 def tint(I: np.ndarray, col) -> np.ndarray:
@@ -217,8 +219,13 @@ def _vignette(h, w):
 
 def develop(hdr: np.ndarray, *, exposure=1.0, frame=0, grain=0.06, ca=1.0,
             weave=0.6, bloom_k=0.35, vignette=0.35, negative=False, star=0.0,
-            lift=0.006, seed=0, toe=0.0) -> np.ndarray:
-    """HDR linear light → 8-bit frame through lens + emulsion."""
+            lift=0.006, seed=0, toe=0.0, neg_tint=(0.92, 0.95, 1.0)) -> np.ndarray:
+    """HDR linear light → 8-bit frame through lens + emulsion.
+
+    ``ca`` is lateral chromatic aberration; push it past ~8 and the lens
+    becomes a prism — the thin RGB fringes of an optical fault, kept for
+    extreme events. ``neg_tint`` colours a negative (cyan = a blue-sensitive
+    plate pushed past its range)."""
     rng = np.random.default_rng(seed * 100003 + frame)
     rgb = hdr
     if star:
@@ -229,10 +236,13 @@ def develop(hdr: np.ndarray, *, exposure=1.0, frame=0, grain=0.06, ca=1.0,
     if toe:
         rgb = np.clip(rgb - toe, 0, None) / (1 - toe)
     if negative:
-        rgb = (1.0 - rgb) * np.array([0.92, 0.95, 1.0], np.float32)
+        rgb = (1.0 - rgb) * np.array(neg_tint, np.float32)
     rgb = rgb * (1 - vignette * 0.5 * _vignette(H, W))[..., None] + lift
     if ca:
         rgb = _chroma(rgb, 0.0016 * ca)
+        if ca > 6:
+            # A prism fault: a second, offset fringe pair.
+            rgb = 0.6 * rgb + 0.4 * _chroma(shift(rgb, 0.0, 0.0), 0.0016 * ca * 2.2)
     if weave:
         dx, dy = rng.normal(0, weave, 2)
         rgb = shift(rgb, dx, dy)

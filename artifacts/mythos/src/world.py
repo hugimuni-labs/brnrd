@@ -269,6 +269,42 @@ def found():
             "census": OB.census(feats), "fork": fork}
 
 
+@_cached("faces")
+def faces():
+    """Pareidolia, measured. While the plate vibrates, look in every frame for
+    two pockets of matching size side by side — mirrored lobes, eyes — with an
+    arch or bowl between and below them. That is ``b^n^d`` before anyone drew
+    it: the configuration, not the letters. Returns candidates ranked by how
+    face-like they are, in grain-image coords (scale 2)."""
+    out = []
+    sc = 2
+    for k, m in plate_sim(OBSERVE[0]):
+        if k < VIBRATE[0] + 8:
+            continue
+        I = grain_image(m, sc)
+        pk = [f for f in OB.pockets(OB.binarize(I, 88), scale=1.0)]
+        eyes = [f for f in pk if f.op in ("cavity", "near")]
+        mouths = [f for f in pk if f.op in ("arch", "bowl", "mouth")]
+        for i, a in enumerate(eyes):
+            for b in eyes[i + 1:]:
+                ra, rb = a.extra["r"], b.extra["r"]
+                r = (ra + rb) / 2
+                if abs(ra - rb) / max(ra, rb) > 0.3 or abs(a.y - b.y) > 0.5 * r:
+                    continue
+                dx = abs(a.x - b.x)
+                if not (2.2 * r < dx < 5.5 * r):
+                    continue
+                cx, cy = (a.x + b.x) / 2, (a.y + b.y) / 2
+                for mo in mouths:
+                    if abs(mo.x - cx) < 0.6 * r and 0.6 * r < mo.y - cy < 2.6 * r:
+                        sym = 1 - abs(ra - rb) / max(ra, rb)
+                        score = a.score * b.score * mo.score * sym
+                        out.append({"k": k, "score": float(score), "x": float(cx), "y": float(cy + 0.5 * r),
+                                    "r": float(r), "eyes": [(a.x, a.y), (b.x, b.y)], "mouth": (mo.x, mo.y)})
+    out.sort(key=lambda f: -f["score"])
+    return out[:8]
+
+
 def layout(die, grid=6.0, exit_x=None, pitch=None):
     """The die as a lithographic layout, with a bus leaving it: each stroke's
     far end is routed out to the right on its own track — a trace becomes a

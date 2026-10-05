@@ -146,31 +146,124 @@ def _layout_screen():
     return Wd.layout(die, grid=12.0, exit_x=W + 200, pitch=30.0)
 
 
-def conduct(need, seed=12):
-    die = _die_screen()
+def _layout_mask(width=4.0, extra=0.0):
     lay, routes = _layout_screen()
-    r_die = Relief([p / 2 for p in die], 960, 540, seed=11, width=8.0)
-    r_lay = Relief([p / 2 for p in lay + routes], 960, 540, seed=11, width=5.0)
-    S_die = up(r_die.shade(1.0, light=(-0.7, -0.45)))
-    S_lay = up(r_lay.shade(0.8, light=(-0.7, -0.45)))
-    H_die = up(r_die.heat(1.0))
-    ch_lay = up(r_lay.channel)
-    arc_lay = up(r_lay.arclen)
+    d = polyline_distance(lay + routes, W, H)
+    return np.clip((width + extra - d) / 1.5 + 0.5, 0, 1).astype(np.float32), d, lay, routes
+
+
+# ── mask: the trace becomes a photomask; UV through glass ─────────────────
+
+MASK_LEN = 30
+
+
+def mask(need, seed=13):
+    """Chrome on glass, held over a resist-coated copper board. A UV lamp
+    floods through: only the layout passes. The die's organic form is gone —
+    snapped to a grid — and this is the first frame where it is *a design*.
+    Light leaking through the lines diffracts: thin prismatic fringes."""
+    m, d, _, _ = _layout_mask(4.0)
+    glass = 0.85 + 0.15 * up(fbm(W // 4, H // 4, seed, 4, 3))
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    for k in sorted(need):
+        on = smoothstep(4, 9, k)
+        # The lamp: flicker on, then steady; violet; the mask edge misregisters.
+        flick = (1 if k >= 9 else (0.2 + 0.8 * (k % 2))) * on
+        transmit = blur(m, 1.2) * glass
+        fringe = np.exp(-((d - 4.0) / 1.2) ** 2) * (d > 3)
+        resist = 0.05 * up(fbm(W // 4, H // 4, seed + 1, 4, 6)) + 0.08
+        hdr = tint(np.full((H, W), resist * 0.15, np.float32), UV_RESIST) \
+            + tint(transmit * 2.6 * flick, UV_LAMP) + tint(blur(transmit, 14) * 0.9 * flick, UV_LAMP)
+        # Prismatic fault at the line edges: R and B spread differently.
+        hdr[..., 0] += O.shift(fringe, 1.5, 0) * 0.5 * flick
+        hdr[..., 2] += O.shift(fringe, -1.5, 0) * 0.8 * flick
+        # Chrome catches a little room light where no UV passes.
+        hdr += tint((1 - m) * 0.012 * (0.5 + 0.5 * (xx / W)), STEEL)
+        yield k, develop(hdr, exposure=1.3, frame=k, seed=seed, grain=0.06, bloom_k=0.55, ca=2.5, vignette=0.55)
+
+
+UV_LAMP = np.array([0.50, 0.18, 1.00], np.float32)
+UV_RESIST = np.array([0.55, 0.25, 0.65], np.float32)
+
+
+# ── etch: copper dissolves everywhere the design isn't ────────────────────
+
+ETCH_LEN = 36
+
+
+def etch(need, seed=14):
+    """A copper board in ferric chloride. The etch front eats the bare copper
+    inward from the far field (where it is thinnest), slowed near the
+    protected traces; bubbles rise; the liquid's surface throws caustics.
+    What remains is the layout, standing in copper on fibreglass."""
+    m, d, _, _ = _layout_mask(4.0)
+    rng = np.random.default_rng(seed)
+    noise = up(fbm(W // 4, H // 4, seed + 2, 5, 5))
+    # Time at which each pixel's copper is gone: far from traces first.
+    t_gone = np.where(m > 0.5, 1e9, 30.0 - np.clip(d, 0, 400) / 400 * 26 + 3.0 * noise).astype(np.float32)
+    weave = up(0.5 + 0.5 * np.sin(np.linspace(0, 260, W, dtype=np.float32))[None, :]
+               * np.sin(np.linspace(0, 150, H, dtype=np.float32))[:, None], W, H)
+    cf = [up(fbm(W // 6, H // 6, seed + 7 + i, 4, 4)) for i in range(2)]
+    bub = rng.uniform([0, 0], [W, H], (500, 2)).astype(np.float32)
+    bsz = rng.uniform(2, 7, 500)
     for k in range(max(need) + 1):
+        bub[:, 1] -= 2.0 + bsz * 0.6
+        bub[:, 1] %= H
         if k not in need:
             continue
-        snap = smoothstep(8, 18, k)          # lithography: organic → grid
-        grow = smoothstep(14, 36, k)         # routes reach out
-        s = ((k * 0.045) % 1.2)
-        C_die = up(r_die.current(s, 0.05, 0.25))
-        C_lay = up(r_lay.current((k - 14) * 0.03, 0.04, 0.3)) * (k > 14)
-        reveal = (arc_lay <= grow + 0.02).astype(np.float32)
-        base = tint(((1 - snap) * S_die + snap * S_lay) * 0.06, STEEL * 0.6 + COPPER * 0.4)
-        hdr = base + tint(H_die * 0.5 * math.exp(-k / 20) * (1 - snap), FURNACE) \
-            + tint(C_die * 3.0 * (1 - snap), WHITEHOT) + tint(blur(C_die, 12) * 2 * (1 - snap), COPPER) \
-            + tint(ch_lay ** 2 * reveal * snap * 0.35, COPPER) \
-            + tint(C_lay * reveal * 3.0, WHITEHOT) + tint(blur(C_lay * reveal, 10) * 1.5, COPPER)
-        yield k, develop(hdr, exposure=1.5, frame=k, seed=seed, grain=0.06, bloom_k=0.5)
+        cu = np.clip((t_gone - k) / 2.0, 0, 1)          # 1 = copper still there
+        front = np.exp(-((t_gone - k) / 1.5) ** 2) * (m < 0.5)
+        gy, gx = np.gradient(blur(cu, 2) * 6)
+        spec = np.clip(-0.6 * gx - 0.4 * gy + 0.3, 0, None) ** 6
+        sub = 0.025 * (0.9 + 0.1 * weave)                 # fibreglass, amber-translucent
+        ph = cf[0] * math.cos(k * 0.15) + cf[1] * math.sin(k * 0.15)
+        caust = np.clip(1 - np.abs(ph) * 5, 0, 1) ** 6 * 0.05   # ridges of a moving surface
+        b = np.zeros((H, W), np.float32)
+        for (x, y), r in zip(bub, bsz):
+            cv2.circle(b, (int(x), int(y)), int(r), 1.0, 1, cv2.LINE_AA)
+        hdr = tint(cu * (0.06 + 1.2 * spec), COPPER * 0.8 + AMBER * 0.2) + tint((1 - cu) * sub, AMBER * 0.7 + BONE * 0.3) \
+            + tint(front * 0.35, FURNACE) + tint(caust + b * 0.18, ETCHANT)
+        hdr *= ETCHANT_TINT
+        yield k, develop(hdr, exposure=1.5, frame=k, seed=seed, grain=0.06, bloom_k=0.4, vignette=0.55)
+
+
+ETCHANT = np.array([0.9, 0.55, 0.25], np.float32)
+ETCHANT_TINT = np.array([1.0, 0.82, 0.62], np.float32)  # through ferric chloride
+
+
+# ── board: the layout as a circuit, under solder mask; current runs out ───
+
+CONDUCT_LEN = 44
+
+
+def conduct(need, seed=12):
+    lay, routes = _layout_screen()
+    r_lay = Relief([p / 2 for p in lay + routes], 960, 540, seed=11, width=4.0)
+    ch = np.clip(up(r_lay.channel), 0, 1)
+    arc = up(r_lay.arclen)
+    pads = np.zeros((H, W), np.float32)
+    for p in lay:
+        for e in (p[0], p[-1]):
+            cv2.circle(pads, (int(e[0]), int(e[1])), 11, 1.0, -1, cv2.LINE_AA)
+    pads = blur(pads, 1.0)
+    weave = up(0.5 + 0.5 * np.sin(np.linspace(0, 300, W, dtype=np.float32))[None, :]
+               * np.sin(np.linspace(0, 170, H, dtype=np.float32))[:, None], W, H)
+    gy, gx = np.gradient(blur(ch, 2.0) * 3)
+    gloss = np.clip(-0.6 * gx - 0.5 * gy + 0.2, 0, None) ** 8
+    xx = np.arange(W, dtype=np.float32)[None, :]
+    for k in sorted(need):
+        coat = smoothstep(0, 8, k)                         # the mask flows on
+        grow = smoothstep(6, 30, k)
+        reveal = (arc <= grow + 0.02).astype(np.float32)
+        Cur = up(r_lay.current((k - 6) * 0.032, 0.035, 0.3)) * (k > 6) * reveal
+        rake = np.clip(1.1 - xx / W * 0.8, 0.2, 1.1)
+        board = O.SOLDER * (0.10 + 0.04 * weave)[..., None] * rake[..., None]
+        trace = (O.SOLDER * 0.6 + COPPER * 0.5) * (ch ** 1.5 * 0.35)[..., None]
+        hdr = board * coat + trace * (0.3 + 0.7 * coat) + tint(gloss * 0.25 * coat, BONE) \
+            + tint(pads * 0.35, np.array([0.85, 0.8, 0.7], np.float32)) \
+            + tint(Cur * 3.0, WHITEHOT) + tint(blur(Cur, 10) * 1.6, AMBER)
+        hdr = hdr + tint(ch * (1 - coat) * 0.3, COPPER)
+        yield k, develop(hdr, exposure=1.5, frame=k, seed=seed, grain=0.06, bloom_k=0.5, vignette=0.55)
 
 
 # ── thread: the conductor is a fibre ──────────────────────────────────────

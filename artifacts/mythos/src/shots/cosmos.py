@@ -161,6 +161,13 @@ def disk(need, seed=1):
                          star=0.025 if k < 30 or k >= 50 else 0.0, vignette=0.5)
 
 
+def _save_anchor(name, data):
+    import json
+    import world as Wd
+    Wd.STATE.mkdir(parents=True, exist_ok=True)
+    (Wd.STATE / f"anchor_{name}.json").write_text(json.dumps(data))
+
+
 # ── corona: arches under tension, reconnection ────────────────────────────
 
 CORONA_LEN = 88
@@ -214,6 +221,12 @@ def corona(need, seed=2, channel="halpha"):
             scale = (limb_y - P_ARCH[1]) / hgt
             center = (P_ARCH[0] - scale * apex[0], limb_y - scale * foot)
             c.heat[hero] = max(c.heat[hero], np.percentile(c.heat, 97))
+            # Record where the hero arch stands on screen: recognition events
+            # align a carved ``n`` to exactly this arch.
+            m = mask[hero]
+            P0 = xy0[hero][m] * scale + np.array(center)
+            _save_anchor("corona_arch", {"apex": [float(P_ARCH[0]), float(P_ARCH[1])],
+                                         "feet": [P0[0].tolist(), P0[-1].tolist()], "limb": limb_y})
         if k not in need:
             continue
         xy, depth = camera(lines, pitch=pitch, scale=scale, center=center)
@@ -306,3 +319,145 @@ def crystal(need, seed=4):
         hdr = tint(shade * 0.05 * (0.4 + vein_full) + blur(sparkle, 0.8) * 3 * tw, STEEL * 0.5 + COPPER * 0.5) \
             + tint(glint * 0.8, WHITEHOT * 0.6 + STEEL * 0.4) + tint(blur(I, 30) * 0.4, AMBER)
         yield k, develop(hdr, exposure=1.5, frame=k, seed=seed, grain=0.08, bloom_k=0.45, vignette=0.55)
+
+
+# ── sun: observed, not simulated — a scale revelation ─────────────────────
+
+SUN_LEN = 64
+SUN_HOLD = (14, 34)  # pull-out window
+
+
+def _slot(k, seed):
+    """Where a missing source belongs: dark, one registration cross."""
+    img = np.zeros((H, W, 3), np.float32)
+    cv2.line(img, (W // 2 - 30, H // 2), (W // 2 + 30, H // 2), (0.4, 0.4, 0.4), 1)
+    cv2.line(img, (W // 2, H // 2 - 30), (W // 2, H // 2 + 30), (0.4, 0.4, 0.4), 1)
+    return develop(img, exposure=1.0, frame=k, seed=seed, grain=0.08, bloom_k=0)
+
+
+CHANNELS = {
+    # EUI 17.4 nm sits where AIA 17.1 does; its conventional rendering is gold.
+    "gold": (np.array([1.0, 0.62, 0.18], np.float32), 1.0),
+    "halpha": (np.array([1.0, 0.035, 0.03], np.float32), 0.75),
+    "uv": (np.array([0.55, 0.12, 1.0], np.float32), 0.8),
+    "cyan": (np.array([0.35, 0.85, 1.0], np.float32), 1.0),
+}
+
+
+def sun(need, seed=51, channel="gold", path="reveal"):
+    """``path='reveal'``: inside an active region's loops, held; then the
+    camera falls back until the loops are a speck on the limb of a star.
+    ``path='loops'``: the held close crop only (for inserts in other channels)."""
+    import sources as SRCS
+    a = SRCS.load("eui174")
+    if a is None:
+        for k in sorted(need):
+            yield k, _slot(k, seed)
+        return
+    v = SRCS.normalise(a, lo=2, hi=99.95, gamma=0.8)
+    v = np.clip((v - 0.08) / 0.92, 0, 1)      # crush the JPEG2000 floor to black
+    lx, ly = SRCS.EUI_LOOPS
+    dx_, dy_, dr = SRCS.EUI_DISK
+    col, gain = CHANNELS[channel]
+    shimmer = [fbm(W // 8, H // 8, seed + i, 3, 3) for i in range(2)]
+    for k in sorted(need):
+        if path == "loops":
+            t = 0.0
+        else:
+            t = float(smoothstep(SUN_HOLD[0], SUN_HOLD[1], k)) ** 1.6
+        # Log-zoom: scale screen px per source px from 2.4 to 0.5.
+        s = math.exp(math.log(2.4) * (1 - t) + math.log(0.52) * t)
+        cx = lx * (1 - t) + dx_ * t + 6 * math.sin(k * 0.13)
+        cy = ly * (1 - t) + dy_ * t + 4 * math.cos(k * 0.11)
+        M = np.float32([[s, 0, W / 2 - s * cx], [0, s, H / 2 - s * cy]])
+        img = cv2.warpAffine(v, M, (W, H), flags=cv2.INTER_CUBIC, borderValue=0.0)
+        # The corona is alive even in a still: a slow intensity boil.
+        boil = up(shimmer[0] * math.cos(k * 0.21) + shimmer[1] * math.sin(k * 0.17))
+        img = np.clip(img * (1 + 0.06 * boil), 0, 1)
+        glow = col * 0.6 + AMBER * 0.4 if channel == "gold" else col
+        hdr = tint(img ** 2.4 * 2.0 * gain, col) + tint(blur(img, 20) ** 2 * 0.25, glow)
+        ex = 1.1 * (1 + 1.5 * math.exp(-k / 2.5)) if path == "reveal" else 1.2
+        yield k, develop(hdr, exposure=ex, frame=k, seed=seed, grain=0.07, bloom_k=0.55,
+                         star=0.01 * t, vignette=0.5)
+
+
+# ── belt: dust in a beam turns out to be a ring around a world ────────────
+
+BELT_LEN = 60
+BELT_PULL = (14, 34)
+
+
+def _belt_cam(k):
+    t = float(smoothstep(BELT_PULL[0], BELT_PULL[1], k)) ** 1.4
+    drift = 0.002 * k
+    # Inside the ring plane, a hair above it, looking along the ring...
+    near_c = np.array([1.95 + drift, -0.15, 0.010])
+    near_t = np.array([3.0, 1.25, -0.02])
+    # ...to far away and above, the planet's limb cut by the frame edge.
+    far_c = np.array([2.7, -3.1, 0.62])
+    far_t = np.array([0.15, 0.9, 0.05])
+    # Log-interpolate the distance so the pull-back accelerates like a zoom.
+    u = (math.exp(2.2 * t) - 1) / (math.exp(2.2) - 1)
+    c = near_c * (1 - u) + far_c * u
+    tg = near_t * (1 - u) + far_t * u
+    return c, tg, t
+
+
+def belt(need, seed=61):
+    from lab.rings import Rings, look, planet, project
+    rg = Rings(seed=seed)
+    focal = 1300.0
+    for k in sorted(need):
+        cam, tg, t = _belt_cam(k)
+        R = look(cam, tg)
+        P = rg.positions(40.0 + 0.04 * k)
+        xy, d, ok = project(P, cam, R, focal, W, H)
+        lit = rg.lit(P)
+        I_p, depth_p, hit, limb = planet(cam, R, focal, W, H, rg.sun, rg, seed=seed)
+        # Particles behind the planet are hidden.
+        xi = np.clip(xy[:, 0].astype(int), 0, W - 1)
+        yi = np.clip(xy[:, 1].astype(int), 0, H - 1)
+        ok &= d < depth_p[yi, xi]
+        ok &= (xy[:, 0] > -50) & (xy[:, 0] < W + 50) & (xy[:, 1] > -50) & (xy[:, 1] < H + 50)
+        # Constant surface brightness: per-particle light falls as 1/d², the
+        # number of particles per pixel rises as d².
+        lum = rg.albedo * lit * 3.2 / np.maximum(d, 0.07) ** 2 * (0.35 + 0.65 * t)
+        # Depth of field: the nearest dust is enormous and soft.
+        hdr_p = np.zeros((H, W), np.float32)
+        layers = [(0, 0.08, 9.0), (0.08, 0.3, 3.5), (0.3, 1.2, 1.2), (1.2, 99, 0.7)]
+        for lo, hi, bl in layers:
+            sel = ok & (d >= lo) & (d < hi)
+            if sel.any():
+                hdr_p += blur(splat(xy[sel], lum[sel] * (1 + 4 * (hi < 0.1))), bl)
+        hdr_p *= 1 + 0.0 * t
+        sky = 0.0
+        hdr = tint(hdr_p * (0.8 + 1.4 * t), BONE * 0.55 + AMBER * 0.45) \
+            + tint(I_p * 0.45 + limb * 0.2 * hit, AMBER * 0.55 + COPPER * 0.45) + sky
+        yield k, develop(hdr, exposure=1.4, frame=k, seed=seed, grain=0.07, bloom_k=0.5, vignette=0.5)
+
+
+# ── raw: the instrument's own frame, before anyone made it beautiful ──────
+
+
+def raw(need, seed=71, which="aia171_raw"):
+    """A real 128×128 detector frame shown at its own resolution: nearest-
+    neighbour pixels, a hard linear stretch, a grey ramp. Almost ugly, on
+    purpose — between pristine images it says *this was measured*."""
+    import sources as SRCS
+    a = SRCS.load(which)
+    for k in sorted(need):
+        if a is None:
+            yield k, _slot(k, seed)
+            continue
+        v = SRCS.normalise(a, lo=1, hi=99.5, gamma=0.7)
+        # A sub-crop, so each frame is a different patch of the detector.
+        rng = np.random.default_rng(seed + k)
+        y0, x0 = rng.integers(10, 50, 2)
+        crop = v[y0:y0 + 72, x0:x0 + 128]
+        img = cv2.resize(crop, (W, int(W * crop.shape[0] / crop.shape[1])), interpolation=cv2.INTER_NEAREST)
+        out = np.zeros((H, W), np.float32)
+        hh = min(H, img.shape[0])
+        out[:hh] = img[:hh]
+        rgb = np.stack([out] * 3, -1) * np.array([0.92, 0.95, 1.0], np.float32)
+        out8 = (np.clip(rgb, 0, 1) ** (1 / 1.8) * 255).astype(np.uint8)
+        yield k, out8
