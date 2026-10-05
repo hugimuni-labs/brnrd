@@ -113,7 +113,7 @@ def build_edl():
     run("disk", 52, 64)
     # II. Debris and belts: inside the ring plane it is dust again — then a world.
     run("belt", 0, 30)
-    guess("belt", 30, ["o", "c", "O"], ("observe", "cavity"), alpha=0.28)
+    guess("belt", 30, ["o", "c", "O"], ("planet",), alpha=0.3)
     run("belt", 33, SC.BELT_LEN)
     # III. Plasma: an arch that the eye cannot stop reading.
     run("corona", 0, 14)
@@ -145,7 +145,7 @@ def build_edl():
     run("plate", 2, 22)
     guess("plate", 22, ["Y", "ᚠ", "r"], ("fork",), alpha=0.35)
     run("plate", 25, Wd.STRIKE_RS + 2)
-    see("plate", Wd.STRIKE_RS + 2, "r", ("fork",), "type", n=3)
+    see("plate", Wd.STRIKE_RS + 2, "r", ("fork",), "ink", n=3)
     run("plate", Wd.STRIKE_RS + 5, 54)
     run("plate", 54, 92)                       # the stare
     run("plate", 92, 128)                      # shaken into near-forms
@@ -354,7 +354,18 @@ def _anchor(rec, e, img):
             sv = pts[3] - c
             mirror = (v[0] * sv[1] - v[1] * sv[0]) < 0
         h = float(np.hypot(*v)) * 0.95
-        return (float(c[0]), float(c[1]) + 0.1 * h, max(h, 260.0), rot, mirror)
+        if rec["mode"] == "replace":
+            # A made object is upright-ish and big: the hand straightens what
+            # the eye saw, but keeps where it was and which way it leaned.
+            return (float(c[0]), float(c[1]), max(h, 620.0), float(np.clip(rot, -14, 14)), mirror)
+        return (float(c[0]), float(c[1]) + 0.1 * h, max(h, 420.0), rot, mirror)
+    if kind == "planet":
+        # The darkest cavity in the frame is the world itself, in silhouette.
+        from lab.rings import look, project
+        cam, tg, _ = SC._belt_cam(k)
+        R = look(cam, tg)
+        xy, d, _ = project(np.zeros((1, 3)), cam, R, 1300.0, W, H)
+        return (float(xy[0, 0]), float(xy[0, 1]), 2.15 * 1300.0 / float(d[0]), 0.0, False)
     if kind == "found":
         x, y = _found_screen(k)
         return (x, y, 300.0, 0.0, False)
