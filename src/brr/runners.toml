@@ -35,6 +35,15 @@ owner = "user"
 class = "economy"
 cost_rank = 18
 
+[profiles.grok]
+cmd = "brnrd runners _grok"
+binary = "grok"
+hooks = "grok"
+provider = "xai"
+owner = "user"
+class = "balanced"
+cost_rank = 32
+
 [aliases]
 codex-mini = "codex-gpt-5.6-luna"
 codex-terra = "codex-gpt-5.6-terra"

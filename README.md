@@ -6,7 +6,7 @@
 <p align="center"><strong>Local agents go brr. From anywhere.</strong></p>
 
 <p align="center">
-  <strong>Keep your Claude Code or Codex agent running 24/7 on a machine you leave on</strong> — the Mac on your desk, a Mac mini, a home server, <a href="https://hugimuni-labs.github.io/brnrd/guides/vps-install/">a small VPS</a>.<br>
+  <strong>Keep your Claude Code, Codex, or Grok agent running 24/7 on a machine you leave on</strong> — the Mac on your desk, a Mac mini, a home server, <a href="https://hugimuni-labs.github.io/brnrd/guides/vps-install/">a small VPS</a>.<br>
   brnrd is the daemon: it keeps the agent alive across reboots, lets you drive it from Telegram, Slack or WhatsApp, remembers everything as files in git, and moves work between your Claude and Codex subscriptions when one hits its window. No API key. It leaves receipts — commits, PRs, a card you can read.
 </p>
 
@@ -53,7 +53,7 @@ work. The vendors are the medium; the resident is the thing that persists.
 | 📟 | **A remote door** | Fire off a task from Telegram, Slack, GitHub, or the dashboard. The agent runs at home; you drive from your pocket. |
 | 🧠 | **A resident, not a reset** | Each repo gets a coworker with working memory, project knowledge, and a playbook. A new run is the same mind's next thought — not an amnesiac subprocess wearing yesterday's name tag. |
 | 💬 | **Interrupt-free interaction** | Follow the live plan and progress card. Add a fact or change direction at runner boundaries, without killing the thought in flight. |
-| 🔀 | **The model is a medium** | Pin Claude or Codex. Escalate a core for a hard pass, downshift for grunt work, and see quota posture before it becomes a surprise. |
+| 🔀 | **The model is a medium** | Pin Claude, Codex, or Grok. Escalate a core for a hard pass, downshift for grunt work, and see quota posture before it becomes a surprise. |
 | 🏠 | **Local means local** | Your checkout, `.git`, and run execution stay on your machine. The one caveat — what the managed dashboard mirrors — is spelled out under [Trust & privacy](#-trust--privacy). |
 | 🧾 | **Git-native receipts** | Every run ends somewhere durable: a branch, a PR, or an answer in the thread. The diff is the proof. |
 | 📁 | **The seams are files** | Gates and live controls speak a small file protocol. A new transport is not a new religion for the daemon. |
@@ -67,11 +67,11 @@ Telegram · WhatsApp · Signal · Slack · GitHub · web
                ▼
   brnrd daemon · your machine
                │
-          ┌────┴────┐
-          ▼         ▼
-     Claude Code  Codex
-          │         │
-          └────┬────┘
+      ┌────────┼────────┐
+      ▼        ▼        ▼
+   Claude    Codex    Grok
+      │        │        │
+      └────────┼────────┘
                ▼
    progress · replies · git
 ```

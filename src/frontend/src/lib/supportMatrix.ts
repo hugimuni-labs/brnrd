@@ -25,6 +25,7 @@ export interface DoorMeta {
 		| 'claude'
 		| 'codex-mono'
 		| 'vibe-mono'
+		| 'grok-mono'
 		| 'telegram'
 		| 'slack-mono'
 		| 'github'
@@ -36,7 +37,8 @@ export interface DoorMeta {
 export const SHELLS: DoorMeta[] = [
 	{ slug: 'claude', label: 'Claude Code', icon: 'claude' },
 	{ slug: 'codex', label: 'Codex', icon: 'codex-mono' },
-	{ slug: 'vibe', label: 'Mistral Vibe', icon: 'vibe-mono' }
+	{ slug: 'vibe', label: 'Mistral Vibe', icon: 'vibe-mono' },
+	{ slug: 'grok', label: 'Grok Build', icon: 'grok-mono' }
 ];
 
 // Slugs must match `brr.support_matrix.DOORS`. Status still comes from the

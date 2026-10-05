@@ -24,7 +24,7 @@ remove it.
 ## What you operate
 
 - the host and its network exposure;
-- the Claude Code or Codex login;
+- the Claude Code, Codex, or Grok login;
 - gate credentials and authorization choices;
 - repository and resident-state backups;
 - updates to this alpha software.

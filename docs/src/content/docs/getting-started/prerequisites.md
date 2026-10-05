@@ -44,6 +44,7 @@ you do not need a separate brnrd model key.
 
 - **Claude Code:** install it using [Anthropic's setup guide](https://docs.anthropic.com/en/docs/claude-code/getting-started), then sign in with a Claude Pro or Max subscription.
 - **Codex CLI:** install it using [OpenAI's CLI guide](https://developers.openai.com/codex/cli/), then sign in with ChatGPT. [ChatGPT Plus](https://chatgpt.com/pricing/)—the US $20/month plan—is enough to start; availability and limits vary by plan and region.
+- **Grok Build:** install it with `curl -fsSL https://x.ai/cli/install.sh | bash`, then sign in with Grok or set `XAI_API_KEY`.
 
 ## 4. The install runtime
 

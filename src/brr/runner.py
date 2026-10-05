@@ -1417,6 +1417,13 @@ class ShellHelp:
 #: selection, and the product's first-impression surface must not recommend
 #: installing an integration the catalog no longer treats as first-class.
 SHELL_HELP: dict[str, ShellHelp] = {
+    "grok": ShellHelp(
+        shell="grok",
+        label="Grok Build",
+        blurb="xAI's terminal agent; uses a Grok subscription or an API key.",
+        docs_url="https://x.ai/cli",
+        install_hint="curl -fsSL https://x.ai/cli/install.sh | bash",
+    ),
     "vibe": ShellHelp(
         shell="vibe",
         label="Mistral Vibe",
@@ -2130,7 +2137,8 @@ def resolve_runner_profile(
         return chosen
 
     raise RuntimeError(
-        "No AI runner found. Install claude or codex, "
+        "No AI runner found. Install a Shell "
+        "(`brnrd runners doctor` names the ones brnrd can launch), "
         "or set runner.default in daemon.config."
     )
 
@@ -2318,7 +2326,9 @@ def _prompt_stdin(
     stdin costs nothing (unlike spilling to a file, which buys a Read turn every
     wake and taxes exactly the "perception is free" property the boot exists to
     protect).  Verified on both live Shells: ``claude --print`` reads a piped prompt,
-    and codex announces ``Reading prompt from stdin...``.
+    and codex announces ``Reading prompt from stdin...``.  Grok does not: its
+    profile command is the ``_grok`` adapter, which spills stdin to
+    ``--prompt-file`` before exec.
 
     **The muted-fd invariant is preserved, not broken.**  ``stdin=DEVNULL`` was
     pinned so codex's stdin path sees an immediate EOF instead of hanging on an

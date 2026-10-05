@@ -6903,10 +6903,14 @@ def compute_neutral(
 # once after a batch of (possibly parallel) tool calls completes — the right
 # seam (it sees every tool result before the next model call) and cheaper than
 # per-tool ``PostToolUse``. Codex exposes ``PostToolUse`` only (no
-# ``PostToolBatch`` in codex-cli 0.141.0). Both inject via
-# ``hookSpecificOutput.additionalContext`` — fire-verified 2026-06-27 on Claude
-# Code 2.1.191 (haiku) and codex-cli 0.141.0 (gpt-5.4-mini).
-_POST_TOOL_EVENT = {"claude": "PostToolBatch", "codex": "PostToolUse"}
+# ``PostToolBatch`` in codex-cli 0.141.0). Grok skips event names it does not
+# know, and ``PostToolBatch`` is one of those, so its seam is ``PostToolUse``.
+# All three inject via ``hookSpecificOutput.additionalContext``.
+_POST_TOOL_EVENT = {
+    "claude": "PostToolBatch",
+    "codex": "PostToolUse",
+    "grok": "PostToolUse",
+}
 
 
 def native_event_name(flavour: str | None, phase: str) -> str:
@@ -6936,7 +6940,7 @@ def render_native(
 
     if flavour == "vibe":
         return _render_vibe(phase, inject, block, reason), 0
-    if flavour in ("claude", "codex"):
+    if flavour in ("claude", "codex", "grok"):
         event_name = native_event_name(flavour, phase)
         out: dict[str, Any] = {}
         if phase == PHASE_PRE_TOOL:
@@ -6951,13 +6955,13 @@ def render_native(
             # an unarmed codex ``pre-tool`` fire (should one ever happen)
             # falls through to the unblocked ``{}`` a no-op ``block=False``
             # already produces.
-            if flavour == "claude" and block:
+            if flavour in ("claude", "grok") and block:
                 out["hookSpecificOutput"] = {
                     "hookEventName": event_name,
                     "permissionDecision": "deny",
                     "permissionDecisionReason": reason or "refused (#1184)",
                 }
-            elif flavour == "claude" and isinstance(neutral.get("updated_input"), dict):
+            elif flavour in ("claude", "grok") and isinstance(neutral.get("updated_input"), dict):
                 # Move 2c: a rewrite, not a decision — no
                 # ``permissionDecision``, so the call still passes through
                 # whatever permission rules the run has.
@@ -6972,7 +6976,7 @@ def render_native(
         # turn, verified); Codex uses the documented ``continue: false`` /
         # ``stopReason`` shape.
         if block:
-            if flavour == "claude":
+            if flavour in ("claude", "grok"):
                 out["decision"] = "block"
                 if reason:
                     out["reason"] = reason
@@ -7077,7 +7081,7 @@ def vibe_hook_capability(*, brr_bin: str = "brnrd") -> bool:
     return shutil.which(brr_bin) is not None
 
 
-_FILE_CONFIG_FLAVOURS = {"claude"}
+_FILE_CONFIG_FLAVOURS = {"claude", "grok"}
 
 
 def hook_config_supported(flavour: str | None) -> bool:
@@ -7094,7 +7098,9 @@ def hook_command(phase: str, brr_bin: str = "brnrd") -> str:
     return f"{brr_bin} hook {phase}"
 
 
-def _claude_hook_settings(brr_bin: str) -> dict[str, Any]:
+def _claude_hook_settings(
+    brr_bin: str, *, post_tool_event: str | None = None,
+) -> dict[str, Any]:
     def _entry(phase: str) -> dict[str, Any]:
         return {"hooks": [{"type": "command", "command": hook_command(phase, brr_bin)}]}
 
@@ -7111,7 +7117,9 @@ def _claude_hook_settings(brr_bin: str) -> dict[str, Any]:
     # from the result JSON instead.
     return {
         "hooks": {
-            native_event_name("claude", PHASE_POST_TOOL): [_entry(PHASE_POST_TOOL)],
+            (post_tool_event or native_event_name("claude", PHASE_POST_TOOL)): [
+                _entry(PHASE_POST_TOOL)
+            ],
             "Stop": [_entry(PHASE_STOP)],
             "SessionStart": [_entry(PHASE_SESSION_START)],
             # #1184: the rooted-write guard, matcher-scoped unlike the three
@@ -7190,19 +7198,24 @@ def install_hook_config(
 ) -> Path | None:
     """Write *flavour*'s native per-run hook config into *cwd*.
 
-    For claude this is ``<cwd>/.claude/settings.local.json`` — the local
+    For claude and grok this is ``<cwd>/.claude/settings.local.json`` — the local
     project overlay that layers on top of any committed ``settings.json``
     and is conventionally gitignored, so brr's generated hooks coexist with
     user settings rather than clobbering them. Merges into an existing local
     overlay (user keys win except for the ``hooks`` block brr owns). Returns
     the written path, or None when the flavour is unsupported.
     """
-    if flavour != "claude":
+    if flavour == "claude":
+        generated = _claude_hook_settings(brr_bin)
+    elif flavour == "grok":
+        # Same Claude project overlay Grok already loads. The post-tool event
+        # differs: Grok skips ``PostToolBatch``.
+        generated = _claude_hook_settings(brr_bin, post_tool_event="PostToolUse")
+    else:
         return None
     settings_dir = cwd / ".claude"
     settings_path = settings_dir / "settings.local.json"
     existing: dict[str, Any] = _read_json(settings_path)
-    generated = _claude_hook_settings(brr_bin)
     # brr's generated keys are *defaults*; user keys in the local overlay layer
     # on top and win — except the ``hooks`` block, which brr owns and force-
     # merges. So a user's own footer or local settings are preserved while
@@ -7507,6 +7520,43 @@ _VIBE_TOOL_ALIASES = {
     "edit": "Edit",
     "search_replace": "Edit",
 }
+
+
+# Grok's pre-tool payload uses camelCase (``toolName`` / ``toolInput``) and
+# its own tool ids. The matcher aliases (``Edit``/``Write`` → ``search_replace``,
+# ``Bash`` → ``run_terminal_command``) decide which hook fires; the payload
+# still carries the real id. ``run_terminal_cmd`` is the headless-guide
+# spelling of the same shell tool. The await-lease rewrite stays claude-only
+# (``_await_lease_input``), so aliasing the shell tool to ``Bash`` does not
+# retarget Grok's timeout field.
+_GROK_TOOL_ALIASES = {
+    "search_replace": "Edit",
+    "write": "Write",
+    "run_terminal_command": "Bash",
+    "run_terminal_cmd": "Bash",
+}
+
+
+def _grok_as_claude_tool(payload: dict[str, Any]) -> dict[str, Any]:
+    """A Grok ``PreToolUse`` payload renamed onto the predicates' vocabulary."""
+    out = dict(payload)
+    if "tool_name" not in out and isinstance(out.get("toolName"), str):
+        out["tool_name"] = out["toolName"]
+    if "tool_input" not in out and isinstance(out.get("toolInput"), dict):
+        out["tool_input"] = out["toolInput"]
+    name = out.get("tool_name")
+    alias = _GROK_TOOL_ALIASES.get(name) if isinstance(name, str) else None
+    if alias is not None:
+        out["tool_name"] = alias
+        out["grok_tool_name"] = name
+    tool_input = out.get("tool_input")
+    if (
+        isinstance(tool_input, dict)
+        and "file_path" not in tool_input
+        and isinstance(tool_input.get("path"), str)
+    ):
+        out["tool_input"] = dict(tool_input, file_path=tool_input["path"])
+    return out
 
 
 def _vibe_as_claude_tool(payload: dict[str, Any]) -> dict[str, Any]:
@@ -7819,6 +7869,8 @@ def run_hook(
     payload = _safe_json(stdin_text)
     if phase == PHASE_PRE_TOOL and ctx.flavour == "vibe":
         payload = _vibe_as_claude_tool(payload)
+    elif phase == PHASE_PRE_TOOL and ctx.flavour == "grok":
+        payload = _grok_as_claude_tool(payload)
     if phase == PHASE_PRE_TOOL:
         # #1184: a filesystem-safety predicate, not a correspondence one —
         # unlike every other phase it never touches the portal or hook state,

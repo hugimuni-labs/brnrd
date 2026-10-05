@@ -5,7 +5,7 @@ description: Pin, select, escalate, and downshift local Shell and Core profiles.
 
 brnrd separates the CLI process from the model it runs:
 
-- **Shell**: the CLI on `PATH` — `claude`, `codex`, or `vibe`.
+- **Shell**: the CLI on `PATH` — `claude`, `codex`, `vibe`, or `grok`.
 - **Core**: the model and its cost, capability, and quota metadata.
 
 Together they form the Runner for one wake. The resident remains the same when
@@ -54,7 +54,7 @@ Each `[profiles.<name>]` table may contain:
 - `cmd`: the headless command. The assembled prompt is piped on stdin unless
   `{prompt}` appears as its own argument.
 - `binary`: the executable to probe when the profile name is an alias.
-- `hooks`: the runner-specific Tier 2 hook adapter (`claude`, `codex`, or `vibe`).
+- `hooks`: the runner-specific Tier 2 hook adapter (`claude`, `codex`, `vibe`, or `grok`).
 - `provider`, `owner`, `class`, `cost_rank`, and `quota_source`: selection and
   quota metadata.
 - `model`: an optional pinned Core. The bundled Core registry also materializes
@@ -86,6 +86,26 @@ hooks in a temporary additional directory; `BRR_VIBE_HOOKS=0` disables them.
 Session resume, model attestation and monthly quota/spend collection remain
 unavailable. Unknown capacity does not imply unlimited usage; Mistral
 subscriptions include a monthly usage allowance.
+
+## Grok Build
+
+Install Grok with `curl -fsSL https://x.ai/cli/install.sh | bash` and sign in
+using Grok's own setup (or set `XAI_API_KEY`). Select `grok` as a runner
+profile, or dispatch a strand with `shell: grok`. The adapter writes the wake
+to a temp file and passes `--prompt-file`, because Grok does not read a piped
+prompt. The resident protonucleus is appended with `--rules`, leaving Grok's
+own tool instructions in place. A pinned core (`grok-4.7`, `grok-4.6`,
+`grok-4.5`, `grok-4.7-build-fast`) sets `-m` for that invocation only. The
+unpinned `grok` profile uses whatever model Grok itself would.
+
+Headless runs use `--permission-mode bypassPermissions` and `--trust`. Grok
+loads the per-run `.claude/settings.local.json` (it treats that file as
+Claude-compatible hooks) and skips event names it does not know, so the
+post-tool seam is `PostToolUse` rather than Claude's `PostToolBatch`. Pre-tool
+denies and stop blocks use Claude's hook JSON, which Grok accepts. Quota,
+spend, and session resume are not collected. Unknown capacity does not mean
+unlimited, and brnrd will not move a wake onto or off Grok because of a
+window it cannot see.
 
 ## Escalate and downshift
 

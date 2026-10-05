@@ -21,6 +21,8 @@
 		{'{ }'}
 	{:else if icon === 'vibe-mono'}
 		M
+	{:else if icon === 'grok-mono'}
+		g
 	{:else if icon === 'telegram'}
 		<svg role="img" viewBox="0 0 24 24" fill="currentColor"
 			><title>Telegram</title><path
