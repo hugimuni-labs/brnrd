@@ -144,7 +144,11 @@
 		? 'panel--collapsed'
 		: ''}"
 	aria-expanded={bodyOnScreen}
-	aria-label={docked ? 'go to the machine' : open ? 'fold the machine' : 'expand the machine'}
+	aria-label={docked
+		? "go to what's running"
+		: open
+			? "fold what's running"
+			: "expand what's running"}
 	onclick={onToggle}
 >
 	{#if face}
@@ -159,9 +163,7 @@
 	<span class="relative flex w-full flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[10px]">
 		<!-- `▸` is the rail's own docked marker, and it means the same thing in
 		     both places: there is more, and it is one tap away. -->
-		<span class="tracking-[0.13em] text-ink-quiet uppercase"
-			>{bodyOnScreen ? '▾' : '▸'} machine</span
-		>
+		<span class="tracking-[0.13em] text-ink-quiet uppercase">{bodyOnScreen ? '▾' : '▸'} now</span>
 		{#if headRun}
 			<span class="flex min-w-0 items-baseline gap-1.5 text-amber-200">
 				{#if face}<span aria-hidden="true" style={`color: ${face.color}`}>{face.glyph}</span>{/if}
@@ -218,7 +220,7 @@
 					>+{burning.length - 1}</span
 				>{/if}
 		{:else}
-			<span class="text-ink-quiet">parked</span>
+			<span class="text-ink-quiet">idle</span>
 		{/if}
 		<span class="ml-auto {error ? 'text-red-400' : 'text-ink-quiet'}">
 			{#if error}

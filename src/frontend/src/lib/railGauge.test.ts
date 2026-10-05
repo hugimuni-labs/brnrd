@@ -500,12 +500,12 @@ test('slotChip drops the ratio entirely once no ceiling is published — #1786 r
 	// report now, not occasionally. Rendering `2/? slots` forever would be a
 	// permanent unanswered question standing in for a reading — the real
 	// fact left is the plain count.
-	assert.equal(slotChip(2, null).label, '2 strands');
+	assert.equal(slotChip(2, null).label, '2 running');
 	assert.equal(slotChip(2, null).level, null);
 	assert.doesNotMatch(slotChip(2, null).title, /spawn\.max_concurrent/);
-	assert.equal(slotChip(2, 0).label, '2 strands');
-	assert.equal(slotChip(1, null).label, '1 strand', 'singular, not "1 strands"');
-	assert.equal(slotChip(0, null).label, '0 strands');
+	assert.equal(slotChip(2, 0).label, '2 running');
+	assert.equal(slotChip(1, null).label, '1 running');
+	assert.equal(slotChip(0, null).label, '0 running');
 });
 
 // THE PICKER YOU CANNOT REACH (2026-08-02) and `railIsSlim`, its fix, are

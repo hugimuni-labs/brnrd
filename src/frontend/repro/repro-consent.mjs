@@ -83,7 +83,7 @@ async function main() {
 		});
 
 		await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'networkidle' });
-		await page.waitForSelector('text=what has become', { timeout: 15000 });
+		await page.waitForSelector('text=What got made', { timeout: 15000 });
 		// The boot-glitch mascot animates for a couple seconds before the shell
 		// settles (layout.css's `.boot-glitch` sequence) — without this wait the
 		// screenshot below catches the wordmark flicker instead of the panel.

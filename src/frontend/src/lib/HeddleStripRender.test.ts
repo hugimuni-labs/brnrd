@@ -47,11 +47,16 @@ test('a live topic makes its existing heddle glow without changing the rune', as
 		/class="[^"]*heddle-weaving/.test(lit),
 		'the existing live-topic button carries the glow state'
 	);
-	ok(lit.includes('aria-label="weaving now"'), 'the existing button names the live state');
-	ok(lit.includes('text-shadow:'), 'the topic-colored rune receives a soft luminance');
-	ok(!lit.includes('↯'), 'the rune gains no bolt glyph');
+	ok(
+		lit.includes('aria-label="The loom, running now"'),
+		'the existing button names the live state'
+	);
+	ok(/>\s*The loom\s*</.test(lit), 'the topic is named, not drawn as a bare mark');
+	ok(lit.includes('text-shadow:'), 'a live topic receives a soft luminance');
+	ok(!lit.includes('↯'), 'the name gains no bolt glyph');
 	ok(!/class="[^"]*heddle-weaving/.test(unlit), 'an unclaimed topic does not glow');
-	ok(!unlit.includes('aria-label="weaving now"'), 'an unclaimed topic has no live-state name');
+	ok(unlit.includes('aria-label="The loom"'), 'an unclaimed topic is still named');
+	ok(!unlit.includes('running now'), 'an unclaimed topic has no live-state name');
 });
 
 // The strip's glow must not depend on the heddle being filtered in: a run can

@@ -121,8 +121,8 @@ test('a pressed provider row reports itself open; an unpressed one does not', as
 	// Exactly one row open — several would grow the page the way the gauge's
 	// own fixed height exists to stop.
 	equal((body.match(/aria-expanded="true"/g) ?? []).length, 1, 'one row open, never two');
-	ok(/claude — fold its windows and cores/u.test(body), 'the open row offers to fold');
-	ok(/codex — open its windows and cores/u.test(body), 'the closed row offers to open');
+	ok(/claude — fold its limits and models/u.test(body), 'the open row offers to fold');
+	ok(/codex — open its limits and models/u.test(body), 'the closed row offers to open');
 	ok(body.includes('▾'), 'the open row wears the open caret');
 	ok(body.includes('▸'), 'the closed row wears the closed one');
 });
@@ -214,7 +214,7 @@ test('a provider row reports the tap target the fuel design asks for', async () 
 		'one row per provider, not per meter'
 	);
 	ok(body.includes('>claude<'), 'the provider itself is the readable label');
-	ok(body.includes('>82%<'), "claude's binding reading is the row's one figure");
+	ok(body.includes('>82% left<'), "claude's binding reading is the row's one figure");
 	// ONE AXIS PER TRACK. Until 2026-08-28 every non-binding window drew a
 	// second, third, fourth semi-transparent fill on this same 12px track at
 	// a 3px vertical offset — so the headline number and the longest visible
@@ -258,7 +258,7 @@ test('the row reads the window that binds, not the one that happens to be weekly
 		}
 	];
 	const body = await renderGauge({ runners: null, shells });
-	ok(body.includes('>4%<'), 'the row shows the ceiling that stops a run first');
+	ok(body.includes('>4% left<'), 'the row shows the ceiling that stops a run first');
 	ok(body.includes('>5h</span>'), 'and names it, so the figure is never ambiguous');
 	ok(
 		/fuel-ledger-name[^>]*>week<\/span> <span[^>]*>82%</u.test(body),
@@ -276,7 +276,7 @@ test('Vibe dispatch remains reachable without a quota response or quota window',
 			runners: { profiles: [{ name: 'vibe-glm-5-3', shell: 'vibe', available: true }] },
 			shells
 		});
-		ok(html.includes('vibe — open its windows and cores'));
+		ok(html.includes('vibe — open its limits and models'));
 		ok(html.includes('vibe: no quota report'));
 		ok(!html.includes('fuel-fill'), 'unknown allowance must not become a zero-percent bar');
 	}

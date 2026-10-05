@@ -92,7 +92,7 @@ async function main() {
 			function sample(tag) {
 				const stack = document.querySelector('.z-40');
 				const machine = document.querySelector('.machine-dock');
-				const heddles = document.querySelector('[aria-label="the heddles · lens"]');
+				const heddles = document.querySelector('[aria-label="topics"]');
 				const rail = stack?.firstElementChild ?? null;
 				const reserve = stack?.nextElementSibling ?? null;
 				frames.push({

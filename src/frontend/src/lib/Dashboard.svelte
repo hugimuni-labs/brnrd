@@ -10,6 +10,7 @@
 	// second place for every future fix to be half-applied. `liveView` names
 	// how the live-runs slot behaves — see its own doc below.
 	import { onDestroy, onMount, untrack } from 'svelte';
+	import type { Snippet } from 'svelte';
 	import { resolve } from '$app/paths';
 	import AccountDeletion from '$lib/AccountDeletion.svelte';
 	import BillingPanel from '$lib/BillingPanel.svelte';
@@ -159,9 +160,13 @@
 		 */
 		liveView?: 'field' | 'map';
 		commandDeck?: boolean;
+		/** Home-only lead, rendered under the opening sentence. `/` uses it for
+		 *  the dated event banner so that banner is not the first thing on the
+		 *  page. `/daily` passes nothing. */
+		afterTitle?: Snippet;
 	}
 
-	let { liveView = 'field', commandDeck = false }: Props = $props();
+	let { liveView = 'field', commandDeck = false, afterTitle }: Props = $props();
 	let deckSection = $state<DeckSection>('overview');
 
 	// Slice 2 (kb/design-dashboard-live-surface.md): the window-track
@@ -1658,15 +1663,28 @@
 			     it implied a ghost predecessor. -->
 			<h1
 				class="mt-1 font-mono text-lg font-semibold tracking-tight text-amber-100"
-				use:typeReveal={{ text: 'resident dashboard', delay: 120 }}
+				use:typeReveal={{ text: 'Your work', delay: 120 }}
 			>
-				resident dashboard
+				Your work
 			</h1>
+			<p class="mt-2 max-w-xl text-sm leading-relaxed text-stone-300">
+				Your work with your AI. Start the next thing in a
+				<a
+					href={resolve('/repos')}
+					class="text-amber-200 underline decoration-amber-800/80 underline-offset-2 hover:text-amber-100"
+					>connected chat</a
+				>.
+			</p>
+			{@render afterTitle?.()}
 			<!-- "Is my merge live?" (#1734): the deployed build's short commit
 			     (linked to the forge) and its age, whenever the endpoint has
 			     something honest to say. No drift clause — see
-			     buildIdentity.ts's doc comment. -->
-			<BuildIdentity view={buildIdentityView(buildVersion, now)} />
+			     buildIdentity.ts's doc comment. It sits under the sentence on
+			     purpose: the page opens on the work, and the sha answers a
+			     maintainer question after that. -->
+			<div class="mt-2">
+				<BuildIdentity view={buildIdentityView(buildVersion, now)} />
+			</div>
 		</header>
 
 		<!-- The digest block is gone (2026-08-11, his ask: it was a redirect
@@ -1772,8 +1790,9 @@
 			{#if heddleDocked}
 				<div
 					class="-mx-6 flex flex-wrap items-baseline gap-x-2 gap-y-1 border-y border-stone-800/60 bg-stone-900 px-6 py-1.5"
-					aria-label="the heddles · lens"
+					aria-label="topics"
 				>
+					<span class="font-mono text-[11px] tracking-wide text-amber-200 uppercase">topics</span>
 					<HeddleStrip
 						threads={topicThreadList}
 						selected={heddleSelection}
@@ -1807,7 +1826,7 @@
 						? ''
 						: 'mt-6'}"
 					style="--ignite-delay: 250ms"
-					aria-label="the machine"
+					aria-label="what's running"
 				>
 					<!-- Keyed on the dock verdict: docking is what changes this line's
 				     form — pointer or disclosure — so it is what the redraw marks.
@@ -1903,7 +1922,7 @@
 				<p class="mt-2 font-mono text-xs text-amber-300">{runnersNote}</p>
 			{/if}
 		</div>
-		<section class="ignite" style="--ignite-delay: 260ms" aria-label="the machine's lane">
+		<section class="ignite" style="--ignite-delay: 260ms" aria-label="the runs">
 			{#if machineExpanded}
 				<div in:glitchReveal={{ duration: 240 }}>
 					<!-- The lane: armed picks falling toward the seam, the burning ones
@@ -2063,13 +2082,13 @@
 			>
 				<div class="flex items-baseline justify-between gap-3">
 					<div>
-						<p class="eyebrow">the shelf</p>
+						<p class="eyebrow">for now</p>
 						<h2
 							bind:this={shelfHeadingEl}
 							id="shelf-heading"
 							class="font-mono text-sm font-semibold text-amber-100"
 						>
-							expires by declaration
+							Pages that expire
 						</h2>
 					</div>
 					<p class="font-mono text-[10px] {surfaceError ? 'text-red-400' : 'text-ink-quiet'}">
@@ -2116,18 +2135,18 @@
 		>
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
-					<p class="eyebrow">the warp · intent</p>
+					<p class="eyebrow">open</p>
 					<h2
 						bind:this={warpHeadingEl}
 						id="warp-heading"
 						class="font-mono text-sm font-semibold text-amber-100"
 					>
-						what is asked
+						What you're working on
 					</h2>
 				</div>
 				<p class="font-mono text-[10px] text-ink-quiet">
 					{surfaceData === null
-						? 'stringing…'
+						? 'loading…'
 						: `${topicThreadList.length} topic${topicThreadList.length === 1 ? '' : 's'} · ${warpReadyCount} ready`}
 				</p>
 			</div>
@@ -2219,13 +2238,13 @@
 		>
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
-					<p class="eyebrow">the cloth · past</p>
+					<p class="eyebrow">done</p>
 					<h2
 						bind:this={clothHeadingEl}
 						id="cloth-heading"
 						class="font-mono text-sm font-semibold text-amber-100"
 					>
-						what has become
+						What got made
 					</h2>
 				</div>
 				<p class="font-mono text-[10px] {runLedgerError ? 'text-red-400' : 'text-ink-quiet'}">
@@ -2264,13 +2283,13 @@
 		>
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
-					<p class="eyebrow">the library</p>
+					<p class="eyebrow">pages</p>
 					<h2
 						bind:this={corpusHeadingEl}
 						id="corpus-heading"
 						class="font-mono text-sm font-semibold text-amber-100"
 					>
-						work surface
+						What was written
 					</h2>
 				</div>
 				<p class="font-mono text-[10px] {surfaceError ? 'text-red-400' : 'text-ink-quiet'}">
@@ -2278,9 +2297,7 @@
 						(surfaceData === null ? 'index loading' : `${surfaceData.files.length} pages`)}
 				</p>
 			</div>
-			<p class="mt-1 text-sm text-stone-400">
-				The shared authored corpus — discovered Markdown, not a list of pages chosen in code.
-			</p>
+			<p class="mt-1 text-sm text-stone-400">Pages this work has written.</p>
 			<div class="mt-3">
 				{#if surfaceError}
 					<p class="text-sm text-red-400">{surfaceError}</p>

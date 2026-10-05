@@ -242,7 +242,7 @@ export function isShellDefault(profile: RunnerProfile): boolean {
 /** The tier as the reader sees it — never blank: a core the catalog could
  *  not place says so. */
 export function tierLabel(profile: RunnerProfile): string {
-	return profile.class ? profile.class : 'unclassed';
+	return profile.class ? profile.class : 'unrated';
 }
 
 /** What the row is called: the vendor's own id for the core, versioned

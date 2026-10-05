@@ -337,7 +337,7 @@
 				{/if}
 				{#if item.says.length > 0}
 					<p class="font-mono text-[10px] text-ink-quiet">
-						says ({item.says.length}):
+						comments ({item.says.length}):
 						{#each item.says as evtId (evtId)}
 							{@const short = evtId.slice(evtId.lastIndexOf('-') + 1)}
 							<span class="ml-1 font-mono text-[9px] text-stone-400" title={evtId}>{short}</span>
@@ -419,13 +419,13 @@
 
 {#if shown < openTotal}
 	<p class="mb-1 font-mono text-[10px] text-ink-mute">
-		{shown} of {openTotal} open items · lensed by the heddles
+		{shown} of {openTotal} open items · in these topics
 	</p>
 {/if}
 
 {#if ready.length === 0 && held.length === 0}
 	<p class="text-sm text-ink-quiet">
-		the warp is bare — items are authored under <span class="font-mono">surface/warp/</span>.
+		Nothing here yet. Items are written under <span class="font-mono">surface/warp/</span>.
 	</p>
 {:else}
 	{#if ready.length > 0}

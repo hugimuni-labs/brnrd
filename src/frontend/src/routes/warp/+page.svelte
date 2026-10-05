@@ -86,13 +86,13 @@
 	});
 </script>
 
-<svelte:head><title>the warp · brnrd</title></svelte:head>
+<svelte:head><title>what you're working on · brnrd</title></svelte:head>
 
 {#if unauthenticated}
 	<div class="mx-auto max-w-xl p-6">
 		<div class="panel p-4 text-sm text-stone-300">
 			Session expired. <a class="text-amber-300 underline" href={resolve('/login')}>Sign in</a> to read
-			the warp.
+			your work.
 		</div>
 	</div>
 {:else if error}
@@ -100,14 +100,16 @@
 		<div class="panel p-4 text-sm text-red-400">{error}</div>
 	</div>
 {:else if data === null}
-	<div class="mx-auto max-w-xl p-6 font-mono text-sm text-ink-quiet">stringing the warp…</div>
+	<div class="mx-auto max-w-xl p-6 font-mono text-sm text-ink-quiet">loading…</div>
 {:else}
 	<div class="mx-auto flex max-w-2xl flex-col p-6">
 		<header class="mb-4">
-			<p class="eyebrow">the warp · every item</p>
-			<h1 class="font-mono text-lg font-semibold text-amber-100">what is asked, and what became</h1>
+			<p class="eyebrow">everything</p>
+			<h1 class="font-mono text-lg font-semibold text-amber-100">
+				What you're working on, and what got made
+			</h1>
 			<p class="mt-1 font-mono text-[10px] text-ink-quiet">
-				<a href={resolve('/')} class="hover:text-stone-300">← dashboard</a>
+				<a href={resolve('/')} class="hover:text-stone-300">← your work</a>
 			</p>
 		</header>
 

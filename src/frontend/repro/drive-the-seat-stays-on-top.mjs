@@ -138,7 +138,7 @@ async function shoot(browser, spec) {
 	});
 
 	await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'networkidle' });
-	await page.waitForSelector('[aria-label="the machine"]', { timeout: 20000 });
+	await page.waitForSelector('[aria-label="what\'s running"]', { timeout: 20000 });
 	await delay(1200); // ignite transitions + glitch reveals settle
 	await page.evaluate(() => window.scrollTo({ top: 0 }));
 	await delay(200);

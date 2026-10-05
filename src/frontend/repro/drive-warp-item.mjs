@@ -124,7 +124,7 @@ async function main() {
 		const meta = page.locator('[aria-label="item metadata"]');
 		await meta.waitFor({ state: 'visible', timeout: 10000 });
 		const metaText = await text(meta);
-		assert.ok(/says · 2/i.test(metaText), `says count (${metaText})`);
+		assert.ok(/comments · 2/i.test(metaText), `comments count (${metaText})`);
 		assert.ok(metaText.includes('8kn1') && metaText.includes('yitn'), `says tails (${metaText})`);
 		// attempts ∪ taken, de-duplicated: two distinct run ids, not three.
 		assert.ok(/runs · 2/i.test(metaText), `runs de-duplicated (${metaText})`);

@@ -232,7 +232,7 @@
 		{/if}
 		{#snippet sayAttempts(row: AskRow)}
 			<div>
-				<p class="text-[10px] tracking-wide text-ink-mute uppercase">says</p>
+				<p class="text-[10px] tracking-wide text-ink-mute uppercase">comments</p>
 				<!-- 17:51Z steer (the-panel-third-pass): "the evt-say lines say
 				     nothing" — `<relative time> · <excerpt> · ↗`, never the raw
 				     event id as the lead (`sayText` falls back to it only when
@@ -351,8 +351,8 @@
 								{#if drone}<span
 										class="shrink-0 font-mono text-xs text-amber-300"
 										data-drone
-										title="a live strand wears this ask: {drone}"
-										aria-label="a live strand is working this ask">⌁</span
+										title="a run is on this ask: {drone}"
+										aria-label="a run is working this ask">⌁</span
 									>{/if}
 								{#if delivery}<span
 										class="min-w-0 flex-1 truncate font-mono text-[10px] text-sky-200/90"
@@ -399,7 +399,7 @@
 										{#if row.stage}<span class="text-ink-mute">· {row.stage}</span>{/if}
 									{/if}
 									<span class="text-ink-mute"
-										>· {row.says.length} say{row.says.length === 1 ? '' : 's'}</span
+										>· {row.says.length} comment{row.says.length === 1 ? '' : 's'}</span
 									>
 								</span>
 							{/if}

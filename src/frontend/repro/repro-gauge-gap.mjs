@@ -45,7 +45,7 @@ async function readState(page) {
 		const stack = document.querySelector('.z-40');
 		const gaugeWrapper = stack ? stack.firstElementChild : null;
 		const spacer = stack ? stack.nextElementSibling : null;
-		const heddleDockedBox = stack ? stack.querySelector('[aria-label="the heddles · lens"]') : null;
+		const heddleDockedBox = stack ? stack.querySelector('[aria-label="topics"]') : null;
 		return {
 			scrollY: window.scrollY,
 			railCondensed: gaugeWrapper ? gaugeWrapper.className.includes('pb-0') : null,

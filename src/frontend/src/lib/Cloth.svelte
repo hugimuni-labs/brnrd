@@ -339,7 +339,7 @@
 					onclick={() => toggle(expanded, tree.root.id)}
 				>
 					{expanded.has(tree.root.id) ? '▾' : '▸'}
-					{tree.children.length} strand{tree.children.length === 1 ? '' : 's'}
+					{tree.children.length} run{tree.children.length === 1 ? '' : 's'}
 				</button>
 			{/if}
 		</div>
@@ -367,7 +367,7 @@
 
 <div class="panel p-4 max-[480px]:p-2.5">
 	<div class="mb-3 flex items-center justify-between gap-2 text-sm">
-		<span class="font-mono font-medium tracking-wide text-amber-200 uppercase">the cloth</span>
+		<span class="font-mono font-medium tracking-wide text-amber-200 uppercase">recent work</span>
 		<span class="flex items-center gap-2">
 			{#if newCount > 0 && onCaughtUp}
 				<!-- The digest block's successor: the anchor lives here now. New
@@ -401,7 +401,7 @@
 		<div
 			class="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[9px] leading-none"
 			role="group"
-			aria-label="lenses over the cloth"
+			aria-label="filters"
 		>
 			{#each lenses as candidate (candidate.id)}
 				<button
@@ -422,12 +422,12 @@
 
 	{#if selectedTopics !== null && windowRows.length > topicRows.length}
 		<p class="mb-1 font-mono text-[10px] text-ink-mute">
-			{topicRows.length} of {windowRows.length} runs in lit topics
+			{topicRows.length} of {windowRows.length} runs in these topics
 		</p>
 	{/if}
 
 	{#if weave === null || days === null || selvage === null}
-		<p class="font-mono text-[10px] text-ink-quiet">reading the cloth…</p>
+		<p class="font-mono text-[10px] text-ink-quiet">loading…</p>
 	{:else}
 		<!-- The selvage: the cloth's self-finished edge. One quiet row, first.
 		     It renders whenever the window holds anything — even under a lens
@@ -438,7 +438,7 @@
 				class="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-b border-stone-800/70 pb-2 font-mono text-[10px] text-ink-quiet"
 				aria-label="spend and produce over the window"
 			>
-				<span class="tracking-[0.16em] text-ink-mute uppercase">selvage</span>
+				<span class="tracking-[0.16em] text-ink-mute uppercase">together</span>
 				{#each selvage as part, index (index)}
 					<span>{part}</span>
 				{/each}
@@ -451,7 +451,7 @@
 			     one chip away would be the cloth lying about its own contents. -->
 			<p class="font-mono text-[10px] text-ink-quiet">
 				{activeLens === LENS_ALL
-					? 'nothing woven in this window yet.'
+					? 'nothing finished in this window yet.'
 					: 'nothing in this window matches this lens.'}
 			</p>
 		{/if}
