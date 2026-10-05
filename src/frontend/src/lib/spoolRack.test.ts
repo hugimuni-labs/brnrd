@@ -164,7 +164,7 @@ test('shell tabs follow the shelf: claude, codex, grok, then vibe', () => {
 	assert.deepEqual(
 		groupByShell(profiles).map((group) => group.shell),
 		['claude', 'codex', 'grok', 'vibe', 'local'],
-		'the shelf order leads, and a shell it does not name stays after, in first-seen order'
+		'popularity order leads; a shell the shelf does not name stays after, in first-seen order'
 	);
 });
 

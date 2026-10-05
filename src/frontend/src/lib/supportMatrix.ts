@@ -34,6 +34,8 @@ export interface DoorMeta {
 		| 'signal';
 }
 
+// Popularity order: Claude, Codex, Grok, Mistral Vibe. Not a quality
+// ranking and not cost — class and cost_rank stay on the profiles.
 export const SHELLS: DoorMeta[] = [
 	{ slug: 'claude', label: 'Claude Code', icon: 'claude' },
 	{ slug: 'codex', label: 'Codex', icon: 'codex-mono' },

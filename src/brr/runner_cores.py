@@ -116,6 +116,7 @@ _MODEL_TOKEN_RE = re.compile(
 # as unknown-cost, sorted after all classed profiles).
 
 _BUNDLED_CORES: dict[str, dict[str, Any]] = {
+    # Shell blocks follow popularity (grok, then vibe), not class or cost.
     # Grok Build selects with `-m`. These ids are the menu shipped with the
     # CLI (headless guide examples plus grok-4.5 / grok-4.7 / the build-fast
     # variant). No row claims a price: quota is not instrumented, and an

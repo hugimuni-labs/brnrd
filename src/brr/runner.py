@@ -1423,6 +1423,8 @@ class ShellHelp:
 #: Gemini deliberately absent (#519): it was cut from first-class Shell
 #: selection, and the product's first-impression surface must not recommend
 #: installing an integration the catalog no longer treats as first-class.
+#: Order is popularity — claude, codex, grok, vibe — matching the landing
+#: shelf. Not a quality or cost ranking.
 SHELL_HELP: dict[str, ShellHelp] = {
     "claude": ShellHelp(
         shell="claude",

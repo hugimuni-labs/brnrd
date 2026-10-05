@@ -218,6 +218,8 @@ def hosted_status(target: Door | str, settings: _SettingsLike) -> str:
 # Shell availability is local (the CLI must be on PATH); the landing lists
 # bundled integrations, not a claim about a visitor's installed tools. Keep
 # this label map and the frontend shelf aligned with the Core registry.
+# Insertion order is popularity (claude, codex, grok, vibe), not quality
+# and not cost.
 # test_bundled_shells_are_all_labeled catches a newly bundled shell that
 # has not reached the support surface yet.
 SHELL_LABELS: dict[str, str] = {

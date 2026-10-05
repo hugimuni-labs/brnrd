@@ -1,10 +1,10 @@
 import type { RunnerProfile } from './runners';
 import { SHELLS } from './supportMatrix.ts';
 
-// The landing shelf is the shell roster. The rack follows it — Claude,
-// Codex, Grok, then Mistral Vibe — instead of whichever shell the
-// cheapest profile happened to mention first. A shell the shelf does not
-// name keeps its first-seen place after those four.
+// Popularity roster from the landing shelf: Claude, Codex, Grok, then
+// Mistral Vibe. Not quality and not cost; class and cost_rank still order
+// the cores inside a shell. A shell the shelf does not name keeps its
+// first-seen place after those four.
 const SHELL_RANK = new Map(SHELLS.map((shell, index) => [shell.slug, index]));
 
 // #328 spool rack. w-68 rework (2026-08-19, the gauge/bench split): two
@@ -171,9 +171,9 @@ export interface ShellGroup {
  * sitting between two runnable ones at its old cost rank read as a live
  * choice with a dashed border, not as *retired*, because "off" wasn't a
  * position, only a style. Available shells sort first; shells with nothing
- * live sort after. Within each of those, the shelf order
- * (Claude, Codex, Grok, Mistral Vibe) wins, and a shell the shelf does not
- * name keeps its first-seen place after them.
+ * live sort after. Within each of those, popularity order from the shelf
+ * (Claude, Codex, Grok, Mistral Vibe) wins — not quality, not cost — and a
+ * shell the shelf does not name keeps its first-seen place after them.
  */
 export function groupByShell(profiles: RunnerProfile[]): ShellGroup[] {
 	const order: string[] = [];
