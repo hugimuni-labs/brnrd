@@ -36,8 +36,7 @@ brnrd runners list
 brnrd runners list --all
 ```
 
-Authenticate the selected Claude Code or Codex CLI outside brnrd, then
-retry.
+Authenticate the selected CLI outside brnrd, then retry.
 
 ## A repo card reads "not initialised" or "init state unknown"
 

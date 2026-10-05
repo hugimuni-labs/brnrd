@@ -1,4 +1,11 @@
 import type { RunnerProfile } from './runners';
+import { SHELLS } from './supportMatrix.ts';
+
+// Popularity roster from the landing shelf: Claude, Codex, Grok, then
+// Mistral Vibe. Not quality and not cost; class and cost_rank still order
+// the cores inside a shell. A shell the shelf does not name keeps its
+// first-seen place after those four.
+const SHELL_RANK = new Map(SHELLS.map((shell, index) => [shell.slug, index]));
 
 // #328 spool rack. w-68 rework (2026-08-19, the gauge/bench split): two
 // design instructions landed mid-flight, both his, both taken —
@@ -164,21 +171,24 @@ export interface ShellGroup {
  * sitting between two runnable ones at its old cost rank read as a live
  * choice with a dashed border, not as *retired*, because "off" wasn't a
  * position, only a style. Available shells sort first; shells with nothing
- * live sort after, in their own first-seen order — the same "unavailable is
- * legitimate and stays, just last" rule, now applied consistently one level
- * down too.
+ * live sort after. Within each of those, popularity order from the shelf
+ * (Claude, Codex, Grok, Mistral Vibe) wins — not quality, not cost — and a
+ * shell the shelf does not name keeps its first-seen place after them.
  */
 export function groupByShell(profiles: RunnerProfile[]): ShellGroup[] {
 	const order: string[] = [];
+	const seen = new Map<string, number>();
 	const byShell = new Map<string, RunnerProfile[]>();
 	for (const profile of profiles) {
 		const shell = profile.shell ?? profile.name;
 		if (!byShell.has(shell)) {
 			byShell.set(shell, []);
+			seen.set(shell, order.length);
 			order.push(shell);
 		}
 		byShell.get(shell)?.push(profile);
 	}
+	const rank = (shell: string) => SHELL_RANK.get(shell) ?? SHELLS.length + (seen.get(shell) ?? 0);
 	const groups = order.map((shell) => {
 		const rows = byShell.get(shell) ?? [];
 		// A locked row (auth failed, key in the user's hand) is usable: it
@@ -192,7 +202,8 @@ export function groupByShell(profiles: RunnerProfile[]): ShellGroup[] {
 	});
 	const live = groups.filter((group) => !group.allUnavailable);
 	const dead = groups.filter((group) => group.allUnavailable);
-	return [...live, ...dead];
+	const byRoster = (a: ShellGroup, b: ShellGroup) => rank(a.shell) - rank(b.shell);
+	return [...live.sort(byRoster), ...dead.sort(byRoster)];
 }
 
 /** The off-tab's own reason text — one shell standing in for N dead cores. */

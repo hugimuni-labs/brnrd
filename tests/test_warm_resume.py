@@ -73,3 +73,41 @@ def test_turn_end_park_arms_native_for_a_host_claude_seat():
     assert hold["native_session_id"] == "s1"
     assert hold["resume_kind"] == "native"
     assert hold["provider"] == "claude"
+
+
+_GROK_SESSION = "018f6b3c-7c3a-7d2e-8f01-aabbccddeeff"
+
+
+def test_grok_native_is_host_only_and_stays_on_the_grok_shell():
+    assert daemon._native_session_id_for(
+        _task("grok", env="host", grok_session_id=_GROK_SESSION)
+    ) == _GROK_SESSION
+    assert daemon._native_session_id_for(
+        _task("grok-4.7", env="worktree", grok_session_id=_GROK_SESSION)
+    ) is None
+    assert daemon._native_session_id_for(
+        _task("claude", env="host", grok_session_id=_GROK_SESSION)
+    ) is None
+    assert daemon._resource_hold_provider_for_runner("grok-4.7") == "grok"
+    held = _task(
+        "grok", resume_native_session_id=_GROK_SESSION, resume_native_provider="grok",
+    )
+    assert daemon._resume_session_for_runner(
+        held, SimpleNamespace(shell="grok", name="grok-4.6"),
+    ) == _GROK_SESSION
+    switched = _task(
+        "claude", resume_native_session_id=_GROK_SESSION, resume_native_provider="grok",
+    )
+    assert daemon._resume_session_for_runner(
+        switched, SimpleNamespace(shell="claude", name="claude"),
+    ) is None
+    forged = Run.from_event({
+        "id": "evt-forged", "source": "telegram", "body": "hi",
+        "env": "host", "runner_shell": "grok", "grok_session_id": _GROK_SESSION,
+    }, {})
+    assert daemon._native_session_id_for(forged) is None
+    task = _task("grok", env="host", grok_session_id=_GROK_SESSION)
+    hold = daemon._park_seat_on_turn_end(task, {"seat.park_on_turn_end": True})
+    assert hold["native_session_id"] == _GROK_SESSION
+    assert hold["provider"] == "grok"
+    assert hold["resume_kind"] == "native"

@@ -1308,6 +1308,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = runners_sub.add_parser("_vibe", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_vibe_runner)
 
+    p = runners_sub.add_parser("_grok", help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_grok_runner)
+
     p = runners_sub.add_parser(
         "list",
         help="list runner profiles from the unified catalog projection")
@@ -5183,6 +5186,12 @@ def cmd_vibe_runner(args):
     from . import vibe_runner
 
     raise SystemExit(vibe_runner.main())
+
+
+def cmd_grok_runner(args):
+    from . import grok_runner
+
+    raise SystemExit(grok_runner.main())
 
 
 def cmd_runners_list(args):
