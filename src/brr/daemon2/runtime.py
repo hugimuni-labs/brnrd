@@ -109,11 +109,6 @@ class Daemon2:
         self._reload_pending = False
         self._next_reload_check = 0.0
         self._next_delivery_check = 0.0
-        # The Shell ``once`` is inside, if any. A foreground SIGINT reads
-        # this so it can kill the Shell without ending ``serve``.
-        self._live_run_id: str | None = None
-        self._interrupt_armed = False
-        self._interrupt_lock = threading.Lock()
 
     @staticmethod
     def _terminate_runner(run_id: str, *, grace: float = 0.5) -> None:
@@ -217,6 +212,30 @@ class Daemon2:
     def _run_id(self) -> str:
         return "run-" + time.strftime("%y%m%d-%H%M", time.gmtime()) + "-" + uuid.uuid4().hex[:4]
 
+    def _address_of(self, event: dict[str, Any]):
+        try:
+            return self.router.route_or_triage(event)
+        except UnaddressedLetter:
+            return None
+
+    def _seat_can_see(self, event: dict[str, Any], conversation: str, *,
+                      is_child: bool) -> bool:
+        """Same conversation, or a resident seat's owner mail on another one.
+
+        A strand stays on the dispatch that named it. An unroutable letter
+        keeps the triage seat it was given, instead of sticking to whichever
+        seat is live. A non-owner letter on another thread stays out: that
+        thread can have its own seat once this one ends.
+        """
+        address = self._address_of(event)
+        if address is None or not address.conversation:
+            return False
+        if address.conversation == conversation:
+            return True
+        if is_child or not address.routable:
+            return False
+        return trust.resolve_tier(event) == trust.OWNER
+
     def _visible(self, conversation: str, current_event: str, *,
                  is_child: bool = False, run_id: str = "") -> list[dict[str, Any]]:
         visible = []
@@ -231,11 +250,8 @@ class Daemon2:
                   or (event.get("source") == "dispatch_message"
                       and event.get("spawn_message_for_run"))):
                 continue
-            try:
-                if self.router.route_or_triage(event).conversation == conversation:
-                    visible.append(event)
-            except UnaddressedLetter:
-                continue
+            if self._seat_can_see(event, conversation, is_child=is_child):
+                visible.append(event)
         return visible
 
     def _notice(self, state: dict[str, Any], text: str, *, kind: str = "refused",
@@ -259,12 +275,19 @@ class Daemon2:
         event = self.door.get(target_id)
         if event is None or event.get("status") not in {"pending", "processing"}:
             raise ValueError(f"event {target_id} is not pending")
-        if self.router.route_or_triage(event).conversation != state["conversation"]:
+        waking = target_id == state["event"]["id"]
+        if not waking and not self._seat_can_see(
+                event, state["conversation"],
+                is_child=bool(state.get("is_child"))):
             raise ValueError("reply target belongs to another conversation")
-        claim = state["claim"] if target_id == state["event"]["id"] else None
+        # The letter's own thread, including when the seat was woken on
+        # another one. The gate delivers from this event; the message
+        # record has to name the same conversation or the receipt lies.
+        routed = self.router.route_or_triage(event).conversation
+        claim = state["claim"] if waking else None
         if claim is None:
             self.letters.ingest(target_id, str(event["status"]), metadata={
-                "conversation": state["conversation"],
+                "conversation": routed,
                 "trust_tier": event.get("trust_tier"),
             })
             claim = self.letters.claim(
@@ -283,7 +306,7 @@ class Daemon2:
                         run_id=state["run_id"], body=body, kind="terminal",
                         target_event=target_id,
                         target_gate=str(event.get("source") or ""),
-                        target_thread=state["conversation"],
+                        target_thread=routed,
                         source_ref="reply:" + target_id)
                 except Exception as exc:
                     self._notice(state, f"response queued without message record: {exc}",
@@ -684,7 +707,9 @@ class Daemon2:
                              source_file=path.name, verb="note")
                 return
             target = str(event["id"])
-            if self.router.route_or_triage(event).conversation != state["conversation"]:
+            if target != event_id and not self._seat_can_see(
+                    event, state["conversation"],
+                    is_child=bool(state.get("is_child"))):
                 raise ValueError("note target does not belong to this conversation")
             claim = state["claim"] if target == event_id else self.letters.claim(
                 target, state["run_id"], self.lease_ttl_seconds, now=time.time())
@@ -1411,31 +1436,6 @@ class Daemon2:
         if hasattr(self, "_stop_serve"):
             self._stop_serve.set()
 
-    def interrupt_runner(self) -> bool:
-        """SIGINT while a Shell is live: kill that Shell, keep serving.
-
-        The runner shares the daemon's process group, so a terminal SIGINT
-        already reaches it. Treating that signal as ``stop()`` parked the
-        seat and then returned from ``serve()``, and the next letter waited
-        until a human started the daemon again (run-261006-1240-de7d).
-
-        The first interrupt signals the live runner and leaves the loop
-        up. A second interrupt, or an interrupt while nothing is running,
-        is ``stop()`` — SIGTERM is still an immediate stop, from ``stop()``.
-        Returns True when a runner was signaled.
-        """
-        with self._interrupt_lock:
-            run_id = self._live_run_id
-            if not run_id or self._interrupt_armed:
-                run_id = None
-            else:
-                self._interrupt_armed = True
-        if run_id is None:
-            self.stop()
-            return False
-        self._terminate_runner(run_id)
-        return True
-
     def once(self, *, role: str = "any",
              self_lease: Lease | None = None) -> RunResult | None:
         if role not in {"any", "resident", "strand"}:
@@ -1685,12 +1685,8 @@ class Daemon2:
                                 resumed.session_id if resumed and resumed.mode == "native"
                                 else None),
                         )
-                        self._live_run_id = run_id
-                        try:
-                            result = runner.invoke_runner(
-                                runner_choice, invocation, self.runner_config)
-                        finally:
-                            self._live_run_id = None
+                        result = runner.invoke_runner(
+                            runner_choice, invocation, self.runner_config)
                         # Drain last-moment submits before publication can
                         # remove the clone (also needed by unplaced fixtures).
                         self._tick(state)
@@ -1775,11 +1771,6 @@ class Daemon2:
                     presence.deregister(self.runtime_dir, presence_entry["id"])
                 if execution_lease is not self_lease:
                     self.leases.release(execution_lease)
-                # The next letter gets its own first interrupt. A stop
-                # requested by a second interrupt stays requested.
-                with self._interrupt_lock:
-                    self._live_run_id = None
-                    self._interrupt_armed = False
 
 
 #: The overdue-delivery sweep's cadence and reach: every 30 s, rows from the

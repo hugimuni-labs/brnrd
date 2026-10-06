@@ -875,7 +875,10 @@ def test_to_delivers_steer_to_child(tmp_path: Path) -> None:
     runtime2 = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
                        runner_name="fake", runner_config={"runner_cmd": [str(to_shell)]},
                        tick_seconds=0.02)
-    result2 = runtime2.once()
+    # The spawn letter is still pending. A resident seat sends `to:`;
+    # a role-any once() would claim the spawn, and a clone that cannot
+    # be placed no longer falls through onto the host checkout.
+    result2 = runtime2.once(role="resident")
     assert result2 is not None and result2.answered
 
     pending = runtime2.door.pending()
@@ -2088,90 +2091,170 @@ def test_placement_failure_retires_without_invoking_the_runner(
     assert all(event["id"] != child.stem for event in runtime.door.pending())
 
 
-def test_interrupt_keeps_serving_the_next_letter(tmp_path: Path) -> None:
-    """The first interrupt kills the live Shell. serve() takes the next letter."""
+_OWNER_OTHER = "cloud:telegram:155783668:"
+_SCHEDULE = "schedule:the-goal-pulse"
+
+
+def test_visible_set_includes_owner_mail_on_another_conversation(
+        tmp_path: Path) -> None:
+    """The resident seat owns the owner's other threads. Nothing else."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    inbox = home / "dispatch" / "inbox"
+    waking = protocol.create_event(
+        inbox, "schedule", "pulse", conversation_key=_SCHEDULE,
+        trust_tier="owner")
+    owner = protocol.create_event(
+        inbox, "cloud", "from telegram", conversation_key=_OWNER_OTHER,
+        trust_tier="owner", cloud_platform="telegram",
+        cloud_chat_id="155783668", cloud_event_id="remote-b")
+    protocol.create_event(
+        inbox, "github", "a stranger", conversation_key="github:stranger",
+        trust_tier="untrusted")
+    protocol.create_event(
+        inbox, "cloud", "a collaborator", conversation_key="cloud:slack:other",
+        trust_tier="collaborator")
+    protocol.create_event(
+        inbox, "spawn", "child work", conversation_key="cloud:telegram:else",
+        trust_tier="owner", parent_run_id="run-parent", ask_id="ask-1")
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": ["true"]})
+    seen = runtime._visible(_SCHEDULE, waking.stem)
+    assert [event["id"] for event in seen] == [owner.stem]
+    assert runtime._visible(_SCHEDULE, waking.stem, is_child=True,
+                            run_id="run-child") == []
+
+
+def test_owner_letter_on_another_conversation_resolves_await_and_replies_there(
+        tmp_path: Path) -> None:
+    """A schedule seat sees an owner telegram letter arrive, and answers it there."""
+    from unittest.mock import MagicMock, patch
+
     home = tmp_path / "home"
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "AGENTS.md").write_text("# Test\n", encoding="utf-8")
     inbox = home / "dispatch" / "inbox"
-    protocol.create_event(inbox, "telegram", "the seat that gets interrupted",
-                          conversation_key="schedule:pulse", trust_tier="owner")
-    protocol.create_event(inbox, "telegram", "the letter that was waiting",
-                          conversation_key="telegram:owner", trust_tier="owner")
-    marker = tmp_path / "starts"
+    responses = home / "dispatch" / "responses"
+    waking = protocol.create_event(
+        inbox, "schedule", "pulse", conversation_key=_SCHEDULE,
+        trust_tier="owner")
+    diag = tmp_path / "diag.txt"
     binary = tmp_path / "shell"
     binary.write_text(
         "#!/usr/bin/env python3\n"
-        "import os, time\n"
+        "import json, os, time\n"
         "from pathlib import Path\n"
-        f"marker = Path({str(marker)!r})\n"
-        "n = int(marker.read_text()) if marker.exists() else 0\n"
-        "marker.write_text(str(n + 1))\n"
+        f"diag = Path({str(diag)!r})\n"
+        f"owner_key = { _OWNER_OTHER!r}\n"
         "outbox = Path(os.environ['BRR_OUTBOX_DIR'])\n"
-        "event = os.environ['BRR_EVENT_ID']\n"
-        "if n == 0:\n"
-        "    time.sleep(60)\n"
-        "(outbox / 'reply.md').write_text('---\\nevent: ' + event + '\\n---\\nnext\\n')\n",
+        "portal = Path(os.environ['BRR_PORTAL_STATE'])\n"
+        "def stage(name, body):\n"
+        "    tmp = outbox / (name + '.tmp')\n"
+        "    tmp.write_text(body, encoding='utf-8')\n"
+        "    tmp.rename(outbox / name)\n"
+        "def read(path):\n"
+        "    try:\n"
+        "        return json.loads(path.read_text(encoding='utf-8'))\n"
+        "    except (OSError, json.JSONDecodeError):\n"
+        "        return {}\n"
+        "stage('wait.md', '---\\nawait: true\\ntimeout: 20s\\n---\\n')\n"
+        "deadline = time.monotonic() + 15\n"
+        "target = None\n"
+        "last = ''\n"
+        "while time.monotonic() < deadline:\n"
+        "    inbox_view = read(outbox / 'inbox.json')\n"
+        "    state = read(portal)\n"
+        "    events = inbox_view.get('events') or []\n"
+        "    last = json.dumps({'inbox': events, 'await': state.get('await')})\n"
+        "    for ev in events:\n"
+        "        if ev.get('conversation_key') != owner_key or ev.get('trust_tier') != 'owner':\n"
+        "            diag.write_text('unexpected ' + last, encoding='utf-8')\n"
+        "            raise SystemExit('non-owner letter became visible')\n"
+        "    waiting = state.get('await') or {}\n"
+        "    if (len(events) == 1 and waiting.get('resolved')\n"
+        "            and waiting.get('outcome') == 'event'):\n"
+        "        target = events[0]['id']\n"
+        "        break\n"
+        "    time.sleep(0.05)\n"
+        "else:\n"
+        "    diag.write_text('timed out ' + last, encoding='utf-8')\n"
+        "    raise SystemExit('owner letter did not reach inbox and await')\n"
+        "stage('reply.md', '---\\nevent: ' + target + '\\n---\\nseen on B\\n')\n",
         encoding="utf-8")
     binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
-    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+    runtime_dir = tmp_path / "runtime"
+    runtime = Daemon2(repo, home, runtime_dir=runtime_dir,
                       runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
-                      tick_seconds=0.02, lease_ttl_seconds=30)
-    output: list = []
-    thread = threading.Thread(
-        target=lambda: output.append(runtime.serve(stop_when_empty=True)))
+                      tick_seconds=0.02)
+    runtime._account_ctx = MagicMock()
+    runtime._account_ctx.default_repo.label = "org/repo"
+    portal = runtime_dir / "outbox" / waking.stem / "portal-state.json"
+    holder: dict[str, object] = {}
+
+    def arrive() -> None:
+        try:
+            # Prompt assembly runs before the Shell, so the portal appears late.
+            deadline = time.monotonic() + 40
+            while time.monotonic() < deadline:
+                if portal.exists():
+                    try:
+                        state = json.loads(portal.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        time.sleep(0.05)
+                        continue
+                    if (state.get("await") or {}).get("armed"):
+                        break
+                time.sleep(0.05)
+            else:
+                holder["arrive"] = "await never armed"
+                return
+            stranger = protocol.create_event(
+                inbox, "github", "a stranger", conversation_key="github:stranger",
+                trust_tier="untrusted")
+            holder["stranger"] = stranger
+            time.sleep(0.4)
+            owner = protocol.create_event(
+                inbox, "cloud", "from telegram", conversation_key=_OWNER_OTHER,
+                trust_tier="owner", cloud_platform="telegram",
+                cloud_chat_id="155783668", cloud_event_id="remote-b")
+            holder["owner"] = owner
+            holder["arrive"] = "created"
+        except Exception as exc:
+            holder["arrive"] = f"{type(exc).__name__}: {exc}"
+
+    thread = threading.Thread(target=arrive, daemon=True)
     thread.start()
-    try:
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            run_id = runtime._live_run_id
-            # The pid exists before the script writes its marker. Killing
-            # in that window leaves the marker unset, and the next letter's
-            # shell takes the sleep path too.
-            started = marker.exists() and marker.read_text().strip() == "1"
-            if run_id and started and runner.live_pid_for_label(run_id):
-                break
-            time.sleep(0.02)
-        else:
-            raise AssertionError(
-                f"runner never started (marker={marker.read_text() if marker.exists() else 'missing'})")
-        assert runtime.interrupt_runner() is True
-        assert not runtime._stop_serve.is_set()
-        thread.join(timeout=30)
-        assert not thread.is_alive(), "serve did not take the next letter"
-        assert len(output) == 1 and len(output[0]) == 2
-        assert output[0][0].returncode != 0
-        assert output[0][1].returncode == 0 and output[0][1].answered
-        assert marker.read_text() == "2"
-    finally:
-        if thread.is_alive():
-            runtime.stop()
-            run_id = runtime._live_run_id
-            if run_id:
-                runtime._terminate_runner(run_id)
-            thread.join(timeout=5)
+    staged: list[dict] = []
 
+    def _fake_stage(_ctx, **kwargs):
+        staged.append(kwargs)
+        return None
 
-def test_second_interrupt_stops_and_idle_interrupt_stops(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "AGENTS.md").write_text("# Test\n", encoding="utf-8")
-    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
-                      runner_name="fake", runner_config={"runner_cmd": ["true"]})
-    runtime._stop_serve = threading.Event()
-    runtime._live_run_id = "run-x"
-    calls = []
-    runtime._terminate_runner = lambda run_id, grace=0.5: calls.append(run_id)
-    assert runtime.interrupt_runner() is True
-    assert calls == ["run-x"]
-    assert not runtime._stop_serve.is_set()
-    assert runtime.interrupt_runner() is False
-    assert runtime._stop_serve.is_set()
-    runtime._stop_serve.clear()
-    runtime._live_run_id = None
-    runtime._interrupt_armed = False
-    assert runtime.interrupt_runner() is False
-    assert runtime._stop_serve.is_set()
-    assert calls == ["run-x"]
+    with patch("brr.daemon2.runtime.message_store.stage", side_effect=_fake_stage):
+        result = runtime.once()
+    thread.join(timeout=2)
+    if result is None or result.returncode != 0:
+        detail = diag.read_text(encoding="utf-8") if diag.exists() else ""
+        files = []
+        for path in inbox.glob("*.md"):
+            event = protocol._read_event(path) or {}
+            files.append((path.name, event.get("source"), event.get("status"),
+                          event.get("conversation_key")))
+        raise AssertionError(
+            f"seat failed: {detail}\narrive={holder.get('arrive')}\nfiles={files}")
+    owner = holder["owner"]
+    stranger = holder["stranger"]
+    assert protocol.read_response(responses, owner.stem) == "seen on B"
+    assert protocol._read_event(owner)["status"] == "done"
+    assert runtime.letters.state(owner.stem).state == "answered"
+    assert conversations.conversation_key_for_event(
+        protocol._read_event(owner)) == _OWNER_OTHER
+    replies = [row for row in staged
+               if row.get("kind") == "terminal" and row.get("target_event") == owner.stem]
+    assert replies, staged
+    assert replies[0]["target_thread"] == _OWNER_OTHER
+    assert replies[0]["target_gate"] == "cloud"
+    assert protocol._read_event(stranger)["status"] == "pending"
+    assert protocol.read_response(responses, waking.stem) is None
