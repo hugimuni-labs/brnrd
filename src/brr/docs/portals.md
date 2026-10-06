@@ -114,19 +114,14 @@ verdict: `✓` consumed · `✓ (advisory: …)` consumed, FYI notice · `✗ <k
 
 ### `brnrd await` — at a glance
 
-the wake's copy · the full section below keeps the reasoning · hold this run until the daemon has something for you · a message, a strand finishing, a schedule firing all arrive as pending events ⇒ all resolve it without being named · a shell `sleep` loop is a wait nobody can interrupt — never that
+the wake's copy · rules live in the `await:` row and **linger** · a message, a strand finishing, a schedule firing all arrive as pending events and resolve it · a shell `sleep` loop is a wait nobody can interrupt: never that
 
 ```
 brnrd await [--timeout <duration>] [--ceiling <duration>] [--file <path>] [--json]
 ```
 
-- `--timeout` = the wait's ceiling · default: the run's remaining budget; none configured ⇒ open-ended · a re-call stages a new generation, so restate an explicit `--timeout` every time
-- `--file <path>` adds a trigger the daemon can't see (a local gate's done-marker, an external CI file) · never narrows the wait
-- outcome (`portal-state.json` → `await`): `event` · `condition` (the file; a pending event outranks it) · `timeout` · `park`
-- `timeout` + `initiative: true` = the seat's own hours: an idle seat's bare await (nobody inside `seat.live_window_minutes`, no live strand, pace ahead) gets a `seat.initiative_after_minutes` ceiling ⇒ act from card → open item → notebook, or `note:` why not (run.md §appetite)
-- `park` = the binding quota read under `seat.starve_floor_pct` (the starvation park, see `hold:`), or — only when `seat.park_on_hold_cost` is opted in — holding has cost `seat.park_after_boot_ratio` boots ⇒ end the turn; that park is the daemon's
-- `pending` = the *call's* lease ran out first (claude: ~50m by default, `--ceiling` up to 6h; the hook sets the tool timeout) ⇒ call again, that is the whole instruction · the next boundary says `slept <d> · woke: <outcome>`
-- blocked = zero tokens · each return = one boundary at full context
+- outcome (`portal-state.json` → `await`): `event` · `condition` (the `--file` trigger; a pending event outranks it) · `timeout` (with `initiative: true` = the seat's own hours) · `park` (the daemon's: starvation, or opted-in hold cost)
+- `pending` = only the *call's* lease ran out ⇒ call again · an explicit `--timeout` is restated on every call
 
 ### `brnrd do` — the verdict rides the act
 
