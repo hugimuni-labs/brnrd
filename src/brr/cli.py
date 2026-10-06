@@ -7311,6 +7311,7 @@ def cmd_up(args):
     if getattr(args, "engine", "1") == "2":
         import os
         import signal
+        import threading
         from . import account, config as conf, dev_reload
         from .daemon2.runtime import Daemon2
 
@@ -7331,8 +7332,14 @@ def cmd_up(args):
         dev_reload.capture_image_fingerprint()
         previous_term = signal.getsignal(signal.SIGTERM)
         previous_int = signal.getsignal(signal.SIGINT)
+        # SIGTERM is shutdown. SIGINT is the terminal's interrupt: the
+        # first one kills the live Shell and serve() takes the next letter.
+        # A second SIGINT, or SIGINT while idle, stops the loop. The
+        # handler can sleep inside the grace kill, so it runs off the
+        # signal stack.
         signal.signal(signal.SIGTERM, lambda _sig, _frame: replacement.stop())
-        signal.signal(signal.SIGINT, lambda _sig, _frame: replacement.stop())
+        signal.signal(signal.SIGINT, lambda _sig, _frame: threading.Thread(
+            target=replacement.interrupt_runner, daemon=True).start())
         brr_dir.mkdir(parents=True, exist_ok=True)
         daemon_mod._write_pid(brr_dir)
         engine_marker = brr_dir / "daemon2.active"
@@ -7344,10 +7351,13 @@ def cmd_up(args):
         try:
             with open(log_path, "ab") as worker_log:
                 for _ in range(strand_worker_count(conf.load_config(root))):
+                    # A new session: a terminal SIGINT is for the resident
+                    # seat, not for these followers. They stop when the
+                    # parent sends SIGTERM from the finally below.
                     workers.append(subprocess.Popen(
                         strand_worker_argv(root, home, brr_dir, inbox, responses),
                         stdin=subprocess.DEVNULL, stdout=worker_log,
-                        stderr=worker_log))
+                        stderr=worker_log, start_new_session=True))
             # With followers carrying strands, the resident loop serves only
             # resident letters: a strand it picked up would hold the self
             # seat (and every message) for the strand's whole life.

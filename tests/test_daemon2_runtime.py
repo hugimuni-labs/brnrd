@@ -2038,3 +2038,140 @@ def test_portal_state_reads_the_door_not_raw_status(tmp_path: Path) -> None:
     attention = json.loads(seen.read_text())
     assert attention["pending_event_count"] == 0, attention
     assert waking.stem != sibling.stem
+
+
+def test_placement_failure_retires_without_invoking_the_runner(
+        tmp_path: Path, monkeypatch) -> None:
+    """A clone that already exists is a deterministic failure.
+
+    The old path logged it and started the Shell on the host checkout.
+    The claim then expired and the letter was pending again, on the same
+    child_run_id, with no backoff. Refuse the Shell, stamp the file off
+    pending, and retire while the lease still authorizes — a second
+    strand poll finds nothing to run.
+    """
+    from brr.daemon2.placement import PlacementError
+
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n", encoding="utf-8")
+    inbox = home / "dispatch" / "inbox"
+    child = protocol.create_event(
+        inbox, "spawn", "work", conversation_key="c", ask_id="ask-1",
+        parent_run_id="run-parent", child_run_id="run-stuck",
+        branch="brr/stuck", report=str(tmp_path / "report.md"))
+    invoked = tmp_path / "invoked"
+    binary = tmp_path / "should-not-run"
+    binary.write_text(
+        "#!/usr/bin/env python3\n"
+        f"from pathlib import Path\nPath({str(invoked)!r}).write_text('ran')\n",
+        encoding="utf-8")
+    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+
+    def boom(*_args, **_kwargs):
+        raise PlacementError(
+            "failed to allocate worktree for run-stuck: "
+            "clone already exists: .brr/worktrees/run-stuck")
+
+    monkeypatch.setattr("brr.daemon2.runtime._placement.allocate", boom)
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02)
+    result = runtime.once(role="strand")
+    assert result is not None and result.returncode == 1
+    assert not invoked.exists()
+    assert protocol._read_event(child)["status"] == "noted"
+    assert runtime.letters.state(child.stem).state == "retired"
+    assert runtime.letters.state(child.stem).retirement["why"] == "strand_exited"
+    assert runtime.once(role="strand") is None
+    assert all(event["id"] != child.stem for event in runtime.door.pending())
+
+
+def test_interrupt_keeps_serving_the_next_letter(tmp_path: Path) -> None:
+    """The first interrupt kills the live Shell. serve() takes the next letter."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n", encoding="utf-8")
+    inbox = home / "dispatch" / "inbox"
+    protocol.create_event(inbox, "telegram", "the seat that gets interrupted",
+                          conversation_key="schedule:pulse", trust_tier="owner")
+    protocol.create_event(inbox, "telegram", "the letter that was waiting",
+                          conversation_key="telegram:owner", trust_tier="owner")
+    marker = tmp_path / "starts"
+    binary = tmp_path / "shell"
+    binary.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, time\n"
+        "from pathlib import Path\n"
+        f"marker = Path({str(marker)!r})\n"
+        "n = int(marker.read_text()) if marker.exists() else 0\n"
+        "marker.write_text(str(n + 1))\n"
+        "outbox = Path(os.environ['BRR_OUTBOX_DIR'])\n"
+        "event = os.environ['BRR_EVENT_ID']\n"
+        "if n == 0:\n"
+        "    time.sleep(60)\n"
+        "(outbox / 'reply.md').write_text('---\\nevent: ' + event + '\\n---\\nnext\\n')\n",
+        encoding="utf-8")
+    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02, lease_ttl_seconds=30)
+    output: list = []
+    thread = threading.Thread(
+        target=lambda: output.append(runtime.serve(stop_when_empty=True)))
+    thread.start()
+    try:
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            run_id = runtime._live_run_id
+            # The pid exists before the script writes its marker. Killing
+            # in that window leaves the marker unset, and the next letter's
+            # shell takes the sleep path too.
+            started = marker.exists() and marker.read_text().strip() == "1"
+            if run_id and started and runner.live_pid_for_label(run_id):
+                break
+            time.sleep(0.02)
+        else:
+            raise AssertionError(
+                f"runner never started (marker={marker.read_text() if marker.exists() else 'missing'})")
+        assert runtime.interrupt_runner() is True
+        assert not runtime._stop_serve.is_set()
+        thread.join(timeout=30)
+        assert not thread.is_alive(), "serve did not take the next letter"
+        assert len(output) == 1 and len(output[0]) == 2
+        assert output[0][0].returncode != 0
+        assert output[0][1].returncode == 0 and output[0][1].answered
+        assert marker.read_text() == "2"
+    finally:
+        if thread.is_alive():
+            runtime.stop()
+            run_id = runtime._live_run_id
+            if run_id:
+                runtime._terminate_runner(run_id)
+            thread.join(timeout=5)
+
+
+def test_second_interrupt_stops_and_idle_interrupt_stops(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n", encoding="utf-8")
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": ["true"]})
+    runtime._stop_serve = threading.Event()
+    runtime._live_run_id = "run-x"
+    calls = []
+    runtime._terminate_runner = lambda run_id, grace=0.5: calls.append(run_id)
+    assert runtime.interrupt_runner() is True
+    assert calls == ["run-x"]
+    assert not runtime._stop_serve.is_set()
+    assert runtime.interrupt_runner() is False
+    assert runtime._stop_serve.is_set()
+    runtime._stop_serve.clear()
+    runtime._live_run_id = None
+    runtime._interrupt_armed = False
+    assert runtime.interrupt_runner() is False
+    assert runtime._stop_serve.is_set()
+    assert calls == ["run-x"]

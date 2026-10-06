@@ -346,6 +346,35 @@ class TestEvents:
 
         assert [ev["id"] for ev in events] == [older["id"], newer["id"]]
 
+    def test_list_pending_does_not_reread_an_unchanged_inbox(self, tmp_path, monkeypatch):
+        """A quiet inbox is stat-only. A status write re-reads that file."""
+        inbox = tmp_path / "inbox"
+        first = protocol.create_event(inbox, source="test", body="one")
+        second = protocol.create_event(inbox, source="test", body="two")
+        reads: list[str] = []
+        real = protocol._read_event
+
+        def wrapped(path):
+            reads.append(Path(path).name)
+            return real(path)
+
+        monkeypatch.setattr(protocol, "_read_event", wrapped)
+        pending = protocol.list_pending(inbox)
+        assert sorted(reads) == sorted([first.name, second.name])
+        pending[0]["body"] = "mutated"
+        reads.clear()
+        again = protocol.list_pending(inbox)
+        assert reads == []
+        assert again[0]["body"] == "one"
+        changed = again[0]["_path"].name
+        protocol.set_status(again[0], "processing")
+        reads.clear()
+        refreshed = protocol.list_pending(inbox)
+        assert reads == [changed]
+        statuses = {ev["id"]: ev["status"] for ev in refreshed}
+        assert statuses[again[0]["id"]] == "processing"
+        assert set(statuses.values()) == {"pending", "processing"}
+
 
 class TestAttachments:
     """Image attachments — event files referencing local downloaded files.

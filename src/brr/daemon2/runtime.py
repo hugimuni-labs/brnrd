@@ -44,6 +44,14 @@ class RunResult:
     response: Path
 
 
+class _UnstartedRunner:
+    """A runner that was refused before ``Popen``. ``once`` still finishes."""
+
+    def __init__(self, returncode: int, stdout: str = "") -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+
+
 class Daemon2:
     def __init__(self, repo_root: Path, home: Path, *,
                  runtime_dir: Path | None = None, runner_name: str | None = None,
@@ -101,6 +109,11 @@ class Daemon2:
         self._reload_pending = False
         self._next_reload_check = 0.0
         self._next_delivery_check = 0.0
+        # The Shell ``once`` is inside, if any. A foreground SIGINT reads
+        # this so it can kill the Shell without ending ``serve``.
+        self._live_run_id: str | None = None
+        self._interrupt_armed = False
+        self._interrupt_lock = threading.Lock()
 
     @staticmethod
     def _terminate_runner(run_id: str, *, grace: float = 0.5) -> None:
@@ -1398,6 +1411,31 @@ class Daemon2:
         if hasattr(self, "_stop_serve"):
             self._stop_serve.set()
 
+    def interrupt_runner(self) -> bool:
+        """SIGINT while a Shell is live: kill that Shell, keep serving.
+
+        The runner shares the daemon's process group, so a terminal SIGINT
+        already reaches it. Treating that signal as ``stop()`` parked the
+        seat and then returned from ``serve()``, and the next letter waited
+        until a human started the daemon again (run-261006-1240-de7d).
+
+        The first interrupt signals the live runner and leaves the loop
+        up. A second interrupt, or an interrupt while nothing is running,
+        is ``stop()`` — SIGTERM is still an immediate stop, from ``stop()``.
+        Returns True when a runner was signaled.
+        """
+        with self._interrupt_lock:
+            run_id = self._live_run_id
+            if not run_id or self._interrupt_armed:
+                run_id = None
+            else:
+                self._interrupt_armed = True
+        if run_id is None:
+            self.stop()
+            return False
+        self._terminate_runner(run_id)
+        return True
+
     def once(self, *, role: str = "any",
              self_lease: Lease | None = None) -> RunResult | None:
         if role not in {"any", "resident", "strand"}:
@@ -1600,59 +1638,77 @@ class Daemon2:
                     return RunResult(str(event["id"]), run_id, 125,
                                      False, outbox, response)
                 strand_alloc: _placement.Allocation | None = None
+                placement_failed = False
                 if is_child and self.worktree_env:
                     try:
                         strand_alloc = _placement.allocate(self.repo_root, run_id)
                     except _placement.PlacementError as exc:
+                        # child_run_id pins the clone path, so this failure
+                        # is the same on every retry. Starting the Shell on
+                        # the host checkout edits the shared tree, and the
+                        # attempt usually outlives the claim fact's until —
+                        # fold_letter then reopens the letter. Retire it
+                        # from the finally below, while the lease still
+                        # authorizes, and stamp the file so a raw pending
+                        # scan cannot dispatch it if the facts are unreadable.
                         self._notice(state, f"worktree allocation failed: {exc}",
                                      kind="advisory")
-                state["allocation"] = strand_alloc
-                strand_root = (strand_alloc.path
-                               if strand_alloc is not None else self.repo_root)
-                state["work_dir"] = strand_root
-                strand_git_env: dict[str, str] = (strand_alloc.env()
-                                                   if strand_alloc is not None else {})
-                try:
-                    invocation = runner.RunnerInvocation(
-                        kind="strand" if is_child else "daemon",
-                        label=run_id, prompt=prompt,
-                        repo_root=strand_root, cwd=strand_root,
-                        selected_runner=runner_choice,
-                        env={**strand_git_env,
-                             "BRR_OUTBOX_DIR": str(outbox),
-                             "BRR_PORTAL_STATE": str(outbox / "portal-state.json"),
-                             "BRR_CONVERSATION_ID": address.conversation,
-                             "BRR_EVENT_ID": str(event["id"]),
-                             "BRR_RUN_ID": run_id,
-                             "BRR_IS_STRAND": "1" if is_child else "0",
-                             "BRR_SOURCE": str(event.get("source") or ""),
-                             "BRR_REPORT_PATH": str(event.get("report") or ""),
-                             "BRR_BRANCH": str(event.get("branch") or ""),
-                             **_await_lease_env(runner_choice)},
-                        resume_native_session_id=(
-                            resumed.session_id if resumed and resumed.mode == "native"
-                            else None),
-                    )
-                    result = runner.invoke_runner(
-                        runner_choice, invocation, self.runner_config)
-                    # Drain last-moment submits before publication can
-                    # remove the clone (also needed by unplaced fixtures).
-                    self._tick(state)
-                    exit_status = ("done" if result.returncode == 0 else
-                                   "crash" if result.returncode < 0 else "error")
-                finally:
-                    if strand_alloc is not None:
+                        protocol.set_status(event, "noted")
+                        placement_failed = True
+                        result = _UnstartedRunner(1)
+                        exit_status = "error"
+                if not placement_failed:
+                    state["allocation"] = strand_alloc
+                    strand_root = (strand_alloc.path
+                                   if strand_alloc is not None else self.repo_root)
+                    state["work_dir"] = strand_root
+                    strand_git_env: dict[str, str] = (strand_alloc.env()
+                                                       if strand_alloc is not None else {})
+                    try:
+                        invocation = runner.RunnerInvocation(
+                            kind="strand" if is_child else "daemon",
+                            label=run_id, prompt=prompt,
+                            repo_root=strand_root, cwd=strand_root,
+                            selected_runner=runner_choice,
+                            env={**strand_git_env,
+                                 "BRR_OUTBOX_DIR": str(outbox),
+                                 "BRR_PORTAL_STATE": str(outbox / "portal-state.json"),
+                                 "BRR_CONVERSATION_ID": address.conversation,
+                                 "BRR_EVENT_ID": str(event["id"]),
+                                 "BRR_RUN_ID": run_id,
+                                 "BRR_IS_STRAND": "1" if is_child else "0",
+                                 "BRR_SOURCE": str(event.get("source") or ""),
+                                 "BRR_REPORT_PATH": str(event.get("report") or ""),
+                                 "BRR_BRANCH": str(event.get("branch") or ""),
+                                 **_await_lease_env(runner_choice)},
+                            resume_native_session_id=(
+                                resumed.session_id if resumed and resumed.mode == "native"
+                                else None),
+                        )
+                        self._live_run_id = run_id
                         try:
-                            publication = _placement.publish(self.repo_root, strand_alloc)
-                            state["publication"] = publication
-                            if not publication.landed or not publication.released:
-                                self._notice(
-                                    state, f"strand clone retained at {strand_alloc.path}: "
-                                    f"{publication.detail or 'branch publication incomplete'}",
-                                    kind="advisory", verb="placement")
-                        except _placement.PlacementError as exc:
-                            self._notice(state, f"strand clone retained: {exc}",
-                                         kind="advisory", verb="placement")
+                            result = runner.invoke_runner(
+                                runner_choice, invocation, self.runner_config)
+                        finally:
+                            self._live_run_id = None
+                        # Drain last-moment submits before publication can
+                        # remove the clone (also needed by unplaced fixtures).
+                        self._tick(state)
+                        exit_status = ("done" if result.returncode == 0 else
+                                       "crash" if result.returncode < 0 else "error")
+                    finally:
+                        if strand_alloc is not None:
+                            try:
+                                publication = _placement.publish(self.repo_root, strand_alloc)
+                                state["publication"] = publication
+                                if not publication.landed or not publication.released:
+                                    self._notice(
+                                        state, f"strand clone retained at {strand_alloc.path}: "
+                                        f"{publication.detail or 'branch publication incomplete'}",
+                                        kind="advisory", verb="placement")
+                            except _placement.PlacementError as exc:
+                                self._notice(state, f"strand clone retained: {exc}",
+                                             kind="advisory", verb="placement")
             finally:
                 done.set()
                 thread.join(timeout=5)
@@ -1719,6 +1775,11 @@ class Daemon2:
                     presence.deregister(self.runtime_dir, presence_entry["id"])
                 if execution_lease is not self_lease:
                     self.leases.release(execution_lease)
+                # The next letter gets its own first interrupt. A stop
+                # requested by a second interrupt stays requested.
+                with self._interrupt_lock:
+                    self._live_run_id = None
+                    self._interrupt_armed = False
 
 
 #: The overdue-delivery sweep's cadence and reach: every 30 s, rows from the
