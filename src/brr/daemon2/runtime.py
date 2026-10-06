@@ -1729,17 +1729,22 @@ _DELIVERY_WINDOW_SECONDS = 24 * 3600.0
 
 
 def _await_lease_env(runner_choice: Any) -> dict[str, str]:
-    """Widen claude's Bash cap so one ``brnrd await`` call can hold its lease.
+    """Stamp the seat's Shell flavour and widen claude's Bash cap.
 
-    Engine 1 does this in ``worker.prepare`` (move 2c); without it the call is
-    killed at claude's 600 s default and the lease returns ``pending`` early.
-    An operator's own value is left alone.
+    ``BRR_RUNNER`` is the stamp engine 1 writes in ``worker.prepare``; the
+    hooks read their flavour from it (``HookContext.flavour``). Without it a
+    daemon2 seat's pre-tool hook saw "another Shell" and never rewrote
+    ``brnrd await`` to the lease cap, so every call returned ``pending`` after
+    the CLI's ~8 min fallback slice (#2194). ``BASH_MAX_TIMEOUT_MS`` widens
+    claude's own per-call kill to cover a full lease; an operator's value is
+    left alone.
     """
-    flavour = (getattr(runner_choice, "hooks", None)
-               or getattr(runner_choice, "name", None) or "")
-    if flavour != "claude" or os.environ.get("BASH_MAX_TIMEOUT_MS"):
-        return {}
-    return {"BASH_MAX_TIMEOUT_MS": str(await_verb.CLAUDE_BASH_MAX_TIMEOUT_MS)}
+    flavour = str(getattr(runner_choice, "hooks", None)
+                  or getattr(runner_choice, "name", None) or "")
+    env = {"BRR_RUNNER": flavour} if flavour else {}
+    if flavour == "claude" and not os.environ.get("BASH_MAX_TIMEOUT_MS"):
+        env["BASH_MAX_TIMEOUT_MS"] = str(await_verb.CLAUDE_BASH_MAX_TIMEOUT_MS)
+    return env
 
 
 #: Strand-only follower processes ``brnrd daemon up --engine 2`` keeps beside

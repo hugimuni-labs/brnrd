@@ -1854,10 +1854,32 @@ def test_claude_runner_gets_the_await_lease_bash_cap(monkeypatch) -> None:
     monkeypatch.delenv("BASH_MAX_TIMEOUT_MS", raising=False)
     claude = SimpleNamespace(name="claude-opus", hooks="claude")
     assert _await_lease_env(claude) == {
+        "BRR_RUNNER": "claude",
         "BASH_MAX_TIMEOUT_MS": str(await_verb.CLAUDE_BASH_MAX_TIMEOUT_MS)}
-    assert _await_lease_env(SimpleNamespace(name="codex", hooks="codex")) == {}
+    assert _await_lease_env(SimpleNamespace(name="codex", hooks="codex")) == {
+        "BRR_RUNNER": "codex"}
+    assert _await_lease_env(SimpleNamespace(name="grok-4", hooks="grok")) == {
+        "BRR_RUNNER": "grok"}
     monkeypatch.setenv("BASH_MAX_TIMEOUT_MS", "1000")
-    assert _await_lease_env(claude) == {}
+    assert _await_lease_env(claude) == {"BRR_RUNNER": "claude"}
+
+
+def test_a_stamped_daemon2_claude_seat_gets_the_await_rewrite(tmp_path, monkeypatch) -> None:
+    """#2194, driven through the hook: the env daemon2 hands a claude seat
+    makes the pre-tool phase rewrite ``brnrd await`` to the lease cap."""
+    from types import SimpleNamespace
+    from brr import await_verb, hooks
+    from brr.daemon2.runtime import _await_lease_env
+    monkeypatch.delenv("BASH_MAX_TIMEOUT_MS", raising=False)
+    env = {**_await_lease_env(SimpleNamespace(name="claude-opus", hooks="claude")),
+           "BRR_OUTBOX_DIR": str(tmp_path)}
+    ctx = hooks.HookContext(env=env)
+    payload = {"tool_name": "Bash",
+               "tool_input": {"command": "brnrd await 2>&1 | tail -3"}}
+    updated = hooks._await_lease_input(ctx, payload, env)
+    assert updated is not None
+    assert updated["timeout"] == int(env["BASH_MAX_TIMEOUT_MS"])
+    assert updated["command"].startswith(f"export {await_verb.CALL_CAP_ENV}=")
 
 
 def test_strand_runs_while_its_parent_seat_is_still_alive(tmp_path: Path) -> None:
