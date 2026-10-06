@@ -27,6 +27,7 @@ import threading
 import time
 import random
 import string
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -751,6 +752,21 @@ TERMINAL_EVENT_STATUSES = frozenset(
 )
 
 
+# A quiet inbox does not change between polls. Parsing every file on each
+# call is what pegged a daemon whose tick is 0.1s against an inbox of
+# several thousand events (measured 2026-10-06: 6903 files, ~0.22s to read,
+# ~0.027s to stat). The cache key is the directory plus each file's name,
+# mtime and size, so a status write invalidates that file and nothing else.
+# Letter facts are not cached here — they move without touching the event
+# file. Callers receive copies; mutating a returned dict must not poison
+# the next poll.
+_PENDING_CACHE_MAX = 32
+# fingerprint: ((name, (mtime_ns, size)), ...) sorted by name
+_pending_cache: OrderedDict[str, tuple[tuple[tuple[str, tuple[int, int]], ...],
+                                        dict[str, dict[str, Any] | None]]] = OrderedDict()
+_pending_cache_lock = threading.Lock()
+
+
 def list_pending(inbox_dir: Path) -> list[dict[str, Any]]:
     """Return events with status pending or processing, oldest first.
 
@@ -765,16 +781,49 @@ def list_pending(inbox_dir: Path) -> list[dict[str, Any]]:
     happens after the read (not on the raw ``DirEntry`` scan, unlike
     :func:`list_done` / :func:`list_active` below) because ``created`` lives
     in the event body, not in anything ``os.scandir`` exposes.
+
+    Unchanged files are not re-parsed. The scan still stats every name, and
+    a changed mtime or size re-reads that file only.
     """
     if not inbox_dir.exists():
         return []
-    events = []
-    for entry in os.scandir(inbox_dir):
-        if not entry.name.endswith(".md"):
-            continue
-        ev = _read_event(Path(entry.path))
-        if ev and ev.get("status") in ("pending", "processing"):
-            events.append(ev)
+    try:
+        key = str(inbox_dir.resolve())
+    except OSError:
+        return []
+    current: dict[str, tuple[int, int]] = {}
+    try:
+        for entry in os.scandir(inbox_dir):
+            if not entry.name.endswith(".md"):
+                continue
+            try:
+                st = entry.stat()
+            except OSError:
+                continue
+            current[entry.name] = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return []
+    fingerprint = tuple(sorted(current.items()))
+    with _pending_cache_lock:
+        cached = _pending_cache.get(key)
+        if cached is not None and cached[0] == fingerprint:
+            _pending_cache.move_to_end(key)
+            parsed = cached[1]
+        else:
+            old_fp = dict(cached[0]) if cached is not None else {}
+            old_parsed = cached[1] if cached is not None else {}
+            parsed = {}
+            for name, sig in current.items():
+                if old_fp.get(name) == sig and name in old_parsed:
+                    parsed[name] = old_parsed[name]
+                else:
+                    parsed[name] = _read_event(inbox_dir / name)
+            _pending_cache[key] = (fingerprint, parsed)
+            _pending_cache.move_to_end(key)
+            while len(_pending_cache) > _PENDING_CACHE_MAX:
+                _pending_cache.popitem(last=False)
+        events = [dict(ev) for ev in parsed.values()
+                  if ev and ev.get("status") in ("pending", "processing")]
     events.sort(key=_event_queue_sort_key)
     return events
 

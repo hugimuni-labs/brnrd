@@ -44,6 +44,14 @@ class RunResult:
     response: Path
 
 
+class _UnstartedRunner:
+    """A runner that was refused before ``Popen``. ``once`` still finishes."""
+
+    def __init__(self, returncode: int, stdout: str = "") -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+
+
 class Daemon2:
     def __init__(self, repo_root: Path, home: Path, *,
                  runtime_dir: Path | None = None, runner_name: str | None = None,
@@ -204,6 +212,30 @@ class Daemon2:
     def _run_id(self) -> str:
         return "run-" + time.strftime("%y%m%d-%H%M", time.gmtime()) + "-" + uuid.uuid4().hex[:4]
 
+    def _address_of(self, event: dict[str, Any]):
+        try:
+            return self.router.route_or_triage(event)
+        except UnaddressedLetter:
+            return None
+
+    def _seat_can_see(self, event: dict[str, Any], conversation: str, *,
+                      is_child: bool) -> bool:
+        """Same conversation, or a resident seat's owner mail on another one.
+
+        A strand stays on the dispatch that named it. An unroutable letter
+        keeps the triage seat it was given, instead of sticking to whichever
+        seat is live. A non-owner letter on another thread stays out: that
+        thread can have its own seat once this one ends.
+        """
+        address = self._address_of(event)
+        if address is None or not address.conversation:
+            return False
+        if address.conversation == conversation:
+            return True
+        if is_child or not address.routable:
+            return False
+        return trust.resolve_tier(event) == trust.OWNER
+
     def _visible(self, conversation: str, current_event: str, *,
                  is_child: bool = False, run_id: str = "") -> list[dict[str, Any]]:
         visible = []
@@ -218,11 +250,8 @@ class Daemon2:
                   or (event.get("source") == "dispatch_message"
                       and event.get("spawn_message_for_run"))):
                 continue
-            try:
-                if self.router.route_or_triage(event).conversation == conversation:
-                    visible.append(event)
-            except UnaddressedLetter:
-                continue
+            if self._seat_can_see(event, conversation, is_child=is_child):
+                visible.append(event)
         return visible
 
     def _notice(self, state: dict[str, Any], text: str, *, kind: str = "refused",
@@ -246,12 +275,19 @@ class Daemon2:
         event = self.door.get(target_id)
         if event is None or event.get("status") not in {"pending", "processing"}:
             raise ValueError(f"event {target_id} is not pending")
-        if self.router.route_or_triage(event).conversation != state["conversation"]:
+        waking = target_id == state["event"]["id"]
+        if not waking and not self._seat_can_see(
+                event, state["conversation"],
+                is_child=bool(state.get("is_child"))):
             raise ValueError("reply target belongs to another conversation")
-        claim = state["claim"] if target_id == state["event"]["id"] else None
+        # The letter's own thread, including when the seat was woken on
+        # another one. The gate delivers from this event; the message
+        # record has to name the same conversation or the receipt lies.
+        routed = self.router.route_or_triage(event).conversation
+        claim = state["claim"] if waking else None
         if claim is None:
             self.letters.ingest(target_id, str(event["status"]), metadata={
-                "conversation": state["conversation"],
+                "conversation": routed,
                 "trust_tier": event.get("trust_tier"),
             })
             claim = self.letters.claim(
@@ -270,7 +306,7 @@ class Daemon2:
                         run_id=state["run_id"], body=body, kind="terminal",
                         target_event=target_id,
                         target_gate=str(event.get("source") or ""),
-                        target_thread=state["conversation"],
+                        target_thread=routed,
                         source_ref="reply:" + target_id)
                 except Exception as exc:
                     self._notice(state, f"response queued without message record: {exc}",
@@ -671,7 +707,9 @@ class Daemon2:
                              source_file=path.name, verb="note")
                 return
             target = str(event["id"])
-            if self.router.route_or_triage(event).conversation != state["conversation"]:
+            if target != event_id and not self._seat_can_see(
+                    event, state["conversation"],
+                    is_child=bool(state.get("is_child"))):
                 raise ValueError("note target does not belong to this conversation")
             claim = state["claim"] if target == event_id else self.letters.claim(
                 target, state["run_id"], self.lease_ttl_seconds, now=time.time())
@@ -1600,59 +1638,73 @@ class Daemon2:
                     return RunResult(str(event["id"]), run_id, 125,
                                      False, outbox, response)
                 strand_alloc: _placement.Allocation | None = None
+                placement_failed = False
                 if is_child and self.worktree_env:
                     try:
                         strand_alloc = _placement.allocate(self.repo_root, run_id)
                     except _placement.PlacementError as exc:
+                        # child_run_id pins the clone path, so this failure
+                        # is the same on every retry. Starting the Shell on
+                        # the host checkout edits the shared tree, and the
+                        # attempt usually outlives the claim fact's until —
+                        # fold_letter then reopens the letter. Retire it
+                        # from the finally below, while the lease still
+                        # authorizes, and stamp the file so a raw pending
+                        # scan cannot dispatch it if the facts are unreadable.
                         self._notice(state, f"worktree allocation failed: {exc}",
                                      kind="advisory")
-                state["allocation"] = strand_alloc
-                strand_root = (strand_alloc.path
-                               if strand_alloc is not None else self.repo_root)
-                state["work_dir"] = strand_root
-                strand_git_env: dict[str, str] = (strand_alloc.env()
-                                                   if strand_alloc is not None else {})
-                try:
-                    invocation = runner.RunnerInvocation(
-                        kind="strand" if is_child else "daemon",
-                        label=run_id, prompt=prompt,
-                        repo_root=strand_root, cwd=strand_root,
-                        selected_runner=runner_choice,
-                        env={**strand_git_env,
-                             "BRR_OUTBOX_DIR": str(outbox),
-                             "BRR_PORTAL_STATE": str(outbox / "portal-state.json"),
-                             "BRR_CONVERSATION_ID": address.conversation,
-                             "BRR_EVENT_ID": str(event["id"]),
-                             "BRR_RUN_ID": run_id,
-                             "BRR_IS_STRAND": "1" if is_child else "0",
-                             "BRR_SOURCE": str(event.get("source") or ""),
-                             "BRR_REPORT_PATH": str(event.get("report") or ""),
-                             "BRR_BRANCH": str(event.get("branch") or ""),
-                             **_await_lease_env(runner_choice)},
-                        resume_native_session_id=(
-                            resumed.session_id if resumed and resumed.mode == "native"
-                            else None),
-                    )
-                    result = runner.invoke_runner(
-                        runner_choice, invocation, self.runner_config)
-                    # Drain last-moment submits before publication can
-                    # remove the clone (also needed by unplaced fixtures).
-                    self._tick(state)
-                    exit_status = ("done" if result.returncode == 0 else
-                                   "crash" if result.returncode < 0 else "error")
-                finally:
-                    if strand_alloc is not None:
-                        try:
-                            publication = _placement.publish(self.repo_root, strand_alloc)
-                            state["publication"] = publication
-                            if not publication.landed or not publication.released:
-                                self._notice(
-                                    state, f"strand clone retained at {strand_alloc.path}: "
-                                    f"{publication.detail or 'branch publication incomplete'}",
-                                    kind="advisory", verb="placement")
-                        except _placement.PlacementError as exc:
-                            self._notice(state, f"strand clone retained: {exc}",
-                                         kind="advisory", verb="placement")
+                        protocol.set_status(event, "noted")
+                        placement_failed = True
+                        result = _UnstartedRunner(1)
+                        exit_status = "error"
+                if not placement_failed:
+                    state["allocation"] = strand_alloc
+                    strand_root = (strand_alloc.path
+                                   if strand_alloc is not None else self.repo_root)
+                    state["work_dir"] = strand_root
+                    strand_git_env: dict[str, str] = (strand_alloc.env()
+                                                       if strand_alloc is not None else {})
+                    try:
+                        invocation = runner.RunnerInvocation(
+                            kind="strand" if is_child else "daemon",
+                            label=run_id, prompt=prompt,
+                            repo_root=strand_root, cwd=strand_root,
+                            selected_runner=runner_choice,
+                            env={**strand_git_env,
+                                 "BRR_OUTBOX_DIR": str(outbox),
+                                 "BRR_PORTAL_STATE": str(outbox / "portal-state.json"),
+                                 "BRR_CONVERSATION_ID": address.conversation,
+                                 "BRR_EVENT_ID": str(event["id"]),
+                                 "BRR_RUN_ID": run_id,
+                                 "BRR_IS_STRAND": "1" if is_child else "0",
+                                 "BRR_SOURCE": str(event.get("source") or ""),
+                                 "BRR_REPORT_PATH": str(event.get("report") or ""),
+                                 "BRR_BRANCH": str(event.get("branch") or ""),
+                                 **_await_lease_env(runner_choice)},
+                            resume_native_session_id=(
+                                resumed.session_id if resumed and resumed.mode == "native"
+                                else None),
+                        )
+                        result = runner.invoke_runner(
+                            runner_choice, invocation, self.runner_config)
+                        # Drain last-moment submits before publication can
+                        # remove the clone (also needed by unplaced fixtures).
+                        self._tick(state)
+                        exit_status = ("done" if result.returncode == 0 else
+                                       "crash" if result.returncode < 0 else "error")
+                    finally:
+                        if strand_alloc is not None:
+                            try:
+                                publication = _placement.publish(self.repo_root, strand_alloc)
+                                state["publication"] = publication
+                                if not publication.landed or not publication.released:
+                                    self._notice(
+                                        state, f"strand clone retained at {strand_alloc.path}: "
+                                        f"{publication.detail or 'branch publication incomplete'}",
+                                        kind="advisory", verb="placement")
+                            except _placement.PlacementError as exc:
+                                self._notice(state, f"strand clone retained: {exc}",
+                                             kind="advisory", verb="placement")
             finally:
                 done.set()
                 thread.join(timeout=5)
