@@ -1542,15 +1542,57 @@ def _common_trailing_segments(descriptions: list[str]) -> list[str]:
     return segmented[0][-shared:] if shared else []
 
 
+# A stale-signature description names the rewrite as
+# "… **replaced** on <date> in `<sha>`, …". The wake line keeps those two
+# facts and drops the quoted removed text, which is what made each finding
+# a paragraph.
+_STALE_SIGNATURE_WHEN_RE = re.compile(
+    r"on (\d{4}-\d{2}-\d{2}) in `([0-9a-fA-F]+)`"
+)
+
+
+def _format_closed_cites(group: list[Finding]) -> str:
+    """One line for every closed-ticket citation, plus where to read them.
+
+    The per-entry lines stay available from ``brnrd notes check``, which
+    prints :meth:`Finding.render`. The wake only needs the count.
+    """
+    n = len(group)
+    noun = "entry cites" if n == 1 else "entries cite"
+    return (
+        f"- **pitfall-cites-closed-issue** [info] — {n} {noun} a closed "
+        f"ticket. List them: `brnrd notes check`"
+    )
+
+
+def _format_stale_signature(finding: Finding) -> str:
+    """Section, date, commit. Not the removed text."""
+    sev = "" if finding.severity == "error" else f" [{finding.severity}]"
+    match = _STALE_SIGNATURE_WHEN_RE.search(finding.description)
+    if match:
+        detail = f"{match.group(1)} `{match.group(2)}`"
+    else:
+        detail = finding.description.split(" — the removed text:", 1)[0]
+    return f"- **stale-signature**{sev} `{finding.target}` — {detail}"
+
+
 def format_findings(findings: list[Finding]) -> str:
     """Render *findings* as the wake block's findings list, or ``""``.
 
-    Findings sharing a ``type`` often restate the same rule-text clause in
-    every instance's description — ``pitfall-cites-closed-issue`` is the
-    motivating case: one wake with 40 stale citations rendered the
-    identical "closed ticket is not proof…" paragraph 40 times. Group by
-    ``type``; when the group's descriptions share a common trailing clause
-    (see :func:`_common_trailing_segments`), print that clause once as the
+    Two types collapse further than the shared-tail grouping below, because
+    the per-instance line was the bulk of the block:
+
+    - ``pitfall-cites-closed-issue`` — one line: the count, and
+      ``brnrd notes check`` to list them. The check still prints every
+      entry; the wake does not.
+    - ``stale-signature`` — one line each: section, date, commit. The
+      quoted removed text stays on the :class:`Finding` (``brnrd notes
+      check`` and the signature tests read it) and does not ride the wake.
+
+    Every other type: findings sharing a ``type`` often restate the same
+    rule-text clause in every instance's description. Group by ``type``;
+    when the group's descriptions share a common trailing clause (see
+    :func:`_common_trailing_segments`), print that clause once as the
     type's rule line and reduce each instance to `` `target` [severity] —
     <the part that differs>``. A type with only one finding, or whose
     descriptions share nothing at the tail, renders exactly as
@@ -1571,6 +1613,12 @@ def format_findings(findings: list[Finding]) -> str:
     blocks: list[str] = []
     for ftype in order:
         group = groups[ftype]
+        if ftype == "pitfall-cites-closed-issue":
+            blocks.append(_format_closed_cites(group))
+            continue
+        if ftype == "stale-signature":
+            blocks.append("\n".join(_format_stale_signature(f) for f in group))
+            continue
         rule_segments = (
             _common_trailing_segments([f.description for f in group])
             if len(group) > 1

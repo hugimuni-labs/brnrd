@@ -44,6 +44,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -580,17 +581,50 @@ def blockers_on_you(goal_id: str, items: list[WarpItem]) -> list[WarpItem]:
 _TYPE_MARK = {"decision": "◆", "preparation": "◇", "action": "●", None: "▫"}
 _TYPE_ORDER = {"decision": 0, "preparation": 1, "action": 2, None: 3}
 
+#: A ready item whose file has not changed in this long collapses to its id.
+#: Goals and held items are exempt — a goal is the container, a held item is
+#: the one whose blocker the reader still has to see.
+_WARP_STALE_SECONDS = 30 * 24 * 60 * 60
+_STALE_KIND_LABEL = {
+    "decision": "decisions",
+    "preparation": "preparations",
+    "action": "actions",
+    "untyped": "untyped",
+}
+
+
+def _item_file_stale(item: WarpItem, now: float) -> bool:
+    """True when the item file's mtime is at least 30 days behind *now*.
+
+    Unreadable ⇒ not stale. Collapsing a file we could not stat would hide
+    an item for a reason the reader cannot check.
+    """
+    try:
+        mtime = item.path.stat().st_mtime
+    except OSError:
+        return False
+    return (now - mtime) >= _WARP_STALE_SECONDS
+
 
 def render_index(
     warp_root: Path | None,
     *,
     done_tail: int = 5,
+    now: float | None = None,
 ) -> str | None:
     """The compact open-items index a wake carries in place of the item
     pages — goals first (their own band, never folded into ready/held: a
     goal is a container, not a dispatchable/decidable item), then one line
     per open item, ready before held, decisions first, plus a short
-    done-tail for continuity. ``None`` when there is no warp."""
+    done-tail for continuity. ``None`` when there is no warp.
+
+    A ready item whose file has not changed in 30 days collapses to its id
+    on one line per kind (``stale decisions (30d+): w-1 w-2``). Items
+    touched more recently keep the full line. Goals and held items are
+    never collapsed — the goal band is the container, and a held line is
+    how the reader sees what it is waiting on. *now* is the clock the
+    30-day cut is measured against; the file mtime is the "changed" fact.
+    """
     items = load_items(warp_root)
     if not items:
         return None
@@ -643,13 +677,27 @@ def render_index(
     held = sorted(
         (item for item in open_items if open_blockers(item, by_id)), key=order
     )
+    clock = time.time() if now is None else now
+    fresh_ready: list[WarpItem] = []
+    stale_by_kind: dict[str, list[WarpItem]] = {}
+    for item in ready:
+        if _item_file_stale(item, clock):
+            stale_by_kind.setdefault(item.type or "untyped", []).append(item)
+        else:
+            fresh_ready.append(item)
     out: list[str] = []
     if goals:
         out.append("goals:")
         out.extend(goal_line(goal) for goal in sorted(goals, key=_id_sort_key))
-    if ready:
+    if fresh_ready or stale_by_kind:
         out.append("ready:")
-        out.extend(line(item) for item in ready)
+        out.extend(line(item) for item in fresh_ready)
+        for kind in ("decision", "preparation", "action", "untyped"):
+            stale = stale_by_kind.get(kind)
+            if not stale:
+                continue
+            ids = " ".join(item.id for item in stale)
+            out.append(f"stale {_STALE_KIND_LABEL[kind]} (30d+): {ids}")
     if held:
         out.append("held:")
         out.extend(line(item) for item in held)
