@@ -1584,6 +1584,7 @@ class Daemon2:
                 pending_events=[public_event(e) for e in events],
                 event_body=str(event.get("body") or ""),
                 event_meta=public_event(event), runner_name=selected_runner,
+                runner_shell=runner_choice.shell, runner_core=runner_choice.model,
                 strand=is_child,
             )
             context.write_text(prompt, encoding="utf-8")

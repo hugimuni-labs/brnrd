@@ -2731,11 +2731,18 @@ def _build_web_capability_block(runner_shell: str | None) -> str:
     tools = "/".join(cap.tools)
     execution = cap.execution or "server-side"
     default_note = ", default-on" if cap.default_on else ""
+    deferred_note = (
+        f" The claude Shell may list them as deferred tools (named, schema "
+        f"not loaded): load them with ToolSearch `select:{','.join(cap.tools)}` "
+        "before first use."
+        if cap.shell == "claude"
+        else ""
+    )
     return (
         f"- Web research: native via {tools}{default_note} — search executes "
         f"{execution} (rides the model API, so it is available even under "
         "the solitary egress boundary); use it to verify changing facts "
-        "before asserting them."
+        "before asserting them." + deferred_note
     )
 
 
