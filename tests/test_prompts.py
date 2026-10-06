@@ -1759,6 +1759,63 @@ class TestPromptBuilding:
         assert _says(prompt, "found it, never mind")
         assert "also:" in prompt
 
+    def test_waking_body_renders_once_when_the_burst_and_instruction_repeat_it(
+        self, tmp_path,
+    ):
+        """The waking message used to land three times: the pending copy,
+        the appended waking-event copy, and ``Run instruction:`` when the
+        task was that body plus a recovery suffix. Ids, order, and the
+        ``also:`` hint stay; the body does not.
+        """
+        body = "the message itself, said once"
+        prompt = build_daemon_prompt(
+            body + "\n\nRecovery checkpoint (previous Shell stopped):\n{}",
+            "evt-new", "/tmp/resp.md", tmp_path,
+            run_id="task-A",
+            event_body=body,
+            event_created="2026-09-09T01:42:00Z",
+            event_meta={
+                "id": "evt-new", "source": "telegram",
+                "telegram_chat_id": "555", "telegram_user": "Gurio",
+                "telegram_username": "StasisRush",
+                "created": "2026-09-09T01:42:00Z",
+                "body": body,
+            },
+            pending_events=[
+                {
+                    "id": "evt-new", "source": "telegram",
+                    "telegram_chat_id": "555", "telegram_user": "Gurio",
+                    "telegram_username": "StasisRush",
+                    "created": "2026-09-09T01:42:00Z",
+                    "body": body,
+                },
+                {
+                    "id": "evt-old", "source": "telegram",
+                    "telegram_chat_id": "555", "telegram_user": "Gurio",
+                    "telegram_username": "StasisRush",
+                    "created": "2026-09-09T01:41:00Z",
+                    "body": "the earlier sibling",
+                },
+            ],
+        )
+        assert prompt.count(body) == 1
+        assert prompt.count("— evt-new — waking event") == 1
+        assert "the earlier sibling" in prompt
+        assert "evt-old" in prompt
+        assert prompt.index("evt-old") < prompt.index("— evt-new — waking event")
+        assert "also:" in prompt
+        assert prompt.count("Recovery checkpoint") == 1
+        assert "Run instruction:" not in prompt
+
+    def test_a_distinct_run_instruction_still_follows_the_event_body(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "do the other thing",
+            "evt-1", "/tmp/resp.md", tmp_path,
+            event_body="the user's words",
+        )
+        assert "the user's words" in prompt
+        assert "Run instruction: do the other thing" in prompt
+
     def test_daemon_prompt_burst_listing_requires_a_resolvable_identity(
         self, tmp_path,
     ):
@@ -3640,9 +3697,9 @@ class TestWorkSurfaceInjection:
     def test_shelf_pages_ride_as_an_index_line(self, tmp_path):
         """#2002 — a shelf page never enters the per-page walk by default;
         it rides the wake as one composed-index line (basename · keeps ·
-        bytes) instead of a full ``### shelf/<name>.md`` section, and an
-        expired one's ``keeps:`` text renders in place rather than being
-        swept into the lifecycle-omitted count.
+        bytes) instead of a full ``### shelf/<name>.md`` section. An
+        expired page collapses further, to its name on one ``expired:``
+        line, rather than a keeps-row or a lifecycle-omitted count.
         """
         home = _seed_account_home(tmp_path)
         surface = home / "surface"
@@ -3670,7 +3727,8 @@ class TestWorkSurfaceInjection:
         assert "Old reading" not in result
         assert "the shelf & archive — index" in result
         assert "`artifact.md` · keeps: until changed ·" in result
-        assert "`old.md` · keeps: expired 2026-08-19" in result
+        assert "expired: old.md" in result
+        assert "`old.md` · keeps:" not in result
 
     def test_shelf_page_opts_back_into_the_walk_with_wake_full(self, tmp_path):
         """The escape hatch: a shelf page whose subject is live declares
@@ -5730,9 +5788,12 @@ class TestPitfallCitesClosedIssueReachesTheWake:
         block = _build_notes_health_block(repo)
 
         assert "pitfall-cites-closed-issue" in block
-        assert _says(block, "Host strand clone shape")
-        assert "#1298" in block
-        assert "2026-08-05" in block
+        assert "1 entry cites a closed ticket" in block
+        assert "`brnrd notes check`" in block
+        # The title and the ticket stay on the Finding (`brnrd notes check`
+        # prints it). The wake line is the count.
+        assert "Host strand clone shape" not in block
+        assert "#1298" not in block
 
     def test_a_retired_entry_stays_quiet_even_citing_the_same_closed_ticket(
         self, tmp_path, monkeypatch

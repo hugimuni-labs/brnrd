@@ -2191,6 +2191,7 @@ def _surface_shelf_archive_index(
     that failed to read, or opted ``wake: full``, is never in it).
     """
     sections: dict[str, list[str]] = {"shelf": [], "archive": [], "other": []}
+    expired: dict[str, list[str]] = {"shelf": [], "archive": [], "other": []}
     covered: set[Path] = set()
     for path in surface_files:
         relative = path.relative_to(surface).as_posix()
@@ -2210,16 +2211,27 @@ def _surface_shelf_archive_index(
             bucket = "archive"
         else:
             bucket = "other"
-        keeps = _page_keeps_text(content) or "—"
-        size = len(content.strip().encode("utf-8"))
-        sections[bucket].append(f"- `{path.name}` · keeps: {keeps} · {size:,} B")
+        keeps = _page_keeps_text(content)
+        if keeps is not None and re.match(r"expired\b", keeps, re.IGNORECASE):
+            # A page that has already said it is over does not earn a
+            # keeps-row and a byte count. The name is the coordinate.
+            expired[bucket].append(path.name)
+        else:
+            shown = keeps or "—"
+            size = len(content.strip().encode("utf-8"))
+            sections[bucket].append(
+                f"- `{path.name}` · keeps: {shown} · {size:,} B"
+            )
         covered.add(path.resolve())
 
-    parts = [
-        f"{name}:\n" + "\n".join(rows)
-        for name in ("shelf", "archive", "other")
-        if (rows := sections[name])
-    ]
+    parts = []
+    for name in ("shelf", "archive", "other"):
+        rows = list(sections[name])
+        names = expired[name]
+        if names:
+            rows.append("expired: " + " ".join(names))
+        if rows:
+            parts.append(f"{name}:\n" + "\n".join(rows))
     if not parts:
         return None, frozenset()
     return "\n\n".join(parts), frozenset(covered)
@@ -5185,6 +5197,27 @@ def build_run_prompt(task: str, repo_root: Path) -> str:
     )
 
 
+def _append_unshown_instruction(
+    trailer: str, task: str, event_body: str | None,
+) -> str:
+    """Append only the part of *task* the bundle has not already shown.
+
+    The waking body renders under ``### Original event body``. When *task*
+    is that body plus a suffix — the recovery checkpoint the runtime
+    appends — repeating the body under ``Run instruction:`` counted the
+    same message again. A task that does not start with the body is a
+    different instruction and still lands whole, labelled.
+    """
+    shown = (event_body or "").strip()
+    instruction = (task or "").strip()
+    if not instruction or instruction == shown:
+        return trailer
+    if shown and instruction.startswith(shown):
+        extra = instruction[len(shown):].strip()
+        return f"{trailer}\n{extra}" if extra else trailer
+    return f"{trailer}\nRun instruction: {instruction}"
+
+
 def build_daemon_prompt(
     task: str,
     event_id: str,
@@ -5354,8 +5387,7 @@ def build_daemon_prompt(
         diffense=diffense,
     )
     trailer = bundle.rstrip()
-    if (event_body or "").strip() != task.strip():
-        trailer = f"{trailer}\nRun instruction: {task}"
+    trailer = _append_unshown_instruction(trailer, task, event_body)
     if _block_text_sink is not None:
         # "run-context-bundle" matches `_TRAILER_KEY` in `replay.py` and the
         # `block_key` the caller's `runtime_entries` filters on
@@ -5672,12 +5704,36 @@ def _bundle_burst_group(
     ]
     if not candidates:
         return []
-    waking_record = dict(event_meta)
-    waking_record["id"] = event_id
-    waking_record["body"] = event_body or ""
-    if event_created:
-        waking_record["created"] = event_created
-    combined = candidates + [waking_record]
+    # The waking event is often already in *pending_events*. Appending it
+    # again rendered the same body twice under "### Original event body",
+    # and `Run instruction:` rendered it a third time when *task* was that
+    # body plus a suffix. One id, one body. A pending copy with an empty
+    # body takes *event_body* so the dedupe does not drop the text.
+    waking_id = str(event_id or "")
+    deduped: list[dict[str, Any]] = []
+    seen_waking = False
+    for ev in candidates:
+        eid = str(ev.get("id") or "")
+        if waking_id and eid == waking_id:
+            if seen_waking:
+                continue
+            seen_waking = True
+            ev = dict(ev)
+            # *event_body* is the waking message. The pending copy is the
+            # same message arriving a second time; keep the canonical text.
+            if (event_body or "").strip():
+                ev["body"] = event_body
+            if event_created and not ev.get("created"):
+                ev["created"] = event_created
+        deduped.append(ev)
+    if not seen_waking:
+        waking_record = dict(event_meta)
+        waking_record["id"] = event_id
+        waking_record["body"] = event_body or ""
+        if event_created:
+            waking_record["created"] = event_created
+        deduped.append(waking_record)
+    combined = deduped
     combined.sort(
         key=lambda ev: protocol.parse_iso_epoch(ev.get("created")) or 0.0
     )

@@ -263,10 +263,8 @@ def test_cited_issue_numbers_unions_issue_and_ambiguous_kinds(tmp_path):
 
 
 def test_format_findings_prints_the_rule_once_for_a_repeated_type(tmp_path):
-    """The motivating case: 40 pitfall entries each citing their own
-    closed issue used to render the identical "closed ticket is not
-    proof…" paragraph 40 times. Grouped, the rule text appears once and
-    every entry's own handle still appears."""
+    """40 closed-ticket citations are one wake line: the count, and the
+    command that lists them. Each Finding still carries its own ticket."""
     repo = _repo(tmp_path)
     dom = tmp_path / "dominion"
     n = 40
@@ -289,10 +287,12 @@ def test_format_findings_prints_the_rule_once_for_a_repeated_type(tmp_path):
 
     block = notes_preflight.format_findings(findings)
 
-    assert block.count("retire the entry.") == 1
-    for i in range(n):
-        assert f"Entry {i}`" in block
-        assert f"#{1000 + i}" in block
+    assert "40 entries cite a closed ticket" in block
+    assert "`brnrd notes check`" in block
+    # The per-entry handles stay on the Finding; the wake line does not.
+    assert "Entry 0" not in block
+    assert "#1000" not in block
+    assert block.count("pitfall-cites-closed-issue") == 1
 
 
 def test_format_findings_keeps_every_type_in_a_mixed_set(tmp_path):
@@ -324,9 +324,32 @@ def test_format_findings_keeps_every_type_in_a_mixed_set(tmp_path):
     assert "No trigger one" in block
     assert "No trigger two" in block
     assert "No trigger three" in block
-    assert "Cites something" in block
+    assert "1 entry cites a closed ticket" in block
+    assert "Cites something" not in block
     # The inert-pitfall rule text (shared by all three) prints once.
     assert block.count("Add a `trigger:") == 1
+
+
+def test_format_findings_stale_signature_is_section_date_commit():
+    finding = notes_preflight.Finding(
+        type="stale-signature",
+        target="workflow.md §Autonomy",
+        description=(
+            "2 lines of signed text in this section were **replaced** on "
+            "2026-09-02 in `da61b062`, after maintainer (2026-07-16) signed "
+            "it — the removed text: `- reversible calls are the resident's`. "
+            "Re-sign or amend — never assume the counterpart still agrees "
+            "with text they have not read."
+        ),
+        severity="warning",
+    )
+    block = notes_preflight.format_findings([finding])
+    assert "`workflow.md §Autonomy`" in block
+    assert "2026-09-02" in block
+    assert "`da61b062`" in block
+    assert "removed text" not in block
+    assert "reversible calls" not in block
+    assert block.count("**stale-signature**") == 1
 
 
 def test_eviction_preview_names_files_not_heading_fragments(monkeypatch, tmp_path):
