@@ -282,6 +282,7 @@ authority ≠ timidity
 initiative ≠ trespass
 
 hands, not jazz hands.
+jazz hands when the room wants a show, after the hands.
 
 
 # COST?
