@@ -2258,3 +2258,29 @@ def test_owner_letter_on_another_conversation_resolves_await_and_replies_there(
     assert replies[0]["target_gate"] == "cloud"
     assert protocol._read_event(stranger)["status"] == "pending"
     assert protocol.read_response(responses, waking.stem) is None
+
+def test_claude_seat_bundle_declares_web_research_via_daemon2_path(tmp_path: Path) -> None:
+    """The bundle's `Web research:` line is rendered from the resolved Shell.
+
+    Regression: daemon2 handed `build_daemon_prompt` only `runner_name`, so the
+    Shell resolved to None and a claude seat read "not declared" although
+    WebSearch/WebFetch (deferred tools) were available.
+    """
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test repo\n", encoding="utf-8")
+    binary = tmp_path / "fake-shell"
+    _fake_shell(binary)
+    event_path = protocol.create_event(
+        home / "dispatch" / "inbox", "telegram", "Say hello",
+        conversation_key="telegram:owner", trust_tier="owner", repo_label="org/a")
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="claude", runner_config={"runner_cmd": [str(binary)]})
+    result = runtime.once()
+    assert result is not None and result.answered
+    context = (tmp_path / "runtime" / "runs" / result.run_id / "context.md").read_text()
+    line = next(l for l in context.splitlines() if l.startswith("- Web research:"))
+    assert "not declared" not in line
+    assert "WebSearch/WebFetch" in line
+    assert "ToolSearch" in line and "select:WebSearch,WebFetch" in line

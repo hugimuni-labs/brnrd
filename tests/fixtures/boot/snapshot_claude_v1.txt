@@ -108,7 +108,7 @@ _From the brnrd daemon: the runtime facts for *this* thought — run metadata, e
 - Environment: worktree
 - Requested Runner: claude-sonnet (requested from the dashboard spool rack) — the Shell+Core selected for this thought; the actual Core is attested from the Shell result. A failure here (quota exhausted, provider error, substitution) ⇒ the user pays a manual reroute, so chunk work and commit early when the budget is tight.
 - Quota: session 72% left (resets 10:30pm); week 57% left
-- Web research: native via WebSearch/WebFetch, default-on — search executes server-side (rides the model API, so it is available even under the solitary egress boundary); use it to verify changing facts before asserting them.
+- Web research: native via WebSearch/WebFetch, default-on — search executes server-side (rides the model API, so it is available even under the solitary egress boundary); use it to verify changing facts before asserting them. The claude Shell may list them as deferred tools (named, schema not loaded): load them with ToolSearch `select:WebSearch,WebFetch` before first use.
 - Delivery: situational outputs captured by brr (see Delivery contract below)
 - Budget: no time limit — brr does not kill a thought on an elapsed clock. Still bound uncertain long-running commands yourself; a hung shell holds the slot until the user stops the run from the dashboard.
 - Runtime recovery: /tmp/brr-fixture-runtime/runs/run-fixture-0001/context.md (open only if a detail you need isn't in this bundle)
@@ -188,7 +188,7 @@ source manifest:
   · notes health (deterministic preflight)                          daemon-live  health             0  computed
   · diffense review-pack prompt                                     product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
   · Introspection dev-mode invitation                               product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
-  ✓ Run Context Bundle (runtime facts)                              daemon-live  runtime        4,080  computed
+  ✓ Run Context Bundle (runtime facts)                              daemon-live  runtime        4,229  computed
 
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
