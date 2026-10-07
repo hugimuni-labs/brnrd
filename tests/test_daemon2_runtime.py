@@ -2286,6 +2286,139 @@ def test_claude_seat_bundle_declares_web_research_via_daemon2_path(tmp_path: Pat
     assert "ToolSearch" in line and "select:WebSearch,WebFetch" in line
 
 
+def _bundle_inbox_ids(prompt: str) -> list[str]:
+    """Event ids rendered under ``### Inbox — other pending events``."""
+    marker = "### Inbox — other pending events"
+    if marker not in prompt:
+        return []
+    section = prompt.split(marker, 1)[1].split("\n### ", 1)[0]
+    ids = []
+    for line in section.splitlines():
+        if not line.startswith("- "):
+            continue
+        token = line[2:].split(" ", 1)[0]
+        if token.startswith("evt-"):
+            ids.append(token)
+    return ids
+
+
+def test_bundle_inbox_matches_visible_projection_not_raw_files(tmp_path: Path) -> None:
+    """Sibling letters the facts already closed stay out of the bundle.
+
+    Their event files still say ``pending``. The bundle used to render
+    every ``door.pending()`` row, including letters this seat cannot see
+    and letters the facts have answered or retired. ``inbox.json`` is
+    built from ``_visible``; the bundle has to be that same list.
+    """
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test repo\n", encoding="utf-8")
+    binary = tmp_path / "fake-shell"
+    _fake_shell(binary)
+    inbox = home / "dispatch" / "inbox"
+    conversation = "telegram:owner"
+    waking = protocol.create_event(
+        inbox, "telegram", "the letter this seat woke on",
+        conversation_key=conversation, trust_tier="owner")
+    still_open = protocol.create_event(
+        inbox, "telegram", "still waiting on this thread",
+        conversation_key=conversation, trust_tier="owner")
+    answered = protocol.create_event(
+        inbox, "telegram", "already answered",
+        conversation_key=conversation, trust_tier="owner")
+    retired = protocol.create_event(
+        inbox, "schedule", "already retired",
+        conversation_key=conversation, trust_tier="owner",
+        schedule_id="pulse")
+    elsewhere = protocol.create_event(
+        inbox, "schedule", "another thread",
+        conversation_key="schedule:other", trust_tier="collaborator",
+        schedule_id="other")
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]})
+    for event_id, kind in ((answered.stem, "answered"), (retired.stem, "retired")):
+        runtime.facts.record("letters", event_id, "pending", "test")
+        runtime.facts.record("letters", event_id, kind, "test", {"why": "done"})
+    result = runtime.once()
+    assert result is not None and result.answered
+    assert result.event_id == waking.stem
+    for path in (answered, retired, elsewhere, still_open):
+        assert protocol._read_event(path)["status"] == "pending"
+    assert runtime.letters.state(answered.stem).state == "answered"
+    assert runtime.letters.state(retired.stem).state == "retired"
+    context = (tmp_path / "runtime" / "runs" / result.run_id / "context.md").read_text()
+    listed = _bundle_inbox_ids(context)
+    inbox_ids = [row["id"] for row in json.loads(
+        (result.outbox / "inbox.json").read_text())["events"]]
+    assert listed == inbox_ids
+    assert still_open.stem in listed
+    assert answered.stem not in listed
+    assert retired.stem not in listed
+    assert elsewhere.stem not in listed
+    assert waking.stem not in listed
+
+
+def test_recovery_checkpoint_names_previous_run_and_delivered_replies(
+        tmp_path: Path) -> None:
+    """A dead seat's re-dispatch states the receipts the daemon already holds."""
+    from brr import daemon as legacy_daemon, message_store
+
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test repo\n", encoding="utf-8")
+    (repo / ".brr").mkdir()
+    (repo / ".brr" / "config").write_text(
+        f"home.path={home}\nrepo.label=org/repo\n", encoding="utf-8")
+    binary = tmp_path / "fake-shell"
+    _fake_shell(binary)
+    conversation = "telegram:owner"
+    event = protocol.create_event(
+        home / "dispatch" / "inbox", "telegram", "pick up where you stopped",
+        conversation_key=conversation, trust_tier="owner", repo_label="org/repo")
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]})
+    seat = Seat(runtime.seats, conversation)
+    started = seat.start(0, run_id="run-dead")
+    assert started.state == "running"
+    assert started.run_id == "run-dead"
+    label = legacy_daemon._repo_label(
+        repo, protocol._read_event(event), runtime._config)
+    directory = message_store.run_messages_dir(runtime._account_ctx, label, "run-dead")
+    directory.mkdir(parents=True)
+
+    def _message(name: str, *, status: str, thread: str, delivered_at: str) -> None:
+        (directory / name).write_text(
+            "---\n"
+            "direction: out\n"
+            f"status: {status}\n"
+            f"target_thread: {thread}\n"
+            f"delivered_at: {delivered_at}\n"
+            "---\n\n"
+            "body\n",
+            encoding="utf-8",
+        )
+
+    _message("0001.md", status="delivered", thread=conversation,
+             delivered_at="2026-10-07T11:00:00+00:00")
+    _message("0002.md", status="delivered", thread=conversation,
+             delivered_at="2026-10-07T12:00:00+00:00")
+    _message("0003.md", status="delivered", thread="schedule:other",
+             delivered_at="2026-10-07T13:00:00+00:00")
+    _message("0004.md", status="pending", thread=conversation,
+             delivered_at="2026-10-07T14:00:00+00:00")
+    result = runtime.once()
+    assert result is not None and result.answered
+    context = (tmp_path / "runtime" / "runs" / result.run_id / "context.md").read_text()
+    marker = "Recovery checkpoint (previous Shell stopped):\n"
+    assert context.count(marker) == 1
+    payload = json.loads(context.split(marker, 1)[1].splitlines()[0])
+    assert payload["previous_run_id"] == "run-dead"
+    assert payload["replies_delivered"] == 2
+    assert payload["last_reply_at"] == "2026-10-07T12:00:00+00:00"
+
+
 def test_dispatch_stamp_lands_when_the_projected_status_differs_from_the_file(
         tmp_path: Path) -> None:
     """2026-10-07 (evt-…-v2l4): after a restart, a letter still ``claimed``

@@ -5080,6 +5080,57 @@ def test_prior_run_block_skips_a_strands_own_node_even_when_newer(tmp_path):
     assert "Still working" not in block
 
 
+def test_prior_run_block_skips_a_failed_foreign_body_strand_without_parent_id(tmp_path):
+    """Daemon2 strand nodes often have ``source: spawn`` and no ``parent_run_id``.
+
+    The newest such node is a failed run on another Shell. It is not this
+    seat's last stretch, and the ``parent_run_id`` guard alone lets it
+    through. ``source: spawn`` is the fact the continuity picker already
+    skips.
+    """
+    import os
+
+    from brr import prompts
+
+    repo = tmp_path / "repo"
+    (repo / ".brr").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / ".brr" / "config").write_text(
+        f"repo.label=Gurio/brr\nhome.path={tmp_path / 'home'}\n", encoding="utf-8",
+    )
+    runs = tmp_path / "home" / "runs" / "Gurio__brr"
+
+    own = runs / "run-seat"
+    own.mkdir(parents=True)
+    (own / "state.md").write_text(
+        "---\nrun_id: run-seat\nstatus: done\nstage: finished\n"
+        "source: cloud\nrunner_name: claude-opus\n---\n",
+        encoding="utf-8",
+    )
+    (own / "body.md").write_text("## Now\n\nThe seat's own stretch.\n", encoding="utf-8")
+
+    foreign = runs / "run-foreign"
+    foreign.mkdir(parents=True)
+    (foreign / "state.md").write_text(
+        "---\nrun_id: run-foreign\nstatus: error\nstage: finished\n"
+        "source: spawn\nrunner_name: vibe-glm-5-3\nrunner_shell: vibe\n---\n",
+        encoding="utf-8",
+    )
+    (foreign / "body.md").write_text(
+        "## Now\n\nFailed on another shell.\n", encoding="utf-8",
+    )
+
+    now = tmp_path.stat().st_mtime
+    os.utime(own / "body.md", (now - 100, now - 100))
+    os.utime(foreign / "body.md", (now, now))
+
+    block = prompts._build_prior_run_block(repo)
+    assert "The seat's own stretch." in block
+    assert "run-seat" in block
+    assert "Failed on another shell." not in block
+    assert "run-foreign" not in block
+
+
 def test_prior_run_node_falls_through_when_only_strand_nodes_exist(tmp_path):
     from brr import prompts
 
