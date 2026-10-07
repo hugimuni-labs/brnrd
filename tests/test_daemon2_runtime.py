@@ -2417,3 +2417,33 @@ def test_recovery_checkpoint_names_previous_run_and_delivered_replies(
     assert payload["previous_run_id"] == "run-dead"
     assert payload["replies_delivered"] == 2
     assert payload["last_reply_at"] == "2026-10-07T12:00:00+00:00"
+
+
+def test_dispatch_stamp_lands_when_the_projected_status_differs_from_the_file(
+        tmp_path: Path) -> None:
+    """2026-10-07 (evt-…-v2l4): after a restart, a letter still ``claimed``
+    by the dead seat projects as ``processing`` over a file reading
+    ``pending``. ``protocol.set_status`` keys its replace on the dict's
+    status, so the dispatch stamp matched nothing, the gate (which sweeps
+    raw files) never saw an active event, and the seat's interim messages
+    sat undelivered. ``FileDoor.stamp`` re-reads the file first."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    path = protocol.create_event(home / "dispatch" / "inbox", "telegram",
+                                 "task", conversation_key="c")
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": ["true"]})
+    runtime.letters.ingest(path.stem, "pending")
+    assert runtime.letters.claim(path.stem, "run-dead", 60, now=time.time())
+    projected = runtime.door.get(path.stem)
+    assert projected["status"] == "processing"
+    assert protocol._read_event(path)["status"] == "pending"
+
+    protocol.set_status(dict(projected), "processing")  # the old call
+    assert protocol._read_event(path)["status"] == "pending"
+
+    runtime.door.stamp(projected, "processing")
+    assert protocol._read_event(path)["status"] == "processing"
+    runtime.door.stamp(projected, "noted")
+    assert protocol._read_event(path)["status"] == "noted"

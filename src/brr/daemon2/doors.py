@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from .. import portals, protocol
 from ..outbox import table
@@ -29,6 +29,9 @@ class FileDoor:
     responses: Path
     letters: Any = None
     other_queues: tuple[tuple[Path, Path, str], ...] = ()
+    # Poll fast path: an unchanged queue directory is not re-statted for
+    # this many seconds (protocol.list_pending). In-place edits wait ≤ this.
+    RESCAN_AFTER: ClassVar[float] = 2.0
 
     def queues(self) -> tuple[tuple[Path, Path, str], ...]:
         return ((self.inbox, self.responses, ""), *self.other_queues)
@@ -67,10 +70,29 @@ class FileDoor:
                   and state.retirement.get("why") == "also" else "noted")}[state.state]
         return {**event, "status": status}
 
+    @staticmethod
+    def stamp(event: dict[str, Any], status: str) -> None:
+        """Write *status* into the event's raw file.
+
+        ``protocol.set_status`` replaces ``status: <dict status>``, and the
+        dicts this runtime holds are *projected* (letter ``claimed`` reads
+        ``processing``) over a file that may still say ``pending``: the
+        replace matched nothing and the stamp was a silent no-op. The gate
+        sweeps raw files, so a seat's interim messages sat undelivered
+        (2026-10-07, evt-…-v2l4, ~25 min after a restart). Re-read the file
+        so the replace keys on what it actually says.
+        """
+        raw = protocol._read_event(Path(event["_path"]))
+        if raw is None:
+            return
+        protocol.set_status(raw, status)
+        event["status"] = status
+
     def pending(self) -> list[dict[str, Any]]:
         pending = []
         for inbox, _responses, label in self.queues():
-            for event in protocol.list_dispatchable(inbox):
+            for event in protocol.list_dispatchable(
+                    inbox, rescan_after=self.RESCAN_AFTER):
                 projected = self._project(self._label(event, label))
                 if projected is not None and projected["status"] in {"pending", "processing"}:
                     pending.append(projected)
