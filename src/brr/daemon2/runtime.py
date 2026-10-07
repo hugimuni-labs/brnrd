@@ -1524,7 +1524,7 @@ class Daemon2:
                 return None
             # Gate delivery sweeps the raw file. The fact projection alone
             # does not expose a live letter's interim carriers to that organ.
-            protocol.set_status(event, "processing")
+            self.door.stamp(event, "processing")
             seat_address = (f"{address.conversation}#strand:{run_id}"
                             if is_child else address.conversation)
             seat = Seat(self.seats, seat_address,
@@ -1654,7 +1654,7 @@ class Daemon2:
                         # scan cannot dispatch it if the facts are unreadable.
                         self._notice(state, f"worktree allocation failed: {exc}",
                                      kind="advisory")
-                        protocol.set_status(event, "noted")
+                        self.door.stamp(event, "noted")
                         placement_failed = True
                         result = _UnstartedRunner(1)
                         exit_status = "error"

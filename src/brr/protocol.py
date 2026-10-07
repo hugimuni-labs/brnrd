@@ -765,9 +765,13 @@ _PENDING_CACHE_MAX = 32
 _pending_cache: OrderedDict[str, tuple[tuple[tuple[str, tuple[int, int]], ...],
                                         dict[str, dict[str, Any] | None]]] = OrderedDict()
 _pending_cache_lock = threading.Lock()
+# Directory fast path, opt-in via ``rescan_after`` (the daemon2 poll loop):
+# key -> (dir mtime_ns, monotonic time of the last full scan).
+_pending_dir_seen: dict[str, tuple[int, float]] = {}
 
 
-def list_pending(inbox_dir: Path) -> list[dict[str, Any]]:
+def list_pending(inbox_dir: Path, *,
+                 rescan_after: float | None = None) -> list[dict[str, Any]]:
     """Return events with status pending or processing, oldest first.
 
     "Oldest first" is an age question — when did this event arrive — not a
@@ -784,6 +788,15 @@ def list_pending(inbox_dir: Path) -> list[dict[str, Any]]:
 
     Unchanged files are not re-parsed. The scan still stats every name, and
     a changed mtime or size re-reads that file only.
+
+    ``rescan_after`` (seconds) lets a hot poll loop skip even the stats:
+    when the directory's own mtime has not moved and the last full scan is
+    younger than this, the cached events are returned. Every protocol
+    write is a temp file + rename, which moves the directory mtime, so a
+    new or re-stamped event is seen on the next call; a writer that edits
+    a file in place is seen within ``rescan_after``. Measured 2026-10-07:
+    a 7,461-file inbox cost ~35 ms per daemon2 ``pending()`` at a 0.1 s
+    tick, i.e. ~25% of a core per idle follower.
     """
     if not inbox_dir.exists():
         return []
@@ -791,6 +804,22 @@ def list_pending(inbox_dir: Path) -> list[dict[str, Any]]:
         key = str(inbox_dir.resolve())
     except OSError:
         return []
+    if rescan_after is not None:
+        try:
+            dir_mtime = os.stat(inbox_dir).st_mtime_ns
+        except OSError:
+            return []
+        now_mono = time.monotonic()
+        with _pending_cache_lock:
+            seen = _pending_dir_seen.get(key)
+            cached = _pending_cache.get(key)
+            if (seen is not None and cached is not None
+                    and seen[0] == dir_mtime
+                    and now_mono - seen[1] < rescan_after):
+                events = [dict(ev) for ev in cached[1].values()
+                          if ev and ev.get("status") in ("pending", "processing")]
+                events.sort(key=_event_queue_sort_key)
+                return events
     current: dict[str, tuple[int, int]] = {}
     try:
         for entry in os.scandir(inbox_dir):
@@ -822,6 +851,10 @@ def list_pending(inbox_dir: Path) -> list[dict[str, Any]]:
             _pending_cache.move_to_end(key)
             while len(_pending_cache) > _PENDING_CACHE_MAX:
                 _pending_cache.popitem(last=False)
+        if rescan_after is not None:
+            # Stamp the mtime read *before* the scan: a write racing the
+            # scan moves the directory past it and forces the next rescan.
+            _pending_dir_seen[key] = (dir_mtime, now_mono)
         events = [dict(ev) for ev in parsed.values()
                   if ev and ev.get("status") in ("pending", "processing")]
     events.sort(key=_event_queue_sort_key)
@@ -957,6 +990,7 @@ def list_dispatchable(
     inbox_dir: Path,
     *,
     now: float | None = None,
+    rescan_after: float | None = None,
 ) -> list[dict[str, Any]]:
     """Return pending/processing events whose deferral has expired.
 
@@ -964,10 +998,11 @@ def list_dispatchable(
     fresh wake can still see and fold them from the live inbox. The daemon
     dispatch loop uses this narrower view for choosing a lead event.
     """
-    return [
-        event for event in list_pending(inbox_dir)
-        if not event_is_deferred(event, now=now)
-    ]
+    # Pass the fast path only when asked: engine 1 and its tests (which
+    # monkeypatch list_pending with one-argument fakes) keep the exact call.
+    events = (list_pending(inbox_dir) if rescan_after is None
+              else list_pending(inbox_dir, rescan_after=rescan_after))
+    return [event for event in events if not event_is_deferred(event, now=now)]
 
 
 def list_done(inbox_dir: Path, source: str) -> list[dict[str, Any]]:
