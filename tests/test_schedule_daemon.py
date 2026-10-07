@@ -226,6 +226,37 @@ def test_fire_due_every_anchors_then_fires(tmp_path):
     assert [e["schedule_id"] for e in pending] == ["upkeep"]
 
 
+def test_fire_due_every_coalesces_while_a_firing_is_unclaimed(tmp_path):
+    """#2212: identical `every:` firings must not pile up behind a busy seat."""
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    inbox = brr_dir / "inbox"
+    path = dominion.ensure_dominion(repo, push=False)
+    _write_schedule(path, "## Upkeep\nevery: 60s\nrun upkeep\n")
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {})  # anchor
+
+    def _elapse():
+        state = schedule.load_state(brr_dir)
+        state["upkeep"] = {"kind": "every", "last_fired": 0.0}
+        schedule.save_state(brr_dir, state)
+
+    _elapse()
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {})
+    first = protocol.list_pending(inbox)
+    assert [e["schedule_id"] for e in first] == ["upkeep"]
+
+    # Due again while the first firing is still unclaimed: no second letter.
+    _elapse()
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {})
+    assert [e["id"] for e in protocol.list_pending(inbox)] == [first[0]["id"]]
+
+    # Once the first is claimed (processing), the next interval fires again.
+    protocol.set_status(first[0], "processing")
+    _elapse()
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {})
+    assert len(protocol.list_pending(inbox)) == 2
+
+
 # ── armed dated-letters snapshot (#904) ───────────────────────────────
 
 
