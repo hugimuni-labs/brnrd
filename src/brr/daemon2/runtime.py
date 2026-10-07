@@ -254,6 +254,33 @@ class Daemon2:
                 visible.append(event)
         return visible
 
+    def _thread_delivery_facts(self, run_id: str, conversation: str,
+                               repo_label: str) -> tuple[int, str | None]:
+        """Delivered replies *run_id* receipted on *conversation*.
+
+        The message store is the receipt (``status: delivered`` plus
+        ``delivered_at``). A row aimed at another thread does not count,
+        and a missing account home degrades to ``(0, None)`` rather than
+        guessing from ``.asks.jsonl``.
+        """
+        if (not run_id or not conversation or not repo_label
+                or not isinstance(self._account_ctx, account.HomeContext)
+                or not self._account_ctx.enabled):
+            return 0, None
+        directory = message_store.run_messages_dir(
+            self._account_ctx, repo_label, run_id)
+        count = 0
+        last: str | None = None
+        for message in message_store.list_messages(
+                directory, status=message_store.DELIVERED):
+            if str(message.get("target_thread") or "") != conversation:
+                continue
+            count += 1
+            stamp = str(message.get("delivered_at") or message.get("created_at") or "")
+            if stamp and (last is None or stamp > last):
+                last = stamp
+        return count, last
+
     def _notice(self, state: dict[str, Any], text: str, *, kind: str = "refused",
                 source_file: str | None = None, verb: str | None = None) -> None:
         from .. import daemon as legacy_daemon
@@ -1531,6 +1558,7 @@ class Daemon2:
                         authorize=self.authority.allowed)
             record = seat.read()
             resumed = None
+            previous_run_id = ""
             if record.state == "parked":
                 if record.wake_on:
                     from_run = str(event.get("handover_from_run") or "")
@@ -1546,6 +1574,9 @@ class Daemon2:
                     else:
                         signal = Signal("mail", seat_address, ask=address.ask,
                                         letter_id=event["id"])
+                    # wake() replaces the seat's run id when this dispatch
+                    # supplies one. Keep the id that was sitting here.
+                    previous_run_id = record.run_id
                     resumed = seat.wake(record.generation, signal,
                                         shell=selected_runner, capabilities=set(),
                                         run_id=run_id)
@@ -1554,6 +1585,9 @@ class Daemon2:
                 else:
                     seat.start(record.generation, run_id=run_id)
             elif record.state in {"running", "awaiting"}:
+                # recover() overwrites the seat's run id with this dispatch.
+                # The dead seat's id is the fact the checkpoint has to name.
+                previous_run_id = record.run_id
                 resumed = seat.recover(record.generation, shell=selected_runner,
                                        capabilities=set(), run_id=run_id)
             elif record.state == "ended":
@@ -1568,20 +1602,35 @@ class Daemon2:
             task_text = str(event.get("body") or "")
             if resumed is not None and resumed.mode == "checkpoint":
                 recovered = seat.read()
+                from .. import daemon as legacy_daemon
+                label = legacy_daemon._repo_label(
+                    self.repo_root, event, self._config)
+                replies, last_reply = self._thread_delivery_facts(
+                    previous_run_id, address.conversation, label)
                 task_text += ("\n\nRecovery checkpoint (previous Shell stopped):\n"
                               + json.dumps({
                                   "checkpoint": recovered.checkpoint,
                                   "carry": recovered.carry,
-                                  "obligations": recovered.obligations,
-                                  "queued_letters": recovered.queued_letters,
+                                  "obligations": list(recovered.obligations),
+                                  "queued_letters": list(recovered.queued_letters),
+                                  "previous_run_id": previous_run_id,
+                                  "replies_delivered": replies,
+                                  "last_reply_at": last_reply,
                               }, sort_keys=True))
+            # Same list inbox.json is written from (`_visible` → door
+            # projection). `events` is every dispatchable letter; a seat
+            # that cannot see one, or one the facts already answered,
+            # must not be told it is waiting.
+            visible_now = self._visible(
+                address.conversation, str(event["id"]),
+                is_child=is_child, run_id=run_id)
             prompt = prompts.build_daemon_prompt(
                 task_text, str(event["id"]), str(response),
                 self.repo_root, execution_root=self.repo_root,
                 outbox_path=str(outbox), run_id=run_id,
                 source=str(event.get("source") or ""), environment="host",
                 runtime_dir=str(self.runtime_dir), context_path=str(context),
-                pending_events=[public_event(e) for e in events],
+                pending_events=[public_event(e) for e in visible_now],
                 event_body=str(event.get("body") or ""),
                 event_meta=public_event(event), runner_name=selected_runner,
                 runner_shell=runner_choice.shell, runner_core=runner_choice.model,

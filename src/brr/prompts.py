@@ -7114,14 +7114,18 @@ _PRIOR_RUN_FRAME_KEYS = ("status", "stage", "runner_name", "publish_status", "br
 def _node_is_strand(state_path: Path) -> bool:
     """True when the node at *state_path* belongs to a ``spawn:``-dispatched strand.
 
-    ``_persist_run_state_doc`` writes ``parent_run_id:`` into a node's
-    frontmatter only when ``task.meta["spawn_parent_run_id"]`` is set — which
-    happens only for a strand (the resident's own seat is never itself a
-    spawned child). A read failure degrades to "not a strand" — the same
-    conservative default :mod:`brr.continuity`'s sibling guard
-    (``_dispatched_as_strand``) uses, and for the same reason: an unreadable
-    node must not be silently skipped, only one this function can actually
-    prove is a strand's.
+    Two facts prove it, and either one is enough. ``parent_run_id`` is what
+    ``_persist_run_state_doc`` writes when ``task.meta["spawn_parent_run_id"]``
+    is set. Daemon2's spawn event carries the parent as ``parent_run_id`` on
+    the letter, and that key is not the one the state doc copies, so a
+    strand node often has no ``parent_run_id`` at all. It does have
+    ``source: spawn`` — the same fact :func:`brr.continuity._dispatched_as_strand`
+    already skips. A resident respawn keeps the originating gate
+    (``telegram``, ``schedule``, ``cloud``) and stays eligible.
+
+    A read failure degrades to "not a strand": an unreadable node must not
+    be silently skipped, only one this function can actually prove is a
+    strand's.
     """
     from . import protocol
 
@@ -7129,7 +7133,9 @@ def _node_is_strand(state_path: Path) -> bool:
         fields = protocol.parse_frontmatter(state_path.read_text(encoding="utf-8"))
     except OSError:
         return False
-    return bool(str(fields.get("parent_run_id") or "").strip())
+    if str(fields.get("parent_run_id") or "").strip():
+        return True
+    return str(fields.get("source") or "").strip() == "spawn"
 
 
 def _prior_run_node(repo_root: Path) -> tuple[Path, Path] | None:
