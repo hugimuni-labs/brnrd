@@ -70,6 +70,24 @@ class FileDoor:
                   and state.retirement.get("why") == "also" else "noted")}[state.state]
         return {**event, "status": status}
 
+    @staticmethod
+    def stamp(event: dict[str, Any], status: str) -> None:
+        """Write *status* into the event's raw file.
+
+        ``protocol.set_status`` replaces ``status: <dict status>``, and the
+        dicts this runtime holds are *projected* (letter ``claimed`` reads
+        ``processing``) over a file that may still say ``pending``: the
+        replace matched nothing and the stamp was a silent no-op. The gate
+        sweeps raw files, so a seat's interim messages sat undelivered
+        (2026-10-07, evt-…-v2l4, ~25 min after a restart). Re-read the file
+        so the replace keys on what it actually says.
+        """
+        raw = protocol._read_event(Path(event["_path"]))
+        if raw is None:
+            return
+        protocol.set_status(raw, status)
+        event["status"] = status
+
     def pending(self) -> list[dict[str, Any]]:
         pending = []
         for inbox, _responses, label in self.queues():

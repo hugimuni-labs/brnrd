@@ -1004,3 +1004,4 @@ def test_list_pending_rescan_after_sees_protocol_writes_and_backstops_in_place_e
     clock = [protocol.time.monotonic() + 61]
     monkeypatch.setattr(protocol.time, "monotonic", lambda: clock[0])
     assert protocol.list_pending(inbox, rescan_after=60) == []
+
