@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from .. import portals, protocol
 from ..outbox import table
@@ -29,6 +29,9 @@ class FileDoor:
     responses: Path
     letters: Any = None
     other_queues: tuple[tuple[Path, Path, str], ...] = ()
+    # Poll fast path: an unchanged queue directory is not re-statted for
+    # this many seconds (protocol.list_pending). In-place edits wait ≤ this.
+    RESCAN_AFTER: ClassVar[float] = 2.0
 
     def queues(self) -> tuple[tuple[Path, Path, str], ...]:
         return ((self.inbox, self.responses, ""), *self.other_queues)
@@ -70,7 +73,8 @@ class FileDoor:
     def pending(self) -> list[dict[str, Any]]:
         pending = []
         for inbox, _responses, label in self.queues():
-            for event in protocol.list_dispatchable(inbox):
+            for event in protocol.list_dispatchable(
+                    inbox, rescan_after=self.RESCAN_AFTER):
                 projected = self._project(self._label(event, label))
                 if projected is not None and projected["status"] in {"pending", "processing"}:
                     pending.append(projected)

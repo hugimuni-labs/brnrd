@@ -975,3 +975,32 @@ def test_a_plain_pipe_value_is_still_a_block_scalar_not_a_string():
         "---\nevent: evt-1\nreason: |\n  body\n---\n"
     )
     assert fm["reason"] == "body"
+
+
+def test_list_pending_rescan_after_sees_protocol_writes_and_backstops_in_place_edits(
+        tmp_path, monkeypatch):
+    """The poll fast path skips the per-file scan only while the directory
+    is unchanged: a protocol write (temp + rename) is seen at once, an
+    in-place edit no later than ``rescan_after``."""
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    first = protocol._read_event(protocol.create_event(inbox, "cli", "one"))
+    assert [e["id"] for e in protocol.list_pending(inbox, rescan_after=60)] == [first["id"]]
+
+    second = protocol._read_event(protocol.create_event(inbox, "cli", "two"))
+    assert {e["id"] for e in protocol.list_pending(inbox, rescan_after=60)} == {
+        first["id"], second["id"]}
+
+    protocol.set_status(first, "done")
+    assert [e["id"] for e in protocol.list_pending(inbox, rescan_after=60)] == [second["id"]]
+
+    # An in-place edit leaves the directory mtime alone: the fast path may
+    # serve the cache until the backstop expires, never past it.
+    path = Path(second["_path"])
+    stat = os.stat(inbox)
+    path.write_text(path.read_text().replace("status: pending", "status: done"))
+    os.utime(inbox, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    assert [e["id"] for e in protocol.list_pending(inbox, rescan_after=60)] == [second["id"]]
+    clock = [protocol.time.monotonic() + 61]
+    monkeypatch.setattr(protocol.time, "monotonic", lambda: clock[0])
+    assert protocol.list_pending(inbox, rescan_after=60) == []
