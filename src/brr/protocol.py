@@ -998,10 +998,11 @@ def list_dispatchable(
     fresh wake can still see and fold them from the live inbox. The daemon
     dispatch loop uses this narrower view for choosing a lead event.
     """
-    return [
-        event for event in list_pending(inbox_dir, rescan_after=rescan_after)
-        if not event_is_deferred(event, now=now)
-    ]
+    # Pass the fast path only when asked: engine 1 and its tests (which
+    # monkeypatch list_pending with one-argument fakes) keep the exact call.
+    events = (list_pending(inbox_dir) if rescan_after is None
+              else list_pending(inbox_dir, rescan_after=rescan_after))
+    return [event for event in events if not event_is_deferred(event, now=now)]
 
 
 def list_done(inbox_dir: Path, source: str) -> list[dict[str, Any]]:
