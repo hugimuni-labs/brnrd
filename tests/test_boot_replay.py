@@ -31,7 +31,7 @@ and where the two runner renderings differ.
 
 It does **not** pin the product prompt *prose*.  Until 2026-07-24 it did:
 about 1,150 of the two snapshots' 1,249 lines were verbatim copies of
-``run.md`` / ``weave.md`` / ``register.md`` / ``daemon-substrate.md`` /
+``run.md`` / ``weave.md`` / ``daemon-substrate.md`` /
 ``identity-core.md``, once per runner — so brnrd's prompt text lived in the
 repo three times and every prose edit had to be applied once and then
 re-applied twice by regeneration.  That is a fixture carrying the payload it
@@ -402,7 +402,6 @@ class TestBootReplay:
         expected = {
             "run.md",
             "weave.md",
-            "register.md",
             "daemon-substrate.md",
             "identity-core.md",
         }

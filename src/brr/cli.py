@@ -1381,7 +1381,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="rebuild a captured run's prompt under modified prompt files "
              "and report which blocks would have changed — w-56 rung 1. "
              "Substitutes only file-backed blocks (run.md, weave.md, "
-             "register.md, daemon-substrate.md, identity-core.md, "
+             "daemon-substrate.md, identity-core.md, "
              "diffense.md, introspection.md, the portals.md verb-grammar "
              "extract); every other byte of the captured wake is held "
              "identical. On a boot.mount run, reconstitutes the full "
