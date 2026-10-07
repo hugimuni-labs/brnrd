@@ -240,11 +240,23 @@ def create(repo_root: Path, run_id: str, *, base_ref: str = "HEAD") -> tuple[Pat
     args = ["worktree", "add", "-b", branch, str(worktree_path), base_ref]
     result = _git(repo_root, *args, check=False)
     if result.returncode != 0:
+        hint = _hint(repo_root, base_ref)
+        if hint:
+            raise RuntimeError(hint)
         detail = result.stderr.strip() or result.stdout.strip()
         raise RuntimeError(detail or f"failed to create worktree {worktree_path}")
     return worktree_path, branch
 
-
+def _hint(repo_root: Path, base_ref: str) -> str | None:
+    """Hint when repo has no commits , else None."""
+    if gitops.commit_count(repo_root) != 0:
+        return None
+    return (
+        f"{repo_root} has no commits yet, so git cannot resolve {base_ref!r} "
+        "as a starting point. Create an initial commit (for example "
+        '`git commit --allow-empty -m "initial commit"`) and send the task '
+        "again."
+    )
 def create_clone(repo_root: Path, run_id: str, *, base_ref: str = "HEAD") -> tuple[Path, str]:
     """Create a fresh run *clone* on a new ``brr/<run_id>`` branch (#746).
 

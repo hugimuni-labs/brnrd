@@ -44,3 +44,12 @@ brnrd run "summarize the test layout; do not change files"
 ```
 
 Good for a smoke test; [Connect](../connect/) is the real front door.
+## A brand-new repository needs one commit
+
+brnrd seeds a run from a branch reference, and a repository created on
+GitHub and freshly cloned has none until its first commit. Make one before
+the first task:
+
+```bash
+git commit --allow-empty -m "initial commit"
+```
