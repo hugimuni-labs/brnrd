@@ -1,5 +1,5 @@
-"""The loom runtime. The screen stays in :mod:`brr.loom`; this package is the machine beside it.
+"""The loom's runtime: the ledger, the port and the jack (step 1), the self as
+a repo and its wake (step 2), and the immune harness and merge loop (step 4a).
 
-Step 2 owns the self: ``init``, rooms as clones, the wake recipe, the README parser.
-Step 1 and step 4a add their own modules. The parent merges ``__main__``.
+Contracts: kb plan-loom-step-1.md, plan-loom-step-2.md, plan-loom-step-4a.md.
 """
