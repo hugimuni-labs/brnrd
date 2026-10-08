@@ -95,7 +95,7 @@ def published(tmp: Path, *, notice: bool = True) -> tuple[Path, Path]:
     git(None, "init", "-b", "main", os.fspath(work))
     copy_seed(work, notice=notice)
     write(work, "memory/scars/x.md", "base\n")
-    write(work, "threads/inbox/README.md", "# Inbox\n\nalpha line\n")
+    write(work, "threads/inbox/README.md", "---\nid: inbox\nstatus: open\ntense: plan\n---\n# Inbox\n\nalpha line\n")
     commit(work, "seed")
     git(work, "remote", "add", "origin", os.fspath(bare))
     install_pre_receive(bare)

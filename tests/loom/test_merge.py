@@ -80,7 +80,7 @@ def published(tmp: Path) -> Path:
     write(work, "memory/scars/x.md", "base\n")
     write(work, "memory/scars/a.md", "a-base\n")
     write(work, "memory/itches/b.md", "b-base\n")
-    write(work, "threads/inbox/README.md", "# Inbox\n\nalpha line\n")
+    write(work, "threads/inbox/README.md", "---\nid: inbox\nstatus: open\ntense: plan\n---\n# Inbox\n\nalpha line\n")
     commit(work, "seed")
     git(work, "remote", "add", "origin", os.fspath(bare))
     install_pre_receive(bare)
@@ -140,16 +140,16 @@ def test_readme_conflict_resolves_on_the_next_call(tmp_path: Path) -> None:
     bare = published(tmp_path)
     left = room(bare, tmp_path / "a", "strand/a")
     right = room(bare, tmp_path / "b", "strand/b")
-    write(left, "threads/inbox/README.md", "# Inbox\n\nalpha from a\n")
+    write(left, "threads/inbox/README.md", "---\nid: inbox\nstatus: open\ntense: plan\n---\n# Inbox\n\nalpha from a\n")
     commit(left, "readme a")
-    write(right, "threads/inbox/README.md", "# Inbox\n\nalpha from b\n")
+    write(right, "threads/inbox/README.md", "---\nid: inbox\nstatus: open\ntense: plan\n---\n# Inbox\n\nalpha from b\n")
     commit(right, "readme b")
     assert send_to_self(left).status == "merged"
     stopped = send_to_self(right)
     assert stopped.status == "stopped"
     assert "threads/inbox/README.md" in stopped.files
     assert rebasing(right)
-    write(right, "threads/inbox/README.md", "# Inbox\n\nalpha resolved\n")
+    write(right, "threads/inbox/README.md", "---\nid: inbox\nstatus: open\ntense: plan\n---\n# Inbox\n\nalpha resolved\n")
     git(right, "add", "threads/inbox/README.md")
     landed = send_to_self(right)
     assert landed.status == "merged", landed
@@ -160,9 +160,9 @@ def test_three_unresolved_stops_abort(tmp_path: Path) -> None:
     bare = published(tmp_path)
     left = room(bare, tmp_path / "a", "strand/a")
     right = room(bare, tmp_path / "b", "strand/b")
-    write(left, "threads/inbox/README.md", "# Inbox\n\nalpha from a\n")
+    write(left, "threads/inbox/README.md", "---\nid: inbox\nstatus: open\ntense: plan\n---\n# Inbox\n\nalpha from a\n")
     commit(left, "readme a")
-    write(right, "threads/inbox/README.md", "# Inbox\n\nalpha from b\n")
+    write(right, "threads/inbox/README.md", "---\nid: inbox\nstatus: open\ntense: plan\n---\n# Inbox\n\nalpha from b\n")
     commit(right, "readme b")
     assert send_to_self(left).status == "merged"
     first = send_to_self(right)
@@ -299,7 +299,7 @@ def test_nonbare_self_updates_worktree_and_refuses(tmp_path: Path) -> None:
     copy_seed(self_repo)
     write(self_repo, "memory/scars/a.md", "a-base\n")
     write(self_repo, "memory/itches/b.md", "b-base\n")
-    write(self_repo, "threads/inbox/README.md", "# Inbox\n\nalpha line\n")
+    write(self_repo, "threads/inbox/README.md", "---\nid: inbox\nstatus: open\ntense: plan\n---\n# Inbox\n\nalpha line\n")
     commit(self_repo, "seed")
     hook = install_pre_receive(self_repo)
     assert hook == self_repo / ".git" / "hooks" / "pre-receive"
