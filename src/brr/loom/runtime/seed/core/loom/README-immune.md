@@ -24,12 +24,19 @@ same script with the pull request's base and head. The first push of a
 branch sends an all-zero `<old>`. The script accepts that and runs the
 checks against `<new>` alone.
 
-## On a bare repository
+## Where the hook is installed
 
 The loom installs the hook with `install_pre_receive` (see
 `brr.loom.runtime.merge`). The hook is a shim: it reads `core/immune` out
 of the incoming commit and runs that. Replacing the file on disk, next to
-the bare repo, does not change what the next push is judged by.
+the repo, does not change what the next push is judged by.
+
+On a bare repo the shim is `hooks/pre-receive`. On a working self — `main`
+checked out, which is what a room's `origin` is — the shim is
+`.git/hooks/pre-receive`, and the install sets
+`receive.denyCurrentBranch` to `updateInstead`. An accepted push then
+updates that worktree. A dirty worktree still refuses the push; the
+install does not force it.
 
 By hand, the same shape is: a `hooks/pre-receive` that runs
 

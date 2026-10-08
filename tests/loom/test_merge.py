@@ -292,6 +292,59 @@ def test_ten_lost_races_raise(tmp_path: Path) -> None:
     assert "main moved 10 times" in str(caught.value)
 
 
+def test_nonbare_self_updates_worktree_and_refuses(tmp_path: Path) -> None:
+    # Step 2's home/self: non-bare, main checked out, rooms are shared clones.
+    self_repo = tmp_path / "self"
+    git(None, "init", "-b", "main", os.fspath(self_repo))
+    copy_seed(self_repo)
+    write(self_repo, "memory/scars/a.md", "a-base\n")
+    write(self_repo, "memory/itches/b.md", "b-base\n")
+    write(self_repo, "threads/inbox/README.md", "# Inbox\n\nalpha line\n")
+    commit(self_repo, "seed")
+    hook = install_pre_receive(self_repo)
+    assert hook == self_repo / ".git" / "hooks" / "pre-receive"
+    assert hook.is_file()
+    assert git(self_repo, "config", "--get", "receive.denyCurrentBranch").stdout.strip() == (
+        "updateInstead"
+    )
+
+    def shared(dest: Path, name: str) -> Path:
+        git(None, "clone", "--shared", os.fspath(self_repo), os.fspath(dest))
+        git(dest, "checkout", "-b", name)
+        return dest
+
+    left = shared(tmp_path / "a", "strand/a")
+    right = shared(tmp_path / "b", "strand/b")
+    write(left, "memory/scars/a.md", "a-base\nfrom-a\n")
+    commit(left, "scar a")
+    write(right, "memory/itches/b.md", "b-base\nfrom-b\n")
+    commit(right, "itch b")
+    assert send_to_self(left).status == "merged"
+    assert send_to_self(right).status == "merged"
+    assert (self_repo / "memory/scars/a.md").read_text(encoding="utf-8") == "a-base\nfrom-a\n"
+    assert (self_repo / "memory/itches/b.md").read_text(encoding="utf-8") == "b-base\nfrom-b\n"
+    assert git(self_repo, "status", "--porcelain").stdout == ""
+    assert git(self_repo, "rev-parse", "HEAD").stdout.strip() == git(
+        self_repo, "rev-parse", "main"
+    ).stdout.strip()
+
+    bad = shared(tmp_path / "c", "strand/c")
+    write(
+        bad,
+        "core/immune.d/60-block",
+        "#!/bin/sh\nprintf 'block-this-exact-line\\n' >&2\nexit 1\n",
+        exe=True,
+    )
+    commit(bad, "a refusing check")
+    head = git(self_repo, "rev-parse", "HEAD").stdout
+    refused = send_to_self(bad)
+    assert refused.status == "refused", refused
+    assert "60-block: block-this-exact-line" in refused.stderr
+    assert git(self_repo, "rev-parse", "HEAD").stdout == head
+    assert git(self_repo, "status", "--porcelain").stdout == ""
+    assert not (self_repo / "core/immune.d/60-block").exists()
+
+
 def test_cli_send_self(tmp_path: Path) -> None:
     bare = published(tmp_path)
     strand = room(bare, tmp_path / "room", "strand/cli")

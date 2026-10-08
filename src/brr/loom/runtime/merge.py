@@ -82,21 +82,31 @@ class Outcome:
     stderr: str = ""
 
 
-def install_pre_receive(bare_repo: str | Path) -> Path:
-    """Write ``hooks/pre-receive`` so the incoming commit's immune judges it.
+def install_pre_receive(repo: str | Path) -> Path:
+    """Write the pre-receive shim so the incoming commit's immune judges it.
 
-    Returns the hook path. A second call replaces the hook. A symlink at
-    that path is refused rather than followed.
+    A bare repo keeps the hook in ``hooks/``. A working repo (step 2's
+    ``home/self``, ``main`` checked out) keeps it in ``.git/hooks`` and gets
+    ``receive.denyCurrentBranch=updateInstead``, so an accepted push updates
+    that worktree instead of dying on the checked-out branch. A dirty
+    worktree still refuses the push — git will not overwrite it, and this
+    function does not override that.
+
+    Returns the hook path. A second call replaces the hook and, on a working
+    repo, sets the config again. A symlink at the hook path is refused
+    rather than followed.
     """
 
-    bare = Path(bare_repo)
-    hooks = _hooks_dir(bare)
+    root = Path(repo)
+    hooks = _hooks_dir(root)
     hooks.mkdir(parents=True, exist_ok=True)
     path = hooks / "pre-receive"
     if path.is_symlink():
         raise SendError(f"refusing to follow symlink: {path}")
     path.write_text(_HOOK, encoding="utf-8")
     path.chmod(0o755)
+    if not _is_bare(root):
+        _git(root, "config", "receive.denyCurrentBranch", "updateInstead")
     return path
 
 
@@ -232,15 +242,18 @@ def _git_path(room: Path, name: str) -> Path:
     return path if path.is_absolute() else room / path
 
 
-def _hooks_dir(bare: Path) -> Path:
-    candidate = bare / "hooks"
-    if candidate.is_dir():
-        return candidate
-    proc = _git(bare, "rev-parse", "--git-path", "hooks", check=False)
-    if proc.returncode != 0:
-        return candidate
-    path = Path(proc.stdout.strip())
-    return path if path.is_absolute() else bare / path
+def _is_bare(repo: Path) -> bool:
+    return _git(repo, "rev-parse", "--is-bare-repository").stdout.strip() == "true"
+
+
+def _hooks_dir(repo: Path) -> Path:
+    # A working tree can contain a directory named hooks/. That is not
+    # git's hook dir. Bare repos are the ones whose hooks live at the top.
+    if _is_bare(repo):
+        return repo / "hooks"
+    raw = _git(repo, "rev-parse", "--git-path", "hooks").stdout.strip()
+    path = Path(raw)
+    return path if path.is_absolute() else repo / path
 
 
 def _git(room: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
