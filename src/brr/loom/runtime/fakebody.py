@@ -191,12 +191,60 @@ def quit_now(ctx) -> int:
     return 0
 
 
+def hold(ctx: Ctx) -> None:
+    """Stay alive without answering, so a failover can see the flock held."""
+    ctx.jack("start")
+    while True:
+        time.sleep(0.2)
+
+
+def answer_fast(ctx: Ctx) -> None:
+    """Answer every owed letter once, then stop."""
+    own = _own_thread(ctx.wake())
+    seen: set[str] = set()
+    letters = list(parse_boundary(ctx.wake()).letters)
+    letters.extend(ctx.jack("start").letters)
+    for letter in letters:
+        if letter.id in seen:
+            continue
+        seen.add(letter.id)
+        ctx.send(f"thread:{own}", note="ok", re=letter.id)
+    ctx.jack("stop")
+
+
+def emit_channel(ctx: Ctx) -> None:
+    """Ten letters to the fake channel, then hold. A kill can land in the middle."""
+    own = _own_thread(ctx.wake())
+    for letter in parse_boundary(ctx.wake()).letters:
+        ctx.send(f"thread:{own}", note="opener", re=letter.id)
+    for n in range(10):
+        ctx.send("channel:fake", f"msg-{n}")
+        time.sleep(0.05)
+    while True:
+        time.sleep(0.1)
+
+
+def die_on_poison(ctx: Ctx) -> None:
+    """Die after being shown a letter whose body is ``poison``. Answer the rest."""
+    own = _own_thread(ctx.wake())
+    letters = ctx.jack("start").letters
+    if any(letter.body.strip() == "poison" for letter in letters):
+        raise SystemExit(1)
+    for letter in letters:
+        ctx.send(f"thread:{own}", note="ok", re=letter.id)
+    ctx.jack("stop")
+
+
 POLICIES = {
     "answer-pings": answer_pings,
     "ping-two": ping_two,
     "molt-once": molt_once,
     "die-now": die_now,
     "quit-now": quit_now,
+    "hold": hold,
+    "answer-fast": answer_fast,
+    "emit-channel": emit_channel,
+    "die-on-poison": die_on_poison,
 }
 
 

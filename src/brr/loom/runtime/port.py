@@ -8,7 +8,9 @@ from pathlib import Path
 
 from brr.daemon2.facts import Fact
 
-from .home import atomic_write, home_of_room, mint, strand_of_room, thread_of
+from .home import (
+    atomic_write, home_of_room, is_channel, mint, strand_of_room, thread_of,
+)
 
 
 class PortError(RuntimeError):
@@ -166,11 +168,15 @@ def write_port(room: Path, stem: str, text: str) -> None:
 def write_send(room: Path, *, to: str, sender: str, body: str = "",
                re: str | None = None, note: str | None = None) -> str:
     home = home_of_room(Path(room))
-    thread = thread_of(to)
-    if not home.thread_exists(thread):
-        raise PortError(
-            f"send: no thread {thread} "
-            f"({home.thread_dir(thread) / 'README.md'} does not exist)")
+    if is_channel(to):
+        if to != "channel:fake":
+            raise PortError(f"send: no channel adapter for {to!r}")
+    else:
+        thread = thread_of(to)
+        if not home.thread_exists(thread):
+            raise PortError(
+                f"send: no thread {thread} "
+                f"({home.thread_dir(thread) / 'README.md'} does not exist)")
     if note is not None and not re:
         raise PortError("send: --note requires --re")
     if note is not None and body:
@@ -215,7 +221,8 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None) -> Fact:
             "id": fact_id, "to": fm["to"], "body": fm.get("body", ""),
             "from": fm.get("from") or strand, "gen": gen,
         }
-        thread_of(data["to"])
+        if not is_channel(data["to"]):
+            thread_of(data["to"])
         if fm.get("re"):
             data["re"] = fm["re"]
         return Fact(kind="letter", by=f"strand:{strand}", data=data, id=fact_id)

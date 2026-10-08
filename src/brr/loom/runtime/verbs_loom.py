@@ -1,4 +1,4 @@
-"""``python -m brr.loom.runtime <loom|send|molt|jack>``."""
+"""``python -m brr.loom.runtime <loom|send|molt|jack|attention>``."""
 
 from __future__ import annotations
 
@@ -7,8 +7,10 @@ import os
 import sys
 from pathlib import Path
 
-from .home import strand_of_room
+from .attention import clear_letter, view
+from .home import Home, strand_of_room
 from .jack import run as run_jack
+from .ledger import read_facts
 from .loom import run as run_loom
 from .port import PortError, write_molt, write_send
 
@@ -23,11 +25,33 @@ def _room(arg: str | None) -> Path:
 def _loom(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime loom")
     parser.add_argument("--home", required=True)
+    parser.add_argument("--install", default=None)
     parser.add_argument("--adapter", default="fake", choices=("fake", "claude"))
     parser.add_argument("--core", default="haiku")
     parser.add_argument("--tick", type=float, default=0.2)
     args = parser.parse_args(argv)
-    run_loom(args.home, adapter=args.adapter, core=args.core, tick=args.tick)
+    run_loom(
+        args.home, adapter=args.adapter, core=args.core, tick=args.tick,
+        install=args.install,
+    )
+    return 0
+
+
+def _attention(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime attention")
+    parser.add_argument("--home", required=True)
+    parser.add_argument("--install", default=None)
+    parser.add_argument("--clear", default=None)
+    args = parser.parse_args(argv)
+    home = Home(args.home, install=args.install)
+    if args.clear:
+        try:
+            clear_letter(home, args.clear)
+        except ValueError as exc:
+            sys.stderr.write(f"{exc}\n")
+            return 1
+    for row in view(read_facts(home)):
+        sys.stdout.write(row.render() + "\n")
     return 0
 
 
@@ -83,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in {"-h", "--help"}:
         sys.stderr.write(
-            "usage: python -m brr.loom.runtime loom|send|molt|jack ...\n")
+            "usage: python -m brr.loom.runtime loom|send|molt|jack|attention ...\n")
         return 2 if argv else 0
     verb, rest = argv[0], argv[1:]
     if verb == "loom":
@@ -94,6 +118,8 @@ def main(argv: list[str] | None = None) -> int:
         return _molt(rest)
     if verb == "jack":
         return _jack(rest)
+    if verb == "attention":
+        return _attention(rest)
     sys.stderr.write(f"unknown verb {verb}\n")
     return 2
 

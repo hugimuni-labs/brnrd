@@ -16,15 +16,31 @@ from pathlib import Path
 from brr.daemon2.facts import Fact
 
 from .adapters import claude_argv, fake_argv, wait_seconds
-from .home import Home, atomic_write, mint, thread_of
+from .attention import actionable
+from .home import Home, atomic_write, is_channel, mint
 from .ledger import LedgerConflict, append, read_facts
 from .port import fact_from_port, parse_frontmatter, render_boundary, render_wake
-from .project import fold, generation, holder, owed, sender_threads
+from .project import fold, generation, sender_threads
 
 SRC = str(Path(__file__).resolve().parents[3])
 FUSE_WINDOW_S = 600
 FUSE_DEATHS = 2
 _GIT_PIN = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+# Held by the body process, not the loom: the wrapper flocks, then execs.
+# preexec_fn after fork from the test's loom thread can deadlock on a lock
+# another thread still owns. The fd stays open across exec, so the lock
+# dies with the body.
+_FLOCK = (
+    "import fcntl, os, sys\n"
+    "path, argv = sys.argv[1], sys.argv[2:]\n"
+    "os.makedirs(os.path.dirname(path) or '.', exist_ok=True)\n"
+    "fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)\n"
+    # Python opens fds non-inheritable. Without this the lock vanishes at
+    # exec and a peer treats a live body as gone.
+    "os.set_inheritable(fd, True)\n"
+    "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+    "os.execv(argv[0], argv)\n"
+)
 
 
 @dataclass
@@ -130,7 +146,8 @@ def _fused(home: Home, facts: list[Fact], strand: str, thread: str) -> bool:
 
 
 def _prepare(home: Home, strand: str, thread: str, gen: int,
-             letters: list[Fact], threads: dict[str, str]) -> Path:
+             letters: list[Fact], threads: dict[str, str],
+             facts: list[Fact]) -> Path:
     room = home.room(strand)
     (room / "port" / "in").mkdir(parents=True, exist_ok=True)
     (room / "port" / "out").mkdir(parents=True, exist_ok=True)
@@ -142,7 +159,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     readme = (home.thread_dir(thread) / "README.md").read_text()
     atomic_write(room / "port" / "wake.md",
                  render_wake(readme, strand, gen, thread, letters, threads))
-    shown = fold(read_facts(home)).shown.get(strand, set())
+    shown = fold(facts).shown.get(strand, set())
     atomic_write(
         room / "port" / "in" / "boundary.md",
         render_boundary(strand, gen, thread, letters, shown, threads),
@@ -150,11 +167,34 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     return room
 
 
+def body_alive(room: Path) -> bool:
+    """True while the body's process holds the flock on ``room/.body``."""
+    path = Path(room) / ".body"
+    if not path.exists():
+        return False
+    try:
+        fd = os.open(path, os.O_RDWR)
+    except OSError:
+        return False
+    try:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    else:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(fd)
+
+
 def _spawn(room: Path, argv: list[str]) -> tuple[subprocess.Popen, object]:
     log = open(room / "port" / "body.log", "ab")
+    cmd = [sys.executable, "-c", _FLOCK, str(room / ".body"), *argv]
     try:
         proc = subprocess.Popen(
-            argv, cwd=room, env=_env(room), stdin=subprocess.DEVNULL,
+            cmd, cwd=room, env=_env(room), stdin=subprocess.DEVNULL,
             stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
         )
     except Exception:
@@ -164,21 +204,22 @@ def _spawn(room: Path, argv: list[str]) -> tuple[subprocess.Popen, object]:
 
 
 def _start(home: Home, strand: str, thread: str, gen: int, adapter: str,
-           core: str, bodies: dict[str, Body]) -> bool:
+           core: str, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
     """Launch one body. Two launch failures inside the fuse window stop there."""
     for _attempt in range(FUSE_DEATHS):
-        facts = read_facts(home)
         if strand in bodies:
-            return True
-        letters = owed(facts, thread)
-        room = _prepare(home, strand, thread, gen, letters, sender_threads(facts))
+            return facts
+        letters = actionable(facts, thread)
+        room = _prepare(
+            home, strand, thread, gen, letters, sender_threads(facts), facts,
+        )
         if adapter == "fake":
             policy = _policy(home, thread)
             if policy is None:
                 _attention(home, f"attention:no-policy:{thread}",
                            f"fake adapter: thread {thread} has no policy file",
                            thread=thread)
-                return False
+                return facts
             argv = fake_argv(room, policy)
         elif adapter == "claude":
             argv = claude_argv(room, core, wait_seconds(room))
@@ -188,23 +229,24 @@ def _start(home: Home, strand: str, thread: str, gen: int, adapter: str,
             proc, log = _spawn(room, argv)
         except OSError as exc:
             _log(home, f"launch failed {strand}: {exc}")
-            _record(home, "body.died",
-                    {"strand": strand, "gen": gen, "code": 127},
-                    f"body.died:{strand}:{gen}:launch:{mint(6)}")
-            if _fused(home, read_facts(home), strand, thread):
-                return False
+            facts.append(_record(home, "body.died",
+                                 {"strand": strand, "gen": gen, "code": 127},
+                                 f"body.died:{strand}:{gen}:launch:{mint(6)}"))
+            if _fused(home, facts, strand, thread):
+                return facts
             continue
         started = _record(
             home, "body.started",
             {"strand": strand, "gen": gen, "pid": proc.pid, "adapter": adapter},
             f"body.started:{strand}:{gen}:{proc.pid}:{mint(6)}",
         )
+        facts.append(started)
         bodies[strand] = Body(
             strand, thread, gen, proc, tuple(started.hlc or ()), log,
         )
         _log(home, f"start {strand} thread {thread} gen {gen} pid {proc.pid} {adapter}")
-        return True
-    return False
+        return facts
+    return facts
 
 
 def _threads(home: Home) -> list[str]:
@@ -224,76 +266,67 @@ def _reject(home: Home, room: Path, path: Path, message: str) -> None:
     _log(home, f"rejected {path.name}: {message}")
 
 
-def _ingest(home: Home) -> None:
+def _may_ingest(home: Home, strand: str, facts: list[Fact], ttl: float) -> bool:
+    """A strand's own loom ingests it. The router also ingests a silent install.
+
+    Otherwise a dead router's outbound letters would sit in ``port/out`` forever.
+    """
+    from .router import install_of, install_silent
+    owner = install_of(strand)
+    if owner is None:
+        return False
+    if owner == home.install_id():
+        return True
+    return install_silent(facts, owner, ttl)
+
+
+def _stamp_router(fact: Fact, facts: list[Fact]) -> None:
+    if fact.kind != "letter" or not is_channel(fact.data.get("to")):
+        return
+    gens = [
+        int(item.data["gen"]) for item in facts
+        if item.kind == "router" and "gen" in item.data
+    ]
+    if gens:
+        fact.data["router_gen"] = max(gens)
+
+
+def _ingest(home: Home, facts: list[Fact] | None = None, ttl: float | None = None) -> list[Fact]:
+    if facts is None:
+        facts = read_facts(home)
+    if ttl is None:
+        from .config import load_config
+        ttl = load_config(home.root).router_ttl
     rooms = home.root / "rooms"
     if not rooms.is_dir():
-        return
+        return facts
     for room in sorted(path for path in rooms.iterdir() if path.is_dir()):
         out = room / "port" / "out"
         if not out.is_dir():
             continue
         strand = room.name
+        if not _may_ingest(home, strand, facts, ttl):
+            continue
         for path in sorted(out.glob("*.md")):
             try:
                 fact = fact_from_port(
                     parse_frontmatter(path.read_text()), strand,
-                    generation(read_facts(home), strand),
+                    generation(facts, strand),
                 )
-                append(home, fact)
+                _stamp_router(fact, facts)
+                facts.append(append(home, fact))
             except Exception as exc:
                 _reject(home, room, path, f"{type(exc).__name__}: {exc}")
                 continue
             path.unlink()
+    return facts
 
 
-def _route(home: Home, bodies: dict[str, Body], adapter: str, core: str) -> None:
-    threads = _threads(home)
-    for thread in threads:
-        facts = read_facts(home)
-        if holder(facts, thread) or any(body.thread == thread for body in bodies.values()):
-            continue
-        if not owed(facts, thread):
-            continue
-        if adapter == "fake" and _policy(home, thread) is None:
-            _attention(home, f"attention:no-policy:{thread}",
-                       f"fake adapter: thread {thread} has no policy file",
-                       thread=thread)
-            continue
-        strand = f"s-{home.install_id()}-{mint(6)}"
-        gen = _next_gen(facts, thread)
-        _record(home, "lease",
-                {"thread": thread, "strand": strand, "gen": gen},
-                f"lease:{thread}:{gen}")
-        _log(home, f"lease {strand} thread {thread} gen {gen}")
-        _start(home, strand, thread, gen, adapter, core, bodies)
-    facts = read_facts(home)
-    state = fold(facts)
-    known = set(threads)
-    for fact in state.accepted:
-        if fact.kind != "letter" or fact.data.get("id") in state.handled:
-            continue
-        letter_id = str(fact.data.get("id") or fact.id)
-        try:
-            thread = thread_of(str(fact.data.get("to")))
-        except ValueError:
-            _attention(home, f"attention:unroutable:{letter_id}",
-                       f"unroutable to {fact.data.get('to')!r}", letter=letter_id)
-            continue
-        if thread not in known:
-            _attention(home, f"attention:no-thread:{letter_id}",
-                       f"no such thread {thread}", thread=thread, letter=letter_id)
-
-
-def _boundaries(home: Home, bodies: dict[str, Body]) -> None:
-    facts = read_facts(home)
+def _boundaries(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> None:
     state = fold(facts)
     threads = sender_threads(facts)
     for body in bodies.values():
-        letters = [
-            fact for fact in state.accepted
-            if fact.kind == "letter" and fact.data.get("id") not in state.handled
-            and _destination(fact) == body.thread
-        ]
+        letters = actionable(facts, body.thread)
         text = render_boundary(
             body.strand, body.gen, body.thread, letters,
             state.shown.get(body.strand, set()), threads,
@@ -301,13 +334,6 @@ def _boundaries(home: Home, bodies: dict[str, Body]) -> None:
         path = home.room(body.strand) / "port" / "in" / "boundary.md"
         if not path.is_file() or path.read_text() != text:
             atomic_write(path, text)
-
-
-def _destination(fact: Fact) -> str | None:
-    try:
-        return thread_of(str(fact.data.get("to")))
-    except ValueError:
-        return None
 
 
 def _molted(home: Home, body: Body, facts: list[Fact]) -> bool:
@@ -323,41 +349,59 @@ def _molted(home: Home, body: Body, facts: list[Fact]) -> bool:
     return False
 
 
-def _reap(home: Home, bodies: dict[str, Body], adapter: str, core: str) -> None:
+def _reap(home: Home, bodies: dict[str, Body], adapter: str, core: str,
+         facts: list[Fact]) -> list[Fact]:
     for strand, body in list(bodies.items()):
         code = body.proc.poll()
         if code is None:
             continue
         body.close_log()
         del bodies[strand]
-        facts_before = read_facts(home)
-        molted = _molted(home, body, facts_before)
+        molted = _molted(home, body, facts)
         kind = "body.exited" if code == 0 else "body.died"
         data = {"strand": strand, "gen": body.gen, "code": code}
-        if code == 0 and not molted and owed(facts_before, body.thread):
+        # A poison letter stays owed and must not look like unfinished work,
+        # or the body that answered everything else would spin the fuse.
+        if code == 0 and not molted and actionable(facts, body.thread):
             data["unfinished"] = True
-        _record(home, kind, data, f"{kind}:{strand}:{body.gen}:{mint(6)}")
+        facts.append(_record(home, kind, data, f"{kind}:{strand}:{body.gen}:{mint(6)}"))
         _log(home, f"exit {strand} code {code}")
-        facts = read_facts(home)
         if code != 0 or data.get("unfinished"):
             if not _fused(home, facts, strand, body.thread):
-                _start(home, strand, body.thread, body.gen, adapter, core, bodies)
+                facts = _start(
+                    home, strand, body.thread, body.gen, adapter, core, bodies, facts,
+                )
             continue
         if molted:
-            _start(home, strand, body.thread, body.gen, adapter, core, bodies)
+            facts = _start(
+                home, strand, body.thread, body.gen, adapter, core, bodies, facts,
+            )
             continue
-        _record(home, "released", {
+        facts.append(_record(home, "released", {
             "thread": body.thread, "strand": strand, "gen": body.gen,
-            "why": "nothing owed",
-        }, f"released:{body.thread}:{body.gen}")
+            "why": "nothing owed", "install": home.install_id(),
+        }, f"released:{body.thread}:{body.gen}"))
         _log(home, f"released {strand} thread {body.thread}")
+    return facts
 
 
-def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str) -> None:
-    _ingest(home)
-    _route(home, bodies, adapter, core)
-    _boundaries(home, bodies)
-    _reap(home, bodies, adapter, core)
+def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
+              router=None) -> None:
+    """One read of the ledger, then ingest, route, boundaries, reap.
+
+    ``router`` is omitted only by callers that have not opened one yet;
+    ``run`` always passes the process's router.
+    """
+    from .router import Router
+    if router is None:
+        router = Router(home)
+    facts = read_facts(home)
+    facts = router.begin_tick(facts)
+    facts = _ingest(home, facts, router.config.router_ttl)
+    facts = router.route(facts, bodies, adapter, core)
+    facts = router.speak_out(facts)
+    _boundaries(home, bodies, facts)
+    _reap(home, bodies, adapter, core, facts)
 
 
 def _pause(stop, seconds: float) -> bool:
@@ -402,19 +446,21 @@ def _own_stop(stop):
 
 
 def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
-        tick: float = 0.2, stop=None) -> None:
+        tick: float = 0.2, stop=None, install: str | None = None) -> None:
     if adapter not in {"fake", "claude"}:
         raise ValueError(f"unknown adapter {adapter!r}")
     if tick <= 0:
         raise ValueError("tick must be positive")
     stop = _own_stop(stop)
-    home = Home(root)
+    home = Home(root, install=install)
     home.install_id()
+    from .router import Router
+    router = Router(home)
     bodies: dict[str, Body] = {}
     try:
         while not (stop is not None and stop.is_set()):
             try:
-                tick_once(home, bodies, adapter, core)
+                tick_once(home, bodies, adapter, core, router)
             except Exception:
                 _log(home, traceback.format_exc().rstrip())
             if _pause(stop, tick):
