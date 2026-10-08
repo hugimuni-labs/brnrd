@@ -11363,7 +11363,27 @@ def _fire_due_schedules(
         # list has had `replace(e, interval=...)` applied to it.
         _fingerprints = {e.id: schedule_mod.entry_fingerprint(e) for e in entries}
         _noticed_untiered: list = list(new_state.get(schedule_mod._NOTICED_UNTIERED_KEY) or [])
+        # #2212: an `every:` entry whose earlier firing is still unclaimed
+        # (status ``pending``) does not fire again. Pile-ups of identical
+        # letters are what starved a one-shot `at:` letter behind a live
+        # seat: claim order is oldest-first, so five queued goal pulses
+        # outranked the molt letter carrying real work. The cadence still
+        # advances (``new_state`` was computed above), so the entry fires
+        # on its next interval once the pending one is taken. A letter
+        # being processed doesn't count: a firing during a long run is a
+        # fresh occasion, not a duplicate.
+        unclaimed_every_ids = {
+            str(ev.get("schedule_id") or "")
+            for ev in protocol.list_pending(inbox_dir)
+            if ev.get("source") == "schedule" and ev.get("status") == "pending"
+        }
         for entry in due:
+            if entry.kind == "every" and entry.id in unclaimed_every_ids:
+                print(
+                    f"[brnrd] schedule: {entry.id} still has an unclaimed "
+                    "firing pending — coalesced, not re-fired (#2212)"
+                )
+                continue
             body = entry.body or f"(self-scheduled thought: {entry.id})"
             # Thread the firing so a recurring entry's wakes share a
             # readable history; default per-entry, overridable to an
