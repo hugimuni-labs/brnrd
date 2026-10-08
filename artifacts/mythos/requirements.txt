@@ -1,0 +1,5 @@
+numpy
+scipy
+opencv-python-headless
+pillow
+astropy  # only to decode the two raw 128px FITS inserts
