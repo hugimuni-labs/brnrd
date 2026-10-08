@@ -1,4 +1,4 @@
-"""A repo with no commits gets an explanation, not git's raw error (#NNN).
+"""A repo with no commits gets an explanation, not git's raw error.
 
 ``git clone`` of an empty GitHub repo leaves a checkout that says
 ``On branch main`` while git has no ``main`` reference at all. The first

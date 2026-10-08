@@ -44,6 +44,7 @@ brnrd run "summarize the test layout; do not change files"
 ```
 
 Good for a smoke test; [Connect](../connect/) is the real front door.
+
 ## A brand-new repository needs one commit
 
 brnrd seeds a run from a branch reference, and a repository created on
