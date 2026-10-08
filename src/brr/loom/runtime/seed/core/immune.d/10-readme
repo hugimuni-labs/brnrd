@@ -1,0 +1,344 @@
+#!/bin/sh
+# README check. Same verdicts as parse_readme, plus id against the folder.
+#   10-readme <old> <new>     changed threads/<id>/README.md; old all-zeros = every one at new
+#   10-readme --file PATH     one file (folder rule only when the name is README.md)
+# exit 0 ok, exit 1 refused (stderr "path: why"), exit 2 a bad invocation.
+# POSIX sh. GIT_DIR is kept so a bare-repo hook can find the repo.
+
+set -eu
+set -f
+
+WHY=""
+HAV=""
+UQ=""
+
+err() {
+  printf '%s: %s\n' "$1" "$2" >&2
+}
+
+die_usage() {
+  printf '%s\n' "usage: 10-readme <old> <new> | 10-readme --file PATH" >&2
+  exit 2
+}
+
+key_ok() {
+  case $1 in
+    "" | *[!A-Za-z0-9_-]* | [0-9_-]*) return 1 ;;
+  esac
+  case $1 in
+    [A-Za-z]*) return 0 ;;
+  esac
+  return 1
+}
+
+unquote() {
+  _uq=$1
+  UQ=""
+  case $_uq in
+    \"*\")
+      UQ=$(printf '%s' "$_uq" | sed 's/^"//; s/"$//')
+      case $UQ in
+        *\"*)
+          WHY="unclosed quote: $_uq"
+          return 1
+          ;;
+      esac
+      ;;
+    *\"*)
+      WHY="unclosed quote: $_uq"
+      return 1
+      ;;
+    *)
+      UQ=$_uq
+      ;;
+  esac
+  return 0
+}
+
+load_val() {
+  HAV=""
+  if [ ! -f "$WORKDIR/vals/$1" ]; then
+    return 1
+  fi
+  IFS= read -r HAV < "$WORKDIR/vals/$1" || true
+  return 0
+}
+
+fm_line() {
+  line=$1
+  case $line in
+    "") return 0 ;;
+    " "* | "	"*)
+      WHY="frontmatter line not key: value: $line"
+      return 1
+      ;;
+  esac
+  case $line in
+    *:*) ;;
+    *)
+      WHY="frontmatter line not key: value: $line"
+      return 1
+      ;;
+  esac
+  key=$(printf '%s' "$line" | sed 's/:.*//' | sed 's/^ *//; s/ *$//')
+  if ! key_ok "$key"; then
+    WHY="frontmatter line not key: value: $line"
+    return 1
+  fi
+  if grep -x -F -q -- "$key" "$WORKDIR/keys"; then
+    WHY="duplicate key: $key"
+    return 1
+  fi
+  printf '%s\n' "$key" >> "$WORKDIR/keys"
+  raw=$(printf '%s' "$line" | sed 's/^[^:]*://' | sed 's/^ *//; s/ *$//')
+  case $raw in
+    "["*)
+      # `for` is a string ("" or a brnrd name). Judged before the list shape,
+      # so a list here is a type error rather than a malformed list.
+      if [ "$key" = "for" ]; then
+        WHY="for must be a string"
+        return 1
+      fi
+      case $raw in
+        *"]") ;;
+        *)
+          WHY="list unclosed: $key"
+          return 1
+          ;;
+      esac
+      inner=$(printf '%s' "$raw" | sed 's/^\[//; s/\]$//' | sed 's/^ *//; s/ *$//')
+      if [ -n "$inner" ]; then
+        case $inner in
+          ,* | *, | *,,*)
+            WHY="list malformed: $key"
+            return 1
+            ;;
+        esac
+        oldifs=$IFS
+        IFS=','
+        # shellcheck disable=SC2086
+        for piece in $inner; do
+          piece=$(printf '%s' "$piece" | sed 's/^ *//; s/ *$//')
+          if [ -z "$piece" ]; then
+            IFS=$oldifs
+            WHY="list malformed: $key"
+            return 1
+          fi
+          if ! unquote "$piece"; then
+            IFS=$oldifs
+            return 1
+          fi
+        done
+        IFS=$oldifs
+      fi
+      printf '%s\n' "$raw" > "$WORKDIR/vals/$key"
+      ;;
+    *)
+      if ! unquote "$raw"; then
+        return 1
+      fi
+      printf '%s\n' "$UQ" > "$WORKDIR/vals/$key"
+      ;;
+  esac
+  return 0
+}
+
+require_fields() {
+  if ! load_val id || [ -z "$HAV" ]; then
+    WHY="id missing"
+    return 1
+  fi
+  if ! load_val status || [ -z "$HAV" ]; then
+    WHY="status missing"
+    return 1
+  fi
+  case $HAV in
+    open | live | dormant | settled | retired) status_v=$HAV ;;
+    *)
+      WHY="status $HAV is not one of open|live|dormant|settled|retired"
+      return 1
+      ;;
+  esac
+  if ! load_val tense || [ -z "$HAV" ]; then
+    WHY="tense missing"
+    return 1
+  fi
+  case $HAV in
+    plan | reference) ;;
+    *)
+      WHY="tense $HAV is not one of plan|reference"
+      return 1
+      ;;
+  esac
+  if [ "$HAV" = "reference" ] && [ "$status_v" != "settled" ]; then
+    WHY="tense reference requires status settled"
+    return 1
+  fi
+  return 0
+}
+
+heading_ok() {
+  line=$1
+  first=$(printf '%s' "$line" | cut -c1-2)
+  rest=$(printf '%s' "$line" | cut -c3-)
+  third=$(printf '%s' "$rest" | cut -c1)
+  trimmed=$(printf '%s' "$rest" | tr -d '[:space:]')
+  if [ "$first" = "# " ] && [ "$third" != "#" ] && [ -n "$trimmed" ]; then
+    return 0
+  fi
+  return 1
+}
+
+parse_file() {
+  file=$1
+  : > "$WORKDIR/lines"
+  close=0
+  nl=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=$(printf '%s' "$line" | tr -d '\r')
+    nl=$((nl + 1))
+    printf '%s\n' "$line" >> "$WORKDIR/lines"
+    if [ "$nl" -gt 1 ] && [ "$close" -eq 0 ] && [ "$line" = "---" ]; then
+      close=$nl
+    fi
+  done < "$file"
+  IFS= read -r first < "$WORKDIR/lines" || true
+  if [ "$nl" -eq 0 ] || [ "$first" != "---" ]; then
+    WHY="frontmatter missing"
+    return 1
+  fi
+  # The closing marker is decided before any line inside is judged, so a
+  # missing closer is "unclosed" even when a later line would also be illegal.
+  if [ "$close" -eq 0 ]; then
+    WHY="frontmatter unclosed"
+    return 1
+  fi
+  nl=0
+  headline=missing
+  while IFS= read -r line; do
+    nl=$((nl + 1))
+    if [ "$nl" -lt "$close" ]; then
+      if [ "$nl" -gt 1 ]; then
+        if ! fm_line "$line"; then
+          return 1
+        fi
+      fi
+      continue
+    fi
+    if [ "$nl" -eq "$close" ]; then
+      continue
+    fi
+    if [ "$headline" != "missing" ]; then
+      continue
+    fi
+    if [ -z "$line" ]; then
+      continue
+    fi
+    if heading_ok "$line"; then
+      headline=ok
+    else
+      headline=bad
+    fi
+  done < "$WORKDIR/lines"
+  if ! require_fields; then
+    return 1
+  fi
+  if [ "$headline" = "missing" ]; then
+    WHY="heading missing"
+    return 1
+  fi
+  if [ "$headline" = "bad" ]; then
+    WHY="heading must be a single '# ' line"
+    return 1
+  fi
+  return 0
+}
+
+check_content() {
+  disp=$1
+  file=$2
+  folder=$3
+  rm -rf "$WORKDIR/vals"
+  mkdir -p "$WORKDIR/vals"
+  : > "$WORKDIR/keys"
+  if ! parse_file "$file"; then
+    err "$disp" "$WHY"
+    return 1
+  fi
+  if [ -n "$folder" ]; then
+    load_val id || true
+    if [ "$HAV" != "$folder" ]; then
+      err "$disp" "id $HAV is not folder $folder"
+      return 1
+    fi
+  fi
+  return 0
+}
+
+is_thread_readme() {
+  case $1 in
+    threads/*/README.md) ;;
+    *) return 1 ;;
+  esac
+  rest=${1#threads/}
+  idpart=${rest%%/*}
+  tail=${rest#*/}
+  [ "$tail" = "README.md" ] && [ -n "$idpart" ] && [ "$idpart" != "$rest" ]
+}
+
+WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/10-readme.XXXXXX")
+trap 'rm -rf "$WORKDIR"' EXIT INT TERM
+mkdir -p "$WORKDIR/vals"
+: > "$WORKDIR/keys"
+
+if [ "${1:-}" = "--file" ]; then
+  [ "$#" -eq 2 ] || die_usage
+  path=$2
+  if [ ! -f "$path" ]; then
+    err "$path" "no such file"
+    exit 1
+  fi
+  folder=""
+  if [ "$(basename "$path")" = "README.md" ]; then
+    folder=$(basename "$(dirname "$path")")
+  fi
+  if ! check_content "$path" "$path" "$folder"; then
+    exit 1
+  fi
+  exit 0
+fi
+
+[ "$#" -eq 2 ] || die_usage
+old=$1
+new=$2
+
+case $old in
+  *[!0]*)
+    git diff --name-only --diff-filter=ACMR "$old" "$new" -- threads > "$WORKDIR/paths"
+    ;;
+  "")
+    die_usage
+    ;;
+  *)
+    git ls-tree -r --name-only "$new" -- threads > "$WORKDIR/paths"
+    ;;
+esac
+
+status=0
+while IFS= read -r path; do
+  [ -n "$path" ] || continue
+  if ! is_thread_readme "$path"; then
+    continue
+  fi
+  if ! git show "$new:$path" > "$WORKDIR/blob" 2>"$WORKDIR/giterr"; then
+    err "$path" "unreadable at $new"
+    status=1
+    continue
+  fi
+  idpart=${path#threads/}
+  idpart=${idpart%%/*}
+  if ! check_content "$path" "$WORKDIR/blob" "$idpart"; then
+    status=1
+  fi
+done < "$WORKDIR/paths"
+exit "$status"
