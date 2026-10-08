@@ -99,6 +99,24 @@ def _existing(directory: Path) -> dict[str, Fact]:
     return found
 
 
+def _heal_tail(path: Path) -> None:
+    """Cut a line a crashed writer left unfinished, so the next append starts clean.
+
+    ``read_file`` skips such a tail, but appending after it would glue the new
+    row onto the fragment and make the file unreadable for good. Caller holds
+    the ledger lock.
+    """
+    if not path.is_file():
+        return
+    raw = path.read_bytes()
+    if not raw or raw.endswith(b"\n"):
+        return
+    with open(path, "r+b") as handle:
+        handle.truncate(raw.rfind(b"\n") + 1)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
 def append(home: Home, fact: Fact) -> Fact:
     """Append ``fact``. Same id + same content is a no-op; different content raises."""
     directory = home.facts_dir()
@@ -121,6 +139,7 @@ def append(home: Home, fact: Fact) -> Fact:
             )
             line = json.dumps(stored.row(), sort_keys=True, separators=(",", ":"))
             path = directory / fact_filename(stored)
+            _heal_tail(path)
             with open(path, "a") as handle:
                 handle.write(line + "\n")
                 handle.flush()

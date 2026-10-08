@@ -58,6 +58,11 @@ def parse_boundary(text: str) -> Boundary:
     letters: list[LetterView] = []
     current: LetterView | None = None
     for line in text[header.end():].splitlines():
+        # Continuation first: a blank line inside a body renders as two
+        # spaces, and must not end the letter (#2223 review).
+        if line.startswith("  ") and current is not None and not current.compact:
+            current.body += "\n" + line[2:]
+            continue
         if not line.strip() or line.startswith("status:") or line.startswith("owed:"):
             current = None
             continue
@@ -69,9 +74,6 @@ def parse_boundary(text: str) -> Boundary:
                 compact=bool(match.group("mark")),
             )
             letters.append(current)
-            continue
-        if line.startswith("  ") and current is not None and not current.compact:
-            current.body += "\n" + line[2:]
             continue
         raise PortError(f"boundary line is not a letter: {line!r}")
     if [letter.id for letter in letters] != ids:
