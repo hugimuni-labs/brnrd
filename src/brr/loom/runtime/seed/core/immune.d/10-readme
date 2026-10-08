@@ -93,6 +93,12 @@ fm_line() {
   raw=$(printf '%s' "$line" | sed 's/^[^:]*://' | sed 's/^ *//; s/ *$//')
   case $raw in
     "["*)
+      # `for` is a string ("" or a brnrd name). Judged before the list shape,
+      # so a list here is a type error rather than a malformed list.
+      if [ "$key" = "for" ]; then
+        WHY="for must be a string"
+        return 1
+      fi
       case $raw in
         *"]") ;;
         *)

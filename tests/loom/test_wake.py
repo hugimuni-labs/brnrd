@@ -40,6 +40,7 @@ NAMED_WHY = {
     "dup-status.md": "duplicate key: status",
     "bad-list.md": "list unclosed: limbs",
     "malformed-list.md": "list malformed: limbs",
+    "for-list.md": "for must be a string",
 }
 
 
@@ -347,6 +348,9 @@ def test_readme_fixtures_agree() -> None:
     quoted = parse_readme((FIXTURES / "ok" / "quoted-limbs.md").read_text(encoding="utf-8"))
     assert quoted["limbs"] == ["send", "recall"]
     assert quoted["status"] == "dormant"
+    held = parse_readme((FIXTURES / "ok" / "for-name.md").read_text(encoding="utf-8"))
+    assert held["for"] == "brnrd"
+    assert "for" not in parse_readme((FIXTURES / "ok" / "minimal.md").read_text(encoding="utf-8"))
 
 
 def test_range_check_and_folder_rule(tmp_path: Path) -> None:

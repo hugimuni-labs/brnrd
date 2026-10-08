@@ -165,6 +165,9 @@ def parse_readme(text: str) -> dict:
         if key in data:
             raise ReadmeError(f"duplicate key: {key}")
         value = raw.strip()
+        # `for` names one brnrd, or is empty. A list is a different fact.
+        if key == "for" and value.startswith("["):
+            raise ReadmeError("for must be a string")
         data[key] = _parse_list(value, key) if value.startswith("[") else _unquote(value)
     _require(data)
     data["headline"] = _headline(lines[end + 1 :])
