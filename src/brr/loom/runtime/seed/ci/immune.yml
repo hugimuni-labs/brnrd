@@ -25,4 +25,9 @@ jobs:
             old="${{ github.event.before }}"
             new="${{ github.sha }}"
           fi
-          sh core/immune "$old" "$new"
+          # The incumbent judges: run core/immune from the main being replaced.
+          script=core/immune
+          case "$old" in
+            ""|*[!0]*) git show "$old:core/immune" >"$RUNNER_TEMP/immune" && script="$RUNNER_TEMP/immune" ;;
+          esac
+          sh "$script" "$old" "$new"

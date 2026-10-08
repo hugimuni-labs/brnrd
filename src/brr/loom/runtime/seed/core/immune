@@ -7,14 +7,71 @@
 # Exit 0 accepts. Exit 1 refuses: one stderr line per reason, prefixed with
 # the check's name. Any ref other than refs/heads/main passes. An empty
 # immune.d/ accepts a fast-forward, so the gate works before any check exists.
-# Checks are the executable files in core/immune.d/ as committed at <new>,
-# run in name order, every one of them, even after an earlier one fails.
+# The incumbent judges the change, and the change must pass its own rules:
+# the executable files in core/immune.d/ at <old> run (reasons prefixed
+# old/), then those at <new>, each set in name order, every one of them,
+# even after an earlier one fails. A push that deletes a check is still
+# judged by it. On the first push (<old> all zeros) only <new>'s run.
 
 zeros_p() {
     case "$1" in
         ""|*[!0]*) return 1 ;;
         *) return 0 ;;
     esac
+}
+
+# run_set <rev> <dir> <prefix> <old> <new>: extract core/immune.d at <rev>
+# into <dir> and run every check. Returns 1 if any refused.
+run_set() {
+    rev=$1
+    dir=$2
+    prefix=$3
+    mkdir -p "$dir"
+    if ! git archive "$rev" core/immune.d >"$dir/checks.tar" 2>"$dir/archive.err"; then
+        if git cat-file -e "$rev:core/immune.d" >/dev/null 2>&1; then
+            printf 'immune: cannot extract core/immune.d at %s\n' "$rev" >&2
+            cat "$dir/archive.err" >&2
+            return 1
+        fi
+        # No immune.d at this rev. Nothing to run.
+        return 0
+    fi
+    if ! tar -x -C "$dir" -f "$dir/checks.tar"; then
+        printf 'immune: cannot extract core/immune.d at %s\n' "$rev" >&2
+        return 1
+    fi
+    checkdir=$dir/core/immune.d
+    if [ ! -d "$checkdir" ]; then
+        printf 'immune: core/immune.d is not a directory at %s\n' "$rev" >&2
+        return 1
+    fi
+    set_failed=0
+    # Byte order, not the operator's locale, so 10-readme stays before 50-.
+    find "$checkdir" -maxdepth 1 -type f -perm -111 | LC_ALL=C sort >"$dir/list"
+    while IFS= read -r check; do
+        [ -n "$check" ] || continue
+        name=$prefix$(basename "$check")
+        err=$dir/err
+        : >"$err"
+        if [ -n "${LOOM_IMMUNE_SH:-}" ]; then
+            "$LOOM_IMMUNE_SH" "$check" "$4" "$5" 2>"$err"
+        else
+            "$check" "$4" "$5" 2>"$err"
+        fi
+        rc=$?
+        if [ "$rc" -ne 0 ]; then
+            set_failed=1
+            if [ -s "$err" ]; then
+                while IFS= read -r line || [ -n "$line" ]; do
+                    printf '%s: %s\n' "$name" "$line" >&2
+                done <"$err"
+            else
+                # A blank refusal is a polite zero. Name the check anyway.
+                printf '%s: failed\n' "$name" >&2
+            fi
+        fi
+    done <"$dir/list"
+    return "$set_failed"
 }
 
 run_checks() {
@@ -25,53 +82,10 @@ run_checks() {
         return 1
     }
     failed=0
-    if ! git archive "$new" core/immune.d >"$tmp/checks.tar" 2>"$tmp/archive.err"; then
-        if git cat-file -e "$new:core/immune.d" >/dev/null 2>&1; then
-            printf 'immune: cannot extract core/immune.d at %s\n' "$new" >&2
-            cat "$tmp/archive.err" >&2
-            rm -rf "$tmp"
-            return 1
-        fi
-        # No immune.d yet. Nothing to run.
-        rm -rf "$tmp"
-        return 0
+    if ! zeros_p "$old"; then
+        run_set "$old" "$tmp/old" "old/" "$old" "$new" || failed=1
     fi
-    if ! tar -x -C "$tmp" -f "$tmp/checks.tar"; then
-        printf 'immune: cannot extract core/immune.d at %s\n' "$new" >&2
-        rm -rf "$tmp"
-        return 1
-    fi
-    checkdir=$tmp/core/immune.d
-    if [ ! -d "$checkdir" ]; then
-        printf 'immune: core/immune.d is not a directory at %s\n' "$new" >&2
-        rm -rf "$tmp"
-        return 1
-    fi
-    # Byte order, not the operator's locale, so 10-readme stays before 50-.
-    find "$checkdir" -maxdepth 1 -type f -perm -111 | LC_ALL=C sort >"$tmp/list"
-    while IFS= read -r check; do
-        [ -n "$check" ] || continue
-        name=$(basename "$check")
-        err=$tmp/err
-        : >"$err"
-        if [ -n "${LOOM_IMMUNE_SH:-}" ]; then
-            "$LOOM_IMMUNE_SH" "$check" "$old" "$new" 2>"$err"
-        else
-            "$check" "$old" "$new" 2>"$err"
-        fi
-        rc=$?
-        if [ "$rc" -ne 0 ]; then
-            failed=1
-            if [ -s "$err" ]; then
-                while IFS= read -r line || [ -n "$line" ]; do
-                    printf '%s: %s\n' "$name" "$line" >&2
-                done <"$err"
-            else
-                # A blank refusal is a polite zero. Name the check anyway.
-                printf '%s: failed\n' "$name" >&2
-            fi
-        fi
-    done <"$tmp/list"
+    run_set "$new" "$tmp/new" "" "$old" "$new" || failed=1
     rm -rf "$tmp"
     return "$failed"
 }

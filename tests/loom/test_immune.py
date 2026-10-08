@@ -269,3 +269,31 @@ def test_core_notice_is_silent_when_core_is_untouched(tmp_path: Path, immune_sh:
     )
     assert direct.returncode == 0
     assert direct.stdout == ""
+
+
+def test_a_push_that_deletes_a_check_is_judged_by_it(tmp_path: Path, immune_sh: str) -> None:
+    _bare, work = published(tmp_path)
+    guard = "#!/bin/sh\nif git cat-file -e \"$2:forbidden\" 2>/dev/null; then printf 'forbidden is here\\n' >&2; exit 1; fi\n"
+    write(work, "core/immune.d/40-guard", guard, exe=True)
+    commit(work, "add the guard")
+    assert git(work, "push", "origin", "HEAD:main", check=False).returncode == 0
+    (work / "core" / "immune.d" / "40-guard").unlink()
+    write(work, "forbidden", "x\n")
+    commit(work, "drop the guard and do the thing it guards")
+    proc = git(work, "push", "origin", "HEAD:main", check=False)
+    assert proc.returncode != 0
+    assert "old/40-guard: forbidden is here" in _blob(proc)
+
+
+def test_a_push_that_rewrites_immune_to_exit_0_is_judged_by_the_old_one(tmp_path: Path, immune_sh: str) -> None:
+    _bare, work = published(tmp_path)
+    guard = "#!/bin/sh\nif git cat-file -e \"$2:forbidden\" 2>/dev/null; then printf 'forbidden is here\\n' >&2; exit 1; fi\n"
+    write(work, "core/immune.d/40-guard", guard, exe=True)
+    commit(work, "add the guard")
+    assert git(work, "push", "origin", "HEAD:main", check=False).returncode == 0
+    write(work, "core/immune", "#!/bin/sh\nexit 0\n", exe=True)
+    write(work, "forbidden", "x\n")
+    commit(work, "neuter immune")
+    proc = git(work, "push", "origin", "HEAD:main", check=False)
+    assert proc.returncode != 0
+    assert "forbidden is here" in _blob(proc)

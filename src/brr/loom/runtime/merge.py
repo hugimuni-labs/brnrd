@@ -37,16 +37,18 @@ _STOPS = "loom-send-stops"
 # so the script that judges it is the one on the tip being deleted.
 _HOOK = """\
 #!/bin/sh
-# Judge the push with core/immune from the incoming commit, not a copy
-# stored beside this hook. A deletion has no new tree: the script on the
-# old tip judges it. A missing or empty script refuses (empty sh exits 0).
+# The incumbent judges the change: core/immune comes from the tip being
+# replaced, never from the incoming commit (a push that rewrites immune to
+# "exit 0" would otherwise judge itself), and never from a copy beside this
+# hook. Only the first push (old all zeros) is judged by its own script.
+# A missing or empty script refuses (empty sh exits 0).
 status=0
 while read -r old new ref; do
     [ -n "$old" ] || continue
-    tip=$new
-    case "$new" in
+    tip=$old
+    case "$old" in
         ""|*[!0]*) ;;
-        *) tip=$old ;;
+        *) tip=$new ;;
     esac
     script=$(mktemp "${TMPDIR:-/tmp}/immune-hook.XXXXXX") || exit 1
     if ! git show "$tip:core/immune" >"$script" 2>/dev/null || [ ! -s "$script" ]; then
@@ -83,7 +85,7 @@ class Outcome:
 
 
 def install_pre_receive(repo: str | Path) -> Path:
-    """Write the pre-receive shim so the incoming commit's immune judges it.
+    """Write the pre-receive shim, so the incumbent ``main``'s immune judges each push.
 
     A bare repo keeps the hook in ``hooks/``. A working repo (step 2's
     ``home/self``, ``main`` checked out) keeps it in ``.git/hooks`` and gets

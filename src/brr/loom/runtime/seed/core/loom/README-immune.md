@@ -1,11 +1,13 @@
 # Protecting main
 
 `core/immune` is the self's own check. A push reaches `main` only if this
-script, as it exists in the incoming commit, says so. Strand branches are
+script, as it exists on the `main` being replaced, says so. Strand branches are
 not checked. This file is the part a person does by hand. Nothing here is
 applied automatically.
 
 ## On a forge
+
+A pull request can edit this workflow file itself, so on GitHub the check is only as strong as where the workflow is read from: make `immune` a required status through a ruleset, and keep strand tokens without admin rights.
 
 1. Copy `ci/immune.yml` to `.github/workflows/immune.yml` in the self (it
    already lives in the seed, under `ci/`, so a self built from the seed
@@ -28,7 +30,11 @@ checks against `<new>` alone.
 
 The loom installs the hook with `install_pre_receive` (see
 `brr.loom.runtime.merge`). The hook is a shim: it reads `core/immune` out
-of the incoming commit and runs that. Replacing the file on disk, next to
+of the tip being replaced and runs that. **The incumbent judges the change**:
+a push that rewrites `core/immune` to `exit 0`, or deletes a check, is judged
+by the rules it is trying to remove. `core/immune` then runs `immune.d/` from
+both the old tip (reasons prefixed `old/`) and the new one, so a change must
+also pass its own new rules. Only the first push is judged by itself alone. Replacing the file on disk, next to
 the repo, does not change what the next push is judged by.
 
 On a bare repo the shim is `hooks/pre-receive`. On a working self — `main`
