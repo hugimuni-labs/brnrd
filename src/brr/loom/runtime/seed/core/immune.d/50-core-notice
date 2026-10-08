@@ -1,0 +1,34 @@
+#!/bin/sh
+# 50-core-notice <old> <new>
+#
+# stdout: "core changed: <paths>" when old..new touches core/, paths in
+# byte order, space-separated, one line. Silent when core/ is untouched.
+# Never refuses — the loom (step 3) turns the line into a notice. An all-zero
+# <old> (the first push) lists every core/ path at <new>.
+
+old=${1:-}
+new=${2:-}
+if [ -z "$old" ] || [ -z "$new" ]; then
+    printf '50-core-notice: usage: 50-core-notice <old> <new>\n' >&2
+    exit 0
+fi
+
+tmp=$(mktemp "${TMPDIR:-/tmp}/core-notice.XXXXXX") || exit 0
+trap 'rm -f "$tmp"' EXIT
+
+case "$old" in
+    ""|*[!0]*)
+        git diff --name-only "$old" "$new" -- core/ >"$tmp" 2>/dev/null || : >"$tmp"
+        ;;
+    *)
+        git ls-tree -r --name-only "$new" 2>/dev/null | grep '^core/' >"$tmp" || : >"$tmp"
+        ;;
+esac
+
+if [ ! -s "$tmp" ]; then
+    exit 0
+fi
+
+paths=$(LC_ALL=C sort "$tmp" | awk 'NF { printf "%s%s", sep, $0; sep = " " }')
+printf 'core changed: %s\n' "$paths"
+exit 0

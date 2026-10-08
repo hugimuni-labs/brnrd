@@ -1,0 +1,4 @@
+memory/scars/*.md merge=union
+memory/itches/*.md merge=union
+memory/moves/*.md merge=union
+threads/*/notes/*.md merge=union
