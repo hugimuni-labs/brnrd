@@ -32,3 +32,26 @@ def test_two_immediate_deaths_fuse_the_strand(tmp_path):
     finally:
         loom.halt()
         assert not loom.errors
+
+
+def test_two_unfinished_exits_fuse_the_strand(tmp_path):
+    """Exit 0 with the letter still owed is a failed attempt, not a reason to spin."""
+    root = tmp_path / "home"
+    write_thread(root, "tq", "thread tq", "quit-now", wait="5")
+    inject_letter(root, to="thread:tq", body="begin")
+    loom = Loom(root, tick=0.05)
+    loom.start()
+    try:
+        def fused():
+            return any(fact.id.startswith("attention:fuse:") for fact in loom.facts())
+
+        wait_until(fused, 5, loom.dump)
+        time.sleep(0.4)
+        facts = loom.facts()
+        starts = [fact for fact in facts if fact.kind == "body.started"]
+        exits = [fact for fact in facts if fact.kind == "body.exited"]
+        assert len(starts) == 2
+        assert len(exits) == 2 and all(fact.data.get("unfinished") for fact in exits)
+    finally:
+        loom.halt()
+        assert not loom.errors

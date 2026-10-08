@@ -186,11 +186,17 @@ def die_now(ctx: Ctx) -> None:
     raise SystemExit(1)
 
 
+def quit_now(ctx) -> int:
+    """Exit 0 at once without answering: a body that gives up politely."""
+    return 0
+
+
 POLICIES = {
     "answer-pings": answer_pings,
     "ping-two": ping_two,
     "molt-once": molt_once,
     "die-now": die_now,
+    "quit-now": quit_now,
 }
 
 

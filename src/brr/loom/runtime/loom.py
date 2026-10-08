@@ -104,7 +104,11 @@ def _recent_deaths(facts: list[Fact], strand: str) -> int:
     now = datetime.now(timezone.utc)
     count = 0
     for fact in facts:
-        if fact.kind != "body.died" or fact.data.get("strand") != strand:
+        # An exit 0 that left letters owed (not a molt) is a failed attempt
+        # too: a body that quits at once with code 0 would otherwise respawn
+        # forever, the crash loop the fuse exists for.
+        unfinished = fact.kind == "body.exited" and fact.data.get("unfinished")
+        if (fact.kind != "body.died" and not unfinished) or fact.data.get("strand") != strand:
             continue
         at = datetime.fromisoformat(fact.at)
         if at.tzinfo is None:
@@ -119,7 +123,7 @@ def _fused(home: Home, facts: list[Fact], strand: str, thread: str) -> bool:
         return False
     _attention(
         home, f"attention:fuse:{strand}",
-        f"fuse: {strand} died twice within 10 minutes", thread=thread,
+        f"fuse: {strand} died or quit unfinished twice within 10 minutes", thread=thread,
     )
     _log(home, f"fuse {strand} thread {thread}")
     return True
@@ -329,15 +333,17 @@ def _reap(home: Home, bodies: dict[str, Body], adapter: str, core: str) -> None:
         facts_before = read_facts(home)
         molted = _molted(home, body, facts_before)
         kind = "body.exited" if code == 0 else "body.died"
-        _record(home, kind, {"strand": strand, "gen": body.gen, "code": code},
-                f"{kind}:{strand}:{body.gen}:{mint(6)}")
+        data = {"strand": strand, "gen": body.gen, "code": code}
+        if code == 0 and not molted and owed(facts_before, body.thread):
+            data["unfinished"] = True
+        _record(home, kind, data, f"{kind}:{strand}:{body.gen}:{mint(6)}")
         _log(home, f"exit {strand} code {code}")
         facts = read_facts(home)
-        if code != 0:
+        if code != 0 or data.get("unfinished"):
             if not _fused(home, facts, strand, body.thread):
                 _start(home, strand, body.thread, body.gen, adapter, core, bodies)
             continue
-        if molted or owed(facts, body.thread):
+        if molted:
             _start(home, strand, body.thread, body.gen, adapter, core, bodies)
             continue
         _record(home, "released", {
