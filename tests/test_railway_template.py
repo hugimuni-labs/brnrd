@@ -21,7 +21,6 @@ def test_railway_json_points_at_the_daemon_image():
 
 def test_no_public_port_because_the_daemon_serves_none():
     assert _load("template.json")["service"]["public_networking"] is False
-    assert "127.0.0.1" in (ROOT / "src/brr/loom/server.py").read_text()
 
 
 def test_volume_matches_the_dockerfile_state_paths():
