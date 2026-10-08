@@ -39,7 +39,9 @@ _FLOCK = (
     # exec and a peer treats a live body as gone.
     "os.set_inheritable(fd, True)\n"
     "fcntl.flock(fd, fcntl.LOCK_EX)\n"
-    "os.execv(argv[0], argv)\n"
+    # execvp, not execv: claude is a PATH name. execv only takes a file path,
+    # so a haiku body died at the wrapper before main.
+    "os.execvp(argv[0], argv)\n"
 )
 
 

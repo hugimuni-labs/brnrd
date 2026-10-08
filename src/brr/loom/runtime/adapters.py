@@ -48,8 +48,10 @@ def write_claude_settings(room: Path, wait: float) -> Path:
 def claude_argv(room: Path, core: str, wait: float) -> list[str]:
     settings = write_claude_settings(room, wait)
     prompt = (room / "port" / "wake.md").read_text()
+    # `--` so a step-2 README, which starts with `---`, is a prompt and not
+    # an option. Checked 2026-10-08: `claude -p -- '--- hello'` runs.
     return ["claude", "-p", "--model", core, "--settings", str(settings),
-            "--dangerously-skip-permissions", prompt]
+            "--dangerously-skip-permissions", "--", prompt]
 
 
 def wait_seconds(room: Path) -> float:

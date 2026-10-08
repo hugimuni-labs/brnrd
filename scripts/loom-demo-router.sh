@@ -152,12 +152,14 @@ try:
         kill_tree(procs[holder].pid)
     else:
         print("no router fact; leaving both looms up for the fold")
-    succ = time.time() + 20
-    while time.time() < succ:
-        later = [fact for fact in facts() if fact.kind == "router"]
-        if any(str(fact.data.get("install")) not in {holder, ""} for fact in later):
+    # The successor shows up once the lease expires (~router_ttl). The haiku
+    # strand is still the holder until it answers; wait for that note too.
+    limit = time.time() + 75
+    while time.time() < limit:
+        seen = facts()
+        if any(fact.kind in {"note", "reply"} and fact.data.get("re") == letter for fact in seen):
             break
-        time.sleep(0.5)
+        time.sleep(1)
     dump("after the kill")
 finally:
     cleanup()
