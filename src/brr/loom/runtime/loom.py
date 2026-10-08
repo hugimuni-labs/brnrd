@@ -387,6 +387,36 @@ def _reap(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     return facts
 
 
+def _recover(home: Home) -> list[Fact]:
+    """Release threads this install held whose bodies died with the last loom.
+
+    Only this loom reaps its own strands, and the router re-grants a dead
+    holder only when its install is silent or the strand fused on poison.
+    A restarted loom is neither, so without this every thread it held stays
+    leased to a corpse. A body still holding its flock is left alone, and a
+    fused strand stays fused: the fuse is the person's to reset.
+    """
+    from .router import install_of
+    facts = read_facts(home)
+    state = fold(facts)
+    own = home.install_id()
+    for thread, (strand, gen) in sorted(state.holder.items()):
+        if install_of(strand) != own or body_alive(home.room(strand)):
+            continue
+        if any(fact.kind == "attention" and fact.id == f"attention:fuse:{strand}"
+               for fact in facts):
+            continue
+        try:
+            facts.append(_record(home, "released", {
+                "thread": thread, "strand": strand, "gen": gen,
+                "why": "loom restarted", "install": own,
+            }, f"released:{thread}:{gen}"))
+        except LedgerConflict:
+            continue
+        _log(home, f"released {strand} thread {thread} (loom restarted)")
+    return facts
+
+
 def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
               router=None) -> None:
     """One read of the ledger, then ingest, route, boundaries, reap.
@@ -458,6 +488,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
     home.install_id()
     from .router import Router
     router = Router(home)
+    _recover(home)
     bodies: dict[str, Body] = {}
     try:
         while not (stop is not None and stop.is_set()):
