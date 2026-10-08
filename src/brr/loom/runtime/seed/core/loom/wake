@@ -62,31 +62,41 @@ def read_exact(path: Path, why: str) -> str:
     raise AssertionError("unreachable")
 
 
-def git_time(root: Path, rel: str) -> int:
+def git_times(root: Path) -> dict[str, int]:
+    """Last commit time per path, in one ``git log`` pass (newest first)."""
     env = os.environ.copy()
     for key in _PINNED:
         env.pop(key, None)
     proc = subprocess.run(
-        ["git", "log", "-1", "--format=%ct", "--", rel],
+        ["git", "log", "--format=%x00%ct", "--name-only", "--", *TREE_ROOTS],
         cwd=root,
         env=env,
         capture_output=True,
         text=True,
     )
-    text = proc.stdout.strip()
-    if proc.returncode != 0 or not text.isdigit():
-        return 0
-    return int(text)
+    times: dict[str, int] = {}
+    if proc.returncode != 0:
+        return times
+    stamp = 0
+    for line in proc.stdout.splitlines():
+        if line.startswith("\x00"):
+            stamp = int(line[1:]) if line[1:].isdigit() else 0
+        elif line and line not in times:
+            times[line] = stamp
+    return times
 
 
 def first_line(path: Path, why: str) -> str:
-    text = read_exact(path, why)
-    lines = text.splitlines()
-    return lines[0] if lines else ""
+    """The first non-empty line after any frontmatter: a README's headline."""
+    lines = read_exact(path, why).splitlines()
+    if lines and lines[0] == "---" and "---" in lines[1:]:
+        lines = lines[lines.index("---", 1) + 1 :]
+    return next((line for line in lines if line.strip()), "")
 
 
 def tree_lines(root: Path, thread: str) -> list[str]:
     rows: list[tuple[int, str, str]] = []
+    times = git_times(root)
     for top in TREE_ROOTS:
         base = root / top
         if not base.is_dir():
@@ -111,7 +121,7 @@ def tree_lines(root: Path, thread: str) -> list[str]:
             ):
                 continue
             line = f"{posix} · {first_line(path, posix)} · {path.stat().st_size}"
-            rows.append((git_time(root, posix), posix, line))
+            rows.append((times.get(posix, 0), posix, line))
     rows.sort(key=lambda row: (-row[0], row[1]))
     return [row[2] for row in rows]
 
@@ -150,7 +160,11 @@ def occasion(path: Path) -> str:
     return "".join(chunks)
 
 
-def fixed_text(root: Path, thread: str, loom: str, owed: Path) -> str:
+def fixed_text(root: Path, thread: str, loom: str, owed: Path) -> tuple[str, str]:
+    """The parts never cut, as (before the tree, after the tree).
+
+    The occasion goes last: it is what this wake is for.
+    """
     identity = read_exact(root / "core" / "identity.md", "core/identity.md")
     stance = read_exact(root / "memory" / "stance.md", "memory/stance.md")
     readme_path = root / "threads" / thread / "README.md"
@@ -160,10 +174,8 @@ def fixed_text(root: Path, thread: str, loom: str, owed: Path) -> str:
         section("memory/stance.md", stance),
         section(f"threads/{thread}/README.md", readme),
         notes_block(root, thread),
-        section("Loom", loom),
-        occasion(owed),
     ]
-    return "".join(parts)
+    return "".join(parts), section("Loom", loom) + occasion(owed)
 
 
 def piece_sizes(text: str) -> list[tuple[str, int]]:
@@ -224,7 +236,8 @@ def main() -> None:
     except UnicodeDecodeError as exc:
         die(f"LOOM_PART: not utf-8: {exc}")
     root = Path.cwd()
-    fixed = fixed_text(root, thread, loom, owed)
+    head, tail = fixed_text(root, thread, loom, owed)
+    fixed = head + tail
     total = len(fixed.encode("utf-8"))
     if total > limit:
         detail = ", ".join(f"{name} {size}B" for name, size in piece_sizes(fixed))
@@ -232,7 +245,7 @@ def main() -> None:
             f"over budget: {detail}; total {total}B > budget {limit}B; none of these is cut",
             3,
         )
-    sys.stdout.write(fixed + fit_tree(fixed, tree_lines(root, thread), limit))
+    sys.stdout.write(head + fit_tree(fixed, tree_lines(root, thread), limit) + tail)
 
 
 if __name__ == "__main__":

@@ -196,7 +196,7 @@ def test_wake_carries_the_self_and_skips_hearth(tmp_path: Path) -> None:
     assert "person:arseni" in out
     assert "loom part goes here verbatim" in out
     # First line of the file, which for a README is the frontmatter marker.
-    assert "threads/inbox/README.md · --- · " in out
+    assert "threads/inbox/README.md · # Letters with no thread yet · " in out
     assert "people/sam/agreement.md · sam agrees in public · " in out
     assert "HEARTH-SECRET-should-not-appear" not in out
     assert "people/sam/hearth/" not in out
@@ -248,7 +248,7 @@ def test_budget_cuts_the_tree_and_refuses_a_fat_identity(tmp_path: Path) -> None
     owed.write_text("[]", encoding="utf-8")
     full = wake(clone, "w-1", owed, LOOM_BUDGET_BYTES="100000")
     assert full.returncode == 0, full.stderr
-    tree = full.stdout.split("## Tree\n", 1)[1]
+    tree = full.stdout.split("## Tree\n", 1)[1].split("## Loom\n", 1)[0]
     assert "omitted" not in tree
     lines = [line for line in tree.splitlines() if line.startswith("memory/scars/")]
     assert [line.split(" · ", 1)[0] for line in lines] == [
@@ -262,11 +262,12 @@ def test_budget_cuts_the_tree_and_refuses_a_fat_identity(tmp_path: Path) -> None
     all_lines = [line for line in tree.splitlines() if " · " in line]
     head, _, _rest = full.stdout.partition("## Tree\n")
     keep = "".join(f"{line}\n" for line in all_lines[:2])
-    limit = len((head + "## Tree\n" + keep).encode("utf-8"))
+    tail = "## Loom\n" + full.stdout.split("## Loom\n", 1)[1]
+    limit = len((head + "## Tree\n" + keep + tail).encode("utf-8"))
     cut = wake(clone, "w-1", owed, LOOM_BUDGET_BYTES=str(limit))
     assert cut.returncode == 0, cut.stderr
     omitted = len(all_lines) - 2
-    assert cut.stdout.rstrip().endswith(f"omitted {omitted} entries; each is one read away")
+    assert f"omitted {omitted} entries; each is one read away\n## Loom\n" in cut.stdout
     assert "NEWEST-FFFF" in cut.stdout
     assert "MID-EEEE" in cut.stdout
     assert "OLDEST-AAAA" not in cut.stdout
