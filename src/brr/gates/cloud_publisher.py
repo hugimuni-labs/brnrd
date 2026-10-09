@@ -73,6 +73,17 @@ def _context() -> PublisherContext:
         raise RuntimeError("cloud publisher context is not configured")
     return _context_factory()
 
+def _mirror_request(brr_dir: Path, base_url: str, method: str, path: str, **kwargs) -> dict:
+    """The common final payload boundary for all dashboard mirror lanes."""
+    from .mirror_redaction import redact_payload
+
+    kwargs["json"] = redact_payload(
+        kwargs.get("json"), brr_dir=brr_dir, lane=path,
+        cloud_token=kwargs.get("token"),
+    )
+    return _context().request(base_url, method, path, **kwargs)
+
+
 _CLAUDE_QUOTA_PUBLISH_MAX_AGE_SECONDS = 240.0
 _CODEX_QUOTA_PUBLISH_MAX_AGE_SECONDS = 120.0
 _DASHBOARD_PUBLISH_INTERVAL_S = 3
@@ -530,8 +541,8 @@ def _publish_activity(brr_dir: Path, inbox_dir: Path, state: dict, responses_dir
     if not (state.get("token") and state.get("brnrd_url")):
         return
     try:
-        _context().request(
-            state["brnrd_url"],
+        _mirror_request(
+            brr_dir, state["brnrd_url"],
             "PUT",
             "/v1/daemons/activity",
             token=state["token"],
@@ -832,8 +843,8 @@ def _publish_corpus(brr_dir: Path, inbox_dir: Path | None, state: dict, response
     # scopes to, with no extra resolve/import needed here.
     payload = _corpus_payload(files, home_root=knowledge_dir.parent)
     try:
-        out = _context().request(
-            state["brnrd_url"],
+        out = _mirror_request(
+            brr_dir, state["brnrd_url"],
             "PUT",
             "/v1/daemons/surface",
             token=state["token"],
@@ -1372,8 +1383,8 @@ def _publish_quota(brr_dir: Path, inbox_dir: Path | None, state: dict, responses
                 })
             except Exception as exc:
                 print(f"[brnrd:cloud] repo state skipped for {repo.label}: {exc}")
-        _context().request(
-            state["brnrd_url"],
+        _mirror_request(
+            brr_dir, state["brnrd_url"],
             "PUT",
             "/v1/daemons/quota",
             token=state["token"],
@@ -1435,8 +1446,8 @@ def _publish_news(brr_dir: Path, inbox_dir: Path | None, state: dict, responses_
     if not (state.get("token") and state.get("brnrd_url")):
         return
     try:
-        _context().request(
-            state["brnrd_url"],
+        _mirror_request(
+            brr_dir, state["brnrd_url"],
             "PUT",
             "/v1/daemons/news",
             token=state["token"],
@@ -1538,8 +1549,8 @@ def _publish_runners(brr_dir: Path, inbox_dir: Path | None, state: dict, respons
         return
     payload = _context().runners_snapshot(brr_dir)
     try:
-        body = _context().request(
-            state["brnrd_url"],
+        body = _mirror_request(
+            brr_dir, state["brnrd_url"],
             "PUT",
             "/v1/daemons/runners",
             token=state["token"],
@@ -2849,8 +2860,8 @@ def _publish_live_runs(brr_dir: Path, inbox_dir: Path | None, state: dict, respo
     acked_releases = run_release_request.consumed_ids(brr_dir)
     acked_respawns = run_respawn_request.consumed_ids(brr_dir)
     try:
-        body = _context().request(
-            state["brnrd_url"],
+        body = _mirror_request(
+            brr_dir, state["brnrd_url"],
             "PUT",
             "/v1/daemons/live-runs",
             token=state["token"],
@@ -3016,8 +3027,8 @@ def _publish_pr_review_queue(brr_dir: Path, inbox_dir: Path | None, state: dict,
     if not (state.get("token") and state.get("brnrd_url")):
         return
     try:
-        _context().request(
-            state["brnrd_url"],
+        _mirror_request(
+            brr_dir, state["brnrd_url"],
             "PUT",
             "/v1/daemons/pr-review-queue",
             token=state["token"],
@@ -3062,8 +3073,8 @@ def _publish_run_ledger(brr_dir: Path, inbox_dir: Path | None, state: dict, resp
     if not (state.get("token") and state.get("brnrd_url")):
         return
     try:
-        _context().request(
-            state["brnrd_url"],
+        _mirror_request(
+            brr_dir, state["brnrd_url"],
             "PUT",
             "/v1/daemons/run-ledger",
             token=state["token"],
