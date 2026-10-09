@@ -182,41 +182,36 @@ def test_verified_person_is_clean_and_missing_user_id_is_stranger(home):
                         self_root=home.root / "self", jack_log="") == CLEAN
 
 
-def test_reply_binding_beats_last_spoke_even_after_release(home):
+def test_reply_goes_to_its_thread_even_after_release(home):
     first = speak(home, "s-aaaa-first1", "first")
     speak(home, "s-aaaa-second", "second")
     facts = read_facts(home)
-    assert relay.route_bare(facts, "telegram/555", None, time.time()) == "thread:second"
+    assert relay.route_bare(facts, "telegram/555") == "thread:second"
     append(home, Fact(kind="released", by="loom:aaaa", id="released:first:1",
                      data={"strand": "s-aaaa-first1", "thread": "first", "gen": 1}))
-    assert relay.route_bare(read_facts(home), "telegram/555", first, time.time()) == "thread:first"
-    assert relay.route_bare(read_facts(home), "telegram/666", first, time.time()) == "thread:inbox"
+    assert relay.route_bare(read_facts(home), "telegram/555", first) == "thread:first"
+    assert relay.route_bare(read_facts(home), "telegram/666", first) == "thread:inbox"
 
 
-def test_bare_expired_lease_goes_to_inbox_and_renewal_restores_it(home):
+def test_bare_goes_to_the_last_speaker_whatever_became_of_its_lease(home):
+    # His rule (2026-10-09): no lease check, no fallback. The last thread to
+    # speak in a chat keeps it through expiry, release and a new router.
     speak(home, "s-aaaa-first1", "first", until=100)
-    assert relay.route_bare(read_facts(home), "telegram/555", None, 100) == "thread:inbox"
-    append(home, Fact(kind="router.renewed", by="loom:aaaa", id="renewed:1",
-                     data={"gen": 1, "until": 200, "install": "aaaa"}))
-    assert relay.route_bare(read_facts(home), "telegram/555", None, 100) == "thread:first"
-    append(home, Fact(kind="released", by="loom:aaaa", id="released:first:1",
-                     data={"strand": "s-aaaa-first1", "thread": "first", "gen": 1}))
-    assert relay.route_bare(read_facts(home), "telegram/555", None, 101) == "thread:inbox"
-
-
-def test_new_router_fences_bare_default(home):
-    speak(home, "s-aaaa-first1", "first", until=500)
+    assert relay.route_bare(read_facts(home), "telegram/555") == "thread:first"
     append(home, Fact(kind="router", by="loom:bbbb", id="router:2",
                      data={"gen": 2, "until": 600, "install": "bbbb"}))
-    assert relay.route_bare(read_facts(home), "telegram/555", None, 100) == "thread:inbox"
+    append(home, Fact(kind="released", by="loom:aaaa", id="released:first:1",
+                     data={"strand": "s-aaaa-first1", "thread": "first", "gen": 1}))
+    assert relay.route_bare(read_facts(home), "telegram/555") == "thread:first"
+    assert relay.route_bare(read_facts(home), "telegram/666") == "thread:inbox"
 
 
 def test_unconfirmed_speech_and_non_person_destinations_never_become_default(home):
     first = speak(home, "s-aaaa-first1", "first", receipt=False)
     speak(home, "s-aaaa-second", "second", chat="fake")
     facts = read_facts(home)
-    assert relay.route_bare(facts, "telegram/555", first, time.time()) == "thread:inbox"
-    assert relay.route_bare(facts, "fake", None, time.time()) == "thread:inbox"
+    assert relay.route_bare(facts, "telegram/555", first) == "thread:inbox"
+    assert relay.route_bare(facts, "fake") == "thread:inbox"
 
 
 def test_same_blob_twice_one_file_two_exact_facts(home):
@@ -330,9 +325,9 @@ def test_optional_verified_letter_binding_is_carried_into_source(home, monkeypat
     ev["reply_to"]["reply_to_letter"] = first
     calls = []
     real_route = relay.route_bare
-    def route(facts, chat, reply_to_letter, now):
+    def route(facts, chat, reply_to_letter=None):
         calls.append((chat, reply_to_letter))
-        return real_route(facts, chat, reply_to_letter, now)
+        return real_route(facts, chat, reply_to_letter)
     monkeypatch.setattr(relay, "route_bare", route)
     relay.pull_once(home, FakeClient([ev]), 0)
     source, = kinds(home, "source")
@@ -374,14 +369,7 @@ def test_outbound_from_text_cannot_steal_another_threads_default(home):
                            "body": "claim another thread", "gen": 1, "router_gen": 1}))
     append(home, Fact(kind="speech", by="loom:aaaa", id=f"speech:sent:{key}",
                      data={"key": key, "state": "sent", "router_gen": 1}))
-    assert relay.route_bare(read_facts(home), "telegram/555", None, time.time()) == "thread:first"
-
-
-def test_old_router_fact_does_not_override_newest_generation(home):
-    speak(home, "s-aaaa-first1", "first", until=500, router_gen=2)
-    append(home, Fact(kind="router", by="loom:bbbb", id="router:old",
-                     data={"gen": 1, "until": 600, "install": "bbbb"}))
-    assert relay.route_bare(read_facts(home), "telegram/555", None, 100) == "thread:first"
+    assert relay.route_bare(read_facts(home), "telegram/555") == "thread:first"
 
 
 def test_same_identity_twice_in_one_response_is_one_letter(home):

@@ -11,7 +11,6 @@ import hashlib
 import json
 import os
 import tempfile
-import time
 from pathlib import Path
 
 from brr.daemon2.facts import Fact, union
@@ -175,14 +174,16 @@ def letter_for_message(facts: list[Fact], channel: str, message_id: object) -> s
     return None
 
 
-def route_bare(facts: list[Fact], chat: str, reply_to_letter: str | None,
-               now: float) -> str:
-    """Reply binding, then last confirmed speech with a live lease, then inbox.
+def route_bare(facts: list[Fact], chat: str, reply_to_letter: str | None = None) -> str:
+    """Where a chat message goes: a reply's thread, else whoever spoke here last.
 
-    ``chat`` is ``<platform>/<chat_id>``. A speech's ``key`` names the
-    outbound letter (the existing speak receipt). ``reply_to_letter`` is a
-    resolved letter id; slice 2 owns the platform-message-id lookup. Thread
-    leases have no deadline of their own: their router generation supplies ``until``.
+    ``chat`` is ``<platform>/<chat_id>``. A Telegram reply to a message the
+    loom sent goes to that message's thread: the person pointed at it. A
+    bare message goes to the thread that last spoke in this chat, whatever
+    became of its lease: the thread's README carries the conversation, so a
+    molted or released thread wakes with it. ``inbox`` only when no thread
+    has spoken here yet. Only confirmed speech (a ``sent`` receipt) counts,
+    and the speaker is the strand that wrote the letter, never its text.
     """
     ordered = union(facts)
     state = fold(ordered)
@@ -191,7 +192,7 @@ def route_bare(facts: list[Fact], chat: str, reply_to_letter: str | None,
         str(f.data.get("id") or f.id): f
         for f in state.accepted if f.kind == "letter"
     }
-    spoken = []
+    last = None
     for fact in ordered:
         if fact.kind != "speech" or fact.data.get("state") != "sent":
             continue
@@ -203,35 +204,10 @@ def route_bare(facts: list[Fact], chat: str, reply_to_letter: str | None,
         thread = threads.get(sender)
         if thread is None:
             continue
-        spoken.append((letter, sender, thread))
         if reply_to_letter and reply_to_letter == str(letter.data.get("id") or letter.id):
             return f"thread:{thread}"
-    if not spoken:
-        return "thread:inbox"
-    letter, sender, thread = spoken[-1]
-    if state.holder.get(thread) != (sender, letter.data.get("gen")):
-        return "thread:inbox"
-    lease = next((fact for fact in reversed(state.accepted)
-                  if fact.kind == "lease" and fact.data.get("thread") == thread
-                  and fact.data.get("strand") == sender
-                  and fact.data.get("gen") == letter.data.get("gen")), None)
-    if lease is None:
-        return "thread:inbox"
-    router_gen = lease.data.get("router_gen")
-    # A step-1 lease lasts until released. Once router facts exist it is
-    # fenced by fold(), just as it is for routing and handling letters.
-    if router_gen is None:
-        return f"thread:{thread}"
-    router_gens = [f.data.get("gen") for f in ordered if f.kind == "router"
-                   and isinstance(f.data.get("gen"), int)]
-    if not router_gens or max(router_gens) != router_gen:
-        return "thread:inbox"
-    windows = [f for f in ordered if f.kind in {"router", "router.renewed"}
-               and f.data.get("gen") == router_gen]
-    until = windows[-1].data.get("until") if windows else None
-    if not isinstance(until, (int, float)) or now >= until:
-        return "thread:inbox"
-    return f"thread:{thread}"
+        last = thread
+    return f"thread:{last}" if last else "thread:inbox"
 
 
 def _blob(home: Home, client, event_id: str, index: int) -> tuple[str, int]:
@@ -352,7 +328,7 @@ def pull_once(home: Home, client, cursor: int) -> int:
         # of that intent: HLC ordering alone cannot reconstruct the original
         # snapshot once facts from another install arrive during recovery.
         data["to"] = route_bare(
-            facts, f"{platform}/{data['chat']}", data.get("reply_to_letter"), time.time(),
+            facts, f"{platform}/{data['chat']}", data.get("reply_to_letter"),
         )
         source = append(home, Fact(
             kind="source", by=f"loom:{home.install_id()}", id=source_id,
