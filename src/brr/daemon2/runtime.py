@@ -987,8 +987,10 @@ class Daemon2:
                      or next((c for c in children.values() if c.run == target), None))
             if child is None or child.conversation != state["conversation"]:
                 raise ValueError(f"to: {target!r} is not a child of this conversation")
-            if child.status != "running":
-                raise ValueError(f"to: child {target!r} is not running (status={child.status!r})")
+            # Submission returns produce, not the body: a returned strand
+            # can still await its parent's review steer or allowance grant.
+            if child.status not in {"running", "returned"}:
+                raise ValueError(f"to: child {target!r} is not steerable (status={child.status!r})")
             first = body.splitlines()[0].strip() if body else ""
             grant = re.fullmatch(r"allowance:\s*([+-]?[0-9][0-9.]*[km]?)",
                                  first, re.IGNORECASE)
@@ -1875,8 +1877,10 @@ def strand_worker_argv(repo_root: Path, home: Path, runtime_dir: Path,
 
 
 def strand_worker_count(config: dict[str, Any]) -> int:
-    raw = config.get("daemon2.strand_workers", DEFAULT_STRAND_WORKERS)
+    """Match configured spawn width unless the follower pool is overridden."""
+    raw = config.get("daemon2.strand_workers",
+                     config.get("spawn.max_concurrent", DEFAULT_STRAND_WORKERS))
     try:
         return max(0, int(raw))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return DEFAULT_STRAND_WORKERS
