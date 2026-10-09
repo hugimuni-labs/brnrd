@@ -13834,6 +13834,26 @@ def _persist_run_state_doc(
         # earns no link; anything else does.
         if summary != task.body:
             lines.extend(["", "[Read the full request](request.md)"])
+    ending_failure = task.meta.get("ending_failure")
+    if task.status == "error" and isinstance(ending_failure, dict):
+        surfaced_failure = dict(ending_failure)
+        if surfaced_failure.get("failure_kind") in (
+            runner_failures.CORE_REFUSAL, runner_failures.INTERRUPTED,
+        ):
+            # Same wording policy as _failure_reason: private manifest evidence
+            # remains intact, while the rendered frame keeps cause/exit without
+            # quoting provider refusal or interruption boilerplate.
+            surfaced_failure.pop("error", None)
+            codex_error = surfaced_failure.get("codex_task_error")
+            if isinstance(codex_error, dict):
+                surfaced_failure["codex_task_error"] = {
+                    key: value for key, value in codex_error.items() if key != "message"
+                }
+        lines.extend([
+            "", "## Ending failure", "", "```json",
+            json.dumps(surfaced_failure, indent=2, sort_keys=True),
+            "```",
+        ])
     # The complete bounded declaration lives on the durable run node as one
     # JSON value.  Keeping the object whole makes omission detectable and
     # avoids inventing a second, lossy Markdown grammar.  ``produce`` is not
