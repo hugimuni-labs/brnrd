@@ -15,6 +15,7 @@ import os
 import pty
 import re
 import select
+import shutil
 import struct
 import subprocess
 import tempfile
@@ -31,7 +32,8 @@ SNAPSHOT_NAME = ".grok-usage-levels.json"
 COLLECTED_SLOTS: frozenset[str] = frozenset({"quota"})
 DEFAULT_TIMEOUT_SECONDS = 12.0
 DEFAULT_BOOT_SECONDS = 6.0
-DEFAULT_TTL_SECONDS = 30.0
+#: The bucket is weekly; a 6–12 s TUI per probe is not worth a tighter read.
+DEFAULT_TTL_SECONDS = 600.0
 TTL_ENV_VAR = "BRR_GROK_USAGE_TTL"
 
 _OSC_RE = re.compile(r"\x1b\].*?(?:\x07|\x1b\\)", re.DOTALL)
@@ -247,6 +249,11 @@ def load_snapshot(cache_dir: Path | None) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def _grok_installed(env: dict[str, str] | None = None) -> bool:
+    path = (env if env is not None else os.environ).get("PATH")
+    return shutil.which("grok", path=path) is not None
+
+
 def load_or_refresh_snapshot(
     cache_dir: Path | None, *, max_age_seconds: float | None = None,
     env: dict[str, str] | None = None, **kwargs: Any,
@@ -268,6 +275,9 @@ def load_or_refresh_snapshot(
                 return cached
     except OSError:
         pass
+    if not _grok_installed(env):
+        # No grok on this host: absent, not an error, and never a probe.
+        return load_snapshot(cache_dir)
     levels = capture_levels(env=env, **kwargs)
     write_snapshot(cache_dir, levels)
     return levels

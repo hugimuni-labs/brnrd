@@ -194,3 +194,31 @@ def test_dashboard_and_ledger_consume_weekly_quota(tmp_path, monkeypatch):
     assert run_ledger.load_quota_levels(
         "grok", tmp_path, None, force_claude_refresh=True,
     )["week_used_percentage"] == 100.0
+
+
+@pytest.fixture(autouse=True)
+def _grok_on_path(monkeypatch):
+    """Tests drive a fake capture; pretend the binary exists unless a test says not."""
+    monkeypatch.setattr(grok_usage, "_grok_installed", lambda env=None: True)
+
+
+def test_no_grok_binary_means_no_probe_and_no_error_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr(grok_usage, "_grok_installed", lambda env=None: False)
+    calls = []
+    monkeypatch.setattr(grok_usage, "capture_usage_raw", lambda **kw: calls.append(kw) or screen())
+    assert grok_usage.load_or_refresh_snapshot(tmp_path, max_age_seconds=0) is None
+    assert calls == []
+    assert not (tmp_path / grok_usage.SNAPSHOT_NAME).exists()
+
+
+def test_publisher_reads_a_fresh_cache_without_reprobing(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(grok_usage, "capture_usage_raw", lambda **kw: calls.append(kw) or screen())
+    cloud._grok_quota_shell(tmp_path)
+    old = time.time() - 300  # inside the 600 s publish window
+    os.utime(tmp_path / grok_usage.SNAPSHOT_NAME, (old, old))
+    cloud._grok_quota_shell(tmp_path)
+    assert len(calls) == 1
+    from brr.gates import cloud_publisher
+    assert cloud_publisher._GROK_QUOTA_PUBLISH_MAX_AGE_SECONDS >= 600
+    assert grok_usage.DEFAULT_TTL_SECONDS >= 600

@@ -75,6 +75,8 @@ def _context() -> PublisherContext:
     return _context_factory()
 
 _CLAUDE_QUOTA_PUBLISH_MAX_AGE_SECONDS = 240.0
+#: Grok's bucket is weekly and each probe is a 6–12 s TUI: read it rarely.
+_GROK_QUOTA_PUBLISH_MAX_AGE_SECONDS = 600.0
 _CODEX_QUOTA_PUBLISH_MAX_AGE_SECONDS = 120.0
 _DASHBOARD_PUBLISH_INTERVAL_S = 3
 
@@ -1195,7 +1197,9 @@ def _claude_credits_block(
 
 
 def _grok_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
-    levels = grok_usage.load_or_refresh_snapshot(brr_dir)
+    levels = grok_usage.load_or_refresh_snapshot(
+        brr_dir, max_age_seconds=_GROK_QUOTA_PUBLISH_MAX_AGE_SECONDS,
+    )
     quota = levels.get("quota") if isinstance(levels, dict) else None
     buckets = quota.get("buckets") if isinstance(quota, dict) else None
     week = buckets.get("week") if isinstance(buckets, dict) else None
