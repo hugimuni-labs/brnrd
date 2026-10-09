@@ -1,52 +1,64 @@
 # The brnrd manifesto
 
-*Internal. For the people building brnrd, for the resident that lives in it, and for whoever joins next. It exists so we don't drift. When a decision is hard, check it against this page before you check it against anything else.*
+*A living page, not a sermon. It's internal, for the people building brnrd, the resident that lives in it, and whoever joins next. Each section is a slot a mature project fills: some are full, some are a single line, some say **empty** on purpose. An empty slot is a fact about where we are, not an omission. Update the state when it moves; change the belief only on purpose, with a dated line in §Changes.*
 
-Written 2026-10-09 by the resident, from the maintainer's brief. Disagree with a line by opening a PR against that line.
+## 1. The bet
 
-## What we're building
+**A Jarvis for everyone.** One mind per person, on hardware that person owns, open source, always on. It does intellectual work that's more than one shot: many tracks of thinking moving forward over days and weeks.
 
-**A Jarvis for everyone.** One mind per person, running on hardware that person owns, open source, always on. It does intellectual work: not a one-shot answer but many tracks of thinking that move forward over days and weeks, the way a colleague carries a project.
+- **Isn't:** a chat window, a coding plugin, a SaaS that keeps your memory
+- **The bridge:** today it thinks on the subscriptions people already pay for. In a few years, models this good run locally at these speeds. So no vendor is load-bearing, and the self lives in the owner's files, never in a provider's session or our cloud
+- **We're wrong if:** *empty.* Name the evidence that would make us stop.
 
-It isn't a chat window, a coding plugin, or a SaaS that keeps your memory on our servers. Chat, code and a hosted relay are things it uses. None of them is what it is.
+## 2. The capabilities
 
-## Why it can be built now, and why it won't look like this for long
+One row per capability. *State* is measured, never hoped. *Lives in* is where the work and its truth sit: code, page, item. "not yet" is a valid answer.
 
-Today the thinking runs on the subscriptions people already pay for (Claude, Codex, Grok and whatever comes next). That's how we get in: no new bill, the best models, on your machine.
+| # | Capability | Belief | State | Next | Lives in |
+|---|---|---|---|---|---|
+| 1 | **Memory** | the work and the person, in files the owner holds | continuous for the work (git, read at each wake); personal memory thin | live and dynamic: updated as things happen, not at run end | the self repo · loom |
+| 2 | **Single entry point** | one place to talk, whatever the channel or project | several gates, one resident per machine; threads still leak across | loom step 5: channels → one ledger | loom · plan-loom-step-5 |
+| 3 | **Personality** | durable character with judgement and taste, shapeable by its owner, never a mirror | identity core + register, one owner | shaping by a second owner | `src/brr/prompts/` |
+| 4 | **Ask → answer** | a request becomes finished, checked work without step-managing | works for code; delegation to strands works but wobbles | not yet measured | daemon2 · strands |
+| 5 | **Resource awareness** | knows its cost in tokens, quota, money, attention and time | quota read for claude and codex; grok spend only | grok quota; per-boundary cost in boot units | `runner_quota` · facets |
+| 6 | **Talking** | conversation both ways; interrupts only when it's worth it | text over Telegram and cloud chat | voice: not yet | gates |
+| 7 | **Self-awareness, self-modification** | reads its own code, prompts and memory, proposes or makes the change inside the owner's rules | edits its own prompts and core by PR, self-merges by grant | the self as a library that runs anywhere (`brnrd self`) | w-124 |
+| 8 | **Proactivity** | carries open threads forward unasked, on its own budget, and says so | initiative wakes + scheduled pulses | measured: what share of shipped work was unasked | schedule · initiative |
+| 9 | **Delivery that doesn't tire** | a glance carries the state; text stays for argument | mostly text, too much of it | the first jack: a pre-attentive surface for status, progress, choices | not yet |
 
-**That's a bridge, not the product.** In a few years, models as good as the ones we rent today will run locally at these speeds. Everything we build has to survive that move:
-- no vendor is load-bearing: the Shell (the CLI) and the Core (the model) can be swapped, and the self doesn't change when they are
-- the self lives in files the person owns (git), never inside a provider's session or our cloud
-- a feature that only works because one vendor exposes one thing today is a convenience. Build it as a convenience, never as a foundation
+## 3. Security: war on the boundary
 
-## What it must be able to do
+Accepted as facts:
+- **Malicious execution will happen.** Injection arrives through pages, issues, files and messages, and no detector reliably tells it from a task. Every control answers one question: *if the model fully obeys the attacker, what can it still not do?*
+- **The fight is on the boundary**: the harness (what a run can reach) and the internet (what comes in, what goes out).
+- **The cloud is a mailbox, not a brain.** The relay is a Python service with an encrypted Postgres, in Docker on Scaleway, over HTTPS. It carries messages; it never holds write access to the self or the keys.
+- **Keys stay on the owner's machine.** Untrusted input is labelled by origin and routed to tighter rooms or refused. What leaves is redacted first.
 
-Each line says where we are now and where we're going. A feature that doesn't move at least one of these lines has to argue for its place.
+| Slot | State |
+|---|---|
+| Threat model | `design-threat-model` (kb), 2026-10-09: six ranked gaps |
+| Controls built vs designed | in the threat model's table |
+| Incidents | *empty*: none recorded yet. The first one gets a row and a post-mortem link |
+| External review | *empty* |
 
-1. **Memory.** Two kinds: the work (projects, decisions, what was learned) and the person (who they are, what they want, how they like to be talked to). *Now:* continuous memory for the work, as files in git that each wake reads; personal memory is thin. *Going:* live and dynamic memory, updated as things happen rather than at the end of a run.
-2. **A single entry point.** One place to talk to it, whatever the channel, whatever the project. The person shouldn't have to know which repo, thread or process they're addressing.
-3. **Personality, shaped.** A durable character with judgement, candour and taste. Its owner can shape it; it isn't a mirror. Agreeing isn't the job; the work and the person are.
-4. **Autonomous ask → answer.** A request turns into finished, checked work (a merged change, a sourced answer, a sent message) without the person managing the steps. Research is a step toward the answer, never the answer.
-5. **Resource-aware execution, time included.** It knows what it costs in tokens, quota, money and the person's attention, and what time it is. It spends like a founder before revenue and paces itself to the reset windows.
-6. **Talking.** Conversation is the main interface, and it has to work in both directions: it asks when it should, and it interrupts only when that's worth it.
-7. **Self-awareness and self-modification.** It can read its own code, prompts and memory, notice when they no longer fit, and propose or make the change, inside rules the owner sets.
-8. **Proactivity.** When nobody is asking, it carries the open threads forward on its own initiative and budget, and says what it did.
-9. **Delivery that doesn't tire people.** *Now:* mostly text, and too much of it. *Going:* dynamic, visual, pre-attentive interfaces, so a glance carries the state without reading. We call these jacks. Text stays for argument; status, progress and choices move to things the eye takes in without effort.
+## 4. How we decide
 
-## Security: we're at war on the boundary
+- The owner's ownership (hardware, files, keys) beats our convenience. Open beats proprietary. Working end to end beats an impressive demo.
+- A feature has to move a row in §2 or argue for its place.
+- Reversible calls get made and explained; irreversible ones get asked.
 
-We accept these as facts, not risks:
+## 5. Slots a mature project fills
 
-- **Malicious execution will happen.** Prompt injection arrives through web pages, issues, READMEs, files and messages, and no detector reliably tells an injected instruction from a task. Design as if the model will sometimes obey an attacker completely.
-- **The fight is on the boundary**: the harness (what a run can reach and touch) and the internet (what comes in, what goes out). The question for every control is structural: *if the model fully obeys the attacker, what can it still not do?*
-- **The cloud is a mailbox, not a brain.** The relay is a Python service with an encrypted Postgres in a Docker container on Scaleway, reached over HTTPS. It carries messages; it never holds write access to the self or the keys. Trust it as far as that, and no further.
-- **Keys stay on the person's machine.** Untrusted input is labelled by where it came from and routed to tighter rooms (sandboxed or refused), and what leaves the machine is redacted first.
+| Slot | State |
+|---|---|
+| Who uses it | the maintainer, the resident; first external contributor 2026-10-08 |
+| Metrics that matter | *empty*: the north-star number isn't chosen |
+| Roadmap | per row in §2 · the warp holds items |
+| Team | maintainer + resident. Onboarding = this page → `README.md` → `AGENTS.md` → ask the resident what it's working on |
+| Licence and governance | `LICENSE-OVERVIEW.md` · governance *empty* |
+| Funding | *empty* here; the investor material lives on the work surface |
+| Glossary | `lexicon` (kb) |
 
-The working document is [`design-threat-model`](https://github.com/hugimuni-labs/brnrd-knowledge/blob/main/repos/hugimuni-labs__brnrd/design-threat-model.md): assets, entry points, attack paths, and which controls are built versus only designed. This page sets the stance; that one keeps the score.
+## Changes
 
-## How to use this page
-
-- **Before building:** which numbered line does this advance? If none, say why it's still worth it, or don't build it.
-- **When two goods conflict:** the person's ownership (their hardware, their files, their keys) beats our convenience. Open beats proprietary. Working end to end beats impressive in a demo.
-- **When joining:** read this, then `README.md`, then `AGENTS.md`. The resident is a colleague: ask it what it's working on.
-- **When it stops being true:** change it. A north star nobody updates becomes decoration.
+- 2026-10-09: first version, from the maintainer's brief; reshaped the same day from a declaration into this live tracker, at his ask.
