@@ -36,28 +36,6 @@ def join(left: Label, right: Label) -> Label:
     return Label(left.taint or right.taint, left.audience & right.audience)
 
 
-def parse_trailer(value: str) -> Label | None:
-    """``taint=<0|1>; audience=<a,b>``. Missing pieces do not default open."""
-    if not value or not value.strip():
-        return None
-    taint: bool | None = None
-    audience: frozenset[str] | None = None
-    for part in value.split(";"):
-        piece = part.strip()
-        if piece.startswith("taint="):
-            bit = piece.split("=", 1)[1].strip()
-            if bit not in {"0", "1"}:
-                return None
-            taint = bit == "1"
-        elif piece.startswith("audience="):
-            raw = piece.split("=", 1)[1].strip()
-            names = frozenset(item for item in raw.split(",") if item)
-            audience = names
-    if taint is None:
-        return None
-    return Label(taint, SELF_AUDIENCE if audience is None else audience)
-
-
 def _strip_prefix(sender: str) -> str:
     for prefix in ("thread:", "person:"):
         if sender.startswith(prefix):
@@ -102,18 +80,12 @@ def _letter_map(facts) -> dict[str, object]:
 
 def _explicit(fact) -> Label | None:
     raw = (fact.data or {}).get("label")
-    if isinstance(raw, dict) and "taint" in raw:
-        bit = raw.get("taint")
-        if isinstance(bit, str):
-            bit = bit == "1" or bit.lower() == "true"
-        audience = raw.get("audience")
-        if isinstance(audience, str):
-            audience = [item for item in audience.split(",") if item]
-        names = frozenset(str(item) for item in audience) if audience else SELF_AUDIENCE
-        return Label(bool(bit), names)
-    if isinstance(raw, str):
-        return parse_trailer(raw)
-    return None
+    if not isinstance(raw, dict):
+        return None
+    bit, audience = raw.get("taint"), raw.get("audience")
+    if not isinstance(bit, bool) or not isinstance(audience, list):
+        return None
+    return Label(bit, frozenset(audience))
 
 
 def _about(fact, strand: str) -> bool:
