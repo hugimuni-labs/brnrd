@@ -78,6 +78,7 @@ from .gates import BUILTIN_GATES as _BUILTIN_GATES
 from . import gate_receipt
 from . import claude_status
 from . import claude_usage
+from . import grok_usage
 from . import gitops
 from . import heddles
 from . import run_topic
@@ -4077,15 +4078,23 @@ def _collect_levels(
     from . import grok_status, vibe_usage
 
     if grok_status.supported(runner_name):
-        # The envelope's own tokens and, when Grok stamped one, its cost.
-        # No quota probe. A shared-dir fallback is a previous session's
-        # spend only — its token totals are not this run's.
-        levels = grok_status.load_snapshot(outbox_dir)
-        if levels is None:
-            levels = grok_status.mark_cross_run(
+        # Subscription quota is account state, shared across concurrent runs.
+        cache_dir = shared_dir or outbox_dir
+        usage = (
+            grok_usage.load_or_refresh_snapshot(cache_dir, cwd=work_dir, **probe_options)
+            if refresh else grok_usage.load_snapshot(cache_dir)
+        )
+        result = grok_status.load_snapshot(outbox_dir)
+        if result is None:
+            result = grok_status.mark_cross_run(
                 grok_status.load_snapshot(shared_dir)
             )
-        return levels, grok_status.COLLECTED_SLOTS
+        merged = _merge_level_snapshots(usage, result)
+        # Unlike Claude's facet merge, the Grok envelope also feeds exact
+        # session token/model accounting. Keep those fields on the own-run path.
+        levels = {**(result or {}), **(usage or {}), **(merged or {})} or None
+        usage_samples.record(cache_dir, "grok", levels)
+        return levels, grok_usage.COLLECTED_SLOTS | grok_status.COLLECTED_SLOTS
     if vibe_usage.supported(runner_name):
         # Terminal per-session tokens feed the ledger. Subscription allowance,
         # dollar spend and context capacity have no collector on this seam.
@@ -11363,7 +11372,27 @@ def _fire_due_schedules(
         # list has had `replace(e, interval=...)` applied to it.
         _fingerprints = {e.id: schedule_mod.entry_fingerprint(e) for e in entries}
         _noticed_untiered: list = list(new_state.get(schedule_mod._NOTICED_UNTIERED_KEY) or [])
+        # #2212: an `every:` entry whose earlier firing is still unclaimed
+        # (status ``pending``) does not fire again. Pile-ups of identical
+        # letters are what starved a one-shot `at:` letter behind a live
+        # seat: claim order is oldest-first, so five queued goal pulses
+        # outranked the molt letter carrying real work. The cadence still
+        # advances (``new_state`` was computed above), so the entry fires
+        # on its next interval once the pending one is taken. A letter
+        # being processed doesn't count: a firing during a long run is a
+        # fresh occasion, not a duplicate.
+        unclaimed_every_ids = {
+            str(ev.get("schedule_id") or "")
+            for ev in protocol.list_pending(inbox_dir)
+            if ev.get("source") == "schedule" and ev.get("status") == "pending"
+        }
         for entry in due:
+            if entry.kind == "every" and entry.id in unclaimed_every_ids:
+                print(
+                    f"[brnrd] schedule: {entry.id} still has an unclaimed "
+                    "firing pending — coalesced, not re-fired (#2212)"
+                )
+                continue
             body = entry.body or f"(self-scheduled thought: {entry.id})"
             # Thread the firing so a recurring entry's wakes share a
             # readable history; default per-entry, overridable to an
@@ -13923,7 +13952,7 @@ def _persist_run_topics(
 # by ``test_capture_control_files_partition_is_total`` (a class defined by
 # listing its members meets the member nobody listed).
 _CONTROL_FILE_MODULES = (
-    relics, gate_receipt, claude_status, codex_usage, claude_usage,
+    relics, gate_receipt, claude_status, codex_usage, claude_usage, grok_usage,
     statusline, run_ledger, hooks_mod, portals, menus, pause,
 )
 # Matches a public (no leading underscore) module-level constant ending in
@@ -14021,6 +14050,7 @@ PRESERVED: dict[str, str] = {
     # the copy is a no-op on most runs and a real record on the runs where
     # it isn't.
     claude_usage.SNAPSHOT_NAME: "claude-usage-levels.json",
+    grok_usage.SNAPSHOT_NAME: "grok-usage-levels.json",
     # Codex's quota is account state by design (``_collect_probe``'s
     # ``codex`` branch: "one cache every reader shares, warm across runs
     # and daemon restarts" — its ``cache_dir`` is the account-shared dir

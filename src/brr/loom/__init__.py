@@ -1,13 +1,6 @@
-"""The loom feed — ``brnrd loom``, the daemon's first local listener.
+"""The loom: the runtime that routes letters, starts bodies and keeps the ledger.
 
-design-the-loom.md §3/§4/§20/§22: the screen is rebuilt every beat from the
-frame's own files. This package is the mechanical half of that screen:
-
-- :mod:`brr.loom.state` — ``build()``, the ``GET /loom/state.json`` contract,
-  pure reads of ``<repo>/.brr`` and the account home;
-- :mod:`brr.loom.server` — a stdlib HTTP listener bound to ``127.0.0.1``
-  serving the page under ``static/``, the state, a bench file and an SSE
-  stream on the beat.
-
-``static/`` is the page's (a sibling hand builds it); nothing here writes.
+Being built in steps under :mod:`brr.loom.runtime` (kb plan-loom-step-1.md,
+design-the-self-runtime.md). The read-only loom *screen* that lived here
+until 2026-10-08 was removed unused; it is in git history.
 """

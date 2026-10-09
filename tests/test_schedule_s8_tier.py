@@ -694,6 +694,9 @@ def test_operator_hand_edit_is_reclaimed_by_the_next_owner_runs_capture(tmp_path
     assert protocol.list_pending(brr_dir / "inbox")[0].get("trust_tier") == (
         schedule.UNRECORDED_TIER_FLOOR
     )
+    # That firing is claimed before the next one: an `every:` entry with an
+    # unclaimed firing coalesces instead of re-firing (#2212).
+    protocol.set_status(protocol.list_pending(brr_dir / "inbox")[0], "done")
 
     # An owner-tier run finalizes; the capture net commits the dirty tree.
     _capture(dom, "run-owner")

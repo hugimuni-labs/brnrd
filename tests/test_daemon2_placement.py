@@ -188,3 +188,58 @@ def test_runtime_publishes_child_branch_before_clone_cleanup(tmp_path: Path,
                    if event["source"] == "spawn_submitted"]
     assert len(submissions) == 1
     assert submissions[0]["spawn_submit_generation"] == 1
+
+
+def _host_with_unpushed_commit(tmp_path: Path) -> tuple[Path, Path, str, str]:
+    """A host whose local main is one unpushed commit ahead of origin/main."""
+    env = _git_env()
+    repo = _make_git_repo(tmp_path / "repo")
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], env=env,
+                   capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", str(remote)],
+                   env=env, capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(repo), "push", "-u", "origin", "main"],
+                   env=env, capture_output=True, check=True)
+    pushed = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], env=env,
+                            capture_output=True, text=True, check=True).stdout.strip()
+    (repo / "private.txt").write_text("operator's unpushed work\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "."], env=env,
+                   capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "unpushed"], env=env,
+                   capture_output=True, check=True)
+    local = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], env=env,
+                           capture_output=True, text=True, check=True).stdout.strip()
+    assert local != pushed
+    return repo, remote, pushed, local
+
+
+def test_strand_seeds_from_remote_default_not_local_main(tmp_path: Path) -> None:
+    """#2236: the operator's unpushed local commit never reaches a strand."""
+    repo, _remote, pushed, local = _host_with_unpushed_commit(tmp_path)
+    alloc = allocate(repo, "run-test-seed")
+    env = _git_env()
+    head = subprocess.run(["git", "-C", str(alloc.path), "rev-parse", "HEAD"], env=env,
+                          capture_output=True, text=True, check=True).stdout.strip()
+    tracking = subprocess.run(["git", "-C", str(alloc.path), "rev-parse", "origin/main"],
+                              env=env, capture_output=True, text=True,
+                              check=True).stdout.strip()
+    assert head == pushed and head != local
+    assert tracking == pushed, "clone's origin/main must not be the host's local main"
+    assert alloc.seed_oid == pushed
+    assert not (alloc.path / "private.txt").exists()
+    release(alloc)
+
+
+def test_publish_skips_a_branch_with_no_commits_of_its_own(tmp_path: Path) -> None:
+    """#2236: a strand that committed nothing publishes no run branch."""
+    repo, remote, _pushed, _local = _host_with_unpushed_commit(tmp_path)
+    alloc = allocate(repo, "run-test-empty")
+    publication = publish(repo, alloc)
+    assert publication.empty and publication.released
+    assert not publication.landed and not publication.pushed
+    assert not alloc.path.exists()
+    remote_branch = subprocess.run(
+        ["git", "--git-dir", str(remote), "rev-parse", "--verify", f"refs/heads/{alloc.branch}"],
+        env=_git_env(), capture_output=True, check=False)
+    assert remote_branch.returncode != 0
