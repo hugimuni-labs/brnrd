@@ -3734,7 +3734,16 @@ def _pending_events_for_agent(
                 # (marked, so the seat knows it is not standing in that
                 # checkout); internal traffic — schedules, strand returns —
                 # stays scoped to its own repo, and a strand sees none of it.
-                if strand or not _event_requires_thread_delivery(ev):
+                # Internal means *every* daemon-minted source
+                # (``protocol.INTERNAL_SOURCES``), not only ``schedule``:
+                # ``_INTERNAL_EVENT_SOURCES`` is the narrower delivery list
+                # and let another repo's strand returns and child steers
+                # through this door.
+                if (
+                    strand
+                    or ev.get("source") in protocol.INTERNAL_SOURCES
+                    or not _event_requires_thread_delivery(ev)
+                ):
                     continue
                 ev["foreign_repo"] = event_label
             if (

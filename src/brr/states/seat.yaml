@@ -43,6 +43,7 @@
         {"from":"held_refill","to":"running","trigger":"respawn <core>","actor":"user","guard":"different runner selected","cost":"cold-boot","code":"src/brr/daemon.py::_apply_run_respawn"},
         {"from":"held_refill","to":"running","trigger":"force","actor":"user","guard":"exact word on the held conversation","cost":"warm-resume","code":"src/brr/daemon.py::_refuse_starved_wake"},
         {"from":"held_strands","to":"running","trigger":"release: strands","actor":"strand","guard":"owned child emits submitted, completed, or allowance-requested","cost":"warm-resume","code":"src/brr/daemon.py::_strand_return_resumes_held_parent"},
+        {"from":"held_strands","to":"running","trigger":"release: schedule","actor":"daemon","guard":"schedule event arrives at a non-wall hold","cost":"warm-resume","code":"src/brr/daemon.py::_handle_resource_held_events"},
         {"from":"held_strands","to":"running","trigger":"release: operator","actor":"user","guard":"any addressed reply","cost":"warm-resume","code":"src/brr/daemon.py::_apply_resource_hold_resume"},
         {"from":"held_any","to":"running","trigger":"release: any","actor":"daemon","guard":"message, owned strand return, or schedule event","cost":"warm-resume","code":"src/brr/daemon.py::_handle_resource_held_events"},
         {"from":"held_any","to":"held_any","trigger":"dev_reload","actor":"daemon","guard":"current is None and not active_spawns","cost":"free","code":"src/brr/daemon.py::start"},
