@@ -30,7 +30,6 @@ _EXECUTABLES = (
     "core/loom/wake",
     "core/immune.d/10-readme",
     "core/immune.d/20-labels",
-    "core/immune.d/30-widening",
 )
 
 AUTHOR_NAME = "brnrd-loom"

@@ -1,9 +1,11 @@
-"""20-labels and 30-widening, through the same bare repo 4a uses."""
+"""20-labels, including widening citations, through a real hooked bare repo."""
 
 from __future__ import annotations
 
 import os
 import subprocess
+
+import pytest
 from pathlib import Path
 
 from brr.loom.runtime.merge import install_pre_receive, send_to_self
@@ -93,8 +95,7 @@ def message(repo: Path, rev: str = "HEAD") -> str:
 
 
 def test_label_checks_are_executable() -> None:
-    for name in ("20-labels", "30-widening"):
-        assert (SEED / "core" / "immune.d" / name).stat().st_mode & 0o111
+    assert (SEED / "core" / "immune.d" / "20-labels").stat().st_mode & 0o111
 
 
 def test_a_clean_stamped_commit_lands(tmp_path: Path) -> None:
@@ -239,3 +240,18 @@ def test_body_identity_cannot_use_the_enrolled_person_to_push_unlabeled(tmp_path
     assert refused.returncode != 0
     assert "20-labels:" in refused.stderr
     assert "no Loom-Label" in refused.stderr
+
+
+@pytest.mark.parametrize("label", ["", "taint=0; audience=self", "taint=1; audience=self"])
+def test_every_widening_is_checked_even_with_a_valid_clause(tmp_path: Path, monkeypatch, label: str) -> None:
+    _bare, work = published(tmp_path, enroll="ada@example.com")
+    _as(monkeypatch, "Ada", "ada@example.com")
+    write(work, "people/ada/agreement.md", "An allowed clause. {#allowed}\n")
+    text = "mixed citations\n\nWidening: people/ada/agreement.md#allowed\nWidening: people/ada/agreement.md#missing\n"
+    if label:
+        text += f"Loom-Label: {label}\n"
+    commit(work, text)
+    refused = git(work, "push", "origin", "HEAD:main", check=False)
+    assert refused.returncode != 0
+    assert "20-labels:" in refused.stderr
+    assert "widening people/ada/agreement.md#missing" in refused.stderr

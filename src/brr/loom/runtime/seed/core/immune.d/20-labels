@@ -5,7 +5,8 @@
 #   no Loom-Label  → refuse, unless the committer is enrolled
 #   taint=1        → refuse, unless a Widening trailer cites a real clause at <new>
 #   audience lacks self → refuse
-# One stderr line per commit and reason. The harness prefixes the check name.
+# Every Widening must cite a real clause, including on clean or unlabeled
+# commits. One stderr line per reason; the harness prefixes the check name.
 #
 # Enrollment is core/loom/people-commit: one email per line, # comments
 # ignored. Fail closed: an empty list enrolls nobody, so an unlabeled
@@ -119,6 +120,17 @@ while IFS= read -r sha || [ -n "$sha" ]; do
     label=$(trailer_values Loom-Label | head -n 1)
     strand=$(trailer_values Loom-Strand | head -n 1)
     [ -n "$strand" ] || strand="?"
+    opened=1
+    trailer_values Widening >"$tmp/widen"
+    while IFS= read -r cite || [ -n "$cite" ]; do
+        [ -n "$cite" ] || continue
+        if valid_widening "$cite"; then
+            opened=0
+        else
+            printf '%s: widening %s\n' "$short" "$cite" >&2
+            status=1
+        fi
+    done <"$tmp/widen"
     if [ -z "$label" ]; then
         if zeros_p "$old"; then
             enrolled "$tmp/new-list" "$email" && continue
@@ -137,15 +149,6 @@ while IFS= read -r sha || [ -n "$sha" ]; do
         continue
     fi
     if [ "$taint" = "1" ]; then
-        opened=1
-        trailer_values Widening >"$tmp/widen"
-        while IFS= read -r cite || [ -n "$cite" ]; do
-            [ -n "$cite" ] || continue
-            if valid_widening "$cite"; then
-                opened=0
-                break
-            fi
-        done <"$tmp/widen"
         if [ "$opened" -eq 1 ]; then
             printf '%s: taint=1 strand %s\n' "$short" "$strand" >&2
             status=1
