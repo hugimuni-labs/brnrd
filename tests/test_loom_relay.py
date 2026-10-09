@@ -304,15 +304,40 @@ def test_current_wire_message_id_is_not_inferred_as_reply_binding(home):
     assert letter.data["to"] == "thread:second"
 
 
-def test_optional_verified_letter_binding_is_carried_into_source(home):
-    # This metadata extension is not emitted by today's Telegram webhook.
-    # Test the seam separately from the recorded, unextended wire fixtures.
+@pytest.mark.parametrize("reply_target", [None, 17])
+def test_raw_reply_target_is_preserved_without_resolving_it(home, reply_target):
+    speak(home, "s-aaaa-first1", "first")
+    speak(home, "s-aaaa-second", "second")
+    ev = event()
+    if reply_target is not None:
+        ev["reply_to"]["reply_to_message_id"] = reply_target
+    relay.pull_once(home, FakeClient([ev]), 0)
+    source, = kinds(home, "source")
+    if reply_target is None:
+        assert "reply_to_message_id" not in source.data
+    else:
+        assert source.data["reply_to_message_id"] == reply_target
+    assert "reply_to_letter" not in source.data
+    assert source.data["to"] == "thread:second"
+
+
+def test_optional_verified_letter_binding_is_carried_into_source(home, monkeypatch):
+    # Slice 2 resolves the raw Telegram target to this letter-id hook.
     first = speak(home, "s-aaaa-first1", "first")
     speak(home, "s-aaaa-second", "second")
     ev = event()
+    ev["reply_to"]["reply_to_message_id"] = 17
     ev["reply_to"]["reply_to_letter"] = first
+    calls = []
+    real_route = relay.route_bare
+    def route(facts, chat, reply_to_letter, now):
+        calls.append((chat, reply_to_letter))
+        return real_route(facts, chat, reply_to_letter, now)
+    monkeypatch.setattr(relay, "route_bare", route)
     relay.pull_once(home, FakeClient([ev]), 0)
     source, = kinds(home, "source")
+    assert calls == [("telegram/555", first)]
+    assert source.data["reply_to_message_id"] == 17
     assert source.data["reply_to_letter"] == first
     assert source.data["to"] == "thread:first"
     letter = next(f for f in kinds(home, "letter") if f.id == "letter:relay:ev_1")

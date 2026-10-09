@@ -601,18 +601,24 @@ def test_stale_daemon_heartbeat_names_last_seen_and_no_remedy(env):
         assert event.body == "do the thing"  # still queued — a daemon that wakes up drains it
 
 
-def test_bound_chat_message_enqueues_with_reply_to(env):
+@pytest.mark.parametrize("reply_target", [None, 17])
+def test_bound_chat_message_enqueues_with_reply_to(env, reply_target):
     app, client, _ = env
     acc = _account(client)
     rid = _repo(client, acc)
     code = _tg_pair_code(client, acc, rid)
     client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
 
-    r = client.post(
-        "/v1/webhooks/telegram",
-        json=_message(555, "do the thing", message_id=42, thread_id=9),
-        headers=_HDR,
-    )
+    update = _message(555, "do the thing", message_id=42, thread_id=9)
+    if reply_target is not None:
+        update["message"]["reply_to_message"] = {
+            "message_id": reply_target, "message_thread_id": 9,
+            "date": update["message"]["date"],
+            "chat": update["message"]["chat"],
+            "from": {"id": 1234, "is_bot": True, "first_name": "brnrd"},
+            "text": "s-aaaa-first1 · first",
+        }
+    r = client.post("/v1/webhooks/telegram", json=update, headers=_HDR)
     assert r.status_code == 200
 
     with app.state.SessionLocal() as db:
@@ -627,7 +633,7 @@ def test_bound_chat_message_enqueues_with_reply_to(env):
     drained = client.get(
         "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn
     ).json()
-    assert drained["events"][0]["reply_to"] == {
+    expected = {
         "platform": "telegram",
         "chat_id": "555",
         "topic_id": 9,
@@ -636,6 +642,9 @@ def test_bound_chat_message_enqueues_with_reply_to(env):
         "user_id": 42,
         "username": "ada_l",
     }
+    if reply_target is not None:
+        expected["reply_to_message_id"] = reply_target
+    assert drained["events"][0]["reply_to"] == expected
 
 
 def test_photo_caption_enqueues_with_attachment_pointer(env):
