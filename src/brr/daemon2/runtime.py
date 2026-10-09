@@ -956,7 +956,12 @@ class Daemon2:
                     protocol._read_event(p) for p in self.door.inbox.glob("*.md"))
                     if event and event.get("source") == "spawn"
                     and event.get("child_run_id") == child.run), None)
-            self.facts.record("asks", state["ask"], "child_stopped",
+            # The fact lands under the child's own ask (#2224): the parent's
+            # may be empty (a schedule seat, so the record raised before the
+            # kill) or a different ask (a spawn under ``item:``, so
+            # ``supervisor.children`` never saw the stop). The fact stays
+            # before the kill: the dying child reads it to settle as stopped.
+            self.facts.record("asks", child.ask, "child_stopped",
                               state["run_id"], {"edge": child.edge, "run": child.run,
                                                 "reason": str(fm.get("reason") or body)})
             self._terminate_runner(child.run)
@@ -992,9 +997,9 @@ class Daemon2:
                 raw = grant.group(1)
                 value = allowance.parse_signed_tokens(raw)
                 if value is not None:
-                    current = self._child_allowance(state["ask"], child.run, child.edge)
+                    current = self._child_allowance(child.ask, child.run, child.edge)
                     total = max(0, current + value if raw[0] in "+-" else value)
-                    self.facts.record("asks", state["ask"], "allowance_granted",
+                    self.facts.record("asks", child.ask, "allowance_granted",
                                       state["run_id"], {"edge": child.edge,
                                                         "run": child.run, "total": total})
             protocol.create_event(
