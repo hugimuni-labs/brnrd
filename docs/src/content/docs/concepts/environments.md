@@ -70,8 +70,9 @@ executes with the same authority as your own. Three tiers:
 - **untrusted** — anything else that still reaches the queue. Routed to
   `trust.untrusted_env` (`solitary` by default, or `sandbox` when that is the
   configured default environment), or **refused** when isolation is unavailable
-  or `trust.untrusted=refuse`. Host, worktree, auto, and plain Docker are not
-  accepted for untrusted runs; the selected backend needs its CLI and a live daemon.
+  or `trust.untrusted=refuse`. The isolated backends need their CLI and a live
+  daemon, checked before a runner starts. Setting `trust.untrusted_env` to a
+  weaker env (`worktree`, `host`) is your explicit choice and is honoured.
 
 An event's own `environment` key can never lift an untrusted event out of its
 tier: the tier wins.
@@ -92,7 +93,7 @@ surfaces can show which trust level a run executed at.
 
 Your own runs use your configured environment, unwrapped unless you choose
 isolation. Untrusted ingress uses `solitary` or a configured `sandbox`, or is
-refused before a runner starts. The harness's own sandbox is a separate opt-in:
+refused before a runner starts, unless you named a weaker env yourself. The harness's own sandbox is a separate opt-in:
 Claude's sandbox covers shell commands only. For Codex, set these runner options
 in the account's `daemon.config` (ordinary repo config is not read for `runner.*`):
 

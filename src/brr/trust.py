@@ -187,7 +187,11 @@ def resolve_decision(
     default = "sandbox" if _event_environment_policy({}, cfg) == "sandbox" else "solitary"
     untrusted_env = _cfg_str(cfg, "untrusted_env", default) or default
     if untrusted_env not in ("solitary", "sandbox"):
-        return _refuse_untrusted(tier, f"trust.untrusted_env={untrusted_env} is not isolated")
+        # The operator named a non-isolated env on purpose (host, worktree,
+        # auto). brnrd runs *their* harnesses on *their* machine: an explicit
+        # choice stands. Only the isolated defaults get the liveness probe, so
+        # a doomed run is refused with a reason instead of dying in Docker.
+        return TrustDecision(tier, untrusted_env, resolve_env(untrusted_env, cfg))
     if untrusted_env == "solitary" and not _docker_configured(cfg):
         return _refuse_untrusted(tier, "solitary is unavailable (no docker.image configured)")
     unavailable = _backend_unavailable(untrusted_env)

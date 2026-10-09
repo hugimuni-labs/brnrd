@@ -210,17 +210,15 @@ def test_untrusted_refuse_mode():
     assert d.reason == "trust.untrusted=refuse"
 
 
-@pytest.mark.parametrize("env", ["host", "worktree", "auto", "docker", "unknown"])
-def test_untrusted_weak_environment_is_refused(env):
+def test_untrusted_env_override_to_worktree_is_honoured():
+    # An operator can explicitly opt untrusted down to a weaker env; it is
+    # their call and requires no docker.image.
     d = trust.resolve_decision(
-        {"source": "github", "environment": "host"},
-        {"trust.untrusted_env": env, "docker.image": "img"},
+        {"source": "telegram", "trust_tier": "untrusted"},
+        {"trust.untrusted_env": "worktree"},
     )
-    assert d.refused
-    assert d.env is None
-    assert "untrusted run refused" in d.reason
-    assert "solitary" in d.reason and "sandbox" in d.reason
-
+    assert not d.refused
+    assert d.env == "worktree"
 
 def test_untrusted_prefers_configured_sandbox(isolated_backend):
     d = trust.resolve_decision({"source": "github"}, {"environment": "sandbox"})
