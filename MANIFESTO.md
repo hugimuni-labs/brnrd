@@ -67,7 +67,12 @@ Malicious execution will happen; injection rides every page, issue and message, 
 
 ## V · The bridge
 
-No vendor is load-bearing: Shell and Core swap and the self doesn't notice. Horizon: the first local Core doing real work, measured against the rented one (∅ today). Who pays: the subscriptions people already have, until they don't need them.
+- **No vendor is load-bearing**: Shell and Core swap and the self doesn't notice
+  - horizon: the first local Core doing real work, measured against the rented one · now ∅
+- **Context the mind can edit**: today's context is a scroll. Append only, cached as a prefix, so changing anything in the middle re-pays for everything after it
+  - horizon: a live block (the status bar, the state of the world) updated in place without re-reading the scroll, and an eviction call that drops block ten, not just the last n. Cheaper, and the mind keeps a desk instead of a diary
+  - now: every boundary re-appends the status line; providers trim only the tail cheaply. Research on position-independent caching exists; no API exposes it. A local Core, where we own the runtime, may get there first
+- **Who pays**: the subscriptions people already have, until they don't need them
 
 ---
 
