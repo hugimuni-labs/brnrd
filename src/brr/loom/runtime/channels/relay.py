@@ -92,9 +92,7 @@ def _sender(home: Home, platform: str, user_id: object) -> str:
         for path in sorted((home.root / "self" / "people").glob("*/channels.md")):
             if key in {line.strip() for line in path.read_text(encoding="utf-8").splitlines()}:
                 matches.append(path.parent.name)
-        if len(matches) > 1:
-            raise ValueError(f"relay: ambiguous person channel {key}")
-        if matches:
+        if len(matches) == 1:
             return f"person:{matches[0]}"
     return f"stranger:{platform}:{'' if user_id is None else user_id}"
 
@@ -114,10 +112,7 @@ def person_dm(home: Home, channel: str) -> str | None:
         return None
     if chat is None:
         return None
-    try:
-        sender = _sender(home, platform, chat)
-    except ValueError:
-        return None
+    sender = _sender(home, platform, chat)
     return sender if sender.startswith("person:") else None
 
 

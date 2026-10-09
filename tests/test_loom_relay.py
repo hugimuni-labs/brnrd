@@ -260,7 +260,7 @@ def test_lower_server_cursor_is_persisted_even_without_events(home):
     assert json.loads((home.root / "loom" / "relay-cursor.json").read_text()) == {"cursor": 2}
 
 
-def test_person_mapping_is_platform_specific_and_ambiguity_refuses(home):
+def test_person_mapping_is_platform_specific_and_ambiguity_is_stranger(home):
     (home.root / "self" / "people" / "ada" / "channels.md").write_text("slack:42\n")
     relay.pull_once(home, FakeClient([event()]), 0)
     assert kinds(home, "source")[0].data["from"] == "stranger:telegram:42"
@@ -268,9 +268,10 @@ def test_person_mapping_is_platform_specific_and_ambiguity_refuses(home):
     other.mkdir()
     (other / "channels.md").write_text("telegram:42\n")
     (home.root / "self" / "people" / "ada" / "channels.md").write_text("telegram:42\n")
-    with pytest.raises(ValueError, match="ambiguous person channel telegram:42"):
-        relay.pull_once(home, FakeClient([event("ev_2")]), 3)
-    assert len(kinds(home, "source")) == 1
+    relay.pull_once(home, FakeClient([event("ev_2")]), 3)
+    assert [f.data["from"] for f in kinds(home, "source")] == ["stranger:telegram:42"] * 2
+    assert all(f.data["label"]["taint"] for f in kinds(home, "letter"))
+    assert relay.person_dm(home, "channel:telegram/42") is None
     assert relay.read_cursor(home) == 3
 
 
