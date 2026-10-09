@@ -11,10 +11,9 @@
 # Enrollment is core/loom/people-commit: one email per line, # comments
 # ignored. Fail closed: an empty list enrolls nobody, so an unlabeled
 # commit is refused (a body pushing with raw git and no trailer must not
-# skip the labels). An unlabeled commit must be from an address on BOTH
-# lists, old and new, so a push cannot enroll itself or delete the list and
-# slip through. The first push (old = zeros) is judged by <new>'s list
-# alone; the seed commit itself carries Loom-Label. A commit that carries
+# skip the labels). An unlabeled commit must use the incumbent list, so a
+# push cannot enroll itself. The first push (old = zeros) uses <new>'s list;
+# the seed commit itself carries Loom-Label. A commit that carries
 # Loom-Label is checked either way. send_to_self always stamps one.
 #
 # Not enforced here: a Loom-Label is a trailer, and anything that can push
@@ -102,8 +101,9 @@ valid_widening() {
     grep -F "{#$clause}" "$blob" >/dev/null 2>&1
 }
 
-load_list "$old" "$tmp/old-list"
-load_list "$new" "$tmp/new-list"
+enrollment=$old
+if zeros_p "$old"; then enrollment=$new; fi
+load_list "$enrollment" "$tmp/people"
 
 if zeros_p "$old"; then
     git rev-list --reverse "$new" >"$tmp/commits" 2>/dev/null || : >"$tmp/commits"
@@ -132,11 +132,7 @@ while IFS= read -r sha || [ -n "$sha" ]; do
         fi
     done <"$tmp/widen"
     if [ -z "$label" ]; then
-        if zeros_p "$old"; then
-            enrolled "$tmp/new-list" "$email" && continue
-        elif enrolled "$tmp/old-list" "$email" && enrolled "$tmp/new-list" "$email"; then
-            continue
-        fi
+        enrolled "$tmp/people" "$email" && continue
         printf '%s: no Loom-Label\n' "$short" >&2
         status=1
         continue

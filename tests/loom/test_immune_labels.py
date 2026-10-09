@@ -269,3 +269,17 @@ def test_body_written_taint_and_audience_do_not_declare_the_fold(tmp_path: Path)
     assert "taint=1" not in text
     assert "audience=other" not in text
     assert "Widening:" not in text
+
+
+def test_incumbent_enrollment_can_revoke_itself_but_not_authorize_the_next_push(tmp_path: Path, monkeypatch) -> None:
+    _bare, work = published(tmp_path, enroll="ada@example.com")
+    _as(monkeypatch, "Ada", "ada@example.com")
+    write(work, "core/loom/people-commit", "# nobody enrolled\n")
+    commit(work, "ada revokes herself")
+    first = git(work, "push", "origin", "HEAD:main", check=False)
+    assert first.returncode == 0, first.stderr
+    write(work, "memory/scars/x.md", "base\nada after revocation\n")
+    commit(work, "ada no longer enrolled")
+    refused = git(work, "push", "origin", "HEAD:main", check=False)
+    assert refused.returncode != 0
+    assert "no Loom-Label" in refused.stderr
