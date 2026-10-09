@@ -63,8 +63,7 @@ def haiku_merge(ours: str, theirs: str, path: str) -> str | None:
     )
     try:
         proc = subprocess.run(
-            ["claude", "-p", "--model", "haiku",
-             "--dangerously-skip-permissions", "--", prompt],
+            ["claude", "-p", "--model", "haiku", "--", prompt],
             capture_output=True, text=True, timeout=120, check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
