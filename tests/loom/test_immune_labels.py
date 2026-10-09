@@ -216,3 +216,26 @@ def test_init_self_labels_the_seed_and_enrolls_the_person(tmp_path: Path) -> Non
     email = git(None, "config", "--global", "user.email").stdout.strip()
     assert email and email in listing.splitlines()
     assert AUTHOR_EMAIL not in listing
+
+
+def test_body_identity_cannot_use_the_enrolled_person_to_push_unlabeled(tmp_path: Path, monkeypatch) -> None:
+    from brr.loom.runtime.loom import _env as body_env
+    from brr.loom.runtime.selfrepo import AUTHOR_EMAIL, AUTHOR_NAME
+
+    bare, work = published(tmp_path, enroll="ada@example.com")
+    _as(monkeypatch, "Ada", "ada@example.com")
+    strand = room(bare, tmp_path / "room", "strand/body")
+    write(strand, "memory/scars/x.md", "base\nbody\n")
+    git(strand, "add", "-A")
+    proc = subprocess.run(
+        ["git", "-c", "commit.gpgsign=false", "commit", "-m", "body, unlabeled"],
+        cwd=strand, env=body_env(strand), capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    identity = git(strand, "log", "-1", "--format=%an <%ae> %cn <%ce>").stdout.strip()
+    assert identity == f"{AUTHOR_NAME} <{AUTHOR_EMAIL}> {AUTHOR_NAME} <{AUTHOR_EMAIL}>"
+    assert "ada@example.com" in git(work, "show", "HEAD:core/loom/people-commit").stdout
+    refused = git(strand, "push", "origin", "HEAD:main", check=False)
+    assert refused.returncode != 0
+    assert "20-labels:" in refused.stderr
+    assert "no Loom-Label" in refused.stderr

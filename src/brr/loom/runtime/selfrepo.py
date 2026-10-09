@@ -241,9 +241,11 @@ def _commit(repo: Path, message: str) -> None:
 def _enroll_person_email(self_dir: Path) -> None:
     """List the person's git email in ``core/loom/people-commit``.
 
-    Only that address may push a commit with no ``Loom-Label`` (20-labels
-    fails closed). The loom's own identity is never enrolled: strands commit
-    as it, and enrolling it would let a body skip the labels with a raw push.
+    Enrolled addresses may push without ``Loom-Label`` for hand commits.
+    Body processes receive the loom's AUTHOR/COMMITTER identity from
+    ``loom._env``; that identity is never enrolled, so an unlabeled raw
+    body push is refused by 20-labels. This is not a sandbox against a body
+    deliberately overriding its identity or forging a label.
     """
     proc = subprocess.run(["git", "config", "--global", "user.email"],
                           capture_output=True, text=True)

@@ -23,6 +23,7 @@ from .port import (
     fact_from_port, fact_from_taint, parse_frontmatter, render_boundary, render_wake,
 )
 from .project import fold, generation, sender_threads
+from .selfrepo import AUTHOR_EMAIL, AUTHOR_NAME
 
 SRC = str(Path(__file__).resolve().parents[3])
 FUSE_WINDOW_S = 600
@@ -79,6 +80,10 @@ def _env(room: Path) -> dict[str, str]:
     if SRC not in parts:
         parts.insert(0, SRC)
     env["PYTHONPATH"] = os.pathsep.join(parts)
+    # Human enrollment is for hand commits; a body must not inherit it.
+    for role in ("AUTHOR", "COMMITTER"):
+        env[f"GIT_{role}_NAME"] = AUTHOR_NAME
+        env[f"GIT_{role}_EMAIL"] = AUTHOR_EMAIL
     env["BRNRD_ROOM"] = str(room)
     return env
 
