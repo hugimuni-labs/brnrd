@@ -1752,7 +1752,8 @@ class Daemon2:
                             try:
                                 publication = _placement.publish(self.repo_root, strand_alloc)
                                 state["publication"] = publication
-                                if not publication.landed or not publication.released:
+                                if ((not publication.landed and not publication.empty)
+                                        or not publication.released):
                                     self._notice(
                                         state, f"strand clone retained at {strand_alloc.path}: "
                                         f"{publication.detail or 'branch publication incomplete'}",
