@@ -227,7 +227,10 @@ subprocess.run(["git", "commit", "-m", "child report"], check=True)
     returned = returns[0]
     assert returned["spawn_parent_run_id"] == result.run_id
     if ending == "crash":
-        assert returned["spawn_published_branch"].startswith("brr/run-")
+        # A child that crashed before committing has nothing past its seed,
+        # so no run branch is published (#2236): an empty name, not a
+        # brr/run-* branch carrying only the host's main.
+        assert returned["spawn_published_branch"] == ""
     else:
         assert returned["spawn_published_branch"] == branch
     assert returned["spawn_report_path"] == report
