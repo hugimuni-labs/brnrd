@@ -95,8 +95,9 @@ def route_bare(facts: list[Fact], chat: str, reply_to_letter: str | None,
     """Reply binding, then last confirmed speech with a live lease, then inbox.
 
     ``chat`` is ``<platform>/<chat_id>``. A speech's ``key`` names the
-    outbound letter (the existing speak receipt). Thread leases have no
-    deadline of their own: their router generation supplies ``until``.
+    outbound letter (the existing speak receipt). ``reply_to_letter`` is a
+    resolved letter id; slice 2 owns the platform-message-id lookup. Thread
+    leases have no deadline of their own: their router generation supplies ``until``.
     """
     ordered = union(facts)
     state = fold(ordered)
@@ -249,8 +250,11 @@ def pull_once(home: Home, client, cursor: int) -> int:
             "chat": meta["cloud_chat_id"], "topic": meta["cloud_topic_id"],
             "from": sender, "text": event.get("body") or "", "blobs": blobs,
         }
-        # Optional verified metadata seam. Today's Telegram webhook omits it;
-        # message_id is the *incoming* id and must never be treated as a reply.
+        # Preserve the raw reply target for slice 2 to resolve against sent
+        # receipts. message_id is the incoming id, never a reply target.
+        if platform == "telegram" and origin.get("reply_to_message_id") is not None:
+            data["reply_to_message_id"] = origin["reply_to_message_id"]
+        # A resolved letter id enters route_bare through this separate seam.
         if platform == "telegram" and origin.get("reply_to_letter"):
             data["reply_to_letter"] = origin["reply_to_letter"]
         # Source is durable before letter. Save the routing decision as part
