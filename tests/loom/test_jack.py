@@ -130,3 +130,12 @@ def test_claude_adapter_pins_the_three_hooks(tmp_path):
         blob = json.dumps(hooks)
         assert f"--event {event}" in blob
         assert "--shell claude" in blob
+
+
+def test_stop_shows_owed_letters_before_reading_wait(tmp_path):
+    room = _room(tmp_path)
+    text = _write(room, [_letter()])
+    (room / "port" / "wait").write_text("broken wait")
+    payload = json.loads(execute("stop", room, "{}"))
+    assert payload == {"decision": "block", "reason": text}
+    assert list((room / "port" / "out").glob("*.md"))

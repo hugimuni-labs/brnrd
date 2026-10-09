@@ -41,10 +41,6 @@ class Boundary:
     ids: list[str] = field(default_factory=list)
     letters: list[LetterView] = field(default_factory=list)
 
-    @classmethod
-    def empty(cls) -> "Boundary":
-        return cls()
-
 
 def parse_boundary(text: str) -> Boundary:
     """Parse a boundary or the owed section of a wake. Empty text is nothing owed.
@@ -53,7 +49,7 @@ def parse_boundary(text: str) -> Boundary:
     letter list, is corrupt. The jack fails open on that; it does not guess.
     """
     if not text or not text.strip():
-        return Boundary.empty()
+        return Boundary()
     header = _HEADER.search(text)
     if header is None:
         raise PortError("boundary has no port header")
