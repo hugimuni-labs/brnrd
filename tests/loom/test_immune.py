@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -303,3 +304,33 @@ def test_a_push_that_rewrites_immune_to_exit_0_is_judged_by_the_old_one(tmp_path
     proc = git(work, "push", "origin", "HEAD:main", check=False)
     assert proc.returncode != 0
     assert "forbidden is here" in _blob(proc)
+
+
+@pytest.mark.parametrize("first, incumbent", [(False, None), (False, ""), (False, "exit 1\n"), (True, None), (True, "")])
+def test_ci_uses_the_incumbent_and_refuses_missing_or_empty_scripts(tmp_path: Path, first: bool, incumbent: str | None) -> None:
+    work = tmp_path / "work"
+    git(None, "init", "-b", "main", os.fspath(work))
+    write(work, "marker", "base\n")
+    if incumbent is not None:
+        write(work, "core/immune", incumbent)
+    commit(work, "incumbent")
+    old = git(work, "rev-parse", "HEAD").stdout.strip()
+    if first:
+        old = "0" * 40
+    else:
+        # A new permissive script cannot judge a missing/empty/refusing old one.
+        write(work, "core/immune", "exit 0\n")
+        commit(work, "incoming")
+    new = git(work, "rev-parse", "HEAD").stdout.strip()
+    workflow = (SEED / "ci/immune.yml").read_text(encoding="utf-8")
+    script = textwrap.dedent(workflow.split("        run: |\n", 1)[1])
+    for expression, value in {"github.event_name": "push", "github.event.before": old,
+                              "github.sha": new, "github.event.pull_request.base.sha": old,
+                              "github.event.pull_request.head.sha": new}.items():
+        script = script.replace("${{ " + expression + " }}", value)
+    env = _env()
+    env["RUNNER_TEMP"] = str(tmp_path)
+    result = subprocess.run(["sh", "-c", script], cwd=work, env=env, capture_output=True, text=True)
+    assert result.returncode != 0, result.stdout
+    if incumbent is None or incumbent == "":
+        assert "immune: core/immune missing at" in result.stderr

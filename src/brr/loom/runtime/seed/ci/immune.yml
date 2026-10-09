@@ -25,9 +25,15 @@ jobs:
             old="${{ github.event.before }}"
             new="${{ github.sha }}"
           fi
-          # The incumbent judges: run core/immune from the main being replaced.
-          script=core/immune
+          # The incumbent judges; a missing or empty script fails closed.
+          tip=$old
           case "$old" in
-            ""|*[!0]*) git show "$old:core/immune" >"$RUNNER_TEMP/immune" && script="$RUNNER_TEMP/immune" ;;
+            ""|*[!0]*) ;;
+            *) tip=$new ;;
           esac
+          script="$RUNNER_TEMP/immune"
+          if ! git show "$tip:core/immune" >"$script" || [ ! -s "$script" ]; then
+            printf 'immune: core/immune missing at %s\n' "$tip" >&2
+            exit 1
+          fi
           sh "$script" "$old" "$new"
