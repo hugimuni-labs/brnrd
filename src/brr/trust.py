@@ -18,7 +18,7 @@ Three tiers:
   tighter env with ``trust.collaborator_env``.
 - ``untrusted`` — anything else that still reaches enqueue. Routed to
   ``trust.untrusted_env`` (default ``solitary``), or **refused** when
-  solitary isn't available (no ``docker.image``) or ``trust.untrusted``
+  isolation isn't available (no image, CLI, or daemon) or ``trust.untrusted``
   is ``refuse``.
 
 Who is which tier is a fact only the gate knows — it holds the sender
@@ -37,6 +37,8 @@ its tier: for untrusted, the event's env policy is ignored entirely.
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from dataclasses import dataclass
 from typing import Any
 
@@ -119,6 +121,33 @@ def resolve_tier(event: dict[str, Any], cfg: dict[str, Any] | None = None) -> st
     return UNTRUSTED
 
 
+def _backend_unavailable(env: str) -> str:
+    """Bounded liveness probe; selection never degrades to host execution."""
+    binary = "sbx" if env == "sandbox" else "docker"
+    if shutil.which(binary) is None:
+        return f"{binary} CLI is not on PATH"
+    command = [binary, "ls"] if env == "sandbox" else [binary, "info"]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return f"{binary} daemon is unavailable (probe failed or timed out)"
+    if result.returncode:
+        return f"{binary} daemon is unavailable"
+    return ""
+
+
+def _refuse_untrusted(tier: str, detail: str) -> TrustDecision:
+    return TrustDecision(
+        tier, None, None, refused=True,
+        reason=(
+            f"untrusted run refused: {detail}. Enable solitary with docker.image "
+            "in security.config and a running Docker daemon, or configure "
+            "trust.untrusted_env=sandbox with sbx on PATH and `sbx daemon start`, "
+            "or name a weaker env yourself with trust.untrusted_env."
+        ),
+    )
+
+
 def resolve_decision(
     event: dict[str, Any], cfg: dict[str, Any] | None = None
 ) -> TrustDecision:
@@ -128,9 +157,9 @@ def resolve_decision(
     - ``collaborator`` → ``trust.collaborator_env`` when set, else the
       event's own env policy (today's behaviour at zero config).
     - ``untrusted``    → ``trust.untrusted_env`` (default ``solitary``),
-      or a refusal when ``trust.untrusted=refuse`` or the resolved env is
-      ``solitary`` without a ``docker.image`` to back it. The event's own
-      env policy is **never** consulted — a stranger cannot name their env.
+      or a refusal when ``trust.untrusted=refuse`` or isolation is unavailable.
+      A configured default ``sandbox`` is used when no trust override is set.
+      The event's own env policy is **never** consulted — a stranger cannot name their env.
     """
     from .run import _event_environment_policy, resolve_env, _docker_configured
 
@@ -155,14 +184,17 @@ def resolve_decision(
             tier, None, None, refused=True,
             reason="trust.untrusted=refuse",
         )
-    untrusted_env = _cfg_str(cfg, "untrusted_env", "solitary") or "solitary"
-    resolved = resolve_env(untrusted_env, cfg)
-    if resolved == "solitary" and not _docker_configured(cfg):
-        return TrustDecision(
-            tier, None, None, refused=True,
-            reason=(
-                "untrusted source and solitary is unavailable "
-                "(no docker.image configured)"
-            ),
-        )
-    return TrustDecision(tier, untrusted_env, resolved)
+    default = "sandbox" if _event_environment_policy({}, cfg) == "sandbox" else "solitary"
+    untrusted_env = _cfg_str(cfg, "untrusted_env", default) or default
+    if untrusted_env not in ("solitary", "sandbox"):
+        # The operator named a non-isolated env on purpose (host, worktree,
+        # auto). brnrd runs *their* harnesses on *their* machine: an explicit
+        # choice stands. Only the isolated defaults get the liveness probe, so
+        # a doomed run is refused with a reason instead of dying in Docker.
+        return TrustDecision(tier, untrusted_env, resolve_env(untrusted_env, cfg))
+    if untrusted_env == "solitary" and not _docker_configured(cfg):
+        return _refuse_untrusted(tier, "solitary is unavailable (no docker.image configured)")
+    unavailable = _backend_unavailable(untrusted_env)
+    if unavailable:
+        return _refuse_untrusted(tier, f"{untrusted_env} is unavailable ({unavailable})")
+    return TrustDecision(tier, untrusted_env, untrusted_env)

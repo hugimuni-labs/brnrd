@@ -7,7 +7,7 @@ The daemon assembles the current repo context, chooses the configured execution
 environment, starts a CLI runner, keeps the conversation live, and preserves
 the outcome in git or the reply thread.
 
-Every project chooses one of four shipped environments. These modes isolate
+Every project chooses one of five shipped environments. These modes isolate
 different kinds of friction; none is a cage for a hostile agent.
 
 | Mode | What it isolates | Use it when |
@@ -15,6 +15,7 @@ different kinds of friction; none is a cage for a hostile agent.
 | `host` | Nothing beyond your shell. Changes hit the working tree immediately. | You trust the agent and want minimum friction. |
 | `worktree` | A separate worktree and branch. It still shares `.git`, credentials, network, and the host filesystem. | You want code runs kept off the main working tree. |
 | `sandbox` | The host behind a Docker Sandbox microVM; the repo workspace remains mounted at its host path, while credentials are injected by the sandbox proxy. | You want the VM boundary and have `sbx`; set its `github` secret to the bot token before forge work. |
+| `solitary` | Docker with provider-only network egress and no forge credentials. | You want the hardened route for untrusted sources. |
 | `docker` | Dependencies and network; host-file visibility is narrowed to the repo and mounted credential paths. The repo is read-write, credentials cross in, and network is on by default. | You want a clean toolchain or network control as defense in depth. |
 
 Select the mode in `security.config` (the daemon-owned file in the brnrd
@@ -67,9 +68,11 @@ executes with the same authority as your own. Three tiers:
   member of a configured room. Gets the configured default too, tightenable to
   a stricter environment with `trust.collaborator_env`.
 - **untrusted** — anything else that still reaches the queue. Routed to
-  `trust.untrusted_env` (default `solitary`, the hardened preset), or
-  **refused** outright — failing closed — when `solitary` can't back it (no
-  `docker.image`) or `trust.untrusted=refuse`.
+  `trust.untrusted_env` (`solitary` by default, or `sandbox` when that is the
+  configured default environment), or **refused** when isolation is unavailable
+  or `trust.untrusted=refuse`. The isolated backends need their CLI and a live
+  daemon, checked before a runner starts. Setting `trust.untrusted_env` to a
+  weaker env (`worktree`, `host`) is your explicit choice and is honoured.
 
 An event's own `environment` key can never lift an untrusted event out of its
 tier: the tier wins.
@@ -87,3 +90,21 @@ trust.untrusted=refuse            # or: refuse untrusted runs outright (default:
 At zero config, owner and collaborator behave exactly as before; untrusted
 fails closed. The resolved tier rides the run metadata (`trust_tier`), so
 surfaces can show which trust level a run executed at.
+
+Your own runs use your configured environment, unwrapped unless you choose
+isolation. Untrusted ingress uses `solitary` or a configured `sandbox`, or is
+refused before a runner starts, unless you named a weaker env yourself. The harness's own sandbox is a separate opt-in:
+Claude's sandbox covers shell commands only. For Codex, set these runner options
+in the account's `daemon.config` (ordinary repo config is not read for `runner.*`):
+
+```ini
+runner.codex_sandbox=workspace-write
+runner.codex_sandbox_network_access=true
+```
+
+This replaces the bundled Codex approval/sandbox bypass with `--sandbox
+workspace-write` and `-c approval_policy="never"` for non-interactive execution.
+Network access defaults to false when this sandbox is enabled; the second option
+allows it explicitly. Leaving `runner.codex_sandbox` unset preserves today's
+unwrapped default. A pinned `runner_cmd` is used verbatim and owns its own flags.
+Harness sandboxing does not replace the environment boundary for untrusted runs.

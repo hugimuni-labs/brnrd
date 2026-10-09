@@ -19,6 +19,11 @@ from brr.gates import BUILTIN_GATES
 from brr.run import Run
 
 
+@pytest.fixture
+def isolated_backend(monkeypatch):
+    monkeypatch.setattr(trust, "_backend_unavailable", lambda env: "")
+
+
 # ── tier resolution: source × stamp matrix ──────────────────────────────
 
 
@@ -167,7 +172,7 @@ def test_collaborator_env_override_caps_the_env():
     assert d.env == "solitary"
 
 
-def test_untrusted_routes_to_solitary_when_available():
+def test_untrusted_routes_to_solitary_when_available(isolated_backend):
     d = trust.resolve_decision(
         {"source": "telegram", "trust_tier": "untrusted"},
         {"docker.image": "img"},
@@ -177,7 +182,7 @@ def test_untrusted_routes_to_solitary_when_available():
     assert not d.refused
 
 
-def test_untrusted_env_key_never_escalates():
+def test_untrusted_env_key_never_escalates(isolated_backend):
     # The no-escalation pin: an event-supplied environment must NEVER lift
     # an untrusted event out of its tier.
     d = trust.resolve_decision(
@@ -215,8 +220,61 @@ def test_untrusted_env_override_to_worktree_is_honoured():
     assert not d.refused
     assert d.env == "worktree"
 
+def test_untrusted_prefers_configured_sandbox(isolated_backend):
+    d = trust.resolve_decision({"source": "github"}, {"environment": "sandbox"})
+    assert not d.refused
+    assert d.env == "sandbox"
 
-def test_untrusted_env_override_accepts_sandbox_without_docker_image():
+
+def test_explicit_solitary_wins_over_default_sandbox(isolated_backend):
+    d = trust.resolve_decision(
+        {"source": "github"},
+        {"environment": "sandbox", "trust.untrusted_env": "solitary", "docker.image": "img"},
+    )
+    assert d.env == "solitary"
+
+
+@pytest.mark.parametrize("backend,binary", [("solitary", "docker"), ("sandbox", "sbx")])
+def test_untrusted_missing_cli_refuses(backend, binary, monkeypatch):
+    monkeypatch.setattr(trust.shutil, "which", lambda name: None)
+    def unexpected_probe(*args, **kwargs):
+        pytest.fail("missing CLI must refuse without running a probe")
+    monkeypatch.setattr(trust.subprocess, "run", unexpected_probe)
+    d = trust.resolve_decision(
+        {"source": "github"}, {"trust.untrusted_env": backend, "docker.image": "img"},
+    )
+    assert d.refused and d.env is None
+    assert f"{binary} CLI is not on PATH" in d.reason
+    assert "security.config" in d.reason and "sbx daemon start" in d.reason
+
+
+@pytest.mark.parametrize("backend,binary", [("solitary", "docker"), ("sandbox", "sbx")])
+@pytest.mark.parametrize("failure", ["nonzero", "timeout", "oserror", "ready"])
+def test_untrusted_backend_probe(backend, binary, failure, monkeypatch):
+    monkeypatch.setattr(trust.shutil, "which", lambda name: f"/bin/{name}")
+    def probe(command, **kwargs):
+        assert command == [binary, "ls" if backend == "sandbox" else "info"]
+        assert kwargs["timeout"] == 5
+        if failure == "timeout":
+            raise trust.subprocess.TimeoutExpired(command, 5)
+        if failure == "oserror":
+            raise OSError("not executable")
+        return trust.subprocess.CompletedProcess(command, 0 if failure == "ready" else 1)
+    monkeypatch.setattr(trust.subprocess, "run", probe)
+    d = trust.resolve_decision(
+        {"source": "github"}, {"trust.untrusted_env": backend, "docker.image": "img"},
+    )
+    assert d.refused == (failure != "ready")
+    assert d.env == (backend if failure == "ready" else None)
+
+
+def test_owner_host_does_not_probe_isolation(monkeypatch):
+    monkeypatch.setattr(trust, "_backend_unavailable", lambda env: pytest.fail("owner probe"))
+    d = trust.resolve_decision({"source": "cli"}, {"environment": "host"})
+    assert d.env == "host" and not d.refused
+
+
+def test_untrusted_env_override_accepts_sandbox_without_docker_image(isolated_backend):
     d = trust.resolve_decision(
         {"source": "telegram", "trust_tier": "untrusted"},
         {"trust.untrusted_env": "sandbox"},
@@ -259,7 +317,7 @@ def test_from_event_owner_paths_unaffected_zero_config():
         assert "trust_refused" not in task.meta
 
 
-def test_from_event_untrusted_env_key_cannot_escalate():
+def test_from_event_untrusted_env_key_cannot_escalate(isolated_backend):
     task = Run.from_event(
         {"id": "e", "source": "telegram", "trust_tier": "untrusted",
          "environment": "host"},

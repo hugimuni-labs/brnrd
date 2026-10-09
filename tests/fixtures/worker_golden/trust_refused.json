@@ -10,7 +10,7 @@
  "hold_active": false,
  "inbox_file": "---\nid: evt-untrusted\nstatus: done\nsource: github\ntrust_tier: untrusted\nrun_id: <RUN>\nrepo_label: <TMP>\n---\nhi\n",
  "log": [
-  "[brnrd] trust refuse run=<RUN> event=evt-untrusted source=github tier=untrusted reason=untrusted source and solitary is unavailable (no docker.image configured)"
+  "[brnrd] trust refuse run=<RUN> event=evt-untrusted source=github tier=untrusted reason=untrusted run refused: solitary is unavailable (no docker.image configured). Enable solitary with docker.image in security.config and a running Docker daemon, or configure trust.untrusted_env=sandbox with sbx on PATH and `sbx daemon start`, or name a weaker env yourself with trust.untrusted_env."
  ],
  "packets": [
   {
@@ -62,14 +62,14 @@
      "why": "trust_refused"
     }
    ],
-   "trust_refused": "untrusted source and solitary is unavailable (no docker.image configured)",
+   "trust_refused": "untrusted run refused: solitary is unavailable (no docker.image configured). Enable solitary with docker.image in security.config and a running Docker daemon, or configure trust.untrusted_env=sandbox with sbx on PATH and `sbx daemon start`, or name a weaker env yourself with trust.untrusted_env.",
    "trust_tier": "untrusted"
   },
   "status": "done",
   "terminal_reply": null
  },
  "portal": null,
- "response": "This request came from an untrusted source and no isolated environment is available to run it safely (untrusted source and solitary is unavailable (no docker.image configured)). No run was started. An operator can configure `trust.untrusted_env` (e.g. `solitary` with a `docker.image`) to enable isolated runs for untrusted sources.",
+ "response": "This request came from an untrusted source and no isolated environment is available to run it safely (untrusted run refused: solitary is unavailable (no docker.image configured). Enable solitary with docker.image in security.config and a running Docker daemon, or configure trust.untrusted_env=sandbox with sbx on PATH and `sbx daemon start`, or name a weaker env yourself with trust.untrusted_env.). No run was started. An operator can configure `trust.untrusted_env` (e.g. `solitary` with a `docker.image`) to enable isolated runs for untrusted sources.",
  "returned": {
   "body": "hi",
   "env": "solitary",
