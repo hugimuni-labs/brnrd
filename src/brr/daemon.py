@@ -78,6 +78,7 @@ from .gates import BUILTIN_GATES as _BUILTIN_GATES
 from . import gate_receipt
 from . import claude_status
 from . import claude_usage
+from . import grok_usage
 from . import gitops
 from . import heddles
 from . import run_topic
@@ -4077,15 +4078,23 @@ def _collect_levels(
     from . import grok_status, vibe_usage
 
     if grok_status.supported(runner_name):
-        # The envelope's own tokens and, when Grok stamped one, its cost.
-        # No quota probe. A shared-dir fallback is a previous session's
-        # spend only — its token totals are not this run's.
-        levels = grok_status.load_snapshot(outbox_dir)
-        if levels is None:
-            levels = grok_status.mark_cross_run(
+        # Subscription quota is account state, shared across concurrent runs.
+        cache_dir = shared_dir or outbox_dir
+        usage = (
+            grok_usage.load_or_refresh_snapshot(cache_dir, cwd=work_dir, **probe_options)
+            if refresh else grok_usage.load_snapshot(cache_dir)
+        )
+        result = grok_status.load_snapshot(outbox_dir)
+        if result is None:
+            result = grok_status.mark_cross_run(
                 grok_status.load_snapshot(shared_dir)
             )
-        return levels, grok_status.COLLECTED_SLOTS
+        merged = _merge_level_snapshots(usage, result)
+        # Unlike Claude's facet merge, the Grok envelope also feeds exact
+        # session token/model accounting. Keep those fields on the own-run path.
+        levels = {**(result or {}), **(usage or {}), **(merged or {})} or None
+        usage_samples.record(cache_dir, "grok", levels)
+        return levels, grok_usage.COLLECTED_SLOTS | grok_status.COLLECTED_SLOTS
     if vibe_usage.supported(runner_name):
         # Terminal per-session tokens feed the ledger. Subscription allowance,
         # dollar spend and context capacity have no collector on this seam.
@@ -13943,7 +13952,7 @@ def _persist_run_topics(
 # by ``test_capture_control_files_partition_is_total`` (a class defined by
 # listing its members meets the member nobody listed).
 _CONTROL_FILE_MODULES = (
-    relics, gate_receipt, claude_status, codex_usage, claude_usage,
+    relics, gate_receipt, claude_status, codex_usage, claude_usage, grok_usage,
     statusline, run_ledger, hooks_mod, portals, menus, pause,
 )
 # Matches a public (no leading underscore) module-level constant ending in
@@ -14041,6 +14050,7 @@ PRESERVED: dict[str, str] = {
     # the copy is a no-op on most runs and a real record on the runs where
     # it isn't.
     claude_usage.SNAPSHOT_NAME: "claude-usage-levels.json",
+    grok_usage.SNAPSHOT_NAME: "grok-usage-levels.json",
     # Codex's quota is account state by design (``_collect_probe``'s
     # ``codex`` branch: "one cache every reader shares, warm across runs
     # and daemon restarts" — its ``cache_dir`` is the account-shared dir
