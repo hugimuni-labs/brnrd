@@ -15,7 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from brr.loom.runtime.selfrepo import ReadmeError, parse_readme
+from brr.loom.runtime.selfrepo import ReadmeError, git, parse_readme
 
 
 def install_merge_driver(repo: Path) -> None:
@@ -31,13 +31,7 @@ def install_merge_driver(repo: Path) -> None:
         f"{shlex.quote(sys.executable)} -m brr.loom.runtime merge-driver "
         "%O %A %B %P"
     )
-    proc = subprocess.run(
-        ["git", "-C", os.fspath(repo), "config", "merge.loom-readme.driver", command],
-        capture_output=True, text=True, check=False,
-    )
-    if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout).strip()
-        raise RuntimeError(f"could not set merge.loom-readme.driver: {detail}")
+    git(repo, "config", "merge.loom-readme.driver", command)
 
 
 def fake_merge(ours: str, theirs: str) -> str:

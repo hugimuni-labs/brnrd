@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from .selfrepo import _segment, git
+
 SELF_AUDIENCE = frozenset({"self"})
 _URL_SCHEMES = ("https://", "http://")
 
@@ -54,18 +56,6 @@ def parse_trailer(value: str) -> Label | None:
     if taint is None:
         return None
     return Label(taint, SELF_AUDIENCE if audience is None else audience)
-
-
-def _segment(value: str) -> str | None:
-    if (
-        not value
-        or value in {".", ".."}
-        or "/" in value
-        or "\\" in value
-        or "\x00" in value
-    ):
-        return None
-    return value
 
 
 def _strip_prefix(sender: str) -> str:
@@ -278,19 +268,7 @@ def label_inputs(room: Path) -> tuple[str, list, Path | None, str]:
 
 
 def _strand_of(room: Path) -> str:
-    import os
-    import subprocess
-    env = {
-        key: value for key, value in os.environ.items()
-        if key not in {
-            "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX",
-            "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE",
-        }
-    }
-    proc = subprocess.run(
-        ["git", "-C", os.fspath(room), "symbolic-ref", "--short", "HEAD"],
-        env=env, capture_output=True, text=True, check=False,
-    )
+    proc = git(room, "symbolic-ref", "--short", "HEAD", check=False)
     if proc.returncode == 0:
         branch = proc.stdout.strip()
         if branch.startswith("strand/"):

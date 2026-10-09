@@ -13,18 +13,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-# Inherited discovery pins outrank ``git -C``. Inside a brnrd run those pins
-# point at the host checkout; leaving them set would rebase *that* tree.
-_DISCOVERY = (
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_PREFIX",
-    "GIT_COMMON_DIR",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_NAMESPACE",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-)
+from .selfrepo import SelfError as SendError, git as _git
 
 _RACE_LIMIT = 10
 _STOP_LIMIT = 3
@@ -63,10 +52,6 @@ while read -r old new ref; do
 done
 exit "$status"
 """
-
-
-class SendError(RuntimeError):
-    """Git failed in a way that is not a conflict, a lost race, or a refusal."""
 
 
 @dataclass(frozen=True)
@@ -259,33 +244,6 @@ def _hooks_dir(repo: Path) -> Path:
     return path if path.is_absolute() else repo / path
 
 
-def _git(room: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    try:
-        proc = subprocess.run(
-            ["git", "-C", os.fspath(room), *args],
-            env=_env(),
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise SendError(f"git {' '.join(args)} timed out") from exc
-    if check and proc.returncode != 0:
-        raise SendError(_text(proc) or f"git {' '.join(args)} failed ({proc.returncode})")
-    return proc
-
-
-def _env() -> dict[str, str]:
-    env = {key: value for key, value in os.environ.items() if key not in _DISCOVERY}
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    # rebase --continue opens an editor. ``true`` keeps the message and
-    # returns, so a resolved conflict cannot park the strand on a prompt.
-    env["GIT_EDITOR"] = "true"
-    env["GIT_SEQUENCE_EDITOR"] = "true"
-    return env
-
-
 def _stamp_range(room: Path, widening: str | None) -> None:
     """Rewrite ``origin/main..HEAD`` so the body cannot keep its own trailers.
 
@@ -378,13 +336,13 @@ def _stamp_message(message: str, *, strand: str, label, widening: str | None) ->
     if not text.endswith("\n"):
         text += "\n"
     cmd = [
-        "git", "interpret-trailers", "--if-exists", "replace",
+        "interpret-trailers", "--if-exists", "replace",
         "--trailer", f"Loom-Strand: {strand}",
         "--trailer", f"Loom-Label: {label.trailer()}",
     ]
     if widening:
         cmd += ["--trailer", f"Widening: {widening}"]
-    proc = subprocess.run(cmd, input=text, capture_output=True, text=True, check=False)
+    proc = _git(Path.cwd(), *cmd, input=text, check=False)
     if proc.returncode != 0:
         raise SendError(proc.stderr.strip() or "git interpret-trailers failed")
     return proc.stdout if proc.stdout.endswith("\n") else proc.stdout + "\n"

@@ -23,12 +23,11 @@ from .port import (
     fact_from_port, fact_from_taint, parse_frontmatter, render_boundary, render_wake,
 )
 from .project import fold, generation, sender_threads
-from .selfrepo import AUTHOR_EMAIL, AUTHOR_NAME
+from .selfrepo import AUTHOR_EMAIL, AUTHOR_NAME, _env_without_pin
 
 SRC = str(Path(__file__).resolve().parents[3])
 FUSE_WINDOW_S = 600
 FUSE_DEATHS = 2
-_GIT_PIN = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
 # Held by the body process, not the loom: the wrapper flocks, then execs.
 # preexec_fn after fork from the test's loom thread can deadlock on a lock
 # another thread still owns. The fd stays open across exec, so the lock
@@ -73,9 +72,7 @@ def _log(home: Home, message: str) -> None:
 
 
 def _env(room: Path) -> dict[str, str]:
-    env = os.environ.copy()
-    for name in _GIT_PIN:
-        env.pop(name, None)
+    env = _env_without_pin()
     parts = [part for part in env.get("PYTHONPATH", "").split(os.pathsep) if part]
     if SRC not in parts:
         parts.insert(0, SRC)

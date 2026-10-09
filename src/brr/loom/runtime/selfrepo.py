@@ -18,6 +18,9 @@ _PINNED_GIT = (
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_INDEX_FILE",
+    "GIT_PREFIX",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
     "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
 )
@@ -54,24 +57,30 @@ def _env_without_pin() -> dict[str, str]:
     env = os.environ.copy()
     for key in _PINNED_GIT:
         env.pop(key, None)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    # Resolved rebases keep their message without waiting on an editor.
+    env["GIT_EDITOR"] = "true"
+    env["GIT_SEQUENCE_EDITOR"] = "true"
     return env
 
 
-def git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    proc = subprocess.run(
-        ["git", "-c", "commit.gpgsign=false", *args],
-        cwd=cwd,
-        env=_env_without_pin(),
-        capture_output=True,
-        text=True,
-    )
+def git(cwd: Path, *args: str, check: bool = True, env: dict[str, str] | None = None,
+        input: str | None = None) -> subprocess.CompletedProcess[str]:
+    try:
+        proc = subprocess.run(
+            ["git", "-c", "commit.gpgsign=false", *args], cwd=cwd,
+            env=_env_without_pin() if env is None else env,
+            input=input, capture_output=True, text=True, timeout=60,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise SelfError(f"git {' '.join(args)} timed out") from exc
     if check and proc.returncode != 0:
         detail = proc.stderr.strip() or proc.stdout.strip()
         raise SelfError(f"git {' '.join(args)} ({cwd}) -> {proc.returncode}: {detail}")
     return proc
 
 
-def _segment(value: str, what: str) -> str:
+def _segment(value: str, what: str | None = None) -> str | None:
     if (
         not value
         or value in {".", ".."}
@@ -79,7 +88,9 @@ def _segment(value: str, what: str) -> str:
         or "\\" in value
         or "\x00" in value
     ):
-        raise SelfError(f"{what} is not a single path segment: {value!r}")
+        if what is not None:
+            raise SelfError(f"{what} is not a single path segment: {value!r}")
+        return None
     return value
 
 
@@ -225,16 +236,7 @@ def _commit(repo: Path, message: str) -> None:
     env["GIT_AUTHOR_EMAIL"] = AUTHOR_EMAIL
     env["GIT_COMMITTER_NAME"] = AUTHOR_NAME
     env["GIT_COMMITTER_EMAIL"] = AUTHOR_EMAIL
-    proc = subprocess.run(
-        ["git", "-c", "commit.gpgsign=false", "commit", "-m", message],
-        cwd=repo,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        detail = proc.stderr.strip() or proc.stdout.strip()
-        raise SelfError(f"git commit ({repo}) -> {proc.returncode}: {detail}")
+    git(repo, "commit", "-m", message, env=env)
 
 
 def _enroll_person_email(self_dir: Path) -> None:
@@ -246,8 +248,7 @@ def _enroll_person_email(self_dir: Path) -> None:
     body push is refused by 20-labels. This is not a sandbox against a body
     deliberately overriding its identity or forging a label.
     """
-    proc = subprocess.run(["git", "config", "--global", "user.email"],
-                          capture_output=True, text=True)
+    proc = git(self_dir, "config", "--global", "user.email", check=False)
     email = proc.stdout.strip()
     if proc.returncode != 0 or not email or email == AUTHOR_EMAIL:
         return
