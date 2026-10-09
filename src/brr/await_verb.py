@@ -227,7 +227,7 @@ CLAUDE_BASH_DEFAULT_MAX_TIMEOUT_MS = 600_000
 #: closeout's control-file discovery.
 LEASE_RECORD_FILE = ".await-lease.json"
 
-_BRNRD_AWAIT_RE = re.compile(r"(?:^|[\s;&|(])(?:\S*/)?brnrd\s+await(?:\s|$)")
+_BRNRD_AWAIT_RE = re.compile(r"(?:^|[\s;&|(])(?:\S*/)?brnrd\s+await(?:[\s;&|)]|$)")
 
 
 def is_await_command(command: object) -> bool:

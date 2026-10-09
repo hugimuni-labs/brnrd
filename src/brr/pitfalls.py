@@ -132,14 +132,29 @@ def parse_pitfalls(dominion_dir: Path) -> list[Pitfall]:
     return pitfalls
 
 
+def is_retired_title(title: str) -> bool:
+    """True when the heading itself says the entry is spent.
+
+    The store's written form is ``## (retired …)``. A retired entry keeps
+    its triggers — the retirement notice often quotes them — so the matcher
+    would otherwise keep injecting a lesson the file has already closed.
+    """
+    return title.lstrip().startswith("(retired")
+
+
 def match(pitfalls: list[Pitfall], task_text: str) -> list[Pitfall]:
     """Return matching pitfalls, strongest trigger evidence first.
 
     Python's sort is stable, so equal-strength matches keep the file order.
+    Entries whose title starts with ``(retired`` are skipped: the trigger
+    still matches, and that is not a reason to inject a closed lesson.
     """
     if not task_text:
         return []
-    matched = [p for p in pitfalls if p.matches(task_text)]
+    matched = [
+        p for p in pitfalls
+        if not is_retired_title(p.title) and p.matches(task_text)
+    ]
     return sorted(matched, key=lambda p: p.match_score(task_text), reverse=True)
 
 

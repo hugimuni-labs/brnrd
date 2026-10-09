@@ -78,6 +78,7 @@ from .gates import BUILTIN_GATES as _BUILTIN_GATES
 from . import gate_receipt
 from . import claude_status
 from . import claude_usage
+from . import grok_usage
 from . import gitops
 from . import heddles
 from . import run_topic
@@ -3722,7 +3723,20 @@ def _pending_events_for_agent(
         for ev in protocol.list_pending(source_inbox):
             event_label = account.event_repo_label(ev)
             if repo_label and event_label and event_label != repo_label:
-                continue
+                # THE ROOM NEXT DOOR (2026-10-01): one resident slot serves
+                # every repo, so a person writing to repo B while the live
+                # seat sits in repo A waits behind that seat — and if the
+                # seat cannot see the message, its `await` never resolves
+                # and nothing ever frees the slot. Two schedule seats in
+                # Gurio/mistral-vibe sat deaf to four brnrd-thread messages
+                # until the maintainer killed both by hand. A person's
+                # message therefore stays visible across the repo boundary
+                # (marked, so the seat knows it is not standing in that
+                # checkout); internal traffic — schedules, strand returns —
+                # stays scoped to its own repo, and a strand sees none of it.
+                if strand or not _event_requires_thread_delivery(ev):
+                    continue
+                ev["foreign_repo"] = event_label
             if (
                 repo_label
                 and not event_label
@@ -4061,8 +4075,26 @@ def _collect_levels(
         return merged, frozenset(
             claude_usage.COLLECTED_SLOTS | claude_status.COLLECTED_SLOTS
         )
-    from . import vibe_usage
+    from . import grok_status, vibe_usage
 
+    if grok_status.supported(runner_name):
+        # Subscription quota is account state, shared across concurrent runs.
+        cache_dir = shared_dir or outbox_dir
+        usage = (
+            grok_usage.load_or_refresh_snapshot(cache_dir, cwd=work_dir, **probe_options)
+            if refresh else grok_usage.load_snapshot(cache_dir)
+        )
+        result = grok_status.load_snapshot(outbox_dir)
+        if result is None:
+            result = grok_status.mark_cross_run(
+                grok_status.load_snapshot(shared_dir)
+            )
+        merged = _merge_level_snapshots(usage, result)
+        # Unlike Claude's facet merge, the Grok envelope also feeds exact
+        # session token/model accounting. Keep those fields on the own-run path.
+        levels = {**(result or {}), **(usage or {}), **(merged or {})} or None
+        usage_samples.record(cache_dir, "grok", levels)
+        return levels, grok_usage.COLLECTED_SLOTS | grok_status.COLLECTED_SLOTS
     if vibe_usage.supported(runner_name):
         # Terminal per-session tokens feed the ledger. Subscription allowance,
         # dollar spend and context capacity have no collector on this seam.
@@ -4266,10 +4298,9 @@ def _record_boot_cost(
     envelope :mod:`brr.claude_status` otherwise depends on (which may be
     hours away on a long-held seat).
 
-    Claude-only for now — Codex's analogous first-request cost is a gap
-    this leaves open, named rather than guessed at (no ``TOKEN_WEIGHTS``-
-    style price table has been validated against Codex's own accounting
-    yet).
+    Codex and Vibe use their exact-session first-request counters via
+    breakeven.collect; no session identity means no reading. Native resumes
+    are excluded. The same allowance weights apply to all Shells.
 
     Retried every heartbeat until the transcript actually has a first
     ``usage`` row to read (``task.meta["boot_cost_recorded"]`` only flips
@@ -4279,13 +4310,48 @@ def _record_boot_cost(
     :func:`brr.claude_status.write_snapshot` preserves it across every
     later overwrite of the same control file.
     """
-    if not hasattr(task, "meta") or task.meta.get("boot_cost_recorded"):
+    if not hasattr(task, "meta"):
         return
-    if not claude_status.supported(runner_name):
+    from . import breakeven
+
+    cost_state = getattr(task, "_breakeven_cache", {})
+    for key in ("claude_session_id", "codex_thread_id"):
+        cost_state[key] = task.meta.get(key)
+    measured = breakeven.collect(cost_state, runner_name, work_dir, outbox_dir,
+                                not_before=not_before)
+    task._breakeven_cache = cost_state
+    task._breakeven_measurement = measured
+    if cost_state.get("break_even_multiple_sessions"):
+        task.meta["break_even_multiple_sessions"] = True
+    if task.meta.get("boot_cost_recorded"):
+        # Keep the growing first-few-request baseline beside the immutable boot.
+        snapshot = claude_status.load_snapshot(outbox_dir) or {}
+        boot = snapshot.get("boot") or {}
+        if task.meta.get("break_even_multiple_sessions"):
+            boot = {**boot, "accounting_version": None, "resumed": True}
+            claude_status.write_snapshot(outbox_dir, {**snapshot, "boot": boot})
+            return
+        if measured and boot.get("accounting_version") != 1 and not task.meta.get("resume_native_session_id"):
+            # The legacy meter can stamp a zero placeholder before billed
+            # usage arrives. Upgrade only the new measurement, retaining the
+            # old hold denominator byte-for-byte.
+            boot = {**boot, "weighted": measured["boot"],
+                    "hold_weighted": boot.get("hold_weighted", boot.get("weighted")),
+                    "accounting_version": 1}
+            claude_status.write_snapshot(outbox_dir, {**snapshot, "boot": boot})
+        if measured and boot.get("baseline") != measured.get("baseline"):
+            boot = {**boot, "baseline": measured.get("baseline"),
+                    "request": measured.get("boot_request"),
+                    "shell": measured.get("shell"), "core": measured.get("core")}
+            claude_status.write_snapshot(outbox_dir, {**snapshot, "boot": boot})
         return
-    tokens = allowance.claude_first_turn_boot_tokens(
-        allowance.latest_claude_transcript(work_dir, not_before=not_before)
-    )
+    resumed = bool(task.meta.get("resume_native_session_id"))
+    hold_tokens = None
+    if claude_status.supported(runner_name):
+        hold_tokens = allowance.claude_first_turn_boot_tokens(
+            allowance.latest_claude_transcript(work_dir, not_before=not_before)
+        )
+    tokens = measured.get("boot", hold_tokens) if not resumed else hold_tokens
     if tokens is None:
         return
     # Merge onto whatever this control file already holds — usually
@@ -4296,6 +4362,12 @@ def _record_boot_cost(
     payload = dict(existing) if isinstance(existing, dict) else {}
     payload["boot"] = {
         "weighted": tokens,
+        "hold_weighted": hold_tokens,
+        "shell": measured.get("shell"), "core": measured.get("core"),
+        "accounting_version": 1 if measured and not resumed else None,
+        "resumed": resumed,
+        "request": measured.get("boot_request"),
+        "baseline": measured.get("baseline", []),
         "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     written = claude_status.write_snapshot(outbox_dir, payload)
@@ -9005,7 +9077,8 @@ def _hold_ratio_facet(
     hold_so_far = max(0, int(self_spent) - int(baseline))
     boot_snapshot = claude_status.load_snapshot(outbox_dir) if outbox_dir else None
     boot = (boot_snapshot or {}).get("boot") if isinstance(boot_snapshot, dict) else None
-    boot_cost = boot.get("weighted") if isinstance(boot, dict) else None
+    # New Shell accounting must not enable/change the existing hold policy.
+    boot_cost = boot.get("hold_weighted", boot.get("weighted")) if isinstance(boot, dict) else None
     ratio = resource_hold.hold_boot_ratio(hold_so_far, boot_cost)
     hold_facet = {"ratio": ratio, "known": ratio is not None}
     if not _seat_park_on_hold_cost_enabled(cfg):
@@ -9384,11 +9457,18 @@ def _halt_spec(
 
     Mirrors ``pending_resource_hold``'s contract deliberately: staged by
     the outbox drain, acted on when this attempt's worker loop unwinds, so
-    the verb's effect lands at the same seam every other terminal outcome
-    does — never mid-drain, with half a turn's replies unsent.
+    run/environment finalization lands at the same seam as every other
+    terminal outcome. The letter's halt receipt is written at acceptance,
+    so a crash before this tail cannot reclaim it as unfinished mail.
     """
     return {
         "declaration": halt_verb.durable_declaration(declaration, dissent=dissent),
+        # The successor's brief, unclipped. The public record above is
+        # bounded at ``halt_verb._MAX_TEXT_CHARS``; the mint must not be —
+        # the bounce checked handles against the *whole* carry, so minting
+        # from the clipped copy let a handle pass the check and then vanish
+        # (run-261002-1511-6uxm's carry lost its watch-outs at 2,048 chars).
+        "brief": declaration.carry,
         "open_items": [item.line for item in open_items],
         "unnamed": list(dissent),
         "shell": declaration.shell,
@@ -11292,7 +11372,27 @@ def _fire_due_schedules(
         # list has had `replace(e, interval=...)` applied to it.
         _fingerprints = {e.id: schedule_mod.entry_fingerprint(e) for e in entries}
         _noticed_untiered: list = list(new_state.get(schedule_mod._NOTICED_UNTIERED_KEY) or [])
+        # #2212: an `every:` entry whose earlier firing is still unclaimed
+        # (status ``pending``) does not fire again. Pile-ups of identical
+        # letters are what starved a one-shot `at:` letter behind a live
+        # seat: claim order is oldest-first, so five queued goal pulses
+        # outranked the molt letter carrying real work. The cadence still
+        # advances (``new_state`` was computed above), so the entry fires
+        # on its next interval once the pending one is taken. A letter
+        # being processed doesn't count: a firing during a long run is a
+        # fresh occasion, not a duplicate.
+        unclaimed_every_ids = {
+            str(ev.get("schedule_id") or "")
+            for ev in protocol.list_pending(inbox_dir)
+            if ev.get("source") == "schedule" and ev.get("status") == "pending"
+        }
         for entry in due:
+            if entry.kind == "every" and entry.id in unclaimed_every_ids:
+                print(
+                    f"[brnrd] schedule: {entry.id} still has an unclaimed "
+                    "firing pending — coalesced, not re-fired (#2212)"
+                )
+                continue
             body = entry.body or f"(self-scheduled thought: {entry.id})"
             # Thread the firing so a recurring entry's wakes share a
             # readable history; default per-entry, overridable to an
@@ -11331,7 +11431,7 @@ def _fire_due_schedules(
                 schedule_id=entry.id,
                 conversation_key=conv,
                 repo_label=(
-                    account_context.default_repo.label
+                    account.current_default_label(account_context)
                     if account_context is not None and account_context.enabled
                     else _repo_label(repo_root, {}, cfg)
                 ),
@@ -13852,7 +13952,7 @@ def _persist_run_topics(
 # by ``test_capture_control_files_partition_is_total`` (a class defined by
 # listing its members meets the member nobody listed).
 _CONTROL_FILE_MODULES = (
-    relics, gate_receipt, claude_status, codex_usage, claude_usage,
+    relics, gate_receipt, claude_status, codex_usage, claude_usage, grok_usage,
     statusline, run_ledger, hooks_mod, portals, menus, pause,
 )
 # Matches a public (no leading underscore) module-level constant ending in
@@ -13950,6 +14050,7 @@ PRESERVED: dict[str, str] = {
     # the copy is a no-op on most runs and a real record on the runs where
     # it isn't.
     claude_usage.SNAPSHOT_NAME: "claude-usage-levels.json",
+    grok_usage.SNAPSHOT_NAME: "grok-usage-levels.json",
     # Codex's quota is account state by design (``_collect_probe``'s
     # ``codex`` branch: "one cache every reader shares, warm across runs
     # and daemon restarts" — its ``cache_dir`` is the account-shared dir
@@ -15602,6 +15703,8 @@ def _resource_hold_provider_for_runner(runner_name: str | None) -> str:
         return "codex"
     if name.startswith("claude"):
         return "claude"
+    if name == "grok" or name.startswith("grok-"):
+        return "grok"
     return name or "unknown"
 
 
@@ -16146,14 +16249,19 @@ def _finalize_halt(
         "open_items": list(halt_fields.get("open_items") or ()),
         "conversation_key": conversation_key,
     }
+    brief = str(halt_fields.get("brief") or "").strip()
     successor = _queue_halt_successor(
-        emit, task, repo_root, inbox_dir, eid, record, None,
+        emit, task, repo_root, inbox_dir, eid,
+        {**record, "carry": brief} if brief else record, None,
     )
     if successor:
         record["successor_event"] = successor
     task.meta["halt"] = record
     task.meta.pop("pending_halt", None)
     _write_terminal_halt_response(emit, task, event, responses_dir, resp_path, record)
+    # The announcement is queued. Settle before publishing the terminal run
+    # or preserving its worktree, so a crash cannot replay this old brief.
+    _set_event_run_outcome(event, HALTED_STATUS)
     halts_mod.record(
         account_home,
         run_id=task.id,
@@ -16181,7 +16289,6 @@ def _finalize_halt(
         except Exception as exc:  # noqa: BLE001 - bookkeeping never blocks an ending
             print(f"[brnrd] halt: shuttle release skipped ({exc})")
     task.update_status(HALTED_STATUS, runs_dir)
-    _set_event_status_if_present(event, "done")
     print(
         f"[brnrd] worker {eid}: halted ({record.get('kind')}) — "
         f"{str(record.get('reason') or '')[:80]}"
@@ -16234,12 +16341,13 @@ def _write_terminal_halt_response(
 def _native_session_id_for(task: Run) -> str | None:
     """The Shell-native session a parked *task* can be resumed into, if any.
 
-    codex ⇒ its ``codex_thread_id``; claude ⇒ its ``claude_session_id``,
-    **host env only** — Claude Code keys sessions by the cwd they ran in,
-    and a worktree / sandbox root is gone (or elsewhere) by the time a
-    resume dispatches, so recording one there would arm a ``native`` hold
-    that resumes into nothing. Anything else ⇒ ``None`` and the hold is
-    honestly ``unsupported``.
+    codex ⇒ its ``codex_thread_id``; claude ⇒ its ``claude_session_id``;
+    grok ⇒ its ``grok_session_id``. Claude and Grok are **host env only** —
+    both key sessions by the cwd they ran in, and a worktree / sandbox
+    root is gone (or elsewhere) by the time a resume dispatches, so
+    recording one there would arm a ``native`` hold that resumes into
+    nothing. Anything else ⇒ ``None`` and the hold is honestly
+    ``unsupported``.
     """
     meta = task.meta if hasattr(task, "meta") else {}
     shell = str(meta.get("runner_shell") or meta.get("runner_name") or "").lower()
@@ -16249,6 +16357,13 @@ def _native_session_id_for(task: Run) -> str | None:
         if str(getattr(task, "env", "") or meta.get("env") or "") != "host":
             return None
         return meta.get("claude_session_id") or None
+    if shell == "grok" or shell.startswith("grok-"):
+        # Grok keys sessions by the working directory they ran in, the same
+        # constraint Claude has: a worktree root is gone by the time a hold
+        # resumes, so only a host run arms a native resume.
+        if str(getattr(task, "env", "") or meta.get("env") or "") != "host":
+            return None
+        return meta.get("grok_session_id") or None
     return None
 
 
@@ -17634,11 +17749,12 @@ def _set_event_run_outcome(event: dict, outcome: str) -> bool:
     (``gates/runtime.py``'s poll loop).
     """
     try:
-        protocol.update_event_meta(event, run_outcome=outcome)
+        # One frontmatter write: a stale in-memory status must not turn the
+        # disposition into a silent no-op, or expose an outcome without it.
+        protocol.update_event_meta(event, status="done", run_outcome=outcome)
     except OSError:
         return False
-    event["run_outcome"] = outcome
-    return _set_event_status_if_present(event, "done")
+    return True
 
 
 # ── Worker-tail housekeeping ────────────────────────────────────────

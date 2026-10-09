@@ -287,7 +287,13 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
     # no-op otherwise except one log line so the scope is visible rather
     # than assumed.
     _pause_seen_ids: set[str] | None = None
-    if runner_name != "claude" and attempt == 1:
+    # The gate is the *Shell*, not the profile name: `runner_name` is the
+    # catalog profile (`claude-opus`, `claude-fable`, …), so comparing it
+    # to "claude" switched pause-on-message off for every named claude
+    # profile — the maintainer's dashboard default included (seen live
+    # 2026-10-01: "runner 'claude-opus' is not claude").
+    runner_shell = str((runner_meta or {}).get("shell") or runner_name or "").strip().lower()
+    if runner_shell != "claude" and attempt == 1:
         print(
             f"[brnrd] pause-on-message: {eid} attempt {attempt} runner "
             f"{runner_name!r} is not claude — no-op (unmeasured cap "
@@ -296,7 +302,7 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
 
     def _maybe_pause() -> None:
         nonlocal _pause_seen_ids
-        if runner_name != "claude" or not daemon._seat_pause_on_message(cfg):
+        if runner_shell != "claude" or not daemon._seat_pause_on_message(cfg):
             return
         if pause.read_paused_record(outbox_dir):
             return  # a pause is already in effect; wait for its release
@@ -414,6 +420,8 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
     if getattr(result, "claude_session_id", None):
         # The claude half of the same fact, same per-run home.
         task.meta["claude_session_id"] = result.claude_session_id
+    if getattr(result, "grok_session_id", None):
+        task.meta["grok_session_id"] = result.grok_session_id
     daemon._emit_new_containers(emit, task.id, env_ctx, seen_containers)
     # Tier-2 Stop is a synchronous portal boundary: the runner cannot
     # return until the matching flush token has been accepted. A normal

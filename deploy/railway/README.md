@@ -8,8 +8,7 @@ Railway service, on *your* login; brnrd.dev only relays messages and status
 (`connect.md`). Your model credential and GitHub token live in your Railway
 project's variables and volume.
 
-**No web app, no port.** The daemon serves no public dashboard: its only local
-listener (`brnrd loom`) binds `127.0.0.1` only (`src/brr/loom/server.py`), and
+**No web app, no port.** The daemon serves no dashboard and opens no listener;
 the dashboard people mean is the hosted one at brnrd.dev. So the template has
 **public networking off** and no healthcheck. The image at the repo root is the
 hosted backend (uvicorn on `PORT`); `src/brr/Dockerfile` is the strand runner

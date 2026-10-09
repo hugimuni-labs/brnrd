@@ -1,0 +1,19 @@
+{
+  "run": "run-261001-2125-3e63",
+  "shell": "claude",
+  "core": "claude-opus-5-5",
+  "source_files": [
+    "1df70962-1978-4d1c-b5a1-7bea2513080b.jsonl"
+  ],
+  "state": {
+    "id": "run-261001-2125-3e63",
+    "runner_shell": "claude",
+    "runner_core": "opus",
+    "core_observed": "claude-opus-5-5",
+    "started_at": "2026-10-01T21:26:08Z"
+  },
+  "measured": {
+    "B": 97136,
+    "c0": 14288
+  }
+}

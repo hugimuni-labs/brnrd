@@ -1,0 +1,33 @@
+# Copy this file to `.github/workflows/immune.yml` in the self.
+# The push command is the one the contract names. pull_request has no
+# github.event.before, so that event uses the PR's base and head — same
+# check, the shas that exist on that event. fetch-depth: 0 because
+# merge-base has to see <old>.
+name: immune
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  immune:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: immune
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            old="${{ github.event.pull_request.base.sha }}"
+            new="${{ github.event.pull_request.head.sha }}"
+          else
+            old="${{ github.event.before }}"
+            new="${{ github.sha }}"
+          fi
+          # The incumbent judges: run core/immune from the main being replaced.
+          script=core/immune
+          case "$old" in
+            ""|*[!0]*) git show "$old:core/immune" >"$RUNNER_TEMP/immune" && script="$RUNNER_TEMP/immune" ;;
+          esac
+          sh "$script" "$old" "$new"

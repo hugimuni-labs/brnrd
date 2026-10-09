@@ -1,0 +1,5 @@
+{"payload": {"action_id": "98fbd8f7-9c00-5027-b3b1-9378026ab74c", "result": {"result": {"usage": {"cached_input_tokens": 640, "input_tokens": 40278, "output_tokens": 380, "total_tokens": 40658}}}}, "type": "action_result"}
+{"payload": {"action_id": "77b11004-5540-5add-aa63-d1061d38edee", "result": {"result": {"usage": {"cached_input_tokens": 40192, "input_tokens": 40814, "output_tokens": 192, "total_tokens": 41006}}}}, "type": "action_result"}
+{"payload": {"action_id": "53fb3382-0c4b-50e3-b644-8a388b48f397", "result": {"result": {"usage": {"cached_input_tokens": 40704, "input_tokens": 41120, "output_tokens": 91, "total_tokens": 41211}}}}, "type": "action_result"}
+{"payload": {"action_id": "89a9f365-10ee-5e45-a6dd-d4d1b687aedd", "result": {"result": {"usage": {"cached_input_tokens": 41088, "input_tokens": 41355, "output_tokens": 61, "total_tokens": 41416}}}}, "type": "action_result"}
+{"payload": {"action_id": "3f7feeaf-8e77-56b2-815b-7fb439bea378", "result": {"result": {"usage": {"cached_input_tokens": 41344, "input_tokens": 41558, "output_tokens": 53, "total_tokens": 41611}}}}, "type": "action_result"}

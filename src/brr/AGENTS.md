@@ -81,8 +81,8 @@ Daemon and setup stages take their hot-path context from the prompt and
 don't have these drift cases.
 
 **Vocabulary anchor.** A **Runner** = a **Shell** (the CLI on PATH:
-`claude`, `codex`) + a **Core** (the model: `opus`, `sonnet`,
-`gpt-5-codex`). The **resident** is the persistent spirit/identity that
+`claude`, `codex`, `grok`, `vibe`) + a **Core** (the model: `opus`,
+`sonnet`, `gpt-5-codex`, `grok-4.7`). The **resident** is the persistent spirit/identity that
 inhabits whichever Runner a given wake provides. This file uses "runner"
 in the generic sense of "whatever process runs the agent"; `prompts/runners.md`
 catalogs the concrete Shell+Core profiles. In user-facing config the knobs

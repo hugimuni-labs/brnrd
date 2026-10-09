@@ -226,6 +226,37 @@ def test_fire_due_every_anchors_then_fires(tmp_path):
     assert [e["schedule_id"] for e in pending] == ["upkeep"]
 
 
+def test_fire_due_every_coalesces_while_a_firing_is_unclaimed(tmp_path):
+    """#2212: identical `every:` firings must not pile up behind a busy seat."""
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    inbox = brr_dir / "inbox"
+    path = dominion.ensure_dominion(repo, push=False)
+    _write_schedule(path, "## Upkeep\nevery: 60s\nrun upkeep\n")
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {})  # anchor
+
+    def _elapse():
+        state = schedule.load_state(brr_dir)
+        state["upkeep"] = {"kind": "every", "last_fired": 0.0}
+        schedule.save_state(brr_dir, state)
+
+    _elapse()
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {})
+    first = protocol.list_pending(inbox)
+    assert [e["schedule_id"] for e in first] == ["upkeep"]
+
+    # Due again while the first firing is still unclaimed: no second letter.
+    _elapse()
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {})
+    assert [e["id"] for e in protocol.list_pending(inbox)] == [first[0]["id"]]
+
+    # Once the first is claimed (processing), the next interval fires again.
+    protocol.set_status(first[0], "processing")
+    _elapse()
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {})
+    assert len(protocol.list_pending(inbox)) == 2
+
+
 # ── armed dated-letters snapshot (#904) ───────────────────────────────
 
 
@@ -918,3 +949,53 @@ def test_undefer_held_event_finds_the_letter_in_a_sibling_drawer(tmp_path, capsy
     # no-op reads exactly like a successful release.
     daemon._undefer_held_event(drawers, "evt-does-not-exist")
     assert "resolved in none of" in capsys.readouterr().out
+
+
+def test_fire_due_reads_the_default_the_registry_holds_now(tmp_path):
+    """A schedule firing follows the account default on disk, not the boot snapshot.
+
+    2026-10-01: the account default was restored by hand mid-day, but the
+    daemon had resolved its context at boot under the wrong default, so every
+    schedule entry kept firing into the other repo — where its seat could not
+    hear the maintainer's chat.
+    """
+    repo = _repo(tmp_path)
+    other = _repo(tmp_path, "other")
+    brr_dir = repo / ".brr"
+    inbox = brr_dir / "inbox"
+    home = tmp_path / "account-home"
+    cfg = {"home.path": str(home), "repo.label": "Gurio/brr"}
+    ctx = account.resolve_context(repo, cfg)
+    account.register_repo(ctx, other, label="Gurio/other", make_default=True)
+    booted = account.resolve_context(repo, cfg)
+    assert booted.default_repo.label == "Gurio/other"  # the snapshot the daemon holds
+
+    # The repair lands on disk after boot.
+    account.register_repo(booted, repo, label="Gurio/brr", make_default=True)
+    assert booted.default_repo.label == "Gurio/other"  # snapshot unchanged
+    assert account.current_default_label(booted) == "Gurio/brr"
+
+    repo_dom = account.repo_dominion_path(booted, "Gurio/brr")
+    dominion.seed_account_dominion(repo_dom)
+    past = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60))
+    _write_schedule(repo_dom, f"## Followup\nat: {past}\nfollow up\n")
+
+    daemon._fire_due_schedules(repo, brr_dir, inbox, cfg, account_context=booted)
+
+    pending = protocol.list_pending(inbox)
+    assert len(pending) == 1
+    assert pending[0]["repo_label"] == "Gurio/brr"
+
+
+def test_current_default_label_ignores_an_unregistered_label(tmp_path):
+    repo = _repo(tmp_path)
+    home = tmp_path / "account-home"
+    cfg = {"home.path": str(home), "repo.label": "Gurio/brr"}
+    ctx = account.resolve_context(repo, cfg)
+    registry = account.context_home_root(ctx) / account.REGISTRY_PATH
+    import json
+
+    raw = json.loads(registry.read_text(encoding="utf-8"))
+    raw["default_repo"] = "Nobody/unknown"
+    registry.write_text(json.dumps(raw), encoding="utf-8")
+    assert account.current_default_label(ctx) == "Gurio/brr"

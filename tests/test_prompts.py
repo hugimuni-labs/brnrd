@@ -971,15 +971,15 @@ class TestPromptBuilding:
 
         prompt = build_run_prompt("do something", tmp_path)
 
-        assert "owner := product" in prompt
+        assert "owner ~ product" in prompt
         assert "core := durable identity" in prompt
         assert _says(prompt, "SEAMS")
         assert _says(prompt, "Fluency :=")
         assert _says(prompt, "Your dominion (working memory)")
-        assert prompt.index("owner := product") < prompt.index(
+        assert prompt.index("owner ~ product") < prompt.index(
             "Your dominion (working memory)"
         )
-        assert prompt.index("owner := product") < prompt.index("Task:")
+        assert prompt.index("owner ~ product") < prompt.index("Task:")
 
     def test_identity_core_ignores_runtime_prompt_override(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
@@ -989,7 +989,7 @@ class TestPromptBuilding:
         )
 
         block = _build_identity_core_block(tmp_path)
-        assert "owner := product" in block
+        assert "owner ~ product" in block
         assert "Runtime override" not in block
 
     def test_run_prompt_includes_context(self, tmp_path):
@@ -1193,7 +1193,7 @@ class TestPromptBuilding:
             run_id="task-9",
             strand=True,
         )
-        assert "owner := product" in prompt
+        assert "owner ~ product" in prompt
         assert _says(prompt, "Pitfalls that match this task")
         assert "Blind retry" in prompt
         assert _says(prompt, "Rebuild the image before you trust the cache.")
@@ -1221,7 +1221,7 @@ class TestPromptBuilding:
             run_id="task-9",
             strand=True,
         )
-        assert "owner := product" in prompt
+        assert "owner ~ product" in prompt
         assert "Work surface" in prompt
 
     def test_daemon_prompt_worker_omits_pitfalls_when_nothing_matches(
@@ -1243,7 +1243,7 @@ class TestPromptBuilding:
         )
         assert not _says(prompt, "Pitfalls that match this task")
         assert "Blind retry" not in prompt
-        assert "owner := product" in prompt
+        assert "owner ~ product" in prompt
 
     def test_daemon_prompt_worker_still_sees_web_capability(self, tmp_path):
         # Workers skip the resident inject stack but still get the bundle —
@@ -1261,7 +1261,7 @@ class TestPromptBuilding:
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
             run_id="task-9",
         )
-        assert "owner := product" in prompt
+        assert "owner ~ product" in prompt
         assert "bounded, single-purpose thought" not in prompt
 
     def test_daemon_prompt_surfaces_runner_medium(self, tmp_path):
@@ -1538,7 +1538,10 @@ class TestPromptBuilding:
         assert _says(prompt, "plan / todo boundaries")
         assert _says(prompt, "immediately before a terminal closeout")
         assert _says(prompt, "after the runner has returned")
-        assert _says(prompt, "dispatched by the daemon at turn end")
+        assert _says(prompt, "dispatched at turn end")
+        # a seat's turn end is its exit: the pin that says so must ride every wake
+        assert _says(prompt, "lives exactly as long as its turn")
+        assert _says(prompt, "stdout = last words")
         assert _says(prompt, "nobody re-runs you to extract a sentence")
         assert _says(prompt, "`gate: forge` = the explicit PR handoff")
         assert _says(prompt, "never owns PR creation")
@@ -1755,6 +1758,63 @@ class TestPromptBuilding:
         assert _says(prompt, "hey are you there")
         assert _says(prompt, "found it, never mind")
         assert "also:" in prompt
+
+    def test_waking_body_renders_once_when_the_burst_and_instruction_repeat_it(
+        self, tmp_path,
+    ):
+        """The waking message used to land three times: the pending copy,
+        the appended waking-event copy, and ``Run instruction:`` when the
+        task was that body plus a recovery suffix. Ids, order, and the
+        ``also:`` hint stay; the body does not.
+        """
+        body = "the message itself, said once"
+        prompt = build_daemon_prompt(
+            body + "\n\nRecovery checkpoint (previous Shell stopped):\n{}",
+            "evt-new", "/tmp/resp.md", tmp_path,
+            run_id="task-A",
+            event_body=body,
+            event_created="2026-09-09T01:42:00Z",
+            event_meta={
+                "id": "evt-new", "source": "telegram",
+                "telegram_chat_id": "555", "telegram_user": "Gurio",
+                "telegram_username": "StasisRush",
+                "created": "2026-09-09T01:42:00Z",
+                "body": body,
+            },
+            pending_events=[
+                {
+                    "id": "evt-new", "source": "telegram",
+                    "telegram_chat_id": "555", "telegram_user": "Gurio",
+                    "telegram_username": "StasisRush",
+                    "created": "2026-09-09T01:42:00Z",
+                    "body": body,
+                },
+                {
+                    "id": "evt-old", "source": "telegram",
+                    "telegram_chat_id": "555", "telegram_user": "Gurio",
+                    "telegram_username": "StasisRush",
+                    "created": "2026-09-09T01:41:00Z",
+                    "body": "the earlier sibling",
+                },
+            ],
+        )
+        assert prompt.count(body) == 1
+        assert prompt.count("— evt-new — waking event") == 1
+        assert "the earlier sibling" in prompt
+        assert "evt-old" in prompt
+        assert prompt.index("evt-old") < prompt.index("— evt-new — waking event")
+        assert "also:" in prompt
+        assert prompt.count("Recovery checkpoint") == 1
+        assert "Run instruction:" not in prompt
+
+    def test_a_distinct_run_instruction_still_follows_the_event_body(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "do the other thing",
+            "evt-1", "/tmp/resp.md", tmp_path,
+            event_body="the user's words",
+        )
+        assert "the user's words" in prompt
+        assert "Run instruction: do the other thing" in prompt
 
     def test_daemon_prompt_burst_listing_requires_a_resolvable_identity(
         self, tmp_path,
@@ -3637,9 +3697,9 @@ class TestWorkSurfaceInjection:
     def test_shelf_pages_ride_as_an_index_line(self, tmp_path):
         """#2002 — a shelf page never enters the per-page walk by default;
         it rides the wake as one composed-index line (basename · keeps ·
-        bytes) instead of a full ``### shelf/<name>.md`` section, and an
-        expired one's ``keeps:`` text renders in place rather than being
-        swept into the lifecycle-omitted count.
+        bytes) instead of a full ``### shelf/<name>.md`` section. An
+        expired page collapses further, to its name on one ``expired:``
+        line, rather than a keeps-row or a lifecycle-omitted count.
         """
         home = _seed_account_home(tmp_path)
         surface = home / "surface"
@@ -3667,7 +3727,8 @@ class TestWorkSurfaceInjection:
         assert "Old reading" not in result
         assert "the shelf & archive — index" in result
         assert "`artifact.md` · keeps: until changed ·" in result
-        assert "`old.md` · keeps: expired 2026-08-19" in result
+        assert "expired: old.md" in result
+        assert "`old.md` · keeps:" not in result
 
     def test_shelf_page_opts_back_into_the_walk_with_wake_full(self, tmp_path):
         """The escape hatch: a shelf page whose subject is live declares
@@ -5019,6 +5080,57 @@ def test_prior_run_block_skips_a_strands_own_node_even_when_newer(tmp_path):
     assert "Still working" not in block
 
 
+def test_prior_run_block_skips_a_failed_foreign_body_strand_without_parent_id(tmp_path):
+    """Daemon2 strand nodes often have ``source: spawn`` and no ``parent_run_id``.
+
+    The newest such node is a failed run on another Shell. It is not this
+    seat's last stretch, and the ``parent_run_id`` guard alone lets it
+    through. ``source: spawn`` is the fact the continuity picker already
+    skips.
+    """
+    import os
+
+    from brr import prompts
+
+    repo = tmp_path / "repo"
+    (repo / ".brr").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / ".brr" / "config").write_text(
+        f"repo.label=Gurio/brr\nhome.path={tmp_path / 'home'}\n", encoding="utf-8",
+    )
+    runs = tmp_path / "home" / "runs" / "Gurio__brr"
+
+    own = runs / "run-seat"
+    own.mkdir(parents=True)
+    (own / "state.md").write_text(
+        "---\nrun_id: run-seat\nstatus: done\nstage: finished\n"
+        "source: cloud\nrunner_name: claude-opus\n---\n",
+        encoding="utf-8",
+    )
+    (own / "body.md").write_text("## Now\n\nThe seat's own stretch.\n", encoding="utf-8")
+
+    foreign = runs / "run-foreign"
+    foreign.mkdir(parents=True)
+    (foreign / "state.md").write_text(
+        "---\nrun_id: run-foreign\nstatus: error\nstage: finished\n"
+        "source: spawn\nrunner_name: vibe-glm-5-3\nrunner_shell: vibe\n---\n",
+        encoding="utf-8",
+    )
+    (foreign / "body.md").write_text(
+        "## Now\n\nFailed on another shell.\n", encoding="utf-8",
+    )
+
+    now = tmp_path.stat().st_mtime
+    os.utime(own / "body.md", (now - 100, now - 100))
+    os.utime(foreign / "body.md", (now, now))
+
+    block = prompts._build_prior_run_block(repo)
+    assert "The seat's own stretch." in block
+    assert "run-seat" in block
+    assert "Failed on another shell." not in block
+    assert "run-foreign" not in block
+
+
 def test_prior_run_node_falls_through_when_only_strand_nodes_exist(tmp_path):
     from brr import prompts
 
@@ -5727,9 +5839,12 @@ class TestPitfallCitesClosedIssueReachesTheWake:
         block = _build_notes_health_block(repo)
 
         assert "pitfall-cites-closed-issue" in block
-        assert _says(block, "Host strand clone shape")
-        assert "#1298" in block
-        assert "2026-08-05" in block
+        assert "1 entry cites a closed ticket" in block
+        assert "`brnrd notes check`" in block
+        # The title and the ticket stay on the Finding (`brnrd notes check`
+        # prints it). The wake line is the count.
+        assert "Host strand clone shape" not in block
+        assert "#1298" not in block
 
     def test_a_retired_entry_stays_quiet_even_citing_the_same_closed_ticket(
         self, tmp_path, monkeypatch

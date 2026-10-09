@@ -21,6 +21,7 @@ import requests
 
 from .. import claude_status, claude_usage, codex_status, codex_usage, emotes, gitops, presence, protocol, run_ledger, run_progress, runner_quota, usage_samples
 from .. import conversations, dominion, run_stop_request, schedule as schedule_mod, wake_request
+from .. import grok_usage
 from ..cli import brnrd_cmd
 from ..gates.github.parse import parse_origin_url
 from ..run import Run, list_runs, run_manifest_path
@@ -80,6 +81,7 @@ _PUBLISHER_COMPAT_NAMES = (
     "_codex_quota_shell",
     "_claude_week_model_windows",
     "_claude_quota_shell",
+    "_grok_quota_shell",
     "_claude_credits_block",
     "_quota_snapshot",
     "_shell_level_label",

@@ -1,0 +1,29 @@
+<?xml version="1.0" ?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-labelledby="title desc">
+  <title id="title">The self is a repository; I am the merge</title>
+  <desc id="desc">Eight scenes explain a proposed design: signed main, parallel stream branches, body recovery, boundary broadcasts, reviewed merges, scheduled forks, layered wakes, and the first-parent view. Static alternatives are in self-explainer-frames/01.svg through 08.svg.</desc>
+  <style>text{font-family:monospace;font-variant-ligatures:none}</style>
+  <rect width="1200" height="675" fill="#101724"/>
+  <text x="64" y="54" font-size="30" fill="#aab6c8" text-anchor="start">brnrd self / proposed design</text>
+  <text x="1136" y="54" font-size="30" fill="#aab6c8" text-anchor="end">01 / 08</text>
+  <text x="64" y="115" font-size="52" fill="#f0f4fa" text-anchor="start">01  main</text>
+  <text x="64" y="157" font-size="30" fill="#aab6c8" text-anchor="start">One keeper holds the signature.</text>
+  <text x="64" y="356" font-size="34" fill="#a9f3cc" text-anchor="start">main</text>
+  <path d="M 180 345 H 1080" fill="none" stroke="#a9f3cc" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="260" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+  <circle cx="1080" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+  <text x="1080" y="407" font-size="38" fill="#a9f3cc" text-anchor="middle">b·_·d</text>
+  <text x="1080" y="446" font-size="30" fill="#aab6c8" text-anchor="middle">keeper</text>
+  <circle cx="260" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+  <text x="260" y="300" font-size="36" fill="#a9f3cc" text-anchor="middle">core</text>
+  <circle cx="490" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+  <text x="490" y="300" font-size="36" fill="#a9f3cc" text-anchor="middle">notebook</text>
+  <circle cx="720" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+  <text x="720" y="300" font-size="36" fill="#a9f3cc" text-anchor="middle">warp</text>
+  <circle cx="950" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+  <text x="950" y="300" font-size="36" fill="#a9f3cc" text-anchor="middle">intentions</text>
+  <circle cx="1080" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+  <path d="M 64 555 H 1136" fill="none" stroke="#354257" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="64" y="603" font-size="36" fill="#f0f4fa" text-anchor="start">the self is a repository;</text>
+  <text x="64" y="641" font-size="36" fill="#f0f4fa" text-anchor="start">main is what I signed</text>
+</svg>

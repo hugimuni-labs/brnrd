@@ -107,7 +107,7 @@ HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "emotes",
     "relic", "gate-run", "close-check", "promise", "act", "mood", "do", "notes",
     "await", "cut", "legend", "item", "asks", "goal", "queue", "envoy",
-    "dominion", "hud", "loom", "states",
+    "dominion", "hud", "states",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -331,6 +331,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = account_sub.add_parser("add", help="add a repo to the connected account home")
     p.add_argument("repo", help="repo path to add")
+    p.add_argument("--default", action="store_true",
+                   help="also make it the account default (where schedules fire)")
     p.set_defaults(func=cmd_add)
 
     p = account_sub.add_parser("connect", help="link this daemon to brnrd")
@@ -520,6 +522,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="run the foreground daemon instead of the installed service")
         q.add_argument("--dev-reload", action="store_true", default=None,
                        help="developer: re-exec daemon when brnrd package files change")
+        q.add_argument("--engine", choices=("1", "2"), default="1",
+                       help="daemon engine (default: 1; 2 is the opt-in replacement)")
         q.set_defaults(func=cmd_daemon_up)
         return q
 
@@ -1201,20 +1205,6 @@ def build_parser() -> argparse.ArgumentParser:
              "BRR_OUTBOX_DIR / BRR_PORTAL_STATE)")
     hud_p.set_defaults(func=cmd_hud)
 
-    # Hidden per HIDDEN_COMMANDS while the loom screen is a proposal: the
-    # public list is a ceiling a verb argues its way onto
-    # (test_help_stays_small_enough_to_read). Read-only in v1.
-    loom_p = sub.add_parser("loom")
-    loom_p.add_argument(
-        "--port", type=int, default=7777,
-        help="port on 127.0.0.1 to serve /loom on (0 = any free port; default 7777)")
-    loom_p.add_argument(
-        "--open", action="store_true",
-        help="open the loom page in the browser once the listener is bound")
-    loom_p.add_argument(
-        "--once", action="store_true",
-        help="print /loom/state.json once and exit — no listener")
-    loom_p.set_defaults(func=cmd_loom)
 
     p = sub.add_parser("kb", help="search home/repo knowledge; omit query to print graph shape")
     p.add_argument("query", nargs="?", default=None,
@@ -1303,6 +1293,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = runners_sub.add_parser("_vibe", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_vibe_runner)
+
+    p = runners_sub.add_parser("_grok", help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_grok_runner)
 
     p = runners_sub.add_parser(
         "list",
@@ -5181,6 +5174,12 @@ def cmd_vibe_runner(args):
     raise SystemExit(vibe_runner.main())
 
 
+def cmd_grok_runner(args):
+    from . import grok_runner
+
+    raise SystemExit(grok_runner.main())
+
+
 def cmd_runners_list(args):
     """List the unified runner catalog — the one projection for all consumers.
 
@@ -5761,50 +5760,6 @@ def cmd_hud(args):
         print(_hud_card_halves(Path(outbox_dir), current.to_dict()))
     else:
         print(hud_mod.render_bar(current, outbox_dir=Path(outbox_dir)))
-    return 0
-
-
-def cmd_loom(args):
-    """``brnrd loom`` — serve the loom screen on ``http://127.0.0.1:<port>/loom``.
-
-    The repo root and account home resolve the way ``brnrd hud --topic``
-    resolves them. ``--once`` prints :func:`brr.loom.state.build` as JSON and
-    exits (the test hook and the reviewer's tool); otherwise the listener
-    serves until Ctrl-C. Binds ``127.0.0.1`` only; writes nothing.
-    """
-    import json
-    import sys
-
-    from . import account
-    from . import config as conf
-    from .loom import server as loom_server
-    from .loom import state as loom_state
-
-    repo_root = _repo_root()
-    cfg = conf.load_config(repo_root)
-    ctx = account.resolve_context(repo_root, cfg, create=False)
-    home = account.context_home_root(ctx)
-    if args.once:
-        payload = loom_state.build(repo_root, home)
-        sys.stdout.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
-        return 0
-    try:
-        listener = loom_server.make_server(repo_root, home, port=args.port)
-    except OSError as exc:
-        print(f"brnrd loom: cannot listen on 127.0.0.1:{args.port} — {exc}", file=sys.stderr)
-        return 1
-    print(f"brnrd loom: serving {listener.url} (Ctrl-C to stop)", flush=True)
-    if args.open:
-        import webbrowser
-
-        webbrowser.open(listener.url)
-    try:
-        listener.serve_forever(poll_interval=0.25)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        listener.stopping.set()
-        listener.server_close()
     return 0
 
 
@@ -6537,8 +6492,21 @@ def cmd_add(args):
     repo_root = _repo_root_from_arg(args.repo)
     target_cfg = conf.load_config(repo_root)
     label = account.repo_label(repo_root, target_cfg)
-    account.register_repo(ctx, repo_root, label=label)
+    make_default = bool(getattr(args, "default", False))
+    # Adding a repo used to make it the account default as a side effect.
+    # The default decides where every schedule fires and which runtime the
+    # cloud loop reads, so a strand registering a sibling checkout
+    # (2026-09-29, Gurio/mistral-vibe) silently moved the whole residency
+    # there. Moving the default is now its own explicit act.
+    account.register_repo(ctx, repo_root, label=label, make_default=make_default)
     print(f"[brnrd] added {label} to account home {ctx.dominion_repo}")
+    if make_default:
+        print(f"[brnrd] {label} is now the account default")
+    else:
+        print(
+            f"[brnrd] account default unchanged: {ctx.default_repo.label} "
+            f"(`{brnrd_cmd()} account add --default` moves it)"
+        )
 
 
 def _print_link_ceremony(owner: str, dominion_name: str, knowledge_name: str) -> None:
@@ -7282,6 +7250,65 @@ def cmd_up(args):
             "`brnrd daemon install` from the repo to refresh the pinned "
             "working directory"
         )
+    if getattr(args, "engine", "1") == "2":
+        import os
+        import signal
+        from . import account, config as conf, dev_reload
+        from .daemon2.runtime import Daemon2
+
+        brr_dir = gitops.shared_brr_dir(root)
+        if daemon_mod.read_pid(brr_dir):
+            raise SystemExit("[brnrd] daemon already running")
+        ctx = account.resolve_context(root, conf.load_config(root))
+        if ctx.enabled:
+            home = ctx.home_root or ctx.dispatch_inbox.parent.parent
+            inbox, responses = ctx.dispatch_inbox, ctx.responses_dir
+        else:
+            home = brr_dir
+            inbox, responses = brr_dir / "inbox", brr_dir / "responses"
+        replacement = Daemon2(root, home, runtime_dir=brr_dir,
+                              inbox_dir=inbox, responses_dir=responses,
+                              dev_reload_enabled=args.dev_reload)
+        dev_reload.clear_reexec_marker()
+        dev_reload.capture_image_fingerprint()
+        previous_term = signal.getsignal(signal.SIGTERM)
+        previous_int = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGTERM, lambda _sig, _frame: replacement.stop())
+        signal.signal(signal.SIGINT, lambda _sig, _frame: replacement.stop())
+        brr_dir.mkdir(parents=True, exist_ok=True)
+        daemon_mod._write_pid(brr_dir)
+        engine_marker = brr_dir / "daemon2.active"
+        engine_marker.write_text(str(os.getpid()) + "\n")
+        import subprocess
+        from .daemon2.runtime import strand_worker_argv, strand_worker_count
+        log_path = brr_dir / "daemon2-strand-workers.log"
+        workers: list[subprocess.Popen] = []
+        try:
+            with open(log_path, "ab") as worker_log:
+                for _ in range(strand_worker_count(conf.load_config(root))):
+                    workers.append(subprocess.Popen(
+                        strand_worker_argv(root, home, brr_dir, inbox, responses),
+                        stdin=subprocess.DEVNULL, stdout=worker_log,
+                        stderr=worker_log))
+            # With followers carrying strands, the resident loop serves only
+            # resident letters: a strand it picked up would hold the self
+            # seat (and every message) for the strand's whole life.
+            replacement.serve(role="resident" if workers else "any")
+        finally:
+            for worker in workers:
+                if worker.poll() is None:
+                    worker.terminate()
+            for worker in workers:
+                try:
+                    worker.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    worker.kill()
+            if daemon_mod.read_pid(brr_dir) == os.getpid():
+                daemon_mod._clear_pid(brr_dir)
+                engine_marker.unlink(missing_ok=True)
+            signal.signal(signal.SIGTERM, previous_term)
+            signal.signal(signal.SIGINT, previous_int)
+        return 0
     daemon_mod.start(root, dev_reload=args.dev_reload)
 
 
@@ -7304,6 +7331,8 @@ def cmd_daemon_up(args):
     ``--dev-reload`` is a foreground concept the service cannot carry, and
     delegating would silently drop it.
     """
+    if getattr(args, "engine", "1") == "2":
+        return cmd_up(args)
     if not args.foreground and args.dev_reload is None:
         from . import daemon_install
         code = daemon_install.start_service()
@@ -7318,6 +7347,13 @@ def cmd_daemon_up(args):
 
 
 def cmd_daemon_down(args):
+    from . import daemon as daemon_mod
+    brr_dir = _maybe_brr_dir()
+    if brr_dir is not None and (brr_dir / "daemon2.active").exists():
+        if daemon_mod.stop(brr_dir):
+            print("[brnrd] daemon2 stopping")
+            return 0
+        (brr_dir / "daemon2.active").unlink(missing_ok=True)
     from . import daemon_install
     code = daemon_install.stop_service()
     if code is not None:
@@ -7326,6 +7362,14 @@ def cmd_daemon_down(args):
 
 
 def cmd_daemon_status(args):
+    from . import daemon as daemon_mod
+    brr_dir = _maybe_brr_dir()
+    if brr_dir is not None and (brr_dir / "daemon2.active").exists():
+        pid = daemon_mod.read_pid(brr_dir)
+        if pid is not None:
+            print(f"[brnrd] daemon2 running (pid {pid})")
+            return 0
+        (brr_dir / "daemon2.active").unlink(missing_ok=True)
     from . import daemon_install
     return daemon_install.status(direct_brr_dir=_maybe_brr_dir())
 

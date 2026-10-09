@@ -46,98 +46,39 @@ reference: `brnrd prompts show` ⇒ blocks + cost
 
 {{BODY verbatim: prompts/daemon-substrate.md}}
 
-### `brnrd do` — the verdict rides the act
+### `brnrd do` — at a glance
 
-porcelain over the grammar above ≠ a new channel · every write = one of the same outbox files, staged and drained the way a hand-written `note.md` / `event: <id>` reply is
-adds the read-back: stages the file · waits for the daemon's own drain · diffs `notices` from just before the stage · reports `✓` / `✓ (advisory: …)` / `✗ <notice>` / `? still queued` in the same call
+the wake's copy · the full section below keeps the reasoning · porcelain over the outbox grammar ≠ a new channel: each verb stages the same file a hand-written directive would, waits for the daemon's drain, and reports the verdict in the same call
 
 ```
 brnrd do [--outbox DIR] [--timeout SECONDS] \
-  [--mood <feeling-or-handle> [--mood-note "…"]] \
+  [--mood <feeling> [--mood-note "…"]] \
   [--note <event-id>]... \
-  [--reply <event-id> [--item <item-id>]... --body-file FILE | --body "…"]... \
+  [--reply <event-id> [--item <id> [--part "…"]]... [--new-item "<headline>"]... [--no-ask "<why>"] \
+     --body-file FILE | --body "…"]... \
   (--promise <what> [--promise-count N] | --no-follow-up) \
-  [--gate <name> --body-file FILE]... \
-  [--card FILE] \
-  [-- <command> [args…]]
+  [--gate <name> --body-file FILE]... [--card FILE] [-- <command> [args…]]
 ```
 
-`--note` / `--reply` / `--gate` ⇒ stage the canonical `note:` / `event:` / `gate:` frontmatter · wait ≤ `--timeout` (default 30s) for the drain · verdict:
-`✓` consumed, no fresh matching notice
-`✓ (advisory: <text>)` consumed ∧ the fresh notice naming this directive is `kind="advisory"` — acted on, FYI only (e.g. a hand-shaped `--note` body ignored) ≠ a failure (brnrd#1693)
-`✗ <kind>: <text>` a fresh `refused` / `dropped` / `redirected` notice named this directive
-`? still queued` still in the outbox at the timeout — never a hang
-`--mood` / `--card` write `.mood` / `.card` directly (never drained ⇒ the verdict is the write) · `--mood` resolves through `emotes.lookup` / `emotes.near_misses` ⇒ a near-miss reports candidates instead of writing nothing silently
+verdict: `✓` consumed · `✓ (advisory: …)` consumed, FYI notice · `✗ <kind>: <text>` refused / dropped / redirected · `? still queued` at the timeout, never a hang
+- any `--reply` ⇒ exactly one of `--promise <what>` (commit · branch · pr · merge · kb · issue · comment · message · file) or `--no-follow-up`, per call · the promise row lands only after every reply drains `✓`
+- every reply names its ask: `--item <id>` (existing; `--part` tags the excerpt) · `--new-item "<headline>"` (mints one on the reply's verdict) · `--no-ask "<why>"` (the recorded zero) · none of the three ⇒ refused before staging when the account has a warp · existing is never the default
+- `--reply` reaches only a *pending* event · refused as non-pending (e.g. the waking letter, already claimed) ⇒ stage a bare outbox file: no frontmatter ⇒ the waking thread
+- a same-thread burst gets one body: outbox `event:` + `also: <id>, <id>` (no `--also` flag yet) · byte-identical replies to several events land as duplicates
+- `--mood` resolves through the emote index; a near-miss lists candidates instead of writing nothing
+- bare `brnrd do` = one screen: pending events · outbound · notices · quota · spawn headroom
+- `-- <command>` runs after staging (execvp, no shell); verdicts move to stderr, the command's output and exit code become the call's
 
-any `--reply` requires exactly one of `--promise <what>` / `--no-follow-up` (evt-1787161641746642000-s0vo, 2026-08-19)
-neither ⇒ refused client-side before anything is staged, naming both flags · both ⇒ argparse refuses (mutually exclusive), same nothing-staged guarantee
-per call ≠ per `--reply` — several replies staged together share one promise-or-none choice ⇒ `--promise` writes ≤ one blueprint row per call
-byte-identical bodies may not target several events in one call — reply once and fold a same-thread, same-correspondent burst in with the outbox grammar's `also: <id>, <id>` (daemon-substrate.md's frontmatter table), or `--note` the siblings; a `--also` flag on this porcelain, mirroring `--item`, is not wired yet (tracked, not done) — either way, without one of these the chat receives one duplicate per target
-`--promise <what>` vocabulary = `brnrd promise`'s (`commit` · `branch` · `pr` · `merge` · `kb` · `issue` · `comment` · `message` · `file`) · appended through `promises.append`, the exact writer `brnrd promise` calls · `--promise-count N` sets the count (default 1)
-the row is written only after every staged reply's own drain verdict comes back `✓` — a refused reply must not leave a debt row for a message nobody got ⇒ a failed reply renders its own `✗` and no `promise …` segment follows
-`--no-follow-up` = the correspondent's event carries no follow-up to derive: nothing owed beyond this reply · replies staged, nothing appended
-`--note` · `--mood` · `--card` · a `--reply`-free call (`--gate` alone) carry no such requirement — a gate handoff's debt is the PR itself · `--promise`/`--no-follow-up` without any `--reply` in the same call ⇒ refused the same way
+### `brnrd await` — at a glance
 
-`--item <id>` binds the immediately preceding `--reply` to a warp item (design-the-water-line.md §The asks lane, rung 2 — the join rung 3's rail is blocked on)
-repeatable · one reply may answer several asks
-an id that does not resolve ∨ an `--item` with no `--reply` before it ⇒ the whole call refused before anything is staged
-existence is the only gate — binding to a `done:` item is legal: the row records a conversation fact ≠ a claim on the work
-per reply ≠ per call (the one place this differs from `--promise`) — each reply's own drain verdict gates only its own rows ⇒ one refused reply never blocks a sibling's bindings
-accepted rows ⇒ `.asks.jsonl` as `{"event": <id>, "item": <id>}`
-
-**The ask at the reply** (his 2026-09-23 steer; design-the-ask.md) — every correspondent event yields a **non-empty set of says** — one message routinely carries information for several asks — and each say lands on an existing item or on a *new* one; `--part "<quoted excerpt>"` after an `--item` tags which part of the message belongs to which ask (rung 3, already wired). `--new-item "<headline>"` mints one (type `--new-item-type`, default `action`) and binds the immediately preceding `--reply` to it — repeatable, mixable with `--item` on the same reply; the mint rides the reply's own accepted drain verdict (a refused reply leaves no item for a message nobody got), and the new file is born with `refs:`/`says:` = the event id. A reply that carries neither `--item` nor `--new-item` is refused before staging when the account has a warp — `--no-ask "<why>"` is the deliberate zero, recorded as `{"event": <id>, "no_ask": "<why>"}` (no `item` key ⇒ never a say). "Existing" is never the default: the choice is made per reply, every time. No warp ⇒ nothing to bind ⇒ the contract does not fire
-
-bare `brnrd do` (no verbs) ⇒ one screen: pending events · outbound counts · notices · the quota line · spawn-pool headroom — the canonical replacement for hand-parsing `portal-state.json`
-
-`-- <command> [args…]` (only `do` recognises it · split out of argv before anything else parses) ⇒ runs the command via `execvp` after the verbs above are staged · argv passthrough, never shell interpretation · verdict lines move to stderr so the command's stdout stays pipeable · the command's own stdout/stderr/exit code become `brnrd do`'s — one boundary carries the speech acts and the real work · omit `--` for a pure update call
-
-one correlation gap, named ≠ patched around: a notice records its verb and target in the message text (`"note dropped: event evt-… …"`) never the staged filename ⇒ `brnrd do` matches a fresh notice to "the directive I just staged" by substring ≠ identity · works because every refusal/drop/redirect in `daemon.py`'s `_drain_outbox` names verb + target · a concurrent notice sharing both substrings would still misattribute · precise fix = daemon-side: `_record_outbox_notice` (`daemon.py` ~L6135) gains an optional `source_file:` from each call site's `fpath.name` · not done here — named so the gap has one place to live
-
-### `brnrd await` — the wait with nothing to forget (#959, #1187)
-
-the measurement this closes: a resident waiting on a strand or a background gate wrote `until <condition>; do sleep 25; done` as one shell call · the thought never ended and emitted zero tool boundaries for the whole span · the daemon reaches a resident only at a boundary ⇒ three of the maintainer's messages queued behind a wait doing exactly what it was told
-a wait a correspondent cannot interrupt ≠ a wait — a gap
+the wake's copy · rules live in the `await:` row and **linger** · a message, a strand finishing, a schedule firing all arrive as pending events and resolve it · a shell `sleep` loop is a wait nobody can interrupt: never that
 
 ```
-brnrd await [--timeout <duration>] [--file <path>] [--json]
+brnrd await [--timeout <duration>] [--ceiling <duration>] [--file <path>] [--json]
 ```
 
-no positional arguments · no condition flags · `brnrd await`, bare, is the whole shape: hold this run until the daemon has something for me
-a message · a dispatched child finishing · a schedule firing — all reach a run as pending events ⇒ all resolve the wait without being named
-
-`--timeout` = the ceiling · default = this run's own remaining budget (the daemon knows it; restating it is the mistake `spawn:<id>` was) · **no configured budget ⇒ no ceiling: the seat stays open**, resolved only by a pending event · wire form `timeout: none`; a missing `timeout:` stays refused
-`--file <path>` = also resolve when that path appears · a footnote for the one thing the daemon cannot observe (an external CI run · a human dropping a file) · adds a trigger · never narrows the wait to only that file
-`--json` = the outcome as JSON
-
-the asymmetry is the design · omitting `--file` ⇒ the correct default · omitting a `spawn:` id used to ⇒ a broken wait (v1 asked you to enumerate what the daemon already tracks; #1187 priced it: five child ids, one typo, the directive silently discarded) ⇒ the condition grammar is gone · `event` ≠ a condition you can forget — it is the semantics · `spawn:<id>` filtered out what a dispatcher usually wants (whichever child finishes first) and a finishing strand already creates a `spawn_completed` event · `pid:` duplicated the Shell's own background-process notification
-
-one call, one boundary, three things: stages the directive · reports its own arming verdict (the `notices` diff `brnrd do` does — a directive that fails to arm fails in the call that made it ≠ a stale `resolved: true` looking like an answer) · blocks until the daemon resolves the wait
-the daemon evaluates on its own heartbeat tick (~10s, whether or not anything is calling) ⇒ a listening wait ≠ a sleeping one
-outcome ⇒ `portal-state.json` → `await`:
-
-```jsonc
-{"armed": true, "file": "/tmp/gate.log", "generation": "…",
- "timeout_seconds": 1200, "deadline": "…",
- "resolved": true, "outcome": "event", "which": null}
-```
-
-`resolved` flips true on exactly one of four — never silence
-`"event"` the daemon has something pending for you
-`"condition"` the optional `--file` path appeared · `which` names it · pending events outrank it deliberately — when both would fire, the correspondent is the answer
-`"timeout"` the deadline passed with nothing else firing — an open-ended wait has none
-`"timeout"` with `"initiative": true` — a **bare** `brnrd await` (no `--timeout`) is not open-ended when the seat is idle: with no correspondent inside `seat.live_window_minutes`, no live strand, no hold armed and the binding quota's pace *ahead* (consumed share < elapsed share), the daemon gives it a computed ceiling of `seat.initiative_after_minutes` (default 20; `seat.initiative` on by default, never for strands) and the timeout that follows says so. Eligibility is re-read every tick, so a message or a strand puts the wait back to open-ended without re-arming; an explicit `--timeout` always wins. What the seat does with such a wake is run.md §appetite: pick one thing from the files it already reads, act, or `note:` why not (design-the-initiative-wake.md; daemon half #2068).
-`"park"` holding has cost more than a boot (design-the-seat-that-never-quits.md §machinery slice 3) — `hold_so_far` (this run's own weighted spend since the wait last had nothing pending) ÷ `spend.json → boot.weighted` ≥ `seat.park_after_boot_ratio` (config, default `12` — a night of idle boundaries, not forty minutes). **Opt-in, off by default** (`seat.park_on_hold_cost`, 2026-09-08): the process stays open until the user releases it or execution is forced to stop — quota, provider, process failure — never on a cost heuristic alone; the ratio still computes and rides the woven bar every heartbeat while armed (`hold N·boot`, or `hold ?·boot` before a boot cost has landed — never a guess), but nothing parks on it unless the opt-in is set. When it is: refused while a pending event exists (caught by `"event"` first), while a correspondent reached the seat within `seat.live_window_minutes` (config, default `30`), or while the run owns a live strand (`resume: strands`'s job) — never for a strand. `brnrd await` prints `parking — holding has cost N·boot; end the turn and the seat parks (anything addressed to it resumes it)`; ending the turn lands the park the daemon already does for `resume: any` (`_finalize_resource_hold`, unchanged since #1815/#1817).
-`"park"` also lands when the binding quota reads under `seat.starve_floor_pct` (config, default `2`) — the **starvation park**: the hold is `quota_starved` / `resume: refill`, and nothing but a measured refill (binding quota at or above `seat.refill_floor_pct`, default `10`, read live on the sweep and on every correspondent message) thaws it; a message while starved is accumulated and answered with the reading — and the words a person can say to it: `wait` (the no-reaction default, also a verb) · `stop` (ends the seat; the next message mints a new one) · `respawn <core>` (a catalog name or `shell core`; a fresh seat on another bucket, same thread, the node as memory; an unknown name is refused with the names that would work) · `force` — the exact word alone — wakes it under the floor on the user's word (`starvation_forced` rides the event; that turn's boundary reports the reading without re-parking; a Shell that dies of it still parks, which is the consequence). the same reading rides `resources.quota.pacing.starvation` every boundary (`binding_remaining_pct`, both floors, `starved`). a resident may choose it: `hold: true` + `resume: refill`.
-
-a call reaching its own ceiling first ⇒ `{"outcome": "pending", "returned_on": "ceiling" | "shell_cap"}` · call again is the entire instruction
-
-**the lease (move 2c)** — one call holds until the wait resolves or `--ceiling` passes (default 50m, under the 1h prompt cache; max 6h) · claude: the daemon widens `BASH_MAX_TIMEOUT_MS`, the pre-tool hook sets the call's timeout and stamps `BRNRD_AWAIT_CALL_CAP_MS` · no stamp ⇒ the per-Shell slice · the first boundary after says `slept <d> · woke: <outcome>` once · a leased seat stays `current` for the dev-reload guard · why + receipts: `await_verb.py`
-
-strands arm this too · a strand does not spend the resident's single-flight slot — it already occupies its own worker by existing · refusing left a strand blocked on a subprocess with nothing but a shell sleep loop — the exact boundary-free stretch this verb ends
-
-under the porcelain = one outbox directive (`await: true` + `timeout:` — a duration or `none` · optional `file:`) · `brnrd await` stages it for you
-a directive still carrying v1's conditions ⇒ refused with a notice naming `brnrd await` — never silently, never by ignoring the extra terms · malformed input (no `timeout:`) ⇒ `notices`, same as any other verb
-`await:` never ends the run to service a wait — it holds the slot
+- outcome (`portal-state.json` → `await`): `event` · `condition` (the `--file` trigger; a pending event outranks it) · `timeout` (with `initiative: true` = the seat's own hours) · `park` (the daemon's: starvation, or opted-in hold cost)
+- `pending` = only the *call's* lease ran out ⇒ call again · an explicit `--timeout` is restated on every call
 
 {{BODY verbatim: prompts/identity-core.md}}
 
@@ -162,7 +103,7 @@ _From the brnrd daemon: the runtime facts for *this* thought — run metadata, e
 - Environment: worktree
 - Requested Runner: claude-sonnet (requested from the dashboard spool rack) — the Shell+Core selected for this thought; the actual Core is attested from the Shell result. A failure here (quota exhausted, provider error, substitution) ⇒ the user pays a manual reroute, so chunk work and commit early when the budget is tight.
 - Quota: session 72% left (resets 10:30pm); week 57% left
-- Web research: native via WebSearch/WebFetch, default-on — search executes server-side (rides the model API, so it is available even under the solitary egress boundary); use it to verify changing facts before asserting them.
+- Web research: native via WebSearch/WebFetch, default-on — search executes server-side (rides the model API, so it is available even under the solitary egress boundary); use it to verify changing facts before asserting them. The claude Shell may list them as deferred tools (named, schema not loaded): load them with ToolSearch `select:WebSearch,WebFetch` before first use.
 - Delivery: situational outputs captured by brr (see Delivery contract below)
 - Budget: no time limit — brr does not kill a thought on an elapsed clock. Still bound uncertain long-running commands yourself; a hung shell holds the slot until the user stops the run from the dashboard.
 - Runtime recovery: /tmp/brr-fixture-runtime/runs/run-fixture-0001/context.md (open only if a detail you need isn't in this bundle)
@@ -227,7 +168,7 @@ source manifest:
   ✓ Working register (weave.md)                                     product      contract     [bytes]  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)                  product      contract     [bytes]  {PACKAGE_ROOT}/prompts/register.md  [mtime]
   ✓ Daemon mechanics (daemon-substrate.md)                          product      substrate    [bytes]  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
-  ✓ Portal verb grammar (`brnrd await` / `brnrd do`, docs portals)  product      substrate     14,037  {PACKAGE_ROOT}/docs/portals.md  [mtime]
+  ✓ Portal verb grammar (`brnrd await` / `brnrd do`, docs portals)  product      substrate      2,770  {PACKAGE_ROOT}/docs/portals.md  [mtime]
   ✓ Resident identity core                                          product      identity     [bytes]  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
   · Stranded-memory warning (repo moved)                            daemon-live  health             0  computed
   · Dominion digest (self-inject)                                   resident     memory             0  computed
@@ -242,13 +183,13 @@ source manifest:
   · notes health (deterministic preflight)                          daemon-live  health             0  computed
   · diffense review-pack prompt                                     product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
   · Introspection dev-mode invitation                               product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
-  ✓ Run Context Bundle (runtime facts)                              daemon-live  runtime        4,080  computed
+  ✓ Run Context Bundle (runtime facts)                              daemon-live  runtime        4,229  computed
 
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
 cost ledger:
-  substrate     [bytes] B  [pct]
   contract      [bytes] B  [pct]
+  substrate     [bytes] B  [pct]
   identity      [bytes] B  [pct]
   runtime       [bytes] B  [pct]
   hearth        [bytes] B  [pct]

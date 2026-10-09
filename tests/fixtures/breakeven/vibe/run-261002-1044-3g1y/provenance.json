@@ -1,0 +1,19 @@
+{
+  "run": "run-261002-1044-3g1y",
+  "shell": "vibe",
+  "core": "mistral-medium-3.5",
+  "source_files": [
+    "0000000000000005.jsonl",
+    "0000000000001362.jsonl"
+  ],
+  "state": {
+    "id": "run-261002-1044-3g1y",
+    "runner_shell": "vibe",
+    "core_observed": "mistral-medium-3.5",
+    "started_at": "2026-10-02T10:44:51Z"
+  },
+  "measured": {
+    "B": 39638,
+    "c0": 4941
+  }
+}

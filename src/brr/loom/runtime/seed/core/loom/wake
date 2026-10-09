@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+"""Wake recipe. The self owns this file; it imports nothing from brnrd.
+
+    core/loom/wake <thread-id> <owed.json>
+
+stdout is the prompt. Exit 0 is ok, exit 3 is over budget (stderr says
+what did not fit), anything else is a broken recipe.
+
+LOOM_BUDGET_BYTES defaults to 24000. LOOM_PART is a file, written by the loom.
+Parts 1, 3 and 4 are never cut. The tree is cut from the bottom, and a
+narrowed wake says how many entries were left out.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+DEFAULT_BUDGET = 24000
+TREE_ROOTS = ("memory", "threads", "people")
+_PINNED = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+
+
+def die(why: str, code: int = 1) -> None:
+    print(why, file=sys.stderr)
+    raise SystemExit(code)
+
+
+def segment(value: str) -> str:
+    if not value or value in {".", ".."} or "/" in value or "\\" in value:
+        die(f"thread id is not a single path segment: {value}")
+    return value
+
+
+def budget() -> int:
+    raw = os.environ.get("LOOM_BUDGET_BYTES")
+    if raw is None or raw == "":
+        return DEFAULT_BUDGET
+    if not raw.isdigit():
+        die(f"LOOM_BUDGET_BYTES is not a nonnegative integer: {raw}")
+    return int(raw)
+
+
+def ensure_nl(text: str) -> str:
+    return text if text.endswith("\n") else text + "\n"
+
+
+def section(title: str, body: str) -> str:
+    return f"## {title}\n{ensure_nl(body)}"
+
+
+def read_exact(path: Path, why: str) -> str:
+    if not path.is_file():
+        die(f"{why}: no such file")
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        die(f"{why}: not utf-8: {exc}")
+    raise AssertionError("unreachable")
+
+
+def git_times(root: Path) -> dict[str, int]:
+    """Last commit time per path, in one ``git log`` pass (newest first)."""
+    env = os.environ.copy()
+    for key in _PINNED:
+        env.pop(key, None)
+    proc = subprocess.run(
+        ["git", "log", "--format=%x00%ct", "--name-only", "--", *TREE_ROOTS],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    times: dict[str, int] = {}
+    if proc.returncode != 0:
+        return times
+    stamp = 0
+    for line in proc.stdout.splitlines():
+        if line.startswith("\x00"):
+            stamp = int(line[1:]) if line[1:].isdigit() else 0
+        elif line and line not in times:
+            times[line] = stamp
+    return times
+
+
+def first_line(path: Path, why: str) -> str:
+    """The first non-empty line after any frontmatter: a README's headline."""
+    lines = read_exact(path, why).splitlines()
+    if lines and lines[0] == "---" and "---" in lines[1:]:
+        lines = lines[lines.index("---", 1) + 1 :]
+    return next((line for line in lines if line.strip()), "")
+
+
+def tree_lines(root: Path, thread: str) -> list[str]:
+    rows: list[tuple[int, str, str]] = []
+    times = git_times(root)
+    for top in TREE_ROOTS:
+        base = root / top
+        if not base.is_dir():
+            continue
+        for path in base.rglob("*.md"):
+            if not path.is_file() or path.is_symlink():
+                continue
+            rel = path.relative_to(root)
+            parts = rel.parts
+            if "hearth" in parts:
+                continue
+            posix = rel.as_posix()
+            if posix == "memory/stance.md":
+                continue
+            if posix == f"threads/{thread}/README.md":
+                continue
+            if (
+                len(parts) >= 3
+                and parts[0] == "threads"
+                and parts[1] == thread
+                and parts[2] == "notes"
+            ):
+                continue
+            line = f"{posix} · {first_line(path, posix)} · {path.stat().st_size}"
+            rows.append((times.get(posix, 0), posix, line))
+    rows.sort(key=lambda row: (-row[0], row[1]))
+    return [row[2] for row in rows]
+
+
+def notes_block(root: Path, thread: str) -> str:
+    folder = root / "threads" / thread / "notes"
+    if not folder.is_dir():
+        return ""
+    files = [path for path in folder.rglob("*") if path.is_file() and not path.is_symlink()]
+    chunks = []
+    for path in sorted(files, key=lambda item: item.relative_to(root).as_posix()):
+        rel = path.relative_to(root).as_posix()
+        chunks.append(section(rel, read_exact(path, rel)))
+    return "".join(chunks)
+
+
+def occasion(path: Path) -> str:
+    if not path.is_file():
+        die(f"owed.json: no such file: {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        die(f"owed.json: {exc}")
+    except UnicodeDecodeError as exc:
+        die(f"owed.json: not utf-8: {exc}")
+    if not isinstance(data, list):
+        die("owed.json: expected a list")
+    chunks = ["## Occasion\n"]
+    for item in data:
+        if not isinstance(item, dict) or any(key not in item for key in ("id", "from", "body")):
+            die("owed.json: each letter needs id, from, body")
+        ident, sender, body = item["id"], item["from"], item["body"]
+        if not all(isinstance(value, str) for value in (ident, sender, body)):
+            die("owed.json: id, from and body must be strings")
+        chunks.append(f"### {ident} from {sender}\n{ensure_nl(body)}")
+    return "".join(chunks)
+
+
+def fixed_text(root: Path, thread: str, loom: str, owed: Path) -> tuple[str, str]:
+    """The parts never cut, as (before the tree, after the tree).
+
+    The occasion goes last: it is what this wake is for.
+    """
+    identity = read_exact(root / "core" / "identity.md", "core/identity.md")
+    stance = read_exact(root / "memory" / "stance.md", "memory/stance.md")
+    readme_path = root / "threads" / thread / "README.md"
+    readme = read_exact(readme_path, f"threads/{thread}/README.md")
+    parts = [
+        section("core/identity.md", identity),
+        section("memory/stance.md", stance),
+        section(f"threads/{thread}/README.md", readme),
+        notes_block(root, thread),
+    ]
+    return "".join(parts), section("Loom", loom) + occasion(owed)
+
+
+def piece_sizes(text: str) -> list[tuple[str, int]]:
+    """Name the uncullable sections by their headings, for the exit-3 line."""
+    sizes: list[tuple[str, int]] = []
+    current = "preamble"
+    buf: list[str] = []
+
+    def flush() -> None:
+        if buf:
+            sizes.append((current, len("".join(buf).encode("utf-8"))))
+
+    for line in text.splitlines(keepends=True):
+        if line.startswith("## "):
+            flush()
+            buf = [line]
+            current = line[3:].strip()
+        else:
+            buf.append(line)
+    flush()
+    return sizes
+
+
+def fit_tree(fixed: str, lines: list[str], limit: int) -> str:
+    """Longest newest-first prefix that fits. The receipt is extra, and always said."""
+    header = "## Tree\n"
+    kept = -1
+    block = ""
+    for count in range(len(lines), -1, -1):
+        body = header + "".join(f"{line}\n" for line in lines[:count])
+        if len((fixed + body).encode("utf-8")) <= limit:
+            kept = count
+            block = body
+            break
+    if kept < 0:
+        kept = 0
+        block = ""
+    omitted = len(lines) - kept
+    if omitted:
+        block += f"omitted {omitted} entries; each is one read away\n"
+    return block
+
+
+def main() -> None:
+    if len(sys.argv) != 3:
+        die("usage: wake <thread-id> <owed.json>")
+    thread = segment(sys.argv[1])
+    owed = Path(sys.argv[2])
+    limit = budget()
+    part = os.environ.get("LOOM_PART")
+    if not part:
+        die("LOOM_PART is not set")
+    loom_path = Path(part)
+    if not loom_path.is_file():
+        die(f"LOOM_PART: no such file: {part}")
+    try:
+        loom = loom_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        die(f"LOOM_PART: not utf-8: {exc}")
+    root = Path.cwd()
+    head, tail = fixed_text(root, thread, loom, owed)
+    fixed = head + tail
+    total = len(fixed.encode("utf-8"))
+    if total > limit:
+        detail = ", ".join(f"{name} {size}B" for name, size in piece_sizes(fixed))
+        die(
+            f"over budget: {detail}; total {total}B > budget {limit}B; none of these is cut",
+            3,
+        )
+    sys.stdout.write(head + fit_tree(fixed, tree_lines(root, thread), limit) + tail)
+
+
+if __name__ == "__main__":
+    main()

@@ -657,8 +657,8 @@ def test_plan_replacement_portal_verb_grammar_re_extracts_from_a_substituted_por
     prompts_dir = tmp_path / "edited-prompts"
     prompts_dir.mkdir()
     (prompts_dir / "portals.md").write_text(
-        "### `brnrd do` — the verdict rides the act\n\nEdited do body.\n\n"
-        "### `brnrd await` — the wait with nothing to forget (#959, #1187)\n\n"
+        "### `brnrd do` — at a glance\n\nEdited do body.\n\n"
+        "### `brnrd await` — at a glance\n\n"
         "Edited await body.\n\n"
         "### Something else entirely\n\nShould not appear.\n",
         encoding="utf-8",

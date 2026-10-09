@@ -27,6 +27,7 @@ import threading
 import time
 import random
 import string
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -751,7 +752,26 @@ TERMINAL_EVENT_STATUSES = frozenset(
 )
 
 
-def list_pending(inbox_dir: Path) -> list[dict[str, Any]]:
+# A quiet inbox does not change between polls. Parsing every file on each
+# call is what pegged a daemon whose tick is 0.1s against an inbox of
+# several thousand events (measured 2026-10-06: 6903 files, ~0.22s to read,
+# ~0.027s to stat). The cache key is the directory plus each file's name,
+# mtime and size, so a status write invalidates that file and nothing else.
+# Letter facts are not cached here — they move without touching the event
+# file. Callers receive copies; mutating a returned dict must not poison
+# the next poll.
+_PENDING_CACHE_MAX = 32
+# fingerprint: ((name, (mtime_ns, size)), ...) sorted by name
+_pending_cache: OrderedDict[str, tuple[tuple[tuple[str, tuple[int, int]], ...],
+                                        dict[str, dict[str, Any] | None]]] = OrderedDict()
+_pending_cache_lock = threading.Lock()
+# Directory fast path, opt-in via ``rescan_after`` (the daemon2 poll loop):
+# key -> (dir mtime_ns, monotonic time of the last full scan).
+_pending_dir_seen: dict[str, tuple[int, float]] = {}
+
+
+def list_pending(inbox_dir: Path, *,
+                 rescan_after: float | None = None) -> list[dict[str, Any]]:
     """Return events with status pending or processing, oldest first.
 
     "Oldest first" is an age question — when did this event arrive — not a
@@ -765,16 +785,78 @@ def list_pending(inbox_dir: Path) -> list[dict[str, Any]]:
     happens after the read (not on the raw ``DirEntry`` scan, unlike
     :func:`list_done` / :func:`list_active` below) because ``created`` lives
     in the event body, not in anything ``os.scandir`` exposes.
+
+    Unchanged files are not re-parsed. The scan still stats every name, and
+    a changed mtime or size re-reads that file only.
+
+    ``rescan_after`` (seconds) lets a hot poll loop skip even the stats:
+    when the directory's own mtime has not moved and the last full scan is
+    younger than this, the cached events are returned. Every protocol
+    write is a temp file + rename, which moves the directory mtime, so a
+    new or re-stamped event is seen on the next call; a writer that edits
+    a file in place is seen within ``rescan_after``. Measured 2026-10-07:
+    a 7,461-file inbox cost ~35 ms per daemon2 ``pending()`` at a 0.1 s
+    tick, i.e. ~25% of a core per idle follower.
     """
     if not inbox_dir.exists():
         return []
-    events = []
-    for entry in os.scandir(inbox_dir):
-        if not entry.name.endswith(".md"):
-            continue
-        ev = _read_event(Path(entry.path))
-        if ev and ev.get("status") in ("pending", "processing"):
-            events.append(ev)
+    try:
+        key = str(inbox_dir.resolve())
+    except OSError:
+        return []
+    if rescan_after is not None:
+        try:
+            dir_mtime = os.stat(inbox_dir).st_mtime_ns
+        except OSError:
+            return []
+        now_mono = time.monotonic()
+        with _pending_cache_lock:
+            seen = _pending_dir_seen.get(key)
+            cached = _pending_cache.get(key)
+            if (seen is not None and cached is not None
+                    and seen[0] == dir_mtime
+                    and now_mono - seen[1] < rescan_after):
+                events = [dict(ev) for ev in cached[1].values()
+                          if ev and ev.get("status") in ("pending", "processing")]
+                events.sort(key=_event_queue_sort_key)
+                return events
+    current: dict[str, tuple[int, int]] = {}
+    try:
+        for entry in os.scandir(inbox_dir):
+            if not entry.name.endswith(".md"):
+                continue
+            try:
+                st = entry.stat()
+            except OSError:
+                continue
+            current[entry.name] = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return []
+    fingerprint = tuple(sorted(current.items()))
+    with _pending_cache_lock:
+        cached = _pending_cache.get(key)
+        if cached is not None and cached[0] == fingerprint:
+            _pending_cache.move_to_end(key)
+            parsed = cached[1]
+        else:
+            old_fp = dict(cached[0]) if cached is not None else {}
+            old_parsed = cached[1] if cached is not None else {}
+            parsed = {}
+            for name, sig in current.items():
+                if old_fp.get(name) == sig and name in old_parsed:
+                    parsed[name] = old_parsed[name]
+                else:
+                    parsed[name] = _read_event(inbox_dir / name)
+            _pending_cache[key] = (fingerprint, parsed)
+            _pending_cache.move_to_end(key)
+            while len(_pending_cache) > _PENDING_CACHE_MAX:
+                _pending_cache.popitem(last=False)
+        if rescan_after is not None:
+            # Stamp the mtime read *before* the scan: a write racing the
+            # scan moves the directory past it and forces the next rescan.
+            _pending_dir_seen[key] = (dir_mtime, now_mono)
+        events = [dict(ev) for ev in parsed.values()
+                  if ev and ev.get("status") in ("pending", "processing")]
     events.sort(key=_event_queue_sort_key)
     return events
 
@@ -908,6 +990,7 @@ def list_dispatchable(
     inbox_dir: Path,
     *,
     now: float | None = None,
+    rescan_after: float | None = None,
 ) -> list[dict[str, Any]]:
     """Return pending/processing events whose deferral has expired.
 
@@ -915,10 +998,11 @@ def list_dispatchable(
     fresh wake can still see and fold them from the live inbox. The daemon
     dispatch loop uses this narrower view for choosing a lead event.
     """
-    return [
-        event for event in list_pending(inbox_dir)
-        if not event_is_deferred(event, now=now)
-    ]
+    # Pass the fast path only when asked: engine 1 and its tests (which
+    # monkeypatch list_pending with one-argument fakes) keep the exact call.
+    events = (list_pending(inbox_dir) if rescan_after is None
+              else list_pending(inbox_dir, rescan_after=rescan_after))
+    return [event for event in events if not event_is_deferred(event, now=now)]
 
 
 def list_done(inbox_dir: Path, source: str) -> list[dict[str, Any]]:

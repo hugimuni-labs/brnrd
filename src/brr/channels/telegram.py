@@ -59,6 +59,8 @@ class ParsedMessage:
     # the field is absent from the payload). "" — never `None` — when
     # absent, matching every other string field on this dataclass.
     chat_title: str = ""
+    # The message being answered; message_id above names the incoming message.
+    reply_to_message_id: int | None = None
 
 
 def _safe_filename(name: str, fallback: str) -> str:
@@ -128,6 +130,8 @@ def parse_update(payload: dict) -> ParsedMessage | None:
         sent_at = None
         message_date = None
 
+    reply = msg.get("reply_to_message")
+    reply_to_message_id = reply.get("message_id") if isinstance(reply, dict) else None
     sender = msg.get("from") or {}
     user_id = sender.get("id")
     # #409: sender_chat is not a personal identity, even when Telegram also
@@ -141,6 +145,7 @@ def parse_update(payload: dict) -> ParsedMessage | None:
         text=text,
         message_date=message_date,
         message_id=msg.get("message_id"),
+        reply_to_message_id=reply_to_message_id,
         topic_id=msg.get("message_thread_id"),
         user=sanitize_meta_str(str(sender.get("first_name", "?"))),
         user_id=user_id,

@@ -257,7 +257,12 @@ def _stacked_since(
     return tuple(name for _, name in sorted(out))
 
 
-def _drift(brr_dir: Path | None, dominion_repo: Path | None) -> tuple[str, ...]:
+def _drift(
+    brr_dir: Path | None,
+    dominion_repo: Path | None,
+    *,
+    current_run_id: str | None = None,
+) -> tuple[str, ...]:
     """Where the resident's account of itself and the world's have come apart.
 
     Deliberately few, and each one *actionable*.  A drift line that a wake can
@@ -283,7 +288,12 @@ def _drift(brr_dir: Path | None, dominion_repo: Path | None) -> tuple[str, ...]:
         # collapsed ``?? runs/`` entry cannot be classified truthfully.
         out = _run_git(dominion_repo, "status", "--porcelain", "--untracked-files=all")
         if out:
-            n = sum(1 for line in out.splitlines() if _is_resident_memory(line))
+            n = sum(
+                1
+                for line in out.splitlines()
+                if _is_resident_memory(line)
+                and not _is_current_run_node(line, current_run_id)
+            )
             if n:
                 found.append(
                     f"dominion has {n} uncommitted change(s) — the capture net "
@@ -305,6 +315,9 @@ def _drift(brr_dir: Path | None, dominion_repo: Path | None) -> tuple[str, ...]:
 #: seam later in the run's life.
 _DAEMON_OWNED_RUN_STATE = re.compile(
     r"^runs/[^/]+/[^/]+/(?:state\.md|messages/[^/]+)$"
+    # The frame's topic ledgers (``heddles.py``): one row per act, appended
+    # mid-wake.  Authored topic pages (``surface/topics/<slug>.md``) still fire.
+    r"|^surface/topics/(?:[^/]+\.index\.jsonl|threads\.json)$"
 )
 
 #: Whole roots of the account home repo that hold daemon machinery, never
@@ -319,7 +332,13 @@ _DAEMON_OWNED_RUN_STATE = re.compile(
 #: alarm the third time this lesson was paid for (#942; the two prior
 #: instalments are documented on :func:`_is_resident_memory`).
 _DAEMON_OWNED_ROOTS = ("account/", "dispatch/", "config-changes/")
-_DAEMON_OWNED_FILES = frozenset({"security.config", "knowledge.capture.lock"})
+#: Root-level daemon live state joins by name: ``shuttle.json`` (the seat
+#: record, ``shuttle.py``) and ``tick.json`` (the heartbeat counter,
+#: ``tick.py``) are rewritten after every capture commit — together they kept
+#: the drift line lit on every 2026-10 wake (#1947's residue).
+_DAEMON_OWNED_FILES = frozenset(
+    {"security.config", "knowledge.capture.lock", "shuttle.json", "tick.json"}
+)
 
 
 def _is_resident_memory(porcelain_line: str) -> bool:
@@ -361,6 +380,24 @@ def _is_resident_memory(porcelain_line: str) -> bool:
     return _DAEMON_OWNED_RUN_STATE.fullmatch(path) is None
 
 
+def _is_current_run_node(porcelain_line: str, current_run_id: str | None) -> bool:
+    """Is this line inside *this* wake's own run node (``runs/<repo>/<run>/``)?
+
+    The node is written while the wake is still running — ``request.md`` at
+    run start, ``body.md`` at closeout — and the capture net that commits it
+    has, by construction, not run yet.  A *prior* run's uncommitted node is
+    still drift; only the waking run's own is exempt.  Before this, every wake
+    counted its own ``request.md`` as a predecessor's lost work (#1947).
+    """
+    if not current_run_id:
+        return False
+    path = porcelain_line[3:].strip() if len(porcelain_line) > 3 else ""
+    if " -> " in path:
+        path = path.split(" -> ", 1)[1]
+    parts = path.split("/")
+    return len(parts) >= 4 and parts[0] == "runs" and parts[2] == current_run_id
+
+
 def build_continuity(
     brr_dir: Path | None = None,
     *,
@@ -400,7 +437,7 @@ def build_continuity(
     # it from an early return, not from the filter it meant to exercise.  Drift
     # is a fact about the dominion's health, and the dominion's health does not
     # depend on whether this checkout has a run history.
-    drift = _drift(brr_dir, dominion_repo)
+    drift = _drift(brr_dir, dominion_repo, current_run_id=current_run_id)
 
     runs_dir = brr_dir / "runs"
     if not runs_dir.is_dir():

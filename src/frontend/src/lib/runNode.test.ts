@@ -18,8 +18,10 @@ import {
 	runNodeFromSurface,
 	runNodeHref,
 	runRepoSlugs,
-	runNodeHrefForPath
+	runNodeHrefForPath,
+	findLiveRunForRoute
 } from './runNode.ts';
+import type { LiveRun } from './liveRuns.ts';
 import type { SurfaceResponse } from './surface.ts';
 
 function surface(files: SurfaceResponse['files']): SurfaceResponse {
@@ -508,4 +510,18 @@ test('runRepoSlugs: a mirrored run node names its repo; the first path wins', ()
 	assert.equal(map.get('run-260925-0424-tfzb'), 'hugimuni-labs__brnrd');
 	assert.equal(map.get('run-260926-2222-adds'), 'acme__other');
 	assert.equal(map.size, 2);
+});
+
+// Live run matching tests for the run route implementation (issue #2162)
+test('live route matches both sanitized repo and run, never a neighbouring row', () => {
+	const row = (repo_label: string, run_id: string) => ({ repo_label, run_id }) as LiveRun;
+	const runs = [
+		row('other/project', 'run shared'),
+		row('example corp/project', 'run other'),
+		row('example corp/project', 'run shared')
+	];
+	assert.equal(findLiveRunForRoute(runs, 'example-corp__project', 'run-shared'), runs[2]);
+	assert.equal(findLiveRunForRoute(runs, 'example-corp__project', 'absent'), null);
+	assert.equal(findLiveRunForRoute(runs, 'absent', 'run-shared'), null);
+	assert.equal(findLiveRunForRoute([], 'example-corp__project', 'run-shared'), null);
 });

@@ -1,5 +1,8 @@
+# Shell tables follow popularity: claude, codex, grok, vibe.
+# class and cost_rank are separate; they are not this order.
+
 [profiles.claude]
-cmd = "claude --print --output-format json --dangerously-skip-permissions --setting-sources local --system-prompt-file {protonucleus}"
+cmd = "claude --print --output-format json --dangerously-skip-permissions --setting-sources user,project,local --system-prompt-file {protonucleus}"
 hooks = "claude"
 provider = "anthropic"
 owner = "user"
@@ -26,6 +29,15 @@ owner = "user"
 class = "balanced"
 cost_rank = 25
 quota_source = "codex-local"
+
+[profiles.grok]
+cmd = "brnrd runners _grok"
+binary = "grok"
+hooks = "grok"
+provider = "xai"
+owner = "user"
+class = "balanced"
+cost_rank = 32
 
 [profiles.vibe]
 cmd = "brnrd runners _vibe"

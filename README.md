@@ -6,12 +6,12 @@
 <p align="center"><strong>Local agents go brr. From anywhere.</strong></p>
 
 <p align="center">
-  <strong>Keep your Claude Code or Codex agent running 24/7 on a machine you leave on</strong> — the Mac on your desk, a Mac mini, a home server, <a href="https://hugimuni-labs.github.io/brnrd/guides/vps-install/">a small VPS</a>.<br>
+  <strong>Keep your Claude Code, Codex, or Grok agent running 24/7 on a machine you leave on</strong> — the Mac on your desk, a Mac mini, a home server, <a href="https://hugimuni-labs.github.io/brnrd/guides/vps-install/">a small VPS</a>.<br>
   brnrd is the daemon: it keeps the agent alive across reboots, lets you drive it from Telegram, Slack or WhatsApp, remembers everything as files in git, and moves work between your Claude and Codex subscriptions when one hits its window. No API key. It leaves receipts — commits, PRs, a card you can read.
 </p>
 
 <p align="center">
-  <strong>3,125 commits on main · 1,405 by the resident · 2,056 merged PRs · since March 2026 · as of 2026-09-21.</strong><br>
+  <strong>2,375 commits on main · 1,783 by the resident · 1,374 merged PRs · since March 2026 · as of 2026-10-01.</strong><br>
   <sub>This repo is built with brnrd, by brnrd; the git log is the demo.</sub>
 </p>
 
@@ -27,22 +27,22 @@ https://github.com/user-attachments/assets/2357758c-fa35-47ba-92b1-f02d51c338e3
 
 ---
 
-Your coding agent already lives where the work is: your repo, your shell, your
-credentials, the odd test setup, and all the context nobody put in the ticket.
-**brnrd gives it a doorbell, a memory, and a live line back to you.**
+Your CLI agents can already work in your repositories, shells, and local tooling.
+What they don't have by default is a continuing place on your machine.
+**brnrd gives them a doorbell, a memory, and a live line back to you.**
 
 Send the task from your phone. Watch the plan and progress card change while it
 works. Correct course without interrupting the run. Get a branch, a PR, or an
 answer back in the same thread.
 
 brnrd is **not another coding agent.** It runs the CLI agents you already chose —
-locally, under your rules — and turns them into a repo-knowing coworker you can
-reach when you are away from the terminal.
+locally, under your rules — and gives you a persistent resident you can reach
+when you are away from the terminal, including when work spans repositories.
 
 **How is this different from Claude Code's remote control or Codex cloud?** Those
-give you a session you can reach. brnrd gives the repo a *resident*: one identity
-per project, with working memory, a playbook, and a standing agenda that outlive
-any single run — and any single model. When Codex hit its quota wall mid-conversation
+give you a session you can reach. brnrd gives your machine a *resident*:
+a continuing identity with working memory, a playbook, and a standing agenda
+that outlive any single run, repository, or model. When Codex hit its quota wall mid-conversation
 on 2026-09-05, the seat continued on Claude with the same memory and the same open
 work. The vendors are the medium; the resident is the thing that persists.
 
@@ -51,9 +51,9 @@ work. The vendors are the medium; the resident is the thing that persists.
 | | Capability | What it actually means |
 |---|---|---|
 | 📟 | **A remote door** | Fire off a task from Telegram, Slack, GitHub, or the dashboard. The agent runs at home; you drive from your pocket. |
-| 🧠 | **A resident, not a reset** | Each repo gets a coworker with working memory, project knowledge, and a playbook. A new run is the same mind's next thought — not an amnesiac subprocess wearing yesterday's name tag. |
+| 🧠 | **A resident, not a reset** | A resident persists on your machine with working memory and a playbook; repository context is brought in for the work at hand. A new run is the same mind's next thought — not an amnesiac subprocess wearing yesterday's name tag. |
 | 💬 | **Interrupt-free interaction** | Follow the live plan and progress card. Add a fact or change direction at runner boundaries, without killing the thought in flight. |
-| 🔀 | **The model is a medium** | Pin Claude or Codex. Escalate a core for a hard pass, downshift for grunt work, and see quota posture before it becomes a surprise. |
+| 🔀 | **The model is a medium** | Pin Claude, Codex, or Grok. Escalate a core for a hard pass, downshift for grunt work, and see quota posture before it becomes a surprise. |
 | 🏠 | **Local means local** | Your checkout, `.git`, and run execution stay on your machine. The one caveat — what the managed dashboard mirrors — is spelled out under [Trust & privacy](#-trust--privacy). |
 | 🧾 | **Git-native receipts** | Every run ends somewhere durable: a branch, a PR, or an answer in the thread. The diff is the proof. |
 | 📁 | **The seams are files** | Gates and live controls speak a small file protocol. A new transport is not a new religion for the daemon. |
@@ -67,19 +67,38 @@ Telegram · WhatsApp · Signal · Slack · GitHub · web
                ▼
   brnrd daemon · your machine
                │
-          ┌────┴────┐
-          ▼         ▼
-     Claude Code  Codex
-          │         │
-          └────┬────┘
+      ┌────────┼────────┐
+      ▼        ▼        ▼
+   Claude    Codex    Grok
+      │        │        │
+      └────────┼────────┘
                ▼
    progress · replies · git
 ```
 
-The daemon does the boring, load-bearing work around the model: it assembles the
-current repo context, selects an execution environment, keeps conversation
-continuity across runs, exposes live control surfaces, preserves the work in git,
-and routes the result back through the gate.
+The daemon does the boring, load-bearing work around the model: it routes
+incoming events, assembles the context relevant to a run (including repository
+context when needed), selects an execution environment, maintains continuity
+across runs, exposes live control surfaces, and routes results back through the
+gate. Git provides durable work receipts where appropriate.
+
+## ✦ What problems does it solve?
+
+- **Keep Claude Code or Codex reachable after the terminal session ends.** A
+  daemon on a machine you control receives work through supported gates and
+  launches CLI runners. The machine still needs to be powered on.
+- **Work across projects without resetting the resident.** The resident's
+  continuity is not defined by a single repository; individual tasks can
+  still select repositories and execution environments.
+- **Use existing CLI-agent subscriptions.** brnrd invokes supported CLI
+  harnesses rather than requiring a separate LLM inference API key. Provider
+  subscriptions, quotas, and account terms still apply.
+- **Follow and redirect long-running work.** Chat gates and the dashboard
+  expose progress; interactions are coordinated at runner boundaries, not
+  injected into an arbitrary running model token stream.
+
+For the architectural distinction between machine residency, repository
+context, and individual sessions, see [Machine residency](docs/machine-residency.md).
 
 ## ✦ Quickstart
 
@@ -165,7 +184,7 @@ much prompt that the agent spends the morning rereading its diary.**
 
 ## ✦ Where it runs
 
-Every project chooses an execution environment. They are honest about what they
+Each run uses an execution environment. These environments are honest about what they
 isolate — none of them is a cage for a hostile agent (see [Trust & privacy](#-trust--privacy)):
 
 | Mode | What it isolates | Reach for it when |
@@ -226,6 +245,7 @@ guide doesn't unpack:
 | [Environments](src/brr/docs/envs.md) | host, worktree, and Docker semantics |
 | [Execution map](src/brr/docs/execution-map.md) | what happens between message and reply |
 | [Account daemon](src/brr/docs/account-daemon.md) | multi-repo / multi-account topology |
+| [Machine residency](docs/machine-residency.md) | why a resident is not a repo, model, or session |
 | `brnrd docs` | the docs that ship inside the tool |
 
 ## ✦ Current posture

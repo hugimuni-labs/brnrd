@@ -19,6 +19,8 @@
 		>
 	{:else if icon === 'codex-mono'}
 		{'{ }'}
+	{:else if icon === 'grok-mono'}
+		g
 	{:else if icon === 'vibe-mono'}
 		M
 	{:else if icon === 'telegram'}
