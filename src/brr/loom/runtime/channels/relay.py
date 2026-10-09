@@ -1,6 +1,6 @@
 """One relay poll into the ledger. Event identity survives cursor resets.
 
-``loom.run`` arms it when ``loom/config.toml`` says ``relay = true``
+``loom.run`` arms it when ``loom/config.toml`` sets ``relay_state``
 (slice 3): ``poll_forever`` holds the account's relay lock, so the daemon's
 cloud gate stops polling while the loom does. The injected client exposes
 ``pull(cursor)``, ``send(payload)`` and

@@ -141,12 +141,11 @@ def test_cloud_gate_records_its_cursor_after_each_poll(tmp_path, monkeypatch):
 def test_config_reads_flat_relay_keys(tmp_path):
     (tmp_path / "loom").mkdir()
     (tmp_path / "loom" / "config.toml").write_text(
-        'relay = true\nrelay_state = "~/acct"\n[channels.relay]\nenabled = true\n'
+        'relay_state = "~/acct"\n[channels.relay]\nenabled = true\n'
     )
     config = load_config(tmp_path)
-    assert config.relay is True
     assert config.relay_state == os.path.expanduser("~/acct")
-    assert load_config(tmp_path / "nowhere").relay is False
+    assert load_config(tmp_path / "nowhere").relay_state is None
 
 
 def test_poll_forever_starts_from_the_handed_cursor_and_records_its_own(home, tmp_path):
@@ -210,7 +209,7 @@ def test_arm_relay_registers_the_effect_and_polls(home, tmp_path, monkeypatch):
     state_dir = tmp_path / "acct"
     (home.root / "loom").mkdir(parents=True, exist_ok=True)
     (home.root / "loom" / "config.toml").write_text(
-        f'relay = true\nrelay_state = "{state_dir}"\n'
+        f'relay_state = "{state_dir}"\n'
     )
     pulled = threading.Event()
 
@@ -232,13 +231,6 @@ def test_arm_relay_registers_the_effect_and_polls(home, tmp_path, monkeypatch):
         loom_mod._disarm_relay(thread)
     assert "relay" not in speak.EFFECTS
     assert "letter:relay:ev_w" in {f.id for f in kinds(home, "letter")}
-
-
-def test_arm_relay_without_state_dir_is_an_attention_row(home):
-    (home.root / "loom").mkdir(parents=True, exist_ok=True)
-    (home.root / "loom" / "config.toml").write_text("relay = true\n")
-    assert loom_mod._arm_relay(home, load_config(home.root), threading.Event()) is None
-    assert "attention:relay-config" in {f.id for f in kinds(home, "attention")}
 
 
 # ── before live: the attachment give-up ─────────────────────────────────

@@ -516,17 +516,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
 
 
 def _arm_relay(home: Home, config, stop):
-    """``relay = true`` ⇒ the relay effect for speech and a poll thread.
-
-    Returns the poll thread, or ``None`` when the relay is off or can't arm.
-    A misconfigured relay is an attention row, never a dead loom.
-    """
-    if not config.relay:
-        return None
+    """``relay_state`` arms the speech effect and the relay poll thread."""
     if not config.relay_state:
-        _attention(home, "attention:relay-config",
-                   "relay = true but relay_state is unset: the loom is not listening to chat")
-        _log(home, "relay: enabled without relay_state; not armed")
         return None
     from brr.gates.relay_lock import RelayLock
     from . import speak
