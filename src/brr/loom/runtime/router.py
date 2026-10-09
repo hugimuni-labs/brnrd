@@ -309,7 +309,8 @@ class Router:
         for fact in state.accepted:
             if not self.armed() or self.lease is None:
                 return facts
-            if fact.kind != "letter" or fact.data.get("to") != CHANNEL:
+            to = fact.data.get("to")
+            if fact.kind != "letter" or not is_channel(to):
                 continue
             key = str(fact.data.get("id") or "")
             if not key or key in sent or key in state.handled:
@@ -321,8 +322,24 @@ class Router:
                 continue
             if grant != self.lease.gen:
                 continue
+            body = str(fact.data.get("body") or "")
+            context: dict = {}
+            if to != CHANNEL:
+                from .channels.relay import person_dm
+                if person_dm(self.home, str(to)) is None:
+                    from .loom import _attention
+                    _attention(
+                        self.home, f"attention:speech-refused:{key}",
+                        f"speech refused: {to} is not a known person's direct chat",
+                        letter=key,
+                    )
+                    continue
+                body = f"{_header(state, fact)}\n\n{body}"
+                event_id = _answers_event(state, fact)
+                if event_id:
+                    context["event_id"] = event_id
             status, speech = speak(
-                self.home, self.lease, key, str(fact.data.get("body") or ""),
+                self.home, self.lease, key, body, channel=str(to), context=context,
             )
             if speech is not None:
                 facts.append(speech)
@@ -332,6 +349,27 @@ class Router:
                 self.granting = False
                 return facts
         return facts
+
+
+def _header(state, letter: Fact) -> str:
+    """``<strand> · <thread>``: who is speaking, from which thread (fork 3)."""
+    strand = str(letter.data.get("from") or letter.by.split(":", 1)[-1])
+    thread = next((name for name, (holder, _gen) in state.holder.items()
+                   if holder == strand), None)
+    return f"{strand} · {thread}" if thread else strand
+
+
+def _answers_event(state, letter: Fact) -> str | None:
+    """The relay event a letter answers: its ``re`` names a relay-cited letter."""
+    re_id = letter.data.get("re")
+    if not re_id:
+        return None
+    for fact in state.accepted:
+        if fact.kind == "letter" and fact.data.get("id") == re_id:
+            cites = str(fact.data.get("cites") or "")
+            if cites.startswith("source:relay:"):
+                return cites.split("source:relay:", 1)[1]
+    return None
 
 
 def _routable(home: Home) -> list[str]:

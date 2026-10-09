@@ -34,7 +34,7 @@ def _freeze(data: dict) -> dict:
 # strand's loom still records that strand's fuse.
 _LOOM_KINDS = {
     "lease", "released", "attention", "router", "router.renewed",
-    "speech", "attention.cleared",
+    "speech", "speech.part", "attention.cleared",
 }
 
 

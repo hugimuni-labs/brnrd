@@ -42,6 +42,21 @@ class RelayClient:
             token=state["token"], params={"since": cursor, "wait": cloud._POLL_WAIT_S},
         )
 
+    def send(self, payload: dict) -> dict:
+        """An event answer → ``/responses`` (ack: ``{event_id, forwarded}``, no
+        message id today); anything else → ``/messages`` (ack carries
+        ``message_id``)."""
+        state = self._state()
+        if payload.get("event_id"):
+            body = {"event_id": payload["event_id"],
+                    "body_markdown": payload["body_markdown"], "status": "done"}
+            return cloud._request(state["brnrd_url"], "POST", "/v1/daemons/responses",
+                                  token=state["token"], json=body)
+        return cloud._request(
+            state["brnrd_url"], "POST", "/v1/daemons/messages",
+            token=state["token"], json=payload,
+        )
+
     def download_attachment(self, event_id: str, index: int, dest: Path) -> bool:
         state = self._state()
         return cloud._download_attachment(
@@ -83,11 +98,81 @@ def _sender(home: Home, platform: str, user_id: object) -> str:
     return f"stranger:{platform}:{'' if user_id is None else user_id}"
 
 
+def person_dm(home: Home, channel: str) -> str | None:
+    """``channel:<platform>/<chat>`` is a known person's direct chat ⇒ that person.
+
+    In a direct chat the chat id is the user id, so the verified mapping in
+    ``people/<name>/channels.md`` names it. Anything else (a group, an
+    unknown chat) is ``None``: until audience labels reach outbound speech,
+    the loom speaks only into a known person's DM, never into a room with
+    strangers in it.
+    """
+    try:
+        platform, chat = channel.split(":", 1)[1].split("/", 1)
+    except (AttributeError, ValueError):
+        return None
+    try:
+        sender = _sender(home, platform, chat)
+    except ValueError:
+        return None
+    return sender if sender.startswith("person:") else None
+
+
+def make_effect(client):
+    """The relay effect for ``speak.EFFECTS``: answer an event, or speak to the owner.
+
+    Answering (``context['event_id']``) posts ``{event_id, body_markdown}``.
+    Otherwise ``{platform, body_markdown}``: the relay resolves the platform's
+    owner chat itself, so an unprompted send can't pick an arbitrary chat.
+    The returned dict is the receipt; ``message_id`` is kept when the relay
+    returns one. ``/messages`` does (``MessageAck``); ``/responses`` doesn't
+    yet (``ResponseAck`` is ``{event_id, forwarded}``), so a reply to the
+    *first* part of an event answer can't bind until the relay returns it.
+    """
+    def effect(home, channel, part_key, text, context):
+        platform = channel.split(":", 1)[1].split("/", 1)[0]
+        payload = {"body_markdown": text}
+        # One event takes one response: only the first part answers it; the
+        # rest follow as ordinary messages to the same platform.
+        first = "#" not in part_key or part_key.endswith("#1")
+        if context.get("event_id") and first:
+            payload["event_id"] = context["event_id"]
+        else:
+            payload["platform"] = platform
+        response = client.send(payload) or {}
+        receipt = {"via": "event" if "event_id" in payload else "platform"}
+        for key in ("message_id", "id"):
+            if response.get(key) not in (None, ""):
+                receipt["message_id"] = response[key]
+                break
+        return receipt
+    return effect
+
+
 def _person_channel(to: object, chat: object) -> bool:
     # Chat keys are platform-qualified, so Telegram 42 cannot select a
     # WhatsApp thread whose chat happens to be 42.
     return (isinstance(to, str) and to == f"channel:{chat}"
             and to.split(":", 1)[1].split("/", 1)[0] in {"telegram", "slack", "whatsapp"})
+
+
+def letter_for_message(facts: list[Fact], channel: str, message_id: object) -> str | None:
+    """The loom letter a platform message carried, from ``speech.part`` receipts.
+
+    Only the loom's own receipts count, and only for the same channel, so a
+    message id from another chat (or another platform) binds nothing.
+    """
+    if message_id in (None, ""):
+        return None
+    for fact in facts:
+        if fact.kind != "speech.part" or not fact.by.startswith("loom:"):
+            continue
+        data = fact.data or {}
+        if data.get("channel") != channel:
+            continue
+        if str((data.get("receipt") or {}).get("message_id")) == str(message_id):
+            return str(data.get("key") or "") or None
+    return None
 
 
 def route_bare(facts: list[Fact], chat: str, reply_to_letter: str | None,
@@ -257,6 +342,12 @@ def pull_once(home: Home, client, cursor: int) -> int:
         # A resolved letter id enters route_bare through this separate seam.
         if platform == "telegram" and origin.get("reply_to_letter"):
             data["reply_to_letter"] = origin["reply_to_letter"]
+        elif data.get("reply_to_message_id") is not None:
+            bound = letter_for_message(
+                facts, f"channel:{platform}/{data['chat']}", data["reply_to_message_id"],
+            )
+            if bound:
+                data["reply_to_letter"] = bound
         # Source is durable before letter. Save the routing decision as part
         # of that intent: HLC ordering alone cannot reconstruct the original
         # snapshot once facts from another install arrive during recovery.
