@@ -16,9 +16,10 @@ Collected, and only when the envelope actually carries them:
   means the totals may under-count.
 - ``model_ids`` — the keys of ``modelUsage``, the models that actually ran.
 
-Not collected: subscription quota, reset time, and context-window
-headroom. The envelope has no window size, and no local probe is wired.
-Unknown capacity is not unlimited.
+Subscription quota and reset time come from the separate interactive
+``/usage`` probe in :mod:`brr.grok_usage`, merged by the daemon. This result
+collector supplies neither quota nor context-window headroom: the envelope
+has no window size. Unknown capacity is not unlimited.
 """
 
 from __future__ import annotations
@@ -32,8 +33,8 @@ from typing import Any
 
 SNAPSHOT_NAME = ".grok-result-levels.json"
 
-#: Spend is the only facet slot this collector can fill. Quota and
-#: context-window stay unwired on purpose.
+#: This result collector fills spend; grok_usage separately fills quota.
+#: The daemon unions their slot sets. Context-window headroom stays unwired.
 COLLECTED_SLOTS: frozenset[str] = frozenset({"spend"})
 
 _TOKEN_FIELDS = (

@@ -186,7 +186,7 @@ print(os.environ["GROK_ENVELOPE"])
     from brr import daemon, run_ledger
 
     levels, slots = daemon._collect_levels("grok-4.7", outbox, refresh=False)
-    assert slots == frozenset({"spend"})
+    assert slots == frozenset({"spend", "quota"})
     assert "quota" not in levels
     assert run_ledger.token_fields(levels)["tokens_input"] == 10
     assert run_ledger.token_fields(levels)["tokens_output"] == 3
@@ -233,7 +233,7 @@ def test_shared_fallback_keeps_spend_and_drops_the_other_run_tokens(tmp_path):
     shared = tmp_path / "shared"
     grok_status.write_snapshot(shared, grok_status.parse_result(json.loads(_envelope())))
     levels, slots = daemon._collect_levels("grok", None, shared_dir=shared, refresh=False)
-    assert slots == frozenset({"spend"})
+    assert slots == frozenset({"spend", "quota"})
     assert "tokens" not in levels
     assert "previous Grok session" in levels["spend"]["summary"]
 

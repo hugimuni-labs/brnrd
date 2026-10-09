@@ -160,6 +160,16 @@ def _no_claude_usage_pty_scrape(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_grok_usage_pty_scrape(monkeypatch):
+    """Unit tests must not open a real authenticated Grok usage session."""
+    from brr import grok_usage
+
+    real_capture = grok_usage.capture_usage_raw
+    monkeypatch.setattr(grok_usage, "capture_usage_raw", lambda **kwargs: b"")
+    yield real_capture
+
+
+@pytest.fixture(autouse=True)
 def _no_real_power_assertion(monkeypatch):
     """Never spawn a real ``caffeinate``/``systemd-inhibit`` from the unit
     suite (#1485).

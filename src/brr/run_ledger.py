@@ -20,6 +20,7 @@ from . import claude_status
 from . import claude_usage
 from . import codex_status
 from . import gitops
+from . import grok_usage
 from . import relics
 from . import runner_select
 from .run import Run
@@ -490,6 +491,12 @@ def load_quota_levels(
             )
             result = claude_status.load_snapshot(outbox_dir)
             return _merge_levels(usage, result)
+        if grok_usage.supported(runner_name):
+            cache_dir = gitops.shared_brr_dir(work_dir) if work_dir else outbox_dir
+            return grok_usage.load_or_refresh_snapshot(
+                cache_dir, cwd=work_dir,
+                max_age_seconds=0.0 if force_claude_refresh else None,
+            )
     except Exception:
         return None
     return None
