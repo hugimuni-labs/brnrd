@@ -56,6 +56,7 @@ include = ["brr*", "brnrd*"]
 
 [tool.setuptools.package-data]
 brr = ["AGENTS.md", "LICENSE", "Dockerfile", "prompts/*.md", "templates/*.md", "docs/*.md", "gates/README.md", "diffense/template.html", "data/*.json", "states/*.yaml"]
+"brr.self" = ["README.md", "templates/*", "templates/.self.json", "templates/*/*.md", "bench/*.md"]
 "brr.daemon2" = ["portal_shape.json", "states/*.yaml"]
 # Copied once into a self and owned there after (plan-loom-step-2).
 # Step 4a adds files under the same tree and does not edit this line.
@@ -109,6 +110,7 @@ dev = ["pytest>=7.0", "pytest-xdist>=3", "pyyaml>=6", "ruff>=0.16", "brnrd[backe
 [project.scripts]
 brnrd = "brr.cli:main"
 brnrd-console = "brr.operator_console:main"
+self = "brr.self.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

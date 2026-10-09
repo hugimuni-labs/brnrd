@@ -1,0 +1,7 @@
+{
+  "wake_budget_bytes": 16384,
+  "consolidate": {
+    "command": "claude -p --model haiku",
+    "timeout_seconds": 180
+  }
+}
