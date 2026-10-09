@@ -1,7 +1,9 @@
 """One relay poll into the ledger. Event identity survives cursor resets.
 
-This adapter is not armed by the loom yet: the shared-consumer cutover is
-slice 3. The injected client exposes ``pull(cursor)`` and
+``loom.run`` arms it when ``loom/config.toml`` says ``relay = true``
+(slice 3): ``poll_forever`` holds the account's relay lock, so the daemon's
+cloud gate stops polling while the loom does. The injected client exposes
+``pull(cursor)``, ``send(payload)`` and
 ``download_attachment(event_id, index, destination)``.
 """
 
@@ -241,6 +243,47 @@ def _blob(home: Home, client, event_id: str, index: int) -> tuple[str, int]:
         tmp.unlink(missing_ok=True)
 
 
+#: Pulls that may fail on one event's attachments before it lands without them.
+GIVE_UP_AFTER = 3
+
+
+def _failures_path(home: Home) -> Path:
+    return home.root / "loom" / "relay-failures.json"
+
+
+def _read_failures(home: Home) -> dict:
+    try:
+        data = json.loads(_failures_path(home).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _failure(home: Home, event_id: str) -> int:
+    """Count one failed pull for ``event_id``; return the count so far."""
+    data = _read_failures(home)
+    count = int(data.get(event_id, 0)) + 1
+    data[event_id] = count
+    atomic_write(_failures_path(home), json.dumps(data, sort_keys=True) + "\n")
+    return count
+
+
+def _clear_failure(home: Home, event_id: str) -> None:
+    data = _read_failures(home)
+    if event_id in data:
+        del data[event_id]
+        atomic_write(_failures_path(home), json.dumps(data, sort_keys=True) + "\n")
+
+
+def _attention(home: Home, fact_id: str, why: str) -> None:
+    from ..ledger import LedgerConflict
+    try:
+        append(home, Fact(kind="attention", by=f"loom:{home.install_id()}",
+                          id=fact_id, data={"why": why}))
+    except LedgerConflict:
+        pass
+
+
 def _letter(home: Home, source: Fact) -> Fact:
     # Reconstruct from the durable source, not from a replay's mutable text
     # or today's person map. A crash after source append cannot lose a letter
@@ -294,8 +337,28 @@ def pull_once(home: Home, client, cursor: int) -> int:
                     else [raw_attachments])
         blobs = []
         blob_ids = []
+        missing = []
+        downloaded = {}
         for index in range(len(names)):
-            sha, size = _blob(home, client, event_id, index)
+            try:
+                downloaded[index] = _blob(home, client, event_id, index)
+            except Exception:  # noqa: BLE001 — counted, then held or given up
+                missing.append(index)
+        if missing:
+            # One permanently missing file must not block every later
+            # message. Hold the cursor for GIVE_UP_AFTER pulls, then land the
+            # source without those blobs and say so.
+            tries = _failure(home, event_id)
+            if tries < GIVE_UP_AFTER:
+                raise RuntimeError(
+                    f"relay: attachment download failed: {event_id}#"
+                    f"{','.join(map(str, missing))} "
+                    f"(attempt {tries} of {GIVE_UP_AFTER})"
+                )
+        for index in range(len(names)):
+            if index not in downloaded:
+                continue
+            sha, size = downloaded[index]
             pointer = pointers[index]
             mime = ((pointer.get("mime_type") if isinstance(pointer, dict) else None)
                     or "application/octet-stream")
@@ -311,6 +374,8 @@ def pull_once(home: Home, client, cursor: int) -> int:
             "chat": meta["cloud_chat_id"], "topic": meta["cloud_topic_id"],
             "from": sender, "text": event.get("body") or "", "blobs": blobs,
         }
+        if missing:
+            data["blobs_missing"] = missing
         # Preserve the raw reply target for slice 2 to resolve against sent
         # receipts. message_id is the incoming id, never a reply target.
         if platform == "telegram" and origin.get("reply_to_message_id") is not None:
@@ -338,5 +403,55 @@ def pull_once(home: Home, client, cursor: int) -> int:
         sources[source_id] = source
         facts.append(_letter(home, source))
         letter_ids.add(letter_id)
+        if missing:
+            _attention(
+                home, f"attention:blobs-missing:{event_id}",
+                f"relay: gave up on attachment(s) {missing} of {event_id} "
+                f"after {GIVE_UP_AFTER} pulls; the message landed without them",
+            )
+        _clear_failure(home, event_id)
     _write_cursor(home, next_cursor)
     return next_cursor
+
+
+def poll_forever(home: Home, client, lock, stop, *, log=None,
+                 backoff_cap: float = 60.0) -> None:
+    """Hold the relay and long-poll it until ``stop`` is set.
+
+    ``lock`` is a ``brr.gates.relay_lock.RelayLock``. The loom declares that
+    it wants the relay, waits for the daemon to finish its current poll, then
+    starts from whichever cursor is further along: its own, or the one the
+    daemon handed over in the lock. Every committed cursor goes back into
+    the lock, so stopping the loom hands the relay back without a replay.
+    """
+    say = log or (lambda message: None)
+    lock.want()
+    waiting = False
+    backoff = 1.0
+    try:
+        while not stop.is_set():
+            if not lock.held:
+                if not lock.try_acquire():
+                    if not waiting:
+                        say(f"relay: waiting for {lock.holder()} to finish its poll")
+                        waiting = True
+                    stop.wait(0.5)
+                    continue
+                waiting = False
+                handed = lock.cursor()
+                own = read_cursor(home)
+                if handed is not None and handed > own:
+                    say(f"relay: cursor {own} -> {handed} (handed over)")
+                    _write_cursor(home, handed)
+                say(f"relay: polling from {read_cursor(home)}")
+            try:
+                cursor = pull_once(home, client, read_cursor(home))
+                lock.record(cursor)
+                backoff = 1.0
+            except Exception as exc:  # noqa: BLE001 — the loop must outlive one bad poll
+                say(f"relay: poll failed: {type(exc).__name__}: {exc}; retry in {backoff:.0f}s")
+                stop.wait(backoff)
+                backoff = min(backoff * 2, backoff_cap)
+    finally:
+        lock.release()
+        lock.unwant()

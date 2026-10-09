@@ -499,6 +499,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
     from .router import Router
     router = Router(home)
     _recover(home)
+    relay = _arm_relay(home, router.config, stop)
     bodies: dict[str, Body] = {}
     try:
         while not (stop is not None and stop.is_set()):
@@ -510,3 +511,42 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 break
     finally:
         _shutdown(bodies)
+        if relay is not None:
+            _disarm_relay(relay)
+
+
+def _arm_relay(home: Home, config, stop):
+    """``relay = true`` ⇒ the relay effect for speech and a poll thread.
+
+    Returns the poll thread, or ``None`` when the relay is off or can't arm.
+    A misconfigured relay is an attention row, never a dead loom.
+    """
+    if not config.relay:
+        return None
+    if not config.relay_state:
+        _attention(home, "attention:relay-config",
+                   "relay = true but relay_state is unset: the loom is not listening to chat")
+        _log(home, "relay: enabled without relay_state; not armed")
+        return None
+    from brr.gates.relay_lock import RelayLock
+    from . import speak
+    from .channels.relay import RelayClient, make_effect, poll_forever
+    client = RelayClient(config.relay_state)
+    speak.EFFECTS["relay"] = make_effect(client)
+    lock = RelayLock(config.relay_state, "loom")
+    thread = threading.Thread(
+        target=poll_forever, args=(home, client, lock, stop),
+        kwargs={"log": lambda message: _log(home, message)},
+        daemon=True, name="loom-relay",
+    )
+    thread.start()
+    _log(home, f"relay: armed on {config.relay_state}")
+    return thread
+
+
+def _disarm_relay(thread) -> None:
+    from . import speak
+    speak.EFFECTS.pop("relay", None)
+    # The poll thread sees ``stop`` within one long-poll; it releases the
+    # lock and its want on the way out. A daemon thread never blocks exit.
+    thread.join(timeout=1.0)
