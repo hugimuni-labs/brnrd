@@ -60,8 +60,8 @@ Every executable file in `core/immune.d/` runs, in name order, as
 `<check> <old> <new>`. Exit 0 accepts. Exit 1 refuses, and the refusal
 lists every failing check, not just the first. A file in that directory
 without the executable bit does not run. Copying the seed with a tool that
-drops `+x` silently drops the check. `10-readme` (step 2) and
-`50-core-notice` (this step) both have to stay executable.
+drops `+x` silently drops the check. `10-readme` (step 2), `20-labels` and `30-widening` (step 4b), and
+`50-core-notice` (this step) all have to stay executable.
 
 `50-core-notice` never refuses. When the push touches `core/` it prints
 one line, `core changed: <paths>`. The loom turns that line into the
@@ -71,10 +71,37 @@ Stderr from a failing check is prefixed with the check's file name
 (`10-readme: threads/inbox/README.md: why`). A check should print the
 reason, not its own name, or the name appears twice.
 
+## Labels
+
+`20-labels` reads `Loom-Label` on each new commit. No trailer refuses,
+unless the committer's email is listed in `core/loom/people-commit` at
+both tips. `taint=1` refuses unless a `Widening` trailer cites a clause
+that `30-widening` can see at the new tip: a line `{#clause-id}` in
+`people/<name>/agreement.md`. Existence only. Audience must contain
+`self`. One stderr line per commit, and a taint refusal names the strand.
+
+The seed lists no address. Comments and blank lines are not addresses.
+An empty list does not refuse an unlabeled commit, so the self's first
+push, and a push that never went through `send_to_self`, still land.
+Once either tip lists an address, an unlabeled commit has to be from an
+address on both non-empty lists. A commit that carries `Loom-Label` is
+checked either way. `send_to_self` always stamps, and overwrites a
+trailer the body wrote.
+
+Bash does not taint. A shell can read or fetch anything, and tainting
+every shell call would taint every strand, which is the same as having
+no labels. The sandbox owns that reach. The jack taints `WebFetch` and
+`WebSearch` only. A failed taint write is logged, and a strand whose
+jack error log is non-empty is tainted: the work stays open, the label
+fails closed.
+
+On this host the labels stop accidents and honest injections. They do
+not stop a body that can rewrite the hook, the stamp, or the facts.
+
 ## What this step does not do
 
-Labels, widening citations, and the README merge driver are step 4b.
-Until that driver exists, a README or `memory/stance.md` that both sides
-edited stops the rebase on purpose. `merge=union` is already set for
-`memory/scars`, `memory/itches`, `memory/moves`, and `threads/*/notes`.
-Union is built into git. It needs no driver configuration.
+`merge=union` is set for `memory/scars`, `memory/itches`, `memory/moves`,
+and `threads/*/notes`. Union is built into git. It needs no driver
+configuration. `threads/*/README.md` and `memory/stance.md` use the
+`loom-readme` driver. A result that fails step 2's README parser stops
+the rebase. The driver does not decide what the prose means.

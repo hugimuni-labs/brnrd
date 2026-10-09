@@ -26,7 +26,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _usage() -> None:
     print(
-        "usage: python -m brr.loom.runtime send-self --room DIR",
+        "usage: python -m brr.loom.runtime send-self --room DIR [--widening REF]",
         file=sys.stderr,
     )
 
@@ -34,9 +34,10 @@ def _usage() -> None:
 def _cmd_send_self(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime send-self")
     parser.add_argument("--room", required=True)
+    parser.add_argument("--widening", default=None)
     ns = parser.parse_args(argv)
     try:
-        outcome = send_to_self(ns.room)
+        outcome = send_to_self(ns.room, widening=ns.widening)
     except SendError as exc:
         print(str(exc), file=sys.stderr)
         return 1

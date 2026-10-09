@@ -112,7 +112,7 @@ def install_pre_receive(repo: str | Path) -> Path:
     return path
 
 
-def send_to_self(room: str | Path) -> Outcome:
+def send_to_self(room: str | Path, widening: str | None = None) -> Outcome:
     """Land the room's ``HEAD`` on ``origin``'s ``main``.
 
     The room is a clone on its own branch. A conflict stops the rebase and
@@ -132,6 +132,7 @@ def send_to_self(room: str | Path) -> Outcome:
         stopped = _continue(room_path) if _rebasing(room_path) else _rebase(room_path)
         if stopped is not None:
             return stopped
+        _stamp_range(room_path, widening)
         sha = _git(room_path, "rev-parse", "HEAD").stdout.strip()
         push = _git(room_path, "push", "origin", "HEAD:main", check=False)
         if push.returncode == 0:
@@ -283,6 +284,134 @@ def _env() -> dict[str, str]:
     env["GIT_EDITOR"] = "true"
     env["GIT_SEQUENCE_EDITOR"] = "true"
     return env
+
+
+def _stamp_range(room: Path, widening: str | None) -> None:
+    """Rewrite ``origin/main..HEAD`` so the body cannot keep its own trailers.
+
+    The label is the strand's fold, joined with the tip it rebased onto and
+    with any ``Loom-Label`` already on the range. Join only raises taint, so
+    a body-written ``taint=0`` on a tainted strand becomes ``taint=1``.
+    ``Widening`` is written only when this call was given one; a body-written
+    citation is dropped.
+    """
+    from .labels import join, label_inputs, strand_label
+
+    branch = _git(room, "symbolic-ref", "--short", "HEAD", check=False)
+    if branch.returncode != 0:
+        raise SendError("room is not on a branch; refusing to stamp")
+    name = branch.stdout.strip()
+    listed = [
+        line for line in _git(room, "rev-list", "--reverse", "origin/main..HEAD").stdout.split()
+        if line
+    ]
+    if not listed:
+        return
+    _strand, facts, self_root, log = label_inputs(room)
+    strand = _strand
+    label = strand_label(facts, strand, self_root=self_root, jack_log=log)
+    onto = _trailer_label(room, "origin/main")
+    if onto is not None:
+        label = join(label, onto)
+    for sha in listed:
+        existing = _trailer_label(room, sha)
+        if existing is not None:
+            label = join(label, existing)
+    original = _git(room, "rev-parse", "HEAD").stdout.strip()
+    _git(room, "checkout", "--detach", "origin/main")
+    try:
+        for sha in listed:
+            picked = _git(room, "cherry-pick", sha, check=False)
+            if picked.returncode != 0:
+                _git(room, "cherry-pick", "--abort", check=False)
+                raise SendError(_text(picked) or f"could not replay {sha} to stamp it")
+            message = _git(room, "log", "-1", "--format=%B").stdout
+            stamped = _stamp_message(message, strand=strand, label=label, widening=widening)
+            # A work tree's .git may be a file (a linked clone). Ask git.
+            git_dir = Path(_git(room, "rev-parse", "--absolute-git-dir").stdout.strip())
+            path = git_dir / "loom-stamp-msg"
+            path.write_text(stamped, encoding="utf-8")
+            amended = _git(
+                room, "-c", "commit.gpgsign=false", "commit", "--amend", "-F", os.fspath(path),
+                check=False,
+            )
+            if amended.returncode != 0:
+                raise SendError(_text(amended) or "could not stamp the commit message")
+    except Exception:
+        _git(room, "checkout", "-B", name, original, check=False)
+        raise
+    _git(room, "checkout", "-B", name, "HEAD")
+
+
+def _trailer_label(room: Path, rev: str):
+    message = _git(room, "log", "-1", "--format=%B", rev, check=False)
+    if message.returncode != 0:
+        return None
+    return _label_in_message(message.stdout)
+
+
+def _label_in_message(message: str):
+    from .labels import parse_trailer
+
+    _body, trailers = _split_message(message)
+    for line in trailers:
+        if line.startswith("Loom-Label:"):
+            return parse_trailer(line.split(":", 1)[1].strip())
+    return None
+
+
+def _split_message(message: str) -> tuple[str, list[str]]:
+    lines = message.splitlines()
+    end = len(lines)
+    while end > 0 and not lines[end - 1].strip():
+        end -= 1
+    start = end
+    while start > 0 and _looks_like_trailer(lines[start - 1]):
+        start -= 1
+    trailers = lines[start:end]
+    blank_before = start > 0 and not lines[start - 1].strip()
+    known = any(
+        line.split(":", 1)[0].strip() in {"Loom-Strand", "Loom-Label", "Widening"}
+        for line in trailers
+    )
+    if trailers and (blank_before or known):
+        body = lines[:start]
+        while body and not body[-1].strip():
+            body.pop()
+        return "\n".join(body), trailers
+    return "\n".join(lines[:end]), []
+
+
+def _looks_like_trailer(line: str) -> bool:
+    if line[:1] in {" ", "\t"}:
+        return True
+    key, sep, _value = line.partition(":")
+    return bool(sep) and bool(key.strip()) and " " not in key.strip()
+
+
+def _stamp_message(message: str, *, strand: str, label, widening: str | None) -> str:
+    """Drop body-written loom trailers, then let ``git interpret-trailers`` add ours."""
+    body, trailers = _split_message(message)
+    kept = [
+        line for line in trailers
+        if line.split(":", 1)[0].strip() not in {"Loom-Strand", "Loom-Label", "Widening"}
+    ]
+    text = body
+    if kept:
+        text = (text + "\n\n" + "\n".join(kept)) if text else "\n".join(kept)
+    if not text.endswith("\n"):
+        text += "\n"
+    cmd = [
+        "git", "interpret-trailers", "--if-exists", "replace",
+        "--trailer", f"Loom-Strand: {strand}",
+        "--trailer", f"Loom-Label: {label.trailer()}",
+    ]
+    if widening:
+        cmd += ["--trailer", f"Widening: {widening}"]
+    proc = subprocess.run(cmd, input=text, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        raise SendError(proc.stderr.strip() or "git interpret-trailers failed")
+    return proc.stdout if proc.stdout.endswith("\n") else proc.stdout + "\n"
 
 
 def _text(proc: subprocess.CompletedProcess[str]) -> str:

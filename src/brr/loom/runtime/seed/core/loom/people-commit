@@ -1,0 +1,3 @@
+# One email per line. Blank lines and # comments are ignored.
+# No address is enrolled yet, so an unlabeled commit still passes.
+# Add the person's email and unlabeled commits by anyone else are refused.

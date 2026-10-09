@@ -94,14 +94,43 @@ def _poll(room: Path) -> str:
         time.sleep(min(0.2, remaining))
 
 
+_TAINT_TOOLS = {"WebFetch", "WebSearch"}
+
+
+def _note_tool(room: Path, stdin_text: str) -> None:
+    """A web tool taints. Read and Bash do not. A failed write raises.
+
+    Bash can reach anything. Tainting every shell call would taint every
+    strand, which is the same as having no labels. The sandbox owns that
+    reach. The failure is logged by ``run``; a non-empty jack error log
+    taints the strand, so the label fails closed while the work stays open.
+    """
+    if not stdin_text or not stdin_text.strip():
+        return
+    try:
+        payload = json.loads(stdin_text)
+    except json.JSONDecodeError:
+        return
+    if not isinstance(payload, dict):
+        return
+    tool = payload.get("tool_name")
+    if tool not in _TAINT_TOOLS:
+        return
+    stem = mint(5)
+    atomic_write(
+        room / "port" / "out" / f"taint-{stem}.json",
+        json.dumps({"tool": tool}, separators=(",", ":")) + "\n",
+    )
+
+
 def execute(event: str, room: Path, stdin_text: str) -> str:
     """Return the hook's stdout. Raise on trouble; ``run`` turns that into fail-open."""
-    del stdin_text  # Claude's hook JSON is not the port.
     room = Path(room)
     if event not in {"start", "post", "stop"}:
         raise ValueError(f"unknown jack event {event!r}")
     if event == "post":
         _set_state(room, 0)
+        _note_tool(room, stdin_text)
     text = _boundary_text(room)
     parsed = parse_boundary(text) if text.strip() else Boundary.empty()
     if event == "start":

@@ -26,7 +26,12 @@ STATUSES = ("open", "live", "dormant", "settled", "retired")
 TENSES = ("plan", "reference")
 STATUS_WHY = "open|live|dormant|settled|retired"
 TENSE_WHY = "plan|reference"
-_EXECUTABLES = ("core/loom/wake", "core/immune.d/10-readme")
+_EXECUTABLES = (
+    "core/loom/wake",
+    "core/immune.d/10-readme",
+    "core/immune.d/20-labels",
+    "core/immune.d/30-widening",
+)
 
 AUTHOR_NAME = "brnrd-loom"
 AUTHOR_EMAIL = "loom@localhost"
@@ -289,6 +294,9 @@ def room(home: Path, strand: str) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     git(home, "clone", "--shared", str(source), str(dest))
     git(dest, "checkout", "-b", f"strand/{strand}")
+    # The README driver lives on the room that rebases, not on the bare self.
+    from brr.loom.runtime.merge_driver import install_merge_driver
+    install_merge_driver(dest)
     return dest
 
 
