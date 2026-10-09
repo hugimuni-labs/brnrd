@@ -1392,12 +1392,13 @@ class TestCommandBuilding:
             "--output-format",
             "json",
             "--dangerously-skip-permissions",
-            # local settings source isolates the run from the user's global
-            # and the project's committed settings — NOT --safe-mode, which
-            # would also silently disable the per-run hook settings brr
-            # installs for the `hooks: claude` profile.
+            # all three sources: the operator's own setup (user MCP servers,
+            # their sandbox settings, their hooks) reaches brnrd's runs, and
+            # local still carries the per-run hook settings brr installs for
+            # the `hooks: claude` profile. Was `local` alone until 2026-10-09,
+            # which silently dropped the user's MCPs and sandbox.
             "--setting-sources",
-            "local",
+            "user,project,local",
             "--system-prompt-file",
             _NUCLEUS_PATH,
         ]
