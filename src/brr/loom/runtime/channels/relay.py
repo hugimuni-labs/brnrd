@@ -397,21 +397,20 @@ def poll_forever(home: Home, client, lock, stop, *, log=None,
     backoff = 1.0
     failures: dict[str, int] = {}
     try:
+        while not stop.is_set() and not lock.try_acquire():
+            if not waiting:
+                say(f"relay: waiting for {lock.holder()} to finish its poll")
+                waiting = True
+            stop.wait(0.5)
+        if stop.is_set():
+            return
+        handed = lock.cursor()
+        own = read_cursor(home)
+        if handed is not None and handed > own:
+            say(f"relay: cursor {own} -> {handed} (handed over)")
+            _write_cursor(home, handed)
+        say(f"relay: polling from {read_cursor(home)}")
         while not stop.is_set():
-            if not lock.held:
-                if not lock.try_acquire():
-                    if not waiting:
-                        say(f"relay: waiting for {lock.holder()} to finish its poll")
-                        waiting = True
-                    stop.wait(0.5)
-                    continue
-                waiting = False
-                handed = lock.cursor()
-                own = read_cursor(home)
-                if handed is not None and handed > own:
-                    say(f"relay: cursor {own} -> {handed} (handed over)")
-                    _write_cursor(home, handed)
-                say(f"relay: polling from {read_cursor(home)}")
             try:
                 cursor = pull_once(home, client, read_cursor(home), failures=failures)
                 lock.record(cursor)
