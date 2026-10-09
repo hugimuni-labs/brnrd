@@ -42,7 +42,7 @@ Today's benchmarks grade alignment to a tight interface: an API, a schema, a CLI
   - horizon: it spends like a good founder: it knows the runway, bets where the upside is, and is never surprised by a bill
   - now: quota read for three providers; spend partial
 - **Hands in the world**: mail, calendar, browser, files, other apps
-  - horizon: a new hand is a file you declare, not a patch we ship [w-101]
+  - horizon: every hand a sane person needs, out of the box, and any resident can grow a new one in minutes: a declared file, not a patch we ship [w-101]
   - now: each hand wired by hand
 - **A society of residents**: minds that talk, trade knowledge, and test each other
   - horizon: an evolutionary loop. Residents set each other's exams, score each other, and the better variants survive: a self-measuring, self-improving cyber pal
