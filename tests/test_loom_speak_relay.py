@@ -132,3 +132,27 @@ def test_a_reply_binds_to_the_letter_its_message_carried(home, lease, client):
                   data={"key": "s-x/evil", "channel": "channel:telegram/42",
                         "receipt": {"message_id": 7}})
     assert relay.letter_for_message([forged], "channel:telegram/42", 7) is None
+
+
+def test_a_split_event_answer_responds_once_then_follows_with_messages(home, lease, client):
+    body = "\n".join("y" * 90 for _ in range(90))  # > one Telegram part
+    speak_mod.speak(home, lease, "s-a/long", body, channel="channel:telegram/42",
+                    context={"event_id": "ev_1"})
+    assert len(client.sent) >= 2
+    assert client.sent[0].get("event_id") == "ev_1"
+    assert all("event_id" not in p and p["platform"] == "telegram" for p in client.sent[1:])
+
+
+def test_client_routes_answers_to_responses_and_the_rest_to_messages(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(relay.cloud, "_load_state_from_dir",
+                        lambda d: {"brnrd_url": "https://relay", "token": "t"})
+    monkeypatch.setattr(relay.cloud, "_request",
+                        lambda url, method, path, **kw: calls.append((path, kw["json"])) or {})
+    c = relay.RelayClient(tmp_path)
+    c.send({"event_id": "ev_1", "body_markdown": "a"})
+    c.send({"platform": "telegram", "body_markdown": "b"})
+    assert calls == [
+        ("/v1/daemons/responses", {"event_id": "ev_1", "body_markdown": "a", "status": "done"}),
+        ("/v1/daemons/messages", {"platform": "telegram", "body_markdown": "b"}),
+    ]

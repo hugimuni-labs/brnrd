@@ -43,7 +43,15 @@ class RelayClient:
         )
 
     def send(self, payload: dict) -> dict:
+        """An event answer → ``/responses`` (ack: ``{event_id, forwarded}``, no
+        message id today); anything else → ``/messages`` (ack carries
+        ``message_id``)."""
         state = self._state()
+        if payload.get("event_id"):
+            body = {"event_id": payload["event_id"],
+                    "body_markdown": payload["body_markdown"], "status": "done"}
+            return cloud._request(state["brnrd_url"], "POST", "/v1/daemons/responses",
+                                  token=state["token"], json=body)
         return cloud._request(
             state["brnrd_url"], "POST", "/v1/daemons/messages",
             token=state["token"], json=payload,
@@ -117,12 +125,17 @@ def make_effect(client):
     Otherwise ``{platform, body_markdown}``: the relay resolves the platform's
     owner chat itself, so an unprompted send can't pick an arbitrary chat.
     The returned dict is the receipt; ``message_id`` is kept when the relay
-    returns one (unverified: the current API may not).
+    returns one. ``/messages`` does (``MessageAck``); ``/responses`` doesn't
+    yet (``ResponseAck`` is ``{event_id, forwarded}``), so a reply to the
+    *first* part of an event answer can't bind until the relay returns it.
     """
     def effect(home, channel, part_key, text, context):
         platform = channel.split(":", 1)[1].split("/", 1)[0]
         payload = {"body_markdown": text}
-        if context.get("event_id"):
+        # One event takes one response: only the first part answers it; the
+        # rest follow as ordinary messages to the same platform.
+        first = "#" not in part_key or part_key.endswith("#1")
+        if context.get("event_id") and first:
             payload["event_id"] = context["event_id"]
         else:
             payload["platform"] = platform
