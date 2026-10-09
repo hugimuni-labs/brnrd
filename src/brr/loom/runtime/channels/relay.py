@@ -251,15 +251,6 @@ def _blob(home: Home, client, event_id: str, index: int) -> tuple[str, int]:
 GIVE_UP_AFTER = 3
 
 
-def _attention(home: Home, fact_id: str, why: str) -> None:
-    from ..ledger import LedgerConflict
-    try:
-        append(home, Fact(kind="attention", by=f"loom:{home.install_id()}",
-                          id=fact_id, data={"why": why}))
-    except LedgerConflict:
-        pass
-
-
 def _letter(home: Home, source: Fact) -> Fact:
     # Reconstruct from the durable source, not from a replay's mutable text
     # or today's person map. A crash after source append cannot lose a letter
@@ -371,6 +362,7 @@ def pull_once(home: Home, client, cursor: int, *, failures: dict | None = None) 
         facts.append(_letter(home, source))
         letter_ids.add(letter_id)
         if missing:
+            from ..loom import _attention
             _attention(
                 home, f"attention:blobs-missing:{event_id}",
                 f"relay: gave up on attachment(s) {missing} of {event_id} "
