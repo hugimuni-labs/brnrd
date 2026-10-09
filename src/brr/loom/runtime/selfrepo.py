@@ -26,7 +26,12 @@ STATUSES = ("open", "live", "dormant", "settled", "retired")
 TENSES = ("plan", "reference")
 STATUS_WHY = "open|live|dormant|settled|retired"
 TENSE_WHY = "plan|reference"
-_EXECUTABLES = ("core/loom/wake", "core/immune.d/10-readme")
+_EXECUTABLES = (
+    "core/loom/wake",
+    "core/immune.d/10-readme",
+    "core/immune.d/20-labels",
+    "core/immune.d/30-widening",
+)
 
 AUTHOR_NAME = "brnrd-loom"
 AUTHOR_EMAIL = "loom@localhost"
@@ -233,6 +238,24 @@ def _commit(repo: Path, message: str) -> None:
         raise SelfError(f"git commit ({repo}) -> {proc.returncode}: {detail}")
 
 
+def _enroll_person_email(self_dir: Path) -> None:
+    """List the person's git email in ``core/loom/people-commit``.
+
+    Only that address may push a commit with no ``Loom-Label`` (20-labels
+    fails closed). The loom's own identity is never enrolled: strands commit
+    as it, and enrolling it would let a body skip the labels with a raw push.
+    """
+    proc = subprocess.run(["git", "config", "--global", "user.email"],
+                          capture_output=True, text=True)
+    email = proc.stdout.strip()
+    if proc.returncode != 0 or not email or email == AUTHOR_EMAIL:
+        return
+    path = self_dir / "core" / "loom" / "people-commit"
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    if email not in text.splitlines():
+        path.write_text(text + email + "\n", encoding="utf-8")
+
+
 def init_self(home: Path, person: str | None = None, remote: str | None = None) -> str:
     """Create ``home/self`` and return the one-line result.
 
@@ -254,12 +277,17 @@ def init_self(home: Path, person: str | None = None, remote: str | None = None) 
             agreement = self_dir / "people" / person / "agreement.md"
             agreement.parent.mkdir(parents=True, exist_ok=True)
             agreement.write_text(_agreement(person), encoding="utf-8")
+        _enroll_person_email(self_dir)
         git(self_dir, "init", "-b", "main")
         git(self_dir, "add", "-A")
         _commit(
             self_dir,
             "Seed the self.\n\n"
-            "The loom copies these files once; the self owns them after this commit.\n",
+            "The loom copies these files once; the self owns them after this commit.\n\n"
+            # The seed is the self's first push; 20-labels fails closed on an
+            # unlabeled commit, so the seed carries its own clean label.
+            "Loom-Strand: seed\n"
+            "Loom-Label: taint=0; audience=self\n",
         )
         if remote:
             git(self_dir, "remote", "add", "origin", remote)
@@ -289,6 +317,9 @@ def room(home: Path, strand: str) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     git(home, "clone", "--shared", str(source), str(dest))
     git(dest, "checkout", "-b", f"strand/{strand}")
+    # The README driver lives on the room that rebases, not on the bare self.
+    from brr.loom.runtime.merge_driver import install_merge_driver
+    install_merge_driver(dest)
     return dest
 
 

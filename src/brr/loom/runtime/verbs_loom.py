@@ -61,13 +61,17 @@ def _send(argv: list[str]) -> int:
     parser.add_argument("--to", required=True)
     parser.add_argument("--re")
     parser.add_argument("--note")
+    parser.add_argument("--clean", action="store_true")
+    parser.add_argument("--kind", default=None)
+    parser.add_argument("--ref", action="append", default=None)
     parser.add_argument("body", nargs="?")
     args = parser.parse_args(argv)
     room = _room(args.room)
     try:
         letter_id = write_send(
             room, to=args.to, sender=strand_of_room(room), body=args.body or "",
-            re=args.re, note=args.note,
+            re=args.re, note=args.note, clean=args.clean, kind=args.kind,
+            refs=tuple(args.ref or ()),
         )
     except (PortError, ValueError) as exc:
         sys.stderr.write(f"{exc}\n")

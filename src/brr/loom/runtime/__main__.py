@@ -10,6 +10,7 @@ VERBS = {
     "attention": "verbs_loom",
     "init": "verbs_self", "wake": "verbs_self",
     "send-self": "verbs_merge",
+    "merge-driver": "merge_driver",
 }
 
 

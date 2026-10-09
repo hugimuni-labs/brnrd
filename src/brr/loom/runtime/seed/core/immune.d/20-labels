@@ -1,0 +1,163 @@
+#!/bin/sh
+# 20-labels <old> <new>
+#
+# Every commit in old..new (every commit at <new> when <old> is all zeros):
+#   no Loom-Label  → refuse, unless the committer is enrolled
+#   taint=1        → refuse, unless a Widening trailer cites a real clause at <new>
+#   audience lacks self → refuse
+# One stderr line per commit and reason. The harness prefixes the check name.
+#
+# Enrollment is core/loom/people-commit: one email per line, # comments
+# ignored. Fail closed: an empty list enrolls nobody, so an unlabeled
+# commit is refused (a body pushing with raw git and no trailer must not
+# skip the labels). An unlabeled commit must be from an address on BOTH
+# lists, old and new, so a push cannot enroll itself or delete the list and
+# slip through. The first push (old = zeros) is judged by <new>'s list
+# alone; the seed commit itself carries Loom-Label. A commit that carries
+# Loom-Label is checked either way. send_to_self always stamps one.
+#
+# Not enforced here: a Loom-Label is a trailer, and anything that can push
+# can write one. Labels bind a body that cannot reach a push credential
+# (the sandbox) or a loom-signed stamp; until then they stop accidents and
+# honest injections, not a body that forges the trailer.
+
+old=${1:-}
+new=${2:-}
+if [ -z "$old" ] || [ -z "$new" ]; then
+    printf 'usage: 20-labels <old> <new>\n' >&2
+    exit 2
+fi
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/20-labels.XXXXXX") || {
+    printf 'mktemp failed\n' >&2
+    exit 1
+}
+trap 'rm -rf "$tmp"' EXIT
+
+zeros_p() {
+    case "$1" in
+        ""|*[!0]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+load_list() {
+    rev=$1
+    dest=$2
+    : >"$dest"
+    if zeros_p "$rev"; then
+        return 0
+    fi
+    if ! git cat-file -e "$rev:core/loom/people-commit" >/dev/null 2>&1; then
+        return 0
+    fi
+    git show "$rev:core/loom/people-commit" 2>/dev/null | while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            ""|"#"*) continue ;;
+        esac
+        line=$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        case "$line" in
+            ""|"#"*) continue ;;
+        esac
+        printf '%s\n' "$line"
+    done >"$dest"
+}
+
+enrolled() {
+    list=$1
+    email=$2
+    if [ ! -s "$list" ]; then
+        return 1
+    fi
+    grep -Fxq -- "$email" "$list"
+}
+
+trailer_values() {
+    key=$1
+    printf '%s\n' "$msg" | git interpret-trailers --parse 2>/dev/null |
+        sed -n "s/^${key}:[[:space:]]*//p"
+}
+
+valid_widening() {
+    value=$1
+    case "$value" in
+        people/*/agreement.md#*) ;;
+        *) return 1 ;;
+    esac
+    file=${value%%#*}
+    clause=${value#*#}
+    case "$clause" in
+        *[!A-Za-z0-9_-]*|"") return 1 ;;
+    esac
+    mid=${file#people/}
+    mid=${mid%/agreement.md}
+    case "$mid" in
+        ""|*/*|.*|..) return 1 ;;
+    esac
+    blob=$tmp/clause
+    if ! git show "$new:$file" >"$blob" 2>/dev/null; then
+        return 1
+    fi
+    grep -F "{#$clause}" "$blob" >/dev/null 2>&1
+}
+
+load_list "$old" "$tmp/old-list"
+load_list "$new" "$tmp/new-list"
+
+if zeros_p "$old"; then
+    git rev-list --reverse "$new" >"$tmp/commits" 2>/dev/null || : >"$tmp/commits"
+else
+    git rev-list --reverse "${old}..${new}" >"$tmp/commits" 2>/dev/null || : >"$tmp/commits"
+fi
+
+status=0
+while IFS= read -r sha || [ -n "$sha" ]; do
+    [ -n "$sha" ] || continue
+    short=$(printf '%s' "$sha" | cut -c1-12)
+    email=$(git log -1 --format=%ce "$sha" 2>/dev/null || true)
+    msg=$(git log -1 --format=%B "$sha" 2>/dev/null || true)
+    label=$(trailer_values Loom-Label | head -n 1)
+    strand=$(trailer_values Loom-Strand | head -n 1)
+    [ -n "$strand" ] || strand="?"
+    if [ -z "$label" ]; then
+        if zeros_p "$old"; then
+            enrolled "$tmp/new-list" "$email" && continue
+        elif enrolled "$tmp/old-list" "$email" && enrolled "$tmp/new-list" "$email"; then
+            continue
+        fi
+        printf '%s: no Loom-Label\n' "$short" >&2
+        status=1
+        continue
+    fi
+    taint=$(printf '%s' "$label" | sed -n 's/.*taint=\([01]\).*/\1/p')
+    audience=$(printf '%s' "$label" | sed -n 's/.*audience=\([^;]*\).*/\1/p')
+    if [ "$taint" != "0" ] && [ "$taint" != "1" ]; then
+        printf '%s: Loom-Label unreadable\n' "$short" >&2
+        status=1
+        continue
+    fi
+    if [ "$taint" = "1" ]; then
+        opened=1
+        trailer_values Widening >"$tmp/widen"
+        while IFS= read -r cite || [ -n "$cite" ]; do
+            [ -n "$cite" ] || continue
+            if valid_widening "$cite"; then
+                opened=0
+                break
+            fi
+        done <"$tmp/widen"
+        if [ "$opened" -eq 1 ]; then
+            printf '%s: taint=1 strand %s\n' "$short" "$strand" >&2
+            status=1
+        fi
+    fi
+    case ",$audience," in
+        *,self,*) ;;
+        *)
+            printf '%s: audience missing self\n' "$short" >&2
+            status=1
+            ;;
+    esac
+done <"$tmp/commits"
+
+exit "$status"

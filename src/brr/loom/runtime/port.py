@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -184,8 +185,54 @@ def _full_re(room: Path, re: str) -> str:
     return matches[0] if len(matches) == 1 else re
 
 
+_CLEAN_KINDS = frozenset({"found", "done", "failed", "question", "proposal"})
+
+
+def clean_accepts(room: Path, kind: str | None, refs: list[str] | tuple[str, ...],
+                  body: str) -> bool:
+    """A clean letter is an enum, checked refs, and no free text.
+
+    A ref is a path that exists in the self or the room, or an ``https://``
+    URL checked for shape only. Nothing is fetched.
+    """
+    if kind not in _CLEAN_KINDS:
+        return False
+    if body.strip():
+        return False
+    if not refs:
+        return False
+    return all(_ref_ok(Path(room), ref) for ref in refs)
+
+
+def _ref_ok(room: Path, ref: str) -> bool:
+    if not isinstance(ref, str) or not ref or any(ch in ref for ch in " \n\t"):
+        return False
+    if ref.startswith("https://"):
+        host = ref[8:].split("/", 1)[0]
+        return bool(host) and host not in {".", ".."} and ".." not in host
+    if ref.startswith("/") or "\\" in ref or "://" in ref:
+        return False
+    parts = Path(ref).parts
+    if not parts or any(part in {".", ".."} for part in parts):
+        return False
+    return any((root / ref).exists() for root in _ref_roots(room))
+
+
+def _ref_roots(room: Path) -> list[Path]:
+    roots = [room]
+    if (room / "self").is_dir():
+        roots.append(room / "self")
+    if room.name == "self":
+        roots.append(room.parent.parent / "self")
+    if room.parent.name == "rooms":
+        roots.append(room.parent.parent / "self")
+    return roots
+
+
 def write_send(room: Path, *, to: str, sender: str, body: str = "",
-               re: str | None = None, note: str | None = None) -> str:
+               re: str | None = None, note: str | None = None,
+               clean: bool = False, kind: str | None = None,
+               refs: tuple[str, ...] | list[str] = ()) -> str:
     home = home_of_room(Path(room))
     if is_channel(to):
         if to != "channel:fake":
@@ -212,6 +259,20 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         fields["re"] = re
     if note is not None:
         fields["note"] = note
+    elif clean:
+        # Schema decides. A passing letter is taint 0. Anything else keeps
+        # the sender's label, including a jack log that tainted them.
+        from .labels import label_inputs, strand_label
+        _strand, facts, self_root, log = label_inputs(Path(room))
+        sender_label = strand_label(facts, sender, self_root=self_root, jack_log=log)
+        fields["clean"] = kind or ""
+        if refs:
+            fields["refs"] = " ".join(refs)
+        if clean_accepts(Path(room), kind, list(refs), body):
+            fields["label"] = f"taint=0; audience={','.join(sorted(sender_label.audience))}"
+            body = ""
+        else:
+            fields["label"] = sender_label.trailer()
     write_port(room, stem, _front(fields, "" if note is not None else body))
     return letter_id
 
@@ -229,8 +290,38 @@ def write_molt(room: Path, why: str) -> str:
     return fact_id
 
 
-def fact_from_port(fm: dict[str, str], strand: str, gen: int | None) -> Fact:
-    """Turn one ingested port file into a fact. ``gen`` is the strand's live lease."""
+def _current_label(room: Path | None, strand: str):
+    from .labels import CLEAN, label_inputs, strand_label
+    if room is None:
+        return CLEAN
+    _strand, facts, self_root, log = label_inputs(Path(room))
+    return strand_label(facts, strand, self_root=self_root, jack_log=log)
+
+
+def fact_from_taint(text: str, strand: str, fact_id: str) -> Fact:
+    """The jack's ``taint-*.json``. WebFetch and WebSearch only."""
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise PortError(f"taint file is not json: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise PortError("taint file is not an object")
+    tool = payload.get("tool")
+    if tool not in {"WebFetch", "WebSearch"}:
+        raise PortError(f"taint file tool {tool!r} is not a taint source")
+    return Fact(
+        kind="label.tainted", by=f"strand:{strand}", id=fact_id,
+        data={"strand": strand, "tool": tool},
+    )
+
+
+def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
+                   room: Path | None = None) -> Fact:
+    """Turn one ingested port file into a fact. ``gen`` is the strand's live lease.
+
+    A ``clean`` claim is checked again here. The file's own ``label`` line is
+    not a way to become clean: only the schema does that.
+    """
     kind = fm.get("kind")
     fact_id = fm.get("id")
     if not fact_id:
@@ -246,6 +337,16 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None) -> Fact:
             thread_of(data["to"])
         if fm.get("re"):
             data["re"] = fm["re"]
+        if fm.get("clean"):
+            refs = (fm.get("refs") or "").split()
+            sender = _current_label(room, strand)
+            if room is not None and clean_accepts(Path(room), fm.get("clean"), refs, data["body"]):
+                data["body"] = ""
+                data["clean"] = fm["clean"]
+                data["refs"] = refs
+                data["label"] = {"taint": False, "audience": sorted(sender.audience)}
+            else:
+                data["label"] = sender.as_dict()
         return Fact(kind="letter", by=f"strand:{strand}", data=data, id=fact_id)
     if kind == "note":
         if not fm.get("re") or not fm.get("note"):

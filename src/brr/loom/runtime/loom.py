@@ -19,7 +19,9 @@ from .adapters import claude_argv, fake_argv, wait_seconds
 from .attention import actionable
 from .home import Home, atomic_write, is_channel, mint
 from .ledger import LedgerConflict, append, read_facts
-from .port import fact_from_port, parse_frontmatter, render_boundary, render_wake
+from .port import (
+    fact_from_port, fact_from_taint, parse_frontmatter, render_boundary, render_wake,
+)
 from .project import fold, generation, sender_threads
 
 SRC = str(Path(__file__).resolve().parents[3])
@@ -313,9 +315,17 @@ def _ingest(home: Home, facts: list[Fact] | None = None, ttl: float | None = Non
             try:
                 fact = fact_from_port(
                     parse_frontmatter(path.read_text()), strand,
-                    generation(facts, strand),
+                    generation(facts, strand), room=room,
                 )
                 _stamp_router(fact, facts)
+                facts.append(append(home, fact))
+            except Exception as exc:
+                _reject(home, room, path, f"{type(exc).__name__}: {exc}")
+                continue
+            path.unlink()
+        for path in sorted(out.glob("taint-*.json")):
+            try:
+                fact = fact_from_taint(path.read_text(), strand, f"{strand}/{path.stem}")
                 facts.append(append(home, fact))
             except Exception as exc:
                 _reject(home, room, path, f"{type(exc).__name__}: {exc}")
