@@ -2,7 +2,7 @@
 name = "brnrd"
 # Derived from src/brr/__init__.py — see [tool.setuptools.dynamic] below.
 dynamic = ["version"]
-description = "Structured guardrails for AI agent work, managed from a chat"
+description = "Local agents go brr. The persistent layer that keeps your Claude Code or Codex agent working across reboots, chats and provider limits, with its memory in git."
 authors = [ { name = "HugiMuni" } ]
 readme = "README.md"
 requires-python = ">=3.10"
