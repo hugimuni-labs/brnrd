@@ -142,8 +142,8 @@ def _refuse_untrusted(tier: str, detail: str) -> TrustDecision:
         reason=(
             f"untrusted run refused: {detail}. Enable solitary with docker.image "
             "in security.config and a running Docker daemon, or configure "
-            "trust.untrusted_env=sandbox with sbx on PATH and `sbx daemon start`. "
-            "Untrusted runs require solitary or sandbox."
+            "trust.untrusted_env=sandbox with sbx on PATH and `sbx daemon start`, "
+            "or name a weaker env yourself with trust.untrusted_env."
         ),
     )
 
