@@ -118,7 +118,9 @@ def fold(facts: Iterable[Fact]) -> Fold:
             continue
         if fact.kind == "letter" and "gen" not in data:
             sender = str(data.get("from") or "")
-            if fact.by.startswith("person:") or sender.startswith("p-"):
+            ingress = (fact.by.startswith("loom:")
+                       and str(data.get("cites") or "").startswith("source:relay:"))
+            if fact.by.startswith("person:") or sender.startswith("p-") or ingress:
                 state.accepted.append(fact)
                 thread = _destination(data)
                 if thread is not None and data.get("id"):
