@@ -37,6 +37,24 @@ def _destination(data: dict) -> str | None:
         return None
 
 
+def lease_accepted(newest_router: int | None, fact: Fact) -> bool:
+    """A lease counts only from the router that was current when it was written.
+
+    No ``router_gen`` is a step-1 lease: it counts while no router fact
+    precedes it, and counts for nothing once a router has. A lease whose
+    ``router_gen`` is not the newest ``router`` fact so far was written by a
+    stale router after the new one and does not take the thread.
+    """
+    raw = fact.data.get("router_gen")
+    if raw is None:
+        return newest_router is None
+    try:
+        grant = int(raw)
+    except (TypeError, ValueError):
+        return False
+    return newest_router == grant
+
+
 def fold(facts: Iterable[Fact]) -> Fold:
     """Replay ``facts`` in causal order.
 
@@ -47,6 +65,7 @@ def fold(facts: Iterable[Fact]) -> Fold:
     state = Fold()
     live: dict[str, int] = {}
     dest: dict[str, str] = {}
+    newest: int | None = None
 
     def consider(writer: str, gen: int, re: object) -> None:
         if not isinstance(re, str) or not re:
@@ -57,9 +76,31 @@ def fold(facts: Iterable[Fact]) -> Fold:
 
     for fact in union(list(facts)):
         data = fact.data
+        if fact.kind == "router":
+            try:
+                gen = int(data["gen"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if newest is None or gen > newest:
+                newest = gen
+            continue
+        if fact.kind == "attention.cleared":
+            state.accepted.append(fact)
+            continue
         if fact.kind == "lease":
+            if not lease_accepted(newest, fact):
+                continue
             strand, gen = str(data["strand"]), int(data["gen"])
-            state.holder[str(data["thread"])] = (strand, gen)
+            thread = str(data["thread"])
+            previous = state.holder.get(thread)
+            # A new holder fences the previous strand even across installs.
+            # Step 1 only replaced ``live`` when the same strand was leased
+            # again; a failover grants a different strand.
+            if previous is not None and previous != (strand, gen):
+                old_strand, old_gen = previous
+                if live.get(old_strand) == old_gen:
+                    live.pop(old_strand, None)
+            state.holder[thread] = (strand, gen)
             live[strand] = gen
             state.accepted.append(fact)
             continue

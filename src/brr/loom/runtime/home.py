@@ -15,17 +15,29 @@ def mint(n: int) -> str:
     return "".join(secrets.choice(_ALPHABET) for _ in range(n))
 
 
+def check_install(value: str) -> str:
+    if (not isinstance(value, str) or len(value) != 4 or
+            any(c not in "0123456789abcdef" for c in value)):
+        raise ValueError(f"install id {value!r} is not 4 hex chars")
+    return value
+
+
+def is_channel(to: object) -> bool:
+    return isinstance(to, str) and to.startswith("channel:")
+
+
 class Home:
-    def __init__(self, root: Path | str):
+    def __init__(self, root: Path | str, install: str | None = None):
         self.root = Path(root)
+        self._install = check_install(install) if install is not None else None
 
     def install_id(self) -> str:
+        if self._install is not None:
+            return self._install
         path = self.root / "loom" / "install-id"
         if path.is_file():
             value = path.read_text().strip()
-            if len(value) != 4 or any(c not in "0123456789abcdef" for c in value):
-                raise ValueError(f"install id {value!r} is not 4 hex chars")
-            return value
+            return check_install(value)
         path.parent.mkdir(parents=True, exist_ok=True)
         value = secrets.token_hex(2)
         try:
@@ -49,6 +61,22 @@ class Home:
 
     def thread_exists(self, thread: str) -> bool:
         return (self.thread_dir(thread) / "README.md").is_file()
+
+    def on_main(self, thread: str) -> bool:
+        """Step 1 is the folder. A git self also requires the README on ``main``.
+
+        No ``.git`` means the step-1 home: the file on disk is the whole check.
+        """
+        check_thread_id(thread)
+        self_dir = self.root / "self"
+        if not (self_dir / ".git").exists():
+            return True
+        from .selfrepo import git
+        proc = git(
+            self_dir, "cat-file", "-e", f"main:threads/{thread}/README.md",
+            check=False,
+        )
+        return proc.returncode == 0
 
     def room(self, strand: str) -> Path:
         if not strand or strand in {".", ".."} or "/" in strand or "\\" in strand:

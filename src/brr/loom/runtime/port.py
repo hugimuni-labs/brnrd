@@ -8,7 +8,9 @@ from pathlib import Path
 
 from brr.daemon2.facts import Fact
 
-from .home import atomic_write, home_of_room, mint, strand_of_room, thread_of
+from .home import (
+    atomic_write, home_of_room, is_channel, mint, strand_of_room, thread_of,
+)
 
 
 class PortError(RuntimeError):
@@ -163,16 +165,41 @@ def write_port(room: Path, stem: str, text: str) -> None:
     atomic_write(Path(room) / "port" / "out" / f"{stem}.md", text)
 
 
+def _full_re(room: Path, re: str) -> str:
+    """A bare stem that names exactly one owed letter becomes its full id.
+
+    The router demo's haiku answered ``--re imf8b`` for ``p-test/imf8b``: the
+    answer handled nothing, the letter stayed owed, and the body answered it
+    twice. Anything else passes through untouched; a reply may name a letter
+    that is no longer owed.
+    """
+    if "/" in re:
+        return re
+    path = room / "port" / "in" / "boundary.md"
+    try:
+        ids = parse_boundary(path.read_text()).ids if path.is_file() else []
+    except PortError:
+        return re
+    matches = [item for item in ids if item.endswith("/" + re)]
+    return matches[0] if len(matches) == 1 else re
+
+
 def write_send(room: Path, *, to: str, sender: str, body: str = "",
                re: str | None = None, note: str | None = None) -> str:
     home = home_of_room(Path(room))
-    thread = thread_of(to)
-    if not home.thread_exists(thread):
-        raise PortError(
-            f"send: no thread {thread} "
-            f"({home.thread_dir(thread) / 'README.md'} does not exist)")
+    if is_channel(to):
+        if to != "channel:fake":
+            raise PortError(f"send: no channel adapter for {to!r}")
+    else:
+        thread = thread_of(to)
+        if not home.thread_exists(thread):
+            raise PortError(
+                f"send: no thread {thread} "
+                f"({home.thread_dir(thread) / 'README.md'} does not exist)")
     if note is not None and not re:
         raise PortError("send: --note requires --re")
+    if re:
+        re = _full_re(Path(room), re)
     if note is not None and body:
         raise PortError("send: --note is the whole no-answer; drop the body")
     stem = mint(5)
@@ -215,7 +242,8 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None) -> Fact:
             "id": fact_id, "to": fm["to"], "body": fm.get("body", ""),
             "from": fm.get("from") or strand, "gen": gen,
         }
-        thread_of(data["to"])
+        if not is_channel(data["to"]):
+            thread_of(data["to"])
         if fm.get("re"):
             data["re"] = fm["re"]
         return Fact(kind="letter", by=f"strand:{strand}", data=data, id=fact_id)

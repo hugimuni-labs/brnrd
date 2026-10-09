@@ -7,6 +7,7 @@ import sys
 
 VERBS = {
     "loom": "verbs_loom", "send": "verbs_loom", "molt": "verbs_loom", "jack": "verbs_loom",
+    "attention": "verbs_loom",
     "init": "verbs_self", "wake": "verbs_self",
     "send-self": "verbs_merge",
 }

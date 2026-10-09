@@ -30,9 +30,17 @@ def _freeze(data: dict) -> dict:
     return frozen
 
 
+# The loom's own file, not a strand's. One writer: the router, except a
+# strand's loom still records that strand's fuse.
+_LOOM_KINDS = {
+    "lease", "released", "attention", "router", "router.renewed",
+    "speech", "attention.cleared",
+}
+
+
 def fact_filename(fact: Fact) -> str:
     """loom.jsonl holds leases, releases, attention, and injected letters."""
-    if fact.kind in {"lease", "released", "attention"}:
+    if fact.kind in _LOOM_KINDS:
         return "loom.jsonl"
     if fact.kind == "letter" and "gen" not in fact.data:
         return "loom.jsonl"
@@ -64,8 +72,11 @@ def read_file(path: Path) -> list[Fact]:
 
 
 def read_facts(home: Home) -> list[Fact]:
-    directory = home.facts_dir()
-    streams = [read_file(path) for path in sorted(directory.glob("*.jsonl"))]
+    """Union every install's folder. Appending stays inside the caller's own."""
+    root = home.root / "ledger" / "facts"
+    if not root.is_dir():
+        return []
+    streams = [read_file(path) for path in sorted(root.glob("*/*.jsonl"))]
     if not streams:
         return []
     return union(*streams)
