@@ -289,8 +289,10 @@ def _env() -> dict[str, str]:
 def _stamp_range(room: Path, widening: str | None) -> None:
     """Rewrite ``origin/main..HEAD`` so the body cannot keep its own trailers.
 
-    The label is the strand's fold, joined with the tip it rebased onto and
-    with any ``Loom-Label`` already on the range. Join only raises taint, so
+    The label is the strand's fold, joined with any ``Loom-Label`` already
+    on the range. Not with the tip it rebased onto: a commit on ``main``
+    already passed ``immune`` (a widening is the person letting it in), and
+    joining it would make taint sticky for every later strand. Join only raises taint, so
     a body-written ``taint=0`` on a tainted strand becomes ``taint=1``.
     ``Widening`` is written only when this call was given one; a body-written
     citation is dropped.
@@ -310,9 +312,6 @@ def _stamp_range(room: Path, widening: str | None) -> None:
     _strand, facts, self_root, log = label_inputs(room)
     strand = _strand
     label = strand_label(facts, strand, self_root=self_root, jack_log=log)
-    onto = _trailer_label(room, "origin/main")
-    if onto is not None:
-        label = join(label, onto)
     for sha in listed:
         existing = _trailer_label(room, sha)
         if existing is not None:

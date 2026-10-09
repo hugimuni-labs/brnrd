@@ -69,7 +69,7 @@ def published(tmp: Path) -> Path:
     copy_seed(work)
     write(work, "memory/scars/x.md", "base\n")
     write(work, "threads/inbox/README.md", README)
-    commit(work, "seed")
+    commit(work, "seed\n\nLoom-Strand: seed\nLoom-Label: taint=0; audience=self\n")
     git(work, "remote", "add", "origin", os.fspath(bare))
     install_pre_receive(bare)
     first = git(work, "push", "origin", "HEAD:main", check=False)
@@ -127,7 +127,8 @@ def test_an_unparseable_readme_stops_the_rebase(tmp_path: Path, monkeypatch) -> 
     assert "memory/stance.md" in stopped.files
 
 
-def test_the_merged_commit_carries_the_join(tmp_path: Path, monkeypatch) -> None:
+def test_a_clean_strand_after_a_widened_one_stays_clean(tmp_path: Path, monkeypatch) -> None:
+    """A widened commit on main is admitted; it must not taint every later strand."""
     monkeypatch.setenv("LOOM_MERGE_BODY", "fake")
     bare = published(tmp_path)
     left = room(bare, tmp_path / "a", "strand/stained")
@@ -139,13 +140,15 @@ def test_the_merged_commit_carries_the_join(tmp_path: Path, monkeypatch) -> None
     (left / "port" / "jack-errors.log").write_text("traceback\n", encoding="utf-8")
     opened = send_to_self(left, widening="people/ada/agreement.md#read")
     assert opened.status == "merged", opened
+    assert "taint=1" in git(bare, "log", "-1", "--format=%B", "main").stdout
     write(right, "memory/scars/a.md", "from-clean\n")
     commit(right, "clean follows")
-    landed = send_to_self(right, widening="people/ada/agreement.md#read")
+    landed = send_to_self(right)
     assert landed.status == "merged", landed
     text = git(bare, "log", "-1", "--format=%B", "main").stdout
     assert "Loom-Strand: clean" in text
-    assert "Loom-Label: taint=1; audience=self" in text
+    assert "Loom-Label: taint=0; audience=self" in text
+    assert "Widening:" not in text
 
 
 @pytest.mark.skipif(os.environ.get("LOOM_DEMO") != "1", reason="set LOOM_DEMO=1 to run haiku once")

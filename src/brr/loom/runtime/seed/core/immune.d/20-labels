@@ -8,13 +8,18 @@
 # One stderr line per commit and reason. The harness prefixes the check name.
 #
 # Enrollment is core/loom/people-commit: one email per line, # comments
-# ignored. The seed lists nobody. An empty list does not refuse unlabeled
-# commits, so the self's first push and the 4a suite (they push as the
-# person, not through send_to_self) still land. Once either tip lists an
-# address, an unlabeled commit must be from an address on BOTH non-empty
-# lists: a push cannot enroll a stranger, or delete the list, and slip
-# through. A commit that carries Loom-Label is checked either way.
-# send_to_self always stamps one.
+# ignored. Fail closed: an empty list enrolls nobody, so an unlabeled
+# commit is refused (a body pushing with raw git and no trailer must not
+# skip the labels). An unlabeled commit must be from an address on BOTH
+# lists, old and new, so a push cannot enroll itself or delete the list and
+# slip through. The first push (old = zeros) is judged by <new>'s list
+# alone; the seed commit itself carries Loom-Label. A commit that carries
+# Loom-Label is checked either way. send_to_self always stamps one.
+#
+# Not enforced here: a Loom-Label is a trailer, and anything that can push
+# can write one. Labels bind a body that cannot reach a push credential
+# (the sandbox) or a loom-signed stamp; until then they stop accidents and
+# honest injections, not a body that forges the trailer.
 
 old=${1:-}
 new=${2:-}
@@ -62,7 +67,7 @@ enrolled() {
     list=$1
     email=$2
     if [ ! -s "$list" ]; then
-        return 0
+        return 1
     fi
     grep -Fxq -- "$email" "$list"
 }
@@ -115,10 +120,13 @@ while IFS= read -r sha || [ -n "$sha" ]; do
     strand=$(trailer_values Loom-Strand | head -n 1)
     [ -n "$strand" ] || strand="?"
     if [ -z "$label" ]; then
-        if ! enrolled "$tmp/old-list" "$email" || ! enrolled "$tmp/new-list" "$email"; then
-            printf '%s: no Loom-Label\n' "$short" >&2
-            status=1
+        if zeros_p "$old"; then
+            enrolled "$tmp/new-list" "$email" && continue
+        elif enrolled "$tmp/old-list" "$email" && enrolled "$tmp/new-list" "$email"; then
+            continue
         fi
+        printf '%s: no Loom-Label\n' "$short" >&2
+        status=1
         continue
     fi
     taint=$(printf '%s' "$label" | sed -n 's/.*taint=\([01]\).*/\1/p')

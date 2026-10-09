@@ -65,6 +65,12 @@ def copy_seed(repo: Path) -> None:
         if rel.as_posix() in {"core/immune", "core/immune.d/50-core-notice"} or src.stat().st_mode & 0o111:
             dest.chmod(0o755)
 
+    # 20-labels fails closed: only an enrolled address may push unlabeled.
+    # These fixtures push as the test's git identity, so enroll it.
+    email = git(None, "config", "--global", "user.email").stdout.strip()
+    listing = repo / "core" / "loom" / "people-commit"
+    listing.write_text(listing.read_text(encoding="utf-8") + email + "\n", encoding="utf-8")
+
 
 def commit(repo: Path, message: str) -> None:
     git(repo, "add", "-A")
