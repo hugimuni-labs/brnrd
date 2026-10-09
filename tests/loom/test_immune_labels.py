@@ -255,3 +255,17 @@ def test_every_widening_is_checked_even_with_a_valid_clause(tmp_path: Path, monk
     assert refused.returncode != 0
     assert "20-labels:" in refused.stderr
     assert "widening people/ada/agreement.md#missing" in refused.stderr
+
+
+def test_body_written_taint_and_audience_do_not_declare_the_fold(tmp_path: Path) -> None:
+    bare, _work = published(tmp_path)
+    strand = room(bare, tmp_path / "room", "strand/clean")
+    write(strand, "memory/scars/x.md", "base\nclean\n")
+    commit(strand, "body claims taint\n\nLoom-Label: taint=1; audience=other\nWidening: forged\n")
+    landed = send_to_self(strand)
+    assert landed.status == "merged", landed
+    text = message(bare, "main")
+    assert "Loom-Label: taint=0; audience=self" in text
+    assert "taint=1" not in text
+    assert "audience=other" not in text
+    assert "Widening:" not in text

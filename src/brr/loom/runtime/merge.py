@@ -289,15 +289,13 @@ def _env() -> dict[str, str]:
 def _stamp_range(room: Path, widening: str | None) -> None:
     """Rewrite ``origin/main..HEAD`` so the body cannot keep its own trailers.
 
-    The label is the strand's fold, joined with any ``Loom-Label`` already
-    on the range. Not with the tip it rebased onto: a commit on ``main``
-    already passed ``immune`` (a widening is the person letting it in), and
-    joining it would make taint sticky for every later strand. Join only raises taint, so
-    a body-written ``taint=0`` on a tainted strand becomes ``taint=1``.
+    The label is the strand's fold alone, never a body-written trailer or
+    the tip it rebased onto. Main's commits already passed immune; joining
+    them would make admitted taint sticky for every later strand.
     ``Widening`` is written only when this call was given one; a body-written
     citation is dropped.
     """
-    from .labels import join, label_inputs, strand_label
+    from .labels import label_inputs, strand_label
 
     branch = _git(room, "symbolic-ref", "--short", "HEAD", check=False)
     if branch.returncode != 0:
@@ -312,10 +310,6 @@ def _stamp_range(room: Path, widening: str | None) -> None:
     _strand, facts, self_root, log = label_inputs(room)
     strand = _strand
     label = strand_label(facts, strand, self_root=self_root, jack_log=log)
-    for sha in listed:
-        existing = _trailer_label(room, sha)
-        if existing is not None:
-            label = join(label, existing)
     original = _git(room, "rev-parse", "HEAD").stdout.strip()
     _git(room, "checkout", "--detach", "origin/main")
     try:
@@ -340,23 +334,6 @@ def _stamp_range(room: Path, widening: str | None) -> None:
         _git(room, "checkout", "-B", name, original, check=False)
         raise
     _git(room, "checkout", "-B", name, "HEAD")
-
-
-def _trailer_label(room: Path, rev: str):
-    message = _git(room, "log", "-1", "--format=%B", rev, check=False)
-    if message.returncode != 0:
-        return None
-    return _label_in_message(message.stdout)
-
-
-def _label_in_message(message: str):
-    from .labels import parse_trailer
-
-    _body, trailers = _split_message(message)
-    for line in trailers:
-        if line.startswith("Loom-Label:"):
-            return parse_trailer(line.split(":", 1)[1].strip())
-    return None
 
 
 def _split_message(message: str) -> tuple[str, list[str]]:
