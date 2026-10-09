@@ -122,8 +122,8 @@
 			</h1>
 			<p class="mt-5 max-w-2xl text-base leading-relaxed text-stone-300 sm:text-lg">
 				A co-maintainer that lives on your machine: survives reboots, remembers who it is, works
-				your Claude, Codex, and Mistral Vibe subscriptions, and leaves receipts — a commit, a pull
-				request, or a reply you can actually check.
+				your Claude, Codex, Grok, and Mistral Vibe subscriptions, and leaves receipts — a commit, a
+				pull request, or a reply you can actually check.
 			</p>
 			<p class="mt-2 max-w-2xl text-xs leading-relaxed text-ink-mute">
 				Needs a machine that's on — a laptop that doesn't sleep, a Mac mini, a home server, or a
@@ -384,9 +384,9 @@
 				</h2>
 				<p class="mt-3 text-sm leading-relaxed text-stone-400">
 					The full resident engine is open source. Install it, point it at a checkout, use your own
-					Claude Code, Codex, or Mistral Vibe subscription, and wire local gates with credentials
-					you control. No brnrd account, payment, phone-home, or feature gate is required for that
-					path.
+					Claude Code, Codex, Grok, or Mistral Vibe subscription, and wire local gates with
+					credentials you control. No brnrd account, payment, phone-home, or feature gate is
+					required for that path.
 				</p>
 				<p class="mt-3 text-xs leading-relaxed text-ink-quiet">
 					Your source trees stay on your machine. The local engine runs where your repositories,

@@ -1,3 +1,5 @@
+import pytest
+
 from brr.channels import telegram
 from brr.channels.telegram import split_message, utf16_len
 
@@ -34,6 +36,19 @@ def test_parse_update_normalizes_identity_caption_and_largest_photo():
         "kind": "photo",
         "file_size": 20,
     }]
+
+
+@pytest.mark.parametrize("reply", [None, {"message_id": 7}, {}])
+def test_parse_update_keeps_reply_target_separate_from_incoming_id(reply):
+    message = {
+        "chat": {"id": 555}, "message_id": 42,
+        "from": {"id": 41, "first_name": "Ada"}, "text": "reply",
+    }
+    if reply is not None:
+        message["reply_to_message"] = reply
+    parsed = telegram.parse_update({"update_id": 42, "message": message})
+    assert parsed.message_id == 42
+    assert parsed.reply_to_message_id == (reply or {}).get("message_id")
 
 
 def test_parse_update_nulls_sender_chat_identity():

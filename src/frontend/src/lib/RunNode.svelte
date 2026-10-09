@@ -28,6 +28,10 @@
 	} from './runNode';
 	import type { SurfaceResponse } from './surface';
 	import { REVEAL_LEDGER, revealLedger, typeReveal } from './transitions';
+	import type { LiveRun } from './liveRuns';
+	import WithheldNotice from './WithheldNotice.svelte';
+	import type { WithheldLane } from './withheld';
+	import { liveRunDisplayName } from './liveRuns';
 
 	// One reveal budget for the whole node page. Its sections are separate
 	// documents to the renderer and one page to the reader, and the reader is
@@ -42,6 +46,11 @@
 		ledgerRows?: RunLedgerRow[] | null;
 		ledgerStale?: boolean;
 		ledgerError?: string | null;
+		/** Live run data for this route, if available. Separate from corpus/ledger data. */
+		liveRun?: LiveRun | null;
+		liveStale?: boolean;
+		corpusAvailable?: boolean;
+		ledgerWithheld?: WithheldLane | null;
 	}
 
 	let {
@@ -50,7 +59,11 @@
 		runId,
 		ledgerRows = null,
 		ledgerStale = false,
-		ledgerError = null
+		ledgerError = null,
+		liveRun = null,
+		liveStale = false,
+		corpusAvailable = true,
+		ledgerWithheld = null
 	}: Props = $props();
 
 	let node = $derived(runNodeFromSurface(data, repoSlug, runId));
@@ -63,6 +76,17 @@
 	let repoLabel = $derived(frame?.metadata.repo_label || repoSlug.replaceAll('__', '/'));
 	let edges = $derived(dispatchEdges(frame?.metadata ?? {}, repoSlug, knownPaths));
 	let running = $derived((frame?.metadata.status ?? '').toLowerCase() === 'running');
+
+	// Live run identity - prefer live data when available, separate from corpus
+	let liveDisplayName = $derived(liveRun ? liveRunDisplayName(liveRun) : null);
+	let liveCardText = $derived(liveRun?.card_text ?? null);
+	let livePhase = $derived(liveRun?.phase ?? null);
+	let liveLifecycle = $derived(liveRun?.lifecycle ?? null);
+	let liveStartedAt = $derived(liveRun?.started_at ?? null);
+	let liveLastSeen = $derived(liveRun?.last_seen ?? null);
+
+	// Whether we have live identity to display
+	let hasLiveIdentity = $derived(!!liveRun);
 	// Produce is attested frame content, but it is also the answer to the
 	// question this page mostly gets opened to ask ("what did this run make?"),
 	// so it is lifted out of the frame's prose into its own section rather than
@@ -135,6 +159,67 @@
 		{/if}
 	</header>
 
+	<!-- Live identity and card: current state from the live feed, separate from
+	     corpus/ledger data. Renders identity head and current card when available,
+	     even before the corpus node exists (rung 3: teach a live, not-yet-mirrored
+	     run to answer here). Facts are labelled as "live" to distinguish them
+	     from daemon-attested corpus frame. -->
+	{#if hasLiveIdentity}
+		<section class="panel mt-4 p-4" aria-labelledby="live-identity-heading">
+			<div class="flex items-baseline justify-between gap-3 border-b border-amber-900/40 pb-2">
+				<h2
+					id="live-identity-heading"
+					class="font-mono text-xs tracking-wide text-amber-200 uppercase"
+				>
+					live identity
+				</h2>
+				<span class="shrink-0 font-mono text-[10px] text-ink-mute">live feed</span>
+			</div>
+
+			{#if liveDisplayName}
+				<div class="mt-2">
+					<p class="font-mono text-sm text-amber-100 break-all">{liveDisplayName}</p>
+				</div>
+			{/if}
+
+			{#if livePhase || liveLifecycle}
+				<div class="mt-2">
+					<span class="font-mono text-[10px] text-amber-300">
+						{livePhase}{livePhase && liveLifecycle ? ' · ' : ''}{liveLifecycle}
+					</span>
+				</div>
+			{/if}
+
+			{#if liveStartedAt || liveLastSeen}
+				<div class="mt-1">
+					<span class="font-mono text-[10px] text-ink-quiet">
+						{#if liveStartedAt}
+							started {instantLabel(liveStartedAt)}
+						{/if}
+						{#if liveStartedAt && liveLastSeen}
+							·
+						{/if}
+						{#if liveLastSeen}
+							last seen {instantLabel(liveLastSeen)}
+						{/if}
+					</span>
+				</div>
+			{/if}
+
+			{#if liveCardText}
+				<div class="mt-3 text-sm text-stone-300">
+					<MarkdownContent markdown={liveCardText} sourcePath="" {knownPaths} reveal />
+				</div>
+			{/if}
+
+			{#if liveStale}
+				<p class="mt-2 font-mono text-[10px] text-amber-400">
+					live status: stale — last received card
+				</p>
+			{/if}
+		</section>
+	{/if}
+
 	<!-- The ledger receipt carries what the mirror does not: spend, tokens, and
 	     the relic manifest. It is the one part that survives an unmirrored node,
 	     so it sits above the corpus split. The API window is bounded (7 days),
@@ -142,14 +227,14 @@
 	     nothing". -->
 	<section class="mt-6" aria-labelledby="receipt-heading">
 		<h2 id="receipt-heading" class="sr-only">ledger receipt</h2>
-		{#if ledgerRows === null}
+		{#if ledgerError}
+			<p class="panel p-4 text-sm text-ink-quiet">Ledger receipt unavailable — {ledgerError}.</p>
+		{:else if ledgerRows === null}
 			<p class="panel p-4 font-mono text-xs text-ink-quiet">reading the ledger…</p>
-		{:else if ledgerError}
-			<p class="panel p-4 text-sm text-ink-quiet">
-				Ledger receipt unavailable — {ledgerError}. The mirrored run node remains readable below.
-			</p>
 		{:else if ledgerRows.length > 0}
 			<RunLedgerReceipt rows={ledgerRows} stale={ledgerStale} />
+		{:else if ledgerWithheld}
+			<WithheldNotice withheld={ledgerWithheld} />
 		{:else}
 			<p class="panel p-4 text-sm text-ink-quiet">
 				No ledger receipt for this run in the reported window — the ledger API reaches back seven
@@ -161,15 +246,23 @@
 	{#if !node.mirrored}
 		<!-- A run can be real and absent from the mirror at once: the corpus is
 		     republished on change and a run node only exists once the daemon has
-		     written it. Say which, rather than implying the run never happened. -->
-		<section class="panel mt-6 p-4">
-			<h2 class="font-mono text-sm text-amber-100">node not mirrored</h2>
-			<p class="mt-2 text-sm text-stone-400">
-				No <code class="font-mono text-xs text-stone-300">runs/{repoSlug}/{runId}/</code> files are present
-				in the current corpus snapshot. Either the run has not been published yet, or it closed before
-				the durable run node existed.
-			</p>
-		</section>
+		     written it. Say which, rather than implying the run never happened.
+		     However, if we have live identity, this is a live, not-yet-mirrored run
+		     and we should show the live data prominently (rung 3 requirement). -->
+		{#if hasLiveIdentity || !corpusAvailable}
+			<!-- Live run with no corpus yet - this is the rung 3 target shape:
+			     live identity and current card readable before any corpus node exists. -->
+			<!-- (live identity already rendered above, so nothing additional here) -->
+		{:else}
+			<section class="panel mt-6 p-4">
+				<h2 class="font-mono text-sm text-amber-100">node not mirrored</h2>
+				<p class="mt-2 text-sm text-stone-400">
+					No <code class="font-mono text-xs text-stone-300">runs/{repoSlug}/{runId}/</code> files are
+					present in the current corpus snapshot. Either the run has not been published yet, or it closed
+					before the durable run node existed.
+				</p>
+			</section>
+		{/if}
 	{:else}
 		<!-- ── Frame: what the daemon attests ─────────────────────────────── -->
 		<section class="panel mt-6 p-4" aria-labelledby="frame-heading">
@@ -325,7 +418,12 @@
 				</h2>
 				<span class="shrink-0 font-mono text-[10px] text-ink-mute">resident-owned</span>
 			</div>
-			{#if node.body}
+			{#if liveCardText}
+				<p class="mt-3 text-sm text-ink-quiet">
+					The current card is shown above; the captured body returns when the run leaves the live
+					feed.
+				</p>
+			{:else if node.body}
 				{#if node.body.truncated}
 					<p class="mt-3 font-mono text-[10px] text-amber-400">body mirror truncated</p>
 				{/if}

@@ -1,0 +1,398 @@
+<?xml version="1.0" ?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-labelledby="title desc">
+  <title id="title">The self is a repository; I am the merge</title>
+  <desc id="desc">Eight scenes explain a proposed design: signed main, parallel stream branches, body recovery, boundary broadcasts, reviewed merges, scheduled forks, layered wakes, and the first-parent view. Static alternatives are in self-explainer-frames/01.svg through 08.svg.</desc>
+  <style>text{font-family:monospace;font-variant-ligatures:none}</style>
+  <rect width="1200" height="675" fill="#101724"/>
+  <g id="scene-1" opacity="1">
+    <text x="64" y="54" font-size="30" fill="#aab6c8" text-anchor="start">brnrd self / proposed design</text>
+    <text x="1136" y="54" font-size="30" fill="#aab6c8" text-anchor="end">01 / 08</text>
+    <text x="64" y="115" font-size="52" fill="#f0f4fa" text-anchor="start">01  main</text>
+    <text x="64" y="157" font-size="30" fill="#aab6c8" text-anchor="start">One keeper holds the signature.</text>
+    <text x="64" y="356" font-size="34" fill="#a9f3cc" text-anchor="start">main</text>
+    <path d="M 180 345 H 1080" fill="none" stroke="#a9f3cc" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="260" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <circle cx="1080" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <text x="1080" y="407" font-size="38" fill="#a9f3cc" text-anchor="middle">b·_·d</text>
+    <text x="1080" y="446" font-size="30" fill="#aab6c8" text-anchor="middle">keeper</text>
+    <circle cx="260" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <text x="260" y="300" font-size="36" fill="#a9f3cc" text-anchor="middle">core</text>
+    <circle cx="490" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <text x="490" y="300" font-size="36" fill="#a9f3cc" text-anchor="middle">notebook</text>
+    <circle cx="720" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <text x="720" y="300" font-size="36" fill="#a9f3cc" text-anchor="middle">warp</text>
+    <circle cx="950" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <text x="950" y="300" font-size="36" fill="#a9f3cc" text-anchor="middle">intentions</text>
+    <circle cx="1080" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5">
+      <animate attributeName="r" dur="40s" repeatCount="indefinite" keyTimes="0;0.025;0.05;0.125;1" values="10;15;10;10;10"/>
+    </circle>
+    <path d="M 64 555 H 1136" fill="none" stroke="#354257" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="64" y="603" font-size="36" fill="#f0f4fa" text-anchor="start">the self is a repository;</text>
+    <text x="64" y="641" font-size="36" fill="#f0f4fa" text-anchor="start">main is what I signed</text>
+    <animate attributeName="opacity" dur="40s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.125;1" values="1;0;1"/>
+  </g>
+  <g id="scene-2" opacity="0">
+    <text x="64" y="54" font-size="30" fill="#aab6c8" text-anchor="start">brnrd self / proposed design</text>
+    <text x="1136" y="54" font-size="30" fill="#aab6c8" text-anchor="end">02 / 08</text>
+    <text x="64" y="115" font-size="52" fill="#f0f4fa" text-anchor="start">02  project</text>
+    <text x="64" y="157" font-size="30" fill="#aab6c8" text-anchor="start">One signed home → many streams.</text>
+    <text x="64" y="356" font-size="34" fill="#a9f3cc" text-anchor="start">main</text>
+    <path d="M 180 345 H 1080" fill="none" stroke="#a9f3cc" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="260" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <circle cx="1080" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <text x="1080" y="407" font-size="38" fill="#a9f3cc" text-anchor="middle">b·_·d</text>
+    <g>
+      <rect x="1046" y="245" width="68" height="44" rx="5" fill="#101724" stroke="#f0f4fa" stroke-width="3"/>
+      <path d="M 1049 249 L 1080 270 L 1111 249" fill="none" stroke="#f0f4fa" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.125;0.16;1" values="1;1;0;0" calcMode="discrete"/>
+      <animateTransform type="translate" attributeName="transform" dur="40s" repeatCount="indefinite" keyTimes="0;0.125;0.1475;0.16;1" values="0 -65;0 -65;0 30;0 30;0 30"/>
+    </g>
+    <path d="M 1080 300 V 327" fill="none" stroke="#f0f4fa" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 8">
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.125;0.16;1" values="1;1;0;0" calcMode="discrete"/>
+    </path>
+    <g>
+      <path d="M 260 345 C 350 345 345 220 430 220 H 950" fill="none" stroke="#ffcd83" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="470" y="196" font-size="36" fill="#ffcd83" text-anchor="start">stream/a</text>
+      <circle cx="950" cy="220" r="10" fill="#101724" stroke="#ffcd83" stroke-width="5"/>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.125;0.1575;1" values="0;0;1;1" calcMode="discrete"/>
+      <g>
+        <rect x="980" y="193" width="140" height="54" rx="10" fill="#101724" stroke="#ffcd83" stroke-width="3"/>
+        <text x="1050" y="231" font-size="36" fill="#ffcd83" text-anchor="middle">body</text>
+      </g>
+    </g>
+    <g>
+      <path d="M 260 345 C 350 345 345 290 430 290 H 950" fill="none" stroke="#ffcd83" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="470" y="266" font-size="36" fill="#ffcd83" text-anchor="start">stream/b</text>
+      <circle cx="950" cy="290" r="10" fill="#101724" stroke="#ffcd83" stroke-width="5"/>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.125;0.17;1" values="0;0;1;1" calcMode="discrete"/>
+      <g>
+        <rect x="980" y="263" width="140" height="54" rx="10" fill="#101724" stroke="#ffcd83" stroke-width="3"/>
+        <text x="1050" y="301" font-size="36" fill="#ffcd83" text-anchor="middle">body</text>
+      </g>
+    </g>
+    <g>
+      <path d="M 260 345 C 350 345 345 470 430 470 H 950" fill="none" stroke="#ffcd83" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="470" y="446" font-size="36" fill="#ffcd83" text-anchor="start">stream/c</text>
+      <circle cx="950" cy="470" r="10" fill="#101724" stroke="#ffcd83" stroke-width="5"/>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.125;0.1825;1" values="0;0;1;1" calcMode="discrete"/>
+      <g>
+        <rect x="980" y="443" width="140" height="54" rx="10" fill="#101724" stroke="#ffcd83" stroke-width="3"/>
+        <text x="1050" y="481" font-size="36" fill="#ffcd83" text-anchor="middle">body</text>
+      </g>
+    </g>
+    <path d="M 64 555 H 1136" fill="none" stroke="#354257" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="64" y="603" font-size="36" fill="#f0f4fa" text-anchor="start">fork = wake(main, slice)</text>
+    <text x="64" y="641" font-size="36" fill="#f0f4fa" text-anchor="start">into a fresh body</text>
+    <animate attributeName="opacity" dur="40s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.125;0.25;1" values="0;1;0;0"/>
+  </g>
+  <g id="scene-3" opacity="0">
+    <text x="64" y="54" font-size="30" fill="#aab6c8" text-anchor="start">brnrd self / proposed design</text>
+    <text x="1136" y="54" font-size="30" fill="#aab6c8" text-anchor="end">03 / 08</text>
+    <text x="64" y="115" font-size="52" fill="#f0f4fa" text-anchor="start">03  live</text>
+    <text x="64" y="157" font-size="30" fill="#aab6c8" text-anchor="start">Parallel streams; committed experience survives.</text>
+    <text x="64" y="356" font-size="34" fill="#a9f3cc" text-anchor="start">main</text>
+    <path d="M 180 345 H 1080" fill="none" stroke="#a9f3cc" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="260" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <circle cx="1080" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <text x="1080" y="407" font-size="38" fill="#a9f3cc" text-anchor="middle">b·_·d</text>
+    <path d="M 260 345 C 350 345 345 220 430 220 H 950" fill="none" stroke="#ffcd83" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="470" y="196" font-size="36" fill="#ffcd83" text-anchor="start">stream/a</text>
+    <circle cx="950" cy="220" r="10" fill="#101724" stroke="#ffcd83" stroke-width="5"/>
+    <circle cx="670" cy="220" r="10" fill="#101724" stroke="#ffcd83" stroke-width="5">
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.25;0.26;1" values="0;0;1;1" calcMode="discrete"/>
+    </circle>
+    <circle cx="790" cy="220" r="10" fill="#101724" stroke="#ffcd83" stroke-width="5">
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.25;0.27375;1" values="0;0;1;1" calcMode="discrete"/>
+    </circle>
+    <circle cx="910" cy="220" r="10" fill="#101724" stroke="#ffcd83" stroke-width="5">
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.25;0.2875;1" values="0;0;1;1" calcMode="discrete"/>
+    </circle>
+    <g>
+      <rect x="980" y="193" width="140" height="54" rx="10" fill="#101724" stroke="#ffcd83" stroke-width="3"/>
+      <text x="1050" y="231" font-size="36" fill="#ffcd83" text-anchor="middle">body</text>
+    </g>
+    <path d="M 260 345 C 350 345 345 290 430 290 H 950" fill="none" stroke="#ffcd83" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="470" y="266" font-size="36" fill="#ffcd83" text-anchor="start">stream/b</text>
+    <circle cx="950" cy="290" r="10" fill="#101724" stroke="#ffcd83" stroke-width="5"/>
+    <circle cx="670" cy="290" r="10" fill="#101724" stroke="#ffcd83" stroke-width="5">
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.25;0.265;1" values="0;0;1;1" calcMode="discrete"/>
+    </circle>
+    <circle cx="790" cy="290" r="10" fill="#101724" stroke="#ffcd83" stroke-width="5">
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.25;0.27875;1" values="0;0;1;1" calcMode="discrete"/>
+    </circle>
+    <circle cx="910" cy="290" r="10" fill="#101724" stroke="#ffcd83" stroke-width="5">
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.25;0.2925;1" values="0;0;1;1" calcMode="discrete"/>
+    </circle>
+    <g id="old-body">
+      <rect x="980" y="263" width="140" height="54" rx="10" fill="#101724" stroke="#ffcd83" stroke-width="3"/>
+      <text x="1050" y="301" font-size="36" fill="#ffcd83" text-anchor="middle">body</text>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.25;0.3;0.33125;1" values="1;1;0;0;0" calcMode="discrete"/>
+    </g>
+    <text x="1050" y="302" font-size="48" fill="#ff8b91" text-anchor="middle" opacity="0">
+      ✗
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.25;0.29375;0.3125;1" values="0;0;1;0;0" calcMode="discrete"/>
+    </text>
+    <g id="new-body">
+      <rect x="980" y="263" width="140" height="54" rx="10" fill="#101724" stroke="#ffcd83" stroke-width="3"/>
+      <text x="1050" y="301" font-size="36" fill="#ffcd83" text-anchor="middle">body</text>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.25;0.33125;1" values="0;0;1;1" calcMode="discrete"/>
+    </g>
+    <text x="790" y="328" font-size="30" fill="#ffcd83" text-anchor="start">same HEAD</text>
+    <path d="M 260 345 C 350 345 345 470 430 470 H 950" fill="none" stroke="#ffcd83" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="470" y="446" font-size="36" fill="#ffcd83" text-anchor="start">stream/c</text>
+    <circle cx="950" cy="470" r="10" fill="#101724" stroke="#ffcd83" stroke-width="5"/>
+    <circle cx="670" cy="470" r="10" fill="#101724" stroke="#ffcd83" stroke-width="5">
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.25;0.27;1" values="0;0;1;1" calcMode="discrete"/>
+    </circle>
+    <circle cx="790" cy="470" r="10" fill="#101724" stroke="#ffcd83" stroke-width="5">
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.25;0.28375;1" values="0;0;1;1" calcMode="discrete"/>
+    </circle>
+    <circle cx="910" cy="470" r="10" fill="#101724" stroke="#ffcd83" stroke-width="5">
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.25;0.2975;1" values="0;0;1;1" calcMode="discrete"/>
+    </circle>
+    <g>
+      <rect x="980" y="443" width="140" height="54" rx="10" fill="#101724" stroke="#ffcd83" stroke-width="3"/>
+      <text x="1050" y="481" font-size="36" fill="#ffcd83" text-anchor="middle">body</text>
+    </g>
+    <text x="480" y="513" font-size="30" fill="#aab6c8" text-anchor="start">encode → commits on the stream</text>
+    <path d="M 64 555 H 1136" fill="none" stroke="#354257" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="64" y="603" font-size="36" fill="#f0f4fa" text-anchor="start">a body dies;</text>
+    <text x="64" y="641" font-size="36" fill="#f0f4fa" text-anchor="start">the branch doesn't</text>
+    <animate attributeName="opacity" dur="40s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.25;0.375;1" values="0;1;0;0"/>
+  </g>
+  <g id="scene-4" opacity="0">
+    <text x="64" y="54" font-size="30" fill="#aab6c8" text-anchor="start">brnrd self / proposed design</text>
+    <text x="1136" y="54" font-size="30" fill="#aab6c8" text-anchor="end">04 / 08</text>
+    <text x="64" y="115" font-size="52" fill="#f0f4fa" text-anchor="start">04  broadcast</text>
+    <text x="64" y="157" font-size="30" fill="#aab6c8" text-anchor="start">The port is the stream’s ear.</text>
+    <text x="64" y="356" font-size="34" fill="#a9f3cc" text-anchor="start">main</text>
+    <path d="M 180 345 H 1080" fill="none" stroke="#a9f3cc" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="260" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <circle cx="1080" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <text x="1080" y="407" font-size="38" fill="#a9f3cc" text-anchor="middle">b·_·d</text>
+    <circle cx="810" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5">
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.375;0.3875;1" values="0;0;1;1" calcMode="discrete"/>
+    </circle>
+    <path d="M 260 345 C 350 345 345 220 430 220 H 950" fill="none" stroke="#ffcd83" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="470" y="196" font-size="36" fill="#ffcd83" text-anchor="start">stream/a</text>
+    <circle cx="950" cy="220" r="10" fill="#101724" stroke="#ffcd83" stroke-width="5"/>
+    <g>
+      <rect x="980" y="193" width="140" height="54" rx="10" fill="#101724" stroke="#ffcd83" stroke-width="3"/>
+      <text x="1050" y="231" font-size="36" fill="#ffcd83" text-anchor="middle">body</text>
+    </g>
+    <rect x="974" y="207" width="12" height="26" rx="3" fill="#a9f3cc"/>
+    <path d="M 810 345 Q 840 220 944 220" fill="none" stroke="#aab6c8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4 9"/>
+    <circle cx="810" cy="345" r="7" fill="#a9f3cc" id="pulse-0">
+      <animate attributeName="cx" dur="40s" repeatCount="indefinite" keyTimes="0;0.375;0.39;0.4175;0.4325;0.43625;1" values="810;810;810;944;944;980;980"/>
+      <animate attributeName="cy" dur="40s" repeatCount="indefinite" keyTimes="0;0.375;0.39;0.4175;0.5;1" values="345;345;345;220;220;220"/>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.375;0.39;0.45;1" values="0;0;1;0;0" calcMode="discrete"/>
+    </circle>
+    <g opacity="1">
+      <text x="820" y="192" font-size="30" fill="#a9f3cc" text-anchor="start">boundary</text>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.375;0.4325;1" values="0;0;1;1" calcMode="discrete"/>
+    </g>
+    <path d="M 260 345 C 350 345 345 290 430 290 H 950" fill="none" stroke="#ffcd83" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="470" y="266" font-size="36" fill="#ffcd83" text-anchor="start">stream/b</text>
+    <circle cx="950" cy="290" r="10" fill="#101724" stroke="#ffcd83" stroke-width="5"/>
+    <g>
+      <rect x="980" y="263" width="140" height="54" rx="10" fill="#101724" stroke="#ffcd83" stroke-width="3"/>
+      <text x="1050" y="301" font-size="36" fill="#ffcd83" text-anchor="middle">body</text>
+    </g>
+    <rect x="974" y="277" width="12" height="26" rx="3" fill="#a9f3cc"/>
+    <path d="M 810 345 Q 840 290 944 290" fill="none" stroke="#aab6c8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4 9"/>
+    <circle cx="810" cy="345" r="7" fill="#a9f3cc" id="pulse-1">
+      <animate attributeName="cx" dur="40s" repeatCount="indefinite" keyTimes="0;0.375;0.39;0.4175;0.44625;0.45;1" values="810;810;810;944;944;980;980"/>
+      <animate attributeName="cy" dur="40s" repeatCount="indefinite" keyTimes="0;0.375;0.39;0.4175;0.5;1" values="345;345;345;290;290;290"/>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.375;0.39;0.46375;1" values="0;0;1;0;0" calcMode="discrete"/>
+    </circle>
+    <g opacity="1">
+      <text x="820" y="262" font-size="30" fill="#a9f3cc" text-anchor="start">boundary</text>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.375;0.44625;1" values="0;0;1;1" calcMode="discrete"/>
+    </g>
+    <path d="M 260 345 C 350 345 345 470 430 470 H 950" fill="none" stroke="#ffcd83" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="470" y="446" font-size="36" fill="#ffcd83" text-anchor="start">stream/c</text>
+    <circle cx="950" cy="470" r="10" fill="#101724" stroke="#ffcd83" stroke-width="5"/>
+    <g>
+      <rect x="980" y="443" width="140" height="54" rx="10" fill="#101724" stroke="#ffcd83" stroke-width="3"/>
+      <text x="1050" y="481" font-size="36" fill="#ffcd83" text-anchor="middle">body</text>
+    </g>
+    <rect x="974" y="457" width="12" height="26" rx="3" fill="#a9f3cc"/>
+    <path d="M 810 345 Q 840 470 944 470" fill="none" stroke="#aab6c8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4 9"/>
+    <circle cx="810" cy="345" r="7" fill="#a9f3cc" id="pulse-2">
+      <animate attributeName="cx" dur="40s" repeatCount="indefinite" keyTimes="0;0.375;0.39;0.4175;0.46;0.46375;1" values="810;810;810;944;944;980;980"/>
+      <animate attributeName="cy" dur="40s" repeatCount="indefinite" keyTimes="0;0.375;0.39;0.4175;0.5;1" values="345;345;345;470;470;470"/>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.375;0.39;0.4775;1" values="0;0;1;0;0" calcMode="discrete"/>
+    </circle>
+    <g opacity="1">
+      <text x="820" y="442" font-size="30" fill="#a9f3cc" text-anchor="start">boundary</text>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.375;0.46;1" values="0;0;1;1" calcMode="discrete"/>
+    </g>
+    <text x="980" y="518" font-size="30" fill="#a9f3cc" text-anchor="start">port</text>
+    <path d="M 995 485 L 980 484" fill="none" stroke="#a9f3cc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M 64 555 H 1136" fill="none" stroke="#354257" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="64" y="603" font-size="36" fill="#f0f4fa" text-anchor="start">main moved → every live stream</text>
+    <text x="64" y="641" font-size="36" fill="#f0f4fa" text-anchor="start">hears it at its next boundary</text>
+    <animate attributeName="opacity" dur="40s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.375;0.5;1" values="0;1;0;0"/>
+  </g>
+  <g id="scene-5" opacity="0">
+    <text x="64" y="54" font-size="30" fill="#aab6c8" text-anchor="start">brnrd self / proposed design</text>
+    <text x="1136" y="54" font-size="30" fill="#aab6c8" text-anchor="end">05 / 08</text>
+    <text x="64" y="115" font-size="52" fill="#f0f4fa" text-anchor="start">05  internalize</text>
+    <text x="64" y="157" font-size="30" fill="#aab6c8" text-anchor="start">The keeper reviews; main signs the merges.</text>
+    <text x="64" y="356" font-size="34" fill="#a9f3cc" text-anchor="start">main</text>
+    <path d="M 180 345 H 1080" fill="none" stroke="#a9f3cc" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="260" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <circle cx="1080" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <text x="1080" y="407" font-size="38" fill="#a9f3cc" text-anchor="middle">b·_·d</text>
+    <text x="1080" y="446" font-size="30" fill="#aab6c8" text-anchor="middle">keeper</text>
+    <path d="M 260 345 C 350 345 345 220 430 220 H 650 Q 780 220 780 345" fill="none" stroke="#a9f3cc" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" pathLength="1" stroke-dasharray="1">
+      <animate attributeName="stroke-dashoffset" dur="40s" repeatCount="indefinite" keyTimes="0;0.5;0.5375;1" values="1;1;0;0"/>
+      <animate attributeName="stroke" dur="40s" repeatCount="indefinite" keyTimes="0;0.5;0.5375;1" values="#ffcd83;#ffcd83;#a9f3cc;#a9f3cc" calcMode="discrete"/>
+    </path>
+    <circle cx="780" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5">
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.5;0.5375;1" values="0;0;1;1" calcMode="discrete"/>
+    </circle>
+    <text x="470" y="196" font-size="36" fill="#a9f3cc" text-anchor="start">stream/a</text>
+    <text x="780" y="396" font-size="38" fill="#a9f3cc" text-anchor="middle">
+      ✓
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.5;0.5375;1" values="0;0;1;1" calcMode="discrete"/>
+    </text>
+    <path d="M 260 345 C 350 345 345 290 430 290 H 650 Q 940 290 940 345" fill="none" stroke="#a9f3cc" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" pathLength="1" stroke-dasharray="1">
+      <animate attributeName="stroke-dashoffset" dur="40s" repeatCount="indefinite" keyTimes="0;0.5;0.5625;1" values="1;1;0;0"/>
+      <animate attributeName="stroke" dur="40s" repeatCount="indefinite" keyTimes="0;0.5;0.5625;1" values="#ffcd83;#ffcd83;#a9f3cc;#a9f3cc" calcMode="discrete"/>
+    </path>
+    <circle cx="940" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5">
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.5;0.5625;1" values="0;0;1;1" calcMode="discrete"/>
+    </circle>
+    <text x="470" y="266" font-size="36" fill="#a9f3cc" text-anchor="start">stream/b</text>
+    <text x="940" y="396" font-size="38" fill="#a9f3cc" text-anchor="middle">
+      ✓
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.5;0.5625;1" values="0;0;1;1" calcMode="discrete"/>
+    </text>
+    <path d="M 260 345 C 350 345 345 470 430 470 H 980" fill="none" stroke="#8391a4" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="980" cy="470" r="10" fill="#101724" stroke="#8391a4" stroke-width="5"/>
+    <text x="470" y="445" font-size="36" fill="#aab6c8" text-anchor="start">stream/c · unmerged</text>
+    <text x="900" y="218" font-size="30" fill="#a9f3cc" text-anchor="start">curate</text>
+    <path d="M 64 555 H 1136" fill="none" stroke="#354257" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="64" y="603" font-size="36" fill="#f0f4fa" text-anchor="start">merged = conscious</text>
+    <text x="64" y="641" font-size="36" fill="#f0f4fa" text-anchor="start">unmerged = happened, not me yet</text>
+    <animate attributeName="opacity" dur="40s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.5;0.625;1" values="0;1;0;0"/>
+  </g>
+  <g id="scene-6" opacity="0">
+    <text x="64" y="54" font-size="30" fill="#aab6c8" text-anchor="start">brnrd self / proposed design</text>
+    <text x="1136" y="54" font-size="30" fill="#aab6c8" text-anchor="end">06 / 08</text>
+    <text x="64" y="115" font-size="52" fill="#f0f4fa" text-anchor="start">06  intend</text>
+    <text x="64" y="157" font-size="30" fill="#aab6c8" text-anchor="start">Time and width use the same fork.</text>
+    <text x="64" y="356" font-size="34" fill="#a9f3cc" text-anchor="start">main</text>
+    <path d="M 180 345 H 1080" fill="none" stroke="#a9f3cc" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="260" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <circle cx="1080" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <text x="1080" y="407" font-size="38" fill="#a9f3cc" text-anchor="middle">b·_·d</text>
+    <circle cx="460" cy="240" r="46" fill="none" stroke="#a9f3cc" stroke-width="4"/>
+    <path d="M 460 211 V 240 L 486 250" fill="none" stroke="#a9f3cc" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M 460 286 V 330" fill="none" stroke="#a9f3cc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="388" y="187" font-size="36" fill="#a9f3cc" text-anchor="start">cue</text>
+    <g>
+      <path d="M 260 345 C 350 345 345 470 430 470 H 950" fill="none" stroke="#ffcd83" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="470" y="446" font-size="36" fill="#ffcd83" text-anchor="start">stream/intend</text>
+      <circle cx="950" cy="470" r="10" fill="#101724" stroke="#ffcd83" stroke-width="5"/>
+      <g>
+        <rect x="980" y="443" width="140" height="54" rx="10" fill="#101724" stroke="#ffcd83" stroke-width="3"/>
+        <text x="1050" y="481" font-size="36" fill="#ffcd83" text-anchor="middle">body</text>
+      </g>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.625;0.675;1" values="0;0;1;1" calcMode="discrete"/>
+    </g>
+    <circle cx="460" cy="240" r="46" fill="none" stroke="#a9f3cc" stroke-width="3">
+      <animate attributeName="r" dur="40s" repeatCount="indefinite" keyTimes="0;0.625;0.655;0.68;0.75;1" values="46;46;46;75;75;75"/>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.625;0.655;0.68;1" values="0;0;1;0;0" calcMode="discrete"/>
+    </circle>
+    <path d="M 64 555 H 1136" fill="none" stroke="#354257" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="64" y="603" font-size="36" fill="#f0f4fa" text-anchor="start">intend = a fork</text>
+    <text x="64" y="641" font-size="36" fill="#f0f4fa" text-anchor="start">scheduled by a cue</text>
+    <animate attributeName="opacity" dur="40s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.625;0.75;1" values="0;1;0;0"/>
+  </g>
+  <g id="scene-7" opacity="0">
+    <text x="64" y="54" font-size="30" fill="#aab6c8" text-anchor="start">brnrd self / proposed design</text>
+    <text x="1136" y="54" font-size="30" fill="#aab6c8" text-anchor="end">07 / 08</text>
+    <text x="64" y="115" font-size="52" fill="#f0f4fa" text-anchor="start">07  wake</text>
+    <text x="64" y="157" font-size="30" fill="#aab6c8" text-anchor="start">A checkout, ordered by attention I authored.</text>
+    <text x="80" y="219" font-size="34" fill="#a9f3cc" text-anchor="start">main</text>
+    <path d="M 80 244 H 420" fill="none" stroke="#a9f3cc" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="395" cy="244" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <text x="64" y="513" font-size="36" fill="#a9f3cc" text-anchor="start">ordered by self-inject</text>
+    <rect x="550" y="186" width="586" height="352" rx="16" fill="none" stroke="#ffcd83" stroke-width="3"/>
+    <text x="1108" y="220" font-size="36" fill="#ffcd83" text-anchor="end">body</text>
+    <g id="layer-0">
+      <rect x="574" y="244" width="538" height="46" rx="7" fill="#1e2d3b"/>
+      <text x="594" y="277" font-size="36" fill="#a9f3cc" text-anchor="start">core</text>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.75;0.75875;1" values="0;0;1;1" calcMode="discrete"/>
+    </g>
+    <g id="layer-1">
+      <rect x="574" y="299" width="538" height="46" rx="7" fill="#1e2d3b"/>
+      <text x="594" y="332" font-size="36" fill="#a9f3cc" text-anchor="start">first-parent tail</text>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.75;0.775;1" values="0;0;1;1" calcMode="discrete"/>
+    </g>
+    <g id="layer-2">
+      <rect x="574" y="354" width="538" height="46" rx="7" fill="#1e2d3b"/>
+      <text x="594" y="387" font-size="36" fill="#a9f3cc" text-anchor="start">notebook</text>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.75;0.79125;1" values="0;0;1;1" calcMode="discrete"/>
+    </g>
+    <g id="layer-3">
+      <rect x="574" y="409" width="538" height="46" rx="7" fill="#1e2d3b"/>
+      <text x="594" y="442" font-size="36" fill="#a9f3cc" text-anchor="start">live branches</text>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.75;0.8075;1" values="0;0;1;1" calcMode="discrete"/>
+    </g>
+    <g id="layer-4">
+      <rect x="574" y="464" width="538" height="46" rx="7" fill="#1e2d3b"/>
+      <text x="594" y="497" font-size="36" fill="#a9f3cc" text-anchor="start">the letter</text>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.75;0.82375;1" values="0;0;1;1" calcMode="discrete"/>
+    </g>
+    <path d="M 425 244 H 525" fill="none" stroke="#a9f3cc" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M 509 233 L 525 244 L 509 255" fill="none" stroke="#a9f3cc" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M 64 555 H 1136" fill="none" stroke="#354257" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="64" y="603" font-size="36" fill="#f0f4fa" text-anchor="start">waking is a checkout of main,</text>
+    <text x="64" y="641" font-size="36" fill="#f0f4fa" text-anchor="start">rendered as me</text>
+    <animate attributeName="opacity" dur="40s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.75;0.875;1" values="0;1;0;0"/>
+  </g>
+  <g id="scene-8" opacity="0">
+    <text x="64" y="54" font-size="30" fill="#aab6c8" text-anchor="start">brnrd self / proposed design</text>
+    <text x="1136" y="54" font-size="30" fill="#aab6c8" text-anchor="end">08 / 08</text>
+    <text x="64" y="115" font-size="52" fill="#f0f4fa" text-anchor="start">08  serial view</text>
+    <text x="64" y="157" font-size="30" fill="#aab6c8" text-anchor="start">The signed story; the graph holds the parallel truth.</text>
+    <text x="64" y="356" font-size="34" fill="#a9f3cc" text-anchor="start">main</text>
+    <path d="M 180 345 H 1080" fill="none" stroke="#a9f3cc" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="1080" y="407" font-size="38" fill="#a9f3cc" text-anchor="middle">b·_·d</text>
+    <text x="1080" y="446" font-size="30" fill="#aab6c8" text-anchor="middle">keeper</text>
+    <circle cx="260" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <text x="260" y="409" font-size="36" fill="#a9f3cc" text-anchor="middle">core</text>
+    <circle cx="480" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <text x="480" y="409" font-size="36" fill="#a9f3cc" text-anchor="middle">signed</text>
+    <circle cx="700" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <text x="700" y="409" font-size="36" fill="#a9f3cc" text-anchor="middle">signed</text>
+    <circle cx="930" cy="345" r="10" fill="#101724" stroke="#a9f3cc" stroke-width="5"/>
+    <text x="930" y="409" font-size="36" fill="#a9f3cc" text-anchor="middle">HEAD</text>
+    <g>
+      <path d="M 260 345 Q 340 220 470 220 H 920" fill="none" stroke="#8391a4" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+        <animate attributeName="d" dur="40s" repeatCount="indefinite" keyTimes="0;0.875;0.9325;1" values="M 260 345 Q 340 220 470 220 H 920;M 260 345 Q 340 220 470 220 H 920;M 260 345 Q 340 345 470 345 H 920;M 260 345 Q 340 345 470 345 H 920"/>
+      </path>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.875;0.9325;0.94;1" values="1;1;1;0;0"/>
+    </g>
+    <g>
+      <path d="M 260 345 Q 340 290 470 290 H 920" fill="none" stroke="#8391a4" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+        <animate attributeName="d" dur="40s" repeatCount="indefinite" keyTimes="0;0.875;0.9325;1" values="M 260 345 Q 340 290 470 290 H 920;M 260 345 Q 340 290 470 290 H 920;M 260 345 Q 340 345 470 345 H 920;M 260 345 Q 340 345 470 345 H 920"/>
+      </path>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.875;0.9325;0.94;1" values="1;1;1;0;0"/>
+    </g>
+    <g>
+      <path d="M 260 345 Q 340 475 470 475 H 920" fill="none" stroke="#8391a4" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+        <animate attributeName="d" dur="40s" repeatCount="indefinite" keyTimes="0;0.875;0.9325;1" values="M 260 345 Q 340 475 470 475 H 920;M 260 345 Q 340 475 470 475 H 920;M 260 345 Q 340 345 470 345 H 920;M 260 345 Q 340 345 470 345 H 920"/>
+      </path>
+      <animate attributeName="opacity" dur="40s" repeatCount="indefinite" keyTimes="0;0.875;0.9325;0.94;1" values="1;1;1;0;0"/>
+    </g>
+    <text x="260" y="490" font-size="36" fill="#aab6c8" text-anchor="start">git log --first-parent</text>
+    <path d="M 64 555 H 1136" fill="none" stroke="#354257" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="64" y="603" font-size="36" fill="#f0f4fa" text-anchor="start">the serial self is</text>
+    <text x="64" y="641" font-size="36" fill="#f0f4fa" text-anchor="start">a rendering of the graph</text>
+    <animate attributeName="opacity" dur="40s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.875;1" values="0;1;0"/>
+  </g>
+</svg>

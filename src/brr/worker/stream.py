@@ -420,6 +420,8 @@ def stream(p: Prepared, dx: Dispatched) -> Streamed:
     if getattr(result, "claude_session_id", None):
         # The claude half of the same fact, same per-run home.
         task.meta["claude_session_id"] = result.claude_session_id
+    if getattr(result, "grok_session_id", None):
+        task.meta["grok_session_id"] = result.grok_session_id
     daemon._emit_new_containers(emit, task.id, env_ctx, seen_containers)
     # Tier-2 Stop is a synchronous portal boundary: the runner cannot
     # return until the matching flush token has been accepted. A normal

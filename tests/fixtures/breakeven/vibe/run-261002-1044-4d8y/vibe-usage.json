@@ -1,0 +1,23 @@
+{
+ "available": true,
+ "collected_at": "2026-10-02T10:56:03.117859+00:00",
+ "context_tokens": {
+  "cached": 100864,
+  "input": 102181,
+  "output": 723,
+  "total": 102904
+ },
+ "list_price_cost_usd": null,
+ "model": "mistral-medium-3.5",
+ "pricing": null,
+ "reason": null,
+ "run_id": "run-261002-1044-4d8y",
+ "session_id": "ebe6c572-0a68-6b5b-9956-21822332c2cf",
+ "session_tokens": {
+  "cached": 4738432,
+  "input": 4841527,
+  "output": 23972,
+  "total": 4865499
+ },
+ "source": "unified"
+}

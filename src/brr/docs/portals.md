@@ -89,6 +89,40 @@ they exist. **Read it after any `spawn:` / `respawn:` / `event:`-addressed
 write.** A dropped directive that nobody reads is a request that silently
 never happened.
 
+### `brnrd do` — at a glance
+
+the wake's copy · the full section below keeps the reasoning · porcelain over the outbox grammar ≠ a new channel: each verb stages the same file a hand-written directive would, waits for the daemon's drain, and reports the verdict in the same call
+
+```
+brnrd do [--outbox DIR] [--timeout SECONDS] \
+  [--mood <feeling> [--mood-note "…"]] \
+  [--note <event-id>]... \
+  [--reply <event-id> [--item <id> [--part "…"]]... [--new-item "<headline>"]... [--no-ask "<why>"] \
+     --body-file FILE | --body "…"]... \
+  (--promise <what> [--promise-count N] | --no-follow-up) \
+  [--gate <name> --body-file FILE]... [--card FILE] [-- <command> [args…]]
+```
+
+verdict: `✓` consumed · `✓ (advisory: …)` consumed, FYI notice · `✗ <kind>: <text>` refused / dropped / redirected · `? still queued` at the timeout, never a hang
+- any `--reply` ⇒ exactly one of `--promise <what>` (commit · branch · pr · merge · kb · issue · comment · message · file) or `--no-follow-up`, per call · the promise row lands only after every reply drains `✓`
+- every reply names its ask: `--item <id>` (existing; `--part` tags the excerpt) · `--new-item "<headline>"` (mints one on the reply's verdict) · `--no-ask "<why>"` (the recorded zero) · none of the three ⇒ refused before staging when the account has a warp · existing is never the default
+- `--reply` reaches only a *pending* event · refused as non-pending (e.g. the waking letter, already claimed) ⇒ stage a bare outbox file: no frontmatter ⇒ the waking thread
+- a same-thread burst gets one body: outbox `event:` + `also: <id>, <id>` (no `--also` flag yet) · byte-identical replies to several events land as duplicates
+- `--mood` resolves through the emote index; a near-miss lists candidates instead of writing nothing
+- bare `brnrd do` = one screen: pending events · outbound · notices · quota · spawn headroom
+- `-- <command>` runs after staging (execvp, no shell); verdicts move to stderr, the command's output and exit code become the call's
+
+### `brnrd await` — at a glance
+
+the wake's copy · rules live in the `await:` row and **linger** · a message, a strand finishing, a schedule firing all arrive as pending events and resolve it · a shell `sleep` loop is a wait nobody can interrupt: never that
+
+```
+brnrd await [--timeout <duration>] [--ceiling <duration>] [--file <path>] [--json]
+```
+
+- outcome (`portal-state.json` → `await`): `event` · `condition` (the `--file` trigger; a pending event outranks it) · `timeout` (with `initiative: true` = the seat's own hours) · `park` (the daemon's: starvation, or opted-in hold cost)
+- `pending` = only the *call's* lease ran out ⇒ call again · an explicit `--timeout` is restated on every call
+
 ### `brnrd do` — the verdict rides the act
 
 porcelain over the grammar above ≠ a new channel · every write = one of the same outbox files, staged and drained the way a hand-written `note.md` / `event: <id>` reply is

@@ -1,0 +1,12 @@
+{"at": "2026-10-02T04:24:27Z", "ctx": {"delta": null, "tokens_after": null}, "phase": "pre-tool", "quota": {}, "spend": {"allowance": null, "allowance_used": null}}
+{"at": "2026-10-02T04:24:29Z", "ctx": {"delta": null, "tokens_after": null}, "phase": "post-tool", "quota": {}, "spend": {"allowance": 450000, "allowance_used": null}}
+{"at": "2026-10-02T04:24:31Z", "ctx": {"delta": null, "tokens_after": null}, "phase": "pre-tool", "quota": {}, "spend": {"allowance": null, "allowance_used": null}}
+{"at": "2026-10-02T04:24:32Z", "ctx": {"delta": null, "tokens_after": null}, "phase": "post-tool", "quota": {}, "spend": {"allowance": 450000, "allowance_used": null}}
+{"at": "2026-10-02T04:24:34Z", "ctx": {"delta": null, "tokens_after": null}, "phase": "pre-tool", "quota": {}, "spend": {"allowance": null, "allowance_used": null}}
+{"at": "2026-10-02T04:24:34Z", "ctx": {"delta": null, "tokens_after": null}, "phase": "post-tool", "quota": {}, "spend": {"allowance": 450000, "allowance_used": null}}
+{"at": "2026-10-02T04:24:36Z", "ctx": {"delta": null, "tokens_after": null}, "phase": "pre-tool", "quota": {}, "spend": {"allowance": null, "allowance_used": null}}
+{"at": "2026-10-02T04:24:36Z", "ctx": {"delta": null, "tokens_after": null}, "phase": "post-tool", "quota": {}, "spend": {"allowance": 450000, "allowance_used": null}}
+{"at": "2026-10-02T04:24:38Z", "ctx": {"delta": null, "tokens_after": null}, "phase": "pre-tool", "quota": {}, "spend": {"allowance": null, "allowance_used": null}}
+{"at": "2026-10-02T04:24:38Z", "ctx": {"delta": null, "tokens_after": null}, "phase": "post-tool", "quota": {}, "spend": {"allowance": 450000, "allowance_used": null}}
+{"at": "2026-10-02T04:24:40Z", "ctx": {"delta": null, "tokens_after": null}, "phase": "pre-tool", "quota": {}, "spend": {"allowance": null, "allowance_used": null}}
+{"at": "2026-10-02T04:24:41Z", "ctx": {"delta": null, "tokens_after": null}, "phase": "post-tool", "quota": {}, "spend": {"allowance": 450000, "allowance_used": null}}

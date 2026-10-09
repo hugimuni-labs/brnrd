@@ -5,7 +5,7 @@ description: Pin, select, escalate, and downshift local Shell and Core profiles.
 
 brnrd separates the CLI process from the model it runs:
 
-- **Shell**: the CLI on `PATH` — `claude`, `codex`, or `vibe`.
+- **Shell**: the CLI on `PATH` — `claude`, `codex`, `grok`, or `vibe`.
 - **Core**: the model and its cost, capability, and quota metadata.
 
 Together they form the Runner for one wake. The resident remains the same when
@@ -54,7 +54,7 @@ Each `[profiles.<name>]` table may contain:
 - `cmd`: the headless command. The assembled prompt is piped on stdin unless
   `{prompt}` appears as its own argument.
 - `binary`: the executable to probe when the profile name is an alias.
-- `hooks`: the runner-specific Tier 2 hook adapter (`claude`, `codex`, or `vibe`).
+- `hooks`: the runner-specific Tier 2 hook adapter (`claude`, `codex`, `grok`, or `vibe`).
 - `provider`, `owner`, `class`, `cost_rank`, and `quota_source`: selection and
   quota metadata.
 - `model`: an optional pinned Core. The bundled Core registry also materializes
@@ -70,6 +70,33 @@ operates in the supplied working directory, and exits with a status code.
 Printing a final reply on stdout adds response delivery; declaring `hooks`
 adds live tool-boundary injection. Profile commands and `runner_cmd` remain in
 the daemon-owned home because both decide which host command executes.
+
+## Grok Build
+
+Install Grok with `curl -fsSL https://x.ai/cli/install.sh | bash` and sign in
+using Grok's own setup (or set `XAI_API_KEY`). Select `grok` as a runner
+profile, or dispatch a strand with `shell: grok`. The adapter writes the wake
+to a temp file and passes `--prompt-file`, because Grok does not read a piped
+prompt. The resident protonucleus is appended with `--rules`, leaving Grok's
+own tool instructions in place. A pinned core (`grok-4.7`, `grok-4.6`,
+`grok-4.5`, `grok-4.7-build-fast`) sets `-m` for that invocation only. The
+unpinned `grok` profile uses whatever model Grok itself would.
+
+Headless runs use `--permission-mode bypassPermissions` and `--trust`. Grok
+loads the per-run `.claude/settings.local.json` (it treats that file as
+Claude-compatible hooks) and skips event names it does not know, so the
+post-tool seam is `PostToolUse` rather than Claude's `PostToolBatch`. Pre-tool
+denies and stop blocks use Claude's hook JSON.
+
+The adapter prints Grok's JSON envelope through. The runner reads it the way
+it reads Claude's: the reply, the session id, the model that ran, the token
+totals, and the cost when Grok stamps one. A cost Grok omits stays omitted
+(pool and OAuth traffic often omit it; absence is not free, and per-model
+rows are not summed into one). A host-env seat resumes that session with
+`--resume`. Grok stores sessions under the working directory they ran in, so
+a worktree run does not arm a native resume. Quota and context-window
+headroom are not collected, and brnrd will not move a wake onto or off Grok
+because of a window it cannot see.
 
 ## Mistral Vibe
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from brr import await_verb
 
 
@@ -187,3 +189,21 @@ def test_evaluate_pending_events_outrank_the_file_trigger(tmp_path):
 def test_evaluate_nothing_pending_stays_unresolved():
     assert await_verb.evaluate(None, []) == (None, None)
     assert await_verb.evaluate("/tmp/definitely-not-here-4242", []) == (None, None)
+
+
+# ── is_await_command — the hook's Bash rewrite depends on this match ──
+
+
+@pytest.mark.parametrize("command,expected", [
+    ("brnrd await", True),
+    (".venv/bin/brnrd await; date -u", True),
+    ("cd /x; brnrd await --timeout 5m", True),
+    ("brnrd await&&echo", True),
+    ("brnrd awaiting", False),
+    ("echo brnrd-await", False),
+])
+def test_is_await_command_matches_shell_compound_forms(command, expected):
+    """A compound line still names ``brnrd await`` (#2194): ``;`` ``&`` ``|``
+    ``)`` end the word just like whitespace or end-of-string, so the pre-tool
+    hook's rewrite reaches an await inside a compound command."""
+    assert await_verb.is_await_command(command) is expected

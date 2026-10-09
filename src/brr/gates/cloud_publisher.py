@@ -29,6 +29,7 @@ from .. import (
     dominion,
     emotes,
     gitops,
+    grok_usage,
     portals,
     presence,
     protocol,
@@ -74,6 +75,8 @@ def _context() -> PublisherContext:
     return _context_factory()
 
 _CLAUDE_QUOTA_PUBLISH_MAX_AGE_SECONDS = 240.0
+#: Grok's bucket is weekly and each probe is a 6–12 s TUI: read it rarely.
+_GROK_QUOTA_PUBLISH_MAX_AGE_SECONDS = 600.0
 _CODEX_QUOTA_PUBLISH_MAX_AGE_SECONDS = 120.0
 _DASHBOARD_PUBLISH_INTERVAL_S = 3
 
@@ -1193,17 +1196,41 @@ def _claude_credits_block(
     return block
 
 
+def _grok_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
+    levels = grok_usage.load_or_refresh_snapshot(
+        brr_dir, max_age_seconds=_GROK_QUOTA_PUBLISH_MAX_AGE_SECONDS,
+    )
+    quota = levels.get("quota") if isinstance(levels, dict) else None
+    buckets = quota.get("buckets") if isinstance(quota, dict) else None
+    week = buckets.get("week") if isinstance(buckets, dict) else None
+    if not isinstance(week, dict):
+        return None
+    usage_samples.record(brr_dir, "grok", levels)
+    return {
+        "shell": "grok", "status": "known",
+        "updated_at": levels.get("updated_at"),
+        "plan_type": levels.get("plan_type"),
+        "windows": [_quota_window(
+            "weekly", week.get("remaining_percentage"),
+            levels.get("week_reset"), levels.get("week_resets_at"),
+        )],
+        "burn": usage_samples.recent_burn(brr_dir, "grok"),
+    }
+
+
 def _quota_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     """This daemon's runner-quota snapshot: real per-shell 5h/weekly windows.
 
     Mirrors the Activity/Plans publish shape (#237) — reads whatever local
-    evidence already exists (Codex's live rollout read, Claude's cached
-    ``/usage`` scrape via :func:`runner_quota.latest_claude_usage_outbox_dir`).
+    evidence already exists (Codex's live rollout read, Grok's cached PTY,
+    Claude's cached ``/usage`` scrape via
+    :func:`runner_quota.latest_claude_usage_outbox_dir`).
     Claude's cached scrape is refreshed here on a bounded idle cadence shorter
     than the dashboard's stale threshold, not on every publish tick. A shell
     with no evidence yet is omitted, not reported as a fake zero.
     """
-    shells = [_claude_quota_shell(brr_dir), _codex_quota_shell(brr_dir)]
+    shells = [_claude_quota_shell(brr_dir), _codex_quota_shell(brr_dir),
+              _grok_quota_shell(brr_dir)]
     return [shell for shell in shells if shell is not None]
 
 

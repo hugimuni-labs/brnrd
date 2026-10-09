@@ -1,0 +1,265 @@
+{
+  "attention": {
+    "needs_attention": false,
+    "pending_event_count": 0,
+    "pending_outbox_file_count": 0
+  },
+  "await": {
+    "armed": false
+  },
+  "budget": {
+    "elapsed_seconds": 0
+  },
+  "card": {
+    "active": false,
+    "age_seconds": 0,
+    "delta": null,
+    "stale": false,
+    "state_moved_seconds": 0,
+    "text": "<redacted>"
+  },
+  "change_token": "<redacted>",
+  "delivery": {
+    "already_delivered": false,
+    "gate": null,
+    "known": false,
+    "reason": null,
+    "route": "<redacted>",
+    "would_land": false
+  },
+  "generated_at": "<redacted>",
+  "heddles": [],
+  "inbound": {
+    "current_event": "<redacted>",
+    "current_event_replyable": false,
+    "current_event_topic": {
+      "confirmed": "<redacted>",
+      "proposed": null
+    },
+    "events": [],
+    "unstamped": []
+  },
+  "knowledge": {
+    "kb_base_url": "<redacted>"
+  },
+  "name": {
+    "written": false
+  },
+  "notices": [
+    {
+      "at": "<redacted>",
+      "kind": "refused",
+      "lifetime": "run",
+      "run": "<redacted>",
+      "text": "<redacted>",
+      "verb": "event"
+    }
+  ],
+  "outbound": {
+    "any_sent": false,
+    "oldest_pending_age_seconds": null,
+    "outbound_messages": 0,
+    "pending_outbox_files": [],
+    "replies_current": 0,
+    "replies_other": 0
+  },
+  "produce": {
+    "branch": "<redacted>",
+    "counts": {
+      "branch": 0,
+      "commit": 0,
+      "pr": 0
+    },
+    "issue_actions": {
+      "completed": 0,
+      "created": 0,
+      "unattributed": 0
+    },
+    "known": false,
+    "latest_commit": "<redacted>",
+    "ledger": {
+      "counts": {
+        "card": 0,
+        "heddle": 0,
+        "knot": 0,
+        "page": 0
+      },
+      "last": [],
+      "sources": {
+        "frame": 0,
+        "relic": 0
+      },
+      "unmapped": 0
+    },
+    "pr": 0,
+    "records": []
+  },
+  "resource_hold": null,
+  "resources": {
+    "allowance": {
+      "explicit": false,
+      "kind": "<redacted>",
+      "note": null,
+      "pct": 0,
+      "required": false,
+      "scope": "<redacted>",
+      "spent": 0,
+      "status": "<redacted>",
+      "summary": "<redacted>",
+      "tokens": 0
+    },
+    "coexisting_runs": {
+      "kind": "<redacted>",
+      "note": null,
+      "owned_children": [],
+      "required": false,
+      "siblings": [],
+      "spawn_pool": {
+        "floor": null
+      },
+      "status": "<redacted>",
+      "summary": "<redacted>"
+    },
+    "context_window": {
+      "kind": "<redacted>",
+      "note": null,
+      "required": false,
+      "status": "<redacted>",
+      "summary": "<redacted>"
+    },
+    "correspondent": {
+      "kind": "<redacted>",
+      "note": "<redacted>",
+      "quiet_seconds": null,
+      "read": null,
+      "required": false,
+      "status": "<redacted>",
+      "summary": null,
+      "unread_bytes": null,
+      "unread_count": null
+    },
+    "quota": {
+      "draws": {
+        "self": 0,
+        "strands": []
+      },
+      "kind": "<redacted>",
+      "note": null,
+      "others": [],
+      "pacing": {
+        "binding_remaining_pct": 0,
+        "critical_floor_pct": 0,
+        "floor": null,
+        "low_floor_pct": 0,
+        "pace": {
+          "consumed_share_pct": 0,
+          "elapsed_share_pct": 0,
+          "ratio": 0,
+          "recommendation": "<redacted>",
+          "resets_at": 0,
+          "window_minutes": 0
+        },
+        "starvation": {
+          "binding_remaining_pct": 0,
+          "refill_floor_pct": 0,
+          "starve_floor_pct": 0,
+          "starved": false
+        },
+        "stretch_factor": 0
+      },
+      "required": false,
+      "status": "<redacted>",
+      "summary": "<redacted>"
+    },
+    "remote_scm": {
+      "branch": "<redacted>",
+      "kind": "<redacted>",
+      "note": null,
+      "pr_number": "<redacted>",
+      "pr_state": "<redacted>",
+      "required": false,
+      "status": "<redacted>",
+      "summary": "<redacted>"
+    },
+    "runner": {
+      "attestation": "<redacted>",
+      "capability_freshness": null,
+      "capability_score": null,
+      "capability_source": null,
+      "catalog": [],
+      "class": "<redacted>",
+      "core_mismatch": null,
+      "cost_rank": 0,
+      "hooks": "<redacted>",
+      "model": "<redacted>",
+      "model_observed": null,
+      "model_requested": "<redacted>",
+      "name": "<redacted>",
+      "owner": "<redacted>",
+      "provider": "<redacted>",
+      "quality_escalation": {
+        "capability_freshness": null,
+        "capability_score": null,
+        "capability_source": null,
+        "class": "<redacted>",
+        "cost_rank": 0,
+        "model": "<redacted>",
+        "name": "<redacted>",
+        "owner": "<redacted>",
+        "provider": "<redacted>",
+        "status": "<redacted>"
+      },
+      "quota_source": "<redacted>",
+      "status": "<redacted>",
+      "substitution_reason": null,
+      "summary": "<redacted>"
+    },
+    "spend": {
+      "kind": "<redacted>",
+      "metered_by": "<redacted>",
+      "note": "<redacted>",
+      "required": false,
+      "status": "<redacted>",
+      "summary": null
+    }
+  },
+  "run": {
+    "attempt": 0,
+    "branch": "<redacted>",
+    "env": "<redacted>",
+    "event_id": "<redacted>",
+    "id": "<redacted>",
+    "phase": "<redacted>",
+    "repo": "<redacted>",
+    "runner": "<redacted>",
+    "status": "<redacted>",
+    "topic": "<redacted>"
+  },
+  "schedule": {
+    "armed": []
+  },
+  "scm": {
+    "branch": "<redacted>",
+    "known": false,
+    "modified_files": 0,
+    "unpushed_commits": 0
+  },
+  "seat": {
+    "parks_on_turn_end": false
+  },
+  "shuttle": {
+    "run_id": "<redacted>",
+    "since": "<redacted>",
+    "state": "<redacted>",
+    "why": "<redacted>"
+  },
+  "strand": {
+    "is_strand": false,
+    "submitted": false
+  },
+  "tick": {
+    "at": "<redacted>",
+    "n": 0
+  },
+  "version": 0
+}

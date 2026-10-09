@@ -80,33 +80,31 @@ jobs:
           # the question five identical pairs cannot: did anything even *load*
           # the code under review, or does this green tick mean nothing looked?
           git diff --name-only "$BASE_SHA" "$PR_SHA" -- . > "$RUNNER_TEMP/ui-shots/changed.txt" || true
-          node repro/ci-shots.mjs comment --summary "$RUNNER_TEMP/ui-shots/summary.json" --base "$BASE_SHA" --sha "$PR_SHA" --changed "$RUNNER_TEMP/ui-shots/changed.txt" --after "$RUNNER_TEMP/ui-shots/after" --url-base "https://raw.githubusercontent.com/$REPOSITORY/shots/pr-$PR_NUMBER/$PR_SHA" --output "$RUNNER_TEMP/ui-shots/comment.md"
+          node repro/ci-shots.mjs comment --summary "$RUNNER_TEMP/ui-shots/summary.json" --base "$BASE_SHA" --sha "$PR_SHA" --changed "$RUNNER_TEMP/ui-shots/changed.txt" --after "$RUNNER_TEMP/ui-shots/after" --url-base "https://raw.githubusercontent.com/hugimuni-labs/shots/main/pr-$PR_NUMBER/$PR_SHA" --output "$RUNNER_TEMP/ui-shots/comment.md"
       - name: Upload screenshot artifact
         uses: actions/upload-artifact@v4
         with:
           name: ui-shots-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           path: ${{ runner.temp }}/ui-shots
-      - name: Publish images to shots branch
+      - name: Publish images to the shots repo
+        # Images live in hugimuni-labs/shots (main), not on a brnrd branch:
+        # every fresh clone of brnrd used to pull this history (2026-10-02,
+        # w-120). Pushing across repos needs SHOTS_PUSH_TOKEN (contents:write
+        # on hugimuni-labs/shots); without it the step skips and the
+        # artifact above is still the record.
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_SHA: ${{ github.event.pull_request.head.sha }}
+          SHOTS_PUSH_TOKEN: ${{ secrets.SHOTS_PUSH_TOKEN }}
+          SHOTS_REPO: hugimuni-labs/shots
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git fetch origin shots || true
-          SHOTS_DIR="$RUNNER_TEMP/ui-shots-branch"
-          if git show-ref --verify --quiet refs/remotes/origin/shots; then
-            git worktree add -b shots "$SHOTS_DIR" origin/shots
-          else
-            git worktree add --detach "$SHOTS_DIR" HEAD
-            # `switch --orphan` already empties the index *and* the working
-            # tree, so the `git rm -rf .` that used to follow it had nothing to
-            # match and exited 128 under `bash -e`. That is why the `shots`
-            # branch has never existed, why the publish step has never
-            # succeeded, and why no `ui-shots` comment has ever been posted —
-            # a first-run bug in a bootstrap that had, by construction, only
-            # ever had first runs.
-            git -C "$SHOTS_DIR" switch --orphan shots
-            git -C "$SHOTS_DIR" rm -rf . --ignore-unmatch --quiet || true
+          if [ -z "$SHOTS_PUSH_TOKEN" ]; then
+            echo "::warning::SHOTS_PUSH_TOKEN not set; images stay in the workflow artifact only"
+            exit 0
           fi
+          SHOTS_DIR="$RUNNER_TEMP/ui-shots-repo"
+          git clone --depth 1 "https://x-access-token:${SHOTS_PUSH_TOKEN}@github.com/${SHOTS_REPO}.git" "$SHOTS_DIR"
           # Closed PR folders are disposable; an API failure must not block a review.
           for number in $(gh api --paginate 'repos/'"$GITHUB_REPOSITORY"'/pulls?state=closed&per_page=100' --jq '.[].number' 2>/dev/null || true); do
             rm -rf "$SHOTS_DIR/pr-$number"
@@ -116,10 +114,8 @@ jobs:
           cp -R "$RUNNER_TEMP/ui-shots/after" "$SHOTS_DIR/pr-$PR_NUMBER/$PR_SHA/after"
           cp -R "$RUNNER_TEMP/ui-shots/diff" "$SHOTS_DIR/pr-$PR_NUMBER/$PR_SHA/diff"
           git -C "$SHOTS_DIR" add -A
-          git -C "$SHOTS_DIR" diff --cached --quiet || git -C "$SHOTS_DIR" -c user.name=github-actions[bot] -c user.email=41898282+github-actions[bot] commit -m "chore: publish UI shots for PR #$PR_NUMBER"
-          # `-u` so the first publish creates the remote branch rather than
-          # pushing to a ref that does not exist yet.
-          git -C "$SHOTS_DIR" push -u origin shots
+          git -C "$SHOTS_DIR" diff --cached --quiet || git -C "$SHOTS_DIR" -c user.name=github-actions[bot] -c user.email=41898282+github-actions[bot] commit -m "chore: publish UI shots for brnrd PR #$PR_NUMBER"
+          git -C "$SHOTS_DIR" push origin HEAD:main
       - name: Upsert PR comment
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}

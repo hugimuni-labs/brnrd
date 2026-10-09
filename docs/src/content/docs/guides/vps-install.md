@@ -29,17 +29,17 @@ ssh you@your-vps-ip
 
 ## 2. Install a coding-agent CLI, and authenticate it
 
-brnrd drives Claude Code or Codex — it doesn't replace them, so one has to
+brnrd drives Claude Code, Codex, or Grok — it doesn't replace them, so one has to
 be on the box first, authenticated with your own subscription or API key.
 
 :::caution[Headless auth is CLI-specific — not fully verified here]
-Both CLIs' normal login flow opens a browser on the same machine. A VPS has
+Each CLI's normal login flow opens a browser on the same machine. A VPS has
 no browser. As of this writing, each vendor has *some* path around that —
 pasting a printed login URL into a browser on your phone or laptop, or an
 API-key environment variable — but the exact flag and prompts change
-between CLI versions. Run `claude --help` or `codex --help` on the box and
-follow its own headless-login instructions; this guide doesn't reproduce
-them because they weren't re-verified for this page.
+between CLI versions. Run `claude --help`, `codex --help`, or `grok --help`
+on the box and follow its own headless-login instructions; this guide
+doesn't reproduce them because they weren't re-verified for this page.
 :::
 
 ## 3. Install brnrd

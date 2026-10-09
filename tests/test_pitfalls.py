@@ -102,6 +102,23 @@ def test_parse_existing_heading_shape_is_backwards_compatible(tmp_path: Path) ->
 # ── match ──────────────────────────────────────────────────────────────
 
 
+def test_match_skips_a_retired_title_even_when_the_trigger_hits(tmp_path: Path) -> None:
+    dom = _write(
+        tmp_path / "dom",
+        "## (retired 2026-09-01) The clone shape\n"
+        "trigger: strand, host\n"
+        "The lesson is spent.\n\n"
+        "## (retired 2026-10-01: a successor adopted the edge) The orphaned edge\n"
+        "trigger: strand\n"
+        "Also spent, colon form.\n\n"
+        "## Still live\n"
+        "trigger: strand\n"
+        "This one still fires.\n",
+    )
+    matched = pitfalls.match(pitfalls.parse_pitfalls(dom), "steer a strand")
+    assert [p.title for p in matched] == ["Still live"]
+
+
 def test_match_is_case_insensitive_term_match(tmp_path: Path) -> None:
     dom = _write(tmp_path / "dom", "## P\ntrigger: Docker\nb\n")
     parsed = pitfalls.parse_pitfalls(dom)

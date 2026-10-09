@@ -1585,6 +1585,13 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         klass=DELTA,
     ),
     _BarSegment(
+        "breakeven", "n*",
+        "Measured respawn payback in further model-request boundaries. "
+        "B / (c(t) - c₀) for the exact Shell+Core cohort; unknown inputs "
+        "render n* ?, and c(t) ≤ c₀ renders n* ∞. Never a seat directive.",
+        klass=VITAL,
+    ),
+    _BarSegment(
         "hold", "hold",
         "design-the-seat-that-never-quits.md §machinery slice 3: the "
         "hold-cost-vs-boot-cost ratio the daemon acts on while `brnrd "
@@ -4021,6 +4028,9 @@ def _render_bar(
     hold_chip = _hold_chip(resources, shuttle_state)
     if hold_chip:
         segments.append(("hold", hold_chip))
+    from . import breakeven
+    if "breakeven" in resources:
+        segments.append(("breakeven", breakeven.chip(resources.get("breakeven"))))
     # Beside `hold`: the other half of the same wait — `hold` while it
     # stands, this once it has ended (move 2c).
     if lease_wake:
@@ -6346,6 +6356,10 @@ def compute_neutral(
     state = _read_hook_state(ctx)
     _ack_previous_inject(state, phase)
     _record_fired(state, phase)
+    # One value for both the visible attribution and the transcript row. A
+    # second read from the payload in record_boundary could drift from what
+    # the resident actually saw on this boundary.
+    boundary_why = _first_tool_why(phase, payload)
     inject: str | None = None
     block = False
     block_reason: str | None = None
@@ -6749,7 +6763,7 @@ def compute_neutral(
                 bolt_asks_total=bolt_asks_total, bolt_edge=bolt_edge,
                 repeat_streaks=repeat_streaks,
                 context_prior=context_prior, room=room, paused=paused,
-                why=_first_tool_why(phase, payload),
+                why=boundary_why,
                 pending_set_changed=pending_set_changed,
                 last_chips=last_chips, rendered_chips=rendered_chips,
                 route_drift=route_drift,
@@ -6877,7 +6891,10 @@ def compute_neutral(
             inject = f"{inject}\n" + "\n".join(item_lines) if inject else "\n".join(item_lines)
 
     _write_hook_state(ctx, state)
-    return {"inject": inject, "block": block, "block_reason": block_reason}
+    return {
+        "inject": inject, "block": block, "block_reason": block_reason,
+        "boundary_why": boundary_why,
+    }
 
 
 # ── Native rendering (neutral → runner flavour) ──────────────────────────
@@ -6886,10 +6903,14 @@ def compute_neutral(
 # once after a batch of (possibly parallel) tool calls completes — the right
 # seam (it sees every tool result before the next model call) and cheaper than
 # per-tool ``PostToolUse``. Codex exposes ``PostToolUse`` only (no
-# ``PostToolBatch`` in codex-cli 0.141.0). Both inject via
-# ``hookSpecificOutput.additionalContext`` — fire-verified 2026-06-27 on Claude
-# Code 2.1.191 (haiku) and codex-cli 0.141.0 (gpt-5.4-mini).
-_POST_TOOL_EVENT = {"claude": "PostToolBatch", "codex": "PostToolUse"}
+# ``PostToolBatch`` in codex-cli 0.141.0). Grok skips event names it does not
+# know, and ``PostToolBatch`` is one of those, so its seam is ``PostToolUse``.
+# All three inject via ``hookSpecificOutput.additionalContext``.
+_POST_TOOL_EVENT = {
+    "claude": "PostToolBatch",
+    "codex": "PostToolUse",
+    "grok": "PostToolUse",
+}
 
 
 def native_event_name(flavour: str | None, phase: str) -> str:
@@ -6919,7 +6940,7 @@ def render_native(
 
     if flavour == "vibe":
         return _render_vibe(phase, inject, block, reason), 0
-    if flavour in ("claude", "codex"):
+    if flavour in ("claude", "codex", "grok"):
         event_name = native_event_name(flavour, phase)
         out: dict[str, Any] = {}
         if phase == PHASE_PRE_TOOL:
@@ -6934,13 +6955,13 @@ def render_native(
             # an unarmed codex ``pre-tool`` fire (should one ever happen)
             # falls through to the unblocked ``{}`` a no-op ``block=False``
             # already produces.
-            if flavour == "claude" and block:
+            if flavour in ("claude", "grok") and block:
                 out["hookSpecificOutput"] = {
                     "hookEventName": event_name,
                     "permissionDecision": "deny",
                     "permissionDecisionReason": reason or "refused (#1184)",
                 }
-            elif flavour == "claude" and isinstance(neutral.get("updated_input"), dict):
+            elif flavour in ("claude", "grok") and isinstance(neutral.get("updated_input"), dict):
                 # Move 2c: a rewrite, not a decision — no
                 # ``permissionDecision``, so the call still passes through
                 # whatever permission rules the run has.
@@ -6955,7 +6976,7 @@ def render_native(
         # turn, verified); Codex uses the documented ``continue: false`` /
         # ``stopReason`` shape.
         if block:
-            if flavour == "claude":
+            if flavour in ("claude", "grok"):
                 out["decision"] = "block"
                 if reason:
                     out["reason"] = reason
@@ -7060,7 +7081,7 @@ def vibe_hook_capability(*, brr_bin: str = "brnrd") -> bool:
     return shutil.which(brr_bin) is not None
 
 
-_FILE_CONFIG_FLAVOURS = {"claude"}
+_FILE_CONFIG_FLAVOURS = {"claude", "grok"}
 
 
 def hook_config_supported(flavour: str | None) -> bool:
@@ -7077,7 +7098,9 @@ def hook_command(phase: str, brr_bin: str = "brnrd") -> str:
     return f"{brr_bin} hook {phase}"
 
 
-def _claude_hook_settings(brr_bin: str) -> dict[str, Any]:
+def _claude_hook_settings(
+    brr_bin: str, *, post_tool_event: str | None = None,
+) -> dict[str, Any]:
     def _entry(phase: str) -> dict[str, Any]:
         return {"hooks": [{"type": "command", "command": hook_command(phase, brr_bin)}]}
 
@@ -7094,7 +7117,9 @@ def _claude_hook_settings(brr_bin: str) -> dict[str, Any]:
     # from the result JSON instead.
     return {
         "hooks": {
-            native_event_name("claude", PHASE_POST_TOOL): [_entry(PHASE_POST_TOOL)],
+            (post_tool_event or native_event_name("claude", PHASE_POST_TOOL)): [
+                _entry(PHASE_POST_TOOL)
+            ],
             "Stop": [_entry(PHASE_STOP)],
             "SessionStart": [_entry(PHASE_SESSION_START)],
             # #1184: the rooted-write guard, matcher-scoped unlike the three
@@ -7173,19 +7198,24 @@ def install_hook_config(
 ) -> Path | None:
     """Write *flavour*'s native per-run hook config into *cwd*.
 
-    For claude this is ``<cwd>/.claude/settings.local.json`` — the local
+    For claude and grok this is ``<cwd>/.claude/settings.local.json`` — the local
     project overlay that layers on top of any committed ``settings.json``
     and is conventionally gitignored, so brr's generated hooks coexist with
     user settings rather than clobbering them. Merges into an existing local
     overlay (user keys win except for the ``hooks`` block brr owns). Returns
     the written path, or None when the flavour is unsupported.
     """
-    if flavour != "claude":
+    if flavour == "claude":
+        generated = _claude_hook_settings(brr_bin)
+    elif flavour == "grok":
+        # Same Claude project overlay Grok already loads. The post-tool event
+        # differs: Grok skips ``PostToolBatch``.
+        generated = _claude_hook_settings(brr_bin, post_tool_event="PostToolUse")
+    else:
         return None
     settings_dir = cwd / ".claude"
     settings_path = settings_dir / "settings.local.json"
     existing: dict[str, Any] = _read_json(settings_path)
-    generated = _claude_hook_settings(brr_bin)
     # brr's generated keys are *defaults*; user keys in the local overlay layer
     # on top and win — except the ``hooks`` block, which brr owns and force-
     # merges. So a user's own footer or local settings are preserved while
@@ -7490,6 +7520,43 @@ _VIBE_TOOL_ALIASES = {
     "edit": "Edit",
     "search_replace": "Edit",
 }
+
+
+# Grok's pre-tool payload uses camelCase (``toolName`` / ``toolInput``) and
+# its own tool ids. The matcher aliases (``Edit``/``Write`` → ``search_replace``,
+# ``Bash`` → ``run_terminal_command``) decide which hook fires; the payload
+# still carries the real id. ``run_terminal_cmd`` is the headless-guide
+# spelling of the same shell tool. The await-lease rewrite stays claude-only
+# (``_await_lease_input``), so aliasing the shell tool to ``Bash`` does not
+# retarget Grok's timeout field.
+_GROK_TOOL_ALIASES = {
+    "search_replace": "Edit",
+    "write": "Write",
+    "run_terminal_command": "Bash",
+    "run_terminal_cmd": "Bash",
+}
+
+
+def _grok_as_claude_tool(payload: dict[str, Any]) -> dict[str, Any]:
+    """A Grok ``PreToolUse`` payload renamed onto the predicates' vocabulary."""
+    out = dict(payload)
+    if "tool_name" not in out and isinstance(out.get("toolName"), str):
+        out["tool_name"] = out["toolName"]
+    if "tool_input" not in out and isinstance(out.get("toolInput"), dict):
+        out["tool_input"] = out["toolInput"]
+    name = out.get("tool_name")
+    alias = _GROK_TOOL_ALIASES.get(name) if isinstance(name, str) else None
+    if alias is not None:
+        out["tool_name"] = alias
+        out["grok_tool_name"] = name
+    tool_input = out.get("tool_input")
+    if (
+        isinstance(tool_input, dict)
+        and "file_path" not in tool_input
+        and isinstance(tool_input.get("path"), str)
+    ):
+        out["tool_input"] = dict(tool_input, file_path=tool_input["path"])
+    return out
 
 
 def _vibe_as_claude_tool(payload: dict[str, Any]) -> dict[str, Any]:
@@ -7802,6 +7869,8 @@ def run_hook(
     payload = _safe_json(stdin_text)
     if phase == PHASE_PRE_TOOL and ctx.flavour == "vibe":
         payload = _vibe_as_claude_tool(payload)
+    elif phase == PHASE_PRE_TOOL and ctx.flavour == "grok":
+        payload = _grok_as_claude_tool(payload)
     if phase == PHASE_PRE_TOOL:
         # #1184: a filesystem-safety predicate, not a correspondence one —
         # unlike every other phase it never touches the portal or hook state,
@@ -7922,13 +7991,14 @@ def _boundary_readings(
         "ctx": {"tokens_after": tokens_after, "delta": delta},
         "spend": spend,
         "quota": quota,
+        "cost": (resources.get("breakeven") or {}).get("latest"),
     }
 
 
 _SHELL_TOOL_NAMES = ("bash", "shell", "exec", "exec_command", "functions_exec")
 
 
-_WHY_MAX = 160
+_WHY_MAX = 240
 _WHY_COMMENT = re.compile(r"^\s*#\s*why:\s*(.+?)\s*$", re.MULTILINE)
 
 
@@ -7951,15 +8021,15 @@ def _tool_why(tool_name: object, tool_input: object) -> str | None:
         why = m.group(1) if m else None
     if not (isinstance(why, str) and why.strip()):
         return None
-    why = re.sub(r"\s+", " ", why.strip())
+    why = redact_detail(re.sub(r"\s+", " ", why.strip()))
     if len(why) > _WHY_MAX:
-        why = why[:_WHY_MAX] + "…"
-    return redact_detail(why)
+        why = why[:_WHY_MAX - 1] + "…"
+    return why
 
 
 def _first_tool_why(phase: str, payload: object) -> str | None:
-    """``why`` of the first act in a post-tool payload (batch or single)."""
-    if phase != PHASE_POST_TOOL or not isinstance(payload, dict):
+    """``why`` of the first act in a tool payload (batch or single)."""
+    if phase not in (PHASE_PRE_TOOL, PHASE_POST_TOOL) or not isinstance(payload, dict):
         return None
     calls = payload.get("tool_calls")
     if isinstance(calls, list):
@@ -8502,8 +8572,13 @@ def record_boundary(
         record["act"] = first_act
     if first_detail is not None:
         record["detail"] = first_detail
-    first_why = _tool_why(first_name, first_input)
-    if first_why is not None:
+    # The normal hook path already extracted this for the bar. Direct callers
+    # of record_boundary still derive from their payload once.
+    first_why = (
+        neutral["boundary_why"] if "boundary_why" in neutral
+        else _first_tool_why(phase, payload)
+    )
+    if isinstance(first_why, str) and first_why:
         record["why"] = first_why
     if has_out_bytes:
         record["out_bytes"] = total_out_bytes
@@ -8529,6 +8604,8 @@ def record_boundary(
         readings.get("spend") or {"allowance_used": None, "allowance": None}
     )
     record["quota"] = dict(readings.get("quota") or {})
+    if isinstance(readings.get("cost"), dict):
+        record["cost"] = readings["cost"]
     # `commit` stays null: nothing the hook holds at this moment means "the
     # checkout's current HEAD" — `produce.latest_commit` is the newest commit
     # the run *produced* (absent before the first one) and the gate receipt's

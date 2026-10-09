@@ -1,107 +1,170 @@
 <script lang="ts">
-	// The Wyrd run node route. Both feeds are ones the dashboard already
-	// publishes — the corpus mirror (`/v1/dashboard/surface`) for the node's
-	// own files, and the run ledger for the spend/produce receipt the mirror
-	// does not carry. Neither is fetched by run id: the surface is a whole
-	// snapshot, and the ledger is the same windowed feed the loom reads, so
-	// this page adds no endpoint and no schema.
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import PublishConsentNotice from '$lib/PublishConsentNotice.svelte';
 	import RunNode from '$lib/RunNode.svelte';
 	import WithheldNotice from '$lib/WithheldNotice.svelte';
-	import type { WithheldLane } from '$lib/withheld';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
-	import { fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
-	import { runLedgerRowsForNode } from '$lib/runNode';
+	import { fetchRunLedger, RunLedgerAuthError, type RunLedgerResponse } from '$lib/runLedger';
+	import { runLedgerRowsForNode, findLiveRunForRoute } from '$lib/runNode';
 	import { ReposAuthError, fetchRepos, type ConnectedRepo } from '$lib/repos';
 	import { SurfaceAuthError, fetchSurface, type SurfaceResponse } from '$lib/surface';
+	import { LiveRunsAuthError, fetchLiveRuns, type LiveRunsResponse } from '$lib/liveRuns';
+	import { startVisiblePoll } from '$lib/visiblePoll';
 
-	// The widest window the ledger API honours (7 days); a run node is usually
-	// opened from the loom's past shelf, whose own scrollback tops out there.
 	const LEDGER_SPAN_MS = 7 * 24 * 60 * 60 * 1000;
-
+	const EMPTY_SURFACE: SurfaceResponse = { generated_at: '', files: [], reported_at: null };
 	let data = $state<SurfaceResponse | null>(null);
 	let error = $state<string | null>(null);
-	let unauthenticated = $state(false);
 	let connectedRepos = $state<ConnectedRepo[] | null>(null);
-	let ledgerRows = $state<RunLedgerRow[] | null>(null);
-	let ledgerWithheld = $state<WithheldLane | null>(null);
-	let ledgerStale = $state(false);
+	let ledger = $state<RunLedgerResponse | null>(null);
 	let ledgerError = $state<string | null>(null);
-
+	let live = $state<LiveRunsResponse | null>(null);
+	let liveError = $state<string | null>(null);
+	let livePending = $state(true);
+	let auth = $state({ live: false, corpus: false, ledger: false, repos: false });
+	let needsLogin = $derived(Object.values(auth).some(Boolean));
 	let repoSlug = $derived(page.params.repo ?? '');
 	let runId = $derived(page.params.run ?? '');
+	// Store account snapshots; every route selection derives both joins anew.
+	let liveRun = $derived(findLiveRunForRoute(live?.runs ?? [], repoSlug, runId));
+	let ledgerRows = $derived(ledger ? runLedgerRowsForNode(ledger.rows, repoSlug, runId) : null);
+	let liveStale = $derived(!!liveError || !!live?.stale || !!liveRun?.daemon_stale);
 
-	onMount(async () => {
-		try {
-			connectedRepos = (await fetchRepos()).connected_repos;
-		} catch (e) {
-			if (e instanceof ReposAuthError) unauthenticated = true;
-		}
-		try {
-			data = await fetchSurface();
-		} catch (e) {
-			if (e instanceof SurfaceAuthError) unauthenticated = true;
-			else error = e instanceof Error ? e.message : 'run node fetch failed';
-		}
-		try {
-			const receipts = await fetchRunLedger(fetch, PRODUCE_GAUGE_LEDGER_LIMIT, LEDGER_SPAN_MS);
-			// Route segments are sanitized directory names. Match both of them:
-			// one account can mirror several repos whose generated run ids may overlap.
-			ledgerRows = runLedgerRowsForNode(receipts.rows, repoSlug, runId);
-			ledgerWithheld = receipts.withheld ?? null;
-			ledgerStale = receipts.stale;
-			ledgerError = null;
-		} catch (e) {
-			// The receipt is a supplement, not the page. A 401 here is already
-			// carried by the surface fetch (same session cookie), and any other
-			// failure should leave the mirrored node readable without pretending
-			// that a failed fetch proved the run was outside the ledger window.
-			ledgerRows = [];
-			ledgerError = e instanceof Error ? e.message : 'ledger fetch failed';
-		}
+	function requestFor(signal: AbortSignal): typeof fetch {
+		return (input, init) =>
+			fetch(input, { ...init, signal: AbortSignal.any([signal, AbortSignal.timeout(12_000)]) });
+	}
+
+	onMount(() => {
+		// Each lane refreshes independently: a slow or withheld mirror cannot
+		// prevent a permitted live card from arriving. All use existing APIs.
+		const stops = [
+			startVisiblePoll(async (signal) => {
+				const request = requestFor(signal);
+				try {
+					const response = await fetchLiveRuns(request);
+					if (signal.aborted) return;
+					live = response;
+					liveError = null;
+					auth.live = false;
+				} catch (e) {
+					if (signal.aborted) return;
+					if (e instanceof LiveRunsAuthError) {
+						live = null;
+						auth.live = true;
+					}
+					liveError = e instanceof Error ? e.message : 'live feed failed';
+				} finally {
+					if (!signal.aborted) livePending = false;
+				}
+			}, document),
+			startVisiblePoll(async (signal) => {
+				const request = requestFor(signal);
+				try {
+					const response = await fetchSurface(request);
+					if (signal.aborted) return;
+					data = response;
+					error = null;
+					auth.corpus = false;
+				} catch (e) {
+					if (signal.aborted) return;
+					if (e instanceof SurfaceAuthError) {
+						data = null;
+						auth.corpus = true;
+					}
+					error = e instanceof Error ? e.message : 'corpus fetch failed';
+				}
+			}, document),
+			startVisiblePoll(async (signal) => {
+				const request = requestFor(signal);
+				try {
+					const response = await fetchRunLedger(
+						request,
+						PRODUCE_GAUGE_LEDGER_LIMIT,
+						LEDGER_SPAN_MS
+					);
+					if (signal.aborted) return;
+					ledger = response;
+					ledgerError = null;
+					auth.ledger = false;
+				} catch (e) {
+					if (signal.aborted) return;
+					if (e instanceof RunLedgerAuthError) {
+						ledger = null;
+						auth.ledger = true;
+					}
+					ledgerError = e instanceof Error ? e.message : 'ledger fetch failed';
+				}
+			}, document),
+			startVisiblePoll(
+				async (signal) => {
+					try {
+						const response = await fetchRepos(requestFor(signal));
+						if (!signal.aborted) {
+							connectedRepos = response.connected_repos;
+							auth.repos = false;
+						}
+					} catch (e) {
+						if (!signal.aborted && e instanceof ReposAuthError) {
+							connectedRepos = null;
+							auth.repos = true;
+						}
+					}
+				},
+				document,
+				60_000
+			)
+		];
+		return () => stops.forEach((stop) => stop());
 	});
 </script>
 
 <svelte:head><title>{runId} · brnrd</title></svelte:head>
 
-{#if unauthenticated}
-	<div class="mx-auto max-w-xl p-6">
-		<div class="panel p-4 text-sm text-stone-300">
-			Session expired. <a class="text-amber-300 underline" href={resolve('/login')}>Sign in</a> to read
+<div class="mx-auto max-w-3xl px-4 pt-4 sm:px-6">
+	<PublishConsentNotice repos={connectedRepos} />
+	{#if needsLogin}
+		<p class="panel mt-3 p-4 text-sm text-stone-300">
+			Session expired. <a class="text-amber-300 underline" href={resolve('/login')}>Sign in</a> to refresh
 			this run.
-		</div>
-	</div>
-{:else if error}
-	<div class="mx-auto max-w-xl p-6">
-		<div class="panel p-4 text-sm text-red-400">{error}</div>
-	</div>
-{:else if data === null}
-	<div class="mx-auto max-w-xl p-6 font-mono text-sm text-ink-quiet">reading run node…</div>
-{:else}
-	<div class="mx-auto max-w-xl px-6 pt-2">
-		<PublishConsentNotice repos={connectedRepos} />
-	</div>
-	{#if data.files.length === 0 && data.withheld}
-		<div class="mx-auto max-w-xl px-6 pt-6">
-			<div class="panel p-4">
-				<WithheldNotice withheld={data.withheld} />
-			</div>
-		</div>
+		</p>
 	{/if}
-	{#if ledgerRows?.length === 0 && ledgerWithheld}
-		<div class="mx-auto max-w-xl px-6 pt-6">
-			<WithheldNotice withheld={ledgerWithheld} />
+	{#if liveError}
+		<p class="panel mt-3 p-4 text-sm text-amber-300">
+			Live feed unavailable — {liveError}.{liveRun ? ' Showing the last received card below.' : ''}
+		</p>
+	{:else if live?.withheld}
+		<div class="panel mt-3 p-4">
+			<p class="eyebrow mb-2">live feed</p>
+			<WithheldNotice withheld={live.withheld} />
 		</div>
+	{:else if livePending}
+		<p class="mt-3 font-mono text-xs text-ink-quiet">reading live status…</p>
 	{/if}
-	<!-- Render the node unless the consent marker has *replaced* it. Guarding on
-	     `files.length > 0` instead loses the case this page exists for: a live
-	     run whose corpus has not been mirrored yet has zero files and no
-	     `withheld`, and RunNode already knows to show the card for it ("a live
-	     node is not an empty one"). That combination rendered a blank page. -->
-	{#if !(data.files.length === 0 && data.withheld)}
-		<RunNode {data} {repoSlug} {runId} {ledgerRows} {ledgerStale} {ledgerError} />
+	{#if error}
+		<p class="panel mt-3 p-4 text-sm text-amber-300">
+			Corpus unavailable — {error}.{data ? ' Showing the last received mirror below.' : ''}
+		</p>
+	{:else if data?.withheld}
+		<div class="panel mt-3 p-4">
+			<p class="eyebrow mb-2">corpus mirror</p>
+			<WithheldNotice withheld={data.withheld} />
+		</div>
+	{:else if data === null}
+		<p class="mt-3 font-mono text-xs text-ink-quiet">reading run corpus…</p>
 	{/if}
-{/if}
+</div>
+<RunNode
+	data={data ?? EMPTY_SURFACE}
+	{repoSlug}
+	{runId}
+	{ledgerRows}
+	ledgerStale={!!ledger?.stale || !!ledgerError}
+	{ledgerError}
+	ledgerWithheld={ledger?.withheld ?? null}
+	{liveRun}
+	{liveStale}
+	corpusAvailable={data !== null && !data.withheld && !error}
+/>

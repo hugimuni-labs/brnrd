@@ -255,7 +255,17 @@ def _enqueue_telegram_event(db: Session, parsed: tg.ParsedMessage, *, repo_id: s
     # still-open member of the same group already opened, instead of one
     # event per photo. `None` for an ordinary message: `enqueue` no-ops the
     # merge path entirely in that case.
-    inbox_service.enqueue(db, repo_id=repo_id, body=body, source="telegram", reply_to={"platform": "telegram", "chat_id": parsed.chat_id, "topic_id": parsed.topic_id, "message_id": parsed.message_id, "user": parsed.user, "user_id": parsed.user_id, "username": parsed.username}, attachments=parsed.attachments or None, media_group_id=parsed.media_group_id)
+    reply_to = {
+        "platform": "telegram", "chat_id": parsed.chat_id,
+        "topic_id": parsed.topic_id, "message_id": parsed.message_id,
+        "user": parsed.user, "user_id": parsed.user_id, "username": parsed.username,
+    }
+    if parsed.reply_to_message_id is not None:
+        reply_to["reply_to_message_id"] = parsed.reply_to_message_id
+    inbox_service.enqueue(
+        db, repo_id=repo_id, body=body, source="telegram", reply_to=reply_to,
+        attachments=parsed.attachments or None, media_group_id=parsed.media_group_id,
+    )
 
 
 # #1282 — matches `capabilities._DAEMON_ONLINE_AFTER`. Duplicated rather

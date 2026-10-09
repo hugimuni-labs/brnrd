@@ -5,6 +5,8 @@ index, and the row-scoped file edits every verb rests on."""
 from __future__ import annotations
 
 import json
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -275,6 +277,32 @@ def test_render_index_bands_and_blockers(tmp_path: Path):
     held = lines[lines.index("held:") + 1]
     assert "w-2" in held and "needs w-1" in held
     assert lines[-1].startswith("done recently: w-3 (2026-08-10)")
+
+
+def test_render_index_collapses_ready_items_untouched_for_30_days(tmp_path: Path):
+    root = _warp(tmp_path)
+    fresh = _write(root, "w-9", "# Recent decision\n\ntype: decision\ntopics: loom\n")
+    stale_d = _write(root, "w-1", "# Old decision\n\ntype: decision\n")
+    stale_a = _write(root, "w-2", "# Old action\n\ntype: action\n")
+    held = _write(root, "w-3", "# Blocked, and old\n\ntype: action\nneeds: w-1\n")
+    goal = _write(root, "g-1", "# The goal\n\ntype: goal\nmetric: ships\n")
+    old = time.time() - (31 * 24 * 60 * 60)
+    for path in (stale_d, stale_a, held, goal):
+        os.utime(path, (old, old))
+    os.utime(fresh, None)
+
+    index = items.render_index(root)
+    assert index is not None
+    assert "w-9" in index and "Recent decision" in index
+    assert "stale decisions (30d+): w-1" in index
+    assert "stale actions (30d+): w-2" in index
+    assert "Old decision" not in index
+    assert "Old action" not in index
+    # Held and goals keep the full line however old the file is.
+    assert "Blocked, and old" in index
+    assert "needs w-1" in index
+    assert "The goal" in index
+    assert "stale decisions" in index.split("held:")[0]
 
 
 def test_render_index_empty_warp_is_none(tmp_path: Path):

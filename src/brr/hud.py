@@ -550,6 +550,10 @@ class HUDInputs:
     account_context: "account.AccountContext | None" = None
     repo_label: str | None = None
     shuttle_home: Path | None = None
+    #: The caller's already-projected pending list. ``None`` keeps engine 1's
+    #: raw ``status:`` scan; daemon2 passes its door's view (letters as facts)
+    #: so ``portal-state.json`` cannot disagree with ``inbox.json`` (#2187).
+    events: list[dict[str, Any]] | None = None
 
 
 def _unstamped(task: Any, events: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -620,7 +624,7 @@ def build(inputs: HUDInputs) -> HUD:
     shuttle_home = inputs.shuttle_home
 
     outbox_dir.mkdir(parents=True, exist_ok=True)
-    events = daemon._pending_events_for_agent(
+    events = list(inputs.events) if inputs.events is not None else daemon._pending_events_for_agent(
         inbox_dir, current_event_id,
         strand=daemon._is_strand(task.meta) if hasattr(task, "meta") else False,
         account_context=account_context,
@@ -764,6 +768,27 @@ def build(inputs: HUDInputs) -> HUD:
     daemon._record_boot_cost(
         task, runner_name, work_dir, outbox_dir, not_before=started_wall,
     )
+    from . import breakeven
+
+    native_cost = getattr(task, "_breakeven_measurement", {})
+    cost_shell, cost_core = native_cost.get("shell"), native_cost.get("core")
+    # Historical reads are a once-per-minute task-local cache, not an account
+    # resolution or an unbounded directory scan on every tool boundary.
+    cost_key = (cost_shell, cost_core)
+    cost_cache = getattr(task, "_breakeven_cohort", {})
+    if cost_cache.get("key") != cost_key or time.monotonic() - cost_cache.get("at", 0) >= 60:
+        history_dir = None
+        if account_context is not None and repo_label and cost_shell and cost_core:
+            from . import account as account_mod
+            history_dir = account_mod.run_dir(account_context, repo_label, task.id).parent
+        terms = breakeven.cohort(history_dir, cost_shell, cost_core,
+                                exclude=task.id,
+                                local_runs_dir=brr_dir / "runs" if brr_dir else None)
+        cost_cache = {"key": cost_key, "at": time.monotonic(), "terms": terms}
+        task._breakeven_cohort = cost_cache
+    break_even_facet = breakeven.project(cost_cache.get("terms", {}),
+                                       native_cost.get("latest"),
+                                       shell=cost_shell, core=cost_core)
     daemon._record_context_window(
         runner_name, work_dir, outbox_dir, not_before=started_wall,
     )
@@ -986,7 +1011,7 @@ def build(inputs: HUDInputs) -> HUD:
         ),
         knowledge=Knowledge(kb_base_url=task.meta.get("kb_base_url")),
         name=Name(written=bool(run_ledger.read_run_name_control(outbox_dir))),
-        resources=daemon._resources_facet(
+        resources={"breakeven": break_even_facet, **daemon._resources_facet(
             quota_summary,
             # Per-Shell level source (see _collect_levels): Codex reads its
             # subscription quota + context window live from the session
@@ -1022,7 +1047,7 @@ def build(inputs: HUDInputs) -> HUD:
                 str((runner_meta or {}).get("shell") or runner_name or ""),
                 runner_catalog, brr_dir,
             ),
-        ),
+        )},
         heddles=[
             dict(h) for h in ((card_state or {}).get("heddles") or [])
             if isinstance(h, dict)

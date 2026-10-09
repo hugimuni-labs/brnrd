@@ -56,6 +56,11 @@ include = ["brr*", "brnrd*"]
 
 [tool.setuptools.package-data]
 brr = ["AGENTS.md", "LICENSE", "Dockerfile", "prompts/*.md", "templates/*.md", "docs/*.md", "gates/README.md", "diffense/template.html", "data/*.json", "states/*.yaml"]
+"brr.daemon2" = ["portal_shape.json", "states/*.yaml"]
+# Copied once into a self and owned there after (plan-loom-step-2).
+# Step 4a adds files under the same tree and does not edit this line.
+# The recipes have no suffix, so they need the glob; `**` is setuptools 77.
+"brr.loom.runtime" = ["seed/**"]
 # `legal/*.txt` is not documentation: it is the byte-exact text a
 # `terms_acceptances.sha256` resolves back to (#735). Ship it or an installed
 # backend cannot reproduce what a user accepted.

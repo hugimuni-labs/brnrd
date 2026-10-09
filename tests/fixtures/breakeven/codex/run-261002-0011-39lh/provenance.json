@@ -1,0 +1,18 @@
+{
+  "run": "run-261002-0011-39lh",
+  "shell": "codex",
+  "core": "gpt-6.1-sol",
+  "source_files": [
+    "rollout-2026-10-02T02-11-37-01a0f9f3-c477-7ba1-bc8a-18418cddc7fe.jsonl"
+  ],
+  "state": {
+    "id": "run-261002-0011-39lh",
+    "runner_shell": "codex",
+    "runner_core": "gpt-6.1-sol",
+    "started_at": "2026-10-02T00:11:27Z"
+  },
+  "measured": {
+    "B": 56197,
+    "c0": 20508
+  }
+}
