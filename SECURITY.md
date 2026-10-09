@@ -140,6 +140,19 @@ not read your source tree.
 
 ## What dashboard publishing mirrors
 
+Before each dashboard mirror PUT, the daemon replaces literal values it holds
+in GitHub credential token files, the account home's `account/*.env` files,
+the managed GitHub token environment variable, and the cloud bearer used for
+that request. Values shorter than 12 characters are ignored. Matches become
+`[redacted:<source-name>]`; standing resident notices name the sources without
+logging their values. The inventory is read at publish time, with no secret
+cache file; an unreadable credential file refuses that publish.
+
+This bounds verbatim disclosure through the mirror. It does not detect
+injections or key-like content, and does not protect encoded or fragmented
+values, chat delivery, capture/git commits, or a host run's other network
+calls. Pages are otherwise mirrored as described below.
+
 This section applies **only** if you ran `brnrd account connect`. Without it, no
 lane below exists. The tables were produced by driving each publisher and
 capturing the payload, not by reading the code — where a claim could not be
