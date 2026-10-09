@@ -112,8 +112,6 @@ def merge(base: str, ours: str, theirs: str, path: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    if args and args[0] == "merge-driver":
-        args = args[1:]
     if len(args) != 4:
         print("usage: python -m brr.loom.runtime merge-driver %O %A %B %P", file=sys.stderr)
         return 1
