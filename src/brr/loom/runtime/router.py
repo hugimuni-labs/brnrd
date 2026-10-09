@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from brr.daemon2.facts import Fact
 from brr.daemon2.leases import Lease, LocalLeaseAuthority
 
-from .attention import actionable, poison_ids
+from .attention import actionable, unrunnable_ids
 from .config import LoomConfig, granting_window, load_config, loom_clock
 from .home import Home, is_channel, mint
 from .ledger import LedgerConflict
@@ -248,17 +248,17 @@ class Router:
             return facts
         owner = install_of(strand)
         own = owner == self.home.install_id()
-        poisoned = poison_ids(facts)
+        unrunnable = unrunnable_ids(facts)
         pending = owed(facts, thread)
         alive_work = [
-            fact for fact in pending if str(fact.data.get("id")) not in poisoned
+            fact for fact in pending if str(fact.data.get("id")) not in unrunnable
         ]
         fused = any(
             fact.kind == "attention" and fact.id == f"attention:fuse:{strand}"
             for fact in facts
         )
         take = False
-        if own and fused and poisoned and alive_work:
+        if own and fused and unrunnable and alive_work:
             take = True
         elif owner and not own and install_silent(facts, owner, self.config.router_ttl):
             take = True

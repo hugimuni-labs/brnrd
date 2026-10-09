@@ -21,8 +21,14 @@ class Row:
         return f"{self.kind} · {self.subject} · {self.why}"
 
 
-def poison_ids(facts: list[Fact]) -> set[str]:
+def unrunnable_ids(facts: list[Fact]) -> set[str]:
     """Letters shown to two bodies that then died, unless a person cleared them.
+
+    Not a security check: nothing here reads the letter's content. It stops
+    a letter that, for reasons unknown, kills the body reading it in this
+    environment (a harness crash, a provider refusal that ends the process)
+    from respawning bodies and draining quota forever. The letter may be
+    fine; the row says only that it could not be run here.
 
     The count is the one ``project.attempts`` makes: a ``body.died`` whose
     body had been ``shown`` the letter. A clear sets the floor at the count
@@ -55,7 +61,7 @@ def poison_ids(facts: list[Fact]) -> set[str]:
 
 
 def clear_letter(home: Home, letter_id: str) -> None:
-    """A person puts a poison letter back. Idempotent on the letter id."""
+    """A person puts an unrunnable letter back. Idempotent on the letter id."""
     if not letter_id:
         raise ValueError("attention --clear needs a letter id")
     append(home, Fact(
@@ -65,8 +71,8 @@ def clear_letter(home: Home, letter_id: str) -> None:
 
 
 def actionable(facts: list[Fact], thread: str) -> list[Fact]:
-    """Owed letters a body should see. A poison letter stays owed and is not listed."""
-    bad = poison_ids(facts)
+    """Owed letters a body should see. An unrunnable letter stays owed and is not listed."""
+    bad = unrunnable_ids(facts)
     return [fact for fact in owed(facts, thread) if str(fact.data.get("id")) not in bad]
 
 
@@ -84,10 +90,12 @@ def view(facts: list[Fact]) -> list[Row]:
     ordered = union(list(facts))
     rows = [row for fact in ordered if (row := _attention_row(fact)) is not None]
     seen = {(row.kind, row.subject) for row in rows}
-    for letter_id in sorted(poison_ids(ordered)):
-        if ("poison", letter_id) in seen:
+    for letter_id in sorted(unrunnable_ids(ordered)):
+        if ("unrunnable", letter_id) in seen:
             continue
-        rows.append(Row("poison", letter_id, "shown to two bodies that died"))
+        rows.append(Row("unrunnable", letter_id,
+                        "two bodies died after reading it: the letter or this environment, "
+                        "unknown which; --clear retries it"))
     current = None
     for fact in ordered:
         if fact.kind == "router" and "gen" in fact.data:
