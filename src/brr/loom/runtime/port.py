@@ -229,13 +229,17 @@ def _ref_roots(room: Path) -> list[Path]:
     return roots
 
 
+#: ``channel:<platform>/<chat>``, spoken through the relay (loom step 5).
+_RELAY_CHANNEL = re.compile(r"channel:(telegram|whatsapp|slack)/[A-Za-z0-9_:#.-]+")
+
+
 def write_send(room: Path, *, to: str, sender: str, body: str = "",
                re: str | None = None, note: str | None = None,
                clean: bool = False, kind: str | None = None,
                refs: tuple[str, ...] | list[str] = ()) -> str:
     home = home_of_room(Path(room))
     if is_channel(to):
-        if to != "channel:fake":
+        if to != "channel:fake" and not _RELAY_CHANNEL.fullmatch(to):
             raise PortError(f"send: no channel adapter for {to!r}")
     else:
         thread = thread_of(to)

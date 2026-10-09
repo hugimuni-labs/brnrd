@@ -117,7 +117,8 @@ def view(facts: list[Fact]) -> list[Row]:
     for key in sorted(intended - sent):
         rows.append(Row("maybe-sent", key, "attempted, never confirmed"))
     for fact in ordered:
-        if fact.kind != "letter" or fact.data.get("to") != "channel:fake":
+        to = fact.data.get("to")
+        if fact.kind != "letter" or not (isinstance(to, str) and to.startswith("channel:")):
             continue
         key = str(fact.data.get("id") or fact.id)
         if key in sent or key in intended:

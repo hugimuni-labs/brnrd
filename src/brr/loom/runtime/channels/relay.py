@@ -42,6 +42,13 @@ class RelayClient:
             token=state["token"], params={"since": cursor, "wait": cloud._POLL_WAIT_S},
         )
 
+    def send(self, payload: dict) -> dict:
+        state = self._state()
+        return cloud._request(
+            state["brnrd_url"], "POST", "/v1/daemons/messages",
+            token=state["token"], json=payload,
+        )
+
     def download_attachment(self, event_id: str, index: int, dest: Path) -> bool:
         state = self._state()
         return cloud._download_attachment(
@@ -81,6 +88,52 @@ def _sender(home: Home, platform: str, user_id: object) -> str:
         if matches:
             return f"person:{matches[0]}"
     return f"stranger:{platform}:{'' if user_id is None else user_id}"
+
+
+def person_dm(home: Home, channel: str) -> str | None:
+    """``channel:<platform>/<chat>`` is a known person's direct chat ⇒ that person.
+
+    In a direct chat the chat id is the user id, so the verified mapping in
+    ``people/<name>/channels.md`` names it. Anything else (a group, an
+    unknown chat) is ``None``: until audience labels reach outbound speech,
+    the loom speaks only into a known person's DM, never into a room with
+    strangers in it.
+    """
+    try:
+        platform, chat = channel.split(":", 1)[1].split("/", 1)
+    except (AttributeError, ValueError):
+        return None
+    try:
+        sender = _sender(home, platform, chat)
+    except ValueError:
+        return None
+    return sender if sender.startswith("person:") else None
+
+
+def make_effect(client):
+    """The relay effect for ``speak.EFFECTS``: answer an event, or speak to the owner.
+
+    Answering (``context['event_id']``) posts ``{event_id, body_markdown}``.
+    Otherwise ``{platform, body_markdown}``: the relay resolves the platform's
+    owner chat itself, so an unprompted send can't pick an arbitrary chat.
+    The returned dict is the receipt; ``message_id`` is kept when the relay
+    returns one (unverified: the current API may not).
+    """
+    def effect(home, channel, part_key, text, context):
+        platform = channel.split(":", 1)[1].split("/", 1)[0]
+        payload = {"body_markdown": text}
+        if context.get("event_id"):
+            payload["event_id"] = context["event_id"]
+        else:
+            payload["platform"] = platform
+        response = client.send(payload) or {}
+        receipt = {"via": "event" if "event_id" in payload else "platform"}
+        for key in ("message_id", "id"):
+            if response.get(key) not in (None, ""):
+                receipt["message_id"] = response[key]
+                break
+        return receipt
+    return effect
 
 
 def _person_channel(to: object, chat: object) -> bool:
