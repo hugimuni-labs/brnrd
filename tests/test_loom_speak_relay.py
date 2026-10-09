@@ -112,6 +112,9 @@ def test_header_and_event_resolution_from_the_fold(home):
 def test_port_accepts_relay_channels_and_refuses_unknown_kinds(tmp_path):
     room = tmp_path / "home" / "rooms" / "s-aaaa-one"
     (room / "port" / "out").mkdir(parents=True)
+    for platform in ("whatsapp", "slack"):
+        with pytest.raises(PortError):
+            write_send(room, to=f"channel:{platform}/42", sender="s-aaaa-one", body="b")
     with pytest.raises(PortError):
         write_send(room, to="channel:email/x", sender="s-aaaa-one", body="b")
     with pytest.raises(PortError):

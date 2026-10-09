@@ -26,7 +26,7 @@ def is_channel(to: object) -> bool:
     return isinstance(to, str) and to.startswith("channel:")
 
 
-_CHANNEL = re.compile(r"channel:(telegram|whatsapp|slack)/([A-Za-z0-9_:#.-]+)")
+_CHANNEL = re.compile(r"channel:(telegram)/([A-Za-z0-9_:#.-]+)")
 
 
 def channel_parts(channel: str) -> tuple[str, str | None]:

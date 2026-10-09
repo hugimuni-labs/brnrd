@@ -59,7 +59,7 @@ EFFECTS: dict[str, Callable[..., dict]] = {"fake": _fake_effect}
 
 #: Characters per message part, per platform. Mirrors the cloud gate's
 #: ``_RESPONSE_LIMITS``; a platform not listed is sent whole.
-LIMITS = {"telegram": 3900, "whatsapp": 4000}
+LIMITS = {"telegram": 3900}
 
 
 def channel_kind(channel: str) -> str:
