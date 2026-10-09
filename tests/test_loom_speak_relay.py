@@ -120,18 +120,20 @@ def test_port_accepts_relay_channels_and_refuses_unknown_kinds(tmp_path):
 
 def test_a_reply_binds_to_the_letter_its_message_carried(home, lease, client):
     speak_mod.speak(home, lease, "s-a/answer", "hi", channel="channel:telegram/42")
+    from test_loom_relay import speak as spoke
+    spoke(home, "s-a", "first", chat="telegram/42", receipt=False)
     facts = read_facts(home)
-    assert relay.letter_for_message(facts, "channel:telegram/42", 1001) == "s-a/answer"
-    assert relay.letter_for_message(facts, "channel:telegram/42", "1001") == "s-a/answer"
+    assert relay.thread_for_message(facts, "channel:telegram/42", 1001) == "first"
+    assert relay.thread_for_message(facts, "channel:telegram/42", "1001") == "first"
     # Same id, another chat or platform: binds nothing.
-    assert relay.letter_for_message(facts, "channel:telegram/43", 1001) is None
-    assert relay.letter_for_message(facts, "channel:whatsapp/42", 1001) is None
-    assert relay.letter_for_message(facts, "channel:telegram/42", 9999) is None
+    assert relay.thread_for_message(facts, "channel:telegram/43", 1001) is None
+    assert relay.thread_for_message(facts, "channel:whatsapp/42", 1001) is None
+    assert relay.thread_for_message(facts, "channel:telegram/42", 9999) is None
     # A strand can't plant a receipt: only the loom's own speech.part counts.
     forged = Fact(kind="speech.part", by="strand:s-x", id="speech.part:forged",
                   data={"key": "s-x/evil", "channel": "channel:telegram/42",
                         "receipt": {"message_id": 7}})
-    assert relay.letter_for_message([forged], "channel:telegram/42", 7) is None
+    assert relay.thread_for_message([forged], "channel:telegram/42", 7) is None
 
 
 def test_a_split_event_answer_responds_once_then_follows_with_messages(home, lease, client):

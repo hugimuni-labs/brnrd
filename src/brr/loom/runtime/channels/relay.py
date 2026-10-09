@@ -157,14 +157,17 @@ def _person_channel(to: object, chat: object) -> bool:
             and to.split(":", 1)[1].split("/", 1)[0] in {"telegram", "slack", "whatsapp"})
 
 
-def letter_for_message(facts: list[Fact], channel: str, message_id: object) -> str | None:
-    """The loom letter a platform message carried, from ``speech.part`` receipts.
+def thread_for_message(facts: list[Fact], channel: str, message_id: object) -> str | None:
+    """The thread a platform message came from, from ``speech.part`` receipts.
 
     Only the loom's own receipts count, and only for the same channel, so a
     message id from another chat (or another platform) binds nothing.
     """
     if message_id in (None, ""):
         return None
+    accepted = fold(facts).accepted
+    threads = sender_threads(accepted)
+    letters = {str(f.data.get("id") or f.id): f for f in accepted if f.kind == "letter"}
     for fact in facts:
         if fact.kind != "speech.part" or not fact.by.startswith("loom:"):
             continue
@@ -172,11 +175,13 @@ def letter_for_message(facts: list[Fact], channel: str, message_id: object) -> s
         if data.get("channel") != channel:
             continue
         if str((data.get("receipt") or {}).get("message_id")) == str(message_id):
-            return str(data.get("key") or "") or None
+            letter = letters.get(str(data.get("key")))
+            if letter is not None and letter.by.startswith("strand:"):
+                return threads.get(letter.by.split(":", 1)[1])
     return None
 
 
-def route_bare(facts: list[Fact], chat: str, reply_to_letter: str | None = None) -> str:
+def route_bare(facts: list[Fact], chat: str, reply_thread: str | None = None) -> str:
     """Where a chat message goes: a reply's thread, else whoever spoke here last.
 
     ``chat`` is ``<platform>/<chat_id>``. A Telegram reply to a message the
@@ -187,6 +192,8 @@ def route_bare(facts: list[Fact], chat: str, reply_to_letter: str | None = None)
     has spoken here yet. Only confirmed speech (a ``sent`` receipt) counts,
     and the speaker is the strand that wrote the letter, never its text.
     """
+    if reply_thread:
+        return f"thread:{reply_thread}"
     ordered = union(facts)
     state = fold(ordered)
     threads = sender_threads(state.accepted)
@@ -206,8 +213,6 @@ def route_bare(facts: list[Fact], chat: str, reply_to_letter: str | None = None)
         thread = threads.get(sender)
         if thread is None:
             continue
-        if reply_to_letter and reply_to_letter == str(letter.data.get("id") or letter.id):
-            return f"thread:{thread}"
         last = thread
     return f"thread:{last}" if last else "thread:inbox"
 
@@ -380,20 +385,14 @@ def pull_once(home: Home, client, cursor: int) -> int:
         # receipts. message_id is the incoming id, never a reply target.
         if platform == "telegram" and origin.get("reply_to_message_id") is not None:
             data["reply_to_message_id"] = origin["reply_to_message_id"]
-        # A resolved letter id enters route_bare through this separate seam.
-        if platform == "telegram" and origin.get("reply_to_letter"):
-            data["reply_to_letter"] = origin["reply_to_letter"]
-        elif data.get("reply_to_message_id") is not None:
-            bound = letter_for_message(
-                facts, f"channel:{platform}/{data['chat']}", data["reply_to_message_id"],
-            )
-            if bound:
-                data["reply_to_letter"] = bound
+        reply_thread = thread_for_message(
+            facts, f"channel:{platform}/{data['chat']}", data.get("reply_to_message_id"),
+        )
         # Source is durable before letter. Save the routing decision as part
         # of that intent: HLC ordering alone cannot reconstruct the original
         # snapshot once facts from another install arrive during recovery.
         data["to"] = route_bare(
-            facts, f"{platform}/{data['chat']}", data.get("reply_to_letter"),
+            facts, f"{platform}/{data['chat']}", reply_thread,
         )
         source = append(home, Fact(
             kind="source", by=f"loom:{home.install_id()}", id=source_id,

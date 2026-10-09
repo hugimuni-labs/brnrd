@@ -189,8 +189,15 @@ def test_reply_goes_to_its_thread_even_after_release(home):
     assert relay.route_bare(facts, "telegram/555") == "thread:second"
     append(home, Fact(kind="released", by="loom:aaaa", id="released:first:1",
                      data={"strand": "s-aaaa-first1", "thread": "first", "gen": 1}))
-    assert relay.route_bare(read_facts(home), "telegram/555", first) == "thread:first"
-    assert relay.route_bare(read_facts(home), "telegram/666", first) == "thread:inbox"
+    facts = read_facts(home)
+    append(home, Fact(kind="speech.part", by="loom:aaaa", id=f"speech.part:{first}",
+                     data={"key": first, "channel": "channel:telegram/555",
+                           "receipt": {"message_id": 17}}))
+    ev = event()
+    ev["reply_to"]["reply_to_message_id"] = 17
+    relay.pull_once(home, FakeClient([ev]), 0)
+    assert kinds(home, "source")[0].data["to"] == "thread:first"
+    assert relay.thread_for_message(read_facts(home), "channel:telegram/666", 17) is None
 
 
 def test_bare_goes_to_the_last_speaker_whatever_became_of_its_lease(home):
@@ -210,7 +217,7 @@ def test_unconfirmed_speech_and_non_person_destinations_never_become_default(hom
     first = speak(home, "s-aaaa-first1", "first", receipt=False)
     speak(home, "s-aaaa-second", "second", chat="fake")
     facts = read_facts(home)
-    assert relay.route_bare(facts, "telegram/555", first) == "thread:inbox"
+    assert relay.route_bare(facts, "telegram/555") == "thread:inbox"
     assert relay.route_bare(facts, "fake") == "thread:inbox"
 
 
@@ -314,29 +321,6 @@ def test_raw_reply_target_is_preserved_without_resolving_it(home, reply_target):
         assert source.data["reply_to_message_id"] == reply_target
     assert "reply_to_letter" not in source.data
     assert source.data["to"] == "thread:second"
-
-
-def test_optional_verified_letter_binding_is_carried_into_source(home, monkeypatch):
-    # Slice 2 resolves the raw Telegram target to this letter-id hook.
-    first = speak(home, "s-aaaa-first1", "first")
-    speak(home, "s-aaaa-second", "second")
-    ev = event()
-    ev["reply_to"]["reply_to_message_id"] = 17
-    ev["reply_to"]["reply_to_letter"] = first
-    calls = []
-    real_route = relay.route_bare
-    def route(facts, chat, reply_to_letter=None):
-        calls.append((chat, reply_to_letter))
-        return real_route(facts, chat, reply_to_letter)
-    monkeypatch.setattr(relay, "route_bare", route)
-    relay.pull_once(home, FakeClient([ev]), 0)
-    source, = kinds(home, "source")
-    assert calls == [("telegram/555", first)]
-    assert source.data["reply_to_message_id"] == 17
-    assert source.data["reply_to_letter"] == first
-    assert source.data["to"] == "thread:first"
-    letter = next(f for f in kinds(home, "letter") if f.id == "letter:relay:ev_1")
-    assert letter.data["to"] == "thread:first"
 
 
 def test_partial_blob_append_replay_preserves_one_fact_per_attachment(home, monkeypatch):
