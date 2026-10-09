@@ -73,6 +73,7 @@ def _context() -> PublisherContext:
         raise RuntimeError("cloud publisher context is not configured")
     return _context_factory()
 
+
 def _mirror_request(brr_dir: Path, base_url: str, method: str, path: str, **kwargs) -> dict:
     """The common final payload boundary for all dashboard mirror lanes."""
     from .mirror_redaction import redact_payload

@@ -66,6 +66,15 @@ def test_all_held_sources_and_nested_strings(inventory, monkeypatch):
     assert payload[values[0]][0]["markdown"] == " ".join(values)
 
 
+def test_account_home_runtime_reads_registered_repo_tokens(inventory, monkeypatch):
+    _, home, sibling = inventory
+    token_file(sibling, "fake-home-runtime-token")
+    monkeypatch.setattr(mirror_redaction.account, "_load_registry", lambda p: (
+        {"sibling": SimpleNamespace(root=sibling.parent)}, None,
+    ))
+    assert redact(home, "fake-home-runtime-token") == "[redacted:github-token]"
+
+
 def test_unchanged_page_is_byte_identical_and_short_values_are_ignored(inventory, capsys):
     brr, _, _ = inventory
     token_file(brr, "short-value")

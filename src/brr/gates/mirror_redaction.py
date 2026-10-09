@@ -51,6 +51,8 @@ def _held_secrets(brr_dir: Path, cloud_token: str | None) -> dict[str, str]:
     # The account gate may be started with the home itself as brr_dir.
     if (brr_dir / "account").is_dir():
         home = brr_dir
+        repos, _default = account._load_registry(home / account.REGISTRY_PATH)
+        roots.update(repo.root / ".brr" for repo in repos.values())
     else:
         ctx = account.resolve_context(
             brr_dir.parent, config.load_config(brr_dir.parent), create=False,
@@ -88,7 +90,10 @@ def _notice(brr_dir: Path, lane: str, sources: set[str]) -> None:
             if run.status == "running" and run.source != "spawn" and run.event_id:
                 targets.add(root / "outbox" / run.event_id)
     if not targets:
-        notices.write("advisory", text, outbox_dir=None, lifetime="standing")
+        key = (brr_dir, text)
+        if key not in _notified:
+            notices.write("advisory", text, outbox_dir=None, lifetime="standing")
+            _notified.add(key)
     for target in sorted(targets):
         key = (target, text)
         if key not in _notified:
