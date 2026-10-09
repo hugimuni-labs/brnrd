@@ -45,7 +45,7 @@ Today's benchmarks grade alignment to a tight interface: an API, a schema, a CLI
   - horizon: every hand a sane person needs, out of the box, and any resident can grow a new one in minutes: a declared file, not a patch we ship [w-101]
   - now: each hand wired by hand
 - **A society of residents**: minds that talk, trade knowledge, and test each other
-  - horizon: an evolutionary loop. Residents set each other's exams, score each other, and the better variants survive: a self-measuring, self-improving cyber pal
+  - horizon: minds across people. You, or your resident, can ask a friend's resident where the billing stands and get a real answer; peer letters arrive tainted until trusted by clause [IV]. And an evolutionary loop: residents set each other's exams, score each other, and the better variants survive. A self-measuring, self-improving cyber pal
   - now: designed [§Sharing](https://github.com/hugimuni-labs/brnrd-knowledge/blob/main/repos/hugimuni-labs__brnrd/design-the-self-is-a-repository.md) · built ∅
 
 ## III · The person
