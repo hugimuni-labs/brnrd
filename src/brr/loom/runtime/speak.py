@@ -98,7 +98,7 @@ def speak(home: Home, router_lease: Lease, key: str, text: str, *,
     if not key:
         raise ValueError("speak: empty key")
     kind = channel_kind(channel)
-    effect = EFFECTS.get(kind) or EFFECTS.get("relay")
+    effect = EFFECTS.get("fake" if kind == "fake" else "relay")
     if effect is None:
         raise ValueError(f"speak: no effect for {channel!r}")
     authority = LocalLeaseAuthority(
@@ -107,7 +107,6 @@ def speak(home: Home, router_lease: Lease, key: str, text: str, *,
     if not authority.authorize(router_lease):
         return _STEP, None
     parts = split(text, LIMITS.get(kind))
-    receipts: list[dict] = []
     maybe = False
     for n, part in enumerate(parts, 1):
         part_key = key if len(parts) == 1 else f"{key}#{n}"
@@ -119,14 +118,11 @@ def speak(home: Home, router_lease: Lease, key: str, text: str, *,
             maybe = True
             continue
 
-        def run(effect_key: str, gen: int, _part=part, _part_key=part_key) -> dict:
-            del effect_key
-            receipt = effect(home, channel, _part_key, _part, dict(context or {}, gen=gen)) or {}
-            receipts.append({"part": _part_key, **receipt})
-            return {"key": _part_key, "gen": gen, **receipt}
+        def run(effect_key: str, gen: int, _part=part, _part_key=part_key, _n=n) -> dict:
+            return effect(home, channel, _part_key, _part, dict(context or {}, first=_n == 1)) or {}
 
         try:
-            authority.effect_once(router_lease, safe, run)
+            receipt = authority.effect_once(router_lease, safe, run)
         except EffectInFlight:
             maybe = True
             continue
@@ -138,18 +134,15 @@ def speak(home: Home, router_lease: Lease, key: str, text: str, *,
             maybe = True
             continue
         # The platform's receipt (its message id) is what a reply binds to.
-        for receipt in receipts:
-            if receipt.get("part") == part_key:
-                append(home, Fact(
-                    kind="speech.part", by=f"loom:{home.install_id()}",
-                    id=f"speech.part:{part_key}",
-                    data={"key": key, "part": part_key, "channel": channel,
-                          "receipt": {k: v for k, v in receipt.items() if k != "part"}},
-                ))
+        if receipt.get("message_id") not in (None, ""):
+            append(home, Fact(
+                kind="speech.part", by=f"loom:{home.install_id()}",
+                id=f"speech.part:{part_key}",
+                data={"key": key, "part": part_key, "channel": channel, "receipt": receipt},
+            ))
     state = "intended" if maybe else "sent"
     fact = append(home, Fact(
         kind="speech", by=f"loom:{home.install_id()}", id=f"speech:{state}:{key}",
-        data={"key": key, "state": state, "router_gen": router_lease.gen,
-              "channel": channel, "parts": len(parts)},
+        data={"key": key, "state": state, "router_gen": router_lease.gen},
     ))
     return (_MAYBE if maybe else _SENT), fact

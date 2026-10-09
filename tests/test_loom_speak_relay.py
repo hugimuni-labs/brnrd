@@ -50,13 +50,13 @@ class FakeClient:
 @pytest.fixture
 def client(monkeypatch):
     c = FakeClient()
-    monkeypatch.setitem(speak_mod.EFFECTS, "telegram", relay.make_effect(c))
+    monkeypatch.setitem(speak_mod.EFFECTS, "relay", relay.make_effect(c))
     return c
 
 
 def test_long_answer_splits_and_a_lost_part_is_never_resent(home, lease, monkeypatch):
     c = FakeClient(fail_on={2})
-    monkeypatch.setitem(speak_mod.EFFECTS, "telegram", relay.make_effect(c))
+    monkeypatch.setitem(speak_mod.EFFECTS, "relay", relay.make_effect(c))
     body = "\n".join(f"line {i:04d} " + "x" * 80 for i in range(100))  # ~9,000 chars
     status, fact = speak_mod.speak(home, lease, "s-a/answer", body,
                                    channel="channel:telegram/42")
@@ -158,3 +158,14 @@ def test_client_routes_answers_to_responses_and_the_rest_to_messages(tmp_path, m
         ("/v1/daemons/responses", {"event_id": "ev_1", "body_markdown": "a", "status": "done"}),
         ("/v1/daemons/messages", {"platform": "telegram", "body_markdown": "b"}),
     ]
+
+
+def test_response_without_message_id_has_no_binding_receipt(home, lease, monkeypatch):
+    class ResponseClient:
+        def send(self, payload):
+            return {"event_id": payload["event_id"], "forwarded": True}
+    monkeypatch.setitem(speak_mod.EFFECTS, "relay", relay.make_effect(ResponseClient()))
+    status, _ = speak_mod.speak(home, lease, "s-a/answer#2", "hi",
+                               channel="channel:telegram/42", context={"event_id": "ev_1"})
+    assert status == "sent"
+    assert not any(f.kind == "speech.part" for f in read_facts(home))

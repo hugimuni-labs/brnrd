@@ -135,18 +135,13 @@ def make_effect(client):
         payload = {"body_markdown": text}
         # One event takes one response: only the first part answers it; the
         # rest follow as ordinary messages to the same platform.
-        first = "#" not in part_key or part_key.endswith("#1")
-        if context.get("event_id") and first:
+        if context.get("event_id") and context["first"]:
             payload["event_id"] = context["event_id"]
         else:
             payload["platform"] = platform
         response = client.send(payload) or {}
-        receipt = {"via": "event" if "event_id" in payload else "platform"}
-        for key in ("message_id", "id"):
-            if response.get(key) not in (None, ""):
-                receipt["message_id"] = response[key]
-                break
-        return receipt
+        return ({"message_id": response["message_id"]}
+                if response.get("message_id") not in (None, "") else {})
     return effect
 
 
