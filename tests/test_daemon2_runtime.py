@@ -588,6 +588,35 @@ def test_stop_cancels_pending_child_and_preserves_submitted_produce(tmp_path: Pa
     assert runtime.door.get(child_event.stem)["status"] == "noted"
 
 
+def test_stop_from_schedule_seat_reaches_child_under_item_ask(tmp_path: Path) -> None:
+    """#2224: a schedule-woken seat (no ask of its own) stops a strand it
+    spawned under an ``item:`` ask. The stop lands under the child's ask,
+    so the supervisor sees it, and the completion event is emitted."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    inbox = home / "dispatch" / "inbox"
+    protocol.create_event(inbox, "schedule", "goal pulse", conversation_key="c")
+    protocol.create_event(
+        inbox, "spawn", "work", conversation_key="c", ask_id="w-7",
+        parent_run_id="run-parent", spawn_edge="edge-1",
+        child_run_id="run-child", branch="brr/child", report=str(tmp_path / "report.md"))
+    binary = tmp_path / "parent-shell"
+    _verb_shell(binary, ("stop.md", "---\nstop: edge-1\nreason: integrated\n---\n"))
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02, worktree_env=False)
+    runtime.supervisor.register("w-7", "c", "run-parent", "edge-1", "run-child")
+    runtime._run_id = lambda: "run-parent"
+    result = runtime.once(role="resident")
+    assert result is not None
+    assert runtime.supervisor.children("w-7")["edge-1"].status == "stopped"
+    completed = [event for event in runtime.door.pending()
+                 if event["source"] == "spawn_completed"]
+    assert len(completed) == 1 and completed[0]["spawn_stopped"]
+
+
 def test_stop_terminates_running_child_shell(tmp_path: Path) -> None:
     home = tmp_path / "home"
     repo = tmp_path / "repo"
