@@ -285,6 +285,58 @@ def test_clean_runner_environ_fails_closed_without_cloud_gate(monkeypatch):
     assert (runner_mod.Path(null_dir) / "hosts.yml").read_text(encoding="utf-8") == ""
 
 
+def test_clean_runner_environ_allowlist_drops_secrets_and_keeps_runtime(monkeypatch):
+    """A secret in the daemon env does not reach the runner. The runtime
+    names the Shells actually need, and the old contaminant strip still
+    holds on top of the allowlist."""
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "aws-secret")
+    monkeypatch.setenv("STRIPE_API_KEY", "sk_live_x")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/ssh-agent.sock")
+    monkeypatch.setenv("GH_ENTERPRISE_TOKEN", "enterprise")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("HOME", "/Users/example")
+    monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
+    monkeypatch.setenv("BRR_RUN_ID", "run-1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("CLAUDE_CODE_SAFE_MODE", "1")
+    monkeypatch.setenv("AI_AGENT", "claude-code_agent")
+
+    cleaned = runner_mod.clean_runner_environ()
+
+    assert "AWS_SECRET_ACCESS_KEY" not in cleaned
+    assert "STRIPE_API_KEY" not in cleaned
+    assert "SSH_AUTH_SOCK" not in cleaned
+    # GH_ is a prefix; only GH_TOKEN itself is the GitHub exemption.
+    assert "GH_ENTERPRISE_TOKEN" not in cleaned
+    assert cleaned["PATH"] == "/usr/bin"
+    assert cleaned["HOME"] == "/Users/example"
+    assert cleaned["LC_ALL"] == "en_US.UTF-8"
+    assert cleaned["BRR_RUN_ID"] == "run-1"
+    assert cleaned["ANTHROPIC_API_KEY"] == "sk-ant-test"
+    assert "CLAUDE_CODE_SAFE_MODE" not in cleaned
+    assert "AI_AGENT" not in cleaned
+
+
+def test_clean_runner_environ_passthrough_adds_a_name(monkeypatch):
+    """``runner.env_passthrough`` admits an exact name, including one the
+    secret drop would otherwise refuse. A contaminant listed there stays
+    out: the strip runs after the allowlist."""
+    monkeypatch.setenv("MY_CUSTOM_TOOL", "1")
+    monkeypatch.setenv("STRIPE_API_KEY", "sk_live_named")
+    monkeypatch.setenv("CLAUDE_CODE_SAFE_MODE", "1")
+
+    cleaned = runner_mod.clean_runner_environ(
+        cfg={
+            "runner.env_passthrough":
+            "MY_CUSTOM_TOOL, STRIPE_API_KEY, CLAUDE_CODE_SAFE_MODE",
+        },
+    )
+
+    assert cleaned["MY_CUSTOM_TOOL"] == "1"
+    assert cleaned["STRIPE_API_KEY"] == "sk_live_named"
+    assert "CLAUDE_CODE_SAFE_MODE" not in cleaned
+
+
 def test_detect_runner_returns_string_or_none():
     result = detect_runner()
     assert result is None or isinstance(result, str)
@@ -1723,7 +1775,8 @@ class TestInvocationTracing:
             captured["env"] = kwargs.get("env")
             return _fake_proc(kwargs, out="ok\n")
 
-        monkeypatch.setenv("EXISTING_ENV", "kept")
+        monkeypatch.setenv("LC_MESSAGES", "kept")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "aws-secret")
         monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
         invocation = RunnerInvocation(
             kind="daemon-run",
@@ -1738,7 +1791,9 @@ class TestInvocationTracing:
 
         assert result.ok
         assert captured["env"]["BRR_PORTAL_STATE"] == "/tmp/state.json"
-        assert captured["env"]["EXISTING_ENV"] == "kept"
+        # Allowlisted base env still arrives; a secret in the daemon env does not.
+        assert captured["env"]["LC_MESSAGES"] == "kept"
+        assert "AWS_SECRET_ACCESS_KEY" not in captured["env"]
 
     def test_invoke_runner_spawns_exactly_one_child_process(
         self, tmp_path, monkeypatch,

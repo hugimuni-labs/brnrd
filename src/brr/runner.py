@@ -249,11 +249,12 @@ def _ensure_publishing_token_fresh(
 ) -> None:
     """Top up the managed GitHub token before a runner snapshots it.
 
-    The runner env is a *copy* of the daemon's environment taken once, at
-    dispatch, and held for the life of the run. The cloud gate's own renewal
-    is paced for the daemon — it renews only when the credential is nearly
-    expired — which is correct for a long-lived process that can always ask
-    again, and wrong for a runner that cannot. Without this, a dispatched run
+    The runner env is an allowlisted snapshot of the daemon's environment
+    taken once, at dispatch, and held for the life of the run. The cloud
+    gate's own renewal is paced for the daemon — it renews only when the
+    credential is nearly expired — which is correct for a long-lived
+    process that can always ask again, and wrong for a runner that cannot.
+    Without this, a dispatched run
     inherits between 10 and 60 minutes of token life at random and finds out
     which by failing to push.
 
@@ -272,19 +273,181 @@ def _ensure_publishing_token_fresh(
         return
 
 
-def clean_runner_environ(
-    brr_dir: Path | None = None, repo_full_name: str | None = None,
-) -> dict[str, str]:
-    """A copy of ``os.environ`` with parent-agent-session leakage removed.
+# Names a runner may inherit. Everything else is dropped, unless it matches
+# a prefix below or ``runner.env_passthrough`` names it. This replaced the
+# "copy os.environ minus nine contaminants" filter (design-threat-model §5
+# gap 1): a secret sitting in the daemon env was reaching every run.
+_RUNNER_ENV_EXACT: frozenset[str] = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "TMPDIR",
+        "TERM",
+        "COLORTERM",
+        "LANG",
+        "TZ",
+        "PWD",
+        "VIRTUAL_ENV",
+        "EDITOR",
+        "GIT_EDITOR",
+        "NO_COLOR",
+        "FORCE_COLOR",
+        "HOMEBREW_PREFIX",
+        "HOMEBREW_CELLAR",
+        "HOMEBREW_REPOSITORY",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        # Exact, not a ``CLAUDE_`` prefix: a prefix would carry the session
+        # contaminants above. The auth-health probe reads this dir
+        # (runner_auth_health.py).
+        "CLAUDE_CONFIG_DIR",
+        # When the operator sets this, prepare / daemon2 leave it alone and
+        # the child is expected to inherit it (worker/prepare.py,
+        # daemon2/runtime.py ``_await_lease_env``).
+        "BASH_MAX_TIMEOUT_MS",
+    }
+)
 
-    The base env every runner subprocess starts from. Stripping the
-    contaminants above keeps a spawned agent CLI from inheriting the *parent*
-    agent's session identity and, critically, its safe-mode flag — so hooks,
-    skills, and plugins behave as they would for a normal top-level run.
+# ``VIBE_`` is what this repo reads (``VIBE_HOME``). ``MISTRAL_`` is the
+# provider prefix (runners.toml ``provider = "mistral"``); no in-repo reader
+# names a ``MISTRAL_*`` variable. ``GEMINI_`` matches the key docker already
+# forwards; gemini is not a first-class Shell (``SHELL_HELP``).
+_RUNNER_ENV_PREFIXES: tuple[str, ...] = (
+    "LC_",
+    "XDG_",
+    "BRR_",
+    "BRNRD_",
+    "GH_",
+    "GIT_",
+    "ANTHROPIC_",
+    "OPENAI_",
+    "CODEX_",
+    "XAI_",
+    "GROK_",
+    "MISTRAL_",
+    "GEMINI_",
+    "VIBE_",
+)
+
+# Secret-shaped names under these prefixes stay. ``GH_`` / ``BRR_`` /
+# ``BRNRD_`` / ``GIT_`` are not in this tuple: a ``GH_ENTERPRISE_TOKEN`` is
+# not a Shell credential. The two GitHub names the branches below handle
+# are exempt one by one.
+_SHELL_ENV_PREFIXES: tuple[str, ...] = (
+    "ANTHROPIC_",
+    "OPENAI_",
+    "CODEX_",
+    "XAI_",
+    "GROK_",
+    "MISTRAL_",
+    "GEMINI_",
+    "VIBE_",
+)
+
+_RUNNER_ENV_SECRET_EXEMPT: frozenset[str] = frozenset(
+    {
+        "GH_TOKEN",
+        "BRNRD_MANAGED_GITHUB_TOKEN",
+    }
+)
+
+_ENV_VAR_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+def _secret_shaped(name: str) -> bool:
+    """True when *name* is a token, secret, key, or password.
+
+    Suffixes ``_TOKEN`` / ``_SECRET`` / ``_KEY``, and a ``PASSWORD``
+    substring, compared case-insensitively. ``GIT_CONFIG_KEY_0`` does not
+    match: the suffix is ``_0``.
+    """
+    upper = name.upper()
+    return "PASSWORD" in upper or upper.endswith(("_TOKEN", "_SECRET", "_KEY"))
+
+
+def _env_passthrough_names(cfg: dict[str, Any] | None) -> frozenset[str]:
+    """Extra exact names from ``runner.env_passthrough``.
+
+    Comma-separated. Read from the cfg dict :func:`runner_timeout` already
+    reads; callers that invoke :func:`clean_runner_environ` without a cfg
+    (the daemon's own git fetch and default-branch push) get no extras.
+    A token that is not an env-var name is skipped. A listed name is
+    admitted even when it is secret-shaped — the operator named it. The
+    contaminant strip still runs afterwards, so listing
+    ``CLAUDE_CODE_SAFE_MODE`` does not put it back.
+    """
+    if not cfg:
+        return frozenset()
+    raw = cfg.get("runner.env_passthrough", "")
+    if raw is None:
+        return frozenset()
+    parts = raw if isinstance(raw, (list, tuple)) else str(raw).split(",")
+    names: set[str] = set()
+    for part in parts:
+        name = str(part).strip()
+        if _ENV_VAR_NAME.fullmatch(name):
+            names.add(name)
+    return frozenset(names)
+
+
+def _runner_env_allowed(name: str, extra: frozenset[str]) -> bool:
+    if name in extra:
+        return True
+    listed = name in _RUNNER_ENV_EXACT or name.startswith(_RUNNER_ENV_PREFIXES)
+    if not listed:
+        return False
+    if _secret_shaped(name) and not (
+        name in _RUNNER_ENV_SECRET_EXEMPT or name.startswith(_SHELL_ENV_PREFIXES)
+    ):
+        return False
+    return True
+
+
+def clean_runner_environ(
+    brr_dir: Path | None = None,
+    repo_full_name: str | None = None,
+    cfg: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """The base env every runner subprocess starts from.
+
+    An allowlist, applied first: exact names (``PATH``, ``HOME``, locale,
+    proxy, CA bundle, ``CLAUDE_CONFIG_DIR``, ``BASH_MAX_TIMEOUT_MS``), the
+    prefixes ``LC_`` ``XDG_`` ``BRR_`` ``BRNRD_`` ``GH_`` ``GIT_``, and each
+    Shell's auth prefix (``ANTHROPIC_``, ``OPENAI_``, ``CODEX_``, ``XAI_``,
+    ``GROK_``, ``MISTRAL_``, ``GEMINI_``, ``VIBE_``). ``SSH_AUTH_SOCK`` is
+    absent on purpose — origin is https, and an agent socket lets a run
+    push as the maintainer.
+
+    Secret-shaped names (``*_TOKEN``, ``*_SECRET``, ``*_KEY``,
+    ``*PASSWORD*``) drop unless a Shell prefix covers them, or the name is
+    ``GH_TOKEN`` / ``BRNRD_MANAGED_GITHUB_TOKEN`` (the GitHub branches below
+    handle those). ``runner.env_passthrough``, a comma-separated list on
+    the runner cfg, adds exact names and wins over that secret drop.
+
+    The contaminant strip and the GitHub branches then run exactly as they
+    did on the old full copy. Stripping the contaminants keeps a spawned
+    agent CLI from inheriting the parent agent's session identity and,
+    critically, its safe-mode flag — so hooks, skills, and plugins behave
+    as they would for a normal top-level run.
     """
     _ensure_publishing_token_fresh(brr_dir, repo_full_name)
+    extra = _env_passthrough_names(cfg)
+    allowed = {
+        k: v for k, v in os.environ.items() if _runner_env_allowed(k, extra)
+    }
     cleaned = {
-        k: v for k, v in os.environ.items() if k not in _RUNNER_ENV_CONTAMINANTS
+        k: v for k, v in allowed.items() if k not in _RUNNER_ENV_CONTAMINANTS
     }
     # GitHub CLI defines GH_TOKEN as the automation-specific override for
     # GITHUB_TOKEN.  Keep that choice unambiguous for every tool in the runner,
@@ -2930,6 +3093,7 @@ def invoke_runner(
     proc_env = clean_runner_environ(
         invocation.publishing_brr_dir,
         invocation.repo_full_name,
+        cfg,
     )
     if invocation.env:
         proc_env.update({str(k): str(v) for k, v in invocation.env.items()})
