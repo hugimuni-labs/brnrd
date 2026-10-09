@@ -255,20 +255,21 @@ def test_a_missing_attachment_holds_the_cursor_three_pulls_then_lands(home):
         return index == 0
     client.download_attachment = download
 
+    failures = {}
     for attempt in (1, 2):
         with pytest.raises(RuntimeError, match=f"attempt {attempt} of 3"):
-            relay.pull_once(home, client, 0)
+            relay.pull_once(home, client, 0, failures=failures)
         assert relay.read_cursor(home) == 0
         assert kinds(home, "source") == []
 
-    assert relay.pull_once(home, client, 0) == 8
+    assert relay.pull_once(home, client, 0, failures=failures) == 8
     (source,) = kinds(home, "source")
     assert source.data["blobs_missing"] == [1]
     assert len(source.data["blobs"]) == 1
     assert "attention:blobs-missing:ev_f" in {f.id for f in kinds(home, "attention")}
-    assert not json.loads((home.root / "loom" / "relay-failures.json").read_text())
+    assert failures == {}
     # A replay after giving up is still one source, one letter.
-    relay.pull_once(home, client, 0)
+    relay.pull_once(home, client, 0, failures=failures)
     assert len(kinds(home, "source")) == 1 and len(kinds(home, "letter")) == 1
 
 

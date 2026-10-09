@@ -252,34 +252,6 @@ def _blob(home: Home, client, event_id: str, index: int) -> tuple[str, int]:
 GIVE_UP_AFTER = 3
 
 
-def _failures_path(home: Home) -> Path:
-    return home.root / "loom" / "relay-failures.json"
-
-
-def _read_failures(home: Home) -> dict:
-    try:
-        data = json.loads(_failures_path(home).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def _failure(home: Home, event_id: str) -> int:
-    """Count one failed pull for ``event_id``; return the count so far."""
-    data = _read_failures(home)
-    count = int(data.get(event_id, 0)) + 1
-    data[event_id] = count
-    atomic_write(_failures_path(home), json.dumps(data, sort_keys=True) + "\n")
-    return count
-
-
-def _clear_failure(home: Home, event_id: str) -> None:
-    data = _read_failures(home)
-    if event_id in data:
-        del data[event_id]
-        atomic_write(_failures_path(home), json.dumps(data, sort_keys=True) + "\n")
-
-
 def _attention(home: Home, fact_id: str, why: str) -> None:
     from ..ledger import LedgerConflict
     try:
@@ -310,8 +282,9 @@ def _letter(home: Home, source: Fact) -> Fact:
     ))
 
 
-def pull_once(home: Home, client, cursor: int) -> int:
+def pull_once(home: Home, client, cursor: int, *, failures: dict | None = None) -> int:
     """Append complete events before committing the server cursor, even a lower one."""
+    failures = failures if failures is not None else {}
     cursor = _cursor(cursor)
     result = client.pull(cursor)
     next_cursor = _cursor(result.get("cursor", cursor))
@@ -343,37 +316,33 @@ def pull_once(home: Home, client, cursor: int) -> int:
         blobs = []
         blob_ids = []
         missing = []
-        downloaded = {}
-        for index in range(len(names)):
+        blob_facts = []
+        for index, pointer in enumerate(pointers[:len(names)]):
             try:
-                downloaded[index] = _blob(home, client, event_id, index)
+                sha, size = _blob(home, client, event_id, index)
             except Exception:  # noqa: BLE001 — counted, then held or given up
                 missing.append(index)
+                continue
+            mime = ((pointer.get("mime_type") if isinstance(pointer, dict) else None)
+                    or "application/octet-stream")
+            ident = f"blob:relay:{event_id}#{index}"
+            blob_facts.append(Fact(
+                kind="blob", by=f"loom:{home.install_id()}", id=ident,
+                data={"sha": sha, "mime": mime, "size": size, "origin": f"relay:{event_id}#{index}"},
+            ))
+            blobs.append(sha)
+            blob_ids.append(ident)
         if missing:
-            # One permanently missing file must not block every later
-            # message. Hold the cursor for GIVE_UP_AFTER pulls, then land the
-            # source without those blobs and say so.
-            tries = _failure(home, event_id)
+            # A restart grants three fresh tries; one missing file must not
+            # stall every subsequent message in a live poller.
+            tries = failures[event_id] = failures.get(event_id, 0) + 1
             if tries < GIVE_UP_AFTER:
                 raise RuntimeError(
                     f"relay: attachment download failed: {event_id}#"
                     f"{','.join(map(str, missing))} "
                     f"(attempt {tries} of {GIVE_UP_AFTER})"
                 )
-        for index in range(len(names)):
-            if index not in downloaded:
-                continue
-            sha, size = downloaded[index]
-            pointer = pointers[index]
-            mime = ((pointer.get("mime_type") if isinstance(pointer, dict) else None)
-                    or "application/octet-stream")
-            ident = f"blob:relay:{event_id}#{index}"
-            facts.append(append(home, Fact(
-                kind="blob", by=f"loom:{home.install_id()}", id=ident,
-                data={"sha": sha, "mime": mime, "size": size, "origin": f"relay:{event_id}#{index}"},
-            )))
-            blobs.append(sha)
-            blob_ids.append(ident)
+        facts.extend(append(home, fact) for fact in blob_facts)
         data = {
             "origin": f"relay:{event_id}", "platform": platform,
             "chat": meta["cloud_chat_id"], "topic": meta["cloud_topic_id"],
@@ -408,7 +377,7 @@ def pull_once(home: Home, client, cursor: int) -> int:
                 f"relay: gave up on attachment(s) {missing} of {event_id} "
                 f"after {GIVE_UP_AFTER} pulls; the message landed without them",
             )
-        _clear_failure(home, event_id)
+        failures.pop(event_id, None)
     _write_cursor(home, next_cursor)
     return next_cursor
 
@@ -427,6 +396,7 @@ def poll_forever(home: Home, client, lock, stop, *, log=None,
     lock.want()
     waiting = False
     backoff = 1.0
+    failures: dict[str, int] = {}
     try:
         while not stop.is_set():
             if not lock.held:
@@ -444,7 +414,7 @@ def poll_forever(home: Home, client, lock, stop, *, log=None,
                     _write_cursor(home, handed)
                 say(f"relay: polling from {read_cursor(home)}")
             try:
-                cursor = pull_once(home, client, read_cursor(home))
+                cursor = pull_once(home, client, read_cursor(home), failures=failures)
                 lock.record(cursor)
                 backoff = 1.0
             except Exception as exc:  # noqa: BLE001 — the loop must outlive one bad poll
