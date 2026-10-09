@@ -41,50 +41,21 @@ def _store_key(key: str) -> str:
     return safe
 
 
-def _channel(home: Home) -> Path:
-    return home.root / "loom" / "channel-fake.jsonl"
-
-
-def _already(path: Path, key: str) -> bool:
-    if not path.is_file():
-        return False
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if row.get("key") == key:
-            return True
-    return False
-
-
-def _append_line(home: Home, key: str, text: str, gen: int) -> None:
-    path = _channel(home)
+def _fake_effect(home: Home, channel: str, key: str, text: str, context: dict) -> dict:
+    path = home.root / "loom" / "channel-fake.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
-    if _already(path, key):
-        return
-    line = json.dumps(
-        {"key": key, "text": text, "gen": gen}, sort_keys=True, separators=(",", ":"),
-    )
+    line = json.dumps({"key": key, "text": text}, sort_keys=True, separators=(",", ":"))
     with path.open("a", encoding="utf-8") as handle:
         handle.write(line + "\n")
         handle.flush()
         os.fsync(handle.fileno())
-
-
-def _speech(home: Home, key: str, state: str, gen: int) -> Fact:
-    return append(home, Fact(
-        kind="speech", by=f"loom:{home.install_id()}", id=f"speech:{state}:{key}",
-        data={"key": key, "state": state, "router_gen": gen},
-    ))
+    return {}
 
 
 #: ``effect(home, channel, part_key, text, context) -> dict`` per channel
 #: kind. ``context`` carries what the router knows (``event_id`` when the
 #: letter answers a relay event). The dict is the receipt, kept on the fact.
-EFFECTS: dict[str, Callable[..., dict]] = {}
+EFFECTS: dict[str, Callable[..., dict]] = {"fake": _fake_effect}
 
 #: Characters per message part, per platform. Mirrors the cloud gate's
 #: ``_RESPONSE_LIMITS``; a platform not listed is sent whole.
@@ -126,36 +97,6 @@ def speak(home: Home, router_lease: Lease, key: str, text: str, *,
     """
     if not key:
         raise ValueError("speak: empty key")
-    if channel != CHANNEL:
-        return _speak_parts(home, router_lease, key, text, channel, context or {})
-    authority = LocalLeaseAuthority(
-        Path(home.root) / "ledger" / "leases", clock=loom_clock,
-    )
-    if not authority.authorize(router_lease):
-        return _STEP, None
-    safe = _store_key(key)
-    prior = list(authority.sends.read("sends", safe))
-    if any(fact.kind == "sent" for fact in prior):
-        return _SENT, _speech(home, key, "sent", router_lease.gen)
-    if any(fact.kind == "intended" for fact in prior):
-        return _MAYBE, _speech(home, key, "intended", router_lease.gen)
-
-    def effect(effect_key: str, gen: int) -> dict:
-        del effect_key
-        _append_line(home, key, text, gen)
-        return {"key": key, "gen": gen}
-
-    try:
-        authority.effect_once(router_lease, safe, effect)
-    except EffectInFlight:
-        return _MAYBE, _speech(home, key, "intended", router_lease.gen)
-    except StaleLease:
-        return _STEP, None
-    return _SENT, _speech(home, key, "sent", router_lease.gen)
-
-
-def _speak_parts(home: Home, router_lease: Lease, key: str, text: str,
-                 channel: str, context: dict) -> tuple[str, Fact | None]:
     kind = channel_kind(channel)
     effect = EFFECTS.get(kind) or EFFECTS.get("relay")
     if effect is None:
@@ -180,7 +121,7 @@ def _speak_parts(home: Home, router_lease: Lease, key: str, text: str,
 
         def run(effect_key: str, gen: int, _part=part, _part_key=part_key) -> dict:
             del effect_key
-            receipt = effect(home, channel, _part_key, _part, dict(context, gen=gen)) or {}
+            receipt = effect(home, channel, _part_key, _part, dict(context or {}, gen=gen)) or {}
             receipts.append({"part": _part_key, **receipt})
             return {"key": _part_key, "gen": gen, **receipt}
 
