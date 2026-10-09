@@ -4,6 +4,8 @@
 > Not a chat window. Not a coding plugin. Not a SaaS that keeps your memory hostage.
 > The rented models are a bridge: this class of model will run locally. Build so the bridge can burn.
 
+*Companion sermon, in the kb: [break-of-gauge](https://github.com/hugimuni-labs/brnrd-knowledge/blob/main/repos/hugimuni-labs__brnrd/break-of-gauge.md).*
+
 *A living tree. Each node is a **belief**, then its **horizon**, where it ends up if we're right, and only then **now**. We steer by the horizon; the next step is the cheapest move toward it, never the definition. `∅` = nothing yet, said on purpose. The branches aren't a closed set: when a new essential appears, it gets a node.*
 
 ---
