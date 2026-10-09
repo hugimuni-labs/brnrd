@@ -16,6 +16,7 @@ from typing import Callable
 
 from brr.daemon2.facts import Fact
 from brr.daemon2.leases import EffectInFlight, Lease, LocalLeaseAuthority, StaleLease
+from brr.gates.cloud import _RESPONSE_LIMITS as LIMITS
 
 from .config import loom_clock
 from .home import Home, channel_parts
@@ -56,10 +57,6 @@ def _fake_effect(home: Home, channel: str, key: str, text: str, context: dict) -
 #: kind. ``context`` carries what the router knows (``event_id`` when the
 #: letter answers a relay event). The dict is the receipt, kept on the fact.
 EFFECTS: dict[str, Callable[..., dict]] = {"fake": _fake_effect}
-
-#: Characters per message part, per platform. Mirrors the cloud gate's
-#: ``_RESPONSE_LIMITS``; a platform not listed is sent whole.
-LIMITS = {"telegram": 3900}
 
 
 def channel_kind(channel: str) -> str:
