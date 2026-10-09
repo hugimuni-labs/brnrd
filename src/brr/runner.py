@@ -2197,6 +2197,36 @@ def _fill_protonucleus(cmd: list[str]) -> list[str]:
     return out
 
 
+def _codex_sandbox_cmd(cmd: list[str], cfg: dict[str, Any]) -> list[str]:
+    """Opt in on profile commands; pinned runner_cmd remains the user's argv."""
+    mode = cfg.get("runner.codex_sandbox")
+    if not mode or not cmd or Path(cmd[0]).name != "codex":
+        return cmd
+    if mode != "workspace-write":
+        raise ValueError("runner.codex_sandbox must be workspace-write or unset")
+    # Remove competing profile sandbox/approval settings before our overrides.
+    out: list[str] = []
+    index = 0
+    while index < len(cmd):
+        arg = cmd[index]
+        if arg in ("--dangerously-bypass-approvals-and-sandbox", "--full-auto", "--approve-for-me"):
+            index += 1
+        elif arg in ("--sandbox", "-s", "--ask-for-approval", "-a"):
+            index += 2
+        elif arg.startswith(("--sandbox=", "--ask-for-approval=")):
+            index += 1
+        else:
+            out.append(arg)
+            index += 1
+    out.extend(["--sandbox", "workspace-write", "-c", "approval_policy=\"never\""])
+    network = cfg.get("runner.codex_sandbox_network_access", False)
+    if str(network).strip().lower() in ("1", "true", "yes", "on"):
+        out.extend(["-c", "sandbox_workspace_write.network_access=true"])
+    else:
+        out.extend(["-c", "sandbox_workspace_write.network_access=false"])
+    return out
+
+
 def _cmd_template(
     runner_name: "str | RunnerProfile",
     cfg: dict[str, Any],
@@ -2230,7 +2260,7 @@ def _cmd_template(
     if profile_cmd:
         cmd = _fill_protonucleus(shlex.split(profile_cmd))
         cmd.extend(extra)
-        return cmd
+        return _codex_sandbox_cmd(cmd, cfg)
 
     return [str(runner_name), *extra]
 
@@ -2638,10 +2668,17 @@ def _insert_codex_resume(cmd_template: list[str], thread_id: str) -> list[str]:
         exec_index = cmd_template.index("exec")
     except ValueError:
         return cmd_template
+    # `exec resume` accepts -c but not --sandbox. Keep that exec-level
+    # option before the subcommand so an opted-in session can resume too.
+    tail = list(cmd_template[exec_index + 1 :])
+    sandbox_args: list[str] = []
+    if "--sandbox" in tail:
+        index = tail.index("--sandbox")
+        sandbox_args = tail[index : index + 2]
+        del tail[index : index + 2]
     return [
-        *cmd_template[: exec_index + 1],
-        "resume", thread_id,
-        *cmd_template[exec_index + 1 :],
+        *cmd_template[: exec_index + 1], *sandbox_args,
+        "resume", thread_id, *tail,
     ]
 
 
