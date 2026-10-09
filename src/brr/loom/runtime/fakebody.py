@@ -224,11 +224,11 @@ def emit_channel(ctx: Ctx) -> None:
         time.sleep(0.1)
 
 
-def die_on_poison(ctx: Ctx) -> None:
-    """Die after being shown a letter whose body is ``poison``. Answer the rest."""
+def die_on_unrunnable(ctx: Ctx) -> None:
+    """Die after being shown a letter whose body is ``unrunnable``. Answer the rest."""
     own = _own_thread(ctx.wake())
     letters = ctx.jack("start").letters
-    if any(letter.body.strip() == "poison" for letter in letters):
+    if any(letter.body.strip() == "unrunnable" for letter in letters):
         raise SystemExit(1)
     for letter in letters:
         ctx.send(f"thread:{own}", note="ok", re=letter.id)
@@ -244,7 +244,7 @@ POLICIES = {
     "hold": hold,
     "answer-fast": answer_fast,
     "emit-channel": emit_channel,
-    "die-on-poison": die_on_poison,
+    "die-on-unrunnable": die_on_unrunnable,
 }
 
 

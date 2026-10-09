@@ -409,21 +409,21 @@ def _out_count(root: Path) -> int:
     return count
 
 
-def test_a_poison_letter_stops_waking_and_clear_puts_it_back(tmp_path):
+def test_an_unrunnable_letter_stops_waking_and_clear_puts_it_back(tmp_path):
     root = tmp_path / "home"
     _config(root, name="brnrd", router_ttl=2, max_skew=0.3, margin=0.1)
-    write_thread(root, "tp", "thread tp", "die-on-poison", wait="3")
-    poison = inject_letter(root, to="thread:tp", body="poison")
+    write_thread(root, "tp", "thread tp", "die-on-unrunnable", wait="3")
+    letter = inject_letter(root, to="thread:tp", body="unrunnable")
     procs = _pair(root)
     try:
-        def poisoned():
+        def set_aside():
             _alive(procs, lambda: _dump(root, procs))
             facts = _facts(root)
             starts = [fact for fact in facts if fact.kind == "body.started"]
             rows = {(row.kind, row.subject) for row in view(facts)}
-            return ("poison", poison) in rows and len(starts) == 2
+            return ("unrunnable", letter) in rows and len(starts) == 2
 
-        wait_until(poisoned, 8, lambda: _dump(root, procs))
+        wait_until(set_aside, 8, lambda: _dump(root, procs))
         strand = _facts(root)[-1].data.get("strand") or [
             fact.data["strand"] for fact in _facts(root) if fact.kind == "body.started"
         ][0]
@@ -442,12 +442,12 @@ def test_a_poison_letter_stops_waking_and_clear_puts_it_back(tmp_path):
         install = _routers(_facts(root))[-1].data["install"]
         subprocess.run(
             [sys.executable, "-m", "brr.loom.runtime", "attention",
-             "--home", str(root), "--install", install, "--clear", poison],
+             "--home", str(root), "--install", install, "--clear", letter],
             check=True, env={**os.environ, "PYTHONPATH": SRC},
             capture_output=True, text=True,
         )
         rows = {(row.kind, row.subject) for row in view(_facts(root))}
-        assert ("poison", poison) not in rows
+        assert ("unrunnable", letter) not in rows
 
         def woke_again():
             facts = _facts(root)

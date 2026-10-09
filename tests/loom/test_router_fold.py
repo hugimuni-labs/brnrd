@@ -89,7 +89,7 @@ def test_attention_view_folds_the_rows():
         ),
         _fact(
             "letter", "person:p-test",
-            {"id": LETTER, "to": "thread:ta", "body": "poison", "from": "p-test"},
+            {"id": LETTER, "to": "thread:ta", "body": "unrunnable", "from": "p-test"},
             LETTER, 2,
         ),
     ]
@@ -128,7 +128,7 @@ def test_attention_view_folds_the_rows():
         "speech:intended:s-aaaa-aaaaaa/lost", 12,
     ))
     rows = {(row.kind, row.subject) for row in view(facts)}
-    assert ("poison", LETTER) in rows
+    assert ("unrunnable", LETTER) in rows
     assert ("fuse", "ta") in rows
     assert ("stale-speech", "s-aaaa-aaaaaa/out") in rows
     assert ("maybe-sent", "s-aaaa-aaaaaa/lost") in rows
@@ -136,7 +136,7 @@ def test_attention_view_folds_the_rows():
         "attention.cleared", "person:aaaa",
         {"letter": LETTER}, f"attention.cleared:{LETTER}", 13,
     ))
-    assert ("poison", LETTER) not in {(row.kind, row.subject) for row in view(facts)}
+    assert ("unrunnable", LETTER) not in {(row.kind, row.subject) for row in view(facts)}
 
 
 def test_the_router_stops_granting_before_a_fast_peer_can_acquire():

@@ -362,7 +362,7 @@ def _reap(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         molted = _molted(home, body, facts)
         kind = "body.exited" if code == 0 else "body.died"
         data = {"strand": strand, "gen": body.gen, "code": code}
-        # A poison letter stays owed and must not look like unfinished work,
+        # An unrunnable letter stays owed and must not look like unfinished work,
         # or the body that answered everything else would spin the fuse.
         if code == 0 and not molted and actionable(facts, body.thread):
             data["unfinished"] = True
@@ -391,7 +391,7 @@ def _recover(home: Home) -> list[Fact]:
     """Release threads this install held whose bodies died with the last loom.
 
     Only this loom reaps its own strands, and the router re-grants a dead
-    holder only when its install is silent or the strand fused on poison.
+    holder only when its install is silent or the strand fused on an unrunnable letter.
     A restarted loom is neither, so without this every thread it held stays
     leased to a corpse. A body still holding its flock is left alone, and a
     fused strand stays fused: the fuse is the person's to reset.
