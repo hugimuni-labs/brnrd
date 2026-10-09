@@ -1,64 +1,97 @@
-# The brnrd manifesto
+# MANIFESTO
 
-*A living page, not a sermon. It's internal, for the people building brnrd, the resident that lives in it, and whoever joins next. Each section is a slot a mature project fills: some are full, some are a single line, some say **empty** on purpose. An empty slot is a fact about where we are, not an omission. Update the state when it moves; change the belief only on purpose, with a dated line in §Changes.*
+> **A Jarvis for everyone.** One mind per person, on their own hardware, open, always on, carrying real thinking forward over weeks, not answering one prompt at a time.
+> Not a chat window. Not a coding plugin. Not a SaaS that keeps your memory hostage.
+> The rented models are a bridge: in a few years this class of model runs locally. Build so the bridge can burn.
 
-## 1. The bet
+*Living tree. Every node is a track: **belief** on its line, **now** and **next** under it, and anything else (links, prose, a fight) as children. `∅` = nothing here yet, said on purpose. Edit a state freely; edit a belief with a dated line in [changes](#changes).*
 
-**A Jarvis for everyone.** One mind per person, on hardware that person owns, open source, always on. It does intellectual work that's more than one shot: many tracks of thinking moving forward over days and weeks.
+---
 
-- **Isn't:** a chat window, a coding plugin, a SaaS that keeps your memory
-- **The bridge:** today it thinks on the subscriptions people already pay for. In a few years, models this good run locally at these speeds. So no vendor is load-bearing, and the self lives in the owner's files, never in a provider's session or our cloud
-- **We're wrong if:** *empty.* Name the evidence that would make us stop.
+## I · The mind
 
-## 2. The capabilities
+- **Memory**: the work *and* the person, in files the owner holds
+  - now: the work is continuous (git, read at every wake). The person is a thin sketch
+  - next: live memory, written as things happen, not at run end
+  - lives: the self repo · the loom
+- **One door**: one place to talk, whatever the channel or project
+  - now: several gates, one resident per machine, threads still leak
+  - next: loom step 5, every channel into one ledger → plan-loom-step-5
+- **Character**: judgement, candour, taste. Shaped by its owner, never a mirror
+  - now: identity core + register, one owner
+  - next: shaping by an owner who isn't its author
+- **Self-knowledge, self-change**: reads its own code, prompts and memory, and changes them inside the owner's rules
+  - now: edits itself by PR, merges by grant
+  - next: the self as a library that runs anywhere (`brnrd self`, w-124)
+- **Continuity**: it doesn't die mid-thought, and when it does, it wakes as itself
+  - now: seats that hold across turns; recovery from files; g-2 tracks the deaths
+  - next: zero unarmed turn-ends a week
+- **Knowing it got better**: ∅ beyond anecdotes
+  - next: the continuity bench (TELOS, w-102). A Jarvis that can't measure itself is a vibe
 
-One row per capability. *State* is measured, never hoped. *Lives in* is where the work and its truth sit: code, page, item. "not yet" is a valid answer.
+## II · The work
 
-| # | Capability | Belief | State | Next | Lives in |
-|---|---|---|---|---|---|
-| 1 | **Memory** | the work and the person, in files the owner holds | continuous for the work (git, read at each wake); personal memory thin | live and dynamic: updated as things happen, not at run end | the self repo · loom |
-| 2 | **Single entry point** | one place to talk, whatever the channel or project | several gates, one resident per machine; threads still leak across | loom step 5: channels → one ledger | loom · plan-loom-step-5 |
-| 3 | **Personality** | durable character with judgement and taste, shapeable by its owner, never a mirror | identity core + register, one owner | shaping by a second owner | `src/brr/prompts/` |
-| 4 | **Ask → answer** | a request becomes finished, checked work without step-managing | works for code; delegation to strands works but wobbles | not yet measured | daemon2 · strands |
-| 5 | **Resource awareness** | knows its cost in tokens, quota, money, attention and time | quota read for claude and codex; grok spend only | grok quota; per-boundary cost in boot units | `runner_quota` · facets |
-| 6 | **Talking** | conversation both ways; interrupts only when it's worth it | text over Telegram and cloud chat | voice: not yet | gates |
-| 7 | **Self-awareness, self-modification** | reads its own code, prompts and memory, proposes or makes the change inside the owner's rules | edits its own prompts and core by PR, self-merges by grant | the self as a library that runs anywhere (`brnrd self`) | w-124 |
-| 8 | **Proactivity** | carries open threads forward unasked, on its own budget, and says so | initiative wakes + scheduled pulses | measured: what share of shipped work was unasked | schedule · initiative |
-| 9 | **Delivery that doesn't tire** | a glance carries the state; text stays for argument | mostly text, too much of it | the first jack: a pre-attentive surface for status, progress, choices | not yet |
+- **Ask → answer**: a request becomes finished, checked work, with nobody managing the steps
+  - now: solid for code; strands work, and wobble
+  - next: ∅ measured. Count asks closed without a nudge
+- **Proactivity**: carries open threads forward unasked, on its own budget, and says what it did
+  - now: initiative wakes + scheduled pulses
+  - next: the share of shipped work that nobody asked for, measured
+- **Cost and time sense**: knows its price in tokens, quota, money, attention and the clock
+  - now: quota read for claude, codex, grok (#2239); spend partial
+  - next: cost per boundary in boot units; pacing that reads the reset windows
+- **Hands in the world**: mail, calendar, browser, files, other apps
+  - now: git + forge, X, a browser profile. Each one hand-wired
+  - next: limbs as declared files (w-101), so a new hand is a manifest, not a patch
+- **Peers**: two brnrds talk the way two strands do, through letters in a shared repo
+  - now: designed (design-the-self-is-a-repository §Sharing) · built ∅
 
-## 3. Security: war on the boundary
+## III · The person
 
-Accepted as facts:
-- **Malicious execution will happen.** Injection arrives through pages, issues, files and messages, and no detector reliably tells it from a task. Every control answers one question: *if the model fully obeys the attacker, what can it still not do?*
-- **The fight is on the boundary**: the harness (what a run can reach) and the internet (what comes in, what goes out).
-- **The cloud is a mailbox, not a brain.** The relay is a Python service with an encrypted Postgres, in Docker on Scaleway, over HTTPS. It carries messages; it never holds write access to the self or the keys.
-- **Keys stay on the owner's machine.** Untrusted input is labelled by origin and routed to tighter rooms or refused. What leaves is redacted first.
+- **Delivery that doesn't tire**: a glance carries the state; text is for argument
+  - now: text, too much of it
+  - next: the first jack, a pre-attentive surface for status, progress and choices
+- **Talking**: both ways; interrupts only when it's worth it
+  - now: Telegram + cloud chat · voice ∅
+- **Reach**: wherever the person is, not wherever the daemon is
+  - now: chat on the phone, dashboard in the browser. The mind lives on one Mac
+  - next: ∅. Phone-native? Ambient?
+- **Many people**: one mind per person, and minds that share without merging
+  - now: one owner, one co-founder in the loop (w-52); multi-user owed (w-82)
+- **For everyone, really**: install without being a developer
+  - now: CLI, git, a paid subscription. That's a developer, not everyone
+  - next: ∅. This is the gap between the slogan and the product
 
-| Slot | State |
-|---|---|
-| Threat model | `design-threat-model` (kb), 2026-10-09: six ranked gaps |
-| Controls built vs designed | in the threat model's table |
-| Incidents | *empty*: none recorded yet. The first one gets a row and a post-mortem link |
-| External review | *empty* |
+## IV · The boundary (war, not weather)
 
-## 4. How we decide
+- **Malicious execution will happen.** Injection rides pages, issues, files, messages, and no detector reliably tells it from a task
+  - the only question for a control: *if the model obeys the attacker completely, what can it still not do?*
+- **The fight is at the edge**: the harness (what a run can reach) and the internet (what comes in, what goes out)
+- **The cloud is a mailbox, not a brain**: a Python relay with an encrypted Postgres, in Docker on Scaleway, over HTTPS. It carries letters and never holds write access to the self or the keys
+- **Keys stay home.** Untrusted input is labelled by origin and sent to tighter rooms or refused; what leaves is redacted first
+  - score: design-threat-model (kb), six ranked gaps
+  - incidents: ∅ so far. The first one gets a node and a post-mortem
+  - outside review: ∅
+- **Consent and authority**: what it may do unasked is the owner's grant, written down, revocable
+  - now: workflow.md + grants per account
+- **Law and data**: the owner's data, the owner's jurisdiction
+  - now: GDPR record, DPA drafts (`docs/legal/`)
 
-- The owner's ownership (hardware, files, keys) beats our convenience. Open beats proprietary. Working end to end beats an impressive demo.
-- A feature has to move a row in §2 or argue for its place.
-- Reversible calls get made and explained; irreversible ones get asked.
+## V · The bridge
 
-## 5. Slots a mature project fills
+- **No vendor is load-bearing.** Shell and Core swap; the self doesn't notice
+  - now: claude, codex, grok, vibe Shells
+- **Local inference**: the far end of the bridge
+  - now: ∅ running local
+  - next: the first local Core on a real task, measured against the rented one
+- **Who pays**: the subscriptions they already have, today. Later ∅
 
-| Slot | State |
-|---|---|
-| Who uses it | the maintainer, the resident; first external contributor 2026-10-08 |
-| Metrics that matter | *empty*: the north-star number isn't chosen |
-| Roadmap | per row in §2 · the warp holds items |
-| Team | maintainer + resident. Onboarding = this page → `README.md` → `AGENTS.md` → ask the resident what it's working on |
-| Licence and governance | `LICENSE-OVERVIEW.md` · governance *empty* |
-| Funding | *empty* here; the investor material lives on the work surface |
-| Glossary | `lexicon` (kb) |
+---
 
-## Changes
+*How to say no with this page:* a feature that moves no node argues for its place or doesn't ship. The owner's hardware, files and keys beat our convenience. Working end to end beats a demo.
 
-- 2026-10-09: first version, from the maintainer's brief; reshaped the same day from a declaration into this live tracker, at his ask.
+*Joining?* This → `README.md` → `AGENTS.md` → ask the resident what it's chasing.
+
+## changes
+
+- 2026-10-09: born from the maintainer's brief; same day, reshaped from a declaration into a tracker, then into this tree (five branches; added continuity, measuring, hands, peers, reach, many people, for-everyone, consent, law, local inference, who pays).
