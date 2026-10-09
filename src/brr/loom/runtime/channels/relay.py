@@ -143,6 +143,25 @@ def _person_channel(to: object, chat: object) -> bool:
             and to.split(":", 1)[1].split("/", 1)[0] in {"telegram", "slack", "whatsapp"})
 
 
+def letter_for_message(facts: list[Fact], channel: str, message_id: object) -> str | None:
+    """The loom letter a platform message carried, from ``speech.part`` receipts.
+
+    Only the loom's own receipts count, and only for the same channel, so a
+    message id from another chat (or another platform) binds nothing.
+    """
+    if message_id in (None, ""):
+        return None
+    for fact in facts:
+        if fact.kind != "speech.part" or not fact.by.startswith("loom:"):
+            continue
+        data = fact.data or {}
+        if data.get("channel") != channel:
+            continue
+        if str((data.get("receipt") or {}).get("message_id")) == str(message_id):
+            return str(data.get("key") or "") or None
+    return None
+
+
 def route_bare(facts: list[Fact], chat: str, reply_to_letter: str | None,
                now: float) -> str:
     """Reply binding, then last confirmed speech with a live lease, then inbox.
@@ -310,6 +329,12 @@ def pull_once(home: Home, client, cursor: int) -> int:
         # A resolved letter id enters route_bare through this separate seam.
         if platform == "telegram" and origin.get("reply_to_letter"):
             data["reply_to_letter"] = origin["reply_to_letter"]
+        elif data.get("reply_to_message_id") is not None:
+            bound = letter_for_message(
+                facts, f"channel:{platform}/{data['chat']}", data["reply_to_message_id"],
+            )
+            if bound:
+                data["reply_to_letter"] = bound
         # Source is durable before letter. Save the routing decision as part
         # of that intent: HLC ordering alone cannot reconstruct the original
         # snapshot once facts from another install arrive during recovery.
