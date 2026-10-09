@@ -80,7 +80,7 @@ def acceptable(text: str, path: str) -> bool:
         data = parse_readme(text)
     except ReadmeError:
         return False
-    if Path(path).name == "README.md" and data.get("id") != Path(path).parent.name:
+    if data.get("id") != Path(path).parent.name:
         return False
     return True
 
