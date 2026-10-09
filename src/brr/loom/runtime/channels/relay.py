@@ -18,7 +18,7 @@ from pathlib import Path
 from brr.daemon2.facts import Fact, union
 from brr.gates import cloud
 
-from ..home import Home, atomic_write
+from ..home import Home, atomic_write, channel_parts
 from ..labels import is_stranger
 from ..ledger import append, read_facts
 from ..project import fold, sender_threads
@@ -109,8 +109,10 @@ def person_dm(home: Home, channel: str) -> str | None:
     strangers in it.
     """
     try:
-        platform, chat = channel.split(":", 1)[1].split("/", 1)
-    except (AttributeError, ValueError):
+        platform, chat = channel_parts(channel)
+    except ValueError:
+        return None
+    if chat is None:
         return None
     try:
         sender = _sender(home, platform, chat)
@@ -131,7 +133,7 @@ def make_effect(client):
     *first* part of an event answer can't bind until the relay returns it.
     """
     def effect(home, channel, part_key, text, context):
-        platform = channel.split(":", 1)[1].split("/", 1)[0]
+        platform, _chat = channel_parts(channel)
         payload = {"body_markdown": text}
         # One event takes one response: only the first part answers it; the
         # rest follow as ordinary messages to the same platform.
@@ -146,10 +148,7 @@ def make_effect(client):
 
 
 def _person_channel(to: object, chat: object) -> bool:
-    # Chat keys are platform-qualified, so Telegram 42 cannot select a
-    # WhatsApp thread whose chat happens to be 42.
-    return (isinstance(to, str) and to == f"channel:{chat}"
-            and to.split(":", 1)[1].split("/", 1)[0] in {"telegram", "slack", "whatsapp"})
+    return to == f"channel:{chat}"
 
 
 def thread_for_message(facts: list[Fact], channel: str, message_id: object) -> str | None:
@@ -187,6 +186,12 @@ def route_bare(facts: list[Fact], chat: str, reply_thread: str | None = None) ->
     has spoken here yet. Only confirmed speech (a ``sent`` receipt) counts,
     and the speaker is the strand that wrote the letter, never its text.
     """
+    try:
+        _platform, chat_id = channel_parts(f"channel:{chat}")
+    except ValueError:
+        return "thread:inbox"
+    if chat_id is None:
+        return "thread:inbox"
     if reply_thread:
         return f"thread:{reply_thread}"
     ordered = union(facts)

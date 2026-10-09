@@ -10,7 +10,7 @@ from pathlib import Path
 from brr.daemon2.facts import Fact
 
 from .home import (
-    atomic_write, home_of_room, is_channel, mint, strand_of_room, thread_of,
+    atomic_write, channel_parts, home_of_room, is_channel, mint, strand_of_room, thread_of,
 )
 
 
@@ -229,18 +229,16 @@ def _ref_roots(room: Path) -> list[Path]:
     return roots
 
 
-#: ``channel:<platform>/<chat>``, spoken through the relay (loom step 5).
-_RELAY_CHANNEL = re.compile(r"channel:(telegram|whatsapp|slack)/[A-Za-z0-9_:#.-]+")
-
-
 def write_send(room: Path, *, to: str, sender: str, body: str = "",
                re: str | None = None, note: str | None = None,
                clean: bool = False, kind: str | None = None,
                refs: tuple[str, ...] | list[str] = ()) -> str:
     home = home_of_room(Path(room))
     if is_channel(to):
-        if to != "channel:fake" and not _RELAY_CHANNEL.fullmatch(to):
-            raise PortError(f"send: no channel adapter for {to!r}")
+        try:
+            channel_parts(to)
+        except ValueError as exc:
+            raise PortError(f"send: {exc}") from exc
     else:
         thread = thread_of(to)
         if not home.thread_exists(thread):

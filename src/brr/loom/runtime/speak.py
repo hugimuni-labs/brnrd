@@ -18,7 +18,7 @@ from brr.daemon2.facts import Fact
 from brr.daemon2.leases import EffectInFlight, Lease, LocalLeaseAuthority, StaleLease
 
 from .config import loom_clock
-from .home import Home
+from .home import Home, channel_parts
 from .ledger import append
 
 
@@ -64,10 +64,7 @@ LIMITS = {"telegram": 3900, "whatsapp": 4000}
 
 def channel_kind(channel: str) -> str:
     """``channel:telegram/555`` → ``telegram``; ``channel:fake`` → ``fake``."""
-    if not isinstance(channel, str) or not channel.startswith("channel:"):
-        raise ValueError(f"not a channel: {channel!r}")
-    rest = channel.split(":", 1)[1]
-    return rest.split("/", 1)[0]
+    return channel_parts(channel)[0]
 
 
 def split(text: str, limit: int | None) -> list[str]:

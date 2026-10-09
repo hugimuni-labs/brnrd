@@ -26,6 +26,19 @@ def is_channel(to: object) -> bool:
     return isinstance(to, str) and to.startswith("channel:")
 
 
+_CHANNEL = re.compile(r"channel:(telegram|whatsapp|slack)/([A-Za-z0-9_:#.-]+)")
+
+
+def channel_parts(channel: str) -> tuple[str, str | None]:
+    """Parse a supported channel address, raising on an unknown adapter or chat."""
+    if channel == "channel:fake":
+        return "fake", None
+    match = _CHANNEL.fullmatch(channel) if isinstance(channel, str) else None
+    if match is None:
+        raise ValueError(f"no channel adapter for {channel!r}")
+    return match.group(1), match.group(2)
+
+
 class Home:
     def __init__(self, root: Path | str, install: str | None = None):
         self.root = Path(root)
