@@ -353,7 +353,7 @@ class Router:
 
 def _header(state, letter: Fact) -> str:
     """``<strand> · <thread>``: who is speaking, from which thread (fork 3)."""
-    strand = str(letter.data.get("from") or letter.by.split(":", 1)[-1])
+    strand = letter.by.removeprefix("strand:")
     thread = next((name for name, (holder, _gen) in state.holder.items()
                    if holder == strand), None)
     return f"{strand} · {thread}" if thread else strand

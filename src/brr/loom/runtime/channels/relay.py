@@ -208,8 +208,7 @@ def route_bare(facts: list[Fact], chat: str, reply_thread: str | None = None) ->
         letter = letters.get(str(fact.data.get("key")))
         if letter is None or not _person_channel(letter.data.get("to"), chat):
             continue
-        sender = (letter.by.split(":", 1)[1] if letter.by.startswith("strand:")
-                  else str(letter.data.get("from") or ""))
+        sender = letter.by.removeprefix("strand:")
         thread = threads.get(sender)
         if thread is None:
             continue

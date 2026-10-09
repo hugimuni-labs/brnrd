@@ -23,7 +23,7 @@ def _room(tmp_path) -> Path:
 
 def _letter(body="ping-1\nmore"):
     return Fact(
-        kind="letter", by="person:p-test", id="p-test/abcde",
+        kind="letter", by="strand:s-ab12-bbbbbb", id="p-test/abcde",
         data={"id": "p-test/abcde", "to": "thread:ta", "body": body, "from": "s-ab12-bbbbbb"},
     )
 

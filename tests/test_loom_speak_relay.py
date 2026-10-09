@@ -11,7 +11,7 @@ from brr.loom.runtime.channels import relay
 from brr.loom.runtime.config import loom_clock
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, read_facts
-from brr.loom.runtime.port import PortError, write_send
+from brr.loom.runtime.port import PortError, fact_from_port, parse_boundary, render_boundary, write_send
 from brr.loom.runtime.project import fold
 from brr.loom.runtime.router import _answers_event, _header
 
@@ -172,3 +172,20 @@ def test_response_without_message_id_has_no_binding_receipt(home, lease, monkeyp
                                channel="channel:telegram/42", context={"event_id": "ev_1"})
     assert status == "sent"
     assert not any(f.kind == "speech.part" for f in read_facts(home))
+
+
+def test_port_cannot_claim_another_strands_sender(home):
+    from test_loom_relay import speak as spoke
+    spoke(home, "s-writer", "first", receipt=False)
+    spoke(home, "s-other", "second", receipt=False)
+    letter = fact_from_port({"kind": "letter", "id": "s-writer/spoof",
+                             "to": "channel:telegram/42", "from": "s-other",
+                             "body": "hello"}, "s-writer", 1)
+    assert letter.by == "strand:s-writer"
+    assert letter.data["from"] == "s-writer"
+    state = fold(read_facts(home))
+    assert _header(state, letter) == "s-writer · first"
+    boundary = render_boundary("s-reader", 1, "inbox", [letter], set(),
+                               {"s-writer": "first", "s-other": "second"})
+    shown, = parse_boundary(boundary).letters
+    assert shown.sender == "s-writer" and shown.reply == "thread:first"

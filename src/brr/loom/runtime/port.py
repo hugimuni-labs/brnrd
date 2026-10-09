@@ -85,8 +85,8 @@ def parse_boundary(text: str) -> Boundary:
                     ids=ids, letters=letters)
 
 
-def _reply(sender: str, sender_threads: dict[str, str]) -> str:
-    thread = sender_threads.get(sender)
+def _reply(letter: Fact, sender_threads: dict[str, str]) -> str:
+    thread = sender_threads.get(letter.by.removeprefix("strand:"))
     return f"thread:{thread}" if thread else "-"
 
 
@@ -114,8 +114,7 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
     ]
     for letter in letters:
         compact = str(letter.data["id"]) in shown
-        lines.extend(_letter_lines(letter, _reply(str(letter.data.get("from") or ""),
-                                                   sender_threads), compact))
+        lines.extend(_letter_lines(letter, _reply(letter, sender_threads), compact))
     lines.append("")
     return "\n".join(lines)
 
@@ -333,7 +332,7 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
     if kind == "letter":
         data: dict = {
             "id": fact_id, "to": fm["to"], "body": fm.get("body", ""),
-            "from": fm.get("from") or strand, "gen": gen,
+            "from": strand, "gen": gen,
         }
         if not is_channel(data["to"]):
             thread_of(data["to"])
