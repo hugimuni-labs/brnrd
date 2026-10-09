@@ -35,10 +35,8 @@ def _emit(outcome) -> int:
         for path in outcome.files:
             print(path)
         return 3
-    if outcome.status == "refused":
-        sys.stderr.write(outcome.stderr)
-        if outcome.stderr and not outcome.stderr.endswith("\n"):
-            sys.stderr.write("\n")
-        return 1
-    print(f"unknown outcome: {outcome.status}", file=sys.stderr)
+    # send_to_self's remaining outcome is refused; no external status enters.
+    sys.stderr.write(outcome.stderr)
+    if outcome.stderr and not outcome.stderr.endswith("\n"):
+        sys.stderr.write("\n")
     return 1

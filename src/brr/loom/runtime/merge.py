@@ -196,11 +196,6 @@ def _rebasing(room: Path) -> bool:
 
 def _unmerged(room: Path) -> tuple[str, ...]:
     names = [line for line in _git(room, "diff", "--name-only", "--diff-filter=U").stdout.splitlines() if line]
-    if not names:
-        listed = _git(room, "ls-files", "--unmerged")
-        for line in listed.stdout.splitlines():
-            if "\t" in line:
-                names.append(line.split("\t", 1)[1])
     return tuple(sorted(set(names)))
 
 
