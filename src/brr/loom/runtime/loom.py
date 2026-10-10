@@ -64,7 +64,6 @@ class Body:
     thread: str
     gen: int
     proc: subprocess.Popen
-    started_hlc: tuple
     log: object
     log_start: int = 0
 
@@ -281,7 +280,7 @@ def _start(home: Home, strand: str, thread: str, gen: int, adapter: str,
         )
         facts.append(started)
         bodies[strand] = Body(
-            strand, thread, gen, proc, tuple(started.hlc or ()), log, log_start,
+            strand, thread, gen, proc, log, log_start,
         )
         _log(home, f"start {strand} thread {thread} gen {gen} pid {proc.pid} {adapter}")
         return facts
@@ -383,17 +382,8 @@ def _boundaries(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> None:
             atomic_write(path, text)
 
 
-def _molted(home: Home, body: Body, facts: list[Fact]) -> bool:
-    if (home.room(body.strand) / "port" / "molt-pending").is_file():
-        return True
-    for fact in facts:
-        if fact.kind != "molt":
-            continue
-        if fact.data.get("strand") != body.strand or int(fact.data.get("gen", -1)) != body.gen:
-            continue
-        if fact.hlc and body.started_hlc and tuple(fact.hlc) > tuple(body.started_hlc):
-            return True
-    return False
+def _molted(home: Home, body: Body) -> bool:
+    return (home.room(body.strand) / "port" / "molt-pending").is_file()
 
 
 def _reap(home: Home, bodies: dict[str, Body], adapter: str, core: str,
@@ -404,7 +394,7 @@ def _reap(home: Home, bodies: dict[str, Body], adapter: str, core: str,
             continue
         body.close_log()
         del bodies[strand]
-        molted = _molted(home, body, facts)
+        molted = _molted(home, body)
         failed = code != 0 or (not molted and bool(actionable(facts, body.thread)))
         if failed and walled(_log_tail(home.room(strand), body.log_start)):
             # The provider's window is spent. Not a death: nothing counts
