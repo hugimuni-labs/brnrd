@@ -30,7 +30,7 @@ def fake_argv(room: Path, policy: str) -> list[str]:
 def _hook(room: Path, event: str, timeout: int | None) -> dict:
     command = (
         f"{shlex.quote(sys.executable)} -m brr.loom.runtime jack "
-        f"--shell claude --event {event} --room {shlex.quote(str(room))}"
+        f"--event {event} --room {shlex.quote(str(room))}"
     )
     item: dict = {"type": "command", "command": command}
     if timeout is not None:

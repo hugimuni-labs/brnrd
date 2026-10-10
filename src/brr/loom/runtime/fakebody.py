@@ -60,7 +60,7 @@ class Ctx:
     def jack(self, event: str) -> JackView:
         proc = subprocess.run(
             [sys.executable, "-m", "brr.loom.runtime", "jack",
-             "--shell", "fake", "--event", event, "--room", str(self.room)],
+             "--event", event, "--room", str(self.room)],
             input=json.dumps({"hookEventName": event}),
             capture_output=True, text=True, env=self.env, cwd=self.room,
         )

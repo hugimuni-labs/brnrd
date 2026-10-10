@@ -97,7 +97,6 @@ def _molt(argv: list[str]) -> int:
 
 def _jack(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime jack")
-    parser.add_argument("--shell", required=True, choices=("claude", "fake"))
     parser.add_argument("--event", required=True, choices=("start", "post", "stop"))
     parser.add_argument("--room", required=True)
     args = parser.parse_args(argv)
