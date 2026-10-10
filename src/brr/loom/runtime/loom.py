@@ -15,19 +15,26 @@ from pathlib import Path
 
 from brr.daemon2.facts import Fact
 
-from .adapters import claude_argv, fake_argv, wait_seconds
+from .adapters import claude_argv, fake_argv, wait_seconds, walled
 from .attention import actionable
 from .home import Home, atomic_write, is_channel, mint
 from .ledger import LedgerConflict, append, read_facts
 from .port import (
     fact_from_port, fact_from_taint, parse_frontmatter, render_boundary, render_wake,
 )
-from .project import fold, generation, sender_threads
+from .project import fold, generation, holder, sender_threads
 from .selfrepo import AUTHOR_EMAIL, AUTHOR_NAME, _env_without_pin
 
 SRC = str(Path(__file__).resolve().parents[3])
 FUSE_WINDOW_S = 600
 FUSE_DEATHS = 2
+# A body that ended on a provider limit is started again after this long.
+# The reset time in the provider's text is not parsed: a start against a
+# spent window is refused before it costs anything, so the retry is the probe.
+WALL_WAIT_S = 900.0
+# Only the end of a body's output is read for the limit line, so a crash
+# that merely mentions a limit earlier on still counts toward the fuse.
+WALL_TAIL = 400
 # Held by the body process, not the loom: the wrapper flocks, then execs.
 # preexec_fn after fork from the test's loom thread can deadlock on a lock
 # another thread still owns. The fd stays open across exec, so the lock
@@ -55,6 +62,7 @@ class Body:
     proc: subprocess.Popen
     started_hlc: tuple
     log: object
+    log_start: int = 0
 
     def close_log(self) -> None:
         close = getattr(self.log, "close", None)
@@ -231,6 +239,8 @@ def _start(home: Home, strand: str, thread: str, gen: int, adapter: str,
             argv = claude_argv(room, core, wait_seconds(room))
         else:
             raise ValueError(f"unknown adapter {adapter!r}")
+        log_path = room / "port" / "body.log"
+        log_start = log_path.stat().st_size if log_path.is_file() else 0
         try:
             proc, log = _spawn(room, argv)
         except OSError as exc:
@@ -248,7 +258,7 @@ def _start(home: Home, strand: str, thread: str, gen: int, adapter: str,
         )
         facts.append(started)
         bodies[strand] = Body(
-            strand, thread, gen, proc, tuple(started.hlc or ()), log,
+            strand, thread, gen, proc, tuple(started.hlc or ()), log, log_start,
         )
         _log(home, f"start {strand} thread {thread} gen {gen} pid {proc.pid} {adapter}")
         return facts
@@ -372,6 +382,17 @@ def _reap(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         body.close_log()
         del bodies[strand]
         molted = _molted(home, body, facts)
+        failed = code != 0 or (not molted and bool(actionable(facts, body.thread)))
+        if failed and walled(_log_tail(home.room(strand), body.log_start)):
+            # The provider's window is spent. Not a death: nothing counts
+            # toward the fuse or against the letters, and the thread stays
+            # held and owed. `_rewake` starts the body again after `until`.
+            facts.append(_record(home, "body.walled", {
+                "strand": strand, "thread": body.thread, "gen": body.gen,
+                "code": code, "until": time.time() + WALL_WAIT_S,
+            }, f"body.walled:{strand}:{body.gen}:{mint(6)}"))
+            _log(home, f"wall {strand} code {code}, next start in {WALL_WAIT_S:.0f}s")
+            continue
         kind = "body.exited" if code == 0 else "body.died"
         data = {"strand": strand, "gen": body.gen, "code": code}
         # An unrunnable letter stays owed and must not look like unfinished work,
@@ -399,6 +420,41 @@ def _reap(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     return facts
 
 
+def _log_tail(room: Path, start: int) -> str:
+    """The last ``WALL_TAIL`` bytes this body wrote to its log."""
+    path = room / "port" / "body.log"
+    if not path.is_file():
+        return ""
+    with open(path, "rb") as handle:
+        handle.seek(max(start, path.stat().st_size - WALL_TAIL))
+        return handle.read().decode("utf-8", "replace")
+
+
+def _walled_last(facts: list[Fact]) -> dict[str, Fact]:
+    """Strands whose latest body fact is a wall: down, waiting, still holding."""
+    last: dict[str, Fact] = {}
+    for fact in facts:
+        if fact.kind.startswith("body.") and fact.data.get("strand"):
+            last[str(fact.data["strand"])] = fact
+    return {strand: fact for strand, fact in last.items() if fact.kind == "body.walled"}
+
+
+def _rewake(home: Home, bodies: dict[str, Body], adapter: str, core: str,
+            facts: list[Fact]) -> list[Fact]:
+    """Start again the bodies whose wait at a provider limit is over."""
+    from .router import install_of
+    for strand, fact in _walled_last(facts).items():
+        if strand in bodies:
+            continue
+        if install_of(strand) != home.install_id() or time.time() < fact.data["until"]:
+            continue
+        thread, gen = str(fact.data["thread"]), int(fact.data["gen"])
+        if holder(facts, thread) != (strand, gen):
+            continue
+        facts = _start(home, strand, thread, gen, adapter, core, bodies, facts)
+    return facts
+
+
 def _recover(home: Home) -> list[Fact]:
     """Release threads this install held whose bodies died with the last loom.
 
@@ -406,7 +462,8 @@ def _recover(home: Home) -> list[Fact]:
     holder only when its install is silent or the strand fused on an unrunnable letter.
     A restarted loom is neither, so without this every thread it held stays
     leased to a corpse. A body still holding its flock is left alone, and a
-    fused strand stays fused: the fuse is the person's to reset.
+    fused strand stays fused: the fuse is the person's to reset. A walled
+    strand stays held too: `_rewake` starts it when its wait is over.
     """
     from .router import install_of
     facts = read_facts(home)
@@ -417,6 +474,8 @@ def _recover(home: Home) -> list[Fact]:
             continue
         if any(fact.kind == "attention" and fact.id == f"attention:fuse:{strand}"
                for fact in facts):
+            continue
+        if _walled_last(facts).get(strand) is not None:
             continue
         try:
             facts.append(_record(home, "released", {
@@ -445,7 +504,8 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     facts = router.route(facts, bodies, adapter, core)
     facts = router.speak_out(facts)
     _boundaries(home, bodies, facts)
-    _reap(home, bodies, adapter, core, facts)
+    facts = _reap(home, bodies, adapter, core, facts)
+    _rewake(home, bodies, adapter, core, facts)
 
 
 def _pause(stop, seconds: float) -> bool:
