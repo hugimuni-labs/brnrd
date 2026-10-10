@@ -28,11 +28,13 @@ from .selfrepo import AUTHOR_EMAIL, AUTHOR_NAME, _env_without_pin
 SRC = str(Path(__file__).resolve().parents[3])
 FUSE_WINDOW_S = 600
 FUSE_DEATHS = 2
-# A body that ended on a provider limit is started again after this long,
-# doubling up to the cap. The reset time in the provider's text is not parsed:
-# a start against a spent window is refused before it costs anything.
-WALL_BASE_S = 300.0
-WALL_CAP_S = 3600.0
+# A body that ended on a provider limit is started again after this long.
+# The reset time in the provider's text is not parsed: a start against a
+# spent window is refused before it costs anything, so the retry is the probe.
+WALL_WAIT_S = 900.0
+# Only the end of a body's output is read for the limit line, so a crash
+# that merely mentions a limit earlier on still counts toward the fuse.
+WALL_TAIL = 400
 # Held by the body process, not the loom: the wrapper flocks, then execs.
 # preexec_fn after fork from the test's loom thread can deadlock on a lock
 # another thread still owns. The fd stays open across exec, so the lock
@@ -385,14 +387,11 @@ def _reap(home: Home, bodies: dict[str, Body], adapter: str, core: str,
             # The provider's window is spent. Not a death: nothing counts
             # toward the fuse or against the letters, and the thread stays
             # held and owed. `_rewake` starts the body again after `until`.
-            seen = sum(1 for fact in facts if fact.kind == "body.walled"
-                       and fact.data.get("strand") == strand)
-            wait = min(WALL_BASE_S * 2 ** seen, WALL_CAP_S)
             facts.append(_record(home, "body.walled", {
                 "strand": strand, "thread": body.thread, "gen": body.gen,
-                "code": code, "until": time.time() + wait,
+                "code": code, "until": time.time() + WALL_WAIT_S,
             }, f"body.walled:{strand}:{body.gen}:{mint(6)}"))
-            _log(home, f"wall {strand} code {code}, next start in {wait:.0f}s")
+            _log(home, f"wall {strand} code {code}, next start in {WALL_WAIT_S:.0f}s")
             continue
         kind = "body.exited" if code == 0 else "body.died"
         data = {"strand": strand, "gen": body.gen, "code": code}
@@ -421,26 +420,31 @@ def _reap(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     return facts
 
 
-def _log_tail(room: Path, start: int, limit: int = 4096) -> str:
-    """What this body wrote to its log, at most the last ``limit`` bytes."""
+def _log_tail(room: Path, start: int) -> str:
+    """The last ``WALL_TAIL`` bytes this body wrote to its log."""
     path = room / "port" / "body.log"
     if not path.is_file():
         return ""
     with open(path, "rb") as handle:
-        handle.seek(max(start, path.stat().st_size - limit))
+        handle.seek(max(start, path.stat().st_size - WALL_TAIL))
         return handle.read().decode("utf-8", "replace")
+
+
+def _walled_last(facts: list[Fact]) -> dict[str, Fact]:
+    """Strands whose latest body fact is a wall: down, waiting, still holding."""
+    last: dict[str, Fact] = {}
+    for fact in facts:
+        if fact.kind.startswith("body.") and fact.data.get("strand"):
+            last[str(fact.data["strand"])] = fact
+    return {strand: fact for strand, fact in last.items() if fact.kind == "body.walled"}
 
 
 def _rewake(home: Home, bodies: dict[str, Body], adapter: str, core: str,
             facts: list[Fact]) -> list[Fact]:
     """Start again the bodies whose wait at a provider limit is over."""
     from .router import install_of
-    last: dict[str, Fact] = {}
-    for fact in facts:
-        if fact.kind.startswith("body.") and fact.data.get("strand"):
-            last[str(fact.data["strand"])] = fact
-    for strand, fact in last.items():
-        if fact.kind != "body.walled" or strand in bodies:
+    for strand, fact in _walled_last(facts).items():
+        if strand in bodies:
             continue
         if install_of(strand) != home.install_id() or time.time() < fact.data["until"]:
             continue
@@ -458,7 +462,8 @@ def _recover(home: Home) -> list[Fact]:
     holder only when its install is silent or the strand fused on an unrunnable letter.
     A restarted loom is neither, so without this every thread it held stays
     leased to a corpse. A body still holding its flock is left alone, and a
-    fused strand stays fused: the fuse is the person's to reset.
+    fused strand stays fused: the fuse is the person's to reset. A walled
+    strand stays held too: `_rewake` starts it when its wait is over.
     """
     from .router import install_of
     facts = read_facts(home)
@@ -469,6 +474,8 @@ def _recover(home: Home) -> list[Fact]:
             continue
         if any(fact.kind == "attention" and fact.id == f"attention:fuse:{strand}"
                for fact in facts):
+            continue
+        if _walled_last(facts).get(strand) is not None:
             continue
         try:
             facts.append(_record(home, "released", {
