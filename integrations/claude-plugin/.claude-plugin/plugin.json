@@ -1,0 +1,22 @@
+{
+  "name": "brnrd",
+  "displayName": "brnrd",
+  "version": "0.1.0",
+  "description": "Keep Claude Code reachable beyond the terminal with brnrd, a local-first resident agent runtime. Set up and diagnose your daemon.",
+  "author": {
+    "name": "HugiMuni SAS",
+    "url": "https://hugimuni.fr"
+  },
+  "homepage": "https://brnrd.dev",
+  "repository": "https://github.com/hugimuni-labs/brnrd",
+  "documentationUrl": "https://hugimuni-labs.github.io/brnrd/",
+  "supportUrl": "https://github.com/hugimuni-labs/brnrd/issues",
+  "keywords": [
+    "persistent agents",
+    "Claude Code",
+    "local-first",
+    "daemon",
+    "agent orchestration",
+    "remote control"
+  ]
+}
