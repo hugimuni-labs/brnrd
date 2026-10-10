@@ -529,6 +529,9 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
     try:
         while not (stop is not None and stop.is_set()):
             try:
+                if relay is not None and not relay.is_alive():
+                    _log(home, "relay: worker died; restarting")
+                    relay = _arm_relay(home, router.config, stop)
                 tick_once(home, bodies, adapter, core, router)
             except Exception:
                 _log(home, traceback.format_exc().rstrip())

@@ -235,7 +235,6 @@ def relay_event(ident):
             "reply_to": {"platform": "telegram", "user_id": 42, "chat_id": 42}}
 
 
-@stuck("one malformed relay event pins the cursor and starves all later chat messages")
 @pytest.mark.parametrize("damage", ["missing-id", "attachments"])
 def test_bad_relay_event_does_not_starve_later_chat(root, tmp_path, monkeypatch, damage):
     broken = relay_event("broken")
@@ -283,7 +282,6 @@ def test_uncertain_speech_gets_a_visible_notice(root, monkeypatch):
                    for line in path.read_text().splitlines()), 2, loom.dump)
 
 
-@stuck("an invalid thread directory aborts routing every healthy thread on every tick")
 def test_bad_thread_directory_does_not_block_healthy_thread(root):
     thread(root)
     bad = root / "self" / "threads" / "bad name"
@@ -296,7 +294,6 @@ def test_bad_thread_directory_does_not_block_healthy_thread(root):
         wait_until(lambda: answered(loom, original), 2, loom.dump)
 
 
-@stuck("one unavailable speech effect aborts boundaries and reaping for every thread")
 def test_unavailable_channel_does_not_block_a_live_threads_new_letter(root, monkeypatch):
     thread(root, "answer-pings", wait="0.1")
     opener = inject_letter(root, to="thread:work", body="begin")
@@ -339,15 +336,11 @@ def test_stale_speech_gets_a_visible_disposition(root):
                    for line in path.read_text().splitlines()), 2, loom.dump)
 
 
-@stuck("a malformed saved cursor kills the poll worker; the loom never starts it again")
 def test_relay_poll_recovers_after_saved_cursor_is_repaired(root, tmp_path, monkeypatch):
     state = tmp_path / "relay"
     (root / "loom" / "config.toml").write_text(f'relay_state = "{state}"\n')
     saved = root / "loom" / "relay-cursor.json"
     saved.write_text("not JSON")
-    failures = []
-    # Capture the thread failure as evidence, without an unhandled-thread warning.
-    monkeypatch.setattr(threading, "excepthook", failures.append)
 
     class Client:
         def __init__(self, _state):
@@ -359,7 +352,8 @@ def test_relay_poll_recovers_after_saved_cursor_is_repaired(root, tmp_path, monk
 
     monkeypatch.setattr(relay, "RelayClient", Client)
     with running(root) as loom:
-        reach(lambda: bool(failures), loom)
+        log = root / "loom" / "loom.log"
+        reach(lambda: log.exists() and "JSONDecodeError" in log.read_text(), loom)
         saved.write_text('{"cursor": 0}\n')
         wait_until(lambda: answered(loom, "letter:relay:after-repair"), 2, loom.dump)
 

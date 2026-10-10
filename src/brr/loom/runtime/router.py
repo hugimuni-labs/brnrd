@@ -194,7 +194,7 @@ class Router:
         from .loom import _attention, _policy, _start, body_alive
 
         home = self.home
-        threads = _routable(home)
+        threads = _routable(home, facts)
         for thread in threads:
             if not self.armed():
                 return facts
@@ -305,6 +305,8 @@ class Router:
         if not self.armed() or self.lease is None:
             return facts
         state = fold(facts)
+        refused = {f.data.get("letter") for f in facts
+                   if f.id.startswith("attention:speech-refused:")}
         sent = {
             str(fact.data.get("key"))
             for fact in facts
@@ -317,7 +319,7 @@ class Router:
             if fact.kind != "letter" or not is_channel(to):
                 continue
             key = str(fact.data.get("id") or "")
-            if not key or key in sent or key in state.handled:
+            if not key or key in sent or key in refused or key in state.handled:
                 continue
             raw = fact.data.get("router_gen")
             try:
@@ -326,25 +328,32 @@ class Router:
                 continue
             if grant != self.lease.gen:
                 continue
-            body = str(fact.data.get("body") or "")
-            context: dict = {}
-            if to != CHANNEL:
-                from .channels.relay import person_dm
-                if person_dm(self.home, str(to)) is None:
-                    from .loom import _attention
-                    _attention(
-                        self.home, f"attention:speech-refused:{key}",
-                        f"speech refused: {to} is not a known person's direct chat",
-                        letter=key,
-                    )
-                    continue
-                body = f"{_header(state, fact)}\n\n{body}"
-                event_id = _answers_event(state, fact)
-                if event_id:
-                    context["event_id"] = event_id
-            status, speech = speak(
-                self.home, self.lease, key, body, channel=str(to), context=context,
-            )
+            try:
+                body = str(fact.data.get("body") or "")
+                context: dict = {}
+                if to != CHANNEL:
+                    from .channels.relay import person_dm
+                    if person_dm(self.home, str(to)) is None:
+                        from .loom import _attention
+                        _attention(
+                            self.home, f"attention:speech-refused:{key}",
+                            f"speech refused: {to} is not a known person's direct chat",
+                            letter=key,
+                        )
+                        continue
+                    body = f"{_header(state, fact)}\n\n{body}"
+                    event_id = _answers_event(state, fact)
+                    if event_id:
+                        context["event_id"] = event_id
+                status, speech = speak(
+                    self.home, self.lease, key, body, channel=str(to), context=context,
+                )
+            except Exception as exc:
+                from .loom import _attention, _log
+                why = f"speech refused: {type(exc).__name__}: {exc}"
+                _attention(self.home, f"attention:speech-refused:{key}", why, letter=key)
+                _log(self.home, why)
+                continue
             if speech is not None:
                 facts.append(speech)
                 if speech.data.get("state") == "sent":
@@ -376,6 +385,18 @@ def _answers_event(state, letter: Fact) -> str | None:
     return None
 
 
-def _routable(home: Home) -> list[str]:
-    from .loom import _threads
-    return [thread for thread in _threads(home) if home.on_main(thread)]
+def _routable(home: Home, facts: list[Fact]) -> list[str]:
+    from .loom import _attention, _log, _threads
+    result = []
+    recorded = {fact.id for fact in facts if fact.kind == "attention"}
+    for thread in _threads(home):
+        try:
+            if home.on_main(thread):
+                result.append(thread)
+        except Exception as exc:
+            ident = f"attention:no-thread:{thread}"
+            if ident not in recorded:
+                why = f"{type(exc).__name__}: {exc}"
+                _attention(home, ident, why, thread=thread)
+                _log(home, why)
+    return result
