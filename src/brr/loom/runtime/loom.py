@@ -446,10 +446,15 @@ def _refresh_holders(home: Home, bodies: dict[str, Body], adapter: str, core: st
             if time.time() >= walls[strand].data["until"]:
                 facts = _start(home, strand, thread, gen, adapter, core, bodies, facts)
         elif not any(fact.id == f"attention:fuse:{strand}" for fact in facts):
-            facts.append(_record(home, "released", {
-                "thread": thread, "strand": strand, "gen": gen,
-                "why": "holder gone", "install": home.install_id(),
-            }, f"released:{thread}:{gen}"))
+            try:
+                facts.append(_record(home, "released", {
+                    "thread": thread, "strand": strand, "gen": gen,
+                    "why": "holder gone", "install": home.install_id(),
+                }, f"released:{thread}:{gen}"))
+            except LedgerConflict:
+                # Someone else's release of this grant is on the ledger; a
+                # conflict here must not abort the tick for every thread.
+                continue
     return facts
 
 
