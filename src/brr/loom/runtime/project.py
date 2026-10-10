@@ -161,24 +161,6 @@ def owed(facts: Iterable[Fact], thread: str) -> list[Fact]:
     return letters
 
 
-def attempts(facts: Iterable[Fact], letter_id: str) -> int:
-    """How many deaths belonged to a body that had been shown ``letter_id``."""
-    count = 0
-    open_ids: dict[str, set[str]] = {}
-    for fact in fold(facts).accepted:
-        strand = fact.data.get("strand")
-        if not isinstance(strand, str):
-            continue
-        if fact.kind == "body.started":
-            open_ids[strand] = set()
-        elif fact.kind == "shown" and strand in open_ids:
-            open_ids[strand].update(str(item) for item in fact.data.get("ids") or ())
-        elif fact.kind == "body.died" and strand in open_ids:
-            if letter_id in open_ids.pop(strand):
-                count += 1
-    return count
-
-
 def generation(facts: Iterable[Fact], strand: str) -> int | None:
     for holder_strand, gen in fold(facts).holder.values():
         if holder_strand == strand:
