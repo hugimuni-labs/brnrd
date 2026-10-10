@@ -11,6 +11,11 @@ def hook(event, timeout):
                        "timeout": timeout}]}
 path = Path(room) / "self/.claude/settings.local.json"
 path.parent.mkdir(parents=True, exist_ok=True)
+# Grok finds project hooks only under the working tree, which here is the
+# self's clone. Keep them out of any commit the body makes.
+exclude = Path(room) / "self/.git/info/exclude"
+if ".claude/" not in exclude.read_text().split():
+    exclude.open("a").write(".claude/\n")
 path.write_text(json.dumps({"hooks": {
     "SessionStart": [hook("start", 60)],
     "PostToolUse": [hook("post", 60)],

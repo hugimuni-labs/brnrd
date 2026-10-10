@@ -312,6 +312,10 @@ def _start(home: Home, strand: str, thread: str, gen: int,
             try:
                 until = datetime.fromisoformat(empty["resets_at"]).timestamp()
             except (ValueError, TypeError, KeyError):
+                until = 0
+            # A reset time that is missing or already past (a gauge that lags
+            # its own reset) would park, expire and re-park on every reading.
+            if until <= time.time():
                 until = time.time() + 900
             data.update(window=empty["name"], until=until)
             facts.append(_record(home, "body.parked", data, f"body.parked:{strand}:{mint(6)}"))
