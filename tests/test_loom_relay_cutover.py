@@ -16,6 +16,7 @@ from brr.loom.runtime.channels import relay
 from brr.loom.runtime.config import load_config
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, read_facts
+from brr.loom.runtime.project import owed
 
 from test_loom_relay import FakeClient, event, home, kinds, speak as spoke  # noqa: F401
 
@@ -258,11 +259,15 @@ def test_a_missing_attachment_holds_the_cursor_three_pulls_then_lands(home):
     (source,) = kinds(home, "source")
     assert source.data["blobs_missing"] == [1]
     assert len(source.data["blobs"]) == 1
-    assert "attention:blobs-missing:ev_f" in {f.id for f in kinds(home, "attention")}
     assert failures == {}
-    # A replay after giving up is still one source, one letter.
+    # A replay after giving up is still one source, one letter, and one
+    # notice, owed in the thread the message landed in.
     relay.pull_once(home, client, 0, failures=failures)
-    assert len(kinds(home, "source")) == 1 and len(kinds(home, "letter")) == 1
+    letter, told = kinds(home, "letter")
+    assert len(kinds(home, "source")) == 1 and letter.id == "letter:relay:ev_f"
+    assert told.data["from"] == "loom" and told.data["to"] == source.data["to"]
+    assert "attachment(s) [1] of letter:relay:ev_f" in told.data["body"]
+    assert told in owed(read_facts(home), "inbox")
 
 
 # ── the molt analog: a bare line after the speaker released ────────────

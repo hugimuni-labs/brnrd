@@ -351,6 +351,9 @@ def pull_once(home: Home, client, cursor: int, *, failures: dict | None = None) 
             data["to"] = route_bare(
                 facts, f"{platform}/{data['chat']}", reply_thread,
             )
+            # The thread that last spoke here may be gone since: fall to inbox.
+            if not home.routable(data["to"].removeprefix("thread:")):
+                data["to"] = "thread:inbox"
             source = append(home, Fact(
                 kind="source", by=f"loom:{home.install_id()}", id=source_id,
                 after=tuple(blob_ids), data=data,
@@ -360,12 +363,12 @@ def pull_once(home: Home, client, cursor: int, *, failures: dict | None = None) 
             facts.append(_letter(home, source))
             letter_ids.add(letter_id)
             if missing:
-                from ..loom import _attention
-                _attention(
-                    home, f"attention:blobs-missing:{event_id}",
-                    f"relay: gave up on attachment(s) {missing} of {event_id} "
-                    f"after {GIVE_UP_AFTER} pulls; the message landed without them",
-                )
+                from ..loom import notice
+                notice(home, facts, "blobs-missing", event_id,
+                       f"relay: gave up on attachment(s) {missing} of {letter_id} "
+                       f"after {GIVE_UP_AFTER} pulls; the message landed without them",
+                       "answer it as usual; ask the sender to send the files again if they matter",
+                       thread=data["to"].removeprefix("thread:"), about=facts[-1])
             failures.pop(key, None)
         except Exception as exc:
             tries = failures[key] = failures.get(key, 0) + 1
@@ -381,8 +384,10 @@ def pull_once(home: Home, client, cursor: int, *, failures: dict | None = None) 
                 kind="source", by=f"loom:{home.install_id()}", id=f"source:relay:{ident}",
                 data={"raw": event, "refused": True, "why": why},
             ))
-            from ..loom import _attention
-            _attention(home, f"attention:reject:relay:{ident}", why)
+            from ..loom import notice
+            notice(home, facts, "relay-reject", ident, why,
+                   f"no letter was made from it; the raw event is kept in the ledger as "
+                   f"source:relay:{ident}", taint=True)
     if retry is not None:
         raise retry
     _write_cursor(home, next_cursor)

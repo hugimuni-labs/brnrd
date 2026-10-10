@@ -13,11 +13,12 @@ from datetime import datetime, timezone
 from brr.daemon2.facts import Fact
 from brr.daemon2.leases import Lease, LocalLeaseAuthority
 
-from .attention import actionable, unrunnable_ids
 from .config import LoomConfig, granting_window, load_config, loom_clock
 from .home import Home, is_channel, mint
 from .ledger import LedgerConflict
-from .project import fold, holder, owed
+from .project import (
+    actionable, fold, holder, is_notice, owed, sender_threads, unrunnable_ids,
+)
 from .selfrepo import ReadmeError, parse_readme
 from .speak import CHANNEL, speak
 
@@ -250,8 +251,11 @@ class Router:
         own = owner == self.home.install_id()
         unrunnable = unrunnable_ids(facts)
         pending = owed(facts, thread)
+        # A loom notice never resets a fuse and never counts as a newer
+        # letter: the notice about a fuse must not un-fuse its own thread.
         alive_work = [
-            fact for fact in pending if str(fact.data.get("id")) not in unrunnable
+            fact for fact in pending
+            if str(fact.data.get("id")) not in unrunnable and not is_notice(fact)
         ]
         fuse = next((fact for fact in facts if fact.kind == "attention"
                      and fact.id == f"attention:fuse:{strand}"), None)
@@ -275,38 +279,47 @@ class Router:
         }, f"released:{thread}:{gen}")
 
     def _unrouted(self, facts: list[Fact], known: set[str]) -> list[Fact]:
+        """Letters no thread will ever show: tell a body. Never about a notice."""
         from .home import thread_of
-        from .loom import _attention
+        from .loom import notice, notice_id
 
         state = fold(facts)
+        unrunnable = unrunnable_ids(facts)
+        ids = {fact.id for fact in facts}
         for fact in state.accepted:
-            if fact.kind != "letter" or fact.data.get("id") in state.handled:
+            if (fact.kind != "letter" or fact.data.get("id") in state.handled
+                    or is_notice(fact) or is_channel(fact.data.get("to"))):
                 continue
             letter_id = str(fact.data.get("id") or fact.id)
             destination = fact.data.get("to")
-            if is_channel(destination):
-                continue
+            read = "read it in the ledger (grep its id under ledger/facts/) and act on it"
             try:
                 thread = thread_of(str(destination))
             except ValueError:
-                _attention(
-                    self.home, f"attention:unroutable:{letter_id}",
-                    f"unroutable to {destination!r}", letter=letter_id,
-                )
-                continue
+                thread = None
             if thread not in known:
-                _attention(
-                    self.home, f"attention:no-thread:{letter_id}",
-                    f"no such thread {thread}", thread=thread, letter=letter_id,
-                )
+                notice(self.home, facts, "unroutable", letter_id,
+                       f"letter {letter_id} from {fact.data.get('from')} is addressed to "
+                       f"{destination!r}, which is not a thread on main; no thread will show it",
+                       read, about=fact, stands=True)
+            elif letter_id in unrunnable and notice_id("unrunnable", letter_id) not in ids:
+                # Its own thread hears of it only when another letter wakes a body there.
+                others = [f for f in actionable(facts, thread) if not is_notice(f)]
+                notice(self.home, facts, "unrunnable", letter_id,
+                       f"letter {letter_id} to thread {thread} is quarantined: two bodies died "
+                       "after reading it, the letter or this environment, unknown which. "
+                       "It stays out of every wake and boundary",
+                       f"{read}, then answer or note it with re:", about=fact, stands=True,
+                       thread=thread if others else None)
         return facts
 
     def speak_out(self, facts: list[Fact]) -> list[Fact]:
         if not self.armed() or self.lease is None:
             return facts
+        from .loom import _log, notice, notice_id
         state = fold(facts)
-        refused = {f.data.get("letter") for f in facts
-                   if f.id.startswith("attention:speech-refused:")}
+        threads = sender_threads(facts)
+        ids = {fact.id for fact in facts}
         sent = {
             str(fact.data.get("key"))
             for fact in facts
@@ -319,14 +332,26 @@ class Router:
             if fact.kind != "letter" or not is_channel(to):
                 continue
             key = str(fact.data.get("id") or "")
-            if not key or key in sent or key in refused or key in state.handled:
+            if (not key or key in sent or key in state.handled
+                    or notice_id("speech-refused", key) in ids):
                 continue
             raw = fact.data.get("router_gen")
             try:
                 grant = int(raw)
             except (TypeError, ValueError):
                 continue
+
+            def tell(kind: str, what: str, can: str) -> None:
+                # Always the thread that drafted it; the draft is never resent.
+                notice(self.home, facts, kind, key, f"your message {key} to {to} {what}", can,
+                       thread=threads.get(fact.by.removeprefix("strand:")),
+                       about=fact, stands=True)
+
+            fresh = "send a fresh message if it still matters; this one is never sent again"
             if grant != self.lease.gen:
+                if grant < self.lease.gen:
+                    tell("stale-speech", "was not sent: it was drafted under router "
+                         f"gen {grant} and a new router (gen {self.lease.gen}) took over", fresh)
                 continue
             try:
                 body = str(fact.data.get("body") or "")
@@ -334,26 +359,24 @@ class Router:
                 if to != CHANNEL:
                     from .channels.relay import person_dm
                     if person_dm(self.home, str(to)) is None:
-                        from .loom import _attention
-                        _attention(
-                            self.home, f"attention:speech-refused:{key}",
-                            f"speech refused: {to} is not a known person's direct chat",
-                            letter=key,
-                        )
+                        tell("speech-refused",
+                             "was refused: that is not a known person's direct chat", fresh)
                         continue
                     body = f"{_header(state, fact)}\n\n{body}"
                     event_id = _answers_event(state, fact)
                     if event_id:
                         context["event_id"] = event_id
-                status, speech = speak(
+                status, speech, unsure = speak(
                     self.home, self.lease, key, body, channel=str(to), context=context,
                 )
             except Exception as exc:
-                from .loom import _attention, _log
-                why = f"speech refused: {type(exc).__name__}: {exc}"
-                _attention(self.home, f"attention:speech-refused:{key}", why, letter=key)
-                _log(self.home, why)
+                why = f"was refused: {type(exc).__name__}: {exc}"
+                tell("speech-refused", why, fresh)
+                _log(self.home, f"speech {key} {why}")
                 continue
+            if unsure:
+                tell("maybe-sent", f"may or may not have arrived: part {', '.join(unsure)} "
+                     "was attempted and no receipt came back", fresh)
             if speech is not None:
                 facts.append(speech)
                 if speech.data.get("state") == "sent":
@@ -386,17 +409,14 @@ def _answers_event(state, letter: Fact) -> str | None:
 
 
 def _routable(home: Home, facts: list[Fact]) -> list[str]:
-    from .loom import _attention, _log, _threads
+    from .loom import _threads, notice
     result = []
-    recorded = {fact.id for fact in facts if fact.kind == "attention"}
     for thread in _threads(home):
         try:
             if home.on_main(thread):
                 result.append(thread)
         except Exception as exc:
-            ident = f"attention:no-thread:{thread}"
-            if ident not in recorded:
-                why = f"{type(exc).__name__}: {exc}"
-                _attention(home, ident, why, thread=thread)
-                _log(home, why)
+            notice(home, facts, "bad-thread", thread,
+                   f"self/threads/{thread!r} cannot be a thread: {type(exc).__name__}: {exc}",
+                   "rename or remove that directory; nothing is routed to it meanwhile")
     return result

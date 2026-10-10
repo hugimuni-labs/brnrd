@@ -10,6 +10,7 @@ from pathlib import Path
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import read_facts
 from brr.loom.runtime.loom import _ingest, run
+from brr.loom.runtime.project import fold, is_notice
 from brr.loom.runtime.selfrepo import _commit, git, init_self
 
 
@@ -26,6 +27,23 @@ def write_thread(root: Path, thread: str, readme: str, policy: str,
     (directory / "wait").write_text(str(wait).strip() + "\n")
     git(root / "self", "add", "threads")
     _commit(root / "self", f"Seed thread {thread}.\n\nLoom-Label: taint=0; audience=self\n")
+
+
+def notices(facts) -> list:
+    """What a dashboard shows: the loom's notices no body has settled yet."""
+    state = fold(facts)
+    return [fact for fact in state.accepted
+            if is_notice(fact) and fact.data["id"] not in state.handled]
+
+
+def hand_note(root: Path, letter_id: str) -> None:
+    """The hand tool, exactly as core/loom/README.md gives it to a person."""
+    home = Home(root)
+    line = ('{"v":1,"id":"hand-' + str(time.time_ns()) + '","kind":"note",'
+            '"by":"person:test","at":"2026-10-10T12:00:00+00:00",'
+            '"data":{"re":"' + letter_id + '","why":"settled by hand"}}')
+    with (home.facts_dir() / "hand.jsonl").open("a") as handle:
+        handle.write(line + "\n")
 
 
 class Loom:

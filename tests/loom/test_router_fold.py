@@ -1,8 +1,7 @@
-"""Lease acceptance and the attention view, on hand-built facts."""
+"""Lease acceptance, on hand-built facts."""
 
 from brr.daemon2.facts import Fact
 
-from brr.loom.runtime.attention import view
 from brr.loom.runtime.config import granting_window
 from brr.loom.runtime.project import fold, holder, lease_accepted, owed
 
@@ -78,65 +77,6 @@ def test_a_lease_from_the_new_router_fences_the_previous_install():
     ]
     assert holder(facts, "ta") == (OTHER, 2)
     assert [fact.id for fact in owed(facts, "ta")] == [LETTER]
-
-
-def test_attention_view_folds_the_rows():
-    deaths = []
-    facts = [
-        _fact(
-            "lease", "loom:aaaa",
-            {"thread": "ta", "strand": STRAND, "gen": 1}, "lease:ta:1", 1,
-        ),
-        _fact(
-            "letter", "person:p-test",
-            {"id": LETTER, "to": "thread:ta", "body": "unrunnable", "from": "p-test"},
-            LETTER, 2,
-        ),
-    ]
-    for n, pid in ((3, 11), (6, 12)):
-        facts.append(_fact(
-            "body.started", "loom:aaaa",
-            {"strand": STRAND, "gen": 1, "pid": pid, "adapter": "fake"},
-            f"body.started:{pid}", n,
-        ))
-        facts.append(_fact(
-            "shown", f"strand:{STRAND}",
-            {"strand": STRAND, "gen": 1, "ids": [LETTER]},
-            f"{STRAND}/shown-{pid}", n + 1,
-        ))
-        facts.append(_fact(
-            "body.died", "loom:aaaa",
-            {"strand": STRAND, "gen": 1, "code": 1},
-            f"body.died:{pid}", n + 2,
-        ))
-        deaths.append(pid)
-    facts.append(_fact(
-        "attention", "loom:aaaa",
-        {"why": "fuse: twice", "thread": "ta"},
-        f"attention:fuse:{STRAND}", 9,
-    ))
-    facts.append(_fact(
-        "letter", "loom:aaaa",
-        {"id": "s-aaaa-aaaaaa/out", "to": "channel:fake", "body": "hi",
-         "from": STRAND, "gen": 1, "router_gen": 1},
-        "s-aaaa-aaaaaa/out", 10,
-    ))
-    facts.append(_router(2, 11, install="bbbb"))
-    facts.append(_fact(
-        "speech", "loom:aaaa",
-        {"key": "s-aaaa-aaaaaa/lost", "state": "intended", "router_gen": 1},
-        "speech:intended:s-aaaa-aaaaaa/lost", 12,
-    ))
-    rows = {(row.kind, row.subject) for row in view(facts)}
-    assert ("unrunnable", LETTER) in rows
-    assert ("fuse", "ta") in rows
-    assert ("stale-speech", "s-aaaa-aaaaaa/out") in rows
-    assert ("maybe-sent", "s-aaaa-aaaaaa/lost") in rows
-    facts.append(_fact(
-        "attention.cleared", "person:aaaa",
-        {"letter": LETTER}, f"attention.cleared:{LETTER}", 13,
-    ))
-    assert ("unrunnable", LETTER) not in {(row.kind, row.subject) for row in view(facts)}
 
 
 def test_the_router_stops_granting_before_a_fast_peer_can_acquire():

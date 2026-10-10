@@ -8,10 +8,9 @@ import sys
 import time
 from pathlib import Path
 
-from brr.loom.runtime.attention import view
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import inject_letter, read_facts
-from brr.loom.runtime.project import fold
+from brr.loom.runtime.project import fold, is_notice
 
 from _step import wait_until, write_thread
 
@@ -372,12 +371,10 @@ def test_channel_keys_are_sent_at_most_once(tmp_path):
             if len(letters) < 10:
                 return False
             keys = _channel_keys(root)
-            rows = {(row.kind, row.subject) for row in view(facts)}
+            # Every draft that did not reach the channel has a notice standing for it.
+            told = {fact.data.get("stands") for fact in facts if is_notice(fact)}
             missing = [str(fact.data["id"]) for fact in letters if fact.data["id"] not in keys]
-            return all(
-                ("maybe-sent", key) in rows or ("stale-speech", key) in rows
-                for key in missing
-            )
+            return all(key in told for key in missing)
 
         wait_until(settled, 20, lambda: _dump(root, procs))
         keys = _channel_keys(root)
@@ -409,7 +406,7 @@ def _out_count(root: Path) -> int:
     return count
 
 
-def test_an_unrunnable_letter_stops_waking_and_clear_puts_it_back(tmp_path):
+def test_an_unrunnable_letter_stops_waking_and_the_rest_is_answered(tmp_path):
     root = tmp_path / "home"
     _config(root, name="brnrd", router_ttl=2, max_skew=0.3, margin=0.1)
     write_thread(root, "tp", "thread tp", "die-on-unrunnable", wait="3")
@@ -420,8 +417,8 @@ def test_an_unrunnable_letter_stops_waking_and_clear_puts_it_back(tmp_path):
             _alive(procs, lambda: _dump(root, procs))
             facts = _facts(root)
             starts = [fact for fact in facts if fact.kind == "body.started"]
-            rows = {(row.kind, row.subject) for row in view(facts)}
-            return ("unrunnable", letter) in rows and len(starts) == 2
+            told = {fact.data.get("stands") for fact in facts if is_notice(fact)}
+            return letter in told and len(starts) == 2
 
         wait_until(set_aside, 8, lambda: _dump(root, procs))
         strand = _facts(root)[-1].data.get("strand") or [
@@ -439,21 +436,15 @@ def test_an_unrunnable_letter_stops_waking_and_clear_puts_it_back(tmp_path):
             return len(notes) == 1 and len(starts) == 2
 
         wait_until(answered, 8, lambda: _dump(root, procs))
+        # The verb has no state of its own: it lists the notice still owed.
         install = _routers(_facts(root))[-1].data["install"]
-        subprocess.run(
+        listed = subprocess.run(
             [sys.executable, "-m", "brr.loom.runtime", "attention",
-             "--home", str(root), "--install", install, "--clear", letter],
+             "--home", str(root), "--install", install],
             check=True, env={**os.environ, "PYTHONPATH": SRC},
             capture_output=True, text=True,
-        )
-        rows = {(row.kind, row.subject) for row in view(_facts(root))}
-        assert ("unrunnable", letter) not in rows
-
-        def woke_again():
-            facts = _facts(root)
-            return len([fact for fact in facts if fact.kind == "body.started"]) >= 4
-
-        wait_until(woke_again, 8, lambda: _dump(root, procs))
+        ).stdout
+        assert f"letter {letter} to thread tp is quarantined" in listed
     finally:
         _stop(root, procs)
 
@@ -477,13 +468,13 @@ def test_for_other_gets_no_lease_and_one_row(tmp_path):
         def ready():
             _alive(procs, lambda: _dump(root, procs))
             facts = _facts(root)
-            rows = [row for row in view(facts) if row.kind == "for-other"]
+            rows = [fact for fact in facts if fact.id.startswith("attention:for-other:")]
             return len(rows) == 1 and not _leases(facts, "to")
 
         wait_until(ready, 6, lambda: _dump(root, procs))
-        rows = [row for row in view(_facts(root)) if row.kind == "for-other"]
-        assert rows[0].subject == "to"
-        assert rows[0].why == "for: other brnrd"
+        rows = [f for f in _facts(root) if f.id.startswith("attention:for-other:")]
+        assert rows[0].data["thread"] == "to"
+        assert rows[0].data["why"] == "for: other brnrd"
         assert _leases(_facts(root), "to") == []
     finally:
         _stop(root, procs)

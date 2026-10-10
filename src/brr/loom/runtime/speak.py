@@ -4,7 +4,8 @@ A channel names where a letter goes: ``channel:fake`` (a jsonl file, for
 tests and demos) or ``channel:<platform>/<chat>`` through a registered
 effect (step 5: the relay). A body longer than the channel's limit goes out
 as parts, and each part is its own at-most-once send keyed ``<key>#<n>``:
-losing part 2 is one ``maybe-sent`` row, never a resent whole.
+losing part 2 is one ``maybe-sent`` notice to the drafting thread, never a
+resent whole.
 """
 
 from __future__ import annotations
@@ -86,8 +87,8 @@ def speak(home: Home, router_lease: Lease, key: str, text: str, *,
           channel: str = CHANNEL, context: dict | None = None) -> tuple[str, Fact | None]:
     """Send ``key`` once. An ``intended`` with no ``sent`` is not retried.
 
-    Returns ``(status, ledger fact)``. ``status`` is ``sent``, ``maybe-sent``,
-    or ``stepped-down``. The fact is what the attention view folds.
+    Returns ``(status, ledger fact, uncertain part keys)``. ``status`` is
+    ``sent``, ``maybe-sent``, or ``stepped-down``.
     """
     if not key:
         raise ValueError("speak: empty key")
@@ -99,9 +100,9 @@ def speak(home: Home, router_lease: Lease, key: str, text: str, *,
         Path(home.root) / "ledger" / "leases", clock=loom_clock,
     )
     if not authority.authorize(router_lease):
-        return _STEP, None
+        return _STEP, None, []
     parts = split(text, LIMITS.get(kind))
-    maybe = False
+    unsure: list[str] = []
     for n, part in enumerate(parts, 1):
         part_key = key if len(parts) == 1 else f"{key}#{n}"
         safe = _store_key(part_key)
@@ -109,7 +110,7 @@ def speak(home: Home, router_lease: Lease, key: str, text: str, *,
         if any(fact.kind == "sent" for fact in prior):
             continue
         if any(fact.kind == "intended" for fact in prior):
-            maybe = True
+            unsure.append(part_key)
             continue
 
         def run(effect_key: str, gen: int, _part=part, _part_key=part_key, _n=n) -> dict:
@@ -118,14 +119,14 @@ def speak(home: Home, router_lease: Lease, key: str, text: str, *,
         try:
             receipt = authority.effect_once(router_lease, safe, run)
         except EffectInFlight:
-            maybe = True
+            unsure.append(part_key)
             continue
         except StaleLease:
-            return _STEP, None
+            return _STEP, None, []
         except Exception:  # noqa: BLE001 — the effect may have reached the person
             # ``intended`` is recorded and ``sent`` is not: this part is
             # maybe-sent and is never retried. The other parts still go.
-            maybe = True
+            unsure.append(part_key)
             continue
         # The platform's receipt (its message id) is what a reply binds to.
         if receipt.get("message_id") not in (None, ""):
@@ -134,9 +135,9 @@ def speak(home: Home, router_lease: Lease, key: str, text: str, *,
                 id=f"speech.part:{part_key}",
                 data={"key": key, "part": part_key, "channel": channel, "receipt": receipt},
             ))
-    state = "intended" if maybe else "sent"
+    state = "intended" if unsure else "sent"
     fact = append(home, Fact(
         kind="speech", by=f"loom:{home.install_id()}", id=f"speech:{state}:{key}",
         data={"key": key, "state": state, "router_gen": router_lease.gen},
     ))
-    return (_MAYBE if maybe else _SENT), fact
+    return (_MAYBE if unsure else _SENT), fact, unsure

@@ -73,8 +73,9 @@ def fold(facts: Iterable[Fact]) -> Fold:
             if newest is None or gen > newest:
                 newest = gen
             continue
-        if fact.kind == "attention.cleared":
-            state.accepted.append(fact)
+        if fact.kind == "note" and fact.by.startswith("person:"):
+            # The hand tool: a person's note settles any letter, whoever holds it.
+            state.handled.add(str(data.get("re")))
             continue
         if fact.kind == "lease":
             if not lease_accepted(newest, fact):
@@ -109,7 +110,8 @@ def fold(facts: Iterable[Fact]) -> Fold:
             sender = str(data.get("from") or "")
             ingress = (fact.by.startswith("loom:")
                        and str(data.get("cites") or "").startswith("source:relay:"))
-            if fact.by.startswith("person:") or sender.startswith("p-") or ingress:
+            if (fact.by.startswith("person:") or sender.startswith("p-") or ingress
+                    or is_notice(fact)):
                 state.accepted.append(fact)
                 thread = _destination(data)
                 if thread is not None and data.get("id"):
@@ -132,7 +134,18 @@ def fold(facts: Iterable[Fact]) -> Fold:
         elif fact.kind == "shown":
             state.shown.setdefault(strand, set()).update(
                 str(item) for item in data.get("ids") or ())
+    # A notice that stands for a letter and that letter settle together.
+    for fact in state.accepted:
+        pair = {fact.data.get("id"), fact.data.get("stands")}
+        if is_notice(fact) and None not in pair and pair & state.handled:
+            state.handled |= pair
     return state
+
+
+def is_notice(fact: Fact) -> bool:
+    """A letter the loom wrote about a condition it could not settle itself."""
+    return (fact.kind == "letter" and fact.by.startswith("loom:")
+            and fact.data.get("from") == "loom")
 
 
 def holder(facts: Iterable[Fact], thread: str) -> tuple[str, int] | None:
@@ -148,6 +161,38 @@ def owed(facts: Iterable[Fact], thread: str) -> list[Fact]:
         if _destination(fact.data) == thread:
             letters.append(fact)
     return letters
+
+
+def unrunnable_ids(facts: Iterable[Fact]) -> set[str]:
+    """Letters shown to two bodies that then died.
+
+    Not a security check: nothing here reads the letter's content. It stops
+    a letter that, for reasons unknown, kills the body reading it in this
+    environment (a harness crash, a provider refusal that ends the process)
+    from respawning bodies and draining quota forever. A death counts only
+    if that body had been ``shown`` the letter.
+    """
+    counts: dict[str, int] = {}
+    open_ids: dict[str, set[str]] = {}
+    for fact in fold(facts).accepted:
+        strand = fact.data.get("strand")
+        if not isinstance(strand, str):
+            continue
+        if fact.kind == "body.started":
+            open_ids[strand] = set()
+        elif fact.kind == "shown" and strand in open_ids:
+            open_ids[strand].update(str(item) for item in fact.data.get("ids") or ())
+        elif fact.kind == "body.died" and strand in open_ids:
+            for letter_id in open_ids.pop(strand):
+                counts[letter_id] = counts.get(letter_id, 0) + 1
+    return {letter_id for letter_id, count in counts.items() if count >= 2}
+
+
+def actionable(facts: Iterable[Fact], thread: str) -> list[Fact]:
+    """Owed letters a body should see. An unrunnable letter stays owed and is not listed."""
+    facts = list(facts)
+    bad = unrunnable_ids(facts)
+    return [fact for fact in owed(facts, thread) if str(fact.data.get("id")) not in bad]
 
 
 def generation(facts: Iterable[Fact], strand: str) -> int | None:
