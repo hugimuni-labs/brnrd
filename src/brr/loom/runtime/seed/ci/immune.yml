@@ -25,7 +25,7 @@ jobs:
             old="${{ github.event.before }}"
             new="${{ github.sha }}"
           fi
-          # The incumbent judges; a missing or empty script fails closed.
+          # The incumbent judges; missing, empty or non-executable fails closed.
           tip=$old
           case "$old" in
             ""|*[!0]*) ;;
@@ -36,4 +36,10 @@ jobs:
             printf 'immune: core/immune missing at %s\n' "$tip" >&2
             exit 1
           fi
-          sh "$script" "$old" "$new"
+          mode=$(git ls-tree "$tip" -- core/immune | cut -d ' ' -f 1)
+          if [ "$mode" != "100755" ]; then
+            printf 'immune: core/immune not executable at %s\n' "$tip" >&2
+            exit 1
+          fi
+          chmod +x "$script"
+          "$script" "$old" "$new"

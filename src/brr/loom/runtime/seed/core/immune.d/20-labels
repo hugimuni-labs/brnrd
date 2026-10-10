@@ -1,162 +1,104 @@
-#!/bin/sh
-# 20-labels <old> <new>
-#
-# Every commit in old..new (every commit at <new> when <old> is all zeros):
-#   no Loom-Label  → refuse, unless the committer is enrolled
-#   taint=1        → refuse, unless a Widening trailer cites a real clause at <new>
-#   audience lacks self → refuse
-# Every Widening must cite a real clause, including on clean or unlabeled
-# commits. One stderr line per reason; the harness prefixes the check name.
-#
-# Enrollment is core/loom/people-commit: one email per line, # comments
-# ignored. Fail closed: an empty list enrolls nobody, so an unlabeled
-# commit is refused (a body pushing with raw git and no trailer must not
-# skip the labels). An unlabeled commit must use the incumbent list, so a
-# push cannot enroll itself. The first push (old = zeros) uses <new>'s list;
-# the seed commit itself carries Loom-Label. A commit that carries
-# Loom-Label is checked either way. send_to_self always stamps one.
-#
-# Not enforced here: a Loom-Label is a trailer, and anything that can push
-# can write one. Labels bind a body that cannot reach a push credential
-# (the sandbox) or a loom-signed stamp; until then they stop accidents and
-# honest injections, not a body that forges the trailer.
+#!/usr/bin/env python3
+"""Refuse new commits with missing labels, unapproved taint or no self audience.
 
-old=${1:-}
-new=${2:-}
-if [ -z "$old" ] || [ -z "$new" ]; then
-    printf 'usage: 20-labels <old> <new>\n' >&2
-    exit 2
-fi
+Unlabeled committers must be enrolled in the incumbent people-commit list
+(the incoming list on the first push). Every Widening must name a clause
+marker in an incoming agreement, even on clean or unlabeled commits.
+A valid widening permits taint=1. Every commit is judged after a refusal.
+These trailers stop accidents; anyone holding push credentials can forge them.
+Git's hook environment, including GIT_DIR, is kept.
+"""
 
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/20-labels.XXXXXX") || {
-    printf 'mktemp failed\n' >&2
-    exit 1
-}
-trap 'rm -rf "$tmp"' EXIT
+import re
+import subprocess
+import sys
 
-zeros_p() {
-    case "$1" in
-        ""|*[!0]*) return 1 ;;
-        *) return 0 ;;
-    esac
-}
 
-load_list() {
-    rev=$1
-    dest=$2
-    : >"$dest"
-    if zeros_p "$rev"; then
-        return 0
-    fi
-    if ! git cat-file -e "$rev:core/loom/people-commit" >/dev/null 2>&1; then
-        return 0
-    fi
-    git show "$rev:core/loom/people-commit" 2>/dev/null | while IFS= read -r line || [ -n "$line" ]; do
-        case "$line" in
-            ""|"#"*) continue ;;
-        esac
-        line=$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-        case "$line" in
-            ""|"#"*) continue ;;
-        esac
-        printf '%s\n' "$line"
-    done >"$dest"
-}
+def git(*args, input=None):
+    return subprocess.run(["git", *args], input=input, capture_output=True,
+                          text=True, encoding="utf-8", errors="surrogateescape")
 
-enrolled() {
-    list=$1
-    email=$2
-    if [ ! -s "$list" ]; then
-        return 1
-    fi
-    grep -Fxq -- "$email" "$list"
-}
 
-trailer_values() {
-    key=$1
-    printf '%s\n' "$msg" | git interpret-trailers --parse 2>/dev/null |
-        sed -n "s/^${key}:[[:space:]]*//p"
-}
+def zeros(value):
+    return bool(value) and all(char == "0" for char in value)
 
-valid_widening() {
-    value=$1
-    case "$value" in
-        people/*/agreement.md#*) ;;
-        *) return 1 ;;
-    esac
-    file=${value%%#*}
-    clause=${value#*#}
-    case "$clause" in
-        *[!A-Za-z0-9_-]*|"") return 1 ;;
-    esac
-    mid=${file#people/}
-    mid=${mid%/agreement.md}
-    case "$mid" in
-        ""|*/*|.*|..) return 1 ;;
-    esac
-    blob=$tmp/clause
-    if ! git show "$new:$file" >"$blob" 2>/dev/null; then
-        return 1
-    fi
-    grep -F "{#$clause}" "$blob" >/dev/null 2>&1
-}
 
-enrollment=$old
-if zeros_p "$old"; then enrollment=$new; fi
-load_list "$enrollment" "$tmp/people"
+def enrolled_people(revision):
+    result = git("show", f"{revision}:core/loom/people-commit")
+    return {line.strip() for line in result.stdout.split("\n")
+            if line.strip() and not line.strip().startswith("#")}
 
-if zeros_p "$old"; then
-    git rev-list --reverse "$new" >"$tmp/commits" 2>/dev/null || : >"$tmp/commits"
-else
-    git rev-list --reverse "${old}..${new}" >"$tmp/commits" 2>/dev/null || : >"$tmp/commits"
-fi
 
-status=0
-while IFS= read -r sha || [ -n "$sha" ]; do
-    [ -n "$sha" ] || continue
-    short=$(printf '%s' "$sha" | cut -c1-12)
-    email=$(git log -1 --format=%ce "$sha" 2>/dev/null || true)
-    msg=$(git log -1 --format=%B "$sha" 2>/dev/null || true)
-    label=$(trailer_values Loom-Label | head -n 1)
-    strand=$(trailer_values Loom-Strand | head -n 1)
-    [ -n "$strand" ] || strand="?"
-    opened=1
-    trailer_values Widening >"$tmp/widen"
-    while IFS= read -r cite || [ -n "$cite" ]; do
-        [ -n "$cite" ] || continue
-        if valid_widening "$cite"; then
-            opened=0
-        else
-            printf '%s: widening %s\n' "$short" "$cite" >&2
-            status=1
-        fi
-    done <"$tmp/widen"
-    if [ -z "$label" ]; then
-        enrolled "$tmp/people" "$email" && continue
-        printf '%s: no Loom-Label\n' "$short" >&2
-        status=1
-        continue
-    fi
-    taint=$(printf '%s' "$label" | sed -n 's/.*taint=\([01]\).*/\1/p')
-    audience=$(printf '%s' "$label" | sed -n 's/.*audience=\([^;]*\).*/\1/p')
-    if [ "$taint" != "0" ] && [ "$taint" != "1" ]; then
-        printf '%s: Loom-Label unreadable\n' "$short" >&2
-        status=1
-        continue
-    fi
-    if [ "$taint" = "1" ]; then
-        if [ "$opened" -eq 1 ]; then
-            printf '%s: taint=1 strand %s\n' "$short" "$strand" >&2
-            status=1
-        fi
-    fi
-    case ",$audience," in
-        *,self,*) ;;
-        *)
-            printf '%s: audience missing self\n' "$short" >&2
-            status=1
-            ;;
-    esac
-done <"$tmp/commits"
+def trailers(message):
+    result = git("interpret-trailers", "--parse", input=message + "\n")
+    values = {}
+    for line in result.stdout.split("\n"):
+        key, separator, value = line.partition(":")
+        if separator:
+            values.setdefault(key, []).append(value.lstrip())
+    return values
 
-exit "$status"
+
+def valid_widening(value, new):
+    file, separator, clause = value.partition("#")
+    parts = file.split("/")
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+    if (not separator or not clause or any(char not in allowed for char in clause)
+            or len(parts) != 3 or parts[0] != "people" or parts[2] != "agreement.md"
+            or not parts[1] or parts[1].startswith(".")):
+        return False
+    blob = git("show", f"{new}:{file}")
+    return blob.returncode == 0 and "{#" + clause + "}" in blob.stdout
+
+
+def main(args):
+    if len(args) < 2 or not args[0] or not args[1]:
+        print("usage: 20-labels <old> <new>", file=sys.stderr)
+        return 2
+    old, new = args[:2]
+    people = enrolled_people(new if zeros(old) else old)
+    revisions = new if zeros(old) else f"{old}..{new}"
+    commits = git("rev-list", "--reverse", revisions)
+    if commits.returncode:
+        return 0  # The shell check has no commits to judge on a failed rev-list.
+    failed = False
+    for sha in commits.stdout.split("\n"):
+        if not sha:
+            continue
+        def refuse(reason):
+            nonlocal failed
+            print(f"{sha[:12]}: {reason}", file=sys.stderr)
+            failed = True
+
+        email = git("log", "-1", "--format=%ce", sha).stdout.rstrip("\n")
+        message = git("log", "-1", "--format=%B", sha).stdout.rstrip("\n")
+        values = trailers(message)
+        label = values.get("Loom-Label", [""])[0]
+        strand = values.get("Loom-Strand", [""])[0] or "?"
+        opened = False
+        for cite in values.get("Widening", []):
+            if not cite:
+                continue
+            if valid_widening(cite, new):
+                opened = True
+            else:
+                refuse(f"widening {cite}")
+        if not label:
+            if email not in people:
+                refuse("no Loom-Label")
+            continue
+        # Greedy prefixes preserve sed's last match: e.g. taint=0; taint=1.
+        taint = re.search(r".*taint=([01])", label)
+        audience = re.search(r".*audience=([^;]*)", label)
+        if taint is None:
+            refuse("Loom-Label unreadable")
+            continue
+        if taint[1] == "1" and not opened:
+            refuse(f"taint=1 strand {strand}")
+        if audience is None or "self" not in audience[1].split(","):
+            refuse("audience missing self")
+    return int(failed)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

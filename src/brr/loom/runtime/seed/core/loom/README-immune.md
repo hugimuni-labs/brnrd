@@ -2,7 +2,7 @@
 
 A push to `main` is judged by `core/immune` from the incumbent tip. Only
 an all-zero old tip (the first push) uses the incoming script. Missing or
-empty scripts refuse. Strand branches bypass the immune checks.
+empty or non-executable scripts refuse. Strand branches bypass the checks.
 
 ## Installing the gate
 
@@ -14,9 +14,11 @@ refuses the push. Replacing a script beside the repo does not change the
 committed script that judges the next push.
 
 By hand, install the same shim: extract `git show <old>:core/immune` into
-a temporary file, refuse failed extraction or an empty file, then run
-`sh <file> <old> <new> <ref>`. On the first push extract from `<new>`.
-Do not pipe extraction directly into `sh`: an empty script exits zero.
+a temporary file, refuse failed extraction, an empty file or a committed
+mode other than `100755`, then make the temporary file executable and run
+`<file> <old> <new> <ref>` through its own shebang. On the first push
+extract from `<new>`. Do not pipe extraction into an interpreter: an empty
+script can exit zero.
 Deletion uses the incumbent script, which refuses deletion of `main`.
 Non-fast-forward updates to `main` also refuse.
 
@@ -27,6 +29,23 @@ base/head, and extracts the incumbent script with the same fail-closed
 rule. The workflow itself must be protected: a PR can edit it. Give
 strands contents-write tokens without administration rights, so they
 cannot lift protection. The seed does not configure forge protections.
+
+## Updating an existing self
+
+`init` seeds a fresh home with this shim; running it again does not refresh
+an existing self. After upgrading brnrd, replace the installed shim before
+the Python transition, using the upgraded installation's interpreter:
+
+```sh
+python3 -c 'import sys; from brr.loom.runtime.merge import install_pre_receive; print(install_pre_receive(sys.argv[1]))' /absolute/path/to/home/self
+```
+
+In a room cloned from that self, copy `core/immune`, all three seed checks
+and this page from the upgraded seed, keep the scripts executable, commit
+and push with an enrolled committer or a clean label. The incumbent shell
+gate runs its shell checks and the incoming Python checks. The next push
+runs the Python gate. Copy the new `ci/immune.yml` to the self's
+`.github/workflows/immune.yml` too; an old workflow still forces `sh`.
 
 ## Checks
 
@@ -39,9 +58,19 @@ only the incoming set. An absent check directory adds no checks.
 Keep `10-readme`, `20-labels` and `50-core-notice` executable. Copying the
 seed without their executable bits silently drops the checks. A failed
 check's stderr is prefixed with its name; a silent failure is still
-named. `LOOM_IMMUNE_SH` selects the shell for the shim and checks when set.
+named. The gate and seed checks use Python 3 and only its standard library
+plus git; they do not import brnrd. The hook and CI launcher stay shell,
+and execute the committed gate directly. Checks may use any interpreter:
+each executable runs through its own shebang. There is no interpreter
+override (`LOOM_IMMUNE_SH` is removed).
 
-`10-readme` validates thread README frontmatter, heading and folder id.
+`10-readme` refuses changed thread READMEs with missing or unclosed
+frontmatter, malformed or duplicate keys, unbalanced quotes or lists,
+missing required fields, unknown status or tense, reference tense without
+settled status, a missing or invalid heading, or an id different from the
+folder. `for` must be a string. The first push checks every README. The
+shell grammar is preserved: whitespace-only lines are not empty, required
+list values remain literal strings, and keys are ASCII names.
 `50-core-notice` never refuses: changes under `core/` print
 `core changed: <paths>` for the person's notice.
 

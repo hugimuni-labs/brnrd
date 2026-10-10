@@ -1,34 +1,35 @@
-#!/bin/sh
-# 50-core-notice <old> <new>
-#
-# stdout: "core changed: <paths>" when old..new touches core/, paths in
-# byte order, space-separated, one line. Silent when core/ is untouched.
-# Never refuses — the loom (step 3) turns the line into a notice. An all-zero
-# <old> (the first push) lists every core/ path at <new>.
+#!/usr/bin/env python3
+"""Never refuse: announce changed core paths so a person can notice them.
 
-old=${1:-}
-new=${2:-}
-if [ -z "$old" ] || [ -z "$new" ]; then
-    printf '50-core-notice: usage: 50-core-notice <old> <new>\n' >&2
-    exit 0
-fi
+Print one byte-sorted, space-separated line on stdout when core changes.
+The first push lists every incoming core path; untouched core is silent.
+Git errors produce no notice and do not refuse the push. The hook's GIT_DIR
+is kept so the notice can read commits in a bare repo.
+"""
 
-tmp=$(mktemp "${TMPDIR:-/tmp}/core-notice.XXXXXX") || exit 0
-trap 'rm -f "$tmp"' EXIT
+import subprocess
+import sys
 
-case "$old" in
-    ""|*[!0]*)
-        git diff --name-only "$old" "$new" -- core/ >"$tmp" 2>/dev/null || : >"$tmp"
-        ;;
-    *)
-        git ls-tree -r --name-only "$new" 2>/dev/null | grep '^core/' >"$tmp" || : >"$tmp"
-        ;;
-esac
 
-if [ ! -s "$tmp" ]; then
-    exit 0
-fi
+def main(args):
+    if len(args) < 2 or not args[0] or not args[1]:
+        print("50-core-notice: usage: 50-core-notice <old> <new>", file=sys.stderr)
+        return 0
+    old, new = args[:2]
+    first = all(char == "0" for char in old)
+    if first:
+        command = ["git", "ls-tree", "-r", "--name-only", new]
+    else:
+        command = ["git", "diff", "--name-only", old, new, "--", "core/"]
+    result = subprocess.run(command, capture_output=True)
+    if result.returncode:
+        return 0
+    paths = [line for line in result.stdout.split(b"\n")
+             if line and (not first or line.startswith(b"core/"))]
+    if paths:
+        sys.stdout.buffer.write(b"core changed: " + b" ".join(sorted(paths)) + b"\n")
+    return 0
 
-paths=$(LC_ALL=C sort "$tmp" | awk 'NF { printf "%s%s", sep, $0; sep = " " }')
-printf 'core changed: %s\n' "$paths"
-exit 0
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
