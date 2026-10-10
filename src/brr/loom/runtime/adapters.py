@@ -3,11 +3,23 @@
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import sys
 from pathlib import Path
 
 from .home import atomic_write
+
+
+# What a provider prints when its window is spent. A body that ends on one of
+# these did not fail: the loom waits and starts it again.
+_WALL = re.compile(
+    r"hit your [a-z ]*limit|usage limit|rate limit|quota (?:exceeded|exhausted)"
+    r"|balance exhausted", re.I)
+
+
+def walled(tail: str) -> bool:
+    return bool(_WALL.search(tail))
 
 
 def fake_argv(room: Path, policy: str) -> list[str]:
