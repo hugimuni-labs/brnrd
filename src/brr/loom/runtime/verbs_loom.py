@@ -7,12 +7,12 @@ import os
 import sys
 from pathlib import Path
 
-from .attention import clear_letter, view
 from .home import Home, strand_of_room
 from .jack import run as run_jack
 from .ledger import read_facts
 from .loom import run as run_loom
 from .port import PortError, write_molt, write_send
+from .project import fold, is_notice
 
 
 def _room(arg: str | None) -> Path:
@@ -41,17 +41,13 @@ def _attention(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime attention")
     parser.add_argument("--home", required=True)
     parser.add_argument("--install", default=None)
-    parser.add_argument("--clear", default=None)
     args = parser.parse_args(argv)
-    home = Home(args.home, install=args.install)
-    if args.clear:
-        try:
-            clear_letter(home, args.clear)
-        except ValueError as exc:
-            sys.stderr.write(f"{exc}\n")
-            return 1
-    for row in view(read_facts(home)):
-        sys.stdout.write(row.render() + "\n")
+    # No state of its own: the loom's notices that no body has settled yet.
+    state = fold(read_facts(Home(args.home, install=args.install)))
+    for fact in state.accepted:
+        if is_notice(fact) and fact.data["id"] not in state.handled:
+            first = str(fact.data["body"]).split("\n", 1)[0]
+            sys.stdout.write(f"{fact.data['id']} · {fact.data['to']} · {first}\n")
     return 0
 
 

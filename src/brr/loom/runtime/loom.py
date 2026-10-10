@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import signal
@@ -18,13 +19,12 @@ from pathlib import Path
 from brr.daemon2.facts import Fact
 
 from .adapters import claude_argv, fake_argv, wait_seconds, walled
-from .attention import actionable
 from .home import Home, atomic_write, is_channel, mint
 from .ledger import LedgerConflict, append, read_facts
 from .port import (
     fact_from_port, fact_from_taint, parse_frontmatter, render_boundary,
 )
-from .project import fold, generation, holder, sender_threads
+from .project import actionable, fold, generation, holder, sender_threads
 from .selfrepo import (
     AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, room as clone_room, run_wake,
 )
@@ -117,6 +117,47 @@ def _record(home: Home, kind: str, data: dict, fact_id: str) -> Fact:
     return append(home, Fact(kind=kind, by=_by(home), data=data, id=fact_id))
 
 
+def notice_id(kind: str, subject: str) -> str:
+    return f"loom/{kind}-{hashlib.sha256(subject.encode()).hexdigest()[:10]}"
+
+
+def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, can: str, *,
+           thread: str | None = None, about: Fact | None = None, stands: bool = False,
+           taint: bool = False) -> bool:
+    """The one writer of loom notices: what the loom cannot settle, a body is told.
+
+    A notice is an owed letter from ``loom``, so it is shown at every
+    boundary until a body settles it. Its id is derived from the condition:
+    a condition met on every tick writes one letter. It goes to ``thread``
+    when a body can run there, else to ``inbox``. The last lines always name
+    the handle. ``stands`` ties it to ``about``: the two settle together.
+    """
+    ident = notice_id(kind, subject)
+    if any(fact.id == ident for fact in facts):
+        return False
+    from .labels import Label, SELF_AUDIENCE, _sender_label, join
+    label = Label(taint, SELF_AUDIENCE)
+    lines = [what]
+    data: dict = {"id": ident, "from": "loom",
+                  "to": f"thread:{thread if home.routable(thread) else 'inbox'}"}
+    if about is not None:
+        label = join(label, _sender_label(about, facts, home.root / "self", frozenset()))
+        lines.append(f"{about.data['id']}: {can}")
+        if stands:
+            data["stands"] = str(about.data["id"])
+            lines.append(f"settling this notice settles {about.data['id']} too")
+    else:
+        lines.append(can)
+    lines.append(f"settle this notice with a reply or a note, re: {ident}")
+    data.update(body="\n".join(lines), label=label.as_dict())
+    try:
+        facts.append(append(home, Fact(kind="letter", by=_by(home), data=data, id=ident)))
+    except LedgerConflict:
+        return False
+    _log(home, f"notice {ident} to {data['to']}: {what}")
+    return True
+
+
 def _next_gen(facts: list[Fact], thread: str) -> int:
     gen = 0
     for fact in facts:
@@ -154,11 +195,16 @@ def _recent_deaths(facts: list[Fact], strand: str) -> int:
 def _fused(home: Home, facts: list[Fact], strand: str, thread: str) -> bool:
     if _recent_deaths(facts, strand) < FUSE_DEATHS:
         return False
-    _attention(
-        home, f"attention:fuse:{strand}",
-        f"fuse: {strand} died or quit unfinished twice within 10 minutes", thread=thread,
-    )
+    why = f"{strand} died or quit unfinished twice within 10 minutes"
+    # The marker is ledger state: it is what keeps the dead strand held.
+    _attention(home, f"attention:fuse:{strand}", f"fuse: {why}", thread=thread)
     _log(home, f"fuse {strand} thread {thread}")
+    last = facts[-1].data if facts[-1].kind.startswith("body.") else {}
+    if thread != "inbox":
+        notice(home, facts, "fuse", strand,
+               f"thread {thread} is fused: {why} (last: {last.get('why') or last.get('code')}); "
+               "its letters stay owed and nothing starts there",
+               f"a new letter to thread:{thread} resets the fuse; fix the cause first")
     return True
 
 
@@ -257,7 +303,6 @@ def _start(home: Home, strand: str, thread: str, gen: int, adapter: str,
         proc, log = _spawn(room, argv)
     except Exception as exc:
         why = f"{type(exc).__name__}: {exc}"
-        _attention(home, f"attention:wake:{strand}:{gen}", why, thread=thread)
         _log(home, f"start failed {strand}: {why}")
         facts.append(_record(home, "body.died", {
             "strand": strand, "gen": gen, "why": why,
@@ -282,12 +327,22 @@ def _threads(home: Home) -> list[str]:
     )
 
 
-def _reject(home: Home, room: Path, path: Path, message: str) -> None:
+def _reject(home: Home, room: Path, path: Path, message: str, facts: list[Fact]) -> None:
     rejected = room / "port" / "rejected"
     rejected.mkdir(parents=True, exist_ok=True)
     os.replace(path, rejected / path.name)
-    _attention(home, f"attention:reject:{path.stem}", why=message)
     _log(home, f"rejected {path.name}: {message}")
+    # Only a strand that still holds its thread is told: it reads the notice
+    # at its next boundary. A late file from a released strand is logged; the
+    # letter it meant to answer is still owed and reaches the next body.
+    thread = next((name for name, (strand, _gen) in fold(facts).holder.items()
+                   if strand == room.name), None)
+    if thread is not None:
+        notice(home, facts, "reject", f"{room.name}/{path.name}",
+               f"the loom refused your port file {path.name}: {message}",
+               f"nothing in it was recorded; it is kept in port/rejected/{path.name}. "
+               "Send it again, corrected, if it still matters",
+               thread=thread)
 
 
 def _may_ingest(home: Home, strand: str, facts: list[Fact], ttl: float) -> bool:
@@ -340,7 +395,7 @@ def _ingest(home: Home, facts: list[Fact] | None = None, ttl: float | None = Non
                 _stamp_router(fact, facts)
                 facts.append(append(home, fact))
             except Exception as exc:
-                _reject(home, room, path, f"{type(exc).__name__}: {exc}")
+                _reject(home, room, path, f"{type(exc).__name__}: {exc}", facts)
                 continue
             path.unlink()
         for path in sorted(out.glob("taint-*.json")):
@@ -348,7 +403,7 @@ def _ingest(home: Home, facts: list[Fact] | None = None, ttl: float | None = Non
                 fact = fact_from_taint(path.read_text(), strand, f"{strand}/{path.stem}")
                 facts.append(append(home, fact))
             except Exception as exc:
-                _reject(home, room, path, f"{type(exc).__name__}: {exc}")
+                _reject(home, room, path, f"{type(exc).__name__}: {exc}", facts)
                 continue
             path.unlink()
     return facts

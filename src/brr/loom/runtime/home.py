@@ -91,6 +91,13 @@ class Home:
         )
         return proc.returncode == 0
 
+    def routable(self, thread: object) -> bool:
+        """A thread a body can be started on: a valid id with its README on main."""
+        try:
+            return self.thread_exists(thread) and self.on_main(thread)
+        except ValueError:
+            return False
+
     def room(self, strand: str) -> Path:
         if not strand or strand in {".", ".."} or "/" in strand or "\\" in strand:
             raise ValueError(f"unsafe strand id {strand!r}")
