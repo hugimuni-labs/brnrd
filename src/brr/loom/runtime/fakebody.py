@@ -197,7 +197,6 @@ def quit_now(ctx) -> int:
 
 def hold(ctx: Ctx) -> None:
     """Stay alive without answering, so a failover can see the flock held."""
-    (ctx.room / "port" / "wake-seen").write_text(ctx.wake())
     ctx.jack("start")
     while True:
         time.sleep(0.2)
@@ -287,6 +286,13 @@ def self_commit(ctx: Ctx) -> None:
     answer_fast(ctx)
 
 
+def echo_wake(ctx: Ctx) -> None:
+    """Tell the person exactly what this live body was woken with."""
+    for letter in ctx.owed():
+        ctx.send("channel:fake", ctx.wake(), re=letter.id)
+    ctx.jack("stop")
+
+
 POLICIES = {
     "answer-pings": answer_pings,
     "ping-two": ping_two,
@@ -300,6 +306,7 @@ POLICIES = {
     "emit-channel": emit_channel,
     "die-on-unrunnable": die_on_unrunnable,
     "self-commit": self_commit,
+    "echo-wake": echo_wake,
 }
 
 
