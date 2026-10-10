@@ -462,7 +462,8 @@ def _recover(home: Home) -> list[Fact]:
     holder only when its install is silent or the strand fused on an unrunnable letter.
     A restarted loom is neither, so without this every thread it held stays
     leased to a corpse. A body still holding its flock is left alone, and a
-    fused strand stays fused: the fuse is the person's to reset. A walled
+    fused strand stays fused until a new letter reaches its thread
+    (`Router._release_abandoned`). A walled
     strand stays held too: `_rewake` starts it when its wait is over.
     """
     from .router import install_of

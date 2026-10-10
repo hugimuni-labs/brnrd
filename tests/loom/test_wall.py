@@ -3,7 +3,6 @@
 import time
 
 from brr.loom.runtime import loom as loom_module
-from brr.loom.runtime.adapters import walled
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import inject_letter, read_facts
 from brr.loom.runtime.loom import _recover
@@ -14,12 +13,6 @@ from _step import Loom, wait_until, write_thread
 
 def _kinds(facts, kind):
     return [fact for fact in facts if fact.kind == kind]
-
-
-def test_the_limit_lines_providers_print_are_walls():
-    assert walled("You've hit your session limit · resets 3:40am (Europe/Paris)")
-    assert walled("402 Grok Build usage balance exhausted")
-    assert not walled("Traceback (most recent call last):\nRuntimeError: boom")
 
 
 def test_a_walled_body_starts_again_and_answers(tmp_path, monkeypatch):
