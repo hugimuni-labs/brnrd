@@ -253,12 +253,16 @@ class Router:
         alive_work = [
             fact for fact in pending if str(fact.data.get("id")) not in unrunnable
         ]
-        fused = any(
-            fact.kind == "attention" and fact.id == f"attention:fuse:{strand}"
-            for fact in facts
-        )
+        fuse = next((fact for fact in facts if fact.kind == "attention"
+                     and fact.id == f"attention:fuse:{strand}"), None)
         take = False
-        if own and fused and unrunnable and alive_work:
+        if own and fuse is not None and unrunnable and alive_work:
+            take = True
+        elif own and fuse is not None and any(
+            tuple(fact.hlc or ()) > tuple(fuse.hlc or ()) for fact in alive_work
+        ):
+            # Writing to the thread again is the reset: a letter newer than
+            # the fuse releases the dead strand, and a fresh one is granted.
             take = True
         elif owner and not own and install_silent(facts, owner, self.config.router_ttl):
             take = True
