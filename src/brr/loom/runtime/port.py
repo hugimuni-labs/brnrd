@@ -115,19 +115,6 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
     return "\n".join(lines)
 
 
-def render_wake(readme: str, strand: str, gen: int, thread: str,
-                letters: list[Fact], sender_threads: dict[str, str]) -> str:
-    """The birth prompt lists every owed letter in full. Compaction is the boundary's job."""
-    owed = render_boundary(strand, gen, thread, letters, set(), sender_threads)
-    sentence = (
-        f"you are strand {strand} on thread {thread}; letters arrive at your "
-        "tool boundaries; answer with `python -m brr.loom.runtime send --re <id> "
-        "--to thread:<from-thread> \"…\"`; when you're done, stop, and the jack "
-        "holds you while letters may come"
-    )
-    return readme.rstrip() + "\n\n" + sentence + "\n\n" + owed
-
-
 def parse_frontmatter(text: str) -> dict[str, str]:
     if not text.startswith("---\n"):
         raise PortError("port file missing frontmatter")

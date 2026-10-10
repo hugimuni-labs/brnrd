@@ -52,6 +52,11 @@ class Ctx:
     def wake(self) -> str:
         return (self.room / "port" / "wake.md").read_text()
 
+    def owed(self) -> list[LetterView]:
+        # Wakes are the self's recipe, not the port wire format. The jack
+        # delivers the same full owed list at start, whatever that recipe is.
+        return self.jack("start").letters
+
     def jack(self, event: str) -> JackView:
         proc = subprocess.run(
             [sys.executable, "-m", "brr.loom.runtime", "jack",
@@ -125,8 +130,7 @@ def answer_pings(ctx: Ctx) -> None:
                 ctx.send(f"thread:{own}", note="not a ping", re=letter.id)
             answered.add(letter.id)
 
-    consume(parse_boundary(ctx.wake()).letters)
-    consume(ctx.jack("start").letters)
+    consume(ctx.owed())
     pending: list[LetterView] = []
     for n in range(1, CALLS + 1):
         time.sleep(TOOL_S)
@@ -143,7 +147,7 @@ def ping_two(ctx: Ctx) -> None:
     wake = ctx.wake()
     target = _target(wake)
     own = _own_thread(wake)
-    openers = [letter for letter in parse_boundary(wake).letters
+    openers = [letter for letter in ctx.owed()
                if not letter.body.strip().startswith("ping-")]
     for letter in openers:
         ctx.send(f"thread:{own}", note="opener", re=letter.id)
@@ -193,6 +197,7 @@ def quit_now(ctx) -> int:
 
 def hold(ctx: Ctx) -> None:
     """Stay alive without answering, so a failover can see the flock held."""
+    (ctx.room / "port" / "wake-seen").write_text(ctx.wake())
     ctx.jack("start")
     while True:
         time.sleep(0.2)
@@ -202,8 +207,7 @@ def answer_fast(ctx: Ctx) -> None:
     """Answer every owed letter once, then stop."""
     own = _own_thread(ctx.wake())
     seen: set[str] = set()
-    letters = list(parse_boundary(ctx.wake()).letters)
-    letters.extend(ctx.jack("start").letters)
+    letters = ctx.owed()
     for letter in letters:
         if letter.id in seen:
             continue
@@ -232,7 +236,7 @@ def die_citing_limit(ctx: Ctx) -> None:
 def emit_channel(ctx: Ctx) -> None:
     """Ten letters to the fake channel, then hold. A kill can land in the middle."""
     own = _own_thread(ctx.wake())
-    for letter in parse_boundary(ctx.wake()).letters:
+    for letter in ctx.owed():
         ctx.send(f"thread:{own}", note="opener", re=letter.id)
     for n in range(10):
         ctx.send("channel:fake", f"msg-{n}")
@@ -252,6 +256,37 @@ def die_on_unrunnable(ctx: Ctx) -> None:
     ctx.jack("stop")
 
 
+def self_commit(ctx: Ctx) -> None:
+    """Read the live wake, commit in the clone and send it through immune."""
+    from .selfrepo import git
+    clone = Path.cwd()
+    identity = (clone / "core" / "identity.md").read_text()
+    if identity not in ctx.wake():
+        raise RuntimeError("live wake omitted the self's identity")
+    if "send-self --room ." not in ctx.wake():
+        raise RuntimeError("live wake did not teach send-self")
+    ctx.owed()
+    # Let the loom ingest shown before the merge derives this body's label.
+    for _ in range(100):
+        letters = parse_boundary((ctx.room / "port" / "in" / "boundary.md").read_text()).letters
+        if letters and all(letter.compact for letter in letters):
+            break
+        time.sleep(0.05)
+    else:
+        raise RuntimeError("shown letters were not ingested")
+    (clone / "memory" / "moves" / "live-body.md").write_text("# A live body saw its self.\n")
+    git(clone, "add", "memory/moves/live-body.md")
+    git(clone, "commit", "-m", "A live body carries its self forward.")
+    proc = subprocess.run(
+        [sys.executable, "-m", "brr.loom.runtime", "send-self", "--room", "."],
+        capture_output=True, text=True, env=ctx.env, cwd=clone,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr or proc.stdout)
+    ctx.trace({"merged": proc.stdout.strip(), "cwd": str(clone)})
+    answer_fast(ctx)
+
+
 POLICIES = {
     "answer-pings": answer_pings,
     "ping-two": ping_two,
@@ -264,6 +299,7 @@ POLICIES = {
     "die-citing-limit": die_citing_limit,
     "emit-channel": emit_channel,
     "die-on-unrunnable": die_on_unrunnable,
+    "self-commit": self_commit,
 }
 
 
