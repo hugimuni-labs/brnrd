@@ -216,7 +216,7 @@ class Router:
                 continue
             from .adapters import at_birth
             try:
-                choice = at_birth(home, thread, letters, default)
+                choice = at_birth(home, thread, default)
             except (ValueError, OSError) as exc:
                 notice(home, facts, "body", thread, f"thread {thread}: {exc}",
                        "correct its body: shell/core choice", thread=thread)

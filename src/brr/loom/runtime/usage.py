@@ -34,7 +34,7 @@ def _refresh(path, script) -> None:
         env["PYTHONPATH"] = str(Path(__file__).resolve().parents[3]) + os.pathsep + env.get("PYTHONPATH", "")
         proc = subprocess.Popen([str(script)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                 env=env, start_new_session=True)
-        out, _ = proc.communicate(timeout=5)
+        out, _ = proc.communicate(timeout=15)
         if proc.returncode == 0:
             for window in json.loads(out)["windows"]:
                 left = window["left_pct"]
