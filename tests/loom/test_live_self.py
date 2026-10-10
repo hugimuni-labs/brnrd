@@ -3,6 +3,8 @@
 import time
 from pathlib import Path
 
+import pytest
+
 from brr.loom.runtime import speak
 from brr.loom.runtime.attention import view
 from brr.loom.runtime.ledger import inject_letter
@@ -34,15 +36,23 @@ def test_the_self_decides_the_live_bodys_wake(tmp_path, monkeypatch):
     assert not loom.errors
 
 
-def test_a_live_body_sees_identity_and_lands_a_labeled_commit(tmp_path):
+@pytest.mark.parametrize("sender", ["p-ada", "p-stranger"])
+def test_a_live_body_sees_identity_and_lands_a_labeled_commit(tmp_path, sender):
     root = tmp_path / "home"
     init_self(root, person="ada")
     write_thread(root, "live", "Carry the self", "self-commit", wait="0")
     seed = git(root / "self", "rev-parse", "main").stdout.strip()
-    inject_letter(root, to="thread:live", body="carry it", sender="p-ada")
+    inject_letter(root, to="thread:live", body="carry it", sender=sender)
     loom = Loom(root)
     loom.start()
     try:
+        if sender == "p-stranger":
+            wait_until(lambda: any(row.kind == "fuse" for row in view(loom.facts())),
+                       15, loom.dump)
+            assert git(root / "self", "rev-parse", "main").stdout.strip() == seed
+            assert not (root / "self" / "memory" / "moves" / "live-body.md").exists()
+            assert owed(loom.facts(), "live")
+            return
         wait_until(lambda: (root / "self" / "memory" / "moves" / "live-body.md").is_file()
                    and not owed(loom.facts(), "live"), 15, loom.dump)
         facts = loom.facts()
@@ -59,7 +69,7 @@ def test_a_live_body_sees_identity_and_lands_a_labeled_commit(tmp_path):
         assert not [f for f in facts if f.kind in {"body.died", "attention"}]
     finally:
         loom.halt()
-    assert not loom.errors
+        assert not loom.errors
 
 
 def test_a_wake_over_budget_refuses_one_start_without_retry(tmp_path, monkeypatch):

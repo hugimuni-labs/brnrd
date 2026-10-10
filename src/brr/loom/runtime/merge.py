@@ -105,7 +105,7 @@ def send_to_self(room: str | Path, widening: str | None = None) -> Outcome:
     The third stop of one send aborts the rebase and returns ``failed``.
     """
 
-    room_path = Path(room)
+    room_path = Path(room).resolve()
     if not room_path.is_dir():
         raise SendError(f"no such room: {room_path}")
     probe = _git(room_path, "rev-parse", "--is-inside-work-tree", check=False)
