@@ -374,6 +374,10 @@ def _reap(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         code = body.proc.poll()
         if code is None:
             continue
+        # A body's last hook may have written after this tick's ingest.
+        # Drain it before the death (and the next start), or its shown
+        # letters get attributed to its successor and poison counts are lost.
+        facts = _ingest(home)
         body.close_log()
         del bodies[strand]
         molted = _molted(home, body)
