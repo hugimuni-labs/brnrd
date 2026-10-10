@@ -14,11 +14,6 @@ def resolve(home, shell: str) -> Path:
     return path.resolve()
 
 
-def walled(folder: Path, tail: str) -> bool:
-    return any(re.search(line, tail, re.I) for line in (folder / "wall").read_text().splitlines()
-               if line.strip())
-
-
 def at_birth(home, thread: str, default: tuple[str, str]) -> tuple[str, str]:
     from .config import load_config
     readme = (home.thread_dir(thread) / "README.md").read_text()

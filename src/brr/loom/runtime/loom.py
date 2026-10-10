@@ -19,7 +19,7 @@ from pathlib import Path
 
 from brr.daemon2.facts import Fact
 
-from .adapters import resolve, walled
+from .adapters import resolve
 from .home import Home, atomic_write, is_channel, mint
 from .ledger import LedgerConflict, append, read_facts
 from .port import (
@@ -33,13 +33,6 @@ from .selfrepo import (
 SRC = str(Path(__file__).resolve().parents[3])
 FUSE_WINDOW_S = 600
 FUSE_DEATHS = 2
-# A body that ended on a provider limit is started again after this long.
-# The reset time in the provider's text is not parsed: a start against a
-# spent window is refused before it costs anything, so the retry is the probe.
-WALL_WAIT_S = 900.0
-# Only the end of a body's output is read for the limit line, so a crash
-# that merely mentions a limit earlier on still counts toward the fuse.
-WALL_TAIL = 400
 # Held by the body process, not the loom: the wrapper flocks, then execs.
 # preexec_fn after fork from the test's loom thread can deadlock on a lock
 # another thread still owns. The fd stays open across exec, so the lock
@@ -66,8 +59,6 @@ class Body:
     gen: int
     proc: subprocess.Popen
     log: object
-    folder: Path
-    log_start: int = 0
 
     def close_log(self) -> None:
         close = getattr(self.log, "close", None)
@@ -301,10 +292,30 @@ def _start(home: Home, strand: str, thread: str, gen: int,
     letters = actionable(facts, thread)
     ids = [str(letter.data["id"]) for letter in letters]
     try:
-        started = next((f for f in facts if f.kind == "body.started"
+        started = next((f for f in facts if f.kind in {"body.started", "body.pending", "body.parked"}
                         and f.data.get("strand") == strand), None)
         shell, core = (started.data["shell"], started.data["core"]) if started else choice
         folder = resolve(home, shell)
+        from .usage import reading
+        prior = [f for f in facts if f.data.get("strand") == strand]
+        after = max((datetime.fromisoformat(f.at).timestamp() for f in prior
+                     if f.kind in {"body.died", "body.parked"} or
+                     (f.kind == "body.exited" and f.data.get("unfinished"))), default=0)
+        gauge = reading(home, shell, after)
+        data = {"strand": strand, "gen": gen, "shell": shell, "core": core}
+        if gauge is None:
+            if not prior or prior[-1].kind not in {"body.pending", "body.parked"}:
+                facts.append(_record(home, "body.pending", data, f"body.pending:{strand}:{mint(6)}"))
+            return facts
+        empty = next((w for w in gauge["windows"] if w["left_pct"] <= 0), None)
+        if empty:
+            try:
+                until = datetime.fromisoformat(empty["resets_at"]).timestamp()
+            except (ValueError, TypeError, KeyError):
+                until = time.time() + 900
+            data.update(window=empty["name"], until=until)
+            facts.append(_record(home, "body.parked", data, f"body.parked:{strand}:{mint(6)}"))
+            return facts
         room = _prepare(
             home, strand, thread, gen, letters, sender_threads(facts), facts,
             (folder / "jack").read_text().strip(),
@@ -313,8 +324,6 @@ def _start(home: Home, strand: str, thread: str, gen: int,
         if policy is not None:
             atomic_write(room / "port/policy", policy + "\n")
         argv = [str(folder / "run"), str(room), core]
-        log_path = room / "port" / "body.log"
-        log_start = log_path.stat().st_size if log_path.is_file() else 0
         # The wake has already exposed these letters. Publish that label
         # before exec: send-self can precede the body's first jack receipt.
         facts.append(_record(home, "shown", {
@@ -333,7 +342,7 @@ def _start(home: Home, strand: str, thread: str, gen: int,
     facts.append(_record(home, "body.started", {
         "strand": strand, "gen": gen, "pid": proc.pid, "shell": shell, "core": core,
     }, f"body.started:{strand}:{gen}:{proc.pid}:{mint(6)}"))
-    bodies[strand] = Body(strand, thread, gen, proc, log, folder, log_start)
+    bodies[strand] = Body(strand, thread, gen, proc, log)
     _log(home, f"start {strand} thread {thread} gen {gen} pid {proc.pid} {shell}/{core}")
     return facts
 
@@ -445,17 +454,6 @@ def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
         body.close_log()
         del bodies[strand]
         molted = _molted(home, body)
-        failed = code != 0 or (not molted and bool(actionable(facts, body.thread)))
-        if failed and walled(body.folder, _log_tail(home.room(strand), body.log_start)):
-            # The provider's window is spent. Not a death: nothing counts
-            # toward the fuse or against the letters, and the thread stays
-            # held and owed. `_refresh_holders` retries after `until`.
-            facts.append(_record(home, "body.walled", {
-                "strand": strand, "thread": body.thread, "gen": body.gen,
-                "code": code, "until": time.time() + WALL_WAIT_S,
-            }, f"body.walled:{strand}:{body.gen}:{mint(6)}"))
-            _log(home, f"wall {strand} code {code}, next start in {WALL_WAIT_S:.0f}s")
-            continue
         kind = "body.exited" if code == 0 else "body.died"
         data = {"strand": strand, "gen": body.gen, "code": code}
         # An unrunnable letter stays owed and must not look like unfinished work,
@@ -483,31 +481,18 @@ def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
     return facts
 
 
-def _log_tail(room: Path, start: int) -> str:
-    """The last ``WALL_TAIL`` bytes this body wrote to its log."""
-    path = room / "port" / "body.log"
-    if not path.is_file():
-        return ""
-    with open(path, "rb") as handle:
-        handle.seek(max(start, path.stat().st_size - WALL_TAIL))
-        return handle.read().decode("utf-8", "replace")
-
-
-def _walled_last(facts: list[Fact]) -> dict[str, Fact]:
-    """Strands whose latest body fact is a wall: down, waiting, still holding."""
-    last: dict[str, Fact] = {}
-    for fact in facts:
-        if fact.kind.startswith("body.") and fact.data.get("strand"):
-            last[str(fact.data["strand"])] = fact
-    return {strand: fact for strand, fact in last.items() if fact.kind == "body.walled"}
+def pending_bodies(facts: list[Fact]) -> dict[str, Fact]:
+    """The latest body fact for each strand, used by the tick and attention."""
+    return {str(f.data["strand"]): f for f in facts
+            if f.kind.startswith("body.") and f.data.get("strand")}
 
 
 def _refresh_holders(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
-    """Own holders: refresh live boundaries, retry expired walls, release corpses."""
+    """Own holders: refresh live boundaries, retry pending starts, release corpses."""
     from .router import install_of
     from .usage import fuel
     shells = {f.data["strand"]: f.data.get("shell") for f in facts if f.kind == "body.started"}
-    state, threads, walls = fold(facts), sender_threads(facts), _walled_last(facts)
+    state, threads, pending = fold(facts), sender_threads(facts), pending_bodies(facts)
     for thread, (strand, gen) in state.holder.items():
         if install_of(strand) != home.install_id():
             continue
@@ -518,8 +503,8 @@ def _refresh_holders(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> 
             path = home.room(strand) / "port" / "in" / "boundary.md"
             if not path.is_file() or path.read_text() != text:
                 atomic_write(path, text)
-        elif strand in walls:
-            if time.time() >= walls[strand].data["until"]:
+        elif strand in pending and pending[strand].kind in {"body.pending", "body.parked"}:
+            if time.time() >= pending[strand].data.get("until", 0):
                 facts = _start(home, strand, thread, gen, bodies, facts)
         elif not any(fact.id == f"attention:fuse:{strand}" for fact in facts):
             try:

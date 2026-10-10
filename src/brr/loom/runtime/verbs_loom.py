@@ -10,7 +10,7 @@ from pathlib import Path
 from .home import Home, strand_of_room
 from .jack import run as run_jack
 from .ledger import read_facts
-from .loom import run as run_loom
+from .loom import pending_bodies, run as run_loom
 from .port import PortError, write_molt, write_send
 from .project import fold, is_notice
 
@@ -44,6 +44,13 @@ def _attention(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     # No state of its own: the loom's notices that no body has settled yet.
     state = fold(read_facts(Home(args.home, install=args.install)))
+    from datetime import datetime, timezone
+    for strand, fact in pending_bodies(state.accepted).items():
+        if fact.kind == "body.parked" and strand in {s for s, _g in state.holder.values()}:
+            d = fact.data
+            thread = next(t for t, (s, _g) in state.holder.items() if s == strand)
+            until = datetime.fromtimestamp(d["until"], timezone.utc).isoformat()
+            sys.stdout.write(f"parked · {thread} · {d['shell']} {d['window']} 0% · until {until}\n")
     for fact in state.accepted:
         if is_notice(fact) and fact.data["id"] not in state.handled:
             first = str(fact.data["body"]).split("\n", 1)[0]

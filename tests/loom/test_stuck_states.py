@@ -111,7 +111,7 @@ def drain_before_death(root, monkeypatch):
     folder = root / "loom/bodies/fake"
     original = resolve(Home(root), "fake")
     folder.mkdir(parents=True)
-    for name in ("wall", "jack"):
+    for name in ("jack",):
         (folder / name).write_text((original / name).read_text())
     run = folder / "run"
     run.write_text((original / "run").read_text().replace(
