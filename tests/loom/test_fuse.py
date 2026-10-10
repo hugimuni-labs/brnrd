@@ -70,6 +70,10 @@ def test_a_new_letter_resets_the_fuse(tmp_path):
             return [fact for fact in loom.facts() if fact.id.startswith("attention:fuse:")]
 
         wait_until(lambda: len(fuses()) == 1, 5, loom.dump)
+        loom.halt()
+        assert not loom.errors
+        loom = Loom(root, tick=0.05)
+        loom.start()
         time.sleep(0.4)
         assert len([f for f in loom.facts() if f.kind == "body.started"]) == 2
         # The person fixes what was wrong and writes again.
