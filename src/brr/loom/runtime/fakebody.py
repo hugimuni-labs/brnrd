@@ -222,6 +222,13 @@ def wall_once(ctx: Ctx) -> None:
     answer_fast(ctx)
 
 
+def die_citing_limit(ctx: Ctx) -> None:
+    """A crash whose output mentions a limit long before it ends."""
+    del ctx
+    print("retrying after rate limit\n" + "Traceback: boom\n" * 60, flush=True)
+    raise SystemExit(1)
+
+
 def emit_channel(ctx: Ctx) -> None:
     """Ten letters to the fake channel, then hold. A kill can land in the middle."""
     own = _own_thread(ctx.wake())
@@ -254,6 +261,7 @@ POLICIES = {
     "hold": hold,
     "answer-fast": answer_fast,
     "wall-once": wall_once,
+    "die-citing-limit": die_citing_limit,
     "emit-channel": emit_channel,
     "die-on-unrunnable": die_on_unrunnable,
 }
