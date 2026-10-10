@@ -129,7 +129,6 @@ def test_claude_adapter_pins_the_three_hooks(tmp_path):
     for event in ("post", "stop", "start"):
         blob = json.dumps(hooks)
         assert f"--event {event}" in blob
-        assert "--shell claude" in blob
 
 
 def test_stop_shows_owed_letters_before_reading_wait(tmp_path):

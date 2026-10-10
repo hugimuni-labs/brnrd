@@ -214,7 +214,6 @@ def body_alive(room: Path) -> bool:
     except BlockingIOError:
         return True
     else:
-        import fcntl
         fcntl.flock(fd, fcntl.LOCK_UN)
         return False
     finally:
