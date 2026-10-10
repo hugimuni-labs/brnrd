@@ -4,8 +4,7 @@ from brr.daemon2.facts import Fact
 
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import LedgerConflict, append, read_facts
-from brr.loom.runtime.attention import unrunnable_ids
-from brr.loom.runtime.project import holder, owed
+from brr.loom.runtime.project import holder, owed, unrunnable_ids
 
 STRAND = "s-ab12-aaaaaa"
 OTHER = "s-ab12-bbbbbb"

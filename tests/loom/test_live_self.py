@@ -5,12 +5,11 @@ from pathlib import Path
 import pytest
 
 from brr.loom.runtime import speak
-from brr.loom.runtime.attention import view
 from brr.loom.runtime.ledger import inject_letter
 from brr.loom.runtime.project import owed
 from brr.loom.runtime.selfrepo import _commit, git, init_self
 
-from _step import Loom, wait_until, write_thread
+from _step import Loom, notices, wait_until, write_thread
 
 
 def test_the_self_decides_the_live_bodys_wake(tmp_path, monkeypatch):
@@ -46,7 +45,7 @@ def test_a_live_body_sees_identity_and_lands_a_labeled_commit(tmp_path, sender):
     loom.start()
     try:
         if sender == "p-stranger":
-            wait_until(lambda: any(row.kind == "fuse" for row in view(loom.facts())),
+            wait_until(lambda: any(f.id.startswith("attention:fuse:") for f in loom.facts()),
                        15, loom.dump)
             assert git(root / "self", "rev-parse", "main").stdout.strip() == seed
             assert not (root / "self" / "memory" / "moves" / "live-body.md").exists()
@@ -79,11 +78,14 @@ def test_a_wake_over_budget_fuses_then_a_new_letter_retries(tmp_path, monkeypatc
     loom = Loom(root)
     loom.start()
     try:
-        wait_until(lambda: any(row.kind == "fuse" for row in view(loom.facts())),
-                   8, loom.dump)
+        wait_until(lambda: notices(loom.facts()), 8, loom.dump)
         facts = loom.facts()
         assert len([f for f in facts if f.kind == "body.died"]) == 2
-        assert any("wake exited 3: over budget:" in row.why for row in view(facts))
+        # The notice to inbox names the thread, the cause and the way out.
+        (told,) = notices(facts)
+        assert told.data["to"] == "thread:inbox"
+        assert "wake exited 3: over budget:" in told.data["body"]
+        assert "a new letter to thread:fat resets the fuse" in told.data["body"]
         assert not [f for f in facts if f.kind == "body.started"]
         assert owed(facts, "fat")
         monkeypatch.delenv("LOOM_BUDGET_BYTES")

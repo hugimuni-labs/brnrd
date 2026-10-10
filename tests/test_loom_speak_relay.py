@@ -58,10 +58,11 @@ def test_long_answer_splits_and_a_lost_part_is_never_resent(home, lease, monkeyp
     c = FakeClient(fail_on={2})
     monkeypatch.setitem(speak_mod.EFFECTS, "relay", relay.make_effect(c))
     body = "\n".join(f"line {i:04d} " + "x" * 80 for i in range(100))  # ~9,000 chars
-    status, fact = speak_mod.speak(home, lease, "s-a/answer", body,
-                                   channel="channel:telegram/42")
+    status, fact, unsure = speak_mod.speak(home, lease, "s-a/answer", body,
+                                           channel="channel:telegram/42")
     assert len(c.sent) == 3
     assert status == "maybe-sent" and fact.data["state"] == "intended"
+    assert unsure == ["s-a/answer#2"]
     assert "".join(p["body_markdown"] for p in c.sent).replace("\n", "") == body.replace("\n", "")
     assert all(len(p["body_markdown"]) <= speak_mod.LIMITS["telegram"] for p in c.sent)
     parts = {f.data["part"]: f.data["receipt"] for f in read_facts(home) if f.kind == "speech.part"}
@@ -73,7 +74,7 @@ def test_long_answer_splits_and_a_lost_part_is_never_resent(home, lease, monkeyp
 
 
 def test_answer_to_an_event_posts_its_event_id(home, lease, client):
-    status, _ = speak_mod.speak(home, lease, "s-a/re", "hi", channel="channel:telegram/42",
+    status, *_ = speak_mod.speak(home, lease, "s-a/re", "hi", channel="channel:telegram/42",
                                 context={"event_id": "ev_7"})
     assert status == "sent"
     assert client.sent == [{"body_markdown": "hi", "event_id": "ev_7"}]
@@ -168,7 +169,7 @@ def test_response_without_message_id_has_no_binding_receipt(home, lease, monkeyp
         def send(self, payload):
             return {"event_id": payload["event_id"], "forwarded": True}
     monkeypatch.setitem(speak_mod.EFFECTS, "relay", relay.make_effect(ResponseClient()))
-    status, _ = speak_mod.speak(home, lease, "s-a/answer#2", "hi",
+    status, *_ = speak_mod.speak(home, lease, "s-a/answer#2", "hi",
                                channel="channel:telegram/42", context={"event_id": "ev_1"})
     assert status == "sent"
     assert not any(f.kind == "speech.part" for f in read_facts(home))

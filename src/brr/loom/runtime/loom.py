@@ -228,6 +228,9 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         "tool boundaries; answer with `python -m brr.loom.runtime send --re <id> "
         "--to thread:<from-thread> \"…\"`; commit in this self clone and land "
         "your branch with `python -m brr.loom.runtime send-self --room .`; "
+        "a letter from `loom` is a notice of something the loom could not settle, "
+        "yours to deal with: its last lines name what settles it "
+        "(core/loom/README.md, Notices); "
         "when you're done, stop, and the jack holds you while letters may come\n"
     ))
     with tempfile.TemporaryFile(mode="w+") as wake, tempfile.TemporaryFile(mode="w+") as why:

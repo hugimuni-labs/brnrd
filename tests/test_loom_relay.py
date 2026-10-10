@@ -198,6 +198,12 @@ def test_reply_goes_to_its_thread_even_after_release(home):
     relay.pull_once(home, FakeClient([ev]), 0)
     assert kinds(home, "source")[0].data["to"] == "thread:first"
     assert relay.thread_for_message(read_facts(home), "channel:telegram/666", 17) is None
+    # The thread is removed: a later reply to the same message falls to inbox.
+    (home.thread_dir("first") / "README.md").unlink()
+    later = event("ev_2")
+    later["reply_to"]["reply_to_message_id"] = 17
+    relay.pull_once(home, FakeClient([later]), 0)
+    assert kinds(home, "source")[1].data["to"] == "thread:inbox"
 
 
 def test_bare_goes_to_the_last_speaker_whatever_became_of_its_lease(home):
