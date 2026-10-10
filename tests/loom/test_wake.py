@@ -314,10 +314,8 @@ def test_room_is_a_clone_and_reused(tmp_path: Path) -> None:
 
 
 def test_readme_fixtures_agree() -> None:
-    syntax = _run(["sh", "-n", str(CHECKER)], ROOT)
-    assert syntax.returncode == 0, syntax.stderr
-    dash = _run(["dash", "-n", str(CHECKER)], ROOT)
-    assert dash.returncode == 0, dash.stderr
+    # The check is Python since w-152; it must at least compile.
+    compile(CHECKER.read_text(encoding="utf-8"), str(CHECKER), "exec")
 
     ok = sorted((FIXTURES / "ok").glob("*.md"))
     bad = sorted((FIXTURES / "bad").glob("*.md"))
