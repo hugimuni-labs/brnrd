@@ -281,6 +281,8 @@ def init_self(home: Path, person: str | None = None, remote: str | None = None) 
             agreement.write_text(_agreement(person), encoding="utf-8")
         _enroll_person_email(self_dir)
         git(self_dir, "init", "-b", "main")
+        from .merge import install_pre_receive
+        install_pre_receive(self_dir)
         git(self_dir, "add", "-A")
         _commit(
             self_dir,
@@ -311,10 +313,6 @@ def room(home: Path, strand: str) -> Path:
     source = home / "self"
     if not (source / ".git").exists():
         raise SelfError(f"no self at {source}; init first")
-    # A live clone sends back to this checked-out main. The incumbent's
-    # immune must gate that push, and git must update the accepted worktree.
-    from .merge import install_pre_receive
-    install_pre_receive(source)
     dest = home / "rooms" / strand / "self"
     if (dest / ".git").exists():
         return dest
