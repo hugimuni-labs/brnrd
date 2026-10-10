@@ -8,6 +8,7 @@ from typing import Iterable
 from brr.daemon2.facts import Fact, union
 
 from .home import thread_of
+from .ledger import strand_of
 
 
 @dataclass
@@ -16,18 +17,6 @@ class Fold:
     holder: dict[str, tuple[str, int]] = field(default_factory=dict)
     handled: set[str] = field(default_factory=set)
     shown: dict[str, set[str]] = field(default_factory=dict)
-
-
-def _strand(fact: Fact) -> str | None:
-    strand = fact.data.get("strand")
-    if isinstance(strand, str) and strand:
-        return strand
-    if fact.by.startswith("strand:"):
-        return fact.by.split(":", 1)[1]
-    sender = fact.data.get("from")
-    if isinstance(sender, str) and sender.startswith("s-"):
-        return sender
-    return None
 
 
 def _destination(data: dict) -> str | None:
@@ -126,7 +115,7 @@ def fold(facts: Iterable[Fact]) -> Fold:
                 if thread is not None and data.get("id"):
                     dest[str(data["id"])] = thread
             continue
-        strand = _strand(fact)
+        strand = strand_of(fact)
         if strand is None or "gen" not in data:
             continue
         gen = int(data["gen"])
