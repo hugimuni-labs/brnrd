@@ -237,53 +237,42 @@ def _spawn(room: Path, argv: list[str]) -> tuple[subprocess.Popen, object]:
 
 def _start(home: Home, strand: str, thread: str, gen: int, adapter: str,
            core: str, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
-    """Launch one body. Two launch failures inside the fuse window stop there."""
-    for _attempt in range(FUSE_DEATHS):
-        if strand in bodies:
-            return facts
-        letters = actionable(facts, thread)
-        try:
-            room = _prepare(
-                home, strand, thread, gen, letters, sender_threads(facts), facts,
-            )
-        except (SelfError, subprocess.TimeoutExpired) as exc:
-            _attention(home, f"attention:wake:{strand}:{gen}", str(exc), thread=thread)
-            return facts
-        if adapter == "fake":
-            policy = _policy(home, thread)
-            if policy is None:
-                _attention(home, f"attention:no-policy:{thread}",
-                           f"fake adapter: thread {thread} has no policy file",
-                           thread=thread)
-                return facts
-            argv = fake_argv(room, policy)
-        elif adapter == "claude":
-            argv = claude_argv(room, core, wait_seconds(room))
-        else:
-            raise ValueError(f"unknown adapter {adapter!r}")
-        log_path = room / "port" / "body.log"
-        log_start = log_path.stat().st_size if log_path.is_file() else 0
-        try:
-            proc, log = _spawn(room, argv)
-        except OSError as exc:
-            _log(home, f"launch failed {strand}: {exc}")
-            facts.append(_record(home, "body.died",
-                                 {"strand": strand, "gen": gen, "code": 127},
-                                 f"body.died:{strand}:{gen}:launch:{mint(6)}"))
-            if _fused(home, facts, strand, thread):
-                return facts
-            continue
-        started = _record(
-            home, "body.started",
-            {"strand": strand, "gen": gen, "pid": proc.pid, "adapter": adapter},
-            f"body.started:{strand}:{gen}:{proc.pid}:{mint(6)}",
-        )
-        facts.append(started)
-        bodies[strand] = Body(
-            strand, thread, gen, proc, log, log_start,
-        )
-        _log(home, f"start {strand} thread {thread} gen {gen} pid {proc.pid} {adapter}")
+    """Launch one body. Process failures are reaped; launch errors reach run()."""
+    if strand in bodies:
         return facts
+    letters = actionable(facts, thread)
+    try:
+        room = _prepare(
+            home, strand, thread, gen, letters, sender_threads(facts), facts,
+        )
+    except (SelfError, subprocess.TimeoutExpired) as exc:
+        _attention(home, f"attention:wake:{strand}:{gen}", str(exc), thread=thread)
+        return facts
+    if adapter == "fake":
+        policy = _policy(home, thread)
+        if policy is None:
+            _attention(home, f"attention:no-policy:{thread}",
+                       f"fake adapter: thread {thread} has no policy file",
+                       thread=thread)
+            return facts
+        argv = fake_argv(room, policy)
+    elif adapter == "claude":
+        argv = claude_argv(room, core, wait_seconds(room))
+    else:
+        raise ValueError(f"unknown adapter {adapter!r}")
+    log_path = room / "port" / "body.log"
+    log_start = log_path.stat().st_size if log_path.is_file() else 0
+    proc, log = _spawn(room, argv)
+    started = _record(
+        home, "body.started",
+        {"strand": strand, "gen": gen, "pid": proc.pid, "adapter": adapter},
+        f"body.started:{strand}:{gen}:{proc.pid}:{mint(6)}",
+    )
+    facts.append(started)
+    bodies[strand] = Body(
+        strand, thread, gen, proc, log, log_start,
+    )
+    _log(home, f"start {strand} thread {thread} gen {gen} pid {proc.pid} {adapter}")
     return facts
 
 
