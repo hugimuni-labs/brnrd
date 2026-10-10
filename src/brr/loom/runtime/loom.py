@@ -249,13 +249,7 @@ def _start(home: Home, strand: str, thread: str, gen: int, adapter: str,
         _attention(home, f"attention:wake:{strand}:{gen}", str(exc), thread=thread)
         return facts
     if adapter == "fake":
-        policy = _policy(home, thread)
-        if policy is None:
-            _attention(home, f"attention:no-policy:{thread}",
-                       f"fake adapter: thread {thread} has no policy file",
-                       thread=thread)
-            return facts
-        argv = fake_argv(room, policy)
+        argv = fake_argv(room, _policy(home, thread))
     elif adapter == "claude":
         argv = claude_argv(room, core, wait_seconds(room))
     else:
