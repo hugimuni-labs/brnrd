@@ -7,7 +7,11 @@ from pathlib import Path
 
 from brr.daemon2.facts import Fact
 
-from brr.loom.runtime.adapters import claude_argv
+import os
+import runpy
+import sys
+from brr.loom.runtime.adapters import resolve
+from brr.loom.runtime.home import Home
 from brr.loom.runtime.jack import execute, run
 from brr.loom.runtime.port import parse_boundary, render_boundary
 
@@ -114,11 +118,18 @@ def test_corrupt_boundary_fails_open(tmp_path):
     assert "Traceback" in (room / "port" / "jack-errors.log").read_text()
 
 
-def test_claude_adapter_pins_the_three_hooks(tmp_path):
+def test_claude_adapter_pins_the_three_hooks(tmp_path, monkeypatch):
     room = tmp_path / "rooms" / STRAND
     (room / "port").mkdir(parents=True)
     (room / "port" / "wake.md").write_text("wake\n")
-    argv = claude_argv(room, "haiku", 10)
+    captured = []
+    monkeypatch.setattr(sys, "argv", ["run", str(room), "haiku"])
+    monkeypatch.setenv("BRNRD_JACK", "python -m brr.loom.runtime jack --room " + str(room))
+    monkeypatch.setenv("BRNRD_WAIT", "10")
+    monkeypatch.setenv("BRNRD_WAKE", str(room / "port/wake.md"))
+    monkeypatch.setattr(os, "execvp", lambda _cmd, argv: captured.extend(argv))
+    runpy.run_path(str(resolve(Home(tmp_path), "claude") / "run"))
+    argv = captured
     assert argv[:4] == ["claude", "-p", "--model", "haiku"]
     assert "--dangerously-skip-permissions" in argv
     assert argv[-1] == "wake\n"

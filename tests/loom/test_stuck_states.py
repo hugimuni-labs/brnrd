@@ -107,8 +107,17 @@ def drain_before_death(root, monkeypatch):
         "    time.sleep(0.01)\n"
         "sys.exit(code)\n"
     )
-    monkeypatch.setattr(runtime, "fake_argv", lambda room, policy: [
-        sys.executable, str(script), "--room", str(room), "--policy", policy])
+    from brr.loom.runtime.adapters import resolve
+    folder = root / "loom/bodies/fake"
+    original = resolve(Home(root), "fake")
+    folder.mkdir(parents=True)
+    for name in ("wall", "jack"):
+        (folder / name).write_text((original / name).read_text())
+    run = folder / "run"
+    run.write_text((original / "run").read_text().replace(
+        '"-m", "brr.loom.runtime.fakebody"', repr(str(script))))
+    run.chmod(0o755)
+
 
 
 def test_an_unrunnable_letter_is_handed_to_a_body(root, monkeypatch):

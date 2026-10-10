@@ -1,0 +1,5 @@
+hit your [a-z ]*limit
+usage limit
+rate limit
+quota (?:exceeded|exhausted)
+balance exhausted

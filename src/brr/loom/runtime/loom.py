@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import signal
+import shlex
 import subprocess
 import sys
 import threading
@@ -18,7 +19,7 @@ from pathlib import Path
 
 from brr.daemon2.facts import Fact
 
-from .adapters import claude_argv, fake_argv, wait_seconds, walled
+from .adapters import resolve, walled
 from .home import Home, atomic_write, is_channel, mint
 from .ledger import LedgerConflict, append, read_facts
 from .port import (
@@ -65,6 +66,7 @@ class Body:
     gen: int
     proc: subprocess.Popen
     log: object
+    folder: Path
     log_start: int = 0
 
     def close_log(self) -> None:
@@ -93,6 +95,11 @@ def _env(room: Path) -> dict[str, str]:
         env[f"GIT_{role}_NAME"] = AUTHOR_NAME
         env[f"GIT_{role}_EMAIL"] = AUTHOR_EMAIL
     env["BRNRD_ROOM"] = str(room)
+    env["BRNRD_WAKE"] = str(room / "port" / "wake.md")
+    env["BRNRD_JACK"] = (f"{shlex.quote(sys.executable)} -m brr.loom.runtime jack "
+                         f"--room {shlex.quote(str(room))}")
+    wait = room / "port" / "wait"
+    env["BRNRD_WAIT"] = wait.read_text().strip() if wait.is_file() else "3600"
     return env
 
 
@@ -218,7 +225,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     wait_src = home.thread_dir(thread) / "wait"
     if wait_src.is_file():
         atomic_write(room / "port" / "wait", wait_src.read_text().strip() + "\n")
-    for name in ("jack-state.json", "molt-pending"):
+    for name in ("jack-state.json", "molt-pending", "policy"):
         (room / "port" / name).unlink(missing_ok=True)
     owed_path = room / "port" / "owed.json"
     atomic_write(owed_path, json.dumps([letter.data for letter in letters]))
@@ -294,8 +301,11 @@ def _start(home: Home, strand: str, thread: str, gen: int, adapter: str,
         room = _prepare(
             home, strand, thread, gen, letters, sender_threads(facts), facts,
         )
-        argv = (fake_argv(room, _policy(home, thread)) if adapter == "fake"
-                else claude_argv(room, core, wait_seconds(room)))
+        folder = resolve(home, adapter)
+        policy = _policy(home, thread)
+        if policy is not None:
+            atomic_write(room / "port/policy", policy + "\n")
+        argv = [str(folder / "run"), str(room), core]
         log_path = room / "port" / "body.log"
         log_start = log_path.stat().st_size if log_path.is_file() else 0
         # The wake has already exposed these letters. Publish that label
@@ -316,7 +326,7 @@ def _start(home: Home, strand: str, thread: str, gen: int, adapter: str,
     facts.append(_record(home, "body.started", {
         "strand": strand, "gen": gen, "pid": proc.pid, "adapter": adapter,
     }, f"body.started:{strand}:{gen}:{proc.pid}:{mint(6)}"))
-    bodies[strand] = Body(strand, thread, gen, proc, log, log_start)
+    bodies[strand] = Body(strand, thread, gen, proc, log, folder, log_start)
     _log(home, f"start {strand} thread {thread} gen {gen} pid {proc.pid} {adapter}")
     return facts
 
@@ -430,7 +440,7 @@ def _reap(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         del bodies[strand]
         molted = _molted(home, body)
         failed = code != 0 or (not molted and bool(actionable(facts, body.thread)))
-        if failed and walled(_log_tail(home.room(strand), body.log_start)):
+        if failed and walled(body.folder, _log_tail(home.room(strand), body.log_start)):
             # The provider's window is spent. Not a death: nothing counts
             # toward the fuse or against the letters, and the thread stays
             # held and owed. `_refresh_holders` retries after `until`.
@@ -578,8 +588,6 @@ def _own_stop(stop):
 
 def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         tick: float = 0.2, stop=None, install: str | None = None) -> None:
-    if adapter not in {"fake", "claude"}:
-        raise ValueError(f"unknown adapter {adapter!r}")
     if tick <= 0:
         raise ValueError("tick must be positive")
     stop = _own_stop(stop)
