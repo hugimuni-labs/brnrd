@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+from brr.codex_usage import probe_rate_limits
+from brr.loom.runtime.usage import print_windows
+
+quota = (probe_rate_limits(timeout_seconds=4) or {}).get("quota", {})
+print_windows(("week" if quota.get(slot + "_window_minutes", 0) == 10080 else "session",
+               quota.get(slot + "_remaining_percent"), quota.get(slot + "_resets_at"))
+              for slot in ("primary", "secondary") if quota.get(slot + "_window_minutes") in (300, 10080))

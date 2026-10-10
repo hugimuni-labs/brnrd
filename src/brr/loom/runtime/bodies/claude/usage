@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+from brr.claude_usage import capture_levels
+from brr.loom.runtime.usage import print_windows
+
+levels = capture_levels(timeout_seconds=4, model="haiku")
+print_windows((name, 100 - levels[name + "_used_percentage"], levels.get(name + "_resets_at"))
+              for name in ("session", "week") if name + "_used_percentage" in levels)

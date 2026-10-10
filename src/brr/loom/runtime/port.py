@@ -100,12 +100,12 @@ def _letter_lines(letter: Fact, reply: str, compact: bool) -> list[str]:
 
 
 def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
-                    shown: set[str], sender_threads: dict[str, str]) -> str:
+                    shown: set[str], sender_threads: dict[str, str], fuel: str = "") -> str:
     """Letters this strand was already shown are compacted to id plus first line."""
     lines = [
         f"<!-- port {strand} gen {gen} · owed "
         + " ".join(str(letter.data['id']) for letter in letters) + " -->",
-        f"status: strand {strand} · gen {gen} · thread {thread}",
+        f"status: strand {strand} · gen {gen} · thread {thread}" + (f" · {fuel}" if fuel else ""),
         "owed:",
     ]
     for letter in letters:

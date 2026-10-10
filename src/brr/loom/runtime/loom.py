@@ -217,7 +217,7 @@ def _fused(home: Home, facts: list[Fact], strand: str, thread: str) -> bool:
 
 def _prepare(home: Home, strand: str, thread: str, gen: int,
              letters: list[Fact], threads: dict[str, str],
-             facts: list[Fact]) -> Path:
+             facts: list[Fact], jack: str) -> Path:
     room = home.room(strand).resolve()
     clone = clone_room(home.root, strand)
     (room / "port" / "in").mkdir(parents=True, exist_ok=True)
@@ -238,7 +238,10 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         "a letter from `loom` is a notice of something the loom could not settle, "
         "yours to deal with: its last lines name what settles it "
         "(core/loom/README.md, Notices); "
-        "when you're done, stop, and the jack holds you while letters may come\n"
+        + ("call `$BRNRD_JACK --event start` now, `$BRNRD_JACK --event post` between "
+           "steps and `$BRNRD_JACK --event stop` before ending; read each returned boundary\n"
+           if jack == "hand" else
+           "when you're done, stop, and the jack holds you while letters may come\n")
     ))
     with tempfile.TemporaryFile(mode="w+") as wake, tempfile.TemporaryFile(mode="w+") as why:
         code = run_wake(clone, thread, owed_path, loom_part=part_path, stdout=wake, stderr=why)
@@ -304,16 +307,11 @@ def _start(home: Home, strand: str, thread: str, gen: int,
         folder = resolve(home, shell)
         room = _prepare(
             home, strand, thread, gen, letters, sender_threads(facts), facts,
+            (folder / "jack").read_text().strip(),
         )
         policy = _policy(home, thread)
         if policy is not None:
             atomic_write(room / "port/policy", policy + "\n")
-        if (folder / "jack").read_text().strip() == "hand":
-            with (room / "port/wake.md").open("a") as wake:
-                wake.write("\nThis body uses a hand jack. Call `$BRNRD_JACK --event start` now, "
-                           "`$BRNRD_JACK --event post` between steps, and "
-                           "`$BRNRD_JACK --event stop` before ending. "
-                           "Read the returned boundary and answer its owed letters.\n")
         argv = [str(folder / "run"), str(room), core]
         log_path = room / "port" / "body.log"
         log_start = log_path.stat().st_size if log_path.is_file() else 0
@@ -507,13 +505,16 @@ def _walled_last(facts: list[Fact]) -> dict[str, Fact]:
 def _refresh_holders(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
     """Own holders: refresh live boundaries, retry expired walls, release corpses."""
     from .router import install_of
+    from .usage import fuel
+    shells = {f.data["strand"]: f.data.get("shell") for f in facts if f.kind == "body.started"}
     state, threads, walls = fold(facts), sender_threads(facts), _walled_last(facts)
     for thread, (strand, gen) in state.holder.items():
         if install_of(strand) != home.install_id():
             continue
         if strand in bodies or body_alive(home.room(strand)):
             text = render_boundary(strand, gen, thread, actionable(facts, thread),
-                                   state.shown.get(strand, set()), threads)
+                                   state.shown.get(strand, set()), threads,
+                                   fuel(home, shells[strand]) if shells.get(strand) else "")
             path = home.room(strand) / "port" / "in" / "boundary.md"
             if not path.is_file() or path.read_text() != text:
                 atomic_write(path, text)
