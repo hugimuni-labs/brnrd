@@ -38,6 +38,17 @@ _LOOM_KINDS = {
 }
 
 
+def strand_of(fact: Fact) -> str | None:
+    """Explicit strand, strand writer, or a letter's strand sender."""
+    strand = fact.data.get("strand")
+    if isinstance(strand, str) and strand:
+        return strand
+    if fact.by.startswith("strand:"):
+        return fact.by.split(":", 1)[1]
+    sender = fact.data.get("from") if fact.kind == "letter" else None
+    return sender if isinstance(sender, str) and sender.startswith("s-") else None
+
+
 def fact_filename(fact: Fact) -> str:
     """loom.jsonl holds leases, releases, attention, and injected letters."""
     if fact.kind in {"source", "blob"} and fact.by.startswith("loom:"):
@@ -46,13 +57,7 @@ def fact_filename(fact: Fact) -> str:
         return "loom.jsonl"
     if fact.kind == "letter" and "gen" not in fact.data:
         return "loom.jsonl"
-    strand = fact.data.get("strand")
-    if not strand and fact.by.startswith("strand:"):
-        strand = fact.by.split(":", 1)[1]
-    if not strand and fact.kind == "letter":
-        sender = fact.data.get("from")
-        if isinstance(sender, str) and sender.startswith("s-"):
-            strand = sender
+    strand = strand_of(fact)
     if not isinstance(strand, str) or not strand or "/" in strand:
         raise ValueError(f"no strand file for {fact.kind} {fact.id}")
     return f"{strand}.jsonl"

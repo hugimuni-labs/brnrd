@@ -30,8 +30,8 @@ def unrunnable_ids(facts: list[Fact]) -> set[str]:
     from respawning bodies and draining quota forever. The letter may be
     fine; the row says only that it could not be run here.
 
-    The count is the one ``project.attempts`` makes: a ``body.died`` whose
-    body had been ``shown`` the letter. A clear sets the floor at the count
+    A death counts only if that body had been ``shown`` the letter.
+    A clear sets the floor at the count
     so far, so the letter wakes again, and two further deaths quarantine it
     once more.
     """

@@ -10,16 +10,22 @@ from pathlib import Path
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import read_facts
 from brr.loom.runtime.loom import _ingest, run
+from brr.loom.runtime.selfrepo import _commit, git, init_self
 
 
 def write_thread(root: Path, thread: str, readme: str, policy: str,
                  wait: str = "20") -> None:
+    init_self(root)
     directory = Home(root).thread_dir(thread)
     directory.mkdir(parents=True, exist_ok=True)
     text = readme if readme.endswith("\n") else readme + "\n"
+    if not text.startswith("---\n"):
+        text = (f"---\nid: {thread}\nstatus: open\ntense: plan\n---\n# " + text)
     (directory / "README.md").write_text(text)
     (directory / "policy").write_text(policy.strip() + "\n")
     (directory / "wait").write_text(str(wait).strip() + "\n")
+    git(root / "self", "add", "threads")
+    _commit(root / "self", f"Seed thread {thread}.\n\nLoom-Label: taint=0; audience=self\n")
 
 
 class Loom:

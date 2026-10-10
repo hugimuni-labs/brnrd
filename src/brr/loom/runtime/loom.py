@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 import traceback
 from dataclasses import dataclass
@@ -20,10 +22,12 @@ from .attention import actionable
 from .home import Home, atomic_write, is_channel, mint
 from .ledger import LedgerConflict, append, read_facts
 from .port import (
-    fact_from_port, fact_from_taint, parse_frontmatter, render_boundary, render_wake,
+    fact_from_port, fact_from_taint, parse_frontmatter, render_boundary,
 )
 from .project import fold, generation, holder, sender_threads
-from .selfrepo import AUTHOR_EMAIL, AUTHOR_NAME, _env_without_pin
+from .selfrepo import (
+    AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, room as clone_room, run_wake,
+)
 
 SRC = str(Path(__file__).resolve().parents[3])
 FUSE_WINDOW_S = 600
@@ -60,7 +64,6 @@ class Body:
     thread: str
     gen: int
     proc: subprocess.Popen
-    started_hlc: tuple
     log: object
     log_start: int = 0
 
@@ -162,7 +165,8 @@ def _fused(home: Home, facts: list[Fact], strand: str, thread: str) -> bool:
 def _prepare(home: Home, strand: str, thread: str, gen: int,
              letters: list[Fact], threads: dict[str, str],
              facts: list[Fact]) -> Path:
-    room = home.room(strand)
+    room = home.room(strand).resolve()
+    clone = clone_room(home.root, strand)
     (room / "port" / "in").mkdir(parents=True, exist_ok=True)
     (room / "port" / "out").mkdir(parents=True, exist_ok=True)
     wait_src = home.thread_dir(thread) / "wait"
@@ -170,9 +174,23 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         atomic_write(room / "port" / "wait", wait_src.read_text().strip() + "\n")
     for name in ("jack-state.json", "molt-pending"):
         (room / "port" / name).unlink(missing_ok=True)
-    readme = (home.thread_dir(thread) / "README.md").read_text()
-    atomic_write(room / "port" / "wake.md",
-                 render_wake(readme, strand, gen, thread, letters, threads))
+    owed_path = room / "port" / "owed.json"
+    atomic_write(owed_path, json.dumps([letter.data for letter in letters]))
+    part_path = room / "port" / "loom.md"
+    atomic_write(part_path, (
+        f"you are strand {strand} on thread {thread}; letters arrive at your "
+        "tool boundaries; answer with `python -m brr.loom.runtime send --re <id> "
+        "--to thread:<from-thread> \"…\"`; commit in this self clone and land "
+        "your branch with `python -m brr.loom.runtime send-self --room .`; "
+        "when you're done, stop, and the jack holds you while letters may come\n"
+    ))
+    with tempfile.TemporaryFile(mode="w+") as wake, tempfile.TemporaryFile(mode="w+") as why:
+        code = run_wake(clone, thread, owed_path, loom_part=part_path, stdout=wake, stderr=why)
+        why.seek(0)
+        if code != 0:
+            raise SelfError(f"wake exited {code}: {why.read().strip()}")
+        wake.seek(0)
+        atomic_write(room / "port" / "wake.md", wake.read())
     shown = fold(facts).shown.get(strand, set())
     atomic_write(
         room / "port" / "in" / "boundary.md",
@@ -196,7 +214,6 @@ def body_alive(room: Path) -> bool:
     except BlockingIOError:
         return True
     else:
-        import fcntl
         fcntl.flock(fd, fcntl.LOCK_UN)
         return False
     finally:
@@ -208,7 +225,7 @@ def _spawn(room: Path, argv: list[str]) -> tuple[subprocess.Popen, object]:
     cmd = [sys.executable, "-c", _FLOCK, str(room / ".body"), *argv]
     try:
         proc = subprocess.Popen(
-            cmd, cwd=room, env=_env(room), stdin=subprocess.DEVNULL,
+            cmd, cwd=room / "self", env=_env(room), stdin=subprocess.DEVNULL,
             stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
         )
     except Exception:
@@ -219,49 +236,36 @@ def _spawn(room: Path, argv: list[str]) -> tuple[subprocess.Popen, object]:
 
 def _start(home: Home, strand: str, thread: str, gen: int, adapter: str,
            core: str, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
-    """Launch one body. Two launch failures inside the fuse window stop there."""
-    for _attempt in range(FUSE_DEATHS):
-        if strand in bodies:
-            return facts
-        letters = actionable(facts, thread)
+    """Launch one body. Process failures are reaped; launch errors reach run()."""
+    if strand in bodies:
+        return facts
+    letters = actionable(facts, thread)
+    try:
         room = _prepare(
             home, strand, thread, gen, letters, sender_threads(facts), facts,
         )
-        if adapter == "fake":
-            policy = _policy(home, thread)
-            if policy is None:
-                _attention(home, f"attention:no-policy:{thread}",
-                           f"fake adapter: thread {thread} has no policy file",
-                           thread=thread)
-                return facts
-            argv = fake_argv(room, policy)
-        elif adapter == "claude":
-            argv = claude_argv(room, core, wait_seconds(room))
-        else:
-            raise ValueError(f"unknown adapter {adapter!r}")
-        log_path = room / "port" / "body.log"
-        log_start = log_path.stat().st_size if log_path.is_file() else 0
-        try:
-            proc, log = _spawn(room, argv)
-        except OSError as exc:
-            _log(home, f"launch failed {strand}: {exc}")
-            facts.append(_record(home, "body.died",
-                                 {"strand": strand, "gen": gen, "code": 127},
-                                 f"body.died:{strand}:{gen}:launch:{mint(6)}"))
-            if _fused(home, facts, strand, thread):
-                return facts
-            continue
-        started = _record(
-            home, "body.started",
-            {"strand": strand, "gen": gen, "pid": proc.pid, "adapter": adapter},
-            f"body.started:{strand}:{gen}:{proc.pid}:{mint(6)}",
-        )
-        facts.append(started)
-        bodies[strand] = Body(
-            strand, thread, gen, proc, tuple(started.hlc or ()), log, log_start,
-        )
-        _log(home, f"start {strand} thread {thread} gen {gen} pid {proc.pid} {adapter}")
+    except (SelfError, subprocess.TimeoutExpired) as exc:
+        _attention(home, f"attention:wake:{strand}:{gen}", str(exc), thread=thread)
         return facts
+    if adapter == "fake":
+        argv = fake_argv(room, _policy(home, thread))
+    elif adapter == "claude":
+        argv = claude_argv(room, core, wait_seconds(room))
+    else:
+        raise ValueError(f"unknown adapter {adapter!r}")
+    log_path = room / "port" / "body.log"
+    log_start = log_path.stat().st_size if log_path.is_file() else 0
+    proc, log = _spawn(room, argv)
+    started = _record(
+        home, "body.started",
+        {"strand": strand, "gen": gen, "pid": proc.pid, "adapter": adapter},
+        f"body.started:{strand}:{gen}:{proc.pid}:{mint(6)}",
+    )
+    facts.append(started)
+    bodies[strand] = Body(
+        strand, thread, gen, proc, log, log_start,
+    )
+    _log(home, f"start {strand} thread {thread} gen {gen} pid {proc.pid} {adapter}")
     return facts
 
 
@@ -360,17 +364,8 @@ def _boundaries(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> None:
             atomic_write(path, text)
 
 
-def _molted(home: Home, body: Body, facts: list[Fact]) -> bool:
-    if (home.room(body.strand) / "port" / "molt-pending").is_file():
-        return True
-    for fact in facts:
-        if fact.kind != "molt":
-            continue
-        if fact.data.get("strand") != body.strand or int(fact.data.get("gen", -1)) != body.gen:
-            continue
-        if fact.hlc and body.started_hlc and tuple(fact.hlc) > tuple(body.started_hlc):
-            return True
-    return False
+def _molted(home: Home, body: Body) -> bool:
+    return (home.room(body.strand) / "port" / "molt-pending").is_file()
 
 
 def _reap(home: Home, bodies: dict[str, Body], adapter: str, core: str,
@@ -379,9 +374,13 @@ def _reap(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         code = body.proc.poll()
         if code is None:
             continue
+        # A body's last hook may have written after this tick's ingest.
+        # Drain it before the death (and the next start), or its shown
+        # letters get attributed to its successor and poison counts are lost.
+        facts = _ingest(home)
         body.close_log()
         del bodies[strand]
-        molted = _molted(home, body, facts)
+        molted = _molted(home, body)
         failed = code != 0 or (not molted and bool(actionable(facts, body.thread)))
         if failed and walled(_log_tail(home.room(strand), body.log_start)):
             # The provider's window is spent. Not a death: nothing counts

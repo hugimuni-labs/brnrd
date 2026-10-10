@@ -8,6 +8,7 @@ from typing import Iterable
 from brr.daemon2.facts import Fact, union
 
 from .home import thread_of
+from .ledger import strand_of
 
 
 @dataclass
@@ -16,18 +17,6 @@ class Fold:
     holder: dict[str, tuple[str, int]] = field(default_factory=dict)
     handled: set[str] = field(default_factory=set)
     shown: dict[str, set[str]] = field(default_factory=dict)
-
-
-def _strand(fact: Fact) -> str | None:
-    strand = fact.data.get("strand")
-    if isinstance(strand, str) and strand:
-        return strand
-    if fact.by.startswith("strand:"):
-        return fact.by.split(":", 1)[1]
-    sender = fact.data.get("from")
-    if isinstance(sender, str) and sender.startswith("s-"):
-        return sender
-    return None
 
 
 def _destination(data: dict) -> str | None:
@@ -126,7 +115,7 @@ def fold(facts: Iterable[Fact]) -> Fold:
                 if thread is not None and data.get("id"):
                     dest[str(data["id"])] = thread
             continue
-        strand = _strand(fact)
+        strand = strand_of(fact)
         if strand is None or "gen" not in data:
             continue
         gen = int(data["gen"])
@@ -159,24 +148,6 @@ def owed(facts: Iterable[Fact], thread: str) -> list[Fact]:
         if _destination(fact.data) == thread:
             letters.append(fact)
     return letters
-
-
-def attempts(facts: Iterable[Fact], letter_id: str) -> int:
-    """How many deaths belonged to a body that had been shown ``letter_id``."""
-    count = 0
-    open_ids: dict[str, set[str]] = {}
-    for fact in fold(facts).accepted:
-        strand = fact.data.get("strand")
-        if not isinstance(strand, str):
-            continue
-        if fact.kind == "body.started":
-            open_ids[strand] = set()
-        elif fact.kind == "shown" and strand in open_ids:
-            open_ids[strand].update(str(item) for item in fact.data.get("ids") or ())
-        elif fact.kind == "body.died" and strand in open_ids:
-            if letter_id in open_ids.pop(strand):
-                count += 1
-    return count
 
 
 def generation(facts: Iterable[Fact], strand: str) -> int | None:

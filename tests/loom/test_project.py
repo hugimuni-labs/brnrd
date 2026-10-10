@@ -4,7 +4,8 @@ from brr.daemon2.facts import Fact
 
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import LedgerConflict, append, read_facts
-from brr.loom.runtime.project import attempts, holder, owed
+from brr.loom.runtime.attention import unrunnable_ids
+from brr.loom.runtime.project import holder, owed
 
 STRAND = "s-ab12-aaaaaa"
 OTHER = "s-ab12-bbbbbb"
@@ -69,7 +70,7 @@ def test_answer_from_the_wrong_holder_does_not_count():
     assert [fact.data["id"] for fact in owed(facts, "ta")] == [LETTER]
 
 
-def test_attempts_count_a_shown_death_and_ignore_one_that_was_not_shown():
+def test_unrunnable_counts_shown_deaths_and_ignores_one_that_was_not_shown():
     facts = [
         _lease(STRAND, "ta", 1, 1),
         _fact("body.started", "loom:ab12",
@@ -85,7 +86,16 @@ def test_attempts_count_a_shown_death_and_ignore_one_that_was_not_shown():
         _fact("body.died", "loom:ab12",
               {"strand": STRAND, "gen": 1, "code": 1}, "body.died:2", 6),
     ]
-    assert attempts(facts, LETTER) == 1
+    assert unrunnable_ids(facts) == set()
+    facts.extend([
+        _fact("body.started", "loom:ab12",
+              {"strand": STRAND, "gen": 1, "pid": 33}, "body.started:3", 7),
+        _fact("shown", f"strand:{STRAND}",
+              {"strand": STRAND, "gen": 1, "ids": [LETTER]}, f"{STRAND}/shown3", 8),
+        _fact("body.died", "loom:ab12",
+              {"strand": STRAND, "gen": 1, "code": 1}, "body.died:3", 9),
+    ])
+    assert unrunnable_ids(facts) == {LETTER}
 
 
 def test_same_id_different_content_is_rejected(tmp_path):
