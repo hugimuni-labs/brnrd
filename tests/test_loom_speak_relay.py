@@ -11,7 +11,7 @@ from brr.loom.runtime.channels import relay
 from brr.loom.runtime.config import loom_clock
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, read_facts
-from brr.loom.runtime.port import PortError, write_send
+from brr.loom.runtime.port import PortError, fact_from_port, parse_boundary, render_boundary, write_send
 from brr.loom.runtime.project import fold
 from brr.loom.runtime.router import _answers_event, _header
 
@@ -50,13 +50,13 @@ class FakeClient:
 @pytest.fixture
 def client(monkeypatch):
     c = FakeClient()
-    monkeypatch.setitem(speak_mod.EFFECTS, "telegram", relay.make_effect(c))
+    monkeypatch.setitem(speak_mod.EFFECTS, "relay", relay.make_effect(c))
     return c
 
 
 def test_long_answer_splits_and_a_lost_part_is_never_resent(home, lease, monkeypatch):
     c = FakeClient(fail_on={2})
-    monkeypatch.setitem(speak_mod.EFFECTS, "telegram", relay.make_effect(c))
+    monkeypatch.setitem(speak_mod.EFFECTS, "relay", relay.make_effect(c))
     body = "\n".join(f"line {i:04d} " + "x" * 80 for i in range(100))  # ~9,000 chars
     status, fact = speak_mod.speak(home, lease, "s-a/answer", body,
                                    channel="channel:telegram/42")
@@ -112,6 +112,9 @@ def test_header_and_event_resolution_from_the_fold(home):
 def test_port_accepts_relay_channels_and_refuses_unknown_kinds(tmp_path):
     room = tmp_path / "home" / "rooms" / "s-aaaa-one"
     (room / "port" / "out").mkdir(parents=True)
+    for platform in ("whatsapp", "slack"):
+        with pytest.raises(PortError):
+            write_send(room, to=f"channel:{platform}/42", sender="s-aaaa-one", body="b")
     with pytest.raises(PortError):
         write_send(room, to="channel:email/x", sender="s-aaaa-one", body="b")
     with pytest.raises(PortError):
@@ -120,18 +123,20 @@ def test_port_accepts_relay_channels_and_refuses_unknown_kinds(tmp_path):
 
 def test_a_reply_binds_to_the_letter_its_message_carried(home, lease, client):
     speak_mod.speak(home, lease, "s-a/answer", "hi", channel="channel:telegram/42")
+    from test_loom_relay import speak as spoke
+    spoke(home, "s-a", "first", chat="telegram/42", receipt=False)
     facts = read_facts(home)
-    assert relay.letter_for_message(facts, "channel:telegram/42", 1001) == "s-a/answer"
-    assert relay.letter_for_message(facts, "channel:telegram/42", "1001") == "s-a/answer"
+    assert relay.thread_for_message(facts, "channel:telegram/42", 1001) == "first"
+    assert relay.thread_for_message(facts, "channel:telegram/42", "1001") == "first"
     # Same id, another chat or platform: binds nothing.
-    assert relay.letter_for_message(facts, "channel:telegram/43", 1001) is None
-    assert relay.letter_for_message(facts, "channel:whatsapp/42", 1001) is None
-    assert relay.letter_for_message(facts, "channel:telegram/42", 9999) is None
+    assert relay.thread_for_message(facts, "channel:telegram/43", 1001) is None
+    assert relay.thread_for_message(facts, "channel:whatsapp/42", 1001) is None
+    assert relay.thread_for_message(facts, "channel:telegram/42", 9999) is None
     # A strand can't plant a receipt: only the loom's own speech.part counts.
     forged = Fact(kind="speech.part", by="strand:s-x", id="speech.part:forged",
                   data={"key": "s-x/evil", "channel": "channel:telegram/42",
                         "receipt": {"message_id": 7}})
-    assert relay.letter_for_message([forged], "channel:telegram/42", 7) is None
+    assert relay.thread_for_message([forged], "channel:telegram/42", 7) is None
 
 
 def test_a_split_event_answer_responds_once_then_follows_with_messages(home, lease, client):
@@ -156,3 +161,31 @@ def test_client_routes_answers_to_responses_and_the_rest_to_messages(tmp_path, m
         ("/v1/daemons/responses", {"event_id": "ev_1", "body_markdown": "a", "status": "done"}),
         ("/v1/daemons/messages", {"platform": "telegram", "body_markdown": "b"}),
     ]
+
+
+def test_response_without_message_id_has_no_binding_receipt(home, lease, monkeypatch):
+    class ResponseClient:
+        def send(self, payload):
+            return {"event_id": payload["event_id"], "forwarded": True}
+    monkeypatch.setitem(speak_mod.EFFECTS, "relay", relay.make_effect(ResponseClient()))
+    status, _ = speak_mod.speak(home, lease, "s-a/answer#2", "hi",
+                               channel="channel:telegram/42", context={"event_id": "ev_1"})
+    assert status == "sent"
+    assert not any(f.kind == "speech.part" for f in read_facts(home))
+
+
+def test_port_cannot_claim_another_strands_sender(home):
+    from test_loom_relay import speak as spoke
+    spoke(home, "s-writer", "first", receipt=False)
+    spoke(home, "s-other", "second", receipt=False)
+    letter = fact_from_port({"kind": "letter", "id": "s-writer/spoof",
+                             "to": "channel:telegram/42", "from": "s-other",
+                             "body": "hello"}, "s-writer", 1)
+    assert letter.by == "strand:s-writer"
+    assert letter.data["from"] == "s-writer"
+    state = fold(read_facts(home))
+    assert _header(state, letter) == "s-writer · first"
+    boundary = render_boundary("s-reader", 1, "inbox", [letter], set(),
+                               {"s-writer": "first", "s-other": "second"})
+    shown, = parse_boundary(boundary).letters
+    assert shown.sender == "s-writer" and shown.reply == "thread:first"

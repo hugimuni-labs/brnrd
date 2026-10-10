@@ -1,107 +1,89 @@
 # Protecting main
 
-`core/immune` is the self's own check. A push reaches `main` only if this
-script, as it exists on the `main` being replaced, says so. Strand branches are
-not checked. This file is the part a person does by hand. Nothing here is
-applied automatically.
+A push to `main` is judged by `core/immune` from the incumbent tip. Only
+an all-zero old tip (the first push) uses the incoming script. Missing or
+empty scripts refuse. Strand branches bypass the immune checks.
 
-## On a forge
+## Installing the gate
 
-A pull request can edit this workflow file itself, so on GitHub the check is only as strong as where the workflow is read from: make `immune` a required status through a ruleset, and keep strand tokens without admin rights.
+`install_pre_receive` in `brr.loom.runtime.merge` writes the shim. On a
+bare self it lives at `hooks/pre-receive`; on a working self it lives at
+`.git/hooks/pre-receive` and sets `receive.denyCurrentBranch=updateInstead`.
+An accepted push updates the checked-out self. A dirty worktree still
+refuses the push. Replacing a script beside the repo does not change the
+committed script that judges the next push.
 
-1. Copy `ci/immune.yml` to `.github/workflows/immune.yml` in the self (it
-   already lives in the seed, under `ci/`, so a self built from the seed
-   has the file — it still has to sit where the forge looks).
-2. Open the repository's branch protection for `main` and require the
-   `immune` status check. Do this after the workflow has run once; a forge
-   will not offer a check it has never seen.
-3. Give a strand a token that can push and cannot administer the
-   repository. A fine-grained personal access token, or a GitHub App
-   installation token, with contents write and no administration, cannot
-   lift the protection. A strand that holds an admin token can, which is
-   why a room never gets one.
+By hand, install the same shim: extract `git show <old>:core/immune` into
+a temporary file, refuse failed extraction or an empty file, then run
+`sh <file> <old> <new> <ref>`. On the first push extract from `<new>`.
+Do not pipe extraction directly into `sh`: an empty script exits zero.
+Deletion uses the incumbent script, which refuses deletion of `main`.
+Non-fast-forward updates to `main` also refuse.
 
-The workflow runs `sh core/immune <old> <new>` on pushes to `main`, and the
-same script with the pull request's base and head. The first push of a
-branch sends an all-zero `<old>`. The script accepts that and runs the
-checks against `<new>` alone.
+On GitHub, copy `ci/immune.yml` to `.github/workflows/immune.yml`, run it
+once, and require the `immune` status for `main` through branch protection
+or a ruleset. The workflow uses the push's before/after tips or the PR's
+base/head, and extracts the incumbent script with the same fail-closed
+rule. The workflow itself must be protected: a PR can edit it. Give
+strands contents-write tokens without administration rights, so they
+cannot lift protection. The seed does not configure forge protections.
 
-## Where the hook is installed
+## Checks
 
-The loom installs the hook with `install_pre_receive` (see
-`brr.loom.runtime.merge`). The hook is a shim: it reads `core/immune` out
-of the tip being replaced and runs that. **The incumbent judges the change**:
-a push that rewrites `core/immune` to `exit 0`, or deletes a check, is judged
-by the rules it is trying to remove. `core/immune` then runs `immune.d/` from
-both the old tip (reasons prefixed `old/`) and the new one, so a change must
-also pass its own new rules. Only the first push is judged by itself alone. Replacing the file on disk, next to
-the repo, does not change what the next push is judged by.
+`core/immune` runs executable files in `core/immune.d/` at both tips, in
+byte-sorted name order, even after a failure. Incumbent failures carry an
+`old/` prefix. A change that deletes or rewrites a check must still pass
+the incumbent checks as well as the incoming checks. The first push runs
+only the incoming set. An absent check directory adds no checks.
 
-On a bare repo the shim is `hooks/pre-receive`. On a working self — `main`
-checked out, which is what a room's `origin` is — the shim is
-`.git/hooks/pre-receive`, and the install sets
-`receive.denyCurrentBranch` to `updateInstead`. An accepted push then
-updates that worktree. A dirty worktree still refuses the push; the
-install does not force it.
+Keep `10-readme`, `20-labels` and `50-core-notice` executable. Copying the
+seed without their executable bits silently drops the checks. A failed
+check's stderr is prefixed with its name; a silent failure is still
+named. `LOOM_IMMUNE_SH` selects the shell for the shim and checks when set.
 
-By hand, the same shape is: a `hooks/pre-receive` that runs
+`10-readme` validates thread README frontmatter, heading and folder id.
+`50-core-notice` never refuses: changes under `core/` print
+`core changed: <paths>` for the person's notice.
 
-```
-git show <new>:core/immune
-```
+## Labels and widening
 
-and feeds the result to `sh`, with the hook's `<old> <new> <ref>` line as
-its arguments. A deletion of `main` has no new commit, so the shim runs the
-script from the tip being deleted. That script refuses the deletion.
+`20-labels` walks every new commit. No `Loom-Label` refuses unless the
+committer's email is in the incumbent `core/loom/people-commit` list
+(the incoming list on the first push). Empty lists enroll nobody;
+comments and blank lines are ignored. A push cannot enroll itself.
+`init` enrolls the person's global git email for hand commits and stamps
+the seed with its own clean label. Bodies receive the unenrolled
+`brnrd-loom <loom@localhost>` author and committer identity.
 
-## What the checks are
+A labeled commit is checked regardless of enrollment. `taint=1` requires
+a `Widening` citing `people/<name>/agreement.md#<clause-id>`, with a
+`{#clause-id}` marker at the incoming tip. Every widening citation is
+validated, including on clean or unlabeled commits. Checks prove existence,
+not the meaning of the clause. Audience must contain `self`. A taint
+refusal names the strand.
 
-Every executable file in `core/immune.d/` runs, in name order, as
-`<check> <old> <new>`. Exit 0 accepts. Exit 1 refuses, and the refusal
-lists every failing check, not just the first. A file in that directory
-without the executable bit does not run. Copying the seed with a tool that
-drops `+x` silently drops the check. `10-readme` (step 2), `20-labels` and `30-widening` (step 4b), and
-`50-core-notice` (this step) all have to stay executable.
+`send_to_self` stamps each outgoing commit from the strand's fact fold,
+overwrites body-written labels and drops body-written widening citations.
+Only a widening supplied to the send call is stamped. Shown letters,
+the parent at birth, taint facts, URL sources and non-empty jack error
+logs feed the fold; leased strand senders contribute their own fold.
 
-`50-core-notice` never refuses. When the push touches `core/` it prints
-one line, `core changed: <paths>`. The loom turns that line into the
-person's notice. It is not a block.
+The jack observes `WebFetch` and `WebSearch`. Bash does not taint:
+tainting every shell call would erase the label's usefulness. The sandbox
+owns shell reach. A failed taint write is logged, and a non-empty jack
+error log fails closed on the label while the work stays open.
 
-Stderr from a failing check is prefixed with the check's file name
-(`10-readme: threads/inbox/README.md: why`). A check should print the
-reason, not its own name, or the name appears twice.
+On this host these controls stop accidents and honest injections. A body
+running as the person can override its git identity, forge trailers or
+rewrite facts and hooks. Enforcement needs protected forge checks and a
+sandbox that fences the push credential and those writable surfaces.
 
-## Labels
+## Merge drivers
 
-`20-labels` reads `Loom-Label` on each new commit. No trailer refuses,
-unless the committer's email is listed in `core/loom/people-commit` at
-both tips. `taint=1` refuses unless a `Widening` trailer cites a clause
-that `30-widening` can see at the new tip: a line `{#clause-id}` in
-`people/<name>/agreement.md`. Existence only. Audience must contain
-`self`. One stderr line per commit, and a taint refusal names the strand.
-
-The seed lists no address. Comments and blank lines are not addresses.
-An empty list does not refuse an unlabeled commit, so the self's first
-push, and a push that never went through `send_to_self`, still land.
-Once either tip lists an address, an unlabeled commit has to be from an
-address on both non-empty lists. A commit that carries `Loom-Label` is
-checked either way. `send_to_self` always stamps, and overwrites a
-trailer the body wrote.
-
-Bash does not taint. A shell can read or fetch anything, and tainting
-every shell call would taint every strand, which is the same as having
-no labels. The sandbox owns that reach. The jack taints `WebFetch` and
-`WebSearch` only. A failed taint write is logged, and a strand whose
-jack error log is non-empty is tainted: the work stays open, the label
-fails closed.
-
-On this host the labels stop accidents and honest injections. They do
-not stop a body that can rewrite the hook, the stamp, or the facts.
-
-## What this step does not do
-
-`merge=union` is set for `memory/scars`, `memory/itches`, `memory/moves`,
-and `threads/*/notes`. Union is built into git. It needs no driver
-configuration. `threads/*/README.md` and `memory/stance.md` use the
-`loom-readme` driver. A result that fails step 2's README parser stops
-the rebase. The driver does not decide what the prose means.
+`merge=union` applies to `memory/scars`, `memory/itches`, `memory/moves`
+and `threads/*/notes`. Git provides it without driver configuration.
+`threads/*/README.md` uses `loom-readme`: the configured text merge body
+returns a README, and invalid output stops the rebase. `memory/stance.md`
+uses git's ordinary merge because it has no README frontmatter. The
+strand resolves a stop in its room and retries; the third stop aborts
+that send. The driver does not judge the prose's meaning.

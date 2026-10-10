@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from .selfrepo import _segment, git
+
 SELF_AUDIENCE = frozenset({"self"})
 _URL_SCHEMES = ("https://", "http://")
 
@@ -32,40 +34,6 @@ CLEAN = Label(False, SELF_AUDIENCE)
 
 def join(left: Label, right: Label) -> Label:
     return Label(left.taint or right.taint, left.audience & right.audience)
-
-
-def parse_trailer(value: str) -> Label | None:
-    """``taint=<0|1>; audience=<a,b>``. Missing pieces do not default open."""
-    if not value or not value.strip():
-        return None
-    taint: bool | None = None
-    audience: frozenset[str] | None = None
-    for part in value.split(";"):
-        piece = part.strip()
-        if piece.startswith("taint="):
-            bit = piece.split("=", 1)[1].strip()
-            if bit not in {"0", "1"}:
-                return None
-            taint = bit == "1"
-        elif piece.startswith("audience="):
-            raw = piece.split("=", 1)[1].strip()
-            names = frozenset(item for item in raw.split(",") if item)
-            audience = names
-    if taint is None:
-        return None
-    return Label(taint, SELF_AUDIENCE if audience is None else audience)
-
-
-def _segment(value: str) -> str | None:
-    if (
-        not value
-        or value in {".", ".."}
-        or "/" in value
-        or "\\" in value
-        or "\x00" in value
-    ):
-        return None
-    return value
 
 
 def _strip_prefix(sender: str) -> str:
@@ -112,18 +80,12 @@ def _letter_map(facts) -> dict[str, object]:
 
 def _explicit(fact) -> Label | None:
     raw = (fact.data or {}).get("label")
-    if isinstance(raw, dict) and "taint" in raw:
-        bit = raw.get("taint")
-        if isinstance(bit, str):
-            bit = bit == "1" or bit.lower() == "true"
-        audience = raw.get("audience")
-        if isinstance(audience, str):
-            audience = [item for item in audience.split(",") if item]
-        names = frozenset(str(item) for item in audience) if audience else SELF_AUDIENCE
-        return Label(bool(bit), names)
-    if isinstance(raw, str):
-        return parse_trailer(raw)
-    return None
+    if not isinstance(raw, dict):
+        return None
+    bit, audience = raw.get("taint"), raw.get("audience")
+    if not isinstance(bit, bool) or not isinstance(audience, list):
+        return None
+    return Label(bit, frozenset(audience))
 
 
 def _about(fact, strand: str) -> bool:
@@ -278,19 +240,7 @@ def label_inputs(room: Path) -> tuple[str, list, Path | None, str]:
 
 
 def _strand_of(room: Path) -> str:
-    import os
-    import subprocess
-    env = {
-        key: value for key, value in os.environ.items()
-        if key not in {
-            "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX",
-            "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE",
-        }
-    }
-    proc = subprocess.run(
-        ["git", "-C", os.fspath(room), "symbolic-ref", "--short", "HEAD"],
-        env=env, capture_output=True, text=True, check=False,
-    )
+    proc = git(room, "symbolic-ref", "--short", "HEAD", check=False)
     if proc.returncode == 0:
         branch = proc.stdout.strip()
         if branch.startswith("strand/"):

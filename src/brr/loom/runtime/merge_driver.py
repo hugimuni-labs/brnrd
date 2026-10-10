@@ -15,7 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from brr.loom.runtime.selfrepo import ReadmeError, parse_readme
+from brr.loom.runtime.selfrepo import ReadmeError, git, parse_readme
 
 
 def install_merge_driver(repo: Path) -> None:
@@ -31,13 +31,7 @@ def install_merge_driver(repo: Path) -> None:
         f"{shlex.quote(sys.executable)} -m brr.loom.runtime merge-driver "
         "%O %A %B %P"
     )
-    proc = subprocess.run(
-        ["git", "-C", os.fspath(repo), "config", "merge.loom-readme.driver", command],
-        capture_output=True, text=True, check=False,
-    )
-    if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout).strip()
-        raise RuntimeError(f"could not set merge.loom-readme.driver: {detail}")
+    git(repo, "config", "merge.loom-readme.driver", command)
 
 
 def fake_merge(ours: str, theirs: str) -> str:
@@ -69,8 +63,7 @@ def haiku_merge(ours: str, theirs: str, path: str) -> str | None:
     )
     try:
         proc = subprocess.run(
-            ["claude", "-p", "--model", "haiku",
-             "--dangerously-skip-permissions", "--", prompt],
+            ["claude", "-p", "--model", "haiku", "--", prompt],
             capture_output=True, text=True, timeout=120, check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -86,7 +79,7 @@ def acceptable(text: str, path: str) -> bool:
         data = parse_readme(text)
     except ReadmeError:
         return False
-    if Path(path).name == "README.md" and data.get("id") != Path(path).parent.name:
+    if data.get("id") != Path(path).parent.name:
         return False
     return True
 
@@ -119,8 +112,6 @@ def merge(base: str, ours: str, theirs: str, path: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    if args and args[0] == "merge-driver":
-        args = args[1:]
     if len(args) != 4:
         print("usage: python -m brr.loom.runtime merge-driver %O %A %B %P", file=sys.stderr)
         return 1

@@ -1,6 +1,8 @@
 """``loom/config.toml``: the knobs one home's looms share.
 
-A four-line file, parsed here, so step 3 does not take a TOML dependency
+Flat ``key = value`` lines only: ``[sections]`` are ignored, so the relay
+switch is ``relay_state = "<dir>"``, never
+``[channels.relay]``. A few-line file, parsed here, so step 3 does not take a TOML dependency
 on Python 3.10. Unknown keys are ignored. ``BRNRD_LOOM_CLOCK_SKEW_S`` is
 test-only: production leaves it unset and ``loom_clock`` is ``time.time``.
 """
@@ -24,6 +26,8 @@ class LoomConfig:
     router_ttl: float = DEFAULT_TTL
     max_skew: float = DEFAULT_SKEW
     margin: float = DEFAULT_MARGIN
+    #: The account's cloud gate state directory (holds ``gates/cloud.json``).
+    relay_state: str | None = None
 
 
 def loom_clock() -> float:
@@ -78,8 +82,15 @@ def load_config(root: Path | str) -> LoomConfig:
             return default
         return value
 
+    relay_state = found.get("relay_state")
+    if not isinstance(relay_state, str) or not relay_state.strip():
+        relay_state = None
+    else:
+        relay_state = os.path.expanduser(relay_state.strip())
+
     return LoomConfig(
         name=name,
+        relay_state=relay_state,
         router_ttl=number("router_ttl", DEFAULT_TTL) or DEFAULT_TTL,
         max_skew=number("max_skew", DEFAULT_SKEW),
         margin=number("margin", DEFAULT_MARGIN),

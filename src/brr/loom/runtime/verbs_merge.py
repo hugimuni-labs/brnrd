@@ -1,8 +1,4 @@
-"""``python -m brr.loom.runtime <verb>``.
-
-Step 4a owns ``send-self``. Sibling strands add their verbs as further
-branches of :func:`main`; the parent merges the dispatchers.
-"""
+"""The ``send-self`` command parser and its outcome rendering."""
 
 from __future__ import annotations
 
@@ -13,25 +9,6 @@ from brr.loom.runtime.merge import SendError, send_to_self
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = list(sys.argv[1:] if argv is None else argv)
-    if not args or args[0] in ("-h", "--help"):
-        _usage()
-        return 2
-    verb, rest = args[0], args[1:]
-    if verb == "send-self":
-        return _cmd_send_self(rest)
-    print(f"unknown verb: {verb}", file=sys.stderr)
-    return 2
-
-
-def _usage() -> None:
-    print(
-        "usage: python -m brr.loom.runtime send-self --room DIR [--widening REF]",
-        file=sys.stderr,
-    )
-
-
-def _cmd_send_self(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime send-self")
     parser.add_argument("--room", required=True)
     parser.add_argument("--widening", default=None)
@@ -58,14 +35,8 @@ def _emit(outcome) -> int:
         for path in outcome.files:
             print(path)
         return 3
-    if outcome.status == "refused":
-        sys.stderr.write(outcome.stderr)
-        if outcome.stderr and not outcome.stderr.endswith("\n"):
-            sys.stderr.write("\n")
-        return 1
-    print(f"unknown outcome: {outcome.status}", file=sys.stderr)
+    # send_to_self's remaining outcome is refused; no external status enters.
+    sys.stderr.write(outcome.stderr)
+    if outcome.stderr and not outcome.stderr.endswith("\n"):
+        sys.stderr.write("\n")
     return 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

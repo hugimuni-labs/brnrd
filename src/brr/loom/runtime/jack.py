@@ -18,13 +18,6 @@ def _boundary_text(room: Path) -> str:
     return path.read_text()
 
 
-def _load(room: Path) -> Boundary:
-    text = _boundary_text(room)
-    if not text.strip():
-        return Boundary.empty()
-    return parse_boundary(text)
-
-
 def _state(room: Path) -> int:
     path = room / "port" / "jack-state.json"
     if not path.is_file():
@@ -84,10 +77,9 @@ def _poll(room: Path) -> str:
         if _molt_pending(room):
             return ""
         text = _boundary_text(room)
-        if text.strip():
-            parsed = parse_boundary(text)
-            if parsed.ids:
-                return _block(room, text, parsed)
+        parsed = parse_boundary(text)
+        if parsed.ids:
+            return _block(room, text, parsed)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return ""
@@ -132,7 +124,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         _set_state(room, 0)
         _note_tool(room, stdin_text)
     text = _boundary_text(room)
-    parsed = parse_boundary(text) if text.strip() else Boundary.empty()
+    parsed = parse_boundary(text)
     if event == "start":
         if not parsed.ids:
             return ""

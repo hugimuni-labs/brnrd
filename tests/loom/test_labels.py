@@ -176,3 +176,20 @@ def test_send_clean_cli(tmp_path: Path) -> None:
     front = parse_frontmatter(found[0].read_text(encoding="utf-8"))
     assert front["clean"] == "found"
     assert "taint=0" in front["label"]
+
+
+def test_label_facts_preserve_empty_audience_and_recurse_for_strand_senders() -> None:
+    facts = [
+        _fact("lease", "lease-p", {"strand": "parent", "gen": 1, "thread": "p"}),
+        _fact("label.tainted", "t-p", {"strand": "parent"}),
+        _fact("letter", "p/1", {"id": "p/1", "from": "parent"}),
+        _fact("shown", "shown-c", {"strand": "child", "ids": ["p/1"]}),
+    ]
+    assert strand_label(facts, "child", jack_log="").taint is True
+    facts.extend([
+        _fact("letter", "schema/1", {"id": "schema/1", "from": "parent", "label": {"taint": False, "audience": []}}),
+        _fact("shown", "shown-schema", {"strand": "schema", "ids": ["schema/1"]}),
+    ])
+    result = strand_label(facts, "schema", jack_log="")
+    assert result.taint is False
+    assert result.audience == frozenset()

@@ -3,4 +3,3 @@ memory/itches/*.md merge=union
 memory/moves/*.md merge=union
 threads/*/notes/*.md merge=union
 threads/*/README.md merge=loom-readme
-memory/stance.md merge=loom-readme

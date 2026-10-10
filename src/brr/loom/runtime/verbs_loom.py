@@ -105,28 +105,3 @@ def _jack(argv: list[str]) -> int:
     _code, out = run_jack(args.event, Path(args.room), stdin_text)
     sys.stdout.write(out)
     return 0
-
-
-def main(argv: list[str] | None = None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv or argv[0] in {"-h", "--help"}:
-        sys.stderr.write(
-            "usage: python -m brr.loom.runtime loom|send|molt|jack|attention ...\n")
-        return 2 if argv else 0
-    verb, rest = argv[0], argv[1:]
-    if verb == "loom":
-        return _loom(rest)
-    if verb == "send":
-        return _send(rest)
-    if verb == "molt":
-        return _molt(rest)
-    if verb == "jack":
-        return _jack(rest)
-    if verb == "attention":
-        return _attention(rest)
-    sys.stderr.write(f"unknown verb {verb}\n")
-    return 2
-
-
-if __name__ == "__main__":
-    sys.exit(main())

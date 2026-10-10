@@ -23,11 +23,11 @@ from .port import (
     fact_from_port, fact_from_taint, parse_frontmatter, render_boundary, render_wake,
 )
 from .project import fold, generation, sender_threads
+from .selfrepo import AUTHOR_EMAIL, AUTHOR_NAME, _env_without_pin
 
 SRC = str(Path(__file__).resolve().parents[3])
 FUSE_WINDOW_S = 600
 FUSE_DEATHS = 2
-_GIT_PIN = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
 # Held by the body process, not the loom: the wrapper flocks, then execs.
 # preexec_fn after fork from the test's loom thread can deadlock on a lock
 # another thread still owns. The fd stays open across exec, so the lock
@@ -72,13 +72,15 @@ def _log(home: Home, message: str) -> None:
 
 
 def _env(room: Path) -> dict[str, str]:
-    env = os.environ.copy()
-    for name in _GIT_PIN:
-        env.pop(name, None)
+    env = _env_without_pin()
     parts = [part for part in env.get("PYTHONPATH", "").split(os.pathsep) if part]
     if SRC not in parts:
         parts.insert(0, SRC)
     env["PYTHONPATH"] = os.pathsep.join(parts)
+    # Human enrollment is for hand commits; a body must not inherit it.
+    for role in ("AUTHOR", "COMMITTER"):
+        env[f"GIT_{role}_NAME"] = AUTHOR_NAME
+        env[f"GIT_{role}_EMAIL"] = AUTHOR_EMAIL
     env["BRNRD_ROOM"] = str(room)
     return env
 
@@ -499,6 +501,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
     from .router import Router
     router = Router(home)
     _recover(home)
+    relay = _arm_relay(home, router.config, stop)
     bodies: dict[str, Body] = {}
     try:
         while not (stop is not None and stop.is_set()):
@@ -510,3 +513,33 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 break
     finally:
         _shutdown(bodies)
+        if relay is not None:
+            _disarm_relay(relay)
+
+
+def _arm_relay(home: Home, config, stop):
+    """``relay_state`` arms the speech effect and the relay poll thread."""
+    if not config.relay_state:
+        return None
+    from brr.gates.relay_lock import RelayLock
+    from . import speak
+    from .channels.relay import RelayClient, make_effect, poll_forever
+    client = RelayClient(config.relay_state)
+    speak.EFFECTS["relay"] = make_effect(client)
+    lock = RelayLock(config.relay_state, "loom")
+    thread = threading.Thread(
+        target=poll_forever, args=(home, client, lock, stop),
+        kwargs={"log": lambda message: _log(home, message)},
+        daemon=True, name="loom-relay",
+    )
+    thread.start()
+    _log(home, f"relay: armed on {config.relay_state}")
+    return thread
+
+
+def _disarm_relay(thread) -> None:
+    from . import speak
+    speak.EFFECTS.pop("relay", None)
+    # The poll thread sees ``stop`` within one long-poll; it releases the
+    # lock and its want on the way out. A daemon thread never blocks exit.
+    thread.join(timeout=1.0)

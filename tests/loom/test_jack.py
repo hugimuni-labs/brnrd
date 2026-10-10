@@ -23,7 +23,7 @@ def _room(tmp_path) -> Path:
 
 def _letter(body="ping-1\nmore"):
     return Fact(
-        kind="letter", by="person:p-test", id="p-test/abcde",
+        kind="letter", by="strand:s-ab12-bbbbbb", id="p-test/abcde",
         data={"id": "p-test/abcde", "to": "thread:ta", "body": body, "from": "s-ab12-bbbbbb"},
     )
 
@@ -130,3 +130,12 @@ def test_claude_adapter_pins_the_three_hooks(tmp_path):
         blob = json.dumps(hooks)
         assert f"--event {event}" in blob
         assert "--shell claude" in blob
+
+
+def test_stop_shows_owed_letters_before_reading_wait(tmp_path):
+    room = _room(tmp_path)
+    text = _write(room, [_letter()])
+    (room / "port" / "wait").write_text("broken wait")
+    payload = json.loads(execute("stop", room, "{}"))
+    assert payload == {"decision": "block", "reason": text}
+    assert list((room / "port" / "out").glob("*.md"))

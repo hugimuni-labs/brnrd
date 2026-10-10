@@ -5,15 +5,15 @@
 #   no Loom-Label  → refuse, unless the committer is enrolled
 #   taint=1        → refuse, unless a Widening trailer cites a real clause at <new>
 #   audience lacks self → refuse
-# One stderr line per commit and reason. The harness prefixes the check name.
+# Every Widening must cite a real clause, including on clean or unlabeled
+# commits. One stderr line per reason; the harness prefixes the check name.
 #
 # Enrollment is core/loom/people-commit: one email per line, # comments
 # ignored. Fail closed: an empty list enrolls nobody, so an unlabeled
 # commit is refused (a body pushing with raw git and no trailer must not
-# skip the labels). An unlabeled commit must be from an address on BOTH
-# lists, old and new, so a push cannot enroll itself or delete the list and
-# slip through. The first push (old = zeros) is judged by <new>'s list
-# alone; the seed commit itself carries Loom-Label. A commit that carries
+# skip the labels). An unlabeled commit must use the incumbent list, so a
+# push cannot enroll itself. The first push (old = zeros) uses <new>'s list;
+# the seed commit itself carries Loom-Label. A commit that carries
 # Loom-Label is checked either way. send_to_self always stamps one.
 #
 # Not enforced here: a Loom-Label is a trailer, and anything that can push
@@ -101,8 +101,9 @@ valid_widening() {
     grep -F "{#$clause}" "$blob" >/dev/null 2>&1
 }
 
-load_list "$old" "$tmp/old-list"
-load_list "$new" "$tmp/new-list"
+enrollment=$old
+if zeros_p "$old"; then enrollment=$new; fi
+load_list "$enrollment" "$tmp/people"
 
 if zeros_p "$old"; then
     git rev-list --reverse "$new" >"$tmp/commits" 2>/dev/null || : >"$tmp/commits"
@@ -119,12 +120,19 @@ while IFS= read -r sha || [ -n "$sha" ]; do
     label=$(trailer_values Loom-Label | head -n 1)
     strand=$(trailer_values Loom-Strand | head -n 1)
     [ -n "$strand" ] || strand="?"
-    if [ -z "$label" ]; then
-        if zeros_p "$old"; then
-            enrolled "$tmp/new-list" "$email" && continue
-        elif enrolled "$tmp/old-list" "$email" && enrolled "$tmp/new-list" "$email"; then
-            continue
+    opened=1
+    trailer_values Widening >"$tmp/widen"
+    while IFS= read -r cite || [ -n "$cite" ]; do
+        [ -n "$cite" ] || continue
+        if valid_widening "$cite"; then
+            opened=0
+        else
+            printf '%s: widening %s\n' "$short" "$cite" >&2
+            status=1
         fi
+    done <"$tmp/widen"
+    if [ -z "$label" ]; then
+        enrolled "$tmp/people" "$email" && continue
         printf '%s: no Loom-Label\n' "$short" >&2
         status=1
         continue
@@ -137,15 +145,6 @@ while IFS= read -r sha || [ -n "$sha" ]; do
         continue
     fi
     if [ "$taint" = "1" ]; then
-        opened=1
-        trailer_values Widening >"$tmp/widen"
-        while IFS= read -r cite || [ -n "$cite" ]; do
-            [ -n "$cite" ] || continue
-            if valid_widening "$cite"; then
-                opened=0
-                break
-            fi
-        done <"$tmp/widen"
         if [ "$opened" -eq 1 ]; then
             printf '%s: taint=1 strand %s\n' "$short" "$strand" >&2
             status=1

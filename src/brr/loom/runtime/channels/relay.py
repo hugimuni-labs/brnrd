@@ -1,7 +1,9 @@
 """One relay poll into the ledger. Event identity survives cursor resets.
 
-This adapter is not armed by the loom yet: the shared-consumer cutover is
-slice 3. The injected client exposes ``pull(cursor)`` and
+``loom.run`` arms it when ``loom/config.toml`` sets ``relay_state``
+(slice 3): ``poll_forever`` holds the account's relay lock, so the daemon's
+cloud gate stops polling while the loom does. The injected client exposes
+``pull(cursor)``, ``send(payload)`` and
 ``download_attachment(event_id, index, destination)``.
 """
 
@@ -11,13 +13,12 @@ import hashlib
 import json
 import os
 import tempfile
-import time
 from pathlib import Path
 
 from brr.daemon2.facts import Fact, union
 from brr.gates import cloud
 
-from ..home import Home, atomic_write
+from ..home import Home, atomic_write, channel_parts
 from ..labels import is_stranger
 from ..ledger import append, read_facts
 from ..project import fold, sender_threads
@@ -91,9 +92,7 @@ def _sender(home: Home, platform: str, user_id: object) -> str:
         for path in sorted((home.root / "self" / "people").glob("*/channels.md")):
             if key in {line.strip() for line in path.read_text(encoding="utf-8").splitlines()}:
                 matches.append(path.parent.name)
-        if len(matches) > 1:
-            raise ValueError(f"relay: ambiguous person channel {key}")
-        if matches:
+        if len(matches) == 1:
             return f"person:{matches[0]}"
     return f"stranger:{platform}:{'' if user_id is None else user_id}"
 
@@ -108,13 +107,12 @@ def person_dm(home: Home, channel: str) -> str | None:
     strangers in it.
     """
     try:
-        platform, chat = channel.split(":", 1)[1].split("/", 1)
-    except (AttributeError, ValueError):
-        return None
-    try:
-        sender = _sender(home, platform, chat)
+        platform, chat = channel_parts(channel)
     except ValueError:
         return None
+    if chat is None:
+        return None
+    sender = _sender(home, platform, chat)
     return sender if sender.startswith("person:") else None
 
 
@@ -130,40 +128,35 @@ def make_effect(client):
     *first* part of an event answer can't bind until the relay returns it.
     """
     def effect(home, channel, part_key, text, context):
-        platform = channel.split(":", 1)[1].split("/", 1)[0]
+        platform, _chat = channel_parts(channel)
         payload = {"body_markdown": text}
         # One event takes one response: only the first part answers it; the
         # rest follow as ordinary messages to the same platform.
-        first = "#" not in part_key or part_key.endswith("#1")
-        if context.get("event_id") and first:
+        if context.get("event_id") and context["first"]:
             payload["event_id"] = context["event_id"]
         else:
             payload["platform"] = platform
         response = client.send(payload) or {}
-        receipt = {"via": "event" if "event_id" in payload else "platform"}
-        for key in ("message_id", "id"):
-            if response.get(key) not in (None, ""):
-                receipt["message_id"] = response[key]
-                break
-        return receipt
+        return ({"message_id": response["message_id"]}
+                if response.get("message_id") not in (None, "") else {})
     return effect
 
 
 def _person_channel(to: object, chat: object) -> bool:
-    # Chat keys are platform-qualified, so Telegram 42 cannot select a
-    # WhatsApp thread whose chat happens to be 42.
-    return (isinstance(to, str) and to == f"channel:{chat}"
-            and to.split(":", 1)[1].split("/", 1)[0] in {"telegram", "slack", "whatsapp"})
+    return to == f"channel:{chat}"
 
 
-def letter_for_message(facts: list[Fact], channel: str, message_id: object) -> str | None:
-    """The loom letter a platform message carried, from ``speech.part`` receipts.
+def thread_for_message(facts: list[Fact], channel: str, message_id: object) -> str | None:
+    """The thread a platform message came from, from ``speech.part`` receipts.
 
     Only the loom's own receipts count, and only for the same channel, so a
     message id from another chat (or another platform) binds nothing.
     """
     if message_id in (None, ""):
         return None
+    accepted = fold(facts).accepted
+    threads = sender_threads(accepted)
+    letters = {str(f.data.get("id") or f.id): f for f in accepted if f.kind == "letter"}
     for fact in facts:
         if fact.kind != "speech.part" or not fact.by.startswith("loom:"):
             continue
@@ -171,19 +164,31 @@ def letter_for_message(facts: list[Fact], channel: str, message_id: object) -> s
         if data.get("channel") != channel:
             continue
         if str((data.get("receipt") or {}).get("message_id")) == str(message_id):
-            return str(data.get("key") or "") or None
+            letter = letters.get(str(data.get("key")))
+            if letter is not None and letter.by.startswith("strand:"):
+                return threads.get(letter.by.split(":", 1)[1])
     return None
 
 
-def route_bare(facts: list[Fact], chat: str, reply_to_letter: str | None,
-               now: float) -> str:
-    """Reply binding, then last confirmed speech with a live lease, then inbox.
+def route_bare(facts: list[Fact], chat: str, reply_thread: str | None = None) -> str:
+    """Where a chat message goes: a reply's thread, else whoever spoke here last.
 
-    ``chat`` is ``<platform>/<chat_id>``. A speech's ``key`` names the
-    outbound letter (the existing speak receipt). ``reply_to_letter`` is a
-    resolved letter id; slice 2 owns the platform-message-id lookup. Thread
-    leases have no deadline of their own: their router generation supplies ``until``.
+    ``chat`` is ``<platform>/<chat_id>``. A Telegram reply to a message the
+    loom sent goes to that message's thread: the person pointed at it. A
+    bare message goes to the thread that last spoke in this chat, whatever
+    became of its lease: the thread's README carries the conversation, so a
+    molted or released thread wakes with it. ``inbox`` only when no thread
+    has spoken here yet. Only confirmed speech (a ``sent`` receipt) counts,
+    and the speaker is the strand that wrote the letter, never its text.
     """
+    try:
+        _platform, chat_id = channel_parts(f"channel:{chat}")
+    except ValueError:
+        return "thread:inbox"
+    if chat_id is None:
+        return "thread:inbox"
+    if reply_thread:
+        return f"thread:{reply_thread}"
     ordered = union(facts)
     state = fold(ordered)
     threads = sender_threads(state.accepted)
@@ -191,47 +196,19 @@ def route_bare(facts: list[Fact], chat: str, reply_to_letter: str | None,
         str(f.data.get("id") or f.id): f
         for f in state.accepted if f.kind == "letter"
     }
-    spoken = []
+    last = None
     for fact in ordered:
         if fact.kind != "speech" or fact.data.get("state") != "sent":
             continue
         letter = letters.get(str(fact.data.get("key")))
         if letter is None or not _person_channel(letter.data.get("to"), chat):
             continue
-        sender = (letter.by.split(":", 1)[1] if letter.by.startswith("strand:")
-                  else str(letter.data.get("from") or ""))
+        sender = letter.by.removeprefix("strand:")
         thread = threads.get(sender)
         if thread is None:
             continue
-        spoken.append((letter, sender, thread))
-        if reply_to_letter and reply_to_letter == str(letter.data.get("id") or letter.id):
-            return f"thread:{thread}"
-    if not spoken:
-        return "thread:inbox"
-    letter, sender, thread = spoken[-1]
-    if state.holder.get(thread) != (sender, letter.data.get("gen")):
-        return "thread:inbox"
-    lease = next((fact for fact in reversed(state.accepted)
-                  if fact.kind == "lease" and fact.data.get("thread") == thread
-                  and fact.data.get("strand") == sender
-                  and fact.data.get("gen") == letter.data.get("gen")), None)
-    if lease is None:
-        return "thread:inbox"
-    router_gen = lease.data.get("router_gen")
-    # A step-1 lease lasts until released. Once router facts exist it is
-    # fenced by fold(), just as it is for routing and handling letters.
-    if router_gen is None:
-        return f"thread:{thread}"
-    router_gens = [f.data.get("gen") for f in ordered if f.kind == "router"
-                   and isinstance(f.data.get("gen"), int)]
-    if not router_gens or max(router_gens) != router_gen:
-        return "thread:inbox"
-    windows = [f for f in ordered if f.kind in {"router", "router.renewed"}
-               and f.data.get("gen") == router_gen]
-    until = windows[-1].data.get("until") if windows else None
-    if not isinstance(until, (int, float)) or now >= until:
-        return "thread:inbox"
-    return f"thread:{thread}"
+        last = thread
+    return f"thread:{last}" if last else "thread:inbox"
 
 
 def _blob(home: Home, client, event_id: str, index: int) -> tuple[str, int]:
@@ -265,6 +242,10 @@ def _blob(home: Home, client, event_id: str, index: int) -> tuple[str, int]:
         tmp.unlink(missing_ok=True)
 
 
+#: Pulls that may fail on one event's attachments before it lands without them.
+GIVE_UP_AFTER = 3
+
+
 def _letter(home: Home, source: Fact) -> Fact:
     # Reconstruct from the durable source, not from a replay's mutable text
     # or today's person map. A crash after source append cannot lose a letter
@@ -286,8 +267,9 @@ def _letter(home: Home, source: Fact) -> Fact:
     ))
 
 
-def pull_once(home: Home, client, cursor: int) -> int:
+def pull_once(home: Home, client, cursor: int, *, failures: dict | None = None) -> int:
     """Append complete events before committing the server cursor, even a lower one."""
+    failures = failures if failures is not None else {}
     cursor = _cursor(cursor)
     result = client.pull(cursor)
     next_cursor = _cursor(result.get("cursor", cursor))
@@ -318,41 +300,53 @@ def pull_once(home: Home, client, cursor: int) -> int:
                     else [raw_attachments])
         blobs = []
         blob_ids = []
-        for index in range(len(names)):
-            sha, size = _blob(home, client, event_id, index)
-            pointer = pointers[index]
+        missing = []
+        blob_facts = []
+        for index, pointer in enumerate(pointers[:len(names)]):
+            try:
+                sha, size = _blob(home, client, event_id, index)
+            except Exception:  # noqa: BLE001 — counted, then held or given up
+                missing.append(index)
+                continue
             mime = ((pointer.get("mime_type") if isinstance(pointer, dict) else None)
                     or "application/octet-stream")
             ident = f"blob:relay:{event_id}#{index}"
-            facts.append(append(home, Fact(
+            blob_facts.append(Fact(
                 kind="blob", by=f"loom:{home.install_id()}", id=ident,
                 data={"sha": sha, "mime": mime, "size": size, "origin": f"relay:{event_id}#{index}"},
-            )))
+            ))
             blobs.append(sha)
             blob_ids.append(ident)
+        if missing:
+            # A restart grants three fresh tries; one missing file must not
+            # stall every subsequent message in a live poller.
+            tries = failures[event_id] = failures.get(event_id, 0) + 1
+            if tries < GIVE_UP_AFTER:
+                raise RuntimeError(
+                    f"relay: attachment download failed: {event_id}#"
+                    f"{','.join(map(str, missing))} "
+                    f"(attempt {tries} of {GIVE_UP_AFTER})"
+                )
+        facts.extend(append(home, fact) for fact in blob_facts)
         data = {
             "origin": f"relay:{event_id}", "platform": platform,
             "chat": meta["cloud_chat_id"], "topic": meta["cloud_topic_id"],
             "from": sender, "text": event.get("body") or "", "blobs": blobs,
         }
+        if missing:
+            data["blobs_missing"] = missing
         # Preserve the raw reply target for slice 2 to resolve against sent
         # receipts. message_id is the incoming id, never a reply target.
         if platform == "telegram" and origin.get("reply_to_message_id") is not None:
             data["reply_to_message_id"] = origin["reply_to_message_id"]
-        # A resolved letter id enters route_bare through this separate seam.
-        if platform == "telegram" and origin.get("reply_to_letter"):
-            data["reply_to_letter"] = origin["reply_to_letter"]
-        elif data.get("reply_to_message_id") is not None:
-            bound = letter_for_message(
-                facts, f"channel:{platform}/{data['chat']}", data["reply_to_message_id"],
-            )
-            if bound:
-                data["reply_to_letter"] = bound
+        reply_thread = thread_for_message(
+            facts, f"channel:{platform}/{data['chat']}", data.get("reply_to_message_id"),
+        )
         # Source is durable before letter. Save the routing decision as part
         # of that intent: HLC ordering alone cannot reconstruct the original
         # snapshot once facts from another install arrive during recovery.
         data["to"] = route_bare(
-            facts, f"{platform}/{data['chat']}", data.get("reply_to_letter"), time.time(),
+            facts, f"{platform}/{data['chat']}", reply_thread,
         )
         source = append(home, Fact(
             kind="source", by=f"loom:{home.install_id()}", id=source_id,
@@ -362,5 +356,56 @@ def pull_once(home: Home, client, cursor: int) -> int:
         sources[source_id] = source
         facts.append(_letter(home, source))
         letter_ids.add(letter_id)
+        if missing:
+            from ..loom import _attention
+            _attention(
+                home, f"attention:blobs-missing:{event_id}",
+                f"relay: gave up on attachment(s) {missing} of {event_id} "
+                f"after {GIVE_UP_AFTER} pulls; the message landed without them",
+            )
+        failures.pop(event_id, None)
     _write_cursor(home, next_cursor)
     return next_cursor
+
+
+def poll_forever(home: Home, client, lock, stop, *, log=None,
+                 backoff_cap: float = 60.0) -> None:
+    """Hold the relay and long-poll it until ``stop`` is set.
+
+    ``lock`` is a ``brr.gates.relay_lock.RelayLock``. The loom declares that
+    it wants the relay, waits for the daemon to finish its current poll, then
+    starts from whichever cursor is further along: its own, or the one the
+    daemon handed over in the lock. Every committed cursor goes back into
+    the lock, so stopping the loom hands the relay back without a replay.
+    """
+    say = log or (lambda message: None)
+    lock.want()
+    waiting = False
+    backoff = 1.0
+    failures: dict[str, int] = {}
+    try:
+        while not stop.is_set() and not lock.try_acquire():
+            if not waiting:
+                say(f"relay: waiting for {lock.holder()} to finish its poll")
+                waiting = True
+            stop.wait(0.5)
+        if stop.is_set():
+            return
+        handed = lock.cursor()
+        own = read_cursor(home)
+        if handed is not None and handed > own:
+            say(f"relay: cursor {own} -> {handed} (handed over)")
+            _write_cursor(home, handed)
+        say(f"relay: polling from {read_cursor(home)}")
+        while not stop.is_set():
+            try:
+                cursor = pull_once(home, client, read_cursor(home), failures=failures)
+                lock.record(cursor)
+                backoff = 1.0
+            except Exception as exc:  # noqa: BLE001 — the loop must outlive one bad poll
+                say(f"relay: poll failed: {type(exc).__name__}: {exc}; retry in {backoff:.0f}s")
+                stop.wait(backoff)
+                backoff = min(backoff * 2, backoff_cap)
+    finally:
+        lock.release()
+        lock.unwant()

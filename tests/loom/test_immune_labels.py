@@ -1,9 +1,11 @@
-"""20-labels and 30-widening, through the same bare repo 4a uses."""
+"""20-labels, including widening citations, through a real hooked bare repo."""
 
 from __future__ import annotations
 
 import os
 import subprocess
+
+import pytest
 from pathlib import Path
 
 from brr.loom.runtime.merge import install_pre_receive, send_to_self
@@ -93,8 +95,7 @@ def message(repo: Path, rev: str = "HEAD") -> str:
 
 
 def test_label_checks_are_executable() -> None:
-    for name in ("20-labels", "30-widening"):
-        assert (SEED / "core" / "immune.d" / name).stat().st_mode & 0o111
+    assert (SEED / "core" / "immune.d" / "20-labels").stat().st_mode & 0o111
 
 
 def test_a_clean_stamped_commit_lands(tmp_path: Path) -> None:
@@ -216,3 +217,69 @@ def test_init_self_labels_the_seed_and_enrolls_the_person(tmp_path: Path) -> Non
     email = git(None, "config", "--global", "user.email").stdout.strip()
     assert email and email in listing.splitlines()
     assert AUTHOR_EMAIL not in listing
+
+
+def test_body_identity_cannot_use_the_enrolled_person_to_push_unlabeled(tmp_path: Path, monkeypatch) -> None:
+    from brr.loom.runtime.loom import _env as body_env
+    from brr.loom.runtime.selfrepo import AUTHOR_EMAIL, AUTHOR_NAME
+
+    bare, work = published(tmp_path, enroll="ada@example.com")
+    _as(monkeypatch, "Ada", "ada@example.com")
+    strand = room(bare, tmp_path / "room", "strand/body")
+    write(strand, "memory/scars/x.md", "base\nbody\n")
+    git(strand, "add", "-A")
+    proc = subprocess.run(
+        ["git", "-c", "commit.gpgsign=false", "commit", "-m", "body, unlabeled"],
+        cwd=strand, env=body_env(strand), capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    identity = git(strand, "log", "-1", "--format=%an <%ae> %cn <%ce>").stdout.strip()
+    assert identity == f"{AUTHOR_NAME} <{AUTHOR_EMAIL}> {AUTHOR_NAME} <{AUTHOR_EMAIL}>"
+    assert "ada@example.com" in git(work, "show", "HEAD:core/loom/people-commit").stdout
+    refused = git(strand, "push", "origin", "HEAD:main", check=False)
+    assert refused.returncode != 0
+    assert "20-labels:" in refused.stderr
+    assert "no Loom-Label" in refused.stderr
+
+
+@pytest.mark.parametrize("label", ["", "taint=0; audience=self", "taint=1; audience=self"])
+def test_every_widening_is_checked_even_with_a_valid_clause(tmp_path: Path, monkeypatch, label: str) -> None:
+    _bare, work = published(tmp_path, enroll="ada@example.com")
+    _as(monkeypatch, "Ada", "ada@example.com")
+    write(work, "people/ada/agreement.md", "An allowed clause. {#allowed}\n")
+    text = "mixed citations\n\nWidening: people/ada/agreement.md#allowed\nWidening: people/ada/agreement.md#missing\n"
+    if label:
+        text += f"Loom-Label: {label}\n"
+    commit(work, text)
+    refused = git(work, "push", "origin", "HEAD:main", check=False)
+    assert refused.returncode != 0
+    assert "20-labels:" in refused.stderr
+    assert "widening people/ada/agreement.md#missing" in refused.stderr
+
+
+def test_body_written_taint_and_audience_do_not_declare_the_fold(tmp_path: Path) -> None:
+    bare, _work = published(tmp_path)
+    strand = room(bare, tmp_path / "room", "strand/clean")
+    write(strand, "memory/scars/x.md", "base\nclean\n")
+    commit(strand, "body claims taint\n\nLoom-Label: taint=1; audience=other\nWidening: forged\n")
+    landed = send_to_self(strand)
+    assert landed.status == "merged", landed
+    text = message(bare, "main")
+    assert "Loom-Label: taint=0; audience=self" in text
+    assert "taint=1" not in text
+    assert "audience=other" not in text
+    assert "Widening:" not in text
+
+
+def test_incumbent_enrollment_can_revoke_itself_but_not_authorize_the_next_push(tmp_path: Path, monkeypatch) -> None:
+    _bare, work = published(tmp_path, enroll="ada@example.com")
+    _as(monkeypatch, "Ada", "ada@example.com")
+    write(work, "core/loom/people-commit", "# nobody enrolled\n")
+    commit(work, "ada revokes herself")
+    first = git(work, "push", "origin", "HEAD:main", check=False)
+    assert first.returncode == 0, first.stderr
+    write(work, "memory/scars/x.md", "base\nada after revocation\n")
+    commit(work, "ada no longer enrolled")
+    refused = git(work, "push", "origin", "HEAD:main", check=False)
+    assert refused.returncode != 0
+    assert "no Loom-Label" in refused.stderr

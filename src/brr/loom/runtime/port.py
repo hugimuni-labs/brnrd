@@ -10,7 +10,7 @@ from pathlib import Path
 from brr.daemon2.facts import Fact
 
 from .home import (
-    atomic_write, home_of_room, is_channel, mint, strand_of_room, thread_of,
+    atomic_write, channel_parts, home_of_room, is_channel, mint, strand_of_room, thread_of,
 )
 
 
@@ -41,10 +41,6 @@ class Boundary:
     ids: list[str] = field(default_factory=list)
     letters: list[LetterView] = field(default_factory=list)
 
-    @classmethod
-    def empty(cls) -> "Boundary":
-        return cls()
-
 
 def parse_boundary(text: str) -> Boundary:
     """Parse a boundary or the owed section of a wake. Empty text is nothing owed.
@@ -53,7 +49,7 @@ def parse_boundary(text: str) -> Boundary:
     letter list, is corrupt. The jack fails open on that; it does not guess.
     """
     if not text or not text.strip():
-        return Boundary.empty()
+        return Boundary()
     header = _HEADER.search(text)
     if header is None:
         raise PortError("boundary has no port header")
@@ -85,8 +81,8 @@ def parse_boundary(text: str) -> Boundary:
                     ids=ids, letters=letters)
 
 
-def _reply(sender: str, sender_threads: dict[str, str]) -> str:
-    thread = sender_threads.get(sender)
+def _reply(letter: Fact, sender_threads: dict[str, str]) -> str:
+    thread = sender_threads.get(letter.by.removeprefix("strand:"))
     return f"thread:{thread}" if thread else "-"
 
 
@@ -114,8 +110,7 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
     ]
     for letter in letters:
         compact = str(letter.data["id"]) in shown
-        lines.extend(_letter_lines(letter, _reply(str(letter.data.get("from") or ""),
-                                                   sender_threads), compact))
+        lines.extend(_letter_lines(letter, _reply(letter, sender_threads), compact))
     lines.append("")
     return "\n".join(lines)
 
@@ -229,18 +224,16 @@ def _ref_roots(room: Path) -> list[Path]:
     return roots
 
 
-#: ``channel:<platform>/<chat>``, spoken through the relay (loom step 5).
-_RELAY_CHANNEL = re.compile(r"channel:(telegram|whatsapp|slack)/[A-Za-z0-9_:#.-]+")
-
-
 def write_send(room: Path, *, to: str, sender: str, body: str = "",
                re: str | None = None, note: str | None = None,
                clean: bool = False, kind: str | None = None,
                refs: tuple[str, ...] | list[str] = ()) -> str:
     home = home_of_room(Path(room))
     if is_channel(to):
-        if to != "channel:fake" and not _RELAY_CHANNEL.fullmatch(to):
-            raise PortError(f"send: no channel adapter for {to!r}")
+        try:
+            channel_parts(to)
+        except ValueError as exc:
+            raise PortError(f"send: {exc}") from exc
     else:
         thread = thread_of(to)
         if not home.thread_exists(thread):
@@ -335,7 +328,7 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
     if kind == "letter":
         data: dict = {
             "id": fact_id, "to": fm["to"], "body": fm.get("body", ""),
-            "from": fm.get("from") or strand, "gen": gen,
+            "from": strand, "gen": gen,
         }
         if not is_channel(data["to"]):
             thread_of(data["to"])

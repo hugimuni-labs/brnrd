@@ -113,18 +113,24 @@ def test_both_readme_edits_land(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_an_unparseable_readme_stops_the_rebase(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("LOOM_MERGE_BODY", "fake")
+    # The driver now applies only to valid READMEs. Make its body return
+    # invalid text to exercise the same parser failure and real git stop.
+    body = tmp_path / "claude"
+    body.write_text("#!/bin/sh\nprintf 'not a readme\\n'\n", encoding="utf-8")
+    body.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("LOOM_MERGE_BODY", "claude-haiku")
     bare = published(tmp_path)
     left = room(bare, tmp_path / "a", "strand/a")
     right = room(bare, tmp_path / "b", "strand/b")
-    write(left, "memory/stance.md", "# Stance\n\nfrom-a\n")
-    commit(left, "stance a")
-    write(right, "memory/stance.md", "# Stance\n\nfrom-b\n")
-    commit(right, "stance b")
+    write(left, "threads/inbox/README.md", README.replace("alpha line", "from-a"))
+    commit(left, "readme a")
+    write(right, "threads/inbox/README.md", README.replace("alpha line", "from-b"))
+    commit(right, "readme b")
     assert send_to_self(left).status == "merged"
     stopped = send_to_self(right)
     assert stopped.status == "stopped", stopped
-    assert "memory/stance.md" in stopped.files
+    assert "threads/inbox/README.md" in stopped.files
 
 
 def test_a_clean_strand_after_a_widened_one_stays_clean(tmp_path: Path, monkeypatch) -> None:

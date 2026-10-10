@@ -27,7 +27,7 @@ from ..gates.github.parse import parse_origin_url
 from ..run import Run, list_runs, run_manifest_path
 from . import cloud_credentials as _credentials
 from . import cloud_publisher as _publisher
-from . import delivery, runtime
+from . import delivery, relay_lock, runtime
 
 _CREDENTIAL_COMPAT_NAMES = (
     "publishing_token_seconds_remaining",
@@ -955,10 +955,37 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     ).start()
     backoff = 1
     auth_backoff = _AUTH_RETRY_MIN_S
+    relay = relay_lock.RelayLock(_state_dir(brr_dir), "daemon")
+    yielded_to: str | None = None
     while True:
         try:
             _try_refresh_publishing_credential(_load_state(brr_dir), brr_dir=brr_dir)  # noqa: F821 — bound by the _COMPAT_NAMES re-export above
-            _loop_once(brr_dir, inbox_dir, responses_dir)
+            # One poller per relay cursor (loom step 5 slice 3). A loom that
+            # wants the relay preempts: the daemon stops polling and only
+            # drains answers it already owes. Stopping the loom hands the
+            # relay back, from the loom's last cursor.
+            holder = _relay_yield(relay)
+            if holder is not None:
+                if holder != yielded_to:
+                    print(f"[brnrd:cloud] relay held by {holder}; not polling, delivering answers only")
+                    yielded_to = holder
+                runtime.record_loop_health(
+                    brr_dir, "cloud", ok=False, error=f"relay held by {holder}: not polling",
+                )
+                state = _load_state(brr_dir)
+                _deliver_responses(brr_dir, inbox_dir, responses_dir, state)
+                _close_noted_events(inbox_dir, state)
+                time.sleep(_RELAY_YIELD_SLEEP_S)
+                continue
+            if yielded_to is not None:
+                print(f"[brnrd:cloud] relay released by {yielded_to}; polling again")
+                yielded_to = None
+            try:
+                _adopt_relay_cursor(brr_dir, relay)
+                _loop_once(brr_dir, inbox_dir, responses_dir)
+                relay.record(_load_state(brr_dir).get("since", 0))
+            finally:
+                relay.release()
             runtime.record_loop_health(brr_dir, "cloud", ok=True)
             backoff = 1
             auth_backoff = _AUTH_RETRY_MIN_S
@@ -987,6 +1014,32 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             print(f"[brnrd:cloud] error: {e}, retrying in {backoff}s")
             time.sleep(backoff)
             backoff = min(backoff * 2, 120)
+
+
+_RELAY_YIELD_SLEEP_S = 5
+
+
+def _relay_yield(relay: "relay_lock.RelayLock") -> str | None:
+    """Who the daemon is yielding the relay to, or ``None`` once it holds it."""
+    wanted = relay.wanted_by_other()
+    if wanted is not None:
+        return f"{wanted.get('kind', '?')} pid {wanted.get('pid', '?')}"
+    if not relay.try_acquire():
+        return relay.holder()
+    return None
+
+
+def _adopt_relay_cursor(brr_dir: Path, relay: "relay_lock.RelayLock") -> None:
+    """Start from the last holder's cursor when it is ahead of ours (the handoff)."""
+    handed = relay.cursor()
+    if handed is None:
+        return
+    state = _load_state(brr_dir)
+    since = state.get("since", 0)
+    if type(since) is int and handed > since:
+        print(f"[brnrd:cloud] relay cursor {since} -> {handed} (handed over)")
+        state["since"] = handed
+        _save_state(brr_dir, state)
 
 
 def _register(brr_dir: Path, state: dict) -> None:

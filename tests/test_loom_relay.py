@@ -182,41 +182,43 @@ def test_verified_person_is_clean_and_missing_user_id_is_stranger(home):
                         self_root=home.root / "self", jack_log="") == CLEAN
 
 
-def test_reply_binding_beats_last_spoke_even_after_release(home):
+def test_reply_goes_to_its_thread_even_after_release(home):
     first = speak(home, "s-aaaa-first1", "first")
     speak(home, "s-aaaa-second", "second")
     facts = read_facts(home)
-    assert relay.route_bare(facts, "telegram/555", None, time.time()) == "thread:second"
+    assert relay.route_bare(facts, "telegram/555") == "thread:second"
     append(home, Fact(kind="released", by="loom:aaaa", id="released:first:1",
                      data={"strand": "s-aaaa-first1", "thread": "first", "gen": 1}))
-    assert relay.route_bare(read_facts(home), "telegram/555", first, time.time()) == "thread:first"
-    assert relay.route_bare(read_facts(home), "telegram/666", first, time.time()) == "thread:inbox"
+    facts = read_facts(home)
+    append(home, Fact(kind="speech.part", by="loom:aaaa", id=f"speech.part:{first}",
+                     data={"key": first, "channel": "channel:telegram/555",
+                           "receipt": {"message_id": 17}}))
+    ev = event()
+    ev["reply_to"]["reply_to_message_id"] = 17
+    relay.pull_once(home, FakeClient([ev]), 0)
+    assert kinds(home, "source")[0].data["to"] == "thread:first"
+    assert relay.thread_for_message(read_facts(home), "channel:telegram/666", 17) is None
 
 
-def test_bare_expired_lease_goes_to_inbox_and_renewal_restores_it(home):
+def test_bare_goes_to_the_last_speaker_whatever_became_of_its_lease(home):
+    # His rule (2026-10-09): no lease check, no fallback. The last thread to
+    # speak in a chat keeps it through expiry, release and a new router.
     speak(home, "s-aaaa-first1", "first", until=100)
-    assert relay.route_bare(read_facts(home), "telegram/555", None, 100) == "thread:inbox"
-    append(home, Fact(kind="router.renewed", by="loom:aaaa", id="renewed:1",
-                     data={"gen": 1, "until": 200, "install": "aaaa"}))
-    assert relay.route_bare(read_facts(home), "telegram/555", None, 100) == "thread:first"
-    append(home, Fact(kind="released", by="loom:aaaa", id="released:first:1",
-                     data={"strand": "s-aaaa-first1", "thread": "first", "gen": 1}))
-    assert relay.route_bare(read_facts(home), "telegram/555", None, 101) == "thread:inbox"
-
-
-def test_new_router_fences_bare_default(home):
-    speak(home, "s-aaaa-first1", "first", until=500)
+    assert relay.route_bare(read_facts(home), "telegram/555") == "thread:first"
     append(home, Fact(kind="router", by="loom:bbbb", id="router:2",
                      data={"gen": 2, "until": 600, "install": "bbbb"}))
-    assert relay.route_bare(read_facts(home), "telegram/555", None, 100) == "thread:inbox"
+    append(home, Fact(kind="released", by="loom:aaaa", id="released:first:1",
+                     data={"strand": "s-aaaa-first1", "thread": "first", "gen": 1}))
+    assert relay.route_bare(read_facts(home), "telegram/555") == "thread:first"
+    assert relay.route_bare(read_facts(home), "telegram/666") == "thread:inbox"
 
 
 def test_unconfirmed_speech_and_non_person_destinations_never_become_default(home):
     first = speak(home, "s-aaaa-first1", "first", receipt=False)
     speak(home, "s-aaaa-second", "second", chat="fake")
     facts = read_facts(home)
-    assert relay.route_bare(facts, "telegram/555", first, time.time()) == "thread:inbox"
-    assert relay.route_bare(facts, "fake", None, time.time()) == "thread:inbox"
+    assert relay.route_bare(facts, "telegram/555") == "thread:inbox"
+    assert relay.route_bare(facts, "fake") == "thread:inbox"
 
 
 def test_same_blob_twice_one_file_two_exact_facts(home):
@@ -258,7 +260,7 @@ def test_lower_server_cursor_is_persisted_even_without_events(home):
     assert json.loads((home.root / "loom" / "relay-cursor.json").read_text()) == {"cursor": 2}
 
 
-def test_person_mapping_is_platform_specific_and_ambiguity_refuses(home):
+def test_person_mapping_is_platform_specific_and_ambiguity_is_stranger(home):
     (home.root / "self" / "people" / "ada" / "channels.md").write_text("slack:42\n")
     relay.pull_once(home, FakeClient([event()]), 0)
     assert kinds(home, "source")[0].data["from"] == "stranger:telegram:42"
@@ -266,9 +268,10 @@ def test_person_mapping_is_platform_specific_and_ambiguity_refuses(home):
     other.mkdir()
     (other / "channels.md").write_text("telegram:42\n")
     (home.root / "self" / "people" / "ada" / "channels.md").write_text("telegram:42\n")
-    with pytest.raises(ValueError, match="ambiguous person channel telegram:42"):
-        relay.pull_once(home, FakeClient([event("ev_2")]), 3)
-    assert len(kinds(home, "source")) == 1
+    relay.pull_once(home, FakeClient([event("ev_2")]), 3)
+    assert [f.data["from"] for f in kinds(home, "source")] == ["stranger:telegram:42"] * 2
+    assert all(f.data["label"]["taint"] for f in kinds(home, "letter"))
+    assert relay.person_dm(home, "channel:telegram/42") is None
     assert relay.read_cursor(home) == 3
 
 
@@ -321,29 +324,6 @@ def test_raw_reply_target_is_preserved_without_resolving_it(home, reply_target):
     assert source.data["to"] == "thread:second"
 
 
-def test_optional_verified_letter_binding_is_carried_into_source(home, monkeypatch):
-    # Slice 2 resolves the raw Telegram target to this letter-id hook.
-    first = speak(home, "s-aaaa-first1", "first")
-    speak(home, "s-aaaa-second", "second")
-    ev = event()
-    ev["reply_to"]["reply_to_message_id"] = 17
-    ev["reply_to"]["reply_to_letter"] = first
-    calls = []
-    real_route = relay.route_bare
-    def route(facts, chat, reply_to_letter, now):
-        calls.append((chat, reply_to_letter))
-        return real_route(facts, chat, reply_to_letter, now)
-    monkeypatch.setattr(relay, "route_bare", route)
-    relay.pull_once(home, FakeClient([ev]), 0)
-    source, = kinds(home, "source")
-    assert calls == [("telegram/555", first)]
-    assert source.data["reply_to_message_id"] == 17
-    assert source.data["reply_to_letter"] == first
-    assert source.data["to"] == "thread:first"
-    letter = next(f for f in kinds(home, "letter") if f.id == "letter:relay:ev_1")
-    assert letter.data["to"] == "thread:first"
-
-
 def test_partial_blob_append_replay_preserves_one_fact_per_attachment(home, monkeypatch):
     client = FakeClient([event(attachments=[{"filename": "one"}, {"filename": "two"}])])
     real_append = relay.append
@@ -374,14 +354,7 @@ def test_outbound_from_text_cannot_steal_another_threads_default(home):
                            "body": "claim another thread", "gen": 1, "router_gen": 1}))
     append(home, Fact(kind="speech", by="loom:aaaa", id=f"speech:sent:{key}",
                      data={"key": key, "state": "sent", "router_gen": 1}))
-    assert relay.route_bare(read_facts(home), "telegram/555", None, time.time()) == "thread:first"
-
-
-def test_old_router_fact_does_not_override_newest_generation(home):
-    speak(home, "s-aaaa-first1", "first", until=500, router_gen=2)
-    append(home, Fact(kind="router", by="loom:bbbb", id="router:old",
-                     data={"gen": 1, "until": 600, "install": "bbbb"}))
-    assert relay.route_bare(read_facts(home), "telegram/555", None, 100) == "thread:first"
+    assert relay.route_bare(read_facts(home), "telegram/555") == "thread:first"
 
 
 def test_same_identity_twice_in_one_response_is_one_letter(home):

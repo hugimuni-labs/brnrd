@@ -13,18 +13,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-# Inherited discovery pins outrank ``git -C``. Inside a brnrd run those pins
-# point at the host checkout; leaving them set would rebase *that* tree.
-_DISCOVERY = (
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_PREFIX",
-    "GIT_COMMON_DIR",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_NAMESPACE",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-)
+from .selfrepo import SelfError as SendError, git as _git
 
 _RACE_LIMIT = 10
 _STOP_LIMIT = 3
@@ -63,10 +52,6 @@ while read -r old new ref; do
 done
 exit "$status"
 """
-
-
-class SendError(RuntimeError):
-    """Git failed in a way that is not a conflict, a lost race, or a refusal."""
 
 
 @dataclass(frozen=True)
@@ -211,11 +196,6 @@ def _rebasing(room: Path) -> bool:
 
 def _unmerged(room: Path) -> tuple[str, ...]:
     names = [line for line in _git(room, "diff", "--name-only", "--diff-filter=U").stdout.splitlines() if line]
-    if not names:
-        listed = _git(room, "ls-files", "--unmerged")
-        for line in listed.stdout.splitlines():
-            if "\t" in line:
-                names.append(line.split("\t", 1)[1])
     return tuple(sorted(set(names)))
 
 
@@ -259,45 +239,16 @@ def _hooks_dir(repo: Path) -> Path:
     return path if path.is_absolute() else repo / path
 
 
-def _git(room: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    try:
-        proc = subprocess.run(
-            ["git", "-C", os.fspath(room), *args],
-            env=_env(),
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise SendError(f"git {' '.join(args)} timed out") from exc
-    if check and proc.returncode != 0:
-        raise SendError(_text(proc) or f"git {' '.join(args)} failed ({proc.returncode})")
-    return proc
-
-
-def _env() -> dict[str, str]:
-    env = {key: value for key, value in os.environ.items() if key not in _DISCOVERY}
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    # rebase --continue opens an editor. ``true`` keeps the message and
-    # returns, so a resolved conflict cannot park the strand on a prompt.
-    env["GIT_EDITOR"] = "true"
-    env["GIT_SEQUENCE_EDITOR"] = "true"
-    return env
-
-
 def _stamp_range(room: Path, widening: str | None) -> None:
     """Rewrite ``origin/main..HEAD`` so the body cannot keep its own trailers.
 
-    The label is the strand's fold, joined with any ``Loom-Label`` already
-    on the range. Not with the tip it rebased onto: a commit on ``main``
-    already passed ``immune`` (a widening is the person letting it in), and
-    joining it would make taint sticky for every later strand. Join only raises taint, so
-    a body-written ``taint=0`` on a tainted strand becomes ``taint=1``.
+    The label is the strand's fold alone, never a body-written trailer or
+    the tip it rebased onto. Main's commits already passed immune; joining
+    them would make admitted taint sticky for every later strand.
     ``Widening`` is written only when this call was given one; a body-written
     citation is dropped.
     """
-    from .labels import join, label_inputs, strand_label
+    from .labels import label_inputs, strand_label
 
     branch = _git(room, "symbolic-ref", "--short", "HEAD", check=False)
     if branch.returncode != 0:
@@ -312,10 +263,6 @@ def _stamp_range(room: Path, widening: str | None) -> None:
     _strand, facts, self_root, log = label_inputs(room)
     strand = _strand
     label = strand_label(facts, strand, self_root=self_root, jack_log=log)
-    for sha in listed:
-        existing = _trailer_label(room, sha)
-        if existing is not None:
-            label = join(label, existing)
     original = _git(room, "rev-parse", "HEAD").stdout.strip()
     _git(room, "checkout", "--detach", "origin/main")
     try:
@@ -340,23 +287,6 @@ def _stamp_range(room: Path, widening: str | None) -> None:
         _git(room, "checkout", "-B", name, original, check=False)
         raise
     _git(room, "checkout", "-B", name, "HEAD")
-
-
-def _trailer_label(room: Path, rev: str):
-    message = _git(room, "log", "-1", "--format=%B", rev, check=False)
-    if message.returncode != 0:
-        return None
-    return _label_in_message(message.stdout)
-
-
-def _label_in_message(message: str):
-    from .labels import parse_trailer
-
-    _body, trailers = _split_message(message)
-    for line in trailers:
-        if line.startswith("Loom-Label:"):
-            return parse_trailer(line.split(":", 1)[1].strip())
-    return None
 
 
 def _split_message(message: str) -> tuple[str, list[str]]:
@@ -401,13 +331,13 @@ def _stamp_message(message: str, *, strand: str, label, widening: str | None) ->
     if not text.endswith("\n"):
         text += "\n"
     cmd = [
-        "git", "interpret-trailers", "--if-exists", "replace",
+        "interpret-trailers", "--if-exists", "replace",
         "--trailer", f"Loom-Strand: {strand}",
         "--trailer", f"Loom-Label: {label.trailer()}",
     ]
     if widening:
         cmd += ["--trailer", f"Widening: {widening}"]
-    proc = subprocess.run(cmd, input=text, capture_output=True, text=True, check=False)
+    proc = _git(Path.cwd(), *cmd, input=text, check=False)
     if proc.returncode != 0:
         raise SendError(proc.stderr.strip() or "git interpret-trailers failed")
     return proc.stdout if proc.stdout.endswith("\n") else proc.stdout + "\n"
