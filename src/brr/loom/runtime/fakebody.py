@@ -212,6 +212,16 @@ def answer_fast(ctx: Ctx) -> None:
     ctx.jack("stop")
 
 
+def wall_once(ctx: Ctx) -> None:
+    """The first body ends on a provider limit line; the next one answers."""
+    mark = ctx.room / "walled-once"
+    if not mark.exists():
+        mark.write_text("")
+        print("You've hit your session limit · resets 3:40am (Europe/Paris)", flush=True)
+        raise SystemExit(1)
+    answer_fast(ctx)
+
+
 def emit_channel(ctx: Ctx) -> None:
     """Ten letters to the fake channel, then hold. A kill can land in the middle."""
     own = _own_thread(ctx.wake())
@@ -243,6 +253,7 @@ POLICIES = {
     "quit-now": quit_now,
     "hold": hold,
     "answer-fast": answer_fast,
+    "wall-once": wall_once,
     "emit-channel": emit_channel,
     "die-on-unrunnable": die_on_unrunnable,
 }
