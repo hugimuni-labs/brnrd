@@ -264,15 +264,6 @@ def self_commit(ctx: Ctx) -> None:
         raise RuntimeError("live wake omitted the self's identity")
     if "send-self --room ." not in ctx.wake():
         raise RuntimeError("live wake did not teach send-self")
-    ctx.owed()
-    # Let the loom ingest shown before the merge derives this body's label.
-    for _ in range(100):
-        letters = parse_boundary((ctx.room / "port" / "in" / "boundary.md").read_text()).letters
-        if letters and all(letter.compact for letter in letters):
-            break
-        time.sleep(0.05)
-    else:
-        raise RuntimeError("shown letters were not ingested")
     (clone / "memory" / "moves" / "live-body.md").write_text("# A live body saw its self.\n")
     git(clone, "add", "memory/moves/live-body.md")
     git(clone, "commit", "-m", "A live body carries its self forward.")

@@ -276,94 +276,115 @@ def pull_once(home: Home, client, cursor: int, *, failures: dict | None = None) 
     facts = read_facts(home)
     sources = {fact.id: fact for fact in facts if fact.kind == "source"}
     letter_ids = {fact.id for fact in facts if fact.kind == "letter"}
+    retry = None
     for event in result.get("events", []):
-        event_id = event.get("event_id")
-        if not isinstance(event_id, str) or not event_id:
-            raise ValueError("relay: event has no event_id")
-        source_id = f"source:relay:{event_id}"
-        letter_id = f"letter:relay:{event_id}"
-        source = sources.get(source_id)
-        if source is not None:
-            if letter_id not in letter_ids:
-                facts.append(_letter(home, source))
-                letter_ids.add(letter_id)
-            continue
-        origin = event.get("reply_to") or {}
-        meta = cloud._origin_meta(origin)
-        platform = str(meta["cloud_platform"])
-        sender = _sender(home, platform, origin.get("user_id"))
-        raw_attachments = event.get("attachments")
-        names = cloud._attachment_names(raw_attachments)
-        if names is None:
-            raise ValueError(f"relay: unreadable attachments for {event_id}")
-        pointers = (raw_attachments if isinstance(raw_attachments, (list, tuple))
-                    else [raw_attachments])
-        blobs = []
-        blob_ids = []
-        missing = []
-        blob_facts = []
-        for index, pointer in enumerate(pointers[:len(names)]):
-            try:
-                sha, size = _blob(home, client, event_id, index)
-            except Exception:  # noqa: BLE001 — counted, then held or given up
-                missing.append(index)
+        key = hashlib.sha256(json.dumps(event, sort_keys=True).encode()).hexdigest()
+        try:
+            event_id = event.get("event_id")
+            ident = event_id if isinstance(event_id, str) and event_id else key
+            source_id, letter_id = f"source:relay:{ident}", f"letter:relay:{ident}"
+            source = sources.get(source_id)
+            if source is not None:
+                if not source.data.get("refused") and letter_id not in letter_ids:
+                    facts.append(_letter(home, source))
+                    letter_ids.add(letter_id)
                 continue
-            mime = ((pointer.get("mime_type") if isinstance(pointer, dict) else None)
-                    or "application/octet-stream")
-            ident = f"blob:relay:{event_id}#{index}"
-            blob_facts.append(Fact(
-                kind="blob", by=f"loom:{home.install_id()}", id=ident,
-                data={"sha": sha, "mime": mime, "size": size, "origin": f"relay:{event_id}#{index}"},
-            ))
-            blobs.append(sha)
-            blob_ids.append(ident)
-        if missing:
-            # A restart grants three fresh tries; one missing file must not
-            # stall every subsequent message in a live poller.
-            tries = failures[event_id] = failures.get(event_id, 0) + 1
-            if tries < GIVE_UP_AFTER:
-                raise RuntimeError(
-                    f"relay: attachment download failed: {event_id}#"
-                    f"{','.join(map(str, missing))} "
-                    f"(attempt {tries} of {GIVE_UP_AFTER})"
-                )
-        facts.extend(append(home, fact) for fact in blob_facts)
-        data = {
-            "origin": f"relay:{event_id}", "platform": platform,
-            "chat": meta["cloud_chat_id"], "topic": meta["cloud_topic_id"],
-            "from": sender, "text": event.get("body") or "", "blobs": blobs,
-        }
-        if missing:
-            data["blobs_missing"] = missing
-        # Preserve the raw reply target for slice 2 to resolve against sent
-        # receipts. message_id is the incoming id, never a reply target.
-        if platform == "telegram" and origin.get("reply_to_message_id") is not None:
-            data["reply_to_message_id"] = origin["reply_to_message_id"]
-        reply_thread = thread_for_message(
-            facts, f"channel:{platform}/{data['chat']}", data.get("reply_to_message_id"),
-        )
-        # Source is durable before letter. Save the routing decision as part
-        # of that intent: HLC ordering alone cannot reconstruct the original
-        # snapshot once facts from another install arrive during recovery.
-        data["to"] = route_bare(
-            facts, f"{platform}/{data['chat']}", reply_thread,
-        )
-        source = append(home, Fact(
-            kind="source", by=f"loom:{home.install_id()}", id=source_id,
-            after=tuple(blob_ids), data=data,
-        ))
-        facts.append(source)
-        sources[source_id] = source
-        facts.append(_letter(home, source))
-        letter_ids.add(letter_id)
-        if missing:
-            from ..loom import _attention
-            _attention(
-                home, f"attention:blobs-missing:{event_id}",
-                f"relay: gave up on attachment(s) {missing} of {event_id} "
-                f"after {GIVE_UP_AFTER} pulls; the message landed without them",
+            if ident == key:
+                raise ValueError("relay: event has no event_id")
+            origin = event.get("reply_to") or {}
+            meta = cloud._origin_meta(origin)
+            platform = str(meta["cloud_platform"])
+            sender = _sender(home, platform, origin.get("user_id"))
+            raw_attachments = event.get("attachments")
+            names = cloud._attachment_names(raw_attachments)
+            if names is None:
+                raise ValueError(f"relay: unreadable attachments for {event_id}")
+            pointers = (raw_attachments if isinstance(raw_attachments, (list, tuple))
+                        else [raw_attachments])
+            blobs = []
+            blob_ids = []
+            missing = []
+            blob_facts = []
+            for index, pointer in enumerate(pointers[:len(names)]):
+                try:
+                    sha, size = _blob(home, client, event_id, index)
+                except Exception:  # noqa: BLE001 — counted, then held or given up
+                    missing.append(index)
+                    continue
+                mime = ((pointer.get("mime_type") if isinstance(pointer, dict) else None)
+                        or "application/octet-stream")
+                ident = f"blob:relay:{event_id}#{index}"
+                blob_facts.append(Fact(
+                    kind="blob", by=f"loom:{home.install_id()}", id=ident,
+                    data={"sha": sha, "mime": mime, "size": size, "origin": f"relay:{event_id}#{index}"},
+                ))
+                blobs.append(sha)
+                blob_ids.append(ident)
+            if missing:
+                # A restart grants three fresh tries; one missing file must not
+                # stall every subsequent message in a live poller.
+                tries = failures.get(key, 0) + 1
+                if tries < GIVE_UP_AFTER:
+                    raise RuntimeError(
+                        f"relay: attachment download failed: {event_id}#"
+                        f"{','.join(map(str, missing))} "
+                        f"(attempt {tries} of {GIVE_UP_AFTER})"
+                    )
+            facts.extend(append(home, fact) for fact in blob_facts)
+            data = {
+                "origin": f"relay:{event_id}", "platform": platform,
+                "chat": meta["cloud_chat_id"], "topic": meta["cloud_topic_id"],
+                "from": sender, "text": event.get("body") or "", "blobs": blobs,
+            }
+            if missing:
+                data["blobs_missing"] = missing
+            # Preserve the raw reply target for slice 2 to resolve against sent
+            # receipts. message_id is the incoming id, never a reply target.
+            if platform == "telegram" and origin.get("reply_to_message_id") is not None:
+                data["reply_to_message_id"] = origin["reply_to_message_id"]
+            reply_thread = thread_for_message(
+                facts, f"channel:{platform}/{data['chat']}", data.get("reply_to_message_id"),
             )
-        failures.pop(event_id, None)
+            # Source is durable before letter. Save the routing decision as part
+            # of that intent: HLC ordering alone cannot reconstruct the original
+            # snapshot once facts from another install arrive during recovery.
+            data["to"] = route_bare(
+                facts, f"{platform}/{data['chat']}", reply_thread,
+            )
+            source = append(home, Fact(
+                kind="source", by=f"loom:{home.install_id()}", id=source_id,
+                after=tuple(blob_ids), data=data,
+            ))
+            facts.append(source)
+            sources[source_id] = source
+            facts.append(_letter(home, source))
+            letter_ids.add(letter_id)
+            if missing:
+                from ..loom import _attention
+                _attention(
+                    home, f"attention:blobs-missing:{event_id}",
+                    f"relay: gave up on attachment(s) {missing} of {event_id} "
+                    f"after {GIVE_UP_AFTER} pulls; the message landed without them",
+                )
+            failures.pop(key, None)
+        except Exception as exc:
+            tries = failures[key] = failures.get(key, 0) + 1
+            if tries < GIVE_UP_AFTER:
+                retry = exc
+                continue
+            # Keep the wire bytes as data before advancing; no letter is
+            # fabricated from an event we cannot interpret.
+            event_id = event.get("event_id") if isinstance(event, dict) else None
+            ident = event_id if isinstance(event_id, str) and event_id else key
+            why = f"relay: refused event {ident} after {GIVE_UP_AFTER} pulls: {type(exc).__name__}: {exc}"
+            sources[f"source:relay:{ident}"] = append(home, Fact(
+                kind="source", by=f"loom:{home.install_id()}", id=f"source:relay:{ident}",
+                data={"raw": event, "refused": True, "why": why},
+            ))
+            from ..loom import _attention
+            _attention(home, f"attention:reject:relay:{ident}", why)
+    if retry is not None:
+        raise retry
     _write_cursor(home, next_cursor)
     return next_cursor
 
@@ -391,15 +412,15 @@ def poll_forever(home: Home, client, lock, stop, *, log=None,
             stop.wait(0.5)
         if stop.is_set():
             return
-        handed = lock.cursor()
-        own = read_cursor(home)
-        if handed is not None and handed > own:
-            say(f"relay: cursor {own} -> {handed} (handed over)")
-            _write_cursor(home, handed)
-        say(f"relay: polling from {read_cursor(home)}")
+        cursor = None
         while not stop.is_set():
             try:
-                cursor = pull_once(home, client, read_cursor(home), failures=failures)
+                if cursor is None:
+                    handed, own = lock.cursor(), read_cursor(home)
+                    cursor = max(own, handed or 0)
+                    _write_cursor(home, cursor)
+                    say(f"relay: polling from {cursor}")
+                cursor = pull_once(home, client, cursor, failures=failures)
                 lock.record(cursor)
                 backoff = 1.0
             except Exception as exc:  # noqa: BLE001 — the loop must outlive one bad poll
