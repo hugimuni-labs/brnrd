@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+from brr.grok_runner import command
+
+room, core = sys.argv[1:]
+def hook(event, timeout):
+    return {"hooks": [{"type": "command", "command": os.environ["BRNRD_JACK"] + " --event " + event,
+                       "timeout": timeout}]}
+path = Path(room) / "self/.claude/settings.local.json"
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps({"hooks": {
+    "SessionStart": [hook("start", 60)],
+    "PostToolUse": [hook("post", 60)],
+    "Stop": [hook("stop", int(float(os.environ["BRNRD_WAIT"])) + 60)],
+}}) + "\n")
+os.execvp("grok", command(Path(os.environ["BRNRD_WAKE"]), model=core,
+                           rules="Follow the self's wake and the loom jack boundaries."))
