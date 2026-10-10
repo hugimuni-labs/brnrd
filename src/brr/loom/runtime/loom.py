@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 import traceback
 from dataclasses import dataclass
@@ -20,10 +22,12 @@ from .attention import actionable
 from .home import Home, atomic_write, is_channel, mint
 from .ledger import LedgerConflict, append, read_facts
 from .port import (
-    fact_from_port, fact_from_taint, parse_frontmatter, render_boundary, render_wake,
+    fact_from_port, fact_from_taint, parse_frontmatter, render_boundary,
 )
 from .project import fold, generation, holder, sender_threads
-from .selfrepo import AUTHOR_EMAIL, AUTHOR_NAME, _env_without_pin
+from .selfrepo import (
+    AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, room as clone_room, run_wake,
+)
 
 SRC = str(Path(__file__).resolve().parents[3])
 FUSE_WINDOW_S = 600
@@ -162,7 +166,8 @@ def _fused(home: Home, facts: list[Fact], strand: str, thread: str) -> bool:
 def _prepare(home: Home, strand: str, thread: str, gen: int,
              letters: list[Fact], threads: dict[str, str],
              facts: list[Fact]) -> Path:
-    room = home.room(strand)
+    room = home.room(strand).resolve()
+    clone = clone_room(home.root, strand)
     (room / "port" / "in").mkdir(parents=True, exist_ok=True)
     (room / "port" / "out").mkdir(parents=True, exist_ok=True)
     wait_src = home.thread_dir(thread) / "wait"
@@ -170,9 +175,23 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         atomic_write(room / "port" / "wait", wait_src.read_text().strip() + "\n")
     for name in ("jack-state.json", "molt-pending"):
         (room / "port" / name).unlink(missing_ok=True)
-    readme = (home.thread_dir(thread) / "README.md").read_text()
-    atomic_write(room / "port" / "wake.md",
-                 render_wake(readme, strand, gen, thread, letters, threads))
+    owed_path = room / "port" / "owed.json"
+    atomic_write(owed_path, json.dumps([letter.data for letter in letters]))
+    part_path = room / "port" / "loom.md"
+    atomic_write(part_path, (
+        f"you are strand {strand} on thread {thread}; letters arrive at your "
+        "tool boundaries; answer with `python -m brr.loom.runtime send --re <id> "
+        "--to thread:<from-thread> \"…\"`; commit in this self clone and land "
+        "your branch with `python -m brr.loom.runtime send-self --room .`; "
+        "when you're done, stop, and the jack holds you while letters may come\n"
+    ))
+    with tempfile.TemporaryFile(mode="w+") as wake, tempfile.TemporaryFile(mode="w+") as why:
+        code = run_wake(clone, thread, owed_path, loom_part=part_path, stdout=wake, stderr=why)
+        why.seek(0)
+        if code != 0:
+            raise SelfError(f"wake exited {code}: {why.read().strip()}")
+        wake.seek(0)
+        atomic_write(room / "port" / "wake.md", wake.read())
     shown = fold(facts).shown.get(strand, set())
     atomic_write(
         room / "port" / "in" / "boundary.md",
@@ -208,7 +227,7 @@ def _spawn(room: Path, argv: list[str]) -> tuple[subprocess.Popen, object]:
     cmd = [sys.executable, "-c", _FLOCK, str(room / ".body"), *argv]
     try:
         proc = subprocess.Popen(
-            cmd, cwd=room, env=_env(room), stdin=subprocess.DEVNULL,
+            cmd, cwd=room / "self", env=_env(room), stdin=subprocess.DEVNULL,
             stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
         )
     except Exception:
@@ -224,9 +243,13 @@ def _start(home: Home, strand: str, thread: str, gen: int, adapter: str,
         if strand in bodies:
             return facts
         letters = actionable(facts, thread)
-        room = _prepare(
-            home, strand, thread, gen, letters, sender_threads(facts), facts,
-        )
+        try:
+            room = _prepare(
+                home, strand, thread, gen, letters, sender_threads(facts), facts,
+            )
+        except (SelfError, subprocess.TimeoutExpired) as exc:
+            _attention(home, f"attention:wake:{strand}:{gen}", str(exc), thread=thread)
+            return facts
         if adapter == "fake":
             policy = _policy(home, thread)
             if policy is None:

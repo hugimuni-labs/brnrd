@@ -311,6 +311,10 @@ def room(home: Path, strand: str) -> Path:
     source = home / "self"
     if not (source / ".git").exists():
         raise SelfError(f"no self at {source}; init first")
+    # A live clone sends back to this checked-out main. The incumbent's
+    # immune must gate that push, and git must update the accepted worktree.
+    from .merge import install_pre_receive
+    install_pre_receive(source)
     dest = home / "rooms" / strand / "self"
     if (dest / ".git").exists():
         return dest
@@ -352,14 +356,17 @@ def default_loom_part(clone: Path, thread: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def run_wake(room_dir: Path, thread: str, owed: Path | None = None) -> int:
+def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
+             loom_part: Path | None = None, stdout=None, stderr=None) -> int:
     """Exec the clone's ``core/loom/wake``. The prompt is its stdout; the code is its code."""
     _segment(thread, "thread")
     clone = resolve_clone(room_dir)
     recipe = clone / "core" / "loom" / "wake"
     if not os.access(recipe, os.X_OK):
         raise SelfError(f"{recipe} is not executable")
-    env = os.environ.copy()
+    env = _env_without_pin()
+    if loom_part is not None:
+        env["LOOM_PART"] = str(loom_part)
     owed_file = None
     part_file = None
     try:
@@ -377,7 +384,8 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None) -> int:
             handle.close()
             part_file = handle.name
             env["LOOM_PART"] = handle.name
-        proc = subprocess.run([str(recipe), thread, owed_arg], cwd=clone, env=env)
+        proc = subprocess.run([str(recipe), thread, owed_arg], cwd=clone, env=env,
+                              stdout=stdout, stderr=stderr, timeout=60)
         return proc.returncode
     finally:
         if owed_file:
