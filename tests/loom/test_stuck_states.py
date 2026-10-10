@@ -45,9 +45,6 @@ def root(tmp_path):
 
 def thread(root, policy="answer-fast", wait="0.1"):
     write_thread(root, "work", "# Work", policy, wait=wait)
-    repo = root / "self"
-    git(repo, "add", "threads")
-    git(repo, "commit", "-m", "Fixture threads\n\nLoom-Label: taint=0; audience=self")
 
 
 def reach(predicate, loom, seconds=5):
@@ -137,15 +134,15 @@ def test_new_message_can_recover_a_silent_live_body(root):
         wait_until(lambda: answered(loom, fresh), 2, loom.dump)
 
 
-@stuck("restart neither adopts live orphans nor releases their leases when they later die")
 def test_restart_recovers_a_body_that_outlived_its_loom(root, monkeypatch):
-    thread(root, "hold")
+    thread(root, "answer-pings")
     inject_letter(root, to="thread:work", body="begin")
     first = Loom(root)
     first.start()
     pid = None
     try:
-        reach(lambda: any(f.kind == "shown" for f in first.facts()), first)
+        reach(lambda: any(f.kind == "body.started" for f in first.facts())
+              and any(runtime.body_alive(path) for path in (root / "rooms").iterdir()), first)
         pid = next(f.data["pid"] for f in first.facts() if f.kind == "body.started")
         # Simulate a loom dying while its separately-sessioned body survives.
         def leave_body(bodies):
@@ -157,8 +154,9 @@ def test_restart_recovers_a_body_that_outlived_its_loom(root, monkeypatch):
         with running(root) as second:
             reach(lambda: second.thread.is_alive() and bool(holder(second.facts(), "work")),
                   second)
-            # Let _recover observe the live flock before the orphan dies.
-            time.sleep(0.2)
+            # The orphan still hears a person's new letter through the new loom.
+            live = inject_letter(root, to="thread:work", body="while you survived")
+            wait_until(lambda: answered(second, live), 2, second.dump)
             (second.home.thread_dir("work") / "policy").write_text("answer-fast\n")
             os.killpg(pid, signal.SIGKILL)
             fresh = inject_letter(root, to="thread:work", body="back after restart")
@@ -173,18 +171,23 @@ def test_restart_recovers_a_body_that_outlived_its_loom(root, monkeypatch):
                 pass
 
 
-@stuck("preparation failure after a lease leaves an own dead holder with no fuse")
 def test_fixed_readme_and_new_message_release_failed_start(root):
     thread(root)
     readme = Home(root).thread_dir("work") / "README.md"
+    original_readme = readme.read_text()
     readme.write_bytes(b"\xff")
+    git(root / "self", "add", "threads/work/README.md")
+    git(root / "self", "commit", "-m", "Fixture broken README")
     original = inject_letter(root, to="thread:work", body="begin")
     with running(root) as loom:
         reach(lambda: holder(loom.facts(), "work") is not None, loom)
         # Wait for the specific preparation failure before repairing the file.
         log = root / "loom" / "loom.log"
-        reach(lambda: log.exists() and "UnicodeDecodeError" in log.read_text(), loom)
-        readme.write_text("# Work\n")
+        reach(lambda: log.exists() and "not utf-8" in log.read_text()
+              and any(f.id.startswith("attention:fuse:") for f in loom.facts()), loom)
+        readme.write_text(original_readme)
+        git(root / "self", "add", "threads/work/README.md")
+        git(root / "self", "commit", "-m", "Repair fixture README")
         inject_letter(root, to="thread:work", body="fixed, retry")
         wait_until(lambda: answered(loom, original), 2, loom.dump)
 

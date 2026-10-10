@@ -5,7 +5,6 @@ import time
 from brr.loom.runtime import loom as loom_module
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import inject_letter, read_facts
-from brr.loom.runtime.loom import _recover
 from brr.loom.runtime.project import holder, owed
 
 from _step import Loom, wait_until, write_thread
@@ -58,8 +57,15 @@ def test_a_walled_body_waits_holding_its_thread(tmp_path, monkeypatch):
         loom.halt()
         assert not loom.errors
     # A restarted loom leaves the walled strand holding: its wait still stands.
-    _recover(Home(root))
-    assert holder(read_facts(Home(root)), "tw") == (wall.data["strand"], wall.data["gen"])
+    restarted = Loom(root)
+    restarted.start()
+    try:
+        time.sleep(0.5)
+        assert holder(read_facts(Home(root)), "tw") == (wall.data["strand"], wall.data["gen"])
+        assert len(_kinds(restarted.facts(), "body.started")) == 1
+    finally:
+        restarted.halt()
+        assert not restarted.errors
 
 
 def test_a_crash_that_mentions_a_limit_earlier_still_fuses(tmp_path):

@@ -236,35 +236,39 @@ def _spawn(room: Path, argv: list[str]) -> tuple[subprocess.Popen, object]:
 
 def _start(home: Home, strand: str, thread: str, gen: int, adapter: str,
            core: str, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
-    """Launch one body. Process failures are reaped; launch errors reach run()."""
+    """Launch one body; preparation and launch failures count toward its fuse."""
     if strand in bodies:
         return facts
     letters = actionable(facts, thread)
+    ids = [str(letter.data["id"]) for letter in letters]
     try:
         room = _prepare(
             home, strand, thread, gen, letters, sender_threads(facts), facts,
         )
-    except (SelfError, subprocess.TimeoutExpired) as exc:
-        _attention(home, f"attention:wake:{strand}:{gen}", str(exc), thread=thread)
+        argv = (fake_argv(room, _policy(home, thread)) if adapter == "fake"
+                else claude_argv(room, core, wait_seconds(room)))
+        log_path = room / "port" / "body.log"
+        log_start = log_path.stat().st_size if log_path.is_file() else 0
+        # The wake has already exposed these letters. Publish that label
+        # before exec: send-self can precede the body's first jack receipt.
+        facts.append(_record(home, "shown", {
+            "strand": strand, "gen": gen, "ids": ids,
+        }, f"shown:wake:{strand}:{gen}:{mint(6)}"))
+        proc, log = _spawn(room, argv)
+    except Exception as exc:
+        why = f"{type(exc).__name__}: {exc}"
+        _attention(home, f"attention:wake:{strand}:{gen}", why, thread=thread)
+        _log(home, f"start failed {strand}: {why}")
+        facts.append(_record(home, "body.died", {
+            "strand": strand, "gen": gen, "why": why,
+        }, f"body.died:{strand}:{gen}:{mint(6)}"))
+        if not _fused(home, facts, strand, thread):
+            return _start(home, strand, thread, gen, adapter, core, bodies, facts)
         return facts
-    if adapter == "fake":
-        argv = fake_argv(room, _policy(home, thread))
-    elif adapter == "claude":
-        argv = claude_argv(room, core, wait_seconds(room))
-    else:
-        raise ValueError(f"unknown adapter {adapter!r}")
-    log_path = room / "port" / "body.log"
-    log_start = log_path.stat().st_size if log_path.is_file() else 0
-    proc, log = _spawn(room, argv)
-    started = _record(
-        home, "body.started",
-        {"strand": strand, "gen": gen, "pid": proc.pid, "adapter": adapter},
-        f"body.started:{strand}:{gen}:{proc.pid}:{mint(6)}",
-    )
-    facts.append(started)
-    bodies[strand] = Body(
-        strand, thread, gen, proc, log, log_start,
-    )
+    facts.append(_record(home, "body.started", {
+        "strand": strand, "gen": gen, "pid": proc.pid, "adapter": adapter,
+    }, f"body.started:{strand}:{gen}:{proc.pid}:{mint(6)}"))
+    bodies[strand] = Body(strand, thread, gen, proc, log, log_start)
     _log(home, f"start {strand} thread {thread} gen {gen} pid {proc.pid} {adapter}")
     return facts
 
@@ -350,20 +354,6 @@ def _ingest(home: Home, facts: list[Fact] | None = None, ttl: float | None = Non
     return facts
 
 
-def _boundaries(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> None:
-    state = fold(facts)
-    threads = sender_threads(facts)
-    for body in bodies.values():
-        letters = actionable(facts, body.thread)
-        text = render_boundary(
-            body.strand, body.gen, body.thread, letters,
-            state.shown.get(body.strand, set()), threads,
-        )
-        path = home.room(body.strand) / "port" / "in" / "boundary.md"
-        if not path.is_file() or path.read_text() != text:
-            atomic_write(path, text)
-
-
 def _molted(home: Home, body: Body) -> bool:
     return (home.room(body.strand) / "port" / "molt-pending").is_file()
 
@@ -385,7 +375,7 @@ def _reap(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         if failed and walled(_log_tail(home.room(strand), body.log_start)):
             # The provider's window is spent. Not a death: nothing counts
             # toward the fuse or against the letters, and the thread stays
-            # held and owed. `_rewake` starts the body again after `until`.
+            # held and owed. `_refresh_holders` retries after `until`.
             facts.append(_record(home, "body.walled", {
                 "strand": strand, "thread": body.thread, "gen": body.gen,
                 "code": code, "until": time.time() + WALL_WAIT_S,
@@ -438,53 +428,28 @@ def _walled_last(facts: list[Fact]) -> dict[str, Fact]:
     return {strand: fact for strand, fact in last.items() if fact.kind == "body.walled"}
 
 
-def _rewake(home: Home, bodies: dict[str, Body], adapter: str, core: str,
-            facts: list[Fact]) -> list[Fact]:
-    """Start again the bodies whose wait at a provider limit is over."""
+def _refresh_holders(home: Home, bodies: dict[str, Body], adapter: str, core: str,
+                     facts: list[Fact]) -> list[Fact]:
+    """Own holders: refresh live boundaries, retry expired walls, release corpses."""
     from .router import install_of
-    for strand, fact in _walled_last(facts).items():
-        if strand in bodies:
+    state, threads, walls = fold(facts), sender_threads(facts), _walled_last(facts)
+    for thread, (strand, gen) in state.holder.items():
+        if install_of(strand) != home.install_id():
             continue
-        if install_of(strand) != home.install_id() or time.time() < fact.data["until"]:
-            continue
-        thread, gen = str(fact.data["thread"]), int(fact.data["gen"])
-        if holder(facts, thread) != (strand, gen):
-            continue
-        facts = _start(home, strand, thread, gen, adapter, core, bodies, facts)
-    return facts
-
-
-def _recover(home: Home) -> list[Fact]:
-    """Release threads this install held whose bodies died with the last loom.
-
-    Only this loom reaps its own strands, and the router re-grants a dead
-    holder only when its install is silent or the strand fused on an unrunnable letter.
-    A restarted loom is neither, so without this every thread it held stays
-    leased to a corpse. A body still holding its flock is left alone, and a
-    fused strand stays fused until a new letter reaches its thread
-    (`Router._release_abandoned`). A walled
-    strand stays held too: `_rewake` starts it when its wait is over.
-    """
-    from .router import install_of
-    facts = read_facts(home)
-    state = fold(facts)
-    own = home.install_id()
-    for thread, (strand, gen) in sorted(state.holder.items()):
-        if install_of(strand) != own or body_alive(home.room(strand)):
-            continue
-        if any(fact.kind == "attention" and fact.id == f"attention:fuse:{strand}"
-               for fact in facts):
-            continue
-        if _walled_last(facts).get(strand) is not None:
-            continue
-        try:
+        if strand in bodies or body_alive(home.room(strand)):
+            text = render_boundary(strand, gen, thread, actionable(facts, thread),
+                                   state.shown.get(strand, set()), threads)
+            path = home.room(strand) / "port" / "in" / "boundary.md"
+            if not path.is_file() or path.read_text() != text:
+                atomic_write(path, text)
+        elif strand in walls:
+            if time.time() >= walls[strand].data["until"]:
+                facts = _start(home, strand, thread, gen, adapter, core, bodies, facts)
+        elif not any(fact.id == f"attention:fuse:{strand}" for fact in facts):
             facts.append(_record(home, "released", {
                 "thread": thread, "strand": strand, "gen": gen,
-                "why": "loom restarted", "install": own,
+                "why": "holder gone", "install": home.install_id(),
             }, f"released:{thread}:{gen}"))
-        except LedgerConflict:
-            continue
-        _log(home, f"released {strand} thread {thread} (loom restarted)")
     return facts
 
 
@@ -501,11 +466,10 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     facts = read_facts(home)
     facts = router.begin_tick(facts)
     facts = _ingest(home, facts, router.config.router_ttl)
+    facts = _refresh_holders(home, bodies, adapter, core, facts)
     facts = router.route(facts, bodies, adapter, core)
     facts = router.speak_out(facts)
-    _boundaries(home, bodies, facts)
     facts = _reap(home, bodies, adapter, core, facts)
-    _rewake(home, bodies, adapter, core, facts)
 
 
 def _pause(stop, seconds: float) -> bool:
@@ -560,7 +524,6 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
     home.install_id()
     from .router import Router
     router = Router(home)
-    _recover(home)
     relay = _arm_relay(home, router.config, stop)
     bodies: dict[str, Body] = {}
     try:

@@ -1,6 +1,5 @@
 """The live loop follows the self -> wake -> body -> branch -> immune road."""
 
-import time
 from pathlib import Path
 
 import pytest
@@ -72,23 +71,25 @@ def test_a_live_body_sees_identity_and_lands_a_labeled_commit(tmp_path, sender):
         assert not loom.errors
 
 
-def test_a_wake_over_budget_refuses_one_start_without_retry(tmp_path, monkeypatch):
+def test_a_wake_over_budget_fuses_then_a_new_letter_retries(tmp_path, monkeypatch):
     root = tmp_path / "home"
-    write_thread(root, "fat", "A fat wake", "hold", wait="0")
+    write_thread(root, "fat", "A fat wake", "answer-fast", wait="0")
     monkeypatch.setenv("LOOM_BUDGET_BYTES", "1")
-    inject_letter(root, to="thread:fat", body="begin")
+    original = inject_letter(root, to="thread:fat", body="begin")
     loom = Loom(root)
     loom.start()
     try:
-        wait_until(lambda: any(row.kind == "wake" for row in view(loom.facts())),
+        wait_until(lambda: any(row.kind == "fuse" for row in view(loom.facts())),
                    8, loom.dump)
-        time.sleep(0.2)  # Several further ticks cannot retry the held start.
         facts = loom.facts()
-        rows = view(facts)
-        assert len(rows) == 1
-        assert "wake exited 3: over budget:" in rows[0].why
-        assert not [f for f in facts if f.kind.startswith("body.")]
+        assert len([f for f in facts if f.kind == "body.died"]) == 2
+        assert any("wake exited 3: over budget:" in row.why for row in view(facts))
+        assert not [f for f in facts if f.kind == "body.started"]
         assert owed(facts, "fat")
+        monkeypatch.delenv("LOOM_BUDGET_BYTES")
+        inject_letter(root, to="thread:fat", body="fixed, retry")
+        wait_until(lambda: not owed(loom.facts(), "fat"), 8, loom.dump)
+        assert original not in {f.data["id"] for f in owed(loom.facts(), "fat")}
     finally:
         loom.halt()
     assert not loom.errors
