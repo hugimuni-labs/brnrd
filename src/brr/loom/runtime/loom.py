@@ -142,6 +142,7 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
     if passive:
         data["notice"] = True
     if about is not None:
+        data["about"] = str(about.data["id"])
         label = join(label, _sender_label(about, facts, home.root / "self", frozenset()))
         lines.append(f"{about.data['id']}: {can}")
         if stands:

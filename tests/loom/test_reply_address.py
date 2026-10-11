@@ -65,3 +65,20 @@ def test_send_refuses_a_letter_to_the_senders_own_thread(tmp_path):
     write_send(room, to="thread:t", sender=STRAND, re="p-test/abcde", note="done")
     write_send(room, to="thread:t", sender=STRAND, body="why", molt=f"{STRAND}/m1")
     assert len(list((room / "port" / "out").glob("*.md"))) == 2
+
+
+def test_a_climbed_letter_keeps_the_chat_it_came_from(tmp_path):
+    """Live, 2026-10-12: a late telegram letter to a settled thread climbed to the
+    inbox as a loom notice shown with `reply -`; the body noted the answer and the
+    person heard nothing."""
+    from brr.loom.runtime.loom import notice
+
+    home = _home(tmp_path)
+    facts = _relayed("telegram")
+    assert notice(home, facts, "climbed", "letter:relay:e1",
+                  "letter letter:relay:e1 to closed thread old climbed here (from person:ada)",
+                  "hi", thread="t", about=facts[1])
+    climbed = next(f for f in ledger.read_facts(home) if f.id.startswith("loom/climbed"))
+    text = render_boundary(STRAND, 1, "t", [climbed], set(), {},
+                           channels=reply_channels(facts + [climbed]))
+    assert parse_boundary(text).letters[0].reply == "channel:telegram/42"
