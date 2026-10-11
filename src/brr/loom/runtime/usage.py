@@ -27,7 +27,7 @@ def print_windows(rows) -> None:
 
 
 def _refresh(path, script) -> None:
-    windows = []
+    at, windows = time.time(), []
     proc = None
     try:
         env = _env_without_pin()
@@ -38,7 +38,7 @@ def _refresh(path, script) -> None:
         if proc.returncode == 0:
             for window in json.loads(out)["windows"]:
                 left = window["left_pct"]
-                if (isinstance(left, (int, float)) and math.isfinite(left) and 0 <= left <= 100
+                if (isinstance(left, (int, float)) and math.isfinite(left) and left <= 100
                         and isinstance(window.get("name"), str)):
                     windows.append(window)
     except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
@@ -48,25 +48,33 @@ def _refresh(path, script) -> None:
             os.killpg(proc.pid, signal.SIGKILL)
             proc.wait()
         try:
-            atomic_write(path, json.dumps({"at": time.time(), "windows": windows}) + "\n")
+            atomic_write(path, json.dumps({"at": at, "windows": windows}) + "\n")
         finally:
             _REFRESHING.discard(path)
 
 
-def fuel(home, shell: str) -> str:
+def reading(home, shell: str, after: float = 0):
+    """None while refreshing; an empty reading means the gauge is unknown."""
     path = (home.root / "loom/usage" / f"{shell}.json").resolve()
-    try:
-        reading = json.loads(path.read_text())
-        if 0 <= time.time() - reading["at"] < 300:
-            parts = [f"{w['name']} {w['left_pct']:g}%" for w in reading["windows"]]
-            return f"fuel {shell} " + " ".join(parts) if parts else ""
-    except (OSError, ValueError, KeyError, TypeError):
-        pass
     try:
         script = resolve(home, shell) / "usage"
     except ValueError:
-        return ""
-    if script.is_file() and path not in _REFRESHING:
+        return {"windows": []}
+    if not script.is_file():
+        return {"windows": []}
+    try:
+        reading = json.loads(path.read_text())
+        if 0 <= time.time() - reading["at"] < 300 and reading["at"] > after:
+            return reading
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    if path not in _REFRESHING:
         _REFRESHING.add(path)
         threading.Thread(target=_refresh, args=(path, script), daemon=True).start()
-    return ""
+    return None
+
+
+def fuel(home, shell: str) -> str:
+    value = reading(home, shell)
+    parts = [f"{w['name']} {w['left_pct']:g}%" for w in value["windows"]] if value else []
+    return f"fuel {shell} " + " ".join(parts) if parts else ""

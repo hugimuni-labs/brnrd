@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+from brr.grok_usage import capture_levels
+from brr.loom.runtime.usage import print_windows
+
+levels = capture_levels()
+print_windows([("week", 100 - levels["week_used_percentage"], levels.get("week_resets_at"))]
+              if "week_used_percentage" in levels else [])

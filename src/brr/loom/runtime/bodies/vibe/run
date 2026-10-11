@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+import json
+import os
+import subprocess
+import shlex
+import sys
+from pathlib import Path
+from brr.hooks import _render_vibe, _vibe_as_claude_tool, vibe_hooks_toml, PHASE_POST_TOOL, PHASE_STOP
+from brr.vibe_runner import command, prepare_system_prompt
+
+# Native hooks use a different response schema. This folder translates the
+# jack's Claude-shaped output; the loop and the jack stay shell-independent.
+if sys.argv[1] == "hook":
+    phase = sys.argv[2]
+    if phase not in (PHASE_POST_TOOL, PHASE_STOP):
+        raise SystemExit(0)
+    event = "post" if phase == PHASE_POST_TOOL else "stop"
+    payload = json.loads(sys.stdin.read() or "{}")
+    result = subprocess.run(shlex.split(os.environ["BRNRD_JACK"]) + ["--event", event],
+                            input=json.dumps(_vibe_as_claude_tool(payload)), text=True, capture_output=True)
+    if result.stdout.strip():
+        payload = json.loads(result.stdout)
+        context = payload.get("hookSpecificOutput", {}).get("additionalContext")
+        block = payload.get("decision") == "block"
+        print(json.dumps(_render_vibe(phase, context, block, payload.get("reason"))))
+    raise SystemExit(result.returncode)
+
+room, core = sys.argv[1:]
+room = Path(room)
+env = dict(os.environ, VIBE_ACTIVE_MODEL=core)
+# Identity comes from the self; the rendered wake travels on stdin.
+prompt = prepare_system_prompt(room / "self/core/identity.md", env)
+hooks = room / ".vibe/hooks.toml"
+hooks.parent.mkdir(parents=True, exist_ok=True)
+hooks.write_text(vibe_hooks_toml(
+    shlex.join([sys.executable, str(Path(__file__).resolve())]),
+    timeout=float(env["BRNRD_WAIT"]) + 60,
+))
+try:
+    result = subprocess.run(command(room), input=Path(env["BRNRD_WAKE"]).read_text(),
+                            text=True, env=env)
+finally:
+    prompt.unlink(missing_ok=True)
+raise SystemExit(result.returncode)

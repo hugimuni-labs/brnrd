@@ -14,7 +14,7 @@ What the loom cannot settle by its own rules it hands to a body: a letter from `
 
 The last lines of every notice are its handle: `settle this notice with a reply or a note, re: <id>`, and, when it is about a letter or a draft of yours, that item's id and what you can do about it. A notice that says it settles another item too stands for that item: settling either one settles both. Conditions that arrive this way: a letter two bodies died reading (quarantined, kept out of every wake), a letter addressed to no thread on main, a message of yours that was refused, went stale under a new router, or may or may not have arrived (it is never sent again; send a fresh one), a fused thread (a new letter to it resets the fuse; a notice never does), a relay event or attachment that could not be taken in, a thread directory that cannot be a thread, a port file of yours the loom refused.
 
-`python -m brr.loom.runtime attention --home <home>` lists the notices nobody has settled. It keeps no state: it reads the ledger.
+`python -m brr.loom.runtime attention --home <home>` lists parked bodies and the notices nobody has settled. A parked body holds its thread until its shell gauge can be read again at the reset time; no reply or note is owed for a park. It keeps no state: it reads the ledger.
 
 ### By hand, when the mechanism itself is what is broken
 
