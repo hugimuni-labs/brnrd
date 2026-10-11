@@ -265,11 +265,12 @@ def body_alive(room: Path) -> bool:
         os.close(fd)
 
 
-def _spawn(room: Path, argv: list[str], shell: str) -> tuple[subprocess.Popen, object]:
+def _spawn(room: Path, argv: list[str], shell: str, thread: str) -> tuple[subprocess.Popen, object]:
     log = open(room / "port" / "body.log", "ab")
     cmd = [sys.executable, "-c", _FLOCK, str(room / ".body"), *argv]
     try:
         env = _env(room)
+        env["BRNRD_THREAD"] = thread
         env["BRNRD_BODY_SHELL"] = shell
         env["BRNRD_BODY_JACK"] = (Path(argv[0]).parent / "jack").read_text().strip()
         proc = subprocess.Popen(
@@ -334,7 +335,7 @@ def _start(home: Home, strand: str, thread: str, gen: int,
             "strand": strand, "gen": gen, "ids": ids,
         }, f"shown:wake:{strand}:{gen}:{mint(6)}"))
         readme = _readme(room, thread)
-        proc, log = _spawn(room, argv, shell)
+        proc, log = _spawn(room, argv, shell, thread)
     except Exception as exc:
         why = f"{type(exc).__name__}: {exc}"
         _log(home, f"start failed {strand}: {why}")
