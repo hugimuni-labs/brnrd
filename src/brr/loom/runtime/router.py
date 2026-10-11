@@ -282,7 +282,7 @@ class Router:
     def _unrouted(self, facts: list[Fact], known: set[str]) -> list[Fact]:
         """Letters no thread will ever show: tell a body. Never about a notice."""
         from .home import thread_of
-        from .loom import _attention, notice, notice_id
+        from .loom import _attention, body_alive, notice, notice_id
         from .lifecycle import CLOSED, read_thread
 
         state = fold(facts)
@@ -305,6 +305,16 @@ class Router:
                        f"{destination!r}, which is not a thread on main; no thread will show it",
                        read, about=fact, stands=True)
             elif read_thread(self.home, thread).get("status") in CLOSED:
+                held = state.holder.get(thread)
+                room = self.home.room(held[0]) if held is not None else None
+                if (held is not None and letter_id in state.shown.get(held[0], set())
+                        and (body_alive(room) or any((room / "port" / "out").glob("*.md")))):
+                    # The body that closed the thread was shown this letter and is still
+                    # leaving: it settles it itself. Climbing it now starts a second body
+                    # on the inbox for what the first answers four seconds later (live,
+                    # 2026-10-12). Its last words may still sit in port/out, unread, when
+                    # it has already exited. Gone with the letter owed, it climbs next tick.
+                    continue
                 target, seen = thread, set()
                 while target in known and target not in seen:
                     seen.add(target)
