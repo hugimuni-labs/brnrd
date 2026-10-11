@@ -208,9 +208,9 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     fresh = not (room / "self" / ".git").exists()
     clone = clone_room(home.root, strand)
     if fresh:
-        lease = next(f for f in reversed(facts) if f.kind == "lease"
-                     and f.data.get("strand") == strand and f.data.get("gen") == gen)
-        parent = lease.data.get("parent")
+        lease = next((f for f in reversed(facts) if f.kind == "lease"
+                      and f.data.get("strand") == strand and f.data.get("gen") == gen), None)
+        parent = lease.data.get("parent") if lease else None
         if parent:
             source = home.room(parent) / "self"
             if (source / ".git").exists():
