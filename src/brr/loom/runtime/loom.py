@@ -308,7 +308,9 @@ def _start(home: Home, strand: str, thread: str, gen: int,
             if not prior or prior[-1].kind not in {"body.pending", "body.parked"}:
                 facts.append(_record(home, "body.pending", data, f"body.pending:{strand}:{mint(6)}"))
             return facts
-        empty = next((w for w in gauge["windows"] if w["left_pct"] <= 0), None)
+        from .config import load_config
+        floor = load_config(home.root).hold_floor_pct
+        empty = next((w for w in gauge["windows"] if w["left_pct"] <= floor), None)
         if empty:
             try:
                 until = datetime.fromisoformat(empty["resets_at"]).timestamp()
