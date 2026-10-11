@@ -119,7 +119,7 @@ def notice_id(kind: str, subject: str) -> str:
 
 def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, can: str, *,
            thread: str | None = None, about: Fact | None = None, stands: bool = False,
-           taint: bool = False) -> bool:
+           taint: bool = False, channel: str | None = None) -> bool:
     """The one writer of loom notices: what the loom cannot settle, a body is told.
 
     A notice is an owed letter from ``loom``, so it is shown at every
@@ -135,7 +135,7 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
     label = Label(taint, SELF_AUDIENCE)
     lines = [what]
     data: dict = {"id": ident, "from": "loom",
-                  "to": f"thread:{thread if home.routable(thread) else 'inbox'}"}
+                  "to": channel or f"thread:{thread if home.routable(thread) else 'inbox'}"}
     if about is not None:
         label = join(label, _sender_label(about, facts, home.root / "self", frozenset()))
         lines.append(f"{about.data['id']}: {can}")
@@ -144,10 +144,14 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
             lines.append(f"settling this notice settles {about.data['id']} too")
     else:
         lines.append(can)
-    lines.append(f"settle this notice with a reply or a note, re: {ident}")
+    if channel is None:
+        lines.append(f"settle this notice with a reply or a note, re: {ident}")
     data.update(body="\n".join(lines), label=label.as_dict())
+    draft = Fact(kind="letter", by=_by(home), data=data, id=ident)
+    if channel is not None:
+        _stamp_router(draft, facts)
     try:
-        facts.append(append(home, Fact(kind="letter", by=_by(home), data=data, id=ident)))
+        facts.append(append(home, draft))
     except LedgerConflict:
         return False
     _log(home, f"notice {ident} to {data['to']}: {what}")
@@ -450,6 +454,24 @@ def _waste(home, facts, strand, thread, gen, code, letters, failure=""):
         ident, author = str(letter.data["id"]), str(letter.data.get("from", ""))
         what = (f"letter {ident} on thread {thread}: body exited {code}; "
                 f"README changed since start: {changed}; {tank or 'fuel unknown'}\n{tail}")
+        if author.startswith("person:") and start is not None:
+            retry = f"retry:{ident}"
+            if not any(f.id == retry for f in facts):
+                facts.append(_record(home, "letter.retry", {"strand": strand, "letter": ident}, retry))
+                continue
+            source = next((f for f in facts if f.id == letter.data.get("cites")), None)
+            channel = (f"channel:{source.data['platform']}/{source.data['chat']}"
+                       if source and source.data.get("platform") and source.data.get("chat") is not None else None)
+            if channel:
+                first = str(letter.data.get("body", "")).splitlines()
+                notice(home, facts, "failed-message", ident,
+                       f"thread {thread} could not handle your letter: {first[0] if first else ''}\n{tail}",
+                       "send again, or leave it", about=letter, channel=channel)
+            else:
+                _attention(home, f"attention:wasted:{ident}", what, thread=thread, letter=ident)
+            facts.append(_record(home, "note", {"strand": strand, "re": ident,
+                                "why": "second body ended without handling it"}, f"wasted:{ident}"))
+            continue
         target = threads.get(author) or (opener.removeprefix("thread:") if opener.startswith("thread:") else None)
         if not is_notice(letter) and not author.startswith("stranger:") and home.routable(target):
             notice(home, facts, "bounce", ident, what, "send again, or leave it",
