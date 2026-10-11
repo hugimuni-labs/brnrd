@@ -23,6 +23,7 @@ DEFAULT_MARGIN = 1.0
 @dataclass(frozen=True)
 class LoomConfig:
     body: str | None = None
+    hold_floor_pct: float = 3.0
     name: str | None = None
     router_ttl: float = DEFAULT_TTL
     max_skew: float = DEFAULT_SKEW
@@ -91,6 +92,7 @@ def load_config(root: Path | str) -> LoomConfig:
 
     return LoomConfig(
         body=found.get("body") or None,
+        hold_floor_pct=number("hold_floor_pct", 3.0),
         name=name,
         relay_state=relay_state,
         router_ttl=number("router_ttl", DEFAULT_TTL) or DEFAULT_TTL,

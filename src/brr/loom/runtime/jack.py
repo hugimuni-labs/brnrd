@@ -75,6 +75,15 @@ def _block(room: Path, text: str, parsed: Boundary) -> str:
 
 
 def _poll(room: Path) -> str:
+    from .usage import below_floor
+    home = home_of_room(room)
+
+    def empty() -> bool:
+        shell = os.environ.get("BRNRD_BODY_SHELL")
+        return bool(not _hand() and shell and below_floor(home, shell))
+
+    if empty():
+        return ""
     deadline = time.monotonic() + _wait(room)
     while True:
         if _state(room).get("molted"):
@@ -87,6 +96,8 @@ def _poll(room: Path) -> str:
             return _block(room, text, parsed)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            if empty():
+                return ""
             from .lifecycle import read_thread
             thread = os.environ["BRNRD_THREAD"]
             opener = str(read_thread(home_of_room(room), thread).get("opened-by", ""))
