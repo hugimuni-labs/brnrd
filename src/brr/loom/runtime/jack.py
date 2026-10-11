@@ -97,12 +97,14 @@ def _poll(room: Path) -> str:
             return _block(room, text, parsed)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            if _hand():
+                return ""
             if empty():
                 return ""
             from .lifecycle import read_thread
             thread = os.environ["BRNRD_THREAD"]
-            opener = str(read_thread(home_of_room(room), thread).get("opened-by", ""))
-            if _hand() or (not parsed.ids and opener.startswith("thread:")):
+            opener = str(read_thread(home, thread).get("opened-by", ""))
+            if not parsed.ids and opener.startswith("thread:"):
                 return ""
             # Request a fresh sample for the next wait, then observe its
             # asynchronous arrival without treating no reading as empty.
