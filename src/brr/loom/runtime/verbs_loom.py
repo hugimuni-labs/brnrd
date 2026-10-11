@@ -51,7 +51,8 @@ def _attention(argv: list[str]) -> int:
             d = fact.data
             thread = next(t for t, (s, _g) in state.holder.items() if s == strand)
             until = datetime.fromtimestamp(d["until"], timezone.utc).isoformat()
-            sys.stdout.write(f"parked · {thread} · {d['shell']} {d['window']} 0% · until {until}\n")
+            left = d.get("left_pct", 0)
+            sys.stdout.write(f"parked · {thread} · {d['shell']} {d['window']} {left:g}% · until {until}\n")
     for fact in state.accepted:
         if is_notice(fact) and fact.data["id"] not in state.handled:
             first = str(fact.data["body"]).split("\n", 1)[0]
