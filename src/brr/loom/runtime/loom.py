@@ -320,7 +320,7 @@ def _start(home: Home, strand: str, thread: str, gen: int,
             # its own reset) would park, expire and re-park on every reading.
             if until <= time.time():
                 until = time.time() + 900
-            data.update(window=empty["name"], until=until)
+            data.update(window=empty["name"], left_pct=empty["left_pct"], until=until)
             facts.append(_record(home, "body.parked", data, f"body.parked:{strand}:{mint(6)}"))
             return facts
         room = _prepare(
