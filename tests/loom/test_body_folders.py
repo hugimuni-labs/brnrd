@@ -48,7 +48,7 @@ ctx.jack("stop")
     assert not loom.errors
 
 
-def test_empty_gauge_parks_then_starts_and_answers(tmp_path, capsys):
+def test_gauge_at_configured_floor_parks_then_starts_and_answers(tmp_path, capsys):
     from brr.loom.runtime.project import holder
     from brr.loom.runtime.verbs_loom import _attention
     root = tmp_path / "home"
@@ -59,6 +59,7 @@ def test_empty_gauge_parks_then_starts_and_answers(tmp_path, capsys):
     git(root / "self", "commit", "-m", "Choose the gauge body.")
     folder = root / "loom/bodies/gauge"
     folder.mkdir(parents=True)
+    (root / "loom/config.toml").write_text("hold_floor_pct = 7\n")
     (folder / "jack").write_text("hooks\n")
     run = folder / "run"
     run.write_text("""#!/usr/bin/env python3
@@ -72,7 +73,7 @@ os.execv(sys.executable, [sys.executable, '-m', 'brr.loom.runtime.fakebody',
 import json, time
 from datetime import datetime, timezone
 from pathlib import Path
-left = 100 if Path(__file__).with_name('refilled').exists() else 0
+left = 100 if Path(__file__).with_name('refilled').exists() else 7
 print(json.dumps({'windows': [{'name': 'week', 'left_pct': left,
     'resets_at': datetime.fromtimestamp(time.time() + 1, timezone.utc).isoformat()}]}))
 """)
@@ -86,7 +87,7 @@ print(json.dumps({'windows': [{'name': 'week', 'left_pct': left,
         assert not any(f.kind in {"body.started", "body.died"} for f in facts)
         assert holder(facts, "gauge") and owed(facts, "gauge")
         _attention(["--home", str(root)])
-        assert "parked · gauge · gauge week 0% · until " in capsys.readouterr().out
+        assert "parked · gauge · gauge week 7% · until " in capsys.readouterr().out
         (folder / "refilled").touch()
         wait_until(lambda: not owed(loom.facts(), "gauge"), 10, loom.dump)
         assert len([f for f in loom.facts() if f.kind == "body.started"]) == 1
