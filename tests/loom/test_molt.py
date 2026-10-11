@@ -124,3 +124,36 @@ else:
     finally:
         loom.halt()
     assert not loom.errors
+
+
+def test_a_successor_is_told_which_owed_letters_its_predecessor_already_read(tmp_path):
+    """Live, 2026-10-12: a person's "add the line, then molt" stayed owed after the
+    molt; the successor read it as an instruction, redid it and molted again."""
+    root = tmp_path / "home"
+    init_self(root, person="test")
+    write_thread(root, "work", "Work\n\nNext step: original", "work", wait="0")
+    ask = inject_letter(root, to="thread:work", body="add the line, then molt")
+    received = root / "successor.json"
+    bodies(root, f'''import json, sys
+from pathlib import Path
+from brr.loom.runtime.fakebody import Ctx
+ctx = Ctx(Path(sys.argv[1]))
+letters = ctx.owed()
+if "predecessor" in ctx.wake():
+    Path({str(received)!r}).write_text(json.dumps({{"wake": ctx.wake()}}))
+    for letter in letters:
+        ctx.send("thread:work", note="settled", re=letter.id)
+else:
+    ctx.molt("line added")
+    assert ctx.jack("stop").raw == ""
+''')
+    loom = Loom(root)
+    loom.start()
+    try:
+        wait_until(received.exists, 30, loom.dump)
+        wake = json.loads(received.read_text())["wake"]
+        assert f"already read by your predecessor, who molted and left its handover: {ask}" in wake
+        assert wake.count("already read by your predecessor") == 1
+    finally:
+        loom.halt()
+    assert not loom.errors

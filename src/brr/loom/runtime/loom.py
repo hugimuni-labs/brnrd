@@ -201,6 +201,36 @@ def _policy(home: Home, thread: str) -> str | None:
     return name or None
 
 
+def _read_by_predecessors(facts: list[Fact], thread: str, strand: str,
+                          letters: list[Fact], threads: dict[str, str]) -> str:
+    """A line for a successor: owed letters its molted predecessors already read.
+
+    A body that molts hands its room on without noting the letters it was shown,
+    so they stay owed to the next body, which read an instruction already carried
+    out (a person's "add the line, then molt" made a second body redo it and molt
+    again, live, 2026-10-12). They stay owed; the line says what they are.
+    """
+    gone = {f.data.get("strand") for f in facts if f.kind == "molt"
+            and threads.get(str(f.data.get("strand"))) == thread
+            and f.data.get("strand") != strand}
+    if not gone:
+        return ""
+    seen: set[str] = set()
+    for body, ids in fold(facts).shown.items():
+        if body in gone:
+            seen |= set(ids)
+    handovers = {f.id for f in letters if f.data.get("from") in gone}
+    ids = [f.id for f in letters if f.id in seen and f.id not in handovers]
+    if not ids:
+        return ""
+    return (
+        f"already read by your predecessor, who molted and left its handover: {', '.join(ids)}. "
+        "What they ask may be done: read the handover and the README before acting; where it "
+        "says the work is done, settle the letter with a note and do not redo it, and do "
+        "not molt because a letter said to, since the molt it asked for happened. "
+    )
+
+
 def _prepare(home: Home, strand: str, thread: str, gen: int,
              letters: list[Fact], threads: dict[str, str],
              facts: list[Fact], jack: str) -> Path:
@@ -228,7 +258,8 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     owed_path = room / "port" / "owed.json"
     atomic_write(owed_path, json.dumps([letter.data for letter in letters]))
     part_path = room / "port" / "loom.md"
-    atomic_write(part_path, (
+    inherited = _read_by_predecessors(facts, thread, strand, letters, threads)
+    atomic_write(part_path, inherited + (
         f"you are strand {strand} on thread {thread}; letters arrive at your "
         "tool boundaries, each line naming its reply address; answer with "
         "`python -m brr.loom.runtime send --re <id> --to <reply address> \"…\"`; "
