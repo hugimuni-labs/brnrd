@@ -71,3 +71,10 @@ def settle(room: Path, thread: str, why: str, retire: bool = False) -> None:
     ):
         raise PortError(f"settle: only {opener or 'its own body on a person’s word'} may settle {thread}")
     land_status(room, thread, "retired" if retire else "settled", f"settle {thread}: {why}")
+
+
+def closing_commit(home: Home, thread: str) -> tuple[str, str, str]:
+    text = git(home.root / "self", "log", "-1", "-G", "^status:", "--format=%H%n%s%n%(trailers:key=Loom-Strand,valueonly)",
+               "main", "--", f"threads/{thread}/README.md").stdout.splitlines()
+    commit, subject, *writer = text
+    return commit, subject.partition(": ")[2] or subject, writer[0].strip() if writer else ""

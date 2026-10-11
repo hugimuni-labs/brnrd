@@ -120,7 +120,7 @@ def notice_id(kind: str, subject: str) -> str:
 def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, can: str, *,
            thread: str | None = None, about: Fact | None = None, stands: bool = False,
            taint: bool = False, channel: str | None = None,
-           source_strand: str | None = None) -> bool:
+           source_strand: str | None = None, passive: bool = False) -> bool:
     """The one writer of loom notices: what the loom cannot settle, a body is told.
 
     A notice is an owed letter from ``loom``, so it is shown at every
@@ -139,6 +139,8 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
     lines = [what]
     data: dict = {"id": ident, "from": "loom",
                   "to": channel or f"thread:{thread if home.routable(thread) else 'inbox'}"}
+    if passive:
+        data["notice"] = True
     if about is not None:
         label = join(label, _sender_label(about, facts, home.root / "self", frozenset()))
         lines.append(f"{about.data['id']}: {can}")
@@ -161,6 +163,26 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
         return False
     _log(home, f"notice {ident} to {data['to']}: {what}")
     return True
+
+
+def _closures(home: Home, facts: list[Fact], threads: list[str]) -> list[Fact]:
+    from .lifecycle import CLOSED, closing_commit, read_thread
+    writers = sender_threads(facts)
+    for thread in threads:
+        data = read_thread(home, thread)
+        if data.get("status") not in CLOSED:
+            continue
+        commit, why, writer = closing_commit(home, thread)
+        ident = f"thread.closed:{thread}:{commit}"
+        if not any(f.id == ident for f in facts):
+            facts.append(_record(home, "thread.closed", {
+                "thread": thread, "status": data["status"], "why": why, "commit": commit,
+            }, ident))
+        opener = str(data.get("opened-by", ""))
+        if opener.startswith("thread:") and writers.get(writer) != opener.removeprefix("thread:"):
+            notice(home, facts, "closed", ident, f"thread {thread} {data['status']}: {why}",
+                   "the thread is closed", thread=opener.removeprefix("thread:"), passive=True)
+    return facts
 
 
 def _next_gen(facts: list[Fact], thread: str) -> int:

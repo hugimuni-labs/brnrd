@@ -192,11 +192,15 @@ class Router:
     def route(self, facts: list[Fact], bodies: dict, default: tuple[str, str]) -> list[Fact]:
         if not self.armed():
             return facts
-        from .loom import _attention, _policy, _start, body_alive, notice
+        from .loom import _attention, _closures, _policy, _start, body_alive, notice
 
         home = self.home
         threads = _routable(home, facts)
+        facts = _closures(home, facts, threads)
+        from .lifecycle import CLOSED, read_thread
         for thread in threads:
+            if read_thread(home, thread).get("status") in CLOSED:
+                continue
             if not self.armed():
                 return facts
             if any(body.thread == thread for body in bodies.values()):
@@ -204,7 +208,7 @@ class Router:
             facts = self._release_abandoned(facts, thread, body_alive)
             if holder(facts, thread):
                 continue
-            letters = actionable(facts, thread)
+            letters = [f for f in actionable(facts, thread) if not f.data.get("notice")]
             if not letters:
                 continue
             target = readme_for(home, thread)
