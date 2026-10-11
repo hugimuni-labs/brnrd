@@ -25,7 +25,7 @@ from .ledger import LedgerConflict, append, read_facts
 from .port import (
     fact_from_port, fact_from_taint, parse_frontmatter, render_boundary,
 )
-from .project import actionable, fold, generation, is_notice, sender_threads
+from .project import actionable, fold, generation, is_notice, reply_channels, sender_threads
 from .selfrepo import (
     AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, git, room as clone_room, run_wake,
 )
@@ -230,9 +230,16 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     part_path = room / "port" / "loom.md"
     atomic_write(part_path, (
         f"you are strand {strand} on thread {thread}; letters arrive at your "
-        "tool boundaries; answer with `python -m brr.loom.runtime send --re <id> "
-        "--to thread:<from-thread> \"…\"`; commit in this self clone and land "
-        "your branch with `python -m brr.loom.runtime send-self --room .`; "
+        "tool boundaries, each line naming its reply address; answer with "
+        "`python -m brr.loom.runtime send --re <id> --to <reply address> \"…\"`; "
+        "where the address is `-` nobody is waiting for words: settle the letter with "
+        f"`python -m brr.loom.runtime send --re <id> --to thread:{thread} --note "
+        "\"<what you did>\"`; if you commit in this self clone, land it with "
+        "`python -m brr.loom.runtime send-self --room .`; you will forget what is "
+        "not written: keep this thread's README true, and when your context grows "
+        "heavy hand over with `python -m brr.loom.runtime molt --why \"<where "
+        "things stand>\"`; `python -m brr.loom.runtime settle <thread> --why "
+        "\"…\"` closes a thread whose work is done; "
         "a letter from `loom` is a notice of something the loom could not settle, "
         "yours to deal with: its last lines name what settles it "
         "(core/loom/README.md, Notices); "
@@ -251,7 +258,8 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     shown = fold(facts).shown.get(strand, set())
     atomic_write(
         room / "port" / "in" / "boundary.md",
-        render_boundary(strand, gen, thread, letters, shown, threads),
+        render_boundary(strand, gen, thread, letters, shown, threads,
+                        channels=reply_channels(facts)),
     )
     return room
 
@@ -576,6 +584,7 @@ def _refresh_holders(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> 
     from .lifecycle import CLOSED, closing_commit, read_thread
     shells = {f.data["strand"]: f.data.get("shell") for f in facts if f.kind == "body.started"}
     state, threads, pending = fold(facts), sender_threads(facts), pending_bodies(facts)
+    channels = reply_channels(facts)
     for thread, (strand, gen) in state.holder.items():
         if install_of(strand) != home.install_id():
             continue
@@ -584,7 +593,8 @@ def _refresh_holders(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> 
                        if read_thread(home, thread).get("status") in CLOSED else None)
             text = render_boundary(strand, gen, thread, actionable(facts, thread),
                                    state.shown.get(strand, set()), threads,
-                                   fuel(home, shells[strand]) if shells.get(strand) else "", settled)
+                                   fuel(home, shells[strand]) if shells.get(strand) else "", settled,
+                                   channels)
             path = home.room(strand) / "port" / "in" / "boundary.md"
             if not path.is_file() or path.read_text() != text:
                 atomic_write(path, text)
