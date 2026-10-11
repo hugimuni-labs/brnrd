@@ -25,7 +25,7 @@ from .ledger import LedgerConflict, append, read_facts
 from .port import (
     fact_from_port, fact_from_taint, parse_frontmatter, render_boundary,
 )
-from .project import actionable, fold, generation, holder, is_notice, sender_threads
+from .project import actionable, fold, generation, is_notice, sender_threads
 from .selfrepo import (
     AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, room as clone_room, run_wake,
 )
@@ -149,6 +149,8 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
     data.update(body="\n".join(lines), label=label.as_dict())
     draft = Fact(kind="letter", by=_by(home), data=data, id=ident)
     if channel is not None:
+        if about is not None:
+            data["re"] = about.data["id"]
         _stamp_router(draft, facts)
     try:
         facts.append(append(home, draft))
@@ -300,6 +302,7 @@ def _start(home: Home, strand: str, thread: str, gen: int,
         facts.append(_record(home, "shown", {
             "strand": strand, "gen": gen, "ids": ids,
         }, f"shown:wake:{strand}:{gen}:{mint(6)}"))
+        readme = _readme(room, thread)
         proc, log = _spawn(room, argv)
     except Exception as exc:
         why = f"{type(exc).__name__}: {exc}"
@@ -309,11 +312,11 @@ def _start(home: Home, strand: str, thread: str, gen: int,
         }, f"body.exited:{strand}:{gen}:{mint(6)}"))
         # No process reached the wake: tell the author about the failed start,
         # rather than repeatedly trying preparation for the same letter.
-        _waste(home, facts, strand, thread, gen, None, letters, why)
+        _waste(home, facts, strand, thread, None, letters, why)
         return _release(home, facts, strand, thread, gen)
     facts.append(_record(home, "body.started", {
         "strand": strand, "gen": gen, "pid": proc.pid, "shell": shell, "core": core,
-        "readme": _readme(room, thread),
+        "readme": readme,
     }, f"body.started:{strand}:{gen}:{proc.pid}:{mint(6)}"))
     bodies[strand] = Body(strand, thread, gen, proc, log)
     _log(home, f"start {strand} thread {thread} gen {gen} pid {proc.pid} {shell}/{core}")
@@ -430,7 +433,7 @@ def _release(home, facts, strand, thread, gen):
     return facts
 
 
-def _waste(home, facts, strand, thread, gen, code, letters, failure=""):
+def _waste(home, facts, strand, thread, code, letters, failure=""):
     from .selfrepo import ReadmeError, parse_readme
     from .usage import fuel
     room = home.room(strand)
@@ -454,6 +457,7 @@ def _waste(home, facts, strand, thread, gen, code, letters, failure=""):
         ident, author = str(letter.data["id"]), str(letter.data.get("from", ""))
         what = (f"letter {ident} on thread {thread}: body exited {code}; "
                 f"README changed since start: {changed}; {tank or 'fuel unknown'}\n{tail}")
+        target = threads.get(author) or (opener.removeprefix("thread:") if opener.startswith("thread:") else None)
         if author.startswith("person:") and start is not None:
             retry = f"retry:{ident}"
             if not any(f.id == retry for f in facts):
@@ -469,11 +473,7 @@ def _waste(home, facts, strand, thread, gen, code, letters, failure=""):
                        "send again, or leave it", about=letter, channel=channel)
             else:
                 _attention(home, f"attention:wasted:{ident}", what, thread=thread, letter=ident)
-            facts.append(_record(home, "note", {"strand": strand, "re": ident,
-                                "why": "second body ended without handling it"}, f"wasted:{ident}"))
-            continue
-        target = threads.get(author) or (opener.removeprefix("thread:") if opener.startswith("thread:") else None)
-        if not is_notice(letter) and not author.startswith("stranger:") and home.routable(target):
+        elif not is_notice(letter) and not author.startswith("stranger:") and home.routable(target):
             notice(home, facts, "bounce", ident, what, "send again, or leave it",
                    thread=target, about=letter)
         else:
@@ -500,7 +500,7 @@ def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
             facts = _start(home, strand, body.thread, body.gen, bodies, facts)
             continue
         shown = fold(facts).shown.get(strand, set())
-        _waste(home, facts, strand, body.thread, body.gen, code,
+        _waste(home, facts, strand, body.thread, code,
                [letter for letter in actionable(facts, body.thread) if letter.data["id"] in shown])
         facts = _release(home, facts, strand, body.thread, body.gen)
     return facts

@@ -20,7 +20,7 @@ from brr.loom.runtime import loom as runtime, speak
 from brr.loom.runtime.channels import relay
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, inject_letter
-from brr.loom.runtime.project import fold, holder, unrunnable_ids
+from brr.loom.runtime.project import owed, fold, holder, unrunnable_ids
 from brr.loom.runtime.selfrepo import init_self
 
 from _step import Loom, hand_note, notices, wait_until, write_thread
@@ -124,13 +124,23 @@ def test_an_unrunnable_letter_is_handed_to_a_body(root, monkeypatch):
     drain_before_death(root, monkeypatch)
     thread(root, "die-on-unrunnable")
     original = inject_letter(root, to="thread:work", body="unrunnable")
+    # Replay the pre-lifecycle ledger: quarantined letters keep their treatment,
+    # although new exits no longer create death/fuse retries.
+    home = Home(root)
+    strand = f"s-{home.install_id()}-legacy"
+    append(home, Fact(kind="lease", by=f"loom:{home.install_id()}",
+                     data={"thread": "work", "strand": strand, "gen": 1}, id="lease:work:1"))
+    for attempt in range(2):
+        for kind, data in (("body.started", {}), ("shown", {"ids": [original]}),
+                           ("body.died", {"code": 1})):
+            append(home, Fact(kind=kind, by=f"loom:{home.install_id()}",
+                             data={"strand": strand, "gen": 1, **data}, id=f"legacy:{attempt}:{kind}"))
+    append(home, Fact(kind="released", by=f"loom:{home.install_id()}",
+                     data={"thread": "work", "strand": strand, "gen": 1}, id="released:work:1"))
     with running(root) as loom:
-        reach(lambda: original in unrunnable_ids(loom.facts()), loom)
         # Nothing else on its thread can wake a body, so inbox is told.
         told_and_settled(loom, original, "inbox", "quarantined", "thread work")
-        # The fuse on its thread is told too, and that notice is settled as well.
-        assert any("thread work is fused" in f.data["body"] for f in loom.facts()
-                   if f.kind == "letter" and f.data.get("from") == "loom")
+        assert not owed(loom.facts(), "work")
 
 
 @stuck("a silent live body has no progress deadline or message-triggered replacement")

@@ -45,11 +45,11 @@ def test_a_live_body_sees_identity_and_lands_a_labeled_commit(tmp_path, sender):
     loom.start()
     try:
         if sender == "p-stranger":
-            wait_until(lambda: any(f.id.startswith("attention:fuse:") for f in loom.facts()),
+            wait_until(lambda: any(f.id.startswith("attention:wasted:") for f in loom.facts()),
                        15, loom.dump)
             assert git(root / "self", "rev-parse", "main").stdout.strip() == seed
             assert not (root / "self" / "memory" / "moves" / "live-body.md").exists()
-            assert owed(loom.facts(), "live")
+            assert not owed(loom.facts(), "live")
             return
         wait_until(lambda: (root / "self" / "memory" / "moves" / "live-body.md").is_file()
                    and not owed(loom.facts(), "live"), 15, loom.dump)
@@ -70,7 +70,7 @@ def test_a_live_body_sees_identity_and_lands_a_labeled_commit(tmp_path, sender):
         assert not loom.errors
 
 
-def test_a_wake_over_budget_fuses_then_a_new_letter_retries(tmp_path, monkeypatch):
+def test_a_wake_over_budget_returns_the_failure_and_a_new_letter_recovers(tmp_path, monkeypatch):
     root = tmp_path / "home"
     write_thread(root, "fat", "A fat wake", "answer-fast", wait="0")
     monkeypatch.setenv("LOOM_BUDGET_BYTES", "1")
@@ -78,16 +78,13 @@ def test_a_wake_over_budget_fuses_then_a_new_letter_retries(tmp_path, monkeypatc
     loom = Loom(root)
     loom.start()
     try:
-        wait_until(lambda: notices(loom.facts()), 8, loom.dump)
+        wait_until(lambda: any(f.id.startswith("attention:wasted:") for f in loom.facts()), 8, loom.dump)
         facts = loom.facts()
-        assert len([f for f in facts if f.kind == "body.died"]) == 2
-        # The notice to inbox names the thread, the cause and the way out.
-        (told,) = notices(facts)
-        assert told.data["to"] == "thread:inbox"
-        assert "wake exited 3: over budget:" in told.data["body"]
-        assert "a new letter to thread:fat resets the fuse" in told.data["body"]
+        failures = [f for f in facts if f.id.startswith("attention:wasted:")]
+        assert len(failures) == 1
+        assert "wake exited 3: over budget:" in failures[0].data["why"]
         assert not [f for f in facts if f.kind == "body.started"]
-        assert owed(facts, "fat")
+        assert not owed(facts, "fat")
         monkeypatch.delenv("LOOM_BUDGET_BYTES")
         inject_letter(root, to="thread:fat", body="fixed, retry")
         wait_until(lambda: not owed(loom.facts(), "fat"), 8, loom.dump)
