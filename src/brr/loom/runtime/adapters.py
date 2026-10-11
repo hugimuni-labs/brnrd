@@ -16,8 +16,13 @@ def resolve(home, shell: str) -> Path:
 
 def at_birth(home, thread: str, default: tuple[str, str]) -> tuple[str, str]:
     from .config import load_config
-    path = home.thread_dir(thread) / "seat"
-    text = path.read_text() if path.exists() else ""
+    from .selfrepo import git
+    if (home.root / "self/.git").exists():
+        proc = git(home.root / "self", "show", f"main:threads/{thread}/seat", check=False)
+        text = proc.stdout if proc.returncode == 0 else ""
+    else:
+        path = home.thread_dir(thread) / "seat"
+        text = path.read_text() if path.exists() else ""
     choice = None
     for line in text.splitlines():
         line = line.strip()
