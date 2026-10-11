@@ -2,7 +2,6 @@
 id: w-130
 status: open
 tense: plan
-body: claude/opus
 opened-by: person:arseni
 blocked-on: ""
 when: ""
