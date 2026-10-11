@@ -537,7 +537,11 @@ def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
                      and f.data.get("gen") == body.gen for f in fold(facts).accepted)
         # A closed thread's body is expected to leave; its letters climb (router).
         from .lifecycle import CLOSED, read_thread
-        if not molted and read_thread(home, body.thread).get("status") not in CLOSED:
+        from .usage import below_floor
+        start = next((f for f in reversed(facts) if f.kind == "body.started"
+                      and f.data.get("strand") == strand), None)
+        paced = bool(start and below_floor(home, start.data["shell"]))
+        if not molted and not paced and read_thread(home, body.thread).get("status") not in CLOSED:
             shown = fold(facts).shown.get(strand, set())
             _waste(home, facts, strand, body.thread, code,
                    [letter for letter in actionable(facts, body.thread) if letter.data["id"] in shown])
