@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import traceback
 from pathlib import Path
@@ -60,9 +61,13 @@ def _json(payload: dict) -> str:
     return json.dumps(payload, separators=(",", ":")) + "\n"
 
 
+def _hand() -> bool:
+    return os.environ.get("BRNRD_BODY_JACK") == "hand"
+
+
 def _block(room: Path, text: str, parsed: Boundary) -> str:
     count = int(_state(room).get("stop_blocks") or 0)
-    if count >= 3:
+    if _hand() and count >= 3:
         return ""
     _shown(room, parsed)
     _set_state(room, stop_blocks=count + 1)
@@ -142,7 +147,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             "hookEventName": "PostToolUse", "additionalContext": text}})
     if _state(room).get("molted") or parsed.settled is not None:
         return ""
-    if parsed.ids:
+    if parsed.ids and (_hand() or not _state(room).get("stop_blocks")):
         return _block(room, text, parsed)
     return _poll(room)
 
