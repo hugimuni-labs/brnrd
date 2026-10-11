@@ -496,7 +496,7 @@ def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
             "strand": strand, "gen": body.gen, "code": code,
         }, f"body.exited:{strand}:{body.gen}:{mint(6)}"))
         _log(home, f"exit {strand} code {code}")
-        if code == 0 and _molted(home, body):
+        if _molted(home, body):
             facts = _start(home, strand, body.thread, body.gen, bodies, facts)
             continue
         shown = fold(facts).shown.get(strand, set())
