@@ -457,6 +457,8 @@ def _waste(home, facts, strand, thread, code, letters, failure=""):
         what = (f"letter {ident} on thread {thread}: body exited {code}; "
                 f"README changed since start: {changed}; {tank or 'fuel unknown'}\n{tail}")
         target = threads.get(author) or (opener.removeprefix("thread:") if opener.startswith("thread:") else None)
+        if target == thread:
+            target = opener.removeprefix("thread:") if opener.startswith("thread:") else None
         if author.startswith("person:"):
             retry = f"retry:{ident}"
             if not any(f.id == retry for f in facts):
