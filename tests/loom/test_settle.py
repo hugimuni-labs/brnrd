@@ -104,3 +104,37 @@ raise SystemExit("no second answer")
     finally:
         loom.halt()
     assert not loom.errors
+
+
+def test_a_thread_settled_from_its_own_body_does_not_climb_the_letter_that_body_holds(tmp_path):
+    """Live, 2026-10-12: a body settled its thread on a person's word and noted the
+    letter four seconds later; in between the letter climbed and woke a second body
+    on the inbox for it."""
+    root = tmp_path / "home"
+    init_self(root, person="test")
+    write_thread(root, "work", "Work", "work", wait="0")
+    ask = inject_letter(root, to="thread:work", body="we're done; settle this thread")
+    done = root / "done"
+    bodies(root, f'''import subprocess, sys, time
+from pathlib import Path
+from brr.loom.runtime.fakebody import Ctx
+ctx = Ctx(Path(sys.argv[1]))
+letters = ctx.owed()
+proc = subprocess.run([sys.executable, "-m", "brr.loom.runtime", "settle", "work",
+                       "--why", "done", "--room", str(ctx.room)], text=True, capture_output=True)
+assert proc.returncode == 0, proc.stderr + proc.stdout
+time.sleep(1.5)  # the loom ticks every 0.05s here: the letter is owed to a closed thread
+for letter in letters:
+    ctx.send("thread:work", note="settled", re=letter.id)
+Path({str(done)!r}).write_text("ok")
+''')
+    loom = Loom(root)
+    loom.start()
+    try:
+        wait_until(done.exists, 30, loom.dump)
+        wait_until(lambda: not owed(loom.facts(), "work"), 5, loom.dump)
+        assert not [f for f in loom.facts() if f.id.startswith("loom/climbed")]
+        assert not [f for f in loom.facts() if f.kind == "lease" and f.data.get("thread") == "inbox"]
+    finally:
+        loom.halt()
+    assert not loom.errors
