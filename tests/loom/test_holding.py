@@ -87,7 +87,14 @@ time.sleep(0.3)
 assert ctx.jack("stop").kind == "block"
 Path({str(blocked)!r}).write_text("one\\n")
 Path({str(waiting)!r}).write_text(str(os.getpid()))
-assert ctx.jack("stop").raw == ""
+holds = 0
+while True:
+    view = ctx.jack("stop")
+    if view.raw == "":
+        break
+    assert "nothing new; holding" in view.raw
+    holds += 1
+    Path({str(root / "holds")!r}).write_text(str(holds))
 ''')
     run.chmod(0o755)
     usage = folder / "usage"
@@ -112,6 +119,7 @@ print(json.dumps({'windows': [{'name': 'session', 'left_pct': left,
         wait_until(lambda: monotonic() - begun > 2.2, 4, loom.dump)
         os.kill(pid, 0)
         assert blocked.read_text() == "one\n"
+        assert int((root / "holds").read_text()) >= 2
         assert len([f for f in loom.facts() if f.kind == "body.started"]) == 1
         assert not any(f.kind == "body.exited" for f in loom.facts())
         (folder / "low").touch()

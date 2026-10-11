@@ -77,7 +77,8 @@ def _block(room: Path, text: str, parsed: Boundary) -> str:
 def _poll(room: Path) -> str:
     from .usage import below_floor
     home = home_of_room(room)
-    after = 0.0
+    # Ask for a reading no older than this wait: the cached one may predate it.
+    after = time.time()
 
     def empty() -> bool:
         shell = os.environ.get("BRNRD_BODY_SHELL")
@@ -106,13 +107,11 @@ def _poll(room: Path) -> str:
             opener = str(read_thread(home, thread).get("opened-by", ""))
             if not parsed.ids and opener.startswith("thread:"):
                 return ""
-            # Request a fresh sample for the next wait, then observe its
-            # asynchronous arrival without treating no reading as empty.
-            after = time.time()
-            empty()
-            deadline = time.monotonic() + _wait(room)
-            remaining = deadline - time.monotonic()
-        time.sleep(min(0.2, max(0.01, remaining)))
+            # Hold again by blocking, never by waiting on in this call: the
+            # shell ends a hook that outlives its timeout, and the body would
+            # then leave while it still owes. One turn per wait is the price.
+            return _json({"decision": "block", "reason": "nothing new; holding\n" + text})
+        time.sleep(min(0.2, remaining))
 
 
 _TAINT_TOOLS = {"WebFetch", "WebSearch"}
