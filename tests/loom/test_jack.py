@@ -102,10 +102,10 @@ def test_stop_polls_until_a_letter_appears(tmp_path):
     assert elapsed < 2
 
 
-def test_molt_pending_allows_the_stop_while_letters_are_owed(tmp_path):
+def test_molted_body_can_stop_while_letters_are_owed(tmp_path):
     room = _room(tmp_path)
     _write(room, [_letter()])
-    (room / "port" / "molt-pending").write_text("fresh body\n")
+    (room / "port" / "jack-state.json").write_text('{"molted": true}\n')
     assert execute("stop", room, "{}") == ""
     assert list((room / "port" / "out").glob("*.md")) == []
 

@@ -287,6 +287,8 @@ def write_molt(room: Path, why: str) -> str:
     fact_id = f"{strand}/{stem}"
     write_port(room, stem, _front({"kind": "molt", "id": fact_id, "why": why}))
     write_send(room, to=f"thread:{thread}", sender=strand, body=why)
+    from .jack import _set_state
+    _set_state(room, molted=True)
     return fact_id
 
 

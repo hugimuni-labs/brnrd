@@ -18,16 +18,18 @@ def _boundary_text(room: Path) -> str:
     return path.read_text()
 
 
-def _state(room: Path) -> int:
+def _state(room: Path) -> dict:
     path = room / "port" / "jack-state.json"
     if not path.is_file():
-        return 0
-    return int(json.loads(path.read_text()).get("stop_blocks") or 0)
+        return {}
+    return json.loads(path.read_text())
 
 
-def _set_state(room: Path, count: int) -> None:
+def _set_state(room: Path, **updates) -> None:
+    state = _state(room)
+    state.update(updates)
     atomic_write(room / "port" / "jack-state.json",
-                 json.dumps({"stop_blocks": count}) + "\n")
+                 json.dumps(state) + "\n")
 
 
 def _wait(room: Path) -> float:
@@ -35,10 +37,6 @@ def _wait(room: Path) -> float:
     if not path.is_file():
         return 3600.0
     return float(path.read_text().strip())
-
-
-def _molt_pending(room: Path) -> bool:
-    return (room / "port" / "molt-pending").is_file()
 
 
 def _shown(room: Path, parsed: Boundary) -> None:
@@ -63,18 +61,18 @@ def _json(payload: dict) -> str:
 
 
 def _block(room: Path, text: str, parsed: Boundary) -> str:
-    count = _state(room)
+    count = int(_state(room).get("stop_blocks") or 0)
     if count >= 3:
         return ""
     _shown(room, parsed)
-    _set_state(room, count + 1)
+    _set_state(room, stop_blocks=count + 1)
     return _json({"decision": "block", "reason": text})
 
 
 def _poll(room: Path) -> str:
     deadline = time.monotonic() + _wait(room)
     while True:
-        if _molt_pending(room):
+        if _state(room).get("molted"):
             return ""
         text = _boundary_text(room)
         parsed = parse_boundary(text)
@@ -121,7 +119,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     if event not in {"start", "post", "stop"}:
         raise ValueError(f"unknown jack event {event!r}")
     if event == "post":
-        _set_state(room, 0)
+        _set_state(room, stop_blocks=0)
         _note_tool(room, stdin_text)
     text = _boundary_text(room)
     parsed = parse_boundary(text)
@@ -136,7 +134,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         _shown(room, parsed)
         return _json({"hookSpecificOutput": {
             "hookEventName": "PostToolUse", "additionalContext": text}})
-    if _molt_pending(room):
+    if _state(room).get("molted"):
         return ""
     if parsed.ids:
         return _block(room, text, parsed)
