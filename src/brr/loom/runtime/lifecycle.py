@@ -4,7 +4,7 @@ from pathlib import Path
 
 from .home import Home, home_of_room, strand_of_room, check_thread_id
 from .ledger import read_facts
-from .merge import send_to_self
+from .merge import _continue, _rebase, _rebasing, send_to_self
 from .port import PortError
 from .project import sender_threads
 from .selfrepo import ReadmeError, git, parse_readme, resolve_clone
@@ -38,6 +38,11 @@ def own_thread(room: Path) -> str:
 def land_status(room: Path, thread: str, status: str, message: str) -> None:
     check_thread_id(thread)
     clone = resolve_clone(room)
+    # Make the decision against main. In a stale open clone, a reopen would
+    # otherwise be no diff and the subsequent rebase would keep main closed.
+    stopped = _continue(clone) if _rebasing(clone) else _rebase(clone)
+    if stopped is not None:
+        raise PortError(f"landing {stopped.status}: {', '.join(stopped.files)}")
     path = f"threads/{thread}/README.md"
     text = (clone / path).read_text()
     parse_readme(text)

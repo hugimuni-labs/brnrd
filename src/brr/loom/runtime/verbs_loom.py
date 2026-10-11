@@ -65,6 +65,7 @@ def _send(argv: list[str]) -> int:
     parser.add_argument("--to", required=True)
     parser.add_argument("--re")
     parser.add_argument("--note")
+    parser.add_argument("--reopen", metavar="TEXT")
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--kind", default=None)
     parser.add_argument("--ref", action="append", default=None)
@@ -72,12 +73,18 @@ def _send(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     room = _room(args.room)
     try:
+        if args.reopen is not None:
+            from .home import thread_of
+            from .lifecycle import land_status
+            if args.body is not None or args.note is not None:
+                raise PortError("send: --reopen supplies the letter text; drop the body and --note")
+            land_status(room, thread_of(args.to), "open", f"reopen {thread_of(args.to)}")
         letter_id = write_send(
-            room, to=args.to, sender=strand_of_room(room), body=args.body or "",
+            room, to=args.to, sender=strand_of_room(room), body=args.reopen if args.reopen is not None else args.body or "",
             re=args.re, note=args.note, clean=args.clean, kind=args.kind,
             refs=tuple(args.ref or ()),
         )
-    except (PortError, SelfError, ValueError) as exc:
+    except (PortError, SelfError, ValueError, OSError) as exc:
         sys.stderr.write(f"{exc}\n")
         return 1
     sys.stdout.write(letter_id + "\n")
@@ -92,7 +99,7 @@ def _molt(argv: list[str]) -> int:
     room = _room(args.room)
     try:
         fact_id = write_molt(room, args.why)
-    except (PortError, SelfError, ValueError) as exc:
+    except (PortError, SelfError, ValueError, OSError) as exc:
         sys.stderr.write(f"{exc}\n")
         return 1
     sys.stdout.write(fact_id + "\n")
