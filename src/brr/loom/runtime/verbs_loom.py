@@ -99,6 +99,22 @@ def _molt(argv: list[str]) -> int:
     return 0
 
 
+def _settle(argv: list[str]) -> int:
+    from .lifecycle import settle
+    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime settle")
+    parser.add_argument("thread")
+    parser.add_argument("--room")
+    parser.add_argument("--why", required=True)
+    parser.add_argument("--retire", action="store_true")
+    args = parser.parse_args(argv)
+    try:
+        settle(_room(args.room), args.thread, args.why, args.retire)
+    except (PortError, SelfError, ValueError, OSError) as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 1
+    return 0
+
+
 def _jack(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime jack")
     parser.add_argument("--event", required=True, choices=("start", "post", "stop"))

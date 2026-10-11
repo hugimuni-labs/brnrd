@@ -8,6 +8,7 @@ import sys
 VERBS = {
     "loom": ("verbs_loom", "_loom"),
     "send": ("verbs_loom", "_send"),
+    "settle": ("verbs_loom", "_settle"),
     "molt": ("verbs_loom", "_molt"),
     "jack": ("verbs_loom", "_jack"),
     "attention": ("verbs_loom", "_attention"),
