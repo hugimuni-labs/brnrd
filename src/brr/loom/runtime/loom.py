@@ -541,18 +541,23 @@ def _refresh_holders(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> 
     """Own holders: refresh live boundaries, retry pending starts, release corpses."""
     from .router import install_of
     from .usage import fuel
+    from .lifecycle import CLOSED, closing_commit, read_thread
     shells = {f.data["strand"]: f.data.get("shell") for f in facts if f.kind == "body.started"}
     state, threads, pending = fold(facts), sender_threads(facts), pending_bodies(facts)
     for thread, (strand, gen) in state.holder.items():
         if install_of(strand) != home.install_id():
             continue
         if strand in bodies or body_alive(home.room(strand)):
+            settled = (closing_commit(home, thread)[1]
+                       if read_thread(home, thread).get("status") in CLOSED else None)
             text = render_boundary(strand, gen, thread, actionable(facts, thread),
                                    state.shown.get(strand, set()), threads,
-                                   fuel(home, shells[strand]) if shells.get(strand) else "")
+                                   fuel(home, shells[strand]) if shells.get(strand) else "", settled)
             path = home.room(strand) / "port" / "in" / "boundary.md"
             if not path.is_file() or path.read_text() != text:
                 atomic_write(path, text)
+        elif read_thread(home, thread).get("status") in CLOSED:
+            facts = _release(home, facts, strand, thread, gen)
         elif strand in pending and pending[strand].kind in {"body.pending", "body.parked"}:
             if time.time() >= pending[strand].data.get("until", 0):
                 facts = _start(home, strand, thread, gen, bodies, facts)

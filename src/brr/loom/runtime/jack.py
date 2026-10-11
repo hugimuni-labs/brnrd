@@ -76,6 +76,8 @@ def _poll(room: Path) -> str:
             return ""
         text = _boundary_text(room)
         parsed = parse_boundary(text)
+        if parsed.settled is not None:
+            return ""
         if parsed.ids:
             return _block(room, text, parsed)
         remaining = deadline - time.monotonic()
@@ -129,12 +131,16 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         _shown(room, parsed)
         return text if text.endswith("\n") else text + "\n"
     if event == "post":
-        if not parsed.ids:
+        if not parsed.ids and parsed.settled is None:
             return ""
+        if parsed.settled is not None:
+            if _state(room).get("settled") == parsed.settled:
+                return ""
+            _set_state(room, settled=parsed.settled)
         _shown(room, parsed)
         return _json({"hookSpecificOutput": {
             "hookEventName": "PostToolUse", "additionalContext": text}})
-    if _state(room).get("molted"):
+    if _state(room).get("molted") or parsed.settled is not None:
         return ""
     if parsed.ids:
         return _block(room, text, parsed)
