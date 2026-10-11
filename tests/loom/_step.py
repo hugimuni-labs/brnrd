@@ -8,7 +8,8 @@ import traceback
 from pathlib import Path
 
 from brr.loom.runtime.home import Home
-from brr.loom.runtime.ledger import read_facts
+from brr.daemon2.facts import Fact
+from brr.loom.runtime.ledger import append, read_facts
 from brr.loom.runtime.loom import _ingest, run
 from brr.loom.runtime.project import fold, is_notice
 from brr.loom.runtime.selfrepo import _commit, git, init_self
@@ -27,6 +28,21 @@ def write_thread(root: Path, thread: str, readme: str, policy: str,
     (directory / "wait").write_text(str(wait).strip() + "\n")
     git(root / "self", "add", "threads")
     _commit(root / "self", f"Seed thread {thread}.\n\nLoom-Label: taint=0; audience=self\n")
+
+
+def historical_quarantine(root, thread, letter, install=None):
+    """A pre-lifecycle ledger whose letter was shown in two failed starts."""
+    home = Home(root, install=install)
+    strand = f"s-{home.install_id()}-legacy"
+    append(home, Fact(kind="lease", by=f"loom:{home.install_id()}",
+                     data={"thread": thread, "strand": strand, "gen": 1}, id=f"lease:{thread}:1"))
+    for attempt in range(2):
+        for kind, data in (("body.started", {}), ("shown", {"ids": [letter]}),
+                           ("body.died", {"code": 1})):
+            append(home, Fact(kind=kind, by=f"loom:{home.install_id()}",
+                             data={"strand": strand, "gen": 1, **data}, id=f"legacy:{attempt}:{kind}"))
+    append(home, Fact(kind="released", by=f"loom:{home.install_id()}",
+                     data={"thread": thread, "strand": strand, "gen": 1}, id=f"released:{thread}:1"))
 
 
 def notices(facts) -> list:

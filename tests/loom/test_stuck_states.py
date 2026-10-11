@@ -23,7 +23,7 @@ from brr.loom.runtime.ledger import append, inject_letter
 from brr.loom.runtime.project import owed, fold, holder, unrunnable_ids
 from brr.loom.runtime.selfrepo import init_self
 
-from _step import Loom, hand_note, notices, wait_until, write_thread
+from _step import Loom, historical_quarantine, hand_note, notices, wait_until, write_thread
 
 
 def stuck(reason):
@@ -126,17 +126,7 @@ def test_an_unrunnable_letter_is_handed_to_a_body(root, monkeypatch):
     original = inject_letter(root, to="thread:work", body="unrunnable")
     # Replay the pre-lifecycle ledger: quarantined letters keep their treatment,
     # although new exits no longer create death/fuse retries.
-    home = Home(root)
-    strand = f"s-{home.install_id()}-legacy"
-    append(home, Fact(kind="lease", by=f"loom:{home.install_id()}",
-                     data={"thread": "work", "strand": strand, "gen": 1}, id="lease:work:1"))
-    for attempt in range(2):
-        for kind, data in (("body.started", {}), ("shown", {"ids": [original]}),
-                           ("body.died", {"code": 1})):
-            append(home, Fact(kind=kind, by=f"loom:{home.install_id()}",
-                             data={"strand": strand, "gen": 1, **data}, id=f"legacy:{attempt}:{kind}"))
-    append(home, Fact(kind="released", by=f"loom:{home.install_id()}",
-                     data={"thread": "work", "strand": strand, "gen": 1}, id="released:work:1"))
+    historical_quarantine(root, "work", original)
     with running(root) as loom:
         # Nothing else on its thread can wake a body, so inbox is told.
         told_and_settled(loom, original, "inbox", "quarantined", "thread work")
