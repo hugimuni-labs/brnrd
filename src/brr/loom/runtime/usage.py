@@ -80,9 +80,9 @@ def fuel(home, shell: str) -> str:
     return f"fuel {shell} " + " ".join(parts) if parts else ""
 
 
-def below_floor(home, shell: str) -> bool:
+def below_floor(home, shell: str, after: float = 0) -> bool:
     """Unknown fuel has no opinion; any exhausted window ends a hold."""
     from .config import load_config
-    value = reading(home, shell)
+    value = reading(home, shell, after)
     floor = load_config(home.root).hold_floor_pct
     return bool(value and any(w["left_pct"] <= floor for w in value["windows"]))

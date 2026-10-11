@@ -77,16 +77,17 @@ def _block(room: Path, text: str, parsed: Boundary) -> str:
 def _poll(room: Path) -> str:
     from .usage import below_floor
     home = home_of_room(room)
+    after = 0.0
 
     def empty() -> bool:
         shell = os.environ.get("BRNRD_BODY_SHELL")
-        return bool(not _hand() and shell and below_floor(home, shell))
+        return bool(not _hand() and shell and below_floor(home, shell, after))
 
     if empty():
         return ""
     deadline = time.monotonic() + _wait(room)
     while True:
-        if _state(room).get("molted"):
+        if _state(room).get("molted") or empty():
             return ""
         text = _boundary_text(room)
         parsed = parse_boundary(text)
@@ -103,6 +104,10 @@ def _poll(room: Path) -> str:
             opener = str(read_thread(home_of_room(room), thread).get("opened-by", ""))
             if _hand() or (not parsed.ids and opener.startswith("thread:")):
                 return ""
+            # Request a fresh sample for the next wait, then observe its
+            # asynchronous arrival without treating no reading as empty.
+            after = time.time()
+            empty()
             deadline = time.monotonic() + _wait(room)
             remaining = deadline - time.monotonic()
         time.sleep(min(0.2, max(0.01, remaining)))
