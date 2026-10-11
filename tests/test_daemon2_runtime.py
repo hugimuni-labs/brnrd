@@ -12,6 +12,8 @@ import time
 from unittest.mock import patch
 from pathlib import Path
 
+import pytest
+
 from brr import conversations, config as conf, protocol, runner
 from brr.daemon2.runtime import Daemon2
 from brr.daemon2.doors import FileDoor
@@ -526,6 +528,81 @@ def test_child_can_resubmit_a_new_generation_without_ending(tmp_path: Path) -> N
     assert runtime.supervisor.children("ask-1")["edge-1"].generation == 2
 
 
+def test_to_wakes_submitted_child_and_allows_resubmit(tmp_path: Path) -> None:
+    """A returned body stays alive in await until its review steer arrives."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    report = tmp_path / "report.md"
+    report.write_text("Status: in progress\n")
+    event = protocol.create_event(
+        home / "dispatch" / "inbox", "spawn", "work",
+        conversation_key="c", ask_id="ask-1", parent_run_id="run-parent",
+        spawn_edge="edge-1", child_run_id="run-child", branch="brr/child",
+        report=str(report), allowance_tokens=100_000)
+    binary = tmp_path / "child-shell"
+    binary.write_text(r"""#!/usr/bin/env python3
+import json, os, time
+from pathlib import Path
+outbox = Path(os.environ["BRR_OUTBOX_DIR"])
+portal = Path(os.environ["BRR_PORTAL_STATE"])
+def stage(name, body):
+    (outbox / (name + ".tmp")).write_text(body)
+    (outbox / (name + ".tmp")).rename(outbox / name)
+stage("01-submit.md", "---\nsubmit: true\n---\nfirst\n")
+stage("02-await.md", "---\nawait: true\ntimeout: none\n---\n")
+deadline = time.monotonic() + 10
+while time.monotonic() < deadline:
+    capsule = json.loads(portal.read_text())
+    if capsule.get("await", {}).get("resolved"):
+        assert capsule["await"]["outcome"] == "event"
+        stage("03-submit.md", "---\nsubmit: true\n---\nreview fixed\n")
+        time.sleep(0.1)
+        break
+    time.sleep(0.02)
+else:
+    raise SystemExit("review steer never woke submitted child")
+""")
+    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02, worktree_env=False)
+    runtime.supervisor.register("ask-1", "c", "run-parent", "edge-1", "run-child")
+    results = []
+    worker = threading.Thread(target=lambda: results.append(runtime.once(role="strand")))
+    worker.start()
+    try:
+        portal = tmp_path / "runtime" / "outbox" / event.stem / "portal-state.json"
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            if portal.exists():
+                capsule = json.loads(portal.read_text())
+                child = runtime.supervisor.children("ask-1")["edge-1"]
+                if child.status == "returned" and capsule.get("await", {}).get("armed"):
+                    break
+            time.sleep(0.02)
+        else:
+            pytest.fail("child never submitted and armed await")
+        steer = tmp_path / "steer.md"
+        steer.write_text("---\nto: run-child\n---\nallowance: +50k\nFix the review finding.\n")
+        # The parent has no ask: allowance belongs to the child's item.
+        runtime._handle_outbox({"event": {"id": "parent-event"}, "seat": None,
+                                "ask": "", "conversation": "c", "run_id": "run-parent"},
+                               steer)
+    finally:
+        worker.join(timeout=12)
+        if worker.is_alive():
+            runtime._terminate_runner("run-child")
+            worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert results and results[0].returncode == 0 and results[0].answered
+    submissions = [e for e in runtime.door.pending() if e["source"] == "spawn_submitted"]
+    assert sorted(e["spawn_submit_generation"] for e in submissions) == [1, 2]
+    assert runtime.supervisor.children("ask-1")["edge-1"].generation == 2
+    assert runtime._child_allowance("ask-1", "run-child", "edge-1") == 150_000
+
+
 def test_child_allowance_ask_mints_parent_letter(tmp_path: Path) -> None:
     home = tmp_path / "home"
     repo = tmp_path / "repo"
@@ -839,8 +916,9 @@ def test_also_late_refusal_releases_preclaimed_sibling(tmp_path: Path) -> None:
     assert runtime.door.get(sibling.stem)["status"] == "pending"
 
 
-def test_to_delivers_steer_to_child(tmp_path: Path) -> None:
-    """to: <edge> creates a dispatch_message for the named child strand."""
+@pytest.mark.parametrize("child_status", ["running", "returned", "stopped", "completed"])
+def test_to_delivers_steer_to_child(tmp_path: Path, child_status: str) -> None:
+    """Only live children accept review steers and allowance grants."""
     home = tmp_path / "home"
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -881,6 +959,12 @@ def test_to_delivers_steer_to_child(tmp_path: Path) -> None:
     children = runtime.supervisor.children("ask1")
     assert children, "no child registered"
     edge, child = next(iter(children.items()))
+    if child_status == "returned":
+        runtime.supervisor.returned("ask1", "c", child.parent, edge, child.run,
+                                    report=report_path, branch="brr/child-steer-test")
+    elif child_status in {"stopped", "completed"}:
+        runtime.facts.record("asks", "ask1", "child_" + child_status, child.parent,
+                             {"edge": edge, "run": child.run, "status": child_status})
     to_script = (
         "#!/usr/bin/env python3\n"
         "import os, time\nfrom pathlib import Path\n"
@@ -914,6 +998,13 @@ def test_to_delivers_steer_to_child(tmp_path: Path) -> None:
     steer_msgs = [e for e in pending
                   if e.get("source") == "dispatch_message"
                   and e.get("spawn_message_for_run") == child.run]
+    if child_status in {"stopped", "completed"}:
+        assert not steer_msgs
+        assert runtime2._child_allowance("ask1", child.run, edge) == 20_000_000
+        capsule = json.loads((result2.outbox / "portal-state.json").read_text())
+        assert any("not steerable" in n["text"] and child_status in n["text"]
+                   for n in capsule["notices"])
+        return
     assert steer_msgs, "no dispatch_message created for child by to: verb"
     assert "Here is the steer" in steer_msgs[0].get("body", "")
     assert steer_msgs[0]["allowance_tokens"] == 20_050_000
@@ -1914,9 +2005,28 @@ def test_a_stamped_daemon2_claude_seat_gets_the_await_rewrite(tmp_path, monkeypa
     assert updated["command"].startswith(f"export {await_verb.CALL_CAP_ENV}=")
 
 
+@pytest.mark.parametrize("config, expected", [
+    ({}, 3),
+    ({"spawn.max_concurrent": 8}, 8),
+    ({"spawn.max_concurrent": "8"}, 8),
+    ({"spawn.max_concurrent": 8, "daemon2.strand_workers": 2}, 2),
+    ({"spawn.max_concurrent": 8, "daemon2.strand_workers": 0}, 0),
+    ({"spawn.max_concurrent": "garbage", "daemon2.strand_workers": 2}, 2),
+    ({"spawn.max_concurrent": "garbage"}, 3),
+    ({"spawn.max_concurrent": None}, 3),
+    ({"spawn.max_concurrent": float("inf")}, 3),
+    ({"daemon2.strand_workers": "garbage", "spawn.max_concurrent": 8}, 3),
+    ({"daemon2.strand_workers": None}, 3),
+    ({"daemon2.strand_workers": -1}, 0),
+])
+def test_strand_worker_count(config, expected) -> None:
+    from brr.daemon2.runtime import strand_worker_count
+    assert strand_worker_count(config) == expected
+
+
 def test_strand_runs_while_its_parent_seat_is_still_alive(tmp_path: Path) -> None:
     """The parent waits for its child's submit before replying: a serial loop deadlocks."""
-    from brr.daemon2.runtime import strand_worker_argv, strand_worker_count
+    from brr.daemon2.runtime import strand_worker_argv
     home = tmp_path / "home"
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1968,8 +2078,6 @@ stage("reply.md", "---\\nevent: " + event_id + "\\n---\\nchild returned while I 
                               home / "dispatch" / "responses", python="py")
     assert argv[:6] == ["py", "-m", "brr.daemon2", "--serve", "--role", "strand"]
     assert argv[argv.index("--inbox") + 1] == str(inbox)
-    assert strand_worker_count({}) == 3
-    assert strand_worker_count({"daemon2.strand_workers": 0}) == 0
 
 
 def test_parent_sees_and_steers_a_child_spawned_under_another_item(tmp_path: Path) -> None:
