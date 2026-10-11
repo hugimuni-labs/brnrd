@@ -264,13 +264,29 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
 def write_molt(room: Path, why: str) -> str:
     if not why:
         raise PortError("molt: --why is empty")
-    strand = strand_of_room(Path(room))
+    from .ledger import read_facts
+    from .project import sender_threads
+    from .merge import send_to_self
+    from .selfrepo import git, resolve_clone
+
+    room = Path(room)
+    strand = strand_of_room(room)
+    home = home_of_room(room)
+    thread = sender_threads(read_facts(home)).get(strand)
+    if thread is None:
+        raise PortError("molt: room has no thread")
+    clone = resolve_clone(room)
+    path = f"threads/{thread}/README.md"
+    if git(clone, "diff", "HEAD", "--quiet", "--", path, check=False).returncode:
+        git(clone, "add", "--", path)
+        git(clone, "commit", "--only", "-m", f"molt: {why}", "--", path)
+    outcome = send_to_self(clone)
+    if outcome.status != "merged":
+        raise PortError(outcome.stderr or f"molt: landing {outcome.status}: {', '.join(outcome.files)}")
     stem = mint(5)
     fact_id = f"{strand}/{stem}"
     write_port(room, stem, _front({"kind": "molt", "id": fact_id, "why": why}))
-    # The jack allows the next stop from this flag, including after the loom
-    # has already ingested and deleted the port/out file.
-    atomic_write(Path(room) / "port" / "molt-pending", why + "\n")
+    write_send(room, to=f"thread:{thread}", sender=strand, body=why)
     return fact_id
 
 

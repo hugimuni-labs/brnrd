@@ -13,6 +13,7 @@ from .ledger import read_facts
 from .loom import pending_bodies, run as run_loom
 from .port import PortError, write_molt, write_send
 from .project import fold, is_notice
+from .selfrepo import SelfError
 
 
 def _room(arg: str | None) -> Path:
@@ -76,7 +77,7 @@ def _send(argv: list[str]) -> int:
             re=args.re, note=args.note, clean=args.clean, kind=args.kind,
             refs=tuple(args.ref or ()),
         )
-    except (PortError, ValueError) as exc:
+    except (PortError, SelfError, ValueError) as exc:
         sys.stderr.write(f"{exc}\n")
         return 1
     sys.stdout.write(letter_id + "\n")
@@ -91,7 +92,7 @@ def _molt(argv: list[str]) -> int:
     room = _room(args.room)
     try:
         fact_id = write_molt(room, args.why)
-    except (PortError, ValueError) as exc:
+    except (PortError, SelfError, ValueError) as exc:
         sys.stderr.write(f"{exc}\n")
         return 1
     sys.stdout.write(fact_id + "\n")
