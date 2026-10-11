@@ -271,7 +271,8 @@ class Router:
     def _unrouted(self, facts: list[Fact], known: set[str]) -> list[Fact]:
         """Letters no thread will ever show: tell a body. Never about a notice."""
         from .home import thread_of
-        from .loom import notice, notice_id
+        from .loom import _attention, notice, notice_id
+        from .lifecycle import CLOSED, read_thread
 
         state = fold(facts)
         unrunnable = unrunnable_ids(facts)
@@ -292,6 +293,26 @@ class Router:
                        f"letter {letter_id} from {fact.data.get('from')} is addressed to "
                        f"{destination!r}, which is not a thread on main; no thread will show it",
                        read, about=fact, stands=True)
+            elif read_thread(self.home, thread).get("status") in CLOSED:
+                target, seen = thread, set()
+                while target in known and target not in seen:
+                    seen.add(target)
+                    data = read_thread(self.home, target)
+                    if data.get("status") not in CLOSED:
+                        break
+                    opener = str(data.get("opened-by", ""))
+                    target = opener.removeprefix("thread:") if opener.startswith("thread:") else None
+                if target in known and read_thread(self.home, target).get("status") not in CLOSED:
+                    notice(self.home, facts, "climbed", letter_id,
+                           f"letter {letter_id} to closed thread {thread} climbed here "
+                           f"(from {fact.data.get('from')})",
+                           str(fact.data.get("body") or ""), thread=target, about=fact)
+                else:
+                    why = "opened-by loop" if target in seen else "no open ancestor"
+                    _attention(self.home, f"attention:climbed:{letter_id}",
+                               f"letter to closed thread {thread}: {why}", thread=thread, letter=letter_id)
+                facts = self._keep(facts, "note", {"re": letter_id, "why": "closed thread; climbed"},
+                                   f"climbed:{letter_id}")
             elif letter_id in unrunnable and notice_id("unrunnable", letter_id) not in ids:
                 # Its own thread hears of it only when another letter wakes a body there.
                 others = [f for f in actionable(facts, thread) if not is_notice(f)]

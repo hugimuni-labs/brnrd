@@ -51,7 +51,7 @@ def strand_of(fact: Fact) -> str | None:
 
 def fact_filename(fact: Fact) -> str:
     """loom.jsonl holds leases, releases, attention, and injected letters."""
-    if fact.kind in {"source", "blob"} and fact.by.startswith("loom:"):
+    if fact.kind in {"source", "blob", "note"} and fact.by.startswith("loom:"):
         return "loom.jsonl"
     if fact.kind in _LOOM_KINDS:
         return "loom.jsonl"
