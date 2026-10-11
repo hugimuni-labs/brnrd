@@ -119,7 +119,8 @@ def notice_id(kind: str, subject: str) -> str:
 
 def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, can: str, *,
            thread: str | None = None, about: Fact | None = None, stands: bool = False,
-           taint: bool = False, channel: str | None = None) -> bool:
+           taint: bool = False, channel: str | None = None,
+           source_strand: str | None = None) -> bool:
     """The one writer of loom notices: what the loom cannot settle, a body is told.
 
     A notice is an owed letter from ``loom``, so it is shown at every
@@ -131,8 +132,10 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
     ident = notice_id(kind, subject)
     if any(fact.id == ident for fact in facts):
         return False
-    from .labels import Label, SELF_AUDIENCE, _sender_label, join
+    from .labels import Label, SELF_AUDIENCE, _sender_label, join, strand_label
     label = Label(taint, SELF_AUDIENCE)
+    if source_strand is not None:
+        label = join(label, strand_label(facts, source_strand, self_root=home.root / "self"))
     lines = [what]
     data: dict = {"id": ident, "from": "loom",
                   "to": channel or f"thread:{thread if home.routable(thread) else 'inbox'}"}
@@ -470,12 +473,12 @@ def _waste(home, facts, strand, thread, code, letters, failure=""):
                 first = str(letter.data.get("body", "")).splitlines()
                 notice(home, facts, "failed-message", ident,
                        f"thread {thread} could not handle your letter: {first[0] if first else ''}\n{tail}",
-                       "send again, or leave it", about=letter, channel=channel)
+                       "send again, or leave it", about=letter, channel=channel, source_strand=strand)
             else:
                 _attention(home, f"attention:wasted:{ident}", what, thread=thread, letter=ident)
         elif not is_notice(letter) and not author.startswith("stranger:") and home.routable(target):
             notice(home, facts, "bounce", ident, what, "send again, or leave it",
-                   thread=target, about=letter)
+                   thread=target, about=letter, source_strand=strand)
         else:
             _attention(home, f"attention:wasted:{ident}", what, thread=thread, letter=ident)
         # The loom disposes of the failed letter; the bounce is a separate ask.
