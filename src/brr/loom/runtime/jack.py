@@ -83,7 +83,7 @@ def _poll(room: Path) -> str:
         parsed = parse_boundary(text)
         if parsed.settled is not None:
             return ""
-        if parsed.ids:
+        if (parsed.ids if _hand() else any(not letter.compact for letter in parsed.letters)):
             return _block(room, text, parsed)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
