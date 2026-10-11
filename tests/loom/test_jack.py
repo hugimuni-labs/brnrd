@@ -74,7 +74,9 @@ def test_stop_blocks_while_letters_are_owed(tmp_path):
     assert list((room / "port" / "out").glob("*.md"))
 
 
-def test_three_blocks_then_the_stop_is_allowed(tmp_path):
+def test_three_blocks_then_the_stop_is_allowed(tmp_path, monkeypatch):
+    # The hand jack retains the old bounded behavior; hooks hold instead.
+    monkeypatch.setenv("BRNRD_BODY_JACK", "hand")
     room = _room(tmp_path)
     _write(room, [_letter()])
     for _ in range(3):
