@@ -98,7 +98,11 @@ def _reply(letter: Fact, sender_threads: dict[str, str], own: str,
     thread = sender_threads.get(letter.by.removeprefix("strand:"))
     if thread and thread != own:
         return f"thread:{thread}"
-    return channels.get(str(letter.data.get("id")), "-")
+    # A notice about a person's letter (a late one that climbed, say) answers to
+    # the chat the letter came from: the body was told `-` and noted an answer
+    # nobody heard (live, 2026-10-12).
+    return (channels.get(str(letter.data.get("id")))
+            or channels.get(str(letter.data.get("about")), "-"))
 
 
 def _letter_lines(letter: Fact, reply: str, compact: bool) -> list[str]:
