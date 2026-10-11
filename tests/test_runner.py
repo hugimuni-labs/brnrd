@@ -4010,3 +4010,63 @@ def test_credential_rotation_ledger_writes_only_on_change(tmp_path, monkeypatch)
     assert "accessToken" not in (tmp_path / ".brr" / "credential-rotations.jsonl").read_text()
     # other shells are not this ledger's
     assert not runner_auth_health.record_credential_reading(tmp_path, "gemini", event="sweep")
+
+
+@pytest.mark.parametrize("network,expected", [(None, "false"), (False, "false"), (True, "true"), ("true", "true")])
+def test_codex_workspace_sandbox_command(network, expected, monkeypatch):
+    monkeypatch.setattr(runner_mod, "_selection_profiles", lambda *a, **kw: {
+        "codex": {"cmd": "codex exec --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"},
+    })
+    cfg = {"runner.codex_sandbox": "workspace-write"}
+    if network is not None:
+        cfg["runner.codex_sandbox_network_access"] = network
+    cmd = _build_cmd("codex", "probe", cfg)
+    assert "--dangerously-bypass-approvals-and-sandbox" not in cmd
+    assert cmd[cmd.index("--sandbox") + 1] == "workspace-write"
+    assert 'approval_policy="never"' in cmd
+    assert f"sandbox_workspace_write.network_access={expected}" in cmd
+    assert "--dangerously-bypass-hook-trust" in cmd
+
+
+def test_codex_sandbox_keeps_generated_core_and_hooks():
+    from brr.runner_select import RunnerProfile
+    profile = RunnerProfile(name="codex-example", profile="codex", shell="codex", cmd="codex exec --model example --dangerously-bypass-approvals-and-sandbox")
+    cmd = _build_cmd(profile, "probe", {"runner.codex_sandbox": "workspace-write"}, extra_args=["-c", "hooks.test=true"])
+    assert cmd[cmd.index("--model") + 1] == "example"
+    assert "hooks.test=true" in cmd
+    assert "--sandbox" in cmd
+
+
+def test_codex_sandbox_replaces_conflicting_profile_flags():
+    cmd = runner_mod._codex_sandbox_cmd(
+        ["codex", "exec", "--sandbox=read-only", "-a", "on-request", "--full-auto"],
+        {"runner.codex_sandbox": "workspace-write"},
+    )
+    assert "--full-auto" not in cmd and "on-request" not in cmd
+    assert "--sandbox=read-only" not in cmd
+    assert cmd.count("--sandbox") == 1
+
+
+def test_codex_sandbox_leaves_pinned_and_other_shell_commands_alone():
+    cfg = {"runner.codex_sandbox": "workspace-write", "runner_cmd": ["codex", "exec", "custom"]}
+    assert _build_cmd("codex", "probe", cfg) == cfg["runner_cmd"]
+    cmd = ["claude", "--dangerously-skip-permissions"]
+    assert runner_mod._codex_sandbox_cmd(cmd, cfg) == cmd
+    bypass = ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox"]
+    assert runner_mod._codex_sandbox_cmd(bypass, {}) == bypass
+
+
+def test_invalid_codex_sandbox_is_rejected():
+    with pytest.raises(ValueError, match="runner.codex_sandbox"):
+        runner_mod._codex_sandbox_cmd(["codex", "exec"], {"runner.codex_sandbox": "typo"})
+
+
+
+def test_codex_sandbox_resume_keeps_exec_level_option():
+    cmd = runner_mod._codex_sandbox_cmd(
+        ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox"],
+        {"runner.codex_sandbox": "workspace-write"},
+    )
+    resumed = runner_mod._insert_codex_resume(cmd, "thread")
+    assert resumed[:6] == ["codex", "exec", "--sandbox", "workspace-write", "resume", "thread"]
+    assert 'approval_policy="never"' in resumed
