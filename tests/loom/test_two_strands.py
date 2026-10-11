@@ -1,4 +1,4 @@
-"""Two strands, one letter mid-work, one kill, one successor."""
+"""Two strands: mid-work letters are answered or returned to their author."""
 
 import json
 import os
@@ -68,7 +68,7 @@ def _trace_ns(room, letter_id):
     return found
 
 
-def test_a_letter_mid_work_and_a_killed_body_answered_once_by_its_successor(tmp_path):
+def test_a_letter_mid_work_is_answered_and_a_killed_bodys_letter_bounces(tmp_path):
     root = tmp_path / "home"
     write_thread(root, "ta", "thread ta", "answer-pings", wait="20")
     write_thread(root, "tb", "thread tb\ntarget: ta", "ping-two", wait="20")
@@ -77,70 +77,45 @@ def test_a_letter_mid_work_and_a_killed_body_answered_once_by_its_successor(tmp_
     inject_letter(root, to="thread:tb", body="begin")
     loom = Loom(root, tick=0.05)
     loom.start()
-    caught = {"wake": None, "killed": False}
+    caught = {"killed": False}
     try:
         def drive():
             facts = loom.facts()
             held = holder(facts, "ta")
-            if held is None:
-                return False
-            strand = held[0]
-            room = root / "rooms" / strand
-            starts = [
-                fact for fact in facts
-                if fact.kind == "body.started" and fact.data.get("strand") == strand
-            ]
-            if len(starts) >= 2 and caught["wake"] is None:
-                caught["wake"] = (room / "port" / "wake.md").read_text()
+            if not caught["killed"] and held is not None:
+                strand = held[0]
+                room = root / "rooms" / strand
+                starts = [f for f in facts if f.kind == "body.started"
+                          and f.data.get("strand") == strand]
+                pings = _body(facts, "ping-2")
+                if (starts and pings and not _replies(facts, pings[0].data["id"], "2-gnip")
+                        and not _pending_reply(room, pings[0].data["id"])
+                        and (_shown(facts, pings[0].data["id"], strand)
+                             or _shown_file(room, pings[0].data["id"]))):
+                    os.killpg(int(starts[0].data["pid"]), signal.SIGKILL)
+                    caught.update(killed=True, strand=strand, room=room)
             pings = _body(facts, "ping-2")
-            if (not caught["killed"] and len(starts) == 1 and pings
-                    and not _replies(facts, pings[0].data["id"], "2-gnip")
-                    and not _pending_reply(room, pings[0].data["id"])
-                    and (_shown(facts, pings[0].data["id"], strand)
-                         or _shown_file(room, pings[0].data["id"]))):
-                os.killpg(int(starts[0].data["pid"]), signal.SIGKILL)
-                caught["killed"] = True
-                caught["pid"] = int(starts[0].data["pid"])
-            if not caught["killed"] or caught["wake"] is None:
+            if not caught["killed"] or not pings:
                 return False
-            ping1 = _body(facts, "ping-1")
-            if len(ping1) != 1 or len(_replies(facts, ping1[0].data["id"], "1-gnip")) != 1:
-                return False
-            if len(_replies(facts, pings[0].data["id"], "2-gnip")) != 1:
-                return False
-            deaths = [
-                fact for fact in facts
-                if fact.kind == "body.died" and fact.data.get("strand") == strand
-            ]
-            return any(fact.data.get("code") == -signal.SIGKILL for fact in deaths)
+            bounce = [f for f in facts if f.kind == "letter" and f.data.get("from") == "loom"
+                      and pings[0].data["id"] in f.data.get("body", "")]
+            return bool(bounce and _shown(facts, bounce[0].data["id"], pings[0].data["from"]))
 
         wait_until(drive, 25, loom.dump)
         facts = loom.facts()
-        strand, gen = holder(facts, "ta")
-        room = root / "rooms" / strand
         ping1 = _body(facts, "ping-1")[0]
-        assert min(_trace_ns(room, ping1.data["id"])) < 15
-        reply1 = _replies(facts, ping1.data["id"], "1-gnip")
-        assert len(reply1) == 1
-        assert _shown(facts, reply1[0].data["id"], ping1.data["from"])
+        assert min(_trace_ns(caught["room"], ping1.data["id"])) < 15
+        assert len(_replies(facts, ping1.data["id"], "1-gnip")) == 1
         ping2 = _body(facts, "ping-2")[0]
-        assert len(_replies(facts, ping2.data["id"], "2-gnip")) == 1
-        assert ping2.data["id"] in caught["wake"]
-        assert "ping-2" in caught["wake"]
-        starts = [
-            fact for fact in facts
-            if fact.kind == "body.started" and fact.data.get("strand") == strand
-        ]
-        assert len(starts) >= 2
-        assert starts[0].data["gen"] == starts[1].data["gen"] == gen
-        assert starts[0].data["pid"] != starts[1].data["pid"]
-        assert starts[0].data["pid"] == caught["pid"]
-        died = [
-            fact for fact in facts
-            if fact.kind == "body.died" and fact.data.get("code") == -signal.SIGKILL
-        ]
-        assert len(died) == 1
-        assert died[0].data["strand"] == strand
+        assert not _replies(facts, ping2.data["id"], "2-gnip")
+        assert not owed(facts, "ta")
+        starts = [f for f in facts if f.kind == "body.started"
+                  and f.data.get("strand") == caught["strand"]]
+        assert len(starts) == 1
+        exits = [f for f in facts if f.kind == "body.exited"
+                 and f.data.get("code") == -signal.SIGKILL]
+        assert len(exits) == 1
+        assert exits[0].data["strand"] == caught["strand"]
     finally:
         loom.halt()
     assert not loom.errors

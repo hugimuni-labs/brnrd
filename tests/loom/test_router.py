@@ -12,7 +12,7 @@ from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import inject_letter, read_facts
 from brr.loom.runtime.project import fold, is_notice
 
-from _step import wait_until, write_thread
+from _step import historical_quarantine, wait_until, write_thread
 
 SRC = str(Path(__file__).resolve().parents[2] / "src")
 A = "aaaa"
@@ -411,6 +411,7 @@ def test_an_unrunnable_letter_stops_waking_and_the_rest_is_answered(tmp_path):
     _config(root, name="brnrd", router_ttl=2, max_skew=0.3, margin=0.1)
     write_thread(root, "tp", "thread tp", "die-on-unrunnable", wait="3")
     letter = inject_letter(root, to="thread:tp", body="unrunnable")
+    historical_quarantine(root, "tp", letter, install=A)
     procs = _pair(root)
     try:
         def set_aside():

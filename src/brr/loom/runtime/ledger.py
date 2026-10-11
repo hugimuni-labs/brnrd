@@ -31,7 +31,7 @@ def _freeze(data: dict) -> dict:
 
 
 # The loom's own file, not a strand's. One writer: the router, except a
-# strand's loom still records that strand's fuse.
+# strand's loom still records that strand's exit.
 _LOOM_KINDS = {
     "lease", "released", "attention", "router", "router.renewed",
     "speech", "speech.part",

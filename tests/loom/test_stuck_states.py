@@ -20,10 +20,10 @@ from brr.loom.runtime import loom as runtime, speak
 from brr.loom.runtime.channels import relay
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, inject_letter
-from brr.loom.runtime.project import fold, holder, unrunnable_ids
+from brr.loom.runtime.project import owed, fold, holder, unrunnable_ids
 from brr.loom.runtime.selfrepo import init_self
 
-from _step import Loom, hand_note, notices, wait_until, write_thread
+from _step import Loom, historical_quarantine, hand_note, notices, wait_until, write_thread
 
 
 def stuck(reason):
@@ -124,13 +124,13 @@ def test_an_unrunnable_letter_is_handed_to_a_body(root, monkeypatch):
     drain_before_death(root, monkeypatch)
     thread(root, "die-on-unrunnable")
     original = inject_letter(root, to="thread:work", body="unrunnable")
+    # Replay the pre-lifecycle ledger: quarantined letters keep their treatment,
+    # although new exits no longer create death/fuse retries.
+    historical_quarantine(root, "work", original)
     with running(root) as loom:
-        reach(lambda: original in unrunnable_ids(loom.facts()), loom)
         # Nothing else on its thread can wake a body, so inbox is told.
         told_and_settled(loom, original, "inbox", "quarantined", "thread work")
-        # The fuse on its thread is told too, and that notice is settled as well.
-        assert any("thread work is fused" in f.data["body"] for f in loom.facts()
-                   if f.kind == "letter" and f.data.get("from") == "loom")
+        assert not owed(loom.facts(), "work")
 
 
 @stuck("a silent live body has no progress deadline or message-triggered replacement")

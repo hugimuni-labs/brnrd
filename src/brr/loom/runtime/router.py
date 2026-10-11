@@ -256,28 +256,7 @@ class Router:
             return facts
         owner = install_of(strand)
         own = owner == self.home.install_id()
-        unrunnable = unrunnable_ids(facts)
-        pending = owed(facts, thread)
-        # A loom notice never resets a fuse and never counts as a newer
-        # letter: the notice about a fuse must not un-fuse its own thread.
-        alive_work = [
-            fact for fact in pending
-            if str(fact.data.get("id")) not in unrunnable and not is_notice(fact)
-        ]
-        fuse = next((fact for fact in facts if fact.kind == "attention"
-                     and fact.id == f"attention:fuse:{strand}"), None)
-        take = False
-        if own and fuse is not None and unrunnable and alive_work:
-            take = True
-        elif own and fuse is not None and any(
-            tuple(fact.hlc or ()) > tuple(fuse.hlc or ()) for fact in alive_work
-        ):
-            # Writing to the thread again is the reset: a letter newer than
-            # the fuse releases the dead strand, and a fresh one is granted.
-            take = True
-        elif owner and not own and install_silent(facts, owner, self.config.router_ttl):
-            take = True
-        if not take:
+        if not (owner and not own and install_silent(facts, owner, self.config.router_ttl)):
             return facts
         return self._keep(facts, "released", {
             "thread": thread, "strand": strand, "gen": gen,
