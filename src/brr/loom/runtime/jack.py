@@ -8,7 +8,7 @@ import time
 import traceback
 from pathlib import Path
 
-from .home import atomic_write, mint
+from .home import atomic_write, home_of_room, mint
 from .port import Boundary, parse_boundary
 
 
@@ -87,8 +87,14 @@ def _poll(room: Path) -> str:
             return _block(room, text, parsed)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            return ""
-        time.sleep(min(0.2, remaining))
+            from .lifecycle import read_thread
+            thread = os.environ["BRNRD_THREAD"]
+            opener = str(read_thread(home_of_room(room), thread).get("opened-by", ""))
+            if _hand() or (not parsed.ids and opener.startswith("thread:")):
+                return ""
+            deadline = time.monotonic() + _wait(room)
+            remaining = deadline - time.monotonic()
+        time.sleep(min(0.2, max(0.01, remaining)))
 
 
 _TAINT_TOOLS = {"WebFetch", "WebSearch"}
