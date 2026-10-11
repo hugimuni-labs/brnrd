@@ -244,8 +244,11 @@ class Router:
             molts = {f.id: f for f in fold(facts).accepted if f.kind == "molt"}
             for letter in reversed(letters):
                 molt = molts.get(letter.data.get("molt"))
+                # Only this thread's own last body may hand its room on: a molt
+                # marker on a letter to another thread would graft a foreign room.
                 if (molt is not None and molt.data.get("strand") == letter.data.get("from")
-                        and molt.data.get("gen") == letter.data.get("gen")):
+                        and molt.data.get("gen") == letter.data.get("gen")
+                        and sender_threads(facts).get(letter.data.get("from")) == thread):
                     data["parent"] = letter.data["from"]
                     break
             try:

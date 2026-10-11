@@ -236,7 +236,12 @@ def label_inputs(room: Path) -> tuple[str, list, Path | None, str]:
             self_root = home / "self"
     if self_root is None and (room / "threads").is_dir():
         self_root = room
-    return strand, facts, self_root, jack_log_text(room, self_root, strand)
+    log = jack_log_text(room, self_root, strand)
+    # A web receipt the loom has not taken in yet is not in ``facts``. The
+    # strand could send in that gap and be stamped clean, so it taints here.
+    if room.name == "self" and any((room.parent / "port" / "out").glob("taint-*.json")):
+        log += "pending taint receipt\n"
+    return strand, facts, self_root, log
 
 
 def _strand_of(room: Path) -> str:
