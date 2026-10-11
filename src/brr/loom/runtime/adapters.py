@@ -1,73 +1,33 @@
-"""How a body is started. Fake for the suite; claude for the demo."""
+"""A shell is a folder; a home's folder wins over the bundled one."""
 
-from __future__ import annotations
-
-import json
-import re
-import shlex
-import sys
 from pathlib import Path
-
-from .home import atomic_write
-
-
-# What a provider prints when its window is spent. A body that ends on one of
-# these did not fail: the loom waits and starts it again.
-_WALL = re.compile(
-    r"hit your [a-z ]*limit|usage limit|rate limit|quota (?:exceeded|exhausted)"
-    r"|balance exhausted", re.I)
+import re
 
 
-def walled(tail: str) -> bool:
-    return bool(_WALL.search(tail))
+def resolve(home, shell: str) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", shell):
+        raise ValueError(f"invalid body shell {shell!r}")
+    local = home.root / "loom" / "bodies" / shell
+    path = local if local.is_dir() else Path(__file__).parent / "bodies" / shell
+    if not (path / "run").is_file():
+        raise ValueError(f"no body folder for {shell!r}")
+    return path.resolve()
 
 
-def fake_argv(room: Path, policy: str) -> list[str]:
-    return [sys.executable, "-m", "brr.loom.runtime.fakebody",
-            "--room", str(room), "--policy", policy]
+def walled(folder: Path, tail: str) -> bool:
+    return any(re.search(line, tail, re.I) for line in (folder / "wall").read_text().splitlines()
+               if line.strip())
 
 
-def _hook(room: Path, event: str, timeout: int | None) -> dict:
-    command = (
-        f"{shlex.quote(sys.executable)} -m brr.loom.runtime jack "
-        f"--event {event} --room {shlex.quote(str(room))}"
-    )
-    item: dict = {"type": "command", "command": command}
-    if timeout is not None:
-        item["timeout"] = timeout
-    return item
-
-
-def write_claude_settings(room: Path, wait: float) -> Path:
-    """Stop's hook timeout is ``wait + 60``. ``.*`` matches every tool call.
-
-    Checked against ``claude --help`` on this machine (2026-10-08): ``-p``,
-    ``--model``, ``--settings`` and ``--dangerously-skip-permissions`` exist.
-    """
-    stop_timeout = int(wait) + 60
-    settings = {
-        "hooks": {
-            "PostToolUse": [{"matcher": ".*", "hooks": [_hook(room, "post", 60)]}],
-            "Stop": [{"hooks": [_hook(room, "stop", stop_timeout)]}],
-            "SessionStart": [{"hooks": [_hook(room, "start", 60)]}],
-        }
-    }
-    path = room / ".claude" / "settings.json"
-    atomic_write(path, json.dumps(settings, indent=2) + "\n")
-    return path
-
-
-def claude_argv(room: Path, core: str, wait: float) -> list[str]:
-    settings = write_claude_settings(room, wait)
-    prompt = (room / "port" / "wake.md").read_text()
-    # `--` so a step-2 README, which starts with `---`, is a prompt and not
-    # an option. Checked 2026-10-08: `claude -p -- '--- hello'` runs.
-    return ["claude", "-p", "--model", core, "--settings", str(settings),
-            "--dangerously-skip-permissions", "--", prompt]
-
-
-def wait_seconds(room: Path) -> float:
-    path = room / "port" / "wait"
-    if not path.is_file():
-        return 3600.0
-    return float(path.read_text().strip())
+def at_birth(home, thread: str, default: tuple[str, str]) -> tuple[str, str]:
+    from .config import load_config
+    readme = (home.thread_dir(thread) / "README.md").read_text()
+    match = re.search(r"^body: *([^\n]+)$", readme.split("\n---", 1)[0], re.M)
+    choice = match.group(1).strip().strip('"') if match else None
+    choice = choice or load_config(home.root).body
+    if not choice:
+        return default
+    shell, slash, core = str(choice).partition("/")
+    if not slash or not core.strip():
+        raise ValueError(f"body must be shell/core: {choice!r}")
+    return shell.strip(), core.strip()

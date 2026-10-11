@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import signal
+import shlex
 import subprocess
 import sys
 import threading
@@ -18,7 +19,7 @@ from pathlib import Path
 
 from brr.daemon2.facts import Fact
 
-from .adapters import claude_argv, fake_argv, wait_seconds, walled
+from .adapters import resolve, walled
 from .home import Home, atomic_write, is_channel, mint
 from .ledger import LedgerConflict, append, read_facts
 from .port import (
@@ -65,6 +66,7 @@ class Body:
     gen: int
     proc: subprocess.Popen
     log: object
+    folder: Path
     log_start: int = 0
 
     def close_log(self) -> None:
@@ -93,6 +95,11 @@ def _env(room: Path) -> dict[str, str]:
         env[f"GIT_{role}_NAME"] = AUTHOR_NAME
         env[f"GIT_{role}_EMAIL"] = AUTHOR_EMAIL
     env["BRNRD_ROOM"] = str(room)
+    env["BRNRD_WAKE"] = str(room / "port" / "wake.md")
+    env["BRNRD_JACK"] = (f"{shlex.quote(sys.executable)} -m brr.loom.runtime jack "
+                         f"--room {shlex.quote(str(room))}")
+    wait = room / "port" / "wait"
+    env["BRNRD_WAIT"] = wait.read_text().strip() if wait.is_file() else "3600"
     return env
 
 
@@ -210,7 +217,7 @@ def _fused(home: Home, facts: list[Fact], strand: str, thread: str) -> bool:
 
 def _prepare(home: Home, strand: str, thread: str, gen: int,
              letters: list[Fact], threads: dict[str, str],
-             facts: list[Fact]) -> Path:
+             facts: list[Fact], jack: str) -> Path:
     room = home.room(strand).resolve()
     clone = clone_room(home.root, strand)
     (room / "port" / "in").mkdir(parents=True, exist_ok=True)
@@ -218,7 +225,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     wait_src = home.thread_dir(thread) / "wait"
     if wait_src.is_file():
         atomic_write(room / "port" / "wait", wait_src.read_text().strip() + "\n")
-    for name in ("jack-state.json", "molt-pending"):
+    for name in ("jack-state.json", "molt-pending", "policy"):
         (room / "port" / name).unlink(missing_ok=True)
     owed_path = room / "port" / "owed.json"
     atomic_write(owed_path, json.dumps([letter.data for letter in letters]))
@@ -231,7 +238,10 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         "a letter from `loom` is a notice of something the loom could not settle, "
         "yours to deal with: its last lines name what settles it "
         "(core/loom/README.md, Notices); "
-        "when you're done, stop, and the jack holds you while letters may come\n"
+        + ("call `$BRNRD_JACK --event start` now, `$BRNRD_JACK --event post` between "
+           "steps and `$BRNRD_JACK --event stop` before ending; read each returned boundary\n"
+           if jack == "hand" else
+           "when you're done, stop, and the jack holds you while letters may come\n")
     ))
     with tempfile.TemporaryFile(mode="w+") as wake, tempfile.TemporaryFile(mode="w+") as why:
         code = run_wake(clone, thread, owed_path, loom_part=part_path, stdout=wake, stderr=why)
@@ -283,19 +293,26 @@ def _spawn(room: Path, argv: list[str]) -> tuple[subprocess.Popen, object]:
     return proc, log
 
 
-def _start(home: Home, strand: str, thread: str, gen: int, adapter: str,
-           core: str, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
+def _start(home: Home, strand: str, thread: str, gen: int,
+           bodies: dict[str, Body], facts: list[Fact], choice=None) -> list[Fact]:
     """Launch one body; preparation and launch failures count toward its fuse."""
     if strand in bodies:
         return facts
     letters = actionable(facts, thread)
     ids = [str(letter.data["id"]) for letter in letters]
     try:
+        started = next((f for f in facts if f.kind == "body.started"
+                        and f.data.get("strand") == strand), None)
+        shell, core = (started.data["shell"], started.data["core"]) if started else choice
+        folder = resolve(home, shell)
         room = _prepare(
             home, strand, thread, gen, letters, sender_threads(facts), facts,
+            (folder / "jack").read_text().strip(),
         )
-        argv = (fake_argv(room, _policy(home, thread)) if adapter == "fake"
-                else claude_argv(room, core, wait_seconds(room)))
+        policy = _policy(home, thread)
+        if policy is not None:
+            atomic_write(room / "port/policy", policy + "\n")
+        argv = [str(folder / "run"), str(room), core]
         log_path = room / "port" / "body.log"
         log_start = log_path.stat().st_size if log_path.is_file() else 0
         # The wake has already exposed these letters. Publish that label
@@ -311,13 +328,13 @@ def _start(home: Home, strand: str, thread: str, gen: int, adapter: str,
             "strand": strand, "gen": gen, "why": why,
         }, f"body.died:{strand}:{gen}:{mint(6)}"))
         if not _fused(home, facts, strand, thread):
-            return _start(home, strand, thread, gen, adapter, core, bodies, facts)
+            return _start(home, strand, thread, gen, bodies, facts, choice)
         return facts
     facts.append(_record(home, "body.started", {
-        "strand": strand, "gen": gen, "pid": proc.pid, "adapter": adapter,
+        "strand": strand, "gen": gen, "pid": proc.pid, "shell": shell, "core": core,
     }, f"body.started:{strand}:{gen}:{proc.pid}:{mint(6)}"))
-    bodies[strand] = Body(strand, thread, gen, proc, log, log_start)
-    _log(home, f"start {strand} thread {thread} gen {gen} pid {proc.pid} {adapter}")
+    bodies[strand] = Body(strand, thread, gen, proc, log, folder, log_start)
+    _log(home, f"start {strand} thread {thread} gen {gen} pid {proc.pid} {shell}/{core}")
     return facts
 
 
@@ -416,8 +433,7 @@ def _molted(home: Home, body: Body) -> bool:
     return (home.room(body.strand) / "port" / "molt-pending").is_file()
 
 
-def _reap(home: Home, bodies: dict[str, Body], adapter: str, core: str,
-         facts: list[Fact]) -> list[Fact]:
+def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
     for strand, body in list(bodies.items()):
         code = body.proc.poll()
         if code is None:
@@ -430,7 +446,7 @@ def _reap(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         del bodies[strand]
         molted = _molted(home, body)
         failed = code != 0 or (not molted and bool(actionable(facts, body.thread)))
-        if failed and walled(_log_tail(home.room(strand), body.log_start)):
+        if failed and walled(body.folder, _log_tail(home.room(strand), body.log_start)):
             # The provider's window is spent. Not a death: nothing counts
             # toward the fuse or against the letters, and the thread stays
             # held and owed. `_refresh_holders` retries after `until`.
@@ -451,12 +467,12 @@ def _reap(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         if code != 0 or data.get("unfinished"):
             if not _fused(home, facts, strand, body.thread):
                 facts = _start(
-                    home, strand, body.thread, body.gen, adapter, core, bodies, facts,
+                    home, strand, body.thread, body.gen, bodies, facts,
                 )
             continue
         if molted:
             facts = _start(
-                home, strand, body.thread, body.gen, adapter, core, bodies, facts,
+                home, strand, body.thread, body.gen, bodies, facts,
             )
             continue
         facts.append(_record(home, "released", {
@@ -486,23 +502,25 @@ def _walled_last(facts: list[Fact]) -> dict[str, Fact]:
     return {strand: fact for strand, fact in last.items() if fact.kind == "body.walled"}
 
 
-def _refresh_holders(home: Home, bodies: dict[str, Body], adapter: str, core: str,
-                     facts: list[Fact]) -> list[Fact]:
+def _refresh_holders(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
     """Own holders: refresh live boundaries, retry expired walls, release corpses."""
     from .router import install_of
+    from .usage import fuel
+    shells = {f.data["strand"]: f.data.get("shell") for f in facts if f.kind == "body.started"}
     state, threads, walls = fold(facts), sender_threads(facts), _walled_last(facts)
     for thread, (strand, gen) in state.holder.items():
         if install_of(strand) != home.install_id():
             continue
         if strand in bodies or body_alive(home.room(strand)):
             text = render_boundary(strand, gen, thread, actionable(facts, thread),
-                                   state.shown.get(strand, set()), threads)
+                                   state.shown.get(strand, set()), threads,
+                                   fuel(home, shells[strand]) if shells.get(strand) else "")
             path = home.room(strand) / "port" / "in" / "boundary.md"
             if not path.is_file() or path.read_text() != text:
                 atomic_write(path, text)
         elif strand in walls:
             if time.time() >= walls[strand].data["until"]:
-                facts = _start(home, strand, thread, gen, adapter, core, bodies, facts)
+                facts = _start(home, strand, thread, gen, bodies, facts)
         elif not any(fact.id == f"attention:fuse:{strand}" for fact in facts):
             try:
                 facts.append(_record(home, "released", {
@@ -529,10 +547,10 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     facts = read_facts(home)
     facts = router.begin_tick(facts)
     facts = _ingest(home, facts, router.config.router_ttl)
-    facts = _refresh_holders(home, bodies, adapter, core, facts)
-    facts = router.route(facts, bodies, adapter, core)
+    facts = _refresh_holders(home, bodies, facts)
+    facts = router.route(facts, bodies, (adapter, core))
     facts = router.speak_out(facts)
-    facts = _reap(home, bodies, adapter, core, facts)
+    facts = _reap(home, bodies, facts)
 
 
 def _pause(stop, seconds: float) -> bool:
@@ -578,8 +596,6 @@ def _own_stop(stop):
 
 def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         tick: float = 0.2, stop=None, install: str | None = None) -> None:
-    if adapter not in {"fake", "claude"}:
-        raise ValueError(f"unknown adapter {adapter!r}")
     if tick <= 0:
         raise ValueError("tick must be positive")
     stop = _own_stop(stop)

@@ -189,10 +189,10 @@ class Router:
             "until": self.lease.until,
         }, f"router.renewed:{self.home.install_id()}:{self.lease.gen}:{bucket}")
 
-    def route(self, facts: list[Fact], bodies: dict, adapter: str, core: str) -> list[Fact]:
+    def route(self, facts: list[Fact], bodies: dict, default: tuple[str, str]) -> list[Fact]:
         if not self.armed():
             return facts
-        from .loom import _attention, _policy, _start, body_alive
+        from .loom import _attention, _policy, _start, body_alive, notice
 
         home = self.home
         threads = _routable(home, facts)
@@ -214,7 +214,14 @@ class Router:
                     thread=thread,
                 )
                 continue
-            if adapter == "fake" and _policy(home, thread) is None:
+            from .adapters import at_birth
+            try:
+                choice = at_birth(home, thread, default)
+            except (ValueError, OSError) as exc:
+                notice(home, facts, "body", thread, f"thread {thread}: {exc}",
+                       "correct its body: shell/core choice", thread=thread)
+                continue
+            if choice[0] == "fake" and _policy(home, thread) is None:
                 _attention(
                     home, f"attention:no-policy:{thread}",
                     f"fake adapter: thread {thread} has no policy file",
@@ -234,7 +241,7 @@ class Router:
             except LedgerConflict:
                 continue
             facts.append(stored)
-            facts = _start(home, strand, thread, gen, adapter, core, bodies, facts)
+            facts = _start(home, strand, thread, gen, bodies, facts, choice)
         if not self.armed():
             return facts
         facts = self._unrouted(facts, set(threads))

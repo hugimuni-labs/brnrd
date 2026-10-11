@@ -26,7 +26,7 @@ def _loom(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime loom")
     parser.add_argument("--home", required=True)
     parser.add_argument("--install", default=None)
-    parser.add_argument("--adapter", default="fake", choices=("fake", "claude"))
+    parser.add_argument("--adapter", default="fake")
     parser.add_argument("--core", default="haiku")
     parser.add_argument("--tick", type=float, default=0.2)
     args = parser.parse_args(argv)
