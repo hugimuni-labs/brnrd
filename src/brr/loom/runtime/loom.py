@@ -461,7 +461,7 @@ def _waste(home, facts, strand, thread, code, letters, failure=""):
         what = (f"letter {ident} on thread {thread}: body exited {code}; "
                 f"README changed since start: {changed}; {tank or 'fuel unknown'}\n{tail}")
         target = threads.get(author) or (opener.removeprefix("thread:") if opener.startswith("thread:") else None)
-        if author.startswith("person:") and start is not None:
+        if author.startswith("person:"):
             retry = f"retry:{ident}"
             if not any(f.id == retry for f in facts):
                 facts.append(_record(home, "letter.retry", {"strand": strand, "letter": ident}, retry))
@@ -476,11 +476,13 @@ def _waste(home, facts, strand, thread, code, letters, failure=""):
                        "send again, or leave it", about=letter, channel=channel, source_strand=strand)
             else:
                 _attention(home, f"attention:wasted:{ident}", what, thread=thread, letter=ident)
+                _log(home, f"wasted {ident} on thread {thread}: nobody to tell")
         elif not is_notice(letter) and not author.startswith("stranger:") and home.routable(target):
             notice(home, facts, "bounce", ident, what, "send again, or leave it",
                    thread=target, about=letter, source_strand=strand)
         else:
             _attention(home, f"attention:wasted:{ident}", what, thread=thread, letter=ident)
+            _log(home, f"wasted {ident} on thread {thread}: nobody to tell")
         # The loom disposes of the failed letter; the bounce is a separate ask.
         facts.append(_record(home, "note", {"strand": strand, "re": ident,
                             "why": "body ended without handling it"}, f"wasted:{ident}"))
@@ -558,9 +560,6 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     if router is None:
         router = Router(home)
     facts = read_facts(home)
-    for fact in facts:
-        if fact.id.startswith("attention:wasted:"):
-            _log(home, fact.data["why"])
     facts = router.begin_tick(facts)
     facts = _ingest(home, facts, router.config.router_ttl)
     facts = _refresh_holders(home, bodies, facts)
