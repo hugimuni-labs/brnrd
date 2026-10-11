@@ -3,6 +3,7 @@
 from brr.loom.runtime import speak
 from brr.loom.runtime.ledger import inject_letter
 from brr.loom.runtime.project import owed
+from brr.loom.runtime.selfrepo import git, init_self
 
 from _step import Loom, wait_until, write_thread
 
@@ -10,9 +11,13 @@ from _step import Loom, wait_until, write_thread
 def test_each_thread_answers_through_its_own_body_folder(tmp_path, monkeypatch):
     root = tmp_path / "home"
     write_thread(root, "bundled", "---\nid: bundled\nstatus: open\ntense: plan\n"
-                 "body: fake/echo\n---\n# Bundled body\n", "echo-wake", wait="0")
+                 "---\n# Bundled body\n", "echo-wake", wait="0")
     write_thread(root, "local", "---\nid: local\nstatus: open\ntense: plan\n"
-                 "body: local/small\n---\n# Local body\n", "unused", wait="0")
+                 "---\n# Local body\n", "unused", wait="0")
+    (root / "self/threads/bundled/seat").write_text("body: fake/echo\n")
+    (root / "self/threads/local/seat").write_text("body: local/small\n")
+    git(root / "self", "add", "threads")
+    git(root / "self", "commit", "-m", "Choose the thread bodies.")
     folder = root / "loom/bodies/local"
     folder.mkdir(parents=True)
     (folder / "jack").write_text("hand\n")
@@ -48,7 +53,10 @@ def test_empty_gauge_parks_then_starts_and_answers(tmp_path, capsys):
     from brr.loom.runtime.verbs_loom import _attention
     root = tmp_path / "home"
     write_thread(root, "gauge", "---\nid: gauge\nstatus: open\ntense: plan\n"
-                 "body: gauge/echo\n---\n# Gauge\n", "answer-fast", wait="0")
+                 "---\n# Gauge\n", "answer-fast", wait="0")
+    (root / "self/threads/gauge/seat").write_text("body: gauge/echo\n")
+    git(root / "self", "add", "threads")
+    git(root / "self", "commit", "-m", "Choose the gauge body.")
     folder = root / "loom/bodies/gauge"
     folder.mkdir(parents=True)
     (folder / "jack").write_text("hooks\n")
@@ -85,6 +93,52 @@ print(json.dumps({'windows': [{'name': 'week', 'left_pct': left,
         assert not any(f.kind == "body.died" for f in loom.facts())
         _attention(["--home", str(root)])
         assert "parked" not in capsys.readouterr().out
+    finally:
+        loom.halt()
+    assert not loom.errors
+
+
+def test_landed_seat_edit_and_molt_switch_the_successors_body(tmp_path):
+    from test_lifecycle import bodies
+    root = tmp_path / "home"
+    init_self(root, person="test")
+    write_thread(root, "work", "Work", "work", wait="0")
+    bodies(root, '''import sys
+from pathlib import Path
+from brr.loom.runtime.fakebody import Ctx
+from brr.loom.runtime.selfrepo import git
+ctx = Ctx(Path(sys.argv[1]))
+ctx.owed()
+clone = ctx.room / "self"
+(clone / "threads/work/seat").write_text("# Execution choice\\nbody: other/small\\nrepo: ignored\\nwatch: ignored\\n")
+git(clone, "add", "threads/work/seat")
+git(clone, "commit", "-m", "Choose another body.")
+ctx.molt("use the landed seat")
+''')
+    folder = root / "loom/bodies/other"
+    folder.mkdir(parents=True)
+    (folder / "jack").write_text("hand\n")
+    script = folder / "run"
+    script.write_text('''#!/usr/bin/env python3
+import sys
+from pathlib import Path
+from brr.loom.runtime.fakebody import Ctx
+ctx = Ctx(Path(sys.argv[1]))
+for letter in ctx.owed():
+    ctx.send("thread:work", note="answered by " + sys.argv[2], re=letter.id)
+''')
+    script.chmod(0o755)
+    first = inject_letter(root, to="thread:work", body="switch and finish this ask")
+    loom = Loom(root)
+    loom.start()
+    try:
+        wait_until(lambda: not owed(loom.facts(), "work"), 20, loom.dump)
+        starts = [f for f in loom.facts() if f.kind == "body.started"]
+        assert [f.data["shell"] for f in starts] == ["fake", "other"]
+        assert starts[0].data["strand"] != starts[1].data["strand"]
+        assert any(f.kind == "note" and f.data.get("re") == first
+                   and f.data.get("why") == "answered by small" for f in loom.facts())
+        assert "body: other/small" in git(root / "self", "show", "main:threads/work/seat").stdout
     finally:
         loom.halt()
     assert not loom.errors
