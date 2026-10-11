@@ -87,9 +87,18 @@ def parse_boundary(text: str) -> Boundary:
                     ids=ids, letters=letters, settled=settled)
 
 
-def _reply(letter: Fact, sender_threads: dict[str, str]) -> str:
+def _reply(letter: Fact, sender_threads: dict[str, str], own: str,
+           channels: dict[str, str]) -> str:
+    """Where an answer goes: the sender's thread, a person's chat, or nowhere.
+
+    ``-`` means nobody is waiting for words. A thread never names itself: a
+    live haiku body answered its own thread, owed itself the answer, and its
+    successor acknowledged that into three more.
+    """
     thread = sender_threads.get(letter.by.removeprefix("strand:"))
-    return f"thread:{thread}" if thread else "-"
+    if thread and thread != own:
+        return f"thread:{thread}"
+    return channels.get(str(letter.data.get("id")), "-")
 
 
 def _letter_lines(letter: Fact, reply: str, compact: bool) -> list[str]:
@@ -107,7 +116,8 @@ def _letter_lines(letter: Fact, reply: str, compact: bool) -> list[str]:
 
 def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     shown: set[str], sender_threads: dict[str, str], fuel: str = "",
-                    settled: str | None = None) -> str:
+                    settled: str | None = None,
+                    channels: dict[str, str] | None = None) -> str:
     """Letters this strand was already shown are compacted to id plus first line."""
     lines = [
         f"<!-- port {strand} gen {gen} · owed "
@@ -119,7 +129,7 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
         lines.insert(2, f"settled: {settled}")
     for letter in letters:
         compact = str(letter.data["id"]) in shown
-        lines.extend(_letter_lines(letter, _reply(letter, sender_threads), compact))
+        lines.extend(_letter_lines(letter, _reply(letter, sender_threads, thread, channels or {}), compact))
     lines.append("")
     return "\n".join(lines)
 
@@ -239,6 +249,14 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                 f"({home.thread_dir(thread) / 'README.md'} does not exist)")
     if note is not None and not re:
         raise PortError("send: --note requires --re")
+    if note is None and molt is None and not is_channel(to):
+        from .ledger import read_facts
+        from .project import sender_threads
+        if sender_threads(read_facts(home)).get(sender) == thread_of(to):
+            raise PortError(
+                f"send: {to} is your own thread, and a thread does not write to itself. "
+                "Answer to the reply address on the letter's line; where that is `-`, "
+                "settle the letter with --re <id> --note \"<what you did>\"")
     if re:
         re = _full_re(Path(room), re)
     if note is not None and body:
