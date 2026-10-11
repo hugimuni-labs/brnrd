@@ -287,9 +287,12 @@ def _start(home: Home, strand: str, thread: str, gen: int,
     letters = actionable(facts, thread)
     ids = [str(letter.data["id"]) for letter in letters]
     try:
-        started = next((f for f in facts if f.kind in {"body.started", "body.pending", "body.parked"}
-                        and f.data.get("strand") == strand), None)
-        shell, core = (started.data["shell"], started.data["core"]) if started else choice
+        # Pending/parked starts never ran and resume without a new choice.
+        pending = pending_bodies(facts).get(strand)
+        if pending and pending.kind in {"body.pending", "body.parked"}:
+            shell, core = pending.data["shell"], pending.data["core"]
+        else:
+            shell, core = choice
         folder = resolve(home, shell)
         from .usage import reading
         prior = [f for f in facts if f.data.get("strand") == strand]
