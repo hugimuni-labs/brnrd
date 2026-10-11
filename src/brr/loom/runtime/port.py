@@ -289,9 +289,10 @@ def write_molt(room: Path, why: str) -> str:
     if git(clone, "diff", "HEAD", "--quiet", "--", path, check=False).returncode:
         git(clone, "add", "--", path)
         git(clone, "commit", "--only", "-m", f"molt: {why}", "--", path)
-    outcome = send_to_self(clone)
-    if outcome.status != "merged":
-        raise PortError(outcome.stderr or f"molt: landing {outcome.status}: {', '.join(outcome.files)}")
+    if not _current_label(clone, strand).taint:
+        outcome = send_to_self(clone)
+        if outcome.status != "merged":
+            raise PortError(outcome.stderr or f"molt: landing {outcome.status}: {', '.join(outcome.files)}")
     stem = mint(5)
     fact_id = f"{strand}/{stem}"
     write_port(room, stem, _front({"kind": "molt", "id": fact_id, "why": why}))
