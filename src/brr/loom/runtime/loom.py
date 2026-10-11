@@ -189,7 +189,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     wait_src = home.thread_dir(thread) / "wait"
     if wait_src.is_file():
         atomic_write(room / "port" / "wait", wait_src.read_text().strip() + "\n")
-    for name in ("jack-state.json", "molt-pending", "policy"):
+    for name in ("jack-state.json", "policy"):
         (room / "port" / name).unlink(missing_ok=True)
     owed_path = room / "port" / "owed.json"
     atomic_write(owed_path, json.dumps([letter.data for letter in letters]))
@@ -417,10 +417,6 @@ def _ingest(home: Home, facts: list[Fact] | None = None, ttl: float | None = Non
     return facts
 
 
-def _molted(home: Home, body: Body) -> bool:
-    return (home.room(body.strand) / "port" / "molt-pending").is_file()
-
-
 def _readme(room: Path, thread: str) -> str | None:
     try:
         return hashlib.sha256((room / "self/threads" / thread / "README.md").read_bytes()).hexdigest()
@@ -501,12 +497,12 @@ def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
             "strand": strand, "gen": body.gen, "code": code,
         }, f"body.exited:{strand}:{body.gen}:{mint(6)}"))
         _log(home, f"exit {strand} code {code}")
-        if _molted(home, body):
-            facts = _start(home, strand, body.thread, body.gen, bodies, facts)
-            continue
-        shown = fold(facts).shown.get(strand, set())
-        _waste(home, facts, strand, body.thread, code,
-               [letter for letter in actionable(facts, body.thread) if letter.data["id"] in shown])
+        molted = any(f.kind == "molt" and f.data.get("strand") == strand
+                     and f.data.get("gen") == body.gen for f in fold(facts).accepted)
+        if not molted:
+            shown = fold(facts).shown.get(strand, set())
+            _waste(home, facts, strand, body.thread, code,
+                   [letter for letter in actionable(facts, body.thread) if letter.data["id"] in shown])
         facts = _release(home, facts, strand, body.thread, body.gen)
     return facts
 
