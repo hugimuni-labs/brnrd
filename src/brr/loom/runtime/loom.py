@@ -25,14 +25,12 @@ from .ledger import LedgerConflict, append, read_facts
 from .port import (
     fact_from_port, fact_from_taint, parse_frontmatter, render_boundary,
 )
-from .project import actionable, fold, generation, holder, sender_threads
+from .project import actionable, fold, generation, holder, is_notice, sender_threads
 from .selfrepo import (
     AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, room as clone_room, run_wake,
 )
 
 SRC = str(Path(__file__).resolve().parents[3])
-FUSE_WINDOW_S = 600
-FUSE_DEATHS = 2
 # Held by the body process, not the loom: the wrapper flocks, then execs.
 # preexec_fn after fork from the test's loom thread can deadlock on a lock
 # another thread still owns. The fd stays open across exec, so the lock
@@ -172,40 +170,6 @@ def _policy(home: Home, thread: str) -> str | None:
     return name or None
 
 
-def _recent_deaths(facts: list[Fact], strand: str) -> int:
-    now = datetime.now(timezone.utc)
-    count = 0
-    for fact in facts:
-        # An exit 0 that left letters owed (not a molt) is a failed attempt
-        # too: a body that quits at once with code 0 would otherwise respawn
-        # forever, the crash loop the fuse exists for.
-        unfinished = fact.kind == "body.exited" and fact.data.get("unfinished")
-        if (fact.kind != "body.died" and not unfinished) or fact.data.get("strand") != strand:
-            continue
-        at = datetime.fromisoformat(fact.at)
-        if at.tzinfo is None:
-            at = at.replace(tzinfo=timezone.utc)
-        if (now - at).total_seconds() <= FUSE_WINDOW_S:
-            count += 1
-    return count
-
-
-def _fused(home: Home, facts: list[Fact], strand: str, thread: str) -> bool:
-    if _recent_deaths(facts, strand) < FUSE_DEATHS:
-        return False
-    why = f"{strand} died or quit unfinished twice within 10 minutes"
-    # The marker is ledger state: it is what keeps the dead strand held.
-    _attention(home, f"attention:fuse:{strand}", f"fuse: {why}", thread=thread)
-    _log(home, f"fuse {strand} thread {thread}")
-    last = facts[-1].data if facts[-1].kind.startswith("body.") else {}
-    if thread != "inbox":
-        notice(home, facts, "fuse", strand,
-               f"thread {thread} is fused: {why} (last: {last.get('why') or last.get('code')}); "
-               "its letters stay owed and nothing starts there",
-               f"a new letter to thread:{thread} resets the fuse; fix the cause first")
-    return True
-
-
 def _prepare(home: Home, strand: str, thread: str, gen: int,
              letters: list[Fact], threads: dict[str, str],
              facts: list[Fact], jack: str) -> Path:
@@ -286,7 +250,7 @@ def _spawn(room: Path, argv: list[str]) -> tuple[subprocess.Popen, object]:
 
 def _start(home: Home, strand: str, thread: str, gen: int,
            bodies: dict[str, Body], facts: list[Fact], choice=None) -> list[Fact]:
-    """Launch one body; preparation and launch failures count toward its fuse."""
+    """Launch one body; the gauge can defer a start without consuming letters."""
     if strand in bodies:
         return facts
     letters = actionable(facts, thread)
@@ -299,8 +263,7 @@ def _start(home: Home, strand: str, thread: str, gen: int,
         from .usage import reading
         prior = [f for f in facts if f.data.get("strand") == strand]
         after = max((datetime.fromisoformat(f.at).timestamp() for f in prior
-                     if f.kind in {"body.died", "body.parked"} or
-                     (f.kind == "body.exited" and f.data.get("unfinished"))), default=0)
+                     if f.kind in {"body.exited", "body.parked"}), default=0)
         gauge = reading(home, shell, after)
         data = {"strand": strand, "gen": gen, "shell": shell, "core": core}
         if gauge is None:
@@ -337,14 +300,16 @@ def _start(home: Home, strand: str, thread: str, gen: int,
     except Exception as exc:
         why = f"{type(exc).__name__}: {exc}"
         _log(home, f"start failed {strand}: {why}")
-        facts.append(_record(home, "body.died", {
-            "strand": strand, "gen": gen, "why": why,
-        }, f"body.died:{strand}:{gen}:{mint(6)}"))
-        if not _fused(home, facts, strand, thread):
-            return _start(home, strand, thread, gen, bodies, facts, choice)
-        return facts
+        facts.append(_record(home, "body.exited", {
+            "strand": strand, "gen": gen, "code": None, "why": why,
+        }, f"body.exited:{strand}:{gen}:{mint(6)}"))
+        # No process reached the wake: tell the author about the failed start,
+        # rather than repeatedly trying preparation for the same letter.
+        _waste(home, facts, strand, thread, gen, None, letters, why)
+        return _release(home, facts, strand, thread, gen)
     facts.append(_record(home, "body.started", {
         "strand": strand, "gen": gen, "pid": proc.pid, "shell": shell, "core": core,
+        "readme": _readme(room, thread),
     }, f"body.started:{strand}:{gen}:{proc.pid}:{mint(6)}"))
     bodies[strand] = Body(strand, thread, gen, proc, log)
     _log(home, f"start {strand} thread {thread} gen {gen} pid {proc.pid} {shell}/{core}")
@@ -446,42 +411,76 @@ def _molted(home: Home, body: Body) -> bool:
     return (home.room(body.strand) / "port" / "molt-pending").is_file()
 
 
+def _readme(room: Path, thread: str) -> str | None:
+    try:
+        return hashlib.sha256((room / "self/threads" / thread / "README.md").read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _release(home, facts, strand, thread, gen):
+    facts.append(_record(home, "released", {
+        "thread": thread, "strand": strand, "gen": gen,
+        "why": "body ended", "install": home.install_id(),
+    }, f"released:{thread}:{gen}"))
+    return facts
+
+
+def _waste(home, facts, strand, thread, gen, code, letters, failure=""):
+    from .selfrepo import ReadmeError, parse_readme
+    from .usage import fuel
+    room = home.room(strand)
+    try:
+        with (room / "port/body.log").open("rb") as log:
+            log.seek(0, os.SEEK_END)
+            log.seek(max(0, log.tell() - 400))
+            tail = log.read().decode(errors="replace")
+    except OSError:
+        tail = failure
+    start = next((f for f in reversed(facts) if f.kind == "body.started"
+                  and f.data.get("strand") == strand), None)
+    changed = (_readme(room, thread) != start.data.get("readme")) if start else "unknown"
+    tank = fuel(home, start.data["shell"]) if start else ""
+    try:
+        opener = parse_readme((home.thread_dir(thread) / "README.md").read_text()).get("opened-by", "")
+    except (OSError, ReadmeError):
+        opener = ""
+    threads = sender_threads(facts)
+    for letter in letters:
+        ident, author = str(letter.data["id"]), str(letter.data.get("from", ""))
+        what = (f"letter {ident} on thread {thread}: body exited {code}; "
+                f"README changed since start: {changed}; {tank or 'fuel unknown'}\n{tail}")
+        target = threads.get(author) or (opener.removeprefix("thread:") if opener.startswith("thread:") else None)
+        if not is_notice(letter) and not author.startswith("stranger:") and home.routable(target):
+            notice(home, facts, "bounce", ident, what, "send again, or leave it",
+                   thread=target, about=letter)
+        else:
+            _attention(home, f"attention:wasted:{ident}", what, thread=thread, letter=ident)
+        # The loom disposes of the failed letter; the bounce is a separate ask.
+        facts.append(_record(home, "note", {"strand": strand, "re": ident,
+                            "why": "body ended without handling it"}, f"wasted:{ident}"))
+
+
 def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
     for strand, body in list(bodies.items()):
         code = body.proc.poll()
         if code is None:
             continue
-        # A body's last hook may have written after this tick's ingest.
-        # Drain it before the death (and the next start), or its shown
-        # letters get attributed to its successor and poison counts are lost.
+        # Drain the body's last boundary and answer before deciding what it wasted.
         facts = _ingest(home)
         body.close_log()
         del bodies[strand]
-        molted = _molted(home, body)
-        kind = "body.exited" if code == 0 else "body.died"
-        data = {"strand": strand, "gen": body.gen, "code": code}
-        # An unrunnable letter stays owed and must not look like unfinished work,
-        # or the body that answered everything else would spin the fuse.
-        if code == 0 and not molted and actionable(facts, body.thread):
-            data["unfinished"] = True
-        facts.append(_record(home, kind, data, f"{kind}:{strand}:{body.gen}:{mint(6)}"))
+        facts.append(_record(home, "body.exited", {
+            "strand": strand, "gen": body.gen, "code": code,
+        }, f"body.exited:{strand}:{body.gen}:{mint(6)}"))
         _log(home, f"exit {strand} code {code}")
-        if code != 0 or data.get("unfinished"):
-            if not _fused(home, facts, strand, body.thread):
-                facts = _start(
-                    home, strand, body.thread, body.gen, bodies, facts,
-                )
+        if code == 0 and _molted(home, body):
+            facts = _start(home, strand, body.thread, body.gen, bodies, facts)
             continue
-        if molted:
-            facts = _start(
-                home, strand, body.thread, body.gen, bodies, facts,
-            )
-            continue
-        facts.append(_record(home, "released", {
-            "thread": body.thread, "strand": strand, "gen": body.gen,
-            "why": "nothing owed", "install": home.install_id(),
-        }, f"released:{body.thread}:{body.gen}"))
-        _log(home, f"released {strand} thread {body.thread}")
+        shown = fold(facts).shown.get(strand, set())
+        _waste(home, facts, strand, body.thread, body.gen, code,
+               [letter for letter in actionable(facts, body.thread) if letter.data["id"] in shown])
+        facts = _release(home, facts, strand, body.thread, body.gen)
     return facts
 
 
@@ -510,7 +509,7 @@ def _refresh_holders(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> 
         elif strand in pending and pending[strand].kind in {"body.pending", "body.parked"}:
             if time.time() >= pending[strand].data.get("until", 0):
                 facts = _start(home, strand, thread, gen, bodies, facts)
-        elif not any(fact.id == f"attention:fuse:{strand}" for fact in facts):
+        else:
             try:
                 facts.append(_record(home, "released", {
                     "thread": thread, "strand": strand, "gen": gen,
@@ -534,6 +533,9 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     if router is None:
         router = Router(home)
     facts = read_facts(home)
+    for fact in facts:
+        if fact.id.startswith("attention:wasted:"):
+            _log(home, fact.data["why"])
     facts = router.begin_tick(facts)
     facts = _ingest(home, facts, router.config.router_ttl)
     facts = _refresh_holders(home, bodies, facts)

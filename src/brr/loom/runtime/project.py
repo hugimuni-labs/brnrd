@@ -73,8 +73,8 @@ def fold(facts: Iterable[Fact]) -> Fold:
             if newest is None or gen > newest:
                 newest = gen
             continue
-        if fact.kind == "note" and fact.by.startswith("person:"):
-            # The hand tool: a person's note settles any letter, whoever holds it.
+        if fact.kind == "note" and fact.by.startswith(("person:", "loom:")):
+            # A person's hand note or the loom's failure disposition settles a letter.
             state.handled.add(str(data.get("re")))
             continue
         if fact.kind == "lease":
