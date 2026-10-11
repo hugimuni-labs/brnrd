@@ -302,6 +302,9 @@ class Router:
                         break
                     opener = str(data.get("opened-by", ""))
                     target = opener.removeprefix("thread:") if opener.startswith("thread:") else None
+                if target not in known and thread != "inbox" and "inbox" in known:
+                    # The chain ended at a person: his late letter still needs a reader.
+                    target = "inbox"
                 if target in known and read_thread(self.home, target).get("status") not in CLOSED:
                     notice(self.home, facts, "climbed", letter_id,
                            f"letter {letter_id} to closed thread {thread} climbed here "

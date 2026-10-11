@@ -100,7 +100,10 @@ def merge(base: str, ours: str, theirs: str, path: str) -> int:
     Conflicting status decisions therefore take %A; other conflicts stop.
     """
     try:
-        base_data, _raw, _text = _parts(Path(base).read_text(encoding="utf-8"))
+        try:
+            base_data = _parts(Path(base).read_text(encoding="utf-8"))[0]
+        except ReadmeError:
+            base_data = {}  # both sides added the file: there is no base to read
         our_data, our_raw, our_body = _parts(Path(ours).read_text(encoding="utf-8"))
         their_data, their_raw, their_body = _parts(Path(theirs).read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, ReadmeError):

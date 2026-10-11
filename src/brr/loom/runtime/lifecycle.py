@@ -78,8 +78,27 @@ def settle(room: Path, thread: str, why: str, retire: bool = False) -> None:
     land_status(room, thread, "retired" if retire else "settled", f"settle {thread}: {why}")
 
 
+_closing: dict[tuple[str, str, str], tuple[str, str, str]] = {}
+
+
 def closing_commit(home: Home, thread: str) -> tuple[str, str, str]:
+    """The commit that last changed the status line: (sha, why, writing strand).
+
+    The loom asks on every tick, and the search walks the README's whole
+    history, so the answer is kept per README blob on main.
+    """
+    path = f"threads/{thread}/README.md"
+    blob = git(home.root / "self", "rev-parse", f"main:{path}", check=False).stdout.strip()
+    key = (str(home.root), thread, blob)
+    if key not in _closing:
+        _closing[key] = _closing_commit(home, path)
+    return _closing[key]
+
+
+def _closing_commit(home: Home, path: str) -> tuple[str, str, str]:
     text = git(home.root / "self", "log", "-1", "-G", "^status:", "--format=%H%n%s%n%(trailers:key=Loom-Strand,valueonly)",
-               "main", "--", f"threads/{thread}/README.md").stdout.splitlines()
+               "main", "--", path, check=False).stdout.splitlines()
+    if len(text) < 2:
+        return "", "", ""
     commit, subject, *writer = text
     return commit, subject.partition(": ")[2] or subject, writer[0].strip() if writer else ""

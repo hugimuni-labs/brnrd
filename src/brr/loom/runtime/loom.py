@@ -476,6 +476,11 @@ def _waste(home, facts, strand, thread, code, letters, failure=""):
     threads = sender_threads(facts)
     for letter in letters:
         ident, author = str(letter.data["id"]), str(letter.data.get("from", ""))
+        if letter.data.get("notice"):
+            # Told once and nothing was asked: not a failure anyone must hear of.
+            facts.append(_record(home, "note", {"strand": strand, "re": ident,
+                                "why": "notice shown"}, f"wasted:{ident}"))
+            continue
         what = (f"letter {ident} on thread {thread}: body exited {code}; "
                 f"README changed since start: {changed}; {tank or 'fuel unknown'}\n{tail}")
         target = threads.get(author) or (opener.removeprefix("thread:") if opener.startswith("thread:") else None)
@@ -523,7 +528,9 @@ def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
         _log(home, f"exit {strand} code {code}")
         molted = any(f.kind == "molt" and f.data.get("strand") == strand
                      and f.data.get("gen") == body.gen for f in fold(facts).accepted)
-        if not molted:
+        # A closed thread's body is expected to leave; its letters climb (router).
+        from .lifecycle import CLOSED, read_thread
+        if not molted and read_thread(home, body.thread).get("status") not in CLOSED:
             shown = fold(facts).shown.get(strand, set())
             _waste(home, facts, strand, body.thread, code,
                    [letter for letter in actionable(facts, body.thread) if letter.data["id"] in shown])
