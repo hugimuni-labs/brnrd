@@ -105,7 +105,8 @@ def notice_id(kind: str, subject: str) -> str:
 def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, can: str, *,
            thread: str | None = None, about: Fact | None = None, stands: bool = False,
            taint: bool = False, channel: str | None = None,
-           source_strand: str | None = None, passive: bool = False) -> bool:
+           source_strand: str | None = None, passive: bool = False,
+           draft_only: bool = False) -> bool | Fact:
     """The one writer of loom notices: what the loom cannot settle, a body is told.
 
     A notice is an owed letter from ``loom``, so it is shown at every
@@ -143,6 +144,8 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
         if about is not None:
             data["re"] = about.data["id"]
         _stamp_router(draft, facts)
+    if draft_only:
+        return draft
     try:
         facts.append(append(home, draft))
     except LedgerConflict:
@@ -390,7 +393,8 @@ def _start(home: Home, strand: str, thread: str, gen: int,
         }, f"body.exited:{strand}:{gen}:{mint(6)}"))
         # No process reached the wake: tell the author about the failed start,
         # rather than repeatedly trying preparation for the same letter.
-        _waste(home, facts, strand, thread, None, letters, why)
+        facts = _end_attempt(home, facts, strand, thread, gen, None, letters, "failed", why)
+        facts = _drained(home, facts, strand, thread, gen)
         return _release(home, facts, strand, thread, gen)
     facts.append(_record(home, "body.started", {
         "strand": strand, "gen": gen, "pid": proc.pid, "shell": shell, "core": core,
@@ -527,63 +531,63 @@ def _release(home, facts, strand, thread, gen):
     return facts
 
 
-def _waste(home, facts, strand, thread, code, letters, failure=""):
-    from .selfrepo import ReadmeError, parse_readme
-    from .usage import fuel
+def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure=""):
+    """Observe once; every disposition and successor is in this single append."""
+    if any(f.id == f"attempt.ended:{strand}:{gen}" for f in facts):
+        return facts
+    from .lifecycle import read_thread
     room = home.room(strand)
     try:
-        with (room / "port/body.log").open("rb") as log:
-            log.seek(0, os.SEEK_END)
-            log.seek(max(0, log.tell() - 400))
-            tail = log.read().decode(errors="replace")
+        tail = (room / "port/body.log").read_text(errors="replace")[-400:]
     except OSError:
         tail = failure
-    start = next((f for f in reversed(facts) if f.kind == "body.started"
-                  and f.data.get("strand") == strand), None)
-    changed = (_readme(room, thread) != start.data.get("readme")) if start else "unknown"
-    tank = fuel(home, start.data["shell"]) if start else ""
-    try:
-        opener = parse_readme((home.thread_dir(thread) / "README.md").read_text()).get("opened-by", "")
-    except (OSError, ReadmeError):
-        opener = ""
-    threads = sender_threads(facts)
+    shown = fold(facts).shown.get(strand, set())
+    # Failed preparation is an attempted start even if no wake reached a body.
+    ids = sorted(shown | {f.id for f in letters})
+    dispositions = []
+    writers = sender_threads(facts)
+    opener = str(read_thread(home, thread).get("opened-by", ""))
     for letter in letters:
-        ident, author = str(letter.data["id"]), str(letter.data.get("from", ""))
-        if letter.data.get("notice"):
-            # Told once and nothing was asked: not a failure anyone must hear of.
-            facts.append(_record(home, "note", {"strand": strand, "re": ident,
-                                "why": "notice shown"}, f"wasted:{ident}"))
+        ident, author = letter.id, str(letter.data.get("from", ""))
+        if cause != "failed":
+            dispositions.append({"id": ident, "outcome": "retry", "reason": cause})
             continue
-        what = (f"letter {ident} on thread {thread}: body exited {code}; "
-                f"README changed since start: {changed}; {tank or 'fuel unknown'}\n{tail}")
-        target = threads.get(author) or (opener.removeprefix("thread:") if opener.startswith("thread:") else None)
+        failures = sum(f.kind == "attempt.ended" and f.data.get("cause") == "failed"
+                       and ident in f.data.get("ids", ()) for f in facts)
+        if author.startswith(("p-", "person:")) and failures == 0:
+            dispositions.append({"id": ident, "outcome": "retry", "reason": "first failed attempt"})
+            continue
+        if letter.data.get("notice"):
+            dispositions.append({"id": ident, "outcome": "done", "reason": "passive notice shown"})
+            continue
+        # A bounce is forwarded along its recipient's opener chain, never back to its author.
+        target = (opener.removeprefix("thread:") if opener.startswith("thread:") else None)
+        if not is_notice(letter):
+            target = writers.get(author) or target
         if target == thread:
             target = opener.removeprefix("thread:") if opener.startswith("thread:") else None
-        if author.startswith("person:"):
-            retry = f"retry:{ident}"
-            if not any(f.id == retry for f in facts):
-                facts.append(_record(home, "letter.retry", {"strand": strand, "letter": ident}, retry))
+        if home.routable(target):
+            what = f"letter {ident} on thread {thread}: body failed ({code})\n{tail}"
+            successor = notice(home, facts, "bounce", ident, what, "send again, or leave it",
+                               thread=target, about=letter, source_strand=strand, draft_only=True)
+            if isinstance(successor, Fact):
+                dispositions.append({"id": ident, "outcome": "done", "reason": "bounced",
+                                     "successor": successor.data})
                 continue
-            source = next((f for f in facts if f.id == letter.data.get("cites")), None)
-            channel = (f"channel:{source.data['platform']}/{source.data['chat']}"
-                       if source and source.data.get("platform") and source.data.get("chat") is not None else None)
-            if channel:
-                first = str(letter.data.get("body", "")).splitlines()
-                notice(home, facts, "failed-message", ident,
-                       f"thread {thread} could not handle your letter: {first[0] if first else ''}\n{tail}",
-                       "send again, or leave it", about=letter, channel=channel, source_strand=strand)
-            else:
-                _attention(home, f"attention:wasted:{ident}", what, thread=thread, letter=ident)
-                _log(home, f"wasted {ident} on thread {thread}: nobody to tell")
-        elif not is_notice(letter) and not author.startswith("stranger:") and home.routable(target):
-            notice(home, facts, "bounce", ident, what, "send again, or leave it",
-                   thread=target, about=letter, source_strand=strand)
-        else:
-            _attention(home, f"attention:wasted:{ident}", what, thread=thread, letter=ident)
-            _log(home, f"wasted {ident} on thread {thread}: nobody to tell")
-        # The loom disposes of the failed letter; the bounce is a separate ask.
-        facts.append(_record(home, "note", {"strand": strand, "re": ident,
-                            "why": "body ended without handling it"}, f"wasted:{ident}"))
+        dispositions.append({"id": ident, "outcome": "operator", "reason":
+                             f"failed attempt limit or no opener: {failure or tail}"})
+    facts.append(_record(home, "attempt.ended", {
+        "thread": thread, "strand": strand, "gen": gen, "ids": ids,
+        "cause": cause, "code": code, "dispositions": dispositions,
+    }, f"attempt.ended:{strand}:{gen}"))
+    return facts
+
+
+def _drained(home, facts, strand, thread, gen):
+    facts.append(_record(home, "port.drained", {
+        "thread": thread, "strand": strand, "gen": gen,
+    }, f"port.drained:{strand}:{gen}"))
+    return facts
 
 
 def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
@@ -614,10 +618,13 @@ def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
         start = next((f for f in reversed(facts) if f.kind == "body.started"
                       and f.data.get("strand") == strand), None)
         paced = bool(start and below_floor(home, start.data["shell"]))
-        if not molted and not paced and read_thread(home, body.thread).get("status") not in CLOSED:
-            shown = fold(facts).shown.get(strand, set())
-            _waste(home, facts, strand, body.thread, code,
-                   [letter for letter in actionable(facts, body.thread) if letter.data["id"] in shown])
+        shown = fold(facts).shown.get(strand, set())
+        letters = [letter for letter in actionable(facts, body.thread) if letter.id in shown]
+        cause = ("molted" if molted else "paced" if paced else
+                 "settled" if read_thread(home, body.thread).get("status") in CLOSED else
+                 "idle" if not letters else "failed")
+        facts = _end_attempt(home, facts, strand, body.thread, body.gen, code, letters, cause)
+        facts = _drained(home, facts, strand, body.thread, body.gen)
         facts = _release(home, facts, strand, body.thread, body.gen)
     return facts
 

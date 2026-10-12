@@ -55,6 +55,7 @@ def fold(facts: Iterable[Fact]) -> Fold:
     live: dict[str, int] = {}
     dest: dict[str, str] = {}
     newest: int | None = None
+    pending_replies: dict[str, str] = {}
 
     def consider(writer: str, gen: int, re: object) -> None:
         if not isinstance(re, str) or not re:
@@ -65,6 +66,25 @@ def fold(facts: Iterable[Fact]) -> Fold:
 
     for fact in union(list(facts)):
         data = fact.data
+        if fact.kind in {"attempt.ended", "port.drained", "letter.disposed", "speech", "speech.part"} and fact.by.startswith("loom:"):
+            state.accepted.append(fact)
+            if fact.kind == "speech" and data.get("state") == "sent":
+                key = str(data.get("key"))
+                state.handled.add(key)
+                if key in pending_replies:
+                    state.handled.add(pending_replies[key])
+            for disposition in data.get("dispositions", ()):
+                if disposition.get("outcome") == "done":
+                    state.handled.add(str(disposition["id"]))
+                successor = disposition.get("successor")
+                if successor:
+                    letter = Fact(kind="letter", by=fact.by, id=successor["id"],
+                                  data=successor, at=fact.at, hlc=fact.hlc, after=(fact.id,))
+                    state.accepted.append(letter)
+                    target = _destination(successor)
+                    if target is not None:
+                        dest[letter.id] = target
+            continue
         if fact.kind == "router":
             try:
                 gen = int(data["gen"])
@@ -128,7 +148,12 @@ def fold(facts: Iterable[Fact]) -> Fold:
             thread = _destination(data)
             if thread is not None and data.get("id"):
                 dest[str(data["id"])] = thread
-            consider(strand, gen, data.get("re"))
+            re = data.get("re")
+            if str(data.get("to", "")).startswith("channel:"):
+                if isinstance(re, str) and state.holder.get(dest.get(re)) == (strand, gen):
+                    pending_replies[fact.id] = re
+            else:
+                consider(strand, gen, re)
         elif fact.kind == "note":
             consider(strand, gen, data.get("re"))
         elif fact.kind == "shown":

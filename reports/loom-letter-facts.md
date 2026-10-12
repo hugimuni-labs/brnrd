@@ -60,3 +60,12 @@ failed-start home: /var/folders/r5/zx7bdmwd55x1djcrdvl6n92c0000gp/T/loom-letter-
 letter router lease body.pending body.exited attention note released
 
 ```
+
+## Step 2
+One attempt.ended row carries the observed cause, code, ids and all failure dispositions, including embedded bounce letters. port.drained follows the final ingestion; accepted channel replies retire their inbound letter only on aggregate speech:sent. Refusal and stale/maybe-sent dispositions embed their notices in one append.
+
+```
+.............                                                            [100%]
+13 passed in 0.39s
+
+```

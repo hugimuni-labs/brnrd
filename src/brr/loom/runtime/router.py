@@ -378,9 +378,15 @@ class Router:
 
             def tell(kind: str, what: str, can: str) -> None:
                 # Always the thread that drafted it; the draft is never resent.
-                notice(self.home, facts, kind, key, f"your message {key} to {to} {what}", can,
+                successor = notice(self.home, facts, kind, key,
+                       f"your message {key} to {to} {what}", can,
                        thread=threads.get(fact.by.removeprefix("strand:")),
-                       about=fact, stands=True)
+                       about=fact, draft_only=True)
+                if isinstance(successor, Fact):
+                    self._keep(facts, "letter.disposed", {"dispositions": [{
+                        "id": key, "outcome": "done", "reason": kind,
+                        "successor": successor.data,
+                    }]}, f"letter.disposed:{key}")
 
             fresh = "send a fresh message if it still matters; this one is never sent again"
             if grant != self.lease.gen:
