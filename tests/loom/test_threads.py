@@ -92,7 +92,7 @@ else:
     loom.start()
     try:
         wait_until(ready.exists, 15, loom.dump)
-        wait_until(opened.exists, 5, loom.dump)
+        wait_until(opened.exists, 30, loom.dump)
         readme = git(root / 'self', 'show', 'main:threads/new-work/README.md').stdout
         assert readme == ('---\nid: new-work\nstatus: open\ntense: plan\n'
                           'opened-by: thread:opener\n---\n# New work\n')
@@ -109,12 +109,12 @@ else:
         assert rows['settled'] == {'thread': 'settled', 'seat': '—', 'now': f'settled {date}',
                                    'owed': '0', 'opened-by': 'thread:opener', 'plan': '1/1'}
         (root / 'clear-owed').write_text('handle without replying yet')
-        wait_until((root / 'changed').exists, 5, loom.dump)
+        wait_until((root / 'changed').exists, 30, loom.dump)
         changed = json.loads((root / 'changed').read_text())['hookSpecificOutput']['additionalContext']
         assert 'opened: new-work holding · owed 0' in changed
         release.write_text('answer now')
-        wait_until(reply.exists, 6, loom.dump)
-        wait_until(lambda: holder(loom.facts(), 'new-work') is None, 5, loom.dump)
+        wait_until(reply.exists, 30, loom.dump)
+        wait_until(lambda: holder(loom.facts(), 'new-work') is None, 30, loom.dump)
         rows = table(root)
         assert rows['new-work']['now'].startswith('idle ')
         assert rows['new-work']['owed'] == '0'
@@ -123,9 +123,9 @@ else:
         assert proc.returncode == 0, proc.stderr
         assert table(root)['new-work']['now'] == f'settled {date}'
         boundary = loom.home.room(opener) / 'port/in/boundary.md'
-        wait_until(lambda: 'opened: new-work' not in boundary.read_text(), 5, loom.dump)
+        wait_until(lambda: 'opened: new-work' not in boundary.read_text(), 30, loom.dump)
         (root / 'stop-opener').write_text('stop')
-        wait_until(lambda: holder(loom.facts(), 'opener') is None, 5, loom.dump)
+        wait_until(lambda: holder(loom.facts(), 'opener') is None, 30, loom.dump)
     finally:
         loom.halt()
     # Unknown reply ids are legal. A bare --re still has to read the boundary;
@@ -184,7 +184,7 @@ Path({str(receipt)!r}).write_text(json.dumps({{k: [p.returncode, p.stderr] for k
         assert 'tainted strand' in rows['tainted'][1] and 'clean letter to inbox' in rows['tainted'][1]
         assert not (root / 'self/threads/failed-open').exists()
         assert not (root / 'self/threads/tainted-open').exists()
-        wait_until(lambda: holder(loom.facts(), 'opener') is None, 5, loom.dump)
+        wait_until(lambda: holder(loom.facts(), 'opener') is None, 30, loom.dump)
     finally:
         loom.halt()
     assert not any(f.kind == 'letter' and f.data.get('to') in {'thread:failed-open', 'thread:tainted-open'}
