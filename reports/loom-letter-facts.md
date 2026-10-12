@@ -49,9 +49,9 @@ Review findings (before continuation edits):
 | Opener owner | `test_unhandled_bounces_walk_to_top_then_operator`; `test_climb_waits_for_ended_and_drained_then_opener_reads_it` |
 | Operator owner + visible + person note | `test_two_failed_starts_are_visible_to_operator_and_a_note_retires_them`; `test_persons_letter_gets_two_starts_then_visible_operator_debt` |
 | settled cause | fresh codex person drive: one ended row, settled, code 0 |
-| molted cause | `test_a_molted_successor_inherits_the_committed_next_step_and_the_unanswered_ask` (test_molt.py; final gate pending) |
+| molted cause | `test_molt_mid_work_lands_readme_and_inherits_unanswered_letter` (test_molt.py; molted cause asserted, 10-test repair gate passed) |
 | idle cause | warm follow-up/live settled-worker tests; `test_settling_worker_disposes_its_reply_without_an_extra_note` (final gate pending) |
-| paced cause, preserves owed and no failed count | `test_owing_worker_is_told_once_holds_twice_then_low_fuel_preserves_and_parks_the_ask` (test_holding.py; final gate pending) |
+| paced cause, preserves owed and no failed count | `test_owing_worker_is_told_once_holds_twice_then_low_fuel_preserves_and_parks_the_ask` (test_holding.py; paced cause asserted, 10-test repair gate passed) |
 | failed cause, only failed attempts count | two-failed-start live regression; person gets exactly two starts and no third |
 | attempt.ended atomically carries dispositions/successors | live unhandled bounce chain and failure-to-operator paths |
 | port.drained gates climb independently of ended | live closed-worker drive pauses exactly between ended and drained; no climb before release, opener reads after |
@@ -133,3 +133,23 @@ letter ownership clean at every ledger prefix
 ```
 
 No external chat was used: the real model's reply reached the fake channel's durable send sink. This proves the live body/port/router/send receipt path; actual Telegram delivery is outside this drive.
+
+
+## Gate failure accounting
+
+The first exploratory whole run was interrupted after 9 failed/67 passed because it was still exercising old imported code while fixes were underway; it is not a gate receipt. The completed pre-final run was **7 failed, 158 passed, 1 skipped, 3 xfailed** (484.12s). Each failure:
+
+| Failure | Cause and resolution |
+| --- | --- |
+| usage, codex + grok | First boundary omitted the gauge already acquired for start; only later refresh added it. Start now passes cached fuel into the initial boundary. Both real captured gauge tests passed in the 10-test repair gate. |
+| two_strands | Test searched raw rows for a bounce now embedded atomically in ended, and assumed the original author process must still be alive. It now searches accepted projection and checks exposure to a reader of the author's thread. Product delivery remains required; passed in repair gate. |
+| restart recovery | Fixed 2s deadline expired after recovery had started its body; note files were waiting in port/out. Outcome and assertions unchanged; bounded 8s allows actual cold startup and ingestion. |
+| relay saved cursor | Fixed 2s deadline included the explicit 1s retry and whole cold start. Outcome unchanged; allow 8s. |
+| uncertain speech | Test assumed another successful message had already created the fake send sink. Wait for that sink before checking the failed key was never resent. |
+| absent inbox owner (expected xfail) | Fixture edited `for:` only in the working tree and awaited the removed attention id. Land the ownership metadata; wait for visible operator debt. The still-unimplemented remote refusal remains an explicit expected failure. |
+
+Earlier fixtures also constructed invalid `# # Work` headlines, or lease rows naming a nonexistent router grant; these now seed valid landed READMEs and actual router grants. Deleted body.died checks were replaced with meaningful failed-attempt exclusions. Legacy function tests were deleted in the inherited third commit because nothing ever writes body.died; live two-failed-start paths replace them.
+
+Repair gate: `PYTHONPATH=src pytest -q tests/loom/test_usage.py tests/loom/test_holding.py tests/loom/test_two_strands.py tests/loom/test_molt.py`: **10 passed in 50.03s**.
+
+Final whole gate is running after these repairs. No non-loom test file has been changed.

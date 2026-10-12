@@ -46,6 +46,7 @@ assert not (ctx.room / "port/molt-pending").exists()
         assert "first ask" not in result["bodies"]
         assert "Next step: inherited" in (root / "self/threads/work/README.md").read_text()
         wait_until(lambda: not mail(root, loom.facts(), "work"), 5, loom.dump)
+        assert any(f.kind == "attempt.ended" and f.data["cause"] == "molted" for f in loom.facts())
         assert not any(is_notice(f) and "body exited" in f.data["body"] for f in loom.facts())
         assert not list((root / "rooms").glob("*/port/molt-pending"))
     finally:
