@@ -64,7 +64,10 @@ def reading(home, shell: str, after: float = 0):
         return {"windows": []}
     try:
         reading = json.loads(path.read_text())
-        if 0 <= time.time() - reading["at"] < 300 and reading["at"] > after:
+        # An exit requires fresh *fuel*, not another failed PTY probe. Keep
+        # unknown gauges for the same five-minute TTL so every new start does
+        # not wait out the collector timeout while the shell is unavailable.
+        if 0 <= time.time() - reading["at"] < 300 and (reading["at"] > after or not reading["windows"]):
             return reading
     except (OSError, ValueError, KeyError, TypeError):
         pass
