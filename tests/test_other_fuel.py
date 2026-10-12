@@ -153,3 +153,53 @@ def test_daemon_reads_cache_only_skips_own_shell_and_caches(monkeypatch, tmp_pat
     daemon._other_shells_fuel("claude", catalog, tmp_path)
     assert len(calls) == 2  # TTL cache: second boundary does no read
     assert daemon._other_shells_fuel("claude", catalog, None) == []
+
+
+def test_heartbeat_warms_grok_and_seed_and_boundary_show_recorded_fuel(tmp_path, monkeypatch):
+    """Cold daemon, no cloud publisher: the seat still sees Grok's pool."""
+    import dataclasses
+    import json
+    from pathlib import Path
+    from brr import codex_status, codex_usage, grok_usage, hud
+    from brr.run import Run
+    from test_hooks import _env
+
+    fixtures = Path(__file__).parent / "fixtures"
+    codex = json.loads((fixtures / "codex_rate_limits_2026_10_12.json").read_text())
+    grok = (fixtures / "grok_usage_screen_2026_10_12.txt").read_bytes()
+    monkeypatch.setattr(codex_status, "load_levels", lambda **kw: None)
+    monkeypatch.setattr(codex_usage, "probe_rate_limits", lambda **kw: codex_usage.parse_rate_limits(codex))
+    monkeypatch.setattr(grok_usage, "_grok_installed", lambda env=None: True)
+    calls = []
+    monkeypatch.setattr(grok_usage, "capture_usage_raw", lambda **kw: calls.append(1) or grok)
+    monkeypatch.setattr(daemon, "_other_fuel_cache", {})
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    inputs = hud.HUDInputs(
+        outbox_dir=tmp_path / "outbox", inbox_dir=inbox, current_event_id="evt-1",
+        task=Run(id="run-1", event_id="evt-1", body="", source="telegram"),
+        phase="running", runner_name="codex", runner_meta={"shell": "codex"},
+        runner_catalog=[{"shell": "codex"}, {"shell": "grok"}, {"shell": "grok"}],
+        brr_dir=tmp_path / ".brr", refresh_levels=False,
+    )
+    cold = hud.build(inputs)
+    assert "grok" not in (hooks._quota_chip(cold.resources) or "")
+    assert calls == []
+    warm = hud.build(dataclasses.replace(inputs, refresh_levels=True))
+    portal = inputs.outbox_dir / "portal-state.json"
+    portal.parent.mkdir(parents=True, exist_ok=True)
+    portal.write_text(warm.to_json())
+    env = _env(inputs.outbox_dir, "codex")
+    seed, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", env)
+    text = seed["hookSpecificOutput"]["additionalContext"]
+    quota_line = next(line for line in text.splitlines() if "resources:" in line)
+    assert "quota=" in quota_line and "grok W100" in quota_line
+    boundary, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert "grok W100" in boundary["hookSpecificOutput"]["additionalContext"]
+    # Boundaries re-read caches; heartbeat repeats use the native 600s TTL.
+    def no_probe(**kwargs):
+        raise AssertionError("warm boundary must not start another Grok TUI")
+    monkeypatch.setattr(grok_usage, "capture_usage_raw", no_probe)
+    assert "grok W100" in hooks._quota_chip(hud.build(inputs).resources)
+    assert "grok W100" in hooks._quota_chip(hud.build(dataclasses.replace(inputs, refresh_levels=True)).resources)
+    assert calls == [1]

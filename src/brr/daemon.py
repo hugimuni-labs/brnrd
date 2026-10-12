@@ -4104,7 +4104,7 @@ def _collect_levels(
 
 #: Cache for :func:`_other_shells_fuel` — it runs on every tool boundary, and
 #: the codex read scans rollout files; the readings themselves only move on the
-#: publisher's 2–4 minute cadence (a read on the boundary path is a read on
+#: collectors' cached cadence (a read on the boundary path is a read on
 #: every boundary — pitfalls.md).
 _OTHER_FUEL_TTL_SECONDS = 15.0
 _other_fuel_cache: dict[tuple[str, str], tuple[float, dict[str, object] | None]] = {}
@@ -4114,12 +4114,14 @@ def _other_shells_fuel(
     own_shell: str | None,
     catalog: "list[dict[str, object]] | None",
     shared_dir: Path | None,
+    *, refresh: bool = False,
 ) -> list[dict[str, object]]:
     """Fuel rows for every Shell in *catalog* other than *own_shell*.
 
-    Cache-only: never refreshes a probe (``refresh=False``) — the publisher
-    keeps the caches warm; a cache nobody warmed reads stale ⇒ ``codex ?``
-    (:mod:`other_fuel`). A Shell with no collector or no reading is omitted.
+    Heartbeats refresh account caches with each collector's own TTL; tool
+    boundaries only read them. The cloud publisher may be disabled or running
+    older code, so it cannot be the only warmer for another Shell. A Shell
+    with no collector or no reading is omitted.
     """
     if shared_dir is None:
         return []
@@ -4134,12 +4136,12 @@ def _other_shells_fuel(
         seen.add(shell)
         key = (shell, str(shared_dir))
         hit = _other_fuel_cache.get(key)
-        if hit is not None and now - hit[0] < _OTHER_FUEL_TTL_SECONDS:
+        if not refresh and hit is not None and now - hit[0] < _OTHER_FUEL_TTL_SECONDS:
             row = hit[1]
         else:
             try:
                 levels, _slots = _collect_levels(
-                    shell, None, None, refresh=False, shared_dir=shared_dir,
+                    shell, None, None, refresh=refresh, shared_dir=shared_dir,
                 )
                 row = other_fuel.fuel_row(shell, levels)
             except Exception:
