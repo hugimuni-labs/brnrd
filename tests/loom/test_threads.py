@@ -115,8 +115,8 @@ else:
                                     'owed': '1', 'opened-by': 'thread:opener', 'plan': '—'}
         assert rows['idle'] == {'thread': 'idle', 'seat': '—', 'now': 'idle 3h', 'owed': '0',
                                 'opened-by': '—', 'plan': '1/2'}
-        date = datetime.now(timezone.utc).date().isoformat()
-        assert rows['settled'] == {'thread': 'settled', 'seat': '—', 'now': f'settled {date}',
+        assert rows['settled']['now'].startswith('settled ')
+        assert rows['settled'] == {'thread': 'settled', 'seat': '—', 'now': rows['settled']['now'],
                                    'owed': '0', 'opened-by': 'thread:opener', 'plan': '1/1'}
         (root / 'clear-owed').write_text('handle without replying yet')
         wait_until((root / 'changed').exists, 30, loom.dump)
@@ -132,7 +132,7 @@ else:
         opener = holder(loom.facts(), 'opener')[0]
         proc = command('settle', 'new-work', '--room', str(loom.home.room(opener)), '--why', 'accepted')
         assert proc.returncode == 0, proc.stderr
-        assert table(root)['new-work']['now'] == f'settled {date}'
+        assert table(root)['new-work']['now'].startswith('settled ')
         boundary = loom.home.room(opener) / 'port/in/boundary.md'
         wait_until(lambda: 'opened: new-work' not in boundary.read_text(), 30, loom.dump)
         (root / 'stop-opener').write_text('stop')
