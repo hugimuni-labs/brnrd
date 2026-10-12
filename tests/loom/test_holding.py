@@ -22,11 +22,13 @@ def test_worker_answers_followup_warm_then_exits_and_a_later_letter_starts_it(tm
     replies = []
     monkeypatch.setitem(speak.EFFECTS, "fake", lambda _h, _c, _k, text, _ctx: replies.append(json.loads(text)))
     waiting = root / "waiting"
+    follow = root / "follow"
     bodies(root, f'''import json, os, sys, time
 from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx
 ctx = Ctx(Path(sys.argv[1]))
 letters = ctx.owed()
+follow = Path({str(follow)!r})
 while True:
     for letter in letters:
         ctx.send("channel:fake", json.dumps({{"body": letter.body, "pid": os.getpid()}}), re=letter.id)
@@ -34,6 +36,12 @@ while True:
     while ctx.jack("post").letters:
         time.sleep(0.03)
     Path({str(waiting)!r}).write_text(str(os.getpid()))
+    if not follow.exists():
+        # Keep the flock until the follow-up is already in the ledger. Writing
+        # waiting and then calling stop made jack's wait the whole window; an
+        # idle worker with an opener leaves when that wait expires.
+        while not follow.exists():
+            time.sleep(0.03)
     view = ctx.jack("stop")
     if view.kind != "block":
         break
@@ -48,6 +56,7 @@ while True:
         pid = replies[0]["pid"]
         os.kill(pid, 0)
         inject_letter(root, to="thread:work", body="follow-up")
+        follow.touch()
         wait_until(lambda: len(replies) == 2 and not mail(root, loom.facts(), "work"), 10, loom.dump)
         assert replies == [{"body": "first", "pid": pid}, {"body": "follow-up", "pid": pid}]
         wait_until(lambda: any(f.kind == "body.exited" for f in loom.facts()), 8, loom.dump)
