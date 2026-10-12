@@ -1,8 +1,10 @@
-Status: in progress
+Status: done
 
 # Letter lifecycle facts
 
-Continuation: run-261012-1456-afa8 is reviewing a6520cae and completing proof/gate/PR; inherited commits will not be rewritten.
+PR: https://github.com/hugimuni-labs/brnrd/pull/2274
+
+Completed on brr/loom-letter-facts. The three inherited commits remain unchanged. Final combined gate: 196 passed, 1 skipped, 4 expected failures. All 51 recorded prefixes and the fresh real codex ledger pass loom check.
 
 Base: e5d4ec2a; branch: brr/loom-letter-facts.
 
@@ -33,7 +35,16 @@ FAILED tests/loom/test_letter_facts_replay.py::test_every_prefix_of_a_real_drive
 ```
 
 ## Commits
-Step 1: production prefix check and CLI, real-drive recorder and three unedited recorded ledgers, replay test (expected red).
+| Commit | Change and reason |
+| --- | --- |
+| 1d13421a | Production prefix check/CLI, real-drive recorder and three unchanged real ledgers; expose the premature-retirement baseline. |
+| d1161a50 | Record attempt.ended with atomic dispositions and successors, port.drained, and aggregate send receipt handling. |
+| a6520cae | Pure ownership table; migrate route/climb/wake/boundary/thread/attention readers; delete the three old selectors; expose operator debts and a person note. |
+| daf5b903 | Separate replacement from explicit handling so a successor notice is actually owed and read; add live contract proof and valid main fixtures. |
+| 5b523cb9 | Preserve acquired fuel on the first boundary and align recovery checks with product outcomes. |
+| 86443d8d | Dispose worker replies upon settlement, while keeping unrelated worker proposals owed. |
+| 8401c1b6 | Preserve relay speaker history through the validated fold; migrate the final relay tests off deleted owed. |
+| final report commit | Finish the rule mapping and record the combined gate, real-drive and prefix receipts. |
 
 ## Contract evidence
 Review findings (resolved by continuation):
@@ -52,7 +63,7 @@ Review findings (resolved by continuation):
 | Operator owner + visible + person note | `test_two_failed_starts_are_visible_to_operator_and_a_note_retires_them`; `test_persons_letter_gets_two_starts_then_visible_operator_debt` |
 | settled cause | fresh codex person drive: one ended row, settled, code 0 |
 | molted cause | `test_molt_mid_work_lands_readme_and_inherits_unanswered_letter` (test_molt.py; molted cause asserted, 10-test repair gate passed) |
-| idle cause | warm follow-up/live settled-worker tests; `test_settling_worker_disposes_its_reply_without_an_extra_note` (final gate pending) |
+| idle cause | warm follow-up/live settled-worker tests; `test_settling_worker_disposes_its_reply_without_an_extra_note` (final combined gate passed) |
 | paced cause, preserves owed and no failed count | `test_owing_worker_is_told_once_holds_twice_then_low_fuel_preserves_and_parks_the_ask` (test_holding.py; paced cause asserted, 10-test repair gate passed) |
 | failed cause, only failed attempts count | two-failed-start live regression; person gets exactly two starts and no third |
 | attempt.ended atomically carries dispositions/successors | live unhandled bounce chain and failure-to-operator paths |
@@ -65,13 +76,17 @@ Review findings (resolved by continuation):
 | owed/actionable/unrunnable_ids deleted | source search: no definitions/imports; readers use letter_owners/letters_for |
 | Every recorded real ledger prefix | CLI replay: 8 failed-start + 15 person + 28 worker prefixes clean; production replay test 3 passed |
 
-New live evidence: `test_letter_owners_live.py`: **7 passed in 47.06s**. Full gate is still running.
+New live evidence: `test_letter_owners_live.py`: **7 passed in 45.68s** after settlement was narrowed; all cases are also in the final combined gate.
 
 ## Departures
 None.
 
 ## Could not verify
-Replay, real-drive completion and gate have not run.
+- Full backend CI is still running at closeout; frontend, npm, hygiene, undefined-name and first-party link checks are green. CI remains the authority for the full repository suite; no full repository suite was run locally.
+- External Telegram delivery and server chat-id selection were not driven; the real codex reply used the durable local channel sink.
+- The optional Haiku demo test was skipped because LOOM_DEMO was not enabled. The requested real body proof used codex/gpt-6-luna instead.
+- Four recovery gaps remain explicit expected failures: silent live-body restart, a router grant missing its predecessor fact, an impossible granting window, and a remote refusal for an absent inbox owner. They are not claimed fixed by this PR.
+- w-160 plan-row/letter links and the ten-turn grok settlement re-drive belong to the parent’s next work, as the contract specifies.
 
 ## Baseline real-drive output
 ```
@@ -154,7 +169,34 @@ Earlier fixtures also constructed invalid `# # Work` headlines, or lease rows na
 
 Repair gate: `PYTHONPATH=src pytest -q tests/loom/test_usage.py tests/loom/test_holding.py tests/loom/test_two_strands.py tests/loom/test_molt.py`: **10 passed in 50.03s**.
 
-Final whole gate is running after these repairs. No non-loom test file has been changed.
+The two relay test files outside tests/loom were subsequently migrated after CI caught their remaining imports; both are included in the final combined gate.
 
 
 Whole loom gate before the final narrow settlement/relay repairs: **165 passed, 1 skipped, 4 xfailed in 488.65s**. The narrowed settlement path independently passed all 7 ownership drives. CI at 5b523cb9 stopped at collection because two non-loom relay suites still imported deleted owed (run 38269137998). The relay suites then exposed the double-fold sender-address regression; that is fixed in both actual relay readers, not waived. These two files are now included in the final gate.
+
+
+## Final gate
+
+From this worktree, using its src:
+
+```
+PYTHONPATH=src pytest -q tests/loom tests/test_loom_relay.py tests/test_loom_relay_cutover.py
+196 passed, 1 skipped, 4 xfailed in 465.58s
+```
+
+No unexpected failure remains. The requested subset also completed separately with 165 passed, 1 skipped, 4 xfailed; the two relay suites independently passed all 31 tests. Final source search finds no imports or definitions of the deleted selectors.
+
+Actual real-drive send sink and attempt receipt:
+
+```
+{"key":"s-eb9f-olxg62/ald68","text":"RECEIVED"}
+Attempts: [('settled', 0, ['p-test/c9dqa'])]
+Main: {'inbox': 'settled'}
+letter ownership clean at every ledger prefix
+```
+
+The recorder’s earlier “ends: 2” line counts body.exited and attempt.ended; this drive has one attempt.ended, not two attempts.
+
+## Out of scope / next
+
+Per the contract: w-160 links plan rows to the letters they answer and replaces README mtime; fresh-message chat-id plumbing on climbs; semantic completion before molt; the internal per-part send store; re-drive grok #2273 after this PR is green. These remain the resident’s next work, not a strand’s standing-surface writes.
