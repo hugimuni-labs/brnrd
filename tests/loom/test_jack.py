@@ -63,6 +63,38 @@ def test_post_with_nothing_owed_prints_nothing(tmp_path):
     assert execute("post", room, "{}") == ""
 
 
+def test_opened_delivery_ignores_age_and_fuel_but_tracks_state_owed_and_removal(tmp_path):
+    room = _room(tmp_path)
+    row = {'thread': 'child', 'now': 'idle 7s', 'owed': 0,
+           'opened-by': 'thread:ta', 'status': 'open'}
+
+    def write(now, owed=0, opened=True):
+        row.update(now=now, owed=owed)
+        text = render_boundary(STRAND, 1, 'ta', [], set(), {}, opened=[row] if opened else [])
+        (room / 'port/in/boundary.md').write_text(text)
+        return text
+
+    first = write('idle 7s')
+    assert 'opened: child idle 0m · owed 0' in first
+    assert execute('start', room, '{}') == first
+    assert execute('post', room, '{}') == ''
+    assert write('idle 59s') == first
+    assert execute('post', room, '{}') == ''
+    assert 'idle 1m' in write('idle 1m')
+    assert execute('post', room, '{}') == ''
+    holding = write('holding 84%')
+    assert 'opened: child holding · owed 0' in holding
+    assert execute('post', room, '{}')
+    assert write('holding 83%') == holding
+    assert execute('post', room, '{}') == ''
+    write('holding 83%', owed=1)
+    assert execute('post', room, '{}')
+    write('holding 83%', opened=False)
+    assert execute('post', room, '{}')
+    assert execute('post', room, '{}') == ''
+    assert list((room / 'port/out').glob('*.md')) == []
+
+
 def test_stop_blocks_while_letters_are_owed(tmp_path):
     room = _room(tmp_path)
     text = _write(room, [_letter()])

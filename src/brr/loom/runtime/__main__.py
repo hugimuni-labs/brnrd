@@ -11,6 +11,7 @@ VERBS = {
     "settle": ("verbs_loom", "_settle"),
     "molt": ("verbs_loom", "_molt"),
     "jack": ("verbs_loom", "_jack"),
+    "threads": ("verbs_threads", "_threads"),
     "attention": ("verbs_loom", "_attention"),
     "init": ("verbs_self", "cmd_init"),
     "wake": ("verbs_self", "cmd_wake"),

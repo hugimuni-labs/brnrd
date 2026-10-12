@@ -107,7 +107,7 @@ HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "emotes",
     "relic", "gate-run", "close-check", "promise", "act", "mood", "do", "notes",
     "await", "cut", "legend", "item", "asks", "goal", "queue", "envoy",
-    "dominion", "hud", "states",
+    "dominion", "hud", "states", "threads",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -1440,6 +1440,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("shell", choices=("bash", "zsh", "fish"),
                    help="shell to generate completions for")
     p.set_defaults(func=cmd_completions)
+
+    from .loom.runtime.verbs_threads import add_threads_parser
+    add_threads_parser(sub)
 
     # Retired top-level spellings — parsed only to fail with a pointer.
     for retired, replacement in RETIRED_COMMANDS.items():
