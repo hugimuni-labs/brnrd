@@ -289,7 +289,7 @@ class Router:
             letter = fate.letter
             if fate.action == "climb":
                 kind, target = "climbed", fate.thread
-                what = f"letter {letter.id} to closed thread {letter.data.get('to')} climbed here"
+                what = f"letter {letter.id} to closed thread {letter.data.get('to', '').removeprefix('thread:')} climbed here"
             else:
                 kind, target = "unroutable", "inbox" if "inbox" in known else None
                 what = f"letter {letter.id} addressed to {letter.data.get('to')!r}, which is not a thread on main"

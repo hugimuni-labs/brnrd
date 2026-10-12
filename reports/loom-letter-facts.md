@@ -2,6 +2,8 @@ Status: in progress
 
 # Letter lifecycle facts
 
+Continuation: run-261012-1456-afa8 is reviewing a6520cae and completing proof/gate/PR; inherited commits will not be rewritten.
+
 Base: e5d4ec2a; branch: brr/loom-letter-facts.
 
 ## Baseline failures
@@ -34,7 +36,34 @@ FAILED tests/loom/test_letter_facts_replay.py::test_every_prefix_of_a_real_drive
 Step 1: production prefix check and CLI, real-drive recorder and three unedited recorded ledgers, replay test (expected red).
 
 ## Contract evidence
-Pending implementation and drives.
+Review findings (before continuation edits):
+- Atomic climb/refusal dispositions mark the old draft done, then legacy bidirectional `stands` handling marks the embedded successor done too. The new notice is never shown. Fix pairing to distinguish explicit handling from replacement disposition; prove through live refusal and climb.
+- The person's second failed attempt now belongs to the operator per the contract; the inherited old lifecycle test still expects an automatic failure message. Preserve two starts/no third and test visible operator debt + hand note instead.
+- Bounce-chain, settlement disposal, refused receipt, ended/drained and main-only selection need live evidence beyond the inherited replay.
+
+| Rule | Proof |
+| --- | --- |
+| Loom owner waiting/start | recorded person ledger before start; `test_routing_ignores_working_checkout_status_for_and_inventory` |
+| Body owner | `test_unsent_reply_returns_to_its_body_with_visible_refusal` (refused and stale variants, same live body sees the notice and original) |
+| Channel owner until receipt | recorded person prefix at accepted reply, clean CLI replay; fresh real codex drive sends RECEIVED once |
+| Opener owner | `test_unhandled_bounces_walk_to_top_then_operator`; `test_climb_waits_for_ended_and_drained_then_opener_reads_it` |
+| Operator owner + visible + person note | `test_two_failed_starts_are_visible_to_operator_and_a_note_retires_them`; `test_persons_letter_gets_two_starts_then_visible_operator_debt` |
+| settled cause | fresh codex person drive: one ended row, settled, code 0 |
+| molted cause | `test_a_molted_successor_inherits_the_committed_next_step_and_the_unanswered_ask` (test_molt.py; final gate pending) |
+| idle cause | warm follow-up/live settled-worker tests; `test_settling_worker_disposes_its_reply_without_an_extra_note` (final gate pending) |
+| paced cause, preserves owed and no failed count | `test_owing_worker_is_told_once_holds_twice_then_low_fuel_preserves_and_parks_the_ask` (test_holding.py; final gate pending) |
+| failed cause, only failed attempts count | two-failed-start live regression; person gets exactly two starts and no third |
+| attempt.ended atomically carries dispositions/successors | live unhandled bounce chain and failure-to-operator paths |
+| port.drained gates climb independently of ended | live closed-worker drive pauses exactly between ended and drained; no climb before release, opener reads after |
+| Accepted reply does not retire person's letter | raw recorded person ledger prefix check; refusal/stale live regression returns original to current body |
+| Bounce walks opener chain to operator | `test_unhandled_bounces_walk_to_top_then_operator`: worker → middle → top → operator note |
+| Settling disposes worker reply on opener | `test_settling_worker_disposes_its_reply_without_an_extra_note`: opener settles worker, reply disappears from next boundary, no note was sent for it |
+| Past failed-attempt limit owed visibly to operator | live two-failed-start and relay-person tests |
+| Status, for and inventory from main | `test_routing_ignores_working_checkout_status_for_and_inventory`: uncommitted settled/for changes ignored, untracked ghost excluded |
+| owed/actionable/unrunnable_ids deleted | source search: no definitions/imports; readers use letter_owners/letters_for |
+| Every recorded real ledger prefix | CLI replay: 8 failed-start + 15 person + 28 worker prefixes clean; production replay test 3 passed |
+
+New live evidence: `test_letter_owners_live.py`: **7 passed in 47.06s**. Full gate is still running.
 
 ## Departures
 None.
@@ -78,3 +107,29 @@ The pure letter_owners table derives owner, reason, action and reply address fro
 5 passed in 20.44s
 
 ```
+
+
+## Continuation: real drive and replay outputs
+
+Recorded ledgers reconstructed in scratch homes with their recorded main snapshots (rows/ids/HLC unchanged), then run through the installed CLI dispatch with this worktree on PYTHONPATH:
+
+```
+failed-start: 8 prefixes
+letter ownership clean at every ledger prefix
+person: 15 prefixes
+letter ownership clean at every ledger prefix
+worker: 28 prefixes
+letter ownership clean at every ledger prefix
+```
+
+Fresh real codex/gpt-6-luna, one person's letter, one reply, settled thread:
+
+```
+2026-10-12T15:03:23.921440+00:00 start s-eb9f-olxg62 thread inbox gen 1 pid 31555 codex/gpt-6-luna
+2026-10-12T15:03:46.257424+00:00 exit s-eb9f-olxg62 code 0
+person home: /var/folders/r5/zx7bdmwd55x1djcrdvl6n92c0000gp/T/loom-letter-person-cs2ivjny rows: 17 ends: 2
+letter router lease body.pending shown body.started router.renewed shown shown letter speech router.renewed thread.closed body.exited attempt.ended port.drained released
+letter ownership clean at every ledger prefix
+```
+
+No external chat was used: the real model's reply reached the fake channel's durable send sink. This proves the live body/port/router/send receipt path; actual Telegram delivery is outside this drive.

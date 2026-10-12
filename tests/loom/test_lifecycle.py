@@ -85,7 +85,7 @@ raise SystemExit("no reply")
     assert not loom.errors
 
 
-def test_persons_letter_gets_two_starts_one_message_and_no_third(tmp_path, monkeypatch):
+def test_persons_letter_gets_two_starts_then_visible_operator_debt(tmp_path, monkeypatch, capsys):
     root = tmp_path / "home"
     init_self(root, person="ada")
     person = root / "self/people/ada/channels.md"
@@ -112,15 +112,23 @@ sys.exit(2)
     loom = Loom(root)
     loom.start()
     try:
-        wait_until(lambda: sent, 10, loom.dump)
-        wait_until(lambda: not mail(root, loom.facts(), "inbox"), 3, loom.dump)
+        from brr.loom.runtime.owners import letter_owners
+        from brr.loom.runtime.lifecycle import main_snapshot
+        from brr.loom.runtime.verbs_loom import _attention
+        from brr.loom.runtime.threads import thread_table
+        ident = "letter:relay:crash"
+        def table():
+            return letter_owners(loom.facts(), main_snapshot(loom.home))
+        wait_until(lambda: table()[ident].owner == "operator", 10, loom.dump)
         time.sleep(0.5)
         assert starts.read_text().splitlines() == ["start", "start"]
-        assert len(sent) == 1
-        channel, text, context = sent[0]
-        assert channel == "channel:telegram/42"
-        assert "thread inbox" in text and "please help" in text and "person failure tail" in text
-        assert context["event_id"] == "crash"
+        assert not sent
+        assert any(row["thread"] == "operator" and ident in row["now"]
+                   for row in thread_table(loom.home, loom.facts()))
+        _attention(["--home", str(root)])
+        assert ident in capsys.readouterr().out
+        _attention(["--home", str(root), "--note", ident, "--why", "handled by operator"])
+        assert table()[ident].done
     finally:
         loom.halt()
     assert not loom.errors

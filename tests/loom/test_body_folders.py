@@ -85,14 +85,14 @@ print(json.dumps({'windows': [{'name': 'week', 'left_pct': left,
     try:
         wait_until(lambda: any(f.kind == "body.parked" for f in loom.facts()), 10, loom.dump)
         facts = loom.facts()
-        assert not any(f.kind in {"body.started", "body.died"} for f in facts)
+        assert not any(f.kind in {"body.started", "attempt.ended"} for f in facts)
         assert holder(facts, "gauge") and mail(root, facts, "gauge")
         _attention(["--home", str(root)])
         assert "parked · gauge · gauge week 7% · until " in capsys.readouterr().out
         (folder / "refilled").touch()
         wait_until(lambda: not mail(root, loom.facts(), "gauge"), 10, loom.dump)
         assert len([f for f in loom.facts() if f.kind == "body.started"]) == 1
-        assert not any(f.kind == "body.died" for f in loom.facts())
+        assert not any(f.kind == "attempt.ended" and f.data["cause"] == "failed" for f in loom.facts())
         _attention(["--home", str(root)])
         assert "parked" not in capsys.readouterr().out
     finally:

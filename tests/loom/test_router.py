@@ -372,7 +372,7 @@ def test_channel_keys_are_sent_at_most_once(tmp_path):
                 return False
             keys = _channel_keys(root)
             # Every draft that did not reach the channel has a notice standing for it.
-            told = {fact.data.get("stands") for fact in facts if is_notice(fact)}
+            told = {fact.data.get("stands") for fact in fold(facts).accepted if is_notice(fact)}
             missing = [str(fact.data["id"]) for fact in letters if fact.data["id"] not in keys]
             return all(key in told for key in missing)
 

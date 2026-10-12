@@ -22,6 +22,7 @@ def _home(tmp_path) -> Home:
     home = Home(tmp_path, install="aaaa")
     home.thread_dir("t").mkdir(parents=True)
     (home.thread_dir("t") / "README.md").write_text("# t\n")
+    ledger.append(home, Fact(kind="router", by="loom:aaaa", id="router:1", data={"gen": 1}))
     ledger.append(home, Fact(kind="lease", by="loom:aaaa", id="lease:t:1", data={
         "thread": "t", "strand": STRAND, "gen": 1, "install": "aaaa", "router_gen": 1}))
     return home

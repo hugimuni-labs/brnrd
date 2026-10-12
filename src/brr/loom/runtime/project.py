@@ -57,6 +57,7 @@ def fold(facts: Iterable[Fact]) -> Fold:
     dest: dict[str, str] = {}
     newest: int | None = None
     pending_replies: dict[str, str] = {}
+    disposed: set[str] = set()
 
     def consider(writer: str, gen: int, re: object) -> None:
         if not isinstance(re, str) or not re:
@@ -76,7 +77,7 @@ def fold(facts: Iterable[Fact]) -> Fold:
                     state.handled.add(pending_replies[key])
             for disposition in data.get("dispositions", ()):
                 if disposition.get("outcome") == "done":
-                    state.handled.add(str(disposition["id"]))
+                    disposed.add(str(disposition["id"]))
                 successor = disposition.get("successor")
                 if successor:
                     letter = Fact(kind="letter", by=fact.by, id=successor["id"],
@@ -166,6 +167,9 @@ def fold(facts: Iterable[Fact]) -> Fold:
         pair = {fact.data.get("id"), fact.data.get("stands")}
         if is_notice(fact) and None not in pair and pair & state.handled:
             state.handled |= pair
+    # Replacing a debt does not answer its successor. Only explicit handling
+    # above propagates through a standing notice.
+    state.handled |= disposed
     return state
 
 

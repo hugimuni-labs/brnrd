@@ -65,13 +65,13 @@ def told_and_settled(loom, about, thread, *words, seconds=5):
     """
     def shown_and_settled():
         facts = loom.facts()
-        told = [f for f in facts if f.kind == "letter" and f.data.get("stands") == about]
+        told = [f for f in fold(facts).accepted if f.kind == "letter" and f.data.get("stands") == about]
         seen = {i for f in facts if f.kind == "shown" for i in f.data.get("ids", ())}
         return (len(told) == 1 and told[0].data["id"] in seen
                 and not notices(facts) and answered(loom, about))
 
     wait_until(shown_and_settled, seconds, loom.dump)
-    (notice,) = [f for f in loom.facts() if f.data.get("stands") == about]
+    (notice,) = [f for f in fold(loom.facts()).accepted if f.data.get("stands") == about]
     body = notice.data["body"]
     assert notice.data["to"] == f"thread:{thread}"
     assert about in body and body.endswith(f"re: {notice.data['id']}")
@@ -197,21 +197,28 @@ def test_impossible_router_window_does_not_silently_abandon_messages(root):
 @pytest.mark.parametrize("destination", ["thread:removed", "nowhere", "thread:inbox"])
 def test_unroutable_letter_gets_a_disposition(root, destination):
     readme = Home(root).thread_dir("inbox") / "README.md"
-    saved = readme.read_text()
     if destination == "thread:inbox":
+        from brr.loom.runtime.selfrepo import git, _commit
         readme.unlink()
+        git(root / "self", "add", "threads/inbox/README.md")
+        _commit(root / "self", "Remove inbox from main.")
     original = "p-test/lost"
     append(Home(root), Fact(kind="letter", by="person:p-test", id=original,
                            data={"id": original, "from": "p-test", "to": destination,
                                  "body": "please help"}))
     with running(root) as loom:
-        reach(lambda: any(f.data.get("stands") == original for f in loom.facts()), loom)
         if destination == "thread:inbox":
-            # No body can be told yet: the notice waits, owed, and says so.
-            time.sleep(0.3)
-            assert [f.data.get("stands") for f in notices(loom.facts())] == [original]
-            readme.write_text(saved)
-        told_and_settled(loom, original, "inbox", repr(destination))
+            # With no thread on main, the operator owns it visibly.
+            from brr.loom.runtime.owners import letter_owners
+            from brr.loom.runtime.lifecycle import main_snapshot
+            from brr.loom.runtime.verbs_loom import _attention
+            def table():
+                return letter_owners(loom.facts(), main_snapshot(loom.home))
+            wait_until(lambda: table()[original].owner == "operator", 5, loom.dump)
+            _attention(["--home", str(root), "--note", original, "--why", "handled by hand"])
+            assert table()[original].done
+        else:
+            told_and_settled(loom, original, "inbox", repr(destination))
 
 
 def relay_event(ident):
@@ -282,9 +289,8 @@ def test_bad_thread_directory_does_not_block_healthy_thread(root):
     (bad / "README.md").write_text("# Bad\n")
     original = inject_letter(root, to="thread:work", body="begin")
     with running(root) as loom:
-        log = root / "loom" / "loom.log"
-        reach(lambda: log.exists() and "unsafe thread id" in log.read_text(), loom)
-        wait_until(lambda: answered(loom, original), 2, loom.dump)
+        wait_until(lambda: answered(loom, original), 5, loom.dump)
+        assert not any(f.data.get("thread") == "bad name" for f in loom.facts())
 
 
 def test_unavailable_channel_does_not_block_a_live_threads_new_letter(root, monkeypatch):
