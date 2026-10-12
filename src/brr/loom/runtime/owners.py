@@ -33,14 +33,11 @@ def letter_owners(facts, main: dict[str, dict]) -> dict[str, Ownership]:
     channels = reply_channels(facts)
     letters = {f.id: f for f in state.accepted if f.kind == 'letter'}
     sent = {f.data.get('key') for f in facts if f.kind == 'speech' and f.data.get('state') == 'sent'}
-    dispositions, ends, drained, failed, attention = {}, {}, set(), {}, {}
+    dispositions, ends, drained, attention = {}, {}, set(), {}
     for fact in state.accepted:
         d = fact.data
         if fact.kind == 'attempt.ended':
             ends[(d['strand'], d['gen'])] = fact
-            if d.get('cause') == 'failed':
-                for ident in d.get('ids', ()):
-                    failed[ident] = failed.get(ident, 0) + 1
         elif fact.kind == 'port.drained':
             drained.add((d['strand'], d['gen']))
         elif fact.kind == 'attention' and d.get('letter'):
@@ -80,7 +77,7 @@ def letter_owners(facts, main: dict[str, dict]) -> dict[str, Ownership]:
             result[ident] = Ownership(letter, owner, why, target, reply, action)
         if ident in state.handled or ident in sent or disposition.get('outcome') == 'done':
             keep(None, reason or 'reply or note recorded')
-        elif disposition.get('outcome') == 'operator' or failed.get(ident, 0) >= 2:
+        elif disposition.get('outcome') == 'operator':
             keep('operator', reason or 'failed attempt limit', action='note')
         elif is_channel(d.get('to')):
             keep('channel', 'accepted send awaiting receipt', action='send')

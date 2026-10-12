@@ -320,7 +320,7 @@ class Router:
             if fact.kind != "letter" or not is_channel(to):
                 continue
             key = str(fact.data.get("id") or "")
-            if not key or key not in table or table[key].done:
+            if not key or key not in table or table[key].owner != "channel":
                 continue
             raw = fact.data.get("router_gen")
             try:
@@ -329,6 +329,12 @@ class Router:
                 continue
 
             def tell(kind: str, what: str, can: str) -> None:
+                # A loom-authored failure has no replying body to repair its send.
+                if is_notice(fact) and key.startswith("loom/failed-message-"):
+                    self._keep(facts, "letter.disposed", {"dispositions": [{
+                        "id": key, "outcome": "operator", "reason": f"{kind}: {what}",
+                    }]}, f"letter.disposed:{key}")
+                    return
                 # Always the thread that drafted it; the draft is never resent.
                 successor = notice(self.home, facts, kind, key,
                        f"your message {key} to {to} {what}", can,
