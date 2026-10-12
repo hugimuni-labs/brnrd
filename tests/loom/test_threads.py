@@ -31,17 +31,12 @@ def table(root):
     return {row[0]: dict(zip(lines[0], row)) for row in lines[1:]}
 
 
-def test_send_opens_lands_routes_and_shows_working_idle_settled(tmp_path, monkeypatch):
-    # Git's %cs uses the commit's timezone, which need not be UTC today.
-    # Give every fixture/body commit the calendar the assertions expect.
-    now = datetime.now(timezone.utc)
-    monkeypatch.setenv('GIT_AUTHOR_DATE', now.isoformat())
-    monkeypatch.setenv('GIT_COMMITTER_DATE', now.isoformat())
+def test_send_opens_lands_routes_and_shows_working_idle_settled(tmp_path):
     root = tmp_path / 'home'
     init_self(root, person='test')
     write_thread(root, 'opener', 'Opener', 'opener', wait='0')
     write_thread(root, 'idle', 'Idle\n\n## Plan\n- [x] First\n- [ ] Second', 'idle', wait='0')
-    old = (now - timedelta(hours=3, minutes=10)).isoformat()
+    old = (datetime.now(timezone.utc) - timedelta(hours=3, minutes=10)).isoformat()
     env = _env_without_pin()
     env['GIT_COMMITTER_DATE'] = old
     git(root / 'self', 'commit', '--amend', '--no-edit', '--date', old, env=env)
@@ -120,7 +115,7 @@ else:
                                     'owed': '1', 'opened-by': 'thread:opener', 'plan': '—'}
         assert rows['idle'] == {'thread': 'idle', 'seat': '—', 'now': 'idle 3h', 'owed': '0',
                                 'opened-by': '—', 'plan': '1/2'}
-        date = now.date().isoformat()
+        date = datetime.now(timezone.utc).date().isoformat()
         assert rows['settled'] == {'thread': 'settled', 'seat': '—', 'now': f'settled {date}',
                                    'owed': '0', 'opened-by': 'thread:opener', 'plan': '1/1'}
         (root / 'clear-owed').write_text('handle without replying yet')
