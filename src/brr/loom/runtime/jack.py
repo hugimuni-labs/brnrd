@@ -153,22 +153,26 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         _note_tool(room, stdin_text)
     text = _boundary_text(room)
     parsed = parse_boundary(text)
-    opened = any(line.startswith("opened: ") for line in text.splitlines())
+    opened = [[line.split()[1], line.split()[2], line.rpartition(" · owed ")[2]]
+              for line in text.splitlines() if line.startswith("opened: ")]
     if event == "start":
         if not parsed.ids and not opened:
             return ""
         if parsed.ids:
             _shown(room, parsed)
+        _set_state(room, opened=opened)
         return text if text.endswith("\n") else text + "\n"
     if event == "post":
-        if not parsed.ids and parsed.settled is None and not opened:
+        state = _state(room)
+        opened_changed = opened != state.get("opened", [])
+        settled_changed = parsed.settled is not None and parsed.settled != state.get("settled")
+        if not parsed.ids and not settled_changed and not opened_changed:
             return ""
-        if parsed.settled is not None:
-            if _state(room).get("settled") == parsed.settled:
-                return ""
+        if settled_changed:
             _set_state(room, settled=parsed.settled)
         if parsed.ids:
             _shown(room, parsed)
+        _set_state(room, opened=opened)
         return _json({"hookSpecificOutput": {
             "hookEventName": "PostToolUse", "additionalContext": text}})
     if _state(room).get("molted") or parsed.settled is not None:
