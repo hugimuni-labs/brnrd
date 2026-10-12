@@ -259,7 +259,9 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         f"`python -m brr.loom.runtime send --re <id> --to thread:{thread} --note "
         "\"<what you did>\"`; if you commit in this self clone, land it with "
         "`python -m brr.loom.runtime send-self --room .`; you will forget what is "
-        "not written: keep this thread's README true, and when your context grows "
+        "not written: keep this thread's README true; under `## Plan`, cite each "
+        "row's letters with ` · re: <id>, <id>` and land the edit with send-self. "
+        "When your context grows "
         "heavy hand over with `python -m brr.loom.runtime molt --why \"<where "
         "things stand>\"`; `python -m brr.loom.runtime settle <thread> --why "
         "\"…\"` closes a thread whose work is done; "
@@ -284,7 +286,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         room / "port" / "in" / "boundary.md",
         render_boundary(strand, gen, thread, letters, shown, threads,
                         fuel=fuel, channels=reply_channels(facts),
-                        opened=thread_table(home, facts), plan=_plan(room, thread, letters),
+                        opened=thread_table(home, facts), plan=_plan(home, thread, facts),
                         replies={k: f.reply_to for k, f in letter_owners(facts, main_snapshot(home)).items()}),
     )
     return room
@@ -541,21 +543,19 @@ def _readme(room: Path, thread: str) -> str | None:
         return None
 
 
-def _plan(room: Path, thread: str, letters: list[Fact]) -> str:
-    from .lifecycle import parse_plan
-    path = room / "self/threads" / thread / "README.md"
-    try:
-        rows = parse_plan(path.read_text())
-        changed = path.stat().st_mtime
-    except OSError:
+def _plan(home: Home, thread: str, facts: list[Fact]) -> str:
+    main = main_snapshot(home)
+    rows = main.get(thread, {}).get("plan_rows")
+    table = letter_owners(facts, main)
+    missing = [ident for ident, fate in table.items()
+               if not fate.done and fate.thread == thread
+               and fate.owner in {"body", "loom", "opener"} and not fate.plan_rows]
+    if rows is None and not missing:
         return ""
-    if rows is None:
-        return ""
-    text = f"plan {sum(done for done, _ in rows)}/{len(rows)}"
-    newer = sum(datetime.fromisoformat(letter.at).timestamp() > changed for letter in letters)
-    if newer:
-        text += f" · plan older than {newer} letter(s)"
-    next_row = next((text for done, text in rows if not done), "")
+    text = f"plan {sum(done for done, _ in rows)}/{len(rows)}" if rows is not None else "plan —"
+    if missing:
+        text += " · letters without a row: " + ", ".join(missing)
+    next_row = next((text for done, text in rows or () if not done), "")
     if next_row:
         text += f" · next: {next_row[:60]}"
     return text
@@ -794,7 +794,7 @@ def _refresh_holders(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> 
             text = render_boundary(strand, gen, thread, letters,
                                    state.shown.get(strand, set()), threads,
                                    fuel(home, shells[strand]) if shells.get(strand) else "", settled,
-                                   channels, opened=table, plan=_plan(home.room(strand), thread, letters),
+                                   channels, opened=table, plan=_plan(home, thread, facts),
                                    replies={k: f.reply_to for k, f in letter_owners(facts, main_snapshot(home)).items()})
             path = home.room(strand) / "port" / "in" / "boundary.md"
             if not path.is_file() or path.read_text() != text:

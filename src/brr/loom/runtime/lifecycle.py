@@ -43,6 +43,7 @@ def read_thread(home: Home, thread: str, ref: str = "main") -> dict:
             text = path.read_text()
         data = parse_readme(text)
         plan = parse_plan(text)
+        data["plan_rows"] = plan
         data["plan"] = f"{sum(done for done, _ in plan)}/{len(plan)}" if plan else "—"
         return data
     except (OSError, ReadmeError):

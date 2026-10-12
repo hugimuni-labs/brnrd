@@ -15,6 +15,7 @@ class Ownership:
     thread: str | None = None
     reply_to: str = '-'
     action: str = ''
+    plan_rows: tuple[int, ...] = ()
 
     @property
     def done(self):
@@ -74,7 +75,10 @@ def letter_owners(facts, main: dict[str, dict]) -> dict[str, Ownership]:
         sender = writers.get(letter.by.removeprefix('strand:'))
         child = main.get(sender, {})
         def keep(owner, why, target=thread, action=''):
-            result[ident] = Ownership(letter, owner, why, target, reply, action)
+            rows = main.get(target, {}).get('plan_rows') or ()
+            cited = tuple(i + 1 for i, (_, text) in enumerate(rows)
+                          if ident in plan_citations(text))
+            result[ident] = Ownership(letter, owner, why, target, reply, action, cited)
         if ident in state.handled or ident in sent or disposition.get('outcome') == 'done':
             keep(None, reason or 'reply or note recorded')
         elif disposition.get('outcome') == 'operator':
@@ -131,3 +135,11 @@ def letters_for(facts, main, thread):
             if not f.done and f.thread == thread and f.owner in {'body', 'loom', 'opener'}
             and f.action not in {'unroutable', 'climb'}
             and (f.action != 'drain' or f.owner == 'body')]
+
+
+def plan_citations(text: str) -> tuple[str, ...]:
+    """Only a row's explicit trailing ` · re: id, id` cites letters."""
+    _, separator, cites = text.rpartition(' · re: ')
+    if not separator:
+        return ()
+    return tuple(ident.strip() for ident in cites.split(',') if ident.strip())

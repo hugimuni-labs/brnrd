@@ -25,3 +25,10 @@ If a notice or any other letter keeps coming back and no reply settles it, a per
 ```
 
 A note written `by` a `person:` with `re:` a letter's id settles that letter whatever thread holds it, and the item it stands for with it. Nothing else is needed: the next tick reads the line. From a room, `<home>` is `../..`.
+
+## Plan citations
+
+A checklist row under `## Plan` names the letters it answers with a trailing
+` · re: <letter-id>, <letter-id>`. Land the README through `send-self`. The
+boundary lists owed letters without a row from the landed plan and the letter
+ownership table; editing a file or mentioning an id in prose does not cite it.
