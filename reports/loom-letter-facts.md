@@ -36,7 +36,8 @@ FAILED tests/loom/test_letter_facts_replay.py::test_every_prefix_of_a_real_drive
 Step 1: production prefix check and CLI, real-drive recorder and three unedited recorded ledgers, replay test (expected red).
 
 ## Contract evidence
-Review findings (before continuation edits):
+Review findings (resolved by continuation):
+- Settlement disposal was too broad: it retired every letter from a settled worker, including new proposals without a reply reference. Restrict disposal to replies to accepted asks on that worker; the live settlement regression now keeps a separate worker proposal owed until the opener notes it.
 - Atomic climb/refusal dispositions mark the old draft done, then legacy bidirectional `stands` handling marks the embedded successor done too. The new notice is never shown. Fix pairing to distinguish explicit handling from replacement disposition; prove through live refusal and climb.
 - The person's second failed attempt now belongs to the operator per the contract; the inherited old lifecycle test still expects an automatic failure message. Preserve two starts/no third and test visible operator debt + hand note instead.
 - Bounce-chain, settlement disposal, refused receipt, ended/drained and main-only selection need live evidence beyond the inherited replay.

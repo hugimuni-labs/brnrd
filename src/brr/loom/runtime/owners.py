@@ -89,7 +89,9 @@ def letter_owners(facts, main: dict[str, dict]) -> dict[str, Ownership]:
         elif ident in attention:
             keep('operator', attention[ident], action='note')
         elif (child.get('status') in {'settled', 'retired'}
-              and child.get('opened-by') == 'thread:' + str(thread)):
+              and child.get('opened-by') == 'thread:' + str(thread)
+              and d.get('re') in letters
+              and _destination(letters[d['re']].data) == sender):
             keep(None, 'worker settled by its opener')
         elif thread not in main:
             keep('loom', 'destination absent from main', action='unroutable')
