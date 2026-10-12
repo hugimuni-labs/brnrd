@@ -290,6 +290,40 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     return room
 
 
+def _port_files(room: Path) -> list[Path]:
+    out = Path(room) / "port" / "out"
+    if not out.is_dir():
+        return []
+    return [path for path in sorted(out.iterdir())
+            if path.is_file() and not path.name.startswith(".")]
+
+
+def _collect_exit(body: Body) -> int | None:
+    if body.proc is None:
+        return None
+    try:
+        return body.proc.wait(timeout=0.1)
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(body.proc.pid, signal.SIGKILL)
+    except OSError:
+        pass
+    try:
+        return body.proc.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def _strand_gen(facts: list[Fact], strand: str) -> int | None:
+    gen = generation(facts, strand)
+    if gen is not None:
+        return gen
+    start = next((fact for fact in reversed(facts) if fact.kind == "body.started"
+                  and fact.data.get("strand") == strand), None)
+    return int(start.data["gen"]) if start else None
+
+
 def body_alive(room: Path) -> bool:
     """True while the body's process holds the flock on ``room/.body``."""
     path = Path(room) / ".body"
@@ -478,22 +512,21 @@ def _ingest(home: Home, facts: list[Fact] | None = None, ttl: float | None = Non
         strand = room.name
         if not _may_ingest(home, strand, facts, ttl):
             continue
-        for path in sorted(out.glob("*.md")):
+        gen = _strand_gen(facts, strand)
+        for path in _port_files(room):
             try:
-                fact = fact_from_port(
-                    parse_frontmatter(path.read_text()), strand,
-                    generation(facts, strand), room=room,
-                )
-                _stamp_router(fact, facts)
-                facts.append(append(home, fact))
-            except Exception as exc:
-                _reject(home, room, path, f"{type(exc).__name__}: {exc}", facts)
-                continue
-            path.unlink()
-        for path in sorted(out.glob("taint-*.json")):
-            try:
-                fact = fact_from_taint(path.read_text(), strand, f"{strand}/{path.stem}")
-                facts.append(append(home, fact))
+                if path.suffix == ".md":
+                    fact = fact_from_port(
+                        parse_frontmatter(path.read_text()), strand,
+                        gen, room=room,
+                    )
+                    _stamp_router(fact, facts)
+                    facts.append(append(home, fact))
+                elif path.name.startswith("taint-") and path.suffix == ".json":
+                    fact = fact_from_taint(path.read_text(), strand, f"{strand}/{path.stem}")
+                    facts.append(append(home, fact))
+                else:
+                    continue
             except Exception as exc:
                 _reject(home, room, path, f"{type(exc).__name__}: {exc}", facts)
                 continue
@@ -624,20 +657,42 @@ def _drained(home, facts, strand, thread, gen):
     return facts
 
 
+def _drain_strand(home: Home, facts: list[Fact], strand: str) -> list[Fact]:
+    """Take this strand's last port/out files. Empty is what port.drained attests."""
+    room = home.room(strand)
+    deadline = time.monotonic() + 1.0
+    while True:
+        facts = _ingest(home, facts)
+        leftover = [path for path in _port_files(room) if path.suffix != ".tmp"]
+        if not leftover:
+            for path in _port_files(room):
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+            return facts
+        if time.monotonic() >= deadline:
+            for path in list(_port_files(room)):
+                try:
+                    _reject(home, room, path, "still in port at drain", facts)
+                except Exception:
+                    try:
+                        path.unlink()
+                    except OSError:
+                        pass
+            return facts
+        time.sleep(0.02)
+
+
 def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
     for strand, body in list(bodies.items()):
         if body_alive(home.room(strand)):
             continue
         # Wait only to collect a child we spawned, never to decide liveness.
         # An inherited body has no waitable child and its code is unknown.
-        code = None
-        if body.proc is not None:
-            try:
-                code = body.proc.wait(timeout=0.1)
-            except subprocess.TimeoutExpired:
-                pass
+        code = _collect_exit(body)
         # Drain the body's last boundary and answer before deciding what it wasted.
-        facts = _ingest(home)
+        facts = _drain_strand(home, facts, strand)
         body.close_log()
         del bodies[strand]
         facts.append(_record(home, "body.exited", {
@@ -658,6 +713,7 @@ def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
                  "settled" if read_thread(home, body.thread).get("status") in CLOSED else
                  "idle" if not letters else "failed")
         facts = _end_attempt(home, facts, strand, body.thread, body.gen, code, letters, cause)
+        facts = _drain_strand(home, facts, strand)
         facts = _drained(home, facts, strand, body.thread, body.gen)
         facts = _release(home, facts, strand, body.thread, body.gen)
     return facts
