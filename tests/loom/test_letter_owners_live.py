@@ -247,14 +247,17 @@ ctx = Ctx(Path(sys.argv[1]))
 if _own_thread(ctx.wake()) == 'worker':
     for l in ctx.owed():
         ctx.send(l.reply, 'WORKED', re=l.id)
+        ctx.send(l.reply, 'New proposal')
 else:
     for l in ctx.owed():
         ctx.send('thread:top', note='dispatched', re=l.id)
     ctx.send('thread:worker', 'Work')
     deadline = time.monotonic() + 12
     while time.monotonic() < deadline:
-        answers = [l for l in ctx.jack('post').letters if l.body == 'WORKED']
-        if answers:
+        seen = ctx.jack('post').letters
+        answers = [l for l in seen if l.body == 'WORKED']
+        proposals = [l for l in seen if l.body == 'New proposal']
+        if answers and proposals:
             answer = answers[0]
             p = subprocess.run([sys.executable, '-m', 'brr.loom.runtime', 'settle', 'worker',
                                 '--why', 'accepted', '--room', str(ctx.room)])
@@ -262,6 +265,8 @@ else:
             while any(l.id == answer.id for l in ctx.jack('post').letters):
                 assert time.monotonic() < deadline
                 time.sleep(.03)
+            assert any(l.id == proposals[0].id for l in ctx.jack('post').letters)
+            ctx.send('thread:top', note='considered new proposal', re=proposals[0].id)
             Path({str(accepted)!r}).write_text(answer.id)
             sys.exit(0)
         time.sleep(.03)
