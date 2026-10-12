@@ -649,14 +649,18 @@ def capture_usage_raw(
     ``--safe-mode`` so project/local hooks and plugins do not fire recursively.
     It still uses Claude's normal subscription auth and does not send a model
     prompt. Quota belongs to the account, not the project: ``cwd`` is accepted
-    for compatibility, but the probe runs in an empty temporary directory with
+    for compatibility, but the probe runs in one fixed, empty directory with
     tools disabled. Only that directory's workspace trust prompt is answered.
     """
     deadline = time.monotonic() + max(3.0, float(timeout_seconds))
     boot_seconds = min(DEFAULT_BOOT_SECONDS, max(0.0, float(timeout_seconds) - 0.5))
     master, slave = pty.openpty()
     proc = None
-    isolated = tempfile.TemporaryDirectory(prefix="brr-claude-usage-")
+    # One fixed, empty directory: Claude records each trusted path in the
+    # user's ~/.claude.json for good, so a fresh one per probe grows that file
+    # by an entry every refresh.
+    isolated = Path(tempfile.gettempdir()) / "brr-claude-usage"
+    isolated.mkdir(mode=0o700, exist_ok=True)
     try:
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 160, 0, 0))
         proc = subprocess.Popen(
@@ -664,14 +668,13 @@ def capture_usage_raw(
             stdin=slave,
             stdout=slave,
             stderr=slave,
-            cwd=isolated.name,
+            cwd=str(isolated),
             env=_probe_env(env),
             close_fds=True,
         )
     except Exception:
         os.close(master)
         os.close(slave)
-        isolated.cleanup()
         raise
 
     os.close(slave)
@@ -723,7 +726,6 @@ def capture_usage_raw(
             os.close(master)
         except OSError:
             pass
-        isolated.cleanup()
     return b"".join(chunks)
 
 
