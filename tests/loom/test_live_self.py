@@ -78,7 +78,9 @@ def test_a_wake_over_budget_returns_the_failure_and_a_new_letter_recovers(tmp_pa
     loom = Loom(root)
     loom.start()
     try:
-        wait_until(lambda: any(f.id.startswith("attention:wasted:") for f in loom.facts()), 8, loom.dump)
+        # The loom writes the attention row, then the note that disposes of the
+        # letter: wait for the second, or a read between the two sees it owed.
+        wait_until(lambda: any(f.id.startswith("wasted:") for f in loom.facts()), 8, loom.dump)
         facts = loom.facts()
         failures = [f for f in facts if f.id.startswith("attention:wasted:")]
         assert len(failures) == 1

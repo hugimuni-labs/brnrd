@@ -209,3 +209,25 @@ def sender_threads(facts: Iterable[Fact]) -> dict[str, str]:
         if fact.kind == "lease":
             found[str(fact.data["strand"])] = str(fact.data["thread"])
     return found
+
+
+def reply_channels(facts: Iterable[Fact]) -> dict[str, str]:
+    """Letter id → the chat it came from, for letters a relay brought in.
+
+    Only an address ``send`` accepts is offered; any other platform stays ``-``.
+    """
+    from .home import channel_parts
+    facts = list(facts)
+    sources = {fact.id: fact.data for fact in facts if fact.kind == "source"}
+    found: dict[str, str] = {}
+    for fact in facts:
+        source = sources.get(fact.data.get("cites")) if fact.kind == "letter" else None
+        if not source or not source.get("platform") or source.get("chat") is None:
+            continue
+        channel = f"channel:{source['platform']}/{source['chat']}"
+        try:
+            channel_parts(channel)
+        except ValueError:
+            continue
+        found[str(fact.data.get("id"))] = channel
+    return found

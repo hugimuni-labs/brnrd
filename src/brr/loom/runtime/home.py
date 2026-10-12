@@ -112,7 +112,8 @@ def check_thread_id(thread: str) -> str:
 
 def thread_of(to: str) -> str:
     if not isinstance(to, str) or not to.startswith("thread:"):
-        raise ValueError(f"step 1 routes only thread:<id>, got {to!r}")
+        raise ValueError(f"an address is thread:<id> or channel:<platform>/<chat>, copied whole "
+                         f"from the letter's reply address; got {to!r}")
     return check_thread_id(to.split(":", 1)[1])
 
 
