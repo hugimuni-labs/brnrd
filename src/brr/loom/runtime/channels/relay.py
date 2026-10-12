@@ -155,7 +155,7 @@ def thread_for_message(facts: list[Fact], channel: str, message_id: object) -> s
     if message_id in (None, ""):
         return None
     accepted = fold(facts).accepted
-    threads = sender_threads(accepted)
+    threads = sender_threads(facts)
     letters = {str(f.data.get("id") or f.id): f for f in accepted if f.kind == "letter"}
     for fact in facts:
         if fact.kind != "speech.part" or not fact.by.startswith("loom:"):
@@ -191,7 +191,7 @@ def route_bare(facts: list[Fact], chat: str, reply_thread: str | None = None) ->
         return f"thread:{reply_thread}"
     ordered = union(facts)
     state = fold(ordered)
-    threads = sender_threads(state.accepted)
+    threads = sender_threads(ordered)
     letters = {
         str(f.data.get("id") or f.id): f
         for f in state.accepted if f.kind == "letter"
