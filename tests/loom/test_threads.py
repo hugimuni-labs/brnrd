@@ -58,7 +58,13 @@ if own == "opener":
         view = ctx.jack("post")
         context = json.loads(view.raw)["hookSpecificOutput"]["additionalContext"] if view.raw else ""
         if "opened: new-work working · owed 1" in context:
-            Path({str(opened)!r}).write_text(view.raw)
+            if not Path({str(opened)!r}).exists():
+                again = ctx.jack("post")
+                assert again.raw == "", again.raw
+                Path({str(opened)!r}).write_text(view.raw)
+        if "opened: new-work holding · owed 0" in context:
+            assert not view.letters
+            Path({str(root / "changed")!r}).write_text(view.raw)
         for letter in view.letters:
             if letter.body == "work answered":
                 ctx.send("thread:opener", note="read answer", re=letter.id)
@@ -69,6 +75,11 @@ else:
     assert own == "new-work" and [l.body.split("\\n", 1)[0] for l in letters] == ["New work"]
     assert "New work\\nDetails" in ctx.wake()
     Path({str(ready)!r}).write_text("ready")
+    while not Path({str(root / "clear-owed")!r}).exists():
+        ctx.jack("post")
+        time.sleep(0.03)
+    for letter in letters:
+        ctx.send("thread:new-work", note="work complete", re=letter.id)
     while not Path({str(release)!r}).exists():
         ctx.jack("post")
         time.sleep(0.03)
@@ -97,6 +108,10 @@ else:
         date = datetime.now(timezone.utc).date().isoformat()
         assert rows['settled'] == {'thread': 'settled', 'seat': '—', 'now': f'settled {date}',
                                    'owed': '0', 'opened-by': 'thread:opener', 'plan': '1/1'}
+        (root / 'clear-owed').write_text('handle without replying yet')
+        wait_until((root / 'changed').exists, 5, loom.dump)
+        changed = json.loads((root / 'changed').read_text())['hookSpecificOutput']['additionalContext']
+        assert 'opened: new-work holding · owed 0' in changed
         release.write_text('answer now')
         wait_until(reply.exists, 6, loom.dump)
         wait_until(lambda: holder(loom.facts(), 'new-work') is None, 5, loom.dump)
@@ -113,6 +128,14 @@ else:
         wait_until(lambda: holder(loom.facts(), 'opener') is None, 5, loom.dump)
     finally:
         loom.halt()
+    # Unknown reply ids are legal. A bare --re still has to read the boundary;
+    # an existing read failure must refuse before opening anything on main.
+    room = loom.home.room(opener)
+    boundary = room / 'port/in/boundary.md'
+    boundary.write_bytes(b'\xff')
+    bad_re = command('send', '--room', str(room), '--to', 'thread:bad-re-open', '--re', 'bad', 'Work')
+    assert bad_re.returncode == 1 and 'invalid start byte' in bad_re.stderr
+    assert git(root / 'self', 'cat-file', '-e', 'main:threads/bad-re-open/README.md', check=False).returncode != 0
     assert not loom.errors
 
 
