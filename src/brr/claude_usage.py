@@ -23,6 +23,7 @@ import re
 import select
 import struct
 import subprocess
+import tempfile
 import termios
 import time
 from datetime import datetime, timedelta, timezone
@@ -55,6 +56,10 @@ TTL_ENV_VAR = "BRR_CLAUDE_USAGE_TTL"
 COMPLETE_GRACE_SECONDS = 0.5
 
 _ENV_CONTAMINANTS = {
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
     "CLAUDE_CODE_SAFE_MODE",
     "CLAUDECODE",
     "CLAUDE_CODE_ENTRYPOINT",
@@ -602,7 +607,8 @@ def _usage_command(
 ) -> list[str]:
     env = env or os.environ
     chosen = model or env.get("BRR_CLAUDE_USAGE_MODEL") or DEFAULT_MODEL
-    return ["claude", "--ax-screen-reader", "--model", chosen, "--safe-mode"]
+    return ["claude", "--ax-screen-reader", "--model", chosen, "--safe-mode",
+            "--tools", ""]
 
 
 def _quota_buckets_complete(
@@ -615,21 +621,6 @@ def _quota_buckets_complete(
     if wait_for_credits:
         return "usage_credits" in levels
     return True
-
-
-def _read_available(master_fd: int, chunks: list[bytes], deadline: float) -> None:
-    while time.monotonic() < deadline:
-        timeout = min(0.1, max(0.0, deadline - time.monotonic()))
-        ready, _, _ = select.select([master_fd], [], [], timeout)
-        if master_fd not in ready:
-            continue
-        try:
-            data = os.read(master_fd, 65536)
-        except OSError:
-            return
-        if not data:
-            return
-        chunks.append(data)
 
 
 def _terminate_process(proc: subprocess.Popen[bytes]) -> None:
@@ -657,11 +648,15 @@ def capture_usage_raw(
     The command runs in ``--ax-screen-reader`` mode for flat, fast output and in
     ``--safe-mode`` so project/local hooks and plugins do not fire recursively.
     It still uses Claude's normal subscription auth and does not send a model
-    prompt.
+    prompt. Quota belongs to the account, not the project: ``cwd`` is accepted
+    for compatibility, but the probe runs in an empty temporary directory with
+    tools disabled. Only that directory's workspace trust prompt is answered.
     """
     deadline = time.monotonic() + max(3.0, float(timeout_seconds))
     boot_seconds = min(DEFAULT_BOOT_SECONDS, max(0.0, float(timeout_seconds) - 0.5))
     master, slave = pty.openpty()
+    proc = None
+    isolated = tempfile.TemporaryDirectory(prefix="brr-claude-usage-")
     try:
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 160, 0, 0))
         proc = subprocess.Popen(
@@ -669,27 +664,47 @@ def capture_usage_raw(
             stdin=slave,
             stdout=slave,
             stderr=slave,
-            cwd=str(cwd) if cwd else None,
+            cwd=isolated.name,
             env=_probe_env(env),
             close_fds=True,
         )
     except Exception:
         os.close(master)
         os.close(slave)
+        isolated.cleanup()
         raise
 
     os.close(slave)
     chunks: list[bytes] = []
     try:
-        boot_deadline = min(deadline, time.monotonic() + boot_seconds)
-        _read_available(master, chunks, boot_deadline)
-        while time.monotonic() < boot_deadline:
-            time.sleep(min(0.05, boot_deadline - time.monotonic()))
-        if time.monotonic() < deadline:
-            os.write(master, b"/usage\r")
+        send_at = min(deadline, time.monotonic() + boot_seconds)
+        trusted = sent = banner = False
         grace_deadline: float | None = None
         while time.monotonic() < deadline:
-            _read_available(master, chunks, min(deadline, time.monotonic() + 0.1))
+            ready, _, _ = select.select([master], [], [], max(0.0, min(0.1, deadline - time.monotonic())))
+            if ready:
+                try:
+                    data = os.read(master, 65536)
+                except OSError:
+                    break
+                if not data:
+                    break
+                chunks.append(data)
+                if b"\x1b[c" in data:
+                    os.write(master, b"\x1b[?1;2c")
+            screen = _clean_terminal_text(b"".join(chunks))
+            if not trusted and "Enter y/n:" in screen:
+                # We created this empty directory, never the caller's repo.
+                os.write(master, b"y\r")
+                trusted = True
+            if not banner and "Claude Code v" in screen:
+                banner = True
+                send_at = max(send_at, time.monotonic() + 0.5)
+            if banner and not sent and time.monotonic() >= send_at:
+                os.write(master, b"/usage\r")
+                sent = True
+            if proc.poll() is not None:
+                break
             if _quota_buckets_complete(
                 parse_usage_text(b"".join(chunks)),
                 wait_for_credits=wait_for_credits,
@@ -702,12 +717,13 @@ def capture_usage_raw(
                     )
                 elif time.monotonic() >= grace_deadline:
                     break
-        _terminate_process(proc)
     finally:
+        _terminate_process(proc)
         try:
             os.close(master)
         except OSError:
             pass
+        isolated.cleanup()
     return b"".join(chunks)
 
 
