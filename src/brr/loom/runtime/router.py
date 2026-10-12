@@ -190,11 +190,12 @@ class Router:
         threads = _routable(home, facts)
         facts = _closures(home, facts, threads)
         from .lifecycle import CLOSED, read_thread
+        pending = []
         for thread in threads:
             if read_thread(home, thread).get("status") in CLOSED:
                 continue
             if not self.armed():
-                return facts
+                break
             if any(body.thread == thread for body in bodies.values()):
                 continue
             facts = self._release_abandoned(facts, thread, body_alive)
@@ -222,7 +223,7 @@ class Router:
                     for f in letters]}, f"no-policy:{thread}:{letters[-1].id}")
                 continue
             if not self.armed():
-                return facts
+                break
             from .loom import _next_gen, _record
             strand = f"s-{home.install_id()}-{mint(6)}"
             gen = _next_gen(facts, thread)
@@ -245,6 +246,10 @@ class Router:
             except LedgerConflict:
                 continue
             facts.append(stored)
+            pending.append((strand, thread, gen, choice))
+        # Clone/start is slow under load; doing it inside the grant loop burned
+        # the skew window so later threads never got a lease this generation.
+        for strand, thread, gen, choice in pending:
             facts = _start(home, strand, thread, gen, bodies, facts, choice)
         if not self.armed():
             return facts
