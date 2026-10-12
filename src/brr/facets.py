@@ -515,6 +515,7 @@ def build(
             {
                 "shell": row.get("shell"),
                 "binding_remaining_pct": row.get("binding_remaining_pct"),
+                "binding_bucket": row.get("binding_bucket"),
                 "resets_in": row.get("resets_in"),
                 "read_at": row.get("read_at"),
                 "stale": bool(row.get("stale")),
@@ -756,10 +757,17 @@ def render_line(resources: dict[str, object] | None) -> str | None:
     """
     if not resources:
         return None
-    parts = [
-        f"{spec.label}={facet_value(resources.get(spec.key))}"
-        for spec in FACETS
-    ]
+    from . import other_fuel
+
+    parts = []
+    for spec in FACETS:
+        facet = resources.get(spec.key)
+        value = facet_value(facet)
+        if spec.key == "quota" and isinstance(facet, dict):
+            others = other_fuel.chip(facet.get("others"))
+            if others:
+                value += " · " + others
+        parts.append(f"{spec.label}={value}")
     return "- resources: " + "; ".join(parts) + "."
 
 

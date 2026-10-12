@@ -5,7 +5,8 @@ it runs on. A resident that plans work across Shells (a codex strand while it
 sits on claude) also needs the *other* pool's headroom at its fingertips — two
 codex strands died of the codex session wall while the line read only claude
 (maintainer, 2026-09-21). This module is the pure half: a level snapshot in, a
-row out; the daemon owns the cache-only read (``daemon._other_shells_fuel``).
+row out; the daemon warms caches on heartbeat and reads them at boundaries
+(``daemon._other_shells_fuel``).
 
 A row is ``{shell, binding_remaining_pct, resets_in, read_at, stale, buckets}``.
 Honesty rules, same as the seat's chip:
@@ -23,10 +24,9 @@ from collections.abc import Mapping
 from typing import Any
 
 #: Stale threshold per Shell: twice the cadence the cloud publisher refreshes
-#: that Shell's cached reading on (``gates.cloud_publisher._CLAUDE_/_CODEX_
-#: QUOTA_PUBLISH_MAX_AGE_SECONDS`` = 240s / 120s) — one missed refresh is
-#: tolerated, two is a reading nobody is keeping alive.
-STALE_AFTER_SECONDS: dict[str, float] = {"claude": 480.0, "codex": 240.0}
+#: that Shell's cached reading on (Claude 240s / Codex 120s / Grok 600s).
+#: One missed refresh is tolerated; two is a reading nobody is keeping alive.
+STALE_AFTER_SECONDS: dict[str, float] = {"claude": 480.0, "codex": 240.0, "grok": 1200.0}
 _DEFAULT_STALE_AFTER = 480.0
 
 _CODEX_LETTERS = {300: "S", 10080: "W"}
