@@ -120,7 +120,7 @@ def notice_id(kind: str, subject: str) -> str:
 def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, can: str, *,
            thread: str | None = None, about: Fact | None = None, stands: bool = False,
            taint: bool = False, channel: str | None = None,
-           source_strand: str | None = None) -> bool:
+           source_strand: str | None = None, passive: bool = False) -> bool:
     """The one writer of loom notices: what the loom cannot settle, a body is told.
 
     A notice is an owed letter from ``loom``, so it is shown at every
@@ -139,6 +139,8 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
     lines = [what]
     data: dict = {"id": ident, "from": "loom",
                   "to": channel or f"thread:{thread if home.routable(thread) else 'inbox'}"}
+    if passive:
+        data["notice"] = True
     if about is not None:
         label = join(label, _sender_label(about, facts, home.root / "self", frozenset()))
         lines.append(f"{about.data['id']}: {can}")
@@ -161,6 +163,26 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
         return False
     _log(home, f"notice {ident} to {data['to']}: {what}")
     return True
+
+
+def _closures(home: Home, facts: list[Fact], threads: list[str]) -> list[Fact]:
+    from .lifecycle import CLOSED, closing_commit, read_thread
+    writers = sender_threads(facts)
+    for thread in threads:
+        data = read_thread(home, thread)
+        if data.get("status") not in CLOSED:
+            continue
+        commit, why, writer = closing_commit(home, thread)
+        ident = f"thread.closed:{thread}:{commit}"
+        if not any(f.id == ident for f in facts):
+            facts.append(_record(home, "thread.closed", {
+                "thread": thread, "status": data["status"], "why": why, "commit": commit,
+            }, ident))
+        opener = str(data.get("opened-by", ""))
+        if opener.startswith("thread:") and writers.get(writer) != opener.removeprefix("thread:"):
+            notice(home, facts, "closed", ident, f"thread {thread} {data['status']}: {why}",
+                   "the thread is closed", thread=opener.removeprefix("thread:"), passive=True)
+    return facts
 
 
 def _next_gen(facts: list[Fact], thread: str) -> int:
@@ -189,7 +211,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     wait_src = home.thread_dir(thread) / "wait"
     if wait_src.is_file():
         atomic_write(room / "port" / "wait", wait_src.read_text().strip() + "\n")
-    for name in ("jack-state.json", "molt-pending", "policy"):
+    for name in ("jack-state.json", "policy"):
         (room / "port" / name).unlink(missing_ok=True)
     owed_path = room / "port" / "owed.json"
     atomic_write(owed_path, json.dumps([letter.data for letter in letters]))
@@ -417,10 +439,6 @@ def _ingest(home: Home, facts: list[Fact] | None = None, ttl: float | None = Non
     return facts
 
 
-def _molted(home: Home, body: Body) -> bool:
-    return (home.room(body.strand) / "port" / "molt-pending").is_file()
-
-
 def _readme(room: Path, thread: str) -> str | None:
     try:
         return hashlib.sha256((room / "self/threads" / thread / "README.md").read_bytes()).hexdigest()
@@ -458,9 +476,16 @@ def _waste(home, facts, strand, thread, code, letters, failure=""):
     threads = sender_threads(facts)
     for letter in letters:
         ident, author = str(letter.data["id"]), str(letter.data.get("from", ""))
+        if letter.data.get("notice"):
+            # Told once and nothing was asked: not a failure anyone must hear of.
+            facts.append(_record(home, "note", {"strand": strand, "re": ident,
+                                "why": "notice shown"}, f"wasted:{ident}"))
+            continue
         what = (f"letter {ident} on thread {thread}: body exited {code}; "
                 f"README changed since start: {changed}; {tank or 'fuel unknown'}\n{tail}")
         target = threads.get(author) or (opener.removeprefix("thread:") if opener.startswith("thread:") else None)
+        if target == thread:
+            target = opener.removeprefix("thread:") if opener.startswith("thread:") else None
         if author.startswith("person:"):
             retry = f"retry:{ident}"
             if not any(f.id == retry for f in facts):
@@ -501,12 +526,14 @@ def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
             "strand": strand, "gen": body.gen, "code": code,
         }, f"body.exited:{strand}:{body.gen}:{mint(6)}"))
         _log(home, f"exit {strand} code {code}")
-        if _molted(home, body):
-            facts = _start(home, strand, body.thread, body.gen, bodies, facts)
-            continue
-        shown = fold(facts).shown.get(strand, set())
-        _waste(home, facts, strand, body.thread, code,
-               [letter for letter in actionable(facts, body.thread) if letter.data["id"] in shown])
+        molted = any(f.kind == "molt" and f.data.get("strand") == strand
+                     and f.data.get("gen") == body.gen for f in fold(facts).accepted)
+        # A closed thread's body is expected to leave; its letters climb (router).
+        from .lifecycle import CLOSED, read_thread
+        if not molted and read_thread(home, body.thread).get("status") not in CLOSED:
+            shown = fold(facts).shown.get(strand, set())
+            _waste(home, facts, strand, body.thread, code,
+                   [letter for letter in actionable(facts, body.thread) if letter.data["id"] in shown])
         facts = _release(home, facts, strand, body.thread, body.gen)
     return facts
 
@@ -521,18 +548,23 @@ def _refresh_holders(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> 
     """Own holders: refresh live boundaries, retry pending starts, release corpses."""
     from .router import install_of
     from .usage import fuel
+    from .lifecycle import CLOSED, closing_commit, read_thread
     shells = {f.data["strand"]: f.data.get("shell") for f in facts if f.kind == "body.started"}
     state, threads, pending = fold(facts), sender_threads(facts), pending_bodies(facts)
     for thread, (strand, gen) in state.holder.items():
         if install_of(strand) != home.install_id():
             continue
         if strand in bodies or body_alive(home.room(strand)):
+            settled = (closing_commit(home, thread)[1]
+                       if read_thread(home, thread).get("status") in CLOSED else None)
             text = render_boundary(strand, gen, thread, actionable(facts, thread),
                                    state.shown.get(strand, set()), threads,
-                                   fuel(home, shells[strand]) if shells.get(strand) else "")
+                                   fuel(home, shells[strand]) if shells.get(strand) else "", settled)
             path = home.room(strand) / "port" / "in" / "boundary.md"
             if not path.is_file() or path.read_text() != text:
                 atomic_write(path, text)
+        elif read_thread(home, thread).get("status") in CLOSED:
+            facts = _release(home, facts, strand, thread, gen)
         elif strand in pending and pending[strand].kind in {"body.pending", "body.parked"}:
             if time.time() >= pending[strand].data.get("until", 0):
                 facts = _start(home, strand, thread, gen, bodies, facts)

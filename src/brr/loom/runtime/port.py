@@ -40,6 +40,7 @@ class Boundary:
     gen: int = 0
     ids: list[str] = field(default_factory=list)
     letters: list[LetterView] = field(default_factory=list)
+    settled: str | None = None
 
 
 def parse_boundary(text: str) -> Boundary:
@@ -56,11 +57,16 @@ def parse_boundary(text: str) -> Boundary:
     ids = header.group(3).split()
     letters: list[LetterView] = []
     current: LetterView | None = None
+    settled = None
     for line in text[header.end():].splitlines():
         # Continuation first: a blank line inside a body renders as two
         # spaces, and must not end the letter (#2223 review).
         if line.startswith("  ") and current is not None and not current.compact:
             current.body += "\n" + line[2:]
+            continue
+        if line.startswith("settled:"):
+            settled = line.partition(":")[2].strip()
+            current = None
             continue
         if not line.strip() or line.startswith("status:") or line.startswith("owed:"):
             current = None
@@ -78,7 +84,7 @@ def parse_boundary(text: str) -> Boundary:
     if [letter.id for letter in letters] != ids:
         raise PortError("owed ids do not match the letter list")
     return Boundary(strand=header.group(1), gen=int(header.group(2)),
-                    ids=ids, letters=letters)
+                    ids=ids, letters=letters, settled=settled)
 
 
 def _reply(letter: Fact, sender_threads: dict[str, str]) -> str:
@@ -100,7 +106,8 @@ def _letter_lines(letter: Fact, reply: str, compact: bool) -> list[str]:
 
 
 def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
-                    shown: set[str], sender_threads: dict[str, str], fuel: str = "") -> str:
+                    shown: set[str], sender_threads: dict[str, str], fuel: str = "",
+                    settled: str | None = None) -> str:
     """Letters this strand was already shown are compacted to id plus first line."""
     lines = [
         f"<!-- port {strand} gen {gen} · owed "
@@ -108,6 +115,8 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
         f"status: strand {strand} · gen {gen} · thread {thread}" + (f" · {fuel}" if fuel else ""),
         "owed:",
     ]
+    if settled is not None:
+        lines.insert(2, f"settled: {settled}")
     for letter in letters:
         compact = str(letter.data["id"]) in shown
         lines.extend(_letter_lines(letter, _reply(letter, sender_threads), compact))
@@ -264,13 +273,31 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
 def write_molt(room: Path, why: str) -> str:
     if not why:
         raise PortError("molt: --why is empty")
-    strand = strand_of_room(Path(room))
+    from .ledger import read_facts
+    from .project import sender_threads
+    from .merge import send_to_self
+    from .selfrepo import git, resolve_clone
+
+    room = Path(room)
+    strand = strand_of_room(room)
+    home = home_of_room(room)
+    thread = sender_threads(read_facts(home)).get(strand)
+    if thread is None:
+        raise PortError("molt: room has no thread")
+    clone = resolve_clone(room)
+    path = f"threads/{thread}/README.md"
+    if git(clone, "diff", "HEAD", "--quiet", "--", path, check=False).returncode:
+        git(clone, "add", "--", path)
+        git(clone, "commit", "--only", "-m", f"molt: {why}", "--", path)
+    outcome = send_to_self(clone)
+    if outcome.status != "merged":
+        raise PortError(outcome.stderr or f"molt: landing {outcome.status}: {', '.join(outcome.files)}")
     stem = mint(5)
     fact_id = f"{strand}/{stem}"
     write_port(room, stem, _front({"kind": "molt", "id": fact_id, "why": why}))
-    # The jack allows the next stop from this flag, including after the loom
-    # has already ingested and deleted the port/out file.
-    atomic_write(Path(room) / "port" / "molt-pending", why + "\n")
+    write_send(room, to=f"thread:{thread}", sender=strand, body=why)
+    from .jack import _set_state
+    _set_state(room, molted=True)
     return fact_id
 
 
