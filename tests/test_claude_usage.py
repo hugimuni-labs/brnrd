@@ -1,6 +1,9 @@
 """Claude interactive /usage quota collector."""
 
 import json
+import os
+import sys
+from pathlib import Path
 from datetime import datetime, timezone
 
 from datetime import timedelta
@@ -225,7 +228,77 @@ def test_usage_command_uses_ax_screen_reader_and_safe_mode():
         "--model",
         "haiku",
         "--safe-mode",
+        "--tools",
+        "",
     ]
+
+
+def test_recorded_real_usage_screen_2026_10_12():
+    fixtures = Path(__file__).parent / "fixtures"
+    assert "quota" not in claude_usage.parse_usage_text(
+        (fixtures / "claude_usage_trust_2026_10_12.txt").read_bytes()
+    )
+    levels = claude_usage.parse_usage_text(
+        (fixtures / "claude_usage_screen_2026_10_12.txt").read_bytes()
+    )
+    assert levels["session_used_percentage"] == 10
+    assert levels["week_used_percentage"] == 92
+    assert levels["session_reset"] == "3:40pm (Europe/Paris)"
+    assert levels["week_reset"] == "Oct 12 at 10pm (Europe/Paris)"
+    assert levels["quota"]["buckets"] == {
+        "session": {"remaining_percentage": 90.0},
+        "week": {"remaining_percentage": 8.0},
+    }
+    now = datetime(2026, 10, 12, 10, tzinfo=timezone.utc)
+    assert claude_usage._reset_epoch(levels["session_reset"], now=now) == 1791812400
+    assert claude_usage._reset_epoch(levels["week_reset"], now=now) == 1791835200
+
+
+def test_probe_handles_recorded_trust_before_usage_and_isolates_the_repo(
+    tmp_path, monkeypatch, _no_claude_usage_pty_scrape,
+):
+    fixtures = Path(__file__).parent / "fixtures"
+    binary = tmp_path / "claude"
+    evidence = tmp_path / "probe.json"
+    binary.write_text("#!" + sys.executable + "\n" + r'''
+import json, os, sys, time, tty
+from pathlib import Path
+Path(os.environ['PROBE_EVIDENCE']).write_text(json.dumps({
+    'cwd': os.getcwd(), 'argv': sys.argv[1:],
+    'git_pins': {k: os.environ[k] for k in ('GIT_DIR', 'GIT_WORK_TREE') if k in os.environ},
+}))
+tty.setraw(0)
+# The real trust screen arrived after the old fixed boot delay.
+time.sleep(0.4)
+os.write(1, Path(os.environ['PROBE_TRUST']).read_bytes())
+received = b''
+while b'\r' not in received:
+    received += os.read(0, 1024)
+assert received == b'y\r', received
+os.write(1, b'Claude Code v2.1.291\r\n')
+received = b''
+while b'\r' not in received:
+    received += os.read(0, 1024)
+assert received == b'/usage\r', received
+os.write(1, Path(os.environ['PROBE_SCREEN']).read_bytes())
+''')
+    binary.chmod(0o755)
+    monkeypatch.setattr(claude_usage, "DEFAULT_BOOT_SECONDS", 0.1)
+    env = dict(os.environ, PATH=str(tmp_path) + os.pathsep + os.environ["PATH"],
+               GIT_DIR="dangerous-pin", GIT_WORK_TREE=str(tmp_path),
+               PROBE_EVIDENCE=str(evidence),
+               PROBE_TRUST=str(fixtures / "claude_usage_trust_2026_10_12.txt"),
+               PROBE_SCREEN=str(fixtures / "claude_usage_screen_2026_10_12.txt"))
+    raw = _no_claude_usage_pty_scrape(cwd=tmp_path, timeout_seconds=3, env=env)
+    assert claude_usage.parse_usage_text(raw)["week_used_percentage"] == 92
+    probe = json.loads(evidence.read_text())
+    assert probe["git_pins"] == {}
+    probe_dir = Path(probe["cwd"])
+    # One fixed directory, reused: a fresh one per probe leaves a trust entry
+    # in ~/.claude.json every time.
+    assert probe_dir != tmp_path and probe_dir.name == "brr-claude-usage"
+    assert not any(probe_dir.iterdir())
+    assert probe["argv"] == claude_usage._usage_command()[1:]
 
 
 def test_suite_guard_prevents_real_pty_scrape(monkeypatch):
