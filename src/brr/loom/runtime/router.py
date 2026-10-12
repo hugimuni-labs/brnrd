@@ -237,11 +237,22 @@ class Router:
             from .loom import _next_gen, _record
             strand = f"s-{home.install_id()}-{mint(6)}"
             gen = _next_gen(facts, thread)
+            data = {
+                "thread": thread, "strand": strand, "gen": gen,
+                "install": home.install_id(), "router_gen": self.lease.gen,
+            }
+            molts = {f.id: f for f in fold(facts).accepted if f.kind == "molt"}
+            for letter in reversed(letters):
+                molt = molts.get(letter.data.get("molt"))
+                # Only this thread's own last body may hand its room on: a molt
+                # marker on a letter to another thread would graft a foreign room.
+                if (molt is not None and molt.data.get("strand") == letter.data.get("from")
+                        and molt.data.get("gen") == letter.data.get("gen")
+                        and sender_threads(facts).get(letter.data.get("from")) == thread):
+                    data["parent"] = letter.data["from"]
+                    break
             try:
-                stored = _record(home, "lease", {
-                    "thread": thread, "strand": strand, "gen": gen,
-                    "install": home.install_id(), "router_gen": self.lease.gen,
-                }, f"lease:{thread}:{gen}")
+                stored = _record(home, "lease", data, f"lease:{thread}:{gen}")
             except LedgerConflict:
                 continue
             facts.append(stored)

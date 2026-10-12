@@ -27,7 +27,7 @@ from .port import (
 )
 from .project import actionable, fold, generation, is_notice, sender_threads
 from .selfrepo import (
-    AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, room as clone_room, run_wake,
+    AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, git, room as clone_room, run_wake,
 )
 
 SRC = str(Path(__file__).resolve().parents[3])
@@ -205,7 +205,19 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
              letters: list[Fact], threads: dict[str, str],
              facts: list[Fact], jack: str) -> Path:
     room = home.room(strand).resolve()
+    fresh = not (room / "self" / ".git").exists()
     clone = clone_room(home.root, strand)
+    if fresh:
+        lease = next((f for f in reversed(facts) if f.kind == "lease"
+                      and f.data.get("strand") == strand and f.data.get("gen") == gen), None)
+        parent = lease.data.get("parent") if lease else None
+        if parent:
+            source = home.room(parent) / "self"
+            if (source / ".git").exists():
+                git(clone, "fetch", str(source), f"strand/{parent}")
+                git(clone, "reset", "--hard", "FETCH_HEAD")
+            else:
+                _log(home, f"start {strand}: parent room {parent} gone; starting from main")
     (room / "port" / "in").mkdir(parents=True, exist_ok=True)
     (room / "port" / "out").mkdir(parents=True, exist_ok=True)
     wait_src = home.thread_dir(thread) / "wait"

@@ -223,7 +223,8 @@ def _ref_roots(room: Path) -> list[Path]:
 def write_send(room: Path, *, to: str, sender: str, body: str = "",
                re: str | None = None, note: str | None = None,
                clean: bool = False, kind: str | None = None,
-               refs: tuple[str, ...] | list[str] = ()) -> str:
+               refs: tuple[str, ...] | list[str] = (),
+               molt: str | None = None) -> str:
     home = home_of_room(Path(room))
     if is_channel(to):
         try:
@@ -250,6 +251,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     }
     if re:
         fields["re"] = re
+    if molt:
+        fields["molt"] = molt
     if note is not None:
         fields["note"] = note
     elif clean:
@@ -289,13 +292,14 @@ def write_molt(room: Path, why: str) -> str:
     if git(clone, "diff", "HEAD", "--quiet", "--", path, check=False).returncode:
         git(clone, "add", "--", path)
         git(clone, "commit", "--only", "-m", f"molt: {why}", "--", path)
-    outcome = send_to_self(clone)
-    if outcome.status != "merged":
-        raise PortError(outcome.stderr or f"molt: landing {outcome.status}: {', '.join(outcome.files)}")
+    if not _current_label(clone, strand).taint:
+        outcome = send_to_self(clone)
+        if outcome.status != "merged":
+            raise PortError(outcome.stderr or f"molt: landing {outcome.status}: {', '.join(outcome.files)}")
     stem = mint(5)
     fact_id = f"{strand}/{stem}"
     write_port(room, stem, _front({"kind": "molt", "id": fact_id, "why": why}))
-    write_send(room, to=f"thread:{thread}", sender=strand, body=why)
+    write_send(room, to=f"thread:{thread}", sender=strand, body=why, molt=fact_id)
     from .jack import _set_state
     _set_state(room, molted=True)
     return fact_id
@@ -348,6 +352,8 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             thread_of(data["to"])
         if fm.get("re"):
             data["re"] = fm["re"]
+        if fm.get("molt"):
+            data["molt"] = fm["molt"]
         if fm.get("clean"):
             refs = (fm.get("refs") or "").split()
             sender = _current_label(room, strand)
