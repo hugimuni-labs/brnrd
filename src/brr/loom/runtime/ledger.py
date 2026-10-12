@@ -34,7 +34,7 @@ def _freeze(data: dict) -> dict:
 # strand's loom still records that strand's exit.
 _LOOM_KINDS = {
     "lease", "released", "attention", "router", "router.renewed",
-    "speech", "speech.part", "thread.closed",
+    "speech", "speech.part", "thread.closed", "attempt.ended", "port.drained", "letter.disposed",
 }
 
 
