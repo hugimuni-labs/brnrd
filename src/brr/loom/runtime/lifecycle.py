@@ -14,6 +14,22 @@ from .selfrepo import ReadmeError, git, parse_readme, resolve_clone
 CLOSED = {"settled", "retired"}
 
 
+def parse_plan(text: str) -> list[tuple[bool, str]] | None:
+    """Checklist rows under Plan; None means there is no Plan section."""
+    plan = None
+    inside = False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            inside = line == "## Plan"
+            if inside and plan is None:
+                plan = []
+        elif inside:
+            row = re.match(r"^\s*- \[([ xX])\] (.+)$", line)
+            if row:
+                plan.append((row.group(1).lower() == "x", row.group(2)))
+    return plan
+
+
 def read_thread(home: Home, thread: str, ref: str = "main") -> dict:
     """Read a landed README, never a room's unlanded status."""
     path = home.thread_dir(thread) / "README.md"
@@ -26,16 +42,8 @@ def read_thread(home: Home, thread: str, ref: str = "main") -> dict:
         else:
             text = path.read_text()
         data = parse_readme(text)
-        plan = []
-        inside = False
-        for line in text.splitlines():
-            if line.startswith("## "):
-                inside = line == "## Plan"
-            elif inside:
-                row = re.match(r"^\s*- \[([ xX])\] (.+)$", line)
-                if row:
-                    plan.append(row.group(1).lower() == "x")
-        data["plan"] = f"{sum(plan)}/{len(plan)}" if plan else "—"
+        plan = parse_plan(text)
+        data["plan"] = f"{sum(done for done, _ in plan)}/{len(plan)}" if plan else "—"
         return data
     except (OSError, ReadmeError):
         return {}
