@@ -1,3 +1,4 @@
+from _step import mail
 """Warm follow-ups and paced exits through real loom loops and hook bodies."""
 
 import json
@@ -5,7 +6,7 @@ import os
 
 from brr.loom.runtime import speak
 from brr.loom.runtime.ledger import inject_letter
-from brr.loom.runtime.project import owed
+
 from brr.loom.runtime.selfrepo import git, init_self
 
 from _step import Loom, wait_until, write_thread
@@ -21,11 +22,13 @@ def test_worker_answers_followup_warm_then_exits_and_a_later_letter_starts_it(tm
     replies = []
     monkeypatch.setitem(speak.EFFECTS, "fake", lambda _h, _c, _k, text, _ctx: replies.append(json.loads(text)))
     waiting = root / "waiting"
+    follow = root / "follow"
     bodies(root, f'''import json, os, sys, time
 from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx
 ctx = Ctx(Path(sys.argv[1]))
 letters = ctx.owed()
+follow = Path({str(follow)!r})
 while True:
     for letter in letters:
         ctx.send("channel:fake", json.dumps({{"body": letter.body, "pid": os.getpid()}}), re=letter.id)
@@ -33,6 +36,12 @@ while True:
     while ctx.jack("post").letters:
         time.sleep(0.03)
     Path({str(waiting)!r}).write_text(str(os.getpid()))
+    if not follow.exists():
+        # Keep the flock until the follow-up is already in the ledger. Writing
+        # waiting and then calling stop made jack's wait the whole window; an
+        # idle worker with an opener leaves when that wait expires.
+        while not follow.exists():
+            time.sleep(0.03)
     view = ctx.jack("stop")
     if view.kind != "block":
         break
@@ -43,16 +52,17 @@ while True:
     loom = Loom(root)
     loom.start()
     try:
-        wait_until(lambda: len(replies) == 1 and waiting.exists() and not owed(loom.facts(), "work"), 12, loom.dump)
+        wait_until(lambda: len(replies) == 1 and waiting.exists() and not mail(root, loom.facts(), "work"), 12, loom.dump)
         pid = replies[0]["pid"]
         os.kill(pid, 0)
         inject_letter(root, to="thread:work", body="follow-up")
-        wait_until(lambda: len(replies) == 2 and not owed(loom.facts(), "work"), 10, loom.dump)
+        follow.touch()
+        wait_until(lambda: len(replies) == 2 and not mail(root, loom.facts(), "work"), 10, loom.dump)
         assert replies == [{"body": "first", "pid": pid}, {"body": "follow-up", "pid": pid}]
         wait_until(lambda: any(f.kind == "body.exited" for f in loom.facts()), 8, loom.dump)
         assert not any(f.id.startswith("loom/bounce-") for f in loom.facts())
         inject_letter(root, to="thread:work", body="later")
-        wait_until(lambda: len(replies) == 3 and not owed(loom.facts(), "work"), 12, loom.dump)
+        wait_until(lambda: len(replies) == 3 and not mail(root, loom.facts(), "work"), 12, loom.dump)
         assert replies[2]["body"] == "later" and replies[2]["pid"] != pid
         starts = [f for f in loom.facts() if f.kind == "body.started"]
         assert [f.data["pid"] for f in starts] == [pid, replies[2]["pid"]]
@@ -126,7 +136,8 @@ print(json.dumps({'windows': [{'name': 'session', 'left_pct': left,
         wait_until(lambda: any(f.kind == "body.parked" for f in loom.facts()), 10, loom.dump)
         facts = loom.facts()
         assert any(f.kind == "body.exited" and f.data["code"] == 0 for f in facts)
-        assert [l.data["id"] for l in owed(facts, "work")] == [letter]
+        assert [f.data["cause"] for f in facts if f.kind == "attempt.ended"] == ["paced"]
+        assert [l.data["id"] for l in mail(root, facts, "work")] == [letter]
         assert not any(f.id.startswith("loom/bounce-") or f.id.startswith("attention:wasted:") for f in facts)
         assert len([f for f in facts if f.kind == "body.started"]) == 1
     finally:

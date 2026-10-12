@@ -1,8 +1,9 @@
+from _step import mail
 """A live home runs threads on different bodies, including a home-supplied one."""
 
 from brr.loom.runtime import speak
 from brr.loom.runtime.ledger import inject_letter
-from brr.loom.runtime.project import owed
+
 from brr.loom.runtime.selfrepo import git, init_self
 
 from _step import Loom, wait_until, write_thread
@@ -39,8 +40,8 @@ ctx.jack("stop")
     loom = Loom(root)
     loom.start()
     try:
-        wait_until(lambda: len(sent) == 2 and not owed(loom.facts(), "bundled")
-                   and not owed(loom.facts(), "local"), 12, loom.dump)
+        wait_until(lambda: len(sent) == 2 and not mail(root, loom.facts(), "bundled")
+                   and not mail(root, loom.facts(), "local"), 12, loom.dump)
         assert "local small: hello local" in sent
         assert any("# Bundled body" in text and "hello bundled" in text for text in sent)
     finally:
@@ -84,14 +85,14 @@ print(json.dumps({'windows': [{'name': 'week', 'left_pct': left,
     try:
         wait_until(lambda: any(f.kind == "body.parked" for f in loom.facts()), 10, loom.dump)
         facts = loom.facts()
-        assert not any(f.kind in {"body.started", "body.died"} for f in facts)
-        assert holder(facts, "gauge") and owed(facts, "gauge")
+        assert not any(f.kind in {"body.started", "attempt.ended"} for f in facts)
+        assert holder(facts, "gauge") and mail(root, facts, "gauge")
         _attention(["--home", str(root)])
         assert "parked · gauge · gauge week 7% · until " in capsys.readouterr().out
         (folder / "refilled").touch()
-        wait_until(lambda: not owed(loom.facts(), "gauge"), 10, loom.dump)
+        wait_until(lambda: not mail(root, loom.facts(), "gauge"), 10, loom.dump)
         assert len([f for f in loom.facts() if f.kind == "body.started"]) == 1
-        assert not any(f.kind == "body.died" for f in loom.facts())
+        assert not any(f.kind == "attempt.ended" and f.data["cause"] == "failed" for f in loom.facts())
         _attention(["--home", str(root)])
         assert "parked" not in capsys.readouterr().out
     finally:
@@ -133,7 +134,7 @@ for letter in ctx.owed():
     loom = Loom(root)
     loom.start()
     try:
-        wait_until(lambda: not owed(loom.facts(), "work"), 20, loom.dump)
+        wait_until(lambda: not mail(root, loom.facts(), "work"), 20, loom.dump)
         starts = [f for f in loom.facts() if f.kind == "body.started"]
         assert [f.data["shell"] for f in starts] == ["fake", "other"]
         assert starts[0].data["strand"] != starts[1].data["strand"]

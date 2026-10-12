@@ -1,13 +1,17 @@
+from _step import mail
 """A wasted start reaches the author; only a person's letter gets a second start."""
 
 import json
 import sys
+import threading
 import time
+
+import pytest
 
 from brr.loom.runtime import speak
 from brr.loom.runtime.channels.relay import pull_once
 from brr.loom.runtime.ledger import inject_letter
-from brr.loom.runtime.project import owed
+
 from brr.loom.runtime.selfrepo import init_self
 
 from _step import Loom, wait_until, write_thread
@@ -76,7 +80,7 @@ raise SystemExit("no reply")
     try:
         wait_until(received.exists, 15, loom.dump)
         assert json.loads(received.read_text()) == {"answer": "answered the resend", "bounce_seen": True}
-        wait_until(lambda: not owed(loom.facts(), "worker"), 3, loom.dump)
+        wait_until(lambda: not mail(root, loom.facts(), "worker"), 3, loom.dump)
         time.sleep(0.3)
         assert starts.read_text().splitlines() == ["start", "start"]
     finally:
@@ -84,7 +88,8 @@ raise SystemExit("no reply")
     assert not loom.errors
 
 
-def test_persons_letter_gets_two_starts_one_message_and_no_third(tmp_path, monkeypatch):
+@pytest.mark.parametrize('delivery', ['sent', 'refused', 'no-channel'])
+def test_persons_two_failed_starts_deliver_failure_or_leave_operator_debt(tmp_path, monkeypatch, capsys, delivery):
     root = tmp_path / "home"
     init_self(root, person="ada")
     person = root / "self/people/ada/channels.md"
@@ -106,20 +111,70 @@ sys.exit(2)
             return {"cursor": 1, "events": [{"event_id": "crash", "body": "please help\nextra", "attachments": [],
                     "reply_to": {"platform": "telegram", "user_id": 42, "chat_id": 42}}]}
     pull_once(Loom(root).home, Client(), 0)
-    sent = []
-    monkeypatch.setitem(speak.EFFECTS, "relay", lambda h, c, k, text, context: sent.append((c, text, context)))
+    sent, attempted = [], []
+    sending, release = threading.Event(), threading.Event()
+    def effect(home, channel, key, text, context):
+        attempted.append(key)
+        sending.set()
+        assert release.wait(10)
+        if delivery == 'refused':
+            raise ValueError('channel refused the failure message')
+        sent.append((channel, text, context))
+        return {}
+    monkeypatch.setitem(speak.EFFECTS, "relay", effect)
+    if delivery == 'no-channel':
+        person.unlink()
+    from brr.loom.runtime.check import run as check
+    assert check(['--home', str(root)]) == 0
+    assert 'loom · waiting for start · letter:relay:crash' in capsys.readouterr().out
+    assert check(['--home', str(root), '--quiet-end']) == 1
+    assert 'quiet end still owed by loom' in capsys.readouterr().out
     loom = Loom(root)
     loom.start()
     try:
-        wait_until(lambda: sent, 10, loom.dump)
-        wait_until(lambda: not owed(loom.facts(), "inbox"), 3, loom.dump)
+        from brr.loom.runtime.owners import letter_owners
+        from brr.loom.runtime.lifecycle import main_snapshot
+        from brr.loom.runtime.verbs_loom import _attention
+        from brr.loom.runtime.threads import thread_table
+        ident = "letter:relay:crash"
+        def table():
+            return letter_owners(loom.facts(), main_snapshot(loom.home))
+        if delivery != 'no-channel':
+            wait_until(sending.is_set, 10, loom.dump)
+            # The failed ask and its channel successor have no append gap.
+            assert table()[ident].done
+            assert any(f.owner == 'channel' and 'person failure tail' in f.letter.data['body']
+                       for f in table().values())
+            assert check(['--home', str(root)]) == 0
+            assert 'channel · accepted send awaiting receipt · loom/failed-message-' in capsys.readouterr().out
+            assert check(['--home', str(root), '--quiet-end']) == 1
+            assert 'quiet end still owed by channel' in capsys.readouterr().out
+            release.set()
+        if delivery == 'sent':
+            wait_until(lambda: all(f.done for f in table().values()), 10, loom.dump)
+            assert len(sent) == 1
+            channel, text, context = sent[0]
+            assert channel == 'channel:telegram/42'
+            assert 'could not handle your letter: please help' in text
+            assert 'person failure tail' in text
+            assert context['event_id'] == 'crash'
+        else:
+            wait_until(lambda: any(f.owner == 'operator' for f in table().values()), 10, loom.dump)
+            debt = next(k for k, f in table().items() if f.owner == 'operator')
+            assert not sent
+            assert any(row['thread'] == 'operator' and debt in row['now']
+                       for row in thread_table(loom.home, loom.facts()))
+            _attention(['--home', str(root)])
+            assert debt in capsys.readouterr().out
+            assert check(['--home', str(root), '--quiet-end']) == 0
+            capsys.readouterr()
+            _attention(['--home', str(root), '--note', debt, '--why', 'handled by operator'])
+            assert all(f.done for f in table().values())
+        assert check(['--home', str(root), '--quiet-end']) == 0
         time.sleep(0.5)
-        assert starts.read_text().splitlines() == ["start", "start"]
-        assert len(sent) == 1
-        channel, text, context = sent[0]
-        assert channel == "channel:telegram/42"
-        assert "thread inbox" in text and "please help" in text and "person failure tail" in text
-        assert context["event_id"] == "crash"
+        assert starts.read_text().splitlines() == ['start', 'start']
+        assert len(attempted) == (0 if delivery == 'no-channel' else 1)
     finally:
+        release.set()
         loom.halt()
     assert not loom.errors

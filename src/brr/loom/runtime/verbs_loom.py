@@ -30,6 +30,9 @@ def _loom(argv: list[str]) -> int:
     parser.add_argument("--adapter", default="fake")
     parser.add_argument("--core", default="haiku")
     parser.add_argument("--tick", type=float, default=0.2)
+    if argv[:1] == ["check"]:
+        from .check import run
+        return run(argv[1:])
     args = parser.parse_args(argv)
     run_loom(
         args.home, adapter=args.adapter, core=args.core, tick=args.tick,
@@ -42,7 +45,22 @@ def _attention(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime attention")
     parser.add_argument("--home", required=True)
     parser.add_argument("--install", default=None)
+    parser.add_argument("--note", metavar="LETTER_ID")
+    parser.add_argument("--why")
     args = parser.parse_args(argv)
+    home = Home(args.home, install=args.install)
+    if args.note:
+        if not args.why or not args.why.strip():
+            parser.error("--note requires --why")
+        from brr.daemon2.facts import Fact
+        from .ledger import append
+        from .home import mint
+        from .owners import letter_owners
+        from .lifecycle import main_snapshot
+        if args.note not in letter_owners(read_facts(home), main_snapshot(home)):
+            parser.error("--note names no accepted letter")
+        append(home, Fact(kind="note", by="person:operator", id="operator-note:" + mint(12),
+                          data={"re": args.note, "why": args.why}))
     # No state of its own: the loom's notices that no body has settled yet.
     state = fold(read_facts(Home(args.home, install=args.install)))
     from datetime import datetime, timezone
@@ -53,10 +71,11 @@ def _attention(argv: list[str]) -> int:
             until = datetime.fromtimestamp(d["until"], timezone.utc).isoformat()
             left = d.get("left_pct", 0)
             sys.stdout.write(f"parked · {thread} · {d['shell']} {d['window']} {left:g}% · until {until}\n")
-    for fact in state.accepted:
-        if is_notice(fact) and fact.data["id"] not in state.handled:
-            first = str(fact.data["body"]).split("\n", 1)[0]
-            sys.stdout.write(f"{fact.data['id']} · {fact.data['to']} · {first}\n")
+    from .owners import letter_owners
+    from .lifecycle import main_snapshot
+    for ident, fate in letter_owners(read_facts(home), main_snapshot(home)).items():
+        if fate.owner == 'operator' or (is_notice(fate.letter) and not fate.done):
+            sys.stdout.write(f"{ident} · {fate.owner}:{fate.thread or '-'} · {fate.reason}\n")
     return 0
 
 

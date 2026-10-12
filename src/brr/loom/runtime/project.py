@@ -17,6 +17,7 @@ class Fold:
     holder: dict[str, tuple[str, int]] = field(default_factory=dict)
     handled: set[str] = field(default_factory=set)
     shown: dict[str, set[str]] = field(default_factory=dict)
+    channel_replies: dict[str, str] = field(default_factory=dict)
 
 
 def _destination(data: dict) -> str | None:
@@ -55,6 +56,8 @@ def fold(facts: Iterable[Fact]) -> Fold:
     live: dict[str, int] = {}
     dest: dict[str, str] = {}
     newest: int | None = None
+    pending_replies: dict[str, str] = {}
+    disposed: set[str] = set()
 
     def consider(writer: str, gen: int, re: object) -> None:
         if not isinstance(re, str) or not re:
@@ -65,6 +68,25 @@ def fold(facts: Iterable[Fact]) -> Fold:
 
     for fact in union(list(facts)):
         data = fact.data
+        if fact.kind in {"attempt.ended", "port.drained", "letter.disposed", "speech", "speech.part"} and fact.by.startswith("loom:"):
+            state.accepted.append(fact)
+            if fact.kind == "speech" and data.get("state") == "sent":
+                key = str(data.get("key"))
+                state.handled.add(key)
+                if key in pending_replies:
+                    state.handled.add(pending_replies[key])
+            for disposition in data.get("dispositions", ()):
+                if disposition.get("outcome") == "done":
+                    disposed.add(str(disposition["id"]))
+                successor = disposition.get("successor")
+                if successor:
+                    letter = Fact(kind="letter", by=fact.by, id=successor["id"],
+                                  data=successor, at=fact.at, hlc=fact.hlc, after=(fact.id,))
+                    state.accepted.append(letter)
+                    target = _destination(successor)
+                    if target is not None:
+                        dest[letter.id] = target
+            continue
         if fact.kind == "router":
             try:
                 gen = int(data["gen"])
@@ -128,7 +150,13 @@ def fold(facts: Iterable[Fact]) -> Fold:
             thread = _destination(data)
             if thread is not None and data.get("id"):
                 dest[str(data["id"])] = thread
-            consider(strand, gen, data.get("re"))
+            re = data.get("re")
+            if str(data.get("to", "")).startswith("channel:"):
+                if isinstance(re, str) and state.holder.get(dest.get(re)) == (strand, gen):
+                    pending_replies[fact.id] = re
+                    state.channel_replies[re] = fact.id
+            else:
+                consider(strand, gen, re)
         elif fact.kind == "note":
             consider(strand, gen, data.get("re"))
         elif fact.kind == "shown":
@@ -139,6 +167,9 @@ def fold(facts: Iterable[Fact]) -> Fold:
         pair = {fact.data.get("id"), fact.data.get("stands")}
         if is_notice(fact) and None not in pair and pair & state.handled:
             state.handled |= pair
+    # Replacing a debt does not answer its successor. Only explicit handling
+    # above propagates through a standing notice.
+    state.handled |= disposed
     return state
 
 
@@ -152,49 +183,6 @@ def holder(facts: Iterable[Fact], thread: str) -> tuple[str, int] | None:
     return fold(facts).holder.get(thread)
 
 
-def owed(facts: Iterable[Fact], thread: str) -> list[Fact]:
-    state = fold(facts)
-    letters = []
-    for fact in state.accepted:
-        if fact.kind != "letter" or fact.data.get("id") in state.handled:
-            continue
-        if _destination(fact.data) == thread:
-            letters.append(fact)
-    return letters
-
-
-def unrunnable_ids(facts: Iterable[Fact]) -> set[str]:
-    """Letters shown to two bodies that then died.
-
-    Not a security check: nothing here reads the letter's content. It stops
-    a letter that, for reasons unknown, kills the body reading it in this
-    environment (a harness crash, a provider refusal that ends the process)
-    from respawning bodies and draining quota forever. A death counts only
-    if that body had been ``shown`` the letter.
-    """
-    counts: dict[str, int] = {}
-    open_ids: dict[str, set[str]] = {}
-    for fact in fold(facts).accepted:
-        strand = fact.data.get("strand")
-        if not isinstance(strand, str):
-            continue
-        if fact.kind == "body.started":
-            open_ids[strand] = set()
-        elif fact.kind == "shown" and strand in open_ids:
-            open_ids[strand].update(str(item) for item in fact.data.get("ids") or ())
-        elif fact.kind == "body.died" and strand in open_ids:
-            for letter_id in open_ids.pop(strand):
-                counts[letter_id] = counts.get(letter_id, 0) + 1
-    return {letter_id for letter_id, count in counts.items() if count >= 2}
-
-
-def actionable(facts: Iterable[Fact], thread: str) -> list[Fact]:
-    """Owed letters a body should see. An unrunnable letter stays owed and is not listed."""
-    facts = list(facts)
-    bad = unrunnable_ids(facts)
-    return [fact for fact in owed(facts, thread) if str(fact.data.get("id")) not in bad]
-
-
 def generation(facts: Iterable[Fact], strand: str) -> int | None:
     for holder_strand, gen in fold(facts).holder.values():
         if holder_strand == strand:
@@ -205,7 +193,7 @@ def generation(facts: Iterable[Fact], strand: str) -> int | None:
 def sender_threads(facts: Iterable[Fact]) -> dict[str, str]:
     """Latest lease wins, including a strand that has since been released."""
     found: dict[str, str] = {}
-    for fact in union(list(facts)):
+    for fact in fold(facts).accepted:
         if fact.kind == "lease":
             found[str(fact.data["strand"])] = str(fact.data["thread"])
     return found

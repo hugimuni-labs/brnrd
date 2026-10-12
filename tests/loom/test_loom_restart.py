@@ -1,3 +1,4 @@
+from _step import mail
 """A loom upgrade preserves work; a body's local plan changes reach its boundary."""
 
 import json
@@ -9,7 +10,7 @@ import pytest
 
 from brr.loom.runtime.ledger import inject_letter
 from brr.loom.runtime.loom import body_alive
-from brr.loom.runtime.project import fold, holder, owed
+from brr.loom.runtime.project import fold, holder
 from brr.loom.runtime.selfrepo import git
 
 from _step import Loom, wait_until, write_thread
@@ -44,7 +45,7 @@ for letter in letters:
         wait_until(lambda: ready.exists() and any(letter in ids for ids in fold(_facts(root)).shown.values()),
                    10, lambda: _dump(root, procs))
         pid = int(ready.read_text())
-        assert letter in [f.id for f in owed(_facts(root), 'work')]
+        assert letter in [f.id for f in mail(root, _facts(root), 'work')]
         held = holder(_facts(root), 'work')[0]
         os.kill(first.proc.pid, stop_signal)
         first.proc.wait(timeout=5)
@@ -62,7 +63,7 @@ for letter in letters:
         assert not any(f.kind == 'body.exited' for f in _facts(root))
         resume.touch()
         sent = root / 'loom/channel-fake.jsonl'
-        wait_until(lambda: sent.exists() and not owed(_facts(root), 'work')
+        wait_until(lambda: sent.exists() and not mail(root, _facts(root), 'work')
                    and holder(_facts(root), 'work') is None, 10, lambda: _dump(root, procs))
         messages = [json.loads(row) for row in sent.read_text().splitlines()]
         assert [json.loads(m['text']) for m in messages] == [{'answer': 'finish this once', 'pid': pid}]

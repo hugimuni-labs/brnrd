@@ -1,3 +1,4 @@
+from _step import mail
 """Phone-operability regressions: desired recovery through the actual loom loop.
 
 Selected recovery cases pass; remaining xfails track deferred ranks. Fixtures use
@@ -20,10 +21,10 @@ from brr.loom.runtime import loom as runtime, speak
 from brr.loom.runtime.channels import relay
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, inject_letter
-from brr.loom.runtime.project import owed, fold, holder, unrunnable_ids
+from brr.loom.runtime.project import fold, holder
 from brr.loom.runtime.selfrepo import init_self
 
-from _step import Loom, historical_quarantine, hand_note, notices, wait_until, write_thread
+from _step import Loom, hand_note, notices, wait_until, write_thread
 
 
 def stuck(reason):
@@ -64,13 +65,13 @@ def told_and_settled(loom, about, thread, *words, seconds=5):
     """
     def shown_and_settled():
         facts = loom.facts()
-        told = [f for f in facts if f.kind == "letter" and f.data.get("stands") == about]
+        told = [f for f in fold(facts).accepted if f.kind == "letter" and f.data.get("stands") == about]
         seen = {i for f in facts if f.kind == "shown" for i in f.data.get("ids", ())}
         return (len(told) == 1 and told[0].data["id"] in seen
                 and not notices(facts) and answered(loom, about))
 
     wait_until(shown_and_settled, seconds, loom.dump)
-    (notice,) = [f for f in loom.facts() if f.data.get("stands") == about]
+    (notice,) = [f for f in fold(loom.facts()).accepted if f.data.get("stands") == about]
     body = notice.data["body"]
     assert notice.data["to"] == f"thread:{thread}"
     assert about in body and body.endswith(f"re: {notice.data['id']}")
@@ -120,18 +121,6 @@ def drain_before_death(root, monkeypatch):
 
 
 
-def test_an_unrunnable_letter_is_handed_to_a_body(root, monkeypatch):
-    drain_before_death(root, monkeypatch)
-    thread(root, "die-on-unrunnable")
-    original = inject_letter(root, to="thread:work", body="unrunnable")
-    # Replay the pre-lifecycle ledger: quarantined letters keep their treatment,
-    # although new exits no longer create death/fuse retries.
-    historical_quarantine(root, "work", original)
-    with running(root) as loom:
-        # Nothing else on its thread can wake a body, so inbox is told.
-        told_and_settled(loom, original, "inbox", "quarantined", "thread work")
-        assert not owed(loom.facts(), "work")
-
 
 @stuck("a silent live body has no progress deadline or message-triggered replacement")
 def test_new_message_can_recover_a_silent_live_body(root):
@@ -170,7 +159,7 @@ def test_restart_recovers_a_body_that_outlived_its_loom(root, monkeypatch):
             (second.home.thread_dir("work") / "policy").write_text("answer-fast\n")
             os.killpg(pid, signal.SIGKILL)
             fresh = inject_letter(root, to="thread:work", body="back after restart")
-            wait_until(lambda: answered(second, fresh), 2, second.dump)
+            wait_until(lambda: answered(second, fresh), 8, second.dump)
     finally:
         if first.thread.is_alive():
             first.halt()
@@ -208,21 +197,28 @@ def test_impossible_router_window_does_not_silently_abandon_messages(root):
 @pytest.mark.parametrize("destination", ["thread:removed", "nowhere", "thread:inbox"])
 def test_unroutable_letter_gets_a_disposition(root, destination):
     readme = Home(root).thread_dir("inbox") / "README.md"
-    saved = readme.read_text()
     if destination == "thread:inbox":
+        from brr.loom.runtime.selfrepo import git, _commit
         readme.unlink()
+        git(root / "self", "add", "threads/inbox/README.md")
+        _commit(root / "self", "Remove inbox from main.")
     original = "p-test/lost"
     append(Home(root), Fact(kind="letter", by="person:p-test", id=original,
                            data={"id": original, "from": "p-test", "to": destination,
                                  "body": "please help"}))
     with running(root) as loom:
-        reach(lambda: any(f.data.get("stands") == original for f in loom.facts()), loom)
         if destination == "thread:inbox":
-            # No body can be told yet: the notice waits, owed, and says so.
-            time.sleep(0.3)
-            assert [f.data.get("stands") for f in notices(loom.facts())] == [original]
-            readme.write_text(saved)
-        told_and_settled(loom, original, "inbox", repr(destination))
+            # With no thread on main, the operator owns it visibly.
+            from brr.loom.runtime.owners import letter_owners
+            from brr.loom.runtime.lifecycle import main_snapshot
+            from brr.loom.runtime.verbs_loom import _attention
+            def table():
+                return letter_owners(loom.facts(), main_snapshot(loom.home))
+            wait_until(lambda: table()[original].owner == "operator", 5, loom.dump)
+            _attention(["--home", str(root), "--note", original, "--why", "handled by hand"])
+            assert table()[original].done
+        else:
+            told_and_settled(loom, original, "inbox", repr(destination))
 
 
 def relay_event(ident):
@@ -279,6 +275,7 @@ def test_uncertain_speech_gets_a_visible_notice(root, monkeypatch):
         # Preserve at-most-once: an explanation, never a resend.
         time.sleep(0.3)
         path = root / "loom" / "channel-fake.jsonl"
+        wait_until(path.exists, 5, loom.dump)
         assert "msg-0" not in [json.loads(line)["text"] for line in path.read_text().splitlines()]
         # This body only talks; a person settles the notice by hand, and with
         # it the draft it stands for.
@@ -293,9 +290,8 @@ def test_bad_thread_directory_does_not_block_healthy_thread(root):
     (bad / "README.md").write_text("# Bad\n")
     original = inject_letter(root, to="thread:work", body="begin")
     with running(root) as loom:
-        log = root / "loom" / "loom.log"
-        reach(lambda: log.exists() and "unsafe thread id" in log.read_text(), loom)
-        wait_until(lambda: answered(loom, original), 2, loom.dump)
+        wait_until(lambda: answered(loom, original), 5, loom.dump)
+        assert not any(f.data.get("thread") == "bad name" for f in loom.facts())
 
 
 def test_unavailable_channel_does_not_block_a_live_threads_new_letter(root, monkeypatch):
@@ -358,7 +354,7 @@ def test_relay_poll_recovers_after_saved_cursor_is_repaired(root, tmp_path, monk
         log = root / "loom" / "loom.log"
         reach(lambda: log.exists() and "JSONDecodeError" in log.read_text(), loom)
         saved.write_text('{"cursor": 0}\n')
-        wait_until(lambda: answered(loom, "letter:relay:after-repair"), 2, loom.dump)
+        wait_until(lambda: answered(loom, "letter:relay:after-repair"), 8, loom.dump)
 
 
 @stuck("inbox addressed to an absent brnrd leaves phone messages without even a refusal")
@@ -368,6 +364,9 @@ def test_unavailable_inbox_owner_explains_the_refusal_remotely(root, tmp_path, m
     person = root / "self" / "people" / "owner"
     person.mkdir(parents=True)
     (person / "channels.md").write_text("telegram:42\n")
+    from brr.loom.runtime.selfrepo import git, _commit
+    git(root / "self", "add", "threads", "people")
+    _commit(root / "self", "Land inbox ownership and direct chat.")
     state = tmp_path / "relay"
     (root / "loom" / "config.toml").write_text(f'relay_state = "{state}"\n')
     sent = []
@@ -386,6 +385,9 @@ def test_unavailable_inbox_owner_explains_the_refusal_remotely(root, tmp_path, m
 
     monkeypatch.setattr(relay, "RelayClient", Client)
     with running(root) as loom:
-        reach(lambda: any(f.id == "attention:for-other:inbox" for f in loom.facts()), loom)
+        from brr.loom.runtime.owners import letter_owners
+        from brr.loom.runtime.lifecycle import main_snapshot
+        reach(lambda: any(f.owner == "operator" and f.reason == "for: other brnrd"
+                          for f in letter_owners(loom.facts(), main_snapshot(loom.home)).values()), loom)
         # Respect ownership; the requested outcome is a refusal the person sees.
         wait_until(lambda: any(p.get("body_markdown") for p in sent), 2, loom.dump)

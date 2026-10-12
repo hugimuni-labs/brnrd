@@ -1,3 +1,4 @@
+from _step import mail
 """Two strands: mid-work letters are answered or returned to their author."""
 
 import json
@@ -6,7 +7,7 @@ import signal
 
 from brr.loom.runtime.ledger import read_facts
 from brr.loom.runtime.loom import _ingest
-from brr.loom.runtime.project import holder, owed
+from brr.loom.runtime.project import holder, fold, sender_threads
 
 from _step import Loom, wait_until, write_thread
 
@@ -97,9 +98,12 @@ def test_a_letter_mid_work_is_answered_and_a_killed_bodys_letter_bounces(tmp_pat
             pings = _body(facts, "ping-2")
             if not caught["killed"] or not pings:
                 return False
-            bounce = [f for f in facts if f.kind == "letter" and f.data.get("from") == "loom"
+            bounce = [f for f in fold(facts).accepted if f.kind == "letter" and f.data.get("from") == "loom"
                       and pings[0].data["id"] in f.data.get("body", "")]
-            return bool(bounce and _shown(facts, bounce[0].data["id"], pings[0].data["from"]))
+            writers = sender_threads(facts)
+            return bool(bounce and any(f.kind == "shown"
+                        and bounce[0].id in f.data.get("ids", ())
+                        and writers.get(f.data.get("strand")) == "tb" for f in facts))
 
         wait_until(drive, 25, loom.dump)
         facts = loom.facts()
@@ -108,7 +112,7 @@ def test_a_letter_mid_work_is_answered_and_a_killed_bodys_letter_bounces(tmp_pat
         assert len(_replies(facts, ping1.data["id"], "1-gnip")) == 1
         ping2 = _body(facts, "ping-2")[0]
         assert not _replies(facts, ping2.data["id"], "2-gnip")
-        assert not owed(facts, "ta")
+        assert not mail(root, facts, "ta")
         starts = [f for f in facts if f.kind == "body.started"
                   and f.data.get("strand") == caught["strand"]]
         assert len(starts) == 1
@@ -121,11 +125,61 @@ def test_a_letter_mid_work_is_answered_and_a_killed_bodys_letter_bounces(tmp_pat
     assert not loom.errors
     assert loom.out_files() == []
     home_facts = read_facts(loom.home)
-    owed_before = [fact.id for fact in owed(home_facts, "ta")]
+    owed_before = [fact.id for fact in mail(root, home_facts, "ta")]
     held_before = holder(home_facts, "ta")
     _ingest(loom.home)
     again = read_facts(loom.home)
     assert [fact.id for fact in again] == [fact.id for fact in home_facts]
-    assert [fact.id for fact in owed(again, "ta")] == owed_before
+    assert [fact.id for fact in mail(root, again, "ta")] == owed_before
     assert holder(again, "ta") == held_before
+    assert loom.out_files() == []
+
+
+def test_late_port_file_is_taken_before_port_drained(tmp_path, monkeypatch):
+    """A killed body's last out file is ingested before port.drained is recorded."""
+    from brr.loom.runtime import loom as runtime
+    from brr.loom.runtime.ledger import inject_letter
+    root = tmp_path / "home"
+    write_thread(root, "t", "thread t", "quit-now", wait="0")
+    inject_letter(root, to="thread:t", body="begin")
+    at_drain = {}
+    orig_end = runtime._end_attempt
+    orig_drained = runtime._drained
+
+    def end_then_plant(home, facts, strand, thread, gen, *args, **kwargs):
+        result = orig_end(home, facts, strand, thread, gen, *args, **kwargs)
+        out = home.room(strand) / "port" / "out"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "late.md").write_text(
+            "---\n"
+            "kind: shown\n"
+            f"id: {strand}/late\n"
+            f"strand: {strand}\n"
+            f"gen: {gen}\n"
+            "ids:\n"
+            "---\n"
+        )
+        at_drain["strand"] = strand
+        return result
+
+    def drained_must_be_empty(home, facts, strand, thread, gen):
+        out = home.room(strand) / "port" / "out"
+        at_drain["files"] = (
+            [path.name for path in out.iterdir() if not path.name.startswith(".")]
+            if out.is_dir() else []
+        )
+        return orig_drained(home, facts, strand, thread, gen)
+
+    monkeypatch.setattr(runtime, "_end_attempt", end_then_plant)
+    monkeypatch.setattr(runtime, "_drained", drained_must_be_empty)
+    loom = Loom(root, tick=0.05)
+    loom.start()
+    try:
+        wait_until(lambda: any(f.kind == "port.drained" for f in loom.facts()), 10, loom.dump)
+        assert at_drain.get("files") == [], at_drain
+        ident = f"{at_drain['strand']}/late"
+        assert any(f.id == ident for f in loom.facts())
+    finally:
+        loom.halt()
+    assert not loom.errors
     assert loom.out_files() == []

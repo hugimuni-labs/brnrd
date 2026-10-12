@@ -1,10 +1,11 @@
+from _step import mail
 """A molted successor inherits the committed next step and the unanswered ask."""
 
 import json
 
 from brr.loom.runtime.ledger import inject_letter
 from brr.loom.runtime.selfrepo import init_self
-from brr.loom.runtime.project import is_notice, owed
+from brr.loom.runtime.project import is_notice
 
 from _step import Loom, wait_until, write_thread
 from test_lifecycle import bodies
@@ -44,7 +45,8 @@ assert not (ctx.room / "port/molt-pending").exists()
         assert second in result["wake"] and "second ask" in result["bodies"]
         assert "first ask" not in result["bodies"]
         assert "Next step: inherited" in (root / "self/threads/work/README.md").read_text()
-        wait_until(lambda: not owed(loom.facts(), "work"), 5, loom.dump)
+        wait_until(lambda: not mail(root, loom.facts(), "work"), 5, loom.dump)
+        assert any(f.kind == "attempt.ended" and f.data["cause"] == "molted" for f in loom.facts())
         assert not any(is_notice(f) and "body exited" in f.data["body"] for f in loom.facts())
         assert not list((root / "rooms").glob("*/port/molt-pending"))
     finally:
@@ -120,7 +122,7 @@ else:
         assert label([f for f in facts if not (f.kind == "shown" and f.data.get("strand") == successor)]).taint
         assert label([replace(f, data={k: v for k, v in f.data.items() if k != "parent"})
                       if f.kind == "lease" else f for f in facts]).taint
-        wait_until(lambda: not owed(loom.facts(), "work"), 5, loom.dump)
+        wait_until(lambda: not mail(root, loom.facts(), "work"), 5, loom.dump)
     finally:
         loom.halt()
     assert not loom.errors

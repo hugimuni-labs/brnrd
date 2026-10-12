@@ -1,0 +1,168 @@
+{
+  "drive": "failed-start",
+  "body": "codex/gpt-6-luna",
+  "original": "p-test/bxkab",
+  "facts": [
+    {
+      "v": 1,
+      "id": "p-test/bxkab",
+      "kind": "letter",
+      "by": "person:p-test",
+      "at": "2026-10-12T14:31:25.750797+00:00",
+      "data": {
+        "body": "Record a deliberately failed start.",
+        "from": "p-test",
+        "id": "p-test/bxkab",
+        "to": "thread:inbox"
+      },
+      "hlc": [
+        1791815485751,
+        0,
+        "be77"
+      ],
+      "after": []
+    },
+    {
+      "v": 1,
+      "id": "router:1",
+      "kind": "router",
+      "by": "loom:be77",
+      "at": "2026-10-12T14:31:25.753354+00:00",
+      "data": {
+        "gen": 1,
+        "install": "be77",
+        "until": 1791815515.752758
+      },
+      "hlc": [
+        1791815485753,
+        0,
+        "be77"
+      ],
+      "after": []
+    },
+    {
+      "v": 1,
+      "id": "lease:inbox:1",
+      "kind": "lease",
+      "by": "loom:be77",
+      "at": "2026-10-12T14:31:25.967946+00:00",
+      "data": {
+        "gen": 1,
+        "install": "be77",
+        "router_gen": 1,
+        "strand": "s-be77-sz5yp9",
+        "thread": "inbox"
+      },
+      "hlc": [
+        1791815485968,
+        0,
+        "be77"
+      ],
+      "after": []
+    },
+    {
+      "v": 1,
+      "id": "body.pending:s-be77-sz5yp9:o3lzta",
+      "kind": "body.pending",
+      "by": "loom:be77",
+      "at": "2026-10-12T14:31:25.969442+00:00",
+      "data": {
+        "core": "gpt-6-luna",
+        "gen": 1,
+        "shell": "codex",
+        "strand": "s-be77-sz5yp9"
+      },
+      "hlc": [
+        1791815485971,
+        0,
+        "be77"
+      ],
+      "after": []
+    },
+    {
+      "v": 1,
+      "id": "body.exited:s-be77-sz5yp9:1:wxqekz",
+      "kind": "body.exited",
+      "by": "loom:be77",
+      "at": "2026-10-12T14:31:27.688505+00:00",
+      "data": {
+        "code": null,
+        "gen": 1,
+        "strand": "s-be77-sz5yp9",
+        "why": "SelfError: wake exited 3: deliberate-start-failure"
+      },
+      "hlc": [
+        1791815487688,
+        0,
+        "be77"
+      ],
+      "after": []
+    },
+    {
+      "v": 1,
+      "id": "attention:wasted:p-test/bxkab",
+      "kind": "attention",
+      "by": "loom:be77",
+      "at": "2026-10-12T14:31:27.689759+00:00",
+      "data": {
+        "letter": "p-test/bxkab",
+        "thread": "inbox",
+        "why": "letter p-test/bxkab on thread inbox: body exited None; README changed since start: unknown; fuel unknown\nSelfError: wake exited 3: deliberate-start-failure"
+      },
+      "hlc": [
+        1791815487690,
+        0,
+        "be77"
+      ],
+      "after": []
+    },
+    {
+      "v": 1,
+      "id": "wasted:p-test/bxkab",
+      "kind": "note",
+      "by": "loom:be77",
+      "at": "2026-10-12T14:31:27.690695+00:00",
+      "data": {
+        "re": "p-test/bxkab",
+        "strand": "s-be77-sz5yp9",
+        "why": "body ended without handling it"
+      },
+      "hlc": [
+        1791815487691,
+        0,
+        "be77"
+      ],
+      "after": []
+    },
+    {
+      "v": 1,
+      "id": "released:inbox:1",
+      "kind": "released",
+      "by": "loom:be77",
+      "at": "2026-10-12T14:31:27.691530+00:00",
+      "data": {
+        "gen": 1,
+        "install": "be77",
+        "strand": "s-be77-sz5yp9",
+        "thread": "inbox",
+        "why": "body ended"
+      },
+      "hlc": [
+        1791815487691,
+        1,
+        "be77"
+      ],
+      "after": []
+    }
+  ],
+  "main": {
+    "inbox": {
+      "id": "inbox",
+      "status": "open",
+      "tense": "plan",
+      "opened-by": "person:test",
+      "headline": "Lifecycle drive",
+      "plan": "\u2014"
+    }
+  }
+}

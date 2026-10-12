@@ -22,7 +22,8 @@ def write_thread(root: Path, thread: str, readme: str, policy: str,
     directory.mkdir(parents=True, exist_ok=True)
     text = readme if readme.endswith("\n") else readme + "\n"
     if not text.startswith("---\n"):
-        text = (f"---\nid: {thread}\nstatus: open\ntense: plan\n---\n# " + text)
+        headline = text.removeprefix("# ")
+        text = (f"---\nid: {thread}\nstatus: open\ntense: plan\n---\n# " + headline)
     (directory / "README.md").write_text(text)
     (directory / "policy").write_text(policy.strip() + "\n")
     (directory / "wait").write_text(str(wait).strip() + "\n")
@@ -30,19 +31,10 @@ def write_thread(root: Path, thread: str, readme: str, policy: str,
     _commit(root / "self", f"Seed thread {thread}.\n\nLoom-Label: taint=0; audience=self\n")
 
 
-def historical_quarantine(root, thread, letter, install=None):
-    """A pre-lifecycle ledger whose letter was shown in two failed starts."""
-    home = Home(root, install=install)
-    strand = f"s-{home.install_id()}-legacy"
-    append(home, Fact(kind="lease", by=f"loom:{home.install_id()}",
-                     data={"thread": thread, "strand": strand, "gen": 1}, id=f"lease:{thread}:1"))
-    for attempt in range(2):
-        for kind, data in (("body.started", {}), ("shown", {"ids": [letter]}),
-                           ("body.died", {"code": 1})):
-            append(home, Fact(kind=kind, by=f"loom:{home.install_id()}",
-                             data={"strand": strand, "gen": 1, **data}, id=f"legacy:{attempt}:{kind}"))
-    append(home, Fact(kind="released", by=f"loom:{home.install_id()}",
-                     data={"thread": thread, "strand": strand, "gen": 1}, id=f"released:{thread}:1"))
+def mail(root, facts, thread):
+    from brr.loom.runtime.owners import letters_for
+    from brr.loom.runtime.lifecycle import main_snapshot
+    return letters_for(facts, main_snapshot(Home(root)), thread)
 
 
 def notices(facts) -> list:

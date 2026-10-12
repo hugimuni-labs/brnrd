@@ -1526,6 +1526,9 @@ def main(argv: list[str] | None = None) -> None:
             from . import front_door
 
             return front_door.run()
+        if raw[:2] == ["loom", "check"]:
+            from .loom.runtime.check import run
+            return run(raw[2:])
         args = build_parser().parse_args(raw)
         args.passthrough = passthrough
         return args.func(args)

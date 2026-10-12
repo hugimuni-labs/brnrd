@@ -34,7 +34,7 @@ def _freeze(data: dict) -> dict:
 # strand's loom still records that strand's exit.
 _LOOM_KINDS = {
     "lease", "released", "attention", "router", "router.renewed",
-    "speech", "speech.part", "thread.closed",
+    "speech", "speech.part", "thread.closed", "attempt.ended", "port.drained", "letter.disposed",
 }
 
 
@@ -51,7 +51,8 @@ def strand_of(fact: Fact) -> str | None:
 
 def fact_filename(fact: Fact) -> str:
     """loom.jsonl holds leases, releases, attention, and injected letters."""
-    if fact.kind in {"source", "blob", "note"} and fact.by.startswith("loom:"):
+    if ((fact.kind in {"source", "blob", "note"} and fact.by.startswith("loom:"))
+            or (fact.kind == "note" and fact.by.startswith("person:"))):
         return "loom.jsonl"
     if fact.kind in _LOOM_KINDS:
         return "loom.jsonl"
