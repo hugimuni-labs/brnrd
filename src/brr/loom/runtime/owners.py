@@ -154,25 +154,28 @@ def thread_axes(facts, main, ownership=None):
     facts = list(facts)
     state = fold(facts)
     table = ownership if ownership is not None else letter_owners(facts, main)
-    ends, bodies, successors = {}, {}, {}
+    ends, bodies = {}, {}
+    origins = {ident: {_destination(fate.letter.data)} for ident, fate in table.items()}
     for fact in state.accepted:
         if fact.kind == 'attempt.ended':
             ends[fact.data['thread']] = fact
-            successors.setdefault(fact.data['thread'], set()).update(
-                d.get('successor', {}).get('id') for d in fact.data.get('dispositions', ()))
         elif fact.kind.startswith('body.') and fact.data.get('strand'):
             bodies[fact.data['strand']] = fact
+        for disposition in fact.data.get('dispositions', ()):
+            ident = disposition.get('successor', {}).get('id')
+            if ident:
+                origins.setdefault(ident, set()).update(origins.get(disposition['id'], ()))
     rows = {}
     for thread, data in main.items():
         held = state.holder.get(thread)
         body = bodies.get(held[0]) if held else None
         end = ends.get(thread)
+        # Include the successor that now carries a thread's original debt,
+        # through every climb/bounce, even when the new reader is elsewhere.
         debts = {ident: fate for ident, fate in table.items() if not fate.done
-                 and (fate.thread == thread or _destination(fate.letter.data) == thread)}
-        # Failed attempts atomically replace letters by debts owed elsewhere.
-        for ident in successors.get(thread, ()):
-            if ident in table and not table[ident].done:
-                debts[ident] = table[ident]
+                 and (fate.thread == thread or thread in origins.get(ident, ()))}
+        start_here = any(f.thread == thread and f.owner in {'loom', 'body', 'opener'}
+                         and f.action not in {'climb', 'unroutable', 'drain'} for f in debts.values())
         owners = sorted({f'{f.owner}:{f.thread}' if f.owner in {'body', 'loom', 'opener'}
                          else f.owner for f in debts.values()})
         opener = data.get('opened-by') or 'operator'
@@ -197,7 +200,7 @@ def thread_axes(facts, main, ownership=None):
             restart = 'loom: retry' if retry else 'author resends'
             control = 'author: note failure closed'
         else:
-            restart, control = ('loom: start' if debts else 'next letter'), '—'
+            restart, control = ('loom: start' if start_here else 'next letter'), '—'
         rows[thread] = {'cause': cause, 'letters': tuple(debts),
                         'owed-by': ', '.join(owners) or 'nobody',
                         'restart': restart, 'control': control, 'reset': reset}

@@ -103,6 +103,7 @@ def thread_table(home: Home, facts: list) -> list[dict]:
             seat = f"{shell}/{latest.data.get('core', '')}"
         last = activity.get(thread, created)
         if data['status'] in CLOSED:
+            count = len(axes[thread]['letters'])
             value = 'settled' + (f' {date}' if date else '')
         elif latest and latest.kind in {'body.parked', 'body.pending'}:
             value = axes[thread]['cause']
