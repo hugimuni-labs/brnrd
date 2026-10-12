@@ -67,6 +67,7 @@ def _send(argv: list[str]) -> int:
     parser.add_argument("--re")
     parser.add_argument("--note")
     parser.add_argument("--reopen", metavar="TEXT")
+    parser.add_argument("--body", dest="body_choice", metavar="SHELL/CORE")
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--kind", default=None)
     parser.add_argument("--ref", action="append", default=None)
@@ -77,13 +78,13 @@ def _send(argv: list[str]) -> int:
         if args.reopen is not None:
             from .home import thread_of
             from .lifecycle import land_status
-            if args.body is not None or args.note is not None:
+            if args.body is not None or args.note is not None or args.body_choice is not None:
                 raise PortError("send: --reopen supplies the letter text; drop the body and --note")
             land_status(room, thread_of(args.to), "open", f"reopen {thread_of(args.to)}")
         letter_id = write_send(
             room, to=args.to, sender=strand_of_room(room), body=args.reopen if args.reopen is not None else args.body or "",
             re=args.re, note=args.note, clean=args.clean, kind=args.kind,
-            refs=tuple(args.ref or ()),
+            refs=tuple(args.ref or ()), body_choice=args.body_choice,
         )
     except (PortError, SelfError, ValueError, OSError) as exc:
         sys.stderr.write(f"{exc}\n")

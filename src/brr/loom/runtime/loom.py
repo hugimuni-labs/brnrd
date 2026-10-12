@@ -287,11 +287,13 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
             raise SelfError(f"wake exited {code}: {why.read().strip()}")
         wake.seek(0)
         atomic_write(room / "port" / "wake.md", wake.read())
+    from .threads import thread_table
     shown = fold(facts).shown.get(strand, set())
     atomic_write(
         room / "port" / "in" / "boundary.md",
         render_boundary(strand, gen, thread, letters, shown, threads,
-                        channels=reply_channels(facts)),
+                        channels=reply_channels(facts),
+                        opened=thread_table(home, facts)),
     )
     return room
 
@@ -617,6 +619,8 @@ def _refresh_holders(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> 
     shells = {f.data["strand"]: f.data.get("shell") for f in facts if f.kind == "body.started"}
     state, threads, pending = fold(facts), sender_threads(facts), pending_bodies(facts)
     channels = reply_channels(facts)
+    from .threads import thread_table
+    table = thread_table(home, facts)
     for thread, (strand, gen) in state.holder.items():
         if install_of(strand) != home.install_id():
             continue
@@ -626,7 +630,7 @@ def _refresh_holders(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> 
             text = render_boundary(strand, gen, thread, actionable(facts, thread),
                                    state.shown.get(strand, set()), threads,
                                    fuel(home, shells[strand]) if shells.get(strand) else "", settled,
-                                   channels)
+                                   channels, opened=table)
             path = home.room(strand) / "port" / "in" / "boundary.md"
             if not path.is_file() or path.read_text() != text:
                 atomic_write(path, text)

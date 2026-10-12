@@ -68,7 +68,7 @@ def parse_boundary(text: str) -> Boundary:
             settled = line.partition(":")[2].strip()
             current = None
             continue
-        if not line.strip() or line.startswith("status:") or line.startswith("owed:"):
+        if not line.strip() or line.startswith("status:") or line.startswith("owed:") or line.startswith("opened:"):
             current = None
             continue
         match = _ITEM.match(line)
@@ -121,7 +121,8 @@ def _letter_lines(letter: Fact, reply: str, compact: bool) -> list[str]:
 def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     shown: set[str], sender_threads: dict[str, str], fuel: str = "",
                     settled: str | None = None,
-                    channels: dict[str, str] | None = None) -> str:
+                    channels: dict[str, str] | None = None,
+                    opened: list[dict] | tuple[dict, ...] = ()) -> str:
     """Letters this strand was already shown are compacted to id plus first line."""
     lines = [
         f"<!-- port {strand} gen {gen} · owed "
@@ -131,6 +132,16 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
     ]
     if settled is not None:
         lines.insert(2, f"settled: {settled}")
+    children = []
+    for row in opened:
+        if row['opened-by'] != f"thread:{thread}" or row['status'] in {"settled", "retired"}:
+            continue
+        now, _, detail = row['now'].partition(' ')
+        # Child fuel is not a change of state; ages cost at most one write a minute.
+        if re.fullmatch(r"\d+[smhd]", detail):
+            now += ' ' + (f"{int(detail[:-1]) // 60}m" if detail.endswith('s') else detail)
+        children.append(f"opened: {row['thread']} {now} · owed {row['owed']}")
+    lines[2:2] = children
     for letter in letters:
         compact = str(letter.data["id"]) in shown
         lines.extend(_letter_lines(letter, _reply(letter, sender_threads, thread, channels or {}), compact))
@@ -238,21 +249,29 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                re: str | None = None, note: str | None = None,
                clean: bool = False, kind: str | None = None,
                refs: tuple[str, ...] | list[str] = (),
-               molt: str | None = None) -> str:
+               molt: str | None = None, body_choice: str | None = None) -> str:
     home = home_of_room(Path(room))
+    opening = None
+    if note is not None and not re:
+        raise PortError("send: --note requires --re")
+    if note is not None and body:
+        raise PortError("send: --note is the whole no-answer; drop the body")
     if is_channel(to):
+        if body_choice is not None:
+            raise PortError("send: --body is only for opening a new thread")
         try:
             channel_parts(to)
         except ValueError as exc:
             raise PortError(f"send: {exc}") from exc
     else:
         thread = thread_of(to)
-        if not home.thread_exists(thread):
-            raise PortError(
-                f"send: no thread {thread} "
-                f"({home.thread_dir(thread) / 'README.md'} does not exist)")
-    if note is not None and not re:
-        raise PortError("send: --note requires --re")
+        if home.routable(thread):
+            if body_choice is not None:
+                raise PortError("send: --body is only for opening a new thread")
+        else:
+            if note is not None or molt is not None:
+                raise PortError(f"send: no thread {thread} on main")
+            opening = thread
     if note is None and molt is None and not is_channel(to):
         from .ledger import read_facts
         from .project import sender_threads
@@ -291,7 +310,11 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
             body = ""
         else:
             fields["label"] = sender_label.trailer()
-    write_port(room, stem, _front(fields, "" if note is not None else body))
+    text = _front(fields, "" if note is not None else body)
+    if opening is not None:
+        from .lifecycle import open_thread
+        open_thread(Path(room), opening, sender, body, body_choice)
+    write_port(room, stem, text)
     return letter_id
 
 
