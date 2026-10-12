@@ -30,6 +30,9 @@ def _loom(argv: list[str]) -> int:
     parser.add_argument("--adapter", default="fake")
     parser.add_argument("--core", default="haiku")
     parser.add_argument("--tick", type=float, default=0.2)
+    if argv[:1] == ["check"]:
+        from .check import run
+        return run(argv[1:])
     args = parser.parse_args(argv)
     run_loom(
         args.home, adapter=args.adapter, core=args.core, tick=args.tick,
