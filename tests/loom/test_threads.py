@@ -42,7 +42,8 @@ def test_send_opens_lands_routes_and_shows_working_idle_settled(tmp_path):
     git(root / 'self', 'commit', '--amend', '--no-edit', '--date', old, env=env)
     write_thread(root, 'settled', '---\nid: settled\nstatus: settled\ntense: plan\n'
                  'opened-by: thread:opener\n---\n# Accepted\n\n## Plan\n- [x] Done', 'settled')
-    ready, release, reply, opened = [root / name for name in ('ready', 'release', 'reply', 'opened')]
+    ready, release, reply, opened, finish = [root / name for name in
+                                            ('ready', 'release', 'reply', 'opened', 'finish')]
     bodies(root, f'''import json, subprocess, sys, time
 from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx, _own_thread
@@ -63,11 +64,14 @@ if own == "opener":
                 again = ctx.jack("post")
                 assert again.raw == "", again.raw
                 Path({str(opened)!r}).write_text(view.raw)
-        if "opened: new-work holding · owed 0" in context:
+        # No mail is expected only before the test releases the reply.
+        # A holding worker can still send a letter to its opener.
+        if "opened: new-work holding · owed 0" in context and not Path({str(root / "changed")!r}).exists():
             assert not view.letters
             Path({str(root / "changed")!r}).write_text(view.raw)
         for letter in view.letters:
             if letter.body == "work answered":
+                assert "opened: new-work holding · owed 0" in context, context
                 ctx.send("thread:opener", note="read answer", re=letter.id)
                 Path({str(reply)!r}).write_text(letter.body)
         time.sleep(0.03)
@@ -86,6 +90,11 @@ else:
         time.sleep(0.03)
     for letter in letters:
         ctx.send(letter.reply, "work answered", re=letter.id)
+    # Make reply delivery precede worker exit on every machine: holding
+    # describes the worker's debt, not the opener's incoming mail.
+    while not Path({str(finish)!r}).exists():
+        ctx.jack("post")
+        time.sleep(0.03)
 ''')
     shutil.copytree(root / 'loom/bodies/fake', root / 'loom/bodies/worker')
     inject_letter(root, to='thread:opener', body='begin')
@@ -115,6 +124,7 @@ else:
         assert 'opened: new-work holding · owed 0' in changed
         release.write_text('answer now')
         wait_until(reply.exists, 30, loom.dump)
+        finish.write_text('reply read; worker may exit')
         wait_until(lambda: holder(loom.facts(), 'new-work') is None, 30, loom.dump)
         rows = table(root)
         assert rows['new-work']['now'].startswith('idle ')
@@ -128,6 +138,7 @@ else:
         (root / 'stop-opener').write_text('stop')
         wait_until(lambda: holder(loom.facts(), 'opener') is None, 30, loom.dump)
     finally:
+        finish.touch()
         loom.halt()
     # Unknown reply ids are legal. A bare --re still has to read the boundary;
     # an existing read failure must refuse before opening anything on main.
