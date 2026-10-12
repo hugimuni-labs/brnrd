@@ -163,3 +163,20 @@ def _closing_commit(home: Home, path: str) -> tuple[str, str, str]:
         return "", "", ""
     commit, subject, *writer = text
     return commit, subject.partition(": ")[2] or subject, writer[0].strip() if writer else ""
+
+
+def main_snapshot(home: Home) -> dict[str, dict]:
+    """Pin main once; both inventory and README fields come from that tree."""
+    repo = home.root / "self"
+    if (repo / ".git").exists():
+        ref = git(repo, "rev-parse", "main").stdout.strip()
+        paths = git(repo, "ls-tree", "-r", "--name-only", ref, "--", "threads").stdout.splitlines()
+    else:
+        ref = "main"
+        paths = [p.relative_to(repo).as_posix() for p in (repo / "threads").glob("*/README.md")]
+    result = {}
+    for path in paths:
+        parts = path.split("/")
+        if len(parts) == 3 and parts[2] == "README.md":
+            result[parts[1]] = read_thread(home, parts[1], ref)
+    return result
