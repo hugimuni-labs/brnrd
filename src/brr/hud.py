@@ -1045,7 +1045,7 @@ def build(inputs: HUDInputs) -> HUD:
             correspondent=correspondent_facet_input,
             other_shells=daemon._other_shells_fuel(
                 str((runner_meta or {}).get("shell") or runner_name or ""),
-                runner_catalog, brr_dir,
+                runner_catalog, brr_dir, refresh=refresh_levels,
             ),
         )},
         heddles=[
