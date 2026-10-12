@@ -143,3 +143,62 @@ def plan_citations(text: str) -> tuple[str, ...]:
     if not separator:
         return ()
     return tuple(ident.strip() for ident in cites.split(',') if ident.strip())
+
+
+def thread_axes(facts, main, ownership=None):
+    """Ends and next actors are columns of the letter table, not stored states.
+
+    A pending start's reset is already an observation in body.parked. A
+    physical process disappearing cannot invent a failed/idle end here.
+    """
+    facts = list(facts)
+    state = fold(facts)
+    table = ownership if ownership is not None else letter_owners(facts, main)
+    ends, bodies, successors = {}, {}, {}
+    for fact in state.accepted:
+        if fact.kind == 'attempt.ended':
+            ends[fact.data['thread']] = fact
+            successors.setdefault(fact.data['thread'], set()).update(
+                d.get('successor', {}).get('id') for d in fact.data.get('dispositions', ()))
+        elif fact.kind.startswith('body.') and fact.data.get('strand'):
+            bodies[fact.data['strand']] = fact
+    rows = {}
+    for thread, data in main.items():
+        held = state.holder.get(thread)
+        body = bodies.get(held[0]) if held else None
+        end = ends.get(thread)
+        debts = {ident: fate for ident, fate in table.items() if not fate.done
+                 and (fate.thread == thread or _destination(fate.letter.data) == thread)}
+        # Failed attempts atomically replace letters by debts owed elsewhere.
+        for ident in successors.get(thread, ()):
+            if ident in table and not table[ident].done:
+                debts[ident] = table[ident]
+        owners = sorted({f'{f.owner}:{f.thread}' if f.owner in {'body', 'loom', 'opener'}
+                         else f.owner for f in debts.values()})
+        opener = data.get('opened-by') or 'operator'
+        override = opener + ' or operator' if opener != 'operator' else 'operator'
+        cause = end.data['cause'] if end else 'idle'
+        reset = None
+        if data.get('status') in {'settled', 'retired'}:
+            cause, restart, control = 'settled', 'new letter or opener answers', opener
+        elif body and body.kind in {'body.pending', 'body.parked'}:
+            cause = 'paced' if body.kind == 'body.parked' else 'pending'
+            reset = body.data.get('until')
+            restart = f'reset {reset}' if reset is not None else 'loom: gauge reading'
+            control = f'{override}: threads --force {thread}' if reset is not None else 'loom'
+        elif held and (not end or (end.data['strand'], end.data['gen']) != held):
+            cause, restart, control = 'body', 'current body', '—'
+        elif cause == 'molted':
+            restart, control = 'loom: now', '—'
+        elif cause == 'paced':
+            restart, control = 'loom: start waiting for gauge', f'{override}: threads --force {thread}'
+        elif cause == 'failed':
+            retry = any(f.reason == 'first failed attempt' for f in debts.values())
+            restart = 'loom: retry' if retry else 'author resends'
+            control = 'author: note failure closed'
+        else:
+            restart, control = ('loom: start' if debts else 'next letter'), '—'
+        rows[thread] = {'cause': cause, 'letters': tuple(debts),
+                        'owed-by': ', '.join(owners) or 'nobody',
+                        'restart': restart, 'control': control, 'reset': reset}
+    return rows

@@ -371,7 +371,27 @@ def _spawn(room: Path, argv: list[str], shell: str, thread: str) -> tuple[subpro
 
 
 def _start(home: Home, strand: str, thread: str, gen: int,
-           bodies: dict[str, Body], facts: list[Fact], choice=None) -> list[Fact]:
+           bodies: dict[str, Body], facts: list[Fact], choice=None, *, force=False) -> list[Fact]:
+    """Serialize starts with the operator's explicit gauge override."""
+    room = home.room(strand)
+    room.mkdir(parents=True, exist_ok=True)
+    with (room / ".starting").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return facts
+        current = read_facts(home)
+        if fold(current).holder.get(thread) != (strand, gen) or body_alive(room):
+            return current
+        if force:
+            pending = pending_bodies(fold(current).accepted).get(strand)
+            if not pending or pending.kind != "body.parked":
+                return current
+        return _launch(home, strand, thread, gen, bodies, current, choice, force=force)
+
+
+def _launch(home: Home, strand: str, thread: str, gen: int,
+            bodies: dict[str, Body], facts: list[Fact], choice=None, *, force=False) -> list[Fact]:
     """Launch one body; the gauge can defer a start without consuming letters."""
     if strand in bodies:
         return facts
@@ -389,7 +409,7 @@ def _start(home: Home, strand: str, thread: str, gen: int,
         prior = [f for f in facts if f.data.get("strand") == strand]
         after = max((datetime.fromisoformat(f.at).timestamp() for f in prior
                      if f.kind in {"body.exited", "body.parked"}), default=0)
-        gauge = reading(home, shell, after)
+        gauge = {"windows": []} if force else reading(home, shell, after)
         data = {"strand": strand, "gen": gen, "shell": shell, "core": core}
         if gauge is None:
             if not prior or prior[-1].kind not in {"body.pending", "body.parked"}:
@@ -755,9 +775,9 @@ def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
         paced = bool(start and below_floor(home, start.data["shell"]))
         shown = fold(facts).shown.get(strand, set())
         letters = [letter for letter in letters_for(facts, main_snapshot(home), body.thread) if letter.id in shown]
-        cause = ("molted" if molted else "paced" if paced else
+        cause = ("molted" if molted else
                  "settled" if read_thread(home, body.thread).get("status") in CLOSED else
-                 "idle" if not letters else "failed")
+                 "idle" if not letters else "paced" if paced else "failed")
         facts = _end_attempt(home, facts, strand, body.thread, body.gen, code, letters, cause)
         facts = _drain_strand(home, facts, strand)
         facts = _drained(home, facts, strand, body.thread, body.gen)

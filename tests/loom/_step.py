@@ -139,3 +139,22 @@ def wait_until(predicate, timeout: float, dump) -> None:
         time.sleep(0.01)
     text = dump() if callable(dump) else dump
     raise AssertionError(text)
+
+
+def kill_bodies(loom):
+    """Test teardown, after halt: production halt intentionally leaves bodies."""
+    import os
+    import signal
+    for fact in loom.facts():
+        if fact.kind == 'body.started':
+            pid = fact.data['pid']
+            from brr.loom.runtime.loom import body_alive
+            try:
+                if body_alive(loom.home.room(fact.data['strand'])):
+                    os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass

@@ -4,7 +4,7 @@ import json
 from brr.loom.runtime.check import violations
 from brr.loom.runtime.ledger import inject_letter
 from brr.loom.runtime.lifecycle import main_snapshot
-from _step import Loom, wait_until, write_thread
+from _step import Loom, wait_until, write_thread, kill_bodies
 from test_lifecycle import bodies
 
 
@@ -72,15 +72,7 @@ for letter in (first, second):
                    10, loom.dump)
     finally:
         finish.touch()
-        # halt stops the loop but deliberately preserves bodies. Kill this
-        # test's sessions explicitly so failed assertions cannot leak one.
-        import os, signal
-        for fact in loom.facts():
-            if fact.kind == 'body.started':
-                try:
-                    os.killpg(fact.data['pid'], signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
         loom.halt()
+        kill_bodies(loom)
     assert not loom.errors
     assert not violations(loom.facts(), main_snapshot(loom.home))
