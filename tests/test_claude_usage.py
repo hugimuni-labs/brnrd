@@ -293,7 +293,11 @@ os.write(1, Path(os.environ['PROBE_SCREEN']).read_bytes())
     assert claude_usage.parse_usage_text(raw)["week_used_percentage"] == 92
     probe = json.loads(evidence.read_text())
     assert probe["git_pins"] == {}
-    assert probe["cwd"] != str(tmp_path) and not Path(probe["cwd"]).exists()
+    probe_dir = Path(probe["cwd"])
+    # One fixed directory, reused: a fresh one per probe leaves a trust entry
+    # in ~/.claude.json every time.
+    assert probe_dir != tmp_path and probe_dir.name == "brr-claude-usage"
+    assert not any(probe_dir.iterdir())
     assert probe["argv"] == claude_usage._usage_command()[1:]
 
 
