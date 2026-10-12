@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from brr.daemon2.facts import Fact, union
-from .home import is_channel
+from .home import is_channel, notice_id
 from .project import _destination, fold, reply_channels, sender_threads
 
 
@@ -156,6 +156,10 @@ def thread_axes(facts, main, ownership=None):
     table = ownership if ownership is not None else letter_owners(facts, main)
     ends, bodies = {}, {}
     origins = {ident: {_destination(fate.letter.data)} for ident, fate in table.items()}
+    # Existing closure observations name their deterministic result notice.
+    for fact in facts:
+        if fact.kind == 'thread.closed' and fact.by.startswith('loom:'):
+            origins.setdefault(notice_id('closed', fact.id), set()).add(fact.data['thread'])
     for fact in state.accepted:
         if fact.kind == 'attempt.ended':
             ends[fact.data['thread']] = fact
@@ -175,7 +179,8 @@ def thread_axes(facts, main, ownership=None):
         debts = {ident: fate for ident, fate in table.items() if not fate.done
                  and (fate.thread == thread or thread in origins.get(ident, ()))}
         start_here = any(f.thread == thread and f.owner in {'loom', 'body', 'opener'}
-                         and f.action not in {'climb', 'unroutable', 'drain'} for f in debts.values())
+                         and f.action not in {'climb', 'unroutable', 'drain'}
+                         and not f.letter.data.get('notice') for f in debts.values())
         owners = sorted({f'{f.owner}:{f.thread}' if f.owner in {'body', 'loom', 'opener'}
                          else f.owner for f in debts.values()})
         opener = data.get('opened-by') or 'operator'

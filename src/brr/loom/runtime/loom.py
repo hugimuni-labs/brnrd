@@ -21,7 +21,7 @@ from pathlib import Path
 from brr.daemon2.facts import Fact
 
 from .adapters import resolve
-from .home import Home, atomic_write, is_channel, mint
+from .home import Home, atomic_write, is_channel, mint, notice_id
 from .ledger import LedgerConflict, append, read_facts
 from .port import (
     fact_from_port, fact_from_taint, parse_frontmatter, render_boundary,
@@ -98,10 +98,6 @@ def _attention(home: Home, fact_id: str, why: str, *,
 
 def _record(home: Home, kind: str, data: dict, fact_id: str) -> Fact:
     return append(home, Fact(kind=kind, by=_by(home), data=data, id=fact_id))
-
-
-def notice_id(kind: str, subject: str) -> str:
-    return f"loom/{kind}-{hashlib.sha256(subject.encode()).hexdigest()[:10]}"
 
 
 def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, can: str, *,
