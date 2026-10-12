@@ -37,6 +37,7 @@ Step 1: production prefix check and CLI, real-drive recorder and three unedited 
 
 ## Contract evidence
 Review findings (resolved by continuation):
+- The relay passed an already-folded accepted list to sender_threads, which now folds before using leases. The second fold lacked router facts and lost every speaker address. Both relay readers now pass the raw ledger. The two external relay suites also still imported deleted owed; migrated those assertions to the table with valid README fixtures.
 - Settlement disposal was too broad: it retired every letter from a settled worker, including new proposals without a reply reference. Restrict disposal to replies to accepted asks on that worker; the live settlement regression now keeps a separate worker proposal owed until the opener notes it.
 - Atomic climb/refusal dispositions mark the old draft done, then legacy bidirectional `stands` handling marks the embedded successor done too. The new notice is never shown. Fix pairing to distinguish explicit handling from replacement disposition; prove through live refusal and climb.
 - The person's second failed attempt now belongs to the operator per the contract; the inherited old lifecycle test still expects an automatic failure message. Preserve two starts/no third and test visible operator debt + hand note instead.
@@ -154,3 +155,6 @@ Earlier fixtures also constructed invalid `# # Work` headlines, or lease rows na
 Repair gate: `PYTHONPATH=src pytest -q tests/loom/test_usage.py tests/loom/test_holding.py tests/loom/test_two_strands.py tests/loom/test_molt.py`: **10 passed in 50.03s**.
 
 Final whole gate is running after these repairs. No non-loom test file has been changed.
+
+
+Whole loom gate before the final narrow settlement/relay repairs: **165 passed, 1 skipped, 4 xfailed in 488.65s**. The narrowed settlement path independently passed all 7 ownership drives. CI at 5b523cb9 stopped at collection because two non-loom relay suites still imported deleted owed (run 38269137998). The relay suites then exposed the double-fold sender-address regression; that is fixed in both actual relay readers, not waived. These two files are now included in the final gate.
