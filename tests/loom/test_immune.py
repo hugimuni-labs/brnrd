@@ -30,21 +30,6 @@ _ALWAYS_EXEC = {
 }
 
 
-def _shells() -> list[str]:
-    found = ["sh"]
-    if shutil.which("dash"):
-        found.append("dash")
-    return found
-
-
-@pytest.fixture(params=_shells())
-def immune_sh(request, monkeypatch):
-    """Run the immune file once under sh and, when present, again under dash."""
-
-    monkeypatch.setenv("LOOM_IMMUNE_SH", request.param)
-    return request.param
-
-
 def _env() -> dict[str, str]:
     env = {key: value for key, value in os.environ.items() if key not in _DISCOVERY}
     env["GIT_TERMINAL_PROMPT"] = "0"
@@ -115,16 +100,7 @@ def _blob(proc: subprocess.CompletedProcess[str]) -> str:
     return (proc.stderr or "") + (proc.stdout or "")
 
 
-def test_sh_n_on_immune_and_the_shim(tmp_path: Path, immune_sh: str) -> None:
-    bare = tmp_path / "self.git"
-    git(None, "init", "--bare", "-b", "main", os.fspath(bare))
-    hook = install_pre_receive(bare)
-    for path in (SEED / "core" / "immune", SEED / "core" / "immune.d" / "50-core-notice", hook):
-        proc = subprocess.run([immune_sh, "-n", os.fspath(path)], capture_output=True, text=True)
-        assert proc.returncode == 0, proc.stderr
-
-
-def test_empty_immune_d_fast_forward(tmp_path: Path, immune_sh: str) -> None:
+def test_empty_immune_d_fast_forward(tmp_path: Path) -> None:
     _bare, work = published(tmp_path, notice=False)
     write(work, "memory/scars/x.md", "base\nmore\n")
     commit(work, "a scar")
@@ -132,7 +108,7 @@ def test_empty_immune_d_fast_forward(tmp_path: Path, immune_sh: str) -> None:
     assert proc.returncode == 0, _blob(proc)
 
 
-def test_force_push_to_main_is_refused(tmp_path: Path, immune_sh: str) -> None:
+def test_force_push_to_main_is_refused(tmp_path: Path) -> None:
     bare, work = published(tmp_path)
     base = git(work, "rev-parse", "HEAD").stdout.strip()
     write(work, "memory/scars/x.md", "base\nsecond\n")
@@ -148,7 +124,7 @@ def test_force_push_to_main_is_refused(tmp_path: Path, immune_sh: str) -> None:
     assert git(bare, "rev-parse", "main").stdout.strip() == tip
 
 
-def test_deleting_main_is_refused(tmp_path: Path, immune_sh: str) -> None:
+def test_deleting_main_is_refused(tmp_path: Path) -> None:
     bare, work = published(tmp_path)
     tip = git(bare, "rev-parse", "main").stdout.strip()
     proc = git(work, "push", "origin", ":main", check=False)
@@ -157,7 +133,7 @@ def test_deleting_main_is_refused(tmp_path: Path, immune_sh: str) -> None:
     assert git(bare, "rev-parse", "main").stdout.strip() == tip
 
 
-def test_strand_branch_passes_untouched(tmp_path: Path, immune_sh: str) -> None:
+def test_strand_branch_passes_untouched(tmp_path: Path) -> None:
     bare, work = published(tmp_path)
     tip = git(bare, "rev-parse", "main").stdout.strip()
     write(work, "core/immune.d/40-fail", "#!/bin/sh\nprintf 'nope\\n' >&2\nexit 1\n", exe=True)
@@ -167,7 +143,7 @@ def test_strand_branch_passes_untouched(tmp_path: Path, immune_sh: str) -> None:
     assert git(bare, "rev-parse", "main").stdout.strip() == tip
 
 
-def test_failing_check_is_named_in_stderr(tmp_path: Path, immune_sh: str) -> None:
+def test_failing_check_is_named_in_stderr(tmp_path: Path) -> None:
     _bare, work = published(tmp_path)
     write(work, "core/immune.d/40-fail", "#!/bin/sh\nprintf 'nope\\n' >&2\nexit 1\n", exe=True)
     commit(work, "failing check")
@@ -176,7 +152,7 @@ def test_failing_check_is_named_in_stderr(tmp_path: Path, immune_sh: str) -> Non
     assert "40-fail: nope" in _blob(proc)
 
 
-def test_two_failing_checks_one_refusal(tmp_path: Path, immune_sh: str) -> None:
+def test_two_failing_checks_one_refusal(tmp_path: Path) -> None:
     _bare, work = published(tmp_path)
     write(work, "core/immune.d/40-a", "#!/bin/sh\nprintf 'reason-a\\n' >&2\nexit 1\n", exe=True)
     write(work, "core/immune.d/41-b", "#!/bin/sh\nprintf 'reason-b\\n' >&2\nexit 1\n", exe=True)
@@ -189,7 +165,7 @@ def test_two_failing_checks_one_refusal(tmp_path: Path, immune_sh: str) -> None:
     assert text.lower().count("hook declined") == 1
 
 
-def test_blank_failure_is_still_named(tmp_path: Path, immune_sh: str) -> None:
+def test_blank_failure_is_still_named(tmp_path: Path) -> None:
     _bare, work = published(tmp_path)
     write(work, "core/immune.d/40-quiet", "#!/bin/sh\nexit 1\n", exe=True)
     commit(work, "quiet check")
@@ -198,7 +174,7 @@ def test_blank_failure_is_still_named(tmp_path: Path, immune_sh: str) -> None:
     assert "40-quiet: failed" in _blob(proc)
 
 
-def test_hook_runs_the_pushed_immune_not_the_one_on_disk(tmp_path: Path, immune_sh: str) -> None:
+def test_hook_runs_the_pushed_immune_not_the_one_on_disk(tmp_path: Path) -> None:
     bare, work = published(tmp_path)
     tip = git(bare, "rev-parse", "main").stdout.strip()
     decoy = bare / "core" / "immune"
@@ -213,7 +189,7 @@ def test_hook_runs_the_pushed_immune_not_the_one_on_disk(tmp_path: Path, immune_
     assert git(bare, "rev-parse", "main").stdout.strip() == tip
 
 
-def test_first_push_with_zero_old(tmp_path: Path, immune_sh: str) -> None:
+def test_first_push_with_zero_old(tmp_path: Path) -> None:
     bare = tmp_path / "self.git"
     work = tmp_path / "work"
     git(None, "init", "--bare", "-b", "main", os.fspath(bare))
@@ -230,7 +206,7 @@ def test_first_push_with_zero_old(tmp_path: Path, immune_sh: str) -> None:
     assert "core/immune" in text
 
 
-def test_core_notice_prints_changed_core_paths(tmp_path: Path, immune_sh: str) -> None:
+def test_core_notice_prints_changed_core_paths(tmp_path: Path) -> None:
     _bare, work = published(tmp_path)
     old = git(work, "rev-parse", "HEAD").stdout.strip()
     write(work, "core/identity.md", "who\n")
@@ -239,7 +215,7 @@ def test_core_notice_prints_changed_core_paths(tmp_path: Path, immune_sh: str) -
     new = git(work, "rev-parse", "HEAD").stdout.strip()
     notice = work / "core" / "immune.d" / "50-core-notice"
     direct = subprocess.run(
-        [immune_sh, os.fspath(notice), old, new],
+        [os.fspath(notice), old, new],
         cwd=work,
         env=_env(),
         capture_output=True,
@@ -249,7 +225,7 @@ def test_core_notice_prints_changed_core_paths(tmp_path: Path, immune_sh: str) -
     assert direct.returncode == 0, direct.stderr
     assert direct.stdout.strip() == "core changed: core/identity.md"
     gated = subprocess.run(
-        [immune_sh, os.fspath(work / "core" / "immune"), old, new],
+        [os.fspath(work / "core" / "immune"), old, new],
         cwd=work,
         env=_env(),
         capture_output=True,
@@ -260,14 +236,14 @@ def test_core_notice_prints_changed_core_paths(tmp_path: Path, immune_sh: str) -
     assert "core changed: core/identity.md" in gated.stdout
 
 
-def test_core_notice_is_silent_when_core_is_untouched(tmp_path: Path, immune_sh: str) -> None:
+def test_core_notice_is_silent_when_core_is_untouched(tmp_path: Path) -> None:
     _bare, work = published(tmp_path)
     old = git(work, "rev-parse", "HEAD").stdout.strip()
     write(work, "memory/stance.md", "stance\n")
     commit(work, "memory only")
     new = git(work, "rev-parse", "HEAD").stdout.strip()
     direct = subprocess.run(
-        [immune_sh, os.fspath(work / "core" / "immune.d" / "50-core-notice"), old, new],
+        [os.fspath(work / "core" / "immune.d" / "50-core-notice"), old, new],
         cwd=work,
         env=_env(),
         capture_output=True,
@@ -278,7 +254,7 @@ def test_core_notice_is_silent_when_core_is_untouched(tmp_path: Path, immune_sh:
     assert direct.stdout == ""
 
 
-def test_a_push_that_deletes_a_check_is_judged_by_it(tmp_path: Path, immune_sh: str) -> None:
+def test_a_push_that_deletes_a_check_is_judged_by_it(tmp_path: Path) -> None:
     _bare, work = published(tmp_path)
     guard = "#!/bin/sh\nif git cat-file -e \"$2:forbidden\" 2>/dev/null; then printf 'forbidden is here\\n' >&2; exit 1; fi\n"
     write(work, "core/immune.d/40-guard", guard, exe=True)
@@ -292,7 +268,7 @@ def test_a_push_that_deletes_a_check_is_judged_by_it(tmp_path: Path, immune_sh: 
     assert "old/40-guard: forbidden is here" in _blob(proc)
 
 
-def test_a_push_that_rewrites_immune_to_exit_0_is_judged_by_the_old_one(tmp_path: Path, immune_sh: str) -> None:
+def test_a_push_that_rewrites_immune_to_exit_0_is_judged_by_the_old_one(tmp_path: Path) -> None:
     _bare, work = published(tmp_path)
     guard = "#!/bin/sh\nif git cat-file -e \"$2:forbidden\" 2>/dev/null; then printf 'forbidden is here\\n' >&2; exit 1; fi\n"
     write(work, "core/immune.d/40-guard", guard, exe=True)
@@ -312,14 +288,14 @@ def test_ci_uses_the_incumbent_and_refuses_missing_or_empty_scripts(tmp_path: Pa
     git(None, "init", "-b", "main", os.fspath(work))
     write(work, "marker", "base\n")
     if incumbent is not None:
-        write(work, "core/immune", incumbent)
+        write(work, "core/immune", "#!/bin/sh\n" + incumbent if incumbent else incumbent, exe=True)
     commit(work, "incumbent")
     old = git(work, "rev-parse", "HEAD").stdout.strip()
     if first:
         old = "0" * 40
     else:
         # A new permissive script cannot judge a missing/empty/refusing old one.
-        write(work, "core/immune", "exit 0\n")
+        write(work, "core/immune", "#!/bin/sh\nexit 0\n", exe=True)
         commit(work, "incoming")
     new = git(work, "rev-parse", "HEAD").stdout.strip()
     workflow = (SEED / "ci/immune.yml").read_text(encoding="utf-8")

@@ -20,7 +20,7 @@ _STOP_LIMIT = 3
 _STOPS = "loom-send-stops"
 
 # Two lines was the shape asked for. A pipeline whose ``git show`` fails
-# feeds ``sh`` an empty script, and an empty ``sh`` exits 0 — a deletion, or
+# feeds an interpreter an empty script, which can exit 0 — a deletion, or
 # a commit that dropped ``core/immune``, would be accepted. The shim is as
 # long as it needs to be to make that a refusal. A deletion has no new tree,
 # so the script that judges it is the one on the tip being deleted.
@@ -30,7 +30,7 @@ _HOOK = """\
 # replaced, never from the incoming commit (a push that rewrites immune to
 # "exit 0" would otherwise judge itself), and never from a copy beside this
 # hook. Only the first push (old all zeros) is judged by its own script.
-# A missing or empty script refuses (empty sh exits 0).
+# A missing, empty or non-executable script refuses. Run its own shebang.
 status=0
 while read -r old new ref; do
     [ -n "$old" ] || continue
@@ -46,8 +46,15 @@ while read -r old new ref; do
         status=1
         continue
     fi
-    runner=${LOOM_IMMUNE_SH:-sh}
-    "$runner" "$script" "$old" "$new" "$ref" || status=1
+    mode=$(git ls-tree "$tip" -- core/immune | cut -d ' ' -f 1)
+    if [ "$mode" != "100755" ]; then
+        printf 'immune: core/immune not executable at %s\\n' "$tip" >&2
+        rm -f "$script"
+        status=1
+        continue
+    fi
+    chmod +x "$script" || { rm -f "$script"; exit 1; }
+    "$script" "$old" "$new" "$ref" || status=1
     rm -f "$script"
 done
 exit "$status"
