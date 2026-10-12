@@ -94,7 +94,8 @@ class Home:
     def routable(self, thread: object) -> bool:
         """A thread a body can be started on: a valid id with its README on main."""
         try:
-            return self.thread_exists(thread) and self.on_main(thread)
+            return (self.on_main(thread) if (self.root / "self/.git").exists()
+                    else self.thread_exists(thread))
         except ValueError:
             return False
 

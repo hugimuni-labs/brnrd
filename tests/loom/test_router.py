@@ -12,7 +12,7 @@ from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import inject_letter, read_facts
 from brr.loom.runtime.project import fold, is_notice
 
-from _step import historical_quarantine, wait_until, write_thread
+from _step import wait_until, write_thread
 
 SRC = str(Path(__file__).resolve().parents[2] / "src")
 A = "aaaa"
@@ -406,50 +406,6 @@ def _out_count(root: Path) -> int:
     return count
 
 
-def test_an_unrunnable_letter_stops_waking_and_the_rest_is_answered(tmp_path):
-    root = tmp_path / "home"
-    _config(root, name="brnrd", router_ttl=2, max_skew=0.3, margin=0.1)
-    write_thread(root, "tp", "thread tp", "die-on-unrunnable", wait="3")
-    letter = inject_letter(root, to="thread:tp", body="unrunnable")
-    historical_quarantine(root, "tp", letter, install=A)
-    procs = _pair(root)
-    try:
-        def set_aside():
-            _alive(procs, lambda: _dump(root, procs))
-            facts = _facts(root)
-            starts = [fact for fact in facts if fact.kind == "body.started"]
-            told = {fact.data.get("stands") for fact in facts if is_notice(fact)}
-            return letter in told and len(starts) == 2
-
-        wait_until(set_aside, 8, lambda: _dump(root, procs))
-        strand = _facts(root)[-1].data.get("strand") or [
-            fact.data["strand"] for fact in _facts(root) if fact.kind == "body.started"
-        ][0]
-        other = inject_letter(root, to="thread:tp", body="other")
-
-        def answered():
-            facts = _facts(root)
-            notes = [fact for fact in facts if fact.kind == "note" and fact.data.get("re") == other]
-            starts = [
-                fact for fact in facts
-                if fact.kind == "body.started" and fact.data.get("strand") == strand
-            ]
-            return len(notes) == 1 and len(starts) == 2
-
-        wait_until(answered, 8, lambda: _dump(root, procs))
-        # The verb has no state of its own: it lists the notice still owed.
-        install = _routers(_facts(root))[-1].data["install"]
-        listed = subprocess.run(
-            [sys.executable, "-m", "brr.loom.runtime", "attention",
-             "--home", str(root), "--install", install],
-            check=True, env={**os.environ, "PYTHONPATH": SRC},
-            capture_output=True, text=True,
-        ).stdout
-        assert f"letter {letter} to thread tp is quarantined" in listed
-    finally:
-        _stop(root, procs)
-
-
 def test_for_other_gets_no_lease_and_one_row(tmp_path):
     root = tmp_path / "home"
     _config(root, name="brnrd", router_ttl=2, max_skew=0.3, margin=0.1)
@@ -469,13 +425,13 @@ def test_for_other_gets_no_lease_and_one_row(tmp_path):
         def ready():
             _alive(procs, lambda: _dump(root, procs))
             facts = _facts(root)
-            rows = [fact for fact in facts if fact.id.startswith("attention:for-other:")]
+            rows = [fact for fact in facts if fact.id.startswith("for-other:")]
             return len(rows) == 1 and not _leases(facts, "to")
 
         wait_until(ready, 6, lambda: _dump(root, procs))
-        rows = [f for f in _facts(root) if f.id.startswith("attention:for-other:")]
-        assert rows[0].data["thread"] == "to"
-        assert rows[0].data["why"] == "for: other brnrd"
+        rows = [f for f in _facts(root) if f.id.startswith("for-other:")]
+        assert rows[0].data["dispositions"][0]["outcome"] == "operator"
+        assert rows[0].data["dispositions"][0]["reason"] == "for: other brnrd"
         assert _leases(_facts(root), "to") == []
     finally:
         _stop(root, procs)

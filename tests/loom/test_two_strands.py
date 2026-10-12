@@ -1,3 +1,4 @@
+from _step import mail
 """Two strands: mid-work letters are answered or returned to their author."""
 
 import json
@@ -6,7 +7,7 @@ import signal
 
 from brr.loom.runtime.ledger import read_facts
 from brr.loom.runtime.loom import _ingest
-from brr.loom.runtime.project import holder, owed
+from brr.loom.runtime.project import holder
 
 from _step import Loom, wait_until, write_thread
 
@@ -108,7 +109,7 @@ def test_a_letter_mid_work_is_answered_and_a_killed_bodys_letter_bounces(tmp_pat
         assert len(_replies(facts, ping1.data["id"], "1-gnip")) == 1
         ping2 = _body(facts, "ping-2")[0]
         assert not _replies(facts, ping2.data["id"], "2-gnip")
-        assert not owed(facts, "ta")
+        assert not mail(root, facts, "ta")
         starts = [f for f in facts if f.kind == "body.started"
                   and f.data.get("strand") == caught["strand"]]
         assert len(starts) == 1
@@ -121,11 +122,11 @@ def test_a_letter_mid_work_is_answered_and_a_killed_bodys_letter_bounces(tmp_pat
     assert not loom.errors
     assert loom.out_files() == []
     home_facts = read_facts(loom.home)
-    owed_before = [fact.id for fact in owed(home_facts, "ta")]
+    owed_before = [fact.id for fact in mail(root, home_facts, "ta")]
     held_before = holder(home_facts, "ta")
     _ingest(loom.home)
     again = read_facts(loom.home)
     assert [fact.id for fact in again] == [fact.id for fact in home_facts]
-    assert [fact.id for fact in owed(again, "ta")] == owed_before
+    assert [fact.id for fact in mail(root, again, "ta")] == owed_before
     assert holder(again, "ta") == held_before
     assert loom.out_files() == []

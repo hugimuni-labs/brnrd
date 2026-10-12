@@ -1,3 +1,4 @@
+from _step import mail
 """A room opens work by sending; the same table tells its opener what is live."""
 
 import json
@@ -9,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from brr.loom.runtime.ledger import inject_letter
 from brr.loom.runtime.selfrepo import git, init_self, _env_without_pin
-from brr.loom.runtime.project import holder, owed
+from brr.loom.runtime.project import holder
 
 from _step import Loom, wait_until, write_thread
 from test_lifecycle import bodies
@@ -99,7 +100,7 @@ else:
         assert git(root / 'self', 'show', 'main:threads/new-work/seat').stdout == 'body: worker/test-core\n'
         assert git(root / 'self', 'log', '-1', '--format=%H', '--', 'threads/new-work/README.md').stdout == git(
             root / 'self', 'log', '-1', '--format=%H', '--', 'threads/new-work/seat').stdout
-        assert [f.data['body'] for f in owed(loom.facts(), 'new-work')] == ['New work\nDetails']
+        assert [f.data['body'] for f in mail(root, loom.facts(), 'new-work')] == ['New work\nDetails']
         rows = table(root)
         assert rows['new-work'] == {'thread': 'new-work', 'seat': 'worker/test-core', 'now': 'working',
                                     'owed': '1', 'opened-by': 'thread:opener', 'plan': '—'}

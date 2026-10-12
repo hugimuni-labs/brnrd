@@ -1,10 +1,11 @@
+from _step import mail
 """An asker's acceptance releases a child; late work climbs and reopening answers."""
 
 import json
 
 from brr.loom.runtime.ledger import inject_letter
 from brr.loom.runtime.selfrepo import init_self
-from brr.loom.runtime.project import owed
+
 
 from _step import Loom, wait_until, write_thread
 from test_lifecycle import bodies
@@ -100,7 +101,7 @@ raise SystemExit("no second answer")
         assert "child" in climbed.read_text() and later in climbed.read_text()
         assert answer.read_text() == "second answer"
         assert "status: open" in readme.read_text()
-        wait_until(lambda: not owed(loom.facts(), "child"), 4, loom.dump)
+        wait_until(lambda: not mail(root, loom.facts(), "child"), 4, loom.dump)
     finally:
         loom.halt()
     assert not loom.errors
@@ -132,7 +133,7 @@ Path({str(done)!r}).write_text("ok")
     loom.start()
     try:
         wait_until(done.exists, 30, loom.dump)
-        wait_until(lambda: not owed(loom.facts(), "work"), 5, loom.dump)
+        wait_until(lambda: not mail(root, loom.facts(), "work"), 5, loom.dump)
         assert not [f for f in loom.facts() if f.id.startswith("loom/climbed")]
         assert not [f for f in loom.facts() if f.kind == "lease" and f.data.get("thread") == "inbox"]
     finally:

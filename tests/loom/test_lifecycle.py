@@ -1,3 +1,4 @@
+from _step import mail
 """A wasted start reaches the author; only a person's letter gets a second start."""
 
 import json
@@ -7,7 +8,7 @@ import time
 from brr.loom.runtime import speak
 from brr.loom.runtime.channels.relay import pull_once
 from brr.loom.runtime.ledger import inject_letter
-from brr.loom.runtime.project import owed
+
 from brr.loom.runtime.selfrepo import init_self
 
 from _step import Loom, wait_until, write_thread
@@ -76,7 +77,7 @@ raise SystemExit("no reply")
     try:
         wait_until(received.exists, 15, loom.dump)
         assert json.loads(received.read_text()) == {"answer": "answered the resend", "bounce_seen": True}
-        wait_until(lambda: not owed(loom.facts(), "worker"), 3, loom.dump)
+        wait_until(lambda: not mail(root, loom.facts(), "worker"), 3, loom.dump)
         time.sleep(0.3)
         assert starts.read_text().splitlines() == ["start", "start"]
     finally:
@@ -112,7 +113,7 @@ sys.exit(2)
     loom.start()
     try:
         wait_until(lambda: sent, 10, loom.dump)
-        wait_until(lambda: not owed(loom.facts(), "inbox"), 3, loom.dump)
+        wait_until(lambda: not mail(root, loom.facts(), "inbox"), 3, loom.dump)
         time.sleep(0.5)
         assert starts.read_text().splitlines() == ["start", "start"]
         assert len(sent) == 1

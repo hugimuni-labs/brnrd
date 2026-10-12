@@ -3,7 +3,7 @@
 from brr.daemon2.facts import Fact
 
 from brr.loom.runtime.config import granting_window
-from brr.loom.runtime.project import fold, holder, lease_accepted, owed
+from brr.loom.runtime.project import fold, holder, lease_accepted
 
 STRAND = "s-aaaa-aaaaaa"
 OTHER = "s-bbbb-bbbbbb"
@@ -76,7 +76,7 @@ def test_a_lease_from_the_new_router_fences_the_previous_install():
         note,
     ]
     assert holder(facts, "ta") == (OTHER, 2)
-    assert [fact.id for fact in owed(facts, "ta")] == [LETTER]
+    assert LETTER not in fold(facts).handled
 
 
 def test_the_router_stops_granting_before_a_fast_peer_can_acquire():

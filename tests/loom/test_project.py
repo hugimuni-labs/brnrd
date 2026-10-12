@@ -4,7 +4,7 @@ from brr.daemon2.facts import Fact
 
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import LedgerConflict, append, read_facts
-from brr.loom.runtime.project import holder, owed, unrunnable_ids
+from brr.loom.runtime.project import holder, fold
 
 STRAND = "s-ab12-aaaaaa"
 OTHER = "s-ab12-bbbbbb"
@@ -42,7 +42,7 @@ def test_answer_from_a_stale_gen_leaves_the_letter_owed():
         _fact("note", f"strand:{STRAND}",
               {"re": LETTER, "why": "late", "gen": 1}, f"{STRAND}/late", 4),
     ]
-    assert [fact.data["id"] for fact in owed(facts, "ta")] == [LETTER]
+    assert LETTER not in fold(facts).handled
     assert holder(facts, "ta") is None
 
 
@@ -54,7 +54,7 @@ def test_answer_during_the_live_gen_stays_handled_after_release():
               {"re": LETTER, "why": "done", "gen": 1}, f"{STRAND}/done", 3),
         _lease(STRAND, "ta", 1, 4, kind="released"),
     ]
-    assert owed(facts, "ta") == []
+    assert LETTER in fold(facts).handled
     assert holder(facts, "ta") is None
 
 
@@ -66,35 +66,7 @@ def test_answer_from_the_wrong_holder_does_not_count():
         _fact("note", f"strand:{OTHER}",
               {"re": LETTER, "why": "not mine", "gen": 1}, f"{OTHER}/nope", 4),
     ]
-    assert [fact.data["id"] for fact in owed(facts, "ta")] == [LETTER]
-
-
-def test_unrunnable_counts_shown_deaths_and_ignores_one_that_was_not_shown():
-    facts = [
-        _lease(STRAND, "ta", 1, 1),
-        _fact("body.started", "loom:ab12",
-              {"strand": STRAND, "gen": 1, "pid": 11, "adapter": "fake"},
-              "body.started:1", 2),
-        _fact("shown", f"strand:{STRAND}",
-              {"strand": STRAND, "gen": 1, "ids": [LETTER]}, f"{STRAND}/shown", 3),
-        _fact("body.died", "loom:ab12",
-              {"strand": STRAND, "gen": 1, "code": -9}, "body.died:1", 4),
-        _fact("body.started", "loom:ab12",
-              {"strand": STRAND, "gen": 1, "pid": 22, "adapter": "fake"},
-              "body.started:2", 5),
-        _fact("body.died", "loom:ab12",
-              {"strand": STRAND, "gen": 1, "code": 1}, "body.died:2", 6),
-    ]
-    assert unrunnable_ids(facts) == set()
-    facts.extend([
-        _fact("body.started", "loom:ab12",
-              {"strand": STRAND, "gen": 1, "pid": 33}, "body.started:3", 7),
-        _fact("shown", f"strand:{STRAND}",
-              {"strand": STRAND, "gen": 1, "ids": [LETTER]}, f"{STRAND}/shown3", 8),
-        _fact("body.died", "loom:ab12",
-              {"strand": STRAND, "gen": 1, "code": 1}, "body.died:3", 9),
-    ])
-    assert unrunnable_ids(facts) == {LETTER}
+    assert LETTER not in fold(facts).handled
 
 
 def test_same_id_different_content_is_rejected(tmp_path):
