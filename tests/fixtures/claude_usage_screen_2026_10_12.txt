@@ -1,0 +1,103 @@
+[Screen Reader Mode: on via flag]
+
+Permission Required: Accessing workspace:
+
+/tmp/brr-claude-usage-REDACTED
+
+Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take
+
+ a moment to review what's in this folder first.
+
+Claude Code'll be able to read, edit, and execute files here.
+
+Security guide
+
+y. Yes, I trust this folder
+
+n. No, exit
+
+Enter y/n:
+
+Enter to confirm · Esc to cancelClaude Code v2.1.291
+
+Haiku 4.5 · Claude Pro
+
+/tmp/brr-claude-usage-REDACTED
+
+warning: Safe mode: all customizations are disabled (CLAUDE.md, skills, plugins, hooks, MCP, agents, and more)
+
+Restart without --safe-mode to re-enable
+
+auto mode on (shift+tab to cycle)
+
+$manual mode on
+
+$You've used 92% of your weekly limit · resets 10pm (Europe/Paris)
+
+$you: /usage
+
+Galloping…
+
+manual mode on  ·  esc to interrupt
+
+You've used 92% of your weekly limit · resets 10pm (Europe/Paris)
+
+$Settings  Status   Config   Usage   Stats
+
+Session
+
+Total cost:            $0.0000
+
+Total duration (API):  0s
+
+Total duration (wall): 4s
+
+Total code changes:    0 lines added, 0 lines removed
+
+Usage:                 0 input, 0 output, 0 cache read, 0 cache write
+
+Current session
+
+10% 10% used
+
+Resets 3:40pm (Europe/Paris)
+
+Current week (all models)
+
+92% 92% used
+
+Resets Oct 12 at 10pm (Europe/Paris)
+
+What's contributing to your limits usage?
+
+Approximate, based on local sessions on this machine — does not include other devices or claude.ai
+
+Scanning local sessions…
+
+Refreshing…
+
+Esc to cancelPer-model breakdown unavailable (rate limited — try again in a moment)
+
+r to retry · Esc to cancelLast 24h · these are independent characteristics of your usage, not a breakdown
+
+65% of your usage was at >150k context
+
+Longer sessions are more expensive even when cached. /compact mid-task, /clear when switching to new tasks.
+
+31% of your usage came from sessions active for 8+ hours
+
+These are often background/loop sessions. Continuous usage can add up quickly so make sure it is intentional.
+
+11% of your usage was while 4+ sessions ran in parallel
+
+All sessions share one limit. If you don't need them all at once, queueing uses it more evenly.
+
+Skills, subagents, plugins, and MCP servers
+
+No attribution data yet · accumulates as you use Claude
+
+d to day · w to week
+
+Per-model breakdown unavailable (rate limited — try again in a moment)
+
+r to retry · Esc to cancel
