@@ -177,7 +177,11 @@ else:
     ctx.owed()
     Path({str(ready)!r}).touch()
     deadline = time.monotonic() + 12
-    while 'settled:' not in ctx.jack('post').raw:
+    boundary = ctx.room / 'port' / 'in' / 'boundary.md'
+    while True:
+        text = boundary.read_text() if boundary.is_file() else ''
+        if 'settled:' in text:
+            break
         assert time.monotonic() < deadline
         time.sleep(.03)
 ''')
