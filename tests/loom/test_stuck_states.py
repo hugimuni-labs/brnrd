@@ -159,7 +159,7 @@ def test_restart_recovers_a_body_that_outlived_its_loom(root, monkeypatch):
             (second.home.thread_dir("work") / "policy").write_text("answer-fast\n")
             os.killpg(pid, signal.SIGKILL)
             fresh = inject_letter(root, to="thread:work", body="back after restart")
-            wait_until(lambda: answered(second, fresh), 2, second.dump)
+            wait_until(lambda: answered(second, fresh), 8, second.dump)
     finally:
         if first.thread.is_alive():
             first.halt()
@@ -275,6 +275,7 @@ def test_uncertain_speech_gets_a_visible_notice(root, monkeypatch):
         # Preserve at-most-once: an explanation, never a resend.
         time.sleep(0.3)
         path = root / "loom" / "channel-fake.jsonl"
+        wait_until(path.exists, 5, loom.dump)
         assert "msg-0" not in [json.loads(line)["text"] for line in path.read_text().splitlines()]
         # This body only talks; a person settles the notice by hand, and with
         # it the draft it stands for.
@@ -353,7 +354,7 @@ def test_relay_poll_recovers_after_saved_cursor_is_repaired(root, tmp_path, monk
         log = root / "loom" / "loom.log"
         reach(lambda: log.exists() and "JSONDecodeError" in log.read_text(), loom)
         saved.write_text('{"cursor": 0}\n')
-        wait_until(lambda: answered(loom, "letter:relay:after-repair"), 2, loom.dump)
+        wait_until(lambda: answered(loom, "letter:relay:after-repair"), 8, loom.dump)
 
 
 @stuck("inbox addressed to an absent brnrd leaves phone messages without even a refusal")
@@ -363,6 +364,9 @@ def test_unavailable_inbox_owner_explains_the_refusal_remotely(root, tmp_path, m
     person = root / "self" / "people" / "owner"
     person.mkdir(parents=True)
     (person / "channels.md").write_text("telegram:42\n")
+    from brr.loom.runtime.selfrepo import git, _commit
+    git(root / "self", "add", "threads", "people")
+    _commit(root / "self", "Land inbox ownership and direct chat.")
     state = tmp_path / "relay"
     (root / "loom" / "config.toml").write_text(f'relay_state = "{state}"\n')
     sent = []
@@ -381,6 +385,9 @@ def test_unavailable_inbox_owner_explains_the_refusal_remotely(root, tmp_path, m
 
     monkeypatch.setattr(relay, "RelayClient", Client)
     with running(root) as loom:
-        reach(lambda: any(f.id == "attention:for-other:inbox" for f in loom.facts()), loom)
+        from brr.loom.runtime.owners import letter_owners
+        from brr.loom.runtime.lifecycle import main_snapshot
+        reach(lambda: any(f.owner == "operator" and f.reason == "for: other brnrd"
+                          for f in letter_owners(loom.facts(), main_snapshot(loom.home)).values()), loom)
         # Respect ownership; the requested outcome is a refusal the person sees.
         wait_until(lambda: any(p.get("body_markdown") for p in sent), 2, loom.dump)

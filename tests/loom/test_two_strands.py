@@ -7,7 +7,7 @@ import signal
 
 from brr.loom.runtime.ledger import read_facts
 from brr.loom.runtime.loom import _ingest
-from brr.loom.runtime.project import holder
+from brr.loom.runtime.project import holder, fold, sender_threads
 
 from _step import Loom, wait_until, write_thread
 
@@ -98,9 +98,12 @@ def test_a_letter_mid_work_is_answered_and_a_killed_bodys_letter_bounces(tmp_pat
             pings = _body(facts, "ping-2")
             if not caught["killed"] or not pings:
                 return False
-            bounce = [f for f in facts if f.kind == "letter" and f.data.get("from") == "loom"
+            bounce = [f for f in fold(facts).accepted if f.kind == "letter" and f.data.get("from") == "loom"
                       and pings[0].data["id"] in f.data.get("body", "")]
-            return bool(bounce and _shown(facts, bounce[0].data["id"], pings[0].data["from"]))
+            writers = sender_threads(facts)
+            return bool(bounce and any(f.kind == "shown"
+                        and bounce[0].id in f.data.get("ids", ())
+                        and writers.get(f.data.get("strand")) == "tb" for f in facts))
 
         wait_until(drive, 25, loom.dump)
         facts = loom.facts()

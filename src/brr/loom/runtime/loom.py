@@ -224,7 +224,7 @@ def _read_by_predecessors(facts: list[Fact], thread: str, strand: str,
 
 def _prepare(home: Home, strand: str, thread: str, gen: int,
              letters: list[Fact], threads: dict[str, str],
-             facts: list[Fact], jack: str) -> Path:
+             facts: list[Fact], jack: str, *, fuel: str = "") -> Path:
     room = home.room(strand).resolve()
     fresh = not (room / "self" / ".git").exists()
     clone = clone_room(home.root, strand)
@@ -283,7 +283,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     atomic_write(
         room / "port" / "in" / "boundary.md",
         render_boundary(strand, gen, thread, letters, shown, threads,
-                        channels=reply_channels(facts),
+                        fuel=fuel, channels=reply_channels(facts),
                         opened=thread_table(home, facts), plan=_plan(room, thread, letters),
                         replies={k: f.reply_to for k, f in letter_owners(facts, main_snapshot(home)).items()}),
     )
@@ -349,7 +349,7 @@ def _start(home: Home, strand: str, thread: str, gen: int,
         else:
             shell, core = choice
         folder = resolve(home, shell)
-        from .usage import reading
+        from .usage import reading, fuel
         prior = [f for f in facts if f.data.get("strand") == strand]
         after = max((datetime.fromisoformat(f.at).timestamp() for f in prior
                      if f.kind in {"body.exited", "body.parked"}), default=0)
@@ -377,6 +377,7 @@ def _start(home: Home, strand: str, thread: str, gen: int,
         room = _prepare(
             home, strand, thread, gen, letters, sender_threads(facts), facts,
             (folder / "jack").read_text().strip(),
+            fuel=fuel(home, shell),
         )
         policy = _policy(home, thread)
         if policy is not None:
@@ -542,7 +543,10 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
     from .lifecycle import read_thread
     room = home.room(strand)
     try:
-        tail = (room / "port/body.log").read_text(errors="replace")[-400:]
+        with (room / "port/body.log").open("rb") as log:
+            log.seek(0, os.SEEK_END)
+            log.seek(max(0, log.tell() - 400))
+            tail = log.read().decode(errors="replace")
     except OSError:
         tail = failure
     shown = fold(facts).shown.get(strand, set())

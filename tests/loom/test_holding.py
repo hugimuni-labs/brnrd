@@ -127,6 +127,7 @@ print(json.dumps({'windows': [{'name': 'session', 'left_pct': left,
         wait_until(lambda: any(f.kind == "body.parked" for f in loom.facts()), 10, loom.dump)
         facts = loom.facts()
         assert any(f.kind == "body.exited" and f.data["code"] == 0 for f in facts)
+        assert [f.data["cause"] for f in facts if f.kind == "attempt.ended"] == ["paced"]
         assert [l.data["id"] for l in mail(root, facts, "work")] == [letter]
         assert not any(f.id.startswith("loom/bounce-") or f.id.startswith("attention:wasted:") for f in facts)
         assert len([f for f in facts if f.kind == "body.started"]) == 1
