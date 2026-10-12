@@ -570,12 +570,14 @@ def _plan(home: Home, thread: str, facts: list[Fact]) -> str:
     missing = [ident for ident, fate in table.items()
                if not fate.done and fate.thread == thread
                and fate.owner in {"body", "loom", "opener"} and not fate.plan_rows]
-    if rows is None and not missing:
+    if rows is None:
+        # A thread with no plan is not asked for one: the nag is for a plan
+        # that exists and has fallen behind its letters.
         return ""
-    text = f"plan {sum(done for done, _ in rows)}/{len(rows)}" if rows is not None else "plan —"
+    text = f"plan {sum(done for done, _ in rows)}/{len(rows)}"
     if missing:
         text += " · letters without a row: " + ", ".join(missing)
-    next_row = next((text for done, text in rows or () if not done), "")
+    next_row = next((text for done, text in rows if not done), "")
     if next_row:
         text += f" · next: {next_row[:60]}"
     return text
