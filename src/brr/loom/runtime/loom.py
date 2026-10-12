@@ -660,8 +660,7 @@ def _drained(home, facts, strand, thread, gen):
 def _drain_strand(home: Home, facts: list[Fact], strand: str) -> list[Fact]:
     """Take this strand's last port/out files. Empty is what port.drained attests."""
     room = home.room(strand)
-    deadline = time.monotonic() + 1.0
-    while True:
+    for _ in range(8):
         facts = _ingest(home, facts)
         leftover = [path for path in _port_files(room) if path.suffix != ".tmp"]
         if not leftover:
@@ -671,17 +670,15 @@ def _drain_strand(home: Home, facts: list[Fact], strand: str) -> list[Fact]:
                 except OSError:
                     pass
             return facts
-        if time.monotonic() >= deadline:
-            for path in list(_port_files(room)):
-                try:
-                    _reject(home, room, path, "still in port at drain", facts)
-                except Exception:
-                    try:
-                        path.unlink()
-                    except OSError:
-                        pass
-            return facts
-        time.sleep(0.02)
+    for path in list(_port_files(room)):
+        try:
+            _reject(home, room, path, "still in port at drain", facts)
+        except Exception:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+    return facts
 
 
 def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
