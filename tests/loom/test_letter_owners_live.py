@@ -276,8 +276,8 @@ else:
     loom = Loom(root)
     loom.start()
     try:
-        wait_until(accepted.exists, 15, loom.dump)
-        ident = accepted.read_text()
+        wait_until(lambda: accepted.is_file() and accepted.read_text().strip(), 15, loom.dump)
+        ident = accepted.read_text().strip()
         assert letter_owners(loom.facts(), main_snapshot(loom.home))[ident].done
         assert not any(f.kind == 'note' and f.data.get('re') == ident for f in loom.facts())
     finally:
