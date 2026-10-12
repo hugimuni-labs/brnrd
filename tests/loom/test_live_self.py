@@ -11,6 +11,8 @@ from brr.loom.runtime.ledger import inject_letter
 from brr.loom.runtime.selfrepo import _commit, git, init_self
 
 from _step import Loom, notices, wait_until, write_thread
+from brr.loom.runtime.owners import letter_owners
+from brr.loom.runtime.lifecycle import main_snapshot
 
 
 def test_the_self_decides_the_live_bodys_wake(tmp_path, monkeypatch):
@@ -41,12 +43,12 @@ def test_a_live_body_sees_identity_and_lands_a_labeled_commit(tmp_path, sender):
     init_self(root, person="ada")
     write_thread(root, "live", "Carry the self", "self-commit", wait="0")
     seed = git(root / "self", "rev-parse", "main").stdout.strip()
-    inject_letter(root, to="thread:live", body="carry it", sender=sender)
+    ident = inject_letter(root, to="thread:live", body="carry it", sender=sender)
     loom = Loom(root)
     loom.start()
     try:
         if sender == "p-stranger":
-            wait_until(lambda: any(f.id.startswith("attention:wasted:") for f in loom.facts()),
+            wait_until(lambda: letter_owners(loom.facts(), main_snapshot(loom.home))[ident].owner == "operator",
                        15, loom.dump)
             assert git(root / "self", "rev-parse", "main").stdout.strip() == seed
             assert not (root / "self" / "memory" / "moves" / "live-body.md").exists()
@@ -65,7 +67,7 @@ def test_a_live_body_sees_identity_and_lands_a_labeled_commit(tmp_path, sender):
         assert "Loom-Label: taint=0; audience=self" in message
         assert git(root / "self", "log", "-1", "--format=%ae %ce").stdout.strip() == (
             "loom@localhost loom@localhost")
-        assert not [f for f in facts if f.kind in {"body.died", "attention"}]
+        assert not [f for f in facts if f.kind == "attempt.ended" and f.data["cause"] == "failed"]
     finally:
         loom.halt()
         assert not loom.errors
@@ -79,13 +81,10 @@ def test_a_wake_over_budget_returns_the_failure_and_a_new_letter_recovers(tmp_pa
     loom = Loom(root)
     loom.start()
     try:
-        # The loom writes the attention row, then the note that disposes of the
-        # letter: wait for the second, or a read between the two sees it owed.
-        wait_until(lambda: any(f.id.startswith("wasted:") for f in loom.facts()), 8, loom.dump)
+        wait_until(lambda: letter_owners(loom.facts(), main_snapshot(loom.home))[original].owner == "operator",
+                   8, loom.dump)
         facts = loom.facts()
-        failures = [f for f in facts if f.id.startswith("attention:wasted:")]
-        assert len(failures) == 1
-        assert "wake exited 3: over budget:" in failures[0].data["why"]
+        assert "wake exited 3: over budget:" in letter_owners(facts, main_snapshot(loom.home))[original].reason
         assert not [f for f in facts if f.kind == "body.started"]
         assert not mail(root, facts, "fat")
         monkeypatch.delenv("LOOM_BUDGET_BYTES")

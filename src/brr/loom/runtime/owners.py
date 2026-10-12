@@ -119,7 +119,10 @@ def letter_owners(facts, main: dict[str, dict]) -> dict[str, Ownership]:
                           for f in state.accepted)):
                 keep('body', refused.get(ident) or 'assigned to current body')
             else:
-                keep('loom', refused.get(ident) or reason or 'waiting for start', action='start')
+                climbed = d.get('from') == 'loom' and ident.startswith(('loom/bounce-', 'loom/climbed-'))
+                keep('opener' if climbed else 'loom',
+                     refused.get(ident) or reason or ('waiting for opener' if climbed else 'waiting for start'),
+                     action='start')
     return result
 
 

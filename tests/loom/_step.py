@@ -22,7 +22,8 @@ def write_thread(root: Path, thread: str, readme: str, policy: str,
     directory.mkdir(parents=True, exist_ok=True)
     text = readme if readme.endswith("\n") else readme + "\n"
     if not text.startswith("---\n"):
-        text = (f"---\nid: {thread}\nstatus: open\ntense: plan\n---\n# " + text)
+        headline = text.removeprefix("# ")
+        text = (f"---\nid: {thread}\nstatus: open\ntense: plan\n---\n# " + headline)
     (directory / "README.md").write_text(text)
     (directory / "policy").write_text(policy.strip() + "\n")
     (directory / "wait").write_text(str(wait).strip() + "\n")

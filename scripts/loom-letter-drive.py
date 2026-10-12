@@ -21,6 +21,7 @@ p = argparse.ArgumentParser()
 p.add_argument('--output', type=Path, required=True)
 p.add_argument('--core', default='gpt-6-luna')
 p.add_argument('--timeout', type=float, default=240)
+p.add_argument('--case', choices=['person', 'worker', 'failed-start', 'all'], default='all')
 args = p.parse_args()
 args.output.mkdir(parents=True, exist_ok=True)
 
@@ -71,6 +72,9 @@ def drive(name, instructions, failed=False):
             body.close_log()
 
 
-drive('person', 'Answer this letter with exactly RECEIVED using send --re <id> --to channel:fake, then settle inbox --why answered. Call the hand jack between acts. Do no other work.')
-drive('worker', 'Open a worker with send --to thread:worker --body codex/'+args.core+' "Reply WORKED to thread:inbox with --re the received id, then end. Do no other work." Note this original letter with --re its id --to thread:inbox --note dispatched. Call the hand jack between acts until WORKED arrives. Settle worker --why complete, then settle inbox --why complete. Do no other work.')
-drive('failed-start', 'Record a deliberately failed start.', failed=True)
+if args.case in {'person', 'all'}:
+    drive('person', 'Answer this letter with exactly RECEIVED using send --re <id> --to channel:fake, then settle inbox --why answered. Call the hand jack between acts. Do no other work.')
+if args.case in {'worker', 'all'}:
+    drive('worker', 'Open a worker with send --to thread:worker --body codex/'+args.core+' "Reply WORKED to thread:inbox with --re the received id, then end. Do no other work." Note this original letter with --re its id --to thread:inbox --note dispatched. Call the hand jack between acts until WORKED arrives. Settle worker --why complete, then settle inbox --why complete. Do no other work.')
+if args.case in {'failed-start', 'all'}:
+    drive('failed-start', 'Record a deliberately failed start.', failed=True)
