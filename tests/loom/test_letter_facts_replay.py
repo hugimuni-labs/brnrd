@@ -11,5 +11,5 @@ RECORDINGS = Path(__file__).parent / 'fixtures/letter-facts'
 def test_every_prefix_of_a_real_drive_has_one_owner(path):
     record = json.loads(path.read_text())
     assert record['body'].startswith(('codex/', 'grok/'))
-    problems = violations([Fact.from_row(row) for row in record['facts']], record['main'])
+    problems = violations([Fact.from_row(row) for row in record['facts']], record['main'], quiet_end=True)
     assert not problems, '\n'.join(f'prefix {p}: {letter}: {why}' for p, letter, why in problems)

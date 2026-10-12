@@ -559,6 +559,7 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
     tank = fuel(home, start.data["shell"]) if start else ""
     dispositions = []
     writers = sender_threads(facts)
+    channels = reply_channels(facts)
     opener = str(read_thread(home, thread).get("opened-by", ""))
     for letter in letters:
         ident, author = letter.id, str(letter.data.get("from", ""))
@@ -569,6 +570,24 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
                        and ident in f.data.get("ids", ()) for f in facts)
         if author.startswith(("p-", "person:")) and failures == 0:
             dispositions.append({"id": ident, "outcome": "retry", "reason": "first failed attempt"})
+            continue
+        if author.startswith(("p-", "person:")):
+            from .channels.relay import person_dm
+            channel = channels.get(ident)
+            person = "person:" + author.removeprefix("p-").removeprefix("person:")
+            if channel and person_dm(home, channel) == person:
+                first = str(letter.data.get("body", "")).splitlines()
+                successor = notice(home, facts, "failed-message", ident,
+                                   f"thread {thread} could not handle your letter: {first[0] if first else ''}\n{tail}",
+                                   "send again, or leave it", about=letter, channel=channel,
+                                   source_strand=strand, draft_only=True)
+                if isinstance(successor, Fact):
+                    dispositions.append({"id": ident, "outcome": "done",
+                                         "reason": "failure message owed to author",
+                                         "successor": successor.data})
+                    continue
+            dispositions.append({"id": ident, "outcome": "operator",
+                                 "reason": f"failed attempt limit; no usable author channel: {failure or tail}"})
             continue
         if letter.data.get("notice"):
             dispositions.append({"id": ident, "outcome": "done", "reason": "passive notice shown"})
