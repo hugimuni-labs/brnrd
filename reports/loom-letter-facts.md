@@ -69,3 +69,12 @@ One attempt.ended row carries the observed cause, code, ids and all failure disp
 13 passed in 0.39s
 
 ```
+
+## Step 3
+The pure letter_owners table derives owner, reason, action and reply address from accepted facts and a pinned main inventory. Router route/climb, wake and boundary mail, thread counts and attention read it. owed, actionable and unrunnable_ids are deleted. Operator debts are listed by attention and threads, and attention --note ID --why TEXT writes a person note. Tests of the deleted legacy body.died selector were deleted; live failed-start coverage replaces them.
+
+```
+.....                                                                    [100%]
+5 passed in 20.44s
+
+```

@@ -122,7 +122,8 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     shown: set[str], sender_threads: dict[str, str], fuel: str = "",
                     settled: str | None = None,
                     channels: dict[str, str] | None = None,
-                    opened: list[dict] | tuple[dict, ...] = (), plan: str = "") -> str:
+                    opened: list[dict] | tuple[dict, ...] = (), plan: str = "",
+                    replies: dict[str, str] | None = None) -> str:
     """Letters this strand was already shown are compacted to id plus first line."""
     lines = [
         f"<!-- port {strand} gen {gen} · owed "
@@ -145,7 +146,8 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
     lines[2:2] = children
     for letter in letters:
         compact = str(letter.data["id"]) in shown
-        lines.extend(_letter_lines(letter, _reply(letter, sender_threads, thread, channels or {}), compact))
+        reply = replies.get(letter.id, "-") if replies is not None else _reply(letter, sender_threads, thread, channels or {})
+        lines.extend(_letter_lines(letter, reply, compact))
     lines.append("")
     return "\n".join(lines)
 

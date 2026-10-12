@@ -12,18 +12,33 @@ from .project import fold
 
 def violations(facts, main):
     """Return coordinates, never repair a ledger while checking it."""
+    from .owners import letter_owners
     problems = []
     rows = union(list(facts))
     for prefix in range(1, len(rows) + 1):
         current = rows[:prefix]
-        state = fold(current)
-        sent = {f.data.get('key') for f in current
-                if f.kind == 'speech' and f.data.get('state') == 'sent'}
-        for reply in state.accepted:
-            original = reply.data.get('re')
-            if (reply.kind == 'letter' and is_channel(reply.data.get('to'))
-                    and original in state.handled and reply.id not in sent):
-                problems.append((prefix, original, 'retired before send receipt; channel still owes reply'))
+        table = letter_owners(current, main)
+        accepted = {f.id for f in fold(current).accepted if f.kind == 'letter'}
+        for ident in accepted:
+            fate = table.get(ident)
+            if fate is None:
+                problems.append((prefix, ident, 'accepted letter has no table row'))
+            elif not fate.done and fate.owner not in {'loom', 'body', 'channel', 'opener', 'operator'}:
+                problems.append((prefix, ident, 'owed letter has no unique owner'))
+            elif fate.owner in {'body', 'opener'} and not fate.thread:
+                problems.append((prefix, ident, 'thread owner has no thread'))
+            elif not fate.reason:
+                problems.append((prefix, ident, 'ownership has no reason'))
+        sent = {f.data.get('key') for f in current if f.kind == 'speech' and f.data.get('state') == 'sent'}
+        for reply in fold(current).accepted:
+            re = reply.data.get('re')
+            if reply.kind == 'letter' and is_channel(reply.data.get('to')) and re in table:
+                if table[re].done and reply.id not in sent:
+                    # A later explicit note can retire an undelivered letter deliberately.
+                    notes = [f for f in current if f.kind == 'note' and f.data.get('re') == re]
+                    if not notes and table[re].reason not in {'worker settled by its opener'}:
+                        problems.append((prefix, re, 'retired before send receipt; channel still owes reply'))
+
     return problems
 
 

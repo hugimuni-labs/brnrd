@@ -156,7 +156,7 @@ def occasion(path: Path) -> str:
         ident, sender, body = item["id"], item["from"], item["body"]
         if not all(isinstance(value, str) for value in (ident, sender, body)):
             die("owed.json: id, from and body must be strings")
-        chunks.append(f"### {ident} from {sender}\n{ensure_nl(body)}")
+        chunks.append(f"### {ident} from {sender} · reply {item.get('reply_to', '-')}\n{ensure_nl(body)}")
     return "".join(chunks)
 
 

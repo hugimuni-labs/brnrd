@@ -26,7 +26,9 @@ from .ledger import LedgerConflict, append, read_facts
 from .port import (
     fact_from_port, fact_from_taint, parse_frontmatter, render_boundary,
 )
-from .project import actionable, fold, generation, is_notice, reply_channels, sender_threads
+from .project import fold, generation, is_notice, reply_channels, sender_threads
+from .owners import letters_for, letter_owners
+from .lifecycle import main_snapshot
 from .selfrepo import (
     AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, git, room as clone_room, run_wake,
 )
@@ -245,7 +247,8 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     for name in ("jack-state.json", "policy"):
         (room / "port" / name).unlink(missing_ok=True)
     owed_path = room / "port" / "owed.json"
-    atomic_write(owed_path, json.dumps([letter.data for letter in letters]))
+    atomic_write(owed_path, json.dumps([dict(letter.data, reply_to=letter_owners(facts, main_snapshot(home))[letter.id].reply_to)
+                                              for letter in letters]))
     part_path = room / "port" / "loom.md"
     inherited = _read_by_predecessors(facts, thread, strand, letters, threads)
     atomic_write(part_path, inherited + (
@@ -281,7 +284,8 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         room / "port" / "in" / "boundary.md",
         render_boundary(strand, gen, thread, letters, shown, threads,
                         channels=reply_channels(facts),
-                        opened=thread_table(home, facts), plan=_plan(room, thread, letters)),
+                        opened=thread_table(home, facts), plan=_plan(room, thread, letters),
+                        replies={k: f.reply_to for k, f in letter_owners(facts, main_snapshot(home)).items()}),
     )
     return room
 
@@ -335,7 +339,7 @@ def _start(home: Home, strand: str, thread: str, gen: int,
     """Launch one body; the gauge can defer a start without consuming letters."""
     if strand in bodies:
         return facts
-    letters = actionable(facts, thread)
+    letters = letters_for(facts, main_snapshot(home), thread)
     ids = [str(letter.data["id"]) for letter in letters]
     try:
         # Pending/parked starts never ran and resume without a new choice.
@@ -544,6 +548,11 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
     shown = fold(facts).shown.get(strand, set())
     # Failed preparation is an attempted start even if no wake reached a body.
     ids = sorted(shown | {f.id for f in letters})
+    start = next((f for f in reversed(facts) if f.kind == "body.started"
+                  and f.data.get("strand") == strand and f.data.get("gen") == gen), None)
+    from .usage import fuel
+    changed = _readme(room, thread) != start.data.get("readme") if start else "unknown"
+    tank = fuel(home, start.data["shell"]) if start else ""
     dispositions = []
     writers = sender_threads(facts)
     opener = str(read_thread(home, thread).get("opened-by", ""))
@@ -567,7 +576,8 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
         if target == thread:
             target = opener.removeprefix("thread:") if opener.startswith("thread:") else None
         if home.routable(target):
-            what = f"letter {ident} on thread {thread}: body failed ({code})\n{tail}"
+            what = (f"letter {ident} on thread {thread}: body exited {code}; "
+                    f"README changed since start: {changed}; {tank or 'fuel unknown'}\n{tail}")
             successor = notice(home, facts, "bounce", ident, what, "send again, or leave it",
                                thread=target, about=letter, source_strand=strand, draft_only=True)
             if isinstance(successor, Fact):
@@ -579,6 +589,7 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
     facts.append(_record(home, "attempt.ended", {
         "thread": thread, "strand": strand, "gen": gen, "ids": ids,
         "cause": cause, "code": code, "dispositions": dispositions,
+        "evidence": {"tail": tail, "readme_changed": changed, "fuel": tank},
     }, f"attempt.ended:{strand}:{gen}"))
     return facts
 
@@ -619,7 +630,7 @@ def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
                       and f.data.get("strand") == strand), None)
         paced = bool(start and below_floor(home, start.data["shell"]))
         shown = fold(facts).shown.get(strand, set())
-        letters = [letter for letter in actionable(facts, body.thread) if letter.id in shown]
+        letters = [letter for letter in letters_for(facts, main_snapshot(home), body.thread) if letter.id in shown]
         cause = ("molted" if molted else "paced" if paced else
                  "settled" if read_thread(home, body.thread).get("status") in CLOSED else
                  "idle" if not letters else "failed")
@@ -654,32 +665,25 @@ def _refresh_holders(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> 
         if body_alive(home.room(strand)):
             settled = (closing_commit(home, thread)[1]
                        if read_thread(home, thread).get("status") in CLOSED else None)
-            letters = actionable(facts, thread)
+            letters = letters_for(facts, main_snapshot(home), thread)
             text = render_boundary(strand, gen, thread, letters,
                                    state.shown.get(strand, set()), threads,
                                    fuel(home, shells[strand]) if shells.get(strand) else "", settled,
-                                   channels, opened=table, plan=_plan(home.room(strand), thread, letters))
+                                   channels, opened=table, plan=_plan(home.room(strand), thread, letters),
+                                   replies={k: f.reply_to for k, f in letter_owners(facts, main_snapshot(home)).items()})
             path = home.room(strand) / "port" / "in" / "boundary.md"
             if not path.is_file() or path.read_text() != text:
                 atomic_write(path, text)
         elif strand in bodies:
             # _reap writes the same exit for a watched or inherited holder.
             continue
-        elif read_thread(home, thread).get("status") in CLOSED:
-            facts = _release(home, facts, strand, thread, gen)
         elif strand in pending and pending[strand].kind in {"body.pending", "body.parked"}:
             if time.time() >= pending[strand].data.get("until", 0):
                 facts = _start(home, strand, thread, gen, bodies, facts)
         else:
-            try:
-                facts.append(_record(home, "released", {
-                    "thread": thread, "strand": strand, "gen": gen,
-                    "why": "holder gone", "install": home.install_id(),
-                }, f"released:{thread}:{gen}"))
-            except LedgerConflict:
-                # Someone else's release of this grant is on the ledger; a
-                # conflict here must not abort the tick for every thread.
-                continue
+            # An orphaned attempt still owes the same end and drain observations.
+            bodies[strand] = Body(strand, thread, gen)
+
     return facts
 
 

@@ -1,3 +1,4 @@
+from _step import mail
 """Warm follow-ups and paced exits through real loom loops and hook bodies."""
 
 import json
@@ -5,7 +6,7 @@ import os
 
 from brr.loom.runtime import speak
 from brr.loom.runtime.ledger import inject_letter
-from brr.loom.runtime.project import owed
+
 from brr.loom.runtime.selfrepo import git, init_self
 
 from _step import Loom, wait_until, write_thread
@@ -43,16 +44,16 @@ while True:
     loom = Loom(root)
     loom.start()
     try:
-        wait_until(lambda: len(replies) == 1 and waiting.exists() and not owed(loom.facts(), "work"), 12, loom.dump)
+        wait_until(lambda: len(replies) == 1 and waiting.exists() and not mail(root, loom.facts(), "work"), 12, loom.dump)
         pid = replies[0]["pid"]
         os.kill(pid, 0)
         inject_letter(root, to="thread:work", body="follow-up")
-        wait_until(lambda: len(replies) == 2 and not owed(loom.facts(), "work"), 10, loom.dump)
+        wait_until(lambda: len(replies) == 2 and not mail(root, loom.facts(), "work"), 10, loom.dump)
         assert replies == [{"body": "first", "pid": pid}, {"body": "follow-up", "pid": pid}]
         wait_until(lambda: any(f.kind == "body.exited" for f in loom.facts()), 8, loom.dump)
         assert not any(f.id.startswith("loom/bounce-") for f in loom.facts())
         inject_letter(root, to="thread:work", body="later")
-        wait_until(lambda: len(replies) == 3 and not owed(loom.facts(), "work"), 12, loom.dump)
+        wait_until(lambda: len(replies) == 3 and not mail(root, loom.facts(), "work"), 12, loom.dump)
         assert replies[2]["body"] == "later" and replies[2]["pid"] != pid
         starts = [f for f in loom.facts() if f.kind == "body.started"]
         assert [f.data["pid"] for f in starts] == [pid, replies[2]["pid"]]
@@ -126,7 +127,7 @@ print(json.dumps({'windows': [{'name': 'session', 'left_pct': left,
         wait_until(lambda: any(f.kind == "body.parked" for f in loom.facts()), 10, loom.dump)
         facts = loom.facts()
         assert any(f.kind == "body.exited" and f.data["code"] == 0 for f in facts)
-        assert [l.data["id"] for l in owed(facts, "work")] == [letter]
+        assert [l.data["id"] for l in mail(root, facts, "work")] == [letter]
         assert not any(f.id.startswith("loom/bounce-") or f.id.startswith("attention:wasted:") for f in facts)
         assert len([f for f in facts if f.kind == "body.started"]) == 1
     finally:

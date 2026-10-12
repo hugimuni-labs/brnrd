@@ -1,3 +1,4 @@
+from _step import mail
 """Phone-operability regressions: desired recovery through the actual loom loop.
 
 Selected recovery cases pass; remaining xfails track deferred ranks. Fixtures use
@@ -20,10 +21,10 @@ from brr.loom.runtime import loom as runtime, speak
 from brr.loom.runtime.channels import relay
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, inject_letter
-from brr.loom.runtime.project import owed, fold, holder, unrunnable_ids
+from brr.loom.runtime.project import fold, holder
 from brr.loom.runtime.selfrepo import init_self
 
-from _step import Loom, historical_quarantine, hand_note, notices, wait_until, write_thread
+from _step import Loom, hand_note, notices, wait_until, write_thread
 
 
 def stuck(reason):
@@ -119,18 +120,6 @@ def drain_before_death(root, monkeypatch):
     run.chmod(0o755)
 
 
-
-def test_an_unrunnable_letter_is_handed_to_a_body(root, monkeypatch):
-    drain_before_death(root, monkeypatch)
-    thread(root, "die-on-unrunnable")
-    original = inject_letter(root, to="thread:work", body="unrunnable")
-    # Replay the pre-lifecycle ledger: quarantined letters keep their treatment,
-    # although new exits no longer create death/fuse retries.
-    historical_quarantine(root, "work", original)
-    with running(root) as loom:
-        # Nothing else on its thread can wake a body, so inbox is told.
-        told_and_settled(loom, original, "inbox", "quarantined", "thread work")
-        assert not owed(loom.facts(), "work")
 
 
 @stuck("a silent live body has no progress deadline or message-triggered replacement")

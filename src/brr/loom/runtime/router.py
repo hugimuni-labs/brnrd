@@ -17,9 +17,11 @@ from .config import LoomConfig, granting_window, load_config, loom_clock
 from .home import Home, is_channel, mint
 from .ledger import LedgerConflict
 from .project import (
-    actionable, fold, holder, is_notice, owed, sender_threads, unrunnable_ids,
+    fold, holder, is_notice, sender_threads,
 )
 from .selfrepo import ReadmeError, parse_readme
+from .owners import letter_owners, letters_for
+from .lifecycle import main_snapshot
 from .speak import CHANNEL, speak
 
 
@@ -59,19 +61,9 @@ def install_silent(facts: list[Fact], install: str, ttl: float) -> bool:
 
 def readme_for(home: Home, thread: str) -> str | None:
     """``for:`` from a step-2 README. A step-1 plain README has none."""
-    path = home.thread_dir(thread) / "README.md"
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return None
-    try:
-        data = parse_readme(text)
-    except ReadmeError:
-        return None
-    value = data.get("for")
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    return None
+    value = main_snapshot(home).get(thread, {}).get("for")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
 
 
 class Router:
@@ -208,15 +200,14 @@ class Router:
             facts = self._release_abandoned(facts, thread, body_alive)
             if holder(facts, thread):
                 continue
-            letters = [f for f in actionable(facts, thread) if not f.data.get("notice")]
+            letters = [f for f in letters_for(facts, main_snapshot(home), thread) if not f.data.get("notice")]
             if not letters:
                 continue
             target = readme_for(home, thread)
             if target and target != self.config.name:
-                _attention(
-                    home, f"attention:for-other:{thread}", "for: other brnrd",
-                    thread=thread,
-                )
+                self._keep(facts, "letter.disposed", {"dispositions": [
+                    {"id": f.id, "outcome": "operator", "reason": "for: other brnrd"}
+                    for f in letters]}, f"for-other:{thread}:{letters[-1].id}")
                 continue
             from .adapters import at_birth
             try:
@@ -226,11 +217,9 @@ class Router:
                        "correct its body: shell/core choice", thread=thread)
                 continue
             if choice[0] == "fake" and _policy(home, thread) is None:
-                _attention(
-                    home, f"attention:no-policy:{thread}",
-                    f"fake adapter: thread {thread} has no policy file",
-                    thread=thread,
-                )
+                self._keep(facts, "letter.disposed", {"dispositions": [
+                    {"id": f.id, "outcome": "operator", "reason": "fake adapter has no policy"}
+                    for f in letters]}, f"no-policy:{thread}:{letters[-1].id}")
                 continue
             if not self.armed():
                 return facts
@@ -273,6 +262,18 @@ class Router:
         own = owner == self.home.install_id()
         if not (owner and not own and install_silent(facts, owner, self.config.router_ttl)):
             return facts
+        from .loom import _ingest, _end_attempt, _drained
+        from .lifecycle import read_thread, CLOSED
+        facts = _ingest(self.home, facts, self.config.router_ttl)
+        state = fold(facts)
+        shown = state.shown.get(strand, set())
+        letters = [f for f in letters_for(facts, main_snapshot(self.home), thread) if f.id in shown]
+        molted = any(f.kind == 'molt' and f.data.get('strand') == strand and f.data.get('gen') == gen
+                     for f in state.accepted)
+        cause = ('molted' if molted else 'settled' if read_thread(self.home, thread).get('status') in CLOSED
+                 else 'failed' if letters else 'idle')
+        facts = _end_attempt(self.home, facts, strand, thread, gen, None, letters, cause)
+        facts = _drained(self.home, facts, strand, thread, gen)
         return self._keep(facts, "released", {
             "thread": thread, "strand": strand, "gen": gen,
             "why": "holder gone", "install": self.home.install_id(),
@@ -280,72 +281,27 @@ class Router:
         }, f"released:{thread}:{gen}")
 
     def _unrouted(self, facts: list[Fact], known: set[str]) -> list[Fact]:
-        """Letters no thread will ever show: tell a body. Never about a notice."""
-        from .home import thread_of
-        from .loom import _attention, body_alive, notice, notice_id
-        from .lifecycle import CLOSED, read_thread
-
-        state = fold(facts)
-        unrunnable = unrunnable_ids(facts)
-        ids = {fact.id for fact in facts}
-        for fact in state.accepted:
-            if (fact.kind != "letter" or fact.data.get("id") in state.handled
-                    or is_notice(fact) or is_channel(fact.data.get("to"))):
+        """Materialize the table's climb/invalid-address decision atomically."""
+        from .loom import notice
+        for fate in letter_owners(facts, main_snapshot(self.home)).values():
+            if fate.action not in {"climb", "unroutable"}:
                 continue
-            letter_id = str(fact.data.get("id") or fact.id)
-            destination = fact.data.get("to")
-            read = "read it in the ledger (grep its id under ledger/facts/) and act on it"
-            try:
-                thread = thread_of(str(destination))
-            except ValueError:
-                thread = None
-            if thread not in known:
-                notice(self.home, facts, "unroutable", letter_id,
-                       f"letter {letter_id} from {fact.data.get('from')} is addressed to "
-                       f"{destination!r}, which is not a thread on main; no thread will show it",
-                       read, about=fact, stands=True)
-            elif read_thread(self.home, thread).get("status") in CLOSED:
-                held = state.holder.get(thread)
-                room = self.home.room(held[0]) if held is not None else None
-                if (held is not None and letter_id in state.shown.get(held[0], set())
-                        and (body_alive(room) or any((room / "port" / "out").glob("*.md")))):
-                    # The body that closed the thread was shown this letter and is still
-                    # leaving: it settles it itself. Climbing it now starts a second body
-                    # on the inbox for what the first answers four seconds later (live,
-                    # 2026-10-12). Its last words may still sit in port/out, unread, when
-                    # it has already exited. Gone with the letter owed, it climbs next tick.
-                    continue
-                target, seen = thread, set()
-                while target in known and target not in seen:
-                    seen.add(target)
-                    data = read_thread(self.home, target)
-                    if data.get("status") not in CLOSED:
-                        break
-                    opener = str(data.get("opened-by", ""))
-                    target = opener.removeprefix("thread:") if opener.startswith("thread:") else None
-                if target not in known and thread != "inbox" and "inbox" in known:
-                    # The chain ended at a person: his late letter still needs a reader.
-                    target = "inbox"
-                if target in known and read_thread(self.home, target).get("status") not in CLOSED:
-                    notice(self.home, facts, "climbed", letter_id,
-                           f"letter {letter_id} to closed thread {thread} climbed here "
-                           f"(from {fact.data.get('from')})",
-                           str(fact.data.get("body") or ""), thread=target, about=fact)
-                else:
-                    why = "opened-by loop" if target in seen else "no open ancestor"
-                    _attention(self.home, f"attention:climbed:{letter_id}",
-                               f"letter to closed thread {thread}: {why}", thread=thread, letter=letter_id)
-                facts = self._keep(facts, "note", {"re": letter_id, "why": "closed thread; climbed"},
-                                   f"climbed:{letter_id}")
-            elif letter_id in unrunnable and notice_id("unrunnable", letter_id) not in ids:
-                # Its own thread hears of it only when another letter wakes a body there.
-                others = [f for f in actionable(facts, thread) if not is_notice(f)]
-                notice(self.home, facts, "unrunnable", letter_id,
-                       f"letter {letter_id} to thread {thread} is quarantined: two bodies died "
-                       "after reading it, the letter or this environment, unknown which. "
-                       "It stays out of every wake and boundary",
-                       f"{read}, then answer or note it with re:", about=fact, stands=True,
-                       thread=thread if others else None)
+            letter = fate.letter
+            if fate.action == "climb":
+                kind, target = "climbed", fate.thread
+                what = f"letter {letter.id} to closed thread {letter.data.get('to')} climbed here"
+            else:
+                kind, target = "unroutable", "inbox" if "inbox" in known else None
+                what = f"letter {letter.id} addressed to {letter.data.get('to')!r}, which is not a thread on main"
+            data = {"id": letter.id, "outcome": "operator", "reason": fate.reason}
+            if target:
+                successor = notice(self.home, facts, kind, letter.id, what,
+                                   str(letter.data.get('body') or ''),
+                                   thread=target, about=letter, stands=True, draft_only=True)
+                if isinstance(successor, Fact):
+                    data.update(outcome="done", successor=successor.data)
+            self._keep(facts, "letter.disposed", {"dispositions": [data]},
+                       f"letter.disposed:{letter.id}")
         return facts
 
     def speak_out(self, facts: list[Fact]) -> list[Fact]:
@@ -355,11 +311,8 @@ class Router:
         state = fold(facts)
         threads = sender_threads(facts)
         ids = {fact.id for fact in facts}
-        sent = {
-            str(fact.data.get("key"))
-            for fact in facts
-            if fact.kind == "speech" and fact.data.get("state") == "sent"
-        }
+        table = letter_owners(facts, main_snapshot(self.home))
+        sent = {key for key, fate in table.items() if fate.done}
         for fact in state.accepted:
             if not self.armed() or self.lease is None:
                 return facts
@@ -367,8 +320,7 @@ class Router:
             if fact.kind != "letter" or not is_channel(to):
                 continue
             key = str(fact.data.get("id") or "")
-            if (not key or key in sent or key in state.handled
-                    or notice_id("speech-refused", key) in ids):
+            if not key or key not in table or table[key].done:
                 continue
             raw = fact.data.get("router_gen")
             try:
@@ -381,7 +333,7 @@ class Router:
                 successor = notice(self.home, facts, kind, key,
                        f"your message {key} to {to} {what}", can,
                        thread=threads.get(fact.by.removeprefix("strand:")),
-                       about=fact, draft_only=True)
+                       about=fact, stands=True, draft_only=True)
                 if isinstance(successor, Fact):
                     self._keep(facts, "letter.disposed", {"dispositions": [{
                         "id": key, "outcome": "done", "reason": kind,
@@ -450,14 +402,4 @@ def _answers_event(state, letter: Fact) -> str | None:
 
 
 def _routable(home: Home, facts: list[Fact]) -> list[str]:
-    from .loom import _threads, notice
-    result = []
-    for thread in _threads(home):
-        try:
-            if home.on_main(thread):
-                result.append(thread)
-        except Exception as exc:
-            notice(home, facts, "bad-thread", thread,
-                   f"self/threads/{thread!r} cannot be a thread: {type(exc).__name__}: {exc}",
-                   "rename or remove that directory; nothing is routed to it meanwhile")
-    return result
+    return sorted(main_snapshot(home))
