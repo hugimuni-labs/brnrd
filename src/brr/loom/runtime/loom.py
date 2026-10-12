@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import json
 import os
 import signal
@@ -31,23 +32,6 @@ from .selfrepo import (
 )
 
 SRC = str(Path(__file__).resolve().parents[3])
-# Held by the body process, not the loom: the wrapper flocks, then execs.
-# preexec_fn after fork from the test's loom thread can deadlock on a lock
-# another thread still owns. The fd stays open across exec, so the lock
-# dies with the body.
-_FLOCK = (
-    "import fcntl, os, sys\n"
-    "path, argv = sys.argv[1], sys.argv[2:]\n"
-    "os.makedirs(os.path.dirname(path) or '.', exist_ok=True)\n"
-    "fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)\n"
-    # Python opens fds non-inheritable. Without this the lock vanishes at
-    # exec and a peer treats a live body as gone.
-    "os.set_inheritable(fd, True)\n"
-    "fcntl.flock(fd, fcntl.LOCK_EX)\n"
-    # execvp, not execv: claude is a PATH name. execv only takes a file path,
-    # so a haiku body died at the wrapper before main.
-    "os.execvp(argv[0], argv)\n"
-)
 
 
 @dataclass
@@ -55,8 +39,9 @@ class Body:
     strand: str
     thread: str
     gen: int
-    proc: subprocess.Popen
-    log: object
+    # These are local resources, not the body's identity or liveness.
+    proc: subprocess.Popen | None = None
+    log: object = None
 
     def close_log(self) -> None:
         close = getattr(self.log, "close", None)
@@ -293,7 +278,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         room / "port" / "in" / "boundary.md",
         render_boundary(strand, gen, thread, letters, shown, threads,
                         channels=reply_channels(facts),
-                        opened=thread_table(home, facts)),
+                        opened=thread_table(home, facts), plan=_plan(room, thread, letters)),
     )
     return room
 
@@ -308,7 +293,6 @@ def body_alive(room: Path) -> bool:
     except OSError:
         return False
     try:
-        import fcntl
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         return True
@@ -321,19 +305,25 @@ def body_alive(room: Path) -> bool:
 
 def _spawn(room: Path, argv: list[str], shell: str, thread: str) -> tuple[subprocess.Popen, object]:
     log = open(room / "port" / "body.log", "ab")
-    cmd = [sys.executable, "-c", _FLOCK, str(room / ".body"), *argv]
+    # Acquire before publishing a start: the first tick must see the lock.
+    # pass_fds carries it through exec; only the child retains it afterwards.
+    lock = os.open(room / ".body", os.O_CREAT | os.O_RDWR, 0o644)
     try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         env = _env(room)
         env["BRNRD_THREAD"] = thread
         env["BRNRD_BODY_SHELL"] = shell
         env["BRNRD_BODY_JACK"] = (Path(argv[0]).parent / "jack").read_text().strip()
         proc = subprocess.Popen(
-            cmd, cwd=room / "self", env=env, stdin=subprocess.DEVNULL,
+            argv, cwd=room / "self", env=env, stdin=subprocess.DEVNULL,
             stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+            pass_fds=(lock,),
         )
     except Exception:
         log.close()
         raise
+    finally:
+        os.close(lock)
     return proc, log
 
 
@@ -509,6 +499,26 @@ def _readme(room: Path, thread: str) -> str | None:
         return None
 
 
+def _plan(room: Path, thread: str, letters: list[Fact]) -> str:
+    from .lifecycle import parse_plan
+    path = room / "self/threads" / thread / "README.md"
+    try:
+        rows = parse_plan(path.read_text())
+        changed = path.stat().st_mtime
+    except OSError:
+        return ""
+    if rows is None:
+        return ""
+    text = f"plan {sum(done for done, _ in rows)}/{len(rows)}"
+    newer = sum(datetime.fromisoformat(letter.at).timestamp() > changed for letter in letters)
+    if newer:
+        text += f" · plan older than {newer} letter(s)"
+    next_row = next((text for done, text in rows if not done), "")
+    if next_row:
+        text += f" · next: {next_row[:60]}"
+    return text
+
+
 def _release(home, facts, strand, thread, gen):
     facts.append(_record(home, "released", {
         "thread": thread, "strand": strand, "gen": gen,
@@ -578,9 +588,16 @@ def _waste(home, facts, strand, thread, code, letters, failure=""):
 
 def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
     for strand, body in list(bodies.items()):
-        code = body.proc.poll()
-        if code is None:
+        if body_alive(home.room(strand)):
             continue
+        # Wait only to collect a child we spawned, never to decide liveness.
+        # An inherited body has no waitable child and its code is unknown.
+        code = None
+        if body.proc is not None:
+            try:
+                code = body.proc.wait(timeout=0.1)
+            except subprocess.TimeoutExpired:
+                pass
         # Drain the body's last boundary and answer before deciding what it wasted.
         facts = _ingest(home)
         body.close_log()
@@ -624,16 +641,23 @@ def _refresh_holders(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> 
     for thread, (strand, gen) in state.holder.items():
         if install_of(strand) != home.install_id():
             continue
-        if strand in bodies or body_alive(home.room(strand)):
+        if strand not in bodies and (body_alive(home.room(strand))
+                                    or (strand in pending and pending[strand].kind == "body.started")):
+            bodies[strand] = Body(strand, thread, gen)
+        if body_alive(home.room(strand)):
             settled = (closing_commit(home, thread)[1]
                        if read_thread(home, thread).get("status") in CLOSED else None)
-            text = render_boundary(strand, gen, thread, actionable(facts, thread),
+            letters = actionable(facts, thread)
+            text = render_boundary(strand, gen, thread, letters,
                                    state.shown.get(strand, set()), threads,
                                    fuel(home, shells[strand]) if shells.get(strand) else "", settled,
-                                   channels, opened=table)
+                                   channels, opened=table, plan=_plan(home.room(strand), thread, letters))
             path = home.room(strand) / "port" / "in" / "boundary.md"
             if not path.is_file() or path.read_text() != text:
                 atomic_write(path, text)
+        elif strand in bodies:
+            # _reap writes the same exit for a watched or inherited holder.
+            continue
         elif read_thread(home, thread).get("status") in CLOSED:
             facts = _release(home, facts, strand, thread, gen)
         elif strand in pending and pending[strand].kind in {"body.pending", "body.parked"}:
@@ -684,23 +708,11 @@ def _pause(stop, seconds: float) -> bool:
 
 def _shutdown(bodies: dict[str, Body]) -> None:
     for body in bodies.values():
-        if body.proc.poll() is None:
-            try:
-                os.killpg(body.proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-    time.sleep(0.05)
-    for body in bodies.values():
-        if body.proc.poll() is None:
-            try:
-                os.killpg(body.proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
         body.close_log()
 
 
 def _own_stop(stop):
-    """SIGTERM ends the loop. Bodies are in their own sessions, so a kill must reap them."""
+    """SIGTERM ends only the loop; bodies keep their own sessions and files."""
     if stop is not None:
         return stop
     stop = threading.Event()
