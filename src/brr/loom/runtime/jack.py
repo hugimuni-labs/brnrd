@@ -155,24 +155,27 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     parsed = parse_boundary(text)
     opened = [[line.split()[1], line.split()[2], line.rpartition(" · owed ")[2]]
               for line in text.splitlines() if line.startswith("opened: ")]
+    plan = next((line.partition(" · plan ")[2] for line in text.splitlines()
+                 if line.startswith("status:")), "")
     if event == "start":
-        if not parsed.ids and not opened:
+        if not parsed.ids and not opened and not plan:
             return ""
         if parsed.ids:
             _shown(room, parsed)
-        _set_state(room, opened=opened)
+        _set_state(room, opened=opened, plan=plan)
         return text if text.endswith("\n") else text + "\n"
     if event == "post":
         state = _state(room)
         opened_changed = opened != state.get("opened", [])
+        plan_changed = plan != state.get("plan", "")
         settled_changed = parsed.settled is not None and parsed.settled != state.get("settled")
-        if not parsed.ids and not settled_changed and not opened_changed:
+        if not parsed.ids and not settled_changed and not opened_changed and not plan_changed:
             return ""
         if settled_changed:
             _set_state(room, settled=parsed.settled)
         if parsed.ids:
             _shown(room, parsed)
-        _set_state(room, opened=opened)
+        _set_state(room, opened=opened, plan=plan)
         return _json({"hookSpecificOutput": {
             "hookEventName": "PostToolUse", "additionalContext": text}})
     if _state(room).get("molted") or parsed.settled is not None:
