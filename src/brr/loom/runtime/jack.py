@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import traceback
 from pathlib import Path
 
-from .home import atomic_write, mint
+from .home import atomic_write, home_of_room, mint
 from .port import Boundary, parse_boundary
 
 
@@ -60,9 +61,13 @@ def _json(payload: dict) -> str:
     return json.dumps(payload, separators=(",", ":")) + "\n"
 
 
+def _hand() -> bool:
+    return os.environ.get("BRNRD_BODY_JACK") == "hand"
+
+
 def _block(room: Path, text: str, parsed: Boundary) -> str:
     count = int(_state(room).get("stop_blocks") or 0)
-    if count >= 3:
+    if _hand() and count >= 3:
         return ""
     _shown(room, parsed)
     _set_state(room, stop_blocks=count + 1)
@@ -70,19 +75,42 @@ def _block(room: Path, text: str, parsed: Boundary) -> str:
 
 
 def _poll(room: Path) -> str:
+    from .usage import below_floor
+    home = home_of_room(room)
+    # Ask for a reading no older than this wait: the cached one may predate it.
+    after = time.time()
+
+    def empty() -> bool:
+        shell = os.environ.get("BRNRD_BODY_SHELL")
+        return bool(not _hand() and shell and below_floor(home, shell, after))
+
+    if empty():
+        return ""
     deadline = time.monotonic() + _wait(room)
     while True:
-        if _state(room).get("molted"):
+        if _state(room).get("molted") or empty():
             return ""
         text = _boundary_text(room)
         parsed = parse_boundary(text)
         if parsed.settled is not None:
             return ""
-        if parsed.ids:
+        if (parsed.ids if _hand() else any(not letter.compact for letter in parsed.letters)):
             return _block(room, text, parsed)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            return ""
+            if _hand():
+                return ""
+            if empty():
+                return ""
+            from .lifecycle import read_thread
+            thread = os.environ["BRNRD_THREAD"]
+            opener = str(read_thread(home, thread).get("opened-by", ""))
+            if not parsed.ids and opener.startswith("thread:"):
+                return ""
+            # Hold again by blocking, never by waiting on in this call: the
+            # shell ends a hook that outlives its timeout, and the body would
+            # then leave while it still owes. One turn per wait is the price.
+            return _json({"decision": "block", "reason": "nothing new; holding\n" + text})
         time.sleep(min(0.2, remaining))
 
 
@@ -142,7 +170,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             "hookEventName": "PostToolUse", "additionalContext": text}})
     if _state(room).get("molted") or parsed.settled is not None:
         return ""
-    if parsed.ids:
+    if parsed.ids and (_hand() or not _state(room).get("stop_blocks")):
         return _block(room, text, parsed)
     return _poll(room)
 

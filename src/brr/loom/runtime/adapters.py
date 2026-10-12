@@ -16,9 +16,23 @@ def resolve(home, shell: str) -> Path:
 
 def at_birth(home, thread: str, default: tuple[str, str]) -> tuple[str, str]:
     from .config import load_config
-    readme = (home.thread_dir(thread) / "README.md").read_text()
-    match = re.search(r"^body: *([^\n]+)$", readme.split("\n---", 1)[0], re.M)
-    choice = match.group(1).strip().strip('"') if match else None
+    from .selfrepo import git
+    if (home.root / "self/.git").exists():
+        proc = git(home.root / "self", "show", f"main:threads/{thread}/seat", check=False)
+        text = proc.stdout if proc.returncode == 0 else ""
+    else:
+        path = home.thread_dir(thread) / "seat"
+        text = path.read_text() if path.exists() else ""
+    choice = None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, colon, value = line.partition(":")
+        if not colon or key.strip() not in {"body", "repo", "watch"}:
+            raise ValueError(f"invalid seat line: {line!r}")
+        if key.strip() == "body":
+            choice = value.strip().strip('"')
     choice = choice or load_config(home.root).body
     if not choice:
         return default

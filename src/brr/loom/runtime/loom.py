@@ -265,12 +265,16 @@ def body_alive(room: Path) -> bool:
         os.close(fd)
 
 
-def _spawn(room: Path, argv: list[str]) -> tuple[subprocess.Popen, object]:
+def _spawn(room: Path, argv: list[str], shell: str, thread: str) -> tuple[subprocess.Popen, object]:
     log = open(room / "port" / "body.log", "ab")
     cmd = [sys.executable, "-c", _FLOCK, str(room / ".body"), *argv]
     try:
+        env = _env(room)
+        env["BRNRD_THREAD"] = thread
+        env["BRNRD_BODY_SHELL"] = shell
+        env["BRNRD_BODY_JACK"] = (Path(argv[0]).parent / "jack").read_text().strip()
         proc = subprocess.Popen(
-            cmd, cwd=room / "self", env=_env(room), stdin=subprocess.DEVNULL,
+            cmd, cwd=room / "self", env=env, stdin=subprocess.DEVNULL,
             stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
         )
     except Exception:
@@ -287,9 +291,12 @@ def _start(home: Home, strand: str, thread: str, gen: int,
     letters = actionable(facts, thread)
     ids = [str(letter.data["id"]) for letter in letters]
     try:
-        started = next((f for f in facts if f.kind in {"body.started", "body.pending", "body.parked"}
-                        and f.data.get("strand") == strand), None)
-        shell, core = (started.data["shell"], started.data["core"]) if started else choice
+        # Pending/parked starts never ran and resume without a new choice.
+        pending = pending_bodies(facts).get(strand)
+        if pending and pending.kind in {"body.pending", "body.parked"}:
+            shell, core = pending.data["shell"], pending.data["core"]
+        else:
+            shell, core = choice
         folder = resolve(home, shell)
         from .usage import reading
         prior = [f for f in facts if f.data.get("strand") == strand]
@@ -301,7 +308,9 @@ def _start(home: Home, strand: str, thread: str, gen: int,
             if not prior or prior[-1].kind not in {"body.pending", "body.parked"}:
                 facts.append(_record(home, "body.pending", data, f"body.pending:{strand}:{mint(6)}"))
             return facts
-        empty = next((w for w in gauge["windows"] if w["left_pct"] <= 0), None)
+        from .config import load_config
+        floor = load_config(home.root).hold_floor_pct
+        empty = next((w for w in gauge["windows"] if w["left_pct"] <= floor), None)
         if empty:
             try:
                 until = datetime.fromisoformat(empty["resets_at"]).timestamp()
@@ -311,7 +320,7 @@ def _start(home: Home, strand: str, thread: str, gen: int,
             # its own reset) would park, expire and re-park on every reading.
             if until <= time.time():
                 until = time.time() + 900
-            data.update(window=empty["name"], until=until)
+            data.update(window=empty["name"], left_pct=empty["left_pct"], until=until)
             facts.append(_record(home, "body.parked", data, f"body.parked:{strand}:{mint(6)}"))
             return facts
         room = _prepare(
@@ -328,7 +337,7 @@ def _start(home: Home, strand: str, thread: str, gen: int,
             "strand": strand, "gen": gen, "ids": ids,
         }, f"shown:wake:{strand}:{gen}:{mint(6)}"))
         readme = _readme(room, thread)
-        proc, log = _spawn(room, argv)
+        proc, log = _spawn(room, argv, shell, thread)
     except Exception as exc:
         why = f"{type(exc).__name__}: {exc}"
         _log(home, f"start failed {strand}: {why}")
@@ -530,7 +539,11 @@ def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
                      and f.data.get("gen") == body.gen for f in fold(facts).accepted)
         # A closed thread's body is expected to leave; its letters climb (router).
         from .lifecycle import CLOSED, read_thread
-        if not molted and read_thread(home, body.thread).get("status") not in CLOSED:
+        from .usage import below_floor
+        start = next((f for f in reversed(facts) if f.kind == "body.started"
+                      and f.data.get("strand") == strand), None)
+        paced = bool(start and below_floor(home, start.data["shell"]))
+        if not molted and not paced and read_thread(home, body.thread).get("status") not in CLOSED:
             shown = fold(facts).shown.get(strand, set())
             _waste(home, facts, strand, body.thread, code,
                    [letter for letter in actionable(facts, body.thread) if letter.data["id"] in shown])
