@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from brr.loom.runtime.home import Home
@@ -466,6 +469,61 @@ def test_a_dashed_relative_source_is_cloned_as_a_url(tmp_path: Path) -> None:
     assert (checkout / ".git").is_dir()
     assert git(checkout, "remote", "get-url", "origin").stdout.strip() == "-widget.git"
     assert (checkout / "README.md").read_text() == "dashed\n"
+
+
+def test_a_parked_body_whose_author_became_enrolled_is_not_started(tmp_path: Path) -> None:
+    root = _home(tmp_path)
+    bare, _work = _source(tmp_path)
+    _seat(root, "work", [str(bare)])
+    bundled = Path(__file__).resolve().parents[2] / "src/brr/loom/runtime/bodies/fake"
+    folder = root / "loom" / "bodies" / "fake"
+    folder.mkdir(parents=True)
+    shutil.copy(bundled / "run", folder / "run")
+    shutil.copy(bundled / "jack", folder / "jack")
+    (folder / "run").chmod(0o755)
+    usage = folder / "usage"
+    usage.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    usage.chmod(0o755)
+    gauge = root / "loom" / "usage" / "fake.json"
+    gauge.parent.mkdir(parents=True)
+    gauge.write_text(json.dumps({
+        "at": time.time(),
+        "windows": [{
+            "name": "week",
+            "left_pct": 0,
+            "resets_at": datetime.fromtimestamp(time.time() + 5, timezone.utc).isoformat(),
+        }],
+    }), encoding="utf-8")
+    home = Home(root)
+    bodies: dict = {}
+    router = Router(home)
+    try:
+        _tick(home, bodies, router)
+        facts = read_facts(home)
+        parked = [fact for fact in facts if fact.kind == "body.parked"]
+        assert len(parked) == 1, _log(root)
+        assert not any(fact.kind == "body.started" for fact in facts)
+        until = parked[0].data["until"]
+        assert until < time.time() + 30, parked[0].data
+        _enroll(root, "ada@example.com")
+        gauge.write_text(json.dumps({
+            "at": time.time(),
+            "windows": [{
+                "name": "week",
+                "left_pct": 100,
+                "resets_at": datetime.fromtimestamp(time.time() + 3600, timezone.utc).isoformat(),
+            }],
+        }), encoding="utf-8")
+        time.sleep(max(0.0, until - time.time()) + 0.3)
+        _tick(home, bodies, router)
+        facts = read_facts(home)
+        assert not any(fact.kind == "body.started" for fact in facts), _log(root)
+        notes = [fact for fact in facts if fact.kind == "letter"
+                 and "ada@example.com" in fact.data.get("body", "")]
+        assert len(notes) == 1
+        assert "choose an author that is not an enrolled person" in notes[0].data["body"]
+    finally:
+        _kill(read_facts(home))
 
 
 def _credential_home(path: Path) -> Path:

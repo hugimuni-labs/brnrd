@@ -420,11 +420,33 @@ def _start(home: Home, strand: str, thread: str, gen: int,
                        repos=repos)
 
 
+def _refuse_author(home: Home, facts: list[Fact], thread: str) -> bool:
+    """True when this start must not run. The notice is the router's.
+
+    ``route`` writes it before taking a lease. A pending or parked body is
+    restarted from ``_refresh_holders`` and never enters ``route``, so the
+    check also lives here, which is the one place every start passes.
+    """
+    from .repos import AuthorError, require_body_author
+    try:
+        require_body_author(home)
+    except AuthorError as exc:
+        if exc.enrolled:
+            hint = "choose an author that is not an enrolled person"
+        else:
+            hint = "set author in loom/config.toml to Name <email>"
+        notice(home, facts, "body", thread, f"thread {thread}: {exc}", hint, thread=thread)
+        return True
+    return False
+
+
 def _launch(home: Home, strand: str, thread: str, gen: int,
             bodies: dict[str, Body], facts: list[Fact], choice=None, *, force=False,
             repos: list[tuple[str, str]] | None = None) -> list[Fact]:
     """Launch one body; the gauge can defer a start without consuming letters."""
     if strand in bodies:
+        return facts
+    if _refuse_author(home, facts, thread):
         return facts
     letters = letters_for(facts, main_snapshot(home), thread)
     ids = [str(letter.data["id"]) for letter in letters]
