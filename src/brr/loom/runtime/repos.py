@@ -1,7 +1,8 @@
 """A project repo is the room's clone of the self, with another source.
 
-One bare mirror per source lives at ``home/repos/<name>.git``. A body start
-fetches it, then (once per room) clones ``--shared`` into
+One bare mirror per directory name lives at ``home/repos/<name>.git``.
+A second source for that name gets no checkout. A body start fetches the
+mirror, then (once per room) clones ``--shared`` into
 ``rooms/<strand>/<name>`` on ``loom/<thread>``.
 """
 
@@ -76,7 +77,11 @@ def _bare(path: Path) -> bool:
 
 
 def _mirror(home: Home, name: str, source: str) -> tuple[Path | None, str | None]:
-    """The bare mirror, fetched. ``(None, "fetch failed")`` when it cannot be created."""
+    """The bare mirror, fetched. ``(None, "fetch failed")`` when it cannot be created.
+
+    A mirror is one source. ``(None, "holds:<url>")`` when this directory
+    already holds a different one: the caller makes no checkout.
+    """
     path = home.root / "repos" / f"{name}.git"
     created = False
     if not path.exists():
@@ -90,6 +95,11 @@ def _mirror(home: Home, name: str, source: str) -> tuple[Path | None, str | None
         created = True
     elif not _bare(path):
         raise SelfError(f"{path} exists and is not a mirror; refusing to overwrite")
+    else:
+        held = git(path, "remote", "get-url", "origin", check=False)
+        other = held.stdout.strip() if held.returncode == 0 else ""
+        if other != source:
+            return None, f"holds:{other or 'an unknown source'}"
     # Auto-gc can delete objects a --shared room still borrows once this
     # mirror's branch no longer reaches them.
     git(path, "config", "gc.auto", "0")
@@ -136,7 +146,7 @@ def prepare_repos(home: Home, strand: str, thread: str,
     failed. A checkout that already exists is left as it stands, including
     its commits. A failed fetch still starts the body: on the mirror's last
     state when there is one, and with no checkout when the mirror was never
-    created.
+    created. A mirror that already holds a different source makes no checkout.
     """
     if not declared:
         return "", ()
@@ -145,6 +155,11 @@ def prepare_repos(home: Home, strand: str, thread: str,
     for name, source in declared:
         mirror, failed = _mirror(home, name, source)
         dest = home.room(strand) / name
+        if mirror is None and failed and failed.startswith("holds:"):
+            line = f"repo {name}: the mirror holds {failed.removeprefix('holds:')}; no checkout"
+            failures.append(line)
+            lines.append(line + "\n")
+            continue
         if (dest / ".git").exists():
             line = f"repo {name}: {dest} on loom/{thread}, left as it stands"
             if failed:

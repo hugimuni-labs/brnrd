@@ -351,7 +351,9 @@ def test_a_failed_fetch_keeps_the_last_state(tmp_path: Path) -> None:
         sha = git(checkout, "rev-parse", "HEAD").stdout.strip()
         mirror = root / "repos" / "widget.git"
         short = git(mirror, "rev-parse", "--short", "HEAD").stdout.strip()
-        git(mirror, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
+        # The source stays the mirror's origin and stops resolving, so this is
+        # a failed fetch of the same source. A different URL is the other test.
+        bare.rename(bare.parent / "widget-gone.git")
         text, failures = prepare_repos(home, room.name, "held", [("widget", str(bare))], None)
         failed = f"repo widget: {checkout} on loom/held, left as it stands; fetch failed"
         assert text == failed + "\n"
@@ -389,6 +391,42 @@ def test_duplicate_repo_names_are_refused(tmp_path: Path) -> None:
         assert len(notes) == 1
         assert "correct the repo lines" in notes[0].data["body"]
         assert not (root / "rooms").exists() or not any((root / "rooms").iterdir())
+    finally:
+        _kill(read_facts(home))
+
+
+def test_two_sources_with_one_name_do_not_share_a_mirror(tmp_path: Path) -> None:
+    root = _home(tmp_path)
+    one, _work = _source(tmp_path, "widget")
+    other = tmp_path / "other-work"
+    other.mkdir()
+    git(None, "init", "-b", "main", str(other))
+    (other / "README.md").write_text("other\n")
+    git(other, "add", "README.md")
+    git(other, "commit", "-m", "other")
+    two = tmp_path / "elsewhere" / "widget.git"
+    two.parent.mkdir()
+    git(None, "clone", "--bare", str(other), str(two))
+    _seat(root, "one", [str(one)])
+    _seat(root, "two", [str(two)])
+    home = Home(root)
+    try:
+        _tick(home, {}, Router(home))
+        assert len(_started(root)) == 2, _log(root)
+        rooms = [path for path in (root / "rooms").iterdir() if path.is_dir()]
+        assert len(rooms) == 2, [path.name for path in rooms]
+        held = [path for path in rooms if "the mirror holds" in (path / "port" / "wake.md").read_text()]
+        opened = [path for path in rooms if (path / "widget" / ".git").is_dir()]
+        assert len(held) == 1 and len(opened) == 1, _log(root)
+        assert held[0] != opened[0]
+        mirror = git(root / "repos" / "widget.git", "remote", "get-url", "origin").stdout.strip()
+        wake = (held[0] / "port" / "wake.md").read_text()
+        line = f"repo widget: the mirror holds {mirror}; no checkout"
+        assert line in wake
+        assert not (held[0] / "widget" / ".git").exists()
+        assert git(opened[0] / "widget", "remote", "get-url", "origin").stdout.strip() == mirror
+        assert mirror in {str(one), str(two)}
+        assert line in _log(root)
     finally:
         _kill(read_facts(home))
 
