@@ -1,8 +1,4 @@
-"""A due ``when:`` is one letter, ``letter:timer:<thread>:<when>``.
-
-The instant is the whole of once. The sentence is built only from the thread
-id and that instant, so a second append of the same id is the ledger's no-op.
-"""
+"""Time enters ownership as an observation on an accepted letter."""
 
 from __future__ import annotations
 
@@ -12,13 +8,12 @@ from datetime import datetime, timedelta, timezone
 from brr.daemon2.facts import Fact
 
 from .home import Home
-from .ledger import LedgerConflict, append
-from .lifecycle import CLOSED, main_snapshot
+from .ledger import append
+from .project import fold
 
 _INSTANT = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 _DURATION = re.compile(r"^\+(\d+)([mhd])$")
 _UNITS = {"m": "minutes", "h": "hours", "d": "days"}
-
 
 def parse_instant(value: str) -> datetime | None:
     if not isinstance(value, str) or not _INSTANT.fullmatch(value):
@@ -29,90 +24,51 @@ def parse_instant(value: str) -> datetime | None:
         return None
 
 
-def letter_id(thread: str, when: str) -> str:
-    return f"letter:timer:{thread}:{when}"
-
-
-def sentence(thread: str, when: str) -> str:
-    return (
-        f"The time {when} has come for thread {thread}. "
-        f"when: still holds {when} until this body changes it."
-    )
-
-
-def column(when: object, thread: str, facts, now: datetime) -> str:
-    """The instant, ``spent`` once it has passed and its letter is in the ledger, or ``—``."""
-    raw = when.strip() if isinstance(when, str) else ""
-    if not raw:
-        return "—"
-    due = parse_instant(raw)
-    if due is not None and due <= now and any(fact.id == letter_id(thread, raw) for fact in facts):
-        return "spent"
-    return raw
-
-
 def stored_when(text: str, now: datetime | None = None) -> str:
-    """The absolute instant to store, or empty for ``clear``."""
+    """The absolute instant to store on a letter."""
     text = text.strip()
-    if text == "clear":
-        return ""
     if parse_instant(text) is not None:
         return text
     match = _DURATION.fullmatch(text)
     if match is None:
         raise ValueError(
-            "when: expected YYYY-MM-DDTHH:MM:SSZ, +<n>m, +<n>h, +<n>d, or clear"
+            "send --at: expected YYYY-MM-DDTHH:MM:SSZ, +<n>m, +<n>h, +<n>d"
         )
     now = now if now is not None else datetime.now(timezone.utc)
-    delta = timedelta(**{_UNITS[match.group(2)]: int(match.group(1))})
-    return (now + delta).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        delta = timedelta(**{_UNITS[match.group(2)]: int(match.group(1))})
+        return (now + delta).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except OverflowError:
+        raise ValueError("send --at: duration is outside the supported calendar") from None
 
 
-def set_when_line(text: str, value: str) -> str:
-    """Replace ``when:`` or insert it before the frontmatter closes."""
-    lines = text.splitlines(keepends=True)
-    if not lines or lines[0].strip() != "---":
-        raise ValueError("when: frontmatter missing")
-    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
-    if end is None:
-        raise ValueError("when: frontmatter unclosed")
-    written = f"when: {value}\n" if value else 'when: ""\n'
-    for i in range(1, end):
-        if lines[i].split(":", 1)[0].strip() == "when":
-            lines[i] = written
-            break
-    else:
-        lines.insert(end, written)
-    return "".join(lines)
+def observe_due(home: Home, facts: list, armed: bool) -> list:
+    """Check only held facts; only the router-lease holder writes observations.
 
-
-def fire(home: Home, facts: list, armed: bool) -> list:
-    """Append each due thread's letter. Only the router-lease holder is armed."""
+    An ordinary tick reads no file or git here. A newly due letter uses the
+    ledger's normal durable append, with an id derived from the letter.
+    """
     if not armed:
         return facts
+    seen = {fact.id for fact in facts if fact.kind == "letter.due"}
     now = datetime.now(timezone.utc)
-    seen = {fact.id for fact in facts}
-    for thread, data in main_snapshot(home).items():
-        if data.get("status") in CLOSED:
+    # The clock is read before anything is folded: a letter due in three days
+    # costs each tick one comparison, never a pass over the whole ledger.
+    passed = set()
+    for fact in facts:
+        if fact.kind == "letter" and fact.data.get("at") and f"due:{fact.id}" not in seen:
+            due = parse_instant(fact.data["at"])
+            if due is not None and due <= now:
+                passed.add(fact.id)
+    if not passed:
+        return facts
+    state = fold(facts)
+    for letter in state.accepted:
+        if letter.kind != "letter" or letter.id not in passed or letter.id in state.handled:
             continue
-        raw = data.get("when") if isinstance(data.get("when"), str) else ""
-        due = parse_instant(raw)
-        if due is None or due > now:
-            continue
-        ident = letter_id(thread, raw)
-        if ident in seen:
-            continue
-        try:
-            stored = append(home, Fact(
-                kind="letter", by=f"loom:{home.install_id()}", id=ident,
-                data={
-                    "id": ident, "from": "loom", "to": f"thread:{thread}",
-                    "body": sentence(thread, raw),
-                    "label": {"taint": False, "audience": ["self"]},
-                },
-            ))
-        except LedgerConflict:
-            continue
+        stored = append(home, Fact(
+            kind="letter.due", by=f"loom:{home.install_id()}", id=f"due:{letter.id}",
+            data={"letter": letter.id}, after=(letter.id,),
+        ))
         facts.append(stored)
-        seen.add(stored.id)
     return facts

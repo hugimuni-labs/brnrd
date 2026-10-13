@@ -95,6 +95,7 @@ def _send(argv: list[str]) -> int:
     parser.add_argument("--re")
     parser.add_argument("--note")
     parser.add_argument("--reopen", metavar="TEXT")
+    parser.add_argument("--at", help="YYYY-MM-DDTHH:MM:SSZ, +<n>m, +<n>h, or +<n>d")
     parser.add_argument("--body", dest="body_choice", metavar="SHELL/CORE")
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--kind", default=None)
@@ -103,6 +104,8 @@ def _send(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     room = _room(args.room)
     try:
+        if args.at is not None and args.reopen is not None:
+            raise PortError("send: --at cannot be used with --reopen")
         if args.reopen is not None:
             from .home import thread_of
             from .lifecycle import land_status
@@ -112,7 +115,7 @@ def _send(argv: list[str]) -> int:
         letter_id = write_send(
             room, to=args.to, sender=strand_of_room(room), body=args.reopen if args.reopen is not None else args.body or "",
             re=args.re, note=args.note, clean=args.clean, kind=args.kind,
-            refs=tuple(args.ref or ()), body_choice=args.body_choice,
+            refs=tuple(args.ref or ()), body_choice=args.body_choice, at=args.at,
         )
     except (PortError, SelfError, ValueError, OSError) as exc:
         sys.stderr.write(f"{exc}\n")

@@ -36,15 +36,16 @@ ownership table; editing a file or mentioning an id in prose does not cite it.
 ## Ends and starts
 
 `brnrd threads` derives who owes each thread's remaining letters, what can
-restart it, and who can force or close it. The `when` column is that
-thread's UTC instant, `spent` once the instant has passed and its timer
-letter is in the ledger, or `—`. A body sets the next instant with
-`brnrd when <time>` (`YYYY-MM-DDTHH:MM:SSZ`, or `+10m`, `+2h`, `+3d`,
-stored as the absolute instant) and clears it with `brnrd when clear`.
-When the instant arrives, the loom writes one letter,
-`letter:timer:<thread>:<when>`. The same instant does not write a second
-letter. A failed timer letter climbs to the thread's opener when
-`opened-by` names a thread, and is operator debt otherwise. A molted body hands on immediately;
+restart it, and who can force or close it. To wake yourself later, send a
+letter to your own thread: `python -m brr.loom.runtime send --to thread:<your-thread> --at +10m "<what to do>"`. The time can be `YYYY-MM-DDTHH:MM:SSZ`, `+10m`, `+2h`, or
+`+3d`; the letter stores the absolute UTC instant. Until that time it is
+waiting, unseen by bodies, and starts nothing. `brnrd threads --due` lists
+waiting letters with their times, ids, destination and sender threads, and
+first lines. Cancel one before its time with `python -m brr.loom.runtime send --to thread:<your-thread> --re <letter-id> --note "<why>"`. To change its time,
+cancel it and send another. A due letter is ordinary mail, even if the loom
+was down at its time. A thread may write to itself only with `--at`; a due
+time cannot be used with a channel address, `--note`, or `--reopen`. For a
+repeat, the woken body sends the next letter. A molted body hands on immediately;
 an idle body leaves the thread open for its next letter. A paced start waits
 for the recorded reset, without consuming letters. Its opener can run
 `threads --force <thread> --room <room>` to start anyway; the operator uses

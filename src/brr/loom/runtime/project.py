@@ -68,7 +68,7 @@ def fold(facts: Iterable[Fact]) -> Fold:
 
     for fact in union(list(facts)):
         data = fact.data
-        if fact.kind in {"attempt.ended", "port.drained", "letter.disposed", "speech", "speech.part"} and fact.by.startswith("loom:"):
+        if fact.kind in {"attempt.ended", "port.drained", "letter.disposed", "letter.due", "speech", "speech.part"} and fact.by.startswith("loom:"):
             state.accepted.append(fact)
             if fact.kind == "speech" and data.get("state") == "sent":
                 key = str(data.get("key"))

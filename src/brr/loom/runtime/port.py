@@ -284,9 +284,15 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                re: str | None = None, note: str | None = None,
                clean: bool = False, kind: str | None = None,
                refs: tuple[str, ...] | list[str] = (),
-               molt: str | None = None, body_choice: str | None = None) -> str:
+               molt: str | None = None, body_choice: str | None = None,
+               at: str | None = None) -> str:
     home = home_of_room(Path(room))
     opening = None
+    if at is not None:
+        from .timers import stored_when
+        if is_channel(to) or note is not None or molt is not None:
+            raise PortError("send: --at is only for a thread letter, without --note or --reopen")
+        at = stored_when(at)
     if note is not None and not re:
         raise PortError("send: --note requires --re")
     if note is not None and body:
@@ -307,12 +313,12 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
             if note is not None or molt is not None:
                 raise PortError(f"send: no thread {thread} on main")
             opening = thread
-    if note is None and molt is None and not is_channel(to):
+    if note is None and molt is None and at is None and not is_channel(to):
         from .ledger import read_facts
         from .project import sender_threads
         if sender_threads(read_facts(home)).get(sender) == thread_of(to):
             raise PortError(
-                f"send: {to} is your own thread, and a thread does not write to itself. "
+                f"send: {to} is your own thread, and a thread does not write to itself without --at. "
                 "Answer to the reply address on the letter's line; where that is `-`, "
                 "settle the letter with --re <id> --note \"<what you did>\"")
     if re:
@@ -325,6 +331,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         "kind": "note" if note is not None else "letter",
         "id": letter_id, "to": to, "from": sender,
     }
+    if at is not None:
+        fields["at"] = at
     if re:
         fields["re"] = re
     if molt:
@@ -432,6 +440,11 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
         }
         if not is_channel(data["to"]):
             thread_of(data["to"])
+        if fm.get("at") is not None:
+            from .timers import parse_instant
+            if is_channel(data["to"]) or fm.get("molt") or parse_instant(fm["at"]) is None:
+                raise PortError("send --at: expected a thread letter with YYYY-MM-DDTHH:MM:SSZ")
+            data["at"] = fm["at"]
         if fm.get("re"):
             data["re"] = fm["re"]
         if fm.get("molt"):
