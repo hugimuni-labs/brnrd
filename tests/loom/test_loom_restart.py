@@ -1,9 +1,10 @@
-from _step import mail
-"""A loom upgrade preserves work; a body's local plan changes reach its boundary."""
+"""A loom upgrade preserves work; landed plans reach a body's live boundary."""
 
 import json
 import os
 import signal
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -11,9 +12,9 @@ import pytest
 from brr.loom.runtime.ledger import inject_letter
 from brr.loom.runtime.loom import body_alive
 from brr.loom.runtime.project import fold, holder
-from brr.loom.runtime.selfrepo import git
+from brr.loom.runtime.selfrepo import git, init_self
 
-from _step import Loom, wait_until, write_thread
+from _step import Loom, kill_bodies, mail, wait_until, write_thread
 from test_lifecycle import bodies
 from test_router import Proc, _config, _dump, _facts, _stop
 
@@ -21,6 +22,7 @@ from test_router import Proc, _config, _dump, _facts, _stop
 @pytest.mark.parametrize('stop_signal', [signal.SIGKILL, signal.SIGTERM])
 def test_restart_inherits_mid_letter_body_and_records_its_eventual_exit(tmp_path, stop_signal):
     root = tmp_path / 'home'
+    init_self(root, person='test')
     write_thread(root, 'work', 'Work', 'work', wait='0')
     _config(root, router_ttl=2, max_skew=0, margin=0.1)
     ready, resume = root / 'ready', root / 'resume'
@@ -50,9 +52,13 @@ for letter in letters:
         os.kill(first.proc.pid, stop_signal)
         first.proc.wait(timeout=5)
         assert body_alive(root / 'rooms' / held)
-        # An uncommitted edit proves that the new loop is refreshing the old room.
+        # A landed edit proves that the new loop refreshes the inherited room.
         readme = root / 'rooms' / held / 'self/threads/work/README.md'
         readme.write_text(readme.read_text() + '\n## Plan\n- [ ] Survive the upgrade\n')
+        git(readme.parents[2], 'add', 'threads/work/README.md')
+        git(readme.parents[2], 'commit', '-m', 'Keep the upgrade plan')
+        subprocess.run([sys.executable, '-m', 'brr.loom.runtime', 'send-self',
+                        '--room', str(readme.parents[2])], check=True, capture_output=True)
         second = Proc(root, 'aaaa')
         procs.append(second)
         boundary = root / 'rooms' / held / 'port/in/boundary.md'
@@ -112,26 +118,37 @@ for letter in letters:
         _stop(root, procs)
 
 
-def test_room_plan_is_live_stale_on_new_mail_and_delivered_once_per_edit(tmp_path):
+def test_landed_plan_reaches_live_body_and_is_delivered_once_per_change(tmp_path):
     root = tmp_path / 'home'
+    init_self(root, person='test')
     write_thread(root, 'work', 'Work\n\n## Plan\n- [x] First\n- [ ] Second', 'work', wait='0')
     ready, complete, finished = [root / name for name in ('ready', 'complete', 'finished')]
-    bodies(root, f'''import json, os, sys, time
+    bodies(root, f'''import json, subprocess, sys, time
 from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx
+from brr.loom.runtime.selfrepo import git
 ctx = Ctx(Path(sys.argv[1]))
 readme = ctx.room / "self/threads/work/README.md"
+def land_plan():
+    git(ctx.room / "self", "add", "threads/work/README.md")
+    git(ctx.room / "self", "commit", "-m", "Update the plan")
+    subprocess.run([sys.executable, "-m", "brr.loom.runtime", "send-self",
+                    "--room", str(ctx.room / "self")], check=True)
 first = ctx.jack("start")
-assert "plan 1/2 · next: Second" in first.raw, first.raw
+assert "plan 1/2" in first.raw and " · next: Second" in first.raw, first.raw
+assert "letters without a row: " + first.letters[0].id in first.raw, first.raw
 for letter in first.letters:
     ctx.send("thread:work", note="begin", re=letter.id)
-deadline = time.monotonic() + 15
+deadline = time.monotonic() + 30
 while ctx.jack("post").letters:
     assert time.monotonic() < deadline
     time.sleep(0.03)
 assert ctx.jack("post").raw == ""
-# Work changes locally, without committing or landing the README.
+# An edit in the room is invisible until the body lands it with send-self.
 readme.write_text(readme.read_text().replace("[ ] Second", "[x] Second") + "- [ ] Third " + "long " * 20 + "\\n")
+assert "- [ ] Second" in git(ctx.room / "self", "show", "origin/main:threads/work/README.md").stdout
+assert ctx.jack("post").raw == ""
+land_plan()
 while True:
     view = ctx.jack("post")
     if "plan 2/3" in view.raw:
@@ -146,21 +163,27 @@ assert ctx.jack("post").raw == ""
 Path({str(ready)!r}).write_text(view.raw)
 while True:
     view = ctx.jack("post")
-    if "plan older than 1 letter(s)" in view.raw:
+    if "letters without a row:" in view.raw:
         Path({str(complete)!r}).write_text(view.raw)
         for letter in view.letters:
             ctx.send("thread:work", note="followup read", re=letter.id)
         break
     assert time.monotonic() < deadline
     time.sleep(0.03)
-while ctx.jack("post").letters:
+while True:
+    view = ctx.jack("post")
+    if not view.letters:
+        text = json.loads(view.raw)["hookSpecificOutput"]["additionalContext"]
+        assert "letters without a row:" not in text, text
+        assert "plan 2/3" in text, text
+        break
+    assert time.monotonic() < deadline
     time.sleep(0.03)
-while "plan older than" in (ctx.room / "port/in/boundary.md").read_text():
-    time.sleep(0.03)
-ctx.jack("post")  # the freshness change is delivered once too
+# Removing the last uncited debt is itself a change, delivered once.
 assert ctx.jack("post").raw == ""
 # Removing the section is itself a change, then silent again.
 readme.write_text(readme.read_text().split("\\n## Plan")[0] + "\\n")
+land_plan()
 while True:
     view = ctx.jack("post")
     if view.raw:
@@ -177,13 +200,17 @@ Path({str(finished)!r}).write_text("all boundary assertions reached")
     try:
         wait_until(ready.exists, 12, loom.dump)
         assert 'plan 2/3' in ready.read_text()
-        # Main still has its original plan. The boundary followed the working copy.
-        assert '- [ ] Second' in git(root / 'self', 'show', 'main:threads/work/README.md').stdout
-        inject_letter(root, to='thread:work', body='a later ask')
+        assert '- [x] Second' in git(root / 'self', 'show', 'main:threads/work/README.md').stdout
+        later = inject_letter(root, to='thread:work', body='a later ask')
         wait_until(complete.exists, 8, loom.dump)
-        assert 'plan 2/3 · plan older than 1 letter(s)' in json.loads(complete.read_text())['hookSpecificOutput']['additionalContext']
-        wait_until(lambda: finished.exists() and holder(loom.facts(), 'work') is None, 5, loom.dump)
+        text = json.loads(complete.read_text())['hookSpecificOutput']['additionalContext']
+        assert 'plan 2/3 · letters without a row: ' + later in text, text
+        # The body now lands the removal through git and the immune gate.
+        # Time that work separately from the loom's eventual body release.
+        wait_until(finished.exists, 30, loom.dump)
+        wait_until(lambda: holder(loom.facts(), 'work') is None, 5, loom.dump)
         assert not any(f.id.startswith('loom/bounce-') or f.id.startswith('attention:wasted:') for f in loom.facts())
     finally:
         loom.halt()
+        kill_bodies(loom)
     assert not loom.errors

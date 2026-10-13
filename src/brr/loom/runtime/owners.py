@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from brr.daemon2.facts import Fact, union
-from .home import is_channel
+from .home import is_channel, notice_id
 from .project import _destination, fold, reply_channels, sender_threads
 
 
@@ -15,6 +15,7 @@ class Ownership:
     thread: str | None = None
     reply_to: str = '-'
     action: str = ''
+    plan_rows: tuple[int, ...] = ()
 
     @property
     def done(self):
@@ -74,7 +75,10 @@ def letter_owners(facts, main: dict[str, dict]) -> dict[str, Ownership]:
         sender = writers.get(letter.by.removeprefix('strand:'))
         child = main.get(sender, {})
         def keep(owner, why, target=thread, action=''):
-            result[ident] = Ownership(letter, owner, why, target, reply, action)
+            rows = main.get(target, {}).get('plan_rows') or ()
+            cited = tuple(i + 1 for i, (_, text) in enumerate(rows)
+                          if ident in plan_citations(text))
+            result[ident] = Ownership(letter, owner, why, target, reply, action, cited)
         if ident in state.handled or ident in sent or disposition.get('outcome') == 'done':
             keep(None, reason or 'reply or note recorded')
         elif disposition.get('outcome') == 'operator':
@@ -131,3 +135,78 @@ def letters_for(facts, main, thread):
             if not f.done and f.thread == thread and f.owner in {'body', 'loom', 'opener'}
             and f.action not in {'unroutable', 'climb'}
             and (f.action != 'drain' or f.owner == 'body')]
+
+
+def plan_citations(text: str) -> tuple[str, ...]:
+    """Only a row's explicit trailing ` · re: id, id` cites letters."""
+    _, separator, cites = text.rpartition(' · re: ')
+    if not separator:
+        return ()
+    return tuple(ident.strip() for ident in cites.split(',') if ident.strip())
+
+
+def thread_axes(facts, main, ownership=None):
+    """Ends and next actors are columns of the letter table, not stored states.
+
+    A pending start's reset is already an observation in body.parked. A
+    physical process disappearing cannot invent a failed/idle end here.
+    """
+    facts = list(facts)
+    state = fold(facts)
+    table = ownership if ownership is not None else letter_owners(facts, main)
+    ends, bodies = {}, {}
+    origins = {ident: {_destination(fate.letter.data)} for ident, fate in table.items()}
+    # Existing closure observations name their deterministic result notice.
+    for fact in facts:
+        if fact.kind == 'thread.closed' and fact.by.startswith('loom:'):
+            origins.setdefault(notice_id('closed', fact.id), set()).add(fact.data['thread'])
+    for fact in state.accepted:
+        if fact.kind == 'attempt.ended':
+            ends[fact.data['thread']] = fact
+        elif fact.kind.startswith('body.') and fact.data.get('strand'):
+            bodies[fact.data['strand']] = fact
+        for disposition in fact.data.get('dispositions', ()):
+            ident = disposition.get('successor', {}).get('id')
+            if ident:
+                origins.setdefault(ident, set()).update(origins.get(disposition['id'], ()))
+    rows = {}
+    for thread, data in main.items():
+        held = state.holder.get(thread)
+        body = bodies.get(held[0]) if held else None
+        end = ends.get(thread)
+        # Include the successor that now carries a thread's original debt,
+        # through every climb/bounce, even when the new reader is elsewhere.
+        debts = {ident: fate for ident, fate in table.items() if not fate.done
+                 and (fate.thread == thread or thread in origins.get(ident, ()))}
+        start_here = any(f.thread == thread and f.owner in {'loom', 'body', 'opener'}
+                         and f.action not in {'climb', 'unroutable', 'drain'}
+                         and not f.letter.data.get('notice') for f in debts.values())
+        owners = sorted({f'{f.owner}:{f.thread}' if f.owner in {'body', 'loom', 'opener'}
+                         else f.owner for f in debts.values()})
+        opener = data.get('opened-by') or 'operator'
+        override = opener + ' or operator' if opener != 'operator' else 'operator'
+        cause = end.data['cause'] if end else 'idle'
+        reset = None
+        if data.get('status') in {'settled', 'retired'}:
+            cause, restart, control = 'settled', 'new letter or opener answers', opener
+        elif body and body.kind in {'body.pending', 'body.parked'}:
+            cause = 'paced' if body.kind == 'body.parked' else 'pending'
+            reset = body.data.get('until')
+            restart = f'reset {reset}' if reset is not None else 'loom: gauge reading'
+            control = f'{override}: threads --force {thread}' if reset is not None else 'loom'
+        elif held and (not end or (end.data['strand'], end.data['gen']) != held):
+            cause, restart, control = 'body', 'current body', '—'
+        elif cause == 'molted':
+            restart, control = 'loom: now', '—'
+        elif cause == 'paced':
+            restart, control = 'loom: start waiting for gauge', f'{override}: threads --force {thread}'
+        elif cause == 'failed':
+            retry = any(f.reason == 'first failed attempt' for f in debts.values())
+            restart = 'loom: retry' if retry else 'author resends'
+            control = 'author: note failure closed'
+        else:
+            restart, control = ('loom: start' if start_here else 'next letter'), '—'
+        rows[thread] = {'cause': cause, 'letters': tuple(debts),
+                        'owed-by': ', '.join(owners) or 'nobody',
+                        'restart': restart, 'control': control, 'reset': reset}
+    return rows

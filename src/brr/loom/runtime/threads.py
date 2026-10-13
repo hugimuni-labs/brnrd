@@ -6,8 +6,8 @@ from datetime import datetime
 
 from .home import Home, thread_of
 from .lifecycle import CLOSED, read_thread, main_snapshot
-from .owners import letter_owners
-from .project import fold, is_notice, sender_threads
+from .owners import letter_owners, thread_axes
+from .project import fold, sender_threads
 from .selfrepo import git
 
 
@@ -40,9 +40,10 @@ def thread_table(home: Home, facts: list) -> list[dict]:
     """
     from .loom import body_alive, pending_bodies
     state, writers = fold(facts), sender_threads(facts)
-    letters = {str(f.data['id']): f for f in state.accepted if f.kind == 'letter'}
-    ownership = letter_owners(facts, main_snapshot(home))
-    owed, failed, activity, boundary = {}, set(), {}, {}
+    main = main_snapshot(home)
+    ownership = letter_owners(facts, main)
+    axes = thread_axes(facts, main, ownership)
+    owed, activity, boundary = {}, {}, {}
     for fate in ownership.values():
         if not fate.done and fate.owner in {'body', 'loom', 'opener'}:
             owed.setdefault(fate.thread, []).append(fate.letter)
@@ -54,11 +55,6 @@ def thread_table(home: Home, facts: list) -> list[dict]:
                 thread = thread_of(f.data.get('to'))
             except ValueError:
                 pass
-            if f.id in ownership and not ownership[f.id].done:
-                if is_notice(f) and f.id.startswith('loom/bounce-'):
-                    original = letters.get(str(f.data.get('about')))
-                    if original:
-                        failed.add(thread_of(original.data['to']))
         if thread:
             activity[thread] = max(activity.get(thread, 0), _at(f))
         if f.kind == 'shown':
@@ -107,11 +103,10 @@ def thread_table(home: Home, facts: list) -> list[dict]:
             seat = f"{shell}/{latest.data.get('core', '')}"
         last = activity.get(thread, created)
         if data['status'] in CLOSED:
+            count = len(axes[thread]['letters'])
             value = 'settled' + (f' {date}' if date else '')
         elif latest and latest.kind in {'body.parked', 'body.pending'}:
-            value = 'parked'
-        elif thread in failed:
-            value = 'failed'
+            value = axes[thread]['cause']
         elif strand and body_alive(home.room(strand)):
             path = home.room(strand) / 'port/jack-state.json'
             try:
@@ -130,18 +125,22 @@ def thread_table(home: Home, facts: list) -> list[dict]:
             else:
                 value = 'idle ' + _age(now - max(last, recent))
         else:
-            value = 'idle ' + _age(now - last)
+            count = len(axes[thread]['letters'])
+            cause = axes[thread]['cause']
+            value = 'idle ' + _age(now - last) if cause == 'idle' else cause
         rows.append({'thread': thread, 'seat': seat, 'now': value, 'owed': count,
                      'opened-by': data.get('opened-by') or '—', 'plan': data['plan'],
-                     'status': data['status']})
+                     'status': data['status'], **{k: axes[thread][k] for k in ('owed-by', 'restart', 'control')}})
     for ident, fate in ownership.items():
         if fate.owner == 'operator':
             rows.append({'thread': 'operator', 'seat': '—', 'now': ident + ': ' + fate.reason,
-                         'owed': 1, 'opened-by': fate.thread or '—', 'plan': '—', 'status': 'open'})
+                         'owed': 1, 'opened-by': fate.thread or '—', 'plan': '—', 'status': 'open',
+                         'owed-by': 'operator', 'restart': 'operator note',
+                         'control': 'operator: attention --note ' + ident + ' --why <reason>'})
     return rows
 
 
 def render_table(rows: list[dict]) -> str:
-    columns = ('thread', 'seat', 'now', 'owed', 'opened-by', 'plan')
+    columns = ('thread', 'seat', 'now', 'owed', 'opened-by', 'plan', 'owed-by', 'restart', 'control')
     return '\n'.join(' · '.join(str(row[c]) for c in columns)
                      for row in [dict(zip(columns, columns)), *rows]) + '\n'

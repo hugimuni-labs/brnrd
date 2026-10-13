@@ -25,3 +25,23 @@ If a notice or any other letter keeps coming back and no reply settles it, a per
 ```
 
 A note written `by` a `person:` with `re:` a letter's id settles that letter whatever thread holds it, and the item it stands for with it. Nothing else is needed: the next tick reads the line. From a room, `<home>` is `../..`.
+
+## Plan citations
+
+A checklist row under `## Plan` names the letters it answers with a trailing
+` · re: <letter-id>, <letter-id>`. Land the README through `send-self`. The
+boundary lists owed letters without a row from the landed plan and the letter
+ownership table; editing a file or mentioning an id in prose does not cite it.
+
+## Ends and starts
+
+`brnrd threads` derives who owes each thread's remaining letters, what can
+restart it, and who can force or close it. A molted body hands on immediately;
+an idle body leaves the thread open for its next letter. A paced start waits
+for the recorded reset, without consuming letters. Its opener can run
+`threads --force <thread> --room <room>` to start anyway; the operator uses
+`threads --force <thread> --home <home>`. The override launches that pending
+start and records its ordinary `body.started` observation. It grants no
+ongoing exemption from the gauge. A failed letter returns to its author, who
+may resend or note the failure closed; operator debt is listed with the note
+command that retires it. Only the opener closes or reopens a child thread.

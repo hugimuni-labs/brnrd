@@ -21,7 +21,7 @@ from pathlib import Path
 from brr.daemon2.facts import Fact
 
 from .adapters import resolve
-from .home import Home, atomic_write, is_channel, mint
+from .home import Home, atomic_write, is_channel, mint, notice_id
 from .ledger import LedgerConflict, append, read_facts
 from .port import (
     fact_from_port, fact_from_taint, parse_frontmatter, render_boundary,
@@ -98,10 +98,6 @@ def _attention(home: Home, fact_id: str, why: str, *,
 
 def _record(home: Home, kind: str, data: dict, fact_id: str) -> Fact:
     return append(home, Fact(kind=kind, by=_by(home), data=data, id=fact_id))
-
-
-def notice_id(kind: str, subject: str) -> str:
-    return f"loom/{kind}-{hashlib.sha256(subject.encode()).hexdigest()[:10]}"
 
 
 def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, can: str, *,
@@ -259,7 +255,9 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         f"`python -m brr.loom.runtime send --re <id> --to thread:{thread} --note "
         "\"<what you did>\"`; if you commit in this self clone, land it with "
         "`python -m brr.loom.runtime send-self --room .`; you will forget what is "
-        "not written: keep this thread's README true, and when your context grows "
+        "not written: keep this thread's README true; under `## Plan`, cite each "
+        "row's letters with ` · re: <id>, <id>` and land the edit with send-self. "
+        "When your context grows "
         "heavy hand over with `python -m brr.loom.runtime molt --why \"<where "
         "things stand>\"`; `python -m brr.loom.runtime settle <thread> --why "
         "\"…\"` closes a thread whose work is done; "
@@ -284,7 +282,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         room / "port" / "in" / "boundary.md",
         render_boundary(strand, gen, thread, letters, shown, threads,
                         fuel=fuel, channels=reply_channels(facts),
-                        opened=thread_table(home, facts), plan=_plan(room, thread, letters),
+                        opened=thread_table(home, facts), plan=_plan(home, thread, facts),
                         replies={k: f.reply_to for k, f in letter_owners(facts, main_snapshot(home)).items()}),
     )
     return room
@@ -369,7 +367,27 @@ def _spawn(room: Path, argv: list[str], shell: str, thread: str) -> tuple[subpro
 
 
 def _start(home: Home, strand: str, thread: str, gen: int,
-           bodies: dict[str, Body], facts: list[Fact], choice=None) -> list[Fact]:
+           bodies: dict[str, Body], facts: list[Fact], choice=None, *, force=False) -> list[Fact]:
+    """Serialize starts with the operator's explicit gauge override."""
+    room = home.room(strand)
+    room.mkdir(parents=True, exist_ok=True)
+    with (room / ".starting").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return facts
+        current = read_facts(home)
+        if fold(current).holder.get(thread) != (strand, gen) or body_alive(room):
+            return current
+        if force:
+            pending = pending_bodies(fold(current).accepted).get(strand)
+            if not pending or pending.kind != "body.parked":
+                return current
+        return _launch(home, strand, thread, gen, bodies, current, choice, force=force)
+
+
+def _launch(home: Home, strand: str, thread: str, gen: int,
+            bodies: dict[str, Body], facts: list[Fact], choice=None, *, force=False) -> list[Fact]:
     """Launch one body; the gauge can defer a start without consuming letters."""
     if strand in bodies:
         return facts
@@ -387,7 +405,7 @@ def _start(home: Home, strand: str, thread: str, gen: int,
         prior = [f for f in facts if f.data.get("strand") == strand]
         after = max((datetime.fromisoformat(f.at).timestamp() for f in prior
                      if f.kind in {"body.exited", "body.parked"}), default=0)
-        gauge = reading(home, shell, after)
+        gauge = {"windows": []} if force else reading(home, shell, after)
         data = {"strand": strand, "gen": gen, "shell": shell, "core": core}
         if gauge is None:
             if not prior or prior[-1].kind not in {"body.pending", "body.parked"}:
@@ -541,20 +559,20 @@ def _readme(room: Path, thread: str) -> str | None:
         return None
 
 
-def _plan(room: Path, thread: str, letters: list[Fact]) -> str:
-    from .lifecycle import parse_plan
-    path = room / "self/threads" / thread / "README.md"
-    try:
-        rows = parse_plan(path.read_text())
-        changed = path.stat().st_mtime
-    except OSError:
-        return ""
+def _plan(home: Home, thread: str, facts: list[Fact]) -> str:
+    main = main_snapshot(home)
+    rows = main.get(thread, {}).get("plan_rows")
+    table = letter_owners(facts, main)
+    missing = [ident for ident, fate in table.items()
+               if not fate.done and fate.thread == thread
+               and fate.owner in {"body", "loom", "opener"} and not fate.plan_rows]
     if rows is None:
+        # A thread with no plan is not asked for one: the nag is for a plan
+        # that exists and has fallen behind its letters.
         return ""
     text = f"plan {sum(done for done, _ in rows)}/{len(rows)}"
-    newer = sum(datetime.fromisoformat(letter.at).timestamp() > changed for letter in letters)
-    if newer:
-        text += f" · plan older than {newer} letter(s)"
+    if missing:
+        text += " · letters without a row: " + ", ".join(missing)
     next_row = next((text for done, text in rows if not done), "")
     if next_row:
         text += f" · next: {next_row[:60]}"
@@ -755,9 +773,9 @@ def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
         paced = bool(start and below_floor(home, start.data["shell"]))
         shown = fold(facts).shown.get(strand, set())
         letters = [letter for letter in letters_for(facts, main_snapshot(home), body.thread) if letter.id in shown]
-        cause = ("molted" if molted else "paced" if paced else
+        cause = ("molted" if molted else
                  "settled" if read_thread(home, body.thread).get("status") in CLOSED else
-                 "idle" if not letters else "failed")
+                 "idle" if not letters else "paced" if paced else "failed")
         facts = _end_attempt(home, facts, strand, body.thread, body.gen, code, letters, cause)
         facts = _drain_strand(home, facts, strand)
         facts = _drained(home, facts, strand, body.thread, body.gen)
@@ -794,7 +812,7 @@ def _refresh_holders(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> 
             text = render_boundary(strand, gen, thread, letters,
                                    state.shown.get(strand, set()), threads,
                                    fuel(home, shells[strand]) if shells.get(strand) else "", settled,
-                                   channels, opened=table, plan=_plan(home.room(strand), thread, letters),
+                                   channels, opened=table, plan=_plan(home, thread, facts),
                                    replies={k: f.reply_to for k, f in letter_owners(facts, main_snapshot(home)).items()})
             path = home.room(strand) / "port" / "in" / "boundary.md"
             if not path.is_file() or path.read_text() != text:

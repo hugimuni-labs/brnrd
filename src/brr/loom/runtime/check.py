@@ -28,6 +28,26 @@ def violations(facts, main, *, quiet_end=False):
                 problems.append((prefix, ident, 'thread owner has no thread'))
             elif not fate.reason:
                 problems.append((prefix, ident, 'ownership has no reason'))
+        # Derived columns obey the same prefix contract as the owner. A
+        # plan citation cannot outlive its row, and an end/next-actor view
+        # cannot report a debt that the letter table has retired.
+        from .owners import thread_axes, plan_citations
+        for ident, fate in table.items():
+            plan = main.get(fate.thread, {}).get('plan_rows') or ()
+            for row in fate.plan_rows:
+                if not 1 <= row <= len(plan) or ident not in plan_citations(plan[row - 1][1]):
+                    problems.append((prefix, ident, 'plan column cites no landed row'))
+        for thread, axis in thread_axes(current, main, table).items():
+            for ident in axis['letters']:
+                if ident not in table or table[ident].done:
+                    problems.append((prefix, ident, f'{thread} end column names no owed letter'))
+            if bool(axis['letters']) == (axis['owed-by'] == 'nobody'):
+                problems.append((prefix, thread, 'end column loses the owner of its owed letters'))
+        for fact in fold(current).accepted:
+            for disposition in fact.data.get('dispositions', ()):
+                successor = disposition.get('successor')
+                if successor and successor['id'] not in table:
+                    problems.append((prefix, disposition['id'], 'disposition loses its successor debt'))
         replaced = {(d.get('id'), d.get('successor', {}).get('id')) for f in fold(current).accepted
                     for d in f.data.get('dispositions', ()) if d.get('outcome') == 'done'}
         sent = {f.data.get('key') for f in current if f.kind == 'speech' and f.data.get('state') == 'sent'}

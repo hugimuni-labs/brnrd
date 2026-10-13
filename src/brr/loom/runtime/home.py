@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import secrets
@@ -13,6 +14,10 @@ _THREAD_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 
 def mint(n: int) -> str:
     return "".join(secrets.choice(_ALPHABET) for _ in range(n))
+
+
+def notice_id(kind: str, subject: str) -> str:
+    return f"loom/{kind}-{hashlib.sha256(subject.encode()).hexdigest()[:10]}"
 
 
 def check_install(value: str) -> str:
