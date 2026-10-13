@@ -15,10 +15,13 @@ def _threads_arguments(parser) -> None:
     parser.add_argument("--home")
     parser.add_argument("--room")
     parser.add_argument("--force", metavar="THREAD", help="start a paced thread before its reset")
+    parser.add_argument("--left", metavar="THREAD", nargs="?", const="",
+                        help="inspect the rooms: alone, the table gains a `left` count; "
+                             "with a thread, its retained paths and commits")
 
 
 def cmd_threads(args) -> int:
-    from .threads import thread_table, render_table
+    from .threads import thread_table, render_table, left_by_thread, render_left
     from .home import Home, home_of_room
     from .ledger import read_facts
     from .verbs_loom import _room
@@ -53,7 +56,23 @@ def cmd_threads(args) -> int:
         except (PortError, ValueError) as exc:
             sys.stderr.write(str(exc) + '\n')
             return 1
-    sys.stdout.write(render_table(thread_table(home, read_facts(home))))
+    facts = read_facts(home)
+    # The inventory runs git in every room and fetches each project source,
+    # so the plain table never pays for it: only --left asks.
+    if args.left is None:
+        sys.stdout.write(render_table(thread_table(home, facts)))
+        return 0
+    left = left_by_thread(home, facts, args.left or None)
+    if args.left:
+        sys.stdout.write(render_left(args.left, left.get(args.left, [])))
+        return 0
+    rows = thread_table(home, facts)
+    for row in rows:
+        items = left.get(row['thread'], [])
+        count = sum(item.count for item in items)
+        if items:
+            row['left'] = (str(count) if count else '') + ('?' if any(item.error for item in items) else '')
+    sys.stdout.write(render_table(rows))
     return 0
 
 
