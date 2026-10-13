@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -104,7 +105,7 @@ def _confirm_macos(*, run, sleep, timeout, label, alive) -> int | None:
     )
     fields = _fields(result.stdout or "")
     pid = _parse_pid(fields.get("pid"))
-    if fields.get("state") != "running" or pid is None or not alive(pid):
+    if result.returncode != 0 or fields.get("state") != "running" or pid is None or not alive(pid):
         return None
     return pid
 
@@ -116,6 +117,8 @@ def _linux_show(run, unit: str) -> tuple[str, int | None]:
         capture_output=True,
         text=True,
     )
+    if result.returncode != 0:
+        return "query-failed", None
     fields = _fields(result.stdout or "")
     return fields.get("ActiveState") or "unknown", _parse_pid(fields.get("MainPID"))
 
@@ -191,7 +194,7 @@ def _print_status(*, state: str, pid: int | None, home: Path | None) -> None:
 
 
 def _run(run):
-    return run or __import__("subprocess").run
+    return run or subprocess.run
 
 
 def _sleep(sleep):
@@ -235,6 +238,7 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
             sleep=_sleep(sleep),
             workdir=home,
             delay=poll,
+            restart=True,
         )
         if args.no_start:
             return 0
@@ -263,13 +267,13 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
         sleep=_sleep(sleep),
         label=LABEL,
         program_args=_program(home),
-        log_name=LOG_NAME,
+        log_directory=_agents(agents_home) / "Library" / "Logs" / LOG_NAME,
         abandon_process_group=True,
         confirm=confirm,
         retry_command="`brnrd loom install`",
     )
     print(f"[brnrd] wrote LaunchAgent: {result.plist_path}")
-    if args.no_start or not result.started:
+    if args.no_start:
         print("[brnrd] launchd service written; it will load at next login")
         return 0
     if result.alive and result.pid:
@@ -318,8 +322,8 @@ def _stop(*, run, agents_home, system) -> int:
     system = _platform(system)
     if system == "Linux":
         return linux.stop_service(unit=UNIT, run=run)
-    macos.stop_loaded_service(run=_run(run), label=LABEL)
-    return 0
+    result = macos.stop_loaded_service(run=_run(run), label=LABEL)
+    return result.returncode
 
 
 def _status(*, run, agents_home, system, pid_alive) -> int:
@@ -382,7 +386,7 @@ def _logs(argv: list[str], *, run, agents_home, system) -> int:
         lines=args.lines,
         home=_agents(agents_home),
         run=_run(run),
-        log_name=LOG_NAME,
+        log_directory=_agents(agents_home) / "Library" / "Logs" / LOG_NAME,
     )
     return 0
 
@@ -425,6 +429,8 @@ def main(
         poll_timeout=poll_timeout,
         system=system,
     )
+    if verb in {"start", "stop", "status", "uninstall"}:
+        argparse.ArgumentParser(prog=f"brnrd loom {verb}").parse_args(rest)
     if verb == "install":
         return _install(rest, **shared)
     if verb == "start":

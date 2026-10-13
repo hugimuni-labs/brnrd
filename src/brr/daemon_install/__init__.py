@@ -28,7 +28,7 @@ def install(
             no_start=no_start,
             label=macos.LABEL,
             program_args=list(macos.DAEMON_PROGRAM_ARGS),
-            log_name=macos.DAEMON_LOG_NAME,
+            log_directory=macos.log_dir(),
         )
         print(f"[brnrd] wrote LaunchAgent: {result.plist_path}")
         print(f"[brnrd] logs: {result.log_dir}")
@@ -55,7 +55,7 @@ def install(
                 print(f"  {line}")
         else:
             print("[brnrd] launchd service kickstarted, but the daemon did not start.")
-            _, err_log = macos.log_paths(name=macos.DAEMON_LOG_NAME)
+            _, err_log = macos.log_paths()
             print(f"[brnrd] last stderr ({err_log}):")
             print(_tail_lines(err_log))
         brnrd = brnrd_cmd()
@@ -158,7 +158,7 @@ def status(*, direct_brr_dir: Path | None = None) -> int:
                 direct_code = 0
             else:
                 print("[brnrd] launchd reports loaded, but the daemon process is not running")
-                _, err_log = macos.log_paths(name=macos.DAEMON_LOG_NAME)
+                _, err_log = macos.log_paths()
                 print(f"[brnrd] last stderr ({err_log}):")
                 print(_tail_lines(err_log))
         _print_gate_health(direct_brr_dir)
@@ -218,7 +218,7 @@ def logs(*, follow: bool = True, lines: int = 80) -> int | None:
     if linux.supported():
         return linux.logs(follow=follow, lines=lines, journal_unit="brr")
     if _is_macos():
-        macos.logs(follow=follow, lines=lines, log_name=macos.DAEMON_LOG_NAME)
+        macos.logs(follow=follow, lines=lines, log_directory=macos.log_dir())
         return None
     _unsupported("logs")
 
@@ -242,7 +242,7 @@ def start_service() -> int | None:
                 print(f"[brnrd] launchd said: {result.error}")
             print(
                 "[brnrd] check `brnrd daemon status` and the logs in "
-                f"{macos.log_dir(name=macos.DAEMON_LOG_NAME)}"
+                f"{macos.log_dir()}"
             )
             return 1
         if result.pid_before is not None and result.pid_before == result.pid:

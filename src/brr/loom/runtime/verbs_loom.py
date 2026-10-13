@@ -39,20 +39,10 @@ def _loom(argv: list[str]) -> int:
     # The service argv carries no --adapter. The home's body is the choice.
     # An explicit --adapter keeps the old hand path (tests pass fake).
     if adapter is None:
-        from .config import load_config
-        choice = load_config(args.home).body
-        path = Path(args.home) / "loom" / "config.toml"
-        if not isinstance(choice, str) or not choice.strip():
-            raise SystemExit(
-                f"loom: body is unset in {path}; set body to shell/core"
-            )
-        shell, slash, rest = choice.partition("/")
-        if not slash or not shell.strip() or not rest.strip():
-            raise SystemExit(
-                f"loom: body must be shell/core, got {choice!r} in {path}"
-            )
-        adapter = shell.strip()
-        core = rest.strip()
+        from .service import _require_body
+        choice = _require_body(Path(args.home).expanduser().resolve())
+        adapter, _, core = choice.partition("/")
+        adapter, core = adapter.strip(), core.strip()
     run_loom(
         args.home, adapter=adapter, core=core, tick=args.tick,
         install=args.install,

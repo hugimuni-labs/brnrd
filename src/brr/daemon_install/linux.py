@@ -81,6 +81,26 @@ WantedBy=default.target
 #: `MemoryHigh=` / `MemoryMax=` comment in ``SYSTEMD_UNIT`` above. These are
 #: the values `resolve_memory_limits` falls back to when `.brr/config` sets
 #: neither `daemon.memory_high` nor `daemon.memory_max`.
+# Non-daemon users share the installer, but not the daemon's runner memory
+# budget. The loom's body limits are a separate product decision.
+USER_SERVICE_UNIT = """[Unit]
+Description=brnrd service ({label})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={workdir}
+ExecStart={exec_start}
+Restart=on-failure
+RestartSec=5s
+Environment=BRR_INSTALL_MANAGED=1
+Environment="PATH={path_env}"
+
+[Install]
+WantedBy=default.target
+"""
+
 DEFAULT_MEMORY_HIGH = "8G"
 DEFAULT_MEMORY_MAX = "12G"
 
@@ -206,7 +226,8 @@ def _exec_start_value(binary: str, program_args: list[str] | None) -> str:
     if program_args is None or list(program_args) == DAEMON_PROGRAM_ARGS:
         return f"{_systemd_escape(binary)} daemon up --foreground"
     return " ".join(
-        '"' + _systemd_escape(part) + '"' for part in [binary, *program_args]
+        '"' + _systemd_escape(part).replace('$', '$$') + '"'
+        for part in [binary, *program_args]
     )
 
 
@@ -216,6 +237,7 @@ def render_systemd_unit(
     path_env: str | None = None,
     workdir: str | Path | None = None,
     cfg: dict[str, Any] | None = None,
+    label: str = SERVICE_UNIT,
     program_args: list[str] | None = None,
     kill_mode: str | None = None,
     log_directory: Path | None = None,
@@ -244,7 +266,7 @@ def render_systemd_unit(
     exec_start = str(brr_path) if brr_path else resolve_brr_bin()
     path_value = path_env if path_env is not None else os.environ.get("PATH", "")
     workdir_value = str(workdir) if workdir else str(resolve_workdir())
-    if cfg is None:
+    if cfg is None and label == SERVICE_UNIT:
         from .. import config as _config
 
         try:
@@ -252,7 +274,9 @@ def render_systemd_unit(
         except Exception:  # noqa: BLE001 - unusable tree ⇒ ceiling defaults
             cfg = {}
     memory_high, memory_max = resolve_memory_limits(cfg)
-    text = SYSTEMD_UNIT.format(
+    template = SYSTEMD_UNIT if label == SERVICE_UNIT else USER_SERVICE_UNIT
+    text = template.format(
+        label=_percent_escape(label),
         exec_start=_exec_start_value(exec_start, program_args),
         path_env=_systemd_escape(path_value),
         workdir=_systemd_escape(workdir_value),
@@ -445,9 +469,10 @@ def install(
     executable: str | None = None,
     successor: str = "daemon",
     run: Callable[..., subprocess.CompletedProcess] | None = None,
-    sleep: Callable[[float], None] = time.sleep,
+    sleep: Callable[[float], None] | None = None,
     workdir: str | Path | None = None,
     delay: float = 2.0,
+    restart: bool = False,
 ) -> int:
     if not supported():
         raise SystemExit("[brnrd] daemon install on this platform is not implemented yet")
@@ -456,6 +481,7 @@ def install(
         log_directory.mkdir(parents=True, exist_ok=True)
     service_path = write_unit_file(
         unit,
+        label=unit,
         brr_path=executable,
         program_args=program_args,
         kill_mode=kill_mode,
@@ -464,13 +490,14 @@ def install(
     )
     print(f"[brnrd] wrote {service_path}")
 
-    maybe_enable_linger(prompt=prompt_linger, assume_yes=assume_yes_linger)
+    if unit == SERVICE_UNIT:
+        maybe_enable_linger(prompt=prompt_linger, assume_yes=assume_yes_linger)
 
     _invoke(["systemctl", "--user", "daemon-reload"], check=True, run=run)
     _invoke(["systemctl", "--user", "enable", unit], check=True, run=run)
     alive = True
     if not no_start:
-        _invoke(["systemctl", "--user", "start", unit], check=True, run=run)
+        _invoke(["systemctl", "--user", "restart" if restart else "start", unit], check=True, run=run)
         # `systemctl start` on a Type=simple unit returns the moment the
         # process forks, not once it has survived — `verify_started`'s own
         # `is-active` probe a beat later already prints the honest
@@ -504,17 +531,18 @@ def uninstall(
     _invoke(["systemctl", "--user", "disable", unit], check=False, run=run)
     unit_path(unit).unlink(missing_ok=True)
     _invoke(["systemctl", "--user", "daemon-reload"], check=False, run=run)
-    maybe_disable_linger(
-        prompt=prompt_linger,
-        assume_yes=assume_yes_disable_linger,
-    )
+    if unit == SERVICE_UNIT:
+        maybe_disable_linger(
+            prompt=prompt_linger,
+            assume_yes=assume_yes_disable_linger,
+        )
     print(f"[brnrd] {successor} service uninstalled")
 
 
 def verify_started(
     *,
     delay: float = 2.0,
-    sleep: Callable[[float], None] = time.sleep,
+    sleep: Callable[[float], None] | None = None,
     unit: str = SERVICE_UNIT,
     successor: str = "daemon",
     run: Callable[..., subprocess.CompletedProcess] | None = None,
@@ -527,7 +555,7 @@ def verify_started(
     and an ``is-active`` probe turns that silent crash-loop into an
     immediate, pointed message.
     """
-    sleep(delay)
+    (sleep or time.sleep)(delay)
     command = ["systemctl", "--user", "is-active", unit]
     if run is None:
         result = _capture(command)
@@ -551,7 +579,7 @@ def start_service(
     unit: str = SERVICE_UNIT,
     successor: str = "daemon",
     run: Callable[..., subprocess.CompletedProcess] | None = None,
-    sleep: Callable[[float], None] = time.sleep,
+    sleep: Callable[[float], None] | None = None,
     delay: float = 2.0,
 ) -> int:
     result = _invoke(["systemctl", "--user", "start", unit], check=False, run=run)

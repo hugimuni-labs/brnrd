@@ -310,3 +310,201 @@ def test_verb_without_adapter_refuses_an_unset_body(tmp_path):
     home.mkdir()
     with pytest.raises(SystemExit, match="body"):
         _loom(["--home", str(home)])
+
+
+@pytest.mark.parametrize("system", ["Linux", "Darwin"])
+def test_cli_service_lifecycle_at_subprocess_boundary(tmp_path, monkeypatch, capsys, system):
+    """Actual CLI argv writes files and reaches only the loom's manager target."""
+    import os
+    from brr.cli import main
+
+    home = tmp_path / "home with spaces"
+    _body(home)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "user")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(service, "_platform", lambda _system: system)
+    monkeypatch.setattr(linux, "supported", lambda: system == "Linux")
+    events = []
+    running = False
+
+    def manager(command, **kwargs):
+        nonlocal running
+        events.append(tuple(command))
+        assert command[0] in {"systemctl", "launchctl", "tail"}
+        assert "dev.brnrd.brr" not in " ".join(command)
+        assert linux.SERVICE_UNIT not in command
+        if command[1] == "bootout" or "stop" in command:
+            running = False
+        if command[1] == "kickstart" or "restart" in command or "start" in command:
+            running = True
+        if command[1] == "print":
+            return _ok(command, f"state = running\npid = {os.getpid()}\n") if running else _gone(command)
+        if "is-active" in command:
+            return _ok(command, "active\n")
+        if "show" in command:
+            return _ok(command, f"ActiveState={'active' if running else 'inactive'}\nMainPID={os.getpid() if running else 0}\n")
+        return _ok(command)
+
+    monkeypatch.setattr(subprocess, "run", manager)
+    monkeypatch.setattr(service.time, "sleep", lambda seconds: events.append(("sleep", seconds)))
+    monkeypatch.setenv("PATH", "/initial/bin:/usr/bin")
+    main(["loom", "install", "--home", str(home)])
+    assert f"pid: {os.getpid()}" in capsys.readouterr().out
+    if system == "Darwin":
+        path = macos.plist_path(label=service.LABEL)
+        data = plistlib.loads(path.read_bytes())
+        assert data["AbandonProcessGroup"] is True
+        assert data["EnvironmentVariables"]["PATH"] == "/initial/bin:/usr/bin"
+        assert data["KeepAlive"] == {"SuccessfulExit": False}
+        program = data["ProgramArguments"]
+    else:
+        path = linux.unit_path(service.UNIT)
+        data = path.read_text()
+        assert "KillMode=process\n" in data
+        assert "Restart=on-failure\n" in data
+        assert "MemoryHigh=" not in data and "MemoryMax=" not in data
+        assert 'Environment="PATH=/initial/bin:/usr/bin"' in data
+        import shlex
+        program = shlex.split(next(line.split("=", 1)[1] for line in data.splitlines() if line.startswith("ExecStart=")))
+    assert program[1:] == ["-m", "brr.loom.runtime", "loom", "--home", str(home)]
+    assert "--adapter" not in program
+    # Run the generated foreground argv's parser; it takes its body from the
+    # config, rather than relying on the old fake adapter default.
+    from brr.loom.runtime import __main__ as runtime_cli, verbs_loom
+    choices = []
+    monkeypatch.setattr(verbs_loom, "run_loom", lambda root, **kwargs: choices.append((root, kwargs)))
+    assert runtime_cli.main(program[3:]) == 0
+    assert choices[0][1]["adapter"] == "grok"
+    assert choices[0][1]["core"] == "grok-4"
+
+    # Reinstall refreshes the home and PATH and actually restarts the job.
+    other = tmp_path / "other-home"
+    _body(other, "codex/gpt-6")
+    monkeypatch.setenv("PATH", "/new/bin:/usr/bin")
+    events.clear()
+    main(["loom", "install", "--home", str(other)])
+    if system == "Linux":
+        assert ("systemctl", "--user", "restart", service.UNIT) in events
+        assert f"WorkingDirectory={other}" in path.read_text()
+        assert 'Environment="PATH=/new/bin:/usr/bin"' in path.read_text()
+    else:
+        assert events[0][1] == "bootout"
+        assert plistlib.loads(path.read_bytes())["WorkingDirectory"] == str(other)
+        assert plistlib.loads(path.read_bytes())["EnvironmentVariables"]["PATH"] == "/new/bin:/usr/bin"
+    capsys.readouterr()
+    main(["loom", "status"])
+    output = capsys.readouterr().out
+    assert f"home: {other}" in output
+    assert "body: codex/gpt-6" in output
+    main(["loom", "stop"])
+    assert not running
+    main(["loom", "start"])
+    assert running
+    main(["loom", "logs", "--no-follow"])
+    assert events[-1][0] == "tail"
+    main(["loom", "uninstall"])
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("system", ["Linux", "Darwin"])
+@pytest.mark.parametrize("choice", [None, "", "not-a-body", "/core", "shell/"])
+def test_unconfigured_install_does_not_write_a_service(tmp_path, monkeypatch, system, choice):
+    home = tmp_path / "home"
+    _body(home, choice)
+    calls = []
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "user")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    with pytest.raises(SystemExit, match="body"):
+        service.main(["install", "--home", str(home)], system=system, run=lambda *a, **k: calls.append(a))
+    assert calls == []
+    assert not linux.unit_path(service.UNIT).exists()
+    assert not macos.plist_path(label=service.LABEL).exists()
+
+
+def test_macos_bootstrap_failure_is_failure(tmp_path, capsys):
+    home = tmp_path / "home"
+    _body(home)
+    box = _Mac()
+
+    def fail_bootstrap(command, **kwargs):
+        if command[1] == "bootstrap":
+            return subprocess.CompletedProcess(command, 1, "", "permission denied")
+        return box.run(command, **kwargs)
+
+    code = service.main(["install", "--home", str(home)], run=fail_bootstrap,
+                        agents_home=tmp_path / "user", sleep=box.sleep, system="Darwin")
+    assert code == 1
+    output = capsys.readouterr().out
+    assert "permission denied" in output
+    assert "next login" not in output
+    assert "pid:" not in output
+
+
+@pytest.mark.parametrize("verb", ["stop", "start", "status", "uninstall"])
+def test_service_verbs_reject_extra_arguments(verb):
+    calls = []
+    with pytest.raises(SystemExit) as raised:
+        service.main([verb, "--mistyped"], run=lambda *a, **k: calls.append(a))
+    assert raised.value.code == 2
+    assert calls == []
+
+
+def test_macos_stop_reports_bootout_failure():
+    assert service.main(["stop"], system="Darwin", run=lambda cmd, **_: subprocess.CompletedProcess(cmd, 5, "", "EIO")) == 5
+
+
+@pytest.mark.parametrize("system", ["Linux", "Darwin"])
+def test_status_shows_last_nonempty_log_line_with_age(tmp_path, monkeypatch, capsys, system):
+    from datetime import datetime, timezone
+    home = tmp_path / "home"
+    _body(home)
+    (home / "loom" / "loom.log").write_text(
+        "2026-10-13T12:00:00+00:00 old entry\n"
+        "2026-10-13T14:00:00+00:00 latest entry\n\n",
+    )
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 13, 14, 2, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(service, "datetime", Clock)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(linux, "supported", lambda: True)
+    box = _Linux() if system == "Linux" else _Mac()
+    kwargs = dict(system=system, run=box.run, sleep=box.sleep,
+                  pid_alive=box.pid_alive, agents_home=tmp_path / "user")
+    assert service.main(["install", "--home", str(home), "--no-start"], **kwargs) == 0
+    if system == "Darwin":
+        box.job_up = True
+    capsys.readouterr()
+    assert service.main(["status"], **kwargs) == 0
+    output = capsys.readouterr().out
+    assert "log: 2026-10-13T14:00:00+00:00 latest entry (2m)" in output
+    assert "old entry" not in output
+
+
+@pytest.mark.parametrize("system", ["Linux", "Darwin"])
+def test_start_does_not_trust_failed_manager_pid_readback(tmp_path, monkeypatch, capsys, system):
+    home = tmp_path / "home"
+    _body(home)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(linux, "supported", lambda: True)
+    box = _Linux() if system == "Linux" else _Mac()
+    kwargs = dict(system=system, run=box.run, sleep=box.sleep,
+                  pid_alive=box.pid_alive, agents_home=tmp_path / "user")
+    assert service.main(["install", "--home", str(home), "--no-start"], **kwargs) == 0
+    capsys.readouterr()
+
+    def failed_read(command, **kw):
+        result = box.run(command, **kw)
+        if "show" in command or command[1] == "print":
+            result.returncode = 1
+        return result
+
+    kwargs["run"] = failed_read
+    assert service.main(["start"], **kwargs) == 1
+    assert "pid: 4242" not in capsys.readouterr().out

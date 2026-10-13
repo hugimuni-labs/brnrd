@@ -35,6 +35,10 @@ _LOOP = textwrap.dedent(
 
     root = Path(sys.argv[1])
     stop_file = Path(sys.argv[2])
+    # Read back which tree the subprocess tests; the working directory
+    # alone is not an import pin in a linked checkout.
+    import brr.loom.runtime.loom as loom
+    assert Path(loom.__file__).resolve() == Path(sys.argv[3]).resolve()
     stop = threading.Event()
 
     def watch() -> None:
@@ -67,7 +71,8 @@ def test_two_loops_on_one_home_answer_one_letter(tmp_path: Path) -> None:
         log = tmp_path / f"loop-{index}.log"
         logs.append(log)
         procs.append(subprocess.Popen(
-            [sys.executable, str(script), str(root), str(stop)],
+            [sys.executable, str(script), str(root), str(stop),
+             str(Path(_src()) / "brr/loom/runtime/loom.py")],
             env=env,
             stdout=log.open("w"),
             stderr=subprocess.STDOUT,

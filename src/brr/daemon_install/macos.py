@@ -107,12 +107,12 @@ def plist_path(*, home: Path | None = None, label: str = LABEL) -> Path:
     return launch_agents_dir(home=home) / f"{label}.plist"
 
 
-def log_dir(*, home: Path | None = None, name: str = DAEMON_LOG_NAME) -> Path:
-    return (home or Path.home()) / "Library" / "Logs" / name
+def log_dir(*, home: Path | None = None) -> Path:
+    return (home or Path.home()) / "Library" / "Logs" / DAEMON_LOG_NAME
 
 
-def log_paths(*, home: Path | None = None, name: str = DAEMON_LOG_NAME) -> tuple[Path, Path]:
-    logs = log_dir(home=home, name=name)
+def log_paths(*, home: Path | None = None, log_directory: Path | None = None) -> tuple[Path, Path]:
+    logs = log_directory if log_directory is not None else log_dir(home=home)
     return logs / "brr.out.log", logs / "brr.err.log"
 
 
@@ -145,7 +145,7 @@ def render_plist(
     workdir: str | Path | None = None,
     label: str = LABEL,
     program_args: list[str] | None = None,
-    log_name: str = DAEMON_LOG_NAME,
+    log_directory: Path | None = None,
     abandon_process_group: bool = False,
 ) -> str:
     """launchd's default PATH is ``/usr/bin:/bin:…`` — the daemon starts but
@@ -163,7 +163,7 @@ def render_plist(
     and are deliberately not used here as a substitute. macOS installs are
     unfenced against the failure mode
     ``incident-oom-cascade-salvage-on-main.md`` describes."""
-    out_log, err_log = log_paths(home=home, name=log_name)
+    out_log, err_log = log_paths(home=home, log_directory=log_directory)
     path_value = path_env if path_env is not None else os.environ.get("PATH", "")
     workdir_value = str(workdir) if workdir else str(resolve_workdir())
     args = list(DAEMON_PROGRAM_ARGS if program_args is None else program_args)
@@ -200,7 +200,7 @@ def install(
     sleep: Callable[[float], None] = time.sleep,
     label: str = LABEL,
     program_args: list[str] | None = None,
-    log_name: str = DAEMON_LOG_NAME,
+    log_directory: Path | None = None,
     abandon_process_group: bool = False,
     confirm: Callable[..., int | None] | None = None,
     retry_command: str = "`brnrd daemon install`",
@@ -210,7 +210,7 @@ def install(
         raise SystemExit("[brnrd] cannot find `brnrd` on PATH; install the CLI before registering launchd")
 
     launch_agents_dir(home=home).mkdir(parents=True, exist_ok=True)
-    logs = log_dir(home=home, name=log_name)
+    logs = log_directory if log_directory is not None else log_dir(home=home)
     logs.mkdir(parents=True, exist_ok=True)
 
     workdir_value = Path(workdir) if workdir else resolve_workdir()
@@ -219,7 +219,7 @@ def install(
     path.write_text(
         render_plist(
             brr_bin, home=home, workdir=workdir_value, label=label,
-            program_args=program_args, log_name=log_name,
+            program_args=program_args, log_directory=logs,
             abandon_process_group=abandon_process_group,
         ),
         encoding="utf-8",
@@ -424,7 +424,7 @@ def status(
     home: Path | None = None,
     run: RunFn = subprocess.run,
     label: str = LABEL,
-    log_name: str = DAEMON_LOG_NAME,
+    log_directory: Path | None = None,
 ) -> ServiceStatus:
     path = plist_path(home=home, label=label)
     loaded: bool | None = None
@@ -443,7 +443,7 @@ def status(
 
     return ServiceStatus(
         plist_path=path,
-        log_dir=log_dir(home=home, name=log_name),
+        log_dir=log_directory if log_directory is not None else log_dir(home=home),
         installed=path.exists(),
         loaded=loaded,
         detail=detail,
@@ -457,10 +457,10 @@ def logs(
     lines: int = 80,
     home: Path | None = None,
     run: RunFn = subprocess.run,
-    log_name: str = DAEMON_LOG_NAME,
+    log_directory: Path | None = None,
 ) -> None:
-    log_dir(home=home, name=log_name).mkdir(parents=True, exist_ok=True)
-    out_log, err_log = log_paths(home=home, name=log_name)
+    out_log, err_log = log_paths(home=home, log_directory=log_directory)
+    out_log.parent.mkdir(parents=True, exist_ok=True)
     for path in (out_log, err_log):
         path.touch(exist_ok=True)
     cmd = ["tail", "-n", str(lines)]
@@ -513,7 +513,7 @@ def start_loaded_service(
         return StartResult(started=False, pid=None, pid_before=None, error=None)
 
     workdir = installed_workdir(home=home, label=label)
-    pid_before = daemon_pid_for_workdir(workdir)
+    pid_before = daemon_pid_for_workdir(workdir) if confirm is None else None
 
     bootstrap = _run_launchctl(
         ["bootstrap", _gui_domain(), str(plist_path(home=home, label=label))],
@@ -556,12 +556,12 @@ def start_loaded_service(
     )
 
 
-def stop_loaded_service(*, run: RunFn = subprocess.run, label: str = LABEL) -> None:
-    _bootout(run=run, check=False, label=label)
+def stop_loaded_service(*, run: RunFn = subprocess.run, label: str = LABEL) -> subprocess.CompletedProcess:
+    return _bootout(run=run, check=False, label=label)
 
 
-def _bootout(*, run: RunFn, check: bool, label: str = LABEL) -> None:
-    _run_launchctl(["bootout", _gui_service(label)], run=run, check=check)
+def _bootout(*, run: RunFn, check: bool, label: str = LABEL) -> subprocess.CompletedProcess:
+    return _run_launchctl(["bootout", _gui_service(label)], run=run, check=check)
 
 
 def _run_launchctl(
