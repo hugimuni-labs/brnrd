@@ -371,3 +371,115 @@ def test_a_workers_commit_under_another_author_is_refused_at_the_opener(tmp_path
         assert _published(root) == []
     finally:
         _kill(read_facts(Home(root)))
+
+
+def _done(room: Path, ref: str, kind: str = "done", cwd: Path | None = None):
+    """The send verb as a body runs it."""
+    return subprocess.run(
+        [sys.executable, "-m", "brr.loom.runtime", "send", "--room", str(cwd or room),
+         "--to", "thread:top", "--clean", "--kind", kind, "--ref", ref],
+        env=_env(room), cwd=room / "self", capture_output=True, text=True, timeout=120,
+    )
+
+
+def test_a_clean_done_names_published_work(tmp_path: Path) -> None:
+    root, top, work, bare = _pair(tmp_path)
+    try:
+        # Nothing committed: there is nothing to publish, and done is true.
+        assert _done(work, "widget").returncode == 0
+        _note(work / "widget", work, "fix.txt", "fixed\n")
+        refused = _done(work, "widget")
+        assert refused.returncode != 0
+        assert "widget has 1 commit(s) on loom/work that are not published" in refused.stderr
+        assert "publish widget" in refused.stderr
+        assert _done(work, "widget/fix.txt", cwd=work / "self").returncode != 0
+        # Another kind makes no claim about the source.
+        assert _done(work, "widget", kind="found").returncode == 0
+        publish(work, "widget")
+        assert _done(work, "widget").returncode == 0
+    finally:
+        _kill(read_facts(Home(root)))
+
+
+def test_a_tainted_done_is_the_handoff(tmp_path: Path) -> None:
+    root, top, work, bare = _pair(tmp_path)
+    try:
+        _note(work / "widget", work, "fix.txt", "fixed\n")
+        _taint(root, work)
+        sent = _done(work, "widget")
+        assert sent.returncode == 0, sent.stderr
+    finally:
+        _kill(read_facts(Home(root)))
+
+
+def test_a_dead_workers_bounce_names_its_commits_and_the_opener_lands_them(tmp_path: Path) -> None:
+    import json
+
+    from brr.loom.runtime.ledger import inject_letter
+    from brr.loom.runtime.selfrepo import _commit
+    from _step import Loom, wait_until
+    from test_lifecycle import bodies
+
+    root = _home(tmp_path)
+    bare, _work = _source(tmp_path)
+    for thread, head in (("top", ""), ("work", "opened-by: thread:top\n")):
+        write_thread(root, thread, f"---\nid: {thread}\nstatus: open\ntense: plan\n{head}"
+                     f"---\n# {thread}\n", thread, wait="0")
+        (root / "self" / "threads" / thread / "seat").write_text(f"repo: {bare}\n")
+    git(root / "self", "add", "threads")
+    _commit(root / "self", f"Seats.{LABEL}")
+    landed = root / "landed.json"
+    bodies(root, f'''import json, subprocess, sys, time
+from pathlib import Path
+from brr.loom.runtime.fakebody import Ctx, _own_thread
+room = Path(sys.argv[1])
+ctx = Ctx(room)
+own = _own_thread(ctx.wake())
+def verb(*args):
+    return subprocess.run([sys.executable, "-m", "brr.loom.runtime", "publish", *args,
+                           "--room", str(room)], capture_output=True, text=True, env=ctx.env)
+if own == "work":
+    for name in ("one", "two"):
+        (room / "widget" / name).write_text(name)
+        subprocess.run(["git", "add", name], cwd=room / "widget", check=True, env=ctx.env)
+        subprocess.run(["git", "commit", "-qm", name], cwd=room / "widget", check=True, env=ctx.env)
+    sys.exit(7)
+for letter in ctx.owed():
+    ctx.send("thread:top", note="opener", re=letter.id)
+ctx.send("thread:work", "two commits please")
+deadline = time.monotonic() + 15
+while time.monotonic() < deadline:
+    for letter in ctx.jack("post").letters:
+        if "body exited 7" not in letter.body:
+            continue
+        fetched = verb("widget", "--from", "work")
+        commit = fetched.stdout.split()[1] if fetched.returncode == 0 else ""
+        pushed = verb("widget", "--from", "work", "--commit", commit)
+        Path({str(landed)!r}).write_text(json.dumps({{
+            "bounce": letter.body, "fetched": fetched.stdout + fetched.stderr,
+            "pushed": pushed.stdout + pushed.stderr, "code": pushed.returncode}}))
+        ctx.send("thread:top", note="landed", re=letter.id)
+        sys.exit(0)
+    time.sleep(0.03)
+raise SystemExit("no bounce")
+''')
+    inject_letter(root, to="thread:top", body="begin")
+    loom = Loom(root)
+    loom.start()
+    try:
+        wait_until(landed.exists, 30, loom.dump)
+        got = json.loads(landed.read_text())
+        (line,) = [text for text in got["bounce"].splitlines() if text.startswith("repo widget:")]
+        assert "2 commit(s) on loom/work not published" in line
+        assert "publish widget --from work" in line
+        dead = line.split(", in ", 1)[1].split(";", 1)[0]
+        tip = _tip(Path(dead), "refs/heads/loom/work")
+        assert f"tip {tip[:12]}" in line
+        assert got["code"] == 0, got
+        assert "2 commit(s) the source does not have" in got["fetched"]
+        assert _tip(bare, "refs/heads/loom/work") == tip
+        ended = [f for f in loom.facts() if f.kind == "attempt.ended" and f.data["cause"] == "failed"]
+        assert ended[0].data["evidence"]["unpublished"] == [line]
+    finally:
+        loom.halt()
+        _kill(read_facts(Home(root)))
