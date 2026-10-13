@@ -66,8 +66,19 @@ if own == 'author' and any(l.body == 'begin' for l in letters):
     ctx.send('thread:worker', 'Keep this work')
     Path({str(dispatched)!r}).write_text(str(os.getpid()))
     sys.exit(0)
-bounce = next(l for l in letters if 'body exited' in l.body)
-text = bounce.body
+# A letter shown in the wake is cut to its first line at the next boundary.
+# Wait until the loom has done that, then read the whole text where a body
+# reads it: in the wake.
+time.sleep(1)
+bounce = next(l for l in ctx.owed() if 'body exited' in l.body)
+rest = ctx.wake().split('### ' + bounce.id + ' ', 1)
+assert len(rest) == 2, 'the wake does not carry the letter'
+kept = []
+for line in rest[1].splitlines()[1:]:
+    if line.startswith(('## ', '### ')):
+        break
+    kept.append(line)
+text = chr(10).join(kept).rstrip()
 if own == 'author':
     Path({str(received)!r}).write_text(json.dumps({{'body': text, 'reader': own, 'pid': os.getpid()}}))
     ctx.send('thread:worker', text)
