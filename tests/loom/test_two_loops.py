@@ -127,3 +127,109 @@ def test_two_loops_on_one_home_answer_one_letter(tmp_path: Path) -> None:
     assert len(started) == 1, detail
     assert len(replies) == 1, detail
     assert replies[0].kind == "note", detail
+
+
+def _lock_held(root: Path) -> bool:
+    import fcntl
+    path = root / "loom" / "loop.lock"
+    if not path.exists():
+        return False
+    with path.open("r") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(handle, fcntl.LOCK_UN)
+    return False
+
+
+def _cli_loop(root: Path, log: Path):
+    """Drive the real foreground verb, including its SIGTERM handler."""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = _src() + os.pathsep + env.get("PYTHONPATH", "")
+    code = (
+        "from pathlib import Path; import sys; "
+        "import brr.loom.runtime.loom as loom; "
+        "assert Path(loom.__file__).resolve() == Path(sys.argv[2]).resolve(); "
+        "from brr.loom.runtime.__main__ import main; "
+        "sys.exit(main(['loom', '--home', sys.argv[1], '--adapter', 'fake', '--tick', '0.05']))"
+    )
+    with log.open("w") as handle:
+        return subprocess.Popen(
+            [sys.executable, "-c", code, str(root), str(Path(_src()) / "brr/loom/runtime/loom.py")],
+            env=env, stdout=handle, stderr=subprocess.STDOUT,
+        )
+
+
+def _until(condition, log: Path, timeout=20):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition():
+            return
+        time.sleep(0.02)
+    raise AssertionError(log.read_text(errors="replace") if log.exists() else "loop did not start")
+
+
+def _end(proc):
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=2)
+
+
+def test_a_waiting_loop_stops_without_stopping_the_holder_and_crash_releases_lock(tmp_path):
+    root = tmp_path / "home"
+    write_thread(root, "work", "Work", "answer-fast", wait="0")
+    owner_log, waiter_log = tmp_path / "owner.log", tmp_path / "waiter.log"
+    owner = _cli_loop(root, owner_log)
+    waiter = successor = None
+    try:
+        _until(lambda: _lock_held(root), owner_log)
+        waiter = _cli_loop(root, waiter_log)
+        _until(lambda: "loop: waiting" in waiter_log.read_text(), waiter_log)
+        waiter.terminate()
+        assert waiter.wait(timeout=2) == 0
+        assert owner.poll() is None
+        assert _lock_held(root)
+        owner.kill()
+        owner.wait(timeout=2)
+        assert not _lock_held(root)
+        successor = _cli_loop(root, owner_log)
+        _until(lambda: _lock_held(root), owner_log)
+        assert successor.poll() is None
+    finally:
+        for process in (owner, waiter, successor):
+            if process is not None:
+                _end(process)
+
+
+def test_waiting_loop_takes_over_after_hand_started_loop_stops(tmp_path):
+    root = tmp_path / "home"
+    write_thread(root, "work", "Work", "answer-fast", wait="0")
+    owner_log, waiter_log = tmp_path / "owner.log", tmp_path / "waiter.log"
+    owner = _cli_loop(root, owner_log)
+    waiter = None
+    try:
+        _until(lambda: _lock_held(root), owner_log)
+        waiter = _cli_loop(root, waiter_log)
+        _until(lambda: "loop: waiting" in waiter_log.read_text(), waiter_log)
+        owner.terminate()
+        assert owner.wait(timeout=2) == 0
+        letter = inject_letter(root, to="thread:work", body="after hand-started loom stops")
+        _until(lambda: any(f.kind == "note" and f.data.get("re") == letter
+                          for f in read_facts(Home(root))), waiter_log)
+        facts = read_facts(Home(root))
+        assert len([f for f in facts if f.kind == "body.started"]) == 1
+    finally:
+        for process in (owner, waiter):
+            if process is not None:
+                _end(process)
+        for fact in read_facts(Home(root)):
+            if fact.kind == "body.started" and body_alive(Home(root).room(fact.data["strand"])):
+                try:
+                    os.killpg(fact.data["pid"], signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
