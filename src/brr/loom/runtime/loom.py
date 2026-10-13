@@ -46,6 +46,10 @@ class Body:
     # These are local resources, not the body's identity or liveness.
     proc: subprocess.Popen | None = None
     log: object = None
+    # Monotonic deadline after which a settled thread's body is signalled.
+    # None until this loop first sees the thread settled. A restarted loop
+    # starts the grace over: the body may be about to leave on its own.
+    stop_after: float | None = None
 
     def close_log(self) -> None:
         close = getattr(self.log, "close", None)
@@ -376,6 +380,111 @@ def body_alive(room: Path) -> bool:
         os.close(fd)
 
 
+def _ps_field(pid: int, field: str) -> str | None:
+    """One ``ps`` column, or None when that pid is not a live process.
+
+    ``lstart`` is kept as text. The same ``ps`` writes it and reads it back,
+    so the locale's layout never has to be parsed.
+    """
+    try:
+        out = subprocess.run(
+            ["ps", "-ww", "-p", str(pid), "-o", f"{field}="],
+            capture_output=True, text=True, timeout=2, check=False,
+            # One layout for ``lstart`` whoever started the loop: a login
+            # service and a terminal do not share a locale.
+            env={**os.environ, "LC_ALL": "C"},
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    text = out.stdout.strip()
+    return text or None
+
+
+def _holds_body_file(room: Path, pid: int) -> bool:
+    """True when ``pid`` still has this room's ``.body`` lock file open.
+
+    Spawn passes that fd to the child and closes its own. ``exec`` keeps
+    the fd, so a body whose command line no longer names the room (codex
+    passes the wake text, not the path) is still identifiable. A pid the
+    kernel has reused does not have the fd.
+    """
+    path = Path(room) / ".body"
+    try:
+        wanted = path.stat()
+    except OSError:
+        return False
+    proc_fds = Path(f"/proc/{pid}/fd")
+    if proc_fds.is_dir():
+        try:
+            entries = list(proc_fds.iterdir())
+        except OSError:
+            return False
+        for fd in entries:
+            try:
+                got = fd.stat()
+            except OSError:
+                continue
+            if got.st_ino == wanted.st_ino and got.st_dev == wanted.st_dev:
+                return True
+        return False
+    try:
+        out = subprocess.run(
+            ["lsof", "-a", "-p", str(pid), "-t", "--", str(path)],
+            capture_output=True, text=True, timeout=2, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return out.returncode == 0 and str(pid) in out.stdout.split()
+
+
+def _proven_body(room: Path, pid: int, lstart: str,
+                 proc: subprocess.Popen | None) -> bool:
+    """True only when ``pid`` is still this room's body.
+
+    An unreaped child this loop spawned cannot have had its pid reused.
+    Any other pid must match the start time recorded at ``body.started``
+    and must still hold ``.body`` or name the room on its command line.
+    With no start time recorded, only holding ``.body`` counts: a command
+    line that names the room is also what ``tail -f <room>/port/body.log``
+    looks like. A miss is not a signal.
+    """
+    if not isinstance(pid, int) or pid <= 1 or not body_alive(room):
+        return False
+    if proc is not None and proc.pid == pid and proc.poll() is None:
+        return True
+    if not lstart:
+        return _holds_body_file(room, pid)
+    if _ps_field(pid, "lstart") != lstart:
+        return False
+    command = _ps_field(pid, "command")
+    room_path = str(Path(room).resolve())
+    if command and (room_path in command or str(room) in command):
+        return True
+    return _holds_body_file(room, pid)
+
+
+def _signal_group(pid: int, sig: int) -> None:
+    try:
+        os.killpg(pid, sig)
+    except OSError:
+        return
+
+
+def _end_group(pid: int) -> None:
+    """SIGTERM, then SIGKILL if the group is still there."""
+    _signal_group(pid, signal.SIGTERM)
+    deadline = time.monotonic() + 0.4
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            break
+        time.sleep(0.05)
+    _signal_group(pid, signal.SIGKILL)
+
+
 def _spawn(room: Path, argv: list[str], shell: str, thread: str) -> tuple[subprocess.Popen, object]:
     log = open(room / "port" / "body.log", "ab")
     # Acquire before publishing a start: the first tick must see the lock.
@@ -512,9 +621,10 @@ def _launch(home: Home, strand: str, thread: str, gen: int,
         facts = _end_attempt(home, facts, strand, thread, gen, None, letters, "failed", why)
         facts = _drained(home, facts, strand, thread, gen)
         return _release(home, facts, strand, thread, gen)
+    started_at = _ps_field(proc.pid, "lstart") or ""
     facts.append(_record(home, "body.started", {
         "strand": strand, "gen": gen, "pid": proc.pid, "shell": shell, "core": core,
-        "readme": readme,
+        "readme": readme, **({"lstart": started_at} if started_at else {}),
     }, f"body.started:{strand}:{gen}:{proc.pid}:{mint(6)}"))
     bodies[strand] = Body(strand, thread, gen, proc, log)
     _log(home, f"start {strand} thread {thread} gen {gen} pid {proc.pid} {shell}/{core}")
@@ -692,6 +802,26 @@ def _leftovers(home: Home, strand: str) -> str:
     return "\n".join(lines)
 
 
+def _room_kept(home: Home, strand: str) -> list[str]:
+    """Commits and edits only this room still holds.
+
+    The same inventory ``leftovers`` gives ``brnrd threads --left``. An
+    inspection failure is a line. The room is not removed either way.
+    """
+    try:
+        from .leftovers import leftovers
+        found = leftovers(home, strand)
+    except Exception as exc:
+        return [f"inspection failed: {type(exc).__name__}: {exc}"]
+    lines = []
+    for item in found:
+        if item.error:
+            lines.append(f"{item.path}: {item.error}")
+        lines.extend(f"{sha} {subject}" for sha, subject in item.commits)
+        lines.extend(f"edit {path}" for path in item.edits)
+    return lines
+
+
 def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure=""):
     """Observe once; every disposition and successor is in this single append."""
     if any(f.id == f"attempt.ended:{strand}:{gen}" for f in facts):
@@ -719,9 +849,20 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
     opener = str(read_thread(home, thread).get("opened-by", ""))
     leftovers = None
     left: list[str] = []
-    if cause == "failed":
+    kept: list[str] = []
+    if cause in {"failed", "stopped"}:
         from .publish import unlanded
         left = unlanded(home, facts, strand, thread)
+    if cause == "stopped":
+        kept = _room_kept(home, strand)
+    stopped_why = ""
+    if cause == "stopped":
+        stopped_why = next(
+            (str(f.data.get("why") or "") for f in reversed(facts)
+             if f.kind == "body.stopped" and f.data.get("strand") == strand
+             and f.data.get("gen") == gen),
+            "",
+        )
     for letter in letters:
         ident, author = letter.id, str(letter.data.get("from", ""))
         if cause != "failed":
@@ -777,7 +918,9 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
         "thread": thread, "strand": strand, "gen": gen, "ids": ids,
         "cause": cause, "code": code, "dispositions": dispositions,
         "evidence": {"tail": tail, "readme_changed": changed, "fuel": tank,
-                     **({"unpublished": left} if left else {})},
+                     **({"unpublished": left} if left else {}),
+                     **({"kept": kept} if kept else {}),
+                     **({"why": stopped_why} if cause == "stopped" else {})},
     }, f"attempt.ended:{strand}:{gen}"))
     return facts
 
@@ -838,7 +981,10 @@ def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
         paced = bool(start and below_floor(home, start.data["shell"]))
         shown = fold(facts).shown.get(strand, set())
         letters = [letter for letter in letters_for(facts, main_snapshot(home), body.thread) if letter.id in shown]
-        cause = ("molted" if molted else
+        stopped = any(f.kind == "body.stopped" and f.data.get("strand") == strand
+                      and f.data.get("gen") == body.gen for f in facts)
+        cause = ("stopped" if stopped else
+                 "molted" if molted else
                  "settled" if read_thread(home, body.thread).get("status") in CLOSED else
                  "idle" if not letters else "paced" if paced else "failed")
         facts = _end_attempt(home, facts, strand, body.thread, body.gen, code, letters, cause)
@@ -895,6 +1041,66 @@ def _refresh_holders(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> 
     return facts
 
 
+def _fact_for(facts: list[Fact], kind: str, strand: str, gen: int) -> Fact | None:
+    return next((f for f in reversed(facts) if f.kind == kind
+                 and f.data.get("strand") == strand and f.data.get("gen") == gen), None)
+
+
+def _stop_settled(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
+    """End a body whose thread is settled and that did not leave.
+
+    ``stop_grace`` is the window in which the body may see ``settled:`` at
+    its next boundary and exit. ``_reap`` then records ``settled``. A body
+    still holding ``.body`` after the grace is signalled, and the attempt
+    ends ``stopped`` because ``body.stopped`` is already in the ledger.
+    The room is left as it is.
+    """
+    if not bodies:
+        return facts
+    from .config import load_config
+    from .lifecycle import CLOSED, closing_commit, read_thread
+    grace = load_config(home.root).stop_grace
+    now = time.monotonic()
+    for strand, body in list(bodies.items()):
+        room = home.room(strand)
+        if not body_alive(room):
+            body.stop_after = None
+            continue
+        if read_thread(home, body.thread).get("status") not in CLOSED:
+            body.stop_after = None
+            continue
+        marked = _fact_for(facts, "body.stopped", strand, body.gen) is not None
+        if not marked:
+            if body.stop_after is None:
+                body.stop_after = now + grace
+            if now < body.stop_after:
+                continue
+        start = _fact_for(facts, "body.started", strand, body.gen)
+        try:
+            pid = int(start.data["pid"]) if start is not None else 0
+        except (TypeError, ValueError, KeyError):
+            pid = 0
+        lstart = str(start.data.get("lstart") or "") if start is not None else ""
+        if not _proven_body(room, pid, lstart, body.proc):
+            if _fact_for(facts, "body.unidentified", strand, body.gen) is None:
+                facts.append(_record(home, "body.unidentified", {
+                    "strand": strand, "gen": body.gen, "pid": pid,
+                    "why": (f"pid {pid} could not be proven to be the body "
+                            f"on thread {body.thread}"),
+                }, f"body.unidentified:{strand}:{body.gen}"))
+                _log(home, f"stop {strand}: pid {pid} is not a proven body; left it")
+            continue
+        if not marked:
+            _sha, why, _writer = closing_commit(home, body.thread)
+            why = why or f"thread {body.thread} settled"
+            facts.append(_record(home, "body.stopped", {
+                "strand": strand, "gen": body.gen, "pid": pid, "why": why,
+            }, f"body.stopped:{strand}:{body.gen}"))
+            _log(home, f"stop {strand} pid {pid}: {why}")
+        _end_group(pid)
+    return facts
+
+
 def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
               router=None) -> None:
     """One read of the ledger, then ingest, route, boundaries, reap.
@@ -913,6 +1119,7 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     facts = observe_due(home, facts, router.armed())
     facts = router.route(facts, bodies, (adapter, core))
     facts = router.speak_out(facts)
+    facts = _stop_settled(home, bodies, facts)
     facts = _reap(home, bodies, facts)
 
 

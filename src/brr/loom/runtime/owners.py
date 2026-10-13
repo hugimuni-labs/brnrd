@@ -191,7 +191,11 @@ def thread_axes(facts, main, ownership=None):
         cause = end.data['cause'] if end else 'idle'
         reset = None
         if data.get('status') in {'settled', 'retired'}:
-            cause, restart, control = 'settled', 'new letter or opener answers', opener
+            # A body the loop signalled stays ``stopped``. ``settled`` is the
+            # thread. A body that left by itself has no stopped attempt.
+            if cause != 'stopped':
+                cause = 'settled'
+            restart, control = 'new letter or opener answers', opener
         elif body and body.kind in {'body.pending', 'body.parked'}:
             cause = 'paced' if body.kind == 'body.parked' else 'pending'
             reset = body.data.get('until')
