@@ -243,10 +243,11 @@ def _enroll_person_email(self_dir: Path) -> None:
     """List the person's git email in ``core/loom/people-commit``.
 
     Enrolled addresses may push without ``Loom-Label`` for hand commits.
-    Body processes receive the loom's AUTHOR/COMMITTER identity from
-    ``loom._env``; that identity is never enrolled, so an unlabeled raw
-    body push is refused by 20-labels. This is not a sandbox against a body
-    deliberately overriding its identity or forging a label.
+    Body processes receive one identity from ``loom._env``: the home's
+    ``author`` when set, otherwise the loom's. A home whose author email
+    is enrolled does not start a body, so an unlabeled raw body push is
+    refused by 20-labels. This is not a sandbox against a body deliberately
+    overriding its identity or forging a label.
     """
     proc = git(self_dir, "config", "--global", "user.email", check=False)
     email = proc.stdout.strip()
@@ -303,19 +304,13 @@ def init_self(home: Path, person: str | None = None, remote: str | None = None) 
     return f"initialized {self_dir} {sha}"
 
 
-def pin_clone(repo: Path, name: str | None, email: str | None) -> None:
-    """Write commit identity into the clone, and give it no credential helper.
+def pin_clone(repo: Path) -> None:
+    """Give the clone no credential helper.
 
     An empty ``credential.helper`` clears helpers inherited from the machine,
-    so a plain ``git push`` from this clone has no credential. Identity lives
-    here rather than in the environment, which would override every repo a
-    body touches.
+    so a plain ``git push`` from this clone has no credential. Commit identity
+    is the body's environment, which covers every clone it touches.
     """
-    if name and email:
-        git(repo, "config", "user.name", name)
-        git(repo, "config", "user.email", email)
-    else:
-        git(repo, "config", "user.useConfigOnly", "true")
     git(repo, "config", "credential.helper", "")
 
 
@@ -323,7 +318,8 @@ def room(home: Path, strand: str) -> Path:
     """``home/rooms/<strand>/self``, a ``--shared`` clone on ``strand/<strand>``.
 
     A room that already exists is returned as it stands. A molt keeps its commits.
-    The clone's git config carries the loom's commit identity.
+    The clone has an empty credential helper. Commit identity is the body's
+    environment.
     """
     home = Path(home).resolve()
     strand = _segment(strand, "strand")
@@ -332,7 +328,7 @@ def room(home: Path, strand: str) -> Path:
         raise SelfError(f"no self at {source}; init first")
     dest = home / "rooms" / strand / "self"
     if (dest / ".git").exists():
-        pin_clone(dest, AUTHOR_NAME, AUTHOR_EMAIL)
+        pin_clone(dest)
         return dest
     if dest.exists():
         raise SelfError(f"{dest} exists and is not a clone; refusing to overwrite")
@@ -342,7 +338,7 @@ def room(home: Path, strand: str) -> Path:
     # The README driver lives on the room that rebases, not on the bare self.
     from brr.loom.runtime.merge_driver import install_merge_driver
     install_merge_driver(dest)
-    pin_clone(dest, AUTHOR_NAME, AUTHOR_EMAIL)
+    pin_clone(dest)
     return dest
 
 

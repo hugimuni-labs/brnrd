@@ -19,6 +19,7 @@ from test_lifecycle import bodies
 
 LABEL = "\n\nLoom-Label: taint=0; audience=self\n"
 AUTHOR = "Ada Lovelace <ada@example.com>"
+LOOM = "brnrd-loom <loom@localhost>"
 
 
 def _source(tmp_path: Path, name: str = "widget") -> tuple[Path, Path]:
@@ -34,10 +35,10 @@ def _source(tmp_path: Path, name: str = "widget") -> tuple[Path, Path]:
     return bare, work
 
 
-def _author(root: Path) -> None:
+def _author(root: Path, author: str = AUTHOR) -> None:
     path = root / "loom" / "config.toml"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f'author = "{AUTHOR}"\n')
+    path.write_text(f'author = "{author}"\n')
 
 
 def _seat(root: Path, thread: str, sources: list[str], policy: str = "quit-now") -> None:
@@ -49,11 +50,32 @@ def _seat(root: Path, thread: str, sources: list[str], policy: str = "quit-now")
     inject_letter(root, to=f"thread:{thread}", body=f"open {thread}")
 
 
-def _home(tmp_path: Path) -> Path:
+def _home(tmp_path: Path, *, author: str | None = AUTHOR) -> Path:
     root = tmp_path / "home"
     init_self(root, person="test")
-    _author(root)
+    if author is not None:
+        _author(root, author)
     return root
+
+
+def _enroll(root: Path, email: str) -> None:
+    path = root / "self" / "core" / "loom" / "people-commit"
+    path.write_text(path.read_text(encoding="utf-8") + email + "\n", encoding="utf-8")
+    git(root / "self", "add", "core/loom/people-commit")
+    _commit(root / "self", f"Enroll {email}.{LABEL}")
+
+
+def _who(repo: Path) -> str:
+    return git(repo, "log", "-1", "--format=%an <%ae> %cn <%ce>").stdout.strip()
+
+
+def _note(repo: Path, room: Path, rel: str, text: str) -> None:
+    env = _env(room)
+    path = repo / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    git(repo, "add", rel, env=env)
+    git(repo, "commit", "-m", rel, env=env)
 
 
 def _tick(home: Home, bodies: dict, router: Router) -> None:
@@ -116,7 +138,7 @@ def test_a_seat_repo_is_checked_out_on_the_thread_branch(tmp_path: Path) -> None
         _kill(read_facts(home))
 
 
-def test_project_commit_uses_the_home_author_and_self_keeps_the_loom(tmp_path: Path) -> None:
+def test_commits_carry_the_home_author_in_the_checkout_and_in_self(tmp_path: Path) -> None:
     root = _home(tmp_path)
     bare, _work = _source(tmp_path)
     _seat(root, "work", [str(bare)])
@@ -126,19 +148,90 @@ def test_project_commit_uses_the_home_author_and_self_keeps_the_loom(tmp_path: P
         assert _started(root), _log(root)
         room = _room(root)
         env = _env(room)
-        assert "GIT_AUTHOR_NAME" not in env
-        assert "GIT_COMMITTER_NAME" not in env
-        checkout = room / "widget"
-        (checkout / "note.txt").write_text("project\n")
-        git(checkout, "add", "note.txt", env=env)
-        git(checkout, "commit", "-m", "project note", env=env)
-        assert git(checkout, "log", "-1", "--format=%an <%ae>").stdout.strip() == AUTHOR
-        clone = room / "self"
-        (clone / "memory" / "moves" / "self-note.md").write_text("self\n")
-        git(clone, "add", "memory/moves/self-note.md", env=env)
-        git(clone, "commit", "-m", "self note", env=env)
-        assert git(clone, "log", "-1", "--format=%an <%ae>").stdout.strip() == (
-            "brnrd-loom <loom@localhost>")
+        assert env["GIT_AUTHOR_NAME"] == "Ada Lovelace"
+        assert env["GIT_AUTHOR_EMAIL"] == "ada@example.com"
+        assert env["GIT_COMMITTER_NAME"] == "Ada Lovelace"
+        assert env["GIT_COMMITTER_EMAIL"] == "ada@example.com"
+        carried = f"{AUTHOR} {AUTHOR}"
+        _note(room / "widget", room, "note.txt", "project\n")
+        _note(room / "self", room, "memory/moves/self-note.md", "self\n")
+        assert _who(room / "widget") == carried
+        assert _who(room / "self") == carried
+    finally:
+        _kill(read_facts(home))
+
+
+def test_commits_carry_the_loom_when_author_is_unset(tmp_path: Path) -> None:
+    root = _home(tmp_path, author=None)
+    bare, _work = _source(tmp_path)
+    _seat(root, "work", [str(bare)])
+    home = Home(root)
+    try:
+        _tick(home, {}, Router(home))
+        assert _started(root), _log(root)
+        room = _room(root)
+        env = _env(room)
+        assert env["GIT_AUTHOR_NAME"] == "brnrd-loom"
+        assert env["GIT_AUTHOR_EMAIL"] == "loom@localhost"
+        assert env["GIT_COMMITTER_EMAIL"] == "loom@localhost"
+        carried = f"{LOOM} {LOOM}"
+        _note(room / "widget", room, "note.txt", "project\n")
+        _note(room / "self", room, "memory/moves/self-note.md", "self\n")
+        assert _who(room / "widget") == carried
+        assert _who(room / "self") == carried
+    finally:
+        _kill(read_facts(home))
+
+
+def test_an_author_enrolled_only_in_the_worktree_still_starts(tmp_path: Path) -> None:
+    root = _home(tmp_path)
+    listing = root / "self" / "core" / "loom" / "people-commit"
+    listing.write_text(listing.read_text(encoding="utf-8") + "ada@example.com\n", encoding="utf-8")
+    bare, _work = _source(tmp_path)
+    _seat(root, "work", [str(bare)])
+    home = Home(root)
+    try:
+        _tick(home, {}, Router(home))
+        assert _started(root), _log(root)
+        assert "ada@example.com" not in git(
+            root / "self", "show", "main:core/loom/people-commit").stdout
+    finally:
+        _kill(read_facts(home))
+
+
+def test_an_enrolled_author_starts_no_body(tmp_path: Path) -> None:
+    root = _home(tmp_path)
+    _enroll(root, "ada@example.com")
+    bare, _work = _source(tmp_path)
+    _seat(root, "work", [str(bare)])
+    home = Home(root)
+    try:
+        _tick(home, {}, Router(home))
+        facts = read_facts(home)
+        assert not any(fact.kind == "body.started" for fact in facts)
+        notes = [fact for fact in facts if fact.kind == "letter"
+                 and "ada@example.com" in fact.data.get("body", "")]
+        assert len(notes) == 1
+        assert "choose an author that is not an enrolled person" in notes[0].data["body"]
+        assert not (root / "rooms").exists() or not any((root / "rooms").iterdir())
+    finally:
+        _kill(read_facts(home))
+
+
+def test_a_malformed_author_starts_no_body(tmp_path: Path) -> None:
+    root = _home(tmp_path, author="Ada Lovelace")
+    bare, _work = _source(tmp_path)
+    _seat(root, "work", [str(bare)])
+    home = Home(root)
+    try:
+        _tick(home, {}, Router(home))
+        facts = read_facts(home)
+        assert not any(fact.kind == "body.started" for fact in facts)
+        notes = [fact for fact in facts if fact.kind == "letter"
+                 and "Name <email>" in fact.data.get("body", "")]
+        assert len(notes) == 1
+        assert "loom/config.toml" in notes[0].data["body"]
+        assert not (root / "rooms").exists() or not any((root / "rooms").iterdir())
     finally:
         _kill(read_facts(home))
 
@@ -163,7 +256,8 @@ def test_a_second_start_leaves_the_checkout(tmp_path: Path) -> None:
         git(work, "commit", "-m", "move main")
         pushed = git(work, "push", str(bare), "HEAD:main", check=False)
         assert pushed.returncode == 0, pushed.stderr
-        text = prepare_repos(home, room.name, "work", [("widget", str(bare))], None)
+        text, failures = prepare_repos(home, room.name, "work", [("widget", str(bare))], None)
+        assert failures == ()
         assert f"repo widget: {checkout} on loom/work, left as it stands\n" == text
         assert git(checkout, "rev-parse", "HEAD").stdout.strip() == sha
         assert (checkout / "kept.txt").read_text() == "kept\n"
@@ -258,9 +352,10 @@ def test_a_failed_fetch_keeps_the_last_state(tmp_path: Path) -> None:
         mirror = root / "repos" / "widget.git"
         short = git(mirror, "rev-parse", "--short", "HEAD").stdout.strip()
         git(mirror, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
-        text = prepare_repos(home, room.name, "held", [("widget", str(bare))], None)
-        assert text == (
-            f"repo widget: {checkout} on loom/held, left as it stands; fetch failed\n")
+        text, failures = prepare_repos(home, room.name, "held", [("widget", str(bare))], None)
+        failed = f"repo widget: {checkout} on loom/held, left as it stands; fetch failed"
+        assert text == failed + "\n"
+        assert failures == (failed,)
         assert git(checkout, "rev-parse", "HEAD").stdout.strip() == sha
         _seat(root, "next", [str(bare)], policy="quit-now")
         _tick(home, bodies, router)

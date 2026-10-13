@@ -81,8 +81,9 @@ committer's email is in the incumbent `core/loom/people-commit` list
 (the incoming list on the first push). Empty lists enroll nobody;
 comments and blank lines are ignored. A push cannot enroll itself.
 `init` enrolls the person's global git email for hand commits and stamps
-the seed with its own clean label. Bodies receive the unenrolled
-`brnrd-loom <loom@localhost>` author and committer identity.
+the seed with its own clean label. Bodies receive one unenrolled identity
+from the environment: the home's `author` when it is set, otherwise
+`brnrd-loom <loom@localhost>`. A home whose author is enrolled starts no body.
 
 A labeled commit is checked regardless of enrollment. `taint=1` requires
 a `Widening` citing `people/<name>/agreement.md#<clause-id>`, with a

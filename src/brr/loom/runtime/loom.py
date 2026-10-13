@@ -31,7 +31,8 @@ from .owners import letters_for, letter_owners
 from .lifecycle import main_snapshot
 from .timers import fire as fire_timers
 from .selfrepo import (
-    SelfError, _env_without_pin, git, room as clone_room, run_wake,
+    AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, git,
+    room as clone_room, run_wake,
 )
 
 SRC = str(Path(__file__).resolve().parents[3])
@@ -61,17 +62,32 @@ def _log(home: Home, message: str) -> None:
     sys.stderr.write(line)
 
 
+def _commit_identity(room: Path) -> tuple[str, str]:
+    """The home's author for a loom room, otherwise the loom's own.
+
+    A room the loom made is ``<home>/rooms/<strand>``. Anything else, including
+    a clone a test builds by hand, has no home author to read.
+    """
+    if room.parent.name != "rooms":
+        return AUTHOR_NAME, AUTHOR_EMAIL
+    from .repos import author_identity
+    found = author_identity(room.parent.parent)
+    return found if found is not None else (AUTHOR_NAME, AUTHOR_EMAIL)
+
+
 def _env(room: Path) -> dict[str, str]:
     env = _env_without_pin()
     parts = [part for part in env.get("PYTHONPATH", "").split(os.pathsep) if part]
     if SRC not in parts:
         parts.insert(0, SRC)
     env["PYTHONPATH"] = os.pathsep.join(parts)
-    # Identity is each clone's git config. These variables would override it
-    # for every repo the body touches, including one it inherited from a person.
-    for key in list(env):
-        if key.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_")):
-            del env[key]
+    # One identity for every repo a body touches, including a clone it makes
+    # itself. Clone config would cover only the clones the loom made, and an
+    # enrolled person's identity may push to main without a label.
+    name, email = _commit_identity(room)
+    for role in ("AUTHOR", "COMMITTER"):
+        env[f"GIT_{role}_NAME"] = name
+        env[f"GIT_{role}_EMAIL"] = email
     env["BRNRD_ROOM"] = str(room)
     env["BRNRD_WAKE"] = str(room / "port" / "wake.md")
     env["BRNRD_JACK"] = (f"{shlex.quote(sys.executable)} -m brr.loom.runtime jack "
@@ -277,11 +293,11 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         from .adapters import repos as seat_repos, seat_text
         repos = seat_repos(seat_text(home, thread))
     from .repos import prepare_repos
-    repo_text = prepare_repos(home, strand, thread, repos, parent)
+    repo_text, failures = prepare_repos(home, strand, thread, repos, parent)
     repo_file = None
+    if failures:
+        _log(home, f"start {strand}: {'; '.join(failures)}")
     if repo_text:
-        if "fetch failed" in repo_text:
-            _log(home, f"start {strand}: {repo_text.strip()}")
         repo_file = room / "port" / "repos"
         atomic_write(repo_file, repo_text)
     with tempfile.TemporaryFile(mode="w+") as wake, tempfile.TemporaryFile(mode="w+") as why:

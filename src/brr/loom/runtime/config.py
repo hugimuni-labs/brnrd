@@ -30,8 +30,7 @@ class LoomConfig:
     margin: float = DEFAULT_MARGIN
     #: The account's cloud gate state directory (holds ``gates/cloud.json``).
     relay_state: str | None = None
-    #: ``Name <email>`` for commits in a project checkout. Unset leaves the
-    #: checkout without a local identity.
+    #: ``Name <email>`` for every commit a body makes. Unset uses the loom's.
     author: str | None = None
 
 
