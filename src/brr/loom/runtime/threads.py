@@ -163,5 +163,31 @@ def thread_table(home: Home, facts: list) -> list[dict]:
 
 def render_table(rows: list[dict]) -> str:
     columns = ('thread', 'seat', 'now', 'owed', 'opened-by', 'plan', 'when', 'owed-by', 'restart', 'control')
+    if any(row.get('left') for row in rows):
+        columns += ('left',)
+        rows = [dict(row, left=row.get('left') or '—') for row in rows]
     return '\n'.join(' · '.join(str(row[c]) for c in columns)
                      for row in [dict(zip(columns, columns)), *rows]) + '\n'
+
+
+def left_by_thread(home: Home, facts: list, thread: str | None = None) -> dict:
+    """Explicit CLI inventory; shared thread_table and body boundaries stay cheap."""
+    from .leftovers import leftovers
+    found = {}
+    for strand, owner in sender_threads(facts).items():
+        if thread is None or thread == owner:
+            left = leftovers(home, strand)
+            if left:
+                found.setdefault(owner, []).extend(left)
+    return found
+
+
+def render_left(thread: str, items: list) -> str:
+    lines = [f'Left in {thread}:']
+    for item in items:
+        lines.append(str(item.path))
+        lines.extend(f'  {sha} {subject}' for sha, subject in item.commits)
+        lines.extend(f'  edit {path!r}' for path in item.edits)
+        if item.error:
+            lines.append(f'  inspection failed: {item.error}')
+    return '\n'.join(lines) + '\n' if items else ''
