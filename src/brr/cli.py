@@ -1532,6 +1532,16 @@ def main(argv: list[str] | None = None) -> None:
         if raw[:2] == ["loom", "check"]:
             from .loom.runtime.check import run
             return run(raw[2:])
+        if (
+            len(raw) >= 2
+            and raw[0] == "loom"
+            and raw[1] in {"install", "uninstall", "start", "stop", "status", "logs"}
+        ):
+            from .loom.runtime.service import main as loom_service
+            code = loom_service(raw[1:])
+            if code:
+                raise SystemExit(code)
+            return
         args = build_parser().parse_args(raw)
         args.passthrough = passthrough
         return args.func(args)

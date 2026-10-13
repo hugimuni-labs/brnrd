@@ -946,6 +946,26 @@ def _own_stop(stop):
     return stop
 
 
+def _hold_loop(home: Home) -> int:
+    """One loop ticks a home. A second waits and takes over when this one leaves.
+
+    Both loops share the home's install id, so each renews the other's router
+    lease and neither stands down. Measured with the fake body and one letter:
+    the two loops started a new body every generation and one deleted the
+    other's port file during ingest. The flock is released on crash, so a
+    restarted service is not stuck behind a dead holder.
+    """
+    path = home.root / "loom" / "loop.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        _log(home, "loop: waiting for the other loom on this home")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
 def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         tick: float = 0.2, stop=None, install: str | None = None) -> None:
     if tick <= 0:
@@ -953,11 +973,15 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
     stop = _own_stop(stop)
     home = Home(root, install=install)
     home.install_id()
-    from .router import Router
-    router = Router(home)
-    relay = _arm_relay(home, router.config, stop)
+    held = _hold_loop(home)
+    relay = None
     bodies: dict[str, Body] = {}
     try:
+        if stop is not None and stop.is_set():
+            return
+        from .router import Router
+        router = Router(home)
+        relay = _arm_relay(home, router.config, stop)
         while not (stop is not None and stop.is_set()):
             try:
                 if relay is not None and not relay.is_alive():
@@ -972,6 +996,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         _shutdown(bodies)
         if relay is not None:
             _disarm_relay(relay)
+        fcntl.flock(held, fcntl.LOCK_UN)
+        os.close(held)
 
 
 def _arm_relay(home: Home, config, stop):

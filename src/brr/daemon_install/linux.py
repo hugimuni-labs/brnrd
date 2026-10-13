@@ -15,6 +15,9 @@ from ..cli import brnrd_cmd
 
 
 SERVICE_UNIT = "brr.service"
+#: Arguments after the pinned binary. Passing this list renders the same
+#: ``ExecStart`` line as omitting it: ``<binary> daemon up --foreground``.
+DAEMON_PROGRAM_ARGS = ["daemon", "up", "--foreground"]
 SYSTEMD_UNIT = """[Unit]
 Description=brnrd daemon (machine-scoped multi-project multiplexer)
 After=network-online.target
@@ -23,7 +26,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory={workdir}
-ExecStart={exec_start} daemon up --foreground
+ExecStart={exec_start}
 Restart=on-failure
 RestartSec=5s
 # A runner subprocess OOM-killed by the kernel must not tear down the whole
@@ -96,8 +99,8 @@ def xdg_state_home() -> Path:
     return Path(raw).expanduser() if raw else Path.home() / ".local" / "state"
 
 
-def unit_path() -> Path:
-    return xdg_config_home() / "systemd" / "user" / SERVICE_UNIT
+def unit_path(unit: str = SERVICE_UNIT) -> Path:
+    return xdg_config_home() / "systemd" / "user" / unit
 
 
 def linger_marker_path() -> Path:
@@ -193,12 +196,29 @@ def _percent_escape(value: str) -> str:
     return value.replace("%", "%%")
 
 
+def _exec_start_value(binary: str, program_args: list[str] | None) -> str:
+    """The ``ExecStart=`` value.
+
+    The daemon's arguments render unquoted, byte-for-byte the historical
+    line. Any other argument list is quoted per word so a home path that
+    contains a space survives systemd's splitter.
+    """
+    if program_args is None or list(program_args) == DAEMON_PROGRAM_ARGS:
+        return f"{_systemd_escape(binary)} daemon up --foreground"
+    return " ".join(
+        '"' + _systemd_escape(part) + '"' for part in [binary, *program_args]
+    )
+
+
 def render_systemd_unit(
     brr_path: str | Path | None = None,
     *,
     path_env: str | None = None,
     workdir: str | Path | None = None,
     cfg: dict[str, Any] | None = None,
+    program_args: list[str] | None = None,
+    kill_mode: str | None = None,
+    log_directory: Path | None = None,
 ) -> str:
     """Render the unit with the resolved entrypoint, the installing shell's
     PATH, and the installing repo's root frozen in.
@@ -232,23 +252,41 @@ def render_systemd_unit(
         except Exception:  # noqa: BLE001 - unusable tree ⇒ ceiling defaults
             cfg = {}
     memory_high, memory_max = resolve_memory_limits(cfg)
-    return SYSTEMD_UNIT.format(
-        exec_start=_systemd_escape(exec_start),
+    text = SYSTEMD_UNIT.format(
+        exec_start=_exec_start_value(exec_start, program_args),
         path_env=_systemd_escape(path_value),
         workdir=_systemd_escape(workdir_value),
         memory_high=_percent_escape(memory_high),
         memory_max=_percent_escape(memory_max),
     )
+    # Kept off the template. ``template_service_directives`` reads the
+    # template source, and a KillMode line there would accuse every
+    # installed daemon unit of drift. The loom passes ``process``.
+    if kill_mode:
+        needle = "Restart=on-failure\n"
+        text = text.replace(
+            needle,
+            f"{needle}KillMode={_percent_escape(kill_mode)}\n",
+            1,
+        )
+    if log_directory is not None:
+        directory = _percent_escape(str(log_directory))
+        block = (
+            f"StandardOutput=append:{directory}/out.log\n"
+            f"StandardError=append:{directory}/err.log\n"
+        )
+        text = text.replace("\n[Install]\n", "\n" + block + "\n[Install]\n", 1)
+    return text
 
 
-def service_installed() -> bool:
-    return unit_path().exists()
+def service_installed(unit: str = SERVICE_UNIT) -> bool:
+    return unit_path(unit).exists()
 
 
-def write_unit_file() -> Path:
-    path = unit_path()
+def write_unit_file(unit: str = SERVICE_UNIT, **kwargs: Any) -> Path:
+    path = unit_path(unit)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_systemd_unit(), encoding="utf-8")
+    path.write_text(render_systemd_unit(**kwargs), encoding="utf-8")
     return path
 
 
@@ -268,6 +306,29 @@ def _capture(command: list[str]) -> subprocess.CompletedProcess:
         return subprocess.run(command, check=False, capture_output=True, text=True)
     except FileNotFoundError as exc:
         return subprocess.CompletedProcess(command, 127, "", str(exc))
+
+
+def _invoke(
+    command: list[str],
+    *,
+    check: bool,
+    run: Callable[..., subprocess.CompletedProcess] | None,
+) -> subprocess.CompletedProcess:
+    """``_run`` when *run* is omitted, so the daemon's tests keep their double.
+
+    A caller that injects ``run`` (the loom's argv tests) gets the same
+    exit-code policy without touching the real service manager.
+    """
+    if run is None:
+        return _run(command, check=check)
+    try:
+        result = run(command, check=False, capture_output=True, text=True)
+    except FileNotFoundError:
+        raise SystemExit(f"[brnrd] required command not found: {command[0]}")
+    if check and result.returncode != 0:
+        rendered = " ".join(command)
+        raise SystemExit(f"[brnrd] command failed ({result.returncode}): {rendered}")
+    return result
 
 
 def linger_enabled(user: str) -> bool:
@@ -377,32 +438,53 @@ def install(
     no_start: bool = False,
     prompt_linger: bool = True,
     assume_yes_linger: bool = False,
+    unit: str = SERVICE_UNIT,
+    program_args: list[str] | None = None,
+    log_directory: Path | None = None,
+    kill_mode: str | None = None,
+    executable: str | None = None,
+    successor: str = "daemon",
+    run: Callable[..., subprocess.CompletedProcess] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    workdir: str | Path | None = None,
+    delay: float = 2.0,
 ) -> int:
     if not supported():
         raise SystemExit("[brnrd] daemon install on this platform is not implemented yet")
 
-    service_path = write_unit_file()
+    if log_directory is not None:
+        log_directory.mkdir(parents=True, exist_ok=True)
+    service_path = write_unit_file(
+        unit,
+        brr_path=executable,
+        program_args=program_args,
+        kill_mode=kill_mode,
+        log_directory=log_directory,
+        workdir=workdir,
+    )
     print(f"[brnrd] wrote {service_path}")
 
     maybe_enable_linger(prompt=prompt_linger, assume_yes=assume_yes_linger)
 
-    _run(["systemctl", "--user", "daemon-reload"])
-    _run(["systemctl", "--user", "enable", SERVICE_UNIT])
+    _invoke(["systemctl", "--user", "daemon-reload"], check=True, run=run)
+    _invoke(["systemctl", "--user", "enable", unit], check=True, run=run)
     alive = True
     if not no_start:
-        _run(["systemctl", "--user", "start", SERVICE_UNIT])
+        _invoke(["systemctl", "--user", "start", unit], check=True, run=run)
         # `systemctl start` on a Type=simple unit returns the moment the
         # process forks, not once it has survived — `verify_started`'s own
         # `is-active` probe a beat later already prints the honest
         # crash-looked-vs-alive message; propagate it as the exit code too,
         # the same "never claim what the kickstart call itself can't prove"
         # fix `daemon_install.install()` needed on macOS (issue #1238).
-        alive = verify_started()
+        alive = verify_started(
+            unit=unit, successor=successor, run=run, sleep=sleep, delay=delay,
+        )
 
     brnrd = brnrd_cmd()
     print(
-        f"[brnrd] next: `{brnrd} daemon status`, `{brnrd} daemon logs`, "
-        f"`{brnrd} daemon uninstall`"
+        f"[brnrd] next: `{brnrd} {successor} status`, `{brnrd} {successor} logs`, "
+        f"`{brnrd} {successor} uninstall`"
     )
     return 0 if alive else 1
 
@@ -411,25 +493,31 @@ def uninstall(
     *,
     prompt_linger: bool = True,
     assume_yes_disable_linger: bool = False,
+    unit: str = SERVICE_UNIT,
+    successor: str = "daemon",
+    run: Callable[..., subprocess.CompletedProcess] | None = None,
 ) -> None:
     if not supported():
         raise SystemExit("[brnrd] daemon uninstall on this platform is not implemented yet")
 
-    _run(["systemctl", "--user", "stop", SERVICE_UNIT], check=False)
-    _run(["systemctl", "--user", "disable", SERVICE_UNIT], check=False)
-    unit_path().unlink(missing_ok=True)
-    _run(["systemctl", "--user", "daemon-reload"], check=False)
+    _invoke(["systemctl", "--user", "stop", unit], check=False, run=run)
+    _invoke(["systemctl", "--user", "disable", unit], check=False, run=run)
+    unit_path(unit).unlink(missing_ok=True)
+    _invoke(["systemctl", "--user", "daemon-reload"], check=False, run=run)
     maybe_disable_linger(
         prompt=prompt_linger,
         assume_yes=assume_yes_disable_linger,
     )
-    print("[brnrd] daemon service uninstalled")
+    print(f"[brnrd] {successor} service uninstalled")
 
 
 def verify_started(
     *,
     delay: float = 2.0,
     sleep: Callable[[float], None] = time.sleep,
+    unit: str = SERVICE_UNIT,
+    successor: str = "daemon",
+    run: Callable[..., subprocess.CompletedProcess] | None = None,
 ) -> bool:
     """Confirm the just-started service is still alive a beat later.
 
@@ -440,28 +528,46 @@ def verify_started(
     immediate, pointed message.
     """
     sleep(delay)
-    result = _capture(
-        ["systemctl", "--user", "is-active", SERVICE_UNIT],
-    )
+    command = ["systemctl", "--user", "is-active", unit]
+    if run is None:
+        result = _capture(command)
+    else:
+        try:
+            result = run(command, check=False, capture_output=True, text=True)
+        except FileNotFoundError as exc:
+            result = subprocess.CompletedProcess(command, 127, "", str(exc))
     state = (result.stdout or "").strip()
     if result.returncode == 0 and state == "active":
         return True
     print(
         f"[brnrd] warning: the service started but is not running "
-        f"(state: {state or 'unknown'}) — check `brnrd daemon logs`"
+        f"(state: {state or 'unknown'}) — check `brnrd {successor} logs`"
     )
     return False
 
 
-def start_service() -> int:
-    result = _run(["systemctl", "--user", "start", SERVICE_UNIT], check=False)
-    if result.returncode == 0 and not verify_started():
+def start_service(
+    *,
+    unit: str = SERVICE_UNIT,
+    successor: str = "daemon",
+    run: Callable[..., subprocess.CompletedProcess] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    delay: float = 2.0,
+) -> int:
+    result = _invoke(["systemctl", "--user", "start", unit], check=False, run=run)
+    if result.returncode == 0 and not verify_started(
+        unit=unit, successor=successor, run=run, sleep=sleep, delay=delay,
+    ):
         return 1
     return result.returncode
 
 
-def stop_service() -> int:
-    result = _run(["systemctl", "--user", "stop", SERVICE_UNIT], check=False)
+def stop_service(
+    *,
+    unit: str = SERVICE_UNIT,
+    run: Callable[..., subprocess.CompletedProcess] | None = None,
+) -> int:
+    result = _invoke(["systemctl", "--user", "stop", unit], check=False, run=run)
     return result.returncode
 
 
@@ -536,24 +642,36 @@ def template_service_directives() -> list[str]:
     return keys
 
 
-def status() -> int:
-    result = _run(
-        ["systemctl", "--user", "status", SERVICE_UNIT, "--no-pager"],
+def status(
+    *,
+    unit: str = SERVICE_UNIT,
+    successor: str = "daemon",
+    run: Callable[..., subprocess.CompletedProcess] | None = None,
+) -> int:
+    result = _invoke(
+        ["systemctl", "--user", "status", unit, "--no-pager"],
         check=False,
+        run=run,
     )
     missing = missing_policy_directives()
     if missing:
         print(
             "[brnrd] the installed unit predates this version's hardening — "
-            f"missing {', '.join(missing)}. Re-run `brnrd daemon install` "
+            f"missing {', '.join(missing)}. Re-run `brnrd {successor} install` "
             "to refresh it (the unit is rewritten, the service restarted)."
         )
     return result.returncode
 
 
-def logs(*, follow: bool = True, lines: int = 80) -> int:
-    command = ["journalctl", "--user", "-u", "brr", "-n", str(lines)]
+def logs(
+    *,
+    follow: bool = True,
+    lines: int = 80,
+    journal_unit: str = "brr",
+    run: Callable[..., subprocess.CompletedProcess] | None = None,
+) -> int:
+    command = ["journalctl", "--user", "-u", journal_unit, "-n", str(lines)]
     if follow:
         command.append("-f")
-    result = _run(command, check=False)
+    result = _invoke(command, check=False, run=run)
     return result.returncode
