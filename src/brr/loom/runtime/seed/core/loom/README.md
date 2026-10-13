@@ -36,7 +36,15 @@ ownership table; editing a file or mentioning an id in prose does not cite it.
 ## Ends and starts
 
 `brnrd threads` derives who owes each thread's remaining letters, what can
-restart it, and who can force or close it. A molted body hands on immediately;
+restart it, and who can force or close it. The `when` column is that
+thread's UTC instant, `spent` once the instant has passed and its timer
+letter is in the ledger, or `—`. A body sets the next instant with
+`brnrd when <time>` (`YYYY-MM-DDTHH:MM:SSZ`, or `+10m`, `+2h`, `+3d`,
+stored as the absolute instant) and clears it with `brnrd when clear`.
+When the instant arrives, the loom writes one letter,
+`letter:timer:<thread>:<when>`. The same instant does not write a second
+letter. A failed timer letter climbs to the thread's opener when
+`opened-by` names a thread, and is operator debt otherwise. A molted body hands on immediately;
 an idle body leaves the thread open for its next letter. A paced start waits
 for the recorded reset, without consuming letters. Its opener can run
 `threads --force <thread> --room <room>` to start anyway; the operator uses

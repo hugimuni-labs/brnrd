@@ -77,6 +77,30 @@ def land(room: Path, message: str, edit: Callable[[Path], dict[str, str]]) -> No
         raise PortError(outcome.stderr or f"landing {outcome.status}: {', '.join(outcome.files)}")
 
 
+def land_when(room: Path, text: str) -> str:
+    """Store an absolute instant, or clear it, on this room's own thread."""
+    from . import timers
+    thread = own_thread(room)
+    try:
+        stored = timers.stored_when(text)
+    except ValueError as exc:
+        raise PortError(str(exc)) from None
+
+    def edit(clone):
+        path = f"threads/{thread}/README.md"
+        current = (clone / path).read_text()
+        parse_readme(current)
+        try:
+            changed = timers.set_when_line(current, stored)
+        except ValueError as exc:
+            raise PortError(str(exc)) from None
+        parse_readme(changed)
+        return {path: changed}
+
+    land(room, f"when {thread}: {stored or 'clear'}", edit)
+    return stored
+
+
 def land_status(room: Path, thread: str, status: str, message: str) -> None:
     check_thread_id(thread)
 
