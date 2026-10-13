@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timezone
 
 from .home import Home, thread_of
-from .lifecycle import CLOSED, read_thread, main_snapshot
+from .lifecycle import CLOSED, read_thread, main_snapshot, main_tree, readme_at
 from .owners import letter_owners, thread_axes
 from .timers import column as when_column
 from .project import fold, sender_threads
@@ -15,6 +15,7 @@ from .selfrepo import git
 # Main changes on a landed commit, not on every router tick. Cache only its
 # derived rows; liveness, owed mail, and age are always read afresh.
 _MAIN = {}
+_ROWS = {}
 
 
 def _at(fact) -> float:
@@ -30,6 +31,15 @@ def _age(seconds: float) -> str:
     if seconds >= 60:
         return f"{seconds // 60}m"
     return f"{seconds}s"
+
+
+def _body_choice(seat: str) -> str:
+    choice = ''
+    for line in seat.splitlines():
+        key, colon, value = line.partition(':')
+        if colon and key.strip() == 'body':
+            choice = value.strip().strip('"')
+    return choice
 
 
 def thread_table(home: Home, facts: list) -> list[dict]:
@@ -62,36 +72,43 @@ def thread_table(home: Home, facts: list) -> list[dict]:
             boundary[strand] = max(boundary.get(strand, 0), _at(f))
     repo = home.root / 'self'
     versioned = (repo / '.git').exists()
-    tip = git(repo, 'rev-parse', 'main').stdout.strip() if versioned else None
+    tip, blobs = main_tree(repo) if versioned else (None, {})
     if not versioned or _MAIN.get(repo, (None, None))[0] != tip:
-        names = (git(repo, 'ls-tree', '-r', '--name-only', 'main', '--', 'threads').stdout.splitlines()
-                 if versioned else [p.relative_to(repo).as_posix() for p in (repo / 'threads').glob('*/README.md')])
-        snapshot = []
+        names = (list(blobs) if versioned
+                 else [p.relative_to(repo).as_posix() for p in (repo / 'threads').glob('*/README.md')])
+        snapshot, kept = [], {}
         for path in names:
             parts = path.split('/')
             if len(parts) != 3 or parts[2] != 'README.md':
                 continue
             thread = parts[1]
-            data = read_thread(home, thread, ref=tip or "main")
+            if versioned:
+                # A row depends on its README and seat alone, so a commit that
+                # touched neither costs this thread no git call.
+                seat_blob = blobs.get(f'threads/{thread}/seat')
+                key = (thread, blobs[path], seat_blob)
+                row = _ROWS.get(repo, {}).get(key)
+                if row is None:
+                    data = readme_at(home, thread, blobs[path], tip)
+                    if not data:
+                        continue
+                    text = git(repo, 'cat-file', 'blob', seat_blob).stdout if seat_blob else ''
+                    stamp = git(repo, 'log', '-1', '--format=%ct', tip, '--', path).stdout.strip()
+                    created = float(stamp or time.time())
+                    date = (git(repo, 'log', '-1', '-G', '^status:', '--format=%cs', tip, '--', path).stdout.strip()
+                            if data['status'] in CLOSED else '')
+                    row = (data, _body_choice(text), created, date)
+                kept[key] = row
+                snapshot.append((thread, *row))
+                continue
+            data = read_thread(home, thread, ref="main")
             if not data:
                 continue
-            if versioned:
-                text = git(repo, 'show', f'{tip}:threads/{thread}/seat', check=False).stdout
-                stamp = git(repo, 'log', '-1', '--format=%ct', tip, '--', path).stdout.strip()
-                created = float(stamp or time.time())
-                date = (git(repo, 'log', '-1', '-G', '^status:', '--format=%cs', tip, '--', path).stdout.strip()
-                        if data['status'] in CLOSED else '')
-            else:
-                seat_path = home.thread_dir(thread) / 'seat'
-                text = seat_path.read_text() if seat_path.is_file() else ''
-                created, date = (repo / path).stat().st_mtime, ''
-            choice = ''
-            for line in text.splitlines():
-                key, colon, value = line.partition(':')
-                if colon and key.strip() == 'body':
-                    choice = value.strip().strip('"')
-            snapshot.append((thread, data, choice, created, date))
+            seat_path = home.thread_dir(thread) / 'seat'
+            text = seat_path.read_text() if seat_path.is_file() else ''
+            snapshot.append((thread, data, _body_choice(text), (repo / path).stat().st_mtime, ''))
         _MAIN[repo] = (tip, snapshot)
+        _ROWS[repo] = kept
     pending, now, rows = pending_bodies(state.accepted), time.time(), []
     for thread, data, choice, created, date in _MAIN[repo][1]:
         count = len(owed.get(thread, ()))
