@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>dev.brnrd.brr</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/recorded/bin/brnrd</string>
+		<string>daemon</string>
+		<string>up</string>
+		<string>--foreground</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>/recorded/repo</string>
+	<key>StandardOutPath</key>
+	<string>/recorded/home/Library/Logs/brr/brr.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>/recorded/home/Library/Logs/brr/brr.err.log</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>BRR_INSTALL_MANAGED</key>
+		<string>1</string>
+		<key>PATH</key>
+		<string>/recorded/bin:/usr/bin</string>
+	</dict>
+</dict>
+</plist>
