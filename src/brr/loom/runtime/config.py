@@ -30,6 +30,9 @@ class LoomConfig:
     margin: float = DEFAULT_MARGIN
     #: The account's cloud gate state directory (holds ``gates/cloud.json``).
     relay_state: str | None = None
+    #: ``Name <email>`` for commits in a project checkout. Unset leaves the
+    #: checkout without a local identity.
+    author: str | None = None
 
 
 def loom_clock() -> float:
@@ -89,12 +92,18 @@ def load_config(root: Path | str) -> LoomConfig:
         relay_state = None
     else:
         relay_state = os.path.expanduser(relay_state.strip())
+    author = found.get("author")
+    if not isinstance(author, str) or not author.strip():
+        author = None
+    else:
+        author = author.strip()
 
     return LoomConfig(
         body=found.get("body") or None,
         hold_floor_pct=number("hold_floor_pct", 3.0),
         name=name,
         relay_state=relay_state,
+        author=author,
         router_ttl=number("router_ttl", DEFAULT_TTL) or DEFAULT_TTL,
         max_skew=number("max_skew", DEFAULT_SKEW),
         margin=number("margin", DEFAULT_MARGIN),

@@ -31,7 +31,7 @@ from .owners import letters_for, letter_owners
 from .lifecycle import main_snapshot
 from .timers import fire as fire_timers
 from .selfrepo import (
-    AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, git, room as clone_room, run_wake,
+    SelfError, _env_without_pin, git, room as clone_room, run_wake,
 )
 
 SRC = str(Path(__file__).resolve().parents[3])
@@ -67,10 +67,11 @@ def _env(room: Path) -> dict[str, str]:
     if SRC not in parts:
         parts.insert(0, SRC)
     env["PYTHONPATH"] = os.pathsep.join(parts)
-    # Human enrollment is for hand commits; a body must not inherit it.
-    for role in ("AUTHOR", "COMMITTER"):
-        env[f"GIT_{role}_NAME"] = AUTHOR_NAME
-        env[f"GIT_{role}_EMAIL"] = AUTHOR_EMAIL
+    # Identity is each clone's git config. These variables would override it
+    # for every repo the body touches, including one it inherited from a person.
+    for key in list(env):
+        if key.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_")):
+            del env[key]
     env["BRNRD_ROOM"] = str(room)
     env["BRNRD_WAKE"] = str(room / "port" / "wake.md")
     env["BRNRD_JACK"] = (f"{shlex.quote(sys.executable)} -m brr.loom.runtime jack "
@@ -221,21 +222,23 @@ def _read_by_predecessors(facts: list[Fact], thread: str, strand: str,
 
 def _prepare(home: Home, strand: str, thread: str, gen: int,
              letters: list[Fact], threads: dict[str, str],
-             facts: list[Fact], jack: str, *, fuel: str = "") -> Path:
+             facts: list[Fact], jack: str, *, fuel: str = "",
+             repos: list[tuple[str, str]] | None = None) -> Path:
     room = home.room(strand).resolve()
     fresh = not (room / "self" / ".git").exists()
     clone = clone_room(home.root, strand)
-    if fresh:
-        lease = next((f for f in reversed(facts) if f.kind == "lease"
-                      and f.data.get("strand") == strand and f.data.get("gen") == gen), None)
-        parent = lease.data.get("parent") if lease else None
-        if parent:
-            source = home.room(parent) / "self"
-            if (source / ".git").exists():
-                git(clone, "fetch", str(source), f"strand/{parent}")
-                git(clone, "reset", "--hard", "FETCH_HEAD")
-            else:
-                _log(home, f"start {strand}: parent room {parent} gone; starting from main")
+    lease = next((f for f in reversed(facts) if f.kind == "lease"
+                  and f.data.get("strand") == strand and f.data.get("gen") == gen), None)
+    parent = lease.data.get("parent") if lease else None
+    if not isinstance(parent, str) or not parent:
+        parent = None
+    if fresh and parent:
+        source = home.room(parent) / "self"
+        if (source / ".git").exists():
+            git(clone, "fetch", str(source), f"strand/{parent}")
+            git(clone, "reset", "--hard", "FETCH_HEAD")
+        else:
+            _log(home, f"start {strand}: parent room {parent} gone; starting from main")
     (room / "port" / "in").mkdir(parents=True, exist_ok=True)
     (room / "port" / "out").mkdir(parents=True, exist_ok=True)
     wait_src = home.thread_dir(thread) / "wait"
@@ -270,8 +273,20 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
            if jack == "hand" else
            "when you're done, stop, and the jack holds you while letters may come\n")
     ))
+    if repos is None:
+        from .adapters import repos as seat_repos, seat_text
+        repos = seat_repos(seat_text(home, thread))
+    from .repos import prepare_repos
+    repo_text = prepare_repos(home, strand, thread, repos, parent)
+    repo_file = None
+    if repo_text:
+        if "fetch failed" in repo_text:
+            _log(home, f"start {strand}: {repo_text.strip()}")
+        repo_file = room / "port" / "repos"
+        atomic_write(repo_file, repo_text)
     with tempfile.TemporaryFile(mode="w+") as wake, tempfile.TemporaryFile(mode="w+") as why:
-        code = run_wake(clone, thread, owed_path, loom_part=part_path, stdout=wake, stderr=why)
+        code = run_wake(clone, thread, owed_path, loom_part=part_path, repos=repo_file,
+                        stdout=wake, stderr=why)
         why.seek(0)
         if code != 0:
             raise SelfError(f"wake exited {code}: {why.read().strip()}")
@@ -368,7 +383,8 @@ def _spawn(room: Path, argv: list[str], shell: str, thread: str) -> tuple[subpro
 
 
 def _start(home: Home, strand: str, thread: str, gen: int,
-           bodies: dict[str, Body], facts: list[Fact], choice=None, *, force=False) -> list[Fact]:
+           bodies: dict[str, Body], facts: list[Fact], choice=None, *, force=False,
+           repos: list[tuple[str, str]] | None = None) -> list[Fact]:
     """Serialize starts with the operator's explicit gauge override."""
     room = home.room(strand)
     room.mkdir(parents=True, exist_ok=True)
@@ -384,11 +400,13 @@ def _start(home: Home, strand: str, thread: str, gen: int,
             pending = pending_bodies(fold(current).accepted).get(strand)
             if not pending or pending.kind != "body.parked":
                 return current
-        return _launch(home, strand, thread, gen, bodies, current, choice, force=force)
+        return _launch(home, strand, thread, gen, bodies, current, choice, force=force,
+                       repos=repos)
 
 
 def _launch(home: Home, strand: str, thread: str, gen: int,
-            bodies: dict[str, Body], facts: list[Fact], choice=None, *, force=False) -> list[Fact]:
+            bodies: dict[str, Body], facts: list[Fact], choice=None, *, force=False,
+            repos: list[tuple[str, str]] | None = None) -> list[Fact]:
     """Launch one body; the gauge can defer a start without consuming letters."""
     if strand in bodies:
         return facts
@@ -430,7 +448,7 @@ def _launch(home: Home, strand: str, thread: str, gen: int,
         room = _prepare(
             home, strand, thread, gen, letters, sender_threads(facts), facts,
             (folder / "jack").read_text().strip(),
-            fuel=fuel(home, shell),
+            fuel=fuel(home, shell), repos=repos,
         )
         policy = _policy(home, thread)
         if policy is not None:

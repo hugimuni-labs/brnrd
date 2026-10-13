@@ -235,6 +235,19 @@ def main() -> None:
         loom = loom_path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
         die(f"LOOM_PART: not utf-8: {exc}")
+    repos = os.environ.get("LOOM_REPOS")
+    if repos:
+        repo_path = Path(repos)
+        if not repo_path.is_file():
+            die(f"LOOM_REPOS: no such file: {repos}")
+        try:
+            extra = repo_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            die(f"LOOM_REPOS: not utf-8: {exc}")
+        if extra:
+            if not loom.endswith("\n"):
+                loom += "\n"
+            loom += extra
     root = Path.cwd()
     head, tail = fixed_text(root, thread, loom, owed)
     fixed = head + tail
