@@ -1444,6 +1444,8 @@ def build_parser() -> argparse.ArgumentParser:
     from .loom.runtime.verbs_threads import add_threads_parser, add_when_parser
     add_threads_parser(sub)
     add_when_parser(sub)
+    from .loom.runtime.publish import add_publish_parser
+    add_publish_parser(sub)
 
     # Retired top-level spellings — parsed only to fail with a pointer.
     for retired, replacement in RETIRED_COMMANDS.items():

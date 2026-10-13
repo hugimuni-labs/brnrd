@@ -32,6 +32,9 @@ class LoomConfig:
     relay_state: str | None = None
     #: ``Name <email>`` for every commit a body makes. Unset uses the loom's.
     author: str | None = None
+    #: A file holding the forge token ``publish`` pushes with. Unset pushes
+    #: with the machine's own git setup.
+    forge_token_file: str | None = None
 
 
 def loom_clock() -> float:
@@ -96,6 +99,11 @@ def load_config(root: Path | str) -> LoomConfig:
         author = None
     else:
         author = author.strip()
+    forge_token_file = found.get("forge_token_file")
+    if not isinstance(forge_token_file, str) or not forge_token_file.strip():
+        forge_token_file = None
+    else:
+        forge_token_file = os.path.expanduser(forge_token_file.strip())
 
     return LoomConfig(
         body=found.get("body") or None,
@@ -103,6 +111,7 @@ def load_config(root: Path | str) -> LoomConfig:
         name=name,
         relay_state=relay_state,
         author=author,
+        forge_token_file=forge_token_file,
         router_ttl=number("router_ttl", DEFAULT_TTL) or DEFAULT_TTL,
         max_skew=number("max_skew", DEFAULT_SKEW),
         margin=number("margin", DEFAULT_MARGIN),
