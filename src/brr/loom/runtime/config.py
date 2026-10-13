@@ -3,7 +3,9 @@
 Flat ``key = value`` lines only: ``[sections]`` are ignored, so the relay
 switch is ``relay_state = "<dir>"``, never
 ``[channels.relay]``. A few-line file, parsed here, so step 3 does not take a TOML dependency
-on Python 3.10. Unknown keys are ignored. ``BRNRD_LOOM_CLOCK_SKEW_S`` is
+on Python 3.10. Unknown keys are ignored. ``stop_grace`` is how many seconds
+a settled thread's body may take to leave before the loop ends it.
+``BRNRD_LOOM_CLOCK_SKEW_S`` is
 test-only: production leaves it unset and ``loom_clock`` is ``time.time``.
 """
 
@@ -18,6 +20,10 @@ from pathlib import Path
 DEFAULT_TTL = 30.0
 DEFAULT_SKEW = 5.0
 DEFAULT_MARGIN = 1.0
+#: After ``settled:`` is on the boundary, a body may still land what it
+#: was holding (the settle test's ``send-self``) and exit. A body that
+#: never comes back is signalled at this deadline. 3s killed that land.
+DEFAULT_STOP_GRACE = 12.0
 
 
 @dataclass(frozen=True)
@@ -28,6 +34,8 @@ class LoomConfig:
     router_ttl: float = DEFAULT_TTL
     max_skew: float = DEFAULT_SKEW
     margin: float = DEFAULT_MARGIN
+    #: Seconds after a thread is settled before the loop signals its body.
+    stop_grace: float = DEFAULT_STOP_GRACE
     #: The account's cloud gate state directory (holds ``gates/cloud.json``).
     relay_state: str | None = None
     #: ``Name <email>`` for every commit a body makes. Unset uses the loom's.
@@ -115,6 +123,7 @@ def load_config(root: Path | str) -> LoomConfig:
         router_ttl=number("router_ttl", DEFAULT_TTL) or DEFAULT_TTL,
         max_skew=number("max_skew", DEFAULT_SKEW),
         margin=number("margin", DEFAULT_MARGIN),
+        stop_grace=number("stop_grace", DEFAULT_STOP_GRACE),
     )
 
 

@@ -122,7 +122,12 @@ def thread_table(home: Home, facts: list) -> list[dict]:
         last = activity.get(thread, created)
         if data['status'] in CLOSED:
             count = len(axes[thread]['letters'])
-            value = 'settled' + (f' {date}' if date else '')
+            if axes[thread]['cause'] == 'stopped':
+                value = 'stopped'
+            elif latest and latest.kind == 'body.unidentified':
+                value = f"unidentified {latest.data.get('pid')}"
+            else:
+                value = 'settled' + (f' {date}' if date else '')
         elif latest and latest.kind in {'body.parked', 'body.pending'}:
             value = axes[thread]['cause']
         elif strand and body_alive(home.room(strand)):
