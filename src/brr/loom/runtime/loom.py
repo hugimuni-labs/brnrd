@@ -292,8 +292,10 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     if repos is None:
         from .adapters import repos as seat_repos, seat_text
         repos = seat_repos(seat_text(home, thread))
-    from .repos import prepare_repos
+    from .repos import PUBLISH_HINT, prepare_repos
     repo_text, failures = prepare_repos(home, strand, thread, repos, parent)
+    if any((room / name / ".git").exists() for name, _ in repos):
+        repo_text += PUBLISH_HINT
     repo_file = None
     if failures:
         _log(home, f"start {strand}: {'; '.join(failures)}")
