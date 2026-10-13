@@ -182,7 +182,7 @@ def test_table_rendering_matches_checked_in_page():
     from pathlib import Path
     page = Path(__file__).resolve().parents[2] / "src/brr/loom/runtime/bodies.md"
     assert render_table() == page.read_text().strip()
-    assert len(TABLE) == 18
+    assert len(TABLE) == 19
 
 
 def test_an_unlisted_pair_logs_and_raises(caplog):
@@ -356,7 +356,8 @@ def test_reclosed_body_probes_once_per_deadline_and_stopping_holds(tmp_path, mon
     tick(8)  # one fresh proof, despite the old failed proof
     tick(9)
     tick(10, False)  # even a reopened stopping child keeps its lock/holder
-    assert proofs == [3, 8]
+    # A stopping body is proven again on every tick it is still alive.
+    assert proofs == [3, 8] + ([9, 10] if second_proven else [])
     assert [f.data["deadline"] for f in facts if f.kind == "body.leaving"] == [3, 8]
     unidentified = [f for f in facts if f.kind == "body.unidentified"]
     assert len(unidentified) == (1 if second_proven else 2)
@@ -374,3 +375,16 @@ def test_later_shown_receipt_does_not_reset_a_leaving_body():
     facts = [fact("shown", ids=[]), fact("body.leaving", deadline=5), fact("shown", ids=["later"])]
     state = state_of(facts, "s", 1, alive=True)
     assert state.name == "leaving" and state.deadline == 5
+
+
+def test_a_stop_on_record_with_the_body_alive_is_signalled_again_only_with_proof():
+    """The loom can die between writing body.stopped and sending the signal."""
+    def fact(kind, **data):
+        return Fact(by="loom:aaaa", kind=kind, data={"strand": "s", "gen": 1, **data})
+    facts = [fact("body.started", pid=123), fact("body.leaving", deadline=2), fact("body.stopped", pid=123)]
+    o = Observation("s", 1, True, True, "ok", 3, proven=True)
+    assert [c.name for c in decide(facts, [o])] == ["signal"]
+    assert decide(facts, [replace(o, proven=False)]) == []
+    assert decide(facts, [replace(o, proven=None)]) == []
+    # Reopening the thread does not take the stop back.
+    assert [c.name for c in decide(facts, [replace(o, closed=False)])] == ["signal"]

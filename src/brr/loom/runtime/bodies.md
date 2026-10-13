@@ -14,7 +14,8 @@
 | leaving | alive, before deadline | leaving | none |
 | leaving | alive, due, proven | stopping | stopped, signal |
 | leaving | alive, due, unproven | unidentified | unidentified |
-| stopping | alive | stopping | none |
+| stopping | alive, proven | stopping | signal |
+| stopping | alive, not proven | stopping | none |
 | unidentified | alive, closed | unidentified | none |
 | exited | any | ended | end, drain, drained, release |
 | ended | not released | ended | drain, drained, release |

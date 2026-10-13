@@ -904,7 +904,10 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
         until = until if until > now else now + 900
     pid = int(start.data.get("pid") or 0) if start else 0
     proven = None
-    if alive and closed and state.name == "leaving" and now >= state.deadline:
+    # A stop on record with the body still alive is a signal that was never
+    # sent or did not land: prove again, every tick, until the lock is gone.
+    if alive and (state.name == "stopping"
+                  or closed and state.name == "leaving" and now >= state.deadline):
         body = bodies.get(strand)
         proven = _proven_body(room, pid, str(start.data.get("lstart") or "") if start else "",
                               body.proc if body else None, alive=alive)
