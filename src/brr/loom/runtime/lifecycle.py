@@ -33,6 +33,9 @@ def parse_plan(text: str) -> list[tuple[bool, str]] | None:
 def read_thread(home: Home, thread: str, ref: str = "main") -> dict:
     """Read a landed README, never a room's unlanded status."""
     path = home.thread_dir(thread) / "README.md"
+    if ref == "main" and (home.root / "self/.git").exists():
+        # The tick asks this per thread; the pinned snapshot already holds it.
+        return dict(main_snapshot(home).get(thread, {}))
     try:
         if (home.root / "self/.git").exists():
             proc = git(home.root / "self", "show", f"{ref}:threads/{thread}/README.md", check=False)
@@ -191,30 +194,79 @@ def _closing_commit(home: Home, path: str) -> tuple[str, str, str]:
 
 
 _MAIN_SNAPSHOTS = {}
+_MAIN_TREES = {}
+_READMES = {}
+_SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
+
+
+def main_tip(repo: Path) -> str:
+    """The commit main names. Read from the ref itself when it can be: the
+    tick asks many times, and a git process each time was most of its cost."""
+    try:
+        loose = (repo / ".git/refs/heads/main").read_text().strip()
+        if _SHA.fullmatch(loose):
+            return loose
+    except OSError:
+        pass
+    try:
+        for line in (repo / ".git/packed-refs").read_text().splitlines():
+            sha, _, name = line.partition(" ")
+            if name == "refs/heads/main" and _SHA.fullmatch(sha):
+                return sha
+    except OSError:
+        pass
+    return git(repo, "rev-parse", "main").stdout.strip()
+
+
+def main_tree(repo: Path) -> tuple[str, dict[str, str]]:
+    """main's commit and the blob of each file under threads/: one git call per new commit."""
+    tip = main_tip(repo)
+    cached = _MAIN_TREES.get(repo)
+    if cached and cached[0] == tip:
+        return cached
+    blobs = {}
+    for line in git(repo, "ls-tree", "-r", tip, "--", "threads").stdout.splitlines():
+        meta, tab, path = line.partition("\t")
+        if tab and len(meta.split()) == 3:
+            blobs[path] = meta.split()[2]
+    _MAIN_TREES[repo] = (tip, blobs)
+    return tip, blobs
+
+
+def readme_at(home: Home, thread: str, blob: str, ref: str) -> dict:
+    """A landed README parsed once per content: a commit elsewhere rereads nothing."""
+    key = (home.root / "self", thread, blob)
+    if key not in _READMES:
+        try:
+            _READMES[key] = read_thread(home, thread, ref)
+        except ValueError:
+            _READMES[key] = {}
+    return _READMES[key]
 
 
 def main_snapshot(home: Home) -> dict[str, dict]:
     """Pin main once; both inventory and README fields come from that tree."""
     repo = home.root / "self"
     if (repo / ".git").exists():
-        ref = git(repo, "rev-parse", "main").stdout.strip()
+        ref, blobs = main_tree(repo)
         cached = _MAIN_SNAPSHOTS.get(repo)
         if cached and cached[0] == ref:
             return cached[1]
-        paths = git(repo, "ls-tree", "-r", "--name-only", ref, "--", "threads").stdout.splitlines()
     else:
         ref = "main"
-        paths = [p.relative_to(repo).as_posix() for p in (repo / "threads").glob("*/README.md")]
+        blobs = {p.relative_to(repo).as_posix(): "" for p in (repo / "threads").glob("*/README.md")}
     result = {}
-    for path in paths:
+    for path, blob in blobs.items():
         parts = path.split("/")
         if len(parts) == 3 and parts[2] == "README.md":
             try:
-                data = read_thread(home, parts[1], ref)
+                data = readme_at(home, parts[1], blob, ref) if blob else read_thread(home, parts[1], ref)
             except ValueError:
                 continue
             if data:
                 result[parts[1]] = data
     if (repo / ".git").exists():
         _MAIN_SNAPSHOTS[repo] = (ref, result)
+        for key in [k for k in _READMES if k[0] == repo and blobs.get(f"threads/{k[1]}/README.md") != k[2]]:
+            del _READMES[key]
     return result
