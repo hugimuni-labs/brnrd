@@ -390,6 +390,9 @@ def _ps_field(pid: int, field: str) -> str | None:
         out = subprocess.run(
             ["ps", "-ww", "-p", str(pid), "-o", f"{field}="],
             capture_output=True, text=True, timeout=2, check=False,
+            # One layout for ``lstart`` whoever started the loop: a login
+            # service and a terminal do not share a locale.
+            env={**os.environ, "LC_ALL": "C"},
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -441,18 +444,20 @@ def _proven_body(room: Path, pid: int, lstart: str,
     """True only when ``pid`` is still this room's body.
 
     An unreaped child this loop spawned cannot have had its pid reused.
-    Any other pid must match the start time recorded at ``body.started``,
-    when one was recorded, and must still hold ``.body`` or name the room
-    on its command line. A miss is not a signal.
+    Any other pid must match the start time recorded at ``body.started``
+    and must still hold ``.body`` or name the room on its command line.
+    With no start time recorded, only holding ``.body`` counts: a command
+    line that names the room is also what ``tail -f <room>/port/body.log``
+    looks like. A miss is not a signal.
     """
     if not isinstance(pid, int) or pid <= 1 or not body_alive(room):
         return False
     if proc is not None and proc.pid == pid and proc.poll() is None:
         return True
-    if lstart:
-        started = _ps_field(pid, "lstart")
-        if not started or started != lstart:
-            return False
+    if not lstart:
+        return _holds_body_file(room, pid)
+    if _ps_field(pid, "lstart") != lstart:
+        return False
     command = _ps_field(pid, "command")
     room_path = str(Path(room).resolve())
     if command and (room_path in command or str(room) in command):

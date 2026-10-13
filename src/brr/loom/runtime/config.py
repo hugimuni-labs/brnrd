@@ -21,9 +21,10 @@ DEFAULT_TTL = 30.0
 DEFAULT_SKEW = 5.0
 DEFAULT_MARGIN = 1.0
 #: After ``settled:`` is on the boundary, a body may still land what it
-#: was holding (the settle test's ``send-self``) and exit. A body that
-#: never comes back is signalled at this deadline. 3s killed that land.
-DEFAULT_STOP_GRACE = 12.0
+#: was holding and exit, and for a model that is one more turn. A body
+#: that never comes back is signalled at this deadline. 3s killed the
+#: settle test's ``send-self`` mid-land.
+DEFAULT_STOP_GRACE = 60.0
 
 
 @dataclass(frozen=True)

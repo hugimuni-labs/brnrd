@@ -257,3 +257,27 @@ def test_a_recorded_pid_for_a_different_process_is_not_signalled(tmp_path):
             sleeper.wait(timeout=2)
         kill_bodies(loom)
     assert not loom.errors
+
+
+def test_a_command_line_naming_the_room_is_not_proof_without_a_start_time(tmp_path):
+    """No ``lstart`` on record: only the process holding ``.body`` is the body."""
+    import fcntl
+    from brr.loom.runtime.loom import _proven_body
+
+    room = tmp_path / "room"
+    room.mkdir()
+    lock = os.open(room / ".body", os.O_CREAT | os.O_RDWR, 0o644)
+    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    argv = [sys.executable, "-c", "import time; time.sleep(60)", str(room)]
+    bystander = subprocess.Popen(argv, start_new_session=True)
+    holder = subprocess.Popen(argv, start_new_session=True, pass_fds=(lock,))
+    try:
+        time.sleep(0.3)
+        assert not _proven_body(room, bystander.pid, "", None)
+        assert _proven_body(room, holder.pid, "", None)
+        assert not _proven_body(room, holder.pid, "Thu Jan  1 00:00:00 1970", None)
+    finally:
+        for proc in (bystander, holder):
+            proc.kill()
+            proc.wait()
+        os.close(lock)
