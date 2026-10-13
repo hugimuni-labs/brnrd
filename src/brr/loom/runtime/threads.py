@@ -2,12 +2,11 @@
 
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 
 from .home import Home, thread_of
 from .lifecycle import CLOSED, read_thread, main_snapshot, main_tree, readme_at
 from .owners import letter_owners, thread_axes
-from .timers import column as when_column
 from .project import fold, sender_threads
 from .selfrepo import git
 
@@ -148,13 +147,11 @@ def thread_table(home: Home, facts: list) -> list[dict]:
             value = 'idle ' + _age(now - last) if cause == 'idle' else cause
         rows.append({'thread': thread, 'seat': seat, 'now': value, 'owed': count,
                      'opened-by': data.get('opened-by') or '—', 'plan': data['plan'],
-                     'when': when_column(data.get('when'), thread, facts,
-                                         datetime.now(timezone.utc)),
                      'status': data['status'], **{k: axes[thread][k] for k in ('owed-by', 'restart', 'control')}})
     for ident, fate in ownership.items():
         if fate.owner == 'operator':
             rows.append({'thread': 'operator', 'seat': '—', 'now': ident + ': ' + fate.reason,
-                         'owed': 1, 'opened-by': fate.thread or '—', 'plan': '—', 'when': '—',
+                         'owed': 1, 'opened-by': fate.thread or '—', 'plan': '—',
                          'status': 'open',
                          'owed-by': 'operator', 'restart': 'operator note',
                          'control': 'operator: attention --note ' + ident + ' --why <reason>'})
@@ -162,7 +159,7 @@ def thread_table(home: Home, facts: list) -> list[dict]:
 
 
 def render_table(rows: list[dict]) -> str:
-    columns = ('thread', 'seat', 'now', 'owed', 'opened-by', 'plan', 'when', 'owed-by', 'restart', 'control')
+    columns = ('thread', 'seat', 'now', 'owed', 'opened-by', 'plan', 'owed-by', 'restart', 'control')
     if any(row.get('left') for row in rows):
         columns += ('left',)
         rows = [dict(row, left=row.get('left') or '—') for row in rows]
@@ -191,3 +188,16 @@ def render_left(thread: str, items: list) -> str:
         if item.error:
             lines.append(f'  inspection failed: {item.error}')
     return '\n'.join(lines) + '\n' if items else ''
+
+
+def due_table(home: Home, facts: list) -> str:
+    """Waiting mail, including its sender thread after that sender has ended."""
+    writers = sender_threads(facts)
+    waiting = [f.letter for f in letter_owners(facts, main_snapshot(home)).values()
+               if f.owner == "clock" and f.action == "wait"]
+    lines = ["at · id · to · from · text"]
+    for letter in sorted(waiting, key=lambda f: (f.data["at"], f.id)):
+        sender = writers.get(letter.by.removeprefix("strand:"), letter.data.get("from", ""))
+        first = str(letter.data.get("body") or "").split("\n", 1)[0]
+        lines.append(f"{letter.data['at']} · {letter.id} · {thread_of(letter.data['to'])} · {sender} · {first}")
+    return "\n".join(lines) + "\n"

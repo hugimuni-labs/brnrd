@@ -52,6 +52,7 @@ def letter_owners(facts, main: dict[str, dict]) -> dict[str, Ownership]:
         if is_channel(f.data.get('to')) and f.data.get('re'):
             if f.id in dispositions and replies.get(f.data['re']) == f.id:
                 refused[f.data['re']] = dispositions[f.id].get('reason', 'send refused')
+    due = {f.data.get("letter") for f in state.accepted if f.kind == "letter.due"}
     result = {}
 
     def reply_address(letter, own):
@@ -83,6 +84,8 @@ def letter_owners(facts, main: dict[str, dict]) -> dict[str, Ownership]:
             keep(None, reason or 'reply or note recorded')
         elif disposition.get('outcome') == 'operator':
             keep('operator', reason or 'failed attempt limit', action='note')
+        elif d.get("at") and ident not in due:
+            keep("clock", f"due {d['at']}", action="wait")
         elif is_channel(d.get('to')):
             keep('channel', 'accepted send awaiting receipt', action='send')
         elif ident in replies and ident not in refused and replies[ident] not in sent:
@@ -176,7 +179,7 @@ def thread_axes(facts, main, ownership=None):
         end = ends.get(thread)
         # Include the successor that now carries a thread's original debt,
         # through every climb/bounce, even when the new reader is elsewhere.
-        debts = {ident: fate for ident, fate in table.items() if not fate.done
+        debts = {ident: fate for ident, fate in table.items() if not fate.done and fate.action != 'wait'
                  and (fate.thread == thread or thread in origins.get(ident, ()))}
         start_here = any(f.thread == thread and f.owner in {'loom', 'body', 'opener'}
                          and f.action not in {'climb', 'unroutable', 'drain'}

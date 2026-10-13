@@ -29,7 +29,7 @@ from .port import (
 from .project import fold, generation, is_notice, reply_channels, sender_threads
 from .owners import letters_for, letter_owners
 from .lifecycle import main_snapshot
-from .timers import fire as fire_timers
+from .timers import observe_due
 from .selfrepo import (
     AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, git,
     room as clone_room, run_wake,
@@ -909,9 +909,8 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     facts = router.begin_tick(facts)
     facts = _ingest(home, facts, router.config.router_ttl)
     facts = _refresh_holders(home, bodies, facts)
-    # The due letter joins this tick's route. The README read is the snapshot
-    # just taken; the check does not walk git again.
-    facts = fire_timers(home, facts, router.armed())
+    # Time enters the owner table once, using only the facts already held.
+    facts = observe_due(home, facts, router.armed())
     facts = router.route(facts, bodies, (adapter, core))
     facts = router.speak_out(facts)
     facts = _reap(home, bodies, facts)
