@@ -27,15 +27,24 @@ def _loom(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime loom")
     parser.add_argument("--home", required=True)
     parser.add_argument("--install", default=None)
-    parser.add_argument("--adapter", default="fake")
+    parser.add_argument("--adapter", default=None)
     parser.add_argument("--core", default="haiku")
     parser.add_argument("--tick", type=float, default=0.2)
     if argv[:1] == ["check"]:
         from .check import run
         return run(argv[1:])
     args = parser.parse_args(argv)
+    adapter = args.adapter
+    core = args.core
+    # The service argv carries no --adapter. The home's body is the choice.
+    # An explicit --adapter keeps the old hand path (tests pass fake).
+    if adapter is None:
+        from .service import _require_body
+        choice = _require_body(Path(args.home).expanduser().resolve())
+        adapter, _, core = choice.partition("/")
+        adapter, core = adapter.strip(), core.strip()
     run_loom(
-        args.home, adapter=args.adapter, core=args.core, tick=args.tick,
+        args.home, adapter=adapter, core=core, tick=args.tick,
         install=args.install,
     )
     return 0

@@ -12,7 +12,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 LABEL = "dev.brnrd.brr"
-PLIST_NAME = f"{LABEL}.plist"
+#: Arguments after the pinned binary. The daemon's call sites pass this
+#: list; render treats it as today's ``daemon up --foreground`` line.
+DAEMON_PROGRAM_ARGS = ["daemon", "up", "--foreground"]
+#: Final path component of ``~/Library/Logs/<name>``.
+DAEMON_LOG_NAME = "brr"
 
 RunFn = Callable[..., subprocess.CompletedProcess]
 
@@ -99,16 +103,16 @@ def launch_agents_dir(*, home: Path | None = None) -> Path:
     return (home or Path.home()) / "Library" / "LaunchAgents"
 
 
-def plist_path(*, home: Path | None = None) -> Path:
-    return launch_agents_dir(home=home) / PLIST_NAME
+def plist_path(*, home: Path | None = None, label: str = LABEL) -> Path:
+    return launch_agents_dir(home=home) / f"{label}.plist"
 
 
 def log_dir(*, home: Path | None = None) -> Path:
-    return (home or Path.home()) / "Library" / "Logs" / "brr"
+    return (home or Path.home()) / "Library" / "Logs" / DAEMON_LOG_NAME
 
 
-def log_paths(*, home: Path | None = None) -> tuple[Path, Path]:
-    logs = log_dir(home=home)
+def log_paths(*, home: Path | None = None, log_directory: Path | None = None) -> tuple[Path, Path]:
+    logs = log_directory if log_directory is not None else log_dir(home=home)
     return logs / "brr.out.log", logs / "brr.err.log"
 
 
@@ -139,6 +143,10 @@ def render_plist(
     home: Path | None = None,
     path_env: str | None = None,
     workdir: str | Path | None = None,
+    label: str = LABEL,
+    program_args: list[str] | None = None,
+    log_directory: Path | None = None,
+    abandon_process_group: bool = False,
 ) -> str:
     """launchd's default PATH is ``/usr/bin:/bin:…`` — the daemon starts but
     cannot find the runner Shells (``claude``, ``codex``) its runs dispatch
@@ -155,17 +163,13 @@ def render_plist(
     and are deliberately not used here as a substitute. macOS installs are
     unfenced against the failure mode
     ``incident-oom-cascade-salvage-on-main.md`` describes."""
-    out_log, err_log = log_paths(home=home)
+    out_log, err_log = log_paths(home=home, log_directory=log_directory)
     path_value = path_env if path_env is not None else os.environ.get("PATH", "")
     workdir_value = str(workdir) if workdir else str(resolve_workdir())
+    args = list(DAEMON_PROGRAM_ARGS if program_args is None else program_args)
     payload: dict[str, Any] = {
-        "Label": LABEL,
-        "ProgramArguments": [
-            str(brr_path),
-            "daemon",
-            "up",
-            "--foreground",
-        ],
+        "Label": label,
+        "ProgramArguments": [str(brr_path), *args],
         "RunAtLoad": True,
         "KeepAlive": {
             "SuccessfulExit": False,
@@ -178,6 +182,10 @@ def render_plist(
             **({"PATH": path_value} if path_value else {}),
         },
     }
+    # Off for the daemon. The loom sets it so a stop kills the loop and
+    # leaves bodies, which are in their own sessions, still running.
+    if abandon_process_group:
+        payload["AbandonProcessGroup"] = True
     return plistlib.dumps(payload, sort_keys=False).decode("utf-8")
 
 
@@ -190,20 +198,31 @@ def install(
     run: RunFn = subprocess.run,
     poll_timeout: float = DEFAULT_POLL_TIMEOUT,
     sleep: Callable[[float], None] = time.sleep,
+    label: str = LABEL,
+    program_args: list[str] | None = None,
+    log_directory: Path | None = None,
+    abandon_process_group: bool = False,
+    confirm: Callable[..., int | None] | None = None,
+    retry_command: str = "`brnrd daemon install`",
 ) -> InstallResult:
     brr_bin = str(brr_path or shutil.which("brnrd") or "")
     if not brr_bin:
         raise SystemExit("[brnrd] cannot find `brnrd` on PATH; install the CLI before registering launchd")
 
     launch_agents_dir(home=home).mkdir(parents=True, exist_ok=True)
-    logs = log_dir(home=home)
+    logs = log_directory if log_directory is not None else log_dir(home=home)
     logs.mkdir(parents=True, exist_ok=True)
 
     workdir_value = Path(workdir) if workdir else resolve_workdir()
 
-    path = plist_path(home=home)
+    path = plist_path(home=home, label=label)
     path.write_text(
-        render_plist(brr_bin, home=home, workdir=workdir_value), encoding="utf-8"
+        render_plist(
+            brr_bin, home=home, workdir=workdir_value, label=label,
+            program_args=program_args, log_directory=logs,
+            abandon_process_group=abandon_process_group,
+        ),
+        encoding="utf-8",
     )
 
     started = False
@@ -211,16 +230,21 @@ def install(
     pid: int | None = None
     error: str | None = None
     if not no_start:
-        _bootout(run=run, check=False)
+        _bootout(run=run, check=False, label=label)
         # `bootout` is a request, not a receipt. Wait for the job to leave
         # the domain before bootstrapping over it, rather than bootstrapping
         # into the teardown window and calling the resulting EIO transient.
-        _await_job_gone(run=run, sleep=sleep)
-        error = _bootstrap_after_bootout(path, run=run, sleep=sleep)
+        _await_job_gone(run=run, sleep=sleep, label=label)
+        error = _bootstrap_after_bootout(
+            path, run=run, sleep=sleep, retry_command=retry_command,
+        )
         if error is None:
-            _run_launchctl(["kickstart", _gui_service()], run=run)
+            _run_launchctl(["kickstart", _gui_service(label)], run=run)
             started = True
-            pid = _poll_for_pid(workdir_value, timeout=poll_timeout, sleep=sleep)
+            if confirm is None:
+                pid = _poll_for_pid(workdir_value, timeout=poll_timeout, sleep=sleep)
+            else:
+                pid = confirm(run=run, sleep=sleep, timeout=poll_timeout, label=label)
             alive = pid is not None
         else:
             alive = False
@@ -241,6 +265,7 @@ def _await_job_gone(
     sleep: Callable[[float], None],
     timeout: float = BOOTOUT_SETTLE_TIMEOUT,
     poll_interval: float = 0.2,
+    label: str = LABEL,
 ) -> bool:
     """Block until launchd no longer knows the job, or *timeout* passes.
 
@@ -256,7 +281,7 @@ def _await_job_gone(
     elapsed = 0.0
     while True:
         result = run(
-            ["launchctl", "print", _gui_service()],
+            ["launchctl", "print", _gui_service(label)],
             check=False,
             capture_output=True,
             text=True,
@@ -275,6 +300,7 @@ def _bootstrap_after_bootout(
     run: RunFn,
     sleep: Callable[[float], None],
     attempts: int = BOOTSTRAP_ATTEMPTS,
+    retry_command: str = "`brnrd daemon install`",
 ) -> str | None:
     """Bootstrap the job; ``None`` on success, else the failure detail.
 
@@ -301,7 +327,7 @@ def _bootstrap_after_bootout(
                 "previous daemon was still shutting down. This is a "
                 "user-domain service, so running as root will not help. "
                 "Wait for the old daemon to exit, then re-run "
-                "`brnrd daemon install` from the checkout the service "
+                f"{retry_command} from the checkout the service "
                 "should run from.\n"
                 f"  launchd said: {detail}"
             )
@@ -310,7 +336,7 @@ def _bootstrap_after_bootout(
     return None
 
 
-def installed_workdir(*, home: Path | None = None) -> Path | None:
+def installed_workdir(*, home: Path | None = None, label: str = LABEL) -> Path | None:
     """``WorkingDirectory`` out of the installed plist, or ``None``.
 
     One machine has one ``dev.brnrd.brr``. Which repo it runs from is an
@@ -319,7 +345,7 @@ def installed_workdir(*, home: Path | None = None) -> Path | None:
     of assuming its own checkout.
     """
     try:
-        payload = plistlib.loads(plist_path(home=home).read_bytes())
+        payload = plistlib.loads(plist_path(home=home, label=label).read_bytes())
     except (OSError, ValueError):
         return None
     raw = payload.get("WorkingDirectory")
@@ -384,9 +410,10 @@ def uninstall(
     *,
     home: Path | None = None,
     run: RunFn = subprocess.run,
+    label: str = LABEL,
 ) -> UninstallResult:
-    _bootout(run=run, check=False)
-    path = plist_path(home=home)
+    _bootout(run=run, check=False, label=label)
+    path = plist_path(home=home, label=label)
     removed = path.exists()
     path.unlink(missing_ok=True)
     return UninstallResult(path, removed, True)
@@ -396,14 +423,16 @@ def status(
     *,
     home: Path | None = None,
     run: RunFn = subprocess.run,
+    label: str = LABEL,
+    log_directory: Path | None = None,
 ) -> ServiceStatus:
-    path = plist_path(home=home)
+    path = plist_path(home=home, label=label)
     loaded: bool | None = None
     detail = ""
 
     if path.exists():
         result = run(
-            ["launchctl", "print", _gui_service()],
+            ["launchctl", "print", _gui_service(label)],
             check=False,
             capture_output=True,
             text=True,
@@ -414,11 +443,11 @@ def status(
 
     return ServiceStatus(
         plist_path=path,
-        log_dir=log_dir(home=home),
+        log_dir=log_directory if log_directory is not None else log_dir(home=home),
         installed=path.exists(),
         loaded=loaded,
         detail=detail,
-        workdir=installed_workdir(home=home),
+        workdir=installed_workdir(home=home, label=label),
     )
 
 
@@ -428,9 +457,10 @@ def logs(
     lines: int = 80,
     home: Path | None = None,
     run: RunFn = subprocess.run,
+    log_directory: Path | None = None,
 ) -> None:
-    log_dir(home=home).mkdir(parents=True, exist_ok=True)
-    out_log, err_log = log_paths(home=home)
+    out_log, err_log = log_paths(home=home, log_directory=log_directory)
+    out_log.parent.mkdir(parents=True, exist_ok=True)
     for path in (out_log, err_log):
         path.touch(exist_ok=True)
     cmd = ["tail", "-n", str(lines)]
@@ -446,6 +476,8 @@ def start_loaded_service(
     sleep: Callable[[float], None] = time.sleep,
     poll_timeout: float = DEFAULT_POLL_TIMEOUT,
     home: Path | None = None,
+    label: str = LABEL,
+    confirm: Callable[..., int | None] | None = None,
 ) -> StartResult:
     """Bring the LaunchAgent up and **read back whether it is actually up**.
 
@@ -477,23 +509,25 @@ def start_loaded_service(
     two different facts an operator reads differently, and one bit cannot
     carry both.
     """
-    if not plist_path(home=home).exists():
+    if not plist_path(home=home, label=label).exists():
         return StartResult(started=False, pid=None, pid_before=None, error=None)
 
-    workdir = installed_workdir(home=home)
-    pid_before = daemon_pid_for_workdir(workdir)
+    workdir = installed_workdir(home=home, label=label)
+    pid_before = daemon_pid_for_workdir(workdir) if confirm is None else None
 
     bootstrap = _run_launchctl(
-        ["bootstrap", _gui_domain(), str(plist_path(home=home))],
+        ["bootstrap", _gui_domain(), str(plist_path(home=home, label=label))],
         run=run,
         check=False,
     )
-    kickstart = _run_launchctl(["kickstart", _gui_service()], run=run, check=False)
+    kickstart = _run_launchctl(["kickstart", _gui_service(label)], run=run, check=False)
 
-    pid = (
-        _poll_for_pid(workdir, timeout=poll_timeout, sleep=sleep)
-        if workdir is not None else None
-    )
+    if confirm is not None:
+        pid = confirm(run=run, sleep=sleep, timeout=poll_timeout, label=label)
+    elif workdir is not None:
+        pid = _poll_for_pid(workdir, timeout=poll_timeout, sleep=sleep)
+    else:
+        pid = None
     if pid is not None:
         return StartResult(started=True, pid=pid, pid_before=pid_before, error=None)
 
@@ -514,16 +548,20 @@ def start_loaded_service(
         started=False,
         pid=None,
         pid_before=pid_before,
-        error=detail or "no daemon pidfile appeared within the poll window",
+        error=detail or (
+            "no daemon pidfile appeared within the poll window"
+            if confirm is None
+            else "the service was not running after the poll interval"
+        ),
     )
 
 
-def stop_loaded_service(*, run: RunFn = subprocess.run) -> None:
-    _bootout(run=run, check=False)
+def stop_loaded_service(*, run: RunFn = subprocess.run, label: str = LABEL) -> subprocess.CompletedProcess:
+    return _bootout(run=run, check=False, label=label)
 
 
-def _bootout(*, run: RunFn, check: bool) -> None:
-    _run_launchctl(["bootout", _gui_service()], run=run, check=check)
+def _bootout(*, run: RunFn, check: bool, label: str = LABEL) -> subprocess.CompletedProcess:
+    return _run_launchctl(["bootout", _gui_service(label)], run=run, check=check)
 
 
 def _run_launchctl(
@@ -548,5 +586,5 @@ def _gui_domain() -> str:
     return f"gui/{os.getuid()}"
 
 
-def _gui_service() -> str:
-    return f"{_gui_domain()}/{LABEL}"
+def _gui_service(label: str = LABEL) -> str:
+    return f"{_gui_domain()}/{label}"

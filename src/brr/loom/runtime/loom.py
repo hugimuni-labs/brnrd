@@ -946,18 +946,53 @@ def _own_stop(stop):
     return stop
 
 
+def _hold_loop(home: Home, stop) -> int | None:
+    """Serialize loops on one home; a stopped waiter leaves without ticking.
+
+    Router leases identify installs, not processes. Two local loops share
+    an install id and therefore both believe they own the router lease.
+    A process lock also serializes ingest and reap, which ledger append's
+    same-id no-op cannot protect. The OS releases it on a crash.
+    """
+    path = home.root / "loom" / "loop.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+    waiting = False
+    try:
+        while not stop.is_set():
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return fd
+            except BlockingIOError:
+                if not waiting:
+                    _log(home, "loop: waiting for the other loom on this home")
+                    waiting = True
+                stop.wait(0.2)
+    except BaseException:
+        os.close(fd)
+        raise
+    os.close(fd)
+    return None
+
+
 def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         tick: float = 0.2, stop=None, install: str | None = None) -> None:
     if tick <= 0:
         raise ValueError("tick must be positive")
     stop = _own_stop(stop)
     home = Home(root, install=install)
-    home.install_id()
-    from .router import Router
-    router = Router(home)
-    relay = _arm_relay(home, router.config, stop)
+    held = _hold_loop(home, stop)
+    if held is None:
+        return
+    relay = None
     bodies: dict[str, Body] = {}
     try:
+        if stop is not None and stop.is_set():
+            return
+        home.install_id()
+        from .router import Router
+        router = Router(home)
+        relay = _arm_relay(home, router.config, stop)
         while not (stop is not None and stop.is_set()):
             try:
                 if relay is not None and not relay.is_alive():
@@ -972,6 +1007,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         _shutdown(bodies)
         if relay is not None:
             _disarm_relay(relay)
+        fcntl.flock(held, fcntl.LOCK_UN)
+        os.close(held)
 
 
 def _arm_relay(home: Home, config, stop):
