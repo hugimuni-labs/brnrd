@@ -20,9 +20,16 @@ def install(
             no_start=no_start,
             prompt_linger=prompt_linger,
             assume_yes_linger=assume_yes_linger,
+            unit=linux.SERVICE_UNIT,
+            program_args=list(linux.DAEMON_PROGRAM_ARGS),
         )
     if _is_macos():
-        result = macos.install(no_start=no_start)
+        result = macos.install(
+            no_start=no_start,
+            label=macos.LABEL,
+            program_args=list(macos.DAEMON_PROGRAM_ARGS),
+            log_name=macos.DAEMON_LOG_NAME,
+        )
         print(f"[brnrd] wrote LaunchAgent: {result.plist_path}")
         print(f"[brnrd] logs: {result.log_dir}")
         if not result.started:
@@ -48,7 +55,7 @@ def install(
                 print(f"  {line}")
         else:
             print("[brnrd] launchd service kickstarted, but the daemon did not start.")
-            _, err_log = macos.log_paths()
+            _, err_log = macos.log_paths(name=macos.DAEMON_LOG_NAME)
             print(f"[brnrd] last stderr ({err_log}):")
             print(_tail_lines(err_log))
         brnrd = brnrd_cmd()
@@ -69,9 +76,10 @@ def uninstall(
         return linux.uninstall(
             prompt_linger=prompt_linger,
             assume_yes_disable_linger=assume_yes_disable_linger,
+            unit=linux.SERVICE_UNIT,
         )
     if _is_macos():
-        result = macos.uninstall()
+        result = macos.uninstall(label=macos.LABEL)
         if result.bootout_attempted:
             print("[brnrd] launchd service stopped if it was loaded")
         if result.removed:
@@ -84,8 +92,8 @@ def uninstall(
 
 def status(*, direct_brr_dir: Path | None = None) -> int:
     if linux.supported():
-        if linux.service_installed():
-            code = linux.status()
+        if linux.service_installed(linux.SERVICE_UNIT):
+            code = linux.status(unit=linux.SERVICE_UNIT)
             _print_gate_health(direct_brr_dir)
             return code
         print("[brnrd] daemon service not installed")
@@ -94,6 +102,8 @@ def status(*, direct_brr_dir: Path | None = None) -> int:
         return code
 
     if _is_macos():
+        # No arguments: the defaults are the daemon's label and log name, and
+        # the status tests replace this function with a zero-arg double.
         service = macos.status()
         installed = "installed" if service.installed else "not installed"
         print(f"[brnrd] macOS LaunchAgent: {installed}")
@@ -148,7 +158,7 @@ def status(*, direct_brr_dir: Path | None = None) -> int:
                 direct_code = 0
             else:
                 print("[brnrd] launchd reports loaded, but the daemon process is not running")
-                _, err_log = macos.log_paths()
+                _, err_log = macos.log_paths(name=macos.DAEMON_LOG_NAME)
                 print(f"[brnrd] last stderr ({err_log}):")
                 print(_tail_lines(err_log))
         _print_gate_health(direct_brr_dir)
@@ -206,22 +216,22 @@ def service_alive() -> tuple[int, Path] | None:
 
 def logs(*, follow: bool = True, lines: int = 80) -> int | None:
     if linux.supported():
-        return linux.logs(follow=follow, lines=lines)
+        return linux.logs(follow=follow, lines=lines, journal_unit="brr")
     if _is_macos():
-        macos.logs(follow=follow, lines=lines)
+        macos.logs(follow=follow, lines=lines, log_name=macos.DAEMON_LOG_NAME)
         return None
     _unsupported("logs")
 
 
 def start_service() -> int | None:
-    if linux.supported() and linux.service_installed():
-        code = linux.start_service()
+    if linux.supported() and linux.service_installed(linux.SERVICE_UNIT):
+        code = linux.start_service(unit=linux.SERVICE_UNIT)
         if code == 0:
             print("[brnrd] daemon service started")
         return code
 
-    if _is_macos() and macos.plist_path().exists():
-        result = macos.start_loaded_service()
+    if _is_macos() and macos.plist_path(label=macos.LABEL).exists():
+        result = macos.start_loaded_service(label=macos.LABEL)
         if not result.started:
             # Louder than the old unconditional success line, and nonzero, so
             # a restart that produced no daemon reads as a failure both to the
@@ -232,7 +242,7 @@ def start_service() -> int | None:
                 print(f"[brnrd] launchd said: {result.error}")
             print(
                 "[brnrd] check `brnrd daemon status` and the logs in "
-                f"{macos.log_dir()}"
+                f"{macos.log_dir(name=macos.DAEMON_LOG_NAME)}"
             )
             return 1
         if result.pid_before is not None and result.pid_before == result.pid:
@@ -245,14 +255,14 @@ def start_service() -> int | None:
 
 
 def stop_service() -> int | None:
-    if linux.supported() and linux.service_installed():
-        code = linux.stop_service()
+    if linux.supported() and linux.service_installed(linux.SERVICE_UNIT):
+        code = linux.stop_service(unit=linux.SERVICE_UNIT)
         if code == 0:
             print("[brnrd] daemon service stopped")
         return code
 
-    if _is_macos() and macos.plist_path().exists():
-        macos.stop_loaded_service()
+    if _is_macos() and macos.plist_path(label=macos.LABEL).exists():
+        macos.stop_loaded_service(label=macos.LABEL)
         print("[brnrd] launchd service stopped")
         return 0
 
