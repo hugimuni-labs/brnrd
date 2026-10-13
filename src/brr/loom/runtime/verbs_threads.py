@@ -61,3 +61,35 @@ def _threads(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime threads")
     _threads_arguments(parser)
     return cmd_threads(parser.parse_args(argv))
+
+
+def add_when_parser(subparsers) -> None:
+    parser = subparsers.add_parser("when")
+    _when_arguments(parser)
+    parser.set_defaults(func=cmd_when)
+
+
+def _when_arguments(parser) -> None:
+    parser.add_argument("time", help="YYYY-MM-DDTHH:MM:SSZ, +<n>m, +<n>h, +<n>d, or clear")
+    parser.add_argument("--room")
+
+
+def cmd_when(args) -> int:
+    from .lifecycle import land_when
+    from .port import PortError
+    from .selfrepo import SelfError
+    from .verbs_loom import _room
+    try:
+        stored = land_when(_room(args.room), args.time)
+    except (PortError, SelfError, ValueError, OSError) as exc:
+        sys.stderr.write(str(exc) + "\n")
+        return 1
+    if stored:
+        sys.stdout.write(stored + "\n")
+    return 0
+
+
+def _when(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime when")
+    _when_arguments(parser)
+    return cmd_when(parser.parse_args(argv))

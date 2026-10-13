@@ -2,6 +2,7 @@
 """Refuse changed thread READMEs with invalid frontmatter, heading or folder id.
 
 Required fields are id, status and tense; reference requires settled status.
+when is empty or one UTC instant, YYYY-MM-DDTHH:MM:SSZ.
 Keys must be unique ASCII names, values must have balanced quotes and lists,
 and for must be a string. Only an empty line is skipped, and required lists
 remain literal strings: these are the shell gate's verdicts, not a new grammar.
@@ -9,7 +10,9 @@ remain literal strings: these are the shell gate's verdicts, not a new grammar.
 Git's hook environment, including GIT_DIR, is kept so bare hooks find the repo.
 """
 
+from datetime import datetime
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -58,6 +61,20 @@ def frontmatter_line(line, values):
         values[key] = unquote(raw)
 
 
+_WHEN = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+
+
+def check_when(value):
+    if value == "":
+        return
+    if not _WHEN.fullmatch(value):
+        raise Refusal(f"when {value} is not empty or YYYY-MM-DDTHH:MM:SSZ")
+    try:
+        datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        raise Refusal(f"when {value} is not a UTC instant") from None
+
+
 def require_fields(values):
     for key, options in (("id", None), ("status", "open|live|dormant|settled|retired"),
                          ("tense", "plan|reference")):
@@ -68,6 +85,8 @@ def require_fields(values):
             raise Refusal(f"{key} {value} is not one of {options}")
     if values["tense"] == "reference" and values["status"] != "settled":
         raise Refusal("tense reference requires status settled")
+    if "when" in values:
+        check_when(values["when"])
 
 
 def check_content(content, folder):

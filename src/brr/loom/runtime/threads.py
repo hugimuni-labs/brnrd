@@ -2,11 +2,12 @@
 
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .home import Home, thread_of
 from .lifecycle import CLOSED, read_thread, main_snapshot
 from .owners import letter_owners, thread_axes
+from .timers import column as when_column
 from .project import fold, sender_threads
 from .selfrepo import git
 
@@ -130,17 +131,20 @@ def thread_table(home: Home, facts: list) -> list[dict]:
             value = 'idle ' + _age(now - last) if cause == 'idle' else cause
         rows.append({'thread': thread, 'seat': seat, 'now': value, 'owed': count,
                      'opened-by': data.get('opened-by') or '—', 'plan': data['plan'],
+                     'when': when_column(data.get('when'), thread, facts,
+                                         datetime.now(timezone.utc)),
                      'status': data['status'], **{k: axes[thread][k] for k in ('owed-by', 'restart', 'control')}})
     for ident, fate in ownership.items():
         if fate.owner == 'operator':
             rows.append({'thread': 'operator', 'seat': '—', 'now': ident + ': ' + fate.reason,
-                         'owed': 1, 'opened-by': fate.thread or '—', 'plan': '—', 'status': 'open',
+                         'owed': 1, 'opened-by': fate.thread or '—', 'plan': '—', 'when': '—',
+                         'status': 'open',
                          'owed-by': 'operator', 'restart': 'operator note',
                          'control': 'operator: attention --note ' + ident + ' --why <reason>'})
     return rows
 
 
 def render_table(rows: list[dict]) -> str:
-    columns = ('thread', 'seat', 'now', 'owed', 'opened-by', 'plan', 'owed-by', 'restart', 'control')
+    columns = ('thread', 'seat', 'now', 'owed', 'opened-by', 'plan', 'when', 'owed-by', 'restart', 'control')
     return '\n'.join(' · '.join(str(row[c]) for c in columns)
                      for row in [dict(zip(columns, columns)), *rows]) + '\n'
