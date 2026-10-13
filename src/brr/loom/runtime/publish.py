@@ -143,6 +143,55 @@ def _other_authors(checkout: Path, branch: str, email: str) -> list[str]:
             if line.strip() and line.split(" ", 1)[1] != email]
 
 
+def unpublished(facts, thread: str, name: str, checkout: Path) -> tuple[str, int] | None:
+    """``(tip, commits)`` when ``loom/<thread>`` in ``checkout`` holds commits
+    that no ``branch.published`` fact and no ``origin`` ref covers. Else none.
+    """
+    if not (checkout / ".git").exists():
+        return None
+    tip = _tip(checkout, f"refs/heads/loom/{thread}")
+    if tip is None:
+        return None
+    known = [str((fact.data or {}).get("commit")) for fact in facts
+             if fact.kind == "branch.published" and (fact.data or {}).get("thread") == thread
+             and (fact.data or {}).get("repo") == name]
+    if tip in known:
+        return None
+    # A published commit this checkout never fetched is not a name git knows.
+    held = [commit for commit in known if _tip(checkout, commit)]
+    count = git(checkout, "rev-list", "--count", tip, "--not", *held, "--remotes=origin",
+                check=False)
+    ahead = int(count.stdout.strip() or 0) if count.returncode == 0 else 0
+    return (tip, ahead) if ahead else None
+
+
+def unlanded(home, facts, strand: str, thread: str) -> list[str]:
+    """What a room holds that has not left it, one line per repo. Read for a
+    dead body's bounce; the room is kept, so each line names where to look."""
+    from .adapters import repos, seat_text
+    room = home.room(strand).resolve()
+    lines: list[str] = []
+    try:
+        clone = room / "self"
+        if (clone / ".git").exists():
+            count = git(clone, "rev-list", "--count", f"refs/heads/strand/{strand}",
+                        "--not", "--remotes=origin", check=False)
+            ahead = int(count.stdout.strip() or 0) if count.returncode == 0 else 0
+            if ahead:
+                lines.append(f"self: {ahead} commit(s) on strand/{strand} not on main, in {clone}")
+        for name, _source in repos(seat_text(home, thread)):
+            left = unpublished(facts, thread, name, room / name)
+            if left:
+                lines.append(
+                    f"repo {name}: {left[1]} commit(s) on loom/{thread} not published, "
+                    f"tip {left[0][:12]}, in {room / name}; its opener publishes them "
+                    f"with `publish {name} --from {thread}`"
+                )
+    except (SelfError, OSError, ValueError) as exc:
+        lines.append(f"unpublished commits not read: {exc}")
+    return lines
+
+
 def _gen(facts, strand: str) -> int | None:
     found = None
     for fact in facts:
@@ -229,11 +278,13 @@ def _worker_checkout(who: _Caller, worker: str) -> Path | None:
     from .project import fold
     strands = [str(fact.data["strand"]) for fact in fold(who.facts).accepted
                if fact.kind == "lease" and str(fact.data.get("thread")) == worker]
-    for strand in reversed(strands):
-        path = who.home.room(strand).resolve() / who.name
-        if (path / ".git").exists():
+    rooms = [who.home.room(strand).resolve() / who.name for strand in reversed(strands)]
+    rooms = [path for path in rooms if (path / ".git").exists()]
+    # A body that died is followed by a fresh room that never saw its commits.
+    for path in rooms:
+        if unpublished(who.facts, worker, who.name, path):
             return path
-    return None
+    return rooms[0] if rooms else None
 
 
 def _for_worker(who: _Caller, worker: str) -> tuple[str, str]:
