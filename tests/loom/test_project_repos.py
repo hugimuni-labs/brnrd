@@ -314,6 +314,7 @@ else:
         assert second["sha"] == first["sha"]
         assert second["kept"] == "kept\n"
         assert "cut from parent" in second["wake"]
+        assert "runtime publish <name>" in second["wake"]
         parent = Path(first["room"]) / "widget"
         assert git(parent, "rev-parse", "HEAD").stdout.strip() == first["sha"]
         assert (parent / "kept.txt").read_text() == "kept\n"

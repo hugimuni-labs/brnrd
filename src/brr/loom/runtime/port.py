@@ -223,6 +223,38 @@ def clean_accepts(room: Path, kind: str | None, refs: list[str] | tuple[str, ...
     return all(_ref_ok(Path(room), ref) for ref in refs)
 
 
+def _done_is_published(room: Path, strand: str, facts, refs) -> None:
+    """A clean strand's ``done`` that names a project checkout says the work
+    is on the source. A tainted strand cannot publish: its ``done`` is the
+    handoff, and its opener publishes.
+    """
+    from .adapters import repos, seat_text
+    from .home import home_of_room
+    from .project import sender_threads
+    from .publish import unpublished
+    if room.name == "self":
+        room = room.parent
+    try:
+        home = home_of_room(room)
+    except ValueError:
+        return
+    thread = sender_threads(facts).get(strand)
+    if thread is None:
+        return
+    declared = {name for name, _source in repos(seat_text(home, thread))}
+    for name in sorted({Path(ref).parts[0] for ref in refs
+                        if ref and not ref.startswith("https://") and Path(ref).parts}):
+        if name not in declared:
+            continue
+        left = unpublished(facts, thread, name, room / name)
+        if left:
+            raise PortError(
+                f"send: {name} has {left[1]} commit(s) on loom/{thread} that are not "
+                f"published, so `done` would name work its reader cannot fetch. "
+                f"Run `publish {name}` first, or send --kind failed if it cannot be pushed."
+            )
+
+
 def _ref_ok(room: Path, ref: str) -> bool:
     if not isinstance(ref, str) or not ref or any(ch in ref for ch in " \n\t"):
         return False
@@ -308,6 +340,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         fields["clean"] = kind or ""
         if refs:
             fields["refs"] = " ".join(refs)
+        if kind == "done" and not sender_label.taint:
+            _done_is_published(Path(room), sender, facts, refs)
         if clean_accepts(Path(room), kind, list(refs), body):
             fields["label"] = f"taint=0; audience={','.join(sorted(sender_label.audience))}"
             body = ""

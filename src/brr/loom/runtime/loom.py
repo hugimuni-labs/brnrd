@@ -292,8 +292,10 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     if repos is None:
         from .adapters import repos as seat_repos, seat_text
         repos = seat_repos(seat_text(home, thread))
-    from .repos import prepare_repos
+    from .repos import PUBLISH_HINT, prepare_repos
     repo_text, failures = prepare_repos(home, strand, thread, repos, parent)
+    if any((room / name / ".git").exists() for name, _ in repos):
+        repo_text += PUBLISH_HINT
     repo_file = None
     if failures:
         _log(home, f"start {strand}: {'; '.join(failures)}")
@@ -716,6 +718,10 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
     channels = reply_channels(facts)
     opener = str(read_thread(home, thread).get("opened-by", ""))
     leftovers = None
+    left: list[str] = []
+    if cause == "failed":
+        from .publish import unlanded
+        left = unlanded(home, facts, strand, thread)
     for letter in letters:
         ident, author = letter.id, str(letter.data.get("from", ""))
         if cause != "failed":
@@ -757,7 +763,8 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
             if leftovers is None:
                 leftovers = _leftovers(home, strand)
             what = (f"letter {ident} on thread {thread}: body exited {code}; "
-                    f"README changed since start: {changed}; {tank or 'fuel unknown'}\n{tail}{leftovers}")
+                    f"README changed since start: {changed}; {tank or 'fuel unknown'}\n"
+                    + "".join(line + "\n" for line in left) + f"{tail}{leftovers}")
             successor = notice(home, facts, "bounce", ident, what, "send again, or leave it",
                                thread=target, about=letter, source_strand=strand, draft_only=True)
             if isinstance(successor, Fact):
@@ -769,7 +776,8 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
     facts.append(_record(home, "attempt.ended", {
         "thread": thread, "strand": strand, "gen": gen, "ids": ids,
         "cause": cause, "code": code, "dispositions": dispositions,
-        "evidence": {"tail": tail, "readme_changed": changed, "fuel": tank},
+        "evidence": {"tail": tail, "readme_changed": changed, "fuel": tank,
+                     **({"unpublished": left} if left else {})},
     }, f"attempt.ended:{strand}:{gen}"))
     return facts
 

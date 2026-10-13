@@ -19,6 +19,9 @@ from .selfrepo import SelfError, git, pin_clone
 _AUTHOR = re.compile(r"^(.+?) <([^<>]+)>$")
 # Not a remote. git push origin echoes it, which is the refusal a reader sees.
 _PUSH_REFUSAL = "use brnrd publish"
+# The wake's last repo line. Without it a body meets the verb only as a refusal.
+PUBLISH_HINT = ("to send a repo's branch out: `python -m brr.loom.runtime publish <name>`; "
+                "git push is refused\n")
 
 
 class AuthorError(ValueError):
