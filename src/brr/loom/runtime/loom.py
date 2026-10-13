@@ -569,6 +569,52 @@ def _release(home, facts, strand, thread, gen):
     return facts
 
 
+def _leftovers(home: Home, strand: str) -> str:
+    """Tell the bounce reader what survives in this dead body's local room."""
+    room = home.room(strand).resolve()
+    clone = room / "self"
+    if not (clone / ".git").exists():
+        return ""
+    limit = 10
+    branch = f"strand/{strand}"
+    # The clone's main is its birth snapshot. Compare to today's self main,
+    # including commits another body landed while this one was working.
+    try:
+        git(clone, "fetch", "origin", "main")
+        count = int(git(clone, "rev-list", "--count", f"FETCH_HEAD..{branch}").stdout)
+        commits = git(clone, "log", f"-{limit}", "--format=%h %s",
+                      f"FETCH_HEAD..{branch}").stdout.splitlines() if count else []
+        status = git(clone, "status", "--porcelain=v1", "-z",
+                     "--untracked-files=all").stdout.split("\0")
+    except (SelfError, ValueError) as exc:
+        return f"\nCould not inspect leftovers in room {room}: {exc}"
+    paths = []
+    records = iter(status)
+    for record in records:
+        if not record:
+            continue
+        paths.append(record[3:])
+        if "R" in record[:2] or "C" in record[:2]:
+            paths[-1] = f"{next(records)} -> {paths[-1]}"
+    if not count and not paths:
+        return ""
+    lines = [f"\nLeft behind in room {room} (self clone: {clone}):"]
+    if count:
+        lines.append(f"Commits on {branch} not on main ({count}):")
+        lines.extend(f"- {commit}" for commit in commits)
+        if count > limit:
+            lines.append(f"... and {count - limit} more commits")
+        command = f"python -m brr.loom.runtime send-self --room {shlex.quote(str(clone))}"
+        lines.append(f"To land these commits on the self's main, run: `{command}`")
+    if paths:
+        lines.append(f"Uncommitted paths relative to that self clone ({len(paths)}):")
+        lines.extend(f"- {path!r}" for path in paths[:limit])
+        if len(paths) > limit:
+            lines.append(f"... and {len(paths) - limit} more paths")
+        lines.append("Review and save these edits before landing; send-self needs a clean working tree.")
+    return "\n".join(lines)
+
+
 def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure=""):
     """Observe once; every disposition and successor is in this single append."""
     if any(f.id == f"attempt.ended:{strand}:{gen}" for f in facts):
@@ -594,6 +640,7 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
     writers = sender_threads(facts)
     channels = reply_channels(facts)
     opener = str(read_thread(home, thread).get("opened-by", ""))
+    leftovers = None
     for letter in letters:
         ident, author = letter.id, str(letter.data.get("from", ""))
         if cause != "failed":
@@ -632,8 +679,10 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
         if target == thread:
             target = opener.removeprefix("thread:") if opener.startswith("thread:") else None
         if home.routable(target):
+            if leftovers is None:
+                leftovers = _leftovers(home, strand)
             what = (f"letter {ident} on thread {thread}: body exited {code}; "
-                    f"README changed since start: {changed}; {tank or 'fuel unknown'}\n{tail}")
+                    f"README changed since start: {changed}; {tank or 'fuel unknown'}\n{tail}{leftovers}")
             successor = notice(home, facts, "bounce", ident, what, "send again, or leave it",
                                thread=target, about=letter, source_strand=strand, draft_only=True)
             if isinstance(successor, Fact):

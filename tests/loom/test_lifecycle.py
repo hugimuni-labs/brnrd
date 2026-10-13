@@ -64,6 +64,7 @@ else:
                 assert original in letter.body and "failure log tail" in letter.body
                 assert "README changed since start: False" in letter.body
                 assert "fuel" in letter.body and "send again, or leave it" in letter.body
+                assert "Left behind in room" not in letter.body
                 assert Path({str(starts)!r}).read_text().splitlines() == ["start"]
                 ctx.send("thread:author", note="read bounce", re=letter.id)
                 ctx.send("thread:worker", "try again")
