@@ -303,10 +303,27 @@ def init_self(home: Path, person: str | None = None, remote: str | None = None) 
     return f"initialized {self_dir} {sha}"
 
 
+def pin_clone(repo: Path, name: str | None, email: str | None) -> None:
+    """Write commit identity into the clone, and give it no credential helper.
+
+    An empty ``credential.helper`` clears helpers inherited from the machine,
+    so a plain ``git push`` from this clone has no credential. Identity lives
+    here rather than in the environment, which would override every repo a
+    body touches.
+    """
+    if name and email:
+        git(repo, "config", "user.name", name)
+        git(repo, "config", "user.email", email)
+    else:
+        git(repo, "config", "user.useConfigOnly", "true")
+    git(repo, "config", "credential.helper", "")
+
+
 def room(home: Path, strand: str) -> Path:
     """``home/rooms/<strand>/self``, a ``--shared`` clone on ``strand/<strand>``.
 
     A room that already exists is returned as it stands. A molt keeps its commits.
+    The clone's git config carries the loom's commit identity.
     """
     home = Path(home).resolve()
     strand = _segment(strand, "strand")
@@ -315,6 +332,7 @@ def room(home: Path, strand: str) -> Path:
         raise SelfError(f"no self at {source}; init first")
     dest = home / "rooms" / strand / "self"
     if (dest / ".git").exists():
+        pin_clone(dest, AUTHOR_NAME, AUTHOR_EMAIL)
         return dest
     if dest.exists():
         raise SelfError(f"{dest} exists and is not a clone; refusing to overwrite")
@@ -324,6 +342,7 @@ def room(home: Path, strand: str) -> Path:
     # The README driver lives on the room that rebases, not on the bare self.
     from brr.loom.runtime.merge_driver import install_merge_driver
     install_merge_driver(dest)
+    pin_clone(dest, AUTHOR_NAME, AUTHOR_EMAIL)
     return dest
 
 
@@ -355,7 +374,8 @@ def default_loom_part(clone: Path, thread: str) -> str:
 
 
 def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
-             loom_part: Path | None = None, stdout=None, stderr=None) -> int:
+             loom_part: Path | None = None, repos: Path | None = None,
+             stdout=None, stderr=None) -> int:
     """Exec the clone's ``core/loom/wake``. The prompt is its stdout; the code is its code."""
     _segment(thread, "thread")
     clone = resolve_clone(room_dir)
@@ -365,6 +385,8 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
     env = _env_without_pin()
     if loom_part is not None:
         env["LOOM_PART"] = str(loom_part)
+    if repos is not None:
+        env["LOOM_REPOS"] = str(repos)
     owed_file = None
     part_file = None
     try:
