@@ -87,7 +87,7 @@ def _mirror(home: Home, name: str, source: str) -> tuple[Path | None, str | None
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            git(path.parent, "clone", "--bare", source, str(path))
+            git(path.parent, "clone", "--bare", "--", source, str(path))
         except SelfError:
             if path.exists():
                 shutil.rmtree(path, ignore_errors=True)
@@ -176,7 +176,7 @@ def prepare_repos(home: Home, strand: str, thread: str,
             raise SelfError(f"{dest} exists and is not a clone; refusing to overwrite")
         dest.parent.mkdir(parents=True, exist_ok=True)
         git(home.root, "clone", "--shared", str(mirror), str(dest))
-        git(dest, "remote", "set-url", "origin", source)
+        git(dest, "remote", "set-url", "origin", "--", source)
         pin_clone(dest)
         cut = _cut_from(dest, thread, parent)
         line = f"repo {name}: {dest} on loom/{thread}, cut from {cut}"

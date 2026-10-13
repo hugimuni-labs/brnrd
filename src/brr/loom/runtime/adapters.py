@@ -49,6 +49,8 @@ def repo_dirname(source: str) -> str:
     text = source.strip().rstrip("/")
     if not text:
         raise RepoSeatError("repo source is empty")
+    if text.startswith("-"):
+        raise RepoSeatError(f"repo source {text!r} begins with '-'")
     name = text.rsplit("/", 1)[-1]
     if name.endswith(".git"):
         name = name[: -len(".git")]
