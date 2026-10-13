@@ -308,8 +308,10 @@ def pin_clone(repo: Path) -> None:
     """Give the clone no credential helper.
 
     An empty ``credential.helper`` clears helpers inherited from the machine,
-    so a plain ``git push`` from this clone has no credential. Commit identity
-    is the body's environment, which covers every clone it touches.
+    including one scoped to a URL. Commit identity is the body's environment,
+    which covers every clone it touches. A project checkout also refuses
+    ``git push origin``; a local source never asks a helper, so that refusal
+    is the checkout's push URL.
     """
     git(repo, "config", "credential.helper", "")
 

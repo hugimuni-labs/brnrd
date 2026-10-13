@@ -17,6 +17,8 @@ from .home import Home
 from .selfrepo import SelfError, git, pin_clone
 
 _AUTHOR = re.compile(r"^(.+?) <([^<>]+)>$")
+# Not a remote. git push origin echoes it, which is the refusal a reader sees.
+_PUSH_REFUSAL = "use brnrd publish"
 
 
 class AuthorError(ValueError):
@@ -178,6 +180,9 @@ def prepare_repos(home: Home, strand: str, thread: str,
         git(home.root, "clone", "--shared", str(mirror), str(dest))
         git(dest, "remote", "set-url", "origin", "--", source)
         pin_clone(dest)
+        # A local source never asks a helper. This push URL is what `git push
+        # origin` hits instead, for every source.
+        git(dest, "remote", "set-url", "--push", "origin", _PUSH_REFUSAL)
         cut = _cut_from(dest, thread, parent)
         line = f"repo {name}: {dest} on loom/{thread}, cut from {cut}"
         if failed:

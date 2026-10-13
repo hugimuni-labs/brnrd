@@ -468,6 +468,35 @@ def test_a_dashed_relative_source_is_cloned_as_a_url(tmp_path: Path) -> None:
     assert (checkout / "README.md").read_text() == "dashed\n"
 
 
+def _credential_home(path: Path) -> Path:
+    """A machine gitconfig whose helpers print a password for every https host."""
+    home = path / "git-home"
+    home.mkdir()
+    helper = home / "helper"
+    helper.write_text("#!/bin/sh\necho username=ada\necho password=from-helper\n", encoding="utf-8")
+    helper.chmod(0o755)
+    (home / ".gitconfig").write_text(
+        "[credential]\n"
+        f"\thelper = {helper}\n"
+        '[credential "https://example.com"]\n'
+        f"\thelper = {helper}\n",
+        encoding="utf-8",
+    )
+    return home
+
+
+def _fill_env(room: Path, home_dir: Path) -> dict[str, str]:
+    env = _env(room)
+    # A strand's command line blanks credential helpers. The machine this
+    # stands in for does not, so the fill has to see the gitconfig above.
+    for key in list(env):
+        if key.startswith("GIT_CONFIG_"):
+            del env[key]
+    env["HOME"] = str(home_dir)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return env
+
+
 def test_a_checkout_push_has_no_credential(tmp_path: Path) -> None:
     root = _home(tmp_path)
     bare, _work = _source(tmp_path)
@@ -478,12 +507,19 @@ def test_a_checkout_push_has_no_credential(tmp_path: Path) -> None:
         assert _started(root), _log(root)
         room = _room(root)
         checkout = room / "widget"
+        pushed = git(checkout, "push", "origin", "HEAD", check=False)
+        assert pushed.returncode != 0, pushed.stderr
+        assert "brnrd publish" in pushed.stderr
+        assert git(
+            bare, "rev-parse", "--verify", "--quiet", "refs/heads/loom/work", check=False,
+        ).returncode != 0
         git(checkout, "remote", "set-url", "origin", "https://example.com/widget.git")
         assert git(checkout, "remote", "get-url", "origin").stdout.strip() == (
             "https://example.com/widget.git")
+        env = _fill_env(room, _credential_home(tmp_path))
+        ask = "protocol=https\nhost=example.com\npath=widget.git\n\n"
         for repo in (checkout, room / "self"):
-            proc = git(repo, "config", "--local", "--get", "credential.helper", check=False)
-            assert proc.returncode == 0, repo
-            assert proc.stdout.strip() == ""
+            proc = git(repo, "credential", "fill", env=env, check=False, input=ask)
+            assert "password=" not in proc.stdout, (repo, proc.stdout, proc.stderr)
     finally:
         _kill(read_facts(home))
