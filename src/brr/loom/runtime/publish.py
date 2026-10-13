@@ -149,6 +149,15 @@ def _uncovered(checkout: Path, revisions: list[str], covered: list[str]) -> list
     return [tuple(line.split("\t", 1)) for line in text.splitlines() if "\t" in line]
 
 
+def _ahead(checkout: Path, revisions: list[str], covered: list[str]) -> int:
+    """The count the bounce and the send guard have always used: a comparison
+    git cannot make (a missing branch) counts as nothing ahead, as before."""
+    try:
+        return len(_uncovered(checkout, revisions, covered))
+    except SelfError:
+        return 0
+
+
 def unpublished(facts, thread: str, name: str, checkout: Path) -> tuple[str, int] | None:
     """``(tip, commits)`` when ``loom/<thread>`` in ``checkout`` holds commits
     that no ``branch.published`` fact and no ``origin`` ref covers. Else none.
@@ -165,7 +174,7 @@ def unpublished(facts, thread: str, name: str, checkout: Path) -> tuple[str, int
         return None
     # A published commit this checkout never fetched is not a name git knows.
     held = [commit for commit in known if _tip(checkout, commit)]
-    ahead = len(_uncovered(checkout, [tip], [*held, "--remotes=origin"]))
+    ahead = _ahead(checkout, [tip], [*held, "--remotes=origin"])
     return (tip, ahead) if ahead else None
 
 
@@ -178,7 +187,7 @@ def unlanded(home, facts, strand: str, thread: str) -> list[str]:
     try:
         clone = room / "self"
         if (clone / ".git").exists():
-            ahead = len(_uncovered(clone, [f"refs/heads/strand/{strand}"], ["--remotes=origin"]))
+            ahead = _ahead(clone, [f"refs/heads/strand/{strand}"], ["--remotes=origin"])
             if ahead:
                 lines.append(f"self: {ahead} commit(s) on strand/{strand} not on main, in {clone}")
         for name, _source in repos(seat_text(home, thread)):
