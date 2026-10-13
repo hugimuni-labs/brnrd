@@ -462,7 +462,7 @@ def test_a_relative_source_is_refused(tmp_path: Path) -> None:
         facts = read_facts(home)
         assert not any(fact.kind == "body.started" for fact in facts), _log(root)
         notes = [fact for fact in facts if fact.kind == "letter"
-                 and "is a relative path" in fact.data.get("body", "")]
+                 and "is neither a URL nor a path from /" in fact.data.get("body", "")]
         assert len(notes) == 1
         assert "correct the repo lines" in notes[0].data["body"]
     finally:
