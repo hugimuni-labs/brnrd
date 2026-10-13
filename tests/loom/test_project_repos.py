@@ -431,6 +431,43 @@ def test_two_sources_with_one_name_do_not_share_a_mirror(tmp_path: Path) -> None
         _kill(read_facts(home))
 
 
+def test_a_source_that_begins_with_a_dash_is_refused(tmp_path: Path) -> None:
+    root = _home(tmp_path)
+    _seat(root, "work", ["-https://example.com/widget.git"])
+    home = Home(root)
+    try:
+        _tick(home, {}, Router(home))
+        facts = read_facts(home)
+        assert not any(fact.kind == "body.started" for fact in facts), _log(root)
+        notes = [fact for fact in facts if fact.kind == "letter"
+                 and "begins with '-'" in fact.data.get("body", "")]
+        assert len(notes) == 1
+        assert "correct the repo lines" in notes[0].data["body"]
+        assert not (root / "rooms").exists() or not any((root / "rooms").iterdir())
+    finally:
+        _kill(read_facts(home))
+
+
+def test_a_dashed_relative_source_is_cloned_as_a_url(tmp_path: Path) -> None:
+    root = _home(tmp_path)
+    work = tmp_path / "dashed-work"
+    work.mkdir()
+    git(None, "init", "-b", "main", str(work))
+    (work / "README.md").write_text("dashed\n")
+    git(work, "add", "README.md")
+    git(work, "commit", "-m", "start")
+    repos = root / "repos"
+    repos.mkdir()
+    git(None, "clone", "--bare", str(work), str(repos / "-widget.git"))
+    home = Home(root)
+    text, failures = prepare_repos(home, "s1", "work", [("widget", "-widget.git")], None)
+    assert failures == (), (failures, text)
+    checkout = home.room("s1") / "widget"
+    assert (checkout / ".git").is_dir()
+    assert git(checkout, "remote", "get-url", "origin").stdout.strip() == "-widget.git"
+    assert (checkout / "README.md").read_text() == "dashed\n"
+
+
 def test_a_checkout_push_has_no_credential(tmp_path: Path) -> None:
     root = _home(tmp_path)
     bare, _work = _source(tmp_path)
