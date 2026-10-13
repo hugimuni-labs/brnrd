@@ -4,12 +4,20 @@ The strand's label is read here, at push time, because a body can become
 tainted after it starts. The push goes to the source the seat declares on
 main, never to the checkout's own ``origin``: a body can rewrite its
 checkout's remotes, and the home's token would follow them.
+
+A tainted strand cannot push, so its opener does it in two calls. ``--from
+<thread>`` copies the worker's branch into the opener's own checkout, under
+the worker's branch name, and pushes nothing. ``--from <thread> --commit
+<sha>`` pushes that copy if it is still at the commit the opener named. The
+push never reads the worker's checkout, so a commit the worker adds after
+the opener read the diff does not ride along.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -17,11 +25,12 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .config import load_config
-from .home import home_of_room, strand_of_room
+from .home import check_thread_id, home_of_room, strand_of_room
 from .ledger import Fact, append, read_facts
 from .selfrepo import SelfError, _env_without_pin, _segment, git, resolve_clone
 
 _PUSH_TIMEOUT = 600
+_SHA = re.compile(r"[0-9a-f]{7,64}")
 _TOKEN_ENV = "BRNRD_FORGE_TOKEN_FILE"
 # git runs a helper that starts with ``!`` through sh. The token is read from
 # the file when git asks, so it is in no argv and no config.
@@ -142,15 +151,30 @@ def _gen(facts, strand: str) -> int | None:
     return found if isinstance(found, int) else None
 
 
-def publish(room: Path | str, name: str) -> Published:
-    """Push ``loom/<thread>`` of ``<room>/<name>`` to its declared source.
+@dataclass(frozen=True)
+class Fetched:
+    """A worker's branch, copied into the opener's checkout and not pushed."""
+    thread: str
+    repo: str
+    branch: str
+    commit: str
+    #: Commits on the branch that no ``origin`` ref holds.
+    ahead: int
+    checkout: Path
 
-    Refuses a tainted strand, a branch carrying another author, and a repo
-    the thread's seat does not declare. Records ``branch.published`` after
-    the push, never before.
-    """
-    from .loom import _commit_identity
-    from .port import _current_label
+
+@dataclass(frozen=True)
+class _Caller:
+    home: object
+    facts: list
+    room: Path
+    strand: str
+    thread: str
+    name: str
+    checkout: Path
+
+
+def _caller(room: Path | str, name: str) -> _Caller:
     from .project import sender_threads
 
     room = Path(room).resolve()
@@ -168,24 +192,152 @@ def publish(room: Path | str, name: str) -> Published:
     thread = sender_threads(facts).get(strand)
     if thread is None:
         raise PublishError(f"publish: room {strand} has no thread")
-    branch = f"loom/{thread}"
-    tip = git(checkout, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}",
-              check=False)
-    if tip.returncode != 0:
-        raise PublishError(f"publish: {checkout} has no branch {branch}")
-    commit = tip.stdout.strip()
+    return _Caller(home, facts, room, strand, thread, name, checkout)
 
-    if _current_label(resolve_clone(room), strand).taint:
+
+def _tainted(who: _Caller) -> bool:
+    from .port import _current_label
+    return bool(_current_label(resolve_clone(who.room), who.strand).taint)
+
+
+def _tip(checkout: Path, ref: str) -> str | None:
+    proc = git(checkout, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False)
+    return proc.stdout.strip() if proc.returncode == 0 else None
+
+
+def _opener(home, thread: str) -> str | None:
+    from .lifecycle import read_thread
+    opener = str(read_thread(home, thread).get("opened-by", ""))
+    return opener.removeprefix("thread:") if opener.startswith("thread:") else None
+
+
+def _opened(home, own: str, worker: str) -> bool:
+    """``own`` opened ``worker``, or opened the thread that did, and so on up."""
+    seen: set[str] = set()
+    current: str | None = worker
+    while current and current not in seen:
+        seen.add(current)
+        current = _opener(home, current)
+        if current == own:
+            return True
+    return False
+
+
+def _worker_checkout(who: _Caller, worker: str) -> Path | None:
+    """The newest room of ``worker`` that has this repo. A molt's successor
+    starts from its predecessor's branch, so the newest holds the most."""
+    from .project import fold
+    strands = [str(fact.data["strand"]) for fact in fold(who.facts).accepted
+               if fact.kind == "lease" and str(fact.data.get("thread")) == worker]
+    for strand in reversed(strands):
+        path = who.home.room(strand).resolve() / who.name
+        if (path / ".git").exists():
+            return path
+    return None
+
+
+def _for_worker(who: _Caller, worker: str) -> tuple[str, str]:
+    """``(branch, source)`` once this caller may publish ``worker``'s branch."""
+    try:
+        check_thread_id(worker)
+    except ValueError as exc:
+        raise PublishError(f"publish: {exc}") from exc
+    if worker == who.thread:
+        raise PublishError(f"publish: {worker} is this room's own thread; leave out --from")
+    if _tainted(who):
         raise PublishError(
-            f"publish: this strand has read untrusted text, so it cannot push. "
-            f"Commit your work, then send your opener a clean letter that names "
-            f"this checkout:\n"
-            f"  send --to <opener> --clean --kind done --ref {name}\n"
-            f"The opener reads the diff and publishes from its own room. The branch "
-            f"is {branch} at {commit} in {checkout}."
+            "publish: this strand has read untrusted text, so it cannot push, "
+            "for itself or for a worker."
         )
+    if not _opened(who.home, who.thread, worker):
+        raise PublishError(
+            f"publish: thread {who.thread} did not open {worker}; a worker's branch "
+            f"is published by the thread that opened it"
+        )
+    source = _declared(who.home, worker, who.name)
+    try:
+        own = _declared(who.home, who.thread, who.name)
+    except PublishError:
+        own = None
+    if own != source:
+        raise PublishError(
+            f"publish: {who.checkout} is not a checkout of {worker}'s {who.name} "
+            f"({source}); this thread's seat declares {own or 'no repo of that name'}"
+        )
+    return f"loom/{worker}", source
 
-    email = _commit_identity(room)[1]
+
+def fetch_from(room: Path | str, name: str, worker: str) -> Fetched:
+    """Copy ``loom/<worker>`` from the worker's room into this room's checkout.
+
+    Nothing is pushed. The copy keeps the worker's branch name: one thread,
+    one branch, and the worker's next clean body starts from it once it is
+    on the source.
+    """
+    who = _caller(room, name)
+    branch, _source = _for_worker(who, worker)
+    theirs = _worker_checkout(who, worker)
+    if theirs is None or _tip(theirs, f"refs/heads/{branch}") is None:
+        raise PublishError(f"publish: no room of thread {worker} has {name} on {branch}")
+    git(who.checkout, "fetch", "--no-tags", "--", str(theirs),
+        f"+refs/heads/{branch}:refs/heads/{branch}")
+    commit = _tip(who.checkout, f"refs/heads/{branch}")
+    assert commit is not None
+    ahead = git(who.checkout, "rev-list", "--count", f"refs/heads/{branch}",
+                "--not", "--remotes=origin").stdout.strip()
+    return Fetched(worker, name, branch, commit, int(ahead or 0), who.checkout)
+
+
+def publish(room: Path | str, name: str, *, worker: str | None = None,
+            commit: str | None = None) -> Published:
+    """Push ``loom/<thread>`` of ``<room>/<name>`` to its declared source.
+
+    Refuses a tainted strand, a branch carrying another author, and a repo
+    the thread's seat does not declare. Records ``branch.published`` after
+    the push, never before. With ``worker``, the branch is that thread's as
+    ``fetch_from`` left it here, and ``commit`` must name its tip.
+    """
+    from .loom import _commit_identity
+
+    who = _caller(room, name)
+    checkout, strand = who.checkout, who.strand
+    if worker is not None:
+        branch, source = _for_worker(who, worker)
+        thread = worker
+        tip = _tip(checkout, f"refs/heads/{branch}")
+        if tip is None or not commit or not _SHA.fullmatch(commit):
+            raise PublishError(
+                f"publish: fetch {branch} and read it before pushing it:\n"
+                f"  publish {name} --from {worker}"
+            )
+        if _tip(checkout, commit) != tip:
+            raise PublishError(
+                f"publish: {branch} in this room is at {tip}, not {commit}. "
+                f"Push the commit you read, or fetch again with: publish {name} --from {worker}"
+            )
+        commit = tip
+    else:
+        thread, branch = who.thread, f"loom/{who.thread}"
+        if commit:
+            raise PublishError("publish: --commit goes with --from")
+        commit = _tip(checkout, f"refs/heads/{branch}")
+        if commit is None:
+            raise PublishError(f"publish: {checkout} has no branch {branch}")
+        if _tainted(who):
+            opener = _opener(who.home, thread)
+            raise PublishError(
+                f"publish: this strand has read untrusted text, so it cannot push. "
+                f"Commit your work, then send your opener a clean letter that names "
+                f"this checkout:\n"
+                f"  send --to {'thread:' + opener if opener else '<opener>'} "
+                f"--clean --kind done --ref {name}\n"
+                f"The opener reads the diff and publishes it with "
+                f"`publish {name} --from {thread}`. The branch "
+                f"is {branch} at {commit} in {checkout}."
+            )
+        source = _declared(who.home, thread, name)
+
+    email = _commit_identity(who.room)[1]
     others = _other_authors(checkout, branch, email)
     if others:
         raise PublishError(
@@ -194,8 +346,8 @@ def publish(room: Path | str, name: str) -> Published:
             + "Rewrite them under this home's author, or leave them out."
         )
 
-    source = _declared(home, thread, name)
-    args, env, lane, note = push_command(source, branch, load_config(home.root).forge_token_file)
+    args, env, lane, note = push_command(source, branch,
+                                         load_config(who.home.root).forge_token_file)
     try:
         proc = subprocess.run(
             ["git", *args], cwd=checkout, env=env, capture_output=True, text=True,
@@ -210,23 +362,35 @@ def publish(room: Path | str, name: str) -> Published:
     git(checkout, "update-ref", f"refs/remotes/origin/{branch}", commit)
     data = {"thread": thread, "repo": name, "branch": branch, "commit": commit,
             "strand": strand}
-    gen = _gen(facts, strand)
+    gen = _gen(who.facts, strand)
     if gen is not None:
         data["gen"] = gen
-    append(home, Fact(kind="branch.published", by=f"strand:{strand}", data=data,
-                      id=f"published:{thread}:{name}:{commit}"))
+    append(who.home, Fact(kind="branch.published", by=f"strand:{strand}", data=data,
+                          id=f"published:{thread}:{name}:{commit}"))
     return Published(thread, name, branch, commit, lane, note)
 
 
 def _arguments(parser) -> None:
     parser.add_argument("name", help="the repo's directory name in the room")
     parser.add_argument("--room")
+    parser.add_argument("--from", dest="worker", metavar="THREAD",
+                        help="a thread this one opened: copy its branch here, push nothing")
+    parser.add_argument("--commit", help="with --from: push the copy, if it is at this commit")
 
 
 def cmd_publish(args) -> int:
     from .verbs_loom import _room
     try:
-        done = publish(_room(args.room), args.name)
+        if args.worker and not args.commit:
+            got = fetch_from(_room(args.room), args.name, args.worker)
+            sys.stdout.write(
+                f"{got.branch} {got.commit} fetched, not pushed: {got.ahead} commit(s) "
+                f"the source does not have.\n"
+                f"Read them: git -C {got.checkout} log -p {got.branch} --not --remotes=origin\n"
+                f"Then: publish {got.repo} --from {got.thread} --commit {got.commit}\n"
+            )
+            return 0
+        done = publish(_room(args.room), args.name, worker=args.worker, commit=args.commit)
     except (PublishError, SelfError, ValueError, OSError) as exc:
         sys.stderr.write(str(exc).rstrip("\n") + "\n")
         return 1
