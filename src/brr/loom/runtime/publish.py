@@ -143,6 +143,12 @@ def _other_authors(checkout: Path, branch: str, email: str) -> list[str]:
             if line.strip() and line.split(" ", 1)[1] != email]
 
 
+def _uncovered(checkout: Path, revisions: list[str], covered: list[str]) -> list[tuple[str, str]]:
+    """The one reachability comparison: commits not held by any covered ref."""
+    text = git(checkout, "log", "--format=%H%x09%s", *revisions, "--not", *covered).stdout
+    return [tuple(line.split("\t", 1)) for line in text.splitlines() if "\t" in line]
+
+
 def unpublished(facts, thread: str, name: str, checkout: Path) -> tuple[str, int] | None:
     """``(tip, commits)`` when ``loom/<thread>`` in ``checkout`` holds commits
     that no ``branch.published`` fact and no ``origin`` ref covers. Else none.
@@ -159,9 +165,7 @@ def unpublished(facts, thread: str, name: str, checkout: Path) -> tuple[str, int
         return None
     # A published commit this checkout never fetched is not a name git knows.
     held = [commit for commit in known if _tip(checkout, commit)]
-    count = git(checkout, "rev-list", "--count", tip, "--not", *held, "--remotes=origin",
-                check=False)
-    ahead = int(count.stdout.strip() or 0) if count.returncode == 0 else 0
+    ahead = len(_uncovered(checkout, [tip], [*held, "--remotes=origin"]))
     return (tip, ahead) if ahead else None
 
 
@@ -174,9 +178,7 @@ def unlanded(home, facts, strand: str, thread: str) -> list[str]:
     try:
         clone = room / "self"
         if (clone / ".git").exists():
-            count = git(clone, "rev-list", "--count", f"refs/heads/strand/{strand}",
-                        "--not", "--remotes=origin", check=False)
-            ahead = int(count.stdout.strip() or 0) if count.returncode == 0 else 0
+            ahead = len(_uncovered(clone, [f"refs/heads/strand/{strand}"], ["--remotes=origin"]))
             if ahead:
                 lines.append(f"self: {ahead} commit(s) on strand/{strand} not on main, in {clone}")
         for name, _source in repos(seat_text(home, thread)):
