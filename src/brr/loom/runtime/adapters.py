@@ -18,6 +18,10 @@ _SEAT_KEYS = {"body", "repo", "watch"}
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
+class RepoSeatError(ValueError):
+    """A seat's ``repo:`` lines cannot be used."""
+
+
 def seat_text(home, thread: str) -> str:
     """The seat as it landed on main, or the file when the self is not git yet."""
     from .selfrepo import git
@@ -44,12 +48,12 @@ def repo_dirname(source: str) -> str:
     """Last path segment of a repo source, without a trailing ``.git``."""
     text = source.strip().rstrip("/")
     if not text:
-        raise ValueError("repo source is empty")
+        raise RepoSeatError("repo source is empty")
     name = text.rsplit("/", 1)[-1]
     if name.endswith(".git"):
         name = name[: -len(".git")]
     if name == "self" or not _NAME.fullmatch(name):
-        raise ValueError(f"repo name {name!r} from {source!r} is not a directory name")
+        raise RepoSeatError(f"repo name {name!r} from {source!r} is not a directory name")
     return name
 
 
@@ -66,7 +70,7 @@ def repos(text: str) -> list[tuple[str, str]]:
             continue
         name = repo_dirname(value)
         if name in seen:
-            raise ValueError(f"repo name {name!r} is declared twice")
+            raise RepoSeatError(f"repo name {name!r} is declared twice")
         seen.add(name)
         found.append((name, value))
     return found

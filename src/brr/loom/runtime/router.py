@@ -210,15 +210,22 @@ class Router:
                     {"id": f.id, "outcome": "operator", "reason": "for: other brnrd"}
                     for f in letters]}, f"for-other:{thread}:{letters[-1].id}")
                 continue
-            from .adapters import at_birth, repos as seat_repos, seat_text
+            from .adapters import RepoSeatError, at_birth, repos as seat_repos, seat_text
+            from .repos import AuthorError, require_body_author
             try:
                 text = seat_text(home, thread)
                 choice = at_birth(home, thread, default, text)
                 declared = seat_repos(text)
+                require_body_author(home)
             except (ValueError, OSError) as exc:
-                hint = ("correct the repo lines in its seat"
-                        if str(exc).startswith("repo ") or "repo source" in str(exc)
-                        else "correct its body: shell/core choice")
+                if isinstance(exc, RepoSeatError):
+                    hint = "correct the repo lines in its seat"
+                elif isinstance(exc, AuthorError) and exc.enrolled:
+                    hint = "choose an author that is not an enrolled person"
+                elif isinstance(exc, AuthorError):
+                    hint = "set author in loom/config.toml to Name <email>"
+                else:
+                    hint = "correct its body: shell/core choice"
                 notice(home, facts, "body", thread, f"thread {thread}: {exc}",
                        hint, thread=thread)
                 continue
