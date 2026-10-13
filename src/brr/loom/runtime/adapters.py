@@ -51,6 +51,10 @@ def repo_dirname(source: str) -> str:
         raise RepoSeatError("repo source is empty")
     if text.startswith("-"):
         raise RepoSeatError(f"repo source {text!r} begins with '-'")
+    if ":" not in text and not text.startswith("/"):
+        # git resolves a relative path against whichever directory it runs
+        # in, and the mirror, the room and the checkout are three of them.
+        raise RepoSeatError(f"repo source {text!r} is a relative path; write it from /")
     name = text.rsplit("/", 1)[-1]
     if name.endswith(".git"):
         name = name[: -len(".git")]
