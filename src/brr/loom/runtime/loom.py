@@ -14,13 +14,14 @@ import threading
 import tempfile
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 from brr.daemon2.facts import Fact
 
 from .adapters import resolve
+from .bodies import Observation, decide, fact_for, state_of
 from .home import Home, atomic_write, is_channel, mint, notice_id
 from .ledger import LedgerConflict, append, read_facts
 from .port import (
@@ -46,11 +47,6 @@ class Body:
     # These are local resources, not the body's identity or liveness.
     proc: subprocess.Popen | None = None
     log: object = None
-    # Monotonic deadline after which a settled thread's body is signalled.
-    # None until this loop first sees the thread settled. A restarted loop
-    # starts the grace over: the body may be about to leave on its own.
-    stop_after: float | None = None
-
     def close_log(self) -> None:
         close = getattr(self.log, "close", None)
         if close is not None:
@@ -440,7 +436,7 @@ def _holds_body_file(room: Path, pid: int) -> bool:
 
 
 def _proven_body(room: Path, pid: int, lstart: str,
-                 proc: subprocess.Popen | None) -> bool:
+                 proc: subprocess.Popen | None, *, alive: bool | None = None) -> bool:
     """True only when ``pid`` is still this room's body.
 
     An unreaped child this loop spawned cannot have had its pid reused.
@@ -450,7 +446,7 @@ def _proven_body(room: Path, pid: int, lstart: str,
     line that names the room is also what ``tail -f <room>/port/body.log``
     looks like. A miss is not a signal.
     """
-    if not isinstance(pid, int) or pid <= 1 or not body_alive(room):
+    if not isinstance(pid, int) or pid <= 1 or not (body_alive(room) if alive is None else alive):
         return False
     if proc is not None and proc.pid == pid and proc.poll() is None:
         return True
@@ -521,21 +517,21 @@ def _start(home: Home, strand: str, thread: str, gen: int,
         except BlockingIOError:
             return facts
         current = read_facts(home)
-        if fold(current).holder.get(thread) != (strand, gen) or body_alive(room):
+        if fold(current).holder.get(thread) != (strand, gen):
             return current
         if force:
             pending = pending_bodies(fold(current).accepted).get(strand)
             if not pending or pending.kind != "body.parked":
                 return current
-        return _launch(home, strand, thread, gen, bodies, current, choice, force=force,
-                       repos=repos)
+        return _advance_body(home, strand, thread, gen, bodies, current, choice,
+                             force=force, repos=repos)
 
 
 def _refuse_author(home: Home, facts: list[Fact], thread: str) -> bool:
     """True when this start must not run. The notice is the router's.
 
     ``route`` writes it before taking a lease. A pending or parked body is
-    restarted from ``_refresh_holders`` and never enters ``route``, so the
+    restarted from the body table and never enters ``route``, so the
     check also lives here, which is the one place every start passes.
     """
     from .repos import AuthorError, require_body_author
@@ -549,86 +545,6 @@ def _refuse_author(home: Home, facts: list[Fact], thread: str) -> bool:
         notice(home, facts, "body", thread, f"thread {thread}: {exc}", hint, thread=thread)
         return True
     return False
-
-
-def _launch(home: Home, strand: str, thread: str, gen: int,
-            bodies: dict[str, Body], facts: list[Fact], choice=None, *, force=False,
-            repos: list[tuple[str, str]] | None = None) -> list[Fact]:
-    """Launch one body; the gauge can defer a start without consuming letters."""
-    if strand in bodies:
-        return facts
-    if _refuse_author(home, facts, thread):
-        return facts
-    letters = letters_for(facts, main_snapshot(home), thread)
-    ids = [str(letter.data["id"]) for letter in letters]
-    try:
-        # Pending/parked starts never ran and resume without a new choice.
-        pending = pending_bodies(facts).get(strand)
-        if pending and pending.kind in {"body.pending", "body.parked"}:
-            shell, core = pending.data["shell"], pending.data["core"]
-        else:
-            shell, core = choice
-        folder = resolve(home, shell)
-        from .usage import reading, fuel
-        prior = [f for f in facts if f.data.get("strand") == strand]
-        after = max((datetime.fromisoformat(f.at).timestamp() for f in prior
-                     if f.kind in {"body.exited", "body.parked"}), default=0)
-        gauge = {"windows": []} if force else reading(home, shell, after)
-        data = {"strand": strand, "gen": gen, "shell": shell, "core": core}
-        if gauge is None:
-            if not prior or prior[-1].kind not in {"body.pending", "body.parked"}:
-                facts.append(_record(home, "body.pending", data, f"body.pending:{strand}:{mint(6)}"))
-            return facts
-        from .config import load_config
-        floor = load_config(home.root).hold_floor_pct
-        empty = next((w for w in gauge["windows"] if w["left_pct"] <= floor), None)
-        if empty:
-            try:
-                until = datetime.fromisoformat(empty["resets_at"]).timestamp()
-            except (ValueError, TypeError, KeyError):
-                until = 0
-            # A reset time that is missing or already past (a gauge that lags
-            # its own reset) would park, expire and re-park on every reading.
-            if until <= time.time():
-                until = time.time() + 900
-            data.update(window=empty["name"], left_pct=empty["left_pct"], until=until)
-            facts.append(_record(home, "body.parked", data, f"body.parked:{strand}:{mint(6)}"))
-            return facts
-        room = _prepare(
-            home, strand, thread, gen, letters, sender_threads(facts), facts,
-            (folder / "jack").read_text().strip(),
-            fuel=fuel(home, shell), repos=repos,
-        )
-        policy = _policy(home, thread)
-        if policy is not None:
-            atomic_write(room / "port/policy", policy + "\n")
-        argv = [str(folder / "run"), str(room), core]
-        # The wake has already exposed these letters. Publish that label
-        # before exec: send-self can precede the body's first jack receipt.
-        facts.append(_record(home, "shown", {
-            "strand": strand, "gen": gen, "ids": ids,
-        }, f"shown:wake:{strand}:{gen}:{mint(6)}"))
-        readme = _readme(room, thread)
-        proc, log = _spawn(room, argv, shell, thread)
-    except Exception as exc:
-        why = f"{type(exc).__name__}: {exc}"
-        _log(home, f"start failed {strand}: {why}")
-        facts.append(_record(home, "body.exited", {
-            "strand": strand, "gen": gen, "code": None, "why": why,
-        }, f"body.exited:{strand}:{gen}:{mint(6)}"))
-        # No process reached the wake: tell the author about the failed start,
-        # rather than repeatedly trying preparation for the same letter.
-        facts = _end_attempt(home, facts, strand, thread, gen, None, letters, "failed", why)
-        facts = _drained(home, facts, strand, thread, gen)
-        return _release(home, facts, strand, thread, gen)
-    started_at = _ps_field(proc.pid, "lstart") or ""
-    facts.append(_record(home, "body.started", {
-        "strand": strand, "gen": gen, "pid": proc.pid, "shell": shell, "core": core,
-        "readme": readme, **({"lstart": started_at} if started_at else {}),
-    }, f"body.started:{strand}:{gen}:{proc.pid}:{mint(6)}"))
-    bodies[strand] = Body(strand, thread, gen, proc, log)
-    _log(home, f"start {strand} thread {thread} gen {gen} pid {proc.pid} {shell}/{core}")
-    return facts
 
 
 def _threads(home: Home) -> list[str]:
@@ -956,149 +872,247 @@ def _drain_strand(home: Home, facts: list[Fact], strand: str) -> list[Fact]:
     return facts
 
 
-def _reap(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
-    for strand, body in list(bodies.items()):
-        if body_alive(home.room(strand)):
-            continue
-        # Wait only to collect a child we spawned, never to decide liveness.
-        # An inherited body has no waitable child and its code is unknown.
-        code = _collect_exit(body)
-        # Drain the body's last boundary and answer before deciding what it wasted.
-        facts = _drain_strand(home, facts, strand)
-        body.close_log()
-        del bodies[strand]
-        facts.append(_record(home, "body.exited", {
-            "strand": strand, "gen": body.gen, "code": code,
-        }, f"body.exited:{strand}:{body.gen}:{mint(6)}"))
-        _log(home, f"exit {strand} code {code}")
-        molted = any(f.kind == "molt" and f.data.get("strand") == strand
-                     and f.data.get("gen") == body.gen for f in fold(facts).accepted)
-        # A closed thread's body is expected to leave; its letters climb (router).
-        from .lifecycle import CLOSED, read_thread
-        from .usage import below_floor
-        start = next((f for f in reversed(facts) if f.kind == "body.started"
-                      and f.data.get("strand") == strand), None)
-        paced = bool(start and below_floor(home, start.data["shell"]))
-        shown = fold(facts).shown.get(strand, set())
-        letters = [letter for letter in letters_for(facts, main_snapshot(home), body.thread) if letter.id in shown]
-        stopped = any(f.kind == "body.stopped" and f.data.get("strand") == strand
-                      and f.data.get("gen") == body.gen for f in facts)
-        cause = ("stopped" if stopped else
-                 "molted" if molted else
-                 "settled" if read_thread(home, body.thread).get("status") in CLOSED else
-                 "idle" if not letters else "paced" if paced else "failed")
-        facts = _end_attempt(home, facts, strand, body.thread, body.gen, code, letters, cause)
-        facts = _drain_strand(home, facts, strand)
-        facts = _drained(home, facts, strand, body.thread, body.gen)
-        facts = _release(home, facts, strand, body.thread, body.gen)
-    return facts
-
-
 def pending_bodies(facts: list[Fact]) -> dict[str, Fact]:
-    """The latest body fact for each strand, used by the tick and attention."""
+    """The latest body fact for each strand, used by attention."""
     return {str(f.data["strand"]): f for f in facts
             if f.kind.startswith("body.") and f.data.get("strand")}
 
 
-def _refresh_holders(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
-    """Own holders: refresh live boundaries, retry pending starts, release corpses."""
-    from .router import install_of
-    from .usage import fuel
-    from .lifecycle import CLOSED, closing_commit, read_thread
-    shells = {f.data["strand"]: f.data.get("shell") for f in facts if f.kind == "body.started"}
-    state, threads, pending = fold(facts), sender_threads(facts), pending_bodies(facts)
-    channels = reply_channels(facts)
-    from .threads import thread_table
-    table = thread_table(home, facts)
-    for thread, (strand, gen) in state.holder.items():
-        if install_of(strand) != home.install_id():
-            continue
-        if strand not in bodies and (body_alive(home.room(strand))
-                                    or (strand in pending and pending[strand].kind == "body.started")):
-            bodies[strand] = Body(strand, thread, gen)
-        if body_alive(home.room(strand)):
-            settled = (closing_commit(home, thread)[1]
-                       if read_thread(home, thread).get("status") in CLOSED else None)
-            letters = letters_for(facts, main_snapshot(home), thread)
-            text = render_boundary(strand, gen, thread, letters,
-                                   state.shown.get(strand, set()), threads,
-                                   fuel(home, shells[strand]) if shells.get(strand) else "", settled,
-                                   channels, opened=table, plan=_plan(home, thread, facts),
-                                   replies={k: f.reply_to for k, f in letter_owners(facts, main_snapshot(home)).items()})
-            path = home.room(strand) / "port" / "in" / "boundary.md"
-            if not path.is_file() or path.read_text() != text:
-                atomic_write(path, text)
-        elif strand in bodies:
-            # _reap writes the same exit for a watched or inherited holder.
-            continue
-        elif strand in pending and pending[strand].kind in {"body.pending", "body.parked"}:
-            if time.time() >= pending[strand].data.get("until", 0):
-                facts = _start(home, strand, thread, gen, bodies, facts)
-        else:
-            # An orphaned attempt still owes the same end and drain observations.
-            bodies[strand] = Body(strand, thread, gen)
-
-    return facts
+@dataclass
+class BodyContext:
+    thread: str
+    shell: str = ""
+    core: str = ""
+    gauge: dict | None = None
+    empty: dict | None = None
+    pid: int = 0
+    why: str = ""
+    failure: str = ""
+    repos: list[tuple[str, str]] | None = None
 
 
-def _fact_for(facts: list[Fact], kind: str, strand: str, gen: int) -> Fact | None:
-    return next((f for f in reversed(facts) if f.kind == kind
-                 and f.data.get("strand") == strand and f.data.get("gen") == gen), None)
-
-
-def _stop_settled(home: Home, bodies: dict[str, Body], facts: list[Fact]) -> list[Fact]:
-    """End a body whose thread is settled and that did not leave.
-
-    ``stop_grace`` is the window in which the body may see ``settled:`` at
-    its next boundary and exit. ``_reap`` then records ``settled``. A body
-    still holding ``.body`` after the grace is signalled, and the attempt
-    ends ``stopped`` because ``body.stopped`` is already in the ledger.
-    The room is left as it is.
-    """
-    if not bodies:
-        return facts
+def _observe_body(home, facts, strand, thread, gen, bodies, choice=None, *,
+                  force=False, repos=None):
+    """Read the five observations once; proof is asked only at a stop row."""
     from .config import load_config
     from .lifecycle import CLOSED, closing_commit, read_thread
-    grace = load_config(home.root).stop_grace
-    now = time.monotonic()
-    for strand, body in list(bodies.items()):
-        room = home.room(strand)
-        if not body_alive(room):
-            body.stop_after = None
-            continue
-        if read_thread(home, body.thread).get("status") not in CLOSED:
-            body.stop_after = None
-            continue
-        marked = _fact_for(facts, "body.stopped", strand, body.gen) is not None
-        if not marked:
-            if body.stop_after is None:
-                body.stop_after = now + grace
-            if now < body.stop_after:
-                continue
-        start = _fact_for(facts, "body.started", strand, body.gen)
+    from .usage import reading
+    now, config = time.time(), load_config(home.root)
+    alive = body_alive(home.room(strand))
+    closed = read_thread(home, thread).get("status") in CLOSED
+    context = BodyContext(thread, repos=repos)
+    prior = [f for f in facts if f.data.get("strand") == strand]
+    choice_fact = next((f for f in reversed(prior) if f.kind in
+                       {"body.started", "body.pending", "body.parked"}
+                       and f.data.get("gen") == gen), None)
+    if choice_fact:
+        context.shell, context.core = choice_fact.data["shell"], choice_fact.data["core"]
+    elif choice:
+        context.shell, context.core = choice
+    start = fact_for(facts, "body.started", strand, gen)
+    try:
+        context.pid = int(start.data["pid"]) if start else 0
+    except (KeyError, TypeError, ValueError):
+        context.pid = 0
+    if closed:
+        context.why = closing_commit(home, thread)[1] or f"thread {thread} settled"
+    pending = fact_for(facts, "body.parked", strand, gen)
+    state = state_of(facts, strand, gen)
+    gauge, until = "ok", 0
+    # Deferred starts before their reset do not read the gauge.
+    if context.shell and not (state == "parked" and pending
+                              and now < pending.data.get("until", 0) and not force):
+        after = max((datetime.fromisoformat(f.at).timestamp() for f in prior
+                     if f.kind in {"body.exited", "body.parked"}), default=0) if not alive else 0
+        context.gauge = {"windows": []} if force else reading(home, context.shell, after)
+        gauge = "unreadable" if context.gauge is None else "ok"
+        empty = next((w for w in context.gauge["windows"] if w["left_pct"] <= config.hold_floor_pct), None) if context.gauge else None
+        if empty:
+            context.empty = empty
+            gauge = "empty"
+            try:
+                until = datetime.fromisoformat(empty["resets_at"]).timestamp()
+            except (ValueError, TypeError, KeyError):
+                until = 0
+            until = until if until > now else now + 900
+    proven = None
+    leaving = fact_for(facts, "body.leaving", strand, gen)
+    due = leaving is not None and now >= leaving.data["deadline"]
+    if alive and closed and (state in {"stopping", "unidentified"} or state == "leaving" and due):
+        body = bodies.get(strand)
+        proven = _proven_body(home.room(strand), context.pid,
+                              str(start.data.get("lstart") or "") if start else "",
+                              body.proc if body else None, alive=alive)
+    observation = Observation(strand, gen, alive, closed, gauge, now, proven,
+                              until=until, force=force, stop_grace=config.stop_grace,
+                              orphan=state == "wanted" and choice is None)
+    return observation, context
+
+
+def _body_fuel(context):
+    parts = [f"{w['name']} {w['left_pct']:g}%" for w in context.gauge["windows"]] if context.gauge else []
+    return f"fuel {context.shell} " + " ".join(parts) if parts else ""
+
+
+def _boundary(home, facts, strand, gen, context):
+    from .threads import thread_table
+    main, state = main_snapshot(home), fold(facts)
+    text = render_boundary(
+        strand, gen, context.thread, letters_for(facts, main, context.thread),
+        state.shown.get(strand, set()), sender_threads(facts), _body_fuel(context),
+        context.why if context.why else None, reply_channels(facts),
+        opened=thread_table(home, facts), plan=_plan(home, context.thread, facts),
+        replies={k: f.reply_to for k, f in letter_owners(facts, main).items()},
+    )
+    path = home.room(strand) / "port/in/boundary.md"
+    if not path.is_file() or path.read_text() != text:
+        atomic_write(path, text)
+
+
+def _execute_body(home, bodies, facts, observation, context, commands=None):
+    """Execute the named hands, feeding preparation failures back to the table."""
+    o, c = observation, context
+    strand, gen, thread = o.strand, o.gen, c.thread
+    data = {"strand": strand, "gen": gen}
+    room, proc, log, code = home.room(strand), None, None, None
+    letters = []
+    commands = decide(facts, [o]) if commands is None else commands
+    if any(command.name == "prepare" for command in commands) and _refuse_author(home, facts, thread):
+        return facts
+    for command in commands:
+        name = command.name
         try:
-            pid = int(start.data["pid"]) if start is not None else 0
-        except (TypeError, ValueError, KeyError):
-            pid = 0
-        lstart = str(start.data.get("lstart") or "") if start is not None else ""
-        if not _proven_body(room, pid, lstart, body.proc):
-            if _fact_for(facts, "body.unidentified", strand, body.gen) is None:
-                facts.append(_record(home, "body.unidentified", {
-                    "strand": strand, "gen": body.gen, "pid": pid,
-                    "why": (f"pid {pid} could not be proven to be the body "
-                            f"on thread {body.thread}"),
-                }, f"body.unidentified:{strand}:{body.gen}"))
-                _log(home, f"stop {strand}: pid {pid} is not a proven body; left it")
-            continue
-        if not marked:
-            _sha, why, _writer = closing_commit(home, body.thread)
-            why = why or f"thread {body.thread} settled"
-            facts.append(_record(home, "body.stopped", {
-                "strand": strand, "gen": body.gen, "pid": pid, "why": why,
-            }, f"body.stopped:{strand}:{body.gen}"))
-            _log(home, f"stop {strand} pid {pid}: {why}")
-        _end_group(pid)
+            if name == "prepare":
+                folder = resolve(home, c.shell)
+                letters = letters_for(facts, main_snapshot(home), thread)
+                room = _prepare(home, strand, thread, gen, letters, sender_threads(facts), facts,
+                                (folder / "jack").read_text().strip(),
+                                fuel=_body_fuel(c), repos=c.repos)
+                policy = _policy(home, thread)
+                if policy is not None:
+                    atomic_write(room / "port/policy", policy + "\n")
+            elif name == "shown":
+                facts.append(_record(home, "shown", {**data, "ids": [str(f.data["id"]) for f in letters]},
+                                     f"shown:wake:{strand}:{gen}:{mint(6)}"))
+            elif name == "spawn":
+                readme = _readme(room, thread)
+                proc, log = _spawn(room, [str(folder / "run"), str(room), c.core], c.shell, thread)
+        except Exception as exc:
+            # Only preparation / spawn failures end a failed start. A failed
+            # ledger write, signal or drain must still reach the loop's logger.
+            if name not in {"prepare", "shown", "spawn"}:
+                raise
+            c.failure = f"{type(exc).__name__}: {exc}"
+            _log(home, f"start failed {strand}: {c.failure}")
+            return _execute_body(home, bodies, facts, replace(o, failure=c.failure), c)
+        if name == "started":
+            started_at = _ps_field(proc.pid, "lstart") or ""
+            facts.append(_record(home, "body.started", {
+                **data, "pid": proc.pid, "shell": c.shell, "core": c.core, "readme": readme,
+                **({"lstart": started_at} if started_at else {}),
+            }, f"body.started:{strand}:{gen}:{proc.pid}:{mint(6)}"))
+            bodies[strand] = Body(strand, thread, gen, proc, log)
+            _log(home, f"start {strand} thread {thread} gen {gen} pid {proc.pid} {c.shell}/{c.core}")
+        elif name in {"pending", "park"}:
+            kind = "body.pending" if name == "pending" else "body.parked"
+            extra = {}
+            if name == "park":
+                extra = {"window": c.empty["name"], "left_pct": c.empty["left_pct"], "until": o.until}
+            facts.append(_record(home, kind, {**data, "shell": c.shell, "core": c.core, **extra},
+                                 f"{kind}:{strand}:{mint(6)}"))
+        elif name in {"leaving", "stayed", "stopped", "unidentified"}:
+            kind = "body." + name
+            extra = {"deadline": command.deadline} if name == "leaving" else {}
+            if name in {"stopped", "unidentified"}:
+                extra.update(pid=c.pid, why=c.why if name == "stopped" else
+                             f"pid {c.pid} could not be proven to be the body on thread {thread}")
+            if name in {"leaving", "stayed"} or fact_for(facts, kind, strand, gen) is None:
+                facts.append(_record(home, kind, {**data, **extra},
+                                     f"{kind}:{strand}:{gen}:{mint(6)}" if name in {"leaving", "stayed"} else f"{kind}:{strand}:{gen}"))
+            if name in {"stopped", "unidentified"}:
+                _log(home, f"{name} {strand} pid {c.pid}: {extra['why']}")
+        elif name == "signal":
+            _end_group(c.pid)
+            # A signal is a command with an outcome. Collect it in the same
+            # tick when the body has left, as the old stop/reap sequence did.
+            if not body_alive(room):
+                return _execute_body(home, bodies, facts, replace(o, alive=False), c)
+        elif name == "boundary":
+            _boundary(home, facts, strand, gen, c)
+        elif name == "collect":
+            body = bodies.pop(strand, None)
+            if body:
+                code = _collect_exit(body)
+                body.close_log()
+        elif name == "drain":
+            facts = _drain_strand(home, facts, strand)
+        elif name == "exit":
+            if fact_for(facts, "body.exited", strand, gen) is None:
+                facts.append(_record(home, "body.exited", {**data, "code": code,
+                                     **({"why": c.failure} if c.failure else {})},
+                                     f"body.exited:{strand}:{gen}:{mint(6)}"))
+                _log(home, f"exit {strand} code {code}")
+        elif name.startswith("end"):
+            if name == "end_failed":
+                cause = "failed"
+                letters = letters_for(facts, main_snapshot(home), thread)
+            elif name == "end_settled":
+                cause, letters = "settled", []
+            else:
+                # Drain can accept a last molt or answer: use the resulting
+                # facts to decide the cause, not the pre-drain snapshot.
+                from .bodies import exit_cause
+                shown = fold(facts).shown.get(strand, set())
+                letters = [f for f in letters_for(facts, main_snapshot(home), thread) if f.id in shown]
+                cause = exit_cause(facts, o, owed=bool(letters))
+            facts = _end_attempt(home, facts, strand, thread, gen, code, letters, cause, c.failure)
+        elif name == "drained":
+            if not fact_for(facts, "port.drained", strand, gen):
+                facts = _drained(home, facts, strand, thread, gen)
+        elif name == "release":
+            facts = _release(home, facts, strand, thread, gen)
     return facts
+
+
+def _advance_body(home, strand, thread, gen, bodies, facts, choice=None, *, force=False, repos=None):
+    observation, context = _observe_body(home, facts, strand, thread, gen, bodies,
+                                         choice, force=force, repos=repos)
+    try:
+        return _execute_body(home, bodies, facts, observation, context)
+    except ValueError as exc:
+        _log(home, str(exc))
+        raise
+
+
+def _advance_bodies(home, bodies, facts):
+    """Refresh/start before routing; leave stop/collection commands after it."""
+    from .router import install_of
+    holders = fold(facts).holder
+    targets = {strand: (thread, gen) for thread, (strand, gen) in holders.items()
+               if install_of(strand) == home.install_id()}
+    # A locally spawned process can outlive a fenced lease. Keep collecting
+    # that handle as the old _reap did; the ledger supplies its identity.
+    for strand in bodies:
+        lease = next((f for f in reversed(facts) if f.kind == "lease"
+                      and f.data.get("strand") == strand), None)
+        if lease:
+            targets.setdefault(strand, (lease.data["thread"], lease.data["gen"]))
+    deferred = []
+    for strand, (thread, gen) in targets.items():
+        if state_of(facts, strand, gen) in {"pending", "parked"}:
+            facts = _start(home, strand, thread, gen, bodies, facts)
+            continue
+        observation, context = _observe_body(home, facts, strand, thread, gen, bodies)
+        try:
+            commands = decide(facts, [observation])
+        except ValueError as exc:
+            _log(home, str(exc))
+            raise
+        before = [c for c in commands if c.name in {"boundary", "leaving", "stayed"}]
+        after = [c for c in commands if c not in before]
+        facts = _execute_body(home, bodies, facts, observation, context, before)
+        deferred.append((observation, context, after))
+    return facts, deferred
 
 
 def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
@@ -1114,13 +1128,13 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     facts = read_facts(home)
     facts = router.begin_tick(facts)
     facts = _ingest(home, facts, router.config.router_ttl)
-    facts = _refresh_holders(home, bodies, facts)
+    facts, deferred = _advance_bodies(home, bodies, facts)
     # Time enters the owner table once, using only the facts already held.
     facts = observe_due(home, facts, router.armed())
     facts = router.route(facts, bodies, (adapter, core))
     facts = router.speak_out(facts)
-    facts = _stop_settled(home, bodies, facts)
-    facts = _reap(home, bodies, facts)
+    for observation, context, commands in deferred:
+        facts = _execute_body(home, bodies, facts, observation, context, commands)
 
 
 def _pause(stop, seconds: float) -> bool:
