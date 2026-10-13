@@ -39,7 +39,9 @@ def _platform(system: str | None) -> str:
 
 
 def _interpreter() -> str:
-    return str(Path(sys.executable).resolve())
+    # Resolving a virtualenv symlink would select the base interpreter and
+    # discard the environment that has brnrd installed. Freeze this Python.
+    return os.path.abspath(sys.executable)
 
 
 def _program(home: Path) -> list[str]:

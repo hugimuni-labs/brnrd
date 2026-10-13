@@ -129,7 +129,7 @@ def test_macos_install_freezes_the_home_and_abandons_the_group(tmp_path, capsys)
     assert code == 0
     plist = macos.plist_path(home=tmp_path / "agents", label=service.LABEL)
     data = plistlib.loads(plist.read_bytes())
-    interpreter = str(Path(sys.executable).resolve())
+    interpreter = str(Path(sys.executable).absolute())
     assert data["Label"] == "dev.brnrd.loom"
     assert data["AbandonProcessGroup"] is True
     assert data["ProgramArguments"][0] == interpreter
@@ -241,7 +241,7 @@ def test_linux_unit_kills_only_the_process_and_names_the_home(tmp_path, monkeypa
     assert code == 0
     assert box.slept == [1.25]
     text = linux.unit_path(service.UNIT).read_text(encoding="utf-8")
-    interpreter = str(Path(sys.executable).resolve())
+    interpreter = str(Path(sys.executable).absolute())
     assert "KillMode=process" in text
     assert str(home.resolve()) in text
     assert interpreter in text
@@ -508,3 +508,27 @@ def test_start_does_not_trust_failed_manager_pid_readback(tmp_path, monkeypatch,
     kwargs["run"] = failed_read
     assert service.main(["start"], **kwargs) == 1
     assert "pid: 4242" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("system", ["Linux", "Darwin"])
+def test_install_keeps_virtualenv_interpreter_symlink(tmp_path, monkeypatch, system):
+    home = tmp_path / "home"
+    _body(home)
+    python = tmp_path / "venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.symlink_to(sys.executable)
+    monkeypatch.setattr(sys, "executable", str(python))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(linux, "supported", lambda: True)
+    box = _Linux() if system == "Linux" else _Mac()
+    assert service.main(["install", "--home", str(home), "--no-start"],
+                        run=box.run, agents_home=tmp_path / "user", system=system) == 0
+    if system == "Darwin":
+        data = plistlib.loads(macos.plist_path(home=tmp_path / "user", label=service.LABEL).read_bytes())
+        assert data["ProgramArguments"][0] == str(python)
+    else:
+        import shlex
+        text = linux.unit_path(service.UNIT).read_text()
+        args = shlex.split(next(line.split("=", 1)[1] for line in text.splitlines() if line.startswith("ExecStart=")))
+        assert args[0] == str(python)
