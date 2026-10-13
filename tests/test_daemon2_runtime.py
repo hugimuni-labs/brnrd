@@ -694,6 +694,48 @@ def test_stop_from_schedule_seat_reaches_child_under_item_ask(tmp_path: Path) ->
     assert len(completed) == 1 and completed[0]["spawn_stopped"]
 
 
+def _stop_from_another_run(tmp_path: Path, *, seat_conversation: str) -> Daemon2:
+    """A strand of ``run-parent`` in conversation ``c`` has submitted and is
+    awaiting; a later seat with its own run id stages ``stop: edge-1``."""
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Test\n")
+    inbox = home / "dispatch" / "inbox"
+    protocol.create_event(inbox, "telegram", "stop the predecessor's child",
+                          conversation_key=seat_conversation, ask_id="ask-1")
+    binary = tmp_path / "successor-shell"
+    _verb_shell(binary, ("stop.md", "---\nstop: edge-1\nreason: seat molted\n---\n"))
+    runtime = Daemon2(repo, home, runtime_dir=tmp_path / "runtime",
+                      runner_name="fake", runner_config={"runner_cmd": [str(binary)]},
+                      tick_seconds=0.02, worktree_env=False)
+    runtime.supervisor.register("ask-1", "c", "run-parent", "edge-1", "run-child")
+    runtime.supervisor.returned("ask-1", "c", "run-parent", "edge-1", "run-child",
+                                report=str(tmp_path / "report.md"), branch="brr/child")
+    runtime._run_id = lambda: "run-successor"
+    assert runtime.once(role="resident") is not None
+    return runtime
+
+
+def test_stop_from_successor_seat_reaches_predecessors_child(tmp_path: Path) -> None:
+    """#2288: a seat that molts leaves its awaiting strands to the next run
+    on the same conversation, which must be able to stop them."""
+    runtime = _stop_from_another_run(tmp_path, seat_conversation="c")
+    assert runtime.supervisor.children("ask-1")["edge-1"].status == "stopped"
+    completed = [event for event in runtime.door.pending()
+                 if event["source"] == "spawn_completed"]
+    assert len(completed) == 1 and completed[0]["spawn_stopped"]
+    assert completed[0]["spawn_parent_run_id"] == "run-successor"
+
+
+def test_stop_from_another_conversation_is_refused(tmp_path: Path) -> None:
+    """The same ask reached from a different conversation owns nothing."""
+    runtime = _stop_from_another_run(tmp_path, seat_conversation="other")
+    assert runtime.supervisor.children("ask-1")["edge-1"].status == "returned"
+    assert not [event for event in runtime.door.pending()
+                if event["source"] == "spawn_completed"]
+
+
 def test_stop_terminates_running_child_shell(tmp_path: Path) -> None:
     home = tmp_path / "home"
     repo = tmp_path / "repo"

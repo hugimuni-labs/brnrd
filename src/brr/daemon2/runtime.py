@@ -947,8 +947,11 @@ class Daemon2:
                     "(already finished, never dispatched here, or the id is wrong)",
                     source_file=path.name, verb="stop")
                 return
-            if child.parent != state["run_id"] or child.conversation != state["conversation"]:
-                raise ValueError("stop target is not an owned child")
+            # Ownership is the conversation, as for ``to:``: a seat that
+            # molts hands its strands to its successor, whose run id differs
+            # (#2288). Comparing the parent run left them unstoppable.
+            if child.conversation != state["conversation"]:
+                raise ValueError("stop target is not a child of this conversation")
             if child.status == "stopped":
                 raise ValueError("stop target is already stopped")
             if child_event is None:
