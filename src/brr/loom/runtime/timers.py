@@ -51,17 +51,20 @@ def observe_due(home: Home, facts: list, armed: bool) -> list:
     if not armed:
         return facts
     seen = {fact.id for fact in facts if fact.kind == "letter.due"}
-    waiting = {fact.id for fact in facts if fact.kind == "letter"
-               and fact.data.get("at") and f"due:{fact.id}" not in seen}
-    if not waiting:
+    now = datetime.now(timezone.utc)
+    # The clock is read before anything is folded: a letter due in three days
+    # costs each tick one comparison, never a pass over the whole ledger.
+    passed = set()
+    for fact in facts:
+        if fact.kind == "letter" and fact.data.get("at") and f"due:{fact.id}" not in seen:
+            due = parse_instant(fact.data["at"])
+            if due is not None and due <= now:
+                passed.add(fact.id)
+    if not passed:
         return facts
     state = fold(facts)
-    now = datetime.now(timezone.utc)
     for letter in state.accepted:
-        if letter.kind != "letter" or letter.id not in waiting or letter.id in state.handled:
-            continue
-        due = parse_instant(letter.data["at"])
-        if due is None or due > now:
+        if letter.kind != "letter" or letter.id not in passed or letter.id in state.handled:
             continue
         stored = append(home, Fact(
             kind="letter.due", by=f"loom:{home.install_id()}", id=f"due:{letter.id}",
