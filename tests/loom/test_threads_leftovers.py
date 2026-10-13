@@ -67,10 +67,10 @@ def _rows(text):
 def test_threads_self_commit_and_current_main(rooms):
     home, room, _ = rooms
     sha = _note(room / 'self', 'self-work')
-    assert _rows(_threads(home))['work']['left'] == '1'
+    assert _rows(_threads(home, '--left'))['work']['left'] == '1'
     detail = _threads(home, '--left', 'work')
     assert str(room / 'self') in detail and sha in detail and 'self-work' in detail
-    assert _rows(_threads(home))['clean']['left'] == '—'
+    assert _rows(_threads(home, '--left'))['clean']['left'] == '—'
     # Main moves after the clone's birth. No cached origin ref can prove this.
     git(home.root / 'self', 'fetch', str(room / 'self'), 'HEAD')
     git(home.root / 'self', 'merge', '--ff-only', 'FETCH_HEAD')
@@ -80,7 +80,7 @@ def test_threads_self_commit_and_current_main(rooms):
 def test_threads_project_commit_and_current_source(rooms):
     home, room, source = rooms
     sha = _note(room / 'widget', 'project-work')
-    assert _rows(_threads(home))['work']['left'] == '1'
+    assert _rows(_threads(home, '--left'))['work']['left'] == '1'
     detail = _threads(home, '--left', 'work')
     assert str(room / 'widget') in detail and sha in detail and 'project-work' in detail
     git(source, 'fetch', str(room / 'widget'), 'HEAD:refs/heads/landed')
@@ -93,7 +93,7 @@ def test_threads_uncommitted_edits(rooms, repo):
     checkout = room / repo
     (checkout / 'README.md').write_text('dirty tracked file')
     (checkout / 'untracked file').write_text('new')
-    assert _rows(_threads(home))['work']['left'] == '2'
+    assert _rows(_threads(home, '--left'))['work']['left'] == '2'
     detail = _threads(home, '--left', 'work')
     assert str(checkout) in detail and "edit 'README.md'" in detail and "edit 'untracked file'" in detail
 
@@ -109,7 +109,7 @@ def test_threads_publish_from_moves_the_commit_to_the_opener(rooms):
     assert proc.returncode == 0, proc.stderr
     assert _threads(home, '--left', 'work') == ''
     assert sha in _threads(home, '--left', 'top')
-    assert _rows(_threads(home))['top']['left'] == '1'
+    assert _rows(_threads(home, '--left'))['top']['left'] == '1'
     # A later worker commit is still only in the worker.
     late = _note(room / 'widget', 'late-work')
     assert late in _threads(home, '--left', 'work')
@@ -121,7 +121,7 @@ def test_threads_molt_successor_inherits_both_repos_but_not_edits(rooms):
     own = _note(room / 'self', 'self-inherited')
     project = _note(room / 'widget', 'project-inherited')
     (room / 'self' / 'not-inherited').write_text('dirty')
-    assert _rows(_threads(home))['work']['left'] == '3'
+    assert _rows(_threads(home, '--left'))['work']['left'] == '3'
     successor = '0001-successor'
     _lease(home, 'work', successor, 2, parent=room.name)
     facts = read_facts(home)
@@ -133,15 +133,15 @@ def test_threads_molt_successor_inherits_both_repos_but_not_edits(rooms):
     predecessor = detail.split(str(room / 'self'), 1)[1].split(str(home.room(successor)), 1)[0]
     assert own not in predecessor and project not in predecessor
     assert 'not-inherited' in predecessor
-    assert _rows(_threads(home))['work']['left'] == '3'
+    assert _rows(_threads(home, '--left'))['work']['left'] == '3'
 
 
 def test_threads_clean_and_gone_rooms_have_no_count(rooms):
     home, room, _ = rooms
-    assert 'left' not in _rows(_threads(home))['work']
+    assert 'left' not in _rows(_threads(home, '--left'))['work']
     assert _threads(home, '--left', 'work') == ''
     shutil.rmtree(room)
-    assert 'left' not in _rows(_threads(home))['work']
+    assert 'left' not in _rows(_threads(home, '--left'))['work']
     assert _threads(home, '--left', 'work') == ''
 
 
@@ -151,11 +151,11 @@ def test_threads_failed_inspection_is_visible_and_nonempty(rooms):
     # The mutable origin is irrelevant: the declared source still reads clean.
     assert _threads(home, '--left', 'work') == ''
     shutil.rmtree(home.root.parent / 'sources')
-    assert _rows(_threads(home))['work']['left'] == '?'
+    assert _rows(_threads(home, '--left'))['work']['left'] == '?'
     assert 'inspection failed:' in _threads(home, '--left', 'work')
 
 
-def test_tick_does_not_inspect_leftovers_but_threads_does(rooms, monkeypatch):
+def test_neither_tick_nor_plain_table_inspects_rooms_but_left_does(rooms, monkeypatch):
     import brr.loom.runtime.leftovers as inventory
     from brr.cli import main
     home, _, _ = rooms
@@ -165,6 +165,7 @@ def test_tick_does_not_inspect_leftovers_but_threads_does(rooms, monkeypatch):
 
     monkeypatch.setattr(inventory, 'leftovers', forbidden)
     tick_once(home, {}, 'fake', 'haiku')
+    main(['threads', '--home', str(home.root)])
     # Proves the patched function is the one used by real CLI argv.
     with pytest.raises(AssertionError, match='leftovers called'):
-        main(['threads', '--home', str(home.root)])
+        main(['threads', '--home', str(home.root), '--left'])

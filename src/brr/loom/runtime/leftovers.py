@@ -94,7 +94,7 @@ def leftovers(home, strand: str) -> tuple[Leftover, ...]:
             commits = _uncovered(checkout, ['--branches'], covered)
             held = set()
             for other, owner in writers.items():
-                if other == strand:
+                if other == strand or len(held) == len(commits):
                     continue
                 copied = (checkout.name != 'self' and thread and _opened(home, owner, thread)
                           and dict(repos(seat_text(home, owner))).get(checkout.name) == declared.get(checkout.name))
@@ -102,7 +102,9 @@ def leftovers(home, strand: str) -> tuple[Leftover, ...]:
                     continue
                 peer = home.room(other) / checkout.name
                 if (peer / '.git').exists():
-                    held.update(sha for sha, _ in _uncovered(peer, ['--branches'], []))
+                    # Ask the peer about these commits only; never walk its history.
+                    held.update(sha for sha, _ in commits if sha not in held and git(
+                        peer, 'branch', '--contains', sha, check=False).stdout.strip())
             commits = tuple((sha, subject) for sha, subject in commits if sha not in held)
             if commits or edits:
                 result.append(Leftover(checkout, commits, edits))

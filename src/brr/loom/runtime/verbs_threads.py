@@ -15,7 +15,9 @@ def _threads_arguments(parser) -> None:
     parser.add_argument("--home")
     parser.add_argument("--room")
     parser.add_argument("--force", metavar="THREAD", help="start a paced thread before its reset")
-    parser.add_argument("--left", metavar="THREAD", help="list retained paths and commits in a thread's rooms")
+    parser.add_argument("--left", metavar="THREAD", nargs="?", const="",
+                        help="inspect the rooms: alone, the table gains a `left` count; "
+                             "with a thread, its retained paths and commits")
 
 
 def cmd_threads(args) -> int:
@@ -55,7 +57,12 @@ def cmd_threads(args) -> int:
             sys.stderr.write(str(exc) + '\n')
             return 1
     facts = read_facts(home)
-    left = left_by_thread(home, facts, args.left)
+    # The inventory runs git in every room and fetches each project source,
+    # so the plain table never pays for it: only --left asks.
+    if args.left is None:
+        sys.stdout.write(render_table(thread_table(home, facts)))
+        return 0
+    left = left_by_thread(home, facts, args.left or None)
     if args.left:
         sys.stdout.write(render_left(args.left, left.get(args.left, [])))
         return 0

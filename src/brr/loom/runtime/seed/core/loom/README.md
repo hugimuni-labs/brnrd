@@ -53,3 +53,8 @@ start and records its ordinary `body.started` observation. It grants no
 ongoing exemption from the gauge. A failed letter returns to its author, who
 may resend or note the failure closed; operator debt is listed with the note
 command that retires it. Only the opener closes or reopens a child thread.
+
+`brnrd threads --left` also looks inside every room and adds a `left` count:
+commits and edited files that exist only there (`?` when a room could not be
+read). `brnrd threads --left <thread>` lists them with their paths. It runs git
+in each room and fetches each project source, so the plain table does not.
