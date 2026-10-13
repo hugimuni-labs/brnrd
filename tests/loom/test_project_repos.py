@@ -451,6 +451,24 @@ def test_a_source_that_begins_with_a_dash_is_refused(tmp_path: Path) -> None:
         _kill(read_facts(home))
 
 
+def test_a_relative_source_is_refused(tmp_path: Path) -> None:
+    # A mirror records a relative source as an absolute path, so the second
+    # start would read its own mirror as holding another source.
+    root = _home(tmp_path)
+    _seat(root, "work", ["../widget.git"])
+    home = Home(root)
+    try:
+        _tick(home, {}, Router(home))
+        facts = read_facts(home)
+        assert not any(fact.kind == "body.started" for fact in facts), _log(root)
+        notes = [fact for fact in facts if fact.kind == "letter"
+                 and "is a relative path" in fact.data.get("body", "")]
+        assert len(notes) == 1
+        assert "correct the repo lines" in notes[0].data["body"]
+    finally:
+        _kill(read_facts(home))
+
+
 def test_a_dashed_relative_source_is_cloned_as_a_url(tmp_path: Path) -> None:
     root = _home(tmp_path)
     work = tmp_path / "dashed-work"
