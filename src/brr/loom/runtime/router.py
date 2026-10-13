@@ -210,12 +210,24 @@ class Router:
                     {"id": f.id, "outcome": "operator", "reason": "for: other brnrd"}
                     for f in letters]}, f"for-other:{thread}:{letters[-1].id}")
                 continue
-            from .adapters import at_birth
+            from .adapters import RepoSeatError, at_birth, repos as seat_repos, seat_text
+            from .repos import AuthorError, require_body_author
             try:
-                choice = at_birth(home, thread, default)
+                text = seat_text(home, thread)
+                choice = at_birth(home, thread, default, text)
+                declared = seat_repos(text)
+                require_body_author(home)
             except (ValueError, OSError) as exc:
+                if isinstance(exc, RepoSeatError):
+                    hint = "correct the repo lines in its seat"
+                elif isinstance(exc, AuthorError) and exc.enrolled:
+                    hint = "choose an author that is not an enrolled person"
+                elif isinstance(exc, AuthorError):
+                    hint = "set author in loom/config.toml to Name <email>"
+                else:
+                    hint = "correct its body: shell/core choice"
                 notice(home, facts, "body", thread, f"thread {thread}: {exc}",
-                       "correct its body: shell/core choice", thread=thread)
+                       hint, thread=thread)
                 continue
             if choice[0] == "fake" and _policy(home, thread) is None:
                 self._keep(facts, "letter.disposed", {"dispositions": [
@@ -246,11 +258,11 @@ class Router:
             except LedgerConflict:
                 continue
             facts.append(stored)
-            pending.append((strand, thread, gen, choice))
+            pending.append((strand, thread, gen, choice, declared))
         # Clone/start is slow under load; doing it inside the grant loop burned
         # the skew window so later threads never got a lease this generation.
-        for strand, thread, gen, choice in pending:
-            facts = _start(home, strand, thread, gen, bodies, facts, choice)
+        for strand, thread, gen, choice, declared in pending:
+            facts = _start(home, strand, thread, gen, bodies, facts, choice, repos=declared)
         if not self.armed():
             return facts
         facts = self._unrouted(facts, set(threads))

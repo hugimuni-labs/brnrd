@@ -31,7 +31,8 @@ from .owners import letters_for, letter_owners
 from .lifecycle import main_snapshot
 from .timers import fire as fire_timers
 from .selfrepo import (
-    AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, git, room as clone_room, run_wake,
+    AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, git,
+    room as clone_room, run_wake,
 )
 
 SRC = str(Path(__file__).resolve().parents[3])
@@ -61,16 +62,32 @@ def _log(home: Home, message: str) -> None:
     sys.stderr.write(line)
 
 
+def _commit_identity(room: Path) -> tuple[str, str]:
+    """The home's author for a loom room, otherwise the loom's own.
+
+    A room the loom made is ``<home>/rooms/<strand>``. Anything else, including
+    a clone a test builds by hand, has no home author to read.
+    """
+    if room.parent.name != "rooms":
+        return AUTHOR_NAME, AUTHOR_EMAIL
+    from .repos import author_identity
+    found = author_identity(room.parent.parent)
+    return found if found is not None else (AUTHOR_NAME, AUTHOR_EMAIL)
+
+
 def _env(room: Path) -> dict[str, str]:
     env = _env_without_pin()
     parts = [part for part in env.get("PYTHONPATH", "").split(os.pathsep) if part]
     if SRC not in parts:
         parts.insert(0, SRC)
     env["PYTHONPATH"] = os.pathsep.join(parts)
-    # Human enrollment is for hand commits; a body must not inherit it.
+    # One identity for every repo a body touches, including a clone it makes
+    # itself. Clone config would cover only the clones the loom made, and an
+    # enrolled person's identity may push to main without a label.
+    name, email = _commit_identity(room)
     for role in ("AUTHOR", "COMMITTER"):
-        env[f"GIT_{role}_NAME"] = AUTHOR_NAME
-        env[f"GIT_{role}_EMAIL"] = AUTHOR_EMAIL
+        env[f"GIT_{role}_NAME"] = name
+        env[f"GIT_{role}_EMAIL"] = email
     env["BRNRD_ROOM"] = str(room)
     env["BRNRD_WAKE"] = str(room / "port" / "wake.md")
     env["BRNRD_JACK"] = (f"{shlex.quote(sys.executable)} -m brr.loom.runtime jack "
@@ -221,21 +238,23 @@ def _read_by_predecessors(facts: list[Fact], thread: str, strand: str,
 
 def _prepare(home: Home, strand: str, thread: str, gen: int,
              letters: list[Fact], threads: dict[str, str],
-             facts: list[Fact], jack: str, *, fuel: str = "") -> Path:
+             facts: list[Fact], jack: str, *, fuel: str = "",
+             repos: list[tuple[str, str]] | None = None) -> Path:
     room = home.room(strand).resolve()
     fresh = not (room / "self" / ".git").exists()
     clone = clone_room(home.root, strand)
-    if fresh:
-        lease = next((f for f in reversed(facts) if f.kind == "lease"
-                      and f.data.get("strand") == strand and f.data.get("gen") == gen), None)
-        parent = lease.data.get("parent") if lease else None
-        if parent:
-            source = home.room(parent) / "self"
-            if (source / ".git").exists():
-                git(clone, "fetch", str(source), f"strand/{parent}")
-                git(clone, "reset", "--hard", "FETCH_HEAD")
-            else:
-                _log(home, f"start {strand}: parent room {parent} gone; starting from main")
+    lease = next((f for f in reversed(facts) if f.kind == "lease"
+                  and f.data.get("strand") == strand and f.data.get("gen") == gen), None)
+    parent = lease.data.get("parent") if lease else None
+    if not isinstance(parent, str) or not parent:
+        parent = None
+    if fresh and parent:
+        source = home.room(parent) / "self"
+        if (source / ".git").exists():
+            git(clone, "fetch", str(source), f"strand/{parent}")
+            git(clone, "reset", "--hard", "FETCH_HEAD")
+        else:
+            _log(home, f"start {strand}: parent room {parent} gone; starting from main")
     (room / "port" / "in").mkdir(parents=True, exist_ok=True)
     (room / "port" / "out").mkdir(parents=True, exist_ok=True)
     wait_src = home.thread_dir(thread) / "wait"
@@ -270,8 +289,20 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
            if jack == "hand" else
            "when you're done, stop, and the jack holds you while letters may come\n")
     ))
+    if repos is None:
+        from .adapters import repos as seat_repos, seat_text
+        repos = seat_repos(seat_text(home, thread))
+    from .repos import prepare_repos
+    repo_text, failures = prepare_repos(home, strand, thread, repos, parent)
+    repo_file = None
+    if failures:
+        _log(home, f"start {strand}: {'; '.join(failures)}")
+    if repo_text:
+        repo_file = room / "port" / "repos"
+        atomic_write(repo_file, repo_text)
     with tempfile.TemporaryFile(mode="w+") as wake, tempfile.TemporaryFile(mode="w+") as why:
-        code = run_wake(clone, thread, owed_path, loom_part=part_path, stdout=wake, stderr=why)
+        code = run_wake(clone, thread, owed_path, loom_part=part_path, repos=repo_file,
+                        stdout=wake, stderr=why)
         why.seek(0)
         if code != 0:
             raise SelfError(f"wake exited {code}: {why.read().strip()}")
@@ -368,7 +399,8 @@ def _spawn(room: Path, argv: list[str], shell: str, thread: str) -> tuple[subpro
 
 
 def _start(home: Home, strand: str, thread: str, gen: int,
-           bodies: dict[str, Body], facts: list[Fact], choice=None, *, force=False) -> list[Fact]:
+           bodies: dict[str, Body], facts: list[Fact], choice=None, *, force=False,
+           repos: list[tuple[str, str]] | None = None) -> list[Fact]:
     """Serialize starts with the operator's explicit gauge override."""
     room = home.room(strand)
     room.mkdir(parents=True, exist_ok=True)
@@ -384,13 +416,37 @@ def _start(home: Home, strand: str, thread: str, gen: int,
             pending = pending_bodies(fold(current).accepted).get(strand)
             if not pending or pending.kind != "body.parked":
                 return current
-        return _launch(home, strand, thread, gen, bodies, current, choice, force=force)
+        return _launch(home, strand, thread, gen, bodies, current, choice, force=force,
+                       repos=repos)
+
+
+def _refuse_author(home: Home, facts: list[Fact], thread: str) -> bool:
+    """True when this start must not run. The notice is the router's.
+
+    ``route`` writes it before taking a lease. A pending or parked body is
+    restarted from ``_refresh_holders`` and never enters ``route``, so the
+    check also lives here, which is the one place every start passes.
+    """
+    from .repos import AuthorError, require_body_author
+    try:
+        require_body_author(home)
+    except AuthorError as exc:
+        if exc.enrolled:
+            hint = "choose an author that is not an enrolled person"
+        else:
+            hint = "set author in loom/config.toml to Name <email>"
+        notice(home, facts, "body", thread, f"thread {thread}: {exc}", hint, thread=thread)
+        return True
+    return False
 
 
 def _launch(home: Home, strand: str, thread: str, gen: int,
-            bodies: dict[str, Body], facts: list[Fact], choice=None, *, force=False) -> list[Fact]:
+            bodies: dict[str, Body], facts: list[Fact], choice=None, *, force=False,
+            repos: list[tuple[str, str]] | None = None) -> list[Fact]:
     """Launch one body; the gauge can defer a start without consuming letters."""
     if strand in bodies:
+        return facts
+    if _refuse_author(home, facts, thread):
         return facts
     letters = letters_for(facts, main_snapshot(home), thread)
     ids = [str(letter.data["id"]) for letter in letters]
@@ -430,7 +486,7 @@ def _launch(home: Home, strand: str, thread: str, gen: int,
         room = _prepare(
             home, strand, thread, gen, letters, sender_threads(facts), facts,
             (folder / "jack").read_text().strip(),
-            fuel=fuel(home, shell),
+            fuel=fuel(home, shell), repos=repos,
         )
         policy = _policy(home, thread)
         if policy is not None:

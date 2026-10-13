@@ -243,10 +243,11 @@ def _enroll_person_email(self_dir: Path) -> None:
     """List the person's git email in ``core/loom/people-commit``.
 
     Enrolled addresses may push without ``Loom-Label`` for hand commits.
-    Body processes receive the loom's AUTHOR/COMMITTER identity from
-    ``loom._env``; that identity is never enrolled, so an unlabeled raw
-    body push is refused by 20-labels. This is not a sandbox against a body
-    deliberately overriding its identity or forging a label.
+    Body processes receive one identity from ``loom._env``: the home's
+    ``author`` when set, otherwise the loom's. A home whose author email
+    is enrolled does not start a body, so an unlabeled raw body push is
+    refused by 20-labels. This is not a sandbox against a body deliberately
+    overriding its identity or forging a label.
     """
     proc = git(self_dir, "config", "--global", "user.email", check=False)
     email = proc.stdout.strip()
@@ -303,10 +304,24 @@ def init_self(home: Path, person: str | None = None, remote: str | None = None) 
     return f"initialized {self_dir} {sha}"
 
 
+def pin_clone(repo: Path) -> None:
+    """Give the clone no credential helper.
+
+    An empty ``credential.helper`` clears helpers inherited from the machine,
+    including one scoped to a URL. Commit identity is the body's environment,
+    which covers every clone it touches. A project checkout also refuses
+    ``git push origin``; a local source never asks a helper, so that refusal
+    is the checkout's push URL.
+    """
+    git(repo, "config", "credential.helper", "")
+
+
 def room(home: Path, strand: str) -> Path:
     """``home/rooms/<strand>/self``, a ``--shared`` clone on ``strand/<strand>``.
 
     A room that already exists is returned as it stands. A molt keeps its commits.
+    The clone has an empty credential helper. Commit identity is the body's
+    environment.
     """
     home = Path(home).resolve()
     strand = _segment(strand, "strand")
@@ -315,6 +330,7 @@ def room(home: Path, strand: str) -> Path:
         raise SelfError(f"no self at {source}; init first")
     dest = home / "rooms" / strand / "self"
     if (dest / ".git").exists():
+        pin_clone(dest)
         return dest
     if dest.exists():
         raise SelfError(f"{dest} exists and is not a clone; refusing to overwrite")
@@ -324,6 +340,7 @@ def room(home: Path, strand: str) -> Path:
     # The README driver lives on the room that rebases, not on the bare self.
     from brr.loom.runtime.merge_driver import install_merge_driver
     install_merge_driver(dest)
+    pin_clone(dest)
     return dest
 
 
@@ -355,7 +372,8 @@ def default_loom_part(clone: Path, thread: str) -> str:
 
 
 def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
-             loom_part: Path | None = None, stdout=None, stderr=None) -> int:
+             loom_part: Path | None = None, repos: Path | None = None,
+             stdout=None, stderr=None) -> int:
     """Exec the clone's ``core/loom/wake``. The prompt is its stdout; the code is its code."""
     _segment(thread, "thread")
     clone = resolve_clone(room_dir)
@@ -365,6 +383,8 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
     env = _env_without_pin()
     if loom_part is not None:
         env["LOOM_PART"] = str(loom_part)
+    if repos is not None:
+        env["LOOM_REPOS"] = str(repos)
     owed_file = None
     part_file = None
     try:

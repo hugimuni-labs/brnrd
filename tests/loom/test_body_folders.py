@@ -112,7 +112,7 @@ from brr.loom.runtime.selfrepo import git
 ctx = Ctx(Path(sys.argv[1]))
 ctx.owed()
 clone = ctx.room / "self"
-(clone / "threads/work/seat").write_text("# Execution choice\\nbody: other/small\\nrepo: ignored\\nwatch: ignored\\n")
+(clone / "threads/work/seat").write_text("# Execution choice\\nbody: other/small\\nrepo: /nowhere/ignored\\nwatch: ignored\\n")
 git(clone, "add", "threads/work/seat")
 git(clone, "commit", "-m", "Choose another body.")
 ctx.molt("use the landed seat")
