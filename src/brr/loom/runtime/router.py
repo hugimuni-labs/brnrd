@@ -196,8 +196,6 @@ class Router:
                 continue
             if not self.armed():
                 break
-            if any(body.thread == thread for body in bodies.values()):
-                continue
             facts = self._release_abandoned(facts, thread, body_alive)
             if holder(facts, thread):
                 continue
@@ -242,6 +240,7 @@ class Router:
             data = {
                 "thread": thread, "strand": strand, "gen": gen,
                 "install": home.install_id(), "router_gen": self.lease.gen,
+                "shell": choice[0], "core": choice[1], "repos": declared,
             }
             molts = {f.id: f for f in fold(facts).accepted if f.kind == "molt"}
             for letter in reversed(letters):

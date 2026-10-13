@@ -21,6 +21,9 @@ class MemoryBody:
     def __init__(self, rng, coverage):
         self.rng, self.coverage = rng, coverage
         self.facts = []
+        self.audit = {}
+        self.signals = []
+        self.current = None
         self.gen = 0
         self.alive = False
         self.now = 0.0
@@ -35,12 +38,23 @@ class MemoryBody:
     def add(self, kind, **data):
         self.facts.append(Fact(kind=kind, by="loom:aaaa", id=f"fact-{len(self.facts)}",
                                data={"strand": self.strand, "gen": self.gen, **data}))
+        self.audit[self.facts[-1].id] = self.current
 
     def check_prefix(self, o):
         # Rule 1: all generations, not just the current one.
         for kind in ("body.started", "body.exited", "attempt.ended"):
             ids = [(f.data["strand"], f.data["gen"]) for f in self.facts if f.kind == kind]
             assert len(ids) == len(set(ids)), (kind, ids)
+        # Rules 2–4 remain true on every later prefix too.
+        assert all(observation.proven is True for observation in self.signals)
+        for index, fact in enumerate(self.facts):
+            observation = self.audit[fact.id]
+            if fact.kind == "body.started":
+                assert not observation.closed
+            if fact.kind == "body.stopped":
+                leaving = fact_for(self.facts[:index], "body.leaving", fact.data["strand"], fact.data["gen"])
+                assert observation.closed and leaving is not None
+                assert observation.now >= leaving.data["deadline"]
         # Rule 5: release follows both ending and draining on this prefix.
         ended, drained = set(), set()
         for f in self.facts:
@@ -52,10 +66,14 @@ class MemoryBody:
             if f.kind == "released":
                 assert key in ended and key in drained
 
-    def step(self, o, *, crash_at_end=False):
-        previous = state_of(self.facts, self.strand, self.gen)
+    def step(self, o, *, crash_at_end=False, crash_at_exit=False):
+        self.current = o
+        previous = state_of(self.facts, self.strand, self.gen, alive=self.alive).name
         row = row_for(self.facts, o)
         self.coverage.add(row)
+        # Rule 6 is checked even when the executor crashes mid-decision.
+        if previous in LIVE and not o.alive:
+            assert TABLE[row].next == "ended"
         commands = decide(self.facts, [o])
         assert commands == decide(self.facts, [o])
         for c in commands:
@@ -64,9 +82,9 @@ class MemoryBody:
             if name == "signal":
                 # Rule 2: proof belongs to this decision, never an older fact.
                 assert o.proven is True
+                self.signals.append(o)
             elif name == "started":
-                # Rule 4. Generated starts are in the router's open-thread
-                # domain; the legacy closed-deferred exception is pinned below.
+                # Rule 4 includes closed deferred starts, without exceptions.
                 assert not o.closed
                 self.add("body.started", pid=123, shell="fake", core="echo")
                 self.alive = True
@@ -89,7 +107,10 @@ class MemoryBody:
             elif name == "exit":
                 if fact_for(self.facts, "body.exited", self.strand, self.gen) is None:
                     self.add("body.exited")
-            elif name in {"end", "end_failed"}:
+                if crash_at_exit:
+                    self.check_prefix(o)
+                    return
+            elif name in {"end", "end_failed", "end_settled"}:
                 cause = "failed" if name == "end_failed" else exit_cause(self.facts, o, owed=False)
                 if fact_for(self.facts, "attempt.ended", self.strand, self.gen) is None:
                     self.add("attempt.ended", cause=cause)
@@ -104,15 +125,12 @@ class MemoryBody:
             elif name not in {"prepare", "shown", "spawn", "boundary", "collect", "drain"}:
                 raise AssertionError(name)
             self.check_prefix(o)
-        # Rule 6 applies when an existing body loses its lock. Deferred starts
-        # have no lock to lose (the prose rule and start rows contradict).
-        if not o.alive and (previous in LIVE or o.orphan or previous == "ended"):
-            assert state_of(self.facts, self.strand, self.gen) == "ended"
-        expected = previous if TABLE[row].next == "same" else TABLE[row].next
-        if TABLE[row].commands:
-            # Adoption without a body.started cannot synthesize a ledger state.
-            if TABLE[row].observed != "adopted, open":
-                assert state_of(self.facts, self.strand, self.gen) == expected
+        # Rule 6 applies to lock-holding states; starts have no lock to lose.
+        if not o.alive and (previous in LIVE or previous in {"exited", "ended"}):
+            assert state_of(self.facts, self.strand, self.gen, alive=self.alive).name == "ended"
+        # The running closure carries the generation's proof marker forward.
+        expected = TABLE[row].next.split(" / ")
+        assert state_of(self.facts, self.strand, self.gen, alive=self.alive).name in expected
 
 
 def test_seeded_sequences_check_ledger_prefixes_and_reach_every_row():
@@ -123,10 +141,8 @@ def test_seeded_sequences_check_ledger_prefixes_and_reach_every_row():
         rng = random.Random(seed)
         body = MemoryBody(rng, coverage)
         for _ in range(350):
-            state = state_of(body.facts, body.strand, body.gen)
+            state = state_of(body.facts, body.strand, body.gen, alive=body.alive).name
             if state == "ended" and fact_for(body.facts, "released", body.strand, body.gen):
-                # Exercise the ended self row before beginning a new lease.
-                body.step(Observation(body.strand, body.gen, False, False, "ok", body.now))
                 body.new_generation()
                 state = "wanted"
             body.now += rng.uniform(0.1, 4)
@@ -135,25 +151,22 @@ def test_seeded_sequences_check_ledger_prefixes_and_reach_every_row():
             adopted = state == "wanted" and rng.random() < 0.08
             if adopted:
                 body.alive = True
-            closed = rng.random() < 0.65 if body.alive or state in LIVE else False
-            gauge = rng.choice(["ok", "ok", "unreadable", "empty"])
+            closed = rng.random() < 0.65
+            gauge = rng.choice(["ok", "ok", "refreshing", "empty"])
             failure = "spawn failed" if state in STARTABLE and not body.alive and rng.random() < 0.1 else ""
             o = Observation(body.strand, body.gen, body.alive, closed, gauge, body.now,
                             proven=rng.choice([True, False]), until=body.now + 3,
-                            stop_grace=1, failure=failure,
-                            orphan=state == "wanted" and not adopted and rng.random() < 0.12)
-            body.step(o, crash_at_end=not body.alive and rng.random() < 0.2)
+                            stop_grace=1, failure=failure)
+            body.step(o, crash_at_end=not body.alive and rng.random() < 0.2,
+                      crash_at_exit=not body.alive and rng.random() < 0.2)
     assert coverage == set(range(len(TABLE))), {i: TABLE[i] for i in set(range(len(TABLE))) - coverage}
 
 
-def test_table_rendering_is_the_code_table(capsys):
-    text = render_table()
-    print(text)
-    lines = capsys.readouterr().out.splitlines()
-    assert lines[:2] == ["| state | observed | next | commands |", "|---|---|---|---|"]
-    assert len(lines) == len(TABLE) + 2
-    for row, line in zip(TABLE, lines[2:]):
-        assert line == f"| {', '.join(row.states)} | {row.observed} | {row.next} | {', '.join(row.commands) or 'none'} |"
+def test_table_rendering_matches_checked_in_page():
+    from pathlib import Path
+    page = Path(__file__).resolve().parents[2] / "src/brr/loom/runtime/bodies.md"
+    assert render_table() == page.read_text().strip()
+    assert len(TABLE) == 18
 
 
 def test_an_unlisted_pair_logs_and_raises(caplog):
@@ -165,30 +178,53 @@ def test_an_unlisted_pair_logs_and_raises(caplog):
     assert "leaving" in caplog.text
 
 
-def test_state_of_is_scoped_to_generation_and_latest_lifecycle_fact():
+def test_state_of_is_scoped_and_retains_all_generation_markers():
     facts = [Fact(by="loom:aaaa", kind="body.started", data={"strand": "s", "gen": 1}),
              Fact(by="loom:aaaa", kind="body.leaving", data={"strand": "s", "gen": 1, "deadline": 3}),
              Fact(by="loom:aaaa", kind="body.stayed", data={"strand": "s", "gen": 1}),
              Fact(by="loom:aaaa", kind="body.pending", data={"strand": "s", "gen": 2})]
-    assert state_of(facts, "s", 1) == "running"
-    assert state_of(facts, "s", 2) == "pending"
-    assert state_of(facts, "other", 1) == "wanted"
+    assert state_of(facts, "s", 1).name == "running"
+    assert state_of(facts, "s", 2).name == "wanted"
+    assert state_of(facts, "other", 1).name == "wanted"
     facts.append(Fact(by="loom:aaaa", kind="attempt.ended", data={"strand": "s", "gen": 1}))
-    assert state_of(facts, "s", 1) == "ended"
+    assert state_of(facts, "s", 1).name == "ended"
 
 
-def test_closed_deferred_start_keeps_the_existing_gauge_path():
-    """Contract mismatch: main retried pending starts even after closure."""
-    facts = [Fact(by="loom:aaaa", kind="body.pending", data={"strand": "s", "gen": 1})]
-    commands = decide(facts, [Observation("s", 1, False, True, "ok", 3)])
-    assert [c.name for c in commands] == ["prepare", "shown", "spawn", "started"]
+@pytest.mark.parametrize("gauge", ["ok", "refreshing", "empty"])
+@pytest.mark.parametrize("kind", ["lease", "body.pending", "body.parked"])
+def test_closed_deferred_start_ends_before_every_gauge_row(kind, gauge):
+    facts = [Fact(by="loom:aaaa", kind=kind, data={"strand": "s", "gen": 1, "until": 100})]
+    commands = decide(facts, [Observation("s", 1, False, True, gauge, 3)])
+    assert [c.name for c in commands] == ["end_settled", "drain", "drained", "release"]
+
+
+def test_all_facts_keep_stop_and_proof_markers_after_reopening():
+    def fact(kind, **extra):
+        return Fact(by="loom:aaaa", kind=kind, data={"strand": "s", "gen": 1, **extra})
+    facts = [fact("lease", shell="fake", core="echo"), fact("body.started"),
+             fact("body.leaving", deadline=2), fact("body.unidentified"), fact("body.stayed")]
+    state = state_of(facts, "s", 1)
+    assert state.name == "running" and not state.identified
+    facts += [fact("body.stopped"), fact("body.pending")]
+    state = state_of(facts, "s", 1)
+    assert state.name == "stopping" and state.stopped and not state.identified
+    facts.append(fact("body.exited"))
+    assert state_of(facts, "s", 1).name == "exited"
+    facts.append(fact("attempt.ended"))
+    assert state_of(facts, "s", 1).name == "ended"
+
+
+def test_lease_with_lock_is_running_before_started_receipt():
+    facts = [Fact(kind="lease", by="loom:aaaa", data={"strand": "s", "gen": 1, "shell": "fake", "core": "echo"})]
+    assert state_of(facts, "s", 1, alive=True).name == "running"
+    assert decide(facts, [Observation("s", 1, True, False, "ok", 3)]) == []
 
 
 def test_reopening_replaces_the_deadline_only_after_a_new_closure():
     facts = [Fact(by="loom:aaaa", kind="body.started", data={"strand": "s", "gen": 1}),
              Fact(by="loom:aaaa", kind="body.leaving", data={"strand": "s", "gen": 1, "deadline": 5})]
     o = Observation("s", 1, True, False, "ok", 3)
-    assert [c.name for c in decide(facts, [o])] == ["stayed", "boundary"]
+    assert [c.name for c in decide(facts, [o])] == ["stayed"]
     facts.append(Fact(by="loom:aaaa", kind="body.stayed", data={"strand": "s", "gen": 1}))
     commands = decide(facts, [replace(o, closed=True, now=4, stop_grace=10)])
     assert commands[0].name == "leaving" and commands[0].deadline == 14

@@ -523,8 +523,7 @@ def _start(home: Home, strand: str, thread: str, gen: int,
             pending = pending_bodies(fold(current).accepted).get(strand)
             if not pending or pending.kind != "body.parked":
                 return current
-        return _advance_body(home, strand, thread, gen, bodies, current, choice,
-                             force=force, repos=repos)
+        return _advance_body(home, strand, thread, gen, bodies, current, force=force)
 
 
 def _refuse_author(home: Home, facts: list[Fact], thread: str) -> bool:
@@ -878,80 +877,41 @@ def pending_bodies(facts: list[Fact]) -> dict[str, Fact]:
             if f.kind.startswith("body.") and f.data.get("strand")}
 
 
-@dataclass
-class BodyContext:
-    thread: str
-    shell: str = ""
-    core: str = ""
-    gauge: dict | None = None
-    empty: dict | None = None
-    pid: int = 0
-    why: str = ""
-    failure: str = ""
-    repos: list[tuple[str, str]] | None = None
-
-
-def _observe_body(home, facts, strand, thread, gen, bodies, choice=None, *,
-                  force=False, repos=None):
-    """Read the five observations once; proof is asked only at a stop row."""
+def _observe_body(home, facts, strand, thread, gen, bodies, *, force=False):
     from .config import load_config
     from .lifecycle import CLOSED, closing_commit, read_thread
     from .usage import reading
-    now, config = time.time(), load_config(home.root)
-    alive = body_alive(home.room(strand))
-    closed = read_thread(home, thread).get("status") in CLOSED
-    context = BodyContext(thread, repos=repos)
-    prior = [f for f in facts if f.data.get("strand") == strand]
-    choice_fact = next((f for f in reversed(prior) if f.kind in
-                       {"body.started", "body.pending", "body.parked"}
-                       and f.data.get("gen") == gen), None)
-    if choice_fact:
-        context.shell, context.core = choice_fact.data["shell"], choice_fact.data["core"]
-    elif choice:
-        context.shell, context.core = choice
+    from types import SimpleNamespace
+    now, config, room = time.time(), load_config(home.root), home.room(strand)
+    alive = body_alive(room)
+    state = state_of(facts, strand, gen, alive=alive)
+    lease = fact_for(facts, "lease", strand, gen).data
     start = fact_for(facts, "body.started", strand, gen)
-    try:
-        context.pid = int(start.data["pid"]) if start else 0
-    except (KeyError, TypeError, ValueError):
-        context.pid = 0
-    if closed:
-        context.why = closing_commit(home, thread)[1] or f"thread {thread} settled"
-    pending = fact_for(facts, "body.parked", strand, gen)
-    state = state_of(facts, strand, gen)
-    gauge, until = "ok", 0
-    # Deferred starts before their reset do not read the gauge.
-    if context.shell and not (state == "parked" and pending
-                              and now < pending.data.get("until", 0) and not force):
-        after = max((datetime.fromisoformat(f.at).timestamp() for f in prior
-                     if f.kind in {"body.exited", "body.parked"}), default=0) if not alive else 0
-        context.gauge = {"windows": []} if force else reading(home, context.shell, after)
-        gauge = "unreadable" if context.gauge is None else "ok"
-        empty = next((w for w in context.gauge["windows"] if w["left_pct"] <= config.hold_floor_pct), None) if context.gauge else None
-        if empty:
-            context.empty = empty
-            gauge = "empty"
-            try:
-                until = datetime.fromisoformat(empty["resets_at"]).timestamp()
-            except (ValueError, TypeError, KeyError):
-                until = 0
-            until = until if until > now else now + 900
+    closed = read_thread(home, thread).get("status") in CLOSED
+    shell, core = lease["shell"], lease["core"]
+    after = max((datetime.fromisoformat(f.at).timestamp() for f in facts
+                 if f.data.get("strand") == strand and f.kind in {"body.exited", "body.parked"}), default=0)
+    gauge = ({"windows": []} if force or state.name == "parked" and now < state.until
+             else reading(home, shell, 0 if alive else after))
+    empty = next((w for w in gauge["windows"] if w["left_pct"] <= config.hold_floor_pct), None) if gauge else None
+    until = 0
+    if empty:
+        try:
+            until = datetime.fromisoformat(empty["resets_at"]).timestamp()
+        except (ValueError, TypeError, KeyError):
+            pass
+        until = until if until > now else now + 900
+    pid = int(start.data.get("pid") or 0) if start else 0
     proven = None
-    leaving = fact_for(facts, "body.leaving", strand, gen)
-    due = leaving is not None and now >= leaving.data["deadline"]
-    if alive and closed and (state in {"stopping", "unidentified"} or state == "leaving" and due):
+    if alive and closed and state.name == "leaving" and now >= state.deadline:
         body = bodies.get(strand)
-        proven = _proven_body(home.room(strand), context.pid,
-                              str(start.data.get("lstart") or "") if start else "",
-                              body.proc if body else None, alive=alive)
-    observation = Observation(strand, gen, alive, closed, gauge, now, proven,
-                              until=until, force=force, stop_grace=config.stop_grace,
-                              orphan=state == "wanted" and choice is None)
-    return observation, context
-
-
-def _body_fuel(context):
-    parts = [f"{w['name']} {w['left_pct']:g}%" for w in context.gauge["windows"]] if context.gauge else []
-    return f"fuel {context.shell} " + " ".join(parts) if parts else ""
+        proven = state.identified and _proven_body(room, pid, str(start.data.get("lstart") or "") if start else "",
+                                                 body.proc if body else None, alive=alive)
+    fuel = "fuel " + shell + " " + " ".join(f"{w['name']} {w['left_pct']:g}%" for w in gauge["windows"]) if gauge and gauge["windows"] else ""
+    context = SimpleNamespace(thread=thread, shell=shell, core=core, pid=pid, empty=empty, fuel=fuel,
+                              why=(closing_commit(home, thread)[1] or f"thread {thread} settled") if closed else "", failure="", repos=lease.get("repos"))
+    return Observation(strand, gen, alive, closed, "refreshing" if gauge is None else "empty" if empty else "ok",
+                       now, proven, until=until, force=force, stop_grace=config.stop_grace), context
 
 
 def _boundary(home, facts, strand, gen, context):
@@ -959,8 +919,8 @@ def _boundary(home, facts, strand, gen, context):
     main, state = main_snapshot(home), fold(facts)
     text = render_boundary(
         strand, gen, context.thread, letters_for(facts, main, context.thread),
-        state.shown.get(strand, set()), sender_threads(facts), _body_fuel(context),
-        context.why if context.why else None, reply_channels(facts),
+        state.shown.get(strand, set()), sender_threads(facts), context.fuel,
+        context.why or None, reply_channels(facts),
         opened=thread_table(home, facts), plan=_plan(home, context.thread, facts),
         replies={k: f.reply_to for k, f in letter_owners(facts, main).items()},
     )
@@ -969,76 +929,59 @@ def _boundary(home, facts, strand, gen, context):
         atomic_write(path, text)
 
 
-def _execute_body(home, bodies, facts, observation, context, commands=None):
-    """Execute the named hands, feeding preparation failures back to the table."""
-    o, c = observation, context
-    strand, gen, thread = o.strand, o.gen, c.thread
-    data = {"strand": strand, "gen": gen}
-    room, proc, log, code = home.room(strand), None, None, None
-    letters = []
-    commands = decide(facts, [o]) if commands is None else commands
-    if any(command.name == "prepare" for command in commands) and _refuse_author(home, facts, thread):
-        return facts
+def _execute_body(home, bodies, facts, o, c):
+    from .bodies import exit_cause
+    strand, gen, thread, room = o.strand, o.gen, c.thread, home.room(o.strand)
+    data, code, letters = {"strand": strand, "gen": gen}, None, []
+    commands = decide(facts, [o])
+    if o.alive:
+        _boundary(home, facts, strand, gen, c)
     for command in commands:
         name = command.name
-        try:
-            if name == "prepare":
+        if name == "prepare":
+            if _refuse_author(home, facts, thread):
+                return facts
+            try:
                 folder = resolve(home, c.shell)
                 letters = letters_for(facts, main_snapshot(home), thread)
                 room = _prepare(home, strand, thread, gen, letters, sender_threads(facts), facts,
-                                (folder / "jack").read_text().strip(),
-                                fuel=_body_fuel(c), repos=c.repos)
+                                (folder / "jack").read_text().strip(), fuel=c.fuel, repos=c.repos)
                 policy = _policy(home, thread)
                 if policy is not None:
                     atomic_write(room / "port/policy", policy + "\n")
-            elif name == "shown":
-                facts.append(_record(home, "shown", {**data, "ids": [str(f.data["id"]) for f in letters]},
-                                     f"shown:wake:{strand}:{gen}:{mint(6)}"))
-            elif name == "spawn":
-                readme = _readme(room, thread)
+            except Exception as exc:
+                c.failure = f"{type(exc).__name__}: {exc}"
+                return _execute_body(home, bodies, facts, replace(o, failure=c.failure), c)
+        elif name == "shown":
+            facts.append(_record(home, "shown", {**data, "ids": [f.id for f in letters]}, f"shown:wake:{strand}:{gen}"))
+        elif name == "spawn":
+            readme = _readme(room, thread)
+            try:
                 proc, log = _spawn(room, [str(folder / "run"), str(room), c.core], c.shell, thread)
-        except Exception as exc:
-            # Only preparation / spawn failures end a failed start. A failed
-            # ledger write, signal or drain must still reach the loop's logger.
-            if name not in {"prepare", "shown", "spawn"}:
-                raise
-            c.failure = f"{type(exc).__name__}: {exc}"
-            _log(home, f"start failed {strand}: {c.failure}")
-            return _execute_body(home, bodies, facts, replace(o, failure=c.failure), c)
-        if name == "started":
-            started_at = _ps_field(proc.pid, "lstart") or ""
-            facts.append(_record(home, "body.started", {
-                **data, "pid": proc.pid, "shell": c.shell, "core": c.core, "readme": readme,
-                **({"lstart": started_at} if started_at else {}),
-            }, f"body.started:{strand}:{gen}:{proc.pid}:{mint(6)}"))
+            except Exception as exc:
+                c.failure = f"{type(exc).__name__}: {exc}"
+                return _execute_body(home, bodies, facts, replace(o, failure=c.failure), c)
             bodies[strand] = Body(strand, thread, gen, proc, log)
-            _log(home, f"start {strand} thread {thread} gen {gen} pid {proc.pid} {c.shell}/{c.core}")
-        elif name in {"pending", "park"}:
-            kind = "body.pending" if name == "pending" else "body.parked"
+        elif name in {"started", "pending", "park", "leaving", "stayed", "stopped", "unidentified", "exit"}:
+            kind = "body." + {"park": "parked", "exit": "exited"}.get(name, name)
             extra = {}
-            if name == "park":
-                extra = {"window": c.empty["name"], "left_pct": c.empty["left_pct"], "until": o.until}
-            facts.append(_record(home, kind, {**data, "shell": c.shell, "core": c.core, **extra},
-                                 f"{kind}:{strand}:{mint(6)}"))
-        elif name in {"leaving", "stayed", "stopped", "unidentified"}:
-            kind = "body." + name
-            extra = {"deadline": command.deadline} if name == "leaving" else {}
-            if name in {"stopped", "unidentified"}:
-                extra.update(pid=c.pid, why=c.why if name == "stopped" else
-                             f"pid {c.pid} could not be proven to be the body on thread {thread}")
-            if name in {"leaving", "stayed"} or fact_for(facts, kind, strand, gen) is None:
-                facts.append(_record(home, kind, {**data, **extra},
-                                     f"{kind}:{strand}:{gen}:{mint(6)}" if name in {"leaving", "stayed"} else f"{kind}:{strand}:{gen}"))
-            if name in {"stopped", "unidentified"}:
-                _log(home, f"{name} {strand} pid {c.pid}: {extra['why']}")
+            if name == "started":
+                extra = {"pid": proc.pid, "shell": c.shell, "core": c.core, "readme": readme, "lstart": _ps_field(proc.pid, "lstart") or ""}
+            elif name in {"pending", "park"}:
+                extra = {"shell": c.shell, "core": c.core}
+                if name == "park":
+                    extra.update(window=c.empty["name"], left_pct=c.empty["left_pct"], until=o.until)
+            elif name == "leaving":
+                extra = {"deadline": command.deadline}
+            elif name in {"stopped", "unidentified"}:
+                extra = {"pid": c.pid, "why": c.why if name == "stopped" else f"pid {c.pid} could not be proven to be the body on thread {thread}"}
+            elif name == "exit":
+                extra = {"code": code, **({"why": c.failure} if c.failure else {})}
+            facts.append(_record(home, kind, {**data, **extra}, f"{kind}:{strand}:{gen}:{mint(6)}" if name in {"park", "leaving", "stayed"} else f"{kind}:{strand}:{gen}"))
         elif name == "signal":
             _end_group(c.pid)
-            # A signal is a command with an outcome. Collect it in the same
-            # tick when the body has left, as the old stop/reap sequence did.
             if not body_alive(room):
                 return _execute_body(home, bodies, facts, replace(o, alive=False), c)
-        elif name == "boundary":
-            _boundary(home, facts, strand, gen, c)
         elif name == "collect":
             body = bodies.pop(strand, None)
             if body:
@@ -1046,25 +989,12 @@ def _execute_body(home, bodies, facts, observation, context, commands=None):
                 body.close_log()
         elif name == "drain":
             facts = _drain_strand(home, facts, strand)
-        elif name == "exit":
-            if fact_for(facts, "body.exited", strand, gen) is None:
-                facts.append(_record(home, "body.exited", {**data, "code": code,
-                                     **({"why": c.failure} if c.failure else {})},
-                                     f"body.exited:{strand}:{gen}:{mint(6)}"))
-                _log(home, f"exit {strand} code {code}")
         elif name.startswith("end"):
-            if name == "end_failed":
-                cause = "failed"
-                letters = letters_for(facts, main_snapshot(home), thread)
-            elif name == "end_settled":
-                cause, letters = "settled", []
-            else:
-                # Drain can accept a last molt or answer: use the resulting
-                # facts to decide the cause, not the pre-drain snapshot.
-                from .bodies import exit_cause
-                shown = fold(facts).shown.get(strand, set())
-                letters = [f for f in letters_for(facts, main_snapshot(home), thread) if f.id in shown]
-                cause = exit_cause(facts, o, owed=bool(letters))
+            exited = fact_for(facts, "body.exited", strand, gen)
+            code = exited.data.get("code") if exited else None
+            shown = fold(facts).shown.get(strand, set())
+            letters = [f for f in letters_for(facts, main_snapshot(home), thread) if name == "end_failed" or f.id in shown]
+            cause = "failed" if name == "end_failed" else "settled" if name == "end_settled" else exit_cause(facts, o, owed=bool(letters))
             facts = _end_attempt(home, facts, strand, thread, gen, code, letters, cause, c.failure)
         elif name == "drained":
             if not fact_for(facts, "port.drained", strand, gen):
@@ -1074,45 +1004,21 @@ def _execute_body(home, bodies, facts, observation, context, commands=None):
     return facts
 
 
-def _advance_body(home, strand, thread, gen, bodies, facts, choice=None, *, force=False, repos=None):
-    observation, context = _observe_body(home, facts, strand, thread, gen, bodies,
-                                         choice, force=force, repos=repos)
-    try:
-        return _execute_body(home, bodies, facts, observation, context)
-    except ValueError as exc:
-        _log(home, str(exc))
-        raise
+def _advance_body(home, strand, thread, gen, bodies, facts, *, force=False):
+    o, c = _observe_body(home, facts, strand, thread, gen, bodies, force=force)
+    return _execute_body(home, bodies, facts, o, c)
 
 
 def _advance_bodies(home, bodies, facts):
-    """Refresh/start before routing; leave stop/collection commands after it."""
     from .router import install_of
-    holders = fold(facts).holder
-    targets = {strand: (thread, gen) for thread, (strand, gen) in holders.items()
-               if install_of(strand) == home.install_id()}
-    # A locally spawned process can outlive a fenced lease. Keep collecting
-    # that handle as the old _reap did; the ledger supplies its identity.
-    for strand in bodies:
-        lease = next((f for f in reversed(facts) if f.kind == "lease"
-                      and f.data.get("strand") == strand), None)
-        if lease:
-            targets.setdefault(strand, (lease.data["thread"], lease.data["gen"]))
-    deferred = []
-    for strand, (thread, gen) in targets.items():
-        if state_of(facts, strand, gen) in {"pending", "parked"}:
-            facts = _start(home, strand, thread, gen, bodies, facts)
-            continue
-        observation, context = _observe_body(home, facts, strand, thread, gen, bodies)
-        try:
-            commands = decide(facts, [observation])
-        except ValueError as exc:
-            _log(home, str(exc))
-            raise
-        before = [c for c in commands if c.name in {"boundary", "leaving", "stayed"}]
-        after = [c for c in commands if c not in before]
-        facts = _execute_body(home, bodies, facts, observation, context, before)
-        deferred.append((observation, context, after))
-    return facts, deferred
+    leases = {f.data["strand"]: f for f in facts if f.kind == "lease"}
+    holders = {strand for strand, gen in fold(facts).holder.values()}
+    for strand in holders | bodies.keys():
+        if install_of(strand) == home.install_id():
+            d = leases[strand].data
+            if not state_of(facts, strand, d["gen"]).released:
+                facts = _start(home, strand, d["thread"], d["gen"], bodies, facts)
+    return facts
 
 
 def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
@@ -1128,13 +1034,11 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     facts = read_facts(home)
     facts = router.begin_tick(facts)
     facts = _ingest(home, facts, router.config.router_ttl)
-    facts, deferred = _advance_bodies(home, bodies, facts)
+    facts = _advance_bodies(home, bodies, facts)
     # Time enters the owner table once, using only the facts already held.
     facts = observe_due(home, facts, router.armed())
     facts = router.route(facts, bodies, (adapter, core))
     facts = router.speak_out(facts)
-    for observation, context, commands in deferred:
-        facts = _execute_body(home, bodies, facts, observation, context, commands)
 
 
 def _pause(stop, seconds: float) -> bool:
