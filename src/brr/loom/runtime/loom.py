@@ -523,7 +523,7 @@ def _start(home: Home, strand: str, thread: str, gen: int,
             pending = pending_bodies(fold(current).accepted).get(strand)
             if not pending or pending.kind != "body.parked":
                 return current
-        return _advance_body(home, strand, thread, gen, bodies, current, force=force)
+        return _advance_body(home, strand, thread, gen, bodies, current, choice=choice, force=force)
 
 
 def _refuse_author(home: Home, facts: list[Fact], thread: str) -> bool:
@@ -877,7 +877,7 @@ def pending_bodies(facts: list[Fact]) -> dict[str, Fact]:
             if f.kind.startswith("body.") and f.data.get("strand")}
 
 
-def _observe_body(home, facts, strand, thread, gen, bodies, *, force=False):
+def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, force=False):
     from .config import load_config
     from .lifecycle import CLOSED, closing_commit, read_thread
     from .usage import reading
@@ -888,7 +888,8 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, force=False):
     lease = fact_for(facts, "lease", strand, gen).data
     start = fact_for(facts, "body.started", strand, gen)
     closed = read_thread(home, thread).get("status") in CLOSED
-    shell, core = lease["shell"], lease["core"]
+    default = choice or ("fake", "haiku")
+    shell, core = lease.get("shell", default[0]), lease.get("core", default[1])
     after = max((datetime.fromisoformat(f.at).timestamp() for f in facts
                  if f.data.get("strand") == strand and f.kind in {"body.exited", "body.parked"}), default=0)
     gauge = ({"windows": []} if force or state.name == "parked" and now < state.until
@@ -905,8 +906,8 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, force=False):
     proven = None
     if alive and closed and state.name == "leaving" and now >= state.deadline:
         body = bodies.get(strand)
-        proven = state.identified and _proven_body(room, pid, str(start.data.get("lstart") or "") if start else "",
-                                                 body.proc if body else None, alive=alive)
+        proven = _proven_body(room, pid, str(start.data.get("lstart") or "") if start else "",
+                              body.proc if body else None, alive=alive)
     fuel = "fuel " + shell + " " + " ".join(f"{w['name']} {w['left_pct']:g}%" for w in gauge["windows"]) if gauge and gauge["windows"] else ""
     context = SimpleNamespace(thread=thread, shell=shell, core=core, pid=pid, empty=empty, fuel=fuel,
                               why=(closing_commit(home, thread)[1] or f"thread {thread} settled") if closed else "", failure="", repos=lease.get("repos"))
@@ -977,7 +978,9 @@ def _execute_body(home, bodies, facts, o, c):
                 extra = {"pid": c.pid, "why": c.why if name == "stopped" else f"pid {c.pid} could not be proven to be the body on thread {thread}"}
             elif name == "exit":
                 extra = {"code": code, **({"why": c.failure} if c.failure else {})}
-            facts.append(_record(home, kind, {**data, **extra}, f"{kind}:{strand}:{gen}:{mint(6)}" if name in {"park", "leaving", "stayed"} else f"{kind}:{strand}:{gen}"))
+            facts.append(_record(home, kind, {**data, **extra}, f"{kind}:{strand}:{gen}:{mint(6)}" if name in {"park", "leaving", "stayed", "unidentified"} else f"{kind}:{strand}:{gen}"))
+            if name == "started":
+                _log(home, f"start {strand} thread {thread} gen {gen} pid {proc.pid} {c.shell}/{c.core}")
         elif name == "signal":
             _end_group(c.pid)
             if not body_alive(room):
@@ -1004,12 +1007,12 @@ def _execute_body(home, bodies, facts, o, c):
     return facts
 
 
-def _advance_body(home, strand, thread, gen, bodies, facts, *, force=False):
-    o, c = _observe_body(home, facts, strand, thread, gen, bodies, force=force)
+def _advance_body(home, strand, thread, gen, bodies, facts, *, choice=None, force=False):
+    o, c = _observe_body(home, facts, strand, thread, gen, bodies, choice=choice, force=force)
     return _execute_body(home, bodies, facts, o, c)
 
 
-def _advance_bodies(home, bodies, facts):
+def _advance_bodies(home, bodies, facts, choice):
     from .router import install_of
     leases = {f.data["strand"]: f for f in facts if f.kind == "lease"}
     holders = {strand for strand, gen in fold(facts).holder.values()}
@@ -1017,7 +1020,7 @@ def _advance_bodies(home, bodies, facts):
         if install_of(strand) == home.install_id():
             d = leases[strand].data
             if not state_of(facts, strand, d["gen"]).released:
-                facts = _start(home, strand, d["thread"], d["gen"], bodies, facts)
+                facts = _start(home, strand, d["thread"], d["gen"], bodies, facts, choice)
     return facts
 
 
@@ -1034,7 +1037,7 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     facts = read_facts(home)
     facts = router.begin_tick(facts)
     facts = _ingest(home, facts, router.config.router_ttl)
-    facts = _advance_bodies(home, bodies, facts)
+    facts = _advance_bodies(home, bodies, facts, (adapter, core))
     # Time enters the owner table once, using only the facts already held.
     facts = observe_due(home, facts, router.armed())
     facts = router.route(facts, bodies, (adapter, core))

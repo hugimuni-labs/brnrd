@@ -23,6 +23,8 @@ class MemoryBody:
         self.facts = []
         self.audit = {}
         self.signals = []
+        self.starts = []
+        self.observed_alive = False
         self.current = None
         self.gen = 0
         self.alive = False
@@ -34,6 +36,7 @@ class MemoryBody:
         self.strand = f"s-aaaa-{self.gen:06d}"
         self.add("lease", thread="work")
         self.alive = False
+        self.observed_alive = False
 
     def add(self, kind, **data):
         self.facts.append(Fact(kind=kind, by="loom:aaaa", id=f"fact-{len(self.facts)}",
@@ -41,7 +44,9 @@ class MemoryBody:
         self.audit[self.facts[-1].id] = self.current
 
     def check_prefix(self, o):
-        # Rule 1: all generations, not just the current one.
+        # Rule 1 includes actual spawns without a body.started receipt.
+        assert len(self.starts) == len(set(self.starts)), self.starts
+        # All generations, not just the current one.
         for kind in ("body.started", "body.exited", "attempt.ended"):
             ids = [(f.data["strand"], f.data["gen"]) for f in self.facts if f.kind == kind]
             assert len(ids) == len(set(ids)), (kind, ids)
@@ -66,9 +71,11 @@ class MemoryBody:
             if f.kind == "released":
                 assert key in ended and key in drained
 
-    def step(self, o, *, crash_at_end=False, crash_at_exit=False):
+    def step(self, o, *, crash_at_end=False, crash_at_exit=False, crash_at_spawn=False):
         self.current = o
-        previous = state_of(self.facts, self.strand, self.gen, alive=self.alive).name
+        previous = state_of(self.facts, self.strand, self.gen, alive=self.observed_alive).name
+        self.observed_alive = o.alive
+        self.alive = o.alive
         row = row_for(self.facts, o)
         self.coverage.add(row)
         # Rule 6 is checked even when the executor crashes mid-decision.
@@ -83,6 +90,14 @@ class MemoryBody:
                 # Rule 2: proof belongs to this decision, never an older fact.
                 assert o.proven is True
                 self.signals.append(o)
+            elif name == "shown":
+                self.add("shown", ids=[])
+            elif name == "spawn":
+                self.starts.append((self.strand, self.gen))
+                self.alive = True
+                if crash_at_spawn:
+                    self.check_prefix(o)
+                    return
             elif name == "started":
                 # Rule 4 includes closed deferred starts, without exceptions.
                 assert not o.closed
@@ -97,7 +112,7 @@ class MemoryBody:
             elif name == "stayed":
                 self.add("body.stayed")
             elif name in {"stopped", "unidentified"}:
-                if fact_for(self.facts, "body." + name, self.strand, self.gen) is None:
+                if name == "unidentified" or fact_for(self.facts, "body." + name, self.strand, self.gen) is None:
                     if name == "stopped":
                         # Rule 3: closed, and this generation's durable deadline.
                         leaving = fact_for(self.facts, "body.leaving", self.strand, self.gen)
@@ -122,7 +137,7 @@ class MemoryBody:
                     self.add("port.drained")
             elif name == "release":
                 self.add("released", thread="work")
-            elif name not in {"prepare", "shown", "spawn", "boundary", "collect", "drain"}:
+            elif name not in {"prepare", "boundary", "collect", "drain"}:
                 raise AssertionError(name)
             self.check_prefix(o)
         # Rule 6 applies to lock-holding states; starts have no lock to lose.
@@ -150,6 +165,7 @@ def test_seeded_sequences_check_ledger_prefixes_and_reach_every_row():
                 body.alive = False
             adopted = state == "wanted" and rng.random() < 0.08
             if adopted:
+                body.add("shown", ids=[])
                 body.alive = True
             closed = rng.random() < 0.65
             gauge = rng.choice(["ok", "ok", "refreshing", "empty"])
@@ -282,3 +298,79 @@ def test_exit_cause_uses_the_post_drain_ledger_in_contract_order():
     assert exit_cause(facts, replace(o, closed=True), owed=True) == "molted"
     facts.append(Fact(kind="body.stopped", by="loom:aaaa", data={"strand": "s", "gen": 1}))
     assert exit_cause(facts, replace(o, closed=True), owed=True) == "stopped"
+
+
+@pytest.mark.parametrize("adopted", [False, True])
+def test_spawn_without_started_then_lock_loss_never_starts_twice(adopted):
+    body = MemoryBody(random.Random(0), set())
+    o = Observation(body.strand, body.gen, False, False, "ok", 1)
+    body.step(o, crash_at_spawn=True)
+    assert fact_for(body.facts, "shown", body.strand, body.gen)
+    assert not fact_for(body.facts, "body.started", body.strand, body.gen)
+    if adopted:
+        body.step(replace(o, alive=True, now=2))
+        assert body.observed_alive
+    # The child left before recovery; prior liveness must not be recomputed
+    # using this false observation. Rule 6 and every prefix of rule 1 apply.
+    body.step(replace(o, now=3), crash_at_exit=True)
+    body.step(replace(o, now=4))
+    assert body.starts == [(body.strand, body.gen)]
+    assert state_of(body.facts, body.strand, body.gen).name == "ended"
+
+
+@pytest.mark.parametrize("second_proven", [False, True])
+def test_reclosed_body_probes_once_per_deadline_and_stopping_holds(tmp_path, monkeypatch, second_proven):
+    from types import SimpleNamespace
+    from brr.loom.runtime import loom as runtime, config, lifecycle, usage
+
+    clock, closed, proofs, signals, boundaries = [1], [True], [], [], []
+    home = SimpleNamespace(root=tmp_path, room=lambda strand: tmp_path / strand)
+    monkeypatch.setattr(runtime.time, "time", lambda: clock[0])
+    monkeypatch.setattr(config, "load_config", lambda root: SimpleNamespace(hold_floor_pct=10, stop_grace=2))
+    monkeypatch.setattr(lifecycle, "read_thread", lambda home, thread: {"status": "settled" if closed[0] else "open"})
+    monkeypatch.setattr(lifecycle, "closing_commit", lambda home, thread: ("sha", "done", "writer"))
+    monkeypatch.setattr(usage, "reading", lambda *args: {"windows": []})
+    monkeypatch.setattr(runtime, "body_alive", lambda room: True)
+    monkeypatch.setattr(runtime, "_boundary", lambda *args: boundaries.append(clock[0]))
+    monkeypatch.setattr(runtime, "_end_group", lambda pid: signals.append(pid))
+    def proof(*args, **kwargs):
+        proofs.append(clock[0])
+        return second_proven if len(proofs) == 2 else False
+    monkeypatch.setattr(runtime, "_proven_body", proof)
+    monkeypatch.setattr(runtime, "_record", lambda home, kind, data, ident: Fact(by="loom:aaaa", kind=kind, data=data, id=ident))
+    def fact(kind, **data):
+        return Fact(by="loom:aaaa", kind=kind, data={"strand": "s", "gen": 1, **data})
+    facts = [fact("lease", shell="fake", core="echo"), fact("body.started", pid=123, lstart="start")]
+    def tick(now, is_closed=True):
+        nonlocal facts
+        clock[0], closed[0] = now, is_closed
+        o, c = runtime._observe_body(home, facts, "s", "work", 1, {})
+        facts = runtime._execute_body(home, {}, facts, o, c)
+    tick(1)  # first deadline: 3
+    tick(2)
+    tick(3)  # failed proof
+    tick(4)  # no retry on an unidentified tick
+    tick(5, False)
+    tick(6)  # new deadline: 8
+    tick(7)
+    tick(8)  # one fresh proof, despite the old failed proof
+    tick(9)
+    tick(10, False)  # even a reopened stopping child keeps its lock/holder
+    assert proofs == [3, 8]
+    assert [f.data["deadline"] for f in facts if f.kind == "body.leaving"] == [3, 8]
+    unidentified = [f for f in facts if f.kind == "body.unidentified"]
+    assert len(unidentified) == (1 if second_proven else 2)
+    assert len({f.id for f in unidentified}) == len(unidentified)
+    assert signals == ([123] if second_proven else [])
+    assert boundaries == list(range(1, 11))
+    if second_proven:
+        assert state_of(facts, "s", 1, alive=True).name == "stopping"
+        assert decide(facts, [Observation("s", 1, True, True, "ok", 11)]) == []
+
+
+def test_later_shown_receipt_does_not_reset_a_leaving_body():
+    def fact(kind, **data):
+        return Fact(by="loom:aaaa", kind=kind, data={"strand": "s", "gen": 1, **data})
+    facts = [fact("shown", ids=[]), fact("body.leaving", deadline=5), fact("shown", ids=["later"])]
+    state = state_of(facts, "s", 1, alive=True)
+    assert state.name == "leaving" and state.deadline == 5

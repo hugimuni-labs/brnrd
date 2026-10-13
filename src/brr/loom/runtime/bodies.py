@@ -42,7 +42,7 @@ TABLE = (
     Row(STARTABLE, "gauge ok", "running", ("prepare", "shown", "spawn", "started")),
     Row(LIVE, "not alive", "ended", FINISH),
     Row(("running",), "alive, open", "running", ()),
-    Row(("running",), "alive, closed", "leaving / unidentified", ("leaving",)),
+    Row(("running",), "alive, closed", "leaving", ("leaving",)),
     Row(("leaving", "unidentified"), "alive, reopened", "running", ("stayed",)),
     Row(("leaving",), "alive, before deadline", "leaving", ()),
     Row(("leaving",), "alive, due, proven", "stopping", ("stopped", "signal")),
@@ -96,10 +96,12 @@ def state_of(facts: list[Fact], strand: str, gen: int, *, alive=False) -> State:
             pending = True
         elif f.kind == "body.parked":
             name, until = "parked", f.data["until"]
+        elif f.kind == "shown" and name in STARTABLE:
+            name = "running"
         elif f.kind in {"body.started", "body.stayed"}:
             name = "running"
         elif f.kind == "body.leaving":
-            name, deadline = "leaving" if identified else "unidentified", f.data["deadline"]
+            name, deadline, identified = "leaving", f.data["deadline"], True
         elif f.kind == "body.stopped":
             stopped = True
         elif f.kind == "body.unidentified":

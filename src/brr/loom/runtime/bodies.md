@@ -9,7 +9,7 @@
 | wanted, parked | gauge ok | running | prepare, shown, spawn, started |
 | running, leaving, stopping, unidentified | not alive | ended | collect, drain, exit, end, drain, drained, release |
 | running | alive, open | running | none |
-| running | alive, closed | leaving / unidentified | leaving |
+| running | alive, closed | leaving | leaving |
 | leaving, unidentified | alive, reopened | running | stayed |
 | leaving | alive, before deadline | leaving | none |
 | leaving | alive, due, proven | stopping | stopped, signal |
