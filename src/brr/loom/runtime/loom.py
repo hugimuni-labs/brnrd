@@ -80,34 +80,28 @@ _FORGE_TOKEN_VARS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_
 
 
 def _forge_env(room: Path, env: dict[str, str]) -> None:
-    """Whose ``gh`` a body uses is the person's written choice (``gh`` in
-    loom/config.toml), never an accident of the machine.
-
-    ``person``: the environment is left as it is, so gh is the person's own
-    login. ``home`` (the default): on a host the body runs as the person, so
-    a bare ``gh`` would read their login anyway. Inherited tokens are dropped,
-    ``GH_CONFIG_DIR`` points at an empty folder in the room, and the home's
-    ``forge_token_file`` (when set) becomes ``GH_TOKEN``. No token: gh is
-    signed out and says so.
+    """A body's ``gh``: the home's token when it has one, otherwise the
+    machine's own login; ``gh = "off"`` in loom/config.toml signs it out.
     """
     from .config import load_config
     config = load_config(room.parent.parent) if room.parent.name == "rooms" else None
-    if config is not None and config.gh == "person":
+    mode = config.gh if config is not None else "auto"
+    token = ""
+    if mode == "auto" and config is not None and config.forge_token_file:
+        try:
+            token = Path(config.forge_token_file).read_text(encoding="utf-8").strip()
+        except OSError:
+            token = ""
+    if mode == "auto" and not token:
         return
     for name in _FORGE_TOKEN_VARS:
         env.pop(name, None)
+    if token:
+        env["GH_TOKEN"] = token
+        return
     gh_dir = room / "port" / "gh"
     gh_dir.mkdir(parents=True, exist_ok=True)
     env["GH_CONFIG_DIR"] = str(gh_dir)
-    token_file = config.forge_token_file if config is not None else None
-    if not token_file:
-        return
-    try:
-        token = Path(token_file).read_text(encoding="utf-8").strip()
-    except OSError:
-        return
-    if token:
-        env["GH_TOKEN"] = token
 
 
 def _env(room: Path) -> dict[str, str]:

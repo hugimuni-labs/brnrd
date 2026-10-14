@@ -44,11 +44,10 @@ class LoomConfig:
     #: A file holding the forge token ``publish`` pushes with. Unset pushes
     #: with the machine's own git setup.
     forge_token_file: str | None = None
-    #: Whose ``gh`` a body uses: ``home`` (the forge token above, or signed
-    #: out without one) or ``person`` (the login of whoever runs the loom,
-    #: their keyring included). The person's grant, written here; ``home``
-    #: unless it says otherwise.
-    gh: str = "home"
+    #: A body's ``gh``: ``auto`` uses the forge token above when the home has
+    #: one, otherwise whatever gh is signed in on the machine. ``off`` signs
+    #: it out.
+    gh: str = "auto"
 
 
 def loom_clock() -> float:
@@ -118,9 +117,9 @@ def load_config(root: Path | str) -> LoomConfig:
         forge_token_file = None
     else:
         forge_token_file = os.path.expanduser(forge_token_file.strip())
-    gh = found.get("gh", "home")
-    if gh not in ("home", "person"):
-        raise ValueError(f"loom/config.toml: gh must be \"home\" or \"person\", not {gh!r}")
+    gh = found.get("gh", "auto")
+    if gh not in ("auto", "off"):
+        raise ValueError(f"loom/config.toml: gh must be \"auto\" or \"off\", not {gh!r}")
 
     return LoomConfig(
         body=found.get("body") or None,
