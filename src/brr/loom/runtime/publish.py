@@ -24,19 +24,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .config import load_config
+from .config import ConfigError, load_config, resolve_secret
 from .home import check_thread_id, home_of_room, strand_of_room
 from .ledger import Fact, append, read_facts
 from .selfrepo import SelfError, _env_without_pin, _segment, git, resolve_clone
 
 _PUSH_TIMEOUT = 600
 _SHA = re.compile(r"[0-9a-f]{7,64}")
-_TOKEN_ENV = "BRNRD_FORGE_TOKEN_FILE"
-# git runs a helper that starts with ``!`` through sh. The token is read from
-# the file when git asks, so it is in no argv and no config.
+_TOKEN_ENV = "BRNRD_FORGE_TOKEN"
+# git runs a helper that starts with ``!`` through sh. The value comes only
+# from the push environment, never argv, config or a file written by us.
 _TOKEN_HELPER = (
     '!f() { test "$1" = get || exit 0; echo username=x-access-token; '
-    f'echo "password=$(cat "${_TOKEN_ENV}")"; }}; f'
+    f'printf "password=%s\\n" "${_TOKEN_ENV}"; }}; f'
 )
 _GIT_CONFIG_ENV = ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM",
                    "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS")
@@ -71,7 +71,7 @@ def _is_local(source: str) -> bool:
     return source.startswith("/") or source.startswith("file://")
 
 
-def push_command(source: str, branch: str, token_file: str | None,
+def push_command(source: str, branch: str, forge_token: str | None,
                  ) -> tuple[list[str], dict[str, str], str, str]:
     """``(git arguments, environment, lane, note)`` for one push of ``branch``.
 
@@ -85,7 +85,7 @@ def push_command(source: str, branch: str, token_file: str | None,
     env = _plain_env()
     if _is_local(source):
         return ["push", "--", source, refspec], env, "local", ""
-    if token_file:
+    if forge_token:
         parts = urlsplit(source)
         if parts.scheme != "https" or not parts.hostname:
             raise PublishError(
@@ -93,12 +93,14 @@ def push_command(source: str, branch: str, token_file: str | None,
                 f"source is {source}. Pushing it would go out under this machine's own "
                 f"keys. Declare the https URL in the seat's repo: line."
             )
-        if not Path(token_file).is_file():
-            raise PublishError(f"publish: forge_token_file {token_file} is not a file")
+        try:
+            token = resolve_secret(forge_token)
+        except ConfigError as exc:
+            raise PublishError(f"publish: forge_token {forge_token}: {exc}") from None
         host = parts.hostname + (f":{parts.port}" if parts.port else "")
         env["GIT_CONFIG_GLOBAL"] = os.devnull
         env["GIT_CONFIG_NOSYSTEM"] = "1"
-        env[_TOKEN_ENV] = token_file
+        env[_TOKEN_ENV] = token
         args = [
             "-c", "credential.helper=",
             "-c", f"credential.https://{host}.helper=",
@@ -120,7 +122,7 @@ def push_command(source: str, branch: str, token_file: str | None,
             if key and newline and value:
                 args += ["-c", f"{key}={value}"]
     who = git(Path.cwd(), "config", "--global", "user.email", check=False, env=env).stdout.strip()
-    note = ("publish: no forge_token_file in loom/config.toml; pushed with this machine's "
+    note = ("publish: no forge_token in loom/config.toml; pushed with this machine's "
             f"own git setup (git user {who or 'unset'})")
     return [*args, "push", "--", source, refspec], env, "machine", note
 
@@ -409,7 +411,7 @@ def publish(room: Path | str, name: str, *, worker: str | None = None,
         )
 
     args, env, lane, note = push_command(source, branch,
-                                         load_config(who.home.root).forge_token_file)
+                                         load_config(who.home.root).forge_token)
     try:
         proc = subprocess.run(
             ["git", *args], cwd=checkout, env=env, capture_output=True, text=True,

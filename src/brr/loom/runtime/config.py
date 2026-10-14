@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import difflib
 import os
+import re
 import subprocess
 import time
 from dataclasses import dataclass, make_dataclass
@@ -155,13 +156,32 @@ def _coerce(key: Key, value: object, path: Path) -> object:
     return number
 
 
+def _without_comment(line: str) -> str:
+    """Keep hashes inside a quoted source (shell commands often need them)."""
+    quote = ""
+    escaped = False
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+        elif char == "\\" and quote == '"':
+            escaped = True
+        elif quote:
+            if char == quote:
+                quote = ""
+        elif char in {"'", '"'}:
+            quote = char
+        elif char == "#":
+            return line[:index]
+    return line
+
+
 def load_config_report(root: Path | str) -> tuple[LoomConfig, frozenset[str]]:
     """The effective config and the keys the file set (the rest are defaults)."""
     path = config_path(root)
     found: dict[str, object] = {}
     if path.is_file():
         for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.split("#", 1)[0].strip()
+            line = _without_comment(line).strip()
             if not line or "=" not in line:
                 continue
             key, _, raw = line.partition("=")
@@ -232,6 +252,8 @@ def _secret_source(spec: str) -> str:
     source, arg = source.strip(), arg.strip()
     if not colon or source not in SECRET_SOURCES or not arg:
         raise ConfigError(f"not a secret source: {spec!r}")
+    if source == "env" and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", arg):
+        raise ConfigError(f"not a secret source: {spec!r}")
     if source == "file":
         arg = os.path.expanduser(arg)
     return f"{source}: {arg}"
@@ -251,15 +273,20 @@ def resolve_secret(spec: str) -> str:
                                   timeout=_SECRET_TIMEOUT, stdin=subprocess.DEVNULL)
         except subprocess.TimeoutExpired:
             raise ConfigError(f"secret command timed out after {_SECRET_TIMEOUT}s: {arg}") from None
+        except OSError:
+            raise ConfigError(f"secret command could not start: {arg}") from None
+        except UnicodeError:
+            raise ConfigError(f"secret command returned non-UTF-8 text: {arg}") from None
         if proc.returncode != 0:
-            tail = proc.stderr.strip().splitlines()[-1:] or [""]
-            raise ConfigError(f"secret command exited {proc.returncode}: {arg}: {tail[0]}")
+            raise ConfigError(f"secret command exited {proc.returncode}: {arg}")
         value = proc.stdout
     elif source == "file":
         try:
             value = Path(arg).read_text(encoding="utf-8")
         except OSError as exc:
-            raise ConfigError(f"secret file {arg}: {exc.strerror or exc}") from None
+            raise ConfigError(f"secret file {arg}: {exc.strerror or type(exc).__name__}") from None
+        except UnicodeError:
+            raise ConfigError(f"secret file {arg}: not UTF-8 text") from None
     else:
         value = os.environ.get(arg, "")
     value = value.strip()
