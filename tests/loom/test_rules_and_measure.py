@@ -189,7 +189,7 @@ def test_gate_refuses_check_unknown_keys_and_bad_ids(tmp_path: Path) -> None:
     assert out.returncode == 1
     err = out.stderr
     assert "30-rules: memory/rules/guarded.md: check: not supported yet" in err
-    assert "30-rules: memory/rules/odd.md: unknown key: keep (keys: id, when)" in err
+    assert "30-rules: memory/rules/odd.md: unknown key: keep (keys: id, when, on)" in err
     assert "30-rules: memory/rules/empty-when.md: when is empty; drop it for a wake rule" in err
     assert "30-rules: memory/rules/wrong.md: id other is not file stem wrong" in err
     assert "30-rules: memory/rules/notes.txt: not a rule file" in err

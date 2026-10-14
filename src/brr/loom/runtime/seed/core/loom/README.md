@@ -22,11 +22,15 @@ when: [migration, "schema change"]
 Never touch `migrations/`; the person owns them.
 ```
 
-- **trigger**: `when:` is a list of words or phrases. The rule is shown when one of them appears, as a whole word and in any case, in this thread's README or in an owed letter. It is shown as `### <id> · when: <the word that matched>`.
-- **wake**: no `when:`. The rule is shown on every wake as `### <id> · wake`.
-- `check:` is reserved for rules kept by a check on what a body emits. `core/immune.d/30-rules` refuses it until that exists, and refuses any other key.
+Three keys say when you see a rule:
 
-A rule shown in full is left out of the tree. A trigger rule that did not match stays in the tree as one line, so it is still one read away. A rule file the gate would refuse makes the wake exit 1 with its name.
+- **`when:` — at wake.** A list of words or phrases. The rule is shown when one of them appears, as a whole word and in any case, in this thread's README or in an owed letter. It is shown as `### <id> · when: <the word that matched>`.
+- **`on:` — at the act.** A list of `"<Tool> <glob>"`, such as `on: ["Edit migrations/*", "Bash git push*"]`. The tool is the Shell's tool name, or `*` for any tool. The glob is matched against what the call acts on: the file path (and that path relative to the call's directory), the command, the URL, the query, or a search's pattern or path. When a call matches, the jack hands you the rule right after the call, as *a note you left yourself*, naming the file and the pattern. Each body sees it once; a new body sees it again. It is a note by the front door, not a lock: the call has already happened, and nothing is refused. A rule file that does not parse is skipped and named in `port/rule-errors.log`.
+- **neither — every wake.** The rule is shown on every wake as `### <id> · wake`.
+
+A rule may have both `when:` and `on:`. `check:` is reserved for rules kept by a check on what a body emits. `core/immune.d/30-rules` refuses it until that exists, and refuses any other key.
+
+A rule shown in full is left out of the tree. A trigger rule that did not match, and a rule with only `on:`, stays in the tree as one line, so it is still one read away. A rule file the gate would refuse makes the wake exit 1 with its name.
 
 ## A thread's measure
 
