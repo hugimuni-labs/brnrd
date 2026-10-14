@@ -14,6 +14,7 @@ VERBS = {
     "threads": ("verbs_threads", "_threads"),
     "attention": ("verbs_loom", "_attention"),
     "init": ("verbs_self", "cmd_init"),
+    "import-daemon": ("import_daemon", "main"),
     "wake": ("verbs_self", "cmd_wake"),
     "send-self": ("verbs_merge", "main"),
     "publish": ("publish", "main"),
