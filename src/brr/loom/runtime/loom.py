@@ -76,6 +76,37 @@ def _commit_identity(room: Path) -> tuple[str, str]:
     return found if found is not None else (AUTHOR_NAME, AUTHOR_EMAIL)
 
 
+_FORGE_TOKEN_VARS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
+
+
+def _forge_env(room: Path, env: dict[str, str]) -> None:
+    """A body's ``gh`` speaks as the home, or not at all — never as the person.
+
+    On a host the body runs as the person, so a bare ``gh`` would read their
+    login from ``~/.config/gh`` or the keyring. ``GH_CONFIG_DIR`` points at an
+    empty folder in the room, inherited tokens are dropped, and the home's
+    ``forge_token_file`` (when set) becomes ``GH_TOKEN``. No token: gh is
+    signed out and says so.
+    """
+    for name in _FORGE_TOKEN_VARS:
+        env.pop(name, None)
+    gh_dir = room / "port" / "gh"
+    gh_dir.mkdir(parents=True, exist_ok=True)
+    env["GH_CONFIG_DIR"] = str(gh_dir)
+    if room.parent.name != "rooms":
+        return
+    from .config import load_config
+    token_file = load_config(room.parent.parent).forge_token_file
+    if not token_file:
+        return
+    try:
+        token = Path(token_file).read_text(encoding="utf-8").strip()
+    except OSError:
+        return
+    if token:
+        env["GH_TOKEN"] = token
+
+
 def _env(room: Path) -> dict[str, str]:
     env = _env_without_pin()
     parts = [part for part in env.get("PYTHONPATH", "").split(os.pathsep) if part]
@@ -89,6 +120,7 @@ def _env(room: Path) -> dict[str, str]:
     for role in ("AUTHOR", "COMMITTER"):
         env[f"GIT_{role}_NAME"] = name
         env[f"GIT_{role}_EMAIL"] = email
+    _forge_env(room, env)
     env["BRNRD_ROOM"] = str(room)
     env["BRNRD_WAKE"] = str(room / "port" / "wake.md")
     env["BRNRD_JACK"] = (f"{shlex.quote(sys.executable)} -m brr.loom.runtime jack "
