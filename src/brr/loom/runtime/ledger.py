@@ -11,6 +11,7 @@ from pathlib import Path
 from brr.daemon2.facts import Fact, union
 
 from .home import Home, mint, thread_of
+from .registry import admit
 
 
 class LedgerConflict(RuntimeError):
@@ -137,7 +138,12 @@ def _heal_tail(path: Path) -> None:
 
 
 def append(home: Home, fact: Fact) -> Fact:
-    """Append ``fact``. Same id + same content is a no-op; different content raises."""
+    """Append ``fact``. Same id + same content is a no-op; different content raises.
+
+    The one write path: a fact of a closed resource the registry does not
+    declare is refused here, before anything touches the folder.
+    """
+    admit(fact)
     directory = home.facts_dir()
     lock_path = directory / ".lock"
     with open(lock_path, "a+") as lock:
