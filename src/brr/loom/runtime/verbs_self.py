@@ -7,16 +7,18 @@ import sys
 from pathlib import Path
 
 from brr.loom.runtime.selfrepo import SelfError, init_self, run_wake
+from .home import resolve_home
 
 
 def cmd_init(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime init")
-    parser.add_argument("--home", required=True)
+    parser.add_argument("--home")
     parser.add_argument("--person", default=None)
     parser.add_argument("--remote", default=None)
     args = parser.parse_args(argv)
+    home, _ = resolve_home(args.home)
     try:
-        print(init_self(Path(args.home), person=args.person, remote=args.remote))
+        print(init_self(home, person=args.person, remote=args.remote))
     except SelfError as exc:
         print(str(exc), file=sys.stderr)
         return 1

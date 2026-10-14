@@ -19,6 +19,7 @@ from pathlib import Path
 from brr.daemon_install import linux, macos
 
 from .config import load_config
+from .home import resolve_home
 from .threads import _age
 
 
@@ -219,10 +220,10 @@ def _agents(agents_home: Path | None) -> Path:
 
 def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeout, system) -> int:
     parser = argparse.ArgumentParser(prog="brnrd loom install")
-    parser.add_argument("--home", required=True)
+    parser.add_argument("--home")
     parser.add_argument("--no-start", action="store_true")
     args = parser.parse_args(argv)
-    home = Path(args.home).expanduser().resolve()
+    home, _ = resolve_home(args.home)
     _require_body(home)
     system = _platform(system)
     poll = _poll(poll_timeout, system)
@@ -364,22 +365,42 @@ def _status(*, run, agents_home, system, pid_alive) -> int:
     return 0
 
 
-def _installed_home(agents_home, system) -> Path | None:
-    if _platform(system) == "Linux":
-        return _linux_home(UNIT)
-    return macos.installed_workdir(home=_agents(agents_home), label=LABEL)
+def cmd_where(argv: list[str]) -> int:
+    """Print today's home layout without creating paths or an install id."""
+    from .config import config_path
+
+    parser = argparse.ArgumentParser(prog="brnrd loom where")
+    parser.add_argument("--home")
+    args = parser.parse_args(argv)
+    home, source = resolve_home(args.home)
+    print(f"home: {home}")
+    print(f"source: {source}")
+    for name, path in (
+        ("config", config_path(home)), ("self", home / "self"),
+        ("ledger", home / "ledger"), ("rooms", home / "rooms"),
+        ("logs", home / "loom" / "loom.log"),
+        ("body logs", home / "rooms" / "<strand>" / "port" / "body.log"),
+    ):
+        print(f"{name}: {path}")
+    return 0
 
 
-def _config(argv: list[str], *, agents_home, system) -> int:
+def cmd_config(argv: list[str]) -> int:
+    return _config(argv)
+
+
+def _config(argv: list[str]) -> int:
     """``brnrd loom config [--home H]``: every key, its effective value, source, help."""
     from .config import ConfigError, config_path, describe_config
 
     parser = argparse.ArgumentParser(prog="brnrd loom config")
     parser.add_argument("--home", default=None)
+    parser.add_argument("action", nargs="?", choices=("edit",), help="edit and validate the config")
     args = parser.parse_args(argv)
-    home = Path(args.home).expanduser().resolve() if args.home else _installed_home(agents_home, system)
-    if home is None:
-        raise SystemExit("loom config: no --home and no installed loom service to read it from")
+    home, _ = resolve_home(args.home)
+    if args.action == "edit":
+        from .config_edit import edit_config
+        return edit_config(home)
     try:
         rows = describe_config(home)
     except ConfigError as exc:
@@ -463,7 +484,9 @@ def main(
     if verb in {"start", "stop", "status", "uninstall"}:
         argparse.ArgumentParser(prog=f"brnrd loom {verb}").parse_args(rest)
     if verb == "config":
-        return _config(rest, agents_home=agents_home, system=system)
+        return _config(rest)
+    if verb == "where":
+        return cmd_where(rest)
     if verb == "install":
         return _install(rest, **shared)
     if verb == "start":
@@ -477,5 +500,5 @@ def main(
     if verb == "uninstall":
         return _uninstall(run=run, agents_home=agents_home, system=system)
     raise SystemExit(
-        "usage: brnrd loom install --home PATH | uninstall | start | stop | status | logs | config"
+        "usage: brnrd loom install [--home PATH] | uninstall | start | stop | status | logs | where | config [edit]"
     )

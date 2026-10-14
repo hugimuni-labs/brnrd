@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from .home import Home, strand_of_room
+from .home import Home, resolve_home, strand_of_room
 from .jack import run as run_jack
 from .ledger import read_facts
 from .loom import pending_bodies, run as run_loom
@@ -25,7 +25,7 @@ def _room(arg: str | None) -> Path:
 
 def _loom(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime loom")
-    parser.add_argument("--home", required=True)
+    parser.add_argument("--home")
     parser.add_argument("--install", default=None)
     parser.add_argument("--adapter", default=None)
     parser.add_argument("--core", default="haiku")
@@ -34,6 +34,7 @@ def _loom(argv: list[str]) -> int:
         from .check import run
         return run(argv[1:])
     args = parser.parse_args(argv)
+    args.home, _ = resolve_home(args.home)
     adapter = args.adapter
     core = args.core
     # The service argv carries no --adapter. The home's body is the choice.
@@ -52,11 +53,12 @@ def _loom(argv: list[str]) -> int:
 
 def _attention(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime attention")
-    parser.add_argument("--home", required=True)
+    parser.add_argument("--home")
     parser.add_argument("--install", default=None)
     parser.add_argument("--note", metavar="LETTER_ID")
     parser.add_argument("--why")
     args = parser.parse_args(argv)
+    args.home, _ = resolve_home(args.home)
     home = Home(args.home, install=args.install)
     if args.note:
         if not args.why or not args.why.strip():

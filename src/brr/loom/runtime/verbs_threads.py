@@ -23,10 +23,15 @@ def _threads_arguments(parser) -> None:
 
 def cmd_threads(args) -> int:
     from .threads import thread_table, render_table, left_by_thread, render_left
-    from .home import Home, home_of_room
+    from .home import Home, home_of_room, resolve_home
     from .ledger import read_facts
     from .verbs_loom import _room
-    home = Home(args.home) if args.home else home_of_room(_room(args.room))
+    if args.home is not None:
+        home = Home(resolve_home(args.home)[0])
+    elif args.room or os.environ.get('BRNRD_ROOM'):
+        home = home_of_room(_room(args.room))
+    else:
+        home = Home(resolve_home()[0])
     if args.due:
         from .threads import due_table
         sys.stdout.write(due_table(home, read_facts(home)))
@@ -40,7 +45,7 @@ def cmd_threads(args) -> int:
             data = read_thread(home, args.force)
             if not data or data.get('status') in CLOSED:
                 raise PortError('force: thread must be open on main; its opener can reopen it with send --reopen')
-            if args.room or not args.home or os.environ.get('BRNRD_ROOM'):
+            if args.room or os.environ.get('BRNRD_ROOM'):
                 own = own_thread(_room(args.room))
                 if data.get('opened-by') != 'thread:' + own:
                     raise PortError(f"force: only {data.get('opened-by') or 'the operator'} or the operator may start anyway")
@@ -85,4 +90,3 @@ def _threads(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime threads")
     _threads_arguments(parser)
     return cmd_threads(parser.parse_args(argv))
-
