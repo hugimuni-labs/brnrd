@@ -4,9 +4,35 @@ A wake is this directory's `wake` script, run with the working directory set to 
 
 The script takes a thread id and a path to `owed.json` (`[{id, from, body}]`). `LOOM_BUDGET_BYTES` defaults to 24000. `LOOM_PART` is a file the loom writes; its contents are printed whole.
 
-Order: identity, stance, this thread's README and its notes, then one line for every other markdown file under `memory/`, `threads/` and `people/` (nothing under `hearth/`), then the loom part, then the owed letters. Identity, stance, the thread, the loom part and the letters are never cut. If those alone exceed the budget the script exits 3 and names what did not fit. Otherwise the tree is cut from the oldest end, and the last line says how many entries were left out. Each of those is one read away.
+Order: identity, stance, the distance (when the thread has a measure), this thread's README and its notes, the rules, then one line for every other markdown file under `memory/`, `threads/` and `people/` (nothing under `hearth/`), then the loom part, then the owed letters.
+
+What is cut, and when: identity, stance, the distance, the thread, the wake rules, the loom part and the letters are never cut. If those alone exceed the budget the script exits 3 and names what did not fit. The tree is cut first, from the oldest end, and its last line says how many entries were left out. Matched trigger rules are cut only once the tree is empty, from the last id, and a line names the ones left out. Each of those is one read away.
 
 Exit 0 is a prompt. Exit 3 is over budget. Any other exit is a broken recipe.
+
+## Rules
+
+A rule is one file, `memory/rules/<id>.md`: frontmatter, then the rule's text. The file says how the rule is kept; the wake does not guess.
+
+```
+---
+id: no-migrations
+when: [migration, "schema change"]
+---
+Never touch `migrations/`; the person owns them.
+```
+
+- **trigger**: `when:` is a list of words or phrases. The rule is shown when one of them appears, as a whole word and in any case, in this thread's README or in an owed letter. It is shown as `### <id> · when: <the word that matched>`.
+- **wake**: no `when:`. The rule is shown on every wake as `### <id> · wake`.
+- `check:` is reserved for rules kept by a check on what a body emits. `core/immune.d/30-rules` refuses it until that exists, and refuses any other key.
+
+A rule shown in full is left out of the tree. A trigger rule that did not match stays in the tree as one line, so it is still one read away. A rule file the gate would refuse makes the wake exit 1 with its name.
+
+## A thread's measure
+
+A README may declare `measure: <path>`, a file inside the self committed with mode `100755`. A thread with `tense: goal` must declare one; `10-readme` refuses it otherwise, and refuses a measure that is missing or not executable at the pushed tip.
+
+Before the wake is printed, the script runs the measure with the self as its working directory, for at most `LOOM_MEASURE_SECONDS` (30), and prints its stdout (the first 1024 bytes) as `## Distance`, right after identity and stance. A measure that fails, times out or is missing prints `measure failed: <path>: <reason>` and the end of its stderr there instead. The wake still goes on.
 
 ## Notices
 
