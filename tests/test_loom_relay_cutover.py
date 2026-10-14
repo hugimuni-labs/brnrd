@@ -141,9 +141,11 @@ def test_cloud_gate_records_its_cursor_after_each_poll(tmp_path, monkeypatch):
 
 
 def test_config_reads_flat_relay_keys(tmp_path):
+    # Section headers are skipped; a key under one is still a key, and the
+    # strict loader refuses one it does not know (test_config_seeded.py).
     (tmp_path / "loom").mkdir()
     (tmp_path / "loom" / "config.toml").write_text(
-        'relay_state = "~/acct"\n[channels.relay]\nenabled = true\n'
+        'relay_state = "~/acct"\n[channels.relay]\n'
     )
     config = load_config(tmp_path)
     assert config.relay_state == os.path.expanduser("~/acct")
