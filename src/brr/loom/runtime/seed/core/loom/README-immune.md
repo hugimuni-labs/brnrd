@@ -77,8 +77,9 @@ shell grammar is preserved: whitespace-only lines are not empty, required
 list values remain literal strings, and keys are ASCII names.
 `30-rules` refuses changed files under `memory/rules/` (the first push:
 all of them) that are not `memory/rules/<id>.md` with frontmatter whose
-`id` is the file's stem, an optional non-empty `when:` list, no other
-key, and some rule text. A rule declaring `check:` is refused with
+`id` is the file's stem, an optional non-empty `when:` list, an optional
+non-empty `on:` list whose items are each `<Tool> <glob>` (both parts
+non-empty), no other key, and some rule text. A rule declaring `check:` is refused with
 "check: not supported yet": the key is reserved, never ignored. `.gitkeep`
 is allowed.
 `50-core-notice` never refuses: changes under `core/` print
