@@ -7,14 +7,20 @@ stdout is the prompt. Exit 0 is ok, exit 3 is over budget (stderr says
 what did not fit), anything else is a broken recipe.
 
 LOOM_BUDGET_BYTES defaults to 24000. LOOM_PART is a file, written by the loom.
-Parts 1, 3 and 4 are never cut. The tree is cut from the bottom, and a
-narrowed wake says how many entries were left out.
+LOOM_MEASURE_SECONDS (default 30) bounds a thread's measure.
+
+Never cut: identity, stance, the distance, the thread and its notes, the wake
+rules, the loom part, the letters. Cut first: the tree, from the oldest end.
+Cut next: matched trigger rules, from the last id. A narrowed wake says how
+many entries and rules were left out.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -22,6 +28,11 @@ from pathlib import Path
 DEFAULT_BUDGET = 24000
 TREE_ROOTS = ("memory", "threads", "people")
 _PINNED = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+RULES = "memory/rules"
+RULE_KEYS = ("id", "when")
+MEASURE_SECONDS = 30
+MEASURE_BYTES = 1024
+STDERR_TAIL = 400
 
 
 def die(why: str, code: int = 1) -> None:
@@ -94,7 +105,7 @@ def first_line(path: Path, why: str) -> str:
     return next((line for line in lines if line.strip()), "")
 
 
-def tree_lines(root: Path, thread: str) -> list[str]:
+def tree_lines(root: Path, thread: str, shown: frozenset[str] = frozenset()) -> list[str]:
     rows: list[tuple[int, str, str]] = []
     times = git_times(root)
     for top in TREE_ROOTS:
@@ -111,7 +122,7 @@ def tree_lines(root: Path, thread: str) -> list[str]:
             posix = rel.as_posix()
             if posix == "memory/stance.md":
                 continue
-            if posix == f"threads/{thread}/README.md":
+            if posix == f"threads/{thread}/README.md" or posix in shown:
                 continue
             if (
                 len(parts) >= 3
@@ -138,7 +149,7 @@ def notes_block(root: Path, thread: str) -> str:
     return "".join(chunks)
 
 
-def occasion(path: Path) -> str:
+def letters(path: Path) -> list[dict]:
     if not path.is_file():
         die(f"owed.json: no such file: {path}")
     try:
@@ -149,33 +160,193 @@ def occasion(path: Path) -> str:
         die(f"owed.json: not utf-8: {exc}")
     if not isinstance(data, list):
         die("owed.json: expected a list")
-    chunks = ["## Occasion\n"]
     for item in data:
         if not isinstance(item, dict) or any(key not in item for key in ("id", "from", "body")):
             die("owed.json: each letter needs id, from, body")
-        ident, sender, body = item["id"], item["from"], item["body"]
-        if not all(isinstance(value, str) for value in (ident, sender, body)):
+        if not all(isinstance(item[key], str) for key in ("id", "from", "body")):
             die("owed.json: id, from and body must be strings")
+    return data
+
+
+def occasion(owed: list[dict]) -> str:
+    chunks = ["## Occasion\n"]
+    for item in owed:
+        ident, sender, body = item["id"], item["from"], item["body"]
         chunks.append(f"### {ident} from {sender} · reply {item.get('reply_to', '-')}\n{ensure_nl(body)}")
     return "".join(chunks)
 
 
-def fixed_text(root: Path, thread: str, loom: str, owed: Path) -> tuple[str, str]:
-    """The parts never cut, as (before the tree, after the tree).
+def frontmatter(text: str, why: str) -> tuple[dict, str]:
+    """10-readme's line grammar: ``key: value`` or ``key: [a, "b c"]``. Dies on anything else."""
+    lines = text.replace("\r", "").split("\n")
+    if not lines or lines[0] != "---" or "---" not in lines[1:]:
+        die(f"{why}: frontmatter missing or unclosed")
+    end = lines.index("---", 1)
+    values: dict = {}
+    for line in lines[1:end]:
+        if line == "":
+            continue
+        key, separator, raw = line.partition(":")
+        key = key.strip(" ")
+        if line[:1] in " \t" or not separator or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", key):
+            die(f"{why}: frontmatter line not key: value: {line}")
+        if key in values:
+            die(f"{why}: duplicate key: {key}")
+        raw = raw.strip(" ")
+        if raw.startswith("["):
+            if not raw.endswith("]"):
+                die(f"{why}: list unclosed: {key}")
+            inner = raw[1:-1].strip(" ")
+            items = [piece.strip(" ") for piece in inner.split(",")] if inner else []
+            if any(not piece for piece in items):
+                die(f"{why}: list malformed: {key}")
+            values[key] = [unquote(piece) for piece in items]
+        else:
+            values[key] = unquote(raw)
+    return values, "\n".join(lines[end + 1 :]).strip("\n") + "\n"
 
-    The occasion goes last: it is what this wake is for.
+
+def unquote(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        return value[1:-1]
+    return value
+
+
+def load_rules(root: Path) -> list[tuple[str, list[str] | None, str]]:
+    """Every rule as (id, when or None, text), by id. The entry declares how it is kept.
+
+    The gate (core/immune.d/30-rules) refuses a bad rule on main; a clone that
+    still holds one is a broken recipe, said by name, never a guess.
     """
+    folder = root / RULES
+    if not folder.is_dir():
+        return []
+    rules = []
+    for path in sorted(folder.iterdir(), key=lambda item: item.name):
+        rel = f"{RULES}/{path.name}"
+        if path.name == ".gitkeep":
+            continue
+        if path.is_symlink() or not path.is_file() or path.suffix != ".md":
+            die(f"{rel}: not a rule file; rules are {RULES}/<id>.md")
+        values, body = frontmatter(read_exact(path, rel), rel)
+        if "check" in values:
+            die(f"{rel}: check: not supported yet")
+        unknown = sorted(key for key in values if key not in RULE_KEYS)
+        if unknown:
+            die(f"{rel}: unknown key: {', '.join(unknown)}")
+        if values.get("id") != path.stem:
+            die(f"{rel}: id {values.get('id', '')} is not file stem {path.stem}")
+        when = values.get("when")
+        if when is not None and (not isinstance(when, list) or not when or not all(w.strip() for w in when)):
+            die(f"{rel}: when must be a non-empty list")
+        rules.append((path.stem, when, body))
+    return rules
+
+
+def matched_word(when: list[str], text: str) -> str | None:
+    """The first declared word or phrase found whole, case-insensitive, else None."""
+    for word in when:
+        words = word.split()
+        pattern = r"(?<!\w)" + r"\s+".join(re.escape(piece) for piece in words) + r"(?!\w)"
+        if re.search(pattern, text, re.IGNORECASE):
+            return word
+    return None
+
+
+def rule_entry(ident: str, keep: str, body: str) -> str:
+    return f"### {ident} · {keep}\n{ensure_nl(body)}"
+
+
+def rules_block(wake: list[str], matched: list[str]) -> str:
+    if not wake and not matched:
+        return ""
+    return "## Rules\n" + "".join(wake) + "".join(matched)
+
+
+def readme_measure(readme: str) -> str | None:
+    """The README's ``measure:`` value. 10-readme owns the README's validity."""
+    lines = readme.replace("\r", "").split("\n")
+    if not lines or lines[0] != "---":
+        return None
+    for line in lines[1:]:
+        if line == "---":
+            return None
+        key, separator, raw = line.partition(":")
+        if separator and key.strip(" ") == "measure":
+            return unquote(raw.strip(" ")) or None
+    return None
+
+
+def measure_seconds() -> float:
+    raw = os.environ.get("LOOM_MEASURE_SECONDS") or str(MEASURE_SECONDS)
+    try:
+        value = float(raw)
+    except ValueError:
+        die(f"LOOM_MEASURE_SECONDS is not a number: {raw}")
+    return value
+
+
+def tail_of(data: bytes) -> str:
+    text = data[-STDERR_TAIL:].decode("utf-8", "replace").strip()
+    return f"\n{text}" if text else ""
+
+
+def distance(root: Path, measure: str) -> str:
+    """Run the thread's measure; its stdout, or why it failed. Never a wake failure."""
+    def failed(reason: str) -> str:
+        return section("Distance", f"measure failed: {measure}: {reason}")
+
+    parts = measure.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        return failed("not a path inside the self")
+    path = root / measure
+    if not path.is_file():
+        return failed("no such file")
+    if not os.access(path, os.X_OK):
+        return failed("not executable")
+    env = os.environ.copy()
+    for key in _PINNED:
+        env.pop(key, None)
+    seconds = measure_seconds()
+    try:
+        proc = subprocess.Popen(
+            [str(path)], cwd=root, env=env, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+        )
+    except OSError as exc:
+        return failed(f"cannot start: {exc}")
+    try:
+        out, err = proc.communicate(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            proc.kill()
+        out, err = proc.communicate()
+        return failed(f"timed out after {seconds:g}s{tail_of(err)}")
+    if proc.returncode != 0:
+        return failed(f"exit {proc.returncode}{tail_of(err)}")
+    shown = out[:MEASURE_BYTES].decode("utf-8", "ignore")
+    if len(out) > MEASURE_BYTES:
+        shown = ensure_nl(shown) + f"(cut at {MEASURE_BYTES} of {len(out)} bytes)\n"
+    return section("Distance", shown if shown.strip() else "(the measure printed nothing)\n")
+
+
+def head_text(root: Path, thread: str) -> tuple[str, str]:
+    """(before the rules, the README text): identity, stance, distance, thread, notes."""
     identity = read_exact(root / "core" / "identity.md", "core/identity.md")
     stance = read_exact(root / "memory" / "stance.md", "memory/stance.md")
     readme_path = root / "threads" / thread / "README.md"
     readme = read_exact(readme_path, f"threads/{thread}/README.md")
+    measure = readme_measure(readme)
     parts = [
         section("core/identity.md", identity),
         section("memory/stance.md", stance),
+        distance(root, measure) if measure else "",
         section(f"threads/{thread}/README.md", readme),
         notes_block(root, thread),
     ]
-    return "".join(parts), section("Loom", loom) + occasion(owed)
+    return "".join(parts), readme
 
 
 def piece_sizes(text: str) -> list[tuple[str, int]]:
@@ -249,8 +420,21 @@ def main() -> None:
                 loom += "\n"
             loom += extra
     root = Path.cwd()
-    head, tail = fixed_text(root, thread, loom, owed)
-    fixed = head + tail
+    owed_letters = letters(owed)
+    head, readme = head_text(root, thread)
+    tail = section("Loom", loom) + occasion(owed_letters)
+    scope = "\n".join([readme, *(item["body"] for item in owed_letters)])
+    wake_rules: list[str] = []
+    triggered: list[tuple[str, str]] = []
+    rules_found = load_rules(root)
+    for ident, when, body in rules_found:
+        if when is None:
+            wake_rules.append(rule_entry(ident, "wake", body))
+            continue
+        word = matched_word(when, scope)
+        if word is not None:
+            triggered.append((ident, rule_entry(ident, f"when: {word}", body)))
+    fixed = head + rules_block(wake_rules, []) + tail
     total = len(fixed.encode("utf-8"))
     if total > limit:
         detail = ", ".join(f"{name} {size}B" for name, size in piece_sizes(fixed))
@@ -258,7 +442,23 @@ def main() -> None:
             f"over budget: {detail}; total {total}B > budget {limit}B; none of these is cut",
             3,
         )
-    sys.stdout.write(head + fit_tree(fixed, tree_lines(root, thread), limit) + tail)
+    # Matched triggers outrank the tree: the tree is cut to nothing first.
+    kept = len(triggered)
+    while kept and len(
+        (head + rules_block(wake_rules, [entry for _, entry in triggered[:kept]]) + tail).encode("utf-8")
+    ) > limit:
+        kept -= 1
+    rules = rules_block(wake_rules, [entry for _, entry in triggered[:kept]])
+    fixed = head + rules + tail
+    if kept < len(triggered):
+        left = ", ".join(ident for ident, _ in triggered[kept:])
+        rules += f"left out {len(triggered) - kept} matched rules: {left}; each is one read away\n"
+    rendered = {name for name, _ in triggered[:kept]}
+    shown = frozenset(
+        f"{RULES}/{ident}.md" for ident, when, _ in rules_found if when is None or ident in rendered
+    )
+    tree = fit_tree(fixed, tree_lines(root, thread, shown), limit)
+    sys.stdout.write(head + rules + tree + tail)
 
 
 if __name__ == "__main__":
