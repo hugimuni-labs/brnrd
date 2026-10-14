@@ -12,6 +12,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from .config import seed_config
+
 # Pinned parent git must not retarget a self. 10-readme does the opposite
 # on purpose: a bare-repo hook finds the repo through GIT_DIR.
 _PINNED_GIT = (
@@ -268,6 +270,7 @@ def init_self(home: Path, person: str | None = None, remote: str | None = None) 
     home = Path(home).resolve()
     self_dir = home / "self"
     if (self_dir / ".git").exists():
+        seed_config(home)
         return f"self already exists: {self_dir}"
     if self_dir.exists():
         raise SelfError(f"{self_dir} exists and is not a git self; refusing to overwrite")
@@ -300,6 +303,7 @@ def init_self(home: Path, person: str | None = None, remote: str | None = None) 
     except Exception:
         shutil.rmtree(self_dir, ignore_errors=True)
         raise
+    seed_config(home)
     sha = git(self_dir, "rev-parse", "--short", "HEAD").stdout.strip()
     return f"initialized {self_dir} {sha}"
 

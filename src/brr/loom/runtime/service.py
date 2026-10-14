@@ -364,6 +364,35 @@ def _status(*, run, agents_home, system, pid_alive) -> int:
     return 0
 
 
+def _installed_home(agents_home, system) -> Path | None:
+    if _platform(system) == "Linux":
+        return _linux_home(UNIT)
+    return macos.installed_workdir(home=_agents(agents_home), label=LABEL)
+
+
+def _config(argv: list[str], *, agents_home, system) -> int:
+    """``brnrd loom config [--home H]``: every key, its effective value, source, help."""
+    from .config import ConfigError, config_path, describe_config
+
+    parser = argparse.ArgumentParser(prog="brnrd loom config")
+    parser.add_argument("--home", default=None)
+    args = parser.parse_args(argv)
+    home = Path(args.home).expanduser().resolve() if args.home else _installed_home(agents_home, system)
+    if home is None:
+        raise SystemExit("loom config: no --home and no installed loom service to read it from")
+    try:
+        rows = describe_config(home)
+    except ConfigError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(f"file: {config_path(home)}" + ("" if config_path(home).is_file() else " (absent: all defaults)"))
+    width = max(len(name) for name, *_ in rows)
+    for name, value, source, help_ in rows:
+        shown = "-" if value is None else (f'"{value}"' if isinstance(value, str) else f"{value:g}")
+        print(f"{name:<{width}} = {shown} · {source} · {help_}")
+    return 0
+
+
 def _logs(argv: list[str], *, run, agents_home, system) -> int:
     parser = argparse.ArgumentParser(prog="brnrd loom logs")
     parser.add_argument("-n", "--lines", type=int, default=80)
@@ -433,6 +462,8 @@ def main(
     )
     if verb in {"start", "stop", "status", "uninstall"}:
         argparse.ArgumentParser(prog=f"brnrd loom {verb}").parse_args(rest)
+    if verb == "config":
+        return _config(rest, agents_home=agents_home, system=system)
     if verb == "install":
         return _install(rest, **shared)
     if verb == "start":
@@ -446,5 +477,5 @@ def main(
     if verb == "uninstall":
         return _uninstall(run=run, agents_home=agents_home, system=system)
     raise SystemExit(
-        "usage: brnrd loom install --home PATH | uninstall | start | stop | status | logs"
+        "usage: brnrd loom install --home PATH | uninstall | start | stop | status | logs | config"
     )
