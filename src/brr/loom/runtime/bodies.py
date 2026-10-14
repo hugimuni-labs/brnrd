@@ -56,6 +56,43 @@ TABLE = (
 
 
 @dataclass(frozen=True)
+class Step:
+    """One command, declared once. ``hand`` names the function that performs
+    it, ``records`` the fact it leaves, ``repeat`` whether performing it again
+    with its effect already in place changes nothing. ``arg`` is the hand's
+    one fixed argument."""
+    name: str
+    hand: str
+    records: str | None
+    repeat: bool
+    arg: str = ""
+
+
+COMMANDS = {step.name: step for step in (
+    #    command         hand        records              repeat
+    Step("prepare",      "prepare",  None,                True),
+    Step("shown",        "show",     "shown",             False),
+    Step("spawn",        "spawn",    None,                False),
+    Step("started",      "started",  "body.started",      False),
+    Step("pending",      "record",   "body.pending",      True),
+    Step("park",         "record",   "body.parked",       True),
+    Step("leaving",      "record",   "body.leaving",      False),
+    Step("stayed",       "record",   "body.stayed",       True),
+    Step("stopped",      "record",   "body.stopped",      False),
+    Step("unidentified", "record",   "body.unidentified", True),
+    Step("signal",       "signal",   None,                True),
+    Step("collect",      "collect",  None,                True),
+    Step("drain",        "drain",    None,                True),
+    Step("exit",         "record",   "body.exited",       False),
+    Step("end",          "end",      "attempt.ended",     False),
+    Step("end_settled",  "end",      "attempt.ended",     False, "settled"),
+    Step("end_failed",   "end",      "attempt.ended",     False, "failed"),
+    Step("drained",      "drained",  "port.drained",      True),
+    Step("release",      "release",  "released",          True),
+)}
+
+
+@dataclass(frozen=True)
 class Observation:
     strand: str
     gen: int
@@ -119,29 +156,33 @@ def state_of(facts: list[Fact], strand: str, gen: int, *, alive=False) -> State:
     return State(name, until, deadline, pending, stopped, identified, released)
 
 
+# What a row's ``observed`` column may say, each a reading of the folded
+# state and this tick's observation.
+OBSERVED = {
+    "closed": lambda s, o: o.closed,
+    "failure": lambda s, o: bool(o.failure),
+    "before until": lambda s, o: not o.force and o.now < s.until,
+    "gauge refreshing": lambda s, o: o.gauge == "refreshing",
+    "gauge empty": lambda s, o: o.gauge == "empty",
+    "gauge ok": lambda s, o: o.gauge == "ok",
+    "not alive": lambda s, o: not o.alive,
+    "alive, proven": lambda s, o: o.alive and o.proven is True,
+    "alive, not proven": lambda s, o: o.alive and o.proven is not True,
+    "alive, open": lambda s, o: o.alive and not o.closed,
+    "alive, closed": lambda s, o: o.alive and o.closed,
+    "alive, reopened": lambda s, o: o.alive and not o.closed,
+    "alive, before deadline": lambda s, o: o.alive and o.now < s.deadline,
+    "alive, due, proven": lambda s, o: o.alive and o.now >= s.deadline and o.proven is True,
+    "alive, due, unproven": lambda s, o: o.alive and o.now >= s.deadline and o.proven is False,
+    "any": lambda s, o: True,
+    "not released": lambda s, o: not s.released,
+}
+
+
 def row_for(facts: list[Fact], o: Observation) -> int:
     s = state_of(facts, o.strand, o.gen, alive=o.alive)
-    matches = {
-        "closed": o.closed,
-        "failure": bool(o.failure),
-        "before until": not o.force and o.now < s.until,
-        "gauge refreshing": o.gauge == "refreshing",
-        "gauge empty": o.gauge == "empty",
-        "gauge ok": o.gauge == "ok",
-        "not alive": not o.alive,
-        "alive, proven": o.alive and o.proven is True,
-        "alive, not proven": o.alive and o.proven is not True,
-        "alive, open": o.alive and not o.closed,
-        "alive, closed": o.alive and o.closed,
-        "alive, reopened": o.alive and not o.closed,
-        "alive, before deadline": o.alive and o.now < s.deadline,
-        "alive, due, proven": o.alive and o.now >= s.deadline and o.proven is True,
-        "alive, due, unproven": o.alive and o.now >= s.deadline and o.proven is False,
-        "any": True,
-        "not released": not s.released,
-    }
     for i, row in enumerate(TABLE):
-        if s.name in row.states and matches[row.observed]:
+        if s.name in row.states and OBSERVED[row.observed](s, o):
             return i
     message = f"body table refused: {s} × {o!r}"
     logging.getLogger(__name__).error(message)

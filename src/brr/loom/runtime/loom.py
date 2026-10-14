@@ -14,16 +14,17 @@ import threading
 import tempfile
 import time
 import traceback
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 from brr.daemon2.facts import Fact
 
 from .adapters import resolve
-from .bodies import Observation, decide, fact_for, state_of
+from .bodies import COMMANDS, Observation, decide, fact_for, state_of
 from .home import Home, atomic_write, is_channel, mint, notice_id
 from .ledger import LedgerConflict, append, read_facts
+from .registry import KINDS
 from .port import (
     fact_from_port, fact_from_taint, parse_frontmatter, render_boundary,
 )
@@ -933,81 +934,139 @@ def _boundary(home, facts, strand, gen, context):
         atomic_write(path, text)
 
 
-def _execute_body(home, bodies, facts, o, c):
+@dataclass
+class _Run:
+    """What the hands of one decision share. Nothing here outlives it."""
+    home: Home
+    bodies: dict
+    facts: list
+    o: Observation
+    c: object
+    room: Path
+    values: dict
+    letters: list = field(default_factory=list)
+    folder: Path | None = None
+    proc: subprocess.Popen | None = None
+
+
+# A hand performs one command. It returns None to go on, False to drop the
+# rest of the decision, or the observation the table is asked again with.
+
+def _failed(x, exc):
+    x.c.failure = f"{type(exc).__name__}: {exc}"
+    return replace(x.o, failure=x.c.failure)
+
+
+def _hand_prepare(x, command, step):
+    c = x.c
+    if _refuse_author(x.home, x.facts, c.thread):
+        return False
+    try:
+        x.folder = resolve(x.home, c.shell)
+        x.letters = letters_for(x.facts, main_snapshot(x.home), c.thread)
+        x.room = _prepare(x.home, x.o.strand, c.thread, x.o.gen, x.letters, sender_threads(x.facts), x.facts,
+                          (x.folder / "jack").read_text().strip(), fuel=c.fuel, repos=c.repos)
+        policy = _policy(x.home, c.thread)
+        if policy is not None:
+            atomic_write(x.room / "port/policy", policy + "\n")
+    except Exception as exc:
+        return _failed(x, exc)
+
+
+def _hand_show(x, command, step):
+    x.facts.append(_record(x.home, step.records, {"strand": x.o.strand, "gen": x.o.gen, "ids": [f.id for f in x.letters]},
+                           f"shown:wake:{x.o.strand}:{x.o.gen}"))
+
+
+def _hand_spawn(x, command, step):
+    c = x.c
+    x.values["readme"] = _readme(x.room, c.thread)
+    try:
+        x.proc, log = _spawn(x.room, [str(x.folder / "run"), str(x.room), c.core], c.shell, c.thread)
+    except Exception as exc:
+        return _failed(x, exc)
+    x.bodies[x.o.strand] = Body(x.o.strand, c.thread, x.o.gen, x.proc, log)
+    x.values["pid"] = x.proc.pid
+
+
+def _hand_record(x, command, step):
+    """Write a body fact: its fields are the registry's, its id follows ``once``."""
+    c, kind = x.c, KINDS[step.records]
+    why = {"body.stopped": c.why, "body.exited": c.failure,
+           "body.unidentified": f"pid {c.pid} could not be proven to be the body on thread {c.thread}"}
+    values = {**x.values, "deadline": command.deadline, "why": why.get(kind.kind)}
+    data = {name: values[name] for name in kind.names() if name in kind.required() or values.get(name)}
+    ident = f"{kind.kind}:{x.o.strand}:{x.o.gen}" + ("" if kind.once else f":{mint(6)}")
+    x.facts.append(_record(x.home, kind.kind, data, ident))
+
+
+def _hand_started(x, command, step):
+    c = x.c
+    x.values["lstart"] = _ps_field(x.proc.pid, "lstart") or ""
+    _hand_record(x, command, step)
+    _log(x.home, f"start {x.o.strand} thread {c.thread} gen {x.o.gen} pid {x.proc.pid} {c.shell}/{c.core}")
+
+
+def _hand_signal(x, command, step):
+    _end_group(x.c.pid)
+    if not body_alive(x.room):
+        return replace(x.o, alive=False)
+
+
+def _hand_collect(x, command, step):
+    body = x.bodies.pop(x.o.strand, None)
+    if body:
+        x.values["code"] = _collect_exit(body)
+        body.close_log()
+
+
+def _hand_drain(x, command, step):
+    x.facts = _drain_strand(x.home, x.facts, x.o.strand)
+
+
+def _hand_end(x, command, step):
     from .bodies import exit_cause
-    strand, gen, thread, room = o.strand, o.gen, c.thread, home.room(o.strand)
-    data, code, letters = {"strand": strand, "gen": gen}, None, []
+    o, c = x.o, x.c
+    exited = fact_for(x.facts, "body.exited", o.strand, o.gen)
+    shown = fold(x.facts).shown.get(o.strand, set())
+    letters = [f for f in letters_for(x.facts, main_snapshot(x.home), c.thread) if step.arg == "failed" or f.id in shown]
+    x.facts = _end_attempt(x.home, x.facts, o.strand, c.thread, o.gen, exited.data.get("code") if exited else None,
+                           letters, step.arg or exit_cause(x.facts, o, owed=bool(letters)), c.failure)
+
+
+def _hand_drained(x, command, step):
+    if not fact_for(x.facts, step.records, x.o.strand, x.o.gen):
+        x.facts = _drained(x.home, x.facts, x.o.strand, x.c.thread, x.o.gen)
+
+
+def _hand_release(x, command, step):
+    x.facts = _release(x.home, x.facts, x.o.strand, x.c.thread, x.o.gen)
+
+
+HANDS = {
+    "prepare": _hand_prepare, "show": _hand_show, "spawn": _hand_spawn, "started": _hand_started,
+    "record": _hand_record, "signal": _hand_signal, "collect": _hand_collect, "drain": _hand_drain,
+    "end": _hand_end, "drained": _hand_drained, "release": _hand_release,
+}
+
+
+def _execute_body(home, bodies, facts, o, c):
+    """Perform what the table decided: each command's declared hand, in order."""
+    empty = c.empty or {}
+    x = _Run(home, bodies, facts, o, c, home.room(o.strand), {
+        "strand": o.strand, "gen": o.gen, "shell": c.shell, "core": c.core, "pid": c.pid, "code": None,
+        "window": empty.get("name"), "left_pct": empty.get("left_pct"), "until": o.until})
     commands = decide(facts, [o])
     if o.alive:
-        _boundary(home, facts, strand, gen, c)
+        _boundary(home, facts, o.strand, o.gen, c)
     for command in commands:
-        name = command.name
-        if name == "prepare":
-            if _refuse_author(home, facts, thread):
-                return facts
-            try:
-                folder = resolve(home, c.shell)
-                letters = letters_for(facts, main_snapshot(home), thread)
-                room = _prepare(home, strand, thread, gen, letters, sender_threads(facts), facts,
-                                (folder / "jack").read_text().strip(), fuel=c.fuel, repos=c.repos)
-                policy = _policy(home, thread)
-                if policy is not None:
-                    atomic_write(room / "port/policy", policy + "\n")
-            except Exception as exc:
-                c.failure = f"{type(exc).__name__}: {exc}"
-                return _execute_body(home, bodies, facts, replace(o, failure=c.failure), c)
-        elif name == "shown":
-            facts.append(_record(home, "shown", {**data, "ids": [f.id for f in letters]}, f"shown:wake:{strand}:{gen}"))
-        elif name == "spawn":
-            readme = _readme(room, thread)
-            try:
-                proc, log = _spawn(room, [str(folder / "run"), str(room), c.core], c.shell, thread)
-            except Exception as exc:
-                c.failure = f"{type(exc).__name__}: {exc}"
-                return _execute_body(home, bodies, facts, replace(o, failure=c.failure), c)
-            bodies[strand] = Body(strand, thread, gen, proc, log)
-        elif name in {"started", "pending", "park", "leaving", "stayed", "stopped", "unidentified", "exit"}:
-            kind = "body." + {"park": "parked", "exit": "exited"}.get(name, name)
-            extra = {}
-            if name == "started":
-                extra = {"pid": proc.pid, "shell": c.shell, "core": c.core, "readme": readme, "lstart": _ps_field(proc.pid, "lstart") or ""}
-            elif name in {"pending", "park"}:
-                extra = {"shell": c.shell, "core": c.core}
-                if name == "park":
-                    extra.update(window=c.empty["name"], left_pct=c.empty["left_pct"], until=o.until)
-            elif name == "leaving":
-                extra = {"deadline": command.deadline}
-            elif name in {"stopped", "unidentified"}:
-                extra = {"pid": c.pid, "why": c.why if name == "stopped" else f"pid {c.pid} could not be proven to be the body on thread {thread}"}
-            elif name == "exit":
-                extra = {"code": code, **({"why": c.failure} if c.failure else {})}
-            facts.append(_record(home, kind, {**data, **extra}, f"{kind}:{strand}:{gen}:{mint(6)}" if name in {"park", "leaving", "stayed", "unidentified"} else f"{kind}:{strand}:{gen}"))
-            if name == "started":
-                _log(home, f"start {strand} thread {thread} gen {gen} pid {proc.pid} {c.shell}/{c.core}")
-        elif name == "signal":
-            _end_group(c.pid)
-            if not body_alive(room):
-                return _execute_body(home, bodies, facts, replace(o, alive=False), c)
-        elif name == "collect":
-            body = bodies.pop(strand, None)
-            if body:
-                code = _collect_exit(body)
-                body.close_log()
-        elif name == "drain":
-            facts = _drain_strand(home, facts, strand)
-        elif name.startswith("end"):
-            exited = fact_for(facts, "body.exited", strand, gen)
-            code = exited.data.get("code") if exited else None
-            shown = fold(facts).shown.get(strand, set())
-            letters = [f for f in letters_for(facts, main_snapshot(home), thread) if name == "end_failed" or f.id in shown]
-            cause = "failed" if name == "end_failed" else "settled" if name == "end_settled" else exit_cause(facts, o, owed=bool(letters))
-            facts = _end_attempt(home, facts, strand, thread, gen, code, letters, cause, c.failure)
-        elif name == "drained":
-            if not fact_for(facts, "port.drained", strand, gen):
-                facts = _drained(home, facts, strand, thread, gen)
-        elif name == "release":
-            facts = _release(home, facts, strand, thread, gen)
-    return facts
+        step = COMMANDS[command.name]
+        again = HANDS[step.hand](x, command, step)
+        if again is False:
+            break
+        if again is not None:
+            return _execute_body(home, bodies, x.facts, again, c)
+    return x.facts
 
 
 def _advance_body(home, strand, thread, gen, bodies, facts, *, choice=None, force=False):
