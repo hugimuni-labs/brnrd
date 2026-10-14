@@ -26,13 +26,14 @@ _PINNED_GIT = (
 )
 
 STATUSES = ("open", "live", "dormant", "settled", "retired")
-TENSES = ("plan", "reference")
+TENSES = ("plan", "reference", "goal")
 STATUS_WHY = "open|live|dormant|settled|retired"
-TENSE_WHY = "plan|reference"
+TENSE_WHY = "plan|reference|goal"
 _EXECUTABLES = (
     "core/loom/wake",
     "core/immune.d/10-readme",
     "core/immune.d/20-labels",
+    "core/immune.d/30-rules",
 )
 
 AUTHOR_NAME = "brnrd-loom"
@@ -139,6 +140,21 @@ def _require(data: dict) -> None:
         raise ReadmeError(f"tense {tense} is not one of {TENSE_WHY}")
     if tense == "reference" and status != "settled":
         raise ReadmeError("tense reference requires status settled")
+    measure = data.get("measure")
+    if tense == "goal" and (measure is None or measure == ""):
+        raise ReadmeError("tense goal requires measure")
+    if "measure" in data:
+        # The file itself is judged at the pushed tip, by 10-readme only.
+        parts = measure.split("/") if isinstance(measure, str) else [""]
+        if any(part in ("", ".", "..") for part in parts):
+            raise ReadmeError(f"measure is not a path inside the self: {_shown(measure)}")
+
+
+def _shown(value: object) -> str:
+    """A list as the shell grammar wrote it, so both parsers name it alike."""
+    if isinstance(value, list):
+        return "[" + ", ".join(value) + "]"
+    return str(value)
 
 
 def _headline(lines: list[str]) -> str:
