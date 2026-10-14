@@ -8,6 +8,7 @@ import json
 import os
 import signal
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -83,21 +84,46 @@ def _forge_env(room: Path, env: dict[str, str]) -> None:
     """A body's ``gh``: the home's token when it has one, otherwise the
     machine's own login; ``gh = "off"`` in loom/config.toml signs it out.
     """
-    from .config import load_config
+    from .config import load_config, secret_shell
     config = load_config(room.parent.parent) if room.parent.name == "rooms" else None
     mode = config.gh if config is not None else "auto"
-    token = ""
-    if mode == "auto" and config is not None and config.forge_token_file:
-        try:
-            token = Path(config.forge_token_file).read_text(encoding="utf-8").strip()
-        except OSError:
-            token = ""
-    if mode == "auto" and not token:
+    spec = config.forge_token if config is not None else None
+    if mode == "auto" and not spec:
         return
+    # An env source can itself name one of the machine token variables.
+    source_var = spec.removeprefix("env: ") if spec and spec.startswith("env: ") else None
+    source_token = env.get(source_var, "") if source_var in _FORGE_TOKEN_VARS else None
     for name in _FORGE_TOKEN_VARS:
         env.pop(name, None)
-    if token:
-        env["GH_TOKEN"] = token
+    if mode == "auto":
+        path = env.get("PATH", os.defpath)
+        real_gh = shutil.which("gh", path=path)
+        if real_gh is None:
+            _log(Home(room.parent.parent), "forge_token configured but gh not found on body PATH; no gh shim")
+            return
+        real_gh = str(Path(real_gh).absolute())
+        bin_dir = room / "port" / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        snippet = secret_shell(spec)
+        if source_token is not None:
+            env["BRNRD_GH_SECRET_SOURCE"] = source_token
+            snippet = (f'{source_var}=${{{source_var}-$BRNRD_GH_SECRET_SOURCE}}; '
+                       f'export {source_var}; ' + snippet)
+        # Restore the original PATH while resolving, so command: gh auth token
+        # calls the real gh rather than recursing through this shim.
+        script = (
+            "#!/bin/sh\n"
+            f"GH_TOKEN=$(PATH={shlex.quote(path)} sh -c {shlex.quote(snippet)} 2>/dev/null) || "
+            "{ echo 'gh: forge_token source failed' >&2; exit 1; }\n"
+            "[ -n \"$GH_TOKEN\" ] || { echo 'gh: forge_token source gave nothing' >&2; exit 1; }\n"
+            "export GH_TOKEN\n"
+            "unset BRNRD_GH_SECRET_SOURCE\n"
+            f"exec {shlex.quote(real_gh)} \"$@\"\n"
+        )
+        shim = bin_dir / "gh"
+        shim.write_text(script, encoding="utf-8")
+        shim.chmod(0o700)
+        env["PATH"] = str(bin_dir) + os.pathsep + path
         return
     gh_dir = room / "port" / "gh"
     gh_dir.mkdir(parents=True, exist_ok=True)

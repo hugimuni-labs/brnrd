@@ -1,19 +1,25 @@
 """``loom/config.toml``: the knobs one home's looms share.
 
 Flat ``key = value`` lines only: ``[sections]`` are ignored, so the relay
-switch is ``relay_state = "<dir>"``, never
-``[channels.relay]``. A few-line file, parsed here, so step 3 does not take a TOML dependency
-on Python 3.10. Unknown keys are ignored. ``stop_grace`` is how many seconds
-a settled thread's body may take to leave before the loop ends it.
-``BRNRD_LOOM_CLOCK_SKEW_S`` is
-test-only: production leaves it unset and ``loom_clock`` is ``time.time``.
+switch is ``relay_state = "<dir>"``, never ``[channels.relay]``. A few-line
+file, parsed here, so the loom takes no TOML dependency on Python 3.10.
+
+``KEYS`` is the one declaration: name, kind, default, help. The dataclass,
+the parser, the file ``init`` seeds and ``brnrd loom config`` all derive from
+it. An unknown key or a value of the wrong kind is refused at load with the
+file, the key and the nearest known key; a typo never silently becomes a
+default. ``BRNRD_LOOM_CLOCK_SKEW_S`` is test-only: production leaves it unset
+and ``loom_clock`` is ``time.time``.
 """
 
 from __future__ import annotations
 
+import difflib
 import os
+import re
+import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, make_dataclass
 from pathlib import Path
 
 
@@ -27,27 +33,62 @@ DEFAULT_MARGIN = 1.0
 DEFAULT_STOP_GRACE = 60.0
 
 
+class ConfigError(ValueError):
+    """``loom/config.toml`` names a key the loom does not know, or misuses one."""
+
+
 @dataclass(frozen=True)
-class LoomConfig:
-    body: str | None = None
-    hold_floor_pct: float = 3.0
-    name: str | None = None
-    router_ttl: float = DEFAULT_TTL
-    max_skew: float = DEFAULT_SKEW
-    margin: float = DEFAULT_MARGIN
-    #: Seconds after a thread is settled before the loop signals its body.
-    stop_grace: float = DEFAULT_STOP_GRACE
-    #: The account's cloud gate state directory (holds ``gates/cloud.json``).
-    relay_state: str | None = None
-    #: ``Name <email>`` for every commit a body makes. Unset uses the loom's.
-    author: str | None = None
-    #: A file holding the forge token ``publish`` pushes with. Unset pushes
-    #: with the machine's own git setup.
-    forge_token_file: str | None = None
-    #: A body's ``gh``: ``auto`` uses the forge token above when the home has
-    #: one, otherwise whatever gh is signed in on the machine. ``off`` signs
-    #: it out.
-    gh: str = "auto"
+class Key:
+    """One knob. ``kind`` is ``text``, ``path`` (``~`` expanded), ``secret``
+    (how to get a value: ``command:``, ``file:`` or ``env:``), ``seconds``
+    (a number >= 0), ``positive`` (a number > 0), ``percent`` or ``choice``."""
+
+    name: str
+    kind: str
+    default: object
+    help: str
+    choices: tuple[str, ...] = ()
+
+
+KEYS: tuple[Key, ...] = (
+    Key("name", "text", None,
+        "This loom's name. A thread whose README says `for: <name>` runs only on the loom of that name; unset matches none."),
+    Key("body", "text", None,
+        "The body a login service runs, as shell/core (e.g. claude/sonnet). "
+        "Required by `brnrd loom install`."),
+    Key("author", "text", None,
+        "`Name <email>` for every commit a body makes. Unset: the loom's own."),
+    Key("forge_token", "secret", None,
+        "How to get the forge token `publish` pushes with and a body's gh uses: "
+        "\"command: gh auth token\", \"file: ~/path\" or \"env: NAME\". Read at each "
+        "use, never stored. Unset: the machine's own git setup and gh login."),
+    Key("gh", "choice", "auto",
+        "A body's `gh`: auto uses the forge token above when the home has one, "
+        "else the machine's gh login; off signs it out.",
+        choices=("auto", "off")),
+    Key("relay_state", "path", None,
+        "The account's cloud gate state directory (holds gates/cloud.json). "
+        "Set it to switch the relay on."),
+    Key("hold_floor_pct", "percent", 3.0,
+        "A quota window with this percent or less left counts as exhausted: a held body stays held."),
+    Key("stop_grace", "seconds", DEFAULT_STOP_GRACE,
+        "Seconds a settled thread's body may take to land and exit before it is signalled."),
+    Key("router_ttl", "positive", DEFAULT_TTL,
+        "Seconds a router lease lasts; a silent router is replaced after this."),
+    Key("max_skew", "seconds", DEFAULT_SKEW,
+        "Clock skew, in seconds, a router lease must tolerate; grants stop at until - max_skew - margin."),
+    Key("margin", "seconds", DEFAULT_MARGIN,
+        "Extra seconds, beyond max_skew, a router stops granting before its lease ends."),
+)
+BY_NAME = {k.name: k for k in KEYS}
+
+#: Derived, not written out a second time: one field per ``KEYS`` row.
+LoomConfig = make_dataclass(
+    "LoomConfig",
+    [(k.name, object, k.default) for k in KEYS],
+    frozen=True,
+    namespace={"__module__": __name__, "__doc__": "The effective config; fields mirror ``KEYS``."},
+)
 
 
 def loom_clock() -> float:
@@ -76,64 +117,194 @@ def _literal(raw: str) -> object:
         return raw
 
 
-def load_config(root: Path | str) -> LoomConfig:
-    path = Path(root) / "loom" / "config.toml"
+def config_path(root: Path | str) -> Path:
+    return Path(root) / "loom" / "config.toml"
+
+
+def _coerce(key: Key, value: object, path: Path) -> object:
+    def refuse(want: str) -> ConfigError:
+        return ConfigError(f"{path}: {key.name} must be {want}, not {value!r}")
+
+    if key.kind in {"text", "path"}:
+        if not isinstance(value, str):
+            raise refuse("a quoted string")
+        value = value.strip()
+        if not value:
+            return None
+        return os.path.expanduser(value) if key.kind == "path" else value
+    if key.kind == "secret":
+        if not isinstance(value, str):
+            raise refuse("a quoted string")
+        value = value.strip()
+        if not value:
+            return None
+        try:
+            return _secret_source(value)
+        except ConfigError:
+            raise refuse('"command: <shell>", "file: <path>" or "env: <NAME>"') from None
+    if key.kind == "choice":
+        if value not in key.choices:
+            raise refuse(" or ".join(f'"{c}"' for c in key.choices))
+        return value
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise refuse("a number")
+    number = float(value)
+    if key.kind == "positive" and number <= 0:
+        raise refuse("greater than 0")
+    if number < 0:
+        raise refuse("0 or more")
+    return number
+
+
+def _without_comment(line: str) -> str:
+    """Keep hashes inside a quoted source (shell commands often need them)."""
+    quote = ""
+    escaped = False
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+        elif char == "\\" and quote == '"':
+            escaped = True
+        elif quote:
+            if char == quote:
+                quote = ""
+        elif char in {"'", '"'}:
+            quote = char
+        elif char == "#":
+            return line[:index]
+    return line
+
+
+def load_config_report(root: Path | str) -> tuple[LoomConfig, frozenset[str]]:
+    """The effective config and the keys the file set (the rest are defaults)."""
+    path = config_path(root)
     found: dict[str, object] = {}
     if path.is_file():
         for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.split("#", 1)[0].strip()
+            line = _without_comment(line).strip()
             if not line or "=" not in line:
                 continue
             key, _, raw = line.partition("=")
             found[key.strip()] = _literal(raw.strip())
-    name = found.get("name")
-    if not isinstance(name, str) or not name.strip():
-        name = None
-    else:
-        name = name.strip()
+    values: dict[str, object] = {}
+    for name, value in found.items():
+        key = BY_NAME.get(name)
+        if key is None:
+            near = difflib.get_close_matches(name, list(BY_NAME), n=1)
+            hint = f" (did you mean {near[0]}?)" if near else f" (known: {', '.join(BY_NAME)})"
+            raise ConfigError(f"{path}: unknown key {name!r}{hint}")
+        values[name] = _coerce(key, value, path)
+    return LoomConfig(**values), frozenset(found)
 
-    def number(key: str, default: float) -> float:
-        value = found.get(key, default)
+
+def load_config(root: Path | str) -> LoomConfig:
+    return load_config_report(root)[0]
+
+
+def _render_value(value: object) -> str:
+    if value is None:
+        return '""'
+    if isinstance(value, str):
+        return f'"{value}"'
+    return repr(value)
+
+
+def render_config() -> str:
+    """The file ``init`` seeds: every key commented out at its default."""
+    out = [
+        "# brnrd loom config: the knobs this home's looms share.",
+        "# Flat `key = value` lines; [sections] are not read. Every line below is",
+        "# commented out at its default: uncomment one to change it. An unknown",
+        "# key, or a value of the wrong kind, is refused when the loom starts.",
+        "# `brnrd loom config` prints what is in effect and where each came from.",
+    ]
+    for key in KEYS:
+        out += ["", f"# {key.help}", f"# {key.name} = {_render_value(key.default)}"]
+    return "\n".join(out) + "\n"
+
+
+def seed_config(root: Path | str) -> bool:
+    """Write the commented file unless one exists. True when it wrote."""
+    path = config_path(root)
+    if path.exists():
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_config(), encoding="utf-8")
+    return True
+
+
+def describe_config(root: Path | str) -> list[tuple[str, object, str, str]]:
+    """``(key, effective value, source, help)`` for every key, in ``KEYS`` order."""
+    cfg, from_file = load_config_report(root)
+    return [
+        (k.name, getattr(cfg, k.name), "file" if k.name in from_file else "default", k.help)
+        for k in KEYS
+    ]
+
+
+SECRET_SOURCES = ("command", "file", "env")
+_SECRET_TIMEOUT = 30
+
+
+def _secret_source(spec: str) -> str:
+    """``spec`` normalised to ``<source>: <arg>``; a ``file:`` path is ``~``-expanded."""
+    source, colon, arg = spec.partition(":")
+    source, arg = source.strip(), arg.strip()
+    if not colon or source not in SECRET_SOURCES or not arg:
+        raise ConfigError(f"not a secret source: {spec!r}")
+    if source == "env" and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", arg):
+        raise ConfigError(f"not a secret source: {spec!r}")
+    if source == "file":
+        arg = os.path.expanduser(arg)
+    return f"{source}: {arg}"
+
+
+def resolve_secret(spec: str) -> str:
+    """Run a secret source now and return the value.
+
+    Called at each use, never once at load: the bot's App token expires
+    hourly, so a value read at start goes stale under a running loom. The
+    value is returned, never logged; an error names the source, not the value.
+    """
+    source, _, arg = _secret_source(spec).partition(": ")
+    if source == "command":
         try:
-            value = float(value)
-        except (TypeError, ValueError):
-            return default
-        if value < 0:
-            return default
-        return value
+            proc = subprocess.run(["sh", "-c", arg], capture_output=True, text=True,
+                                  timeout=_SECRET_TIMEOUT, stdin=subprocess.DEVNULL)
+        except subprocess.TimeoutExpired:
+            raise ConfigError(f"secret command timed out after {_SECRET_TIMEOUT}s: {arg}") from None
+        except OSError:
+            raise ConfigError(f"secret command could not start: {arg}") from None
+        except UnicodeError:
+            raise ConfigError(f"secret command returned non-UTF-8 text: {arg}") from None
+        if proc.returncode != 0:
+            raise ConfigError(f"secret command exited {proc.returncode}: {arg}")
+        value = proc.stdout
+    elif source == "file":
+        try:
+            value = Path(arg).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ConfigError(f"secret file {arg}: {exc.strerror or type(exc).__name__}") from None
+        except UnicodeError:
+            raise ConfigError(f"secret file {arg}: not UTF-8 text") from None
+    else:
+        value = os.environ.get(arg, "")
+    value = value.strip()
+    if not value:
+        raise ConfigError(f"secret {source}: {arg} gave nothing")
+    return value
 
-    relay_state = found.get("relay_state")
-    if not isinstance(relay_state, str) or not relay_state.strip():
-        relay_state = None
-    else:
-        relay_state = os.path.expanduser(relay_state.strip())
-    author = found.get("author")
-    if not isinstance(author, str) or not author.strip():
-        author = None
-    else:
-        author = author.strip()
-    forge_token_file = found.get("forge_token_file")
-    if not isinstance(forge_token_file, str) or not forge_token_file.strip():
-        forge_token_file = None
-    else:
-        forge_token_file = os.path.expanduser(forge_token_file.strip())
-    gh = found.get("gh", "auto")
-    if gh not in ("auto", "off"):
-        raise ValueError(f"loom/config.toml: gh must be \"auto\" or \"off\", not {gh!r}")
 
-    return LoomConfig(
-        body=found.get("body") or None,
-        hold_floor_pct=number("hold_floor_pct", 3.0),
-        name=name,
-        relay_state=relay_state,
-        author=author,
-        forge_token_file=forge_token_file,
-        gh=gh,
-        router_ttl=number("router_ttl", DEFAULT_TTL) or DEFAULT_TTL,
-        max_skew=number("max_skew", DEFAULT_SKEW),
-        margin=number("margin", DEFAULT_MARGIN),
-        stop_grace=number("stop_grace", DEFAULT_STOP_GRACE),
-    )
+def secret_shell(spec: str) -> str:
+    """A shell snippet that prints the secret when run: what a ``gh`` shim
+    evaluates at each call."""
+    import shlex
+    source, _, arg = _secret_source(spec).partition(": ")
+    if source == "command":
+        return arg
+    if source == "file":
+        return f"cat {shlex.quote(arg)}"
+    return f"printenv {shlex.quote(arg)}"
 
 
 def granting_window(now: float, until: float, max_skew: float, margin: float) -> bool:
