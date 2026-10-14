@@ -36,7 +36,6 @@ def stuck(reason):
 def root(tmp_path):
     path = tmp_path / "home"
     init_self(path)
-    (path / "loom").mkdir()
     write_thread(path, "inbox", (Home(path).thread_dir("inbox") / "README.md").read_text(),
                  "answer-fast", wait="0.1")
     return path

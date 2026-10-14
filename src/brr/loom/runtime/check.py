@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 
 from brr.daemon2.facts import union
-from .home import Home, is_channel
+from .home import Home, is_channel, resolve_home
 from .ledger import read_facts
 from .project import fold
 
@@ -70,11 +70,11 @@ def violations(facts, main, *, quiet_end=False):
 
 def run(argv):
     parser = argparse.ArgumentParser(prog='brnrd loom check')
-    parser.add_argument('--home', required=True)
+    parser.add_argument('--home')
     parser.add_argument('--quiet-end', action='store_true',
                         help='require no loom or channel debts at the final prefix')
     args = parser.parse_args(argv)
-    home = Home(args.home)
+    home = Home(resolve_home(args.home)[0])
     from .lifecycle import main_snapshot
     facts, main = read_facts(home), main_snapshot(home)
     problems = violations(facts, main, quiet_end=args.quiet_end)

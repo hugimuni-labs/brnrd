@@ -12,6 +12,29 @@ _ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 _THREAD_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 
 
+def resolve_home(flag: str | Path | None = None) -> tuple[Path, str]:
+    """Resolve an explicit home, the environment, or an existing default home.
+
+    Explicit paths may be new: ``init`` must be able to create a home.
+    Only the implicit default needs evidence that it belongs to the loom.
+    """
+    if flag is not None:
+        return Path(flag).expanduser().resolve(), "flag"
+    env = os.environ.get("BRNRD_HOME")
+    if env:
+        return Path(env).expanduser().resolve(), "env"
+    default = Path.home() / "brnrd"
+    if any((default / marker).is_file() for marker in (
+        "loom/config.toml", "loom/install-id", "self/core/loom/wake",
+    )):
+        return default.resolve(), "default"
+    raise SystemExit(
+        "no loom home: --home was not given; BRNRD_HOME is unset or empty; "
+        f"default {default} is not a loom home. Pass --home PATH, set BRNRD_HOME, "
+        "or initialise ~/brnrd with --home."
+    )
+
+
 def mint(n: int) -> str:
     return "".join(secrets.choice(_ALPHABET) for _ in range(n))
 

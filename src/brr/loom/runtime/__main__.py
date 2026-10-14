@@ -6,6 +6,8 @@ import importlib
 import sys
 
 VERBS = {
+    "where": ("service", "cmd_where"),
+    "config": ("service", "cmd_config"),
     "loom": ("verbs_loom", "_loom"),
     "send": ("verbs_loom", "_send"),
     "settle": ("verbs_loom", "_settle"),
