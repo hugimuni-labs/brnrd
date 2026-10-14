@@ -2,10 +2,13 @@
 """Refuse changed rule files that do not declare how they are kept.
 
 A rule is one file, memory/rules/<id>.md: frontmatter, then the rule's text.
-Keys: id (the file's stem) and when (a non-empty list of words or phrases).
-A rule with when is a trigger; without it, a wake rule. check is reserved
-and refused until the self has a check point for it; any other key is
-refused, so nothing is silently ignored. Anything else under memory/rules/
+Keys: id (the file's stem), when (a non-empty list of words or phrases) and
+on (a non-empty list of "<Tool> <glob>": a tool name or *, a space, an
+fnmatch glob over the call's main argument). A rule with when is shown at
+wake when a word matches; a rule with on is shown at the act, once per body;
+a rule with neither is a wake rule, always shown. check is reserved and
+refused until the self has a check point for it; any other key is refused,
+so nothing is silently ignored. Anything else under memory/rules/
 except .gitkeep is refused too. The frontmatter line grammar is 10-readme's.
 --file checks one file; an all-zero old tip checks every incoming rule.
 Git's hook environment, including GIT_DIR, is kept.
@@ -15,7 +18,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-KEYS = ("id", "when")
+KEYS = ("id", "when", "on")
 LETTERS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 ID_CHARS = LETTERS + "0123456789_-"
 
@@ -73,12 +76,17 @@ def frontmatter(lines):
 
 
 def check_content(content, stem):
+    parse_rule(content, stem)
+
+
+def parse_rule(content, stem):
+    """(frontmatter values, body text) of a valid rule, else a Refusal. The jack reads rules through this."""
     lines = content.replace("\r", "").split("\n")
     if lines and lines[-1] == "":
         lines.pop()
     values, body = frontmatter(lines)
     if "check" in values:
-        raise Refusal("check: not supported yet; use when: or no key (a wake rule)")
+        raise Refusal("check: not supported yet; use when:, on: or no key (a wake rule)")
     unknown = sorted(key for key in values if key not in KEYS)
     if unknown:
         raise Refusal(f"unknown key: {', '.join(unknown)} (keys: {', '.join(KEYS)})")
@@ -93,8 +101,19 @@ def check_content(content, stem):
             raise Refusal("when must be a list: when: [word, \"a phrase\"]")
         if not when or any(not word.strip() for word in when):
             raise Refusal("when is empty; drop it for a wake rule")
+    if "on" in values:
+        on = values["on"]
+        if not isinstance(on, list):
+            raise Refusal('on must be a list: on: ["Edit migrations/*", "Bash git push*"]')
+        if not on:
+            raise Refusal("on is empty; drop it for a wake rule")
+        for item in on:
+            tool, _, glob = item.strip(" ").partition(" ")
+            if not tool or not glob.strip(" "):
+                raise Refusal(f"on item is not <Tool> <glob>: {item}")
     if not any(line.strip() for line in body):
         raise Refusal("rule text missing")
+    return values, "\n".join(body).strip("\n") + "\n"
 
 
 def stem_of(path):

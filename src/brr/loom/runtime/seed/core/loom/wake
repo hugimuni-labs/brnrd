@@ -29,7 +29,7 @@ DEFAULT_BUDGET = 24000
 TREE_ROOTS = ("memory", "threads", "people")
 _PINNED = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
 RULES = "memory/rules"
-RULE_KEYS = ("id", "when")
+RULE_KEYS = ("id", "when", "on")
 MEASURE_SECONDS = 30
 MEASURE_BYTES = 1024
 STDERR_TAIL = 400
@@ -212,8 +212,11 @@ def unquote(value: str) -> str:
     return value
 
 
-def load_rules(root: Path) -> list[tuple[str, list[str] | None, str]]:
-    """Every rule as (id, when or None, text), by id. The entry declares how it is kept.
+def load_rules(root: Path) -> list[tuple[str, list[str] | None, list[str] | None, str]]:
+    """Every rule as (id, when or None, on or None, text), by id. The entry declares how it is kept.
+
+    A rule with on and no when is the jack's, shown at the act; the wake leaves
+    it one line in the tree.
 
     The gate (core/immune.d/30-rules) refuses a bad rule on main; a clone that
     still holds one is a broken recipe, said by name, never a guess.
@@ -239,8 +242,17 @@ def load_rules(root: Path) -> list[tuple[str, list[str] | None, str]]:
         when = values.get("when")
         if when is not None and (not isinstance(when, list) or not when or not all(w.strip() for w in when)):
             die(f"{rel}: when must be a non-empty list")
-        rules.append((path.stem, when, body))
+        on = values.get("on")
+        if on is not None and (not isinstance(on, list) or not on or not all(on_item(item) for item in on)):
+            die(f"{rel}: on must be a non-empty list of \"<Tool> <glob>\"")
+        rules.append((path.stem, when, on, body))
     return rules
+
+
+def on_item(item: str) -> bool:
+    """30-rules' shape for an on: item: a tool, a space, a non-empty glob."""
+    tool, _, glob = item.strip(" ").partition(" ")
+    return bool(tool and glob.strip(" "))
 
 
 def matched_word(when: list[str], text: str) -> str | None:
@@ -427,9 +439,11 @@ def main() -> None:
     wake_rules: list[str] = []
     triggered: list[tuple[str, str]] = []
     rules_found = load_rules(root)
-    for ident, when, body in rules_found:
-        if when is None:
+    for ident, when, on, body in rules_found:
+        if when is None and on is None:
             wake_rules.append(rule_entry(ident, "wake", body))
+            continue
+        if when is None:
             continue
         word = matched_word(when, scope)
         if word is not None:
@@ -455,7 +469,8 @@ def main() -> None:
         rules += f"left out {len(triggered) - kept} matched rules: {left}; each is one read away\n"
     rendered = {name for name, _ in triggered[:kept]}
     shown = frozenset(
-        f"{RULES}/{ident}.md" for ident, when, _ in rules_found if when is None or ident in rendered
+        f"{RULES}/{ident}.md" for ident, when, on, _ in rules_found
+        if (when is None and on is None) or ident in rendered
     )
     tree = fit_tree(fixed, tree_lines(root, thread, shown), limit)
     sys.stdout.write(head + rules + tree + tail)
