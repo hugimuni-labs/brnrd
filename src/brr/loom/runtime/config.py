@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import difflib
 import os
+import re
+import subprocess
 import time
 from dataclasses import dataclass, make_dataclass
 from pathlib import Path
@@ -37,7 +39,8 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True)
 class Key:
-    """One knob. ``kind`` is ``text``, ``path`` (``~`` expanded), ``seconds``
+    """One knob. ``kind`` is ``text``, ``path`` (``~`` expanded), ``secret``
+    (how to get a value: ``command:``, ``file:`` or ``env:``), ``seconds``
     (a number >= 0), ``positive`` (a number > 0), ``percent`` or ``choice``."""
 
     name: str
@@ -55,9 +58,10 @@ KEYS: tuple[Key, ...] = (
         "Required by `brnrd loom install`."),
     Key("author", "text", None,
         "`Name <email>` for every commit a body makes. Unset: the loom's own."),
-    Key("forge_token_file", "path", None,
-        "A file holding the forge token `publish` pushes with. "
-        "Unset: push with the machine's own git setup."),
+    Key("forge_token", "secret", None,
+        "How to get the forge token `publish` pushes with and a body's gh uses: "
+        "\"command: gh auth token\", \"file: ~/path\" or \"env: NAME\". Read at each "
+        "use, never stored. Unset: the machine's own git setup and gh login."),
     Key("gh", "choice", "auto",
         "A body's `gh`: auto uses the forge token above when the home has one, "
         "else the machine's gh login; off signs it out.",
@@ -128,6 +132,16 @@ def _coerce(key: Key, value: object, path: Path) -> object:
         if not value:
             return None
         return os.path.expanduser(value) if key.kind == "path" else value
+    if key.kind == "secret":
+        if not isinstance(value, str):
+            raise refuse("a quoted string")
+        value = value.strip()
+        if not value:
+            return None
+        try:
+            return _secret_source(value)
+        except ConfigError:
+            raise refuse('"command: <shell>", "file: <path>" or "env: <NAME>"') from None
     if key.kind == "choice":
         if value not in key.choices:
             raise refuse(" or ".join(f'"{c}"' for c in key.choices))
@@ -142,13 +156,32 @@ def _coerce(key: Key, value: object, path: Path) -> object:
     return number
 
 
+def _without_comment(line: str) -> str:
+    """Keep hashes inside a quoted source (shell commands often need them)."""
+    quote = ""
+    escaped = False
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+        elif char == "\\" and quote == '"':
+            escaped = True
+        elif quote:
+            if char == quote:
+                quote = ""
+        elif char in {"'", '"'}:
+            quote = char
+        elif char == "#":
+            return line[:index]
+    return line
+
+
 def load_config_report(root: Path | str) -> tuple[LoomConfig, frozenset[str]]:
     """The effective config and the keys the file set (the rest are defaults)."""
     path = config_path(root)
     found: dict[str, object] = {}
     if path.is_file():
         for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.split("#", 1)[0].strip()
+            line = _without_comment(line).strip()
             if not line or "=" not in line:
                 continue
             key, _, raw = line.partition("=")
@@ -207,6 +240,71 @@ def describe_config(root: Path | str) -> list[tuple[str, object, str, str]]:
         (k.name, getattr(cfg, k.name), "file" if k.name in from_file else "default", k.help)
         for k in KEYS
     ]
+
+
+SECRET_SOURCES = ("command", "file", "env")
+_SECRET_TIMEOUT = 30
+
+
+def _secret_source(spec: str) -> str:
+    """``spec`` normalised to ``<source>: <arg>``; a ``file:`` path is ``~``-expanded."""
+    source, colon, arg = spec.partition(":")
+    source, arg = source.strip(), arg.strip()
+    if not colon or source not in SECRET_SOURCES or not arg:
+        raise ConfigError(f"not a secret source: {spec!r}")
+    if source == "env" and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", arg):
+        raise ConfigError(f"not a secret source: {spec!r}")
+    if source == "file":
+        arg = os.path.expanduser(arg)
+    return f"{source}: {arg}"
+
+
+def resolve_secret(spec: str) -> str:
+    """Run a secret source now and return the value.
+
+    Called at each use, never once at load: the bot's App token expires
+    hourly, so a value read at start goes stale under a running loom. The
+    value is returned, never logged; an error names the source, not the value.
+    """
+    source, _, arg = _secret_source(spec).partition(": ")
+    if source == "command":
+        try:
+            proc = subprocess.run(["sh", "-c", arg], capture_output=True, text=True,
+                                  timeout=_SECRET_TIMEOUT, stdin=subprocess.DEVNULL)
+        except subprocess.TimeoutExpired:
+            raise ConfigError(f"secret command timed out after {_SECRET_TIMEOUT}s: {arg}") from None
+        except OSError:
+            raise ConfigError(f"secret command could not start: {arg}") from None
+        except UnicodeError:
+            raise ConfigError(f"secret command returned non-UTF-8 text: {arg}") from None
+        if proc.returncode != 0:
+            raise ConfigError(f"secret command exited {proc.returncode}: {arg}")
+        value = proc.stdout
+    elif source == "file":
+        try:
+            value = Path(arg).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ConfigError(f"secret file {arg}: {exc.strerror or type(exc).__name__}") from None
+        except UnicodeError:
+            raise ConfigError(f"secret file {arg}: not UTF-8 text") from None
+    else:
+        value = os.environ.get(arg, "")
+    value = value.strip()
+    if not value:
+        raise ConfigError(f"secret {source}: {arg} gave nothing")
+    return value
+
+
+def secret_shell(spec: str) -> str:
+    """A shell snippet that prints the secret when run: what a ``gh`` shim
+    evaluates at each call."""
+    import shlex
+    source, _, arg = _secret_source(spec).partition(": ")
+    if source == "command":
+        return arg
+    if source == "file":
+        return f"cat {shlex.quote(arg)}"
+    return f"printenv {shlex.quote(arg)}"
 
 
 def granting_window(now: float, until: float, max_skew: float, margin: float) -> bool:

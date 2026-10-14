@@ -184,10 +184,12 @@ def test_the_token_answers_only_its_host_and_never_enters_argv(tmp_path: Path) -
     token = tmp_path / "token"
     token.write_text("ghs_secret\n")
     args, env, lane, _note_ = push_command(
-        "https://example.com/acme/widget.git", "loom/work", str(token))
+        "https://example.com/acme/widget.git", "loom/work", f"file: {token}")
     assert lane == "token"
     assert "ghs_secret" not in " ".join(args)
-    assert all("ghs_secret" not in value for value in env.values())
+    assert env["BRNRD_FORGE_TOKEN"] == "ghs_secret"
+    assert all("ghs_secret" not in value for key, value in env.items()
+               if key != "BRNRD_FORGE_TOKEN")
     config = args[:args.index("push")]
     # A machine gitconfig with its own helper and an ssh rewrite: neither is read.
     machine = _credential_home(tmp_path)
@@ -220,14 +222,14 @@ def test_a_token_is_not_traded_for_the_machines_keys(tmp_path: Path, source: str
     token = tmp_path / "token"
     token.write_text("ghs_secret\n")
     with pytest.raises(PublishError, match="only sent over https"):
-        push_command(source, "loom/work", str(token))
+        push_command(source, "loom/work", f"file: {token}")
 
 
 def test_no_token_pushes_as_the_machine_and_says_so(tmp_path: Path) -> None:
     args, _env_, lane, note = push_command(
         "https://example.com/acme/widget.git", "loom/work", None)
     assert lane == "machine"
-    assert "no forge_token_file" in note and "this machine's own git setup" in note
+    assert "no forge_token" in note and "this machine's own git setup" in note
     assert args[-3:] == ["--", "https://example.com/acme/widget.git",
                          "refs/heads/loom/work:refs/heads/loom/work"]
 
@@ -483,3 +485,34 @@ raise SystemExit("no bounce")
     finally:
         loom.halt()
         _kill(read_facts(Home(root)))
+
+
+def test_command_token_is_resolved_once_for_each_push(tmp_path):
+    token = tmp_path / "token"
+    token.write_text("first-token\n")
+    calls = tmp_path / "calls"
+    spec = f"command: echo call >> '{calls}'; cat '{token}'"
+    for value in ("first-token", "next-token"):
+        token.write_text(value + "\n")
+        args, env, lane, note = push_command("https://example.com/widget.git", "loom/work", spec)
+        assert env["BRNRD_FORGE_TOKEN"] == value
+        assert value not in " ".join(args) + note
+        config = args[:args.index("push")]
+        for _ in range(2):
+            proc = subprocess.run(["git", *config, "credential", "fill"], cwd=tmp_path, env=env,
+                                  input="protocol=https\nhost=example.com\n\n",
+                                  capture_output=True, text=True, timeout=5)
+            assert proc.returncode == 0
+            assert f"password={value}\n" in proc.stdout
+    assert calls.read_text().splitlines() == ["call", "call"]
+
+
+def test_resolver_failure_becomes_publish_error_without_secret_value(tmp_path):
+    token = tmp_path / "token"
+    token.write_text("do-not-log-this-token\n")
+    source = f"command: cat '{token}' >&2; exit 7"
+    with pytest.raises(PublishError) as err:
+        push_command("https://example.com/widget.git", "loom/work", source)
+    assert source in str(err.value)
+    assert "exited 7" in str(err.value)
+    assert "do-not-log-this-token" not in str(err.value)

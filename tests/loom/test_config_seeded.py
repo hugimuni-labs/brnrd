@@ -9,7 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from brr.loom.runtime.config import KEYS, ConfigError, load_config, load_config_report, render_config
+from brr.loom.runtime.config import (
+    KEYS, ConfigError, describe_config, load_config, load_config_report,
+    render_config, resolve_secret, secret_shell,
+)
 from brr.loom.runtime.selfrepo import init_self
 from brr.loom.runtime.service import main as service_main
 
@@ -28,11 +31,11 @@ def test_declaration_is_the_dataclass():
 
 
 def test_unknown_key_is_refused_with_the_nearest(tmp_path):
-    home = _home(tmp_path, 'forge_token = "x"\n')
+    home = _home(tmp_path, 'forge_token_file = "x"\n')
     with pytest.raises(ConfigError) as err:
         load_config(home)
     msg = str(err.value)
-    assert "config.toml" in msg and "forge_token" in msg and "did you mean forge_token_file?" in msg
+    assert "config.toml" in msg and "forge_token" in msg and "did you mean forge_token?" in msg
 
 
 @pytest.mark.parametrize("line", ['stop_grace = "soon"', "stop_grace = -1", "router_ttl = 0", "author = 5", "gh = true"])
@@ -80,3 +83,102 @@ def test_loom_config_reports_a_refused_file(tmp_path, capsys):
     home = _home(tmp_path, "nope = 1\n")
     assert service_main(["config", "--home", str(home)]) == 1
     assert "unknown key 'nope'" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(("raw", "normalised"), [
+    (" command : echo token ", "command: echo token"),
+    ("file: /tmp/token", "file: /tmp/token"),
+    (" env : TOKEN_1 ", "env: TOKEN_1"),
+    ("", None),
+])
+def test_secret_source_is_normalised(tmp_path, raw, normalised):
+    cfg = load_config(_home(tmp_path, f'forge_token = "{raw}"\n'))
+    assert cfg.forge_token == normalised
+
+
+def test_secret_file_expands_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg = load_config(_home(tmp_path, 'forge_token = "file: ~/token"\n'))
+    assert cfg.forge_token == f"file: {tmp_path}/token"
+
+
+@pytest.mark.parametrize("raw", ["token", "command:", "file: ", "env:", "env: 1BAD", "env: A B", "url: x"])
+def test_bad_secret_source_is_refused(tmp_path, raw):
+    with pytest.raises(ConfigError) as err:
+        load_config(_home(tmp_path, f'forge_token = "{raw}"\n'))
+    assert 'forge_token must be "command: <shell>", "file: <path>" or "env: <NAME>"' in str(err.value)
+
+
+def test_secret_wrong_type_is_refused(tmp_path):
+    with pytest.raises(ConfigError, match="forge_token must be a quoted string"):
+        load_config(_home(tmp_path, "forge_token = 42\n"))
+
+
+def test_secret_command_hash_is_not_a_config_comment(tmp_path):
+    cfg = load_config(_home(tmp_path, 'forge_token = "command: echo token # shell comment" # config comment\n'))
+    assert cfg.forge_token == "command: echo token # shell comment"
+    assert resolve_secret(cfg.forge_token) == "token"
+
+
+@pytest.mark.parametrize("source", ["command", "file", "env"])
+def test_resolve_secret_and_shell_read_each_source(tmp_path, monkeypatch, source):
+    token = tmp_path / "token with spaces"
+    token.write_text("first-token\n")
+    monkeypatch.setenv("TEST_FORGE_TOKEN", "first-token")
+    spec = {"command": f"command: cat '{token}'", "file": f"file: {token}",
+            "env": "env: TEST_FORGE_TOKEN"}[source]
+    assert resolve_secret(spec) == "first-token"
+    proc = subprocess.run(["sh", "-c", secret_shell(spec)], capture_output=True, text=True)
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == "first-token"
+    token.write_text("next-token\n")
+    monkeypatch.setenv("TEST_FORGE_TOKEN", "next-token")
+    assert resolve_secret(spec) == "next-token"
+
+
+def test_failed_secret_command_does_not_expose_output():
+    with pytest.raises(ConfigError) as err:
+        resolve_secret("command: printf output; printf error >&2; exit 7")
+    assert str(err.value) == "secret command exited 7: printf output; printf error >&2; exit 7"
+
+
+@pytest.mark.parametrize("spec", ["command: true", "env: MISSING_FORGE_SECRET", "file"])
+def test_empty_secret_is_refused(tmp_path, monkeypatch, spec):
+    monkeypatch.delenv("MISSING_FORGE_SECRET", raising=False)
+    if spec == "file":
+        token = tmp_path / "empty"
+        token.write_text(" \n")
+        spec = f"file: {token}"
+    with pytest.raises(ConfigError, match="gave nothing"):
+        resolve_secret(spec)
+
+
+def test_missing_secret_file_names_only_source(tmp_path):
+    with pytest.raises(ConfigError, match="secret file"):
+        resolve_secret(f"file: {tmp_path}/missing")
+
+
+def test_config_description_and_cli_do_not_resolve_secrets(tmp_path, capsys, monkeypatch):
+    import brr.loom.runtime.config as config
+    monkeypatch.setattr(config, "resolve_secret", lambda _: pytest.fail("must not resolve"))
+    home = _home(tmp_path, 'forge_token = "command: never run me"\n')
+    row = next(row for row in describe_config(home) if row[0] == "forge_token")
+    assert row[1:3] == ("command: never run me", "file")
+    assert service_main(["config", "--home", str(home)]) == 0
+    assert '= "command: never run me" · file ·' in capsys.readouterr().out
+
+
+def test_secret_command_stderr_cannot_leak_a_resolved_value(tmp_path):
+    token = tmp_path / "token"
+    token.write_text("do-not-log-this-token\n")
+    with pytest.raises(ConfigError) as err:
+        resolve_secret(f"command: cat '{token}' >&2; exit 7")
+    assert "do-not-log-this-token" not in str(err.value)
+
+
+def test_non_utf8_secret_file_is_refused_without_its_bytes(tmp_path):
+    token = tmp_path / "token"
+    token.write_bytes(b"secret-value-\xff")
+    with pytest.raises(ConfigError) as err:
+        resolve_secret(f"file: {token}")
+    assert str(err.value) == f"secret file {token}: not UTF-8 text"
