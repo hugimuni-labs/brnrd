@@ -11,7 +11,7 @@ import pytest
 from brr.loom.runtime.loom import _env
 
 
-def _room(tmp_path: Path, token: str | None) -> Path:
+def _room(tmp_path: Path, token: str | None, gh: str | None = None) -> Path:
     home = tmp_path / "home"
     (home / "loom").mkdir(parents=True)
     lines = ['name = "t"']
@@ -19,6 +19,8 @@ def _room(tmp_path: Path, token: str | None) -> Path:
         token_file = tmp_path / "forge.token"
         token_file.write_text(token + "\n")
         lines.append(f'forge_token_file = "{token_file}"')
+    if gh is not None:
+        lines.append(f'gh = "{gh}"')
     (home / "loom" / "config.toml").write_text("\n".join(lines) + "\n")
     room = home / "rooms" / "s1"
     (room / "port").mkdir(parents=True)
@@ -49,3 +51,16 @@ def test_real_gh_in_a_body_env_does_not_find_the_persons_login(tmp_path, monkeyp
     proc = subprocess.run(["gh", "auth", "status"], env=env, capture_output=True, text=True)
     assert proc.returncode != 0
     assert "not logged" in (proc.stdout + proc.stderr).lower()
+
+
+def test_person_gh_is_a_written_choice_and_then_left_alone(tmp_path, monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", "person-token")
+    monkeypatch.delenv("GH_CONFIG_DIR", raising=False)
+    env = _env(_room(tmp_path, "home-token", gh="person"))
+    assert env["GH_TOKEN"] == "person-token"
+    assert "GH_CONFIG_DIR" not in env
+
+
+def test_an_unknown_gh_value_is_refused(tmp_path):
+    with pytest.raises(ValueError):
+        _env(_room(tmp_path, None, gh="mine"))
