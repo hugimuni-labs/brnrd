@@ -100,14 +100,15 @@ def ingest(home, name, fm, attachments):
     source_id = f'source:{name}:{ident}'
     facts = read_facts(home)
     source = next((f for f in facts if f.id == source_id), None)
+    binding = reply_for_message(facts, source.data['channel'] if source else fm['to'],
+                                source.data.get('re') if source else fm.get('re'))
     if source is None:
         platform, chat = channel_parts(fm['to'], home)
         raw_sender = fm.get('from', '')
         sender = _sender(home, platform, raw_sender.partition(':')[2]
                          if raw_sender.startswith(platform + ':') else None)
         clean = clean_accepts(home.root / 'self', fm['kind'], fm.get('refs', '').split(), fm['body'])
-        reply = thread_for_message(facts, fm['to'], fm.get('re'))
-        to = route_bare(facts, f'{platform}/{chat}', reply)
+        to = route_bare(facts, f'{platform}/{chat}', binding[1] if binding else None)
         if not home.routable(to.removeprefix('thread:')):
             to = 'thread:inbox'
         blobs, blob_ids = [], []
@@ -141,6 +142,8 @@ def ingest(home, name, fm, attachments):
         sender = data['from']
         fields = dict(id=letter_id, **{'from': sender}, to=data['to'], body=data['text'],
                       cites=source.id, label=data['label'])
+        if binding:
+            fields['re'] = str(binding[0].data.get('id') or binding[0].id)
         for key in ('clean', 'refs'):
             if key in data:
                 fields[key] = data[key]
@@ -233,16 +236,21 @@ def _speech(facts, channel, kind):
             continue
         thread = threads.get(letter.by.removeprefix('strand:'))
         if thread:
-            yield fact.data, thread
+            yield fact.data, letter, thread
+
+
+def reply_for_message(facts, channel, message_id):
+    """The outbound letter and its thread, bound by a trusted same-chat receipt."""
+    if message_id not in (None, ''):
+        for data, letter, thread in _speech(facts, channel, 'speech.part'):
+            if data.get('channel') == channel and str((data.get('receipt') or {}).get('message_id')) == str(message_id):
+                return letter, thread
+    return None
 
 
 def thread_for_message(facts, channel, message_id):
-    """A reply binds only to a loom receipt in the same chat."""
-    if message_id not in (None, ''):
-        for data, thread in _speech(facts, channel, 'speech.part'):
-            if data.get('channel') == channel and str((data.get('receipt') or {}).get('message_id')) == str(message_id):
-                return thread
-    return None
+    binding = reply_for_message(facts, channel, message_id)
+    return binding[1] if binding else None
 
 
 def route_bare(facts, chat, reply_thread=None):
@@ -255,6 +263,6 @@ def route_bare(facts, chat, reply_thread=None):
         return 'thread:inbox'
     if reply_thread:
         return f'thread:{reply_thread}'
-    spoken = [thread for data, thread in _speech(facts, f'channel:{chat}', 'speech')
+    spoken = [thread for data, _letter, thread in _speech(facts, f'channel:{chat}', 'speech')
               if data.get('state') == 'sent']
     return f'thread:{spoken[-1]}' if spoken else 'thread:inbox'

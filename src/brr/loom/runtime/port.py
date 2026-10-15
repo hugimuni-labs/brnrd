@@ -134,8 +134,27 @@ def letter_attachments(root: Path, facts: list[Fact]) -> dict[str, list[str]]:
     return result
 
 
+def letter_replies(facts: list[Fact]) -> dict[str, str]:
+    """Reply context for inbound sources; an unknown native id is not a letter id."""
+    sources = {f.id: f.data for f in facts if f.kind == "source"}
+    letters = {str(f.data.get("id") or f.id): f for f in facts if f.kind == "letter"}
+    result = {}
+    for letter in letters.values():
+        source = sources.get(letter.data.get("cites"), {})
+        native = source.get("re")
+        if native in (None, ""):
+            continue
+        target = letters.get(letter.data.get("re"))
+        if target is not None:
+            first = str(target.data.get("body") or "").split("\n", 1)[0]
+            result[letter.id] = f"replying to your {letter.data['re']}: {first}"
+        else:
+            result[letter.id] = f"replying to an earlier message ({native})"
+    return result
+
+
 def _letter_lines(letter: Fact, reply: str, compact: bool,
-                  attachments: list[str] | tuple[str, ...] = ()) -> list[str]:
+                  attachments: list[str] | tuple[str, ...] = (), context: str = "") -> list[str]:
     body = str(letter.data.get("body") or "")
     first, *rest = body.split("\n") if body else [""]
     mark = " · compact" if compact else ""
@@ -145,6 +164,8 @@ def _letter_lines(letter: Fact, reply: str, compact: bool,
     ]
     if not compact:
         lines.extend(f"  {extra}" for extra in rest)
+    if context:
+        lines.append(f"  {context}")
     lines.extend(f"  {attachment}" for attachment in attachments)
     return lines
 
@@ -155,8 +176,9 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     channels: dict[str, str] | None = None,
                     opened: list[dict] | tuple[dict, ...] = (), plan: str = "",
                     replies: dict[str, str] | None = None,
-                    attachments: dict[str, list[str]] | None = None) -> str:
-    """Shown letters keep their first line and attachment paths when compacted."""
+                    attachments: dict[str, list[str]] | None = None,
+                    reply_context: dict[str, str] | None = None) -> str:
+    """Shown letters keep their first line, reply context and attachments when compacted."""
     lines = [
         f"<!-- port {strand} gen {gen} · owed "
         + " ".join(str(letter.data['id']) for letter in letters) + " -->",
@@ -179,7 +201,8 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
     for letter in letters:
         compact = str(letter.data["id"]) in shown
         reply = replies.get(letter.id, "-") if replies is not None else _reply(letter, sender_threads, thread, channels or {})
-        lines.extend(_letter_lines(letter, reply, compact, (attachments or {}).get(letter.id, ())))
+        lines.extend(_letter_lines(letter, reply, compact, (attachments or {}).get(letter.id, ()),
+                                   (reply_context or {}).get(letter.id, "")))
     lines.append("")
     return "\n".join(lines)
 

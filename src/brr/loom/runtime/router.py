@@ -24,6 +24,8 @@ from .owners import letter_owners, letters_for
 from .lifecycle import main_snapshot
 from .speak import speak
 
+REST_FACE = "⌁[b·_·d]"
+
 
 def install_of(strand: str) -> str | None:
     parts = strand.split("-")
@@ -409,11 +411,11 @@ class Router:
 
 
 def _header(state, letter: Fact) -> str:
-    """``<strand> · <thread>``: who is speaking, from which thread (fork 3)."""
+    """The resident's face and thread; strand ids stay in the ledger."""
     strand = letter.by.removeprefix("strand:")
-    thread = next((name for name, (holder, _gen) in state.holder.items()
-                   if holder == strand), None)
-    return f"{strand} · {thread}" if thread else strand
+    thread = next((f.data["thread"] for f in reversed(state.accepted)
+                   if f.kind == "lease" and f.data["strand"] == strand), None)
+    return f"{REST_FACE} {thread}" if thread else REST_FACE
 
 
 def _answers_event(state, letter: Fact) -> str | None:

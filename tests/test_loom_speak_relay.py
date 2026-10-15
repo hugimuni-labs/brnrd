@@ -106,7 +106,7 @@ def test_header_and_event_resolution_from_the_fold(home):
                   data={"id": "s-aaaa-one/a", "from": "s-aaaa-one",
                         "to": "channel:relay/telegram:42", "re": "letter:relay:ev_9"})
     assert _answers_event(state, answer) == "ev_9"
-    assert _header(state, answer) == "s-aaaa-one · inbox"
+    assert _header(state, answer) == "⌁[b·_·d] inbox"
 
 
 def test_port_accepts_relay_channels_and_refuses_unknown_kinds(tmp_path):
@@ -184,7 +184,7 @@ def test_port_cannot_claim_another_strands_sender(home):
     assert letter.by == "strand:s-writer"
     assert letter.data["from"] == "s-writer"
     state = fold(read_facts(home))
-    assert _header(state, letter) == "s-writer · first"
+    assert _header(state, letter) == "⌁[b·_·d] first"
     boundary = render_boundary("s-reader", 1, "inbox", [letter], set(),
                                {"s-writer": "first", "s-other": "second"})
     shown, = parse_boundary(boundary).letters

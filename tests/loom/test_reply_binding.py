@@ -1,0 +1,169 @@
+"""A native quoted reply keeps one binding through routing and body delivery."""
+
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from brr.daemon2.facts import Fact
+from brr.loom.runtime.connector import ingest, route_bare
+from brr.loom.runtime.home import Home
+from brr.loom.runtime.jack import execute
+from brr.loom.runtime.ledger import append, read_facts
+from brr.loom.runtime.loom import _boundary, _prepare
+from brr.loom.runtime.port import parse_boundary
+from brr.loom.runtime.project import fold, sender_threads
+from brr.loom.runtime.router import Router, _header
+
+from _step import mail, write_thread
+
+CHANNEL = "channel:mine/42"
+FIRST = "s-aaaa-first/answer"
+READER = "s-aaaa-reader"
+
+
+@pytest.fixture
+def home(tmp_path):
+    home = Home(tmp_path / "home", install="aaaa")
+    for thread in ("inbox", "first", "second"):
+        write_thread(home.root, thread, thread.title(), "quit-now")
+    (home.root / "loom/config.toml").write_text('connectors = ["mine=fake", "other=fake"]\n')
+    person = home.root / "self/people/ada"
+    person.mkdir(parents=True)
+    (person / "channels.toml").write_text('channels = ["mine:42"]\n')
+    append(home, Fact(kind="router", by="loom:aaaa", id="router:1", data={"gen": 1}))
+    return home
+
+
+def draft(home, thread, *, sent=True):
+    strand = f"s-aaaa-{thread}"
+    key = strand + "/answer"
+    append(home, Fact(kind="lease", by="loom:aaaa", id=f"lease:{thread}", data={
+        "strand": strand, "thread": thread, "gen": 1, "router_gen": 1}))
+    append(home, Fact(kind="letter", by=f"strand:{strand}", id=key, data={
+        "id": key, "from": strand, "to": CHANNEL, "gen": 1, "router_gen": 1,
+        "body": f"The {thread} answer\nMore detail"}))
+    if sent:
+        append(home, Fact(kind="speech", by="loom:aaaa", id=f"speech:{key}", data={
+            "key": key, "state": "sent", "router_gen": 1}))
+    return key
+
+
+def receipt(home, native, key=FIRST, *, channel=CHANNEL, by="loom:aaaa"):
+    append(home, Fact(kind="speech.part", by=by, id=f"part:{native}", data={
+        "key": key, "channel": channel, "receipt": {"message_id": native}}))
+
+
+def prepare(home, facts, thread):
+    append(home, Fact(kind="lease", by="loom:aaaa", id=f"lease:{READER}", data={
+        "strand": READER, "thread": thread, "gen": 2, "router_gen": 1}))
+    facts = read_facts(home)
+    room = _prepare(home, READER, thread, 2, mail(home.root, facts, thread),
+                    sender_threads(facts), facts, "hand")
+    return room, facts
+
+
+@pytest.mark.parametrize("mode", ["known", "unknown", "other-channel", "forged", "orphan", "unquoted"])
+def test_source_reply_binding_reaches_wake_and_boundary(home, mode):
+    draft(home, "first")
+    draft(home, "second")
+    receipt(home, "42:part1")
+    native = "42:part2"
+    if mode == "known":
+        receipt(home, native)
+    elif mode == "other-channel":
+        receipt(home, native, channel="channel:other/42")
+    elif mode == "forged":
+        receipt(home, native, by="strand:s-forged")
+    elif mode == "orphan":
+        receipt(home, native, key="s-missing/no-letter")
+    if mode == "unquoted":
+        native = None
+    fields = dict(id="incoming", kind="letter", to=CHANNEL, body="My follow-up", **{"from": "mine:42"})
+    if native is not None:
+        fields["re"] = native
+    ingest(home, "mine", fields, [])
+    facts = read_facts(home)
+    source = next(f for f in facts if f.id == "source:mine:incoming")
+    letter = next(f for f in facts if f.id == "letter:mine:incoming")
+    thread = "first" if mode == "known" else "second"
+    assert route_bare(facts, "mine/42") == "thread:second"
+    assert letter.data["to"] == f"thread:{thread}"
+    assert letter.data.get("re") == (FIRST if mode == "known" else None)
+    assert source.data.get("re") == native
+    expected = (f"replying to your {FIRST}: The first answer" if mode == "known" else
+                f"replying to an earlier message ({native})" if native else "")
+    room, facts = prepare(home, facts, thread)
+    wake = (room / "port/wake.md").read_text()
+    boundary = (room / "port/in/boundary.md").read_text()
+    for text in (wake, boundary):
+        assert "My follow-up" in text
+        if expected:
+            assert text.count(expected) == 1
+            assert text.index(expected) > text.index("My follow-up")
+        else:
+            assert "replying to" not in text
+    # The same context survives compact live redelivery and the jack parser.
+    append(home, Fact(kind="shown", by=f"strand:{READER}", id="shown:reply", data={
+        "strand": READER, "gen": 2, "ids": [letter.id]}))
+    _boundary(home, read_facts(home), READER, 2,
+              SimpleNamespace(thread=thread, fuel="", why=""))
+    text = (room / "port/in/boundary.md").read_text()
+    parsed, = parse_boundary(text).letters
+    assert parsed.compact
+    delivered = execute("post", room, "{}")
+    if expected:
+        assert expected in parsed.body and expected in delivered
+    else:
+        assert "replying to" not in delivered
+
+
+def test_late_reply_delivers_context_at_a_live_boundary(home):
+    draft(home, "first")
+    receipt(home, "42:quoted")
+    room, facts = prepare(home, read_facts(home), "first")
+    assert "replying to" not in (room / "port/wake.md").read_text()
+    ingest(home, "mine", dict(id="late", kind="letter", to=CHANNEL,
+                             re="42:quoted", body="Later question"), [])
+    _boundary(home, read_facts(home), READER, 2,
+              SimpleNamespace(thread="first", fuel="", why=""))
+    expected = f"replying to your {FIRST}: The first answer"
+    parsed, = parse_boundary((room / "port/in/boundary.md").read_text()).letters
+    assert not parsed.compact and expected in parsed.body
+    assert expected in execute("post", room, "{}")
+
+
+def test_recovered_source_uses_its_saved_quote_not_replayed_fields(home, monkeypatch):
+    from brr.loom.runtime import connector
+    draft(home, "first")
+    receipt(home, "42:saved")
+    real_append = connector.append
+    def interrupt(home, fact):
+        if fact.kind == "letter":
+            raise RuntimeError("source saved, letter interrupted")
+        return real_append(home, fact)
+    fields = dict(id="recover", kind="letter", to=CHANNEL, re="42:saved", body="Question")
+    monkeypatch.setattr(connector, "append", interrupt)
+    with pytest.raises(RuntimeError, match="letter interrupted"):
+        ingest(home, "mine", fields, [])
+    monkeypatch.setattr(connector, "append", real_append)
+    ingest(home, "mine", dict(fields, re="42:changed"), [])
+    letter = next(f for f in read_facts(home) if f.id == "letter:mine:recover")
+    assert letter.data["re"] == FIRST
+
+
+def test_chat_header_is_the_face_and_thread_even_after_release(home):
+    key = draft(home, "first", sent=False)
+    router = Router(home)
+    facts = router.begin_tick(read_facts(home))
+    assert router.armed()
+    facts = router.speak_out(facts)
+    sent = json.loads((home.root / "loom/channel-fake.jsonl").read_text())
+    assert sent["key"] == key
+    assert sent["text"] == "⌁[b·_·d] first\n\nThe first answer\nMore detail"
+    append(home, Fact(kind="released", by="loom:aaaa", id="released:first", data={
+        "strand": "s-aaaa-first", "thread": "first", "gen": 1}))
+    state = fold(read_facts(home))
+    letter = next(f for f in facts if f.id == key)
+    assert _header(state, letter) == "⌁[b·_·d] first"
+    assert _header(state, Fact(kind="letter", by="loom:aaaa")) == "⌁[b·_·d]"
