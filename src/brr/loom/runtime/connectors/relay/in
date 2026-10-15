@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""Long-poll under the account's relay lock; publish complete port letters."""
+
+import hashlib
+import json
+import signal
+import sys
+import threading
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from common import RelayClient, atomic_write, cloud, message_id, read, settings
+from brr.gates.relay_lock import RelayLock
+from brr.loom.runtime.port import _front
+
+
+def cursor_at(state):
+    value = read(state / 'cursor.json', {'cursor': 0})['cursor']
+    if type(value) is not int or value < 0:
+        raise ValueError(f'relay: invalid cursor {value!r}')
+    return value
+
+
+def write_cursor(state, cursor):
+    if type(cursor) is not int or cursor < 0:
+        raise ValueError(f'relay: invalid cursor {cursor!r}')
+    atomic_write(state / 'cursor.json', json.dumps(dict(cursor=cursor)) + '\n')
+
+
+def pull_once(drop, state, client, cursor, failures=None):
+    failures = failures if failures is not None else {}
+    result = client.pull(cursor)
+    next_cursor = result.get('cursor', cursor)
+    if type(next_cursor) is not int or next_cursor < 0:
+        raise ValueError(f'relay: invalid cursor {next_cursor!r}')
+    mapping = read(state / 'messages.json', {})
+    retry = None
+    for event in result.get('events', []):
+        key = hashlib.sha256(json.dumps(event, sort_keys=True).encode()).hexdigest()
+        event_id = event.get('event_id') if isinstance(event, dict) else None
+        if (event_id or key) in mapping.values():
+            continue
+        try:
+            if not isinstance(event_id, str) or not event_id:
+                raise ValueError('relay: event has no event_id')
+            origin = event.get('reply_to') or {}
+            meta = cloud._origin_meta(origin)
+            platform, chat = str(meta['cloud_platform']), str(meta['cloud_chat_id'])
+            ident = message_id(platform, chat, origin.get('message_id') or origin.get('comment_id') or event_id)
+            # No slash/path from a remote id is ever used as a file name.
+            import re
+            if not re.fullmatch(r'[A-Za-z0-9_%:#.-]+', ident):
+                raise ValueError('relay: unsafe message id')
+            names = cloud._attachment_names(event.get('attachments'))
+            if names is None:
+                raise ValueError('relay: unreadable attachments')
+            attachments = drop / f'{ident}.d'
+            attachments.mkdir(parents=True, exist_ok=True)
+            missing = []
+            for index, _name in enumerate(names):
+                dest = attachments / str(index)
+                tmp = attachments / f'.{index}.tmp'
+                if dest.exists():
+                    continue
+                if client.download_attachment(event_id, index, tmp):
+                    tmp.replace(dest)
+                else:
+                    tmp.unlink(missing_ok=True)
+                    missing.append(index)
+            if missing and failures.get(key, 0) < 2:
+                raise RuntimeError(f'relay: attachment download failed: {event_id}#{missing[0]} '
+                                   f'(attempt {failures.get(key, 0) + 1} of 3)')
+            # WhatsApp: a chat with the business number is one person, and its
+            # chat id is that person's own wa_id; the server sends no user_id.
+            fields = dict(kind='letter', id=ident, to=f'channel:{platform}/{chat}',
+                          **{'from': f"{platform}:{chat if platform == 'whatsapp' else origin.get('user_id') or ''}"})
+            if origin.get('reply_to_message_id') is not None:
+                fields['re'] = message_id(platform, chat, origin['reply_to_message_id'])
+            if missing:
+                fields['missing'] = ' '.join(map(str, missing))
+            atomic_write(drop / f'{ident}.md', _front(fields, event.get('body') or ''))
+            mapping[ident] = event_id
+            atomic_write(state / 'messages.json', json.dumps(mapping))
+            failures.pop(key, None)
+        except Exception as exc:
+            failures[key] = failures.get(key, 0) + 1
+            if failures[key] < 3:
+                retry = exc
+                continue
+            # The loom quarantines the unreadable file once; retain the wire bytes.
+            atomic_write(drop / f'{key}.md', json.dumps(event))
+            mapping[key] = event_id or key
+            atomic_write(state / 'messages.json', json.dumps(mapping))
+    if retry is not None:
+        raise retry
+    write_cursor(state, next_cursor)
+    return next_cursor
+
+
+def poll_forever(drop, state, client, lock, stop, log=print):
+    lock.want()
+    try:
+        waiting = False
+        while not stop.is_set() and not lock.try_acquire():
+            if not waiting:
+                log(f'relay: waiting for {lock.holder()} to finish its poll')
+                waiting = True
+            stop.wait(.5)
+        if stop.is_set():
+            return
+        cursor = None
+        failures, backoff = {}, 1
+        while not stop.is_set():
+            try:
+                if cursor is None:
+                    cursor = max(cursor_at(state), lock.cursor() or 0)
+                    write_cursor(state, cursor)
+                cursor = pull_once(drop, state, client, cursor, failures)
+                lock.record(cursor)
+                backoff = 1
+            except Exception as exc:
+                log(f'relay: {type(exc).__name__}: {exc}; retry in {backoff}s')
+                stop.wait(backoff)
+                backoff = min(backoff * 2, 60)
+    finally:
+        lock.release()
+        lock.unwant()
+
+
+if __name__ == '__main__':
+    config, state = settings()
+    if not config.relay_state:
+        sys.exit('relay requires relay_state in BRNRD_CONFIG')
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    poll_forever(Path(sys.argv[1]), state, RelayClient(config.relay_state),
+                 RelayLock(config.relay_state, 'loom'), stop)

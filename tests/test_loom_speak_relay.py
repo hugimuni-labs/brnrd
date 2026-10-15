@@ -7,7 +7,7 @@ import pytest
 from brr.daemon2.facts import Fact
 from brr.daemon2.leases import LocalLeaseAuthority
 from brr.loom.runtime import speak as speak_mod
-from brr.loom.runtime.channels import relay
+import connector_support as relay
 from brr.loom.runtime.config import loom_clock
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, read_facts
@@ -23,6 +23,7 @@ def home(tmp_path):
     person = h.root / "self" / "people" / "ada"
     person.mkdir(parents=True)
     (person / "channels.md").write_text("telegram:42\n")
+    relay.enable(h)
     return h
 
 
@@ -35,54 +36,52 @@ def lease(home):
 
 
 class FakeClient:
-    def __init__(self, fail_on: set[int] | None = None):
+    def __init__(self, fail_on: set[int] | None = None, status: int | None = None):
         self.sent: list[dict] = []
         self.fail_on = fail_on or set()
+        self.status = status
 
     def send(self, payload):
         n = len(self.sent) + 1
         self.sent.append(payload)
         if n in self.fail_on:
-            raise RuntimeError("connection reset after write")
+            err = RuntimeError(f"brnrd POST -> {self.status}" if self.status else "connection reset after write")
+            err.status_code = self.status
+            raise err
         return {"message_id": 1000 + n}
 
 
 @pytest.fixture
-def client(monkeypatch):
+def client(monkeypatch, home):
     c = FakeClient()
-    monkeypatch.setitem(speak_mod.EFFECTS, "relay", relay.make_effect(c))
+    relay.install_out(monkeypatch, home, c)
     return c
 
 
 def test_long_answer_splits_and_a_lost_part_is_never_resent(home, lease, monkeypatch):
     c = FakeClient(fail_on={2})
-    monkeypatch.setitem(speak_mod.EFFECTS, "relay", relay.make_effect(c))
+    relay.install_out(monkeypatch, home, c)
     body = "\n".join(f"line {i:04d} " + "x" * 80 for i in range(100))  # ~9,000 chars
     status, fact, unsure = speak_mod.speak(home, lease, "s-a/answer", body,
                                            channel="channel:telegram/42")
-    assert len(c.sent) == 3
+    assert len(c.sent) == 2  # per-letter: a failed part stops the connector
     assert status == "maybe-sent" and fact.data["state"] == "intended"
-    assert unsure == ["s-a/answer#2"]
-    assert "".join(p["body_markdown"] for p in c.sent).replace("\n", "") == body.replace("\n", "")
-    assert all(len(p["body_markdown"]) <= speak_mod.LIMITS["telegram"] for p in c.sent)
-    parts = {f.data["part"]: f.data["receipt"] for f in read_facts(home) if f.kind == "speech.part"}
-    assert set(parts) == {"s-a/answer#1", "s-a/answer#3"}
-    assert parts["s-a/answer#1"]["message_id"] == 1001
-    # A rerun sends nothing: parts 1 and 3 are sent, part 2 is intended.
+    assert unsure == ["s-a/answer"]
+    assert not any(f.kind == "speech.part" for f in read_facts(home))
     speak_mod.speak(home, lease, "s-a/answer", body, channel="channel:telegram/42")
-    assert len(c.sent) == 3
+    assert len(c.sent) == 2
 
 
 def test_answer_to_an_event_posts_its_event_id(home, lease, client):
     status, *_ = speak_mod.speak(home, lease, "s-a/re", "hi", channel="channel:telegram/42",
-                                context={"event_id": "ev_7"})
+                                context={"re": "ev_7"})
     assert status == "sent"
     assert client.sent == [{"body_markdown": "hi", "event_id": "ev_7"}]
 
 
 def test_unprompted_send_names_the_platform_never_a_chat(home, lease, client):
     speak_mod.speak(home, lease, "s-a/hey", "hey", channel="channel:telegram/42")
-    assert client.sent == [{"body_markdown": "hey", "platform": "telegram"}]
+    assert client.sent == [{"body_markdown": "hey", "platform": "telegram", "chat_id": "42"}]
 
 
 def test_only_a_known_persons_direct_chat_is_speakable(home):
@@ -127,8 +126,8 @@ def test_a_reply_binds_to_the_letter_its_message_carried(home, lease, client):
     from test_loom_relay import speak as spoke
     spoke(home, "s-a", "first", chat="telegram/42", receipt=False)
     facts = read_facts(home)
-    assert relay.thread_for_message(facts, "channel:telegram/42", 1001) == "first"
-    assert relay.thread_for_message(facts, "channel:telegram/42", "1001") == "first"
+    assert relay.thread_for_message(facts, "channel:telegram/42", "telegram:42:1001") == "first"
+    assert relay.thread_for_message(facts, "channel:telegram/42", "telegram:42:1001") == "first"
     # Same id, another chat or platform: binds nothing.
     assert relay.thread_for_message(facts, "channel:telegram/43", 1001) is None
     assert relay.thread_for_message(facts, "channel:whatsapp/42", 1001) is None
@@ -143,7 +142,7 @@ def test_a_reply_binds_to_the_letter_its_message_carried(home, lease, client):
 def test_a_split_event_answer_responds_once_then_follows_with_messages(home, lease, client):
     body = "\n".join("y" * 90 for _ in range(90))  # > one Telegram part
     speak_mod.speak(home, lease, "s-a/long", body, channel="channel:telegram/42",
-                    context={"event_id": "ev_1"})
+                    context={"re": "ev_1"})
     assert len(client.sent) >= 2
     assert client.sent[0].get("event_id") == "ev_1"
     assert all("event_id" not in p and p["platform"] == "telegram" for p in client.sent[1:])
@@ -168,9 +167,9 @@ def test_response_without_message_id_has_no_binding_receipt(home, lease, monkeyp
     class ResponseClient:
         def send(self, payload):
             return {"event_id": payload["event_id"], "forwarded": True}
-    monkeypatch.setitem(speak_mod.EFFECTS, "relay", relay.make_effect(ResponseClient()))
+    relay.install_out(monkeypatch, home, ResponseClient())
     status, *_ = speak_mod.speak(home, lease, "s-a/answer#2", "hi",
-                               channel="channel:telegram/42", context={"event_id": "ev_1"})
+                               channel="channel:telegram/42", context={"re": "ev_1"})
     assert status == "sent"
     assert not any(f.kind == "speech.part" for f in read_facts(home))
 
@@ -190,3 +189,35 @@ def test_port_cannot_claim_another_strands_sender(home):
                                {"s-writer": "first", "s-other": "second"})
     shown, = parse_boundary(boundary).letters
     assert shown.sender == "s-writer" and shown.reply == "thread:first"
+
+
+@pytest.mark.parametrize('reply', [False, True], ids=['fresh', 'multipart-answer'])
+def test_github_part_is_refused_before_any_request(home, lease, monkeypatch, reply):
+    client = FakeClient()
+    relay.install_out(monkeypatch, home, client)
+    text = 'x' * 65537 if reply else 'hello'
+    status, fact, unsure = speak_mod.speak(home, lease, 's-a/no-fresh', text,
+        channel='channel:github/42', context={'re': 'ev_1'} if reply else {})
+    assert status == 'not-sent' and not unsure
+    assert client.sent == []
+    assert 'answered with gh' in fact.data['reason']
+
+
+@pytest.mark.parametrize('code', [404, 409, 501])
+def test_server_refusal_of_the_first_part_is_not_sent(home, lease, monkeypatch, code):
+    client = FakeClient(fail_on={1}, status=code)
+    relay.install_out(monkeypatch, home, client)
+    status, fact, unsure = speak_mod.speak(home, lease, 's-a/wa', 'hello',
+                                           channel='channel:whatsapp/42')
+    assert status == 'not-sent' and not unsure
+    assert client.sent[0]['chat_id'] == '42'
+    assert str(code) in fact.data['reason']
+
+
+def test_server_refusal_after_a_part_went_is_maybe_sent(home, lease, monkeypatch):
+    client = FakeClient(fail_on={2}, status=409)
+    relay.install_out(monkeypatch, home, client)
+    status, _fact, unsure = speak_mod.speak(home, lease, 's-a/wa2', 'x' * 5000,
+                                            channel='channel:whatsapp/42')
+    assert status == 'maybe-sent' and unsure == ['s-a/wa2']
+    assert len(client.sent) == 2

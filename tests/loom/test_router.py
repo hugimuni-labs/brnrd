@@ -22,7 +22,7 @@ B = "bbbb"
 def _config(root: Path, **values) -> None:
     path = root / "loom" / "config.toml"
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = []
+    lines = ['connectors = ["fake"]']
     for key, value in values.items():
         if isinstance(value, str):
             lines.append(f'{key} = "{value}"')

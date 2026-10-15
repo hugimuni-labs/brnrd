@@ -12,7 +12,7 @@ import pytest
 from brr.daemon2.facts import Fact
 from brr.gates import cloud, relay_lock
 from brr.loom.runtime import loom as loom_mod, speak
-from brr.loom.runtime.channels import relay
+import connector_support as relay
 from brr.loom.runtime.config import load_config
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, read_facts
@@ -171,7 +171,7 @@ def test_poll_forever_starts_from_the_handed_cursor_and_records_its_own(home, tm
 
     assert client.polls == [12]
     assert relay.read_cursor(home) == 13
-    assert [f.id for f in kinds(home, "letter")] == ["letter:relay:ev_a"]
+    assert [f.id for f in kinds(home, "letter")] == ["letter:relay:telegram:555:ev_a"]
     after = relay_lock.RelayLock(state_dir, "daemon")
     assert after.cursor() == 13
     assert after.wanted_by_other() is None  # the want went with the loom
@@ -209,32 +209,28 @@ def test_daemon_yields_to_a_live_loom_want(tmp_path, monkeypatch):
     assert not daemon.held
 
 
-def test_arm_relay_registers_the_effect_and_polls(home, tmp_path, monkeypatch):
-    state_dir = tmp_path / "acct"
-    (home.root / "loom").mkdir(parents=True, exist_ok=True)
-    (home.root / "loom" / "config.toml").write_text(
-        f'relay_state = "{state_dir}"\n'
-    )
-    pulled = threading.Event()
-
-    class Client(FakeClient):
-        def __init__(self, _state_dir):
-            super().__init__([event("ev_w")], cursor=1)
-
-        def pull(self, cursor):
-            pulled.set()
-            return super().pull(cursor)
-    monkeypatch.setattr(relay, "RelayClient", Client)
-    stop = threading.Event()
-    thread = loom_mod._arm_relay(home, load_config(home.root), stop)
+def test_enabled_folder_is_started_and_its_drop_is_ingested(home):
+    from brr.loom.runtime.connector import Inputs
+    from brr.loom.runtime.port import _front
+    relay.enable(home)
+    local = home.root / 'loom/connectors/relay'
+    (local / 'in').rmdir()
+    script = local / 'in'
+    script.write_text("#!/usr/bin/env python3\nimport sys\nfrom pathlib import Path\n"
+                      + "(Path(sys.argv[1]) / 'wired.md').write_text("
+                      + repr(_front(dict(kind='letter', id='wired', to='channel:telegram/555',
+                                         **{'from': 'telegram:42'}), 'wired')) + ")\n")
+    script.chmod(0o755)
+    inputs = Inputs(home)
     try:
-        assert "relay" in speak.EFFECTS
-        assert pulled.wait(5)
+        deadline = time.monotonic() + 5
+        while not kinds(home, 'letter') and time.monotonic() < deadline:
+            inputs.step()
+            time.sleep(.01)
+        assert 'letter:relay:wired' in {f.id for f in kinds(home, 'letter')}
+        assert (local / 'state').is_dir()
     finally:
-        stop.set()
-        loom_mod._disarm_relay(thread)
-    assert "relay" not in speak.EFFECTS
-    assert "letter:relay:ev_w" in {f.id for f in kinds(home, "letter")}
+        inputs.close()
 
 
 # ── before live: the attachment give-up ─────────────────────────────────
@@ -267,9 +263,9 @@ def test_a_missing_attachment_holds_the_cursor_three_pulls_then_lands(home):
     # notice, owed in the thread the message landed in.
     relay.pull_once(home, client, 0, failures=failures)
     letter, told = kinds(home, "letter")
-    assert len(kinds(home, "source")) == 1 and letter.id == "letter:relay:ev_f"
+    assert len(kinds(home, "source")) == 1 and letter.id == "letter:relay:telegram:555:ev_f"
     assert told.data["from"] == "loom" and told.data["to"] == source.data["to"]
-    assert "attachment(s) [1] of letter:relay:ev_f" in told.data["body"]
+    assert "attachment(s) [1] of letter:relay:telegram:555:ev_f" in told.data["body"]
     assert told in letters_for(read_facts(home), main_snapshot(home), "inbox")
 
 
@@ -282,5 +278,5 @@ def test_bare_message_after_the_speaker_released_wakes_that_thread(home):
                       data={"thread": "first", "strand": "s-first", "gen": 1,
                             "why": "molt", "install": "aaaa"}))
     relay.pull_once(home, FakeClient([event("ev_late")]), 0)
-    (letter,) = [f for f in kinds(home, "letter") if f.id == "letter:relay:ev_late"]
+    (letter,) = [f for f in kinds(home, "letter") if f.id == "letter:relay:telegram:555:ev_late"]
     assert letter.data["to"] == "thread:first"

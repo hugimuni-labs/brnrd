@@ -370,9 +370,11 @@ class Router:
                 continue
             try:
                 body = str(fact.data.get("body") or "")
-                context: dict = {}
+                context = {k: str(fact.data[k]) for k in ("from", "clean", "edit") if k in fact.data}
+                if fact.data.get("refs"):
+                    context["refs"] = " ".join(fact.data["refs"])
                 if to != CHANNEL:
-                    from .channels.relay import person_dm
+                    from .connector import person_dm
                     if person_dm(self.home, str(to)) is None:
                         tell("speech-refused",
                              "was refused: that is not a known person's direct chat", fresh)
@@ -380,7 +382,7 @@ class Router:
                     body = f"{_header(state, fact)}\n\n{body}"
                     event_id = _answers_event(state, fact)
                     if event_id:
-                        context["event_id"] = event_id
+                        context["re"] = event_id
                 status, speech, unsure = speak(
                     self.home, self.lease, key, body, channel=str(to), context=context,
                 )
@@ -389,8 +391,10 @@ class Router:
                 tell("speech-refused", why, fresh)
                 _log(self.home, f"speech {key} {why}")
                 continue
+            if status == "not-sent":
+                tell("speech-refused", f"was not sent: {speech.data['reason']}", fresh)
             if unsure:
-                tell("maybe-sent", f"may or may not have arrived: part {', '.join(unsure)} "
+                tell("maybe-sent", f"may or may not have arrived: letter {', '.join(unsure)} "
                      "was attempted and no receipt came back", fresh)
             if speech is not None:
                 facts.append(speech)
@@ -411,15 +415,13 @@ def _header(state, letter: Fact) -> str:
 
 
 def _answers_event(state, letter: Fact) -> str | None:
-    """The relay event a letter answers: its ``re`` names a relay-cited letter."""
+    """The transport id of the inbound letter this letter answers."""
     re_id = letter.data.get("re")
-    if not re_id:
-        return None
     for fact in state.accepted:
         if fact.kind == "letter" and fact.data.get("id") == re_id:
             cites = str(fact.data.get("cites") or "")
-            if cites.startswith("source:relay:"):
-                return cites.split("source:relay:", 1)[1]
+            if cites.startswith("source:"):
+                return cites.split(":", 2)[2]
     return None
 
 

@@ -37,6 +37,8 @@ def _room(tmp_path: Path, strand: str = "s1") -> tuple[Path, Path]:
     room = home / "rooms" / strand
     (room / "port" / "out").mkdir(parents=True)
     (home / "self").mkdir()
+    (home / "loom").mkdir()
+    (home / "loom/config.toml").write_text('connectors = ["fake"]\n')
     return home, room
 
 

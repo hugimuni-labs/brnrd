@@ -131,7 +131,7 @@ def fold(facts: Iterable[Fact]) -> Fold:
         if fact.kind == "letter" and "gen" not in data:
             sender = str(data.get("from") or "")
             ingress = (fact.by.startswith("loom:")
-                       and str(data.get("cites") or "").startswith("source:relay:"))
+                       and str(data.get("cites") or "").startswith("source:"))
             if (fact.by.startswith("person:") or sender.startswith("p-") or ingress
                     or is_notice(fact)):
                 state.accepted.append(fact)
@@ -199,7 +199,7 @@ def sender_threads(facts: Iterable[Fact]) -> dict[str, str]:
     return found
 
 
-def reply_channels(facts: Iterable[Fact]) -> dict[str, str]:
+def reply_channels(facts: Iterable[Fact], home=None) -> dict[str, str]:
     """Letter id → the chat it came from, for letters a relay brought in.
 
     Only an address ``send`` accepts is offered; any other platform stays ``-``.
@@ -210,11 +210,11 @@ def reply_channels(facts: Iterable[Fact]) -> dict[str, str]:
     found: dict[str, str] = {}
     for fact in facts:
         source = sources.get(fact.data.get("cites")) if fact.kind == "letter" else None
-        if not source or not source.get("platform") or source.get("chat") is None:
+        if not source or not source.get("platform") or (source.get("chat") is None and not source.get("channel")):
             continue
-        channel = f"channel:{source['platform']}/{source['chat']}"
+        channel = source.get("channel") or f"channel:{source['platform']}/{source['chat']}"
         try:
-            channel_parts(channel)
+            channel_parts(channel, home)
         except ValueError:
             continue
         found[str(fact.data.get("id"))] = channel

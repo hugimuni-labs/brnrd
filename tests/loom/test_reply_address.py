@@ -25,6 +25,8 @@ def _home(tmp_path) -> Home:
     ledger.append(home, Fact(kind="router", by="loom:aaaa", id="router:1", data={"gen": 1}))
     ledger.append(home, Fact(kind="lease", by="loom:aaaa", id="lease:t:1", data={
         "thread": "t", "strand": STRAND, "gen": 1, "install": "aaaa", "router_gen": 1}))
+    (home.root / "loom").mkdir(exist_ok=True)
+    (home.root / "loom/config.toml").write_text('connectors = ["relay"]\n')
     return home
 
 
@@ -37,14 +39,17 @@ def _relayed(platform: str) -> list[Fact]:
     return [source, letter]
 
 
-def test_a_persons_letter_names_the_chat_it_came_from():
+def test_a_persons_letter_names_the_chat_it_came_from(tmp_path):
+    home = _home(tmp_path)
     facts = _relayed("telegram")
-    text = render_boundary(STRAND, 1, "t", facts[1:], set(), {}, channels=reply_channels(facts))
+    text = render_boundary(STRAND, 1, "t", facts[1:], set(), {}, channels=reply_channels(facts, home))
     assert parse_boundary(text).letters[0].reply == "channel:telegram/42"
 
 
-def test_a_platform_send_would_refuse_is_not_offered():
-    assert reply_channels(_relayed("whatsapp")) == {}
+def test_a_platform_send_would_refuse_is_not_offered(tmp_path):
+    home = _home(tmp_path)
+    (home.root / "loom/config.toml").write_text("connectors = []\n")
+    assert reply_channels(_relayed("whatsapp"), home) == {}
 
 
 def test_a_thread_never_names_itself_as_the_reply_address():
@@ -81,5 +86,5 @@ def test_a_climbed_letter_keeps_the_chat_it_came_from(tmp_path):
                   "hi", thread="t", about=facts[1])
     climbed = next(f for f in ledger.read_facts(home) if f.id.startswith("loom/climbed"))
     text = render_boundary(STRAND, 1, "t", [climbed], set(), {},
-                           channels=reply_channels(facts + [climbed]))
+                           channels=reply_channels(facts + [climbed], home))
     assert parse_boundary(text).letters[0].reply == "channel:telegram/42"

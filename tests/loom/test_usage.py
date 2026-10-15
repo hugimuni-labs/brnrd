@@ -57,7 +57,7 @@ def test_known_fuel_still_refreshes_after_an_exit(tmp_path, monkeypatch):
 ])
 def test_recorded_shell_reading_reaches_a_body_boundary(tmp_path, monkeypatch, shell, reading_file, expected):
     """Actual body-folder readers parse real captures on the live loom path."""
-    from brr.loom.runtime import speak
+    from connector_support import install_fake
     from brr.loom.runtime.ledger import inject_letter
     from brr.loom.runtime.selfrepo import git
     from _step import Loom, wait_until, write_thread
@@ -97,7 +97,7 @@ for letter in view.letters:
 ''')
     run.chmod(0o755)
     received = []
-    monkeypatch.setitem(speak.EFFECTS, "fake", lambda _h, _c, _k, text, _ctx: received.append(text))
+    install_fake(monkeypatch, lambda text: received.append(text))
     inject_letter(root, to="thread:gauge", body="Show your fuel.")
     loom = Loom(root)
     loom.start()
