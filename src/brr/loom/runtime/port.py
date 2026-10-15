@@ -61,7 +61,7 @@ def parse_boundary(text: str) -> Boundary:
     for line in text[header.end():].splitlines():
         # Continuation first: a blank line inside a body renders as two
         # spaces, and must not end the letter (#2223 review).
-        if line.startswith("  ") and current is not None and not current.compact:
+        if line.startswith("  ") and current is not None:
             current.body += "\n" + line[2:]
             continue
         if line.startswith("settled:"):
@@ -105,7 +105,37 @@ def _reply(letter: Fact, sender_threads: dict[str, str], own: str,
             or channels.get(str(letter.data.get("about")), "-"))
 
 
-def _letter_lines(letter: Fact, reply: str, compact: bool) -> list[str]:
+def letter_attachments(root: Path, facts: list[Fact]) -> dict[str, list[str]]:
+    """Resolve a letter's cited source into lines both body deliveries can use.
+
+    Bodies share the host filesystem: name the stored blob, without copying
+    it into each room or putting binary data in the wake.
+    """
+    sources = {f.id: f for f in facts if f.kind == "source"}
+    blobs = {f.id: f.data for f in facts if f.kind == "blob"}
+    folder = root.resolve() / "blobs"
+    result = {}
+    for letter in facts:
+        if letter.kind != "letter":
+            continue
+        source = sources.get(letter.data.get("cites"))
+        if source is None:
+            continue
+        lines = []
+        # Follow this source's blob facts: identical bytes can arrive under
+        # different filenames (and hence MIME types) in another source.
+        for ref in source.after:
+            blob = blobs.get(ref)
+            if blob is not None and blob["sha"] in source.data.get("blobs", ()):
+                lines.append(f"attachment: {blob['mime']} · {blob['size']} bytes · {folder / blob['sha']}")
+        lines.extend(f"attachment {number} could not be fetched"
+                     for number in source.data.get("blobs_missing", ()))
+        result[letter.id] = lines
+    return result
+
+
+def _letter_lines(letter: Fact, reply: str, compact: bool,
+                  attachments: list[str] | tuple[str, ...] = ()) -> list[str]:
     body = str(letter.data.get("body") or "")
     first, *rest = body.split("\n") if body else [""]
     mark = " · compact" if compact else ""
@@ -115,6 +145,7 @@ def _letter_lines(letter: Fact, reply: str, compact: bool) -> list[str]:
     ]
     if not compact:
         lines.extend(f"  {extra}" for extra in rest)
+    lines.extend(f"  {attachment}" for attachment in attachments)
     return lines
 
 
@@ -123,8 +154,9 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     settled: str | None = None,
                     channels: dict[str, str] | None = None,
                     opened: list[dict] | tuple[dict, ...] = (), plan: str = "",
-                    replies: dict[str, str] | None = None) -> str:
-    """Letters this strand was already shown are compacted to id plus first line."""
+                    replies: dict[str, str] | None = None,
+                    attachments: dict[str, list[str]] | None = None) -> str:
+    """Shown letters keep their first line and attachment paths when compacted."""
     lines = [
         f"<!-- port {strand} gen {gen} · owed "
         + " ".join(str(letter.data['id']) for letter in letters) + " -->",
@@ -147,7 +179,7 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
     for letter in letters:
         compact = str(letter.data["id"]) in shown
         reply = replies.get(letter.id, "-") if replies is not None else _reply(letter, sender_threads, thread, channels or {})
-        lines.extend(_letter_lines(letter, reply, compact))
+        lines.extend(_letter_lines(letter, reply, compact, (attachments or {}).get(letter.id, ())))
     lines.append("")
     return "\n".join(lines)
 
