@@ -18,6 +18,10 @@ from brr.loom.runtime.selfrepo import _commit, git, init_self
 def write_thread(root: Path, thread: str, readme: str, policy: str,
                  wait: str = "20") -> None:
     init_self(root)
+    cfg = root / 'loom/config.toml'
+    if 'connectors =' not in '\n'.join(l for l in cfg.read_text().splitlines() if not l.startswith('#')):
+        with cfg.open('a') as stream:
+            stream.write('connectors = ["fake"]\n')
     directory = Home(root).thread_dir(thread)
     directory.mkdir(parents=True, exist_ok=True)
     text = readme if readme.endswith("\n") else readme + "\n"

@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""Send one letter; platform splitting and event acknowledgements stay here."""
+
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from common import RelayClient, message_id, read, settings
+from brr.channels.telegram import split_message
+from brr.loom.runtime.port import parse_frontmatter
+
+
+def deliver(path, state, client):
+    letter = parse_frontmatter(path.read_text())
+    platform, _, chat = letter['to'].removeprefix('channel:').partition('/')
+    if platform not in {'telegram', 'whatsapp', 'github'} or not chat:
+        print('relay: unknown platform or chat', file=sys.stderr)
+        return 3
+    if letter.get('edit'):
+        print('relay: editing is not supported', file=sys.stderr)
+        return 3
+    text = letter['body']
+    limit = {'telegram': 4000, 'whatsapp': 4096, 'github': 65536}[platform]
+    parts = split_message(text, limit=limit, max_chunks=None)
+    mapping = read(state / 'messages.json', {})
+    event_id = mapping.get(letter.get('re'))
+    ids = []
+    for index, part in enumerate(parts):
+        payload = dict(body_markdown=part)
+        if index == 0 and event_id:
+            payload['event_id'] = event_id
+        else:
+            payload.update(platform=platform, chat_id=chat)
+        result = client.send(payload) or {}
+        if result.get('message_id') not in (None, ''):
+            ids.append(message_id(platform, chat, result['message_id']))
+    print(json.dumps(dict(ids=ids)))
+    return 0
+
+
+if __name__ == '__main__':
+    config, state = settings()
+    sys.exit(deliver(Path(sys.argv[1]), state, RelayClient(config.relay_state)))

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from brr.loom.runtime import speak
+from connector_support import install_fake
 from brr.loom.runtime.ledger import inject_letter
 
 from brr.loom.runtime.selfrepo import _commit, git, init_self
@@ -25,7 +25,7 @@ def test_the_self_decides_the_live_bodys_wake(tmp_path, monkeypatch):
     _commit(root / "self", "The self rewrites its wake.")
     inject_letter(root, to="thread:custom", body="begin")
     sent = []
-    monkeypatch.setitem(speak.EFFECTS, "fake", lambda _h, _c, _k, text, _ctx: sent.append(text))
+    install_fake(monkeypatch, lambda text: sent.append(text))
     loom = Loom(root)
     loom.start()
     try:

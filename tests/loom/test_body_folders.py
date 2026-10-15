@@ -1,7 +1,7 @@
 from _step import mail
 """A live home runs threads on different bodies, including a home-supplied one."""
 
-from brr.loom.runtime import speak
+from connector_support import install_fake
 from brr.loom.runtime.ledger import inject_letter
 
 from brr.loom.runtime.selfrepo import git, init_self
@@ -34,7 +34,7 @@ ctx.jack("stop")
 """)
     script.chmod(0o755)
     sent = []
-    monkeypatch.setitem(speak.EFFECTS, "fake", lambda _h, _c, _k, text, _ctx: sent.append(text))
+    install_fake(monkeypatch, lambda text: sent.append(text))
     inject_letter(root, to="thread:bundled", body="hello bundled")
     inject_letter(root, to="thread:local", body="hello local")
     loom = Loom(root)

@@ -1,7 +1,7 @@
 """``loom/config.toml``: the knobs one home's looms share.
 
-Flat ``key = value`` lines only: ``[sections]`` are ignored, so the relay
-switch is ``relay_state = "<dir>"``, never ``[channels.relay]``. A few-line
+Flat ``key = value`` lines only: ``[sections]`` are ignored. Enable folders
+with ``connectors = ["relay"]``; ``relay_state`` supplies its account path. A few-line
 file, parsed here, so the loom takes no TOML dependency on Python 3.10.
 
 ``KEYS`` is the one declaration: name, kind, default, help. The dataclass,
@@ -14,6 +14,7 @@ and ``loom_clock`` is ``time.time``.
 
 from __future__ import annotations
 
+import ast
 import difflib
 import os
 import re
@@ -66,9 +67,11 @@ KEYS: tuple[Key, ...] = (
         "A body's `gh`: auto uses the forge token above when the home has one, "
         "else the machine's gh login; off signs it out.",
         choices=("auto", "off")),
+    Key("connectors", "names", (),
+        "Enabled connector folders, e.g. [\"relay\"]. Home folders override bundled folders; default: none."),
     Key("relay_state", "path", None,
         "The account's cloud gate state directory (holds gates/cloud.json). "
-        "Set it to switch the relay on."),
+        'Read by the relay connector; enable it with connectors = ["relay"].'),
     Key("hold_floor_pct", "percent", 3.0,
         "A quota window with this percent or less left counts as exhausted: a held body stays held."),
     Key("stop_grace", "seconds", DEFAULT_STOP_GRACE,
@@ -109,6 +112,11 @@ def loom_clock() -> float:
 
 
 def _literal(raw: str) -> object:
+    if raw.startswith("["):
+        try:
+            return ast.literal_eval(raw)
+        except (ValueError, SyntaxError):
+            return raw
     if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {'"', "'"}:
         return raw[1:-1]
     try:
@@ -125,6 +133,13 @@ def _coerce(key: Key, value: object, path: Path) -> object:
     def refuse(want: str) -> ConfigError:
         return ConfigError(f"{path}: {key.name} must be {want}, not {value!r}")
 
+    if key.kind == "names":
+        if not isinstance(value, (list, tuple)) or any(
+                not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", v) for v in value):
+            raise refuse("an array of connector names")
+        if len(set(value)) != len(value):
+            raise refuse("unique connector names")
+        return tuple(value)
     if key.kind in {"text", "path"}:
         if not isinstance(value, str):
             raise refuse("a quoted string")
@@ -202,6 +217,9 @@ def load_config(root: Path | str) -> LoomConfig:
 
 
 def _render_value(value: object) -> str:
+    if isinstance(value, (list, tuple)):
+        import json
+        return json.dumps(list(value))
     if value is None:
         return '""'
     if isinstance(value, str):

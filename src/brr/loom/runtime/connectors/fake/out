@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""The deterministic file transport used by demos and tests."""
+import json
+import os
+import sys
+from pathlib import Path
+from brr.loom.runtime.port import parse_frontmatter
+
+letter = parse_frontmatter(Path(sys.argv[1]).read_text())
+path = Path(os.environ['BRNRD_HOME']) / 'loom/channel-fake.jsonl'
+path.parent.mkdir(parents=True, exist_ok=True)
+with path.open('a') as stream:
+    stream.write(json.dumps(dict(key=letter['id'], text=letter['body'])) + '\n')
+    stream.flush()
+    os.fsync(stream.fileno())
+print('{"ids": []}')

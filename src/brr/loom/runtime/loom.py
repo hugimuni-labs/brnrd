@@ -371,7 +371,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     atomic_write(
         room / "port" / "in" / "boundary.md",
         render_boundary(strand, gen, thread, letters, shown, threads,
-                        fuel=fuel, channels=reply_channels(facts),
+                        fuel=fuel, channels=reply_channels(facts, home),
                         opened=thread_table(home, facts), plan=_plan(home, thread, facts),
                         replies={k: f.reply_to for k, f in letter_owners(facts, main_snapshot(home)).items()}),
     )
@@ -816,7 +816,7 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
     tank = fuel(home, start.data["shell"]) if start else ""
     dispositions = []
     writers = sender_threads(facts)
-    channels = reply_channels(facts)
+    channels = reply_channels(facts, home)
     opener = str(read_thread(home, thread).get("opened-by", ""))
     leftovers = None
     left: list[str] = []
@@ -845,7 +845,7 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
             dispositions.append({"id": ident, "outcome": "retry", "reason": "first failed attempt"})
             continue
         if author.startswith(("p-", "person:")):
-            from .channels.relay import person_dm
+            from .channel import person_dm
             channel = channels.get(ident)
             person = "person:" + author.removeprefix("p-").removeprefix("person:")
             if channel and person_dm(home, channel) == person:
@@ -980,7 +980,7 @@ def _boundary(home, facts, strand, gen, context):
     text = render_boundary(
         strand, gen, context.thread, letters_for(facts, main, context.thread),
         state.shown.get(strand, set()), sender_threads(facts), context.fuel,
-        context.why or None, reply_channels(facts),
+        context.why or None, reply_channels(facts, home),
         opened=thread_table(home, facts), plan=_plan(home, context.thread, facts),
         replies={k: f.reply_to for k, f in letter_owners(facts, main).items()},
     )
@@ -1228,7 +1228,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
     held = _hold_loop(home, stop)
     if held is None:
         return
-    relay = None
+    inputs = None
     bodies: dict[str, Body] = {}
     try:
         if stop is not None and stop.is_set():
@@ -1236,12 +1236,11 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         home.install_id()
         from .router import Router
         router = Router(home)
-        relay = _arm_relay(home, router.config, stop)
+        from .connector import Inputs
+        inputs = Inputs(home)
         while not (stop is not None and stop.is_set()):
             try:
-                if relay is not None and not relay.is_alive():
-                    _log(home, "relay: worker died; restarting")
-                    relay = _arm_relay(home, router.config, stop)
+                inputs.step()
                 tick_once(home, bodies, adapter, core, router)
             except Exception:
                 _log(home, traceback.format_exc().rstrip())
@@ -1249,35 +1248,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 break
     finally:
         _shutdown(bodies)
-        if relay is not None:
-            _disarm_relay(relay)
+        if inputs is not None:
+            inputs.close()
         fcntl.flock(held, fcntl.LOCK_UN)
         os.close(held)
-
-
-def _arm_relay(home: Home, config, stop):
-    """``relay_state`` arms the speech effect and the relay poll thread."""
-    if not config.relay_state:
-        return None
-    from brr.gates.relay_lock import RelayLock
-    from . import speak
-    from .channels.relay import RelayClient, make_effect, poll_forever
-    client = RelayClient(config.relay_state)
-    speak.EFFECTS["relay"] = make_effect(client)
-    lock = RelayLock(config.relay_state, "loom")
-    thread = threading.Thread(
-        target=poll_forever, args=(home, client, lock, stop),
-        kwargs={"log": lambda message: _log(home, message)},
-        daemon=True, name="loom-relay",
-    )
-    thread.start()
-    _log(home, f"relay: armed on {config.relay_state}")
-    return thread
-
-
-def _disarm_relay(thread) -> None:
-    from . import speak
-    speak.EFFECTS.pop("relay", None)
-    # The poll thread sees ``stop`` within one long-poll; it releases the
-    # lock and its want on the way out. A daemon thread never blocks exit.
-    thread.join(timeout=1.0)

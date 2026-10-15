@@ -92,6 +92,9 @@ def test_unsent_reply_returns_to_its_body_with_visible_refusal(tmp_path, monkeyp
     from brr.loom.runtime import router as routing
     root = tmp_path / 'home'
     write_thread(root, 'work', 'Reply', 'custom', wait='0')
+    from connector_support import enable
+    from brr.loom.runtime.home import Home
+    enable(Home(root))
     ready, resume = root / 'refusal-read', root / 'resume'
     if stale:
         # Simulate the real takeover seam: the draft carries an old router grant.

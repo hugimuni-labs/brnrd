@@ -10,6 +10,8 @@ from contextlib import contextmanager
 import json
 import os
 import signal
+import subprocess
+from pathlib import Path
 import sys
 import time
 
@@ -18,7 +20,7 @@ import pytest
 from brr.daemon2.facts import Fact
 from brr.daemon2.leases import LocalLeaseAuthority
 from brr.loom.runtime import loom as runtime, speak
-from brr.loom.runtime.channels import relay
+import connector_support as relay
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, inject_letter
 from brr.loom.runtime.project import fold, holder
@@ -241,22 +243,24 @@ def test_bad_relay_event_does_not_starve_later_chat(root, tmp_path, monkeypatch)
             return {"cursor": 2, "events": [broken, relay_event("later")] if cursor < 2 else []}
 
     monkeypatch.setattr(relay, "RelayClient", Client)
+    relay.install_input(monkeypatch, Home(root))
     with running(root) as loom:
         log = root / "loom" / "loom.log"
         reach(lambda: log.exists() and "relay: poll failed" in log.read_text(), loom)
-        wait_until(lambda: answered(loom, "letter:relay:later"), 3.5, loom.dump)
+        wait_until(lambda: answered(loom, "letter:relay:telegram:42:later"), 3.5, loom.dump)
 
 
 def test_uncertain_speech_gets_a_visible_notice(root, monkeypatch):
     thread(root, "emit-channel")
-    effect = speak.EFFECTS["fake"]
-
-    def lost(home, channel, key, text, context):
-        if text == "msg-0":
-            raise OSError("connection lost before receipt")
-        return effect(home, channel, key, text, context)
-
-    monkeypatch.setitem(speak.EFFECTS, "fake", lost)
+    real_run = subprocess.run
+    def lost(args, **kw):
+        from brr.loom.runtime.port import parse_frontmatter
+        if str(args[0]).endswith('/fake/out'):
+            letter = parse_frontmatter(Path(args[1]).read_text())
+            if letter['body'] == 'msg-0':
+                raise OSError('connection lost before receipt')
+        return real_run(args, **kw)
+    monkeypatch.setattr(subprocess, 'run', lost)
     inject_letter(root, to="thread:work", body="begin")
     with running(root) as loom:
         reach(lambda: any(f.kind == "speech" and f.data.get("state") == "intended"
@@ -269,7 +273,7 @@ def test_uncertain_speech_gets_a_visible_notice(root, monkeypatch):
         (notice,) = notices(loom.facts())
         assert notice.data["to"] == "thread:work"
         assert "may or may not have arrived" in notice.data["body"]
-        assert f"part {lost} " in notice.data["body"]
+        assert f"letter {lost} " in notice.data["body"]
         assert "send a fresh message" in notice.data["body"]
         # Preserve at-most-once: an explanation, never a resend.
         time.sleep(0.3)
@@ -300,13 +304,13 @@ def test_unavailable_channel_does_not_block_a_live_threads_new_letter(root, monk
         reach(lambda: answered(loom, opener), loom)
         strand, gen = holder(loom.facts(), "work")
         router_gen = max(f.data["gen"] for f in loom.facts() if f.kind == "router")
-        monkeypatch.delitem(speak.EFFECTS, "fake")
+        monkeypatch.setattr(speak, 'carries', lambda home: {})
         key = f"{strand}/unavailable"
         append(loom.home, Fact(kind="letter", by=f"strand:{strand}", id=key,
                data={"id": key, "from": strand, "to": "channel:fake", "body": "answer",
                      "gen": gen, "router_gen": router_gen}))
         log = root / "loom" / "loom.log"
-        reach(lambda: "speak: no effect" in log.read_text(), loom)
+        reach(lambda: "speech-refused" in log.read_text() or "KeyError" in log.read_text(), loom)
         fresh = inject_letter(root, to="thread:work", body="new task mid-work")
         wait_until(lambda: answered(loom, fresh), 2, loom.dump)
 
@@ -337,7 +341,8 @@ def test_stale_speech_gets_a_visible_disposition(root):
 def test_relay_poll_recovers_after_saved_cursor_is_repaired(root, tmp_path, monkeypatch):
     state = tmp_path / "relay"
     (root / "loom" / "config.toml").write_text(f'relay_state = "{state}"\n')
-    saved = root / "loom" / "relay-cursor.json"
+    saved = root / "loom/connectors/relay/state/cursor.json"
+    saved.parent.mkdir(parents=True, exist_ok=True)
     saved.write_text("not JSON")
 
     class Client:
@@ -349,11 +354,12 @@ def test_relay_poll_recovers_after_saved_cursor_is_repaired(root, tmp_path, monk
             return {"cursor": 1, "events": [relay_event("after-repair")] if cursor == 0 else []}
 
     monkeypatch.setattr(relay, "RelayClient", Client)
+    relay.install_input(monkeypatch, Home(root))
     with running(root) as loom:
         log = root / "loom" / "loom.log"
         reach(lambda: log.exists() and "JSONDecodeError" in log.read_text(), loom)
         saved.write_text('{"cursor": 0}\n')
-        wait_until(lambda: answered(loom, "letter:relay:after-repair"), 8, loom.dump)
+        wait_until(lambda: answered(loom, "letter:relay:telegram:42:after-repair"), 8, loom.dump)
 
 
 @stuck("inbox addressed to an absent brnrd leaves phone messages without even a refusal")
@@ -383,6 +389,7 @@ def test_unavailable_inbox_owner_explains_the_refusal_remotely(root, tmp_path, m
             return {"message_id": 1}
 
     monkeypatch.setattr(relay, "RelayClient", Client)
+    relay.install_input(monkeypatch, Home(root))
     with running(root) as loom:
         from brr.loom.runtime.owners import letter_owners
         from brr.loom.runtime.lifecycle import main_snapshot

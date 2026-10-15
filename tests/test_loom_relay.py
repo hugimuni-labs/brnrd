@@ -11,7 +11,7 @@ import pytest
 
 from brr.daemon2.facts import Fact
 from brr.gates import cloud
-from brr.loom.runtime.channels import relay
+import connector_support as relay
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.labels import CLEAN, strand_label
 from brr.loom.runtime.ledger import append, read_facts
@@ -28,7 +28,7 @@ def event(ident="ev_1", *, user_id=42, body="fix from telegram", attachments=Non
         "event_id": ident, "body": body, "source": "telegram",
         "reply_to": {
             "platform": "telegram", "chat_id": 555, "topic_id": 9,
-            "message_id": 100, "user": "Ada", "user_id": user_id, "username": "ada_l",
+            "message_id": ident, "user": "Ada", "user_id": user_id, "username": "ada_l",
         },
         "attachments": attachments or [],
     }
@@ -96,21 +96,20 @@ def test_replay_twice_and_cursor_reset_do_not_duplicate_values(home):
     cursor = relay.pull_once(home, client, 0)
     assert relay.pull_once(home, client, cursor) == 3
     # An operator losing the file and supplying 0 does not lose identity.
-    (home.root / "loom" / "relay-cursor.json").write_text('{"cursor":0}\n')
+    (home.root / "loom/connectors/relay/state/cursor.json").write_text('{"cursor":0}\n')
     assert relay.pull_once(home, client, relay.read_cursor(home)) == 3
     assert client.polls == [0, 3, 0]
     sources = kinds(home, "source")
     letters = kinds(home, "letter")
     assert len(sources) == len(letters) == 3
     for i, (source, letter) in enumerate(zip(sources, letters)):
-        assert source.id == f"source:relay:ev_{i}"
+        assert source.id == f"source:relay:telegram:555:ev_{i}"
         assert source.data == {
-            "origin": f"relay:ev_{i}", "platform": "telegram", "chat": 555,
-            "topic": 9, "from": "person:ada", "text": f"message {i}", "blobs": [],
-            "to": "thread:inbox",
+            "origin": f"relay:telegram:555:ev_{i}", "platform": "telegram", "chat": "555", "channel": "channel:telegram/555", "from": "person:ada", "text": f"message {i}", "blobs": [],
+            "to": "thread:inbox", "label": {"taint": False, "audience": ["self"]},
         }
         assert letter.data == {
-            "id": f"letter:relay:ev_{i}", "from": "person:ada", "to": "thread:inbox",
+            "id": f"letter:relay:telegram:555:ev_{i}", "from": "person:ada", "to": "thread:inbox",
             "body": f"message {i}", "cites": source.id,
             "label": {"taint": False, "audience": ["self"]},
         }
@@ -127,8 +126,9 @@ def test_crash_after_append_before_cursor_write_is_absorbed(home, monkeypatch):
     monkeypatch.setattr(relay, "_write_cursor", crash)
     with pytest.raises(OSError, match="crash before cursor"):
         relay.pull_once(home, client, 0)
-    assert not (home.root / "loom" / "relay-cursor.json").exists()
-    assert len(kinds(home, "letter")) == 1
+    assert not (home.root / "loom/connectors/relay/state/cursor.json").exists()
+    assert len(kinds(home, "letter")) == 0
+    assert list((home.root / "loom/connectors/relay/state/in").glob("*.md"))
     monkeypatch.setattr(relay, "_write_cursor", real_write)
     assert relay.pull_once(home, client, 0) == 1
     assert len(kinds(home, "letter")) == len(kinds(home, "source")) == 1
@@ -150,7 +150,7 @@ def test_source_append_crash_repairs_letter_from_original_routing(home, monkeypa
     (home.root / "self" / "people" / "ada" / "channels.md").write_text("telegram:7\n")
     monkeypatch.setattr(relay, "append", real_append)
     relay.pull_once(home, FakeClient([event(body="changed replay")]), 0)
-    letter = next(f for f in kinds(home, "letter") if f.id == "letter:relay:ev_1")
+    letter = next(f for f in kinds(home, "letter") if f.id == "letter:relay:telegram:555:ev_1")
     assert letter.data["body"] == "fix from telegram"
     assert letter.data["from"] == "person:ada"
     assert letter.data["to"] == "thread:first"
@@ -194,7 +194,7 @@ def test_reply_goes_to_its_thread_even_after_release(home):
     facts = read_facts(home)
     append(home, Fact(kind="speech.part", by="loom:aaaa", id=f"speech.part:{first}",
                      data={"key": first, "channel": "channel:telegram/555",
-                           "receipt": {"message_id": 17}}))
+                           "receipt": {"message_id": "telegram:555:17"}}))
     ev = event()
     ev["reply_to"]["reply_to_message_id"] = 17
     relay.pull_once(home, FakeClient([ev]), 0)
@@ -238,8 +238,8 @@ def test_same_blob_twice_one_file_two_exact_facts(home):
     assert (home.root / "blobs" / digest).read_bytes() == b"JPEG!"
     blobs = kinds(home, "blob")
     assert [f.data for f in blobs] == [
-        {"sha": digest, "mime": "application/octet-stream", "size": 5, "origin": "relay:ev_a#0"},
-        {"sha": digest, "mime": "application/octet-stream", "size": 5, "origin": "relay:ev_b#0"},
+        {"sha": digest, "mime": "application/octet-stream", "size": 5, "origin": "relay:telegram:555:ev_a#0"},
+        {"sha": digest, "mime": "application/octet-stream", "size": 5, "origin": "relay:telegram:555:ev_b#0"},
     ]
     assert [f.data["blobs"] for f in kinds(home, "source")] == [[digest], [digest]]
     before = (home.root / "blobs" / digest).stat().st_mtime_ns
@@ -255,7 +255,7 @@ def test_download_failure_keeps_cursor_and_retry_stores_bytes(home):
         relay.pull_once(home, client, 0)
     assert relay.read_cursor(home) == 0
     assert read_facts(home) == []
-    assert list((home.root / "blobs").iterdir()) == []
+    assert not (home.root / "blobs").exists()
     client.fail_download = False
     relay.pull_once(home, client, 0)
     assert kinds(home, "blob")[0].data["mime"] == "application/octet-stream"
@@ -265,7 +265,7 @@ def test_download_failure_keeps_cursor_and_retry_stores_bytes(home):
 def test_lower_server_cursor_is_persisted_even_without_events(home):
     assert relay.pull_once(home, FakeClient([], cursor=2), 900) == 2
     assert relay.read_cursor(home) == 2
-    assert json.loads((home.root / "loom" / "relay-cursor.json").read_text()) == {"cursor": 2}
+    assert json.loads((home.root / "loom/connectors/relay/state/cursor.json").read_text()) == {"cursor": 2}
 
 
 def test_person_mapping_is_platform_specific_and_ambiguity_is_stranger(home):
@@ -307,11 +307,11 @@ def test_current_wire_message_id_is_not_inferred_as_reply_binding(home):
     first = speak(home, "s-aaaa-first1", "first")
     speak(home, "s-aaaa-second", "second")
     ev = event()
-    ev["reply_to"]["message_id"] = first
+    ev["reply_to"]["message_id"] = first.replace("/", "_")
     relay.pull_once(home, FakeClient([ev]), 0)
     source, = kinds(home, "source")
     assert "reply_to_letter" not in source.data
-    letter = next(f for f in kinds(home, "letter") if f.id == "letter:relay:ev_1")
+    letter = next(f for f in kinds(home, "letter") if f.data.get("cites") == "source:relay:telegram:555:" + first.replace("/", "_"))
     assert letter.data["to"] == "thread:second"
 
 
@@ -325,9 +325,9 @@ def test_raw_reply_target_is_preserved_without_resolving_it(home, reply_target):
     relay.pull_once(home, FakeClient([ev]), 0)
     source, = kinds(home, "source")
     if reply_target is None:
-        assert "reply_to_message_id" not in source.data
+        assert "re" not in source.data
     else:
-        assert source.data["reply_to_message_id"] == reply_target
+        assert source.data["re"] == f"telegram:555:{reply_target}"
     assert "reply_to_letter" not in source.data
     assert source.data["to"] == "thread:second"
 
@@ -346,7 +346,7 @@ def test_partial_blob_append_replay_preserves_one_fact_per_attachment(home, monk
     assert len(kinds(home, "source")) == 0
     monkeypatch.setattr(relay, "append", real_append)
     relay.pull_once(home, client, 0)
-    assert [f.data["origin"] for f in kinds(home, "blob")] == ["relay:ev_1#0", "relay:ev_1#1"]
+    assert [f.data["origin"] for f in kinds(home, "blob")] == ["relay:telegram:555:ev_1#0", "relay:telegram:555:ev_1#1"]
     digest = hashlib.sha256(b"JPEG!").hexdigest()
     assert kinds(home, "source")[0].data["blobs"] == [digest, digest]
     assert len(list((home.root / "blobs").iterdir())) == 1
@@ -370,3 +370,15 @@ def test_same_identity_twice_in_one_response_is_one_letter(home):
     source, = kinds(home, "source")
     letter, = kinds(home, "letter")
     assert source.data["text"] == letter.data["body"] == "fix from telegram"
+
+
+def test_github_repository_chat_uses_the_same_folder_and_source_step(home):
+    wire = dict(event_id='gh-event', body='please inspect', attachments=[], reply_to=dict(
+                platform='github', repo='owner/repo', issue_number=17, comment_id=100, author='ada'))
+    relay.pull_once(home, FakeClient([wire]), 0)
+    source, = kinds(home, 'source')
+    letter, = kinds(home, 'letter')
+    assert source.id == 'source:relay:github:owner%2Frepo%2317:100'
+    assert source.data['channel'] == 'channel:github/owner/repo#17'
+    assert letter.data['from'] == 'stranger:github:'
+    assert letter.data['label']['taint']

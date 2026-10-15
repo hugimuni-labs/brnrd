@@ -4,7 +4,7 @@ from _step import mail
 import json
 import os
 
-from brr.loom.runtime import speak
+from connector_support import install_fake
 from brr.loom.runtime.ledger import inject_letter
 
 from brr.loom.runtime.selfrepo import git, init_self
@@ -20,7 +20,7 @@ def test_worker_answers_followup_warm_then_exits_and_a_later_letter_starts_it(tm
     write_thread(root, "work", "---\nid: work\nstatus: open\ntense: plan\n"
                  "opened-by: thread:opener\n---\n# Worker\n", "work", wait="1.2")
     replies = []
-    monkeypatch.setitem(speak.EFFECTS, "fake", lambda _h, _c, _k, text, _ctx: replies.append(json.loads(text)))
+    install_fake(monkeypatch, lambda text: replies.append(json.loads(text)))
     waiting = root / "waiting"
     follow = root / "follow"
     bodies(root, f'''import json, os, sys, time
@@ -126,7 +126,9 @@ print(json.dumps({'windows': [{'name': 'session', 'left_pct': left,
         # Two actual wait expiries, beyond the hook subprocess's launch cost.
         from time import monotonic
         begun = monotonic()
-        wait_until(lambda: monotonic() - begun > 2.2, 4, loom.dump)
+        # Count the real expiries; hook launch/collector time is additional.
+        wait_until(lambda: monotonic() - begun > 2.2 and (root / "holds").exists()
+                   and int((root / "holds").read_text()) >= 2, 6, loom.dump)
         os.kill(pid, 0)
         assert blocked.read_text() == "one\n"
         assert int((root / "holds").read_text()) >= 2

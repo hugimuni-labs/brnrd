@@ -54,17 +54,25 @@ def is_channel(to: object) -> bool:
     return isinstance(to, str) and to.startswith("channel:")
 
 
-_CHANNEL = re.compile(r"channel:(telegram)/([A-Za-z0-9_:#.-]+)")
+_CHANNEL = re.compile(r"channel:([A-Za-z0-9][A-Za-z0-9._-]*)/([A-Za-z0-9_:@#.+/-]+)")
 
 
-def channel_parts(channel: str) -> tuple[str, str | None]:
-    """Parse a supported channel address, raising on an unknown adapter or chat."""
+def channel_parts(channel: str, home=None) -> tuple[str, str | None]:
+    """Parse an address; with a home, require an enabled carrier as well."""
     if channel == "channel:fake":
-        return "fake", None
-    match = _CHANNEL.fullmatch(channel) if isinstance(channel, str) else None
-    if match is None:
-        raise ValueError(f"no channel adapter for {channel!r}")
-    return match.group(1), match.group(2)
+        parts = ("fake", None)
+    else:
+        match = _CHANNEL.fullmatch(channel) if isinstance(channel, str) else None
+        if match is None:
+            raise ValueError(f"no channel adapter for {channel!r}")
+        parts = (match.group(1), match.group(2))
+        if any(segment in {"", ".", ".."} for segment in parts[1].split("/")):
+            raise ValueError(f"invalid channel chat {parts[1]!r}")
+    if home is not None:
+        from .connector import carries
+        if parts[0] not in carries(home):
+            raise ValueError(f"no enabled connector carries {parts[0]!r}")
+    return parts
 
 
 class Home:
@@ -146,16 +154,21 @@ def thread_of(to: str) -> str:
     return check_thread_id(to.split(":", 1)[1])
 
 
-def atomic_write(path: Path, text: str) -> None:
+def atomic_write(path: Path, text: str | bytes, *, sync_directory: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     fd = os.open(tmp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o644)
-    try:
-        os.write(fd, text.encode())
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(text.encode() if isinstance(text, str) else text)
+        stream.flush()
+        os.fsync(stream.fileno())
     os.replace(tmp, path)
+    if sync_directory:
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
 
 
 def home_of_room(room: Path) -> Home:

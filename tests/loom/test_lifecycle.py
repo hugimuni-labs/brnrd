@@ -2,14 +2,14 @@ from _step import mail
 """A wasted start reaches the author; only a person's letter gets a second start."""
 
 import json
+import subprocess
 import sys
 import threading
 import time
 
 import pytest
 
-from brr.loom.runtime import speak
-from brr.loom.runtime.channels.relay import pull_once
+from connector_support import pull_once
 from brr.loom.runtime.ledger import inject_letter
 
 from brr.loom.runtime.selfrepo import init_self
@@ -122,12 +122,21 @@ sys.exit(2)
             raise ValueError('channel refused the failure message')
         sent.append((channel, text, context))
         return {}
-    monkeypatch.setitem(speak.EFFECTS, "relay", effect)
+    real_run = subprocess.run
+    def run_out(args, **kw):
+        if str(args[0]).endswith('/relay/out'):
+            from brr.loom.runtime.port import parse_frontmatter
+            from pathlib import Path
+            letter = parse_frontmatter(Path(args[1]).read_text())
+            effect(Loom(root).home, letter['to'], letter['id'], letter['body'], letter)
+            return subprocess.CompletedProcess(args, 0, '{"ids": []}', '')
+        return real_run(args, **kw)
+    monkeypatch.setattr(subprocess, 'run', run_out)
     if delivery == 'no-channel':
         person.unlink()
     from brr.loom.runtime.check import run as check
     assert check(['--home', str(root)]) == 0
-    assert 'loom · waiting for start · letter:relay:crash' in capsys.readouterr().out
+    assert 'loom · waiting for start · letter:relay:telegram:42:crash' in capsys.readouterr().out
     assert check(['--home', str(root), '--quiet-end']) == 1
     assert 'quiet end still owed by loom' in capsys.readouterr().out
     loom = Loom(root)
@@ -137,7 +146,7 @@ sys.exit(2)
         from brr.loom.runtime.lifecycle import main_snapshot
         from brr.loom.runtime.verbs_loom import _attention
         from brr.loom.runtime.threads import thread_table
-        ident = "letter:relay:crash"
+        ident = "letter:relay:telegram:42:crash"
         def table():
             return letter_owners(loom.facts(), main_snapshot(loom.home))
         if delivery != 'no-channel':
@@ -158,7 +167,7 @@ sys.exit(2)
             assert channel == 'channel:telegram/42'
             assert 'could not handle your letter: please help' in text
             assert 'person failure tail' in text
-            assert context['event_id'] == 'crash'
+            assert context['re'] == 'telegram:42:crash'
         else:
             wait_until(lambda: any(f.owner == 'operator' for f in table().values()), 10, loom.dump)
             debt = next(k for k, f in table().items() if f.owner == 'operator')

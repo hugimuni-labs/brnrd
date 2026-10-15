@@ -391,7 +391,7 @@ def cmd_config(argv: list[str]) -> int:
 
 def _config(argv: list[str]) -> int:
     """``brnrd loom config [--home H]``: every key, its effective value, source, help."""
-    from .config import ConfigError, config_path, describe_config
+    from .config import ConfigError, _render_value, config_path, describe_config
 
     parser = argparse.ArgumentParser(prog="brnrd loom config")
     parser.add_argument("--home", default=None)
@@ -409,7 +409,7 @@ def _config(argv: list[str]) -> int:
     print(f"file: {config_path(home)}" + ("" if config_path(home).is_file() else " (absent: all defaults)"))
     width = max(len(name) for name, *_ in rows)
     for name, value, source, help_ in rows:
-        shown = "-" if value is None else (f'"{value}"' if isinstance(value, str) else f"{value:g}")
+        shown = "-" if value is None else (_render_value(value) if isinstance(value, (str, tuple)) else f"{value:g}")
         print(f"{name:<{width}} = {shown} · {source} · {help_}")
     return 0
 

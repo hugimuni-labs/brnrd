@@ -301,7 +301,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         if body_choice is not None:
             raise PortError("send: --body is only for opening a new thread")
         try:
-            channel_parts(to)
+            channel_parts(to, home)
         except ValueError as exc:
             raise PortError(f"send: {exc}") from exc
     else:
@@ -447,6 +447,8 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             data["at"] = fm["at"]
         if fm.get("re"):
             data["re"] = fm["re"]
+        if fm.get("edit"):
+            data["edit"] = fm["edit"]
         if fm.get("molt"):
             data["molt"] = fm["molt"]
         if fm.get("clean"):
