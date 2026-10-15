@@ -1,6 +1,5 @@
 """A folder, including a passive fake, pairs through the one letter API."""
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -70,11 +69,10 @@ def test_cli_setup_and_setup_channel_share_flow(tmp_path, monkeypatch):
     assert all(args[1:] == ('fake', 'desk', 'ada') for args, _ in calls)
 
 
-def test_relay_missing_browser_pairing_has_actionable_stub(tmp_path, capfd):
+def test_named_relay_setup_refuses_with_legacy_path(tmp_path):
     home = home_at(tmp_path)
-    with pytest.raises(subprocess.CalledProcessError):
+    with pytest.raises(ValueError, match='multi-platform folder.*connectors'):
         setup_channel.pair(home, 'relay', 'cloud', 'ada', out=lambda _: None)
-    assert 'brnrd account connect' in capfd.readouterr().err
     assert load_config(tmp_path).connectors == ()
 
 

@@ -3,7 +3,6 @@
 
 import hashlib
 import json
-import os
 import signal
 import sys
 import threading
@@ -73,15 +72,8 @@ def pull_once(drop, state, client, cursor, failures=None):
                                    f'(attempt {failures.get(key, 0) + 1} of 3)')
             # WhatsApp: a chat with the business number is one person, and its
             # chat id is that person's own wa_id; the server sends no user_id.
-            address = os.environ.get('BRNRD_CHANNEL', platform)
-            if os.environ.get('BRNRD_CHANNEL'):
-                chats = read(state / 'chats.json', {})
-                if chat in chats and chats[chat] != platform:
-                    raise ValueError('relay: chat id collides across platforms; use separate instances')
-                chats[chat] = platform
-                atomic_write(state / 'chats.json', json.dumps(chats))
-            fields = dict(kind='letter', id=ident, to=f'channel:{address}/{chat}',
-                          **{'from': f"{address}:{chat if platform == 'whatsapp' else origin.get('user_id') or ''}"})
+            fields = dict(kind='letter', id=ident, to=f'channel:{platform}/{chat}',
+                          **{'from': f"{platform}:{chat if platform == 'whatsapp' else origin.get('user_id') or ''}"})
             if origin.get('reply_to_message_id') is not None:
                 fields['re'] = message_id(platform, chat, origin['reply_to_message_id'])
             if missing:

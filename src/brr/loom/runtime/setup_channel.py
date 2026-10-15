@@ -22,6 +22,9 @@ def pair(home, kind, name, person, *, timeout=180, out=print):
         raise ValueError('Channel and person names use letters, digits, dots, dashes or underscores')
     if name in instances(home) or name in carries(home):
         raise ValueError(f'Channel name {name!r} is already in use')
+    if kind == 'relay':
+        raise ValueError('relay is a multi-platform folder and cannot take one name yet; '
+                         'use connectors = ["relay"] and the existing account setup')
     folder = resolve(home, kind, 'connectors')
     if not (folder / 'out').is_file():
         raise ValueError(f'{kind} is an input pipe, not a messaging channel')

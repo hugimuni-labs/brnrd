@@ -138,6 +138,9 @@ def _coerce(key: Key, value: object, path: Path) -> object:
         if not isinstance(value, (list, tuple)) or any(
                 not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*(?:=[A-Za-z0-9][A-Za-z0-9._-]*)?", v) for v in value):
             raise refuse('an array of "folder" or "name=folder" strings')
+        if any(v.partition("=")[2] == "relay" for v in value):
+            raise ConfigError(f'{path}: relay is a multi-platform folder and cannot take one name yet; '
+                              'use connectors = ["relay"] with its legacy platform addresses')
         names = [v.split("=", 1)[0] for v in value]
         if len(set(names)) != len(names):
             raise refuse("unique connector names")

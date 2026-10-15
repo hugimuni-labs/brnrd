@@ -45,27 +45,7 @@ def test_duplicate_or_unsafe_instance_names_refused(tmp_path, config):
         load_config(home.root)
 
 
-@pytest.mark.parametrize('name', ['cloud', 'telegram'])
-def test_named_relay_translates_platform_only_inside_folder(tmp_path, monkeypatch, name):
-    import connector_support
-    from test_loom_relay import FakeClient
-    from test_loom_speak_relay import FakeClient as Sender
-
-    home = home_at(tmp_path, f'connectors = ["{name}=relay"]')
-    env = connector.environment(home, name)
-    state = Path(env['BRNRD_STATE'])
-    drop = state / 'in'
-    drop.mkdir()
-    monkeypatch.setenv('BRNRD_CHANNEL', name)
-    event = dict(event_id='ev1', body='hi', reply_to=dict(
-        platform='telegram', chat_id=42, user_id=42, message_id=7))
-    connector_support.input_module.pull_once(drop, state, FakeClient([event]), 0)
-    from brr.loom.runtime.port import parse_frontmatter
-    fm = parse_frontmatter((drop / 'telegram:42:7.md').read_text())
-    assert fm['to'] == f'channel:{name}/42' and fm['from'] == f'{name}:42'
-    path = tmp_path / 'reply.md'
-    path.write_text(_front(dict(kind='letter', id='draft', to=f'channel:{name}/42',
-                               re='telegram:42:7'), 'answer'))
-    client = Sender()
-    assert connector_support.output_module.deliver(path, state, client) == 0
-    assert client.sent == [dict(event_id='ev1', body_markdown='answer')]
+def test_named_relay_refused_at_config_load(tmp_path):
+    home = home_at(tmp_path, 'connectors = ["home=relay"]')
+    with pytest.raises(ConfigError, match='multi-platform folder.*connectors'):
+        load_config(home.root)

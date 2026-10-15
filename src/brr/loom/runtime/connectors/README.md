@@ -27,12 +27,10 @@ secret source. It stores the source or token in the instance's `token` file
 active webhook or another poller. No live Bot API request is made by the tests.
 They run the folder against a local fake server instead.
 
-Relay account/browser pairing is still the existing `brnrd account connect`
-flow. Set `relay_state` to that paired account state directory before running
-channel setup; connect the chat to the account on brnrd.dev first. Setup
-reports that step explicitly when the account state is absent. Named relay
-instances keep their chat-to-platform map inside their own state directory;
-a chat id colliding across two platforms is refused rather than misrouted.
+Relay stays on its existing account/browser setup (`brnrd account connect`)
+and plain `connectors = ["relay"]` declaration, with `channel:telegram/<chat>`
+and `channel:whatsapp/<chat>` addresses. `name=relay` is refused by both config
+and channel setup: a multi-platform folder cannot take one name yet.
 
 Folder contract: `in <drop-dir>` publishes one complete letter by rename,
 after any attachments in `<id>.d/`; `out <letter-file>` prints `{"ids": [...]}`
