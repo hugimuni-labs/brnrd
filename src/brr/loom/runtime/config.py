@@ -1,7 +1,8 @@
 """``loom/config.toml``: the knobs one home's looms share.
 
 Flat ``key = value`` lines only: ``[sections]`` are ignored. Enable folders
-with ``connectors = ["relay"]``; ``relay_state`` supplies its account path. A few-line
+with ``connectors = ["relay"]``; ``relay_state`` supplies its account path.
+Named instances use ``connectors = ["home-tg=telegram"]`` (name=folder). A few-line
 file, parsed here, so the loom takes no TOML dependency on Python 3.10.
 
 ``KEYS`` is the one declaration: name, kind, default, help. The dataclass,
@@ -68,7 +69,7 @@ KEYS: tuple[Key, ...] = (
         "else the machine's gh login; off signs it out.",
         choices=("auto", "off")),
     Key("connectors", "names", (),
-        "Enabled connector folders, e.g. [\"relay\"]. Home folders override bundled folders; default: none."),
+        "Enabled folders or named channels, e.g. [\"relay\"] or [\"home-tg=telegram\"]. Home folders override bundled folders; default: none."),
     Key("relay_state", "path", None,
         "The account's cloud gate state directory (holds gates/cloud.json). "
         'Read by the relay connector; enable it with connectors = ["relay"].'),
@@ -135,9 +136,10 @@ def _coerce(key: Key, value: object, path: Path) -> object:
 
     if key.kind == "names":
         if not isinstance(value, (list, tuple)) or any(
-                not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", v) for v in value):
-            raise refuse("an array of connector names")
-        if len(set(value)) != len(value):
+                not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*(?:=[A-Za-z0-9][A-Za-z0-9._-]*)?", v) for v in value):
+            raise refuse('an array of "folder" or "name=folder" strings')
+        names = [v.split("=", 1)[0] for v in value]
+        if len(set(names)) != len(names):
             raise refuse("unique connector names")
         return tuple(value)
     if key.kind in {"text", "path"}:
@@ -200,7 +202,10 @@ def load_config_report(root: Path | str) -> tuple[LoomConfig, frozenset[str]]:
             if not line or "=" not in line:
                 continue
             key, _, raw = line.partition("=")
-            found[key.strip()] = _literal(raw.strip())
+            key = key.strip()
+            if key == "connectors" and key in found:
+                raise ConfigError(f"{path}: duplicate {key} declaration")
+            found[key] = _literal(raw.strip())
     values: dict[str, object] = {}
     for name, value in found.items():
         key = BY_NAME.get(name)

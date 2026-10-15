@@ -20,19 +20,31 @@ from .port import clean_accepts, parse_frontmatter
 from .project import fold, sender_threads
 
 
+def instances(home):
+    cfg = load_config(home.root)
+    return dict(v.split('=', 1) if '=' in v else (v, v) for v in cfg.connectors)
+
+
 def carries(home):
     found = {}
-    for name in load_config(home.root).connectors:
-        folder = resolve(home, name, "connectors")
-        for raw in (folder / "carries").read_text().splitlines():
-            if not raw.strip() or raw.lstrip().startswith("#"):
-                continue
-            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*(?: edit)?", raw.strip()):
+    legacy = load_config(home.root).connectors
+    for name, kind in instances(home).items():
+        folder = resolve(home, kind, "connectors")
+        lines = [r.strip() for r in (folder / "carries").read_text().splitlines()
+                 if r.strip() and not r.lstrip().startswith("#")]
+        for raw in lines:
+            if not re.fullmatch(r"(?:edit|[A-Za-z0-9][A-Za-z0-9._-]*(?: edit)?)", raw):
                 raise ValueError(f"{folder}/carries: invalid line {raw!r}")
-            platform, *flags = raw.split()
-            if platform in found:
-                raise ValueError(f"{platform} carried by both {found[platform][0]} and {name}")
-            found[platform] = (name, folder, "edit" in flags)
+        # Legacy lists retain their platform addresses. Named channels use only
+        # the edit capability; the instance name is the entire address namespace.
+        if name in legacy and lines not in ([], ['edit']):
+            declarations = [(r.split()[0], 'edit' in r.split()) for r in lines]
+        else:
+            declarations = [(name, any('edit' in r.split() for r in lines))]
+        for address, edits in declarations:
+            if address in found:
+                raise ValueError(f"{address} carried by both {found[address][0]} and {name}")
+            found[address] = (name, folder, edits)
     return found
 
 
@@ -45,6 +57,10 @@ def environment(home, name):
     env.update(BRNRD_HOME=str(home.root.resolve()), BRNRD_STATE=str(state.resolve()),
                BRNRD_CONFIG=str(config_path(home.root).resolve()),
                PYTHONPATH=src + os.pathsep + env.get("PYTHONPATH", ""))
+    if name not in load_config(home.root).connectors:
+        env["BRNRD_CHANNEL"] = name
+    else:
+        env.pop("BRNRD_CHANNEL", None)
     return env
 
 
@@ -53,11 +69,11 @@ class Inputs:
     def __init__(self, home):
         carries(home)  # validate the complete declaration before starting any child
         self.home, self.children, self.failures = home, {}, {}
-        self.names = load_config(home.root).connectors
+        self.names = instances(home)
 
     def step(self):
-        for name in self.names:
-            folder = resolve(self.home, name, "connectors")
+        for name, kind in self.names.items():
+            folder = resolve(self.home, kind, "connectors")
             drop = self.home.root / "loom/connectors" / name / "state/in"
             drop.mkdir(parents=True, exist_ok=True)
             command = folder / "in"
@@ -154,7 +170,9 @@ def drain(home, name, drop, failures=None):
             fm = parse_frontmatter(path.read_text(encoding='utf-8'))
             if path.is_symlink() or fm.get('id') != path.stem or not re.fullmatch(r'[A-Za-z0-9_%:#.-]+', fm.get('id', '')) or not fm.get('kind'):
                 raise ValueError('letter requires a safe id and kind')
-            channel_parts(fm.get('to', ''), home)
+            address, _chat = channel_parts(fm.get('to', ''), home)
+            if carries(home)[address][0] != name:
+                raise ValueError('letter addresses another connector instance')
             if fm['kind'] != 'letter' and not clean_accepts(
                     home.root / 'self', fm['kind'], fm.get('refs', '').split(), fm['body']):
                 raise ValueError('kind must be letter or a clean letter with valid refs')

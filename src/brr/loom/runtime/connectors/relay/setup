@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""Reuse an existing account pairing; the browser flow remains daemon-owned."""
+import os
+from pathlib import Path
+from brr.loom.runtime.config import load_config
+
+config = load_config(Path(os.environ['BRNRD_CONFIG']).parent.parent)
+if not config.relay_state:
+    raise SystemExit('Relay browser pairing uses the existing account flow: run '
+                     '`brnrd account connect`, then set relay_state in loom/config.toml '
+                     'to that account state directory and retry. No channel was enabled.')
+print('Using the paired cloud account; send the code through a chat connected on brnrd.dev.')
