@@ -160,10 +160,10 @@ def test_chat_header_is_the_face_and_thread_even_after_release(home):
     facts = router.speak_out(facts)
     sent = json.loads((home.root / "loom/channel-fake.jsonl").read_text())
     assert sent["key"] == key
-    assert sent["text"] == "⌁[b·_·d] first\n\nThe first answer\nMore detail"
+    assert sent["text"] == "b·_·d ⌁ [ first ]\n\nThe first answer\nMore detail"
     append(home, Fact(kind="released", by="loom:aaaa", id="released:first", data={
         "strand": "s-aaaa-first", "thread": "first", "gen": 1}))
     state = fold(read_facts(home))
     letter = next(f for f in facts if f.id == key)
-    assert _header(state, letter) == "⌁[b·_·d] first"
-    assert _header(state, Fact(kind="letter", by="loom:aaaa")) == "⌁[b·_·d]"
+    assert _header(state, letter) == "b·_·d ⌁ [ first ]"
+    assert _header(state, Fact(kind="letter", by="loom:aaaa")) == "b·_·d ⌁"
