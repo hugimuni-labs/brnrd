@@ -63,7 +63,7 @@ def home(tmp_path):
             f"---\nid: {thread}\nstatus: open\ntense: plan\n---\n# {thread}\n")
     person = home.root / "self" / "people" / "ada"
     person.mkdir(parents=True)
-    (person / "channels.md").write_text("relay:telegram:42\nrelay:whatsapp:555\n")
+    (person / "channels.toml").write_text('channels = ["relay:telegram:42", "relay:whatsapp:555"]\n')
     return home
 
 
@@ -147,7 +147,7 @@ def test_source_append_crash_repairs_letter_from_original_routing(home, monkeypa
     speak(home, "s-aaaa-second", "second")
     # A replay changed its text and person map after the crash. The original
     # source still controls the letter and its routing moment.
-    (home.root / "self" / "people" / "ada" / "channels.md").write_text("telegram:7\n")
+    (home.root / "self" / "people" / "ada" / "channels.toml").write_text('channels = ["telegram:7"]\n')
     monkeypatch.setattr(relay, "append", real_append)
     relay.pull_once(home, FakeClient([event(body="changed replay")]), 0)
     letter = next(f for f in kinds(home, "letter") if f.id == "letter:relay:telegram:555:ev_1")
@@ -269,13 +269,13 @@ def test_lower_server_cursor_is_persisted_even_without_events(home):
 
 
 def test_person_mapping_is_platform_specific_and_ambiguity_is_stranger(home):
-    (home.root / "self" / "people" / "ada" / "channels.md").write_text("slack:42\n")
+    (home.root / "self" / "people" / "ada" / "channels.toml").write_text('channels = ["slack:42"]\n')
     relay.pull_once(home, FakeClient([event()]), 0)
     assert kinds(home, "source")[0].data["from"] == "stranger:relay:telegram:42"
     other = home.root / "self" / "people" / "other"
     other.mkdir()
-    (other / "channels.md").write_text("relay:telegram:42\n")
-    (home.root / "self" / "people" / "ada" / "channels.md").write_text("relay:telegram:42\n")
+    (other / "channels.toml").write_text('channels = ["relay:telegram:42"]\n')
+    (home.root / "self" / "people" / "ada" / "channels.toml").write_text('channels = ["relay:telegram:42"]\n')
     relay.pull_once(home, FakeClient([event("ev_2")]), 3)
     assert [f.data["from"] for f in kinds(home, "source")] == ["stranger:relay:telegram:42"] * 2
     assert all(f.data["label"]["taint"] for f in kinds(home, "letter"))

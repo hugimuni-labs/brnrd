@@ -30,7 +30,7 @@ def test_fake_live_pair_saves_named_identity_and_keeps_unrelated_letters(tmp_pat
                                       to='42', **{'from': '42'}), code))
     assert setup_channel.pair(home, 'fake', 'desk', 'ada', out=send_code) == 'desk:42'
     assert load_config(tmp_path).connectors == ('desk=fake',)
-    assert (tmp_path / 'self/people/ada/channels.md').read_text() == 'desk:42\n'
+    assert (tmp_path / 'self/people/ada/channels.toml').read_text() == 'channels = ["desk:42"]\n'
     sent = [json.loads(r) for r in (tmp_path / 'loom/channel-fake.jsonl').read_text().splitlines()]
     assert sent[0]['text'] == 'heard you as 42'
     assert (state / 'in/other.md').exists() and not (state / 'in/code.md').exists()
@@ -44,7 +44,7 @@ def test_timeout_never_enables_or_enrols_channel(tmp_path):
     with pytest.raises(TimeoutError):
         setup_channel.pair(home, 'fake', 'desk', 'ada', timeout=0, out=lambda _: None)
     assert load_config(tmp_path).connectors == ()
-    assert not (tmp_path / 'self/people/ada/channels.md').exists()
+    assert not (tmp_path / 'self/people/ada/channels.toml').exists()
 
 
 def test_group_or_spoofed_identity_never_pairs(tmp_path):
@@ -104,7 +104,7 @@ def test_bad_out_receipt_never_enrols_person(tmp_path, receipt):
     with pytest.raises(ValueError, match='ids receipt'):
         setup_channel.pair(home, 'fake', 'desk', 'ada', out=send_code)
     assert load_config(tmp_path).connectors == ()
-    assert not (tmp_path / 'self/people/ada/channels.md').exists()
+    assert not (tmp_path / 'self/people/ada/channels.toml').exists()
 
 
 def test_home_folder_pairs_ingests_and_sends_native_ids(tmp_path):
@@ -137,7 +137,7 @@ print('{"ids": ["native-receipt"]}')
         if line.startswith('Send '):
             wire('pair', line.split()[1])
     assert setup_channel.pair(home, 'postbox', 'desk', 'ada', out=send_code) == 'desk:native:42'
-    assert (tmp_path / 'self/people/ada/channels.md').read_text() == 'desk:native:42\n'
+    assert (tmp_path / 'self/people/ada/channels.toml').read_text() == 'channels = ["desk:native:42"]\n'
     wire('message', 'hello')
     connector.drain(home, 'desk', state / 'in')
     source, = [f for f in read_facts(home) if f.kind == 'source']

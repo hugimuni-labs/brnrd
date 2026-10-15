@@ -70,3 +70,26 @@ def test_disabled_instance_is_refused_at_write_and_drafting_thread_hears(tmp_pat
     notice, = [f for f in read_facts(home) if f.kind == 'letter']
     assert notice.data['to'] == 'thread:work'
     assert reason in notice.data['body']
+
+
+def test_person_channel_toml_uses_exact_ids_and_shared_comment_rules(tmp_path):
+    home = home_at(tmp_path, 'connectors = ["home=fake"]')
+    person = tmp_path / 'self/people/ada'
+    person.mkdir(parents=True)
+    (person / 'channels.md').write_text('home:99\n')  # Old prose is not an authority source.
+    (person / 'channels.toml').write_text('channels = ["home:42", "home:ab#cd"] # comment\n')
+    assert connector.person_dm(home, 'channel:home/42') == 'person:ada'
+    assert connector.person_dm(home, 'channel:home/ab#cd') == 'person:ada'
+    assert connector.person_dm(home, 'channel:home/4') is None
+    assert connector.person_dm(home, 'channel:home/99') is None
+
+
+@pytest.mark.parametrize('text', ['channels = "home:42"', 'channels = [42]',
+                                 'channels = ["home:42"]\nchannels = ["home:99"]'])
+def test_person_channel_toml_refuses_invalid_arrays(tmp_path, text):
+    home = home_at(tmp_path, 'connectors = ["home=fake"]')
+    person = tmp_path / 'self/people/ada'
+    person.mkdir(parents=True)
+    (person / 'channels.toml').write_text(text)
+    with pytest.raises(ConfigError):
+        connector.person_dm(home, 'channel:home/42')

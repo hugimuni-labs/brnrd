@@ -22,7 +22,7 @@ def home(tmp_path):
     h.root.mkdir(parents=True)
     person = h.root / "self" / "people" / "ada"
     person.mkdir(parents=True)
-    (person / "channels.md").write_text("relay:telegram:42\n")
+    (person / "channels.toml").write_text('channels = ["relay:telegram:42"]\n')
     relay.enable(h)
     return h
 

@@ -215,7 +215,7 @@ def test_relay_photo_answer_and_reply_through_real_folder_processes(home, tmp_pa
     (home.root / 'loom/config.toml').write_text(f'connectors = ["relay"]\nrelay_state = "{state}"\n')
     person = home.root / 'self/people/ada'
     person.mkdir(parents=True)
-    (person / 'channels.md').write_text('relay:telegram:42\n')
+    (person / 'channels.toml').write_text('channels = ["relay:telegram:42"]\n')
     directory = home.thread_dir('first')
     directory.mkdir()
     (directory / 'README.md').write_text('---\nid: first\nstatus: open\ntense: plan\n---\n# First\n')

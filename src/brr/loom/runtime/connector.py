@@ -12,7 +12,7 @@ from pathlib import Path
 
 from brr.daemon2.facts import Fact, union
 from .adapters import resolve
-from .config import config_path, load_config
+from .config import config_path, load_config, read_array
 from .home import atomic_write, channel_parts, mint
 from .labels import is_stranger
 from .ledger import append, read_facts
@@ -205,8 +205,8 @@ def drain(home, name, drop, failures=None):
 def _sender(home, instance, user_id):
     # Only a connector's authenticated identity enters the person lookup.
     key = f"{instance}:{user_id}"
-    matches = [p.parent.name for p in sorted((home.root / 'self/people').glob('*/channels.md'))
-               if user_id not in (None, '') and key in set(map(str.strip, p.read_text().splitlines()))]
+    matches = [p.parent.name for p in sorted((home.root / 'self/people').glob('*/channels.toml'))
+               if user_id not in (None, '') and key in read_array(p, 'channels')]
     return f'person:{matches[0]}' if len(matches) == 1 else f'stranger:{instance}:{"" if user_id is None else user_id}'
 
 

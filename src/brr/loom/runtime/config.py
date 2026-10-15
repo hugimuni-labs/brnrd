@@ -191,9 +191,9 @@ def _without_comment(line: str) -> str:
     return line
 
 
-def load_config_report(root: Path | str) -> tuple[LoomConfig, frozenset[str]]:
-    """The effective config and the keys the file set (the rest are defaults)."""
-    path = config_path(root)
+def read_values(path: Path | str) -> dict[str, object]:
+    """Read the shared flat TOML grammar, without applying a key registry."""
+    path = Path(path)
     found: dict[str, object] = {}
     if path.is_file():
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -202,9 +202,23 @@ def load_config_report(root: Path | str) -> tuple[LoomConfig, frozenset[str]]:
                 continue
             key, _, raw = line.partition("=")
             key = key.strip()
-            if key == "connectors" and key in found:
+            if key in {"connectors", "channels"} and key in found:
                 raise ConfigError(f"{path}: duplicate {key} declaration")
             found[key] = _literal(raw.strip())
+    return found
+
+
+def read_array(path: Path, key: str) -> list[str]:
+    values = read_values(path).get(key, [])
+    if not isinstance(values, list) or any(not isinstance(v, str) for v in values):
+        raise ConfigError(f"{path}: {key} must be an array of strings")
+    return values
+
+
+def load_config_report(root: Path | str) -> tuple[LoomConfig, frozenset[str]]:
+    """The effective config and the keys the file set (the rest are defaults)."""
+    path = config_path(root)
+    found = read_values(path)
     values: dict[str, object] = {}
     for name, value in found.items():
         key = BY_NAME.get(name)

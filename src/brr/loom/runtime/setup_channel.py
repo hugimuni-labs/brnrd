@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from .adapters import resolve
-from .config import config_path, load_config, seed_config
+from .config import config_path, load_config, read_array, seed_config
 from .connector import addressed, environment, instances
 from .home import Home, atomic_write, channel_parts, resolve_home
 from .port import _front, parse_frontmatter
@@ -68,11 +68,11 @@ def pair(home, kind, name, person, *, timeout=180, out=print):
                 path.unlink()
                 if path.with_suffix('.d').exists():
                     shutil.rmtree(path.with_suffix('.d'))
-                channels = home.root / 'self/people' / person / 'channels.md'
-                previous = channels.read_text() if channels.exists() else ''
+                channels = home.root / 'self/people' / person / 'channels.toml'
+                previous = read_array(channels, 'channels')
                 key = f'{name}:{chat}'
-                if key not in previous.splitlines():
-                    atomic_write(channels, previous.rstrip() + ('\n' if previous.strip() else '') + key + '\n')
+                if key not in previous:
+                    atomic_write(channels, 'channels = ' + json.dumps([*previous, key]) + '\n')
                 # Commit the config last: a failed pairing never enables input.
                 seed_config(home.root)
                 config = config_path(home.root)

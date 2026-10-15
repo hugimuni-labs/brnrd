@@ -185,7 +185,7 @@ def test_photo_answer_and_reply_bind_same_thread_through_named_instance(bot):
             f'---\nid: {thread}\nstatus: open\ntense: plan\n---\n# {thread}\n')
     person = home.root / 'self/people/ada'
     person.mkdir(parents=True)
-    (person / 'channels.md').write_text('home-tg:42\n')
+    (person / 'channels.toml').write_text('channels = ["home-tg:42"]\n')
     bot.updates = [message(photo=[dict(file_id='p')])]
     inputs = connector.Inputs(home)
     def received(ident):
