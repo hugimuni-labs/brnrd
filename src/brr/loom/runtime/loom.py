@@ -27,7 +27,8 @@ from .home import Home, atomic_write, is_channel, mint, notice_id
 from .ledger import LedgerConflict, append, read_facts
 from .registry import KINDS
 from .port import (
-    fact_from_port, fact_from_taint, letter_attachments, parse_frontmatter, render_boundary,
+    fact_from_port, fact_from_taint, letter_attachments, letter_replies,
+    parse_frontmatter, render_boundary,
 )
 from .project import fold, generation, is_notice, reply_channels, sender_threads
 from .owners import letters_for, letter_owners
@@ -320,7 +321,9 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         (room / "port" / name).unlink(missing_ok=True)
     owed_path = room / "port" / "owed.json"
     attachments = letter_attachments(home.root, facts)
+    reply_context = letter_replies(facts)
     atomic_write(owed_path, json.dumps([dict(letter.data, attachments=attachments.get(letter.id, []),
+                                           reply_context=reply_context.get(letter.id, ""),
                                            reply_to=letter_owners(facts, main_snapshot(home))[letter.id].reply_to)
                                               for letter in letters]))
     part_path = room / "port" / "loom.md"
@@ -376,7 +379,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                         fuel=fuel, channels=reply_channels(facts, home),
                         opened=thread_table(home, facts), plan=_plan(home, thread, facts),
                         replies={k: f.reply_to for k, f in letter_owners(facts, main_snapshot(home)).items()},
-                        attachments=attachments),
+                        attachments=attachments, reply_context=reply_context),
     )
     return room
 
@@ -987,6 +990,7 @@ def _boundary(home, facts, strand, gen, context):
         opened=thread_table(home, facts), plan=_plan(home, context.thread, facts),
         replies={k: f.reply_to for k, f in letter_owners(facts, main).items()},
         attachments=letter_attachments(home.root, facts),
+        reply_context=letter_replies(facts),
     )
     path = home.room(strand) / "port/in/boundary.md"
     if not path.is_file() or path.read_text() != text:
