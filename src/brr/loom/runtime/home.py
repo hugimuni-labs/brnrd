@@ -154,13 +154,20 @@ def thread_of(to: str) -> str:
 
 def atomic_write(path: Path, text: str | bytes, *, sync_directory: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    fd = os.open(tmp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o644)
-    with os.fdopen(fd, "wb") as stream:
-        stream.write(text.encode() if isinstance(text, str) else text)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(tmp, path)
+    # One temp name per writer: a shared name lets a second writer's replace
+    # find the first one's file already moved. Dot-first and .tmp-last, so
+    # port readers skip it either way.
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
+    fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(text.encode() if isinstance(text, str) else text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     if sync_directory:
         directory = os.open(path.parent, os.O_RDONLY)
         try:
