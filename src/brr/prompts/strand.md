@@ -56,7 +56,8 @@ commit early: the tell must arrive before the context runs out
 
 owed:
 declared `branch:` + `report:` = owed first ≠ last
-report: skeleton in the opening minutes, grown as the work goes · first commit likewise
+report: skeleton in the opening minutes, grown as the work goes · at its declared path, outside the tree, never committed
+first commit: early, likewise
 uncommitted diff = a report about work nobody can see · the branch = the deliverable the parent reads
 
 done:
