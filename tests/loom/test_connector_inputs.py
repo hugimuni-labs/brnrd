@@ -12,7 +12,7 @@ def test_failed_ingest_keeps_body_ticks_and_quarantines_after_three_tries(tmp_pa
     drop = root / 'loom/connectors/fake/state/in'
     drop.mkdir(parents=True)
     poison = drop / 'poison.md'
-    poison.write_text(_front(dict(kind='letter', id='poison', to='channel:fake'), 'poison'))
+    poison.write_text(_front(dict(kind='letter', id='poison', to='in'), 'poison'))
     attachments = drop / 'poison.d'
     attachments.mkdir()
     (attachments / '0').write_bytes(b'attachment')

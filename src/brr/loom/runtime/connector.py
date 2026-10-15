@@ -27,24 +27,12 @@ def instances(home):
 
 def carries(home):
     found = {}
-    legacy = load_config(home.root).connectors
     for name, kind in instances(home).items():
         folder = resolve(home, kind, "connectors")
-        lines = [r.strip() for r in (folder / "carries").read_text().splitlines()
-                 if r.strip() and not r.lstrip().startswith("#")]
-        for raw in lines:
-            if not re.fullmatch(r"(?:edit|[A-Za-z0-9][A-Za-z0-9._-]*(?: edit)?)", raw):
-                raise ValueError(f"{folder}/carries: invalid line {raw!r}")
-        # Legacy lists retain their platform addresses. Named channels use only
-        # the edit capability; the instance name is the entire address namespace.
-        if name in legacy and lines not in ([], ['edit']):
-            declarations = [(r.split()[0], 'edit' in r.split()) for r in lines]
-        else:
-            declarations = [(name, any('edit' in r.split() for r in lines))]
-        for address, edits in declarations:
-            if address in found:
-                raise ValueError(f"{address} carried by both {found[address][0]} and {name}")
-            found[address] = (name, folder, edits)
+        flags = (folder / "carries").read_text().split()
+        if flags not in ([], ["edit"]):
+            raise ValueError(f"{folder}/carries: expected only an optional edit line")
+        found[name] = (name, folder, bool(flags))
     return found
 
 
@@ -57,10 +45,6 @@ def environment(home, name):
     env.update(BRNRD_HOME=str(home.root.resolve()), BRNRD_STATE=str(state.resolve()),
                BRNRD_CONFIG=str(config_path(home.root).resolve()),
                PYTHONPATH=src + os.pathsep + env.get("PYTHONPATH", ""))
-    if name not in load_config(home.root).connectors:
-        env["BRNRD_CHANNEL"] = name
-    else:
-        env.pop("BRNRD_CHANNEL", None)
     return env
 
 
@@ -100,6 +84,15 @@ class Inputs:
                 except subprocess.TimeoutExpired:
                     child.kill()
                     child.wait()
+
+
+def addressed(name, fm):
+    """The one inbound boundary: native ids become instance addresses."""
+    fields = dict(fm, to=f"channel:{name}/{fm['to']}")
+    channel_parts(fields['to'])
+    if fm.get('from'):
+        fields['from'] = f"{name}:{fm['from']}"
+    return fields
 
 
 def ingest(home, name, fm, attachments):
@@ -167,12 +160,10 @@ def drain(home, name, drop, failures=None):
         attachments = path.with_suffix('.d')
         valid = False
         try:
-            fm = parse_frontmatter(path.read_text(encoding='utf-8'))
+            fm = addressed(name, parse_frontmatter(path.read_text(encoding='utf-8')))
             if path.is_symlink() or fm.get('id') != path.stem or not re.fullmatch(r'[A-Za-z0-9_%:#.-]+', fm.get('id', '')) or not fm.get('kind'):
                 raise ValueError('letter requires a safe id and kind')
-            address, _chat = channel_parts(fm.get('to', ''), home)
-            if carries(home)[address][0] != name:
-                raise ValueError('letter addresses another connector instance')
+            channel_parts(fm['to'], home)
             if fm['kind'] != 'letter' and not clean_accepts(
                     home.root / 'self', fm['kind'], fm.get('refs', '').split(), fm['body']):
                 raise ValueError('kind must be letter or a clean letter with valid refs')
@@ -211,21 +202,21 @@ def drain(home, name, drop, failures=None):
         failures.pop(path, None)
 
 
-def _sender(home, platform, user_id):
+def _sender(home, instance, user_id):
     # Only a connector's authenticated identity enters the person lookup.
-    key = f"{platform}:{user_id}"
+    key = f"{instance}:{user_id}"
     matches = [p.parent.name for p in sorted((home.root / 'self/people').glob('*/channels.md'))
                if user_id not in (None, '') and key in set(map(str.strip, p.read_text().splitlines()))]
-    return f'person:{matches[0]}' if len(matches) == 1 else f'stranger:{platform}:{"" if user_id is None else user_id}'
+    return f'person:{matches[0]}' if len(matches) == 1 else f'stranger:{instance}:{"" if user_id is None else user_id}'
 
 
 def person_dm(home, channel):
     """Only a unique enrolled person's direct chat may be spoken to."""
     try:
-        platform, chat = channel_parts(channel)
+        instance, chat = channel_parts(channel, home)
     except ValueError:
         return None
-    sender = _sender(home, platform, chat)
+    sender = _sender(home, instance, chat)
     return sender if chat is not None and sender.startswith('person:') else None
 
 

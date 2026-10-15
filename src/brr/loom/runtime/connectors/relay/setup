@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""Account pairing stays with the existing browser flow."""
+import os
+from pathlib import Path
+from brr.loom.runtime.config import load_config
+
+if not load_config(Path(os.environ['BRNRD_CONFIG']).parent.parent).relay_state:
+    raise SystemExit('relay requires relay_state: run `brnrd account connect` for browser '
+                     'pairing, then set relay_state to that account state directory. '
+                     'Connect the chat on brnrd.dev before retrying channel setup.')

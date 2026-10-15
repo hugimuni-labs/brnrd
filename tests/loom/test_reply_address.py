@@ -32,7 +32,7 @@ def _home(tmp_path) -> Home:
 
 def _relayed(platform: str) -> list[Fact]:
     source = Fact(kind="source", by="loom:aaaa", id="source:relay:e1", data={
-        "platform": platform, "chat": "42", "from": "person:ada", "text": "hi", "to": "thread:t"})
+        "platform": "relay", "chat": f"{platform}:42", "channel": f"channel:relay/{platform}:42", "from": "person:ada", "text": "hi", "to": "thread:t"})
     letter = Fact(kind="letter", by="loom:aaaa", id="letter:relay:e1", data={
         "id": "letter:relay:e1", "from": "person:ada", "to": "thread:t", "body": "hi",
         "cites": source.id})
@@ -43,7 +43,7 @@ def test_a_persons_letter_names_the_chat_it_came_from(tmp_path):
     home = _home(tmp_path)
     facts = _relayed("telegram")
     text = render_boundary(STRAND, 1, "t", facts[1:], set(), {}, channels=reply_channels(facts, home))
-    assert parse_boundary(text).letters[0].reply == "channel:telegram/42"
+    assert parse_boundary(text).letters[0].reply == "channel:relay/telegram:42"
 
 
 def test_a_platform_send_would_refuse_is_not_offered(tmp_path):
@@ -87,4 +87,4 @@ def test_a_climbed_letter_keeps_the_chat_it_came_from(tmp_path):
     climbed = next(f for f in ledger.read_facts(home) if f.id.startswith("loom/climbed"))
     text = render_boundary(STRAND, 1, "t", [climbed], set(), {},
                            channels=reply_channels(facts + [climbed], home))
-    assert parse_boundary(text).letters[0].reply == "channel:telegram/42"
+    assert parse_boundary(text).letters[0].reply == "channel:relay/telegram:42"

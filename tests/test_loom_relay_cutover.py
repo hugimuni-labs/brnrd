@@ -218,7 +218,7 @@ def test_enabled_folder_is_started_and_its_drop_is_ingested(home):
     script = local / 'in'
     script.write_text("#!/usr/bin/env python3\nimport sys\nfrom pathlib import Path\n"
                       + "(Path(sys.argv[1]) / 'wired.md').write_text("
-                      + repr(_front(dict(kind='letter', id='wired', to='channel:telegram/555',
+                      + repr(_front(dict(kind='letter', id='wired', to='telegram:555',
                                          **{'from': 'telegram:42'}), 'wired')) + ")\n")
     script.chmod(0o755)
     inputs = Inputs(home)

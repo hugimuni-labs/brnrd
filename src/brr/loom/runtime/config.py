@@ -1,8 +1,7 @@
 """``loom/config.toml``: the knobs one home's looms share.
 
 Flat ``key = value`` lines only: ``[sections]`` are ignored. Enable folders
-with ``connectors = ["relay"]``; ``relay_state`` supplies its account path.
-Named instances use ``connectors = ["home-tg=telegram"]`` (name=folder). A few-line
+with ``connectors = ["inbox=addon"]`` (name=folder; a bare folder uses its own name). A few-line
 file, parsed here, so the loom takes no TOML dependency on Python 3.10.
 
 ``KEYS`` is the one declaration: name, kind, default, help. The dataclass,
@@ -69,10 +68,10 @@ KEYS: tuple[Key, ...] = (
         "else the machine's gh login; off signs it out.",
         choices=("auto", "off")),
     Key("connectors", "names", (),
-        "Enabled folders or named channels, e.g. [\"relay\"] or [\"home-tg=telegram\"]. Home folders override bundled folders; default: none."),
+        "Enabled folders or named channels, e.g. [\"inbox=addon\"]. Home folders override bundled folders; default: none."),
     Key("relay_state", "path", None,
         "The account's cloud gate state directory (holds gates/cloud.json). "
-        'Read by the relay connector; enable it with connectors = ["relay"].'),
+        'Read by the account-backed connector folder.'),
     Key("hold_floor_pct", "percent", 3.0,
         "A quota window with this percent or less left counts as exhausted: a held body stays held."),
     Key("stop_grace", "seconds", DEFAULT_STOP_GRACE,
@@ -138,9 +137,6 @@ def _coerce(key: Key, value: object, path: Path) -> object:
         if not isinstance(value, (list, tuple)) or any(
                 not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*(?:=[A-Za-z0-9][A-Za-z0-9._-]*)?", v) for v in value):
             raise refuse('an array of "folder" or "name=folder" strings')
-        if any(v.partition("=")[2] == "relay" for v in value):
-            raise ConfigError(f'{path}: relay is a multi-platform folder and cannot take one name yet; '
-                              'use connectors = ["relay"] with its legacy platform addresses')
         names = [v.split("=", 1)[0] for v in value]
         if len(set(names)) != len(names):
             raise refuse("unique connector names")

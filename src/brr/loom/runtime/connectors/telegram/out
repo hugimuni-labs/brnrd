@@ -14,7 +14,7 @@ def deliver(path):
     ids = []
     try:
         letter = parse_frontmatter(path.read_text())
-        chat = letter['to'].partition('/')[2]
+        chat = letter['to']
         if not chat.lstrip('-').isdecimal() or not letter['body'].strip():
             raise Refused('Telegram requires a numeric chat and nonempty text')
         parts = split_message(letter['body'], max_chunks=None)

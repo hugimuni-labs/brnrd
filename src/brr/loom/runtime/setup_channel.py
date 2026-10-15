@@ -12,7 +12,7 @@ from pathlib import Path
 
 from .adapters import resolve
 from .config import config_path, load_config, seed_config
-from .connector import carries, environment, instances
+from .connector import addressed, environment, instances
 from .home import Home, atomic_write, channel_parts, resolve_home
 from .port import _front, parse_frontmatter
 
@@ -20,11 +20,8 @@ from .port import _front, parse_frontmatter
 def pair(home, kind, name, person, *, timeout=180, out=print):
     if not all(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', v) for v in (name, person)):
         raise ValueError('Channel and person names use letters, digits, dots, dashes or underscores')
-    if name in instances(home) or name in carries(home):
+    if name in instances(home):
         raise ValueError(f'Channel name {name!r} is already in use')
-    if kind == 'relay':
-        raise ValueError('relay is a multi-platform folder and cannot take one name yet; '
-                         'use connectors = ["relay"] and the existing account setup')
     folder = resolve(home, kind, 'connectors')
     if not (folder / 'out').is_file():
         raise ValueError(f'{kind} is an input pipe, not a messaging channel')
@@ -47,7 +44,7 @@ def pair(home, kind, name, person, *, timeout=180, out=print):
             for path in sorted(drop.glob('*.md')):
                 if path.is_symlink():
                     continue
-                fm = parse_frontmatter(path.read_text())
+                fm = addressed(name, parse_frontmatter(path.read_text()))
                 if fm.get('body', '').strip() not in (code, '/start ' + code):
                     continue
                 address, chat = channel_parts(fm.get('to', ''))
@@ -58,7 +55,7 @@ def pair(home, kind, name, person, *, timeout=180, out=print):
                 with tempfile.TemporaryDirectory(prefix='pair-', dir=state) as directory:
                     reply = Path(directory) / 'reply.md'
                     reply.write_text(_front(dict(kind='letter', id='pair-' + code,
-                                                to=fm['to'], re=fm['id']), f'heard you as {chat}'))
+                                                to=chat, re=fm['id']), f'heard you as {chat}'))
                     result = subprocess.run([str(folder / 'out'), str(reply)], env=env,
                                             capture_output=True, text=True, timeout=60)
                 if result.returncode != 0:

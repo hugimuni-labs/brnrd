@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Long-poll a bot; publish attachments, then a letter, then its cursor."""
 import json
-import os
 import signal
 import sys
 import threading
@@ -42,10 +41,9 @@ def receive(drop, update):
             except Exception:
                 if attempt == 2:
                     missing.append(str(index))
-    name = os.environ.get('BRNRD_CHANNEL', 'telegram')
-    fields = dict(kind='letter', id=ident, to=f'channel:{name}/{parsed.chat_id}')
+    fields = dict(kind='letter', id=ident, to=parsed.chat_id)
     if parsed.user_id is not None:
-        fields['from'] = f'{name}:{parsed.user_id}'
+        fields['from'] = str(parsed.user_id)
     if parsed.reply_to_message_id is not None:
         fields['re'] = message_id(parsed.chat_id, parsed.reply_to_message_id)
     if missing:

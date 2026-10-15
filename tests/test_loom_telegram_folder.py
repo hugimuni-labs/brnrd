@@ -94,7 +94,7 @@ def wait_for(predicate):
 
 def run_out(bot, tmp_path, body='hello', **fields):
     path = tmp_path / 'out.md'
-    path.write_text(_front(dict(kind='letter', id='draft', to='channel:home-tg/42', **fields), body))
+    path.write_text(_front(dict(kind='letter', id='draft', to='42', **fields), body))
     return subprocess.run([str(bot.folder / 'out'), str(path)], env=bot.env,
                           capture_output=True, text=True, timeout=5)
 
@@ -107,8 +107,8 @@ def test_in_photo_reply_authenticated_sender_and_persistent_cursor(bot, tmp_path
         path = drop / '42:7.md'
         wait_for(path.exists)
         fm = parse_frontmatter(path.read_text())
-        assert fm['from'] == 'home-tg:42'
-        assert fm['to'] == 'channel:home-tg/42'
+        assert fm['from'] == '42'
+        assert fm['to'] == '42'
         assert fm['id'] == '42:7' and fm['re'] == '42:101'
         assert (drop / '42:7.d/0.jpg').read_bytes() == b'PHOTO'
         wait_for(lambda: (bot.state / 'cursor').exists())

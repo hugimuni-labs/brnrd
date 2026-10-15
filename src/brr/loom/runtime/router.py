@@ -22,7 +22,7 @@ from .project import (
 from .selfrepo import ReadmeError, parse_readme
 from .owners import letter_owners, letters_for
 from .lifecycle import main_snapshot
-from .speak import CHANNEL, speak
+from .speak import speak
 
 
 def install_of(strand: str) -> str | None:
@@ -373,7 +373,9 @@ class Router:
                 context = {k: str(fact.data[k]) for k in ("from", "clean", "edit") if k in fact.data}
                 if fact.data.get("refs"):
                     context["refs"] = " ".join(fact.data["refs"])
-                if to != CHANNEL:
+                from .home import channel_parts
+                _instance, native = channel_parts(str(to), self.home)
+                if native is not None:
                     from .connector import person_dm
                     if person_dm(self.home, str(to)) is None:
                         tell("speech-refused",
