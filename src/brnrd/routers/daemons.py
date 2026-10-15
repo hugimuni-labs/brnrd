@@ -1066,20 +1066,18 @@ def post_response(request: Request, payload: schemas.ResponsePost, principal: Pr
     if owned_event is None:
         raise HTTPException(status_code=404, detail="event not found for this account")
     try:
-        event = inbox_service.record_response(db, repo_id=owned_event.repo_id, event_id=payload.event_id, body_markdown=payload.body_markdown, status=payload.status, forwarder=request.app.state.forwarder, conversation_id=payload.conversation_id)
+        result = inbox_service.record_response(db, repo_id=owned_event.repo_id, event_id=payload.event_id, body_markdown=payload.body_markdown, status=payload.status, forwarder=request.app.state.forwarder, conversation_id=payload.conversation_id)
     except inbox_service.DeliveryError as e:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_safe_detail(f"forward to platform failed: {e}")) from e
-    if event is None:
+    if result is None:
         raise HTTPException(status_code=404, detail="event not found for this account")
     _touch_daemon(db, principal)
-    return schemas.ResponseAck(event_id=payload.event_id, forwarded=True)
+    return schemas.ResponseAck(event_id=payload.event_id, forwarded=True, message_id=result.message_id)
 
 
-#: How many of the account's most recent events the fresh-send resolver
-#: scans looking for a platform match, oldest cut off first. A bound, not a
-#: tune: `/v1/daemons/inbox` learned the same lesson the hard way (#1004's
-#: sibling incident) — an unbounded "most recent" scan over a busy, mixed-
-#: platform account is a full-table walk waiting for the day one exists.
+#: Bound the legacy latest-chat search. Explicit destinations must be
+#: checked against all retained account events; stream that search in
+#: batches of the same size rather than loading the history into memory.
 _MESSAGE_SCAN_LIMIT = 200
 
 
@@ -1087,8 +1085,8 @@ def _account_repo_ids(db: Session, account_id: str) -> set[str]:
     return set(db.execute(select(Repo.id).where(Repo.account_id == account_id)).scalars())
 
 
-def _most_recent_reply_to(db: Session, account_id: str, platform: str) -> dict[str, Any] | None:
-    """The account's most recently active *platform* conversation address.
+def _most_recent_reply_to(db: Session, account_id: str, platform: str, chat_id: str | int | None = None) -> dict[str, Any] | None:
+    """Latest matching address, restricted to ``chat_id`` when supplied.
 
     #1205's fresh-send primitive has no inbound event to answer against, so
     it borrows the address of whichever conversation last had one — read
@@ -1104,19 +1102,25 @@ def _most_recent_reply_to(db: Session, account_id: str, platform: str) -> dict[s
     repo_ids = _account_repo_ids(db, account_id)
     if not repo_ids:
         return None
-    rows = db.execute(
+    query = (
         select(Event.reply_to)
         .where(Event.repo_id.in_(repo_ids))
         # `seq` (autoincrement) as the tiebreak: two events minted within
         # the same `created_at` tick (same-millisecond enqueues, a burst)
         # would otherwise order arbitrarily against each other.
         .order_by(Event.created_at.desc(), Event.seq.desc())
-        .limit(_MESSAGE_SCAN_LIMIT)
-    ).scalars()
-    for blob in rows:
-        reply_to = inbox_service.decode_reply_to(blob)
-        if reply_to.get("platform") == platform and reply_to.get("chat_id") not in (None, ""):
-            return reply_to
+    )
+    if chat_id is None:
+        query = query.limit(_MESSAGE_SCAN_LIMIT)
+    else:
+        query = query.execution_options(yield_per=_MESSAGE_SCAN_LIMIT)
+    with db.execute(query) as rows:
+        for blob in rows.scalars():
+            reply_to = inbox_service.decode_reply_to(blob)
+            target = reply_to.get("chat_id")
+            if reply_to.get("platform") == platform and target not in (None, ""):
+                if chat_id is None or str(target) == str(chat_id):
+                    return reply_to
     return None
 
 
@@ -1139,16 +1143,42 @@ def _telegram_fresh_send(settings, reply_to: dict[str, Any], body_markdown: str)
     return message_id
 
 
+def _whatsapp_fresh_send(settings, reply_to: dict[str, Any], body_markdown: str) -> str:
+    if not (settings.whatsapp_access_token and settings.whatsapp_phone_number_id):
+        raise HTTPException(status_code=503, detail="whatsapp is not configured on this deployment")
+    from ..platforms import whatsapp as wa
+
+    try:
+        message_id = wa.send_message(
+            settings.whatsapp_access_token,
+            settings.whatsapp_phone_number_id,
+            str(reply_to["chat_id"]),
+            body_markdown,
+            api_base_url=settings.whatsapp_api_base_url,
+            api_version=settings.whatsapp_api_version,
+        )
+    except wa.WindowClosed as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_safe_detail(f"whatsapp 24h window closed: {e}"),
+        ) from e
+    if message_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="whatsapp accepted the send but returned no message id",
+        )
+    return message_id
+
+
 # One platform -> resolver mapping, in the shape ``inbox.make_default_forwarder``'s
 # own ``handlers`` table already uses for the *reply* direction (#1205): the set
 # of platforms this endpoint can actually originate a fresh send on is exactly
 # this dict's keys, so adding one is adding one entry here rather than widening
 # an ``if platform != "telegram"`` that would silently overclaim coverage for
-# whatever comes after it. Telegram is the only lane wired today — everything
-# else answers 501, honestly, instead of a hardcoded single-platform check
-# dressed up as the full matrix.
+# whatever comes after it. Unsupported platforms answer 501.
 _MESSAGE_SENDERS: dict[str, Callable[[Any, dict[str, Any], str], str]] = {
     "telegram": _telegram_fresh_send,
+    "whatsapp": _whatsapp_fresh_send,
 }
 
 
@@ -1162,8 +1192,10 @@ def post_message(
     """#1205's fresh-send primitive — an unaddressed send, no inbound event.
 
     Keyed on platform chat identity rather than an ``event_id``:
-    ``_most_recent_reply_to`` resolves the account's most recently active
-    conversation on ``payload.platform``. A platform with no resolver in
+    An explicit ``chat_id`` must match an event owned by the account; it
+    never falls back to another chat. Without it, ``_most_recent_reply_to``
+    resolves the most recently active conversation on ``payload.platform``.
+    A platform with no resolver in
     ``_MESSAGE_SENDERS`` is an honest 501; a resolver that finds nothing to
     address is an honest 404 — neither path ever returns 200 having sent
     nothing, the exact failure mode this endpoint exists to retire (see the
@@ -1176,11 +1208,15 @@ def post_message(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=f"platform {payload.platform!r} has no fresh-send primitive yet",
         )
-    reply_to = _most_recent_reply_to(db, principal.account_id, payload.platform)
+    reply_to = _most_recent_reply_to(db, principal.account_id, payload.platform, payload.chat_id)
     if reply_to is None:
         raise HTTPException(
             status_code=404,
-            detail=f"no resolvable {payload.platform} conversation for this account",
+            detail=(
+                f"unknown {payload.platform} chat {payload.chat_id!r} for this account"
+                if payload.chat_id is not None
+                else f"no resolvable {payload.platform} conversation for this account"
+            ),
         )
     try:
         message_id = handler(settings, reply_to, payload.body_markdown)
