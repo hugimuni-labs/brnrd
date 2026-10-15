@@ -25,6 +25,10 @@ def deliver(path, state, client):
     parts = split_message(text, limit=limit, max_chunks=None)
     mapping = read(state / 'messages.json', {})
     event_id = mapping.get(letter.get('re'))
+    if platform in {'whatsapp', 'github'} and (not event_id or len(parts) > 1):
+        reason = 'github is answered with gh' if platform == 'github' else 'whatsapp has no fresh-send support on this server'
+        print(f'relay: {reason}', file=sys.stderr)
+        return 3
     ids = []
     for index, part in enumerate(parts):
         payload = dict(body_markdown=part)

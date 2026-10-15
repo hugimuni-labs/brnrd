@@ -186,3 +186,19 @@ def test_port_cannot_claim_another_strands_sender(home):
                                {"s-writer": "first", "s-other": "second"})
     shown, = parse_boundary(boundary).letters
     assert shown.sender == "s-writer" and shown.reply == "thread:first"
+
+
+@pytest.mark.parametrize('platform,limit', [('whatsapp', 4096), ('github', 65536)])
+@pytest.mark.parametrize('reply', [False, True], ids=['fresh', 'multipart-answer'])
+def test_unsupported_fresh_part_is_refused_before_any_request(home, lease, monkeypatch, platform, limit, reply):
+    client = FakeClient()
+    relay.install_out(monkeypatch, home, client)
+    text = 'x' * (limit + 1) if reply else 'hello'
+    status, fact, unsure = speak_mod.speak(home, lease, 's-a/no-fresh', text,
+        channel=f'channel:{platform}/42', context={'re': 'ev_1'} if reply else {})
+    assert status == 'not-sent' and not unsure
+    assert client.sent == []
+    if platform == 'github':
+        assert 'answered with gh' in fact.data['reason']
+    else:
+        assert 'fresh-send' in fact.data['reason']

@@ -1241,6 +1241,9 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         while not (stop is not None and stop.is_set()):
             try:
                 inputs.step()
+            except Exception:
+                _log(home, traceback.format_exc().rstrip())
+            try:
                 tick_once(home, bodies, adapter, core, router)
             except Exception:
                 _log(home, traceback.format_exc().rstrip())

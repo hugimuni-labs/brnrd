@@ -7,7 +7,7 @@ import shutil
 
 from brr.daemon2.facts import Fact
 from .channel import _sender, route_bare, thread_for_message
-from .home import atomic_write, channel_parts
+from .home import atomic_write, channel_parts, mint
 from .labels import is_stranger
 from .ledger import append, read_facts
 from .port import PortError, clean_accepts, parse_frontmatter
@@ -77,6 +77,22 @@ def ingest(home, name, fm, attachments):
                thread=source.data['to'].removeprefix('thread:'))
 
 
+def _refuse(home, name, path, exc):
+    refused = path.parent / 'refused'
+    refused.mkdir(exist_ok=True)
+    target = refused / path.name
+    if target.exists() or target.is_symlink():
+        target = refused / f'{path.stem}-{mint(5)}.md'
+    for suffix in ('.d', '.failures'):
+        extra = path.with_suffix(suffix)
+        if extra.exists():
+            extra.replace(target.with_suffix(suffix))
+    path.replace(target)
+    from .loom import notice
+    notice(home, read_facts(home), 'connector-reject', f'{name}:{path.stem}',
+           f'{name}: refused {path.name}: {exc}', 'repair the refused letter before resubmitting', taint=True)
+
+
 def drain(home, name, drop):
     for path in sorted(drop.glob('*.md'), key=lambda p: (p.lstat().st_mtime_ns, p.name)):
         attachments = path.with_suffix('.d')
@@ -96,16 +112,19 @@ def drain(home, name, drop):
                     raise ValueError('attachment must be a regular file')
                 file.read_bytes()
         except (OSError, UnicodeError, ValueError, PortError) as exc:
-            refused = drop / 'refused'
-            refused.mkdir(exist_ok=True)
-            path.replace(refused / path.name)
-            if attachments.exists():
-                attachments.replace(refused / attachments.name)
-            from .loom import notice
-            notice(home, read_facts(home), 'connector-reject', f'{name}:{path.stem}',
-                   f'{name}: refused {path.name}: {exc}', 'repair the refused letter before resubmitting', taint=True)
+            _refuse(home, name, path, exc)
             continue
-        ingest(home, name, fm, files)  # ledger failures leave the drop for recovery
+        counter = path.with_suffix('.failures')
+        try:
+            ingest(home, name, fm, files)
+        except Exception as exc:
+            failures = (int(counter.read_text()) if counter.exists() else 0) + 1
+            atomic_write(counter, str(failures))
+            if failures < 3:
+                raise  # leave the original drop for recovery
+            _refuse(home, name, path, f'ingest failed {failures} times: {type(exc).__name__}: {exc}')
+            continue
+        counter.unlink(missing_ok=True)
         path.unlink()
         if attachments.exists():
             shutil.rmtree(attachments)
