@@ -8,8 +8,9 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
-from brr.loom.runtime import connector, source
-from brr.loom.runtime.channel import person_dm, route_bare, thread_for_message
+from brr.loom.runtime import connector as source
+from brr.loom.runtime import connector
+from brr.loom.runtime.connector import person_dm, route_bare, thread_for_message
 from brr.loom.runtime.home import atomic_write
 
 FOLDER = Path(connector.__file__).parent / 'connectors/relay'

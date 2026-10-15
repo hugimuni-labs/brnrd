@@ -31,9 +31,7 @@ def speak(home, router_lease, key, text, *, channel=CHANNEL, context=None):
     safe = hashlib.sha256(key.encode()).hexdigest()
     prior = list(authority.sends.read('sends', safe))
     receipt = next((f.data['receipt'] for f in prior if f.kind == 'sent'), None)
-    legacy = key.replace('/', '_')
-    old = (authority.sends.read('sends', legacy) + authority.sends.read('sends', legacy + '#1')) if not prior else []
-    if receipt is None and (old or any(f.kind == 'intended' for f in prior)):
+    if receipt is None and any(f.kind == 'intended' for f in prior):
         status, receipt = 'maybe-sent', {}
     else:
         def run(_key, _gen):

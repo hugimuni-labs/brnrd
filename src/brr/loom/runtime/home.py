@@ -54,20 +54,17 @@ def is_channel(to: object) -> bool:
     return isinstance(to, str) and to.startswith("channel:")
 
 
-_CHANNEL = re.compile(r"channel:([A-Za-z0-9][A-Za-z0-9._-]*)/([A-Za-z0-9_:@#.+/-]+)")
+_CHANNEL = re.compile(r"channel:([A-Za-z0-9][A-Za-z0-9._-]*)(?:/([A-Za-z0-9_:@#.+/-]+))?")
 
 
 def channel_parts(channel: str, home=None) -> tuple[str, str | None]:
     """Parse an address; with a home, require an enabled carrier as well."""
-    if channel == "channel:fake":
-        parts = ("fake", None)
-    else:
-        match = _CHANNEL.fullmatch(channel) if isinstance(channel, str) else None
-        if match is None:
-            raise ValueError(f"no channel adapter for {channel!r}")
-        parts = (match.group(1), match.group(2))
-        if any(segment in {"", ".", ".."} for segment in parts[1].split("/")):
-            raise ValueError(f"invalid channel chat {parts[1]!r}")
+    match = _CHANNEL.fullmatch(channel) if isinstance(channel, str) else None
+    if match is None or (match[2] is None and match[1] != "fake"):
+        raise ValueError(f"no channel adapter for {channel!r}")
+    parts = match.groups()
+    if parts[1] is not None and any(segment in {"", ".", ".."} for segment in parts[1].split("/")):
+        raise ValueError(f"invalid channel chat {parts[1]!r}")
     if home is not None:
         from .connector import carries
         if parts[0] not in carries(home):

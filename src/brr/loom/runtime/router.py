@@ -374,7 +374,7 @@ class Router:
                 if fact.data.get("refs"):
                     context["refs"] = " ".join(fact.data["refs"])
                 if to != CHANNEL:
-                    from .channel import person_dm
+                    from .connector import person_dm
                     if person_dm(self.home, str(to)) is None:
                         tell("speech-refused",
                              "was refused: that is not a known person's direct chat", fresh)

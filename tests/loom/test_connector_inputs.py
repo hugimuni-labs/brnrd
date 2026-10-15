@@ -1,6 +1,6 @@
 """A poisoned connector drop must not starve the loop's bodies."""
 
-from brr.loom.runtime import loom as runtime, source
+from brr.loom.runtime import loom as runtime, connector as source
 from brr.loom.runtime.ledger import inject_letter
 from brr.loom.runtime.port import _front
 from _step import Loom, mail, wait_until, write_thread

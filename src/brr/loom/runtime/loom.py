@@ -845,7 +845,7 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
             dispositions.append({"id": ident, "outcome": "retry", "reason": "first failed attempt"})
             continue
         if author.startswith(("p-", "person:")):
-            from .channel import person_dm
+            from .connector import person_dm
             channel = channels.get(ident)
             person = "person:" + author.removeprefix("p-").removeprefix("person:")
             if channel and person_dm(home, channel) == person:

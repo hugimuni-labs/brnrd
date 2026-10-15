@@ -13,7 +13,7 @@ from brr.loom.runtime.config import ConfigError, load_config
 from brr.loom.runtime.home import Home, channel_parts
 from brr.loom.runtime.ledger import read_facts
 from brr.loom.runtime.port import _front, write_send
-from brr.loom.runtime.source import drain
+from brr.loom.runtime.connector import drain
 
 
 @pytest.fixture
@@ -70,6 +70,11 @@ def test_carries_collision_refuses_before_starting_any_child(home, monkeypatch):
         connector.Inputs(home)
 
 
+@pytest.mark.parametrize('chat', ['fake', 'telegram/../42', 'telegram//42', 'telegram/'])
+def test_routing_keeps_address_validation_even_with_a_reply_thread(chat):
+    assert connector.route_bare([], chat, reply_thread='untrusted') == 'thread:inbox'
+
+
 def test_generic_address_and_real_out_with_multiple_receipts(home):
     folder(home, 'addon')
     assert channel_parts('channel:test/dm', home) == ('test', 'dm')
@@ -78,7 +83,6 @@ def test_generic_address_and_real_out_with_multiple_receipts(home):
     result, _, _ = speak.speak(home, lease(home), 'writer/a', 'hello', channel='channel:test/dm')
     assert result == 'sent'
     assert [f.data['receipt']['message_id'] for f in read_facts(home) if f.kind == 'speech.part'] == ['m1', 'm2']
-
 
 @pytest.mark.parametrize('exit_code,status', [(3, 'not-sent'), (1, 'maybe-sent')])
 def test_out_exit_contract_and_recovery_never_repeat_the_effect(home, exit_code, status):
@@ -112,6 +116,35 @@ def test_unreadable_drop_is_quarantined_with_one_notice(home):
         drain(home, 'fake', drop)
     assert (drop / 'refused/bad.md').exists()
     assert len([f for f in read_facts(home) if f.kind == 'letter']) == 1
+
+
+def test_retry_state_resets_with_inputs_and_keeps_only_quarantine_diagnostics(home, monkeypatch):
+    drop = home.root / 'loom/connectors/fake/state/in'
+    drop.mkdir(parents=True)
+    path = drop / 'retry.md'
+    path.write_text(_front(dict(kind='letter', id='retry', to='channel:fake'), 'retry'))
+    attempts = []
+    def fail(*_args):
+        attempts.append(1)
+        raise RuntimeError('unavailable ledger')
+    monkeypatch.setattr(connector, 'ingest', fail)
+    first = connector.Inputs(home)
+    with pytest.raises(RuntimeError, match='unavailable ledger'):
+        first.step()
+    assert not path.with_suffix('.failures').exists()
+    first.close()
+    restarted = connector.Inputs(home)
+    try:
+        for _ in range(2):
+            with pytest.raises(RuntimeError, match='unavailable ledger'):
+                restarted.step()
+            assert path.exists()
+        restarted.step()
+        assert len(attempts) == 4
+        assert (drop / 'refused/retry.failures').read_text() == '3'
+        assert not path.exists()
+    finally:
+        restarted.close()
 
 
 def test_passive_input_ingests_and_removes_the_letter(home):
@@ -212,12 +245,3 @@ def test_relay_photo_answer_and_reply_through_real_folder_processes(home, tmp_pa
         server.shutdown()
         server.server_close()
         worker.join(timeout=2)
-
-
-@pytest.mark.parametrize('suffix', ['', '#1'])
-def test_legacy_intent_blocks_a_new_whole_letter_attempt(home, suffix):
-    authority = LocalLeaseAuthority(home.root / 'ledger/leases')
-    grant = authority.acquire('router', 'test', 120)
-    authority.sends.record('sends', 'writer_a' + suffix, 'intended', 'test', {})
-    assert speak.speak(home, grant, 'writer/a', 'hello')[0] == 'maybe-sent'
-    assert not (home.root / 'loom/channel-fake.jsonl').exists()
