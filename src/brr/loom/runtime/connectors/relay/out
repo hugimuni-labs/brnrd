@@ -25,9 +25,8 @@ def deliver(path, state, client):
     parts = split_message(text, limit=limit, max_chunks=None)
     mapping = read(state / 'messages.json', {})
     event_id = mapping.get(letter.get('re'))
-    if platform in {'whatsapp', 'github'} and (not event_id or len(parts) > 1):
-        reason = 'github is answered with gh' if platform == 'github' else 'whatsapp has no fresh-send support on this server'
-        print(f'relay: {reason}', file=sys.stderr)
+    if platform == 'github' and (not event_id or len(parts) > 1):
+        print('relay: github is answered with gh', file=sys.stderr)
         return 3
     ids = []
     for index, part in enumerate(parts):
@@ -36,7 +35,16 @@ def deliver(path, state, client):
             payload['event_id'] = event_id
         else:
             payload.update(platform=platform, chat_id=chat)
-        result = client.send(payload) or {}
+        try:
+            result = client.send(payload) or {}
+        except RuntimeError as exc:
+            # The server refused before sending (unknown chat, closed
+            # WhatsApp window, no sender): not sent, but only for the first
+            # part. A refusal after a part went out is a partial send.
+            if index == 0 and getattr(exc, 'status_code', None) in (404, 409, 501):
+                print(f'relay: {exc}', file=sys.stderr)
+                return 3
+            raise
         if result.get('message_id') not in (None, ''):
             ids.append(message_id(platform, chat, result['message_id']))
     print(json.dumps(dict(ids=ids)))

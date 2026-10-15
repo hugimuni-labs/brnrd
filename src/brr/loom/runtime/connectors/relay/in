@@ -70,8 +70,10 @@ def pull_once(drop, state, client, cursor, failures=None):
             if missing and failures.get(key, 0) < 2:
                 raise RuntimeError(f'relay: attachment download failed: {event_id}#{missing[0]} '
                                    f'(attempt {failures.get(key, 0) + 1} of 3)')
+            # WhatsApp: a chat with the business number is one person, and its
+            # chat id is that person's own wa_id; the server sends no user_id.
             fields = dict(kind='letter', id=ident, to=f'channel:{platform}/{chat}',
-                          **{'from': f"{platform}:{origin.get('user_id') or ''}"})
+                          **{'from': f"{platform}:{chat if platform == 'whatsapp' else origin.get('user_id') or ''}"})
             if origin.get('reply_to_message_id') is not None:
                 fields['re'] = message_id(platform, chat, origin['reply_to_message_id'])
             if missing:

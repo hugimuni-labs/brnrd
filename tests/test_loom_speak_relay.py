@@ -36,15 +36,18 @@ def lease(home):
 
 
 class FakeClient:
-    def __init__(self, fail_on: set[int] | None = None):
+    def __init__(self, fail_on: set[int] | None = None, status: int | None = None):
         self.sent: list[dict] = []
         self.fail_on = fail_on or set()
+        self.status = status
 
     def send(self, payload):
         n = len(self.sent) + 1
         self.sent.append(payload)
         if n in self.fail_on:
-            raise RuntimeError("connection reset after write")
+            err = RuntimeError(f"brnrd POST -> {self.status}" if self.status else "connection reset after write")
+            err.status_code = self.status
+            raise err
         return {"message_id": 1000 + n}
 
 
@@ -188,17 +191,33 @@ def test_port_cannot_claim_another_strands_sender(home):
     assert shown.sender == "s-writer" and shown.reply == "thread:first"
 
 
-@pytest.mark.parametrize('platform,limit', [('whatsapp', 4096), ('github', 65536)])
 @pytest.mark.parametrize('reply', [False, True], ids=['fresh', 'multipart-answer'])
-def test_unsupported_fresh_part_is_refused_before_any_request(home, lease, monkeypatch, platform, limit, reply):
+def test_github_part_is_refused_before_any_request(home, lease, monkeypatch, reply):
     client = FakeClient()
     relay.install_out(monkeypatch, home, client)
-    text = 'x' * (limit + 1) if reply else 'hello'
+    text = 'x' * 65537 if reply else 'hello'
     status, fact, unsure = speak_mod.speak(home, lease, 's-a/no-fresh', text,
-        channel=f'channel:{platform}/42', context={'re': 'ev_1'} if reply else {})
+        channel='channel:github/42', context={'re': 'ev_1'} if reply else {})
     assert status == 'not-sent' and not unsure
     assert client.sent == []
-    if platform == 'github':
-        assert 'answered with gh' in fact.data['reason']
-    else:
-        assert 'fresh-send' in fact.data['reason']
+    assert 'answered with gh' in fact.data['reason']
+
+
+@pytest.mark.parametrize('code', [404, 409, 501])
+def test_server_refusal_of_the_first_part_is_not_sent(home, lease, monkeypatch, code):
+    client = FakeClient(fail_on={1}, status=code)
+    relay.install_out(monkeypatch, home, client)
+    status, fact, unsure = speak_mod.speak(home, lease, 's-a/wa', 'hello',
+                                           channel='channel:whatsapp/42')
+    assert status == 'not-sent' and not unsure
+    assert client.sent[0]['chat_id'] == '42'
+    assert str(code) in fact.data['reason']
+
+
+def test_server_refusal_after_a_part_went_is_maybe_sent(home, lease, monkeypatch):
+    client = FakeClient(fail_on={2}, status=409)
+    relay.install_out(monkeypatch, home, client)
+    status, _fact, unsure = speak_mod.speak(home, lease, 's-a/wa2', 'x' * 5000,
+                                            channel='channel:whatsapp/42')
+    assert status == 'maybe-sent' and unsure == ['s-a/wa2']
+    assert len(client.sent) == 2
