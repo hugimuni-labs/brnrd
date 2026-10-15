@@ -40,7 +40,7 @@ the Python transition, using the upgraded installation's interpreter:
 python3 -c 'import sys; from brr.loom.runtime.merge import install_pre_receive; print(install_pre_receive(sys.argv[1]))' /absolute/path/to/home/self
 ```
 
-In a room cloned from that self, copy `core/immune`, all three seed checks
+In a room cloned from that self, copy `core/immune`, all four seed checks
 and this page from the upgraded seed, keep the scripts executable, commit
 and push with an enrolled committer or a clean label. The incumbent shell
 gate runs its shell checks and the incoming Python checks. The next push
@@ -55,7 +55,7 @@ byte-sorted name order, even after a failure. Incumbent failures carry an
 the incumbent checks as well as the incoming checks. The first push runs
 only the incoming set. An absent check directory adds no checks.
 
-Keep `10-readme`, `20-labels` and `50-core-notice` executable. Copying the
+Keep `10-readme`, `20-labels`, `30-rules` and `50-core-notice` executable. Copying the
 seed without their executable bits silently drops the checks. A failed
 check's stderr is prefixed with its name; a silent failure is still
 named. The gate and seed checks use Python 3 and only its standard library
@@ -67,10 +67,21 @@ override (`LOOM_IMMUNE_SH` is removed).
 `10-readme` refuses changed thread READMEs with missing or unclosed
 frontmatter, malformed or duplicate keys, unbalanced quotes or lists,
 missing required fields, unknown status or tense, reference tense without
-settled status, a missing or invalid heading, or an id different from the
-folder. `for` must be a string. The first push checks every README. The
+settled status, goal tense without `measure:`, a missing or invalid
+heading, or an id different from the folder. A `measure:`, on any
+thread, must be a path inside the self to a file committed with mode
+`100755` at the pushed tip. A push that removes or changes that file
+judges the README naming it again, even if the README did not change.
+`--file` checks the path's form but not the file. `for` must be a string. The first push checks every README. The
 shell grammar is preserved: whitespace-only lines are not empty, required
 list values remain literal strings, and keys are ASCII names.
+`30-rules` refuses changed files under `memory/rules/` (the first push:
+all of them) that are not `memory/rules/<id>.md` with frontmatter whose
+`id` is the file's stem, an optional non-empty `when:` list, an optional
+non-empty `on:` list whose items are each `<Tool> <glob>` (both parts
+non-empty), no other key, and some rule text. A rule declaring `check:` is refused with
+"check: not supported yet": the key is reserved, never ignored. `.gitkeep`
+is allowed.
 `50-core-notice` never refuses: changes under `core/` print
 `core changed: <paths>` for the person's notice.
 
