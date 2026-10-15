@@ -24,7 +24,7 @@ from .owners import letter_owners, letters_for
 from .lifecycle import main_snapshot
 from .speak import speak
 
-REST_FACE = "⌁[b·_·d]"
+REST_FACE = "b·_·d"
 
 
 def install_of(strand: str) -> str | None:
@@ -415,7 +415,7 @@ def _header(state, letter: Fact) -> str:
     strand = letter.by.removeprefix("strand:")
     thread = next((f.data["thread"] for f in reversed(state.accepted)
                    if f.kind == "lease" and f.data["strand"] == strand), None)
-    return f"{REST_FACE} {thread}" if thread else REST_FACE
+    return f"{REST_FACE} ⌁ [ {thread} ]" if thread else f"{REST_FACE} ⌁"
 
 
 def _answers_event(state, letter: Fact) -> str | None:
