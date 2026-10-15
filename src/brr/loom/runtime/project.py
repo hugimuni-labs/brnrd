@@ -200,9 +200,9 @@ def sender_threads(facts: Iterable[Fact]) -> dict[str, str]:
 
 
 def reply_channels(facts: Iterable[Fact], home=None) -> dict[str, str]:
-    """Letter id → the chat it came from, for letters a relay brought in.
+    """Letter id → the chat it came from, for letters a connector brought in.
 
-    Only an address ``send`` accepts is offered; any other platform stays ``-``.
+    Only an address ``send`` accepts is offered; any disabled instance stays ``-``.
     """
     from .home import channel_parts
     facts = list(facts)
@@ -210,9 +210,9 @@ def reply_channels(facts: Iterable[Fact], home=None) -> dict[str, str]:
     found: dict[str, str] = {}
     for fact in facts:
         source = sources.get(fact.data.get("cites")) if fact.kind == "letter" else None
-        if not source or not source.get("platform") or (source.get("chat") is None and not source.get("channel")):
+        if not source or not source.get("channel"):
             continue
-        channel = source.get("channel") or f"channel:{source['platform']}/{source['chat']}"
+        channel = source["channel"]
         try:
             channel_parts(channel, home)
         except ValueError:

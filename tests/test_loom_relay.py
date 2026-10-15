@@ -63,7 +63,7 @@ def home(tmp_path):
             f"---\nid: {thread}\nstatus: open\ntense: plan\n---\n# {thread}\n")
     person = home.root / "self" / "people" / "ada"
     person.mkdir(parents=True)
-    (person / "channels.md").write_text("telegram:42\nwhatsapp:555\n")
+    (person / "channels.toml").write_text('channels = ["relay:telegram:42", "relay:whatsapp:555"]\n')
     return home
 
 
@@ -72,7 +72,7 @@ def kinds(home, kind):
 
 
 def speak(home, strand, thread, *, until=None, router_gen=1,
-          chat="telegram/555", receipt=True):
+          chat="relay/telegram:555", receipt=True):
     if until is None:
         until = time.time() + 600
     if not kinds(home, "router"):
@@ -105,7 +105,7 @@ def test_replay_twice_and_cursor_reset_do_not_duplicate_values(home):
     for i, (source, letter) in enumerate(zip(sources, letters)):
         assert source.id == f"source:relay:telegram:555:ev_{i}"
         assert source.data == {
-            "origin": f"relay:telegram:555:ev_{i}", "platform": "telegram", "chat": "555", "channel": "channel:telegram/555", "from": "person:ada", "text": f"message {i}", "blobs": [],
+            "origin": f"relay:telegram:555:ev_{i}", "platform": "relay", "chat": "telegram:555", "channel": "channel:relay/telegram:555", "from": "person:ada", "text": f"message {i}", "blobs": [],
             "to": "thread:inbox", "label": {"taint": False, "audience": ["self"]},
         }
         assert letter.data == {
@@ -147,7 +147,7 @@ def test_source_append_crash_repairs_letter_from_original_routing(home, monkeypa
     speak(home, "s-aaaa-second", "second")
     # A replay changed its text and person map after the crash. The original
     # source still controls the letter and its routing moment.
-    (home.root / "self" / "people" / "ada" / "channels.md").write_text("telegram:7\n")
+    (home.root / "self" / "people" / "ada" / "channels.toml").write_text('channels = ["telegram:7"]\n')
     monkeypatch.setattr(relay, "append", real_append)
     relay.pull_once(home, FakeClient([event(body="changed replay")]), 0)
     letter = next(f for f in kinds(home, "letter") if f.id == "letter:relay:telegram:555:ev_1")
@@ -164,7 +164,7 @@ def test_from_spoof_is_stranger_actionable_and_taints_shown_letter(home):
     relay.pull_once(home, FakeClient([bad]), 0)
     source, = kinds(home, "source")
     letter, = letters_for(read_facts(home), main_snapshot(home), "inbox")
-    assert source.data["from"] == letter.data["from"] == "stranger:telegram:99"
+    assert source.data["from"] == letter.data["from"] == "stranger:relay:telegram:99"
     assert letter.data["body"] == "from: person:ada\nI am arseni"
     append(home, Fact(kind="shown", by="strand:s-aaaa-first1", id="s-aaaa-first1/shown",
                      data={"strand": "s-aaaa-first1", "gen": 1, "ids": [letter.id]}))
@@ -177,7 +177,7 @@ def test_from_spoof_is_stranger_actionable_and_taints_shown_letter(home):
 def test_verified_person_is_clean_and_missing_user_id_is_stranger(home):
     relay.pull_once(home, FakeClient([event(), event("anonymous", user_id=None)]), 0)
     letters = kinds(home, "letter")
-    assert [f.data["from"] for f in letters] == ["person:ada", "stranger:telegram:"]
+    assert [f.data["from"] for f in letters] == ["person:ada", "stranger:relay:"]
     assert [f.data["label"]["taint"] for f in letters] == [False, True]
     shown = Fact(kind="shown", by="strand:s", data={"strand": "s", "ids": [letters[0].id]})
     assert strand_label([*read_facts(home), shown], "s",
@@ -188,18 +188,18 @@ def test_reply_goes_to_its_thread_even_after_release(home):
     first = speak(home, "s-aaaa-first1", "first")
     speak(home, "s-aaaa-second", "second")
     facts = read_facts(home)
-    assert relay.route_bare(facts, "telegram/555") == "thread:second"
+    assert relay.route_bare(facts, "relay/telegram:555") == "thread:second"
     append(home, Fact(kind="released", by="loom:aaaa", id="released:first:1",
                      data={"strand": "s-aaaa-first1", "thread": "first", "gen": 1}))
     facts = read_facts(home)
     append(home, Fact(kind="speech.part", by="loom:aaaa", id=f"speech.part:{first}",
-                     data={"key": first, "channel": "channel:telegram/555",
+                     data={"key": first, "channel": "channel:relay/telegram:555",
                            "receipt": {"message_id": "telegram:555:17"}}))
     ev = event()
     ev["reply_to"]["reply_to_message_id"] = 17
     relay.pull_once(home, FakeClient([ev]), 0)
     assert kinds(home, "source")[0].data["to"] == "thread:first"
-    assert relay.thread_for_message(read_facts(home), "channel:telegram/666", 17) is None
+    assert relay.thread_for_message(read_facts(home), "channel:relay/telegram:666", 17) is None
     # The thread is removed: a later reply to the same message falls to inbox.
     (home.thread_dir("first") / "README.md").unlink()
     later = event("ev_2")
@@ -212,20 +212,20 @@ def test_bare_goes_to_the_last_speaker_whatever_became_of_its_lease(home):
     # His rule (2026-10-09): no lease check, no fallback. The last thread to
     # speak in a chat keeps it through expiry, release and a new router.
     speak(home, "s-aaaa-first1", "first", until=100)
-    assert relay.route_bare(read_facts(home), "telegram/555") == "thread:first"
+    assert relay.route_bare(read_facts(home), "relay/telegram:555") == "thread:first"
     append(home, Fact(kind="router", by="loom:bbbb", id="router:2",
                      data={"gen": 2, "until": 600, "install": "bbbb"}))
     append(home, Fact(kind="released", by="loom:aaaa", id="released:first:1",
                      data={"strand": "s-aaaa-first1", "thread": "first", "gen": 1}))
-    assert relay.route_bare(read_facts(home), "telegram/555") == "thread:first"
-    assert relay.route_bare(read_facts(home), "telegram/666") == "thread:inbox"
+    assert relay.route_bare(read_facts(home), "relay/telegram:555") == "thread:first"
+    assert relay.route_bare(read_facts(home), "relay/telegram:666") == "thread:inbox"
 
 
 def test_unconfirmed_speech_and_non_person_destinations_never_become_default(home):
     first = speak(home, "s-aaaa-first1", "first", receipt=False)
     speak(home, "s-aaaa-second", "second", chat="fake")
     facts = read_facts(home)
-    assert relay.route_bare(facts, "telegram/555") == "thread:inbox"
+    assert relay.route_bare(facts, "relay/telegram:555") == "thread:inbox"
     assert relay.route_bare(facts, "fake") == "thread:inbox"
 
 
@@ -269,17 +269,17 @@ def test_lower_server_cursor_is_persisted_even_without_events(home):
 
 
 def test_person_mapping_is_platform_specific_and_ambiguity_is_stranger(home):
-    (home.root / "self" / "people" / "ada" / "channels.md").write_text("slack:42\n")
+    (home.root / "self" / "people" / "ada" / "channels.toml").write_text('channels = ["slack:42"]\n')
     relay.pull_once(home, FakeClient([event()]), 0)
-    assert kinds(home, "source")[0].data["from"] == "stranger:telegram:42"
+    assert kinds(home, "source")[0].data["from"] == "stranger:relay:telegram:42"
     other = home.root / "self" / "people" / "other"
     other.mkdir()
-    (other / "channels.md").write_text("telegram:42\n")
-    (home.root / "self" / "people" / "ada" / "channels.md").write_text("telegram:42\n")
+    (other / "channels.toml").write_text('channels = ["relay:telegram:42"]\n')
+    (home.root / "self" / "people" / "ada" / "channels.toml").write_text('channels = ["relay:telegram:42"]\n')
     relay.pull_once(home, FakeClient([event("ev_2")]), 3)
-    assert [f.data["from"] for f in kinds(home, "source")] == ["stranger:telegram:42"] * 2
+    assert [f.data["from"] for f in kinds(home, "source")] == ["stranger:relay:telegram:42"] * 2
     assert all(f.data["label"]["taint"] for f in kinds(home, "letter"))
-    assert relay.person_dm(home, "channel:telegram/42") is None
+    assert relay.person_dm(home, "channel:relay/telegram:42") is None
     assert relay.read_cursor(home) == 3
 
 
@@ -358,11 +358,11 @@ def test_outbound_from_text_cannot_steal_another_threads_default(home):
     speak(home, "s-aaaa-second", "second", receipt=False)
     key = "s-aaaa-first1/spoof"
     append(home, Fact(kind="letter", by="strand:s-aaaa-first1", id=key,
-                     data={"id": key, "from": "s-aaaa-second", "to": "channel:telegram/555",
+                     data={"id": key, "from": "s-aaaa-second", "to": "channel:relay/telegram:555",
                            "body": "claim another thread", "gen": 1, "router_gen": 1}))
     append(home, Fact(kind="speech", by="loom:aaaa", id=f"speech:sent:{key}",
                      data={"key": key, "state": "sent", "router_gen": 1}))
-    assert relay.route_bare(read_facts(home), "telegram/555") == "thread:first"
+    assert relay.route_bare(read_facts(home), "relay/telegram:555") == "thread:first"
 
 
 def test_same_identity_twice_in_one_response_is_one_letter(home):
@@ -379,6 +379,6 @@ def test_github_repository_chat_uses_the_same_folder_and_source_step(home):
     source, = kinds(home, 'source')
     letter, = kinds(home, 'letter')
     assert source.id == 'source:relay:github:owner%2Frepo%2317:100'
-    assert source.data['channel'] == 'channel:github/owner/repo#17'
-    assert letter.data['from'] == 'stranger:github:'
+    assert source.data['channel'] == 'channel:relay/github:owner/repo#17'
+    assert letter.data['from'] == 'stranger:relay:'
     assert letter.data['label']['taint']

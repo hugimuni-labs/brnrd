@@ -368,7 +368,7 @@ def test_unavailable_inbox_owner_explains_the_refusal_remotely(root, tmp_path, m
     readme.write_text(readme.read_text().replace('for: ""', 'for: "absent-brnrd"'))
     person = root / "self" / "people" / "owner"
     person.mkdir(parents=True)
-    (person / "channels.md").write_text("telegram:42\n")
+    (person / "channels.toml").write_text('channels = ["relay:telegram:42"]\n')
     from brr.loom.runtime.selfrepo import git, _commit
     git(root / "self", "add", "threads", "people")
     _commit(root / "self", "Land inbox ownership and direct chat.")

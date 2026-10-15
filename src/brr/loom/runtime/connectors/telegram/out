@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""Send or edit a letter; an error after any send is always uncertain."""
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from common import Refused, call, message_id, reply_id
+from brr.channels.telegram import split_message
+from brr.loom.runtime.port import parse_frontmatter
+
+
+def deliver(path):
+    ids = []
+    try:
+        letter = parse_frontmatter(path.read_text())
+        chat = letter['to']
+        if not chat.lstrip('-').isdecimal() or not letter['body'].strip():
+            raise Refused('Telegram requires a numeric chat and nonempty text')
+        parts = split_message(letter['body'], max_chunks=None)
+        edit = reply_id(letter['edit'], chat) if letter.get('edit') else None
+        re = reply_id(letter['re'], chat) if letter.get('re') else None
+        if edit is not None and len(parts) != 1:
+            raise Refused('Telegram cannot edit one message into several')
+        for part in parts:
+            payload = dict(chat_id=chat, text=part)
+            if edit is not None:
+                payload['message_id'] = edit
+            elif re is not None:
+                payload['reply_parameters'] = dict(message_id=re)
+            result = call('editMessageText' if edit is not None else 'sendMessage', payload)
+            ids.append(message_id(chat, result['message_id']))
+    except Refused as exc:
+        print(str(exc), file=sys.stderr)
+        return 1 if ids else 3
+    except Exception as exc:
+        print(f'telegram: {type(exc).__name__}', file=sys.stderr)
+        return 1
+    print(json.dumps(dict(ids=ids)))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(deliver(Path(sys.argv[1])))

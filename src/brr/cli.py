@@ -48,7 +48,6 @@ GATE_BY_PLATFORM: dict[str, tuple[str, str]] = {
 RETIRED_COMMANDS = {
     "auth": "brnrd gate auth <gate>",
     "bind": "brnrd gate bind <repo> <gate>",
-    "setup": "brnrd gate setup <gate>",
     "add": "brnrd account add <repo>",
     "connect": "brnrd account connect [url]",
 }
@@ -107,7 +106,7 @@ HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "emotes",
     "relic", "gate-run", "close-check", "promise", "act", "mood", "do", "notes",
     "await", "cut", "legend", "item", "asks", "goal", "queue", "envoy",
-    "dominion", "hud", "states", "threads", "publish",
+    "dominion", "hud", "states", "threads", "publish", "setup",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -301,6 +300,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="repo --resolve looks the refs up in (default: whatever "
                         "gh resolves from the working directory)")
     p.set_defaults(func=cmd_close_check)
+
+    # The loom setup remains off the daemon help until cut-over. The old
+    # `setup <gate>` spelling still fails with its existing migration pointer.
+    p = sub.add_parser("setup")
+    p.add_argument("step", nargs="?", default="channel")
+    p.add_argument("--home")
+    p.add_argument("--kind")
+    p.add_argument("--name")
+    p.add_argument("--person")
+    p.add_argument("--timeout", type=float, default=180)
+    p.set_defaults(func=cmd_setup_channel)
 
     gate_help = f"gate name ({', '.join(GATES)})"
 
@@ -6917,6 +6927,18 @@ def cmd_config_unset(args):
         return 2
     print(f"[brnrd config unset] {args.key} ({path})")
     return 0
+
+
+def cmd_setup_channel(args):
+    if args.step != "channel":
+        return _retired_command("setup", "brnrd gate setup <gate>")(args)
+    from .loom.runtime.setup_channel import main
+    argv = [args.step]
+    for key in ('home', 'kind', 'name', 'person', 'timeout'):
+        value = getattr(args, key, None)
+        if value is not None:
+            argv.extend(['--' + key, str(value)])
+    return main(argv)
 
 
 def cmd_setup(args):

@@ -102,7 +102,7 @@ def test_unsent_reply_returns_to_its_body_with_visible_refusal(tmp_path, monkeyp
         def takeover(self, facts):
             from dataclasses import replace
             changed = [replace(f, data=dict(f.data, router_gen=0))
-                       if f.kind == 'letter' and f.data.get('to') == 'channel:telegram/42'
+                       if f.kind == 'letter' and f.data.get('to') == 'channel:relay/telegram:42'
                        else f for f in facts]
             return original(self, changed)
         monkeypatch.setattr(routing.Router, 'speak_out', takeover)
@@ -113,7 +113,7 @@ ctx = Ctx(Path(sys.argv[1]))
 letters = ctx.owed()
 assert len(letters) == 1
 ask = letters[0]
-ctx.send('channel:telegram/42', 'answer', re=ask.id)
+ctx.send('channel:relay/telegram:42', 'answer', re=ask.id)
 deadline = time.monotonic() + 15
 while time.monotonic() < deadline:
     seen = ctx.jack('post').letters

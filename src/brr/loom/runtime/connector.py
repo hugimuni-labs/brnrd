@@ -12,7 +12,7 @@ from pathlib import Path
 
 from brr.daemon2.facts import Fact, union
 from .adapters import resolve
-from .config import config_path, load_config
+from .config import config_path, load_config, read_array
 from .home import atomic_write, channel_parts, mint
 from .labels import is_stranger
 from .ledger import append, read_facts
@@ -20,19 +20,19 @@ from .port import clean_accepts, parse_frontmatter
 from .project import fold, sender_threads
 
 
+def instances(home):
+    cfg = load_config(home.root)
+    return dict(v.split('=', 1) if '=' in v else (v, v) for v in cfg.connectors)
+
+
 def carries(home):
     found = {}
-    for name in load_config(home.root).connectors:
-        folder = resolve(home, name, "connectors")
-        for raw in (folder / "carries").read_text().splitlines():
-            if not raw.strip() or raw.lstrip().startswith("#"):
-                continue
-            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*(?: edit)?", raw.strip()):
-                raise ValueError(f"{folder}/carries: invalid line {raw!r}")
-            platform, *flags = raw.split()
-            if platform in found:
-                raise ValueError(f"{platform} carried by both {found[platform][0]} and {name}")
-            found[platform] = (name, folder, "edit" in flags)
+    for name, kind in instances(home).items():
+        folder = resolve(home, kind, "connectors")
+        flags = (folder / "carries").read_text().split()
+        if flags not in ([], ["edit"]):
+            raise ValueError(f"{folder}/carries: expected only an optional edit line")
+        found[name] = (name, folder, bool(flags))
     return found
 
 
@@ -53,11 +53,11 @@ class Inputs:
     def __init__(self, home):
         carries(home)  # validate the complete declaration before starting any child
         self.home, self.children, self.failures = home, {}, {}
-        self.names = load_config(home.root).connectors
+        self.names = instances(home)
 
     def step(self):
-        for name in self.names:
-            folder = resolve(self.home, name, "connectors")
+        for name, kind in self.names.items():
+            folder = resolve(self.home, kind, "connectors")
             drop = self.home.root / "loom/connectors" / name / "state/in"
             drop.mkdir(parents=True, exist_ok=True)
             command = folder / "in"
@@ -84,6 +84,15 @@ class Inputs:
                 except subprocess.TimeoutExpired:
                     child.kill()
                     child.wait()
+
+
+def addressed(name, fm):
+    """The one inbound boundary: native ids become instance addresses."""
+    fields = dict(fm, to=f"channel:{name}/{fm['to']}")
+    channel_parts(fields['to'])
+    if fm.get('from'):
+        fields['from'] = f"{name}:{fm['from']}"
+    return fields
 
 
 def ingest(home, name, fm, attachments):
@@ -151,10 +160,10 @@ def drain(home, name, drop, failures=None):
         attachments = path.with_suffix('.d')
         valid = False
         try:
-            fm = parse_frontmatter(path.read_text(encoding='utf-8'))
+            fm = addressed(name, parse_frontmatter(path.read_text(encoding='utf-8')))
             if path.is_symlink() or fm.get('id') != path.stem or not re.fullmatch(r'[A-Za-z0-9_%:#.-]+', fm.get('id', '')) or not fm.get('kind'):
                 raise ValueError('letter requires a safe id and kind')
-            channel_parts(fm.get('to', ''), home)
+            channel_parts(fm['to'], home)
             if fm['kind'] != 'letter' and not clean_accepts(
                     home.root / 'self', fm['kind'], fm.get('refs', '').split(), fm['body']):
                 raise ValueError('kind must be letter or a clean letter with valid refs')
@@ -193,21 +202,21 @@ def drain(home, name, drop, failures=None):
         failures.pop(path, None)
 
 
-def _sender(home, platform, user_id):
+def _sender(home, instance, user_id):
     # Only a connector's authenticated identity enters the person lookup.
-    key = f"{platform}:{user_id}"
-    matches = [p.parent.name for p in sorted((home.root / 'self/people').glob('*/channels.md'))
-               if user_id not in (None, '') and key in set(map(str.strip, p.read_text().splitlines()))]
-    return f'person:{matches[0]}' if len(matches) == 1 else f'stranger:{platform}:{"" if user_id is None else user_id}'
+    key = f"{instance}:{user_id}"
+    matches = [p.parent.name for p in sorted((home.root / 'self/people').glob('*/channels.toml'))
+               if user_id not in (None, '') and key in read_array(p, 'channels')]
+    return f'person:{matches[0]}' if len(matches) == 1 else f'stranger:{instance}:{"" if user_id is None else user_id}'
 
 
 def person_dm(home, channel):
     """Only a unique enrolled person's direct chat may be spoken to."""
     try:
-        platform, chat = channel_parts(channel)
+        instance, chat = channel_parts(channel, home)
     except ValueError:
         return None
-    sender = _sender(home, platform, chat)
+    sender = _sender(home, instance, chat)
     return sender if chat is not None and sender.startswith('person:') else None
 
 

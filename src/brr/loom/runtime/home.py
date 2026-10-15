@@ -60,15 +60,16 @@ _CHANNEL = re.compile(r"channel:([A-Za-z0-9][A-Za-z0-9._-]*)(?:/([A-Za-z0-9_:@#.
 def channel_parts(channel: str, home=None) -> tuple[str, str | None]:
     """Parse an address; with a home, require an enabled carrier as well."""
     match = _CHANNEL.fullmatch(channel) if isinstance(channel, str) else None
-    if match is None or (match[2] is None and match[1] != "fake"):
+    if match is None:
         raise ValueError(f"no channel adapter for {channel!r}")
     parts = match.groups()
     if parts[1] is not None and any(segment in {"", ".", ".."} for segment in parts[1].split("/")):
         raise ValueError(f"invalid channel chat {parts[1]!r}")
     if home is not None:
-        from .connector import carries
-        if parts[0] not in carries(home):
-            raise ValueError(f"no enabled connector carries {parts[0]!r}")
+        from .connector import instances
+        names = instances(home)
+        if parts[0] not in names:
+            raise ValueError(f'not sent: no channel "{parts[0]}"; enabled: {", ".join(names) or "(none)"}')
     return parts
 
 

@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""Keep the bot credential private to this channel instance."""
+import getpass
+import os
+from pathlib import Path
+
+path = Path(os.environ['BRNRD_STATE']) / 'token'
+value = getpass.getpass('BotFather token (or command:/file:/env: secret source): ').strip()
+if not value or '\n' in value or '\r' in value:
+    raise SystemExit('A token or secret source is required')
+fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+with os.fdopen(fd, 'w') as stream:
+    os.fchmod(stream.fileno(), 0o600)
+    stream.write(value + '\n')

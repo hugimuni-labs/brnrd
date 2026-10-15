@@ -27,7 +27,7 @@ def home(tmp_path):
     return home
 
 
-def folder(home, name, carries='test', out='print(\'{"ids": ["m1", "m2"]}\')'):
+def folder(home, name, carries='', out='print(\'{"ids": ["m1", "m2"]}\')'):
     path = home.root / 'loom/connectors' / name
     path.mkdir(parents=True, exist_ok=True)
     (path / 'carries').write_text(carries + '\n')
@@ -56,17 +56,17 @@ def test_runtime_directories_do_not_shadow_the_bundled_folder(home):
     expected = resolve(home, 'fake', 'connectors')
     connector.environment(home, 'fake')
     assert resolve(home, 'fake', 'connectors') == expected
-    local = folder(home, 'fake', 'custom edit')
+    local = folder(home, 'fake', 'edit')
     assert resolve(home, 'fake', 'connectors') == local.resolve()
-    assert connector.carries(home)['custom'][2]
+    assert connector.carries(home)['fake'][2]
 
 
-def test_carries_collision_refuses_before_starting_any_child(home, monkeypatch):
-    folder(home, 'one', 'chat')
-    folder(home, 'two', 'chat')
-    (home.root / 'loom/config.toml').write_text('connectors = ["one", "two"]')
+def test_duplicate_instances_refuse_before_starting_any_child(home, monkeypatch):
+    folder(home, 'one')
+    folder(home, 'two')
+    (home.root / 'loom/config.toml').write_text('connectors = ["same=one", "same=two"]')
     monkeypatch.setattr(subprocess, 'Popen', lambda *_a, **_kw: pytest.fail('started child'))
-    with pytest.raises(ValueError, match='chat carried by both one and two'):
+    with pytest.raises(ConfigError, match='unique connector names'):
         connector.Inputs(home)
 
 
@@ -77,10 +77,10 @@ def test_routing_keeps_address_validation_even_with_a_reply_thread(chat):
 
 def test_generic_address_and_real_out_with_multiple_receipts(home):
     folder(home, 'addon')
-    assert channel_parts('channel:test/dm', home) == ('test', 'dm')
+    assert channel_parts('channel:addon/dm', home) == ('addon', 'dm')
     with pytest.raises(ValueError):
-        channel_parts('channel:telegram/42', home)
-    result, _, _ = speak.speak(home, lease(home), 'writer/a', 'hello', channel='channel:test/dm')
+        channel_parts('channel:relay/telegram:42', home)
+    result, _, _ = speak.speak(home, lease(home), 'writer/a', 'hello', channel='channel:addon/dm')
     assert result == 'sent'
     assert [f.data['receipt']['message_id'] for f in read_facts(home) if f.kind == 'speech.part'] == ['m1', 'm2']
 
@@ -90,12 +90,12 @@ def test_out_exit_contract_and_recovery_never_repeat_the_effect(home, exit_code,
     folder(home, 'addon', out=f'import sys\nfrom pathlib import Path\np=Path({str(count)!r})\np.write_text(p.read_text()+"x" if p.exists() else "x")\nprint("closed window", file=sys.stderr)\nsys.exit({exit_code})')
     grant = lease(home)
     for _ in range(2):
-        state, fact, _ = speak.speak(home, grant, 'writer/a', 'hello', channel='channel:test/dm')
+        state, fact, _ = speak.speak(home, grant, 'writer/a', 'hello', channel='channel:addon/dm')
         assert state == status
     assert count.read_text() == 'x'
     if status == 'not-sent':
         assert fact.data['reason'] == 'closed window'
-        assert speak.speak(home, grant, 'writer/fresh', 'retry', channel='channel:test/dm')[0] == status
+        assert speak.speak(home, grant, 'writer/fresh', 'retry', channel='channel:addon/dm')[0] == status
         assert count.read_text() == 'xx'
 
 
@@ -105,7 +105,7 @@ def test_timeout_and_bad_receipt_are_uncertain(home, monkeypatch):
         assert kw['timeout'] == 60
         raise subprocess.TimeoutExpired('out', 60)
     monkeypatch.setattr(subprocess, 'run', timeout)
-    assert speak.speak(home, lease(home), 'writer/a', 'hello', channel='channel:test/dm')[0] == 'maybe-sent'
+    assert speak.speak(home, lease(home), 'writer/a', 'hello', channel='channel:addon/dm')[0] == 'maybe-sent'
 
 
 def test_unreadable_drop_is_quarantined_with_one_notice(home):
@@ -122,7 +122,7 @@ def test_retry_state_resets_with_inputs_and_keeps_only_quarantine_diagnostics(ho
     drop = home.root / 'loom/connectors/fake/state/in'
     drop.mkdir(parents=True)
     path = drop / 'retry.md'
-    path.write_text(_front(dict(kind='letter', id='retry', to='channel:fake'), 'retry'))
+    path.write_text(_front(dict(kind='letter', id='retry', to='in'), 'retry'))
     attempts = []
     def fail(*_args):
         attempts.append(1)
@@ -150,8 +150,7 @@ def test_retry_state_resets_with_inputs_and_keeps_only_quarantine_diagnostics(ho
 def test_passive_input_ingests_and_removes_the_letter(home):
     drop = home.root / 'loom/connectors/fake/state/in'
     drop.mkdir(parents=True)
-    (drop / 'hello.md').write_text(_front(dict(kind='letter', id='hello', to='channel:fake',
-                                             **{'from': 'fake:visitor'}), 'hello'))
+    (drop / 'hello.md').write_text(_front(dict(kind='letter', id='hello', to='in', **{'from': 'visitor'}), 'hello'))
     inputs = connector.Inputs(home)
     try:
         inputs.step()
@@ -216,7 +215,7 @@ def test_relay_photo_answer_and_reply_through_real_folder_processes(home, tmp_pa
     (home.root / 'loom/config.toml').write_text(f'connectors = ["relay"]\nrelay_state = "{state}"\n')
     person = home.root / 'self/people/ada'
     person.mkdir(parents=True)
-    (person / 'channels.md').write_text('telegram:42\n')
+    (person / 'channels.toml').write_text('channels = ["relay:telegram:42"]\n')
     directory = home.thread_dir('first')
     directory.mkdir()
     (directory / 'README.md').write_text('---\nid: first\nstatus: open\ntense: plan\n---\n# First\n')
@@ -234,8 +233,8 @@ def test_relay_photo_answer_and_reply_through_real_folder_processes(home, tmp_pa
         first = receive('letter:relay:telegram:42:1')
         assert first.data['from'] == 'person:ada' and not first.data['label']['taint']
         assert any(p.read_bytes() == b'PHOTO' for p in (home.root / 'blobs').iterdir())
-        key = spoke(home, 's-a', 'first', chat='telegram/42', receipt=False)
-        assert speak.speak(home, lease(home), key, 'answer', channel='channel:telegram/42',
+        key = spoke(home, 's-a', 'first', chat='relay/telegram:42', receipt=False)
+        assert speak.speak(home, lease(home), key, 'answer', channel='channel:relay/telegram:42',
                            context=dict(re='telegram:42:1'))[0] == 'sent'
         assert sent == [('/v1/daemons/responses', dict(event_id='ev1', body_markdown='answer', status='done'))]
         reply = receive('letter:relay:telegram:42:2')

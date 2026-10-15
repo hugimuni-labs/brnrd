@@ -13,7 +13,7 @@ from brr.loom.runtime.port import parse_frontmatter
 
 def deliver(path, state, client):
     letter = parse_frontmatter(path.read_text())
-    platform, _, chat = letter['to'].removeprefix('channel:').partition('/')
+    platform, _, chat = letter['to'].partition(':')
     if platform not in {'telegram', 'whatsapp', 'github'} or not chat:
         print('relay: unknown platform or chat', file=sys.stderr)
         return 3

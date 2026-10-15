@@ -93,8 +93,8 @@ raise SystemExit("no reply")
 def test_persons_two_failed_starts_deliver_failure_or_leave_operator_debt(tmp_path, monkeypatch, capsys, delivery):
     root = tmp_path / "home"
     init_self(root, person="ada")
-    person = root / "self/people/ada/channels.md"
-    person.write_text("telegram:42\n")
+    person = root / "self/people/ada/channels.toml"
+    person.write_text('channels = ["relay:telegram:42"]\n')
     write_thread(root, "inbox", "Inbox", "die-now", wait="0")
     starts = root / "starts"
     bodies(root, f'''import sys
@@ -164,7 +164,7 @@ sys.exit(2)
             wait_until(lambda: all(f.done for f in table().values()), 10, loom.dump)
             assert len(sent) == 1
             channel, text, context = sent[0]
-            assert channel == 'channel:telegram/42'
+            assert channel == 'telegram:42'  # the folder receives only its native chat
             assert 'could not handle your letter: please help' in text
             assert 'person failure tail' in text
             assert context['re'] == 'telegram:42:crash'

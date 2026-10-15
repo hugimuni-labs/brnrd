@@ -303,7 +303,14 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         try:
             channel_parts(to, home)
         except ValueError as exc:
-            raise PortError(f"send: {exc}") from exc
+            from .ledger import read_facts
+            from .project import sender_threads
+            from .loom import notice
+            facts = read_facts(home)
+            notice(home, facts, 'speech-refused', f'{sender}:{to}', str(exc),
+                   'choose an enabled channel and write a fresh letter',
+                   thread=sender_threads(facts).get(sender))
+            raise PortError(str(exc)) from exc
     else:
         thread = thread_of(to)
         if home.routable(thread):

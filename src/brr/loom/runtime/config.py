@@ -1,7 +1,7 @@
 """``loom/config.toml``: the knobs one home's looms share.
 
 Flat ``key = value`` lines only: ``[sections]`` are ignored. Enable folders
-with ``connectors = ["relay"]``; ``relay_state`` supplies its account path. A few-line
+with ``connectors = ["inbox=addon"]`` (name=folder; a bare folder uses its own name). A few-line
 file, parsed here, so the loom takes no TOML dependency on Python 3.10.
 
 ``KEYS`` is the one declaration: name, kind, default, help. The dataclass,
@@ -68,10 +68,10 @@ KEYS: tuple[Key, ...] = (
         "else the machine's gh login; off signs it out.",
         choices=("auto", "off")),
     Key("connectors", "names", (),
-        "Enabled connector folders, e.g. [\"relay\"]. Home folders override bundled folders; default: none."),
+        "Enabled folders or named channels, e.g. [\"inbox=addon\"]. Home folders override bundled folders; default: none."),
     Key("relay_state", "path", None,
         "The account's cloud gate state directory (holds gates/cloud.json). "
-        'Read by the relay connector; enable it with connectors = ["relay"].'),
+        'Read by the account-backed connector folder.'),
     Key("hold_floor_pct", "percent", 3.0,
         "A quota window with this percent or less left counts as exhausted: a held body stays held."),
     Key("stop_grace", "seconds", DEFAULT_STOP_GRACE,
@@ -135,9 +135,10 @@ def _coerce(key: Key, value: object, path: Path) -> object:
 
     if key.kind == "names":
         if not isinstance(value, (list, tuple)) or any(
-                not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", v) for v in value):
-            raise refuse("an array of connector names")
-        if len(set(value)) != len(value):
+                not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*(?:=[A-Za-z0-9][A-Za-z0-9._-]*)?", v) for v in value):
+            raise refuse('an array of "folder" or "name=folder" strings')
+        names = [v.split("=", 1)[0] for v in value]
+        if len(set(names)) != len(names):
             raise refuse("unique connector names")
         return tuple(value)
     if key.kind in {"text", "path"}:
@@ -190,9 +191,9 @@ def _without_comment(line: str) -> str:
     return line
 
 
-def load_config_report(root: Path | str) -> tuple[LoomConfig, frozenset[str]]:
-    """The effective config and the keys the file set (the rest are defaults)."""
-    path = config_path(root)
+def read_values(path: Path | str) -> dict[str, object]:
+    """Read the shared flat TOML grammar, without applying a key registry."""
+    path = Path(path)
     found: dict[str, object] = {}
     if path.is_file():
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -200,7 +201,24 @@ def load_config_report(root: Path | str) -> tuple[LoomConfig, frozenset[str]]:
             if not line or "=" not in line:
                 continue
             key, _, raw = line.partition("=")
-            found[key.strip()] = _literal(raw.strip())
+            key = key.strip()
+            if key in {"connectors", "channels"} and key in found:
+                raise ConfigError(f"{path}: duplicate {key} declaration")
+            found[key] = _literal(raw.strip())
+    return found
+
+
+def read_array(path: Path, key: str) -> list[str]:
+    values = read_values(path).get(key, [])
+    if not isinstance(values, list) or any(not isinstance(v, str) for v in values):
+        raise ConfigError(f"{path}: {key} must be an array of strings")
+    return values
+
+
+def load_config_report(root: Path | str) -> tuple[LoomConfig, frozenset[str]]:
+    """The effective config and the keys the file set (the rest are defaults)."""
+    path = config_path(root)
+    found = read_values(path)
     values: dict[str, object] = {}
     for name, value in found.items():
         key = BY_NAME.get(name)

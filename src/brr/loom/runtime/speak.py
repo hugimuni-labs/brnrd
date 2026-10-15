@@ -9,20 +9,22 @@ import tempfile
 from brr.daemon2.facts import Fact
 from brr.daemon2.leases import LocalLeaseAuthority, StaleLease
 from .config import loom_clock
-from .connector import carries, environment
+from .connector import carries, environment, instances
 from .home import channel_parts
 from .ledger import append
 from .port import _front
 
-CHANNEL = 'channel:fake'
-
-
-def speak(home, router_lease, key, text, *, channel=CHANNEL, context=None):
+def speak(home, router_lease, key, text, *, channel=None, context=None):
     if not key:
         raise ValueError('speak: empty key')
-    platform, _chat = channel_parts(channel, home)
-    name, folder, edits = carries(home)[platform]
-    fields = dict(kind='letter', id=key, to=channel, **(context or {}))
+    if channel is None:
+        names = instances(home)
+        if len(names) != 1:
+            raise ValueError('speak requires an explicit channel when there is not exactly one instance')
+        channel = f'channel:{next(iter(names))}'
+    name, chat = channel_parts(channel, home)
+    _name, folder, edits = carries(home)[name]
+    fields = dict(kind='letter', id=key, **(context or {}), to=chat or '')
     if fields.get('edit') and not edits:
         raise ValueError(f'{name} does not carry edits')
     authority = LocalLeaseAuthority(home.root / 'ledger/leases', clock=loom_clock)

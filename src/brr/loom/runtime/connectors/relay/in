@@ -72,8 +72,10 @@ def pull_once(drop, state, client, cursor, failures=None):
                                    f'(attempt {failures.get(key, 0) + 1} of 3)')
             # WhatsApp: a chat with the business number is one person, and its
             # chat id is that person's own wa_id; the server sends no user_id.
-            fields = dict(kind='letter', id=ident, to=f'channel:{platform}/{chat}',
-                          **{'from': f"{platform}:{chat if platform == 'whatsapp' else origin.get('user_id') or ''}"})
+            fields = dict(kind='letter', id=ident, to=f'{platform}:{chat}')
+            user = chat if platform == 'whatsapp' else origin.get('user_id')
+            if user not in (None, ''):
+                fields['from'] = f'{platform}:{user}'
             if origin.get('reply_to_message_id') is not None:
                 fields['re'] = message_id(platform, chat, origin['reply_to_message_id'])
             if missing:
