@@ -120,8 +120,9 @@ def send_message(
     topic_id: int | None = None,
     reply_to_message_id: int | None = None,
     timeout: float = 30.0,
-) -> None:
-    transport.send_message(
+) -> str | None:
+    """Send an addressed reply and return the first chunk's platform id."""
+    results = transport.send_message(
         lambda method, params, call_timeout: _post_json(
             token, method, params, call_timeout
         ),
@@ -132,6 +133,14 @@ def send_message(
         reply_to_message_id=reply_to_message_id,
         timeout=timeout,
     )
+
+    if not results:
+        return None
+    first_result = results[0].get("result") if isinstance(results[0], dict) else None
+    message_id = (
+        first_result.get("message_id") if isinstance(first_result, dict) else None
+    )
+    return None if message_id is None else str(message_id)
 
 
 def send_fresh_message(
@@ -144,12 +153,10 @@ def send_fresh_message(
 ) -> str | None:
     """Unaddressed send (#1205's fresh-send primitive) — no reply target.
 
-    Same chunking policy as :func:`send_message`, but that function returns
-    ``None``: it exists only to *forward* an already-addressed reply, where
-    nothing downstream reads the platform id back. A fresh send has no
-    inbound event to attach a receipt to, so its caller (the daemon
-    endpoint) needs the id to hand back — the last chunk's, the one Telegram
-    actually rendered as the tail of what the correspondent sees.
+    Same chunking policy as :func:`send_message`. Preserve the fresh-send
+    receipt contract: the last chunk's id, which Telegram rendered as the
+    tail of what the correspondent sees. Addressed replies return the first
+    chunk's id instead.
     """
     results = transport.send_message(
         lambda method, params, call_timeout: _post_json(

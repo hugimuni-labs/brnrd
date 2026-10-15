@@ -35,7 +35,13 @@ class CapturingForwarder:
         self.items.append(item)
 
 
-Forwarder = Callable[[ForwardItem], None]
+Forwarder = Callable[[ForwardItem], str | None]
+
+
+@dataclass
+class RecordedResponse:
+    event: Event
+    message_id: str | None = None
 
 
 class DeliveryError(RuntimeError):
@@ -86,7 +92,7 @@ def make_default_forwarder(settings) -> Forwarder:
             return credential["token"]
         return settings.github_bot_token
 
-    def forward_telegram(item: ForwardItem, reply_to: dict) -> None:
+    def forward_telegram(item: ForwardItem, reply_to: dict) -> str | None:
         if not settings.telegram_bot_token:
             return
         # `.get`, not `[...]` — and an early return, the way both sibling
@@ -101,7 +107,7 @@ def make_default_forwarder(settings) -> Forwarder:
         if not chat_id:
             return
         from .platforms import telegram
-        telegram.send_message(
+        return telegram.send_message(
             settings.telegram_bot_token,
             chat_id,
             item.body,
@@ -127,7 +133,7 @@ def make_default_forwarder(settings) -> Forwarder:
         else:
             github.post_issue_comment(token, settings.github_api_base_url, settings.github_api_version, repo, issue_number, body)
 
-    def forward_whatsapp(item: ForwardItem, reply_to: dict) -> None:
+    def forward_whatsapp(item: ForwardItem, reply_to: dict) -> str | None:
         if not (settings.whatsapp_access_token and settings.whatsapp_phone_number_id):
             return
         from .platforms import whatsapp
@@ -151,7 +157,7 @@ def make_default_forwarder(settings) -> Forwarder:
         if utf16_len(body) > whatsapp.MAX_BODY_LEN:
             budget = whatsapp.MAX_BODY_LEN - utf16_len(TRUNCATION_MARKER)
             body = trim_to_limit(body, budget) + TRUNCATION_MARKER
-        whatsapp.send_message(
+        return whatsapp.send_message(
             settings.whatsapp_access_token,
             settings.whatsapp_phone_number_id,
             str(chat_id),
@@ -172,17 +178,17 @@ def make_default_forwarder(settings) -> Forwarder:
     # settings closure. Adding a platform is adding one entry here plus its
     # ``platforms/<name>.py`` transport module — no other call site knows
     # this table exists.
-    handlers: dict[str, Callable[[ForwardItem, dict], None]] = {
+    handlers: dict[str, Callable[[ForwardItem, dict], str | None]] = {
         "telegram": forward_telegram,
         "github": forward_github,
         "whatsapp": forward_whatsapp,
     }
 
-    def forward(item: ForwardItem) -> None:
+    def forward(item: ForwardItem) -> str | None:
         reply_to = item.reply_to or {}
         handler = handlers.get(reply_to.get("platform"))
         if handler is not None:
-            handler(item, reply_to)
+            return handler(item, reply_to)
 
     return forward
 
@@ -762,7 +768,7 @@ def _close_noted(db: Session, event: Event) -> Event:
     return event
 
 
-def record_response(db: Session, *, repo_id: str, event_id: str, body_markdown: str, status: str, forwarder: Forwarder, conversation_id: str | None = None) -> Event | None:
+def record_response(db: Session, *, repo_id: str, event_id: str, body_markdown: str, status: str, forwarder: Forwarder, conversation_id: str | None = None) -> RecordedResponse | None:
     """Forward one daemon message for *event_id*; close the event on ``done``.
 
     The streaming protocol posts interim messages with a non-``done`` status
@@ -798,28 +804,29 @@ def record_response(db: Session, *, repo_id: str, event_id: str, body_markdown: 
         event.conversation_id = conversation_id
         db.commit()
     if status == RESPONSE_STATUS_NOTED:
-        return _close_noted(db, event)
+        return RecordedResponse(_close_noted(db, event))
     sha = _body_sha(body_markdown)
     if event.status == Event.STATUS_RESPONDED and sha == event.response_sha:
         # Idempotent retry of the last forwarded message: quiet ACK.
-        return event
+        return RecordedResponse(event)
 
     try:
-        forwarder(ForwardItem(event_id=event_id, reply_to=_loads(event.reply_to), body=body_markdown, status=status))
+        message_id = forwarder(ForwardItem(event_id=event_id, reply_to=_loads(event.reply_to), body=body_markdown, status=status))
     except Exception as e:
         raise DeliveryError(str(e)) from e
 
+    result = RecordedResponse(event, message_id)
     if event.status == Event.STATUS_RESPONDED:
         # Continuation speech into an already-closed event: forwarded above,
         # event stays closed; remember the body for retry dedupe.
         event.response_sha = sha
         event.response_len = len(body_markdown)
         db.commit()
-        return event
+        return result
 
     if status != "done":
         # Interim: forwarded, event stays open for the terminal close.
-        return event
+        return result
 
     now = datetime.now(timezone.utc)
     created = event.created_at
@@ -836,7 +843,7 @@ def record_response(db: Session, *, repo_id: str, event_id: str, body_markdown: 
     # event's media, and the mirror stays bounded (#543).
     event.attachments_json = "[]"
     db.commit()
-    return event
+    return result
 
 
 # ── #502 event GC — the queue is a relay, not an archive ──

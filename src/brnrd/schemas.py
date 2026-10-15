@@ -307,6 +307,7 @@ class ResponsePost(BaseModel):
 class ResponseAck(BaseModel):
     event_id: str
     forwarded: bool
+    message_id: str | None = None
 
 
 class CardPost(BaseModel):
@@ -321,15 +322,14 @@ class CardAck(BaseModel):
 
 
 class MessagePost(BaseModel):
-    """#1205's fresh-send primitive: an unaddressed send, no inbound event.
+    """Fresh send to a known account chat, without answering an event.
 
-    ``platform`` defaults to ``telegram`` — the only wired lane today; an
-    unresolvable/unsupported one is an honest 501 at the router, not a
-    silently-ignored field.
+    Omit ``chat_id`` to use the most recently active chat on ``platform``.
     """
 
     body_markdown: str = Field(min_length=1)
     platform: str = Field(default="telegram", min_length=1, max_length=32)
+    chat_id: str | int | None = None
 
 
 class MessageAck(BaseModel):

@@ -1597,7 +1597,7 @@ def test_the_handler_list_above_matches_the_routing_table():
     import inspect
 
     source = inspect.getsource(inbox_service.make_default_forwarder)
-    table = source.split("handlers: dict[str, Callable[[ForwardItem, dict], None]] = {", 1)[1]
+    table = source.split("handlers: dict[str, Callable[[ForwardItem, dict], str | None]] = {", 1)[1]
     table = table.split("}", 1)[0]
     registered = {
         line.split('"')[1]
@@ -1740,7 +1740,7 @@ def test_fresh_send_registry_matches_what_this_test_module_covers():
     registered = {
         line.split('"')[1] for line in table.splitlines() if line.strip().startswith('"')
     }
-    assert registered == {"telegram"}, (
+    assert registered == {"telegram", "whatsapp"}, (
         "a platform was added to the fresh-send registry without extending "
         "the coverage above"
     )
@@ -1827,3 +1827,243 @@ def test_whoami_refuses_a_missing_or_wrong_token(env):
     ).status_code == 401
     # An account credential is a real token of the wrong kind.
     assert client.get("/v1/daemons/whoami", headers=acc).status_code == 403
+
+
+# ── Slice B — explicit relay destinations and platform receipts ──────
+
+
+@pytest.fixture()
+def relay_env(env):
+    from dataclasses import replace
+
+    app, client, _ = env
+    settings = replace(
+        app.state.settings,
+        telegram_bot_token="bot:relay-test",
+        whatsapp_access_token="wa-relay-test",
+        whatsapp_phone_number_id="phone-relay-test",
+    )
+    app.state.settings = settings
+    app.state.forwarder = inbox_service.make_default_forwarder(settings)
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+    return app, client, acc, rid, dmn
+
+
+def _relay_event(client, acc, rid, platform, chat_id, **address):
+    response = client.post(
+        "/v1/_dev/enqueue",
+        json={
+            "repo_id": rid, "body": "task",
+            "reply_to": {"platform": platform, "chat_id": chat_id, **address},
+        },
+        headers=acc,
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["event_id"]
+
+
+@pytest.mark.parametrize("chat_id", [111, "111"])
+def test_explicit_chat_uses_its_latest_address_even_beyond_fallback_scan(
+    relay_env, monkeypatch, chat_id,
+):
+    app, client, acc, rid, dmn = relay_env
+    monkeypatch.setattr(daemon_routes, "_MESSAGE_SCAN_LIMIT", 2)
+    _relay_event(client, acc, rid, "telegram", 111, topic_id=3)
+    _relay_event(client, acc, rid, "telegram", 111, topic_id=7)
+    _relay_event(client, acc, rid, "telegram", 222, topic_id=9)
+    _relay_event(client, acc, rid, "whatsapp", "111")
+    sent = []
+
+    def send(token, target, body, **kwargs):
+        sent.append((token, target, body, kwargs))
+        return "tg-explicit"
+
+    monkeypatch.setattr("brnrd.platforms.telegram.send_fresh_message", send)
+    response = client.post(
+        "/v1/daemons/messages",
+        json={"chat_id": chat_id, "body_markdown": "only to 111"},
+        headers=dmn,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {"platform": "telegram", "message_id": "tg-explicit"}
+    assert sent == [("bot:relay-test", 111, "only to 111", {"topic_id": 7})]
+
+
+@pytest.mark.parametrize("foreign_history", [False, True])
+def test_unknown_explicit_chat_never_falls_back_or_crosses_accounts(
+    relay_env, monkeypatch, foreign_history,
+):
+    app, client, acc, rid, dmn = relay_env
+    _relay_event(client, acc, rid, "telegram", 222)
+    # A chat known on a different platform does not authorize Telegram.
+    _relay_event(client, acc, rid, "whatsapp", "999")
+    if foreign_history:
+        other = _account(client, email="other@b.com")
+        other_rid = _repo(client, other, name="other")
+        _relay_event(client, other, other_rid, "telegram", 999)
+    sends = []
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.send_fresh_message",
+        lambda *args, **kwargs: sends.append(args),
+    )
+    response = client.post(
+        "/v1/daemons/messages",
+        json={"chat_id": "999", "body_markdown": "must not land anywhere"},
+        headers=dmn,
+    )
+    assert response.status_code == 404, response.text
+    assert "999" in response.json()["detail"]
+    assert sends == []
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_whatsapp_fresh_send_returns_wamid_and_has_no_reply_context(
+    relay_env, monkeypatch, explicit,
+):
+    app, client, acc, rid, dmn = relay_env
+    _relay_event(client, acc, rid, "whatsapp", "15550001", message_id="inbound-old")
+    _relay_event(client, acc, rid, "whatsapp", "15550002", message_id="inbound-new")
+    sends = []
+
+    def send(token, phone, target, body, **kwargs):
+        sends.append((token, phone, target, body, kwargs))
+        return "wamid.fresh"
+
+    monkeypatch.setattr("brnrd.platforms.whatsapp.send_message", send)
+    payload = {"platform": "whatsapp", "body_markdown": "fresh hello"}
+    if explicit:
+        payload["chat_id"] = "15550001"
+    response = client.post("/v1/daemons/messages", json=payload, headers=dmn)
+    assert response.status_code == 200, response.text
+    assert response.json() == {"platform": "whatsapp", "message_id": "wamid.fresh"}
+    assert sends == [(
+        "wa-relay-test", "phone-relay-test", "15550001" if explicit else "15550002",
+        "fresh hello", {
+            "api_base_url": app.state.settings.whatsapp_api_base_url,
+            "api_version": app.state.settings.whatsapp_api_version,
+        },
+    )]
+
+
+@pytest.mark.parametrize("missing", ["whatsapp_access_token", "whatsapp_phone_number_id"])
+def test_whatsapp_fresh_send_without_credentials_returns_503(
+    relay_env, monkeypatch, missing,
+):
+    from dataclasses import replace
+
+    app, client, acc, rid, dmn = relay_env
+    app.state.settings = replace(app.state.settings, **{missing: ""})
+    _relay_event(client, acc, rid, "whatsapp", "15550001")
+    sends = []
+    monkeypatch.setattr(
+        "brnrd.platforms.whatsapp.send_message",
+        lambda *args, **kwargs: sends.append(args),
+    )
+    response = client.post(
+        "/v1/daemons/messages",
+        json={"platform": "whatsapp", "body_markdown": "hello"}, headers=dmn,
+    )
+    assert response.status_code == 503, response.text
+    assert sends == []
+
+
+@pytest.mark.parametrize("failure, expected, detail", [
+    ("window", 409, "24h window"),
+    ("transport", 502, "connection failed"),
+    ("no-receipt", 502, "returned no message id"),
+])
+def test_whatsapp_fresh_send_reports_refusal_or_failure(
+    relay_env, monkeypatch, failure, expected, detail,
+):
+    from brnrd.platforms.whatsapp import WindowClosed
+
+    app, client, acc, rid, dmn = relay_env
+    _relay_event(client, acc, rid, "whatsapp", "15550001")
+    sends = []
+
+    def send(*args, **kwargs):
+        sends.append(args)
+        if failure == "window":
+            raise WindowClosed("outside 24h window — template messages not yet supported")
+        if failure == "transport":
+            raise RuntimeError("connection failed")
+        return None
+
+    monkeypatch.setattr("brnrd.platforms.whatsapp.send_message", send)
+    response = client.post(
+        "/v1/daemons/messages",
+        json={"platform": "whatsapp", "chat_id": "15550001", "body_markdown": "hello"},
+        headers=dmn,
+    )
+    assert response.status_code == expected, response.text
+    assert detail in response.json()["detail"]
+    assert len(sends) == 1
+
+
+@pytest.mark.parametrize("platform", ["telegram", "whatsapp"])
+def test_response_receipts_survive_interim_done_and_continuation(
+    relay_env, monkeypatch, platform,
+):
+    from brnrd.platforms import telegram as tg
+
+    app, client, acc, rid, dmn = relay_env
+    event_id = _relay_event(client, acc, rid, platform, "15550001", message_id="source-id")
+    sends = []
+
+    def telegram_post(token, method, params, timeout):
+        sends.append(params)
+        return {"result": {"message_id": len(sends)}}
+
+    def whatsapp_send(*args, **kwargs):
+        sends.append((args, kwargs))
+        return f"wamid.{len(sends)}"
+
+    monkeypatch.setattr(tg, "_post_json", telegram_post)
+    monkeypatch.setattr("brnrd.platforms.whatsapp.send_message", whatsapp_send)
+    for status, body in [("processing", "working"), ("done", "x" * 9000), ("done", "continuation")]:
+        first_id = len(sends) + 1
+        response = client.post(
+            "/v1/daemons/responses",
+            json={"event_id": event_id, "body_markdown": body, "status": status},
+            headers=dmn,
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == {
+            "event_id": event_id, "forwarded": True,
+            "message_id": str(first_id) if platform == "telegram" else f"wamid.{first_id}",
+        }
+        with app.state.SessionLocal() as db:
+            event = db.execute(select(Event).where(Event.event_id == event_id)).scalar_one()
+            assert event.status == (Event.STATUS_QUEUED if status == "processing" else Event.STATUS_RESPONDED)
+    if platform == "telegram":
+        assert len(sends) > 3  # the long response really passed through the chunker
+    else:
+        assert len(sends) == 3  # WhatsApp still trims instead of splitting
+        assert len(sends[1][0][3]) <= 4096
+
+    # An exact retry does not send again or invent a receipt we did not store.
+    count = len(sends)
+    retry = client.post(
+        "/v1/daemons/responses",
+        json={"event_id": event_id, "body_markdown": "continuation"}, headers=dmn,
+    )
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["message_id"] is None
+    assert len(sends) == count
+
+
+def test_response_without_platform_receipt_keeps_legacy_ack(env):
+    app, client, forwarder = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+    event_id = _relay_event(client, acc, rid, "telegram", 111)
+    response = client.post(
+        "/v1/daemons/responses",
+        json={"event_id": event_id, "body_markdown": "legacy forwarder"}, headers=dmn,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {"event_id": event_id, "forwarded": True, "message_id": None}
+    assert len(forwarder.items) == 1
