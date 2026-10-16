@@ -82,10 +82,8 @@ _FORGE_TOKEN_VARS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_
 
 
 def _forge_env(room: Path, env: dict[str, str]) -> None:
-    """A body's ``gh``: the home's token when it has one, otherwise the
-    machine's own login; ``gh = "off"`` in loom/config.toml signs it out.
-    """
-    from .config import load_config, secret_shell
+    """Keep a configured forge identity isolated even when a shell bypasses the shim."""
+    from .config import ConfigError, load_config, resolve_secret, secret_shell
     config = load_config(room.parent.parent) if room.parent.name == "rooms" else None
     mode = config.gh if config is not None else "auto"
     spec = config.forge_token if config is not None else None
@@ -96,7 +94,17 @@ def _forge_env(room: Path, env: dict[str, str]) -> None:
     source_token = env.get(source_var, "") if source_var in _FORGE_TOKEN_VARS else None
     for name in _FORGE_TOKEN_VARS:
         env.pop(name, None)
-    if mode == "auto":
+    gh_dir = room / "port" / "gh"
+    gh_dir.mkdir(parents=True, exist_ok=True)
+    env["GH_CONFIG_DIR"] = str(gh_dir)
+    if mode == "auto" and spec:
+        # Login profiles can put real gh ahead of our refreshing shim. An
+        # exported token survives that PATH change; absent one, the empty
+        # room config makes gh fail closed.
+        try:
+            env["GH_TOKEN"] = resolve_secret(spec)
+        except ConfigError:
+            _log(Home(room.parent.parent), "forge_token unavailable at body start; gh remains signed out")
         path = env.get("PATH", os.defpath)
         real_gh = shutil.which("gh", path=path)
         if real_gh is None:
@@ -126,9 +134,6 @@ def _forge_env(room: Path, env: dict[str, str]) -> None:
         shim.chmod(0o700)
         env["PATH"] = str(bin_dir) + os.pathsep + path
         return
-    gh_dir = room / "port" / "gh"
-    gh_dir.mkdir(parents=True, exist_ok=True)
-    env["GH_CONFIG_DIR"] = str(gh_dir)
 
 
 def _env(room: Path) -> dict[str, str]:

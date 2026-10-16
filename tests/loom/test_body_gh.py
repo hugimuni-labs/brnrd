@@ -1,4 +1,4 @@
-"""A body's gh: the home's token when it has one, else the machine's login; off signs it out."""
+"""A configured forge identity never falls back to the machine owner's credentials."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ def test_home_token_wins_over_the_machines(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "machine-token-2")
     room = _room(tmp_path, "home-token")
     env = _env(room)
-    assert "GH_TOKEN" not in env
+    assert env["GH_TOKEN"] == "home-token"
     assert _call_gh(env).stdout == "home-token\n"
     (tmp_path / "forge.token").write_text("refreshed-token\n")
     assert _call_gh(env).stdout == "refreshed-token\n"
@@ -89,7 +89,7 @@ def test_no_real_gh_logs_and_does_not_make_a_shim(tmp_path, monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "machine-token")
     room = _room(tmp_path, "home-token")
     env = _env(room)
-    assert "GH_TOKEN" not in env
+    assert env["GH_TOKEN"] == "home-token"
     assert not (room / "port" / "bin" / "gh").exists()
     assert "gh not found" in (room.parent.parent / "loom" / "loom.log").read_text()
 
@@ -127,3 +127,39 @@ def test_env_source_is_available_to_shim(tmp_path, monkeypatch, variable):
     (room.parent.parent / "loom" / "config.toml").write_text(
         f'forge_token = "env: {variable}"\n')
     assert _call_gh(_env(room)).stdout == "source-token\n"
+
+
+@pytest.mark.parametrize("mode,token,expected", [
+    ("auto", "home-token", "home-token"),
+    ("auto", "", ""),
+    ("off", "home-token", ""),
+])
+def test_login_shell_bypassing_shim_keeps_room_credentials(
+    tmp_path, monkeypatch, mode, token, expected,
+):
+    _fake_gh(tmp_path, monkeypatch)
+    monkeypatch.setenv("GH_CONFIG_DIR", str(tmp_path / "owner-config"))
+    for variable in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
+        monkeypatch.setenv(variable, "owner-token")
+    room = _room(tmp_path, token, gh=mode)
+    if token == "":
+        (tmp_path / "forge.token").unlink()
+    env = _env(room)
+    # Model a login profile putting another gh ahead of the shim. The probe
+    # deliberately bypasses the refreshing shim, like /opt/homebrew/bin/gh.
+    bypass = tmp_path / "profile-bin"
+    bypass.mkdir()
+    gh = bypass / "gh"
+    gh.write_text('#!/bin/sh\nprintf "%s\\n" "$GH_CONFIG_DIR" "${GH_TOKEN-}" "${GITHUB_TOKEN-}" "${GH_ENTERPRISE_TOKEN-}" "${GITHUB_ENTERPRISE_TOKEN-}"\n')
+    gh.chmod(0o755)
+    shell = shutil.which("zsh")
+    if shell is None:
+        pytest.skip("zsh not installed")
+    proc = subprocess.run(
+        [shell, "-lc", 'export PATH="$PROBE_BIN:$PATH"; gh'],
+        env={**env, "PROBE_BIN": str(bypass)}, capture_output=True, text=True,
+        timeout=5,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.splitlines() == [str(room / "port" / "gh"), expected, "", "", ""]
+    assert list((room / "port" / "gh").iterdir()) == []

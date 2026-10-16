@@ -65,7 +65,7 @@ KEYS: tuple[Key, ...] = (
     Key("forge_token", "secret", None,
         "How to get the forge token `publish` pushes with and a body's gh uses: "
         "\"command: gh auth token\", \"file: ~/path\" or \"env: NAME\". Read at each "
-        "use, never stored. Unset: the machine's own git setup and gh login."),
+        "use and at body start, never stored. Unset: the machine's own git setup and gh login."),
     Key("gh", "choice", "auto",
         "A body's `gh`: auto uses the forge token above when the home has one, "
         "else the machine's gh login; off signs it out.",
