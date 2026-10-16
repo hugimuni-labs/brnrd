@@ -155,7 +155,11 @@ def _env(room: Path) -> dict[str, str]:
     env["BRNRD_JACK"] = (f"{shlex.quote(sys.executable)} -m brr.loom.runtime jack "
                          f"--room {shlex.quote(str(room))}")
     wait = room / "port" / "wait"
-    env["BRNRD_WAIT"] = wait.read_text().strip() if wait.is_file() else "3600"
+    from .jack import HOLD, PARK
+    env["BRNRD_WAIT"] = wait.read_text().strip() if wait.is_file() else f"{HOLD:g}"
+    # The stop hook may sleep through an exhausted window, or hold for one
+    # wait, whichever is longer; the adapter pins its timeout from this.
+    env["BRNRD_STOP_TIMEOUT"] = str(int(max(float(env["BRNRD_WAIT"]), PARK)) + 60)
     return env
 
 
@@ -178,6 +182,18 @@ def _attention(home: Home, fact_id: str, why: str, *,
 
 def _record(home: Home, kind: str, data: dict, fact_id: str) -> Fact:
     return append(home, Fact(kind=kind, by=_by(home), data=data, id=fact_id))
+
+
+def _failed_words(thread: str, body: str, tail: str) -> str:
+    """What a person reads when a body could not take their letter."""
+    first = next((line.strip() for line in body.splitlines() if line.strip()), "")
+    quoted = first if len(first) <= 80 else first[:79].rstrip() + "…"
+    why = next((line.strip() for line in reversed(tail.splitlines()) if line.strip()), "no reason was recorded")
+    for prefix in ("SelfError: ", "wake exited 3: "):
+        why = why.removeprefix(prefix)
+    why = why if len(why) <= 400 else why[:399] + "…"
+    return (f"I could not take your letter on thread {thread} (\u201c{quoted}\u201d); "
+            f"two bodies tried and neither started.\nWhy: {why}")
 
 
 def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, can: str, *,
@@ -208,7 +224,8 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
     if about is not None:
         data["about"] = str(about.data["id"])
         label = join(label, _sender_label(about, facts, home.root / "self", frozenset()))
-        lines.append(f"{about.data['id']}: {can}")
+        # A person reads words, not letter ids.
+        lines.append(can if channel else f"{about.data['id']}: {can}")
         if stands:
             data["stands"] = str(about.data["id"])
             lines.append(f"settling this notice settles {about.data['id']} too")
@@ -860,10 +877,9 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
             channel = channels.get(ident)
             person = "person:" + author.removeprefix("p-").removeprefix("person:")
             if channel and person_dm(home, channel) == person:
-                first = str(letter.data.get("body", "")).splitlines()
                 successor = notice(home, facts, "failed-message", ident,
-                                   f"thread {thread} could not handle your letter: {first[0] if first else ''}\n{tail}",
-                                   "send again, or leave it", about=letter, channel=channel,
+                                   _failed_words(thread, str(letter.data.get("body", "")), tail),
+                                   "Send it again, or leave it.", about=letter, channel=channel,
                                    source_strand=strand, draft_only=True)
                 if isinstance(successor, Fact):
                     dispositions.append({"id": ident, "outcome": "done",

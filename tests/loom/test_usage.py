@@ -164,3 +164,24 @@ def test_attention_prints_each_shell_with_fuel(tmp_path, capsys):
     assert _attention(['--home', str(tmp_path)]) == 0
     assert capsys.readouterr().out.splitlines() == [
         f'fuel {shell} week 42%' for shell in usage.shells(home)]
+
+
+def test_a_reading_from_before_its_window_reset_is_not_fuel(tmp_path, monkeypatch):
+    # 2026-10-16: at 20:50 the session window reset, the gauge still held the
+    # 2% read at 20:48, and the loom parked the body for another 15 minutes.
+    from datetime import datetime, timezone
+    home = Home(tmp_path)
+    path = tmp_path / "loom/usage/claude.json"
+    path.parent.mkdir(parents=True)
+    reset = datetime.fromtimestamp(150, timezone.utc).isoformat()
+    path.write_text(json.dumps({"at": 100, "windows": [
+        {"name": "session", "left_pct": 2, "resets_at": reset}]}))
+    usage._REFRESHING.add(path)
+    try:
+        monkeypatch.setattr(usage.time, "time", lambda: 140)
+        assert usage.reading(home, "claude")["windows"][0]["left_pct"] == 2
+        monkeypatch.setattr(usage.time, "time", lambda: 160)
+        assert usage.reading(home, "claude") is None
+        assert usage.dry_until(home, "claude") is None
+    finally:
+        usage._REFRESHING.discard(path)
