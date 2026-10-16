@@ -4,4 +4,4 @@ from brr.loom.runtime.usage import print_windows
 
 levels = capture_levels()
 print_windows([("week", 100 - levels["week_used_percentage"], levels.get("week_resets_at"))]
-              if "week_used_percentage" in levels else [])
+              if "week_used_percentage" in levels else [], error=levels.get("error"))

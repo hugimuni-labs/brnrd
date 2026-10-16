@@ -1,26 +1,20 @@
-"""Grok Build subscription quota from the interactive ``/usage`` panel.
+"""Read Grok subscription quota over HTTP, without starting the client.
 
-The headless result envelope has no subscription windows. This best-effort
-PTY probe opens only the usage panel, without a model prompt, in an isolated
-temporary directory. Quota is account state; callers share one cached reading.
-The captured 1.0.50 panel exposes a weekly bucket, not a session bucket.
+Only the stored, unexpired first-party access key is used. Authentication is
+read-only: no refresh grant, browser, subprocess, or credential writes.
 """
 
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
+import math
 import os
-import pty
 import re
-import select
 import shutil
-import struct
-import subprocess
-import tempfile
-import termios
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -31,8 +25,7 @@ logger = logging.getLogger(__name__)
 SNAPSHOT_NAME = ".grok-usage-levels.json"
 COLLECTED_SLOTS: frozenset[str] = frozenset({"quota"})
 DEFAULT_TIMEOUT_SECONDS = 12.0
-DEFAULT_BOOT_SECONDS = 6.0
-#: The bucket is weekly; a 6–12 s TUI per probe is not worth a tighter read.
+#: Shared by dashboard/daemon readers; the loom adds its own lock/attempt floor.
 DEFAULT_TTL_SECONDS = 600.0
 TTL_ENV_VAR = "BRR_GROK_USAGE_TTL"
 
@@ -144,85 +137,108 @@ def parse_usage_text(raw: bytes | str) -> dict[str, Any]:
     return levels
 
 
+BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
+AUTH_SCOPE = "https://auth.x.ai::b1a00492-073a-47ea-816f-4c329264a828"
+
+
+class _ReadingError(ValueError):
+    """A collector diagnostic safe to persist without request/credential data."""
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Never forward the stored bearer key to a redirect target.
+        return None
+
+
+def _access_key(env: dict[str, str]) -> dict[str, Any]:
+    home = Path(env.get("GROK_HOME") or Path(env.get("HOME") or Path.home()) / ".grok")
+    path = Path(env.get("GROK_AUTH_PATH") or home / "auth.json")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise _ReadingError("grok access key absent or auth.json unreadable") from None
+    auth = data.get(AUTH_SCOPE) if isinstance(data, dict) else None
+    if (not isinstance(auth, dict) or not isinstance(auth.get("key"), str)
+            or not auth["key"].strip()):
+        raise _ReadingError("grok first-party access key absent")
+    try:
+        expiry = datetime.fromisoformat(auth["expires_at"].replace("Z", "+00:00"))
+        if expiry.tzinfo is None:
+            raise ValueError
+    except (KeyError, TypeError, AttributeError, ValueError):
+        raise _ReadingError("grok access key expiry absent or invalid") from None
+    if expiry.timestamp() <= time.time():
+        raise _ReadingError("grok access key expired; read-only collector cannot refresh it")
+    return auth
+
+
 def capture_usage_raw(
     *, cwd: Path | str | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     env: dict[str, str] | None = None,
 ) -> bytes:
-    """Open ``/usage`` without a prompt or repository hooks; always reap Grok.
+    """GET the request captured from Grok 1.0.60's billing extension.
 
-    ``cwd`` is accepted for collector compatibility; the probe deliberately
-    uses a temporary directory. Inherited git discovery pins must be stripped:
-    Grok's session startup can checkpoint/detach the pinned repo even from a
-    different cwd.
+    ``cwd`` remains accepted for collector compatibility. The endpoint is
+    pinned: an inherited proxy-base override must not receive this credential.
+    HTTP errors are terminal; in particular 401 never starts token refresh.
     """
-    probe_env = dict(env if env is not None else os.environ)
-    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
-                "GROK_RESUME_SESSION", "GROK_ACTIVE_MODEL"):
-        probe_env.pop(key, None)
-    probe_env.setdefault("TERM", "xterm-256color")
-    probe_env.setdefault("NO_COLOR", "1")
-    chunks: list[bytes] = []
-    master, slave = pty.openpty()
-    proc = None
+    auth = _access_key(env if env is not None else os.environ)
+    headers = {"Authorization": "Bearer " + auth["key"],
+               "X-XAI-Token-Auth": "xai-grok-cli",
+               "X-Grok-Client-Version": "1.0.60", "X-Grok-Client-Mode": "interactive"}
+    if isinstance(auth.get("user_id"), str):
+        headers["X-UserId"] = auth["user_id"]
+    request = urllib.request.Request(BILLING_URL, headers=headers, method="GET")
+    opener = urllib.request.build_opener(_NoRedirect())
+    with opener.open(request, timeout=timeout_seconds) as response:
+        return response.read(1024 * 1024)
+
+
+def parse_billing(raw: bytes | str) -> dict[str, Any]:
+    """Only a weekly bucket actually declared by the billing service is fuel."""
+    data = json.loads(raw)
+    config = data.get("config") if isinstance(data, dict) else None
+    if not isinstance(config, dict):
+        raise _ReadingError("grok billing response has no config")
+    period = config.get("currentPeriod")
+    if not isinstance(period, dict) or period.get("type") != "USAGE_PERIOD_TYPE_WEEKLY":
+        raise _ReadingError("grok billing response has no weekly period")
+    used = config.get("creditUsagePercent")
+    if (isinstance(used, bool) or not isinstance(used, (int, float))
+            or not math.isfinite(used) or not 0 <= used <= 100):
+        raise _ReadingError("grok billing response has no valid usage percentage")
     try:
-        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 160, 0, 0))
-        with tempfile.TemporaryDirectory(prefix="brr-grok-usage-") as isolated:
-            proc = subprocess.Popen(
-                ["grok", "--fullscreen", "--no-alt-screen", "--no-subagents",
-                 "--no-auto-update"], stdin=slave, stdout=slave, stderr=slave,
-                cwd=isolated, env=probe_env, close_fds=True,
-            )
-            os.close(slave)
-            slave = -1
-            started = time.monotonic()
-            deadline = started + max(0.0, float(timeout_seconds))
-            sent = False
-            try:
-                while time.monotonic() < deadline:
-                    if not sent and time.monotonic() - started >= DEFAULT_BOOT_SECONDS:
-                        os.write(master, b"/usage\r")
-                        sent = True
-                    ready, _, _ = select.select([master], [], [], 0.1)
-                    if ready:
-                        try:
-                            data = os.read(master, 65536)
-                        except OSError:
-                            break
-                        if not data:
-                            break
-                        chunks.append(data)
-                        if b"\x1b[6n" in data:
-                            os.write(master, b"\x1b[1;1R")
-                        levels = parse_usage_text(b"".join(chunks))
-                        if levels.get("quota") and levels.get("week_reset"):
-                            break
-                    if not ready and proc.poll() is not None:
-                        break
-            finally:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=1.0)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait(timeout=1.0)
-    finally:
-        os.close(master)
-        if slave != -1:
-            os.close(slave)
-    return b"".join(chunks)
+        reset = datetime.fromisoformat(period["end"].replace("Z", "+00:00"))
+        if reset.tzinfo is None:
+            raise ValueError
+        epoch = reset.timestamp()
+    except (KeyError, AttributeError, TypeError, ValueError, OverflowError):
+        raise _ReadingError("grok billing response has no valid reset timestamp") from None
+    display = reset.astimezone(timezone.utc).strftime("%b %d, %I:%M%p (UTC)").replace("AM", "am").replace("PM", "pm")
+    return {"source": "grok billing HTTP", "updated_at": _updated_at(),
+            "week_used_percentage": used, "week_reset": period["end"],
+            "week_resets_at": epoch,
+            "quota": {"summary": f"week {100 - used:g}% left (resets {display})",
+                      "buckets": {"week": {"remaining_percentage": 100 - used}},
+                      "week_resets_at": epoch, "reset_timezone": "UTC"}}
 
 
 def capture_levels(**kwargs: Any) -> dict[str, Any]:
-    """A failed probe is an absent quota, never an invented zero reading."""
+    """A failed read is absent quota with a named error, never a live zero."""
     try:
-        levels = parse_usage_text(capture_usage_raw(**kwargs))
-        if "quota" not in levels:
-            levels["error"] = "no quota bucket parsed from /usage screen"
-        return levels
-    except Exception as exc:
-        return {"source": "grok /usage PTY", "updated_at": _updated_at(),
-                "error": str(exc) or exc.__class__.__name__}
+        return parse_billing(capture_usage_raw(**kwargs))
+    except urllib.error.HTTPError as exc:
+        error = f"grok billing HTTP {exc.code}; no authentication refresh attempted"
+    except (urllib.error.URLError, OSError):
+        error = "grok billing request failed"
+    except _ReadingError as exc:
+        error = str(exc)
+    except (ValueError, TypeError, OverflowError):
+        # urllib can include a malformed Authorization value in its exception.
+        error = "invalid grok credential or billing response"
+    return {"source": "grok billing HTTP", "updated_at": _updated_at(), "error": error}
 
 
 def write_snapshot(cache_dir: Path | None, levels: dict[str, Any]) -> Path | None:

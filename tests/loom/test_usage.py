@@ -185,3 +185,74 @@ def test_a_reading_from_before_its_window_reset_is_not_fuel(tmp_path, monkeypatc
         assert usage.dry_until(home, "claude") is None
     finally:
         usage._REFRESHING.discard(path)
+
+
+def test_run_refreshes_every_usage_script_even_without_a_seated_body(tmp_path, monkeypatch):
+    """Drive the periodic caller, including shells used outside the loom."""
+    import threading
+    from brr.loom.runtime import loom
+    from _step import write_thread
+
+    root = tmp_path / "home"
+    write_thread(root, "sweep", "Sweep", "", wait="0")
+    home = Home(root)
+    expected = set(usage.shells(home))
+    assert {"claude", "codex", "grok", "vibe"} <= expected
+    # No bodies need these shells. A custom shell with a script must be swept too.
+    from brr.loom.runtime.adapters import resolve
+    folder = root / "loom/bodies/extra"
+    folder.mkdir(parents=True)
+    (folder / "run").write_text("#!/bin/sh\nexit 0\n")
+    (folder / "usage").write_text("#!/bin/sh\nexit 1\n")
+    assert resolve(home, "extra") == folder
+    expected.add("extra")
+    seen = []
+    stop = threading.Event()
+    monkeypatch.setattr(usage, "reading", lambda home, shell: seen.append(shell))
+    monkeypatch.setattr(loom, "tick_once", lambda *args: stop.set())
+    loom.run(root, tick=.01, stop=stop)
+    assert set(seen) == expected
+    assert len(seen) == len(expected)
+
+
+def test_grok_expired_error_survives_actual_collector_and_attempt_floor(tmp_path, monkeypatch):
+    """The real usage script cannot start a PATH grok, even with expired auth."""
+    import os
+    from brr import grok_usage
+    root = tmp_path / "home"
+    home = Home(root)
+    auth_home = tmp_path / "grok-home"
+    auth_home.mkdir()
+    auth = auth_home / "auth.json"
+    auth.write_text(json.dumps({grok_usage.AUTH_SCOPE: {
+        "key": "expired-test-key", "expires_at": "2000-01-01T00:00:00Z",
+        "refresh_token": "must-not-refresh",
+    }}))
+    before = auth.read_bytes()
+    binary_dir = tmp_path / "bin"
+    binary_dir.mkdir()
+    marker = tmp_path / "spawned-grok"
+    binary = binary_dir / "grok"
+    binary.write_text(f"#!/bin/sh\ntouch '{marker}'\nexit 99\n")
+    binary.chmod(0o755)
+    monkeypatch.setenv("GROK_HOME", str(auth_home))
+    monkeypatch.delenv("GROK_AUTH_PATH", raising=False)
+    monkeypatch.setenv("PATH", str(binary_dir) + os.pathsep + os.environ["PATH"])
+    path = root / "loom/usage/grok.json"
+    script = Path(usage.__file__).parent / "bodies/grok/usage"
+    usage._refresh(path, script)
+    result = usage.reading(home, "grok")
+    assert result["windows"] == [] and "expired" in result["error"]
+    assert not marker.exists() and auth.read_bytes() == before
+    cached = path.read_bytes()
+    usage._refresh(path, script)
+    assert path.read_bytes() == cached  # failed attempt still owns the 60s floor
+
+
+def test_vibe_collector_reports_absence_without_inventing_fuel(tmp_path):
+    home = Home(tmp_path)
+    path = tmp_path / "loom/usage/vibe.json"
+    usage._refresh(path, Path(usage.__file__).parent / "bodies/vibe/usage")
+    result = usage.reading(home, "vibe")
+    assert result["windows"] == []
+    assert "token totals only" in result["error"]
