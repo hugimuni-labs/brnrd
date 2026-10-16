@@ -107,3 +107,59 @@ for letter in view.letters:
     finally:
         loom.halt()
     assert not loom.errors
+
+
+def test_repeated_timed_out_probes_kill_the_whole_group(tmp_path, monkeypatch):
+    import os
+    import subprocess
+    import time
+    import threading
+
+    home = Home(tmp_path)
+    folder = tmp_path / 'loom/bodies/stuck'
+    folder.mkdir(parents=True)
+    (folder / 'run').touch()
+    script = folder / 'usage'
+    script.write_text(f'#!{sys.executable}\nimport time\ntime.sleep(60)\n')
+    script.chmod(0o755)
+    real_communicate = subprocess.Popen.communicate
+    real_popen = subprocess.Popen
+    processes = []
+    def launch(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        processes.append(proc)
+        return proc
+    monkeypatch.setattr(subprocess, 'Popen', launch)
+    timeouts = []
+    def fast_timeout(proc, *args, **kwargs):
+        timeouts.append(kwargs['timeout'])
+        return real_communicate(proc, timeout=.1)
+    monkeypatch.setattr(real_popen, 'communicate', fast_timeout)
+    path = (tmp_path / 'loom/usage/stuck.json').resolve()
+    for _ in range(3):
+        assert usage.reading(home, 'stuck') is None
+        deadline = time.monotonic() + 3
+        while path in usage._REFRESHING and time.monotonic() < deadline:
+            threading.Event().wait(.01)
+        assert path not in usage._REFRESHING
+        assert json.loads(path.read_text())['windows'] == []
+        pid = processes[-1].pid
+        assert processes[-1].returncode == -9
+        with pytest.raises(ProcessLookupError):
+            os.killpg(pid, 0)
+        path.unlink()  # next clock cycle has an expired cache
+    assert timeouts == [15, 15, 15]
+
+
+def test_attention_prints_each_shell_with_fuel(tmp_path, capsys):
+    import time
+    from brr.loom.runtime.verbs_loom import _attention
+    home = Home(tmp_path)
+    for shell in usage.shells(home):
+        path = tmp_path / 'loom/usage' / f'{shell}.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({'at': time.time(), 'windows': [
+            {'name': 'week', 'left_pct': 42}]}))
+    assert _attention(['--home', str(tmp_path)]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        f'fuel {shell} week 42%' for shell in usage.shells(home)]

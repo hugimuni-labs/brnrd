@@ -72,6 +72,11 @@ def _attention(argv: list[str]) -> int:
             parser.error("--note names no accepted letter")
         append(home, Fact(kind="note", by="person:operator", id="operator-note:" + mint(12),
                           data={"re": args.note, "why": args.why}))
+    from .usage import fuel, shells
+    for shell in shells(home):
+        line = fuel(home, shell)
+        if line:
+            print(line)
     # No state of its own: the loom's notices that no body has settled yet.
     state = fold(read_facts(Home(args.home, install=args.install)))
     from datetime import datetime, timezone

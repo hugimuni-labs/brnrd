@@ -1227,6 +1227,14 @@ def _hold_loop(home: Home, stop) -> int | None:
     return None
 
 
+def _source_fingerprint():
+    root = Path(__file__).parent
+    return hashlib.sha256(repr([
+        (str(p.relative_to(root)), p.stat().st_mtime_ns)
+        for p in sorted(root.rglob("*")) if p.is_file() and "__pycache__" not in p.parts
+    ]).encode()).hexdigest()
+
+
 def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         tick: float = 0.2, stop=None, install: str | None = None) -> None:
     if tick <= 0:
@@ -1242,19 +1250,42 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         if stop is not None and stop.is_set():
             return
         home.install_id()
+        from .config import ConfigError, load_config, tick_config
+        from . import usage
+        config = load_config(home.root)
+        fingerprint = _source_fingerprint()
+        next_usage = 0
         from .router import Router
-        router = Router(home)
+        router = Router(home, config)
         from .connector import Inputs
         inputs = Inputs(home)
         while not (stop is not None and stop.is_set()):
             try:
-                inputs.step()
-            except Exception:
-                _log(home, traceback.format_exc().rstrip())
-            try:
-                tick_once(home, bodies, adapter, core, router)
-            except Exception:
-                _log(home, traceback.format_exc().rstrip())
+                config = load_config(home.root)
+            except ConfigError as exc:
+                _log(home, str(exc))
+                notice(home, read_facts(home), "config-error", str(home.root), str(exc),
+                       "fix loom/config.toml; the loop is using its last valid config")
+            with tick_config(home.root, config):
+                router.config = config
+                if time.monotonic() >= next_usage:
+                    for shell in usage.shells(home):
+                        usage.reading(home, shell)
+                    next_usage = time.monotonic() + usage.REFRESH_INTERVAL
+                try:
+                    inputs.step()
+                except Exception:
+                    _log(home, traceback.format_exc().rstrip())
+                try:
+                    tick_once(home, bodies, adapter, core, router)
+                except Exception:
+                    _log(home, traceback.format_exc().rstrip())
+            if _source_fingerprint() != fingerprint:
+                _log(home, "runtime source changed; re-executing loom")
+                inputs.close()
+                _shutdown(bodies)
+                os.execv(sys.executable, [sys.executable, *sys.orig_argv[1:]])
+                return
             if _pause(stop, tick):
                 break
     finally:
