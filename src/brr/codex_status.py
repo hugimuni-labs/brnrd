@@ -445,32 +445,60 @@ def _rollout_for_thread(root: Path, thread_id: str) -> Path | None:
     return newest
 
 
-def _last_token_count(path: Path) -> tuple[dict[str, Any], Any] | None:
-    """The ``(payload, timestamp)`` of the last ``token_count`` event in
-    rollout *path*, or None. ``timestamp`` is the record's own top-level
-    field (the event's real time), not a scrape time.
+def _rollout_snapshot(
+    path: Path,
+) -> tuple[tuple[dict[str, Any], Any] | None, str | None]:
+    """Read quota and the current turn's model in one streaming pass.
 
-    Scans line by line (a rollout is JSONL) and keeps the last match; the file is
-    small enough that a full pass is cheap, and the *last* event carries the
-    freshest quota.
+    Filter before parsing: conversation records can contain megabytes of
+    prompts and tool output, neither of which is telemetry evidence.
     """
     last: tuple[dict[str, Any], Any] | None = None
+    model: str | None = None
     try:
         with path.open(encoding="utf-8") as handle:
             for line in handle:
                 line = line.strip()
-                if not line or '"token_count"' not in line:
+                if not line or not any(
+                    tag in line for tag in ('"token_count"', '"turn_context"')
+                ):
                     continue
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError:
                     continue
                 payload = record.get("payload") if isinstance(record, dict) else None
+                if isinstance(record, dict) and record.get("type") == "turn_context":
+                    value = payload.get("model") if isinstance(payload, dict) else None
+                    # Missing current evidence must not reuse an earlier Core.
+                    model = (value.strip() or None) if isinstance(value, str) else None
                 if isinstance(payload, dict) and payload.get("type") == "token_count":
                     last = (payload, record.get("timestamp"))
     except OSError:
+        return None, None
+    return last, model
+
+
+def _last_token_count(path: Path) -> tuple[dict[str, Any], Any] | None:
+    """Last token-count payload and its event timestamp, never scrape time."""
+    return _rollout_snapshot(path)[0]
+
+
+def load_model(
+    env: dict[str, str] | None = None, *, thread_id: str | None = None,
+) -> str | None:
+    """Read the latest Core named by this exact thread's turn context.
+
+    A shell config is a preference; a sibling's rollout is somebody else's
+    evidence. Neither substitutes for an identified thread.
+    """
+    safe_id = _safe_thread_id(thread_id)
+    if safe_id is None:
         return None
-    return last
+    rollout = _rollout_for_thread(sessions_root(env), safe_id)
+    if rollout is None:
+        return None
+    return _rollout_snapshot(rollout)[1]
 
 
 def load_levels(
@@ -509,13 +537,17 @@ def load_levels(
         rollout = _rollout_for_thread(root, safe_id)
     if rollout is None:
         return None
-    found = _last_token_count(rollout)
+    found, model = _rollout_snapshot(rollout)
+    if thread_id is None:
+        model = None  # The mtime fallback cannot identify this run's Core.
     if found is None:
-        return None
+        return {"model_ids": [model]} if model else None
     payload, event_timestamp = found
     levels = parse_token_count(payload, event_timestamp)
+    if model:
+        levels["model_ids"] = [model]
     # Only worth returning if at least one level slot was proven.
-    if not any(key in levels for key in COLLECTED_SLOTS):
+    if not model and not any(key in levels for key in COLLECTED_SLOTS):
         return None
     return levels
 
