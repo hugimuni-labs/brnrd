@@ -1270,6 +1270,31 @@ def _source_fingerprint():
     ]).encode()).hexdigest()
 
 
+def _usage_shells(home, config):
+    """Only resident or selected shells may have a gauge with side effects."""
+    from .adapters import at_birth
+    from .lifecycle import CLOSED
+    selected = set()
+    if config.body:
+        selected.add(config.body.partition("/")[0].strip())
+    for thread, data in main_snapshot(home).items():
+        if data.get("status") not in CLOSED:
+            try:
+                shell, _ = at_birth(home, thread, ("", ""))
+                selected.add(shell)
+            except ValueError:
+                continue  # The routing path reports invalid seats.
+    facts = fold(read_facts(home)).accepted
+    for lease in (f for f in facts if f.kind == "lease"):
+        strand, gen = lease.data["strand"], lease.data["gen"]
+        alive = body_alive(home.room(strand))
+        state = state_of(facts, strand, gen, alive=alive)
+        if alive or state.name in {"wanted", "parked"} and not state.released:
+            selected.add(lease.data.get("shell", ""))
+    from .usage import shells
+    return sorted(selected.intersection(shells(home)))
+
+
 def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         tick: float = 0.2, stop=None, install: str | None = None) -> None:
     if tick <= 0:
@@ -1304,7 +1329,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
             with tick_config(home.root, config):
                 router.config = config
                 if time.monotonic() >= next_usage:
-                    for shell in usage.shells(home):
+                    for shell in _usage_shells(home, config):
                         usage.reading(home, shell)
                     next_usage = time.monotonic() + usage.REFRESH_INTERVAL
                 try:
