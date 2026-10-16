@@ -195,3 +195,18 @@ def test_label_facts_preserve_empty_audience_and_recurse_for_strand_senders() ->
     result = strand_label(facts, "schema", jack_log="")
     assert result.taint is False
     assert result.audience == frozenset()
+
+
+def test_guard_off_leaves_every_strand_clean_and_on_keeps_the_taint(tmp_path: Path) -> None:
+    from brr.loom.runtime.ledger import append
+    from brr.loom.runtime.port import _current_label
+
+    home, room = _room(tmp_path, STRAND)
+    _thread(home / "self", "inbox")
+    (home / "ledger" / "facts").mkdir(parents=True)
+    append(Home(home), _fact("letter", "x/1", {"id": "x/1", "from": "stranger:cloud:telegram:1", "body": "hi"}))
+    append(Home(home), _fact("shown", "shown-1", {"strand": STRAND, "ids": ["x/1"], "gen": 1}))
+    assert _current_label(room, STRAND).taint is True
+    config = home / "loom/config.toml"
+    config.write_text(config.read_text() + 'guard = "off"\n')
+    assert _current_label(room, STRAND) == CLEAN

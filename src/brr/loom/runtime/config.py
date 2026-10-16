@@ -72,6 +72,11 @@ KEYS: tuple[Key, ...] = (
     Key("relay_state", "path", None,
         "The account's cloud gate state directory (holds gates/cloud.json). "
         'Read by the account-backed connector folder.'),
+    Key("guard", "choice", "on",
+        "on: letters from strangers, web reads and tainted strands taint what they touch, "
+        "and a tainted strand cannot publish, push to self or open threads. off: every "
+        "strand is clean and nothing is shielded.",
+        choices=("on", "off")),
     Key("hold_floor_pct", "percent", 3.0,
         "A quota window with this percent or less left counts as exhausted: a held body stays held."),
     Key("stop_grace", "seconds", DEFAULT_STOP_GRACE,

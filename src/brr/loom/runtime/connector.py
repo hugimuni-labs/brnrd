@@ -14,7 +14,7 @@ from brr.daemon2.facts import Fact, union
 from .adapters import resolve
 from .config import config_path, load_config, read_array
 from .home import atomic_write, channel_parts, mint
-from .labels import is_stranger
+from .labels import guard_off, is_stranger
 from .ledger import append, read_facts
 from .port import clean_accepts, parse_frontmatter
 from .project import fold, sender_threads
@@ -126,7 +126,7 @@ def ingest(home, name, fm, attachments):
             blob_ids.append(blob_id)
         data = dict(origin=f'{name}:{ident}', platform=platform, chat=chat, channel=fm['to'],
                     **{'from': sender}, text=fm['body'], blobs=blobs, to=to,
-                    label=dict(taint=not clean and (sender.startswith('stranger:') or
+                    label=dict(taint=not clean and not guard_off(home.root / 'self') and (sender.startswith('stranger:') or
                                is_stranger(sender, home.root / 'self')), audience=['self']))
         if fm.get('re'):
             data['re'] = fm['re']

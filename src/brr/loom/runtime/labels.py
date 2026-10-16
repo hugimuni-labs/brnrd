@@ -43,6 +43,17 @@ def _strip_prefix(sender: str) -> str:
     return sender
 
 
+def guard_off(self_root: Path | None) -> bool:
+    """The home's config turned labels off. An unreadable config keeps them on."""
+    if self_root is None:
+        return False
+    from .config import load_config
+    try:
+        return load_config(Path(self_root).parent).guard == "off"
+    except (OSError, ValueError, SystemExit):
+        return False
+
+
 def is_stranger(sender: str, self_root: Path | None) -> bool:
     """True unless ``sender`` is a thread of this self or a person in ``people/``.
 
@@ -167,6 +178,8 @@ def strand_label(
     ``self_root`` is set.
     """
     if not strand or strand in _seen:
+        return CLEAN
+    if guard_off(self_root):
         return CLEAN
     seen = _seen | {strand}
     label = CLEAN
