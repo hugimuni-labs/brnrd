@@ -148,6 +148,7 @@ def test_repeated_timed_out_probes_kill_the_whole_group(tmp_path, monkeypatch):
         with pytest.raises(ProcessLookupError):
             os.killpg(pid, 0)
         path.unlink()  # next clock cycle has an expired cache
+        path.with_suffix(".lock").write_text("0")
     assert timeouts == [15, 15, 15]
 
 

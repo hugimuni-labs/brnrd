@@ -77,12 +77,10 @@ def _block(room: Path, text: str, parsed: Boundary) -> str:
 def _poll(room: Path) -> str:
     from .usage import below_floor
     home = home_of_room(room)
-    # Ask for a reading no older than this wait: the cached one may predate it.
-    after = time.time()
 
     def empty() -> bool:
         shell = os.environ.get("BRNRD_BODY_SHELL")
-        return bool(not _hand() and shell and below_floor(home, shell, after))
+        return bool(not _hand() and shell and below_floor(home, shell))
 
     if empty():
         return ""

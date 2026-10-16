@@ -135,6 +135,15 @@ print(json.dumps({'windows': [{'name': 'session', 'left_pct': left,
         assert len([f for f in loom.facts() if f.kind == "body.started"]) == 1
         assert not any(f.kind == "body.exited" for f in loom.facts())
         (folder / "low").touch()
+        # Advance the gauge's collection cycle: holds reuse cached fuel for
+        # five minutes and probes share a one-minute attempt floor.
+        from time import time
+        from brr.loom.runtime.home import atomic_write
+        gauge = root / "loom/usage/gauge.json"
+        cached = json.loads(gauge.read_text())
+        cached["at"] = time() - 301
+        atomic_write(gauge, json.dumps(cached))
+        gauge.with_suffix(".lock").write_text(str(time() - 301))
         wait_until(lambda: any(f.kind == "body.parked" for f in loom.facts()), 10, loom.dump)
         facts = loom.facts()
         assert any(f.kind == "body.exited" and f.data["code"] == 0 for f in facts)
