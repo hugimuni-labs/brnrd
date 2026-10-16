@@ -6,9 +6,13 @@ description: Install the brnrd command, and check that it can see a coding-agent
 New to terminal tooling? Start with the short [Prerequisites](../prerequisites/)
 checklist, then come back here.
 
-Use whichever command matches the tooling you already have — just the one;
-all three install the same program and leave you with a `brnrd` command on
+Use whichever command matches the tooling you already have — just the one.
+Each installs the same program and leaves you with a `brnrd` command on
 your `PATH`.
+
+```bash
+curl -LsSf https://hugimuni-labs.github.io/brnrd/install.sh | sh
+```
 
 If you have Node:
 
