@@ -105,7 +105,8 @@ context, and individual sessions, see [Machine residency](docs/machine-residency
 Install the command:
 
 ```bash
-npm install -g brnrd         # if you have Node
+curl -LsSf https://hugimuni-labs.github.io/brnrd/install.sh | sh
+# or: npm install -g brnrd         # if you have Node
 # or: uv tool install brnrd
 # or: pipx install brnrd
 brnrd --version
