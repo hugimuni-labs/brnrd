@@ -90,6 +90,10 @@ print(json.dumps({'windows': [{'name': 'week', 'left_pct': left,
         _attention(["--home", str(root)])
         assert "parked · gauge · gauge week 7% · until " in capsys.readouterr().out
         (folder / "refilled").touch()
+        # This fixture rolls its window after one second. Advance the shared
+        # attempt clock too: production cannot probe again inside 60 seconds.
+        import time
+        (root / "loom/usage/gauge.lock").write_text(str(time.time() - 61))
         wait_until(lambda: not mail(root, loom.facts(), "gauge"), 10, loom.dump)
         assert len([f for f in loom.facts() if f.kind == "body.started"]) == 1
         assert not any(f.kind == "attempt.ended" and f.data["cause"] == "failed" for f in loom.facts())

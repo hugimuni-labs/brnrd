@@ -1,5 +1,6 @@
 """Optional body fuel, refreshed off the tick and cached per home and shell."""
 
+import fcntl
 import json
 import math
 import os
@@ -16,6 +17,7 @@ from .selfrepo import _env_without_pin
 
 CACHE_TTL = 300
 REFRESH_INTERVAL = 600
+PROBE_INTERVAL = 60
 _REFRESHING = set()
 
 
@@ -45,7 +47,27 @@ def print_windows(rows) -> None:
 def _refresh(path, script) -> None:
     at, windows = time.time(), []
     proc = None
+    claim = None
+    attempted = False
     try:
+        # The persistent file records attempts, including collectors that fail
+        # or whose jack process exits. flock releases on process death, so no
+        # stale claim can survive the collector's 15-second lifetime.
+        path.parent.mkdir(parents=True, exist_ok=True)
+        claim = path.with_suffix(".lock").open("a+")
+        try:
+            fcntl.flock(claim, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        claim.seek(0)
+        previous = claim.read().strip()
+        if previous and 0 <= at - float(previous) < PROBE_INTERVAL:
+            return
+        claim.seek(0)
+        claim.truncate()
+        claim.write(str(at))
+        claim.flush()
+        attempted = True
         env = _env_without_pin()
         env["PYTHONPATH"] = str(Path(__file__).resolve().parents[3]) + os.pathsep + env.get("PYTHONPATH", "")
         proc = subprocess.Popen([str(script)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -64,8 +86,11 @@ def _refresh(path, script) -> None:
             os.killpg(proc.pid, signal.SIGKILL)
             proc.wait()
         try:
-            atomic_write(path, json.dumps({"at": at, "windows": windows}) + "\n")
+            if attempted:
+                atomic_write(path, json.dumps({"at": at, "windows": windows}) + "\n")
         finally:
+            if claim is not None:
+                claim.close()
             _REFRESHING.discard(path)
 
 
