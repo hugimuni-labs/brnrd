@@ -10,6 +10,7 @@ from brr.daemon2.facts import Fact
 import os
 import runpy
 import sys
+import pytest
 from brr.loom.runtime.adapters import resolve
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.jack import execute, run
@@ -218,3 +219,62 @@ def test_post_says_the_context_weight_once_per_band(tmp_path):
     assert first.startswith("context: 120k tokens") and "booted at 40k" in first
     assert call(130_000) == ""
     assert "context: 151k" in call(151_000)
+
+
+@pytest.mark.parametrize('shell,cache,override,expected', [
+    ('claude', None, None, 3300),
+    ('codex', None, None, 7110),
+    ('grok', None, None, 7110),
+    ('custom', '1200', None, 900),
+    ('custom', 'none', None, 7110),
+    ('custom', None, None, 7110),
+    ('custom', '300', None, 7110),
+    ('claude', None, '42', 42),
+    ('codex', None, '42', 42),
+])
+def test_stop_uses_body_cache_or_hook_ceiling(tmp_path, monkeypatch, shell, cache, override, expected):
+    from brr.loom.runtime import jack, usage
+    room = _room(tmp_path)
+    _write(room, [])
+    if shell == 'custom':
+        folder = tmp_path / 'loom/bodies/custom'
+        folder.mkdir(parents=True)
+        (folder / 'run').touch()
+        if cache is not None:
+            (folder / 'cache').write_text(cache)
+    if override is not None:
+        (room / 'port/wait').write_text(override)
+    monkeypatch.setenv('BRNRD_BODY_SHELL', shell)
+    monkeypatch.setenv('BRNRD_BODY_JACK', 'hooks')
+    monkeypatch.setenv('BRNRD_STOP_TIMEOUT', '7200')
+    monkeypatch.delenv('BRNRD_THREAD', raising=False)
+    monkeypatch.setattr(usage, 'dry_until', lambda *args: None)
+    now = [0.]
+    monkeypatch.setattr(jack.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(jack.time, 'sleep', lambda seconds: now.__setitem__(0, now[0] + seconds))
+    result = json.loads(jack.execute('stop', room, '{}'))
+    assert result['decision'] == 'block'
+    assert result['reason'].startswith('nothing new; holding')
+    assert now[0] == pytest.approx(expected)
+
+
+def test_stop_without_cache_wakes_for_letters_before_ceiling(tmp_path, monkeypatch):
+    from brr.loom.runtime import jack, usage
+    room = _room(tmp_path)
+    _write(room, [])
+    monkeypatch.setenv('BRNRD_BODY_SHELL', 'codex')
+    monkeypatch.setenv('BRNRD_BODY_JACK', 'hooks')
+    monkeypatch.setenv('BRNRD_STOP_TIMEOUT', '7200')
+    monkeypatch.delenv('BRNRD_THREAD', raising=False)
+    monkeypatch.setattr(usage, 'dry_until', lambda *args: None)
+    now = [0.]
+    def sleep(seconds):
+        now[0] += seconds
+        if now[0] >= 100:
+            _write(room, [_letter()])
+    monkeypatch.setattr(jack.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(jack.time, 'sleep', sleep)
+    result = json.loads(jack.execute('stop', room, '{}'))
+    assert result['decision'] == 'block'
+    assert 'ping-1' in result['reason']
+    assert now[0] == pytest.approx(100, abs=.2)
