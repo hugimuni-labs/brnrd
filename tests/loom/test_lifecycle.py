@@ -188,3 +188,59 @@ sys.exit(2)
         release.set()
         loom.halt()
     assert not loom.errors
+
+
+def test_person_is_told_once_when_fuel_parks_their_letter(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from brr.loom.runtime.selfrepo import git
+    root = tmp_path / "home"
+    init_self(root, person="ada")
+    (root / "self/people/ada/channels.toml").write_text('channels = ["relay:telegram:42"]\n')
+    write_thread(root, "inbox", "Inbox", "answer-fast", wait="0")
+    (root / "self/threads/inbox/seat").write_text("body: claude/echo\n")
+    git(root / "self", "add", "threads")
+    git(root / "self", "commit", "-m", "Choose gauge body.")
+    reset = datetime.now(timezone.utc) + timedelta(hours=2)
+    local_time = reset.astimezone().strftime("%H:%M")
+    folder = root / "loom/bodies/claude"
+    folder.mkdir(parents=True)
+    (folder / "jack").write_text("hooks\n")
+    for name, source in {
+        "run": "raise SystemExit('must park before starting')",
+        "usage": "import json; print(json.dumps(" + repr({"windows": [
+            {"name": "session", "left_pct": 2, "resets_at": reset.isoformat()}]}) + "))",
+    }.items():
+        script = folder / name
+        script.write_text(f"#!{sys.executable}\n{source}\n")
+        script.chmod(0o755)
+
+    class Client:
+        def pull(self, cursor):
+            return {"cursor": 1, "events": [{"event_id": "park", "body": "please help", "attachments": [],
+                    "reply_to": {"platform": "telegram", "user_id": 42, "chat_id": 42}}]}
+    pull_once(Loom(root).home, Client(), 0)
+    sent = []
+    real_run = subprocess.run
+    def run_out(args, **kw):
+        if str(args[0]).endswith("/relay/out"):
+            from pathlib import Path
+            from brr.loom.runtime.port import parse_frontmatter
+            sent.append(parse_frontmatter(Path(args[1]).read_text()))
+            return subprocess.CompletedProcess(args, 0, '{"ids": []}', '')
+        return real_run(args, **kw)
+    monkeypatch.setattr(subprocess, "run", run_out)
+    loom = Loom(root)
+    loom.start()
+    try:
+        wait_until(lambda: len(sent) == 1, 10, loom.dump)
+        assert sent[0]["to"] == "telegram:42"
+        assert (f"Out of claude session fuel (2% left) until about {local_time}. "
+                "Your letter is kept on thread inbox and is answered when it refills.") in sent[0]["body"]
+        assert sent[0]["re"] == "telegram:42:park"
+        wait_until(lambda: any(f.kind == "body.parked" for f in loom.facts()), 5, loom.dump)
+        time.sleep(0.3)  # several more parked ticks
+        assert len(sent) == 1
+        assert mail(root, loom.facts(), "inbox")  # the notice does not settle the ask
+    finally:
+        loom.halt()
+    assert not loom.errors

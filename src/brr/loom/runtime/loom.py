@@ -969,6 +969,20 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
         except (ValueError, TypeError, KeyError):
             pass
         until = until if until > now else now + 900
+        from .connector import person_dm
+        channels = reply_channels(facts, home)
+        what = (f"Out of {shell} {empty['name']} fuel ({empty['left_pct']:g}% left) "
+                f"until about {datetime.fromtimestamp(until).astimezone():%H:%M}. "
+                f"Your letter is kept on thread {thread} and is answered when it refills.")
+        for letter in letters_for(facts, main_snapshot(home), thread):
+            author = str(letter.data.get("from", ""))
+            if not author.startswith(("p-", "person:")):
+                continue
+            channel = channels.get(letter.id)
+            person = "person:" + author.removeprefix("p-").removeprefix("person:")
+            if channel and person_dm(home, channel) == person:
+                notice(home, facts, "parked", letter.id, what, "Nothing to do.",
+                       about=letter, channel=channel, passive=True)
     pid = int(start.data.get("pid") or 0) if start else 0
     proven = None
     # A stop on record with the body still alive is a signal that was never
