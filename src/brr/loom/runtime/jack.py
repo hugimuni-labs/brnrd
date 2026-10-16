@@ -33,10 +33,6 @@ def _set_state(room: Path, **updates) -> None:
                  json.dumps(state) + "\n")
 
 
-# The prompt cache lives an hour from its last read. A hold that wakes at
-# 3600 s lands on the edge, and one of three such wakes rewrote 109k tokens;
-# at 55 minutes every keepalive is a cache read.
-HOLD = 3300.0
 # How long one stop hook may run: long enough to sleep through an exhausted
 # five-hour window instead of leaving. The body's adapter pins the hook
 # timeout from the same number, in BRNRD_STOP_TIMEOUT.
@@ -44,11 +40,23 @@ PARK = 6 * 3600.0
 MARGIN = 90.0
 
 
-def _wait(room: Path) -> float:
+def _wait(room: Path) -> float | None:
     path = room / "port" / "wait"
-    if not path.is_file():
-        return HOLD
-    return float(path.read_text().strip())
+    if path.is_file():
+        return float(path.read_text().strip())
+    from .adapters import resolve
+    shell = os.environ.get("BRNRD_BODY_SHELL")
+    if not shell:
+        return None
+    try:
+        cache = (resolve(home_of_room(room), shell) / "cache").read_text().strip()
+    except (OSError, ValueError):
+        return None
+    if cache == "none":
+        return None
+    lifetime = float(cache)
+    # A lifetime too short to leave the safety margin cannot buy a hold.
+    return lifetime - 300 if lifetime > 300 else None
 
 
 def _stop_timeout() -> float:
@@ -96,7 +104,8 @@ def _poll(room: Path) -> str:
     begun = time.monotonic()
     # Leave before the shell kills this hook: a killed hook ends the body.
     ceiling = begun + max(_stop_timeout() - MARGIN, 0.0)
-    deadline = min(begun + _wait(room), ceiling)
+    wait = _wait(room)
+    deadline = ceiling if wait is None else min(begun + wait, ceiling)
     parked = False
     from .lifecycle import read_thread
     thread = "" if _hand() else os.environ.get("BRNRD_THREAD", "")
@@ -132,12 +141,12 @@ def _poll(room: Path) -> str:
         if remaining <= 0:
             if _hand():
                 return ""
-            if not parsed.ids and opener.startswith("thread:"):
+            if wait is not None and not parsed.ids and opener.startswith("thread:"):
                 return ""
             # Hold again by blocking, never by waiting on in this call: the
             # shell ends a hook that outlives its timeout, and the body would
-            # then leave while it still owes. Under the cache's hour this
-            # turn is a cache read.
+            # then leave while it still owes. With no cache lifetime this
+            # happens only at the hook ceiling.
             return _json({"decision": "block", "reason": "nothing new; holding\n" + text})
         time.sleep(min(0.2, remaining))
 
