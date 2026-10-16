@@ -283,7 +283,7 @@ def main() -> None:
         largest = ", ".join(f"{name} {size}B" for name, size in sizes[:4])
         die(
             f"over budget: the wake is {total}B, {total - limit}B over its {limit}B budget, "
-            f"even with the thread README cut. Largest parts: {largest}. "
+            f"more than cutting the thread README can give. Largest parts: {largest}. "
             f"core/identity.md, memory/stance.md and the letters are never cut.",
             3,
         )
