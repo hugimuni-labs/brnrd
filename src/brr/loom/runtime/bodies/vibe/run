@@ -34,7 +34,7 @@ hooks = room / ".vibe/hooks.toml"
 hooks.parent.mkdir(parents=True, exist_ok=True)
 hooks.write_text(vibe_hooks_toml(
     shlex.join([sys.executable, str(Path(__file__).resolve())]),
-    timeout=float(env["BRNRD_WAIT"]) + 60,
+    timeout=float(env.get("BRNRD_STOP_TIMEOUT") or float(env["BRNRD_WAIT"]) + 60),
 ))
 try:
     result = subprocess.run(command(room), input=Path(env["BRNRD_WAKE"]).read_text(),

@@ -7,8 +7,10 @@ stdout is the prompt. Exit 0 is ok, exit 3 is over budget (stderr says
 what did not fit), anything else is a broken recipe.
 
 LOOM_BUDGET_BYTES defaults to 24000. LOOM_PART is a file, written by the loom.
-Parts 1, 3 and 4 are never cut. The tree is cut from the bottom, and a
-narrowed wake says how many entries were left out.
+The tree is cut from the bottom, and a narrowed wake says how many entries
+were left out. Then the thread's README is cut from its end, and says so: it
+is the one part the waking body can fix, so it never costs a letter. The
+identity, the stance, the notes and the occasion are never cut.
 """
 
 from __future__ import annotations
@@ -163,7 +165,22 @@ def occasion(path: Path) -> str:
     return "".join(chunks)
 
 
-def fixed_text(root: Path, thread: str, loom: str, owed: Path) -> tuple[str, str]:
+def clip(readme: str, excess: int, limit: int) -> str:
+    """The README less ``excess`` bytes from its end, cut at a line, with a receipt."""
+    data = readme.encode("utf-8")
+    note = (f"[the wake cut {{}} of this README's {len(data)} bytes from its end to fit the "
+            f"{limit}-byte budget; the file is whole on disk: trim it]\n")
+    keep = len(data) - excess - len(note.format(len(data)).encode("utf-8"))
+    if keep <= 0:
+        return ""
+    kept = data[:keep].decode("utf-8", "ignore")
+    kept = kept[: kept.rfind("\n") + 1] if "\n" in kept else ""
+    if not kept:
+        return ""
+    return kept + note.format(len(data) - len(kept.encode("utf-8")))
+
+
+def fixed_text(root: Path, thread: str, loom: str, owed: Path, excess: int = 0, limit: int = 0) -> tuple[str, str]:
     """The parts never cut, as (before the tree, after the tree).
 
     The occasion goes last: it is what this wake is for.
@@ -172,6 +189,8 @@ def fixed_text(root: Path, thread: str, loom: str, owed: Path) -> tuple[str, str
     stance = read_exact(root / "memory" / "stance.md", "memory/stance.md")
     readme_path = root / "threads" / thread / "README.md"
     readme = read_exact(readme_path, f"threads/{thread}/README.md")
+    if excess:
+        readme = clip(readme, excess, limit) or readme
     parts = [
         section("core/identity.md", identity),
         section("memory/stance.md", stance),
@@ -256,9 +275,16 @@ def main() -> None:
     fixed = head + tail
     total = len(fixed.encode("utf-8"))
     if total > limit:
-        detail = ", ".join(f"{name} {size}B" for name, size in piece_sizes(fixed))
+        head, tail = fixed_text(root, thread, loom, owed, total - limit, limit)
+        fixed = head + tail
+    total = len(fixed.encode("utf-8"))
+    if total > limit:
+        sizes = sorted(piece_sizes(fixed), key=lambda item: -item[1])
+        largest = ", ".join(f"{name} {size}B" for name, size in sizes[:4])
         die(
-            f"over budget: {detail}; total {total}B > budget {limit}B; none of these is cut",
+            f"over budget: the wake is {total}B, {total - limit}B over its {limit}B budget, "
+            f"more than cutting the thread README can give. Largest parts: {largest}. "
+            f"core/identity.md, memory/stance.md and the letters are never cut.",
             3,
         )
     sys.stdout.write(head + fit_tree(fixed, tree_lines(root, thread), limit) + tail)

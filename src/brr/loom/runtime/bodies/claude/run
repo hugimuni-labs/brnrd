@@ -12,7 +12,7 @@ def hook(event, timeout):
 settings = {"hooks": {
     "SessionStart": [{"hooks": [hook("start", 60)]}],
     "PostToolUse": [{"matcher": ".*", "hooks": [hook("post", 60)]}],
-    "Stop": [{"hooks": [hook("stop", int(float(os.environ["BRNRD_WAIT"])) + 60)]}],
+    "Stop": [{"hooks": [hook("stop", int(os.environ.get("BRNRD_STOP_TIMEOUT") or float(os.environ["BRNRD_WAIT"]) + 60))]}],
 }}
 path = room / ".claude/settings.json"
 path.parent.mkdir(parents=True, exist_ok=True)

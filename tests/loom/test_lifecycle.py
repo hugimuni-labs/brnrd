@@ -165,7 +165,7 @@ sys.exit(2)
             assert len(sent) == 1
             channel, text, context = sent[0]
             assert channel == 'telegram:42'  # the folder receives only its native chat
-            assert 'could not handle your letter: please help' in text
+            assert 'could not take your letter' in text and 'please help' in text
             assert 'person failure tail' in text
             assert context['re'] == 'telegram:42:crash'
         else:

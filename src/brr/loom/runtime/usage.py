@@ -108,6 +108,9 @@ def reading(home, shell: str, after: float = 0):
         # An exit requires fresh *fuel*, not another failed PTY probe. Keep
         # unknown gauges for the same five-minute TTL so every new start does
         # not wait out the collector timeout while the shell is unavailable.
+        # A window that has reset since the reading was taken is not known:
+        # at the reset, a 2% reading taken a minute earlier re-parked a body.
+        after = max([after] + [_reset(w) for w in reading["windows"] if _reset(w) <= time.time()])
         if 0 <= time.time() - reading["at"] < CACHE_TTL and (reading["at"] > after or not reading["windows"]):
             return reading
     except (OSError, ValueError, KeyError, TypeError):
@@ -116,6 +119,26 @@ def reading(home, shell: str, after: float = 0):
         _REFRESHING.add(path)
         threading.Thread(target=_refresh, args=(path, script), daemon=True).start()
     return None
+
+
+def _reset(window) -> float:
+    try:
+        return datetime.fromisoformat(window["resets_at"]).timestamp()
+    except (ValueError, TypeError, KeyError):
+        return 0
+
+
+def dry_until(home, shell: str):
+    """When an exhausted window refills, or None. None also while refreshing
+    or unknown: a caller that is already parked keeps waiting on None."""
+    from .config import load_config
+    value = reading(home, shell)
+    floor = load_config(home.root).hold_floor_pct
+    dry = [w for w in (value or {"windows": []})["windows"] if w["left_pct"] <= floor]
+    if not dry:
+        return None
+    now = time.time()
+    return max(_reset(w) if _reset(w) > now else now + 900 for w in dry)
 
 
 def fuel(home, shell: str) -> str:

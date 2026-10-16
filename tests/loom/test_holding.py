@@ -71,7 +71,13 @@ while True:
     assert not loom.errors
 
 
-def test_owing_worker_is_told_once_holds_twice_then_low_fuel_preserves_and_parks_the_ask(tmp_path):
+import pytest
+
+
+@pytest.mark.parametrize("reset", [7 * 86400, 60])
+def test_owing_worker_is_told_once_holds_twice_then_low_fuel_preserves_and_parks_the_ask(tmp_path, reset):
+    """A refill past the stop hook's life ends the body and the loom parks the
+    ask; a refill within it is slept through, in the hook, by the same body."""
     root = tmp_path / "home"
     init_self(root, person="test")
     write_thread(root, "opener", "Opener", "answer-fast", wait="0")
@@ -114,8 +120,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 left = 2 if Path(__file__).with_name('low').exists() else 100
 print(json.dumps({'windows': [{'name': 'session', 'left_pct': left,
-    'resets_at': datetime.fromtimestamp(time.time() + 60, timezone.utc).isoformat()}]}))
-''')
+    'resets_at': datetime.fromtimestamp(time.time() + RESET, timezone.utc).isoformat()}]}))
+'''.replace("RESET", str(reset)))
     usage.chmod(0o755)
     letter = inject_letter(root, to="thread:work", body="still waiting on my child")
     loom = Loom(root)
@@ -144,6 +150,26 @@ print(json.dumps({'windows': [{'name': 'session', 'left_pct': left,
         cached["at"] = time() - 301
         atomic_write(gauge, json.dumps(cached))
         gauge.with_suffix(".lock").write_text(str(time() - 301))
+        if reset < 3600:
+            # Parked in the hook: no exit, no turn, while the window is dry.
+            wait_until(lambda: json.loads(gauge.read_text())["windows"][0]["left_pct"] == 2, 10, loom.dump)
+            parked = int((root / "holds").read_text())
+            import time as clock
+            clock.sleep(2.5)
+            os.kill(pid, 0)
+            assert int((root / "holds").read_text()) == parked
+            assert not any(f.kind in {"body.exited", "body.parked"} for f in loom.facts())
+            # The refill: the same body holds again, still owing the ask.
+            (folder / "low").unlink()
+            cached = json.loads(gauge.read_text())
+            cached["at"] = time() - 301
+            atomic_write(gauge, json.dumps(cached))
+            gauge.with_suffix(".lock").write_text(str(time() - 301))
+            wait_until(lambda: int((root / "holds").read_text()) > parked, 10, loom.dump)
+            os.kill(pid, 0)
+            assert len([f for f in loom.facts() if f.kind == "body.started"]) == 1
+            assert [l.data["id"] for l in mail(root, loom.facts(), "work")] == [letter]
+            return
         wait_until(lambda: any(f.kind == "body.parked" for f in loom.facts()), 10, loom.dump)
         facts = loom.facts()
         assert any(f.kind == "body.exited" and f.data["code"] == 0 for f in facts)

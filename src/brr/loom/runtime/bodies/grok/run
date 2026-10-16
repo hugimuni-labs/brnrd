@@ -19,7 +19,7 @@ if ".claude/" not in exclude.read_text().split():
 path.write_text(json.dumps({"hooks": {
     "SessionStart": [hook("start", 60)],
     "PostToolUse": [hook("post", 60)],
-    "Stop": [hook("stop", int(float(os.environ["BRNRD_WAIT"])) + 60)],
+    "Stop": [hook("stop", int(os.environ.get("BRNRD_STOP_TIMEOUT") or float(os.environ["BRNRD_WAIT"]) + 60))],
 }}) + "\n")
 os.execvp("grok", command(Path(os.environ["BRNRD_WAKE"]), model=core,
                            rules="Follow the self's wake and the loom jack boundaries."))

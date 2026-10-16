@@ -183,3 +183,38 @@ def test_stop_shows_owed_letters_before_reading_wait(tmp_path):
     payload = json.loads(execute("stop", room, "{}"))
     assert payload == {"decision": "block", "reason": text}
     assert list((room / "port" / "out").glob("*.md"))
+
+
+def test_a_dry_body_does_not_take_a_turn_for_an_owed_letter(tmp_path, monkeypatch):
+    # A turn without fuel fails; the stop hook sleeps instead of blocking.
+    from brr.loom.runtime import jack, usage
+    room = _room(tmp_path)
+    _write(room, [_letter()])
+    monkeypatch.setenv("BRNRD_BODY_SHELL", "claude")
+    monkeypatch.setenv("BRNRD_STOP_TIMEOUT", "91.5")
+    dry = iter([True] * 3 + [False] * 1000)
+    monkeypatch.setattr(usage, "dry_until", lambda home, shell: 9e9 if next(dry) else None)
+    monkeypatch.setattr(usage, "reading", lambda home, shell, after=0: {"windows": []})
+    monkeypatch.setattr(jack.time, "sleep", lambda s: None)
+    assert jack.execute("stop", room, "{}") == ""
+    dry = iter([True] * 3 + [False] * 1000)
+    monkeypatch.setenv("BRNRD_STOP_TIMEOUT", str(6 * 3600 + 60))
+    monkeypatch.setattr(usage, "dry_until", lambda home, shell: usage.time.time() + 60 if next(dry) else None)
+    assert json.loads(jack.execute("stop", room, "{}"))["decision"] == "block"
+
+
+def test_post_says_the_context_weight_once_per_band(tmp_path):
+    room = _room(tmp_path)
+    _write(room, [])
+    transcript = tmp_path / "t.jsonl"
+
+    def call(tokens):
+        with transcript.open("a") as out:
+            out.write(json.dumps({"message": {"usage": {"input_tokens": 1, "cache_read_input_tokens": tokens}}}) + "\n")
+        return execute("post", room, json.dumps({"tool_name": "Bash", "transcript_path": str(transcript)}))
+
+    assert call(40_000) == ""
+    first = json.loads(call(120_000))["hookSpecificOutput"]["additionalContext"]
+    assert first.startswith("context: 120k tokens") and "booted at 40k" in first
+    assert call(130_000) == ""
+    assert "context: 151k" in call(151_000)

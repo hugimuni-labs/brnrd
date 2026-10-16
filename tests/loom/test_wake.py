@@ -278,13 +278,34 @@ def test_budget_cuts_the_tree_and_refuses_a_fat_identity(tmp_path: Path) -> None
     assert refused.stdout == ""
     assert "over budget" in refused.stderr
     assert "core/identity.md" in refused.stderr
-    assert "none of these is cut" in refused.stderr
+    assert "never cut" in refused.stderr
 
     broken = wake(clone, "w-1", owed, LOOM_PART="")
     # empty string is "unset" in the recipe only when the variable is missing;
     # a set-but-empty value is not a file.
     assert broken.returncode == 1
     assert "LOOM_PART" in broken.stderr
+
+
+def test_a_fat_thread_readme_is_cut_and_the_letter_still_wakes(tmp_path: Path) -> None:
+    # 2026-10-16: a 7.3 KB inbox Plan made two of the owner's letters bounce.
+    home = tmp_path / "home"
+    assert cli(["init", "--home", str(home)]).returncode == 0
+    self_dir = home / "self"
+    write_thread(self_dir, "w-1", "Headline\n\n## Plan\n\n" + "".join(f"- [ ] row {i} " + "y" * 60 + "\n" for i in range(80)))
+    commit(self_dir, "fat plan")
+    clone = selfrepo.room(home, "s1")
+    owed = tmp_path / "owed.json"
+    owed.write_text(json.dumps([{"id": "letter:x", "from": "person:a", "body": "the ask"}]), encoding="utf-8")
+    full = wake(clone, "w-1", owed, LOOM_BUDGET_BYTES="100000")
+    assert full.returncode == 0, full.stderr
+    limit = len(full.stdout.encode("utf-8")) - 3000
+    cut = wake(clone, "w-1", owed, LOOM_BUDGET_BYTES=str(limit))
+    assert cut.returncode == 0, cut.stderr
+    assert len(cut.stdout.encode("utf-8")) <= limit
+    assert "row 0 " in cut.stdout and "row 79 " not in cut.stdout
+    assert "the file is whole on disk: trim it]" in cut.stdout
+    assert cut.stdout.rstrip().endswith("the ask")
 
 
 def test_room_is_a_clone_and_reused(tmp_path: Path) -> None:
