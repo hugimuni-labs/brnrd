@@ -335,6 +335,24 @@ def _ref_roots(room: Path) -> list[Path]:
     return roots
 
 
+def _refuse_other_loom(home, thread: str) -> None:
+    """A thread whose README names another loom in ``for:`` never runs here.
+
+    Refusing here tells the writer now, instead of a notice after the router
+    declines it (2026-10-16: two PR verdicts sent to ``thread:arseni``, whose
+    ``for:`` held prose, printed ids and reached nobody).
+    """
+    from .config import load_config
+    from .router import readme_for
+    target = readme_for(home, thread)
+    name = load_config(home.root).name
+    if target and target != name:
+        raise PortError(
+            f"send: thread {thread} says `for: {target}`, and this loom is {name or '(unnamed)'}: "
+            "a letter there is never run here. Words for a person go to the reply address "
+            "on their letter; to run the thread here, empty its `for:`")
+
+
 def write_send(room: Path, *, to: str, sender: str, body: str = "",
                re: str | None = None, note: str | None = None,
                clean: bool = False, kind: str | None = None,
@@ -375,6 +393,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
             if note is not None or molt is not None:
                 raise PortError(f"send: no thread {thread} on main")
             opening = thread
+    if note is None and molt is None and not is_channel(to):
+        _refuse_other_loom(home, thread_of(to))
     if note is None and molt is None and at is None and not is_channel(to):
         from .ledger import read_facts
         from .project import sender_threads

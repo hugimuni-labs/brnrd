@@ -73,6 +73,32 @@ def test_send_refuses_a_letter_to_the_senders_own_thread(tmp_path):
     assert len(list((room / "port" / "out").glob("*.md"))) == 2
 
 
+def test_send_refuses_a_thread_whose_for_names_another_loom(tmp_path):
+    """Live, 2026-10-16: two PR verdicts sent to thread:arseni printed ids and
+    reached nobody. Its README held prose in `for:`, which the router reads as
+    another loom's name, so it disposed both letters as operator attention."""
+    home = _home(tmp_path)
+    (home.root / "loom/config.toml").write_text('name = "brnrd"\nconnectors = ["relay"]\n')
+    room = home.room(STRAND)
+
+    def thread(name, owner):
+        home.thread_dir(name).mkdir(parents=True)
+        (home.thread_dir(name) / "README.md").write_text(
+            f"---\nid: {name}\nstatus: open\ntense: plan\nfor: {owner}\n---\n# {name}\n")
+
+    thread("arseni", '"the conversation with the maintainer"')
+    with pytest.raises(PortError, match="never run here"):
+        write_send(room, to="thread:arseni", sender=STRAND, body="verdict")
+    with pytest.raises(PortError, match="never run here"):
+        write_send(room, to="thread:arseni", sender=STRAND, body="later", at="+1h")
+    assert not list((room / "port" / "out").glob("*.md"))
+    # Settling a letter there is not routing one; this loom's own name runs.
+    write_send(room, to="thread:arseni", sender=STRAND, re="p-test/abcde", note="seen")
+    thread("ours", "brnrd")
+    write_send(room, to="thread:ours", sender=STRAND, body="run")
+    assert len(list((room / "port" / "out").glob("*.md"))) == 2
+
+
 def test_a_climbed_letter_keeps_the_chat_it_came_from(tmp_path):
     """Live, 2026-10-12: a late telegram letter to a settled thread climbed to the
     inbox as a loom notice shown with `reply -`; the body noted the answer and the
