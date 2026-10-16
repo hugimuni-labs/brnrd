@@ -1329,8 +1329,11 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
             with tick_config(home.root, config):
                 router.config = config
                 if time.monotonic() >= next_usage:
-                    for shell in _usage_shells(home, config):
-                        usage.reading(home, shell)
+                    try:
+                        for shell in _usage_shells(home, config):
+                            usage.reading(home, shell)
+                    except Exception:
+                        _log(home, traceback.format_exc().rstrip())
                     next_usage = time.monotonic() + usage.REFRESH_INTERVAL
                 try:
                     inputs.step()
