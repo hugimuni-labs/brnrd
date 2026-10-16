@@ -252,7 +252,8 @@ class Router:
                 if (molt is not None and molt.data.get("strand") == letter.data.get("from")
                         and molt.data.get("gen") == letter.data.get("gen")
                         and sender_threads(facts).get(letter.data.get("from")) == thread):
-                    data["parent"] = letter.data["from"]
+                    if not molt.data.get("fresh", False):
+                        data["parent"] = letter.data["from"]
                     break
             try:
                 stored = _record(home, "lease", data, f"lease:{thread}:{gen}")

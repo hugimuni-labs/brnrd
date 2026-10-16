@@ -100,7 +100,7 @@ def land_status(room: Path, thread: str, status: str, message: str) -> None:
 
 
 def open_thread(room: Path, thread: str, sender: str, text: str,
-                body_choice: str | None = None) -> None:
+                body_choice: str | None = None, repo_sources: tuple[str, ...] | list[str] = ()) -> None:
     from .port import _current_label
     check_thread_id(thread)
     own = sender_threads(read_facts(home_of_room(room))).get(sender)
@@ -110,6 +110,12 @@ def open_thread(room: Path, thread: str, sender: str, text: str,
         raise PortError("send: a tainted strand cannot open a thread on main; send a clean letter to inbox instead")
     if body_choice is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*/[^\s]+", body_choice):
         raise PortError("send: --body must be shell/core")
+    from .adapters import repos
+    if any("\n" in source or "\r" in source for source in repo_sources):
+        raise PortError("send: --repo must be one seat line")
+    seat = (f"body: {body_choice}\n" if body_choice is not None else "")
+    seat += "".join(f"repo: {source}\n" for source in repo_sources)
+    repos(seat)
     first = text.split("\n", 1)[0]
     readme = (f"---\nid: {thread}\nstatus: open\ntense: plan\n"
               f"opened-by: thread:{own}\n---\n# {first}\n")
@@ -120,8 +126,8 @@ def open_thread(room: Path, thread: str, sender: str, text: str,
         if git(clone, "cat-file", "-e", f"origin/main:{path}", check=False).returncode == 0:
             raise PortError(f"send: thread {thread} was opened meanwhile; send to the existing thread")
         files = {path: readme}
-        if body_choice is not None:
-            files[f"threads/{thread}/seat"] = f"body: {body_choice}\n"
+        if seat:
+            files[f"threads/{thread}/seat"] = seat
         return files
 
     land(room, f"open {thread} from thread:{own}", edit)

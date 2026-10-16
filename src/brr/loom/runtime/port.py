@@ -340,7 +340,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                clean: bool = False, kind: str | None = None,
                refs: tuple[str, ...] | list[str] = (),
                molt: str | None = None, body_choice: str | None = None,
-               at: str | None = None) -> str:
+               at: str | None = None, repo_sources: tuple[str, ...] | list[str] = ()) -> str:
     home = home_of_room(Path(room))
     opening = None
     if at is not None:
@@ -353,8 +353,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     if note is not None and body:
         raise PortError("send: --note is the whole no-answer; drop the body")
     if is_channel(to):
-        if body_choice is not None:
-            raise PortError("send: --body is only for opening a new thread")
+        if body_choice is not None or repo_sources:
+            raise PortError("send: --body is only for opening a new thread; --repo is only for opening a new thread")
         try:
             channel_parts(to, home)
         except ValueError as exc:
@@ -369,8 +369,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     else:
         thread = thread_of(to)
         if home.routable(thread):
-            if body_choice is not None:
-                raise PortError("send: --body is only for opening a new thread")
+            if body_choice is not None or repo_sources:
+                raise PortError("send: --body is only for opening a new thread; --repo is only for opening a new thread")
         else:
             if note is not None or molt is not None:
                 raise PortError(f"send: no thread {thread} on main")
@@ -420,12 +420,12 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     text = _front(fields, "" if note is not None else body)
     if opening is not None:
         from .lifecycle import open_thread
-        open_thread(Path(room), opening, sender, body, body_choice)
+        open_thread(Path(room), opening, sender, body, body_choice, repo_sources)
     write_port(room, stem, text)
     return letter_id
 
 
-def write_molt(room: Path, why: str) -> str:
+def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
     if not why:
         raise PortError("molt: --why is empty")
     from .ledger import read_facts
@@ -441,17 +441,21 @@ def write_molt(room: Path, why: str) -> str:
         raise PortError("molt: room has no thread")
     clone = resolve_clone(room)
     path = f"threads/{thread}/README.md"
-    if git(clone, "diff", "HEAD", "--quiet", "--", path, check=False).returncode:
+    if not fresh and git(clone, "diff", "HEAD", "--quiet", "--", path, check=False).returncode:
         git(clone, "add", "--", path)
         git(clone, "commit", "--only", "-m", f"molt: {why}", "--", path)
-    if not _current_label(clone, strand).taint:
+    if not fresh and not _current_label(clone, strand).taint:
         outcome = send_to_self(clone)
         if outcome.status != "merged":
             raise PortError(outcome.stderr or f"molt: landing {outcome.status}: {', '.join(outcome.files)}")
     stem = mint(5)
     fact_id = f"{strand}/{stem}"
-    write_port(room, stem, _front({"kind": "molt", "id": fact_id, "why": why}))
-    write_send(room, to=f"thread:{thread}", sender=strand, body=why, molt=fact_id)
+    fields = {"kind": "molt", "id": fact_id, "why": why}
+    if fresh:
+        fields["fresh"] = "true"
+    write_port(room, stem, _front(fields))
+    write_send(room, to=f"thread:{thread}", sender=strand,
+               body="Fresh molt: start from main." if fresh else why, molt=fact_id)
     from .jack import _set_state
     _set_state(room, molted=True)
     return fact_id
@@ -546,6 +550,6 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             raise PortError(f"molt {fact_id} has no why")
         return Fact(
             kind="molt", by=f"strand:{strand}", id=fact_id,
-            data={"strand": strand, "gen": gen, "why": fm["why"]},
+            data={"strand": strand, "gen": gen, "why": fm["why"], **({"fresh": True} if fm.get("fresh") == "true" else {})},
         )
     raise PortError(f"unknown port kind {kind!r}")

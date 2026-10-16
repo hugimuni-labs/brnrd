@@ -59,3 +59,7 @@ command that retires it. Only the opener closes or reopens a child thread.
 commits and edited files that exist only there (`?` when a room could not be
 read). `brnrd threads --left <thread>` lists them with their paths. It runs git
 in each room and fetches each project source, so the plain table does not.
+
+Open a worker and declare its checkouts together with `send --to thread:<new> --body <shell/core> --repo <url> "<work>"`; repeat `--repo` for each checkout. The README and seat land together before its first lease. Repo directory names must be distinct.
+
+`molt --fresh --why "<reason>"` starts a successor from main without inheriting the room or its label. The old room and unlanded work remain for review. The reason stays in the molt fact; the successor receives a fixed fresh-start message. Plain `molt` carries the room and label forward.
