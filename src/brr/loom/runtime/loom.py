@@ -30,7 +30,7 @@ from .port import (
     fact_from_port, fact_from_taint, letter_attachments, letter_replies,
     parse_frontmatter, render_boundary,
 )
-from .project import fold, generation, is_notice, reply_channels, sender_threads
+from .project import projection_cache, fold, generation, is_notice, reply_channels, sender_threads
 from .owners import letters_for, letter_owners
 from .lifecycle import main_snapshot
 from .timers import observe_due
@@ -1194,14 +1194,18 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     from .router import Router
     if router is None:
         router = Router(home)
-    facts = read_facts(home)
-    facts = router.begin_tick(facts)
-    facts = _ingest(home, facts, router.config.router_ttl)
-    facts = _advance_bodies(home, bodies, facts, (adapter, core))
-    # Time enters the owner table once, using only the facts already held.
-    facts = observe_due(home, facts, router.armed())
-    facts = router.route(facts, bodies, (adapter, core))
-    facts = router.speak_out(facts)
+    facts = router.reader.read(home)
+    if router.projection_revision != router.reader.revision:
+        router.projections.clear()
+        router.projection_revision = router.reader.revision
+    with projection_cache(router.projections):
+        facts = router.begin_tick(facts)
+        facts = _ingest(home, facts, router.config.router_ttl)
+        facts = _advance_bodies(home, bodies, facts, (adapter, core))
+        # Time enters the owner table once, using only the facts already held.
+        facts = observe_due(home, facts, router.armed())
+        facts = router.route(facts, bodies, (adapter, core))
+        facts = router.speak_out(facts)
 
 
 def _pause(stop, seconds: float) -> bool:

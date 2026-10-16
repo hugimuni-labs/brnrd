@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -45,7 +47,42 @@ def lease_accepted(newest_router: int | None, fact: Fact) -> bool:
     return newest_router == grant
 
 
+_projection_cache = ContextVar("loom_projection_cache", default=None)
+
+
+@contextmanager
+def projection_cache(cache=None):
+    """Share replay for identical fact objects; retain snapshots to pin identity."""
+    token = _projection_cache.set({} if cache is None else cache)
+    try:
+        yield
+    finally:
+        _projection_cache.reset(token)
+
+
+def ordered_facts(facts: Iterable[Fact]) -> list[Fact]:
+    cache = _projection_cache.get()
+    if cache is None:
+        return union(list(facts))
+    snapshot = tuple(facts)
+    key = ("ordered", tuple(map(id, snapshot)))
+    if key not in cache:
+        cache[key] = (snapshot, union(snapshot))
+    return cache[key][1]
+
+
 def fold(facts: Iterable[Fact]) -> Fold:
+    cache = _projection_cache.get()
+    if cache is None:
+        return _fold(facts)
+    snapshot = tuple(facts)
+    key = tuple(map(id, snapshot))
+    if key not in cache:
+        cache[key] = (snapshot, _fold(snapshot))
+    return cache[key][1]
+
+
+def _fold(facts: Iterable[Fact]) -> Fold:
     """Replay ``facts`` in causal order.
 
     A letter is handled only by a note or a reply from the strand that held
@@ -66,7 +103,7 @@ def fold(facts: Iterable[Fact]) -> Fold:
         if thread is not None and state.holder.get(thread) == (writer, gen):
             state.handled.add(re)
 
-    for fact in union(list(facts)):
+    for fact in ordered_facts(facts):
         data = fact.data
         if fact.kind in {"attempt.ended", "port.drained", "letter.disposed", "letter.due", "speech", "speech.part"} and fact.by.startswith("loom:"):
             state.accepted.append(fact)

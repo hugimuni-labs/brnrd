@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from brr.daemon2.facts import Fact, union
+from brr.daemon2.facts import Fact
 from .home import is_channel, notice_id
-from .project import _destination, fold, reply_channels, sender_threads
+from .project import ordered_facts, _destination, fold, reply_channels, sender_threads
 
 
 @dataclass(frozen=True)
@@ -28,7 +28,7 @@ def letter_owners(facts, main: dict[str, dict]) -> dict[str, Ownership]:
     A missing observation is debt owed by the loom, never an invented end.
     Embedded successors become letters in the same causal prefix as disposition.
     """
-    facts = union(list(facts))
+    facts = ordered_facts(facts)
     state = fold(facts)
     writers = sender_threads(facts)
     channels = reply_channels(facts)
