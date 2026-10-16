@@ -138,3 +138,28 @@ def test_usage_selection_includes_default_and_pending_parked_live_bodies(tmp_pat
     monkeypatch.setattr(loom, 'main_snapshot', lambda home: {})
     monkeypatch.setattr(usage, 'shells', lambda home: iter(['default', 'pending', 'parked', 'started', 'exited', 'ended', 'idle']))
     assert loom._usage_shells(Home(tmp_path), SimpleNamespace(body='default/core')) == ['default', 'parked', 'pending', 'started']
+
+
+def test_usage_selection_failure_keeps_ticking_and_waits_to_retry(tmp_path, monkeypatch):
+    write_thread(tmp_path, 'inbox', 'Inbox', 'quit-now')
+    stop = threading.Event()
+    now = [100.]
+    attempts, ticks, logs = [], [], []
+    def fail(*args):
+        attempts.append(now[0])
+        raise RuntimeError('broken gauge selection')
+    monkeypatch.setattr(loom, '_usage_shells', fail)
+    monkeypatch.setattr(loom, '_log', lambda home, text: logs.append(text))
+    monkeypatch.setattr(loom.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(loom, 'tick_once', lambda *args: ticks.append(now[0]))
+    def pause(*args):
+        now[0] += 300
+        if now[0] > 1300:
+            stop.set()
+        return stop.is_set()
+    monkeypatch.setattr(loom, '_pause', pause)
+    loom.run(tmp_path, stop=stop)
+    assert ticks == [100., 400., 700., 1000., 1300.]
+    assert attempts == [100., 700., 1300.]
+    assert len(logs) == 3
+    assert all('broken gauge selection' in text for text in logs)
