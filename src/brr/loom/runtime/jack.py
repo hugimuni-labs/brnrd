@@ -50,11 +50,9 @@ def _wait(room: Path) -> float | None:
         return None
     try:
         cache = (resolve(home_of_room(room), shell) / "cache").read_text().strip()
+        lifetime = float(cache)
     except (OSError, ValueError):
         return None
-    if cache == "none":
-        return None
-    lifetime = float(cache)
     # A lifetime too short to leave the safety margin cannot buy a hold.
     return lifetime - 300 if lifetime > 300 else None
 
@@ -141,7 +139,7 @@ def _poll(room: Path) -> str:
         if remaining <= 0:
             if _hand():
                 return ""
-            if wait is not None and not parsed.ids and opener.startswith("thread:"):
+            if not parsed.ids and opener.startswith("thread:"):
                 return ""
             # Hold again by blocking, never by waiting on in this call: the
             # shell ends a hook that outlives its timeout, and the body would

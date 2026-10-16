@@ -227,6 +227,7 @@ def test_post_says_the_context_weight_once_per_band(tmp_path):
     ('grok', None, None, 7110),
     ('custom', '1200', None, 900),
     ('custom', 'none', None, 7110),
+    ('custom', 'garbage', None, 7110),
     ('custom', None, None, 7110),
     ('custom', '300', None, 7110),
     ('claude', None, '42', 42),
@@ -278,3 +279,22 @@ def test_stop_without_cache_wakes_for_letters_before_ceiling(tmp_path, monkeypat
     assert result['decision'] == 'block'
     assert 'ping-1' in result['reason']
     assert now[0] == pytest.approx(100, abs=.2)
+
+
+@pytest.mark.parametrize('shell', ['codex', 'grok', 'vibe'])
+def test_idle_thread_worker_without_cache_releases_at_ceiling(tmp_path, monkeypatch, shell):
+    from brr.loom.runtime import jack, usage
+    from _step import write_thread
+    write_thread(tmp_path, 'ta', 'Worker', 'thread:x')
+    room = _room(tmp_path)
+    _write(room, [])
+    monkeypatch.setenv('BRNRD_BODY_SHELL', shell)
+    monkeypatch.setenv('BRNRD_BODY_JACK', 'hooks')
+    monkeypatch.setenv('BRNRD_THREAD', 'ta')
+    monkeypatch.setenv('BRNRD_STOP_TIMEOUT', '7200')
+    monkeypatch.setattr(usage, 'dry_until', lambda *args: None)
+    now = [0.]
+    monkeypatch.setattr(jack.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(jack.time, 'sleep', lambda seconds: now.__setitem__(0, now[0] + seconds))
+    assert jack.execute('stop', room, '{}') == ''
+    assert now[0] == pytest.approx(7110)
