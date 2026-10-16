@@ -14,7 +14,23 @@ from .adapters import resolve
 from .home import atomic_write
 from .selfrepo import _env_without_pin
 
+CACHE_TTL = 300
+REFRESH_INTERVAL = 600
 _REFRESHING = set()
+
+
+def shells(home):
+    names = set()
+    for root in (Path(__file__).parent / "bodies", home.root / "loom/bodies"):
+        if root.is_dir():
+            names.update(p.name for p in root.iterdir() if p.is_dir())
+    for name in sorted(names):
+        try:
+            folder = resolve(home, name)
+        except ValueError:
+            continue
+        if (folder / "usage").is_file():
+            yield name
 
 
 def print_windows(rows) -> None:
@@ -67,7 +83,7 @@ def reading(home, shell: str, after: float = 0):
         # An exit requires fresh *fuel*, not another failed PTY probe. Keep
         # unknown gauges for the same five-minute TTL so every new start does
         # not wait out the collector timeout while the shell is unavailable.
-        if 0 <= time.time() - reading["at"] < 300 and (reading["at"] > after or not reading["windows"]):
+        if 0 <= time.time() - reading["at"] < CACHE_TTL and (reading["at"] > after or not reading["windows"]):
             return reading
     except (OSError, ValueError, KeyError, TypeError):
         pass

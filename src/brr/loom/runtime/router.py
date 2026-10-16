@@ -385,7 +385,8 @@ class Router:
                         continue
                     body = f"{_header(state, fact)}\n\n{body}"
                     event_id = _answers_event(state, fact)
-                    if event_id:
+                    from .project import reply_channels
+                    if event_id and reply_channels(facts).get(fact.data.get("re")) == to:
                         context["re"] = event_id
                 status, speech, unsure = speak(
                     self.home, self.lease, key, body, channel=str(to), context=context,

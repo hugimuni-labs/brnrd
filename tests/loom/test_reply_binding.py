@@ -167,3 +167,37 @@ def test_chat_header_is_the_face_and_thread_even_after_release(home):
     letter = next(f for f in facts if f.id == key)
     assert _header(state, letter) == "b·_·d ⌁ [ first ]"
     assert _header(state, Fact(kind="letter", by="loom:aaaa")) == "b·_·d ⌁"
+
+
+@pytest.mark.parametrize("destination,expected", [(CHANNEL, "incoming"), ("channel:other/42", None),
+                                                  ("channel:mine/43", None)])
+def test_send_binds_native_reply_only_in_its_source_channel(home, monkeypatch, destination, expected):
+    import subprocess
+    from pathlib import Path
+    from brr.loom.runtime import speak
+    from brr.loom.runtime.loom import _ingest
+    from brr.loom.runtime.port import parse_frontmatter, write_send
+
+    (home.root / "self/people/ada/channels.toml").write_text(
+        'channels = ["mine:42", "mine:43", "other:42"]\n')
+    draft(home, "first")
+    ingest(home, "mine", dict(id="incoming", kind="letter", to=CHANNEL,
+                             body="Question", **{"from": "mine:42"}), [])
+    room, _ = prepare(home, read_facts(home), "first")
+    router = Router(home)
+    router.begin_tick(read_facts(home))
+    captured = []
+    real_run = subprocess.run
+    def transport(args, **kw):
+        if Path(str(args[0])).name == "out":
+            captured.append(parse_frontmatter(Path(args[1]).read_text()))
+            return subprocess.CompletedProcess(args, 0, '{"ids": []}', '')
+        return real_run(args, **kw)
+    monkeypatch.setattr(speak.subprocess, "run", transport)
+    key = write_send(room, to=destination, sender=READER, body="Answer", re="letter:mine:incoming")
+    facts = _ingest(home, read_facts(home))
+    router.speak_out(facts)
+    sent = next(item for item in captured if item['id'] == key)
+    assert sent.get('re') == expected
+    assert any(f.kind == 'speech' and f.data.get('key') == key and f.data['state'] == 'sent'
+               for f in read_facts(home))

@@ -14,6 +14,9 @@ and ``loom_clock`` is ``time.time``.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+
 import ast
 import difflib
 import os
@@ -235,7 +238,22 @@ def load_config_report(root: Path | str) -> tuple[LoomConfig, frozenset[str]]:
     return LoomConfig(**values), frozenset(found)
 
 
+_TICK_CONFIG = ContextVar("loom_tick_config", default=None)
+
+
+@contextmanager
+def tick_config(root, config):
+    token = _TICK_CONFIG.set((Path(root).resolve(), config))
+    try:
+        yield
+    finally:
+        _TICK_CONFIG.reset(token)
+
+
 def load_config(root: Path | str) -> LoomConfig:
+    snapshot = _TICK_CONFIG.get()
+    if snapshot is not None and snapshot[0] == Path(root).resolve():
+        return snapshot[1]
     return load_config_report(root)[0]
 
 
