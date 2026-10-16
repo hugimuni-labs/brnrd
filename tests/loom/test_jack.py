@@ -285,7 +285,8 @@ def test_stop_without_cache_wakes_for_letters_before_ceiling(tmp_path, monkeypat
 def test_idle_thread_worker_without_cache_releases_at_ceiling(tmp_path, monkeypatch, shell):
     from brr.loom.runtime import jack, usage
     from _step import write_thread
-    write_thread(tmp_path, 'ta', 'Worker', 'thread:x')
+    write_thread(tmp_path, 'ta', '---\nid: ta\nstatus: open\ntense: plan\n'
+                 'opened-by: thread:x\n---\n# Worker\n', 'work')
     room = _room(tmp_path)
     _write(room, [])
     monkeypatch.setenv('BRNRD_BODY_SHELL', shell)
