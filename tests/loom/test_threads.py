@@ -53,7 +53,7 @@ if own == "opener":
     for letter in ctx.owed():
         ctx.send("thread:opener", note="begin", re=letter.id)
     proc = subprocess.run([sys.executable, "-m", "brr.loom.runtime", "send", "--room", str(ctx.room),
-                           "--to", "thread:new-work", "--body", "worker/test-core", "New work\\nDetails"],
+                           "--to", "thread:new-work", "--body", "worker/test-core", "--repo", "https://example/a.git", "New work\\nDetails"],
                           text=True, capture_output=True)
     assert proc.returncode == 0, proc.stderr
     while not Path({str(root / "stop-opener")!r}).exists():
@@ -106,9 +106,10 @@ else:
         readme = git(root / 'self', 'show', 'main:threads/new-work/README.md').stdout
         assert readme == ('---\nid: new-work\nstatus: open\ntense: plan\n'
                           'opened-by: thread:opener\n---\n# New work\n')
-        assert git(root / 'self', 'show', 'main:threads/new-work/seat').stdout == 'body: worker/test-core\n'
+        assert git(root / 'self', 'show', 'main:threads/new-work/seat').stdout == 'body: worker/test-core\nrepo: https://example/a.git\n'
         assert git(root / 'self', 'log', '-1', '--format=%H', '--', 'threads/new-work/README.md').stdout == git(
             root / 'self', 'log', '-1', '--format=%H', '--', 'threads/new-work/seat').stdout
+        assert next(f for f in loom.facts() if f.kind == 'lease' and f.data['thread'] == 'new-work').data['repos'] == [['a', 'https://example/a.git']]
         assert [f.data['body'] for f in mail(root, loom.facts(), 'new-work')] == ['New work\nDetails']
         rows = table(root)
         assert rows['new-work'] == {'thread': 'new-work', 'seat': 'worker/test-core', 'now': 'working',
@@ -176,6 +177,8 @@ def send(thread, *extra):
                            "--to", "thread:" + thread, *extra, "Work"], text=True, capture_output=True)
 existing = send("opener", "--body", "fake/test-core")
 unsafe = send("../outside")
+duplicate = send("duplicate-repos", "--repo", "https://example/a.git", "--repo", "https://other/a.git")
+injected = send("injected-repo", "--repo", "https://example/a.git\\nbody: fake/other")
 clone = ctx.room / "self"
 path = clone / "threads/opener/README.md"
 path.write_text(path.read_text().replace("status: open", "status: invalid"))
@@ -189,7 +192,7 @@ tainted = send("tainted-open")
 assert not (clone / "threads/tainted-open").exists()
 Path({str(receipt)!r}).write_text(json.dumps({{k: [p.returncode, p.stderr] for k, p in
                                             [("existing", existing), ("unsafe", unsafe),
-                                             ("failed", failed), ("tainted", tainted)]}}))
+                                             ("failed", failed), ("tainted", tainted), ("duplicate", duplicate), ("injected", injected)]}}))
 ''')
     inject_letter(root, to='thread:opener', body='begin')
     loom = Loom(root)
@@ -199,6 +202,10 @@ Path({str(receipt)!r}).write_text(json.dumps({{k: [p.returncode, p.stderr] for k
         rows = json.loads(receipt.read_text())
         assert all(code == 1 for code, _ in rows.values()), rows
         assert '--body is only for opening' in rows['existing'][1]
+        assert 'declared twice' in rows['duplicate'][1]
+        assert 'one seat line' in rows['injected'][1]
+        assert not (root / 'self/threads/duplicate-repos').exists()
+        assert not (root / 'self/threads/injected-repo').exists()
         assert 'unsafe thread id' in rows['unsafe'][1]
         assert 'pre-receive hook declined' in rows['failed'][1]
         assert 'tainted strand' in rows['tainted'][1] and 'clean letter to inbox' in rows['tainted'][1]

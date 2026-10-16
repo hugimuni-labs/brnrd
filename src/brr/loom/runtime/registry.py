@@ -69,7 +69,7 @@ REGISTRY = (
     _kind("lease",             "thread",  "thread strand gen install router_gen shell core repos parent?", "loom", "global", once=True),
     _kind("released",          "thread",  "thread strand gen why install router_gen?",        "loom",        "global",  once=True),
     _kind("shown",             "letter",  "strand gen ids",                                   "loom strand", "global"),
-    _kind("molt",              "letter",  "strand gen why",                                   "strand",      "global"),
+    _kind("molt",              "letter",  "strand gen why fresh?",                            "strand",      "global"),
     _kind("attempt.ended",     "attempt", "thread strand gen ids cause code dispositions evidence", "loom",  "global",  once=True),
     _kind("port.drained",      "port",    "thread strand gen",                                "loom",        "global",  once=True),
 )

@@ -83,10 +83,10 @@ class Ctx:
             raise RuntimeError(proc.stderr.strip() or f"send exited {proc.returncode}")
         return proc.stdout.strip()
 
-    def molt(self, why: str) -> None:
+    def molt(self, why: str, *, fresh: bool = False) -> None:
         proc = subprocess.run(
             [sys.executable, "-m", "brr.loom.runtime", "molt",
-             "--room", str(self.room), "--why", why],
+             "--room", str(self.room), "--why", why, *(["--fresh"] if fresh else [])],
             capture_output=True, text=True, env=self.env, cwd=self.room,
         )
         if proc.returncode != 0:

@@ -10,6 +10,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import inject_letter, read_facts
 from brr.loom.runtime.loom import _env, tick_once
@@ -270,7 +272,8 @@ def test_a_second_start_leaves_the_checkout(tmp_path: Path) -> None:
         _kill(read_facts(home))
 
 
-def test_molt_successor_holds_the_predecessor_commit(tmp_path: Path) -> None:
+@pytest.mark.parametrize("fresh", [False, True])
+def test_molt_successor_holds_the_predecessor_commit(tmp_path: Path, fresh: bool) -> None:
     root = _home(tmp_path)
     bare, _work = _source(tmp_path)
     _seat(root, "work", [str(bare)], policy="quit-now")
@@ -281,11 +284,12 @@ from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx
 ctx = Ctx(Path(sys.argv[1]))
 checkout = ctx.room / "widget"
-if "cut from parent" in ctx.wake():
+if "cut from parent" in ctx.wake() or "Fresh molt: start from main." in ctx.wake():
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip()
     Path({str(received)!r}).write_text(json.dumps({{
         "sha": sha,
-        "kept": (checkout / "kept.txt").read_text(),
+        "kept": (checkout / "kept.txt").read_text() if (checkout / "kept.txt").exists() else None,
+        "strand": ctx.room.name,
         "wake": ctx.wake(),
     }}))
     for letter in ctx.owed():
@@ -301,7 +305,12 @@ else:
     Path({str(pred)!r}).write_text(json.dumps({{
         "sha": sha, "cwd": str(Path.cwd()), "room": str(ctx.room),
     }}))
-    ctx.molt("carry the checkout")
+    self_clone = ctx.room / "self"
+    (self_clone / "threads/work/research.md").write_text("parent research")
+    subprocess.check_call(["git", "add", "threads/work/research.md"], cwd=self_clone)
+    subprocess.check_call(["git", "-c", "commit.gpgsign=false", "commit", "-m", "research"], cwd=self_clone)
+    (ctx.room / "port/out/taint-research.json").write_text('{{"tool":"WebFetch"}}')
+    ctx.molt("carry the checkout", fresh={fresh!r})
     assert ctx.jack("stop").raw == ""
 ''')
     loom = Loom(root)
@@ -311,9 +320,19 @@ else:
         first = json.loads(pred.read_text())
         second = json.loads(received.read_text())
         assert Path(first["cwd"]).resolve() == (Path(first["room"]) / "self").resolve()
-        assert second["sha"] == first["sha"]
-        assert second["kept"] == "kept\n"
-        assert "cut from parent" in second["wake"]
+        from brr.loom.runtime.labels import strand_label
+        assert strand_label(loom.facts(), second["strand"], self_root=root / "self").taint is (not fresh)
+        if fresh:
+            assert second["sha"] != first["sha"]
+            assert second["kept"] is None
+            assert git(loom.home.room(second["strand"]) / "widget", "cat-file", "-e", first["sha"], check=False).returncode != 0
+            assert any(f.kind == "molt" and f.data.get("fresh") is True for f in loom.facts())
+        else:
+            assert second["sha"] == first["sha"]
+            assert second["kept"] == "kept\n"
+            assert "cut from parent" in second["wake"]
+        assert (loom.home.room(second["strand"]) / "self/threads/work/research.md").exists() is (not fresh)
+        assert (Path(first["room"]) / "self/threads/work/research.md").read_text() == "parent research"
         assert "runtime publish <name>" in second["wake"]
         parent = Path(first["room"]) / "widget"
         assert git(parent, "rev-parse", "HEAD").stdout.strip() == first["sha"]

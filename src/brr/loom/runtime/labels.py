@@ -218,6 +218,17 @@ def strand_label(
 
 
 def _sender_label(letter, facts, self_root: Path | None, seen: frozenset[str]) -> Label:
+    # A fresh molt carries only a fixed control message, never room prose.
+    d = letter.data or {}
+    from .project import sender_threads
+    own = sender_threads(facts).get(d.get("from"))
+    if own and d.get("to") == f"thread:{own}" and d.get("body") == "Fresh molt: start from main.":
+        for fact in facts:
+            if (fact.kind == "molt" and fact.id == d.get("molt")
+                    and fact.data.get("fresh") is True
+                    and fact.data.get("strand") == d.get("from")
+                    and fact.data.get("gen") == d.get("gen")):
+                return CLEAN
     explicit = _explicit(letter)
     if explicit is not None:
         return explicit
