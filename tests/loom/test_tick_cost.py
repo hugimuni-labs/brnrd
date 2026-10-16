@@ -86,3 +86,45 @@ def test_main_tip_agrees_with_git_loose_and_packed(tmp_path: Path) -> None:
     _commit(repo, "Touch." + LABEL)
     moved = git(repo, "rev-parse", "main").stdout.strip()
     assert moved != asked and main_tip(repo) == moved
+
+
+def test_idle_ticks_do_not_reparse_an_8k_ledger(tmp_path, monkeypatch):
+    """Zero decoded rows per warm idle tick, independent of CPU/CI speed."""
+    import json
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime import ledger, project
+
+    root = _home(tmp_path)
+    home = Home(root)
+    path = home.facts_dir() / 'loom.jsonl'
+    path.write_text(''.join(json.dumps(Fact(
+        kind='router.renewed', by='loom:abcd', id=f'renew-{n}',
+        data={'install': 'abcd', 'gen': 1, 'until': n},
+        hlc=(n, 0, 'abcd'),
+    ).row()) + '\n' for n in range(8000)))
+    router, bodies = Router(home), {}
+    tick_once(home, bodies, 'fake', 'haiku', router)
+    # Load the router acquisition written by the first tick.
+    router.clock = lambda fixed=router.lease.until - router.config.router_ttl: fixed
+    tick_once(home, bodies, 'fake', 'haiku', router)
+    parsed, sorted_streams = [], []
+    real = ledger.json.loads
+    real_union = project.union
+
+    def counted(raw, *args, **kwargs):
+        result = real(raw, *args, **kwargs)
+        if isinstance(result, dict) and 'kind' in result and 'hlc' in result:
+            parsed.append(result)
+        return result
+
+    def counted_union(*streams):
+        sorted_streams.append(True)
+        return real_union(*streams)
+
+    monkeypatch.setattr(ledger.json, 'loads', counted)
+    monkeypatch.setattr(project, 'union', counted_union)
+    # Lease time stays fixed: this checks idle work rather than timed appends.
+    for _ in range(5):
+        tick_once(home, bodies, 'fake', 'haiku', router)
+    assert parsed == []
+    assert sorted_streams == []

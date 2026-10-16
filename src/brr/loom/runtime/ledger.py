@@ -91,6 +91,52 @@ def read_facts(home: Home) -> list[Fact]:
     return union(*streams)
 
 
+class LedgerReader:
+    """Process-local incremental view; the files remain authoritative.
+
+    Only complete lines advance the offset. Replacement, truncation, and
+    same-size edits invalidate a stream; removed files leave the union.
+    Callers receive a fresh list because a tick appends its own observations.
+    """
+
+    def __init__(self):
+        self.streams = {}
+        self.ordered = []
+        self.revision = 0
+
+    def read(self, home: Home) -> list[Fact]:
+        paths = sorted((home.root / "ledger" / "facts").glob("*/*.jsonl"))
+        streams = {}
+        changed = set(paths) != set(self.streams)
+        for path in paths:
+            with path.open("rb") as handle:
+                stat = os.fstat(handle.fileno())
+                stamp = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns,
+                         stat.st_ctime_ns)
+                prior = self.streams.get(path)
+                if prior is not None and prior[0] == stamp:
+                    streams[path] = prior
+                    continue
+                changed = True
+                if (prior is not None and prior[0][:2] == stamp[:2]
+                        and stat.st_size > prior[0][2]):
+                    offset, facts = prior[1], prior[2]
+                else:
+                    offset, facts = 0, []
+                handle.seek(offset)
+                raw = handle.read()
+                complete = raw[:raw.rfind(b"\n") + 1]
+                added = [Fact.from_row(json.loads(line))
+                         for line in complete.decode().splitlines() if line.strip()]
+                streams[path] = (stamp, offset + len(complete), facts + added)
+        if changed:
+            ordered = union(*(entry[2] for entry in streams.values()))
+            self.ordered = ordered
+            self.revision += 1
+        self.streams = streams
+        return list(self.ordered)
+
+
 def _next_hlc(directory: Path, install: str) -> tuple[int, int, str]:
     ms = int(time.time() * 1000)
     best_ms = -1

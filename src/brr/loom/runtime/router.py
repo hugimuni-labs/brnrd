@@ -15,7 +15,7 @@ from brr.daemon2.leases import Lease, LocalLeaseAuthority
 
 from .config import LoomConfig, granting_window, load_config, loom_clock
 from .home import Home, is_channel, mint
-from .ledger import LedgerConflict
+from .ledger import LedgerConflict, LedgerReader
 from .project import (
     fold, holder, is_notice, sender_threads,
 )
@@ -71,6 +71,9 @@ def readme_for(home: Home, thread: str) -> str | None:
 class Router:
     def __init__(self, home: Home, config: LoomConfig | None = None):
         self.home = home
+        self.reader = LedgerReader()
+        self.projections = {}
+        self.projection_revision = -1
         self.config = config if config is not None else load_config(home.root)
         self.clock = loom_clock
         self.authority = LocalLeaseAuthority(
