@@ -209,9 +209,11 @@ class Router:
                 continue
             target = readme_for(home, thread)
             if target and target != self.config.name:
-                self._keep(facts, "letter.disposed", {"dispositions": [
-                    {"id": f.id, "outcome": "operator", "reason": "for: other brnrd"}
-                    for f in letters]}, f"for-other:{thread}:{letters[-1].id}")
+                self._refused(facts, thread, letters, "for-other", "for: other brnrd",
+                              f"thread {thread} says `for: {target}`, and this loom is "
+                              f"{self.config.name or '(unnamed)'}: it never runs here",
+                              "words for a person go to the reply address on their letter; "
+                              "to run the thread here, empty its `for:`")
                 continue
             from .adapters import RepoSeatError, at_birth, repos as seat_repos, seat_text
             from .repos import AuthorError, require_body_author
@@ -233,9 +235,9 @@ class Router:
                        hint, thread=thread)
                 continue
             if choice[0] == "fake" and _policy(home, thread) is None:
-                self._keep(facts, "letter.disposed", {"dispositions": [
-                    {"id": f.id, "outcome": "operator", "reason": "fake adapter has no policy"}
-                    for f in letters]}, f"no-policy:{thread}:{letters[-1].id}")
+                self._refused(facts, thread, letters, "no-policy", "fake adapter has no policy",
+                              f"thread {thread} runs the fake adapter, which has no policy here",
+                              "give the thread a policy or another body")
                 continue
             if not self.armed():
                 break
@@ -301,6 +303,25 @@ class Router:
             "why": "holder gone", "install": self.home.install_id(),
             "router_gen": self.lease.gen,
         }, f"released:{thread}:{gen}")
+
+    def _refused(self, facts: list[Fact], thread: str, letters: list[Fact], kind: str,
+                 reason: str, what: str, can: str) -> None:
+        """Letters this loom will not run: each writer is told, never left believing it landed."""
+        from .loom import notice
+        writers = sender_threads(facts)
+        dispositions = []
+        for letter in letters:
+            data = {"id": letter.id, "outcome": "operator", "reason": reason}
+            target = writers.get(str(letter.data.get("from", ""))) or "inbox"
+            if target != thread and self.home.routable(target):
+                successor = notice(self.home, facts, kind, letter.id,
+                                   f"your letter {letter.id} was not delivered: {what}", can,
+                                   thread=target, about=letter, stands=True, draft_only=True)
+                if isinstance(successor, Fact):
+                    data.update(outcome="done", successor=successor.data)
+            dispositions.append(data)
+        self._keep(facts, "letter.disposed", {"dispositions": dispositions},
+                   f"{kind}:{thread}:{letters[-1].id}")
 
     def _unrouted(self, facts: list[Fact], known: set[str]) -> list[Fact]:
         """Materialize the table's climb/invalid-address decision atomically."""

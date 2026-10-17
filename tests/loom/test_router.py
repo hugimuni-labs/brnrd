@@ -430,8 +430,15 @@ def test_for_other_gets_no_lease_and_one_row(tmp_path):
 
         wait_until(ready, 6, lambda: _dump(root, procs))
         rows = [f for f in _facts(root) if f.id.startswith("for-other:")]
-        assert rows[0].data["dispositions"][0]["outcome"] == "operator"
-        assert rows[0].data["dispositions"][0]["reason"] == "for: other brnrd"
+        row = rows[0].data["dispositions"][0]
+        assert row["reason"] == "for: other brnrd"
+        # Never dropped in silence: the writer is told, standing until settled.
+        assert row["outcome"] == "done"
+        from brr.loom.runtime.project import fold
+        told = [f for f in fold(_facts(root)).accepted if f.kind == "letter"
+                and f.data.get("from") == "loom" and f.data.get("about") == row["id"]]
+        assert len(told) == 1 and "was not delivered" in told[0].data["body"]
+        assert "for: someone-else" in told[0].data["body"]
         assert _leases(_facts(root), "to") == []
     finally:
         _stop(root, procs)
