@@ -91,5 +91,5 @@ A Plan citation records an ask, not an answer. Boundaries also list `unanswered`
 person letters cited by that thread; `threads` counts the same distinct letters,
 including settled threads. Only a reply `re:` the letter with a `speech.part`
 receipt on its originating channel, or that person's own hand note, clears it.
-Resident notes and done dispositions do not. This line informs the body; it
+Resident notes, done dispositions, and loom status notices do not. This line informs the body; it
 adds no stop block.

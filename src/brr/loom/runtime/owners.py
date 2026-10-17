@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from brr.daemon2.facts import Fact
 from .home import is_channel, notice_id
-from .project import _projection_cache, ordered_facts, _destination, fold, reply_channels, sender_threads
+from .project import _projection_cache, ordered_facts, _destination, fold, reply_channels, sender_threads, is_notice
 
 
 @dataclass(frozen=True)
@@ -255,7 +255,9 @@ def unanswered_letters(facts) -> dict[str, Fact]:
     answered = {f.data.get('re') for f in facts if f.kind == 'note'
                 and f.by.startswith('person:') and f.data.get('re') in asks
                 and person(f.by) == author(asks[f.data['re']])}
-    replies = {f.id: f for f in accepted if f.kind == 'letter'
+    # Loom notices report transport/runtime state, not an answer to the ask.
+    # They can be embedded in a done disposition and have real part receipts.
+    replies = {f.id: f for f in accepted if f.kind == 'letter' and not is_notice(f)
                and f.data.get('re') in asks and f.data.get('to') == channels.get(f.data['re'])}
     for f in accepted:
         if f.kind != 'speech.part' or f.data.get('key') not in replies:

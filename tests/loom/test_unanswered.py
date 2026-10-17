@@ -24,12 +24,20 @@ def replay(tmp_path):
         return append(home, Fact(kind=kind, id=ident, by=by, data=data))
     record('source', 'source:4401', {'channel': CHANNEL})
     record('letter', ASK, dict(id=ASK, to='thread:inbox', body='The ask',
-                              **{'from': 'p-155783668'}, cites='source:4401'))
+                              **{'from': 'person:arseni'}, cites='source:4401'))
     record('lease', 'lease:inbox:7', dict(thread='inbox', strand=STRAND, gen=7, install='ae66'))
     record('attempt.ended', 'attempt.ended:s-ae66-xo04cv:7', dict(
         thread='inbox', strand=STRAND, gen=7, ids=[ASK], cause='failed', code=3,
         evidence={'tail': 'wake over budget; Plan 7345 B'},
-        dispositions=[dict(id=ASK, outcome='done', reason='failure message owed to author')]))
+        dispositions=[dict(id=ASK, outcome='done', reason='failure message owed to author',
+                           successor=dict(id='loom/failed-message-d8454633cf',
+                                          to=CHANNEL, body='Send again, or leave it.',
+                                          re=ASK, about=ASK, **{'from': 'loom'}))]))
+    # The real 4401 history has no standalone reply here, but its disposition
+    # embeds this delivered failure notice. That is still not an answer.
+    record('speech.part', 'speech.part:loom/failed-message-d8454633cf#1', dict(
+        key='loom/failed-message-d8454633cf', part='loom/failed-message-d8454633cf#1',
+        channel=CHANNEL, receipt={'message_id': '155783668:4403'}))
     (home.room(STRAND) / 'port/in').mkdir(parents=True)
     return home, record
 
@@ -96,7 +104,7 @@ def test_own_hand_note_answers_but_another_person_does_not(tmp_path, capsys):
     assert view(home, capsys)[1]['unanswered'] == '1'
     # The documented hand.jsonl interface, with the actual author's identity.
     path = home.facts_dir() / 'hand.jsonl'
-    path.write_text(path.read_text().replace('person:test', 'person:155783668'))
+    path.write_text(path.read_text().replace('person:test', 'person:arseni'))
     assert view(home, capsys)[1]['unanswered'] == '0'
 
 
