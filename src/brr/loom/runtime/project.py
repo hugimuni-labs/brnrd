@@ -60,6 +60,22 @@ def projection_cache(cache=None):
         _projection_cache.reset(token)
 
 
+def cached_projection(facts, name, inputs, build):
+    """Reuse a pure projection of immutable fact objects and explicit inputs.
+
+    Pin the objects just as fold does; append/replacement and caller inputs
+    change the key. Without a tick context, always compute a fresh result.
+    """
+    cache = _projection_cache.get()
+    if cache is None:
+        return build(facts)
+    snapshot = tuple(facts)
+    key = (name, tuple(map(id, snapshot)), inputs)
+    if key not in cache:
+        cache[key] = (snapshot, build(snapshot))
+    return cache[key][1]
+
+
 def ordered_facts(facts: Iterable[Fact]) -> list[Fact]:
     cache = _projection_cache.get()
     if cache is None:
@@ -229,6 +245,10 @@ def generation(facts: Iterable[Fact], strand: str) -> int | None:
 
 def sender_threads(facts: Iterable[Fact]) -> dict[str, str]:
     """Latest lease wins, including a strand that has since been released."""
+    return cached_projection(facts, "senders", (), _sender_threads)
+
+
+def _sender_threads(facts):
     found: dict[str, str] = {}
     for fact in fold(facts).accepted:
         if fact.kind == "lease":
@@ -241,6 +261,13 @@ def reply_channels(facts: Iterable[Fact], home=None) -> dict[str, str]:
 
     Only an address ``send`` accepts is offered; any disabled instance stays ``-``.
     """
+    from .connector import instances
+    enabled = frozenset(instances(home)) if home is not None else None
+    return cached_projection(facts, "reply-channels", enabled,
+                             lambda rows: _reply_channels(rows, enabled))
+
+
+def _reply_channels(facts, enabled):
     from .home import channel_parts
     facts = list(facts)
     sources = {fact.id: fact.data for fact in facts if fact.kind == "source"}
@@ -251,7 +278,9 @@ def reply_channels(facts: Iterable[Fact], home=None) -> dict[str, str]:
             continue
         channel = source["channel"]
         try:
-            channel_parts(channel, home)
+            instance, _ = channel_parts(channel)
+            if enabled is not None and instance not in enabled:
+                continue
         except ValueError:
             continue
         found[str(fact.data.get("id"))] = channel

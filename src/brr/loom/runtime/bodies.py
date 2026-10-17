@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 from brr.daemon2.facts import Fact
 
+from .project import cached_projection
+
 
 @dataclass(frozen=True)
 class State:
@@ -123,6 +125,11 @@ def fact_for(facts: list[Fact], kind: str, strand: str, gen: int) -> Fact | None
 
 def state_of(facts: list[Fact], strand: str, gen: int, *, alive=False) -> State:
     """Fold all generation facts, retaining once-only markers across reopenings."""
+    return cached_projection(facts, "body-state", (strand, gen, alive),
+                             lambda rows: _state_of(rows, strand, gen, alive=alive))
+
+
+def _state_of(facts, strand, gen, *, alive):
     name, until, deadline = "wanted", 0, 0
     pending, stopped, identified, released, exited, ended = False, False, True, False, False, False
     for f in facts:

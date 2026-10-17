@@ -196,14 +196,17 @@ class Router:
         facts = _closures(home, facts, threads)
         from .lifecycle import CLOSED, read_thread
         pending = []
+        state = fold(facts)
         for thread in threads:
             if read_thread(home, thread).get("status") in CLOSED:
                 continue
             if not self.armed():
                 break
-            facts = self._release_abandoned(facts, thread, body_alive)
-            if holder(facts, thread):
-                continue
+            if thread in state.holder:
+                facts = self._release_abandoned(facts, thread, body_alive)
+                state = fold(facts)
+                if thread in state.holder:
+                    continue
             letters = [f for f in letters_for(facts, main_snapshot(home), thread) if not f.data.get("notice")]
             if not letters:
                 continue

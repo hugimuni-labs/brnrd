@@ -252,16 +252,18 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
 def _closures(home: Home, facts: list[Fact], threads: list[str]) -> list[Fact]:
     from .lifecycle import CLOSED, closing_commit, read_thread
     writers = sender_threads(facts)
+    ids = {fact.id for fact in facts}
     for thread in threads:
         data = read_thread(home, thread)
         if data.get("status") not in CLOSED:
             continue
         commit, why, writer = closing_commit(home, thread)
         ident = f"thread.closed:{thread}:{commit}"
-        if not any(f.id == ident for f in facts):
+        if ident not in ids:
             facts.append(_record(home, "thread.closed", {
                 "thread": thread, "status": data["status"], "why": why, "commit": commit,
             }, ident))
+            ids.add(ident)
         opener = str(data.get("opened-by", ""))
         if opener.startswith("thread:") and writers.get(writer) != opener.removeprefix("thread:"):
             notice(home, facts, "closed", ident, f"thread {thread} {data['status']}: {why}",

@@ -1,12 +1,15 @@
 """Profile a disconnected copy: PYTHONPATH=src python bench/loom_home_idle.py HOME.
 
 Copies ledger/, loom/, self/ and empty room outboxes. Never profiles the
-original home. No workers, connectors, forge or shell gauges can be reached.
+original home. No real workers, connector children, forge or gauge collectors run.
 """
 from __future__ import annotations
 
 import argparse
 import cProfile
+import fcntl
+import json
+from contextlib import ExitStack
 import pstats
 import shutil
 import subprocess
@@ -16,7 +19,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from brr.loom.runtime import connector, loom, usage
+from brr.loom.runtime import connector, loom, usage, router as router_module
+from brr.loom.runtime.project import fold
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.router import Router
 
@@ -27,6 +31,8 @@ def main():
     parser.add_argument('--ticks', type=int, default=20)
     parser.add_argument('--start-checks', action='store_true',
                         help='include locked start authority checks; never advance a body')
+    parser.add_argument('--full-tick', action='store_true',
+                        help='advance fake held bodies, read cached gauges, poll empty connectors')
     args = parser.parse_args()
     print(f'tick source: {loom.__file__}')
     with tempfile.TemporaryDirectory(prefix='loom-home-idle-') as temporary:
@@ -57,25 +63,63 @@ def main():
             if args.start_checks:
                 return real_start(home, strand, thread, gen, bodies, facts, choice, **kwargs)
             return facts
-        with patch.object(usage, 'reading', return_value={'windows': []}), \
-                patch.object(loom, '_start', no_start), \
-                patch.object(loom, '_advance_body', no_advance):
-            loom.tick_once(home, bodies, 'fake', 'haiku', router)
+        def forbidden(*args, **kwargs):
+            raise RuntimeError('disconnected benchmark forbids spawn, signal, send or collector')
+        with ExitStack() as guards:
+            guards.enter_context(patch.object(loom, '_spawn', forbidden))
+            guards.enter_context(patch.object(loom, '_end_group', forbidden))
+            guards.enter_context(patch.object(router_module, 'speak', forbidden))
+            inputs = None
+            if args.full_tick:
+                config.write_text(config.read_text().replace('connectors = []', connectors))
+                for thread, (strand, gen) in fold(router.reader.read(home)).holder.items():
+                    room = home.room(strand)
+                    (room / 'port/in').mkdir(parents=True, exist_ok=True)
+                    lock = guards.enter_context((room / '.body').open('a+'))
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                for path in (root / 'loom/usage').glob('*.json'):
+                    reading = json.loads(path.read_text())
+                    reading['at'] = time.time()
+                    path.write_text(json.dumps(reading))
+                guards.enter_context(patch.object(usage, '_refresh', forbidden))
+                with patch.object(connector.subprocess, 'Popen',
+                                  return_value=SimpleNamespace(poll=lambda: None)):
+                    inputs = connector.Inputs(home)
+                    inputs.step()
+            else:
+                guards.enter_context(patch.object(usage, 'reading', return_value={'windows': []}))
+                guards.enter_context(patch.object(loom, '_start', no_start))
+                guards.enter_context(patch.object(loom, '_advance_body', no_advance))
+            def tick():
+                if inputs is not None:
+                    inputs.step()
+                    loom._source_fingerprint()
+                loom.tick_once(home, bodies, 'fake', 'haiku', router)
+            tick()
             # Hold lease time fixed to compare identical idle work, excluding
             # timer-triggered renewal appends from the profiled interval.
             if router.lease is not None:
                 fixed = router.lease.until - router.config.router_ttl
                 router.clock = router.authority.clock = lambda: fixed
-            loom.tick_once(home, bodies, 'fake', 'haiku', router)
+            tick()
+            if args.full_tick:
+                print(f'full tick: {len(router.reader.read(home))} facts, '
+                      f'{len(fold(router.reader.read(home)).holder)} fake holders, '
+                      f'{len(list((root / "rooms").iterdir()))} empty rooms, '
+                      f'{len(inputs.names)} supervisors')
             profile = cProfile.Profile()
             started = time.process_time()
             with profile:
                 for _ in range(args.ticks):
-                    loom.tick_once(home, bodies, 'fake', 'haiku', router)
+                    tick()
             print(f'{args.ticks} ticks: {time.process_time() - started:.3f}s CPU')
             stats = pstats.Stats(profile).strip_dirs().sort_stats('cumulative')
             stats.print_stats(25)
-            stats.print_stats(r'_ingest|observe_due|notice|letter_owners|speak_out')
+            stats.print_stats(r'_ingest|observe_due|notice|letter_owners|speak_out|_boundary|thread_table|reading')
+            started = time.process_time()
+            for _ in range(args.ticks):
+                tick()
+            print(f'{args.ticks} unprofiled ticks: {time.process_time() - started:.3f}s CPU')
             started = time.process_time()
             for _ in range(args.ticks):
                 loom._source_fingerprint()
