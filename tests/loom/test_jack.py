@@ -10,6 +10,7 @@ from brr.daemon2.facts import Fact
 import os
 import runpy
 import sys
+import pytest
 from brr.loom.runtime.adapters import resolve
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.jack import execute, run
@@ -218,3 +219,43 @@ def test_post_says_the_context_weight_once_per_band(tmp_path):
     assert first.startswith("context: 120k tokens") and "booted at 40k" in first
     assert call(130_000) == ""
     assert "context: 151k" in call(151_000)
+
+
+@pytest.mark.parametrize('shell,cache,override,creation,expected', [
+    ('claude', None, None, {'ephemeral_1h_input_tokens': 5000}, 3300),
+    ('claude', None, None, {'ephemeral_5m_input_tokens': 5000}, 7110),
+    ('claude', None, None, {}, 3300),
+    ('codex', None, None, {}, 7110),
+    ('custom', '1200', None, {}, 900),
+    ('custom', 'garbage', None, {}, 7110),
+    ('custom', 'Infinity', None, {}, 7110),
+    ('custom', '300', None, {}, 7110),
+    ('claude', None, '42', {}, 42),
+    ('codex', None, '42', {}, 42),
+])
+def test_stop_holds_for_the_shells_cache_or_the_hook_ceiling(
+        tmp_path, monkeypatch, shell, cache, override, creation, expected):
+    from brr.loom.runtime import jack, usage
+    room = _room(tmp_path)
+    _write(room, [])
+    if shell == 'custom':
+        folder = tmp_path / 'loom/bodies/custom'
+        folder.mkdir(parents=True)
+        (folder / 'run').touch()
+        (folder / 'cache').write_text(cache)
+    if override is not None:
+        (room / 'port/wait').write_text(override)
+    transcript = tmp_path / 'transcript.jsonl'
+    transcript.write_text(json.dumps({'message': {'usage': {'cache_creation': creation}}}) + '\n')
+    monkeypatch.setenv('BRNRD_BODY_SHELL', shell)
+    monkeypatch.setenv('BRNRD_BODY_JACK', 'hooks')
+    monkeypatch.setenv('BRNRD_STOP_TIMEOUT', '7200')
+    monkeypatch.delenv('BRNRD_THREAD', raising=False)
+    monkeypatch.setattr(usage, 'dry_until', lambda *args: None)
+    now = [0.]
+    monkeypatch.setattr(jack.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(jack.time, 'sleep', lambda seconds: now.__setitem__(0, now[0] + seconds))
+    result = json.loads(jack.execute('stop', room, json.dumps({'transcript_path': str(transcript)})))
+    assert result['decision'] == 'block'
+    assert result['reason'].startswith('nothing new; holding')
+    assert now[0] == pytest.approx(expected)

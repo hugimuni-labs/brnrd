@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 import traceback
@@ -33,10 +34,6 @@ def _set_state(room: Path, **updates) -> None:
                  json.dumps(state) + "\n")
 
 
-# The prompt cache lives an hour from its last read. A hold that wakes at
-# 3600 s lands on the edge, and one of three such wakes rewrote 109k tokens;
-# at 55 minutes every keepalive is a cache read.
-HOLD = 3300.0
 # How long one stop hook may run: long enough to sleep through an exhausted
 # five-hour window instead of leaving. The body's adapter pins the hook
 # timeout from the same number, in BRNRD_STOP_TIMEOUT.
@@ -44,11 +41,50 @@ PARK = 6 * 3600.0
 MARGIN = 90.0
 
 
-def _wait(room: Path) -> float:
+def _cache_access(stdin_text: str) -> str:
+    """Claude reports the effective TTL, including settings/credit overrides.
+
+    Authentication alone cannot tell whether a subscription is using paid
+    credits. Read the CLI's own cache-write buckets rather than guessing.
+    """
+    if os.environ.get('BRNRD_BODY_SHELL') != 'claude':
+        return ''
+    try:
+        path = Path(json.loads(stdin_text)['transcript_path'])
+        with path.open('rb') as handle:
+            handle.seek(max(path.stat().st_size - 200_000, 0))
+            lines = handle.read().decode(errors='replace').splitlines()
+        for line in reversed(lines):
+            try:
+                creation = json.loads(line)['message']['usage']['cache_creation']
+                if creation.get('ephemeral_5m_input_tokens', 0) > 0:
+                    return '5m'
+                if creation.get('ephemeral_1h_input_tokens', 0) > 0:
+                    return '1h'
+            except (ValueError, KeyError, TypeError, AttributeError):
+                continue
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return ''
+
+
+def _wait(room: Path, stdin_text: str = '') -> float | None:
     path = room / "port" / "wait"
-    if not path.is_file():
-        return HOLD
-    return float(path.read_text().strip())
+    if path.is_file():
+        return float(path.read_text().strip())
+    from .adapters import resolve
+    shell = os.environ.get("BRNRD_BODY_SHELL")
+    if not shell:
+        return None
+    try:
+        # Absent file: the shell declares no lifetime. A home may override.
+        lifetime = float((resolve(home_of_room(room), shell) / "cache").read_text().strip())
+    except (OSError, ValueError, OverflowError):
+        return None
+    if shell == "claude" and _cache_access(stdin_text) == "5m":
+        lifetime = 300.0
+    # A lifetime too short to leave the safety margin cannot buy a hold.
+    return lifetime - 300 if math.isfinite(lifetime) and lifetime > 300 else None
 
 
 def _stop_timeout() -> float:
@@ -89,14 +125,15 @@ def _block(room: Path, text: str, parsed: Boundary) -> str:
     return _json({"decision": "block", "reason": text})
 
 
-def _poll(room: Path) -> str:
+def _poll(room: Path, stdin_text: str = '') -> str:
     from .usage import dry_until
     home = home_of_room(room)
     shell = os.environ.get("BRNRD_BODY_SHELL")
     begun = time.monotonic()
     # Leave before the shell kills this hook: a killed hook ends the body.
     ceiling = begun + max(_stop_timeout() - MARGIN, 0.0)
-    deadline = min(begun + _wait(room), ceiling)
+    wait = _wait(room, stdin_text)
+    deadline = ceiling if wait is None else min(begun + wait, ceiling)
     parked = False
     from .lifecycle import read_thread
     thread = "" if _hand() else os.environ.get("BRNRD_THREAD", "")
@@ -136,8 +173,8 @@ def _poll(room: Path) -> str:
                 return ""
             # Hold again by blocking, never by waiting on in this call: the
             # shell ends a hook that outlives its timeout, and the body would
-            # then leave while it still owes. Under the cache's hour this
-            # turn is a cache read.
+            # then leave while it still owes. With no cache lifetime this
+            # happens only at the hook ceiling.
             return _json({"decision": "block", "reason": "nothing new; holding\n" + text})
         time.sleep(min(0.2, remaining))
 
@@ -258,7 +295,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         return ""
     if parsed.ids and (_hand() or not _state(room).get("stop_blocks") and not _dry(room)):
         return _block(room, text, parsed)
-    return _poll(room)
+    return _poll(room, stdin_text)
 
 
 def _dry(room: Path) -> bool:
