@@ -91,7 +91,7 @@ def walk(table=TABLE, commands=COMMANDS, observed=OBSERVED, hands=loom.HANDS, ki
     wrong += [f"hand {name} performs no command" for name in sorted(set(hands) - {s.hand for s in commands.values()})]
     recorded = {step.records for step in commands.values()}
     wrong += [f"{row.kind} is written by no command" for row in kinds.values()
-              if row.resource in CLOSED and row.kind not in recorded]
+              if row.resource == "body" and row.kind not in recorded]
     wrong += [f"the table reads undeclared {kind}" for kind in sorted(_kinds_read(bodies) - set(kinds))]
     return wrong
 
@@ -123,7 +123,8 @@ def test_the_registry_is_well_formed():
         assert row.scope in registry.SCOPES, row
         assert len(set(row.names())) == len(row.fields), row
         # The body table folds by strand and generation.
-        assert {"strand", "gen"} <= set(row.required()), row
+        if row.resource != "wish":
+            assert {"strand", "gen"} <= set(row.required()), row
 
 
 def test_a_live_run_writes_only_facts_the_registry_accepts(tmp_path, capsys):

@@ -358,7 +358,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                clean: bool = False, kind: str | None = None,
                refs: tuple[str, ...] | list[str] = (),
                molt: str | None = None, body_choice: str | None = None,
-               at: str | None = None, repo_sources: tuple[str, ...] | list[str] = ()) -> str:
+               at: str | None = None, repo_sources: tuple[str, ...] | list[str] = (),
+               wish: str | None = None) -> str:
     home = home_of_room(Path(room))
     opening = None
     if at is not None:
@@ -407,6 +408,18 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         re = _full_re(Path(room), re)
     if note is not None and body:
         raise PortError("send: --note is the whole no-answer; drop the body")
+    wish_stamp = None
+    if wish is not None:
+        from .ledger import read_facts
+        from .lifecycle import own_thread
+        from .verbs_wishes import say_span, wish_fact
+        if not re:
+            raise PortError("send --wish requires --re")
+        facts = read_facts(home)
+        ident, line = ("new", wish[4:]) if wish.startswith("new:") else (wish, None)
+        wish_stamp = wish_fact(facts, by="strand:" + sender, ident=ident,
+                               says=[say_span(re, facts)], line=line,
+                               thread=own_thread(Path(room)) if ident == "new" else None)
     stem = mint(5)
     letter_id = f"{sender}/{stem}"
     fields = {
@@ -442,6 +455,9 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         from .lifecycle import open_thread
         open_thread(Path(room), opening, sender, body, body_choice, repo_sources)
     write_port(room, stem, text)
+    if wish_stamp is not None:
+        from .ledger import append
+        append(home, wish_stamp)
     return letter_id
 
 
