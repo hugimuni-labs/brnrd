@@ -1,44 +1,29 @@
 {
   "default": {
-    "seconds": null,
-    "status": "unknown",
-    "reason": "Unlisted model or access path: no established cache lifetime."
+    "seconds": null
   },
   "models": {
     "gpt-6.1-sol": {
-      "seconds": null,
-      "status": "unknown",
-      "reason": "API minimum 1800s documented for this model (source O); Codex subscription CLI retention is unpublished. CLI probes observe cache hits, not a stable lifetime. See cache-measurements.md. No API policy is assumed for a subscription backend."
+      "seconds": null
     },
     "gpt-6-astra": {
-      "seconds": null,
-      "status": "unknown",
-      "reason": "API minimum 1800s documented for this model (source O); Codex subscription CLI retention is unpublished. CLI probes observe cache hits, not a stable lifetime. See cache-measurements.md. No API policy is assumed for a subscription backend."
+      "seconds": null
     },
     "gpt-6-sol": {
-      "seconds": null,
-      "status": "unknown",
-      "reason": "API minimum 1800s documented for this model (source O); Codex subscription CLI retention is unpublished. CLI probes observe cache hits, not a stable lifetime. See cache-measurements.md. No API policy is assumed for a subscription backend."
+      "seconds": null
     },
     "gpt-6-luna": {
-      "seconds": null,
-      "status": "unknown",
-      "reason": "API minimum 1800s documented for this model (source O); Codex subscription CLI retention is unpublished. CLI probes observe cache hits, not a stable lifetime. See cache-measurements.md. No API policy is assumed for a subscription backend."
+      "seconds": null
     },
     "gpt-5.6-sol": {
-      "seconds": null,
-      "status": "unknown",
-      "reason": "API minimum 1800s documented for this model (source O); Codex subscription CLI retention is unpublished. CLI probes observe cache hits, not a stable lifetime. See cache-measurements.md. No API policy is assumed for a subscription backend."
+      "seconds": null
     },
     "gpt-5.6-terra": {
-      "seconds": null,
-      "status": "unknown",
-      "reason": "API minimum 1800s documented for this model (source O); Codex subscription CLI retention is unpublished. CLI probes observe cache hits, not a stable lifetime. See cache-measurements.md. No API policy is assumed for a subscription backend."
+      "seconds": null
     },
     "gpt-5.6-luna": {
-      "seconds": null,
-      "status": "unknown",
-      "reason": "API minimum 1800s documented for this model (source O); Codex subscription CLI retention is unpublished. CLI probes observe cache hits, not a stable lifetime. See cache-measurements.md. No API policy is assumed for a subscription backend."
+      "seconds": null
     }
-  }
+  },
+  "source": "https://github.com/hugimuni-labs/brnrd-knowledge/blob/main/repos/hugimuni-labs__brnrd/research-model-cache-lifetimes.md"
 }

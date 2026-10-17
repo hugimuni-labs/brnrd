@@ -1,24 +1,17 @@
 {
   "default": {
-    "seconds": null,
-    "status": "unknown",
-    "reason": "Unlisted model or access path: no established cache lifetime."
+    "seconds": null
   },
   "models": {
     "mistral-medium-3.5": {
-      "seconds": null,
-      "status": "unknown",
-      "reason": "Mistral documents caching but no TTL (source M); real subscription CLI probe rejected with budget exhausted."
+      "seconds": null
     },
     "glm-5-3": {
-      "seconds": null,
-      "status": "unknown",
-      "reason": "Mistral documents caching but no TTL (source M); real subscription CLI probe rejected with budget exhausted."
+      "seconds": null
     },
     "local": {
-      "seconds": null,
-      "status": "unknown",
-      "reason": "Local inference server is user-configured; no running server or portable TTL contract."
+      "seconds": null
     }
-  }
+  },
+  "source": "https://github.com/hugimuni-labs/brnrd-knowledge/blob/main/repos/hugimuni-labs__brnrd/research-model-cache-lifetimes.md"
 }

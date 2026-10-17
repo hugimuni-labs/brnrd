@@ -1,8 +1,7 @@
 {
   "default": {
-    "seconds": null,
-    "status": "documented",
-    "reason": "Test process makes no provider calls; no prompt cache."
+    "seconds": null
   },
-  "models": {}
+  "models": {},
+  "source": "https://github.com/hugimuni-labs/brnrd-knowledge/blob/main/repos/hugimuni-labs__brnrd/research-model-cache-lifetimes.md"
 }

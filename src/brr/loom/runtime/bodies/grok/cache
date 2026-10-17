@@ -1,29 +1,20 @@
 {
   "default": {
-    "seconds": null,
-    "status": "unknown",
-    "reason": "Unlisted model or access path: no established cache lifetime."
+    "seconds": null
   },
   "models": {
     "grok-4.5": {
-      "seconds": null,
-      "status": "unknown",
-      "reason": "API may evict at any time (source X); subscription CLI TTL undocumented. See measurement record."
+      "seconds": null
     },
     "grok-4.6": {
-      "seconds": null,
-      "status": "unknown",
-      "reason": "API may evict at any time (source X); subscription CLI TTL undocumented. See measurement record."
+      "seconds": null
     },
     "grok-4.7": {
-      "seconds": null,
-      "status": "unknown",
-      "reason": "API may evict at any time (source X); subscription CLI TTL undocumented. See measurement record."
+      "seconds": null
     },
     "grok-4.7-build-fast": {
-      "seconds": null,
-      "status": "unknown",
-      "reason": "API may evict at any time (source X); subscription CLI TTL undocumented. See measurement record."
+      "seconds": null
     }
-  }
+  },
+  "source": "https://github.com/hugimuni-labs/brnrd-knowledge/blob/main/repos/hugimuni-labs__brnrd/research-model-cache-lifetimes.md"
 }
