@@ -12,7 +12,7 @@ from pathlib import Path
 
 from brr.daemon2.facts import Fact, union
 from .adapters import resolve
-from .config import config_path, load_config, read_array
+from .config import ConfigError, config_path, load_config, read_array
 from .home import atomic_write, channel_parts, mint
 from .labels import guard_off, is_stranger
 from .ledger import append, read_facts
@@ -55,7 +55,21 @@ class Inputs:
         self.home, self.children, self.failures = home, {}, {}
         self.names = instances(home)
 
+    def follow_config(self):
+        """A channel paired while the loom runs starts on the next step; a removed one stops.
+
+        An edit the loader or carries refuses keeps the running set."""
+        try:
+            carries(self.home)
+            names = instances(self.home)
+        except (ConfigError, ValueError, OSError):
+            return
+        for name in set(self.children) - set(names):
+            _stop(self.children.pop(name)[0])
+        self.names = names
+
     def step(self):
+        self.follow_config()
         for name, kind in self.names.items():
             folder = resolve(self.home, kind, "connectors")
             drop = self.home.root / "loom/connectors" / name / "state/in"
@@ -77,13 +91,17 @@ class Inputs:
 
     def close(self):
         for child, _due, _delay in self.children.values():
-            if child is not None and child.poll() is None:
-                child.terminate()
-                try:
-                    child.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    child.kill()
-                    child.wait()
+            _stop(child)
+
+
+def _stop(child):
+    if child is not None and child.poll() is None:
+        child.terminate()
+        try:
+            child.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait()
 
 
 def addressed(name, fm):
