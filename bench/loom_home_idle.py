@@ -82,7 +82,8 @@ def main():
                 started = time.process_time()
                 for _ in range(args.ticks):
                     inputs.step()
-                print(f'{args.ticks} empty connector polls: {time.process_time() - started:.3f}s CPU')
+                print(f'{args.ticks} empty connector polls ({len(inputs.names)} supervisors): '
+                      f'{time.process_time() - started:.3f}s CPU')
 
 
 if __name__ == '__main__':
