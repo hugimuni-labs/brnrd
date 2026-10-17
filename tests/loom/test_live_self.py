@@ -73,7 +73,7 @@ def test_a_live_body_sees_identity_and_lands_a_labeled_commit(tmp_path, sender):
         assert not loom.errors
 
 
-def test_a_wake_over_budget_returns_the_failure_and_a_new_letter_recovers(tmp_path, monkeypatch):
+def test_a_home_wake_over_budget_keeps_original_owed_and_recovers_without_resend(tmp_path, monkeypatch):
     root = tmp_path / "home"
     write_thread(root, "fat", "A fat wake", "answer-fast", wait="0")
     monkeypatch.setenv("LOOM_BUDGET_BYTES", "1")
@@ -81,16 +81,20 @@ def test_a_wake_over_budget_returns_the_failure_and_a_new_letter_recovers(tmp_pa
     loom = Loom(root)
     loom.start()
     try:
-        wait_until(lambda: letter_owners(loom.facts(), main_snapshot(loom.home))[original].owner == "operator",
-                   8, loom.dump)
+        wait_until(lambda: len([f for f in loom.facts() if f.kind == "attempt.ended"
+                               and f.data["thread"] == "fat"]) >= 3, 8, loom.dump)
         facts = loom.facts()
-        assert "wake exited 3: over budget:" in letter_owners(facts, main_snapshot(loom.home))[original].reason
+        fate = letter_owners(facts, main_snapshot(loom.home))[original]
+        assert not fate.done and fate.reason == "home-caused failure"
         assert not [f for f in facts if f.kind == "body.started"]
-        assert not mail(root, facts, "fat")
+        assert original in {f.id for f in mail(root, facts, "fat")}
+        notices = [f for f in facts if f.id.startswith("loom/self-refusal-")]
+        assert len(notices) == 1 and notices[0].data["to"] == "thread:inbox"
         monkeypatch.delenv("LOOM_BUDGET_BYTES")
-        inject_letter(root, to="thread:fat", body="fixed, retry")
-        wait_until(lambda: not mail(root, loom.facts(), "fat"), 8, loom.dump)
-        assert original not in {f.data["id"] for f in mail(root, loom.facts(), "fat")}
+        # Repairing the home is sufficient: the person never has to resend.
+        wait_until(lambda: letter_owners(loom.facts(), main_snapshot(loom.home))[original].done,
+                   8, loom.dump)
+        assert any(f.kind == "note" and f.data.get("re") == original for f in loom.facts())
     finally:
         loom.halt()
     assert not loom.errors
