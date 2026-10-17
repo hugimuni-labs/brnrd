@@ -239,7 +239,7 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
     A notice is an owed letter from ``loom``, so it is shown at every
     boundary until a body settles it. Its id is derived from the condition:
     a condition met on every tick writes one letter. It goes to ``thread``
-    when a body can run there, else to ``inbox``. The last lines always name
+    when a body can run there, else to the home thread. The last lines always name
     the handle. ``stands`` ties it to ``about``: the two settle together.
     """
     ident = notice_id(kind, subject)
@@ -251,7 +251,7 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
         label = join(label, strand_label(facts, source_strand, self_root=home.root / "self"))
     lines = [what]
     data: dict = {"id": ident, "from": "loom",
-                  "to": channel or f"thread:{thread if home.routable(thread) else 'inbox'}"}
+                  "to": channel or f"thread:{thread if home.routable(thread) else home.main_thread()}"}
     if passive:
         data["notice"] = True
     if about is not None:

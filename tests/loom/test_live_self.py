@@ -89,7 +89,7 @@ def test_a_home_wake_over_budget_keeps_original_owed_and_recovers_without_resend
         assert not [f for f in facts if f.kind == "body.started"]
         assert original in {f.id for f in mail(root, facts, "fat")}
         notices = [f for f in facts if f.id.startswith("loom/self-refusal-")]
-        assert len(notices) == 1 and notices[0].data["to"] == "thread:inbox"
+        assert len(notices) == 1 and notices[0].data["to"] == "thread:brnrd"
         monkeypatch.delenv("LOOM_BUDGET_BYTES")
         # A repair outside self recovers at the ten-minute fallback.
         from datetime import datetime, timedelta

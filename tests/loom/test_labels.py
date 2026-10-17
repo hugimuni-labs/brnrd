@@ -44,12 +44,12 @@ def _room(tmp_path: Path, strand: str = "s1") -> tuple[Path, Path]:
 
 def test_a_strangers_letter_taints_and_a_thread_does_not(tmp_path: Path) -> None:
     root = tmp_path / "self"
-    _thread(root, "inbox")
-    assert is_stranger("inbox", root) is False
-    assert is_stranger("thread:inbox", root) is False
+    _thread(root, "brnrd")
+    assert is_stranger("brnrd", root) is False
+    assert is_stranger("thread:brnrd", root) is False
     assert is_stranger("channel-user", root) is True
     stranger = _fact("letter", "x/1", {"id": "x/1", "from": "channel-user", "body": "hi"})
-    own = _fact("letter", "inbox/1", {"id": "inbox/1", "from": "thread:inbox", "body": "hi"})
+    own = _fact("letter", "inbox/1", {"id": "inbox/1", "from": "thread:brnrd", "body": "hi"})
     shown_bad = _fact("shown", "shown-1", {"strand": "s1", "ids": ["x/1"], "gen": 1})
     shown_ok = _fact("shown", "shown-2", {"strand": "s2", "ids": ["inbox/1"], "gen": 1})
     tainted = strand_label([stranger, shown_bad], "s1", self_root=root, jack_log="")
@@ -202,7 +202,7 @@ def test_guard_off_leaves_every_strand_clean_and_on_keeps_the_taint(tmp_path: Pa
     from brr.loom.runtime.port import _current_label
 
     home, room = _room(tmp_path, STRAND)
-    _thread(home / "self", "inbox")
+    _thread(home / "self", "brnrd")
     (home / "ledger" / "facts").mkdir(parents=True)
     append(Home(home), _fact("letter", "x/1", {"id": "x/1", "from": "stranger:cloud:telegram:1", "body": "hi"}))
     append(Home(home), _fact("shown", "shown-1", {"strand": STRAND, "ids": ["x/1"], "gen": 1}))

@@ -14,7 +14,7 @@ from brr.daemon2.facts import Fact
 from brr.daemon2.leases import Lease, LocalLeaseAuthority
 
 from .config import LoomConfig, granting_window, load_config, loom_clock
-from .home import Home, is_channel, mint
+from .home import Home, home_thread, is_channel, mint
 from .ledger import LedgerConflict, LedgerReader
 from .project import (
     fold, holder, is_notice, sender_threads,
@@ -346,7 +346,7 @@ class Router:
         dispositions = []
         for letter in letters:
             data = {"id": letter.id, "outcome": "operator", "reason": reason}
-            target = writers.get(str(letter.data.get("from", ""))) or "inbox"
+            target = writers.get(str(letter.data.get("from", ""))) or self.home.main_thread()
             if target != thread and self.home.routable(target):
                 successor = notice(self.home, facts, kind, letter.id,
                                    f"your letter {letter.id} was not delivered: {what}", can,
@@ -368,7 +368,8 @@ class Router:
                 kind, target = "climbed", fate.thread
                 what = f"letter {letter.id} to closed thread {letter.data.get('to', '').removeprefix('thread:')} climbed here"
             else:
-                kind, target = "unroutable", "inbox" if "inbox" in known else None
+                kind, target = "unroutable", home_thread(known)
+                target = target if target in known else None
                 what = f"letter {letter.id} addressed to {letter.data.get('to')!r}, which is not a thread on main"
             data = {"id": letter.id, "outcome": "operator", "reason": fate.reason}
             if target:

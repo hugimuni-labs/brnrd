@@ -10,7 +10,7 @@ Exit 0 is a prompt. Exit 3 is over budget. Any other exit is a broken recipe.
 
 ## Notices
 
-What the loom cannot settle by its own rules it hands to a body: a letter from `loom`, owed like any other, shown at every boundary until it is settled and gone after that. One is written per condition, not per tick. It goes to the thread the condition belongs to when a body can run there, otherwise to `inbox`.
+What the loom cannot settle by its own rules it hands to a body: a letter from `loom`, owed like any other, shown at every boundary until it is settled and gone after that. One is written per condition, not per tick. It goes to the thread the condition belongs to when a body can run there, otherwise to `brnrd`, the home thread.
 
 The last lines of every notice are its handle: `settle this notice with a reply or a note, re: <id>`, and, when it is about a letter or a draft of yours, that item's id and what you can do about it. A notice that says it settles another item too stands for that item: settling either one settles both. Conditions that arrive this way: a letter two bodies died reading (quarantined, kept out of every wake), a letter addressed to no thread on main, a message of yours that was refused, went stale under a new router, or may or may not have arrived (it is never sent again; send a fresh one), a body that ended before handling your letter (send again, or leave it), a relay event or attachment that could not be taken in, a thread directory that cannot be a thread, a port file of yours the loom refused.
 
@@ -28,7 +28,7 @@ A note written `by` a `person:` with `re:` a letter's id settles that letter wha
 
 A failed preparation (including an over-budget home or a broken wake recipe)
 keeps its letters owed for retry. One self-refusal notice asks for home repair,
-in inbox when preparation, spawn, or the holding install cannot run. Only an input that
+in brnrd when preparation, spawn, or the holding install cannot run. Only an input that
 itself exceeds the wake budget, with a recipe that runs without mail, uses the
 letter-failure path. A failure to prepare does not spend a letter's body-crash
 retry allowance. The person receives no failure message for a home refusal. A nonzero body exit

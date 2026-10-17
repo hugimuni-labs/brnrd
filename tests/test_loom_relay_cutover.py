@@ -30,7 +30,7 @@ def _cloud_state(tmp_path, since=0):
     brr_dir = tmp_path / ".brr"
     cloud._save_state(brr_dir, {"brnrd_url": "http://brnrd", "token": "bd_x",
                                 "repo_id": "proj_x", "since": since})
-    return brr_dir, brr_dir / "inbox", brr_dir / "responses"
+    return brr_dir, brr_dir / "brnrd", brr_dir / "responses"
 
 
 def _quiet_cloud(monkeypatch):
@@ -266,7 +266,7 @@ def test_a_missing_attachment_holds_the_cursor_three_pulls_then_lands(home):
     assert len(kinds(home, "source")) == 1 and letter.id == "letter:relay:telegram:555:ev_f"
     assert told.data["from"] == "loom" and told.data["to"] == source.data["to"]
     assert "attachment(s) [1] of letter:relay:telegram:555:ev_f" in told.data["body"]
-    assert told in letters_for(read_facts(home), main_snapshot(home), "inbox")
+    assert told in letters_for(read_facts(home), main_snapshot(home), "brnrd")
 
 
 # ── the molt analog: a bare line after the speaker released ────────────

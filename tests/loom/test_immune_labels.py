@@ -17,7 +17,7 @@ _DISCOVERY = {
     "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
 }
-README = "---\nid: inbox\nstatus: open\ntense: plan\n---\n# Inbox\n\nalpha line\n"
+README = "---\nid: brnrd\nstatus: open\ntense: plan\n---\n# Brnrd\n\nalpha line\n"
 
 
 def _env() -> dict[str, str]:
@@ -75,7 +75,7 @@ def published(tmp: Path, *, enroll: str | None = None) -> tuple[Path, Path]:
         listing = work / "core" / "loom" / "people-commit"
         listing.write_text(listing.read_text(encoding="utf-8") + enroll + "\n", encoding="utf-8")
     write(work, "memory/scars/x.md", "base\n")
-    write(work, "threads/inbox/README.md", README)
+    write(work, "threads/brnrd/README.md", README)
     commit(work, SEED_TRAILERS)
     git(work, "remote", "add", "origin", os.fspath(bare))
     install_pre_receive(bare)

@@ -21,9 +21,9 @@ def home(tmp_path):
     home = Home(tmp_path, 'aaaa')
     (tmp_path / 'loom').mkdir()
     (tmp_path / 'loom/config.toml').write_text('connectors = ["fake"]\n')
-    directory = home.thread_dir('inbox')
+    directory = home.thread_dir('brnrd')
     directory.mkdir(parents=True)
-    (directory / 'README.md').write_text('---\nid: inbox\nstatus: open\ntense: plan\n---\n# Inbox\n')
+    (directory / 'README.md').write_text('---\nid: brnrd\nstatus: open\ntense: plan\n---\n# Brnrd\n')
     return home
 
 
@@ -72,7 +72,7 @@ def test_duplicate_instances_refuse_before_starting_any_child(home, monkeypatch)
 
 @pytest.mark.parametrize('chat', ['fake', 'telegram/../42', 'telegram//42', 'telegram/'])
 def test_routing_keeps_address_validation_even_with_a_reply_thread(chat):
-    assert connector.route_bare([], chat, reply_thread='untrusted') == 'thread:inbox'
+    assert connector.route_bare([], chat, reply_thread='untrusted') == 'thread:brnrd'
 
 
 def test_generic_address_and_real_out_with_multiple_receipts(home):

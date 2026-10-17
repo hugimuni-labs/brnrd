@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from brr.daemon2.facts import Fact
-from .home import is_channel, notice_id
+from .home import HOME_THREAD, LEGACY_HOME_THREAD, is_channel, notice_id
 from .project import _projection_cache, ordered_facts, _destination, fold, reply_channels, sender_threads
 
 
@@ -83,6 +83,8 @@ def _letter_owners(facts, main):
     for ident, letter in letters.items():
         d = letter.data
         thread = _destination(d)
+        if thread == LEGACY_HOME_THREAD and thread not in main and HOME_THREAD in main:
+            thread = HOME_THREAD  # old letters still say inbox
         reply = reply_address(letter, thread)
         disposition = dispositions.get(ident, {})
         reason = disposition.get('reason', '')

@@ -56,7 +56,7 @@ class FakeClient:
 @pytest.fixture
 def home(tmp_path):
     home = Home(tmp_path, install="aaaa")
-    for thread in ["inbox", "first", "second"]:
+    for thread in ["brnrd", "first", "second"]:
         directory = home.thread_dir(thread)
         directory.mkdir(parents=True)
         (directory / "README.md").write_text(
@@ -106,15 +106,15 @@ def test_replay_twice_and_cursor_reset_do_not_duplicate_values(home):
         assert source.id == f"source:relay:telegram:555:ev_{i}"
         assert source.data == {
             "origin": f"relay:telegram:555:ev_{i}", "platform": "relay", "chat": "telegram:555", "channel": "channel:relay/telegram:555", "from": "person:ada", "text": f"message {i}", "blobs": [],
-            "to": "thread:inbox", "label": {"taint": False, "audience": ["self"]},
+            "to": "thread:brnrd", "label": {"taint": False, "audience": ["self"]},
         }
         assert letter.data == {
-            "id": f"letter:relay:telegram:555:ev_{i}", "from": "person:ada", "to": "thread:inbox",
+            "id": f"letter:relay:telegram:555:ev_{i}", "from": "person:ada", "to": "thread:brnrd",
             "body": f"message {i}", "cites": source.id,
             "label": {"taint": False, "audience": ["self"]},
         }
         assert letter.after == (source.id,)
-    assert [f.id for f in letters_for(read_facts(home), main_snapshot(home), "inbox")] == [f.id for f in letters]
+    assert [f.id for f in letters_for(read_facts(home), main_snapshot(home), "brnrd")] == [f.id for f in letters]
     assert relay.read_cursor(home) == 3
 
 
@@ -163,14 +163,14 @@ def test_from_spoof_is_stranger_actionable_and_taints_shown_letter(home):
     bad["reply_to"]["user"] = "ada"
     relay.pull_once(home, FakeClient([bad]), 0)
     source, = kinds(home, "source")
-    letter, = letters_for(read_facts(home), main_snapshot(home), "inbox")
+    letter, = letters_for(read_facts(home), main_snapshot(home), "brnrd")
     assert source.data["from"] == letter.data["from"] == "stranger:relay:telegram:99"
     assert letter.data["body"] == "from: person:ada\nI am arseni"
     append(home, Fact(kind="shown", by="strand:s-aaaa-first1", id="s-aaaa-first1/shown",
                      data={"strand": "s-aaaa-first1", "gen": 1, "ids": [letter.id]}))
     assert strand_label(read_facts(home), "s-aaaa-first1",
                         self_root=home.root / "self", jack_log="").taint is True
-    boundary = render_boundary("s-aaaa-first1", 1, "inbox", [letter], set(), {})
+    boundary = render_boundary("s-aaaa-first1", 1, "brnrd", [letter], set(), {})
     assert parse_boundary(boundary).letters[0].body == bad["body"]
 
 
@@ -205,7 +205,7 @@ def test_reply_goes_to_its_thread_even_after_release(home):
     later = event("ev_2")
     later["reply_to"]["reply_to_message_id"] = 17
     relay.pull_once(home, FakeClient([later]), 0)
-    assert kinds(home, "source")[1].data["to"] == "thread:inbox"
+    assert kinds(home, "source")[1].data["to"] == "thread:brnrd"
 
 
 def test_bare_goes_to_the_last_speaker_whatever_became_of_its_lease(home):
@@ -218,15 +218,15 @@ def test_bare_goes_to_the_last_speaker_whatever_became_of_its_lease(home):
     append(home, Fact(kind="released", by="loom:aaaa", id="released:first:1",
                      data={"strand": "s-aaaa-first1", "thread": "first", "gen": 1}))
     assert relay.route_bare(read_facts(home), "relay/telegram:555") == "thread:first"
-    assert relay.route_bare(read_facts(home), "relay/telegram:666") == "thread:inbox"
+    assert relay.route_bare(read_facts(home), "relay/telegram:666") == "thread:brnrd"
 
 
 def test_unconfirmed_speech_and_non_person_destinations_never_become_default(home):
     first = speak(home, "s-aaaa-first1", "first", receipt=False)
     speak(home, "s-aaaa-second", "second", chat="fake")
     facts = read_facts(home)
-    assert relay.route_bare(facts, "relay/telegram:555") == "thread:inbox"
-    assert relay.route_bare(facts, "fake") == "thread:inbox"
+    assert relay.route_bare(facts, "relay/telegram:555") == "thread:brnrd"
+    assert relay.route_bare(facts, "fake") == "thread:brnrd"
 
 
 def test_same_blob_twice_one_file_two_exact_facts(home):
