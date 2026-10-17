@@ -225,6 +225,15 @@ def _finalize_exhausted(p: Prepared, b: Boundary) -> Finalized:
     # `topic: None` + `topic_unset: True`; the next wake on the thread sees
     # `predecessor_topic_unset` in its bundle and may assign it once.
     _mark_topic_unset(p, task)
+    # Store the ending attempt before either status or environment finalize
+    # saves the manifest. Earlier attempt failures remain history, not cause.
+    task.meta["ending_failure"] = {
+        **(last_failure or {}),
+        "attempt": attempt,
+        "failure_kind": str(
+            (last_failure or {}).get("failure_kind") or runner_failures.NO_OUTPUT
+        ),
+    }
     task.update_status("error", runs_dir)
     failure_reason = _cite_earlier_failure(
         daemon._failure_reason(last_failure, attempt),
@@ -271,6 +280,7 @@ def _finalize_exhausted(p: Prepared, b: Boundary) -> Finalized:
     failure_kind = str(
         (last_failure or {}).get("failure_kind") or runner_failures.NO_OUTPUT
     )
+
     failed_payload: dict[str, object] = {
         "run_id": task.id,
         "event_id": eid,
