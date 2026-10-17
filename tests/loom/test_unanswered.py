@@ -38,6 +38,8 @@ def replay(tmp_path):
     record('speech.part', 'speech.part:loom/failed-message-d8454633cf#1', dict(
         key='loom/failed-message-d8454633cf', part='loom/failed-message-d8454633cf#1',
         channel=CHANNEL, receipt={'message_id': '155783668:4403'}))
+    record('speech', 'speech:sent:loom/failed-message-d8454633cf', dict(
+        key='loom/failed-message-d8454633cf', state='sent'))
     (home.room(STRAND) / 'port/in').mkdir(parents=True)
     return home, record
 
