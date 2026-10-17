@@ -1451,6 +1451,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="shell to generate completions for")
     p.set_defaults(func=cmd_completions)
 
+    from .loom.runtime.verbs_wishes import add_wishes_parsers
+    add_wishes_parsers(sub)
     from .loom.runtime.verbs_threads import add_threads_parser
     add_threads_parser(sub)
     from .loom.runtime.publish import add_publish_parser
