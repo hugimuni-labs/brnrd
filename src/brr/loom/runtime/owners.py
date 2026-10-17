@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from brr.daemon2.facts import Fact
 from .home import is_channel, notice_id
-from .project import ordered_facts, _destination, fold, reply_channels, sender_threads
+from .project import _projection_cache, ordered_facts, _destination, fold, reply_channels, sender_threads
 
 
 @dataclass(frozen=True)
@@ -28,6 +28,19 @@ def letter_owners(facts, main: dict[str, dict]) -> dict[str, Ownership]:
     A missing observation is debt owed by the loom, never an invented end.
     Embedded successors become letters in the same causal prefix as disposition.
     """
+    cache = _projection_cache.get()
+    if cache is None:
+        return _letter_owners(facts, main)
+    snapshot = tuple(facts)
+    # Main can change without a ledger append. Include its value, so plan
+    # edits and thread closures invalidate ownership as well.
+    key = ("owners", tuple(map(id, snapshot)), repr(main))
+    if key not in cache:
+        cache[key] = (snapshot, _letter_owners(snapshot, main))
+    return cache[key][1]
+
+
+def _letter_owners(facts, main):
     facts = ordered_facts(facts)
     state = fold(facts)
     writers = sender_threads(facts)

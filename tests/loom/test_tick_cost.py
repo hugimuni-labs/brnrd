@@ -128,3 +128,52 @@ def test_idle_ticks_do_not_reparse_an_8k_ledger(tmp_path, monkeypatch):
         tick_once(home, bodies, 'fake', 'haiku', router)
     assert parsed == []
     assert sorted_streams == []
+
+
+def test_closed_thread_idle_tick_starts_no_git_process(tmp_path, monkeypatch):
+    root = _home(tmp_path)
+    repo = root / 'self'
+    path = repo / 'threads/w-3/README.md'
+    path.write_text(path.read_text().replace('status: open', 'status: settled'))
+    git(repo, 'add', 'threads')
+    _commit(repo, 'settle: done' + LABEL)
+    home = Home(root)
+    router = Router(home)
+    tick_once(home, {}, 'fake', 'haiku', router)
+    seen = _git_calls(monkeypatch)
+    for _ in range(3):
+        tick_once(home, {}, 'fake', 'haiku', router)
+    assert seen == []
+    assert any(f.kind == 'thread.closed' and f.data['thread'] == 'w-3'
+               for f in read_facts(home))
+
+
+def test_ownership_cache_tracks_main_edits_and_appended_facts(monkeypatch):
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime import owners
+    from brr.loom.runtime.owners import letter_owners
+    from brr.loom.runtime.project import projection_cache
+
+    letter = Fact(kind='letter', by='person:test', id='question',
+                  data={'id': 'question', 'to': 'thread:work', 'body': 'Do it'})
+    facts = [letter]
+    main = {'work': {'status': 'open', 'plan_rows': [(False, 'Do it')]}}
+    calls = []
+    compute = owners._letter_owners
+    def counted(facts, main):
+        calls.append(True)
+        return compute(facts, main)
+    monkeypatch.setattr(owners, '_letter_owners', counted)
+    with projection_cache():
+        assert letter_owners(facts, main)['question'].plan_rows == ()
+        for _ in range(5):
+            assert letter_owners(list(facts), main)['question'].owner == 'loom'
+        assert len(calls) == 1
+        main['work']['plan_rows'] = [(False, 'Do it · re: question')]
+        assert letter_owners(facts, main)['question'].plan_rows == (1,)
+        main['work']['status'] = 'settled'
+        assert letter_owners(facts, main)['question'].owner == 'operator'
+        facts.append(Fact(kind='note', by='person:test', id='settled',
+                          data={'re': 'question', 'why': 'done'}))
+        assert letter_owners(facts, main)['question'].done
+        assert len(calls) == 4

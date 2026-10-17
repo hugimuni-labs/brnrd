@@ -698,8 +698,11 @@ def _ingest(home: Home, facts: list[Fact] | None = None, ttl: float | None = Non
         strand = room.name
         if not _may_ingest(home, strand, facts, ttl):
             continue
+        paths = _port_files(room)
+        if not paths:
+            continue
         gen = _strand_gen(facts, strand)
-        for path in _port_files(room):
+        for path in paths:
             try:
                 if path.suffix == ".md":
                     fact = fact_from_port(

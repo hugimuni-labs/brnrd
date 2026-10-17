@@ -357,14 +357,16 @@ class Router:
         table = letter_owners(facts, main_snapshot(self.home))
         sent = {key for key, fate in table.items() if fate.done}
         for fact in state.accepted:
-            if not self.armed() or self.lease is None:
-                return facts
             to = fact.data.get("to")
             if fact.kind != "letter" or not is_channel(to):
                 continue
             key = str(fact.data.get("id") or "")
             if not key or key not in table or table[key].owner != "channel":
                 continue
+            # Recheck authority immediately before a pending send, not for
+            # every historical fact (including already delivered letters).
+            if not self.armed() or self.lease is None:
+                return facts
             raw = fact.data.get("router_gen")
             try:
                 grant = int(raw)
