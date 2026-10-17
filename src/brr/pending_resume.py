@@ -49,6 +49,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -167,48 +168,46 @@ def consume(seat_home: Path, *, conversation_key: str) -> dict[str, Any] | None:
     target = path_for(seat_home)
     if not target.exists():
         return None
-    claimed = target.with_suffix(f".json.claimed-{os.getpid()}")
+    claimed = target.with_suffix(f".json.claimed-{os.getpid()}-{uuid.uuid4().hex}")
     try:
         os.replace(target, claimed)
     except OSError:
         return None
     try:
-        record = json.loads(claimed.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        record = None
+        try:
+            record = json.loads(claimed.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(record, dict):
+            return None
+
+        age = time.time() - float(record.get("armed_at") or 0.0)
+        if age > MAX_AGE_SECONDS:
+            print(
+                f"[brnrd] pending resume expired after {age / 3600:.1f}h "
+                f"(from {record.get('from_run') or '?'}) — cold boot"
+            )
+            return None
+
+        armed_for = str(record.get("conversation_key") or "")
+        arriving = str(conversation_key or "")
+        if armed_for and armed_for != arriving:
+            # Return the same record, including its original expiry clock.
+            # A new claim armed during this read wins: link never replaces it.
+            try:
+                os.link(claimed, target)
+            except FileExistsError:
+                pass
+            except OSError as exc:
+                print(f"[brnrd] pending resume could not be restored: {exc}")
+            print(
+                f"[brnrd] pending resume not claimed: armed for {armed_for!r}, "
+                f"this dispatch is {arriving!r}"
+            )
+            return None
+        return record
     finally:
         try:
             claimed.unlink()
         except OSError:
             pass
-    if not isinstance(record, dict):
-        return None
-
-    armed_for = str(record.get("conversation_key") or "")
-    arriving = str(conversation_key or "")
-    if armed_for and armed_for != arriving:
-        # Re-arm it: this dispatch is not the seat coming back, and taking
-        # the claim away from the one that is would turn a mis-route into a
-        # silent cold boot for the run that was owed it.
-        print(
-            f"[brnrd] pending resume not claimed: armed for {armed_for!r}, "
-            f"this dispatch is {arriving!r} — left for the seat"
-        )
-        arm(
-            seat_home,
-            session_id=str(record.get("session_id") or ""),
-            provider=str(record.get("provider") or ""),
-            conversation_key=armed_for,
-            from_run=str(record.get("from_run") or ""),
-            why=str(record.get("why") or ""),
-        )
-        return None
-
-    age = time.time() - float(record.get("armed_at") or 0.0)
-    if age > MAX_AGE_SECONDS:
-        print(
-            f"[brnrd] pending resume expired after {age / 3600:.1f}h "
-            f"(from {record.get('from_run') or '?'}) — cold boot"
-        )
-        return None
-    return record
