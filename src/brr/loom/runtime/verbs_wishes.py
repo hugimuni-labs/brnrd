@@ -16,7 +16,9 @@ from .wishes import wishes, wish_line
 def _context(args):
     from .verbs_loom import _room
     from .lifecycle import own_thread
-    if args.room or (os.environ.get("BRNRD_ROOM") and not args.home):
+    if args.room or os.environ.get("BRNRD_ROOM"):
+        if args.home:
+            raise ValueError("--home is not allowed inside a strand room")
         room = _room(args.room)
         return home_of_room(room), "strand:" + strand_of_room(room), own_thread(room)
     return Home(resolve_home(args.home)[0]), "person:operator", None

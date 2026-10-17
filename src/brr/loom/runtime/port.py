@@ -454,10 +454,10 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     if opening is not None:
         from .lifecycle import open_thread
         open_thread(Path(room), opening, sender, body, body_choice, repo_sources)
+    write_port(room, stem, text)
     if wish_stamp is not None:
         from .ledger import append
         append(home, wish_stamp)
-    write_port(room, stem, text)
     return letter_id
 
 

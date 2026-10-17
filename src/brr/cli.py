@@ -106,7 +106,7 @@ HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "emotes",
     "relic", "gate-run", "close-check", "promise", "act", "mood", "do", "notes",
     "await", "cut", "legend", "item", "asks", "goal", "queue", "envoy",
-    "dominion", "hud", "states", "threads", "publish", "setup",
+    "dominion", "hud", "states", "threads", "publish", "setup", "wish", "wishes",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs

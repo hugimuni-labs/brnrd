@@ -157,3 +157,55 @@ def test_wake_bounds_each_line_and_reserves_its_budget(ledger, monkeypatch):
     assert run_wake(seat, "work", stdout=output) == 0
     assert len(output.getvalue().encode()) <= len(prompt.encode()) + 100
     assert ident in output.getvalue()
+
+
+def test_room_cannot_use_home_to_accept_as_person(ledger):
+    home, seat = ledger
+    ident = command(home, seat, "wish", "new", "--line", "Own wish")
+    before = read_facts(home)
+    for room_args in ([], ["--room", str(seat)]):
+        result = cli(["wish", ident, "--home", str(home.root), *room_args,
+                      "--accept", "word"], env={"BRNRD_ROOM": str(seat)})
+        assert result.returncode == 1
+        assert "--home is not allowed" in result.stderr
+    assert read_facts(home) == before
+    result = cli(["wish", ident, "--read", "Resident reading"],
+                 env={"BRNRD_ROOM": str(seat)})
+    assert result.returncode == 0, result.stderr
+    reading = next(f for f in read_facts(home) if f.kind == "wish.read")
+    assert reading.by == "strand:s-aaaa-test"
+    assert reading.data["by"] == "resident"
+
+
+def test_failed_port_write_does_not_stamp_wish(ledger, monkeypatch):
+    from brr.loom.runtime import port
+
+    home, seat = ledger
+    letter = inject_letter(home.root, to="thread:work", body="Please reply")
+    before = read_facts(home)
+
+    def fail(*args):
+        raise OSError("port unavailable")
+
+    monkeypatch.setattr(port, "write_port", fail)
+    with pytest.raises(OSError, match="port unavailable"):
+        port.write_send(seat, to="thread:other", sender="s-aaaa-test",
+                        re=letter, wish="new:Unsent reply", body="reply")
+    assert read_facts(home) == before
+    assert not (seat / "port/out").exists()
+
+
+def test_wake_caps_rows_with_asks_first(ledger):
+    home, seat = ledger
+    for i in range(70):
+        append(home, Fact(kind="wish", by="strand:s-aaaa-test", data={
+            "wish": f"w-{i:03}", "says": [], "from": "resident" if i == 69 else "person",
+            "line": "x" * 160, "thread": "work"}))
+    output = StringIO()
+    assert run_wake(seat, "work", stdout=output) == 0
+    section = output.getvalue().split("## Wishes\n")[1].split("## Notes")[0]
+    lines = section.strip().splitlines()
+    assert lines[0].startswith("w-069 ·")
+    assert len(lines) == 21
+    assert lines[-1] == "+50 more · wishes --thread work"
+    assert len(command(home, seat, "wishes").splitlines()) == 72

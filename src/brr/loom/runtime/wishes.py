@@ -109,7 +109,10 @@ def wake_wishes(facts: Iterable[Fact], thread: str) -> str:
     if not rows:
         return ""
     rows.sort(key=lambda w: (w.sender != "resident", w.id))
-    return "## Wishes\n" + "".join(wish_line(w) + "\n" for w in rows)
+    section = "## Wishes\n" + "".join(wish_line(w) + "\n" for w in rows[:20])
+    if len(rows) > 20:
+        section += f"+{len(rows) - 20} more · wishes --thread {thread}\n"
+    return section
 
 
 def insert_wishes(prompt: str, section: str) -> str:
