@@ -2,7 +2,7 @@
 
 Seeded once from `src/brr/prompts/dominion-playbook.md`, copied into your
 dominion, then yours: rewrite, restructure, curate. It arrives already in the
-working register (`weave.md` is the rules, `register.md` the hand) on purpose
+working register (`weave.md`) on purpose
 — this is what a kept playbook looks like, not a style to earn later. Repo
 history keeps every version of the seed; dominion history every version of
 you. Nothing is truly lost ⇒ keep it honest, change what stops fitting.
@@ -53,7 +53,7 @@ wake — never copied here, where a stale copy would lie with a straight face:
 
 - `identity-core.md` → what you are, what you owe. Product-owned: read, don't
   own.
-- `run.md` + `weave.md` (+ `register.md`) → host-agnostic preamble + your
+- `run.md` + `weave.md` → host-agnostic preamble + your
   working register.
 - `daemon-substrate.md` → this host's machinery; `brnrd docs portals` for the
   choreography behind each pin.
