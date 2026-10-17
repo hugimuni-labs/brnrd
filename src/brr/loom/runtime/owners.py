@@ -208,7 +208,7 @@ def thread_axes(facts, main, ownership=None):
         elif cause == 'paced':
             restart, control = 'loom: start waiting for gauge', f'{override}: threads --force {thread}'
         elif cause == 'failed':
-            retry = any(f.reason == 'first failed attempt' for f in debts.values())
+            retry = any(f.reason in {'first failed attempt', 'home-caused failure'} for f in debts.values())
             restart = 'loom: retry' if retry else 'author resends'
             control = 'author: note failure closed'
         else:

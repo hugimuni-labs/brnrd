@@ -26,6 +26,15 @@ If a notice or any other letter keeps coming back and no reply settles it, a per
 
 A note written `by` a `person:` with `re:` a letter's id settles that letter whatever thread holds it, and the item it stands for with it. Nothing else is needed: the next tick reads the line. From a room, `<home>` is `../..`.
 
+A failed preparation (including an over-budget home or a broken wake recipe)
+keeps its letters owed for retry. One self-refusal notice asks for home repair,
+in inbox when preparation, spawn, or the holding install cannot run. Only an input that
+itself exceeds the wake budget, with a recipe that runs without mail, uses the
+letter-failure path. A failure to prepare does not spend a letter's body-crash
+retry allowance. The person receives no failure message for a home refusal. A nonzero body exit
+requires a fresh gauge observation; depleted fuel keeps the letter owed and
+parks its next start until all exhausted windows reset.
+
 ## Plan citations
 
 A checklist row under `## Plan` names the letters it answers with a trailing

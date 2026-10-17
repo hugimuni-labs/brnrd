@@ -296,7 +296,8 @@ class Router:
                      for f in state.accepted)
         cause = ('molted' if molted else 'settled' if read_thread(self.home, thread).get('status') in CLOSED
                  else 'failed' if letters else 'idle')
-        facts = _end_attempt(self.home, facts, strand, thread, gen, None, letters, cause)
+        facts = _end_attempt(self.home, facts, strand, thread, gen, None, letters, cause,
+                             "holding install went silent", failure_origin="home", repair_thread=thread)
         facts = _drained(self.home, facts, strand, thread, gen)
         return self._keep(facts, "released", {
             "thread": thread, "strand": strand, "gen": gen,
