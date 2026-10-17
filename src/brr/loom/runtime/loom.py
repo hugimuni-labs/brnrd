@@ -784,6 +784,10 @@ def _plan(home: Home, thread: str, facts: list[Fact]) -> str:
     text = f"plan {sum(done for done, _ in rows)}/{len(rows)}"
     if missing:
         text += " · letters without a row: " + ", ".join(missing)
+    from .owners import unanswered_by_thread
+    unanswered = unanswered_by_thread(facts, main).get(thread, ())
+    if unanswered:
+        text += " · unanswered: " + ", ".join(unanswered)
     next_row = next((text for done, text in rows if not done), "")
     if next_row:
         text += f" · next: {next_row[:60]}"
