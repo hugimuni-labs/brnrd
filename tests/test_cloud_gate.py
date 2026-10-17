@@ -1691,7 +1691,7 @@ def test_publish_quota_collects_each_repo_independently(tmp_path, monkeypatch):
     repo_a.mkdir()
     repo_b.mkdir()
     (repo_a / "AGENTS.md").write_text("# A\n")
-    ctx = SimpleNamespace(repos={
+    ctx = SimpleNamespace(home_root=tmp_path / "home", repos={
         "org/a": SimpleNamespace(label="org/a", root=repo_a),
         "org/b": SimpleNamespace(label="org/b", root=repo_b),
     })
@@ -2502,7 +2502,11 @@ def test_loop_publishes_pr_review_queue_snapshot(tmp_path, monkeypatch):
     monkeypatch.setattr(cloud, "_request", _route_to(client))
     monkeypatch.setattr(cloud, "_pr_review_repo_labels", lambda _brr_dir: ["Gurio/demo"])
 
+    real_run = subprocess.run
+
     def fake_run(cmd, **kwargs):
+        if cmd[0] == "git":
+            return real_run(cmd, **kwargs)
         assert cmd == [
             "gh",
             "pr",
