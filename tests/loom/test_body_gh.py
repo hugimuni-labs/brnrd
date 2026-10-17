@@ -61,11 +61,15 @@ def test_an_unknown_gh_value_is_refused(tmp_path):
         _env(_room(tmp_path, None, gh="person"))
 
 
-@pytest.mark.skipif(shutil.which("gh") is None, reason="gh not installed")
 def test_real_gh_is_signed_out_when_off(tmp_path, monkeypatch):
+    gh = shutil.which("gh")
+    if gh is None:
+        pytest.skip("gh not installed")
+    assert Path(gh).parent.parts[-2:] != ("port", "bin"), gh
     monkeypatch.delenv("GH_TOKEN", raising=False)
     env = _env(_room(tmp_path, None, gh="off"))
-    proc = subprocess.run(["gh", "auth", "status"], env=env, capture_output=True, text=True)
+    assert shutil.which("gh", path=env["PATH"]) == gh
+    proc = subprocess.run([gh, "auth", "status"], env=env, capture_output=True, text=True)
     assert proc.returncode != 0
     assert "not logged" in (proc.stdout + proc.stderr).lower()
 
