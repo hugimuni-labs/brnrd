@@ -44,7 +44,7 @@ def print_windows(rows, *, error: str | None = None) -> None:
     print(json.dumps({"windows": windows, **({"error": error} if error else {})}))
 
 
-def _refresh(path, script) -> None:
+def _refresh(path, script, after=0) -> None:
     at, windows = time.time(), []
     error = None
     proc = None
@@ -62,7 +62,7 @@ def _refresh(path, script) -> None:
             return
         claim.seek(0)
         previous = claim.read().strip()
-        if previous and 0 <= at - float(previous) < PROBE_INTERVAL:
+        if previous and float(previous) >= after and 0 <= at - float(previous) < PROBE_INTERVAL:
             return
         claim.seek(0)
         claim.truncate()
@@ -98,7 +98,7 @@ def _refresh(path, script) -> None:
             _REFRESHING.discard(path)
 
 
-def reading(home, shell: str, after: float = 0):
+def reading(home, shell: str, after: float = 0, *, fresh=False):
     """None while refreshing; an empty reading means the gauge is unknown."""
     path = (home.root / "loom/usage" / f"{shell}.json").resolve()
     try:
@@ -115,13 +115,13 @@ def reading(home, shell: str, after: float = 0):
         # A window that has reset since the reading was taken is not known:
         # at the reset, a 2% reading taken a minute earlier re-parked a body.
         after = max([after] + [_reset(w) for w in reading["windows"] if _reset(w) <= time.time()])
-        if 0 <= time.time() - reading["at"] < CACHE_TTL and (reading["at"] > after or not reading["windows"]):
+        if 0 <= time.time() - reading["at"] < CACHE_TTL and (reading["at"] > after or not fresh and not reading["windows"]):
             return reading
     except (OSError, ValueError, KeyError, TypeError):
         pass
     if path not in _REFRESHING:
         _REFRESHING.add(path)
-        threading.Thread(target=_refresh, args=(path, script), daemon=True).start()
+        threading.Thread(target=_refresh, args=(path, script, after) if fresh else (path, script), daemon=True).start()
     return None
 
 

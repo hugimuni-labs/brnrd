@@ -64,7 +64,7 @@ REGISTRY = (
     _kind("body.stayed",       "body",    "strand gen",                                       "loom",        "machine"),
     _kind("body.stopped",      "body",    "strand gen pid why",                               "loom",        "machine", once=True),
     _kind("body.unidentified", "body",    "strand gen pid why",                               "loom",        "machine"),
-    _kind("body.exited",       "body",    "strand gen code why?",                             "loom",        "global",  once=True),
+    _kind("body.exited",       "body",    "strand gen code why? failure_origin? failure_letters?",                             "loom",        "global",  once=True),
     # Read by the body's table, owned elsewhere, not enforced here.
     _kind("lease",             "thread",  "thread strand gen install router_gen shell core repos parent?", "loom", "global", once=True),
     _kind("released",          "thread",  "thread strand gen why install router_gen?",        "loom",        "global",  once=True),

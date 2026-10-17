@@ -184,6 +184,39 @@ def _record(home: Home, kind: str, data: dict, fact_id: str) -> Fact:
     return append(home, Fact(kind=kind, by=_by(home), data=data, id=fact_id))
 
 
+class WakeFailure(SelfError):
+    """Preparation belongs to the home unless an input is intrinsically too big."""
+
+    def __init__(self, why, letter_ids=()):
+        super().__init__(why)
+        self.letter_ids = tuple(letter_ids)
+
+
+def _oversized_letters(clone, thread, owed, part, repos):
+    """Prove input-local failure without interpreting a recipe's exit codes.
+
+    The wake budget is the recipe contract. A large home plus small mail is
+    still the home's fault. Even intrinsically oversized mail is not blamed
+    when the very same recipe cannot run with an empty occasion.
+    """
+    raw = os.environ.get("LOOM_BUDGET_BYTES") or "24000"
+    if not raw.isdigit():
+        return ()
+    limit = int(raw)
+    large = tuple(f["id"] for f in json.loads(owed.read_text())
+                  if len((f["body"] + "\n".join(f.get("attachments", ())) +
+                          f.get("reply_context", "")).encode("utf-8")) > limit)
+    if not large:
+        return ()
+    try:
+        with tempfile.TemporaryFile(mode="w+") as output:
+            ok = run_wake(clone, thread, loom_part=part, repos=repos,
+                          stdout=output, stderr=output) == 0
+    except Exception:
+        return ()
+    return large if ok else ()
+
+
 def _failed_words(thread: str, body: str, tail: str) -> str:
     """What a person reads when a body could not take their letter."""
     first = next((line.strip() for line in body.splitlines() if line.strip()), "")
@@ -390,7 +423,8 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                         stdout=wake, stderr=why)
         why.seek(0)
         if code != 0:
-            raise SelfError(f"wake exited {code}: {why.read().strip()}")
+            raise WakeFailure(f"wake exited {code}: {why.read().strip()}",
+                              _oversized_letters(clone, thread, owed_path, part_path, repo_file))
         wake.seek(0)
         atomic_write(room / "port" / "wake.md", wake.read())
     from .threads import thread_table
@@ -821,7 +855,8 @@ def _room_kept(home: Home, strand: str) -> list[str]:
     return lines
 
 
-def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure=""):
+def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure="",
+                 failure_origin="", failure_letters=(), repair_thread=None):
     """Observe once; every disposition and successor is in this single append."""
     if any(f.id == f"attempt.ended:{strand}:{gen}" for f in facts):
         return facts
@@ -862,13 +897,36 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
              and f.data.get("gen") == gen),
             "",
         )
+    retry_revision = None
+    if (cause == "failed" and failure_origin == "home"
+            and (not letters or any(f.id not in failure_letters for f in letters))):
+        # Preparation/spawn failed, or the holding install disappeared. No
+        # running reader is available here to repair the condition.
+        from .lifecycle import main_tip
+        try:
+            retry_revision = main_tip(home.root / "self")
+        except (SelfError, OSError):
+            retry_revision = "unknown"
+        clone = room / "self"
+        try:
+            revision = git(clone, "rev-parse", "HEAD").stdout.strip()
+        except (SelfError, OSError):
+            revision = "unknown"
+        notice(home, facts, "self-refusal", f"{thread}:{revision}",
+               f"thread {thread} could not start from its own state: {failure or tail}",
+               f"repair the home's wake recipe or context; its letters remain owed on {thread}",
+               thread=repair_thread)
     for letter in letters:
         ident, author = letter.id, str(letter.data.get("from", ""))
+        if cause == "failed" and failure_origin == "home" and ident not in failure_letters:
+            dispositions.append({"id": ident, "outcome": "retry", "reason": "home-caused failure"})
+            continue
         if cause != "failed":
             dispositions.append({"id": ident, "outcome": "retry", "reason": cause})
             continue
         failures = sum(f.kind == "attempt.ended" and f.data.get("cause") == "failed"
-                       and ident in f.data.get("ids", ()) for f in facts)
+                       and any(d.get("id") == ident and d.get("reason") != "home-caused failure"
+                               for d in f.data.get("dispositions", ())) for f in facts)
         if author.startswith(("p-", "person:")) and failures == 0:
             dispositions.append({"id": ident, "outcome": "retry", "reason": "first failed attempt"})
             continue
@@ -916,6 +974,7 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
         "thread": thread, "strand": strand, "gen": gen, "ids": ids,
         "cause": cause, "code": code, "dispositions": dispositions,
         "evidence": {"tail": tail, "readme_changed": changed, "fuel": tank,
+                     **({"self_revision": retry_revision} if retry_revision else {}),
                      **({"unpublished": left} if left else {}),
                      **({"kept": kept} if kept else {}),
                      **({"why": stopped_why} if cause == "stopped" else {})},
@@ -980,11 +1039,8 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     empty = next((w for w in gauge["windows"] if w["left_pct"] <= config.hold_floor_pct), None) if gauge else None
     until = 0
     if empty:
-        try:
-            until = datetime.fromisoformat(empty["resets_at"]).timestamp()
-        except (ValueError, TypeError, KeyError):
-            pass
-        until = until if until > now else now + 900
+        from .usage import dry_until
+        until = dry_until(home, shell) or now + 900
         from .connector import person_dm
         channels = reply_channels(facts, home)
         what = (f"Out of {shell} {empty['name']} fuel ({empty['left_pct']:g}% left) "
@@ -1052,6 +1108,8 @@ class _Run:
 
 def _failed(x, exc):
     x.c.failure = f"{type(exc).__name__}: {exc}"
+    x.c.failure_origin = "home"
+    x.c.failure_letters = list(getattr(exc, "letter_ids", ()))
     return replace(x.o, failure=x.c.failure)
 
 
@@ -1126,10 +1184,22 @@ def _hand_end(x, command, step):
     from .bodies import exit_cause
     o, c = x.o, x.c
     exited = fact_for(x.facts, "body.exited", o.strand, o.gen)
+    if exited and exited.data.get("code") not in (None, 0) and fact_for(x.facts, "body.started", o.strand, o.gen):
+        # The cache that admitted this body cannot explain its failure. Wait
+        # for a post-exit observation before retiring any of its letters.
+        from .usage import reading, dry_until
+        from .config import load_config
+        gauge = reading(x.home, c.shell, datetime.fromisoformat(exited.at).timestamp(), fresh=True)
+        if gauge is None:
+            return False
+        if any(w["left_pct"] <= load_config(x.home.root).hold_floor_pct for w in gauge["windows"]):
+            o = replace(o, gauge="empty", until=dry_until(x.home, c.shell) or 0)
     shown = fold(x.facts).shown.get(o.strand, set())
     letters = [f for f in letters_for(x.facts, main_snapshot(x.home), c.thread) if step.arg == "failed" or f.id in shown]
     x.facts = _end_attempt(x.home, x.facts, o.strand, c.thread, o.gen, exited.data.get("code") if exited else None,
-                           letters, step.arg or exit_cause(x.facts, o, owed=bool(letters)), c.failure)
+                           letters, step.arg or exit_cause(x.facts, o, owed=bool(letters)), c.failure,
+                           (exited.data if exited else x.values).get("failure_origin", ""),
+                           (exited.data if exited else x.values).get("failure_letters", ()))
 
 
 def _hand_drained(x, command, step):
@@ -1153,6 +1223,8 @@ def _execute_body(home, bodies, facts, o, c):
     empty = c.empty or {}
     x = _Run(home, bodies, facts, o, c, home.room(o.strand), {
         "strand": o.strand, "gen": o.gen, "shell": c.shell, "core": c.core, "pid": c.pid, "code": None,
+        "failure_origin": getattr(c, "failure_origin", ""),
+        "failure_letters": getattr(c, "failure_letters", ()),
         "window": empty.get("name"), "left_pct": empty.get("left_pct"), "until": o.until})
     commands = decide(facts, [o])
     if o.alive:
