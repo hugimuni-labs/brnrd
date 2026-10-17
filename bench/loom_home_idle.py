@@ -10,6 +10,7 @@ import cProfile
 import fcntl
 import json
 from contextlib import ExitStack
+from collections import Counter
 import pstats
 import shutil
 import subprocess
@@ -33,6 +34,8 @@ def main():
                         help='include locked start authority checks; never advance a body')
     parser.add_argument('--full-tick', action='store_true',
                         help='advance fake held bodies, read cached gauges, poll empty connectors')
+    parser.add_argument('--extra', type=int, default=0, help='add inert renewal history in the disconnected copy')
+    parser.add_argument('--changed-ticks', type=int, default=3, help='measure ticks with one durable renewal append each')
     args = parser.parse_args()
     print(f'tick source: {loom.__file__}')
     with tempfile.TemporaryDirectory(prefix='loom-home-idle-') as temporary:
@@ -54,7 +57,18 @@ def main():
             line for line in lines
             if not line.lstrip().startswith(('connectors =', 'forge_token =', 'relay_state ='))
         ) + '\nconnectors = []\n')
+        from brr.daemon2.facts import Fact
+        from brr.loom.runtime.ledger import append, read_facts
+        if args.extra:
+            extra = root / 'ledger/facts/benchmark-history'
+            extra.mkdir(parents=True)
+            (extra / 'loom.jsonl').write_text(''.join(
+                json.dumps(Fact(kind='router.renewed', by='loom:benchmark',
+                                id=f'benchmark:{n}', data={'gen': 0},
+                                hlc=(n, 0, 'benchmark')).row()) + '\n'
+                for n in range(args.extra)))
         home, bodies = Home(root), {}
+        initial_ids = {f.id for f in read_facts(home)}
         router = Router(home)
         real_start = loom._start
         def no_advance(home, strand, thread, gen, bodies, facts, **kwargs):
@@ -107,6 +121,7 @@ def main():
                       f'{len(fold(router.reader.read(home)).holder)} fake holders, '
                       f'{len(list((root / "rooms").iterdir()))} empty rooms, '
                       f'{len(inputs.names)} supervisors')
+            print('warmup added kinds:', dict(Counter(f.kind for f in read_facts(home) if f.id not in initial_ids)))
             profile = cProfile.Profile()
             started = time.process_time()
             with profile:
@@ -120,6 +135,14 @@ def main():
             for _ in range(args.ticks):
                 tick()
             print(f'{args.ticks} unprofiled ticks: {time.process_time() - started:.3f}s CPU')
+            maximum = max((f.hlc[0] for f in read_facts(home) if f.hlc), default=0)
+            started = time.process_time()
+            for n in range(args.changed_ticks):
+                append(home, Fact(kind='router.renewed', by=f'loom:{home.install_id()}',
+                                  id=f'benchmark:new:{n}', data={'gen': 0},
+                                  hlc=(maximum + n + 1, 0, home.install_id())))
+                tick()
+            print(f'{args.changed_ticks} changed ticks including writer: {time.process_time() - started:.3f}s CPU')
             started = time.process_time()
             for _ in range(args.ticks):
                 loom._source_fingerprint()
