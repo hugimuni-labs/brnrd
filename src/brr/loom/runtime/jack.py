@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 import traceback
@@ -40,7 +41,34 @@ PARK = 6 * 3600.0
 MARGIN = 90.0
 
 
-def _wait(room: Path) -> float | None:
+def _cache_access(stdin_text: str) -> str:
+    """Claude reports the effective TTL, including settings/credit overrides.
+
+    Authentication alone cannot tell whether a subscription is using paid
+    credits. Read the CLI's own cache-write buckets rather than guessing.
+    """
+    if os.environ.get('BRNRD_BODY_SHELL') != 'claude':
+        return ''
+    try:
+        path = Path(json.loads(stdin_text)['transcript_path'])
+        with path.open('rb') as handle:
+            handle.seek(max(path.stat().st_size - 200_000, 0))
+            lines = handle.read().decode(errors='replace').splitlines()
+        for line in reversed(lines):
+            try:
+                creation = json.loads(line)['message']['usage']['cache_creation']
+                if creation.get('ephemeral_5m_input_tokens', 0) > 0:
+                    return '5m'
+                if creation.get('ephemeral_1h_input_tokens', 0) > 0:
+                    return '1h'
+            except (ValueError, KeyError, TypeError, AttributeError):
+                continue
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return ''
+
+
+def _wait(room: Path, stdin_text: str = '') -> float | None:
     path = room / "port" / "wait"
     if path.is_file():
         return float(path.read_text().strip())
@@ -50,11 +78,22 @@ def _wait(room: Path) -> float | None:
         return None
     try:
         cache = (resolve(home_of_room(room), shell) / "cache").read_text().strip()
-        lifetime = float(cache)
-    except (OSError, ValueError):
+        if cache.startswith('{'):
+            declaration = json.loads(cache)
+            row = declaration.get('models', {}).get(
+                os.environ.get('BRNRD_BODY_CORE', ''), declaration.get('default'))
+            value = row.get('access', {}).get(_cache_access(stdin_text),
+                                              row.get('seconds'))
+            if isinstance(value, bool):
+                return None
+            lifetime = float(value)
+        else:
+            # Existing home folders may still declare just seconds or none.
+            lifetime = float(cache)
+    except (OSError, ValueError, TypeError, AttributeError, OverflowError):
         return None
     # A lifetime too short to leave the safety margin cannot buy a hold.
-    return lifetime - 300 if lifetime > 300 else None
+    return lifetime - 300 if math.isfinite(lifetime) and lifetime > 300 else None
 
 
 def _stop_timeout() -> float:
@@ -95,14 +134,14 @@ def _block(room: Path, text: str, parsed: Boundary) -> str:
     return _json({"decision": "block", "reason": text})
 
 
-def _poll(room: Path) -> str:
+def _poll(room: Path, stdin_text: str = '') -> str:
     from .usage import dry_until
     home = home_of_room(room)
     shell = os.environ.get("BRNRD_BODY_SHELL")
     begun = time.monotonic()
     # Leave before the shell kills this hook: a killed hook ends the body.
     ceiling = begun + max(_stop_timeout() - MARGIN, 0.0)
-    wait = _wait(room)
+    wait = _wait(room, stdin_text)
     deadline = ceiling if wait is None else min(begun + wait, ceiling)
     parked = False
     from .lifecycle import read_thread
@@ -265,7 +304,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         return ""
     if parsed.ids and (_hand() or not _state(room).get("stop_blocks") and not _dry(room)):
         return _block(room, text, parsed)
-    return _poll(room)
+    return _poll(room, stdin_text)
 
 
 def _dry(room: Path) -> bool:

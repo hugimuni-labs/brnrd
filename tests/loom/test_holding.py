@@ -98,6 +98,7 @@ from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx
 ctx = Ctx(Path(sys.argv[1]))
 ctx.owed()
+assert os.environ['BRNRD_BODY_CORE'] == 'quiet'
 # Wait for the shown receipt to reach the boundary; no answer is made.
 time.sleep(0.3)
 assert ctx.jack("stop").kind == "block"

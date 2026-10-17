@@ -1,1 +1,29 @@
-none
+{
+  "default": {
+    "seconds": null,
+    "status": "unknown",
+    "reason": "Unlisted model or access path: no established cache lifetime."
+  },
+  "models": {
+    "grok-4.5": {
+      "seconds": null,
+      "status": "unknown",
+      "reason": "API may evict at any time (source X); subscription CLI TTL undocumented. See measurement record."
+    },
+    "grok-4.6": {
+      "seconds": null,
+      "status": "unknown",
+      "reason": "API may evict at any time (source X); subscription CLI TTL undocumented. See measurement record."
+    },
+    "grok-4.7": {
+      "seconds": null,
+      "status": "unknown",
+      "reason": "API may evict at any time (source X); subscription CLI TTL undocumented. See measurement record."
+    },
+    "grok-4.7-build-fast": {
+      "seconds": null,
+      "status": "unknown",
+      "reason": "API may evict at any time (source X); subscription CLI TTL undocumented. See measurement record."
+    }
+  }
+}

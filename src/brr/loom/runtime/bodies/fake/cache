@@ -1,1 +1,8 @@
-none
+{
+  "default": {
+    "seconds": null,
+    "status": "documented",
+    "reason": "Test process makes no provider calls; no prompt cache."
+  },
+  "models": {}
+}

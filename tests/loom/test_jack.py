@@ -222,7 +222,7 @@ def test_post_says_the_context_weight_once_per_band(tmp_path):
 
 
 @pytest.mark.parametrize('shell,cache,override,expected', [
-    ('claude', None, None, 3300),
+    ('claude', None, None, 7110),
     ('codex', None, None, 7110),
     ('grok', None, None, 7110),
     ('custom', '1200', None, 900),
@@ -299,3 +299,65 @@ def test_idle_thread_worker_without_cache_releases_at_ceiling(tmp_path, monkeypa
     monkeypatch.setattr(jack.time, 'sleep', lambda seconds: now.__setitem__(0, now[0] + seconds))
     assert jack.execute('stop', room, '{}') == ''
     assert now[0] == pytest.approx(7110)
+
+
+@pytest.mark.parametrize('core,declaration,expected', [
+    ('selected', {'default': {'seconds': 2400}, 'models': {'selected': {'seconds': 1200}}}, 900),
+    ('unlisted', {'default': {'seconds': 2400}, 'models': {'selected': {'seconds': 1200}}}, 2100),
+    ('selected', {'default': {'seconds': 2400}, 'models': {'selected': {'seconds': None}}}, 7110),
+    ('selected', {'default': {'seconds': 2400}, 'models': {'selected': {'seconds': 'bad'}}}, 7110),
+    ('selected', {'default': {'seconds': 2400}, 'models': {'selected': []}}, 7110),
+    ('selected', {'default': {'seconds': 2400}, 'models': []}, 7110),
+    ('selected', {'default': {'seconds': 2400}, 'models': {'selected': {'seconds': True}}}, 7110),
+    ('selected', {'models': {'selected': {'seconds': 'Infinity'}}}, 7110),
+    ('selected', {'models': {'selected': {'seconds': 'NaN'}}}, 7110),
+])
+def test_stop_uses_seated_core_then_shell_default(tmp_path, monkeypatch, core, declaration, expected):
+    from brr.loom.runtime import jack, usage
+    room = _room(tmp_path)
+    _write(room, [])
+    folder = tmp_path / 'loom/bodies/modelled'
+    folder.mkdir(parents=True)
+    (folder / 'run').touch()
+    (folder / 'cache').write_text(json.dumps(declaration))
+    monkeypatch.setenv('BRNRD_BODY_SHELL', 'modelled')
+    monkeypatch.setenv('BRNRD_BODY_CORE', core)
+    monkeypatch.setenv('BRNRD_BODY_JACK', 'hooks')
+    monkeypatch.setenv('BRNRD_STOP_TIMEOUT', '7200')
+    monkeypatch.delenv('BRNRD_THREAD', raising=False)
+    monkeypatch.setattr(usage, 'dry_until', lambda *args: None)
+    now = [0.]
+    monkeypatch.setattr(jack.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(jack.time, 'sleep', lambda seconds: now.__setitem__(0, now[0] + seconds))
+    result = json.loads(jack.execute('stop', room, '{}'))
+    assert result['decision'] == 'block'
+    assert now[0] == pytest.approx(expected)
+
+
+@pytest.mark.parametrize('shell,core,creation,expected', [
+    ('claude', 'opus', {'ephemeral_1h_input_tokens': 5000}, 3300),
+    ('claude', 'sonnet', {'ephemeral_5m_input_tokens': 5000}, 7110),
+    ('claude', 'haiku', {'ephemeral_1h_input_tokens': 10, 'ephemeral_5m_input_tokens': 20}, 7110),
+    ('claude', 'fable', {}, 7110),
+    ('claude', 'unlisted', {'ephemeral_1h_input_tokens': 5000}, 7110),
+    ('codex', 'gpt-6.1-sol', {}, 7110),
+    ('codex', 'gpt-5.6-luna', {}, 7110),
+    ('codex', 'future-model', {}, 7110),
+])
+def test_stop_uses_bundled_model_and_actual_claude_ttl(tmp_path, monkeypatch, shell, core, creation, expected):
+    from brr.loom.runtime import jack, usage
+    room = _room(tmp_path)
+    _write(room, [])
+    transcript = tmp_path / 'transcript.jsonl'
+    transcript.write_text(json.dumps({'message': {'usage': {'cache_creation': creation}}}) + '\n')
+    monkeypatch.setenv('BRNRD_BODY_SHELL', shell)
+    monkeypatch.setenv('BRNRD_BODY_CORE', core)
+    monkeypatch.setenv('BRNRD_BODY_JACK', 'hooks')
+    monkeypatch.setenv('BRNRD_STOP_TIMEOUT', '7200')
+    monkeypatch.delenv('BRNRD_THREAD', raising=False)
+    monkeypatch.setattr(usage, 'dry_until', lambda *args: None)
+    now = [0.]
+    monkeypatch.setattr(jack.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(jack.time, 'sleep', lambda seconds: now.__setitem__(0, now[0] + seconds))
+    assert json.loads(jack.execute('stop', room, json.dumps({'transcript_path': str(transcript)})))['decision'] == 'block'
+    assert now[0] == pytest.approx(expected)

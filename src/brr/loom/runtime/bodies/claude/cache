@@ -1,1 +1,45 @@
-3600
+{
+  "default": {
+    "seconds": null,
+    "status": "unknown",
+    "reason": "Unlisted model or access path: no established cache lifetime."
+  },
+  "models": {
+    "haiku": {
+      "seconds": 300,
+      "status": "documented",
+      "reason": "Claude Code: API/credits default 5m; main subscription or explicit extended TTL 1h only when CLI usage confirms it. Source C.",
+      "access": {
+        "5m": 300,
+        "1h": 3600
+      }
+    },
+    "sonnet": {
+      "seconds": 300,
+      "status": "documented",
+      "reason": "Claude Code: API/credits default 5m; main subscription or explicit extended TTL 1h only when CLI usage confirms it. Source C.",
+      "access": {
+        "5m": 300,
+        "1h": 3600
+      }
+    },
+    "opus": {
+      "seconds": 300,
+      "status": "documented",
+      "reason": "Claude Code: API/credits default 5m; main subscription or explicit extended TTL 1h only when CLI usage confirms it. Source C.",
+      "access": {
+        "5m": 300,
+        "1h": 3600
+      }
+    },
+    "fable": {
+      "seconds": 300,
+      "status": "documented",
+      "reason": "Claude Code: API/credits default 5m; main subscription or explicit extended TTL 1h only when CLI usage confirms it. Source C.",
+      "access": {
+        "5m": 300,
+        "1h": 3600
+      }
+    }
+  }
+}

@@ -1,1 +1,24 @@
-none
+{
+  "default": {
+    "seconds": null,
+    "status": "unknown",
+    "reason": "Unlisted model or access path: no established cache lifetime."
+  },
+  "models": {
+    "mistral-medium-3.5": {
+      "seconds": null,
+      "status": "unknown",
+      "reason": "Mistral documents caching but no TTL (source M); real subscription CLI probe rejected with budget exhausted."
+    },
+    "glm-5-3": {
+      "seconds": null,
+      "status": "unknown",
+      "reason": "Mistral documents caching but no TTL (source M); real subscription CLI probe rejected with budget exhausted."
+    },
+    "local": {
+      "seconds": null,
+      "status": "unknown",
+      "reason": "Local inference server is user-configured; no running server or portable TTL contract."
+    }
+  }
+}
