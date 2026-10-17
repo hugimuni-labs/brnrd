@@ -856,7 +856,8 @@ def _room_kept(home: Home, strand: str) -> list[str]:
 
 
 def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure="",
-                 failure_origin="", failure_letters=(), repair_thread=None):
+                 failure_origin="", failure_letters=(), repair_thread=None,
+                 await_repair=True):
     """Observe once; every disposition and successor is in this single append."""
     if any(f.id == f"attempt.ended:{strand}:{gen}" for f in facts):
         return facts
@@ -902,11 +903,13 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
             and (not letters or any(f.id not in failure_letters for f in letters))):
         # Preparation/spawn failed, or the holding install disappeared. No
         # running reader is available here to repair the condition.
-        from .lifecycle import main_tip
-        try:
-            retry_revision = main_tip(home.root / "self")
-        except (SelfError, OSError):
-            retry_revision = "unknown"
+        # A takeover is its own repair: only a broken home waits for self.
+        if await_repair:
+            from .lifecycle import main_tip
+            try:
+                retry_revision = main_tip(home.root / "self")
+            except (SelfError, OSError):
+                retry_revision = "unknown"
         clone = room / "self"
         try:
             revision = git(clone, "rev-parse", "HEAD").stdout.strip()
