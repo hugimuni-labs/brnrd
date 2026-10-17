@@ -1,0 +1,29 @@
+{
+  "config": {
+    "currentPeriod": {
+      "type": "USAGE_PERIOD_TYPE_WEEKLY",
+      "start": "2026-10-12T11:59:55.857848+00:00",
+      "end": "2026-10-19T11:59:55.857848+00:00"
+    },
+    "creditUsagePercent": 55.0,
+    "onDemandCap": {
+      "val": 0
+    },
+    "onDemandUsed": {
+      "val": 0
+    },
+    "productUsage": [
+      {
+        "product": "GrokBuild",
+        "usagePercent": 55.0
+      }
+    ],
+    "isUnifiedBillingUser": true,
+    "prepaidBalance": {
+      "val": 0
+    },
+    "topUpMethod": "TOP_UP_METHOD_SAVED_PAYMENT_METHOD",
+    "billingPeriodStart": "2026-10-12T11:59:55.857848+00:00",
+    "billingPeriodEnd": "2026-10-19T11:59:55.857848+00:00"
+  }
+}

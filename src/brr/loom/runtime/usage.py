@@ -35,17 +35,18 @@ def shells(home):
             yield name
 
 
-def print_windows(rows) -> None:
+def print_windows(rows, *, error: str | None = None) -> None:
     windows = [{"name": name, "left_pct": left,
                 "resets_at": datetime.fromtimestamp(reset, timezone.utc).isoformat() if reset else None}
                for name, left, reset in rows if left is not None]
-    if not windows:
+    if not windows and not error:
         raise SystemExit(1)
-    print(json.dumps({"windows": windows}))
+    print(json.dumps({"windows": windows, **({"error": error} if error else {})}))
 
 
 def _refresh(path, script) -> None:
     at, windows = time.time(), []
+    error = None
     proc = None
     claim = None
     attempted = False
@@ -74,7 +75,10 @@ def _refresh(path, script) -> None:
                                 env=env, start_new_session=True)
         out, _ = proc.communicate(timeout=15)
         if proc.returncode == 0:
-            for window in json.loads(out)["windows"]:
+            payload = json.loads(out)
+            if isinstance(payload.get("error"), str):
+                error = payload["error"]
+            for window in payload["windows"]:
                 left = window["left_pct"]
                 if (isinstance(left, (int, float)) and math.isfinite(left) and left <= 100
                         and isinstance(window.get("name"), str)):
@@ -87,7 +91,7 @@ def _refresh(path, script) -> None:
             proc.wait()
         try:
             if attempted:
-                atomic_write(path, json.dumps({"at": at, "windows": windows}) + "\n")
+                atomic_write(path, json.dumps({"at": at, "windows": windows, **({"error": error} if error else {})}) + "\n")
         finally:
             if claim is not None:
                 claim.close()
