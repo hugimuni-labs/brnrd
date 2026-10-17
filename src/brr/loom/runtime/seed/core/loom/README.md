@@ -63,3 +63,10 @@ in each room and fetches each project source, so the plain table does not.
 Open a worker and declare its checkouts together with `send --to thread:<new> --body <shell/core> --repo <url> "<work>"`; repeat `--repo` for each checkout. The README and seat land together before its first lease. Repo directory names must be distinct.
 
 `molt --fresh --why "<reason>"` starts a successor from main without inheriting the room or its label. The old room and unlanded work remain for review. The reason stays in the molt fact; the successor receives a fixed fresh-start message. Plain `molt` carries the room and label forward.
+
+A Plan citation records an ask, not an answer. Boundaries also list `unanswered`
+person letters cited by that thread; `threads` counts the same distinct letters,
+including settled threads. Only a reply `re:` the letter with a `speech.part`
+receipt on its originating channel, or that person's own hand note, clears it.
+Resident notes and done dispositions do not. This line informs the body; it
+adds no stop block.

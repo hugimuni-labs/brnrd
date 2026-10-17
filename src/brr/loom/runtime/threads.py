@@ -6,7 +6,7 @@ from datetime import datetime
 
 from .home import Home, thread_of
 from .lifecycle import CLOSED, read_thread, main_snapshot, main_tree, readme_at
-from .owners import letter_owners, thread_axes
+from .owners import letter_owners, thread_axes, unanswered_by_thread
 from .project import fold, sender_threads
 from .selfrepo import git
 
@@ -52,6 +52,7 @@ def thread_table(home: Home, facts: list) -> list[dict]:
     state, writers = fold(facts), sender_threads(facts)
     main = main_snapshot(home)
     ownership = letter_owners(facts, main)
+    unanswered = unanswered_by_thread(facts, main)
     axes = thread_axes(facts, main, ownership)
     owed, activity, boundary = {}, {}, {}
     for fate in ownership.values():
@@ -150,13 +151,13 @@ def thread_table(home: Home, facts: list) -> list[dict]:
             count = len(axes[thread]['letters'])
             cause = axes[thread]['cause']
             value = 'idle ' + _age(now - last) if cause == 'idle' else cause
-        rows.append({'thread': thread, 'seat': seat, 'now': value, 'owed': count,
+        rows.append({'thread': thread, 'seat': seat, 'now': value, 'owed': count, 'unanswered': len(unanswered.get(thread, ())),
                      'opened-by': data.get('opened-by') or '—', 'plan': data['plan'],
                      'status': data['status'], **{k: axes[thread][k] for k in ('owed-by', 'restart', 'control')}})
     for ident, fate in ownership.items():
         if fate.owner == 'operator':
             rows.append({'thread': 'operator', 'seat': '—', 'now': ident + ': ' + fate.reason,
-                         'owed': 1, 'opened-by': fate.thread or '—', 'plan': '—',
+                         'owed': 1, 'unanswered': 0, 'opened-by': fate.thread or '—', 'plan': '—',
                          'status': 'open',
                          'owed-by': 'operator', 'restart': 'operator note',
                          'control': 'operator: attention --note ' + ident + ' --why <reason>'})
@@ -164,7 +165,7 @@ def thread_table(home: Home, facts: list) -> list[dict]:
 
 
 def render_table(rows: list[dict]) -> str:
-    columns = ('thread', 'seat', 'now', 'owed', 'opened-by', 'plan', 'owed-by', 'restart', 'control')
+    columns = ('thread', 'seat', 'now', 'owed', 'unanswered', 'opened-by', 'plan', 'owed-by', 'restart', 'control')
     if any(row.get('left') for row in rows):
         columns += ('left',)
         rows = [dict(row, left=row.get('left') or '—') for row in rows]

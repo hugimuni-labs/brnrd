@@ -217,3 +217,46 @@ def thread_axes(facts, main, ownership=None):
                         'owed-by': ', '.join(owners) or 'nobody',
                         'restart': restart, 'control': control, 'reset': reset}
     return rows
+
+
+def unanswered_letters(facts) -> dict[str, Fact]:
+    """Person letters without a delivered reply or their author's hand note.
+
+    Handling debt and answering a person are separate projections: neither a
+    resident's note nor a done disposition is evidence the person heard back.
+    """
+    facts = ordered_facts(facts)
+    accepted = fold(facts).accepted
+    channels = reply_channels(facts)
+
+    def person(value):
+        value = str(value or '')
+        if value.startswith(('person:', 'p-')):
+            return 'person:' + value.removeprefix('person:').removeprefix('p-')
+        return None
+
+    def author(letter):
+        return person(letter.data.get('from')) or person(letter.by)
+
+    asks = {f.id: f for f in accepted if f.kind == 'letter' and author(f)}
+    answered = {f.data.get('re') for f in facts if f.kind == 'note'
+                and f.by.startswith('person:') and f.data.get('re') in asks
+                and person(f.by) == author(asks[f.data['re']])}
+    replies = {f.id: f for f in accepted if f.kind == 'letter'
+               and f.data.get('re') in asks and f.data.get('to') == channels.get(f.data['re'])}
+    for f in accepted:
+        if f.kind != 'speech.part' or f.data.get('key') not in replies:
+            continue
+        reply = replies[f.data['key']]
+        if (f.data.get('channel') == reply.data['to']
+                and f.data.get('receipt', {}).get('message_id') is not None):
+            answered.add(reply.data['re'])
+    return {ident: letter for ident, letter in asks.items() if ident not in answered}
+
+
+def unanswered_by_thread(facts, main) -> dict[str, tuple[str, ...]]:
+    """Every citing thread sees its distinct unanswered letters, even if closed."""
+    unanswered = unanswered_letters(facts)
+    return {thread: tuple(sorted({ident for _, row in data.get('plan_rows') or ()
+                                  for ident in plan_citations(row) if ident in unanswered}))
+            for thread, data in main.items()}
