@@ -234,3 +234,33 @@ def test_sender_reassignment_moves_historical_activity(tmp_path):
         view.append(row)
         seen.append(row)
         equivalent(view, seen, main, tmp_path)
+
+
+@pytest.mark.parametrize('shared_source', [False, True])
+def test_later_reply_and_source_citation_do_not_change_old_letter_projections(tmp_path, shared_source):
+    """Inbound replies/citations are not inputs to the older letter's context.
+
+    Each production projection reads the letter's own source and, for reply
+    context, its own re target. A later letter pointing back cannot change
+    those inputs. Actual source/blob/target arrivals remain reverse-indexed.
+    """
+    main = {'inbox': {'status': 'open'}}
+    blob = f('blob', 1, {'sha': 'old', 'mime': 'text/plain', 'size': 2})
+    source = f('source', 2, {'channel': 'channel:telegram/old', 're': 'native-parent', 'blobs': ['old']}, after=(blob.id,))
+    parent = f('letter', 3, {'id': 'parent', 'to': 'thread:inbox', 'from': 'p-a', 'body': 'parent body'}, by='person:a')
+    old = f('letter', 4, {'id': 'old', 'to': 'thread:inbox', 'from': 'p-a', 'cites': source.id, 're': parent.id}, by='person:a')
+    seen = [blob, source, parent, old]
+    view = LedgerView(seen)
+    equivalent(view, seen, main, tmp_path)
+    expected = (reply_channels(view)[old.id], copy.deepcopy(letter_attachments(tmp_path, view)[old.id]), letter_replies(view)[old.id])
+    later_blob = f('blob', 5, {'sha': 'new', 'mime': 'image/png', 'size': 3})
+    later_source = f('source', 6, {'channel': 'channel:telegram/new', 're': 'native-old', 'blobs': ['new']}, after=(later_blob.id,))
+    later = f('letter', 7, {'id': 'later', 'to': 'thread:inbox', 'from': 'p-a', 're': old.id,
+                           'cites': source.id if shared_source else later_source.id}, by='person:a')
+    for row in (later_blob, later_source, later):
+        view.append(row)
+        seen.append(row)
+        equivalent(view, seen, main, tmp_path)
+        assert (reply_channels(view)[old.id], letter_attachments(tmp_path, view)[old.id], letter_replies(view)[old.id]) == expected
+    assert letter_replies(view)[later.id].startswith('replying to your old:')
+    assert letter_attachments(tmp_path, view)[later.id] == (expected[1] if shared_source else [f'attachment: image/png · 3 bytes · {tmp_path.resolve() / "blobs/new"}'])
