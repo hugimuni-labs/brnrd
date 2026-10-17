@@ -27,10 +27,13 @@ def _content(fact: Fact) -> str:
 
 
 def _freeze(data: dict) -> dict:
-    frozen = {}
-    for key, value in data.items():
-        frozen[key] = list(value) if isinstance(value, (list, tuple)) else value
-    return frozen
+    """Return the same deep JSON representation a subsequent disk read sees.
+
+    Repo declarations contain tuple pairs. A shallow copy leaves those tuples
+    in a locally appended Fact while the ledger decodes them as arrays, which
+    would make the carried view report a false duplicate-ID conflict.
+    """
+    return json.loads(json.dumps(data))
 
 
 # The loom's own file, not a strand's. One writer: the router, except a

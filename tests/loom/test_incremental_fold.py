@@ -264,3 +264,18 @@ def test_later_reply_and_source_citation_do_not_change_old_letter_projections(tm
         assert (reply_channels(view)[old.id], letter_attachments(tmp_path, view)[old.id], letter_replies(view)[old.id]) == expected
     assert letter_replies(view)[later.id].startswith('replying to your old:')
     assert letter_attachments(tmp_path, view)[later.id] == (expected[1] if shared_source else [f'attachment: image/png · 3 bytes · {tmp_path.resolve() / "blobs/new"}'])
+
+
+def test_local_append_repo_pairs_equal_the_next_production_refresh(tmp_path):
+    home = Home(tmp_path, install='abcd')
+    reader = LedgerReader()
+    view = reader.refresh(home)
+    data = {'thread': 'work', 'strand': 's-abcd-first', 'gen': 1,
+            'repos': [('widget', 'https://example.invalid/widget.git')]}
+    stored = append(home, Fact('lease', 'loom:abcd', data))
+    view.append(stored)
+    assert stored == read_facts(home)[0]
+    assert reader.refresh(home) is view
+    assert view == read_facts(home)
+    assert isinstance(data['repos'][0], tuple)  # callers retain their input
+    assert isinstance(stored.data['repos'][0], list)
