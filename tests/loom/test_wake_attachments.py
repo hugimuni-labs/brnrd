@@ -23,10 +23,10 @@ STRAND = "s-aaaa-attach"
 @pytest.fixture
 def home(tmp_path):
     root = tmp_path / "home with spaces"
-    write_thread(root, "inbox", "Inbox", "quit-now")
+    write_thread(root, "brnrd", "Brnrd", "quit-now")
     home = Home(root, install="aaaa")
     append(home, Fact(kind="lease", by="loom:aaaa", id="lease:inbox:1", data={
-        "thread": "inbox", "strand": STRAND, "gen": 1}))
+        "thread": "brnrd", "strand": STRAND, "gen": 1}))
     return home
 
 
@@ -57,7 +57,7 @@ def assert_attachment(text, home, facts):
 @pytest.mark.parametrize("attached,missing", [(True, ""), (True, "1 3"), (False, "0")])
 def test_source_attachments_reach_wake_and_initial_boundary(home, tmp_path, attached, missing):
     facts, letter = receive(home, tmp_path, attached=attached, missing=missing)
-    room = _prepare(home, STRAND, "inbox", 1, mail(home.root, facts, "inbox"),
+    room = _prepare(home, STRAND, "brnrd", 1, mail(home.root, facts, "brnrd"),
                     sender_threads(facts), facts, "hand")
     wake = (room / "port/wake.md").read_text()
     boundary = (room / "port/in/boundary.md").read_text()
@@ -78,14 +78,14 @@ def test_source_attachments_reach_wake_and_initial_boundary(home, tmp_path, atta
 @pytest.mark.parametrize("compact", [False, True])
 def test_new_boundary_letter_and_compact_redelivery_keep_attachments(home, tmp_path, compact):
     facts = read_facts(home)
-    room = _prepare(home, STRAND, "inbox", 1, [], sender_threads(facts), facts, "hand")
+    room = _prepare(home, STRAND, "brnrd", 1, [], sender_threads(facts), facts, "hand")
     assert "attachment:" not in (room / "port/wake.md").read_text()
     facts, letter = receive(home, tmp_path, missing="1")
     if compact:
         append(home, Fact(kind="shown", by=f"strand:{STRAND}", id="shown:photo", data={
             "strand": STRAND, "gen": 1, "ids": [letter.id]}))
         facts = read_facts(home)
-    _boundary(home, facts, STRAND, 1, SimpleNamespace(thread="inbox", fuel="", why=""))
+    _boundary(home, facts, STRAND, 1, SimpleNamespace(thread="brnrd", fuel="", why=""))
     text = (room / "port/in/boundary.md").read_text()
     parsed = next(f for f in parse_boundary(text).letters if f.id == letter.id)
     assert parsed.compact is compact
@@ -105,7 +105,7 @@ def test_same_blob_in_another_source_does_not_replace_mime(home, tmp_path):
     ingest(home, "fake", dict(id="other", kind="letter", to="channel:fake/42",
                              body="same bytes, different filename"), [same])
     facts = read_facts(home)
-    room = _prepare(home, STRAND, "inbox", 1, mail(home.root, facts, "inbox"),
+    room = _prepare(home, STRAND, "brnrd", 1, mail(home.root, facts, "brnrd"),
                     sender_threads(facts), facts, "hand")
     wake = (room / "port/wake.md").read_text()
     occasions = {section.split(" from ")[0]: section for section in wake.split("### ")[1:]}

@@ -94,19 +94,19 @@ def test_only_a_known_persons_direct_chat_is_speakable(home):
 def test_header_and_event_resolution_from_the_fold(home):
     append(home, Fact(kind="letter", by="loom:aaaa", id="letter:relay:ev_9",
                       data={"id": "letter:relay:ev_9", "from": "person:ada",
-                            "to": "thread:inbox", "body": "q",
+                            "to": "thread:brnrd", "body": "q",
                             "cites": "source:relay:ev_9"}))
     append(home, Fact(kind="router", by="loom:aaaa", id="router:1",
                       data={"gen": 1, "until": loom_clock() + 600, "install": "aaaa"}))
     append(home, Fact(kind="lease", by="loom:aaaa", id="lease:inbox:1",
-                      data={"thread": "inbox", "strand": "s-aaaa-one", "gen": 1,
+                      data={"thread": "brnrd", "strand": "s-aaaa-one", "gen": 1,
                             "router_gen": 1, "install": "aaaa"}))
     state = fold(read_facts(home))
     answer = Fact(kind="letter", by="strand:s-aaaa-one", id="s-aaaa-one/a",
                   data={"id": "s-aaaa-one/a", "from": "s-aaaa-one",
                         "to": "channel:relay/telegram:42", "re": "letter:relay:ev_9"})
     assert _answers_event(state, answer) == "ev_9"
-    assert _header(state, answer) == "b·_·d ⌁ [ inbox ]"
+    assert _header(state, answer) == "b·_·d ⌁ [ brnrd ]"
 
 
 def test_port_accepts_relay_channels_and_refuses_unknown_kinds(tmp_path):
@@ -185,7 +185,7 @@ def test_port_cannot_claim_another_strands_sender(home):
     assert letter.data["from"] == "s-writer"
     state = fold(read_facts(home))
     assert _header(state, letter) == "b·_·d ⌁ [ first ]"
-    boundary = render_boundary("s-reader", 1, "inbox", [letter], set(),
+    boundary = render_boundary("s-reader", 1, "brnrd", [letter], set(),
                                {"s-writer": "first", "s-other": "second"})
     shown, = parse_boundary(boundary).letters
     assert shown.sender == "s-writer" and shown.reply == "thread:first"

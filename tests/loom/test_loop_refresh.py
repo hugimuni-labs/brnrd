@@ -11,7 +11,7 @@ from _step import write_thread
 
 
 def test_bad_config_keeps_inputs_and_ticks_on_last_good_snapshot(tmp_path, monkeypatch):
-    write_thread(tmp_path, 'inbox', 'Inbox', 'quit-now')
+    write_thread(tmp_path, 'brnrd', 'Brnrd', 'quit-now')
     path = tmp_path / 'loom/config.toml'
     good = path.read_text()
     stop = threading.Event()
@@ -38,7 +38,7 @@ def test_bad_config_keeps_inputs_and_ticks_on_last_good_snapshot(tmp_path, monke
 
 
 def test_runtime_touch_requests_same_argv_exec_without_stopping_bodies(tmp_path, monkeypatch):
-    write_thread(tmp_path, 'inbox', 'Inbox', 'quit-now')
+    write_thread(tmp_path, 'brnrd', 'Brnrd', 'quit-now')
     source = tmp_path / 'runtime'
     source.mkdir()
     module = source / 'loom.py'
@@ -51,7 +51,7 @@ def test_runtime_touch_requests_same_argv_exec_without_stopping_bodies(tmp_path,
     body = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
                             start_new_session=True)
     def step(home, bodies, *args):
-        bodies['survivor'] = loom.Body('survivor', 'inbox', 1, body)
+        bodies['survivor'] = loom.Body('survivor', 'brnrd', 1, body)
         stat = module.stat()
         os.utime(module, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1))
     monkeypatch.setattr(loom, 'tick_once', step)
@@ -65,7 +65,7 @@ def test_runtime_touch_requests_same_argv_exec_without_stopping_bodies(tmp_path,
 
 
 def test_loop_refreshes_all_resolved_usage_shells_every_ten_minutes(tmp_path, monkeypatch):
-    write_thread(tmp_path, 'inbox', 'Inbox', 'quit-now')
+    write_thread(tmp_path, 'brnrd', 'Brnrd', 'quit-now')
     for name in ('local', 'no-gauge'):
         folder = tmp_path / 'loom/bodies' / name
         folder.mkdir(parents=True)

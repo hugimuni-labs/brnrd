@@ -108,9 +108,10 @@ def ingest(home, name, fm, attachments):
         sender = _sender(home, platform, raw_sender.partition(':')[2]
                          if raw_sender.startswith(platform + ':') else None)
         clean = clean_accepts(home.root / 'self', fm['kind'], fm.get('refs', '').split(), fm['body'])
-        to = route_bare(facts, f'{platform}/{chat}', binding[1] if binding else None)
+        to = route_bare(facts, f'{platform}/{chat}', binding[1] if binding else None,
+                        home.main_thread())
         if not home.routable(to.removeprefix('thread:')):
-            to = 'thread:inbox'
+            to = f'thread:{home.main_thread()}'
         blobs, blob_ids = [], []
         for index, path in enumerate(attachments):
             payload = path.read_bytes()
@@ -253,16 +254,16 @@ def thread_for_message(facts, channel, message_id):
     return binding[1] if binding else None
 
 
-def route_bare(facts, chat, reply_thread=None):
+def route_bare(facts, chat, reply_thread=None, fallback='brnrd'):
     """A reply's thread, else the last confirmed speaker, regardless of lease."""
     try:
         _platform, chat_id = channel_parts(f'channel:{chat}')
     except ValueError:
-        return 'thread:inbox'
+        return f'thread:{fallback}'
     if chat_id is None:
-        return 'thread:inbox'
+        return f'thread:{fallback}'
     if reply_thread:
         return f'thread:{reply_thread}'
     spoken = [thread for data, _letter, thread in _speech(facts, f'channel:{chat}', 'speech')
               if data.get('state') == 'sent']
-    return f'thread:{spoken[-1]}' if spoken else 'thread:inbox'
+    return f'thread:{spoken[-1]}' if spoken else f'thread:{fallback}'

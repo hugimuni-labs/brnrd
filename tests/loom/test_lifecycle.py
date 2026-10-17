@@ -95,7 +95,7 @@ def test_persons_two_failed_starts_deliver_failure_or_leave_operator_debt(tmp_pa
     init_self(root, person="ada")
     person = root / "self/people/ada/channels.toml"
     person.write_text('channels = ["relay:telegram:42"]\n')
-    write_thread(root, "inbox", "Inbox", "die-now", wait="0")
+    write_thread(root, "brnrd", "Brnrd", "die-now", wait="0")
     starts = root / "starts"
     bodies(root, f'''import sys
 from pathlib import Path
@@ -196,8 +196,8 @@ def test_person_is_told_once_when_fuel_parks_their_letter(tmp_path, monkeypatch)
     root = tmp_path / "home"
     init_self(root, person="ada")
     (root / "self/people/ada/channels.toml").write_text('channels = ["relay:telegram:42"]\n')
-    write_thread(root, "inbox", "Inbox", "answer-fast", wait="0")
-    (root / "self/threads/inbox/seat").write_text("body: claude/echo\n")
+    write_thread(root, "brnrd", "Brnrd", "answer-fast", wait="0")
+    (root / "self/threads/brnrd/seat").write_text("body: claude/echo\n")
     git(root / "self", "add", "threads")
     git(root / "self", "commit", "-m", "Choose gauge body.")
     reset = datetime.now(timezone.utc) + timedelta(hours=2)
@@ -235,12 +235,12 @@ def test_person_is_told_once_when_fuel_parks_their_letter(tmp_path, monkeypatch)
         wait_until(lambda: len(sent) == 1, 10, loom.dump)
         assert sent[0]["to"] == "telegram:42"
         assert (f"Out of claude session fuel (2% left) until about {local_time}. "
-                "Your letter is kept on thread inbox and is answered when it refills.") in sent[0]["body"]
+                "Your letter is kept on thread brnrd and is answered when it refills.") in sent[0]["body"]
         assert sent[0]["re"] == "telegram:42:park"
         wait_until(lambda: any(f.kind == "body.parked" for f in loom.facts()), 5, loom.dump)
         time.sleep(0.3)  # several more parked ticks
         assert len(sent) == 1
-        assert mail(root, loom.facts(), "inbox")  # the notice does not settle the ask
+        assert mail(root, loom.facts(), "brnrd")  # the notice does not settle the ask
     finally:
         loom.halt()
     assert not loom.errors
