@@ -485,14 +485,19 @@ def search(
     cfg: dict | None = None,
     *,
     limit: int = 20,
+    search_sources: Iterable[KnowledgeSource] | None = None,
 ) -> list[SearchHit]:
-    """Search knowledge sources for *query*, preserving source order."""
+    """Search knowledge sources for *query*, preserving source order.
+
+    Explicit ``search_sources`` supports a standalone home without consulting
+    account/config discovery. ``None`` retains the repo source chain.
+    """
 
     needle = query.strip().lower()
     if not needle:
         return []
     hits: list[SearchHit] = []
-    for source in sources(repo_root, cfg):
+    for source in (sources(repo_root, cfg) if search_sources is None else search_sources):
         for path in _iter_docs(source.root):
             try:
                 lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
