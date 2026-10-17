@@ -1032,7 +1032,7 @@ def pending_bodies(facts: list[Fact]) -> dict[str, Fact]:
 def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, force=False):
     from .config import load_config
     from .lifecycle import CLOSED, closing_commit, read_thread
-    from .usage import reading
+    from .usage import fuels, reading
     from types import SimpleNamespace
     now, config, room = time.time(), load_config(home.root), home.room(strand)
     alive = body_alive(room)
@@ -1074,7 +1074,8 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
         body = bodies.get(strand)
         proven = _proven_body(room, pid, str(start.data.get("lstart") or "") if start else "",
                               body.proc if body else None, alive=alive)
-    fuel = "fuel " + shell + " " + " ".join(f"{w['name']} {w['left_pct']:g}%" for w in gauge["windows"]) if gauge and gauge["windows"] else ""
+    # The boundary lists every cached shell. Park still reads `empty`, the seated gauge only.
+    fuel = fuels(home, shell)
     context = SimpleNamespace(thread=thread, shell=shell, core=core, pid=pid, empty=empty, fuel=fuel,
                               why=(closing_commit(home, thread)[1] or f"thread {thread} settled") if closed else "", failure="", repos=lease.get("repos"))
     return Observation(strand, gen, alive, closed, "refreshing" if gauge is None else "empty" if empty else "ok",
