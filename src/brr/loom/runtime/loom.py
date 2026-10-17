@@ -904,7 +904,7 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
         clone = room / "self"
         try:
             revision = git(clone, "rev-parse", "HEAD").stdout.strip()
-        except SelfError:
+        except (SelfError, OSError):
             revision = "unknown"
         notice(home, facts, "self-refusal", f"{thread}:{revision}",
                f"thread {thread} could not start from its own state: {failure or tail}",
