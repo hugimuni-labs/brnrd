@@ -269,7 +269,8 @@ class Router:
         # Clone/start is slow under load; doing it inside the grant loop burned
         # the skew window so later threads never got a lease this generation.
         for strand, thread, gen, choice, declared in pending:
-            facts = _start(home, strand, thread, gen, bodies, facts, choice, repos=declared)
+            facts = _start(home, strand, thread, gen, bodies, facts, choice,
+                           repos=declared, reader=self.reader)
         if not self.armed():
             return facts
         facts = self._unrouted(facts, set(threads))

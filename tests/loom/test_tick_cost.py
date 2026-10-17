@@ -177,3 +177,58 @@ def test_ownership_cache_tracks_main_edits_and_appended_facts(monkeypatch):
                           data={'re': 'question', 'why': 'done'}))
         assert letter_owners(facts, main)['question'].done
         assert len(calls) == 4
+
+
+def test_held_body_ticks_reuse_ledger_rows(tmp_path, monkeypatch):
+    """Exercise the real locked _start path excluded by the idle benchmark."""
+    import json
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime import ledger, loom
+
+    home = Home(_home(tmp_path))
+    router = Router(home)
+    tick_once(home, {}, 'fake', 'haiku', router)
+    router.clock = lambda: router.lease.until - router.config.router_ttl
+    strand = f's-{home.install_id()}-held'
+    ledger.append(home, Fact(kind='lease', by=f'loom:{home.install_id()}',
+        data={'strand': strand, 'thread': 'w-1', 'gen': 1,
+              'router_gen': router.lease.gen, 'install': home.install_id()}))
+    advanced = []
+    def no_advance(home, strand, thread, gen, bodies, facts, **kwargs):
+        advanced.append(strand)
+        return facts
+    monkeypatch.setattr(loom, '_advance_body', no_advance)
+    tick_once(home, {}, 'fake', 'haiku', router)
+    parsed = []
+    real = json.loads
+    def counted(raw, *args, **kwargs):
+        value = real(raw, *args, **kwargs)
+        if isinstance(value, dict) and 'hlc' in value:
+            parsed.append(value)
+        return value
+    monkeypatch.setattr(ledger.json, 'loads', counted)
+    advanced.clear()
+    for _ in range(3):
+        tick_once(home, {}, 'fake', 'haiku', router)
+    assert advanced == [strand] * 3
+    assert parsed == []
+
+
+def test_cached_start_refreshes_lease_before_advancing(tmp_path, monkeypatch):
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime import ledger, loom
+
+    home = Home(_home(tmp_path))
+    strand = f's-{home.install_id()}-old'
+    def lease(who, gen):
+        return Fact(kind='lease', by=f'loom:{home.install_id()}',
+                    data={'strand': who, 'thread': 'w-1', 'gen': gen})
+    ledger.append(home, lease(strand, 1))
+    reader = ledger.LedgerReader()
+    stale = reader.read(home)
+    ledger.append(home, lease(f's-{home.install_id()}-new', 2))
+    advanced = []
+    monkeypatch.setattr(loom, '_advance_body', lambda *a, **k: advanced.append(True))
+    current = loom._start(home, strand, 'w-1', 1, {}, stale, reader=reader)
+    assert advanced == []
+    assert len(current) == 2

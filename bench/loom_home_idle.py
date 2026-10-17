@@ -25,6 +25,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('home', type=Path)
     parser.add_argument('--ticks', type=int, default=20)
+    parser.add_argument('--start-checks', action='store_true',
+                        help='include locked start authority checks; never advance a body')
     args = parser.parse_args()
     print(f'tick source: {loom.__file__}')
     with tempfile.TemporaryDirectory(prefix='loom-home-idle-') as temporary:
@@ -48,10 +50,16 @@ def main():
         ) + '\nconnectors = []\n')
         home, bodies = Home(root), {}
         router = Router(home)
+        real_start = loom._start
+        def no_advance(home, strand, thread, gen, bodies, facts, **kwargs):
+            return facts
         def no_start(home, strand, thread, gen, bodies, facts, choice, **kwargs):
+            if args.start_checks:
+                return real_start(home, strand, thread, gen, bodies, facts, choice, **kwargs)
             return facts
         with patch.object(usage, 'reading', return_value={'windows': []}), \
-                patch.object(loom, '_start', no_start):
+                patch.object(loom, '_start', no_start), \
+                patch.object(loom, '_advance_body', no_advance):
             loom.tick_once(home, bodies, 'fake', 'haiku', router)
             # Hold lease time fixed to compare identical idle work, excluding
             # timer-triggered renewal appends from the profiled interval.
