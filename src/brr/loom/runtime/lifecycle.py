@@ -159,7 +159,8 @@ def closing_commit(home: Home, thread: str) -> tuple[str, str, str]:
     history, so the answer is kept per README blob on main.
     """
     path = f"threads/{thread}/README.md"
-    blob = git(home.root / "self", "rev-parse", f"main:{path}", check=False).stdout.strip()
+    _, blobs = main_tree(home.root / "self")
+    blob = blobs.get(path, "")
     key = (str(home.root), thread, blob)
     if key not in _closing:
         _closing[key] = _closing_commit(home, path)

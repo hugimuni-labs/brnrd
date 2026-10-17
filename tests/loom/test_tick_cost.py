@@ -128,3 +128,213 @@ def test_idle_ticks_do_not_reparse_an_8k_ledger(tmp_path, monkeypatch):
         tick_once(home, bodies, 'fake', 'haiku', router)
     assert parsed == []
     assert sorted_streams == []
+
+
+def test_closed_thread_idle_tick_starts_no_git_process(tmp_path, monkeypatch):
+    root = _home(tmp_path)
+    repo = root / 'self'
+    path = repo / 'threads/w-3/README.md'
+    path.write_text(path.read_text().replace('status: open', 'status: settled'))
+    git(repo, 'add', 'threads')
+    _commit(repo, 'settle: done' + LABEL)
+    home = Home(root)
+    router = Router(home)
+    tick_once(home, {}, 'fake', 'haiku', router)
+    seen = _git_calls(monkeypatch)
+    for _ in range(3):
+        tick_once(home, {}, 'fake', 'haiku', router)
+    assert seen == []
+    assert any(f.kind == 'thread.closed' and f.data['thread'] == 'w-3'
+               for f in read_facts(home))
+
+
+def test_ownership_cache_tracks_main_edits_and_appended_facts(monkeypatch):
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime import owners
+    from brr.loom.runtime.owners import letter_owners
+    from brr.loom.runtime.project import projection_cache
+
+    letter = Fact(kind='letter', by='person:test', id='question',
+                  data={'id': 'question', 'to': 'thread:work', 'body': 'Do it'})
+    facts = [letter]
+    main = {'work': {'status': 'open', 'plan_rows': [(False, 'Do it')]}}
+    calls = []
+    compute = owners._letter_owners
+    def counted(facts, main):
+        calls.append(True)
+        return compute(facts, main)
+    monkeypatch.setattr(owners, '_letter_owners', counted)
+    with projection_cache():
+        assert letter_owners(facts, main)['question'].plan_rows == ()
+        for _ in range(5):
+            assert letter_owners(list(facts), main)['question'].owner == 'loom'
+        assert len(calls) == 1
+        main['work']['plan_rows'] = [(False, 'Do it · re: question')]
+        assert letter_owners(facts, main)['question'].plan_rows == (1,)
+        main['work']['status'] = 'settled'
+        assert letter_owners(facts, main)['question'].owner == 'operator'
+        facts.append(Fact(kind='note', by='person:test', id='settled',
+                          data={'re': 'question', 'why': 'done'}))
+        assert letter_owners(facts, main)['question'].done
+        assert len(calls) == 4
+
+
+def test_held_body_ticks_reuse_ledger_rows(tmp_path, monkeypatch):
+    """Exercise the real locked _start path excluded by the idle benchmark."""
+    import json
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime import ledger, loom
+
+    home = Home(_home(tmp_path))
+    router = Router(home)
+    tick_once(home, {}, 'fake', 'haiku', router)
+    router.clock = lambda: router.lease.until - router.config.router_ttl
+    strand = f's-{home.install_id()}-held'
+    ledger.append(home, Fact(kind='lease', by=f'loom:{home.install_id()}',
+        data={'strand': strand, 'thread': 'w-1', 'gen': 1,
+              'router_gen': router.lease.gen, 'install': home.install_id()}))
+    advanced = []
+    def no_advance(home, strand, thread, gen, bodies, facts, **kwargs):
+        advanced.append(strand)
+        return facts
+    monkeypatch.setattr(loom, '_advance_body', no_advance)
+    tick_once(home, {}, 'fake', 'haiku', router)
+    parsed = []
+    real = json.loads
+    def counted(raw, *args, **kwargs):
+        value = real(raw, *args, **kwargs)
+        if isinstance(value, dict) and 'hlc' in value:
+            parsed.append(value)
+        return value
+    monkeypatch.setattr(ledger.json, 'loads', counted)
+    advanced.clear()
+    for _ in range(3):
+        tick_once(home, {}, 'fake', 'haiku', router)
+    assert advanced == [strand] * 3
+    assert parsed == []
+
+
+def test_cached_start_refreshes_lease_before_advancing(tmp_path, monkeypatch):
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime import ledger, loom
+
+    home = Home(_home(tmp_path))
+    strand = f's-{home.install_id()}-old'
+    def lease(who, gen):
+        return Fact(kind='lease', by=f'loom:{home.install_id()}',
+                    data={'strand': who, 'thread': 'w-1', 'gen': gen})
+    ledger.append(home, lease(strand, 1))
+    reader = ledger.LedgerReader()
+    stale = reader.read(home)
+    ledger.append(home, lease(f's-{home.install_id()}-new', 2))
+    advanced = []
+    monkeypatch.setattr(loom, '_advance_body', lambda *a, **k: advanced.append(True))
+    current = loom._start(home, strand, 'w-1', 1, {}, stale, reader=reader)
+    assert advanced == []
+    assert len(current) == 2
+
+
+def test_real_held_ticks_reuse_boundary_inputs_and_refresh_on_append(tmp_path, monkeypatch):
+    """Warm N production ticks rebuild no projections; one disk append rebuilds once."""
+    import fcntl
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime import ledger, loom, threads, usage
+
+    home = Home(_home(tmp_path))
+    router = Router(home)
+    tick_once(home, {}, 'fake', 'haiku', router)
+    router.clock = lambda: router.lease.until - router.config.router_ttl
+    strand = f's-{home.install_id()}-held'
+    ledger.append(home, Fact(kind='lease', by=f'loom:{home.install_id()}',
+        data={'strand': strand, 'thread': 'w-1', 'gen': 1,
+              'router_gen': router.lease.gen, 'install': home.install_id()}))
+    room = home.room(strand)
+    (room / 'port/in').mkdir(parents=True)
+    monkeypatch.setattr(usage, 'reading', lambda *a, **k: {'windows': []})
+    rebuilt = []
+    real = threads.thread_axes
+    def counted(*args):
+        rebuilt.append(True)
+        return real(*args)
+    monkeypatch.setattr(threads, 'thread_axes', counted)
+    with (room / '.body').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        tick_once(home, {}, 'fake', 'haiku', router)
+        rebuilt.clear()
+        for _ in range(4):
+            tick_once(home, {}, 'fake', 'haiku', router)
+        assert rebuilt == []
+        ledger.append(home, Fact(kind='note', by='person:test', id='new-observation',
+                                 data={'re': 'unknown', 'why': 'done'}))
+        tick_once(home, {}, 'fake', 'haiku', router)
+        for _ in range(3):
+            tick_once(home, {}, 'fake', 'haiku', router)
+        assert rebuilt == [True]
+        assert (room / 'port/in/boundary.md').is_file()
+
+
+def test_reply_channel_projection_reuses_rows_and_tracks_enabled_config(tmp_path, monkeypatch):
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime import home as home_module
+    from brr.loom.runtime.project import projection_cache, reply_channels
+
+    home = Home(tmp_path)
+    config = tmp_path / 'loom/config.toml'
+    config.parent.mkdir()
+    config.write_text('connectors = ["chat=directory"]\n')
+    facts = [Fact(kind='source', by='loom:test', id='source:chat:a', data={'channel': 'channel:chat/a'}),
+             Fact(kind='letter', by='loom:test', id='a', data={'id': 'a', 'cites': 'source:chat:a'})]
+    calls = []
+    real = home_module.channel_parts
+    def counted(*args, **kwargs):
+        calls.append(True)
+        return real(*args, **kwargs)
+    monkeypatch.setattr(home_module, 'channel_parts', counted)
+    cache = {}
+    with projection_cache(cache):
+        assert reply_channels(facts, home) == {'a': 'channel:chat/a'}
+    calls.clear()
+    for _ in range(4):
+        with projection_cache(cache):
+            assert reply_channels(list(facts), home) == {'a': 'channel:chat/a'}
+    assert calls == []
+    with projection_cache(cache):
+        facts.append(Fact(kind='note', by='person:test', id='new', data={'re': 'a'}))
+        assert reply_channels(facts, home) == {'a': 'channel:chat/a'}
+        assert calls == [True]
+        config.write_text('connectors = []\n')
+        assert reply_channels(facts, home) == {}
+        assert reply_channels(facts) == {'a': 'channel:chat/a'}
+
+
+def test_thread_input_reuse_keeps_gauge_liveness_time_and_main_fresh(tmp_path, monkeypatch):
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime import loom, threads, usage
+    from brr.loom.runtime.project import projection_cache
+
+    home = Home(_home(tmp_path))
+    facts = [Fact(kind='lease', by='loom:test', id='lease',
+                  data={'strand': 's-test-one', 'thread': 'w-1', 'gen': 1}),
+             Fact(kind='body.started', by='loom:test', id='started',
+                  data={'strand': 's-test-one', 'gen': 1, 'shell': 'fake', 'core': 'haiku'})]
+    alive, left, now = [True], [95], [2000000000]
+    monkeypatch.setattr(loom, 'body_alive', lambda room: alive[0])
+    monkeypatch.setattr(usage, 'fuel', lambda *a: f'fuel fake session {left[0]}%')
+    monkeypatch.setattr(threads.time, 'time', lambda: now[0])
+    def row(thread='w-1'):
+        return next(r for r in thread_table(home, facts) if r['thread'] == thread)
+    with projection_cache():
+        assert row()['now'] == 'holding session 95%'
+        left[0] = 80
+        assert row()['now'] == 'holding session 80%'
+        alive[0] = False
+        assert row()['now'] == 'body'
+        first = row('w-2')['now']
+        assert first.startswith('idle ')
+        now[0] += 86400
+        assert row('w-2')['now'] != first
+        readme = home.root / 'self/threads/w-1/README.md'
+        readme.write_text(readme.read_text().replace('status: open', 'status: settled'))
+        git(home.root / 'self', 'add', 'threads')
+        _commit(home.root / 'self', 'settle: cached input invalidation' + LABEL)
+        assert row()['now'].startswith('settled')

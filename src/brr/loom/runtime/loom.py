@@ -285,16 +285,18 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
 def _closures(home: Home, facts: list[Fact], threads: list[str]) -> list[Fact]:
     from .lifecycle import CLOSED, closing_commit, read_thread
     writers = sender_threads(facts)
+    ids = {fact.id for fact in facts}
     for thread in threads:
         data = read_thread(home, thread)
         if data.get("status") not in CLOSED:
             continue
         commit, why, writer = closing_commit(home, thread)
         ident = f"thread.closed:{thread}:{commit}"
-        if not any(f.id == ident for f in facts):
+        if ident not in ids:
             facts.append(_record(home, "thread.closed", {
                 "thread": thread, "status": data["status"], "why": why, "commit": commit,
             }, ident))
+            ids.add(ident)
         opener = str(data.get("opened-by", ""))
         if opener.startswith("thread:") and writers.get(writer) != opener.removeprefix("thread:"):
             notice(home, facts, "closed", ident, f"thread {thread} {data['status']}: {why}",
@@ -625,7 +627,7 @@ def _spawn(room: Path, argv: list[str], shell: str, thread: str) -> tuple[subpro
 
 def _start(home: Home, strand: str, thread: str, gen: int,
            bodies: dict[str, Body], facts: list[Fact], choice=None, *, force=False,
-           repos: list[tuple[str, str]] | None = None) -> list[Fact]:
+           repos: list[tuple[str, str]] | None = None, reader=None) -> list[Fact]:
     """Serialize starts with the operator's explicit gauge override."""
     room = home.room(strand)
     room.mkdir(parents=True, exist_ok=True)
@@ -634,7 +636,9 @@ def _start(home: Home, strand: str, thread: str, gen: int,
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return facts
-        current = read_facts(home)
+        # Still refresh under the start lock: another caller may have moved
+        # the lease. The loop reader preserves unchanged fact identities.
+        current = reader.read(home) if reader is not None else read_facts(home)
         if fold(current).holder.get(thread) != (strand, gen):
             return current
         if force:
@@ -732,8 +736,11 @@ def _ingest(home: Home, facts: list[Fact] | None = None, ttl: float | None = Non
         strand = room.name
         if not _may_ingest(home, strand, facts, ttl):
             continue
+        paths = _port_files(room)
+        if not paths:
+            continue
         gen = _strand_gen(facts, strand)
-        for path in _port_files(room):
+        for path in paths:
             try:
                 if path.suffix == ".md":
                     fact = fact_from_port(
@@ -1247,7 +1254,7 @@ def _advance_body(home, strand, thread, gen, bodies, facts, *, choice=None, forc
     return _execute_body(home, bodies, facts, o, c)
 
 
-def _advance_bodies(home, bodies, facts, choice):
+def _advance_bodies(home, bodies, facts, choice, *, reader=None):
     from .router import install_of
     leases = {f.data["strand"]: f for f in facts if f.kind == "lease"}
     holders = {strand for strand, gen in fold(facts).holder.values()}
@@ -1255,7 +1262,8 @@ def _advance_bodies(home, bodies, facts, choice):
         if install_of(strand) == home.install_id():
             d = leases[strand].data
             if not state_of(facts, strand, d["gen"]).released:
-                facts = _start(home, strand, d["thread"], d["gen"], bodies, facts, choice)
+                facts = _start(home, strand, d["thread"], d["gen"], bodies, facts, choice,
+                               reader=reader)
     return facts
 
 
@@ -1276,7 +1284,7 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     with projection_cache(router.projections):
         facts = router.begin_tick(facts)
         facts = _ingest(home, facts, router.config.router_ttl)
-        facts = _advance_bodies(home, bodies, facts, (adapter, core))
+        facts = _advance_bodies(home, bodies, facts, (adapter, core), reader=router.reader)
         # Time enters the owner table once, using only the facts already held.
         facts = observe_due(home, facts, router.armed())
         facts = router.route(facts, bodies, (adapter, core))

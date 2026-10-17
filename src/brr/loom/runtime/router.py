@@ -196,14 +196,17 @@ class Router:
         facts = _closures(home, facts, threads)
         from .lifecycle import CLOSED, read_thread
         pending = []
+        state = fold(facts)
         for thread in threads:
             if read_thread(home, thread).get("status") in CLOSED:
                 continue
             if not self.armed():
                 break
-            facts = self._release_abandoned(facts, thread, body_alive)
-            if holder(facts, thread):
-                continue
+            if thread in state.holder:
+                facts = self._release_abandoned(facts, thread, body_alive)
+                state = fold(facts)
+                if thread in state.holder:
+                    continue
             letters = [f for f in letters_for(facts, main_snapshot(home), thread) if not f.data.get("notice")]
             if not letters:
                 continue
@@ -271,7 +274,8 @@ class Router:
         # Clone/start is slow under load; doing it inside the grant loop burned
         # the skew window so later threads never got a lease this generation.
         for strand, thread, gen, choice, declared in pending:
-            facts = _start(home, strand, thread, gen, bodies, facts, choice, repos=declared)
+            facts = _start(home, strand, thread, gen, bodies, facts, choice,
+                           repos=declared, reader=self.reader)
         if not self.armed():
             return facts
         facts = self._unrouted(facts, set(threads))
@@ -387,14 +391,16 @@ class Router:
         table = letter_owners(facts, main_snapshot(self.home))
         sent = {key for key, fate in table.items() if fate.done}
         for fact in state.accepted:
-            if not self.armed() or self.lease is None:
-                return facts
             to = fact.data.get("to")
             if fact.kind != "letter" or not is_channel(to):
                 continue
             key = str(fact.data.get("id") or "")
             if not key or key not in table or table[key].owner != "channel":
                 continue
+            # Recheck authority immediately before a pending send, not for
+            # every historical fact (including already delivered letters).
+            if not self.armed() or self.lease is None:
+                return facts
             raw = fact.data.get("router_gen")
             try:
                 grant = int(raw)
