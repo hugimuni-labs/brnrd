@@ -1,7 +1,7 @@
 {
   "name": "brnrd",
   "version": "0.6.24",
-  "description": "brnrd — structured guardrails for AI agent work, managed from a chat. Install with `npm install -g brnrd`; this package is the launcher for the Python program.",
+  "description": "brnrd — local agents go brr: the persistent layer that keeps your Claude Code or Codex agent working across reboots, chats and provider limits. Install with `npm install -g brnrd`; this package is the launcher for the Python program.",
   "keywords": [
     "ai",
     "agent",
