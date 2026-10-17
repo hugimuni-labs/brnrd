@@ -33,8 +33,12 @@ def test_self_refusal_stays_owed_and_one_notice_repairs_home(tmp_path, fault):
     loom.start()
     try:
         wait_until(lambda: len([f for f in loom.facts() if f.kind == "attempt.ended"
-                               and f.data["thread"] == "work"]) >= 3, 15, loom.dump)
+                               and f.data["thread"] == "work"]) >= 1, 15, loom.dump)
+        import time
+        time.sleep(0.5)
         facts = loom.facts()
+        assert len([f for f in facts if f.kind == "attempt.ended"
+                    and f.data["thread"] == "work"]) == 1
         fate = letter_owners(facts, main_snapshot(Home(root)))[ident]
         assert not fate.done and fate.owner == "loom"
         ends = [f for f in facts if f.kind == "attempt.ended" and f.data["thread"] == "work"]
@@ -155,3 +159,22 @@ def test_disappeared_install_does_not_spend_a_letters_crash_allowance(tmp_path):
     notices = [f for f in facts if f.id.startswith('loom/self-refusal-')]
     assert len(notices) == 1 and notices[0].data['to'] == 'thread:work'
     assert not any(f.id.startswith(('loom/bounce-', 'loom/failed-message-')) for f in facts)
+
+
+def test_home_retry_fallback_survives_router_restart(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime.router import Router
+    root = tmp_path / 'home'
+    write_thread(root, 'work', 'The ask', 'answer-fast', wait='0')
+    home = Home(root)
+    revision = git(root / 'self', 'rev-parse', 'main').stdout.strip()
+    now = datetime.now(timezone.utc)
+    def attempt(age):
+        return Fact(kind='attempt.ended', id='end', by='loom:test',
+                    at=(now - timedelta(seconds=age)).isoformat(), data={
+                        'thread': 'work', 'evidence': {'self_revision': revision},
+                        'dispositions': [{'id': 'ask', 'outcome': 'retry',
+                                          'reason': 'home-caused failure'}]})
+    assert Router(home)._home_retry_waiting([attempt(599)], 'work')
+    assert not Router(home)._home_retry_waiting([attempt(601)], 'work')

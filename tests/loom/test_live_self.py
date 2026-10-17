@@ -82,7 +82,7 @@ def test_a_home_wake_over_budget_keeps_original_owed_and_recovers_without_resend
     loom.start()
     try:
         wait_until(lambda: len([f for f in loom.facts() if f.kind == "attempt.ended"
-                               and f.data["thread"] == "fat"]) >= 3, 8, loom.dump)
+                               and f.data["thread"] == "fat"]) >= 1, 8, loom.dump)
         facts = loom.facts()
         fate = letter_owners(facts, main_snapshot(loom.home))[original]
         assert not fate.done and fate.reason == "home-caused failure"
@@ -91,7 +91,14 @@ def test_a_home_wake_over_budget_keeps_original_owed_and_recovers_without_resend
         notices = [f for f in facts if f.id.startswith("loom/self-refusal-")]
         assert len(notices) == 1 and notices[0].data["to"] == "thread:inbox"
         monkeypatch.delenv("LOOM_BUDGET_BYTES")
-        # Repairing the home is sufficient: the person never has to resend.
+        # A repair outside self recovers at the ten-minute fallback.
+        from datetime import datetime, timedelta
+        from brr.loom.runtime import router
+        class AfterFallback(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime.now(tz) + timedelta(seconds=601)
+        monkeypatch.setattr(router, "datetime", AfterFallback)
         wait_until(lambda: letter_owners(loom.facts(), main_snapshot(loom.home))[original].done,
                    8, loom.dump)
         assert any(f.kind == "note" and f.data.get("re") == original for f in loom.facts())

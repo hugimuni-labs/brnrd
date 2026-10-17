@@ -897,10 +897,16 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
              and f.data.get("gen") == gen),
             "",
         )
+    retry_revision = None
     if (cause == "failed" and failure_origin == "home"
             and (not letters or any(f.id not in failure_letters for f in letters))):
         # Preparation/spawn failed, or the holding install disappeared. No
         # running reader is available here to repair the condition.
+        from .lifecycle import main_tip
+        try:
+            retry_revision = main_tip(home.root / "self")
+        except (SelfError, OSError):
+            retry_revision = "unknown"
         clone = room / "self"
         try:
             revision = git(clone, "rev-parse", "HEAD").stdout.strip()
@@ -968,6 +974,7 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
         "thread": thread, "strand": strand, "gen": gen, "ids": ids,
         "cause": cause, "code": code, "dispositions": dispositions,
         "evidence": {"tail": tail, "readme_changed": changed, "fuel": tank,
+                     **({"self_revision": retry_revision} if retry_revision else {}),
                      **({"unpublished": left} if left else {}),
                      **({"kept": kept} if kept else {}),
                      **({"why": stopped_why} if cause == "stopped" else {})},

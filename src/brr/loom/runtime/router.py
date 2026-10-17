@@ -207,6 +207,8 @@ class Router:
             letters = [f for f in letters_for(facts, main_snapshot(home), thread) if not f.data.get("notice")]
             if not letters:
                 continue
+            if self._home_retry_waiting(facts, thread):
+                continue
             target = readme_for(home, thread)
             if target and target != self.config.name:
                 self._refused(facts, thread, letters, "for-other", "for: other brnrd",
@@ -274,6 +276,32 @@ class Router:
             return facts
         facts = self._unrouted(facts, set(threads))
         return facts
+
+    def _home_retry_waiting(self, facts, thread) -> bool:
+        """Retry a refused home when self changes, or after ten minutes.
+
+        Persist the failed revision in the attempt, so restarts and router
+        handoffs obey the same bound. The fallback covers repairs outside self.
+        """
+        for fact in reversed(facts):
+            if fact.kind != "attempt.ended" or fact.data.get("thread") != thread:
+                continue
+            dispositions = fact.data.get("dispositions", ())
+            blocked = {d["id"] for d in dispositions
+                       if d.get("reason") == "home-caused failure"}
+            if not blocked:
+                return False
+            revision = fact.data.get("evidence", {}).get("self_revision")
+            if not revision or (datetime.now(timezone.utc) - _when(fact)).total_seconds() >= 600:
+                return False
+            from .selfrepo import SelfError
+            from .lifecycle import main_tip
+            try:
+                current = main_tip(self.home.root / "self")
+            except (SelfError, OSError):
+                return True
+            return current == revision
+        return False
 
     def _release_abandoned(self, facts, thread: str, body_alive) -> list[Fact]:
         held = holder(facts, thread)
