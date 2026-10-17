@@ -151,3 +151,59 @@ def test_initiative_fires_on_idle_seat(tmp_path, monkeypatch):
     assert result["outcome"] == "timeout"
     assert result["initiative"] is True
     assert result["timeout_seconds"] == 300
+
+
+def test_retired_submit_before_handoff_waits_for_a_new_event(tmp_path):
+    """An old submit is not a new generation; a tick still releases the seat."""
+    brr_dir, inbox, outbox, responses, task = _seat(tmp_path)
+    _live_child(task)
+    with daemon._run_controls_lock:
+        daemon._run_controls["evt-child"]["submitted"] = True
+    submitted = protocol.create_event(
+        inbox, "spawn_submitted", "already reviewed generation 1",
+        spawn_parent_run_id=task.id, spawned_by_run="run-child",
+        conversation_key=task.conversation_key,
+    )
+    protocol.set_status(protocol._read_event(submitted), "done")
+    # The processing lead remains in the raw drawer; the retired submit does not.
+    assert {event["id"] for event in protocol.list_pending(inbox)} == {task.event_id}
+    _drain(
+        brr_dir, inbox, outbox, responses, task,
+        "---\ncut: true\nproduce: none\nowed: none\nstrands:\n"
+        "  run-child: handoff — wait for next generation\n---\nWaiting.\n",
+    )
+    daemon._arm_resource_hold(
+        task, brr_dir / "runs", conversation_key=task.conversation_key,
+        repo_root=tmp_path, **task.meta["pending_resource_hold"],
+    )
+    assert daemon._handle_resource_held_events([], None) == []
+    persisted = Run.from_file(brr_dir / "runs" / task.id / "run.md")
+    assert persisted.meta["resource_hold"]["released"] is False
+    tick = protocol.create_event(
+        inbox, "schedule", "next tick", conversation_key=task.conversation_key,
+    )
+    target = daemon._DispatchTarget(
+        event=protocol._read_event(tick), repo_root=tmp_path, inbox_dir=inbox,
+        responses_dir=responses, repo_label="home",
+    )
+    assert daemon._handle_resource_held_events([target], None) == [target]
+    persisted = Run.from_file(brr_dir / "runs" / task.id / "run.md")
+    assert persisted.meta["resource_hold"]["released_by"] == "schedule"
+    assert pending_resume.peek(brr_dir)["session_id"] == "native-seat-123"
+
+
+@pytest.mark.parametrize("disposition", ["converged", "stopped"])
+def test_cut_disposition_does_not_stop_a_submitted_child(tmp_path, disposition):
+    """Cut rows are declarations; the separate stop verb owns release."""
+    brr_dir, inbox, outbox, responses, task = _seat(tmp_path)
+    _live_child(task)
+    with daemon._run_controls_lock:
+        daemon._run_controls["evt-child"]["submitted"] = True
+    _drain(
+        brr_dir, inbox, outbox, responses, task,
+        "---\ncut: true\nproduce: none\nowed: none\nstrands:\n"
+        f"  run-child: {disposition}\n---\nDisposition recorded.\n",
+    )
+    assert task.meta["bolt"]["annotated"] == 0
+    assert "pending_resource_hold" not in task.meta
+    assert daemon._working_child_controls(task.id)[0]["status"] == "submitted"
