@@ -77,21 +77,12 @@ def _wait(room: Path, stdin_text: str = '') -> float | None:
     if not shell:
         return None
     try:
-        cache = (resolve(home_of_room(room), shell) / "cache").read_text().strip()
-        if cache.startswith('{'):
-            declaration = json.loads(cache)
-            row = declaration.get('models', {}).get(
-                os.environ.get('BRNRD_BODY_CORE', ''), declaration.get('default'))
-            value = row.get('access', {}).get(_cache_access(stdin_text),
-                                              row.get('seconds'))
-            if isinstance(value, bool):
-                return None
-            lifetime = float(value)
-        else:
-            # Existing home folders may still declare just seconds or none.
-            lifetime = float(cache)
-    except (OSError, ValueError, TypeError, AttributeError, OverflowError):
+        # Absent file: the shell declares no lifetime. A home may override.
+        lifetime = float((resolve(home_of_room(room), shell) / "cache").read_text().strip())
+    except (OSError, ValueError, OverflowError):
         return None
+    if shell == "claude" and _cache_access(stdin_text) == "5m":
+        lifetime = 300.0
     # A lifetime too short to leave the safety margin cannot buy a hold.
     return lifetime - 300 if math.isfinite(lifetime) and lifetime > 300 else None
 

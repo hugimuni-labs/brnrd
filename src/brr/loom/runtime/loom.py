@@ -611,7 +611,6 @@ def _spawn(room: Path, argv: list[str], shell: str, thread: str) -> tuple[subpro
         env = _env(room)
         env["BRNRD_THREAD"] = thread
         env["BRNRD_BODY_SHELL"] = shell
-        env["BRNRD_BODY_CORE"] = argv[2]
         env["BRNRD_BODY_JACK"] = (Path(argv[0]).parent / "jack").read_text().strip()
         proc = subprocess.Popen(
             argv, cwd=room / "self", env=env, stdin=subprocess.DEVNULL,
