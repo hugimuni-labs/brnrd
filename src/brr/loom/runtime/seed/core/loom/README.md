@@ -42,6 +42,20 @@ A checklist row under `## Plan` names the letters it answers with a trailing
 boundary lists owed letters without a row from the landed plan and the letter
 ownership table; editing a file or mentioning an id in prose does not cite it.
 
+## Wishes
+
+A wish is what someone wants from a thread, kept as facts; the wake lists the
+thread's open ones under `## Wishes`. Stamp it when you reply: `send --re <id>
+--to <reply address> --wish new:"<what they want>"`, or `--wish <w-id>` for
+one already heard. A wish in the wisher's own words is said; one you infer
+(`wish new --line "…"` without `--say`) is derived: when you reply about it,
+name it as derived, your reading and not their words. When a result exists,
+record it with `wish <w-id> --result <kind>:<ref> --line "…"`, adding
+`--deliver` on the one you hand over. Cite wish ids in Plan rows beside the
+letters: ` · re: <letter-id>, <w-id>`. `settle` refuses while a delivered wish
+awaits a verdict; `--hand-to <thread>` moves those to a thread that will carry
+them. Heard and working wishes stay with their thread.
+
 ## Ends and starts
 
 `brnrd threads` derives who owes each thread's remaining letters, what can
