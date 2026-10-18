@@ -109,7 +109,17 @@ async function send(page, words) {
 	await page.getByRole('status').waitFor({ timeout: 5000 });
 }
 
-const shot = (page, name) => page.screenshot({ path: `${OUT}/${name}.png`, fullPage: true });
+// The glass (`body::before`) is position:fixed, so a full-page capture paints
+// it over the first viewport only and leaves a seam; growing the viewport to
+// the page first matches what a reader sees at every scroll position (#2350's
+// drive-landing.mjs does the same).
+async function shot(page, name) {
+	const viewport = page.viewportSize();
+	const height = await page.evaluate(() => document.documentElement.scrollHeight);
+	await page.setViewportSize({ width: viewport.width, height });
+	await page.screenshot({ path: `${OUT}/${name}.png`, fullPage: true });
+	await page.setViewportSize(viewport);
+}
 
 async function main() {
 	await mkdir(OUT, { recursive: true });
