@@ -1501,6 +1501,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         router = Router(home, config)
         from .connector import Inputs
         inputs = Inputs(home)
+        from .snapshot import Publisher
+        publisher = Publisher(home, _log)
         while not (stop is not None and stop.is_set()):
             try:
                 config = load_config(home.root)
@@ -1520,6 +1522,10 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                     _log(home, traceback.format_exc().rstrip())
                 try:
                     tick_once(home, bodies, adapter, core, router)
+                except Exception:
+                    _log(home, traceback.format_exc().rstrip())
+                try:
+                    publisher.step(config, router)
                 except Exception:
                     _log(home, traceback.format_exc().rstrip())
             if _source_fingerprint() != fingerprint:
