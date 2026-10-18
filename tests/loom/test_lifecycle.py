@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from connector_support import pull_once
+from connector_support import directories, enable, input_module, pull_once
 from brr.loom.runtime.ledger import inject_letter
 
 from brr.loom.runtime.selfrepo import init_self
@@ -202,7 +202,9 @@ class _Person:
             def pull(_, cursor):
                 return {"cursor": cursor + 1, "events": [{"event_id": event_id, "body": body, "attachments": [],
                         "reply_to": {"platform": "telegram", "user_id": 42, "chat_id": 42}}]}
-        self.cursor = pull_once(self.home, Client(), self.cursor)
+        # Write the drop only: the loom drains it, and a second drain races its unlink.
+        enable(self.home)
+        self.cursor = input_module.pull_once(*directories(self.home), Client(), self.cursor)
 
 
 def _parked_home(tmp_path, monkeypatch, *, run="raise SystemExit('must park before starting')"):
@@ -319,6 +321,7 @@ def test_letter_during_park_is_told_and_wake_starts_the_leased_body(tmp_path, mo
     loom.start()
     try:
         wait_until(lambda: any(f.kind == "body.parked" for f in loom.facts()), 10, loom.dump)
+        wait_until(lambda: (home.root / "loom/usage/spare.json").is_file(), 10, loom.dump)  # spare's gauge has read
         home.person.says("again", "are you there?")
         wait_until(lambda: any(m["re"] == "telegram:42:again" for m in home.sent), 10, loom.dump)
         told = next(m for m in home.sent if m["re"] == "telegram:42:again")
