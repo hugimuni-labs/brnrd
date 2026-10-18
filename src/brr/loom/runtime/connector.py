@@ -108,7 +108,9 @@ def ingest(home, name, fm, attachments):
         sender = _sender(home, platform, raw_sender.partition(':')[2]
                          if raw_sender.startswith(platform + ':') else None)
         clean = clean_accepts(home.root / 'self', fm['kind'], fm.get('refs', '').split(), fm['body'])
-        to = route_bare(facts, f'{platform}/{chat}', binding[1] if binding else None)
+        # A connector may name the thread a letter was written on; else route it.
+        to = (f"thread:{fm['thread']}" if fm.get('thread') else
+              route_bare(facts, f'{platform}/{chat}', binding[1] if binding else None))
         if not home.routable(to.removeprefix('thread:')):
             to = 'thread:inbox'
         blobs, blob_ids = [], []
