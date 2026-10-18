@@ -168,7 +168,7 @@ def test_seeded_sequences_check_ledger_prefixes_and_reach_every_row():
                 body.add("shown", ids=[])
                 body.alive = True
             closed = rng.random() < 0.65
-            gauge = rng.choice(["ok", "ok", "refreshing", "empty"])
+            gauge = rng.choice(["ok", "ok", "unknown", "refreshing", "empty"])
             failure = "spawn failed" if state in STARTABLE and not body.alive and rng.random() < 0.1 else ""
             o = Observation(body.strand, body.gen, body.alive, closed, gauge, body.now,
                             proven=rng.choice([True, False]), until=body.now + 3,
@@ -182,7 +182,7 @@ def test_table_rendering_matches_checked_in_page():
     from pathlib import Path
     page = Path(__file__).resolve().parents[2] / "src/brr/loom/runtime/bodies.md"
     assert render_table() == page.read_text().strip()
-    assert len(TABLE) == 19
+    assert len(TABLE) == 20
 
 
 def test_an_unlisted_pair_logs_and_raises(caplog):
@@ -206,7 +206,7 @@ def test_state_of_is_scoped_and_retains_all_generation_markers():
     assert state_of(facts, "s", 1).name == "ended"
 
 
-@pytest.mark.parametrize("gauge", ["ok", "refreshing", "empty"])
+@pytest.mark.parametrize("gauge", ["ok", "unknown", "refreshing", "empty"])
 @pytest.mark.parametrize("kind", ["lease", "body.pending", "body.parked"])
 def test_closed_deferred_start_ends_before_every_gauge_row(kind, gauge):
     facts = [Fact(by="loom:aaaa", kind=kind, data={"strand": "s", "gen": 1, "until": 100})]

@@ -2,11 +2,12 @@
 |---|---|---|---|
 | wanted, parked | closed | ended | end_settled, drain, drained, release |
 | wanted, parked | failure | ended | exit, end_failed, drain, drained, release |
-| parked | before until | parked | none |
+| parked | gauge unknown, before until | parked | none |
 | parked | gauge refreshing | parked | none |
 | wanted | gauge refreshing | wanted | pending |
+| parked | gauge empty | parked | none |
 | wanted, parked | gauge empty | parked | park |
-| wanted, parked | gauge ok | running | prepare, shown, spawn, started |
+| wanted, parked | gauge not empty | running | prepare, shown, spawn, started |
 | running, leaving, stopping, unidentified | not alive | ended | collect, drain, exit, end, drain, drained, release |
 | running | alive, open | running | none |
 | running | alive, closed | leaving | leaving |

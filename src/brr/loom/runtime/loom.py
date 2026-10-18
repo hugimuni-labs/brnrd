@@ -6,6 +6,7 @@ import hashlib
 import fcntl
 import json
 import os
+import re
 import signal
 import shlex
 import shutil
@@ -22,7 +23,7 @@ from pathlib import Path
 from brr.daemon2.facts import Fact
 
 from .adapters import resolve
-from .bodies import COMMANDS, Observation, decide, fact_for, state_of
+from .bodies import COMMANDS, TABLE, Observation, decide, fact_for, row_for, state_of
 from .home import Home, atomic_write, is_channel, mint, notice_id
 from .ledger import LedgerConflict, append, read_facts
 from .registry import KINDS
@@ -1046,27 +1047,25 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     shell, core = lease.get("shell", default[0]), lease.get("core", default[1])
     after = max((datetime.fromisoformat(f.at).timestamp() for f in facts
                  if f.data.get("strand") == strand and f.kind in {"body.exited", "body.parked"}), default=0)
-    gauge = ({"windows": []} if force or state.name == "parked" and now < state.until
-             else reading(home, shell, 0 if alive else after))
+    dms = list(_person_dms(home, facts, thread)) if state.name == "parked" else []
+    # A person's "wake" on their own DM is `threads --force`, said in a word.
+    for letter, _ in dms:
+        if WAKE.fullmatch(str(letter.data.get("body", "")).strip()):
+            force = True
+            try:
+                facts.append(_record(home, "letter.disposed", {"dispositions": [
+                    {"id": letter.id, "outcome": "done", "reason": "wake: started before its reset"}]},
+                    f"letter.disposed:{letter.id}"))
+            except LedgerConflict:
+                pass
+    # A parked body reads the gauge like any other: a refill is seen when it
+    # happens, and the park's `until` only guards a gauge that reads nothing.
+    gauge = {"windows": []} if force else reading(home, shell, 0 if alive else after)
     empty = next((w for w in gauge["windows"] if w["left_pct"] <= config.hold_floor_pct), None) if gauge else None
     until = 0
     if empty:
         from .usage import dry_until
         until = dry_until(home, shell) or now + 900
-        from .connector import person_dm
-        channels = reply_channels(facts, home)
-        what = (f"Out of {shell} {empty['name']} fuel ({empty['left_pct']:g}% left) "
-                f"until about {datetime.fromtimestamp(until).astimezone():%H:%M}. "
-                f"Your letter is kept on thread {thread} and is answered when it refills.")
-        for letter in letters_for(facts, main_snapshot(home), thread):
-            author = str(letter.data.get("from", ""))
-            if not author.startswith(("p-", "person:")):
-                continue
-            channel = channels.get(letter.id)
-            person = "person:" + author.removeprefix("p-").removeprefix("person:")
-            if channel and person_dm(home, channel) == person:
-                notice(home, facts, "parked", letter.id, what, "Nothing to do.",
-                       about=letter, channel=channel, passive=True)
     pid = int(start.data.get("pid") or 0) if start else 0
     proven = None
     # A stop on record with the body still alive is a signal that was never
@@ -1080,8 +1079,35 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     fuel = fuels(home, shell)
     context = SimpleNamespace(thread=thread, shell=shell, core=core, pid=pid, empty=empty, fuel=fuel,
                               why=(closing_commit(home, thread)[1] or f"thread {thread} settled") if closed else "", failure="", repos=lease.get("repos"))
-    return Observation(strand, gen, alive, closed, "refreshing" if gauge is None else "empty" if empty else "ok",
-                       now, proven, until=until, force=force, stop_grace=config.stop_grace), context
+    o = Observation(strand, gen, alive, closed, "refreshing" if gauge is None else "empty" if empty
+                    else "ok" if gauge["windows"] else "unknown",
+                    now, proven, until=until, force=force, stop_grace=config.stop_grace)
+    if TABLE[row_for(facts, o)].next == "parked":
+        park = fact_for(facts, "body.parked", strand, gen)
+        window, left, when = ((empty["name"], empty["left_pct"], until) if empty else
+                              (park.data["window"], park.data["left_pct"], park.data["until"]))
+        what = (f"Out of {shell} {window} fuel ({left:g}% left) "
+                f"until about {datetime.fromtimestamp(when).astimezone():%H:%M}. "
+                f"Your letter is kept on thread {thread} and is answered when it refills.")
+        for letter, channel in dms or _person_dms(home, facts, thread):
+            notice(home, facts, "parked", letter.id, what, "Reply wake to start it now.",
+                   about=letter, channel=channel, passive=True)
+    return o, context
+
+
+WAKE = re.compile(r"/?wake", re.IGNORECASE)
+
+
+def _person_dms(home, facts, thread):
+    """Owed letters on ``thread`` that a person wrote in their own direct chat."""
+    from .connector import person_dm
+    channels = reply_channels(facts, home)
+    for letter in letters_for(facts, main_snapshot(home), thread):
+        author = str(letter.data.get("from", ""))
+        channel = channels.get(letter.id)
+        if (author.startswith(("p-", "person:")) and channel and person_dm(home, channel)
+                == "person:" + author.removeprefix("p-").removeprefix("person:")):
+            yield letter, channel
 
 
 def _boundary(home, facts, strand, gen, context):
