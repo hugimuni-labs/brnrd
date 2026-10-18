@@ -1,7 +1,7 @@
 <script lang="ts">
 	// The fuel strip: one gauge per shell, sticky at the top of the board.
 	// Quiet while every shell is healthy; promoted (taller, warm) the moment a
-	// shell is low or parked, so the one reading that changes what you can ask
+	// shell is low or dry, so the one reading that changes what you can ask
 	// for is the one the eye lands on. Tapping a shell opens its cores, and
 	// picking a core sets the body the composer sends with: body choice lives
 	// here and nowhere else.
@@ -59,8 +59,13 @@
 					>
 						{shell.shell}
 					</span>
-					{#if shell.state === 'parked'}
-						<span class="text-[10px] tracking-wider text-orange-300 uppercase">parked</span>
+					{#if shell.state === 'dry'}
+						<span class="text-[10px] tracking-wider text-orange-300 uppercase">dry</span>
+					{:else if shell.state === 'stale'}
+						<span
+							class="text-[10px] tracking-wider text-ink-mute uppercase"
+							title="read before its last reset">stale</span
+						>
 					{:else if low}
 						<span class="text-[10px] tracking-wider text-orange-300 uppercase">low</span>
 					{/if}

@@ -1046,7 +1046,7 @@ export function loomSnapshots(now = Date.now()) {
 			},
 			{
 				shell: 'codex',
-				state: 'parked',
+				state: 'dry',
 				gauges: [
 					{ window: 'session', left_pct: 0, resets_at: resets(118) },
 					{ window: 'week', left_pct: 40, resets_at: resets(2 * 1440) }

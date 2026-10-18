@@ -211,10 +211,14 @@ export function latestReceipt(thread: LoomThread): LoomDone | null {
 
 // --- fuel -----------------------------------------------------------------
 
-/** Low is the quota track's own 'spent' tier (≤15% left, `quotaLevel`), and a
- * parked shell is low whatever its gauges say: nothing runs on it. */
+/** A shell's `state` is ok | dry | stale (loom-on-the-web, s-ae66-8vajw7/g9eux).
+ * Low is the quota track's own 'spent' tier (≤15% left, `quotaLevel`), and a
+ * dry shell is low whatever its gauges say: the loom holds work off it. A
+ * stale reading predates a reset that has already passed, so its gauges say
+ * nothing about now and never make the shell low. */
 export function shellLow(shell: LoomShell): boolean {
-	if (shell.state === 'parked') return true;
+	if (shell.state === 'dry') return true;
+	if (shell.state === 'stale') return false;
 	return (shell.gauges ?? []).some((g) => quotaLevel(g.left_pct) === 'spent');
 }
 

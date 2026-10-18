@@ -103,13 +103,15 @@ test('originLabel, planFraction, latestReceipt', () => {
 	assert.equal(receipt?.ref, 'u2');
 });
 
-test('fuel: low at ≤15% left or parked; promoted when any shell is low', () => {
+test('fuel: low at ≤15% left or dry, never from a stale reading; promoted when any shell is low', () => {
 	const healthy = { shell: 'claude', gauges: [{ window: 'session', left_pct: 82 }] };
 	const low = { shell: 'codex', gauges: [{ window: 'week', left_pct: 15 }] };
-	const parked = { shell: 'grok', state: 'parked', gauges: [{ window: 'week', left_pct: 90 }] };
+	const parked = { shell: 'grok', state: 'dry', gauges: [{ window: 'week', left_pct: 90 }] };
+	const stale = { shell: 'codex', state: 'stale', gauges: [{ window: 'session', left_pct: 3 }] };
 	assert.equal(shellLow(healthy), false);
 	assert.equal(shellLow(low), true);
 	assert.equal(shellLow(parked), true);
+	assert.equal(shellLow(stale), false);
 	// an absent gauge reading is unknown, not empty
 	assert.equal(shellLow({ shell: 'x', gauges: [{ window: 'week' }] }), false);
 	assert.equal(fuelPromoted([healthy]), false);

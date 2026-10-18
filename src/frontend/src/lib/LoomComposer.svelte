@@ -80,10 +80,12 @@
 			</label>
 		{/if}
 		<span class="text-ink-quiet" data-testid="composer-body">
-			as
 			{#if body}
-				<span class="text-stone-200">{body}</span>
+				<!-- Carried with the letter; the loom takes a body only when it opens
+				     a thread or wakes a parked one, so this asks rather than promises. -->
+				asks for <span class="text-stone-200">{body}</span>
 			{:else}
+				as
 				<span class="text-stone-300">{fallback ?? 'the loom’s choice'}</span>
 				<span class="text-ink-mute">· default</span>
 			{/if}

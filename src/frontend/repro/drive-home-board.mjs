@@ -174,7 +174,11 @@ async function main() {
 					assert.ok((await text(cores)).includes('gpt-6.1-sol'), 'codex cores shown');
 					await cores.getByRole('button', { name: 'gpt-6.1-sol', exact: true }).click();
 					const after = await text(page.locator('[data-testid="composer-body"]'));
-					assert.equal(after, 'as codex/gpt-6.1-sol', `picked body reaches composer (${after})`);
+					assert.equal(
+						after,
+						'asks for codex/gpt-6.1-sol',
+						`picked body reaches composer (${after})`
+					);
 					await send(page, 'Picked.');
 					assert.deepEqual(letters.at(-1), {
 						thread: 'inbox',
@@ -210,7 +214,7 @@ async function main() {
 				await context.close();
 			}
 
-			// 3. Low fuel: a shell under 15% and one parked promote the strip.
+			// 3. Low fuel: a shell under 15% and one dry promote the strip.
 			{
 				const { context, page } = await scene(browser, modules, viewport, {
 					loom: SNAPSHOTS.lowFuel
@@ -223,7 +227,7 @@ async function main() {
 					.evaluateAll((els) => els.map((el) => `${el.dataset.shell}:${el.dataset.low}`));
 				assert.deepEqual(low, ['claude:true', 'codex:true'], `both shells low (${low})`);
 				const stripText = await text(strip);
-				assert.ok(/parked/i.test(stripText) && /resets in/.test(stripText), `strip (${stripText})`);
+				assert.ok(/dry/i.test(stripText) && /resets in/.test(stripText), `strip (${stripText})`);
 				const age = await text(page.locator('[data-testid="snapshot-age"]'));
 				assert.equal(age, 'snapshot 5m old', `stale snapshot says its age (${age})`);
 				await shot(page, `${viewport}-3-low-fuel`);
