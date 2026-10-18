@@ -125,7 +125,7 @@ export const REACH_GROUPS: ReachGroup[] = [
 			{
 				id: 'slack-app',
 				label: 'Slack App',
-				detail: 'Workspace-installed ingress, rather than a bot identity you provision yourself.',
+				detail: 'Workspace-installed ingress. Not yet a loom connector.',
 				icon: 'slack-mono',
 				doorSlug: 'slack',
 				statusMode: 'hosted'
@@ -161,7 +161,7 @@ export const REACH_GROUPS: ReachGroup[] = [
 			{
 				id: 'web-dashboard',
 				label: 'Web dashboard',
-				detail: 'Inspect and steer paired residents from brnrd.dev.',
+				detail: 'Your resident’s threads and receipts on brnrd.dev.',
 				icon: 'dashboard',
 				doorSlug: 'dashboard',
 				statusMode: 'hosted'

@@ -44,11 +44,28 @@ async function waitForServer(url, tries = 90) {
 	throw new Error(`dev server never came up at ${url}`);
 }
 
+// brnrd.dev's /v1/stats/support as read 2026-10-19, so the reach badges
+// render as a visitor sees them rather than stuck on "checking…".
+const SUPPORT = {
+	doors: [
+		{ slug: 'telegram', status: 'live' },
+		{ slug: 'slack', status: 'ready' },
+		{ slug: 'github', status: 'live' },
+		{ slug: 'dashboard', status: 'live' },
+		{ slug: 'whatsapp', status: 'live' },
+		{ slug: 'signal', status: 'ready' }
+	]
+};
+
 async function routePage(page) {
 	await page.route('**/v1/**', async (route) => {
 		const path = new URL(route.request().url()).pathname;
 		if (path === '/v1/stats/support')
-			return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+			return route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify(SUPPORT)
+			});
 		await route.fulfill({ status: 401, contentType: 'application/json', body: '{}' });
 	});
 }
@@ -121,7 +138,7 @@ async function main() {
 			const body = await text(page.locator('body'));
 			for (const noun of ['letter', 'thread', 'strand', 'receipt'])
 				assert.ok(body.toLowerCase().includes(noun), `"${noun}" is on the page`);
-			for (const stale of ['daemon', 'routes bring work', 'bounded workers'])
+			for (const stale of ['daemon', 'paired', 'routes bring work', 'bounded workers'])
 				assert.ok(!body.toLowerCase().includes(stale), `daemon-era copy "${stale}" is gone`);
 
 			seen[viewport.name] = await checkLinks(page);

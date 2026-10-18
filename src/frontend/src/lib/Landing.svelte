@@ -53,8 +53,8 @@
 		{
 			index: '02',
 			verb: 'work',
-			body: 'A strand takes the thread: one body, a shell and a core, in its own room with the repo checked out. It works the Plan and checks its work.',
-			readout: 'strand · claude/opus · plan → change → test'
+			body: 'A strand takes the thread: your agent CLI, in its own room with the repo checked out. It works the Plan and checks its work.',
+			readout: 'strand · plan → change → test'
 		},
 		{
 			index: '03',
@@ -244,7 +244,7 @@
 				<div class="border-t border-stone-800 pt-3 text-center">
 					<p class="font-mono text-[10px] tracking-wide text-amber-200/70 uppercase">strand</p>
 					<p class="mt-2 text-xs leading-relaxed text-stone-400">
-						one body: shell/core · its own room · receipts back to the thread
+						your agent CLI · its own room · receipts back to the thread
 					</p>
 				</div>
 			</div>
@@ -320,8 +320,8 @@
 		</h2>
 		<p class="mt-3 max-w-2xl text-sm leading-relaxed text-ink-quiet">
 			Use a hosted identity, install brnrd where you already work, or bring your own local gate.
-			GitHub and Slack are app-shaped integrations; the dashboard is control. The same resident sits
-			behind each route.
+			Telegram, WhatsApp, and GitHub bring letters to the loom today; the dashboard is control. The
+			same resident sits behind each of them.
 		</p>
 
 		<div class="mt-7 grid grid-cols-1 gap-x-8 gap-y-8 md:grid-cols-2">
