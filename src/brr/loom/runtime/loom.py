@@ -6,6 +6,7 @@ import hashlib
 import fcntl
 import json
 import os
+import re
 import signal
 import shlex
 import shutil
@@ -22,7 +23,7 @@ from pathlib import Path
 from brr.daemon2.facts import Fact
 
 from .adapters import resolve
-from .bodies import COMMANDS, Observation, decide, fact_for, state_of
+from .bodies import COMMANDS, TABLE, Observation, decide, fact_for, row_for, state_of
 from .home import Home, atomic_write, is_channel, mint, notice_id
 from .ledger import LedgerConflict, append, read_facts
 from .registry import KINDS
@@ -1038,7 +1039,7 @@ def pending_bodies(facts: list[Fact]) -> dict[str, Fact]:
 def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, force=False):
     from .config import load_config
     from .lifecycle import CLOSED, closing_commit, read_thread
-    from .usage import reading
+    from .usage import fuels, reading
     from types import SimpleNamespace
     now, config, room = time.time(), load_config(home.root), home.room(strand)
     alive = body_alive(room)
@@ -1050,27 +1051,42 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     shell, core = lease.get("shell", default[0]), lease.get("core", default[1])
     after = max((datetime.fromisoformat(f.at).timestamp() for f in facts
                  if f.data.get("strand") == strand and f.kind in {"body.exited", "body.parked"}), default=0)
-    gauge = ({"windows": []} if force or state.name == "parked" and now < state.until
-             else reading(home, shell, 0 if alive else after))
+    dms = list(_person_dms(home, facts, thread)) if state.name == "parked" else []
+    # A person's "wake" on their own DM is `threads --force`, said in a word;
+    # "wake <shell>[/<core>]" ends this park so the next gen runs on that body.
+    told = set()
+    for letter, channel in dms:
+        said = WAKE.fullmatch(str(letter.data.get("body", "")).strip())
+        if not said:
+            continue
+        told.add(letter.id)
+        named = _wake_body(home, facts, thread, (shell, core), said)
+        disposition = {"id": letter.id, "outcome": "done"}
+        if isinstance(named, str):
+            notice(home, facts, "wake-refused", letter.id, f"{named} Nothing was started.",
+                   "\n".join(_wake_lines(home, facts, thread, (shell, core), None)),
+                   about=letter, channel=channel, passive=True)
+            disposition["reason"] = "wake: refused, " + named
+        elif named == (shell, core):
+            force = True
+            disposition["reason"] = "wake: started before its reset"
+        else:
+            disposition.update(reason=f"wake: on {named[0]}/{named[1]}", thread=thread, body="/".join(named))
+        try:
+            facts.append(_record(home, "letter.disposed", {"dispositions": [disposition]},
+                                 f"letter.disposed:{letter.id}"))
+        except LedgerConflict:
+            pass
+    dms = [(letter, channel) for letter, channel in dms if letter.id not in told]
+    woken = _wake_choice(facts, thread) if state.name == "parked" else None
+    # A parked body reads the gauge like any other: a refill is seen when it
+    # happens, and the park's `until` only guards a gauge that reads nothing.
+    gauge = {"windows": []} if force else reading(home, shell, 0 if alive else after)
     empty = next((w for w in gauge["windows"] if w["left_pct"] <= config.hold_floor_pct), None) if gauge else None
     until = 0
     if empty:
         from .usage import dry_until
         until = dry_until(home, shell) or now + 900
-        from .connector import person_dm
-        channels = reply_channels(facts, home)
-        what = (f"Out of {shell} {empty['name']} fuel ({empty['left_pct']:g}% left) "
-                f"until about {datetime.fromtimestamp(until).astimezone():%H:%M}. "
-                f"Your letter is kept on thread {thread} and is answered when it refills.")
-        for letter in letters_for(facts, main_snapshot(home), thread):
-            author = str(letter.data.get("from", ""))
-            if not author.startswith(("p-", "person:")):
-                continue
-            channel = channels.get(letter.id)
-            person = "person:" + author.removeprefix("p-").removeprefix("person:")
-            if channel and person_dm(home, channel) == person:
-                notice(home, facts, "parked", letter.id, what, "Nothing to do.",
-                       about=letter, channel=channel, passive=True)
     pid = int(start.data.get("pid") or 0) if start else 0
     proven = None
     # A stop on record with the body still alive is a signal that was never
@@ -1080,11 +1096,113 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
         body = bodies.get(strand)
         proven = _proven_body(room, pid, str(start.data.get("lstart") or "") if start else "",
                               body.proc if body else None, alive=alive)
-    fuel = "fuel " + shell + " " + " ".join(f"{w['name']} {w['left_pct']:g}%" for w in gauge["windows"]) if gauge and gauge["windows"] else ""
+    # The boundary lists every cached shell. Park still reads `empty`, the seated gauge only.
+    fuel = fuels(home, shell)
     context = SimpleNamespace(thread=thread, shell=shell, core=core, pid=pid, empty=empty, fuel=fuel,
                               why=(closing_commit(home, thread)[1] or f"thread {thread} settled") if closed else "", failure="", repos=lease.get("repos"))
-    return Observation(strand, gen, alive, closed, "refreshing" if gauge is None else "empty" if empty else "ok",
-                       now, proven, until=until, force=force, stop_grace=config.stop_grace), context
+    o = Observation(strand, gen, alive, closed, "refreshing" if gauge is None else "empty" if empty
+                    else "ok" if gauge["windows"] else "unknown",
+                    now, proven, until=until, force=force, stop_grace=config.stop_grace,
+                    woken="/".join(woken) if woken else "")
+    if TABLE[row_for(facts, o)].next == "parked":
+        park = fact_for(facts, "body.parked", strand, gen)
+        window, left, when = ((empty["name"], empty["left_pct"], until) if empty else
+                              (park.data["window"], park.data["left_pct"], park.data["until"]))
+        what = (f"Out of {shell} {window} fuel ({left:g}% left) "
+                f"until about {datetime.fromtimestamp(when).astimezone():%H:%M}. "
+                f"Your letter is kept on thread {thread} and is answered when it refills.")
+        lines = _wake_lines(home, facts, thread, (shell, core), (window, left, when))
+        can = ("Reply wake to start it now." if len(lines) == 1
+               else "Reply with one of:\n" + "\n".join(lines))
+        for letter, channel in dms or _person_dms(home, facts, thread):
+            notice(home, facts, "parked", letter.id, what, can,
+                   about=letter, channel=channel, passive=True)
+    return o, context
+
+
+WAKE = re.compile(r"/?wake(?:\s+([A-Za-z0-9][A-Za-z0-9._-]*)(?:/(\S+))?)?", re.IGNORECASE)
+
+
+def _wake_shells(home, leased):
+    """Shells a wake may name: the leased one, and every folder with a gauge."""
+    from .usage import shells
+    return sorted(set(shells(home)) | {leased})
+
+
+def _core_for(home, facts, thread, shell, leased):
+    """The core a bare ``wake <shell>`` means, or None when none is on record."""
+    if shell == leased[0]:
+        return leased[1]
+    from .adapters import at_birth
+    try:
+        seated = at_birth(home, thread, ("", ""))
+    except (ValueError, OSError):
+        seated = ("", "")
+    if seated[0] == shell and seated[1]:
+        return seated[1]
+    return next((f.data["core"] for f in reversed(facts)
+                 if f.kind == "lease" and f.data.get("shell") == shell and f.data.get("core")), None)
+
+
+def _wake_body(home, facts, thread, leased, said):
+    """``(shell, core)`` a wake names, or the words for why it names none."""
+    if not said[1]:
+        return leased
+    shell = said[1].lower()
+    valid = _wake_shells(home, leased[0])
+    if shell not in valid:
+        return f"No body {said[1]!r} here; bodies are {', '.join(valid)}."
+    core = said[2] or _core_for(home, facts, thread, shell, leased)
+    if not core:
+        return f"No core on record for {shell}: name one, as wake {shell}/<core>."
+    return shell, core
+
+
+def _wake_lines(home, facts, thread, leased, park):
+    """Each body a parked thread may wake on, as the exact letter, with its fuel."""
+    from .usage import shell_fuels
+    found = shell_fuels(home)
+    if park:
+        window, left, when = park
+        lines = [f"wake: retry {leased[0]}/{leased[1]} ({window} {left:g}%, "
+                 f"resets {datetime.fromtimestamp(when).astimezone():%a %H:%M})"]
+    else:
+        lines = [f"wake: retry {leased[0]}/{leased[1]}"]
+    for shell in _wake_shells(home, leased[0]):
+        if shell == leased[0]:
+            continue
+        word = f"wake {shell}" if _core_for(home, facts, thread, shell, leased) else f"wake {shell}/<core>"
+        lines.append(f"{word}: {shell + ' ' + found[shell] if shell in found else 'fuel unknown'}")
+    return lines
+
+
+def _wake_choice(facts, thread):
+    """The body a person woke ``thread`` on since its last lease, or None.
+
+    Read from the ledger, so a crash between the wake and the next lease
+    still converges: the parked gen ends, and the router leases this body.
+    """
+    last = max((i for i, f in enumerate(facts) if f.kind == "lease" and f.data.get("thread") == thread),
+               default=-1)
+    for f in reversed(facts[last + 1:]):
+        if f.kind == "letter.disposed" and f.by.startswith("loom:"):
+            for d in f.data.get("dispositions", ()):
+                if d.get("thread") == thread and d.get("body"):
+                    shell, _, core = str(d["body"]).partition("/")
+                    return shell, core
+    return None
+
+
+def _person_dms(home, facts, thread):
+    """Owed letters on ``thread`` that a person wrote in their own direct chat."""
+    from .connector import person_dm
+    channels = reply_channels(facts, home)
+    for letter in letters_for(facts, main_snapshot(home), thread):
+        author = str(letter.data.get("from", ""))
+        channel = channels.get(letter.id)
+        if (author.startswith(("p-", "person:")) and channel and person_dm(home, channel)
+                == "person:" + author.removeprefix("p-").removeprefix("person:")):
+            yield letter, channel
 
 
 def _boundary(home, facts, strand, gen, context):
