@@ -224,7 +224,8 @@ class Router:
             from .repos import AuthorError, require_body_author
             try:
                 text = seat_text(home, thread)
-                choice = at_birth(home, thread, default, text)
+                from .loom import _wake_choice
+                choice = _wake_choice(facts, thread) or at_birth(home, thread, default, text)
                 declared = seat_repos(text)
                 require_body_author(home)
             except (ValueError, OSError) as exc:
