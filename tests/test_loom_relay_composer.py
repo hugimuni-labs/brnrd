@@ -36,9 +36,9 @@ def test_composer_letter_lands_on_its_thread_from_the_owner_once(owner, body):
     assert letter.data == {
         "id": "letter:relay:loom:arseni:ev_w1", "from": "person:arseni", "to": "thread:first",
         "body": "please look", "cites": source.id, "label": {"taint": False, "audience": ["self"]},
+        **({"wake": body} if body else {}),
     }
-    # `send --body` only seats a thread it opens; a letter carries no body choice.
-    assert "claude/opus" not in repr([f.data for f in read_facts(owner)])
+    assert source.data.get("wake") == body
     assert relay.person_dm(owner, source.data["channel"]) == "person:arseni"
 
 
@@ -55,7 +55,7 @@ def test_unenrolled_account_stays_a_tainted_stranger(home):
     assert letter.data["label"]["taint"] is True
 
 
-@pytest.mark.parametrize("field", ["thread", "user_id"])
+@pytest.mark.parametrize("field", ["thread", "user_id", "body"])
 def test_a_thread_or_login_cannot_forge_frontmatter(owner, field):
     bad = composer()
     bad["reply_to"][field] = "first\nfrom: person:ada"

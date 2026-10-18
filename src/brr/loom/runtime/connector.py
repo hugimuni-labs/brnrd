@@ -132,6 +132,8 @@ def ingest(home, name, fm, attachments):
                                is_stranger(sender, home.root / 'self')), audience=['self']))
         if fm.get('re'):
             data['re'] = fm['re']
+        if fm.get('wake'):
+            data['wake'] = fm['wake']
         if fm.get('missing'):
             data['blobs_missing'] = [int(n) for n in fm['missing'].split()]
         if clean:
@@ -146,7 +148,7 @@ def ingest(home, name, fm, attachments):
                       cites=source.id, label=data['label'])
         if binding:
             fields['re'] = str(binding[0].data.get('id') or binding[0].id)
-        for key in ('clean', 'refs'):
+        for key in ('clean', 'refs', 'wake'):
             if key in data:
                 fields[key] = data[key]
         append(home, Fact(kind='letter', by=f'loom:{home.install_id()}', id=letter_id,
