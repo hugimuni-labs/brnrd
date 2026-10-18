@@ -157,9 +157,10 @@ def _settle(argv: list[str]) -> int:
     parser.add_argument("--room")
     parser.add_argument("--why", required=True)
     parser.add_argument("--retire", action="store_true")
+    parser.add_argument("--hand-to")
     args = parser.parse_args(argv)
     try:
-        settle(_room(args.room), args.thread, args.why, args.retire)
+        settle(_room(args.room), args.thread, args.why, args.retire, args.hand_to)
     except (PortError, SelfError, ValueError, OSError) as exc:
         sys.stderr.write(f"{exc}\n")
         return 1

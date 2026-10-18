@@ -209,3 +209,81 @@ def test_wake_caps_rows_with_asks_first(ledger):
     assert len(lines) == 21
     assert lines[-1] == "+50 more · wishes --thread work"
     assert len(command(home, seat, "wishes").splitlines()) == 72
+
+
+def delivered_wish(home, seat, line="Delivered work"):
+    ident = command(home, seat, "wish", "new", "--line", line)
+    command(home, seat, "wish", ident, "--result", "pr:https://example.com/1",
+            "--line", "Ready", "--deliver")
+    return ident
+
+
+@pytest.mark.parametrize("retire", [False, True])
+def test_settle_refuses_each_delivered_wish_without_changing_state(ledger, retire):
+    from brr.loom.runtime.lifecycle import read_thread
+
+    home, seat = ledger
+    ids = [delivered_wish(home, seat, str(i)) for i in range(2)]
+    before = read_facts(home)
+    error = command(home, seat, "settle", "work", "--why", "Finished",
+                    *(["--retire"] if retire else []), ok=False)
+    assert all(ident in error for ident in ids)
+    assert "--hand-to" in error
+    assert read_thread(home, "work")["status"] == "open"
+    assert read_facts(home) == before
+
+
+@pytest.mark.parametrize("verdict", [("--accept", "word"), ("--drop", "Cancelled")])
+def test_settle_allows_delivered_wish_after_verdict(ledger, verdict):
+    from brr.loom.runtime.lifecycle import read_thread
+
+    home, seat = ledger
+    ident = delivered_wish(home, seat)
+    command(home, seat, "wish", ident, *verdict)
+    command(home, seat, "settle", "work", "--why", "Resolved")
+    assert read_thread(home, "work")["status"] == "settled"
+
+
+def test_settle_hands_only_pending_delivered_wishes_to_new_thread(ledger):
+    from brr.loom.runtime.lifecycle import read_thread
+
+    home, seat = ledger
+    ids = [delivered_wish(home, seat, str(i)) for i in range(2)]
+    heard = command(home, seat, "wish", "new", "--line", "Still heard")
+    done = delivered_wish(home, seat, "Accepted")
+    command(home, seat, "wish", done, "--accept", "word")
+    command(home, seat, "settle", "work", "--why", "Review continues",
+            "--hand-to", "other")
+    assert read_thread(home, "work")["status"] == "settled"
+    listing = command(home, seat, "wishes", "--thread", "other")
+    assert all(ident in listing for ident in ids)
+    assert heard not in listing and done not in listing
+    for ident in ids:
+        assert view(home, ident).thread == "other"
+        assert view(home, ident).state == "delivered"
+        assert len(view(home, ident).results) == 1
+    assert view(home, heard).thread == view(home, done).thread == "work"
+    moves = [f for f in read_facts(home) if f.kind == "wish" and f.data["thread"] == "other"]
+    assert {f.data["wish"] for f in moves} == set(ids)
+    assert all(f.by == "strand:s-aaaa-test" for f in moves)
+
+
+@pytest.mark.parametrize("target", ["missing", "work"])
+def test_invalid_settle_handoff_has_no_effect(ledger, target):
+    from brr.loom.runtime.lifecycle import read_thread
+
+    home, seat = ledger
+    delivered_wish(home, seat)
+    before = read_facts(home)
+    assert "another thread on main" in command(
+        home, seat, "settle", "work", "--why", "Done", "--hand-to", target, ok=False)
+    assert read_facts(home) == before
+    assert read_thread(home, "work")["status"] == "open"
+
+
+def test_settle_without_wishes_still_settles(ledger):
+    from brr.loom.runtime.lifecycle import read_thread
+
+    home, seat = ledger
+    command(home, seat, "settle", "work", "--why", "Done")
+    assert read_thread(home, "work")["status"] == "settled"
