@@ -15,8 +15,8 @@
 	import {
 		BODY_KEY,
 		SEEN_KEY,
-		defaultBody,
 		fetchLoom,
+		keptBody,
 		newestAt,
 		store,
 		stored,
@@ -45,7 +45,7 @@
 
 	function show(next: LoomSnapshot) {
 		snapshot = next;
-		body ??= stored(BODY_KEY) ?? defaultBody(next);
+		body ??= keptBody(next);
 		view = 'board';
 		store(SEEN_KEY, newestAt(next));
 	}
@@ -90,8 +90,10 @@
 		};
 	});
 
+	// Only a picked body is kept; with none picked nothing is written, so a
+	// stale pick dropped by pickedBody() stays dropped on the next read.
 	$effect(() => {
-		if (view === 'board') store(BODY_KEY, body);
+		if (view === 'board' && body) store(BODY_KEY, body);
 	});
 </script>
 

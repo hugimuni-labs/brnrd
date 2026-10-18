@@ -58,7 +58,7 @@
 						<span class="ml-auto text-ink-mute">{ago(entry.at, now) ?? ''}</span>
 					</p>
 					{#if entry.kind === 'receipt' && entry.ref}
-						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- an external receipt -->
+						<!-- eslint-disable svelte/no-navigation-without-resolve -- an external receipt -->
 						<a
 							href={entry.ref}
 							target="_blank"
@@ -67,6 +67,7 @@
 						>
 							↗ {entry.head || entry.ref}
 						</a>
+						<!-- eslint-enable svelte/no-navigation-without-resolve -->
 					{:else}
 						<p
 							class={`mt-0.5 line-clamp-3 text-sm break-words ${

@@ -791,7 +791,7 @@ export function loomSnapshots(now = Date.now()) {
 					{ id: 's-ae66-nsyh0r', body: 'codex/gpt-6.1-sol', state: 'working', since: at(55) },
 					{ id: 's-ae66-8vajw7', body: 'claude/sonnet', state: 'idle', since: at(120) }
 				],
-				done: [{ kind: 'pr', ref: `${PR}/2351`, line: 'loom snapshot endpoint' }],
+				done: [{ kind: 'pr', ref: `${PR}/2300`, line: 'loom snapshot endpoint' }],
 				owed: 0,
 				last_at: at(14)
 			},
@@ -899,8 +899,8 @@ export function loomSnapshots(now = Date.now()) {
 				from: 's-ae66-nsyh0r',
 				thread: 'loom-on-the-web',
 				kind: 'receipt',
-				head: 'PR #2351 opened: loom snapshot endpoint',
-				ref: `${PR}/2351`
+				head: 'PR #2300 opened: loom snapshot endpoint',
+				ref: `${PR}/2300`
 			},
 			{
 				id: 's-ae66-nsyh0r/l7',

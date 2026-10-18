@@ -1,16 +1,25 @@
 <script lang="ts">
 	// Write a letter. It goes to the hosted inbox the relay drains, so a 202
 	// means queued, not read: the composer says exactly that. The body comes
-	// from the fuel strip; the thread is inbox unless you pick another (or the
-	// page already is one thread).
+	// from the fuel strip and is sent only when someone picked one there;
+	// otherwise the letter carries no body and the loom chooses, and the line
+	// shows which default that is. The thread is inbox unless you pick another
+	// (or the page already is one thread).
 	import { LoomAuthError, postLetter, type LoomThread } from './loomSnapshot.ts';
 
 	let {
 		threads,
 		thread = $bindable('inbox'),
 		body,
+		fallback = null,
 		fixed = false
-	}: { threads: LoomThread[]; thread?: string; body: string | null; fixed?: boolean } = $props();
+	}: {
+		threads: LoomThread[];
+		thread?: string;
+		body: string | null;
+		fallback?: string | null;
+		fixed?: boolean;
+	} = $props();
 
 	let text = $state('');
 	let sending = $state(false);
@@ -71,7 +80,13 @@
 			</label>
 		{/if}
 		<span class="text-ink-quiet" data-testid="composer-body">
-			as <span class="text-stone-200">{body ?? 'the default body'}</span>
+			as
+			{#if body}
+				<span class="text-stone-200">{body}</span>
+			{:else}
+				<span class="text-stone-300">{fallback ?? 'the loom’s choice'}</span>
+				<span class="text-ink-mute">· default</span>
+			{/if}
 		</span>
 		<button
 			type="submit"

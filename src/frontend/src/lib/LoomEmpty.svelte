@@ -1,6 +1,9 @@
 <script lang="ts">
 	// Signed in, nothing running yet. One screen: the three nouns the board
-	// is made of, then the one step that makes it fill.
+	// is made of, then the step that pairs this machine. Pairing alone does not
+	// fill this board: the loom's snapshot publisher has not shipped, and until
+	// it does a paired account sees the bridge at `/`. The caption says so
+	// rather than promise a board that stays empty.
 	import { resolve } from '$app/paths';
 
 	const NOUNS = [
@@ -67,7 +70,9 @@
 				class="border border-amber-600/70 px-2.5 py-1 text-amber-100 hover:bg-amber-950/40"
 				onclick={copy}>{copied ? 'copied' : 'copy'}</button
 			>
-			<span class="text-ink-quiet">your first letter goes to inbox; it opens threads for you</span>
+			<span class="text-ink-quiet"
+				>pairs this machine; the bridge shows it until the loom publishes here</span
+			>
 		</div>
 	</section>
 

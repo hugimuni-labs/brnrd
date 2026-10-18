@@ -13,6 +13,7 @@ import {
 	latestReceipt,
 	matchesFilter,
 	newestAt,
+	pickedBody,
 	originLabel,
 	planFraction,
 	postLetter,
@@ -127,6 +128,26 @@ test('bodies: declared choices win; else shell/core; default falls back to prese
 	snap.bodies = { default: 'claude/sonnet', choices: ['claude/sonnet'] };
 	assert.deepEqual(bodyChoices(snap), ['claude/sonnet']);
 	assert.equal(defaultBody(snap), 'claude/sonnet');
+});
+
+test('pickedBody: only a kept pick the loom still offers; nothing picked is not the default', () => {
+	const snap: LoomSnapshot = {
+		v: 1,
+		bodies: { default: 'claude/opus', choices: ['claude/opus', 'codex/gpt-6.1-sol'] }
+	};
+	assert.equal(pickedBody(snap, null), null);
+	assert.equal(pickedBody(snap, 'codex/gpt-6.1-sol'), 'codex/gpt-6.1-sol');
+	assert.equal(pickedBody(snap, 'grok/grok-4.7'), null);
+});
+
+test('postLetter: no body picked sends no body field', async () => {
+	const sent: unknown[] = [];
+	const fetchImpl = (async (_url: string, init: RequestInit) => {
+		sent.push(JSON.parse(String(init.body)));
+		return new Response(JSON.stringify({ ok: true }), { status: 202 });
+	}) as typeof fetch;
+	await postLetter({ thread: 'inbox', text: 'hi', body: undefined }, fetchImpl);
+	assert.deepEqual(sent, [{ thread: 'inbox', text: 'hi' }]);
 });
 
 test('time: ago, resetsIn, snapshotAge', () => {

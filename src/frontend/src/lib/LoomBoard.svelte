@@ -9,6 +9,7 @@
 	import LoomThreadCard from './LoomThreadCard.svelte';
 	import {
 		FILTERS,
+		defaultBody,
 		filterCounts,
 		matchesFilter,
 		snapshotAge,
@@ -132,6 +133,6 @@
 		aria-labelledby="write-heading"
 	>
 		<h2 id="write-heading" class="eyebrow mb-2">write</h2>
-		<LoomComposer {threads} {body} />
+		<LoomComposer {threads} {body} fallback={defaultBody(snapshot)} />
 	</section>
 </main>

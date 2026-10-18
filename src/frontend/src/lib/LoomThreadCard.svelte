@@ -119,7 +119,7 @@
 			<span class="font-mono text-[10px] text-ink-mute">{origin}</span>
 		{/if}
 		{#if receipt?.ref}
-			<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- an external receipt -->
+			<!-- eslint-disable svelte/no-navigation-without-resolve -- an external receipt -->
 			<a
 				href={receipt.ref}
 				target="_blank"
@@ -129,6 +129,7 @@
 			>
 				↗ {receipt.line || receipt.kind || 'receipt'}
 			</a>
+			<!-- eslint-enable svelte/no-navigation-without-resolve -->
 		{/if}
 	</div>
 </article>

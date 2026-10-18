@@ -14,6 +14,7 @@
 		ago,
 		defaultBody,
 		fetchLoom,
+		keptBody,
 		originLabel,
 		planFraction,
 		store,
@@ -43,7 +44,7 @@
 				// Keep the last good snapshot through a failed refresh.
 				if (next === 'error' && snapshot) return;
 				read = next;
-				if (typeof next === 'object') body ??= stored(BODY_KEY) ?? defaultBody(next);
+				if (typeof next === 'object') body ??= keptBody(next);
 			},
 			document,
 			30_000
@@ -55,7 +56,7 @@
 	});
 
 	$effect(() => {
-		if (snapshot) store(BODY_KEY, body);
+		if (snapshot && body) store(BODY_KEY, body);
 	});
 </script>
 
@@ -169,13 +170,14 @@
 							>{item.kind ?? ''}</span
 						>
 						{#if item.ref}
-							<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- an external receipt -->
+							<!-- eslint-disable svelte/no-navigation-without-resolve -- an external receipt -->
 							<a
 								href={item.ref}
 								target="_blank"
 								rel="noopener noreferrer"
 								class="text-sky-200 hover:text-sky-100">↗ {item.line || item.ref}</a
 							>
+							<!-- eslint-enable svelte/no-navigation-without-resolve -->
 						{:else}
 							<span class="text-stone-300">{item.line}</span>
 						{/if}
@@ -193,7 +195,13 @@
 
 		<section class="panel mt-4 p-4" aria-labelledby="write-heading">
 			<h2 id="write-heading" class="eyebrow mb-2">write</h2>
-			<LoomComposer threads={snapshot?.threads ?? []} thread={thread.id} {body} fixed />
+			<LoomComposer
+				threads={snapshot?.threads ?? []}
+				thread={thread.id}
+				{body}
+				fallback={snapshot ? defaultBody(snapshot) : null}
+				fixed
+			/>
 		</section>
 	{/if}
 </main>

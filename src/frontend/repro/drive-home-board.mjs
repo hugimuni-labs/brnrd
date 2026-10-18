@@ -79,21 +79,34 @@ async function routePage(page, { loom, repos = fixtures.repos }, letters) {
 
 const text = async (locator) => (await locator.innerText()).replace(/\s+/g, ' ').trim();
 
-async function scene(browser, modules, viewport, scenario, route = '/') {
+/** `kept` seeds `brnrd.loom.body`, the pick an earlier visit left behind. */
+async function scene(browser, modules, viewport, scenario, route = '/', kept = null) {
 	const context = await browser.newContext({
 		viewport: VIEWPORTS[viewport],
 		deviceScaleFactor: 2,
 		reducedMotion: 'reduce'
 	});
-	await context.addInitScript((seen) => {
-		localStorage.setItem('brnrd.loom.seen', seen);
-		localStorage.removeItem('brnrd.loom.body');
-	}, SEEN);
+	await context.addInitScript(
+		([seen, body]) => {
+			localStorage.setItem('brnrd.loom.seen', seen);
+			if (body) localStorage.setItem('brnrd.loom.body', body);
+			else localStorage.removeItem('brnrd.loom.body');
+		},
+		[SEEN, kept]
+	);
 	const page = await modules.watch(await context.newPage(), 'drive-home-board');
 	const letters = [];
 	await routePage(page, scenario, letters);
 	await page.goto(`http://localhost:${PORT}${route}`, { waitUntil: 'networkidle' });
 	return { context, page, letters };
+}
+
+const kept = (page) => page.evaluate(() => localStorage.getItem('brnrd.loom.body'));
+
+async function send(page, words) {
+	await page.getByRole('textbox', { name: 'letter' }).fill(words);
+	await page.getByRole('button', { name: 'send' }).click();
+	await page.getByRole('status').waitFor({ timeout: 5000 });
 }
 
 const shot = (page, name) => page.screenshot({ path: `${OUT}/${name}.png`, fullPage: true });
@@ -115,7 +128,7 @@ async function main() {
 
 			// 1. Busy: yours first, every turn mark, unread dots, body choice.
 			{
-				const { context, page } = await scene(browser, modules, viewport, {
+				const { context, page, letters } = await scene(browser, modules, viewport, {
 					loom: SNAPSHOTS.busy
 				});
 				await page.waitForSelector('[data-testid="loom-board"]', { timeout: 20000 });
@@ -148,19 +161,31 @@ async function main() {
 				await shot(page, `${viewport}-1-busy`);
 
 				if (phone) {
+					// Nothing picked: the line names the default, the letter carries no
+					// body and nothing is kept, so the loom still chooses.
 					const before = await text(page.locator('[data-testid="composer-body"]'));
-					assert.ok(before.includes('claude/opus'), `default body (${before})`);
+					assert.equal(before, 'as claude/opus · default', `default body (${before})`);
+					await send(page, 'Unpicked.');
+					assert.deepEqual(letters.at(-1), { thread: 'inbox', text: 'Unpicked.' });
+					assert.equal(await kept(page), null, 'an unpicked body is not stored');
 					await page.locator('[data-shell="codex"]').click();
 					const cores = page.locator('[data-testid="cores"]');
 					await cores.waitFor({ state: 'visible', timeout: 5000 });
 					assert.ok((await text(cores)).includes('gpt-6.1-sol'), 'codex cores shown');
 					await cores.getByRole('button', { name: 'gpt-6.1-sol', exact: true }).click();
 					const after = await text(page.locator('[data-testid="composer-body"]'));
-					assert.ok(after.includes('codex/gpt-6.1-sol'), `picked body reaches composer (${after})`);
+					assert.equal(after, 'as codex/gpt-6.1-sol', `picked body reaches composer (${after})`);
+					await send(page, 'Picked.');
+					assert.deepEqual(letters.at(-1), {
+						thread: 'inbox',
+						text: 'Picked.',
+						body: 'codex/gpt-6.1-sol'
+					});
+					assert.equal(await kept(page), 'codex/gpt-6.1-sol', 'a pick is stored');
 					await page.locator('[data-filter="yours"]').click();
 					const yours = await cards.evaluateAll((els) => els.map((el) => el.dataset.turn));
 					assert.deepEqual(yours, ['yours', 'yours'], `yours filter (${yours})`);
-					report.body = { before, after };
+					report.body = { before, after, letters };
 				}
 				report[`${viewport}-busy`] = { turns, unread, receipts };
 				await modules.harvest(page, 'drive-home-board');
@@ -212,7 +237,9 @@ async function main() {
 					modules,
 					viewport,
 					{ loom: SNAPSHOTS.busy },
-					'/thread/answer-asks-build'
+					'/thread/answer-asks-build',
+					// A pick from an earlier visit the loom no longer offers.
+					'grok/grok-4.6'
 				);
 				await page.waitForSelector('[data-testid="loom-thread"] h1', { timeout: 20000 });
 				const main = await text(page.locator('[data-testid="loom-thread"]'));
@@ -226,12 +253,12 @@ async function main() {
 				await shot(page, `${viewport}-4-thread`);
 
 				if (phone) {
-					await page.getByRole('textbox', { name: 'letter' }).fill('Merging after lunch.');
-					await page.getByRole('button', { name: 'send' }).click();
+					assert.equal(await kept(page), null, 'a stale pick is dropped');
+					await send(page, 'Merging after lunch.');
 					const status = await text(page.getByRole('status'));
 					assert.equal(status, 'queued for answer-asks-build · evt-1', `queued (${status})`);
 					assert.deepEqual(letters, [
-						{ thread: 'answer-asks-build', text: 'Merging after lunch.', body: 'claude/opus' }
+						{ thread: 'answer-asks-build', text: 'Merging after lunch.' }
 					]);
 					report.letter = { status, letters };
 				}

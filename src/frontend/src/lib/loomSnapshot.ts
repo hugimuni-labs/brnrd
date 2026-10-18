@@ -163,8 +163,6 @@ export function sortThreads(threads: LoomThread[]): LoomThread[] {
 	);
 }
 
-export const LIVE_STATES = new Set(['working', 'holding']);
-
 export function isWorking(thread: LoomThread): boolean {
 	return (thread.strands ?? []).some((s) => s.state === 'working');
 }
@@ -233,6 +231,14 @@ export function bodyChoices(snapshot: LoomSnapshot): string[] {
 
 export function defaultBody(snapshot: LoomSnapshot): string | null {
 	return snapshot.bodies?.default ?? snapshot.presence?.body ?? null;
+}
+
+/** The body a person picked on the fuel strip and this browser kept, if the
+ * loom still offers it. Nothing picked is null, never the default: a letter
+ * without a body leaves the choice to the loom, which knows when a shell is
+ * low; a default copied into storage would outlive the default it copied. */
+export function pickedBody(snapshot: LoomSnapshot, kept: string | null): string | null {
+	return kept && bodyChoices(snapshot).includes(kept) ? kept : null;
 }
 
 // --- time -----------------------------------------------------------------
@@ -312,6 +318,15 @@ export function stored(key: string): string | null {
 	} catch {
 		return null;
 	}
+}
+
+/** The kept pick for this snapshot, dropping it from storage when the loom
+ * no longer offers it, so a stale pick is gone rather than merely ignored. */
+export function keptBody(snapshot: LoomSnapshot): string | null {
+	const kept = stored(BODY_KEY);
+	const picked = pickedBody(snapshot, kept);
+	if (kept && !picked) store(BODY_KEY, null);
+	return picked;
 }
 
 export function store(key: string, value: string | null): void {
