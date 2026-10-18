@@ -123,7 +123,7 @@
 		aria-labelledby="log-heading"
 	>
 		<h2 id="log-heading" class="eyebrow mb-2">log</h2>
-		<LoomLog log={snapshot.log ?? []} {seenAt} {now} />
+		<LoomLog log={snapshot.log ?? []} {seenAt} {now} limit={8} />
 	</section>
 
 	<section

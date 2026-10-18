@@ -1,0 +1,270 @@
+// Drives `/` as the loom home board and `/thread/[id]`: a busy board, a
+// quiet one, one where fuel is the news, a thread page, and the empty state
+// a signed-in account with no snapshot and no paired daemon sees.
+//
+// Behavioural asserts first, screenshots second (drive-warp-item.mjs's
+// pattern, `finish.mjs`'s bounded teardown and coverage recorder). The
+// snapshots come from `loomSnapshots()` in fixtures.mjs, stamped relative to
+// the moment this driver starts, and `brnrd.loom.seen` is seeded ten minutes
+// back so the unread dots have something to mark.
+//
+// Usage: node repro/drive-home-board.mjs [--out DIR] [--port N]
+import { spawn } from 'node:child_process';
+import { strict as assert } from 'node:assert';
+import { mkdir } from 'node:fs/promises';
+import { chromium } from 'playwright';
+import { setTimeout as delay } from 'node:timers/promises';
+import * as fixtures from './fixtures.mjs';
+import { closeBrowser, exerciseRecorder, runDriver, stopVite } from './finish.mjs';
+
+const args = process.argv.slice(2);
+const arg = (flag) => {
+	const index = args.indexOf(flag);
+	return index === -1 || index + 1 >= args.length ? null : args[index + 1];
+};
+const OUT = arg('--out') ?? '/tmp/home-board';
+const PORT = Number(arg('--port') ?? 5207);
+
+async function waitForServer(url, tries = 90) {
+	for (let attempt = 0; attempt < tries; attempt += 1) {
+		try {
+			const response = await fetch(url);
+			if (response.ok || response.status === 404) return;
+		} catch {
+			// Vite has not bound its port yet.
+		}
+		await delay(500);
+	}
+	throw new Error(`dev server never came up at ${url}`);
+}
+
+const NOW = Date.now();
+const SNAPSHOTS = fixtures.loomSnapshots(NOW);
+const SEEN = new Date(NOW - 10 * 60_000).toISOString();
+// A signed-in account no daemon has ever paired with.
+const NEVER_PAIRED = { ...fixtures.repos, connected_repos: [], machines: { paired: false } };
+
+const VIEWPORTS = {
+	phone: { width: 390, height: 844 },
+	desktop: { width: 1280, height: 900 }
+};
+
+/** `loom` is a snapshot, or null for the 404 a fresh account gets. */
+async function routePage(page, { loom, repos = fixtures.repos }, letters) {
+	await page.route('**/v1/dashboard/**', async (route) => {
+		const request = route.request();
+		const path = new URL(request.url()).pathname;
+		if (path === '/v1/dashboard/loom/letters' && request.method() === 'POST') {
+			letters.push(JSON.parse(request.postData() ?? '{}'));
+			await route.fulfill({
+				status: 202,
+				contentType: 'application/json',
+				body: JSON.stringify({ ok: true, event_id: `evt-${letters.length}` })
+			});
+			return;
+		}
+		const body =
+			path === '/v1/dashboard/loom'
+				? loom
+				: path === '/v1/dashboard/repos'
+					? repos
+					: fixtures.ROUTES[path];
+		await route.fulfill({
+			status: body ? 200 : 404,
+			contentType: 'application/json',
+			body: JSON.stringify(body ?? {})
+		});
+	});
+}
+
+const text = async (locator) => (await locator.innerText()).replace(/\s+/g, ' ').trim();
+
+async function scene(browser, modules, viewport, scenario, route = '/') {
+	const context = await browser.newContext({
+		viewport: VIEWPORTS[viewport],
+		deviceScaleFactor: 2,
+		reducedMotion: 'reduce'
+	});
+	await context.addInitScript((seen) => {
+		localStorage.setItem('brnrd.loom.seen', seen);
+		localStorage.removeItem('brnrd.loom.body');
+	}, SEEN);
+	const page = await modules.watch(await context.newPage(), 'drive-home-board');
+	const letters = [];
+	await routePage(page, scenario, letters);
+	await page.goto(`http://localhost:${PORT}${route}`, { waitUntil: 'networkidle' });
+	return { context, page, letters };
+}
+
+const shot = (page, name) => page.screenshot({ path: `${OUT}/${name}.png`, fullPage: true });
+
+async function main() {
+	await mkdir(OUT, { recursive: true });
+	const vite = spawn('npx', ['vite', 'dev', '--port', String(PORT), '--strictPort'], {
+		stdio: ['ignore', 'pipe', 'pipe']
+	});
+	const modules = exerciseRecorder();
+	const report = {};
+	let browser;
+	try {
+		await waitForServer(`http://localhost:${PORT}/`);
+		browser = await chromium.launch();
+
+		for (const viewport of Object.keys(VIEWPORTS)) {
+			const phone = viewport === 'phone';
+
+			// 1. Busy: yours first, every turn mark, unread dots, body choice.
+			{
+				const { context, page } = await scene(browser, modules, viewport, {
+					loom: SNAPSHOTS.busy
+				});
+				await page.waitForSelector('[data-testid="loom-board"]', { timeout: 20000 });
+				const cards = page.locator('[data-testid="thread-card"]');
+				const turns = await cards.evaluateAll((els) => els.map((el) => el.dataset.turn));
+				assert.equal(turns[0], 'yours', `yours card first (${turns})`);
+				assert.deepEqual(
+					[...new Set(turns)],
+					['yours', 'mine', 'blocked', 'none'],
+					`turn order (${turns})`
+				);
+				const blocked = await text(page.locator('[data-turn="blocked"]').first());
+				assert.ok(
+					blocked.includes('waits on an xAI API key'),
+					`blocked names its wait (${blocked})`
+				);
+				const strip = page.locator('[data-testid="fuel-strip"]');
+				assert.equal(await strip.getAttribute('data-promoted'), 'false', 'healthy strip is quiet');
+				const presence = await text(page.locator('[data-testid="presence"]'));
+				assert.ok(
+					/working/.test(presence) && /owes 2 letters/.test(presence),
+					`presence (${presence})`
+				);
+				const unread = await page.locator('[data-testid="loom-log"] [data-unread="true"]').count();
+				assert.ok(unread >= 3, `unread dots on letters newer than seen (${unread})`);
+				const receipts = await page
+					.locator('[data-testid="loom-log"] [data-kind="receipt"]')
+					.count();
+				assert.ok(receipts >= 2, `receipts in the log (${receipts})`);
+				await shot(page, `${viewport}-1-busy`);
+
+				if (phone) {
+					const before = await text(page.locator('[data-testid="composer-body"]'));
+					assert.ok(before.includes('claude/opus'), `default body (${before})`);
+					await page.locator('[data-shell="codex"]').click();
+					const cores = page.locator('[data-testid="cores"]');
+					await cores.waitFor({ state: 'visible', timeout: 5000 });
+					assert.ok((await text(cores)).includes('gpt-6.1-sol'), 'codex cores shown');
+					await cores.getByRole('button', { name: 'gpt-6.1-sol', exact: true }).click();
+					const after = await text(page.locator('[data-testid="composer-body"]'));
+					assert.ok(after.includes('codex/gpt-6.1-sol'), `picked body reaches composer (${after})`);
+					await page.locator('[data-filter="yours"]').click();
+					const yours = await cards.evaluateAll((els) => els.map((el) => el.dataset.turn));
+					assert.deepEqual(yours, ['yours', 'yours'], `yours filter (${yours})`);
+					report.body = { before, after };
+				}
+				report[`${viewport}-busy`] = { turns, unread, receipts };
+				await modules.harvest(page, 'drive-home-board');
+				await context.close();
+			}
+
+			// 2. Quiet: nothing is yours, the strip stays quiet.
+			{
+				const { context, page } = await scene(browser, modules, viewport, {
+					loom: SNAPSHOTS.quiet
+				});
+				await page.waitForSelector('[data-testid="loom-board"]', { timeout: 20000 });
+				const turns = await page
+					.locator('[data-testid="thread-card"]')
+					.evaluateAll((els) => els.map((el) => el.dataset.turn));
+				assert.deepEqual(turns, ['none', 'none'], `quiet threads (${turns})`);
+				assert.equal(
+					await page.locator('[data-testid="fuel-strip"]').getAttribute('data-promoted'),
+					'false'
+				);
+				await shot(page, `${viewport}-2-quiet`);
+				await context.close();
+			}
+
+			// 3. Low fuel: a shell under 15% and one parked promote the strip.
+			{
+				const { context, page } = await scene(browser, modules, viewport, {
+					loom: SNAPSHOTS.lowFuel
+				});
+				await page.waitForSelector('[data-testid="loom-board"]', { timeout: 20000 });
+				const strip = page.locator('[data-testid="fuel-strip"]');
+				assert.equal(await strip.getAttribute('data-promoted'), 'true', 'low strip is promoted');
+				const low = await strip
+					.locator('[data-shell]')
+					.evaluateAll((els) => els.map((el) => `${el.dataset.shell}:${el.dataset.low}`));
+				assert.deepEqual(low, ['claude:true', 'codex:true'], `both shells low (${low})`);
+				const stripText = await text(strip);
+				assert.ok(/parked/i.test(stripText) && /resets in/.test(stripText), `strip (${stripText})`);
+				const age = await text(page.locator('[data-testid="snapshot-age"]'));
+				assert.equal(age, 'snapshot 5m old', `stale snapshot says its age (${age})`);
+				await shot(page, `${viewport}-3-low-fuel`);
+				await context.close();
+			}
+
+			// 4. Thread page: Plan, Done, its letters, its strands; a letter queues.
+			{
+				const { context, page, letters } = await scene(
+					browser,
+					modules,
+					viewport,
+					{ loom: SNAPSHOTS.busy },
+					'/thread/answer-asks-build'
+				);
+				await page.waitForSelector('[data-testid="loom-thread"] h1', { timeout: 20000 });
+				const main = await text(page.locator('[data-testid="loom-thread"]'));
+				// The headings are eyebrows: uppercase on screen, so match without case.
+				for (const word of ['plan', 'done', 'letters', 'strands'])
+					assert.ok(main.toLowerCase().includes(word), `thread page shows ${word}`);
+				const done = await text(page.locator('[data-testid="done"]'));
+				assert.ok(done.includes('asks, graph, receipts on the board'), `done (${done})`);
+				const entries = await page.locator('[data-testid="loom-log"] li').count();
+				assert.equal(entries, 2, `only this thread's letters (${entries})`);
+				await shot(page, `${viewport}-4-thread`);
+
+				if (phone) {
+					await page.getByRole('textbox', { name: 'letter' }).fill('Merging after lunch.');
+					await page.getByRole('button', { name: 'send' }).click();
+					const status = await text(page.getByRole('status'));
+					assert.equal(status, 'queued for answer-asks-build · evt-1', `queued (${status})`);
+					assert.deepEqual(letters, [
+						{ thread: 'answer-asks-build', text: 'Merging after lunch.', body: 'claude/opus' }
+					]);
+					report.letter = { status, letters };
+				}
+				await context.close();
+			}
+
+			// 5. Empty: signed in, no snapshot, never paired: the three nouns.
+			{
+				const { context, page } = await scene(browser, modules, viewport, {
+					loom: null,
+					repos: NEVER_PAIRED
+				});
+				await page.waitForSelector('[data-testid="loom-empty"]', { timeout: 20000 });
+				const empty = await text(page.locator('[data-testid="loom-empty"]'));
+				for (const word of [
+					'thread',
+					'strand',
+					'letter',
+					'npm install -g brnrd',
+					'brnrd account connect'
+				])
+					assert.ok(empty.includes(word), `empty state shows ${word}`);
+				await shot(page, `${viewport}-5-empty`);
+				await context.close();
+			}
+		}
+
+		await modules.save(OUT, 'drive-home-board');
+		console.log(JSON.stringify({ ...report, ok: true }, null, 2));
+	} finally {
+		if (browser) await closeBrowser(browser, 'drive-home-board');
+		stopVite(vite, 'drive-home-board');
+	}
+}
+
+runDriver(main);

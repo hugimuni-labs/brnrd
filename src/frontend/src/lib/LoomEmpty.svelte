@@ -24,7 +24,7 @@
 	let copied = $state(false);
 	async function copy() {
 		try {
-			await navigator.clipboard.writeText('npm install -g brnrd\nbrnrd');
+			await navigator.clipboard.writeText('npm install -g brnrd\nbrnrd account connect');
 			copied = true;
 			setTimeout(() => (copied = false), 1500);
 		} catch {
@@ -60,7 +60,7 @@
 		<pre class="mt-2 overflow-x-auto font-mono text-sm leading-relaxed text-amber-100"><span
 				class="text-ink-mute"
 				>$ </span>npm install -g brnrd
-<span class="text-ink-mute">$ </span>brnrd</pre>
+<span class="text-ink-mute">$ </span>brnrd account connect</pre>
 		<div class="mt-3 flex items-center gap-3 font-mono text-[11px]">
 			<button
 				type="button"
