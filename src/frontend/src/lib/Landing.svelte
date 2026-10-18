@@ -47,7 +47,7 @@
 		{
 			index: '01',
 			verb: 'assign',
-			body: 'Write a letter from your chat or the terminal. It lands on a thread: one topic, with its own Plan and Done list.',
+			body: 'Write a letter from Telegram, WhatsApp, or a GitHub issue. It lands on a thread: one topic, with its own Plan.',
 			readout: 'letter → thread'
 		},
 		{
@@ -196,8 +196,8 @@
 	<section class="ignite mt-16 sm:mt-20" style="--ignite-delay: 260ms" aria-label="how brnrd fits">
 		<p class="eyebrow">how it fits</p>
 		<div class="mt-5">
-			<div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-				{#each ['Telegram', 'WhatsApp', 'GitHub', 'Slack', 'Signal', 'Web'] as route (route)}
+			<div class="mx-auto grid max-w-xl grid-cols-3 gap-2">
+				{#each ['Telegram', 'WhatsApp', 'GitHub'] as route (route)}
 					<div
 						class="border-t border-stone-800 px-1 pt-2 text-center font-mono text-[10px] tracking-wide text-ink-mute uppercase"
 					>
@@ -236,11 +236,9 @@
 
 			<div class="mx-auto grid max-w-xl grid-cols-1 gap-5 sm:grid-cols-2">
 				<div class="border-t border-stone-800 pt-3 text-center">
-					<p class="font-mono text-[10px] tracking-wide text-amber-200/70 uppercase">
-						thread
-					</p>
+					<p class="font-mono text-[10px] tracking-wide text-amber-200/70 uppercase">thread</p>
 					<p class="mt-2 text-xs leading-relaxed text-stone-400">
-						one topic · its letters · a Plan and a Done list
+						one topic · its letters · its Plan
 					</p>
 				</div>
 				<div class="border-t border-stone-800 pt-3 text-center">
@@ -269,8 +267,8 @@
 		</div>
 		<p class="mx-auto mt-6 max-w-2xl text-center text-sm leading-relaxed text-ink-quiet">
 			The loom runs on your machine. Letters land on threads; a strand works each thread through the
-			agent CLI you already pay for and leaves its receipt there. brnrd is the layer connecting those
-			pieces, not another model behind them.
+			agent CLI you already pay for and leaves its receipt there. brnrd is the layer connecting
+			those pieces, not another model behind them.
 		</p>
 	</section>
 
@@ -407,13 +405,13 @@
 					brnrd.dev control plane
 				</h3>
 				<p class="mt-3 text-sm leading-relaxed text-stone-400">
-					Pair that same local daemon to add hosted Telegram and WhatsApp identities, installable
-					app ingress, and the dashboard from anywhere. The control plane routes and coordinates; it
-					does not become the machine doing the coding.
+					Connect that same loom to add hosted Telegram and WhatsApp identities, GitHub App ingress,
+					and the dashboard from anywhere. The control plane relays letters; it does not become the
+					machine doing the coding.
 				</p>
 				<p class="mt-3 text-xs leading-relaxed text-ink-quiet">
-					Execution stays local. Connecting an account mirrors derived project notes to brnrd.dev,
-					never your source tree.
+					Execution stays local. The loom exchanges letters and replies with brnrd.dev, never your
+					source tree.
 				</p>
 				<a
 					class="mt-5 inline-flex items-center gap-2 border border-amber-700 bg-amber-950/40 px-3 py-2 font-mono text-[12px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70"
