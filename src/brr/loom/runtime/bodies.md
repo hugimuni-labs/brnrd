@@ -2,6 +2,7 @@
 |---|---|---|---|
 | wanted, parked | closed | ended | end_settled, drain, drained, release |
 | wanted, parked | failure | ended | exit, end_failed, drain, drained, release |
+| parked | woken on another body | ended | end_molted, drain, drained, release |
 | parked | gauge unknown, before until | parked | none |
 | parked | gauge refreshing | parked | none |
 | wanted | gauge refreshing | wanted | pending |

@@ -37,6 +37,7 @@ FINISH = ("collect", "drain", "exit") + END
 TABLE = (
     Row(STARTABLE, "closed", "ended", ("end_settled",) + CLEANUP),
     Row(STARTABLE, "failure", "ended", ("exit", "end_failed") + CLEANUP),
+    Row(("parked",), "woken on another body", "ended", ("end_molted",) + CLEANUP),
     Row(("parked",), "gauge unknown, before until", "parked", ()),
     Row(("parked",), "gauge refreshing", "parked", ()),
     Row(("wanted",), "gauge refreshing", "wanted", ("pending",)),
@@ -90,6 +91,7 @@ COMMANDS = {step.name: step for step in (
     Step("end",          "end",      "attempt.ended",     False),
     Step("end_settled",  "end",      "attempt.ended",     False, "settled"),
     Step("end_failed",   "end",      "attempt.ended",     False, "failed"),
+    Step("end_molted",   "end",      "attempt.ended",     False, "molted"),
     Step("drained",      "drained",  "port.drained",      True),
     Step("release",      "release",  "released",          True),
 )}
@@ -108,6 +110,7 @@ class Observation:
     force: bool = False
     stop_grace: float = 60
     failure: str = ""
+    woken: str = ""
 
 
 @dataclass(frozen=True)
@@ -169,6 +172,7 @@ def _state_of(facts, strand, gen, *, alive):
 OBSERVED = {
     "closed": lambda s, o: o.closed,
     "failure": lambda s, o: bool(o.failure),
+    "woken on another body": lambda s, o: bool(o.woken),
     "gauge unknown, before until": lambda s, o: not o.force and o.gauge == "unknown" and o.now < s.until,
     "gauge refreshing": lambda s, o: o.gauge == "refreshing",
     "gauge empty": lambda s, o: o.gauge == "empty",

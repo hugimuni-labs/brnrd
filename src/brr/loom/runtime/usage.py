@@ -192,18 +192,17 @@ def _past_reset(payload, now: float) -> bool:
     return bool(passed) and float(payload["at"]) < max(passed)
 
 
-def fuels(home, shell: str) -> str:
-    """Every shell with a reading in ``loom/usage``, for the boundary line.
+def shell_fuels(home) -> dict[str, str]:
+    """Window text per shell with a reading in ``loom/usage``.
 
-    The seated shell is first, then the rest by name. A shell with no file,
-    or a file that yields no windows, is omitted. A reading older than its
-    newest reset that has already passed is kept and marked with ``?``
-    (``grok week 45%?``): dropping it is how a full tank was read as dry.
-    Hold and park do not call this.
+    A shell with no file, or a file that yields no windows, is omitted. A
+    reading older than its newest reset that has already passed is kept and
+    marked with ``?`` (``grok week 45%?``): dropping it is how a full tank
+    was read as dry.
     """
     directory = home.root / "loom" / "usage"
     if not directory.is_dir():
-        return ""
+        return {}
     now, found = time.time(), {}
     for path in directory.glob("*.json"):
         name = path.name.removesuffix(".json")
@@ -217,6 +216,16 @@ def fuels(home, shell: str) -> str:
         if not parts:
             continue
         found[name] = " ".join(parts) + ("?" if _past_reset(payload, now) else "")
+    return found
+
+
+def fuels(home, shell: str) -> str:
+    """Every shell with a reading in ``loom/usage``, for the boundary line.
+
+    The seated shell is first, then the rest by name. Hold and park do not
+    call this.
+    """
+    found = shell_fuels(home)
     if not found:
         return ""
     order = ([shell] if shell in found else []) + sorted(n for n in found if n != shell)

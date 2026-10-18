@@ -125,8 +125,9 @@ class MemoryBody:
                 if crash_at_exit:
                     self.check_prefix(o)
                     return
-            elif name in {"end", "end_failed", "end_settled"}:
-                cause = "failed" if name == "end_failed" else exit_cause(self.facts, o, owed=False)
+            elif name in {"end", "end_failed", "end_settled", "end_molted"}:
+                cause = ("failed" if name == "end_failed" else "molted" if name == "end_molted"
+                         else exit_cause(self.facts, o, owed=False))
                 if fact_for(self.facts, "attempt.ended", self.strand, self.gen) is None:
                     self.add("attempt.ended", cause=cause)
                 if crash_at_end:
@@ -170,9 +171,10 @@ def test_seeded_sequences_check_ledger_prefixes_and_reach_every_row():
             closed = rng.random() < 0.65
             gauge = rng.choice(["ok", "ok", "unknown", "refreshing", "empty"])
             failure = "spawn failed" if state in STARTABLE and not body.alive and rng.random() < 0.1 else ""
+            woken = "other/core" if state == "parked" and rng.random() < 0.1 else ""
             o = Observation(body.strand, body.gen, body.alive, closed, gauge, body.now,
                             proven=rng.choice([True, False]), until=body.now + 3,
-                            stop_grace=1, failure=failure)
+                            stop_grace=1, failure=failure, woken=woken)
             body.step(o, crash_at_end=not body.alive and rng.random() < 0.2,
                       crash_at_exit=not body.alive and rng.random() < 0.2)
     assert coverage == set(range(len(TABLE))), {i: TABLE[i] for i in set(range(len(TABLE))) - coverage}
@@ -182,7 +184,7 @@ def test_table_rendering_matches_checked_in_page():
     from pathlib import Path
     page = Path(__file__).resolve().parents[2] / "src/brr/loom/runtime/bodies.md"
     assert render_table() == page.read_text().strip()
-    assert len(TABLE) == 20
+    assert len(TABLE) == 21
 
 
 def test_an_unlisted_pair_logs_and_raises(caplog):
