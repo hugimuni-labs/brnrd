@@ -138,7 +138,8 @@ def _poll(room: Path) -> str:
             # shell ends a hook that outlives its timeout, and the body would
             # then leave while it still owes. Under the cache's hour this
             # turn is a cache read.
-            return _json({"decision": "block", "reason": "nothing new; holding\n" + text})
+            return _json({"decision": "block", "reason": "cache keepalive, nothing new arrived: stop, unless the boundary"
+                          " below shows work you already owed\n" + text})
         time.sleep(min(0.2, remaining))
 
 
