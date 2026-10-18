@@ -14,6 +14,7 @@ import {
 	matchesFilter,
 	newestAt,
 	pickedBody,
+	liveStrand,
 	originLabel,
 	planFraction,
 	postLetter,
@@ -140,6 +141,30 @@ test('pickedBody: only a kept pick the loom still offers; nothing picked is not 
 	assert.equal(pickedBody(snap, null), null);
 	assert.equal(pickedBody(snap, 'codex/gpt-6.1-sol'), 'codex/gpt-6.1-sol');
 	assert.equal(pickedBody(snap, 'grok/grok-4.7'), null);
+});
+
+test('liveStrand: working or holding is live; idle, parked and absent threads are not', () => {
+	const threads: LoomThread[] = [
+		{
+			id: 'a',
+			strands: [
+				{ id: 's1', state: 'molted' },
+				{ id: 's2', body: 'claude/opus', state: 'holding' }
+			]
+		},
+		{ id: 'b', strands: [{ id: 's3', body: 'claude/sonnet', state: 'working' }] },
+		{
+			id: 'c',
+			strands: [
+				{ id: 's4', body: 'claude/opus', state: 'parked' },
+				{ id: 's5', state: 'idle' }
+			]
+		}
+	];
+	assert.equal(liveStrand(threads, 'a')?.id, 's2');
+	assert.equal(liveStrand(threads, 'b')?.body, 'claude/sonnet');
+	assert.equal(liveStrand(threads, 'c'), null);
+	assert.equal(liveStrand(threads, 'inbox'), null);
 });
 
 test('postLetter: no body picked sends no body field', async () => {

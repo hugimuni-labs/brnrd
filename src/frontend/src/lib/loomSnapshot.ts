@@ -245,6 +245,15 @@ export function pickedBody(snapshot: LoomSnapshot, kept: string | null): string 
 	return kept && bodyChoices(snapshot).includes(kept) ? kept : null;
 }
 
+/** The strand a letter to `thread` would reach as it runs: working or
+ * holding. The loom applies a body only when a letter opens a thread or wakes
+ * a parked one, so while one is live the letter goes to that strand's body
+ * and a pick would be ignored. */
+export function liveStrand(threads: LoomThread[], thread: string): LoomStrand | null {
+	const found = threads.find((t) => t.id === thread);
+	return (found?.strands ?? []).find((s) => s.state === 'working' || s.state === 'holding') ?? null;
+}
+
 // --- time -----------------------------------------------------------------
 
 function span(seconds: number): string {

@@ -196,10 +196,20 @@ async function main() {
 						body: 'codex/gpt-6.1-sol'
 					});
 					assert.equal(await kept(page), 'codex/gpt-6.1-sol', 'a pick is stored');
+					// A thread with a live strand reads the letter in that strand's
+					// body: the pick is not offered and not sent.
+					await page.locator('[data-testid="composer-thread"]').selectOption('answer-asks-build');
+					const live = await text(page.locator('[data-testid="composer-body"]'));
+					assert.equal(live, 'as claude/opus', `live strand's body (${live})`);
+					await send(page, 'Live.');
+					assert.deepEqual(letters.at(-1), { thread: 'answer-asks-build', text: 'Live.' });
+					await page.locator('[data-testid="composer-thread"]').selectOption('inbox');
+					const back = await text(page.locator('[data-testid="composer-body"]'));
+					assert.equal(back, 'asks for codex/gpt-6.1-sol', `pick offered again (${back})`);
 					await page.locator('[data-filter="yours"]').click();
 					const yours = await cards.evaluateAll((els) => els.map((el) => el.dataset.turn));
 					assert.deepEqual(yours, ['yours', 'yours'], `yours filter (${yours})`);
-					report.body = { before, after, letters };
+					report.body = { before, after, live, back, letters };
 				}
 				report[`${viewport}-busy`] = { turns, unread, receipts };
 				await modules.harvest(page, 'drive-home-board');
@@ -271,10 +281,19 @@ async function main() {
 					await send(page, 'Merging after lunch.');
 					const status = await text(page.getByRole('status'));
 					assert.equal(status, 'queued for answer-asks-build · evt-1', `queued (${status})`);
+					// A pick made here still does not reach the holding strand.
+					await page.locator('[data-shell="codex"]').click();
+					const cores = page.locator('[data-testid="cores"]');
+					await cores.waitFor({ state: 'visible', timeout: 5000 });
+					await cores.getByRole('button', { name: 'gpt-6.1-sol', exact: true }).click();
+					const live = await text(page.locator('[data-testid="composer-body"]'));
+					assert.equal(live, 'as claude/opus', `holding strand's body (${live})`);
+					await send(page, 'Still you.');
 					assert.deepEqual(letters, [
-						{ thread: 'answer-asks-build', text: 'Merging after lunch.' }
+						{ thread: 'answer-asks-build', text: 'Merging after lunch.' },
+						{ thread: 'answer-asks-build', text: 'Still you.' }
 					]);
-					report.letter = { status, letters };
+					report.letter = { status, live, letters };
 				}
 				await context.close();
 			}
