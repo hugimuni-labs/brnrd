@@ -56,6 +56,20 @@ letters: ` · re: <letter-id>, <w-id>`. `settle` refuses while a delivered wish
 awaits a verdict; `--hand-to <thread>` moves those to a thread that will carry
 them. Heard and working wishes stay with their thread.
 
+## Answer, Done, asks
+
+A thread README opens with `## Answer`: what is true now, decided, and still
+open, written for the person and rewritten in place, never appended. Each
+produce gets one line under `## Done`, written when it exists:
+`- <kind> <url-or-path> — <what it is>`, kind one of pr, issue, doc, research,
+file, answer, post, action. What you need from the person is an ask: `wish new
+--from resident --line "<the decision or act; rec: …>"`, closed by their
+verdict. `brnrd asks` lists, over every thread, what is in hand, the asks, the
+unanswered letters and the Done lines. A thread a person opened settles on
+their word only: when their reply says it is done, `settle <thread> --why "…"
+--word <their letter>`; silence never settles. `brnrd graph` lists each
+thread's strands, `--strands` each strand's threads, with the origin of each.
+
 ## Ends and starts
 
 `brnrd threads` derives who owes each thread's remaining letters, what can
