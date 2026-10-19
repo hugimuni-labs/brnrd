@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from connector_support import directories, enable, input_module, pull_once
+from connector_support import drop_once, pull_once
 from brr.loom.runtime.ledger import inject_letter
 
 from brr.loom.runtime.selfrepo import init_self
@@ -202,9 +202,7 @@ class _Person:
             def pull(_, cursor):
                 return {"cursor": cursor + 1, "events": [{"event_id": event_id, "body": body, "attachments": [],
                         "reply_to": {"platform": "telegram", "user_id": 42, "chat_id": 42}}]}
-        # Write the drop only: the loom drains it, and a second drain races its unlink.
-        enable(self.home)
-        self.cursor = input_module.pull_once(*directories(self.home), Client(), self.cursor)
+        self.cursor = drop_once(self.home, Client(), self.cursor)
 
 
 def _parked_home(tmp_path, monkeypatch, *, run="raise SystemExit('must park before starting')"):

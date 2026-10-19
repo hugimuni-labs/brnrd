@@ -71,6 +71,12 @@ def pull_once(home, client, cursor, failures=None):
         source.append = real_append
 
 
+def drop_once(home, client, cursor):
+    """Write the relay drop only: a running Loom drains it, and a second drain races its unlink."""
+    enable(home)
+    return input_module.pull_once(*directories(home), client, cursor)
+
+
 def poll_forever(home, client, lock, stop, log=None):
     enable(home)
     drop, state = directories(home)
