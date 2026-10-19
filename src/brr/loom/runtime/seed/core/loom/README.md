@@ -56,6 +56,20 @@ letters: ` · re: <letter-id>, <w-id>`. `settle` refuses while a delivered wish
 awaits a verdict; `--hand-to <thread>` moves those to a thread that will carry
 them. Heard and working wishes stay with their thread.
 
+## Answer, Done, asks
+
+A thread README opens with `## Answer`: what is true now, decided, and still
+open, written for the person and rewritten in place, never appended. Each
+produce gets one line under `## Done`, written when it exists:
+`- <kind> <url-or-path> — <what it is>`, kind one of pr, issue, doc, research,
+file, answer, post, action. What you need from the person is an ask: `wish new
+--from resident --line "<the decision or act; rec: …>"`, closed by their
+verdict. `brnrd asks` lists, over every thread, what is in hand, the asks, the
+unanswered letters and the Done lines. A thread a person opened settles on
+their word only: when their reply says it is done, `settle <thread> --why "…"
+--word <their letter>`; silence never settles. `brnrd graph` lists each
+thread's strands, `--strands` each strand's threads, with the origin of each.
+
 ## Ends and starts
 
 `brnrd threads` derives who owes each thread's remaining letters, what can
@@ -86,3 +100,10 @@ in each room and fetches each project source, so the plain table does not.
 Open a worker and declare its checkouts together with `send --to thread:<new> --body <shell/core> --repo <url> "<work>"`; repeat `--repo` for each checkout. The README and seat land together before its first lease. Repo directory names must be distinct.
 
 `molt --fresh --why "<reason>"` starts a successor from main without inheriting the room or its label. The old room and unlanded work remain for review. The reason stays in the molt fact; the successor receives a fixed fresh-start message. Plain `molt` carries the room and label forward.
+
+A Plan citation records an ask, not an answer. Boundaries also list `unanswered`
+person letters cited by that thread; `threads` counts the same distinct letters,
+including settled threads. Only a reply `re:` the letter with a `speech.part`
+receipt on its originating channel, or that person's own hand note, clears it.
+Resident notes, done dispositions, and loom status notices do not. This line informs the body; it
+adds no stop block.

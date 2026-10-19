@@ -122,7 +122,7 @@ from brr.loom.runtime.fakebody import Ctx
 ctx = Ctx(Path(sys.argv[1]))
 letters = ctx.owed()
 proc = subprocess.run([sys.executable, "-m", "brr.loom.runtime", "settle", "work",
-                       "--why", "done", "--room", str(ctx.room)], text=True, capture_output=True)
+                       "--why", "done", "--word", letters[0].id, "--room", str(ctx.room)], text=True, capture_output=True)
 assert proc.returncode == 0, proc.stderr + proc.stdout
 time.sleep(1.5)  # the loom ticks every 0.05s here: the letter is owed to a closed thread
 for letter in letters:

@@ -106,7 +106,7 @@ HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "emotes",
     "relic", "gate-run", "close-check", "promise", "act", "mood", "do", "notes",
     "await", "cut", "legend", "item", "asks", "goal", "queue", "envoy",
-    "dominion", "hud", "states", "threads", "publish", "setup", "wish", "wishes",
+    "dominion", "hud", "states", "threads", "publish", "setup", "wish", "wishes", "graph",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -800,10 +800,14 @@ def build_parser() -> argparse.ArgumentParser:
     # `asks` (design-the-ask.md §Build cut, step 1): the LRU list of the
     # warp's open items, read-only. Hidden like `item` — the resident's
     # verb over the account's warp, until the console draws the same rows.
+    # A loom home (--home or BRNRD_HOME) reads the loom's four buckets instead.
     asks_p = sub.add_parser("asks")
     asks_p.add_argument("--json", action="store_true", help="rows as a JSON list")
     asks_p.add_argument(
         "--all", action="store_true", help="include done/retired items")
+    asks_p.add_argument("--home", help="a loom home: the loom's asks over every thread")
+    asks_p.add_argument("--room", help=argparse.SUPPRESS)
+    asks_p.add_argument("--thread", help="with a loom home, one thread's asks")
     asks_p.set_defaults(func=cmd_asks)
     item_p = sub.add_parser("item")
     item_sub = item_p.add_subparsers(dest="item_cmd", required=True)
@@ -1455,6 +1459,8 @@ def build_parser() -> argparse.ArgumentParser:
     add_wishes_parsers(sub)
     from .loom.runtime.verbs_threads import add_threads_parser
     add_threads_parser(sub)
+    from .loom.runtime.verbs_asks import add_graph_parser
+    add_graph_parser(sub)
     from .loom.runtime.publish import add_publish_parser
     add_publish_parser(sub)
 
@@ -4233,6 +4239,10 @@ def cmd_item_list(args):
 def cmd_asks(args):
     """One screen: goals, then open warp items by last touch, stale below."""
     import json as _json
+
+    if args.home or os.environ.get("BRNRD_HOME"):
+        from .loom.runtime.verbs_asks import cmd_asks as loom_asks
+        return loom_asks(args)
 
     from . import account as account_mod
     from . import asks as asks_mod

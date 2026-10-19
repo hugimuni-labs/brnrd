@@ -38,6 +38,11 @@ def command(home, seat, *args, person=False, ok=True):
     return result.stdout.strip() if ok else result.stderr
 
 
+def word(home):
+    """The person opened work; its body settles it on their word."""
+    return inject_letter(home.root, to="thread:work", body="done")
+
+
 def view(home, ident):
     return wishes(read_facts(home))[ident]
 
@@ -224,8 +229,9 @@ def test_settle_refuses_each_delivered_wish_without_changing_state(ledger, retir
 
     home, seat = ledger
     ids = [delivered_wish(home, seat, str(i)) for i in range(2)]
+    said = word(home)
     before = read_facts(home)
-    error = command(home, seat, "settle", "work", "--why", "Finished",
+    error = command(home, seat, "settle", "work", "--word", said, "--why", "Finished",
                     *(["--retire"] if retire else []), ok=False)
     assert all(ident in error for ident in ids)
     assert "--hand-to" in error
@@ -240,7 +246,7 @@ def test_settle_allows_delivered_wish_after_verdict(ledger, verdict):
     home, seat = ledger
     ident = delivered_wish(home, seat)
     command(home, seat, "wish", ident, *verdict)
-    command(home, seat, "settle", "work", "--why", "Resolved")
+    command(home, seat, "settle", "work", "--word", word(home), "--why", "Resolved")
     assert read_thread(home, "work")["status"] == "settled"
 
 
@@ -252,7 +258,7 @@ def test_settle_hands_only_pending_delivered_wishes_to_new_thread(ledger):
     heard = command(home, seat, "wish", "new", "--line", "Still heard")
     done = delivered_wish(home, seat, "Accepted")
     command(home, seat, "wish", done, "--accept", "word")
-    command(home, seat, "settle", "work", "--why", "Review continues",
+    command(home, seat, "settle", "work", "--word", word(home), "--why", "Review continues",
             "--hand-to", "other")
     assert read_thread(home, "work")["status"] == "settled"
     listing = command(home, seat, "wishes", "--thread", "other")
@@ -274,9 +280,10 @@ def test_invalid_settle_handoff_has_no_effect(ledger, target):
 
     home, seat = ledger
     delivered_wish(home, seat)
+    said = word(home)
     before = read_facts(home)
     assert "another thread on main" in command(
-        home, seat, "settle", "work", "--why", "Done", "--hand-to", target, ok=False)
+        home, seat, "settle", "work", "--word", said, "--why", "Done", "--hand-to", target, ok=False)
     assert read_facts(home) == before
     assert read_thread(home, "work")["status"] == "open"
 
@@ -285,5 +292,5 @@ def test_settle_without_wishes_still_settles(ledger):
     from brr.loom.runtime.lifecycle import read_thread
 
     home, seat = ledger
-    command(home, seat, "settle", "work", "--why", "Done")
+    command(home, seat, "settle", "work", "--word", word(home), "--why", "Done")
     assert read_thread(home, "work")["status"] == "settled"
