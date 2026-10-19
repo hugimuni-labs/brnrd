@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from connector_support import directories, enable, input_module, pull_once
+from connector_support import drop_once, pull_once
 from brr.loom.runtime.ledger import inject_letter
 
 from brr.loom.runtime.selfrepo import init_self
@@ -38,6 +38,7 @@ def test_worker_bounces_once_and_authors_resend_is_answered(tmp_path):
     bodies(root, f'''import json, sys, time
 from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.home import atomic_write
 ctx = Ctx(Path(sys.argv[1]))
 own = _own_thread(ctx.wake())
 if own == "worker":
@@ -70,7 +71,7 @@ else:
                 ctx.send("thread:author", note="read bounce", re=letter.id)
                 ctx.send("thread:worker", "try again")
             elif letter.body == "answered the resend":
-                Path({str(received)!r}).write_text(json.dumps({{"answer": letter.body, "bounce_seen": True}}))
+                atomic_write(Path({str(received)!r}), json.dumps({{"answer": letter.body, "bounce_seen": True}}))
                 ctx.send("thread:author", note="read answer", re=letter.id)
                 sys.exit(0)
         time.sleep(0.03)
@@ -202,9 +203,7 @@ class _Person:
             def pull(_, cursor):
                 return {"cursor": cursor + 1, "events": [{"event_id": event_id, "body": body, "attachments": [],
                         "reply_to": {"platform": "telegram", "user_id": 42, "chat_id": 42}}]}
-        # Write the drop only: the loom drains it, and a second drain races its unlink.
-        enable(self.home)
-        self.cursor = input_module.pull_once(*directories(self.home), Client(), self.cursor)
+        self.cursor = drop_once(self.home, Client(), self.cursor)
 
 
 def _parked_home(tmp_path, monkeypatch, *, run="raise SystemExit('must park before starting')"):
