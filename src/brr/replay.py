@@ -18,7 +18,7 @@ after the fact — that world is gone, and pretending otherwise is how a
 replay tool starts lying about what a resident actually saw. So this
 module never rebuilds a prompt from scratch. It takes the literal captured
 ``prompt.md`` bytes, locates the spans that came from **files on disk**
-(``run.md``, ``weave.md``, ``register.md``, ``daemon-substrate.md``,
+(``run.md``, ``weave.md``, ``daemon-substrate.md``,
 ``identity-core.md``, ``diffense.md``, ``introspection.md``, and the
 curated ``portals.md`` extract), and splices in the corresponding file
 from ``--prompts <dir>`` when one is supplied — holding every other byte

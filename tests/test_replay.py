@@ -192,7 +192,7 @@ def test_locate_resolves_every_file_backed_block_of_a_real_resident_wake(tmp_pat
 
     assert located.prompt_bytes == prompt.encode("utf-8")
     file_backed = {s.block_key: s for s in located.spans if s.file_backed}
-    for key in ("run-preamble", "weave", "register", "daemon-substrate", "identity-core"):
+    for key in ("run-preamble", "weave", "daemon-substrate", "identity-core"):
         assert key in file_backed, f"{key} missing from located spans"
         span = file_backed[key]
         # The exact byte range must reproduce the block content, byte for byte.
@@ -211,11 +211,10 @@ def test_locate_resolves_a_strand_wake_which_uses_strand_preamble_not_run(tmp_pa
 
     assert "strand-preamble" in keys
     assert "run-preamble" not in keys
-    assert "register" not in keys  # strand wakes skip register.md
     # identity-core rides even a light strand wake (#1823, strand.md: "not
     # someone else — you, narrowed: same identity core") — only the
-    # standing-seat blocks (dominion, hearth, work-surface, runner-policy,
-    # register.md's worked example) are dropped.
+    # standing-seat blocks (dominion, hearth, work-surface, runner-policy)
+    # are dropped.
     assert "identity-core" in keys
 
 

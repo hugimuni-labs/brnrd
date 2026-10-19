@@ -42,8 +42,6 @@ reference: `brnrd prompts show` ⇒ blocks + cost
 
 {{BODY verbatim: prompts/weave.md}}
 
-{{BODY verbatim: prompts/register.md}}
-
 {{BODY verbatim: prompts/daemon-substrate.md}}
 
 ### `brnrd do` — at a glance
@@ -166,7 +164,6 @@ source manifest:
   ✓ Boot kernel (action-first score)                                daemon-live  runtime        1,272  computed
   ✓ Operational preamble (run.md)                                   product      contract     [bytes]  {PACKAGE_ROOT}/prompts/run.md  [mtime]
   ✓ Working register (weave.md)                                     product      contract     [bytes]  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
-  ✓ Working register, worked example (register.md)                  product      contract     [bytes]  {PACKAGE_ROOT}/prompts/register.md  [mtime]
   ✓ Daemon mechanics (daemon-substrate.md)                          product      substrate    [bytes]  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
   ✓ Portal verb grammar (`brnrd await` / `brnrd do`, docs portals)  product      substrate      2,770  {PACKAGE_ROOT}/docs/portals.md  [mtime]
   ✓ Resident identity core                                          product      identity     [bytes]  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
@@ -188,8 +185,8 @@ source manifest:
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
 cost ledger:
-  contract      [bytes] B  [pct]
   substrate     [bytes] B  [pct]
+  contract      [bytes] B  [pct]
   identity      [bytes] B  [pct]
   runtime       [bytes] B  [pct]
   hearth        [bytes] B  [pct]
