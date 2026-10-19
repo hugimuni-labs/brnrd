@@ -30,7 +30,7 @@ class _Composer:
 
 
 def _home(tmp_path, monkeypatch):
-    """The parked inbox home, its owner enrolled on brnrd.dev, and an idle thread on spare/y."""
+    """The parked brnrd home, its owner enrolled on brnrd.dev, and an idle thread on spare/y."""
     home = _parked_home(tmp_path, monkeypatch)
     (home.root / "self/people/ada/channels.toml").write_text(
         'channels = ["relay:telegram:42", "relay:loom:ada"]\n')
@@ -57,12 +57,12 @@ def test_composer_body_moves_a_parked_thread_and_its_text_stays_owed(tmp_path, m
     loom.start()
     try:
         wait_until(lambda: any(f.kind == "body.parked" for f in loom.facts()), 10, loom.dump)
-        letter = _Composer(loom.home).says("w1", "inbox", "try the other body", body="spare/x")
+        letter = _Composer(loom.home).says("w1", "brnrd", "try the other body", body="spare/x")
         wait_until(lambda: home.starts.is_file(), 10, loom.dump)
-        assert _leases(loom, "inbox") == [("claude", "echo"), ("spare", "x")]
+        assert _leases(loom, "brnrd") == [("claude", "echo"), ("spare", "x")]
         assert _woken(loom) == [{"id": letter + "#wake", "outcome": "done", "reason": "wake: on spare/x",
-                                 "thread": "inbox", "body": "spare/x"}]
-        assert letter in {str(l.data["id"]) for l in mail(home.root, loom.facts(), "inbox")}
+                                 "thread": "brnrd", "body": "spare/x"}]
+        assert letter in {str(l.data["id"]) for l in mail(home.root, loom.facts(), "brnrd")}
     finally:
         loom.halt()
         kill_bodies(loom)

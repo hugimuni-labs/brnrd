@@ -207,7 +207,7 @@ class _Person:
 
 
 def _parked_home(tmp_path, monkeypatch, *, run="raise SystemExit('must park before starting')"):
-    """A home whose inbox is seated on claude/echo with 2% session fuel.
+    """A home whose brnrd thread is seated on claude/echo with 2% session fuel.
 
     The claude gauge reads ``fuel``, so a test can refill it. A second shell,
     ``spare``, has a gauge at 70%; the packaged shells are shadowed by folders
@@ -334,7 +334,7 @@ def test_letter_during_park_is_told_and_wake_starts_the_leased_body(tmp_path, mo
         wait_until(lambda: starts.is_file(), 10, loom.dump)
         assert starts.read_text() == "claude\n"
         assert _leases(loom) == [(1, "claude", "echo")]
-        owed = {str(letter.data["id"]) for letter in mail(home.root, loom.facts(), "inbox")}
+        owed = {str(letter.data["id"]) for letter in mail(home.root, loom.facts(), "brnrd")}
         assert {"letter:relay:telegram:42:park", "letter:relay:telegram:42:again"} <= owed
         assert "letter:relay:telegram:42:wake" not in owed  # the word is settled, not handed over as work
         assert not any(m["re"] == "telegram:42:wake" for m in home.sent)
@@ -356,7 +356,7 @@ def test_wake_naming_another_body_moves_the_parked_thread_there(tmp_path, monkey
         assert _leases(loom) == [(1, "claude", "echo"), (2, "spare", "x")]
         ended = [f for f in loom.facts() if f.kind == "attempt.ended"]
         assert [(f.data["gen"], f.data.get("cause")) for f in ended] == [(1, "molted")]
-        assert "letter:relay:telegram:42:move" not in {str(l.data["id"]) for l in mail(home.root, loom.facts(), "inbox")}
+        assert "letter:relay:telegram:42:move" not in {str(l.data["id"]) for l in mail(home.root, loom.facts(), "brnrd")}
     finally:
         loom.halt()
         kill_bodies(loom)
@@ -377,7 +377,7 @@ def test_wake_naming_no_enabled_body_is_refused_with_the_list(tmp_path, monkeypa
         time.sleep(0.5)
         assert not _started(loom)
         assert _leases(loom) == [(1, "claude", "echo")]
-        assert "letter:relay:telegram:42:nope" not in {str(l.data["id"]) for l in mail(home.root, loom.facts(), "inbox")}
+        assert "letter:relay:telegram:42:nope" not in {str(l.data["id"]) for l in mail(home.root, loom.facts(), "brnrd")}
     finally:
         loom.halt()
         kill_bodies(loom)
