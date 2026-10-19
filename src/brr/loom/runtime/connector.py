@@ -18,6 +18,7 @@ from .labels import guard_off, is_stranger
 from .ledger import append, read_facts
 from .port import clean_accepts, parse_frontmatter
 from .project import fold, sender_threads
+from .wishes import wishes
 
 
 def instances(home):
@@ -108,8 +109,10 @@ def ingest(home, name, fm, attachments):
         sender = _sender(home, platform, raw_sender.partition(':')[2]
                          if raw_sender.startswith(platform + ':') else None)
         clean = clean_accepts(home.root / 'self', fm['kind'], fm.get('refs', '').split(), fm['body'])
-        to = route_bare(facts, f'{platform}/{chat}', binding[1] if binding else None,
-                        home.main_thread())
+        # A connector may name the thread a letter was written on; else route it.
+        to = (f"thread:{fm['thread']}" if fm.get('thread') else
+              route_bare(facts, f'{platform}/{chat}', binding[1] if binding else None,
+                         home.main_thread()))
         if not home.routable(to.removeprefix('thread:')):
             to = f'thread:{home.main_thread()}'
         blobs, blob_ids = [], []
@@ -131,6 +134,9 @@ def ingest(home, name, fm, attachments):
                                is_stranger(sender, home.root / 'self')), audience=['self']))
         if fm.get('re'):
             data['re'] = fm['re']
+        for key in ('wake', 'wish', 'verdict'):
+            if fm.get(key):
+                data[key] = fm[key]
         if fm.get('missing'):
             data['blobs_missing'] = [int(n) for n in fm['missing'].split()]
         if clean:
@@ -145,11 +151,19 @@ def ingest(home, name, fm, attachments):
                       cites=source.id, label=data['label'])
         if binding:
             fields['re'] = str(binding[0].data.get('id') or binding[0].id)
-        for key in ('clean', 'refs'):
+        for key in ('clean', 'refs', 'wake', 'wish', 'verdict'):
             if key in data:
                 fields[key] = data[key]
         append(home, Fact(kind='letter', by=f'loom:{home.install_id()}', id=letter_id,
                           after=(source.id,), data=fields))
+    # A person's agree on a delivered wish is its acceptance; a correct is the letter.
+    verdict_id = f'wish.verdict:{letter_id}'
+    if (source.data.get('verdict') == 'agree' and source.data['from'].startswith('person:')
+            and not any(f.id == verdict_id for f in facts)):
+        wish = wishes(facts).get(source.data.get('wish'))
+        if wish is not None and wish.state == 'delivered':
+            append(home, Fact(kind='wish.verdict', by=source.data['from'], id=verdict_id,
+                              data={'wish': wish.id, 'as': 'accepted', 'evidence': 'word', 'ref': letter_id}))
     if source.data.get('blobs_missing'):
         from .loom import notice
         notice(home, read_facts(home), 'blobs-missing', source.id,

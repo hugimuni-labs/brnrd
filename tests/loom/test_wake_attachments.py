@@ -115,3 +115,12 @@ def test_same_blob_in_another_source_does_not_replace_mime(home, tmp_path):
     bodies = {f.id: f.body for f in boundary.letters}
     assert "attachment: image/jpeg" in bodies[letter.id]
     assert "attachment: image/png" in bodies["letter:fake:other"]
+
+
+@pytest.mark.parametrize("jack", ["hand", "hold"])
+def test_loom_part_points_at_wishes(home, jack):
+    facts = read_facts(home)
+    room = _prepare(home, STRAND, "inbox", 1, [], sender_threads(facts), facts, jack)
+    part = (room / "port/loom.md").read_text()
+    assert "cite each row's letters and wish ids with ` · re: <id>, <w-id>`" in part
+    assert "stamp what someone wants with `send --wish` (core/loom/README.md, Wishes)" in part

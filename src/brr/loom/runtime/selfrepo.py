@@ -1,7 +1,7 @@
 """A self is a git repo. ``init`` seeds it once; a room is a clone, not a worktree.
 
 The wake recipe lives in the self after the copy (``seed/core/loom/wake``).
-Nothing here decides what a later wake contains.
+The runtime adds the current thread's wish projection to the recipe's output.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -378,7 +379,7 @@ def default_loom_part(clone: Path, thread: str) -> str:
 def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
              loom_part: Path | None = None, repos: Path | None = None,
              stdout=None, stderr=None) -> int:
-    """Exec the clone's ``core/loom/wake``. The prompt is its stdout; the code is its code."""
+    """Run the self recipe and add its thread wishes within the wake budget."""
     _segment(thread, "thread")
     clone = resolve_clone(room_dir)
     recipe = clone / "core" / "loom" / "wake"
@@ -389,6 +390,20 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
         env["LOOM_PART"] = str(loom_part)
     if repos is not None:
         env["LOOM_REPOS"] = str(repos)
+    from .home import home_of_room
+    from .ledger import read_facts
+    from .wishes import insert_wishes, wake_wishes
+    section = ""
+    try:
+        home = home_of_room(clone.parent)
+    except ValueError:
+        home = None  # A standalone self clone has no loom ledger.
+    if home is not None:
+        section = wake_wishes(read_facts(home), thread)
+    # Reserve the section before the recipe fits its tree/README to the budget.
+    if section:
+        limit = int(env.get("LOOM_BUDGET_BYTES") or 24000)
+        env["LOOM_BUDGET_BYTES"] = str(max(0, limit - len(section.encode("utf-8"))))
     owed_file = None
     part_file = None
     try:
@@ -407,7 +422,11 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
             part_file = handle.name
             env["LOOM_PART"] = handle.name
         proc = subprocess.run([str(recipe), thread, owed_arg], cwd=clone, env=env,
-                              stdout=stdout, stderr=stderr, timeout=60)
+                              stdout=subprocess.PIPE, stderr=stderr, timeout=60)
+        output = proc.stdout.decode("utf-8")
+        if proc.returncode == 0 and section:
+            output = insert_wishes(output, section)
+        (stdout or sys.stdout).write(output)
         return proc.returncode
     finally:
         if owed_file:

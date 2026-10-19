@@ -15,12 +15,12 @@ from brr.daemon2.leases import Lease, LocalLeaseAuthority
 
 from .config import LoomConfig, granting_window, load_config, loom_clock
 from .home import Home, home_thread, is_channel, mint
-from .ledger import LedgerConflict, LedgerReader
+from .ledger import LedgerConflict, LedgerReader, LedgerView, kind_facts
 from .project import (
     fold, holder, is_notice, sender_threads,
 )
 from .selfrepo import ReadmeError, parse_readme
-from .owners import letter_owners, letters_for
+from .owners import active_owners, letter_owners, letters_for
 from .lifecycle import main_snapshot
 from .speak import speak
 
@@ -117,7 +117,7 @@ class Router:
     def _prior_visible(self, facts: list[Fact], gen: int) -> bool:
         if gen <= 1:
             return True
-        for fact in facts:
+        for fact in kind_facts(facts, "router", "router.renewed"):
             if fact.kind not in {"router", "router.renewed"}:
                 continue
             try:
@@ -224,7 +224,16 @@ class Router:
             from .repos import AuthorError, require_body_author
             try:
                 text = seat_text(home, thread)
-                choice = at_birth(home, thread, default, text)
+                from .loom import _person_dms, _wake_choice, _wake_letter
+                seated = at_birth(home, thread, default, text)
+                # A body chosen in brnrd.dev's composer is a wake, but only for a
+                # letter that landed while no strand held the thread.
+                freed = max((i for i, f in enumerate(facts) if f.kind == "released"
+                             and f.data.get("thread") == thread), default=-1)
+                for letter, channel in _person_dms(home, facts, thread):
+                    if letter.data.get("wake") and facts.index(letter) > freed:
+                        _wake_letter(home, facts, thread, seated, letter, channel, parked=False)
+                choice = _wake_choice(facts, thread) or seated
                 declared = seat_repos(text)
                 require_body_author(home)
             except (ValueError, OSError) as exc:
@@ -287,7 +296,7 @@ class Router:
         Persist the failed revision in the attempt, so restarts and router
         handoffs obey the same bound. The fallback covers repairs outside self.
         """
-        for fact in reversed(facts):
+        for fact in reversed(kind_facts(facts, "attempt.ended")):
             if fact.kind != "attempt.ended" or fact.data.get("thread") != thread:
                 continue
             dispositions = fact.data.get("dispositions", ())
@@ -360,7 +369,7 @@ class Router:
     def _unrouted(self, facts: list[Fact], known: set[str]) -> list[Fact]:
         """Materialize the table's climb/invalid-address decision atomically."""
         from .loom import notice
-        for fate in letter_owners(facts, main_snapshot(self.home)).values():
+        for fate in active_owners(facts, main_snapshot(self.home)):
             if fate.action not in {"climb", "unroutable"}:
                 continue
             letter = fate.letter
@@ -385,13 +394,14 @@ class Router:
     def speak_out(self, facts: list[Fact]) -> list[Fact]:
         if not self.armed() or self.lease is None:
             return facts
-        from .loom import _log, notice, notice_id
+        from .loom import _log, notice
         state = fold(facts)
         threads = sender_threads(facts)
-        ids = {fact.id for fact in facts}
         table = letter_owners(facts, main_snapshot(self.home))
-        sent = {key for key, fate in table.items() if fate.done}
-        for fact in state.accepted:
+        for fate in active_owners(facts, main_snapshot(self.home)):
+            if fate.owner != "channel":
+                continue
+            fact = fate.letter
             to = fact.data.get("to")
             if fact.kind != "letter" or not is_channel(to):
                 continue
@@ -465,8 +475,6 @@ class Router:
                      "was attempted and no receipt came back", fresh)
             if speech is not None:
                 facts.append(speech)
-                if speech.data.get("state") == "sent":
-                    sent.add(key)
             if status == "stepped-down":
                 self.granting = False
                 return facts

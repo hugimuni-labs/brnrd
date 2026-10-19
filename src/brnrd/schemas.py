@@ -546,6 +546,34 @@ class NewsOut(BaseModel):
     news_updated_at: datetime | None = None
 
 
+class LoomOut(BaseModel):
+    loom_updated_at: datetime
+
+
+class LoomLetterPost(BaseModel):
+    """The board's composer: one letter to a loom thread, via the relay inbox."""
+
+    thread: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
+    text: str = Field(min_length=1, max_length=20_000)
+    body: str | None = Field(default=None, pattern=r"^[a-z0-9._-]+/[A-Za-z0-9._-]+$", max_length=128)
+    # The board's verdict on a delivered wish; the text is the person's word.
+    wish: str | None = Field(default=None, pattern=r"^w-[A-Za-z0-9]{1,32}$")
+    verdict: Literal["agree", "correct"] | None = None
+
+    @field_validator("text")
+    @classmethod
+    def _text_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("text must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def _verdict_names_its_wish(self) -> "LoomLetterPost":
+        if (self.wish is None) != (self.verdict is None):
+            raise ValueError("wish and verdict come together")
+        return self
+
+
 class RunnerAuthErrorIn(BaseModel):
     """#1867: the auth mark on a core, as the daemon reports it — the row
     stays tappable, the ledger line says `auth failed <since> · sign in`."""

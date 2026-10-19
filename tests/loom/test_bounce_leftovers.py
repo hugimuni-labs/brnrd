@@ -29,6 +29,7 @@ def test_killed_body_bounce_reaches_author_and_recovers_room(tmp_path, commits, 
     bodies(root, f'''import json, os, re, shlex, subprocess, sys, time
 from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.home import atomic_write
 from brr.loom.runtime.selfrepo import git
 ctx = Ctx(Path(sys.argv[1]))
 own = _own_thread(ctx.wake())
@@ -80,7 +81,7 @@ for line in rest[1].splitlines()[1:]:
     kept.append(line)
 text = chr(10).join(kept).rstrip()
 if own == 'author':
-    Path({str(received)!r}).write_text(json.dumps({{'body': text, 'reader': own, 'pid': os.getpid()}}))
+    atomic_write(Path({str(received)!r}), json.dumps({{'body': text, 'reader': own, 'pid': os.getpid()}}))
     ctx.send('thread:worker', text)
     ctx.send('thread:author', note='asked next worker to recover its room', re=bounce.id)
     sys.exit(0)

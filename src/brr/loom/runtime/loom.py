@@ -6,6 +6,7 @@ import hashlib
 import fcntl
 import json
 import os
+import re
 import signal
 import shlex
 import shutil
@@ -22,16 +23,16 @@ from pathlib import Path
 from brr.daemon2.facts import Fact
 
 from .adapters import resolve
-from .bodies import COMMANDS, Observation, decide, fact_for, state_of
+from .bodies import COMMANDS, TABLE, Observation, decide, fact_for, row_for, state_of
 from .home import Home, atomic_write, is_channel, mint, notice_id
-from .ledger import LedgerConflict, append, read_facts
+from .ledger import LedgerView, kind_facts, LedgerConflict, append, read_facts
 from .registry import KINDS
 from .port import (
     fact_from_port, fact_from_taint, letter_attachments, letter_replies,
     parse_frontmatter, render_boundary,
 )
 from .project import projection_cache, fold, generation, is_notice, reply_channels, sender_threads
-from .owners import letters_for, letter_owners
+from .owners import active_owners, letters_for, letter_owners
 from .lifecycle import main_snapshot
 from .timers import observe_due
 from .selfrepo import (
@@ -243,7 +244,7 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
     the handle. ``stands`` ties it to ``about``: the two settle together.
     """
     ident = notice_id(kind, subject)
-    if any(fact.id == ident for fact in facts):
+    if (ident in facts.by_id if isinstance(facts, LedgerView) else any(fact.id == ident for fact in facts)):
         return False
     from .labels import Label, SELF_AUDIENCE, _sender_label, join, strand_label
     label = Label(taint, SELF_AUDIENCE)
@@ -285,7 +286,7 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
 def _closures(home: Home, facts: list[Fact], threads: list[str]) -> list[Fact]:
     from .lifecycle import CLOSED, closing_commit, read_thread
     writers = sender_threads(facts)
-    ids = {fact.id for fact in facts}
+    ids = facts.by_id if isinstance(facts, LedgerView) else {fact.id for fact in facts}
     for thread in threads:
         data = read_thread(home, thread)
         if data.get("status") not in CLOSED:
@@ -296,7 +297,8 @@ def _closures(home: Home, facts: list[Fact], threads: list[str]) -> list[Fact]:
             facts.append(_record(home, "thread.closed", {
                 "thread": thread, "status": data["status"], "why": why, "commit": commit,
             }, ident))
-            ids.add(ident)
+            if not isinstance(facts, LedgerView):
+                ids.add(ident)
         opener = str(data.get("opened-by", ""))
         if opener.startswith("thread:") and writers.get(writer) != opener.removeprefix("thread:"):
             notice(home, facts, "closed", ident, f"thread {thread} {data['status']}: {why}",
@@ -306,7 +308,7 @@ def _closures(home: Home, facts: list[Fact], threads: list[str]) -> list[Fact]:
 
 def _next_gen(facts: list[Fact], thread: str) -> int:
     gen = 0
-    for fact in facts:
+    for fact in kind_facts(facts, "lease", "released"):
         if fact.kind in {"lease", "released"} and str(fact.data.get("thread")) == thread:
             gen = max(gen, int(fact.data["gen"]))
     return gen + 1
@@ -394,14 +396,16 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         "\"<what you did>\"`; if you commit in this self clone, land it with "
         "`python -m brr.loom.runtime send-self --room .`; you will forget what is "
         "not written: keep this thread's README true; under `## Plan`, cite each "
-        "row's letters with ` · re: <id>, <id>` and land the edit with send-self. "
+        "row's letters and wish ids with ` · re: <id>, <w-id>` and land the edit "
+        "with send-self. "
         "When your context grows "
         "heavy hand over with `python -m brr.loom.runtime molt --why \"<where "
         "things stand>\"`; `python -m brr.loom.runtime settle <thread> --why "
         "\"…\"` closes a thread whose work is done; "
         "a letter from `loom` is a notice of something the loom could not settle, "
         "yours to deal with: its last lines name what settles it "
-        "(core/loom/README.md, Notices); "
+        "(core/loom/README.md, Notices); stamp what someone wants with "
+        "`send --wish` (core/loom/README.md, Wishes); "
         + ("call `$BRNRD_JACK --event start` now, `$BRNRD_JACK --event post` between "
            "steps and `$BRNRD_JACK --event stop` before ending; read each returned boundary\n"
            if jack == "hand" else
@@ -436,7 +440,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         render_boundary(strand, gen, thread, letters, shown, threads,
                         fuel=fuel, channels=reply_channels(facts, home),
                         opened=thread_table(home, facts), plan=_plan(home, thread, facts),
-                        replies={k: f.reply_to for k, f in letter_owners(facts, main_snapshot(home)).items()},
+                        replies={f.letter.id: f.reply_to for f in active_owners(facts, main_snapshot(home))},
                         attachments=attachments, reply_context=reply_context),
     )
     return room
@@ -638,7 +642,7 @@ def _start(home: Home, strand: str, thread: str, gen: int,
             return facts
         # Still refresh under the start lock: another caller may have moved
         # the lease. The loop reader preserves unchanged fact identities.
-        current = reader.read(home) if reader is not None else read_facts(home)
+        current = reader.refresh(home) if reader is not None else read_facts(home)
         if fold(current).holder.get(thread) != (strand, gen):
             return current
         if force:
@@ -713,7 +717,7 @@ def _stamp_router(fact: Fact, facts: list[Fact]) -> None:
     if fact.kind != "letter" or not is_channel(fact.data.get("to")):
         return
     gens = [
-        int(item.data["gen"]) for item in facts
+        int(item.data["gen"]) for item in kind_facts(facts, "router")
         if item.kind == "router" and "gen" in item.data
     ]
     if gens:
@@ -771,8 +775,7 @@ def _readme(room: Path, thread: str) -> str | None:
 def _plan(home: Home, thread: str, facts: list[Fact]) -> str:
     main = main_snapshot(home)
     rows = main.get(thread, {}).get("plan_rows")
-    table = letter_owners(facts, main)
-    missing = [ident for ident, fate in table.items()
+    missing = [fate.letter.id for fate in active_owners(facts, main)
                if not fate.done and fate.thread == thread
                and fate.owner in {"body", "loom", "opener"} and not fate.plan_rows]
     if rows is None:
@@ -1032,7 +1035,7 @@ def pending_bodies(facts: list[Fact]) -> dict[str, Fact]:
 def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, force=False):
     from .config import load_config
     from .lifecycle import CLOSED, closing_commit, read_thread
-    from .usage import reading
+    from .usage import fuels, reading
     from types import SimpleNamespace
     now, config, room = time.time(), load_config(home.root), home.room(strand)
     alive = body_alive(room)
@@ -1042,29 +1045,31 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     closed = read_thread(home, thread).get("status") in CLOSED
     default = choice or ("fake", "haiku")
     shell, core = lease.get("shell", default[0]), lease.get("core", default[1])
-    after = max((datetime.fromisoformat(f.at).timestamp() for f in facts
-                 if f.data.get("strand") == strand and f.kind in {"body.exited", "body.parked"}), default=0)
-    gauge = ({"windows": []} if force or state.name == "parked" and now < state.until
-             else reading(home, shell, 0 if alive else after))
+    if isinstance(facts, LedgerView):
+        after = max(facts.latest_at.get((kind, strand), 0) for kind in ("body.exited", "body.parked"))
+    else:
+        after = max((datetime.fromisoformat(f.at).timestamp() for f in facts
+                     if f.data.get("strand") == strand and f.kind in {"body.exited", "body.parked"}), default=0)
+    dms = list(_person_dms(home, facts, thread)) if state.name == "parked" else []
+    # A person's "wake" on their own DM is `threads --force`, said in a word;
+    # "wake <shell>[/<core>]" ends this park so the next gen runs on that body.
+    told = set()
+    for letter, channel in dms:
+        named = _wake_letter(home, facts, thread, (shell, core), letter, channel)
+        if named is None:
+            continue
+        told.add(letter.id)
+        force = force or named == (shell, core)
+    dms = [(letter, channel) for letter, channel in dms if letter.id not in told]
+    woken = _wake_choice(facts, thread) if state.name == "parked" else None
+    # A parked body reads the gauge like any other: a refill is seen when it
+    # happens, and the park's `until` only guards a gauge that reads nothing.
+    gauge = {"windows": []} if force else reading(home, shell, 0 if alive else after)
     empty = next((w for w in gauge["windows"] if w["left_pct"] <= config.hold_floor_pct), None) if gauge else None
     until = 0
     if empty:
         from .usage import dry_until
         until = dry_until(home, shell) or now + 900
-        from .connector import person_dm
-        channels = reply_channels(facts, home)
-        what = (f"Out of {shell} {empty['name']} fuel ({empty['left_pct']:g}% left) "
-                f"until about {datetime.fromtimestamp(until).astimezone():%H:%M}. "
-                f"Your letter is kept on thread {thread} and is answered when it refills.")
-        for letter in letters_for(facts, main_snapshot(home), thread):
-            author = str(letter.data.get("from", ""))
-            if not author.startswith(("p-", "person:")):
-                continue
-            channel = channels.get(letter.id)
-            person = "person:" + author.removeprefix("p-").removeprefix("person:")
-            if channel and person_dm(home, channel) == person:
-                notice(home, facts, "parked", letter.id, what, "Nothing to do.",
-                       about=letter, channel=channel, passive=True)
     pid = int(start.data.get("pid") or 0) if start else 0
     proven = None
     # A stop on record with the body still alive is a signal that was never
@@ -1074,11 +1079,143 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
         body = bodies.get(strand)
         proven = _proven_body(room, pid, str(start.data.get("lstart") or "") if start else "",
                               body.proc if body else None, alive=alive)
-    fuel = "fuel " + shell + " " + " ".join(f"{w['name']} {w['left_pct']:g}%" for w in gauge["windows"]) if gauge and gauge["windows"] else ""
+    # The boundary lists every cached shell. Park still reads `empty`, the seated gauge only.
+    fuel = fuels(home, shell)
     context = SimpleNamespace(thread=thread, shell=shell, core=core, pid=pid, empty=empty, fuel=fuel,
                               why=(closing_commit(home, thread)[1] or f"thread {thread} settled") if closed else "", failure="", repos=lease.get("repos"))
-    return Observation(strand, gen, alive, closed, "refreshing" if gauge is None else "empty" if empty else "ok",
-                       now, proven, until=until, force=force, stop_grace=config.stop_grace), context
+    o = Observation(strand, gen, alive, closed, "refreshing" if gauge is None else "empty" if empty
+                    else "ok" if gauge["windows"] else "unknown",
+                    now, proven, until=until, force=force, stop_grace=config.stop_grace,
+                    woken="/".join(woken) if woken else "")
+    if TABLE[row_for(facts, o)].next == "parked":
+        park = fact_for(facts, "body.parked", strand, gen)
+        window, left, when = ((empty["name"], empty["left_pct"], until) if empty else
+                              (park.data["window"], park.data["left_pct"], park.data["until"]))
+        what = (f"Out of {shell} {window} fuel ({left:g}% left) "
+                f"until about {datetime.fromtimestamp(when).astimezone():%H:%M}. "
+                f"Your letter is kept on thread {thread} and is answered when it refills.")
+        lines = _wake_lines(home, facts, thread, (shell, core), (window, left, when))
+        can = ("Reply wake to start it now." if len(lines) == 1
+               else "Reply with one of:\n" + "\n".join(lines))
+        for letter, channel in dms or _person_dms(home, facts, thread):
+            notice(home, facts, "parked", letter.id, what, can,
+                   about=letter, channel=channel, passive=True)
+    return o, context
+
+
+WAKE = re.compile(r"/?wake(?:\s+([A-Za-z0-9][A-Za-z0-9._-]*)(?:/(\S+))?)?", re.IGNORECASE)
+
+
+def _wake_letter(home, facts, thread, leased, letter, channel, *, parked=True):
+    """Dispose of one person's wake: the body it names, its refusal words, or None.
+
+    The word is the whole letter, or the body a brnrd.dev composer letter
+    chose; that letter's text stays owed, so its disposition has its own id.
+    """
+    chosen = letter.data.get("wake")
+    said = WAKE.fullmatch(f"wake {chosen}" if chosen else str(letter.data.get("body", "")).strip())
+    ident = f"{letter.id}#wake" if chosen else letter.id
+    if not said or any(f.id == f"letter.disposed:{ident}" for f in facts):
+        return None
+    named = _wake_body(home, facts, thread, leased, said)
+    disposition = {"id": ident, "outcome": "done"}
+    if isinstance(named, str):
+        notice(home, facts, "wake-refused", letter.id, f"{named} Nothing was started.",
+               "\n".join(_wake_lines(home, facts, thread, leased, None)),
+               about=letter, channel=channel, passive=True)
+        disposition["reason"] = "wake: refused, " + named
+    elif parked and named == leased:
+        disposition["reason"] = "wake: started before its reset"
+    else:
+        disposition.update(reason=f"wake: on {named[0]}/{named[1]}", thread=thread, body="/".join(named))
+    try:
+        facts.append(_record(home, "letter.disposed", {"dispositions": [disposition]},
+                             f"letter.disposed:{ident}"))
+    except LedgerConflict:
+        pass
+    return named
+
+
+def _wake_shells(home, leased):
+    """Shells a wake may name: the leased one, and every folder with a gauge."""
+    from .usage import shells
+    return sorted(set(shells(home)) | {leased})
+
+
+def _core_for(home, facts, thread, shell, leased):
+    """The core a bare ``wake <shell>`` means, or None when none is on record."""
+    if shell == leased[0]:
+        return leased[1]
+    from .adapters import at_birth
+    try:
+        seated = at_birth(home, thread, ("", ""))
+    except (ValueError, OSError):
+        seated = ("", "")
+    if seated[0] == shell and seated[1]:
+        return seated[1]
+    return next((f.data["core"] for f in reversed(facts)
+                 if f.kind == "lease" and f.data.get("shell") == shell and f.data.get("core")), None)
+
+
+def _wake_body(home, facts, thread, leased, said):
+    """``(shell, core)`` a wake names, or the words for why it names none."""
+    if not said[1]:
+        return leased
+    shell = said[1].lower()
+    valid = _wake_shells(home, leased[0])
+    if shell not in valid:
+        return f"No body {said[1]!r} here; bodies are {', '.join(valid)}."
+    core = said[2] or _core_for(home, facts, thread, shell, leased)
+    if not core:
+        return f"No core on record for {shell}: name one, as wake {shell}/<core>."
+    return shell, core
+
+
+def _wake_lines(home, facts, thread, leased, park):
+    """Each body a parked thread may wake on, as the exact letter, with its fuel."""
+    from .usage import shell_fuels
+    found = shell_fuels(home)
+    if park:
+        window, left, when = park
+        lines = [f"wake: retry {leased[0]}/{leased[1]} ({window} {left:g}%, "
+                 f"resets {datetime.fromtimestamp(when).astimezone():%a %H:%M})"]
+    else:
+        lines = [f"wake: retry {leased[0]}/{leased[1]}"]
+    for shell in _wake_shells(home, leased[0]):
+        if shell == leased[0]:
+            continue
+        word = f"wake {shell}" if _core_for(home, facts, thread, shell, leased) else f"wake {shell}/<core>"
+        lines.append(f"{word}: {shell + ' ' + found[shell] if shell in found else 'fuel unknown'}")
+    return lines
+
+
+def _wake_choice(facts, thread):
+    """The body a person woke ``thread`` on since its last lease, or None.
+
+    Read from the ledger, so a crash between the wake and the next lease
+    still converges: the parked gen ends, and the router leases this body.
+    """
+    last = max((i for i, f in enumerate(facts) if f.kind == "lease" and f.data.get("thread") == thread),
+               default=-1)
+    for f in reversed(facts[last + 1:]):
+        if f.kind == "letter.disposed" and f.by.startswith("loom:"):
+            for d in f.data.get("dispositions", ()):
+                if d.get("thread") == thread and d.get("body"):
+                    shell, _, core = str(d["body"]).partition("/")
+                    return shell, core
+    return None
+
+
+def _person_dms(home, facts, thread):
+    """Owed letters on ``thread`` that a person wrote in their own direct chat."""
+    from .connector import person_dm
+    channels = reply_channels(facts, home)
+    for letter in letters_for(facts, main_snapshot(home), thread):
+        author = str(letter.data.get("from", ""))
+        channel = channels.get(letter.id)
+        if (author.startswith(("p-", "person:")) and channel and person_dm(home, channel)
+                == "person:" + author.removeprefix("p-").removeprefix("person:")):
+            yield letter, channel
 
 
 def _boundary(home, facts, strand, gen, context):
@@ -1089,7 +1226,7 @@ def _boundary(home, facts, strand, gen, context):
         state.shown.get(strand, set()), sender_threads(facts), context.fuel,
         context.why or None, reply_channels(facts, home),
         opened=thread_table(home, facts), plan=_plan(home, context.thread, facts),
-        replies={k: f.reply_to for k, f in letter_owners(facts, main).items()},
+        replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
         attachments=letter_attachments(home.root, facts),
         reply_context=letter_replies(facts),
     )
@@ -1256,14 +1393,20 @@ def _advance_body(home, strand, thread, gen, bodies, facts, *, choice=None, forc
 
 def _advance_bodies(home, bodies, facts, choice, *, reader=None):
     from .router import install_of
-    leases = {f.data["strand"]: f for f in facts if f.kind == "lease"}
-    holders = {strand for strand, gen in fold(facts).holder.values()}
-    for strand in holders | bodies.keys():
+    holders = {strand: (thread, gen) for thread, (strand, gen) in fold(facts).holder.items()}
+    for strand in holders.keys() | bodies.keys():
         if install_of(strand) == home.install_id():
-            d = leases[strand].data
-            if not state_of(facts, strand, d["gen"]).released:
-                facts = _start(home, strand, d["thread"], d["gen"], bodies, facts, choice,
-                               reader=reader)
+            if strand in holders:
+                thread, gen = holders[strand]
+                lease = fact_for(facts, "lease", strand, gen)
+            else:
+                lease = (facts.latest_strand.get(("lease", strand)) if isinstance(facts, LedgerView)
+                         else next((f for f in reversed(facts) if f.kind == "lease" and f.data.get("strand") == strand), None))
+            if lease is not None:
+                d = lease.data
+                if not state_of(facts, strand, d["gen"]).released:
+                    facts = _start(home, strand, d["thread"], d["gen"], bodies, facts, choice,
+                                   reader=reader)
     return facts
 
 
@@ -1277,7 +1420,7 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     from .router import Router
     if router is None:
         router = Router(home)
-    facts = router.reader.read(home)
+    facts = router.reader.refresh(home)
     if router.projection_revision != router.reader.revision:
         router.projections.clear()
         router.projection_revision = router.reader.revision
@@ -1381,6 +1524,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         router = Router(home, config)
         from .connector import Inputs
         inputs = Inputs(home)
+        from .snapshot import Publisher
+        publisher = Publisher(home, _log)
         while not (stop is not None and stop.is_set()):
             try:
                 config = load_config(home.root)
@@ -1400,6 +1545,10 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                     _log(home, traceback.format_exc().rstrip())
                 try:
                     tick_once(home, bodies, adapter, core, router)
+                except Exception:
+                    _log(home, traceback.format_exc().rstrip())
+                try:
+                    publisher.step(config, router)
                 except Exception:
                     _log(home, traceback.format_exc().rstrip())
             if _source_fingerprint() != fingerprint:

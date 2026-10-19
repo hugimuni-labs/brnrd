@@ -101,6 +101,7 @@ def _send(argv: list[str]) -> int:
     parser.add_argument("--to", required=True)
     parser.add_argument("--re")
     parser.add_argument("--note")
+    parser.add_argument("--wish")
     parser.add_argument("--reopen", metavar="TEXT")
     parser.add_argument("--at", help="YYYY-MM-DDTHH:MM:SSZ, +<n>m, +<n>h, or +<n>d")
     parser.add_argument("--body", dest="body_choice", metavar="SHELL/CORE")
@@ -124,6 +125,7 @@ def _send(argv: list[str]) -> int:
             room, to=args.to, sender=strand_of_room(room), body=args.reopen if args.reopen is not None else args.body or "",
             re=args.re, note=args.note, clean=args.clean, kind=args.kind,
             refs=tuple(args.ref or ()), body_choice=args.body_choice, repo_sources=args.repo, at=args.at,
+            wish=args.wish,
         )
     except (PortError, SelfError, ValueError, OSError) as exc:
         sys.stderr.write(f"{exc}\n")
@@ -155,9 +157,10 @@ def _settle(argv: list[str]) -> int:
     parser.add_argument("--room")
     parser.add_argument("--why", required=True)
     parser.add_argument("--retire", action="store_true")
+    parser.add_argument("--hand-to")
     args = parser.parse_args(argv)
     try:
-        settle(_room(args.room), args.thread, args.why, args.retire)
+        settle(_room(args.room), args.thread, args.why, args.retire, args.hand_to)
     except (PortError, SelfError, ValueError, OSError) as exc:
         sys.stderr.write(f"{exc}\n")
         return 1

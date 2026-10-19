@@ -316,7 +316,9 @@ def test_unavailable_channel_does_not_block_a_live_threads_new_letter(root, monk
 
 
 def test_stale_speech_gets_a_visible_disposition(root):
-    thread(root)
+    # Recovery can start the old lease before speak_out creates its notice.
+    # Keep reading boundaries so the fixture handles mail arriving after start.
+    thread(root, "answer-pings")
     home = Home(root)
     authority = LocalLeaseAuthority(root / "ledger" / "leases")
     lease = authority.acquire("router", home.install_id(), 30)
