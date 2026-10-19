@@ -1052,27 +1052,11 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     # "wake <shell>[/<core>]" ends this park so the next gen runs on that body.
     told = set()
     for letter, channel in dms:
-        said = WAKE.fullmatch(str(letter.data.get("body", "")).strip())
-        if not said:
+        named = _wake_letter(home, facts, thread, (shell, core), letter, channel)
+        if named is None:
             continue
         told.add(letter.id)
-        named = _wake_body(home, facts, thread, (shell, core), said)
-        disposition = {"id": letter.id, "outcome": "done"}
-        if isinstance(named, str):
-            notice(home, facts, "wake-refused", letter.id, f"{named} Nothing was started.",
-                   "\n".join(_wake_lines(home, facts, thread, (shell, core), None)),
-                   about=letter, channel=channel, passive=True)
-            disposition["reason"] = "wake: refused, " + named
-        elif named == (shell, core):
-            force = True
-            disposition["reason"] = "wake: started before its reset"
-        else:
-            disposition.update(reason=f"wake: on {named[0]}/{named[1]}", thread=thread, body="/".join(named))
-        try:
-            facts.append(_record(home, "letter.disposed", {"dispositions": [disposition]},
-                                 f"letter.disposed:{letter.id}"))
-        except LedgerConflict:
-            pass
+        force = force or named == (shell, core)
     dms = [(letter, channel) for letter, channel in dms if letter.id not in told]
     woken = _wake_choice(facts, thread) if state.name == "parked" else None
     # A parked body reads the gauge like any other: a refill is seen when it
@@ -1117,6 +1101,36 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
 
 
 WAKE = re.compile(r"/?wake(?:\s+([A-Za-z0-9][A-Za-z0-9._-]*)(?:/(\S+))?)?", re.IGNORECASE)
+
+
+def _wake_letter(home, facts, thread, leased, letter, channel, *, parked=True):
+    """Dispose of one person's wake: the body it names, its refusal words, or None.
+
+    The word is the whole letter, or the body a brnrd.dev composer letter
+    chose; that letter's text stays owed, so its disposition has its own id.
+    """
+    chosen = letter.data.get("wake")
+    said = WAKE.fullmatch(f"wake {chosen}" if chosen else str(letter.data.get("body", "")).strip())
+    ident = f"{letter.id}#wake" if chosen else letter.id
+    if not said or any(f.id == f"letter.disposed:{ident}" for f in facts):
+        return None
+    named = _wake_body(home, facts, thread, leased, said)
+    disposition = {"id": ident, "outcome": "done"}
+    if isinstance(named, str):
+        notice(home, facts, "wake-refused", letter.id, f"{named} Nothing was started.",
+               "\n".join(_wake_lines(home, facts, thread, leased, None)),
+               about=letter, channel=channel, passive=True)
+        disposition["reason"] = "wake: refused, " + named
+    elif parked and named == leased:
+        disposition["reason"] = "wake: started before its reset"
+    else:
+        disposition.update(reason=f"wake: on {named[0]}/{named[1]}", thread=thread, body="/".join(named))
+    try:
+        facts.append(_record(home, "letter.disposed", {"dispositions": [disposition]},
+                             f"letter.disposed:{ident}"))
+    except LedgerConflict:
+        pass
+    return named
 
 
 def _wake_shells(home, leased):
@@ -1501,6 +1515,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         router = Router(home, config)
         from .connector import Inputs
         inputs = Inputs(home)
+        from .snapshot import Publisher
+        publisher = Publisher(home, _log)
         while not (stop is not None and stop.is_set()):
             try:
                 config = load_config(home.root)
@@ -1520,6 +1536,10 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                     _log(home, traceback.format_exc().rstrip())
                 try:
                     tick_once(home, bodies, adapter, core, router)
+                except Exception:
+                    _log(home, traceback.format_exc().rstrip())
+                try:
+                    publisher.step(config, router)
                 except Exception:
                     _log(home, traceback.format_exc().rstrip())
             if _source_fingerprint() != fingerprint:

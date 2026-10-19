@@ -34,5 +34,20 @@
 	{
 		"driver": "drive-landing.mjs",
 		"shots": ["phone-landing.png", "desktop-landing.png"]
+	},
+	{
+		"driver": "drive-home-board.mjs",
+		"shots": [
+			"phone-1-busy.png",
+			"phone-2-quiet.png",
+			"phone-3-low-fuel.png",
+			"phone-4-thread.png",
+			"phone-5-empty.png",
+			"desktop-1-busy.png",
+			"desktop-2-quiet.png",
+			"desktop-3-low-fuel.png",
+			"desktop-4-thread.png",
+			"desktop-5-empty.png"
+		]
 	}
 ]
