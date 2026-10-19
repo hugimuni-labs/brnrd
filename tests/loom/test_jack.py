@@ -262,5 +262,5 @@ def test_stop_holds_for_the_shells_cache_or_the_hook_ceiling(
     monkeypatch.setattr(jack.time, 'sleep', lambda seconds: now.__setitem__(0, now[0] + seconds))
     result = json.loads(jack.execute('stop', room, json.dumps({'transcript_path': str(transcript)})))
     assert result['decision'] == 'block'
-    assert result['reason'].startswith('nothing new; holding')
+    assert result['reason'].startswith('cache keepalive, nothing new arrived')
     assert now[0] == pytest.approx(expected)
