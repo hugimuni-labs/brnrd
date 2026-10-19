@@ -36,7 +36,7 @@
 </script>
 
 <article
-	class={`subpanel relative border-l-2 ${frame[turn] ?? frame.none}`}
+	class={`subpanel relative min-w-0 border-l-2 ${frame[turn] ?? frame.none}`}
 	data-testid="thread-card"
 	data-thread={thread.id}
 	data-turn={turn}

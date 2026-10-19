@@ -1469,6 +1469,8 @@ async def dashboard_loom_letter(request: Request, db: Session = Depends(get_db))
     }
     if payload.body:
         reply_to["body"] = payload.body
+    if payload.wish:
+        reply_to.update(wish=payload.wish, verdict=payload.verdict)
     event = inbox_service.enqueue(db, repo_id=repo_id, body=payload.text, source="web", reply_to=reply_to)
     return JSONResponse({"ok": True, "event_id": event.event_id}, status_code=202)
 
