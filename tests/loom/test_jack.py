@@ -171,6 +171,11 @@ def test_claude_adapter_pins_the_three_hooks(tmp_path, monkeypatch):
     hooks = settings["hooks"]
     assert hooks["PostToolUse"][0]["matcher"] == ".*"
     assert hooks["Stop"][0]["hooks"][0]["timeout"] == 70
+    # The same adapter caller also accepts the timeout exported by the loom.
+    monkeypatch.setenv("BRNRD_STOP_TIMEOUT", "21660")
+    runpy.run_path(str(resolve(Home(tmp_path), "claude") / "run"))
+    settings = json.loads((room / ".claude" / "settings.json").read_text())
+    assert settings["hooks"]["Stop"][0]["hooks"][0]["timeout"] == 21660
     for event in ("post", "stop", "start"):
         blob = json.dumps(hooks)
         assert f"--event {event}" in blob
