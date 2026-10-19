@@ -76,6 +76,9 @@ def _run_ps(args: list[str]) -> str:
     try:
         completed = subprocess.run(
             args, capture_output=True, text=True, timeout=10, check=False,
+            # `_parse_lstart` reads the C layout; en_AU puts the day first
+            # ("Mon 19 Oct"), which parsed to None and made every pause inert.
+            env={**os.environ, "LC_ALL": "C"},
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""

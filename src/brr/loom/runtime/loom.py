@@ -29,7 +29,7 @@ from .ledger import LedgerView, kind_facts, LedgerConflict, append, read_facts
 from .registry import KINDS
 from .port import (
     fact_from_port, fact_from_taint, letter_attachments, letter_replies,
-    parse_frontmatter, render_boundary,
+    parse_boundary, parse_frontmatter, render_boundary,
 )
 from .project import projection_cache, fold, generation, is_notice, reply_channels, sender_threads
 from .owners import active_owners, letters_for, letter_owners
@@ -1239,6 +1239,35 @@ def _boundary(home, facts, strand, gen, context):
         atomic_write(path, text)
 
 
+_PAUSE_LOOKED: dict[Path, float] = {}
+
+
+def _pause_for_letters(home, strand, c):
+    """A letter the body has not seen pauses its tool call (pausing.py)."""
+    from brr import pause
+    from . import pausing
+    port = home.room(strand) / "port"
+    if pause.overdue_records(port):
+        _log(home, f"pause of {strand} unanswered for {pausing.CAP:.0f}s; resumed "
+                   + pause.describe_paused(pause.resume_pids(port)))
+    boundary = port / "in/boundary.md"
+    if not c.pid or not boundary.is_file():
+        return
+    pattern = pausing.wrapper(resolve(home, c.shell))
+    unseen = any(not letter.compact for letter in parse_boundary(boundary.read_text()).letters)
+    # One ps a few seconds, not one a tick, while a letter waits on a call.
+    if pattern is None or not unseen or time.monotonic() - _PAUSE_LOOKED.get(port, 0) < pausing.MIN_AGE:
+        return
+    _PAUSE_LOOKED[port] = time.monotonic()
+    state = json.loads((port / "jack-state.json").read_text()) if (port / "jack-state.json").is_file() else {}
+    since = state.get("boundary_at")
+    # A delegate's calls are children of the same body, and its failure hook says nothing.
+    live = port / "live-delegates"
+    delegating = live.is_dir() and any(time.time() - p.stat().st_mtime < pausing.CAP for p in live.iterdir())
+    if since and not delegating and (records := pausing.pause_call(port, c.pid, pattern, float(since))):
+        _log(home, f"paused {strand}'s call for a letter: {pause.describe_paused(records)}")
+
+
 @dataclass
 class _Run:
     """What the hands of one decision share. Nothing here outlives it."""
@@ -1359,6 +1388,9 @@ def _hand_drained(x, command, step):
 
 
 def _hand_release(x, command, step):
+    from brr import pause
+    # A body gone with its call paused: nobody is left to resume it.
+    pause.release_all(x.room / "port")
     x.facts = _release(x.home, x.facts, x.o.strand, x.c.thread, x.o.gen)
 
 
@@ -1380,6 +1412,7 @@ def _execute_body(home, bodies, facts, o, c):
     commands = decide(facts, [o])
     if o.alive:
         _boundary(home, facts, o.strand, o.gen, c)
+        _pause_for_letters(home, o.strand, c)
     for command in commands:
         step = COMMANDS[command.name]
         again = HANDS[step.hand](x, command, step)

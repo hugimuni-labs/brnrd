@@ -9,7 +9,10 @@ import time
 import traceback
 from pathlib import Path
 
+from brr.pause import read_paused_record
+
 from .home import atomic_write, home_of_room, mint
+from .pausing import describe
 from .port import Boundary, parse_boundary
 
 
@@ -304,19 +307,52 @@ def _delegate_call(stdin_text: str) -> bool:
     return isinstance(payload, dict) and bool(payload.get("agent_id"))
 
 
+def _delegates(room: Path, stdin_text: str, seen: bool) -> None:
+    """A delegate mid-work, one file each, its mtime the last call: a pause would stop its call.
+
+    One file per delegate, not a key in jack-state: delegates' hooks run
+    alongside the body's, and that file has one writer at a time.
+    """
+    agent = str(json.loads(stdin_text).get("agent_id") or "")
+    if not agent or "/" in agent:
+        return
+    path = room / "port" / "live-delegates" / agent
+    if seen:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _hook_event(stdin_text: str) -> str:
+    """A failed call (a paused one too) runs PostToolUseFailure, answered in its own name."""
+    try:
+        payload = json.loads(stdin_text) if stdin_text and stdin_text.strip() else {}
+    except json.JSONDecodeError:
+        payload = {}
+    failed = isinstance(payload, dict) and payload.get("hook_event_name") == "PostToolUseFailure"
+    return "PostToolUseFailure" if failed else "PostToolUse"
+
+
 def execute(event: str, room: Path, stdin_text: str) -> str:
     """Return the hook's stdout. Raise on trouble; ``run`` turns that into fail-open."""
     room = Path(room)
     if event not in {"start", "post", "stop", "subagent-stop"}:
         raise ValueError(f"unknown jack event {event!r}")
     if event == "subagent-stop":
+        _delegates(room, stdin_text, False)
         _delegate(room, stdin_text)
         return ""
     if event == "post":
         _note_tool(room, stdin_text)
         if _delegate_call(stdin_text):
+            _delegates(room, stdin_text, True)
             return ""
-        _set_state(room, stop_blocks=0)
+        # A call begun before this is not the body's current one (pausing.py):
+        # a background call returns at once, so a boundary always follows it.
+        _set_state(room, stop_blocks=0, boundary_at=time.time())
+    elif event == "start":
+        _set_state(room, boundary_at=time.time())
     text = _boundary_text(room)
     parsed = parse_boundary(text)
     opened = [[line.split()[1], line.split()[2], line.rpartition(" · owed ")[2]]
@@ -336,20 +372,24 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         plan_changed = plan != state.get("plan", "")
         settled_changed = parsed.settled is not None and parsed.settled != state.get("settled")
         weight = _weight(room, stdin_text, state)
+        paused = describe(read_paused_record(room / "port"))
+        hook = _hook_event(stdin_text)
         if not parsed.ids and not settled_changed and not opened_changed and not plan_changed:
-            if not weight:
+            if not weight and not paused:
                 return ""
             return _json({"hookSpecificOutput": {
-                "hookEventName": "PostToolUse", "additionalContext": weight}})
+                "hookEventName": hook, "additionalContext": "\n".join(filter(None, (paused, weight)))}})
         if weight:
             text = weight + "\n" + text
+        if paused:
+            text = paused + "\n" + text
         if settled_changed:
             _set_state(room, settled=parsed.settled)
         if parsed.ids:
             _shown(room, parsed)
         _set_state(room, opened=opened, plan=plan)
         return _json({"hookSpecificOutput": {
-            "hookEventName": "PostToolUse", "additionalContext": text}})
+            "hookEventName": hook, "additionalContext": text}})
     if _state(room).get("molted") or parsed.settled is not None:
         return ""
     if parsed.ids and (_hand() or not _state(room).get("stop_blocks") and not _dry(room)):
