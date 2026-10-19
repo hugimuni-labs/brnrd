@@ -136,3 +136,44 @@ Path({str(seen)!r}).write_text(json.dumps({{"alive": alive, "letters": [letter.b
         loom.halt()
     assert not loom.errors
     assert json.loads(seen.read_text()) == {"alive": True, "letters": ["how is it going?"], "paused": False}
+
+
+def test_call_while_a_delegate_works_is_left_running(tmp_path, monkeypatch):
+    """A delegate's calls are the body's children too, and its failure hook stays silent."""
+    monkeypatch.setattr(pausing, "MIN_AGE", 0.5)
+    root = tmp_path / "home"
+    write_thread(root, "work", "Worker", "work", wait="30")
+    seen, started = root / "seen.json", root / "started"
+    bodies(root, f'''import json, subprocess, sys, time
+from pathlib import Path
+from brr.loom.runtime.fakebody import Ctx, _own_thread
+ctx = Ctx(Path(sys.argv[1]))
+own = _own_thread(ctx.wake())
+for letter in ctx.owed():
+    ctx.send(f"thread:{{own}}", note="delegated", re=letter.id)
+while ctx.jack("post").letters:
+    time.sleep(0.03)
+ctx.jack("post", {{"agent_id": "d1", "agent_type": "general-purpose", "tool_name": "Bash"}})
+time.sleep(1.1)
+call = subprocess.Popen(["/bin/sh", "-c", ": fake-tool-wrapper; sleep 30; echo done"])
+Path({str(started)!r}).write_text("1")
+time.sleep(3)
+alive = call.poll() is None
+call.kill()
+view = ctx.jack("post")
+Path({str(seen)!r}).write_text(json.dumps({{"alive": alive, "letters": [letter.body for letter in view.letters],
+    "paused": (ctx.room / "port/.paused.json").exists()}}))
+''')
+    (root / "loom/bodies/fake/jack").write_text("hooks\n")
+    (root / "loom/bodies/fake/pause").write_text("fake-tool-wrapper\n")
+    inject_letter(root, to="thread:work", body="hand it to a delegate")
+    loom = Loom(root)
+    loom.start()
+    try:
+        wait_until(started.exists, 15, loom.dump)
+        inject_letter(root, to="thread:work", body="any news?")
+        wait_until(seen.exists, 20, loom.dump)
+    finally:
+        loom.halt()
+    assert not loom.errors
+    assert json.loads(seen.read_text()) == {"alive": True, "letters": ["any news?"], "paused": False}

@@ -1262,7 +1262,8 @@ def _pause_for_letters(home, strand, c):
     state = json.loads((port / "jack-state.json").read_text()) if (port / "jack-state.json").is_file() else {}
     since = state.get("boundary_at")
     # A delegate's calls are children of the same body, and its failure hook says nothing.
-    delegating = any(time.time() - float(at) < pausing.CAP for at in (state.get("delegates") or {}).values())
+    live = port / "live-delegates"
+    delegating = live.is_dir() and any(time.time() - p.stat().st_mtime < pausing.CAP for p in live.iterdir())
     if since and not delegating and (records := pausing.pause_call(port, c.pid, pattern, float(since))):
         _log(home, f"paused {strand}'s call for a letter: {pause.describe_paused(records)}")
 

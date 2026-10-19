@@ -307,17 +307,21 @@ def _delegate_call(stdin_text: str) -> bool:
     return isinstance(payload, dict) and bool(payload.get("agent_id"))
 
 
-def _delegates(room: Path, stdin_text: str, seen: float | None) -> None:
-    """Delegates mid-work, by their last call: a pause would stop theirs (pausing.py)."""
+def _delegates(room: Path, stdin_text: str, seen: bool) -> None:
+    """A delegate mid-work, one file each, its mtime the last call: a pause would stop its call.
+
+    One file per delegate, not a key in jack-state: delegates' hooks run
+    alongside the body's, and that file has one writer at a time.
+    """
     agent = str(json.loads(stdin_text).get("agent_id") or "")
-    if not agent:
+    if not agent or "/" in agent:
         return
-    live = dict(_state(room).get("delegates") or {})
-    if seen is None:
-        live.pop(agent, None)
+    path = room / "port" / "live-delegates" / agent
+    if seen:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
     else:
-        live[agent] = seen
-    _set_state(room, delegates=live)
+        path.unlink(missing_ok=True)
 
 
 def _hook_event(stdin_text: str) -> str:
@@ -336,13 +340,13 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     if event not in {"start", "post", "stop", "subagent-stop"}:
         raise ValueError(f"unknown jack event {event!r}")
     if event == "subagent-stop":
-        _delegates(room, stdin_text, None)
+        _delegates(room, stdin_text, False)
         _delegate(room, stdin_text)
         return ""
     if event == "post":
         _note_tool(room, stdin_text)
         if _delegate_call(stdin_text):
-            _delegates(room, stdin_text, time.time())
+            _delegates(room, stdin_text, True)
             return ""
         # A call begun before this is not the body's current one (pausing.py):
         # a background call returns at once, so a boundary always follows it.
