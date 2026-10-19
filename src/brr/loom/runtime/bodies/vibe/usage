@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+from brr.loom.runtime.usage import print_windows
+
+# vibe_usage reads per-session token journals, not an account quota or limit.
+# No percentage can be derived from cumulative tokens without a denominator.
+print_windows([], error="vibe account quota unavailable; session journals contain token totals only")

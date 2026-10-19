@@ -16,8 +16,8 @@ Collected, and only when the envelope actually carries them:
   means the totals may under-count.
 - ``model_ids`` — the keys of ``modelUsage``, the models that actually ran.
 
-Subscription quota and reset time come from the separate interactive
-``/usage`` probe in :mod:`brr.grok_usage`, merged by the daemon. This result
+Subscription quota and reset time come from the separate read-only billing
+HTTP collector in :mod:`brr.grok_usage`, merged by the daemon. This result
 collector supplies neither quota nor context-window headroom: the envelope
 has no window size. Unknown capacity is not unlimited.
 """

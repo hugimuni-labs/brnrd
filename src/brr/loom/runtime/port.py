@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from brr.daemon2.facts import Fact
+from .ledger import LedgerView, kind_facts
+from .project import cached_projection
 
 from .home import (
     atomic_write, channel_parts, home_of_room, is_channel, mint, strand_of_room, thread_of,
@@ -111,21 +113,30 @@ def letter_attachments(root: Path, facts: list[Fact]) -> dict[str, list[str]]:
     Bodies share the host filesystem: name the stored blob, without copying
     it into each room or putting binary data in the wake.
     """
-    sources = {f.id: f for f in facts if f.kind == "source"}
-    blobs = {f.id: f.data for f in facts if f.kind == "blob"}
+    if isinstance(facts, LedgerView):
+        return facts.project_letters("attachments", str(root.resolve()),
+                                     lambda rows, selected: _letter_attachments(root, rows, selected))
+    return cached_projection(facts, "attachments", str(root.resolve()),
+                             lambda rows: _letter_attachments(root, rows))
+
+
+def _letter_attachments(root, facts, selected=None):
+    sources = facts.by_id if isinstance(facts, LedgerView) else {f.id: f for f in kind_facts(facts, "source")}
+    blobs = facts.by_id if isinstance(facts, LedgerView) else {f.id: f for f in kind_facts(facts, "blob")}
     folder = root.resolve() / "blobs"
     result = {}
-    for letter in facts:
+    for letter in (kind_facts(facts, "letter") if selected is None else selected):
         if letter.kind != "letter":
             continue
         source = sources.get(letter.data.get("cites"))
-        if source is None:
+        if source is None or source.kind != "source":
             continue
         lines = []
         # Follow this source's blob facts: identical bytes can arrive under
         # different filenames (and hence MIME types) in another source.
         for ref in source.after:
-            blob = blobs.get(ref)
+            blob_fact = blobs.get(ref)
+            blob = blob_fact.data if blob_fact is not None and blob_fact.kind == "blob" else None
             if blob is not None and blob["sha"] in source.data.get("blobs", ()):
                 lines.append(f"attachment: {blob['mime']} · {blob['size']} bytes · {folder / blob['sha']}")
         lines.extend(f"attachment {number} could not be fetched"
@@ -136,11 +147,18 @@ def letter_attachments(root: Path, facts: list[Fact]) -> dict[str, list[str]]:
 
 def letter_replies(facts: list[Fact]) -> dict[str, str]:
     """Reply context for inbound sources; an unknown native id is not a letter id."""
-    sources = {f.id: f.data for f in facts if f.kind == "source"}
-    letters = {str(f.data.get("id") or f.id): f for f in facts if f.kind == "letter"}
+    if isinstance(facts, LedgerView):
+        return facts.project_letters("reply-context", (), _letter_replies)
+    return cached_projection(facts, "reply-context", (), _letter_replies)
+
+
+def _letter_replies(facts, selected=None):
+    sources = facts.by_id if isinstance(facts, LedgerView) else {f.id: f for f in kind_facts(facts, "source")}
+    letters = facts.named_letters if isinstance(facts, LedgerView) else {str(f.data.get("id") or f.id): f for f in kind_facts(facts, "letter")}
     result = {}
-    for letter in letters.values():
-        source = sources.get(letter.data.get("cites"), {})
+    for letter in (letters.values() if selected is None else selected):
+        source_fact = sources.get(letter.data.get("cites"))
+        source = source_fact.data if source_fact is not None and source_fact.kind == "source" else {}
         native = source.get("re")
         if native in (None, ""):
             continue
@@ -358,7 +376,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                clean: bool = False, kind: str | None = None,
                refs: tuple[str, ...] | list[str] = (),
                molt: str | None = None, body_choice: str | None = None,
-               at: str | None = None, repo_sources: tuple[str, ...] | list[str] = ()) -> str:
+               at: str | None = None, repo_sources: tuple[str, ...] | list[str] = (),
+               wish: str | None = None) -> str:
     home = home_of_room(Path(room))
     opening = None
     if at is not None:
@@ -407,6 +426,18 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         re = _full_re(Path(room), re)
     if note is not None and body:
         raise PortError("send: --note is the whole no-answer; drop the body")
+    wish_stamp = None
+    if wish is not None:
+        from .ledger import read_facts
+        from .lifecycle import own_thread
+        from .verbs_wishes import say_span, wish_fact
+        if not re:
+            raise PortError("send --wish requires --re")
+        facts = read_facts(home)
+        ident, line = ("new", wish[4:]) if wish.startswith("new:") else (wish, None)
+        wish_stamp = wish_fact(facts, by="strand:" + sender, ident=ident,
+                               says=[say_span(re, facts)], line=line,
+                               thread=own_thread(Path(room)) if ident == "new" else None)
     stem = mint(5)
     letter_id = f"{sender}/{stem}"
     fields = {
@@ -442,6 +473,9 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         from .lifecycle import open_thread
         open_thread(Path(room), opening, sender, body, body_choice, repo_sources)
     write_port(room, stem, text)
+    if wish_stamp is not None:
+        from .ledger import append
+        append(home, wish_stamp)
     return letter_id
 
 

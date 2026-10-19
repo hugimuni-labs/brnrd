@@ -5,9 +5,10 @@ import time
 from datetime import datetime
 
 from .home import Home, thread_of
+from .ledger import LedgerView
 from .lifecycle import CLOSED, read_thread, main_snapshot, main_tree, readme_at
-from .owners import letter_owners, thread_axes
-from .project import fold, sender_threads
+from .owners import active_owners, letter_owners, thread_axes
+from .project import cached_projection, fold, sender_threads
 from .selfrepo import git
 
 
@@ -41,22 +42,19 @@ def _body_choice(seat: str) -> str:
     return choice
 
 
-def thread_table(home: Home, facts: list) -> list[dict]:
-    """Read main and the ledger; never ask a body to declare its state.
-
-    A recent boundary is a shown fact or the jack's existing state-file mtime.
-    There is no explicit 'waiting' fact: a live body with nothing owed, or a
-    stop block, is the nearest derivable holding value.
-    """
-    from .loom import body_alive, pending_bodies
+def _table_inputs(facts, main):
+    """Ledger/main-only inputs; physical liveness, gauges and time stay outside."""
+    from .loom import pending_bodies
     state, writers = fold(facts), sender_threads(facts)
-    main = main_snapshot(home)
     ownership = letter_owners(facts, main)
     axes = thread_axes(facts, main, ownership)
     owed, activity, boundary = {}, {}, {}
-    for fate in ownership.values():
+    debts = active_owners(facts, main) if isinstance(facts, LedgerView) else ownership.values()
+    for fate in debts:
         if not fate.done and fate.owner in {'body', 'loom', 'opener'}:
             owed.setdefault(fate.thread, []).append(fate.letter)
+    if isinstance(facts, LedgerView):
+        return state, ownership, axes, owed, state.activity, state.boundary, state.bodies
     for f in state.accepted:
         strand = f.data.get('strand') or f.by.removeprefix('strand:')
         thread = writers.get(strand)
@@ -69,6 +67,20 @@ def thread_table(home: Home, facts: list) -> list[dict]:
             activity[thread] = max(activity.get(thread, 0), _at(f))
         if f.kind == 'shown':
             boundary[strand] = max(boundary.get(strand, 0), _at(f))
+    return state, ownership, axes, owed, activity, boundary, pending_bodies(state.accepted)
+
+
+def thread_table(home: Home, facts: list) -> list[dict]:
+    """Read main and the ledger; never ask a body to declare its state.
+
+    A recent boundary is a shown fact or the jack's existing state-file mtime.
+    There is no explicit 'waiting' fact: a live body with nothing owed, or a
+    stop block, is the nearest derivable holding value.
+    """
+    from .loom import body_alive
+    main = main_snapshot(home)
+    state, ownership, axes, owed, activity, boundary, pending = cached_projection(
+        facts, "thread-table", repr(main), lambda rows: _table_inputs(rows, main))
     repo = home.root / 'self'
     versioned = (repo / '.git').exists()
     tip, blobs = main_tree(repo) if versioned else (None, {})
@@ -108,7 +120,7 @@ def thread_table(home: Home, facts: list) -> list[dict]:
             snapshot.append((thread, data, _body_choice(text), (repo / path).stat().st_mtime, ''))
         _MAIN[repo] = (tip, snapshot)
         _ROWS[repo] = kept
-    pending, now, rows = pending_bodies(state.accepted), time.time(), []
+    now, rows = time.time(), []
     for thread, data, choice, created, date in _MAIN[repo][1]:
         count = len(owed.get(thread, ()))
         strand = state.holder.get(thread, ('', 0))[0]

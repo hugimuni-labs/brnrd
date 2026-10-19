@@ -6,8 +6,12 @@
 	// visual, like exactly as it is"). This route is the URL and nothing else;
 	// its render is the component's default (`liveView="field"`), which is the
 	// exact shape this file held before the extraction.
+	//
+	// 2026-10-19: `/` is the loom's home board when the loom has published a
+	// snapshot, and this same dashboard otherwise (`$lib/LoomHome.svelte`
+	// decides). The dashboard with the command deck stays at /bridge.
 	import { resolve } from '$app/paths';
-	import Dashboard from '$lib/Dashboard.svelte';
+	import LoomHome from '$lib/LoomHome.svelte';
 	import { HOME_DESCRIPTION, HOME_TITLE, SOCIAL_IMAGE } from '$lib/seo';
 </script>
 
@@ -32,4 +36,4 @@
 	</a>
 </div>
 
-<Dashboard />
+<LoomHome />

@@ -15,12 +15,12 @@ from brr.daemon2.leases import Lease, LocalLeaseAuthority
 
 from .config import LoomConfig, granting_window, load_config, loom_clock
 from .home import Home, is_channel, mint
-from .ledger import LedgerConflict, LedgerReader
+from .ledger import LedgerConflict, LedgerReader, LedgerView, kind_facts
 from .project import (
     fold, holder, is_notice, sender_threads,
 )
 from .selfrepo import ReadmeError, parse_readme
-from .owners import letter_owners, letters_for
+from .owners import active_owners, letter_owners, letters_for
 from .lifecycle import main_snapshot
 from .speak import speak
 
@@ -117,7 +117,7 @@ class Router:
     def _prior_visible(self, facts: list[Fact], gen: int) -> bool:
         if gen <= 1:
             return True
-        for fact in facts:
+        for fact in kind_facts(facts, "router", "router.renewed"):
             if fact.kind not in {"router", "router.renewed"}:
                 continue
             try:
@@ -196,16 +196,21 @@ class Router:
         facts = _closures(home, facts, threads)
         from .lifecycle import CLOSED, read_thread
         pending = []
+        state = fold(facts)
         for thread in threads:
             if read_thread(home, thread).get("status") in CLOSED:
                 continue
             if not self.armed():
                 break
-            facts = self._release_abandoned(facts, thread, body_alive)
-            if holder(facts, thread):
-                continue
+            if thread in state.holder:
+                facts = self._release_abandoned(facts, thread, body_alive)
+                state = fold(facts)
+                if thread in state.holder:
+                    continue
             letters = [f for f in letters_for(facts, main_snapshot(home), thread) if not f.data.get("notice")]
             if not letters:
+                continue
+            if self._home_retry_waiting(facts, thread):
                 continue
             target = readme_for(home, thread)
             if target and target != self.config.name:
@@ -219,7 +224,16 @@ class Router:
             from .repos import AuthorError, require_body_author
             try:
                 text = seat_text(home, thread)
-                choice = at_birth(home, thread, default, text)
+                from .loom import _person_dms, _wake_choice, _wake_letter
+                seated = at_birth(home, thread, default, text)
+                # A body chosen in brnrd.dev's composer is a wake, but only for a
+                # letter that landed while no strand held the thread.
+                freed = max((i for i, f in enumerate(facts) if f.kind == "released"
+                             and f.data.get("thread") == thread), default=-1)
+                for letter, channel in _person_dms(home, facts, thread):
+                    if letter.data.get("wake") and facts.index(letter) > freed:
+                        _wake_letter(home, facts, thread, seated, letter, channel, parked=False)
+                choice = _wake_choice(facts, thread) or seated
                 declared = seat_repos(text)
                 require_body_author(home)
             except (ValueError, OSError) as exc:
@@ -269,11 +283,38 @@ class Router:
         # Clone/start is slow under load; doing it inside the grant loop burned
         # the skew window so later threads never got a lease this generation.
         for strand, thread, gen, choice, declared in pending:
-            facts = _start(home, strand, thread, gen, bodies, facts, choice, repos=declared)
+            facts = _start(home, strand, thread, gen, bodies, facts, choice,
+                           repos=declared, reader=self.reader)
         if not self.armed():
             return facts
         facts = self._unrouted(facts, set(threads))
         return facts
+
+    def _home_retry_waiting(self, facts, thread) -> bool:
+        """Retry a refused home when self changes, or after ten minutes.
+
+        Persist the failed revision in the attempt, so restarts and router
+        handoffs obey the same bound. The fallback covers repairs outside self.
+        """
+        for fact in reversed(kind_facts(facts, "attempt.ended")):
+            if fact.kind != "attempt.ended" or fact.data.get("thread") != thread:
+                continue
+            dispositions = fact.data.get("dispositions", ())
+            blocked = {d["id"] for d in dispositions
+                       if d.get("reason") == "home-caused failure"}
+            if not blocked:
+                return False
+            revision = fact.data.get("evidence", {}).get("self_revision")
+            if not revision or (datetime.now(timezone.utc) - _when(fact)).total_seconds() >= 600:
+                return False
+            from .selfrepo import SelfError
+            from .lifecycle import main_tip
+            try:
+                current = main_tip(self.home.root / "self")
+            except (SelfError, OSError):
+                return True
+            return current == revision
+        return False
 
     def _release_abandoned(self, facts, thread: str, body_alive) -> list[Fact]:
         held = holder(facts, thread)
@@ -296,7 +337,9 @@ class Router:
                      for f in state.accepted)
         cause = ('molted' if molted else 'settled' if read_thread(self.home, thread).get('status') in CLOSED
                  else 'failed' if letters else 'idle')
-        facts = _end_attempt(self.home, facts, strand, thread, gen, None, letters, cause)
+        facts = _end_attempt(self.home, facts, strand, thread, gen, None, letters, cause,
+                             "holding install went silent", failure_origin="home", repair_thread=thread,
+                             await_repair=False)
         facts = _drained(self.home, facts, strand, thread, gen)
         return self._keep(facts, "released", {
             "thread": thread, "strand": strand, "gen": gen,
@@ -326,7 +369,7 @@ class Router:
     def _unrouted(self, facts: list[Fact], known: set[str]) -> list[Fact]:
         """Materialize the table's climb/invalid-address decision atomically."""
         from .loom import notice
-        for fate in letter_owners(facts, main_snapshot(self.home)).values():
+        for fate in active_owners(facts, main_snapshot(self.home)):
             if fate.action not in {"climb", "unroutable"}:
                 continue
             letter = fate.letter
@@ -350,21 +393,24 @@ class Router:
     def speak_out(self, facts: list[Fact]) -> list[Fact]:
         if not self.armed() or self.lease is None:
             return facts
-        from .loom import _log, notice, notice_id
+        from .loom import _log, notice
         state = fold(facts)
         threads = sender_threads(facts)
-        ids = {fact.id for fact in facts}
         table = letter_owners(facts, main_snapshot(self.home))
-        sent = {key for key, fate in table.items() if fate.done}
-        for fact in state.accepted:
-            if not self.armed() or self.lease is None:
-                return facts
+        for fate in active_owners(facts, main_snapshot(self.home)):
+            if fate.owner != "channel":
+                continue
+            fact = fate.letter
             to = fact.data.get("to")
             if fact.kind != "letter" or not is_channel(to):
                 continue
             key = str(fact.data.get("id") or "")
             if not key or key not in table or table[key].owner != "channel":
                 continue
+            # Recheck authority immediately before a pending send, not for
+            # every historical fact (including already delivered letters).
+            if not self.armed() or self.lease is None:
+                return facts
             raw = fact.data.get("router_gen")
             try:
                 grant = int(raw)
@@ -428,8 +474,6 @@ class Router:
                      "was attempted and no receipt came back", fresh)
             if speech is not None:
                 facts.append(speech)
-                if speech.data.get("state") == "sent":
-                    sent.add(key)
             if status == "stepped-down":
                 self.granting = False
                 return facts

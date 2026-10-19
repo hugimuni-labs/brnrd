@@ -93,7 +93,7 @@ def test_owing_worker_is_told_once_holds_twice_then_low_fuel_preserves_and_parks
     waiting = root / "holding"
     run = folder / "run"
     run.write_text(f'''#!/usr/bin/env python3
-import os, sys, time
+import json, os, sys, time
 from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx
 ctx = Ctx(Path(sys.argv[1]))
@@ -108,7 +108,7 @@ while True:
     view = ctx.jack("stop")
     if view.raw == "":
         break
-    assert "nothing new; holding" in view.raw
+    assert json.loads(view.raw)["reason"].startswith("cache keepalive, nothing new arrived: stop")
     holds += 1
     Path({str(root / "holds")!r}).write_text(str(holds))
 ''')

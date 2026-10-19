@@ -4,6 +4,7 @@ import fcntl
 import json
 import math
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -35,17 +36,18 @@ def shells(home):
             yield name
 
 
-def print_windows(rows) -> None:
+def print_windows(rows, *, error: str | None = None) -> None:
     windows = [{"name": name, "left_pct": left,
                 "resets_at": datetime.fromtimestamp(reset, timezone.utc).isoformat() if reset else None}
                for name, left, reset in rows if left is not None]
-    if not windows:
+    if not windows and not error:
         raise SystemExit(1)
-    print(json.dumps({"windows": windows}))
+    print(json.dumps({"windows": windows, **({"error": error} if error else {})}))
 
 
-def _refresh(path, script) -> None:
+def _refresh(path, script, after=0) -> None:
     at, windows = time.time(), []
+    error = None
     proc = None
     claim = None
     attempted = False
@@ -61,7 +63,7 @@ def _refresh(path, script) -> None:
             return
         claim.seek(0)
         previous = claim.read().strip()
-        if previous and 0 <= at - float(previous) < PROBE_INTERVAL:
+        if previous and float(previous) >= after and 0 <= at - float(previous) < PROBE_INTERVAL:
             return
         claim.seek(0)
         claim.truncate()
@@ -74,7 +76,10 @@ def _refresh(path, script) -> None:
                                 env=env, start_new_session=True)
         out, _ = proc.communicate(timeout=15)
         if proc.returncode == 0:
-            for window in json.loads(out)["windows"]:
+            payload = json.loads(out)
+            if isinstance(payload.get("error"), str):
+                error = payload["error"]
+            for window in payload["windows"]:
                 left = window["left_pct"]
                 if (isinstance(left, (int, float)) and math.isfinite(left) and left <= 100
                         and isinstance(window.get("name"), str)):
@@ -87,14 +92,14 @@ def _refresh(path, script) -> None:
             proc.wait()
         try:
             if attempted:
-                atomic_write(path, json.dumps({"at": at, "windows": windows}) + "\n")
+                atomic_write(path, json.dumps({"at": at, "windows": windows, **({"error": error} if error else {})}) + "\n")
         finally:
             if claim is not None:
                 claim.close()
             _REFRESHING.discard(path)
 
 
-def reading(home, shell: str, after: float = 0):
+def reading(home, shell: str, after: float = 0, *, fresh=False):
     """None while refreshing; an empty reading means the gauge is unknown."""
     path = (home.root / "loom/usage" / f"{shell}.json").resolve()
     try:
@@ -111,13 +116,13 @@ def reading(home, shell: str, after: float = 0):
         # A window that has reset since the reading was taken is not known:
         # at the reset, a 2% reading taken a minute earlier re-parked a body.
         after = max([after] + [_reset(w) for w in reading["windows"] if _reset(w) <= time.time()])
-        if 0 <= time.time() - reading["at"] < CACHE_TTL and (reading["at"] > after or not reading["windows"]):
+        if 0 <= time.time() - reading["at"] < CACHE_TTL and (reading["at"] > after or not fresh and not reading["windows"]):
             return reading
     except (OSError, ValueError, KeyError, TypeError):
         pass
     if path not in _REFRESHING:
         _REFRESHING.add(path)
-        threading.Thread(target=_refresh, args=(path, script), daemon=True).start()
+        threading.Thread(target=_refresh, args=(path, script, after) if fresh else (path, script), daemon=True).start()
     return None
 
 
@@ -145,6 +150,86 @@ def fuel(home, shell: str) -> str:
     value = reading(home, shell)
     parts = [f"{w['name']} {w['left_pct']:g}%" for w in value["windows"]] if value else []
     return f"fuel {shell} " + " ".join(parts) if parts else ""
+
+
+_SHELL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _shown_windows(payload) -> list[str] | None:
+    """Window text for one on-disk reading, or None when it shows nothing."""
+    if not isinstance(payload, dict):
+        return None
+    windows = payload.get("windows")
+    if not isinstance(windows, list):
+        return None
+    try:
+        at = float(payload["at"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not math.isfinite(at):
+        return None
+    parts = []
+    for window in windows:
+        if not isinstance(window, dict):
+            continue
+        left, name = window.get("left_pct"), window.get("name")
+        if isinstance(left, bool) or not isinstance(left, (int, float)) or not math.isfinite(left):
+            continue
+        if left > 100 or not isinstance(name, str) or not name:
+            continue
+        parts.append(f"{name} {left:g}%")
+    return parts or None
+
+
+def _past_reset(payload, now: float) -> bool:
+    """True when ``at`` is older than the newest reset that has already passed.
+
+    A reset still in the future does not count: every sample is older than a
+    clock that has not arrived, and the mark would sit on every gauge.
+    """
+    passed = [_reset(window) for window in payload["windows"]
+              if isinstance(window, dict) and 0 < _reset(window) <= now]
+    return bool(passed) and float(payload["at"]) < max(passed)
+
+
+def shell_fuels(home) -> dict[str, str]:
+    """Window text per shell with a reading in ``loom/usage``.
+
+    A shell with no file, or a file that yields no windows, is omitted. A
+    reading older than its newest reset that has already passed is kept and
+    marked with ``?`` (``grok week 45%?``): dropping it is how a full tank
+    was read as dry.
+    """
+    directory = home.root / "loom" / "usage"
+    if not directory.is_dir():
+        return {}
+    now, found = time.time(), {}
+    for path in directory.glob("*.json"):
+        name = path.name.removesuffix(".json")
+        if not _SHELL_NAME.fullmatch(name):
+            continue
+        try:
+            payload = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        parts = _shown_windows(payload)
+        if not parts:
+            continue
+        found[name] = " ".join(parts) + ("?" if _past_reset(payload, now) else "")
+    return found
+
+
+def fuels(home, shell: str) -> str:
+    """Every shell with a reading in ``loom/usage``, for the boundary line.
+
+    The seated shell is first, then the rest by name. Hold and park do not
+    call this.
+    """
+    found = shell_fuels(home)
+    if not found:
+        return ""
+    order = ([shell] if shell in found else []) + sorted(n for n in found if n != shell)
+    return "fuel " + " · ".join(f"{name} {found[name]}" for name in order)
 
 
 def below_floor(home, shell: str, after: float = 0) -> bool:

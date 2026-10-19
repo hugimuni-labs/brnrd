@@ -282,11 +282,12 @@ def test_molt_successor_holds_the_predecessor_commit(tmp_path: Path, fresh: bool
     bodies(root, f'''import json, subprocess, sys
 from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx
+from brr.loom.runtime.home import atomic_write
 ctx = Ctx(Path(sys.argv[1]))
 checkout = ctx.room / "widget"
 if "cut from parent" in ctx.wake() or "Fresh molt: start from main." in ctx.wake():
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip()
-    Path({str(received)!r}).write_text(json.dumps({{
+    atomic_write(Path({str(received)!r}), json.dumps({{
         "sha": sha,
         "kept": (checkout / "kept.txt").read_text() if (checkout / "kept.txt").exists() else None,
         "strand": ctx.room.name,

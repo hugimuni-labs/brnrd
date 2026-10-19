@@ -201,3 +201,33 @@ def test_send_binds_native_reply_only_in_its_source_channel(home, monkeypatch, d
     assert sent.get('re') == expected
     assert any(f.kind == 'speech' and f.data.get('key') == key and f.data['state'] == 'sent'
                for f in read_facts(home))
+
+
+def test_delivered_history_does_not_reauthorize_each_fact(home, monkeypatch):
+    draft(home, "first")
+    router = Router(home)
+    facts = router.begin_tick(read_facts(home))
+    # Attention facts are accepted history, as are delivered channel letters.
+    facts.extend(Fact(kind="attention", by="loom:aaaa", id=f"attention:{n}",
+                      data={"why": "old condition"}, hlc=(n, 0, "aaaa"))
+                 for n in range(1000))
+    calls = []
+    authorize = router.authority.authorize
+    def counted(lease):
+        calls.append(lease)
+        return authorize(lease)
+    monkeypatch.setattr(router.authority, "authorize", counted)
+    router.speak_out(facts)
+    assert len(calls) == 1
+    assert not (home.root / "loom/channel-fake.jsonl").exists()
+
+
+def test_pending_send_rechecks_authority_after_selecting_letter(home, monkeypatch):
+    draft(home, "first", sent=False)
+    router = Router(home)
+    facts = router.begin_tick(read_facts(home))
+    checks = iter([True, False])
+    monkeypatch.setattr(router.authority, "authorize", lambda lease: next(checks))
+    router.speak_out(facts)
+    assert router.lease is None
+    assert not (home.root / "loom/channel-fake.jsonl").exists()

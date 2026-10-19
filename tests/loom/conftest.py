@@ -19,6 +19,28 @@ def subprocess_tree(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolate_hosting_body(monkeypatch):
+    """A test starts as an operator, without the resident hosting pytest.
+
+    BRNRD_ROOM changes caller authority; BRNRD_STOP_TIMEOUT and other body
+    settings change adapter inputs. The room forge shim on PATH can also
+    inject credentials even after all token variables have been removed.
+    Tests that need a body set its environment explicitly.
+    """
+    def room_bin(entry):
+        path = Path(entry).resolve()
+        return (path.name == "bin" and path.parent.name == "port"
+                and path.parent.parent.parent.name == "rooms")
+
+    path = os.environ.get("PATH", os.defpath)
+    monkeypatch.setenv("PATH", os.pathsep.join(
+        entry for entry in path.split(os.pathsep) if not room_bin(entry)))
+    for name in tuple(os.environ):
+        if name.startswith("BRNRD_"):
+            monkeypatch.delenv(name)
+
+
+@pytest.fixture(autouse=True)
 def reap_bodies(tmp_path):
     """A body outlives its loom by design, so a test's loom halting leaves it
     running. Kill every body still holding its room under this test's tmp_path;

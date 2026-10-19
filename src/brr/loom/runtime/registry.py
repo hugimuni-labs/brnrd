@@ -51,7 +51,7 @@ def _kind(kind: str, resource: str, fields: str, writer: str, scope: str, once: 
     return Kind(kind, resource, tuple(fields.split()), tuple(writer.split()), scope, once)
 
 
-CLOSED = ("body",)
+CLOSED = ("body", "wish")
 ROLES = ("loom", "strand", "person")
 SCOPES = ("global", "machine")
 
@@ -64,7 +64,11 @@ REGISTRY = (
     _kind("body.stayed",       "body",    "strand gen",                                       "loom",        "machine"),
     _kind("body.stopped",      "body",    "strand gen pid why",                               "loom",        "machine", once=True),
     _kind("body.unidentified", "body",    "strand gen pid why",                               "loom",        "machine"),
-    _kind("body.exited",       "body",    "strand gen code why?",                             "loom",        "global",  once=True),
+    _kind("body.exited",       "body",    "strand gen code why? failure_origin? failure_letters?",                             "loom",        "global",  once=True),
+    _kind("wish",              "wish",    "wish says from line thread",                        "strand person", "global"),
+    _kind("wish.read",         "wish",    "wish reading by",                                   "strand person", "global"),
+    _kind("wish.result",       "wish",    "wish kind ref line delivered",                       "strand",        "global"),
+    _kind("wish.verdict",      "wish",    "wish as evidence ref",                              "strand person", "global"),
     # Read by the body's table, owned elsewhere, not enforced here.
     _kind("lease",             "thread",  "thread strand gen install router_gen shell core repos parent?", "loom", "global", once=True),
     _kind("released",          "thread",  "thread strand gen why install router_gen?",        "loom",        "global",  once=True),

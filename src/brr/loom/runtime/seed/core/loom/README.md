@@ -14,7 +14,7 @@ What the loom cannot settle by its own rules it hands to a body: a letter from `
 
 The last lines of every notice are its handle: `settle this notice with a reply or a note, re: <id>`, and, when it is about a letter or a draft of yours, that item's id and what you can do about it. A notice that says it settles another item too stands for that item: settling either one settles both. Conditions that arrive this way: a letter two bodies died reading (quarantined, kept out of every wake), a letter addressed to no thread on main, a message of yours that was refused, went stale under a new router, or may or may not have arrived (it is never sent again; send a fresh one), a body that ended before handling your letter (send again, or leave it), a relay event or attachment that could not be taken in, a thread directory that cannot be a thread, a port file of yours the loom refused.
 
-`python -m brr.loom.runtime attention --home <home>` lists parked bodies and the notices nobody has settled. A parked body holds its thread until its shell gauge can be read again at the reset time; no reply or note is owed for a park. It keeps no state: it reads the ledger.
+`python -m brr.loom.runtime attention --home <home>` lists parked bodies and the notices nobody has settled. A parked body holds its thread and starts when its shell gauge reads a refill; a person's letter meanwhile is told it is parked, and a bare `wake` in their DM starts it now. No reply or note is owed for a park. It keeps no state: it reads the ledger.
 
 ### By hand, when the mechanism itself is what is broken
 
@@ -26,12 +26,35 @@ If a notice or any other letter keeps coming back and no reply settles it, a per
 
 A note written `by` a `person:` with `re:` a letter's id settles that letter whatever thread holds it, and the item it stands for with it. Nothing else is needed: the next tick reads the line. From a room, `<home>` is `../..`.
 
+A failed preparation (including an over-budget home or a broken wake recipe)
+keeps its letters owed for retry. One self-refusal notice asks for home repair,
+in inbox when preparation, spawn, or the holding install cannot run. Only an input that
+itself exceeds the wake budget, with a recipe that runs without mail, uses the
+letter-failure path. A failure to prepare does not spend a letter's body-crash
+retry allowance. The person receives no failure message for a home refusal. A nonzero body exit
+requires a fresh gauge observation; depleted fuel keeps the letter owed and
+parks its next start until all exhausted windows reset.
+
 ## Plan citations
 
 A checklist row under `## Plan` names the letters it answers with a trailing
 ` · re: <letter-id>, <letter-id>`. Land the README through `send-self`. The
 boundary lists owed letters without a row from the landed plan and the letter
 ownership table; editing a file or mentioning an id in prose does not cite it.
+
+## Wishes
+
+A wish is what someone wants from a thread, kept as facts; the wake lists the
+thread's open ones under `## Wishes`. Stamp it when you reply: `send --re <id>
+--to <reply address> --wish new:"<what they want>"`, or `--wish <w-id>` for
+one already heard. A wish in the wisher's own words is said; one you infer
+(`wish new --line "…"` without `--say`) is derived: when you reply about it,
+name it as derived, your reading and not their words. When a result exists,
+record it with `wish <w-id> --result <kind>:<ref> --line "…"`, adding
+`--deliver` on the one you hand over. Cite wish ids in Plan rows beside the
+letters: ` · re: <letter-id>, <w-id>`. `settle` refuses while a delivered wish
+awaits a verdict; `--hand-to <thread>` moves those to a thread that will carry
+them. Heard and working wishes stay with their thread.
 
 ## Ends and starts
 

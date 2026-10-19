@@ -13,8 +13,7 @@ from _step import Loom, wait_until, write_thread
 def test_two_failed_starts_are_visible_to_operator_and_a_note_retires_them(tmp_path, monkeypatch, capsys):
     root = tmp_path / 'home'
     write_thread(root, 'work', 'Over-budget wake', 'answer-fast', wait='0')
-    monkeypatch.setenv('LOOM_BUDGET_BYTES', '1')
-    ident = inject_letter(root, to='thread:work', body='Please answer')
+    ident = inject_letter(root, to='thread:work', body='Please answer' * 3000)
     loom = Loom(root)
     loom.start()
     try:

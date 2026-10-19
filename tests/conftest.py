@@ -161,7 +161,7 @@ def _no_claude_usage_pty_scrape(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_grok_usage_pty_scrape(monkeypatch):
-    """Unit tests must not open a real authenticated Grok usage session."""
+    """Unit tests must not make authenticated Grok billing requests."""
     from brr import grok_usage
 
     real_capture = grok_usage.capture_usage_raw
