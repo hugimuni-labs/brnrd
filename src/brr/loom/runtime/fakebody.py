@@ -57,11 +57,11 @@ class Ctx:
         # delivers the same full owed list at start, whatever that recipe is.
         return self.jack("start").letters
 
-    def jack(self, event: str) -> JackView:
+    def jack(self, event: str, payload: dict | None = None) -> JackView:
         proc = subprocess.run(
             [sys.executable, "-m", "brr.loom.runtime", "jack",
              "--event", event, "--room", str(self.room)],
-            input=json.dumps({"hookEventName": event}),
+            input=json.dumps(payload or {"hookEventName": event}),
             capture_output=True, text=True, env=self.env, cwd=self.room,
         )
         return JackView(proc.stdout)

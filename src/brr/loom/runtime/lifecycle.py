@@ -12,6 +12,7 @@ from .project import sender_threads
 from .selfrepo import ReadmeError, git, parse_readme, resolve_clone
 
 CLOSED = {"settled", "retired"}
+DONE_KINDS = ("pr", "issue", "doc", "research", "file", "answer", "post", "action")
 
 
 def parse_plan(text: str) -> list[tuple[bool, str]] | None:
@@ -28,6 +29,19 @@ def parse_plan(text: str) -> list[tuple[bool, str]] | None:
             if row:
                 plan.append((row.group(1).lower() == "x", row.group(2)))
     return plan
+
+
+def parse_done(text: str) -> list[tuple[str, str, str]]:
+    """``- <kind> <ref> — <line>`` under Done; any other line there is prose."""
+    done, inside = [], False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            inside = line == "## Done"
+        elif inside:
+            row = re.match(rf"^- ({'|'.join(DONE_KINDS)}) (\S+) — (.+)$", line)
+            if row:
+                done.append(row.groups())
+    return done
 
 
 def read_thread(home: Home, thread: str, ref: str = "main") -> dict:
@@ -47,6 +61,7 @@ def read_thread(home: Home, thread: str, ref: str = "main") -> dict:
         data = parse_readme(text)
         plan = parse_plan(text)
         data["plan_rows"] = plan
+        data["done"] = parse_done(text)
         data["plan"] = f"{sum(done for done, _ in plan)}/{len(plan)}" if plan else "—"
         return data
     except (OSError, ReadmeError):
@@ -135,7 +150,7 @@ def open_thread(room: Path, thread: str, sender: str, text: str,
 
 
 def settle(room: Path, thread: str, why: str, retire: bool = False,
-           hand_to: str | None = None) -> None:
+           hand_to: str | None = None, word: str | None = None) -> None:
     if not why.strip():
         raise PortError("settle: --why is empty")
     home = home_of_room(room)
@@ -149,10 +164,19 @@ def settle(room: Path, thread: str, why: str, retire: bool = False,
     ):
         raise PortError(f"settle: only {opener or 'its own body on a person’s word'} may settle {thread}")
     from .ledger import append
+    from .project import _destination, fold
     from .verbs_wishes import wish_fact
     from .wishes import wishes
 
     facts = read_facts(home)
+    if opener != f"thread:{own}":
+        # A person's thread settles on their word, never on silence: the
+        # body judges the reply and cites it; the loom checks who wrote it.
+        said = next((f for f in fold(facts).accepted if f.kind == "letter" and f.id == word), None)
+        if said is None or not str(said.data.get("from", "")).startswith(("p-", "person:")) \
+                or _destination(said.data) != thread:
+            raise PortError(f"settle: {thread} settles on its person's word: "
+                            f"--word <their letter to {thread}>")
     pending = sorted(w.id for w in wishes(facts).values()
                      if w.thread == thread and w.state == "delivered")
     if hand_to is not None:

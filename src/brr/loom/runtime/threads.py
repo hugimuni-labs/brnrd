@@ -7,7 +7,7 @@ from datetime import datetime
 from .home import Home, thread_of
 from .ledger import LedgerView
 from .lifecycle import CLOSED, read_thread, main_snapshot, main_tree, readme_at
-from .owners import active_owners, letter_owners, thread_axes
+from .owners import active_owners, letter_owners, thread_axes, unanswered_by_thread
 from .project import cached_projection, fold, sender_threads
 from .selfrepo import git
 
@@ -47,6 +47,7 @@ def _table_inputs(facts, main):
     from .loom import pending_bodies
     state, writers = fold(facts), sender_threads(facts)
     ownership = letter_owners(facts, main)
+    unanswered = unanswered_by_thread(facts, main)
     axes = thread_axes(facts, main, ownership)
     owed, activity, boundary = {}, {}, {}
     debts = active_owners(facts, main) if isinstance(facts, LedgerView) else ownership.values()
@@ -54,7 +55,7 @@ def _table_inputs(facts, main):
         if not fate.done and fate.owner in {'body', 'loom', 'opener'}:
             owed.setdefault(fate.thread, []).append(fate.letter)
     if isinstance(facts, LedgerView):
-        return state, ownership, axes, owed, state.activity, state.boundary, state.bodies
+        return state, ownership, axes, owed, state.activity, state.boundary, state.bodies, unanswered
     for f in state.accepted:
         strand = f.data.get('strand') or f.by.removeprefix('strand:')
         thread = writers.get(strand)
@@ -67,7 +68,7 @@ def _table_inputs(facts, main):
             activity[thread] = max(activity.get(thread, 0), _at(f))
         if f.kind == 'shown':
             boundary[strand] = max(boundary.get(strand, 0), _at(f))
-    return state, ownership, axes, owed, activity, boundary, pending_bodies(state.accepted)
+    return state, ownership, axes, owed, activity, boundary, pending_bodies(state.accepted), unanswered
 
 
 def thread_table(home: Home, facts: list) -> list[dict]:
@@ -79,7 +80,7 @@ def thread_table(home: Home, facts: list) -> list[dict]:
     """
     from .loom import body_alive
     main = main_snapshot(home)
-    state, ownership, axes, owed, activity, boundary, pending = cached_projection(
+    state, ownership, axes, owed, activity, boundary, pending, unanswered = cached_projection(
         facts, "thread-table", repr(main), lambda rows: _table_inputs(rows, main))
     repo = home.root / 'self'
     versioned = (repo / '.git').exists()
@@ -162,13 +163,13 @@ def thread_table(home: Home, facts: list) -> list[dict]:
             count = len(axes[thread]['letters'])
             cause = axes[thread]['cause']
             value = 'idle ' + _age(now - last) if cause == 'idle' else cause
-        rows.append({'thread': thread, 'seat': seat, 'now': value, 'owed': count,
+        rows.append({'thread': thread, 'seat': seat, 'now': value, 'owed': count, 'unanswered': len(unanswered.get(thread, ())),
                      'opened-by': data.get('opened-by') or '—', 'plan': data['plan'],
                      'status': data['status'], **{k: axes[thread][k] for k in ('owed-by', 'restart', 'control')}})
     for ident, fate in ownership.items():
         if fate.owner == 'operator':
             rows.append({'thread': 'operator', 'seat': '—', 'now': ident + ': ' + fate.reason,
-                         'owed': 1, 'opened-by': fate.thread or '—', 'plan': '—',
+                         'owed': 1, 'unanswered': 0, 'opened-by': fate.thread or '—', 'plan': '—',
                          'status': 'open',
                          'owed-by': 'operator', 'restart': 'operator note',
                          'control': 'operator: attention --note ' + ident + ' --why <reason>'})
@@ -176,7 +177,7 @@ def thread_table(home: Home, facts: list) -> list[dict]:
 
 
 def render_table(rows: list[dict]) -> str:
-    columns = ('thread', 'seat', 'now', 'owed', 'opened-by', 'plan', 'owed-by', 'restart', 'control')
+    columns = ('thread', 'seat', 'now', 'owed', 'unanswered', 'opened-by', 'plan', 'owed-by', 'restart', 'control')
     if any(row.get('left') for row in rows):
         columns += ('left',)
         rows = [dict(row, left=row.get('left') or '—') for row in rows]

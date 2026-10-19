@@ -16,6 +16,8 @@ VERBS = {
     "wish": ("verbs_wishes", "_wish"),
     "wishes": ("verbs_wishes", "_wishes"),
     "threads": ("verbs_threads", "_threads"),
+    "asks": ("verbs_asks", "_asks"),
+    "graph": ("verbs_asks", "_graph"),
     "attention": ("verbs_loom", "_attention"),
     "init": ("verbs_self", "cmd_init"),
     "wake": ("verbs_self", "cmd_wake"),

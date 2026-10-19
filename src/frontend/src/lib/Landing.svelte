@@ -47,20 +47,20 @@
 		{
 			index: '01',
 			verb: 'assign',
-			body: 'Send a task from your connected chat, a GitHub issue, or the terminal. Keep the conversation beside the work.',
-			readout: 'task → repo → resident'
+			body: 'Write a letter from Telegram, WhatsApp, or a GitHub issue. It lands on a thread: one topic, with its own Plan.',
+			readout: 'letter → thread'
 		},
 		{
 			index: '02',
 			verb: 'work',
-			body: 'It reads the repo, makes changes, and checks its work. Context carries forward when you come back with the next task.',
-			readout: 'plan → change → test → review'
+			body: 'A strand takes the thread: your agent CLI, in its own room with the repo checked out. It works the Plan and checks its work.',
+			readout: 'strand · plan → change → test'
 		},
 		{
 			index: '03',
 			verb: 'receipt',
-			body: 'Progress and reviewable results return to the thread that asked. Inspect the diff, correct the course, or hand over the next task.',
-			readout: 'out: commit · pull request · reply'
+			body: 'The receipt comes back to the thread. Inspect the diff, answer on the thread, or write the next letter; the next strand starts from what this one wrote down.',
+			readout: 'out: pull request · commit · reply'
 		}
 	];
 </script>
@@ -196,8 +196,8 @@
 	<section class="ignite mt-16 sm:mt-20" style="--ignite-delay: 260ms" aria-label="how brnrd fits">
 		<p class="eyebrow">how it fits</p>
 		<div class="mt-5">
-			<div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-				{#each ['Telegram', 'WhatsApp', 'GitHub', 'Slack', 'Signal', 'Web'] as route (route)}
+			<div class="mx-auto grid max-w-xl grid-cols-3 gap-2">
+				{#each ['Telegram', 'WhatsApp', 'GitHub'] as route (route)}
 					<div
 						class="border-t border-stone-800 px-1 pt-2 text-center font-mono text-[10px] tracking-wide text-ink-mute uppercase"
 					>
@@ -207,22 +207,22 @@
 			</div>
 
 			<p class="my-4 text-center font-mono text-[10px] tracking-wide text-ink-mute uppercase">
-				messages · issues · reviews · steering<br />↓
+				letters · replies · steering<br />↓
 			</p>
 
 			<div class="mx-auto max-w-xl border-y border-amber-900/60 py-5 sm:border sm:px-6">
 				<p class="text-center font-mono text-[10px] tracking-[0.18em] text-amber-200/70 uppercase">
-					brnrd resident
+					brnrd loom
 				</p>
 				<h2 class="mt-2 text-center font-mono text-xl font-semibold tracking-tight text-amber-100">
-					persistent identity · project-aware context
+					one resident · many threads
 				</h2>
 				<div
 					class="mt-5 grid grid-cols-2 gap-x-5 gap-y-3 text-center font-mono text-[11px] text-stone-400 sm:grid-cols-4"
 				>
+					<span>letters</span>
+					<span>threads</span>
 					<span>memory</span>
-					<span>routing</span>
-					<span>steering</span>
 					<span>git receipts</span>
 				</div>
 				<p class="mt-4 text-center font-mono text-[10px] tracking-wide text-ink-mute uppercase">
@@ -231,22 +231,20 @@
 			</div>
 
 			<p class="my-4 text-center font-mono text-[10px] tracking-wide text-ink-mute uppercase">
-				↓ resolves where the work belongs · dispatches bounded work when useful
+				↓ a letter lands on its thread · a strand wakes to work it
 			</p>
 
 			<div class="mx-auto grid max-w-xl grid-cols-1 gap-5 sm:grid-cols-2">
 				<div class="border-t border-stone-800 pt-3 text-center">
-					<p class="font-mono text-[10px] tracking-wide text-amber-200/70 uppercase">
-						project context
-					</p>
+					<p class="font-mono text-[10px] tracking-wide text-amber-200/70 uppercase">thread</p>
 					<p class="mt-2 text-xs leading-relaxed text-stone-400">
-						repo target · project knowledge · current bearing
+						one topic · its letters · its Plan
 					</p>
 				</div>
 				<div class="border-t border-stone-800 pt-3 text-center">
-					<p class="font-mono text-[10px] tracking-wide text-amber-200/70 uppercase">strands</p>
+					<p class="font-mono text-[10px] tracking-wide text-amber-200/70 uppercase">strand</p>
 					<p class="mt-2 text-xs leading-relaxed text-stone-400">
-						bounded workers · isolated worktrees · return to resident
+						your agent CLI · its own room · receipts back to the thread
 					</p>
 				</div>
 			</div>
@@ -264,13 +262,13 @@
 				{/each}
 			</div>
 			<p class="mt-4 text-center font-mono text-[10px] tracking-wide text-amber-200/60 uppercase">
-				repository · worktree · tests · credentials
+				repository · room · tests · credentials
 			</p>
 		</div>
 		<p class="mx-auto mt-6 max-w-2xl text-center text-sm leading-relaxed text-ink-quiet">
-			The daemon stays on your machine. Routes bring work to the resident; it keeps continuity,
-			resolves the project context, dispatches strands when useful, and sends durable results back
-			out. brnrd is the layer connecting those pieces, not another model behind them.
+			The loom runs on your machine. Letters land on threads; a strand works each thread through the
+			agent CLI you already pay for and leaves its receipt there. brnrd is the layer connecting
+			those pieces, not another model behind them.
 		</p>
 	</section>
 
@@ -281,9 +279,9 @@
 				it sleeps without forgetting
 			</h2>
 			<p class="mt-3 text-sm leading-relaxed text-stone-400">
-				Persistence lives in durable state, not in keeping a model process warm. When work arrives,
-				the resident wakes, resolves the project context, can dispatch bounded strands, and goes
-				quiet again when the work is done.
+				Persistence lives in durable state, not in keeping a model process warm. When a letter
+				arrives, a strand wakes on its thread, reads what the last one wrote down, and ends when the
+				work is done. The thread stays.
 			</p>
 		</div>
 		<div class="mt-7 grid grid-cols-1 gap-7 md:grid-cols-3">
@@ -322,8 +320,8 @@
 		</h2>
 		<p class="mt-3 max-w-2xl text-sm leading-relaxed text-ink-quiet">
 			Use a hosted identity, install brnrd where you already work, or bring your own local gate.
-			GitHub and Slack are app-shaped integrations; the dashboard is control. The same resident sits
-			behind each route.
+			Telegram, WhatsApp, and GitHub bring letters to the loom today; the dashboard is control. The
+			same resident sits behind each of them.
 		</p>
 
 		<div class="mt-7 grid grid-cols-1 gap-x-8 gap-y-8 md:grid-cols-2">
@@ -407,13 +405,13 @@
 					brnrd.dev control plane
 				</h3>
 				<p class="mt-3 text-sm leading-relaxed text-stone-400">
-					Pair that same local daemon to add hosted Telegram and WhatsApp identities, installable
-					app ingress, and the dashboard from anywhere. The control plane routes and coordinates; it
-					does not become the machine doing the coding.
+					Connect that same loom to add hosted Telegram and WhatsApp identities, GitHub App ingress,
+					and the dashboard from anywhere. The control plane relays letters; it does not become the
+					machine doing the coding.
 				</p>
 				<p class="mt-3 text-xs leading-relaxed text-ink-quiet">
-					Execution stays local. Connecting an account mirrors derived project notes to brnrd.dev,
-					never your source tree.
+					Execution stays local. The loom exchanges letters and replies with brnrd.dev, never your
+					source tree.
 				</p>
 				<a
 					class="mt-5 inline-flex items-center gap-2 border border-amber-700 bg-amber-950/40 px-3 py-2 font-mono text-[12px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70"

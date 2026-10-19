@@ -158,9 +158,10 @@ def _settle(argv: list[str]) -> int:
     parser.add_argument("--why", required=True)
     parser.add_argument("--retire", action="store_true")
     parser.add_argument("--hand-to")
+    parser.add_argument("--word", metavar="LETTER_ID")
     args = parser.parse_args(argv)
     try:
-        settle(_room(args.room), args.thread, args.why, args.retire, args.hand_to)
+        settle(_room(args.room), args.thread, args.why, args.retire, args.hand_to, args.word)
     except (PortError, SelfError, ValueError, OSError) as exc:
         sys.stderr.write(f"{exc}\n")
         return 1
@@ -169,7 +170,7 @@ def _settle(argv: list[str]) -> int:
 
 def _jack(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime jack")
-    parser.add_argument("--event", required=True, choices=("start", "post", "stop"))
+    parser.add_argument("--event", required=True, choices=("start", "post", "stop", "subagent-stop"))
     parser.add_argument("--room", required=True)
     args = parser.parse_args(argv)
     stdin_text = "" if sys.stdin.isatty() else sys.stdin.read()

@@ -8,7 +8,7 @@
 //
 // Those are not the same taxonomy. Telegram deliberately appears twice in
 // the reach model: once as brnrd.dev's shared hosted identity and once as a
-// bot token the operator owns and wires directly to the local daemon. Signal
+// bot token the operator owns and wires directly to the local loom. Signal
 // is local/BYO only. GitHub and Slack are app-shaped integrations. The web
 // dashboard is a control surface, not a chat connector. Keeping those shapes
 // separate is the point of this file: a provider logo is not an architecture.
@@ -92,7 +92,7 @@ export const REACH_GROUPS: ReachGroup[] = [
 				id: 'telegram-hosted',
 				label: 'Telegram',
 				detail:
-					'Message the shared brnrd bot; the control plane routes the thread to your paired daemon.',
+					'Message the shared brnrd bot; brnrd.dev relays the letter to the loom on your machine.',
 				icon: 'telegram',
 				doorSlug: 'telegram',
 				statusMode: 'hosted'
@@ -100,7 +100,8 @@ export const REACH_GROUPS: ReachGroup[] = [
 			{
 				id: 'whatsapp-hosted',
 				label: 'WhatsApp',
-				detail: 'Message the brnrd number; hosted routing hands the work to your paired daemon.',
+				detail:
+					'Message the brnrd number; brnrd.dev relays the letter to the loom on your machine.',
 				icon: 'whatsapp',
 				doorSlug: 'whatsapp',
 				statusMode: 'hosted'
@@ -124,7 +125,7 @@ export const REACH_GROUPS: ReachGroup[] = [
 			{
 				id: 'slack-app',
 				label: 'Slack App',
-				detail: 'Workspace-installed ingress, rather than a bot identity you provision yourself.',
+				detail: 'Workspace-installed ingress. Not yet a loom connector.',
 				icon: 'slack-mono',
 				doorSlug: 'slack',
 				statusMode: 'hosted'
@@ -134,19 +135,19 @@ export const REACH_GROUPS: ReachGroup[] = [
 	{
 		slug: 'byo',
 		label: 'bring your own',
-		description: 'your credentials, your identity, wired straight to the local daemon.',
+		description: 'your credentials, your identity, wired straight to the loom on your machine.',
 		surfaces: [
 			{
 				id: 'telegram-byo',
 				label: 'Telegram bot',
-				detail: 'Run your own bot token directly against the daemon.',
+				detail: 'Run your own bot token directly against the loom.',
 				icon: 'telegram',
 				statusMode: 'byo'
 			},
 			{
 				id: 'signal-byo',
 				label: 'Signal',
-				detail: 'Link your own Signal number/device to the daemon.',
+				detail: 'Your own Signal number or device. Not yet a loom connector.',
 				icon: 'signal',
 				statusMode: 'byo'
 			}
@@ -160,7 +161,7 @@ export const REACH_GROUPS: ReachGroup[] = [
 			{
 				id: 'web-dashboard',
 				label: 'Web dashboard',
-				detail: 'Inspect and steer paired residents from brnrd.dev.',
+				detail: 'Your resident’s threads and receipts on brnrd.dev.',
 				icon: 'dashboard',
 				doorSlug: 'dashboard',
 				statusMode: 'hosted'
