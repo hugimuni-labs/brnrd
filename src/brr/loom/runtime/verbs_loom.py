@@ -177,3 +177,24 @@ def _jack(argv: list[str]) -> int:
     _code, out = run_jack(args.event, Path(args.room), stdin_text)
     sys.stdout.write(out)
     return 0
+
+
+def _paused(verb: str, act, argv: list[str]) -> int:
+    """``resume``/``drop``: the body's answer to a ``paused:`` line (pausing.py)."""
+    from brr.pause import describe_paused
+    parser = argparse.ArgumentParser(prog=f"python -m brr.loom.runtime {verb}")
+    parser.add_argument("--room")
+    args = parser.parse_args(argv)
+    done = act(_room(args.room) / "port")
+    sys.stdout.write(f"{verb}: {describe_paused(done)}\n" if done else "nothing paused\n")
+    return 0
+
+
+def _resume(argv: list[str]) -> int:
+    from brr.pause import resume_pids
+    return _paused("resume", resume_pids, argv)
+
+
+def _drop(argv: list[str]) -> int:
+    from brr.pause import drop_pids
+    return _paused("drop", drop_pids, argv)

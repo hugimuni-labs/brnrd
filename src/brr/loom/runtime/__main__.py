@@ -13,6 +13,8 @@ VERBS = {
     "settle": ("verbs_loom", "_settle"),
     "molt": ("verbs_loom", "_molt"),
     "jack": ("verbs_loom", "_jack"),
+    "resume": ("verbs_loom", "_resume"),
+    "drop": ("verbs_loom", "_drop"),
     "wish": ("verbs_wishes", "_wish"),
     "wishes": ("verbs_wishes", "_wishes"),
     "threads": ("verbs_threads", "_threads"),

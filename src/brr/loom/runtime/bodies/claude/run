@@ -12,6 +12,8 @@ def hook(event, timeout):
 settings = {"hooks": {
     "SessionStart": [{"hooks": [hook("start", 60)]}],
     "PostToolUse": [{"matcher": ".*", "hooks": [hook("post", 60)]}],
+    # A failed call, and a paused one (pausing.py), is a boundary too.
+    "PostToolUseFailure": [{"matcher": ".*", "hooks": [hook("post", 60)]}],
     "SubagentStop": [{"hooks": [hook("subagent-stop", 60)]}],
     "Stop": [{"hooks": [hook("stop", int(os.environ.get("BRNRD_STOP_TIMEOUT") or float(os.environ["BRNRD_WAIT"]) + 60))]}],
 }}
