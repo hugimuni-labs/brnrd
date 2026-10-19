@@ -11,9 +11,9 @@ population was empty of third parties, so no re-acceptance was owed).
 
 Hash snapshot:
 
-- Date: 2026-09-01
+- Date: 2026-10-09
 - Source revision (parent of this export-only change):
-  `67dbc907a47c76efb8bdb6c4e037dc30a6697ff8`
+  `23ed3f0807399a5327f435ce3cf8bf24ad92b2d8`
 - Algorithm: SHA-256 over raw repository file bytes
 - Machine-readable list: [`SHA256SUMS`](SHA256SUMS)
 - Verification from the repository root:
@@ -47,7 +47,7 @@ hashes below remain authoritative for the snapshot if a deployed page changes.
 | Sub-processor list | [`src/frontend/src/routes/sub-processors/+page.svelte`](../../../src/frontend/src/routes/sub-processors/+page.svelte) | `4e0f5df17271fcc32fb4ab677b4ff499a6493a0cab0a68a49fcdfd702230fb75` |
 | Data Processing Agreement | [`docs/legal/dpa.md`](../dpa.md) | `ee366853701826282da0326092fc4ff504aab99f726e6dfcf234f4d9854f43fd` |
 | Article 30 record of processing | [`docs/legal/art-30-record.md`](../art-30-record.md) | `84d3186f7cf3263cf67d5377aca4d6a94fc56facf0416710cfc0390abb4c446f` |
-| Driven data-flow and trust inventory | [`SECURITY.md`](../../../SECURITY.md) | `2883c0835519ffd0aafed284983b8e5bbe9ef6662aaaa3da476701f0446645a5` |
+| Driven data-flow and trust inventory | [`SECURITY.md`](../../../SECURITY.md) | `195ab903ab0d77bfa0a81908c1806041ef84844185e088332a3cd800b5c473d0` |
 | Pricing and offer page | [`src/frontend/src/routes/pricing/+page.svelte`](../../../src/frontend/src/routes/pricing/+page.svelte) | `bbbe96d6db93ed6a875ddb4e6ce6849734de6cbc96414853479e97c9eb2c2e3d` |
 | MIT license | [`LICENSE`](../../../LICENSE) | `3101d42b24f94e634de450ea11eca86b144900590896948376f67936acf02d92` |
 | License boundary overview | [`LICENSE-OVERVIEW.md`](../../../LICENSE-OVERVIEW.md) | `37ed3bb589c5b2a46bcb4a674548d49d433efdda573c003332f7c13405ada0d8` |
