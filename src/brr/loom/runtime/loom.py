@@ -156,8 +156,8 @@ def _env(room: Path) -> dict[str, str]:
     env["BRNRD_JACK"] = (f"{shlex.quote(sys.executable)} -m brr.loom.runtime jack "
                          f"--room {shlex.quote(str(room))}")
     wait = room / "port" / "wait"
-    from .jack import HOLD, PARK
-    env["BRNRD_WAIT"] = wait.read_text().strip() if wait.is_file() else f"{HOLD:g}"
+    from .jack import PARK
+    env["BRNRD_WAIT"] = wait.read_text().strip() if wait.is_file() else f"{PARK:g}"
     # The stop hook may sleep through an exhausted window, or hold for one
     # wait, whichever is longer; the adapter pins its timeout from this.
     env["BRNRD_STOP_TIMEOUT"] = str(int(max(float(env["BRNRD_WAIT"]), PARK)) + 60)
