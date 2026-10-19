@@ -419,6 +419,36 @@ def test_duplicate_repo_names_are_refused(tmp_path: Path) -> None:
         _kill(read_facts(home))
 
 
+@pytest.mark.parametrize("origin_suffix, seat_suffix", [
+    (".git", ""), (".git/", ""), ("", ".git/"), ("/", ".git"),
+])
+def test_equivalent_seat_source_opens_the_existing_mirror(
+    tmp_path: Path, origin_suffix: str, seat_suffix: str,
+) -> None:
+    root = _home(tmp_path)
+    bare, _work = _source(tmp_path)
+    base = bare.as_uri().removesuffix(".git")
+    origin = base + origin_suffix
+    source = base + seat_suffix
+    mirror = root / "repos" / "widget.git"
+    mirror.parent.mkdir()
+    git(None, "clone", "--bare", origin, str(mirror))
+    _seat(root, "work", [source])
+    home = Home(root)
+    try:
+        _tick(home, {}, Router(home))
+        assert _started(root), _log(root)
+        room = _room(root)
+        checkout = room / "widget"
+        assert (checkout / "README.md").read_text() == "widget\n"
+        assert git(checkout, "remote", "get-url", "origin").stdout.strip() == source
+        assert git(mirror, "remote", "get-url", "origin").stdout.strip() == origin
+        assert "cut from origin/main" in (room / "port" / "wake.md").read_text()
+        assert "no checkout" not in (room / "port" / "wake.md").read_text()
+    finally:
+        _kill(read_facts(home))
+
+
 def test_two_sources_with_one_name_do_not_share_a_mirror(tmp_path: Path) -> None:
     root = _home(tmp_path)
     one, _work = _source(tmp_path, "widget")

@@ -81,6 +81,11 @@ def _bare(path: Path) -> bool:
     return (path / "HEAD").is_file() and (path / "objects").is_dir()
 
 
+def _source_key(source: str) -> str:
+    """Ignore Git URL suffix spelling when comparing mirror sources."""
+    return source.rstrip("/").removesuffix(".git")
+
+
 def _mirror(home: Home, name: str, source: str) -> tuple[Path | None, str | None]:
     """The bare mirror, fetched. ``(None, "fetch failed")`` when it cannot be created.
 
@@ -103,7 +108,7 @@ def _mirror(home: Home, name: str, source: str) -> tuple[Path | None, str | None
     else:
         held = git(path, "remote", "get-url", "origin", check=False)
         other = held.stdout.strip() if held.returncode == 0 else ""
-        if other != source:
+        if _source_key(other) != _source_key(source):
             return None, f"holds:{other or 'an unknown source'}"
     # Auto-gc can delete objects a --shared room still borrows once this
     # mirror's branch no longer reaches them.
