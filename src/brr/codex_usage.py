@@ -336,8 +336,8 @@ def merge_levels(
 
     Slot ownership follows what each seam can actually prove:
 
-    - ``context_window`` / ``tokens`` — rollout only (they are *this thread's*
-      occupancy; the account-wide app-server has no view of them).
+    - ``context_window`` / ``tokens`` / ``model_ids`` — rollout only (they
+      describe this thread; the account-wide app-server cannot attest them).
     - ``quota`` / ``plan_type`` — whichever snapshot is genuinely fresher by its
       own ``updated_at``. During a live Codex run the rollout's per-turn write is
       as current as anything; once the run ends it freezes, and the probe (or the
@@ -351,7 +351,7 @@ def merge_levels(
     sources: list[str] = []
 
     if isinstance(rollout, dict):
-        for key in ("context_window", "tokens"):
+        for key in ("context_window", "tokens", "model_ids"):
             if key in rollout:
                 merged[key] = rollout[key]
 

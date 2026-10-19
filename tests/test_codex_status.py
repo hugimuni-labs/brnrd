@@ -32,6 +32,59 @@ def test_supported_is_per_vessel():
     assert codex_status.supported(None) is False
 
 
+def test_live_core_is_from_exact_thread_even_before_quota(tmp_path):
+    thread = "a0d0f1e9-8aeb-4f27-8e3c-f72822288984"
+    other = "b0d0f1e9-8aeb-4f27-8e3c-f72822288984"
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    env = {"CODEX_HOME": str(tmp_path)}
+    own = sessions / f"rollout-2026-09-05T17-45-34-{thread}.jsonl"
+    own.write_text(json.dumps({
+        "type": "turn_context", "payload": {"model": "gpt-test-current"},
+    }) + "\n")
+    (sessions / f"rollout-2026-09-05T17-45-35-{other}.jsonl").write_text(json.dumps({
+        "type": "turn_context", "payload": {"model": "gpt-test-sibling"},
+    }) + "\n")
+
+    levels = codex_status.load_levels(env, thread_id=thread)
+    assert levels == {"model_ids": ["gpt-test-current"]}
+    core = facets.build(runner_name="codex", levels=levels)["runner"]
+    assert core["model_requested"] is None
+    assert core["model_observed"] == "gpt-test-current"
+    assert core["attestation"] == "observed"
+    assert core["core_mismatch"] is None
+    assert codex_status.load_model(env) is None
+    assert codex_status.load_model(env, thread_id="not-an-id") is None
+    assert codex_status.load_model(
+        env, thread_id="c0d0f1e9-8aeb-4f27-8e3c-f72822288984",
+    ) is None
+
+    # A later turn may change model. A torn trailing write is not a record.
+    with own.open("a") as handle:
+        handle.write(json.dumps({
+            "type": "event_msg", "payload": _PAYLOAD,
+        }) + "\n")
+        handle.write(json.dumps({
+            "type": "turn_context", "payload": {"model": "gpt-test-next"},
+        }) + '\n{"type":')
+    levels = codex_status.load_levels(env, thread_id=thread)
+    assert levels["model_ids"] == ["gpt-test-next"]
+    assert "quota" in levels
+    assert "model_ids" not in codex_status.load_levels(env)
+
+
+@pytest.mark.parametrize("payload", [{}, {"model": None}, {"model": 9}, {"model": " "}])
+def test_current_context_without_model_does_not_reuse_earlier_core(tmp_path, payload):
+    thread = "a0d0f1e9-8aeb-4f27-8e3c-f72822288984"
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    (sessions / f"rollout-2026-09-05T17-45-34-{thread}.jsonl").write_text("\n".join([
+        json.dumps({"type": "turn_context", "payload": {"model": "old"}}),
+        json.dumps({"type": "turn_context", "payload": payload}),
+    ]))
+    assert codex_status.load_model({"CODEX_HOME": str(tmp_path)}, thread_id=thread) is None
+
+
 def test_parse_token_count_quota_and_context():
     levels = codex_status.parse_token_count(_PAYLOAD)
     # used_percent → headroom = 100 - used; window_minutes → human label.

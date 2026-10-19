@@ -143,6 +143,39 @@ def test_merge_survives_either_side_missing():
     assert codex_usage.merge_levels(None, None) is None
 
 
+@pytest.mark.parametrize("probe", [None, {"quota": {}, "model_ids": ["other-session"]}])
+def test_daemon_collector_keeps_exact_thread_model_before_first_quota(
+    tmp_path, monkeypatch, probe,
+):
+    import json
+    from brr import daemon, facets
+
+    thread = "a0d0f1e9-8aeb-4f27-8e3c-f72822288984"
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    rollout = sessions / f"rollout-2026-09-05T17-45-34-{thread}.jsonl"
+    rollout.write_text(json.dumps({
+        "type": "turn_context", "payload": {"model": "current-model"},
+    }) + "\n")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setattr(codex_usage, "load_snapshot", lambda _: probe)
+
+    levels, _ = daemon._collect_levels(
+        "codex", tmp_path / "outbox", refresh=False, codex_thread_id=thread,
+    )
+    core = facets.build(runner_name="codex", levels=levels)["runner"]
+    assert core["model_observed"] == "current-model"
+    assert core["attestation"] == "observed"
+
+    # A subsequent context lacking evidence must not borrow the probe's model.
+    with rollout.open("a") as handle:
+        handle.write(json.dumps({"type": "turn_context", "payload": {}}) + "\n")
+    levels, _ = daemon._collect_levels(
+        "codex", tmp_path / "outbox", refresh=False, codex_thread_id=thread,
+    )
+    assert facets.build(runner_name="codex", levels=levels)["runner"]["model_observed"] is None
+
+
 def test_probe_never_raises_when_codex_is_missing(_no_codex_app_server_probe):
     # No `codex` on PATH is the ordinary case on a Claude-only box. The autouse
     # conftest fixture stubs the probe out for every other test; this one asks
