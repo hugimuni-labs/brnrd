@@ -18,13 +18,19 @@ import {
 	originLabel,
 	planFraction,
 	postLetter,
+	refHref,
 	resetsIn,
 	shellLow,
 	snapshotAge,
 	sortThreads,
+	sortWishes,
 	sortedLog,
+	tryHref,
+	verdictOwed,
+	askOwed,
 	type LoomSnapshot,
-	type LoomThread
+	type LoomThread,
+	type LoomWish
 } from './loomSnapshot.ts';
 
 const answer = (status: number, body?: unknown) =>
@@ -224,4 +230,74 @@ test('newestAt: the latest of snapshot.at and the log', () => {
 		'2026-10-19T00:07:00Z'
 	);
 	assert.equal(newestAt({ v: 1 }), null);
+});
+
+test('postLetter: a verdict carries wish and verdict together, never one alone', async () => {
+	const sent: unknown[] = [];
+	const fetchImpl = (async (_url: string, init: RequestInit) => {
+		sent.push(JSON.parse(String(init.body)));
+		return new Response(JSON.stringify({ ok: true }), { status: 202 });
+	}) as typeof fetch;
+	await postLetter(
+		{ thread: 'pricing-page', text: 'agree', wish: 'w-1', verdict: 'agree' },
+		fetchImpl
+	);
+	await postLetter({ thread: 'inbox', text: 'half', wish: 'w-1' }, fetchImpl);
+	await postLetter({ thread: 'inbox', text: 'half', verdict: 'correct' }, fetchImpl);
+	assert.deepEqual(sent, [
+		{ thread: 'pricing-page', text: 'agree', wish: 'w-1', verdict: 'agree' },
+		{ thread: 'inbox', text: 'half' },
+		{ thread: 'inbox', text: 'half' }
+	]);
+});
+
+const wish = (over: Partial<LoomWish>): LoomWish => ({ id: 'w', ...over });
+
+test('sortWishes: open first, then newest result, else newest wish', () => {
+	const sorted = sortWishes([
+		wish({ id: 'accepted', state: 'accepted', at: '2026-10-19T00:50:00Z' }),
+		wish({ id: 'old', state: 'heard', at: '2026-10-19T00:01:00Z' }),
+		wish({
+			id: 'result-new',
+			state: 'delivered',
+			at: '2026-10-18T00:00:00Z',
+			results: [{ at: '2026-10-19T00:40:00Z' }, { at: '2026-10-18T01:00:00Z' }]
+		}),
+		wish({ id: 'dropped', state: 'dropped', at: '2026-10-19T00:30:00Z' }),
+		wish({ id: 'new', state: 'granting', at: '2026-10-19T00:20:00Z' })
+	]);
+	assert.deepEqual(
+		sorted.map((w) => w.id),
+		['result-new', 'new', 'old', 'accepted', 'dropped']
+	);
+});
+
+test('verdictOwed: open and delivered with no answer; askOwed: an unanswered resident ask', () => {
+	assert.equal(verdictOwed(wish({ state: 'delivered' })), true);
+	assert.equal(verdictOwed(wish({ state: 'granting' })), false);
+	assert.equal(verdictOwed(wish({ state: 'accepted' })), false);
+	assert.equal(verdictOwed(wish({ state: 'delivered', answer: { verdict: 'agree' } })), false);
+	assert.equal(askOwed(wish({ from: 'resident', state: 'scoped' })), true);
+	assert.equal(askOwed(wish({ from: 'resident', state: 'scoped', answer: {} })), false);
+	assert.equal(askOwed(wish({ from: 'person', state: 'scoped' })), false);
+	// a delivered ask counts once, as a verdict
+	assert.equal(askOwed(wish({ from: 'resident', state: 'delivered' })), false);
+});
+
+test('tryHref: brnrd.dev or a ui URL; refHref: any http(s) ref', () => {
+	assert.equal(
+		tryHref({ kind: 'pr', ref: 'https://brnrd.dev/thread/x' }),
+		'https://brnrd.dev/thread/x'
+	);
+	assert.equal(tryHref({ ref: 'https://preview.brnrd.dev/' }), 'https://preview.brnrd.dev/');
+	assert.equal(tryHref({ kind: 'ui', ref: 'http://localhost:5173/' }), 'http://localhost:5173/');
+	const pr = { kind: 'pr', ref: 'https://github.com/hugimuni-labs/brnrd/pull/2347' };
+	assert.equal(tryHref(pr), null);
+	assert.equal(refHref(pr), pr.ref);
+	// look-alike hosts and plain http are not brnrd.dev
+	assert.equal(tryHref({ ref: 'https://brnrd.dev.evil.example/' }), null);
+	assert.equal(tryHref({ ref: 'http://brnrd.dev/' }), null);
+	assert.equal(tryHref({ kind: 'ui', ref: 'javascript:alert(1)' }), null);
+	assert.equal(refHref({ kind: 'pr', ref: '#2347' }), null);
+	assert.equal(refHref({}), null);
 });

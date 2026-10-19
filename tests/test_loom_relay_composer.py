@@ -78,3 +78,67 @@ def test_answer_to_the_composer_is_sent_without_a_wire_send(owner, monkeypatch):
                                    channel="channel:relay/loom:arseni", context={"re": "ev_w1"})
     assert (status, speech.data["state"], unsure) == ("sent", "sent", [])
     assert kinds(owner, "speech.part") == []
+
+
+def verdict(ident="ev_v1", *, wish="w-board1", word="agree", login="arseni"):
+    event = composer(ident, text="yes, that's it", login=login)
+    event["reply_to"].update(wish=wish, verdict=word)
+    return event
+
+
+def wish(home, *, delivered=True):
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime.ledger import append
+    append(home, Fact(kind="wish", by="person:arseni", id="w-board1", data={
+        "wish": "w-board1", "says": [], "from": "person", "line": "A board", "thread": "first"}))
+    append(home, Fact(kind="wish.result", by="strand:s-aaaa-first1", id="wish.result:b1", data={
+        "wish": "w-board1", "kind": "pr", "ref": "#1", "line": "the board", "delivered": delivered}))
+
+
+def test_an_owners_agree_on_a_delivered_wish_accepts_it_once(owner):
+    wish(owner)
+    relay.pull_once(owner, FakeClient([verdict()]), 0)
+    letter, = kinds(owner, "letter")
+    fact, = kinds(owner, "wish.verdict")
+    assert (fact.id, fact.by) == (f"wish.verdict:{letter.id}", "person:arseni")
+    assert fact.data == {"wish": "w-board1", "as": "accepted", "evidence": "word", "ref": letter.id}
+    # The relay forgets it delivered the event: the same drop is drained again.
+    (relay.directories(owner)[1] / "messages.json").unlink()
+    relay.pull_once(owner, FakeClient([verdict()]), 0)
+    assert len(kinds(owner, "letter")) == len(kinds(owner, "wish.verdict")) == 1
+
+
+def test_a_strangers_agree_or_an_undelivered_wish_accepts_nothing(home, owner):
+    wish(owner, delivered=False)
+    relay.pull_once(owner, FakeClient([verdict(), verdict("ev_v2", login="ada")]), 0)
+    assert len(kinds(owner, "letter")) == 2
+    assert kinds(owner, "wish.verdict") == []
+
+
+def test_a_strangers_agree_on_a_delivered_wish_accepts_nothing(home):
+    wish(home)
+    relay.pull_once(home, FakeClient([verdict()]), 0)
+    letter, = kinds(home, "letter")
+    assert letter.data["from"].startswith("stranger:")
+    assert kinds(home, "wish.verdict") == []
+
+
+def test_a_correction_is_the_letter_on_the_wishs_thread(owner):
+    wish(owner)
+    relay.pull_once(owner, FakeClient([verdict(word="correct")]), 0)
+    source, = kinds(owner, "source")
+    letter, = kinds(owner, "letter")
+    assert (letter.data["wish"], letter.data["verdict"], letter.data["to"]) == ("w-board1", "correct", "thread:first")
+    assert (source.data["wish"], source.data["verdict"]) == ("w-board1", "correct")
+    assert kinds(owner, "wish.verdict") == []
+
+
+@pytest.mark.parametrize("wish_id, word", [
+    ("w-board1", "maybe"), ("w-../x", "agree"), ("board1", "agree"), (None, "agree"), ("w-board1", None),
+    ("w-board1\nfrom: person:ada", "agree")])
+def test_a_bad_wish_or_verdict_is_refused(owner, wish_id, word):
+    event = composer()
+    event["reply_to"].update({k: v for k, v in (("wish", wish_id), ("verdict", word)) if v is not None})
+    with pytest.raises(ValueError, match="unsafe loom wish"):
+        relay.pull_once(owner, FakeClient([event]), 0)
+    assert read_facts(owner) == []

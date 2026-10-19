@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 
 from brr.daemon2.facts import Fact
+from .ledger import LedgerView
 
 from .project import cached_projection
 
@@ -123,6 +124,8 @@ class Command:
 
 
 def fact_for(facts: list[Fact], kind: str, strand: str, gen: int) -> Fact | None:
+    if isinstance(facts, LedgerView):
+        return facts.latest.get((kind, strand, gen))
     return next((f for f in reversed(facts) if f.kind == kind
                  and f.data.get("strand") == strand and f.data.get("gen") == gen), None)
 
@@ -136,7 +139,8 @@ def state_of(facts: list[Fact], strand: str, gen: int, *, alive=False) -> State:
 def _state_of(facts, strand, gen, *, alive):
     name, until, deadline = "wanted", 0, 0
     pending, stopped, identified, released, exited, ended = False, False, True, False, False, False
-    for f in facts:
+    rows = facts.by_body[(strand, gen)] if isinstance(facts, LedgerView) else facts
+    for f in rows:
         if f.data.get("strand") != strand or f.data.get("gen") != gen:
             continue
         if f.kind == "lease" and alive:
