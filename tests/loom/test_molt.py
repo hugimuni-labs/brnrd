@@ -21,10 +21,11 @@ def test_molt_mid_work_lands_readme_and_inherits_unanswered_letter(tmp_path):
     bodies(root, f'''import json, sys, time
 from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx
+from brr.loom.runtime.home import atomic_write
 ctx = Ctx(Path(sys.argv[1]))
 letters = ctx.owed()
 if "Next step: inherited" in ctx.wake():
-    Path({str(received)!r}).write_text(json.dumps({{"wake": ctx.wake(), "bodies": [l.body for l in letters]}}))
+    atomic_write(Path({str(received)!r}), json.dumps({{"wake": ctx.wake(), "bodies": [l.body for l in letters]}}))
     for letter in letters:
         ctx.send("thread:work", note="finished inherited work", re=letter.id)
 else:
@@ -139,10 +140,11 @@ def test_a_successor_is_told_which_owed_letters_its_predecessor_already_read(tmp
     bodies(root, f'''import json, sys
 from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx
+from brr.loom.runtime.home import atomic_write
 ctx = Ctx(Path(sys.argv[1]))
 letters = ctx.owed()
 if "predecessor" in ctx.wake():
-    Path({str(received)!r}).write_text(json.dumps({{"wake": ctx.wake()}}))
+    atomic_write(Path({str(received)!r}), json.dumps({{"wake": ctx.wake()}}))
     for letter in letters:
         ctx.send("thread:work", note="settled", re=letter.id)
 else:

@@ -38,6 +38,7 @@ def test_worker_bounces_once_and_authors_resend_is_answered(tmp_path):
     bodies(root, f'''import json, sys, time
 from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.home import atomic_write
 ctx = Ctx(Path(sys.argv[1]))
 own = _own_thread(ctx.wake())
 if own == "worker":
@@ -70,7 +71,7 @@ else:
                 ctx.send("thread:author", note="read bounce", re=letter.id)
                 ctx.send("thread:worker", "try again")
             elif letter.body == "answered the resend":
-                Path({str(received)!r}).write_text(json.dumps({{"answer": letter.body, "bounce_seen": True}}))
+                atomic_write(Path({str(received)!r}), json.dumps({{"answer": letter.body, "bounce_seen": True}}))
                 ctx.send("thread:author", note="read answer", re=letter.id)
                 sys.exit(0)
         time.sleep(0.03)
