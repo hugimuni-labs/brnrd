@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from connector_support import pull_once
+from connector_support import drop_once
 from brr.loom.runtime.selfrepo import git
 
 from _step import Loom, kill_bodies, mail, wait_until, write_thread
@@ -25,7 +25,7 @@ class _Composer:
         class Client:
             def pull(_, cursor):
                 return {"cursor": cursor + 1, "events": [event]}
-        self.cursor = pull_once(self.home, Client(), self.cursor)
+        self.cursor = drop_once(self.home, Client(), self.cursor)
         return f"letter:relay:loom:{login}:{event_id}"
 
 
