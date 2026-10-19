@@ -18,7 +18,7 @@ _DISCOVERY = {
     "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
 }
-README = "---\nid: inbox\nstatus: open\ntense: plan\n---\n# Inbox\n\nalpha line\n"
+README = "---\nid: brnrd\nstatus: open\ntense: plan\n---\n# Brnrd\n\nalpha line\n"
 
 
 def _env() -> dict[str, str]:
@@ -68,7 +68,7 @@ def published(tmp: Path) -> Path:
     git(None, "init", "-b", "main", os.fspath(work))
     copy_seed(work)
     write(work, "memory/scars/x.md", "base\n")
-    write(work, "threads/inbox/README.md", README)
+    write(work, "threads/brnrd/README.md", README)
     commit(work, "seed\n\nLoom-Strand: seed\nLoom-Label: taint=0; audience=self\n")
     git(work, "remote", "add", "origin", os.fspath(bare))
     install_pre_receive(bare)
@@ -89,7 +89,7 @@ def test_unparseable_output_exits_1_and_does_not_write(tmp_path: Path) -> None:
     theirs = tmp_path / "theirs"
     ours.write_text("not a readme\n", encoding="utf-8")
     theirs.write_text(README, encoding="utf-8")
-    assert merge("", os.fspath(ours), os.fspath(theirs), "threads/inbox/README.md") == 1
+    assert merge("", os.fspath(ours), os.fspath(theirs), "threads/brnrd/README.md") == 1
     assert ours.read_text(encoding="utf-8") == "not a readme\n"
 
 
@@ -98,14 +98,14 @@ def test_both_readme_edits_land(tmp_path: Path, monkeypatch) -> None:
     bare = published(tmp_path)
     left = room(bare, tmp_path / "a", "strand/a")
     right = room(bare, tmp_path / "b", "strand/b")
-    write(left, "threads/inbox/README.md", README.replace("alpha line", "alpha from a"))
+    write(left, "threads/brnrd/README.md", README.replace("alpha line", "alpha from a"))
     commit(left, "readme a")
-    write(right, "threads/inbox/README.md", README.replace("alpha line", "alpha from b"))
+    write(right, "threads/brnrd/README.md", README.replace("alpha line", "alpha from b"))
     commit(right, "readme b")
     assert send_to_self(left).status == "merged"
     landed = send_to_self(right)
     assert landed.status == "merged", landed
-    text = git(bare, "show", "main:threads/inbox/README.md").stdout
+    text = git(bare, "show", "main:threads/brnrd/README.md").stdout
     assert "alpha from a" in text
     assert "alpha from b" in text
     tip = git(bare, "log", "-1", "--format=%B", "main").stdout
@@ -123,14 +123,14 @@ def test_an_unparseable_readme_stops_the_rebase(tmp_path: Path, monkeypatch) -> 
     bare = published(tmp_path)
     left = room(bare, tmp_path / "a", "strand/a")
     right = room(bare, tmp_path / "b", "strand/b")
-    write(left, "threads/inbox/README.md", README.replace("alpha line", "from-a"))
+    write(left, "threads/brnrd/README.md", README.replace("alpha line", "from-a"))
     commit(left, "readme a")
-    write(right, "threads/inbox/README.md", README.replace("alpha line", "from-b"))
+    write(right, "threads/brnrd/README.md", README.replace("alpha line", "from-b"))
     commit(right, "readme b")
     assert send_to_self(left).status == "merged"
     stopped = send_to_self(right)
     assert stopped.status == "stopped", stopped
-    assert "threads/inbox/README.md" in stopped.files
+    assert "threads/brnrd/README.md" in stopped.files
 
 
 def test_a_clean_strand_after_a_widened_one_stays_clean(tmp_path: Path, monkeypatch) -> None:
@@ -163,14 +163,14 @@ def test_haiku_merges_two_readme_edits(tmp_path: Path, monkeypatch) -> None:
     bare = published(tmp_path)
     left = room(bare, tmp_path / "a", "strand/a")
     right = room(bare, tmp_path / "b", "strand/b")
-    write(left, "threads/inbox/README.md", README.replace("alpha line", "alpha from a"))
+    write(left, "threads/brnrd/README.md", README.replace("alpha line", "alpha from a"))
     commit(left, "readme a")
-    write(right, "threads/inbox/README.md", README.replace("alpha line", "alpha from b"))
+    write(right, "threads/brnrd/README.md", README.replace("alpha line", "alpha from b"))
     commit(right, "readme b")
     assert send_to_self(left).status == "merged"
     landed = send_to_self(right)
     assert landed.status == "merged", landed
-    text = git(bare, "show", "main:threads/inbox/README.md").stdout
+    text = git(bare, "show", "main:threads/brnrd/README.md").stdout
     Path("/tmp/loom-4b-demo-readme.md").write_text(text, encoding="utf-8")
     assert "alpha from a" in text
     assert "alpha from b" in text

@@ -178,7 +178,7 @@ def test_photo_answer_and_reply_bind_same_thread_through_named_instance(bot):
     from test_loom_relay import speak as drafted
 
     home = bot.home
-    for thread in ('inbox', 'first'):
+    for thread in ('brnrd', 'first'):
         directory = home.thread_dir(thread)
         directory.mkdir(parents=True)
         (directory / 'README.md').write_text(

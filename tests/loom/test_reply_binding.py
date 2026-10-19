@@ -25,7 +25,7 @@ READER = "s-aaaa-reader"
 @pytest.fixture
 def home(tmp_path):
     home = Home(tmp_path / "home", install="aaaa")
-    for thread in ("inbox", "first", "second"):
+    for thread in ("brnrd", "first", "second"):
         write_thread(home.root, thread, thread.title(), "quit-now")
     (home.root / "loom/config.toml").write_text('connectors = ["mine=fake", "other=fake"]\n')
     person = home.root / "self/people/ada"

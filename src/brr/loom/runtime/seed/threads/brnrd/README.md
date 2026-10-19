@@ -1,5 +1,5 @@
 ---
-id: inbox
+id: brnrd
 status: open
 tense: plan
 opened-by: person:loom

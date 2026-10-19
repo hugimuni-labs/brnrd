@@ -17,9 +17,9 @@ README = """---
 id: web
 status: open
 tense: plan
-opened-by: thread:inbox
+opened-by: thread:brnrd
 ---
-# Put the loom on the web. Then tell the inbox.
+# Put the loom on the web. Then tell brnrd.
 
 ## Plan
 
@@ -81,7 +81,7 @@ def fuel(root, left):
 
 
 def reporting_body(root):
-    """Notes what it is owed; on web it also reports the PR to the inbox."""
+    """Notes what it is owed; on web it also reports the PR to brnrd."""
     folder = root / "loom/bodies/fake"
     folder.mkdir(parents=True)
     (folder / "jack").write_text("hand\n")
@@ -95,7 +95,7 @@ own = _own_thread(ctx.wake())
 for letter in ctx.owed():
     ctx.send("thread:" + own, note="ok", re=letter.id)
 if own == "web":
-    ctx.send("thread:inbox", "PR https://github.com/acme/brnrd/pull/7 opened")
+    ctx.send("thread:brnrd", "PR https://github.com/acme/brnrd/pull/7 opened")
 ctx.jack("stop")
 """)
     run.chmod(0o755)
@@ -130,7 +130,7 @@ def test_document_matches_the_contract(board):
         {"window": "session", "left_pct": 82, "resets_at": "2026-10-19T05:00:00Z"}]}]
     thread = next(t for t in doc["threads"] if t["id"] == "web")
     assert thread["id"] == "web" and thread["title"] == "Put the loom on the web."
-    assert thread["status"] == "open" and thread["opened_by"] == "thread:inbox"
+    assert thread["status"] == "open" and thread["opened_by"] == "thread:brnrd"
     assert thread["plan"] == {"done": 1, "total": 2, "next": "Publisher pushes"}
     assert thread["done"] == [{"kind": "pr", "ref": "https://github.com/acme/brnrd/pull/7",
                                "line": "snapshot contract"}]
@@ -147,7 +147,7 @@ def test_document_matches_the_contract(board):
     assert asked == {"id": asked["id"], "at": asked["at"], "from": "p-test", "to": "thread:web",
                      "thread": "web", "kind": "letter", "head": "Ship the board, please."}
     receipt = next(e for e in doc["log"] if e["kind"] == "receipt")
-    assert receipt["thread"] == "web" and receipt["to"] == "thread:inbox"
+    assert receipt["thread"] == "web" and receipt["to"] == "thread:brnrd"
     assert receipt["ref"] == "https://github.com/acme/brnrd/pull/7"
     assert receipt["from"] in {s["id"] for s in thread["strands"]}
     # Nothing the loom lacks is sent as a placeholder.

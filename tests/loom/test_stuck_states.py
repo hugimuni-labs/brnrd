@@ -38,7 +38,7 @@ def stuck(reason):
 def root(tmp_path):
     path = tmp_path / "home"
     init_self(path)
-    write_thread(path, "inbox", (Home(path).thread_dir("inbox") / "README.md").read_text(),
+    write_thread(path, "brnrd", (Home(path).thread_dir("brnrd") / "README.md").read_text(),
                  "answer-fast", wait="0.1")
     return path
 
@@ -195,20 +195,20 @@ def test_impossible_router_window_does_not_silently_abandon_messages(root):
         wait_until(lambda: answered(loom, original), 2, loom.dump)
 
 
-@pytest.mark.parametrize("destination", ["thread:removed", "nowhere", "thread:inbox"])
+@pytest.mark.parametrize("destination", ["thread:removed", "nowhere", "thread:brnrd"])
 def test_unroutable_letter_gets_a_disposition(root, destination):
-    readme = Home(root).thread_dir("inbox") / "README.md"
-    if destination == "thread:inbox":
+    readme = Home(root).thread_dir("brnrd") / "README.md"
+    if destination == "thread:brnrd":
         from brr.loom.runtime.selfrepo import git, _commit
         readme.unlink()
-        git(root / "self", "add", "threads/inbox/README.md")
-        _commit(root / "self", "Remove inbox from main.")
+        git(root / "self", "add", "threads/brnrd/README.md")
+        _commit(root / "self", "Remove brnrd from main.")
     original = "p-test/lost"
     append(Home(root), Fact(kind="letter", by="person:p-test", id=original,
                            data={"id": original, "from": "p-test", "to": destination,
                                  "body": "please help"}))
     with running(root) as loom:
-        if destination == "thread:inbox":
+        if destination == "thread:brnrd":
             # With no thread on main, the operator owns it visibly.
             from brr.loom.runtime.owners import letter_owners
             from brr.loom.runtime.lifecycle import main_snapshot
@@ -219,7 +219,7 @@ def test_unroutable_letter_gets_a_disposition(root, destination):
             _attention(["--home", str(root), "--note", original, "--why", "handled by hand"])
             assert table()[original].done
         else:
-            told_and_settled(loom, original, "inbox", repr(destination))
+            told_and_settled(loom, original, "brnrd", repr(destination))
 
 
 def relay_event(ident):
@@ -364,16 +364,16 @@ def test_relay_poll_recovers_after_saved_cursor_is_repaired(root, tmp_path, monk
         wait_until(lambda: answered(loom, "letter:relay:telegram:42:after-repair"), 8, loom.dump)
 
 
-@stuck("inbox addressed to an absent brnrd leaves phone messages without even a refusal")
-def test_unavailable_inbox_owner_explains_the_refusal_remotely(root, tmp_path, monkeypatch):
-    readme = Home(root).thread_dir("inbox") / "README.md"
+@stuck("brnrd addressed to an absent thread leaves phone messages without even a refusal")
+def test_unavailable_home_thread_owner_explains_the_refusal_remotely(root, tmp_path, monkeypatch):
+    readme = Home(root).thread_dir("brnrd") / "README.md"
     readme.write_text(readme.read_text().replace('for: ""', 'for: "absent-brnrd"'))
     person = root / "self" / "people" / "owner"
     person.mkdir(parents=True)
     (person / "channels.toml").write_text('channels = ["relay:telegram:42"]\n')
     from brr.loom.runtime.selfrepo import git, _commit
     git(root / "self", "add", "threads", "people")
-    _commit(root / "self", "Land inbox ownership and direct chat.")
+    _commit(root / "self", "Land brnrd ownership and direct chat.")
     state = tmp_path / "relay"
     (root / "loom" / "config.toml").write_text(f'relay_state = "{state}"\n')
     sent = []

@@ -122,7 +122,8 @@ def open_thread(room: Path, thread: str, sender: str, text: str,
     if own is None:
         raise PortError("send: opening a thread requires a sender with a thread")
     if _current_label(resolve_clone(room), sender).taint:
-        raise PortError("send: a tainted strand cannot open a thread on main; send a clean letter to inbox instead")
+        raise PortError("send: a tainted strand cannot open a thread on main; "
+                        f"send a clean letter to {home_of_room(room).main_thread()} instead")
     if body_choice is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*/[^\s]+", body_choice):
         raise PortError("send: --body must be shell/core")
     from .adapters import repos
