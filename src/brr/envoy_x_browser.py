@@ -114,6 +114,7 @@ import hashlib
 import math
 import os
 import random
+import re
 import sys
 import tempfile
 import time
@@ -736,6 +737,17 @@ def _playwright_driver(paths: Paths, *, headless: bool) -> "_PlaywrightDriver":
     return _PlaywrightDriver(paths, headless=headless, sync_playwright=sync_playwright)
 
 
+def _status_id(url: str) -> str | None:
+    """The numeric identity in an X status URL, independent of its handle."""
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname not in {
+        "x.com", "www.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com",
+    }:
+        return None
+    match = re.search(r"(?:^|/)status/(\d+)(?:/|$)", parsed.path)
+    return match.group(1) if match else None
+
+
 class _PlaywrightDriver:
     """The real browser backend. Never imported or instantiated by the
     guardrail/argv-guard tests — those inject a fake at the
@@ -808,8 +820,37 @@ class _PlaywrightDriver:
         input("Press Enter once you've logged in in the opened browser window... ")
 
     def read_url(self, url: str) -> dict[str, Any]:
+        wanted = _status_id(url)
+        if wanted is None:
+            raise RuntimeError("read requires an X status URL with a numeric post id")
         self._goto(url)
-        article = self._page.locator('article[data-testid="tweet"]').first
+        # Conversation order is not identity: ancestors render before replies,
+        # and a quote can contain the wanted link inside another article.
+        candidates = self._page.locator('article[data-testid="tweet"]').filter(
+            has=self._page.locator(
+                f'a:has(time)[href$="/status/{wanted}"], '
+                f'a:has(time)[href*="/status/{wanted}?"], '
+                f'a:has(time)[href*="/status/{wanted}/"]'
+            )
+        )
+        try:
+            candidates.first.wait_for(state="visible", timeout=COMPOSER_TIMEOUT_MS)
+        except Exception as exc:
+            raise RuntimeError(f"read failed: requested post {wanted} did not render") from exc
+        article = None
+        resolved_url = None
+        deadline = time.monotonic() + COMPOSER_TIMEOUT_MS / 1000
+        while time.monotonic() < deadline and article is None:
+            for index in range(candidates.count()):
+                candidate = candidates.nth(index)
+                permalink = self._status_url(candidate)
+                if permalink and _status_id(permalink) == wanted:
+                    article, resolved_url = candidate, permalink
+                    break
+            if article is None:
+                self._page.wait_for_timeout(100)
+        if article is None:
+            raise RuntimeError(f"read failed: no article owns requested post {wanted}")
         timestamp = None
         try:
             timestamp = article.locator("time").first.get_attribute("datetime", timeout=5000)
@@ -817,6 +858,8 @@ class _PlaywrightDriver:
             pass
         return {
             "url": url,
+            "post_id": wanted,
+            "resolved_url": resolved_url,
             "author": self._first_text(article, '[data-testid="User-Name"]'),
             "text": self._first_text(article, '[data-testid="tweetText"]'),
             "timestamp": timestamp,
