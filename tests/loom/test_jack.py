@@ -64,6 +64,24 @@ def test_post_with_nothing_owed_prints_nothing(tmp_path):
     assert execute("post", room, "{}") == ""
 
 
+def test_a_delegates_post_leaves_the_bodys_letters_alone(tmp_path):
+    # A delegate's tool call runs the same PostToolUse hook; its payload
+    # carries agent_id. The owed letter stays unshown for the body, the held
+    # stop stays held, and the delegate's web fetch still taints the strand.
+    room = _room(tmp_path)
+    _write(room, [_letter()])
+    assert json.loads(execute("stop", room, "{}"))["decision"] == "block"
+    _write(room, [_letter()])
+    delegate = {"agent_id": "a92830476e38202a7", "agent_type": "general-purpose", "tool_name": "WebFetch"}
+    assert execute("post", room, json.dumps(delegate)) == ""
+    state = json.loads((room / "port" / "jack-state.json").read_text())
+    assert state["stop_blocks"] == 1
+    out = sorted(p.name for p in (room / "port" / "out").iterdir())
+    assert len(out) == 2 and any(name.startswith("taint-") for name in out)
+    posted = json.loads(execute("post", room, json.dumps({"tool_name": "Bash"})))
+    assert "p-test/abcde" in posted["hookSpecificOutput"]["additionalContext"]
+
+
 def test_opened_delivery_ignores_age_and_fuel_but_tracks_state_owed_and_removal(tmp_path):
     room = _room(tmp_path)
     row = {'thread': 'child', 'now': 'idle 7s', 'owed': 0,
