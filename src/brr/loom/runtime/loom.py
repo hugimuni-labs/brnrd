@@ -25,14 +25,14 @@ from brr.daemon2.facts import Fact
 from .adapters import resolve
 from .bodies import COMMANDS, TABLE, Observation, decide, fact_for, row_for, state_of
 from .home import Home, atomic_write, is_channel, mint, notice_id
-from .ledger import LedgerConflict, append, read_facts
+from .ledger import LedgerView, kind_facts, LedgerConflict, append, read_facts
 from .registry import KINDS
 from .port import (
     fact_from_port, fact_from_taint, letter_attachments, letter_replies,
     parse_frontmatter, render_boundary,
 )
 from .project import projection_cache, fold, generation, is_notice, reply_channels, sender_threads
-from .owners import letters_for, letter_owners
+from .owners import active_owners, letters_for, letter_owners
 from .lifecycle import main_snapshot
 from .timers import observe_due
 from .selfrepo import (
@@ -244,7 +244,7 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
     the handle. ``stands`` ties it to ``about``: the two settle together.
     """
     ident = notice_id(kind, subject)
-    if any(fact.id == ident for fact in facts):
+    if (ident in facts.by_id if isinstance(facts, LedgerView) else any(fact.id == ident for fact in facts)):
         return False
     from .labels import Label, SELF_AUDIENCE, _sender_label, join, strand_label
     label = Label(taint, SELF_AUDIENCE)
@@ -286,7 +286,7 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
 def _closures(home: Home, facts: list[Fact], threads: list[str]) -> list[Fact]:
     from .lifecycle import CLOSED, closing_commit, read_thread
     writers = sender_threads(facts)
-    ids = {fact.id for fact in facts}
+    ids = facts.by_id if isinstance(facts, LedgerView) else {fact.id for fact in facts}
     for thread in threads:
         data = read_thread(home, thread)
         if data.get("status") not in CLOSED:
@@ -297,7 +297,8 @@ def _closures(home: Home, facts: list[Fact], threads: list[str]) -> list[Fact]:
             facts.append(_record(home, "thread.closed", {
                 "thread": thread, "status": data["status"], "why": why, "commit": commit,
             }, ident))
-            ids.add(ident)
+            if not isinstance(facts, LedgerView):
+                ids.add(ident)
         opener = str(data.get("opened-by", ""))
         if opener.startswith("thread:") and writers.get(writer) != opener.removeprefix("thread:"):
             notice(home, facts, "closed", ident, f"thread {thread} {data['status']}: {why}",
@@ -307,7 +308,7 @@ def _closures(home: Home, facts: list[Fact], threads: list[str]) -> list[Fact]:
 
 def _next_gen(facts: list[Fact], thread: str) -> int:
     gen = 0
-    for fact in facts:
+    for fact in kind_facts(facts, "lease", "released"):
         if fact.kind in {"lease", "released"} and str(fact.data.get("thread")) == thread:
             gen = max(gen, int(fact.data["gen"]))
     return gen + 1
@@ -439,7 +440,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         render_boundary(strand, gen, thread, letters, shown, threads,
                         fuel=fuel, channels=reply_channels(facts, home),
                         opened=thread_table(home, facts), plan=_plan(home, thread, facts),
-                        replies={k: f.reply_to for k, f in letter_owners(facts, main_snapshot(home)).items()},
+                        replies={f.letter.id: f.reply_to for f in active_owners(facts, main_snapshot(home))},
                         attachments=attachments, reply_context=reply_context),
     )
     return room
@@ -641,7 +642,7 @@ def _start(home: Home, strand: str, thread: str, gen: int,
             return facts
         # Still refresh under the start lock: another caller may have moved
         # the lease. The loop reader preserves unchanged fact identities.
-        current = reader.read(home) if reader is not None else read_facts(home)
+        current = reader.refresh(home) if reader is not None else read_facts(home)
         if fold(current).holder.get(thread) != (strand, gen):
             return current
         if force:
@@ -716,7 +717,7 @@ def _stamp_router(fact: Fact, facts: list[Fact]) -> None:
     if fact.kind != "letter" or not is_channel(fact.data.get("to")):
         return
     gens = [
-        int(item.data["gen"]) for item in facts
+        int(item.data["gen"]) for item in kind_facts(facts, "router")
         if item.kind == "router" and "gen" in item.data
     ]
     if gens:
@@ -774,8 +775,7 @@ def _readme(room: Path, thread: str) -> str | None:
 def _plan(home: Home, thread: str, facts: list[Fact]) -> str:
     main = main_snapshot(home)
     rows = main.get(thread, {}).get("plan_rows")
-    table = letter_owners(facts, main)
-    missing = [ident for ident, fate in table.items()
+    missing = [fate.letter.id for fate in active_owners(facts, main)
                if not fate.done and fate.thread == thread
                and fate.owner in {"body", "loom", "opener"} and not fate.plan_rows]
     if rows is None:
@@ -1045,8 +1045,11 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     closed = read_thread(home, thread).get("status") in CLOSED
     default = choice or ("fake", "haiku")
     shell, core = lease.get("shell", default[0]), lease.get("core", default[1])
-    after = max((datetime.fromisoformat(f.at).timestamp() for f in facts
-                 if f.data.get("strand") == strand and f.kind in {"body.exited", "body.parked"}), default=0)
+    if isinstance(facts, LedgerView):
+        after = max(facts.latest_at.get((kind, strand), 0) for kind in ("body.exited", "body.parked"))
+    else:
+        after = max((datetime.fromisoformat(f.at).timestamp() for f in facts
+                     if f.data.get("strand") == strand and f.kind in {"body.exited", "body.parked"}), default=0)
     dms = list(_person_dms(home, facts, thread)) if state.name == "parked" else []
     # A person's "wake" on their own DM is `threads --force`, said in a word;
     # "wake <shell>[/<core>]" ends this park so the next gen runs on that body.
@@ -1223,7 +1226,7 @@ def _boundary(home, facts, strand, gen, context):
         state.shown.get(strand, set()), sender_threads(facts), context.fuel,
         context.why or None, reply_channels(facts, home),
         opened=thread_table(home, facts), plan=_plan(home, context.thread, facts),
-        replies={k: f.reply_to for k, f in letter_owners(facts, main).items()},
+        replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
         attachments=letter_attachments(home.root, facts),
         reply_context=letter_replies(facts),
     )
@@ -1390,14 +1393,20 @@ def _advance_body(home, strand, thread, gen, bodies, facts, *, choice=None, forc
 
 def _advance_bodies(home, bodies, facts, choice, *, reader=None):
     from .router import install_of
-    leases = {f.data["strand"]: f for f in facts if f.kind == "lease"}
-    holders = {strand for strand, gen in fold(facts).holder.values()}
-    for strand in holders | bodies.keys():
+    holders = {strand: (thread, gen) for thread, (strand, gen) in fold(facts).holder.items()}
+    for strand in holders.keys() | bodies.keys():
         if install_of(strand) == home.install_id():
-            d = leases[strand].data
-            if not state_of(facts, strand, d["gen"]).released:
-                facts = _start(home, strand, d["thread"], d["gen"], bodies, facts, choice,
-                               reader=reader)
+            if strand in holders:
+                thread, gen = holders[strand]
+                lease = fact_for(facts, "lease", strand, gen)
+            else:
+                lease = (facts.latest_strand.get(("lease", strand)) if isinstance(facts, LedgerView)
+                         else next((f for f in reversed(facts) if f.kind == "lease" and f.data.get("strand") == strand), None))
+            if lease is not None:
+                d = lease.data
+                if not state_of(facts, strand, d["gen"]).released:
+                    facts = _start(home, strand, d["thread"], d["gen"], bodies, facts, choice,
+                                   reader=reader)
     return facts
 
 
@@ -1411,7 +1420,7 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     from .router import Router
     if router is None:
         router = Router(home)
-    facts = router.reader.read(home)
+    facts = router.reader.refresh(home)
     if router.projection_revision != router.reader.revision:
         router.projections.clear()
         router.projection_revision = router.reader.revision

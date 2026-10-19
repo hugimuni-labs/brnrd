@@ -6,6 +6,8 @@ import fcntl
 import json
 import os
 import time
+from collections import defaultdict, OrderedDict
+from datetime import datetime
 from pathlib import Path
 
 from brr.daemon2.facts import Fact, union
@@ -25,10 +27,13 @@ def _content(fact: Fact) -> str:
 
 
 def _freeze(data: dict) -> dict:
-    frozen = {}
-    for key, value in data.items():
-        frozen[key] = list(value) if isinstance(value, (list, tuple)) else value
-    return frozen
+    """Return the same deep JSON representation a subsequent disk read sees.
+
+    Repo declarations contain tuple pairs. A shallow copy leaves those tuples
+    in a locally appended Fact while the ledger decodes them as arrays, which
+    would make the carried view report a false duplicate-ID conflict.
+    """
+    return json.loads(json.dumps(data))
 
 
 # The loom's own file, not a strand's. One writer: the router, except a
@@ -93,6 +98,179 @@ def read_facts(home: Home) -> list[Fact]:
     return union(*streams)
 
 
+def fact_order(fact):
+    return (fact.hlc or (int(datetime.fromisoformat(fact.at).timestamp() * 1000),
+                         0, fact.by), fact.id)
+
+
+class LedgerView(list):
+    """Canonical process-local ledger, with an explicit revision and delta.
+
+    Only append is mutable. Disk changes replace the view on repair. Ordinary
+    extension is proven conservatively: every new priority exceeds every old
+    priority and no new id resolves an old missing predecessor. Otherwise the
+    authoritative union is replayed. Startup never restores a checkpoint.
+    """
+    def __init__(self, facts=()):
+        super().__init__()
+        self.revision = 0
+        self.by_id = {}
+        self.positions = {}
+        self.by_kind = defaultdict(list)
+        self.raw_letters = {}
+        self.named_letters = {}
+        self.letters_by_source = defaultdict(set)
+        self.letters_by_reply = defaultdict(set)
+        self.sources_by_blob = defaultdict(set)
+        self.letter_projections = {}
+        self.noncanonical_letters = False
+        self.by_body = defaultdict(list)
+        self.by_strand = defaultdict(list)
+        self.latest = {}
+        self.latest_strand = {}
+        self.latest_at = {}
+        self.timed = {}
+        self.due_ids = set()
+        self.missing = set()
+        self.maximum = None
+        self.cache = {}
+        self.semantic_revision = 0
+        self.reducer = None
+        self.delta = ()
+        self.reset = True
+        self.extend(facts)
+
+    def _add(self, fact):
+        if fact.kind != "router.renewed":
+            self.semantic_revision += 1
+        self.positions[fact.id] = len(self)
+        super().append(fact)
+        self.by_id[fact.id] = fact
+        self.by_kind[fact.kind].append(fact)
+        self.by_body[(fact.data.get('strand'), fact.data.get('gen'))].append(fact)
+        strand = fact.data.get('strand')
+        self.by_strand[strand].append(fact)
+        self.latest[(fact.kind, strand, fact.data.get('gen'))] = fact
+        self.latest_strand[(fact.kind, strand)] = fact
+        stamp = datetime.fromisoformat(fact.at).timestamp()
+        self.latest_at[(fact.kind, strand)] = max(self.latest_at.get((fact.kind, strand), 0), stamp)
+        if fact.kind == 'letter':
+            self.raw_letters[fact.id] = fact
+            name = str(fact.data.get('id') or fact.id)
+            self.noncanonical_letters |= name != fact.id
+            self.named_letters[name] = fact
+            self.letters_by_source[fact.data.get('cites')].add(fact.id)
+            self.letters_by_reply[fact.data.get('re')].add(fact.id)
+        elif fact.kind == 'source':
+            for ref in fact.after:
+                self.sources_by_blob[ref].add(fact.id)
+        if fact.kind == 'letter' and fact.data.get('at'):
+            self.timed[fact.id] = fact
+        elif fact.kind == 'letter.due':
+            self.due_ids.add(fact.id)
+            self.timed.pop(fact.data.get('letter'), None)
+        self.missing.update(p for p in fact.after if p not in self.by_id)
+        self.missing.discard(fact.id)
+        key = fact_order(fact)
+        self.maximum = max(self.maximum, key) if self.maximum is not None else key
+
+    def extend(self, facts):
+        added = []
+        for fact in facts:
+            old = self.by_id.get(fact.id)
+            if old is not None:
+                if old != fact:
+                    raise ValueError(f'conflicting fact id: {fact.id}')
+                continue
+            added.append(fact)
+        if not added:
+            self.delta = ()
+            return
+        # union(delta) validates duplicates/cycles within the incoming batch.
+        delta = union(added)
+        repair = (any(f.id in self.missing for f in delta)
+                  or self.maximum is not None and any(fact_order(f) <= self.maximum for f in delta))
+        if repair:
+            ordered = union(self, delta)
+            fresh = LedgerView(ordered)
+            prior = self.revision
+            self.__dict__.clear()
+            self.__dict__.update(fresh.__dict__)
+            super().clear()
+            super().extend(fresh)
+            self.revision = prior + 1
+            self.delta = tuple(ordered)
+            self.reset = True
+        else:
+            for fact in delta:
+                self._add(fact)
+            self.revision += 1
+            self.delta = tuple(delta)
+            self.reset = False
+
+    def append(self, fact):
+        self.extend((fact,))
+
+    def project_letters(self, name, inputs, build):
+        """Carry source projections; visit only new or newly resolvable letters."""
+        if self.noncanonical_letters:
+            return self.project(name, inputs, lambda rows: build(rows, None))
+        kinds = ('letter', 'source', 'blob')
+        counts = tuple(len(self.by_kind[kind]) for kind in kinds)
+        prior = self.letter_projections.get(name)
+        if prior is None or prior[0] != inputs:
+            selected, result = set(self.raw_letters), {}
+        else:
+            _, cursors, result = prior
+            if cursors == counts:
+                return result
+            selected = set()
+            for kind, offset in zip(kinds, cursors):
+                for fact in self.by_kind[kind][offset:]:
+                    if kind == 'letter':
+                        selected.add(fact.id)
+                        selected.update(self.letters_by_reply.get(fact.id, ()))
+                    elif kind == 'source':
+                        selected.update(self.letters_by_source.get(fact.id, ()))
+                    else:
+                        for source in self.sources_by_blob.get(fact.id, ()):
+                            selected.update(self.letters_by_source.get(source, ()))
+        letters = [self.raw_letters[ident] for ident in sorted(selected, key=self.positions.__getitem__)]
+        for ident in selected:
+            result.pop(ident, None)
+        result.update(build(self, letters))
+        self.letter_projections[name] = (inputs, counts, result)
+        return result
+
+    def project(self, name, inputs, build):
+        dependencies = {
+            'senders': ('lease',),
+            'reply-channels': ('source', 'letter'),
+            'attachments': ('source', 'blob', 'letter'),
+            'reply-context': ('source', 'letter'),
+        }
+        if name == 'body-state':
+            revision = len(self.by_body[inputs[:2]])
+        elif name in dependencies:
+            revision = tuple(len(self.by_kind[kind]) for kind in dependencies[name])
+        else:
+            revision = self.semantic_revision
+        key = (name, inputs)
+        prior = self.cache.get(key)
+        if prior is None or prior[0] != revision:
+            self.cache[key] = (revision, build(self))
+        return self.cache[key][1]
+
+
+def kind_facts(facts, *kinds):
+    """Indexed raw rows in canonical order, or the ordinary iterable fallback."""
+    if isinstance(facts, LedgerView):
+        if len(kinds) == 1:
+            return facts.by_kind[kinds[0]]
+        return sorted((f for kind in kinds for f in facts.by_kind[kind]), key=lambda f: facts.positions[f.id])
+    return [f for f in facts if f.kind in kinds]
+
+
 class LedgerReader:
     """Process-local incremental view; the files remain authoritative.
 
@@ -103,13 +281,18 @@ class LedgerReader:
 
     def __init__(self):
         self.streams = {}
-        self.ordered = []
+        self.ordered = LedgerView()
         self.revision = 0
 
     def read(self, home: Home) -> list[Fact]:
+        return list(self.refresh(home))
+
+    def refresh(self, home: Home) -> LedgerView:
         paths = sorted((home.root / "ledger" / "facts").glob("*/*.jsonl"))
         streams = {}
         changed = set(paths) != set(self.streams)
+        repair = bool(set(self.streams) - set(paths))
+        additions = []
         for path in paths:
             with path.open("rb") as handle:
                 stat = os.fstat(handle.fileno())
@@ -122,65 +305,117 @@ class LedgerReader:
                 changed = True
                 if (prior is not None and prior[0][:2] == stamp[:2]
                         and stat.st_size > prior[0][2]):
-                    offset, facts = prior[1], prior[2]
+                    offset = prior[1]
                 else:
-                    offset, facts = 0, []
+                    offset = 0
+                    repair = repair or prior is not None
                 handle.seek(offset)
                 raw = handle.read()
                 complete = raw[:raw.rfind(b"\n") + 1]
                 added = [Fact.from_row(json.loads(line))
                          for line in complete.decode().splitlines() if line.strip()]
-                streams[path] = (stamp, offset + len(complete), facts + added)
+                streams[path] = (stamp, offset + len(complete))
+                additions.extend(added)
         if changed:
-            ordered = union(*(entry[2] for entry in streams.values()))
-            self.ordered = ordered
+            if repair:
+                self.ordered = LedgerView(union(*(read_file(path) for path in paths)))
+            else:
+                self.ordered.extend(additions)
             self.revision += 1
         self.streams = streams
-        return list(self.ordered)
+        return self.ordered
 
 
-def _next_hlc(directory: Path, install: str) -> tuple[int, int, str]:
-    ms = int(time.time() * 1000)
-    best_ms = -1
-    counter = -1
-    for path in directory.glob("*.jsonl"):
-        for fact in read_file(path):
-            if not fact.hlc or fact.hlc[2] != install:
-                continue
-            fact_ms, fact_counter, _install = fact.hlc
-            if (fact_ms > best_ms or
-                    (fact_ms == best_ms and fact_counter > counter)):
-                best_ms, counter = fact_ms, fact_counter
-    if ms > best_ms:
-        return (ms, 0, install)
-    return (max(ms, best_ms), counter + 1, install)
+class WriterIndex:
+    """Local ID/content and HLC indexes, refreshed under the ledger flock."""
+    def __init__(self):
+        self.stamps = {}
+        self.existing = {}
+        self.clocks = {}
 
-
-def _existing(directory: Path) -> dict[str, Fact]:
-    found: dict[str, Fact] = {}
-    for path in directory.glob("*.jsonl"):
-        for fact in read_file(path):
-            old = found.get(fact.id)
+    def refresh(self, directory):
+        stamps, additions = {}, []
+        paths = sorted(directory.glob('*.jsonl'))
+        repair = bool(set(self.stamps) - set(paths))
+        for path in paths:
+            with path.open('rb') as handle:
+                stat = os.fstat(handle.fileno())
+                stamp = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+                prior = self.stamps.get(path)
+                if prior and prior[0] == stamp:
+                    stamps[path] = prior
+                    continue
+                grows = prior and prior[0][:2] == stamp[:2] and stamp[2] > prior[0][2]
+                repair |= bool(prior and not grows)
+                offset = prior[1] if grows else 0
+                handle.seek(offset)
+                raw = handle.read()
+                complete = raw[:raw.rfind(b'\n') + 1]
+                additions.extend(Fact.from_row(json.loads(line)) for line in complete.splitlines() if line.strip())
+                stamps[path] = (stamp, offset + len(complete))
+        if repair:
+            additions = [f for path in paths for f in read_file(path)]
+            existing, clocks = {}, {}
+        else:
+            existing, clocks = self.existing, self.clocks
+        # Validate before publishing cursor progress, including conflicts.
+        batch = {}
+        for fact in additions:
+            old = batch.get(fact.id, existing.get(fact.id))
             if old is not None and _content(old) != _content(fact):
-                raise LedgerConflict(f"conflicting fact id: {fact.id}")
-            found[fact.id] = fact
-    return found
+                raise LedgerConflict(f'conflicting fact id: {fact.id}')
+            batch[fact.id] = fact
+        for fact in additions:
+            existing[fact.id] = fact
+            if fact.hlc:
+                install = fact.hlc[2]
+                clocks[install] = max(clocks.get(install, (-1, -1)), fact.hlc[:2])
+        self.existing, self.clocks, self.stamps = existing, clocks, stamps
+
+    def next_hlc(self, install):
+        ms = int(time.time() * 1000)
+        best_ms, counter = self.clocks.get(install, (-1, -1))
+        return (ms, 0, install) if ms > best_ms else (best_ms, counter + 1, install)
+
+
+_writer_indexes = OrderedDict()
+
+
+def _writer_index(directory):
+    key = directory.resolve()
+    index = _writer_indexes.pop(key, None) or WriterIndex()
+    _writer_indexes[key] = index
+    while len(_writer_indexes) > 32:
+        _writer_indexes.popitem(last=False)
+    index.refresh(directory)
+    return index
 
 
 def _heal_tail(path: Path) -> None:
-    """Cut a line a crashed writer left unfinished, so the next append starts clean.
-
-    ``read_file`` skips such a tail, but appending after it would glue the new
-    row onto the fragment and make the file unreadable for good. Caller holds
-    the ledger lock.
-    """
-    if not path.is_file():
+    """Repair only an unfinished tail; ordinary appends read one byte."""
+    try:
+        handle = path.open('r+b')
+    except FileNotFoundError:
         return
-    raw = path.read_bytes()
-    if not raw or raw.endswith(b"\n"):
-        return
-    with open(path, "r+b") as handle:
-        handle.truncate(raw.rfind(b"\n") + 1)
+    with handle:
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        if not size:
+            return
+        handle.seek(-1, os.SEEK_END)
+        if handle.read(1) == b'\n':
+            return
+        end = size
+        while end:
+            start = max(0, end - 8192)
+            handle.seek(start)
+            block = handle.read(end - start)
+            cut = block.rfind(b'\n')
+            if cut >= 0:
+                end = start + cut + 1
+                break
+            end = start
+        handle.truncate(end)
         handle.flush()
         os.fsync(handle.fileno())
 
@@ -197,15 +432,15 @@ def append(home: Home, fact: Fact) -> Fact:
     with open(lock_path, "a+") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
-            existing = _existing(directory)
-            old = existing.get(fact.id)
+            index = _writer_index(directory)
+            old = index.existing.get(fact.id)
             data = _freeze(fact.data)
             if old is not None:
                 probe = Fact(kind=fact.kind, by=fact.by, data=data, id=fact.id)
                 if _content(old) == _content(probe):
                     return old
                 raise LedgerConflict(f"conflicting fact id: {fact.id}")
-            hlc = fact.hlc or _next_hlc(directory, home.install_id())
+            hlc = fact.hlc or index.next_hlc(home.install_id())
             stored = Fact(
                 kind=fact.kind, by=fact.by, data=data, at=fact.at, id=fact.id,
                 v=fact.v, hlc=hlc, after=fact.after,
