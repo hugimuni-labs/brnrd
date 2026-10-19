@@ -289,6 +289,21 @@ def _delegate(room: Path, stdin_text: str) -> None:
     ))
 
 
+def _delegate_call(stdin_text: str) -> bool:
+    """A delegate's tool call runs the room's hooks too (2.1.303: ``agent_id``).
+
+    The boundary is the body's: a delegate that sees it pays ~1 KB a call
+    and may act on it (a haiku delegate reported it as injected instructions),
+    and marking letters shown there hides them from the body. Only the taint
+    counts: a delegate's web fetch is the strand's.
+    """
+    try:
+        payload = json.loads(stdin_text) if stdin_text and stdin_text.strip() else {}
+    except json.JSONDecodeError:
+        return False
+    return isinstance(payload, dict) and bool(payload.get("agent_id"))
+
+
 def execute(event: str, room: Path, stdin_text: str) -> str:
     """Return the hook's stdout. Raise on trouble; ``run`` turns that into fail-open."""
     room = Path(room)
@@ -298,8 +313,10 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         _delegate(room, stdin_text)
         return ""
     if event == "post":
-        _set_state(room, stop_blocks=0)
         _note_tool(room, stdin_text)
+        if _delegate_call(stdin_text):
+            return ""
+        _set_state(room, stop_blocks=0)
     text = _boundary_text(room)
     parsed = parse_boundary(text)
     opened = [[line.split()[1], line.split()[2], line.rpartition(" · owed ")[2]]
