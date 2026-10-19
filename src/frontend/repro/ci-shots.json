@@ -32,6 +32,10 @@
 		"shots": ["1-full-item.png", "2-prompt-only.png"]
 	},
 	{
+		"driver": "drive-landing.mjs",
+		"shots": ["phone-landing.png", "desktop-landing.png"]
+	},
+	{
 		"driver": "drive-home-board.mjs",
 		"shots": [
 			"phone-1-busy.png",

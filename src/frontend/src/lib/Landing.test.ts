@@ -92,3 +92,13 @@ test('install, reach, and legal surfaces still render', async () => {
 	ok(html.includes('href="/terms"'));
 	ok(html.includes('href="/privacy"'));
 });
+
+// The loom (2026-10): a letter lands on a thread, a strand works it, a
+// receipt comes back. The daemon-era nouns (paired daemon, routes bringing
+// work, strands as bounded workers) described a product that no longer runs.
+test('how work moves and how it fits speak the loom, not the daemon', async () => {
+	const html = (await renderLanding()).toLowerCase();
+	for (const noun of ['letter', 'thread', 'strand', 'receipt']) ok(html.includes(noun), noun);
+	for (const stale of ['daemon', 'paired', 'routes bring work', 'bounded workers'])
+		ok(!html.includes(stale), `"${stale}" is gone`);
+});
