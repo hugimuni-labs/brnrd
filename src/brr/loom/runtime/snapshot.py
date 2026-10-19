@@ -26,6 +26,7 @@ _PR = re.compile(r"https://github\.com/[^\s/]+/[^\s/]+/pull/\d+")
 _SENTENCE = re.compile(r"(?<=[.!?])\s")
 LOG = 200
 HEAD = 280
+WISHES = 100
 
 # Cadence, in seconds of ``clock``: tests replace both.
 ASSEMBLE_EVERY = 3
@@ -40,6 +41,10 @@ def _iso(value) -> str:
     when = (datetime.fromtimestamp(value, timezone.utc) if isinstance(value, (int, float))
             else datetime.fromisoformat(value))
     return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _when(value: str) -> datetime:
+    return datetime.fromisoformat(value)
 
 
 def _readmes(home: Home) -> dict[str, str]:
@@ -139,6 +144,48 @@ def _log_rows(accepted, writers, done_refs, wish_threads) -> list[dict]:
     return rows[-LOG:]
 
 
+def _bare(entry: dict) -> dict:
+    return {k: v for k, v in entry.items() if v not in (None, "", [], {})}
+
+
+def _wish_rows(told, facts) -> list[dict]:
+    """Open wishes first, then by the newest result, else the wish itself."""
+    letters = {str(f.data.get("id", f.id)): f for f in facts if f.kind == "letter"}
+    answers = {}
+    for f in facts:
+        if f.kind == "letter" and f.data.get("wish") and f.data.get("verdict"):
+            old = answers.get(f.data["wish"])
+            if old is None or _when(f.at) >= _when(old.at):
+                answers[f.data["wish"]] = f
+
+    def last(wish):
+        return max((_when(r["at"]) for r in wish.results), default=_when(wish.at))
+    rows = []
+    for w in sorted(told.values(), key=lambda w: (not w.open, -last(w).timestamp(), w.id))[:WISHES]:
+        says = []
+        for ident, offset, size in w.says:
+            letter = letters.get(ident)
+            if letter is None:
+                continue
+            body = str(letter.data.get("body") or "")
+            text = body[offset:] if size is None else body[offset:offset + size]
+            says.append(_bare({"id": ident, "from": letter.data.get("from"),
+                               "at": _iso(letter.at), "head": text[:HEAD]}))
+        answer = answers.get(w.id)
+        rows.append(_bare({
+            "id": w.id, "thread": w.thread, "from": w.sender, "line": w.line, "state": w.state,
+            "origin": w.origin, "at": _iso(w.at), "says": says, "reading": w.reading,
+            "results": [_bare({"kind": r.get("kind"), "ref": r.get("ref"), "line": r.get("line"),
+                               "delivered": bool(r.get("delivered")), "at": _iso(r["at"])})
+                        for r in w.results],
+            "verdict": _bare({"as": w.verdict["as"], "evidence": w.verdict.get("evidence"),
+                              "at": _iso(w.verdict["at"])}) if w.verdict else None,
+            "answer": {"verdict": answer.data["verdict"], "at": _iso(answer.at),
+                       "head": str(answer.data.get("body") or "")[:HEAD]}
+            if answer is not None and _when(answer.at) > _when(w.at) else None}))
+    return rows
+
+
 def assemble(home: Home, facts: list, config) -> dict:
     """The snapshot document, ``at`` included; pure reads of what is held."""
     from .lifecycle import CLOSED, main_snapshot
@@ -217,7 +264,8 @@ def assemble(home: Home, facts: list, config) -> dict:
            "bodies": {k: v for k, v in bodies.items() if v},
            "threads": doc_threads,
            "log": _log_rows(state.accepted, writers, done_refs,
-                            {w.id: w.thread for w in told.values()})}
+                            {w.id: w.thread for w in told.values()}),
+           "wishes": _wish_rows(told, facts)}
     return {k: v for k, v in doc.items() if v not in (None, [], {})}
 
 

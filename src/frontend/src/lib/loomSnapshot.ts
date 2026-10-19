@@ -78,6 +78,47 @@ export interface LoomLogEntry {
 	ref?: string;
 }
 
+export type WishState =
+	'heard' | 'read' | 'scoped' | 'granting' | 'delivered' | 'accepted' | 'dropped';
+
+export type WishVerdict = 'agree' | 'correct';
+
+/** One span of the asker's own words: a letter, or the part of one, the
+ * wish was heard in. */
+export interface LoomWishSay {
+	id: string;
+	from?: string;
+	at?: string;
+	head?: string;
+}
+
+export interface LoomWishResult {
+	kind?: 'pr' | 'ui' | string;
+	ref?: string;
+	line?: string;
+	delivered?: boolean;
+	at?: string;
+}
+
+/** A wish, as the ledger keeps it (wish, wish.read, wish.result,
+ * wish.verdict). `from: 'resident'` is brnrd asking the person; origin
+ * 'derived' means brnrd inferred it, so `line` is its reading, not his words.
+ * `answer` is his latest tap on the board that no newer wish fact reflects. */
+export interface LoomWish {
+	id: string;
+	thread?: string;
+	from?: 'person' | 'resident' | string;
+	line?: string;
+	state?: WishState | string;
+	origin?: 'said' | 'derived' | string;
+	at?: string;
+	says?: LoomWishSay[];
+	reading?: string;
+	results?: LoomWishResult[];
+	verdict?: { as?: 'accepted' | 'dropped' | string; evidence?: string; at?: string };
+	answer?: { verdict?: WishVerdict | string; at?: string; head?: string };
+}
+
 export interface LoomSnapshot {
 	v: 1;
 	at?: string;
@@ -88,6 +129,7 @@ export interface LoomSnapshot {
 	bodies?: LoomBodies;
 	threads?: LoomThread[];
 	log?: LoomLogEntry[];
+	wishes?: LoomWish[];
 }
 
 /** 'anon' = signed out (401); 'none' = signed in, no snapshot stored yet. */
@@ -120,13 +162,18 @@ export interface LetterQueued {
 }
 
 /** A 202 means queued for the relay, not delivered: the loom has not read it
- * yet, and the composer says 'queued'. */
+ * yet, and the composer says 'queued'. A verdict from the wishes board rides
+ * the same letter: `wish` and `verdict` go together or not at all. */
 export async function postLetter(
-	letter: { thread: string; text: string; body?: string },
+	letter: { thread: string; text: string; body?: string; wish?: string; verdict?: WishVerdict },
 	fetchImpl: typeof fetch = fetch
 ): Promise<LetterQueued> {
 	const payload: Record<string, string> = { thread: letter.thread, text: letter.text };
 	if (letter.body) payload.body = letter.body;
+	if (letter.wish && letter.verdict) {
+		payload.wish = letter.wish;
+		payload.verdict = letter.verdict;
+	}
 	const res = await fetchImpl('/v1/dashboard/loom/letters', {
 		method: 'POST',
 		credentials: 'include',
@@ -207,6 +254,62 @@ export function planFraction(thread: LoomThread): number | null {
 export function latestReceipt(thread: LoomThread): LoomDone | null {
 	const done = (thread.done ?? []).filter((d) => d.ref);
 	return done.length ? done[done.length - 1] : null;
+}
+
+// --- wishes ---------------------------------------------------------------
+
+export function wishOpen(wish: LoomWish): boolean {
+	return wish.state !== 'accepted' && wish.state !== 'dropped';
+}
+
+/** The newest result first: the one a row shows. */
+export function wishResults(wish: LoomWish): LoomWishResult[] {
+	return [...(wish.results ?? [])].sort((a, b) => stamp(b.at) - stamp(a.at));
+}
+
+const wishMoved = (w: LoomWish) =>
+	Math.max(stamp(w.at), ...(w.results ?? []).map((r) => stamp(r.at)));
+
+/** Open wishes first, then the newest result (or, with none, the newest
+ * wish). Accepted and dropped sink to the end. */
+export function sortWishes(wishes: LoomWish[]): LoomWish[] {
+	const closed = (w: LoomWish) => (wishOpen(w) ? 0 : 1);
+	return [...wishes].sort((a, b) => closed(a) - closed(b) || wishMoved(b) - wishMoved(a));
+}
+
+/** Delivered and open, and he has not answered yet: his verdict is owed. */
+export function verdictOwed(wish: LoomWish): boolean {
+	return wishOpen(wish) && wish.state === 'delivered' && !wish.answer;
+}
+
+/** brnrd asked him something and he has not answered. */
+export function askOwed(wish: LoomWish): boolean {
+	return wishOpen(wish) && wish.from === 'resident' && !wish.answer && !verdictOwed(wish);
+}
+
+function httpUrl(ref: string | undefined): URL | null {
+	if (!ref) return null;
+	try {
+		const url = new URL(ref);
+		return url.protocol === 'https:' || url.protocol === 'http:' ? url : null;
+	} catch {
+		return null;
+	}
+}
+
+/** Where to try a result: anything on brnrd.dev, or a UI result's own URL.
+ * A PR is not something to try; it gets `refHref`. */
+export function tryHref(result: LoomWishResult): string | null {
+	const url = httpUrl(result.ref);
+	if (!url) return null;
+	const brnrd = url.protocol === 'https:' && /(^|\.)brnrd\.dev$/.test(url.hostname);
+	return brnrd || result.kind === 'ui' ? (result.ref ?? null) : null;
+}
+
+/** A link to the result itself (a PR, a commit) when its ref is a URL. A bare
+ * id names no repo, so it stays text. */
+export function refHref(result: LoomWishResult): string | null {
+	return httpUrl(result.ref) ? (result.ref ?? null) : null;
 }
 
 // --- fuel -----------------------------------------------------------------

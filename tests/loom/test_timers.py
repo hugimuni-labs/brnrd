@@ -75,6 +75,16 @@ if any(l.body == "begin" for l in letters):
     assert proc.returncode == 0, proc.stderr
     ident = proc.stdout.strip()
     if {cancel!r}:
+        # send queues a port file; wait for the scheduled letter to be accepted
+        # before exercising cancellation of an existing waiting letter.
+        from brr.loom.runtime.ledger import read_facts
+        from brr.loom.runtime.home import Home
+        import time
+        deadline = time.monotonic() + 10
+        home = Home(ctx.room.parent.parent)
+        while not any(f.id == ident for f in read_facts(home)):
+            assert time.monotonic() < deadline, "scheduled letter was not ingested"
+            time.sleep(0.01)
         cancelled = send("--re", ident, "--note", "cancelled before its time")
         assert cancelled.returncode == 0, cancelled.stderr
     atomic_write(Path({str(root / 'scheduled')!r}), json.dumps({{"id": ident, "room": str(ctx.room)}}))

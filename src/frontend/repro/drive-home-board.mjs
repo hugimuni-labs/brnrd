@@ -168,6 +168,26 @@ async function main() {
 					.locator('[data-testid="loom-log"] [data-kind="receipt"]')
 					.count();
 				assert.ok(receipts >= 2, `receipts in the log (${receipts})`);
+				// The wishes come first: what waits on him is amber and on top, the
+				// closed ones fold behind 'N done'.
+				const wishes = page.locator('[data-testid="wish"]');
+				const owedRows = await wishes.evaluateAll((els) => els.map((el) => el.dataset.owed));
+				assert.deepEqual(
+					owedRows,
+					['true', 'true', 'false', 'false', 'false'],
+					`wishes (${owedRows})`
+				);
+				const owedLine = await text(page.locator('[data-testid="wishes-owed"]'));
+				assert.equal(owedLine, '2 wait on you', `owed count (${owedLine})`);
+				assert.equal(
+					await wishes.first().locator('[data-testid="try-it"]').getAttribute('href'),
+					'https://brnrd.dev/',
+					'the owed verdict carries its try-it link'
+				);
+				const recorded = await text(
+					page.locator('[data-wish="w-h3r0ln"] [data-testid="answered"]')
+				);
+				assert.ok(/sent, not recorded yet/.test(recorded), `agree is not a verdict (${recorded})`);
 				await shot(page, `${viewport}-1-busy`);
 
 				if (phone) {
@@ -209,7 +229,37 @@ async function main() {
 					await page.locator('[data-filter="yours"]').click();
 					const yours = await cards.evaluateAll((els) => els.map((el) => el.dataset.turn));
 					assert.deepEqual(yours, ['yours', 'yours'], `yours filter (${yours})`);
-					report.body = { before, after, live, back, letters };
+					report.body = { before, after, live, back, letters: [...letters] };
+
+					// Last, since each leaves a status line: Agree is one tap, Answer
+					// opens a box; both are letters on the wish's thread.
+					const owedWish = page.locator('[data-wish="w-b0dy7k"]');
+					await owedWish.locator('[data-testid="agree"]').click();
+					await owedWish.locator('[data-testid="answered"]').waitFor({ timeout: 5000 });
+					assert.deepEqual(letters.at(-1), {
+						thread: 'loom-on-the-web',
+						text: 'agree',
+						wish: 'w-b0dy7k',
+						verdict: 'agree'
+					});
+					const agreed = await text(owedWish.locator('[data-testid="answered"]'));
+					assert.ok(/queued for the relay/.test(agreed), `agree queues (${agreed})`);
+					const ask = page.locator('[data-wish="w-pr1c3s"]');
+					assert.equal(await ask.locator('[data-testid="agree"]').count(), 0, 'no agree on an ask');
+					await ask.locator('[data-testid="correct"]').click();
+					await ask.getByRole('textbox', { name: 'your answer' }).fill('The middle one.');
+					await ask.getByRole('button', { name: 'send answer' }).click();
+					await ask.locator('[data-testid="answered"]').waitFor({ timeout: 5000 });
+					assert.deepEqual(letters.at(-1), {
+						thread: 'pricing-page',
+						text: 'The middle one.',
+						wish: 'w-pr1c3s',
+						verdict: 'correct'
+					});
+					await page.locator('[data-testid="wishes-done"]').click();
+					assert.equal(await wishes.count(), 7, 'done wishes unfold');
+					await shot(page, `${viewport}-1b-busy-answered`);
+					report.wishes = { owedRows, owedLine, recorded, agreed, letters: letters.slice(-2) };
 				}
 				report[`${viewport}-busy`] = { turns, unread, receipts };
 				await modules.harvest(page, 'drive-home-board');
@@ -226,6 +276,8 @@ async function main() {
 					.locator('[data-testid="thread-card"]')
 					.evaluateAll((els) => els.map((el) => el.dataset.turn));
 				assert.deepEqual(turns, ['none', 'none'], `quiet threads (${turns})`);
+				const empty = await text(page.locator('[data-testid="wishes-empty"]'));
+				assert.ok(/no wishes yet/.test(empty), `wishes empty state (${empty})`);
 				assert.equal(
 					await page.locator('[data-testid="fuel-strip"]').getAttribute('data-promoted'),
 					'false'

@@ -556,6 +556,9 @@ class LoomLetterPost(BaseModel):
     thread: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
     text: str = Field(min_length=1, max_length=20_000)
     body: str | None = Field(default=None, pattern=r"^[a-z0-9._-]+/[A-Za-z0-9._-]+$", max_length=128)
+    # The board's verdict on a delivered wish; the text is the person's word.
+    wish: str | None = Field(default=None, pattern=r"^w-[A-Za-z0-9]{1,32}$")
+    verdict: Literal["agree", "correct"] | None = None
 
     @field_validator("text")
     @classmethod
@@ -563,6 +566,12 @@ class LoomLetterPost(BaseModel):
         if not value.strip():
             raise ValueError("text must not be blank")
         return value
+
+    @model_validator(mode="after")
+    def _verdict_names_its_wish(self) -> "LoomLetterPost":
+        if (self.wish is None) != (self.verdict is None):
+            raise ValueError("wish and verdict come together")
+        return self
 
 
 class RunnerAuthErrorIn(BaseModel):

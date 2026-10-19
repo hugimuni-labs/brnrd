@@ -710,8 +710,8 @@ export const STRESS_SCALE = { repos: 12, environments: 5, shells: 4, cores: 6, q
 // repo): what `/` renders as the home board. Every stamp is relative to the
 // moment `loomSnapshots()` is called, so the ages and resets on a shot read
 // the same on any day. Three scenarios: a busy board (every turn, every
-// strand state, receipts and a notice in the log), a quiet one, and one
-// where fuel is the news.
+// strand state, receipts and a notice in the log, every kind of wish), a
+// quiet one (no wishes yet), and one where fuel is the news.
 export function loomSnapshots(now = Date.now()) {
 	const at = (minutes) => new Date(now - minutes * 60_000).toISOString();
 	const resets = (minutes) => new Date(now + minutes * 60_000).toISOString();
@@ -847,6 +847,177 @@ export function loomSnapshots(now = Date.now()) {
 				done: [{ kind: 'pr', ref: `${PR}/2348`, line: 'park-wakes merged' }],
 				owed: 0,
 				last_at: at(31 * 60)
+			}
+		],
+		// The wishes (the board's top section): one verdict owed with a place to
+		// try it, one still granting, one he already answered, an ask from
+		// brnrd, one brnrd derived, and two closed ones under 'N done'.
+		wishes: [
+			{
+				id: 'w-b0dy7k',
+				thread: 'loom-on-the-web',
+				from: 'person',
+				line: 'Pick the body from the fuel strip, not a settings page',
+				state: 'delivered',
+				origin: 'said',
+				at: at(13),
+				says: [
+					{
+						id: 'letter:mine:155783668:4511',
+						from: 'person:arseni',
+						at: at(13),
+						head: 'Body choice belongs on the fuel strip, not in a settings page. Tap a shell, pick a core, done.'
+					}
+				],
+				reading:
+					'Tapping a shell on the fuel strip lists its cores; the core you tap rides your next letter as its body. No settings page.',
+				results: [
+					{
+						kind: 'pr',
+						ref: `${PR}/2352`,
+						line: 'fuel strip picks a body',
+						delivered: true,
+						at: at(40)
+					},
+					{
+						kind: 'ui',
+						ref: 'https://brnrd.dev/',
+						line: 'Tap claude or codex on the fuel strip, then a core',
+						delivered: true,
+						at: at(8)
+					}
+				]
+			},
+			{
+				id: 'w-pr1c3s',
+				thread: 'pricing-page',
+				from: 'resident',
+				line: 'Pick one of the three price ladders',
+				state: 'scoped',
+				origin: 'said',
+				at: at(95),
+				says: [
+					{
+						id: 's-ae66-p7ricx/q1',
+						from: 's-ae66-p7ricx',
+						at: at(95),
+						head: 'Three ladders on the thread. I would ship the middle one; your call.'
+					}
+				],
+				reading: 'Arseni picks the ladder; the middle one ships if he says nothing else.'
+			},
+			{
+				id: 'w-a5ks1t',
+				thread: 'answer-asks-build',
+				from: 'person',
+				line: 'Answer asks from the board with one tap and get a receipt back',
+				state: 'granting',
+				origin: 'said',
+				at: at(4 * 60),
+				says: [
+					{
+						id: 'letter:mine:155783668:4470',
+						from: 'person:arseni',
+						at: at(4 * 60),
+						head: 'I want to answer an ask right on the board. One tap, and I see that it landed.'
+					}
+				],
+				reading:
+					'Each ask on the board gets its answer buttons; a tap is a letter, and its receipt shows on the same row.',
+				results: [
+					{
+						kind: 'pr',
+						ref: `${PR}/2347`,
+						line: 'asks, graph, receipts on the board',
+						delivered: false,
+						at: at(11)
+					}
+				]
+			},
+			{
+				id: 'w-h3r0ln',
+				thread: 'landing-loom',
+				from: 'person',
+				line: 'Keep my line as the landing hero, install step under it',
+				state: 'delivered',
+				origin: 'said',
+				at: at(130),
+				says: [
+					{
+						id: 'letter:mine:155783668:4490',
+						from: 'person:arseni',
+						at: at(130),
+						head: 'The hero is my line, word for word. The install step goes right under it.'
+					}
+				],
+				reading: 'Hero text is his line verbatim; `npm install -g brnrd` sits directly below.',
+				results: [
+					{
+						kind: 'ui',
+						ref: 'https://brnrd.dev/?preview=landing',
+						line: 'The new hero, on the logged-out landing',
+						delivered: true,
+						at: at(20)
+					}
+				],
+				answer: { verdict: 'agree', at: at(4), head: 'agree' }
+			},
+			{
+				id: 'w-gr0k3d',
+				thread: 'grok-shell',
+				from: 'person',
+				line: 'One provider running dry should not stop the loom',
+				state: 'read',
+				origin: 'derived',
+				at: at(6 * 60),
+				reading: 'Add grok as a third shell, with its own fuel gauge, so work can move to it.'
+			},
+			{
+				id: 'w-p4rkw8',
+				thread: 'park-wakes',
+				from: 'person',
+				line: 'A shell that runs dry sleeps and comes back by itself',
+				state: 'accepted',
+				origin: 'said',
+				at: at(40 * 60),
+				says: [
+					{
+						id: 'letter:mine:155783668:4400',
+						from: 'person:arseni',
+						at: at(40 * 60),
+						head: 'When a shell runs dry, park it and wake it when it refills. I should not have to.'
+					}
+				],
+				reading: 'Park a strand whose shell is dry; wake it on the refill without a letter.',
+				results: [
+					{
+						kind: 'pr',
+						ref: `${PR}/2348`,
+						line: 'park-wakes merged',
+						delivered: true,
+						at: at(31 * 60)
+					}
+				],
+				verdict: { as: 'accepted', evidence: 'agree', at: at(30 * 60) }
+			},
+			{
+				id: 'w-str4nd',
+				thread: 'landing-loom',
+				from: 'person',
+				line: 'Show the live strands on the landing page',
+				state: 'dropped',
+				origin: 'said',
+				at: at(50 * 60),
+				says: [
+					{
+						id: 'letter:mine:155783668:4380',
+						from: 'person:arseni',
+						at: at(50 * 60),
+						head: 'Maybe show the live strands on the landing page?'
+					}
+				],
+				reading: 'A live strand list on the logged-out landing.',
+				verdict: { as: 'dropped', evidence: 'not for strangers', at: at(48 * 60) }
 			}
 		],
 		log: [

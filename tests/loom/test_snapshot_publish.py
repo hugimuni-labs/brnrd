@@ -245,3 +245,60 @@ def test_an_open_ask_to_a_person_is_their_turn(tmp_path):
     append(home, Fact(kind="wish.verdict", by="person:test", id="wish.verdict:t1",
                       data={"wish": ask.data["wish"], "as": "accepted", "evidence": "word", "ref": "-"}))
     assert turn() == "none"
+
+
+def test_wishes_carry_their_words_results_and_the_answer_newer_than_them(tmp_path):
+    from brr.loom.runtime.config import load_config
+    from brr.loom.runtime.home import Home
+    from brr.loom.runtime.ledger import append, read_facts
+    root = tmp_path / "home"
+    write_thread(root, "web", README, "answer-fast", wait="0")
+    home = Home(root)
+
+    def at(minute):
+        return f"2026-10-19T10:{minute:02d}:00+00:00"
+
+    def fact(kind, minute, ident, data, by="strand:s-test-web001"):
+        append(home, Fact(kind=kind, by=by, id=ident, at=at(minute), data=data))
+
+    def letter(minute, ident, body, **extra):
+        fact("letter", minute, ident, {"id": ident, "from": "person:test", "to": "thread:web",
+                                       "body": body, **extra}, by="person:test")
+
+    def wish(minute, ident, sender, line, says=(), by="strand:s-test-web001"):
+        fact("wish", minute, ident, {"wish": ident, "says": list(says), "from": sender,
+                                     "line": line, "thread": "web"}, by=by)
+
+    def result(minute, ident, wish, ref, line, delivered):
+        fact("wish.result", minute, ident, {"wish": wish, "kind": "pr", "ref": ref, "line": line,
+                                            "delivered": delivered})
+    letter(0, "p-test/said1", "Hello. Show my wishes on the board, please.")
+    wish(1, "w-said", "person", "Wishes on the board", [["p-test/said1", 7, 27]], by="person:test")
+    fact("wish.read", 2, "wish.read:r1", {"wish": "w-said", "reading": "a list per wish", "by": "resident"})
+    result(3, "wish.result:r1", "w-said", "#1", "draft", False)
+    result(4, "wish.result:r2", "w-said", "#2", "board", True)
+    letter(5, "p-test/answer", "Not quite: also the cost.", wish="w-said", verdict="correct")
+    wish(3, "w-ask", "resident", "Pick a domain")
+    wish(6, "w-done", "person", "Old thing", by="person:test")
+    result(7, "wish.result:d1", "w-done", "#0", "old", True)
+    letter(8, "p-test/agree", "Yes.", wish="w-done", verdict="agree")
+    fact("wish.verdict", 9, "wish.verdict:d1", {"wish": "w-done", "as": "accepted", "evidence": "word",
+                                                "ref": "p-test/agree"}, by="person:test")
+
+    rows = snapshot.assemble(home, read_facts(home), load_config(root))["wishes"]
+    assert [w["id"] for w in rows] == ["w-said", "w-ask", "w-done"]
+    said, ask, done = rows
+    assert said == {
+        "id": "w-said", "thread": "web", "from": "person", "line": "Wishes on the board",
+        "state": "delivered", "origin": "said", "at": "2026-10-19T10:04:00Z",
+        "says": [{"id": "p-test/said1", "from": "person:test", "at": "2026-10-19T10:00:00Z",
+                  "head": "Show my wishes on the board"}],
+        "reading": "a list per wish",
+        "results": [{"kind": "pr", "ref": "#1", "line": "draft", "delivered": False, "at": "2026-10-19T10:03:00Z"},
+                    {"kind": "pr", "ref": "#2", "line": "board", "delivered": True, "at": "2026-10-19T10:04:00Z"}],
+        "answer": {"verdict": "correct", "at": "2026-10-19T10:05:00Z", "head": "Not quite: also the cost."},
+    }
+    assert ask == {"id": "w-ask", "thread": "web", "from": "resident", "line": "Pick a domain",
+                   "state": "heard", "origin": "derived", "at": "2026-10-19T10:03:00Z"}
+    assert done["state"] == "accepted" and "answer" not in done
+    assert done["verdict"] == {"as": "accepted", "evidence": "word", "at": "2026-10-19T10:09:00Z"}

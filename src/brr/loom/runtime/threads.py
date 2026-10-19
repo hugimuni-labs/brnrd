@@ -5,8 +5,9 @@ import time
 from datetime import datetime
 
 from .home import Home, thread_of
+from .ledger import LedgerView
 from .lifecycle import CLOSED, read_thread, main_snapshot, main_tree, readme_at
-from .owners import letter_owners, thread_axes, unanswered_by_thread
+from .owners import active_owners, letter_owners, thread_axes, unanswered_by_thread
 from .project import cached_projection, fold, sender_threads
 from .selfrepo import git
 
@@ -49,9 +50,12 @@ def _table_inputs(facts, main):
     unanswered = unanswered_by_thread(facts, main)
     axes = thread_axes(facts, main, ownership)
     owed, activity, boundary = {}, {}, {}
-    for fate in ownership.values():
+    debts = active_owners(facts, main) if isinstance(facts, LedgerView) else ownership.values()
+    for fate in debts:
         if not fate.done and fate.owner in {'body', 'loom', 'opener'}:
             owed.setdefault(fate.thread, []).append(fate.letter)
+    if isinstance(facts, LedgerView):
+        return state, ownership, axes, owed, state.activity, state.boundary, state.bodies
     for f in state.accepted:
         strand = f.data.get('strand') or f.by.removeprefix('strand:')
         thread = writers.get(strand)
