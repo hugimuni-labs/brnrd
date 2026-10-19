@@ -153,7 +153,7 @@ def test_corrupt_boundary_fails_open(tmp_path):
     assert "Traceback" in (room / "port" / "jack-errors.log").read_text()
 
 
-def test_claude_adapter_pins_the_three_hooks(tmp_path, monkeypatch):
+def test_claude_adapter_pins_its_hooks(tmp_path, monkeypatch):
     room = tmp_path / "rooms" / STRAND
     (room / "port").mkdir(parents=True)
     (room / "port" / "wake.md").write_text("wake\n")
@@ -177,7 +177,7 @@ def test_claude_adapter_pins_the_three_hooks(tmp_path, monkeypatch):
     runpy.run_path(str(resolve(Home(tmp_path), "claude") / "run"))
     settings = json.loads((room / ".claude" / "settings.json").read_text())
     assert settings["hooks"]["Stop"][0]["hooks"][0]["timeout"] == 21660
-    for event in ("post", "stop", "start"):
+    for event in ("post", "stop", "start", "subagent-stop"):
         blob = json.dumps(hooks)
         assert f"--event {event}" in blob
 
