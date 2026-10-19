@@ -133,7 +133,8 @@ def open_thread(room: Path, thread: str, sender: str, text: str,
     land(room, f"open {thread} from thread:{own}", edit)
 
 
-def settle(room: Path, thread: str, why: str, retire: bool = False) -> None:
+def settle(room: Path, thread: str, why: str, retire: bool = False,
+           hand_to: str | None = None) -> None:
     if not why.strip():
         raise PortError("settle: --why is empty")
     home = home_of_room(room)
@@ -146,6 +147,23 @@ def settle(room: Path, thread: str, why: str, retire: bool = False) -> None:
         own == thread and (not opener or str(opener).startswith("person:"))
     ):
         raise PortError(f"settle: only {opener or 'its own body on a person’s word'} may settle {thread}")
+    from .ledger import append
+    from .verbs_wishes import wish_fact
+    from .wishes import wishes
+
+    facts = read_facts(home)
+    pending = sorted(w.id for w in wishes(facts).values()
+                     if w.thread == thread and w.state == "delivered")
+    if hand_to is not None:
+        check_thread_id(hand_to)
+        if hand_to == thread or not home.routable(hand_to):
+            raise PortError("settle: --hand-to must name another thread on main")
+    if pending and hand_to is None:
+        raise PortError(f"settle: delivered wishes await a verdict: {', '.join(pending)}; "
+                        "record a verdict or use --hand-to <thread>")
+    for ident in pending:
+        append(home, wish_fact(facts, by="strand:" + strand_of_room(room),
+                               ident=ident, thread=hand_to))
     land_status(room, thread, "retired" if retire else "settled", f"settle {thread}: {why}")
 
 

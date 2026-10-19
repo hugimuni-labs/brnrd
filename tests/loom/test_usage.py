@@ -249,6 +249,79 @@ def test_grok_expired_error_survives_actual_collector_and_attempt_floor(tmp_path
     assert path.read_bytes() == cached  # failed attempt still owns the 60s floor
 
 
+def test_boundary_lists_every_cached_shell_and_park_stays_seated(tmp_path, monkeypatch):
+    """The status line is every usage file. Hold and park still read the seat."""
+    import time
+    from datetime import datetime, timezone
+
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime import loom
+    from brr.loom.runtime.bodies import decide
+    from _step import write_thread
+
+    root = tmp_path / "home"
+    write_thread(root, "work", "All fuels", "")
+    config = root / "loom/config.toml"
+    config.write_text(config.read_text() + "hold_floor_pct = 3\n")
+    now = time.time()
+    future = datetime.fromtimestamp(now + 7 * 86400, timezone.utc).isoformat()
+    passed = datetime.fromtimestamp(now - 30, timezone.utc).isoformat()
+
+    def write(shell, at, windows):
+        path = root / "loom/usage" / f"{shell}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"at": at, "windows": windows}))
+
+    write("grok", now, [{"name": "week", "left_pct": 45, "resets_at": future}])
+    write("claude", now, [
+        {"name": "session", "left_pct": 72, "resets_at": future},
+        {"name": "week", "left_pct": 11, "resets_at": future},
+    ])
+    write("codex", now - 90, [
+        {"name": "session", "left_pct": 100, "resets_at": passed},
+        {"name": "week", "left_pct": 100, "resets_at": passed},
+    ])
+    write("blank", now, [])
+    home = Home(root)
+    strand = "s-ab12-aaaaaa"
+
+    def fact(kind, **data):
+        return Fact(by="loom:aaaa", kind=kind, data={"strand": strand, "gen": 1, **data})
+
+    lease = fact("lease", shell="grok", core="echo", thread="work")
+    started = fact("body.started", pid=1, shell="grok")
+    monkeypatch.setattr(loom, "body_alive", lambda room: True)
+    loom._advance_body(home, strand, "work", 1, {}, [lease, started])
+    status = next(line for line in (home.room(strand) / "port/in/boundary.md").read_text().splitlines()
+                  if line.startswith("status:"))
+    assert status.endswith(
+        "fuel grok week 45% · claude session 72% week 11% · codex session 100% week 100%?")
+    assert "vibe" not in status and "blank" not in status
+    # threads.py strips this prefix. It must stay one shell.
+    assert usage.fuel(home, "grok") == "fuel grok week 45%"
+    assert usage.fuel(home, "grok").removeprefix("fuel grok ") == "week 45%"
+
+    write("claude", now, [
+        {"name": "session", "left_pct": 0, "resets_at": future},
+        {"name": "week", "left_pct": 11, "resets_at": future},
+    ])
+    monkeypatch.setattr(loom, "body_alive", lambda room: False)
+    wanted = [lease]
+    observed, context = loom._observe_body(home, wanted, strand, "work", 1, {})
+    assert observed.gauge == "ok" and context.empty is None
+    assert "park" not in [command.name for command in decide(wanted, [observed])]
+    assert usage.dry_until(home, "grok") is None
+    assert usage.dry_until(home, "claude") is not None
+    assert usage.fuel(home, "claude") == "fuel claude session 0% week 11%"
+
+    write("grok", now, [{"name": "week", "left_pct": 1, "resets_at": future}])
+    parked = loom._advance_body(home, strand, "work", 1, {}, wanted)
+    park = next(item for item in parked if item.kind == "body.parked")
+    assert park.data["shell"] == "grok" and park.data["window"] == "week"
+    assert park.data["left_pct"] == 1
+    assert usage.dry_until(home, "grok") is not None
+
+
 def test_vibe_collector_reports_absence_without_inventing_fuel(tmp_path):
     home = Home(tmp_path)
     path = tmp_path / "loom/usage/vibe.json"

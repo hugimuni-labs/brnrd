@@ -6,15 +6,16 @@ import subprocess
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
-from connector_support import pull_once
+from connector_support import drop_once, pull_once
 from brr.loom.runtime.ledger import inject_letter
 
 from brr.loom.runtime.selfrepo import init_self
 
-from _step import Loom, wait_until, write_thread
+from _step import Loom, kill_bodies, wait_until, write_thread
 
 
 def bodies(root, program):
@@ -37,6 +38,7 @@ def test_worker_bounces_once_and_authors_resend_is_answered(tmp_path):
     bodies(root, f'''import json, sys, time
 from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.home import atomic_write
 ctx = Ctx(Path(sys.argv[1]))
 own = _own_thread(ctx.wake())
 if own == "worker":
@@ -69,7 +71,7 @@ else:
                 ctx.send("thread:author", note="read bounce", re=letter.id)
                 ctx.send("thread:worker", "try again")
             elif letter.body == "answered the resend":
-                Path({str(received)!r}).write_text(json.dumps({{"answer": letter.body, "bounce_seen": True}}))
+                atomic_write(Path({str(received)!r}), json.dumps({{"answer": letter.body, "bounce_seen": True}}))
                 ctx.send("thread:author", note="read answer", re=letter.id)
                 sys.exit(0)
         time.sleep(0.03)
@@ -190,8 +192,31 @@ sys.exit(2)
     assert not loom.errors
 
 
-def test_person_is_told_once_when_fuel_parks_their_letter(tmp_path, monkeypatch):
+class _Person:
+    """Ada on telegram:42: each letter is one relay pull."""
+
+    def __init__(self, home):
+        self.home, self.cursor = home, 0
+
+    def says(self, event_id, body):
+        class Client:
+            def pull(_, cursor):
+                return {"cursor": cursor + 1, "events": [{"event_id": event_id, "body": body, "attachments": [],
+                        "reply_to": {"platform": "telegram", "user_id": 42, "chat_id": 42}}]}
+        self.cursor = drop_once(self.home, Client(), self.cursor)
+
+
+def _parked_home(tmp_path, monkeypatch, *, run="raise SystemExit('must park before starting')"):
+    """A home whose inbox is seated on claude/echo with 2% session fuel.
+
+    The claude gauge reads ``fuel``, so a test can refill it. A second shell,
+    ``spare``, has a gauge at 70%; the packaged shells are shadowed by folders
+    with no gauge, so they are not enabled and no real probe runs.
+    """
     from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+    from brr.loom.runtime import usage
+    from brr.loom.runtime.port import parse_frontmatter
     from brr.loom.runtime.selfrepo import git
     root = tmp_path / "home"
     init_self(root, person="ada")
@@ -201,40 +226,59 @@ def test_person_is_told_once_when_fuel_parks_their_letter(tmp_path, monkeypatch)
     git(root / "self", "add", "threads")
     git(root / "self", "commit", "-m", "Choose gauge body.")
     reset = datetime.now(timezone.utc) + timedelta(hours=2)
-    local_time = reset.astimezone().strftime("%H:%M")
-    folder = root / "loom/bodies/claude"
-    folder.mkdir(parents=True)
-    (folder / "jack").write_text("hooks\n")
-    for name, source in {
-        "run": "raise SystemExit('must park before starting')",
-        "usage": "import json; print(json.dumps(" + repr({"windows": [
-            {"name": "session", "left_pct": 2, "resets_at": reset.isoformat()}]}) + "))",
+    fuel = root / "fuel"
+    fuel.write_text("2")
+    starts = root / "starts"
+    for shell, sources in {
+        "claude": {"run": run, "usage": "import json, pathlib; print(json.dumps({'windows': [{'name': 'session', "
+                   f"'left_pct': float(pathlib.Path({str(fuel)!r}).read_text()), 'resets_at': {reset.isoformat()!r}}}]}}))"},
+        "spare": {"run": f"import pathlib, sys, time\nwith pathlib.Path({str(starts)!r}).open('a') as out:\n"
+                         "    out.write('spare\\n')\ntime.sleep(30)",
+                  "usage": "import json; print(json.dumps({'windows': [{'name': 'session', 'left_pct': 70}]}))"},
+        "codex": {"run": "raise SystemExit(1)"}, "grok": {"run": "raise SystemExit(1)"},
+        "vibe": {"run": "raise SystemExit(1)"},
     }.items():
-        script = folder / name
-        script.write_text(f"#!{sys.executable}\n{source}\n")
-        script.chmod(0o755)
-
-    class Client:
-        def pull(self, cursor):
-            return {"cursor": 1, "events": [{"event_id": "park", "body": "please help", "attachments": [],
-                    "reply_to": {"platform": "telegram", "user_id": 42, "chat_id": 42}}]}
-    pull_once(Loom(root).home, Client(), 0)
+        folder = root / "loom/bodies" / shell
+        folder.mkdir(parents=True)
+        (folder / "jack").write_text("hooks\n")
+        for name, source in sources.items():
+            script = folder / name
+            script.write_text(f"#!{sys.executable}\n{source}\n")
+            script.chmod(0o755)
+    # The gauge cache outlives a test; the cadence is the same path, faster.
+    monkeypatch.setattr(usage, "CACHE_TTL", 0.3)
+    monkeypatch.setattr(usage, "PROBE_INTERVAL", 0.1)
+    person = _Person(Loom(root).home)
+    person.says("park", "please help")
     sent = []
     real_run = subprocess.run
     def run_out(args, **kw):
         if str(args[0]).endswith("/relay/out"):
-            from pathlib import Path
-            from brr.loom.runtime.port import parse_frontmatter
             sent.append(parse_frontmatter(Path(args[1]).read_text()))
             return subprocess.CompletedProcess(args, 0, '{"ids": []}', '')
         return real_run(args, **kw)
     monkeypatch.setattr(subprocess, "run", run_out)
+    return SimpleNamespace(root=root, person=person, sent=sent, fuel=fuel, starts=starts,
+                           local_time=reset.astimezone().strftime("%H:%M"))
+
+
+def _started(loom):
+    return [f for f in loom.facts() if f.kind == "body.started"]
+
+
+def _leases(loom):
+    return [(f.data["gen"], f.data["shell"], f.data["core"]) for f in loom.facts() if f.kind == "lease"]
+
+
+def test_person_is_told_once_when_fuel_parks_their_letter(tmp_path, monkeypatch):
+    home = _parked_home(tmp_path, monkeypatch)
+    root, sent = home.root, home.sent
     loom = Loom(root)
     loom.start()
     try:
         wait_until(lambda: len(sent) == 1, 10, loom.dump)
         assert sent[0]["to"] == "telegram:42"
-        assert (f"Out of claude session fuel (2% left) until about {local_time}. "
+        assert (f"Out of claude session fuel (2% left) until about {home.local_time}. "
                 "Your letter is kept on thread inbox and is answered when it refills.") in sent[0]["body"]
         assert sent[0]["re"] == "telegram:42:park"
         wait_until(lambda: any(f.kind == "body.parked" for f in loom.facts()), 5, loom.dump)
@@ -243,4 +287,98 @@ def test_person_is_told_once_when_fuel_parks_their_letter(tmp_path, monkeypatch)
         assert mail(root, loom.facts(), "inbox")  # the notice does not settle the ask
     finally:
         loom.halt()
+    assert not loom.errors
+
+
+def _claude_starts(starts):
+    return f"import pathlib, time\nwith pathlib.Path({str(starts)!r}).open('a') as out:\n    out.write('claude\\n')\ntime.sleep(30)"
+
+
+def test_parked_body_starts_when_its_gauge_refills_before_until(tmp_path, monkeypatch):
+    starts = tmp_path / "home/starts"
+    home = _parked_home(tmp_path, monkeypatch, run=_claude_starts(starts))
+    loom = Loom(home.root)
+    loom.start()
+    try:
+        wait_until(lambda: any(f.kind == "body.parked" for f in loom.facts()), 10, loom.dump)
+        time.sleep(0.5)  # parked ticks read the gauge and stay parked
+        assert not _started(loom)
+        home.fuel.write_text("100")  # the plan was upgraded; the reset is hours away
+        wait_until(lambda: starts.is_file(), 10, loom.dump)
+        assert starts.read_text() == "claude\n"
+        assert _leases(loom) == [(1, "claude", "echo")]
+    finally:
+        loom.halt()
+        kill_bodies(loom)
+    assert not loom.errors
+
+
+def test_letter_during_park_is_told_and_wake_starts_the_leased_body(tmp_path, monkeypatch):
+    starts = tmp_path / "home/starts"
+    home = _parked_home(tmp_path, monkeypatch, run=_claude_starts(starts))
+    loom = Loom(home.root)
+    loom.start()
+    try:
+        wait_until(lambda: any(f.kind == "body.parked" for f in loom.facts()), 10, loom.dump)
+        wait_until(lambda: (home.root / "loom/usage/spare.json").is_file(), 10, loom.dump)  # spare's gauge has read
+        home.person.says("again", "are you there?")
+        wait_until(lambda: any(m["re"] == "telegram:42:again" for m in home.sent), 10, loom.dump)
+        told = next(m for m in home.sent if m["re"] == "telegram:42:again")
+        assert "Out of claude session fuel (2% left)" in told["body"]
+        assert "Reply with one of:\nwake: retry claude/echo (session 2%, resets " in told["body"]
+        assert "\nwake spare/<core>: spare session 70%" in told["body"]
+        assert "codex" not in told["body"]  # a shell with no gauge is not enabled
+        time.sleep(0.3)
+        assert [m["re"] for m in home.sent] == ["telegram:42:park", "telegram:42:again"]
+        home.person.says("wake", "  /WAKE ")
+        wait_until(lambda: starts.is_file(), 10, loom.dump)
+        assert starts.read_text() == "claude\n"
+        assert _leases(loom) == [(1, "claude", "echo")]
+        owed = {str(letter.data["id"]) for letter in mail(home.root, loom.facts(), "inbox")}
+        assert {"letter:relay:telegram:42:park", "letter:relay:telegram:42:again"} <= owed
+        assert "letter:relay:telegram:42:wake" not in owed  # the word is settled, not handed over as work
+        assert not any(m["re"] == "telegram:42:wake" for m in home.sent)
+    finally:
+        loom.halt()
+        kill_bodies(loom)
+    assert not loom.errors
+
+
+def test_wake_naming_another_body_moves_the_parked_thread_there(tmp_path, monkeypatch):
+    home = _parked_home(tmp_path, monkeypatch)
+    loom = Loom(home.root)
+    loom.start()
+    try:
+        wait_until(lambda: any(f.kind == "body.parked" for f in loom.facts()), 10, loom.dump)
+        home.person.says("move", "wake spare/x")
+        wait_until(lambda: home.starts.is_file(), 10, loom.dump)
+        assert home.starts.read_text() == "spare\n"
+        assert _leases(loom) == [(1, "claude", "echo"), (2, "spare", "x")]
+        ended = [f for f in loom.facts() if f.kind == "attempt.ended"]
+        assert [(f.data["gen"], f.data.get("cause")) for f in ended] == [(1, "molted")]
+        assert "letter:relay:telegram:42:move" not in {str(l.data["id"]) for l in mail(home.root, loom.facts(), "inbox")}
+    finally:
+        loom.halt()
+        kill_bodies(loom)
+    assert not loom.errors
+
+
+def test_wake_naming_no_enabled_body_is_refused_with_the_list(tmp_path, monkeypatch):
+    home = _parked_home(tmp_path, monkeypatch)
+    loom = Loom(home.root)
+    loom.start()
+    try:
+        wait_until(lambda: any(f.kind == "body.parked" for f in loom.facts()), 10, loom.dump)
+        home.person.says("nope", "wake codex")
+        wait_until(lambda: any(m["re"] == "telegram:42:nope" for m in home.sent), 10, loom.dump)
+        refused = next(m for m in home.sent if m["re"] == "telegram:42:nope")
+        assert "No body 'codex' here; bodies are claude, spare. Nothing was started." in refused["body"]
+        assert "wake spare/<core>: spare session 70%" in refused["body"]
+        time.sleep(0.5)
+        assert not _started(loom)
+        assert _leases(loom) == [(1, "claude", "echo")]
+        assert "letter:relay:telegram:42:nope" not in {str(l.data["id"]) for l in mail(home.root, loom.facts(), "inbox")}
+    finally:
+        loom.halt()
+        kill_bodies(loom)
     assert not loom.errors

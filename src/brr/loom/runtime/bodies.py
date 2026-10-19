@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 
 from brr.daemon2.facts import Fact
+from .ledger import LedgerView
 
 from .project import cached_projection
 
@@ -37,11 +38,13 @@ FINISH = ("collect", "drain", "exit") + END
 TABLE = (
     Row(STARTABLE, "closed", "ended", ("end_settled",) + CLEANUP),
     Row(STARTABLE, "failure", "ended", ("exit", "end_failed") + CLEANUP),
-    Row(("parked",), "before until", "parked", ()),
+    Row(("parked",), "woken on another body", "ended", ("end_molted",) + CLEANUP),
+    Row(("parked",), "gauge unknown, before until", "parked", ()),
     Row(("parked",), "gauge refreshing", "parked", ()),
     Row(("wanted",), "gauge refreshing", "wanted", ("pending",)),
+    Row(("parked",), "gauge empty", "parked", ()),
     Row(STARTABLE, "gauge empty", "parked", ("park",)),
-    Row(STARTABLE, "gauge ok", "running", ("prepare", "shown", "spawn", "started")),
+    Row(STARTABLE, "gauge not empty", "running", ("prepare", "shown", "spawn", "started")),
     Row(LIVE, "not alive", "ended", FINISH),
     Row(("running",), "alive, open", "running", ()),
     Row(("running",), "alive, closed", "leaving", ("leaving",)),
@@ -89,6 +92,7 @@ COMMANDS = {step.name: step for step in (
     Step("end",          "end",      "attempt.ended",     False),
     Step("end_settled",  "end",      "attempt.ended",     False, "settled"),
     Step("end_failed",   "end",      "attempt.ended",     False, "failed"),
+    Step("end_molted",   "end",      "attempt.ended",     False, "molted"),
     Step("drained",      "drained",  "port.drained",      True),
     Step("release",      "release",  "released",          True),
 )}
@@ -107,6 +111,7 @@ class Observation:
     force: bool = False
     stop_grace: float = 60
     failure: str = ""
+    woken: str = ""
 
 
 @dataclass(frozen=True)
@@ -119,6 +124,8 @@ class Command:
 
 
 def fact_for(facts: list[Fact], kind: str, strand: str, gen: int) -> Fact | None:
+    if isinstance(facts, LedgerView):
+        return facts.latest.get((kind, strand, gen))
     return next((f for f in reversed(facts) if f.kind == kind
                  and f.data.get("strand") == strand and f.data.get("gen") == gen), None)
 
@@ -132,7 +139,8 @@ def state_of(facts: list[Fact], strand: str, gen: int, *, alive=False) -> State:
 def _state_of(facts, strand, gen, *, alive):
     name, until, deadline = "wanted", 0, 0
     pending, stopped, identified, released, exited, ended = False, False, True, False, False, False
-    for f in facts:
+    rows = facts.by_body[(strand, gen)] if isinstance(facts, LedgerView) else facts
+    for f in rows:
         if f.data.get("strand") != strand or f.data.get("gen") != gen:
             continue
         if f.kind == "lease" and alive:
@@ -168,10 +176,11 @@ def _state_of(facts, strand, gen, *, alive):
 OBSERVED = {
     "closed": lambda s, o: o.closed,
     "failure": lambda s, o: bool(o.failure),
-    "before until": lambda s, o: not o.force and o.now < s.until,
+    "woken on another body": lambda s, o: bool(o.woken),
+    "gauge unknown, before until": lambda s, o: not o.force and o.gauge == "unknown" and o.now < s.until,
     "gauge refreshing": lambda s, o: o.gauge == "refreshing",
     "gauge empty": lambda s, o: o.gauge == "empty",
-    "gauge ok": lambda s, o: o.gauge == "ok",
+    "gauge not empty": lambda s, o: o.gauge in {"ok", "unknown"},
     "not alive": lambda s, o: not o.alive,
     "alive, proven": lambda s, o: o.alive and o.proven is True,
     "alive, not proven": lambda s, o: o.alive and o.proven is not True,

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from brr.daemon2.facts import Fact
 
 from .home import Home
-from .ledger import append
+from .ledger import LedgerView, append, kind_facts
 from .project import fold
 
 _INSTANT = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
@@ -50,12 +50,13 @@ def observe_due(home: Home, facts: list, armed: bool) -> list:
     """
     if not armed:
         return facts
-    seen = {fact.id for fact in facts if fact.kind == "letter.due"}
+    seen = facts.due_ids if isinstance(facts, LedgerView) else {fact.id for fact in kind_facts(facts, "letter.due")}
     now = datetime.now(timezone.utc)
     # The clock is read before anything is folded: a letter due in three days
     # costs each tick one comparison, never a pass over the whole ledger.
     passed = set()
-    for fact in facts:
+    candidates = list(facts.timed.values()) if isinstance(facts, LedgerView) else facts
+    for fact in candidates:
         if fact.kind == "letter" and fact.data.get("at") and f"due:{fact.id}" not in seen:
             due = parse_instant(fact.data["at"])
             if due is not None and due <= now:
@@ -71,4 +72,7 @@ def observe_due(home: Home, facts: list, armed: bool) -> list:
             data={"letter": letter.id}, after=(letter.id,),
         ))
         facts.append(stored)
+    if isinstance(facts, LedgerView):
+        for ident in passed:
+            facts.timed.pop(ident, None)
     return facts
