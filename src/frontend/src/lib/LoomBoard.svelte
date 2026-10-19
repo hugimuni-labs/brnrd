@@ -1,12 +1,14 @@
 <script lang="ts">
-	// The home board, top to bottom: who you are talking to, the fuel you
-	// have, the threads (the main surface), the log, and the composer. One
+	// The home board, top to bottom: who you are talking to, the wishes (the
+	// centrepiece: what you asked, what came of it, what waits on you), the
+	// fuel you have, the threads, the log, and the composer. One
 	// snapshot drives all of it; this component only arranges it.
 	import { resolve } from '$app/paths';
 	import LoomComposer from './LoomComposer.svelte';
 	import LoomFuelStrip from './LoomFuelStrip.svelte';
 	import LoomLog from './LoomLog.svelte';
 	import LoomThreadCard from './LoomThreadCard.svelte';
+	import LoomWishes from './LoomWishes.svelte';
 	import {
 		FILTERS,
 		defaultBody,
@@ -78,6 +80,8 @@
 			</div>
 		</section>
 	{/if}
+
+	<LoomWishes wishes={snapshot.wishes ?? []} {now} />
 
 	{#if (snapshot.fuel ?? []).length}
 		<LoomFuelStrip fuel={snapshot.fuel ?? []} bind:body {now} />

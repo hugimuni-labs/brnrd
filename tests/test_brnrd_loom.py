@@ -178,8 +178,20 @@ def test_composer_letter_reaches_relay_inbox(client):
         "user_id": "arseni",
         "body": "claude/opus",
     }
-    assert "body" not in second["reply_to"]
+    assert not {"body", "wish", "verdict"} & set(second["reply_to"])
     assert second["reply_to"]["thread"] == "inbox"
+
+
+@pytest.mark.parametrize("verdict", ["agree", "correct"])
+def test_composer_verdict_names_its_wish(client, verdict):
+    headers, session = _account(client)
+    relay = _relay_token(client, headers, _repo(client, headers))
+    _signed_in(client, session)
+    r = client.post("/v1/dashboard/loom/letters",
+                    json={"thread": "web", "text": "yes", "wish": "w-0a9zq3k7m2xp", "verdict": verdict})
+    assert r.status_code == 202, r.text
+    event, = client.get("/v1/daemons/inbox", params={"wait": 0}, headers=relay).json()["events"]
+    assert (event["reply_to"]["wish"], event["reply_to"]["verdict"]) == ("w-0a9zq3k7m2xp", verdict)
 
 
 def test_composer_prefers_loom_daemon_repo(client):
@@ -214,6 +226,11 @@ def test_composer_without_repo_is_409(client):
         {"thread": "inbox", "text": "hi", "body": "Claude/opus"},
         {"text": "hi"},
         {"thread": "inbox"},
+        {"thread": "inbox", "text": "yes", "wish": "w-abc123"},
+        {"thread": "inbox", "text": "yes", "verdict": "agree"},
+        {"thread": "inbox", "text": "yes", "wish": "abc123", "verdict": "agree"},
+        {"thread": "inbox", "text": "yes", "wish": "w-" + "a" * 33, "verdict": "agree"},
+        {"thread": "inbox", "text": "yes", "wish": "w-abc123", "verdict": "accept"},
     ],
 )
 def test_composer_validation(client, payload):

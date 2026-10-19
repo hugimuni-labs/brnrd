@@ -72,11 +72,11 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
             wish = found[ident]
             if fact.kind == "wish.read":
                 wish.reading = d["reading"]
-                wish.reads.append(dict(d))
+                wish.reads.append(dict(d, at=fact.at))
             elif fact.kind == "wish.result":
-                wish.results.append(dict(d))
+                wish.results.append(dict(d, at=fact.at))
             else:
-                wish.verdict = dict(d)
+                wish.verdict = dict(d, at=fact.at)
         wish.at = fact.at
     for wish in found.values():
         def own_say(say):
