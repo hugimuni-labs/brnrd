@@ -108,7 +108,9 @@ def ingest(home, name, fm, attachments):
         sender = _sender(home, platform, raw_sender.partition(':')[2]
                          if raw_sender.startswith(platform + ':') else None)
         clean = clean_accepts(home.root / 'self', fm['kind'], fm.get('refs', '').split(), fm['body'])
-        to = route_bare(facts, f'{platform}/{chat}', binding[1] if binding else None)
+        # A connector may name the thread a letter was written on; else route it.
+        to = (f"thread:{fm['thread']}" if fm.get('thread') else
+              route_bare(facts, f'{platform}/{chat}', binding[1] if binding else None))
         if not home.routable(to.removeprefix('thread:')):
             to = 'thread:inbox'
         blobs, blob_ids = [], []
@@ -130,6 +132,8 @@ def ingest(home, name, fm, attachments):
                                is_stranger(sender, home.root / 'self')), audience=['self']))
         if fm.get('re'):
             data['re'] = fm['re']
+        if fm.get('wake'):
+            data['wake'] = fm['wake']
         if fm.get('missing'):
             data['blobs_missing'] = [int(n) for n in fm['missing'].split()]
         if clean:
@@ -144,7 +148,7 @@ def ingest(home, name, fm, attachments):
                       cites=source.id, label=data['label'])
         if binding:
             fields['re'] = str(binding[0].data.get('id') or binding[0].id)
-        for key in ('clean', 'refs'):
+        for key in ('clean', 'refs', 'wake'):
             if key in data:
                 fields[key] = data[key]
         append(home, Fact(kind='letter', by=f'loom:{home.install_id()}', id=letter_id,

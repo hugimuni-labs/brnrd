@@ -233,6 +233,9 @@ def _migrate_daemons(conn: Connection) -> None:
     # #932 conversation-sticky mirror + release ask — see models.Daemon.
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS runner_sticky_json TEXT"))
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS runner_sticky_release_at TIMESTAMP"))
+    # Loom snapshot v1 — see models.Daemon.loom_json.
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS loom_json TEXT"))
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS loom_updated_at TIMESTAMP"))
 
 
 def _migrate_daemon_repos(conn: Connection) -> None:

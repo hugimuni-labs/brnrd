@@ -330,6 +330,15 @@ class Daemon(Base):
         info=_publish_store("news", "repo"),
     )
     news_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Loom snapshot v1 (threads/inbox/loom-snapshot.md), stored verbatim from
+    # `PUT /v1/daemons/loom` for the home board. Gated on the token repo's
+    # `activity` consent: no loom lane exists in `_PUBLISH_TICK_ORDER`.
+    loom_json: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        info=_publish_store("activity", "repo"),
+    )
+    loom_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class DaemonRepo(Base):

@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 import anyio
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -236,32 +236,35 @@ def _activity_out(row: ActivityRecord) -> schemas.ActivityRecordOut:
     )
 
 
-@router.post("/register", response_model=schemas.DaemonRegistered)
-def register(payload: schemas.DaemonRegister, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+def _upsert_daemon(db: Session, principal: Principal, payload: schemas.DaemonRegister) -> Daemon:
+    """Bind ``payload.daemon_name`` on this account to the calling token (uncommitted)."""
     repo_id = principal.repo_id
     caps = json.dumps(payload.capabilities)
-    existing = db.execute(
+    daemon = db.execute(
         select(Daemon).where(
             Daemon.account_id == principal.account_id,
             Daemon.daemon_name == payload.daemon_name,
         )
     ).scalar_one_or_none()
-    if existing is not None:
-        existing.online = True
-        existing.last_seen_at = datetime.now(timezone.utc)
-        existing.capabilities = caps
-        existing.token_id = principal.token.id
-        existing.repo_id = repo_id
-        if payload.repos is not None:
-            _replace_daemon_repos(db, existing, payload.repos)
-        db.commit()
-        return schemas.DaemonRegistered(daemon_id=existing.id, repo_id=repo_id)
-    daemon = Daemon(id=ids.daemon_id(), account_id=principal.account_id, repo_id=repo_id, token_id=principal.token.id, daemon_name=payload.daemon_name, capabilities=caps, online=True)
-    db.add(daemon)
+    if daemon is not None:
+        daemon.online = True
+        daemon.last_seen_at = datetime.now(timezone.utc)
+        daemon.capabilities = caps
+        daemon.token_id = principal.token.id
+        daemon.repo_id = repo_id
+    else:
+        daemon = Daemon(id=ids.daemon_id(), account_id=principal.account_id, repo_id=repo_id, token_id=principal.token.id, daemon_name=payload.daemon_name, capabilities=caps, online=True)
+        db.add(daemon)
     if payload.repos is not None:
         _replace_daemon_repos(db, daemon, payload.repos)
+    return daemon
+
+
+@router.post("/register", response_model=schemas.DaemonRegistered)
+def register(payload: schemas.DaemonRegister, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+    daemon = _upsert_daemon(db, principal, payload)
     db.commit()
-    return schemas.DaemonRegistered(daemon_id=daemon.id, repo_id=repo_id)
+    return schemas.DaemonRegistered(daemon_id=daemon.id, repo_id=principal.repo_id)
 
 
 @router.get("/whoami", response_model=schemas.DaemonWhoami)
@@ -665,6 +668,37 @@ def put_news(payload: schemas.NewsReport, principal: Principal = Depends(require
     daemon.last_seen_at = now
     db.commit()
     return schemas.NewsOut(items=items, news_updated_at=now)
+
+
+#: The loom names itself; `brnrd account connect` mints its token without a
+#: `/register`, so the first snapshot creates the row.
+LOOM_DAEMON_NAME = "loom"
+_MAX_LOOM_BYTES = 1_000_000
+
+
+@router.put("/loom", response_model=schemas.LoomOut)
+def put_loom(doc: dict[str, Any] = Body(...), principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+    """Store the loom snapshot v1 verbatim (threads/inbox/loom-snapshot.md)."""
+    if doc.get("v") != 1:
+        raise HTTPException(status_code=422, detail="loom snapshot must carry v: 1")
+    blob = json.dumps(doc, separators=(",", ":"))
+    if len(blob.encode("utf-8")) > _MAX_LOOM_BYTES:
+        raise HTTPException(status_code=413, detail="loom snapshot exceeds 1 MB")
+    daemon = _current_daemon(db, principal)
+    if daemon is None:
+        daemon = _upsert_daemon(db, principal, schemas.DaemonRegister(daemon_name=LOOM_DAEMON_NAME))
+    now = datetime.now(timezone.utc)
+    # Threads, strands and log heads are the loom's activity: the token's
+    # repo consent for that lane decides, and a refusal also drops the copy.
+    permitted = publish_scope.lane_permitted(db, repo_id=principal.repo_id, lane="activity")
+    daemon.loom_json = blob if permitted else None
+    daemon.loom_updated_at = now
+    daemon.online = True
+    daemon.last_seen_at = now
+    db.commit()
+    if not permitted:
+        raise HTTPException(status_code=403, detail="this repo's publish scope withholds the activity lane")
+    return schemas.LoomOut(loom_updated_at=now)
 
 
 @router.put("/runners", response_model=schemas.RunnersOut)

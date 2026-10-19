@@ -224,8 +224,16 @@ class Router:
             from .repos import AuthorError, require_body_author
             try:
                 text = seat_text(home, thread)
-                from .loom import _wake_choice
-                choice = _wake_choice(facts, thread) or at_birth(home, thread, default, text)
+                from .loom import _person_dms, _wake_choice, _wake_letter
+                seated = at_birth(home, thread, default, text)
+                # A body chosen in brnrd.dev's composer is a wake, but only for a
+                # letter that landed while no strand held the thread.
+                freed = max((i for i, f in enumerate(facts) if f.kind == "released"
+                             and f.data.get("thread") == thread), default=-1)
+                for letter, channel in _person_dms(home, facts, thread):
+                    if letter.data.get("wake") and facts.index(letter) > freed:
+                        _wake_letter(home, facts, thread, seated, letter, channel, parked=False)
+                choice = _wake_choice(facts, thread) or seated
                 declared = seat_repos(text)
                 require_body_author(home)
             except (ValueError, OSError) as exc:
