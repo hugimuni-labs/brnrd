@@ -55,7 +55,7 @@ def _table_inputs(facts, main):
         if not fate.done and fate.owner in {'body', 'loom', 'opener'}:
             owed.setdefault(fate.thread, []).append(fate.letter)
     if isinstance(facts, LedgerView):
-        return state, ownership, axes, owed, state.activity, state.boundary, state.bodies
+        return state, ownership, axes, owed, state.activity, state.boundary, state.bodies, unanswered
     for f in state.accepted:
         strand = f.data.get('strand') or f.by.removeprefix('strand:')
         thread = writers.get(strand)
