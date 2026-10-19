@@ -367,8 +367,10 @@ attests:
 - **strands** vs the live child registry (the same `owned_children`
   projection `portal-state.json` → `resources.coexisting_runs` and the
   closeout's live-child handover line both read) — a live child with no
-  `strands:` row is named, and a `strands:` row naming a run that isn't a
-  live child of this run is named too.
+  `strands:` row is named. Rows naming children no longer live are allowed:
+  `converged` and `stopped` can describe children already released. These
+  rows declare disposition; they do not stop a child. Use `stop:` to release
+  it before declaring it stopped.
 
 Mismatch ⇒ **bounce**: a notice named `cut bounced: <diff>`, the file
 retired, nothing delivered. Bounded like the closeout latch learned to be:
