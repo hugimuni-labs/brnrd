@@ -35,6 +35,10 @@ def event_id() -> str:
     return _rid("ev")
 
 
+def loom_letter_id() -> str:
+    return _rid("ltr")
+
+
 def activity_id() -> str:
     return _rid("act")
 

@@ -13,7 +13,7 @@ from pathlib import Path
 from brr.daemon2.facts import Fact, union
 
 from .home import Home, mint, thread_of
-from .registry import admit
+from .registry import admit, resource_of
 
 
 class LedgerConflict(RuntimeError):
@@ -59,6 +59,8 @@ def fact_filename(fact: Fact) -> str:
     """loom.jsonl holds leases, releases, attention, and injected letters."""
     if ((fact.kind in {"source", "blob", "note"} and fact.by.startswith("loom:"))
             or (fact.kind == "note" and fact.by.startswith("person:"))):
+        return "loom.jsonl"
+    if resource_of(fact.kind) == "wish" and fact.by.startswith("person:"):
         return "loom.jsonl"
     if fact.kind in _LOOM_KINDS:
         return "loom.jsonl"

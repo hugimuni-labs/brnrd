@@ -206,7 +206,7 @@ def test_security_config_runner_cmd_is_honoured(tmp_path):
 # ── Behavioural invariant #2: untrusted routing survives a repo override ─
 
 
-def test_repo_trust_untrusted_env_does_not_change_untrusted_routing(tmp_path):
+def test_repo_trust_untrusted_env_does_not_change_untrusted_routing(tmp_path, monkeypatch):
     """#533 required test 2 — #524's invariant, enforced one layer down.
 
     A repo config cannot escalate an untrusted event past solitary by
@@ -231,6 +231,8 @@ def test_repo_trust_untrusted_env_does_not_change_untrusted_routing(tmp_path):
         "docker.image=brr-runner:local\n", encoding="utf-8"
     )
     cfg = conf.load_config(repo)
+    # The claim is routing, not this machine's Docker daemon.
+    monkeypatch.setattr(trust, "_backend_unavailable", lambda env: "")
 
     decision = trust.resolve_decision(
         {"source": "github", "trust_tier": "untrusted"}, cfg

@@ -703,3 +703,358 @@ export const DEFAULT_SCALE = { repos: 3, environments: 2, shells: 2, cores: 3, q
 // measured against by hand: many projects, many environments, a wide
 // catalog across shells and cores, several quota windows in flight.
 export const STRESS_SCALE = { repos: 12, environments: 5, shells: 4, cores: 6, quotaWindows: 4 };
+
+// --- The loom snapshot (repro/drive-home-board.mjs) -----------------------
+//
+// `GET /v1/dashboard/loom`, v1 (threads/inbox/loom-snapshot.md in the self
+// repo): what `/` renders as the home board. Every stamp is relative to the
+// moment `loomSnapshots()` is called, so the ages and resets on a shot read
+// the same on any day. Three scenarios: a busy board (every turn, every
+// strand state, receipts and a notice in the log), a quiet one, and one
+// where fuel is the news.
+export function loomSnapshots(now = Date.now()) {
+	const at = (minutes) => new Date(now - minutes * 60_000).toISOString();
+	const resets = (minutes) => new Date(now + minutes * 60_000).toISOString();
+	const PR = 'https://github.com/hugimuni-labs/brnrd/pull';
+	const bodies = {
+		default: 'claude/opus',
+		choices: ['claude/opus', 'claude/sonnet', 'codex/gpt-6.1-sol', 'grok/grok-4.7']
+	};
+	const healthyFuel = [
+		{
+			shell: 'claude',
+			state: 'ok',
+			gauges: [
+				{ window: 'session', left_pct: 82, resets_at: resets(134) },
+				{ window: 'week', left_pct: 97, resets_at: resets(4 * 1440) }
+			],
+			cores: ['opus', 'sonnet']
+		},
+		{
+			shell: 'codex',
+			state: 'ok',
+			gauges: [
+				{ window: 'session', left_pct: 64, resets_at: resets(71) },
+				{ window: 'week', left_pct: 88, resets_at: resets(2 * 1440) }
+			],
+			cores: ['gpt-6.1-sol', 'gpt-6.1-mini']
+		}
+	];
+
+	const busy = {
+		v: 1,
+		at: at(0.5),
+		stale_s: 20,
+		presence: {
+			strand: 's-ae66-6vf7ze',
+			thread: 'inbox',
+			state: 'working',
+			now: 'Fold the night-shift handoff into the brnrd.dev row and answer Arseni on landing copy',
+			owed: 2,
+			body: 'claude/opus'
+		},
+		fuel: healthyFuel,
+		bodies,
+		threads: [
+			{
+				id: 'landing-loom',
+				title: 'The logged-out brnrd.dev landing, brought up to the loom',
+				status: 'open',
+				turn: 'mine',
+				opened_by: 'thread:inbox',
+				plan: { done: 2, total: 6, next: 'Hero: the three nouns as the first screen' },
+				strands: [{ id: 's-ae66-k2p9qa', body: 'claude/sonnet', state: 'working', since: at(18) }],
+				done: [],
+				owed: 0,
+				last_at: at(3)
+			},
+			{
+				id: 'answer-asks-build',
+				title: 'Asks answered from the board: one tap, a receipt back',
+				status: 'open',
+				turn: 'yours',
+				opened_by: 'person:arseni',
+				plan: { done: 6, total: 7, next: 'Arseni: merge #2347 or say what is wrong with it' },
+				strands: [{ id: 's-ae66-riiuvn', body: 'claude/opus', state: 'holding', since: at(42) }],
+				done: [{ kind: 'pr', ref: `${PR}/2347`, line: 'asks, graph, receipts on the board' }],
+				owed: 1,
+				last_at: at(9)
+			},
+			{
+				id: 'loom-on-the-web',
+				title: 'GET /v1/dashboard/loom and the letters POST, on the hosted side',
+				status: 'open',
+				turn: 'mine',
+				opened_by: 'thread:inbox',
+				plan: { done: 4, total: 5, next: 'Deploy and read the snapshot back from prod' },
+				strands: [
+					{ id: 's-ae66-nsyh0r', body: 'codex/gpt-6.1-sol', state: 'working', since: at(55) },
+					{ id: 's-ae66-8vajw7', body: 'claude/sonnet', state: 'idle', since: at(120) }
+				],
+				done: [{ kind: 'pr', ref: `${PR}/2300`, line: 'loom snapshot endpoint' }],
+				owed: 0,
+				last_at: at(14)
+			},
+			{
+				id: 'pricing-page',
+				title: 'Pricing that says what a shell-hour costs',
+				status: 'open',
+				turn: 'yours',
+				opened_by: 'thread:inbox',
+				plan: { done: 1, total: 4, next: 'Pick one of the three price ladders' },
+				strands: [{ id: 's-ae66-p7ricx', body: 'claude/opus', state: 'parked', since: at(300) }],
+				done: [],
+				owed: 1,
+				last_at: at(95)
+			},
+			{
+				id: 'grok-shell',
+				title: 'Grok as a third shell, with its own fuel gauge',
+				status: 'open',
+				turn: 'blocked',
+				blocked_on: 'an xAI API key',
+				opened_by: 'loom',
+				plan: { done: 3, total: 5, next: 'Read the quota headers once a key exists' },
+				strands: [
+					{ id: 's-ae66-gr0k4a', body: 'codex/gpt-6.1-sol', state: 'failed', since: at(400) }
+				],
+				done: [],
+				owed: 0,
+				last_at: at(6 * 60)
+			},
+			{
+				id: 'scar-merge-union',
+				title: 'A send-self edit to another thread’s file can merge as a union',
+				status: 'open',
+				turn: 'none',
+				opened_by: 'thread:inbox',
+				plan: { done: 1, total: 3, next: 'Write the failing test against send-self' },
+				strands: [],
+				done: [],
+				owed: 0,
+				last_at: at(26 * 60)
+			},
+			{
+				id: 'park-wakes',
+				title: 'Park, refill, wake: a shell that runs dry sleeps and comes back',
+				status: 'settled',
+				turn: 'none',
+				opened_by: 'person:arseni',
+				plan: { done: 5, total: 5 },
+				strands: [
+					{ id: 's-ae66-pk3w1z', body: 'claude/opus', state: 'settled', since: at(30 * 60) }
+				],
+				done: [{ kind: 'pr', ref: `${PR}/2348`, line: 'park-wakes merged' }],
+				owed: 0,
+				last_at: at(31 * 60)
+			}
+		],
+		log: [
+			{
+				id: 'letter:mine:155783668:4520',
+				at: at(1),
+				from: 's-ae66-6vf7ze',
+				to: 'person:arseni',
+				thread: 'inbox',
+				kind: 'letter',
+				head: 'Landing copy: I kept your line for the hero and moved the install step under it. Two variants on the thread if you want to compare.'
+			},
+			{
+				id: 's-ae66-k2p9qa/a81',
+				at: at(3),
+				from: 's-ae66-k2p9qa',
+				thread: 'landing-loom',
+				kind: 'letter',
+				head: 'Hero draft pushed to the room; shots next.'
+			},
+			{
+				id: 's-ae66-riiuvn/q2',
+				at: at(9),
+				from: 's-ae66-riiuvn',
+				thread: 'answer-asks-build',
+				kind: 'letter',
+				head: 'Ready for you: #2347 is green, ui-shots posted. Merge, or tell me what is off.'
+			},
+			{
+				id: 's-ae66-riiuvn/r1',
+				at: at(11),
+				from: 's-ae66-riiuvn',
+				thread: 'answer-asks-build',
+				kind: 'receipt',
+				head: 'PR #2347 opened',
+				ref: `${PR}/2347`
+			},
+			{
+				id: 'letter:mine:155783668:4511',
+				at: at(13),
+				from: 'person:arseni',
+				to: 'thread:inbox',
+				thread: 'inbox',
+				kind: 'letter',
+				head: 'Body choice belongs on the fuel strip, not in a settings page. Tap a shell, pick a core, done.'
+			},
+			{
+				id: 's-ae66-nsyh0r/r2',
+				at: at(14),
+				from: 's-ae66-nsyh0r',
+				thread: 'loom-on-the-web',
+				kind: 'receipt',
+				head: 'PR #2300 opened: loom snapshot endpoint',
+				ref: `${PR}/2300`
+			},
+			{
+				id: 's-ae66-nsyh0r/l7',
+				at: at(22),
+				from: 's-ae66-nsyh0r',
+				thread: 'loom-on-the-web',
+				kind: 'letter',
+				head: 'No snapshot is a 404; signed out is a 401. The 200 carries stale_s.'
+			},
+			{
+				id: 'loom/n-31',
+				at: at(40),
+				from: 'loom',
+				thread: 'grok-shell',
+				kind: 'notice',
+				head: 'strand s-ae66-gr0k4a failed twice on grok-shell; the loom will not wake it again until the key exists.'
+			},
+			{
+				id: 's-ae66-p7ricx/q1',
+				at: at(95),
+				from: 's-ae66-p7ricx',
+				thread: 'pricing-page',
+				kind: 'letter',
+				head: 'Three ladders on the thread. I would ship the middle one; your call.'
+			},
+			{
+				id: 'letter:mine:155783668:4498',
+				at: at(130),
+				from: 'person:arseni',
+				to: 'thread:inbox',
+				thread: 'inbox',
+				kind: 'letter',
+				head: 'Open a thread for pricing. Keep it short.'
+			},
+			{
+				id: 's-ae66-6vf7ze/o1',
+				at: at(131),
+				from: 's-ae66-6vf7ze',
+				thread: 'inbox',
+				kind: 'letter',
+				head: 'Opened thread:pricing-page and put a strand on it.'
+			},
+			{
+				id: 's-ae66-gr0k4a/l2',
+				at: at(6 * 60),
+				from: 's-ae66-gr0k4a',
+				thread: 'grok-shell',
+				kind: 'letter',
+				head: 'Blocked: no xAI key on this machine.'
+			},
+			{
+				id: 's-ae66-pk3w1z/r3',
+				at: at(31 * 60),
+				from: 's-ae66-pk3w1z',
+				thread: 'park-wakes',
+				kind: 'receipt',
+				head: 'park-wakes merged',
+				ref: `${PR}/2348`
+			},
+			{
+				id: 's-ae66-6vf7ze/s1',
+				at: at(31 * 60 + 5),
+				from: 's-ae66-6vf7ze',
+				thread: 'inbox',
+				kind: 'letter',
+				head: 'Settled park-wakes: merged, loaded, a dry shell slept and woke on its own.'
+			},
+			{
+				id: 'letter:mine:155783668:4420',
+				at: at(33 * 60),
+				from: 'person:arseni',
+				to: 'thread:inbox',
+				thread: 'inbox',
+				kind: 'letter',
+				head: 'Good night. Keep the scar thread for tomorrow.'
+			}
+		]
+	};
+
+	const quiet = {
+		v: 1,
+		at: at(1),
+		stale_s: 15,
+		presence: {
+			strand: 's-ae66-6vf7ze',
+			thread: 'inbox',
+			state: 'idle',
+			now: 'Nothing owed. Write a letter to start something.',
+			owed: 0,
+			body: 'claude/opus'
+		},
+		fuel: healthyFuel,
+		bodies,
+		threads: [
+			{
+				id: 'scar-merge-union',
+				title: 'A send-self edit to another thread’s file can merge as a union',
+				status: 'open',
+				turn: 'none',
+				opened_by: 'thread:inbox',
+				plan: { done: 1, total: 3, next: 'Write the failing test against send-self' },
+				strands: [{ id: 's-ae66-sc4r9m', body: 'claude/sonnet', state: 'idle', since: at(200) }],
+				done: [],
+				owed: 0,
+				last_at: at(200)
+			},
+			{
+				id: 'park-wakes',
+				title: 'Park, refill, wake: a shell that runs dry sleeps and comes back',
+				status: 'open',
+				turn: 'none',
+				opened_by: 'person:arseni',
+				plan: { done: 5, total: 5 },
+				strands: [],
+				done: [{ kind: 'pr', ref: `${PR}/2348`, line: 'park-wakes merged' }],
+				owed: 0,
+				last_at: at(9 * 60)
+			}
+		],
+		log: busy.log
+			.filter((e) => ['inbox', 'park-wakes', 'scar-merge-union'].includes(e.thread))
+			.slice(-3)
+	};
+
+	const lowFuel = {
+		...busy,
+		at: at(2),
+		stale_s: 340,
+		presence: {
+			...busy.presence,
+			state: 'holding',
+			now: 'Waiting for codex to refill before waking loom-on-the-web'
+		},
+		fuel: [
+			{
+				shell: 'claude',
+				state: 'ok',
+				gauges: [
+					{ window: 'session', left_pct: 9, resets_at: resets(47) },
+					{ window: 'week', left_pct: 61, resets_at: resets(3 * 1440) }
+				],
+				cores: ['opus', 'sonnet']
+			},
+			{
+				shell: 'codex',
+				state: 'dry',
+				gauges: [
+					{ window: 'session', left_pct: 0, resets_at: resets(118) },
+					{ window: 'week', left_pct: 40, resets_at: resets(2 * 1440) }
+				],
+				cores: ['gpt-6.1-sol', 'gpt-6.1-mini']
+			}
+		]
+	};
+
+	return { busy, quiet, lowFuel };
+}
