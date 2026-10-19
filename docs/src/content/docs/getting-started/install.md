@@ -47,7 +47,40 @@ that CLI; it never asks you for a model key of its own.
 Self-hosted gates and local execution are free. No brnrd account is needed to
 use them.
 
-## Run `brnrd`
+## Run the loom
+
+The loom is brnrd's runtime: one process that holds your threads, starts a
+coding-agent body for each, and hands them letters. It lives in a home
+directory you choose; `~/brnrd` is the one brnrd finds without `--home`.
+
+```bash
+brnrd loom config edit --home ~/brnrd   # set body = "claude/sonnet" (shell/core)
+brnrd loom install --home ~/brnrd       # launchd on macOS, systemd --user on Linux
+brnrd loom status
+brnrd loom logs
+```
+
+`config edit` writes `~/brnrd/loom/config.toml` with every key and its help;
+`body` is the only one `install` needs. The service runs
+`python -m brr.loom.runtime loom --home ~/brnrd` with the Python brnrd is
+installed in, and it freezes the installing shell's `PATH`: run `install` from
+the shell whose tools (`claude`, `codex`, `gh`, …) your bodies should see.
+`brnrd setup --home ~/brnrd` pairs a channel such as Telegram, so letters reach
+you away from the terminal. `brnrd loom stop`, `start` and `uninstall` do what
+they say.
+
+To upgrade, run `uv tool upgrade brnrd` (or the route you installed with). The
+running loom sees its files change and re-execs itself; its bodies resume from
+the letters they held.
+
+:::note[The loom or the daemon]
+The loom (`brnrd loom …`) is the runtime brnrd's own resident runs on. The
+daemon (`brnrd daemon install`, and the guided setup below) is the earlier one:
+gates bound to repositories, optionally a brnrd account. They are separate
+services; you need only one.
+:::
+
+## Or: the daemon's guided setup
 
 ```bash
 brnrd
@@ -122,8 +155,8 @@ installs brnrd from PyPI into it, and hands over. Every run after that is just a
 launch. Your system Python is not touched and your `PATH` is not rewritten by
 the launcher itself — only by npm, for the `brnrd` command.
 
-That durability is what makes the npm route a real install: `brnrd daemon
-install` writes a systemd/launchd unit pointing into that virtualenv, and it is
+That durability is what makes the npm route a real install: `brnrd loom
+install` and `brnrd daemon install` write a systemd/launchd unit pointing into that virtualenv, and it is
 still there tomorrow.
 
 If no Python is on the machine, the launcher downloads a checksum-pinned
@@ -131,8 +164,8 @@ If no Python is on the machine, the launcher downloads a checksum-pinned
 under the same directory. It never pipes a script into a shell.
 
 :::caution[Not `uvx brnrd` or `pipx run brnrd`]
-Both run from a disposable, per-invocation environment. `brnrd daemon install`
-would pin the background service to a binary path that disappears with it. Use a
+Both run from a disposable, per-invocation environment. `brnrd loom install`
+or `brnrd daemon install` would pin the background service to a binary path that disappears with it. Use a
 persistent install, then install the service.
 :::
 

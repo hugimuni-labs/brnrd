@@ -44,30 +44,37 @@ doesn't reproduce them because they weren't re-verified for this page.
 
 ## 3. Install brnrd
 
-Same three routes as any machine:
-
 ```bash
-npm install -g brnrd         # if you have Node
+curl -LsSf https://hugimuni-labs.github.io/brnrd/install.sh | sh
 # or: uv tool install brnrd
-# or: pipx install brnrd
+# or: npm install -g brnrd     # if you have Node
 brnrd --version
 ```
 
-## 4. Run it
+## 4. Run the loom
 
 ```bash
-brnrd
+brnrd loom config edit --home ~/brnrd   # set body = "claude/sonnet" (shell/core)
+brnrd loom install --home ~/brnrd       # a systemd --user unit
+brnrd loom status
+brnrd setup --home ~/brnrd              # pair a channel, e.g. Telegram
 ```
 
-The guided setup pairs this VPS with your brnrd account and prints a
-pairing link. **Open that link on your phone or laptop** — it's a link you
-approve, not a localhost callback, so it doesn't need a browser on the VPS
-itself. From there it installs and starts the background service
-(a systemd unit on Linux) the same way it would on a desktop.
+The unit runs `python -m brr.loom.runtime loom --home ~/brnrd` with the Python
+brnrd is installed in, under the `PATH` of the shell you installed it from.
+`brnrd loom logs` follows its output. On a box you log out of, keep the user
+manager alive past logout with `sudo loginctl enable-linger $USER`.
+`uv tool upgrade brnrd` upgrades it; the loom re-execs itself on the new files.
+More in [Install](../../getting-started/install/) → "Run the loom".
 
-Prefer no account at all? `brnrd gate setup telegram && brnrd daemon install`
-wires a self-hosted Telegram gate directly, with no brnrd account or payment
-involved (see [Connect](../../getting-started/connect/)).
+:::note[The daemon instead]
+The earlier runtime still works: bare `brnrd` is its guided setup. It pairs
+this VPS with your brnrd account and prints a pairing link. **Open that link on
+your phone or laptop**; it is a link you approve, not a localhost callback.
+Prefer no account? `brnrd gate setup telegram && brnrd daemon install` wires a
+self-hosted Telegram gate directly (see
+[Connect](../../getting-started/connect/)). Run the loom or the daemon, not both.
+:::
 
 ## What you don't need to open
 
