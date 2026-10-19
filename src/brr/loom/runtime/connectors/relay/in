@@ -46,11 +46,21 @@ def pull_once(drop, state, client, cursor, failures=None):
             origin = event.get('reply_to') or {}
             meta = cloud._origin_meta(origin)
             platform, chat = str(meta['cloud_platform']), str(meta['cloud_chat_id'])
+            # brnrd.dev's composer: the account's own page is one chat, keyed by
+            # its login, and the letter names the thread it was written on.
+            thread = wake = None
+            if platform == 'loom':
+                chat, thread, wake = str(origin.get('user_id') or ''), origin.get('thread'), origin.get('body')
             ident = message_id(platform, chat, origin.get('message_id') or origin.get('comment_id') or event_id)
             # No slash/path from a remote id is ever used as a file name.
             import re
             if not re.fullmatch(r'[A-Za-z0-9_%:#.-]+', ident):
                 raise ValueError('relay: unsafe message id')
+            if platform == 'loom' and not all(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', str(v))
+                                              for v in (chat, *([thread] if thread else []))):
+                raise ValueError('relay: unsafe loom login or thread')
+            if wake and not re.fullmatch(r'\S+', str(wake)):
+                raise ValueError('relay: unsafe loom body')
             names = cloud._attachment_names(event.get('attachments'))
             if names is None:
                 raise ValueError('relay: unreadable attachments')
@@ -78,6 +88,11 @@ def pull_once(drop, state, client, cursor, failures=None):
                 fields['from'] = f'{platform}:{user}'
             if origin.get('reply_to_message_id') is not None:
                 fields['re'] = message_id(platform, chat, origin['reply_to_message_id'])
+            if thread:
+                fields['thread'] = thread
+            if wake:
+                # The composer's shell/core is the person's wake word.
+                fields['wake'] = wake
             if missing:
                 fields['missing'] = ' '.join(map(str, missing))
             atomic_write(drop / f'{ident}.md', _front(fields, event.get('body') or ''))

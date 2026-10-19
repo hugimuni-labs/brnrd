@@ -16,12 +16,16 @@ from sqlalchemy.orm import Session
 from brnrd import (
     bench_store,
     github_marker,
+    ids,
+    inbox as inbox_service,
+    limits,
     publish_scope,
     run_release_requests,
     run_respawn_requests,
     run_stop_requests,
     wake_requests,
 )
+from brnrd.routers.daemons import LOOM_DAEMON_NAME
 from brnrd.routers.pairing import telegram_pair_core
 from brnrd.activity_records import dedupe_activity_records, fresh_activity_records
 from brnrd.auth import get_db
@@ -45,11 +49,13 @@ from brnrd.models import (
     TgPairCode,
 )
 from brnrd import schemas
+from pydantic import ValidationError
 from brr.asks import asks_from_files, repo_hint, resolve_receipts, run_repo_slugs
 from brr import says as says_mod
 
 from ._session import (
     _account_id,
+    _json_body,
     _age_label,
     _dt,
     _github_background_refresh_needed,
@@ -1398,6 +1404,73 @@ def dashboard_news_api(request: Request, db: Session = Depends(get_db)) -> JSONR
             **_withheld_lane(repos, "news"),
         }
     )
+
+
+@router.get("/v1/dashboard/loom")
+def dashboard_loom_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """The account's newest loom snapshot v1, unchanged, plus ``stale_s``."""
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    daemon = db.execute(
+        select(Daemon)
+        .where(Daemon.account_id == account_id, Daemon.loom_json.is_not(None), Daemon.loom_updated_at.is_not(None))
+        .order_by(Daemon.loom_updated_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    try:
+        doc = json.loads(daemon.loom_json) if daemon is not None else None
+    except ValueError:
+        doc = None
+    if not isinstance(doc, dict):
+        return JSONResponse({"detail": "no loom snapshot"}, status_code=404)
+    stale_s = max(0, int((datetime.now(timezone.utc) - _dt(daemon.loom_updated_at)).total_seconds()))
+    return JSONResponse({**doc, "stale_s": stale_s})
+
+
+def _loom_letter_repo_id(db: Session, account_id: str) -> str | None:
+    """The loom daemon's repo when it still belongs here, else the oldest repo."""
+    loom = db.execute(
+        select(Daemon).where(Daemon.account_id == account_id, Daemon.daemon_name == LOOM_DAEMON_NAME)
+    ).scalar_one_or_none()
+    if loom is not None and loom.repo_id:
+        repo = db.get(Repo, loom.repo_id)
+        if repo is not None and repo.account_id == account_id:
+            return repo.id
+    return db.execute(
+        select(Repo.id).where(Repo.account_id == account_id).order_by(Repo.created_at, Repo.id).limit(1)
+    ).scalar_one_or_none()
+
+
+@router.post("/v1/dashboard/loom/letters")
+async def dashboard_loom_letter(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """The board's composer: queue a letter the relay delivers to a loom thread."""
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    account = db.get(Account, account_id)
+    if account is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    try:
+        payload = schemas.LoomLetterPost.model_validate(await _json_body(request))
+    except ValidationError as exc:
+        return JSONResponse({"detail": exc.errors(include_url=False, include_context=False)}, status_code=422)
+    repo_id = _loom_letter_repo_id(db, account.id)
+    if repo_id is None:
+        return JSONResponse({"detail": "connect a repo first: the loom's relay inbox is repo-scoped"}, status_code=409)
+    limits.raise_if_denied(
+        limits.check_event_admission(db, request.app.state.settings, account, body=payload.text)
+    )
+    reply_to: dict[str, Any] = {
+        "platform": "loom",
+        "thread": payload.thread,
+        "message_id": ids.loom_letter_id(),
+        "user_id": account.github_login,
+    }
+    if payload.body:
+        reply_to["body"] = payload.body
+    event = inbox_service.enqueue(db, repo_id=repo_id, body=payload.text, source="web", reply_to=reply_to)
+    return JSONResponse({"ok": True, "event_id": event.event_id}, status_code=202)
 
 
 @router.get("/v1/dashboard/runners")
