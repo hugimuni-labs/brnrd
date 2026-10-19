@@ -214,11 +214,52 @@ def _context(lines) -> int:
     return 0
 
 
+# A delegate's report in a letter head; the whole report stays in the room.
+DELEGATE_HEAD = 800
+
+
+def _delegate(room: Path, stdin_text: str) -> None:
+    """A background delegate finished: a letter from this strand to itself.
+
+    The harness's own task notification cannot cross a held stop hook, so the
+    report waited for some other letter (mock 3: done 20:45, read 21:23). The
+    letter carries ``at`` now: a thread writes to itself only on a timer, and
+    the loom makes it due in the tick that drains it. A foreground delegate
+    already answered in its tool result and is not in ``background_tasks``.
+    """
+    payload = json.loads(stdin_text)
+    agent = str(payload.get("agent_id") or "")
+    if not agent or agent not in {str(task.get("id")) for task in payload.get("background_tasks") or ()
+                                  if isinstance(task, dict)}:
+        return
+    report = str(payload.get("last_assistant_message") or "").strip() or "(no final message)"
+    path = room / "delegates" / f"{agent}.md"
+    atomic_write(path, report + "\n")
+    head = report if len(report) <= DELEGATE_HEAD else report[:DELEGATE_HEAD - 1].rstrip() + "…"
+    strand, stem = room.name, mint(5)
+    thread = os.environ["BRNRD_THREAD"]
+    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    atomic_write(room / "port" / "out" / f"{stem}.md", (
+        "---\n"
+        "kind: letter\n"
+        f"id: {strand}/{stem}\n"
+        f"to: thread:{thread}\n"
+        f"from: {strand}\n"
+        f"at: {at}\n"
+        "---\n"
+        f"delegate {payload.get('agent_type') or 'agent'} {agent} finished; full report: {path}\n"
+        f"{head}\n"
+    ))
+
+
 def execute(event: str, room: Path, stdin_text: str) -> str:
     """Return the hook's stdout. Raise on trouble; ``run`` turns that into fail-open."""
     room = Path(room)
-    if event not in {"start", "post", "stop"}:
+    if event not in {"start", "post", "stop", "subagent-stop"}:
         raise ValueError(f"unknown jack event {event!r}")
+    if event == "subagent-stop":
+        _delegate(room, stdin_text)
+        return ""
     if event == "post":
         _set_state(room, stop_blocks=0)
         _note_tool(room, stdin_text)
