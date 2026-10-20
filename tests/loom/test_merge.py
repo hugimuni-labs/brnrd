@@ -298,15 +298,26 @@ def test_ten_lost_races_raise(tmp_path: Path) -> None:
     assert "main moved 10 times" in str(caught.value)
 
 
-def test_nonbare_self_updates_worktree_and_refuses(tmp_path: Path) -> None:
+def working_self(tmp: Path) -> Path:
     # Step 2's home/self: non-bare, main checked out, rooms are shared clones.
-    self_repo = tmp_path / "self"
+    self_repo = tmp / "self"
     git(None, "init", "-b", "main", os.fspath(self_repo))
     copy_seed(self_repo)
     write(self_repo, "memory/scars/a.md", "a-base\n")
     write(self_repo, "memory/itches/b.md", "b-base\n")
     write(self_repo, "threads/brnrd/README.md", "---\nid: brnrd\nstatus: open\ntense: plan\n---\n# Brnrd\n\nalpha line\n")
     commit(self_repo, "seed")
+    return self_repo
+
+
+def shared(self_repo: Path, dest: Path, name: str) -> Path:
+    git(None, "clone", "--shared", os.fspath(self_repo), os.fspath(dest))
+    git(dest, "checkout", "-b", name)
+    return dest
+
+
+def test_nonbare_self_updates_worktree_and_refuses(tmp_path: Path) -> None:
+    self_repo = working_self(tmp_path)
     hook = install_pre_receive(self_repo)
     assert hook == self_repo / ".git" / "hooks" / "pre-receive"
     assert hook.is_file()
@@ -314,13 +325,8 @@ def test_nonbare_self_updates_worktree_and_refuses(tmp_path: Path) -> None:
         "updateInstead"
     )
 
-    def shared(dest: Path, name: str) -> Path:
-        git(None, "clone", "--shared", os.fspath(self_repo), os.fspath(dest))
-        git(dest, "checkout", "-b", name)
-        return dest
-
-    left = shared(tmp_path / "a", "strand/a")
-    right = shared(tmp_path / "b", "strand/b")
+    left = shared(self_repo, tmp_path / "a", "strand/a")
+    right = shared(self_repo, tmp_path / "b", "strand/b")
     write(left, "memory/scars/a.md", "a-base\nfrom-a\n")
     commit(left, "scar a")
     write(right, "memory/itches/b.md", "b-base\nfrom-b\n")
@@ -334,7 +340,7 @@ def test_nonbare_self_updates_worktree_and_refuses(tmp_path: Path) -> None:
         self_repo, "rev-parse", "main"
     ).stdout.strip()
 
-    bad = shared(tmp_path / "c", "strand/c")
+    bad = shared(self_repo, tmp_path / "c", "strand/c")
     write(
         bad,
         "core/immune.d/60-block",
@@ -349,6 +355,51 @@ def test_nonbare_self_updates_worktree_and_refuses(tmp_path: Path) -> None:
     assert git(self_repo, "rev-parse", "HEAD").stdout == head
     assert git(self_repo, "status", "--porcelain").stdout == ""
     assert not (self_repo / "core/immune.d/60-block").exists()
+
+
+# Rounds of two sends at once into one working self. Without the lock, 20 of
+# 20 barrier-started rounds wedged it (2026-10-21); the rounds beyond the
+# first are for the lock, whose loser has to rebase and land every time.
+_WEDGE_ROUNDS = 10
+
+
+def test_concurrent_sends_never_wedge_a_working_self(tmp_path: Path) -> None:
+    # updateInstead checks the pushed tree out before the ref moves. Two
+    # pushes at once: the loser's ref update fails with its tree already
+    # staged, and every later push is refused for staged changes (#2370).
+    self_repo = working_self(tmp_path)
+    install_pre_receive(self_repo)
+    rooms = [
+        shared(self_repo, tmp_path / "a", "strand/a"),
+        shared(self_repo, tmp_path / "b", "strand/b"),
+    ]
+    for turn in range(_WEDGE_ROUNDS):
+        for index, repo in enumerate(rooms):
+            write(repo, f"memory/scars/race-{index}-{turn}.md", f"{index} {turn}\n")
+            commit(repo, f"race {index} {turn}")
+        barrier = threading.Barrier(2)
+        results: list = [None, None]
+        errors: list[BaseException] = []
+
+        def run(index: int, repo: Path) -> None:
+            try:
+                barrier.wait(timeout=30)
+                results[index] = send_to_self(repo)
+            except BaseException as exc:  # noqa: BLE001 — the assertion is the report
+                errors.append(exc)
+
+        threads = [threading.Thread(target=run, args=(i, r)) for i, r in enumerate(rooms)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=120)
+        status = git(self_repo, "status", "--porcelain").stdout
+        assert not errors, (turn, errors, status)
+        assert all(item is not None and item.status == "merged" for item in results), (turn, results)
+        assert git(self_repo, "diff", "--cached", "--quiet", check=False).returncode == 0, (turn, status)
+        assert status == "", (turn, status)
+        for index in range(2):
+            assert (self_repo / f"memory/scars/race-{index}-{turn}.md").is_file(), (turn, index)
 
 
 def test_cli_send_self(tmp_path: Path) -> None:
