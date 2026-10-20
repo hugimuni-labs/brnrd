@@ -42,6 +42,14 @@ A checklist row under `## Plan` names the letters it answers with a trailing
 boundary lists owed letters without a row from the landed plan and the letter
 ownership table; editing a file or mentioning an id in prose does not cite it.
 
+## Linking a file
+
+The loom mirrors `self` main to its forge remote within a minute of a landing. A
+path you send a person is a link: `<remote>/blob/<sha>/<path>`, where `<remote>`
+is `git remote get-url origin` without `.git` and `<sha>` is your room's `HEAD`
+after `send-self` returned `merged`. The sha pins the file as you wrote it. Send
+no bare path, and no link to a commit that has not landed.
+
 ## Wishes
 
 A wish is what someone wants from a thread, kept as facts; the wake lists the
