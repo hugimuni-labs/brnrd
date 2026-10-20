@@ -14,6 +14,7 @@ import json
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -41,21 +42,23 @@ def pending(self_dir: Path) -> tuple[str, str] | None:
     return url, head
 
 
-def is_private(url: str, forge_token: str) -> bool:
-    """Whether the forge says ``url``'s repo is private. Any doubt is no."""
+def is_private(url: str, forge_token: str) -> bool | None:
+    """Whether the forge says ``url``'s repo is private; none when it did not answer."""
     parts = urlsplit(url)
     if parts.scheme != "https" or parts.hostname != "github.com":
         return False
     path = parts.path.strip("/").removesuffix(".git")
-    req = urllib.request.Request(
-        f"https://api.github.com/repos/{path}",
-        headers={"Authorization": f"Bearer {resolve_secret(forge_token)}",
-                 "Accept": "application/vnd.github+json"})
     try:
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{path}",
+            headers={"Authorization": f"Bearer {resolve_secret(forge_token)}",
+                     "Accept": "application/vnd.github+json"})
         with urllib.request.urlopen(req, timeout=20) as resp:
             return json.load(resp).get("private") is True
+    except urllib.error.HTTPError as exc:
+        return False if exc.code in (403, 404) else None
     except Exception:
-        return False
+        return None
 
 
 def push(self_dir: Path, url: str, sha: str, forge_token: str) -> None:
@@ -83,6 +86,7 @@ class Mirror:
         self.worker: threading.Thread | None = None
         self.failing = False
         self.private: bool | None = None
+        self.asking = False
 
     def step(self, config) -> None:
         if not config.forge_token or (self.worker and self.worker.is_alive()):
@@ -99,9 +103,18 @@ class Mirror:
             return
         url, sha = found
         if self.private is None:
-            # Self holds people's pages: ask the forge once, keep the answer.
-            self.private = url.startswith(("/", "file://")) or is_private(url, config.forge_token)
-            if not self.private:
+            # Self holds people's pages: ask the forge, keep an answer, never a silence.
+            answer = url.startswith(("/", "file://")) or is_private(url, config.forge_token)
+            if answer is None:
+                if not self.asking:
+                    self.log(self.home, "mirror: could not ask the forge whether origin is "
+                                        "private; will retry")
+                self.asking = True
+                self.checked = None
+                return
+            self.asking = False
+            self.private = answer
+            if not answer:
                 self.log(self.home, "mirror: origin is not private; not mirroring")
         if not self.private:
             return

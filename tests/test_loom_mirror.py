@@ -104,3 +104,23 @@ def test_diverged_remote_is_named(tmp_path):
         assert "remote diverged from self main; mirror paused" in str(exc)
     else:
         raise AssertionError("push should have been rejected")
+
+
+def test_mirror_retries_when_the_forge_does_not_answer(tmp_path, monkeypatch):
+    home, s, _ = _setup(tmp_path)
+    (s / "a").write_text("2")
+    _g(s, "commit", "-qam", "two")
+    _g(s, "remote", "set-url", "origin", "https://github.com/o/r.git")
+    answers = iter([None, True])
+    monkeypatch.setattr(mirror, "is_private", lambda url, tok: next(answers))
+    monkeypatch.setattr(mirror, "push", lambda *a: None)
+    logs = []
+    m = mirror.Mirror(home, lambda h, msg: logs.append(msg))
+    cfg = SimpleNamespace(forge_token="command: printf tok")
+    m.step(cfg)
+    assert m.worker is None
+    assert logs == ["mirror: could not ask the forge whether origin is private; will retry"]
+    m.step(cfg)
+    assert m.worker is not None
+    m.worker.join()
+    assert len(logs) == 1
