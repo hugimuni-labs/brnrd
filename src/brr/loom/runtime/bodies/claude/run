@@ -3,6 +3,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from brr.loom.runtime.port import wake_parts
 
 room, core = sys.argv[1:]
 room = Path(room)
@@ -20,6 +21,9 @@ settings = {"hooks": {
 path = room / ".claude/settings.json"
 path.parent.mkdir(parents=True, exist_ok=True)
 path.write_text(json.dumps(settings) + "\n")
-os.execvp("claude", ["claude", "-p", "--model", core, "--settings", str(path),
-                     "--dangerously-skip-permissions", "--",
-                     Path(os.environ["BRNRD_WAKE"]).read_text()])
+# The self's core is appended to Claude Code's own system prompt, never put
+# in its place; the user turn carries only the occasion.
+core_text, occasion = wake_parts(os.environ)
+system = ["--append-system-prompt-file", os.environ["BRNRD_CORE"]] if core_text else []
+os.execvp("claude", ["claude", "-p", "--model", core, "--settings", str(path), *system,
+                     "--dangerously-skip-permissions", "--", occasion])

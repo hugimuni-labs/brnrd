@@ -378,8 +378,12 @@ def default_loom_part(clone: Path, thread: str) -> str:
 
 def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
              loom_part: Path | None = None, repos: Path | None = None,
-             stdout=None, stderr=None) -> int:
-    """Run the self recipe and add its thread wishes within the wake budget."""
+             core: Path | None = None, stdout=None, stderr=None) -> int:
+    """Run the self recipe and add its thread wishes within the wake budget.
+
+    With ``core``, a recipe that knows ``LOOM_CORE`` writes the core there and
+    leaves it out of stdout; one that does not leaves the file unwritten.
+    """
     _segment(thread, "thread")
     clone = resolve_clone(room_dir)
     recipe = clone / "core" / "loom" / "wake"
@@ -390,6 +394,8 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
         env["LOOM_PART"] = str(loom_part)
     if repos is not None:
         env["LOOM_REPOS"] = str(repos)
+    if core is not None:
+        env["LOOM_CORE"] = str(core)
     from .home import home_of_room
     from .ledger import read_facts
     from .wishes import insert_wishes, wake_wishes

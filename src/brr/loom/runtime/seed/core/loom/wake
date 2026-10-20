@@ -7,6 +7,9 @@ stdout is the prompt. Exit 0 is ok, exit 3 is over budget (stderr says
 what did not fit), anything else is a broken recipe.
 
 LOOM_BUDGET_BYTES defaults to 24000. LOOM_PART is a file, written by the loom.
+When LOOM_CORE names a file, the core (identity and stance) is written there
+and left out of stdout: a body that has a system slot carries it there, where
+automated turns and compaction do not wear it down. The budget still counts it.
 The tree is cut from the bottom, and a narrowed wake says how many entries
 were left out. Then the thread's README is cut from its end, and says so: it
 is the one part the waking body can fix, so it never costs a letter. The
@@ -180,20 +183,24 @@ def clip(readme: str, excess: int, limit: int) -> str:
     return kept + note.format(len(data) - len(kept.encode("utf-8")))
 
 
+def core_text(root: Path) -> str:
+    """Who wakes, whatever the occasion. Nothing per-wake goes here."""
+    identity = read_exact(root / "core" / "identity.md", "core/identity.md")
+    stance = read_exact(root / "memory" / "stance.md", "memory/stance.md")
+    return section("core/identity.md", identity) + section("memory/stance.md", stance)
+
+
 def fixed_text(root: Path, thread: str, loom: str, owed: Path, excess: int = 0, limit: int = 0) -> tuple[str, str]:
     """The parts never cut, as (before the tree, after the tree).
 
     The occasion goes last: it is what this wake is for.
     """
-    identity = read_exact(root / "core" / "identity.md", "core/identity.md")
-    stance = read_exact(root / "memory" / "stance.md", "memory/stance.md")
     readme_path = root / "threads" / thread / "README.md"
     readme = read_exact(readme_path, f"threads/{thread}/README.md")
     if excess:
         readme = clip(readme, excess, limit) or readme
     parts = [
-        section("core/identity.md", identity),
-        section("memory/stance.md", stance),
+        core_text(root),
         section(f"threads/{thread}/README.md", readme),
         notes_block(root, thread),
     ]
@@ -287,7 +294,13 @@ def main() -> None:
             f"core/identity.md, memory/stance.md and the letters are never cut.",
             3,
         )
-    sys.stdout.write(head + fit_tree(fixed, tree_lines(root, thread), limit) + tail)
+    out = head + fit_tree(fixed, tree_lines(root, thread), limit) + tail
+    core = os.environ.get("LOOM_CORE")
+    if core:
+        text = core_text(root)
+        Path(core).write_text(text, encoding="utf-8")
+        out = out[len(text):]
+    sys.stdout.write(out)
 
 
 if __name__ == "__main__":
