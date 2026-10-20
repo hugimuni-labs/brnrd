@@ -156,3 +156,26 @@ def test_the_backfill_proposes_from_the_opening_letter_and_writes_nothing(ledger
                           env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[2] / "src")})
     assert "--thread other" not in proc.stdout
 
+
+
+LETTERS = Path(__file__).parent / "fixtures" / "live-letters-2026-10-20.jsonl"
+
+
+def test_his_channel_letters_fold_as_his_say_and_a_loom_notice_does_not(ledger):
+    """The connector writes his letters (by loom:<install>); the sender is data.from."""
+    home, seat = ledger
+    shutil.copy(FIXTURE, home.facts_dir() / "live.jsonl")
+    shutil.copy(LETTERS, home.facts_dir() / "letters.jsonl")
+    notice = Fact(kind="letter", by="loom:aaaa", id="notice:test",
+                  data={"id": "notice:test", "from": "loom", "to": "thread:work", "body": "stuck"})
+    append(home, notice)
+    command(home, seat, "wish", "new", "--line", "unstick", "--say", "notice:test", "--thread", "work")
+    told = wishes(read_facts(home))
+    live = {json.loads(line)["data"]["wish"] for line in FIXTURE.read_text().splitlines()}
+    assert {told[w].origin for w in live} == {"said"}
+    assert next(w for w in told.values() if w.line == "unstick").origin == "derived"
+    shown = command(home, seat, "wishes", "--all")
+    assert "w-8rzhb6h7xyyz · " in shown and "unstick" in shown
+    rows = [row for row in shown.splitlines() if any(w in row for w in live)]
+    assert len(rows) == 8 and not any("derived" in row for row in rows)
+    assert "derived" in next(row for row in shown.splitlines() if "unstick" in row)
