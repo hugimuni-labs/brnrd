@@ -239,6 +239,10 @@ def test_an_open_ask_to_a_person_is_their_turn(tmp_path):
         doc = snapshot.assemble(home, read_facts(home), load_config(root))
         return next(t for t in doc["threads"] if t["id"] == "web")["turn"]
     assert turn() == "none"
+    # The input this test used to build, a resident wish with says and no parent, is refused.
+    with pytest.raises(ValueError, match="ask --for <wish>"):
+        wish_fact(read_facts(home), by="person:test", ident="new", line="Pick a domain",
+                  says=[["s-test-web001/ask", 0, None]], thread="web", sender="resident")
     root_wish = append(home, wish_fact(read_facts(home), by="person:test", ident="new", line="A site",
                                        says=[["p-test/site", 0, None]], thread="web"))
     ask = append(home, wish_fact(read_facts(home), by="person:test", ident="new", line="Pick a domain",
