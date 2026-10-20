@@ -56,7 +56,9 @@ def is_private(url: str, forge_token: str) -> bool | None:
         with urllib.request.urlopen(req, timeout=20) as resp:
             return json.load(resp).get("private") is True
     except urllib.error.HTTPError as exc:
-        return False if exc.code in (403, 404) else None
+        limited = (exc.headers.get("x-ratelimit-remaining") == "0"
+                   or exc.headers.get("retry-after") is not None)
+        return False if exc.code == 404 or (exc.code == 403 and not limited) else None
     except Exception:
         return None
 

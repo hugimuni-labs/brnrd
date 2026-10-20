@@ -124,3 +124,26 @@ def test_mirror_retries_when_the_forge_does_not_answer(tmp_path, monkeypatch):
     assert m.worker is not None
     m.worker.join()
     assert len(logs) == 1
+
+
+def test_is_private_reads_a_rate_limited_403_as_no_answer(monkeypatch):
+    import io
+    import urllib.error
+    from email.message import Message
+
+    def answer(code, **headers):
+        msg = Message()
+        for k, v in headers.items():
+            msg[k.replace("_", "-")] = v
+
+        def fake(req, timeout):
+            raise urllib.error.HTTPError(req.full_url, code, "x", msg, io.BytesIO(b""))
+        return fake
+
+    monkeypatch.setattr(mirror, "resolve_secret", lambda spec: "tok")
+    url = "https://github.com/o/r.git"
+    for code, headers, want in [(403, {"x_ratelimit_remaining": "0"}, None),
+                                (403, {"retry_after": "30"}, None),
+                                (403, {}, False), (404, {}, False), (500, {}, None)]:
+        monkeypatch.setattr(mirror.urllib.request, "urlopen", answer(code, **headers))
+        assert mirror.is_private(url, "x") is want, (code, headers)
