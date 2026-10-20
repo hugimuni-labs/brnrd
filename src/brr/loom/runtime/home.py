@@ -24,15 +24,40 @@ def resolve_home(flag: str | Path | None = None) -> tuple[Path, str]:
     if env:
         return Path(env).expanduser().resolve(), "env"
     default = Path.home() / "brnrd"
-    if any((default / marker).is_file() for marker in (
-        "loom/config.toml", "loom/install-id", "self/core/loom/wake",
-    )):
+    if is_home(default):
         return default.resolve(), "default"
     raise SystemExit(
         "no loom home: --home was not given; BRNRD_HOME is unset or empty; "
         f"default {default} is not a loom home. Pass --home PATH, set BRNRD_HOME, "
         "or initialise ~/brnrd with --home."
     )
+
+
+_MARKERS = ("loom/config.toml", "loom/install-id", "self/core/loom/wake")
+
+
+def is_home(path: Path) -> bool:
+    """A folder the loom has already written into, not merely one named like a home."""
+    return any((Path(path) / marker).is_file() for marker in _MARKERS)
+
+
+def found_homes() -> list[Path]:
+    """Every existing loom home in the places brnrd puts one, without a flag.
+
+    ``~/brnrd``, and any folder one level inside an account under brnrd's
+    state root (``accounts/<id>/<name>``), whatever it is called.
+    """
+    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state").expanduser()
+    accounts = state / "brnrd" / "accounts"
+    candidates = [Path.home() / "brnrd"]
+    if accounts.is_dir():
+        candidates += sorted(p for account in accounts.iterdir() if account.is_dir()
+                             for p in account.iterdir() if p.is_dir())
+    found: list[Path] = []
+    for path in candidates:
+        if is_home(path) and path.resolve() not in found:
+            found.append(path.resolve())
+    return found
 
 
 def mint(n: int) -> str:

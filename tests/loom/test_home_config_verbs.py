@@ -125,7 +125,7 @@ def test_service_install_freezes_env_home(user_home, monkeypatch):
     config_path(user_home).parent.mkdir()
     config_path(user_home).write_text('body = "fake/echo"\n')
     monkeypatch.setenv('BRNRD_HOME', str(user_home))
-    assert service.main(['install', '--no-start'], system='Darwin', agents_home=user_home / 'agents') == 0
+    assert service.main(['install', '--no-start', '--dev'], system='Darwin', agents_home=user_home / 'agents') == 0
     unit = plistlib.loads(macos.plist_path(home=user_home / 'agents', label=service.LABEL).read_bytes())
     argv = unit['ProgramArguments']
     assert argv[-2:] == ['--home', str(user_home.resolve())]
