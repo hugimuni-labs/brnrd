@@ -251,7 +251,7 @@ def parse_frontmatter(text: str) -> dict[str, str]:
         if ":" not in line:
             raise PortError(f"port frontmatter not key: value: {line!r}")
         key, value = line.split(":", 1)
-        found[key.strip()] = value.strip()
+        found[key.strip()] = _unquote(value.strip())
     body = text[end + 5:]
     if body.startswith("\n"):
         body = body[1:]
@@ -259,8 +259,27 @@ def parse_frontmatter(text: str) -> dict[str, str]:
     return found
 
 
+def _quote(value) -> str:
+    """One line per field: a value with a newline, or one that opens with a
+    quote, is written as a JSON string. A raw newline would end the field and
+    make its next line a field of its own, or close the frontmatter early."""
+    value = str(value)
+    return json.dumps(value) if "\n" in value or value.startswith('"') else value
+
+
+def _unquote(value: str) -> str:
+    if value.startswith('"'):
+        try:
+            loaded = json.loads(value)
+        except ValueError:
+            return value
+        if isinstance(loaded, str):
+            return loaded
+    return value
+
+
 def _front(fields: dict[str, str], body: str = "") -> str:
-    lines = ["---", *[f"{key}: {value}" for key, value in fields.items()], "---"]
+    lines = ["---", *[f"{key}: {_quote(value)}" for key, value in fields.items()], "---"]
     text = "\n".join(lines) + "\n"
     if body:
         text += body if body.endswith("\n") else body + "\n"
