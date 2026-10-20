@@ -239,11 +239,17 @@ def test_an_open_ask_to_a_person_is_their_turn(tmp_path):
         doc = snapshot.assemble(home, read_facts(home), load_config(root))
         return next(t for t in doc["threads"] if t["id"] == "web")["turn"]
     assert turn() == "none"
+    root_wish = append(home, wish_fact(read_facts(home), by="person:test", ident="new", line="A site",
+                                       says=[["p-test/site", 0, None]], thread="web"))
     ask = append(home, wish_fact(read_facts(home), by="person:test", ident="new", line="Pick a domain",
-                                 says=[["s-test-web001/ask", 0, None]], thread="web", sender="resident"))
+                                 thread="web", sender="resident", parent=root_wish.data["wish"]))
+    assert turn() != "yours"  # it waits on its opener, thread:brnrd, until that asks onward
+    onward = append(home, wish_fact(read_facts(home), by="person:test", ident="new", line="Pick a domain",
+                                    thread="brnrd", sender="resident", parent=ask.data["wish"]))
     assert turn() == "yours"
-    append(home, Fact(kind="wish.verdict", by="person:test", id="wish.verdict:t1",
-                      data={"wish": ask.data["wish"], "as": "accepted", "evidence": "word", "ref": "-"}))
+    for i, w in enumerate((onward, ask)):
+        append(home, Fact(kind="wish.verdict", by="person:test", id=f"wish.verdict:t{i}",
+                          data={"wish": w.data["wish"], "as": "accepted", "evidence": "word", "ref": "-"}))
     assert turn() == "none"
 
 
@@ -299,6 +305,6 @@ def test_wishes_carry_their_words_results_and_the_answer_newer_than_them(tmp_pat
         "answer": {"verdict": "correct", "at": "2026-10-19T10:05:00Z", "head": "Not quite: also the cost."},
     }
     assert ask == {"id": "w-ask", "thread": "web", "from": "resident", "line": "Pick a domain",
-                   "state": "heard", "origin": "derived", "at": "2026-10-19T10:03:00Z"}
+                   "state": "heard", "origin": "said", "at": "2026-10-19T10:03:00Z"}
     assert done["state"] == "accepted" and "answer" not in done
     assert done["verdict"] == {"as": "accepted", "evidence": "word", "at": "2026-10-19T10:09:00Z"}
