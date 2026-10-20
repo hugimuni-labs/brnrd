@@ -9,17 +9,24 @@ shell and core to run: the unit's argv passes no ``--adapter``.
 from __future__ import annotations
 
 import argparse
+import fcntl
+import json
 import os
+import re
+import shutil
+import signal
+import site
 import subprocess
 import sys
+import sysconfig
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from brr.daemon_install import linux, macos
 
-from .config import load_config
-from .home import resolve_home
+from .config import config_path, load_config, seed_config
+from .home import found_homes, is_home, resolve_home
 from .threads import _age
 
 
@@ -49,20 +56,252 @@ def _program(home: Path) -> list[str]:
     return ["-m", "brr.loom.runtime", "loom", "--home", str(home)]
 
 
-def _require_body(home: Path) -> str:
-    """Refuse a login service whose home has no ``shell/core`` body."""
-    choice = load_config(home).body
-    path = home / "loom" / "config.toml"
-    if not isinstance(choice, str) or not choice.strip():
+def _brr_source() -> Path | None:
+    """The checkout ``brr`` is imported from, or None when it is installed.
+
+    uv tool, pipx and pip all put brr under one of this interpreter's
+    site-packages. Anywhere else (an editable install, ``PYTHONPATH=src``)
+    is a source tree the service would go on running after the shell that
+    installed it has moved on.
+    """
+    import brr
+
+    package = Path(brr.__file__).resolve().parent
+    roots = {sysconfig.get_paths()[k] for k in ("purelib", "platlib")}
+    roots.update(site.getsitepackages() if hasattr(site, "getsitepackages") else [])
+    roots.add(site.getusersitepackages())
+    if any(package.is_relative_to(Path(root).resolve()) for root in roots if root):
+        return None
+    return package
+
+
+def _refuse_source(dev: bool) -> None:
+    source = _brr_source()
+    if source is None or dev:
+        return
+    raise SystemExit(
+        f"loom install: {_interpreter()} imports brr from {source}, a source checkout, "
+        "and the service would keep running it. Run `deactivate; hash -r` and "
+        "`brnrd loom install` again for the installed brnrd, or pass --dev to mean it."
+    )
+
+
+def _installed_home(agents_home: Path | None, system: str | None) -> Path | None:
+    try:
+        system = _platform(system)
+    except SystemExit:
+        return None
+    if system == "Linux":
+        return _linux_home(UNIT)
+    return macos.installed_workdir(home=_agents(agents_home), label=LABEL)
+
+
+def _service_home(flag, *, agents_home=None, system=None) -> tuple[Path, str]:
+    """``--home``, BRNRD_HOME, the installed service's home, the one home found, or ~/brnrd."""
+    if flag is not None or os.environ.get("BRNRD_HOME"):
+        return resolve_home(flag)
+    installed = _installed_home(agents_home, system)
+    if installed is not None and is_home(installed):
+        return installed.resolve(), "the installed service's"
+    found = found_homes()
+    default = (Path.home() / "brnrd").resolve()
+    if len(found) == 1:
+        return found[0], "default" if found[0] == default else "the only one found"
+    if found:
         raise SystemExit(
-            f"loom install: body is unset in {path}; set body to shell/core"
+            "several loom homes; pass --home with one of:\n"
+            + "\n".join(f"  {path}" for path in found)
         )
+    return default, "new"
+
+
+def _body_choice(home: Path) -> str | None:
+    """``body`` from the home's config: None when unset, refused when not shell/core."""
+    choice = load_config(home).body
+    if not isinstance(choice, str) or not choice.strip():
+        return None
     shell, slash, core = choice.partition("/")
     if not slash or not shell.strip() or not core.strip():
         raise SystemExit(
-            f"loom install: body must be shell/core, got {choice!r} in {path}"
+            f"loom install: body must be shell/core, got {choice!r} in {config_path(home)}"
         )
     return choice.strip()
+
+
+def _codex_model() -> str | None:
+    """The person's own codex default: top-level ``model`` in codex's config."""
+    path = Path(os.environ.get("CODEX_HOME") or "~/.codex").expanduser() / "config.toml"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        line = line.strip()
+        if line.startswith("["):
+            return None
+        match = re.fullmatch(r'model\s*=\s*"([^"]+)"\s*(#.*)?', line)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _defaults() -> list[tuple[str, str | None]]:
+    """The bodies install may pick, in order."""
+    return [("claude", "sonnet"), ("codex", _codex_model())]
+
+
+def _fuel(home: Path, shell: str) -> str | None:
+    """``session 91% week 76%`` when the shell's CLI answers with fuel above the floor."""
+    if shutil.which(shell) is None:
+        return None
+    from . import usage
+    from .adapters import resolve
+    from .home import Home
+
+    reading = home / "loom" / "usage" / f"{shell}.json"
+    try:
+        usage._refresh(reading.resolve(), resolve(Home(home), shell) / "usage")
+        windows = json.loads(reading.read_text())["windows"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    floor = load_config(home).hold_floor_pct
+    if not windows or any(w["left_pct"] <= floor for w in windows):
+        return None
+    return " ".join(f"{w['name']} {w['left_pct']:g}%" for w in windows)
+
+
+def _write_body(home: Path, choice: str) -> None:
+    """Set ``body`` in the config, keeping every other line as written."""
+    seed_config(home)
+    path = config_path(home)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    setting = f'body = "{choice}"'
+    for index, line in enumerate(lines):
+        if re.match(r"\s*body\s*=", line):
+            lines[index] = setting
+            break
+    else:
+        lines.append(setting)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _require_body(home: Path) -> str:
+    """Refuse a login service whose home has no ``shell/core`` body."""
+    choice = _body_choice(home)
+    if choice is None:
+        raise SystemExit(
+            f"loom install: body is unset in {config_path(home)}; set body to shell/core"
+        )
+    return choice
+
+
+def _settle_body(home: Path, *, write: bool = True) -> tuple[str, str]:
+    """The body install's service will run, and where it came from.
+
+    Unset: the first default body whose CLI answers with fuel, written to
+    the config so ``loom config`` and the service agree on it.
+    """
+    choice = _body_choice(home)
+    if choice is not None:
+        return choice, "from config"
+    tried = []
+    for shell, core in _defaults():
+        fuel = _fuel(home, shell) if core else None
+        if fuel is None:
+            tried.append(shell if core else f"{shell} (no default model)")
+            continue
+        choice = f"{shell}/{core}"
+        if write:
+            _write_body(home, choice)
+        where = f"written to {config_path(home)}" if write else "not written: dry run"
+        return choice, f"picked: {shell} has fuel, {fuel}; {where}"
+    raise SystemExit(
+        f"loom install: body is unset in {config_path(home)} and no CLI answered with fuel "
+        f"({', '.join(tried)}); set body to shell/core with `brnrd loom config edit`"
+    )
+
+
+def _lock_held(home: Path) -> bool:
+    path = home / "loom" / "loop.lock"
+    if not path.is_file():
+        return False
+    fd = os.open(path, os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)
+    return False
+
+
+def _holders(run, home: Path) -> list[int] | None:
+    """Pids with the home's loop lock open, or None when lsof cannot say."""
+    try:
+        result = _run(run)(
+            ["lsof", "-t", str(home / "loom" / "loop.lock")],
+            check=False, capture_output=True, text=True,
+        )
+    except OSError:
+        return None
+    pids = [int(raw) for raw in (result.stdout or "").split() if raw.isdigit()]
+    return [pid for pid in pids if pid != os.getpid()] or None
+
+
+def _service_pid(run, system: str, alive) -> int | None:
+    if system == "Linux":
+        if _unit_text(UNIT) is None:
+            return None
+        state, pid = _linux_show(run, UNIT)
+        return pid if state == "active" and pid is not None and alive(pid) else None
+    result = _run(run)(
+        ["launchctl", "print", macos._gui_service(LABEL)],
+        check=False, capture_output=True, text=True,
+    )
+    pid = _parse_pid(_fields(result.stdout or "").get("pid"))
+    return pid if result.returncode == 0 and pid is not None and alive(pid) else None
+
+
+def _replace(home: Path, *, run, system: str, alive, dry_run: bool) -> str:
+    """Make way for the new service; the receipt's ``replaced:`` line.
+
+    The service's own loom is left to the install, which boots it out
+    before it loads the new one. A loom running outside the service (a
+    shell, an old install) holds the home's loop lock and would keep the
+    new one waiting: it gets SIGTERM, which ends only its loop. Bodies
+    are never signalled: they keep their sessions, and the new loom finds
+    them in the ledger.
+    """
+    service = _service_pid(run, system, alive)
+    others = []
+    if _lock_held(home):
+        holders = _holders(run, home)
+        if holders is None:
+            raise SystemExit(
+                f"loom install: a loom outside the service holds {home / 'loom' / 'loop.lock'} "
+                "and lsof could not name it; stop it, then run install again"
+            )
+        others = [pid for pid in holders if pid != service]
+    parts = [f"pid {service}, the service's loom"] if service else []
+    parts += [f"pid {pid}, a loom outside the service" for pid in others]
+    if not parts:
+        return "none"
+    if dry_run:
+        return "would stop " + "; ".join(parts) + " · bodies keep running"
+    for pid in others:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + 10
+    while others and _lock_held(home):
+        if time.monotonic() > deadline:
+            raise SystemExit(
+                f"loom install: sent SIGTERM to {', '.join(map(str, others))}; "
+                f"{home / 'loom' / 'loop.lock'} is still held after 10s"
+            )
+        time.sleep(0.1)
+    return "; ".join(parts) + " · bodies keep running"
 
 
 def _pid_alive(pid: int) -> bool:
@@ -218,14 +457,46 @@ def _agents(agents_home: Path | None) -> Path:
     return agents_home if agents_home is not None else Path.home()
 
 
+def _receipt(rows: list[tuple[str, object]]) -> None:
+    for key, value in rows:
+        print(f"{key}: {value}")
+
+
 def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeout, system) -> int:
     parser = argparse.ArgumentParser(prog="brnrd loom install")
     parser.add_argument("--home")
     parser.add_argument("--no-start", action="store_true")
+    parser.add_argument("--dev", action="store_true",
+                        help="install even though brr is imported from a source checkout")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="print the receipt install would print; write and start nothing")
     args = parser.parse_args(argv)
-    home, _ = resolve_home(args.home)
-    _require_body(home)
+    from brr import __version__
+
+    _refuse_source(args.dev)
     system = _platform(system)
+    home, source = _service_home(args.home, agents_home=agents_home, system=system)
+    body, picked = _settle_body(home, write=not args.dry_run)
+    alive = _alive(pid_alive)
+    if system not in {"Linux", "Darwin"}:
+        raise SystemExit("[brnrd] loom install on this platform is not implemented yet")
+    unit_file = (linux.unit_path(UNIT) if system == "Linux"
+                 else macos.plist_path(home=_agents(agents_home), label=LABEL))
+    receipt = [
+        ("interpreter", _interpreter()),
+        ("brnrd", __version__ + (" (source checkout, --dev)" if _brr_source() else "")),
+        ("home", f"{home} ({source})"),
+        ("body", f"{body} ({picked})"),
+        ("service", unit_file),
+    ]
+    if args.dry_run:
+        replaced = "not checked (--no-start)" if args.no_start else _replace(
+            home, run=run, system=system, alive=alive, dry_run=True)
+        _receipt(receipt + [("replaced", replaced), ("pid", "- (dry run: nothing written or started)")])
+        return 0
+    replaced = "nothing (--no-start)" if args.no_start else _replace(
+        home, run=run, system=system, alive=alive, dry_run=False)
+    receipt.append(("replaced", replaced))
     poll = _poll(poll_timeout, system)
     if system == "Linux":
         code = linux.install(
@@ -244,18 +515,18 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
             restart=True,
         )
         if args.no_start:
+            _receipt(receipt + [("pid", "- (not started: --no-start)")])
             return 0
         if code != 0:
+            _receipt(receipt + [("pid", "-")])
             return code
         state, pid = _linux_show(run, UNIT)
-        if state == "active" and pid is not None and _alive(pid_alive)(pid):
-            print(f"pid: {pid}")
+        if state == "active" and pid is not None and alive(pid):
+            _receipt(receipt + [("pid", pid)])
             return 0
         print(_NOT_RUNNING)
+        _receipt(receipt + [("pid", "-")])
         return 1
-    if system != "Darwin":
-        raise SystemExit("[brnrd] loom install on this platform is not implemented yet")
-    alive = _alive(pid_alive)
 
     def confirm(*, run, sleep, timeout, label, alive=alive):
         return _confirm_macos(run=run, sleep=sleep, timeout=timeout, label=label, alive=alive)
@@ -275,14 +546,14 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
         confirm=confirm,
         retry_command="`brnrd loom install`",
     )
-    print(f"[brnrd] wrote LaunchAgent: {result.plist_path}")
     if args.no_start:
-        print("[brnrd] launchd service written; it will load at next login")
+        _receipt(receipt + [("pid", "- (not started: --no-start; it loads at next login)")])
         return 0
     if result.alive and result.pid:
-        print(f"pid: {result.pid}")
+        _receipt(receipt + [("pid", result.pid)])
         return 0
     print(result.error or _NOT_RUNNING)
+    _receipt(receipt + [("pid", "-")])
     return 1
 
 
@@ -367,12 +638,10 @@ def _status(*, run, agents_home, system, pid_alive) -> int:
 
 def cmd_where(argv: list[str]) -> int:
     """Print today's home layout without creating paths or an install id."""
-    from .config import config_path
-
     parser = argparse.ArgumentParser(prog="brnrd loom where")
     parser.add_argument("--home")
     args = parser.parse_args(argv)
-    home, source = resolve_home(args.home)
+    home, source = _service_home(args.home)
     print(f"home: {home}")
     print(f"source: {source}")
     for name, path in (
@@ -391,13 +660,13 @@ def cmd_config(argv: list[str]) -> int:
 
 def _config(argv: list[str]) -> int:
     """``brnrd loom config [--home H]``: every key, its effective value, source, help."""
-    from .config import ConfigError, _render_value, config_path, describe_config
+    from .config import ConfigError, _render_value, describe_config
 
     parser = argparse.ArgumentParser(prog="brnrd loom config")
     parser.add_argument("--home", default=None)
     parser.add_argument("action", nargs="?", choices=("edit",), help="edit and validate the config")
     args = parser.parse_args(argv)
-    home, _ = resolve_home(args.home)
+    home, _ = _service_home(args.home)
     if args.action == "edit":
         from .config_edit import edit_config
         return edit_config(home)
@@ -500,5 +769,5 @@ def main(
     if verb == "uninstall":
         return _uninstall(run=run, agents_home=agents_home, system=system)
     raise SystemExit(
-        "usage: brnrd loom install [--home PATH] | uninstall | start | stop | status | logs | where | config [edit]"
+        "usage: brnrd loom install [--home PATH] [--no-start] [--dry-run] [--dev] | uninstall | start | stop | status | logs | where | config [edit]"
     )

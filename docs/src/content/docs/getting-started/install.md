@@ -50,24 +50,49 @@ use them.
 ## Run the loom
 
 The loom is brnrd's runtime: one process that holds your threads, starts a
-coding-agent body for each, and hands them letters. It lives in a home
-directory you choose; `~/brnrd` is the one brnrd finds without `--home`.
+coding-agent body for each, and hands them letters. It runs as a login
+service, launchd on macOS and systemd --user on Linux:
 
 ```bash
-brnrd loom config edit --home ~/brnrd   # set body = "claude/sonnet" (shell/core)
-brnrd loom install --home ~/brnrd       # launchd on macOS, systemd --user on Linux
-brnrd loom status
-brnrd loom logs
+uv tool install brnrd
+brnrd loom install
 ```
 
-`config edit` writes `~/brnrd/loom/config.toml` with every key and its help;
-`body` is the only one `install` needs. The service runs
-`python -m brr.loom.runtime loom --home ~/brnrd` with the Python brnrd is
-installed in, and it freezes the installing shell's `PATH`: run `install` from
-the shell whose tools (`claude`, `codex`, `gh`, …) your bodies should see.
-`brnrd setup --home ~/brnrd` pairs a channel such as Telegram, so letters reach
-you away from the terminal. `brnrd loom stop`, `start` and `uninstall` do what
-they say.
+That is the whole install. `brnrd loom install` ends with one receipt:
+
+```text
+interpreter: /Users/you/.local/share/uv/tools/brnrd/bin/python3
+brnrd: (the version you installed)
+home: /Users/you/brnrd (default)
+body: claude/sonnet (picked: claude has fuel, session 91% week 76%; written to /Users/you/brnrd/loom/config.toml)
+service: /Users/you/Library/LaunchAgents/dev.brnrd.loom.plist
+replaced: none
+pid: 4242
+```
+
+- **interpreter** is the Python the service runs. It is the one brnrd was
+  installed into; install refuses a source checkout (see
+  [Troubleshooting](../../guides/troubleshooting/#loom-install-refuses-a-source-checkout)).
+- **home** is found for you: the installed service's home, else the one loom
+  home on this machine (`~/brnrd`, or a home inside a brnrd account), else a
+  new `~/brnrd`. When more than one could be meant, install lists them and asks
+  for `--home`.
+- **body** is the coding agent the loom runs, as shell/core. Unset, install
+  asks Claude Code, then Codex (with the model in your `~/.codex/config.toml`),
+  for its quota and writes the first one with fuel left. `brnrd loom config
+  edit` changes it.
+- **replaced** names the loom install stopped to make way. The service's own
+  loom is reloaded; a loom running outside the service is sent SIGTERM, which
+  ends only its loop. Bodies are never stopped: they keep their sessions, and
+  the new loom picks them up.
+
+The service freezes the installing shell's `PATH`: run `install` from the
+shell whose tools (`claude`, `codex`, `gh`, …) your bodies should see.
+`brnrd loom install --dry-run` prints the receipt without writing or starting
+anything; `--no-start` writes the service and leaves it for the next login.
+`brnrd loom status` and `brnrd loom logs` show it running; `stop`, `start` and
+`uninstall` do what they say. `brnrd setup` pairs a channel such as Telegram,
+so letters reach you away from the terminal.
 
 To upgrade, run `uv tool upgrade brnrd` (or the route you installed with). The
 running loom sees its files change and re-execs itself; its bodies resume from

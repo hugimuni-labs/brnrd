@@ -17,6 +17,23 @@ from brr.daemon_install import linux, macos
 from brr.loom.runtime import service
 
 
+@pytest.fixture(autouse=True)
+def _installed_brr(monkeypatch, tmp_path):
+    """brr as uv tool installs it, and no coding CLI answering with fuel.
+
+    The suite imports brr from ``src``: exactly the checkout install refuses.
+    Tests about that refusal undo this. No test probes a real CLI's quota.
+    """
+    import sysconfig
+
+    import brr
+
+    monkeypatch.setattr(brr, "__file__", str(Path(sysconfig.get_paths()["purelib"]) / "brr" / "__init__.py"))
+    monkeypatch.setattr(service, "_fuel", lambda home, shell: None)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.delenv("BRNRD_HOME", raising=False)
+
+
 def _body(home: Path, value: str | None = "grok/grok-4") -> None:
     path = home / "loom" / "config.toml"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -389,7 +406,8 @@ def test_cli_service_lifecycle_at_subprocess_boundary(tmp_path, monkeypatch, cap
         assert f"WorkingDirectory={other}" in path.read_text()
         assert 'Environment="PATH=/new/bin:/usr/bin"' in path.read_text()
     else:
-        assert events[0][1] == "bootout"
+        # Reading the running service's pid comes first; the first change is bootout.
+        assert [e for e in events if e[1] != "print"][0][1] == "bootout"
         assert plistlib.loads(path.read_bytes())["WorkingDirectory"] == str(other)
         assert plistlib.loads(path.read_bytes())["EnvironmentVariables"]["PATH"] == "/new/bin:/usr/bin"
     capsys.readouterr()
@@ -438,7 +456,9 @@ def test_macos_bootstrap_failure_is_failure(tmp_path, capsys):
     output = capsys.readouterr().out
     assert "permission denied" in output
     assert "next login" not in output
-    assert "pid:" not in output
+    # The receipt still prints, and claims no pid.
+    assert "\npid: -\n" in output
+    assert "4242" not in output
 
 
 @pytest.mark.parametrize("verb", ["stop", "start", "status", "uninstall"])
@@ -532,3 +552,301 @@ def test_install_keeps_virtualenv_interpreter_symlink(tmp_path, monkeypatch, sys
         text = linux.unit_path(service.UNIT).read_text()
         args = shlex.split(next(line.split("=", 1)[1] for line in text.splitlines() if line.startswith("ExecStart=")))
         assert args[0] == str(python)
+
+
+# ---- `brnrd loom install` is the whole install (4597) ----------------------
+
+
+class _Manager:
+    """launchctl/systemctl/lsof at the subprocess boundary, for ``brnrd`` argv.
+
+    ``service_pid`` is the pid the service manager reports as already
+    running before install; ``holders`` is what lsof says has the lock open.
+    """
+
+    def __init__(self, *, service_pid: int | None = None, holders=()):
+        self.calls: list[list[str]] = []
+        self.service_pid = service_pid
+        self.holders = list(holders)
+        self.at_bootstrap: list = []
+        self.on_bootstrap = lambda: None
+
+    def run(self, command, **_kwargs):
+        command = list(command)
+        self.calls.append(command)
+        if command[0] == "lsof":
+            return _ok(command, "".join(f"{pid}\n" for pid in self.holders))
+        assert command[0] in {"launchctl", "systemctl"}
+        if command[1] in {"bootout"} or command[-2:-1] == ["stop"]:
+            self.service_pid = None
+        if command[1] == "bootstrap" or "restart" in command:
+            self.at_bootstrap.append(self.on_bootstrap())
+        if command[1] == "kickstart" or "restart" in command:
+            self.service_pid = os.getpid()
+        if command[1] == "print":
+            if self.service_pid is None:
+                return _gone(command)
+            return _ok(command, f"state = running\npid = {self.service_pid}\n")
+        if "is-active" in command:
+            return _ok(command, "active\n")
+        if "show" in command:
+            active = self.service_pid is not None
+            return _ok(command, f"ActiveState={'active' if active else 'inactive'}\nMainPID={self.service_pid or 0}\n")
+        return _ok(command)
+
+    def changes(self) -> list[list[str]]:
+        return [c for c in self.calls if c[0] != "lsof" and c[1] not in {"print", "show", "is-active"}]
+
+
+import os  # noqa: E402
+
+
+@pytest.fixture
+def machine(tmp_path, monkeypatch):
+    """A person's machine as `brnrd` sees it: home folder, state root, service manager."""
+    user = tmp_path / "user"
+    user.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: user)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(linux, "supported", lambda: True)
+    monkeypatch.setattr(service.time, "sleep", lambda _seconds: None)
+    manager = _Manager()
+    monkeypatch.setattr(subprocess, "run", lambda command, **kw: manager.run(command, **kw))
+
+    def platform(system):
+        monkeypatch.setattr(service, "_platform", lambda _system: system)
+        return manager
+
+    return platform
+
+
+def _brnrd(*argv: str) -> int:
+    from brr.cli import main
+
+    try:
+        main(list(argv))
+    except SystemExit as exc:
+        if isinstance(exc.code, str):
+            raise
+        return exc.code or 0
+    return 0
+
+
+def _account_home(tmp_path: Path, account: str = "acc_1", name: str = "loom-home", body="claude/opus") -> Path:
+    home = tmp_path / "state" / "brnrd" / "accounts" / account / name
+    _body(home, body)
+    return home
+
+
+def _unit_program(system: str) -> list[str]:
+    if system == "Darwin":
+        return plistlib.loads(macos.plist_path(label=service.LABEL).read_bytes())["ProgramArguments"]
+    text = linux.unit_path(service.UNIT).read_text()
+    line = next(line for line in text.splitlines() if line.startswith("ExecStart="))
+    import shlex
+    return shlex.split(line.split("=", 1)[1])
+
+
+@pytest.mark.parametrize("system", ["Darwin", "Linux"])
+def test_cli_install_refuses_a_source_checkout_and_names_the_fix(tmp_path, machine, monkeypatch, system):
+    import brr
+
+    manager = machine(system)
+    home = tmp_path / "home"
+    _body(home)
+    checkout = tmp_path / "Source" / "brnrd" / "src" / "brr" / "__init__.py"
+    monkeypatch.setattr(brr, "__file__", str(checkout))
+    with pytest.raises(SystemExit) as caught:
+        _brnrd("loom", "install", "--home", str(home))
+    text = str(caught.value)
+    assert str(Path(sys.executable).absolute()) in text
+    assert str(checkout.parent) in text
+    assert "deactivate; hash -r" in text and "--dev" in text
+    assert manager.calls == []
+    assert not macos.plist_path(label=service.LABEL).exists()
+    assert not linux.unit_path(service.UNIT).exists()
+
+    # --dev means it: the checkout's interpreter is frozen, and the receipt says so.
+    assert _brnrd("loom", "install", "--home", str(home), "--dev") == 0
+    assert _unit_program(system)[0] == str(Path(sys.executable).absolute())
+
+
+@pytest.mark.parametrize("system", ["Darwin", "Linux"])
+def test_cli_install_freezes_the_tool_interpreter_and_prints_the_receipt(tmp_path, machine, monkeypatch, capsys, system):
+    from brr import __version__
+
+    machine(system)
+    home = tmp_path / "home"
+    _body(home, "claude/opus")
+    tool = tmp_path / "user" / ".local" / "share" / "uv" / "tools" / "brnrd" / "bin" / "python3"
+    tool.parent.mkdir(parents=True)
+    tool.symlink_to(sys.executable)
+    monkeypatch.setattr(sys, "executable", str(tool))
+    assert _brnrd("loom", "install", "--home", str(home)) == 0
+    assert _unit_program(system)[0] == str(tool)
+    out = capsys.readouterr().out
+    unit = macos.plist_path(label=service.LABEL) if system == "Darwin" else linux.unit_path(service.UNIT)
+    for line in (
+        f"interpreter: {tool}",
+        f"brnrd: {__version__}\n",
+        f"home: {home.resolve()} (flag)",
+        "body: claude/opus (from config)",
+        f"service: {unit}",
+        "replaced: none",
+        f"pid: {os.getpid()}",
+    ):
+        assert line in out
+
+
+@pytest.mark.parametrize("system", ["Darwin", "Linux"])
+def test_cli_install_needs_no_home_when_there_is_one(tmp_path, machine, capsys, system):
+    machine(system)
+    home = _account_home(tmp_path)
+    assert _brnrd("loom", "install") == 0
+    assert _unit_program(system)[-2:] == ["--home", str(home.resolve())]
+    assert f"home: {home.resolve()} (the only one found)" in capsys.readouterr().out
+
+    # A second home appears: the installed service's home still decides.
+    _account_home(tmp_path, "acc_2")
+    assert _brnrd("loom", "install") == 0
+    assert f"home: {home.resolve()} (the installed service's)" in capsys.readouterr().out
+
+
+def test_cli_install_lists_the_homes_when_more_than_one_could_be_meant(tmp_path, machine):
+    manager = machine("Darwin")
+    first = _account_home(tmp_path, "acc_1")
+    second = _body(tmp_path / "user" / "brnrd") or tmp_path / "user" / "brnrd"
+    with pytest.raises(SystemExit) as caught:
+        _brnrd("loom", "install")
+    text = str(caught.value)
+    assert "--home" in text
+    assert str(first.resolve()) in text and str(second.resolve()) in text
+    assert manager.changes() == []
+    assert not macos.plist_path(label=service.LABEL).exists()
+
+
+def _lock_holder(home: Path) -> subprocess.Popen:
+    """A loom outside the service: holds the loop lock until SIGTERM, as loom.run does."""
+    lock = home / "loom" / "loop.lock"
+    child = subprocess.Popen(
+        [sys.executable, "-c",
+         "import fcntl, os, signal, sys, time\n"
+         "fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR)\n"
+         "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+         "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
+         "print('held', flush=True)\n"
+         "time.sleep(60)\n",
+         str(lock)],
+        stdout=subprocess.PIPE, text=True,
+    )
+    assert child.stdout.readline().strip() == "held"
+    return child
+
+
+real_run = subprocess.run
+
+
+def test_cli_install_stops_a_loom_outside_the_service_before_starting(tmp_path, machine, capsys):
+    manager = machine("Darwin")
+    home = tmp_path / "home"
+    _body(home)
+    child = _lock_holder(home)
+    try:
+        manager.holders = [child.pid]
+        manager.on_bootstrap = lambda: child.poll()
+        assert _brnrd("loom", "install", "--home", str(home)) == 0
+        # Stopped (SIGTERM, a clean exit) before the new service was loaded.
+        assert manager.at_bootstrap == [0]
+        assert child.wait(timeout=5) == 0
+        assert not service._lock_held(home)
+        out = capsys.readouterr().out
+        assert f"replaced: pid {child.pid}, a loom outside the service · bodies keep running" in out
+        assert f"pid: {os.getpid()}" in out
+    finally:
+        if child.poll() is None:
+            child.kill()
+
+
+def test_cli_install_leaves_the_services_own_loom_to_bootout(tmp_path, machine, capsys):
+    """The service's loom is booted out by install, never signalled by hand."""
+    manager = machine("Darwin")
+    home = tmp_path / "home"
+    _body(home)
+    child = _lock_holder(home)
+    try:
+        manager.service_pid = child.pid
+        manager.holders = [child.pid]
+        assert _brnrd("loom", "install", "--home", str(home)) == 0
+        assert child.poll() is None
+        assert [c[1] for c in manager.changes()][:2] == ["bootout", "bootstrap"]
+        assert f"replaced: pid {child.pid}, the service's loom · bodies keep running" in capsys.readouterr().out
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_cli_install_no_start_stops_nothing(tmp_path, machine, capsys):
+    manager = machine("Darwin")
+    home = tmp_path / "home"
+    _body(home)
+    child = _lock_holder(home)
+    try:
+        manager.holders = [child.pid]
+        assert _brnrd("loom", "install", "--home", str(home), "--no-start") == 0
+        assert child.poll() is None
+        assert manager.calls == []
+        assert "replaced: nothing (--no-start)" in capsys.readouterr().out
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_cli_install_picks_a_body_with_fuel_and_writes_it(tmp_path, machine, monkeypatch, capsys):
+    from brr.loom.runtime.config import load_config, seed_config
+
+    machine("Darwin")
+    home = tmp_path / "home"
+    seed_config(home)
+    codex = tmp_path / "codex"
+    codex.mkdir()
+    (codex / "config.toml").write_text('model = "gpt-6"\n\n[profiles.fast]\nmodel = "gpt-6-mini"\n')
+    monkeypatch.setenv("CODEX_HOME", str(codex))
+    asked = []
+    monkeypatch.setattr(service, "_fuel", lambda h, shell: asked.append(shell) or ("week 80%" if shell == "codex" else None))
+    assert _brnrd("loom", "install", "--home", str(home)) == 0
+    assert asked == ["claude", "codex"]
+    assert load_config(home).body == "codex/gpt-6"
+    out = capsys.readouterr().out
+    assert "body: codex/gpt-6 (picked: codex has fuel, week 80%; written to" in out
+    # The rest of the seeded file is kept.
+    assert "# brnrd loom config" in (home / "loom" / "config.toml").read_text()
+
+    # Set once, it is the config's from then on: nothing is probed again.
+    asked.clear()
+    assert _brnrd("loom", "install", "--home", str(home)) == 0
+    assert asked == []
+    assert "body: codex/gpt-6 (from config)" in capsys.readouterr().out
+
+
+def test_cli_install_dry_run_prints_the_receipt_and_changes_nothing(tmp_path, machine, monkeypatch, capsys):
+    manager = machine("Darwin")
+    home = _account_home(tmp_path, body=None)
+    (home / "loom" / "install-id").write_text("ae66\n")  # a home the loom has run in, body unset
+    monkeypatch.setattr(service, "_fuel", lambda h, shell: "session 91% week 76%" if shell == "claude" else None)
+    child = _lock_holder(home)
+    try:
+        manager.holders = [child.pid]
+        assert _brnrd("loom", "install", "--dry-run") == 0
+        assert child.poll() is None
+    finally:
+        child.kill()
+        child.wait()
+    out = capsys.readouterr().out
+    assert "body: claude/sonnet (picked: claude has fuel, session 91% week 76%; not written: dry run)" in out
+    assert f"replaced: would stop pid {child.pid}, a loom outside the service · bodies keep running" in out
+    assert f"home: {home.resolve()} (the only one found)" in out
+    assert "pid: - (dry run" in out
+    assert manager.changes() == []
+    assert not macos.plist_path(label=service.LABEL).exists()
+    assert not (home / "loom" / "config.toml").exists()

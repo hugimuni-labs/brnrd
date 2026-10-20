@@ -54,14 +54,14 @@ brnrd --version
 ## 4. Run the loom
 
 ```bash
-brnrd loom config edit --home ~/brnrd   # set body = "claude/sonnet" (shell/core)
-brnrd loom install --home ~/brnrd       # a systemd --user unit
-brnrd loom status
+brnrd loom install                      # a systemd --user unit; ends with a receipt
 brnrd setup --home ~/brnrd              # pair a channel, e.g. Telegram
 ```
 
 The unit runs `python -m brr.loom.runtime loom --home ~/brnrd` with the Python
-brnrd is installed in, under the `PATH` of the shell you installed it from.
+brnrd is installed in, under the `PATH` of the shell you installed it from. With
+`body` unset, install picks the first of `claude` and `codex` that answers with
+quota left and writes it to `~/brnrd/loom/config.toml`.
 `brnrd loom logs` follows its output. On a box you log out of, keep the user
 manager alive past logout with `sudo loginctl enable-linger $USER`.
 `uv tool upgrade brnrd` upgrades it; the loom re-execs itself on the new files.

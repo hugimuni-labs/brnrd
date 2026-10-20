@@ -115,9 +115,7 @@ brnrd --version
 Then start the loom, brnrd's runtime, as a login service:
 
 ```bash
-brnrd loom config edit --home ~/brnrd   # set body = "claude/sonnet"
-brnrd loom install --home ~/brnrd       # launchd or systemd --user
-brnrd loom status
+brnrd loom install       # launchd or systemd --user; prints what it installed
 ```
 
 [Install → Run the loom](https://hugimuni-labs.github.io/brnrd/getting-started/install/#run-the-loom)

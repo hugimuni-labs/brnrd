@@ -104,6 +104,27 @@ npm install -g brnrd
 Both use the same durable environment under `~/.local/share/brnrd` — installing
 after having used `npx` costs nothing and reuses what is already there.
 
+## `loom install` refuses a source checkout
+
+```text
+loom install: /…/brnrd/.venv/bin/python3 imports brr from /…/brnrd/src/brr, a source checkout, …
+```
+
+The `brnrd` your shell found is not the one `uv tool install` put in
+`~/.local/bin`: an activated virtualenv (or `PYTHONPATH`) puts a source
+checkout's `brnrd` first. A service installed from it would keep running that
+checkout, at whatever commit it is on, long after you upgraded. Leave the
+virtualenv and let the shell find the installed command again:
+
+```bash
+deactivate; hash -r
+brnrd --version        # the version you installed
+brnrd loom install
+```
+
+Pass `--dev` when running the checkout is what you mean; the receipt says
+`(source checkout, --dev)` next to the version.
+
 ## Stop or uninstall the service
 
 ```bash
