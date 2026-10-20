@@ -82,8 +82,9 @@ produce gets one line under `## Done`, written when it exists:
 file, answer, post, action. What you need from the person is an ask: `ask
 "<the decision or act>" --for <w-id> --rec "<what you recommend>"`, where
 `--for` names the wish it unblocks; their verdict closes it. An ask waits on
-your thread's opener; when that is a thread, it asks onward with `--for <your
-ask>`, and the wait passes along until it reaches a person. `brnrd asks`
+your thread's opener; when that is a thread, the ask mails it, and it answers
+or asks onward with `--for <your ask>`, so the wait passes along until it
+reaches a person. `brnrd asks`
 lists, over every thread, what is in hand, the asks, the unanswered letters
 and the Done lines. A thread a person opened settles on their word only: when
 their reply says it is done, `settle <thread> --why "…" --word <their

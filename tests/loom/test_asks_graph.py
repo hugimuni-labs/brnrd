@@ -77,11 +77,11 @@ def test_unshown_strand_is_the_loom_s(loom):
 def test_asks_lists_buckets_over_every_thread(loom):
     home, seat = loom
     pr = inject_letter(home.root, to="thread:work", body="PR #1 is open")
-    ask = run("wish", "new", "--room", str(seat), "--from", "resident", "--say", pr,
-              "--line", "merge #1? rec: yes").strip()
+    merge = run("wish", "new", "--room", str(seat), "--say", pr, "--line", "merge #1").strip()
+    ask = run("ask", "merge #1? rec: yes", "--room", str(seat), "--for", merge).strip()
     text = run("asks", "--home", str(home.root))
     assert "in hand\ninbox · s-aaaa-inbx · plan —\nwork · s-aaaa-work · plan —\n" in text
-    assert f"yours\n{ask} · heard, derived · merge #1? rec: yes · -\n" in text
+    assert f"yours\n{ask} · heard · merge #1? rec: yes · - · waits on operator\n" in text
     assert "done\n1 · asks --all\n" in text
     rows = run("asks", "--home", str(home.root), "--all", "--thread", "work")
     assert "work · pr https://example.test/pull/1 — the fix" in rows
