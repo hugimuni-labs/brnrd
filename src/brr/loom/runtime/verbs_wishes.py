@@ -144,10 +144,23 @@ def cmd_ask(args):
         fact = wish_fact(facts, by=by, ident="new", line=args.what, thread=thread,
                          sender="resident", parent=args.wish)
         append(home, fact)
+        ident = fact.data["wish"]
         if args.rec is not None:
             append(home, Fact(kind="wish.read", by=by, id="wish.read:" + mint(12),
-                              data={"wish": fact.data["wish"], "reading": args.rec, "by": "resident"}))
-        print(fact.data["wish"])
+                              data={"wish": ident, "reading": args.rec, "by": "resident"}))
+        # A thread that waits on another must wake it: a wish alone is mail to nobody.
+        from .lifecycle import main_snapshot
+        from .port import write_send
+        from .verbs_loom import _room
+        head = waits_on(wishes(read_facts(home)), main_snapshot(home)).get(ident, "")
+        if head.startswith("thread:"):
+            room = _room(args.room)
+            body = f"ask {ident} from thread:{thread}: {args.what}\n"
+            if args.rec is not None:
+                body += f"rec: {args.rec}\n"
+            body += f"Answer it, or ask onward with: ask \"<what>\" --for {ident}\n"
+            write_send(room, to=head, sender=strand_of_room(room), body=body)
+        print(ident)
         return 0
     except (ValueError, OSError, RuntimeError) as exc:
         print(str(exc), file=sys.stderr)

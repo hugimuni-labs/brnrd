@@ -8,6 +8,7 @@ import pytest
 from brr.daemon2.facts import Fact
 from brr.loom.runtime.config import load_config
 from brr.loom.runtime.ledger import append, inject_letter, read_facts
+from brr.loom.runtime.lifecycle import main_snapshot
 from brr.loom.runtime.registry import UndeclaredFact
 from brr.loom.runtime.selfrepo import room
 from brr.loom.runtime import snapshot
@@ -24,10 +25,10 @@ def turns(home):
 
 
 def child(home, seat, thread, strand):
-    """Open <thread> from work for a wish, and lease a strand on it."""
-    letter = inject_letter(home.root, to="thread:work", body="Please split this out")
-    command(home, seat, "send", "--to", f"thread:{thread}", "--re", letter, "--wish", "new:Split it out", "Fresh")
-    wish = next(w.id for w in wishes(read_facts(home)).values() if w.line == "Split it out")
+    """Open <thread> from the seat's thread for a wish, and lease a strand on it."""
+    line = f"Split out {thread}"
+    command(home, seat, "send", "--to", f"thread:{thread}", "--wish", f"new:{line}", "Fresh")
+    wish = next(w.id for w in wishes(read_facts(home)).values() if w.line == line)
     append(home, Fact(kind="lease", by="loom:aaaa", data={
         "thread": thread, "strand": strand, "gen": 1,
         "install": "aaaa", "router_gen": 1, "shell": "fake", "core": "fake", "repos": [],
@@ -72,17 +73,27 @@ def test_ask_writes_the_wish_and_its_recommendation(ledger):
     assert len(wishes(read_facts(home))) == 3
 
 
+def mail(seat, ident):
+    """The letters a seat sent that carry an ask id."""
+    out = seat / "port" / "out"
+    return [p.read_text() for p in sorted(out.iterdir()) if ident in p.read_text()] if out.exists() else []
+
+
 def test_an_ask_waits_on_the_opener_until_it_asks_onward(ledger):
     home, seat = ledger
     wish, mid = child(home, seat, "mid", "s-aaaa-mid")
     ask = command(home, mid, "ask", "Which half first?", "--for", wish)
     assert view(home, ask).thread == "mid"
+    # The wait wakes its head: one letter to work, carrying the ask id.
+    [letter] = mail(mid, ask)
+    assert "to: thread:work" in letter and "Which half first?" in letter
     # mid was opened by work, and work has not asked anyone: work's turn, not the person's.
     assert turns(home)["mid"][0] != "yours"
     assert turns(home)["mid"][1] == ["thread:work"]
     assert f"{ask} · heard · Which half first? · - · waits on thread:work" in command(home, seat, "asks")
     assert "waits on thread:work" in command(home, seat, "wishes")
     onward = command(home, seat, "ask", "Which half first?", "--for", ask, "--rec", "the parser")
+    assert mail(seat, onward) == []  # work's head is the operator: no thread to wake.
     # work asked onward for mid's ask; work has no opener on record, so both wait on the operator.
     assert turns(home)["mid"] == ("yours", ["operator"])
     assert turns(home)["work"] == ("yours", ["operator"])
@@ -93,6 +104,17 @@ def test_an_ask_waits_on_the_opener_until_it_asks_onward(ledger):
     command(home, seat, "wish", onward, "--accept", "word", "--ref", "parser first", person=True)
     assert turns(home)["mid"][1] == ["thread:work"]
     assert "work" not in {t for t, (turn, _w) in turns(home).items() if turn == "yours"}
+
+
+def test_an_ask_under_a_settled_opener_waits_on_the_operator_and_mails_nobody(ledger):
+    home, seat = ledger
+    _wish, mid = child(home, seat, "mid", "s-aaaa-mid")
+    wish, leaf = child(home, mid, "leaf", "s-aaaa-leaf")
+    command(home, seat, "settle", "mid", "--why", "split done")
+    assert main_snapshot(home)["mid"]["status"] == "settled"
+    ask = command(home, leaf, "ask", "Keep going?", "--for", wish)
+    assert mail(leaf, ask) == []
+    assert turns(home)["leaf"] == ("yours", ["operator"])
 
 
 def test_the_chain_reaches_a_person_and_survives_a_loop():
