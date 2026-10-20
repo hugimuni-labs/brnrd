@@ -240,7 +240,7 @@ def test_an_open_ask_to_a_person_is_their_turn(tmp_path):
         return next(t for t in doc["threads"] if t["id"] == "web")["turn"]
     assert turn() == "none"
     ask = append(home, wish_fact(read_facts(home), by="person:test", ident="new", line="Pick a domain",
-                                 thread="web", sender="resident"))
+                                 says=[["s-test-web001/ask", 0, None]], thread="web", sender="resident"))
     assert turn() == "yours"
     append(home, Fact(kind="wish.verdict", by="person:test", id="wish.verdict:t1",
                       data={"wish": ask.data["wish"], "as": "accepted", "evidence": "word", "ref": "-"}))
@@ -265,9 +265,9 @@ def test_wishes_carry_their_words_results_and_the_answer_newer_than_them(tmp_pat
         fact("letter", minute, ident, {"id": ident, "from": "person:test", "to": "thread:web",
                                        "body": body, **extra}, by="person:test")
 
-    def wish(minute, ident, sender, line, says=(), by="strand:s-test-web001"):
+    def wish(minute, ident, sender, line, says=(), by="strand:s-test-web001", **parent):
         fact("wish", minute, ident, {"wish": ident, "says": list(says), "from": sender,
-                                     "line": line, "thread": "web"}, by=by)
+                                     "line": line, "thread": "web", **parent}, by=by)
 
     def result(minute, ident, wish, ref, line, delivered):
         fact("wish.result", minute, ident, {"wish": wish, "kind": "pr", "ref": ref, "line": line,
@@ -278,8 +278,8 @@ def test_wishes_carry_their_words_results_and_the_answer_newer_than_them(tmp_pat
     result(3, "wish.result:r1", "w-said", "#1", "draft", False)
     result(4, "wish.result:r2", "w-said", "#2", "board", True)
     letter(5, "p-test/answer", "Not quite: also the cost.", wish="w-said", verdict="correct")
-    wish(3, "w-ask", "resident", "Pick a domain")
-    wish(6, "w-done", "person", "Old thing", by="person:test")
+    wish(3, "w-ask", "resident", "Pick a domain", parent="w-said")
+    wish(6, "w-done", "person", "Old thing", [["p-test/said1", 0, None]], by="person:test")
     result(7, "wish.result:d1", "w-done", "#0", "old", True)
     letter(8, "p-test/agree", "Yes.", wish="w-done", verdict="agree")
     fact("wish.verdict", 9, "wish.verdict:d1", {"wish": "w-done", "as": "accepted", "evidence": "word",

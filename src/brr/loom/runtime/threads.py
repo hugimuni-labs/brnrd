@@ -122,7 +122,14 @@ def thread_table(home: Home, facts: list) -> list[dict]:
         _MAIN[repo] = (tip, snapshot)
         _ROWS[repo] = kept
     now, rows = time.time(), []
+    told = None
     for thread, data, choice, created, date in _MAIN[repo][1]:
+        why = '—'
+        if opened_for(data):
+            if told is None:
+                from .wishes import wishes
+                told = wishes([f for f in facts if f.kind.startswith('wish') or f.kind == 'letter'])
+            why = '; '.join(opened_for_line(ident, told.get(ident)) for ident in opened_for(data))
         count = len(owed.get(thread, ()))
         strand = state.holder.get(thread, ('', 0))[0]
         latest = pending.get(strand)
@@ -164,20 +171,35 @@ def thread_table(home: Home, facts: list) -> list[dict]:
             cause = axes[thread]['cause']
             value = 'idle ' + _age(now - last) if cause == 'idle' else cause
         rows.append({'thread': thread, 'seat': seat, 'now': value, 'owed': count, 'unanswered': len(unanswered.get(thread, ())),
-                     'opened-by': data.get('opened-by') or '—', 'plan': data['plan'],
+                     'opened-by': data.get('opened-by') or '—', 'opened-for': why, 'plan': data['plan'],
                      'status': data['status'], **{k: axes[thread][k] for k in ('owed-by', 'restart', 'control')}})
     for ident, fate in ownership.items():
         if fate.owner == 'operator':
             rows.append({'thread': 'operator', 'seat': '—', 'now': ident + ': ' + fate.reason,
-                         'owed': 1, 'unanswered': 0, 'opened-by': fate.thread or '—', 'plan': '—',
+                         'owed': 1, 'unanswered': 0, 'opened-by': fate.thread or '—', 'opened-for': '—',
+                         'plan': '—',
                          'status': 'open',
                          'owed-by': 'operator', 'restart': 'operator note',
                          'control': 'operator: attention --note ' + ident + ' --why <reason>'})
     return rows
 
 
+def opened_for(data: dict) -> list[str]:
+    """``opened-for`` as a list, also when a hand edit wrote one bare id."""
+    value = data.get('opened-for') or []
+    return [value] if isinstance(value, str) else list(value)
+
+
+def opened_for_line(ident: str, wish) -> str:
+    """A wish a thread was opened for: its id, state and line, or that it is gone."""
+    if wish is None:
+        return f'{ident} (no such wish)'
+    line = ' '.join(wish.line.split()).replace(' · ', ' / ')
+    return f"{ident} {wish.state}: {line if len(line) <= 60 else line[:59] + '…'}"
+
+
 def render_table(rows: list[dict]) -> str:
-    columns = ('thread', 'seat', 'now', 'owed', 'unanswered', 'opened-by', 'plan', 'owed-by', 'restart', 'control')
+    columns = ('thread', 'seat', 'now', 'owed', 'unanswered', 'opened-by', 'opened-for', 'plan', 'owed-by', 'restart', 'control')
     if any(row.get('left') for row in rows):
         columns += ('left',)
         rows = [dict(row, left=row.get('left') or '—') for row in rows]

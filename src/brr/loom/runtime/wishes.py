@@ -16,6 +16,7 @@ class Wish:
     sender: str = "person"
     line: str = ""
     thread: str = ""
+    parent: str = ""
     reading: str = ""
     reads: list[dict] = field(default_factory=list)
     results: list[dict] = field(default_factory=list)
@@ -65,6 +66,7 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
                 if say not in wish.says:
                     wish.says.append(list(say))
             wish.sender, wish.line, wish.thread = d["from"], d["line"], d["thread"]
+            wish.parent = d.get("parent") or wish.parent
             wish.verdict = None
         else:
             if ident not in found:

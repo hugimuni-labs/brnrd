@@ -75,6 +75,6 @@ def drive(name, instructions, failed=False):
 if args.case in {'person', 'all'}:
     drive('person', 'Answer this letter with exactly RECEIVED using send --re <id> --to channel:fake, then settle inbox --why answered. Call the hand jack between acts. Do no other work.')
 if args.case in {'worker', 'all'}:
-    drive('worker', 'Open a worker with send --to thread:worker --body codex/'+args.core+' "Reply WORKED to thread:inbox with --re the received id, then end. Do no other work." Note this original letter with --re its id --to thread:inbox --note dispatched. Call the hand jack between acts until WORKED arrives. Settle worker --why complete, then settle inbox --why complete. Do no other work.')
+    drive('worker', 'Open a worker with send --to thread:worker --re <the received id> --wish new:"worker replies WORKED" --body codex/'+args.core+' "Reply WORKED to thread:inbox with --re the received id, then end. Do no other work." Note this original letter with --re its id --to thread:inbox --note dispatched. Call the hand jack between acts until WORKED arrives. Settle worker --why complete, then settle inbox --why complete. Do no other work.')
 if args.case in {'failed-start', 'all'}:
     drive('failed-start', 'Record a deliberately failed start.', failed=True)

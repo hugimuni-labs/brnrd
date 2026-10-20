@@ -409,7 +409,8 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         "a letter from `loom` is a notice of something the loom could not settle, "
         "yours to deal with: its last lines name what settles it "
         "(core/loom/README.md, Notices); stamp what someone wants with "
-        "`send --wish` (core/loom/README.md, Wishes); "
+        "`send --wish` (core/loom/README.md, Wishes), and open a thread only for "
+        "a wish: `send --to thread:<new> --wish <w-id>` or `--wish new:\"<line>\"`; "
         + ("call `$BRNRD_JACK --event start` now, `$BRNRD_JACK --event post` between "
            "steps and `$BRNRD_JACK --event stop` before ending; read each returned boundary\n"
            if jack == "hand" else

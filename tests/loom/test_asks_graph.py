@@ -76,7 +76,8 @@ def test_unshown_strand_is_the_loom_s(loom):
 
 def test_asks_lists_buckets_over_every_thread(loom):
     home, seat = loom
-    ask = run("wish", "new", "--room", str(seat), "--from", "resident",
+    pr = inject_letter(home.root, to="thread:work", body="PR #1 is open")
+    ask = run("wish", "new", "--room", str(seat), "--from", "resident", "--say", pr,
               "--line", "merge #1? rec: yes").strip()
     text = run("asks", "--home", str(home.root))
     assert "in hand\ninbox · s-aaaa-inbx · plan —\nwork · s-aaaa-work · plan —\n" in text

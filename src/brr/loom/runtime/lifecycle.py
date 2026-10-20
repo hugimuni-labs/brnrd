@@ -115,7 +115,8 @@ def land_status(room: Path, thread: str, status: str, message: str) -> None:
 
 
 def open_thread(room: Path, thread: str, sender: str, text: str,
-                body_choice: str | None = None, repo_sources: tuple[str, ...] | list[str] = ()) -> None:
+                body_choice: str | None = None, repo_sources: tuple[str, ...] | list[str] = (),
+                opened_for: tuple[str, ...] | list[str] = ()) -> None:
     from .port import _current_label
     check_thread_id(thread)
     own = sender_threads(read_facts(home_of_room(room))).get(sender)
@@ -134,7 +135,9 @@ def open_thread(room: Path, thread: str, sender: str, text: str,
     repos(seat)
     first = text.split("\n", 1)[0]
     readme = (f"---\nid: {thread}\nstatus: open\ntense: plan\n"
-              f"opened-by: thread:{own}\n---\n# {first}\n")
+              f"opened-by: thread:{own}\n"
+              + (f"opened-for: [{', '.join(opened_for)}]\n" if opened_for else "")
+              + f"---\n# {first}\n")
     parse_readme(readme)
 
     def edit(clone):

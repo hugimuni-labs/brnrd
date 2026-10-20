@@ -38,8 +38,11 @@ def say_span(raw: str, facts) -> list:
     return [ident, off, size]
 
 
-def wish_fact(facts, *, by, ident, says=(), line=None, thread=None, sender=None):
-    current = wishes(facts).get(ident)
+def wish_fact(facts, *, by, ident, says=(), line=None, thread=None, sender=None, parent=None):
+    known = wishes(facts)
+    current = known.get(ident)
+    if parent is not None and parent not in known:
+        raise ValueError(f"--parent: no wish {parent}")
     if ident == "new":
         ident = "w-" + mint(12)
         if not line or not line.strip():
@@ -48,12 +51,15 @@ def wish_fact(facts, *, by, ident, says=(), line=None, thread=None, sender=None)
             raise ValueError("wish new requires --thread outside a thread room")
     elif current is None:
         raise ValueError(f"no wish {ident}")
-    return Fact(kind="wish", by=by, id=ident if current is None else "wish:" + mint(12), data={
+    data = {
         "wish": ident, "says": list(says),
         "from": sender or (current.sender if current else "person"),
         "line": line if line is not None else current.line,
         "thread": thread if thread is not None else current.thread,
-    })
+    }
+    if parent is not None:
+        data["parent"] = parent
+    return Fact(kind="wish", by=by, id=ident if current is None else "wish:" + mint(12), data=data)
 
 
 def _arguments(parser):
@@ -67,6 +73,7 @@ def _wish_arguments(parser):
     parser.add_argument("id")
     parser.add_argument("--say", action="append", default=[])
     parser.add_argument("--line")
+    parser.add_argument("--parent")
     parser.add_argument("--from", dest="sender", choices=("person", "resident"))
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--read")
@@ -89,7 +96,7 @@ def cmd_wish(args):
         if actions:
             if args.id == "new" or args.id not in wishes(facts):
                 raise ValueError(f"no wish {args.id}; create it with wish new first")
-            if args.say or args.sender or args.thread or (args.line is not None and args.result is None):
+            if args.say or args.sender or args.thread or args.parent or (args.line is not None and args.result is None):
                 raise ValueError("touch flags cannot accompany a reading, result or verdict")
             data = {"wish": args.id}
             if args.read is not None:
@@ -110,7 +117,8 @@ def cmd_wish(args):
         else:
             fact = wish_fact(facts, by=by, ident=args.id,
                              says=[say_span(s, facts) for s in args.say], line=args.line,
-                             thread=args.thread or (thread if args.id == "new" else None), sender=args.sender)
+                             thread=args.thread or (thread if args.id == "new" else None), sender=args.sender,
+                             parent=args.parent)
         target = fact.data["thread"] if "thread" in fact.data else wishes(facts)[args.id].thread
         if not home.routable(target):
             raise ValueError("wish: thread must exist on main")

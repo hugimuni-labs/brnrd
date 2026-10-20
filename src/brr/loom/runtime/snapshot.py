@@ -189,7 +189,7 @@ def _wish_rows(told, facts) -> list[dict]:
 def assemble(home: Home, facts: list, config) -> dict:
     """The snapshot document, ``at`` included; pure reads of what is held."""
     from .lifecycle import CLOSED, main_snapshot
-    from .threads import _table_inputs, thread_table
+    from .threads import _table_inputs, opened_for, thread_table
     from .wishes import wishes
     from .adapters import resolve
     table = [row for row in thread_table(home, facts) if row["thread"] != "operator"]
@@ -238,7 +238,11 @@ def assemble(home: Home, facts: list, config) -> dict:
         title = _SENTENCE.split(data.get("headline", ""), 1)[0]
         entry = {"id": thread, "title": title, "status": data.get("status"), "turn": turn,
                  "blocked_on": row["restart"] if turn == "blocked" else None,
-                 "opened_by": data.get("opened-by"), "plan": plan, "strands": strands,
+                 "opened_by": data.get("opened-by"),
+                 "opened_for": [{"wish": ident, **({"line": told[ident].line, "state": told[ident].state}
+                                                   if ident in told else {})}
+                                for ident in opened_for(data)],
+                 "plan": plan, "strands": strands,
                  "done": done, "owed": row["owed"], "last_at": _iso(last) if last else None}
         doc_threads.append({k: v for k, v in entry.items() if v not in (None, "", [])})
         if now == "working" and thread in state.holder:
