@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from brr.hooks import _render_vibe, _vibe_as_claude_tool, vibe_hooks_toml, PHASE_POST_TOOL, PHASE_STOP
 from brr.vibe_runner import command, prepare_system_prompt
+from brr.loom.runtime.port import wake_parts
 
 # Native hooks use a different response schema. This folder translates the
 # jack's Claude-shaped output; the loop and the jack stay shell-independent.
@@ -28,8 +29,10 @@ if sys.argv[1] == "hook":
 room, core = sys.argv[1:]
 room = Path(room)
 env = dict(os.environ, VIBE_ACTIVE_MODEL=core)
-# Identity comes from the self; the rendered wake travels on stdin.
-prompt = prepare_system_prompt(room / "self/core/identity.md", env)
+# The self's core is the system prompt (identity alone when its recipe kept
+# the core in the wake); the rest of the wake travels on stdin.
+core_text, occasion = wake_parts(env)
+prompt = prepare_system_prompt(Path(env["BRNRD_CORE"]) if core_text else room / "self/core/identity.md", env)
 hooks = room / ".vibe/hooks.toml"
 hooks.parent.mkdir(parents=True, exist_ok=True)
 hooks.write_text(vibe_hooks_toml(
@@ -37,7 +40,7 @@ hooks.write_text(vibe_hooks_toml(
     timeout=float(env.get("BRNRD_STOP_TIMEOUT") or float(env["BRNRD_WAIT"]) + 60),
 ))
 try:
-    result = subprocess.run(command(room), input=Path(env["BRNRD_WAKE"]).read_text(),
+    result = subprocess.run(command(room), input=occasion,
                             text=True, env=env)
 finally:
     prompt.unlink(missing_ok=True)

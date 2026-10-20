@@ -4,6 +4,7 @@ import os
 import sys
 from pathlib import Path
 from brr.grok_runner import command
+from brr.loom.runtime.port import wake_parts
 
 room, core = sys.argv[1:]
 def hook(event, timeout):
@@ -21,5 +22,9 @@ path.write_text(json.dumps({"hooks": {
     "PostToolUse": [hook("post", 60)],
     "Stop": [hook("stop", int(os.environ.get("BRNRD_STOP_TIMEOUT") or float(os.environ["BRNRD_WAIT"]) + 60))],
 }}) + "\n")
-os.execvp("grok", command(Path(os.environ["BRNRD_WAKE"]), model=core,
-                           rules="Follow the self's wake and the loom jack boundaries."))
+# --rules is appended to Grok's own system prompt; the core rides there and
+# the prompt file carries only the occasion.
+core_text, _ = wake_parts(os.environ)
+rules = "Follow the self's wake and the loom jack boundaries."
+os.execvp("grok", command(Path(os.environ["BRNRD_OCCASION" if core_text else "BRNRD_WAKE"]),
+                          model=core, rules=rules + "\n\n" + core_text if core_text else rules))

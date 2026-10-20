@@ -152,7 +152,11 @@ def _env(room: Path) -> dict[str, str]:
         env[f"GIT_{role}_EMAIL"] = email
     _forge_env(room, env)
     env["BRNRD_ROOM"] = str(room)
+    # The whole wake for any body; the core and the occasion apart for a body
+    # with a system slot (_prepare).
     env["BRNRD_WAKE"] = str(room / "port" / "wake.md")
+    env["BRNRD_CORE"] = str(room / "port" / "core.md")
+    env["BRNRD_OCCASION"] = str(room / "port" / "occasion.md")
     env["BRNRD_JACK"] = (f"{shlex.quote(sys.executable)} -m brr.loom.runtime jack "
                          f"--room {shlex.quote(str(room))}")
     wait = room / "port" / "wait"
@@ -376,7 +380,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     wait_src = home.thread_dir(thread) / "wait"
     if wait_src.is_file():
         atomic_write(room / "port" / "wait", wait_src.read_text().strip() + "\n")
-    for name in ("jack-state.json", "policy"):
+    for name in ("jack-state.json", "policy", "core.md"):
         (room / "port" / name).unlink(missing_ok=True)
     owed_path = room / "port" / "owed.json"
     attachments = letter_attachments(home.root, facts)
@@ -424,15 +428,23 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     if repo_text:
         repo_file = room / "port" / "repos"
         atomic_write(repo_file, repo_text)
+    core_path = room / "port" / "core.md"
     with tempfile.TemporaryFile(mode="w+") as wake, tempfile.TemporaryFile(mode="w+") as why:
         code = run_wake(clone, thread, owed_path, loom_part=part_path, repos=repo_file,
-                        stdout=wake, stderr=why)
+                        core=core_path, stdout=wake, stderr=why)
         why.seek(0)
         if code != 0:
             raise WakeFailure(f"wake exited {code}: {why.read().strip()}",
                               _oversized_letters(clone, thread, owed_path, part_path, repo_file))
         wake.seek(0)
-        atomic_write(room / "port" / "wake.md", wake.read())
+        occasion = wake.read()
+    # The core rides in a body's system slot, where automated turns and
+    # compaction do not wear it down. wake.md stays whole, so a body that
+    # reads only BRNRD_WAKE never loses it. An older recipe writes no core.
+    core = core_path.read_text() if core_path.is_file() else ""
+    atomic_write(core_path, core)
+    atomic_write(room / "port" / "occasion.md", occasion)
+    atomic_write(room / "port" / "wake.md", core + occasion)
     from .threads import thread_table
     shown = fold(facts).shown.get(strand, set())
     atomic_write(

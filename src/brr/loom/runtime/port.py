@@ -16,6 +16,19 @@ from .home import (
 )
 
 
+def wake_parts(env) -> tuple[str, str]:
+    """(core, occasion) for a body with a system slot.
+
+    The core is "" when the self's recipe kept it in the wake; the occasion
+    is then the whole wake, so the core is never lost.
+    """
+    core = env.get("BRNRD_CORE", "")
+    text = Path(core).read_text() if core and Path(core).is_file() else ""
+    if not text:
+        return "", Path(env["BRNRD_WAKE"]).read_text()
+    return text, Path(env["BRNRD_OCCASION"]).read_text()
+
+
 class PortError(RuntimeError):
     """A port file or an address the loom will not guess its way past."""
 
