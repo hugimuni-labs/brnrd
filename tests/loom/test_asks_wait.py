@@ -110,6 +110,10 @@ def test_the_chain_reaches_a_person_and_survives_a_loop():
     loop = {w.id: w for w in (ask("x", "p", "y"), ask("y", "q", "x"))}
     heads = waits_on(loop, {"p": {"opened-by": "thread:q"}, "q": {"opened-by": "thread:p"}})
     assert heads == {"x": "thread:p", "y": "thread:q"}
+    # An opener that is settled, or not on main, will never wake for it: the operator's.
+    main["mid"]["status"] = "settled"
+    assert waits_on(found, main)["a"] == "operator"
+    assert waits_on(found, {"leaf": {"opened-by": "thread:gone"}})["a"] == "operator"
 
 
 def test_the_live_ledger_replays_with_no_parentless_ask(ledger):

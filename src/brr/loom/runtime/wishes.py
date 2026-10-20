@@ -103,9 +103,11 @@ def waits_on(found: dict[str, Wish], main: dict) -> dict[str, str]:
     on that thread's opener. When the opener is a thread that asked onward
     for it (an open ask whose parent is this ask), the wait passes along to
     that thread's opener, until it reaches a person or a thread that has not
-    asked. A thread with no opener on record waits on the operator, as the
-    owners table reads it.
+    asked. A thread with no opener on record, or one opened by a thread that
+    is settled or gone, waits on the operator, as the owners table reads it:
+    nobody else will wake for it.
     """
+    from .lifecycle import CLOSED
     asks = {w.id: w for w in found.values() if w.open and w.sender == "resident"}
     onward: dict[tuple[str, str], Wish] = {}
     for w in asks.values():
@@ -116,7 +118,10 @@ def waits_on(found: dict[str, Wish], main: dict) -> dict[str, str]:
         while True:
             seen.add(current.id)
             head = str(main.get(current.thread, {}).get("opened-by") or "operator")
-            nxt = onward.get((head.removeprefix("thread:"), current.id)) if head.startswith("thread:") else None
+            opener = head.removeprefix("thread:")
+            if head.startswith("thread:") and (opener not in main or main[opener].get("status") in CLOSED):
+                head = "operator"
+            nxt = onward.get((opener, current.id)) if head.startswith("thread:") else None
             if nxt is None or nxt.id in seen:
                 break
             current = nxt
