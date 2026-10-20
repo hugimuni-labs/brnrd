@@ -190,7 +190,7 @@ def assemble(home: Home, facts: list, config) -> dict:
     """The snapshot document, ``at`` included; pure reads of what is held."""
     from .lifecycle import CLOSED, main_snapshot
     from .threads import _table_inputs, opened_for, thread_table
-    from .wishes import wishes
+    from .wishes import waits_on, wishes
     from .adapters import resolve
     table = [row for row in thread_table(home, facts) if row["thread"] != "operator"]
     main = main_snapshot(home)
@@ -207,8 +207,12 @@ def assemble(home: Home, facts: list, config) -> dict:
             leases.setdefault(f.data["thread"], {})[f.data["strand"]] = f
             cores.setdefault(f.data["shell"], set()).add(f.data["core"])
     told = wishes([f for f in facts if f.kind.startswith("wish") or f.kind == "letter"])
-    # The wishes verb's "asks (yours)": an open wish the resident made of a person.
-    asked = {w.thread for w in told.values() if w.open and w.sender == "resident"}
+    # An open ask is the person's turn unless it waits on a thread that has not asked onward.
+    heads = waits_on(told, main)
+    waits: dict[str, list[str]] = {}
+    for ident, head in sorted(heads.items()):
+        waits.setdefault(told[ident].thread, []).append(head)
+    asked = {t for t, hs in waits.items() if any(not h.startswith("thread:") for h in hs)}
     doc_threads, done_refs, present = [], {}, []
     for row in table:
         thread = row["thread"]
@@ -239,6 +243,7 @@ def assemble(home: Home, facts: list, config) -> dict:
         entry = {"id": thread, "title": title, "status": data.get("status"), "turn": turn,
                  "blocked_on": row["restart"] if turn == "blocked" else None,
                  "opened_by": data.get("opened-by"),
+                 "waits_on": waits.get(thread),
                  "opened_for": [{"wish": ident, **({"line": told[ident].line, "state": told[ident].state}
                                                    if ident in told else {})}
                                 for ident in opened_for(data)],

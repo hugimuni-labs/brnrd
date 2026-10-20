@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from .lifecycle import CLOSED
 from .owners import unanswered_by_thread
 from .project import _destination, fold, sender_threads
-from .wishes import wishes, wish_line
+from .wishes import waits_on, waits_word, wishes, wish_line
 
 
 @dataclass(frozen=True)
@@ -67,13 +67,15 @@ def render_graph(edges: list[Edge], by: str = "thread", only: str | None = None)
 def asks(facts, main: dict, thread: str | None = None, everything: bool = False) -> str:
     """Four buckets over every thread, settled ones included."""
     holder = fold(facts).holder
-    found = wishes(facts).values()
+    told = wishes(facts)
+    found = told.values()
+    heads = waits_on(told, main)
     mine = lambda t: thread is None or t == thread  # noqa: E731
     buckets = {
         "in hand": [f"{t} · {holder[t][0]} · plan {d['plan']}" for t, d in sorted(main.items())
                     if mine(t) and t in holder and d.get("status") not in CLOSED],
-        "yours": [wish_line(w) for w in found
-                  if mine(w.thread) and w.open and w.sender == "resident"],
+        "yours": [wish_line(w) + waits_word(heads[w.id]) for w in found
+                  if mine(w.thread) and w.id in heads],
         "unanswered": [f"{t} · {i}" for t, ids in sorted(unanswered_by_thread(facts, main).items())
                        if mine(t) for i in ids],
         "done": [f"{t} · {kind} {ref} — {line}" for t, d in sorted(main.items()) if mine(t)
