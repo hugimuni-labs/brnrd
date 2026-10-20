@@ -85,7 +85,10 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
             letter = letters.get(say[0])
             if letter is None:
                 return False
-            return (letter.by.startswith("person:") if wish.sender == "person"
+            # The sender is data.from: the connector writes a person's
+            # channel letters, so letter.by is loom:<install> for them.
+            return (str(letter.data.get("from", "")).startswith(("p-", "person:"))
+                    if wish.sender == "person"
                     else letter.by.startswith("strand:"))
         wish.origin = "said" if wish.says and all(map(own_say, wish.says)) else "derived"
     return found
