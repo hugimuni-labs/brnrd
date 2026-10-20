@@ -101,7 +101,7 @@ def _send(argv: list[str]) -> int:
     parser.add_argument("--to", required=True)
     parser.add_argument("--re")
     parser.add_argument("--note")
-    parser.add_argument("--wish")
+    parser.add_argument("--wish", action="append", default=[])
     parser.add_argument("--reopen", metavar="TEXT")
     parser.add_argument("--at", help="YYYY-MM-DDTHH:MM:SSZ, +<n>m, +<n>h, or +<n>d")
     parser.add_argument("--body", dest="body_choice", metavar="SHELL/CORE")

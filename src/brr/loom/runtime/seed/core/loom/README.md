@@ -47,9 +47,18 @@ ownership table; editing a file or mentioning an id in prose does not cite it.
 A wish is what someone wants from a thread, kept as facts; the wake lists the
 thread's open ones under `## Wishes`. Stamp it when you reply: `send --re <id>
 --to <reply address> --wish new:"<what they want>"`, or `--wish <w-id>` for
-one already heard. A wish in the wisher's own words is said; one you infer
-(`wish new --line "…"` without `--say`) is derived: when you reply about it,
-name it as derived, your reading and not their words. When a result exists,
+one already heard. A new wish cites what it answers: `--say <letter>`, or
+`--parent <w-id>` for a wish born of another; the ledger refuses one with
+neither. A wish in the wisher's own words is said; one you infer (its says
+cite only your own letters) is derived: when you reply about it, name it as
+derived, your reading and not their words.
+
+A thread is opened for a wish. `send --to thread:<new>` requires `--wish
+<w-id>` (moves that wish to the new thread) or `--wish new:"<line>"`
+(repeatable). The new wish cites `--re` when given, otherwise the opening
+letter itself, which makes it derived. The README records the ids once as
+`opened-for: [w-…]`: why the thread was opened, while each wish's thread
+says where its work is now. When a result exists,
 record it with `wish <w-id> --result <kind>:<ref> --line "…"`, adding
 `--deliver` on the one you hand over. Cite wish ids in Plan rows beside the
 letters: ` · re: <letter-id>, <w-id>`. `settle` refuses while a delivered wish
@@ -97,7 +106,7 @@ commits and edited files that exist only there (`?` when a room could not be
 read). `brnrd threads --left <thread>` lists them with their paths. It runs git
 in each room and fetches each project source, so the plain table does not.
 
-Open a worker and declare its checkouts together with `send --to thread:<new> --body <shell/core> --repo <url> "<work>"`; repeat `--repo` for each checkout. The README and seat land together before its first lease. Repo directory names must be distinct.
+Open a worker and declare its checkouts together with `send --to thread:<new> --wish <w-id> --body <shell/core> --repo <url> "<work>"`; repeat `--repo` for each checkout. The README and seat land together before its first lease. Repo directory names must be distinct.
 
 `molt --fresh --why "<reason>"` starts a successor from main without inheriting the room or its label. The old room and unlanded work remain for review. The reason stays in the molt fact; the successor receives a fixed fresh-start message. Plain `molt` carries the room and label forward.
 

@@ -384,13 +384,17 @@ def _refuse_other_loom(home, thread: str) -> None:
             "on their letter; to run the thread here, empty its `for:`")
 
 
+OPEN_NEEDS_WISH = ('send: opening a thread needs the wish behind it: '
+                   '--wish <id> | --wish new:"<line>"')
+
+
 def write_send(room: Path, *, to: str, sender: str, body: str = "",
                re: str | None = None, note: str | None = None,
                clean: bool = False, kind: str | None = None,
                refs: tuple[str, ...] | list[str] = (),
                molt: str | None = None, body_choice: str | None = None,
                at: str | None = None, repo_sources: tuple[str, ...] | list[str] = (),
-               wish: str | None = None) -> str:
+               wish: str | tuple[str, ...] | list[str] | None = None) -> str:
     home = home_of_room(Path(room))
     opening = None
     if at is not None:
@@ -439,20 +443,32 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         re = _full_re(Path(room), re)
     if note is not None and body:
         raise PortError("send: --note is the whole no-answer; drop the body")
-    wish_stamp = None
-    if wish is not None:
-        from .ledger import read_facts
-        from .lifecycle import own_thread
-        from .verbs_wishes import say_span, wish_fact
-        if not re:
-            raise PortError("send --wish requires --re")
-        facts = read_facts(home)
-        ident, line = ("new", wish[4:]) if wish.startswith("new:") else (wish, None)
-        wish_stamp = wish_fact(facts, by="strand:" + sender, ident=ident,
-                               says=[say_span(re, facts)], line=line,
-                               thread=own_thread(Path(room)) if ident == "new" else None)
+    asked = [wish] if isinstance(wish, str) else list(dict.fromkeys(wish or ()))
+    if opening is not None and not asked:
+        raise PortError(OPEN_NEEDS_WISH)
     stem = mint(5)
     letter_id = f"{sender}/{stem}"
+    wish_stamps = []
+    if asked:
+        from .ledger import read_facts
+        from .lifecycle import own_thread
+        from .registry import admit
+        from .verbs_wishes import say_span, wish_fact
+        if not re and opening is None:
+            raise PortError("send --wish requires --re, unless the letter opens a thread")
+        facts = read_facts(home)
+        for value in asked:
+            ident, line = ("new", value[4:]) if value.startswith("new:") else (value, None)
+            if re:
+                says = [say_span(re, facts)]
+            else:
+                # Nothing to cite but the opening letter itself: a
+                # resident's say, so the fold reports the wish as derived.
+                says = [[letter_id, 0, None]] if ident == "new" else []
+            stamp = wish_fact(facts, by="strand:" + sender, ident=ident, says=says, line=line,
+                              thread=opening or (own_thread(Path(room)) if ident == "new" else None))
+            admit(stamp)
+            wish_stamps.append(stamp)
     fields = {
         "kind": "note" if note is not None else "letter",
         "id": letter_id, "to": to, "from": sender,
@@ -484,11 +500,13 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     text = _front(fields, "" if note is not None else body)
     if opening is not None:
         from .lifecycle import open_thread
-        open_thread(Path(room), opening, sender, body, body_choice, repo_sources)
+        open_thread(Path(room), opening, sender, body, body_choice, repo_sources,
+                    opened_for=[stamp.data["wish"] for stamp in wish_stamps])
     write_port(room, stem, text)
-    if wish_stamp is not None:
+    if wish_stamps:
         from .ledger import append
-        append(home, wish_stamp)
+        for stamp in wish_stamps:
+            append(home, stamp)
     return letter_id
 
 

@@ -65,7 +65,7 @@ REGISTRY = (
     _kind("body.stopped",      "body",    "strand gen pid why",                               "loom",        "machine", once=True),
     _kind("body.unidentified", "body",    "strand gen pid why",                               "loom",        "machine"),
     _kind("body.exited",       "body",    "strand gen code why? failure_origin? failure_letters?",                             "loom",        "global",  once=True),
-    _kind("wish",              "wish",    "wish says from line thread",                        "strand person", "global"),
+    _kind("wish",              "wish",    "wish says from line thread parent?",                "strand person", "global"),
     _kind("wish.read",         "wish",    "wish reading by",                                   "strand person", "global"),
     _kind("wish.result",       "wish",    "wish kind ref line delivered",                       "strand",        "global"),
     _kind("wish.verdict",      "wish",    "wish as evidence ref",                              "strand person", "global"),
@@ -106,9 +106,17 @@ def problems(fact: Fact) -> list[str]:
 
 
 def admit(fact: Fact) -> None:
-    """Refuse a fact of a closed resource the registry has anything against."""
+    """Refuse a fact of a closed resource the registry has anything against.
+
+    A wish is born for someone: the fact that creates one (its id is the
+    wish) cites a letter in ``says`` or names a ``parent`` wish. Touches and
+    the facts already in the ledger are not checked: only ``append`` admits.
+    """
     if resource_of(fact.kind) not in CLOSED:
         return
     found = problems(fact)
+    if (fact.kind == "wish" and not found and fact.id == fact.data["wish"]
+            and not fact.data["says"] and not fact.data.get("parent")):
+        found.append("a new wish needs --say <letter> or --parent <wish>")
     if found:
         raise UndeclaredFact(f"registry refused {fact.id}: " + "; ".join(found))
