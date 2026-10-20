@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from brr.loom.runtime.ledger import inject_letter
 from brr.loom.runtime.selfrepo import git, init_self, _env_without_pin
 from brr.loom.runtime.project import holder
+from brr.loom.runtime.wishes import wishes
 
 from _step import Loom, wait_until, write_thread, kill_bodies
 from test_lifecycle import bodies
@@ -27,7 +28,7 @@ def table(root):
                           text=True, capture_output=True, timeout=15)
     assert proc.returncode == 0, proc.stderr
     lines = [line.split(' · ') for line in proc.stdout.splitlines()]
-    assert lines[0] == ['thread', 'seat', 'now', 'owed', 'unanswered', 'opened-by', 'plan', 'owed-by', 'restart', 'control']
+    assert lines[0] == ['thread', 'seat', 'now', 'owed', 'unanswered', 'opened-by', 'opened-for', 'plan', 'owed-by', 'restart', 'control']
     return {row[0]: dict(zip(lines[0], row)) for row in lines[1:]}
 
 
@@ -53,7 +54,7 @@ if own == "opener":
     for letter in ctx.owed():
         ctx.send("thread:opener", note="begin", re=letter.id)
     proc = subprocess.run([sys.executable, "-m", "brr.loom.runtime", "send", "--room", str(ctx.room),
-                           "--to", "thread:new-work", "--body", "worker/test-core", "--repo", "https://example/a.git", "New work\\nDetails"],
+                           "--to", "thread:new-work", "--wish", "new:New work", "--body", "worker/test-core", "--repo", "https://example/a.git", "New work\\nDetails"],
                           text=True, capture_output=True)
     assert proc.returncode == 0, proc.stderr
     while not Path({str(root / "stop-opener")!r}).exists():
@@ -104,8 +105,10 @@ else:
         wait_until(ready.exists, 15, loom.dump)
         wait_until(opened.exists, 30, loom.dump)
         readme = git(root / 'self', 'show', 'main:threads/new-work/README.md').stdout
+        behind = next(w for w in wishes(loom.facts()).values() if w.line == 'New work')
+        assert (behind.thread, behind.origin) == ('new-work', 'derived')
         assert readme == ('---\nid: new-work\nstatus: open\ntense: plan\n'
-                          'opened-by: thread:opener\n---\n# New work\n')
+                          f'opened-by: thread:opener\nopened-for: [{behind.id}]\n---\n# New work\n')
         assert git(root / 'self', 'show', 'main:threads/new-work/seat').stdout == 'body: worker/test-core\nrepo: https://example/a.git\n'
         assert git(root / 'self', 'log', '-1', '--format=%H', '--', 'threads/new-work/README.md').stdout == git(
             root / 'self', 'log', '-1', '--format=%H', '--', 'threads/new-work/seat').stdout
@@ -113,15 +116,16 @@ else:
         assert [f.data['body'] for f in mail(root, loom.facts(), 'new-work')] == ['New work\nDetails']
         rows = table(root)
         assert rows['new-work'] == {'thread': 'new-work', 'seat': 'worker/test-core', 'now': 'working',
-                                    'owed': '1', 'unanswered': '0', 'opened-by': 'thread:opener', 'plan': '—',
+                                    'owed': '1', 'unanswered': '0', 'opened-by': 'thread:opener',
+                                    'opened-for': f'{behind.id} heard: New work', 'plan': '—',
                                     'owed-by': 'body:new-work', 'restart': 'current body', 'control': '—'}
         assert rows['idle'] == {'thread': 'idle', 'seat': '—', 'now': 'idle 3h', 'owed': '0', 'unanswered': '0',
-                                'opened-by': '—', 'plan': '1/2', 'owed-by': 'nobody',
+                                'opened-by': '—', 'opened-for': '—', 'plan': '1/2', 'owed-by': 'nobody',
                                 'restart': 'next letter', 'control': '—'}
         date = git(root / 'self', 'log', '-1', '-G', '^status:', '--format=%cs',
                    'main', '--', 'threads/settled/README.md').stdout.strip()
         assert rows['settled'] == {'thread': 'settled', 'seat': '—', 'now': f'settled {date}',
-                                   'owed': '0', 'unanswered': '0', 'opened-by': 'thread:opener', 'plan': '1/1',
+                                   'owed': '0', 'unanswered': '0', 'opened-by': 'thread:opener', 'opened-for': '—', 'plan': '1/1',
                                    'owed-by': 'nobody',
                                    'restart': 'new letter or opener answers', 'control': 'thread:opener'}
         (root / 'clear-owed').write_text('handle without replying yet')
@@ -174,7 +178,7 @@ for letter in ctx.owed():
     ctx.send("thread:opener", note="begin", re=letter.id)
 def send(thread, *extra):
     return subprocess.run([sys.executable, "-m", "brr.loom.runtime", "send", "--room", str(ctx.room),
-                           "--to", "thread:" + thread, *extra, "Work"], text=True, capture_output=True)
+                           "--to", "thread:" + thread, "--wish", "new:Work", *extra, "Work"], text=True, capture_output=True)
 existing = send("opener", "--body", "fake/test-core")
 unsafe = send("../outside")
 duplicate = send("duplicate-repos", "--repo", "https://example/a.git", "--repo", "https://other/a.git")

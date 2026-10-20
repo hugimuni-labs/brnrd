@@ -90,7 +90,7 @@ def wish(home, *, delivered=True):
     from brr.daemon2.facts import Fact
     from brr.loom.runtime.ledger import append
     append(home, Fact(kind="wish", by="person:arseni", id="w-board1", data={
-        "wish": "w-board1", "says": [], "from": "person", "line": "A board", "thread": "first"}))
+        "wish": "w-board1", "says": [["arseni/board", 0, None]], "from": "person", "line": "A board", "thread": "first"}))
     append(home, Fact(kind="wish.result", by="strand:s-aaaa-first1", id="wish.result:b1", data={
         "wish": "w-board1", "kind": "pr", "ref": "#1", "line": "the board", "delivered": delivered}))
 

@@ -194,7 +194,7 @@ def opened_for_line(ident: str, wish) -> str:
     """A wish a thread was opened for: its id, state and line, or that it is gone."""
     if wish is None:
         return f'{ident} (no such wish)'
-    line = ' '.join(wish.line.split())
+    line = ' '.join(wish.line.split()).replace(' · ', ' / ')
     return f"{ident} {wish.state}: {line if len(line) <= 60 else line[:59] + '…'}"
 
 

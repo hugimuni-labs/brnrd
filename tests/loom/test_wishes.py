@@ -43,6 +43,12 @@ def word(home):
     return inject_letter(home.root, to="thread:work", body="done")
 
 
+def heard(home, seat, line, *args):
+    """A wish born for a letter: the ledger refuses one that cites nothing."""
+    letter = inject_letter(home.root, to="thread:work", body="Please: " + line)
+    return command(home, seat, "wish", "new", "--line", line, "--say", letter, *args)
+
+
 def view(home, ident):
     return wishes(read_facts(home))[ident]
 
@@ -90,8 +96,10 @@ def test_says_asks_and_send_stamp(ledger):
     home, seat = ledger
     letter = inject_letter(home.root, to="thread:work", body="A long enough letter")
     said = command(home, seat, "wish", "new", "--line", "said", "--say", letter + "@2+4")
-    derived = command(home, seat, "wish", "new", "--line", "derived")
-    ask = command(home, seat, "wish", "new", "--from", "resident", "--line", "Need your decision")
+    derived = command(home, seat, "wish", "new", "--line", "derived", "--parent", said)
+    ask = command(home, seat, "wish", "new", "--from", "resident", "--line", "Need your decision",
+                  "--parent", said)
+    assert view(home, derived).parent == view(home, ask).parent == said
     assert view(home, derived).derived_unconfirmed
     assert view(home, said).says == [[letter, 2, 4]]
     assert view(home, said).origin == "said"
@@ -121,19 +129,26 @@ def test_refused_writes_have_no_effect(ledger):
     assert "span past" in command(home, seat, "wish", "new", "--line", "Bad", "--say", letter + "@2+3", ok=False)
     assert "no letter" in command(home, seat, "wish", "new", "--line", "Bad", "--say", "missing", ok=False)
     assert "no wish" in command(home, seat, "send", "--to", "thread:other", "--re", letter, "--wish", "absent", "reply", ok=False)
+    assert "--say <letter> or --parent <wish>" in command(home, seat, "wish", "new", "--line", "Bad", ok=False)
+    assert "--parent: no wish" in command(home, seat, "wish", "new", "--line", "Bad", "--parent", "w-absent", ok=False)
     assert read_facts(home) == before
     assert not (seat / "port/out").exists()
     with pytest.raises(UndeclaredFact, match="does not declare stored_state"):
         append(home, Fact(kind="wish", by="person:test", data={"wish": "w-bad", "says": [],
             "from": "person", "line": "Bad", "thread": "work", "stored_state": "heard"}))
-    ident = command(home, seat, "wish", "new", "--line", "Fine")
+    with pytest.raises(UndeclaredFact, match="a birth .* or a touch"):
+        append(home, Fact(kind="wish", by="person:test", data={"wish": "w-bad", "says": [],
+            "from": "person", "line": "Bad", "thread": "work"}))
+    assert read_facts(home) == before
+    ident = heard(home, seat, "Fine")
     assert "written by strand" in command(home, seat, "wish", ident, "--result", "file:x", "--line", "x", person=True, ok=False)
 
 
 def test_unconfirmed_is_computed_at_read_time_and_fold_orders_facts(ledger):
     home, seat = ledger
-    ident = command(home, seat, "wish", "new", "--line", "Old derived wish")
-    fact = next(f for f in read_facts(home) if f.kind == "wish")
+    ident = command(home, seat, "wish", "new", "--line", "Old derived wish",
+                    "--parent", heard(home, seat, "Parent"))
+    fact = next(f for f in read_facts(home) if f.kind == "wish" and f.id == ident)
     old = replace(fact, at=(datetime.now(timezone.utc) - timedelta(days=61)).isoformat())
     w = wishes([old])[ident]
     assert w.unconfirmed()
@@ -148,7 +163,7 @@ def test_unconfirmed_is_computed_at_read_time_and_fold_orders_facts(ledger):
 
 def test_wake_bounds_each_line_and_reserves_its_budget(ledger, monkeypatch):
     home, seat = ledger
-    ident = command(home, seat, "wish", "new", "--line", "recall\n" + "x" * 2000)
+    ident = heard(home, seat, "recall\n" + "x" * 2000)
     command(home, seat, "wish", ident, "--result", "file:" + "r" * 1000,
             "--line", "Result", "--deliver")
     output = StringIO()
@@ -166,7 +181,7 @@ def test_wake_bounds_each_line_and_reserves_its_budget(ledger, monkeypatch):
 
 def test_room_cannot_use_home_to_accept_as_person(ledger):
     home, seat = ledger
-    ident = command(home, seat, "wish", "new", "--line", "Own wish")
+    ident = heard(home, seat, "Own wish")
     before = read_facts(home)
     for room_args in ([], ["--room", str(seat)]):
         result = cli(["wish", ident, "--home", str(home.root), *room_args,
@@ -203,8 +218,8 @@ def test_failed_port_write_does_not_stamp_wish(ledger, monkeypatch):
 def test_wake_caps_rows_with_asks_first(ledger):
     home, seat = ledger
     for i in range(70):
-        append(home, Fact(kind="wish", by="strand:s-aaaa-test", data={
-            "wish": f"w-{i:03}", "says": [], "from": "resident" if i == 69 else "person",
+        append(home, Fact(kind="wish", by="strand:s-aaaa-test", id=f"w-{i:03}", data={
+            "wish": f"w-{i:03}", "says": [["s-aaaa-test/x", 0, None]], "from": "resident" if i == 69 else "person",
             "line": "x" * 160, "thread": "work"}))
     output = StringIO()
     assert run_wake(seat, "work", stdout=output) == 0
@@ -217,7 +232,7 @@ def test_wake_caps_rows_with_asks_first(ledger):
 
 
 def delivered_wish(home, seat, line="Delivered work"):
-    ident = command(home, seat, "wish", "new", "--line", line)
+    ident = heard(home, seat, line)
     command(home, seat, "wish", ident, "--result", "pr:https://example.com/1",
             "--line", "Ready", "--deliver")
     return ident
@@ -255,7 +270,7 @@ def test_settle_hands_only_pending_delivered_wishes_to_new_thread(ledger):
 
     home, seat = ledger
     ids = [delivered_wish(home, seat, str(i)) for i in range(2)]
-    heard = command(home, seat, "wish", "new", "--line", "Still heard")
+    still = heard(home, seat, "Still heard")
     done = delivered_wish(home, seat, "Accepted")
     command(home, seat, "wish", done, "--accept", "word")
     command(home, seat, "settle", "work", "--word", word(home), "--why", "Review continues",
@@ -263,12 +278,12 @@ def test_settle_hands_only_pending_delivered_wishes_to_new_thread(ledger):
     assert read_thread(home, "work")["status"] == "settled"
     listing = command(home, seat, "wishes", "--thread", "other")
     assert all(ident in listing for ident in ids)
-    assert heard not in listing and done not in listing
+    assert still not in listing and done not in listing
     for ident in ids:
         assert view(home, ident).thread == "other"
         assert view(home, ident).state == "delivered"
         assert len(view(home, ident).results) == 1
-    assert view(home, heard).thread == view(home, done).thread == "work"
+    assert view(home, still).thread == view(home, done).thread == "work"
     moves = [f for f in read_facts(home) if f.kind == "wish" and f.data["thread"] == "other"]
     assert {f.data["wish"] for f in moves} == set(ids)
     assert all(f.by == "strand:s-aaaa-test" for f in moves)

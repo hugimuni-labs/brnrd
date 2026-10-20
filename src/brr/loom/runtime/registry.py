@@ -109,14 +109,21 @@ def admit(fact: Fact) -> None:
     """Refuse a fact of a closed resource the registry has anything against.
 
     A wish is born for someone: the fact that creates one (its id is the
-    wish) cites a letter in ``says`` or names a ``parent`` wish. Touches and
-    the facts already in the ledger are not checked: only ``append`` admits.
+    wish) cites a letter in ``says`` or names a ``parent`` wish. Any other
+    ``wish`` fact is a touch, id ``wish:…``; one with neither shape would be
+    a birth the rule never saw, since the fold creates a wish from whichever
+    fact names it first. Whether a touched wish exists is the verb's check:
+    admit sees one fact, not the ledger. The facts already in the ledger are
+    not checked: only ``append`` admits.
     """
     if resource_of(fact.kind) not in CLOSED:
         return
     found = problems(fact)
-    if (fact.kind == "wish" and not found and fact.id == fact.data["wish"]
-            and not fact.data["says"] and not fact.data.get("parent")):
-        found.append("a new wish needs --say <letter> or --parent <wish>")
+    if fact.kind == "wish" and not found:
+        if fact.id == fact.data["wish"]:
+            if not fact.data["says"] and not fact.data.get("parent"):
+                found.append("a new wish needs --say <letter> or --parent <wish>")
+        elif not fact.id.startswith("wish:"):
+            found.append("a wish fact is a birth (id = the wish) or a touch (id wish:…)")
     if found:
         raise UndeclaredFact(f"registry refused {fact.id}: " + "; ".join(found))
