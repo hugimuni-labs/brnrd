@@ -376,7 +376,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     wait_src = home.thread_dir(thread) / "wait"
     if wait_src.is_file():
         atomic_write(room / "port" / "wait", wait_src.read_text().strip() + "\n")
-    for name in ("jack-state.json", "policy"):
+    for name in ("jack-state.json", "policy", "in/hold"):
         (room / "port" / name).unlink(missing_ok=True)
     owed_path = room / "port" / "owed.json"
     attachments = letter_attachments(home.root, facts)
@@ -1054,18 +1054,23 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     else:
         after = max((datetime.fromisoformat(f.at).timestamp() for f in facts
                      if f.data.get("strand") == strand and f.kind in {"body.exited", "body.parked"}), default=0)
-    dms = list(_person_dms(home, facts, thread)) if state.name == "parked" else []
+    # A live body asleep in its own stop hook is parked too: the jack waits
+    # for fuel there rather than lose the conversation (jack.py, _poll).
+    held = state.name == "running" and alive and _held_dry(room)
+    dms = list(_person_dms(home, facts, thread)) if state.name == "parked" or held else []
     # A person's "wake" on their own DM is `threads --force`, said in a word;
     # "wake <shell>[/<core>]" ends this park so the next gen runs on that body.
     told = set()
     for letter, channel in dms:
-        named = _wake_letter(home, facts, thread, (shell, core), letter, channel)
+        named = _wake_letter(home, facts, thread, (shell, core), letter, channel, held=held)
         if named is None:
             continue
         told.add(letter.id)
-        force = force or named == (shell, core)
+        if named == (shell, core) and held:
+            atomic_write(room / "port/in/hold", "release\n")
+        force = force or named == (shell, core) and not held
     dms = [(letter, channel) for letter, channel in dms if letter.id not in told]
-    woken = _wake_choice(facts, thread) if state.name == "parked" else None
+    woken = _wake_choice(facts, thread) if state.name in ("parked", "running") else None
     # A parked body reads the gauge like any other: a refill is seen when it
     # happens, and the park's `until` only guards a gauge that reads nothing.
     gauge = {"windows": []} if force else reading(home, shell, 0 if alive else after)
@@ -1090,27 +1095,50 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     o = Observation(strand, gen, alive, closed, "refreshing" if gauge is None else "empty" if empty
                     else "ok" if gauge["windows"] else "unknown",
                     now, proven, until=until, force=force, stop_grace=config.stop_grace,
-                    woken="/".join(woken) if woken else "")
+                    woken="/".join(woken) if woken else "", held=held)
     if TABLE[row_for(facts, o)].next == "parked":
         park = fact_for(facts, "body.parked", strand, gen)
-        window, left, when = ((empty["name"], empty["left_pct"], until) if empty else
-                              (park.data["window"], park.data["left_pct"], park.data["until"]))
-        what = (f"Out of {shell} {window} fuel ({left:g}% left) "
-                f"until about {datetime.fromtimestamp(when).astimezone():%H:%M}. "
-                f"Your letter is kept on thread {thread} and is answered when it refills.")
-        lines = _wake_lines(home, facts, thread, (shell, core), (window, left, when))
-        can = ("Reply wake to start it now." if len(lines) == 1
-               else "Reply with one of:\n" + "\n".join(lines))
-        for letter, channel in dms or _person_dms(home, facts, thread):
-            notice(home, facts, "parked", letter.id, what, can,
-                   about=letter, channel=channel, passive=True)
+        _park_notice(home, facts, thread, (shell, core),
+                     (empty["name"], empty["left_pct"], until) if empty else
+                     (park.data["window"], park.data["left_pct"], park.data["until"]),
+                     dms or _person_dms(home, facts, thread))
+    elif held and empty:
+        # Only letters this body has not been shown wait on its fuel.
+        shown = fold(facts).shown.get(strand, set())
+        _park_notice(home, facts, thread, (shell, core), (empty["name"], empty["left_pct"], until),
+                     [(letter, channel) for letter, channel in dms if letter.id not in shown], held=True)
     return o, context
+
+
+def _held_dry(room: Path) -> bool:
+    """The jack says its body sleeps in the stop hook for fuel."""
+    try:
+        return bool(json.loads((room / "port/jack-state.json").read_text()).get("dry"))
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _park_notice(home, facts, thread, leased, park, letters, *, held=False):
+    """Tell each person whose letter waits on fuel, once a letter, with the bodies to wake.
+
+    The loom's park and a body's dry hold in its stop hook say the same words.
+    """
+    window, left, when = park
+    what = (f"Out of {leased[0]} {window} fuel ({left:g}% left) "
+            f"until about {datetime.fromtimestamp(when).astimezone():%H:%M}. "
+            f"Your letter is kept on thread {thread} and is answered when it refills.")
+    lines = _wake_lines(home, facts, thread, leased, park, held=held)
+    can = (("Reply wake to go on now; the turn may fail on fuel." if held else "Reply wake to start it now.")
+           if len(lines) == 1 else "Reply with one of:\n" + "\n".join(lines))
+    for letter, channel in letters:
+        notice(home, facts, "parked", letter.id, what, can,
+               about=letter, channel=channel, passive=True)
 
 
 WAKE = re.compile(r"/?wake(?:\s+([A-Za-z0-9][A-Za-z0-9._-]*)(?:/(\S+))?)?", re.IGNORECASE)
 
 
-def _wake_letter(home, facts, thread, leased, letter, channel, *, parked=True):
+def _wake_letter(home, facts, thread, leased, letter, channel, *, parked=True, held=False):
     """Dispose of one person's wake: the body it names, its refusal words, or None.
 
     The word is the whole letter, or the body a brnrd.dev composer letter
@@ -1125,9 +1153,11 @@ def _wake_letter(home, facts, thread, leased, letter, channel, *, parked=True):
     disposition = {"id": ident, "outcome": "done"}
     if isinstance(named, str):
         notice(home, facts, "wake-refused", letter.id, f"{named} Nothing was started.",
-               "\n".join(_wake_lines(home, facts, thread, leased, None)),
+               "\n".join(_wake_lines(home, facts, thread, leased, None, held=held)),
                about=letter, channel=channel, passive=True)
         disposition["reason"] = "wake: refused, " + named
+    elif held and named == leased:
+        disposition["reason"] = "wake: hold released before its reset"
     elif parked and named == leased:
         disposition["reason"] = "wake: started before its reset"
     else:
@@ -1175,16 +1205,21 @@ def _wake_body(home, facts, thread, leased, said):
     return shell, core
 
 
-def _wake_lines(home, facts, thread, leased, park):
-    """Each body a parked thread may wake on, as the exact letter, with its fuel."""
+def _wake_lines(home, facts, thread, leased, park, *, held=False):
+    """Each body a parked thread may wake on, as the exact letter, with its fuel.
+
+    A held body is alive: ``wake`` lets it take its turn now, on what fuel is left.
+    """
     from .usage import shell_fuels
     found = shell_fuels(home)
+    retry = (f"wake: go on with {leased[0]}/{leased[1]} now, the turn may fail on fuel" if held
+             else f"wake: retry {leased[0]}/{leased[1]}")
     if park:
         window, left, when = park
-        lines = [f"wake: retry {leased[0]}/{leased[1]} ({window} {left:g}%, "
+        lines = [f"{retry} ({window} {left:g}%, "
                  f"resets {datetime.fromtimestamp(when).astimezone():%a %H:%M})"]
     else:
-        lines = [f"wake: retry {leased[0]}/{leased[1]}"]
+        lines = [retry]
     for shell in _wake_shells(home, leased[0]):
         if shell == leased[0]:
             continue
@@ -1349,6 +1384,13 @@ def _hand_signal(x, command, step):
         return replace(x.o, alive=False)
 
 
+def _hand_let_go(x, command, step):
+    """A body held dry was woken on another: its jack lets it stop (jack.py, _order)."""
+    path = x.room / "port/in/hold"
+    if not path.is_file() or path.read_text() != "end\n":
+        atomic_write(path, "end\n")
+
+
 def _hand_collect(x, command, step):
     body = x.bodies.pop(x.o.strand, None)
     if body:
@@ -1396,7 +1438,7 @@ def _hand_release(x, command, step):
 
 HANDS = {
     "prepare": _hand_prepare, "show": _hand_show, "spawn": _hand_spawn, "started": _hand_started,
-    "record": _hand_record, "signal": _hand_signal, "collect": _hand_collect, "drain": _hand_drain,
+    "record": _hand_record, "signal": _hand_signal, "let_go": _hand_let_go, "collect": _hand_collect, "drain": _hand_drain,
     "end": _hand_end, "drained": _hand_drained, "release": _hand_release,
 }
 

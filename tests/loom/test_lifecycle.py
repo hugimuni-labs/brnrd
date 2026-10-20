@@ -206,7 +206,7 @@ class _Person:
         self.cursor = drop_once(self.home, Client(), self.cursor)
 
 
-def _parked_home(tmp_path, monkeypatch, *, run="raise SystemExit('must park before starting')"):
+def _parked_home(tmp_path, monkeypatch, *, run="raise SystemExit('must park before starting')", left="2"):
     """A home whose brnrd thread is seated on claude/echo with 2% session fuel.
 
     The claude gauge reads ``fuel``, so a test can refill it. A second shell,
@@ -227,7 +227,7 @@ def _parked_home(tmp_path, monkeypatch, *, run="raise SystemExit('must park befo
     git(root / "self", "commit", "-m", "Choose gauge body.")
     reset = datetime.now(timezone.utc) + timedelta(hours=2)
     fuel = root / "fuel"
-    fuel.write_text("2")
+    fuel.write_text(left)
     starts = root / "starts"
     for shell, sources in {
         "claude": {"run": run, "usage": "import json, pathlib; print(json.dumps({'windows': [{'name': 'session', "
@@ -378,6 +378,100 @@ def test_wake_naming_no_enabled_body_is_refused_with_the_list(tmp_path, monkeypa
         assert not _started(loom)
         assert _leases(loom) == [(1, "claude", "echo")]
         assert "letter:relay:telegram:42:nope" not in {str(l.data["id"]) for l in mail(home.root, loom.facts(), "brnrd")}
+    finally:
+        loom.halt()
+        kill_bodies(loom)
+    assert not loom.errors
+
+
+def _held_body(log):
+    """A claude body that answers what it woke with, then sits in the real stop hook.
+
+    Each turn the hook gives it is a line in ``log``; it leaves when the hook lets it.
+    """
+    return f"""import pathlib, sys
+from brr.loom.runtime.fakebody import Ctx
+ctx = Ctx(pathlib.Path(sys.argv[1]))
+def say(line):
+    with pathlib.Path({str(log)!r}).open("a") as out:
+        out.write(line + "\\n")
+for letter in ctx.owed():
+    ctx.send(letter.reply, "on it", re=letter.id)
+say("woke")
+while True:
+    view = ctx.jack("stop")
+    if view.kind != "block":
+        say("left")
+        break
+    if "cache keepalive" not in view.raw:
+        say("turn " + " ".join(letter.id for letter in view.letters))
+        for letter in view.letters:
+            ctx.send(letter.reply, "back", re=letter.id)
+"""
+
+
+def _held_dry(home, loom):
+    """Start the brnrd thread on claude with fuel, then drain it while the body holds."""
+    log = home.root / "turns"
+    wait_until(lambda: log.is_file() and "woke" in log.read_text(), 15, loom.dump)
+    home.fuel.write_text("2")
+    gauge = home.root / "loom/usage/claude.json"
+    wait_until(lambda: gauge.is_file() and json.loads(gauge.read_text())["windows"][0]["left_pct"] == 2,
+               10, loom.dump)
+    time.sleep(1.5)  # the stop hook reads the same gauge and goes to sleep
+    return log
+
+
+def test_body_held_dry_in_its_stop_hook_tells_the_person_of_each_letter(tmp_path, monkeypatch):
+    home = _parked_home(tmp_path, monkeypatch, run=_held_body(tmp_path / "home/turns"), left="100")
+    loom = Loom(home.root)
+    loom.start()
+    try:
+        log = _held_dry(home, loom)
+        wait_until(lambda: (home.root / "loom/usage/spare.json").is_file(), 10, loom.dump)
+        home.person.says("again", "are you there?")
+        wait_until(lambda: any(m["re"] == "telegram:42:again" for m in home.sent), 10, loom.dump)
+        told = next(m for m in home.sent if m["re"] == "telegram:42:again")
+        assert "Out of claude session fuel (2% left)" in told["body"]
+        assert "Your letter is kept on thread brnrd" in told["body"]
+        assert ("Reply with one of:\nwake: go on with claude/echo now, the turn may fail on fuel "
+                "(session 2%, resets ") in told["body"]
+        assert "\nwake spare/<core>: spare session 70%" in told["body"]
+        home.person.says("more", "still?")
+        wait_until(lambda: any(m["re"] == "telegram:42:more" for m in home.sent), 10, loom.dump)
+        time.sleep(0.5)
+        # One notice a letter; the first letter was answered before the hold, so none for it.
+        assert [m["re"] for m in home.sent if "Out of claude" in m["body"]] == ["telegram:42:again", "telegram:42:more"]
+        assert log.read_text().splitlines() == ["woke"]  # no turn taken without fuel
+        home.person.says("wake", "wake")
+        wait_until(lambda: "turn" in log.read_text(), 10, loom.dump)
+        assert log.read_text().splitlines()[1].split()[1:] == ["letter:relay:telegram:42:again",
+                                                                "letter:relay:telegram:42:more"]
+        assert "letter:relay:telegram:42:wake" not in {str(l.data["id"]) for l in mail(home.root, loom.facts(), "brnrd")}
+        assert _leases(loom) == [(1, "claude", "echo")]
+    finally:
+        loom.halt()
+        kill_bodies(loom)
+    assert not loom.errors
+
+
+def test_body_held_dry_woken_on_another_body_ends_molted_and_the_next_gen_runs_there(tmp_path, monkeypatch):
+    home = _parked_home(tmp_path, monkeypatch, run=_held_body(tmp_path / "home/turns"), left="100")
+    loom = Loom(home.root)
+    loom.start()
+    try:
+        log = _held_dry(home, loom)
+        home.person.says("again", "are you there?")
+        wait_until(lambda: any(m["re"] == "telegram:42:again" for m in home.sent), 10, loom.dump)
+        home.person.says("move", "wake spare/x")
+        wait_until(lambda: home.starts.is_file(), 15, loom.dump)
+        assert home.starts.read_text() == "spare\n"
+        assert log.read_text().splitlines() == ["woke", "left"]
+        assert _leases(loom) == [(1, "claude", "echo"), (2, "spare", "x")]
+        ended = [f for f in loom.facts() if f.kind == "attempt.ended"]
+        assert [(f.data["gen"], f.data.get("cause")) for f in ended] == [(1, "molted")]
+        owed = {str(l.data["id"]) for l in mail(home.root, loom.facts(), "brnrd")}
+        assert "letter:relay:telegram:42:again" in owed and "letter:relay:telegram:42:move" not in owed
     finally:
         loom.halt()
         kill_bodies(loom)
