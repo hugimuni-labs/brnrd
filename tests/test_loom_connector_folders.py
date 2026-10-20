@@ -244,3 +244,25 @@ def test_relay_photo_answer_and_reply_through_real_folder_processes(home, tmp_pa
         server.shutdown()
         server.server_close()
         worker.join(timeout=2)
+
+
+def test_a_channel_enabled_while_running_starts_on_the_next_step(home):
+    config = home.root / 'loom/config.toml'
+    config.write_text('connectors = []\n')
+    inputs = connector.Inputs(home)
+    try:
+        inputs.step()
+        drop = home.root / 'loom/connectors/fake/state/in'
+        drop.mkdir(parents=True)
+        (drop / 'hello.md').write_text(_front(dict(kind='letter', id='hello', to='in', **{'from': 'visitor'}), 'hello'))
+        config.write_text('connectors = ["fake"]\n')
+        inputs.step()
+        assert [f.id for f in read_facts(home) if f.kind == 'letter']
+        config.write_text('connectors = "broken"\n')
+        inputs.step()
+        assert inputs.names == {'fake': 'fake'}
+        config.write_text('connectors = []\n')
+        inputs.step()
+        assert inputs.names == {} and inputs.children == {}
+    finally:
+        inputs.close()
