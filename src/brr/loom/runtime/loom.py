@@ -1070,7 +1070,9 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
             atomic_write(room / "port/in/hold", "release\n")
         force = force or named == (shell, core) and not held
     dms = [(letter, channel) for letter, channel in dms if letter.id not in told]
-    woken = _wake_choice(facts, thread) if state.name in ("parked", "running") else None
+    # Read at a park, a hold, or the exit a hold's wake caused; never on
+    # every tick of a running body (the scan walks the ledger).
+    woken = _wake_choice(facts, thread) if state.name == "parked" or held or state.name == "running" and not alive else None
     # A parked body reads the gauge like any other: a refill is seen when it
     # happens, and the park's `until` only guards a gauge that reads nothing.
     gauge = {"windows": []} if force else reading(home, shell, 0 if alive else after)

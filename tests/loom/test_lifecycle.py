@@ -411,15 +411,22 @@ while True:
 
 
 def _held_dry(home, loom):
-    """Start the brnrd thread on claude with fuel, then drain it while the body holds."""
+    """Start the brnrd thread on claude with fuel, then drain it while the body holds.
+
+    Returns the turn log and its lines before the hold: with fuel, the hook may
+    still show the first letter once before the loom has read the answer.
+    """
     log = home.root / "turns"
     wait_until(lambda: log.is_file() and "woke" in log.read_text(), 15, loom.dump)
     home.fuel.write_text("2")
     gauge = home.root / "loom/usage/claude.json"
     wait_until(lambda: gauge.is_file() and json.loads(gauge.read_text())["windows"][0]["left_pct"] == 2,
                10, loom.dump)
-    time.sleep(1.5)  # the stop hook reads the same gauge and goes to sleep
-    return log
+
+    def dry():
+        return any(json.loads(p.read_text()).get("dry") for p in home.root.rglob("port/jack-state.json"))
+    wait_until(dry, 10, loom.dump)  # the stop hook read the same gauge and sleeps
+    return log, len(log.read_text().splitlines())
 
 
 def test_body_held_dry_in_its_stop_hook_tells_the_person_of_each_letter(tmp_path, monkeypatch):
@@ -427,7 +434,7 @@ def test_body_held_dry_in_its_stop_hook_tells_the_person_of_each_letter(tmp_path
     loom = Loom(home.root)
     loom.start()
     try:
-        log = _held_dry(home, loom)
+        log, before = _held_dry(home, loom)
         wait_until(lambda: (home.root / "loom/usage/spare.json").is_file(), 10, loom.dump)
         home.person.says("again", "are you there?")
         wait_until(lambda: any(m["re"] == "telegram:42:again" for m in home.sent), 10, loom.dump)
@@ -442,10 +449,10 @@ def test_body_held_dry_in_its_stop_hook_tells_the_person_of_each_letter(tmp_path
         time.sleep(0.5)
         # One notice a letter; the first letter was answered before the hold, so none for it.
         assert [m["re"] for m in home.sent if "Out of claude" in m["body"]] == ["telegram:42:again", "telegram:42:more"]
-        assert log.read_text().splitlines() == ["woke"]  # no turn taken without fuel
+        assert log.read_text().splitlines()[before:] == []  # no turn taken without fuel
         home.person.says("wake", "wake")
-        wait_until(lambda: "turn" in log.read_text(), 10, loom.dump)
-        assert log.read_text().splitlines()[1].split()[1:] == ["letter:relay:telegram:42:again",
+        wait_until(lambda: log.read_text().splitlines()[before:], 10, loom.dump)
+        assert log.read_text().splitlines()[before].split()[1:] == ["letter:relay:telegram:42:again",
                                                                 "letter:relay:telegram:42:more"]
         assert "letter:relay:telegram:42:wake" not in {str(l.data["id"]) for l in mail(home.root, loom.facts(), "brnrd")}
         assert _leases(loom) == [(1, "claude", "echo")]
@@ -460,13 +467,13 @@ def test_body_held_dry_woken_on_another_body_ends_molted_and_the_next_gen_runs_t
     loom = Loom(home.root)
     loom.start()
     try:
-        log = _held_dry(home, loom)
+        log, before = _held_dry(home, loom)
         home.person.says("again", "are you there?")
         wait_until(lambda: any(m["re"] == "telegram:42:again" for m in home.sent), 10, loom.dump)
         home.person.says("move", "wake spare/x")
         wait_until(lambda: home.starts.is_file(), 15, loom.dump)
         assert home.starts.read_text() == "spare\n"
-        assert log.read_text().splitlines() == ["woke", "left"]
+        assert log.read_text().splitlines()[before:] == ["left"]
         assert _leases(loom) == [(1, "claude", "echo"), (2, "spare", "x")]
         ended = [f for f in loom.facts() if f.kind == "attempt.ended"]
         assert [(f.data["gen"], f.data.get("cause")) for f in ended] == [(1, "molted")]
