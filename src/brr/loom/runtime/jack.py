@@ -124,8 +124,16 @@ def _block(room: Path, text: str, parsed: Boundary) -> str:
     if _hand() and count >= 3:
         return ""
     _shown(room, parsed)
-    _set_state(room, stop_blocks=count + 1)
+    _set_state(room, stop_blocks=count + 1, dry=None)
     return _json({"decision": "block", "reason": text})
+
+
+def _order(room: Path) -> str:
+    """The loom's word on a dry hold, from a person's wake: ``release`` takes
+    the turn now, whatever the fuel; ``end`` lets this body go, so the next
+    gen starts on another."""
+    path = room / "port" / "in" / "hold"
+    return path.read_text().strip() if path.is_file() else ""
 
 
 def _poll(room: Path, stdin_text: str = '') -> str:
@@ -137,18 +145,23 @@ def _poll(room: Path, stdin_text: str = '') -> str:
     ceiling = begun + max(_stop_timeout() - MARGIN, 0.0)
     wait = _wait(room, stdin_text)
     deadline = ceiling if wait is None else min(begun + wait, ceiling)
-    parked = False
+    parked = released = False
     from .lifecycle import read_thread
     thread = "" if _hand() else os.environ.get("BRNRD_THREAD", "")
     opener = str(read_thread(home, thread).get("opened-by", "")) if thread else ""
     while True:
-        if _state(room).get("molted"):
+        order = _order(room)
+        if _state(room).get("molted") or order == "end":
             return ""
+        if order == "release" and not released:
+            # One release for this hold; the next dry stop parks again.
+            (room / "port" / "in" / "hold").unlink(missing_ok=True)
+            released = True
         text = _boundary_text(room)
         parsed = parse_boundary(text)
         if parsed.settled is not None:
             return ""
-        if shell and not _hand():
+        if shell and not _hand() and not released:
             until = dry_until(home, shell)
             if until is not None or parked and _refilling(home, shell):
                 # Out of fuel: sleep in the hook, letters wait. A turn now
@@ -157,6 +170,9 @@ def _poll(room: Path, stdin_text: str = '') -> str:
                 if until is not None and (time.monotonic() + until - time.time() > ceiling
                                           or not parsed.ids and opener.startswith("thread:")):
                     return ""
+                if not parked:
+                    # The loom reads this: a live body held dry tells the person.
+                    _set_state(room, dry=time.time())
                 parked = True
                 time.sleep(1.0)
                 continue
@@ -164,6 +180,7 @@ def _poll(room: Path, stdin_text: str = '') -> str:
                 # The cache went cold while parked; a keepalive would pay a
                 # full rewrite for nothing. Hold on letters until the ceiling.
                 parked = False
+                _set_state(room, dry=None)
                 if not opener.startswith("thread:"):
                     deadline = ceiling
         if (parsed.ids if _hand() else any(not letter.compact for letter in parsed.letters)):
@@ -390,7 +407,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         _set_state(room, opened=opened, plan=plan)
         return _json({"hookSpecificOutput": {
             "hookEventName": hook, "additionalContext": text}})
-    if _state(room).get("molted") or parsed.settled is not None:
+    if _state(room).get("molted") or _order(room) == "end" or parsed.settled is not None:
         return ""
     if parsed.ids and (_hand() or not _state(room).get("stop_blocks") and not _dry(room)):
         return _block(room, text, parsed)
