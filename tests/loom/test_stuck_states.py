@@ -26,7 +26,7 @@ from brr.loom.runtime.ledger import append, inject_letter
 from brr.loom.runtime.project import fold, holder
 from brr.loom.runtime.selfrepo import init_self
 
-from _step import Loom, hand_note, notices, wait_until, write_thread
+from _step import Loom, hand_note, kill_bodies, notices, wait_until, write_thread
 
 
 def stuck(reason):
@@ -89,6 +89,7 @@ def running(root):
         yield loom
     finally:
         loom.halt()
+        kill_bodies(loom)
         if loom.errors:
             raise RuntimeError(loom.dump())
 
