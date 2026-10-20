@@ -8,8 +8,10 @@ real refusal turns into a polite zero.
 
 from __future__ import annotations
 
+import fcntl
 import os
 import subprocess
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -126,7 +128,8 @@ def send_to_self(room: str | Path, widening: str | None = None) -> Outcome:
             return stopped
         _stamp_range(room_path, widening)
         sha = _git(room_path, "rev-parse", "HEAD").stdout.strip()
-        push = _git(room_path, "push", "origin", "HEAD:main", check=False)
+        with _push_lock(room_path):
+            push = _git(room_path, "push", "origin", "HEAD:main", check=False)
         if push.returncode == 0:
             _write_stops(room_path, 0)
             return Outcome("merged", sha=sha)
@@ -143,6 +146,31 @@ def send_to_self(room: str | Path, widening: str | None = None) -> Outcome:
     raise SendError(
         f"main moved {_RACE_LIMIT} times; push still rejected\n{last}"
     )
+
+
+@contextmanager
+def _push_lock(room: Path):
+    """One push into a local self at a time.
+
+    A self with a work tree takes pushes with ``updateInstead``: receive-pack
+    checks the new tree out *before* it moves the ref. Two pushes at once:
+    the loser's tree is already in the index when its ref update fails, so
+    every later push is refused with "Working directory has staged changes"
+    (#2370). The lock lives in the self's git dir, so every room that pushes
+    there shares it. A remote that is not a local path is left to its server.
+    """
+    url = _git(room, "remote", "get-url", "origin", check=False).stdout.strip()
+    target = room / (url[7:] if url.startswith("file://") else url)
+    if not url or not target.is_dir():
+        yield
+        return
+    git_dir = target / ".git" if (target / ".git").is_dir() else target
+    with open(git_dir / "loom-push.lock", "a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def _rebase(room: Path) -> Outcome | None:
