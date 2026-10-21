@@ -1,4 +1,4 @@
-"""Write one wish fact, or read the buckets, through the existing ledger."""
+"""Read wishes or write explicit wish facts through the existing ledger."""
 
 from __future__ import annotations
 
@@ -96,6 +96,13 @@ def cmd_wish(args):
             raise ValueError("--deliver requires --result")
         if args.ref is not None and args.accept is None:
             raise ValueError("--ref requires --accept")
+        touches = args.say or any(x is not None for x in (args.line, args.sender, args.thread, args.parent))
+        if args.id != "new" and not actions and not touches:
+            current = wishes(facts).get(args.id)
+            if current is None:
+                raise ValueError(f"no wish {args.id}")
+            print(wish_line(current))
+            return 0
         if actions:
             if args.id == "new" or args.id not in wishes(facts):
                 raise ValueError(f"no wish {args.id}; create it with wish new first")
