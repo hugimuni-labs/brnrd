@@ -15,7 +15,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from .ledger import Fact, append
+from .ledger import Fact, append, kind_facts
 from .selfrepo import git
 
 #: The load word of a merged pull request, by what the latest start knows.
@@ -59,9 +59,7 @@ def record_start(home, facts, *, root: Path | None = None) -> Fact:
         proc = git(root, "rev-parse", "--verify", "--quiet", "HEAD^{commit}", check=False)
         commit = proc.stdout.strip() or None
     if commit:
-        for fact in facts:
-            if fact.kind != "pr.merged":
-                continue
+        for fact in kind_facts(facts, "pr.merged"):
             data = fact.data or {}
             held = git(root, "merge-base", "--is-ancestor", str(data.get("merge_commit")),
                        commit, check=False)
@@ -76,9 +74,10 @@ def record_start(home, facts, *, root: Path | None = None) -> Fact:
 
 def receipts(facts) -> dict[str, list[Receipt]]:
     """Each thread's pull requests in the order first claimed; a later
-    ``pr.opened`` of the same one names its newer head."""
+    ``pr.opened`` of the same one names its newer head. Read off the
+    ledger's kind index, so a tick's thread table walks no old ledger."""
     opened, merged, start = {}, {}, None
-    for fact in facts:
+    for fact in kind_facts(facts, "pr.opened", "pr.merged", "loom.started"):
         if fact.kind in ("pr.opened", "pr.merged"):
             data = fact.data or {}
             key = (str(data.get("thread")), str(data.get("repo")), data.get("number"))
