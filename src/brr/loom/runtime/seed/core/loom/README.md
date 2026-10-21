@@ -101,8 +101,8 @@ never blocks. A `[[paths]]` (`repo`, `untouched` and `absent` globs) warns
 on an Edit or Write into its paths and blocks your stop once. send-self,
 publish and settle refuse while it is broken. A broken guard file is skipped
 whole and named in a `guards:` line at your start. When a scar becomes a
-guard, delete the scar in the same commit. A guard a person set goes only
-with their letter.
+guard, delete the scar in the same commit. A guard a person set is deleted or
+loosened only by a commit carrying `Guard-Lifted: <their letter id>`.
 
 ## Answer, Done, asks
 

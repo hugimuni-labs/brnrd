@@ -55,7 +55,7 @@ byte-sorted name order, even after a failure. Incumbent failures carry an
 the incumbent checks as well as the incoming checks. The first push runs
 only the incoming set. An absent check directory adds no checks.
 
-Keep `10-readme`, `20-labels`, `30-index` and `50-core-notice` executable. Copying the
+Keep `10-readme`, `20-labels`, `30-index`, `40-guards` and `50-core-notice` executable. Copying the
 seed without their executable bits silently drops the checks. A failed
 check's stderr is prefixed with its name; a silent failure is still
 named. The gate and seed checks use Python 3 and only its standard library
@@ -77,6 +77,13 @@ the recipe derives from that tree, when `CLAUDE.md` is not a copy of
 `AGENTS.md`, or when either was deleted. A file absent at both tips passes,
 so a self from before the index lands its first one through `send-self`.
 A tip without the recipe adds no check.
+
+`40-guards` judges the push's net change to `core/guards/`. A guard whose
+`set-by` is `letter:<id>` is lifted when it is deleted, stops parsing,
+changes `set-by` or `scope`, or loses any `[[paths]]` or `[[match]]`
+entry; that needs a commit in the push carrying `Guard-Lifted: <id>`.
+Adding entries or rewording `says` lands without one. The trailer proves
+the citation exists, not what the letter says.
 `50-core-notice` never refuses: changes under `core/` print
 `core changed: <paths>` for the person's notice.
 

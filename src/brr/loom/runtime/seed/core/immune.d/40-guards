@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Refuse lifting a guard a person set unless a commit cites their letter.
+
+A guard in core/guards/ whose set-by is letter:<id> is a person's ask. The
+push is judged by its net change, old tip to new: deleting such a guard,
+breaking its file, changing its set-by or scope, or dropping any of its
+[[paths]] or [[match]] entries lifts it, and needs a commit in the push
+carrying `Guard-Lifted: <id>`. Adding entries or rewording says does not.
+The trailer proves the citation exists, not what the letter says. The first
+push has nothing to lift. Git's hook environment, including GIT_DIR, is kept.
+"""
+
+import re
+import subprocess
+import sys
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10: any change to the file lifts it.
+    tomllib = None
+
+GUARD_DIR = "core/guards/"
+
+
+def git(*args, input=None):
+    return subprocess.run(["git", *args], input=input, capture_output=True,
+                          text=True, encoding="utf-8", errors="surrogateescape")
+
+
+def zeros(value):
+    return bool(value) and all(char == "0" for char in value)
+
+
+def guard_files(revision):
+    listing = git("ls-tree", "--name-only", revision, GUARD_DIR)
+    return {path: git("show", f"{revision}:{path}").stdout
+            for path in listing.stdout.split("\n") if path.endswith(".toml")}
+
+
+def parsed(text):
+    if tomllib is None:
+        return None
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def letter_of(data):
+    set_by = data.get("set-by")
+    if isinstance(set_by, str) and set_by.startswith("letter:") and len(set_by) > 7:
+        return set_by[7:].strip()
+    return None
+
+
+def entries(data, key):
+    value = data.get(key) or []
+    return list(value) if isinstance(value, list) else [value]
+
+
+def lifted(old, new_text):
+    """Why the new text lifts the old guard, or None when it holds as tight."""
+    if new_text is None:
+        return "deleted"
+    if tomllib is None:
+        return None if new_text == old["text"] else "changed"
+    new = parsed(new_text)
+    if new is None:
+        return "unreadable"
+    data = old["data"]
+    if new.get("set-by") != data.get("set-by"):
+        return "set-by changed"
+    if new.get("scope", "self") != data.get("scope", "self"):
+        return "scope changed"
+    for key in ("paths", "match"):
+        kept = entries(new, key)
+        if any(entry not in kept for entry in entries(data, key)):
+            return f"a [[{key}]] entry dropped"
+    return None
+
+
+def cited(old, new):
+    found = set()
+    for sha in git("rev-list", f"{old}..{new}").stdout.split():
+        message = git("log", "-1", "--format=%B", sha).stdout
+        result = git("interpret-trailers", "--parse", input=message)
+        for line in result.stdout.split("\n"):
+            key, separator, value = line.partition(":")
+            if separator and key.strip() == "Guard-Lifted" and value.strip():
+                found.add(value.strip())
+    return found
+
+
+def main(args):
+    if len(args) < 2 or not args[0] or not args[1]:
+        print("usage: 40-guards <old> <new>", file=sys.stderr)
+        return 2
+    old, new = args[:2]
+    if zeros(old):
+        return 0
+    before = {}
+    for path, text in guard_files(old).items():
+        data = parsed(text) if tomllib is not None else None
+        if tomllib is None:
+            found = re.search(r"""^\s*set-by\s*=\s*["']letter:([^"']+)""", text, re.M)
+            letter = found[1].strip() if found else None
+        else:
+            letter = letter_of(data) if data is not None else None
+        if letter:
+            before[path] = {"text": text, "data": data, "letter": letter}
+    if not before:
+        return 0
+    after = guard_files(new)
+    citations = None
+    failed = False
+    for path in sorted(before):
+        why = lifted(before[path], after.get(path))
+        if why is None:
+            continue
+        if citations is None:
+            citations = cited(old, new)
+        letter = before[path]["letter"]
+        if letter not in citations:
+            print(f"{path}: {why}; a guard set by letter {letter} lifts only with "
+                  f"a commit carrying Guard-Lifted: {letter}", file=sys.stderr)
+            failed = True
+    return int(failed)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
