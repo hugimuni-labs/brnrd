@@ -29,6 +29,7 @@ rather than raising into a caller that can't do anything about it either.
 
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import re
@@ -139,37 +140,84 @@ def list_all_processes() -> list[ProcInfo]:
     every line is data.
     """
     procs = _parse_ps_snapshot(_run_ps(["ps", "-A", "-o", "pid=,ppid=,lstart=,command="]))
-    return _sharpen_linux_starts(procs) if sys.platform.startswith("linux") else procs
-
-
-def _sharpen_linux_starts(procs: list[ProcInfo]) -> list[ProcInfo]:
-    """Replace procps' `lstart` with the kernel's start time, to a tick.
-
-    procps adds a process's start (boot-relative ticks) to a boot time cut
-    to the second, then prints the sum cut to the second again: on a GitHub
-    runner `lstart` read 0.75-1.71 s before the `time.time()` taken just
-    ahead of the spawn. Every "begun after this boundary" test then skipped
-    a call started within that lag, for the call's whole life: the pause
-    never came (letter-pause-flake). `/proc/uptime` counts on the same boot
-    clock as `/proc/<pid>/stat`, so ``now - uptime + ticks/HZ`` is the start
-    on the wall clock this process reads. Darwin's `lstart` is exact but cut
-    to the second, so there a call needs a second's distance from the mark.
-    """
+    reader = _linux_reader if sys.platform.startswith("linux") else _darwin_reader if sys.platform == "darwin" else None
     try:
-        hertz = os.sysconf("SC_CLK_TCK")
-        boot = time.time() - float(Path("/proc/uptime").read_text().split()[0])
-    except (OSError, ValueError, IndexError):
-        return procs
+        exact = reader() if reader else None
+    except OSError:
+        exact = None
+    return _sharpen_starts(procs, exact) if exact else procs
+
+
+def _sharpen_starts(procs: list[ProcInfo], exact) -> list[ProcInfo]:
+    """Replace `ps`'s `lstart` with the kernel's start time, below a second.
+
+    `lstart` is cut to the second. Every "begun after this boundary" test
+    then skipped a call started within the cut, for the call's whole life:
+    the pause never came (letter-pause-flake). On Linux the cut is worse:
+    procps adds a boot time cut to the second, then cuts the sum again, and
+    on a GitHub runner `lstart` read 0.75-1.71 s before the `time.time()`
+    taken just ahead of the spawn. On darwin a call begun up to 1 s after a
+    boundary read as begun before it.
+
+    A pid can be reused between the snapshot and this read; the new start
+    is taken only when the kernel's parent agrees with the snapshot's, so a
+    stranger's start time is not pinned to the old command line.
+    """
     sharp = []
     for proc in procs:
         try:
-            # Field 22, counted after the parenthesised command, which may hold spaces.
-            fields = Path(f"/proc/{proc.pid}/stat").read_text().rpartition(")")[2].split()
-            proc = replace(proc, started_at=boot + int(fields[19]) / hertz)
+            ppid, started = exact(proc.pid)
+            if ppid == proc.ppid:
+                proc = replace(proc, started_at=started)
         except (OSError, ValueError, IndexError):
             pass  # gone since the snapshot, or not ours to read: keep `ps`'s second
         sharp.append(proc)
     return sharp
+
+
+def _linux_reader():
+    """`/proc/uptime` counts on the same boot clock as `/proc/<pid>/stat`."""
+    hertz = os.sysconf("SC_CLK_TCK")
+    try:
+        boot = time.time() - float(Path("/proc/uptime").read_text().split()[0])
+    except (ValueError, IndexError) as exc:
+        raise OSError(f"/proc/uptime: {exc}") from exc
+
+    def start(pid: int) -> tuple[int, float]:
+        # Fields 4 and 22, counted after the parenthesised command, which may hold spaces.
+        fields = Path(f"/proc/{pid}/stat").read_text().rpartition(")")[2].split()
+        return int(fields[1]), boot + int(fields[19]) / hertz
+    return start
+
+
+_LIBPROC = None
+
+
+class _BsdInfo(ctypes.Structure):
+    """`struct proc_bsdinfo` from <sys/proc_info.h>, 136 bytes."""
+    _fields_ = [("flags", ctypes.c_uint32), ("status", ctypes.c_uint32), ("xstatus", ctypes.c_uint32),
+                ("pid", ctypes.c_uint32), ("ppid", ctypes.c_uint32), ("ids", ctypes.c_uint32 * 7),
+                ("comm", ctypes.c_char * 16), ("name", ctypes.c_char * 32), ("rest", ctypes.c_uint32 * 6),
+                ("start_tvsec", ctypes.c_uint64), ("start_tvusec", ctypes.c_uint64)]
+
+
+def _darwin_reader():
+    """libproc's `proc_pidinfo(PROC_PIDTBSDINFO)`: the start to a microsecond."""
+    global _LIBPROC
+    if _LIBPROC is None:
+        lib = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        # int proc_pidinfo(int pid, int flavor, uint64_t arg, void *buffer, int buffersize)
+        lib.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+        lib.proc_pidinfo.restype = ctypes.c_int
+        _LIBPROC = lib
+
+    def start(pid: int) -> tuple[int, float]:
+        info = _BsdInfo()
+        got = _LIBPROC.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info))
+        if got != ctypes.sizeof(info) or info.pid != pid:
+            raise OSError(ctypes.get_errno(), f"proc_pidinfo({pid}) returned {got}")
+        return info.ppid, info.start_tvsec + info.start_tvusec / 1e6
+    return start
 
 
 def _looks_like_brnrd(command: str) -> bool:

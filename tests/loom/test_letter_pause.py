@@ -41,7 +41,7 @@ for letter in ctx.owed():
     ctx.send(f"thread:{{own}}", note="on it", re=letter.id)
 while ctx.jack("post").letters:
     time.sleep(0.03)
-time.sleep(1.1)  # ps start times have a one-second grain
+time.sleep(0.2)  # lstart's second would read this call as begun before the boundary
 out = ctx.room / "task.output"
 with out.open("w") as handle:
     call = subprocess.Popen(["/bin/sh", "-c", f": fake-tool-wrapper; {{sys.executable}} {str(work)!r}; echo done"],
