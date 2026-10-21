@@ -12,6 +12,7 @@ from .jack import run as run_jack
 from .ledger import read_facts
 from .loom import pending_bodies, run as run_loom
 from .port import PortError, write_molt, write_send
+from .spend import parse_tokens
 from .project import fold, is_notice
 from .selfrepo import SelfError
 
@@ -106,6 +107,8 @@ def _send(argv: list[str]) -> int:
     parser.add_argument("--at", help="YYYY-MM-DDTHH:MM:SSZ, +<n>m, +<n>h, or +<n>d")
     parser.add_argument("--body", dest="body_choice", metavar="SHELL/CORE")
     parser.add_argument("--repo", action="append", default=[])
+    parser.add_argument("--budget", metavar="TOKENS",
+                        help="weighted tokens, e.g. 2m: a new thread's allocation, or the opener's raise")
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--kind", default=None)
     parser.add_argument("--ref", action="append", default=None)
@@ -125,7 +128,7 @@ def _send(argv: list[str]) -> int:
             room, to=args.to, sender=strand_of_room(room), body=args.reopen if args.reopen is not None else args.body or "",
             re=args.re, note=args.note, clean=args.clean, kind=args.kind,
             refs=tuple(args.ref or ()), body_choice=args.body_choice, repo_sources=args.repo, at=args.at,
-            wish=args.wish,
+            wish=args.wish, budget=None if args.budget is None else parse_tokens(args.budget),
         )
     except (PortError, SelfError, ValueError, OSError) as exc:
         sys.stderr.write(f"{exc}\n")

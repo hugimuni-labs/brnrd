@@ -454,7 +454,8 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                         fuel=fuel, channels=reply_channels(facts, home),
                         opened=thread_table(home, facts), plan=_plan(home, thread, facts),
                         replies={f.letter.id: f.reply_to for f in active_owners(facts, main_snapshot(home))},
-                        attachments=attachments, reply_context=reply_context),
+                        attachments=attachments, reply_context=reply_context,
+                        **_budget(home, thread, facts)),
     )
     return room
 
@@ -806,6 +807,21 @@ def _plan(home: Home, thread: str, facts: list[Fact]) -> str:
     if next_row:
         text += f" · next: {next_row[:60]}"
     return text
+
+
+def _budget(home: Home, thread: str, facts) -> dict[str, str]:
+    """``spent/allocation`` for the status line, and the warning once past it."""
+    from .config import load_config
+    from .lifecycle import read_thread
+    from .spend import allocation, budget_text, over_line, thread_spent
+    spent = thread_spent(home, facts, thread)
+    if spent is None:
+        return {}
+    opener = str(read_thread(home, thread).get("opened-by", ""))
+    allocated = allocation(facts, thread, opener, sender_threads(facts),
+                           int(load_config(home.root).thread_budget)) if opener.startswith("thread:") else None
+    over = over_line(thread, opener, spent, allocated) if allocated and spent > allocated else ""
+    return {"budget": budget_text(spent, allocated), "over": over}
 
 
 def _release(home, facts, strand, thread, gen):
@@ -1246,6 +1262,7 @@ def _boundary(home, facts, strand, gen, context):
         replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
         attachments=letter_attachments(home.root, facts),
         reply_context=letter_replies(facts),
+        **_budget(home, context.thread, facts),
     )
     path = home.room(strand) / "port/in/boundary.md"
     if not path.is_file() or path.read_text() != text:

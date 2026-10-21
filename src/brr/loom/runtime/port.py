@@ -83,7 +83,7 @@ def parse_boundary(text: str) -> Boundary:
             settled = line.partition(":")[2].strip()
             current = None
             continue
-        if not line.strip() or line.startswith("status:") or line.startswith("owed:") or line.startswith("opened:"):
+        if not line.strip() or line.startswith(("status:", "owed:", "opened:", "budget:")):
             current = None
             continue
         match = _ITEM.match(line)
@@ -208,15 +208,23 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     opened: list[dict] | tuple[dict, ...] = (), plan: str = "",
                     replies: dict[str, str] | None = None,
                     attachments: dict[str, list[str]] | None = None,
-                    reply_context: dict[str, str] | None = None) -> str:
-    """Shown letters keep their first line, reply context and attachments when compacted."""
+                    reply_context: dict[str, str] | None = None,
+                    budget: str = "", over: str = "") -> str:
+    """Shown letters keep their first line, reply context and attachments when compacted.
+
+    ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
+    and spend that moves on every call is not news.
+    """
     lines = [
         f"<!-- port {strand} gen {gen} · owed "
         + " ".join(str(letter.data['id']) for letter in letters) + " -->",
         f"status: strand {strand} · gen {gen} · thread {thread}"
-        + (f" · {fuel}" if fuel else "") + (f" · {plan}" if plan else ""),
+        + (f" · {fuel}" if fuel else "") + (f" · {budget}" if budget else "")
+        + (f" · {plan}" if plan else ""),
         "owed:",
     ]
+    if over:
+        lines.insert(2, over)
     if settled is not None:
         lines.insert(2, f"settled: {settled}")
     children = []
@@ -403,6 +411,28 @@ def _refuse_other_loom(home, thread: str) -> None:
             "on their letter; to run the thread here, empty its `for:`")
 
 
+def _check_grant(home, to: str, sender: str, opening: str | None, note, molt) -> None:
+    """``--budget`` rides a letter to a thread: the one opening it, or the opener's answer.
+
+    The fold counts a grant only from the parent's strands as well; this is
+    the refusal its writer reads now.
+    """
+    if is_channel(to) or note is not None or molt is not None:
+        raise PortError("send: --budget is for a letter to a thread, without --note")
+    if opening is not None:
+        return
+    from .ledger import read_facts
+    from .lifecycle import read_thread
+    from .project import sender_threads
+    thread = thread_of(to)
+    opener = str(read_thread(home, thread).get("opened-by", ""))
+    mine = sender_threads(read_facts(home)).get(sender)
+    if not mine or opener != f"thread:{mine}":
+        raise PortError(
+            f"send: --budget raises thread {thread}'s allocation, and only its opener "
+            f"({opener or 'none'}) may: ask it by letter")
+
+
 OPEN_NEEDS_WISH = ('send: opening a thread needs the wish behind it: '
                    '--wish <id> | --wish new:"<line>"')
 
@@ -413,7 +443,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                refs: tuple[str, ...] | list[str] = (),
                molt: str | None = None, body_choice: str | None = None,
                at: str | None = None, repo_sources: tuple[str, ...] | list[str] = (),
-               wish: str | tuple[str, ...] | list[str] | None = None) -> str:
+               wish: str | tuple[str, ...] | list[str] | None = None,
+               budget: int | None = None) -> str:
     home = home_of_room(Path(room))
     opening = None
     if at is not None:
@@ -458,6 +489,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                 f"send: {to} is your own thread, and a thread does not write to itself without --at. "
                 "Answer to the reply address on the letter's line; where that is `-`, "
                 "settle the letter with --re <id> --note \"<what you did>\"")
+    if budget is not None:
+        _check_grant(home, to, sender, opening, note, molt)
     if re:
         re = _full_re(Path(room), re)
     if note is not None and body:
@@ -494,6 +527,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     }
     if at is not None:
         fields["at"] = at
+    if budget is not None:
+        fields["budget"] = str(budget)
     if re:
         fields["re"] = re
     if molt:
@@ -621,6 +656,11 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             data["edit"] = fm["edit"]
         if fm.get("molt"):
             data["molt"] = fm["molt"]
+        if fm.get("budget"):
+            try:
+                data["budget"] = int(fm["budget"])
+            except ValueError as exc:
+                raise PortError(f"letter {fact_id}: budget {fm['budget']!r} is not a count") from exc
         if fm.get("clean"):
             refs = (fm.get("refs") or "").split()
             sender = _current_label(room, strand)

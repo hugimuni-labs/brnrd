@@ -82,6 +82,9 @@ KEYS: tuple[Key, ...] = (
         choices=("on", "off")),
     Key("hold_floor_pct", "percent", 3.0,
         "A quota window with this percent or less left counts as exhausted: a held body stays held."),
+    Key("thread_budget", "positive", 2_000_000,
+        "Weighted tokens a thread opened by another thread may spend before its strand is told, at "
+        "every boundary, to write to its parent for more. `send --budget` overrides it."),
     Key("stop_grace", "seconds", DEFAULT_STOP_GRACE,
         "Seconds a settled thread's body may take to land and exit before it is signalled."),
     Key("router_ttl", "positive", DEFAULT_TTL,
