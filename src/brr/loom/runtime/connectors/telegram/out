@@ -19,7 +19,7 @@ def deliver(path):
             raise Refused('Telegram requires a numeric chat and nonempty text')
         parts = split_message(letter['body'], max_chunks=None)
         edit = reply_id(letter['edit'], chat) if letter.get('edit') else None
-        re = reply_id(letter['re'], chat) if letter.get('re') else None
+        re = reply_id(letter['re'], chat, quotable=True) if letter.get('re') else None
         if edit is not None and len(parts) != 1:
             raise Refused('Telegram cannot edit one message into several')
         for part in parts:
