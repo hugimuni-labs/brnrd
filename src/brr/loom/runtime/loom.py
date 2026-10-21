@@ -1565,6 +1565,12 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         if stop is not None and stop.is_set():
             return
         home.install_id()
+        from .receipts import record_start
+        try:
+            # Each start and re-exec: which merged pull requests this code holds.
+            record_start(home, read_facts(home))
+        except Exception:
+            _log(home, traceback.format_exc().rstrip())
         from .config import ConfigError, load_config, tick_config
         from . import usage
         config = load_config(home.root)
