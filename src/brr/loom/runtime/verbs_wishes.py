@@ -10,7 +10,7 @@ import sys
 from brr.daemon2.facts import Fact
 from .home import Home, home_of_room, mint, resolve_home, strand_of_room
 from .ledger import append, read_facts
-from .wishes import wishes, wish_line
+from .wishes import waits_on, waits_word, wishes, wish_line
 
 
 def _context(args):
@@ -59,6 +59,8 @@ def wish_fact(facts, *, by, ident, says=(), line=None, thread=None, sender=None,
     }
     if parent is not None:
         data["parent"] = parent
+    if data["from"] == "resident" and not (parent or (current and current.parent)):
+        raise ValueError("an ask needs the wish it unblocks: ask --for <wish>")
     return Fact(kind="wish", by=by, id=ident if current is None else "wish:" + mint(12), data=data)
 
 
@@ -130,17 +132,63 @@ def cmd_wish(args):
         return 1
 
 
+def cmd_ask(args):
+    """A resident asks a person: a wish from:resident under the wish it unblocks."""
+    try:
+        home, by, thread = _context(args)
+        if thread is None:
+            raise ValueError("ask: only a strand asks; run it inside a thread room")
+        facts = read_facts(home)
+        if args.rec is not None and not args.rec.strip():
+            raise ValueError("ask: --rec is empty")
+        fact = wish_fact(facts, by=by, ident="new", line=args.what, thread=thread,
+                         sender="resident", parent=args.wish)
+        append(home, fact)
+        ident = fact.data["wish"]
+        if args.rec is not None:
+            append(home, Fact(kind="wish.read", by=by, id="wish.read:" + mint(12),
+                              data={"wish": ident, "reading": args.rec, "by": "resident"}))
+        # A thread that waits on another must wake it: a wish alone is mail to nobody.
+        from .lifecycle import main_snapshot
+        from .port import write_send
+        from .verbs_loom import _room
+        head = waits_on(wishes(read_facts(home)), main_snapshot(home)).get(ident, "")
+        if head.startswith("thread:"):
+            room = _room(args.room)
+            body = f"ask {ident} from thread:{thread}: {args.what}\n"
+            if args.rec is not None:
+                body += f"rec: {args.rec}\n"
+            body += f"Answer it, or ask onward with: ask \"<what>\" --for {ident}\n"
+            write_send(room, to=head, sender=strand_of_room(room), body=body)
+        print(ident)
+        return 0
+    except (ValueError, OSError, RuntimeError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+
+def _ask_arguments(parser):
+    parser.add_argument("--room")
+    parser.add_argument("--home")
+    parser.add_argument("what")
+    parser.add_argument("--for", dest="wish", required=True, help="the wish this ask unblocks")
+    parser.add_argument("--rec", help="what you recommend; written as the ask's reading")
+
+
 def cmd_wishes(args):
     try:
         home, _by, _thread = _context(args)
         buckets = {name: [] for name in ("in hand", "asks (yours)", "delivered", "heard", "done")}
-        rows = sorted(wishes(read_facts(home)).values(), key=lambda w: (w.at, w.id), reverse=True)
+        from .lifecycle import main_snapshot
+        told = wishes(read_facts(home))
+        heads = waits_on(told, main_snapshot(home))
+        rows = sorted(told.values(), key=lambda w: (w.at, w.id), reverse=True)
         for w in rows:
             if (args.thread and w.thread != args.thread) or (not args.all and not w.open):
                 continue
             bucket = ("done" if not w.open else "asks (yours)" if w.sender == "resident" else
                       "delivered" if w.state == "delivered" else "heard" if w.state == "heard" else "in hand")
-            buckets[bucket].append(wish_line(w))
+            buckets[bucket].append(wish_line(w) + (waits_word(heads[w.id]) if w.id in heads else ""))
         for name, lines in buckets.items():
             if lines:
                 print(name + "\n" + "\n".join(lines))
@@ -164,6 +212,12 @@ def _wish(argv):
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime wish")
     _wish_arguments(parser)
     return cmd_wish(parser.parse_args(argv))
+
+
+def _ask(argv):
+    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime ask")
+    _ask_arguments(parser)
+    return cmd_ask(parser.parse_args(argv))
 
 
 def _wishes(argv):

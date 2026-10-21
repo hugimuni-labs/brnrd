@@ -220,7 +220,7 @@ def test_wake_caps_rows_with_asks_first(ledger):
     for i in range(70):
         append(home, Fact(kind="wish", by="strand:s-aaaa-test", id=f"w-{i:03}", data={
             "wish": f"w-{i:03}", "says": [["s-aaaa-test/x", 0, None]], "from": "resident" if i == 69 else "person",
-            "line": "x" * 160, "thread": "work"}))
+            "line": "x" * 160, "thread": "work", **({"parent": "w-000"} if i == 69 else {})}))
     output = StringIO()
     assert run_wake(seat, "work", stdout=output) == 0
     section = output.getvalue().split("## Wishes\n")[1].split("## Notes")[0]

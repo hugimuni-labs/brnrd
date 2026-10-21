@@ -90,13 +90,52 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
             return (str(letter.data.get("from", "")).startswith(("p-", "person:"))
                     if wish.sender == "person"
                     else letter.by.startswith("strand:"))
-        wish.origin = "said" if wish.says and all(map(own_say, wish.says)) else "derived"
+        # An ask cites no letter: the resident who writes it is the one saying it.
+        asked = wish.sender == "resident" and not wish.says
+        wish.origin = "said" if asked or (wish.says and all(map(own_say, wish.says))) else "derived"
     return found
+
+
+def waits_on(found: dict[str, Wish], main: dict) -> dict[str, str]:
+    """Who each open ask waits on, derived and never stored.
+
+    An ask is an open wish a resident made, on the thread that asked. It waits
+    on that thread's opener. When the opener is a thread that asked onward
+    for it (an open ask whose parent is this ask), the wait passes along to
+    that thread's opener, until it reaches a person or a thread that has not
+    asked. A thread with no opener on record, or one opened by a thread that
+    is settled or gone, waits on the operator, as the owners table reads it:
+    nobody else will wake for it.
+    """
+    from .lifecycle import CLOSED
+    asks = {w.id: w for w in found.values() if w.open and w.sender == "resident"}
+    onward: dict[tuple[str, str], Wish] = {}
+    for w in asks.values():
+        onward.setdefault((w.thread, w.parent), w)
+    heads: dict[str, str] = {}
+    for ask in asks.values():
+        seen, current = set(), ask
+        while True:
+            seen.add(current.id)
+            head = str(main.get(current.thread, {}).get("opened-by") or "operator")
+            opener = head.removeprefix("thread:")
+            if head.startswith("thread:") and (opener not in main or main[opener].get("status") in CLOSED):
+                head = "operator"
+            nxt = onward.get((opener, current.id)) if head.startswith("thread:") else None
+            if nxt is None or nxt.id in seen:
+                break
+            current = nxt
+        heads[ask.id] = head
+    return heads
 
 
 def _short(value: str, size: int) -> str:
     text = " ".join(str(value).split())
     return text if len(text) <= size else text[:size - 1] + "…"
+
+
+def waits_word(head: str) -> str:
+    return f" · waits on {head}"
 
 
 def wish_line(wish: Wish) -> str:

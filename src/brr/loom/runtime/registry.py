@@ -109,7 +109,9 @@ def admit(fact: Fact) -> None:
     """Refuse a fact of a closed resource the registry has anything against.
 
     A wish is born for someone: the fact that creates one (its id is the
-    wish) cites a letter in ``says`` or names a ``parent`` wish. Any other
+    wish) cites a letter in ``says`` or names a ``parent`` wish; one a
+    resident makes of a person (an ask) names the wish it unblocks, so it
+    always has a ``parent``. Any other
     ``wish`` fact is a touch, id ``wish:…``; one with neither shape would be
     a birth the rule never saw, since the fold creates a wish from whichever
     fact names it first. Whether a touched wish exists is the verb's check:
@@ -123,6 +125,8 @@ def admit(fact: Fact) -> None:
         if fact.id == fact.data["wish"]:
             if not fact.data["says"] and not fact.data.get("parent"):
                 found.append("a new wish needs --say <letter> or --parent <wish>")
+            elif fact.data["from"] == "resident" and not fact.data.get("parent"):
+                found.append("an ask needs the wish it unblocks: ask --for <wish>")
         elif not fact.id.startswith("wish:"):
             found.append("a wish fact is a birth (id = the wish) or a touch (id wish:…)")
     if found:

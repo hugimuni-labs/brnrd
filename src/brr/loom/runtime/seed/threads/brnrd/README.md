@@ -4,7 +4,6 @@ status: open
 tense: plan
 opened-by: person:loom
 for: ""
-blocked-on: ""
 when: ""
 limbs: []
 ---
