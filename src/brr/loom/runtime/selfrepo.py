@@ -39,6 +39,7 @@ _EXECUTABLES = (
     "core/immune.d/20-labels",
     "core/immune.d/30-index",
     "core/immune.d/40-guards",
+    "core/immune.d/40-links",
 )
 
 AUTHOR_NAME = "brnrd-loom"
