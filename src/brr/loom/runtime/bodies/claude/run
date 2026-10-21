@@ -12,6 +12,8 @@ def hook(event, timeout):
             "timeout": timeout}
 settings = {"hooks": {
     "SessionStart": [{"hooks": [hook("start", 60)]}],
+    # Guards warn before a call runs (guards.py); never a boundary.
+    "PreToolUse": [{"matcher": ".*", "hooks": [hook("pre", 60)]}],
     "PostToolUse": [{"matcher": ".*", "hooks": [hook("post", 60)]}],
     # A failed call, and a paused one (pausing.py), is a boundary too.
     "PostToolUseFailure": [{"matcher": ".*", "hooks": [hook("post", 60)]}],

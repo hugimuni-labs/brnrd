@@ -334,20 +334,78 @@ def _hook_event(stdin_text: str) -> str:
     return "PostToolUseFailure" if failed else "PostToolUse"
 
 
+def _guards(room: Path):
+    """Guards fail apart from the jack: a broken guard must not cost the
+    boundary, nor taint the strand through jack-errors.log."""
+    from .guards import for_room
+    try:
+        return for_room(room, os.environ.get("BRNRD_THREAD", ""), cache=True)
+    except Exception:
+        try:
+            with (room / "port" / "guard-errors.log").open("a") as handle:
+                handle.write(traceback.format_exc())
+        except OSError:
+            pass
+        return [], [f"all: guards unreadable, see {room / 'port' / 'guard-errors.log'}"]
+
+
+def _guard_warnings(room: Path, at: str, stdin_text: str) -> str:
+    """A call that trips a guard hears the guard's own words. Warn, never block."""
+    from .guards import warnings
+    try:
+        payload = json.loads(stdin_text) if stdin_text and stdin_text.strip() else {}
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(payload, dict) or not payload.get("tool_name"):
+        return ""
+    guards, _errors = _guards(room)
+    return "\n".join(warnings(guards, room, at, payload))
+
+
+def _guard_stop(room: Path) -> str:
+    """A broken path guard blocks the stop once per distinct set of breaks.
+
+    The same breaks a second time let the stop through: a body that has read
+    the guard and cannot fix it is not trapped in a loop. send-self, publish
+    and settle still refuse.
+    """
+    from .guards import violations
+    guards, _errors = _guards(room)
+    lines = violations([g for g in guards if g.paths], room)
+    if not lines:
+        if _state(room).get("guard_stop"):
+            _set_state(room, guard_stop="")
+        return ""
+    seen = "\n".join(lines)
+    if _state(room).get("guard_stop") == seen:
+        return ""
+    _set_state(room, guard_stop=seen)
+    return _json({"decision": "block", "reason": "a path guard is broken; undo the change, or ask the person"
+                  " who set it (send-self, publish and settle refuse until then):\n" + seen})
+
+
 def execute(event: str, room: Path, stdin_text: str) -> str:
     """Return the hook's stdout. Raise on trouble; ``run`` turns that into fail-open."""
     room = Path(room)
-    if event not in {"start", "post", "stop", "subagent-stop"}:
+    if event not in {"start", "pre", "post", "stop", "subagent-stop"}:
         raise ValueError(f"unknown jack event {event!r}")
     if event == "subagent-stop":
         _delegates(room, stdin_text, False)
         _delegate(room, stdin_text)
         return ""
+    if event == "pre":
+        # Not a boundary: letters wait for the call's result. A delegate's
+        # call is guarded too, since the act is the strand's.
+        said = _guard_warnings(room, "pre", stdin_text)
+        return _json({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                             "additionalContext": said}}) if said else ""
+    guarded = _guard_warnings(room, "post", stdin_text) if event == "post" else ""
     if event == "post":
         _note_tool(room, stdin_text)
         if _delegate_call(stdin_text):
             _delegates(room, stdin_text, True)
-            return ""
+            return _json({"hookSpecificOutput": {"hookEventName": _hook_event(stdin_text),
+                                                 "additionalContext": guarded}}) if guarded else ""
         # A call begun before this is not the body's current one (pausing.py):
         # a background call returns at once, so a boundary always follows it.
         _set_state(room, stop_blocks=0, boundary_at=time.time())
@@ -360,7 +418,10 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     plan = next((line.partition(" · plan ")[2] for line in text.splitlines()
                  if line.startswith("status:")), "")
     if event == "start":
-        if not parsed.ids and not opened and not plan:
+        broken = _guards(room)[1]
+        if broken:
+            text = "".join(f"guards: skipped {line}\n" for line in broken) + text
+        if not parsed.ids and not opened and not plan and not broken:
             return ""
         if parsed.ids:
             _shown(room, parsed)
@@ -377,10 +438,12 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         # Past its allocation a strand is told at every boundary, not once.
         over = next((line for line in text.splitlines() if line.startswith("budget: ")), "")
         if not parsed.ids and not settled_changed and not opened_changed and not plan_changed:
-            if not weight and not paused and not over:
+            if not weight and not paused and not over and not guarded:
                 return ""
             return _json({"hookSpecificOutput": {
-                "hookEventName": hook, "additionalContext": "\n".join(filter(None, (paused, weight, over)))}})
+                "hookEventName": hook, "additionalContext": "\n".join(filter(None, (guarded, paused, weight, over)))}})
+        if guarded:
+            text = guarded + "\n" + text
         if weight:
             text = weight + "\n" + text
         if paused:
@@ -394,6 +457,9 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             "hookEventName": hook, "additionalContext": text}})
     if _state(room).get("molted") or parsed.settled is not None:
         return ""
+    blocked = _guard_stop(room)
+    if blocked:
+        return blocked
     if parsed.ids and (_hand() or not _state(room).get("stop_blocks") and not _dry(room)):
         return _block(room, text, parsed)
     return _poll(room, stdin_text)

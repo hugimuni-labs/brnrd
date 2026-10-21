@@ -409,6 +409,11 @@ def publish(room: Path | str, name: str, *, worker: str | None = None,
             )
         source = _declared(who.home, thread, name)
 
+    from .guards import for_room, violations
+    broken = violations(for_room(who.room, thread)[0], who.room, repo=name, commit=commit)
+    if broken:
+        raise PublishError(f"publish: a path guard refuses {branch} at {commit}:\n" + "\n".join(broken))
+
     email = _commit_identity(who.room)[1]
     others = _other_authors(checkout, branch, email)
     if others:

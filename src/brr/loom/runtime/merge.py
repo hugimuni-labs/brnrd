@@ -126,6 +126,8 @@ def send_to_self(room: str | Path, widening: str | None = None) -> Outcome:
         stopped = _continue(room_path) if _rebasing(room_path) else _rebase(room_path)
         if stopped is not None:
             return stopped
+        # After the fetch and rebase: origin/main is fresh, so the diff is ours alone.
+        _guarded(room_path)
         _fold_index(room_path)
         _stamp_range(room_path, widening)
         sha = _git(room_path, "rev-parse", "HEAD").stdout.strip()
@@ -147,6 +149,23 @@ def send_to_self(room: str | Path, widening: str | None = None) -> Outcome:
     raise SendError(
         f"main moved {_RACE_LIMIT} times; push still rejected\n{last}"
     )
+
+
+def _guarded(clone: Path) -> None:
+    """A self clone in a strand's room lands nothing a path guard forbids."""
+    room = clone.parent
+    if room.parent.name != "rooms" or clone.name != "self":
+        return
+    from .guards import for_room, violations
+    from .lifecycle import own_thread
+    try:
+        thread = own_thread(room)
+    except Exception:
+        thread = ""
+    guards, _ = for_room(room, thread)
+    lines = violations(guards, room, repo="self", commit="HEAD")
+    if lines:
+        raise SendError("send-self: a path guard refuses this landing:\n" + "\n".join(lines))
 
 
 def _fold_index(room: Path) -> None:

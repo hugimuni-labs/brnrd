@@ -134,6 +134,26 @@ def test_another_author_on_the_branch_is_refused_by_commit(tmp_path: Path) -> No
         _kill(read_facts(Home(root)))
 
 
+def test_a_commit_that_breaks_a_path_guard_is_refused_and_records_nothing(tmp_path: Path) -> None:
+    root, room, checkout, bare = _open(tmp_path)
+    try:
+        guards = root / "self" / "core" / "guards"
+        guards.mkdir(parents=True)
+        (guards / "secrets.toml").write_text(
+            'says = "Leave secrets/ alone."\nset-by = "letter:4726"\n'
+            '[[paths]]\nrepo = "widget"\nuntouched = ["secrets/"]\n')
+        git(root / "self", "add", "core/guards")
+        git(root / "self", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "guard")
+        (checkout / "secrets").mkdir()
+        _note(checkout, room, "secrets/key.txt", "k\n")
+        with pytest.raises(PublishError, match="guard secrets \\(letter:4726\\)"):
+            publish(room, "widget")
+        assert _tip(bare, "refs/heads/loom/work") is None
+        assert _published(root) == []
+    finally:
+        _kill(read_facts(Home(root)))
+
+
 def test_the_push_goes_to_the_seat_source_not_the_checkout_remote(tmp_path: Path) -> None:
     """A body that rewrites its checkout's origin does not redirect the push."""
     root, room, checkout, bare = _open(tmp_path)

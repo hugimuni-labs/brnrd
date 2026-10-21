@@ -173,7 +173,7 @@ def _settle(argv: list[str]) -> int:
 
 def _jack(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime jack")
-    parser.add_argument("--event", required=True, choices=("start", "post", "stop", "subagent-stop"))
+    parser.add_argument("--event", required=True, choices=("start", "pre", "post", "stop", "subagent-stop"))
     parser.add_argument("--room", required=True)
     args = parser.parse_args(argv)
     stdin_text = "" if sys.stdin.isatty() else sys.stdin.read()
