@@ -40,7 +40,7 @@ the Python transition, using the upgraded installation's interpreter:
 python3 -c 'import sys; from brr.loom.runtime.merge import install_pre_receive; print(install_pre_receive(sys.argv[1]))' /absolute/path/to/home/self
 ```
 
-In a room cloned from that self, copy `core/immune`, all three seed checks
+In a room cloned from that self, copy `core/immune`, all four seed checks
 and this page from the upgraded seed, keep the scripts executable, commit
 and push with an enrolled committer or a clean label. The incumbent shell
 gate runs its shell checks and the incoming Python checks. The next push
@@ -55,7 +55,7 @@ byte-sorted name order, even after a failure. Incumbent failures carry an
 the incumbent checks as well as the incoming checks. The first push runs
 only the incoming set. An absent check directory adds no checks.
 
-Keep `10-readme`, `20-labels` and `50-core-notice` executable. Copying the
+Keep `10-readme`, `20-labels`, `30-index` and `50-core-notice` executable. Copying the
 seed without their executable bits silently drops the checks. A failed
 check's stderr is prefixed with its name; a silent failure is still
 named. The gate and seed checks use Python 3 and only its standard library
@@ -71,6 +71,12 @@ settled status, a missing or invalid heading, or an id different from the
 folder. `for` must be a string. The first push checks every README. The
 shell grammar is preserved: whitespace-only lines are not empty, required
 list values remain literal strings, and keys are ASCII names.
+`30-index` extracts `core/loom/index` from the incoming tip and runs it
+as `--rev <new> --check --old <old>`: it refuses when `INDEX.md` is not what
+the recipe derives from that tree, when `CLAUDE.md` is not a copy of
+`AGENTS.md`, or when either was deleted. A file absent at both tips passes,
+so a self from before the index lands its first one through `send-self`.
+A tip without the recipe adds no check.
 `50-core-notice` never refuses: changes under `core/` print
 `core changed: <paths>` for the person's notice.
 

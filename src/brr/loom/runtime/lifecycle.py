@@ -114,9 +114,15 @@ def land_status(room: Path, thread: str, status: str, message: str) -> None:
     land(room, message, edit)
 
 
+def frontmatter_text(value: str) -> str:
+    """One line the README grammar can hold: whitespace folded, double quotes made single."""
+    return " ".join(str(value).split()).replace('"', "'")
+
+
 def open_thread(room: Path, thread: str, sender: str, text: str,
                 body_choice: str | None = None, repo_sources: tuple[str, ...] | list[str] = (),
-                opened_for: tuple[str, ...] | list[str] = ()) -> None:
+                opened_for: tuple[str, ...] | list[str] = (),
+                wish_lines: dict[str, str] | None = None) -> None:
     from .port import _current_label
     check_thread_id(thread)
     own = sender_threads(read_facts(home_of_room(room))).get(sender)
@@ -134,9 +140,14 @@ def open_thread(room: Path, thread: str, sender: str, text: str,
     seat += "".join(f"repo: {source}\n" for source in repo_sources)
     repos(seat)
     first = text.split("\n", 1)[0]
+    # The wish's line is copied beside its id: INDEX.md is built in the room,
+    # which has no ledger. A copy of an immutable fact, like a letter id.
+    lines = "".join(f'wish-{ident}: "{frontmatter_text((wish_lines or {}).get(ident, ""))}"\n'
+                    for ident in opened_for if (wish_lines or {}).get(ident, "").strip())
     readme = (f"---\nid: {thread}\nstatus: open\ntense: plan\n"
               f"opened-by: thread:{own}\n"
               + (f"opened-for: [{', '.join(opened_for)}]\n" if opened_for else "")
+              + lines
               + f"---\n# {first}\n")
     parse_readme(readme)
 
