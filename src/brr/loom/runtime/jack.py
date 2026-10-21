@@ -414,6 +414,9 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         # A call begun before this is not the body's current one (pausing.py):
         # a background call returns at once, so a boundary always follows it.
         _set_state(room, stop_blocks=0, boundary_at=time.time())
+        from .selfsync import pull_at_boundary
+        synced = pull_at_boundary(room)
+        guarded = "\n".join(filter(None, (guarded, synced)))
     elif event == "start":
         _set_state(room, boundary_at=time.time())
     text = _boundary_text(room)
@@ -460,11 +463,18 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         _set_state(room, opened=opened, plan=plan)
         return _json({"hookSpecificOutput": {
             "hookEventName": hook, "additionalContext": text}})
-    if _state(room).get("molted") or parsed.settled is not None:
+    if _state(room).get("molted"):
+        return ""
+    # Before the hold: what the body leaves behind is on main while it waits.
+    # A broken path guard refuses the landing inside send_to_self.
+    from .selfsync import land_at_stop
+    if parsed.settled is not None:
+        land_at_stop(room)
         return ""
     blocked = _guard_stop(room)
     if blocked:
         return blocked
+    land_at_stop(room)
     if parsed.ids and (_hand() or not _state(room).get("stop_blocks") and not _dry(room)):
         return _block(room, text, parsed)
     return _poll(room, stdin_text)

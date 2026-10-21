@@ -209,17 +209,19 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     replies: dict[str, str] | None = None,
                     attachments: dict[str, list[str]] | None = None,
                     reply_context: dict[str, str] | None = None,
-                    budget: str = "", over: str = "") -> str:
+                    budget: str = "", over: str = "", sync: str = "") -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
-    ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
-    and spend that moves on every call is not news.
+    ``budget`` and ``sync`` sit before the plan: the jack compares what follows
+    `` · plan ``. Spend that moves on every call is not news, and the jack has
+    already said what self-sync did when it did it.
     """
     lines = [
         f"<!-- port {strand} gen {gen} · owed "
         + " ".join(str(letter.data['id']) for letter in letters) + " -->",
         f"status: strand {strand} · gen {gen} · thread {thread}"
         + (f" · {fuel}" if fuel else "") + (f" · {budget}" if budget else "")
+        + (f" · sync {sync}" if sync else "")
         + (f" · {plan}" if plan else ""),
         "owed:",
     ]

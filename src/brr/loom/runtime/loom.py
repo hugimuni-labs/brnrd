@@ -27,6 +27,7 @@ from .bodies import COMMANDS, TABLE, Observation, decide, fact_for, row_for, sta
 from .home import Home, atomic_write, is_channel, mint, notice_id
 from .ledger import LedgerView, kind_facts, LedgerConflict, append, read_facts
 from .registry import KINDS
+from .selfsync import sync_line
 from .port import (
     fact_from_port, fact_from_taint, letter_attachments, letter_replies,
     parse_boundary, parse_frontmatter, render_boundary,
@@ -455,7 +456,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                         opened=thread_table(home, facts), plan=_plan(home, thread, facts),
                         replies={f.letter.id: f.reply_to for f in active_owners(facts, main_snapshot(home))},
                         attachments=attachments, reply_context=reply_context,
-                        **_budget(home, thread, facts)),
+                        sync=sync_line(room), **_budget(home, thread, facts)),
     )
     return room
 
@@ -770,6 +771,9 @@ def _ingest(home: Home, facts: list[Fact] | None = None, ttl: float | None = Non
                 elif path.name.startswith("taint-") and path.suffix == ".json":
                     fact = fact_from_taint(path.read_text(), strand, f"{strand}/{path.stem}")
                     facts.append(append(home, fact))
+                elif path.name.startswith("sync-") and path.suffix == ".json":
+                    from .selfsync import notice_from_port
+                    notice_from_port(home, facts, strand, path.read_text())
                 else:
                     continue
             except Exception as exc:
@@ -1262,7 +1266,7 @@ def _boundary(home, facts, strand, gen, context):
         replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
         attachments=letter_attachments(home.root, facts),
         reply_context=letter_replies(facts),
-        **_budget(home, context.thread, facts),
+        sync=sync_line(home.room(strand)), **_budget(home, context.thread, facts),
     )
     path = home.room(strand) / "port/in/boundary.md"
     if not path.is_file() or path.read_text() != text:
