@@ -356,9 +356,9 @@ class TestCLI:
         assert "nothing paused" in capsys.readouterr().out
 
 
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="darwin's lstart is exact, cut to the second")
-def test_a_process_begun_after_a_mark_starts_after_it_on_linux():
-    """procps' lstart read up to 1.7 s early on CI, so a call begun after a boundary looked begun before it."""
+@pytest.mark.skipif(not sys.platform.startswith(("linux", "darwin")), reason="no exact start time read here")
+def test_a_process_begun_after_a_mark_starts_after_it():
+    """lstart is cut to the second (on Linux read up to 1.7 s early), so a call begun after a boundary looked begun before it."""
     for _ in range(5):
         mark = time.time()
         proc = subprocess.Popen(["sleep", "30"])
@@ -367,5 +367,5 @@ def test_a_process_begun_after_a_mark_starts_after_it_on_linux():
         finally:
             proc.kill()
             proc.wait(timeout=5)
-        # A clock tick and /proc/uptime's centisecond, nothing like a second.
+        # Linux: a clock tick and /proc/uptime's centisecond; darwin: a microsecond. Nothing like a second.
         assert mark - 0.05 <= started <= time.time()
