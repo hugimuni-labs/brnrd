@@ -34,8 +34,9 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -137,7 +138,38 @@ def list_all_processes() -> list[ProcInfo]:
     drops the header row (each `=` suppresses its own column heading) so
     every line is data.
     """
-    return _parse_ps_snapshot(_run_ps(["ps", "-A", "-o", "pid=,ppid=,lstart=,command="]))
+    procs = _parse_ps_snapshot(_run_ps(["ps", "-A", "-o", "pid=,ppid=,lstart=,command="]))
+    return _sharpen_linux_starts(procs) if sys.platform.startswith("linux") else procs
+
+
+def _sharpen_linux_starts(procs: list[ProcInfo]) -> list[ProcInfo]:
+    """Replace procps' `lstart` with the kernel's start time, to a tick.
+
+    procps adds a process's start (boot-relative ticks) to a boot time cut
+    to the second, then prints the sum cut to the second again: on a GitHub
+    runner `lstart` read 0.75-1.71 s before the `time.time()` taken just
+    ahead of the spawn. Every "begun after this boundary" test then skipped
+    a call started within that lag, for the call's whole life: the pause
+    never came (letter-pause-flake). `/proc/uptime` counts on the same boot
+    clock as `/proc/<pid>/stat`, so ``now - uptime + ticks/HZ`` is the start
+    on the wall clock this process reads. Darwin's `lstart` is exact but cut
+    to the second, so there a call needs a second's distance from the mark.
+    """
+    try:
+        hertz = os.sysconf("SC_CLK_TCK")
+        boot = time.time() - float(Path("/proc/uptime").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return procs
+    sharp = []
+    for proc in procs:
+        try:
+            # Field 22, counted after the parenthesised command, which may hold spaces.
+            fields = Path(f"/proc/{proc.pid}/stat").read_text().rpartition(")")[2].split()
+            proc = replace(proc, started_at=boot + int(fields[19]) / hertz)
+        except (OSError, ValueError, IndexError):
+            pass  # gone since the snapshot, or not ours to read: keep `ps`'s second
+        sharp.append(proc)
+    return sharp
 
 
 def _looks_like_brnrd(command: str) -> bool:
