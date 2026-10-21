@@ -124,6 +124,17 @@ def test_the_same_breaks_let_the_second_stop_through(tmp_path, monkeypatch):
     assert "proj: probe.config.ts exists" in third["reason"]
 
 
+def test_a_forged_guard_cache_does_not_silence_the_stop(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRNRD_THREAD", "ta")
+    monkeypatch.setenv("BRNRD_STOP_TIMEOUT", "91")  # unblocked, the hold returns at once
+    room = _home(tmp_path, {"migrations": MIGRATIONS})
+    from brr.loom.runtime.lifecycle import main_tip
+    tip = main_tip(tmp_path / "self")
+    (room / "port" / "guards.json").write_text(json.dumps({"tip": tip, "files": {}}))
+    (room / "proj" / "migrations" / "001.sql").write_text("changed\n")
+    assert "proj: migrations/001.sql changed" in json.loads(execute("stop", room, "{}"))["reason"]
+
+
 def test_a_guard_scoped_to_another_repo_or_thread_stays_quiet(tmp_path, monkeypatch):
     monkeypatch.setenv("BRNRD_THREAD", "ta")
     other = MIGRATIONS.replace('scope = "repo:proj"', 'scope = "thread:tb"\n') \

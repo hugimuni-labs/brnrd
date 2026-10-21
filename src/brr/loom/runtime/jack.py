@@ -334,12 +334,12 @@ def _hook_event(stdin_text: str) -> str:
     return "PostToolUseFailure" if failed else "PostToolUse"
 
 
-def _guards(room: Path):
+def _guards(room: Path, cache: bool = True):
     """Guards fail apart from the jack: a broken guard must not cost the
     boundary, nor taint the strand through jack-errors.log."""
     from .guards import for_room
     try:
-        return for_room(room, os.environ.get("BRNRD_THREAD", ""), cache=True)
+        return for_room(room, os.environ.get("BRNRD_THREAD", ""), cache=cache)
     except Exception:
         try:
             with (room / "port" / "guard-errors.log").open("a") as handle:
@@ -367,10 +367,11 @@ def _guard_stop(room: Path) -> str:
 
     The same breaks a second time let the stop through: a body that has read
     the guard and cannot fix it is not trapped in a loop. send-self, publish
-    and settle still refuse.
+    and settle still refuse. Read past the cache: the body can write the
+    room's port, and a forged cache must not silence the stop.
     """
     from .guards import violations
-    guards, _errors = _guards(room)
+    guards, _errors = _guards(room, cache=False)
     lines = violations([g for g in guards if g.paths], room)
     if not lines:
         if _state(room).get("guard_stop"):
