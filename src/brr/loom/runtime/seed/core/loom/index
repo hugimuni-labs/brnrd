@@ -36,7 +36,8 @@ def die(why: str, code: int = 2) -> None:
 
 
 def git(*args: str) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(["git", *args], capture_output=True)
+    # quotepath off: a non-ASCII path comes back as bytes, not as "caf\303\251".
+    return subprocess.run(["git", "-c", "core.quotepath=off", *args], capture_output=True)
 
 
 def show(rev: str, path: str) -> str | None:

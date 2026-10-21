@@ -57,6 +57,20 @@ def test_the_index_derives_rows_from_the_tree(tmp_path: Path) -> None:
     assert run_index(work, "--rev", "HEAD").stdout == text
 
 
+def test_a_non_ascii_path_stays_in_the_index(tmp_path: Path) -> None:
+    """git quotes a non-ASCII path (core.quotepath) unless told not to; the row must not drop."""
+    bare = published(tmp_path)
+    work = room(bare, tmp_path / "w", "strand/w")
+    write(work, "threads/café/README.md",
+          "---\nid: café\nstatus: open\ntense: plan\n---\n# Café, with an accent\n")
+    write(work, "threads/café/résumé.md", "# Résumé\n\nbody\n")
+    commit(work, "accented thread")
+    text = run_index(work).stdout
+    assert "- **[café](threads/café/README.md)** · open · Café, with an accent" in text
+    assert "  - [résumé.md](threads/café/résumé.md) · Résumé · <1 KB" in text
+    assert '\\303' not in text and '"threads' not in text
+
+
 def test_thirty_index_refuses_a_stale_or_deleted_index(tmp_path: Path) -> None:
     bare = published(tmp_path)
     work = room(bare, tmp_path / "w", "strand/w")
