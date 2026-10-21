@@ -15,9 +15,11 @@ One row per kind, read top-down:
 
 A resource in ``CLOSED`` is declared in full: ``admit`` refuses, at the
 ledger's one write path, a kind under its name that has no row here, a writer
-the row does not name, and fields the row does not list. Rows of any other
-resource are here because the body's table reads them; their writers are not
-checked and kinds beside them stay undeclared.
+the row does not name, and fields the row does not list. The body's table
+folds ``body`` rows by strand and generation; the other closed resources
+(wishes, pull request receipts, loom starts) are declared for that check
+alone. Rows of any other resource are here because the body's table reads
+them; their writers are not checked and kinds beside them stay undeclared.
 """
 
 from __future__ import annotations
@@ -51,7 +53,7 @@ def _kind(kind: str, resource: str, fields: str, writer: str, scope: str, once: 
     return Kind(kind, resource, tuple(fields.split()), tuple(writer.split()), scope, once)
 
 
-CLOSED = ("body", "wish")
+CLOSED = ("body", "wish", "pr", "loom")
 ROLES = ("loom", "strand", "person")
 SCOPES = ("global", "machine")
 
@@ -69,6 +71,8 @@ REGISTRY = (
     _kind("wish.read",         "wish",    "wish reading by",                                   "strand person", "global"),
     _kind("wish.result",       "wish",    "wish kind ref line delivered",                       "strand",        "global"),
     _kind("wish.verdict",      "wish",    "wish as evidence ref",                              "strand person", "global"),
+    _kind("pr.opened",         "pr",      "thread repo number url head",                       "strand",        "global"),
+    _kind("pr.merged",         "pr",      "thread repo number head merge_commit",              "strand",        "global"),
     # Read by the body's table, owned elsewhere, not enforced here.
     _kind("lease",             "thread",  "thread strand gen install router_gen shell core repos parent?", "loom", "global", once=True),
     _kind("released",          "thread",  "thread strand gen why install router_gen?",        "loom",        "global",  once=True),
@@ -76,6 +80,7 @@ REGISTRY = (
     _kind("molt",              "letter",  "strand gen why fresh?",                            "strand",      "global"),
     _kind("attempt.ended",     "attempt", "thread strand gen ids cause code dispositions evidence", "loom",  "global",  once=True),
     _kind("port.drained",      "port",    "thread strand gen",                                "loom",        "global",  once=True),
+    _kind("loom.started",      "loom",    "install pid commit? loaded",                       "loom",        "global"),
 )
 
 KINDS = {row.kind: row for row in REGISTRY}

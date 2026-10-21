@@ -123,6 +123,8 @@ def thread_table(home: Home, facts: list) -> list[dict]:
         _ROWS[repo] = kept
     now, rows = time.time(), []
     told = None
+    from .receipts import receipts
+    shipped = receipts(facts)
     for thread, data, choice, created, date in _MAIN[repo][1]:
         why = '—'
         if opened_for(data):
@@ -172,7 +174,8 @@ def thread_table(home: Home, facts: list) -> list[dict]:
             value = 'idle ' + _age(now - last) if cause == 'idle' else cause
         rows.append({'thread': thread, 'seat': seat, 'now': value, 'owed': count, 'unanswered': len(unanswered.get(thread, ())),
                      'opened-by': data.get('opened-by') or '—', 'opened-for': why, 'plan': data['plan'],
-                     'status': data['status'], **{k: axes[thread][k] for k in ('owed-by', 'restart', 'control')}})
+                     'status': data['status'], **{k: axes[thread][k] for k in ('owed-by', 'restart', 'control')},
+                     'receipts': '; '.join(r.line() for r in shipped.get(thread, ())) or '—'})
     for ident, fate in ownership.items():
         if fate.owner == 'operator':
             rows.append({'thread': 'operator', 'seat': '—', 'now': ident + ': ' + fate.reason,
@@ -200,6 +203,9 @@ def opened_for_line(ident: str, wish) -> str:
 
 def render_table(rows: list[dict]) -> str:
     columns = ('thread', 'seat', 'now', 'owed', 'unanswered', 'opened-by', 'opened-for', 'plan', 'owed-by', 'restart', 'control')
+    if any(row.get('receipts', '—') != '—' for row in rows):
+        columns += ('receipts',)
+        rows = [dict(row, receipts=row.get('receipts') or '—') for row in rows]
     if any(row.get('left') for row in rows):
         columns += ('left',)
         rows = [dict(row, left=row.get('left') or '—') for row in rows]

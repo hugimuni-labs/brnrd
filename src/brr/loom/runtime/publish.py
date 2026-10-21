@@ -73,7 +73,16 @@ def _is_local(source: str) -> bool:
 
 def push_command(source: str, branch: str, forge_token: str | None,
                  ) -> tuple[list[str], dict[str, str], str, str]:
-    """``(git arguments, environment, lane, note)`` for one push of ``branch``.
+    """``(git arguments, environment, lane, note)`` for one push of ``branch``."""
+    refspec = f"refs/heads/{branch}:refs/heads/{branch}"
+    return remote_command(source, ["push", "--", source, refspec], forge_token)
+
+
+def remote_command(source: str, tail: list[str], forge_token: str | None,
+                   ) -> tuple[list[str], dict[str, str], str, str]:
+    """``(git arguments, environment, lane, note)`` for one git call that
+    talks to ``source``; ``tail`` is the call itself (``push``, ``ls-remote``,
+    ``fetch``), so every read of the source goes out the push's lane.
 
     With a token, git reads no machine or user config: a ``url.*.insteadOf``
     there would turn the https push into an ssh push under the machine
@@ -81,10 +90,9 @@ def push_command(source: str, branch: str, forge_token: str | None,
     token's helper is scoped to the source's host, so a redirect to another
     host is handed nothing.
     """
-    refspec = f"refs/heads/{branch}:refs/heads/{branch}"
     env = _plain_env()
     if _is_local(source):
-        return ["push", "--", source, refspec], env, "local", ""
+        return list(tail), env, "local", ""
     if forge_token:
         parts = urlsplit(source)
         if parts.scheme != "https" or not parts.hostname:
@@ -105,7 +113,7 @@ def push_command(source: str, branch: str, forge_token: str | None,
             "-c", "credential.helper=",
             "-c", f"credential.https://{host}.helper=",
             "-c", f"credential.https://{host}.helper={_TOKEN_HELPER}",
-            "push", "--", source, refspec,
+            *tail,
         ]
         return args, env, "token", ""
     # No token: the machine's own setup, said out loud. The checkout's empty
@@ -122,9 +130,9 @@ def push_command(source: str, branch: str, forge_token: str | None,
             if key and newline and value:
                 args += ["-c", f"{key}={value}"]
     who = git(Path.cwd(), "config", "--global", "user.email", check=False, env=env).stdout.strip()
-    note = ("publish: no forge_token in loom/config.toml; pushed with this machine's "
+    note = ("publish: no forge_token in loom/config.toml; used this machine's "
             f"own git setup (git user {who or 'unset'})")
-    return [*args, "push", "--", source, refspec], env, "machine", note
+    return [*args, *tail], env, "machine", note
 
 
 def _declared(home, thread: str, name: str) -> str:
@@ -434,17 +442,130 @@ def publish(room: Path | str, name: str, *, worker: str | None = None,
     return Published(thread, name, branch, commit, lane, note)
 
 
+def _remote(who: _Caller, source: str, tail: list[str]) -> tuple[str, str]:
+    """``(stdout, note)`` of one git call to ``source`` over the push's lane."""
+    args, env, _lane, note = remote_command(source, tail,
+                                            load_config(who.home.root).forge_token)
+    try:
+        proc = subprocess.run(["git", *args], cwd=who.checkout, env=env,
+                              capture_output=True, text=True, timeout=_PUSH_TIMEOUT)
+    except subprocess.TimeoutExpired as exc:
+        raise PublishError(f"publish: git {tail[0]} did not finish in {_PUSH_TIMEOUT}s") from exc
+    if proc.returncode != 0:
+        raise PublishError((proc.stderr or proc.stdout).rstrip() or f"publish: git {tail[0]} failed")
+    return proc.stdout, note
+
+
+def pr_url(source: str, number: int) -> str:
+    """The pull request's page when the source is an https URL; else empty."""
+    if urlsplit(source).scheme != "https":
+        return ""
+    return source.rstrip("/").removesuffix(".git") + f"/pull/{number}"
+
+
+def _pr_head(who: _Caller, source: str, number: int) -> tuple[str, str]:
+    """``(head, note)``: the source's ``refs/pull/N/head``, once it is a
+    commit publish pushed for this thread's repo."""
+    out, note = _remote(who, source, ["ls-remote", "--", source, f"refs/pull/{number}/head"])
+    head = out.split("\t", 1)[0].strip() if out.strip() else ""
+    if not head:
+        raise PublishError(f"publish: {source} has no pull request {number} "
+                           f"(no refs/pull/{number}/head)")
+    pushed = {str((fact.data or {}).get("commit")) for fact in who.facts
+              if fact.kind == "branch.published" and (fact.data or {}).get("thread") == who.thread
+              and (fact.data or {}).get("repo") == who.name}
+    if head not in pushed:
+        raise PublishError(
+            f"publish: pull request {number}'s head is {head[:12]}, which publish never "
+            f"pushed for thread {who.thread}'s {who.name}; a receipt names this thread's "
+            f"own published work"
+        )
+    return head, note
+
+
+def _merge_of(who: _Caller, source: str, head: str, number: int) -> str:
+    """The merge commit on the source's default branch whose second parent is ``head``."""
+    _remote(who, source, ["fetch", "--no-tags", "--", source, "HEAD"])
+    main = _tip(who.checkout, "FETCH_HEAD")
+    if main is None:
+        raise PublishError(f"publish: fetching {source} left no FETCH_HEAD")
+    text = git(who.checkout, "log", "--merges", "--format=%H %P%x09%s", main, f"^{head}").stdout
+    for line in text.splitlines():
+        hashes, _tab, subject = line.partition("\t")
+        commits = hashes.split()
+        if len(commits) >= 3 and commits[2] == head:
+            if not re.search(rf"#{number}\b", subject):
+                raise PublishError(
+                    f"publish: {commits[0][:12]} merges {head[:12]}, but its subject does not "
+                    f"name #{number}: {subject}"
+                )
+            return commits[0]
+    raise PublishError(
+        f"publish: no merge commit with second parent = head {head[:12]} on {source}'s "
+        f"default branch. A squash or rebase merge leaves none; merge pull request "
+        f"{number} with a merge commit, or record nothing."
+    )
+
+
+@dataclass(frozen=True)
+class Claimed:
+    """A pull request receipt the source has shown, now a fact."""
+    fact: Fact
+    note: str = ""
+
+
+def claim_pr(room: Path | str, name: str, number: int, *, merged: bool = False) -> Claimed:
+    """``pr.opened`` (or with ``merged``, ``pr.merged``) for this room's own thread.
+
+    git on the declared source is the evidence: the pull request's head ref
+    must be a commit this thread published, and a merge needs a merge commit
+    on the source's default branch with that head as its second parent.
+    """
+    who = _caller(room, name)
+    if number <= 0:
+        raise PublishError(f"publish: {number} is not a pull request number")
+    source = _declared(who.home, who.thread, name)
+    head, note = _pr_head(who, source, number)
+    data = {"thread": who.thread, "repo": name, "number": number, "head": head}
+    if merged:
+        data["merge_commit"] = _merge_of(who, source, head, number)
+        fact = Fact(kind="pr.merged", by=f"strand:{who.strand}", data=data,
+                    id=f"pr.merged:{who.thread}:{name}:{number}")
+    else:
+        data["url"] = pr_url(source, number)
+        fact = Fact(kind="pr.opened", by=f"strand:{who.strand}", data=data,
+                    id=f"pr.opened:{who.thread}:{name}:{number}:{head}")
+    return Claimed(append(who.home, fact), note)
+
+
 def _arguments(parser) -> None:
     parser.add_argument("name", help="the repo's directory name in the room")
     parser.add_argument("--room")
     parser.add_argument("--from", dest="worker", metavar="THREAD",
                         help="a thread this one opened: copy its branch here, push nothing")
     parser.add_argument("--commit", help="with --from: push the copy, if it is at this commit")
+    parser.add_argument("--pr", type=int, metavar="N",
+                        help="record pull request N of this thread's pushed branch as opened")
+    parser.add_argument("--merged", type=int, metavar="N",
+                        help="record pull request N as merged, by its merge commit on the source")
 
 
 def cmd_publish(args) -> int:
     from .verbs_loom import _room
     try:
+        if args.pr is not None or args.merged is not None:
+            if args.worker or args.commit or (args.pr is not None and args.merged is not None):
+                raise PublishError("publish: --pr and --merged each go alone, for this thread")
+            got = claim_pr(_room(args.room), args.name,
+                           args.pr if args.merged is None else args.merged,
+                           merged=args.merged is not None)
+            if got.note:
+                sys.stderr.write(got.note + "\n")
+            data = got.fact.data
+            sys.stdout.write(f"{got.fact.kind} {data['repo']}#{data['number']} "
+                             f"{data.get('merge_commit') or data['head']}"
+                             + (f" {data['url']}" if data.get("url") else "") + "\n")
+            return 0
         if args.worker and not args.commit:
             got = fetch_from(_room(args.room), args.name, args.worker)
             sys.stdout.write(

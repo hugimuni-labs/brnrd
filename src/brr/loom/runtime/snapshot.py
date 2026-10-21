@@ -207,6 +207,8 @@ def assemble(home: Home, facts: list, config) -> dict:
             leases.setdefault(f.data["thread"], {})[f.data["strand"]] = f
             cores.setdefault(f.data["shell"], set()).add(f.data["core"])
     told = wishes([f for f in facts if f.kind.startswith("wish") or f.kind == "letter"])
+    from .receipts import receipts
+    shipped = receipts(facts)
     # An open ask is the person's turn unless it waits on a thread that has not asked onward.
     heads = waits_on(told, main)
     waits: dict[str, list[str]] = {}
@@ -248,6 +250,10 @@ def assemble(home: Home, facts: list, config) -> dict:
                                                    if ident in told else {})}
                                 for ident in opened_for(data)],
                  "plan": plan, "strands": strands,
+                 "receipts": [{k: v for k, v in {
+                     "repo": r.repo, "number": r.number, "url": r.url, "head": r.head,
+                     "state": r.state(), "merge_commit": r.merge_commit, "load": r.load()}.items()
+                     if v not in (None, "")} for r in shipped.get(thread, ())],
                  "done": done, "owed": row["owed"], "last_at": _iso(last) if last else None}
         doc_threads.append({k: v for k, v in entry.items() if v not in (None, "", [])})
         if now == "working" and thread in state.holder:

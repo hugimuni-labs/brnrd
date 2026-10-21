@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from .lifecycle import CLOSED
 from .owners import unanswered_by_thread
 from .project import _destination, fold, sender_threads
+from .receipts import receipts
 from .wishes import waits_on, waits_word, wishes, wish_line
 
 
@@ -80,6 +81,8 @@ def asks(facts, main: dict, thread: str | None = None, everything: bool = False)
                        if mine(t) for i in ids],
         "done": [f"{t} · {kind} {ref} — {line}" for t, d in sorted(main.items()) if mine(t)
                  for kind, ref, line in d.get("done") or ()]
+                + [f"{t} · {r.line()}" for t, rs in sorted(receipts(facts).items()) if mine(t)
+                   for r in rs]
                 + [wish_line(w) for w in found if mine(w.thread) and w.state == "accepted"],
     }
     text = ""
