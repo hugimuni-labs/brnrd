@@ -12,7 +12,8 @@ send-self makes them at every landing. Targets with a scheme (``https:``,
 untouched. Fenced blocks and
 inline code are not read. Changed ``.md`` files between the tips are judged;
 an all-zero old tip judges every ``.md`` at the new tip. ``--file PATH``
-judges one working file against the working tree. Git's hook environment,
+judges one working file, which must be tracked, against HEAD's tree: a link
+to a target that is not committed yet reads dead. Git's hook environment,
 including GIT_DIR, is kept.
 """
 
@@ -132,7 +133,8 @@ def report(display, refusals):
 
 def main(args):
     if len(args) != 2 or not args[0] or not args[1]:
-        print("usage: 40-links <old> <new> | 40-links --file PATH", file=sys.stderr)
+        print("usage: 40-links <old> <new> | 40-links --file PATH  (a tracked file, judged against HEAD's tree)",
+              file=sys.stderr)
         return 2
     if args[0] == "--file":
         top = git("rev-parse", "--show-toplevel")

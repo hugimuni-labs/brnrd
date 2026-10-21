@@ -154,3 +154,22 @@ def test_init_seeds_the_links_check_executable(tmp_path: Path) -> None:
     self_dir = home / "self"
     assert os.access(self_dir / "core" / "immune.d" / "40-links", os.X_OK)
     assert run_links(self_dir, "0" * 40, "HEAD").returncode == 0
+
+
+def test_file_judges_a_tracked_file_against_the_head_tree(tmp_path: Path) -> None:
+    bare = published(tmp_path)
+    work = room(bare, tmp_path / "w", "strand/w")
+    write(work, "threads/one/README.md", "---\nid: one\nstatus: open\ntense: plan\n---\n# One\n")
+    commit(work, "one")
+    # The target exists on disk but not in HEAD's tree, so the link reads dead.
+    write(work, "threads/one/README.md", "---\nid: one\nstatus: open\ntense: plan\n---\n# One\n\n[notes](notes.md)\n")
+    write(work, "threads/one/notes.md", "# Notes\n")
+    judged = run_links(work, "--file", "threads/one/README.md")
+    assert judged.returncode == 1
+    assert "threads/one/README.md: dead link: notes.md" in judged.stderr
+    # An untracked file is refused, not judged.
+    judged = run_links(work, "--file", "threads/one/notes.md")
+    assert judged.returncode == 1
+    assert "threads/one/notes.md: not a tracked file" in judged.stderr
+    commit(work, "notes")
+    assert run_links(work, "--file", "threads/one/README.md").returncode == 0
