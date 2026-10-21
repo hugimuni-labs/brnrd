@@ -203,3 +203,32 @@ def test_off_leaves_the_clone_to_the_body(tmp_path):
     _run(room, "stop")
     assert _main_has(root, "plain.txt") == "base\n"
     assert git(room / "self", "status", "--porcelain", "--untracked-files=no").stdout != ""
+
+
+def test_a_stop_with_a_delegate_at_work_lands_nothing(tmp_path):
+    root = _home(tmp_path)
+    _strand_id, room = _strand(root, "a")
+    (room / "self" / "plain.txt").write_text("half made\n")
+    (room / "port" / "live-delegates").mkdir()
+    (room / "port" / "live-delegates" / "agent-1").touch()
+    _run(room, "stop")
+    assert _main_has(root, "plain.txt") == "base\n"
+    assert _state(room)["sync"] == "held: a delegate is at work"
+
+
+def test_an_untracked_file_main_would_overwrite_is_a_notice_not_a_loss(tmp_path):
+    root = _home(tmp_path)
+    (_a, first), (strand, second) = (_strand(root, tag) for tag in "ab")
+    (first / "self" / "new.txt").write_text("tracked by a\n")
+    git(first / "self", "add", "new.txt")
+    _run(first, "stop")
+    (second / "self" / "new.txt").write_text("b's own, untracked\n")
+
+    _run(second, "post", {"tool_name": "Bash"})
+
+    assert (second / "self" / "new.txt").read_text() == "b's own, untracked\n"
+    assert _state(second)["sync"].startswith("pull refused")
+    home = Home(root)
+    facts = _ingest(home, read_facts(home))
+    found = [n for n in notices(facts) if strand in n.data["body"]]
+    assert len(found) == 1 and "new.txt" in found[0].data["body"], [n.data for n in found]

@@ -102,6 +102,11 @@ def land_at_stop(room: Path) -> str:
             line = "held: rebase in progress"
             _say(room, line)
             return line
+        if _delegates_live(room):
+            # A delegate's half-made edit is not the body's to land.
+            line = "held: a delegate is at work"
+            _say(room, line)
+            return line
         changed = _dirty(clone)
         if changed:
             git(clone, "add", "-u")
@@ -117,7 +122,8 @@ def land_at_stop(room: Path) -> str:
         try:
             outcome = send_to_self(clone)
         except SelfError as exc:
-            line = f"held: {str(exc).splitlines()[0]}"
+            # A rebase git would not start, a guard, a push that failed: the body must hear it.
+            line = _conflict(room, clone, "land refused", (), str(exc))
             _say(room, line)
             return line
         if outcome.status == "merged":
@@ -162,7 +168,9 @@ def pull_at_boundary(room: Path) -> str:
         if clone is None or not _enabled(room) or not _main_moved(clone):
             return ""
         # Mid-edit, mid-resolution, or a delegate at work: leave the tree alone.
-        if _rebasing(clone) or _dirty(clone) or _delegates_live(room):
+        if (_rebasing(clone) or _delegates_live(room)
+                or Path(git(clone, "rev-parse", "--absolute-git-dir").stdout.strip(), "index.lock").exists()
+                or _dirty(clone)):
             return ""
         before = git(clone, "rev-parse", "HEAD").stdout.strip()
         git(clone, "fetch", "origin", "main")
@@ -212,7 +220,10 @@ def notice_from_port(home, facts, strand: str, text: str) -> None:
                 f"in {', '.join(files)}. The rebase was aborted; the room is on its own commit.")
     else:
         said = f"self-sync: {what} for {strand}'s self clone at main {base[:7]}:\n{detail}"
-    can = ("resolve in the room: `python -m brr.loom.runtime send-self --room .` rebases and stops on the "
-           "files above; fix them, `git add`, and send-self again")
+    if what == "conflict":
+        can = ("resolve in the room: `python -m brr.loom.runtime send-self --room .` rebases and stops on the "
+               "files above; fix them, `git add`, and send-self again")
+    else:
+        can = "fix what the lines above name, then land with `python -m brr.loom.runtime send-self --room .`"
     notice(home, facts, "self-sync", f"{strand}:{what}:{base}:{' '.join(sorted(files))}", said, can,
            thread=thread)

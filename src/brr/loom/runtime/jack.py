@@ -1,4 +1,8 @@
-"""The jack. It reads boundary.md and stdin, never the ledger. It fails open."""
+"""The jack. It reads boundary.md and stdin, never the ledger. It fails open.
+
+One exception: self-sync's landing at stop goes through send_to_self, which
+reads the ledger for the strand's label exactly as send-self does.
+"""
 
 from __future__ import annotations
 
