@@ -309,3 +309,29 @@ def test_settle_without_wishes_still_settles(ledger):
     home, seat = ledger
     command(home, seat, "settle", "work", "--word", word(home), "--why", "Done")
     assert read_thread(home, "work")["status"] == "settled"
+
+
+def test_settle_judges_the_settled_childs_room_not_only_the_callers(ledger):
+    from brr.loom.runtime.lifecycle import read_thread
+
+    home, seat = ledger
+    self_dir = home.root / "self"
+    (self_dir / "threads/child").mkdir(parents=True)
+    (self_dir / "threads/child/README.md").write_text(
+        "---\nid: child\nstatus: open\ntense: plan\nopened-by: thread:work\n---\n# Child\n\nThe page.\n")
+    (self_dir / "core/guards").mkdir(parents=True, exist_ok=True)
+    (self_dir / "core/guards/notes.toml").write_text(
+        'says = "notes.md stays as main has it."\nset-by = "letter:9"\n[[paths]]\nuntouched = ["notes.md"]\n')
+    commit(self_dir, "child and guard")
+    kid = room(home.root, "s-aaaa-kid")
+    append(home, Fact(kind="lease", by="loom:aaaa", data={
+        "thread": "child", "strand": "s-aaaa-kid", "gen": 1,
+        "install": "aaaa", "router_gen": 1, "shell": "fake", "core": "fake", "repos": [],
+    }))
+    (kid / "notes.md").write_text("drift\n")
+    error = command(home, seat, "settle", "child", "--why", "Done", ok=False)
+    assert "s-aaaa-kid: guard notes" in error and "notes.md changed" in error
+    assert read_thread(home, "child")["status"] == "open"
+    (kid / "notes.md").unlink()
+    command(home, seat, "settle", "child", "--why", "Done")
+    assert read_thread(home, "child")["status"] == "settled"

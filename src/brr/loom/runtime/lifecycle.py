@@ -192,9 +192,18 @@ def settle(room: Path, thread: str, why: str, retire: bool = False,
             raise PortError(f"settle: {thread} settles on its person's word: "
                             f"--word <their letter to {thread}>")
     from .guards import for_room, violations
-    broken = violations(for_room(room, own)[0], room)
+    # The settled thread's own rooms too: an opener settling a child would
+    # otherwise judge only the room it settles from.
+    rooms = {Path(room).resolve(): own}
+    for strand, served in sender_threads(facts).items():
+        if served == thread and home.room(strand).is_dir():
+            rooms.setdefault(home.room(strand).resolve(), thread)
+    broken = []
+    for where, serving in rooms.items():
+        lines = violations(for_room(where, serving)[0], where)
+        broken += [f"{where.name}: {line}" for line in lines]
     if broken:
-        raise PortError("settle: a path guard is broken in this room:\n" + "\n".join(broken))
+        raise PortError("settle: a path guard is broken in this thread's rooms:\n" + "\n".join(broken))
     pending = sorted(w.id for w in wishes(facts).values()
                      if w.thread == thread and w.state == "delivered")
     if hand_to is not None:

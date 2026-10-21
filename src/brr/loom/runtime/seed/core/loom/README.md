@@ -99,7 +99,8 @@ own words, `set-by` is `letter:<id>` (a person asked) or
 `path`, `cwd`, `output`, all regexes) warns on the call that trips it and
 never blocks. A `[[paths]]` (`repo`, `untouched` and `absent` globs) warns
 on an Edit or Write into its paths and blocks your stop once. send-self,
-publish and settle refuse while it is broken. send-self refuses a landing
+publish and settle refuse while it is broken; settle judges every room
+serving the settled thread, not only yours. send-self refuses a landing
 whose new or changed guard does not parse, or names in `absent` a file
 already on that repo's main. A broken guard file is skipped
 whole and named in a `guards:` line at your start. When a scar becomes a
