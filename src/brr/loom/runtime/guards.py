@@ -179,29 +179,16 @@ def _git_batch(repo: Path, blobs: list[str]) -> dict[str, str]:
     return found
 
 
-def load(self_repo: Path, cache: Path | None = None) -> tuple[list[Guard], list[str]]:
+def load(self_repo: Path) -> tuple[list[Guard], list[str]]:
     """Every guard on main and every file that failed to parse.
 
-    With ``cache``, the files are kept per main tip in that JSON file: the jack
-    runs once per tool call, and main rarely moves between calls.
+    Read from git at every call, never from a file in the room: the body can
+    write the room, and a forged copy would silence a refusing guard.
     """
     self_repo = Path(self_repo)
     if not (self_repo / ".git").exists():
         return [], []
-    from .lifecycle import main_tip
-    texts = None
-    if cache is not None and cache.is_file():
-        try:
-            saved = json.loads(cache.read_text())
-            if saved.get("tip") == main_tip(self_repo):
-                texts = saved["files"]
-        except (OSError, ValueError, KeyError, TypeError):
-            texts = None
-    if texts is None:
-        tip, texts = _texts(self_repo)
-        if cache is not None:
-            from .home import atomic_write
-            atomic_write(cache, json.dumps({"tip": tip, "files": texts}) + "\n")
+    _tip, texts = _texts(self_repo)
     guards, errors = [], []
     for ident in sorted(texts):
         try:
@@ -220,12 +207,11 @@ def applies(guard: Guard, room: Path, thread: str) -> bool:
     return (Path(room) / name / ".git").exists()
 
 
-def for_room(room: Path, thread: str, cache: bool = False) -> tuple[list[Guard], list[str]]:
+def for_room(room: Path, thread: str) -> tuple[list[Guard], list[str]]:
     """The guards on the home self's main that cover this room's thread."""
     from .home import home_of_room
     room = Path(room)
-    guards, errors = load(home_of_room(room).root / "self",
-                          room / "port" / "guards.json" if cache else None)
+    guards, errors = load(home_of_room(room).root / "self")
     return [g for g in guards if applies(g, room, thread)], errors
 
 
@@ -399,8 +385,9 @@ def trips(guards: list[Guard], room: Path, at: str, payload: dict) -> list[tuple
                 continue
             if m.unless is not None and m.unless.search(text):
                 continue
-            hit, refuse = guard.label, m.refuse
-            break
+            # Every entry, not the first: a warning entry listed first must
+            # not hide a refusing one in the same guard.
+            hit, refuse = guard.label, refuse or m.refuse
         if hit is None and at == "pre" and tool in _FILE_TOOLS and file_path:
             hit = _file_hit(guard, Path(room), Path(file_path))
         if hit:

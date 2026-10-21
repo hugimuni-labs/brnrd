@@ -287,6 +287,25 @@ def test_a_refusing_guard_denies_the_call_before_it_runs(tmp_path, monkeypatch, 
     assert "A backtick inside double quotes runs in your own shell" in said["permissionDecisionReason"]
 
 
+def test_a_forged_guard_file_in_the_port_does_not_silence_a_refusal(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRNRD_THREAD", "ta")
+    room = _home(tmp_path, {"backtick": BACKTICK})
+    from brr.loom.runtime.lifecycle import main_tip
+    tip = main_tip(tmp_path / "self")
+    (room / "port" / "guards.json").write_text(json.dumps({"tip": tip, "files": {}}))
+    said = json.loads(execute("pre", room, _call("Bash", command='echo "`x`"')))["hookSpecificOutput"]
+    assert said["permissionDecision"] == "deny"
+
+
+def test_a_warning_entry_listed_first_does_not_hide_a_refusing_one(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRNRD_THREAD", "ta")
+    both = BACKTICK.replace("[[match]]", '[[match]]\ntool = "Bash"\ninput = \'\'\'echo\'\'\'\n\n[[match]]', 1)
+    room = _home(tmp_path, {"backtick": both})
+    said = json.loads(execute("pre", room, _call("Bash", command='echo "`x`"')))["hookSpecificOutput"]
+    assert said["permissionDecision"] == "deny"
+    assert said["permissionDecisionReason"].count("A backtick") == 1
+
+
 def test_a_warning_guard_beside_a_refusing_one_is_said_in_the_refusal(tmp_path, monkeypatch):
     monkeypatch.setenv("BRNRD_THREAD", "ta")
     room = _home(tmp_path, {"backtick": BACKTICK, "stash-pop": STASH})
