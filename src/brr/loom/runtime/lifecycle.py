@@ -180,6 +180,10 @@ def settle(room: Path, thread: str, why: str, retire: bool = False,
                 or _destination(said.data) != thread:
             raise PortError(f"settle: {thread} settles on its person's word: "
                             f"--word <their letter to {thread}>")
+    from .guards import for_room, violations
+    broken = violations(for_room(room, own)[0], room)
+    if broken:
+        raise PortError("settle: a path guard is broken in this room:\n" + "\n".join(broken))
     pending = sorted(w.id for w in wishes(facts).values()
                      if w.thread == thread and w.state == "delivered")
     if hand_to is not None:

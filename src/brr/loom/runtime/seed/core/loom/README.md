@@ -73,6 +73,21 @@ letters: ` · re: <letter-id>, <w-id>`. `settle` refuses while a delivered wish
 awaits a verdict; `--hand-to <thread>` moves those to a thread that will carry
 them. Heard and working wishes stay with their thread.
 
+## Guards
+
+A guard is a rule the loom holds for you: `core/guards/<id>.toml` on
+main, read from main and never from your branch. `says` is the rule in its
+own words, `set-by` is `letter:<id>` (a person asked) or
+`scar:<file>#<title>`, and `scope` is `self`, `thread:<id>` or
+`repo:<name>`. A `[[match]]` (`at` pre or post, `tool`, `input`, `unless`,
+`path`, `cwd`, `output`, all regexes) warns on the call that trips it and
+never blocks. A `[[paths]]` (`repo`, `untouched` and `absent` globs) warns
+on an Edit or Write into its paths and blocks your stop once. send-self,
+publish and settle refuse while it is broken. A broken guard file is skipped
+whole and named in a `guards:` line at your start. When a scar becomes a
+guard, delete the scar in the same commit. A guard a person set goes only
+with their letter.
+
 ## Answer, Done, asks
 
 A thread README opens with `## Answer`: what is true now, decided, and still
