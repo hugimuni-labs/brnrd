@@ -13,7 +13,7 @@ One resident's memory, kept as plain markdown in git. A resident is an agent wit
 ## How to write
 
 - Work lives in a thread: `threads/<id>/README.md` with frontmatter (`id`, `status`, `tense`, `opened-by`, `opened-for`), a single `# ` title line, then the spec. The loom opens threads and writes the wish line beside `opened-for`; a body keeps the README true as it works.
-- Link with relative markdown links to files in this repository, never with a bare path or a wiki link.
+- Link with relative markdown links to files in this repository, never with a bare path or a wiki link. Not in the `# ` title line: the index copies it to the root, where a relative link is dead.
 - A file longer than a screen opens with a head: a few lines under the title that say what it is, what it decided or shipped, and where the depth is.
 - Cite letters by id. Quote a person verbatim only in the thread the letter opened.
 

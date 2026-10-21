@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""Refuse a changed markdown file with a dead relative link, a link into people/, or a wiki link.
+
+The stated rule (AGENTS.md): link with relative markdown links to files in this
+repository, never a bare path or a wiki link, and never into people/ from
+outside it. This check judges only the shape that rule names. Inline links
+and images, ``[text](target)``, are resolved against the file's folder and
+the incoming tree; a target may be a file or a folder, with or without a
+fragment; the derived ``INDEX.md`` and ``CLAUDE.md`` count as present, since
+send-self makes them at every landing. Targets with a scheme (``https:``,
+``mailto:``) and bare fragments are not links into the repository and pass
+untouched. Fenced blocks and
+inline code are not read. Changed ``.md`` files between the tips are judged;
+an all-zero old tip judges every ``.md`` at the new tip. ``--file PATH``
+judges one working file against the working tree. Git's hook environment,
+including GIT_DIR, is kept.
+"""
+
+import posixpath
+import re
+import subprocess
+import sys
+from urllib.parse import unquote
+
+FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
+CODE = re.compile(r"(`+)[^`]*?\1")
+LINK = re.compile(r"!?\[(?:[^\[\]]|\[[^\[\]]*\])*\]\((<[^>]*>|[^()\s]*(?:\([^()\s]*\)[^()\s]*)*)(?:\s+(?:\"[^\"]*\"|'[^']*'))?\)")
+WIKI = re.compile(r"\[\[[^\[\]\s][^\[\]]*\]\]")
+SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+# send-self derives these at every landing and 30-index lets a tree without
+# them pass, so a link to one is live by the next landing, never dead.
+DERIVED = {"INDEX.md", "CLAUDE.md"}
+
+
+def git(*args):
+    return subprocess.run(["git", *args], capture_output=True)
+
+
+def zeros(value):
+    return bool(value) and all(char == "0" for char in value)
+
+
+def prose(text):
+    """The lines of a markdown text outside fenced blocks, with inline code removed."""
+    lines = []
+    fence = None
+    for line in text.replace("\r", "").split("\n"):
+        opened = FENCE.match(line)
+        if fence is None:
+            if opened:
+                fence = opened.group(1)
+                continue
+            lines.append(CODE.sub("", line))
+        elif opened and opened.group(1)[0] == fence[0] and len(opened.group(1)) >= len(fence):
+            fence = None
+    return lines
+
+
+def resolve(source, target):
+    """The repository path a link target names, or None when it leaves the repository."""
+    target = target.strip()
+    if target.startswith("<") and target.endswith(">"):
+        target = target[1:-1].strip()
+    target = target.split("#", 1)[0]
+    if not target or SCHEME.match(target) or target.startswith("//"):
+        return ""  # not a link into the repository
+    target = unquote(target)
+    if target.startswith("/"):
+        return None
+    folder = posixpath.dirname(source)
+    joined = posixpath.normpath(posixpath.join(folder, target)) if folder else posixpath.normpath(target)
+    if joined == "." or joined == ".." or joined.startswith("../"):
+        return None
+    return joined
+
+
+def judge(source, text, files, folders):
+    """Refusals for one file: (reason, target) pairs."""
+    refusals = []
+    inside_people = source == "people" or source.startswith("people/")
+    for line in prose(text):
+        for match in WIKI.finditer(line):
+            refusals.append(("wiki link", match.group(0)))
+        for match in LINK.finditer(line):
+            raw = match.group(1)
+            path = resolve(source, raw)
+            if path == "":
+                continue
+            if path is None or (path not in files and path not in folders and path not in DERIVED):
+                refusals.append(("dead link", raw))
+                continue
+            if not inside_people and (path == "people" or path.startswith("people/")):
+                refusals.append(("links into people/", raw))
+    return refusals
+
+
+def tree(revision):
+    """Files and folders at a revision, from git's unquoted -z listing."""
+    listing = git("ls-tree", "-r", "-z", "--name-only", revision)
+    if listing.returncode:
+        sys.stderr.buffer.write(listing.stderr)
+        return None, None
+    files = set()
+    for raw in listing.stdout.split(b"\0"):
+        if raw:
+            files.add(raw.decode("utf-8", "surrogateescape"))
+    folders = set()
+    for path in files:
+        while "/" in path:
+            path = path.rsplit("/", 1)[0]
+            folders.add(path)
+    return files, folders
+
+
+def changed(old, new):
+    if zeros(old):
+        listing = git("ls-tree", "-r", "-z", "--name-only", new)
+    else:
+        listing = git("diff", "-z", "--name-only", "--diff-filter=ACMR", old, new)
+    if listing.returncode:
+        sys.stderr.buffer.write(listing.stderr)
+        return None
+    return [raw.decode("utf-8", "surrogateescape") for raw in listing.stdout.split(b"\0")
+            if raw.endswith(b".md")]
+
+
+def report(display, refusals):
+    for reason, target in refusals:
+        print(f"{display}: {reason}: {target}", file=sys.stderr)
+    return 1 if refusals else 0
+
+
+def main(args):
+    if len(args) != 2 or not args[0] or not args[1]:
+        print("usage: 40-links <old> <new> | 40-links --file PATH", file=sys.stderr)
+        return 2
+    if args[0] == "--file":
+        top = git("rev-parse", "--show-toplevel")
+        if top.returncode:
+            sys.stderr.buffer.write(top.stderr)
+            return 1
+        root = top.stdout.decode("utf-8", "surrogateescape").rstrip("\n")
+        rel = git("ls-files", "--full-name", "--error-unmatch", "--", args[1])
+        if rel.returncode:
+            print(f"{args[1]}: not a tracked file", file=sys.stderr)
+            return 1
+        source = rel.stdout.decode("utf-8", "surrogateescape").rstrip("\n")
+        files, folders = tree("HEAD")
+        if files is None:
+            return 1
+        try:
+            with open(f"{root}/{source}", "rb") as handle:
+                text = handle.read().decode("utf-8", "surrogateescape")
+        except OSError as exc:
+            print(f"{args[1]}: {exc}", file=sys.stderr)
+            return 1
+        return report(args[1], judge(source, text, files, folders))
+    old, new = args
+    paths = changed(old, new)
+    if paths is None:
+        return 1
+    if not paths:
+        return 0
+    files, folders = tree(new)
+    if files is None:
+        return 1
+    status = 0
+    for path in paths:
+        blob = git("show", f"{new}:{path}")
+        if blob.returncode:
+            print(f"{path}: unreadable at {new}", file=sys.stderr)
+            status = 1
+            continue
+        status |= report(path, judge(path, blob.stdout.decode("utf-8", "surrogateescape"), files, folders))
+    return status
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

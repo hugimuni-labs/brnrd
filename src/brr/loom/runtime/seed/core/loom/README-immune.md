@@ -40,7 +40,7 @@ the Python transition, using the upgraded installation's interpreter:
 python3 -c 'import sys; from brr.loom.runtime.merge import install_pre_receive; print(install_pre_receive(sys.argv[1]))' /absolute/path/to/home/self
 ```
 
-In a room cloned from that self, copy `core/immune`, all four seed checks
+In a room cloned from that self, copy `core/immune`, all six seed checks
 and this page from the upgraded seed, keep the scripts executable, commit
 and push with an enrolled committer or a clean label. The incumbent shell
 gate runs its shell checks and the incoming Python checks. The next push
@@ -55,7 +55,8 @@ byte-sorted name order, even after a failure. Incumbent failures carry an
 the incumbent checks as well as the incoming checks. The first push runs
 only the incoming set. An absent check directory adds no checks.
 
-Keep `10-readme`, `20-labels`, `30-index`, `40-guards` and `50-core-notice` executable. Copying the
+Keep `10-readme`, `20-labels`, `30-index`, `40-guards`, `40-links` and
+`50-core-notice` executable. Copying the
 seed without their executable bits silently drops the checks. A failed
 check's stderr is prefixed with its name; a silent failure is still
 named. The gate and seed checks use Python 3 and only its standard library
@@ -84,6 +85,15 @@ changes `set-by` or `scope`, or loses any `[[paths]]` or `[[match]]`
 entry; that needs a commit in the push carrying `Guard-Lifted: <id>`.
 Adding entries or rewording `says` lands without one. The trailer proves
 the citation exists, not what the letter says.
+
+`40-links` reads every changed `.md` file at the incoming tip (every `.md`
+on the first push) and refuses a relative markdown link whose target is not
+a file or folder in that tree, a link into `people/` from outside `people/`,
+or a wiki link. A link to `INDEX.md` or `CLAUDE.md` passes even before
+they exist: `send-self` derives both at every landing. Inline links and
+images are read; fenced blocks and inline code are not. Targets with a scheme and bare fragments pass. `40-links
+--file PATH` judges one working file. A dead link that landed before the
+check refuses only when its file is next changed.
 `50-core-notice` never refuses: changes under `core/` print
 `core changed: <paths>` for the person's notice.
 
