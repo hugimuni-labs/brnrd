@@ -8,6 +8,22 @@ Order: identity, stance, this thread's README and its notes, then one line for e
 
 Exit 0 is a prompt. Exit 3 is over budget. Any other exit is a broken recipe.
 
+## The index
+
+`INDEX.md` at the root is the wake tree without its byte cap, for a person or
+an outside agent: one row per thread (status, wish line, headline, files with
+first line and size), open threads first, newest first; one row per file under
+`memory/`, scar folders as one row with a count; `people/` as names only. The
+self's own `core/loom/index` derives it from the committed tree, same contract
+as `wake` (the self owns it, it imports nothing from brnrd): `index` prints it,
+`index --write` writes `INDEX.md` and `CLAUDE.md` as a copy of `AGENTS.md`,
+`index --check` compares. `send-self` runs `--write` after the rebase and folds
+the two files into the landing commit; `core/immune.d/30-index` runs `--check`
+at the incoming tip and refuses a push where either differs. Nobody edits
+them; `AGENTS.md` is written by hand and is the one source. A thread's wish
+line is copied into its README at open as `wish-<w-id>: "<line>"` beside
+`opened-for`, a copy of an immutable fact, so the room needs no ledger.
+
 ## Notices
 
 What the loom cannot settle by its own rules it hands to a body: a letter from `loom`, owed like any other, shown at every boundary until it is settled and gone after that. One is written per condition, not per tick. It goes to the thread the condition belongs to when a body can run there, otherwise to `brnrd`, the home thread.

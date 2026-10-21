@@ -78,7 +78,9 @@ def test_an_open_for_a_new_wish_cites_the_letter_and_the_readme_records_it(ledge
     behind = next(w for w in wishes(read_facts(home)).values() if w.line == "Split it out")
     assert (behind.says, behind.thread, behind.origin) == ([[letter, 0, None]], "fresh", "said")
     assert f"opened-for: [{behind.id}]\n" in readme(home, "fresh")
+    assert f'wish-{behind.id}: "Split it out"\n' in readme(home, "fresh")
     assert "opened-by: thread:work\n" in readme(home, "fresh")
+    assert f"· {behind.id} Split it out · Fresh work" in git(home.root / "self", "show", "main:INDEX.md").stdout
 
 
 def test_an_open_with_nothing_to_cite_is_derived_from_the_opening_letter(ledger):

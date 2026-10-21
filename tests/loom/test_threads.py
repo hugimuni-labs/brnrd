@@ -108,7 +108,8 @@ else:
         behind = next(w for w in wishes(loom.facts()).values() if w.line == 'New work')
         assert (behind.thread, behind.origin) == ('new-work', 'derived')
         assert readme == ('---\nid: new-work\nstatus: open\ntense: plan\n'
-                          f'opened-by: thread:opener\nopened-for: [{behind.id}]\n---\n# New work\n')
+                          f'opened-by: thread:opener\nopened-for: [{behind.id}]\n'
+                          f'wish-{behind.id}: "New work"\n---\n# New work\n')
         assert git(root / 'self', 'show', 'main:threads/new-work/seat').stdout == 'body: worker/test-core\nrepo: https://example/a.git\n'
         assert git(root / 'self', 'log', '-1', '--format=%H', '--', 'threads/new-work/README.md').stdout == git(
             root / 'self', 'log', '-1', '--format=%H', '--', 'threads/new-work/seat').stdout

@@ -1,0 +1,287 @@
+#!/usr/bin/env python3
+"""Index recipe. The self owns this file; it imports nothing from brnrd.
+
+    core/loom/index [--rev REV] [--write | --check [--old REV]]
+
+Reads one committed tree (HEAD by default) through git, so a room, a bare
+hook with GIT_DIR, and a person's checkout all see the same thing, and
+prints INDEX.md to stdout. --write writes INDEX.md, and CLAUDE.md as a copy
+of AGENTS.md when AGENTS.md is in the tree (CLAUDE.md is removed when it is
+not). --check compares INDEX.md and CLAUDE.md at REV with the regeneration
+and exits 1 naming each that differs; a file absent at both --old and REV
+passes, so a self from before the index lands its first one through
+send-self. Exit 2 is a broken recipe.
+
+Generation only derives from what a writer already wrote: titles, first
+lines, sizes, frontmatter, wish lines, link targets. It never summarises,
+never moves a file and never closes anything. Order is newest first by the
+commit that last touched a path, counted in topological order, so the same
+tree gives the same index after a rebase or a relabel.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+ROOTS = ("threads", "memory", "people")
+OPEN = ("open", "live", "dormant")
+HEADLINE = 200
+
+
+def die(why: str, code: int = 2) -> None:
+    print(why, file=sys.stderr)
+    raise SystemExit(code)
+
+
+def git(*args: str) -> subprocess.CompletedProcess[bytes]:
+    # quotepath off: a non-ASCII path comes back as bytes, not as "caf\303\251".
+    return subprocess.run(["git", "-c", "core.quotepath=off", *args], capture_output=True)
+
+
+def show(rev: str, path: str) -> str | None:
+    proc = git("show", f"{rev}:{path}")
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.decode("utf-8", "replace")
+
+
+def tree(rev: str) -> dict[str, tuple[str, int]]:
+    """path -> (blob sha, size) for every regular file under the roots."""
+    proc = git("ls-tree", "-r", "-l", "--full-tree", rev, "--", *ROOTS)
+    if proc.returncode != 0:
+        die(f"git ls-tree {rev}: {proc.stderr.decode('utf-8', 'replace').strip()}")
+    files: dict[str, tuple[str, int]] = {}
+    for line in proc.stdout.decode("utf-8", "surrogateescape").splitlines():
+        meta, _, path = line.partition("\t")
+        mode, kind, sha, size = meta.split()
+        if kind != "blob" or mode == "120000":
+            continue
+        if "hearth" in path.split("/"):
+            continue
+        files[path] = (sha, int(size))
+    return files
+
+
+def blobs(shas: list[str]) -> dict[str, str]:
+    """sha -> text, in one cat-file pass."""
+    if not shas:
+        return {}
+    proc = subprocess.run(["git", "cat-file", "--batch"], input="\n".join(shas).encode() + b"\n",
+                          capture_output=True)
+    if proc.returncode != 0:
+        die(f"git cat-file: {proc.stderr.decode('utf-8', 'replace').strip()}")
+    out: dict[str, str] = {}
+    data = proc.stdout
+    pos = 0
+    while pos < len(data):
+        end = data.index(b"\n", pos)
+        header = data[pos:end].decode()
+        pos = end + 1
+        parts = header.split()
+        if len(parts) != 3:
+            continue
+        sha, size = parts[0], int(parts[2])
+        out[sha] = data[pos:pos + size].decode("utf-8", "replace")
+        pos += size + 1
+    return out
+
+
+def ranks(rev: str) -> dict[str, int]:
+    """Path -> position of the commit that last touched it, newest first."""
+    proc = git("log", "--topo-order", "--format=%x00", "--name-only", rev, "--", *ROOTS)
+    found: dict[str, int] = {}
+    if proc.returncode != 0:
+        return found
+    rank = -1
+    for line in proc.stdout.decode("utf-8", "surrogateescape").splitlines():
+        if line.startswith("\x00"):
+            rank += 1
+        elif line and line not in found:
+            found[line] = rank
+    return found
+
+
+def frontmatter(text: str) -> tuple[dict[str, str], str]:
+    """Keys as written (lists kept literal) and the first non-empty line after."""
+    lines = text.splitlines()
+    data: dict[str, str] = {}
+    body = lines
+    if lines and lines[0] == "---" and "---" in lines[1:]:
+        end = lines.index("---", 1)
+        for line in lines[1:end]:
+            key, sep, raw = line.partition(":")
+            if sep and key.strip() and key[:1] not in " \t":
+                value = raw.strip()
+                if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+                    value = value[1:-1]
+                data[key.strip()] = value
+        body = lines[end + 1:]
+    first = next((line for line in body if line.strip()), "")
+    return data, first
+
+
+def title(first: str) -> str:
+    text = first[2:] if first.startswith("# ") else first
+    text = " ".join(text.split())
+    return text if len(text) <= HEADLINE else text[:HEADLINE - 1] + "…"
+
+
+def kb(size: int) -> str:
+    return "<1 KB" if size < 1024 else f"{size // 1024} KB"
+
+
+def wish_lines(data: dict[str, str]) -> str:
+    ids = data.get("opened-for", "")
+    ids = [part.strip().strip('"') for part in ids.strip("[]").split(",") if part.strip()]
+    parts = []
+    for ident in ids:
+        line = data.get(f"wish-{ident}", "")
+        parts.append(f"{ident} {line}".strip())
+    return "; ".join(parts)
+
+
+def thread_rows(files: dict[str, tuple[str, int]], text: dict[str, str], order: dict[str, int]) -> str:
+    threads: dict[str, list[str]] = {}
+    for path in files:
+        parts = path.split("/")
+        if parts[0] == "threads" and len(parts) >= 3 and path.endswith(".md"):
+            threads.setdefault(parts[1], []).append(path)
+    rows: list[tuple[int, int, str, str]] = []
+    for name, paths in threads.items():
+        readme = f"threads/{name}/README.md"
+        data, first = frontmatter(text[files[readme][0]]) if readme in files else ({}, "")
+        status = data.get("status", "")
+        head = f"- **[{name}]({readme})**" if readme in files else f"- **{name}**"
+        head += f" · {status or 'no README'}"
+        wishes = wish_lines(data)
+        if wishes:
+            head += f" · {wishes}"
+        if first:
+            head += f" · {title(first)}"
+        lines = [head]
+        for path in sorted(paths):
+            if path == readme:
+                continue
+            sha, size = files[path]
+            rel = path[len(f"threads/{name}/"):]
+            _, line = frontmatter(text[sha])
+            lines.append(f"  - [{rel}]({path}) · {title(line)} · {kb(size)}")
+        rank = min(order.get(path, 10**9) for path in paths)
+        group = 0 if (status in OPEN or not status) else 1
+        rows.append((group, rank, name, "\n".join(lines)))
+    rows.sort(key=lambda row: (row[0], row[1], row[2]))
+    out = ["## threads\n"]
+    for label, group in (("open", 0), ("settled", 1)):
+        chosen = [row for row in rows if row[0] == group]
+        out.append(f"\n### {label} ({len(chosen)})\n\n")
+        out.extend(row[3] + "\n" for row in chosen)
+    return "".join(out)
+
+
+def memory_rows(files: dict[str, tuple[str, int]], text: dict[str, str]) -> str:
+    out = ["\n## memory\n\n"]
+    folders: dict[str, int] = {}
+    singles: list[tuple[str, str]] = []
+    for path in sorted(files):
+        parts = path.split("/")
+        if parts[0] != "memory" or not path.endswith(".md"):
+            continue
+        if parts[1] == "scars" and len(parts) >= 4:
+            folders[parts[2]] = folders.get(parts[2], 0) + (0 if parts[-1] == "index.md" else 1)
+            continue
+        sha, size = files[path]
+        _, first = frontmatter(text[sha])
+        singles.append((path, f"- [{path[7:]}]({path}) · {title(first)} · {kb(size)}"))
+    for name, count in sorted(folders.items()):
+        target = f"memory/scars/{name}/index.md"
+        link = target if target in files else f"memory/scars/{name}/"
+        singles.append((f"memory/scars/{name}", f"- [scars/{name}/]({link}) · {count} scars"))
+    singles.sort()
+    out.extend(line + "\n" for _, line in singles)
+    return "".join(out)
+
+
+def people_rows(files: dict[str, tuple[str, int]]) -> str:
+    names = sorted({path.split("/")[1] for path in files if path.startswith("people/") and path.count("/") >= 2})
+    return "\n## people\n\n" + "".join(f"- {name}\n" for name in names)
+
+
+def generate(rev: str) -> str:
+    files = tree(rev)
+    text = blobs(sorted({sha for path, (sha, _) in files.items() if path.endswith(".md")}))
+    order = ranks(rev)
+    head = ("# Index\n\n"
+            "Generated by `core/loom/index` at every landing: do not edit. "
+            "Read [AGENTS.md](AGENTS.md) first. One row per thread, open first, newest first; "
+            "under it, the thread's files with their first line and size.\n\n")
+    return head + thread_rows(files, text, order) + memory_rows(files, text) + people_rows(files)
+
+
+def check(rev: str, old: str | None) -> int:
+    status = 0
+    was = (lambda path: old is not None and show(old, path) is not None)
+    current = show(rev, "INDEX.md")
+    if current is None:
+        if was("INDEX.md"):
+            print("INDEX.md: deleted; run core/loom/index --write and commit", file=sys.stderr)
+            status = 1
+    elif current != generate(rev):
+        print(f"INDEX.md: differs from core/loom/index at {rev}; run core/loom/index --write and commit",
+              file=sys.stderr)
+        status = 1
+    agents = show(rev, "AGENTS.md")
+    claude = show(rev, "CLAUDE.md")
+    if claude is None:
+        if was("CLAUDE.md"):
+            print("CLAUDE.md: deleted; run core/loom/index --write and commit", file=sys.stderr)
+            status = 1
+    elif agents is None:
+        print("CLAUDE.md: present without AGENTS.md; run core/loom/index --write and commit", file=sys.stderr)
+        status = 1
+    elif claude != agents:
+        print("CLAUDE.md: not a copy of AGENTS.md; run core/loom/index --write and commit", file=sys.stderr)
+        status = 1
+    return status
+
+
+def write(rev: str) -> None:
+    root = Path.cwd()
+    (root / "INDEX.md").write_text(generate(rev), encoding="utf-8")
+    agents = show(rev, "AGENTS.md")
+    claude = root / "CLAUDE.md"
+    if agents is None:
+        claude.unlink(missing_ok=True)
+    else:
+        claude.write_text(agents, encoding="utf-8")
+
+
+def main(argv: list[str]) -> int:
+    rev = "HEAD"
+    old = None
+    mode = "print"
+    args = list(argv)
+    while args:
+        arg = args.pop(0)
+        if arg == "--rev" and args:
+            rev = args.pop(0)
+        elif arg == "--old" and args:
+            old = args.pop(0)
+        elif arg in ("--write", "--check"):
+            mode = arg[2:]
+        else:
+            die("usage: core/loom/index [--rev REV] [--write | --check [--old REV]]")
+    if old is not None and all(char == "0" for char in old):
+        old = None
+    if mode == "check":
+        return check(rev, old)
+    if mode == "write":
+        write(rev)
+        return 0
+    sys.stdout.write(generate(rev))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
