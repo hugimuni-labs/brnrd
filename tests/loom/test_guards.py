@@ -238,3 +238,14 @@ def test_send_self_lands_a_guard_whose_absent_file_is_not_there(tmp_path, monkey
                         'says = "x"\nset-by = "scar:git.md#x"\n[[paths]]\nrepo = "proj"\nabsent = ["probe.config.ts"]\n')
     assert send_to_self(clone).status == "merged"
     assert "core/guards/new.toml" in git(tmp_path / "self", "ls-tree", "-r", "--name-only", "main")
+
+
+def test_a_post_warning_and_the_budget_line_both_reach_a_quiet_boundary(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRNRD_THREAD", "ta")
+    room = _home(tmp_path, {"stash-pop": STASH})
+    over = "budget: thread ta has spent 3.5M of 3M tokens. Write to thread:inbox."
+    (room / "port" / "in" / "boundary.md").write_text(f"<!-- port {STRAND} gen 1 · owed -->\nstatus: x\n{over}\n")
+    payload = json.loads(_call("Bash", command="curl x"))
+    payload["tool_response"] = {"stdout": "error code: 1010", "stderr": ""}
+    said = _context(execute("post", room, json.dumps(payload))).splitlines()
+    assert said == ["guard stash-pop (scar:git.md#stash-pop): Worktrees share one stash list: pop by name.", over]
