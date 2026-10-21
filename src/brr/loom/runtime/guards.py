@@ -2,8 +2,9 @@
 
 A guard is read from the self's main, never from a room's branch, so a
 strand cannot loosen its own guard by editing it. ``match`` warns at the
-tool boundary and never blocks. ``paths`` blocks one stop and refuses the
-outward acts (send-self, publish, settle). A broken file is skipped whole
+tool boundary; one marked ``refuse`` denies the call before it runs.
+``paths`` blocks one stop and refuses the outward acts (send-self, publish,
+settle). A broken file is skipped whole
 and reported, never applied in part.
 """
 
@@ -39,6 +40,7 @@ class Match:
     path: re.Pattern | None = None
     cwd: re.Pattern | None = None
     output: re.Pattern | None = None
+    refuse: bool = False
 
 
 @dataclass(frozen=True)
@@ -116,7 +118,7 @@ def parse(ident: str, text: str) -> Guard:
     matches = []
     for n, entry in enumerate(data.get("match") or ()):
         where = f"match[{n}]"
-        keys = {"at", "tool", "input", "unless", "path", "cwd", "output"}
+        keys = {"at", "tool", "input", "unless", "path", "cwd", "output", "refuse"}
         if not isinstance(entry, dict) or set(entry) - keys:
             raise GuardError(f"{ident}: {where} takes {', '.join(sorted(keys))}")
         at = entry.get("at", "pre")
@@ -124,11 +126,16 @@ def parse(ident: str, text: str) -> Guard:
             raise GuardError(f"{ident}: {where}.at is pre or post")
         item = Match(at, _regex(ident, f"{where}.tool", entry.get("tool", ".*")),
                      *(_regex(ident, f"{where}.{key}", entry.get(key))
-                       for key in ("input", "unless", "path", "cwd", "output")))
+                       for key in ("input", "unless", "path", "cwd", "output")),
+                     refuse=entry.get("refuse", False))
         if item.input is None and item.path is None and item.output is None:
             raise GuardError(f"{ident}: {where} needs input, path or output")
         if item.output is not None and at != "post":
             raise GuardError(f"{ident}: {where}.output needs at = \"post\"")
+        if not isinstance(item.refuse, bool):
+            raise GuardError(f"{ident}: {where}.refuse is true or false")
+        if item.refuse and at != "pre":
+            raise GuardError(f"{ident}: {where}.refuse needs at = \"pre\": a call that ran cannot be refused")
         matches.append(item)
     if not paths and not matches:
         raise GuardError(f"{ident}: a guard needs [[paths]] or [[match]]")
@@ -311,6 +318,39 @@ def violations(guards: list[Guard], room: Path, *, repo: str | None = None,
     return lines
 
 
+def born_broken(clone: Path, room: Path) -> list[str]:
+    """Guards this landing adds or changes that could never pass.
+
+    An ``absent`` judged at a commit reads the whole tree, so a guard naming a
+    file already on its repo's main would refuse every landing until someone
+    lifts it. The self is judged at the landing's tip, another repo at the
+    room clone's ``origin/main``; a repo not in the room is not judged here.
+    """
+    base = _base(clone, "HEAD")
+    if base is None:
+        return []
+    changed = _git(clone, "diff", "--name-only", "--no-renames", "--diff-filter=AM", base, "HEAD",
+                   "--", f"{GUARD_DIR}/").stdout.splitlines()
+    lines = []
+    for path in changed:
+        if not path.endswith(".toml"):
+            continue
+        try:
+            guard = parse(Path(path).stem, _git(clone, "show", f"HEAD:{path}").stdout)
+        except GuardError as exc:
+            lines.append(f"{path}: {exc}")
+            continue
+        for item in guard.paths:
+            if not item.absent:
+                continue
+            tree, rev = (clone, "HEAD") if item.repo == "self" else (_tree(room, item.repo), "origin/main")
+            if not (tree / ".git").exists():
+                continue
+            for hit in _present(tree, item.absent, rev):
+                lines.append(f"{path}: absent names {item.repo}: {hit}, which is already on main")
+    return lines
+
+
 def _call_text(tool: str, tool_input) -> str:
     if not isinstance(tool_input, dict):
         return json.dumps(tool_input)
@@ -334,8 +374,8 @@ def _response_text(response) -> str:
     return json.dumps(response, separators=(",", ":"))
 
 
-def warnings(guards: list[Guard], room: Path, at: str, payload: dict) -> list[str]:
-    """The guards this one call trips, in the guard's own words."""
+def trips(guards: list[Guard], room: Path, at: str, payload: dict) -> list[tuple[str, bool]]:
+    """Each guard this call trips, in its own words, and whether its match refuses the call."""
     tool = str(payload.get("tool_name") or "")
     tool_input = payload.get("tool_input") or {}
     text = _call_text(tool, tool_input)
@@ -345,7 +385,7 @@ def warnings(guards: list[Guard], room: Path, at: str, payload: dict) -> list[st
     response = _response_text(payload.get("tool_response")) if at == "post" else ""
     out = []
     for guard in guards:
-        hit = None
+        hit, refuse = None, False
         for m in guard.matches:
             if m.at != at or not m.tool.fullmatch(tool):
                 continue
@@ -359,12 +399,12 @@ def warnings(guards: list[Guard], room: Path, at: str, payload: dict) -> list[st
                 continue
             if m.unless is not None and m.unless.search(text):
                 continue
-            hit = guard.label
+            hit, refuse = guard.label, m.refuse
             break
         if hit is None and at == "pre" and tool in _FILE_TOOLS and file_path:
             hit = _file_hit(guard, Path(room), Path(file_path))
         if hit:
-            out.append(hit)
+            out.append((hit, refuse))
     return out
 
 

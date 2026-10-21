@@ -37,6 +37,19 @@ tool = "Bash"
 output = '''error code: 1010'''
 """
 
+# The backtick guard (m8479) with refuse on, to test the mechanism. It lands in
+# the self as warn until Arseni picks warn or refuse.
+BACKTICK = r"""
+says = "A backtick inside double quotes runs in your own shell: single-quote the text, or write it to a file and pass the file."
+set-by = "scar:shell.md#a-backtick-inside-a-double-quoted---body-executes-in-your-own-shell"
+
+[[match]]
+tool = "Bash"
+input = '''\A(?:[^'"\\]|\\[\s\S]|'[^']*'|"(?:[^"\\`]|\\[\s\S])*")*"(?:[^"\\`]|\\[\s\S])*`'''
+unless = '''<<-?\s*['"\\]'''
+refuse = true
+"""
+
 
 def git(cwd, *args):
     return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
@@ -124,6 +137,17 @@ def test_the_same_breaks_let_the_second_stop_through(tmp_path, monkeypatch):
     assert "proj: probe.config.ts exists" in third["reason"]
 
 
+def test_a_forged_guard_cache_does_not_silence_the_stop(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRNRD_THREAD", "ta")
+    monkeypatch.setenv("BRNRD_STOP_TIMEOUT", "91")  # unblocked, the hold returns at once
+    room = _home(tmp_path, {"migrations": MIGRATIONS})
+    from brr.loom.runtime.lifecycle import main_tip
+    tip = main_tip(tmp_path / "self")
+    (room / "port" / "guards.json").write_text(json.dumps({"tip": tip, "files": {}}))
+    (room / "proj" / "migrations" / "001.sql").write_text("changed\n")
+    assert "proj: migrations/001.sql changed" in json.loads(execute("stop", room, "{}"))["reason"]
+
+
 def test_a_guard_scoped_to_another_repo_or_thread_stays_quiet(tmp_path, monkeypatch):
     monkeypatch.setenv("BRNRD_THREAD", "ta")
     other = MIGRATIONS.replace('scope = "repo:proj"', 'scope = "thread:tb"\n') \
@@ -191,7 +215,85 @@ def test_globs(glob, yes, no):
     ('says = "x"\nset-by = "letter:1"\n[[match]]\noutput = "x"\n', 'needs at = "post"'),
     ('says = "x"\nset-by = "letter:1"\nscope = "everyone"\n[[match]]\ninput = "x"\n', "scope is"),
     ('says = "x"\nset-by = "letter:1"\nwhen = 1\n[[match]]\ninput = "x"\n', "unknown keys when"),
+    ('says = "x"\nset-by = "letter:1"\n[[match]]\nat = "post"\ninput = "x"\nrefuse = true\n', 'refuse needs at = "pre"'),
+    ('says = "x"\nset-by = "letter:1"\n[[match]]\ninput = "x"\nrefuse = "yes"\n', "refuse is true or false"),
 ])
 def test_parse_names_the_field(text, error):
     with pytest.raises(GuardError, match=error.replace("[", r"\[").replace("]", r"\]")):
         parse("g", text)
+
+
+def _land_guard(tmp_path, monkeypatch, text: str):
+    room = _home(tmp_path, {})
+    git(tmp_path / "self", "config", "receive.denyCurrentBranch", "updateInstead")
+    git(tmp_path, "clone", "-q", str(tmp_path / "self"), str(room / "self"))
+    clone = room / "self"
+    git(clone, "switch", "-qc", f"strand/{STRAND}")
+    (clone / "core/guards").mkdir(parents=True)
+    (clone / "core/guards/new.toml").write_text(text)
+    git(clone, "add", "-A")
+    git(clone, "commit", "-qm", "guard")
+    monkeypatch.setattr("brr.loom.runtime.lifecycle.own_thread", lambda room: "ta")
+    return clone
+
+
+@pytest.mark.parametrize("paths,hit", [
+    ('absent = ["README.md"]', "self: README.md"),
+    ('repo = "proj"\nabsent = ["migrations/*.sql"]', "proj: migrations/001.sql"),
+])
+def test_send_self_refuses_a_guard_whose_absent_file_is_already_on_main(tmp_path, monkeypatch, paths, hit):
+    clone = _land_guard(tmp_path, monkeypatch, f'says = "x"\nset-by = "scar:git.md#x"\n[[paths]]\n{paths}\n')
+    with pytest.raises(SendError, match=f"absent names {hit}, which is already on main"):
+        send_to_self(clone)
+    assert "core/guards/new.toml" not in git(tmp_path / "self", "ls-tree", "-r", "--name-only", "main")
+
+
+def test_send_self_lands_a_guard_whose_absent_file_is_not_there(tmp_path, monkeypatch):
+    clone = _land_guard(tmp_path, monkeypatch,
+                        'says = "x"\nset-by = "scar:git.md#x"\n[[paths]]\nrepo = "proj"\nabsent = ["probe.config.ts"]\n')
+    assert send_to_self(clone).status == "merged"
+    assert "core/guards/new.toml" in git(tmp_path / "self", "ls-tree", "-r", "--name-only", "main")
+
+
+def test_a_post_warning_and_the_budget_line_both_reach_a_quiet_boundary(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRNRD_THREAD", "ta")
+    room = _home(tmp_path, {"stash-pop": STASH})
+    over = "budget: thread ta has spent 3.5M of 3M tokens. Write to thread:inbox."
+    (room / "port" / "in" / "boundary.md").write_text(f"<!-- port {STRAND} gen 1 · owed -->\nstatus: x\n{over}\n")
+    payload = json.loads(_call("Bash", command="curl x"))
+    payload["tool_response"] = {"stdout": "error code: 1010", "stderr": ""}
+    said = _context(execute("post", room, json.dumps(payload))).splitlines()
+    assert said == ["guard stash-pop (scar:git.md#stash-pop): Worktrees share one stash list: pop by name.", over]
+
+
+@pytest.mark.parametrize("command,refused", [
+    ('gh pr create --body "see `x`"', True),
+    ('echo "a" && git commit -m "fix `foo`"', True),
+    ('echo "a \\"b `c`"', True),
+    ("echo 'a \"b `c`\" d'", False),
+    ('echo "a \\` b"', False),
+    ('echo `date` "plain"', False),
+    ("cat <<'EOF'\nsay \"`x`\"\nEOF", False),
+])
+def test_a_refusing_guard_denies_the_call_before_it_runs(tmp_path, monkeypatch, command, refused):
+    monkeypatch.setenv("BRNRD_THREAD", "ta")
+    room = _home(tmp_path, {"backtick": BACKTICK, "stash-pop": STASH})
+    out = execute("pre", room, _call("Bash", command=command))
+    if not refused:
+        assert out == ""
+        return
+    said = json.loads(out)["hookSpecificOutput"]
+    assert said["permissionDecision"] == "deny"
+    assert "A backtick inside double quotes runs in your own shell" in said["permissionDecisionReason"]
+
+
+def test_a_warning_guard_beside_a_refusing_one_is_said_in_the_refusal(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRNRD_THREAD", "ta")
+    room = _home(tmp_path, {"backtick": BACKTICK, "stash-pop": STASH})
+    said = json.loads(execute("pre", room, _call("Bash", command='git stash pop; echo "`x`"')))["hookSpecificOutput"]
+    assert said["permissionDecision"] == "deny"
+    assert "Worktrees share" in said["permissionDecisionReason"]
+    # Without refuse the same match only warns.
+    room = _home(tmp_path / "b", {"backtick": BACKTICK.replace("refuse = true", "")})
+    out = json.loads(execute("pre", room, _call("Bash", command='echo "`x`"')))["hookSpecificOutput"]
+    assert "permissionDecision" not in out and "A backtick" in out["additionalContext"]

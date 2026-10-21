@@ -334,12 +334,12 @@ def _hook_event(stdin_text: str) -> str:
     return "PostToolUseFailure" if failed else "PostToolUse"
 
 
-def _guards(room: Path):
+def _guards(room: Path, cache: bool = True):
     """Guards fail apart from the jack: a broken guard must not cost the
     boundary, nor taint the strand through jack-errors.log."""
     from .guards import for_room
     try:
-        return for_room(room, os.environ.get("BRNRD_THREAD", ""), cache=True)
+        return for_room(room, os.environ.get("BRNRD_THREAD", ""), cache=cache)
     except Exception:
         try:
             with (room / "port" / "guard-errors.log").open("a") as handle:
@@ -349,17 +349,19 @@ def _guards(room: Path):
         return [], [f"all: guards unreadable, see {room / 'port' / 'guard-errors.log'}"]
 
 
-def _guard_warnings(room: Path, at: str, stdin_text: str) -> str:
-    """A call that trips a guard hears the guard's own words. Warn, never block."""
-    from .guards import warnings
+def _guard_warnings(room: Path, at: str, stdin_text: str) -> tuple[str, bool]:
+    """A call that trips a guard hears the guard's own words, and whether a
+    ``refuse`` match among them denies it. Warn unless the guard says refuse."""
+    from .guards import trips
     try:
         payload = json.loads(stdin_text) if stdin_text and stdin_text.strip() else {}
     except json.JSONDecodeError:
-        return ""
+        return "", False
     if not isinstance(payload, dict) or not payload.get("tool_name"):
-        return ""
+        return "", False
     guards, _errors = _guards(room)
-    return "\n".join(warnings(guards, room, at, payload))
+    hits = trips(guards, room, at, payload)
+    return "\n".join(label for label, _ in hits), any(refuse for _, refuse in hits)
 
 
 def _guard_stop(room: Path) -> str:
@@ -367,10 +369,11 @@ def _guard_stop(room: Path) -> str:
 
     The same breaks a second time let the stop through: a body that has read
     the guard and cannot fix it is not trapped in a loop. send-self, publish
-    and settle still refuse.
+    and settle still refuse. Read past the cache: the body can write the
+    room's port, and a forged cache must not silence the stop.
     """
     from .guards import violations
-    guards, _errors = _guards(room)
+    guards, _errors = _guards(room, cache=False)
     lines = violations([g for g in guards if g.paths], room)
     if not lines:
         if _state(room).get("guard_stop"):
@@ -396,10 +399,13 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     if event == "pre":
         # Not a boundary: letters wait for the call's result. A delegate's
         # call is guarded too, since the act is the strand's.
-        said = _guard_warnings(room, "pre", stdin_text)
+        said, refuse = _guard_warnings(room, "pre", stdin_text)
+        if refuse:
+            return _json({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                                 "permissionDecisionReason": "refused by a guard:\n" + said}})
         return _json({"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                              "additionalContext": said}}) if said else ""
-    guarded = _guard_warnings(room, "post", stdin_text) if event == "post" else ""
+    guarded = _guard_warnings(room, "post", stdin_text)[0] if event == "post" else ""
     if event == "post":
         _note_tool(room, stdin_text)
         if _delegate_call(stdin_text):

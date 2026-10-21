@@ -156,8 +156,11 @@ def _guarded(clone: Path) -> None:
     room = clone.parent
     if room.parent.name != "rooms" or clone.name != "self":
         return
-    from .guards import for_room, violations
+    from .guards import born_broken, for_room, violations
     from .lifecycle import own_thread
+    born = born_broken(clone, room)
+    if born:
+        raise SendError("send-self: a guard in this landing could never pass:\n" + "\n".join(born))
     try:
         thread = own_thread(room)
     except Exception:
