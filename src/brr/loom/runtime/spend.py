@@ -49,7 +49,7 @@ class _Reader:
     """One file read forward from where the last tick stopped."""
 
     def __init__(self):
-        self.offset, self.total, self.seen = 0, 0.0, set()
+        self.offset, self.total, self.seen = 0, 0.0, {}
 
 
 _FILES: dict[Path, _Reader] = {}
@@ -82,15 +82,18 @@ def _claude_rows(path: Path) -> float:
             continue
         if row.get("type") != "assistant" or not isinstance(usage, dict):
             continue
-        key = message.get("id") or row.get("requestId")
-        if key in reader.seen:
-            continue
-        if key:
-            reader.seen.add(key)
-        reader.total += sum(WEIGHTS[name] * float(usage.get(field) or 0) for name, field in (
+        weighted = sum(WEIGHTS[name] * float(usage.get(field) or 0) for name, field in (
             ("input", "input_tokens"), ("output", "output_tokens"),
             ("cache_read", "cache_read_input_tokens"),
             ("cache_creation", "cache_creation_input_tokens")))
+        # A message's rows carry identical usage today; keeping its largest
+        # survives a harness that writes growing snapshots instead.
+        key = message.get("id") or row.get("requestId")
+        before = reader.seen.get(key, 0.0) if key else 0.0
+        if weighted > before:
+            reader.total += weighted - before
+            if key:
+                reader.seen[key] = weighted
     return reader.total
 
 
@@ -103,7 +106,9 @@ def claude_spent(room: Path) -> float:
 
     A body runs in ``<room>/self``; Claude names its folder by that path with
     each non-alphanumeric character a dash. Subagents keep their own files
-    under ``<session>/subagents/``: their spend is the strand's too.
+    under ``<session>/subagents/``: their spend is the strand's too. Claude
+    Code shortens a very long path's folder name; rooms are about 130
+    characters today, so a strand that reads 0 has outgrown this mirror.
     """
     folder = claude_projects() / re.sub(r"[^A-Za-z0-9]", "-", str(Path(room).resolve() / "self"))
     if not folder.is_dir():
@@ -208,7 +213,7 @@ def allocation(facts, thread: str, opener: str, writers: dict[str, str], default
     """
     if not opener.startswith("thread:"):
         return None
-    key = (id(facts), thread, len(facts), opener, default)
+    key = (id(facts), len(facts), facts[-1].id if len(facts) else None, thread, opener, default)
     if key not in _ALLOCATED:
         _ALLOCATED.clear()
         _ALLOCATED[key] = _allocation(facts, thread, opener, writers, default)

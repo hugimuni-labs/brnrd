@@ -448,11 +448,13 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     atomic_write(room / "port" / "wake.md", core + occasion)
     from .threads import thread_table
     shown = fold(facts).shown.get(strand, set())
+    opened = thread_table(home, facts)
     atomic_write(
         room / "port" / "in" / "boundary.md",
         render_boundary(strand, gen, thread, letters, shown, threads,
                         fuel=fuel, channels=reply_channels(facts, home),
-                        opened=thread_table(home, facts), plan=_plan(home, thread, facts),
+                        opened=opened, plan=_plan(home, thread, facts),
+                        spend=_opened_spend(home, thread, facts, opened),
                         replies={f.letter.id: f.reply_to for f in active_owners(facts, main_snapshot(home))},
                         attachments=attachments, reply_context=reply_context,
                         **_budget(home, thread, facts)),
@@ -822,6 +824,18 @@ def _budget(home: Home, thread: str, facts) -> dict[str, str]:
                            int(load_config(home.root).thread_budget)) if opener.startswith("thread:") else None
     over = over_line(thread, opener, spent, allocated) if allocated and spent > allocated else ""
     return {"budget": budget_text(spent, allocated), "over": over}
+
+
+def _opened_spend(home: Home, thread: str, facts, opened: list[dict]) -> dict[str, str]:
+    """Each live child's ``spent s/n``, and ``over`` once past its allocation."""
+    spend = {}
+    for row in opened:
+        if row["opened-by"] != f"thread:{thread}" or row["status"] in {"settled", "retired"}:
+            continue
+        child = _budget(home, row["thread"], facts)
+        if child.get("budget"):
+            spend[row["thread"]] = child["budget"] + (" over" if child.get("over") else "")
+    return spend
 
 
 def _release(home, facts, strand, thread, gen):
@@ -1254,11 +1268,13 @@ def _person_dms(home, facts, thread):
 def _boundary(home, facts, strand, gen, context):
     from .threads import thread_table
     main, state = main_snapshot(home), fold(facts)
+    opened = thread_table(home, facts)
     text = render_boundary(
         strand, gen, context.thread, letters_for(facts, main, context.thread),
         state.shown.get(strand, set()), sender_threads(facts), context.fuel,
         context.why or None, reply_channels(facts, home),
-        opened=thread_table(home, facts), plan=_plan(home, context.thread, facts),
+        opened=opened, plan=_plan(home, context.thread, facts),
+        spend=_opened_spend(home, context.thread, facts, opened),
         replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
         attachments=letter_attachments(home.root, facts),
         reply_context=letter_replies(facts),

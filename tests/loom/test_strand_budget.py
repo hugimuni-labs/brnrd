@@ -149,3 +149,39 @@ def test_an_opening_without_budget_takes_the_homes_default_and_a_parentless_thre
     assert spend.parse_tokens("1.5m") == 1_500_000
     with pytest.raises(ValueError):
         spend.parse_tokens("lots")
+
+
+def test_a_snapshot_message_counts_its_largest_usage_once(home, tmp_path):
+    folder = _transcripts(tmp_path / "claude" / "projects", home.room(CHILD))
+    (folder / "s1.jsonl").write_text(_turn("m1", output=100, blocks=1) + _turn("m1", output=300, blocks=1)
+                                     + _turn("m1", output=200, blocks=1))
+    assert spend.claude_spent(home.room(CHILD)) == 1_500
+
+
+def test_the_opener_sees_each_strand_it_opened_with_spend_and_a_report_as_submitted(home, tmp_path):
+    folder = _transcripts(tmp_path / "claude" / "projects", home.room(CHILD))
+    (folder / "s1.jsonl").write_text(_turn("m1", output=100_000))
+    _letter(home, PARENT, "thread:work", "Build it.")
+    context = SimpleNamespace(thread="parent", fuel="", why="")
+    loom._boundary(home, read_facts(home), PARENT, 1, context)
+    boundary = home.room(PARENT) / "port" / "in" / "boundary.md"
+    text = boundary.read_text()
+    row = next(line for line in text.splitlines() if line.startswith("opened: work "))
+    assert row.endswith(" · spent 500k/2M · owed 1"), row
+    assert " · thread parent · strands 1 · " in text.splitlines()[1] + " · "
+    assert execute("start", home.room(PARENT), "{}")
+
+    # Spend that moves is not news; the jack stays quiet.
+    (folder / "s1.jsonl").write_text(_turn("m1", output=100_000) + _turn("m2", output=500_000))
+    loom._boundary(home, read_facts(home), PARENT, 1, context)
+    assert " · spent 3M/2M over · owed" in boundary.read_text()
+    assert execute("post", home.room(PARENT), "{}") == ""
+
+    # The child reports: the parent owes its letter, and the row says so.
+    _letter(home, CHILD, "thread:parent", "Done: PR #1. Read it?")
+    loom._boundary(home, read_facts(home), PARENT, 1, context)
+    text = boundary.read_text()
+    report = next(f.data["id"] for f in read_facts(home) if f.kind == "letter" and f.data["from"] == CHILD)
+    assert f"opened: work submitted {report} · spent 3M/2M over · owed" in text
+    assert " · strands 1 (1 submitted)" in text.splitlines()[1]
+    parse_boundary(text)

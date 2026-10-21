@@ -209,25 +209,22 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     replies: dict[str, str] | None = None,
                     attachments: dict[str, list[str]] | None = None,
                     reply_context: dict[str, str] | None = None,
-                    budget: str = "", over: str = "") -> str:
+                    budget: str = "", over: str = "",
+                    spend: dict[str, str] | None = None) -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
     ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
-    and spend that moves on every call is not news.
+    and spend that moves on every call is not news. For the same reason a
+    child's ``spend`` sits between its state and `` · owed ``: the jack reads
+    an ``opened:`` row as its thread, its state's first word, and its count.
+
+    A child whose letter this thread owes is ``submitted``: it reported and
+    waits on the opener's read, whatever its body is doing.
     """
-    lines = [
-        f"<!-- port {strand} gen {gen} · owed "
-        + " ".join(str(letter.data['id']) for letter in letters) + " -->",
-        f"status: strand {strand} · gen {gen} · thread {thread}"
-        + (f" · {fuel}" if fuel else "") + (f" · {budget}" if budget else "")
-        + (f" · {plan}" if plan else ""),
-        "owed:",
-    ]
-    if over:
-        lines.insert(2, over)
-    if settled is not None:
-        lines.insert(2, f"settled: {settled}")
-    children = []
+    reports: dict[str, str] = {}
+    for letter in letters:
+        reports.setdefault(sender_threads.get(str(letter.data.get("from", ""))), str(letter.data["id"]))
+    children, submitted = [], 0
     for row in opened:
         if row['opened-by'] != f"thread:{thread}" or row['status'] in {"settled", "retired"}:
             continue
@@ -235,8 +232,26 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
         # Child fuel is not a change of state; ages cost at most one write a minute.
         if re.fullmatch(r"\d+[smhd]", detail):
             now += ' ' + (f"{int(detail[:-1]) // 60}m" if detail.endswith('s') else detail)
-        children.append(f"opened: {row['thread']} {now} · owed {row['owed']}")
-    lines[2:2] = children
+        if row['thread'] in reports:
+            now, submitted = f"submitted {reports[row['thread']]}", submitted + 1
+        spent = (spend or {}).get(row['thread'])
+        children.append(f"opened: {row['thread']} {now}" + (f" · {spent}" if spent else "")
+                        + f" · owed {row['owed']}")
+    strands = (f" · strands {len(children)}" + (f" ({submitted} submitted)" if submitted else "")
+               if children else "")
+    lines = [
+        f"<!-- port {strand} gen {gen} · owed "
+        + " ".join(str(letter.data['id']) for letter in letters) + " -->",
+        f"status: strand {strand} · gen {gen} · thread {thread}" + strands
+        + (f" · {fuel}" if fuel else "") + (f" · {budget}" if budget else "")
+        + (f" · {plan}" if plan else ""),
+        *children,
+        "owed:",
+    ]
+    if over:
+        lines.insert(2, over)
+    if settled is not None:
+        lines.insert(2, f"settled: {settled}")
     for letter in letters:
         compact = str(letter.data["id"]) in shown
         reply = replies.get(letter.id, "-") if replies is not None else _reply(letter, sender_threads, thread, channels or {})

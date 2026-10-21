@@ -130,6 +130,8 @@ Open a worker and declare its checkouts together with `send --to thread:<new> --
 
 A thread opened by another thread carries an allocation: `--budget <n>` on the opening letter (`500k`, `2m`), or the home's `thread_budget` (2M). The status line shows `spent <s>/<n>` in weighted tokens (input 1, output 5, cache read 0.1, cache write 1.25), read from the harness's own transcripts. Past it, every boundary says so: write to the opener what is done, what is left and how much more you ask. It warns; it never stops a body. The opener raises it with `send --to thread:<child> --budget <n> "…"`, which adds n; read what was spent against what came back before granting.
 
+An opener sees its own strands at every boundary and at the wake: `strands <n>` on the status line, and one row each, `opened: <thread> <state> · spent <s>/<n> · owed <k>`. The state is `working`, `holding`, `idle <age>` or a parked cause; a child whose report this thread owes reads `submitted <letter id>` (with `(<m> submitted)` on the status line) until the opener answers it, and its spend reads `over` past its allocation.
+
 `molt --fresh --why "<reason>"` starts a successor from main without inheriting the room or its label. The old room and unlanded work remain for review. The reason stays in the molt fact; the successor receives a fixed fresh-start message. Plain `molt` carries the room and label forward.
 
 A Plan citation records an ask, not an answer. Boundaries also list `unanswered`
