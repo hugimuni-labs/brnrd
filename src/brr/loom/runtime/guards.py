@@ -311,6 +311,39 @@ def violations(guards: list[Guard], room: Path, *, repo: str | None = None,
     return lines
 
 
+def born_broken(clone: Path, room: Path) -> list[str]:
+    """Guards this landing adds or changes that could never pass.
+
+    An ``absent`` judged at a commit reads the whole tree, so a guard naming a
+    file already on its repo's main would refuse every landing until someone
+    lifts it. The self is judged at the landing's tip, another repo at the
+    room clone's ``origin/main``; a repo not in the room is not judged here.
+    """
+    base = _base(clone, "HEAD")
+    if base is None:
+        return []
+    changed = _git(clone, "diff", "--name-only", "--no-renames", "--diff-filter=AM", base, "HEAD",
+                   "--", f"{GUARD_DIR}/").stdout.splitlines()
+    lines = []
+    for path in changed:
+        if not path.endswith(".toml"):
+            continue
+        try:
+            guard = parse(Path(path).stem, _git(clone, "show", f"HEAD:{path}").stdout)
+        except GuardError as exc:
+            lines.append(f"{path}: {exc}")
+            continue
+        for item in guard.paths:
+            if not item.absent:
+                continue
+            tree, rev = (clone, "HEAD") if item.repo == "self" else (_tree(room, item.repo), "origin/main")
+            if not (tree / ".git").exists():
+                continue
+            for hit in _present(tree, item.absent, rev):
+                lines.append(f"{path}: absent names {item.repo}: {hit}, which is already on main")
+    return lines
+
+
 def _call_text(tool: str, tool_input) -> str:
     if not isinstance(tool_input, dict):
         return json.dumps(tool_input)

@@ -206,3 +206,35 @@ def test_globs(glob, yes, no):
 def test_parse_names_the_field(text, error):
     with pytest.raises(GuardError, match=error.replace("[", r"\[").replace("]", r"\]")):
         parse("g", text)
+
+
+def _land_guard(tmp_path, monkeypatch, text: str):
+    room = _home(tmp_path, {})
+    git(tmp_path / "self", "config", "receive.denyCurrentBranch", "updateInstead")
+    git(tmp_path, "clone", "-q", str(tmp_path / "self"), str(room / "self"))
+    clone = room / "self"
+    git(clone, "switch", "-qc", f"strand/{STRAND}")
+    (clone / "core/guards").mkdir(parents=True)
+    (clone / "core/guards/new.toml").write_text(text)
+    git(clone, "add", "-A")
+    git(clone, "commit", "-qm", "guard")
+    monkeypatch.setattr("brr.loom.runtime.lifecycle.own_thread", lambda room: "ta")
+    return clone
+
+
+@pytest.mark.parametrize("paths,hit", [
+    ('absent = ["README.md"]', "self: README.md"),
+    ('repo = "proj"\nabsent = ["migrations/*.sql"]', "proj: migrations/001.sql"),
+])
+def test_send_self_refuses_a_guard_whose_absent_file_is_already_on_main(tmp_path, monkeypatch, paths, hit):
+    clone = _land_guard(tmp_path, monkeypatch, f'says = "x"\nset-by = "scar:git.md#x"\n[[paths]]\n{paths}\n')
+    with pytest.raises(SendError, match=f"absent names {hit}, which is already on main"):
+        send_to_self(clone)
+    assert "core/guards/new.toml" not in git(tmp_path / "self", "ls-tree", "-r", "--name-only", "main")
+
+
+def test_send_self_lands_a_guard_whose_absent_file_is_not_there(tmp_path, monkeypatch):
+    clone = _land_guard(tmp_path, monkeypatch,
+                        'says = "x"\nset-by = "scar:git.md#x"\n[[paths]]\nrepo = "proj"\nabsent = ["probe.config.ts"]\n')
+    assert send_to_self(clone).status == "merged"
+    assert "core/guards/new.toml" in git(tmp_path / "self", "ls-tree", "-r", "--name-only", "main")
