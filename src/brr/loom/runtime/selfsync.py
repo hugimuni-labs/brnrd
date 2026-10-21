@@ -140,18 +140,28 @@ def land_at_stop(room: Path) -> str:
         return line
 
 
-def _main_moved(clone: Path) -> bool:
-    """Whether the self's ``main`` is ahead of what this clone last fetched.
+def _ref(repo: Path, git_dir: Path, name: str) -> str:
+    """A ref's sha: the loose file when there is one, else ``rev-parse`` (packed refs)."""
+    try:
+        text = (git_dir / name).read_text().strip()
+    except OSError:
+        text = ""
+    if len(text) == 40 and all(ch in "0123456789abcdef" for ch in text):
+        return text
+    return git(repo, "rev-parse", "--verify", "--quiet", name, check=False).stdout.strip()
 
-    Read from the self's own ref, one ``rev-parse``. A remote that is not a
-    local directory is not polled at every tool call.
+
+def _main_moved(room: Path, clone: Path) -> bool:
+    """Whether home self's ``main`` is ahead of what this clone last fetched.
+
+    This runs at every tool call, so it spawns no git when both refs are
+    loose files: the room's origin is home self by construction
+    (``selfrepo.room``).
     """
-    url = git(clone, "remote", "get-url", "origin", check=False).stdout.strip()
-    source = Path(url[7:] if url.startswith("file://") else url)
-    if not url or not source.is_absolute() or not source.is_dir():
-        return False
-    theirs = git(source, "rev-parse", "--verify", "--quiet", "refs/heads/main", check=False).stdout.strip()
-    ours = git(clone, "rev-parse", "--verify", "--quiet", "origin/main", check=False).stdout.strip()
+    from .home import home_of_room
+    source = home_of_room(room).root / "self"
+    theirs = _ref(source, source / ".git", "refs/heads/main")
+    ours = _ref(clone, clone / ".git", "refs/remotes/origin/main")
     return bool(theirs) and theirs != ours
 
 
@@ -165,7 +175,7 @@ def pull_at_boundary(room: Path) -> str:
     room = Path(room)
     try:
         clone = _clone(room)
-        if clone is None or not _enabled(room) or not _main_moved(clone):
+        if clone is None or not _main_moved(room, clone) or not _enabled(room):
             return ""
         # Mid-edit, mid-resolution, or a delegate at work: leave the tree alone.
         if (_rebasing(clone) or _delegates_live(room)
