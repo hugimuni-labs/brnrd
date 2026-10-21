@@ -171,8 +171,17 @@ def test_a_retried_ask_finishes_the_one_that_half_happened(ledger):
     [sent] = mail(mid, ask)
     for path in out.iterdir():
         path.unlink()
-    inject_letter(home.root, to="thread:work", body=sent.split("---\n", 2)[2])
+    body = sent.split("---\n", 2)[2]
+    # A letter that only quotes the ask, or goes elsewhere, is not its mail.
+    inject_letter(home.root, to="thread:work", body="fwd: " + body)
+    inject_letter(home.root, to="thread:mid", body=body)
     command(home, mid, "ask", "Which half first?", "--for", wish, "--rec", "the parser")
+    [again] = mail(mid, ask)
+    for path in out.iterdir():
+        path.unlink()
+    inject_letter(home.root, to="thread:work", body=body)
+    retry = cli(["ask", "--room", str(mid), "Which half first?", "--for", wish, "--rec", "the parser"])
+    assert retry.returncode == 0 and f"reused {ask}" in retry.stderr
     assert mail(mid, ask) == []
     asks = [w for w in wishes(read_facts(home)).values() if w.sender == "resident"]
     assert [w.id for w in asks] == [ask] and len(asks[0].reads) == 1

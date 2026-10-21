@@ -133,13 +133,21 @@ def cmd_wish(args):
         return 1
 
 
-def _mailed(facts, room, marker):
-    """A letter that starts with ``marker`` left this room: still in its port, or in the ledger."""
+def _mailed(facts, room, to, marker):
+    """A letter to ``to`` whose body starts with ``marker`` left this room:
+    still in its port, or in the ledger. One pass over the facts the ask
+    already read; a letter that only quotes the marker further in is not it."""
+    from .port import PortError, parse_frontmatter
     out = Path(room) / "port" / "out"
-    if out.is_dir() and any(marker in path.read_text() for path in out.glob("*.md")):
-        return True
-    return any(f.kind == "letter" and str((f.data or {}).get("body", "")).startswith(marker)
-               for f in facts)
+    for path in sorted(out.glob("*.md")) if out.is_dir() else ():
+        try:
+            sent = parse_frontmatter(path.read_text())
+        except PortError:
+            continue
+        if sent.get("to") == to and sent["body"].startswith(marker):
+            return True
+    return any(f.kind == "letter" and (f.data or {}).get("to") == to
+               and str((f.data or {}).get("body", "")).startswith(marker) for f in facts)
 
 
 def cmd_ask(args):
@@ -162,6 +170,7 @@ def cmd_ask(args):
             ident = fact.data["wish"]
         else:
             ident = same.id
+            print(f"ask: reused {ident}, the open ask with this line for {args.wish}", file=sys.stderr)
         if args.rec is not None and (same is None or same.reading != args.rec):
             append(home, Fact(kind="wish.read", by=by, id="wish.read:" + mint(12),
                               data={"wish": ident, "reading": args.rec, "by": "resident"}))
@@ -173,7 +182,7 @@ def cmd_ask(args):
         head = waits_on(wishes(facts), main_snapshot(home)).get(ident, "")
         room = _room(args.room)
         marker = f"ask {ident} from thread:{thread}: "
-        if head.startswith("thread:") and not _mailed(facts, room, marker):
+        if head.startswith("thread:") and not _mailed(facts, room, head, marker):
             body = marker + args.what + "\n"
             if args.rec is not None:
                 body += f"rec: {args.rec}\n"
