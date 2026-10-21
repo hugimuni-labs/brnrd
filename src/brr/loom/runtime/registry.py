@@ -15,9 +15,11 @@ One row per kind, read top-down:
 
 A resource in ``CLOSED`` is declared in full: ``admit`` refuses, at the
 ledger's one write path, a kind under its name that has no row here, a writer
-the row does not name, and fields the row does not list. Rows of any other
-resource are here because the body's table reads them; their writers are not
-checked and kinds beside them stay undeclared.
+the row does not name, and fields the row does not list. The body's table
+folds ``body`` rows by strand and generation; the other closed resources
+(wishes, pull request receipts, loom starts) are declared for that check
+alone. Rows of any other resource are here because the body's table reads
+them; their writers are not checked and kinds beside them stay undeclared.
 """
 
 from __future__ import annotations
@@ -51,7 +53,7 @@ def _kind(kind: str, resource: str, fields: str, writer: str, scope: str, once: 
     return Kind(kind, resource, tuple(fields.split()), tuple(writer.split()), scope, once)
 
 
-CLOSED = ("body", "wish", "pr")
+CLOSED = ("body", "wish", "pr", "loom")
 ROLES = ("loom", "strand", "person")
 SCOPES = ("global", "machine")
 

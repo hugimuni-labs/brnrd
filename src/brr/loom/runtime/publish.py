@@ -556,7 +556,8 @@ def cmd_publish(args) -> int:
         if args.pr is not None or args.merged is not None:
             if args.worker or args.commit or (args.pr is not None and args.merged is not None):
                 raise PublishError("publish: --pr and --merged each go alone, for this thread")
-            got = claim_pr(_room(args.room), args.name, args.merged or args.pr,
+            got = claim_pr(_room(args.room), args.name,
+                           args.pr if args.merged is None else args.merged,
                            merged=args.merged is not None)
             if got.note:
                 sys.stderr.write(got.note + "\n")

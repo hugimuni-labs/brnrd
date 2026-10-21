@@ -116,6 +116,8 @@ def test_a_pull_request_whose_head_this_thread_never_pushed_is_refused(tmp_path:
         assert proc.returncode == 1 and "never pushed" in proc.stderr
         proc = _verb(room, "widget", "--pr", "8")
         assert proc.returncode == 1 and "no pull request 8" in proc.stderr
+        proc = _verb(room, "widget", "--merged", "0")
+        assert proc.returncode == 1 and "0 is not a pull request number" in proc.stderr
         assert _kinds(root, "pr.opened") == []
     finally:
         _kill(read_facts(Home(root)))
