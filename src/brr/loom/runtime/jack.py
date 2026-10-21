@@ -349,17 +349,19 @@ def _guards(room: Path, cache: bool = True):
         return [], [f"all: guards unreadable, see {room / 'port' / 'guard-errors.log'}"]
 
 
-def _guard_warnings(room: Path, at: str, stdin_text: str) -> str:
-    """A call that trips a guard hears the guard's own words. Warn, never block."""
-    from .guards import warnings
+def _guard_warnings(room: Path, at: str, stdin_text: str) -> tuple[str, bool]:
+    """A call that trips a guard hears the guard's own words, and whether a
+    ``refuse`` match among them denies it. Warn unless the guard says refuse."""
+    from .guards import trips
     try:
         payload = json.loads(stdin_text) if stdin_text and stdin_text.strip() else {}
     except json.JSONDecodeError:
-        return ""
+        return "", False
     if not isinstance(payload, dict) or not payload.get("tool_name"):
-        return ""
+        return "", False
     guards, _errors = _guards(room)
-    return "\n".join(warnings(guards, room, at, payload))
+    hits = trips(guards, room, at, payload)
+    return "\n".join(label for label, _ in hits), any(refuse for _, refuse in hits)
 
 
 def _guard_stop(room: Path) -> str:
@@ -397,10 +399,13 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     if event == "pre":
         # Not a boundary: letters wait for the call's result. A delegate's
         # call is guarded too, since the act is the strand's.
-        said = _guard_warnings(room, "pre", stdin_text)
+        said, refuse = _guard_warnings(room, "pre", stdin_text)
+        if refuse:
+            return _json({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                                 "permissionDecisionReason": "refused by a guard:\n" + said}})
         return _json({"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                              "additionalContext": said}}) if said else ""
-    guarded = _guard_warnings(room, "post", stdin_text) if event == "post" else ""
+    guarded = _guard_warnings(room, "post", stdin_text)[0] if event == "post" else ""
     if event == "post":
         _note_tool(room, stdin_text)
         if _delegate_call(stdin_text):

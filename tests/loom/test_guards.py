@@ -37,6 +37,18 @@ tool = "Bash"
 output = '''error code: 1010'''
 """
 
+# The first refusing guard (m8479), as it lands in the self's core/guards/.
+BACKTICK = r"""
+says = "A backtick inside double quotes runs in your own shell: single-quote the text, or write it to a file and pass the file."
+set-by = "scar:shell.md#a-backtick-inside-a-double-quoted---body-executes-in-your-own-shell"
+
+[[match]]
+tool = "Bash"
+input = '''\A(?:[^'"\\]|\\[\s\S]|'[^']*'|"(?:[^"\\`]|\\[\s\S])*")*"(?:[^"\\`]|\\[\s\S])*`'''
+unless = '''<<-?\s*['"\\]'''
+refuse = true
+"""
+
 
 def git(cwd, *args):
     return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
@@ -202,6 +214,8 @@ def test_globs(glob, yes, no):
     ('says = "x"\nset-by = "letter:1"\n[[match]]\noutput = "x"\n', 'needs at = "post"'),
     ('says = "x"\nset-by = "letter:1"\nscope = "everyone"\n[[match]]\ninput = "x"\n', "scope is"),
     ('says = "x"\nset-by = "letter:1"\nwhen = 1\n[[match]]\ninput = "x"\n', "unknown keys when"),
+    ('says = "x"\nset-by = "letter:1"\n[[match]]\nat = "post"\ninput = "x"\nrefuse = true\n', 'refuse needs at = "pre"'),
+    ('says = "x"\nset-by = "letter:1"\n[[match]]\ninput = "x"\nrefuse = "yes"\n', "refuse is true or false"),
 ])
 def test_parse_names_the_field(text, error):
     with pytest.raises(GuardError, match=error.replace("[", r"\[").replace("]", r"\]")):
@@ -249,3 +263,36 @@ def test_a_post_warning_and_the_budget_line_both_reach_a_quiet_boundary(tmp_path
     payload["tool_response"] = {"stdout": "error code: 1010", "stderr": ""}
     said = _context(execute("post", room, json.dumps(payload))).splitlines()
     assert said == ["guard stash-pop (scar:git.md#stash-pop): Worktrees share one stash list: pop by name.", over]
+
+
+@pytest.mark.parametrize("command,refused", [
+    ('gh pr create --body "see `x`"', True),
+    ('echo "a" && git commit -m "fix `foo`"', True),
+    ('echo "a \\"b `c`"', True),
+    ("echo 'a \"b `c`\" d'", False),
+    ('echo "a \\` b"', False),
+    ('echo `date` "plain"', False),
+    ("cat <<'EOF'\nsay \"`x`\"\nEOF", False),
+])
+def test_a_refusing_guard_denies_the_call_before_it_runs(tmp_path, monkeypatch, command, refused):
+    monkeypatch.setenv("BRNRD_THREAD", "ta")
+    room = _home(tmp_path, {"backtick": BACKTICK, "stash-pop": STASH})
+    out = execute("pre", room, _call("Bash", command=command))
+    if not refused:
+        assert out == ""
+        return
+    said = json.loads(out)["hookSpecificOutput"]
+    assert said["permissionDecision"] == "deny"
+    assert "A backtick inside double quotes runs in your own shell" in said["permissionDecisionReason"]
+
+
+def test_a_warning_guard_beside_a_refusing_one_is_said_in_the_refusal(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRNRD_THREAD", "ta")
+    room = _home(tmp_path, {"backtick": BACKTICK, "stash-pop": STASH})
+    said = json.loads(execute("pre", room, _call("Bash", command='git stash pop; echo "`x`"')))["hookSpecificOutput"]
+    assert said["permissionDecision"] == "deny"
+    assert "Worktrees share" in said["permissionDecisionReason"]
+    # Without refuse the same match only warns.
+    room = _home(tmp_path / "b", {"backtick": BACKTICK.replace("refuse = true", "")})
+    out = json.loads(execute("pre", room, _call("Bash", command='echo "`x`"')))["hookSpecificOutput"]
+    assert "permissionDecision" not in out and "A backtick" in out["additionalContext"]

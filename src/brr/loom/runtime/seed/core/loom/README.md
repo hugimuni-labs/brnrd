@@ -96,8 +96,9 @@ main, read from main and never from your branch. `says` is the rule in its
 own words, `set-by` is `letter:<id>` (a person asked) or
 `scar:<file>#<title>`, and `scope` is `self`, `thread:<id>` or
 `repo:<name>`. A `[[match]]` (`at` pre or post, `tool`, `input`, `unless`,
-`path`, `cwd`, `output`, all regexes) warns on the call that trips it and
-never blocks. A `[[paths]]` (`repo`, `untouched` and `absent` globs) warns
+`path`, `cwd`, `output`, all regexes) warns on the call that trips it; a
+pre match with `refuse = true` denies the call instead, so keep that for a
+regex whose false positives cost less than its misses. A `[[paths]]` (`repo`, `untouched` and `absent` globs) warns
 on an Edit or Write into its paths and blocks your stop once. send-self,
 publish and settle refuse while it is broken; settle judges every room
 serving the settled thread, not only yours. send-self refuses a landing
