@@ -37,7 +37,8 @@ tool = "Bash"
 output = '''error code: 1010'''
 """
 
-# The first refusing guard (m8479), as it lands in the self's core/guards/.
+# The backtick guard (m8479) with refuse on, to test the mechanism. It lands in
+# the self as warn until Arseni picks warn or refuse.
 BACKTICK = r"""
 says = "A backtick inside double quotes runs in your own shell: single-quote the text, or write it to a file and pass the file."
 set-by = "scar:shell.md#a-backtick-inside-a-double-quoted---body-executes-in-your-own-shell"
