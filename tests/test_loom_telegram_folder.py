@@ -152,8 +152,16 @@ def test_edit_and_wrong_chat_reply_validation(bot, tmp_path):
     assert run_out(bot, tmp_path, edit='42:101').returncode == 0
     assert bot.sent == [('editMessageText', dict(chat_id='42', text='hello', message_id=101))]
     assert run_out(bot, tmp_path, re='43:7').returncode == 3
+    assert run_out(bot, tmp_path, re='43:board-x').returncode == 3
+    assert run_out(bot, tmp_path, edit='42:board-x').returncode == 3
     assert run_out(bot, tmp_path, 'x' * 5000, edit='42:101').returncode == 3
     assert len(bot.sent) == 1
+
+
+def test_reply_to_a_letter_telegram_never_sent_goes_out_unquoted(bot, tmp_path):
+    result = run_out(bot, tmp_path, re='42:board-teky2up5r4')
+    assert result.returncode == 0, result.stderr
+    assert bot.sent == [('sendMessage', dict(chat_id='42', text='hello'))]
 
 
 def test_command_secret_resolved_at_each_use(bot, tmp_path):

@@ -58,8 +58,13 @@ def message_id(chat, ident):
     return f'{chat}:{ident}'
 
 
-def reply_id(value, chat):
+def reply_id(value, chat, quotable=False):
+    """A message id in this chat; with quotable, one Telegram never sent is None.
+
+    A letter dropped into the chat's folder by hand (the board's `board-…`)
+    carries an id of this chat that no Telegram message has: its reply goes
+    out unquoted rather than refused."""
     prefix, colon, ident = value.rpartition(':')
-    if not colon or prefix != str(chat) or not ident.isdecimal():
+    if not colon or prefix != str(chat) or not (ident.isdecimal() or quotable and ident):
         raise Refused('Telegram message id belongs to another chat or is invalid')
-    return int(ident)
+    return int(ident) if ident.isdecimal() else None
