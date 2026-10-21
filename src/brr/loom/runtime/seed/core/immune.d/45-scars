@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""Refuse a changed scar under memory/scars/<domain>/ without a trigger: line and a date in its head.
+
+The stated rule (AGENTS.md): a scar is one file at ``memory/scars/<domain>/
+<slug>.md`` whose head carries a ``trigger:`` line and a YYYY-MM-DD date. The
+head is the frontmatter plus the first 10 non-blank lines after it, title
+included; a ``trigger:`` frontmatter key counts, and ``trigger:`` is read
+without regard to case. ``core/loom/index`` reads the same head for the
+folder's generated ``index.md``, which is not judged here, and neither is a
+file directly under ``memory/scars/`` (the layout before scars were split).
+Content is not judged: the check asks only whether a reader can find the
+act that summons the scar and when it happened. Changed ``.md`` files
+between the tips are judged; an all-zero old tip judges every scar at the
+new tip. ``--file PATH`` judges one working file, tracked or not. Git's
+hook environment, including GIT_DIR, is kept.
+"""
+
+import re
+import subprocess
+import sys
+
+HEAD = 10
+SCARS = "memory/scars/"
+DATE = re.compile(r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)")
+TRIGGER = re.compile(r"^\s*trigger:", re.IGNORECASE)
+
+
+def git(*args):
+    return subprocess.run(["git", *args], capture_output=True)
+
+
+def zeros(value):
+    return bool(value) and all(char == "0" for char in value)
+
+
+def is_scar(path):
+    parts = path.split("/")
+    return path.startswith(SCARS) and len(parts) >= 4 and path.endswith(".md") and parts[-1] != "index.md"
+
+
+def head(text):
+    """Frontmatter lines and the first HEAD non-blank lines after them."""
+    lines = text.replace("\r", "").split("\n")
+    front = []
+    body = lines
+    if lines and lines[0] == "---" and "---" in lines[1:]:
+        end = lines.index("---", 1)
+        front = lines[1:end]
+        body = lines[end + 1:]
+    return front, [line for line in body if line.strip()][:HEAD]
+
+
+def judge(text):
+    """Refusals for one scar's text."""
+    front, body = head(text)
+    refusals = []
+    if not any(TRIGGER.match(line) for line in [*front, *body]):
+        refusals.append(f"no trigger: line in its first {HEAD} lines")
+    if not any(DATE.search(line) for line in [*front, *body]):
+        refusals.append(f"no YYYY-MM-DD date in its first {HEAD} lines")
+    return refusals
+
+
+def changed(old, new):
+    if zeros(old):
+        listing = git("ls-tree", "-r", "-z", "--name-only", new)
+    else:
+        listing = git("diff", "-z", "--name-only", "--diff-filter=ACMR", old, new)
+    if listing.returncode:
+        sys.stderr.buffer.write(listing.stderr)
+        return None
+    return [path for path in (raw.decode("utf-8", "surrogateescape") for raw in listing.stdout.split(b"\0"))
+            if is_scar(path)]
+
+
+def report(display, refusals):
+    for reason in refusals:
+        print(f"{display}: {reason}", file=sys.stderr)
+    return 1 if refusals else 0
+
+
+def main(args):
+    if len(args) != 2 or not args[0] or not args[1]:
+        print("usage: 45-scars <old> <new> | 45-scars --file PATH", file=sys.stderr)
+        return 2
+    if args[0] == "--file":
+        try:
+            with open(args[1], "rb") as handle:
+                text = handle.read().decode("utf-8", "surrogateescape")
+        except OSError as exc:
+            print(f"{args[1]}: {exc}", file=sys.stderr)
+            return 1
+        return report(args[1], judge(text))
+    old, new = args
+    paths = changed(old, new)
+    if paths is None:
+        return 1
+    status = 0
+    for path in paths:
+        blob = git("show", f"{new}:{path}")
+        if blob.returncode:
+            print(f"{path}: unreadable at {new}", file=sys.stderr)
+            status = 1
+            continue
+        status |= report(path, judge(blob.stdout.decode("utf-8", "surrogateescape")))
+    return status
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

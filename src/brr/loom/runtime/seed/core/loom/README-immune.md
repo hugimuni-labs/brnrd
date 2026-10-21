@@ -40,7 +40,7 @@ the Python transition, using the upgraded installation's interpreter:
 python3 -c 'import sys; from brr.loom.runtime.merge import install_pre_receive; print(install_pre_receive(sys.argv[1]))' /absolute/path/to/home/self
 ```
 
-In a room cloned from that self, copy `core/immune`, all six seed checks
+In a room cloned from that self, copy `core/immune`, all seven seed checks
 and this page from the upgraded seed, keep the scripts executable, commit
 and push with an enrolled committer or a clean label. The incumbent shell
 gate runs its shell checks and the incoming Python checks. The next push
@@ -55,8 +55,8 @@ byte-sorted name order, even after a failure. Incumbent failures carry an
 the incumbent checks as well as the incoming checks. The first push runs
 only the incoming set. An absent check directory adds no checks.
 
-Keep `10-readme`, `20-labels`, `30-index`, `40-guards`, `40-links` and
-`50-core-notice` executable. Copying the
+Keep `10-readme`, `20-labels`, `30-index`, `40-guards`, `40-links`,
+`45-scars` and `50-core-notice` executable. Copying the
 seed without their executable bits silently drops the checks. A failed
 check's stderr is prefixed with its name; a silent failure is still
 named. The gate and seed checks use Python 3 and only its standard library
@@ -77,7 +77,10 @@ as `--rev <new> --check --old <old>`: it refuses when `INDEX.md` is not what
 the recipe derives from that tree, when `CLAUDE.md` is not a copy of
 `AGENTS.md`, or when either was deleted. A file absent at both tips passes,
 so a self from before the index lands its first one through `send-self`.
-A tip without the recipe adds no check.
+The same run judges each `memory/scars/<domain>/index.md`: refused when it
+differs from what the folder's scars derive, when it is missing (a folder
+that had scars and no index at the old tip passes until one lands), or when it has no
+scar beside it. A tip without the recipe adds no check.
 
 `40-guards` judges the push's net change to `core/guards/`. A guard whose
 `set-by` is `letter:<id>` is lifted when it is deleted, stops parsing,
@@ -89,11 +92,19 @@ the citation exists, not what the letter says.
 `40-links` reads every changed `.md` file at the incoming tip (every `.md`
 on the first push) and refuses a relative markdown link whose target is not
 a file or folder in that tree, a link into `people/` from outside `people/`,
-or a wiki link. A link to `INDEX.md` or `CLAUDE.md` passes even before
-they exist: `send-self` derives both at every landing. Inline links and
+or a wiki link. A link to `INDEX.md`, `CLAUDE.md` or the `index.md` of a
+scar folder that holds a scar passes even before they exist: `send-self`
+derives them at every landing. Inline links and
 images are read; fenced blocks and inline code are not. Targets with a scheme and bare fragments pass. `40-links
 --file PATH` judges one working file. A dead link that landed before the
 check refuses only when its file is next changed.
+`45-scars` reads every changed `.md` under `memory/scars/<domain>/` (every
+one on the first push) and refuses a scar without a `trigger:` line or
+without a YYYY-MM-DD date in its head: the frontmatter plus the first 10
+non-blank lines after it, title included. A `trigger:` frontmatter key
+counts. The folder's `index.md` and a file directly under `memory/scars/`
+are not judged, and content is never judged. `45-scars --file PATH` judges
+one working file.
 `50-core-notice` never refuses: changes under `core/` print
 `core changed: <paths>` for the person's notice.
 

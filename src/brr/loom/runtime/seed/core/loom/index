@@ -5,12 +5,21 @@
 
 Reads one committed tree (HEAD by default) through git, so a room, a bare
 hook with GIT_DIR, and a person's checkout all see the same thing, and
-prints INDEX.md to stdout. --write writes INDEX.md, and CLAUDE.md as a copy
-of AGENTS.md when AGENTS.md is in the tree (CLAUDE.md is removed when it is
-not). --check compares INDEX.md and CLAUDE.md at REV with the regeneration
-and exits 1 naming each that differs; a file absent at both --old and REV
-passes, so a self from before the index lands its first one through
-send-self. Exit 2 is a broken recipe.
+prints INDEX.md to stdout. --write writes INDEX.md, CLAUDE.md as a copy of
+AGENTS.md when AGENTS.md is in the tree (CLAUDE.md is removed when it is
+not), and one memory/scars/<domain>/index.md per folder that holds scars
+(removed when the folder holds none). --check compares each of them at REV
+with the regeneration and exits 1 naming each that differs; INDEX.md or
+CLAUDE.md absent at both --old and REV passes, and so does a scar folder
+that had scars and no index at --old, so a self from before the index lands
+its first one through send-self. Exit 2 is a broken recipe.
+
+A scar is one file at memory/scars/<domain>/<slug>.md. Its folder index
+reads title, trigger words and date from the scar's head: the frontmatter
+plus the first SCAR_HEAD non-blank lines after it, title included. The
+`trigger:` line (or frontmatter key) and the YYYY-MM-DD date are what
+core/immune.d/45-scars refuses a changed scar without; the same head is
+read here, so the two agree on where a scar's trigger and date must sit.
 
 Generation only derives from what a writer already wrote: titles, first
 lines, sizes, frontmatter, wish lines, link targets. It never summarises,
@@ -21,6 +30,7 @@ tree gives the same index after a rebase or a relabel.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -28,6 +38,10 @@ from pathlib import Path
 ROOTS = ("threads", "memory", "people")
 OPEN = ("open", "live", "dormant")
 HEADLINE = 200
+SCAR_HEAD = 10
+SCARS = "memory/scars/"
+DATE = re.compile(r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)")
+TRIGGER = re.compile(r"^\s*trigger:\s*(.*)$", re.IGNORECASE)
 
 
 def die(why: str, code: int = 2) -> None:
@@ -103,8 +117,8 @@ def ranks(rev: str) -> dict[str, int]:
     return found
 
 
-def frontmatter(text: str) -> tuple[dict[str, str], str]:
-    """Keys as written (lists kept literal) and the first non-empty line after."""
+def split(text: str) -> tuple[dict[str, str], list[str]]:
+    """Frontmatter keys as written (lists kept literal) and the lines after it."""
     lines = text.splitlines()
     data: dict[str, str] = {}
     body = lines
@@ -118,8 +132,61 @@ def frontmatter(text: str) -> tuple[dict[str, str], str]:
                     value = value[1:-1]
                 data[key.strip()] = value
         body = lines[end + 1:]
+    return data, body
+
+
+def frontmatter(text: str) -> tuple[dict[str, str], str]:
+    """Keys as written and the first non-empty line after the frontmatter."""
+    data, body = split(text)
     first = next((line for line in body if line.strip()), "")
     return data, first
+
+
+def scar_head(text: str) -> tuple[str, str, str]:
+    """(title, trigger words, date) of a scar, read from its frontmatter and first SCAR_HEAD non-blank lines."""
+    data, body = split(text)
+    head = [line for line in body if line.strip()][:SCAR_HEAD]
+    trigger = data.get("trigger", "")
+    if not trigger:
+        for line in head[1:]:
+            found = TRIGGER.match(line)
+            if found:
+                trigger = found.group(1).strip()
+                break
+    date = next((found.group(0) for found in map(DATE.search, [*data.values(), *head]) if found), "")
+    return title(head[0] if head else ""), " ".join(trigger.split()), date
+
+
+def scar_folders(files: dict[str, tuple[str, int]]) -> dict[str, list[str]]:
+    """memory/scars/<domain> -> its scar paths (every .md under it but index.md)."""
+    folders: dict[str, list[str]] = {}
+    for path in files:
+        parts = path.split("/")
+        if path.startswith(SCARS) and len(parts) >= 4 and path.endswith(".md") and parts[-1] != "index.md":
+            folders.setdefault("/".join(parts[:3]), []).append(path)
+    return folders
+
+
+def scar_indexes(files: dict[str, tuple[str, int]], text: dict[str, str]) -> dict[str, str]:
+    """memory/scars/<domain>/index.md -> its generated text, for every folder that holds scars."""
+    out: dict[str, str] = {}
+    for folder, paths in sorted(scar_folders(files).items()):
+        rows: list[tuple[str, str, str]] = []
+        for path in paths:
+            name, trigger, date = scar_head(text[files[path][0]])
+            rel = path[len(folder) + 1:]
+            row = " · ".join(part for part in (f"[{rel}]({rel})", name, trigger, date) if part)
+            rows.append((date, rel, f"- {row}\n"))
+        rows.sort(key=lambda row: row[1])
+        rows.sort(key=lambda row: row[0], reverse=True)  # newest first, undated last; stable on the slug
+        domain = folder[len(SCARS):]
+        up = "../" * (folder.count("/") + 1)  # memory/scars/<domain>/index.md sits three folders down
+        head = (f"# Scars: {domain} ({len(rows)})\n\n"
+                "Generated by `core/loom/index` at every landing: do not edit. "
+                f"One row per scar, newest first: title · trigger words · date. "
+                f"Read a scar before the act its trigger names; the rule is in [AGENTS.md]({up}AGENTS.md).\n\n")
+        out[f"{folder}/index.md"] = head + "".join(row[2] for row in rows)
+    return out
 
 
 def title(first: str) -> str:
@@ -195,9 +262,11 @@ def memory_rows(files: dict[str, tuple[str, int]], text: dict[str, str]) -> str:
         _, first = frontmatter(text[sha])
         singles.append((path, f"- [{path[7:]}]({path}) · {title(first)} · {kb(size)}"))
     for name, count in sorted(folders.items()):
-        target = f"memory/scars/{name}/index.md"
-        link = target if target in files else f"memory/scars/{name}/"
-        singles.append((f"memory/scars/{name}", f"- [scars/{name}/]({link}) · {count} scars"))
+        # The folder index is derived by --write in the same pass (and removed where no
+        # scar is left), so the row links it whether or not this tree has it yet and a
+        # folder holding only an index gets no row: the row must not flip at the landing.
+        if count:
+            singles.append((f"memory/scars/{name}", f"- [scars/{name}/](memory/scars/{name}/index.md) · {count} scars"))
     singles.sort()
     out.extend(line + "\n" for _, line in singles)
     return "".join(out)
@@ -208,9 +277,14 @@ def people_rows(files: dict[str, tuple[str, int]]) -> str:
     return "\n## people\n\n" + "".join(f"- {name}\n" for name in names)
 
 
-def generate(rev: str) -> str:
+def load(rev: str) -> tuple[dict[str, tuple[str, int]], dict[str, str]]:
     files = tree(rev)
     text = blobs(sorted({sha for path, (sha, _) in files.items() if path.endswith(".md")}))
+    return files, text
+
+
+def generate(rev: str, loaded: tuple[dict[str, tuple[str, int]], dict[str, str]] | None = None) -> str:
+    files, text = loaded if loaded is not None else load(rev)
     order = ranks(rev)
     head = ("# Index\n\n"
             "Generated by `core/loom/index` at every landing: do not edit. "
@@ -219,15 +293,43 @@ def generate(rev: str) -> str:
     return head + thread_rows(files, text, order) + memory_rows(files, text) + people_rows(files)
 
 
+def check_scars(rev: str, old: str | None, loaded: tuple[dict[str, tuple[str, int]], dict[str, str]]) -> int:
+    """Each scar folder's index.md at REV is what its scars derive; none is left where no scar is."""
+    status = 0
+    files, text = loaded
+    expected = scar_indexes(files, text)
+    legacy: set[str] = set()
+    if old is not None:
+        before = tree(old)
+        legacy = {folder for folder in scar_folders(before) if f"{folder}/index.md" not in before}
+    for path, want in expected.items():
+        have = text.get(files[path][0]) if path in files else None
+        if have is None:
+            if path[:-len("/index.md")] in legacy:
+                continue
+            print(f"{path}: missing; run core/loom/index --write and commit", file=sys.stderr)
+            status = 1
+        elif have != want:
+            print(f"{path}: differs from core/loom/index at {rev}; run core/loom/index --write and commit",
+                  file=sys.stderr)
+            status = 1
+    for path in sorted(files):
+        if path.startswith(SCARS) and path.endswith("/index.md") and path.count("/") == 3 and path not in expected:
+            print(f"{path}: no scars beside it; run core/loom/index --write and commit", file=sys.stderr)
+            status = 1
+    return status
+
+
 def check(rev: str, old: str | None) -> int:
     status = 0
     was = (lambda path: old is not None and show(old, path) is not None)
+    loaded = load(rev)
     current = show(rev, "INDEX.md")
     if current is None:
         if was("INDEX.md"):
             print("INDEX.md: deleted; run core/loom/index --write and commit", file=sys.stderr)
             status = 1
-    elif current != generate(rev):
+    elif current != generate(rev, loaded):
         print(f"INDEX.md: differs from core/loom/index at {rev}; run core/loom/index --write and commit",
               file=sys.stderr)
         status = 1
@@ -243,18 +345,27 @@ def check(rev: str, old: str | None) -> int:
     elif claude != agents:
         print("CLAUDE.md: not a copy of AGENTS.md; run core/loom/index --write and commit", file=sys.stderr)
         status = 1
-    return status
+    return status | check_scars(rev, old, loaded)
 
 
 def write(rev: str) -> None:
     root = Path.cwd()
-    (root / "INDEX.md").write_text(generate(rev), encoding="utf-8")
+    loaded = load(rev)
+    (root / "INDEX.md").write_text(generate(rev, loaded), encoding="utf-8")
     agents = show(rev, "AGENTS.md")
     claude = root / "CLAUDE.md"
     if agents is None:
         claude.unlink(missing_ok=True)
     else:
         claude.write_text(agents, encoding="utf-8")
+    indexes = scar_indexes(*loaded)
+    for path, body in indexes.items():
+        target = root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body, encoding="utf-8")
+    for stale in root.glob("memory/scars/*/index.md"):
+        if stale.relative_to(root).as_posix() not in indexes:
+            stale.unlink()
 
 
 def main(argv: list[str]) -> int:
