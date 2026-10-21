@@ -34,8 +34,10 @@ STATUS_WHY = "open|live|dormant|settled|retired"
 TENSE_WHY = "plan|reference"
 _EXECUTABLES = (
     "core/loom/wake",
+    "core/loom/index",
     "core/immune.d/10-readme",
     "core/immune.d/20-labels",
+    "core/immune.d/30-index",
 )
 
 AUTHOR_NAME = "brnrd-loom"
@@ -233,13 +235,35 @@ def _agreement(person: str) -> str:
     )
 
 
-def _commit(repo: Path, message: str) -> None:
+def _commit(repo: Path, message: str, amend: bool = False) -> None:
     env = _env_without_pin()
     env["GIT_AUTHOR_NAME"] = AUTHOR_NAME
     env["GIT_AUTHOR_EMAIL"] = AUTHOR_EMAIL
     env["GIT_COMMITTER_NAME"] = AUTHOR_NAME
     env["GIT_COMMITTER_EMAIL"] = AUTHOR_EMAIL
-    git(repo, "commit", "-m", message, env=env)
+    args = ("commit", "--amend", "--no-edit") if amend else ("commit", "-m", message)
+    git(repo, *args, env=env)
+
+
+def refresh_index(clone: Path) -> list[str]:
+    """Run ``core/loom/index --write`` at ``HEAD`` and name what changed on disk.
+
+    INDEX.md and CLAUDE.md are derived from the committed tree by the self's
+    own recipe. A self without the recipe is left as it is. The caller
+    commits the named paths; nothing else in the worktree is touched.
+    """
+    recipe = clone / "core" / "loom" / "index"
+    if not recipe.is_file() or not os.access(recipe, os.X_OK):
+        return []
+    try:
+        proc = subprocess.run([str(recipe), "--write"], cwd=clone, env=_env_without_pin(),
+                              capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SelfError(f"core/loom/index: {exc}") from exc
+    if proc.returncode != 0:
+        raise SelfError(f"core/loom/index --write -> {proc.returncode}: {proc.stderr.strip()}")
+    status = git(clone, "status", "--porcelain", "--", "INDEX.md", "CLAUDE.md").stdout
+    return [line[3:] for line in status.splitlines() if line[3:]]
 
 
 def _enroll_person_email(self_dir: Path) -> None:
@@ -298,6 +322,11 @@ def init_self(home: Path, person: str | None = None, remote: str | None = None) 
             "Loom-Strand: seed\n"
             "Loom-Label: taint=0; audience=self\n",
         )
+        # The index derives from the committed tree, so it is made after the
+        # seed commit and folded into it: one commit, with its label.
+        if refresh_index(self_dir):
+            git(self_dir, "add", "-A")
+            _commit(self_dir, "", amend=True)
         if remote:
             git(self_dir, "remote", "add", "origin", remote)
             git(self_dir, "push", "-u", "origin", "main")

@@ -520,7 +520,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     if opening is not None:
         from .lifecycle import open_thread
         open_thread(Path(room), opening, sender, body, body_choice, repo_sources,
-                    opened_for=[stamp.data["wish"] for stamp in wish_stamps])
+                    opened_for=[stamp.data["wish"] for stamp in wish_stamps],
+                    wish_lines={stamp.data["wish"]: stamp.data.get("line", "") for stamp in wish_stamps})
     write_port(room, stem, text)
     if wish_stamps:
         from .ledger import append

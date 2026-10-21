@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from .selfrepo import SelfError as SendError, git as _git
+from .selfrepo import SelfError as SendError, git as _git, refresh_index
 
 _RACE_LIMIT = 10
 _STOP_LIMIT = 3
@@ -126,6 +126,7 @@ def send_to_self(room: str | Path, widening: str | None = None) -> Outcome:
         stopped = _continue(room_path) if _rebasing(room_path) else _rebase(room_path)
         if stopped is not None:
             return stopped
+        _fold_index(room_path)
         _stamp_range(room_path, widening)
         sha = _git(room_path, "rev-parse", "HEAD").stdout.strip()
         with _push_lock(room_path):
@@ -146,6 +147,31 @@ def send_to_self(room: str | Path, widening: str | None = None) -> Outcome:
     raise SendError(
         f"main moved {_RACE_LIMIT} times; push still rejected\n{last}"
     )
+
+
+def _fold_index(room: Path) -> None:
+    """Regenerate INDEX.md and CLAUDE.md from the rebased tip and fold them into it.
+
+    The self's ``core/loom/index`` derives both from the committed tree, so
+    they are made here, after the rebase, and amended into the room's last
+    commit: one landing, one index, and 30-index at the self finds them
+    equal to its own regeneration. A room with nothing of its own to land
+    but a stale index gets one commit for it.
+    """
+    changed = refresh_index(room)
+    if not changed:
+        return
+    _git(room, "add", "--", *changed)
+    head = _git(room, "rev-parse", "HEAD").stdout.strip()
+    base = _git(room, "rev-parse", "origin/main").stdout.strip()
+    if head == base:
+        _git(room, "commit", "-m", "index", "--only", "--", *changed)
+    else:
+        # A commit that only deleted the index is empty once it is back: drop it,
+        # the stamp's cherry-pick refuses an empty commit.
+        _git(room, "commit", "--amend", "--no-edit", "--allow-empty", "--only", "--", *changed)
+        if _git(room, "diff", "--quiet", "HEAD~1", "HEAD", check=False).returncode == 0:
+            _git(room, "reset", "--soft", "HEAD~1")
 
 
 @contextmanager
