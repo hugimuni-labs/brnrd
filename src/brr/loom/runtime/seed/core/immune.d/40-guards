@@ -8,6 +8,12 @@ breaking its file, changing its set-by or scope, or dropping any of its
 carrying `Guard-Lifted: <id>`. Adding entries or rewording says does not.
 The trailer proves the citation exists, not what the letter says. The first
 push has nothing to lift. Git's hook environment, including GIT_DIR, is kept.
+
+A guard whose set-by is scar:<path>#<title> cites a scar under memory/scars/.
+Every guard at the new tip is read: a scar path missing from that tree, or an
+anchor that is no heading's slug in that file, refuses the push, whichever
+side of the pointer the push changed. A guard file that does not parse is
+left to send-self, which refuses it.
 """
 
 import re
@@ -20,6 +26,7 @@ except ModuleNotFoundError:  # Python 3.10: any change to the file lifts it.
     tomllib = None
 
 GUARD_DIR = "core/guards/"
+SCAR_DIR = "memory/scars/"
 
 
 def git(*args, input=None):
@@ -57,6 +64,60 @@ def letter_of(data):
 def entries(data, key):
     value = data.get(key) or []
     return list(value) if isinstance(value, list) else [value]
+
+
+def set_by_of(text):
+    """The set-by value of a guard's text, parsed or regex-read, else None."""
+    data = parsed(text)
+    if data is not None:
+        value = data.get("set-by")
+        return value if isinstance(value, str) else None
+    found = re.search(r"""^\s*set-by\s*=\s*(["'])(.*?)\1""", text, re.M)
+    return found[2] if found else None
+
+
+def slug(heading):
+    """GitHub's anchor for a markdown heading: lowercase, punctuation dropped."""
+    text = re.sub(r"[^\w\s-]", "", heading.strip().lower())
+    return re.sub(r"\s", "-", text)
+
+
+def dangling(set_by, revision, scars):
+    """Why a scar pointer does not resolve at revision, or None when it does."""
+    if not set_by.startswith("scar:"):
+        return None
+    path, _, anchor = set_by[5:].partition("#")
+    full = SCAR_DIR + path.strip()
+    if full not in scars:
+        return f"set-by names {full}, which is not in the tree"
+    if not anchor:
+        return None
+    text = git("show", f"{revision}:{full}").stdout
+    headings = re.findall(r"^#+\s+(.+?)\s*$", text, re.M)
+    if anchor.strip() not in {slug(heading) for heading in headings}:
+        return f"set-by anchor #{anchor} is no heading of {full}"
+    return None
+
+
+def scar_files(revision):
+    listing = git("ls-tree", "-r", "--name-only", revision, SCAR_DIR)
+    return set(listing.stdout.split("\n"))
+
+
+def unresolved(new):
+    """Every guard at new whose scar pointer does not resolve, path: why."""
+    found = {}
+    scars = None
+    for path, text in guard_files(new).items():
+        set_by = set_by_of(text)
+        if set_by is None or not set_by.startswith("scar:"):
+            continue
+        if scars is None:
+            scars = scar_files(new)
+        why = dangling(set_by, new, scars)
+        if why:
+            found[path] = why
+    return found
 
 
 def lifted(old, new_text):
@@ -97,8 +158,13 @@ def main(args):
         print("usage: 40-guards <old> <new>", file=sys.stderr)
         return 2
     old, new = args[:2]
+    failed = False
+    for path, why in sorted(unresolved(new).items()):
+        print(f"{path}: {why}; a scar guard cites a scar in memory/scars/ by "
+              f"path and heading", file=sys.stderr)
+        failed = True
     if zeros(old):
-        return 0
+        return int(failed)
     before = {}
     for path, text in guard_files(old).items():
         data = parsed(text) if tomllib is not None else None
@@ -110,10 +176,9 @@ def main(args):
         if letter:
             before[path] = {"text": text, "data": data, "letter": letter}
     if not before:
-        return 0
+        return int(failed)
     after = guard_files(new)
     citations = None
-    failed = False
     for path in sorted(before):
         why = lifted(before[path], after.get(path))
         if why is None:

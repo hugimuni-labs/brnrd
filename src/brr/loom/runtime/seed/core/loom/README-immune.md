@@ -87,7 +87,11 @@ scar beside it. A tip without the recipe adds no check.
 changes `set-by` or `scope`, or loses any `[[paths]]` or `[[match]]`
 entry; that needs a commit in the push carrying `Guard-Lifted: <id>`.
 Adding entries or rewording `says` lands without one. The trailer proves
-the citation exists, not what the letter says.
+the citation exists, not what the letter says. A guard whose `set-by` is
+`scar:<path>#<title-slug>` is read at every push: the path must be a file
+under `memory/scars/` at the incoming tip and the slug one of its
+headings', so splitting or deleting a scar refuses the landing until its
+guard is repointed.
 
 `40-links` reads every changed `.md` file at the incoming tip (every `.md`
 on the first push) and refuses a relative markdown link whose target is not

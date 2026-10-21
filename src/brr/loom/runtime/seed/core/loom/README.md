@@ -94,7 +94,9 @@ them. Heard and working wishes stay with their thread.
 A guard is a rule the loom holds for you: `core/guards/<id>.toml` on
 main, read from main and never from your branch. `says` is the rule in its
 own words, `set-by` is `letter:<id>` (a person asked) or
-`scar:<file>#<title>`, and `scope` is `self`, `thread:<id>` or
+`scar:<path>#<title-slug>` (a path under `memory/scars/`, the slug its
+heading's; a landing whose guard cites a scar that is not in the tree is
+refused, whichever side moved), and `scope` is `self`, `thread:<id>` or
 `repo:<name>`. A `[[match]]` (`at` pre or post, `tool`, `input`, `unless`,
 `path`, `cwd`, `output`, all regexes) warns on the call that trips it; a
 pre match with `refuse = true` denies the call instead, so keep that for a

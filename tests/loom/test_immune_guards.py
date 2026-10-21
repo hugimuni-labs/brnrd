@@ -82,3 +82,78 @@ def test_tightening_or_rewording_lands_without_a_letter(tmp_path: Path) -> None:
     tighter += '[[paths]]\nabsent = ["migrations/*.sql.bak"]\n'
     landed = attempt(bare, tmp_path, "tight", tighter, "tighten the guard")
     assert landed.status == "merged", landed
+
+
+SCAR_TITLE = "Driving code in a worktree runs the editable install's tree, not the worktree's"
+SCAR_ANCHOR = "driving-code-in-a-worktree-runs-the-editable-installs-tree-not-the-worktrees"
+SCAR_PATH = "memory/scars/git/driving-code-in-a-worktree.md"
+SCAR = f"# {SCAR_TITLE}\ntrigger: worktree, python -m, editable\n2026-08-03, on me.\n"
+
+
+def scar_guard(pointer: str) -> str:
+    return (
+        'says = "assert mod.__file__ before believing what you drove"\n'
+        f'set-by = "scar:{pointer}"\n'
+        '[[match]]\ntool = "Bash"\ninput = "python -m brr"\n'
+    )
+
+
+def land(bare: Path, tmp: Path, name: str, files: dict[str, str | None], msg: str):
+    strand = room(bare, tmp / name, f"strand/{name}")
+    for rel, text in files.items():
+        if text is None:
+            (strand / rel).unlink()
+        else:
+            write(strand, rel, text)
+    commit(strand, msg)
+    return send_to_self(strand)
+
+
+def test_a_scar_guard_whose_scar_and_heading_exist_lands(tmp_path: Path) -> None:
+    bare, _work = published(tmp_path)
+    landed = land(bare, tmp_path, "ok", {
+        SCAR_PATH: SCAR,
+        "core/guards/live-checkout.toml": scar_guard(f"git/driving-code-in-a-worktree.md#{SCAR_ANCHOR}"),
+    }, "guard from a scar")
+    assert landed.status == "merged", landed
+
+
+def test_a_scar_guard_naming_a_missing_scar_is_refused(tmp_path: Path) -> None:
+    bare, _work = published(tmp_path)
+    refused = land(bare, tmp_path, "missing", {
+        "core/guards/live-checkout.toml": scar_guard(f"git.md#{SCAR_ANCHOR}"),
+    }, "guard from a scar that is gone")
+    assert refused.status == "refused", refused
+    assert "core/guards/live-checkout.toml: set-by names memory/scars/git.md" in refused.stderr
+
+
+def test_a_scar_guard_whose_anchor_is_no_heading_is_refused(tmp_path: Path) -> None:
+    bare, _work = published(tmp_path)
+    refused = land(bare, tmp_path, "anchor", {
+        SCAR_PATH: SCAR,
+        "core/guards/live-checkout.toml": scar_guard("git/driving-code-in-a-worktree.md#some-other-title"),
+    }, "guard with a stale anchor")
+    assert refused.status == "refused", refused
+    assert "set-by anchor #some-other-title is no heading of memory/scars/git/driving-code-in-a-worktree.md" in refused.stderr
+
+
+def test_deleting_the_scar_a_guard_cites_is_refused(tmp_path: Path) -> None:
+    """Today's self: the scars were split into folders and the guards kept the old paths."""
+    bare, _work = published(tmp_path)
+    landed = land(bare, tmp_path, "set", {
+        SCAR_PATH: SCAR,
+        "core/guards/live-checkout.toml": scar_guard(f"git/driving-code-in-a-worktree.md#{SCAR_ANCHOR}"),
+    }, "guard from a scar")
+    assert landed.status == "merged", landed
+    refused = land(bare, tmp_path, "split", {
+        SCAR_PATH: None,
+        "memory/scars/git/driving-code-split.md": SCAR,
+    }, "split the scar without repointing the guard")
+    assert refused.status == "refused", refused
+    assert "core/guards/live-checkout.toml: set-by names memory/scars/git/driving-code-in-a-worktree.md" in refused.stderr
+    repointed = land(bare, tmp_path, "repoint", {
+        SCAR_PATH: None,
+        "memory/scars/git/driving-code-split.md": SCAR,
+        "core/guards/live-checkout.toml": scar_guard(f"git/driving-code-split.md#{SCAR_ANCHOR}"),
+    }, "split the scar and repoint the guard")
+    assert repointed.status == "merged", repointed
