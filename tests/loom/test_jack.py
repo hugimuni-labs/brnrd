@@ -283,3 +283,41 @@ def test_stop_holds_for_the_shells_cache_or_the_hook_ceiling(
     assert result['decision'] == 'block'
     assert result['reason'].startswith('cache keepalive, nothing new arrived')
     assert now[0] == pytest.approx(expected)
+
+
+def test_post_traces_the_call_without_its_command(tmp_path):
+    from brr.loom.runtime import tooltrace
+    room = _room(tmp_path)
+    secret = "curl -H 'Authorization: Bearer sk-live-SECRET' https://x.test/a?token=SECRET"
+    calls = [
+        {"tool_name": "Bash", "tool_input": {"command": secret, "description": "Fetch the thing"}},
+        {"tool_name": "Bash", "tool_input": {"command": secret}},
+        {"tool_name": "Read", "tool_input": {"file_path": "/Users/x/private/SECRET-dir/notes.md"}},
+        {"tool_name": "Grep", "tool_input": {"pattern": "def execute", "path": "/a/SECRET"}},
+        {"tool_name": "WebFetch", "tool_input": {"url": "https://x.test/a?token=SECRET", "prompt": "p"}},
+    ]
+    for call in calls:
+        execute("post", room, json.dumps(call))
+    text = (room / "port" / "tools.jsonl").read_text()
+    assert "SECRET" not in text and "curl" not in text
+    rows = tooltrace.read(room)
+    assert [(r["tool"], r["arg"]) for r in rows] == [
+        ("Bash", "Fetch the thing"), ("Bash", ""), ("Read", "notes.md"),
+        ("Grep", "def execute"), ("WebFetch", "x.test"),
+    ]
+
+
+def test_tool_trace_never_fails_the_hook_and_rotates(tmp_path, monkeypatch):
+    from brr.loom.runtime import tooltrace
+    room = _room(tmp_path)
+    (room / "port" / "tools.jsonl").mkdir()  # an append that cannot happen
+    assert execute("post", room, json.dumps({"tool_name": "Read", "tool_input": {"file_path": "a"}})) == ""
+    (room / "port" / "tools.jsonl").rmdir()
+    monkeypatch.setattr(tooltrace, "CAP", 200)
+    for n in range(20):
+        tooltrace.note(room, json.dumps({"tool_name": "Bash", "tool_input": {"description": f"step {n}"}}))
+    assert (room / "port" / "tools.jsonl").stat().st_size <= 200 + 100
+    assert (room / "port" / "tools.jsonl.1").is_file()
+    args = [r["arg"] for r in tooltrace.read(room)]
+    assert args[-1] == "step 19" and args == sorted(args, key=lambda a: int(a.split()[1]))
+    assert len(tooltrace.read(room, limit=3)) == 3
