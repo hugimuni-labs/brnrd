@@ -6,6 +6,7 @@ import argparse
 import os
 import re
 import sys
+from pathlib import Path
 
 from brr.daemon2.facts import Fact
 from .home import Home, home_of_room, mint, resolve_home, strand_of_room
@@ -132,6 +133,15 @@ def cmd_wish(args):
         return 1
 
 
+def _mailed(facts, room, marker):
+    """A letter that starts with ``marker`` left this room: still in its port, or in the ledger."""
+    out = Path(room) / "port" / "out"
+    if out.is_dir() and any(marker in path.read_text() for path in out.glob("*.md")):
+        return True
+    return any(f.kind == "letter" and str((f.data or {}).get("body", "")).startswith(marker)
+               for f in facts)
+
+
 def cmd_ask(args):
     """A resident asks a person: a wish from:resident under the wish it unblocks."""
     try:
@@ -141,21 +151,30 @@ def cmd_ask(args):
         facts = read_facts(home)
         if args.rec is not None and not args.rec.strip():
             raise ValueError("ask: --rec is empty")
-        fact = wish_fact(facts, by=by, ident="new", line=args.what, thread=thread,
-                         sender="resident", parent=args.wish)
-        append(home, fact)
-        ident = fact.data["wish"]
-        if args.rec is not None:
+        # A retry of an ask that half-happened finishes it: the same open ask
+        # (thread, parent, line) is reused, and mailed only if no mail for it left.
+        same = next((w for w in wishes(facts).values() if w.open and w.sender == "resident"
+                     and (w.thread, w.parent, w.line) == (thread, args.wish, args.what)), None)
+        if same is None:
+            fact = wish_fact(facts, by=by, ident="new", line=args.what, thread=thread,
+                             sender="resident", parent=args.wish)
+            append(home, fact)
+            ident = fact.data["wish"]
+        else:
+            ident = same.id
+        if args.rec is not None and (same is None or same.reading != args.rec):
             append(home, Fact(kind="wish.read", by=by, id="wish.read:" + mint(12),
                               data={"wish": ident, "reading": args.rec, "by": "resident"}))
         # A thread that waits on another must wake it: a wish alone is mail to nobody.
         from .lifecycle import main_snapshot
         from .port import write_send
         from .verbs_loom import _room
-        head = waits_on(wishes(read_facts(home)), main_snapshot(home)).get(ident, "")
-        if head.startswith("thread:"):
-            room = _room(args.room)
-            body = f"ask {ident} from thread:{thread}: {args.what}\n"
+        facts = read_facts(home)
+        head = waits_on(wishes(facts), main_snapshot(home)).get(ident, "")
+        room = _room(args.room)
+        marker = f"ask {ident} from thread:{thread}: "
+        if head.startswith("thread:") and not _mailed(facts, room, marker):
+            body = marker + args.what + "\n"
             if args.rec is not None:
                 body += f"rec: {args.rec}\n"
             body += f"Answer it, or ask onward with: ask \"<what>\" --for {ident}\n"

@@ -147,3 +147,32 @@ def test_the_live_ledger_replays_with_no_parentless_ask(ledger):
     told = wishes(read_facts(home))
     assert {b["id"] for b in births} <= set(told)
     assert waits_on(told, {}) == {}
+
+
+
+def test_a_retried_ask_finishes_the_one_that_half_happened(ledger):
+    home, seat = ledger
+    wish, mid = child(home, seat, "mid", "s-aaaa-mid")
+    out = mid / "port" / "out"
+    out.mkdir(parents=True, exist_ok=True)
+    out.chmod(0o500)
+    try:
+        command(home, mid, "ask", "Which half first?", "--for", wish, "--rec", "the parser", ok=False)
+    finally:
+        out.chmod(0o700)
+    [half] = [w for w in wishes(read_facts(home)).values() if w.sender == "resident"]
+    assert mail(mid, half.id) == []
+    # The retry mails the ask the failed try wrote, and writes no second ask.
+    ask = command(home, mid, "ask", "Which half first?", "--for", wish, "--rec", "the parser")
+    assert ask == half.id
+    assert len(mail(mid, ask)) == 1
+    # Once the mail has left, another retry sends nothing, also after the loom drained the port.
+    command(home, mid, "ask", "Which half first?", "--for", wish, "--rec", "the parser")
+    [sent] = mail(mid, ask)
+    for path in out.iterdir():
+        path.unlink()
+    inject_letter(home.root, to="thread:work", body=sent.split("---\n", 2)[2])
+    command(home, mid, "ask", "Which half first?", "--for", wish, "--rec", "the parser")
+    assert mail(mid, ask) == []
+    asks = [w for w in wishes(read_facts(home)).values() if w.sender == "resident"]
+    assert [w.id for w in asks] == [ask] and len(asks[0].reads) == 1
