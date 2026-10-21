@@ -374,11 +374,13 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         weight = _weight(room, stdin_text, state)
         paused = describe(read_paused_record(room / "port"))
         hook = _hook_event(stdin_text)
+        # Past its allocation a strand is told at every boundary, not once.
+        over = next((line for line in text.splitlines() if line.startswith("budget: ")), "")
         if not parsed.ids and not settled_changed and not opened_changed and not plan_changed:
-            if not weight and not paused:
+            if not weight and not paused and not over:
                 return ""
             return _json({"hookSpecificOutput": {
-                "hookEventName": hook, "additionalContext": "\n".join(filter(None, (paused, weight)))}})
+                "hookEventName": hook, "additionalContext": "\n".join(filter(None, (paused, weight, over)))}})
         if weight:
             text = weight + "\n" + text
         if paused:
