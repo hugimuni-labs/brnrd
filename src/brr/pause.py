@@ -140,7 +140,11 @@ def list_all_processes() -> list[ProcInfo]:
     every line is data.
     """
     procs = _parse_ps_snapshot(_run_ps(["ps", "-A", "-o", "pid=,ppid=,lstart=,command="]))
-    exact = _linux_start if sys.platform.startswith("linux") else _darwin_start if sys.platform == "darwin" else None
+    reader = _linux_reader if sys.platform.startswith("linux") else _darwin_reader if sys.platform == "darwin" else None
+    try:
+        exact = reader() if reader else None
+    except OSError:
+        exact = None
     return _sharpen_starts(procs, exact) if exact else procs
 
 
@@ -171,13 +175,19 @@ def _sharpen_starts(procs: list[ProcInfo], exact) -> list[ProcInfo]:
     return sharp
 
 
-def _linux_start(pid: int) -> tuple[int, float]:
+def _linux_reader():
     """`/proc/uptime` counts on the same boot clock as `/proc/<pid>/stat`."""
     hertz = os.sysconf("SC_CLK_TCK")
-    boot = time.time() - float(Path("/proc/uptime").read_text().split()[0])
-    # Fields 4 and 22, counted after the parenthesised command, which may hold spaces.
-    fields = Path(f"/proc/{pid}/stat").read_text().rpartition(")")[2].split()
-    return int(fields[1]), boot + int(fields[19]) / hertz
+    try:
+        boot = time.time() - float(Path("/proc/uptime").read_text().split()[0])
+    except (ValueError, IndexError) as exc:
+        raise OSError(f"/proc/uptime: {exc}") from exc
+
+    def start(pid: int) -> tuple[int, float]:
+        # Fields 4 and 22, counted after the parenthesised command, which may hold spaces.
+        fields = Path(f"/proc/{pid}/stat").read_text().rpartition(")")[2].split()
+        return int(fields[1]), boot + int(fields[19]) / hertz
+    return start
 
 
 _LIBPROC = None
@@ -191,16 +201,23 @@ class _BsdInfo(ctypes.Structure):
                 ("start_tvsec", ctypes.c_uint64), ("start_tvusec", ctypes.c_uint64)]
 
 
-def _darwin_start(pid: int) -> tuple[int, float]:
+def _darwin_reader():
     """libproc's `proc_pidinfo(PROC_PIDTBSDINFO)`: the start to a microsecond."""
     global _LIBPROC
     if _LIBPROC is None:
-        _LIBPROC = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
-    info = _BsdInfo()
-    got = _LIBPROC.proc_pidinfo(pid, 3, ctypes.c_uint64(0), ctypes.byref(info), ctypes.sizeof(info))
-    if got != ctypes.sizeof(info) or info.pid != pid:
-        raise OSError(ctypes.get_errno(), f"proc_pidinfo({pid}) returned {got}")
-    return info.ppid, info.start_tvsec + info.start_tvusec / 1e6
+        lib = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        # int proc_pidinfo(int pid, int flavor, uint64_t arg, void *buffer, int buffersize)
+        lib.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+        lib.proc_pidinfo.restype = ctypes.c_int
+        _LIBPROC = lib
+
+    def start(pid: int) -> tuple[int, float]:
+        info = _BsdInfo()
+        got = _LIBPROC.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info))
+        if got != ctypes.sizeof(info) or info.pid != pid:
+            raise OSError(ctypes.get_errno(), f"proc_pidinfo({pid}) returned {got}")
+        return info.ppid, info.start_tvsec + info.start_tvusec / 1e6
+    return start
 
 
 def _looks_like_brnrd(command: str) -> bool:
