@@ -6,7 +6,8 @@ repository, never a bare path or a wiki link, and never into people/ from
 outside it. This check judges only the shape that rule names. Inline links
 and images, ``[text](target)``, are resolved against the file's folder and
 the incoming tree; a target may be a file or a folder, with or without a
-fragment; the derived ``INDEX.md`` and ``CLAUDE.md`` count as present, since
+fragment; the derived ``INDEX.md``, ``CLAUDE.md`` and the ``index.md`` of a
+``memory/scars/<domain>/`` folder that holds a scar count as present, since
 send-self makes them at every landing. Targets with a scheme (``https:``,
 ``mailto:``) and bare fragments are not links into the repository and pass
 untouched. Fenced blocks and
@@ -31,6 +32,12 @@ SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 # send-self derives these at every landing and 30-index lets a tree without
 # them pass, so a link to one is live by the next landing, never dead.
 DERIVED = {"INDEX.md", "CLAUDE.md"}
+SCAR_INDEX = re.compile(r"^memory/scars/[^/]+/index\.md$")
+
+
+def derived(path, folders):
+    """A path send-self writes at the landing: the root pair, or the index of a scar folder that exists."""
+    return path in DERIVED or bool(SCAR_INDEX.match(path) and path.rsplit("/", 1)[0] in folders)
 
 
 def git(*args):
@@ -87,7 +94,7 @@ def judge(source, text, files, folders):
             path = resolve(source, raw)
             if path == "":
                 continue
-            if path is None or (path not in files and path not in folders and path not in DERIVED):
+            if path is None or (path not in files and path not in folders and not derived(path, folders)):
                 refusals.append(("dead link", raw))
                 continue
             if not inside_people and (path == "people" or path.startswith("people/")):

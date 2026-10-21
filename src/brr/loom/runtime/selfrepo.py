@@ -40,6 +40,7 @@ _EXECUTABLES = (
     "core/immune.d/30-index",
     "core/immune.d/40-guards",
     "core/immune.d/40-links",
+    "core/immune.d/45-scars",
 )
 
 AUTHOR_NAME = "brnrd-loom"
@@ -250,9 +251,10 @@ def _commit(repo: Path, message: str, amend: bool = False) -> None:
 def refresh_index(clone: Path) -> list[str]:
     """Run ``core/loom/index --write`` at ``HEAD`` and name what changed on disk.
 
-    INDEX.md and CLAUDE.md are derived from the committed tree by the self's
-    own recipe. A self without the recipe is left as it is. The caller
-    commits the named paths; nothing else in the worktree is touched.
+    INDEX.md, CLAUDE.md and each ``memory/scars/<domain>/index.md`` are
+    derived from the committed tree by the self's own recipe. A self without
+    the recipe is left as it is. The caller commits the named paths; nothing
+    else in the worktree is touched.
     """
     recipe = clone / "core" / "loom" / "index"
     if not recipe.is_file() or not os.access(recipe, os.X_OK):
@@ -264,8 +266,9 @@ def refresh_index(clone: Path) -> list[str]:
         raise SelfError(f"core/loom/index: {exc}") from exc
     if proc.returncode != 0:
         raise SelfError(f"core/loom/index --write -> {proc.returncode}: {proc.stderr.strip()}")
-    status = git(clone, "status", "--porcelain", "--", "INDEX.md", "CLAUDE.md").stdout
-    return [line[3:] for line in status.splitlines() if line[3:]]
+    status = git(clone, "status", "--porcelain", "-z", "--untracked-files=all", "--",
+                 "INDEX.md", "CLAUDE.md", "memory/scars/*/index.md").stdout
+    return [entry[3:] for entry in status.split("\0") if entry[3:]]
 
 
 def _enroll_person_email(self_dir: Path) -> None:
