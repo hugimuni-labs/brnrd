@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from .config import seed_config
@@ -355,32 +356,228 @@ def pin_clone(repo: Path) -> None:
     git(repo, "config", "credential.helper", "")
 
 
-def room(home: Path, strand: str) -> Path:
+def room(home: Path, strand: str, gen: int | None = None) -> Path:
     """``home/rooms/<strand>/self``, a ``--shared`` clone on ``strand/<strand>``.
 
-    A room that already exists is returned as it stands. A molt keeps its commits.
+    A room that already exists keeps its commits and edits (a molt keeps its
+    commits), once ``heal_room`` has repaired what a crash left (see there).
     The clone has an empty credential helper. Commit identity is the body's
     environment.
     """
+    return ensure_room(home, strand, gen)[0]
+
+
+def ensure_room(home: Path, strand: str, gen: int | None = None):
+    """``room`` and the ``room.repaired`` fact it wrote, or None for a sound room."""
     home = Path(home).resolve()
     strand = _segment(strand, "strand")
     source = home / "self"
     if not (source / ".git").exists():
         raise SelfError(f"no self at {source}; init first")
     dest = home / "rooms" / strand / "self"
-    if (dest / ".git").exists():
-        pin_clone(dest)
-        return dest
-    if dest.exists():
-        raise SelfError(f"{dest} exists and is not a clone; refusing to overwrite")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    git(home, "clone", "--shared", str(source), str(dest))
-    git(dest, "checkout", "-b", f"strand/{strand}")
-    # The README driver lives on the room that rebases, not on the bare self.
-    from brr.loom.runtime.merge_driver import install_merge_driver
-    install_merge_driver(dest)
+    report = None
+    if (dest / ".git").exists() or dest.exists():
+        report = heal_room(home, strand)
+    if not (dest / ".git").exists():
+        _create_room(source, dest, strand)
+    if report is not None and report.get("aside"):
+        _recover_branch(Path(report["aside"]), dest, strand, report)
     pin_clone(dest)
-    return dest
+    fact = _record_repair(home, strand, gen, report) if report else None
+    return dest, fact
+
+
+def _create_room(source: Path, dest: Path, strand: str) -> None:
+    """Clone beside ``dest`` and rename it in once it is whole.
+
+    A crash before the rename leaves only a ``.self-clone-<pid>-*`` sibling,
+    which the next creation removes once its pid is dead: ``dest`` is either
+    absent or a finished clone on its strand branch.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    for stale in dest.parent.glob(".self-clone-*"):
+        pid = stale.name.split("-")[2]
+        if not (pid.isdigit() and _pid_alive(int(pid))):
+            shutil.rmtree(stale, ignore_errors=True)
+    tmp = Path(tempfile.mkdtemp(prefix=f".self-clone-{os.getpid()}-", dir=dest.parent))
+    try:
+        git(dest.parent, "clone", "--shared", str(source), str(tmp))
+        git(tmp, "checkout", "-b", f"strand/{strand}")
+        # The README driver lives on the room that rebases, not on the bare self.
+        from brr.loom.runtime.merge_driver import install_merge_driver
+        install_merge_driver(tmp)
+        pin_clone(tmp)
+        os.rename(tmp, dest)
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+# A loom git call times out at 60 s; a lock older than that with no body in the
+# room has no holder left.
+STALE_LOCK_SECONDS = 60
+
+
+def heal_room(home: Path, strand: str) -> dict | None:
+    """Repair what a crash left in an existing room, or move the room aside.
+
+    Repairs are lossless by construction: a dead ``index.lock`` goes, an
+    unreadable or empty index (while HEAD has a tree) is rebuilt from HEAD
+    with the work tree untouched, and a tracked file that is missing, or empty
+    where HEAD has content, is written back from HEAD. A file with content is
+    never touched, nor is any ref. A room whose HEAD or tree cannot be read,
+    or a ``dest`` with no ``.git``, is renamed to ``self.broken-<stamp>`` (kept,
+    never deleted) for ``ensure_room`` to reclone. A live lock (a body in the
+    room, or younger than any loom git call) leaves everything as it stands.
+    Returns None when nothing was repaired, else ``{"found": [...], "done": [...], "aside": path | None}``.
+    """
+    room_dir = Path(home) / "rooms" / strand
+    dest = room_dir / "self"
+    # A broken .git must fail, not send discovery up to some enclosing repo.
+    env = dict(_env_without_pin(), GIT_DIR=str(dest / ".git"), GIT_WORK_TREE=str(dest))
+
+    def hgit(*args, **kw):
+        return git(dest, *args, check=False, env=env, **kw)
+
+    found: list[str] = []
+    done: list[str] = []
+
+    def aside(why: str) -> dict:
+        found.append(why)
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        target = room_dir / f"self.broken-{stamp}"
+        n = 1
+        while target.exists():
+            n += 1
+            target = room_dir / f"self.broken-{stamp}-{n}"
+        os.rename(dest, target)
+        done.append(f"moved the room aside to {target.name} and recloned from self")
+        return {"found": found, "done": done, "aside": str(target)}
+
+    if not (dest / ".git").exists():
+        return aside("the room has no .git (a clone that never finished)")
+    lock = dest / ".git" / "index.lock"
+    if lock.exists():
+        from .loom import body_alive
+        age = time.time() - lock.stat().st_mtime
+        if body_alive(room_dir) or age < STALE_LOCK_SECONDS:
+            return None  # Someone may still be writing: touch nothing.
+        lock.unlink()
+        found.append(f"a stale index.lock ({age:.0f}s old, no body in the room)")
+        done.append("removed index.lock")
+    head = hgit("rev-parse", "--verify", "-q", "HEAD^{tree}")
+    if head.returncode != 0:
+        return aside("HEAD has no readable commit")
+    tree = hgit("ls-tree", "-r", "-z", "--long", "HEAD")
+    if tree.returncode != 0:
+        return aside(f"HEAD's tree is unreadable: {tree.stderr.strip()}")
+    entries = []
+    for row in tree.stdout.split("\0"):
+        if not row:
+            continue
+        meta, path = row.split("\t", 1)
+        mode, kind, _sha, size = meta.split()
+        if kind == "blob":
+            entries.append((path, mode, int(size) if size.isdigit() else 0))
+    index = hgit("ls-files", "-z")
+    if index.returncode != 0 or (entries and not index.stdout):
+        found.append("an unreadable index" if index.returncode != 0
+                     else f"an empty index while HEAD has {len(entries)} files")
+        broken = dest / ".git" / "index"
+        if broken.exists():
+            os.replace(broken, dest / ".git" / "index.broken")
+        if hgit("reset", "-q").returncode != 0:
+            return aside("the index could not be rebuilt from HEAD")
+        done.append("rebuilt the index from HEAD (work tree untouched)")
+    missing, emptied = [], []
+    for path, mode, size in entries:
+        target = dest / path
+        if not os.path.lexists(target):
+            missing.append(path)
+        elif mode != "120000" and size > 0 and target.is_file() and target.stat().st_size == 0:
+            emptied.append(path)
+    if missing or emptied:
+        if missing:
+            found.append(f"{len(missing)} tracked files missing ({_some(missing)})")
+        if emptied:
+            found.append(f"{len(emptied)} tracked files empty where HEAD has content ({_some(emptied)})")
+        paths = missing + emptied
+        restore = hgit("restore", "--source=HEAD", "--worktree",
+                       "--pathspec-from-file=-", "--pathspec-file-nul",
+                       input="\0".join(paths) + "\0")
+        if restore.returncode != 0:
+            return aside(f"tracked files could not be restored: {restore.stderr.strip()}")
+        done.append(f"restored {len(paths)} files from HEAD")
+    branch = f"strand/{strand}"
+    if hgit("rev-parse", "--verify", "-q", f"refs/heads/{branch}").returncode:
+        found.append(f"no {branch} branch (a clone that stopped before it)")
+        if hgit("checkout", "-q", "-b", branch).returncode:
+            return aside(f"{branch} could not be created")
+        from brr.loom.runtime.merge_driver import install_merge_driver
+        install_merge_driver(dest)
+        done.append(f"created {branch} at HEAD")
+    if not found:
+        return None
+    return {"found": found, "done": done, "aside": None}
+
+
+def _some(paths: list[str], n: int = 3) -> str:
+    return ", ".join(paths[:n]) + (f", +{len(paths) - n} more" if len(paths) > n else "")
+
+
+def _recover_branch(old: Path, dest: Path, strand: str, report: dict) -> None:
+    """Carry the strand branch's commits from a room moved aside, if readable.
+
+    The old room is read, never written. When its ``HEAD`` is what broke, git
+    refuses it as a repository, so the fetch reads its refs and objects
+    through a stand-in directory with a sound ``HEAD``.
+    """
+    branch = f"strand/{strand}"
+    gitdir = old / ".git"
+    with tempfile.TemporaryDirectory(prefix="loom-aside-") as view:
+        source = gitdir
+        if (gitdir / "objects").is_dir():
+            source = Path(view)
+            for name in ("objects", "refs", "packed-refs"):
+                if (gitdir / name).exists():
+                    (source / name).symlink_to(gitdir / name)
+            (source / "HEAD").write_text("ref: refs/heads/main\n")
+            (source / "config").write_text("[core]\n\tbare = true\n")
+        fetched = git(dest, "fetch", "-q", "--no-tags", str(source), f"refs/heads/{branch}",
+                      check=False)
+    if fetched.returncode != 0:
+        report["done"].append(f"found no readable {branch} in the old room; it starts at main")
+        return
+    git(dest, "reset", "-q", "--hard", "FETCH_HEAD")
+    sha = git(dest, "rev-parse", "--short", "HEAD").stdout.strip()
+    report["done"].append(f"kept {branch}'s commits ({sha})")
+
+
+def _record_repair(home: Path, strand: str, gen: int | None, report: dict):
+    from brr.daemon2.facts import Fact
+    from .home import Home
+    from .ledger import append
+    loom = Home(home)
+    return append(loom, Fact(kind="room.repaired", by=f"loom:{loom.install_id()}", data={
+        "strand": strand, "gen": gen, "found": report["found"],
+        "done": report["done"], "aside": report.get("aside"),
+    }))
+
+
+def repaired_line(fact) -> str:
+    """The boundary's line for a ``room.repaired`` fact."""
+    data = fact.data
+    return "repaired: room " + "; ".join(data["found"]) + " -> " + "; ".join(data["done"])
 
 
 def resolve_clone(room_dir: Path) -> Path:

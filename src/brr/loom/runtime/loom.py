@@ -37,7 +37,7 @@ from .lifecycle import main_snapshot
 from .timers import observe_due
 from .selfrepo import (
     AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, git,
-    room as clone_room, run_wake,
+    ensure_room, repaired_line, run_wake,
 )
 
 SRC = str(Path(__file__).resolve().parents[3])
@@ -362,7 +362,10 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
              repos: list[tuple[str, str]] | None = None) -> Path:
     room = home.room(strand).resolve()
     fresh = not (room / "self" / ".git").exists()
-    clone = clone_room(home.root, strand)
+    clone, repair = ensure_room(home.root, strand, gen)
+    if repair is not None:
+        _log(home, f"start {strand}: {repaired_line(repair)}")
+        facts = [*facts, repair]
     lease = next((f for f in reversed(facts) if f.kind == "lease"
                   and f.data.get("strand") == strand and f.data.get("gen") == gen), None)
     parent = lease.data.get("parent") if lease else None
@@ -455,6 +458,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                         opened=thread_table(home, facts), plan=_plan(home, thread, facts),
                         replies={f.letter.id: f.reply_to for f in active_owners(facts, main_snapshot(home))},
                         attachments=attachments, reply_context=reply_context,
+                        repaired=_repaired(facts, strand, gen),
                         **_budget(home, thread, facts)),
     )
     return room
@@ -1251,6 +1255,15 @@ def _person_dms(home, facts, thread):
             yield letter, channel
 
 
+def _repaired(facts, strand, gen) -> str:
+    """What the loom repaired in this generation's room before it woke."""
+    for fact in reversed(facts):
+        if (fact.kind == "room.repaired" and fact.data.get("strand") == strand
+                and fact.data.get("gen") == gen):
+            return repaired_line(fact)
+    return ""
+
+
 def _boundary(home, facts, strand, gen, context):
     from .threads import thread_table
     main, state = main_snapshot(home), fold(facts)
@@ -1262,6 +1275,7 @@ def _boundary(home, facts, strand, gen, context):
         replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
         attachments=letter_attachments(home.root, facts),
         reply_context=letter_replies(facts),
+        repaired=_repaired(facts, strand, gen),
         **_budget(home, context.thread, facts),
     )
     path = home.room(strand) / "port/in/boundary.md"
