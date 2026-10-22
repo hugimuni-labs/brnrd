@@ -159,7 +159,12 @@ def _main_moved(room: Path, clone: Path) -> bool:
     (``selfrepo.room``).
     """
     from .home import home_of_room
-    source = home_of_room(room).root / "self"
+    try:
+        source = home_of_room(room).root / "self"
+    except ValueError:
+        return False
+    if not (source / ".git").exists():
+        return False
     theirs = _ref(source, source / ".git", "refs/heads/main")
     ours = _ref(clone, clone / ".git", "refs/remotes/origin/main")
     return bool(theirs) and theirs != ours

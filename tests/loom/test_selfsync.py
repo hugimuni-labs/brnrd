@@ -235,3 +235,12 @@ def test_an_untracked_file_main_would_overwrite_is_a_notice_not_a_loss(tmp_path)
     facts = _ingest(home, read_facts(home))
     found = [n for n in notices(facts) if strand in n.data["body"]]
     assert len(found) == 1 and "new.txt" in found[0].data["body"], [n.data for n in found]
+
+
+def test_a_room_whose_home_has_no_self_says_nothing(tmp_path):
+    from brr.loom.runtime.selfsync import pull_at_boundary
+    room = tmp_path / "home" / "rooms" / "s-ab12-aaaaaa"
+    git(tmp_path, "init", "-q", os.fspath(room / "self"))
+    (room / "port").mkdir()
+    assert pull_at_boundary(room) == ""
+    assert not (room / "port" / "sync-errors.log").exists()
