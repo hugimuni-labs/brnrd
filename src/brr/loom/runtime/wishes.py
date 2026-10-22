@@ -80,7 +80,15 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
             else:
                 wish.verdict = dict(d, at=fact.at)
         wish.at = fact.at
+    starts = [f for f in ordered if f.kind == "loom.started"]
+    start = starts[-1].data if starts else None
     for wish in found.values():
+        for result in wish.results:
+            if not result["delivered"] and start and start.get("commit"):
+                from .receipts import held_merge
+                # Merged and in the code the loom runs: delivered, until a rollback.
+                if (merge := held_merge(result, start)):
+                    result.update(delivered=True, held=merge)
         def own_say(say):
             letter = letters.get(say[0])
             if letter is None:
