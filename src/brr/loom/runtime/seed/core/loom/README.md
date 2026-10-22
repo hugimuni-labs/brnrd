@@ -77,6 +77,17 @@ neither. A wish in the wisher's own words is said; one you infer (its says
 cite only your own letters) is derived: when you reply about it, name it as
 derived, your reading and not their words.
 
+A person letter gets a disposition before a reply to it is sent: `send --re`
+to one with none yet refuses unless the send carries `--wish` or `--chatter`
+(it wants nothing; `--chatter=<id>,…` names other letters too). After a
+`--wish`, `--says "<quote>"` (or `<letter id>:"<quote>"`) cites its words,
+matched ignoring case, spacing and punctuation; a quote that matches nothing
+is kept and cites the whole letter. `--ref <kind>:<ref>` records where it is
+being worked (`pr:2390`, a URL; `pid:N` keeps the process's command line), and
+`--answered` makes this reply its delivery. Each binds to the `--wish` before
+it; only the person's verdict closes a wish. The send prints the graph it
+wrote on stderr: `w-… ← "<quote>" (<letter>) → refs: …`.
+
 A thread is opened for a wish. `send --to thread:<new>` requires `--wish
 <w-id>` (moves that wish to the new thread) or `--wish new:"<line>"`
 (repeatable). The new wish cites `--re` when given, otherwise the opening
