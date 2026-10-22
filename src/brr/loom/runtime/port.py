@@ -443,8 +443,17 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                refs: tuple[str, ...] | list[str] = (),
                molt: str | None = None, body_choice: str | None = None,
                at: str | None = None, repo_sources: tuple[str, ...] | list[str] = (),
-               wish: str | tuple[str, ...] | list[str] | None = None,
-               budget: int | None = None) -> str:
+               wish: str | tuple | list | None = None,
+               budget: int | None = None, chatter: list[str] | None = None,
+               echo: list[str] | None = None) -> str:
+    """Write one letter (or note) into port/out, with the wish stamps it carries.
+
+    ``wish`` items are a ``w-id`` or ``new:"line"``, or a dict with ``value``
+    and the ``says``, ``refs`` and ``answered`` bound to it. ``chatter`` is
+    the letters this send cites as no wish (``[]``: the ``--re`` letter). A
+    reply to a person letter that has no disposition yet must carry one.
+    ``echo`` gathers the graph this send wrote, one line per wish.
+    """
     home = home_of_room(Path(room))
     opening = None
     if at is not None:
@@ -495,32 +504,86 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         re = _full_re(Path(room), re)
     if note is not None and body:
         raise PortError("send: --note is the whole no-answer; drop the body")
-    asked = [wish] if isinstance(wish, str) else list(dict.fromkeys(wish or ()))
+    asked = [wish] if isinstance(wish, (str, dict)) else list(wish or ())
+    asked = [item if isinstance(item, dict) else {"value": item} for item in asked]
+    first: dict = {}
+    for item in asked:
+        first.setdefault(item["value"], item)
+    asked = list(first.values())
     if opening is not None and not asked:
         raise PortError(OPEN_NEEDS_WISH)
     stem = mint(5)
     letter_id = f"{sender}/{stem}"
-    wish_stamps = []
-    if asked:
+    wish_stamps, results, cited = [], [], set()
+    letters: dict = {}
+    if asked or chatter is not None or re:
+        from .dispositions import letter_index, resolve, result_of, say_of
         from .ledger import read_facts
+        facts = read_facts(home)
+        letters = letter_index(facts)
+    if chatter is not None:
+        named = []
+        for raw in chatter:
+            ident = resolve(letters, raw)
+            if ident is None:
+                raise PortError(f"send --chatter: no letter {raw}")
+            named.append(ident)
+        if not chatter and not re:
+            raise PortError("send --chatter names the letters it cites, or needs --re")
+        # A bare --chatter cites the --re letter; a notice it answers is no letter and cites nothing.
+        chatter = list(dict.fromkeys(named or ([re] if re in letters else [])))
+        cited.update(chatter)
+    if asked:
         from .lifecycle import own_thread
         from .registry import admit
         from .verbs_wishes import say_span, wish_fact
         if not re and opening is None:
             raise PortError("send --wish requires --re, unless the letter opens a thread")
-        facts = read_facts(home)
-        for value in asked:
-            ident, line = ("new", value[4:]) if value.startswith("new:") else (value, None)
-            if re:
-                says = [say_span(re, facts)]
-            else:
-                # Nothing to cite but the opening letter itself: a
-                # resident's say, so the fold reports the wish as derived.
-                says = [[letter_id, 0, None]] if ident == "new" else []
-            stamp = wish_fact(facts, by="strand:" + sender, ident=ident, says=says, line=line,
-                              thread=opening or (own_thread(Path(room)) if ident == "new" else None))
-            admit(stamp)
+        line = next((l.strip() for l in (note or body).splitlines() if l.strip()), letter_id)[:160]
+        for item in asked:
+            value = item["value"]
+            ident, wished = ("new", value[4:]) if value.startswith("new:") else (value, None)
+            try:
+                if item.get("says"):
+                    says = [say_of(letters, raw, re if re in letters else None) for raw in item["says"]]
+                elif re:
+                    says = [say_span(re, facts)]
+                else:
+                    # Nothing to cite but the opening letter itself: a
+                    # resident's say, so the fold reports the wish as derived.
+                    says = [[letter_id, 0, None]] if ident == "new" else []
+                stamp = wish_fact(facts, by="strand:" + sender, ident=ident, says=says, line=wished,
+                                  thread=opening or (own_thread(Path(room)) if ident == "new" else None))
+                admit(stamp)
+                refs_of = [result_of(raw) for raw in item.get("refs") or ()]
+            except ValueError as exc:
+                raise PortError(f"send: {exc}") from exc
+            if item.get("answered"):
+                if note is not None:
+                    raise PortError("send --answered: a note has no words to be the receipt")
+                refs_of.append({"kind": "letter", "ref": letter_id, "delivered": True})
+            for result in refs_of:
+                fact = Fact(kind="wish.result", by="strand:" + sender, id="wish.result:" + mint(12),
+                            data={"wish": stamp.data["wish"], "line": line, "delivered": False, **result})
+                admit(fact)
+                results.append(fact)
+            cited.update(str(say[0]) for say in says)
             wish_stamps.append(stamp)
+            if echo is not None:
+                from .dispositions import echo as echo_line
+                echo.append(echo_line(stamp.data["wish"], says, [
+                    "answered" if r["kind"] == "letter" and r["ref"] == letter_id else f"{r['kind']}:{r['ref']}"
+                    for r in refs_of], letters))
+    if re and re in letters and re not in cited:
+        from .dispositions import disposed, is_person
+        if is_person(letters[re]) and re not in disposed(facts, Path(room)):
+            raise PortError(
+                f"send: {re} is a person letter with no disposition yet; carry one: "
+                '--wish <w-id>|new:"<line>" [--says "quote"] [--ref kind:ref] [--answered], '
+                "or --chatter if it wants nothing")
+    if echo is not None and chatter:
+        from .dispositions import short
+        echo.append("chatter ← " + ", ".join(f"({short(ident)})" for ident in chatter))
     fields = {
         "kind": "note" if note is not None else "letter",
         "id": letter_id, "to": to, "from": sender,
@@ -531,6 +594,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         fields["budget"] = str(budget)
     if re:
         fields["re"] = re
+    if chatter:
+        fields["chatter"] = " ".join(chatter)
     if molt:
         fields["molt"] = molt
     if note is not None:
@@ -562,6 +627,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         from .ledger import append
         for stamp in wish_stamps:
             append(home, stamp)
+        for result in results:
+            append(home, result)
     return letter_id
 
 
@@ -653,6 +720,8 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             data["at"] = fm["at"]
         if fm.get("re"):
             data["re"] = fm["re"]
+        if fm.get("chatter"):
+            data["chatter"] = fm["chatter"].split()
         if fm.get("edit"):
             data["edit"] = fm["edit"]
         if fm.get("molt"):
@@ -678,7 +747,8 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             raise PortError(f"note {fact_id} requires re and note")
         return Fact(
             kind="note", by=f"strand:{strand}", id=fact_id,
-            data={"re": fm["re"], "why": fm["note"], "gen": gen},
+            data={"re": fm["re"], "why": fm["note"], "gen": gen,
+                  **({"chatter": fm["chatter"].split()} if fm.get("chatter") else {})},
         )
     if kind == "shown":
         owner = fm.get("strand") or strand

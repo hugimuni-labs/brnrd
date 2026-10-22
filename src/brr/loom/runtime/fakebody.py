@@ -71,7 +71,8 @@ class Ctx:
         cmd = [sys.executable, "-m", "brr.loom.runtime", "send",
                "--room", str(self.room), "--to", to]
         if re:
-            cmd.extend(["--re", re])
+            # A compliant body disposes of what it answers; test_dispositions drives the gate.
+            cmd.extend(["--re", re, "--chatter"])
         if note is not None:
             cmd.extend(["--note", note])
         else:

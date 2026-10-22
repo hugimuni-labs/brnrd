@@ -96,13 +96,39 @@ def _attention(argv: list[str]) -> int:
     return 0
 
 
+class _Wish(argparse.Action):
+    """``--wish`` opens a group; ``--says``, ``--ref`` and ``--answered`` after it bind to it.
+
+    A ``--ref`` before any ``--wish`` stays the clean letter's ref.
+    """
+
+    def __call__(self, parser, namespace, value, option=None):
+        if namespace.wish is None:
+            namespace.wish = []
+        groups = namespace.wish
+        if self.dest == "wish":
+            groups.append({"value": value, "says": [], "refs": [], "answered": False})
+        elif self.dest == "ref" and not groups:
+            namespace.ref = (namespace.ref or []) + [value]
+        elif not groups:
+            parser.error(f"{option} binds to the --wish before it")
+        elif self.dest == "answered":
+            groups[-1]["answered"] = True
+        else:
+            groups[-1][self.dest + ("" if self.dest == "says" else "s")].append(value)
+
+
 def _send(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime send")
     parser.add_argument("--room")
     parser.add_argument("--to", required=True)
     parser.add_argument("--re")
     parser.add_argument("--note")
-    parser.add_argument("--wish", action="append", default=[])
+    parser.add_argument("--wish", action=_Wish, default=None, help='w-id or new:"<line>"')
+    parser.add_argument("--says", action=_Wish, help='"quote" or <letter id>:"quote"; never refused')
+    parser.add_argument("--answered", action=_Wish, nargs=0, help="this send's words are the receipt")
+    parser.add_argument("--chatter", action="store_true", help="cites the --re letter as no wish")
+    parser.add_argument("--chatter-of", dest="chatter_of", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--reopen", metavar="TEXT")
     parser.add_argument("--at", help="YYYY-MM-DDTHH:MM:SSZ, +<n>m, +<n>h, or +<n>d")
     parser.add_argument("--body", dest="body_choice", metavar="SHELL/CORE")
@@ -111,9 +137,14 @@ def _send(argv: list[str]) -> int:
                         help="weighted tokens, e.g. 2m: a new thread's allocation, or the opener's raise")
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--kind", default=None)
-    parser.add_argument("--ref", action="append", default=None)
+    parser.add_argument("--ref", action=_Wish, default=None, help="after --wish: kind:ref; before: a clean ref")
     parser.add_argument("body", nargs="?")
-    args = parser.parse_args(argv)
+    # --chatter=<id>,… names the letters; a bare --chatter never eats the body after it.
+    args = parser.parse_args([part for arg in argv for part in (
+        ["--chatter-of", arg.partition("=")[2]] if arg.startswith("--chatter=") else [arg])])
+    chatter = (None if args.chatter_of is None and not args.chatter
+               else [i for i in (args.chatter_of or "").split(",") if i.strip()])
+    echo: list[str] = []
     room = _room(args.room)
     try:
         if args.at is not None and args.reopen is not None:
@@ -129,11 +160,15 @@ def _send(argv: list[str]) -> int:
             re=args.re, note=args.note, clean=args.clean, kind=args.kind,
             refs=tuple(args.ref or ()), body_choice=args.body_choice, repo_sources=args.repo, at=args.at,
             wish=args.wish, budget=None if args.budget is None else parse_tokens(args.budget),
+            chatter=chatter,
+            echo=echo,
         )
     except (PortError, SelfError, ValueError, OSError) as exc:
         sys.stderr.write(f"{exc}\n")
         return 1
     sys.stdout.write(letter_id + "\n")
+    # stdout stays the letter id; the graph this send wrote goes beside it.
+    sys.stderr.write("".join(line + "\n" for line in echo))
     return 0
 
 
