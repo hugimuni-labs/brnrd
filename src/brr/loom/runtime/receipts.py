@@ -6,13 +6,15 @@ loom writes ``loom.started`` each time it starts or re-executes, naming the
 commit its own source is at and the merged pull requests that commit holds.
 A pull request merged with no ``pr.merged`` still counts: the start finds the
 merge commit of an opened head in its own history and names it in
-``merges``. Whether a merge is loaded is read from the latest start alone, so
+``merges``. The same history delivers a wish whose result is a pull request
+the latest start holds (``held_merge``). Whether a merge is loaded is read from the latest start alone, so
 a rollback unloads it. A loom whose source is not a git checkout knows no commit: its
 merges are drawn as unknown, never as not loaded.
 """
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 from dataclasses import dataclass
@@ -82,6 +84,20 @@ def record_start(home, facts, *, root: Path | None = None) -> Fact:
     return append(home, Fact(kind="loom.started", by=f"loom:{home.install_id()}", data=data))
 
 
+@functools.lru_cache(maxsize=8)
+def _merge_log(root: Path, commit: str) -> tuple[tuple[str, str, str], ...]:
+    """``(merge, second parent, subject)`` for each merge in ``commit``'s
+    history, newest first. A commit never changes, so one walk serves it."""
+    text = git(root, "log", "--merges", "--format=%H %P%x09%s", commit, check=False).stdout
+    rows = []
+    for line in text.splitlines():
+        hashes, _tab, subject = line.partition("\t")
+        commits = hashes.split()
+        if len(commits) >= 3:
+            rows.append((commits[0], commits[2], subject))
+    return tuple(rows)
+
+
 def _merges_held(root: Path, commit: str, facts, recorded: set[str]) -> dict[str, str]:
     """``repo#N`` to its merge commit in ``commit``'s history, for each opened
     pull request with no ``pr.merged``: a merge whose second parent is one of
@@ -93,18 +109,44 @@ def _merges_held(root: Path, commit: str, facts, recorded: set[str]) -> dict[str
         name = f"{data.get('repo')}#{data.get('number')}"
         if name not in recorded and data.get("head"):
             heads[str(data["head"])] = (name, data.get("number"))
-    if not heads:
-        return {}
     found = {}
-    text = git(root, "log", "--merges", "--format=%H %P%x09%s", commit, check=False).stdout
-    for line in text.splitlines():
-        hashes, _tab, subject = line.partition("\t")
-        commits = hashes.split()
-        if len(commits) >= 3 and commits[2] in heads:
-            name, number = heads[commits[2]]
+    for merge, head, subject in (_merge_log(root, commit) if heads else ()):
+        if head in heads:
+            name, number = heads[head]
             if re.search(rf"#{number}\b", subject):
-                found.setdefault(name, commits[0])
+                found.setdefault(name, merge)
     return found
+
+
+#: A wish result's pull request: ``pr:N`` (the loom's own repo) or its URL.
+_PULL = re.compile(r"/([^/]+)/pull/(\d+)/?$")
+
+
+@functools.lru_cache(maxsize=8)
+def _repo_name(root: Path) -> str:
+    url = git(root, "remote", "get-url", "origin", check=False).stdout.strip()
+    return (url.rstrip("/").rsplit("/", 1)[-1] if url else root.name).removesuffix(".git")
+
+
+def held_merge(result: dict, start: dict | None, *, root: Path | None = None) -> str | None:
+    """The merge commit in the start's commit of the pull request a wish
+    result names, if the loom's source holds one: a merge subject GitHub
+    writes, ``Merge pull request #N``. A ``pr:N`` names the loom's own repo;
+    a URL must name it too. ``None`` when the start knows no commit."""
+    commit = (start or {}).get("commit")
+    root = source_root() if root is None else root
+    if not commit or not (root / ".git").exists():
+        return None
+    ref = str(result.get("ref") or "")
+    if result.get("kind") == "pr" and ref.isdigit():
+        number = ref
+    elif (match := _PULL.search(ref)) and match.group(1) == _repo_name(root):
+        number = match.group(2)
+    else:
+        return None
+    pattern = re.compile(rf"^Merge pull request #{number}\b")
+    return next((merge for merge, _head, subject in _merge_log(root, commit)
+                 if pattern.match(subject)), None)
 
 
 def receipts(facts) -> dict[str, list[Receipt]]:
