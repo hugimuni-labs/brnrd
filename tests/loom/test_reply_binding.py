@@ -194,7 +194,8 @@ def test_send_binds_native_reply_only_in_its_source_channel(home, monkeypatch, d
             return subprocess.CompletedProcess(args, 0, '{"ids": []}', '')
         return real_run(args, **kw)
     monkeypatch.setattr(speak.subprocess, "run", transport)
-    key = write_send(room, to=destination, sender=READER, body="Answer", re="letter:mine:incoming")
+    key = write_send(room, to=destination, sender=READER, body="Answer", re="letter:mine:incoming",
+                     chatter=[])
     facts = _ingest(home, read_facts(home))
     router.speak_out(facts)
     sent = next(item for item in captured if item['id'] == key)

@@ -60,7 +60,7 @@ def test_graph_renders_both_ways_with_each_edge_origin(loom):
     home, seat = loom
     asked = inject_letter(home.root, to="thread:inbox", body="please fix it")
     shown(home, "s-aaaa-inbx", asked)
-    dispatch = send(home, "s-aaaa-inbx", "--to", "thread:work", "--re", asked, "Spec: fix it")
+    dispatch = send(home, "s-aaaa-inbx", "--to", "thread:work", "--re", asked, "--chatter", "Spec: fix it")
     shown(home, "s-aaaa-work", dispatch)
     by_thread = run("graph", "--home", str(home.root))
     assert "inbox\n  s-aaaa-inbx · ran · person\n" in by_thread
