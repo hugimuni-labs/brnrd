@@ -14,6 +14,7 @@ from brr.pause import read_paused_record
 from .home import atomic_write, home_of_room, mint
 from .pausing import describe
 from .port import Boundary, parse_boundary
+from . import tooltrace
 
 
 def _boundary_text(room: Path) -> str:
@@ -406,6 +407,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
                                              "additionalContext": said}}) if said else ""
     guarded = _guard_warnings(room, "post", stdin_text)[0] if event == "post" else ""
     if event == "post":
+        tooltrace.note(room, stdin_text)
         _note_tool(room, stdin_text)
         if _delegate_call(stdin_text):
             _delegates(room, stdin_text, True)
