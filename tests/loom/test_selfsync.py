@@ -19,6 +19,8 @@ from _step import notices, write_thread
 
 ROOT = Path(__file__).resolve().parents[2]
 THREAD = "ta"
+_DISCOVERY = {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_COMMON_DIR",
+              "GIT_NAMESPACE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"}
 
 
 def _home(tmp_path: Path) -> Path:
@@ -51,7 +53,8 @@ def _strand(root: Path, tag: str) -> tuple[str, Path]:
 
 def _jack(room: Path, event: str, payload: dict | None = None) -> subprocess.Popen:
     """The command the body's hooks run, in its own process."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k != "BRNRD_THREAD"}
+    # Repo discovery stays out; identity stays in, as a body's own environment carries it.
+    env = {k: v for k, v in os.environ.items() if k not in _DISCOVERY and k != "BRNRD_THREAD"}
     env["PYTHONPATH"] = os.fspath(ROOT / "src") + os.pathsep + env.get("PYTHONPATH", "")
     env["BRNRD_STOP_TIMEOUT"] = "100"
     return subprocess.Popen(
