@@ -134,7 +134,9 @@ def test_document_matches_the_contract(board):
     assert thread["plan"] == {"done": 1, "total": 2, "next": "Publisher pushes"}
     assert thread["done"] == [{"kind": "pr", "ref": "https://github.com/acme/brnrd/pull/7",
                                "line": "snapshot contract"}]
-    assert thread["turn"] in {"mine", "none"} and isinstance(thread["owed"], int)
+    # The PR line to brnrd bounces (the fake adapter has no policy): while the body
+    # runs the bounce is its own to settle, once it exits the operator's.
+    assert thread["turn"] in {"mine", "yours"} and isinstance(thread["owed"], int)
     assert "blocked_on" not in thread and thread["last_at"].endswith("Z")
     for strand in thread["strands"]:
         assert strand["body"] == "fake/haiku" and strand["since"].endswith("Z")

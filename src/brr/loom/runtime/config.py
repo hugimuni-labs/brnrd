@@ -80,6 +80,11 @@ KEYS: tuple[Key, ...] = (
         "and a tainted strand cannot publish, push to self or open threads. off: every "
         "strand is clean and nothing is shielded.",
         choices=("on", "off")),
+    Key("self_sync", "choice", "on",
+        "on: a body's self clone lands its tracked changes when the body stops and rebases onto "
+        "main at clean tool boundaries; a conflict the merge drivers cannot resolve is a notice. "
+        "off: the body lands by hand with send-self.",
+        choices=("on", "off")),
     Key("hold_floor_pct", "percent", 3.0,
         "A quota window with this percent or less left counts as exhausted: a held body stays held."),
     Key("thread_budget", "positive", 2_000_000,
