@@ -110,7 +110,9 @@ while True:
         break
     assert json.loads(view.raw)["reason"].startswith("cache keepalive, nothing new arrived: stop")
     holds += 1
-    Path({str(root / "holds")!r}).write_text(str(holds))
+    # Replace, never truncate: the test polls this file and must not read ''.
+    Path({str(root / "holds.tmp")!r}).write_text(str(holds))
+    os.replace({str(root / "holds.tmp")!r}, {str(root / "holds")!r})
 ''')
     run.chmod(0o755)
     usage = folder / "usage"
