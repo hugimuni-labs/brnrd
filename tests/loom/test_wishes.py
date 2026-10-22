@@ -335,3 +335,21 @@ def test_settle_judges_the_settled_childs_room_not_only_the_callers(ledger):
     (kid / "notes.md").unlink()
     command(home, seat, "settle", "child", "--why", "Done")
     assert read_thread(home, "child")["status"] == "settled"
+
+
+@pytest.mark.parametrize("verdict", [None, "accepted", "dropped"])
+@pytest.mark.parametrize("person", [False, True])
+def test_bare_wish_is_a_read_even_when_closed(ledger, verdict, person):
+    home, seat = ledger
+    letter = inject_letter(home.root, to="thread:work", body="Keep this wish")
+    ident = command(home, seat, "wish", "new", "--line", "Keep this wish", "--say", letter)
+    if verdict == "accepted":
+        command(home, seat, "wish", ident, "--accept", "word", person=True)
+    elif verdict == "dropped":
+        command(home, seat, "wish", ident, "--drop", "No longer needed")
+    before = read_facts(home)
+    output = command(home, seat, "wish", ident, person=person)
+    assert read_facts(home) == before
+    assert output == f"{ident} · {verdict or 'heard'} · Keep this wish · -"
+    assert "no wish" in command(home, seat, "wish", "w-missing", person=person, ok=False)
+    assert read_facts(home) == before
