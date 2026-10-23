@@ -45,7 +45,7 @@ if own == "worker":
     with Path({str(starts)!r}).open("a") as out:
         out.write("start\\n")
     letters = ctx.owed()
-    if any(l.body == "first try" for l in letters):
+    if any(l.body.startswith("first try") for l in letters):
         print("failure log tail", flush=True)
         sys.exit(7)
     for letter in letters:
@@ -54,7 +54,7 @@ if own == "worker":
 else:
     for letter in ctx.owed():
         ctx.send("thread:author", note="opener", re=letter.id)
-    original = ctx.send("thread:worker", "first try")
+    original = ctx.send("thread:worker", "first try", cite=letter.id)
     seen = set()
     deadline = time.monotonic() + 12
     while time.monotonic() < deadline:
@@ -69,7 +69,7 @@ else:
                 assert "Left behind in room" not in letter.body
                 assert Path({str(starts)!r}).read_text().splitlines() == ["start"]
                 ctx.send("thread:author", note="read bounce", re=letter.id)
-                ctx.send("thread:worker", "try again")
+                ctx.send("thread:worker", "try again", cite=letter.id)
             elif letter.body == "answered the resend":
                 atomic_write(Path({str(received)!r}), json.dumps({{"answer": letter.body, "bounce_seen": True}}))
                 ctx.send("thread:author", note="read answer", re=letter.id)

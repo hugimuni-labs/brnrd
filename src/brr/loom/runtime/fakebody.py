@@ -67,7 +67,10 @@ class Ctx:
         return JackView(proc.stdout)
 
     def send(self, to: str, body: str = "", *, re: str | None = None,
-             note: str | None = None) -> str:
+             note: str | None = None, cite: str | None = None) -> str:
+        if cite:
+            # A delegation answers no letter, so it names the one it follows as an &ref.
+            body += "\n\n&" + cite
         cmd = [sys.executable, "-m", "brr.loom.runtime", "send",
                "--room", str(self.room), "--to", to]
         if re:

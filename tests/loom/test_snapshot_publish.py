@@ -96,7 +96,7 @@ own = _own_thread(ctx.wake())
 for letter in ctx.owed():
     ctx.send("thread:" + own, note="ok", re=letter.id)
 if own == "web":
-    ctx.send("thread:brnrd", "PR https://github.com/acme/brnrd/pull/7 opened")
+    ctx.send("thread:brnrd", "PR https://github.com/acme/brnrd/pull/7 opened", cite=letter.id)
 ctx.jack("stop")
 """)
     run.chmod(0o755)

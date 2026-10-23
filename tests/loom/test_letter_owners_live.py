@@ -46,7 +46,7 @@ letters = ctx.owed()
 if any('begin' == l.body for l in letters):
     for l in letters:
         ctx.send('thread:top', note='dispatched', re=l.id)
-    ctx.send('thread:middle', 'Do the work')
+    ctx.send('thread:middle', 'Do the work', cite=l.id)
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         if any('body exited' in l.body for l in ctx.jack('post').letters):
@@ -56,7 +56,7 @@ if any('begin' == l.body for l in letters):
 if own == 'middle':
     for l in letters:
         ctx.send('thread:middle', note='delegated', re=l.id)
-    ctx.send('thread:worker', 'Do the work')
+    ctx.send('thread:worker', 'Do the work', cite=l.id)
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         if any('body exited' in l.body for l in ctx.jack('post').letters):
@@ -167,7 +167,7 @@ if _own_thread(ctx.wake()) == 'top':
             ctx.send('thread:top', note='read climbed ask', re=l.id)
             sys.exit(0)
         ctx.send('thread:top', note='dispatch', re=l.id)
-    ctx.send('thread:work', 'Read after closure')
+    ctx.send('thread:work', 'Read after closure', cite=l.id)
     deadline = time.monotonic() + 12
     while not Path({str(ready)!r}).exists():
         assert time.monotonic() < deadline
@@ -253,16 +253,16 @@ ctx = Ctx(Path(sys.argv[1]))
 if _own_thread(ctx.wake()) == 'worker':
     for l in ctx.owed():
         ctx.send(l.reply, 'WORKED', re=l.id)
-        ctx.send(l.reply, 'New proposal')
+        ctx.send(l.reply, 'New proposal', cite=l.id)
 else:
     for l in ctx.owed():
         ctx.send('thread:top', note='dispatched', re=l.id)
-    ctx.send('thread:worker', 'Work')
+    ctx.send('thread:worker', 'Work', cite=l.id)
     deadline = time.monotonic() + 12
     while time.monotonic() < deadline:
         seen = ctx.jack('post').letters
         answers = [l for l in seen if l.body == 'WORKED']
-        proposals = [l for l in seen if l.body == 'New proposal']
+        proposals = [l for l in seen if l.body.startswith('New proposal')]
         if answers and proposals:
             answer = answers[0]
             p = subprocess.run([sys.executable, '-m', 'brr.loom.runtime', 'settle', 'worker',
