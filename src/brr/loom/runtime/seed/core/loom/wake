@@ -174,12 +174,9 @@ def clip(readme: str, excess: int, limit: int) -> str:
     note = (f"[the wake cut {{}} of this README's {len(data)} bytes from its end to fit the "
             f"{limit}-byte budget; the file is whole on disk: trim it]\n")
     keep = len(data) - excess - len(note.format(len(data)).encode("utf-8"))
-    if keep <= 0:
-        return ""
-    kept = data[:keep].decode("utf-8", "ignore")
+    kept = data[:max(0, keep)].decode("utf-8", "ignore")
     kept = kept[: kept.rfind("\n") + 1] if "\n" in kept else ""
-    if not kept:
-        return ""
+    # A README smaller than the excess is cut whole, not kept whole.
     return kept + note.format(len(data) - len(kept.encode("utf-8")))
 
 
