@@ -163,7 +163,7 @@ def ping_two(ctx: Ctx) -> None:
         time.sleep(0.05)
     else:
         raise RuntimeError("opener still owed")
-    ctx.send(f"thread:{target}", "ping-1")
+    ctx.send(f"thread:{target}", "ping-1", cite=openers[0].id)
     seen = ctx.jack("stop")
     ctx.trace({"event": "stop", "ids": [letter.id for letter in seen.letters],
                "kind": seen.kind})
@@ -171,7 +171,7 @@ def ping_two(ctx: Ctx) -> None:
         raise SystemExit(3)
     for letter in seen.letters:
         ctx.send(f"thread:{own}", note="seen", re=letter.id)
-    ctx.send(f"thread:{target}", "ping-2")
+    ctx.send(f"thread:{target}", "ping-2", cite=openers[0].id)
     later = ctx.jack("stop")
     if later.kind == "block":
         for letter in later.letters:

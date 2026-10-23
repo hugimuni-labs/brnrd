@@ -39,8 +39,10 @@ class Index:
     """What a ref can name, read once per intake and only when there is a ref."""
 
     def __init__(self, facts, threads):
+        from .project import fold
         from .wishes import wishes
-        self.letters = letter_index(facts)
+        # A notice can live only inside a disposition, as Beads reads it.
+        self.letters = {**letter_index(fold(facts).accepted), **letter_index(facts)}
         self.wishes = set(wishes(facts))
         self.strands = {str(f.data.get("strand")) for f in facts if f.kind == "lease"}
         self.threads = set(threads)
