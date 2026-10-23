@@ -40,10 +40,11 @@ _HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 _USERINFO_RE = re.compile(r"://[^/\s@]+@")
 _LONG_RE = re.compile(r"[A-Za-z0-9_\-+=]{32,}")
 # user:pass after -u or --user (curl, wget): keep the user, mask the rest.
-_USERPASS_RE = re.compile(r"(?<!\S)((?:-u|--user)(?:=|\s*)['\"]?[^\s:'\"]*:)[^\s'\"]+")
+_USERPASS_RE = re.compile(r"(?<!\S)((?:-u|--user)(?:=|\s*)(?:'[^':]*:|\"[^\":]*:|[^\s:'\"]*:))(?:[^']*(?=')|[^\"]*(?=\")|[^\s'\"]+)")
 # A value after -p, glued (mysql -pSECRET) or spaced (sshpass -p SECRET),
-# unless it reads as a port (or a port map), a path, a variable or a pytest plugin.
-_SHORT_P_RE = re.compile(r"(?<!\S)(-p\s*)(?![\d:]+(?:\s|$)|[-/.~$'\"]|no:)[^\s/]+(?=\s|$)")
+# unless it reads as a port (or a port map), a path, a variable or a pytest
+# plugin. A quoted value is masked whole, quotes kept.
+_SHORT_P_RE = re.compile(r"(?<!\S)(-p\s*)(?:(['\"])(?:(?!\2).)*\2|(?![\d:]+(?:\s|$)|[-/.~$]|no:)[^\s/'\"]+(?=\s|$))")
 _SENTENCE_RE = re.compile(r"(?<=[.!?:])\s")
 
 
@@ -79,7 +80,7 @@ def arg_of(tool: str, given: object) -> str:
 def _masked(text: str) -> str:
     text = _USERINFO_RE.sub("://<redacted>@", redact_detail(text))
     text = _USERPASS_RE.sub(r"\1<redacted>", text)
-    text = _SHORT_P_RE.sub(r"\1<redacted>", text)
+    text = _SHORT_P_RE.sub(lambda m: m[1] + (m[2] or "") + "<redacted>" + (m[2] or ""), text)
     return _LONG_RE.sub(lambda m: "<redacted>" if re.search(r"[A-Za-z]", m[0]) and re.search(r"\d", m[0])
                         else m[0], text)
 
