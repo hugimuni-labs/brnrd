@@ -285,26 +285,119 @@ def test_stop_holds_for_the_shells_cache_or_the_hook_ceiling(
     assert now[0] == pytest.approx(expected)
 
 
-def test_post_traces_the_call_without_its_command(tmp_path):
+def test_post_traces_the_call_with_its_command_masked(tmp_path):
     from brr.loom.runtime import tooltrace
     room = _room(tmp_path)
-    secret = "curl -H 'Authorization: Bearer sk-live-SECRET' https://x.test/a?token=SECRET"
+    secret = "curl -H 'Authorization: Bearer sk-live-SECRET' https://u:SECRET@x.test/a?token=SECRET"
     calls = [
         {"tool_name": "Bash", "tool_input": {"command": secret, "description": "Fetch the thing"}},
-        {"tool_name": "Bash", "tool_input": {"command": secret}},
+        {"tool_name": "Bash", "tool_input": {"command": "cat > f <<'EOF'\nSECRET body\nEOF"}},
+        {"tool_name": "Bash", "tool_input": {"command": "echo ghx_0123456789abcdefghij0123456789abcdef"}},
         {"tool_name": "Read", "tool_input": {"file_path": "/Users/x/private/SECRET-dir/notes.md"}},
         {"tool_name": "Grep", "tool_input": {"pattern": "def execute", "path": "/a/SECRET"}},
         {"tool_name": "WebFetch", "tool_input": {"url": "https://x.test/a?token=SECRET", "prompt": "p"}},
     ]
-    for call in calls:
-        execute("post", room, json.dumps(call))
+    for n, call in enumerate(calls):
+        execute("pre", room, json.dumps(dict(call, tool_use_id=f"t{n}")))
+        execute("post", room, json.dumps(dict(call, tool_use_id=f"t{n}", duration_ms=5)))
     text = (room / "port" / "tools.jsonl").read_text()
-    assert "SECRET" not in text and "curl" not in text
+    assert "SECRET" not in text and "0123456789abcdef" not in text
     rows = tooltrace.read(room)
     assert [(r["tool"], r["arg"]) for r in rows] == [
-        ("Bash", "Fetch the thing"), ("Bash", ""), ("Read", "notes.md"),
+        ("Bash", "Fetch the thing"), ("Bash", ""), ("Bash", ""), ("Read", "notes.md"),
         ("Grep", "def execute"), ("WebFetch", "x.test"),
     ]
+    assert rows[0]["cmd"].startswith("curl -H 'Authorization: <redacted>")
+    assert "://<redacted>@x.test" in rows[0]["cmd"]
+    assert rows[1]["cmd"] == "cat > f <<'EOF' …"
+    assert rows[2]["cmd"] == "echo <redacted>"
+    assert all(r["end"] is not None and r["ms"] == 5 for r in rows)
+
+
+def test_an_open_call_is_live_with_its_line_until_its_post(tmp_path, monkeypatch):
+    from brr.loom.runtime import tooltrace
+    room = _room(tmp_path)
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text("".join(json.dumps(e) + "\n" for e in [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "Old line."}]}},
+        {"type": "user", "message": {"content": "x"}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "Running the suite now. It takes a while."}, {"type": "tool_use"}]}},
+    ]))
+    sleep = {"tool_name": "Bash", "tool_use_id": "s1", "transcript_path": str(transcript),
+             "tool_input": {"command": "sleep 90", "description": "Wait"}}
+    execute("pre", room, json.dumps(sleep))
+    execute("pre", room, json.dumps(dict(sleep, tool_use_id="s2", tool_input={"command": "ls"})))
+    execute("post", room, json.dumps(dict(sleep, tool_use_id="s2", tool_input={"command": "ls"})))
+    now = tooltrace.live(room)
+    assert [(c["cmd"], c["end"]) for c in now["open"]] == [("sleep 90", None)]
+    assert now["say"] == "Running the suite now." and now["last_end"] and now["paused"] is None
+    lines = (room / "port" / "tools.jsonl").read_text().splitlines()
+    assert sum('"say"' in line for line in lines) == 1  # written when it changes, not per call
+    execute("post", room, json.dumps(dict(sleep, hook_event_name="PostToolUseFailure")))
+    assert tooltrace.live(room)["open"] == []
+    assert tooltrace.read(room)[0]["failed"] is True
+
+
+def test_a_refused_call_is_written_ended(tmp_path, monkeypatch):
+    from brr.loom.runtime import tooltrace
+    room = _room(tmp_path)
+    from brr.loom.runtime import jack
+    monkeypatch.setattr(jack, "_guard_warnings", lambda *a: ("guard x", True))
+    out = json.loads(execute("pre", room, json.dumps(
+        {"tool_name": "Bash", "tool_use_id": "r1", "tool_input": {"command": "rm -rf x"}})))
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    [row] = tooltrace.read(room)
+    assert row["cmd"] == "rm -rf x" and row["end"] is not None and row["failed"] is True
+    assert tooltrace.live(room)["open"] == []
+
+
+def test_lines_without_ids_or_starts_still_read_as_calls(tmp_path):
+    from brr.loom.runtime import tooltrace
+    room = _room(tmp_path)
+    (room / "port" / "tools.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
+        {"at": 10.0, "tool": "Read", "arg": "old.md"},  # before starts were written
+        {"at": 11.0, "end": 0, "tool": "Bash", "arg": "a"},  # grok/vibe: no id
+        {"at": 12.0, "end": 0, "tool": "Bash", "arg": "b"},
+        {"at": 13.0, "end": 1, "tool": "Bash", "arg": "a"},
+        {"at": 20.0, "end": 1, "id": "lost", "tool": "Grep", "arg": "p", "ms": 4000},
+    ]))
+    rows = tooltrace.read(room)
+    assert [(r["arg"], r["at"], r["end"]) for r in rows] == [
+        ("old.md", 10.0, 10.0), ("a", 11.0, 13.0), ("b", 12.0, None), ("p", 16.0, 20.0)]
+    assert [c["arg"] for c in tooltrace.live(room)["open"]] == ["b"]
+
+
+def test_a_codex_room_reads_its_rollout(tmp_path, monkeypatch):
+    from brr.loom.runtime import tooltrace
+    room = _room(tmp_path)
+    thread = "01a1-codex-thread"
+    (room / "port" / "body.log").write_text(
+        "noise\n" + json.dumps({"type": "thread.started", "thread_id": thread}) + "\n")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    rollout = tmp_path / "codex/sessions/2026/10/23" / f"rollout-2026-10-23T00-00-00-{thread}.jsonl"
+    rollout.parent.mkdir(parents=True)
+
+    def item(ts, payload):
+        return json.dumps({"timestamp": f"2026-10-23T00:00:{ts:02d}.000Z", "type": "response_item",
+                           "payload": payload}) + "\n"
+    exec_input = "text(await tools.exec_command({cmd:'pytest -q tests/x --token=SECRET',max_output_tokens:9}));"
+    rollout.write_text(
+        item(0, {"type": "message", "role": "assistant", "phase": "commentary",
+                 "content": [{"type": "output_text", "text": "Running the tests. Then publish."}]})
+        + item(1, {"type": "custom_tool_call", "call_id": "c1", "name": "exec", "input": exec_input})
+        + item(31, {"type": "custom_tool_call_output", "call_id": "c1",
+                    "output": [{"type": "input_text", "text": "Script running with cell ID 7\nWall time 30"}]})
+        + item(33, {"type": "function_call", "call_id": "c2", "name": "wait", "arguments": '{"cell_id":"7"}'}))
+    now = tooltrace.live(room)
+    [running] = now["open"]
+    assert running["cmd"] == "pytest -q tests/x --token=<redacted>" and now["say"] == "Running the tests."
+    assert running["at"] == tooltrace._stamp("2026-10-23T00:00:01.000Z")
+    with rollout.open("a") as handle:  # read on from where the last read stopped
+        handle.write(item(50, {"type": "function_call_output", "call_id": "c2", "output": "Script completed"}))
+    assert tooltrace.live(room)["open"] == []
+    [done] = tooltrace.read(room)
+    assert done["end"] - done["at"] == 49
 
 
 def test_tool_trace_never_fails_the_hook_and_rotates(tmp_path, monkeypatch):

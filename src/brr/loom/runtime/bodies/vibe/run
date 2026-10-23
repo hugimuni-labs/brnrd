@@ -5,7 +5,7 @@ import subprocess
 import shlex
 import sys
 from pathlib import Path
-from brr.hooks import _render_vibe, _vibe_as_claude_tool, vibe_hooks_toml, PHASE_POST_TOOL, PHASE_STOP
+from brr.hooks import _render_vibe, _vibe_as_claude_tool, vibe_hooks_toml, PHASE_POST_TOOL, PHASE_PRE_TOOL, PHASE_STOP
 from brr.vibe_runner import command, prepare_system_prompt
 from brr.loom.runtime.port import wake_parts
 
@@ -13,17 +13,19 @@ from brr.loom.runtime.port import wake_parts
 # jack's Claude-shaped output; the loop and the jack stay shell-independent.
 if sys.argv[1] == "hook":
     phase = sys.argv[2]
-    if phase not in (PHASE_POST_TOOL, PHASE_STOP):
+    event = {PHASE_PRE_TOOL: "pre", PHASE_POST_TOOL: "post", PHASE_STOP: "stop"}.get(phase)
+    if event is None:
         raise SystemExit(0)
-    event = "post" if phase == PHASE_POST_TOOL else "stop"
     payload = json.loads(sys.stdin.read() or "{}")
     result = subprocess.run(shlex.split(os.environ["BRNRD_JACK"]) + ["--event", event],
                             input=json.dumps(_vibe_as_claude_tool(payload)), text=True, capture_output=True)
     if result.stdout.strip():
         payload = json.loads(result.stdout)
-        context = payload.get("hookSpecificOutput", {}).get("additionalContext")
-        block = payload.get("decision") == "block"
-        print(json.dumps(_render_vibe(phase, context, block, payload.get("reason"))))
+        specific = payload.get("hookSpecificOutput", {})
+        context = specific.get("additionalContext")
+        block = payload.get("decision") == "block" or specific.get("permissionDecision") == "deny"
+        reason = payload.get("reason") or specific.get("permissionDecisionReason")
+        print(json.dumps(_render_vibe(phase, context, block, reason)))
     raise SystemExit(result.returncode)
 
 room, core = sys.argv[1:]

@@ -400,14 +400,17 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         # Not a boundary: letters wait for the call's result. A delegate's
         # call is guarded too, since the act is the strand's.
         said, refuse = _guard_warnings(room, "pre", stdin_text)
+        tooltrace.note(room, stdin_text, "pre")
         if refuse:
+            # A refused call gets no post hook; its end is written here.
+            tooltrace.note(room, stdin_text, "refused")
             return _json({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                                  "permissionDecisionReason": "refused by a guard:\n" + said}})
         return _json({"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                              "additionalContext": said}}) if said else ""
     guarded = _guard_warnings(room, "post", stdin_text)[0] if event == "post" else ""
     if event == "post":
-        tooltrace.note(room, stdin_text)
+        tooltrace.note(room, stdin_text, "post")
         _note_tool(room, stdin_text)
         if _delegate_call(stdin_text):
             _delegates(room, stdin_text, True)
