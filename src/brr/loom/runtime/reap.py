@@ -103,8 +103,8 @@ def left(home, strand: str) -> list[str]:
              f" `{run} reap --discard '{name}' --why \"<why>\"`" for name in loose(room)]
     for item in leftovers(home, strand):
         where, at = item.path.name, item.path
-        if item.error:
-            lines.append(f"{where}: not inspected ({item.error}); look with `git -C '{at}' status`")
+        # A checkout leftovers could not inspect has no command that clears it, so it
+        # would hold the stop for good; room_kept still keeps the room for it.
         if item.commits:
             shown = ", ".join(f"{sha[:8]} {subject!r}" for sha, subject in item.commits[:3])
             more = ", ..." if len(item.commits) > 3 else ""
