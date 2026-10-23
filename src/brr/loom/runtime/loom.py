@@ -406,6 +406,8 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     part_path = room / "port" / "loom.md"
     inherited = _read_by_predecessors(facts, thread, strand, letters, threads)
     gone = since_gone(facts, strand, gen, thread, threads, home.install_id())
+    from .reap import kept_line
+    gone += kept_line(home, thread, threads)
     atomic_write(part_path, gone + inherited + (
         f"you are strand {strand} on thread {thread}; letters arrive at your "
         "tool boundaries, each line naming its reply address; answer with "

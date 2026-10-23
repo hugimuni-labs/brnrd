@@ -29,6 +29,13 @@ def _ended(home, thread, strand, days):
     return home.room(strand)
 
 
+def _text(path):
+    try:  # the pass may rotate it between two reads
+        return path.read_text()
+    except FileNotFoundError:
+        return ""
+
+
 def _reaped(home):
     return {f.data["path"]: f for f in read_facts(home) if f.kind == "room.reaped"}
 
@@ -60,7 +67,7 @@ def test_the_loop_reaps_only_what_is_held_elsewhere(tmp_path, monkeypatch):
     looming = Loom(home.root, tick=0.01)
     looming.start()
     try:
-        wait_until(lambda: log.exists() and "reap: " in log.read_text(), 20, looming.dump)
+        wait_until(lambda: "reap: " in _text(log), 20, looming.dump)
     finally:
         looming.halt()
     assert not looming.errors
@@ -107,3 +114,81 @@ def test_under_the_disk_floor_the_loop_degrades_and_recovers(tmp_path, monkeypat
     [down] = [f for f in read_facts(Home(root)) if f.kind == "loom.degraded"]
     assert down.data["step"] == "disk"
     assert down.data["error"].startswith("DiskFloor: 0 MB free")
+
+
+def _jack(room, event, thread):
+    import json, os, re, subprocess, sys
+    env = dict(os.environ, BRNRD_THREAD=thread, BRNRD_ROOM=str(room))
+    for name in ("BRNRD_BODY_JACK", "BRNRD_BODY_SHELL"):
+        env.pop(name, None)
+    out = subprocess.run([sys.executable, "-m", "brr.loom.runtime", "jack", "--event", event, "--room", str(room)],
+                         input="{}", text=True, capture_output=True, env=env, timeout=60).stdout
+    return json.loads(out) if out.strip() else {}
+
+
+def test_a_stop_with_work_only_its_room_holds_is_blocked_and_says_how_to_clear_it(tmp_path):
+    import os, re, subprocess
+    home = Home(tmp_path / "home", install="0001")
+    init_self(home.root, person="test")
+    write_thread(home.root, "live", "# live", "quit-now", wait="0")
+    append(home, Fact(kind="lease", by="router:0001", id="lease:0001-live",
+                      data=dict(thread="live", strand="0001-live", gen=1)))
+    room = clone_room(home.root, "0001-live").parent
+    for sub in ("in", "out"):
+        (room / "port" / sub).mkdir(parents=True, exist_ok=True)
+    (room / "port" / "wait").write_text("0\n")
+    from brr.loom.runtime.port import render_boundary
+    (room / "port" / "in" / "boundary.md").write_text(render_boundary("0001-live", 1, "live", [], set(), {}))
+    clean = _jack(room, "stop", "live")
+    assert "left in room" not in clean.get("reason", "")
+
+    (room / "pr2-body.md").write_text("a draft only here")
+    (room / "self" / "work.md").write_text("not committed")
+    _jack(room, "post", "live")
+    held = _jack(room, "stop", "live")
+    assert held["decision"] == "block"
+    reason = held["reason"]
+    assert reason.startswith("left in room: ")
+    assert "pr2-body.md: a loose file" in reason and "self: 1 paths not committed (work.md)" in reason
+    # Each item names the one command that clears it; run them as printed.
+    for command in re.findall(r"or discard (?:it|them): `([^`]+)`", reason):
+        ran = subprocess.run(command, shell=True, cwd=room, text=True, capture_output=True,
+                             env=dict(os.environ, BRNRD_ROOM=str(room), BRNRD_THREAD="live"))
+        assert ran.returncode == 0, ran.stderr
+    assert not (room / "pr2-body.md").exists() and not (room / "self" / "work.md").exists()
+    _jack(room, "post", "live")
+    assert "left in room" not in _jack(room, "stop", "live").get("reason", "")
+    [gone] = [f for f in read_facts(home) if f.kind == "room.discarded"]
+    assert gone.data["path"] == "pr2-body.md" and gone.data["why"] == "<why>"
+
+
+def test_rooms_kept_for_a_body_reach_inbox_once_their_thread_at_wake_and_force_clears_one(tmp_path):
+    import json, os, subprocess, sys
+    home = Home(tmp_path / "home", install="0001")
+    init_self(home.root, person="test")
+    write_thread(home.root, "brnrd", "Brnrd", "quit-now", wait="0")
+    loose = _ended(home, "loose", "0001-loose", 8)
+    (loose / "pr2-body.md").write_text("a draft only here")
+    _ended(home, "young", "0001-young", 1)
+    reaper = reap.Reaper(home, lambda *_: None)
+    reaper.reap()
+    reaper.reap()
+    notices = [f for f in read_facts(home) if f.kind == "letter" and f.id.startswith("loom/rooms-kept-")]
+    assert len(notices) == 1
+    assert notices[0].data["to"] == f"thread:{home.main_thread()}"
+    assert "- 0001-loose (thread loose): loose files: pr2-body.md" in notices[0].data["body"]
+    assert "reap <strand> --force" in notices[0].data["body"]
+    assert "loose files" in reap.kept_line(home, "loose", {"0001-loose": "loose"})
+    assert reap.kept_line(home, "young", {"0001-young": "young"}) == ""
+
+    def verb(*args):
+        return subprocess.run([sys.executable, "-m", "brr.loom.runtime", "reap", *args, "--home", str(home.root)],
+                              text=True, capture_output=True, timeout=60)
+    assert verb("0001-loose").stdout.startswith("kept: loose files")
+    assert verb("0001-loose", "--force").returncode == 2  # no --why
+    done = verb("0001-loose", "--force", "--why", "the draft is in the PR body")
+    assert done.returncode == 0, done.stderr
+    assert not loose.exists()
+    assert _reaped(home)["rooms/0001-loose"].data["forced"] == "the draft is in the PR body"
+    reaper.reap()
+    assert json.loads((home.root / reap.KEPT).read_text()) == {"kept": {}, "told": []}
