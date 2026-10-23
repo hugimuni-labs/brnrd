@@ -94,24 +94,131 @@ def asks(facts, main: dict, thread: str | None = None, everything: bool = False)
     return text
 
 
-def bead(facts, main: dict, ident: str) -> dict | None:
-    """One item and what it hangs from, read from the facts: never stored.
 
-    A letter walks up its ``re`` (or first letter link) to a person's letter,
-    the root, whose neighbours on that person's strip are their letters just
-    before and after it in fact order. It also names the wishes whose says
-    cite it, the threads and strands it touched, and the letters answering it.
+ROOTS = ("person", "loom", "unconfirmed")
+
+
+class Beads:
+    """Every item's parent, read from the facts once: never stored.
+
+    Walking up ends at a root: a person's letter, a loom fact (a notice's
+    condition, an incident's event), or a derived wish nobody confirmed yet.
+    A letter climbs its ``re``, else its first link; a loom letter climbs to
+    the fact it was written after; a resident letter that cites nothing
+    climbs to its strand, the strand to its thread, the thread to the wish
+    it was opened for (or, opened before wishes, the wish or letter its
+    Plan rows cite), a said wish to the letter that says it.
     """
-    from .dispositions import is_person, letter_index
+
+    def __init__(self, facts, main: dict):
+        from .dispositions import letter_index
+        from .project import fold
+        state = fold(facts)
+        # A notice can live only inside a disposition: the fold reads those out.
+        self.letters = {**letter_index(state.accepted), **letter_index(facts)}
+        self.facts = {f.id: f for f in facts}
+        self.wishes, self.writers, self.main = wishes(facts), sender_threads(facts), main
+        self.leases = [f for f in state.accepted if f.kind == "lease"]
+
+    def kind(self, ident: str) -> str:
+        from .refs import kind_of
+        if ident in self.letters:
+            return "letter"
+        if ident in self.wishes:
+            return "wish"
+        if ident in self.facts:
+            return "fact"
+        return kind_of(ident)
+
+    def parent(self, ident: str) -> tuple[str | None, str]:
+        """``(parent, edge)``, or ``(None, root kind)``, or ``(None, "dangling")``."""
+        from .dispositions import is_person
+        kind = self.kind(ident)
+        if kind == "letter":
+            f = self.letters[ident]
+            d = f.data
+            if d.get("re"):
+                return str(d["re"]), "re"
+            if d.get("links"):
+                return str(d["links"][0]), "link"
+            if is_person(f) or str(d.get("from", "")).startswith("stranger:"):
+                return None, "person"
+            if d.get("from") == "loom":
+                return (f.after[0], "after") if f.after and f.after[0] in self.facts else (None, "loom")
+            if f.by.startswith("strand:"):
+                return f.by.removeprefix("strand:"), "molt" if d.get("molt") else "strand"
+            return None, "dangling"
+        if kind == "fact":
+            return None, "loom" if self.facts[ident].by.startswith("loom:") else "dangling"
+        if kind == "strand":
+            return (f"thread:{self.writers[ident]}", "thread") if ident in self.writers else (None, "dangling")
+        if kind == "thread":
+            from .threads import opened_for
+            name = ident.removeprefix("thread:")
+            data = self.main.get(name) or {}
+            wanted = opened_for(data)
+            if wanted:
+                return wanted[0], "opened-for"
+            # Opened before wishes: its Plan rows cite the wish or letter they answer.
+            from .dispositions import resolve
+            cited = [raw for _, row in data.get("plan_rows") or () if " · re: " in row
+                     for raw in row.rpartition(" · re: ")[2].replace(",", " ").split()]
+            found = next((raw for raw in cited if raw in self.wishes), None)
+            found = found or next(filter(None, (resolve(self.letters, raw) for raw in cited)), None)
+            return (found, "row") if found else (None, "dangling")
+        if kind == "wish":
+            w = self.wishes.get(ident)
+            if w is None:
+                return None, "dangling"
+            if w.verdict and w.verdict.get("letter"):
+                return str(w.verdict["letter"]), "verdict"
+            if w.origin == "derived":
+                return None, "unconfirmed"
+            if w.says:
+                return w.says[0].letter, "says"
+            return (f"thread:{w.thread}", "asked") if w.thread else (None, "dangling")
+        return None, "dangling"
+
+    def chain(self, ident: str) -> tuple[list[tuple[str, str]], str]:
+        """``ident``'s ancestors as ``(id, edge)``, nearest first, and the root kind."""
+        out, seen, at = [], {ident}, ident
+        while True:
+            up, edge = self.parent(at)
+            if up is None:
+                return out, edge
+            if up in seen:
+                return out, "dangling"
+            seen.add(up)
+            out.append((up, edge))
+            if up not in self.letters and up not in self.facts and self.kind(up) == "letter":
+                return out, "dangling"
+            at = up
+
+    def successor(self, strand: str) -> str | None:
+        """The strand that took over ``strand``'s thread after it molted."""
+        thread = self.writers.get(strand)
+        held = [str(f.data["strand"]) for f in self.leases if f.data.get("thread") == thread]
+        after = held[held.index(strand) + 1:] if strand in held else []
+        return next((s for s in after if s != strand), None)
+
+
+def bead(facts, main: dict, ident: str) -> dict | None:
+    """One item, the chain up to its root, and what hangs from it."""
+    from .dispositions import is_person
     from .ledger import fact_order
-    from .refs import Index, kind_of
+    from .refs import Index
     from .threads import opened_for
-    index = Index(facts, main)
-    found = index.resolve(ident.removeprefix("&"))
+    beads = Beads(facts, main)
+    found = Index(facts, main).resolve(ident.removeprefix("&"))
+    if found is None and ident.removeprefix("&") in beads.letters:
+        found = ident.removeprefix("&")
     if found is None:
         return None
-    letters, told, writers, edges = index.letters, wishes(facts), sender_threads(facts), graph(facts)
-    kind = kind_of(found)
+    told, writers, edges, letters = beads.wishes, beads.writers, graph(facts), beads.letters
+    kind = beads.kind(found)
+    chain, root_kind = beads.chain(found)
+    up = {"ancestors": [{"id": i, "kind": beads.kind(i), "edge": e} for i, e in chain],
+          "root": chain[-1][0] if chain else found, "root_kind": root_kind}
 
     def strands_on(thread):
         return sorted({e.strand for e in edges if e.thread == thread})
@@ -121,51 +228,49 @@ def bead(facts, main: dict, ident: str) -> dict | None:
         return {"kind": "wish", "id": found, "line": w.line, "state": w.state, "origin": w.origin,
                 "thread": w.thread, "says": list(dict.fromkeys(s.letter for s in w.says)),
                 "results": [r.get("ref") for r in w.results],
-                "opened": sorted(t for t, d in main.items() if found in opened_for(d))}
+                "opened": sorted(t for t, d in main.items() if found in opened_for(d)), **up}
     if kind == "thread":
         name = found.removeprefix("thread:")
         return {"kind": "thread", "id": found, "status": main[name].get("status"),
                 "opened_for": opened_for(main[name]), "opened_by": main[name].get("opened-by"),
                 "wishes": sorted(w.id for w in told.values() if w.thread == name and w.open),
-                "strands": strands_on(name)}
+                "strands": strands_on(name), **up}
     if kind == "strand":
         return {"kind": "strand", "id": found, "thread": writers.get(found),
+                "successor": beads.successor(found),
                 "edges": [{"thread": e.thread, "how": e.how, "origin": e.origin}
-                          for e in edges if e.strand == found]}
+                          for e in edges if e.strand == found], **up}
     letter = letters[found]
     d = letter.data
-
-    def parent(f):
-        up = f.data.get("re") or next((i for i in f.data.get("links") or () if i in letters), None)
-        return str(up) if up else None
-
-    chain, seen, up = [], {found}, parent(letter)
-    while up and up not in seen and up in letters:
-        seen.add(up)
-        chain.append(up)
-        up = parent(letters[up])
-    root = next((i for i in [found, *chain] if is_person(letters[i])), None)
+    said = next((i for i in [found, *(i for i, _ in chain)] if i in letters and is_person(letters[i])), None)
     strip = {}
-    if root:
-        sender = letters[root].data.get("from")
+    if said:
+        sender = letters[said].data.get("from")
         own = sorted((f for f in letters.values() if is_person(f) and f.data.get("from") == sender),
                      key=fact_order)
-        at = [str(f.data.get("id", f.id)) for f in own].index(root)
+        at = [str(f.data.get("id", f.id)) for f in own].index(said)
         strip = {"prev": str(own[at - 1].data.get("id")) if at else None,
                  "next": str(own[at + 1].data.get("id")) if at + 1 < len(own) else None}
     strand = letter.by.removeprefix("strand:") if letter.by.startswith("strand:") else None
+    molt = {"from": strand, "to": beads.successor(strand)} if d.get("molt") and strand else None
     shown = sorted({str(f.data.get("strand")) for f in facts
                     if f.kind == "shown" and found in (f.data.get("ids") or ())})
-    said = sorted(w.id for w in told.values() if any(s.letter == found for s in w.says))
-    threads = [writers.get(strand), _destination(d), *(told[w].thread for w in said)]
+    wished = sorted(w.id for w in told.values() if any(s.letter == found for s in w.says))
+    threads = [writers.get(strand), _destination(d), *(told[w].thread for w in wished)]
     return {"kind": "letter", "id": found, "from": d.get("from"), "to": d.get("to"), "at": letter.at,
-            "body": d.get("body", ""), "links": list(d.get("links") or ()),
-            "ancestors": chain, "root": root, "strip": strip, "wishes": said,
+            "body": d.get("body", ""), "links": list(d.get("links") or ()), **up,
+            "said": said, "strip": strip, "molt": molt, "wishes": wished,
             "threads": list(dict.fromkeys(t for t in threads if t)),
             "strands": list(dict.fromkeys(s for s in [strand, *shown] if s)),
             "answers": [i for i, f in letters.items()
                         if f.data.get("re") == found or found in (f.data.get("links") or ())]}
 
+
+def roots(facts, main: dict) -> dict[str, int]:
+    """How many letters' chains end at each root kind: the provenance count."""
+    from collections import Counter
+    beads = Beads(facts, main)
+    return dict(Counter(beads.chain(i)[1] for i in beads.letters))
 
 def render_bead(found: dict | None) -> str:
     if found is None:

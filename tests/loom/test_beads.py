@@ -89,7 +89,8 @@ def test_a_bead_walks_a_resident_reply_back_to_the_person_root(ledger):
     fm = parse_frontmatter(out_file(seat, reply).read_text())
     append(home, fact_from_port(fm, "s-aaaa-test", 1))
     found = bead(read_facts(home), main_snapshot(home), reply)
-    assert (found["ancestors"], found["root"]) == ([root], root)
+    assert [a["id"] for a in found["ancestors"]] == [root]
+    assert (found["root"], found["root_kind"], found["said"]) == (root, "person", root)
     assert found["strip"] == {"prev": first, "next": None} and found["links"] == [first]
     assert bead(read_facts(home), main_snapshot(home), first)["answers"] == [reply]
     shown = cli(["graph", "--room", str(seat), "--bead", reply])
