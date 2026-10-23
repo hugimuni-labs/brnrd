@@ -129,7 +129,8 @@ def answer_pings(ctx: Ctx) -> None:
             if body.startswith("ping-"):
                 if not letter.reply.startswith("thread:"):
                     raise RuntimeError(f"{letter.id} has no reply thread ({letter.reply})")
-                ctx.send(letter.reply, body[::-1], re=letter.id)
+                # The ping is its first line; an &ref under it is not echoed.
+                ctx.send(letter.reply, body.split("\n", 1)[0][::-1], re=letter.id)
             else:
                 ctx.send(f"thread:{own}", note="not a ping", re=letter.id)
             answered.add(letter.id)

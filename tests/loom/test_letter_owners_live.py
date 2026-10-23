@@ -199,9 +199,10 @@ else:
     loom = Loom(root)
     loom.start()
     try:
-        wait_until(ended.is_set, 12, loom.dump)
+        # settle alone takes ~8s, so ended lands near 11s on main as well.
+        wait_until(ended.is_set, 30, loom.dump)
         table = letter_owners(loom.facts(), main_snapshot(loom.home))
-        ident = next(k for k, f in table.items() if f.letter.data['body'] == 'Read after closure')
+        ident = next(k for k, f in table.items() if f.letter.data['body'].startswith('Read after closure'))
         assert table[ident].owner == 'loom'
         assert table[ident].reason == 'awaiting port drain'
         assert not any(f.data.get('about') == ident for f in loom.facts())
