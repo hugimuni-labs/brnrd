@@ -200,26 +200,6 @@ class WakeFailure(SelfError):
         self.letter_ids = tuple(letter_ids)
 
 
-def _graft(home: Home, clone: Path, strand: str, parent: str) -> None:
-    """Start where the parent stands, which is how strands share the self.
-
-    Its strand branch first, else its HEAD, else main. A crash can leave a
-    parent room on another branch: on 2026-10-23 an OOM killed a clone before
-    its strand branch existed, its body worked on ``main``, and every successor
-    then failed to fetch ``strand/<parent>``, so inbox could not start for hours.
-    """
-    source = home.room(parent) / "self"
-    if (source / ".git").exists():
-        for ref in (f"strand/{parent}", "HEAD"):
-            if git(clone, "fetch", "-q", "--no-tags", str(source), ref, check=False).returncode == 0:
-                git(clone, "reset", "--hard", "FETCH_HEAD")
-                if ref == "HEAD":
-                    _log(home, f"start {strand}: parent room {parent} has no strand/{parent}; "
-                               "started from its HEAD")
-                return
-    _log(home, f"start {strand}: parent room {parent} gone or unreadable; starting from main")
-
-
 def _run_recipe(clone, thread, owed_path, part_path, repo_file, core_path, recipe=None):
     with tempfile.TemporaryFile(mode="w+") as wake, tempfile.TemporaryFile(mode="w+") as why:
         code = run_wake(clone, thread, owed_path, loom_part=part_path, repos=repo_file,
@@ -1007,7 +987,7 @@ def _room_kept(home: Home, strand: str) -> list[str]:
 def _home_streak(facts, thread: str, gen: int) -> int:
     """The first generation of the home-caused failures that end at ``gen``."""
     ends = sorted((int(f.data["gen"]), f) for f in kind_facts(facts, "attempt.ended")
-                  if f.kind == "attempt.ended" and f.data.get("thread") == thread
+                  if f.data.get("thread") == thread
                   and int(f.data["gen"]) < gen)
     start = gen
     for prior, fact in reversed(ends):
