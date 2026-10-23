@@ -3,7 +3,7 @@
 A room goes only when the ledger and git both show its work is held
 elsewhere: its last gen released and drained at least ``ROOM_AGE`` ago, no
 body holding ``room/.body``, nothing in ``port/out``, no live lease naming it
-``parent``, and ``leftovers`` empty (self commits on home self's main, repo
+``parent``, nothing at its root but plumbing and checkouts, and ``leftovers`` empty (self commits on home self's main, repo
 commits on their declared source, no dirty paths). A room failing any check
 is kept, and the reason is logged. ``self.broken-*`` asides go ``BROKEN_AGE``
 after the ``room.repaired`` that made them, ``.self-clone-*`` once their pid is
@@ -30,6 +30,8 @@ LOG_MAX = 20 * 1024 * 1024
 LOG_KEEP = 3
 FLOOR_BYTES = 5 * 1024 ** 3
 FLOOR_SHARE = 0.05
+# What the loom and the harness put at a room's root; checkouts are read by leftovers.
+PLUMBING = {"self", "port", ".body", ".starting", ".claude", ".pytest-tmp"}
 
 
 class DiskFloor(Exception):
@@ -106,6 +108,12 @@ def room_kept(home, facts, strand: str, now: float) -> str:
                    if f.kind == "lease" and f.data.get("strand") == child)
         if (child, last) not in done:
             return f"{child} is its live child"
+    # leftovers reads git checkouts only: anything else a body left at the root keeps the room.
+    loose = sorted(p.name for p in room.iterdir() if p.name not in PLUMBING
+                   and not p.name.startswith(("self.broken-", ".self-clone-"))
+                   and not (p / ".git").exists())
+    if loose:
+        return "loose files: " + ", ".join(loose[:5]) + (", ..." if len(loose) > 5 else "")
     from .leftovers import leftovers
     left = leftovers(home, strand)
     if left:

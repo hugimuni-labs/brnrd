@@ -47,6 +47,8 @@ def test_the_loop_reaps_only_what_is_held_elsewhere(tmp_path, monkeypatch):
         aside.mkdir()
         append(home, Fact(kind="room.repaired", by="loom:0001", at=_ago(days), data={
             "strand": "0001-kept", "gen": 1, "found": ["x"], "done": ["y"], "aside": str(aside)}))
+    loose = _ended(home, "loose", "0001-loose", 8)
+    (loose / "pr2-body.md").write_text("a draft only here")
     dead = kept / ".self-clone-999999-abc"
     dead.mkdir()
     head = git(done / "self", "rev-parse", "strand/0001-done").stdout.strip()
@@ -70,10 +72,11 @@ def test_the_loop_reaps_only_what_is_held_elsewhere(tmp_path, monkeypatch):
     assert room.data["what"] == "room" and room.data["bytes"] > 0
     assert room.data["heads"]["self"]["strand/0001-done"] == head
     assert not done.exists() and not old.exists() and not dead.exists()
-    # Work only this room holds, a young release and a young aside all stay.
+    # Work only this room holds, a loose file at a root, a young release and a young aside all stay.
     assert (kept / "self" / "work.md").exists() and fresh.exists() and young.exists()
+    assert (loose / "pr2-body.md").exists()
     assert (home.root / "loom" / "loom.log.1").read_text().startswith("x" * 100)
-    assert "reap: 1 rooms reaped; kept 1 (leftovers in self), 1 (released less than 7 days ago)" in log.read_text()
+    assert "reap: 1 rooms reaped; kept 1 (leftovers in self), 1 (loose files), 1 (released less than 7 days ago)" in log.read_text()
 
 
 def test_a_fact_left_by_a_crash_mid_delete_is_finished(tmp_path):
