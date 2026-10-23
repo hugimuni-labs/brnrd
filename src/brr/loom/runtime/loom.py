@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import fcntl
+import functools
 import json
 import os
 import re
@@ -1629,11 +1630,11 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         router = Router(home, config)
         from .connector import Inputs
         inputs = Inputs(home)
+        health = Health(home, read_facts(home), _log)
         from .snapshot import Publisher
-        publisher = Publisher(home, _log)
+        publisher = Publisher(home, _log, functools.partial(health.guard, backoff=False))
         from .mirror import Mirror
         mirror = Mirror(home, _log)
-        health = Health(home, read_facts(home), _log)
         while not (stop is not None and stop.is_set()):
             try:
                 config = load_config(home.root)
