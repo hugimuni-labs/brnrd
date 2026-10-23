@@ -81,6 +81,8 @@ REGISTRY = (
     _kind("attempt.ended",     "attempt", "thread strand gen ids cause code dispositions evidence", "loom",  "global",  once=True),
     _kind("port.drained",      "port",    "thread strand gen",                                "loom",        "global",  once=True),
     _kind("loom.started",      "loom",    "install pid commit? loaded",                       "loom",        "global"),
+    _kind("loom.degraded",     "loom",    "install step error where since",                   "loom",        "machine"),
+    _kind("loom.recovered",    "loom",    "install step since count last",                    "loom",        "machine"),
 )
 
 KINDS = {row.kind: row for row in REGISTRY}

@@ -86,11 +86,17 @@ class Mirror:
         self.home, self.log = home, log
         self.checked: float | None = None
         self.worker: threading.Thread | None = None
-        self.failing = False
+        self.failing: tuple[Exception, object] | None = None
         self.private: bool | None = None
         self.asking = False
 
     def step(self, config) -> None:
+        """Until a push succeeds again, raise the last push failure for the loop's guard."""
+        self._attempt(config)
+        if self.failing is not None and config.forge_token:
+            raise self.failing[0].with_traceback(self.failing[1])
+
+    def _attempt(self, config) -> None:
         if not config.forge_token or (self.worker and self.worker.is_alive()):
             return
         now = time.monotonic()
@@ -127,8 +133,6 @@ class Mirror:
     def _push(self, self_dir: Path, url: str, sha: str, forge_token: str) -> None:
         try:
             push(self_dir, url, sha, forge_token)
-            self.failing = False
+            self.failing = None
         except Exception as exc:
-            if not self.failing:
-                self.log(self.home, f"mirror: push of self main failed: {exc}")
-            self.failing = True
+            self.failing = (exc, exc.__traceback__)

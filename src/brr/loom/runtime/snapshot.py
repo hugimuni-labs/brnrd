@@ -295,7 +295,8 @@ class Publisher:
     """Assemble every few seconds; PUT on a settled change, else once a minute.
 
     The PUT runs on its own thread, one at a time, so the loop never waits on
-    the network. A failure is logged once, until a push succeeds again.
+    the network. Until a push succeeds again, every step raises the last
+    push failure, so the loop's guard holds the streak.
     """
 
     def __init__(self, home: Home, log):
@@ -303,7 +304,7 @@ class Publisher:
         self.doc = self.sum = self.sent = None
         self.assembled = self.changed = self.attempted = None
         self.worker: threading.Thread | None = None
-        self.failing = False
+        self.failing: tuple[Exception, object] | None = None
 
     def step(self, config, router) -> None:
         if not config.relay_state:
@@ -316,8 +317,12 @@ class Publisher:
                 doc = assemble(self.home, facts, config)
             if digest(doc) != self.sum:
                 self.doc, self.sum, self.changed = doc, digest(doc), now
-        if self.doc is None or (self.worker and self.worker.is_alive()):
-            return
+        if self.doc is not None and not (self.worker and self.worker.is_alive()):
+            self._push(config, now)
+        if self.failing is not None:
+            raise self.failing[0].with_traceback(self.failing[1])
+
+    def _push(self, config, now) -> None:
         settled = self.sum != self.sent and now - self.changed >= DEBOUNCE
         if self.attempted is None or settled or now - self.attempted >= IDLE:
             self.attempted, self.sent = now, self.sum
@@ -334,8 +339,6 @@ class Publisher:
                 raise RuntimeError("cloud state has no URL or token")
             cloud._request(state["brnrd_url"], "PUT", "/v1/daemons/loom", token=state["token"],
                            json=doc, retry=False)
-            self.failing = False
+            self.failing = None
         except Exception as exc:
-            if not self.failing:
-                self.log(self.home, f"snapshot: push failed: {exc}")
-            self.failing = True
+            self.failing = (exc, exc.__traceback__)
