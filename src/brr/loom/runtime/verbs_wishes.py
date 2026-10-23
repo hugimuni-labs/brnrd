@@ -193,7 +193,8 @@ def cmd_ask(args):
             body = marker + args.what + "\n"
             if args.rec is not None:
                 body += f"rec: {args.rec}\n"
-            body += f"Answer it, or ask onward with: ask \"<what>\" --for {ident}\n"
+            # The &ref is the mail's parent: a thread letter cites what it answers.
+            body += f"Answer &{ident}, or ask onward with: ask \"<what>\" --for {ident}\n"
             write_send(room, to=head, sender=strand_of_room(room), body=body)
         print(ident)
         return 0

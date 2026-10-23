@@ -10,6 +10,7 @@ from pathlib import Path
 from brr.daemon2.facts import Fact
 from .ledger import LedgerView, kind_facts
 from .project import cached_projection
+from . import refs as refs_mod
 
 from .home import (
     atomic_write, channel_parts, home_of_room, is_channel, mint, strand_of_room, thread_of,
@@ -450,7 +451,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                at: str | None = None, repo_sources: tuple[str, ...] | list[str] = (),
                wish: str | tuple | list | None = None,
                budget: int | None = None, chatter: list[str] | None = None,
-               echo: list[str] | None = None) -> str:
+               echo: list[str] | None = None, reopen: bool = False) -> str:
     """Write one letter (or note) into port/out, with the wish stamps it carries.
 
     ``wish`` items are a ``w-id`` or ``new:"line"``, or a dict with ``value``
@@ -587,6 +588,30 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                 f"send: {re} is a person letter with no disposition yet; carry one: "
                 '--wish <w-id>|new:"<line>" [--says "quote"] [--ref kind:ref] [--answered], '
                 "or --chatter if it wants nothing")
+    links, misses = [], []
+    if refs_mod.tokens(note or body):
+        from .ledger import read_facts
+        from .lifecycle import main_snapshot
+        facts = facts if letters else read_facts(home)
+        links, misses = refs_mod.link(facts, main_snapshot(home), note or body)
+    # A thread letter answers something: a letter, a wish, or an item it names.
+    # A reopen's parent is the thread it reopens, as a molt's is; a budget
+    # raise's is the thread it funds; a --clean handoff's is the strand whose
+    # work it publishes.
+    if (not is_channel(to) and opening is None and note is None and molt is None and at is None
+            and not reopen and budget is None and not clean
+            and not re and not asked and not chatter and not links):
+        raise PortError(f"send: a letter to {to} cites nothing; answer the letter it follows "
+                        "with --re <id>, or carry --wish, --chatter or an &ref")
+    if misses:
+        if echo is not None:
+            echo.append(refs_mod.miss_words(misses))
+        if not is_channel(to):
+            from .ledger import read_facts
+            from .loom import notice
+            notice(home, read_facts(home), "ref-unknown", letter_id,
+                   f"{letter_id} from {sender}: {refs_mod.miss_words(misses)}",
+                   "nothing to look for: those ids do not exist", thread=thread_of(to), passive=True)
     if echo is not None and chatter:
         from .dispositions import short
         echo.append("chatter ← " + ", ".join(f"({short(ident)})" for ident in chatter))
@@ -602,6 +627,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         fields["re"] = re
     if chatter:
         fields["chatter"] = " ".join(chatter)
+    if links:
+        fields["links"] = " ".join(links)
     if molt:
         fields["molt"] = molt
     if note is not None:
@@ -728,6 +755,8 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             data["re"] = fm["re"]
         if fm.get("chatter"):
             data["chatter"] = fm["chatter"].split()
+        if fm.get("links"):
+            data["links"] = fm["links"].split()
         if fm.get("edit"):
             data["edit"] = fm["edit"]
         if fm.get("molt"):

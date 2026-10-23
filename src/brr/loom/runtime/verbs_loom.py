@@ -161,7 +161,7 @@ def _send(argv: list[str]) -> int:
             refs=tuple(args.ref or ()), body_choice=args.body_choice, repo_sources=args.repo, at=args.at,
             wish=args.wish, budget=None if args.budget is None else parse_tokens(args.budget),
             chatter=chatter,
-            echo=echo,
+            echo=echo, reopen=args.reopen is not None,
         )
     except (PortError, SelfError, ValueError, OSError) as exc:
         sys.stderr.write(f"{exc}\n")

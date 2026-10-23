@@ -468,7 +468,7 @@ if own == "work":
     sys.exit(7)
 for letter in ctx.owed():
     ctx.send("thread:top", note="opener", re=letter.id)
-ctx.send("thread:work", "two commits please")
+ctx.send("thread:work", "two commits please", cite=letter.id)
 deadline = time.monotonic() + 15
 while time.monotonic() < deadline:
     for letter in ctx.jack("post").letters:
