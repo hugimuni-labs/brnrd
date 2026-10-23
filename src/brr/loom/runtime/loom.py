@@ -1646,10 +1646,11 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 if time.monotonic() >= next_usage:
                     health.guard("usage", _read_usage, home, usage, backoff=False)
                     next_usage = time.monotonic() + usage.REFRESH_INTERVAL
-                health.guard("inputs", inputs.step)
+                # Inputs, publisher and mirror pace their own retries; only the tick backs off.
+                health.guard("inputs", inputs.step, backoff=False)
                 health.guard("tick_once", tick_once, home, bodies, adapter, core, router)
-                health.guard("publisher", publisher.step, config, router)
-                health.guard("mirror", mirror.step, config)
+                health.guard("publisher", publisher.step, config, router, backoff=False)
+                health.guard("mirror", mirror.step, config, backoff=False)
             if _source_fingerprint() != fingerprint:
                 _log(home, "runtime source changed; re-executing loom")
                 inputs.close()

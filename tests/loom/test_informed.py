@@ -9,6 +9,7 @@ from brr.loom.runtime import health, loom
 from brr.loom.runtime.home import Home, notice_id
 from brr.loom.runtime.ledger import append, read_facts
 from brr.loom.runtime.loom import _prepare
+from brr.loom.runtime.port import parse_boundary
 from brr.loom.runtime.project import sender_threads
 from brr.loom.runtime.since import HEADER
 
@@ -137,6 +138,7 @@ def test_the_wake_opens_with_what_happened_since_the_predecessor(gone):
             "at loom/runtime/snapshot.py:166 (loom.degraded:aaaa:publisher:2026-10-23T09:00:00Z)") in section
     boundary = (room / "port/in/boundary.md").read_text()
     assert "degraded: publisher since 09:00Z (ValueError at snapshot.py:166)" in boundary
+    assert parse_boundary(boundary).strand == NEXT
 
 
 def test_a_silent_ledger_before_a_start_is_named(gone):

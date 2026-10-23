@@ -83,7 +83,7 @@ def parse_boundary(text: str) -> Boundary:
             settled = line.partition(":")[2].strip()
             current = None
             continue
-        if not line.strip() or line.startswith(("status:", "owed:", "opened:", "budget:", "repaired:")):
+        if not line.strip() or line.startswith(("status:", "owed:", "opened:", "budget:", "repaired:", "degraded:")):
             current = None
             continue
         match = _ITEM.match(line)

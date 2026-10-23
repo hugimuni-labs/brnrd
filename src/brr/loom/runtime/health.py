@@ -1,9 +1,10 @@
 """The loop's health: every step runs through one guard, and its streaks are facts.
 
 The first failure of a step writes ``loom.degraded``; the first pass after
-writes ``loom.recovered``. Between them the step backs off (1, 2, 4 … 300
-calls) and only the first traceback reaches loom.log. Open streaks are read
-back from the ledger at start, so a restart keeps them. A streak still open
+writes ``loom.recovered``. Between them a step that does not pace its own
+retries backs off (1, 2, 4 … 300 calls), and only the first traceback
+reaches loom.log. Open streaks are read back from the ledger at start, so a
+restart keeps them. A streak still open
 after ``NOTICE_AFTER`` seconds is told to the home thread once.
 """
 
@@ -34,7 +35,8 @@ class Streak:
 
 
 def _iso(seconds: float) -> str:
-    return datetime.fromtimestamp(seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Milliseconds: a step that recovers and fails again opens a streak of its own.
+    return datetime.fromtimestamp(seconds, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _seconds(iso: str) -> float:

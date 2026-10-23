@@ -9,7 +9,8 @@ import pytest
 from brr.daemon2.facts import Fact
 from brr.gates import cloud
 from brr.loom.runtime import snapshot, usage
-from brr.loom.runtime.ledger import inject_letter
+from brr.loom.runtime.home import Home
+from brr.loom.runtime.ledger import inject_letter, read_facts
 
 from _step import Loom, kill_bodies, wait_until, write_thread
 
@@ -187,21 +188,25 @@ def test_an_unchanged_snapshot_is_re_put_once_a_minute(board):
     assert len(board.cloud.calls) == 2 and snapshot.digest(first) == snapshot.digest(second)
 
 
-def test_a_failing_board_is_logged_once_and_the_loop_keeps_going(board):
+def test_a_failing_board_is_one_streak_and_the_loop_keeps_going(board):
     board.cloud.fail = True
     board.start()
     for count in (1, 2, 3):
         wait_until(lambda: len(board.cloud.calls) == count, 10, board.dump)
         steps(board)
         board.now[0] += snapshot.IDLE
+    kinds = lambda kind: [f for f in read_facts(Home(board.root)) if f.kind == kind]
+    [down] = kinds("loom.degraded")
+    assert down.data["step"] == "publisher" and "board unreachable" in down.data["error"]
     log = board.root / "loom/loom.log"
-    assert log.read_text().count("snapshot: push failed: board unreachable") == 1
+    assert log.read_text().count("degraded: publisher") == 1
     board.cloud.fail = False
     wait_until(lambda: len(board.cloud.calls) == 4, 10, board.dump)
-    steps(board)
+    wait_until(lambda: kinds("loom.recovered"), 10, board.dump)
     board.cloud.fail = True
     board.now[0] += snapshot.IDLE
-    wait_until(lambda: log.read_text().count("snapshot: push failed") == 2, 10, board.dump)
+    wait_until(lambda: len(kinds("loom.degraded")) == 2, 10, board.dump)
+    assert log.read_text().count("degraded: publisher") == 2
     assert board.thread.is_alive()
 
 
