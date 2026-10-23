@@ -185,102 +185,147 @@ def _wish_rows(told, facts) -> list[dict]:
     return rows
 
 
-def assemble(home: Home, facts: list, config) -> dict:
-    """The snapshot document, ``at`` included; pure reads of what is held."""
-    from .lifecycle import CLOSED, main_snapshot
-    from .threads import _table_inputs, opened_for, thread_table
-    from .wishes import waits_on, wishes
-    from .adapters import resolve
-    table = [row for row in thread_table(home, facts) if row["thread"] != "operator"]
-    main = main_snapshot(home)
-    activity = cached_projection(facts, "thread-table", repr(main),
-                                 lambda rows: _table_inputs(rows, main))[4]
-    state = fold(facts)
-    writers = sender_threads(facts)
-    texts = _readmes(home)
-    held = {strand: thread for thread, (strand, _gen) in state.holder.items()}
-    ends = {f.data["strand"]: f.data["cause"] for f in state.accepted if f.kind == "attempt.ended"}
-    leases, cores = {}, {}
-    for f in state.accepted:
-        if f.kind == "lease" and f.data.get("shell") and f.data.get("core"):
-            leases.setdefault(f.data["thread"], {})[f.data["strand"]] = f
-            cores.setdefault(f.data["shell"], set()).add(f.data["core"])
-    told = wishes([f for f in facts if f.kind.startswith("wish") or f.kind == "letter"])
-    from .receipts import receipts
-    shipped = receipts(facts)
-    # An open ask is the person's turn unless it waits on a thread that has not asked onward.
-    heads = waits_on(told, main)
-    waits: dict[str, list[str]] = {}
-    for ident, head in sorted(heads.items()):
-        waits.setdefault(told[ident].thread, []).append(head)
-    asked = {t for t, hs in waits.items() if any(not h.startswith("thread:") for h in hs)}
-    doc_threads, done_refs, present = [], {}, []
-    for row in table:
-        thread = row["thread"]
-        data = main.get(thread, {})
-        now = _state(row["now"])
-        owed_by = row["owed-by"]
-        if data.get("status") in CLOSED:
-            turn = "none"
-        elif "operator" in owed_by.split(", ") or thread in asked:
-            turn = "yours"
-        elif now in {"parked", "failed"}:
-            turn = "blocked"
-        elif row["owed"] or now == "working" or any(
-                owed_by.startswith(w) for w in ("body:", "loom:", "opener:")):
-            turn = "mine"
-        else:
-            turn = "none"
-        strands = []
-        for strand, lease in leases.get(thread, {}).items():
-            word = now if held.get(strand) == thread else _state(ends.get(strand, ""))
-            strands.append({"id": strand, "body": f"{lease.data['shell']}/{lease.data['core']}",
-                            **({"state": word} if word else {}), "since": _iso(lease.at)})
-        done = _done(texts.get(thread, ""))
-        done_refs[thread] = {d["ref"] for d in done if "ref" in d}
-        plan = _plan(data.get("plan_rows"))
-        last = activity.get(thread)
-        title = _SENTENCE.split(data.get("headline", ""), 1)[0]
-        entry = {"id": thread, "title": title, "status": data.get("status"), "turn": turn,
-                 "blocked_on": row["restart"] if turn == "blocked" else None,
-                 "opened_by": data.get("opened-by"),
-                 "waits_on": waits.get(thread),
-                 "opened_for": [{"wish": ident, **({"line": told[ident].line, "state": told[ident].state}
-                                                   if ident in told else {})}
-                                for ident in opened_for(data)],
-                 "plan": plan, "strands": strands,
-                 "receipts": [{k: v for k, v in {
-                     "repo": r.repo, "number": r.number, "url": r.url, "head": r.head,
-                     "state": r.state(), "merge_commit": r.merge_commit, "load": r.load()}.items()
-                     if v not in (None, "")} for r in shipped.get(thread, ())],
-                 "done": done, "owed": row["owed"], "last_at": _iso(last) if last else None}
-        doc_threads.append({k: v for k, v in entry.items() if v not in (None, "", [])})
-        if now == "working" and thread in state.holder:
-            strand = state.holder[thread][0]
-            lease = leases.get(thread, {}).get(strand)
-            present.append((last or 0, {
+class View:
+    """The projections every section reads, each read once per assemble."""
+
+    def __init__(self, home: Home, facts: list, config):
+        from .lifecycle import main_snapshot
+        from .receipts import receipts
+        from .threads import _table_inputs, thread_table
+        from .wishes import waits_on, wishes
+        self.home, self.facts, self.config = home, facts, config
+        self.table = [row for row in thread_table(home, facts) if row["thread"] != "operator"]
+        self.main = main_snapshot(home)
+        self.activity = cached_projection(facts, "thread-table", repr(self.main),
+                                          lambda rows: _table_inputs(rows, self.main))[4]
+        self.state = fold(facts)
+        self.writers = sender_threads(facts)
+        self.texts = _readmes(home)
+        self.held = {strand: thread for thread, (strand, _gen) in self.state.holder.items()}
+        self.ends = {f.data["strand"]: f.data["cause"]
+                     for f in self.state.accepted if f.kind == "attempt.ended"}
+        self.leases, cores = {}, {}
+        for f in self.state.accepted:
+            if f.kind == "lease" and f.data.get("shell") and f.data.get("core"):
+                self.leases.setdefault(f.data["thread"], {})[f.data["strand"]] = f
+                cores.setdefault(f.data["shell"], set()).add(f.data["core"])
+        self.cores = {shell: sorted(c) for shell, c in cores.items()}
+        self.told = wishes([f for f in facts if f.kind.startswith("wish") or f.kind == "letter"])
+        self.shipped = receipts(facts)
+        # An open ask is the person's turn unless it waits on a thread that has not asked onward.
+        self.waits: dict[str, list[str]] = {}
+        for ident, head in sorted(waits_on(self.told, self.main).items()):
+            self.waits.setdefault(self.told[ident].thread, []).append(head)
+        self.asked = {t for t, hs in self.waits.items() if any(not h.startswith("thread:") for h in hs)}
+
+
+def _turn(v: View, row: dict) -> str:
+    from .lifecycle import CLOSED
+    thread, now, owed_by = row["thread"], _state(row["now"]), row["owed-by"]
+    if v.main.get(thread, {}).get("status") in CLOSED:
+        return "none"
+    if "operator" in owed_by.split(", ") or thread in v.asked:
+        return "yours"
+    if now in {"parked", "failed"}:
+        return "blocked"
+    if row["owed"] or now == "working" or any(
+            owed_by.startswith(w) for w in ("body:", "loom:", "opener:")):
+        return "mine"
+    return "none"
+
+
+def thread(v: View, row: dict) -> dict:
+    from .threads import opened_for
+    thread = row["thread"]
+    data = v.main.get(thread, {})
+    now = _state(row["now"])
+    turn = _turn(v, row)
+    strands = []
+    for strand, lease in v.leases.get(thread, {}).items():
+        word = now if v.held.get(strand) == thread else _state(v.ends.get(strand, ""))
+        strands.append({"id": strand, "body": f"{lease.data['shell']}/{lease.data['core']}",
+                        **({"state": word} if word else {}), "since": _iso(lease.at)})
+    last = v.activity.get(thread)
+    told = v.told
+    entry = {"id": thread, "title": _SENTENCE.split(data.get("headline", ""), 1)[0],
+             "status": data.get("status"), "turn": turn,
+             "blocked_on": row["restart"] if turn == "blocked" else None,
+             "opened_by": data.get("opened-by"),
+             "waits_on": v.waits.get(thread),
+             "opened_for": [{"wish": ident, **({"line": told[ident].line, "state": told[ident].state}
+                                               if ident in told else {})}
+                            for ident in opened_for(data)],
+             "plan": _plan(data.get("plan_rows")), "strands": strands,
+             "receipts": [{k: val for k, val in {
+                 "repo": r.repo, "number": r.number, "url": r.url, "head": r.head,
+                 "state": r.state(), "merge_commit": r.merge_commit, "load": r.load()}.items()
+                 if val not in (None, "")} for r in v.shipped.get(thread, ())],
+             "done": _done(v.texts.get(thread, "")), "owed": row["owed"],
+             "last_at": _iso(last) if last else None}
+    return {k: val for k, val in entry.items() if val not in (None, "", [])}
+
+
+def presence(v: View) -> dict | None:
+    """The working thread with the newest activity."""
+    present = []
+    for row in v.table:
+        thread, now = row["thread"], _state(row["now"])
+        if now == "working" and thread in v.state.holder:
+            strand = v.state.holder[thread][0]
+            lease = v.leases.get(thread, {}).get(strand)
+            present.append((v.activity.get(thread) or 0, {
                 "strand": strand, "thread": thread, "state": now,
-                "now": (plan or {}).get("next"), "owed": row["owed"],
+                "now": (_plan(v.main.get(thread, {}).get("plan_rows")) or {}).get("next"),
+                "owed": row["owed"],
                 "body": f"{lease.data['shell']}/{lease.data['core']}" if lease else None}))
-    choices = {f"{s}/{c}" for s, cs in cores.items() for c in cs} | ({config.body} if config.body else set())
+    if not present:
+        return None
+    return {k: val for k, val in max(present, key=lambda p: p[0])[1].items() if val is not None}
+
+
+def fuel(v: View) -> list[dict]:
+    return _fuel(v.home, v.cores, v.config.hold_floor_pct)
+
+
+def bodies(v: View) -> dict:
+    from .adapters import resolve
+    config = v.config
+    choices = {f"{s}/{c}" for s, cs in v.cores.items() for c in cs} | ({config.body} if config.body else set())
 
     def usable(choice):
         try:
-            return bool(resolve(home, choice.partition("/")[0]))
+            return bool(resolve(v.home, choice.partition("/")[0]))
         except ValueError:
             return False
-    bodies = {"default": config.body,
-              "choices": sorted(filter(usable, choices), key=lambda c: (c != config.body, c))}
-    doc = {"v": 1, "at": _iso(time.time()),
-           "presence": {k: v for k, v in max(present, key=lambda p: p[0])[1].items() if v is not None}
-           if present else None,
-           "fuel": _fuel(home, {s: sorted(c) for s, c in cores.items()}, config.hold_floor_pct),
-           "bodies": {k: v for k, v in bodies.items() if v},
-           "threads": doc_threads,
-           "log": _log_rows(state.accepted, writers, done_refs,
-                            {w.id: w.thread for w in told.values()}),
-           "wishes": _wish_rows(told, facts)}
-    return {k: v for k, v in doc.items() if v not in (None, [], {})}
+    found = {"default": config.body,
+             "choices": sorted(filter(usable, choices), key=lambda c: (c != config.body, c))}
+    return {k: val for k, val in found.items() if val}
+
+
+def log(v: View) -> list[dict]:
+    done_refs = {row["thread"]: {d["ref"] for d in _done(v.texts.get(row["thread"], "")) if "ref" in d}
+                 for row in v.table}
+    return _log_rows(v.state.accepted, v.writers, done_refs, {w.id: w.thread for w in v.told.values()})
+
+
+def _raise(step, fn, *args):
+    fn(*args)
+
+
+def assemble(home: Home, facts: list, config, guard=_raise) -> dict:
+    """The snapshot document, ``at`` included; pure reads of what is held.
+
+    Each section runs through ``guard`` as ``publisher.<section>``: the loop's
+    guard leaves a section that raises out of this document and keeps its streak.
+    """
+    v = View(home, facts, config)
+    sections = {"presence": presence, "fuel": fuel, "bodies": bodies,
+                "threads": lambda v: [thread(v, row) for row in v.table],
+                "log": log, "wishes": lambda v: _wish_rows(v.told, v.facts)}
+    doc = {"v": 1, "at": _iso(time.time())}
+    for name, section in sections.items():
+        guard(f"publisher.{name}", lambda name=name, section=section: doc.__setitem__(name, section(v)))
+    return {k: val for k, val in doc.items() if val not in (None, [], {})}
 
 
 def digest(doc: dict) -> str:
@@ -293,11 +338,12 @@ class Publisher:
 
     The PUT runs on its own thread, one at a time, so the loop never waits on
     the network. Until a push succeeds again, every step raises the last
-    push failure, so the loop's guard holds the streak.
+    push failure, so the loop's guard holds the streak. ``guard`` runs each
+    section, so one that raises costs that section, not the push.
     """
 
-    def __init__(self, home: Home, log):
-        self.home, self.log = home, log
+    def __init__(self, home: Home, log, guard=_raise):
+        self.home, self.log, self.guard = home, log, guard
         self.doc = self.sum = self.sent = None
         self.assembled = self.changed = self.attempted = None
         self.worker: threading.Thread | None = None
@@ -311,7 +357,7 @@ class Publisher:
             self.assembled = now
             facts = router.reader.read(self.home)
             with projection_cache(router.projections):
-                doc = assemble(self.home, facts, config)
+                doc = assemble(self.home, facts, config, self.guard)
             if digest(doc) != self.sum:
                 self.doc, self.sum, self.changed = doc, digest(doc), now
         if self.doc is not None and not (self.worker and self.worker.is_alive()):

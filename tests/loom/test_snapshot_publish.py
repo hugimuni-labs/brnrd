@@ -210,6 +210,33 @@ def test_a_failing_board_is_one_streak_and_the_loop_keeps_going(board):
     assert board.thread.is_alive()
 
 
+def test_a_section_that_raises_is_left_out_and_is_its_own_streak(board, monkeypatch):
+    fuel(board.root, 82)
+    broken, real = [True], snapshot._fuel
+
+    def gauges(*args):
+        if broken[0]:
+            raise TypeError("cannot unpack non-iterable dict object")
+        return real(*args)
+    monkeypatch.setattr(snapshot, "_fuel", gauges)
+    board.start()
+    wait_until(lambda: board.cloud.calls, 10, board.dump)
+    doc = board.cloud.calls[-1]["doc"]
+    assert "fuel" not in doc and any(t["id"] == "web" for t in doc["threads"])
+    kinds = lambda kind: [f for f in read_facts(Home(board.root)) if f.kind == kind]
+    [down] = kinds("loom.degraded")
+    assert down.data["step"] == "publisher.fuel"
+    assert down.data["error"] == "TypeError: cannot unpack non-iterable dict object"
+    assert down.data["where"].startswith("loom/runtime/snapshot.py:")
+    broken[0] = False
+    wait_until(lambda: kinds("loom.recovered"), 10, board.dump)
+    [back] = kinds("loom.recovered")
+    assert back.data["step"] == "publisher.fuel"
+    board.now[0] += snapshot.IDLE
+    wait_until(lambda: "fuel" in board.cloud.calls[-1]["doc"], 10, board.dump)
+    assert [f.data["step"] for f in kinds("loom.degraded")] == ["publisher.fuel"]
+
+
 def test_without_relay_state_nothing_is_read_or_sent(tmp_path, monkeypatch):
     root = tmp_path / "home"
     write_thread(root, "web", README, "answer-fast", wait="0")
