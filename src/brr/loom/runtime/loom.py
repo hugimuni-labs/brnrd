@@ -373,11 +373,19 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         parent = None
     if fresh and parent:
         source = home.room(parent) / "self"
-        if (source / ".git").exists():
-            git(clone, "fetch", str(source), f"strand/{parent}")
+        if not (source / ".git").exists():
+            _log(home, f"start {strand}: parent room {parent} gone; starting from main")
+        elif (fetched := git(clone, "fetch", str(source), f"strand/{parent}",
+                             check=False)).returncode == 0:
             git(clone, "reset", "--hard", "FETCH_HEAD")
         else:
-            _log(home, f"start {strand}: parent room {parent} gone; starting from main")
+            # A parent room a crash left without its branch must not block the wake.
+            why = fetched.stderr.strip().splitlines()[-1:] or ["fetch failed"]
+            _log(home, f"start {strand}: parent room {parent} has no strand/{parent} "
+                       f"({why[0]}); starting from main")
+            append(home, Fact(kind="room.unseeded", by=f"loom:{home.install_id()}", data={
+                "strand": strand, "gen": gen, "parent": parent, "room": str(source),
+                "error": why[0]}))
     (room / "port" / "in").mkdir(parents=True, exist_ok=True)
     (room / "port" / "out").mkdir(parents=True, exist_ok=True)
     wait_src = home.thread_dir(thread) / "wait"

@@ -47,6 +47,7 @@ def test_an_emptied_index_and_missing_files_are_healed(home):
     clone = room(home, STRAND)
     head = tracked(clone)
     assert len(head) > 5
+    sha = git(clone, "rev-parse", "HEAD").stdout.strip()
     (clone / ".git" / "index").unlink()
     gone = head[:4]
     for path in gone:
@@ -54,6 +55,7 @@ def test_an_emptied_index_and_missing_files_are_healed(home):
     (clone / head[4]).write_text("")  # the OOM crash also truncated one
     edited = head[5]
     (clone / edited).write_text("a real edit\n")
+    (clone / "notes.md").write_text("untracked\n")
 
     assert room(home, STRAND) == clone
 
@@ -62,7 +64,7 @@ def test_an_emptied_index_and_missing_files_are_healed(home):
         assert (clone / path).read_bytes() == git(clone, "show", f"HEAD:{path}").stdout.encode()
     assert (clone / head[4]).stat().st_size > 0
     assert (clone / edited).read_text() == "a real edit\n"
-    assert git(clone, "status", "--porcelain").stdout.split() == ["M", edited]
+    assert git(clone, "status", "--porcelain").stdout.split() == ["M", edited, "??", "notes.md"]
     [fact] = repairs(home)
     assert fact.data["strand"] == STRAND
     assert any("empty index" in why for why in fact.data["found"])
@@ -70,6 +72,11 @@ def test_an_emptied_index_and_missing_files_are_healed(home):
     assert any("1 tracked files empty" in why for why in fact.data["found"])
     assert "restored 5 files from HEAD" in fact.data["done"]
     assert fact.data["aside"] is None
+    # The crash site, read before the repair: the deletions and truncation too.
+    assert fact.data["head"] == sha
+    assert sorted(fact.data["dirty"]) == sorted(
+        [f" D {p}" for p in gone] + [f" M {head[4]}", f" M {edited}", "?? notes.md"])
+    assert fact.data["dirty_count"] == 7
 
 
 def test_a_room_with_real_local_work_is_left_alone(home):
@@ -125,6 +132,7 @@ def test_a_half_created_dest_is_rebuilt_and_kept_aside(home):
 def test_a_room_whose_head_broke_is_recloned_with_its_commits(home):
     clone = room(home, STRAND)
     sha = commit_in_room(clone)
+    (clone / "scratch.md").write_text("work the crash interrupted\n")
     (clone / ".git" / "HEAD").write_text("")  # git no longer calls this a repository
 
     assert room(home, STRAND) == clone
@@ -136,6 +144,8 @@ def test_a_room_whose_head_broke_is_recloned_with_its_commits(home):
     assert (aside / ".git" / "HEAD").read_text() == ""  # read, never written
     [fact] = repairs(home)
     assert any("kept strand/" in done for done in fact.data["done"])
+    assert fact.data["head"] == sha
+    assert fact.data["dirty"] == ["?? scratch.md"]
 
 
 def test_a_clone_that_dies_midway_leaves_no_room(home, monkeypatch):
@@ -164,7 +174,9 @@ def test_the_waking_body_sees_what_was_repaired(home):
     append(loom, Fact(kind="lease", by="loom:aaaa", id="lease:brnrd:1", data={
         "thread": "brnrd", "strand": STRAND, "gen": 1}))
     clone = room(home, STRAND)
+    sha = git(clone, "rev-parse", "HEAD").stdout.strip()
     (clone / ".git" / "index").unlink()
+    (clone / "half-written.md").write_text("x\n")
     facts = read_facts(loom)
 
     prepared = _prepare(loom, STRAND, "brnrd", 1, [], sender_threads(facts), facts, "hand")
@@ -172,6 +184,27 @@ def test_the_waking_body_sees_what_was_repaired(home):
     boundary = (prepared / "port/in/boundary.md").read_text()
     [line] = [l for l in boundary.splitlines() if l.startswith("repaired:")]
     assert "empty index" in line and "rebuilt the index from HEAD" in line
+    assert f"crash site: strand/{STRAND} was at {sha[:12]}; 1 dirty paths (half-written.md)" in line
     parse_boundary(boundary)  # the jack still reads it
     [fact] = repairs(home)
     assert fact.data["gen"] == 1
+
+
+def test_a_parent_room_without_its_branch_does_not_block_the_wake(home):
+    loom = Home(home, install="aaaa")
+    parent = "s-aaaa-parent"
+    shell = home / "rooms" / parent / "self"
+    git(home, "clone", "-q", "--shared", str(home / "self"), str(shell))  # never got strand/<parent>
+    append(loom, Fact(kind="lease", by="loom:aaaa", id="lease:brnrd:1", data={
+        "thread": "brnrd", "strand": STRAND, "gen": 1, "parent": parent}))
+    facts = read_facts(loom)
+
+    prepared = _prepare(loom, STRAND, "brnrd", 1, [], sender_threads(facts), facts, "hand")
+
+    clone = prepared / "self"
+    assert git(clone, "rev-parse", "HEAD").stdout == git(home / "self", "rev-parse", "HEAD").stdout
+    assert git(clone, "branch", "--show-current").stdout.strip() == f"strand/{STRAND}"
+    assert (prepared / "port/in/boundary.md").is_file()
+    [fact] = [f for f in read_facts(loom) if f.kind == "room.unseeded"]
+    assert fact.data["parent"] == parent and fact.data["room"] == str(shell.resolve())
+    assert "couldn't find remote ref" in fact.data["error"]
