@@ -451,7 +451,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                at: str | None = None, repo_sources: tuple[str, ...] | list[str] = (),
                wish: str | tuple | list | None = None,
                budget: int | None = None, chatter: list[str] | None = None,
-               echo: list[str] | None = None) -> str:
+               echo: list[str] | None = None, reopen: bool = False) -> str:
     """Write one letter (or note) into port/out, with the wish stamps it carries.
 
     ``wish`` items are a ``w-id`` or ``new:"line"``, or a dict with ``value``
@@ -595,8 +595,10 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         facts = facts if letters else read_facts(home)
         links, misses = refs_mod.link(facts, main_snapshot(home), note or body)
     # A thread letter answers something: a letter, a wish, or an item it names.
+    # A reopen's parent is the thread it reopens, as a molt's is; a --clean
+    # handoff's is the strand whose work it publishes.
     if (not is_channel(to) and opening is None and note is None and molt is None and at is None
-            and not re and not asked and not chatter and not links):
+            and not reopen and not clean and not re and not asked and not chatter and not links):
         raise PortError(f"send: a letter to {to} cites nothing; answer the letter it follows "
                         "with --re <id>, or carry --wish, --chatter or an &ref")
     if misses:
