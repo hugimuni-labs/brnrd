@@ -205,6 +205,6 @@ def test_a_parent_room_without_its_branch_does_not_block_the_wake(home):
     assert git(clone, "rev-parse", "HEAD").stdout == git(home / "self", "rev-parse", "HEAD").stdout
     assert git(clone, "branch", "--show-current").stdout.strip() == f"strand/{STRAND}"
     assert (prepared / "port/in/boundary.md").is_file()
-    [fact] = [f for f in read_facts(loom) if f.kind == "room.unseeded"]
+    [fact] = [f for f in read_facts(loom) if f.kind == "room.seeded"]
     assert fact.data["parent"] == parent and fact.data["room"] == str(shell.resolve())
-    assert "couldn't find remote ref" in fact.data["error"]
+    assert fact.data["source"] == "HEAD" and "couldn't find remote ref" in fact.data["error"]
