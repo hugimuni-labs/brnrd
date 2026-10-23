@@ -10,7 +10,7 @@ from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, inject_letter, read_facts, fact_filename
 from brr.loom.runtime.registry import UndeclaredFact
 from brr.loom.runtime.selfrepo import init_self, room, run_wake
-from brr.loom.runtime.wishes import wishes
+from brr.loom.runtime.wishes import Say, wishes
 from test_wake import cli, commit, write_thread
 
 
@@ -101,7 +101,7 @@ def test_says_asks_and_send_stamp(ledger):
                   "--parent", said)
     assert view(home, derived).parent == view(home, ask).parent == said
     assert view(home, derived).derived_unconfirmed
-    assert view(home, said).says == [[letter, 2, 4]]
+    assert view(home, said).says == [Say(letter, 2, 4)]
     assert view(home, said).origin == "said"
     command(home, seat, "wish", derived, "--read", "confirmed", person=True)
     assert not view(home, derived).derived_unconfirmed
@@ -111,10 +111,10 @@ def test_says_asks_and_send_stamp(ledger):
     assert section.splitlines()[0].startswith(ask)
     sent = command(home, seat, "send", "--to", "thread:other", "--re", letter, "--wish", "new:Stamped reply", "A reply")
     stamped = next(w for w in wishes(read_facts(home)).values() if w.line == "Stamped reply")
-    assert stamped.says == [[letter, 0, None]]
+    assert stamped.says == [Say(letter, 0, None)]
     assert (seat / "port/out" / (sent.split("/")[1] + ".md")).exists()
     command(home, seat, "send", "--to", "thread:other", "--re", letter, "--wish", said, "Followup")
-    assert view(home, said).says == [[letter, 2, 4], [letter, 0, None]]
+    assert view(home, said).says == [Say(letter, 2, 4), Say(letter, 0, None)]
     assert "asks (yours)" in command(home, seat, "wishes")
     append(home, Fact(kind="letter", by="strand:s-aaaa-test", id="s-aaaa-test/source", data={
         "id": "s-aaaa-test/source", "from": "s-aaaa-test", "to": "thread:other", "body": "Inference", "gen": 1}))

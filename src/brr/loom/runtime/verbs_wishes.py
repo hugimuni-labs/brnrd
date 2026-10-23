@@ -11,7 +11,7 @@ from pathlib import Path
 from brr.daemon2.facts import Fact
 from .home import Home, home_of_room, mint, resolve_home, strand_of_room
 from .ledger import append, read_facts
-from .wishes import waits_on, waits_word, wishes, wish_line
+from .wishes import Say, waits_on, waits_word, wishes, wish_line
 
 
 def _context(args):
@@ -25,7 +25,7 @@ def _context(args):
     return Home(resolve_home(args.home)[0]), "person:operator", None
 
 
-def say_span(raw: str, facts) -> list:
+def say_span(raw: str, facts) -> Say:
     match = re.fullmatch(r"(.+?)(?:@(\d+)\+(\d+))?", raw)
     if not match:
         raise ValueError("--say expects L or L@off+len")
@@ -36,7 +36,7 @@ def say_span(raw: str, facts) -> list:
     off, size = int(offset or 0), int(length) if length is not None else None
     if off + (size or 0) > len(letters[ident].data.get("body", "")):
         raise ValueError(f"--say: span past the end of {ident}")
-    return [ident, off, size]
+    return Say(ident, off, size)
 
 
 def wish_fact(facts, *, by, ident, says=(), line=None, thread=None, sender=None, parent=None):
@@ -53,7 +53,7 @@ def wish_fact(facts, *, by, ident, says=(), line=None, thread=None, sender=None,
     elif current is None:
         raise ValueError(f"no wish {ident}")
     data = {
-        "wish": ident, "says": list(says),
+        "wish": ident, "says": [Say.read(say).row() for say in says],
         "from": sender or (current.sender if current else "person"),
         "line": line if line is not None else current.line,
         "thread": thread if thread is not None else current.thread,

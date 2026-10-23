@@ -164,14 +164,11 @@ def _wish_rows(told, facts) -> list[dict]:
     for w in sorted(told.values(), key=lambda w: (not w.open, -last(w).timestamp(), w.id))[:WISHES]:
         says = []
         for say in w.says:
-            # An unplaced say carries its quote 4th, at 0/None: it cites the whole letter.
-            ident, offset, size = say[:3]
-            letter = letters.get(ident)
+            letter = letters.get(say.letter)
             if letter is None:
                 continue
-            body = str(letter.data.get("body") or "")
-            text = body[offset:] if size is None else body[offset:offset + size]
-            says.append(_bare({"id": ident, "from": letter.data.get("from"),
+            text = say.text(str(letter.data.get("body") or ""))
+            says.append(_bare({"id": say.letter, "from": letter.data.get("from"),
                                "at": _iso(letter.at), "head": text[:HEAD]}))
         answer = answers.get(w.id)
         rows.append(_bare({

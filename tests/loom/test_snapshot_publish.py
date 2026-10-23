@@ -291,6 +291,10 @@ def test_wishes_carry_their_words_results_and_the_answer_newer_than_them(tmp_pat
     wish(3, "w-ask", "resident", "Pick a domain", parent="w-said")
     # An unplaced quote (dispositions.say_of) cites the whole letter.
     wish(3, "w-unplaced", "person", "Unplaced", [["p-test/said1", 0, None, "not in it"]], by="person:test")
+    # A record, the shape every new wish fact writes; and one bad say beside a good one.
+    wish(3, "w-record", "person", "Record", [{"letter": "p-test/said1", "offset": 7, "size": 4}], by="person:test")
+    wish(3, "w-bad", "person", "Bad", [["p-test/said1", "7", 4], {"offset": 1}, "p-test/said1",
+                                        ["p-test/said1", 0, 6]], by="person:test")
     wish(6, "w-done", "person", "Old thing", [["p-test/said1", 0, None]], by="person:test")
     result(7, "wish.result:d1", "w-done", "#0", "old", True)
     letter(8, "p-test/agree", "Yes.", wish="w-done", verdict="agree")
@@ -298,9 +302,11 @@ def test_wishes_carry_their_words_results_and_the_answer_newer_than_them(tmp_pat
                                                 "ref": "p-test/agree"}, by="person:test")
 
     rows = snapshot.assemble(home, read_facts(home), load_config(root))["wishes"]
-    assert [w["id"] for w in rows] == ["w-said", "w-ask", "w-unplaced", "w-done"]
-    said, ask, unplaced, done = rows
+    assert [w["id"] for w in rows] == ["w-said", "w-ask", "w-bad", "w-record", "w-unplaced", "w-done"]
+    said, ask, bad, record, unplaced, done = rows
     assert [s["head"] for s in unplaced["says"]] == ["Hello. Show my wishes on the board, please."]
+    assert [s["head"] for s in record["says"]] == ["Show"]
+    assert [s["head"] for s in bad["says"]] == ["Hello."]
     assert said == {
         "id": "w-said", "thread": "web", "from": "person", "line": "Wishes on the board",
         "state": "delivered", "origin": "said", "at": "2026-10-19T10:04:00Z",

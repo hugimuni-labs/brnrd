@@ -12,7 +12,7 @@ from brr.loom.runtime.ledger import append, inject_letter, read_facts
 from brr.loom.runtime.registry import UndeclaredFact
 from brr.loom.runtime.selfrepo import git
 from brr.loom.runtime import snapshot
-from brr.loom.runtime.wishes import wishes
+from brr.loom.runtime.wishes import Say, wishes
 from test_wishes import command, ledger, view  # noqa: F401  (ledger is a fixture)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "live-wishes-2026-10-20.jsonl"
@@ -76,7 +76,7 @@ def test_an_open_for_a_new_wish_cites_the_letter_and_the_readme_records_it(ledge
     letter = inject_letter(home.root, to="thread:work", body="Please split this out")
     command(home, seat, "send", "--to", "thread:fresh", "--re", letter, "--wish", "new:Split it out", "Fresh work")
     behind = next(w for w in wishes(read_facts(home)).values() if w.line == "Split it out")
-    assert (behind.says, behind.thread, behind.origin) == ([[letter, 0, None]], "fresh", "said")
+    assert (behind.says, behind.thread, behind.origin) == ([Say(letter, 0, None)], "fresh", "said")
     assert f"opened-for: [{behind.id}]\n" in readme(home, "fresh")
     assert f'wish-{behind.id}: "Split it out"\n' in readme(home, "fresh")
     assert "opened-by: thread:work\n" in readme(home, "fresh")
@@ -89,7 +89,7 @@ def test_an_open_with_nothing_to_cite_is_derived_from_the_opening_letter(ledger)
                    "--wish", "new:And another", "Fresh work")
     told = {w.line: w for w in wishes(read_facts(home)).values()}
     for line in ("My own idea", "And another"):
-        assert told[line].says == [[sent, 0, None]]
+        assert told[line].says == [Say(sent, 0, None)]
         assert told[line].origin == "derived" and told[line].thread == "fresh"
     assert f"opened-for: [{told['My own idea'].id}, {told['And another'].id}]\n" in readme(home, "fresh")
 
@@ -101,7 +101,7 @@ def test_an_open_for_an_existing_wish_moves_it(ledger):
     assert view(home, ident).thread == "work"
     command(home, seat, "send", "--to", "thread:fresh", "--wish", ident, "Do the thing")
     moved = view(home, ident)
-    assert (moved.thread, moved.says, moved.origin) == ("fresh", [[letter, 0, None]], "said")
+    assert (moved.thread, moved.says, moved.origin) == ("fresh", [Say(letter, 0, None)], "said")
     assert f"opened-for: [{ident}]\n" in readme(home, "fresh")
     stderr = command(home, seat, "send", "--to", "thread:other2", "--wish", "w-nosuchwish", "x", ok=False)
     assert "no wish w-nosuchwish" in stderr
