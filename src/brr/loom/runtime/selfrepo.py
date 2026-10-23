@@ -701,17 +701,23 @@ def default_loom_part(clone: Path, thread: str) -> str:
 
 def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
              loom_part: Path | None = None, repos: Path | None = None,
-             core: Path | None = None, stdout=None, stderr=None) -> int:
+             core: Path | None = None, stdout=None, stderr=None,
+             recipe: Path | None = None) -> int:
     """Run the self recipe and add its thread wishes within the wake budget.
 
     With ``core``, a recipe that knows ``LOOM_CORE`` writes the core there and
     leaves it out of stdout; one that does not leaves the file unwritten.
+    ``recipe`` runs another recipe (the packaged one) against the same clone.
     """
     _segment(thread, "thread")
     clone = resolve_clone(room_dir)
-    recipe = clone / "core" / "loom" / "wake"
-    if not os.access(recipe, os.X_OK):
-        raise SelfError(f"{recipe} is not executable")
+    if recipe is not None:
+        argv = [sys.executable, str(recipe)]
+    else:
+        recipe = clone / "core" / "loom" / "wake"
+        if not os.access(recipe, os.X_OK):
+            raise SelfError(f"{recipe} is not executable")
+        argv = [str(recipe)]
     env = _env_without_pin()
     if loom_part is not None:
         env["LOOM_PART"] = str(loom_part)
@@ -750,7 +756,7 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
             handle.close()
             part_file = handle.name
             env["LOOM_PART"] = handle.name
-        proc = subprocess.run([str(recipe), thread, owed_arg], cwd=clone, env=env,
+        proc = subprocess.run([*argv, thread, owed_arg], cwd=clone, env=env,
                               stdout=subprocess.PIPE, stderr=stderr, timeout=60)
         output = proc.stdout.decode("utf-8")
         if proc.returncode == 0 and section:

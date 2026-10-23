@@ -95,7 +95,7 @@ def test_send_refuses_a_thread_whose_for_names_another_loom(tmp_path):
     # Settling a letter there is not routing one; this loom's own name runs.
     write_send(room, to="thread:arseni", sender=STRAND, re="p-test/abcde", note="seen")
     thread("ours", "brnrd")
-    write_send(room, to="thread:ours", sender=STRAND, body="run")
+    write_send(room, to="thread:ours", sender=STRAND, body="run", at="+1h")
     assert len(list((room / "port" / "out").glob("*.md"))) == 2
 
 

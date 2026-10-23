@@ -13,7 +13,8 @@ from _step import Loom, wait_until, write_thread
 
 
 def _body(facts, text):
-    found = [fact for fact in facts if fact.kind == "letter" and fact.data.get("body") == text]
+    found = [fact for fact in facts if fact.kind == "letter"
+             and fact.data.get("body", "").split("\n", 1)[0] == text]
     return found
 
 

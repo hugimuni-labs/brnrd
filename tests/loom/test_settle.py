@@ -56,7 +56,7 @@ if own == "child":
 else:
     for letter in ctx.owed():
         ctx.send("thread:opener", note="begin", re=letter.id)
-    ctx.send("thread:child", "first work")
+    ctx.send("thread:child", "first work", cite=letter.id)
     before_close = git(ctx.room / "self", "rev-parse", "HEAD").stdout.strip()
     seen = set()
     deadline = time.monotonic() + 60

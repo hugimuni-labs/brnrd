@@ -40,7 +40,7 @@ from .lifecycle import main_snapshot
 from .timers import observe_due
 from .selfrepo import (
     AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, git,
-    ensure_room, repaired_line, run_wake,
+    ensure_room, repaired_line, run_wake, seed_root,
 )
 
 SRC = str(Path(__file__).resolve().parents[3])
@@ -200,7 +200,84 @@ class WakeFailure(SelfError):
         self.letter_ids = tuple(letter_ids)
 
 
-def _oversized_letters(clone, thread, owed, part, repos):
+def _run_recipe(clone, thread, owed_path, part_path, repo_file, core_path, recipe=None):
+    with tempfile.TemporaryFile(mode="w+") as wake, tempfile.TemporaryFile(mode="w+") as why:
+        code = run_wake(clone, thread, owed_path, loom_part=part_path, repos=repo_file,
+                        core=core_path, stdout=wake, stderr=why, recipe=recipe)
+        wake.seek(0)
+        why.seek(0)
+        return code, wake.read(), why.read().strip()
+
+
+def _build_wake(home, strand, gen, clone, thread, rows, part, owed_path, part_path, repo_file, core_path):
+    """Run the recipe; a home that cannot wake still wakes when it can be made to.
+
+    The resident is who repairs its home, and it can only do that awake. So a
+    broken recipe is replaced by the packaged one, and owed letters that do not
+    fit are left for the first boundary, which shows unread letters whole. Only
+    a wake that cannot be built at all (no recipe fits even an empty occasion,
+    or one letter is larger than the budget) is refused. ``owed.json`` ends as
+    the letters the wake carried.
+    """
+    def attempt(carried, text, recipe):
+        atomic_write(owed_path, json.dumps(carried))
+        atomic_write(part_path, text)
+        return _run_recipe(clone, thread, owed_path, part_path, repo_file, core_path, recipe)
+
+    from .converge import WAKE_FALLBACK, record
+    recipe = None
+    try:
+        code, occasion, why = attempt(rows, part, None)
+        broken = f"wake exited {code}: {why}"
+    except SelfError as exc:  # a recipe that is missing or not executable
+        code, occasion, why, broken = -1, "", str(exc), str(exc)
+    if code not in (0, 3):
+        recipe = seed_root() / "core" / "loom" / "wake"
+        _log(home, f"start {strand}: the self's core/loom/wake failed ({broken}); "
+                   "waking with the packaged recipe")
+        part = (f"your self's core/loom/wake failed ({broken[:400]}); brnrd's packaged recipe "
+                "built this wake instead; repair core/loom/wake and land it with send-self "
+                "before other work. ") + part
+        record(home, WAKE_FALLBACK, strand, gen, "recipe", {"want": "recipe", "error": broken[:400]})
+        code, occasion, why = attempt(rows, part, recipe)
+    if code == 3 and rows and not _oversized_letters(clone, thread, owed_path, part_path,
+                                                     repo_file, recipe=recipe):
+        best = None
+        low, high = 0, len(rows) - 1
+        while low <= high:
+            mid = (low + high) // 2
+            text = _deferred_line(rows[mid:], len(rows)) + part
+            result = attempt(rows[:mid], text, recipe)
+            if result[0] == 0:
+                best, low = (mid, text, result), mid + 1
+            else:
+                high = mid - 1
+        if best is not None:
+            mid, text, (code, occasion, why) = best
+            atomic_write(owed_path, json.dumps(rows[:mid]))
+            atomic_write(part_path, text)
+            _log(home, f"start {strand}: the wake carries {mid} of {len(rows)} owed letters; "
+                       "the rest arrive at the first boundary")
+            record(home, WAKE_FALLBACK, strand, gen, "letters", {
+                "want": "letters", "carried": mid,
+                "deferred": [str(row.get("id")) for row in rows[mid:]]})
+            return occasion
+        attempt(rows, part, recipe)
+    if code != 0:
+        raise WakeFailure(f"wake exited {code}: {why}",
+                          _oversized_letters(clone, thread, owed_path, part_path, repo_file,
+                                             recipe=recipe))
+    return occasion
+
+
+def _deferred_line(rest, total):
+    ids = ", ".join(str(row.get("id")) for row in rest)
+    return (f"the wake had room for {total - len(rest)} of {total} owed letters; the other "
+            f"{len(rest)} ({ids}) arrive whole at your first tool boundary: read them "
+            "before you act on the ones below. ")
+
+
+def _oversized_letters(clone, thread, owed, part, repos, recipe=None):
     """Prove input-local failure without interpreting a recipe's exit codes.
 
     The wake budget is the recipe contract. A large home plus small mail is
@@ -219,7 +296,7 @@ def _oversized_letters(clone, thread, owed, part, repos):
     try:
         with tempfile.TemporaryFile(mode="w+") as output:
             ok = run_wake(clone, thread, loom_part=part, repos=repos,
-                          stdout=output, stderr=output) == 0
+                          stdout=output, stderr=output, recipe=recipe) == 0
     except Exception:
         return ()
     return large if ok else ()
@@ -364,51 +441,44 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
              facts: list[Fact], jack: str, *, fuel: str = "",
              repos: list[tuple[str, str]] | None = None) -> Path:
     room = home.room(strand).resolve()
-    fresh = not (room / "self" / ".git").exists()
-    clone, repair = ensure_room(home.root, strand, gen)
-    if repair is not None:
-        _log(home, f"start {strand}: {repaired_line(repair)}")
-        facts = [*facts, repair]
     lease = next((f for f in reversed(facts) if f.kind == "lease"
                   and f.data.get("strand") == strand and f.data.get("gen") == gen), None)
     parent = lease.data.get("parent") if lease else None
     if not isinstance(parent, str) or not parent:
         parent = None
-    if fresh and parent:
-        source = home.room(parent) / "self"
-        if not (source / ".git").exists():
-            _log(home, f"start {strand}: parent room {parent} gone; starting from main")
-        elif (fetched := git(clone, "fetch", str(source), f"strand/{parent}",
-                             check=False)).returncode == 0:
-            git(clone, "reset", "--hard", "FETCH_HEAD")
-        else:
-            # A parent room a crash left without its branch must not block the wake.
-            why = fetched.stderr.strip().splitlines()[-1:] or ["fetch failed"]
-            _log(home, f"start {strand}: parent room {parent} has no strand/{parent} "
-                       f"({why[0]}); starting from main")
-            append(home, Fact(kind="room.unseeded", by=f"loom:{home.install_id()}", data={
-                "strand": strand, "gen": gen, "parent": parent, "room": str(source),
-                "error": why[0]}))
-    (room / "port" / "in").mkdir(parents=True, exist_ok=True)
-    (room / "port" / "out").mkdir(parents=True, exist_ok=True)
+    repaired: list[Fact] = []
+
+    def ensure() -> None:
+        _clone, repair = ensure_room(home.root, strand, gen)
+        if repair is not None:
+            _log(home, f"start {strand}: {repaired_line(repair)}")
+            repaired.append(repair)
+
+    from .converge import converge, port_want, room_wants
     wait_src = home.thread_dir(thread) / "wait"
-    if wait_src.is_file():
-        atomic_write(room / "port" / "wait", wait_src.read_text().strip() + "\n")
-    for name in ("jack-state.json", "policy", "core.md"):
-        (room / "port" / name).unlink(missing_ok=True)
+    wait = wait_src.read_text().strip() if wait_src.is_file() else None
+    fell = converge(home, strand, gen, [*room_wants(home, strand, gen, parent, facts, ensure),
+                                        port_want(room, wait)])
+    for fact in fell:
+        if fact.data.get("source") not in (f"strand/{parent}", None):
+            _log(home, f"start {strand}: seeded from {fact.data['source']} "
+                       f"({fact.data.get('error', 'no error')})")
+    facts = [*facts, *repaired, *fell]
+    clone = room / "self"
     owed_path = room / "port" / "owed.json"
     attachments = letter_attachments(home.root, facts)
     reply_context = letter_replies(facts)
-    atomic_write(owed_path, json.dumps([dict(letter.data, attachments=attachments.get(letter.id, []),
-                                           reply_context=reply_context.get(letter.id, ""),
-                                           reply_to=letter_owners(facts, main_snapshot(home))[letter.id].reply_to)
-                                              for letter in letters]))
+    rows = [dict(letter.data, attachments=attachments.get(letter.id, []),
+                 reply_context=reply_context.get(letter.id, ""),
+                 reply_to=letter_owners(facts, main_snapshot(home))[letter.id].reply_to)
+            for letter in letters]
+    atomic_write(owed_path, json.dumps(rows))
     part_path = room / "port" / "loom.md"
     inherited = _read_by_predecessors(facts, thread, strand, letters, threads)
     gone = since_gone(facts, strand, gen, thread, threads, home.install_id())
     from .reap import kept_line
     gone += kept_line(home, thread, threads)
-    atomic_write(part_path, gone + inherited + (
+    part = gone + inherited + (
         f"you are strand {strand} on thread {thread}; letters arrive at your "
         "tool boundaries, each line naming its reply address; answer with "
         "`python -m brr.loom.runtime send --re <id> --to <reply address> \"…\"`; "
@@ -432,7 +502,8 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
            "steps and `$BRNRD_JACK --event stop` before ending; read each returned boundary\n"
            if jack == "hand" else
            "when you're done, stop, and the jack holds you while letters may come\n")
-    ))
+    )
+    atomic_write(part_path, part)
     if repos is None:
         from .adapters import repos as seat_repos, seat_text
         repos = seat_repos(seat_text(home, thread))
@@ -443,19 +514,17 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     repo_file = None
     if failures:
         _log(home, f"start {strand}: {'; '.join(failures)}")
+    from .converge import FALLBACK, record
+    for line in failures:
+        name = line.split(":", 1)[0].removeprefix("repo ")
+        record(home, FALLBACK, strand, gen, f"repo:{name}", {
+            "want": f"repo:{name}", "expected": f"a fetched mirror and loom/{thread}", "got": line})
     if repo_text:
         repo_file = room / "port" / "repos"
         atomic_write(repo_file, repo_text)
     core_path = room / "port" / "core.md"
-    with tempfile.TemporaryFile(mode="w+") as wake, tempfile.TemporaryFile(mode="w+") as why:
-        code = run_wake(clone, thread, owed_path, loom_part=part_path, repos=repo_file,
-                        core=core_path, stdout=wake, stderr=why)
-        why.seek(0)
-        if code != 0:
-            raise WakeFailure(f"wake exited {code}: {why.read().strip()}",
-                              _oversized_letters(clone, thread, owed_path, part_path, repo_file))
-        wake.seek(0)
-        occasion = wake.read()
+    occasion = _build_wake(home, strand, gen, clone, thread, rows, part, owed_path, part_path,
+                           repo_file, core_path)
     # The core rides in a body's system slot, where automated turns and
     # compaction do not wear it down. wake.md stays whole, so a body that
     # reads only BRNRD_WAKE never loses it. An older recipe writes no core.
@@ -917,6 +986,19 @@ def _room_kept(home: Home, strand: str) -> list[str]:
     return lines
 
 
+def _home_streak(facts, thread: str, gen: int) -> int:
+    """The first generation of the home-caused failures that end at ``gen``."""
+    ends = sorted((int(f.data["gen"]), f) for f in kind_facts(facts, "attempt.ended")
+                  if f.data.get("thread") == thread
+                  and int(f.data["gen"]) < gen)
+    start = gen
+    for prior, fact in reversed(ends):
+        if not fact.data.get("evidence", {}).get("home_failure"):
+            break
+        start = prior
+    return start
+
+
 def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure="",
                  failure_origin="", failure_letters=(), repair_thread=None,
                  await_repair=True):
@@ -977,7 +1059,9 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
             revision = git(clone, "rev-parse", "HEAD").stdout.strip()
         except (SelfError, OSError):
             revision = "unknown"
-        notice(home, facts, "self-refusal", f"{thread}:{revision}",
+        # One notice per run of home-caused failures: keyed on the HEAD each
+        # retry cloned, a busy main minted a new one per attempt (inbox, 2026-10-23).
+        notice(home, facts, "self-refusal", f"{thread}:streak:{_home_streak(facts, thread, gen)}",
                f"thread {thread} could not start from its own state: {failure or tail}",
                f"repair the home's wake recipe or context; its letters remain owed on {thread}",
                thread=repair_thread)
@@ -1039,6 +1123,7 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
         "thread": thread, "strand": strand, "gen": gen, "ids": ids,
         "cause": cause, "code": code, "dispositions": dispositions,
         "evidence": {"tail": tail, "readme_changed": changed, "fuel": tank,
+                     **({"home_failure": True} if cause == "failed" and failure_origin == "home" else {}),
                      **({"self_revision": retry_revision} if retry_revision else {}),
                      **({"unpublished": left} if left else {}),
                      **({"kept": kept} if kept else {}),
@@ -1362,6 +1447,9 @@ def _hand_prepare(x, command, step):
         x.letters = letters_for(x.facts, main_snapshot(x.home), c.thread)
         x.room = _prepare(x.home, x.o.strand, c.thread, x.o.gen, x.letters, sender_threads(x.facts), x.facts,
                           (x.folder / "jack").read_text().strip(), fuel=c.fuel, repos=c.repos)
+        # Shown is what the wake carried; a letter left out arrives at a boundary.
+        carried = {str(row.get("id")) for row in json.loads((x.room / "port/owed.json").read_text())}
+        x.letters = [f for f in x.letters if str(f.data.get("id", f.id)) in carried]
         policy = _policy(x.home, c.thread)
         if policy is not None:
             atomic_write(x.room / "port/policy", policy + "\n")

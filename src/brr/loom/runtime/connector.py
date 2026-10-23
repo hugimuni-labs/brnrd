@@ -18,6 +18,7 @@ from .labels import guard_off, is_stranger
 from .ledger import append, read_facts
 from .port import clean_accepts, parse_frontmatter
 from .project import fold, sender_threads
+from .refs import link, miss_words
 from .wishes import wishes
 
 
@@ -141,6 +142,13 @@ def ingest(home, name, fm, attachments):
             data['blobs_missing'] = [int(n) for n in fm['missing'].split()]
         if clean:
             data.update(clean=fm['kind'], refs=fm['refs'].split())
+        # A ref that names nothing never refuses his letter: it lands without that link.
+        from .lifecycle import main_snapshot
+        links, misses = link(facts, main_snapshot(home), fm['body'])
+        if links:
+            data['links'] = links
+        if misses:
+            data['refs_missing'] = misses
         source = append(home, Fact(kind='source', by=f'loom:{home.install_id()}',
                                    id=source_id, after=tuple(blob_ids), data=data))
     letter_id = source_id.replace('source:', 'letter:', 1)
@@ -151,11 +159,23 @@ def ingest(home, name, fm, attachments):
                       cites=source.id, label=data['label'])
         if binding:
             fields['re'] = str(binding[0].data.get('id') or binding[0].id)
-        for key in ('clean', 'refs', 'wake', 'wish', 'verdict'):
+        for key in ('clean', 'refs', 'links', 'wake', 'wish', 'verdict'):
             if key in data:
                 fields[key] = data[key]
         append(home, Fact(kind='letter', by=f'loom:{home.install_id()}', id=letter_id,
                           after=(source.id,), data=fields))
+    if source.data.get('refs_missing'):
+        from .loom import notice
+        facts = read_facts(home)
+        letter = next(f for f in facts if f.id == letter_id)
+        words = miss_words(source.data['refs_missing'])
+        notice(home, facts, 'ref-unknown', letter_id, f"{letter_id} from {source.data['from']}: {words}",
+               'nothing to look for: those ids do not exist',
+               thread=source.data['to'].removeprefix('thread:'), passive=True)
+        if source.data['from'].startswith('person:'):
+            notice(home, facts, 'ref-told', letter_id, f'Your letter landed; {words}.',
+                   'Check the id and send the ref again if it matters.',
+                   about=letter, channel=source.data['channel'], passive=True)
     # A person's agree on a delivered wish is its acceptance; a correct is the letter.
     verdict_id = f'wish.verdict:{letter_id}'
     if (source.data.get('verdict') == 'agree' and source.data['from'].startswith('person:')

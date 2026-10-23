@@ -107,7 +107,7 @@ def test_a_person_thread_settles_only_on_their_word(loom):
     other = inject_letter(home.root, to="thread:inbox", body="done")
     assert "--word" in run("settle", "work", "--room", str(seat), "--why", "Shipped",
                            "--word", other, ok=False)
-    mine = send(home, "s-aaaa-inbx", "--to", "thread:work", "done")
+    mine = send(home, "s-aaaa-inbx", "--to", "thread:work", "--re", other, "--chatter", "done")
     assert "--word" in run("settle", "work", "--room", str(seat), "--why", "Shipped",
                            "--word", mine, ok=False)
     assert read_thread(home, "work")["status"] == "open"
