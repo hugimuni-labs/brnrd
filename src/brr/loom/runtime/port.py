@@ -83,7 +83,7 @@ def parse_boundary(text: str) -> Boundary:
             settled = line.partition(":")[2].strip()
             current = None
             continue
-        if not line.strip() or line.startswith(("status:", "owed:", "opened:", "budget:", "repaired:")):
+        if not line.strip() or line.startswith(("status:", "owed:", "opened:", "budget:", "repaired:", "degraded:")):
             current = None
             continue
         match = _ITEM.match(line)
@@ -209,7 +209,8 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     replies: dict[str, str] | None = None,
                     attachments: dict[str, list[str]] | None = None,
                     reply_context: dict[str, str] | None = None,
-                    budget: str = "", over: str = "", repaired: str = "") -> str:
+                    budget: str = "", over: str = "", repaired: str = "",
+                    degraded: str = "") -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
     ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
@@ -227,6 +228,8 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
         lines.insert(2, over)
     if repaired:
         lines.insert(2, repaired)
+    if degraded:
+        lines.insert(2, degraded)
     if settled is not None:
         lines.insert(2, f"settled: {settled}")
     children = []

@@ -24,6 +24,8 @@ from brr.daemon2.facts import Fact
 
 from .adapters import resolve
 from .bodies import COMMANDS, TABLE, Observation, decide, fact_for, row_for, state_of
+from .health import Health, degraded_line
+from .since import since_gone
 from .home import Home, atomic_write, is_channel, mint, notice_id
 from .ledger import LedgerView, kind_facts, LedgerConflict, append, read_facts
 from .registry import KINDS
@@ -402,7 +404,8 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                                               for letter in letters]))
     part_path = room / "port" / "loom.md"
     inherited = _read_by_predecessors(facts, thread, strand, letters, threads)
-    atomic_write(part_path, inherited + (
+    gone = since_gone(facts, strand, gen, thread, threads, home.install_id())
+    atomic_write(part_path, gone + inherited + (
         f"you are strand {strand} on thread {thread}; letters arrive at your "
         "tool boundaries, each line naming its reply address; answer with "
         "`python -m brr.loom.runtime send --re <id> --to <reply address> \"…\"`; "
@@ -467,6 +470,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                         replies={f.letter.id: f.reply_to for f in active_owners(facts, main_snapshot(home))},
                         attachments=attachments, reply_context=reply_context,
                         repaired=_repaired(facts, strand, gen),
+                        degraded=degraded_line(facts, home.install_id()),
                         **_budget(home, thread, facts)),
     )
     return room
@@ -1284,6 +1288,7 @@ def _boundary(home, facts, strand, gen, context):
         attachments=letter_attachments(home.root, facts),
         reply_context=letter_replies(facts),
         repaired=_repaired(facts, strand, gen),
+        degraded=degraded_line(facts, home.install_id()),
         **_budget(home, context.thread, facts),
     )
     path = home.room(strand) / "port/in/boundary.md"
@@ -1589,6 +1594,11 @@ def _source_fingerprint():
     ]).encode()).hexdigest()
 
 
+def _read_usage(home, usage) -> None:
+    for shell in usage.shells(home):
+        usage.reading(home, shell)
+
+
 def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         tick: float = 0.2, stop=None, install: str | None = None) -> None:
     if tick <= 0:
@@ -1623,6 +1633,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         publisher = Publisher(home, _log)
         from .mirror import Mirror
         mirror = Mirror(home, _log)
+        health = Health(home, read_facts(home), _log)
         while not (stop is not None and stop.is_set()):
             try:
                 config = load_config(home.root)
@@ -1633,25 +1644,13 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
             with tick_config(home.root, config):
                 router.config = config
                 if time.monotonic() >= next_usage:
-                    for shell in usage.shells(home):
-                        usage.reading(home, shell)
+                    health.guard("usage", _read_usage, home, usage, backoff=False)
                     next_usage = time.monotonic() + usage.REFRESH_INTERVAL
-                try:
-                    inputs.step()
-                except Exception:
-                    _log(home, traceback.format_exc().rstrip())
-                try:
-                    tick_once(home, bodies, adapter, core, router)
-                except Exception:
-                    _log(home, traceback.format_exc().rstrip())
-                try:
-                    publisher.step(config, router)
-                except Exception:
-                    _log(home, traceback.format_exc().rstrip())
-                try:
-                    mirror.step(config)
-                except Exception:
-                    _log(home, traceback.format_exc().rstrip())
+                # Inputs, publisher and mirror pace their own retries; only the tick backs off.
+                health.guard("inputs", inputs.step, backoff=False)
+                health.guard("tick_once", tick_once, home, bodies, adapter, core, router)
+                health.guard("publisher", publisher.step, config, router, backoff=False)
+                health.guard("mirror", mirror.step, config, backoff=False)
             if _source_fingerprint() != fingerprint:
                 _log(home, "runtime source changed; re-executing loom")
                 inputs.close()
