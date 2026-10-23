@@ -9,10 +9,58 @@ from typing import Iterable
 from brr.daemon2.facts import Fact, union
 
 
+@dataclass(frozen=True)
+class Say:
+    """A span of a letter a wish cites. ``size`` None cites from ``offset`` to the end;
+    ``quote`` is kept when the quote could not be placed, and then it cites the whole letter."""
+    letter: str
+    offset: int = 0
+    size: int | None = None
+    quote: str | None = None
+
+    @classmethod
+    def read(cls, raw) -> "Say":
+        """A ``{"letter": …}`` row, or an old ``[id, off, size]`` / ``[id, 0, None, quote]``."""
+        if isinstance(raw, Say):
+            return raw
+        if isinstance(raw, dict):
+            raw = [raw.get("letter"), raw.get("offset", 0), raw.get("size"), raw.get("quote")]
+        if not isinstance(raw, (list, tuple)) or not 1 <= len(raw) <= 4:
+            raise ValueError(f"say {raw!r}: not a say")
+        letter, offset, size, quote = (*raw, *(0, None, None)[len(raw) - 1:])
+        if not isinstance(letter, str) or not letter:
+            raise ValueError(f"say {raw!r}: no letter id")
+        if type(offset) is not int or offset < 0 or (size is not None and (type(size) is not int or size < 0)):
+            raise ValueError(f"say {raw!r}: offset and size are counts")
+        if quote is not None and not isinstance(quote, str):
+            raise ValueError(f"say {raw!r}: a quote is text")
+        return cls(letter, offset, size, quote)
+
+    def row(self) -> dict:
+        return {"letter": self.letter, "offset": self.offset,
+                **({"size": self.size} if self.size is not None else {}),
+                **({"quote": self.quote} if self.quote is not None else {})}
+
+    def text(self, body: str) -> str:
+        """The words cited; an unplaced quote (at 0, no size) cites the whole letter."""
+        return body[self.offset:] if self.size is None else body[self.offset:self.offset + self.size]
+
+
+def read_says(rows) -> list[Say]:
+    """Every say a row holds that can be read; a bad one is left out, never raised."""
+    found = []
+    for raw in rows or ():
+        try:
+            found.append(Say.read(raw))
+        except ValueError:
+            continue
+    return found
+
+
 @dataclass
 class Wish:
     id: str
-    says: list = field(default_factory=list)
+    says: list[Say] = field(default_factory=list)
     sender: str = "person"
     line: str = ""
     thread: str = ""
@@ -62,9 +110,9 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
         ident = d["wish"]
         if fact.kind == "wish":
             wish = found.setdefault(ident, Wish(ident))
-            for say in d["says"]:
+            for say in read_says(d.get("says")):
                 if say not in wish.says:
-                    wish.says.append(list(say))
+                    wish.says.append(say)
             wish.sender, wish.line, wish.thread = d["from"], d["line"], d["thread"]
             wish.parent = d.get("parent") or wish.parent
             wish.verdict = None
@@ -82,7 +130,7 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
         wish.at = fact.at
     for wish in found.values():
         def own_say(say):
-            letter = letters.get(say[0])
+            letter = letters.get(say.letter)
             if letter is None:
                 return False
             # The sender is data.from: the connector writes a person's

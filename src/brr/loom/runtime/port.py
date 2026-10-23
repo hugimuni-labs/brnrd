@@ -542,6 +542,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         from .lifecycle import own_thread
         from .registry import admit
         from .verbs_wishes import say_span, wish_fact
+        from .wishes import Say
         if not re and opening is None:
             raise PortError("send --wish requires --re, unless the letter opens a thread")
         line = next((l.strip() for l in (note or body).splitlines() if l.strip()), letter_id)[:160]
@@ -556,7 +557,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                 else:
                     # Nothing to cite but the opening letter itself: a
                     # resident's say, so the fold reports the wish as derived.
-                    says = [[letter_id, 0, None]] if ident == "new" else []
+                    says = [Say(letter_id)] if ident == "new" else []
                 stamp = wish_fact(facts, by="strand:" + sender, ident=ident, says=says, line=wished,
                                   thread=opening or (own_thread(Path(room)) if ident == "new" else None))
                 admit(stamp)
@@ -572,7 +573,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                             data={"wish": stamp.data["wish"], "line": line, "delivered": False, **result})
                 admit(fact)
                 results.append(fact)
-            cited.update(str(say[0]) for say in says)
+            cited.update(say.letter for say in says)
             wish_stamps.append(stamp)
             if echo is not None:
                 from .dispositions import echo as echo_line

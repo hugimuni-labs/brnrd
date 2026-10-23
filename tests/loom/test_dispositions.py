@@ -6,7 +6,7 @@ from brr.daemon2.facts import Fact
 from brr.loom.runtime.dispositions import disposed, place
 from brr.loom.runtime.ledger import append, inject_letter, read_facts
 from brr.loom.runtime.port import fact_from_port, parse_frontmatter
-from brr.loom.runtime.wishes import wishes
+from brr.loom.runtime.wishes import Say, wishes
 from test_wake import cli
 from test_wishes import ledger  # noqa: F401  (fixture)
 
@@ -73,9 +73,13 @@ def test_says_are_loose_quotes_and_never_refused(ledger):
     assert done.returncode == 0, done.stderr
     w = by_line(home, "Board shows where")
     start = BODY.index("WHERE")
-    assert w.says[0] == [letter, start, len("WHERE it is being worked on")]
-    assert w.says[1] == [letter, 0, None, "a quote nowhere in it"]
-    assert w.says[2] == [other, "Also: keep it lean".index("keep"), len("keep it lean")]
+    assert w.says[0] == Say(letter, start, len("WHERE it is being worked on"))
+    assert w.says[1] == Say(letter, 0, None, "a quote nowhere in it")
+    assert w.says[2] == Say(other, "Also: keep it lean".index("keep"), len("keep it lean"))
+    # The ledger holds records; the fold reads them back as the same says.
+    [fact] = [f for f in read_facts(home) if f.kind == "wish" and f.data["wish"] == w.id]
+    assert fact.data["says"] == [say.row() for say in w.says]
+    assert fact.data["says"][1] == {"letter": letter, "offset": 0, "quote": "a quote nowhere in it"}
     assert '"WHERE it is being worked on"' in done.stderr
     assert '"a quote nowhere in it"?' in done.stderr
 
@@ -87,10 +91,10 @@ def test_says_name_a_colon_letter_id_by_its_last_segment(ledger):
         "id": ident, "from": "person:test", "to": "thread:work", "body": "ship: the gate first"}))
     done = send(seat, "--re", ident, "--wish", "new:Gate first", "--says", "board-abc123:ship: the gate", "ok")
     assert done.returncode == 0, done.stderr
-    assert by_line(home, "Gate first").says == [[ident, 0, len("ship: the gate")]]
+    assert by_line(home, "Gate first").says == [Say(ident, 0, len("ship: the gate"))]
     # The prefix names no letter: the whole value is a quote of the --re letter.
     done = send(seat, "--re", ident, "--wish", "new:Gate", "--says", "ship: the gate", "ok")
-    assert by_line(home, "Gate").says == [[ident, 0, len("ship: the gate")]]
+    assert by_line(home, "Gate").says == [Say(ident, 0, len("ship: the gate"))]
 
 
 def test_refs_and_answered_bind_to_the_preceding_wish(ledger):
