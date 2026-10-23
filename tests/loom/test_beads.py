@@ -7,7 +7,7 @@ from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, inject_letter, read_facts
 from brr.loom.runtime.port import fact_from_port, parse_frontmatter
 from brr.loom.runtime.refs import tokens
-from test_dispositions import out_file, send
+from test_dispositions import by_line, out_file, send
 from test_wishes import ledger  # noqa: F401  (fixture)
 from _step import write_thread
 
@@ -96,3 +96,53 @@ def test_a_bead_walks_a_resident_reply_back_to_the_person_root(ledger):
     shown = cli(["graph", "--room", str(seat), "--bead", reply])
     assert shown.returncode == 0 and f"root: {root}" in shown.stdout
     assert cli(["graph", "--room", str(seat), "--bead", "nope"]).returncode == 1
+
+
+def test_every_root_kind_through_its_writer_and_nothing_dangles(ledger):
+    """A person letter, a loom notice, a molt up to the thread's wish, an
+    incident a person ratified, and a derived wish before and after its verdict."""
+    from brr.loom.runtime.asks import Beads, roots
+    from brr.loom.runtime.lifecycle import main_snapshot
+    from brr.loom.runtime.loom import notice, notice_id
+    from brr.loom.runtime.port import write_send
+    from test_wake import cli, commit
+    home, seat = ledger
+
+    def walk(ident):
+        return Beads(read_facts(home), main_snapshot(home)).chain(ident)
+
+    def land(letter):
+        append(home, fact_from_port(parse_frontmatter(out_file(seat, letter).read_text()), "s-aaaa-test", 1))
+        return letter
+
+    said = inject_letter(home.root, to="thread:work", body="fold the facts")
+    assert walk(said) == ([], "person")
+    # (a) A loom notice is its own root.
+    assert notice(home, read_facts(home), "test-degraded", "work", "degraded", "nothing", thread="work")
+    told = notice_id("test-degraded", "work")
+    assert walk(told) == ([], "loom")
+    # (b) An incident: the resident answers the notice, the person ratifies that answer.
+    sent = send(seat, "--re", told, "--chatter", "repaired")
+    assert sent.returncode == 0, sent.stderr
+    answer = land(sent.stdout.strip())
+    ratified = inject_letter(home.root, to="thread:work", body="good", re=answer)
+    assert walk(ratified) == ([(answer, "re"), (told, "re")], "loom")
+    # (e) Initiative: a resident's wish is unconfirmed until a person's verdict letter.
+    made = send(seat, "--re", answer, "--wish", "new:Fold facts once", "I will fold them")
+    assert made.returncode == 0, made.stderr
+    land(made.stdout.strip())
+    wish = by_line(home, "Fold facts once").id
+    assert walk(wish) == ([], "unconfirmed")
+    # (c) A handover climbs strand, thread, the wish the thread was opened for.
+    (home.root / "self/threads/work/README.md").write_text(
+        f"---\nid: work\nstatus: open\ntense: plan\nopened-for: [{wish}]\n---\n# Wish work\n")
+    commit(home.root / "self", "opened for")
+    molt = land(write_send(seat, to="thread:work", sender="s-aaaa-test", body="handover",
+                           molt="s-aaaa-test/abcde"))
+    up = [("s-aaaa-test", "molt"), ("thread:work", "thread"), (wish, "opened-for")]
+    assert walk(molt) == (up, "unconfirmed")
+    agreed = cli(["wish", wish, "--room", str(seat), "--accept", "word", "--ref", said])
+    assert agreed.returncode == 0, agreed.stderr
+    assert walk(molt) == ([*up, (said, "verdict")], "person")
+    # The invariant: every letter here ends at a person, a loom fact or an unconfirmed wish.
+    assert set(roots(read_facts(home), main_snapshot(home))) <= {"person", "loom", "unconfirmed"}

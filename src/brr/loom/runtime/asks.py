@@ -170,8 +170,10 @@ class Beads:
             w = self.wishes.get(ident)
             if w is None:
                 return None, "dangling"
-            if w.verdict and w.verdict.get("letter"):
-                return str(w.verdict["letter"]), "verdict"
+            # A verdict's ref is the letter that gave it, when a letter did.
+            ref = str((w.verdict or {}).get("ref") or "")
+            if ref in self.letters:
+                return ref, "verdict"
             if w.origin == "derived":
                 return None, "unconfirmed"
             if w.says:
