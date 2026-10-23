@@ -7,6 +7,7 @@ The runtime adds the current thread's wish projection to the recipe's output.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -439,7 +440,10 @@ def heal_room(home: Path, strand: str) -> dict | None:
     or a ``dest`` with no ``.git``, is renamed to ``self.broken-<stamp>`` (kept,
     never deleted) for ``ensure_room`` to reclone. A live lock (a body in the
     room, or younger than any loom git call) leaves everything as it stands.
-    Returns None when nothing was repaired, else ``{"found": [...], "done": [...], "aside": path | None}``.
+    Before the first change it reads the crash site (``_crash_site``): the
+    strand branch's sha and what in the work tree differs from it.
+    Returns None when nothing was repaired, else ``{"found": [...], "done": [...],
+    "aside": path | None, "head": sha | None, "dirty": [...] | None, "dirty_count": n}``.
     """
     room_dir = Path(home) / "rooms" / strand
     dest = room_dir / "self"
@@ -451,8 +455,18 @@ def heal_room(home: Path, strand: str) -> dict | None:
 
     found: list[str] = []
     done: list[str] = []
+    crash: dict = {}
+
+    def site() -> None:
+        if not crash:
+            crash.update(_crash_site(dest, strand))
+
+    def report(**kw) -> dict:
+        site()
+        return {"found": found, "done": done, "aside": None, **crash, **kw}
 
     def aside(why: str) -> dict:
+        site()
         found.append(why)
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
         target = room_dir / f"self.broken-{stamp}"
@@ -462,7 +476,7 @@ def heal_room(home: Path, strand: str) -> dict | None:
             target = room_dir / f"self.broken-{stamp}-{n}"
         os.rename(dest, target)
         done.append(f"moved the room aside to {target.name} and recloned from self")
-        return {"found": found, "done": done, "aside": str(target)}
+        return report(aside=str(target))
 
     if not (dest / ".git").exists():
         return aside("the room has no .git (a clone that never finished)")
@@ -472,6 +486,7 @@ def heal_room(home: Path, strand: str) -> dict | None:
         age = time.time() - lock.stat().st_mtime
         if body_alive(room_dir) or age < STALE_LOCK_SECONDS:
             return None  # Someone may still be writing: touch nothing.
+        site()
         lock.unlink()
         found.append(f"a stale index.lock ({age:.0f}s old, no body in the room)")
         done.append("removed index.lock")
@@ -493,6 +508,7 @@ def heal_room(home: Path, strand: str) -> dict | None:
     if index.returncode != 0 or (entries and not index.stdout):
         found.append("an unreadable index" if index.returncode != 0
                      else f"an empty index while HEAD has {len(entries)} files")
+        site()
         broken = dest / ".git" / "index"
         if broken.exists():
             os.replace(broken, dest / ".git" / "index.broken")
@@ -512,6 +528,7 @@ def heal_room(home: Path, strand: str) -> dict | None:
         if emptied:
             found.append(f"{len(emptied)} tracked files empty where HEAD has content ({_some(emptied)})")
         paths = missing + emptied
+        site()
         restore = hgit("restore", "--source=HEAD", "--worktree",
                        "--pathspec-from-file=-", "--pathspec-file-nul",
                        input="\0".join(paths) + "\0")
@@ -521,6 +538,7 @@ def heal_room(home: Path, strand: str) -> dict | None:
     branch = f"strand/{strand}"
     if hgit("rev-parse", "--verify", "-q", f"refs/heads/{branch}").returncode:
         found.append(f"no {branch} branch (a clone that stopped before it)")
+        site()
         if hgit("checkout", "-q", "-b", branch).returncode:
             return aside(f"{branch} could not be created")
         from brr.loom.runtime.merge_driver import install_merge_driver
@@ -528,7 +546,67 @@ def heal_room(home: Path, strand: str) -> dict | None:
         done.append(f"created {branch} at HEAD")
     if not found:
         return None
-    return {"found": found, "done": done, "aside": None}
+    return report()
+
+
+# The fact keeps this many dirty paths; ``dirty_count`` counts them all.
+DIRTY_KEPT = 200
+
+
+def _crash_site(dest: Path, strand: str) -> dict:
+    """The strand branch's sha and the work tree's differences from it, read only.
+
+    Refs are read as files, so a broken ``HEAD`` doesn't hide them. ``dirty``
+    is ``git status --porcelain`` of the work tree against that commit (or
+    HEAD's, before the branch existed), taken through a stand-in git dir
+    with its own index: the room's index may be what broke, and nothing in
+    the room is written. None when there is no commit to compare with.
+    """
+    gitdir = dest / ".git"
+    head = _read_ref(gitdir, f"refs/heads/strand/{strand}")
+    base = head or _read_ref(gitdir, "HEAD")
+    site = {"head": head, "dirty": None, "dirty_count": 0}
+    if not base or not (gitdir / "objects").is_dir():
+        return site
+    with tempfile.TemporaryDirectory(prefix="loom-site-") as view:
+        view = Path(view)
+        for name in ("objects", "refs", "packed-refs", "info"):
+            if (gitdir / name).exists():
+                (view / name).symlink_to(gitdir / name)
+        (view / "HEAD").write_text(base + "\n")
+        (view / "config").write_text("[core]\n\tbare = false\n")
+        env = dict(_env_without_pin(), GIT_DIR=str(view), GIT_WORK_TREE=str(dest),
+                   GIT_INDEX_FILE=str(view / "index"))
+        if git(dest, "read-tree", base, check=False, env=env).returncode:
+            return site
+        status = git(dest, "status", "--porcelain", "-z", "--no-renames",
+                     "--untracked-files=all", check=False, env=env)
+    if status.returncode:
+        return site
+    dirty = [row for row in status.stdout.split("\0") if row]
+    site.update(dirty=dirty[:DIRTY_KEPT], dirty_count=len(dirty))
+    return site
+
+
+def _read_ref(gitdir: Path, name: str, depth: int = 3) -> str | None:
+    """The sha ``name`` points to, read from loose and packed refs without git."""
+    try:
+        text = (gitdir / name).read_text().strip()
+    except (OSError, UnicodeDecodeError):
+        text = ""
+    if text.startswith("ref: ") and depth:
+        return _read_ref(gitdir, text[5:].strip(), depth - 1)
+    if re.fullmatch(r"[0-9a-f]{40,64}", text):
+        return text
+    try:
+        packed = (gitdir / "packed-refs").read_text().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+    for line in packed:
+        sha, _, ref = line.partition(" ")
+        if ref == name and re.fullmatch(r"[0-9a-f]{40,64}", sha):
+            return sha
+    return None
 
 
 def _some(paths: list[str], n: int = 3) -> str:
@@ -571,13 +649,27 @@ def _record_repair(home: Path, strand: str, gen: int | None, report: dict):
     return append(loom, Fact(kind="room.repaired", by=f"loom:{loom.install_id()}", data={
         "strand": strand, "gen": gen, "found": report["found"],
         "done": report["done"], "aside": report.get("aside"),
+        "head": report.get("head"), "dirty": report.get("dirty"),
+        "dirty_count": report.get("dirty_count", 0),
     }))
 
 
 def repaired_line(fact) -> str:
     """The boundary's line for a ``room.repaired`` fact."""
     data = fact.data
-    return "repaired: room " + "; ".join(data["found"]) + " -> " + "; ".join(data["done"])
+    line = "repaired: room " + "; ".join(data["found"]) + " -> " + "; ".join(data["done"])
+    site = []
+    if data.get("aside"):
+        site.append(f"the old room is at {data['aside']}")
+    if data.get("head"):
+        site.append(f"strand/{data['strand']} was at {data['head'][:12]}")
+    if data.get("dirty") is not None:
+        n = data.get("dirty_count", len(data["dirty"]))
+        paths = [row[3:] for row in data["dirty"]]
+        site.append(f"{n} dirty paths ({_some(paths)})" if n else "no dirty paths")
+    if site:
+        line += " · crash site: " + "; ".join(site)
+    return line.replace("\n", "\\n")
 
 
 def resolve_clone(room_dir: Path) -> Path:
