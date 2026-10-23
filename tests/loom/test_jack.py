@@ -296,6 +296,10 @@ def test_post_traces_the_call_with_its_command_masked(tmp_path):
         {"tool_name": "Read", "tool_input": {"file_path": "/Users/x/private/SECRET-dir/notes.md"}},
         {"tool_name": "Grep", "tool_input": {"pattern": "def execute", "path": "/a/SECRET"}},
         {"tool_name": "WebFetch", "tool_input": {"url": "https://x.test/a?token=SECRET", "prompt": "p"}},
+        {"tool_name": "Bash", "tool_input": {"command": "mysql -pSECRETpw db"}},
+        {"tool_name": "Bash", "tool_input": {"command": "sshpass -p SECRET2 ssh h"}},
+        {"tool_name": "Bash", "tool_input": {"command": "curl -u bob:SECRET https://x"}},
+        {"tool_name": "Bash", "tool_input": {"command": "ssh -p 22 h && mkdir -p a/b && pytest -p no:randomly"}},
     ]
     for n, call in enumerate(calls):
         execute("pre", room, json.dumps(dict(call, tool_use_id=f"t{n}")))
@@ -306,11 +310,16 @@ def test_post_traces_the_call_with_its_command_masked(tmp_path):
     assert [(r["tool"], r["arg"]) for r in rows] == [
         ("Bash", "Fetch the thing"), ("Bash", ""), ("Bash", ""), ("Read", "notes.md"),
         ("Grep", "def execute"), ("WebFetch", "x.test"),
+        ("Bash", ""), ("Bash", ""), ("Bash", ""), ("Bash", ""),
     ]
     assert rows[0]["cmd"].startswith("curl -H 'Authorization: <redacted>")
     assert "://<redacted>@x.test" in rows[0]["cmd"]
     assert rows[1]["cmd"] == "cat > f <<'EOF' …"
     assert rows[2]["cmd"] == "echo <redacted>"
+    assert [r["cmd"] for r in rows[6:]] == [
+        "mysql -p<redacted> db", "sshpass -p <redacted> ssh h", "curl -u bob:<redacted> https://x",
+        "ssh -p 22 h && mkdir -p a/b && pytest -p no:randomly",
+    ]
     assert all(r["end"] is not None and r["ms"] == 5 for r in rows)
 
 
