@@ -139,9 +139,6 @@ def _poll(room: Path, stdin_text: str = '') -> str:
     wait = _wait(room, stdin_text)
     deadline = ceiling if wait is None else min(begun + wait, ceiling)
     parked = False
-    from .lifecycle import read_thread
-    thread = "" if _hand() else os.environ.get("BRNRD_THREAD", "")
-    opener = str(read_thread(home, thread).get("opened-by", "")) if thread else ""
     while True:
         if _state(room).get("molted"):
             return ""
@@ -155,8 +152,7 @@ def _poll(room: Path, stdin_text: str = '') -> str:
                 # Out of fuel: sleep in the hook, letters wait. A turn now
                 # would fail, and leaving loses the conversation. A refill
                 # past this hook's lifetime is the loom's to wait for.
-                if until is not None and (time.monotonic() + until - time.time() > ceiling
-                                          or not parsed.ids and opener.startswith("thread:")):
+                if until is not None and time.monotonic() + until - time.time() > ceiling:
                     return ""
                 parked = True
                 time.sleep(1.0)
@@ -165,15 +161,12 @@ def _poll(room: Path, stdin_text: str = '') -> str:
                 # The cache went cold while parked; a keepalive would pay a
                 # full rewrite for nothing. Hold on letters until the ceiling.
                 parked = False
-                if not opener.startswith("thread:"):
-                    deadline = ceiling
+                deadline = ceiling
         if (parsed.ids if _hand() else any(not letter.compact for letter in parsed.letters)):
             return _block(room, text, parsed)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             if _hand():
-                return ""
-            if not parsed.ids and opener.startswith("thread:"):
                 return ""
             # Hold again by blocking, never by waiting on in this call: the
             # shell ends a hook that outlives its timeout, and the body would
@@ -472,7 +465,37 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         return blocked
     if parsed.ids and (_hand() or not _state(room).get("stop_blocks") and not _dry(room)):
         return _block(room, text, parsed)
+    refused = _undeclared(room, plan)
+    if refused:
+        return refused
     return _poll(room, stdin_text)
+
+
+END = """work is left on this thread (plan {plan}) and this body has not said how it ends. Do one, then stop:
+- a result: python -m brr.loom.runtime wish <w-id> --result <kind>:<ref> --line "<what it is>" [--deliver]
+- an ask to a person: python -m brr.loom.runtime ask "<question>" --for <w-id> --rec "<your call>"
+- a park with its reason: python -m brr.loom.runtime wish <w-id> --read "waiting: <on what>"
+- done: python -m brr.loom.runtime settle {thread} --why "<what it became>"
+`python -m brr.loom.runtime wishes` lists the w-ids. The jack then holds you while letters may come."""
+
+
+def declare(room: Path, how: str) -> None:
+    """A verb that says how this body ends marks its room; the next start clears it."""
+    _set_state(room, declared=how)
+
+
+def _undeclared(room: Path, plan: str) -> str:
+    """The first stop with wishes still open is refused once unless this body
+    declared its end. The plan counts wish stamps, never Plan rows."""
+    done, _, total = plan.partition(" ")[0].partition("/")
+    if _hand() or not (done.isdigit() and total.isdigit() and int(done) < int(total)) or _dry(room):
+        return ""
+    state = _state(room)
+    if state.get("declared") or state.get("end_refused"):
+        return ""
+    _set_state(room, end_refused=True)
+    thread = os.environ.get("BRNRD_THREAD") or "<thread>"
+    return _json({"decision": "block", "reason": END.format(plan=f"{done}/{total}", thread=thread)})
 
 
 def _dry(room: Path) -> bool:

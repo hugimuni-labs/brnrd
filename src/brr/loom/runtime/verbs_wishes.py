@@ -25,6 +25,13 @@ def _context(args):
     return Home(resolve_home(args.home)[0]), "person:operator", None
 
 
+def _declare(args, how: str) -> None:
+    """This body said how it ends: the jack lets its first stop through."""
+    from .jack import declare
+    from .verbs_loom import _room
+    declare(_room(args.room), how)
+
+
 def say_span(raw: str, facts) -> Say:
     match = re.fullmatch(r"(.+?)(?:@(\d+)\+(\d+))?", raw)
     if not match:
@@ -133,6 +140,8 @@ def cmd_wish(args):
         if not home.routable(target):
             raise ValueError("wish: thread must exist on main")
         append(home, fact)
+        if actions and kind in {"wish.result", "wish.read"} and by.startswith("strand:"):
+            _declare(args, "result" if kind == "wish.result" else "park")
         print(fact.data["wish"])
         return 0
     except (ValueError, OSError, RuntimeError) as exc:
@@ -196,6 +205,7 @@ def cmd_ask(args):
             # The &ref is the mail's parent: a thread letter cites what it answers.
             body += f"Answer &{ident}, or ask onward with: ask \"<what>\" --for {ident}\n"
             write_send(room, to=head, sender=strand_of_room(room), body=body)
+        _declare(args, "ask")
         print(ident)
         return 0
     except (ValueError, OSError, RuntimeError) as exc:
