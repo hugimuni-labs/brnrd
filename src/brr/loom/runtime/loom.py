@@ -476,6 +476,8 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     part_path = room / "port" / "loom.md"
     inherited = _read_by_predecessors(facts, thread, strand, letters, threads)
     gone = since_gone(facts, strand, gen, thread, threads, home.install_id())
+    from .reap import kept_line
+    gone += kept_line(home, thread, threads)
     part = gone + inherited + (
         f"you are strand {strand} on thread {thread}; letters arrive at your "
         "tool boundaries, each line naming its reply address; answer with "
@@ -1723,6 +1725,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         publisher = Publisher(home, _log, functools.partial(health.guard, backoff=False))
         from .mirror import Mirror
         mirror = Mirror(home, _log)
+        from .reap import Reaper
+        reaper = Reaper(home, _log)
         while not (stop is not None and stop.is_set()):
             try:
                 config = load_config(home.root)
@@ -1735,11 +1739,13 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 if time.monotonic() >= next_usage:
                     health.guard("usage", _read_usage, home, usage, backoff=False)
                     next_usage = time.monotonic() + usage.REFRESH_INTERVAL
-                # Inputs, publisher and mirror pace their own retries; only the tick backs off.
+                # Inputs, publisher, mirror and reap pace their own retries; only the tick backs off.
                 health.guard("inputs", inputs.step, backoff=False)
                 health.guard("tick_once", tick_once, home, bodies, adapter, core, router)
                 health.guard("publisher", publisher.step, config, router, backoff=False)
                 health.guard("mirror", mirror.step, config, backoff=False)
+                health.guard("disk", reaper.disk, backoff=False)
+                health.guard("reap", reaper.step, backoff=False)
             if _source_fingerprint() != fingerprint:
                 _log(home, "runtime source changed; re-executing loom")
                 inputs.close()

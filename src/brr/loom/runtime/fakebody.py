@@ -11,11 +11,17 @@ import sys
 import time
 from pathlib import Path
 
-from .port import LetterView, parse_boundary
+from .port import _HEADER, LetterView, parse_boundary
 
 CALLS = 15
 TOOL_S = 0.2
 _THREAD = re.compile(r"on thread ([A-Za-z0-9._-]+)")
+
+
+def _letters(text: str) -> list[LetterView]:
+    # The jack's own lines (left in room:, guards, pauses) can come with no
+    # port header when nothing is owed; only a headed boundary carries letters.
+    return parse_boundary(text).letters if _HEADER.search(text) else []
 
 
 class JackView:
@@ -30,18 +36,18 @@ class JackView:
             payload = json.loads(text)
         except json.JSONDecodeError:
             self.kind = "text"
-            self.letters = parse_boundary(stdout).letters
+            self.letters = _letters(stdout)
             return
         if "decision" in payload:
             self.kind = "block" if payload.get("decision") == "block" else "allow"
             reason = payload.get("reason") or ""
             if reason.strip():
-                self.letters = parse_boundary(reason).letters
+                self.letters = _letters(reason)
             return
         context = ((payload.get("hookSpecificOutput") or {}).get("additionalContext")) or ""
         self.kind = "post"
         if context.strip():
-            self.letters = parse_boundary(context).letters
+            self.letters = _letters(context)
 
 
 class Ctx:

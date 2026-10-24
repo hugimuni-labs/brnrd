@@ -46,10 +46,15 @@ if own == "child":
     git(ctx.room / "self", "add", "threads/child/README.md")
     git(ctx.room / "self", "commit", "-m", "child plan")
     Path({str(ready)!r}).write_text("holding")
-    assert ctx.jack("stop").raw == ""
-    boundary = ctx.jack("post").raw
-    assert "settled: accepted result" in boundary
-    assert ctx.jack("post").raw == ""
+    # The unlanded commit is left in room: the stop is refused and names the
+    # command that lands it, so the body waits for acceptance on its posts.
+    blocked = ctx.jack("stop").raw
+    assert "left in room:" in blocked and "send-self --room ." in blocked, blocked
+    deadline = time.monotonic() + 20
+    while "settled: accepted result" not in (boundary := ctx.jack("post").raw):
+        assert time.monotonic() < deadline
+        time.sleep(0.03)
+    assert "settled: accepted result" not in ctx.jack("post").raw
     verb("send-self")
     Path({str(ended)!r}).write_text(boundary)
     sys.exit(0)
