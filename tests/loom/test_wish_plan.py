@@ -9,7 +9,7 @@ from brr.loom.runtime.lifecycle import main_snapshot, parse_plan
 from brr.loom.runtime.loom import _boundary
 from brr.loom.runtime.verbs_threads import _threads
 from brr.loom.runtime.wishes import progress, wishes
-from test_wake import commit, write_thread
+from test_wake import cli, commit, write_thread
 from test_wishes import command, heard, ledger  # noqa: F401  (fixture)
 
 STRAND = "s-aaaa-test"
@@ -118,7 +118,6 @@ def test_refusal_without_open_wishes_is_unchanged(ledger):
 
 def test_new_beside_open_wishes_echoes_the_steer(ledger):
     home, seat = ledger
-    from test_wake import cli
     old = heard(home, seat, "Hovered column holds still")
     letter = inject_letter(home.root, to="thread:work", body="and the inspect sheet")
     sent = cli(["send", "--room", str(seat), "--to", "thread:other", "--re", letter,

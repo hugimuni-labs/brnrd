@@ -5,14 +5,13 @@ import os
 import signal
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
 from brr.loom.runtime.ledger import inject_letter
 from brr.loom.runtime.loom import body_alive
 from brr.loom.runtime.project import fold, holder
-from brr.loom.runtime.selfrepo import git, init_self
+from brr.loom.runtime.selfrepo import init_self
 
 from _step import Loom, kill_bodies, mail, wait_until, write_thread
 from test_lifecycle import bodies
@@ -52,13 +51,9 @@ for letter in letters:
         os.kill(first.proc.pid, stop_signal)
         first.proc.wait(timeout=5)
         assert body_alive(root / 'rooms' / held)
-        # A landed edit proves that the new loop refreshes the inherited room.
-        readme = root / 'rooms' / held / 'self/threads/work/README.md'
-        readme.write_text(readme.read_text() + '\n## Plan\n- [ ] Survive the upgrade\n')
-        git(readme.parents[2], 'add', 'threads/work/README.md')
-        git(readme.parents[2], 'commit', '-m', 'Keep the upgrade plan')
-        subprocess.run([sys.executable, '-m', 'brr.loom.runtime', 'send-self',
-                        '--room', str(readme.parents[2])], check=True, capture_output=True)
+        # A wish stamped while no loop runs proves the new loop refreshes the inherited room.
+        subprocess.run([sys.executable, '-m', 'brr.loom.runtime', 'wish', 'new', '--line', 'Survive the upgrade',
+                        '--say', letter, '--room', str(root / 'rooms' / held)], check=True, capture_output=True)
         second = Proc(root, 'aaaa')
         procs.append(second)
         boundary = root / 'rooms' / held / 'port/in/boundary.md'
