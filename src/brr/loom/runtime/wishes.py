@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import posixpath
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
@@ -198,6 +201,54 @@ def progress(found: dict[str, Wish], thread: str) -> dict | None:
     if waiting:
         plan["next"] = waiting[0].line
     return plan
+
+
+# A step's receipt: a markdown link, a pull request URL or #number, or a commit sha.
+RECEIPT = re.compile(r"\[[^\]]+\]\(([^)\s]+)\)|(https://github\.com/\S+/pull/\d+)|(?<![\w&])#(\d{3,})\b"
+                     r"|\b((?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40})\b")
+
+
+def receipt(thread: str, row: str) -> tuple[str, str] | None:
+    """``(kind, ref)`` of the first receipt in a Plan row's step, before its ` · re:` tail.
+    A relative link is a file of the self, named from its root."""
+    step = row.rpartition(" · re: ")[0] if " · re: " in row else row
+    hit = RECEIPT.search(step)
+    if hit is None:
+        return None
+    link, url, number, sha = hit.groups()
+    if link is not None:
+        if re.match(r"[a-z]+:", link):
+            return ("pr" if re.search(r"/pull/\d+$", link) else "link"), link
+        path = posixpath.normpath(posixpath.join("threads", thread, link.split("#")[0]))
+        return "file", path
+    if url is not None:
+        return "pr", url
+    return ("pr", "#" + number) if number is not None else ("commit", sha)
+
+
+def landed_results(found: dict[str, Wish], main: dict, by: str) -> list[Fact]:
+    """A landed Plan row with a receipt grants each open wish it cites, no verb to forget.
+
+    One result per wish and ref, never delivered: delivered stays declared. The id is
+    the pair's, so the same receipt on two rows or two landings is one fact."""
+    from .owners import plan_citations
+    out, seen = [], {(w.id, r["ref"]) for w in found.values() for r in w.results}
+    for thread, data in sorted(main.items()):
+        for _, row in data.get("plan_rows") or ():
+            got = receipt(thread, row)
+            if got is None:
+                continue
+            kind, ref = got
+            line = _short(row.rpartition(" · re: ")[0].strip(), 160)
+            for ident in plan_citations(row):
+                wish = found.get(ident)
+                if wish is None or not wish.open or (ident, ref) in seen:
+                    continue
+                seen.add((ident, ref))
+                key = hashlib.sha256(f"{ident} {ref}".encode()).hexdigest()[:12]
+                out.append(Fact(kind="wish.result", by=by, id="wish.result:landed-" + key, data={
+                    "wish": ident, "kind": kind, "ref": ref, "line": line, "delivered": False}))
+    return out
 
 
 def plan_word(found: dict[str, Wish], thread: str) -> str:
