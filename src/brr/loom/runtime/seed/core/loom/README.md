@@ -53,10 +53,12 @@ parks its next start until all exhausted windows reset.
 
 ## Plan citations
 
-A checklist row under `## Plan` names the letters it answers with a trailing
-` · re: <letter-id>, <letter-id>`. Land the README through `send-self`. The
-boundary lists owed letters without a row from the landed plan and the letter
-ownership table; editing a file or mentioning an id in prose does not cite it.
+A row under `## Plan` is a step, `- <step> · re: <letter-id>, <w-id>`, with
+no checkbox: it carries steps and receipts, never status. Land the README
+through `send-self`; mentioning an id in prose does not cite it. Progress is
+the thread's wishes, delivered and accepted over all that are not dropped:
+the status line's `plan x/y`. A person letter on a thread with open wishes is
+shown with a `steers?` line naming them and the `send` that says it steers one.
 
 ## Linking a file
 

@@ -196,8 +196,7 @@ def _letter_lines(letter: Fact, reply: str, compact: bool,
     ]
     if not compact:
         lines.extend(f"  {extra}" for extra in rest)
-    if context:
-        lines.append(f"  {context}")
+    lines.extend(f"  {line}" for line in context.splitlines())
     lines.extend(f"  {attachment}" for attachment in attachments)
     return lines
 
@@ -576,6 +575,13 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                 results.append(fact)
             cited.update(say.letter for say in says)
             wish_stamps.append(stamp)
+            if echo is not None and ident == "new":
+                from .wishes import steer_candidates, wishes
+                beside = [w.id for w in steer_candidates(wishes(facts), stamp.data["thread"])]
+                if beside:
+                    echo.append(f"new {stamp.data['wish']} beside open {', '.join(beside)}: "
+                                f"if it steers one, say so on it: wish {beside[0]} --say "
+                                f"{says[0].letter if says else letter_id}")
             if echo is not None:
                 from .dispositions import echo as echo_line
                 echo.append(echo_line(stamp.data["wish"], says, [
@@ -584,10 +590,13 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     if re and re in letters and re not in cited:
         from .dispositions import disposed, is_person
         if is_person(letters[re]) and re not in disposed(facts, Path(room)):
+            from .project import sender_threads
+            from .wishes import steers_refusal, wishes
+            steer = steers_refusal(wishes(facts), sender_threads(facts).get(sender))
             raise PortError(
-                f"send: {re} is a person letter with no disposition yet; carry one: "
-                '--wish <w-id>|new:"<line>" [--says "quote"] [--ref kind:ref] [--answered], '
-                "or --chatter if it wants nothing")
+                f"send: {re} is a person letter with no disposition yet; "
+                + (steer + '--wish new:"<line>"' if steer else 'carry one: --wish <w-id>|new:"<line>"')
+                + ' [--says "quote"] [--ref kind:ref] [--answered], or --chatter if it wants nothing')
     links, misses = [], []
     if refs_mod.tokens(note or body):
         from .ledger import read_facts

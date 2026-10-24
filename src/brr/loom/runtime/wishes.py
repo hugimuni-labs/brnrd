@@ -144,6 +144,16 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
     return found
 
 
+WISH_KINDS = ("wish", "wish.read", "wish.result", "wish.verdict", "letter")
+
+
+def told(facts) -> dict[str, Wish]:
+    """``wishes`` once per change to its kinds: a held tick never walks the ledger."""
+    from .ledger import kind_facts
+    from .project import cached_projection
+    return cached_projection(facts, "wishes", (), lambda rows: wishes(kind_facts(rows, *WISH_KINDS)))
+
+
 def waits_on(found: dict[str, Wish], main: dict) -> dict[str, str]:
     """Who each open ask waits on, derived and never stored.
 
@@ -175,6 +185,53 @@ def waits_on(found: dict[str, Wish], main: dict) -> dict[str, str]:
             current = nxt
         heads[ask.id] = head
     return heads
+
+
+def progress(found: dict[str, Wish], thread: str) -> dict | None:
+    """A thread's plan is its person wishes: delivered or accepted over all not dropped."""
+    rows = [w for w in found.values() if w.thread == thread and w.sender == "person"
+            and w.state != "dropped"]
+    if not rows:
+        return None
+    plan = {"done": sum(w.state in {"delivered", "accepted"} for w in rows), "total": len(rows)}
+    waiting = sorted((w for w in rows if w.open and w.state != "delivered"), key=lambda w: w.at)
+    if waiting:
+        plan["next"] = waiting[0].line
+    return plan
+
+
+def plan_word(found: dict[str, Wish], thread: str) -> str:
+    plan = progress(found, thread)
+    return f"{plan['done']}/{plan['total']}" if plan else "—"
+
+
+STEERS = 3
+
+
+def steer_candidates(found: dict[str, Wish], thread: str) -> list[Wish]:
+    """Open person wishes a follow-up on ``thread`` may steer, newest first."""
+    return sorted((w for w in found.values() if w.thread == thread and w.open
+                   and w.sender == "person"), key=lambda w: w.at, reverse=True)
+
+
+def steers_line(found: dict[str, Wish], thread: str, letter: str) -> str:
+    """The prompt under a person letter that has no disposition yet."""
+    rows = steer_candidates(found, thread)
+    if not rows:
+        return ""
+    named = " · ".join(f'{w.id} "{_short(w.line, 40)}"' for w in rows[:STEERS])
+    more = f" · +{len(rows) - STEERS} more: wishes --thread {thread}" if len(rows) > STEERS else ""
+    return (f"steers? {named}{more} · or new — send --re {letter} --wish <w-id> "
+            '[--says "…"] | --wish new:"<line>" | --chatter')
+
+
+def steers_refusal(found: dict[str, Wish], thread: str | None) -> str:
+    rows = steer_candidates(found, thread) if thread else []
+    if not rows:
+        return ""
+    named = " | ".join(f'--wish {w.id} ("{_short(w.line, 40)}")' for w in rows[:STEERS])
+    more = f" | wishes --thread {thread}" if len(rows) > STEERS else ""
+    return f"if it steers a wish on {thread}: {named}{more}; else "
 
 
 def _short(value: str, size: int) -> str:

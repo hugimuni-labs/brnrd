@@ -467,7 +467,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     clone = room / "self"
     owed_path = room / "port" / "owed.json"
     attachments = letter_attachments(home.root, facts)
-    reply_context = letter_replies(facts)
+    reply_context = _reply_context(facts, thread, letters, room)
     rows = [dict(letter.data, attachments=attachments.get(letter.id, []),
                  reply_context=reply_context.get(letter.id, ""),
                  reply_to=letter_owners(facts, main_snapshot(home))[letter.id].reply_to)
@@ -484,9 +484,9 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         f"`python -m brr.loom.runtime send --re <id> --to thread:{thread} --note "
         "\"<what you did>\"`; if you commit in this self clone, land it with "
         "`python -m brr.loom.runtime send-self --room .`; you will forget what is "
-        "not written: keep this thread's README true; under `## Plan`, cite each "
-        "row's letters and wish ids with ` · re: <id>, <w-id>` and land the edit "
-        "with send-self. "
+        "not written: keep this thread's README true; a `## Plan` row is a step "
+        "that cites its letters and wish ids with ` · re: <id>, <w-id>`; progress "
+        "is the wishes; land the edit with send-self. "
         "When your context grows "
         "heavy hand over with `python -m brr.loom.runtime molt --why \"<where "
         "things stand>\"`; `python -m brr.loom.runtime settle <thread> --why "
@@ -873,26 +873,37 @@ def _readme(room: Path, thread: str) -> str | None:
 
 
 def _plan(home: Home, thread: str, facts: list[Fact]) -> str:
-    main = main_snapshot(home)
-    rows = main.get(thread, {}).get("plan_rows")
-    missing = [fate.letter.id for fate in active_owners(facts, main)
-               if not fate.done and fate.thread == thread
-               and fate.owner in {"body", "loom", "opener"} and not fate.plan_rows]
-    if rows is None:
-        # A thread with no plan is not asked for one: the nag is for a plan
-        # that exists and has fallen behind its letters.
-        return ""
-    text = f"plan {sum(done for done, _ in rows)}/{len(rows)}"
-    if missing:
-        text += " · letters without a row: " + ", ".join(missing)
+    """The thread's wishes, delivered or accepted over all; no wishes, no plan."""
     from .owners import unanswered_by_thread
+    from .wishes import progress, told
+    main, plan = main_snapshot(home), progress(told(facts), thread)
+    if plan is None and main.get(thread, {}).get("plan_rows") is None:
+        # Neither wishes nor a Plan: the thread is not asked for one.
+        return ""
     unanswered = unanswered_by_thread(facts, main).get(thread, ())
+    parts = [f"plan {plan['done']}/{plan['total']}"] if plan else []
     if unanswered:
-        text += " · unanswered: " + ", ".join(unanswered)
-    next_row = next((text for done, text in rows if not done), "")
-    if next_row:
-        text += f" · next: {next_row[:60]}"
-    return text
+        parts.append("unanswered: " + ", ".join(unanswered))
+    if plan and plan.get("next"):
+        parts.append(f"next: {plan['next'][:60]}")
+    return " · ".join(parts)
+
+
+def _reply_context(facts, thread: str, letters, room: Path | None = None) -> dict[str, str]:
+    """Reply context, and a steers? line under each undisposed person letter."""
+    context = dict(letter_replies(facts))
+    from .dispositions import disposed, is_person
+    person = [letter for letter in letters if is_person(letter)]
+    if not person:
+        return context
+    from .wishes import steers_line, told
+    found, done = told(facts), disposed(facts, room)
+    for letter in person:
+        ident = str(letter.data.get("id", letter.id))
+        line = "" if ident in done else steers_line(found, thread, ident)
+        if line:
+            context[letter.id] = "\n".join(filter(None, (context.get(letter.id, ""), line)))
+    return context
 
 
 def _budget(home: Home, thread: str, facts) -> dict[str, str]:
@@ -1365,14 +1376,15 @@ def _repaired(facts, strand, gen) -> str:
 def _boundary(home, facts, strand, gen, context):
     from .threads import thread_table
     main, state = main_snapshot(home), fold(facts)
+    owed = letters_for(facts, main, context.thread)
     text = render_boundary(
-        strand, gen, context.thread, letters_for(facts, main, context.thread),
+        strand, gen, context.thread, owed,
         state.shown.get(strand, set()), sender_threads(facts), context.fuel,
         context.why or None, reply_channels(facts, home),
         opened=thread_table(home, facts), plan=_plan(home, context.thread, facts),
         replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
         attachments=letter_attachments(home.root, facts),
-        reply_context=letter_replies(facts),
+        reply_context=_reply_context(facts, context.thread, owed, home.room(strand)),
         repaired=_repaired(facts, strand, gen),
         degraded=degraded_line(facts, home.install_id()),
         **_budget(home, context.thread, facts),

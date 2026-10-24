@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .home import Home, thread_of
 from .project import cached_projection, fold, is_notice, projection_cache, sender_threads
+from .wishes import progress
 
 STATES = {"working", "holding", "idle", "parked", "failed", "molted", "settled", "stopped"}
 # The threads table's words for a start waiting on fuel; the board says parked.
@@ -77,16 +78,6 @@ def _done(text: str) -> list[dict]:
             words = item.partition(" — ")[2] or item
             rows.append({"kind": "pr", "ref": url.group(0), "line": words} if url else {"line": item})
     return rows
-
-
-def _plan(rows) -> dict | None:
-    if rows is None:
-        return None
-    plan = {"done": sum(done for done, _ in rows), "total": len(rows)}
-    open_rows = [text for done, text in rows if not done]
-    if open_rows:
-        plan["next"] = open_rows[0].rpartition(" · re: ")[0] or open_rows[0]
-    return plan
 
 
 def _state(now: str) -> str | None:
@@ -255,7 +246,7 @@ def thread(v: View, row: dict) -> dict:
              "opened_for": [{"wish": ident, **({"line": told[ident].line, "state": told[ident].state}
                                                if ident in told else {})}
                             for ident in opened_for(data)],
-             "plan": _plan(data.get("plan_rows")), "strands": strands,
+             "plan": progress(told, thread), "strands": strands,
              "receipts": [{k: val for k, val in {
                  "repo": r.repo, "number": r.number, "url": r.url, "head": r.head,
                  "state": r.state(), "merge_commit": r.merge_commit, "load": r.load()}.items()
@@ -275,7 +266,7 @@ def presence(v: View) -> dict | None:
             lease = v.leases.get(thread, {}).get(strand)
             present.append((v.activity.get(thread) or 0, {
                 "strand": strand, "thread": thread, "state": now,
-                "now": (_plan(v.main.get(thread, {}).get("plan_rows")) or {}).get("next"),
+                "now": (progress(v.told, thread) or {}).get("next"),
                 "owed": row["owed"],
                 "body": f"{lease.data['shell']}/{lease.data['core']}" if lease else None}))
     if not present:
