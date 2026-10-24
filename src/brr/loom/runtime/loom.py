@@ -496,6 +496,8 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         "(core/loom/README.md, Notices); stamp what someone wants with "
         "`send --wish` (core/loom/README.md, Wishes), and open a thread only for "
         "a wish: `send --to thread:<new> --wish <w-id>` or `--wish new:\"<line>\"`; "
+        "`python -m brr.loom.runtime face <word>` shows how this work feels on your "
+        "thread; set none if none is true; "
         + ("call `$BRNRD_JACK --event start` now, `$BRNRD_JACK --event post` between "
            "steps and `$BRNRD_JACK --event stop` before ending; read each returned boundary\n"
            if jack == "hand" else
