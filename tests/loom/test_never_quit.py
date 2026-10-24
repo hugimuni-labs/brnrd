@@ -95,3 +95,49 @@ def test_a_body_with_no_open_wish_is_not_asked_how_it_ends(worker, monkeypatch):
         render_boundary(STRAND, 1, "work", [], set(), {}, plan="plan 2/2"))
     result = json.loads(jack.execute("stop", room, "{}"))
     assert result["reason"].startswith("cache keepalive, nothing new arrived")
+
+
+def test_a_body_that_settles_with_wishes_open_is_not_asked_how_it_ends(ledger, monkeypatch):
+    home, seat = ledger
+    letter = inject_letter(home.root, to="thread:work", body="Please decide")
+    command(home, seat, "wish", "new", "--line", "Decide", "--say", letter)
+    plan = _plan(home, "work", read_facts(home))
+    assert plan.startswith("plan 0/1")
+    (seat / "port/in").mkdir(parents=True, exist_ok=True)
+    (seat / "port/out").mkdir(exist_ok=True)
+    # The boundary the body last saw: the settle has not reached it yet.
+    (seat / "port/in/boundary.md").write_text(
+        render_boundary("s-aaaa-test", 1, "work", [], set(), {}, plan=plan))
+    monkeypatch.setenv("BRNRD_THREAD", "work")
+    monkeypatch.setenv("BRNRD_BODY_JACK", "hooks")
+    monkeypatch.delenv("BRNRD_BODY_SHELL", raising=False)
+    monkeypatch.setenv("BRNRD_STOP_TIMEOUT", "100")
+    now = [0.]
+    monkeypatch.setattr(jack.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(jack.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    command(home, seat, "settle", "work", "--word", inject_letter(home.root, to="thread:work", body="done"),
+            "--why", "Parked for good")
+    out = jack.execute("stop", seat, "{}")
+    assert "has not said how it ends" not in out
+
+
+def test_only_a_reading_that_says_what_it_waits_on_is_a_park(ledger, monkeypatch):
+    home, seat = ledger
+    letter = inject_letter(home.root, to="thread:work", body="Please decide")
+    wish = command(home, seat, "wish", "new", "--line", "Decide", "--say", letter)
+    (seat / "port/in").mkdir(parents=True, exist_ok=True)
+    (seat / "port/out").mkdir(exist_ok=True)
+    (seat / "port/in/boundary.md").write_text(render_boundary(
+        "s-aaaa-test", 1, "work", [], set(), {}, plan=_plan(home, "work", read_facts(home))))
+    monkeypatch.setenv("BRNRD_THREAD", "work")
+    monkeypatch.setenv("BRNRD_BODY_JACK", "hooks")
+    monkeypatch.delenv("BRNRD_BODY_SHELL", raising=False)
+    monkeypatch.setenv("BRNRD_STOP_TIMEOUT", "100")
+    now = [0.]
+    monkeypatch.setattr(jack.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(jack.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    command(home, seat, "wish", wish, "--read", "looks hard")
+    assert "has not said how it ends" in jack.execute("stop", seat, "{}")
+    (seat / "port/jack-state.json").unlink()
+    command(home, seat, "wish", wish, "--read", "waiting: his answer on the colour")
+    assert "has not said how it ends" not in jack.execute("stop", seat, "{}")

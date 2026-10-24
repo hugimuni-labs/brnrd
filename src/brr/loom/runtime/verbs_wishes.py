@@ -140,8 +140,11 @@ def cmd_wish(args):
         if not home.routable(target):
             raise ValueError("wish: thread must exist on main")
         append(home, fact)
-        if actions and kind in {"wish.result", "wish.read"} and by.startswith("strand:"):
-            _declare(args, "result" if kind == "wish.result" else "park")
+        # A park is a reading that says what it waits on, the one the board shows.
+        if actions and kind == "wish.result" and by.startswith("strand:"):
+            _declare(args, "result")
+        elif actions and kind == "wish.read" and by.startswith("strand:") and args.read.startswith("waiting:"):
+            _declare(args, "park")
         print(fact.data["wish"])
         return 0
     except (ValueError, OSError, RuntimeError) as exc:
