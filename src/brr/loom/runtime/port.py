@@ -84,7 +84,7 @@ def parse_boundary(text: str) -> Boundary:
             settled = line.partition(":")[2].strip()
             current = None
             continue
-        if not line.strip() or line.startswith(("status:", "owed:", "opened:", "budget:", "repaired:", "degraded:")):
+        if not line.strip() or line.startswith(("status:", "owed:", "opened:", "budget:", "repaired:", "degraded:", "face? ")):
             current = None
             continue
         match = _ITEM.match(line)
@@ -210,7 +210,7 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     attachments: dict[str, list[str]] | None = None,
                     reply_context: dict[str, str] | None = None,
                     budget: str = "", over: str = "", repaired: str = "",
-                    degraded: str = "") -> str:
+                    degraded: str = "", face: str = "") -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
     ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
@@ -224,6 +224,9 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
         + (f" · {plan}" if plan else ""),
         "owed:",
     ]
+    if face:
+        # Its own line, never after `` · plan``: a proposal is not news that wakes a held body.
+        lines.insert(2, face)
     if over:
         lines.insert(2, over)
     if repaired:
@@ -812,11 +815,11 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             data={"strand": strand, "gen": gen, "why": fm["why"], **({"fresh": True} if fm.get("fresh") == "true" else {})},
         )
     if kind == "face":
-        from .faces import word_of
+        from .faces import face_of
         try:
-            word = word_of(fm["word"]) if fm.get("word") else None
+            face = face_of(fm["face"]) if fm.get("face") else None
         except ValueError as exc:
             raise PortError(str(exc)) from exc
         return Fact(kind="face", by=f"strand:{strand}", id=fact_id,
-                    data={"strand": strand, "gen": gen, "word": word})
+                    data={"strand": strand, "gen": gen, "face": face})
     raise PortError(f"unknown port kind {kind!r}")

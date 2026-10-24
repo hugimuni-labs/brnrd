@@ -455,7 +455,7 @@ class Router:
                         tell("speech-refused",
                              "was refused: that is not a known person's direct chat", fresh)
                         continue
-                    body = f"{_header(state, fact)}\n\n{body}"
+                    body = f"{_header(state, fact, facts)}\n\n{body}"
                     event_id = _answers_event(state, fact)
                     from .project import reply_channels
                     if event_id and reply_channels(facts).get(fact.data.get("re")) == to:
@@ -481,12 +481,24 @@ class Router:
         return facts
 
 
-def _header(state, letter: Fact) -> str:
-    """The resident's face and thread; strand ids stay in the ledger."""
+def _header(state, letter: Fact, facts: list[Fact] | None = None) -> str:
+    """The face the body decided, its thread, and the fact the loom last proposed on.
+
+    No decided face is the resting one; strand ids stay in the ledger. Faces
+    and proposals read the raw ``facts``: a ``pr.merged`` is never folded in.
+    """
+    from .faces import faces, voice
     strand = letter.by.removeprefix("strand:")
-    thread = next((f.data["thread"] for f in reversed(state.accepted)
-                   if f.kind == "lease" and f.data["strand"] == strand), None)
-    return f"{REST_FACE} ⌁ [ {thread} ]" if thread else f"{REST_FACE} ⌁"
+    lease = next((f for f in reversed(state.accepted)
+                  if f.kind == "lease" and f.data["strand"] == strand), None)
+    if lease is None:
+        return f"{REST_FACE} ⌁"
+    thread, gen = lease.data["thread"], lease.data["gen"]
+    facts = state.accepted if facts is None else facts
+    decided = faces(facts).get(thread, {})
+    face = decided["face"] if decided.get("strand") == strand else REST_FACE
+    said = voice(facts, strand, gen, thread)
+    return f"{face} ⌁ [ {thread} ]" + (f" · {said}" if said else "")
 
 
 def _answers_event(state, letter: Fact) -> str | None:
