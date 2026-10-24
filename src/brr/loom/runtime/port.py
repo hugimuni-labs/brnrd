@@ -746,7 +746,7 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
     fact_id = fm.get("id")
     if not fact_id:
         raise PortError("port file has no id")
-    if kind in {"letter", "note", "molt"} and gen is None:
+    if kind in {"letter", "note", "molt", "face"} and gen is None:
         raise PortError(f"strand {strand} has no lease; refusing {kind} {fact_id}")
     if kind == "letter":
         data: dict = {
@@ -811,4 +811,12 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             kind="molt", by=f"strand:{strand}", id=fact_id,
             data={"strand": strand, "gen": gen, "why": fm["why"], **({"fresh": True} if fm.get("fresh") == "true" else {})},
         )
+    if kind == "face":
+        from .faces import word_of
+        try:
+            word = word_of(fm["word"]) if fm.get("word") else None
+        except ValueError as exc:
+            raise PortError(str(exc)) from exc
+        return Fact(kind="face", by=f"strand:{strand}", id=fact_id,
+                    data={"strand": strand, "gen": gen, "word": word})
     raise PortError(f"unknown port kind {kind!r}")
