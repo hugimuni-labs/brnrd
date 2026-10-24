@@ -118,95 +118,70 @@ for letter in letters:
         _stop(root, procs)
 
 
-def test_landed_plan_reaches_live_body_and_is_delivered_once_per_change(tmp_path):
+def test_wish_progress_reaches_live_body_and_is_delivered_once_per_change(tmp_path):
     root = tmp_path / 'home'
     init_self(root, person='test')
+    # Ticked rows count for nothing: the plan is the thread's wishes.
     write_thread(root, 'work', 'Work\n\n## Plan\n- [x] First\n- [ ] Second', 'work', wait='0')
     ready, complete, finished = [root / name for name in ('ready', 'complete', 'finished')]
-    bodies(root, f'''import json, subprocess, sys, time
+    bodies(root, f"""import json, subprocess, sys, time
 from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx
-from brr.loom.runtime.selfrepo import git
 ctx = Ctx(Path(sys.argv[1]))
-readme = ctx.room / "self/threads/work/README.md"
-def land_plan():
-    git(ctx.room / "self", "add", "threads/work/README.md")
-    git(ctx.room / "self", "commit", "-m", "Update the plan")
-    subprocess.run([sys.executable, "-m", "brr.loom.runtime", "send-self",
-                    "--room", str(ctx.room / "self")], check=True)
+def wish(*args):
+    proc = subprocess.run([sys.executable, "-m", "brr.loom.runtime", "wish", *args,
+                           "--room", str(ctx.room)], capture_output=True, text=True, check=True,
+                          env=ctx.env, cwd=ctx.room)
+    return proc.stdout.strip()
+def until(word):
+    while True:
+        view = ctx.jack("post")
+        if word in view.raw:
+            return view
+        assert time.monotonic() < deadline, view.raw
+        time.sleep(0.03)
 first = ctx.jack("start")
-assert "plan 1/2" in first.raw and " · next: Second" in first.raw, first.raw
-assert "letters without a row: " + first.letters[0].id in first.raw, first.raw
-for letter in first.letters:
-    ctx.send("thread:work", note="begin", re=letter.id)
+assert " · plan " not in first.raw and "letters without a row" not in first.raw, first.raw
+letter = first.letters[0].id
+one = wish("new", "--line", "First", "--say", letter)
+two = wish("new", "--line", "Second " + "long " * 20, "--say", letter)
+ctx.send("thread:work", note="begin", re=letter)
 deadline = time.monotonic() + 30
-while ctx.jack("post").letters:
-    assert time.monotonic() < deadline
-    time.sleep(0.03)
+until("plan 0/2")
 assert ctx.jack("post").raw == ""
-# An edit in the room is invisible until the body lands it with send-self.
-readme.write_text(readme.read_text().replace("[ ] Second", "[x] Second") + "- [ ] Third " + "long " * 20 + "\\n")
-assert "- [ ] Second" in git(ctx.room / "self", "show", "origin/main:threads/work/README.md").stdout
-assert ctx.jack("post").raw == ""
-land_plan()
-while True:
-    view = ctx.jack("post")
-    if "plan 2/3" in view.raw:
-        break
-    assert time.monotonic() < deadline
-    time.sleep(0.03)
+wish(one, "--result", "pr:https://example.com/1", "--line", "First done", "--deliver")
+view = until("plan 1/2")
 text = json.loads(view.raw)["hookSpecificOutput"]["additionalContext"]
 next_row = text.split(" · next: ")[1].split("\\n")[0]
-assert len(next_row) == 60, next_row
-assert "Third" in next_row
+assert len(next_row) == 60 and next_row.startswith("Second"), next_row
 assert ctx.jack("post").raw == ""
 Path({str(ready)!r}).write_text(view.raw)
-while True:
+view = ctx.jack("post")
+while not view.letters:
     view = ctx.jack("post")
-    if "letters without a row:" in view.raw:
-        Path({str(complete)!r}).write_text(view.raw)
-        for letter in view.letters:
-            ctx.send("thread:work", note="followup read", re=letter.id)
-        break
     assert time.monotonic() < deadline
     time.sleep(0.03)
-while True:
-    view = ctx.jack("post")
-    if not view.letters:
-        text = json.loads(view.raw)["hookSpecificOutput"]["additionalContext"]
-        assert "letters without a row:" not in text, text
-        assert "plan 2/3" in text, text
-        break
-    assert time.monotonic() < deadline
-    time.sleep(0.03)
-# Removing the last uncited debt is itself a change, delivered once.
-assert ctx.jack("post").raw == ""
-# Removing the section is itself a change, then silent again.
-readme.write_text(readme.read_text().split("\\n## Plan")[0] + "\\n")
-land_plan()
-while True:
-    view = ctx.jack("post")
-    if view.raw:
-        assert " · plan " not in view.raw, view.raw
-        assert ctx.jack("post").raw == ""
-        break
+Path({str(complete)!r}).write_text(view.raw)
+for later in view.letters:
+    ctx.send("thread:work", note="followup read", re=later.id)
+wish(two, "--result", "pr:https://example.com/2", "--line", "Second done", "--deliver")
+view = until("plan 2/2")
+assert " · next: " not in view.raw, view.raw
+while ctx.jack("post").raw:
     assert time.monotonic() < deadline
     time.sleep(0.03)
 Path({str(finished)!r}).write_text("all boundary assertions reached")
-''')
+""")
     inject_letter(root, to='thread:work', body='begin')
     loom = Loom(root)
     loom.start()
     try:
         wait_until(ready.exists, 12, loom.dump)
-        assert 'plan 2/3' in ready.read_text()
-        assert '- [x] Second' in git(root / 'self', 'show', 'main:threads/work/README.md').stdout
+        assert 'plan 1/2' in ready.read_text()
         later = inject_letter(root, to='thread:work', body='a later ask')
         wait_until(complete.exists, 8, loom.dump)
         text = json.loads(complete.read_text())['hookSpecificOutput']['additionalContext']
-        assert 'plan 2/3 · letters without a row: ' + later in text, text
-        # The body now lands the removal through git and the immune gate.
-        # Time that work separately from the loom's eventual body release.
+        assert later in text and 'letters without a row' not in text, text
         wait_until(finished.exists, 30, loom.dump)
         wait_until(lambda: holder(loom.facts(), 'work') is None, 5, loom.dump)
         assert not any(f.id.startswith('loom/bounce-') or f.id.startswith('attention:wasted:') for f in loom.facts())

@@ -8,7 +8,7 @@ from .lifecycle import CLOSED
 from .owners import unanswered_by_thread
 from .project import _destination, fold, sender_threads
 from .receipts import receipts
-from .wishes import waits_on, waits_word, wishes, wish_line
+from .wishes import plan_word, waits_on, waits_word, wishes, wish_line
 
 
 @dataclass(frozen=True)
@@ -73,7 +73,7 @@ def asks(facts, main: dict, thread: str | None = None, everything: bool = False)
     heads = waits_on(told, main)
     mine = lambda t: thread is None or t == thread  # noqa: E731
     buckets = {
-        "in hand": [f"{t} · {holder[t][0]} · plan {d['plan']}" for t, d in sorted(main.items())
+        "in hand": [f"{t} · {holder[t][0]} · plan {plan_word(told, t)}" for t, d in sorted(main.items())
                     if mine(t) and t in holder and d.get("status") not in CLOSED],
         "yours": [wish_line(w) + waits_word(heads[w.id]) for w in found
                   if mine(w.thread) and w.id in heads],

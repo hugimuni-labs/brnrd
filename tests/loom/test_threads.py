@@ -36,6 +36,7 @@ def test_send_opens_lands_routes_and_shows_working_idle_settled(tmp_path):
     root = tmp_path / 'home'
     init_self(root, person='test')
     write_thread(root, 'opener', 'Opener', 'opener', wait='0')
+    # Ticked rows are no plan: the plan column counts wishes (test_wish_plan).
     write_thread(root, 'idle', 'Idle\n\n## Plan\n- [x] First\n- [ ] Second', 'idle', wait='0')
     old = (datetime.now(timezone.utc) - timedelta(hours=3, minutes=10)).isoformat()
     env = _env_without_pin()
@@ -118,15 +119,15 @@ else:
         rows = table(root)
         assert rows['new-work'] == {'thread': 'new-work', 'seat': 'worker/test-core', 'now': 'working',
                                     'owed': '1', 'unanswered': '0', 'opened-by': 'thread:opener',
-                                    'opened-for': f'{behind.id} heard: New work', 'plan': '—',
+                                    'opened-for': f'{behind.id} heard: New work', 'plan': '0/1',
                                     'owed-by': 'body:new-work', 'restart': 'current body', 'control': '—'}
         assert rows['idle'] == {'thread': 'idle', 'seat': '—', 'now': 'idle 3h', 'owed': '0', 'unanswered': '0',
-                                'opened-by': '—', 'opened-for': '—', 'plan': '1/2', 'owed-by': 'nobody',
+                                'opened-by': '—', 'opened-for': '—', 'plan': '—', 'owed-by': 'nobody',
                                 'restart': 'next letter', 'control': '—'}
         date = git(root / 'self', 'log', '-1', '-G', '^status:', '--format=%cs',
                    'main', '--', 'threads/settled/README.md').stdout.strip()
         assert rows['settled'] == {'thread': 'settled', 'seat': '—', 'now': f'settled {date}',
-                                   'owed': '0', 'unanswered': '0', 'opened-by': 'thread:opener', 'opened-for': '—', 'plan': '1/1',
+                                   'owed': '0', 'unanswered': '0', 'opened-by': 'thread:opener', 'opened-for': '—', 'plan': '—',
                                    'owed-by': 'nobody',
                                    'restart': 'new letter or opener answers', 'control': 'thread:opener'}
         (root / 'clear-owed').write_text('handle without replying yet')

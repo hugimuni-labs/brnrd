@@ -10,7 +10,7 @@ from brr.daemon2.facts import Fact
 from brr.gates import cloud
 from brr.loom.runtime import snapshot, usage
 from brr.loom.runtime.home import Home
-from brr.loom.runtime.ledger import inject_letter, read_facts
+from brr.loom.runtime.ledger import append, inject_letter, read_facts
 
 from _step import Loom, kill_bodies, wait_until, write_thread
 
@@ -111,7 +111,14 @@ def steps(loom, n=3):
 def test_document_matches_the_contract(board):
     fuel(board.root, 82)
     reporting_body(board.root)
-    inject_letter(board.root, to="thread:web", body="Ship the board, please.")
+    ask = inject_letter(board.root, to="thread:web", body="Ship the board, please.")
+    # The plan is web's wishes; its ticked README rows count for nothing.
+    home = Home(board.root)
+    for ident, line in (("w-contract", "Contract read"), ("w-push", "Publisher pushes")):
+        append(home, Fact(kind="wish", by="person:test", id=ident, data={
+            "wish": ident, "says": [{"letter": ask}], "from": "person", "line": line, "thread": "web"}))
+    append(home, Fact(kind="wish.result", by="strand:s-test-web001", data={
+        "wish": "w-contract", "kind": "pr", "ref": "#7", "line": "read", "delivered": True}))
     board.start()
 
     def pushed_full():

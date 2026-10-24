@@ -122,5 +122,5 @@ def test_loom_part_points_at_wishes(home, jack):
     facts = read_facts(home)
     room = _prepare(home, STRAND, "brnrd", 1, [], sender_threads(facts), facts, jack)
     part = (room / "port/loom.md").read_text()
-    assert "cite each row's letters and wish ids with ` · re: <id>, <w-id>`" in part
+    assert "cites its letters and wish ids with ` · re: <id>, <w-id>`; progress is the wishes" in part
     assert "stamp what someone wants with `send --wish` (core/loom/README.md, Wishes)" in part
