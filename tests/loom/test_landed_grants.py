@@ -45,7 +45,8 @@ def test_a_row_without_a_receipt_or_a_closed_wish_grants_nothing(ledger):
     plain = heard(home, seat, "Plain")
     dropped = heard(home, seat, "Dropped")
     command(home, seat, "wish", dropped, "--drop", "Not wanted")
-    land(seat, f"- Plan it, w-abc and 4988 · re: {plain}\n- Built 1a2b3c4d · re: {dropped}")
+    land(seat, f"- Plan it, w-abc and 4988 · re: {plain}\n- [ ] Follow-up on #2402, see 1a2b3c4d · re: {plain}\n"
+               f"- #2392 · re: {plain}\n- Built 1a2b3c4d · re: {dropped}")
     tick_once(home, {}, "fake", "haiku")
     found = wishes(read_facts(home))
     assert found[plain].state == "heard" and found[dropped].state == "dropped"
@@ -56,5 +57,9 @@ def test_receipt_kinds():
     assert receipt("t", "- [notes](research/a.md) · re: w-1") == ("file", "threads/t/research/a.md")
     assert receipt("t", "[x](../other/b.md#head)") == ("file", "threads/other/b.md")
     assert receipt("t", "PR #2404 open") == ("pr", "#2404")
+    assert receipt("t", "landed as brnrd#2404") == ("pr", "#2404")
+    # A bare #n is context, an issue or a label row, never a receipt.
+    assert receipt("inbox", "#2392 · re: w-abc") is None
+    assert receipt("t", "(C2) Kept-room follow-up on #2402") is None
     assert receipt("t", "landed 585f1321") == ("commit", "585f1321")
     assert receipt("t", "Done · re: w-abc1234def") is None

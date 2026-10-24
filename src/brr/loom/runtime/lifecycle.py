@@ -15,9 +15,9 @@ CLOSED = {"settled", "retired"}
 DONE_KINDS = ("pr", "issue", "doc", "research", "file", "answer", "post", "action")
 
 
-def parse_plan(text: str) -> list[tuple[bool, str]] | None:
-    """``- step`` rows under Plan, a ``[ ]``/``[x]`` tick kept but counted by no one;
-    None means there is no Plan section."""
+def parse_plan(text: str) -> list[tuple[bool | None, str]] | None:
+    """``- step`` rows under Plan, a ``[ ]``/``[x]`` tick kept but counted by no one
+    (None when the row has no box); None means there is no Plan section."""
     plan = None
     inside = False
     for line in text.splitlines():
@@ -28,7 +28,8 @@ def parse_plan(text: str) -> list[tuple[bool, str]] | None:
         elif inside:
             row = re.match(r"^\s*- (?:\[([ xX])\] )?(.+)$", line)
             if row:
-                plan.append(((row.group(1) or "").lower() == "x", row.group(2)))
+                box = row.group(1)
+                plan.append((None if box is None else box.lower() == "x", row.group(2)))
     return plan
 
 

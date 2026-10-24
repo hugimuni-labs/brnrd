@@ -203,8 +203,9 @@ def progress(found: dict[str, Wish], thread: str) -> dict | None:
     return plan
 
 
-# A step's receipt: a markdown link, a pull request URL or #number, or a commit sha.
-RECEIPT = re.compile(r"\[[^\]]+\]\(([^)\s]+)\)|(https://github\.com/\S+/pull/\d+)|(?<![\w&])#(\d{3,})\b"
+# A step's receipt: a markdown link, a pull request URL, 'PR #n' or 'brnrd#n', or a commit sha.
+# A bare #n is context (an issue, a label row), never a receipt.
+RECEIPT = re.compile(r"\[[^\]]+\]\(([^)\s]+)\)|(https://github\.com/\S+/pull/\d+)|\b(?:PR |brnrd)#(\d{3,})\b"
                      r"|\b((?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40})\b")
 
 
@@ -228,14 +229,15 @@ def receipt(thread: str, row: str) -> tuple[str, str] | None:
 
 def landed_results(found: dict[str, Wish], main: dict, by: str) -> list[Fact]:
     """A landed Plan row with a receipt grants each open wish it cites, no verb to forget.
+    A row with an open ``[ ]`` box says it is not done, whatever it mentions.
 
     One result per wish and ref, never delivered: delivered stays declared. The id is
     the pair's, so the same receipt on two rows or two landings is one fact."""
     from .owners import plan_citations
     out, seen = [], {(w.id, r["ref"]) for w in found.values() for r in w.results}
     for thread, data in sorted(main.items()):
-        for _, row in data.get("plan_rows") or ():
-            got = receipt(thread, row)
+        for box, row in data.get("plan_rows") or ():
+            got = None if box is False else receipt(thread, row)
             if got is None:
                 continue
             kind, ref = got

@@ -132,4 +132,4 @@ def test_new_beside_open_wishes_echoes_the_steer(ledger):
 
 def test_parse_plan_reads_plain_rows():
     text = "# T\n\n## Plan\n- Read the ledger · re: w-a\n- [x] Old tick\n- [ ] Old open\n\n## Notes\n- not a row\n"
-    assert parse_plan(text) == [(False, "Read the ledger · re: w-a"), (True, "Old tick"), (False, "Old open")]
+    assert parse_plan(text) == [(None, "Read the ledger · re: w-a"), (True, "Old tick"), (False, "Old open")]
