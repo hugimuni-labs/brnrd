@@ -1853,7 +1853,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 else:
                     inputs.close()
                 health.guard("tick_once", tick_once, home, bodies, adapter, core, router,
-                             overrun=router.config.router_ttl)
+                             overrun=router.config.router_ttl,
+                             about=lambda: {"bodies": len(bodies)})
                 health.guard("publisher", publisher.step, config, router, backoff=False)
                 health.guard("mirror", mirror.step, config, backoff=False)
                 health.guard("library", keeper.step, backoff=False)

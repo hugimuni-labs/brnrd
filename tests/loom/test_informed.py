@@ -84,6 +84,9 @@ def test_a_tick_past_the_lease_is_degraded_while_it_runs_and_recovers(tmp_path, 
     assert down.data["step"] == back.data["step"] == "tick_once.overrun"
     assert down.data["error"] == "TimeoutError: tick_once still running after 0.3s, past the router lease"
     assert back.data["since"] == down.data["since"] and back.data["count"] == 1
+    # Arseni (5104): does the tick slow with the number of live bodies?
+    assert down.data["seconds"] == 0.3 and back.data["seconds"] >= 0.3
+    assert down.data["bodies"] == back.data["bodies"] == 0
 
 
 def test_a_restart_closes_a_streak_its_predecessor_left_open(tmp_path):
