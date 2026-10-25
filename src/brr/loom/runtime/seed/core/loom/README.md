@@ -97,8 +97,16 @@ letter itself, which makes it derived. The README records the ids once as
 `opened-for: [w-…]`: why the thread was opened, while each wish's thread
 says where its work is now. When a result exists,
 record it with `wish <w-id> --result <kind>:<ref> --line "…"`, adding
-`--deliver` on the one you hand over. Cite wish ids in Plan rows beside the
-letters: ` · re: <letter-id>, <w-id>`. `settle` refuses while a delivered wish
+`--deliver` on the one you hand over. What is left on a wish is the wish's
+own: `wish <w-id> --left "<step>" --left "<step>"` restates the whole list,
+and the latest one wins (`--left same` when nothing moved). The loom asks for
+it at a stop and refuses a molt while a wish moved since its last left: a
+steer, a result, a fact this body wrote on it, or, on a thread with one open
+wish, this body's start. The stop asks once per wish (a `left.asked` fact), so
+nothing is trapped; the wake shows each open wish as done, left and the steers
+since. A Plan row that cites a wish (` · re: <letter-id>, <w-id>`) with a
+receipt still grants it, and a pull request opened on a thread with one open
+wish is that wish's result. `settle` refuses while a delivered wish
 awaits a verdict; `--hand-to <thread>` moves those to a thread that will carry
 them. Heard and working wishes stay with their thread.
 

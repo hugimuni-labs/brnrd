@@ -168,6 +168,11 @@ def _wish_rows(told, facts) -> list[dict]:
             "results": [_bare({"kind": r.get("kind"), "ref": r.get("ref"), "line": r.get("line"),
                                "delivered": bool(r.get("delivered")), "at": _iso(r["at"])})
                         for r in w.results],
+            "left": _bare({"steps": w.left["steps"], "gen": w.left["gen"], "by": w.left["by"],
+                           "at": _iso(w.left["at"])}) if w.left else None,
+            # Steers after the latest left: what the left has not taken in yet.
+            "steered": [i for x in w.stamps if x["letters"] and x["at"] > (w.left["at"] if w.left else w.born)
+                        for i in x["letters"]],
             "verdict": _bare({"as": w.verdict["as"], "evidence": w.verdict.get("evidence"),
                               "at": _iso(w.verdict["at"])}) if w.verdict else None,
             "answer": {"verdict": answer.data["verdict"], "at": _iso(answer.at),

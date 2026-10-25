@@ -84,7 +84,8 @@ def parse_boundary(text: str) -> Boundary:
             settled = line.partition(":")[2].strip()
             current = None
             continue
-        if not line.strip() or line.startswith(("status:", "owed:", "opened:", "budget:", "repaired:", "degraded:", "face? ")):
+        if not line.strip() or line.startswith(("status:", "owed:", "opened:", "budget:", "repaired:", "degraded:", "face? ",
+                                                "left? ")):
             current = None
             continue
         match = _ITEM.match(line)
@@ -210,7 +211,7 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     attachments: dict[str, list[str]] | None = None,
                     reply_context: dict[str, str] | None = None,
                     budget: str = "", over: str = "", repaired: str = "",
-                    degraded: str = "", face: str = "") -> str:
+                    degraded: str = "", face: str = "", left: str = "") -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
     ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
@@ -224,6 +225,9 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
         + (f" · {plan}" if plan else ""),
         "owed:",
     ]
+    if left:
+        # What the stop will ask for; never after `` · plan``, so it wakes nobody.
+        lines.insert(2, left)
     if face:
         # Its own line, never after `` · plan``: a proposal is not news that wakes a held body.
         lines.insert(2, face)
@@ -730,9 +734,17 @@ def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
     room = Path(room)
     strand = strand_of_room(room)
     home = home_of_room(room)
-    thread = sender_threads(read_facts(home)).get(strand)
+    facts = read_facts(home)
+    thread = sender_threads(facts).get(strand)
     if thread is None:
         raise PortError("molt: room has no thread")
+    from .wishes import owed_lefts, wishes
+    owed = owed_lefts(wishes(facts), facts, thread, strand)
+    if owed:
+        # The successor reads what is left from the wish, not from this body's memory.
+        raise PortError("molt: say what is left first, then molt:\n" + "\n".join(
+            f'  python -m brr.loom.runtime wish {ident} --left "<step>" --left "<step>"   ({why}; --left same if nothing moved)'
+            for ident, why in owed))
     clone = resolve_clone(room)
     path = f"threads/{thread}/README.md"
     if not fresh and git(clone, "diff", "HEAD", "--quiet", "--", path, check=False).returncode:
@@ -791,7 +803,7 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
     fact_id = fm.get("id")
     if not fact_id:
         raise PortError("port file has no id")
-    if kind in {"letter", "note", "molt", "face"} and gen is None:
+    if kind in {"letter", "note", "molt", "face", "left-asked"} and gen is None:
         raise PortError(f"strand {strand} has no lease; refusing {kind} {fact_id}")
     if kind == "letter":
         data: dict = {
@@ -849,6 +861,10 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             kind="shown", by=f"strand:{strand}", id=fact_id,
             data={"strand": owner, "gen": int(fm["gen"]), "ids": fm.get("ids", "").split()},
         )
+    if kind == "left-asked":
+        # The jack refused a stop on these wishes; once asked, the next stop passes.
+        return Fact(kind="left.asked", by=f"strand:{strand}", id=fact_id,
+                    data={"strand": strand, "gen": gen, "wishes": fm.get("wishes", "").split()})
     if kind == "molt":
         if not fm.get("why"):
             raise PortError(f"molt {fact_id} has no why")

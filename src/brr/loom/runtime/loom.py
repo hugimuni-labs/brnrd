@@ -485,9 +485,11 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         f"`python -m brr.loom.runtime send --re <id> --to thread:{thread} --note "
         "\"<what you did>\"`; if you commit in this self clone, land it with "
         "`python -m brr.loom.runtime send-self --room .`; you will forget what is "
-        "not written: keep this thread's README true; a `## Plan` row is a step "
-        "that cites its letters and wish ids with ` · re: <id>, <w-id>`; progress "
-        "is the wishes; land the edit with send-self. "
+        "not written: keep this thread's README true (the spec and the decisions); "
+        "what is left on a wish lives on the wish: `python -m brr.loom.runtime wish "
+        "<w-id> --left \"<step>\" --left \"<step>\"`, the whole list, latest wins "
+        "(`--left same` when nothing moved), and the stop asks for it once a wish "
+        "moved; progress is the wishes; land the edit with send-self. "
         "When your context grows "
         "heavy hand over with `python -m brr.loom.runtime molt --why \"<where "
         "things stand>\"`; `python -m brr.loom.runtime settle <thread> --why "
@@ -548,6 +550,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                         repaired=_repaired(facts, strand, gen),
                         degraded=degraded_line(facts, home.install_id()),
                         face=proposal_line(propose(facts, strand, gen, thread)),
+                        left=_left(facts, thread, strand),
                         **_budget(home, thread, facts)),
     )
     return room
@@ -894,6 +897,12 @@ def _plan(home: Home, thread: str, facts: list[Fact]) -> str:
     if plan and plan.get("next"):
         parts.append(f"next: {plan['next'][:60]}")
     return " · ".join(parts)
+
+
+def _left(facts, thread: str, strand: str) -> str:
+    """The wishes this body's stop will ask to restate, derived at every render."""
+    from .wishes import left_line, owed_lefts, told
+    return left_line(owed_lefts(told(facts), facts, thread, strand))
 
 
 def _reply_context(facts, thread: str, letters, room: Path | None = None) -> dict[str, str]:
@@ -1395,11 +1404,15 @@ def _boundary(home, facts, strand, gen, context):
         repaired=_repaired(facts, strand, gen),
         degraded=degraded_line(facts, home.install_id()),
         face=proposal_line(propose(facts, strand, gen, context.thread)),
+        left=_left(facts, context.thread, strand),
         **_budget(home, context.thread, facts),
     )
     path = home.room(strand) / "port/in/boundary.md"
     if not path.is_file() or path.read_text() != text:
         atomic_write(path, text)
+    else:
+        # Rendered from these facts: the jack's stop compares this mtime with the ledger's.
+        os.utime(path)
 
 
 _PAUSE_LOOKED: dict[Path, float] = {}
@@ -1631,6 +1644,7 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         facts = router.begin_tick(facts)
         facts = _ingest(home, facts, router.config.router_ttl)
         facts = _grant_landed(home, facts)
+        facts = _grant_opened(home, facts)
         facts = _advance_bodies(home, bodies, facts, (adapter, core), reader=router.reader)
         # Time enters the owner table once, using only the facts already held.
         facts = observe_due(home, facts, router.armed())
@@ -1654,6 +1668,14 @@ def _grant_landed(home: Home, facts: list[Fact]) -> list[Fact]:
     for fact in landed_results(told(facts), main_snapshot(home), f"loom:{home.install_id()}"):
         facts.append(append(home, fact))
     _GRANTED[repo] = tip
+    return facts
+
+
+def _grant_opened(home: Home, facts: list[Fact]) -> list[Fact]:
+    """A pull request opened on a thread with one open wish is that wish's result."""
+    from .wishes import opened_results, told
+    for fact in opened_results(told(facts), kind_facts(facts, "pr.opened"), f"loom:{home.install_id()}"):
+        facts.append(append(home, fact))
     return facts
 
 
