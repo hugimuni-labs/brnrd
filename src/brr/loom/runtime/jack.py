@@ -422,6 +422,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     plan = next((line.partition(" · plan ")[2] for line in text.splitlines()
                  if line.startswith("status:")), "")
     face = next((line for line in text.splitlines() if line.startswith("face? ")), "")
+    moved = next((line for line in text.splitlines() if line.startswith("moved: ")), "")
     if event == "start":
         broken = _guards(room)[1]
         if broken:
@@ -430,7 +431,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             return ""
         if parsed.ids:
             _shown(room, parsed)
-        _set_state(room, opened=opened, plan=plan, face=face)
+        _set_state(room, opened=opened, plan=plan, face=face, moved=moved)
         return text if text.endswith("\n") else text + "\n"
     if event == "post":
         state = _state(room)
@@ -439,13 +440,15 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         settled_changed = parsed.settled is not None and parsed.settled != state.get("settled")
         # A new proposal is shown once, at the next post; it never wakes a held body.
         face_changed = bool(face) and face != state.get("face", "")
+        # The loom's code moved under a seated body: said once, at the next post.
+        moved_changed = bool(moved) and moved != state.get("moved", "")
         weight = _weight(room, stdin_text, state)
         paused = describe(read_paused_record(room / "port"))
         hook = _hook_event(stdin_text)
         # Past its allocation a strand is told at every boundary, not once.
         over = next((line for line in text.splitlines() if line.startswith("budget: ")), "")
         if not parsed.ids and not settled_changed and not opened_changed and not plan_changed \
-                and not face_changed:
+                and not face_changed and not moved_changed:
             if not weight and not paused and not over and not guarded:
                 return ""
             return _json({"hookSpecificOutput": {
@@ -460,7 +463,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             _set_state(room, settled=parsed.settled)
         if parsed.ids:
             _shown(room, parsed)
-        _set_state(room, opened=opened, plan=plan, face=face)
+        _set_state(room, opened=opened, plan=plan, face=face, moved=moved)
         return _json({"hookSpecificOutput": {
             "hookEventName": hook, "additionalContext": text}})
     if _state(room).get("molted") or parsed.settled is not None:

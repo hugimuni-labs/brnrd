@@ -45,7 +45,13 @@ class Receipt:
 
 
 def source_root() -> Path:
-    """The checkout the running loom imports, when it runs from one."""
+    """The checkout the running loom imports, when it runs from one.
+
+    ``BRNRD_LOOM_SOURCE`` is test-only: the suite points it away from the
+    checkout under test, so no test loom fetches or moves it.
+    """
+    if override := os.environ.get("BRNRD_LOOM_SOURCE"):
+        return Path(override)
     import brr
     return Path(brr.__file__).resolve().parents[2]
 
@@ -65,11 +71,20 @@ def record_start(home, facts, *, root: Path | None = None) -> Fact:
                        commit, check=False)
             if held.returncode == 0:
                 loaded.append(f"{data.get('repo')}#{data.get('number')}")
-    data = {"install": home.install_id(), "pid": os.getpid(),
-            "loaded": sorted(set(loaded))}
+    install = home.install_id()
+    data = {"install": install, "pid": os.getpid(), "loaded": sorted(set(loaded))}
     if commit:
         data["commit"] = commit
-    return append(home, Fact(kind="loom.started", by=f"loom:{home.install_id()}", data=data))
+    before = next((str(f.data["commit"]) for f in reversed(kind_facts(facts, "loom.started"))
+                   if f.data.get("install") == install and f.data.get("commit")), None)
+    started = append(home, Fact(kind="loom.started", by=f"loom:{install}", data=data))
+    if commit and before and before != commit:
+        # Whoever moved it, the updater or a hand: the seated bodies hear it once.
+        from .update import merges
+        append(home, Fact(kind="loom.moved", by=f"loom:{install}", id=f"loom.moved:{started.id}", data={
+            "install": install, "from": before, "to": commit,
+            "merges": merges(root, before, commit), "started": started.id}))
+    return started
 
 
 def receipts(facts) -> dict[str, list[Receipt]]:
