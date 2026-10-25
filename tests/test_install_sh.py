@@ -13,12 +13,16 @@ import pytest
 
 ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "docs" / "public" / "install.sh"
-SYSTEM = ("sh", "grep", "sed", "wc", "tr", "mktemp", "rm")
+SYSTEM = ("sh", "grep", "sed", "wc", "tr", "mktemp", "rm", "id")
 SHELLS = [path for path in ("/bin/sh", "/bin/dash") if os.path.exists(path)]
 CURL = "curl -LsSf https://hugimuni-labs.github.io/brnrd/install.sh | sh"
 UV_BOOTSTRAP = "curl -LsSf https://astral.sh/uv/install.sh | sh"
 
 UV_ABSENT = """
+case "$*" in
+  "tool dir --bin") printf '%s\\n' "$HOME/.local/bin"; exit 0 ;;
+  "tool dir") printf '%s\\n' "$HOME/.local/share/uv/tools"; exit 0 ;;
+esac
 if [ "$1" = "tool" ] && [ "$2" = "list" ]; then
   exit 0
 fi
@@ -27,6 +31,10 @@ exit 1
 """
 
 UV_PRESENT = """
+case "$*" in
+  "tool dir --bin") printf '%s\\n' "$HOME/.local/bin"; exit 0 ;;
+  "tool dir") printf '%s\\n' "$HOME/.local/share/uv/tools"; exit 0 ;;
+esac
 if [ "$1" = "tool" ] && [ "$2" = "list" ]; then
   printf '%s\\n' "brnrd v1.2.3"
   printf '%s\\n' "- brnrd"
@@ -51,6 +59,11 @@ if [ "$1" = "list" ] && [ "$2" = "--short" ]; then
 fi
 printf '%s\\n' "unexpected pipx $*" >> "$BRNRD_TRACE"
 exit 1
+"""
+
+# ps -U <uid> -o pid=,args=: this user's processes, from FAKE_PS.
+PS = """
+printf '%s' "${FAKE_PS:-}"
 """
 
 REFUSES = """
@@ -136,10 +149,11 @@ exit 1
 
 DEV_TOOLS = {
     "git": GIT_CLEAN,
-    "uv": REFUSES,
+    "uv": UV_ABSENT,
     "gh": GH_SIGNED_IN,
     "claude": REFUSES,
-    "pipx": REFUSES,
+    "pipx": PIPX_ABSENT,
+    "ps": PS,
     "curl": REFUSES,
 }
 
@@ -354,6 +368,53 @@ def test_dev_warns_when_no_body_cli_is_on_path(tmp_path):
     assert result.stderr.splitlines() == [
         "warning: neither claude nor codex is on PATH, and loom install picks the loom's body from them; "
         "install and sign in to one first."
+    ]
+
+
+@pytest.mark.parametrize("args", [(), ("--dev",)])
+@pytest.mark.parametrize("unit", ["Library/LaunchAgents/dev.brnrd.brr.plist", ".config/systemd/user/brr.service"])
+def test_an_old_daemon_service_warns_on_both_paths(tmp_path, args, unit):
+    path = tmp_path / "home" / unit
+    path.parent.mkdir(parents=True)
+    path.write_text("", encoding="utf-8")
+    result = _run(tmp_path, DEV_TOOLS, args=args)
+    _commands(result)
+    assert result.stderr.splitlines() == [
+        f"warning: an old brnrd daemon is installed ({path}) and runs beside the loom; "
+        "remove it with brnrd daemon uninstall."
+    ]
+
+
+def test_dev_warns_when_pipx_holds_a_brnrd_release(tmp_path):
+    result = _run(tmp_path, {**DEV_TOOLS, "pipx": PIPX_PRESENT}, args=("--dev",))
+    _commands(result)
+    assert result.stderr.splitlines() == [
+        "warning: pipx has a brnrd release installed, and its brnrd command collides with this install; "
+        "run pipx uninstall brnrd."
+    ]
+
+
+def test_dev_warns_when_another_brnrd_shadows_the_uv_tool_bin(tmp_path):
+    result = _run(tmp_path, {**DEV_TOOLS, "brnrd": REFUSES}, args=("--dev",))
+    _commands(result)
+    ubin = tmp_path / "home" / ".local" / "bin"
+    assert result.stderr.splitlines() == [
+        f"warning: brnrd on PATH is {tmp_path / 'bin' / 'brnrd'}, not {ubin}/brnrd, so it shadows this install; "
+        f"remove it or put {ubin} first on PATH."
+    ]
+
+
+def test_dev_warns_about_a_loom_running_from_another_install_only(tmp_path):
+    ours = tmp_path / "home" / ".local" / "share" / "uv" / "tools" / "brnrd" / "bin" / "python"
+    ps = (f"  101 /opt/py/bin/python -m brr.loom.runtime loom --home /h\n"
+          f"  102 {ours} -m brr.loom.runtime loom --home /h\n"
+          f"  103 /bin/zsh\n")
+    result = _run(tmp_path, DEV_TOOLS, args=("--dev",), env={"FAKE_PS": ps})
+    _commands(result)
+    assert result.stderr.splitlines() == [
+        "warning: a loom from another install is running (pid 101: /opt/py/bin/python); loom install --dev "
+        "replaces the loom service, but a loom started by hand keeps running beside it: stop it with that "
+        "install's brnrd loom stop, or kill 101."
     ]
 
 
