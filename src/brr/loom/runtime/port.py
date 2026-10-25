@@ -590,6 +590,20 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                 echo.append(echo_line(stamp.data["wish"], says, [
                     "answered" if r["kind"] == "letter" and r["ref"] == letter_id else f"{r['kind']}:{r['ref']}"
                     for r in refs_of], letters))
+    if (re in letters and note is None and molt is None and not is_channel(to)
+            and thread_of(to) != home.main_thread()):
+        from .dispositions import is_person
+        from .project import sender_threads
+        if is_person(letters[re]) and sender_threads(facts).get(sender) == home.main_thread():
+            try:
+                carried = _carried(home, facts, wish_stamps, re, thread_of(to), sender)
+            except ValueError as exc:
+                raise PortError(f"send: {exc}") from exc
+            wish_stamps += carried
+            if echo is not None:
+                echo += [f"{s.data['wish']} → thread:{s.data['thread']}" if s.id.startswith("wish:")
+                         else f"{s.data['wish']} on thread:{s.data['thread']}, child of {s.data['parent']}"
+                         for s in carried]
     if re and re in letters and re not in cited:
         from .dispositions import disposed, is_person
         if is_person(letters[re]) and re not in disposed(facts, Path(room)):
@@ -675,6 +689,34 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         for result in results:
             append(home, result)
     return letter_id
+
+
+def _carried(home, facts, stamped, re, target, sender) -> list:
+    """The home thread forwarding a person letter carries the wish it says.
+
+    The first forward moves the wish to the target thread; a later forward of
+    the same letter, once the wish has left home, makes a child wish there.
+    """
+    from .registry import admit
+    from .verbs_wishes import say_span, wish_fact
+    from .wishes import wishes
+    seen = [*facts, *stamped]
+    known = wishes(seen)
+    says_re = {w.id for w in known.values() if any(say.letter == re for say in w.says)}
+    out = []
+    for ident in sorted(says_re):
+        wish = known[ident]
+        if wish.parent in says_re or wish.thread == target or any(
+                w.parent == ident and w.thread == target for w in known.values()):
+            continue
+        if wish.thread == home.main_thread():
+            stamp = wish_fact(seen, by="strand:" + sender, ident=ident, thread=target)
+        else:
+            stamp = wish_fact(seen, by="strand:" + sender, ident="new", line=wish.line,
+                              thread=target, parent=ident, says=[say_span(re, facts)])
+        admit(stamp)
+        out.append(stamp)
+    return out
 
 
 def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
