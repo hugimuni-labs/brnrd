@@ -25,7 +25,8 @@ def cmd_asks(args) -> int:
     from .ledger import read_facts
     from .lifecycle import main_snapshot
     home = _home(args)
-    sys.stdout.write(asks(read_facts(home), main_snapshot(home), args.thread, args.all))
+    sys.stdout.write(asks(read_facts(home), main_snapshot(home), args.thread, args.all,
+                          install=home.install_id()))
     return 0
 
 

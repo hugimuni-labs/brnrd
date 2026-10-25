@@ -127,7 +127,7 @@ def thread_table(home: Home, facts: list) -> list[dict]:
     from .wishes import plan_word, told as fold_wishes
     told = fold_wishes(facts)
     from .receipts import receipts
-    shipped = receipts(facts)
+    shipped = receipts(facts, home.install_id())
     for thread, data, choice, created, date in _MAIN[repo][1]:
         why = '—'
         if opened_for(data):

@@ -55,7 +55,7 @@ def test_progress_is_delivered_and_accepted_over_person_wishes(ledger, capsys):
     assert progress(wishes(read_facts(home)), "work") == {"done": 1, "total": 2, "next": "Second"}
     deliver(home, seat, second)
     assert status(home).endswith("plan 2/2")
-    assert "work · s-aaaa-test · plan 2/2" in asks(read_facts(home), main_snapshot(home), "work")
+    assert "work · s-aaaa-test · plan 2/2" in asks(read_facts(home), main_snapshot(home), "work", install=home.install_id())
 
 
 def test_ticked_rows_count_for_nothing(ledger, capsys):
