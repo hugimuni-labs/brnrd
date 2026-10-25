@@ -501,7 +501,9 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         + ("call `$BRNRD_JACK --event start` now, `$BRNRD_JACK --event post` between "
            "steps and `$BRNRD_JACK --event stop` before ending; read each returned boundary\n"
            if jack == "hand" else
-           "when you're done, stop, and the jack holds you while letters may come\n")
+           "before you stop with wishes open, say how this body ends: a result (`wish <w-id> --result`), "
+           "an `ask`, a park with its reason (`wish <w-id> --read \"waiting: …\"`), or `settle`; "
+           "then stop, and the jack holds you while letters may come\n")
     )
     atomic_write(part_path, part)
     if repos is None:
