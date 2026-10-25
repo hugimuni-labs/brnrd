@@ -202,3 +202,8 @@ def test_a_seated_body_hears_the_move_once_and_a_new_body_reads_it_in_its_wake(t
             Fact(kind="lease", by="loom", at=_at(10), data={"thread": "brnrd", "strand": STRAND, "gen": 2})]
     gone = since_gone(rows, STRAND, 2, "brnrd", {}, install)
     assert "loom moved aaaaaaaa → bbbbbbbb, loaded #7 (loom.moved:x)" in gone
+
+
+def test_no_test_loom_follows_the_checkout_under_test():
+    from brr.loom.runtime.receipts import source_root
+    assert not (source_root() / ".git").exists(), source_root()
