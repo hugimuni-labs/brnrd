@@ -1800,7 +1800,12 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                     health.guard("usage", _read_usage, home, usage, backoff=False)
                     next_usage = time.monotonic() + usage.REFRESH_INTERVAL
                 # Inputs, publisher and mirror pace their own retries; only the tick backs off.
-                health.guard("inputs", inputs.step, backoff=False)
+                # Connectors run only on the router lease's holder: a second
+                # install ingesting too would answer every letter twice.
+                if router.armed():
+                    health.guard("inputs", inputs.step, backoff=False)
+                else:
+                    inputs.close()
                 health.guard("tick_once", tick_once, home, bodies, adapter, core, router)
                 health.guard("publisher", publisher.step, config, router, backoff=False)
                 health.guard("mirror", mirror.step, config, backoff=False)

@@ -10,7 +10,7 @@ from collections import defaultdict, OrderedDict
 from datetime import datetime
 from pathlib import Path
 
-from brr.daemon2.facts import Fact, union
+from brr.daemon2.facts import Fact, keep, union
 
 from .home import Home, mint, thread_of
 from .registry import admit, resource_of
@@ -139,6 +139,7 @@ class LedgerView(list):
         self.reducer = None
         self.delta = ()
         self.reset = True
+        self.duplicates = []
         self.extend(facts)
 
     def _add(self, fact):
@@ -176,24 +177,31 @@ class LedgerView(list):
         self.maximum = max(self.maximum, key) if self.maximum is not None else key
 
     def extend(self, facts):
-        added = []
+        added, displaced = [], False
         for fact in facts:
             old = self.by_id.get(fact.id)
             if old is not None:
-                if old != fact:
-                    raise ValueError(f'conflicting fact id: {fact.id}')
-                continue
+                if old == fact:
+                    continue
+                # Another install's copy of an ingested source: the lower HLC
+                # stays, and displacing a held copy replays the union.
+                if keep(old, fact) is old:
+                    self.duplicates.append(fact)
+                    continue
+                displaced = True
             added.append(fact)
         if not added:
             self.delta = ()
             return
         # union(delta) validates duplicates/cycles within the incoming batch.
-        delta = union(added)
-        repair = (any(f.id in self.missing for f in delta)
+        delta = union(added, duplicates=self.duplicates)
+        repair = (displaced or any(f.id in self.missing for f in delta)
                   or self.maximum is not None and any(fact_order(f) <= self.maximum for f in delta))
         if repair:
-            ordered = union(self, delta)
+            duplicates = self.duplicates
+            ordered = union(self, delta, duplicates=duplicates)
             fresh = LedgerView(ordered)
+            fresh.duplicates = duplicates
             prior = self.revision
             self.__dict__.clear()
             self.__dict__.update(fresh.__dict__)
@@ -320,7 +328,10 @@ class LedgerReader:
                 additions.extend(added)
         if changed:
             if repair:
-                self.ordered = LedgerView(union(*(read_file(path) for path in paths)))
+                duplicates = []
+                self.ordered = LedgerView(union(*(read_file(path) for path in paths),
+                                                duplicates=duplicates))
+                self.ordered.duplicates = duplicates
             else:
                 self.ordered.extend(additions)
             self.revision += 1
