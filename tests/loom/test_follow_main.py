@@ -58,6 +58,7 @@ def world(tmp_path, monkeypatch):
     _git(upstream, "push", "-q", "origin", "main")
     monkeypatch.setenv("BRNRD_LOOM_SOURCE", str(source))
     monkeypatch.setattr(update, "EVERY", 0)
+    monkeypatch.setattr(update, "LOOK_EVERY", 0)
     execs = []
     monkeypatch.setattr(os, "execv", lambda *args: execs.append(args))
 

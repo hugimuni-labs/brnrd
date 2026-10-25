@@ -29,6 +29,8 @@ from .config import resolve_secret
 from .selfrepo import git
 
 EVERY = 300
+#: Seconds between looks for an idle tick while an offer waits: a look reads the ledger.
+LOOK_EVERY = 5
 #: Check conclusions that count as passed; any other completed one is red.
 PASSED = {"success", "neutral", "skipped"}
 _MERGE = re.compile(r"^Merge pull request #(\d+)")
@@ -154,6 +156,7 @@ class Updater:
         self.failing: tuple[Exception, object] | None = None
         self.offer: Offer | None = None
         self.moved: Offer | None = None
+        self.looked = 0.0
         self.said: set[str] = set()
 
     def _say_once(self, text: str) -> None:
@@ -181,7 +184,11 @@ class Updater:
         if source is None:
             self.failing = self.offer = None
             return
-        if self.offer is not None and idle():
+        if self.offer is not None and time.monotonic() - self.looked >= LOOK_EVERY:
+            self.looked = time.monotonic()
+            if not idle():
+                self._attempt(source)
+                return
             offer, self.offer = self.offer, None
             if source.apply(offer):
                 self.log(self.home, f"update: fast-forwarded {self.root} {offer.old[:8]} -> {offer.new[:8]}")
