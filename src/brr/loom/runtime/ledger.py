@@ -175,7 +175,8 @@ class LedgerView(list):
         key = fact_order(fact)
         self.maximum = max(self.maximum, key) if self.maximum is not None else key
 
-    def extend(self, facts):
+    def incoming(self, facts) -> tuple[list, bool]:
+        """The batch's new facts in canonical order, and whether they reorder this view."""
         added = []
         for fact in facts:
             old = self.by_id.get(fact.id)
@@ -185,12 +186,17 @@ class LedgerView(list):
                 continue
             added.append(fact)
         if not added:
-            self.delta = ()
-            return
+            return [], False
         # union(delta) validates duplicates/cycles within the incoming batch.
         delta = union(added)
-        repair = (any(f.id in self.missing for f in delta)
-                  or self.maximum is not None and any(fact_order(f) <= self.maximum for f in delta))
+        return delta, (any(f.id in self.missing for f in delta)
+                       or self.maximum is not None and any(fact_order(f) <= self.maximum for f in delta))
+
+    def extend(self, facts):
+        delta, repair = self.incoming(facts)
+        if not delta:
+            self.delta = ()
+            return
         if repair:
             ordered = union(self, delta)
             fresh = LedgerView(ordered)
@@ -278,7 +284,9 @@ class LedgerReader:
 
     Only complete lines advance the offset. Replacement, truncation, and
     same-size edits invalidate a stream; removed files leave the union.
-    Callers receive a fresh list because a tick appends its own observations.
+    ``read`` returns a fresh list because a tick appends its own observations.
+    A view ``refresh`` returned only ever grows at its tail: a reorder builds a
+    new view, so a walker on another thread never sees one half-rebuilt.
     """
 
     def __init__(self):
@@ -322,7 +330,11 @@ class LedgerReader:
             if repair:
                 self.ordered = LedgerView(union(*(read_file(path) for path in paths)))
             else:
-                self.ordered.extend(additions)
+                delta, reorder = self.ordered.incoming(additions)
+                if reorder:
+                    self.ordered = LedgerView(union(self.ordered, delta))
+                else:
+                    self.ordered.extend(delta)
             self.revision += 1
         self.streams = streams
         return self.ordered
