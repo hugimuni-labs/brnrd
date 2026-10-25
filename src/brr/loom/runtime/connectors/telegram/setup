@@ -41,7 +41,7 @@ for attempt in range(TRIES):
         break
     print(message, file=sys.stderr)
 else:
-    raise SystemExit(f'No token after {TRIES} tries; rerun brnrd setup telegram with the token in a file and answer file:<path>')
+    raise SystemExit(f'No token after {TRIES} tries; rerun brnrd setup --kind telegram with the token in a file and answer file:<path>')
 fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
 with os.fdopen(fd, 'w') as stream:
     os.fchmod(stream.fileno(), 0o600)
