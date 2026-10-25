@@ -25,6 +25,7 @@ from brr.daemon2.facts import Fact
 
 from .adapters import resolve
 from .bodies import COMMANDS, TABLE, Observation, decide, fact_for, row_for, state_of
+from .faces import propose, proposal_line
 from .health import Health, degraded_line
 from .since import since_gone
 from .home import Home, atomic_write, is_channel, mint, notice_id
@@ -496,8 +497,9 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         "(core/loom/README.md, Notices); stamp what someone wants with "
         "`send --wish` (core/loom/README.md, Wishes), and open a thread only for "
         "a wish: `send --to thread:<new> --wish <w-id>` or `--wish new:\"<line>\"`; "
-        "`python -m brr.loom.runtime face <word>` shows how this work feels on your "
-        "thread; set none if none is true; "
+        "a `face?` line proposes a face for a fact you just met: "
+        "`python -m brr.loom.runtime face take` wears it, `face <face>` wears another, "
+        "and doing nothing lets it lapse; "
         + ("call `$BRNRD_JACK --event start` now, `$BRNRD_JACK --event post` between "
            "steps and `$BRNRD_JACK --event stop` before ending; read each returned boundary\n"
            if jack == "hand" else
@@ -545,6 +547,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                         attachments=attachments, reply_context=reply_context,
                         repaired=_repaired(facts, strand, gen),
                         degraded=degraded_line(facts, home.install_id()),
+                        face=proposal_line(propose(facts, strand, gen, thread)),
                         **_budget(home, thread, facts)),
     )
     return room
@@ -1391,6 +1394,7 @@ def _boundary(home, facts, strand, gen, context):
         reply_context=_reply_context(facts, context.thread, owed, home.room(strand)),
         repaired=_repaired(facts, strand, gen),
         degraded=degraded_line(facts, home.install_id()),
+        face=proposal_line(propose(facts, strand, gen, context.thread)),
         **_budget(home, context.thread, facts),
     )
     path = home.room(strand) / "port/in/boundary.md"

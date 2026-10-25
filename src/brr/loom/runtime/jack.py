@@ -420,6 +420,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
               for line in text.splitlines() if line.startswith("opened: ")]
     plan = next((line.partition(" · plan ")[2] for line in text.splitlines()
                  if line.startswith("status:")), "")
+    face = next((line for line in text.splitlines() if line.startswith("face? ")), "")
     if event == "start":
         broken = _guards(room)[1]
         if broken:
@@ -428,19 +429,22 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             return ""
         if parsed.ids:
             _shown(room, parsed)
-        _set_state(room, opened=opened, plan=plan)
+        _set_state(room, opened=opened, plan=plan, face=face)
         return text if text.endswith("\n") else text + "\n"
     if event == "post":
         state = _state(room)
         opened_changed = opened != state.get("opened", [])
         plan_changed = plan != state.get("plan", "")
         settled_changed = parsed.settled is not None and parsed.settled != state.get("settled")
+        # A new proposal is shown once, at the next post; it never wakes a held body.
+        face_changed = bool(face) and face != state.get("face", "")
         weight = _weight(room, stdin_text, state)
         paused = describe(read_paused_record(room / "port"))
         hook = _hook_event(stdin_text)
         # Past its allocation a strand is told at every boundary, not once.
         over = next((line for line in text.splitlines() if line.startswith("budget: ")), "")
-        if not parsed.ids and not settled_changed and not opened_changed and not plan_changed:
+        if not parsed.ids and not settled_changed and not opened_changed and not plan_changed \
+                and not face_changed:
             if not weight and not paused and not over and not guarded:
                 return ""
             return _json({"hookSpecificOutput": {
@@ -455,7 +459,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             _set_state(room, settled=parsed.settled)
         if parsed.ids:
             _shown(room, parsed)
-        _set_state(room, opened=opened, plan=plan)
+        _set_state(room, opened=opened, plan=plan, face=face)
         return _json({"hookSpecificOutput": {
             "hookEventName": hook, "additionalContext": text}})
     if _state(room).get("molted") or parsed.settled is not None:
