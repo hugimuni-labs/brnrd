@@ -219,33 +219,42 @@ def progress(found: dict[str, Wish], thread: str) -> dict | None:
     return plan
 
 
-# A step's receipt: a markdown link, a pull request URL, 'PR #n' or 'brnrd#n', or a commit sha.
+# A step's receipt: a pull request URL, 'PR #n' or 'brnrd#n', or a commit sha; a markdown link
+# to one of those counts too. A link to a file of the self is a mention, a receipt only under [x].
 # A bare #n is context (an issue, a label row), never a receipt.
 RECEIPT = re.compile(r"\[[^\]]+\]\(([^)\s]+)\)|(https://github\.com/\S+/pull/\d+)|\b(?:PR |brnrd)#(\d{3,})\b"
                      r"|\b((?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40})\b")
 
 
-def receipt(thread: str, row: str) -> tuple[str, str] | None:
-    """``(kind, ref)`` of the first receipt in a Plan row's step, before its ` · re:` tail.
-    A relative link is a file of the self, named from its root."""
-    step = row.rpartition(" · re: ")[0] if " · re: " in row else row
-    hit = RECEIPT.search(step)
-    if hit is None:
+def receipt(thread: str, row: str, box: bool | None = None) -> tuple[str, str] | None:
+    """``(kind, ref)`` that makes a Plan row's step done, read before its ` · re:` tail.
+
+    An open ``[ ]`` box is never done. A PR, a pull URL or a sha is a receipt. A link
+    to a file of the self (named from its root) is a mention: it counts only when the
+    box is ``[x]``, and an ``[x]`` with nothing to cite is done as the README's own row."""
+    if box is False:
         return None
-    link, url, number, sha = hit.groups()
-    if link is not None:
-        if re.match(r"[a-z]+:", link):
-            return ("pr" if re.search(r"/pull/\d+$", link) else "link"), link
-        path = posixpath.normpath(posixpath.join("threads", thread, link.split("#")[0]))
-        return "file", path
-    if url is not None:
-        return "pr", url
-    return ("pr", "#" + number) if number is not None else ("commit", sha)
+    step = row.rpartition(" · re: ")[0] if " · re: " in row else row
+    mention = None
+    for hit in RECEIPT.finditer(step):
+        link, url, number, sha = hit.groups()
+        if link is not None:
+            if re.search(r"/pull/\d+$", link):
+                return "pr", link
+            if mention is None and not re.match(r"[a-z]+:", link):
+                mention = "file", posixpath.normpath(posixpath.join("threads", thread, link.split("#")[0]))
+            continue
+        if url is not None:
+            return "pr", url
+        return ("pr", "#" + number) if number is not None else ("commit", sha)
+    if box:
+        return mention or ("box", f"threads/{thread}/README.md")
+    return None
 
 
 def landed_results(found: dict[str, Wish], main: dict, by: str) -> list[Fact]:
-    """A landed Plan row with a receipt grants each open wish it cites, no verb to forget.
-    A row with an open ``[ ]`` box says it is not done, whatever it mentions.
+    """A landed Plan row that ``receipt`` reads as done grants each open wish it cites, no
+    verb to forget. A row that only links a doc, or says it waits, grants nothing.
 
     One result per wish and ref, never delivered: delivered stays declared. The id is
     the pair's, so the same receipt on two rows or two landings is one fact."""
@@ -253,7 +262,7 @@ def landed_results(found: dict[str, Wish], main: dict, by: str) -> list[Fact]:
     out, seen = [], {(w.id, r["ref"]) for w in found.values() for r in w.results}
     for thread, data in sorted(main.items()):
         for box, row in data.get("plan_rows") or ():
-            got = None if box is False else receipt(thread, row)
+            got = receipt(thread, row, box)
             if got is None:
                 continue
             kind, ref = got
