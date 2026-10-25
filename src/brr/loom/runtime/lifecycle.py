@@ -298,11 +298,15 @@ def readme_at(home: Home, thread: str, blob: str, ref: str) -> dict:
     return _READMES[key]
 
 
-def main_snapshot(home: Home) -> dict[str, dict]:
-    """Pin main once; both inventory and README fields come from that tree."""
+def main_snapshot(home: Home, tree: tuple[str, dict[str, str]] | None = None) -> dict[str, dict]:
+    """Pin main once; both inventory and README fields come from that tree.
+
+    A caller that also walks main's tree passes the ``main_tree`` it read, so a
+    commit landing between two reads cannot split one view across two tips.
+    """
     repo = home.root / "self"
     if (repo / ".git").exists():
-        ref, blobs = main_tree(repo)
+        ref, blobs = tree or main_tree(repo)
         cached = _MAIN_SNAPSHOTS.get(repo)
         if cached and cached[0] == ref:
             return cached[1]
