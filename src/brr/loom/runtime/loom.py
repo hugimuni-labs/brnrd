@@ -1626,11 +1626,31 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     with projection_cache(router.projections):
         facts = router.begin_tick(facts)
         facts = _ingest(home, facts, router.config.router_ttl)
+        facts = _grant_landed(home, facts)
         facts = _advance_bodies(home, bodies, facts, (adapter, core), reader=router.reader)
         # Time enters the owner table once, using only the facts already held.
         facts = observe_due(home, facts, router.armed())
         facts = router.route(facts, bodies, (adapter, core))
         facts = router.speak_out(facts)
+
+
+_GRANTED: dict[Path, str] = {}
+
+
+def _grant_landed(home: Home, facts: list[Fact]) -> list[Fact]:
+    """Once per main commit: a landed Plan row's receipt is a result on each wish it cites."""
+    from .lifecycle import main_tip
+    from .wishes import landed_results, told
+    repo = home.root / "self"
+    if not (repo / ".git").exists():
+        return facts
+    tip = main_tip(repo)
+    if _GRANTED.get(repo) == tip:
+        return facts
+    for fact in landed_results(told(facts), main_snapshot(home), f"loom:{home.install_id()}"):
+        facts.append(append(home, fact))
+    _GRANTED[repo] = tip
+    return facts
 
 
 def _pause(stop, seconds: float) -> bool:
