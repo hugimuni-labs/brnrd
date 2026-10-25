@@ -36,8 +36,8 @@ def isolate_hosting_body(monkeypatch):
     monkeypatch.setenv("PATH", os.pathsep.join(
         entry for entry in path.split(os.pathsep) if not room_bin(entry)))
     for name in tuple(os.environ):
-        # BRNRD_LOOM_SOURCE is the suite's own (tests/conftest.py): without it a test loom follows this checkout.
-        if name.startswith("BRNRD_") and name != "BRNRD_LOOM_SOURCE":
+        # BRNRD_LOOM_SOURCE is the suite's own (tests/conftest.py); BRNRD_ROOT likewise (entry shim): without it a test loom follows this checkout.
+        if name.startswith("BRNRD_") and name not in ("BRNRD_LOOM_SOURCE", "BRNRD_ROOT"):
             monkeypatch.delenv(name)
 
 

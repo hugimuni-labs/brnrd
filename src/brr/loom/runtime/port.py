@@ -746,7 +746,7 @@ def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
     if owed:
         # The successor reads what is left from the wish, not from this body's memory.
         raise PortError("molt: say what is left first, then molt:\n" + "\n".join(
-            f'  python -m brr.loom.runtime wish {ident} --left "<step>" --left "<step>"   ({why}; --left same if nothing moved)'
+            f'  brnrd runtime wish {ident} --left "<step>" --left "<step>"   ({why}; --left same if nothing moved)'
             for ident, why in owed))
     clone = resolve_clone(room)
     path = f"threads/{thread}/README.md"

@@ -480,16 +480,16 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
 
 
 END = """work is left on this thread (plan {plan}) and this body has not said how it ends. Do one, then stop:
-- a result: python -m brr.loom.runtime wish <w-id> --result <kind>:<ref> --line "<what it is>" [--deliver]
-- an ask to a person: python -m brr.loom.runtime ask "<question>" --for <w-id> --rec "<your call>"
-- a park with its reason: python -m brr.loom.runtime wish <w-id> --read "waiting: <on what>"
-- done: python -m brr.loom.runtime settle {thread} --why "<what it became>"
-`python -m brr.loom.runtime wishes` lists the w-ids. The jack then holds you while letters may come."""
+- a result: brnrd runtime wish <w-id> --result <kind>:<ref> --line "<what it is>" [--deliver]
+- an ask to a person: brnrd runtime ask "<question>" --for <w-id> --rec "<your call>"
+- a park with its reason: brnrd runtime wish <w-id> --read "waiting: <on what>"
+- done: brnrd runtime settle {thread} --why "<what it became>"
+`brnrd runtime wishes` lists the w-ids. The jack then holds you while letters may come."""
 
 
 LEFT = """what is left on a wish moved since it was last said: {named}
 Restate each one's whole list, then stop:
-- python -m brr.loom.runtime wish <w-id> --left "<step>" --left "<step>"   (--left same when nothing moved)
+- brnrd runtime wish <w-id> --left "<step>" --left "<step>"   (--left same when nothing moved)
 - or a park: wish <w-id> --read "waiting: <on what>"; a delivery: --result <kind>:<ref> --line "<what>" --deliver
 This is asked once per wish: the next stop passes, and the wake shows an unanswered left as stale."""
 
