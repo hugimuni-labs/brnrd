@@ -1,5 +1,6 @@
 """The loop tells: degraded steps become facts, and a wake opens with what happened since."""
 
+import dataclasses
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -160,3 +161,51 @@ def test_a_first_body_has_no_section(tmp_path):
     facts = read_facts(home)
     room = _prepare(home, NEXT, "brnrd", 1, [], sender_threads(facts), facts, "hold")
     assert (room / "port/loom.md").read_text().startswith("you are strand")
+
+
+def test_another_installs_loom_facts_stay_off_this_wake(tmp_path):
+    """Two installs' folders on one home: the laptop's starts and streaks are not this machine's."""
+    root = tmp_path / "home"
+    write_thread(root, "brnrd", "Brnrd", "quit-now")
+    here, there = Home(root, install="aaaa"), Home(root, install="bbbb")
+    base = int(datetime.now(timezone.utc).timestamp() * 1000)
+    rows = [
+        (here, Fact(kind="lease", by="loom:aaaa", id="lease:brnrd:prev", at=_at(-181),
+                    data={"thread": "brnrd", "strand": PREV, "gen": 1})),
+        (here, Fact(kind="body.started", by="loom:aaaa", at=_at(-181), data={
+            "strand": PREV, "gen": 1, "pid": 1, "shell": "fake", "core": "haiku", "readme": "", "lstart": ""})),
+        (here, Fact(kind="shown", by="loom:aaaa", at=_at(-180), data={"strand": PREV, "gen": 1, "ids": []})),
+        (there, Fact(kind="loom.started", by="loom:bbbb", at=_at(-60),
+                     data={"install": "bbbb", "pid": 2, "commit": "bbbb1111", "loaded": []})),
+        (here, Fact(kind="attempt.ended", by="loom:aaaa", id=f"attempt.ended:{PREV}:1", at=_at(-59), data={
+            "thread": "brnrd", "strand": PREV, "gen": 1, "ids": [], "cause": "failed", "code": -9,
+            "dispositions": [], "evidence": {}})),
+        (there, Fact(kind="loom.degraded", by="loom:bbbb", id="loom.degraded:bbbb:inputs:T1", at=_at(-20),
+                     data={"install": "bbbb", "step": "inputs", "error": "OSError: bbbb down",
+                           "where": "loom/runtime/connector.py:76", "since": "T1"})),
+        (there, Fact(kind="loom.recovered", by="loom:bbbb", id="loom.recovered:bbbb:inputs:T1", at=_at(-19),
+                     data={"install": "bbbb", "step": "inputs", "since": "T1", "count": 3,
+                           "last": "OSError: bbbb down"})),
+        (there, Fact(kind="loom.degraded", by="loom:bbbb", id="loom.degraded:bbbb:publisher:T2", at=_at(-18),
+                     data={"install": "bbbb", "step": "publisher", "error": "ValueError: bbbb broke",
+                           "where": "loom/runtime/snapshot.py:166", "since": "T2"})),
+        (here, Fact(kind="lease", by="loom:aaaa", id="lease:brnrd:next", at=_at(0),
+                    data={"thread": "brnrd", "strand": NEXT, "gen": 1})),
+        # The laptop kept writing while this machine was off for two hours.
+        (there, Fact(kind="body.started", by="loom:bbbb", at=_at(110), data={
+            "strand": "s-bbbb-pitch", "gen": 1, "pid": 9, "shell": "fake", "core": "haiku",
+            "readme": "", "lstart": ""})),
+        (here, Fact(kind="loom.started", by="loom:aaaa", id="start-late", at=_at(120),
+                    data={"install": "aaaa", "pid": 3, "commit": "9b1254f5", "loaded": []})),
+    ]
+    for k, (home, fact) in enumerate(rows):
+        append(home, dataclasses.replace(fact, hlc=(base + k, 0, home.install_id())))
+    assert {p.parent.name for p in (root / "ledger" / "facts").glob("*/*.jsonl")} == {"aaaa", "bbbb"}
+    facts = read_facts(here)
+    room = _prepare(here, NEXT, "brnrd", 1, [], sender_threads(facts), facts, "hold")
+    part = (room / "port/loom.md").read_text()
+    section = part[:part.index("you are strand")]
+    assert f"your predecessor {PREV} gen 1 ended failed, code -9 (attempt.ended:{PREV}:1)" in section
+    assert "the loom started 1 time (at 9b1254f5); the ledger was silent 2h" in section
+    assert "bbbb" not in section
+    assert "degraded" not in (room / "port/in/boundary.md").read_text()

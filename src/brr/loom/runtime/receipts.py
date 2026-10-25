@@ -72,10 +72,12 @@ def record_start(home, facts, *, root: Path | None = None) -> Fact:
     return append(home, Fact(kind="loom.started", by=f"loom:{home.install_id()}", data=data))
 
 
-def receipts(facts) -> dict[str, list[Receipt]]:
+def receipts(facts, install: str) -> dict[str, list[Receipt]]:
     """Each thread's pull requests in the order first claimed; a later
-    ``pr.opened`` of the same one names its newer head. Read off the
-    ledger's kind index, so a tick's thread table walks no old ledger."""
+    ``pr.opened`` of the same one names its newer head. Loaded is read from
+    ``install``'s latest start: another machine's loom runs its own checkout.
+    Read off the ledger's kind index, so a tick's thread table walks no old
+    ledger."""
     opened, merged, start = {}, {}, None
     for fact in kind_facts(facts, "pr.opened", "pr.merged", "loom.started"):
         if fact.kind in ("pr.opened", "pr.merged"):
@@ -83,8 +85,8 @@ def receipts(facts) -> dict[str, list[Receipt]]:
             key = (str(data.get("thread")), str(data.get("repo")), data.get("number"))
             (opened if fact.kind == "pr.opened" else merged)[key] = data
             opened.setdefault(key, None)
-        elif fact.kind == "loom.started":
-            start = fact.data or {}
+        elif fact.kind == "loom.started" and (fact.data or {}).get("install") == install:
+            start = fact.data
     held = (set(start.get("loaded") or ()) if start and start.get("commit") else None)
     found: dict[str, list[Receipt]] = {}
     for key in opened:

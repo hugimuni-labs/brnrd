@@ -65,7 +65,7 @@ def render_graph(edges: list[Edge], by: str = "thread", only: str | None = None)
     return "".join(f"{key}\n" + "\n".join(lines) + "\n" for key, lines in groups.items())
 
 
-def asks(facts, main: dict, thread: str | None = None, everything: bool = False) -> str:
+def asks(facts, main: dict, thread: str | None = None, everything: bool = False, *, install: str) -> str:
     """Four buckets over every thread, settled ones included."""
     holder = fold(facts).holder
     told = wishes(facts)
@@ -81,7 +81,7 @@ def asks(facts, main: dict, thread: str | None = None, everything: bool = False)
                        if mine(t) for i in ids],
         "done": [f"{t} · {kind} {ref} — {line}" for t, d in sorted(main.items()) if mine(t)
                  for kind, ref, line in d.get("done") or ()]
-                + [f"{t} · {r.line()}" for t, rs in sorted(receipts(facts).items()) if mine(t)
+                + [f"{t} · {r.line()}" for t, rs in sorted(receipts(facts, install).items()) if mine(t)
                    for r in rs]
                 + [wish_line(w) for w in found if mine(w.thread) and w.state == "accepted"],
     }

@@ -18,6 +18,7 @@ from brr.loom.runtime.ledger import read_facts
 from brr.loom.runtime.lifecycle import main_snapshot
 from brr.loom.runtime.receipts import receipts, record_start
 from brr.loom.runtime.selfrepo import git
+from brr.loom.runtime.threads import thread_table
 
 from _step import Loom, wait_until
 from test_project_repos import _kill, _note
@@ -42,7 +43,7 @@ def _kinds(root: Path, kind: str) -> list:
 
 
 def _shipped(root: Path) -> list[str]:
-    return [r.line() for r in receipts(read_facts(Home(root))).get("work", [])]
+    return [r.line() for r in receipts(read_facts(Home(root)), Home(root).install_id()).get("work", [])]
 
 
 def test_a_pull_request_is_claimed_opened_then_merged_by_its_merge_commit(tmp_path: Path) -> None:
@@ -140,7 +141,16 @@ def test_loaded_follows_the_latest_start_and_a_rollback_unloads(tmp_path: Path) 
         record_start(home, read_facts(home), root=source)
         assert _kinds(root, "loom.started")[-1].data["loaded"] == ["widget#7"]
         assert _shipped(root) == ["widget#7 merged, loaded"]
+        # Another install's loom starting on an older checkout is its load, not this one's:
+        # through the thread table, which every surface reads.
         git(source, "checkout", "--quiet", "--detach", "HEAD^1")
+        other = Home(root, install="bbbb" if home.install_id() != "bbbb" else "cccc")
+        record_start(other, read_facts(home), root=source)
+        assert {p.parent.name for p in (root / "ledger" / "facts").glob("*/*.jsonl")} >= {
+            home.install_id(), other.install_id()}
+        [row] = [r for r in thread_table(home, read_facts(home)) if r["thread"] == "work"]
+        assert row["receipts"] == "widget#7 merged, loaded"
+        assert _shipped(root) == ["widget#7 merged, loaded"]
         record_start(home, read_facts(home), root=source)
         started = _kinds(root, "loom.started")[-1].data
         assert started["loaded"] == [] and started["commit"] == _tip(source, "HEAD")
@@ -163,7 +173,8 @@ def test_receipts_are_drawn_in_threads_and_asks_all(tmp_path: Path) -> None:
         _pull(bare, 7, _tip(checkout, "HEAD"))
         assert _verb(room, "widget", "--pr", "7").returncode == 0
         home = Home(root)
-        text = asks(read_facts(home), main_snapshot(home), everything=True)
+        text = asks(read_facts(home), main_snapshot(home), everything=True,
+                    install=home.install_id())
         assert "work · widget#7 opened\n" in text
         proc = subprocess.run([sys.executable, "-m", "brr", "threads", "--home", str(root)],
                               text=True, capture_output=True, timeout=30)

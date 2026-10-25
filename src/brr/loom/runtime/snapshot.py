@@ -202,7 +202,7 @@ class View:
                 cores.setdefault(f.data["shell"], set()).add(f.data["core"])
         self.cores = {shell: sorted(c) for shell, c in cores.items()}
         self.told = wishes([f for f in facts if f.kind.startswith("wish") or f.kind == "letter"])
-        self.shipped = receipts(facts)
+        self.shipped = receipts(facts, home.install_id())
         # An open ask is the person's turn unless it waits on a thread that has not asked onward.
         self.waits: dict[str, list[str]] = {}
         for ident, head in sorted(waits_on(self.told, self.main).items()):
