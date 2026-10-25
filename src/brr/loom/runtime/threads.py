@@ -79,12 +79,14 @@ def thread_table(home: Home, facts: list) -> list[dict]:
     stop block, is the nearest derivable holding value.
     """
     from .loom import body_alive
-    main = main_snapshot(home)
-    state, ownership, axes, owed, activity, boundary, pending, unanswered = cached_projection(
-        facts, "thread-table", repr(main), lambda rows: _table_inputs(rows, main))
     repo = home.root / 'self'
     versioned = (repo / '.git').exists()
+    # One read of main feeds both the axes and the rows: a thread opened
+    # between two reads would have a row and no axes.
     tip, blobs = main_tree(repo) if versioned else (None, {})
+    main = main_snapshot(home, (tip, blobs) if versioned else None)
+    state, ownership, axes, owed, activity, boundary, pending, unanswered = cached_projection(
+        facts, "thread-table", repr(main), lambda rows: _table_inputs(rows, main))
     if not versioned or _MAIN.get(repo, (None, None))[0] != tip:
         names = (list(blobs) if versioned
                  else [p.relative_to(repo).as_posix() for p in (repo / 'threads').glob('*/README.md')])
