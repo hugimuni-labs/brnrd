@@ -81,7 +81,7 @@ def record_start(home, facts, *, root: Path | None = None) -> Fact:
     if commit and before and before != commit:
         # Whoever moved it, the updater or a hand: the seated bodies hear it once.
         from .update import merges
-        append(home, Fact(kind="loom.moved", by=f"loom:{install}", data={
+        append(home, Fact(kind="loom.moved", by=f"loom:{install}", id=f"loom.moved:{started.id}", data={
             "install": install, "from": before, "to": commit,
             "merges": merges(root, before, commit), "started": started.id}))
     return started
