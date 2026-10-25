@@ -70,7 +70,10 @@ def cmd_threads(args) -> int:
     # The inventory runs git in every room and fetches each project source,
     # so the plain table never pays for it: only --left asks.
     if args.left is None:
-        sys.stdout.write(render_table(thread_table(home, facts)))
+        from .selfrepo import forge_threads
+        forge = forge_threads(home.root / "self")
+        sys.stdout.write(render_table(thread_table(home, facts))
+                         + (f"forge: {forge}/<thread>\n" if forge else ""))
         return 0
     left = left_by_thread(home, facts, args.left or None)
     if args.left:
