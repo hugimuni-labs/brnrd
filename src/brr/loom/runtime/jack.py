@@ -1,5 +1,5 @@
-"""The jack. It reads boundary.md and stdin, and the ledger only through
-``reap.left`` for its own room. It fails open."""
+"""The jack. It reads boundary.md and stdin, of the ledger its own strand's
+file, and the rest only through ``reap.left`` for its own room. It fails open."""
 
 from __future__ import annotations
 
@@ -151,6 +151,55 @@ def _hand() -> bool:
     return os.environ.get("BRNRD_BODY_JACK") == "hand"
 
 
+def _answered(room: Path, parsed: Boundary) -> set[str]:
+    """Owed ids this generation already answered: a ``re`` or ``chatter`` in its
+    unsent port/out, or in a fact it wrote to its own strand's ledger file. The
+    loom renders the boundary; a slow or stalled tick renders it late, and an
+    answer must not wait on it (2026-10-25: a reply blocked the stop for 12 min)."""
+    if not parsed.ids:
+        return set()
+    from .port import PortError, parse_frontmatter
+    found: set[str] = set()
+    for path in (room / "port" / "out").glob("*.md"):
+        try:
+            head = parse_frontmatter(path.read_text())
+        except (PortError, OSError):
+            continue
+        found.update([str(head.get("re") or "")] + str(head.get("chatter") or "").split())
+    try:
+        files = list((home_of_room(room).root / "ledger" / "facts").glob(f"*/{parsed.strand}.jsonl"))
+    except ValueError:
+        files = []
+    for path in files:
+        try:
+            lines = path.read_text().splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            if '"re"' not in line and '"chatter"' not in line:
+                continue
+            try:
+                fact = json.loads(line)
+                data = fact["data"]
+            except (ValueError, KeyError, TypeError):
+                continue
+            if fact.get("by") != "strand:" + parsed.strand or data.get("gen") != parsed.gen:
+                continue
+            found.add(str(data.get("re") or ""))
+            found.update(str(x) for x in data.get("chatter") or ())
+    return found & set(parsed.ids)
+
+
+def _unanswered(room: Path, parsed: Boundary) -> Boundary:
+    """The boundary less what this body already answered since it was rendered."""
+    done = _answered(room, parsed)
+    if not done:
+        return parsed
+    letters = [letter for letter in parsed.letters if letter.id not in done]
+    return Boundary(strand=parsed.strand, gen=parsed.gen, ids=[letter.id for letter in letters],
+                    letters=letters, settled=parsed.settled)
+
+
 def _block(room: Path, text: str, parsed: Boundary) -> str:
     count = int(_state(room).get("stop_blocks") or 0)
     if _hand() and count >= 3:
@@ -194,6 +243,8 @@ def _poll(room: Path, stdin_text: str = '') -> str:
                 # full rewrite for nothing. Hold on letters until the ceiling.
                 parked = False
                 deadline = ceiling
+        if parsed.ids:
+            parsed = _unanswered(room, parsed)
         if (parsed.ids if _hand() else any(not letter.compact for letter in parsed.letters)):
             return _block(room, text, parsed)
         remaining = deadline - time.monotonic()
@@ -557,6 +608,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     blocked = _guard_stop(room) or _kept_stop(room) or _known_stop(room)
     if blocked:
         return blocked
+    parsed = _unanswered(room, parsed)
     # Work only this room holds blocks the stop the way an owed letter does.
     left = _left(room, True)
     if left and (_hand() or not _state(room).get("stop_blocks") and not _dry(room)):

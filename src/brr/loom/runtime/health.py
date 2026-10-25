@@ -10,6 +10,7 @@ after ``NOTICE_AFTER`` seconds is told to the home thread once.
 
 from __future__ import annotations
 
+import threading
 import time
 import traceback
 from dataclasses import dataclass
@@ -84,12 +85,20 @@ class Health:
             self.streaks[str(fact.data["step"])] = Streak(
                 str(fact.data["since"]), str(fact.data.get("error", "")))
 
-    def guard(self, step: str, fn, *args, backoff: bool = True) -> None:
-        """``backoff=False`` for a step its caller already spaces out."""
+    def guard(self, step: str, fn, *args, backoff: bool = True, overrun: float | None = None) -> None:
+        """``backoff=False`` for a step its caller already spaces out. ``overrun``
+        is how long the step may run: past it, a watchdog writes ``loom.degraded``
+        for ``<step>.overrun`` while the step still runs, and its end writes
+        ``loom.recovered`` (2026-10-25: a nine-minute tick left no fact)."""
         streak = self.streaks.get(step)
         if streak is not None and streak.skip > 0:
             streak.skip -= 1
             return
+        watchdog = None
+        if overrun is not None:
+            watchdog = threading.Timer(overrun, self._overran, (step, overrun))
+            watchdog.daemon = True
+            watchdog.start()
         try:
             fn(*args)
         except Exception as exc:
@@ -97,6 +106,19 @@ class Health:
         else:
             if streak is not None:
                 self._passed(step, streak)
+        finally:
+            if watchdog is not None:
+                watchdog.cancel()
+                watchdog.join()
+                late = self.streaks.get(step + ".overrun")
+                if late is not None:
+                    self._passed(step + ".overrun", late)
+
+    def _overran(self, step: str, limit: float) -> None:
+        try:
+            raise TimeoutError(f"{step} still running after {limit:g}s, past the router lease")
+        except TimeoutError as exc:
+            self._failed(step + ".overrun", exc, backoff=False)
 
     def _failed(self, step: str, exc: Exception, backoff: bool) -> None:
         error = f"{type(exc).__name__}: {exc}"[:300]

@@ -1852,7 +1852,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                     health.guard("inputs", inputs.step, backoff=False)
                 else:
                     inputs.close()
-                health.guard("tick_once", tick_once, home, bodies, adapter, core, router)
+                health.guard("tick_once", tick_once, home, bodies, adapter, core, router,
+                             overrun=router.config.router_ttl)
                 health.guard("publisher", publisher.step, config, router, backoff=False)
                 health.guard("mirror", mirror.step, config, backoff=False)
                 health.guard("library", keeper.step, backoff=False)

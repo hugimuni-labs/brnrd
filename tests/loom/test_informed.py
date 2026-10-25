@@ -60,6 +60,32 @@ def test_a_failing_step_opens_one_streak_backs_off_and_recovers(tmp_path, monkey
     assert len(calls) >= 4
 
 
+def test_a_tick_past_the_lease_is_degraded_while_it_runs_and_recovers(tmp_path, monkeypatch):
+    from brr.loom.runtime.config import config_path
+    root = tmp_path / "home"
+    write_thread(root, "brnrd", "Brnrd", "brnrd")
+    path = config_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("router_ttl = 0.3\n")
+    real, seen = loom.tick_once, []
+
+    def slow(*args):
+        if not seen:
+            # The fact is written while the tick is still stuck, not after it.
+            wait_until(lambda: _kinds(root, "loom.degraded"), 5, lambda: "")
+            seen.append([f.data["step"] for f in _kinds(root, "loom.recovered")])
+        return real(*args)
+
+    monkeypatch.setattr(loom, "tick_once", slow)
+    _running(root, lambda: _kinds(root, "loom.recovered"))
+    [down] = _kinds(root, "loom.degraded")
+    [back] = _kinds(root, "loom.recovered")
+    assert seen == [[]]
+    assert down.data["step"] == back.data["step"] == "tick_once.overrun"
+    assert down.data["error"] == "TimeoutError: tick_once still running after 0.3s, past the router lease"
+    assert back.data["since"] == down.data["since"] and back.data["count"] == 1
+
+
 def test_a_restart_closes_a_streak_its_predecessor_left_open(tmp_path):
     root = tmp_path / "home"
     write_thread(root, "inbox", "Brnrd", "inbox")

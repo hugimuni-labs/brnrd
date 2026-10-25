@@ -427,3 +427,50 @@ def test_tool_trace_never_fails_the_hook_and_rotates(tmp_path, monkeypatch):
     args = [r["arg"] for r in tooltrace.read(room)]
     assert args[-1] == "step 19" and args == sorted(args, key=lambda a: int(a.split()[1]))
     assert len(tooltrace.read(room, limit=3)) == 3
+
+
+def _answer(room: Path, *flags: str) -> None:
+    import subprocess
+    done = subprocess.run([sys.executable, "-m", "brr.loom.runtime", "send", "--room", str(room), "--re", "p-test/abcde",
+                    "--to", "thread:tb", *flags], capture_output=True, text=True,
+                   env={**os.environ, "BRNRD_STRAND": STRAND})
+    assert done.returncode == 0, done.stderr
+
+
+@pytest.mark.parametrize("flags", [("done",), ("--chatter", "--note", "seen")])
+def test_an_answer_the_loom_has_not_rendered_lets_the_stop_pass(tmp_path, flags, monkeypatch):
+    # 2026-10-25: a tick stalled for nine minutes, boundary.md still named a
+    # letter the body had answered, and every stop was blocked on it.
+    sys.path.insert(0, str(Path(__file__).parent))
+    from _step import write_thread
+    for thread in ("ta", "tb"):
+        write_thread(tmp_path, thread, f"# {thread}", thread)
+    monkeypatch.setenv("BRNRD_BODY_JACK", "hand")
+    room = _room(tmp_path)
+    (room / "port" / "wait").write_text("0")
+    _write(room, [_letter()])
+    _answer(room, *flags)
+    assert list((room / "port" / "out").glob("*.md"))
+    assert execute("stop", room, "{}") == ""
+    # Ingested: the file becomes the fact fact_from_port makes of it, and leaves port/out.
+    from brr.loom.runtime.ledger import append, read_facts
+    from brr.loom.runtime.port import fact_from_port, parse_frontmatter
+    home = Home(tmp_path)
+    for path in (room / "port" / "out").glob("*.md"):
+        head = parse_frontmatter(path.read_text())
+        if head.get("kind") in {"letter", "note"}:
+            append(home, fact_from_port(head, STRAND, 1, room=room))
+        path.unlink()
+    assert any(f.data.get("re") == "p-test/abcde" for f in read_facts(home))
+    assert execute("stop", room, "{}") == ""
+
+
+def test_an_answer_from_another_generation_does_not_count(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRNRD_BODY_JACK", "hand")
+    room = _room(tmp_path)
+    _write(room, [_letter()])
+    ledger = tmp_path / "ledger" / "facts" / "ab12"
+    ledger.mkdir(parents=True)
+    (ledger / f"{STRAND}.jsonl").write_text(json.dumps({"by": "strand:" + STRAND, "kind": "letter", "id": STRAND + "/old",
+                                                         "data": {"re": "p-test/abcde", "gen": 0}}) + "\n")
+    assert json.loads(execute("stop", room, "{}"))["decision"] == "block"
