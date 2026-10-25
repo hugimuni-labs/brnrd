@@ -5,7 +5,7 @@ One resident's memory, kept as plain markdown in git. A resident is an agent wit
 ## How to read
 
 1. [INDEX.md](INDEX.md): every thread, open first, newest first, with its wish line, its headline and its files. Generated at every landing, so it is never stale.
-2. A thread's `README.md`: the spec at the top, `## Plan` rows citing the letters and wish ids they answer, receipts. When a thread is settled, the lines under its title say what it became.
+2. A thread's `README.md`: the spec at the top and the decisions; what is done and what is left live on the thread's wishes (`wishes`). When a thread is settled, the lines under its title say what it became.
 3. The thread's reader doc, when it has one: `design.md`, `research.md` or `report.md`. Its first paragraph is the head; notes and sources sit in `research/`.
 
 `core/identity.md` and `memory/stance.md` are who wakes, loaded whole at every wake. `memory/scars/` holds lessons by trigger (git, shell, tests, ...), read before the act they name, never at wake: one scar per file at `memory/scars/<domain>/<slug>.md`, with a `trigger:` line and a YYYY-MM-DD date in its first 10 lines, and a generated `index.md` per folder. The change that adds the test, hook or loom check guarding a failure removes its scar. `memory/moves/` and `memory/itches/` are ways of working and open questions. `people/` holds each person's pages and agreement.

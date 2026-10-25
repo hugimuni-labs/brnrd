@@ -51,14 +51,15 @@ retry allowance. The person receives no failure message for a home refusal. A no
 requires a fresh gauge observation; depleted fuel keeps the letter owed and
 parks its next start until all exhausted windows reset.
 
-## Plan citations
+## The README and the plan
 
-A row under `## Plan` is a step, `- <step> · re: <letter-id>, <w-id>`, with
-no checkbox: it carries steps and receipts, never status. Land the README
-through `send-self`; mentioning an id in prose does not cite it. Progress is
-the thread's wishes, delivered and accepted over all that are not dropped:
-the status line's `plan x/y`. A person letter on a thread with open wishes is
-shown with a `steers?` line naming them and the `send` that says it steers one.
+A thread's README holds its spec and its decisions; it has no `## Plan`. The
+steps still to do are the wish's left (`wish <w-id> --left …`, below), what is
+done is its results, and a person letter it answers is a say on it. Land the
+README through `send-self`. Progress is the thread's wishes, delivered and
+accepted over all that are not dropped: the status line's `plan x/y`. A person
+letter on a thread with open wishes is shown with a `steers?` line naming them
+and the `send` that says it steers one.
 
 ## Linking a file
 
@@ -104,9 +105,8 @@ it at a stop and refuses a molt while a wish moved since its last left: a
 steer, a result, a fact this body wrote on it, or, on a thread with one open
 wish, this body's start. The stop asks once per wish (a `left.asked` fact), so
 nothing is trapped; the wake shows each open wish as done, left and the steers
-since. A Plan row that cites a wish (` · re: <letter-id>, <w-id>`) with a
-receipt still grants it, and a pull request opened on a thread with one open
-wish is that wish's result. `settle` refuses while a delivered wish
+since. A pull request opened on a thread with one open wish is that wish's
+result. `settle` refuses while a delivered wish
 awaits a verdict; `--hand-to <thread>` moves those to a thread that will carry
 them. Heard and working wishes stay with their thread.
 

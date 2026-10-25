@@ -18,6 +18,7 @@ VERBS = {
     "wish": ("verbs_wishes", "_wish"),
     "wishes": ("verbs_wishes", "_wishes"),
     "ask": ("verbs_wishes", "_ask"),
+    "migrate-plan": ("migrate", "_migrate_plan"),
     "threads": ("verbs_threads", "_threads"),
     "asks": ("verbs_asks", "_asks"),
     "graph": ("verbs_asks", "_graph"),

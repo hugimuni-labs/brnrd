@@ -146,7 +146,8 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
                 continue
             else:
                 wish.verdict = dict(d, at=fact.at)
-        wish.at = fact.at
+        # A fact dated before the last (a migrated say carries its letter's date) never ages a wish.
+        wish.at = max(wish.at, fact.at)
     for wish in found.values():
         def own_say(say):
             letter = letters.get(say.letter)

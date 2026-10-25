@@ -549,7 +549,7 @@ def declare(room: Path, how: str) -> None:
 
 def _undeclared(room: Path, plan: str) -> str:
     """The first stop with wishes still open is refused once unless this body
-    declared its end. The plan counts wish stamps, never Plan rows."""
+    declared its end. The plan counts wish stamps."""
     done, _, total = plan.partition(" ")[0].partition("/")
     if _hand() or not (done.isdigit() and total.isdigit() and int(done) < int(total)) or _dry(room):
         return ""
