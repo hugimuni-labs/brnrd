@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import time
 import traceback
 from pathlib import Path
@@ -469,7 +470,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         return blocked
     if parsed.ids and (_hand() or not _state(room).get("stop_blocks") and not _dry(room)):
         return _block(room, text, parsed)
-    refused = _undeclared(room, plan)
+    refused = _left_owed(room, text) or _undeclared(room, plan)
     if refused:
         return refused
     return _poll(room, stdin_text)
@@ -481,6 +482,60 @@ END = """work is left on this thread (plan {plan}) and this body has not said ho
 - a park with its reason: python -m brr.loom.runtime wish <w-id> --read "waiting: <on what>"
 - done: python -m brr.loom.runtime settle {thread} --why "<what it became>"
 `python -m brr.loom.runtime wishes` lists the w-ids. The jack then holds you while letters may come."""
+
+
+LEFT = """what is left on a wish moved since it was last said: {named}
+Restate each one's whole list, then stop:
+- python -m brr.loom.runtime wish <w-id> --left "<step>" --left "<step>"   (--left same when nothing moved)
+- or a park: wish <w-id> --read "waiting: <on what>"; a delivery: --result <kind>:<ref> --line "<what>" --deliver
+This is asked once per wish: the next stop passes, and the wake shows an unanswered left as stale."""
+
+# Long enough for the loom to render a left written just before the stop.
+LEFT_GRACE = 3.0
+
+
+def _left_owed(room: Path, text: str) -> str:
+    """Refuse a stop while the boundary names wishes whose left moved. Nothing is
+    remembered here: the loom derives the line from the ledger, and a refusal
+    becomes a ``left.asked`` fact through the port, after which the line drops it."""
+    if _hand() or _dry(room) or "\nleft? " not in "\n" + text:
+        return ""
+    stop = time.monotonic() + LEFT_GRACE
+    while _rendered_before_ledger(room):
+        if time.monotonic() >= stop:
+            # A loom too slow to render cannot be trusted to ask: fail open, and
+            # the next wake shows the left as stale.
+            return ""
+        time.sleep(0.2)
+    text = _boundary_text(room)
+    line = next((x for x in text.splitlines() if x.startswith("left? ")), "")
+    pending = set()
+    for path in (room / "port" / "out").glob("asked-*.md"):
+        pending.update(re.findall(r"^wishes: (.*)$", path.read_text(), re.M)[0].split())
+    owed = [ident for ident in re.findall(r"(w-[0-9a-z]+) \(", line) if ident not in pending]
+    if not owed:
+        return ""
+    parsed = parse_boundary(text)
+    stem = mint(5)
+    atomic_write(room / "port" / "out" / f"asked-{stem}.md", (
+        "---\n"
+        "kind: left-asked\n"
+        f"id: {parsed.strand or room.name}/{stem}\n"
+        f"wishes: {' '.join(owed)}\n"
+        "---\n"))
+    return _json({"decision": "block", "reason": LEFT.format(named=line.removeprefix("left? "))})
+
+
+def _rendered_before_ledger(room: Path) -> bool:
+    """A fact this strand wrote after the boundary was rendered (a left, a park)
+    has not reached it yet. A stat, never a read of the ledger."""
+    try:
+        rendered = (room / "port" / "in" / "boundary.md").stat().st_mtime
+        home = home_of_room(room)
+    except (OSError, ValueError):
+        return False
+    files = (home.root / "ledger" / "facts").glob(f"*/{room.name}.jsonl")
+    return any(path.stat().st_mtime > rendered for path in files)
 
 
 def declare(room: Path, how: str) -> None:

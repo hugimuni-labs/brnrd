@@ -249,7 +249,7 @@ class LedgerView(list):
             'reply-channels': ('source', 'letter'),
             'attachments': ('source', 'blob', 'letter'),
             'reply-context': ('source', 'letter'),
-            'wishes': ('wish', 'wish.read', 'wish.result', 'wish.verdict', 'letter'),
+            'wishes': ('wish', 'wish.read', 'wish.result', 'wish.verdict', 'wish.left', 'letter'),
         }
         if name == 'body-state':
             revision = len(self.by_body[inputs[:2]])

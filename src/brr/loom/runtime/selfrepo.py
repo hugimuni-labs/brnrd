@@ -734,7 +734,9 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
     except ValueError:
         home = None  # A standalone self clone has no loom ledger.
     if home is not None:
-        section = wake_wishes(read_facts(home), thread)
+        from .lifecycle import main_snapshot
+        rows = main_snapshot(home).get(thread, {}).get("plan_rows") or ()
+        section = wake_wishes(read_facts(home), thread, rows)
     # Reserve the section before the recipe fits its tree/README to the budget.
     if section:
         limit = int(env.get("LOOM_BUDGET_BYTES") or 24000)
