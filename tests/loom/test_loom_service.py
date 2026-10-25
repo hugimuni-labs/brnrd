@@ -138,7 +138,9 @@ def test_install_refuses_a_body_that_is_not_shell_core(tmp_path):
     assert mac.calls == []
 
 
-def test_macos_install_freezes_the_home_and_abandons_the_group(tmp_path, capsys):
+def test_macos_install_freezes_the_home_and_abandons_the_group(tmp_path, monkeypatch, capsys):
+    # The installing shell has its venv's bin on PATH; the unit reads it through current.
+    monkeypatch.setenv("PATH", f"{entry.prefix() / 'bin'}:/usr/bin")
     home = tmp_path / "home"
     _body(home)
     mac = _Mac()
@@ -153,6 +155,7 @@ def test_macos_install_freezes_the_home_and_abandons_the_group(tmp_path, capsys)
     assert data["ProgramArguments"][1:] == ["runtime", "loom", "--home", str(home.resolve())]
     plain = plist.read_text()
     assert sys.executable not in plain and str(entry.prefix()) not in plain
+    assert data["EnvironmentVariables"]["PATH"] == f"{entry.shim().parent}:{entry.current() / 'bin'}:/usr/bin"
     # The shim runs current's python on brr's runtime CLI.
     ran = subprocess.run([data["ProgramArguments"][0], "runtime", "no-such-verb"],
                          capture_output=True, text=True)
@@ -241,6 +244,7 @@ def test_macos_verbs_after_install(tmp_path, capsys):
 
 
 def test_linux_unit_kills_only_the_process_and_names_the_home(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("PATH", f"{entry.prefix() / 'bin'}:/usr/bin")
     home = tmp_path / "home"
     _body(home)
     config = tmp_path / "config"
