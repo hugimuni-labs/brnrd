@@ -1410,6 +1410,9 @@ def _boundary(home, facts, strand, gen, context):
     path = home.room(strand) / "port/in/boundary.md"
     if not path.is_file() or path.read_text() != text:
         atomic_write(path, text)
+    else:
+        # Rendered from these facts: the jack's stop compares this mtime with the ledger's.
+        os.utime(path)
 
 
 _PAUSE_LOOKED: dict[Path, float] = {}

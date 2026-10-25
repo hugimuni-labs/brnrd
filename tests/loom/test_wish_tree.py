@@ -114,6 +114,21 @@ def test_a_loom_that_does_not_render_within_the_grace_lets_the_stop_through(body
     assert "  left: none said yet" in wake(seat)
 
 
+def test_a_fact_that_leaves_the_boundary_unchanged_still_gets_the_left_asked(body, monkeypatch):
+    home, seat = body
+    wish = heard(home, seat, "Hold the board still")
+    elsewhere = command(home, seat, "wish", "new", "--line", "Other", "--thread", "other",
+                        "--say", inject_letter(home.root, to="thread:other", body="Please: other"))
+    before = render(home)
+    # A reading on another thread's wish: the ledger moves, this boundary's text does not.
+    command(home, seat, "wish", elsewhere, "--read", "looks small")
+    now = [0.]
+    monkeypatch.setattr(jack.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(jack.time, "sleep", lambda seconds: (render(home), now.__setitem__(0, now[0] + seconds)))
+    assert (seat / "port/in/boundary.md").read_text() == before
+    assert f"{wish} (no left yet)" in json.loads(stop(seat))["reason"]
+
+
 def test_a_new_body_restates_the_only_wish_but_not_unnamed_ones(body):
     home, seat = body
     first = heard(home, seat, "Hold the board still")

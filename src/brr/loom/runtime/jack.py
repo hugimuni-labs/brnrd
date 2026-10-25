@@ -511,7 +511,8 @@ def _left_owed(room: Path, text: str) -> str:
     line = next((x for x in text.splitlines() if x.startswith("left? ")), "")
     pending = set()
     for path in (room / "port" / "out").glob("asked-*.md"):
-        pending.update(re.findall(r"^wishes: (.*)$", path.read_text(), re.M)[0].split())
+        for listed in re.findall(r"^wishes: (.*)$", path.read_text(), re.M):
+            pending.update(listed.split())
     owed = [ident for ident in re.findall(r"(w-[0-9a-z]+) \(", line) if ident not in pending]
     if not owed:
         return ""
