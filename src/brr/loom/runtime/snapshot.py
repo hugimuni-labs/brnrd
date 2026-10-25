@@ -187,6 +187,7 @@ class View:
     def __init__(self, home: Home, facts: list, config):
         from .lifecycle import main_snapshot
         from .receipts import receipts
+        from .selfrepo import forge_threads
         from .threads import _table_inputs, thread_table
         from .wishes import waits_on, wishes
         self.home, self.facts, self.config = home, facts, config
@@ -197,6 +198,7 @@ class View:
         self.state = fold(facts)
         self.writers = sender_threads(facts)
         self.texts = _readmes(home)
+        self.forge = forge_threads(home.root / "self")
         self.held = {strand: thread for thread, (strand, _gen) in self.state.holder.items()}
         self.ends = {f.data["strand"]: f.data["cause"]
                      for f in self.state.accepted if f.kind == "attempt.ended"}
@@ -257,7 +259,8 @@ def thread(v: View, row: dict) -> dict:
                  "state": r.state(), "merge_commit": r.merge_commit, "load": r.load()}.items()
                  if val not in (None, "")} for r in v.shipped.get(thread, ())],
              "done": _done(v.texts.get(thread, "")), "owed": row["owed"],
-             "last_at": _iso(last) if last else None}
+             "last_at": _iso(last) if last else None,
+             "url": f"{v.forge}/{thread}" if v.forge else None}
     return {k: val for k, val in entry.items() if val not in (None, "", [])}
 
 

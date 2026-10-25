@@ -90,6 +90,21 @@ def git(cwd: Path, *args: str, check: bool = True, env: dict[str, str] | None = 
     return proc
 
 
+# A forge's browse path for a folder on main; an origin elsewhere has no link.
+_FORGES = {"github.com": "tree/main", "gitlab.com": "-/tree/main", "codeberg.org": "src/branch/main"}
+_ORIGIN = re.compile(r"(?:(?:https?|ssh)://)?(?:[^@/]+@)?([^/:@]+)(?::\d+)?[:/]([^/]+)/([^/]+?)(?:\.git)?/?")
+
+
+def forge_threads(self_dir: Path) -> str | None:
+    """The self's threads folder on the forge its origin names, credentials dropped."""
+    if not (self_dir / ".git").exists():
+        return None
+    url = git(self_dir, "remote", "get-url", "origin", check=False).stdout.strip()
+    m = _ORIGIN.fullmatch(url)
+    if not m or m[1].lower() not in _FORGES:
+        return None
+    return f"https://{m[1].lower()}/{m[2]}/{m[3]}/{_FORGES[m[1].lower()]}/threads"
+
 def _segment(value: str, what: str | None = None) -> str | None:
     if (
         not value

@@ -41,7 +41,7 @@ from .lifecycle import main_snapshot
 from .timers import observe_due
 from .selfrepo import (
     AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, git,
-    ensure_room, repaired_line, run_wake, seed_root,
+    ensure_room, forge_threads, repaired_line, run_wake, seed_root,
 )
 
 SRC = str(Path(__file__).resolve().parents[3])
@@ -477,8 +477,10 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     part_path = room / "port" / "loom.md"
     inherited = _read_by_predecessors(facts, thread, strand, letters, threads)
     gone = since_gone(facts, strand, gen, thread, threads, home.install_id())
+    forge = forge_threads(home.root / "self")
     part = gone + inherited + (
-        f"you are strand {strand} on thread {thread}; letters arrive at your "
+        f"you are strand {strand} on thread {thread}"
+        + (f" ({forge}/{thread})" if forge else "") + "; letters arrive at your "
         "tool boundaries, each line naming its reply address; answer with "
         "`python -m brr.loom.runtime send --re <id> --to <reply address> \"…\"`; "
         "where the address is `-` nobody is waiting for words: settle the letter with "
