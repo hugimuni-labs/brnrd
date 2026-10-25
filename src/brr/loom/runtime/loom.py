@@ -28,6 +28,7 @@ from .bodies import COMMANDS, TABLE, Observation, decide, fact_for, row_for, sta
 from .faces import propose, proposal_line
 from .health import Health, degraded_line
 from .since import since_gone
+from .update import Updater, moved_line
 from .home import Home, atomic_write, is_channel, mint, notice_id
 from .ledger import LedgerView, kind_facts, LedgerConflict, append, read_facts
 from .registry import KINDS
@@ -551,6 +552,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                         attachments=attachments, reply_context=reply_context,
                         repaired=_repaired(facts, strand, gen),
                         degraded=degraded_line(facts, home.install_id()),
+                        moved=moved_line(facts, strand, gen, home.install_id()),
                         face=proposal_line(propose(facts, strand, gen, thread)),
                         left=_left(facts, thread, strand),
                         **_budget(home, thread, facts)),
@@ -1405,6 +1407,7 @@ def _boundary(home, facts, strand, gen, context):
         reply_context=_reply_context(facts, context.thread, owed, home.room(strand)),
         repaired=_repaired(facts, strand, gen),
         degraded=degraded_line(facts, home.install_id()),
+        moved=moved_line(facts, strand, gen, home.install_id()),
         face=proposal_line(propose(facts, strand, gen, context.thread)),
         left=_left(facts, context.thread, strand),
         **_budget(home, context.thread, facts),
@@ -1747,6 +1750,23 @@ def _source_fingerprint():
     ]).encode()).hexdigest()
 
 
+#: An open call older than this is a lost post hook, not a body at work.
+IDLE_STALE = 1800
+
+
+def _idle(home: Home) -> bool:
+    """No live body of this install has a tool call open: the loom may move its code."""
+    from . import tooltrace
+    from .router import install_of
+    for strand, _gen in fold(read_facts(home)).holder.values():
+        room = home.room(strand)
+        if install_of(strand) != home.install_id() or not body_alive(room):
+            continue
+        if any(time.time() - call["at"] < IDLE_STALE for call in tooltrace.live(room)["open"]):
+            return False
+    return True
+
+
 def _read_usage(home, usage) -> None:
     for shell in usage.shells(home):
         usage.reading(home, shell)
@@ -1787,6 +1807,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         publisher = Publisher(home, _log, functools.partial(health.guard, backoff=False))
         from .mirror import Mirror
         mirror = Mirror(home, _log)
+        from .receipts import source_root
+        updater = Updater(home, _log, source_root())
         while not (stop is not None and stop.is_set()):
             try:
                 config = load_config(home.root)
@@ -1804,7 +1826,10 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 health.guard("tick_once", tick_once, home, bodies, adapter, core, router)
                 health.guard("publisher", publisher.step, config, router, backoff=False)
                 health.guard("mirror", mirror.step, config, backoff=False)
-            if _source_fingerprint() != fingerprint:
+                # Only at an idle tick, and the re-exec follows in this same pass.
+                health.guard("update", updater.step, config, functools.partial(_idle, home),
+                             backoff=False)
+            if updater.moved is not None or _source_fingerprint() != fingerprint:
                 _log(home, "runtime source changed; re-executing loom")
                 inputs.close()
                 _shutdown(bodies)

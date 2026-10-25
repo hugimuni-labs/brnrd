@@ -2,7 +2,7 @@
 
 The cut is the predecessor's last ``shown`` fact, or the thread's last
 ``attempt.ended`` when that is later. The section opens the wake's loom part:
-restarts and the silence before them, how the predecessor ended, what the loom
+restarts and the silence before them, moves of the loom's code, how the predecessor ended, what the loom
 repaired or fell back on for this strand, notes by outside hands, letters of
 this thread that bounced, and the loop's degradations. Every line names its
 fact. Newest last, capped at ``CAP`` bytes by dropping the oldest lines.
@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 
 from .health import _seconds, open_streaks
+from .update import moved_text
 
 CAP = 1500
 SILENT = 600
@@ -103,6 +104,8 @@ def since_gone(facts, strand: str, gen: int, thread: str, threads: dict[str, str
                 if ("bounced" in (d.get("outcome"), d.get("reason")) and letter is not None
                         and threads.get(str(letter.data.get("from"))) == thread):
                     lines.append((i, f"bounced: your letter {d.get('id')} ({f.id})"))
+        elif f.kind == "loom.moved" and data.get("install") == install:
+            lines.append((i, f"{moved_text(f)} ({f.id})"))
         elif f.kind == "loom.degraded" and f.id in recovered:
             back = recovered[f.id]
             lines.append((i, f"{data.get('step')} degraded at {data.get('since')} and recovered after "

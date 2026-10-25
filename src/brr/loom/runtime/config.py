@@ -70,6 +70,11 @@ KEYS: tuple[Key, ...] = (
         "A body's `gh`: auto uses the forge token above when the home has one, "
         "else the machine's gh login; off signs it out.",
         choices=("auto", "off")),
+    Key("update", "choice", "auto",
+        "How the loom follows new code: dev fast-forwards the checkout it runs from to origin's "
+        "main once main's CI is green, then re-execs at an idle tick; stable is the release "
+        "channel (not built yet); off stays put. auto: dev for a git checkout, else off.",
+        choices=("auto", "dev", "stable", "off")),
     Key("connectors", "names", (),
         "Enabled folders or named channels, e.g. [\"inbox=addon\"]. Home folders override bundled folders; default: none."),
     Key("relay_state", "path", None,

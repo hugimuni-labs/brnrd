@@ -85,6 +85,7 @@ REGISTRY = (
     _kind("loom.started",      "loom",    "install pid commit? loaded",                       "loom",        "global"),
     _kind("loom.degraded",     "loom",    "install step error where since",                   "loom",        "machine"),
     _kind("loom.recovered",    "loom",    "install step since count last",                    "loom",        "machine"),
+    _kind("loom.moved",        "loom",    "install from to merges started",                   "loom",        "global"),
 )
 
 KINDS = {row.kind: row for row in REGISTRY}

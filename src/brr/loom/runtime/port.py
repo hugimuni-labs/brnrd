@@ -84,8 +84,8 @@ def parse_boundary(text: str) -> Boundary:
             settled = line.partition(":")[2].strip()
             current = None
             continue
-        if not line.strip() or line.startswith(("status:", "owed:", "opened:", "budget:", "repaired:", "degraded:", "face? ",
-                                                "left? ")):
+        if not line.strip() or line.startswith(("status:", "owed:", "opened:", "budget:", "repaired:", "degraded:", "moved:",
+                                                "face? ", "left? ")):
             current = None
             continue
         match = _ITEM.match(line)
@@ -211,7 +211,7 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     attachments: dict[str, list[str]] | None = None,
                     reply_context: dict[str, str] | None = None,
                     budget: str = "", over: str = "", repaired: str = "",
-                    degraded: str = "", face: str = "", left: str = "") -> str:
+                    degraded: str = "", face: str = "", left: str = "", moved: str = "") -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
     ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
@@ -228,6 +228,9 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
     if left:
         # What the stop will ask for; never after `` · plan``, so it wakes nobody.
         lines.insert(2, left)
+    if moved:
+        # Its own line too: the jack shows a new one once, at the next post.
+        lines.insert(2, moved)
     if face:
         # Its own line, never after `` · plan``: a proposal is not news that wakes a held body.
         lines.insert(2, face)
