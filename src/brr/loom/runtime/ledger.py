@@ -176,7 +176,11 @@ class LedgerView(list):
         key = fact_order(fact)
         self.maximum = max(self.maximum, key) if self.maximum is not None else key
 
-    def extend(self, facts):
+    def incoming(self, facts) -> tuple[list, bool]:
+        """The batch's new facts in canonical order, and whether they reorder this view.
+
+        Records a displaced duplicate as it goes: call it once per batch.
+        """
         added, displaced = [], False
         for fact in facts:
             old = self.by_id.get(fact.id)
@@ -191,12 +195,20 @@ class LedgerView(list):
                 displaced = True
             added.append(fact)
         if not added:
-            self.delta = ()
-            return
+            return [], False
         # union(delta) validates duplicates/cycles within the incoming batch.
         delta = union(added, duplicates=self.duplicates)
-        repair = (displaced or any(f.id in self.missing for f in delta)
-                  or self.maximum is not None and any(fact_order(f) <= self.maximum for f in delta))
+        return delta, (displaced or any(f.id in self.missing for f in delta)
+                       or self.maximum is not None and any(fact_order(f) <= self.maximum for f in delta))
+
+    def extend(self, facts):
+        self.apply(*self.incoming(facts))
+
+    def apply(self, delta, repair):
+        """Add what ``incoming`` returned, rebuilding this view in place on a reorder."""
+        if not delta:
+            self.delta = ()
+            return
         if repair:
             duplicates = self.duplicates
             ordered = union(self, delta, duplicates=duplicates)
@@ -286,7 +298,9 @@ class LedgerReader:
 
     Only complete lines advance the offset. Replacement, truncation, and
     same-size edits invalidate a stream; removed files leave the union.
-    Callers receive a fresh list because a tick appends its own observations.
+    ``read`` returns a fresh list because a tick appends its own observations.
+    A view ``refresh`` returned only ever grows at its tail: a reorder builds a
+    new view, so a walker on another thread never sees one half-rebuilt.
     """
 
     def __init__(self):
@@ -333,7 +347,13 @@ class LedgerReader:
                                                 duplicates=duplicates))
                 self.ordered.duplicates = duplicates
             else:
-                self.ordered.extend(additions)
+                delta, reorder = self.ordered.incoming(additions)
+                if reorder:
+                    duplicates = list(self.ordered.duplicates)
+                    self.ordered = LedgerView(union(self.ordered, delta, duplicates=duplicates))
+                    self.ordered.duplicates = duplicates
+                else:
+                    self.ordered.apply(delta, reorder)
             self.revision += 1
         self.streams = streams
         return self.ordered
