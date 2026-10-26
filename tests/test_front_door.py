@@ -86,11 +86,14 @@ def _all_configured(monkeypatch, *, connected=True, doors=("telegram",), runner_
 # ── Dispatch ────────────────────────────────────────────────────────
 
 
-def test_bare_argv_opens_the_front_door(monkeypatch):
+def test_bare_argv_runs_the_loom_guided_setup(monkeypatch):
+    from brr.loom.runtime import setup_channel
+
     calls = []
-    monkeypatch.setattr(front_door, "run", lambda: calls.append(True) or 7)
-    assert main([]) == 7
-    assert calls == [True]
+    monkeypatch.setattr(front_door, "run", lambda: calls.append("front_door") or 7)
+    monkeypatch.setattr(setup_channel, "main", lambda argv: calls.append(argv) or 0)
+    assert main([]) == 0
+    assert calls == [[]]
 
 
 def test_a_verb_still_takes_the_ordinary_cli_path(monkeypatch):

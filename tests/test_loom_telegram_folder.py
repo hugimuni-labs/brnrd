@@ -44,6 +44,8 @@ def bot(tmp_path, monkeypatch):
                 if not updates:
                     time.sleep(.01)
                 self.reply(dict(ok=True, result=updates))
+            elif method == 'getMe' and bot.failure == 'getMe':
+                self.reply(dict(ok=False, error_code=401), 401)
             elif method == 'getMe':
                 self.reply(dict(ok=True, result=dict(id=1, is_bot=True, username='ada_bot')))
             elif method == 'getFile':
@@ -172,16 +174,7 @@ def test_command_secret_resolved_at_each_use(bot, tmp_path):
     assert bot.sent
 
 
-def test_telegram_setup_stores_only_private_instance_secret(bot, monkeypatch):
-    import runpy
-    monkeypatch.setenv('BRNRD_STATE', str(bot.state))
-    monkeypatch.setattr('getpass.getpass', lambda _: 'command: printf test-token')
-    runpy.run_path(str(bot.folder / 'setup'), run_name='__main__')
-    assert (bot.state / 'token').stat().st_mode & 0o777 == 0o600
-    assert (bot.state / 'token').read_text().strip() == 'command: printf test-token'
-
-
-def run_setup(bot, monkeypatch, hidden, *visible):
+def run_setup(bot, monkeypatch, *visible):
     import runpy
     answers = iter(visible)
 
@@ -190,21 +183,44 @@ def run_setup(bot, monkeypatch, hidden, *visible):
             return answer
         raise EOFError
     monkeypatch.setenv('BRNRD_STATE', str(bot.state))
-    monkeypatch.setattr('getpass.getpass', lambda _: hidden)
     monkeypatch.setattr('builtins.input', visible_input)
     runpy.run_path(str(bot.folder / 'setup'), run_name='__main__')
 
 
-def test_telegram_setup_reprompts_visibly_after_an_empty_hidden_paste(bot, monkeypatch, capsys):
-    run_setup(bot, monkeypatch, '', '123:ABC-def_9')
-    assert capsys.readouterr().err == 'Received 0 characters.\n'
+def test_telegram_setup_stores_only_private_instance_secret(bot, monkeypatch):
+    run_setup(bot, monkeypatch, 'command: printf test-token')
+    assert (bot.state / 'token').stat().st_mode & 0o777 == 0o600
+    assert (bot.state / 'token').read_text().strip() == 'command: printf test-token'
+
+
+def test_telegram_setup_names_the_bot_the_token_belongs_to(bot, monkeypatch, capsys):
+    run_setup(bot, monkeypatch, '123:ABC-def_9')
+    assert 'This is @ada_bot' in capsys.readouterr().out
     assert (bot.state / 'token').read_text() == '123:ABC-def_9\n'
 
 
-def test_telegram_setup_refuses_a_value_that_is_not_a_token(bot, monkeypatch, capsys):
-    run_setup(bot, monkeypatch, 'ABC-def', 'file: /tmp/tg')
-    assert 'Received 7 characters, which is not a BotFather token' in capsys.readouterr().err
-    assert (bot.state / 'token').read_text() == 'file: /tmp/tg\n'
+def test_telegram_setup_asks_again_when_telegram_refuses_the_token(bot, monkeypatch, capsys):
+    before = (bot.state / 'token').read_text()
+    bot.failure = 'getMe'
+    with pytest.raises(SystemExit, match='No token after 3 tries'):
+        run_setup(bot, monkeypatch, '1:bad', '2:bad', '3:bad')
+    assert capsys.readouterr().err.count('Telegram does not know this token') == 3
+    assert (bot.state / 'token').read_text() == before
+
+
+def test_telegram_setup_reprompts_after_an_empty_paste(bot, monkeypatch, capsys):
+    run_setup(bot, monkeypatch, '', '123:ABC-def_9')
+    assert capsys.readouterr().err.count('Received 0 characters.') == 1
+    assert (bot.state / 'token').read_text() == '123:ABC-def_9\n'
+
+
+def test_telegram_setup_refuses_a_value_that_is_not_a_token(bot, monkeypatch, capsys, tmp_path):
+    (tmp_path / 'tg').write_text('123:ABC\n')
+    run_setup(bot, monkeypatch, 'ABC-def', f'file: {tmp_path}/missing', f'file: {tmp_path}/tg')
+    err = capsys.readouterr().err
+    assert 'Received 7 characters, which is not a BotFather token' in err
+    assert 'missing' in err
+    assert (bot.state / 'token').read_text() == f'file: {tmp_path}/tg\n'
 
 
 def test_telegram_setup_gives_up_after_three_tries_and_keeps_the_old_token(bot, monkeypatch, capsys):
@@ -218,7 +234,7 @@ def test_telegram_setup_gives_up_after_three_tries_and_keeps_the_old_token(bot, 
 def test_telegram_setup_stops_when_input_closes(bot, monkeypatch):
     before = (bot.state / 'token').read_text()
     with pytest.raises(SystemExit, match='input closed'):
-        run_setup(bot, monkeypatch, '')
+        run_setup(bot, monkeypatch)
     assert (bot.state / 'token').read_text() == before
 
 
