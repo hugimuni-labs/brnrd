@@ -849,39 +849,46 @@ def test_cli_install_picks_a_body_with_fuel_and_writes_it(tmp_path, machine, mon
     monkeypatch.setattr(service, "_fuel", lambda h, shell: asked.append(shell) or ("week 80%" if shell == "codex" else None))
     assert _brnrd("loom", "install", "--home", str(home)) == 0
     assert asked == ["claude", "codex"]
-    assert load_config(home).body == "codex/gpt-6"
+    assert _default_body(home) == "codex/gpt-6"
     out = capsys.readouterr().out
     assert "body: codex/gpt-6 (picked: codex has fuel, week 80%; written to" in out
     # The rest of the seeded file is kept.
     assert "# brnrd loom config" in (home / "loom" / "config.toml").read_text()
 
-    # Set once, it is the config's from then on: nothing is probed again.
+    # Set once, it is the preference from then on: nothing is probed again.
     asked.clear()
     assert _brnrd("loom", "install", "--home", str(home)) == 0
     assert asked == []
-    assert "body: codex/gpt-6 (from config)" in capsys.readouterr().out
+    assert "body: codex/gpt-6 (from preferences)" in capsys.readouterr().out
 
 
-def test_cli_install_writes_body_on_the_template_line_so_a_hand_edit_wins(tmp_path, machine, monkeypatch):
+def test_cli_install_writes_the_pick_once_and_a_hand_edit_wins(tmp_path, machine, monkeypatch, capsys):
     """Sasha's home: install appended a second body line below the template's,
-    and a hand edit of the template line lost to it."""
-    from brr.loom.runtime.config import load_config, render_config, seed_config
+    and a hand edit of the template line lost to it. The pick now lives in
+    ``loom/preferences.toml``, said once, and a later install reads it back."""
+    from brr.loom.runtime.config import seed_config
 
     machine("Darwin")
     home = tmp_path / "home"
     seed_config(home)
-    at = render_config().splitlines().index("# body = \"\"")
+    template = (home / "loom" / "config.toml").read_text()
     monkeypatch.setattr(service, "_fuel", lambda h, shell: "session 91% week 76%" if shell == "claude" else None)
     assert _brnrd("loom", "install", "--home", str(home)) == 0
-    path = home / "loom" / "config.toml"
-    lines = path.read_text().splitlines()
-    assert [i for i, l in enumerate(lines) if re.match(r"#?\s*body\s*=", l)] == [at]
-    assert lines[at] == 'body = "claude"'
+    assert (home / "loom" / "config.toml").read_text() == template
+    path = home / "loom" / "preferences.toml"
+    assert path.read_text() == 'model.default = "claude"\n'
 
-    lines[at] = 'body = "claude/opus"'
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text('# mine\nmodel.default = "claude/opus"\n')
+    capsys.readouterr()
     assert _brnrd("loom", "install", "--home", str(home)) == 0
-    assert load_config(home).body == "claude/opus"
+    assert "body: claude/opus (from preferences)" in capsys.readouterr().out
+    assert path.read_text() == '# mine\nmodel.default = "claude/opus"\n'
+
+
+def _default_body(home):
+    from brr.loom.runtime.adapters import _preferences
+    from brr.loom.runtime.home import Home
+    return _preferences(Home(home))[1].get("model.default")
 
 
 def test_cli_install_folds_a_body_set_twice_keeping_the_one_in_effect(tmp_path, machine, monkeypatch, capsys):
@@ -908,8 +915,8 @@ def test_cli_install_with_no_body_writes_the_bare_claude_shell(tmp_path, machine
     seed_config(home)
     monkeypatch.setattr(service, "_fuel", lambda h, shell: "week 80%" if shell == "claude" else None)
     assert _brnrd("loom", "install", "--home", str(home)) == 0
-    assert load_config(home).body == "claude"
-    assert 'body = "claude"' in (home / "loom" / "config.toml").read_text().splitlines()
+    assert _default_body(home) == "claude"
+    assert load_config(home).body is None  # the pick is a preference, not config
     assert "body: claude (picked: claude has fuel, week 80%; written to" in capsys.readouterr().out
 
 
