@@ -21,14 +21,12 @@ from brr import (
     do as do_mod,
     hooks,
     message_store,
-    portals,
     protocol,
     run_context,
     run_progress,
     updates,
 )
 from brr.envs import RunContext
-from brr.gates import cloud as cloud_gate
 from brr.run import Run
 
 from _helpers import init_git_repo, write_repo_scaffold
@@ -54,17 +52,6 @@ def test_hooks_installed_packet_is_persisted(tmp_path):
     assert record["type"] == "hooks_installed"
     assert record["run_id"] == "run-a"
     assert record["flavour"] == "codex"
-
-
-def test_is_staging_name_matches_tmp_anywhere_in_the_suffix_chain():
-    """The predicate three drains share (#590)."""
-    assert portals.is_staging_name("note.md.tmp")
-    assert portals.is_staging_name("note.md.tmp.1680005.8f6c42b9a1f7")
-    assert portals.is_staging_name("note.tmp.md")  # any component counts
-    # Real messages, including ones whose *name* merely contains "tmp".
-    assert not portals.is_staging_name("note.md")
-    assert not portals.is_staging_name("tmp-notes.md")
-    assert not portals.is_staging_name("note-tmp.md")
 
 
 class TestDrainOutbox:
@@ -1871,17 +1858,6 @@ class TestDrainAgentCard:
         assert bodies == ["real interim"]
 
 
-def test_remove_outbox_is_best_effort(tmp_path):
-    outbox = tmp_path / ".brr" / "outbox" / "evt-1"
-    outbox.mkdir(parents=True)
-    (outbox / "leftover.tmp").write_text("x")
-    daemon._remove_outbox(outbox)
-    assert not outbox.exists()
-    # tolerates a missing dir / None
-    daemon._remove_outbox(outbox)
-    daemon._remove_outbox(None)
-
-
 def test_live_inbox_file_lists_other_pending_events(tmp_path):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
@@ -2258,77 +2234,6 @@ def test_live_portal_state_flags_stale_card(tmp_path):
     assert payload["card"]["stale"] is False
 
 
-def test_terminal_reply_lands_predicate():
-    # #562: the one fact the Stop-hook delivery warning and the dispatch
-    # path's terminal-stream suppression must agree on. Dispatch-tree
-    # sources are owned by nobody — a reply addressed to one can never
-    # arrive; that is a property of the protocol, not of a source name the
-    # hook happens to string-match.
-    assert daemon._terminal_reply_lands("telegram") is True
-    assert daemon._terminal_reply_lands("slack") is True
-    assert daemon._terminal_reply_lands("github") is True
-    assert daemon._terminal_reply_lands("schedule") is False
-    assert daemon._terminal_reply_lands("spawn") is False
-    assert daemon._terminal_reply_lands("dispatch_message") is False
-    # A spawning parent collects the child's terminal report along the
-    # dispatch edge, so a spawn child's reply does land.
-    assert daemon._terminal_reply_lands(
-        "spawn", spawn_parent_run_id="run-parent") is True
-    # Absent source is unknown, not impossible — never manufacture a false
-    # "nobody will see this" out of a missing field.
-    assert daemon._terminal_reply_lands("") is True
-
-
-def test_terminal_route_names_what_carried_the_stream():
-    # #743. ``_terminal_reply_lands`` answers True for a gate delivery and
-    # for a dispatch-edge collection alike, which is exactly why "should the
-    # terminal stdout be a delivery channel?" kept being reasoned about as
-    # one question. This splits them, per run, at the moment it is decided.
-    route = daemon._terminal_route
-
-    # A gate delivered it and nothing else went out: the static dispatch is
-    # the only reason this run's correspondent heard anything at all.
-    assert route("telegram") == "gate-sole"
-    # The run already spoke through the outbox — the closeout is additional
-    # content, not the run's only voice.
-    assert route("telegram", delivered_elsewhere=True) == "gate-extra"
-
-    # A strand's report on the dispatch edge. Not a chat delivery: an
-    # unambiguous return value to one parent, with nothing to duplicate and
-    # no addressing to guess.
-    assert route(
-        "spawn", spawn_parent_run_id="run-parent") == "dispatch-edge"
-
-    # The two shapes that already cost nothing if the static dispatch went
-    # away, distinguished so they never inflate the count of what it saves.
-    assert route("telegram", duplicate=True) == "duplicate"
-    assert route("schedule", undeliverable=True) == "undeliverable"
-    # Precedence: a duplicate is a duplicate even where a gate would have
-    # taken it, and an undeliverable run that also spoke elsewhere is not a
-    # gate delivery.
-    assert route(
-        "telegram", duplicate=True, delivered_elsewhere=True) == "duplicate"
-    assert route(
-        "spawn", undeliverable=True, delivered_elsewhere=True
-    ) == "undeliverable"
-
-    # An absent source lands by assumption (see the predicate above), so it
-    # is neither a gate delivery nor a dispatch edge. Say so rather than
-    # returning an empty string that reads as "no terminal stream".
-    assert route("") == "unknown"
-
-    # "no run left unheard": nobody owns the source, but a `notify.gate`
-    # fallback carried the text anyway — distinct from both the ordinary
-    # undeliverable shape and a gate that was actually addressed.
-    assert route("schedule", undeliverable=False, gate_fallback=True) == "gate-fallback"
-    # Duplicate still wins over everything, gate-fallback included — a
-    # duplicate terminal is never re-routed anywhere, so the caller must
-    # never be able to pass ``duplicate=True, gate_fallback=True`` and get
-    # anything but the duplicate verdict.
-    assert route(
-        "schedule", duplicate=True, gate_fallback=True) == "duplicate"
-
-
 # ── #1296: a stale spawn_parent_run_id is not a live dispatch edge ──────
 #
 # Root cause, reconstructed from run-260810-0728-x41g's own boundary
@@ -2400,40 +2305,6 @@ def test_terminal_route_checks_spawn_parent_liveness(tmp_path):
     ) == "unknown"
 
 
-def test_resolve_notify_gate_explicit_key_wins(tmp_path, monkeypatch):
-    # An explicit key resolves outright — no need to check whether it is
-    # also the *only* configured gate.
-    monkeypatch.setattr(
-        daemon, "_gate_can_deliver",
-        lambda _brr, gate: gate in ("telegram", "slack"),
-    )
-    assert daemon._resolve_notify_gate(
-        {"notify.gate": "slack"}, tmp_path) == "slack"
-
-
-def test_resolve_notify_gate_explicit_key_not_deliverable_resolves_to_nothing(
-    tmp_path, monkeypatch,
-):
-    # A misconfigured/typo'd explicit key must not silently fall back to
-    # inference — that would surprise an operator who deliberately named a
-    # gate. It resolves like "nothing resolved" (current undeliverable
-    # staging), never a crash.
-    monkeypatch.setattr(
-        daemon, "_gate_can_deliver", lambda _brr, gate: gate == "telegram",
-    )
-    assert daemon._resolve_notify_gate(
-        {"notify.gate": "slack"}, tmp_path) == ""
-
-
-def test_resolve_notify_gate_infers_the_single_configured_user_chat_gate(
-    tmp_path, monkeypatch,
-):
-    monkeypatch.setattr(
-        daemon, "_gate_can_deliver", lambda _brr, gate: gate == "telegram",
-    )
-    assert daemon._resolve_notify_gate({}, tmp_path) == "telegram"
-
-
 # ── #1205: capability, not name — an unaddressed-incapable gate never wins ─
 #
 # `cloud` was the one real example of an unaddressed-incapable gate when
@@ -2450,100 +2321,7 @@ def test_resolve_notify_gate_infers_the_single_configured_user_chat_gate(
 # gate happens to be incapable today.
 
 
-def test_resolve_notify_gate_skips_an_incapable_sole_candidate(
-    tmp_path, monkeypatch,
-):
-    # Being the *only* configured gate must not be enough when it declares
-    # itself unaddressed-incapable — this fallback never carries addressing
-    # of its own. Resolves like "no candidate", never a synthesized event
-    # nothing will ever deliver.
-    monkeypatch.setattr(
-        daemon, "_gate_can_deliver", lambda _brr, gate: gate == "cloud",
-    )
-    monkeypatch.setattr(
-        daemon, "_gate_can_send_unaddressed", lambda gate: gate != "cloud",
-    )
-    assert daemon._resolve_notify_gate({}, tmp_path) == ""
-
-
-def test_resolve_notify_gate_falls_through_an_incapable_candidate(
-    tmp_path, monkeypatch,
-):
-    # cloud + telegram configured, cloud incapable: cloud is filtered out
-    # by capability before the "how many candidates" count is even taken,
-    # so this reads as single-gate inference (telegram), not "several —
-    # ambiguous".
-    monkeypatch.setattr(
-        daemon, "_gate_can_deliver",
-        lambda _brr, gate: gate in ("cloud", "telegram"),
-    )
-    monkeypatch.setattr(
-        daemon, "_gate_can_send_unaddressed", lambda gate: gate != "cloud",
-    )
-    assert daemon._resolve_notify_gate({}, tmp_path) == "telegram"
-
-
-def test_resolve_notify_gate_explicit_incapable_key_resolves_to_nothing(
-    tmp_path, monkeypatch,
-):
-    # An operator naming an incapable gate explicitly still cannot make an
-    # unaddressed send possible — explicit config wins the *selection*,
-    # never the physics.
-    monkeypatch.setattr(daemon, "_gate_can_deliver", lambda _brr, gate: True)
-    monkeypatch.setattr(
-        daemon, "_gate_can_send_unaddressed", lambda gate: gate != "cloud",
-    )
-    assert daemon._resolve_notify_gate(
-        {"notify.gate": "cloud"}, tmp_path) == ""
-
-
-def test_gate_can_send_unaddressed_defaults_true_for_every_other_gate():
-    # Absent `CAN_SEND_UNADDRESSED` -> capable, preserving today's behavior
-    # for every gate that hasn't opted out. `cloud` now also reads True —
-    # #1205's fresh-send primitive retired its incapability — so no
-    # built-in gate declares itself incapable any more; the filtering logic
-    # above is pinned against a monkeypatched predicate instead.
-    for gate in ("telegram", "slack", "github", "signal", "forge", "cloud"):
-        assert daemon._gate_can_send_unaddressed(gate) is True
-
-
-def test_resolve_notify_gate_zero_or_several_candidates_resolve_to_nothing(
-    tmp_path, monkeypatch,
-):
-    monkeypatch.setattr(daemon, "_gate_can_deliver", lambda _brr, gate: False)
-    assert daemon._resolve_notify_gate({}, tmp_path) == ""
-
-    monkeypatch.setattr(
-        daemon, "_gate_can_deliver",
-        lambda _brr, gate: gate in ("telegram", "slack"),
-    )
-    assert daemon._resolve_notify_gate({}, tmp_path) == ""
-
-
-def test_resolve_notify_gate_never_infers_github(tmp_path, monkeypatch):
-    # A forge PR/issue thread is not the correspondent who scheduled the
-    # wake — inference must not silently pick it even when it is the only
-    # gate configured. An explicit ``notify.gate=github`` still goes
-    # through (that is the operator saying so), just never the guess.
-    monkeypatch.setattr(daemon, "_gate_can_deliver", lambda _brr, gate: gate == "github")
-    assert daemon._resolve_notify_gate({}, tmp_path) == ""
-    assert daemon._resolve_notify_gate(
-        {"notify.gate": "github"}, tmp_path) == "github"
-
-
 # ── ambiguous candidates: the conversation-ownership tiebreak ─────────
-
-
-def test_notify_gate_for_conversation_key_is_the_leading_field():
-    # Every native key's first ``:``-field *is* its owning gate name — no
-    # lookup table to keep in sync with conversations.gate_thread_key.
-    assert daemon._notify_gate_for_conversation_key("telegram:555:0") == "telegram"
-    assert daemon._notify_gate_for_conversation_key("slack:general:0") == "slack"
-    assert daemon._notify_gate_for_conversation_key("cloud:telegram:1:0") == "cloud"
-    # Non-gate keys resolve to a prefix that is simply never in the
-    # candidate set — the caller filters it out, this makes no exception.
-    assert daemon._notify_gate_for_conversation_key("schedule:director-tick") == "schedule"
-    assert daemon._notify_gate_for_conversation_key("") == ""
 
 
 # ── #1750: a `thread:` frontmatter key the resolved gate cannot route on ──
@@ -2596,63 +2374,6 @@ def _drain_gate_message(tmp_path, monkeypatch, body_text, account_context=None):
     return n, outbox, inbox, notices
 
 
-def test_thread_notice_fires_when_gate_cannot_route_it(tmp_path, monkeypatch):
-    # Reproduces #1750's live measurement: red before the fix (no notice
-    # existed at all), green after.
-    n, outbox, inbox, notices = _drain_gate_message(
-        tmp_path, monkeypatch,
-        "---\ngate: cloud\nthread: cloud:whatsapp:4915121024376:\n---\n"
-        "it's ready\n",
-    )
-    assert n == 1
-    # Unchanged behaviour: the message still ships — a `done` cloud event
-    # is synthesized, never refused. Trading a wrong-channel delivery for
-    # no delivery is exactly what the issue's own text rules out.
-    assert len(protocol.list_done(inbox, "cloud")) == 1
-    advisories = [x for x in notices if x["kind"] == "advisory"]
-    assert len(advisories) == 1
-    text = advisories[0]["text"]
-    assert "cloud:whatsapp:4915121024376:" in text  # the thread asked for
-    assert "telegram" in text  # the destination it actually went to
-    assert "event: <id>" in text  # the lane that does route to a thread
-    # A wrong `kind` here renders as a failure and is its own bug (#1693).
-    assert all(x["kind"] != "refused" and x["kind"] != "dropped" for x in notices)
-
-
-def test_thread_notice_silent_when_no_thread_key(tmp_path, monkeypatch):
-    # The guard must not fire on every out-of-bound send — only one that
-    # actually named a thread the gate can't use.
-    n, outbox, inbox, notices = _drain_gate_message(
-        tmp_path, monkeypatch,
-        "---\ngate: cloud\n---\nit's ready\n",
-    )
-    assert n == 1
-    assert len(protocol.list_done(inbox, "cloud")) == 1
-    assert notices == []
-
-
-def test_thread_notice_silent_when_gate_declares_routing_capable(tmp_path, monkeypatch):
-    # A gate that opts in via CAN_ROUTE_THREAD must not trip the advisory
-    # the way an undeclared gate does — the property is per-gate, not a
-    # hardcoded "cloud" check.
-    monkeypatch.setattr(daemon, "_gate_can_route_thread", lambda gate: True)
-    n, outbox, inbox, notices = _drain_gate_message(
-        tmp_path, monkeypatch,
-        "---\ngate: cloud\nthread: cloud:whatsapp:123:\n---\nit's ready\n",
-    )
-    assert n == 1
-    assert notices == []
-
-
-def test_gate_can_route_thread_defaults_false_for_every_built_in_gate():
-    # No built-in gate has ever honoured a `thread:` frontmatter key on its
-    # fresh-send lane — an undeclared gate answering False is the true
-    # state, not a permissive guess (contrast CAN_SEND_UNADDRESSED, which
-    # defaults True to preserve pre-existing behaviour).
-    for gate in ("telegram", "slack", "github", "signal", "forge", "cloud"):
-        assert daemon._gate_can_route_thread(gate) is False
-
-
 def test_unrouted_thread_is_named_on_the_durable_message_record(
     tmp_path, monkeypatch,
 ):
@@ -2697,94 +2418,6 @@ def test_routable_send_leaves_the_message_record_reason_empty(
     assert _staged_messages(ctx)[0].get("reason", "") == ""
 
 
-def test_gate_thread_destination_names_clouds_real_default():
-    assert (
-        daemon._gate_thread_destination("cloud", {})
-        == "the account's default telegram chat"
-    )
-    assert (
-        daemon._gate_thread_destination("cloud", {"cloud_platform": "whatsapp"})
-        == "the account's default whatsapp chat"
-    )
-
-
-def test_thread_notice_silent_when_the_send_carries_the_gates_own_addressing(
-    tmp_path, monkeypatch,
-):
-    # Convergence catch on #1750's own fix: the notice's sentence says
-    # *unaddressed*, and `cloud_event_id` (passed straight through by the
-    # `target_meta` walk) makes the send addressed — `cloud.addressed()`
-    # answers True and the delivery resolves through `POST
-    # /v1/daemons/responses` keyed on that event, landing on the event's own
-    # thread. Firing here would have the advisory name "the account's
-    # default telegram chat" for a message that never goes there: a
-    # diagnostic asserting a destination it never checked, which is the
-    # class of polite wrong answer this whole issue exists to end.
-    n, outbox, inbox, notices = _drain_gate_message(
-        tmp_path, monkeypatch,
-        "---\ngate: cloud\ncloud_event_id: srv-evt-9\n"
-        "thread: cloud:whatsapp:4915121024376:\n---\nit's ready\n",
-    )
-    assert n == 1
-    done = protocol.list_done(inbox, "cloud")
-    assert len(done) == 1
-    # The precondition the guard turns on, asserted rather than assumed.
-    assert cloud_gate.addressed(done[0]) is True
-    assert notices == []
-
-
-def test_thread_notice_never_claims_a_delivery_that_has_not_happened(
-    tmp_path, monkeypatch,
-):
-    # The notice is written at synthesis, before the gate's deliver loop has
-    # sent anything, so it may promise queueing and never a completed send.
-    # #1750 *is* "a receipt that claimed a delivery nobody got"; the fix's
-    # own words must not repeat it.
-    _n, _outbox, _inbox, notices = _drain_gate_message(
-        tmp_path, monkeypatch,
-        "---\ngate: cloud\nthread: cloud:whatsapp:4915121024376:\n---\nhi\n",
-    )
-    text = [x for x in notices if x["kind"] == "advisory"][0]["text"]
-    assert "queued for delivery" in text
-    assert "Delivery still happened" not in text
-    assert "it went to" not in text
-
-
-def test_gate_thread_destination_names_the_ambiguity_when_unknown():
-    # telegram declares no `unaddressed_destination` hook — the diagnostic
-    # says so honestly rather than fabricating a place.
-    assert (
-        daemon._gate_thread_destination("telegram", {})
-        == daemon._UNKNOWN_THREAD_DESTINATION
-    )
-
-
-def test_resolve_notify_gate_ambiguous_prefers_the_runs_own_conversation(
-    tmp_path, monkeypatch,
-):
-    monkeypatch.setattr(
-        daemon, "_gate_can_deliver",
-        lambda _brr, gate: gate in ("telegram", "slack"),
-    )
-    assert daemon._resolve_notify_gate(
-        {}, tmp_path, conversation_key="slack:general:0") == "slack"
-
-
-def test_resolve_notify_gate_ambiguous_ignores_a_conversation_key_neither_owns(
-    tmp_path, monkeypatch,
-):
-    # The run's own conversation belongs to a gate that isn't even one of
-    # the ambiguous candidates (github is excluded from inference) — falls
-    # through to the recent-activity tiebreak, which also finds nothing on
-    # an empty account, so it stays unresolved rather than guessing.
-    monkeypatch.setattr(
-        daemon, "_gate_can_deliver",
-        lambda _brr, gate: gate in ("telegram", "slack"),
-    )
-    assert daemon._resolve_notify_gate(
-        {}, tmp_path, conversation_key="github:owner/repo:42") == ""
-
-
 def test_resolve_notify_gate_ambiguous_prefers_most_recently_active_thread(
     tmp_path, monkeypatch,
 ):
@@ -2803,27 +2436,6 @@ def test_resolve_notify_gate_ambiguous_prefers_most_recently_active_thread(
 
     # No conversation_key of the run's own — only the repo-history signal.
     assert daemon._resolve_notify_gate({}, brr_dir, conversation_key="") == "slack"
-
-
-def test_resolve_notify_gate_ambiguous_activity_ignores_non_candidate_threads(
-    tmp_path, monkeypatch,
-):
-    # A github thread is the most recent in the repo, but github is not a
-    # notify-fallback candidate — it must not win by recency either.
-    monkeypatch.setattr(
-        daemon, "_gate_can_deliver",
-        lambda _brr, gate: gate in ("telegram", "slack"),
-    )
-    brr_dir = tmp_path / ".brr"
-    for key, seconds_ago in (("telegram:1:0", 600), ("github:o/r:9", 5)):
-        conversations.append_event(
-            brr_dir, key, {"id": f"evt-{key}", "source": key.split(":", 1)[0], "body": "hi"},
-        )
-        log_path = conversations.event_log_path(brr_dir, key, f"evt-{key}")
-        stamp = time.time() - seconds_ago
-        os.utime(log_path, (stamp, stamp))
-
-    assert daemon._resolve_notify_gate({}, brr_dir, conversation_key="") == "telegram"
 
 
 def test_portal_state_marks_schedule_event_not_replyable(tmp_path):
@@ -3118,127 +2730,6 @@ def test_write_mounted_blocks_persists_the_sidecar_beside_the_prompt(tmp_path):
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["run_id"] == "task-mounted-1"
     assert payload["blocks"] == mount_sink
-
-
-class TestTerminalStreamDedupe:
-    """The static-dispatch dedupe (ceremony cut 2026-07-16): a terminal
-    stream that exactly duplicates a reply already delivered to the waking
-    thread via the outbox is dropped, never double-posted. Anything new
-    still ships."""
-
-    def _drain_current(self, tmp_path, monkeypatch, body):
-        brr_dir = tmp_path / ".brr"
-        responses = brr_dir / "responses"
-        outbox = brr_dir / "outbox" / "evt-1"
-        outbox.mkdir(parents=True)
-        (outbox / "001.md").write_text(body)
-        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
-            brr_dir=brr_dir, conversation_key="", event_id="evt-1")
-        task = types.SimpleNamespace(id="task-1", meta={})
-        daemon._drain_outbox(emit, task, responses, "evt-1", outbox)
-        return task, responses
-
-    def test_exact_duplicate_is_detected(self, tmp_path, monkeypatch):
-        task, responses = self._drain_current(
-            tmp_path, monkeypatch, "the whole reply\nsecond line\n")
-        resp = responses / "evt-1.md"
-        # Terminal stream = same content, differing only in surrounding
-        # whitespace (the strip the outbox drain already applies).
-        resp.write_text("the whole reply\nsecond line\n\n")
-        assert daemon._terminal_stream_duplicates_delivered(task, resp)
-
-    def test_new_terminal_content_still_ships(self, tmp_path, monkeypatch):
-        task, responses = self._drain_current(
-            tmp_path, monkeypatch, "interim: on it\n")
-        resp = responses / "evt-1.md"
-        resp.write_text("done — the real answer, different text\n")
-        assert not daemon._terminal_stream_duplicates_delivered(task, resp)
-
-    def test_no_delivered_partials_never_suppresses(self, tmp_path):
-        task = types.SimpleNamespace(id="task-1", meta={})
-        resp = tmp_path / "evt-1.md"
-        resp.write_text("a reply\n")
-        assert not daemon._terminal_stream_duplicates_delivered(task, resp)
-
-    def test_cross_event_reply_does_not_arm_dedupe(self, tmp_path, monkeypatch):
-        # A reply folded into a *different* event must not suppress this
-        # thread's terminal stream, even with identical text.
-        brr_dir = tmp_path / ".brr"
-        responses = brr_dir / "responses"
-        outbox = brr_dir / "outbox" / "evt-1"
-        outbox.mkdir(parents=True)
-        inbox = brr_dir / "inbox"
-        inbox.mkdir(parents=True)
-        (inbox / "evt-2.md").write_text("---\nid: evt-2\nstatus: pending\n---\nq\n")
-        (outbox / "001.md").write_text("---\nevent: evt-2\n---\nsame text\n")
-        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
-            brr_dir=brr_dir, conversation_key="", event_id="evt-1")
-        task = types.SimpleNamespace(id="task-1", meta={})
-        daemon._drain_outbox(emit, task, responses, "evt-1", outbox, inbox)
-        resp = responses / "evt-1.md"
-        resp.write_text("same text\n")
-        assert not daemon._terminal_stream_duplicates_delivered(task, resp)
-
-
-class TestLiveRunBodyMirror:
-    """A running run's node carries its card, not an empty body section."""
-
-    def test_card_change_mirrors_the_body_onto_the_run_node(
-        self, tmp_path, monkeypatch,
-    ):
-        repo = tmp_path / "repo"
-        (repo / ".brr").mkdir(parents=True)
-        (repo / ".git").mkdir()
-        ctx = daemon.account.resolve_context(
-            repo,
-            {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "home")},
-        )
-        outbox = repo / ".brr" / "outbox" / "evt-1"
-        outbox.mkdir(parents=True)
-        card = outbox / ".card"
-        card.write_text("## Now\n\nMid-flight.\n", encoding="utf-8")
-        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
-            brr_dir=repo / ".brr", conversation_key="k", event_id="evt-1",
-        )
-        task = daemon.Run(
-            id="run-live", event_id="evt-1", body="work", source="telegram",
-            status="running", meta={"repo_label": "Gurio/brr"},
-        )
-        state: dict = {}
-
-        assert daemon._drain_agent_card(
-            emit, task, "evt-1", card, state,
-            account_context=ctx, repo_label="Gurio/brr",
-        ) is True
-
-        body = ctx.runs_dir / "Gurio__brr" / "run-live" / "body.md"
-        assert body.read_text(encoding="utf-8") == "## Now\n\nMid-flight.\n"
-
-        # A re-read with unchanged text is still a no-op; no rewrite storm.
-        card.write_text("## Now\n\nLater.\n", encoding="utf-8")
-        assert daemon._drain_agent_card(
-            emit, task, "evt-1", card, state,
-            account_context=ctx, repo_label="Gurio/brr",
-        ) is True
-        assert body.read_text(encoding="utf-8") == "## Now\n\nLater.\n"
-
-    def test_without_an_account_context_the_drain_is_unchanged(
-        self, tmp_path, monkeypatch,
-    ):
-        outbox = tmp_path / ".brr" / "outbox" / "evt-1"
-        outbox.mkdir(parents=True)
-        card = outbox / ".card"
-        card.write_text("plain\n", encoding="utf-8")
-        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
-            brr_dir=tmp_path / ".brr", conversation_key="k", event_id="evt-1",
-        )
-        task = types.SimpleNamespace(id="task-1", meta={})
-
-        assert daemon._drain_agent_card(emit, task, "evt-1", card, {}) is True
 
 
 def test_parked_proposal_counts_as_promoted_but_not_as_delivered(

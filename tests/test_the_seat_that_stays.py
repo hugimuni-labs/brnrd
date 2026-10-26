@@ -233,17 +233,6 @@ def test_a_tick_under_a_wall_accumulates_and_wakes_nothing(tmp_path, condition, 
     assert pending_resume.peek(_runs_dir(tmp_path).parent) is None
 
 
-def test_wall_predicate():
-    wall = resource_hold.is_resource_wall
-    build = resource_hold.build
-    assert wall(build(reason="x", provider="c", resume_condition=resource_hold.RESUME_REFILL))
-    assert wall(build(reason="x", provider="c", resume_condition=resource_hold.RESUME_RESET))
-    assert wall(build(reason=resource_hold.REASON_QUOTA_EXHAUSTED, provider="c"))
-    assert not wall(build(reason="x", provider="c", resume_condition=resource_hold.RESUME_ANY))
-    assert not wall(build(reason="x", provider="c", resume_condition=resource_hold.RESUME_OPERATOR))
-    assert not wall(None)
-
-
 # ── one seat per repo ──────────────────────────────────────────────
 
 

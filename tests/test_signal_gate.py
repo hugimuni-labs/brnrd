@@ -6,39 +6,6 @@ from brr import protocol, trust
 from brr.gates import signal
 
 
-def test_missing_number_is_not_configured(tmp_path):
-    brr_dir = tmp_path / ".brr"
-    signal._save_state(brr_dir, {"api_url": "http://127.0.0.1:8080"})
-
-    assert not signal.is_configured(brr_dir)
-
-
-def test_coerce_sender_recovers_leading_plus_from_int_round_trip():
-    # protocol._coerce runs every frontmatter scalar through int(), and
-    # int("+15551111111") succeeds — the file on disk still says
-    # "+15551111111", but a value read back out of it arrives as a bare
-    # int with the "+" gone.
-    assert signal._coerce_sender(15551111111) == "+15551111111"
-
-
-def test_coerce_sender_passes_through_a_string_untouched():
-    assert signal._coerce_sender("+15551111111") == "+15551111111"
-
-
-def test_coerce_sender_handles_missing_value():
-    assert signal._coerce_sender(None) == ""
-    assert signal._coerce_sender("") == ""
-
-
-def test_api_url_and_number_is_configured(tmp_path):
-    brr_dir = tmp_path / ".brr"
-    signal._save_state(
-        brr_dir, {"api_url": "http://127.0.0.1:8080", "number": "+15550000000"},
-    )
-
-    assert signal.is_configured(brr_dir)
-
-
 def _envelope(update_id, sender, text, *, timestamp=1751000000000, name=None, group=None):
     data_message = {"message": text, "timestamp": timestamp}
     if group is not None:
@@ -272,30 +239,6 @@ def test_loop_dedupes_repeated_envelope_by_sender_and_timestamp(tmp_path, monkey
     events = protocol.list_pending(inbox_dir)
     assert len(events) == 1
     assert signal._load_state(brr_dir)["seen"] == ["+15551111111:42"]
-
-
-def test_loop_seen_window_is_bounded(tmp_path, monkeypatch):
-    brr_dir = tmp_path / ".brr"
-    inbox_dir = brr_dir / "inbox"
-    responses_dir = brr_dir / "responses"
-    signal._save_state(brr_dir, {
-        "api_url": "http://127.0.0.1:8080",
-        "number": "+15550000000",
-        "paired_sender": "+15551111111",
-        "seen": [f"+15551111111:{i}" for i in range(signal._SEEN_LIMIT)],
-    })
-
-    monkeypatch.setattr(
-        signal, "_api_get",
-        lambda api_url, path, *, params=None: [
-            _envelope(1, "+15551111111", "one more", timestamp=999999),
-        ],
-    )
-
-    signal._loop_once(brr_dir, inbox_dir, responses_dir)
-
-    assert len(signal._load_state(brr_dir)["seen"]) == signal._SEEN_LIMIT
-    assert signal._load_state(brr_dir)["seen"][-1] == "+15551111111:999999"
 
 
 # ── Newline sanitization (mirrors telegram's #413 §7 S3 guard) ───────

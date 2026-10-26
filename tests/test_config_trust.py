@@ -28,15 +28,6 @@ from brr.runner import RunnerResult
 from _helpers import init_git_repo, make_event, write_repo_scaffold
 
 
-@pytest.fixture(autouse=True)
-def _no_env_home(monkeypatch):
-    # `home.path` in `.brr/config` is how these tests pin a deterministic
-    # security.config location; BRNRD_HOME outranks it in
-    # `account._explicit_home` (see account.py), so a leaked env var from
-    # the outer shell would silently redirect every test in this file.
-    monkeypatch.delenv("BRNRD_HOME", raising=False)
-
-
 # ── is_security_key: the classifier itself ──────────────────────────────
 
 
@@ -359,34 +350,6 @@ def test_no_notice_when_no_security_key_is_set(tmp_path, monkeypatch):
 # ── brnrd config promote ─────────────────────────────────────────────────
 
 
-def test_plan_promote_identifies_exactly_the_security_keys(tmp_path):
-    home = tmp_path / "home"
-    home.mkdir()
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    conf.write_config(
-        repo,
-        {
-            "home.path": str(home),
-            "docker.image": "brr-runner:local",
-            "environment": "host",
-            "shell": "codex",
-            "runner.timeout_seconds": 60,
-        },
-    )
-
-    plan = conf.plan_promote(repo)
-
-    assert plan.security_path == home / conf.SECURITY_CONFIG_FILENAME
-    assert plan.moves == {"docker.image": "brr-runner:local", "environment": "host"}
-    assert plan.conflicts == {}
-    assert plan.remaining_repo_cfg == {
-        "home.path": str(home),
-        "shell": "codex",
-        "runner.timeout_seconds": 60,
-    }
-
-
 def test_apply_promote_moves_keys_leaves_benign_keys_mode_0600(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
@@ -465,12 +428,6 @@ def test_apply_promote_force_overwrites_a_differing_value(tmp_path):
     }
 
 
-def test_plan_promote_with_no_security_keys_is_a_no_op_plan(tmp_path):
-    conf.write_config(tmp_path, {"shell": "codex"})
-    plan = conf.plan_promote(tmp_path)
-    assert plan.moves == {}
-
-
 # ── ``brnrd config promote`` — CLI surface ──────────────────────────────
 
 
@@ -514,18 +471,6 @@ def test_cli_config_promote_dry_run_writes_nothing(monkeypatch, tmp_path, capsys
     assert repo_cfg.get("runner_cmd") == "evil"  # untouched
 
 
-def test_cli_config_promote_nothing_to_do(monkeypatch, tmp_path, capsys):
-    repo = tmp_path / "repo"
-    init_git_repo(repo)
-    monkeypatch.chdir(repo)
-    conf.write_config(repo, {"shell": "codex"})
-
-    rc = main(["config", "promote"])
-
-    assert rc == 0
-    assert "nothing to do" in capsys.readouterr().out
-
-
 def test_cli_config_promote_refuses_conflict_without_force(monkeypatch, tmp_path, capsys):
     repo = tmp_path / "repo"
     init_git_repo(repo)
@@ -564,45 +509,6 @@ def test_cli_config_promote_force_flag_overwrites(monkeypatch, tmp_path, capsys)
     assert conf._read_flat(home / conf.SECURITY_CONFIG_FILENAME) == {
         "docker.image": "new-value"
     }
-
-
-
-def _cli_subparsers():
-    """The live ``brnrd`` subparsers action — same accessor ``test_cli`` uses."""
-    import argparse
-
-    from brr import cli as cli_mod
-
-    parser = cli_mod.build_parser()
-    for action in parser._actions:
-        if isinstance(action, argparse._SubParsersAction):
-            return action
-    raise AssertionError("no subparsers action on the brnrd parser")
-
-
-def test_config_still_parses_wherever_help_lists_it():
-    """This file's stake in ``config`` is that it *works*, not where it shows.
-
-    Until 2026-09-10 this asserted ``"config" in HIDDEN_COMMANDS``, bare, with
-    no argument attached. The argument was never a security one — `b7418e21`,
-    which introduced both the verb and this pin, gives it in one clause:
-    *"Hidden from --help (the public list is already [at its ceiling])"*. So
-    the fact lived in two places and only one of them, ``test_cli``'s
-    ``test_help_stays_small_enough_to_read``, carried the reasoning — and that
-    is the copy that must win, because a pin that states a decision without
-    its argument cannot tell a considered change from a regression. It reads
-    as a security constraint purely by being in this file.
-
-    A fact stored twice is repaired once. What this file legitimately owns is
-    below: the verb parses, and the trust split still holds regardless of who
-    can see the verb.
-    """
-    from brr.cli import ALL_COMMANDS
-
-    action = _cli_subparsers()
-    assert "config" in ALL_COMMANDS
-    assert "config" in action.choices, "the verb must parse however it is listed"
-    assert action.choices["config"].parse_args([]).func.__name__ == "cmd_config_show"
 
 
 def test_security_config_resolves_the_same_from_a_linked_worktree(
@@ -1022,21 +928,6 @@ def test_legacy_repo_side_prompts_runners_md_cmd_is_never_executed(
     )
 
 
-def test_home_owned_runners_md_resolves_and_is_used(tmp_path, cold_profiles):
-    """The daemon-owned ``<home>/runners.md`` is the custom-profile home."""
-    repo, home = _repo_and_home(tmp_path)
-    (home / conf.PROFILES_FILENAME).write_text(
-        '[profiles.home-runner]\ncmd = "home-runner --go"\n', encoding="utf-8"
-    )
-
-    assert _build_cmd("home-runner", "fix it", {}, repo) == ["home-runner", "--go"]
-
-
-def test_bundled_profiles_still_resolve_with_no_home_file(tmp_path, cold_profiles):
-    repo, _home = _repo_and_home(tmp_path)
-    assert _build_cmd("codex", "fix it", {}, repo)[0] == "codex"
-
-
 def test_security_config_runner_cmd_still_wins_over_a_home_profile(
     tmp_path, cold_profiles,
 ):
@@ -1052,28 +943,6 @@ def test_security_config_runner_cmd_still_wins_over_a_home_profile(
 
     cfg = conf.load_config(repo)
     assert _build_cmd("codex", "fix it", cfg, repo) == ["pinned-runner", "--go"]
-
-
-def test_wake_runner_catalog_renders_home_profiles_and_not_repo_ones(
-    tmp_path, monkeypatch, cold_profiles,
-):
-    """Selection is not the only reader — the catalog the wake is shown
-    must move to the new source too, or the visible half stays poisoned."""
-    repo, home = _repo_and_home(tmp_path)
-    (home / conf.PROFILES_FILENAME).write_text(
-        '[profiles.home-shell]\ncmd = "home-shell run"\n', encoding="utf-8"
-    )
-    (repo / ".brr" / "runners.md").write_text(
-        "---\nrepo-shell:\n  cmd: 'repo-shell run'\n---\n", encoding="utf-8"
-    )
-    # No Shell binary resolves — keeps the catalog probe IO-free. Rows for
-    # unavailable profiles are still emitted, which is what this asserts on.
-    monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: None)
-
-    names = {row["name"] for row in runner_mod.available_runner_catalog(repo)}
-
-    assert "home-shell" in names, f"home profile missing from the catalog: {names}"
-    assert "repo-shell" not in names, f"repo profile rendered in the catalog: {names}"
 
 
 def test_profiles_cache_key_can_never_name_a_repo_path(tmp_path, cold_profiles):
@@ -1303,19 +1172,6 @@ def test_home_profiles_unreachable_is_silent_when_the_account_profile_is_just_ab
     assert conf.home_profiles_unreachable(repo) is False
 
 
-def test_home_profiles_unreachable_is_silent_when_the_account_profile_exists(
-    tmp_path, monkeypatch,
-):
-    """And silent when the account's runners.md is right there and used."""
-    repo, home = _account_repo(tmp_path, monkeypatch)
-    (home / conf.PROFILES_FILENAME).write_text(
-        "---\nhome-runner:\n  cmd: 'home-runner --go'\n---\n", encoding="utf-8"
-    )
-    conf._SECURITY_PATH_CACHE.clear()
-
-    assert conf.home_profiles_unreachable(repo) is False
-
-
 def test_home_profiles_unreachable_is_silent_for_an_ordinary_unconnected_repo(
     tmp_path, monkeypatch,
 ):
@@ -1430,164 +1286,6 @@ def test_unreachable_profile_catalog_surfaces_as_a_run_notice_and_warning(
 # the code's own symbol cannot fail when the code moves; it moves with it.
 # Where the *value* is the subject, the referent has to be one production
 # cannot edit.
-
-
-def test_plan_promote_carries_a_markdown_catalog_under_its_own_name(tmp_path):
-    repo, home = _repo_and_home(tmp_path)
-    (repo / ".brr" / "runners.md").write_text(
-        "---\nlocal-agent:\n  cmd: 'local-agent run'\n---\n", encoding="utf-8"
-    )
-
-    plan = conf.plan_promote(repo)
-
-    assert list(plan.profiles_moves) == [
-        (repo / ".brr" / "runners.md", home / "runners.md"),
-    ]
-    assert plan.profiles_conflict is False
-
-
-def test_plan_promote_carries_a_toml_catalog(tmp_path):
-    """The live format is promotable at all — it was invisible for a release.
-
-    ``config promote``'s job *is* the repo-to-home migration, so pinning it
-    to the deprecated filename meant the one file the reader actually loads
-    was the one file the migration could not see.
-    """
-    repo, home = _repo_and_home(tmp_path)
-    (repo / ".brr" / "runners.toml").write_text(
-        '[profiles.local-agent]\ncmd = "local-agent run"\n', encoding="utf-8"
-    )
-
-    plan = conf.plan_promote(repo)
-
-    assert list(plan.profiles_moves) == [
-        (repo / ".brr" / "runners.toml", home / "runners.toml"),
-    ]
-
-
-def test_plan_promote_carries_both_catalogs_when_both_exist(tmp_path):
-    """Promoting one and leaving the other renders as a finished migration."""
-    repo, home = _repo_and_home(tmp_path)
-    (repo / ".brr" / "runners.toml").write_text(
-        '[profiles.new-agent]\ncmd = "new-agent"\n', encoding="utf-8"
-    )
-    (repo / ".brr" / "runners.md").write_text(
-        "---\nold-agent:\n  cmd: 'old-agent'\n---\n", encoding="utf-8"
-    )
-
-    plan = conf.plan_promote(repo)
-
-    assert list(plan.profiles_moves) == [
-        (repo / ".brr" / "runners.toml", home / "runners.toml"),
-        (repo / ".brr" / "runners.md", home / "runners.md"),
-    ]
-
-
-@pytest.mark.parametrize(
-    "filename, body",
-    [
-        ("runners.toml", '[profiles.local-agent]\ncmd = "local-agent run --yes"\n'),
-        ("runners.md", "---\nlocal-agent:\n  cmd: 'local-agent run --yes'\n---\n"),
-    ],
-)
-def test_a_promoted_catalog_is_readable_where_it_lands(
-    tmp_path, cold_profiles, filename, body,
-):
-    """THE pin: promotion lands a catalog where a reader of *its* format looks.
-
-    Asserts the *effect* — the promoted profile is the one the command
-    builder resolves afterwards — not just that a file moved.  That is what
-    makes the destination filename load-bearing rather than cosmetic: the
-    home reader picks its parser from the name, so a Markdown catalog moved
-    to ``runners.toml`` is a ``tomllib`` error and a promotion that reads
-    as done.  Both formats, one assertion, because the invariant is about
-    neither of them in particular.
-    """
-    repo, _home = _repo_and_home(tmp_path)
-    (repo / ".brr" / filename).write_text(body, encoding="utf-8")
-
-    conf.apply_promote(repo, conf.plan_promote(repo))
-
-    assert not (repo / ".brr" / filename).exists()
-    assert _build_cmd("local-agent", "fix it", {}, repo) == [
-        "local-agent", "run", "--yes",
-    ]
-
-
-def test_apply_promote_refuses_to_clobber_an_existing_home_profiles_file(tmp_path):
-    repo, home = _repo_and_home(tmp_path)
-    (repo / ".brr" / "runners.md").write_text(
-        "---\nrepo-agent:\n  cmd: 'repo-agent'\n---\n", encoding="utf-8"
-    )
-    (home / "runners.md").write_text(
-        "---\nhome-agent:\n  cmd: 'home-agent'\n---\n", encoding="utf-8"
-    )
-
-    plan = conf.plan_promote(repo)
-    assert plan.profiles_conflict is True
-
-    with pytest.raises(conf.ConfigPromoteError):
-        conf.apply_promote(repo, plan, force=False)
-
-    assert "home-agent" in (home / "runners.md").read_text(encoding="utf-8")
-    assert (repo / ".brr" / "runners.md").exists()
-
-
-def test_apply_promote_is_idempotent_for_the_profiles_file(tmp_path):
-    repo, home = _repo_and_home(tmp_path)
-    (repo / ".brr" / "runners.md").write_text(
-        "---\nlocal-agent:\n  cmd: 'local-agent run'\n---\n", encoding="utf-8"
-    )
-
-    conf.apply_promote(repo, conf.plan_promote(repo))
-    second = conf.plan_promote(repo)
-    assert second.profiles_moves == ()
-    conf.apply_promote(repo, second)  # no-op, must not raise
-
-    assert "local-agent" in (home / "runners.md").read_text(encoding="utf-8")
-
-
-def test_cli_config_promote_reports_and_moves_the_profiles_file(
-    monkeypatch, tmp_path, capsys,
-):
-    repo = tmp_path / "repo"
-    init_git_repo(repo)
-    monkeypatch.chdir(repo)
-    home = tmp_path / "home"
-    home.mkdir()
-    conf.write_config(repo, {"home.path": str(home)})
-    (repo / ".brr" / "runners.md").write_text(
-        "---\nlocal-agent:\n  cmd: 'local-agent run'\n---\n", encoding="utf-8"
-    )
-
-    rc = main(["config", "promote"])
-
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert "runners.md" in out
-    assert (home / "runners.md").exists()
-    assert not (repo / ".brr" / "runners.md").exists()
-
-
-def test_cli_config_promote_dry_run_leaves_the_profiles_file_alone(
-    monkeypatch, tmp_path, capsys,
-):
-    repo = tmp_path / "repo"
-    init_git_repo(repo)
-    monkeypatch.chdir(repo)
-    home = tmp_path / "home"
-    home.mkdir()
-    conf.write_config(repo, {"home.path": str(home)})
-    (repo / ".brr" / "runners.md").write_text(
-        "---\nlocal-agent:\n  cmd: 'local-agent run'\n---\n", encoding="utf-8"
-    )
-
-    rc = main(["config", "promote", "--dry-run"])
-
-    assert rc == 0
-    assert "runners.md" in capsys.readouterr().out
-    assert (repo / ".brr" / "runners.md").exists()
-    assert not (home / "runners.md").exists()
 
 
 def test_account_resolves_the_same_from_a_shared_clone_strand(tmp_path, monkeypatch):

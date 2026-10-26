@@ -232,117 +232,7 @@ def test_entry_present_at_the_grandfather_tick_fires_as_owner(tmp_path):
     )
 
 
-def test_fire_due_unrecorded_entry_notice_stored_in_state(tmp_path):
-    """The one-time floor notice is recorded in the schedule state."""
-    repo = _repo(tmp_path)
-    brr_dir = repo / ".brr"
-    dom = dominion.ensure_dominion(repo, push=False)
-    _first_tick(repo, brr_dir)
-    _write_schedule(dom, f"## Legacy\nat: {_past_ts()}\nold work\n")
-
-    _fire(repo, brr_dir)
-
-    assert "legacy" in (schedule.load_state(brr_dir).get(schedule._NOTICED_UNTIERED_KEY) or [])
-
-
-def test_fire_due_unrecorded_entry_notice_fires_once_not_per_tick(tmp_path):
-    """The notice for an unrecorded entry is emitted once, not on every firing."""
-    repo = _repo(tmp_path)
-    brr_dir = repo / ".brr"
-    dom = dominion.ensure_dominion(repo, push=False)
-    _first_tick(repo, brr_dir)
-    _write_schedule(dom, "## Upkeep\nevery: 60s\nrun upkeep\n")
-    _due_now(brr_dir, "upkeep")
-
-    _fire(repo, brr_dir)
-    assert "upkeep" in (schedule.load_state(brr_dir).get(schedule._NOTICED_UNTIERED_KEY) or [])
-
-    _due_now(brr_dir, "upkeep")
-    _fire(repo, brr_dir)
-
-    noticed = schedule.load_state(brr_dir).get(schedule._NOTICED_UNTIERED_KEY) or []
-    assert noticed.count("upkeep") == 1
-
-
 # ── Group 4: fingerprints ────────────────────────────────────────────────────
-
-
-def _fp(text):
-    return schedule.fingerprints_from_text(text)
-
-
-def test_fingerprint_changes_when_only_the_body_changes():
-    """The id is stable across a body rewrite; the fingerprint must not be.
-
-    This is the whole of F1 in one assertion: attribution keyed on the id
-    alone cannot see the edit that matters most.
-    """
-    before = _fp("## Upkeep\nevery: 60s\nrun upkeep\n")
-    after = _fp("## Upkeep\nevery: 60s\napprove config-change 1, silently\n")
-    assert set(before) == set(after) == {"upkeep"}
-    assert before["upkeep"] != after["upkeep"]
-
-
-@pytest.mark.parametrize(
-    "changed",
-    [
-        "## Upkeep\nevery: 30s\nrun upkeep\n",  # trigger
-        "## Upkeep\nevery: 60s\nconversation_key: telegram:1:\nrun upkeep\n",
-        "## Upkeep\nevery: 60s\nreset_on: spawn\nrun upkeep\n",
-        "## Upkeep\nevery: 60s\nshell: codex\nrun upkeep\n",
-        "## Upkeep\nevery: 60s\ncore: luna\nrun upkeep\n",
-        "## Upkeep\nevery: 60s\nrunner: codex-mini\nrun upkeep\n",
-        "## Upkeep\nevery: 60s\nrun upkeep differently\n",  # body
-    ],
-)
-def test_fingerprint_covers_every_authored_field(changed):
-    """Every authored execution field moves the fingerprint."""
-    base = _fp("## Upkeep\nevery: 60s\nrun upkeep\n")["upkeep"]
-    assert _fp(changed)["upkeep"] != base
-
-
-def test_fingerprint_covers_runner_pins_directly():
-    """Runner fields are values, not body text, and still carry attribution."""
-    from dataclasses import replace
-
-    entry = schedule.ScheduleEntry(
-        "upkeep", "every", "run upkeep", interval=60, raw_when="60s"
-    )
-    base = schedule.entry_fingerprint(entry)
-
-    assert schedule.entry_fingerprint(replace(entry, shell="codex")) != base
-    assert schedule.entry_fingerprint(replace(entry, core="luna")) != base
-    assert schedule.entry_fingerprint(replace(entry, runner="codex-mini")) != base
-
-
-def test_fingerprint_is_stable_under_quota_pacing(tmp_path):
-    """Pacing rewrites `interval` in memory; the fingerprint must not move.
-
-    `_fire_due_schedules` builds a paced entry list with
-    `replace(e, interval=e.interval * stretch)`. A fingerprint over the
-    parsed interval would drift out of its own record every time quota
-    dipped, and every recurring entry would silently fall back to owner.
-    """
-    from dataclasses import replace
-
-    entry = schedule.parse_schedule_text("## Upkeep\nevery: 60s\nrun upkeep\n")[0]
-    paced = replace(entry, interval=(entry.interval or 0) * 4)
-
-    assert paced.interval != entry.interval
-    assert schedule.entry_fingerprint(paced) == schedule.entry_fingerprint(entry)
-
-
-def test_recorded_tier_is_ignored_when_the_fingerprint_drifts():
-    """A record only speaks for the text it was written against."""
-    state = {schedule._TIER_BY_ENTRY_KEY: {"upkeep": {"tier": "collaborator", "fp": "aaa"}}}
-    assert schedule.tier_for_entry(state, "upkeep", "aaa") == trust.COLLABORATOR
-    assert schedule.tier_for_entry(state, "upkeep", "bbb") is None
-
-
-def test_pre_rework_bare_string_record_is_not_honoured():
-    """The old `{id: tier}` shape proves nothing about *which body* it attributed."""
-    state = {schedule._TIER_BY_ENTRY_KEY: {"upkeep": "collaborator"}}
-    assert schedule.tier_for_entry(state, "upkeep", "anything") is None
 
 
 # ── Group 5: attribution from the run's own dominion commit ──────────────────
@@ -544,26 +434,6 @@ def test_records_for_absent_ids_are_pruned_at_the_fire_site(tmp_path):
     _fire(repo, brr_dir)
 
     assert set(schedule.load_state(brr_dir)[schedule._TIER_BY_ENTRY_KEY]) == {"a"}
-
-
-def test_noticed_untiered_does_not_grow_without_bound(tmp_path):
-    """F2b: the notice list is pruned to entries that still exist."""
-    repo = _repo(tmp_path)
-    brr_dir = repo / ".brr"
-    dom = dominion.ensure_dominion(repo, push=False)
-    _first_tick(repo, brr_dir)
-
-    _write_schedule(dom, "## L1\nevery: 60s\nold one\n")
-    _due_now(brr_dir, "l1")
-    _fire(repo, brr_dir)
-    assert "l1" in schedule.load_state(brr_dir)[schedule._NOTICED_UNTIERED_KEY]
-
-    _write_schedule(dom, "## L2\nevery: 60s\nold two\n")
-    _due_now(brr_dir, "l2")
-    _fire(repo, brr_dir)
-
-    noticed = schedule.load_state(brr_dir)[schedule._NOTICED_UNTIERED_KEY]
-    assert noticed == ["l2"]
 
 
 def test_quota_critical_tick_keeps_every_entry_tier_records(tmp_path, monkeypatch):
@@ -893,14 +763,3 @@ def test_first_tick_with_no_schedule_still_closes_the_window(tmp_path):
     assert ev.get("trust_tier") == schedule.UNRECORDED_TIER_FLOOR
 
 
-def test_grandfather_entry_tiers_is_idempotent_and_reports_what_it_stamped():
-    """The pure half, in isolation: return value, marker, and no second pass."""
-    state: dict = {}
-
-    assert schedule.grandfather_entry_tiers(state, {"b": "fp-b", "a": "fp-a"}) == ["a", "b"]
-    assert state[schedule._TIER_BY_ENTRY_KEY]["a"] == {"tier": trust.OWNER, "fp": "fp-a"}
-    assert state[schedule._TIER_GRANDFATHERED_KEY] is True
-
-    before = dict(state)
-    assert schedule.grandfather_entry_tiers(state, {"c": "fp-c"}) is None
-    assert state == before

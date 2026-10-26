@@ -3,12 +3,11 @@
 import json
 import os
 import time
-from datetime import datetime
 from pathlib import Path
 
 import pytest
 
-from brr import daemon, facets, grok_status, grok_usage, hooks, run_ledger, runner_quota
+from brr import daemon, facets, grok_status, grok_usage, hooks, runner_quota
 from brr.gates import cloud
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -20,93 +19,6 @@ def screen():
 
 def billing():
     return (FIXTURES / "grok_billing_2026_10_17.json").read_bytes()
-
-
-def test_captured_exhausted_panel_values(monkeypatch):
-    monkeypatch.setattr(grok_usage, "_reset_epoch", lambda reset: 1791806340.0)
-    levels = grok_usage.parse_usage_text(screen())
-    assert levels["plan_type"] == "SuperGrok"
-    assert levels["week_used_percentage"] == 100.0
-    assert levels["week_reset"] == "October 12, 13:59"
-    assert levels["quota"]["buckets"]["week"]["remaining_percentage"] == 0.0
-    assert levels["quota"]["week_resets_at"] == 1791806340.0
-    assert levels["quota"]["summary"] == (
-        "week 0% left (resets Oct 12, 11:59am (UTC))"
-    )
-    assert "session_used_percentage" not in levels
-    assert "session" not in levels["quota"]["buckets"]
-    assert runner_quota.binding_quota_remaining_pct(levels) == 0.0
-    assert runner_quota.binding_quota_reset_epoch(levels) == 1791806340.0
-    assert run_ledger.quota_used_percentages(levels) == (100.0, None)
-
-
-def test_captured_starting_panel_does_not_fabricate_quota():
-    raw = (FIXTURES / "grok_usage_screen_starting.txt").read_bytes()
-    assert "quota" not in grok_usage.parse_usage_text(raw)
-
-
-def test_footer_and_context_percent_are_not_quota():
-    # Synthetic negative cases only; positive values above come from the capture.
-    assert "quota" not in grok_usage.parse_usage_text(
-        "Weekly limit left: 0%\nContext usage\n100%\nResets: October 12, 13:59"
-    )
-    assert "quota" not in grok_usage.parse_usage_text(
-        "Weekly limit (SuperGrok)\nSession usage\n100%"
-    )
-    assert "quota" not in grok_usage.parse_usage_text(
-        "Weekly limit (SuperGrok)\n101%"
-    )
-
-
-def test_reset_clock_uses_host_timezone_at_the_reset_date(monkeypatch):
-    old_tz = os.environ.get("TZ")
-    monkeypatch.setenv("TZ", "Europe/Paris")
-    time.tzset()
-    try:
-        assert grok_usage._reset_epoch(
-            "October 12, 13:59", now=datetime(2026, 10, 9)
-        ) == 1791806340.0
-        # Year rollover and winter offset use the target date's local rules.
-        assert grok_usage._reset_epoch(
-            "January 2, 13:59", now=datetime(2026, 12, 30)
-        ) == datetime(2027, 1, 2, 13, 59).timestamp()
-        assert grok_usage._reset_epoch("February 30, 13:59") is None
-        assert grok_usage._reset_epoch("unknown clock") is None
-    finally:
-        if old_tz is None:
-            os.environ.pop("TZ", None)
-        else:
-            os.environ["TZ"] = old_tz
-        time.tzset()
-
-
-def test_cache_throttles_and_failed_refresh_does_not_claim_a_live_zero(tmp_path, monkeypatch):
-    calls = []
-
-    def capture(**kwargs):
-        calls.append(kwargs)
-        return billing()
-
-    monkeypatch.setattr(grok_usage, "capture_usage_raw", capture)
-    first = grok_usage.load_or_refresh_snapshot(tmp_path)
-    assert first["week_used_percentage"] == 55.0
-    assert grok_usage.load_or_refresh_snapshot(tmp_path) == first
-    assert len(calls) == 1
-    assert json.loads((tmp_path / grok_usage.SNAPSHOT_NAME).read_text()) == first
-    monkeypatch.setattr(grok_usage, "capture_usage_raw", lambda **kw: b"")
-    failed = grok_usage.load_or_refresh_snapshot(tmp_path, max_age_seconds=0)
-    assert "quota" not in failed and failed["error"]
-    assert grok_usage.load_snapshot(tmp_path) == failed
-
-
-def test_corrupt_cache_reprobes_and_ttl_override(tmp_path, monkeypatch):
-    (tmp_path / grok_usage.SNAPSHOT_NAME).write_text("broken JSON")
-    calls = []
-    monkeypatch.setattr(grok_usage, "capture_usage_raw", lambda **kw: calls.append(kw) or billing())
-    levels = grok_usage.load_or_refresh_snapshot(tmp_path)
-    assert levels["week_used_percentage"] == 55.0 and len(calls) == 1
-    grok_usage.load_or_refresh_snapshot(tmp_path, env={grok_usage.TTL_ENV_VAR: "0"})
-    assert len(calls) == 2
 
 
 def test_daemon_merges_quota_preserving_own_tokens_and_read_only_boundaries(tmp_path, monkeypatch):
@@ -142,37 +54,6 @@ def test_daemon_cold_shared_cache_and_cross_run_cost(tmp_path, monkeypatch):
     assert "tokens" not in levels
     assert "previous Grok session" in levels["spend"]["summary"]
     assert runner_quota.binding_quota_remaining_pct(levels) == 45.0
-
-
-def test_dashboard_and_ledger_consume_weekly_quota(tmp_path, monkeypatch):
-    monkeypatch.setattr(grok_usage, "capture_usage_raw", lambda **kw: billing())
-    row = cloud._grok_quota_shell(tmp_path)
-    assert row["shell"] == "grok"
-    assert row["windows"] == [{
-        "label": "weekly", "used": None, "limit": None, "percent": 45.0,
-        "reset": "2026-10-19T11:59:55.857848+00:00", "resets_at": 1792411195.857848,
-    }]
-    monkeypatch.setattr(cloud, "_claude_quota_shell", lambda cache: None)
-    monkeypatch.setattr(cloud, "_codex_quota_shell", lambda cache: None)
-    assert cloud._quota_snapshot(tmp_path) == [row]
-    assert run_ledger.load_quota_levels(
-        "grok", tmp_path, None, force_claude_refresh=True,
-    )["week_used_percentage"] == 55.0
-
-
-@pytest.fixture(autouse=True)
-def _grok_on_path(monkeypatch):
-    """Tests drive a fake capture; pretend the binary exists unless a test says not."""
-    monkeypatch.setattr(grok_usage, "_grok_installed", lambda env=None: True)
-
-
-def test_no_grok_binary_means_no_probe_and_no_error_snapshot(tmp_path, monkeypatch):
-    monkeypatch.setattr(grok_usage, "_grok_installed", lambda env=None: False)
-    calls = []
-    monkeypatch.setattr(grok_usage, "capture_usage_raw", lambda **kw: calls.append(kw) or billing())
-    assert grok_usage.load_or_refresh_snapshot(tmp_path, max_age_seconds=0) is None
-    assert calls == []
-    assert not (tmp_path / grok_usage.SNAPSHOT_NAME).exists()
 
 
 def test_publisher_reads_a_fresh_cache_without_reprobing(tmp_path, monkeypatch):

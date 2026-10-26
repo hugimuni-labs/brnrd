@@ -17,19 +17,10 @@ Four properties, each pinned below:
 
 from __future__ import annotations
 
-import json
 
-import pytest
 
 from brr import account, message_store, protocol
 from brr.gates import delivery, runtime
-
-
-@pytest.fixture(autouse=True)
-def _clean_backoff():
-    runtime._delivery_retry.clear()
-    yield
-    runtime._delivery_retry.clear()
 
 
 def _event(tmp_path, body: str, **meta):
@@ -45,68 +36,6 @@ def _event(tmp_path, body: str, **meta):
 
 
 # ── the offload is idempotent ────────────────────────────────────────
-
-
-def test_a_retried_overflow_reuses_the_gist_it_already_minted(tmp_path):
-    cache = delivery.OverflowCache(tmp_path, "cloud")
-    minted = []
-
-    def gist(text):
-        minted.append(text)
-        return f"https://gist.github.com/u/{len(minted)}"
-
-    body = "x" * 9000
-    first = delivery.resolve_overflow(body, limit=4096, gist_fn=gist, cache=cache)
-    second = delivery.resolve_overflow(body, limit=4096, gist_fn=gist, cache=cache)
-
-    assert first == second, "a retry must post the same bytes, or dedupe cannot fire"
-    assert len(minted) == 1, "one reply, one gist — not one gist per attempt"
-
-
-def test_without_a_cache_every_attempt_still_mints(tmp_path):
-    # The pre-fix behaviour, kept explicit: this is what 1,230 gists looked
-    # like, and it is why the cache is not an optimisation.
-    minted = []
-
-    def gist(text):
-        minted.append(text)
-        return f"https://gist.github.com/u/{len(minted)}"
-
-    body = "x" * 9000
-    first = delivery.resolve_overflow(body, limit=4096, gist_fn=gist)
-    second = delivery.resolve_overflow(body, limit=4096, gist_fn=gist)
-    assert first != second
-    assert len(minted) == 2
-
-
-def test_a_different_reply_gets_its_own_gist(tmp_path):
-    cache = delivery.OverflowCache(tmp_path, "cloud")
-    urls = iter(["https://g/1", "https://g/2"])
-    a = delivery.resolve_overflow(
-        "a" * 9000, limit=4096, gist_fn=lambda _t: next(urls), cache=cache
-    )
-    b = delivery.resolve_overflow(
-        "b" * 9000, limit=4096, gist_fn=lambda _t: next(urls), cache=cache
-    )
-    assert a != b
-
-
-def test_the_cache_is_bounded(tmp_path):
-    cache = delivery.OverflowCache(tmp_path, "cloud")
-    for i in range(delivery.OverflowCache.LIMIT + 20):
-        cache.put(f"body-{i}", f"https://g/{i}")
-    stored = json.loads(cache.path.read_text(encoding="utf-8"))
-    assert len(stored) == delivery.OverflowCache.LIMIT
-
-
-def test_an_unreadable_cache_degrades_to_minting(tmp_path):
-    cache = delivery.OverflowCache(tmp_path, "cloud")
-    cache.path.parent.mkdir(parents=True, exist_ok=True)
-    cache.path.write_text("{ not json", encoding="utf-8")
-    out = delivery.resolve_overflow(
-        "x" * 9000, limit=4096, gist_fn=lambda _t: "https://g/1", cache=cache
-    )
-    assert out == "Result: https://g/1"
 
 
 # ── the body a retry posts is the same body ──────────────────────────

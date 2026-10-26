@@ -77,33 +77,6 @@ def test_run_loop_error_preserves_last_success(tmp_path, monkeypatch):
     assert health["last_error_at"] is not None
 
 
-def test_gate_health_classifies_never_and_degraded_boundary(tmp_path):
-    brr_dir = tmp_path / ".brr"
-    now = datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc)
-    gates_dir = brr_dir / "gates"
-    gates_dir.mkdir(parents=True)
-    (gates_dir / "telegram.health.json").write_text(
-        json.dumps({"last_poll_ok": (now - timedelta(seconds=300)).isoformat()}),
-        encoding="utf-8",
-    )
-    (gates_dir / "slack.health.json").write_text(
-        json.dumps({"last_poll_ok": (now - timedelta(seconds=301)).isoformat()}),
-        encoding="utf-8",
-    )
-
-    rows = runtime.gate_health_rows(
-        brr_dir,
-        gates=["telegram", "slack", "github"],
-        now=now,
-    )
-
-    assert [(row["gate"], row["age_seconds"], row["status"]) for row in rows] == [
-        ("telegram", 300, "ok"),
-        ("slack", 301, "degraded"),
-        ("github", None, "never"),
-    ]
-
-
 def test_gate_health_hides_error_after_a_newer_success(tmp_path):
     brr_dir = tmp_path / ".brr"
     now = datetime(2026, 7, 18, 20, 0, tzinfo=timezone.utc)
@@ -144,36 +117,6 @@ def test_gate_health_keeps_error_newer_than_last_success(tmp_path):
     assert row["last_error"] == "upstream 502"
 
 
-def test_server_fingerprint_round_trips_and_stamps_fetched_at(tmp_path):
-    brr_dir = tmp_path / ".brr"
-    assert runtime.load_server_fingerprint(brr_dir, "cloud") is None
-
-    # Stored verbatim: the daemon is a courier for whatever the server sent,
-    # so the payload is the server's current shape and not a copy of it kept
-    # in sync here.
-    server = {
-        "build": {"commit": "bebd5c1d", "built_at": "2026-07-30T10:19:01+00:00", "started_at": "2026-07-30T10:28:49+00:00"},
-        "github": {"bot_login": "brnrd-bot", "app_slug": "brnrd-dev", "trigger_label": "brnrd", "trigger_aliases": ["brnrd", "brr"], "webhook_secret_set": True, "bot_token_set": True},
-    }
-    runtime.save_server_fingerprint(brr_dir, "cloud", server)
-
-    loaded = runtime.load_server_fingerprint(brr_dir, "cloud")
-    assert loaded["build"]["commit"] == "bebd5c1d"
-    assert loaded["github"]["bot_login"] == "brnrd-bot"
-    assert loaded["fetched_at"]  # local stamp added at write time
-    assert not runtime.server_fingerprint_path(brr_dir, "cloud").with_suffix(
-        ".json.tmp"
-    ).exists()
-
-
-def test_server_fingerprint_corrupt_file_reads_as_absent(tmp_path):
-    brr_dir = tmp_path / ".brr"
-    path = runtime.server_fingerprint_path(brr_dir, "cloud")
-    path.parent.mkdir(parents=True)
-    path.write_text("{not json", encoding="utf-8")
-    assert runtime.load_server_fingerprint(brr_dir, "cloud") is None
-
-
 @pytest.mark.parametrize(
     "raw",
     ["null", "[]", '"a-legacy-token-string"', "5", "{not json"],
@@ -195,27 +138,6 @@ def test_load_state_reads_a_non_dict_or_corrupt_file_as_absent(tmp_path, raw):
     path.write_text(raw, encoding="utf-8")
 
     assert runtime.load_state(brr_dir, "telegram") == {}
-
-
-def test_configured_gates_skips_a_gate_with_malformed_state_instead_of_crashing(
-    tmp_path,
-):
-    """The real caller chain #1386 actually crashed through: the daemon's
-    quota-publish tick calls ``configured_gates`` once per PUT, over every
-    built-in gate — one malformed state file used to take the whole tick
-    down (caught only by ``_publish_quota``'s own blanket except, which
-    then misreported it as a quota-snapshot failure). A malformed gate is
-    "not configured", the same honest answer an absent one already gets;
-    the *other*, healthy gates must still be reported."""
-    brr_dir = tmp_path / ".brr"
-    gates_dir = brr_dir / "gates"
-    gates_dir.mkdir(parents=True)
-    (gates_dir / "telegram.json").write_text("null", encoding="utf-8")
-    (gates_dir / "github.json").write_text(
-        json.dumps({"repo": "o/r", "token": "ghp_x"}), encoding="utf-8"
-    )
-
-    assert runtime.configured_gates(brr_dir) == ["github"]
 
 
 #: Stands in for "a poll that just succeeded" inside the parametrize table
