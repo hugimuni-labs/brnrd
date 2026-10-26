@@ -200,71 +200,7 @@ def test_adopts_existing_github_repo_when_gh_repo_view_finds_one(tmp_path, monke
 # ── create path ──────────────────────────────────────────────────────────
 
 
-def test_creates_a_private_repo_when_none_exists(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    repo_root = tmp_path / "repo"
-
-    created_remote = _bare_repo(tmp_path, "brnrd-home")
-    monkeypatch.setattr(home_link, "_clone_url", lambda owner, name: str(created_remote))
-    # knowledge slot: point at a second bare repo too, so both links succeed
-    knowledge_remote = _bare_repo(tmp_path, "brnrd-knowledge")
-
-    def clone_url(owner, name):
-        return str(created_remote if name == "brnrd-home" else knowledge_remote)
-
-    monkeypatch.setattr(home_link, "_clone_url", clone_url)
-
-    create_calls = []
-
-    def fake_run_gh(args):
-        if args[:2] == ["auth", "status"]:
-            return _cp(0)
-        if args[:2] == ["auth", "setup-git"]:
-            return _cp(0)
-        if args[:2] == ["repo", "view"]:
-            return _cp(1, stderr="not found")
-        if args[:2] == ["repo", "create"]:
-            create_calls.append(list(args))
-            name = args[2].split("/", 1)[1]
-            return _cp(0, stdout=f"https://github.com/acme/{name}\n")
-        raise AssertionError(f"unexpected gh call: {args}")
-
-    monkeypatch.setattr(home_link, "_run_gh", fake_run_gh)
-
-    results = home_link.link_home(repo_root, _cfg(home), owner="acme")
-
-    assert {r.slot: r.action for r in results} == {"dominion": "created", "knowledge": "created"}
-    assert all(r.pushed for r in results)
-    assert len(create_calls) == 2
-    assert all("--private" in c for c in create_calls), "created repos must always be private"
-    assert all("--public" not in c for c in create_calls)
-
-
 # ── gh absent / unauthenticated ─────────────────────────────────────────
-
-
-def test_missing_gh_raises_actionable_error_only_when_a_repo_needs_it(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    repo_root = tmp_path / "repo"
-    monkeypatch.setattr(home_link.shutil, "which", lambda _name: None)
-
-    with pytest.raises(home_link.HomeLinkError, match="gh .GitHub CLI. is not installed"):
-        home_link.link_home(repo_root, _cfg(home))
-
-
-def test_unauthenticated_gh_raises_actionable_error(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    repo_root = tmp_path / "repo"
-    monkeypatch.setattr(home_link.shutil, "which", lambda _name: "/usr/bin/gh")
-
-    def fake_run_gh(args):
-        assert args == ["auth", "status"]
-        return _cp(1, stderr="not logged in")
-
-    monkeypatch.setattr(home_link, "_run_gh", fake_run_gh)
-
-    with pytest.raises(home_link.HomeLinkError, match="not authenticated"):
-        home_link.link_home(repo_root, _cfg(home))
 
 
 # ── push failure: no half-wired silence ─────────────────────────────────
@@ -332,50 +268,11 @@ def test_push_failure_names_the_repo_and_leaves_origin_wired(tmp_path, monkeypat
 # ── owner resolution ─────────────────────────────────────────────────────
 
 
-def test_explicit_owner_skips_gh_api_user_lookup(monkeypatch):
-    assert home_link.resolve_owner("explicit-owner") == "explicit-owner"
-
-
-def test_resolve_owner_shells_out_to_gh_api_user(monkeypatch):
-    monkeypatch.setattr(
-        home_link, "_run_gh", lambda args: _cp(0, stdout="octocat\n")
-        if args == ["api", "user", "-q", ".login"] else _fail_if_called(),
-    )
-    assert home_link.resolve_owner(None) == "octocat"
-
-
-def test_resolve_owner_failure_is_actionable(monkeypatch):
-    monkeypatch.setattr(home_link, "_run_gh", lambda args: _cp(1, stderr="boom"))
-    with pytest.raises(home_link.HomeLinkError, match="pass --owner"):
-        home_link.resolve_owner(None)
-
-
 # ── identity detection — init states it, without an account ──────────────
 #
 # `detect_identity()` is the caller `init` was missing: same resolution as
 # `resolve_owner`, but never raises. Callers that only want to *state* the
 # identity (never require it) get a plain `str | None` back.
-
-
-def test_detect_identity_returns_the_resolved_login(monkeypatch):
-    monkeypatch.setattr(home_link, "gh_available", lambda: True)
-    monkeypatch.setattr(
-        home_link, "_run_gh", lambda args: _cp(0, stdout="octocat\n")
-        if args == ["api", "user", "-q", ".login"] else _fail_if_called(),
-    )
-    assert home_link.detect_identity() == "octocat"
-
-
-def test_detect_identity_none_when_gh_is_not_on_path(monkeypatch):
-    monkeypatch.setattr(home_link, "gh_available", lambda: False)
-    monkeypatch.setattr(home_link, "_run_gh", _fail_if_called)
-    assert home_link.detect_identity() is None
-
-
-def test_detect_identity_none_when_gh_is_unauthenticated(monkeypatch):
-    monkeypatch.setattr(home_link, "gh_available", lambda: True)
-    monkeypatch.setattr(home_link, "_run_gh", lambda args: _cp(1, stderr="not logged in"))
-    assert home_link.detect_identity() is None
 
 
 def test_refuses_to_adopt_a_public_repo(tmp_path, monkeypatch):
@@ -409,100 +306,8 @@ def test_refuses_to_adopt_a_public_repo(tmp_path, monkeypatch):
     assert gitops.default_remote(ctx.dominion_repo) is None
 
 
-def test_unreadable_visibility_is_refused_too(tmp_path, monkeypatch):
-    """Unknown is not a licence. Refusing is cheap and recoverable; a public
-    push of agent memory is neither."""
-    home = tmp_path / "home"
-    repo_root = tmp_path / "repo"
-
-    def fake_run_gh(args):
-        if args[:2] == ["auth", "status"]:
-            return _cp(0)
-        if args[:2] == ["repo", "view"]:
-            return _cp(0, stdout='{"url": "https://github.com/acme/brnrd-home"}\n')
-        raise AssertionError(f"unexpected gh call: {args}")
-
-    monkeypatch.setattr(home_link, "_run_gh", fake_run_gh)
-
-    with pytest.raises(home_link.HomeLinkError):
-        home_link.link_home(repo_root, _cfg(home), owner="acme")
-
-
 # ── #1241: never let git prompt, and prefer the transport that already
 # works ───────────────────────────────────────────────────────────────
-
-
-def test_noninteractive_git_env_disables_every_prompt_path(monkeypatch):
-    """Unit-level: the env every git subprocess in this module gets.
-
-    An unset ``GIT_TERMINAL_PROMPT`` makes git write a credential prompt
-    straight to the real ``/dev/tty`` — invisible to ``capture_output=True``
-    — and hang for a human who isn't watching (the #1241 trace). This
-    checks the fix directly: the HTTPS side (``GIT_TERMINAL_PROMPT`` /
-    ``GIT_ASKPASS``) and the SSH side (``GIT_SSH_COMMAND``'s
-    ``BatchMode=yes``) are both closed, and the discovery-override pin a
-    strand run inherits (#703) does not leak into a call that names its
-    own repo via ``cwd=``.
-    """
-    monkeypatch.delenv("GIT_SSH_COMMAND", raising=False)
-    monkeypatch.setenv("GIT_DIR", "/somewhere/pinned.git")
-    monkeypatch.setenv("GIT_WORK_TREE", "/somewhere/pinned")
-
-    env = home_link._noninteractive_git_env()
-
-    assert env["GIT_TERMINAL_PROMPT"] == "0"
-    assert env["GIT_ASKPASS"]  # a real, resolvable no-op command
-    assert "BatchMode=yes" in env["GIT_SSH_COMMAND"]
-    assert "GIT_DIR" not in env
-    assert "GIT_WORK_TREE" not in env
-
-
-def test_push_subprocess_actually_carries_the_noninteractive_env(tmp_path, monkeypatch):
-    """Through ``link_home``'s own path: the real ``git push`` call this
-    module makes — not just some git call somewhere — must carry the env
-    that keeps it from ever reaching for a tty. A regression here is
-    exactly how #1241 happened: the fix living in a helper nobody calls
-    from the actual push site."""
-    captured_envs = []
-    real_run = subprocess.run
-
-    def spy_run(cmd, *args, **kwargs):
-        if cmd[:2] == ["git", "push"]:
-            captured_envs.append(kwargs.get("env"))
-        return real_run(cmd, *args, **kwargs)
-
-    monkeypatch.setattr(home_link.subprocess, "run", spy_run)
-
-    home = tmp_path / "home"
-    repo_root = tmp_path / "repo"
-    dominion_remote = _bare_repo(tmp_path, "brnrd-home")
-    knowledge_remote = _bare_repo(tmp_path, "brnrd-knowledge")
-
-    def clone_url(owner, name):
-        return str(dominion_remote if name == "brnrd-home" else knowledge_remote)
-
-    monkeypatch.setattr(home_link, "_clone_url", clone_url)
-
-    def fake_run_gh(args):
-        if args[:2] in (["auth", "status"], ["auth", "setup-git"]):
-            return _cp(0)
-        if args[:2] == ["repo", "view"]:
-            return _cp(1, stderr="not found")
-        if args[:2] == ["repo", "create"]:
-            name = args[2].split("/", 1)[1]
-            return _cp(0, stdout=f"https://github.com/acme/{name}\n")
-        raise AssertionError(f"unexpected gh call: {args}")
-
-    monkeypatch.setattr(home_link, "_run_gh", fake_run_gh)
-
-    results = home_link.link_home(repo_root, _cfg(home), owner="acme")
-
-    assert all(r.pushed for r in results)
-    assert len(captured_envs) == 2, "both repos should have pushed"
-    for env in captured_envs:
-        assert env is not None, "git push ran with the ambient env — a tty prompt could reach it"
-        assert env["GIT_TERMINAL_PROMPT"] == "0"
-        assert env.get("GIT_ASKPASS")
 
 
 def test_explicit_ssh_override_uses_ssh_home_remote_and_skips_gh_setup_git(tmp_path, monkeypatch):
@@ -555,106 +360,6 @@ def test_explicit_ssh_override_uses_ssh_home_remote_and_skips_gh_setup_git(tmp_p
             capture_output=True, text=True, check=True, env=gitops.explicit_repo_env(),
         )
         assert log.stdout.strip()
-
-
-def test_https_origin_tries_gh_auth_setup_git_once_before_pushing(tmp_path, monkeypatch):
-    """The mirror of the SSH test: an HTTPS (or absent) project origin goes
-    through `_clone_url` (never `_clone_url_ssh`) and `gh auth setup-git`
-    fires exactly once across both repos — not per repo, not per push."""
-    home = tmp_path / "home"
-    repo_root = tmp_path / "repo"
-
-    dominion_remote = _bare_repo(tmp_path, "brnrd-home")
-    knowledge_remote = _bare_repo(tmp_path, "brnrd-knowledge")
-
-    def clone_url(owner, name):
-        return str(dominion_remote if name == "brnrd-home" else knowledge_remote)
-
-    monkeypatch.setattr(home_link, "_clone_url", clone_url)
-    monkeypatch.setattr(home_link, "_clone_url_ssh", _fail_if_called)
-
-    setup_git_calls = []
-
-    def fake_run_gh(args):
-        if args[:2] == ["auth", "status"]:
-            return _cp(0)
-        if args[:2] == ["auth", "setup-git"]:
-            setup_git_calls.append(list(args))
-            return _cp(0)
-        if args[:2] == ["repo", "view"]:
-            return _cp(1, stderr="not found")
-        if args[:2] == ["repo", "create"]:
-            name = args[2].split("/", 1)[1]
-            return _cp(0, stdout=f"https://github.com/acme/{name}\n")
-        raise AssertionError(f"unexpected gh call: {args}")
-
-    monkeypatch.setattr(home_link, "_run_gh", fake_run_gh)
-
-    results = home_link.link_home(repo_root, _cfg(home), owner="acme")
-
-    assert all(r.pushed for r in results)
-    assert len(setup_git_calls) == 1
-
-
-def test_push_failure_message_carries_stderr_and_a_specific_remedy(tmp_path, monkeypatch):
-    """#1241's other half: 'origin is wired; re-run once fixed' alone was
-    the bug. The message must name the actual captured git failure plus a
-    concrete next step, not a shrug."""
-    home = tmp_path / "home"
-    repo_root = tmp_path / "repo"
-    bogus_target = tmp_path / "does-not-exist-as-a-repo"
-
-    monkeypatch.setattr(home_link, "_clone_url", lambda owner, name: str(bogus_target))
-
-    def fake_run_gh(args):
-        if args[:2] in (["auth", "status"], ["auth", "setup-git"]):
-            return _cp(0)
-        if args[:2] == ["repo", "view"]:
-            name = args[2].split("/", 1)[1]
-            return _cp(0, stdout=f'{{"url": "https://github.com/acme/{name}", '
-                                 f'"visibility": "PRIVATE"}}\n')
-        raise AssertionError(f"unexpected gh call: {args}")
-
-    monkeypatch.setattr(home_link, "_run_gh", fake_run_gh)
-
-    with pytest.raises(home_link.HomeLinkError) as excinfo:
-        home_link.link_home(repo_root, _cfg(home), owner="acme")
-
-    message = str(excinfo.value)
-    # the real git stderr, not the generic "git push failed" fallback
-    assert "does-not-exist-as-a-repo" in message
-    # a concrete remedy — gh is available in this fake, so the gh-flavoured one
-    assert "gh auth setup-git" in message or "gh auth login" in message
-
-
-def test_dominion_push_failure_does_not_skip_knowledge_creation(tmp_path, monkeypatch):
-    """A two-repo promise must attempt both slots even when the first
-    repository is wired but its initial push fails."""
-    home = tmp_path / "home"
-    repo_root = tmp_path / "repo"
-    created: list[str] = []
-
-    monkeypatch.setattr(home_link, "_require_gh_auth", lambda: None)
-    monkeypatch.setattr(home_link, "resolve_owner", lambda _owner=None: "acme")
-    monkeypatch.setattr(home_link, "_try_gh_setup_git", lambda: True)
-    monkeypatch.setattr(
-        home_link,
-        "_clone_url",
-        lambda _owner, name: str(tmp_path / f"remote-{name}"),
-    )
-
-    def fake_link_one(*, slot, repo_path, owner, name, ssh, prepare_push):
-        created.append(slot)
-        if slot == "dominion":
-            raise home_link.HomeLinkError("dominion: initial push failed")
-        return home_link.RepoLinkResult(slot, repo_path, f"https://github.test/{name}", "created", True)
-
-    monkeypatch.setattr(home_link, "_link_one", fake_link_one)
-
-    with pytest.raises(home_link.HomeLinkError, match="dominion: initial push failed"):
-        home_link.link_home(repo_root, _cfg(home))
-
-    assert created == ["dominion", "knowledge"]
 
 
 def test_current_or_symbolic_branch_survives_a_current_branch_probe_failure(

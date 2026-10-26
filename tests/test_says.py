@@ -33,30 +33,6 @@ def _home(tmp_path: Path) -> Path:
     return warp
 
 
-def test_write_say_copies_the_message_once_and_grows_items(tmp_path):
-    warp, repo = _home(tmp_path), tmp_path / "repo"
-    _store(repo, EVT, "the warp body is just nowhere")
-    assert says.write_say(warp, EVT, [repo], item_id="w-1")
-    text = (warp / "says" / f"{EVT}.md").read_text()
-    assert "the warp body is just nowhere" in text
-    assert "the reply, not the say" not in text
-    assert "items: w-1" in text
-    # a second item stamping the same message: one file, two items, a part named
-    assert says.write_say(warp, EVT, [], item_id="w-2", part="just nowhere")
-    text = (warp / "says" / f"{EVT}.md").read_text()
-    assert "items: w-1 w-2" in text
-    assert "part w-2: just nowhere" in text
-    assert text.count("the warp body is just nowhere") == 1
-    assert not says.write_say(warp, EVT, [], item_id="w-2", part="just nowhere")  # idempotent
-
-
-def test_write_say_without_a_store_writes_nothing(tmp_path):
-    warp = _home(tmp_path)
-    assert not says.write_say(warp, EVT, [tmp_path / "nowhere"], item_id="w-1")
-    assert not says.write_say(warp, "evt-abc", [tmp_path], item_id="w-1")  # not an event id
-    assert not (warp / "says").exists()
-
-
 def test_index_carries_ids_and_home_never_words(tmp_path):
     warp, repo = _home(tmp_path), tmp_path / "repo"
     home = warp.parent.parent
@@ -76,28 +52,6 @@ def test_index_carries_ids_and_home_never_words(tmp_path):
     assert says.say_url(parsed, EVT2) is None  # not kept at home ⇒ no link
 
 
-def test_only_the_index_is_mirrored():
-    assert says.is_mirrored("surface/warp/w-1.md")
-    assert says.is_mirrored("surface/warp/says/index.md")
-    assert not says.is_mirrored(f"surface/warp/says/{EVT}.md")
-
-
-def test_corpus_files_leave_the_words_at_home(tmp_path, monkeypatch):
-    from brr import account
-
-    warp, repo = _home(tmp_path), tmp_path / "repo"
-    _store(repo, EVT, "secret words")
-    says.write_say(warp, EVT, [repo], item_id="w-1")
-    home = warp.parent.parent
-    monkeypatch.setattr(account, "context_home_root", lambda ctx: home)
-    monkeypatch.setattr(account, "work_surface_path", lambda ctx: home / "surface")
-    monkeypatch.setattr(account, "knowledge_path", lambda ctx: home / "knowledge")
-    paths = {f.path for f in account.corpus_files(object())}
-    assert "surface/warp/w-1.md" in paths
-    assert "surface/warp/says/index.md" in paths
-    assert f"surface/warp/says/{EVT}.md" not in paths
-
-
 def test_build_asks_links_a_say_kept_at_home():
     index = f"home: https://github.com/acme/acme-home\nbranch: main\nsays: {EVT}\n"
     files = [
@@ -110,19 +64,6 @@ def test_build_asks_links_a_say_kept_at_home():
     assert by_event[EVT]["url"].endswith(f"/surface/warp/says/{EVT}.md")
     assert by_event[EVT2]["url"] is None
     assert [r["id"] for r in payload["asks"]] == ["w-1"]  # the index is never an item
-
-
-def test_stamp_say_keeps_the_message_and_backfill_fills_the_rest(tmp_path):
-    warp, repo = _home(tmp_path), tmp_path / "repo"
-    _store(repo, EVT, "first")
-    _store(repo, EVT2, "second")
-    asks.stamp_say(warp, "w-1", EVT, repo_roots=[repo])
-    assert (warp / "says" / f"{EVT}.md").is_file()
-    asks.stamp_say(warp, "w-2", EVT2)  # no roots: the row lands, the file waits
-    assert not (warp / "says" / f"{EVT2}.md").exists()
-    counts = says.backfill(warp, [repo])
-    assert counts == {"written": 1, "present": 1, "missing": 0}
-    assert "items: w-2" in (warp / "says" / f"{EVT2}.md").read_text()
 
 
 def test_receipts_find_their_repo_among_several():

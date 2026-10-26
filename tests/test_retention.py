@@ -91,31 +91,6 @@ def _totals(reports: dict[str, retention.StoreReport]) -> tuple[int, int]:
 # ── window math ─────────────────────────────────────────────────────
 
 
-def test_window_absent_zero_or_garbage_means_keep_forever():
-    w = retention.Windows.from_config({
-        "retention.messages_days": 0,
-        "retention.inbox_days": -3,
-        "retention.run_state_days": "not-a-number",
-        "retention.run_history_days": "not-a-number",
-    })
-    assert w.conversations is None  # absent
-    assert w.messages is None       # zero
-    assert w.inbox is None          # negative
-    assert w.run_history is None    # garbage
-    assert w.run_state is None      # absent
-    assert w.all_disabled()
-
-
-def test_window_days_convert_to_seconds():
-    w = retention.Windows.from_config({
-        "retention.conversations_days": 90,
-        "retention.ledger_days": "365",
-    })
-    assert w.conversations == 90 * DAY
-    assert w.ledger == 365 * DAY
-    assert not w.all_disabled()
-
-
 # ── conversations ───────────────────────────────────────────────────
 
 

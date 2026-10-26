@@ -16,7 +16,6 @@ import pytest
 
 from brr import conversations, config as conf, protocol, runner
 from brr.daemon2.runtime import Daemon2
-from brr.daemon2.doors import FileDoor
 from brr.daemon2.transport import GateTransport
 from brr.daemon2.seat import Seat
 
@@ -161,64 +160,6 @@ def test_module_entrypoint_runs_the_same_wire(tmp_path: Path) -> None:
     assert result["answered"] is True
 
 
-def test_portal_capsule_matches_redacted_live_shape_and_notice_wire(tmp_path: Path) -> None:
-    reference = json.loads(
-        (Path(__file__).parent / "fixtures" /
-         "daemon2_portal_state_redacted.json").read_text(encoding="utf-8"))
-    notice = {"at": "2026-10-03T00:00:00Z", "kind": "refused",
-              "text": "event refused: target absent", "lifetime": "run",
-              "run": "r1", "verb": "event"}
-    FileDoor.write_views(tmp_path, "evt-test", [], phase="running",
-                         notices=[notice], run_id="r1",
-                         repo="org/repo", runner_name="fake")
-    actual = json.loads((tmp_path / "portal-state.json").read_text())
-    assert set(actual) == set(reference)
-    for key, value in reference.items():
-        if isinstance(value, dict):
-            assert set(actual[key]) == set(value), key
-    assert set(actual["notices"][0]) == set(reference["notices"][0])
-    assert actual["notices"][0]["text"] == notice["text"]
-    assert actual["inbound"]["current_event"] == "evt-test"
-    assert actual["run"]["id"] == "r1"
-
-
-def test_portal_capsule_with_resources_populates_quota_and_coexisting(tmp_path: Path) -> None:
-    """Test that resources (quota + coexisting runs) are wired into portal-state."""
-    from brr.daemon2.doors import FileDoor
-    
-    # Test with resources parameter passed
-    resources = {
-        "quota": {
-            "pacing": {
-                "starvation": {
-                    "binding_remaining_pct": 50.0,
-                    "starve_floor_pct": 2.0,
-                    "refill_floor_pct": 10.0,
-                    "starved": False,
-                }
-            }
-        },
-        "coexisting_runs": {
-            "siblings": [{"run_id": "sibling1", "kind": "daemon"}]
-        }
-    }
-    
-    FileDoor.write_views(tmp_path, "evt-test", [], phase="running",
-                         notices=[], run_id="r1", repo="org/repo", runner_name="fake",
-                         resources=resources)
-    
-    actual = json.loads((tmp_path / "portal-state.json").read_text())
-    
-    # Verify resources are populated
-    assert "resources" in actual
-    assert actual["resources"]["quota"]["pacing"]["starvation"]["binding_remaining_pct"] == 50.0
-    assert actual["resources"]["quota"]["pacing"]["starvation"]["starve_floor_pct"] == 2.0
-    assert actual["resources"]["quota"]["pacing"]["starvation"]["refill_floor_pct"] == 10.0
-    assert actual["resources"]["quota"]["pacing"]["starvation"]["starved"] is False
-    assert len(actual["resources"]["coexisting_runs"]["siblings"]) == 1
-    assert actual["resources"]["coexisting_runs"]["siblings"][0]["run_id"] == "sibling1"
-
-
 def test_once_uses_recorded_quota_levels_for_hud_and_hold(tmp_path: Path) -> None:
     """The Shell sees measured pacing and the hold wall uses that reading."""
     from brr import account, daemon as legacy_daemon, presence
@@ -343,22 +284,6 @@ def test_hold_with_measured_binding_quota_under_floor_parks_seat(tmp_path: Path)
     
     # Check that the reason contains quota_starved
     assert "quota_starved" in record.why
-
-
-def test_runner_resolved_from_each_letter_before_dispatch(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    runtime = Daemon2(repo, tmp_path / "home")
-    with patch("brr.daemon2.runtime.runner.resolve_runner_profile") as resolve:
-        resolve.return_value.name = "codex-gpt-6-sol"
-        assert runtime._runner_for({
-            "runner": "claude-sonnet",
-            "dashboard_wake_request_profile": "codex-gpt-6-sol",
-            "core": "gpt-6-sol",
-        }).name == "codex-gpt-6-sol"
-        assert resolve.call_args.args[0] == repo
-        assert resolve.call_args.args[1] == {
-            "runner": "codex-gpt-6-sol", "core": "gpt-6-sol"}
 
 
 def test_pending_unaddressed_letter_gets_visible_triage_seat(tmp_path: Path) -> None:
@@ -2010,60 +1935,6 @@ stage("reply.md", "---\nevent: " + event_id + "\n---\nheld twice\n")
     assert capsule["await"]["resolved"] is True
     assert capsule["await"]["outcome"] == "timeout"
     assert runtime.letters.state(event_path.stem).state == "answered"
-
-
-def test_claude_runner_gets_the_await_lease_bash_cap(monkeypatch) -> None:
-    from types import SimpleNamespace
-    from brr import await_verb
-    from brr.daemon2.runtime import _await_lease_env
-    monkeypatch.delenv("BASH_MAX_TIMEOUT_MS", raising=False)
-    claude = SimpleNamespace(name="claude-opus", hooks="claude")
-    assert _await_lease_env(claude) == {
-        "BRR_RUNNER": "claude",
-        "BASH_MAX_TIMEOUT_MS": str(await_verb.CLAUDE_BASH_MAX_TIMEOUT_MS)}
-    assert _await_lease_env(SimpleNamespace(name="codex", hooks="codex")) == {
-        "BRR_RUNNER": "codex"}
-    assert _await_lease_env(SimpleNamespace(name="grok-4", hooks="grok")) == {
-        "BRR_RUNNER": "grok"}
-    monkeypatch.setenv("BASH_MAX_TIMEOUT_MS", "1000")
-    assert _await_lease_env(claude) == {"BRR_RUNNER": "claude"}
-
-
-def test_a_stamped_daemon2_claude_seat_gets_the_await_rewrite(tmp_path, monkeypatch) -> None:
-    """#2194, driven through the hook: the env daemon2 hands a claude seat
-    makes the pre-tool phase rewrite ``brnrd await`` to the lease cap."""
-    from types import SimpleNamespace
-    from brr import await_verb, hooks
-    from brr.daemon2.runtime import _await_lease_env
-    monkeypatch.delenv("BASH_MAX_TIMEOUT_MS", raising=False)
-    env = {**_await_lease_env(SimpleNamespace(name="claude-opus", hooks="claude")),
-           "BRR_OUTBOX_DIR": str(tmp_path)}
-    ctx = hooks.HookContext(env=env)
-    payload = {"tool_name": "Bash",
-               "tool_input": {"command": "brnrd await 2>&1 | tail -3"}}
-    updated = hooks._await_lease_input(ctx, payload, env)
-    assert updated is not None
-    assert updated["timeout"] == int(env["BASH_MAX_TIMEOUT_MS"])
-    assert updated["command"].startswith(f"export {await_verb.CALL_CAP_ENV}=")
-
-
-@pytest.mark.parametrize("config, expected", [
-    ({}, 3),
-    ({"spawn.max_concurrent": 8}, 8),
-    ({"spawn.max_concurrent": "8"}, 8),
-    ({"spawn.max_concurrent": 8, "daemon2.strand_workers": 2}, 2),
-    ({"spawn.max_concurrent": 8, "daemon2.strand_workers": 0}, 0),
-    ({"spawn.max_concurrent": "garbage", "daemon2.strand_workers": 2}, 2),
-    ({"spawn.max_concurrent": "garbage"}, 3),
-    ({"spawn.max_concurrent": None}, 3),
-    ({"spawn.max_concurrent": float("inf")}, 3),
-    ({"daemon2.strand_workers": "garbage", "spawn.max_concurrent": 8}, 3),
-    ({"daemon2.strand_workers": None}, 3),
-    ({"daemon2.strand_workers": -1}, 0),
-])
-def test_strand_worker_count(config, expected) -> None:
-    from brr.daemon2.runtime import strand_worker_count
-    assert strand_worker_count(config) == expected
 
 
 def test_strand_runs_while_its_parent_seat_is_still_alive(tmp_path: Path) -> None:

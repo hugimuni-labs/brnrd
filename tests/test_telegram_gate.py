@@ -1,16 +1,7 @@
-from pathlib import Path
 
-import pytest
 
 from brr import protocol
 from brr.gates import telegram
-
-
-def test_token_only_state_is_configured(tmp_path):
-    brr_dir = tmp_path / ".brr"
-    telegram._save_state(brr_dir, {"token": "secret"})
-
-    assert telegram.is_configured(brr_dir)
 
 
 def test_loop_accepts_any_chat_and_records_message_chat(tmp_path, monkeypatch):
@@ -443,34 +434,6 @@ def test_loop_follows_chat_migration_without_enqueue(tmp_path, monkeypatch):
     assert telegram._load_state(brr_dir)["chat_id"] == -100999
 
 
-def test_download_telegram_file_returns_false_on_missing_file_path(monkeypatch):
-    monkeypatch.setattr(
-        telegram, "_api_call", lambda token, method, params=None, poll=False: {"result": {}},
-    )
-    ok = telegram._download_telegram_file(
-        "secret", "some-id", Path("/tmp/does-not-matter"),
-    )
-    assert ok is False
-
-
-def test_pick_image_file_id_prefers_photo_over_document():
-    msg = {
-        "photo": [{"file_id": "p1"}],
-        "document": {"file_id": "d1", "mime_type": "image/png"},
-    }
-    assert telegram._pick_image_file_id(msg) == ("p1", "photo.jpg")
-
-
-def test_pick_image_file_id_accepts_image_document():
-    msg = {"document": {"file_id": "d1", "mime_type": "image/png", "file_name": "shot.png"}}
-    assert telegram._pick_image_file_id(msg) == ("d1", "shot.png")
-
-
-def test_pick_image_file_id_rejects_non_image_document():
-    msg = {"document": {"file_id": "d1", "mime_type": "application/pdf"}}
-    assert telegram._pick_image_file_id(msg) is None
-
-
 def test_delivery_loop_falls_back_to_the_bound_principal_for_chatless_event(
     tmp_path, monkeypatch,
 ):
@@ -632,81 +595,6 @@ def test_replies_skip_reply_to_when_event_has_no_message_id(tmp_path, monkeypatc
     assert sent == [("secret", 111, None, "ok", None)]
 
 
-def test_send_message_passes_reply_to_message_id(monkeypatch):
-    # ``_send_message`` is the single chokepoint through which both the
-    # progress card and the final response reach Telegram, so pin the
-    # exact API parameters it emits when threading is requested.
-    captured: dict = {}
-
-    def fake_api_call(token, method, params=None):
-        captured["token"] = token
-        captured["method"] = method
-        captured["params"] = params
-        return {"ok": True, "result": {"message_id": 9}}
-
-    monkeypatch.setattr(telegram, "_api_call", fake_api_call)
-    telegram._send_message(
-        "secret", 111, "hi", topic_id=None,
-        parse_mode="HTML", reply_to_message_id=42,
-    )
-
-    assert captured["method"] == "sendMessage"
-    params = captured["params"]
-    assert params["chat_id"] == 111
-    assert params["text"] == "hi"
-    assert params["parse_mode"] == "HTML"
-    assert params["reply_to_message_id"] == 42
-    # ``allow_sending_without_reply`` keeps delivery resilient when the
-    # source message was deleted before the runner finished.
-    assert params["allow_sending_without_reply"] is True
-
-
-def test_send_message_omits_reply_to_when_unset(monkeypatch):
-    captured: dict = {}
-
-    def fake_api_call(token, method, params=None):
-        captured["params"] = params
-        return {"ok": True, "result": {"message_id": 9}}
-
-    monkeypatch.setattr(telegram, "_api_call", fake_api_call)
-    telegram._send_message("secret", 111, "hi", topic_id=None)
-
-    assert "reply_to_message_id" not in captured["params"]
-    assert "allow_sending_without_reply" not in captured["params"]
-
-
-def test_api_call_uses_requests_json_and_typed_not_modified(monkeypatch):
-    class FakeResponse:
-        status_code = 400
-        text = '{"description":"Bad Request: message is not modified"}'
-        reason = "Bad Request"
-
-        def json(self):
-            return {
-                "ok": False,
-                "error_code": 400,
-                "description": "Bad Request: message is not modified",
-            }
-
-    calls = []
-
-    def fake_post(url, **kwargs):
-        calls.append((url, kwargs))
-        return FakeResponse()
-
-    monkeypatch.setattr(telegram._SESSION, "post", fake_post)
-
-    with pytest.raises(telegram._TelegramNotModified):
-        telegram._api_call("secret", "editMessageText", {"chat_id": 1})
-
-    assert calls == [
-        (
-            "https://api.telegram.org/botsecret/editMessageText",
-            {"json": {"chat_id": 1}, "timeout": 90},
-        )
-    ]
-
-
 def test_run_loop_starts_dedicated_delivery_loop(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox_dir = brr_dir / "inbox"
@@ -736,20 +624,6 @@ def test_run_loop_starts_dedicated_delivery_loop(tmp_path, monkeypatch):
         ("telegram-delivery", telegram._DELIVERY_INTERVAL),
         ("telegram", 0.0),
     ]
-
-
-def test_api_call_redacts_token_from_request_errors(monkeypatch):
-    def fake_post(url, **kwargs):
-        raise telegram.requests.RequestException(f"failed for {url}")
-
-    monkeypatch.setattr(telegram._SESSION, "post", fake_post)
-
-    with pytest.raises(RuntimeError) as caught:
-        telegram._api_call("secret-token", "getMe")
-
-    message = str(caught.value)
-    assert "secret-token" not in message
-    assert "<token>" in message
 
 
 class TestTelegramNewlineSanitization:

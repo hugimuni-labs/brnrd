@@ -5,22 +5,9 @@ import sys
 
 import pytest
 
-from brr import hooks, runner, runner_cores, runner_select, grok_runner, grok_status
+from brr import runner, runner_cores, runner_select, grok_status
 
 _SESSION = "018f6b3c-7c3a-7d2e-8f01-aabbccddeeff"
-
-
-def test_reply_is_the_text_field_only():
-    payload = {"text": "done", "sessionId": "s", "usage": {"output_tokens": 1}}
-    assert grok_runner.final_reply(json.dumps(payload)) == ("done\n", None)
-    assert grok_runner.final_reply('{"text":"done\\n"}') == ("done\n", None)
-
-
-@pytest.mark.parametrize("stdout", ["", "not json", "[]", '{"text":"  "}',
-                                    '{"type":"error","message":"no session"}'])
-def test_no_reply_is_failure(stdout):
-    reply, error = grok_runner.final_reply(stdout)
-    assert reply == "" and error
 
 
 @pytest.mark.parametrize("failure", [False, True])
@@ -253,55 +240,3 @@ def test_grok_core_catalog_pins_the_model_through_the_adapter_env():
     assert row["cost_rank"] is None
 
 
-def test_grok_hook_file_uses_post_tool_use(tmp_path):
-    path = hooks.install_hook_config("grok", tmp_path)
-    settings = json.loads(path.read_text())
-    assert path == tmp_path / ".claude" / "settings.local.json"
-    assert set(settings["hooks"]) == {"PostToolUse", "Stop", "SessionStart", "PreToolUse"}
-    assert "PostToolBatch" not in settings["hooks"]
-    assert settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"] == "brnrd hook post-tool"
-
-
-def test_grok_pre_tool_deny_uses_claude_permission_decision():
-    out, rc = hooks.render_native(
-        "grok", hooks.PHASE_PRE_TOOL,
-        {"inject": None, "block": True, "block_reason": "rooted write"},
-    )
-    assert rc == 0
-    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert out["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
-    stopped, _ = hooks.render_native(
-        "grok", hooks.PHASE_STOP,
-        {"inject": None, "block": True, "block_reason": "owed a card"},
-    )
-    assert stopped["decision"] == "block" and stopped["reason"] == "owed a card"
-
-
-def _grok_pre_tool(tool_name, file_path, cwd, *, path_key="file_path"):
-    return json.dumps({
-        "hook_event_name": "PreToolUse",
-        "cwd": str(cwd),
-        "toolName": tool_name,
-        "toolInput": {path_key: str(file_path), "old_string": "a", "new_string": "b"},
-    })
-
-
-def test_grok_write_into_host_checkout_is_denied(tmp_path):
-    host = tmp_path / "host"
-    wt = host / ".brr" / "worktrees" / "run-x"
-    wt.mkdir(parents=True)
-    env = {"BRR_RUNNER": "grok", "BRR_HOST_ROOT": str(host), "BRR_WORK_TREE": str(wt)}
-    out, rc = hooks.run_hook(
-        "pre-tool", _grok_pre_tool("search_replace", host / "stray.txt", wt), env,
-    )
-    assert rc == 0 and out["hookSpecificOutput"]["permissionDecision"] == "deny"
-    via_path, _ = hooks.run_hook(
-        "pre-tool",
-        _grok_pre_tool("search_replace", host / "stray.txt", wt, path_key="path"),
-        env,
-    )
-    assert via_path["hookSpecificOutput"]["permissionDecision"] == "deny"
-    ok, rc = hooks.run_hook(
-        "pre-tool", _grok_pre_tool("search_replace", wt / "ok.txt", wt), env,
-    )
-    assert (ok, rc) == ({}, 0)

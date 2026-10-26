@@ -131,6 +131,28 @@ def repos(text: str, home=None) -> list[tuple[str, str]]:
     return found
 
 
+def preferred_body(home, thread: str) -> str:
+    """The person's body for ``thread`` from ``loom/preferences.toml``, or "".
+
+    ``model.<thread>`` first, then ``model.inbox`` for the home thread
+    whatever its folder is called, then ``model.default``. A seat's ``body:``
+    still wins over all of them; ``config.toml``'s ``body`` is the fallback.
+    """
+    from .config import ConfigError, read_values
+    path = home.root / "loom" / "preferences.toml"
+    found = read_values(path)
+    for key in found:
+        if not key.startswith("model.") or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", key[6:]):
+            raise ConfigError(f"{path}: unknown key {key!r} (known: model.default, model.inbox, model.<thread>)")
+    roles = [thread]
+    if thread == home.main_thread():
+        roles.append("inbox")
+    for role in [*roles, "default"]:
+        if found.get(f"model.{role}"):
+            return str(found[f"model.{role}"])
+    return ""
+
+
 def at_birth(home, thread: str, default: tuple[str, str],
              text: str | None = None) -> tuple[str, str]:
     from .config import load_config
@@ -140,7 +162,7 @@ def at_birth(home, thread: str, default: tuple[str, str],
     for key, value in _entries(text):
         if key == "body":
             choice = value
-    choice = choice or load_config(home.root).body
+    choice = choice or preferred_body(home, thread) or load_config(home.root).body
     if not choice:
         return default
     return parse_body(choice)

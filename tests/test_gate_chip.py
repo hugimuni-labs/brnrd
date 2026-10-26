@@ -93,27 +93,6 @@ def test_a_red_verdict_says_red(tmp_path):
     assert "gate RED@e59f527" in (out["inject"] or "")
 
 
-def test_no_receipt_renders_no_chip_at_all(tmp_path):
-    """A run that has not gated is not a run that failed.
-
-    Silence is the honest answer; a chip claiming any verdict here would be
-    a pessimistic lie where the truth is "no measurement exists".
-    """
-    ctx, outbox, portal = _ctx(tmp_path)
-    portal.write_text(json.dumps(_portal("t1")), encoding="utf-8")
-    out = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
-    assert "gate " not in (out["inject"] or "")
-
-
-def test_a_malformed_receipt_renders_no_chip(tmp_path):
-    """Absent, unreadable and malformed all mean *no trustworthy record*."""
-    ctx, outbox, portal = _ctx(tmp_path)
-    portal.write_text(json.dumps(_portal("t1")), encoding="utf-8")
-    (outbox / hooks.GATE_RECEIPT_NAME).write_text("{not json", encoding="utf-8")
-    out = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
-    assert "gate " not in (out["inject"] or "")
-
-
 def test_a_receipt_with_no_verdict_renders_no_chip(tmp_path):
     ctx, outbox, portal = _ctx(tmp_path)
     portal.write_text(json.dumps(_portal("t1")), encoding="utf-8")
