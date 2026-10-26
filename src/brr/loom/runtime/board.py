@@ -22,7 +22,10 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from .dispositions import letter_index
-from .home import Home, thread_of
+from .config import read_array
+from .connector import instances
+from .home import Home, atomic_write, channel_parts, mint, thread_of
+from .port import _front
 from .lifecycle import CLOSED, main_snapshot
 from .project import fold, is_notice, projection_cache, sender_threads
 from .snapshot import _iso, assemble
@@ -305,7 +308,7 @@ def letters_of(facts, typed: dict | None = None, told: dict | None = None) -> tu
     return rows, every
 
 
-def board_threads(home: Home, facts, config, person: str | None = None) -> tuple[dict, dict, list, dict]:
+def board_threads(home: Home, facts, config, person: str | None = None, typed: dict | None = None) -> tuple[dict, dict, list, dict]:
     """``(snapshot, told, letters, wish rows)``: snapshot v1 with each thread's board state, steps and opening."""
     raw = wishes([f for f in facts if f.kind.startswith("wish") or f.kind == "letter"])
     snap = assemble(home, facts, config, told=raw)  # one union of the wish facts per step, not three
@@ -315,7 +318,7 @@ def board_threads(home: Home, facts, config, person: str | None = None) -> tuple
         t["steps"] = steps_of(root, t["id"])
         if t.get("plan") and (size := plan_bytes(root, t["id"])) is not None:
             t["plan"] = dict(t["plan"], bytes=size, **({"cap": PLAN_CAP} if t["id"] == main_name else {}))
-    letters, told = letters_of(facts, None, raw)
+    letters, told = letters_of(facts, typed, raw)
     calls = calls_of(snap.get("threads") or [], raw, facts)
     opened = {}  # a thread opens with its first letter or lease, whichever came first: idle keeps that place (4921)
     ends = {}  # strand → its last body's (cause, at)
@@ -376,9 +379,10 @@ def digest(part) -> str:
     return hashlib.sha256(json.dumps(part, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
 
 
-def compute(home: Home, facts, config, tools: dict, live: dict, person: str | None = None) -> dict[str, dict]:
+def compute(home: Home, facts, config, tools: dict, live: dict, person: str | None = None,
+            typed: dict | None = None) -> dict[str, dict]:
     """Every part by name: ``index``, ``thread/<id>`` per thread, ``beads``. The index carries the others' hashes."""
-    snap, raw, letters, told = board_threads(home, facts, config, person)
+    snap, raw, letters, told = board_threads(home, facts, config, person, typed)
     threads = snap.get("threads") or []
     parts: dict[str, dict] = {}
     by_thread: dict[str, list] = {}
@@ -469,18 +473,21 @@ class Parts:
         self.parts: dict[str, dict] = {}
         self.hashes: dict[str, str] = {}
         self.revision = None
+        # Which strand typed a letter through the board: the board's own note, outside the self repo.
+        self.typed_path, self.typed, self.typed_mtime = home.root / "loom/board/typed.json", {}, None
         self.changed = threading.Condition()
         self.stop = threading.Event()
 
     def step(self) -> bool:
         """One recompute when anything moved; True when a part's hash did."""
         facts = self.reader.refresh(self.home)
-        moved = self.tape.read()
+        moved = self.tape.read() | self._typed()
         if self.reader.revision == self.revision and not moved:
             return False
         self.revision = self.reader.revision
         with projection_cache(self.cache):
-            parts = compute(self.home, facts, self.config_of(), self.tape.tools, self.tape.live, self.person)
+            parts = compute(self.home, facts, self.config_of(), self.tape.tools, self.tape.live, self.person,
+                            self.typed)
         hashes = {name: digest(part) for name, part in parts.items()}
         if hashes == self.hashes:
             return False
@@ -488,6 +495,45 @@ class Parts:
             self.parts, self.hashes = parts, hashes
             self.changed.notify_all()
         return True
+
+    def _typed(self) -> bool:
+        mtime = self.typed_path.stat().st_mtime if self.typed_path.exists() else None
+        if mtime == self.typed_mtime:
+            return False
+        self.typed, self.typed_mtime = json.loads(self.typed_path.read_text()) if mtime else {}, mtime
+        return True
+
+    def send(self, body: str, typed_by: str | None = None, wish: str | None = None,
+             verdict: str | None = None) -> dict:
+        """One letter as the person into the main thread, dropped where the channel's own letters land.
+
+        ``wish`` ties it to the wish a call names; ``verdict`` is agree or correct, as the relay writes
+        them: an agree on a delivered wish is the intake's own acceptance (connector.ingest), a correct
+        is the letter itself. A done on an ask goes as agree too; the intake stamps nothing on an ask.
+        """
+        if not body.strip():
+            raise ValueError("empty letter")
+        if wish and not re.fullmatch(r"w-[a-z0-9]{6,16}", wish):
+            raise ValueError("wish is a wish id")
+        if verdict not in (None, "agree", "correct"):
+            raise ValueError("verdict is agree or correct")
+        if typed_by and not re.fullmatch(r"s-[a-z0-9]{2,8}-[a-z0-9]{4,12}", typed_by):
+            raise ValueError("typed_by is a strand id")
+        instance, user = person_channel(self.home, self.person)
+        lands = self.home.main_thread()
+        ident = f"{user}:board-{mint(10)}"  # a chat-scoped native id, as the connector writes
+        drop = self.home.root / "loom/connectors" / instance / "state/in"
+        drop.mkdir(parents=True, exist_ok=True)
+        fields = {"kind": "letter", "id": ident, "to": user, "from": user, "thread": lands,
+                  **({"wish": wish} if wish else {}), **({"verdict": verdict} if wish and verdict else {})}
+        if typed_by:
+            with self.changed:
+                typed = json.loads(self.typed_path.read_text()) if self.typed_path.exists() else {}
+                typed[f"letter:{instance}:{ident}"] = typed_by
+                self.typed_path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write(self.typed_path, json.dumps(typed))
+        atomic_write(drop / f"{ident}.md", _front(fields, body))
+        return {"id": f"letter:{instance}:{ident}", "thread": lands}
 
     def run(self) -> None:
         while not self.stop.is_set():
@@ -499,8 +545,23 @@ class Parts:
             self.stop.wait(TICK)
 
 
+def person_channel(home: Home, person: str | None) -> tuple[str, str]:
+    """``(instance, user)``: the person's first direct channel on an enabled connector, from people/*/channels.toml."""
+    enabled = instances(home)
+    for path in sorted((home.root / "self/people").glob("*/channels.toml")):
+        if person and path.parent.name != person:
+            continue
+        for entry in read_array(path, "channels"):
+            instance, _, user = entry.partition(":")
+            if instance in enabled and user and ":" not in user:
+                channel_parts(f"channel:{instance}/{user}", home)
+                return instance, user
+    raise LookupError("no person with a direct channel on an enabled connector")
+
+
 def handler(parts: Parts, port: int):
     hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+    origins = {f"http://{host}" for host in hosts}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -548,6 +609,32 @@ def handler(parts: Parts, port: int):
                 return self._json(part, hashes[path])
             self.send_error(HTTPStatus.NOT_FOUND)
 
+        def do_POST(self):
+            # A write needs our own Host (DNS rebinding), our own Origin when a browser sends one, and a
+            # JSON body: a foreign page cannot send application/json without a preflight we never answer.
+            if self.headers.get("Host") not in hosts or self.headers.get("Origin", next(iter(origins))) not in origins:
+                self.send_error(HTTPStatus.FORBIDDEN, "origin")
+                return
+            if (self.headers.get("Content-Type") or "").split(";")[0].strip() != "application/json":
+                self.send_error(HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+                return
+            if self.path != "/v1/loom/letters":
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            try:
+                data = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20)))
+                sent = parts.send(str(data["body"]), data.get("typed_by") or None,
+                                  data.get("wish") or None, data.get("verdict") or None)
+            except (ValueError, KeyError, TypeError, LookupError) as exc:
+                raw = json.dumps({"error": str(exc)}).encode()
+                self.send_response(HTTPStatus.BAD_REQUEST)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+            self._json(sent)
+
         def _events(self):
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/event-stream")
@@ -575,7 +662,7 @@ def handler(parts: Parts, port: int):
 
 
 def serve(parts: Parts, port: int) -> ThreadingHTTPServer:
-    """The loopback shell: ``/v1/loom/{index,thread/<id>,beads,events}`` on 127.0.0.1, on a daemon thread."""
+    """The loopback shell: GET ``/v1/loom/{index,thread/<id>,beads,events}``, POST ``/v1/loom/letters``, on 127.0.0.1."""
     server = ThreadingHTTPServer(("127.0.0.1", port), handler(parts, port))
     server.daemon_threads = True
     if port == 0:  # a test's free port: the Host check needs the bound one

@@ -118,3 +118,50 @@ def test_loopback_serves_parts_and_streams_a_letter_within_budget(parts):
         parts.stop.set()
         server.shutdown()
         server.server_close()
+
+
+def post(port, payload, host=None, **headers):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.request("POST", "/v1/loom/letters", body=json.dumps(payload).encode(),
+                 headers={"Host": host or f"127.0.0.1:{port}", "Content-Type": "application/json", **headers})
+    resp = conn.getresponse()
+    body = resp.read()
+    conn.close()
+    return resp.status, body
+
+
+def test_a_board_letter_lands_as_the_persons_own_and_foreign_pages_cannot_send(parts):
+    """POST /v1/loom/letters drops where the channel's letters land; the intake reads it as the person's."""
+    from brr.loom.runtime.connector import drain
+    from brr.loom.runtime.ledger import read_facts
+    root = parts.home.root
+    (root / "loom/config.toml").write_text('connectors = ["mine=fake"]\n')
+    (root / "self/people/ada").mkdir(parents=True)
+    (root / "self/people/ada/channels.toml").write_text('channels = ["mine:42"]\n')
+    parts.step()
+    server = serve(parts, 0)
+    port = server.server_address[1]
+    try:
+        assert post(port, {"body": "x"}, Origin="https://evil.test")[0] == 403
+        assert post(port, {"body": "x"}, host="evil.test")[0] == 403
+        assert post(port, {"body": "x"}, **{"Content-Type": "text/plain"})[0] == 415
+        assert post(port, {"body": "  "})[0] == 400
+        assert post(port, {"body": "x", "wish": "nope"})[0] == 400
+        assert not list(root.glob("loom/connectors/mine/state/in/*"))
+
+        status, body = post(port, {"body": "from the board", "typed_by": "s-ae66-abcdef"},
+                            Origin=f"http://127.0.0.1:{port}")
+        assert status == 200, body
+        sent = json.loads(body)
+        drop = root / "loom/connectors/mine/state/in"
+        drain(parts.home, "mine", drop, {})
+        letter = next(f for f in read_facts(parts.home) if f.id == sent["id"])
+        assert letter.data["body"] == "from the board" and letter.data["from"] == "person:ada"
+        assert parts.step()
+        typed = [r for p, part in parts.parts.items() if p.startswith("thread/") for r in part["letters"]
+                 if r["id"] == sent["id"]]
+        assert [r["typed_by"] for r in typed] == ["s-ae66-abcdef"]
+    finally:
+        parts.stop.set()
+        server.shutdown()
+        server.server_close()
