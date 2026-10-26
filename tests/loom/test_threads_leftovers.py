@@ -169,3 +169,33 @@ def test_neither_tick_nor_plain_table_inspects_rooms_but_left_does(rooms, monkey
     # Proves the patched function is the one used by real CLI argv.
     with pytest.raises(AssertionError, match='leftovers called'):
         main(['threads', '--home', str(home.root), '--left'])
+
+
+def test_thread_opened_between_reads_of_main_waits_a_tick(tmp_path, monkeypatch):
+    from brr.loom.runtime import threads as threads_mod
+    home = Home(tmp_path / 'home', install='0001')
+    init_self(home.root, person='test')
+
+    def open_thread(thread):
+        home.thread_dir(thread).mkdir(parents=True)
+        (home.thread_dir(thread) / 'README.md').write_text(
+            f'---\nid: {thread}\nstatus: open\ntense: plan\n---\n# {thread}\n')
+        git(home.root / 'self', 'add', 'threads')
+        _commit(home.root / 'self', f'{thread}\n\nLoom-Label: taint=0; audience=self\n')
+
+    open_thread('old')
+    snapshot = threads_mod.main_snapshot
+
+    def landing(*args):
+        main = snapshot(*args)
+        if 'new' not in main:
+            open_thread('new')
+        return main
+
+    # A commit lands right after the axes read main: this tick shows the
+    # old tip whole, the next one shows the new thread.
+    monkeypatch.setattr(threads_mod, 'main_snapshot', landing)
+    before = {row['thread'] for row in threads_mod.thread_table(home, read_facts(home))}
+    assert 'old' in before and 'new' not in before
+    after = {row['thread'] for row in threads_mod.thread_table(home, read_facts(home))}
+    assert after == before | {'new'}

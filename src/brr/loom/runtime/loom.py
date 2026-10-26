@@ -25,8 +25,10 @@ from brr.daemon2.facts import Fact
 
 from .adapters import resolve
 from .bodies import COMMANDS, TABLE, Observation, decide, fact_for, row_for, state_of
+from .faces import propose, proposal_line
 from .health import Health, degraded_line
 from .since import since_gone
+from .update import Updater, moved_line
 from .home import Home, atomic_write, is_channel, mint, notice_id
 from .ledger import LedgerView, kind_facts, LedgerConflict, append, read_facts
 from .registry import KINDS
@@ -40,7 +42,7 @@ from .lifecycle import main_snapshot
 from .timers import observe_due
 from .selfrepo import (
     AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, git,
-    ensure_room, repaired_line, run_wake, seed_root,
+    ensure_room, forge_threads, repaired_line, run_wake, seed_root,
 )
 
 SRC = str(Path(__file__).resolve().parents[3])
@@ -467,7 +469,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     clone = room / "self"
     owed_path = room / "port" / "owed.json"
     attachments = letter_attachments(home.root, facts)
-    reply_context = letter_replies(facts)
+    reply_context = _reply_context(facts, thread, letters, room)
     rows = [dict(letter.data, attachments=attachments.get(letter.id, []),
                  reply_context=reply_context.get(letter.id, ""),
                  reply_to=letter_owners(facts, main_snapshot(home))[letter.id].reply_to)
@@ -478,17 +480,21 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     gone = since_gone(facts, strand, gen, thread, threads, home.install_id())
     from .reap import kept_line
     gone += kept_line(home, thread, threads)
+    forge = forge_threads(home.root / "self")
     part = gone + inherited + (
-        f"you are strand {strand} on thread {thread}; letters arrive at your "
+        f"you are strand {strand} on thread {thread}"
+        + (f" ({forge}/{thread})" if forge else "") + "; letters arrive at your "
         "tool boundaries, each line naming its reply address; answer with "
         "`python -m brr.loom.runtime send --re <id> --to <reply address> \"…\"`; "
         "where the address is `-` nobody is waiting for words: settle the letter with "
         f"`python -m brr.loom.runtime send --re <id> --to thread:{thread} --note "
         "\"<what you did>\"`; if you commit in this self clone, land it with "
         "`python -m brr.loom.runtime send-self --room .`; you will forget what is "
-        "not written: keep this thread's README true; under `## Plan`, cite each "
-        "row's letters and wish ids with ` · re: <id>, <w-id>` and land the edit "
-        "with send-self. "
+        "not written: keep this thread's README true (the spec and the decisions); "
+        "what is left on a wish lives on the wish: `python -m brr.loom.runtime wish "
+        "<w-id> --left \"<step>\" --left \"<step>\"`, the whole list, latest wins "
+        "(`--left same` when nothing moved), and the stop asks for it once a wish "
+        "moved; progress is the wishes; land the edit with send-self. "
         "When your context grows "
         "heavy hand over with `python -m brr.loom.runtime molt --why \"<where "
         "things stand>\"`; `python -m brr.loom.runtime settle <thread> --why "
@@ -498,10 +504,15 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         "(core/loom/README.md, Notices); stamp what someone wants with "
         "`send --wish` (core/loom/README.md, Wishes), and open a thread only for "
         "a wish: `send --to thread:<new> --wish <w-id>` or `--wish new:\"<line>\"`; "
+        "a `face?` line proposes a face for a fact you just met: "
+        "`python -m brr.loom.runtime face take` wears it, `face <face>` wears another, "
+        "and doing nothing lets it lapse; "
         + ("call `$BRNRD_JACK --event start` now, `$BRNRD_JACK --event post` between "
            "steps and `$BRNRD_JACK --event stop` before ending; read each returned boundary\n"
            if jack == "hand" else
-           "when you're done, stop, and the jack holds you while letters may come\n")
+           "before you stop with wishes open, say how this body ends: a result (`wish <w-id> --result`), "
+           "an `ask`, a park with its reason (`wish <w-id> --read \"waiting: …\"`), or `settle`; "
+           "then stop, and the jack holds you while letters may come\n")
     )
     atomic_write(part_path, part)
     if repos is None:
@@ -543,6 +554,9 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                         attachments=attachments, reply_context=reply_context,
                         repaired=_repaired(facts, strand, gen),
                         degraded=degraded_line(facts, home.install_id()),
+                        moved=moved_line(facts, strand, gen, home.install_id()),
+                        face=proposal_line(propose(facts, strand, gen, thread)),
+                        left=_left(facts, thread, strand),
                         **_budget(home, thread, facts)),
     )
     return room
@@ -875,26 +889,43 @@ def _readme(room: Path, thread: str) -> str | None:
 
 
 def _plan(home: Home, thread: str, facts: list[Fact]) -> str:
-    main = main_snapshot(home)
-    rows = main.get(thread, {}).get("plan_rows")
-    missing = [fate.letter.id for fate in active_owners(facts, main)
-               if not fate.done and fate.thread == thread
-               and fate.owner in {"body", "loom", "opener"} and not fate.plan_rows]
-    if rows is None:
-        # A thread with no plan is not asked for one: the nag is for a plan
-        # that exists and has fallen behind its letters.
-        return ""
-    text = f"plan {sum(done for done, _ in rows)}/{len(rows)}"
-    if missing:
-        text += " · letters without a row: " + ", ".join(missing)
+    """The thread's wishes, delivered or accepted over all; no wishes, no plan."""
     from .owners import unanswered_by_thread
+    from .wishes import progress, told
+    main, plan = main_snapshot(home), progress(told(facts), thread)
+    if plan is None and main.get(thread, {}).get("plan_rows") is None:
+        # Neither wishes nor a Plan: the thread is not asked for one.
+        return ""
     unanswered = unanswered_by_thread(facts, main).get(thread, ())
+    parts = [f"plan {plan['done']}/{plan['total']}"] if plan else []
     if unanswered:
-        text += " · unanswered: " + ", ".join(unanswered)
-    next_row = next((text for done, text in rows if not done), "")
-    if next_row:
-        text += f" · next: {next_row[:60]}"
-    return text
+        parts.append("unanswered: " + ", ".join(unanswered))
+    if plan and plan.get("next"):
+        parts.append(f"next: {plan['next'][:60]}")
+    return " · ".join(parts)
+
+
+def _left(facts, thread: str, strand: str) -> str:
+    """The wishes this body's stop will ask to restate, derived at every render."""
+    from .wishes import left_line, owed_lefts, told
+    return left_line(owed_lefts(told(facts), facts, thread, strand))
+
+
+def _reply_context(facts, thread: str, letters, room: Path | None = None) -> dict[str, str]:
+    """Reply context, and a steers? line under each undisposed person letter."""
+    context = dict(letter_replies(facts))
+    from .dispositions import disposed, is_person
+    person = [letter for letter in letters if is_person(letter)]
+    if not person:
+        return context
+    from .wishes import steers_line, told
+    found, done = told(facts), disposed(facts, room)
+    for letter in person:
+        ident = str(letter.data.get("id", letter.id))
+        line = "" if ident in done else steers_line(found, thread, ident)
+        if line:
+            context[letter.id] = "\n".join(filter(None, (context.get(letter.id, ""), line)))
+    return context
 
 
 def _budget(home: Home, thread: str, facts) -> dict[str, str]:
@@ -1367,21 +1398,28 @@ def _repaired(facts, strand, gen) -> str:
 def _boundary(home, facts, strand, gen, context):
     from .threads import thread_table
     main, state = main_snapshot(home), fold(facts)
+    owed = letters_for(facts, main, context.thread)
     text = render_boundary(
-        strand, gen, context.thread, letters_for(facts, main, context.thread),
+        strand, gen, context.thread, owed,
         state.shown.get(strand, set()), sender_threads(facts), context.fuel,
         context.why or None, reply_channels(facts, home),
         opened=thread_table(home, facts), plan=_plan(home, context.thread, facts),
         replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
         attachments=letter_attachments(home.root, facts),
-        reply_context=letter_replies(facts),
+        reply_context=_reply_context(facts, context.thread, owed, home.room(strand)),
         repaired=_repaired(facts, strand, gen),
         degraded=degraded_line(facts, home.install_id()),
+        moved=moved_line(facts, strand, gen, home.install_id()),
+        face=proposal_line(propose(facts, strand, gen, context.thread)),
+        left=_left(facts, context.thread, strand),
         **_budget(home, context.thread, facts),
     )
     path = home.room(strand) / "port/in/boundary.md"
     if not path.is_file() or path.read_text() != text:
         atomic_write(path, text)
+    else:
+        # Rendered from these facts: the jack's stop compares this mtime with the ledger's.
+        os.utime(path)
 
 
 _PAUSE_LOOKED: dict[Path, float] = {}
@@ -1612,11 +1650,40 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     with projection_cache(router.projections):
         facts = router.begin_tick(facts)
         facts = _ingest(home, facts, router.config.router_ttl)
+        facts = _grant_landed(home, facts)
+        facts = _grant_opened(home, facts)
         facts = _advance_bodies(home, bodies, facts, (adapter, core), reader=router.reader)
         # Time enters the owner table once, using only the facts already held.
         facts = observe_due(home, facts, router.armed())
         facts = router.route(facts, bodies, (adapter, core))
         facts = router.speak_out(facts)
+
+
+_GRANTED: dict[Path, str] = {}
+
+
+def _grant_landed(home: Home, facts: list[Fact]) -> list[Fact]:
+    """Once per main commit: a landed Plan row's receipt is a result on each wish it cites."""
+    from .lifecycle import main_tip
+    from .wishes import landed_results, told
+    repo = home.root / "self"
+    if not (repo / ".git").exists():
+        return facts
+    tip = main_tip(repo)
+    if _GRANTED.get(repo) == tip:
+        return facts
+    for fact in landed_results(told(facts), main_snapshot(home), f"loom:{home.install_id()}"):
+        facts.append(append(home, fact))
+    _GRANTED[repo] = tip
+    return facts
+
+
+def _grant_opened(home: Home, facts: list[Fact]) -> list[Fact]:
+    """A pull request opened on a thread with one open wish is that wish's result."""
+    from .wishes import opened_results, told
+    for fact in opened_results(told(facts), kind_facts(facts, "pr.opened"), f"loom:{home.install_id()}"):
+        facts.append(append(home, fact))
+    return facts
 
 
 def _pause(stop, seconds: float) -> bool:
@@ -1685,6 +1752,23 @@ def _source_fingerprint():
     ]).encode()).hexdigest()
 
 
+#: An open call older than this is a lost post hook, not a body at work.
+IDLE_STALE = 1800
+
+
+def _idle(home: Home) -> bool:
+    """No live body of this install has a tool call open: the loom may move its code."""
+    from . import tooltrace
+    from .router import install_of
+    for strand, _gen in fold(read_facts(home)).holder.values():
+        room = home.room(strand)
+        if install_of(strand) != home.install_id() or not body_alive(room):
+            continue
+        if any(time.time() - call["at"] < IDLE_STALE for call in tooltrace.live(room)["open"]):
+            return False
+    return True
+
+
 def _read_usage(home, usage) -> None:
     for shell in usage.shells(home):
         usage.reading(home, shell)
@@ -1727,6 +1811,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         mirror = Mirror(home, _log)
         from .reap import Reaper
         reaper = Reaper(home, _log)
+        from .receipts import source_root
+        updater = Updater(home, _log, source_root())
         while not (stop is not None and stop.is_set()):
             try:
                 config = load_config(home.root)
@@ -1740,13 +1826,21 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                     health.guard("usage", _read_usage, home, usage, backoff=False)
                     next_usage = time.monotonic() + usage.REFRESH_INTERVAL
                 # Inputs, publisher, mirror and reap pace their own retries; only the tick backs off.
-                health.guard("inputs", inputs.step, backoff=False)
+                # Connectors run only on the router lease's holder: a second
+                # install ingesting too would answer every letter twice.
+                if router.armed():
+                    health.guard("inputs", inputs.step, backoff=False)
+                else:
+                    inputs.close()
                 health.guard("tick_once", tick_once, home, bodies, adapter, core, router)
                 health.guard("publisher", publisher.step, config, router, backoff=False)
                 health.guard("mirror", mirror.step, config, backoff=False)
                 health.guard("disk", reaper.disk, backoff=False)
                 health.guard("reap", reaper.step, backoff=False)
-            if _source_fingerprint() != fingerprint:
+                # Only at an idle tick, and the re-exec follows in this same pass.
+                health.guard("update", updater.step, config, functools.partial(_idle, home),
+                             backoff=False)
+            if updater.moved is not None or _source_fingerprint() != fingerprint:
                 _log(home, "runtime source changed; re-executing loom")
                 inputs.close()
                 _shutdown(bodies)

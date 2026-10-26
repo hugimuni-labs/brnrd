@@ -2,10 +2,14 @@
 
 The cut is the predecessor's last ``shown`` fact, or the thread's last
 ``attempt.ended`` when that is later. The section opens the wake's loom part:
-restarts and the silence before them, how the predecessor ended, what the loom
+restarts and the silence before them, moves of the loom's code, how the predecessor ended, what the loom
 repaired or fell back on for this strand, notes by outside hands, letters of
 this thread that bounced, and the loop's degradations. Every line names its
 fact. Newest last, capped at ``CAP`` bytes by dropping the oldest lines.
+
+Restarts, silences and degradations are machine facts: each is read only from
+the install it is about, so another machine's loom starting is not a restart
+under this body.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ from __future__ import annotations
 import json
 
 from .health import _seconds, open_streaks
+from .update import moved_text
 
 CAP = 1500
 SILENT = 600
@@ -48,8 +53,15 @@ def _cut(rows, strand: str, gen: int, thread: str) -> tuple[int, tuple[str, int]
     return cut, pred
 
 
-def _ended(rows, pred) -> tuple[int, str] | None:
-    """How the predecessor ended, naming a loom restart inside its life."""
+def _wrote(fact, install: str) -> bool:
+    """``install`` appended ``fact``; a fact from before HLCs is taken as local."""
+    return fact.hlc is None or fact.hlc[2] == install
+
+
+def _ended(rows, pred, install: str) -> tuple[int, str] | None:
+    """How the predecessor ended, naming a restart of its own install's loom."""
+    from .router import install_of
+    home = install_of(pred[0]) or install
     began = None
     for i, f in enumerate(rows):
         if (f.data.get("strand"), f.data.get("gen")) != pred:
@@ -58,7 +70,8 @@ def _ended(rows, pred) -> tuple[int, str] | None:
             began = i
         if f.kind == "attempt.ended":
             cause, code = f.data.get("cause"), f.data.get("code")
-            restart = began is not None and any(r.kind == "loom.started" for r in rows[began:i])
+            restart = began is not None and any(r.kind == "loom.started" and r.data.get("install") == home
+                                                for r in rows[began:i])
             how = (f"was lost to a loom restart (recorded {cause}, code {code})"
                    if restart and cause == "failed" else f"ended {cause}, code {code}")
             return i, f"your predecessor {pred[0]} gen {pred[1]} {how} ({f.id})"
@@ -72,21 +85,22 @@ def since_gone(facts, strand: str, gen: int, thread: str, threads: dict[str, str
     if cut < 0:
         return ""
     lines: list[tuple[int, str]] = []
-    if pred is not None and (ended := _ended(rows, pred)) is not None:
+    if pred is not None and (ended := _ended(rows, pred, install)) is not None:
         lines.append(ended)
     after = list(enumerate(rows))[cut + 1:]
-    starts = [(i, f) for i, f in after if f.kind == "loom.started"]
+    starts = [(i, f) for i, f in after if f.kind == "loom.started" and f.data.get("install") == install]
     if starts:
         i, first = starts[0]
         commits = list(dict.fromkeys(str(f.data.get("commit") or "?")[:8] for _, f in starts))
         text = f"the loom started {len(starts)} time{'s' * (len(starts) > 1)} (at {', '.join(commits)})"
-        gap = _seconds(first.at) - _seconds(rows[i - 1].at) if i > 0 else 0
+        last = next((r for r in reversed(rows[:i]) if _wrote(r, install)), None)
+        gap = _seconds(first.at) - _seconds(last.at) if last is not None else 0
         if gap > SILENT:
             text += f"; the ledger was silent {_span(gap)} before the first (a power-off or a stopped loop)"
         lines.append((i, f"{text} ({first.id})"))
     letters = {str(f.data.get("id") or f.id): f for f in rows if f.kind == "letter"}
     recovered = {f.id.replace("loom.recovered:", "loom.degraded:", 1): f
-                 for _, f in after if f.kind == "loom.recovered"}
+                 for _, f in after if f.kind == "loom.recovered" and f.data.get("install") == install}
     for i, f in after:
         data = f.data or {}
         if f.kind in ROOM_KINDS and data.get("strand") == strand:
@@ -103,6 +117,8 @@ def since_gone(facts, strand: str, gen: int, thread: str, threads: dict[str, str
                 if ("bounced" in (d.get("outcome"), d.get("reason")) and letter is not None
                         and threads.get(str(letter.data.get("from"))) == thread):
                     lines.append((i, f"bounced: your letter {d.get('id')} ({f.id})"))
+        elif f.kind == "loom.moved" and data.get("install") == install:
+            lines.append((i, f"{moved_text(f)} ({f.id})"))
         elif f.kind == "loom.degraded" and f.id in recovered:
             back = recovered[f.id]
             lines.append((i, f"{data.get('step')} degraded at {data.get('since')} and recovered after "

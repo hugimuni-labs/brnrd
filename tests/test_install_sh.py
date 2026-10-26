@@ -65,18 +65,27 @@ def _tool(bindir: Path, name: str, body: str) -> None:
     path.chmod(0o755)
 
 
-def _run(tmp_path: Path, tools: dict[str, str], shell: str = "/bin/sh") -> subprocess.CompletedProcess[str]:
+def _run(
+    tmp_path: Path,
+    tools: dict[str, str],
+    shell: str = "/bin/sh",
+    args: tuple[str, ...] = (),
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     bindir = tmp_path / "bin"
     for name, body in tools.items():
         _tool(bindir, name, body)
     trace = tmp_path / "trace"
-    env = os.environ.copy()
+    base = os.environ.copy()
+    base.pop("PYTHONPATH", None)
+    base.update(env or {})
+    env = base
     env["PATH"] = os.pathsep.join((str(bindir), "/usr/bin", "/bin"))
     env["HOME"] = str(tmp_path / "home")
     env["BRNRD_INSTALL_DRY_RUN"] = "1"
     env["BRNRD_TRACE"] = str(trace)
     result = subprocess.run(
-        [shell, str(SCRIPT)],
+        [shell, str(SCRIPT), *args],
         env=env,
         capture_output=True,
         text=True,
@@ -84,6 +93,58 @@ def _run(tmp_path: Path, tools: dict[str, str], shell: str = "/bin/sh") -> subpr
     )
     result.trace = trace.read_text(encoding="utf-8") if trace.exists() else ""
     return result
+
+
+GIT_CLEAN = """
+case "$*" in
+  --version) exit 0 ;;
+  *"symbolic-ref -q --short HEAD") printf '%s\\n' "${FAKE_BRANCH:-main}"; exit 0 ;;
+  *"status --porcelain --untracked-files=no") printf '%s' "${FAKE_DIRTY:-}"; exit 0 ;;
+esac
+printf '%s\\n' "unexpected git $*" >> "$BRNRD_TRACE"
+exit 1
+"""
+
+GH_SIGNED_IN = """
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  exit 0
+fi
+printf '%s\\n' "unexpected gh $*" >> "$BRNRD_TRACE"
+exit 1
+"""
+
+GH_SIGNED_OUT = """
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  exit 1
+fi
+printf '%s\\n' "unexpected gh $*" >> "$BRNRD_TRACE"
+exit 1
+"""
+
+DEV_TOOLS = {
+    "git": GIT_CLEAN,
+    "uv": REFUSES,
+    "gh": GH_SIGNED_IN,
+    "claude": REFUSES,
+    "pipx": REFUSES,
+    "curl": REFUSES,
+}
+
+
+def _dev_tail(clone: Path) -> list[str]:
+    return [
+        f"uv tool install --editable {clone}",
+        "uv tool update-shell",
+        "brnrd loom install --dev --dry-run",
+        "brnrd loom install --dev",
+        "brnrd loom status",
+    ]
+
+
+def _clone(tmp_path: Path) -> Path:
+    clone = tmp_path / "home" / ".brnrd" / "src"
+    (clone / ".git").mkdir(parents=True)
+    return clone
 
 
 def _commands(result: subprocess.CompletedProcess[str]) -> list[str]:
@@ -163,6 +224,130 @@ def test_a_failed_probe_exits_nonzero_with_one_sentence(tmp_path, shell):
     assert lines == [
         "uv tool list failed; run uv tool install brnrd by hand, or uv tool upgrade brnrd if it is already installed."
     ]
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_dev_clones_main_then_installs_it_editable_and_starts_the_loom(tmp_path, shell):
+    result = _run(tmp_path, DEV_TOOLS, shell, args=("--dev",))
+    clone = tmp_path / "home" / ".brnrd" / "src"
+    assert result.stderr == ""
+    assert _commands(result) == [
+        f"git clone https://github.com/hugimuni-labs/brnrd {clone}",
+        *_dev_tail(clone),
+    ]
+
+
+def test_dev_env_var_means_the_flag_and_dev_dir_moves_the_clone(tmp_path):
+    clone = tmp_path / "elsewhere"
+    result = _run(tmp_path, DEV_TOOLS, env={"BRNRD_INSTALL_DEV": "1", "BRNRD_DEV_DIR": str(clone)})
+    assert _commands(result) == [
+        f"git clone https://github.com/hugimuni-labs/brnrd {clone}",
+        *_dev_tail(clone),
+    ]
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_dev_rerun_fast_forwards_a_clean_clone_on_main(tmp_path, shell):
+    clone = _clone(tmp_path)
+    # An untracked file does not count, as in the loom's own rule.
+    result = _run(tmp_path, DEV_TOOLS, shell, args=("--dev",), env={"FAKE_DIRTY": ""})
+    assert _commands(result) == [
+        f"git -C {clone} pull --ff-only origin main",
+        *_dev_tail(clone),
+    ]
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_dev_rerun_refuses_a_dirty_clone_with_one_sentence(tmp_path, shell):
+    clone = _clone(tmp_path)
+    result = _run(tmp_path, DEV_TOOLS, shell, args=("--dev",),
+                  env={"FAKE_DIRTY": " M src/brr/cli.py\nM  README.md\n"})
+    assert result.returncode != 0
+    assert result.trace == ""
+    assert result.stdout == ""
+    assert result.stderr.splitlines() == [
+        f"checkout {clone} has 2 uncommitted change(s) (M src/brr/cli.py): not touched; "
+        "commit or stash them and run this again."
+    ]
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_dev_rerun_refuses_a_clone_on_another_branch(tmp_path, shell):
+    clone = _clone(tmp_path)
+    result = _run(tmp_path, DEV_TOOLS, shell, args=("--dev",), env={"FAKE_BRANCH": "wip"})
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert result.stderr.splitlines() == [
+        f"checkout {clone} is on branch wip, not main: not touched; "
+        f"switch it back with git -C {clone} switch main and run this again."
+    ]
+
+
+def test_dev_refuses_a_directory_that_is_not_a_checkout(tmp_path):
+    clone = tmp_path / "home" / ".brnrd" / "src"
+    clone.mkdir(parents=True)
+    result = _run(tmp_path, DEV_TOOLS, args=("--dev",))
+    assert result.returncode != 0
+    assert result.stderr.splitlines() == [
+        f"{clone} exists and is not a git checkout: not touched; "
+        "move it away or set BRNRD_DEV_DIR to another directory."
+    ]
+
+
+def test_dev_bootstraps_uv_when_it_is_missing(tmp_path):
+    tools = {name: body for name, body in DEV_TOOLS.items() if name != "uv"}
+    commands = _commands(_run(tmp_path, tools, args=("--dev",)))
+    assert commands[:2] == [UV_BOOTSTRAP, f"git clone https://github.com/hugimuni-labs/brnrd {tmp_path / 'home' / '.brnrd' / 'src'}"]
+
+
+def test_an_unknown_option_is_refused(tmp_path):
+    result = _run(tmp_path, DEV_TOOLS, args=("--stable",))
+    assert result.returncode != 0
+    assert result.stderr.splitlines() == ["Unknown option --stable; the only option is --dev."]
+
+
+@pytest.mark.parametrize("args", [(), ("--dev",)])
+def test_pythonpath_warns_on_both_paths_and_does_not_stop_the_install(tmp_path, args):
+    result = _run(tmp_path, {**DEV_TOOLS, "uv": UV_ABSENT}, args=args, env={"PYTHONPATH": "/x/brnrd/src"})
+    _commands(result)
+    assert result.stderr.splitlines() == [
+        "warning: PYTHONPATH is set (/x/brnrd/src), so brnrd may run another checkout's code "
+        "instead of this install; unset it here and in your shell profile."
+    ]
+
+
+def test_dev_warns_when_gh_is_missing(tmp_path):
+    tools = {name: body for name, body in DEV_TOOLS.items() if name != "gh"}
+    result = _run(tmp_path, tools, args=("--dev",))
+    _commands(result)
+    assert result.stderr.splitlines() == [
+        "warning: gh is not installed, and following main reads CI through it; "
+        "install the GitHub CLI and run gh auth login."
+    ]
+
+
+def test_dev_warns_when_gh_is_signed_out(tmp_path):
+    result = _run(tmp_path, {**DEV_TOOLS, "gh": GH_SIGNED_OUT}, args=("--dev",))
+    _commands(result)
+    assert result.stderr.splitlines() == [
+        "warning: gh auth status fails, and following main reads CI through it; run gh auth login."
+    ]
+
+
+def test_dev_warns_when_no_body_cli_is_on_path(tmp_path):
+    tools = {name: body for name, body in DEV_TOOLS.items() if name != "claude"}
+    result = _run(tmp_path, tools, args=("--dev",))
+    _commands(result)
+    assert result.stderr.splitlines() == [
+        "warning: neither claude nor codex is on PATH, and loom install picks the loom's body from them; "
+        "install and sign in to one first."
+    ]
+
+
+def test_the_release_path_does_not_ask_about_gh(tmp_path):
+    result = _run(tmp_path, {"uv": UV_ABSENT, "gh": REFUSES})
+    _commands(result)
+    assert result.stderr == ""
 
 
 def test_shellcheck_sh_when_installed():

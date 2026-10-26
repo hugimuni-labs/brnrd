@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .home import Home, thread_of
 from .project import cached_projection, fold, is_notice, projection_cache, sender_threads
+from .wishes import progress
 
 STATES = {"working", "holding", "idle", "parked", "failed", "molted", "settled", "stopped"}
 # The threads table's words for a start waiting on fuel; the board says parked.
@@ -77,16 +78,6 @@ def _done(text: str) -> list[dict]:
             words = item.partition(" — ")[2] or item
             rows.append({"kind": "pr", "ref": url.group(0), "line": words} if url else {"line": item})
     return rows
-
-
-def _plan(rows) -> dict | None:
-    if rows is None:
-        return None
-    plan = {"done": sum(done for done, _ in rows), "total": len(rows)}
-    open_rows = [text for done, text in rows if not done]
-    if open_rows:
-        plan["next"] = open_rows[0].rpartition(" · re: ")[0] or open_rows[0]
-    return plan
 
 
 def _state(now: str) -> str | None:
@@ -177,6 +168,11 @@ def _wish_rows(told, facts) -> list[dict]:
             "results": [_bare({"kind": r.get("kind"), "ref": r.get("ref"), "line": r.get("line"),
                                "delivered": bool(r.get("delivered")), "at": _iso(r["at"])})
                         for r in w.results],
+            "left": _bare({"steps": w.left["steps"], "gen": w.left["gen"], "by": w.left["by"],
+                           "at": _iso(w.left["at"])}) if w.left else None,
+            # Steers after the latest left: what the left has not taken in yet.
+            "steered": [i for x in w.stamps if x["letters"] and x["at"] > (w.left["at"] if w.left else w.born)
+                        for i in x["letters"]],
             "verdict": _bare({"as": w.verdict["as"], "evidence": w.verdict.get("evidence"),
                               "at": _iso(w.verdict["at"])}) if w.verdict else None,
             "answer": {"verdict": answer.data["verdict"], "at": _iso(answer.at),
@@ -191,6 +187,7 @@ class View:
     def __init__(self, home: Home, facts: list, config):
         from .lifecycle import main_snapshot
         from .receipts import receipts
+        from .selfrepo import forge_threads
         from .threads import _table_inputs, thread_table
         from .wishes import waits_on, wishes
         self.home, self.facts, self.config = home, facts, config
@@ -201,6 +198,7 @@ class View:
         self.state = fold(facts)
         self.writers = sender_threads(facts)
         self.texts = _readmes(home)
+        self.forge = forge_threads(home.root / "self")
         self.held = {strand: thread for thread, (strand, _gen) in self.state.holder.items()}
         self.ends = {f.data["strand"]: f.data["cause"]
                      for f in self.state.accepted if f.kind == "attempt.ended"}
@@ -211,7 +209,7 @@ class View:
                 cores.setdefault(f.data["shell"], set()).add(f.data["core"])
         self.cores = {shell: sorted(c) for shell, c in cores.items()}
         self.told = wishes([f for f in facts if f.kind.startswith("wish") or f.kind == "letter"])
-        self.shipped = receipts(facts)
+        self.shipped = receipts(facts, home.install_id())
         # An open ask is the person's turn unless it waits on a thread that has not asked onward.
         self.waits: dict[str, list[str]] = {}
         for ident, head in sorted(waits_on(self.told, self.main).items()):
@@ -255,13 +253,14 @@ def thread(v: View, row: dict) -> dict:
              "opened_for": [{"wish": ident, **({"line": told[ident].line, "state": told[ident].state}
                                                if ident in told else {})}
                             for ident in opened_for(data)],
-             "plan": _plan(data.get("plan_rows")), "strands": strands,
+             "plan": progress(told, thread), "strands": strands,
              "receipts": [{k: val for k, val in {
                  "repo": r.repo, "number": r.number, "url": r.url, "head": r.head,
                  "state": r.state(), "merge_commit": r.merge_commit, "load": r.load()}.items()
                  if val not in (None, "")} for r in v.shipped.get(thread, ())],
              "done": _done(v.texts.get(thread, "")), "owed": row["owed"],
-             "last_at": _iso(last) if last else None}
+             "last_at": _iso(last) if last else None,
+             "url": f"{v.forge}/{thread}" if v.forge else None}
     return {k: val for k, val in entry.items() if val not in (None, "", [])}
 
 
@@ -275,7 +274,7 @@ def presence(v: View) -> dict | None:
             lease = v.leases.get(thread, {}).get(strand)
             present.append((v.activity.get(thread) or 0, {
                 "strand": strand, "thread": thread, "state": now,
-                "now": (_plan(v.main.get(thread, {}).get("plan_rows")) or {}).get("next"),
+                "now": (progress(v.told, thread) or {}).get("next"),
                 "owed": row["owed"],
                 "body": f"{lease.data['shell']}/{lease.data['core']}" if lease else None}))
     if not present:

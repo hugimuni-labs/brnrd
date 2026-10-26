@@ -65,8 +65,9 @@ def say_of(letters: dict[str, Fact], raw: str, default: str | None) -> Say:
 
 def disposed(facts: Iterable[Fact], room: Path | None = None) -> set[str]:
     """Letter ids a say or chatter cites: the ledger, and this room's unsent port/out."""
+    from .ledger import kind_facts
     found: set[str] = set()
-    for f in facts:
+    for f in kind_facts(facts, "wish", "letter", "note"):
         if f.kind == "wish":
             found.update(say.letter for say in read_says(f.data.get("says")))
         elif f.kind in {"letter", "note"}:

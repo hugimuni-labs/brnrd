@@ -53,10 +53,12 @@ parks its next start until all exhausted windows reset.
 
 ## Plan citations
 
-A checklist row under `## Plan` names the letters it answers with a trailing
-` · re: <letter-id>, <letter-id>`. Land the README through `send-self`. The
-boundary lists owed letters without a row from the landed plan and the letter
-ownership table; editing a file or mentioning an id in prose does not cite it.
+A row under `## Plan` is a step, `- <step> · re: <letter-id>, <w-id>`, with
+no checkbox: it carries steps and receipts, never status. Land the README
+through `send-self`; mentioning an id in prose does not cite it. Progress is
+the thread's wishes, delivered and accepted over all that are not dropped:
+the status line's `plan x/y`. A person letter on a thread with open wishes is
+shown with a `steers?` line naming them and the `send` that says it steers one.
 
 ## Linking a file
 
@@ -95,8 +97,16 @@ letter itself, which makes it derived. The README records the ids once as
 `opened-for: [w-…]`: why the thread was opened, while each wish's thread
 says where its work is now. When a result exists,
 record it with `wish <w-id> --result <kind>:<ref> --line "…"`, adding
-`--deliver` on the one you hand over. Cite wish ids in Plan rows beside the
-letters: ` · re: <letter-id>, <w-id>`. `settle` refuses while a delivered wish
+`--deliver` on the one you hand over. What is left on a wish is the wish's
+own: `wish <w-id> --left "<step>" --left "<step>"` restates the whole list,
+and the latest one wins (`--left same` when nothing moved). The loom asks for
+it at a stop and refuses a molt while a wish moved since its last left: a
+steer, a result, a fact this body wrote on it, or, on a thread with one open
+wish, this body's start. The stop asks once per wish (a `left.asked` fact), so
+nothing is trapped; the wake shows each open wish as done, left and the steers
+since. A Plan row that cites a wish (` · re: <letter-id>, <w-id>`) with a
+receipt still grants it, and a pull request opened on a thread with one open
+wish is that wish's result. `settle` refuses while a delivered wish
 awaits a verdict; `--hand-to <thread>` moves those to a thread that will carry
 them. Heard and working wishes stay with their thread.
 

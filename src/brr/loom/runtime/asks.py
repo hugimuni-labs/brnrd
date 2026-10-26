@@ -8,7 +8,7 @@ from .lifecycle import CLOSED
 from .owners import unanswered_by_thread
 from .project import _destination, fold, sender_threads
 from .receipts import receipts
-from .wishes import waits_on, waits_word, wishes, wish_line
+from .wishes import plan_word, waits_on, waits_word, wishes, wish_line
 
 
 @dataclass(frozen=True)
@@ -65,7 +65,7 @@ def render_graph(edges: list[Edge], by: str = "thread", only: str | None = None)
     return "".join(f"{key}\n" + "\n".join(lines) + "\n" for key, lines in groups.items())
 
 
-def asks(facts, main: dict, thread: str | None = None, everything: bool = False) -> str:
+def asks(facts, main: dict, thread: str | None = None, everything: bool = False, *, install: str) -> str:
     """Four buckets over every thread, settled ones included."""
     holder = fold(facts).holder
     told = wishes(facts)
@@ -73,7 +73,7 @@ def asks(facts, main: dict, thread: str | None = None, everything: bool = False)
     heads = waits_on(told, main)
     mine = lambda t: thread is None or t == thread  # noqa: E731
     buckets = {
-        "in hand": [f"{t} · {holder[t][0]} · plan {d['plan']}" for t, d in sorted(main.items())
+        "in hand": [f"{t} · {holder[t][0]} · plan {plan_word(told, t)}" for t, d in sorted(main.items())
                     if mine(t) and t in holder and d.get("status") not in CLOSED],
         "yours": [wish_line(w) + waits_word(heads[w.id]) for w in found
                   if mine(w.thread) and w.id in heads],
@@ -81,7 +81,7 @@ def asks(facts, main: dict, thread: str | None = None, everything: bool = False)
                        if mine(t) for i in ids],
         "done": [f"{t} · {kind} {ref} — {line}" for t, d in sorted(main.items()) if mine(t)
                  for kind, ref, line in d.get("done") or ()]
-                + [f"{t} · {r.line()}" for t, rs in sorted(receipts(facts).items()) if mine(t)
+                + [f"{t} · {r.line()}" for t, rs in sorted(receipts(facts, install).items()) if mine(t)
                    for r in rs]
                 + [wish_line(w) for w in found if mine(w.thread) and w.state == "accepted"],
     }

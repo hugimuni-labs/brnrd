@@ -69,8 +69,10 @@ REGISTRY = (
     _kind("body.exited",       "body",    "strand gen code why? failure_origin? failure_letters?",                             "loom",        "global",  once=True),
     _kind("wish",              "wish",    "wish says from line thread parent?",                "strand person", "global"),
     _kind("wish.read",         "wish",    "wish reading by",                                   "strand person", "global"),
-    _kind("wish.result",       "wish",    "wish kind ref line delivered cmd?",                  "strand",        "global"),
+    _kind("wish.result",       "wish",    "wish kind ref line delivered cmd?",                  "strand loom",   "global"),
     _kind("wish.verdict",      "wish",    "wish as evidence ref",                              "strand person", "global"),
+    _kind("wish.left",         "wish",    "wish steps gen same?",                              "strand",        "global"),
+    _kind("left.asked",        "wish",    "strand gen wishes",                                 "strand",        "global"),
     _kind("pr.opened",         "pr",      "thread repo number url head",                       "strand",        "global"),
     _kind("pr.merged",         "pr",      "thread repo number head merge_commit",              "strand",        "global"),
     # Read by the body's table, owned elsewhere, not enforced here.
@@ -83,6 +85,7 @@ REGISTRY = (
     _kind("loom.started",      "loom",    "install pid commit? loaded",                       "loom",        "global"),
     _kind("loom.degraded",     "loom",    "install step error where since",                   "loom",        "machine"),
     _kind("loom.recovered",    "loom",    "install step since count last",                    "loom",        "machine"),
+    _kind("loom.moved",        "loom",    "install from to merges started",                   "loom",        "global"),
 )
 
 KINDS = {row.kind: row for row in REGISTRY}

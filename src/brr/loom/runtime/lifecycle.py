@@ -15,8 +15,9 @@ CLOSED = {"settled", "retired"}
 DONE_KINDS = ("pr", "issue", "doc", "research", "file", "answer", "post", "action")
 
 
-def parse_plan(text: str) -> list[tuple[bool, str]] | None:
-    """Checklist rows under Plan; None means there is no Plan section."""
+def parse_plan(text: str) -> list[tuple[bool | None, str]] | None:
+    """``- step`` rows under Plan, a ``[ ]``/``[x]`` tick kept but counted by no one
+    (None when the row has no box); None means there is no Plan section."""
     plan = None
     inside = False
     for line in text.splitlines():
@@ -25,9 +26,10 @@ def parse_plan(text: str) -> list[tuple[bool, str]] | None:
             if inside and plan is None:
                 plan = []
         elif inside:
-            row = re.match(r"^\s*- \[([ xX])\] (.+)$", line)
+            row = re.match(r"^\s*- (?:\[([ xX])\] )?(.+)$", line)
             if row:
-                plan.append((row.group(1).lower() == "x", row.group(2)))
+                box = row.group(1)
+                plan.append((None if box is None else box.lower() == "x", row.group(2)))
     return plan
 
 
@@ -62,7 +64,6 @@ def read_thread(home: Home, thread: str, ref: str = "main") -> dict:
         plan = parse_plan(text)
         data["plan_rows"] = plan
         data["done"] = parse_done(text)
-        data["plan"] = f"{sum(done for done, _ in plan)}/{len(plan)}" if plan else "—"
         return data
     except (OSError, ReadmeError):
         return {}
@@ -297,11 +298,15 @@ def readme_at(home: Home, thread: str, blob: str, ref: str) -> dict:
     return _READMES[key]
 
 
-def main_snapshot(home: Home) -> dict[str, dict]:
-    """Pin main once; both inventory and README fields come from that tree."""
+def main_snapshot(home: Home, tree: tuple[str, dict[str, str]] | None = None) -> dict[str, dict]:
+    """Pin main once; both inventory and README fields come from that tree.
+
+    A caller that also walks main's tree passes the ``main_tree`` it read, so a
+    commit landing between two reads cannot split one view across two tips.
+    """
     repo = home.root / "self"
     if (repo / ".git").exists():
-        ref, blobs = main_tree(repo)
+        ref, blobs = tree or main_tree(repo)
         cached = _MAIN_SNAPSHOTS.get(repo)
         if cached and cached[0] == ref:
             return cached[1]

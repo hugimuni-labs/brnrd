@@ -25,6 +25,13 @@ def _context(args):
     return Home(resolve_home(args.home)[0]), "person:operator", None
 
 
+def _declare(args, how: str) -> None:
+    """This body said how it ends: the jack lets its first stop through."""
+    from .jack import declare
+    from .verbs_loom import _room
+    declare(_room(args.room), how)
+
+
 def say_span(raw: str, facts) -> Say:
     match = re.fullmatch(r"(.+?)(?:@(\d+)\+(\d+))?", raw)
     if not match:
@@ -85,6 +92,8 @@ def _wish_arguments(parser):
     action.add_argument("--drop")
     parser.add_argument("--deliver", action="store_true")
     parser.add_argument("--ref")
+    parser.add_argument("--left", action="append", default=[],
+                        help="a step still to do; repeat for each, the whole list (or: same)")
 
 
 def cmd_wish(args):
@@ -92,6 +101,16 @@ def cmd_wish(args):
         home, by, thread = _context(args)
         facts = read_facts(home)
         actions = any(x is not None for x in (args.read, args.result, args.accept, args.drop))
+        left = _left_fact(args, facts, by) if args.left else None
+        if left is not None and not actions:
+            if args.say or any(x is not None for x in (args.line, args.sender, args.thread, args.parent)):
+                raise ValueError("--left restates what is left; it takes no touch flags")
+            append(home, left)
+            _declare(args, "left")
+            print(args.id)
+            return 0
+        if left is not None and args.result is None:
+            raise ValueError("--left goes alone or with --result")
         if args.deliver and args.result is None:
             raise ValueError("--deliver requires --result")
         if args.ref is not None and args.accept is None:
@@ -133,11 +152,41 @@ def cmd_wish(args):
         if not home.routable(target):
             raise ValueError("wish: thread must exist on main")
         append(home, fact)
+        if left is not None:
+            append(home, left)
+        # A park is a reading that says what it waits on, the one the board shows.
+        if actions and kind == "wish.result" and by.startswith("strand:"):
+            _declare(args, "result")
+        elif actions and kind == "wish.read" and by.startswith("strand:") and args.read.startswith("waiting:"):
+            _declare(args, "park")
         print(fact.data["wish"])
         return 0
     except (ValueError, OSError, RuntimeError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
+
+
+def _left_fact(args, facts, by):
+    """The whole list of what is left on a wish, latest wins; ``same`` restates the last one."""
+    if not by.startswith("strand:"):
+        raise ValueError("--left: only the body working a wish says what is left on it")
+    current = wishes(facts).get(args.id)
+    if current is None:
+        raise ValueError(f"no wish {args.id}")
+    steps = [" ".join(step.split()) for step in args.left]
+    if any(not step for step in steps):
+        raise ValueError("--left: a step is empty")
+    if steps == ["none"]:
+        raise ValueError("--left none: nothing left is a delivery: --result <kind>:<ref> --line … --deliver")
+    strand = by.removeprefix("strand:")
+    gen = max((int(f.data["gen"]) for f in facts if f.kind == "lease" and f.data.get("strand") == strand),
+              default=0)
+    data = {"wish": args.id, "steps": [] if steps == ["same"] else steps, "gen": gen}
+    if steps == ["same"]:
+        if current.left is None:
+            raise ValueError(f"--left same: {args.id} has no left yet; write its steps")
+        data["same"] = True
+    return Fact(kind="wish.left", by=by, id="wish.left:" + mint(12), data=data)
 
 
 def _mailed(facts, room, to, marker):
@@ -196,6 +245,7 @@ def cmd_ask(args):
             # The &ref is the mail's parent: a thread letter cites what it answers.
             body += f"Answer &{ident}, or ask onward with: ask \"<what>\" --for {ident}\n"
             write_send(room, to=head, sender=strand_of_room(room), body=body)
+        _declare(args, "ask")
         print(ident)
         return 0
     except (ValueError, OSError, RuntimeError) as exc:

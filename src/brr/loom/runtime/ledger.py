@@ -10,7 +10,7 @@ from collections import defaultdict, OrderedDict
 from datetime import datetime
 from pathlib import Path
 
-from brr.daemon2.facts import Fact, union
+from brr.daemon2.facts import Fact, keep, union
 
 from .home import Home, mint, thread_of
 from .registry import admit, resource_of
@@ -41,7 +41,7 @@ def _freeze(data: dict) -> dict:
 _LOOM_KINDS = {
     "lease", "released", "attention", "router", "router.renewed",
     "speech", "speech.part", "thread.closed", "attempt.ended", "port.drained", "letter.disposed", "letter.due",
-    "loom.started", "loom.degraded", "loom.recovered",
+    "loom.started", "loom.degraded", "loom.recovered", "loom.moved",
 }
 
 
@@ -61,7 +61,7 @@ def fact_filename(fact: Fact) -> str:
     if ((fact.kind in {"source", "blob", "note"} and fact.by.startswith("loom:"))
             or (fact.kind == "note" and fact.by.startswith("person:"))):
         return "loom.jsonl"
-    if resource_of(fact.kind) == "wish" and fact.by.startswith("person:"):
+    if resource_of(fact.kind) == "wish" and fact.by.startswith(("person:", "loom:")):
         return "loom.jsonl"
     if fact.kind in _LOOM_KINDS:
         return "loom.jsonl"
@@ -139,6 +139,7 @@ class LedgerView(list):
         self.reducer = None
         self.delta = ()
         self.reset = True
+        self.duplicates = []
         self.extend(facts)
 
     def _add(self, fact):
@@ -175,25 +176,44 @@ class LedgerView(list):
         key = fact_order(fact)
         self.maximum = max(self.maximum, key) if self.maximum is not None else key
 
-    def extend(self, facts):
-        added = []
+    def incoming(self, facts) -> tuple[list, bool]:
+        """The batch's new facts in canonical order, and whether they reorder this view.
+
+        Records a displaced duplicate as it goes: call it once per batch.
+        """
+        added, displaced = [], False
         for fact in facts:
             old = self.by_id.get(fact.id)
             if old is not None:
-                if old != fact:
-                    raise ValueError(f'conflicting fact id: {fact.id}')
-                continue
+                if old == fact:
+                    continue
+                # Another install's copy of an ingested source: the lower HLC
+                # stays, and displacing a held copy replays the union.
+                if keep(old, fact) is old:
+                    self.duplicates.append(fact)
+                    continue
+                displaced = True
             added.append(fact)
         if not added:
+            return [], False
+        # union(delta) validates duplicates/cycles within the incoming batch.
+        delta = union(added, duplicates=self.duplicates)
+        return delta, (displaced or any(f.id in self.missing for f in delta)
+                       or self.maximum is not None and any(fact_order(f) <= self.maximum for f in delta))
+
+    def extend(self, facts):
+        self.apply(*self.incoming(facts))
+
+    def apply(self, delta, repair):
+        """Add what ``incoming`` returned, rebuilding this view in place on a reorder."""
+        if not delta:
             self.delta = ()
             return
-        # union(delta) validates duplicates/cycles within the incoming batch.
-        delta = union(added)
-        repair = (any(f.id in self.missing for f in delta)
-                  or self.maximum is not None and any(fact_order(f) <= self.maximum for f in delta))
         if repair:
-            ordered = union(self, delta)
+            duplicates = self.duplicates
+            ordered = union(self, delta, duplicates=duplicates)
             fresh = LedgerView(ordered)
+            fresh.duplicates = duplicates
             prior = self.revision
             self.__dict__.clear()
             self.__dict__.update(fresh.__dict__)
@@ -249,6 +269,7 @@ class LedgerView(list):
             'reply-channels': ('source', 'letter'),
             'attachments': ('source', 'blob', 'letter'),
             'reply-context': ('source', 'letter'),
+            'wishes': ('wish', 'wish.read', 'wish.result', 'wish.verdict', 'wish.left', 'letter'),
         }
         if name == 'body-state':
             revision = len(self.by_body[inputs[:2]])
@@ -277,7 +298,9 @@ class LedgerReader:
 
     Only complete lines advance the offset. Replacement, truncation, and
     same-size edits invalidate a stream; removed files leave the union.
-    Callers receive a fresh list because a tick appends its own observations.
+    ``read`` returns a fresh list because a tick appends its own observations.
+    A view ``refresh`` returned only ever grows at its tail: a reorder builds a
+    new view, so a walker on another thread never sees one half-rebuilt.
     """
 
     def __init__(self):
@@ -319,9 +342,18 @@ class LedgerReader:
                 additions.extend(added)
         if changed:
             if repair:
-                self.ordered = LedgerView(union(*(read_file(path) for path in paths)))
+                duplicates = []
+                self.ordered = LedgerView(union(*(read_file(path) for path in paths),
+                                                duplicates=duplicates))
+                self.ordered.duplicates = duplicates
             else:
-                self.ordered.extend(additions)
+                delta, reorder = self.ordered.incoming(additions)
+                if reorder:
+                    duplicates = list(self.ordered.duplicates)
+                    self.ordered = LedgerView(union(self.ordered, delta, duplicates=duplicates))
+                    self.ordered.duplicates = duplicates
+                else:
+                    self.ordered.apply(delta, reorder)
             self.revision += 1
         self.streams = streams
         return self.ordered

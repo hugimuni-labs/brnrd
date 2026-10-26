@@ -86,6 +86,7 @@ class Inputs:
                 except subprocess.TimeoutExpired:
                     child.kill()
                     child.wait()
+        self.children.clear()
 
 
 def addressed(name, fm):

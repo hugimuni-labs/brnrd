@@ -109,3 +109,22 @@ def test_reader_reorders_when_a_causal_predecessor_arrives_late(tmp_path):
     (folder / 'hand.jsonl').write_bytes(row('predecessor', hlc=(2, 0, 'abcd')))
     assert [f.id for f in reader.read(home)] == ['predecessor', 'successor']
     assert reader.read(home) == read_facts(home)
+
+
+def test_a_view_handed_out_never_changes_when_a_late_fact_reorders(tmp_path):
+    """A walker on another thread holds the view refresh returned (the board's
+    bead press). A late earlier fact used to rebuild that object in place, so the
+    walker saw an emptied list under a full index and cached a partial answer."""
+    home = Home(tmp_path)
+    folder = home.facts_dir()
+    (folder / 'loom.jsonl').write_bytes(row('late', hlc=(5, 0, 'abcd')))
+    reader = LedgerReader()
+    held = reader.refresh(home)
+    built = held.project('ids', (), lambda view: [f.id for f in view])
+    (folder / 'hand.jsonl').write_bytes(row('early', hlc=(2, 0, 'abcd')))
+    current = reader.refresh(home)
+    assert [f.id for f in current] == ['early', 'late']
+    assert [f.id for f in held] == ['late']
+    assert [f.id for f in held.by_kind['note']] == ['late']
+    assert held.project('ids', (), lambda view: [f.id for f in view]) is built
+    assert current == read_facts(home)

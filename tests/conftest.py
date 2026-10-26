@@ -99,6 +99,8 @@ def _isolate_account_state(tmp_path_factory, monkeypatch):
     """
     state_home = tmp_path_factory.mktemp("xdg-state")
     monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    # No test loom follows this checkout's main: its source is a folder, not a repo.
+    monkeypatch.setenv("BRNRD_LOOM_SOURCE", str(state_home / "loom-source"))
     yield
 
 

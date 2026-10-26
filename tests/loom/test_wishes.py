@@ -224,7 +224,7 @@ def test_wake_caps_rows_with_asks_first(ledger):
     output = StringIO()
     assert run_wake(seat, "work", stdout=output) == 0
     section = output.getvalue().split("## Wishes\n")[1].split("## Notes")[0]
-    lines = section.strip().splitlines()
+    lines = [line for line in section.strip().splitlines() if not line.startswith("  ")]
     assert lines[0].startswith("w-069 ·")
     assert len(lines) == 21
     assert lines[-1] == "+50 more · wishes --thread work"

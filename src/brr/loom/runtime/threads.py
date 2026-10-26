@@ -79,12 +79,14 @@ def thread_table(home: Home, facts: list) -> list[dict]:
     stop block, is the nearest derivable holding value.
     """
     from .loom import body_alive
-    main = main_snapshot(home)
-    state, ownership, axes, owed, activity, boundary, pending, unanswered = cached_projection(
-        facts, "thread-table", repr(main), lambda rows: _table_inputs(rows, main))
     repo = home.root / 'self'
     versioned = (repo / '.git').exists()
+    # One read of main feeds both the axes and the rows: a thread opened
+    # between two reads would have a row and no axes.
     tip, blobs = main_tree(repo) if versioned else (None, {})
+    main = main_snapshot(home, (tip, blobs) if versioned else None)
+    state, ownership, axes, owed, activity, boundary, pending, unanswered = cached_projection(
+        facts, "thread-table", repr(main), lambda rows: _table_inputs(rows, main))
     if not versioned or _MAIN.get(repo, (None, None))[0] != tip:
         names = (list(blobs) if versioned
                  else [p.relative_to(repo).as_posix() for p in (repo / 'threads').glob('*/README.md')])
@@ -122,15 +124,13 @@ def thread_table(home: Home, facts: list) -> list[dict]:
         _MAIN[repo] = (tip, snapshot)
         _ROWS[repo] = kept
     now, rows = time.time(), []
-    told = None
+    from .wishes import plan_word, told as fold_wishes
+    told = fold_wishes(facts)
     from .receipts import receipts
-    shipped = receipts(facts)
+    shipped = receipts(facts, home.install_id())
     for thread, data, choice, created, date in _MAIN[repo][1]:
         why = '—'
         if opened_for(data):
-            if told is None:
-                from .wishes import wishes
-                told = wishes([f for f in facts if f.kind.startswith('wish') or f.kind == 'letter'])
             why = '; '.join(opened_for_line(ident, told.get(ident)) for ident in opened_for(data))
         count = len(owed.get(thread, ()))
         strand = state.holder.get(thread, ('', 0))[0]
@@ -173,7 +173,7 @@ def thread_table(home: Home, facts: list) -> list[dict]:
             cause = axes[thread]['cause']
             value = 'idle ' + _age(now - last) if cause == 'idle' else cause
         rows.append({'thread': thread, 'seat': seat, 'now': value, 'owed': count, 'unanswered': len(unanswered.get(thread, ())),
-                     'opened-by': data.get('opened-by') or '—', 'opened-for': why, 'plan': data['plan'],
+                     'opened-by': data.get('opened-by') or '—', 'opened-for': why, 'plan': plan_word(told, thread),
                      'status': data['status'], **{k: axes[thread][k] for k in ('owed-by', 'restart', 'control')},
                      'receipts': '; '.join(r.line() for r in shipped.get(thread, ())) or '—'})
     for ident, fate in ownership.items():
