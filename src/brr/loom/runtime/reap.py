@@ -9,6 +9,9 @@ is kept, and the reason is logged. ``self.broken-*`` asides go ``BROKEN_AGE``
 after the ``room.repaired`` that made them, ``.self-clone-*`` once their pid is
 dead. Each removal writes ``room.reaped`` first, with the bytes and branch
 heads it held; a path still on disk under such a fact is finished next pass.
+A kept room still loses each code clone (a checkout other than self) once
+``clone_kept`` finds no reason: one ``clone:<strand>/<name>`` converge want
+each, ``CLONE_AGE`` after release; self and port stay until the room goes.
 ``loom.log`` rotates at ``LOG_MAX`` to three generations. Below the disk floor
 ``disk`` raises, so the guard opens a degradation, and the pass runs at once.
 The pass runs off the loop: ``leftovers`` fetches into every room it reads.
@@ -25,7 +28,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -34,6 +39,7 @@ from pathlib import Path
 
 EVERY = 3600
 ROOM_AGE = 7 * 86400
+CLONE_AGE = 2 * 86400
 BROKEN_AGE = 14 * 86400
 LOG_MAX = 20 * 1024 * 1024
 LOG_KEEP = 3
@@ -42,7 +48,7 @@ FLOOR_SHARE = 0.05
 # What the loom and the harness put at a room's root; checkouts are read by leftovers.
 PLUMBING = {"self", "port", ".body", ".starting", ".claude", ".pytest-tmp", "delegates"}
 # Reasons only a body can settle; the rest are the loom's or time's.
-BODY_REASONS = ("loose files", "leftovers in")
+BODY_REASONS = ("loose files", "leftovers in", "a stash in")
 KEPT = "loom/reap-kept.json"
 
 
@@ -174,6 +180,75 @@ def room_kept(home, facts, strand: str, now: float, force: bool = False) -> str:
     return ""
 
 
+def busy(rooms: Path) -> set[str]:
+    """Rooms some process works in: its cwd, an open file or its command line under the room.
+
+    One ``lsof`` and one ``ps`` for the whole pass. A failed probe raises: an
+    unread machine is never read as idle.
+    """
+    prefix = str(rooms.resolve()) + os.sep
+    plain = str(rooms) + os.sep
+    out = subprocess.run(["lsof", "-n", "-w", "-Fn"], capture_output=True, text=True, timeout=300).stdout
+    if not out:
+        raise OSError("lsof printed nothing")
+    out += subprocess.run(["ps", "-axww", "-o", "command="], capture_output=True, text=True,
+                          check=True, timeout=60).stdout
+    return {match for base in {prefix, plain}
+            for match in re.findall(re.escape(base) + r"([^/\s]+)", out)}
+
+
+def latest_strands(facts) -> set[str]:
+    """Each thread's latest leased strand: its next wake lands in that room."""
+    latest = {}
+    for fact in facts:
+        if fact.kind == "lease" and fact.data.get("thread"):
+            latest[str(fact.data["thread"])] = str(fact.data.get("strand"))
+    return set(latest.values())
+
+
+def clone_kept(home, facts, strand: str, name: str, now: float, working: set[str],
+               latest: set[str]) -> str:
+    """Why ``rooms/<strand>/<name>`` stays, or empty when the clone may go. Cheapest first."""
+    from .loom import body_alive
+    room = home.room(strand)
+    checkout = room / name
+    if strand in working:
+        return "a process works in the room"
+    if body_alive(room):
+        return "a body holds it"
+    if strand in latest:
+        return "it is its thread's latest strand"
+    leases = [f for f in facts if f.kind == "lease" and f.data.get("strand") == strand]
+    if not leases:
+        return "no lease names it"
+    gen = max(int(f.data.get("gen") or 0) for f in leases)
+    released = next((f for f in facts if f.kind == "released" and f.data.get("strand") == strand
+                     and int(f.data.get("gen") or 0) == gen), None)
+    if released is None:
+        return f"gen {gen} is not released"
+    if now - _seconds(released.at) < CLONE_AGE:
+        return "released less than 48 h ago"
+    if (checkout / ".git").is_file():
+        return "a linked worktree"
+    from .selfrepo import git
+    listed = git(checkout, "worktree", "list", "--porcelain").stdout
+    linked = [line[len("worktree "):] for line in listed.splitlines() if line.startswith("worktree ")][1:]
+    if any(Path(path).exists() for path in linked):
+        return "linked worktrees: " + ", ".join(linked[:3])
+    if git(checkout, "stash", "list").stdout.strip():
+        return f"a stash in {name}"
+    from .leftovers import leftovers
+    left = leftovers(home, strand, only=name)
+    if left:
+        item = left[0]
+        return f"leftovers in {name}: " + (item.error or f"{len(item.commits)} commits, {len(item.edits)} edits")
+    return ""
+
+
+def clones(room: Path) -> list[Path]:
+    return sorted(p for p in room.iterdir() if p.name not in PLUMBING and (p / ".git").exists())
+
+
 class Reaper:
     def __init__(self, home, log):
         self.home = home
@@ -234,7 +309,10 @@ class Reaper:
         asides = {Path(str(f.data["aside"])).resolve(): f.at for f in facts
                   if f.kind == "room.repaired" and f.data.get("aside")}
         key = self._key
+        working = busy(rooms)
+        latest = latest_strands(facts)
         gone, kept, settle = 0, {}, {}
+        cloned, freed, held = 0, 0, {}
         for room in sorted(rooms.iterdir()):
             if room.name.startswith(".") or not room.is_dir():
                 continue
@@ -252,6 +330,16 @@ class Reaper:
             kept[why.split(":")[0]] = kept.get(why.split(":")[0], 0) + 1
             if why.startswith(BODY_REASONS):
                 settle[room.name] = why
+            for name, done, bytes_, reason in self.clones(room, facts, reaped, now, working, latest):
+                if done:
+                    cloned += 1
+                    freed += bytes_
+                    continue
+                if not reason:
+                    continue
+                held[reason.split(":")[0]] = held.get(reason.split(":")[0], 0) + 1
+                if reason.startswith(BODY_REASONS) and room.name not in settle:
+                    settle[room.name] = reason
             for aside in sorted(room.glob("self.broken-*")):
                 at = asides.get(aside.resolve())
                 if key(aside) in reaped or (at and now - _seconds(at) >= BROKEN_AGE):
@@ -262,7 +350,48 @@ class Reaper:
                     self._remove(clone, "self-clone", room.name, done=key(clone) in reaped)
         self.log(home, f"reap: {gone} rooms reaped; kept " + (
             ", ".join(f"{n} ({why})" for why, n in sorted(kept.items())) or "none"))
+        self.log(home, f"reap: {cloned} clones reaped ({freed / 1024 ** 3:.2f} GB); kept " + (
+            ", ".join(f"{n} ({why})" for why, n in sorted(held.items())) or "none"))
         self.tell(settle)
+
+    def clones(self, room: Path, facts, reaped: set[str], now: float, working: set[str],
+               latest: set[str]):
+        """Converge ``clone:<strand>/<name>`` for each code clone of a kept room.
+
+        Holds when the clone is gone or ``clone_kept`` names a reason. ``make``
+        writes ``room.reaped {what: clone}`` and then deletes, so a path still on
+        disk under that fact is finished by the next pass's ``make``.
+        Yields ``(name, removed, bytes, reason)``.
+        """
+        from .converge import Want, converge
+        strand = room.name
+        for checkout in clones(room):
+            name, reason, removed = checkout.name, [""], [0]
+            finishing = self._key(checkout) in reaped
+
+            def holds(checkout=checkout, name=name, reason=reason, finishing=finishing):
+                if not checkout.exists():
+                    return True
+                if finishing:
+                    return False
+                try:
+                    reason[0] = clone_kept(self.home, facts, strand, name, now, working, latest)
+                except Exception as exc:
+                    reason[0] = f"inspection failed: {type(exc).__name__}: {exc}"
+                return bool(reason[0])
+
+            def make(checkout=checkout, removed=removed, finishing=finishing):
+                removed[0] = 0 if finishing else size(checkout)
+                self._remove(checkout, "clone", strand, done=finishing)
+                return None
+
+            gen = max((int(f.data.get("gen") or 0) for f in facts
+                       if f.kind == "lease" and f.data.get("strand") == strand), default=0)
+            try:
+                converge(self.home, strand, gen, [Want(f"clone:{strand}/{name}", holds, make)])
+            except Exception as exc:
+                reason[0] = f"removal failed: {type(exc).__name__}: {exc}"
+            yield name, not checkout.exists(), removed[0], reason[0]
 
     def tell(self, settle: dict[str, str]) -> None:
         """One inbox notice naming every room a body must settle, when one is new to it."""
