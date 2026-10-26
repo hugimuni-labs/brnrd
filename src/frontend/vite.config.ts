@@ -65,7 +65,7 @@ export default defineConfig({
 		// namespace the backend declares and steals none of the SPA's own.
 		// Adding a backend prefix without adding it here now fails the suite.
 		proxy: {
-			'^/(api|auth|healthz|install(\.sh)?|logout|r|static|v1)(/|$)': {
+			'^/(api|auth|healthz|install([.]sh)?|logout|r|static|v1)(/|$)': {
 				target: process.env.BRNRD_DEV_TARGET ?? 'http://localhost:8000',
 				changeOrigin: true
 			}
