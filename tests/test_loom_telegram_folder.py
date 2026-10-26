@@ -44,6 +44,8 @@ def bot(tmp_path, monkeypatch):
                 if not updates:
                     time.sleep(.01)
                 self.reply(dict(ok=True, result=updates))
+            elif method == 'getMe':
+                self.reply(dict(ok=True, result=dict(id=1, is_bot=True, username='ada_bot')))
             elif method == 'getFile':
                 self.reply(dict(ok=True, result=dict(file_path='photo.jpg')))
             else:
@@ -252,3 +254,9 @@ def test_photo_answer_and_reply_bind_same_thread_through_named_instance(bot):
         assert reply.data['to'] == 'thread:first'
     finally:
         inputs.close()
+
+
+def test_door_names_the_bot_and_links_the_code(bot):
+    result = subprocess.run([str(bot.folder / 'door'), 'c0de'], env=bot.env,
+                            capture_output=True, text=True, timeout=30)
+    assert json.loads(result.stdout) == dict(name='@ada_bot', link='https://t.me/ada_bot?start=c0de')
