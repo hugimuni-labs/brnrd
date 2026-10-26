@@ -67,12 +67,18 @@ def _path_env() -> str:
     return os.pathsep.join(dict.fromkeys([str(entry.shim().parent), *kept]))
 
 
-def _point_entry() -> str:
-    """Write the shim and point ``current`` at this interpreter's prefix: installing is choosing this brnrd."""
+def _refuse_prefix() -> None:
+    """Refuse an interpreter whose prefix has no ``bin/python`` for the shim to run,
+    before anything is stopped or written."""
     target = entry.prefix()
     if not os.access(target / "bin" / "python", os.X_OK):
         raise SystemExit(f"loom install: {target} has no bin/python for {entry.shim()} to run; "
                          "install brnrd into a virtualenv (uv tool, pipx) and run it from there")
+
+
+def _point_entry() -> str:
+    """Write the shim and point ``current`` at this interpreter's prefix: installing is choosing this brnrd."""
+    target = entry.prefix()
     entry.write_shim()
     was = entry.point(target)
     return f"{entry.current()} -> {entry.prefix()}" + (f" (was {was})" if was else "")
@@ -510,6 +516,7 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
     from brr import __version__
 
     _refuse_source(args.dev)
+    _refuse_prefix()
     system = _platform(system)
     home, source = _service_home(args.home, agents_home=agents_home, system=system)
     body, picked = _settle_body(home, write=not args.dry_run)

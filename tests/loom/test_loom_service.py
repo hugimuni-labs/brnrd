@@ -776,6 +776,30 @@ def test_cli_install_stops_a_loom_outside_the_service_before_starting(tmp_path, 
             child.kill()
 
 
+def test_cli_install_from_a_prefix_with_no_python_stops_nothing(tmp_path, machine, monkeypatch):
+    # Homebrew's bin has python3 but no python: the shim could not run it, so
+    # install refuses before the running loom is stopped.
+    manager = machine("Darwin")
+    home = tmp_path / "home"
+    _body(home)
+    bare = tmp_path / "brew" / "bin" / "python3"
+    bare.parent.mkdir(parents=True)
+    bare.symlink_to(sys.executable)
+    monkeypatch.setattr(sys, "executable", str(bare))
+    child = _lock_holder(home)
+    try:
+        manager.holders = [child.pid]
+        with pytest.raises(SystemExit, match="no bin/python"):
+            _brnrd("loom", "install", "--home", str(home))
+        assert child.poll() is None
+        assert manager.changes() == []
+        assert not entry.current().exists() and not entry.shim().exists()
+        assert not macos.plist_path(label=service.LABEL).exists()
+    finally:
+        child.kill()
+        child.wait()
+
+
 def test_cli_install_leaves_the_services_own_loom_to_bootout(tmp_path, machine, capsys):
     """The service's loom is booted out by install, never signalled by hand."""
     manager = machine("Darwin")
