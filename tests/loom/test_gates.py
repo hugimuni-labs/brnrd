@@ -153,3 +153,81 @@ def test_relay_state_inside_the_home_or_a_plain_forge_token_is_not_legacy(tmp_pa
     (root / "loom/config.toml").write_text(
         f'relay_state = "{root}/loom"\nforge_token = "command: gh auth token"\n')
     assert not gates.legacy(root, load_config(root))
+
+
+def signed_in_gh(tmp_path: Path, monkeypatch, token: str = "gho_person") -> None:
+    """A gh on PATH that answers ``gh auth token`` like a signed-in one."""
+    bin_dir = tmp_path / "gh-bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(f'#!/bin/sh\n[ "$1 $2" = "auth token" ] && echo {token} && exit 0\nexit 1\n')
+    gh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{__import__('os').environ['PATH']}")
+
+
+def fresh(tmp_path: Path) -> Path:
+    root = tmp_path / "home"
+    (root / "loom").mkdir(parents=True)
+    (root / "loom/config.toml").write_text('name = "brnrd"\n# forge_token = ...\n')
+    return root
+
+
+def test_no_cloud_sets_the_persons_gh_and_publish_pushes_with_it(tmp_path, monkeypatch):
+    root = fresh(tmp_path)
+    signed_in_gh(tmp_path, monkeypatch)
+    assert gates.converge(root) == {"forge_token": gates.GH, "forge_token_was": None}
+    config = load_config(root)
+    assert config.forge_token == gates.GH and config.name == "brnrd"
+    _args, env, lane, _ = remote_command("https://github.com/o/r.git", ["push"], config.forge_token)
+    assert lane == "token" and env["BRNRD_FORGE_TOKEN"] == "gho_person"
+    assert gates.converge(root) == {}
+
+
+def test_gh_not_signed_in_leaves_forge_token_unset(tmp_path):
+    root = fresh(tmp_path)
+    assert gates.converge(root) == {}
+    assert load_config(root).forge_token is None
+
+
+def test_a_gate_moves_the_persons_gh_to_the_app_and_publish_mints(tmp_path, monkeypatch, mint, shim):
+    root = fresh(tmp_path)
+    signed_in_gh(tmp_path, monkeypatch)
+    gates.converge(root)
+    connected(root, mint.url)
+    assert gates.converge(root) == {"forge_token": spec(root), "forge_token_was": gates.GH}
+    _args, env, _lane, _ = remote_command("https://github.com/o/r.git", ["push"],
+                                          load_config(root).forge_token)
+    assert env["BRNRD_FORGE_TOKEN"] == "ghs_1"
+
+
+def test_the_app_never_falls_back_to_the_persons_gh_and_a_persons_choice_stays(tmp_path, monkeypatch):
+    signed_in_gh(tmp_path, monkeypatch)
+    root = fresh(tmp_path)
+    # The verb with its gate gone stays the verb: it fails loudly as the App (fork A).
+    (root / "loom/config.toml").write_text(f'forge_token = {json.dumps(spec(root))}\n')
+    assert gates.converge(root) == {}
+    (root / "loom/config.toml").write_text('forge_token = "env: MY_TOKEN"\n')
+    assert gates.converge(root) == {}
+
+
+def test_install_writes_and_names_the_identity_and_a_dry_run_writes_nothing(tmp_path, monkeypatch):
+    from brr.loom.runtime import service
+    signed_in_gh(tmp_path, monkeypatch)
+    root = fresh(tmp_path)
+    before = (root / "loom/config.toml").read_text()
+    assert service._settle_forge(root, write=False) == f"{gates.GH} (your own gh login, set now)"
+    assert (root / "loom/config.toml").read_text() == before
+    assert service._settle_forge(root) == f"{gates.GH} (your own gh login, set now)"
+    assert service._settle_forge(root) == f"{gates.GH} (your own gh login)"
+
+
+def test_loom_start_converges_and_records_it(tmp_path, monkeypatch):
+    from brr.loom.runtime.home import Home
+    from brr.loom.runtime.ledger import read_facts
+    from brr.loom.runtime.loom import _converge_forge_token
+    signed_in_gh(tmp_path, monkeypatch)
+    root = fresh(tmp_path)
+    _converge_forge_token(Home(root))
+    assert load_config(root).forge_token == gates.GH
+    moved = [f for f in read_facts(Home(root)) if f.kind == "home.migrated"]
+    assert [f.data["want"] for f in moved] == ["forge_token"]

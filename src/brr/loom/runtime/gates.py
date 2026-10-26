@@ -82,6 +82,63 @@ def main(argv: list[str]) -> int:
     return 0
 
 
+# ---- converge:forge_token ------------------------------------------------
+
+GH = "command: gh auth token"
+
+
+def verb(home_root: Path | str) -> str:
+    """The forge_token that mints the App token from this home's gate."""
+    from . import entry
+    return "command: " + entry.command("forge-token", "--home", str(Path(home_root)))
+
+
+def gh_answers() -> bool:
+    """``gh auth token`` prints a token here, with this process's PATH."""
+    import subprocess
+    if not shutil.which("gh"):
+        return False
+    try:
+        with subprocess.Popen(["gh", "auth", "token"], stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, text=True) as gh:
+            out, _ = gh.communicate(timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return gh.returncode == 0 and bool(out.strip())
+
+
+def wanted(home_root: Path | str, config, *, gh=gh_answers) -> str | None:
+    """One identity per install: the App when the home holds a cloud gate,
+    else the person's own gh when it answers, else none (publish then uses
+    the machine's git setup, and the mirror waits)."""
+    if state_dir(home_root, config) is not None:
+        return verb(home_root)
+    return GH if gh() else None
+
+
+def converge(home_root: Path | str, *, gh=gh_answers, write: bool = True) -> dict:
+    """Set an unset forge_token, or move ``GH`` to the verb once the home
+    holds a gate.
+
+    Nothing else is touched: a ``file:``, ``env:`` or other command is the
+    person's, and the verb never falls back to the person's gh when the
+    gate goes missing; it fails, loudly, with the App's identity (fork A).
+    Returns ``{"forge_token": new, "forge_token_was": old}`` when it
+    changed, else {}.
+    """
+    root = Path(home_root)
+    config = load_config(root)
+    have = config.forge_token
+    if have not in (None, GH):
+        return {}
+    want = wanted(root, config, gh=gh)
+    if want is None or want == have:
+        return {}
+    if write:
+        _rewrite(root, {"forge_token": want}, why="converge:forge_token")
+    return {"forge_token": want, "forge_token_was": have}
+
+
 # ---- migrate:gates -------------------------------------------------------
 
 _LEGACY = re.compile(r"/loom/bin/forge-token\b")
@@ -118,8 +175,7 @@ def migrate(home_root: Path | str, *, verify=None) -> dict:
     if config.relay_state and not _inside(Path(config.relay_state), root):
         edits["relay_state"] = None
     if config.forge_token and _LEGACY.search(config.forge_token):
-        from . import entry
-        edits["forge_token"] = "command: " + entry.command("forge-token", "--home", str(root))
+        edits["forge_token"] = verb(root)
         data["forge_token_was"] = config.forge_token
     if edits:
         _rewrite(root, edits)
@@ -142,21 +198,28 @@ def _inside(path: Path, root: Path) -> bool:
         return False
 
 
-def _rewrite(root: Path, edits: dict[str, str | None]) -> None:
-    """Set or comment out each key in place; the loader must accept the result."""
+def _rewrite(root: Path, edits: dict[str, str | None], why: str = "migrate:gates") -> None:
+    """Set or comment out each key in place, appending a key with no line;
+    the loader must accept the result."""
     path = config_path(root)
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     stamp = time.strftime("%Y-%m-%d")
-    out = []
+    out, done = [], set()
     for line in lines:
         key = line.split("=", 1)[0].strip() if "=" in line and not line.lstrip().startswith("#") else None
         if key in edits:
             value = edits[key]
-            out.append(f"# {line.rstrip()}  # moved by migrate:gates {stamp}\n")
+            out.append(f"# {line.rstrip()}  # moved by {why} {stamp}\n")
             if value is not None:
                 out.append(f"{key} = {json.dumps(value)}\n")
+            done.add(key)
             continue
         out.append(line)
+    if out and not out[-1].endswith("\n"):
+        out[-1] += "\n"
+    for key, value in edits.items():
+        if key not in done and value is not None:
+            out.append(f"{key} = {json.dumps(value)}  # set by {why} {stamp}\n")
     text = "".join(out)
     draft = path.with_name(path.name + ".gates")
     draft.write_text(text, encoding="utf-8")

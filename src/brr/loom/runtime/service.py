@@ -243,6 +243,20 @@ def _settle_body(home: Path, *, write: bool = True) -> tuple[str, str]:
     )
 
 
+def _settle_forge(home: Path, *, write: bool = True) -> str:
+    """Give the install one GitHub identity (threads/forge-auth) and say which."""
+    from . import gates
+    if write:
+        seed_config(home)
+    changed = gates.converge(home, write=write) if config_path(home).is_file() else {}
+    token = changed.get("forge_token") if changed else load_config(home).forge_token
+    if token is None:
+        return "none: gh is not signed in here; publish uses this machine's git setup"
+    who = ("the brnrd-dev App (cloud)" if token == gates.verb(home)
+           else "your own gh login" if token == gates.GH else "your own setting")
+    return f"{token} ({who}{', set now' if changed else ''})"
+
+
 def _lock_held(home: Path) -> bool:
     path = home / "loom" / "loop.lock"
     if not path.is_file():
@@ -499,6 +513,7 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
     system = _platform(system)
     home, source = _service_home(args.home, agents_home=agents_home, system=system)
     body, picked = _settle_body(home, write=not args.dry_run)
+    forge = _settle_forge(home, write=not args.dry_run)
     alive = _alive(pid_alive)
     if system not in {"Linux", "Darwin"}:
         raise SystemExit("[brnrd] loom install on this platform is not implemented yet")
@@ -509,6 +524,7 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
         ("brnrd", __version__ + (" (source checkout, --dev)" if _brr_source() else "")),
         ("home", f"{home} ({source})"),
         ("body", f"{body} ({picked})"),
+        ("forge", forge),
         ("service", unit_file),
         ("entry", entry.shim()),
     ]

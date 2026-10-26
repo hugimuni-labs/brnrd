@@ -65,7 +65,9 @@ KEYS: tuple[Key, ...] = (
     Key("forge_token", "secret", None,
         "How to get the forge token `publish` pushes with and a body's gh uses: "
         "\"command: gh auth token\", \"file: ~/path\" or \"env: NAME\". Read at each "
-        "use and at body start, never stored. Unset: the machine's own git setup and gh login."),
+        "use and at body start, never stored. Install and loom start set it: \"command: gh auth "
+        "token\" when gh is signed in, the App's `forge-token` verb once the home holds a "
+        "cloud gate; any other value is left alone. Unset: the machine's own git setup."),
     Key("gh", "choice", "auto",
         "A body's `gh`: auto uses the forge token above when the home has one, "
         "else the machine's gh login; off signs it out.",

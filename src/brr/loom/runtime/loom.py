@@ -1788,6 +1788,23 @@ def _migrate_gates(home: Home) -> None:
     _log(home, f"migrate:gates: {data}")
 
 
+def _converge_forge_token(home: Home) -> None:
+    """Before the first tick, after the gate migration: an unset forge_token
+    gets the person's gh, and gh becomes the App's verb once the home holds a
+    cloud gate (gates.converge). A failure keeps the config as it was."""
+    from . import gates
+    try:
+        data = gates.converge(home.root)
+    except Exception as exc:
+        _log(home, f"converge:forge_token: unchanged: {type(exc).__name__}: {exc}")
+        return
+    if not data:
+        return
+    append(home, Fact(kind="home.migrated", by=f"loom:{home.install_id()}",
+                      data={"want": "forge_token", **data}))
+    _log(home, f"converge:forge_token: {data}")
+
+
 def _read_usage(home, usage) -> None:
     for shell in usage.shells(home):
         usage.reading(home, shell)
@@ -1815,6 +1832,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         except Exception:
             _log(home, traceback.format_exc().rstrip())
         _migrate_gates(home)
+        _converge_forge_token(home)
         from .config import ConfigError, load_config, tick_config
         from . import usage
         config = load_config(home.root)
