@@ -16,6 +16,23 @@ def home_at(tmp_path):
     return Home(tmp_path, 'aaaa')
 
 
+def test_pair_sets_connectors_on_the_template_line_and_keeps_the_rest(tmp_path):
+    from brr.loom.runtime.config import render_config, seed_config
+    home = home_at(tmp_path)
+    seed_config(tmp_path)
+    before = render_config().splitlines()
+    state = Path(connector.environment(home, 'desk')['BRNRD_STATE'])
+    def send_code(line):
+        if line.startswith('Send '):
+            (state / 'in' / 'code.md').write_text(_front(dict(kind='letter', id='code',
+                                                   to='42', **{'from': '42'}), line.split()[1]))
+    assert setup_channel.pair(home, 'fake', 'desk', 'ada', out=send_code) == 'desk:42'
+    after = (tmp_path / 'loom/config.toml').read_text().splitlines()
+    at = before.index('# connectors = []')
+    assert after[at] == 'connectors = ["desk=fake"]'
+    assert after[:at] + after[at + 1:] == before[:at] + before[at + 1:]
+
+
 def test_fake_live_pair_saves_named_identity_and_keeps_unrelated_letters(tmp_path):
     home = home_at(tmp_path)
     state = Path(connector.environment(home, 'desk')['BRNRD_STATE'])
