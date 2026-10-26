@@ -132,8 +132,8 @@ def open_thread(room: Path, thread: str, sender: str, text: str,
     if _current_label(resolve_clone(room), sender).taint:
         raise PortError("send: a tainted strand cannot open a thread on main; "
                         f"send a clean letter to {home_of_room(room).main_thread()} instead")
-    if body_choice is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*/[^\s]+", body_choice):
-        raise PortError("send: --body must be shell/core")
+    if body_choice is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*(/[^\s]+)?", body_choice):
+        raise PortError("send: --body must be shell or shell/core")
     from .adapters import repos
     if any("\n" in source or "\r" in source for source in repo_sources):
         raise PortError("send: --repo must be one seat line")

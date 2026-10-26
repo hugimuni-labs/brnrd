@@ -46,8 +46,8 @@ def _loom(argv: list[str]) -> int:
         # A home an appending writer left with a key set twice loads once folded.
         fold_config(Path(args.home).expanduser().resolve())
         choice = _require_body(Path(args.home).expanduser().resolve())
-        adapter, _, core = choice.partition("/")
-        adapter, core = adapter.strip(), core.strip()
+        from .adapters import parse_body
+        adapter, core = parse_body(choice)
     run_loom(
         args.home, adapter=adapter, core=core, tick=args.tick,
         install=args.install,
@@ -134,7 +134,7 @@ def _send(argv: list[str]) -> int:
     parser.add_argument("--chatter-of", dest="chatter_of", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--reopen", metavar="TEXT")
     parser.add_argument("--at", help="YYYY-MM-DDTHH:MM:SSZ, +<n>m, +<n>h, or +<n>d")
-    parser.add_argument("--body", dest="body_choice", metavar="SHELL/CORE")
+    parser.add_argument("--body", dest="body_choice", metavar="SHELL[/CORE]")
     parser.add_argument("--repo", action="append", default=[])
     parser.add_argument("--budget", metavar="TOKENS",
                         help="weighted tokens, e.g. 2m: a new thread's allocation, or the opener's raise")

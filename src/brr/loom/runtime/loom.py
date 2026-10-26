@@ -23,7 +23,7 @@ from pathlib import Path
 
 from brr.daemon2.facts import Fact
 
-from .adapters import resolve
+from .adapters import body_label, resolve
 from .bodies import COMMANDS, TABLE, Observation, decide, fact_for, row_for, state_of
 from .faces import propose, proposal_line
 from .health import Health, degraded_line
@@ -1298,7 +1298,7 @@ def _wake_letter(home, facts, thread, leased, letter, channel, *, parked=True):
     elif parked and named == leased:
         disposition["reason"] = "wake: started before its reset"
     else:
-        disposition.update(reason=f"wake: on {named[0]}/{named[1]}", thread=thread, body="/".join(named))
+        disposition.update(reason=f"wake: on {body_label(*named)}", thread=thread, body=body_label(*named))
     try:
         facts.append(_record(home, "letter.disposed", {"dispositions": [disposition]},
                              f"letter.disposed:{ident}"))
@@ -1322,7 +1322,7 @@ def _core_for(home, facts, thread, shell, leased):
         seated = at_birth(home, thread, ("", ""))
     except (ValueError, OSError):
         seated = ("", "")
-    if seated[0] == shell and seated[1]:
+    if seated[0] == shell:
         return seated[1]
     return next((f.data["core"] for f in reversed(facts)
                  if f.kind == "lease" and f.data.get("shell") == shell and f.data.get("core")), None)
@@ -1337,7 +1337,7 @@ def _wake_body(home, facts, thread, leased, said):
     if shell not in valid:
         return f"No body {said[1]!r} here; bodies are {', '.join(valid)}."
     core = said[2] or _core_for(home, facts, thread, shell, leased)
-    if not core:
+    if core is None:
         return f"No core on record for {shell}: name one, as wake {shell}/<core>."
     return shell, core
 
@@ -1348,14 +1348,14 @@ def _wake_lines(home, facts, thread, leased, park):
     found = shell_fuels(home)
     if park:
         window, left, when = park
-        lines = [f"wake: retry {leased[0]}/{leased[1]} ({window} {left:g}%, "
+        lines = [f"wake: retry {body_label(*leased)} ({window} {left:g}%, "
                  f"resets {datetime.fromtimestamp(when).astimezone():%a %H:%M})"]
     else:
-        lines = [f"wake: retry {leased[0]}/{leased[1]}"]
+        lines = [f"wake: retry {body_label(*leased)}"]
     for shell in _wake_shells(home, leased[0]):
         if shell == leased[0]:
             continue
-        word = f"wake {shell}" if _core_for(home, facts, thread, shell, leased) else f"wake {shell}/<core>"
+        word = f"wake {shell}" if _core_for(home, facts, thread, shell, leased) is not None else f"wake {shell}/<core>"
         lines.append(f"{word}: {shell + ' ' + found[shell] if shell in found else 'fuel unknown'}")
     return lines
 
@@ -1372,8 +1372,11 @@ def _wake_choice(facts, thread):
         if f.kind == "letter.disposed" and f.by.startswith("loom:"):
             for d in f.data.get("dispositions", ()):
                 if d.get("thread") == thread and d.get("body"):
-                    shell, _, core = str(d["body"]).partition("/")
-                    return shell, core
+                    from .adapters import parse_body
+                    try:
+                        return parse_body(d["body"])
+                    except ValueError:
+                        continue
     return None
 
 
@@ -1529,7 +1532,7 @@ def _hand_started(x, command, step):
     c = x.c
     x.values["lstart"] = _ps_field(x.proc.pid, "lstart") or ""
     _hand_record(x, command, step)
-    _log(x.home, f"start {x.o.strand} thread {c.thread} gen {x.o.gen} pid {x.proc.pid} {c.shell}/{c.core}")
+    _log(x.home, f"start {x.o.strand} thread {c.thread} gen {x.o.gen} pid {x.proc.pid} {body_label(c.shell, c.core)}")
 
 
 def _hand_signal(x, command, step):

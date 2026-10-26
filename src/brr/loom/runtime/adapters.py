@@ -1,5 +1,6 @@
 """A shell is a folder; a home's folder wins over the bundled one."""
 
+import os
 from pathlib import Path
 import re
 
@@ -13,6 +14,40 @@ def resolve(home, shell: str, group: str = "bodies") -> Path:
     if not path.is_dir() or (group == "bodies" and not (path / "run").is_file()):
         raise ValueError(f"no {group} folder for {shell!r}")
     return path.resolve()
+
+
+def parse_body(choice) -> tuple[str, str]:
+    """``(shell, core)`` from ``shell/core`` or a bare ``shell``.
+
+    A bare shell has the empty core: the harness's own model choice.
+    """
+    shell, slash, core = str(choice).strip().partition("/")
+    shell, core = shell.strip(), core.strip()
+    if not shell or (slash and not core):
+        raise ValueError(f"body must be shell or shell/core: {choice!r}")
+    return shell, core
+
+
+def body_label(shell: str, core: str) -> str:
+    """``shell/core``, or the bare shell when the harness picks the model."""
+    return f"{shell}/{core}" if core else shell
+
+
+def codex_model() -> str | None:
+    """The person's own codex default: top-level ``model`` in codex's config."""
+    path = Path(os.environ.get("CODEX_HOME") or "~/.codex").expanduser() / "config.toml"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        line = line.strip()
+        if line.startswith("["):
+            return None
+        match = re.fullmatch(r'model\s*=\s*"([^"]+)"\s*(#.*)?', line)
+        if match:
+            return match.group(1)
+    return None
 
 
 _SEAT_KEYS = {"body", "repo", "watch"}
@@ -95,7 +130,4 @@ def at_birth(home, thread: str, default: tuple[str, str],
     choice = choice or load_config(home.root).body
     if not choice:
         return default
-    shell, slash, core = str(choice).partition("/")
-    if not slash or not core.strip():
-        raise ValueError(f"body must be shell/core: {choice!r}")
-    return shell.strip(), core.strip()
+    return parse_body(choice)
