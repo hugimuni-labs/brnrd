@@ -77,7 +77,7 @@ def test_the_first_stop_with_wishes_open_is_refused_until_the_body_asks(ledger, 
     refused = json.loads(jack.execute("stop", seat, "{}"))
     assert refused["decision"] == "block"
     assert "has not said how it ends" in refused["reason"]
-    assert 'python -m brr.loom.runtime ask "<question>" --for <w-id>' in refused["reason"]
+    assert 'brnrd runtime ask "<question>" --for <w-id>' in refused["reason"]
     assert "settle work --why" in refused["reason"]
     assert now[0] == 0
     # A fresh body (the loom deletes jack-state at every start) asks, then stops.
