@@ -78,3 +78,33 @@ def test_codex_run_carries_the_persons_model_when_the_core_is_empty(tmp_path):
 
     (codex / "config.toml").write_text('[profiles.fast]\nmodel = "gpt-6-mini"\n')
     assert "--model" not in _drive(tmp_path, "codex", "", {"CODEX_HOME": str(codex)})
+
+
+def test_preferences_pick_a_body_per_role_under_the_seat(tmp_path):
+    home = Home(tmp_path / "home")
+    for thread in ("inbox", "work", "other"):
+        home.thread_dir(thread).mkdir(parents=True)
+    (home.root / "loom").mkdir(parents=True)
+    (home.root / "loom" / "config.toml").write_text('body = "codex"\n')
+    assert at_birth(home, "work", ("fake", "x")) == ("codex", "")
+
+    prefs = home.root / "loom" / "preferences.toml"
+    prefs.write_text('model.default = "claude"\nmodel.inbox = "claude/opus"\nmodel.work = "codex/gpt-6"\n')
+    assert at_birth(home, "inbox", ("fake", "x")) == ("claude", "opus")
+    assert at_birth(home, "work", ("fake", "x")) == ("codex", "gpt-6")
+    assert at_birth(home, "other", ("fake", "x")) == ("claude", "")
+
+    (home.thread_dir("work") / "seat").write_text("body: claude/sonnet\n")
+    assert at_birth(home, "work", ("fake", "x")) == ("claude", "sonnet")
+
+    prefs.write_text('modle.default = "claude"\n')
+    with pytest.raises(ValueError):
+        at_birth(home, "other", ("fake", "x"))
+
+
+def test_the_inbox_preference_follows_a_legacy_home_thread(tmp_path):
+    home = Home(tmp_path / "home")
+    home.thread_dir("brnrd").mkdir(parents=True)
+    (home.root / "loom").mkdir(parents=True)
+    (home.root / "loom" / "preferences.toml").write_text('model.inbox = "claude/opus"\n')
+    assert at_birth(home, "brnrd", ("fake", "x")) == ("claude", "opus")
