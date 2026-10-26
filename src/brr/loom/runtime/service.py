@@ -26,7 +26,7 @@ from pathlib import Path
 from brr.daemon_install import linux, macos
 
 from . import entry
-from .config import config_path, load_config, seed_config
+from .config import config_path, fold_config, load_config, set_value
 from .home import found_homes, is_home, resolve_home
 from .threads import _age
 
@@ -200,17 +200,7 @@ def _fuel(home: Path, shell: str) -> str | None:
 
 def _write_body(home: Path, choice: str) -> None:
     """Set ``body`` in the config, keeping every other line as written."""
-    seed_config(home)
-    path = config_path(home)
-    lines = path.read_text(encoding="utf-8").splitlines()
-    setting = f'body = "{choice}"'
-    for index, line in enumerate(lines):
-        if re.match(r"\s*body\s*=", line):
-            lines[index] = setting
-            break
-    else:
-        lines.append(setting)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    set_value(home, "body", choice)
 
 
 def _require_body(home: Path) -> str:
@@ -229,6 +219,8 @@ def _settle_body(home: Path, *, write: bool = True) -> tuple[str, str]:
     Unset: the first default body whose CLI answers with fuel, written to
     the config so ``loom config`` and the service agree on it.
     """
+    if write:
+        fold_config(home)
     choice = _body_choice(home)
     if choice is not None:
         return choice, "from config"

@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from .adapters import resolve
-from .config import config_path, load_config, read_array, seed_config
+from .config import load_config, read_array, seed_config, set_value
 from .connector import addressed, environment, instances
 from .home import Home, atomic_write, channel_parts, resolve_home
 from .port import _front, parse_frontmatter
@@ -76,12 +76,7 @@ def pair(home, kind, name, person, *, timeout=180, out=print):
                     atomic_write(channels, 'channels = ' + json.dumps([*previous, key]) + '\n')
                 # Commit the config last: a failed pairing never enables input.
                 seed_config(home.root)
-                config = config_path(home.root)
-                text = config.read_text()
-                values = [*load_config(home.root).connectors, f'{name}={kind}']
-                lines = [line for line in text.splitlines()
-                         if not re.match(r'^\s*connectors\s*=', line)]
-                atomic_write(config, '\n'.join(lines) + '\nconnectors = ' + json.dumps(values) + '\n')
+                set_value(home.root, 'connectors', [*load_config(home.root).connectors, f'{name}={kind}'])
                 out(f'heard you as {chat}; saved {key} for {person}')
                 return key
             if child is not None and child.poll() is not None:
