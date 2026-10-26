@@ -263,3 +263,48 @@ def test_the_idle_check_opens_and_clears_kept_folder_problems(tmp_path: Path, mo
     keeper.checked = None
     keeper.step()
     assert "notes no .git at" in library.problem_line(read_facts(home), home.install_id())
+
+
+def _call(tool: str, cwd: Path, **given) -> str:
+    return json.dumps({"tool_name": tool, "tool_input": given, "cwd": str(cwd), "tool_use_id": "t",
+                       "hook_event_name": "PostToolUse"})
+
+
+def test_a_known_folder_a_body_touched_is_nudged_once_at_stop(tmp_path: Path, monkeypatch) -> None:
+    root = _home(tmp_path)
+    taxes = tmp_path / "taxes"
+    taxes.mkdir()
+    (tmp_path / "taxes-old").mkdir()
+    assert _add(root, "taxes", str(taxes), "--kind", "known", "--whose", "Ada", "--for", "tax returns") == 0
+    _seat(root, "work", [])
+    home = Home(root)
+    bodies: dict = {}
+    try:
+        _tick(home, bodies, Router(home))
+        assert _started(root), _log(root)
+        room = _room(root)
+        assert not (room / "lib" / "taxes").exists()  # a known folder is not linked
+        monkeypatch.setenv("BRNRD_THREAD", "work")
+        monkeypatch.setenv("BRNRD_STOP_TIMEOUT", "91")
+        assert "known folder" not in execute("stop", room, "{}")
+        execute("post", room, _call("Bash", room, command=f"ls {tmp_path}/taxes-old", description="list"))
+        assert "known folder" not in execute("stop", room, "{}")  # a neighbour's name is not the folder
+        execute("post", room, _call("Read", room, file_path=str(taxes / "2025.pdf")))
+        execute("post", room, _call("Read", room, file_path=str(taxes / "2024.pdf")))
+        execute("post", room, _call("Bash", room, command=f"cd '{taxes}' && ls", description="list"))
+        execute("post", room, _call("Edit", taxes, file_path="notes.md", old_string="a", new_string="b"))
+        first = json.loads(execute("stop", room, "{}"))
+        assert first["decision"] == "block"
+        assert "taxes/ (read 2, wrote 1, ran 1)" in first["reason"] and "tidy" in first["reason"]
+        assert str(taxes) not in (room / "port/tools.jsonl").read_text()  # the trace keeps basenames
+        assert "known folder" not in execute("stop", room, "{}")  # asked once per body
+        execute("post", room, _call("Read", room, file_path=str(taxes / "2023.pdf")))
+        assert "known folder" not in execute("stop", room, "{}")
+        later = time.time() + 5
+        import os
+        os.utime(room / "port/library.json", (later, later))  # the next body
+        execute("post", room, _call("Grep", room, pattern="IBAN", path=str(taxes)))
+        again = json.loads(execute("stop", room, "{}"))
+        assert "taxes/ (read 1)" in again["reason"] and "worth noting" in again["reason"]
+    finally:
+        _kill(read_facts(home))

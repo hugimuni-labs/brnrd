@@ -506,3 +506,95 @@ def write_room_list(room: Path, found: list[Entry], host: str | None = None) -> 
     rows = [{"name": e.name, "kind": e.kind, "path": e.path} for e in found if e.here(host)]
     from .home import atomic_write
     atomic_write(room / "port" / "library.json", json.dumps(rows, indent=1) + "\n")
+
+
+# --- known folders: what a body touched, nudged once at stop ----------------
+
+TOUCHED = "library-touched.json"
+_WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+
+
+def _known(room: Path) -> tuple[float, list[tuple[str, str, set[str]]]]:
+    """This body's start (the room list's mtime) and its known folders: name, real path, spellings."""
+    listed = room / "port" / "library.json"
+    since = listed.stat().st_mtime
+    found = json.loads(listed.read_text())
+    folders = []
+    for item in found if isinstance(found, list) else []:
+        if isinstance(item, dict) and item.get("kind") == "known" and item.get("path"):
+            full = os.path.expanduser(str(item["path"])).rstrip(os.sep)
+            real = os.path.realpath(full)
+            spelled = {full, real, _home_short(full), _home_short(real)}
+            folders.append((str(item.get("name")), real, spelled))
+    return since, folders
+
+
+def _names(command: str, spelled: set[str]) -> bool:
+    """A shell command names the folder: a spelling followed by an end, a slash, a quote or a space."""
+    return any(re.search(re.escape(path) + r"(?=$|[/\s'\";|)&])", command) for path in spelled)
+
+
+def _touched_state(room: Path, since: float) -> dict:
+    """The touch record for the body that began at ``since``; a stale one starts over."""
+    try:
+        state = json.loads((room / "port" / TOUCHED).read_text())
+    except (OSError, ValueError):
+        state = {}
+    if not isinstance(state, dict) or state.get("since") != since:
+        state = {"since": since, "folders": {}, "nudged": []}
+    return state
+
+
+def touch(room: Path, stdin_text: str) -> None:
+    """Count a tool call aimed inside a known folder: a path argument, or a shell command naming it.
+
+    The full path is matched here and never stored; the trace keeps basenames.
+    """
+    since, folders = _known(room)
+    if not folders:
+        return
+    payload = json.loads(stdin_text)
+    tool = payload.get("tool_name")
+    given = payload.get("tool_input")
+    if not isinstance(given, dict):
+        return
+    if tool == "Bash":
+        command = str(given.get("command") or "")
+        hits = [name for name, _real, spelled in folders if _names(command, spelled)]
+        how = "ran"
+    else:
+        raw = next((str(given[key]) for key in ("file_path", "notebook_path", "path") if given.get(key)), "")
+        if not raw:
+            return
+        cwd = str(payload.get("cwd") or room)
+        target = os.path.realpath(os.path.join(cwd, os.path.expanduser(raw)))
+        hits = [name for name, real, _spelled in folders if target == real or target.startswith(real + os.sep)]
+        how = "wrote" if tool in _WRITE_TOOLS else "read"
+    if not hits:
+        return
+    state = _touched_state(room, since)
+    for name in hits:
+        counts = state["folders"].setdefault(name, {})
+        counts[how] = counts.get(how, 0) + 1
+    from .home import atomic_write
+    atomic_write(room / "port" / TOUCHED, json.dumps(state) + "\n")
+
+
+def known_nudge(room: Path) -> str:
+    """Once per folder per body: the known folders this body touched and not yet asked about."""
+    since, _folders = _known(room)
+    state = _touched_state(room, since)
+    fresh = [name for name in state["folders"] if name not in state["nudged"]]
+    if not fresh:
+        return ""
+    parts = []
+    for name in fresh:
+        counts = state["folders"][name]
+        did = ", ".join(f"{how} {counts[how]}" for how in ("read", "wrote", "ran") if counts.get(how))
+        parts.append(f"{name}/ ({did})")
+    wrote = any(state["folders"][name].get("wrote") or state["folders"][name].get("ran") for name in fresh)
+    state["nudged"] = state["nudged"] + fresh
+    from .home import atomic_write
+    atomic_write(room / "port" / TOUCHED, json.dumps(state) + "\n")
+    ask = "anything to tidy, or to note on its page?" if wrote else "anything worth noting on its page?"
+    return f"you touched the known folder{'s' if len(fresh) > 1 else ''} {', '.join(parts)}: {ask}"
