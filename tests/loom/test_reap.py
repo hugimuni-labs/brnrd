@@ -294,3 +294,25 @@ def test_a_process_in_the_room_keeps_its_clone(tmp_path, monkeypatch):
     reap.Reaper(home, lambda *_: None).reap()
     assert (home.room("0001-old") / "widget" / ".git").exists()
     assert not _reaped(home)
+
+
+def test_a_settled_threads_room_goes_at_release_and_a_reopen_wakes_it_into_a_fresh_one(tmp_path):
+    home = Home(tmp_path / "home", install="0001")
+    init_self(home.root, person="test")
+    done = _ended(home, "done", "0001-done", 0)
+    young = _ended(home, "young", "0001-young", 0)
+    readme = home.thread_dir("done") / "README.md"
+    readme.write_text(readme.read_text().replace("status: open", "status: settled"))
+    git(home.root / "self", "add", "threads")
+    _commit(home.root / "self", "Settle.\n\nLoom-Label: taint=0; audience=self\n")
+    reaper = reap.Reaper(home, lambda *_: None)
+    reaper.reap()
+    # Settled: no age, and its latest strand is no reason. Open: the 7 days still hold.
+    assert not done.exists() and young.exists()
+
+    # A wish reopens it; the next wake leases the same strand into a fresh room at that path.
+    append(home, Fact(kind="lease", by="router:0001", id="lease:0001-done:2",
+                      data=dict(thread="done", strand="0001-done", gen=2)))
+    clone_room(home.root, "0001-done")
+    reaper.reap()
+    assert (done / "self" / ".git").exists()

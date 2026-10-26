@@ -12,6 +12,9 @@ heads it held; a path still on disk under such a fact is finished next pass.
 A kept room still loses each code clone (a checkout other than self) once
 ``clone_kept`` finds no reason: one ``clone:<strand>/<name>`` converge want
 each, ``CLONE_AGE`` after release; self and port stay until the room goes.
+A strand whose thread is settled (closed on main, no open wish) skips both
+ages and the latest-strand keep: its room goes once released and drained, and
+a wish that reopens the thread wakes it into a fresh room.
 ``loom.log`` rotates at ``LOG_MAX`` to three generations. Below the disk floor
 ``disk`` raises, so the guard opens a degradation, and the pass runs at once.
 The pass runs off the loop: ``leftovers`` fetches into every room it reads.
@@ -128,7 +131,22 @@ def left(home, strand: str) -> list[str]:
     return lines
 
 
-def room_kept(home, facts, strand: str, now: float, force: bool = False) -> str:
+def settled_threads(home, facts) -> set[str]:
+    """Threads closed on main that hold no open wish: no wake is owed to their rooms."""
+    from .lifecycle import CLOSED, main_snapshot
+    from .wishes import wishes
+    held = {w.thread for w in wishes(facts).values() if w.open}
+    return {thread for thread, data in main_snapshot(home).items()
+            if data.get("status") in CLOSED and thread not in held}
+
+
+def _thread(facts, strand: str) -> str:
+    return next((str(f.data.get("thread")) for f in reversed(facts)
+                 if f.kind == "lease" and f.data.get("strand") == strand), "")
+
+
+def room_kept(home, facts, strand: str, now: float, force: bool = False,
+              settled: set[str] = frozenset()) -> str:
     """Why ``rooms/<strand>`` stays, or empty when it may go. Cheapest checks first.
 
     ``force`` is a body's word that the room's work is settled: age, loose
@@ -150,7 +168,7 @@ def room_kept(home, facts, strand: str, now: float, force: bool = False) -> str:
     if not any(f.kind == "port.drained" and f.data.get("strand") == strand
                and int(f.data.get("gen") or 0) == gen for f in facts):
         return f"gen {gen}'s port is not drained"
-    if not force and now - _seconds(released.at) < ROOM_AGE:
+    if not force and _thread(facts, strand) not in settled and now - _seconds(released.at) < ROOM_AGE:
         return "released less than 7 days ago"
     if body_alive(room):
         return "a body holds it"
@@ -208,7 +226,7 @@ def latest_strands(facts) -> set[str]:
 
 
 def clone_kept(home, facts, strand: str, name: str, now: float, working: set[str],
-               latest: set[str]) -> str:
+               latest: set[str], settled: set[str] = frozenset()) -> str:
     """Why ``rooms/<strand>/<name>`` stays, or empty when the clone may go. Cheapest first."""
     from .loom import body_alive
     room = home.room(strand)
@@ -217,7 +235,8 @@ def clone_kept(home, facts, strand: str, name: str, now: float, working: set[str
         return "a process works in the room"
     if body_alive(room):
         return "a body holds it"
-    if strand in latest:
+    done = _thread(facts, strand) in settled
+    if strand in latest and not done:
         return "it is its thread's latest strand"
     leases = [f for f in facts if f.kind == "lease" and f.data.get("strand") == strand]
     if not leases:
@@ -227,7 +246,7 @@ def clone_kept(home, facts, strand: str, name: str, now: float, working: set[str
                      and int(f.data.get("gen") or 0) == gen), None)
     if released is None:
         return f"gen {gen} is not released"
-    if now - _seconds(released.at) < CLONE_AGE:
+    if not done and now - _seconds(released.at) < CLONE_AGE:
         return "released less than 48 h ago"
     if (checkout / ".git").is_file():
         return "a linked worktree"
@@ -307,12 +326,17 @@ class Reaper:
             return
         facts = read_facts(home)
         now = time.time()
-        reaped = {str(f.data.get("path")) for f in facts if f.kind == "room.reaped"}
+        # A room.reaped fact finishes its path only until the strand is leased again:
+        # a reopened thread wakes its latest strand into a fresh room at that path.
+        leased = {str(f.data.get("strand")): i for i, f in enumerate(facts) if f.kind == "lease"}
+        reaped = {str(f.data.get("path")) for i, f in enumerate(facts) if f.kind == "room.reaped"
+                  and i > leased.get(str(f.data.get("strand")), -1)}
         asides = {Path(str(f.data["aside"])).resolve(): f.at for f in facts
                   if f.kind == "room.repaired" and f.data.get("aside")}
         key = self._key
         working = busy(rooms)
         latest = latest_strands(facts)
+        settled = settled_threads(home, facts)
         gone, kept, settle = 0, {}, {}
         cloned, freed, held = 0, 0, {}
         for room in sorted(rooms.iterdir()):
@@ -322,7 +346,7 @@ class Reaper:
                 shutil.rmtree(room, ignore_errors=True)
                 continue
             try:
-                why = room_kept(home, facts, room.name, now)
+                why = room_kept(home, facts, room.name, now, settled=settled)
             except Exception as exc:
                 why = f"inspection failed: {type(exc).__name__}: {exc}"
             if not why:
@@ -332,7 +356,7 @@ class Reaper:
             kept[why.split(":")[0]] = kept.get(why.split(":")[0], 0) + 1
             if why.startswith(BODY_REASONS):
                 settle[room.name] = why
-            for name, done, bytes_, reason in self.clones(room, facts, reaped, now, working, latest):
+            for name, done, bytes_, reason in self.clones(room, facts, reaped, now, working, latest, settled):
                 if done:
                     cloned += 1
                     freed += bytes_
@@ -357,7 +381,7 @@ class Reaper:
         self.tell(settle)
 
     def clones(self, room: Path, facts, reaped: set[str], now: float, working: set[str],
-               latest: set[str]):
+               latest: set[str], settled: set[str] = frozenset()):
         """Converge ``clone:<strand>/<name>`` for each code clone of a kept room.
 
         Holds when the clone is gone or ``clone_kept`` names a reason. ``make``
@@ -377,7 +401,7 @@ class Reaper:
                 if finishing:
                     return False
                 try:
-                    reason[0] = clone_kept(self.home, facts, strand, name, now, working, latest)
+                    reason[0] = clone_kept(self.home, facts, strand, name, now, working, latest, settled)
                 except Exception as exc:
                     reason[0] = f"inspection failed: {type(exc).__name__}: {exc}"
                 return bool(reason[0])
