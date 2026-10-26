@@ -26,7 +26,7 @@ line is copied into its README at open as `wish-<w-id>: "<line>"` beside
 
 ## Notices
 
-What the loom cannot settle by its own rules it hands to a body: a letter from `loom`, owed like any other, shown at every boundary until it is settled and gone after that. One is written per condition, not per tick. It goes to the thread the condition belongs to when a body can run there, otherwise to `brnrd`, the home thread.
+What the loom cannot settle by its own rules it hands to a body: a letter from `loom`, owed like any other, shown at every boundary until it is settled and gone after that. One is written per condition, not per tick. It goes to the thread the condition belongs to when a body can run there, otherwise to `inbox`, the home thread.
 
 The last lines of every notice are its handle: `settle this notice with a reply or a note, re: <id>`, and, when it is about a letter or a draft of yours, that item's id and what you can do about it. A notice that says it settles another item too stands for that item: settling either one settles both. Conditions that arrive this way: a letter two bodies died reading (quarantined, kept out of every wake), a letter addressed to no thread on main, a message of yours that was refused, went stale under a new router, or may or may not have arrived (it is never sent again; send a fresh one), a body that ended before handling your letter (send again, or leave it), a relay event or attachment that could not be taken in, a thread directory that cannot be a thread, a port file of yours the loom refused.
 
@@ -44,7 +44,7 @@ A note written `by` a `person:` with `re:` a letter's id settles that letter wha
 
 A failed preparation (including an over-budget home or a broken wake recipe)
 keeps its letters owed for retry. One self-refusal notice asks for home repair,
-in brnrd when preparation, spawn, or the holding install cannot run. Only an input that
+in inbox when preparation, spawn, or the holding install cannot run. Only an input that
 itself exceeds the wake budget, with a recipe that runs without mail, uses the
 letter-failure path. A failure to prepare does not spend a letter's body-crash
 retry allowance. The person receives no failure message for a home refusal. A nonzero body exit
@@ -177,7 +177,12 @@ for the recorded reset, without consuming letters. Its opener can run
 start and records its ordinary `body.started` observation. It grants no
 ongoing exemption from the gauge. A failed letter returns to its author, who
 may resend or note the failure closed; operator debt is listed with the note
-command that retires it. Only the opener closes or reopens a child thread.
+command that retires it. Only the opener closes or reopens a child thread by
+verb. A wish placed on a settled or retired thread (`send --wish`, a forward
+that carries one, or `wish <w-id> --say` on one of its wishes) opens it again:
+the send lands `status: open` on main before the stamp, and a `thread.reopened`
+fact names the wish and the settle it undid, which the next wake shows above
+its wishes. Placed with `--home`, outside any room, such a wish is refused.
 
 `brnrd threads --left` also looks inside every room and adds a `left` count:
 commits and edited files that exist only there (`?` when a room could not be

@@ -289,7 +289,7 @@ def thread_for_message(facts, channel, message_id):
     return binding[1] if binding else None
 
 
-def route_bare(facts, chat, reply_thread=None, fallback='brnrd'):
+def route_bare(facts, chat, reply_thread=None, fallback='inbox'):
     """A reply's thread, else the last confirmed speaker, regardless of lease."""
     try:
         _platform, chat_id = channel_parts(f'channel:{chat}')

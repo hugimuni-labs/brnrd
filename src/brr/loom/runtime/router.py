@@ -17,7 +17,7 @@ from .config import LoomConfig, granting_window, load_config, loom_clock
 from .home import Home, home_thread, is_channel, mint
 from .ledger import LedgerConflict, LedgerReader, LedgerView, kind_facts
 from .project import (
-    fold, holder, is_notice, sender_threads,
+    fold, holder, is_notice, reply_channels, sender_threads,
 )
 from .selfrepo import ReadmeError, parse_readme
 from .owners import active_owners, letter_owners, letters_for
@@ -381,12 +381,24 @@ class Router:
                 target = target if target in known else None
                 what = f"letter {letter.id} addressed to {letter.data.get('to')!r}, which is not a thread on main"
             data = {"id": letter.id, "outcome": "operator", "reason": fate.reason}
+            channel = None if target else reply_channels(facts, self.home).get(letter.id)
             if target:
                 successor = notice(self.home, facts, kind, letter.id, what,
                                    str(letter.data.get('body') or ''),
                                    thread=target, about=letter, stands=True, draft_only=True)
-                if isinstance(successor, Fact):
-                    data.update(outcome="done", successor=successor.data)
+            elif channel:
+                # No thread on main can hold it: the person who wrote is
+                # waiting on this chat, so the answer goes back there.
+                successor = notice(self.home, facts, kind, letter.id,
+                                   "Your message reached brnrd, but no thread is set up "
+                                   "to read it yet, so nobody saw it.",
+                                   "Run brnrd setup again on the machine where brnrd runs, "
+                                   "then send your message again.",
+                                   about=letter, channel=channel, draft_only=True)
+            else:
+                successor = None
+            if isinstance(successor, Fact):
+                data.update(outcome="done", successor=successor.data)
             self._keep(facts, "letter.disposed", {"dispositions": [data]},
                        f"letter.disposed:{letter.id}")
         return facts

@@ -11,10 +11,11 @@ import time
 from pathlib import Path
 
 from .adapters import resolve
-from .config import config_path, load_config, read_array, seed_config
+from .config import load_config, read_array, seed_config, set_value
 from .connector import addressed, environment, instances
 from .home import Home, atomic_write, channel_parts, resolve_home
 from .port import _front, parse_frontmatter
+from .selfrepo import SelfError, init_self
 
 
 def pair(home, kind, name, person, *, timeout=180, out=print):
@@ -75,12 +76,7 @@ def pair(home, kind, name, person, *, timeout=180, out=print):
                     atomic_write(channels, 'channels = ' + json.dumps([*previous, key]) + '\n')
                 # Commit the config last: a failed pairing never enables input.
                 seed_config(home.root)
-                config = config_path(home.root)
-                text = config.read_text()
-                values = [*load_config(home.root).connectors, f'{name}={kind}']
-                lines = [line for line in text.splitlines()
-                         if not re.match(r'^\s*connectors\s*=', line)]
-                atomic_write(config, '\n'.join(lines) + '\nconnectors = ' + json.dumps(values) + '\n')
+                set_value(home.root, 'connectors', [*load_config(home.root).connectors, f'{name}={kind}'])
                 out(f'heard you as {chat}; saved {key} for {person}')
                 return key
             if child is not None and child.poll() is not None:
@@ -117,7 +113,9 @@ def main(argv=None):
         name = args.name or input('Name this channel: ').strip()
         people = sorted(p.name for p in (home.root / 'self/people').glob('*') if p.is_dir())
         person = args.person or (people[0] if len(people) == 1 else input('Your person name: ').strip())
+        # A letter lands only on a thread on the self's main: seed it before pairing.
+        print(init_self(home.root, person=person))
         pair(home, kind, name, person, timeout=args.timeout)
-    except (ValueError, OSError, TimeoutError, subprocess.SubprocessError) as exc:
+    except (ValueError, OSError, TimeoutError, subprocess.SubprocessError, SelfError) as exc:
         raise SystemExit(str(exc)) from None
     return 0

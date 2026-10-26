@@ -41,7 +41,10 @@ def _loom(argv: list[str]) -> int:
     # The service argv carries no --adapter. The home's body is the choice.
     # An explicit --adapter keeps the old hand path (tests pass fake).
     if adapter is None:
+        from .config import fold_config
         from .service import _require_body
+        # A home an appending writer left with a key set twice loads once folded.
+        fold_config(Path(args.home).expanduser().resolve())
         choice = _require_body(Path(args.home).expanduser().resolve())
         adapter, _, core = choice.partition("/")
         adapter, core = adapter.strip(), core.strip()

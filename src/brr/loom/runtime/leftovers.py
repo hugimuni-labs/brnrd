@@ -41,13 +41,14 @@ def _edits(checkout: Path) -> tuple[str, ...]:
     return tuple(paths)
 
 
-def leftovers(home, strand: str) -> tuple[Leftover, ...]:
+def leftovers(home, strand: str, only: str | None = None) -> tuple[Leftover, ...]:
     """Commits and edits that only ``home.room(strand)`` still holds.
 
     Self is compared with today's main, projects with their declared source
     (refreshed on request, never their mutable origin). Copies in an opener
     or a descendant room cover commits, never another room's dirty edits.
     Missing rooms are empty; failed inspections are explicit retained items.
+    ``only`` names the one checkout to read, so a clone is judged without fetching its siblings.
     """
     room = home.room(strand).resolve()
     if not room.is_dir():
@@ -70,7 +71,7 @@ def leftovers(home, strand: str) -> tuple[Leftover, ...]:
     declared = dict(repos(seat_text(home, thread), home)) if thread else {}
     result = []
     for checkout in sorted(room.iterdir()):
-        if not (checkout / '.git').exists():
+        if not (checkout / '.git').exists() or only is not None and checkout.name != only:
             continue
         edits = ()
         try:

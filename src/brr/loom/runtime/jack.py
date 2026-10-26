@@ -1,4 +1,5 @@
-"""The jack. It reads boundary.md and stdin, never the ledger. It fails open."""
+"""The jack. It reads boundary.md and stdin, and the ledger only through
+``reap.left`` for its own room. It fails open."""
 
 from __future__ import annotations
 
@@ -113,6 +114,35 @@ def _shown(room: Path, parsed: Boundary) -> None:
     atomic_write(room / "port" / "out" / f"{stem}.md", text)
 
 
+LEFT_EVERY = 60.0
+
+
+def _left(room: Path, fresh: bool) -> str:
+    """``left in room:`` from ``reap.left`` on this room only, or nothing when it is clean.
+
+    It reads the ledger and fetches, so a post reuses a read younger than
+    ``LEFT_EVERY``; a stop reads again. A failure is logged and shows nothing:
+    a broken check must not hold every stop.
+    """
+    state = _state(room)
+    if fresh or time.time() - float(state.get("left_at") or 0) >= LEFT_EVERY:
+        from .reap import left
+        try:
+            lines = left(home_of_room(room), room.name)
+        except Exception:
+            try:
+                with (room / "port" / "left-errors.log").open("a") as handle:
+                    handle.write(traceback.format_exc())
+            except OSError:
+                pass
+            lines = []
+        _set_state(room, left=lines, left_at=time.time())
+    else:
+        lines = list(state.get("left") or ())
+    return "".join(["left in room: only this room holds these; the stop waits until each is cleared\n",
+                    *(f"- {line}\n" for line in lines)]) if lines else ""
+
+
 def _json(payload: dict) -> str:
     return json.dumps(payload, separators=(",", ":")) + "\n"
 
@@ -125,7 +155,8 @@ def _block(room: Path, text: str, parsed: Boundary) -> str:
     count = int(_state(room).get("stop_blocks") or 0)
     if _hand() and count >= 3:
         return ""
-    _shown(room, parsed)
+    if parsed.ids:
+        _shown(room, parsed)
     _set_state(room, stop_blocks=count + 1)
     return _json({"decision": "block", "reason": text})
 
@@ -449,7 +480,9 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         broken = _guards(room)[1]
         if broken:
             text = "".join(f"guards: skipped {line}\n" for line in broken) + text
-        if not parsed.ids and not opened and not plan and not broken:
+        left = _left(room, True)
+        text = left + text
+        if not parsed.ids and not opened and not plan and not broken and not left:
             return ""
         if parsed.ids:
             _shown(room, parsed)
@@ -469,12 +502,15 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         hook = _hook_event(stdin_text)
         # Past its allocation a strand is told at every boundary, not once.
         over = next((line for line in text.splitlines() if line.startswith("budget: ")), "")
+        left = _left(room, False).rstrip("\n")
         if not parsed.ids and not settled_changed and not opened_changed and not plan_changed \
                 and not face_changed and not moved_changed:
-            if not weight and not paused and not over and not guarded:
+            if not weight and not paused and not over and not guarded and not left:
                 return ""
-            return _json({"hookSpecificOutput": {
-                "hookEventName": hook, "additionalContext": "\n".join(filter(None, (guarded, paused, weight, over)))}})
+            return _json({"hookSpecificOutput": {"hookEventName": hook, "additionalContext": "\n".join(
+                filter(None, (guarded, paused, weight, over, left)))}})
+        if left:
+            text = left + "\n" + text
         if guarded:
             text = guarded + "\n" + text
         if weight:
@@ -493,6 +529,10 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     blocked = _guard_stop(room) or _kept_stop(room)
     if blocked:
         return blocked
+    # Work only this room holds blocks the stop the way an owed letter does.
+    left = _left(room, True)
+    if left and (_hand() or not _state(room).get("stop_blocks") and not _dry(room)):
+        return _block(room, left + text, parsed)
     if parsed.ids and (_hand() or not _state(room).get("stop_blocks") and not _dry(room)):
         return _block(room, text, parsed)
     refused = _left_owed(room, text) or _undeclared(room, plan)
@@ -502,16 +542,16 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
 
 
 END = """work is left on this thread (plan {plan}) and this body has not said how it ends. Do one, then stop:
-- a result: python -m brr.loom.runtime wish <w-id> --result <kind>:<ref> --line "<what it is>" [--deliver]
-- an ask to a person: python -m brr.loom.runtime ask "<question>" --for <w-id> --rec "<your call>"
-- a park with its reason: python -m brr.loom.runtime wish <w-id> --read "waiting: <on what>"
-- done: python -m brr.loom.runtime settle {thread} --why "<what it became>"
-`python -m brr.loom.runtime wishes` lists the w-ids. The jack then holds you while letters may come."""
+- a result: brnrd runtime wish <w-id> --result <kind>:<ref> --line "<what it is>" [--deliver]
+- an ask to a person: brnrd runtime ask "<question>" --for <w-id> --rec "<your call>"
+- a park with its reason: brnrd runtime wish <w-id> --read "waiting: <on what>"
+- done: brnrd runtime settle {thread} --why "<what it became>"
+`brnrd runtime wishes` lists the w-ids. The jack then holds you while letters may come."""
 
 
 LEFT = """what is left on a wish moved since it was last said: {named}
 Restate each one's whole list, then stop:
-- python -m brr.loom.runtime wish <w-id> --left "<step>" --left "<step>"   (--left same when nothing moved)
+- brnrd runtime wish <w-id> --left "<step>" --left "<step>"   (--left same when nothing moved)
 - or a park: wish <w-id> --read "waiting: <on what>"; a delivery: --result <kind>:<ref> --line "<what>" --deliver
 This is asked once per wish: the next stop passes, and the wake shows an unanswered left as stale."""
 

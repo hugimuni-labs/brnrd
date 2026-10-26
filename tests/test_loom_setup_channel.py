@@ -16,6 +16,23 @@ def home_at(tmp_path):
     return Home(tmp_path, 'aaaa')
 
 
+def test_pair_sets_connectors_on_the_template_line_and_keeps_the_rest(tmp_path):
+    from brr.loom.runtime.config import render_config, seed_config
+    home = home_at(tmp_path)
+    seed_config(tmp_path)
+    before = render_config().splitlines()
+    state = Path(connector.environment(home, 'desk')['BRNRD_STATE'])
+    def send_code(line):
+        if line.startswith('Send '):
+            (state / 'in' / 'code.md').write_text(_front(dict(kind='letter', id='code',
+                                                   to='42', **{'from': '42'}), line.split()[1]))
+    assert setup_channel.pair(home, 'fake', 'desk', 'ada', out=send_code) == 'desk:42'
+    after = (tmp_path / 'loom/config.toml').read_text().splitlines()
+    at = before.index('# connectors = []')
+    assert after[at] == 'connectors = ["desk=fake"]'
+    assert after[:at] + after[at + 1:] == before[:at] + before[at + 1:]
+
+
 def test_fake_live_pair_saves_named_identity_and_keeps_unrelated_letters(tmp_path):
     home = home_at(tmp_path)
     state = Path(connector.environment(home, 'desk')['BRNRD_STATE'])
@@ -149,3 +166,25 @@ print('{"ids": ["native-receipt"]}')
     sent = [json.loads(row) for row in (state / 'sent').read_text().splitlines()]
     assert [row['to'] for row in sent] == ['native:42', 'native:42']
     assert sent[-1]['body'] == 'answer'
+
+
+def test_setup_seeds_a_self_so_a_letter_has_a_thread_to_land_on(tmp_path, monkeypatch):
+    # The shape a pairing left before setup seeded anything: a bare people file.
+    channels = tmp_path / 'self/people/ada/channels.toml'
+    channels.parent.mkdir(parents=True)
+    channels.write_text('channels = ["desk:42"]\n')
+    monkeypatch.setattr(setup_channel, 'pair', lambda *a, **kw: None)
+    assert setup_channel.main(['--home', str(tmp_path), '--kind', 'fake',
+                               '--name', 'desk', '--person', 'ada']) == 0
+    home = Home(tmp_path, 'aaaa')
+    assert home.main_thread() == 'inbox' and home.routable('inbox')
+    tracked = subprocess.run(['git', '-C', str(tmp_path / 'self'), 'ls-tree', '-r', '--name-only', 'main'],
+                             capture_output=True, text=True, check=True).stdout.split()
+    assert 'threads/inbox/README.md' in tracked and 'people/ada/agreement.md' in tracked
+    # The pairing's file survives the seed, outside the commit.
+    assert channels.read_text() == 'channels = ["desk:42"]\n'
+    assert 'people/ada/channels.toml' not in tracked
+    assert connector._sender(home, 'desk', '42') == 'person:ada'
+    # A second run finds the self and leaves it be.
+    assert setup_channel.main(['--home', str(tmp_path), '--kind', 'fake',
+                               '--name', 'desk', '--person', 'ada']) == 0

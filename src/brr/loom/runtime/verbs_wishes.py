@@ -151,6 +151,16 @@ def cmd_wish(args):
         target = fact.data["thread"] if "thread" in fact.data else wishes(facts)[args.id].thread
         if not home.routable(target):
             raise ValueError("wish: thread must exist on main")
+        if fact.kind == "wish":
+            from .lifecycle import CLOSED, read_thread, reopen_for
+            if not by.startswith("strand:"):
+                if read_thread(home, target).get("status") in CLOSED:
+                    raise ValueError(f"wish: {target} is closed on main, and a wish placed there "
+                                     "reopens it; place it from a strand room, which lands the reopen")
+            else:
+                from .verbs_loom import _room
+                for reopened in reopen_for(_room(args.room), [fact]):
+                    append(home, reopened)
         append(home, fact)
         if left is not None:
             append(home, left)
@@ -222,6 +232,11 @@ def cmd_ask(args):
         if same is None:
             fact = wish_fact(facts, by=by, ident="new", line=args.what, thread=thread,
                              sender="resident", parent=args.wish)
+            from .lifecycle import reopen_for
+            from .verbs_loom import _room
+            # A body that settled its own thread and asks again holds open work there.
+            for reopened in reopen_for(_room(args.room), [fact]):
+                append(home, reopened)
             append(home, fact)
             ident = fact.data["wish"]
         else:

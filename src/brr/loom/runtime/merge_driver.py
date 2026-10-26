@@ -1,6 +1,6 @@
 """``loom-readme``: merge a README by a body, or stop.
 
-Git runs ``python -m brr.loom.runtime merge-driver %O %A %B %P``. The body
+Git runs ``brnrd runtime merge-driver %O %A %B %P``. The body
 is ``LOOM_MERGE_BODY`` (``fake`` or ``claude-haiku``). Frontmatter merges per key against the base. ``fake`` keeps our prose
 and appends their lines that ours does not already have. The result is
 written to ``%A`` only when it passes step 2's README parser. Anything else
@@ -15,23 +15,23 @@ import subprocess
 import sys
 from pathlib import Path
 
+from brr.loom.runtime import entry
 from brr.loom.runtime.selfrepo import ReadmeError, git, parse_readme
 
 
-def install_merge_driver(repo: Path) -> None:
-    """Point ``merge.loom-readme`` at this tree's interpreter.
+def driver_command() -> str:
+    """``merge.loom-readme``'s command: the shim, with this tree on ``PYTHONPATH``.
 
-    The command carries ``PYTHONPATH`` for the tree that contains this
-    file, so a room merges with the code it was built from. An installed
-    copy resolves the same way: the path is that copy's parent of ``brr``.
+    The path makes a room merge with the code it was built from; an installed
+    copy resolves the same way (that copy's parent of ``brr``). A path that
+    has since gone is skipped by Python, and the shim's brnrd merges instead.
     """
     root = Path(__file__).resolve().parents[3]
-    command = (
-        f"PYTHONPATH={shlex.quote(os.fspath(root))} "
-        f"{shlex.quote(sys.executable)} -m brr.loom.runtime merge-driver "
-        "%O %A %B %P"
-    )
-    git(repo, "config", "merge.loom-readme.driver", command)
+    return f"PYTHONPATH={shlex.quote(os.fspath(root))} {entry.command('merge-driver')} %O %A %B %P"
+
+
+def install_merge_driver(repo: Path) -> None:
+    git(repo, "config", "merge.loom-readme.driver", driver_command())
 
 
 def fake_merge(ours: str, theirs: str) -> str:

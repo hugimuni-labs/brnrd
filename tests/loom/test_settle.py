@@ -46,10 +46,15 @@ if own == "child":
     git(ctx.room / "self", "add", "threads/child/README.md")
     git(ctx.room / "self", "commit", "-m", "child plan")
     Path({str(ready)!r}).write_text("holding")
-    assert ctx.jack("stop").raw == ""
-    boundary = ctx.jack("post").raw
-    assert "settled: accepted result" in boundary
-    assert ctx.jack("post").raw == ""
+    # The unlanded commit is left in room: the stop is refused and names the
+    # command that lands it, so the body waits for acceptance on its posts.
+    blocked = ctx.jack("stop").raw
+    assert "left in room:" in blocked and "send-self --room ." in blocked, blocked
+    deadline = time.monotonic() + 20
+    while "settled: accepted result" not in (boundary := ctx.jack("post").raw):
+        assert time.monotonic() < deadline
+        time.sleep(0.03)
+    assert "settled: accepted result" not in ctx.jack("post").raw
     verb("send-self")
     Path({str(ended)!r}).write_text(boundary)
     sys.exit(0)
@@ -135,7 +140,7 @@ Path({str(done)!r}).write_text("ok")
         wait_until(done.exists, 30, loom.dump)
         wait_until(lambda: not mail(root, loom.facts(), "work"), 5, loom.dump)
         assert not [f for f in loom.facts() if f.id.startswith("loom/climbed")]
-        assert not [f for f in loom.facts() if f.kind == "lease" and f.data.get("thread") == "brnrd"]
+        assert not [f for f in loom.facts() if f.kind == "lease" and f.data.get("thread") == "inbox"]
     finally:
         loom.halt()
     assert not loom.errors

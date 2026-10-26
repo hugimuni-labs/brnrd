@@ -686,6 +686,10 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         else:
             fields["label"] = sender_label.trailer()
     text = _front(fields, "" if note is not None else body)
+    reopened = []
+    if wish_stamps:
+        from .lifecycle import reopen_for
+        reopened = reopen_for(Path(room), wish_stamps)
     if opening is not None:
         from .lifecycle import open_thread
         open_thread(Path(room), opening, sender, body, body_choice, repo_sources,
@@ -694,6 +698,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     write_port(room, stem, text)
     if wish_stamps:
         from .ledger import append
+        for fact in reopened:
+            append(home, fact)
         for stamp in wish_stamps:
             append(home, stamp)
         for result in results:
@@ -749,7 +755,7 @@ def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
     if owed:
         # The successor reads what is left from the wish, not from this body's memory.
         raise PortError("molt: say what is left first, then molt:\n" + "\n".join(
-            f'  python -m brr.loom.runtime wish {ident} --left "<step>" --left "<step>"   ({why}; --left same if nothing moved)'
+            f'  brnrd runtime wish {ident} --left "<step>" --left "<step>"   ({why}; --left same if nothing moved)'
             for ident, why in owed))
     clone = resolve_clone(room)
     path = f"threads/{thread}/README.md"
