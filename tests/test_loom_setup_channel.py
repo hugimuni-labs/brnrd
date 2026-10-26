@@ -210,3 +210,28 @@ def test_a_door_puts_its_link_in_the_prompt_and_a_broken_one_falls_back(tmp_path
     code = code_in(lines[0])
     assert code and 'does not write first' in lines[0]
     assert (f'https://t.me/ada_bot?start={code}' in lines[0]) == linked
+
+
+def test_a_door_link_is_also_a_qr_code_a_phone_can_scan(tmp_path):
+    segno = pytest.importorskip('segno')
+    home = home_at(tmp_path)
+    folder = tmp_path / 'loom/connectors/fake'
+    shutil.copytree(Path(setup_channel.__file__).parent / 'connectors/fake', folder)
+    (folder / 'door').write_text('#!/usr/bin/env python3\nimport json, sys\n'
+                                 'print(json.dumps(dict(name="@ada_bot", link="https://t.me/ada_bot?start=" + sys.argv[1])))\n')
+    (folder / 'door').chmod(0o755)
+    lines = []
+    with pytest.raises(TimeoutError):
+        setup_channel.pair(home, 'fake', 'desk', 'ada', timeout=0, out=lines.append, qr=True)
+    code = code_in(lines[0])
+    assert 'scan the code below' in lines[0] and len(lines) == 2
+    # Every module is painted explicitly, black or white, and they spell the link.
+    painted = [[cell == '40' for cell in re.findall(r'\x1b\[(4[07])m  ', row)] for row in lines[1].splitlines()]
+    want = [[bool(dark) for dark in row]
+            for row in segno.make(f'https://t.me/ada_bot?start={code}', error='l').matrix_iter(border=2)]
+    assert painted == want
+
+    lines = []
+    with pytest.raises(TimeoutError):
+        setup_channel.pair(Home(tmp_path, 'aaaa'), 'fake', 'desk2', 'ada', timeout=0, out=lines.append, qr=False)
+    assert len(lines) == 1 and 'scan' not in lines[0] and 'https://t.me/ada_bot?start=' in lines[0]

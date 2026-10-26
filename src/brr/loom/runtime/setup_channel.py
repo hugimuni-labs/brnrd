@@ -6,6 +6,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -18,30 +19,50 @@ from .port import _front, parse_frontmatter
 from .selfrepo import SelfError, init_self
 
 
-def _instructions(folder, env, code, timeout):
+def _door(folder, env, code):
+    """An optional door's ``{name, link}``: the bot, and a link that sends the code by itself."""
+    if not (folder / 'door').is_file():
+        return None
+    try:
+        result = subprocess.run([str(folder / 'door'), code], env=env, stdout=subprocess.PIPE,
+                                text=True, timeout=30)
+        door = json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if not (isinstance(door, dict) and isinstance(door.get('name'), str)
+            and isinstance(door.get('link'), str)):
+        return None
+    return door
+
+
+def _instructions(door, code, timeout, scan=False):
     """Say which way pairing runs: the person writes first; nothing arrives before."""
-    door = None
-    if (folder / 'door').is_file():
-        # An optional door names the bot and a link that sends the code by itself.
-        try:
-            result = subprocess.run([str(folder / 'door'), code], env=env, stdout=subprocess.PIPE,
-                                    text=True, timeout=30)
-            door = json.loads(result.stdout) if result.returncode == 0 else None
-        except (OSError, subprocess.SubprocessError, ValueError):
-            door = None
-        if not (isinstance(door, dict) and isinstance(door.get('name'), str)
-                and isinstance(door.get('link'), str)):
-            door = None
     tail = (f"The bot does not write first; it answers 'heard you as <your id>'. "
             f'Waiting up to {timeout:g}s.')
     if door:
-        return (f"Open {door['link']} where you use the app and press Start: that sends "
+        also = ", or scan the code below with your phone's camera" if scan else ''
+        return (f"Open {door['link']} where you use the app and press Start{also}: that sends "
                 f"your code. Or open {door['name']} yourself and send the code {code}. " + tail)
     return (f'Open the chat with your bot yourself (press Start if the app asks) '
             f'and send the code {code}. ' + tail)
 
 
-def pair(home, kind, name, person, *, timeout=180, out=print):
+def qr_code(link):
+    """``link`` as a QR code for a terminal, or "" when segno is missing.
+
+    Each module is painted black or white, not left to the terminal's own
+    colours: a light theme would otherwise invert the code.
+    """
+    try:
+        import segno
+    except ImportError:
+        return ''
+    rows = segno.make(link, error='l').matrix_iter(border=2)
+    return '\n'.join(''.join('\x1b[40m  ' if dark else '\x1b[47m  ' for dark in row) + '\x1b[0m'
+                     for row in rows)
+
+
+def pair(home, kind, name, person, *, timeout=180, out=print, qr=None):
     if not all(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', v) for v in (name, person)):
         raise ValueError('Channel and person names use letters, digits, dots, dashes or underscores')
     if name in instances(home):
@@ -61,7 +82,11 @@ def pair(home, kind, name, person, *, timeout=180, out=print):
     drop.mkdir(parents=True, exist_ok=True)
     command = folder / 'in'
     child = subprocess.Popen([str(command), str(drop)], env=env) if command.is_file() else None
-    out(_instructions(folder, env, code, timeout))
+    door = _door(folder, env, code)
+    picture = qr_code(door['link']) if door and (sys.stdout.isatty() if qr is None else qr) else ''
+    out(_instructions(door, code, timeout, scan=bool(picture)))
+    if picture:
+        out(picture)
     deadline = time.monotonic() + timeout
     try:
         while time.monotonic() < deadline:
