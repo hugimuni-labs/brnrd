@@ -185,7 +185,7 @@ def _wish_rows(told, facts) -> list[dict]:
 class View:
     """The projections every section reads, each read once per assemble."""
 
-    def __init__(self, home: Home, facts: list, config):
+    def __init__(self, home: Home, facts: list, config, told: dict | None = None):
         from .lifecycle import main_snapshot
         from .receipts import receipts
         from .selfrepo import forge_threads
@@ -210,7 +210,7 @@ class View:
                 if f.data.get("core"):
                     cores.setdefault(f.data["shell"], set()).add(f.data["core"])
         self.cores = {shell: sorted(c) for shell, c in cores.items()}
-        self.told = wishes([f for f in facts if f.kind.startswith("wish") or f.kind == "letter"])
+        self.told = told if told is not None else wishes([f for f in facts if f.kind.startswith("wish") or f.kind == "letter"])
         self.shipped = receipts(facts, home.install_id())
         # An open ask is the person's turn unless it waits on a thread that has not asked onward.
         self.waits: dict[str, list[str]] = {}
@@ -313,13 +313,13 @@ def _raise(step, fn, *args):
     fn(*args)
 
 
-def assemble(home: Home, facts: list, config, guard=_raise) -> dict:
+def assemble(home: Home, facts: list, config, guard=_raise, told: dict | None = None) -> dict:
     """The snapshot document, ``at`` included; pure reads of what is held.
 
     Each section runs through ``guard`` as ``publisher.<section>``: the loop's
     guard leaves a section that raises out of this document and keeps its streak.
     """
-    v = View(home, facts, config)
+    v = View(home, facts, config, told)
     sections = {"presence": presence, "fuel": fuel, "bodies": bodies,
                 "threads": lambda v: [thread(v, row) for row in v.table],
                 "log": log, "wishes": lambda v: _wish_rows(v.told, v.facts)}

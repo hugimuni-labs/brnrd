@@ -307,14 +307,14 @@ def letters_of(facts, typed: dict | None = None, told: dict | None = None) -> tu
 
 def board_threads(home: Home, facts, config, person: str | None = None) -> tuple[dict, dict, list, dict]:
     """``(snapshot, told, letters, wish rows)``: snapshot v1 with each thread's board state, steps and opening."""
-    snap = assemble(home, facts, config)
+    raw = wishes([f for f in facts if f.kind.startswith("wish") or f.kind == "letter"])
+    snap = assemble(home, facts, config, told=raw)  # one union of the wish facts per step, not three
     root = home.root / "self"
     main_name = home.main_thread()
     for t in snap.get("threads") or []:
         t["steps"] = steps_of(root, t["id"])
         if t.get("plan") and (size := plan_bytes(root, t["id"])) is not None:
             t["plan"] = dict(t["plan"], bytes=size, **({"cap": PLAN_CAP} if t["id"] == main_name else {}))
-    raw = wishes([f for f in facts if f.kind.startswith("wish") or f.kind == "letter"])
     letters, told = letters_of(facts, None, raw)
     calls = calls_of(snap.get("threads") or [], raw, facts)
     opened = {}  # a thread opens with its first letter or lease, whichever came first: idle keeps that place (4921)
