@@ -344,9 +344,14 @@ def test_cli_service_lifecycle_at_subprocess_boundary(tmp_path, monkeypatch, cap
     monkeypatch.setattr(linux, "supported", lambda: system == "Linux")
     events = []
     running = False
+    real_run = subprocess.run
 
     def manager(command, **kwargs):
         nonlocal running
+        if command[0] == "git" or "self" in Path(command[0]).parts:
+            # Loom start seeds a self the home lacks (git, then the self's
+            # own index script); that is not the manager.
+            return real_run(command, **kwargs)
         events.append(tuple(command))
         assert command[0] in {"systemctl", "launchctl", "tail"}
         assert "dev.brnrd.brr" not in " ".join(command)

@@ -171,3 +171,22 @@ def test_setup_seeds_a_self_so_a_letter_has_a_thread_to_land_on(tmp_path, monkey
     # A second run finds the self and leaves it be.
     assert setup_channel.main(['--home', str(tmp_path), '--kind', 'fake',
                                '--name', 'desk', '--person', 'ada']) == 0
+
+
+def test_loom_start_seeds_a_self_a_pairing_left_without_one(tmp_path):
+    # An install paired before setup seeded: the service start heals it.
+    from brr.loom.runtime.verbs_loom import _service_body
+    channels = tmp_path / 'self/people/ada/channels.toml'
+    channels.parent.mkdir(parents=True)
+    channels.write_text('channels = ["desk:42"]\n')
+    (tmp_path / 'loom').mkdir()
+    (tmp_path / 'loom/config.toml').write_text('body = "claude/sonnet"\n')
+    assert _service_body(tmp_path) == 'claude/sonnet'
+    home = Home(tmp_path, 'aaaa')
+    assert home.main_thread() == 'brnrd' and home.routable('brnrd')
+    assert channels.read_text() == 'channels = ["desk:42"]\n'
+    head = subprocess.run(['git', '-C', str(tmp_path / 'self'), 'rev-parse', 'HEAD'],
+                          capture_output=True, text=True, check=True).stdout
+    assert _service_body(tmp_path) == 'claude/sonnet'
+    assert subprocess.run(['git', '-C', str(tmp_path / 'self'), 'rev-parse', 'HEAD'],
+                          capture_output=True, text=True, check=True).stdout == head

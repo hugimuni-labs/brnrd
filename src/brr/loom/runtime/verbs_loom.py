@@ -41,8 +41,7 @@ def _loom(argv: list[str]) -> int:
     # The service argv carries no --adapter. The home's body is the choice.
     # An explicit --adapter keeps the old hand path (tests pass fake).
     if adapter is None:
-        from .service import _require_body
-        choice = _require_body(Path(args.home).expanduser().resolve())
+        choice = _service_body(Path(args.home).expanduser().resolve())
         adapter, _, core = choice.partition("/")
         adapter, core = adapter.strip(), core.strip()
     run_loom(
@@ -50,6 +49,19 @@ def _loom(argv: list[str]) -> int:
         install=args.install,
     )
     return 0
+
+
+def _service_body(root: Path) -> str:
+    """Make the home runnable, then name its body.
+
+    A home paired before any self existed has letters with no thread to
+    land on: seed the self here, so the install heals without a rerun.
+    """
+    from .selfrepo import init_self
+    from .service import _require_body
+    if not (root / "self" / ".git").exists():
+        init_self(root)
+    return _require_body(root)
 
 
 def _attention(argv: list[str]) -> int:
