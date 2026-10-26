@@ -122,6 +122,6 @@ def test_loom_part_points_at_wishes(home, jack):
     facts = read_facts(home)
     room = _prepare(home, STRAND, "inbox", 1, [], sender_threads(facts), facts, jack)
     part = (room / "port/loom.md").read_text()
-    assert "what is left on a wish lives on the wish: `python -m brr.loom.runtime wish <w-id> --left" in part
+    assert "what is left on a wish lives on the wish: `brnrd runtime wish <w-id> --left" in part
     assert "the stop asks for it once a wish moved; progress is the wishes" in part
     assert "stamp what someone wants with `send --wish` (core/loom/README.md, Wishes)" in part

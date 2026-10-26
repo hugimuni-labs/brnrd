@@ -42,10 +42,10 @@ def test_composer_letter_lands_on_its_thread_from_the_owner_once(owner, body):
     assert relay.person_dm(owner, source.data["channel"]) == "person:arseni"
 
 
-def test_unknown_thread_falls_back_to_brnrd(owner):
+def test_unknown_thread_falls_back_to_the_home_thread(owner):
     relay.pull_once(owner, FakeClient([composer(thread="nowhere")]), 0)
     letter, = kinds(owner, "letter")
-    assert letter.data["to"] == "thread:brnrd"
+    assert letter.data["to"] == "thread:inbox"
 
 
 def test_unenrolled_account_stays_a_tainted_stranger(home):

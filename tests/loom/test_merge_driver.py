@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from brr.loom.runtime import entry
 from brr.loom.runtime.merge import install_pre_receive, send_to_self
 from brr.loom.runtime.merge_driver import install_merge_driver, merge
 
@@ -80,6 +81,8 @@ def published(tmp: Path) -> Path:
 def room(bare: Path, dest: Path, name: str) -> Path:
     git(None, "clone", os.fspath(bare), os.fspath(dest))
     git(dest, "checkout", "-b", name)
+    # The driver runs through the shim, which the wake's entry want sets up before any clone.
+    entry.ensure()
     install_merge_driver(dest)
     return dest
 

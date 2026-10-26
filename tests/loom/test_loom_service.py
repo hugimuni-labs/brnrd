@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from brr.daemon_install import linux, macos
-from brr.loom.runtime import service
+from brr.loom.runtime import entry, service
 
 
 @pytest.fixture(autouse=True)
@@ -139,7 +139,9 @@ def test_install_refuses_a_body_that_is_not_shell_core(tmp_path):
     assert mac.calls == []
 
 
-def test_macos_install_freezes_the_home_and_abandons_the_group(tmp_path, capsys):
+def test_macos_install_freezes_the_home_and_abandons_the_group(tmp_path, monkeypatch, capsys):
+    # The installing shell has its venv's bin on PATH; the unit reads it through current.
+    monkeypatch.setenv("PATH", f"{entry.prefix() / 'bin'}:/usr/bin")
     home = tmp_path / "home"
     _body(home)
     mac = _Mac()
@@ -147,14 +149,18 @@ def test_macos_install_freezes_the_home_and_abandons_the_group(tmp_path, capsys)
     assert code == 0
     plist = macos.plist_path(home=tmp_path / "agents", label=service.LABEL)
     data = plistlib.loads(plist.read_bytes())
-    interpreter = str(Path(sys.executable).absolute())
     assert data["Label"] == "dev.brnrd.loom"
     assert data["AbandonProcessGroup"] is True
-    assert data["ProgramArguments"][0] == interpreter
-    assert Path(data["ProgramArguments"][0]).is_absolute()
-    assert data["ProgramArguments"][1:] == [
-        "-m", "brr.loom.runtime", "loom", "--home", str(home.resolve()),
-    ]
+    # The unit runs the shim, never this interpreter or its venv (entry.py).
+    assert data["ProgramArguments"][0] == str(entry.shim())
+    assert data["ProgramArguments"][1:] == ["runtime", "loom", "--home", str(home.resolve())]
+    plain = plist.read_text()
+    assert sys.executable not in plain and str(entry.prefix()) not in plain
+    assert data["EnvironmentVariables"]["PATH"] == f"{entry.shim().parent}:{entry.current() / 'bin'}:/usr/bin"
+    # The shim runs current's python on brr's runtime CLI.
+    ran = subprocess.run([data["ProgramArguments"][0], "runtime", "no-such-verb"],
+                         capture_output=True, text=True)
+    assert ran.returncode == 2 and "usage: python -m brr.loom.runtime" in ran.stderr
     assert "--adapter" not in data["ProgramArguments"]
     assert data["WorkingDirectory"] == str(home.resolve())
     assert "brnrd-loom" in data["StandardOutPath"]
@@ -239,6 +245,7 @@ def test_macos_verbs_after_install(tmp_path, capsys):
 
 
 def test_linux_unit_kills_only_the_process_and_names_the_home(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("PATH", f"{entry.prefix() / 'bin'}:/usr/bin")
     home = tmp_path / "home"
     _body(home)
     config = tmp_path / "config"
@@ -259,10 +266,10 @@ def test_linux_unit_kills_only_the_process_and_names_the_home(tmp_path, monkeypa
     assert code == 0
     assert box.slept == [1.25]
     text = linux.unit_path(service.UNIT).read_text(encoding="utf-8")
-    interpreter = str(Path(sys.executable).absolute())
     assert "KillMode=process" in text
     assert str(home.resolve()) in text
-    assert interpreter in text
+    assert f'ExecStart="{entry.shim()}" "runtime" "loom"' in text
+    assert sys.executable not in text and str(entry.prefix()) not in text
     assert "--home" in text
     assert "--adapter" not in text
     assert f"{state}/brnrd-loom/out.log" in text
@@ -373,7 +380,7 @@ def test_cli_service_lifecycle_at_subprocess_boundary(tmp_path, monkeypatch, cap
         path = macos.plist_path(label=service.LABEL)
         data = plistlib.loads(path.read_bytes())
         assert data["AbandonProcessGroup"] is True
-        assert data["EnvironmentVariables"]["PATH"] == "/initial/bin:/usr/bin"
+        assert data["EnvironmentVariables"]["PATH"] == f"{entry.shim().parent}:/initial/bin:/usr/bin"
         assert data["KeepAlive"] == {"SuccessfulExit": False}
         program = data["ProgramArguments"]
     else:
@@ -382,17 +389,17 @@ def test_cli_service_lifecycle_at_subprocess_boundary(tmp_path, monkeypatch, cap
         assert "KillMode=process\n" in data
         assert "Restart=on-failure\n" in data
         assert "MemoryHigh=" not in data and "MemoryMax=" not in data
-        assert 'Environment="PATH=/initial/bin:/usr/bin"' in data
+        assert f'Environment="PATH={entry.shim().parent}:/initial/bin:/usr/bin"' in data
         import shlex
         program = shlex.split(next(line.split("=", 1)[1] for line in data.splitlines() if line.startswith("ExecStart=")))
-    assert program[1:] == ["-m", "brr.loom.runtime", "loom", "--home", str(home)]
+    assert program[1:] == ["runtime", "loom", "--home", str(home)]
     assert "--adapter" not in program
     # Run the generated foreground argv's parser; it takes its body from the
     # config, rather than relying on the old fake adapter default.
     from brr.loom.runtime import __main__ as runtime_cli, verbs_loom
     choices = []
     monkeypatch.setattr(verbs_loom, "run_loom", lambda root, **kwargs: choices.append((root, kwargs)))
-    assert runtime_cli.main(program[3:]) == 0
+    assert runtime_cli.main(program[2:]) == 0
     assert choices[0][1]["adapter"] == "grok"
     assert choices[0][1]["core"] == "grok-4"
 
@@ -405,12 +412,12 @@ def test_cli_service_lifecycle_at_subprocess_boundary(tmp_path, monkeypatch, cap
     if system == "Linux":
         assert ("systemctl", "--user", "restart", service.UNIT) in events
         assert f"WorkingDirectory={other}" in path.read_text()
-        assert 'Environment="PATH=/new/bin:/usr/bin"' in path.read_text()
+        assert f'Environment="PATH={entry.shim().parent}:/new/bin:/usr/bin"' in path.read_text()
     else:
         # Reading the running service's pid comes first; the first change is bootout.
         assert [e for e in events if e[1] != "print"][0][1] == "bootout"
         assert plistlib.loads(path.read_bytes())["WorkingDirectory"] == str(other)
-        assert plistlib.loads(path.read_bytes())["EnvironmentVariables"]["PATH"] == "/new/bin:/usr/bin"
+        assert plistlib.loads(path.read_bytes())["EnvironmentVariables"]["PATH"] == f"{entry.shim().parent}:/new/bin:/usr/bin"
     capsys.readouterr()
     main(["loom", "status"])
     output = capsys.readouterr().out
@@ -532,7 +539,7 @@ def test_start_does_not_trust_failed_manager_pid_readback(tmp_path, monkeypatch,
 
 
 @pytest.mark.parametrize("system", ["Linux", "Darwin"])
-def test_install_keeps_virtualenv_interpreter_symlink(tmp_path, monkeypatch, system):
+def test_install_points_current_at_the_virtualenv_not_its_base(tmp_path, monkeypatch, system):
     home = tmp_path / "home"
     _body(home)
     python = tmp_path / "venv" / "bin" / "python"
@@ -545,14 +552,9 @@ def test_install_keeps_virtualenv_interpreter_symlink(tmp_path, monkeypatch, sys
     box = _Linux() if system == "Linux" else _Mac()
     assert service.main(["install", "--home", str(home), "--no-start"],
                         run=box.run, agents_home=tmp_path / "user", system=system) == 0
-    if system == "Darwin":
-        data = plistlib.loads(macos.plist_path(home=tmp_path / "user", label=service.LABEL).read_bytes())
-        assert data["ProgramArguments"][0] == str(python)
-    else:
-        import shlex
-        text = linux.unit_path(service.UNIT).read_text()
-        args = shlex.split(next(line.split("=", 1)[1] for line in text.splitlines() if line.startswith("ExecStart=")))
-        assert args[0] == str(python)
+    # Resolving the venv's link would select the base Python, without brr.
+    assert entry.current().resolve() == (tmp_path / "venv").resolve()
+    assert entry.current().readlink() == tmp_path / "venv"
 
 
 # ---- `brnrd loom install` is the whole install (4597) ----------------------
@@ -662,19 +664,21 @@ def test_cli_install_refuses_a_source_checkout_and_names_the_fix(tmp_path, machi
         _brnrd("loom", "install", "--home", str(home))
     text = str(caught.value)
     assert str(Path(sys.executable).absolute()) in text
+    assert not entry.current().exists()
     assert str(checkout.parent) in text
     assert "deactivate; hash -r" in text and "--dev" in text
     assert manager.calls == []
     assert not macos.plist_path(label=service.LABEL).exists()
     assert not linux.unit_path(service.UNIT).exists()
 
-    # --dev means it: the checkout's interpreter is frozen, and the receipt says so.
+    # --dev means it: current points at the checkout's venv, and the unit at the shim.
     assert _brnrd("loom", "install", "--home", str(home), "--dev") == 0
-    assert _unit_program(system)[0] == str(Path(sys.executable).absolute())
+    assert _unit_program(system)[0] == str(entry.shim())
+    assert entry.current().readlink() == entry.prefix()
 
 
 @pytest.mark.parametrize("system", ["Darwin", "Linux"])
-def test_cli_install_freezes_the_tool_interpreter_and_prints_the_receipt(tmp_path, machine, monkeypatch, capsys, system):
+def test_cli_install_points_current_at_the_tool_and_prints_the_receipt(tmp_path, machine, monkeypatch, capsys, system):
     from brr import __version__
 
     machine(system)
@@ -683,9 +687,11 @@ def test_cli_install_freezes_the_tool_interpreter_and_prints_the_receipt(tmp_pat
     tool = tmp_path / "user" / ".local" / "share" / "uv" / "tools" / "brnrd" / "bin" / "python3"
     tool.parent.mkdir(parents=True)
     tool.symlink_to(sys.executable)
+    (tool.parent / "python").symlink_to(sys.executable)
     monkeypatch.setattr(sys, "executable", str(tool))
     assert _brnrd("loom", "install", "--home", str(home)) == 0
-    assert _unit_program(system)[0] == str(tool)
+    assert _unit_program(system)[0] == str(entry.shim())
+    assert entry.current().readlink() == tool.parent.parent
     out = capsys.readouterr().out
     unit = macos.plist_path(label=service.LABEL) if system == "Darwin" else linux.unit_path(service.UNIT)
     for line in (
@@ -694,7 +700,9 @@ def test_cli_install_freezes_the_tool_interpreter_and_prints_the_receipt(tmp_pat
         f"home: {home.resolve()} (flag)",
         "body: claude/opus (from config)",
         f"service: {unit}",
+        f"entry: {entry.shim()}",
         "replaced: none",
+        f"current: {entry.current()} -> {tool.parent.parent} (was nothing)",
         f"pid: {os.getpid()}",
     ):
         assert line in out
@@ -767,6 +775,30 @@ def test_cli_install_stops_a_loom_outside_the_service_before_starting(tmp_path, 
     finally:
         if child.poll() is None:
             child.kill()
+
+
+def test_cli_install_from_a_prefix_with_no_python_stops_nothing(tmp_path, machine, monkeypatch):
+    # Homebrew's bin has python3 but no python: the shim could not run it, so
+    # install refuses before the running loom is stopped.
+    manager = machine("Darwin")
+    home = tmp_path / "home"
+    _body(home)
+    bare = tmp_path / "brew" / "bin" / "python3"
+    bare.parent.mkdir(parents=True)
+    bare.symlink_to(sys.executable)
+    monkeypatch.setattr(sys, "executable", str(bare))
+    child = _lock_holder(home)
+    try:
+        manager.holders = [child.pid]
+        with pytest.raises(SystemExit, match="no bin/python"):
+            _brnrd("loom", "install", "--home", str(home))
+        assert child.poll() is None
+        assert manager.changes() == []
+        assert not entry.current().exists() and not entry.shim().exists()
+        assert not macos.plist_path(label=service.LABEL).exists()
+    finally:
+        child.kill()
+        child.wait()
 
 
 def test_cli_install_leaves_the_services_own_loom_to_bootout(tmp_path, machine, capsys):
