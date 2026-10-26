@@ -244,7 +244,7 @@ class Router:
                 elif isinstance(exc, AuthorError):
                     hint = "set author in loom/config.toml to Name <email>"
                 else:
-                    hint = "correct its body: shell/core choice"
+                    hint = "correct its body: shell or shell/core choice"
                 notice(home, facts, "body", thread, f"thread {thread}: {exc}",
                        hint, thread=thread)
                 continue

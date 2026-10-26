@@ -27,5 +27,7 @@ path.write_text(json.dumps(settings) + "\n")
 # in its place; the user turn carries only the occasion.
 core_text, occasion = wake_parts(os.environ)
 system = ["--append-system-prompt-file", os.environ["BRNRD_CORE"]] if core_text else []
-os.execvp("claude", ["claude", "-p", "--model", core, "--settings", str(path), *system,
+# An empty core leaves the model to Claude Code: the person's own /model.
+model = ["--model", core] if core else []
+os.execvp("claude", ["claude", "-p", *model, "--settings", str(path), *system,
                      "--dangerously-skip-permissions", "--", occasion])

@@ -58,8 +58,9 @@ KEYS: tuple[Key, ...] = (
     Key("name", "text", None,
         "This loom's name. A thread whose README says `for: <name>` runs only on the loom of that name; unset matches none."),
     Key("body", "text", None,
-        "The body a login service runs, as shell/core (e.g. claude/sonnet). "
-        "Required by `brnrd loom install`."),
+        "The body a login service runs: a shell (e.g. claude), which uses the harness's own "
+        "model choice, or shell/core to pin a model (e.g. claude/sonnet). "
+        "`brnrd loom install` writes one when unset."),
     Key("author", "text", None,
         "`Name <email>` for every commit a body makes. Unset: the loom's own."),
     Key("forge_token", "secret", None,
