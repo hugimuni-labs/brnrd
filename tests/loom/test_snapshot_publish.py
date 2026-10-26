@@ -95,9 +95,12 @@ ctx = Ctx(Path(sys.argv[1]))
 own = _own_thread(ctx.wake())
 for letter in ctx.owed():
     ctx.send("thread:" + own, note="ok", re=letter.id)
-if own == "web":
-    ctx.send("thread:inbox", "PR https://github.com/acme/brnrd/pull/7 opened", cite=letter.id)
-ctx.jack("stop")
+    if own == "web" and letter.sender == "p-test":
+        ctx.send("thread:inbox", "PR https://github.com/acme/brnrd/pull/7 opened", cite=letter.id)
+# The PR letter's no-policy notice can land at the stop; a body answers what the stop hands it.
+while letters := ctx.jack("stop").letters:
+    for letter in letters:
+        ctx.send("thread:" + own, note="ok", re=letter.id)
 """)
     run.chmod(0o755)
 
@@ -126,7 +129,8 @@ def test_document_matches_the_contract(board):
         steps(board)
         doc = board.cloud.calls[-1]["doc"] if board.cloud.calls else {}
         web = [t for t in doc.get("threads", []) if t["id"] == "web"]
-        return web and web[0].get("strands") and any(e["kind"] == "receipt" for e in doc["log"])
+        ended = any(f.kind == "attempt.ended" for f in read_facts(home))
+        return ended and web and web[0].get("strands") and any(e["kind"] == "receipt" for e in doc["log"])
     wait_until(pushed_full, 20, board.dump)
     call = board.cloud.calls[-1]
     assert (call["url"], call["method"], call["path"], call["token"], call["retry"]) == (
