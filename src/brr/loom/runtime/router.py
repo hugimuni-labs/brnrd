@@ -128,6 +128,23 @@ class Router:
                 return True
         return False
 
+    def _held_since(self, facts: list[Fact], gen: int) -> bool:
+        """Every router gen from ``gen`` to the current one is this install's.
+
+        A gen with no visible ``router`` fact may have been another
+        install's, so it breaks the run.
+        """
+        mine = self.home.install_id()
+        held: set[int] = set()
+        for fact in kind_facts(facts, "router"):
+            if fact.kind != "router" or fact.data.get("install") != mine:
+                continue
+            try:
+                held.add(int(fact.data["gen"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return all(g in held for g in range(gen, self.lease.gen + 1))
+
     def begin_tick(self, facts: list[Fact]) -> list[Fact]:
         if self.lease is None:
             return self._acquire(facts)
@@ -449,6 +466,10 @@ class Router:
                     }]}, f"letter.disposed:{key}")
 
             fresh = "send a fresh message if it still matters; this one is never sent again"
+            if grant < self.lease.gen and self._held_since(facts, grant):
+                # Every router since the draft was this install: the same
+                # speaker, so the draft is sent under the current gen.
+                grant = self.lease.gen
             if grant != self.lease.gen:
                 if grant < self.lease.gen:
                     tell("stale-speech", "was not sent: it was drafted under router "
