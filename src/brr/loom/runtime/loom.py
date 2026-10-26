@@ -1771,15 +1771,17 @@ def _source_fingerprint():
 IDLE_STALE = 1800
 
 
-def _idle(home: Home) -> bool:
-    """No live body of this install has a tool call open: the loom may move its code."""
+def _idle(home: Home, young: float | None = None) -> bool:
+    """No live body of this install has a tool call open younger than ``young`` seconds
+    (``None``: none open at all): the loom may move its code."""
+    limit = IDLE_STALE if young is None else min(young, IDLE_STALE)
     from . import tooltrace
     from .router import install_of
     for strand, _gen in fold(read_facts(home)).holder.values():
         room = home.room(strand)
         if install_of(strand) != home.install_id() or not body_alive(room):
             continue
-        if any(time.time() - call["at"] < IDLE_STALE for call in tooltrace.live(room)["open"]):
+        if any(time.time() - call["at"] < limit for call in tooltrace.live(room)["open"]):
             return False
     return True
 
