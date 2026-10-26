@@ -31,6 +31,15 @@ from _helpers import init_git_repo, make_event, write_repo_scaffold
 # ── is_security_key: the classifier itself ──────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _no_env_home(monkeypatch):
+    # `home.path` in `.brr/config` is how these tests pin a deterministic
+    # security.config location; BRNRD_HOME outranks it in
+    # `account._explicit_home` (see account.py), so a leaked env var from
+    # the outer shell would silently redirect every test in this file.
+    monkeypatch.delenv("BRNRD_HOME", raising=False)
+
+
 @pytest.mark.parametrize(
     "key",
     [

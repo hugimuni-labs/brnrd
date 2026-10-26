@@ -29,6 +29,16 @@ from brr.worker import (
 from _helpers import StubWorktreeEnv, make_event, succeed_invoke, write_repo_scaffold
 
 
+@pytest.fixture(autouse=True)
+def _close_path_and_clean_controls(monkeypatch):
+    monkeypatch.setattr(daemon, "SEAT_PARK_ON_TURN_END_DEFAULT", False)
+    with daemon._run_controls_lock:
+        daemon._run_controls.clear()
+    yield
+    with daemon._run_controls_lock:
+        daemon._run_controls.clear()
+
+
 def _wire(monkeypatch, invoke=None, *, fallback=None):
     monkeypatch.setattr(
         daemon.runner, "resolve_runner_profile",

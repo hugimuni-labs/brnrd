@@ -1,10 +1,60 @@
 import json
 import subprocess
+import threading
 from pathlib import Path
 
+import pytest
 
 from brr import forge_pr_cache, parked_branches
 from brr.run import Run
+
+
+def _join_sweep(timeout: float = 5.0) -> None:
+    """Wait for any in-flight background sweep to land before asserting.
+
+    ``refresh_if_stale_async`` (the only thing that still calls ``detect``)
+    always runs on a thread named ``"parked-branches"`` — same idiom as
+    ``test_lane_liveness.py``'s own ``for thread in threading.enumerate()``
+    join, because a test that reads the cache before its refresh thread
+    finishes is racing the very asynchrony this module now provides on
+    purpose.
+    """
+    for thread in threading.enumerate():
+        if thread.name == "parked-branches":
+            thread.join(timeout=timeout)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_sweep_state():
+    """This module's process-lifetime state, reset per test.
+
+    Four globals now, all added or repurposed when the walk moved off the
+    caller's own thread (2026-09-22, the-tick-that-breathes): `_WARNED`
+    (which branches have been announced), `_cached_at` / `_cached_items`
+    (per-repo dicts backing the async-refreshed cache `read_cached` and
+    `warn_new` both read instead of calling `detect` themselves), and
+    `_refreshing` (the per-repo in-flight set `refresh_if_stale_async` uses
+    to avoid starting a second walk for the same repo while one is still
+    running). The TTL fixture this replaces was added 2026-09-11 after a
+    pre-existing test cleared only `_WARNED`, passed alone, and failed in a
+    full run — a second sweep inside the window returned before it could
+    print anything. Same failure shape would recur here with any one of the
+    four left dirty.
+
+    Autouse rather than another `monkeypatch.setattr` line per test, because
+    the failure mode is "a future test forgets one of them", and a fixture
+    is the only version of this that a new test cannot omit.
+    """
+    def _reset():
+        parked_branches._WARNED.clear()
+        parked_branches._cached_at.clear()
+        parked_branches._cached_items.clear()
+        parked_branches._refreshing.clear()
+
+    _reset()
+    yield
+    _join_sweep()
+    _reset()
 
 
 def _git(repo, *args):

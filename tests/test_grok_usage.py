@@ -13,6 +13,12 @@ from brr.gates import cloud
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def _grok_on_path(monkeypatch):
+    """Tests drive a fake capture; pretend the binary exists unless a test says not."""
+    monkeypatch.setattr(grok_usage, "_grok_installed", lambda env=None: True)
+
+
 def screen():
     return (FIXTURES / "grok_usage_screen_exhausted.txt").read_bytes()
 

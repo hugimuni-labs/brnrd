@@ -17,10 +17,17 @@ Four properties, each pinned below:
 
 from __future__ import annotations
 
-
+import pytest
 
 from brr import account, message_store, protocol
 from brr.gates import delivery, runtime
+
+
+@pytest.fixture(autouse=True)
+def _clean_backoff():
+    runtime._delivery_retry.clear()
+    yield
+    runtime._delivery_retry.clear()
 
 
 def _event(tmp_path, body: str, **meta):

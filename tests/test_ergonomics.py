@@ -12,16 +12,25 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 
 from brr.envs import RunContext
 from brr.ergonomics import probes, store
 from brr.ergonomics.proxy import (
     LocalErgoProxy,
+    reset_log_dedup,
 )
 from brr.ergonomics.record import Record
 
-
 # ── fixtures / helpers ──────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _clear_log_dedup():
+    """The log proxy dedups on a process-global window; isolate tests."""
+    reset_log_dedup()
+    yield
+    reset_log_dedup()
 
 
 def _ctx(name: str = "docker", *, owner: str = "user", **env_state) -> RunContext:

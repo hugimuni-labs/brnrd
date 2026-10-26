@@ -18,6 +18,23 @@ from brr.daemon_install import linux, macos
 from brr.loom.runtime import entry, service
 
 
+@pytest.fixture(autouse=True)
+def _installed_brr(monkeypatch, tmp_path):
+    """brr as uv tool installs it, and no coding CLI answering with fuel.
+
+    The suite imports brr from ``src``: exactly the checkout install refuses.
+    Tests about that refusal undo this. No test probes a real CLI's quota.
+    """
+    import sysconfig
+
+    import brr
+
+    monkeypatch.setattr(brr, "__file__", str(Path(sysconfig.get_paths()["purelib"]) / "brr" / "__init__.py"))
+    monkeypatch.setattr(service, "_fuel", lambda home, shell: None)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.delenv("BRNRD_HOME", raising=False)
+
+
 def _body(home: Path, value: str | None = "grok/grok-4") -> None:
     path = home / "loom" / "config.toml"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -779,6 +796,40 @@ def test_cli_install_from_a_prefix_with_no_python_stops_nothing(tmp_path, machin
         assert manager.changes() == []
         assert not entry.current().exists() and not entry.shim().exists()
         assert not macos.plist_path(label=service.LABEL).exists()
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_cli_install_leaves_the_services_own_loom_to_bootout(tmp_path, machine, capsys):
+    """The service's loom is booted out by install, never signalled by hand."""
+    manager = machine("Darwin")
+    home = tmp_path / "home"
+    _body(home)
+    child = _lock_holder(home)
+    try:
+        manager.service_pid = child.pid
+        manager.holders = [child.pid]
+        assert _brnrd("loom", "install", "--home", str(home)) == 0
+        assert child.poll() is None
+        assert [c[1] for c in manager.changes()][:2] == ["bootout", "bootstrap"]
+        assert f"replaced: pid {child.pid}, the service's loom · bodies keep running" in capsys.readouterr().out
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_cli_install_no_start_stops_nothing(tmp_path, machine, capsys):
+    manager = machine("Darwin")
+    home = tmp_path / "home"
+    _body(home)
+    child = _lock_holder(home)
+    try:
+        manager.holders = [child.pid]
+        assert _brnrd("loom", "install", "--home", str(home), "--no-start") == 0
+        assert child.poll() is None
+        assert manager.calls == []
+        assert "replaced: nothing (--no-start)" in capsys.readouterr().out
     finally:
         child.kill()
         child.wait()

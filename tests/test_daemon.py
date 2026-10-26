@@ -28,6 +28,21 @@ from _helpers import (
 
 
 @pytest.fixture(autouse=True)
+def _clear_notify_gate_cache():
+    """Drop the per-run notify-gate memo around every test in this module.
+
+    :func:`daemon._cached_notify_gate` is a process-global keyed by run id,
+    and the fixtures below all use ``run-1`` — without this, the first test
+    to resolve a gate would answer for every later one. Production drops an
+    entry in ``_run_worker_and_finalize``'s ``finally``; a test never
+    reaches that, so it clears here.
+    """
+    daemon._notify_gate_cache.clear()
+    yield
+    daemon._notify_gate_cache.clear()
+
+
+@pytest.fixture(autouse=True)
 def _clean_run_controls():
     with daemon._run_controls_lock:
         daemon._run_controls.clear()

@@ -19,6 +19,20 @@ from brr import account, front_door
 from _helpers import init_git_repo
 
 
+@pytest.fixture(autouse=True)
+def _no_stray_input(monkeypatch):
+    """A prompt nobody asked for is the failure this suite exists to catch.
+
+    Every test that *wants* a prompt replaces this; the rest inherit a
+    hard error, so a step that slipped past its TTY gate fails loudly here
+    instead of hanging a CI run on a blocking read.
+    """
+    def _refuse(*_args, **_kwargs):
+        raise AssertionError("the front door asked a question it should not have")
+
+    monkeypatch.setattr(builtins, "input", _refuse)
+
+
 @pytest.fixture
 def repo(tmp_path, monkeypatch) -> Path:
     root = tmp_path / "proj"

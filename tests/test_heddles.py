@@ -6,10 +6,18 @@ import json
 import time
 from pathlib import Path
 
+import pytest
 
 from brr import heddles
 
 NOW = 1_790_000_000.0  # a fixed epoch; every row below is dated against it
+
+
+@pytest.fixture(autouse=True)
+def _fresh_cache():
+    heddles.reset_cache()
+    yield
+    heddles.reset_cache()
 
 
 def iso(epoch: float) -> str:
