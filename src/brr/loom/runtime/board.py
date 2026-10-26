@@ -29,7 +29,7 @@ from .port import _front
 from .lifecycle import CLOSED, main_snapshot
 from .project import fold, is_notice, projection_cache, sender_threads
 from .snapshot import _iso, assemble
-from .wishes import Say, receipt, waits_on, wishes
+from .wishes import Say, receipt, told as told_of, waits_on, wishes
 from . import tooltrace
 
 TICK = 0.25  # seconds between stats of the ledger and the rooms; a still home costs a few stats
@@ -297,21 +297,32 @@ def letters_of(facts, typed: dict | None = None, told: dict | None = None) -> tu
         if row["id"] in answers:
             row["answers"] = answers[row["id"]]
     # A wish's letters: the ones its says cite, then every letter whose re reaches one of them, in time order.
-    ids = {row["id"] for row in rows}
+    # Walked over a reply map, not rows × wishes: a reply joins when it comes after what it answers,
+    # and a cited letter takes its replies whenever they came.
+    place = {row["id"]: n for n, row in enumerate(rows)}
+    replies: dict[str, list] = {}
+    for row in rows:
+        if re_ := str(row.get("re") or ""):
+            replies.setdefault(re_ if re_ in place else f"letter:{re_}", []).append(row["id"])
+            if re_ not in place:
+                replies.setdefault(re_, []).append(row["id"])
     for w in every:
-        tied = {s["id"] for s in w["says"]}
-        for row in rows:
-            re_ = str(row.get("re") or "")
-            if row["id"] not in tied and (re_ in tied or (re_ not in ids and f"letter:{re_}" in tied)):
-                tied.add(row["id"])
-        w["letters"] = [row["id"] for row in rows if row["id"] in tied]
+        tied = {s["id"]: -1 for s in w["says"]}
+        todo = list(tied)
+        while todo:
+            ident = todo.pop()
+            for child in replies.get(ident, ()):
+                if child not in tied and place[child] > tied[ident]:
+                    tied[child] = place[child]
+                    todo.append(child)
+        w["letters"] = sorted((i for i in tied if i in place), key=place.__getitem__)
     return rows, every
 
 
 def board_threads(home: Home, facts, config, person: str | None = None, typed: dict | None = None) -> tuple[dict, dict, list, dict]:
     """``(snapshot, told, letters, wish rows)``: snapshot v1 with each thread's board state, steps and opening."""
-    raw = wishes([f for f in facts if f.kind.startswith("wish") or f.kind == "letter"])
-    snap = assemble(home, facts, config, told=raw)  # one union of the wish facts per step, not three
+    raw = told_of(facts)  # the projection the beads read too: one union of the wish facts per change
+    snap = assemble(home, facts, config, told=raw)
     root = home.root / "self"
     main_name = home.main_thread()
     for t in snap.get("threads") or []:

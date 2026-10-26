@@ -8,7 +8,7 @@ from .lifecycle import CLOSED
 from .owners import unanswered_by_thread
 from .project import _destination, fold, sender_threads
 from .receipts import receipts
-from .wishes import plan_word, waits_on, waits_word, wishes, wish_line
+from .wishes import plan_word, told, waits_on, waits_word, wishes, wish_line
 
 
 @dataclass(frozen=True)
@@ -117,7 +117,7 @@ class Beads:
         # A notice can live only inside a disposition: the fold reads those out.
         self.letters = {**letter_index(state.accepted), **letter_index(facts)}
         self.facts = {f.id: f for f in facts}
-        self.wishes, self.writers, self.main = wishes(facts), sender_threads(facts), main
+        self.wishes, self.writers, self.main = told(facts), sender_threads(facts), main
         self.leases = [f for f in state.accepted if f.kind == "lease"]
 
     def kind(self, ident: str) -> str:
