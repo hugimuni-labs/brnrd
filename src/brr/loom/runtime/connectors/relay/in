@@ -152,11 +152,11 @@ def poll_forever(drop, state, client, lock, stop, log=print):
 
 
 if __name__ == '__main__':
-    config, state = settings()
-    if not config.relay_state:
-        sys.exit('relay requires relay_state in BRNRD_CONFIG')
+    config, state, gate = settings()
+    if gate is None:
+        sys.exit('relay: no cloud gate in loom/gates: run brnrd account connect')
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
-    poll_forever(Path(sys.argv[1]), state, RelayClient(config.relay_state),
-                 RelayLock(config.relay_state, 'loom'), stop)
+    poll_forever(Path(sys.argv[1]), state, RelayClient(gate),
+                 RelayLock(gate, 'loom'), stop)

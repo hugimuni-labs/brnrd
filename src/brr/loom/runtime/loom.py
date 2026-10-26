@@ -1770,6 +1770,24 @@ def _idle(home: Home) -> bool:
     return True
 
 
+def _migrate_gates(home: Home) -> None:
+    """Before the first tick (a tick reads one config snapshot): bring a gate
+    left in the daemon's account home into this one (gates.py). A refusal
+    keeps the old config, which still works, and the next start retries."""
+    from . import gates
+    from .config import load_config
+    try:
+        if not gates.legacy(home.root, load_config(home.root)):
+            return
+        data = gates.migrate(home.root)
+    except Exception as exc:
+        _log(home, f"migrate:gates: not moved, the old gate stays in use: {type(exc).__name__}: {exc}")
+        return
+    append(home, Fact(kind="home.migrated", by=f"loom:{home.install_id()}",
+                      data={"want": "gates", **data}))
+    _log(home, f"migrate:gates: {data}")
+
+
 def _read_usage(home, usage) -> None:
     for shell in usage.shells(home):
         usage.reading(home, shell)
@@ -1796,6 +1814,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
             record_start(home, read_facts(home))
         except Exception:
             _log(home, traceback.format_exc().rstrip())
+        _migrate_gates(home)
         from .config import ConfigError, load_config, tick_config
         from . import usage
         config = load_config(home.root)

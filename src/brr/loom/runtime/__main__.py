@@ -27,6 +27,7 @@ VERBS = {
     "wake": ("verbs_self", "cmd_wake"),
     "send-self": ("verbs_merge", "main"),
     "publish": ("publish", "main"),
+    "forge-token": ("gates", "main"),
     "merge-driver": ("merge_driver", "main"),
 }
 
