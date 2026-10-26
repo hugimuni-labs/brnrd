@@ -43,7 +43,7 @@ def test_self_refusal_stays_owed_and_one_notice_repairs_home(tmp_path, fault):
                    for f in ends for d in f.data["dispositions"] if d["id"] == ident)
         notices = [f for f in facts if f.kind == "letter" and f.id.startswith("loom/self-refusal-")]
         assert len(notices) == 1
-        assert notices[0].data["to"] == "thread:brnrd"
+        assert notices[0].data["to"] == "thread:inbox"
         assert not any(f.kind == "letter" and f.id.startswith("loom/failed-message-") for f in facts)
         assert not any(f.kind == "letter" and str(f.data.get("to", "")).startswith("channel:") for f in facts)
         # Repair main. The original letter, rather than a resend, now runs.

@@ -160,10 +160,10 @@ def test_setup_seeds_a_self_so_a_letter_has_a_thread_to_land_on(tmp_path, monkey
     assert setup_channel.main(['--home', str(tmp_path), '--kind', 'fake',
                                '--name', 'desk', '--person', 'ada']) == 0
     home = Home(tmp_path, 'aaaa')
-    assert home.main_thread() == 'brnrd' and home.routable('brnrd')
+    assert home.main_thread() == 'inbox' and home.routable('inbox')
     tracked = subprocess.run(['git', '-C', str(tmp_path / 'self'), 'ls-tree', '-r', '--name-only', 'main'],
                              capture_output=True, text=True, check=True).stdout.split()
-    assert 'threads/brnrd/README.md' in tracked and 'people/ada/agreement.md' in tracked
+    assert 'threads/inbox/README.md' in tracked and 'people/ada/agreement.md' in tracked
     # The pairing's file survives the seed, outside the commit.
     assert channels.read_text() == 'channels = ["desk:42"]\n'
     assert 'people/ada/channels.toml' not in tracked
