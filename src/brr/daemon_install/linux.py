@@ -473,6 +473,7 @@ def install(
     workdir: str | Path | None = None,
     delay: float = 2.0,
     restart: bool = False,
+    path_env: str | None = None,
 ) -> int:
     if not supported():
         raise SystemExit("[brnrd] daemon install on this platform is not implemented yet")
@@ -487,6 +488,7 @@ def install(
         kill_mode=kill_mode,
         log_directory=log_directory,
         workdir=workdir,
+        path_env=path_env,
     )
     print(f"[brnrd] wrote {service_path}")
 

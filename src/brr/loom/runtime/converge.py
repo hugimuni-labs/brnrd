@@ -193,3 +193,39 @@ def port_want(room: Path, wait: str | None) -> Want:
         return None
 
     return Want("port", holds, make)
+
+
+def entry_want() -> Want:
+    """The shim exists and ``current`` runs (entry.py); every launcher below names it.
+
+    A missing or broken ``current`` is linked to the loom's own prefix and
+    the fallback fact says why; one that cannot be linked fails the attempt.
+    """
+    from . import entry
+
+    def make():
+        try:
+            done = entry.ensure()
+        except OSError as exc:
+            raise Unconverged("entry", str(exc)) from None
+        return (FALLBACK, {"want": "entry", **done}) if done and "current" in done else None
+
+    return Want("entry", entry.sound, make)
+
+
+def driver_want(clone: Path) -> Want:
+    """The clone's README merge driver runs through the shim, so a room made
+    before it converges at its next wake."""
+    from .merge_driver import driver_command, install_merge_driver
+
+    def holds() -> bool:
+        if not (clone / ".git").exists():
+            return True
+        proc = git(clone, "config", "--get", "merge.loom-readme.driver", check=False)
+        return proc.stdout.strip() == driver_command()
+
+    def make():
+        install_merge_driver(clone)
+        return None
+
+    return Want("driver", holds, make)
