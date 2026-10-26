@@ -306,3 +306,52 @@ def test_a_running_loom_hears_a_channel_paired_after_it_started(tmp_path):
         assert letter.data['from'] == 'person:ada'
     finally:
         inputs.close()
+
+
+def test_setup_is_done_when_the_first_letter_reaches_a_body(tmp_path):
+    import threading
+    import time
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime.ledger import append, read_facts
+    home = home_at(tmp_path)
+    inbox = home.thread_dir('inbox')
+    inbox.mkdir(parents=True)
+    (inbox / 'README.md').write_text('---\nid: inbox\nstatus: open\ntense: plan\n---\n# Inbox\n')
+    (tmp_path / 'self/people/ada').mkdir(parents=True)
+    (tmp_path / 'self/people/ada/channels.toml').write_text('channels = ["desk:42"]\n')
+    (tmp_path / 'loom/config.toml').write_text('connectors = ["desk=fake"]\n')
+    said, result = [], {}
+    def wait():
+        try:
+            result['strand'] = setup_channel.first_letter(home, 'ada', timeout=30, out=said.append,
+                                                          running=lambda: True, sleep=lambda s: time.sleep(.02))
+        except Exception as exc:
+            result['error'] = exc
+    inputs = connector.Inputs(home)
+    waiter = threading.Thread(target=wait)
+    waiter.start()
+    try:
+        inputs.step()
+        state = Path(connector.environment(home, 'desk')['BRNRD_STATE'])
+        (state / 'in/hello.md').write_text(_front(dict(kind='letter', id='hello',
+                                           to='42', **{'from': '42'}), 'hello brnrd'))
+        inputs.step()
+        letter, = [f for f in read_facts(home) if f.kind == 'letter']
+        assert waiter.is_alive()  # landed is not done: no body has read it
+        append(home, Fact(kind='shown', by='strand:s-1', id='shown:s-1:1',
+                          data={'strand': 's-1', 'gen': 1, 'ids': [letter.data['id']]}))
+        waiter.join(30)
+    finally:
+        inputs.close()
+    assert result == {'strand': 's-1'}
+    words = '\n'.join(said)
+    assert 'brnrd got your message' in words and 'brnrd is reading it now (s-1)' in words
+
+
+def test_setup_says_when_nothing_is_running_to_hear_the_first_letter(tmp_path):
+    home = home_at(tmp_path)
+    said = []
+    with pytest.raises(TimeoutError, match='No message from you reached brnrd'):
+        setup_channel.first_letter(home, 'ada', timeout=.2, out=said.append, running=lambda: False,
+                                   sleep=lambda s: None)
+    assert said == [said[0]] and '`brnrd loom install`' in said[0]
