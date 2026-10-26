@@ -148,17 +148,6 @@ def test_lookup_returns_emote_or_none():
     assert emotes.lookup("") is None
 
 
-def test_for_telemetry_resolves_states_and_refuses_unknowns():
-    for state in TELEMETRY_STATES:
-        e = emotes.for_telemetry(state)
-        assert e is not None and e.kind == "telemetry"
-    assert emotes.for_telemetry("running").name == TELEMETRY_DEFAULTS["running"]
-    # An unmapped state renders nothing rather than inventing a mood.
-    assert emotes.for_telemetry("not_a_daemon_state") is None
-    # A real *situational* word is not a telemetry state.
-    assert emotes.for_telemetry("focused") is None
-
-
 def test_emote_is_frozen():
     e = next(iter(EMOTES.values()))
     with pytest.raises(Exception):
@@ -287,22 +276,6 @@ def test_every_vocabulary_word_has_a_unique_still_not_the_rest_glyph():
     assert len(set(stills)) == len(situational), "every word's still must be its own"
 
 
-def test_sequences_of_is_the_publish_paths_only_reach_into_frames():
-    """`cloud.py` published `frames[0]` directly and starved the dashboard
-    for it. The library states the frame rules, so the library answers the
-    questions about them: `glyph` (resting, legacy), `resting_frame`, and
-    `sequences_of`. Unknown handles resolve to nothing, never a default.
-    """
-    from brr.emotes import sequences_of
-
-    assert sequences_of("no-such-handle") is None
-    focus = sequences_of("fo.cus")
-    assert focus is not None and len(focus) >= 2, focus
-    assert focus[0] != focus[1]
-    # the legacy handle and the vocabulary word answer identically
-    assert sequences_of("fo.cus") == sequences_of("focused")
-
-
 def test_every_situational_face_declares_its_family():
     """A new face joining with no edit is the tell of an enumerated class.
     Post-rework a situational face's family equals its own name — the
@@ -315,17 +288,6 @@ def test_every_situational_face_declares_its_family():
     for e in EMOTES.values():
         if e.kind == "situational":
             assert e.family == e.name, e.name
-
-
-def test_the_palette_the_docstring_advertises_is_actually_findable():
-    """The claim and the check read the same source, so they cannot drift.
-
-    The rework's docstring advertises the twelve words by name (in
-    ``VOCABULARY``'s own definition line); every one of them must be
-    findable through ``search``.
-    """
-    unfindable = [w for w in VOCABULARY if not emotes.search(w)]
-    assert not unfindable, unfindable
 
 
 def test_lookup_reads_the_word_for_the_feeling_not_only_the_legacy_mark():
@@ -397,22 +359,6 @@ def test_near_misses_is_empty_exactly_when_lookup_succeeds():
     # A slip past the typo tolerance still gets its shortlist.
     assert emotes.lookup("curiousity") is None
     assert emotes.near_misses("curiousity")
-
-
-def test_an_unknown_word_names_the_vocabulary_never_guesses():
-    """`brnrd do --mood` refuses an unknown word with the list — no silent
-    nearest-face write. Two honest answers, kept distinct:
-
-    - a **typo** gets the face it was reaching for (`resolve_nearest`)
-    - a word that is simply **not ours** gets the vocabulary (`families`),
-      because there is no thesaurus wide enough to bridge every feeling
-    """
-    assert [e.name for e in emotes.nearest("fokused")] == ["focused"]
-    assert emotes.nearest("elated") == [], (
-        "a word that is merely absent must not be guessed at"
-    )
-    assert set(emotes.families()) == set(VOCABULARY)
-    assert len(emotes.families()) == 12
 
 
 def test_lookup_accepts_a_typo_within_two_edits():

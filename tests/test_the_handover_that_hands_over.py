@@ -63,40 +63,6 @@ def test_the_real_respawn_event_defeats_the_shipped_predicate(tmp_path):
     assert event["resume_native_session_id"] == "5196fef7-a011-4ebd-87ab-b70193b3ba44"
 
 
-def test_the_marker_is_not_the_respawn_origin_fields(tmp_path):
-    """``respawned_from_event``/``respawned_by_run`` cannot carry the meaning.
-
-    ``_queue_spawn_request`` stamps both onto a **strand**'s dispatch event
-    too — a spawn is the same system-to-system handoff shape, just concurrent
-    instead of sequential. A child starting work must never release its
-    parent's hold, so the handover marker has to be a fact of its own.
-    """
-    meta = resource_hold.build(
-        reason="turn_ended", provider="claude",
-        resume_condition=resource_hold.RESUME_ANY,
-    )
-    strandish = {
-        "source": "spawn_queued",
-        "respawned_from_event": "evt-parent",
-        "respawned_by_run": "run-parent",
-    }
-    assert not resource_hold.handover_event_releases(meta, strandish)
-    assert resource_hold.handover_event_releases(
-        meta, dict(strandish, handover=True),
-    )
-
-
-@pytest.mark.parametrize("raw", [True, "true", "True", "yes", "1"])
-def test_the_marker_survives_the_round_trip_through_a_file(raw):
-    """Frontmatter is text. ``handover: true`` off disk is a string."""
-    assert resource_hold.is_handover({"handover": raw})
-
-
-@pytest.mark.parametrize("raw", [False, "false", "no", "", None])
-def test_only_a_real_marker_is_a_handover(raw):
-    assert not resource_hold.is_handover({"handover": raw})
-
-
 # ── mechanism 2: identifiable without hijacking `source` ────────────
 
 

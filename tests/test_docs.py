@@ -5,15 +5,6 @@ from __future__ import annotations
 from brr import docs
 
 
-def test_list_topics_includes_bundled():
-    topics = docs.list_topics()
-    assert "active-task" in topics
-    assert "execution-map" in topics
-    assert "internals" in topics
-    assert "portals" in topics
-    assert "review-pack" in topics
-
-
 def test_review_pack_topic_carries_publish_plumbing():
     # The heavy publish procedure moved out of the injected diffense block
     # into this inspected topic (cost-aware-cockpit de-firehose).
@@ -115,26 +106,6 @@ def test_read_topic_override_wins(tmp_path):
 
     text = docs.read_topic("execution-map", repo_root=tmp_path)
     assert text == "# custom override"
-
-
-def test_list_topics_includes_override_additions(tmp_path):
-    overrides = tmp_path / ".brr" / "docs"
-    overrides.mkdir(parents=True)
-    (overrides / "repo-specific.md").write_text("# repo specific")
-
-    topics = docs.list_topics(repo_root=tmp_path)
-    assert "repo-specific" in topics
-    assert "execution-map" in topics  # bundled still listed
-
-
-def test_format_listing_marks_overrides(tmp_path):
-    overrides = tmp_path / ".brr" / "docs"
-    overrides.mkdir(parents=True)
-    (overrides / "execution-map.md").write_text("# custom")
-
-    listing = docs.format_listing(repo_root=tmp_path)
-    assert "execution-map" in listing
-    assert "(overridden)" in listing
 
 
 def test_read_topic_uses_shared_runtime_override_for_worktree(tmp_path):

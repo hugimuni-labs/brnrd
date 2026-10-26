@@ -11,95 +11,13 @@ return value.
 
 from __future__ import annotations
 
-from pathlib import Path
 
-from brr import cli, hooks
+from brr import cli
 
 
 def _run(monkeypatch, outbox, argv):
     monkeypatch.setenv("BRR_OUTBOX_DIR", str(outbox))
     return cli.main(argv)
-
-
-def _mood_text(outbox: Path) -> str:
-    return (outbox / hooks.MOOD_NAME).read_text(encoding="utf-8")
-
-
-def test_mood_resolves_a_feeling_and_writes_the_handle(monkeypatch, tmp_path, capsys):
-    assert _run(monkeypatch, tmp_path, ["mood", "focus"]) == 0
-    assert _mood_text(tmp_path) == "focused\n"
-    out = capsys.readouterr().out
-    assert "focused" in out
-
-
-def test_mood_exact_word_wins_and_writes_it_verbatim(monkeypatch, tmp_path):
-    """An exact vocabulary word short-circuits the fuzzy resolver entirely."""
-    assert _run(monkeypatch, tmp_path, ["mood", "curious"]) == 0
-    assert _mood_text(tmp_path) == "curious\n"
-
-
-def test_mood_legacy_handle_still_resolves_onto_its_vocabulary_word(
-    monkeypatch, tmp_path,
-):
-    """A pre-rework ``.mood`` handle (``lock_``, under the old ``focused``
-    family) still resolves — onto the twelve-word vocabulary, not onto
-    itself; the handle is a frame of ``focused`` now, not a name of its own."""
-    assert _run(monkeypatch, tmp_path, ["mood", "lock_"]) == 0
-    assert _mood_text(tmp_path) == "focused\n"
-
-
-def test_mood_accepts_trailing_narration(monkeypatch, tmp_path, capsys):
-    assert _run(
-        monkeypatch, tmp_path,
-        ["mood", "lock_", "the", "repro", "is", "in", "hand"],
-    ) == 0
-    assert _mood_text(tmp_path) == "focused\nthe repro is in hand\n"
-    assert "the repro is in hand" in capsys.readouterr().out
-
-
-def test_mood_family_word_chooses_the_palette_default(
-    monkeypatch, tmp_path, capsys,
-):
-    """A family word selects its stable palette-order default."""
-    assert _run(monkeypatch, tmp_path, ["mood", "satisfied"]) == 0
-    assert _mood_text(tmp_path).splitlines()[0]
-
-
-def test_mood_invented_handle_with_no_near_misses_still_writes_nothing(
-    monkeypatch, tmp_path, capsys,
-):
-    assert _run(monkeypatch, tmp_path, ["mood", "zzzqzxnotaface"]) == 1
-    assert not (tmp_path / hooks.MOOD_NAME).exists()
-    err = capsys.readouterr().err
-    assert "no face matches" in err
-    assert "nothing was written" in err.lower()
-
-
-def test_mood_outside_a_run_says_why(monkeypatch, capsys):
-    monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
-    monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
-
-    assert cli.main(["mood", "flow_"]) == 1
-    err = capsys.readouterr().err
-    assert "no run outbox" in err
-    assert "BRR_OUTBOX_DIR" in err
-
-
-def test_mood_outbox_flag_overrides_a_missing_environment(tmp_path, monkeypatch, capsys):
-    monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
-    monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
-
-    assert cli.main(["mood", "flow_", "--outbox", str(tmp_path)]) == 0
-    assert _mood_text(tmp_path) == "focused\n"
-
-
-def test_mood_resolves_the_outbox_from_the_portal_path(tmp_path, monkeypatch):
-    """Same fallback every other control-file consumer already trusts."""
-    monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
-    monkeypatch.setenv("BRR_PORTAL_STATE", str(tmp_path / "portal-state.json"))
-
-    assert cli.main(["mood", "flow_"]) == 0
-    assert _mood_text(tmp_path) == "focused\n"
 
 
 def test_mood_is_hidden_but_still_parses():

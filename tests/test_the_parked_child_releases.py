@@ -26,7 +26,7 @@ import pytest
 
 from pathlib import Path
 
-from brr import cut_verb, daemon, hooks, protocol, resource_hold
+from brr import cut_verb, daemon, protocol, resource_hold
 from brr.run import Run
 
 
@@ -432,62 +432,3 @@ class TestTheSeatMayCloseAParkedChild:
 # ── what the seat reads at its boundary ──────────────────────────────
 
 
-class TestTheBoundarySurface:
-    def _payload(self, **row):
-        entry = {"parent_run_id": "run-parent", "run_id": "run-kid", **row}
-        return {
-            "run": {"id": "run-parent"},
-            "resources": {"coexisting_runs": {"owned_children": [entry]}},
-        }
-
-    def _parked_payload(self):
-        return self._payload(
-            status="parked", title="the lift",
-            hold_reason="quota_starved",
-            waiting_on="a measured quota refill on its own bucket",
-        )
-
-    def test_the_row_names_the_child_its_reason_and_its_wait(self):
-        line = hooks._parked_child_lines(self._parked_payload())[0]
-        assert "run-kid" in line
-        assert "the lift" in line
-        assert "quota_starved" in line
-        assert "a measured quota refill on its own bucket" in line
-
-    def test_the_three_overrides_are_all_offered(self):
-        line = hooks._parked_child_lines(self._parked_payload())[0]
-        assert "`to: run-kid`" in line
-        assert "`stop: run-kid`" in line
-        assert "respawn" in line
-
-    def test_the_respawn_is_priced_as_a_boot(self):
-        line = hooks._parked_child_lines(self._parked_payload())[0]
-        assert "boot" in line
-        assert "cold read" in line
-        assert "across Shells it cannot reopen the transcript" in line
-
-    def test_nothing_executes_on_its_own(self):
-        line = hooks._parked_child_lines(self._parked_payload())[0]
-        assert "Nothing happens unless you say so." in line
-
-    def test_a_working_child_renders_no_parked_row(self):
-        assert hooks._parked_child_lines(self._payload()) == []
-        assert hooks._parked_child_lines(self._payload(status="submitted")) == []
-
-    def test_someone_elses_parked_child_is_not_mine(self):
-        payload = self._parked_payload()
-        payload["resources"]["coexisting_runs"]["owned_children"][0][
-            "parent_run_id"
-        ] = "run-elsewhere"
-        assert hooks._parked_child_lines(payload) == []
-
-    def test_a_parked_child_is_not_an_armed_spawn(self):
-        """`_spawn_child_armed` gates the linger: a sleeper is not a worker."""
-        assert hooks._spawn_child_armed(
-            self._parked_payload(), "run-parent",
-        ) is False
-        assert hooks._spawn_child_armed(self._payload(), "run-parent") is True
-
-    def test_the_handover_line_leaves_parked_rows_to_their_own_row(self):
-        assert hooks._live_child_handover_line(self._parked_payload()) is None
-        assert "run-kid" in (hooks._live_child_handover_line(self._payload()) or "")

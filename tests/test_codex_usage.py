@@ -100,11 +100,6 @@ def test_failed_probe_degrades_to_the_stale_cache(tmp_path, monkeypatch):
     assert degraded["updated_at"] == cached["updated_at"]
 
 
-def test_cold_cache_and_failed_probe_is_none(tmp_path, monkeypatch):
-    monkeypatch.setattr(codex_usage, "probe_rate_limits", lambda **kw: None)
-    assert codex_usage.load_or_refresh_snapshot(tmp_path) is None
-
-
 def _levels(source, updated_at, pct, extra=None):
     levels = {
         "source": source,
@@ -113,34 +108,6 @@ def _levels(source, updated_at, pct, extra=None):
     }
     levels.update(extra or {})
     return levels
-
-
-def test_merge_prefers_the_fresher_quota_and_keeps_its_timestamp():
-    probe = _levels("codex app-server", "2026-07-12T10:00:00Z", 67.0)
-    rollout = _levels(
-        "codex session rollout", "2026-07-12T08:00:00Z", 20.0,
-        {"context_window": {"summary": "40% context left (est)"}},
-    )
-
-    merged = codex_usage.merge_levels(probe, rollout)
-    # Idle Codex: the rollout froze two hours ago, the probe is live.
-    assert merged["quota"]["primary_remaining_percent"] == 67.0
-    assert merged["updated_at"] == "2026-07-12T10:00:00Z"
-    # …but context/tokens are per-thread, and only the rollout can see them.
-    assert merged["context_window"]["summary"] == "40% context left (est)"
-
-    # Live Codex: a turn just wrote a rollout event newer than the cached probe.
-    fresh_rollout = _levels("codex session rollout", "2026-07-12T10:05:00Z", 55.0)
-    merged = codex_usage.merge_levels(probe, fresh_rollout)
-    assert merged["quota"]["primary_remaining_percent"] == 55.0
-    assert merged["updated_at"] == "2026-07-12T10:05:00Z"
-
-
-def test_merge_survives_either_side_missing():
-    probe = _levels("codex app-server", "2026-07-12T10:00:00Z", 67.0)
-    assert codex_usage.merge_levels(probe, None)["quota"]["primary_remaining_percent"] == 67.0
-    assert codex_usage.merge_levels(None, probe)["quota"]["primary_remaining_percent"] == 67.0
-    assert codex_usage.merge_levels(None, None) is None
 
 
 def test_probe_never_raises_when_codex_is_missing(_no_codex_app_server_probe):

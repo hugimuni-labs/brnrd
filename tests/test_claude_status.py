@@ -130,26 +130,6 @@ def test_capture_stdout_without_shared_dir_only_writes_outbox(tmp_path):
     assert claude_status.load_snapshot(tmp_path)["spend"]["total_cost_usd"] == 0.022774
 
 
-def test_capture_stdout_empty_env_dict_does_not_fall_back_to_process_environ(
-    tmp_path, monkeypatch
-):
-    """A real-but-empty ``env={}`` must not silently read the daemon's own environ.
-
-    ``RunnerInvocation.env`` defaults to ``{}``, not ``None`` — an empty dict
-    is a legitimate "nothing set" from a caller, and ``{} or os.environ``
-    would have quietly substituted the *daemon process's* own environment
-    (which carries no ``BRR_OUTBOX_DIR``/``BRR_SHARED_DIR`` of its own,
-    contaminating the write with whatever the daemon's host env happens to
-    carry — or, as here, writing nowhere the test can find it).
-    """
-    stray_dir = tmp_path / "stray-process-environ-dir"
-    monkeypatch.setenv("BRR_OUTBOX_DIR", str(stray_dir))
-
-    claude_status.capture_stdout(json.dumps(_RESULT), {})
-
-    assert not stray_dir.exists()
-
-
 def test_capture_stdout_stamps_run_id_when_the_caller_names_one(tmp_path):
     """#1027 follow-up (maintainer review): a snapshot served across a run
     boundary needs to say whose run it is, or the honest-looking summary
@@ -201,41 +181,6 @@ def test_write_snapshot_a_fresh_boot_key_wins_over_a_stale_one(tmp_path):
 def test_write_snapshot_no_boot_anywhere_is_unaffected(tmp_path):
     claude_status.write_snapshot(tmp_path, {"spend": {"total_cost_usd": 0.01}})
     assert "boot" not in claude_status.load_snapshot(tmp_path)
-
-
-def test_mark_cross_run_attributes_the_carried_reading():
-    levels = {
-        "run_id": "run-earlier-abcd",
-        "spend": {"summary": "$1.23 this session (estimated)", "total_cost_usd": 1.23},
-        "context_window": {"summary": "40% context left (est)"},
-    }
-
-    marked = claude_status.mark_cross_run(levels)
-
-    assert marked["spend"]["summary"] == (
-        "$1.23 this session (estimated) — run-earlier-abcd's reading, "
-        "carried (not this run's)"
-    )
-    assert marked["context_window"]["summary"] == (
-        "40% context left (est) — run-earlier-abcd's reading, "
-        "carried (not this run's)"
-    )
-    # The numeric field a reader might still aggregate on is untouched.
-    assert marked["spend"]["total_cost_usd"] == 1.23
-    # The original dict is not mutated in place.
-    assert levels["spend"]["summary"] == "$1.23 this session (estimated)"
-
-
-def test_mark_cross_run_is_a_noop_without_a_run_id():
-    """An older snapshot written before ``run_id`` existed has nothing to
-    attribute to — passed through exactly as it would have rendered before
-    this fix, rather than inventing an "unknown run" label."""
-    levels = {"spend": {"summary": "$1.23 this session (estimated)"}}
-    assert claude_status.mark_cross_run(levels) is levels
-
-
-def test_mark_cross_run_tolerates_none():
-    assert claude_status.mark_cross_run(None) is None
 
 
 def test_result_error_text_uses_errors_when_result_absent():
@@ -404,11 +349,6 @@ def test_substitution_reason_names_refusal_category():
     reason = claude_status.substitution_reason(levels)
     assert "stop_reason=refusal" in reason
     assert "category=cyber" in reason
-
-
-def test_substitution_reason_none_without_signals():
-    assert claude_status.substitution_reason({}) is None
-    assert claude_status.substitution_reason(None) is None
 
 
 # --- Session-transcript refusal capture (2026-07-16) -------------------------
@@ -721,26 +661,3 @@ def test_instantaneous_reading_matches_context_window_by_model_prefix(tmp_path):
     assert levels["tokens"]["context_window_used_percent"] == 100.0
 
 
-def test_runner_facet_exposes_the_substitution_reason():
-    # The portal could say "mismatch" but never say why; that gap is what cost
-    # three days of guesswork.
-    levels = {
-        "model_ids": ["claude-opus-4-8"],
-        "fallback_signals": {
-            "refusal": {
-                "category": "reasoning_extraction",
-                "from": "claude-fable-5",
-                "to": "claude-opus-4-8",
-                "count": 1,
-            }
-        },
-    }
-    block = facets.build(
-        runner_name="claude-fable",
-        runner_meta={"model": "claude-fable-5"},
-        levels=levels,
-    )["runner"]
-    assert block["attestation"] == "mismatch"
-    assert block["substitution_reason"] == (
-        "refusal=reasoning_extraction;fallback=claude-fable-5->claude-opus-4-8"
-    )

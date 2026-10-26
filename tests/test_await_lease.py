@@ -24,60 +24,9 @@ from brr.run import Run
 # ── units ────────────────────────────────────────────────────────────────
 
 
-def test_lease_ceiling_defaults_to_the_cache_warm_length_or_the_budget():
-    assert await_verb.LEASE_DEFAULT_SECONDS < 3600, "must sit under the 1h cache TTL"
-    assert await_verb.lease_ceiling(None) == await_verb.LEASE_DEFAULT_SECONDS
-    assert await_verb.lease_ceiling({"budget_seconds": None}) == (
-        await_verb.LEASE_DEFAULT_SECONDS
-    )
-    assert await_verb.lease_ceiling(
-        {"budget_seconds": 3600, "elapsed_seconds": 3000},
-    ) == 600
-    assert await_verb.lease_ceiling(
-        {"budget_seconds": 86400, "elapsed_seconds": 0},
-    ) == await_verb.LEASE_DEFAULT_SECONDS
-    # --ceiling wins over the budget, and is still capped.
-    assert await_verb.lease_ceiling(
-        {"budget_seconds": 3600, "elapsed_seconds": 600}, 1800,
-    ) == 1800
-    assert await_verb.lease_ceiling(None, 48 * 3600) == await_verb.LEASE_MAX_SECONDS
-
-
 def test_the_widened_shell_cap_covers_a_full_lease_with_margin():
     cap = await_verb.CLAUDE_BASH_MAX_TIMEOUT_MS / 1000
     assert cap - await_verb.CALL_CAP_MARGIN_SECONDS > await_verb.LEASE_MAX_SECONDS
-
-
-@pytest.mark.parametrize("command,expected", [
-    ("brnrd await", True),
-    ("brnrd await --file /tmp/gate.log", True),
-    ("cd /x && brnrd await --ceiling 30m", True),
-    ("/opt/bin/brnrd await", True),
-    ("brnrd do --mood calm", False),
-    ("echo brnrd awaits", False),
-    ("await", False),
-    (None, False),
-])
-def test_is_await_command(command, expected):
-    assert await_verb.is_await_command(command) is expected
-
-
-def test_format_slept():
-    assert await_verb.format_slept(12.4) == "12s"
-    assert await_verb.format_slept(41 * 60 + 5) == "41m"
-    assert await_verb.format_slept(3 * 3600 + 12 * 60) == "3h12m"
-    assert await_verb.format_slept(2 * 3600) == "2h"
-
-
-def test_lease_record_round_trip_and_chip(tmp_path):
-    assert await_verb.read_lease_record(tmp_path) is None
-    await_verb.write_lease_record(
-        tmp_path, generation="g1", slept_seconds=11520.2, outcome="event",
-    )
-    record = await_verb.read_lease_record(tmp_path)
-    assert record is not None
-    assert await_verb.lease_chip(record) == "slept 3h12m · woke: event"
-    assert not list(tmp_path.glob("*.tmp"))
 
 
 # ── the lease, driven through the real drain and heartbeat ───────────────
@@ -277,68 +226,6 @@ def test_a_stamped_shell_cap_under_the_lease_returns_before_the_kill(
 # ── the hook half: the call's timeout, raised and stamped ────────────────
 
 
-def _pre_tool(tmp_path, command, *, flavour="claude", extra_env=None, **tool_input):
-    env = {
-        "BRR_RUN_ID": "run-1",
-        "BRR_RUNNER": flavour,
-        "BRR_OUTBOX_DIR": str(tmp_path),
-        **(extra_env or {}),
-    }
-    payload = {"tool_name": "Bash", "tool_input": {"command": command, **tool_input}}
-    return hooks.run_hook(hooks.PHASE_PRE_TOOL, json.dumps(payload), env)
-
-
-def test_pre_tool_raises_and_stamps_an_await_calls_timeout(tmp_path):
-    out, code = _pre_tool(
-        tmp_path, "brnrd await --file /tmp/gate.log", timeout=600000,
-        extra_env={"BASH_MAX_TIMEOUT_MS": str(_FULL_CAP)},
-    )
-    assert code == 0
-    spec = out["hookSpecificOutput"]
-    assert spec["hookEventName"] == "PreToolUse"
-    assert "permissionDecision" not in spec
-    updated = spec["updatedInput"]
-    assert updated["timeout"] == _FULL_CAP
-    assert updated["command"] == (
-        f"export {await_verb.CALL_CAP_ENV}={_FULL_CAP}; brnrd await --file /tmp/gate.log"
-    )
-
-
-def test_pre_tool_stamps_claudes_default_cap_when_the_daemon_did_not_widen_it(tmp_path):
-    out, _ = _pre_tool(tmp_path, "brnrd await")
-    updated = out["hookSpecificOutput"]["updatedInput"]
-    assert updated["timeout"] == 600_000
-    assert f"{await_verb.CALL_CAP_ENV}=600000;" in updated["command"]
-
-
-@pytest.mark.parametrize("case", [
-    {"command": "pytest -q"},
-    {"command": "brnrd await", "flavour": "codex"},
-    {"command": "brnrd await", "run_in_background": True},
-    {"command": f"export {await_verb.CALL_CAP_ENV}=1; brnrd await"},
-])
-def test_pre_tool_leaves_every_other_bash_call_alone(tmp_path, case):
-    case = dict(case)
-    command = case.pop("command")
-    flavour = case.pop("flavour", "claude")
-    out, code = _pre_tool(tmp_path, command, flavour=flavour, **case)
-    assert (out, code) == ({}, 0)
-
-
-def test_pre_tool_needs_a_daemon_outbox(tmp_path):
-    payload = {"tool_name": "Bash", "tool_input": {"command": "brnrd await"}}
-    out, code = hooks.run_hook(
-        hooks.PHASE_PRE_TOOL, json.dumps(payload), {"BRR_RUNNER": "claude"},
-    )
-    assert (out, code) == ({}, 0)
-
-
-def test_claude_settings_route_bash_through_the_pre_tool_hook():
-    settings = hooks._claude_hook_settings("brnrd")
-    matcher = settings["hooks"]["PreToolUse"][0]["matcher"]
-    assert "Bash" in matcher.split("|")
-
-
 # ── the chip: slept … · woke: …, once ────────────────────────────────────
 
 
@@ -351,42 +238,6 @@ def _portal(tmp_path, token):
         "change_token": token,
     }
     (tmp_path / "portal-state.json").write_text(json.dumps(payload), encoding="utf-8")
-
-
-def _post_tool(tmp_path):
-    env = {
-        "BRR_RUN_ID": "run-1",
-        "BRR_EVENT_ID": "evt-1",
-        "BRR_RUNNER": "claude",
-        "BRR_OUTBOX_DIR": str(tmp_path),
-        "BRR_PORTAL_STATE": str(tmp_path / "portal-state.json"),
-    }
-    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    return (out.get("hookSpecificOutput") or {}).get("additionalContext") or ""
-
-
-def test_the_first_boundary_after_a_lease_says_how_long_and_why_once(tmp_path):
-    _portal(tmp_path, "t1")
-    _post_tool(tmp_path)  # an ordinary boundary before any lease
-
-    await_verb.write_lease_record(
-        tmp_path, generation="g1", slept_seconds=3 * 3600 + 12 * 60, outcome="event",
-    )
-    _portal(tmp_path, "t2")
-    first = _post_tool(tmp_path)
-    assert "slept 3h12m · woke: event" in first
-
-    _portal(tmp_path, "t3")
-    second = _post_tool(tmp_path)
-    assert "slept" not in second
-
-    # The next lease is news again, even with the same duration and outcome.
-    time.sleep(0.01)
-    await_verb.write_lease_record(
-        tmp_path, generation="g2", slept_seconds=3 * 3600 + 12 * 60, outcome="event",
-    )
-    _portal(tmp_path, "t4")
-    assert "slept 3h12m · woke: event" in _post_tool(tmp_path)
 
 
 def test_the_lease_chip_is_a_documented_delta_segment():

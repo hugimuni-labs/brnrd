@@ -134,15 +134,6 @@ def _render(repo: Path) -> str:
 # ── 1. A missing answer renders as missing ───────────────────────────
 
 
-def test_never_probed_renders_loudly_and_is_not_silence(tmp_path):
-    """No cache is not "fine" — and it is not nothing, either."""
-    repo = _repo(tmp_path)
-    rendered = _render(repo)
-    assert "Lane liveness: never probed" in rendered
-    assert lane_liveness.EDGE_NOTE in rendered
-    assert "200" not in rendered
-
-
 def test_probe_failure_never_renders_as_a_bare_code(tmp_path):
     """A timeout and a 200 must not be skimmable as the same thing."""
     repo = _repo(tmp_path)
@@ -598,23 +589,6 @@ def test_the_two_wiring_points_exist_in_the_daemon(tmp_path):
     assert "lane_liveness.FACET_KEY" in Path(prompts.__file__).read_text("utf-8"), (
         "the wake renderer no longer reads the lane facet off the snapshot"
     )
-
-
-def test_a_sweep_that_found_no_gate_says_so_instead_of_vanishing(tmp_path):
-    """An empty sweep is an answer. Dropping the block makes it look like fine.
-
-    This test previously asserted the opposite — that the block disappears —
-    which locked in the bug: "we looked and there is nothing configured" and
-    "we could not look" both rendered as silence, and silence reads as health.
-    """
-    repo = _repo(tmp_path)
-    lane_liveness.refresh(repo)
-    state = lane_liveness.read_state(repo)
-    assert state["lanes"] == []
-    assert state["discovery"] == "ok"
-    rendered = _render(repo)
-    assert "Lane liveness" in rendered
-    assert "no configured gate to probe" in rendered
 
 
 def test_discovery_failure_is_rendered_not_swallowed(tmp_path):

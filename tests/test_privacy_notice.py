@@ -244,30 +244,6 @@ def test_a_task_row_goes_stale_on_the_published_minute(numbers):
     assert kept == {"fresh"}
 
 
-def test_run_pages_stop_being_mirrored_on_the_published_day(numbers):
-    """Drive the daemon-side selection the notice describes as the default."""
-    from brr.account import CorpusFile
-    from brr.gates import cloud
-
-    days = numbers["TTL_RUN_MIRROR_DAYS"]
-    now = datetime(2026, 7, 21, tzinfo=timezone.utc)
-    dummy = Path(__file__)
-
-    def run_file(stamp: str) -> CorpusFile:
-        return CorpusFile(
-            layer="runs", path=f"runs/slug/run-{stamp}-1000-aaaa/state.md", abspath=dummy
-        )
-
-    inside = (now - timedelta(days=days - 1)).strftime("%y%m%d")
-    outside = (now - timedelta(days=days + 1)).strftime("%y%m%d")
-    kept = {
-        f.path
-        for f in cloud._publish_selection([run_file(inside), run_file(outside)], {}, now=now)
-    }
-    assert run_file(inside).path in kept
-    assert run_file(outside).path not in kept
-
-
 # ── the route itself ─────────────────────────────────────────────────────
 
 

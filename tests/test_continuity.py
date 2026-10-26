@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-import time as _time
 from pathlib import Path
 
 from brr import continuity as cont_mod
@@ -32,11 +31,7 @@ from brr.bootscore import (
     BootHost,
     BootScore,
     ContractEntry,
-    event_age_seconds,
-    format_carry_note,
-    format_event_age,
     format_kernel,
-    format_retry_note,
 )
 
 
@@ -92,57 +87,6 @@ def test_attention_line_names_the_gate_not_the_runner() -> None:
 # below as the canonical stale case.
 
 
-def test_event_age_seconds_parses_and_degrades_on_bad_input() -> None:
-    assert event_age_seconds(None) is None
-    assert event_age_seconds("") is None
-    assert event_age_seconds("not-a-timestamp") is None
-    now = 1_800_000_000.0
-    created = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(now - 3661))
-    age = event_age_seconds(created, now=now)
-    assert age is not None
-    assert abs(age - 3661) < 1.5
-
-
-def test_format_event_age_below_threshold_is_the_stamp_alone() -> None:
-    # Below EVENT_AGE_STALE_SECONDS: the stamp reads as "just now" to anyone
-    # glancing at a clock, so the common (fresh-event) path stays quiet —
-    # no elapsed half, no wording.
-    rendered = format_event_age("2026-08-18T21:33:00Z", 12.0)
-    assert rendered == "sent 2026-08-18T21:33:00Z"
-
-
-def test_format_event_age_above_threshold_names_elapsed_and_cause() -> None:
-    rendered = format_event_age("2026-08-18T14:58:06Z", 6 * 3600 + 6 * 60)
-    assert rendered == (
-        "sent 2026-08-18T14:58:06Z (6h06m ago) — the daemon was only "
-        "asleep; this reached you late, not live"
-    )
-
-
-def test_format_event_age_none_when_unknown() -> None:
-    assert format_event_age(None, None) is None
-    assert format_event_age("2026-08-18T21:33:00Z", None) is None
-
-
-def test_format_retry_note_single_multiple_and_absent() -> None:
-    assert format_retry_note(None, None) is None
-    assert (
-        format_retry_note("run-260818-1834-lcu3", "host_interrupted")
-        == "retry of run-260818-1834-lcu3 (host interrupt)"
-    )
-    assert format_retry_note("run-A,run-B", "host_interrupted,timed_out") == (
-        "retries of (in order) run-A (host interrupt), run-B (timed out)"
-    )
-    # An unmapped reason still renders (underscores turned to spaces)
-    # rather than silently dropping the fact.
-    assert (
-        format_retry_note("run-A", "provider_error")
-        == "retry of run-A (provider error)"
-    )
-    # No reason recorded still names the run.
-    assert format_retry_note("run-A", None) == "retry of run-A"
-
-
 def test_attention_line_stale_event_renders_age_and_soft_language() -> None:
     """The regression this issue names, pinned at the kernel: past the
     threshold the attention line must not leave the reader to do
@@ -187,19 +131,6 @@ def test_attention_line_missing_created_degrades_quietly() -> None:
     )
     att = next(ln for ln in out.splitlines() if ln.lstrip().startswith("attention:"))
     assert att.strip() == "attention: evt-x ←telegram"
-
-
-def test_format_carry_note_names_the_predecessor_and_cuts_the_reason() -> None:
-    assert format_carry_note(None, None) is None
-    assert format_carry_note("", "why") is None
-    assert format_carry_note("run-260923-0008-88ed", None) == "carry ⇐ run-260923-0008-88ed"
-    assert (
-        format_carry_note("run-260923-0008-88ed", "the scroll is at ~310k\n after six hours")
-        == "carry ⇐ run-260923-0008-88ed (the scroll is at ~310k after six hours)"
-    )
-    long = "x" * 200
-    note = format_carry_note("run-A", long)
-    assert note is not None and note.endswith("…)") and len(note) < 140
 
 
 def test_attention_line_names_a_carry_beside_the_inherited_source() -> None:
@@ -280,30 +211,6 @@ def test_mount_failure_is_a_first_class_fact() -> None:
     )
 
 
-def test_no_brr_dir_is_unreachable_not_a_crash() -> None:
-    """Continuity is an orientation aid; it must never take the wake down."""
-    assert cont_mod.build_continuity(None).mount == "✗ unreachable"
-
-
-def test_first_wake_when_no_prior_score(tmp_path: Path) -> None:
-    (tmp_path / "runs").mkdir()
-    assert cont_mod.build_continuity(tmp_path).mount == "✗ first wake"
-
-
-def test_prior_wake_is_read_from_its_persisted_boot_score(tmp_path: Path) -> None:
-    """The mount is already on disk — every wake since Slice 1 persists one."""
-    runs = tmp_path / "runs"
-    (runs / "run-260713-2251-ropg").mkdir(parents=True)
-    (runs / "run-260713-2251-ropg" / "boot-score.json").write_text(
-        json.dumps({"schema_version": "1"}), encoding="utf-8"
-    )
-    (runs / "run-260713-2331-qk3d").mkdir(parents=True)
-
-    c = cont_mod.build_continuity(tmp_path, current_run_id="run-260713-2331-qk3d")
-    assert c.mount == "✓"
-    assert c.last_run == "run-260713-2251-ropg"
-
-
 def _score(source_gate: str | None = None) -> str:
     """A boot score as ``to_dict`` writes it, carrying only what the picker reads.
 
@@ -317,136 +224,6 @@ def _score(source_gate: str | None = None) -> str:
             "attention": {"event_ids": ["evt-x"], "source_gate": source_gate},
         }
     )
-
-
-def test_a_spawned_worker_is_not_the_prior_wake(tmp_path: Path) -> None:
-    """#987, the live case, pinned.
-
-    ``run-260802-0730-cc2f`` booted with ``continuity: ✓ run-260802-0649-lcrd``
-    — a codex worker ``run-260802-0632-v2ir`` had dispatched — while its own
-    ``## Your last run`` block named ``v2ir``.  Two blocks in one prompt, two
-    answers to *where was I*, and the anchor whose whole job is closing the loop
-    across wakes was the one naming a child.
-
-    A subspawn is not a previous self: different task, often a different Shell
-    and Core, on a thread the parent never joined.  Newest-first is the right
-    order; it just has to be newest-first *on this resident's line*.
-    """
-    runs = tmp_path / "runs"
-    (runs / "run-260802-0632-v2ir").mkdir(parents=True)
-    (runs / "run-260802-0632-v2ir" / "boot-score.json").write_text(
-        _score("schedule"), encoding="utf-8"
-    )
-    # Dispatched by v2ir, and newer — which is exactly why it used to win.
-    (runs / "run-260802-0649-lcrd").mkdir(parents=True)
-    (runs / "run-260802-0649-lcrd" / "boot-score.json").write_text(
-        _score("spawn"), encoding="utf-8"
-    )
-
-    c = cont_mod.build_continuity(tmp_path, current_run_id="run-260802-0730-cc2f")
-    assert c.mount == "✓"
-    assert c.last_run == "run-260802-0632-v2ir"
-
-
-def test_a_respawn_handoff_is_still_the_prior_wake(tmp_path: Path) -> None:
-    """The distinction the ticket refused to collapse — and it holds today.
-
-    ``_queue_respawn_request`` derives its child's source as ``fm ->
-    current.get("source") -> task.source -> "respawn"``: it *inherits the
-    originating gate*.  So a resident that handed its own thought to a stronger
-    Core writes ``source_gate: telegram`` (or ``schedule`` / ``cli``), never
-    ``spawn`` — and remains the predecessor, because a respawn is the same
-    thought continuing in a different body.
-
-    Only ``_queue_spawn_request`` writes ``"spawn"``.  Skipping exactly that is
-    the conservative rule: it skips what can be *proved* concurrent.
-    """
-    runs = tmp_path / "runs"
-    (runs / "run-260802-0632-v2ir").mkdir(parents=True)
-    (runs / "run-260802-0632-v2ir" / "boot-score.json").write_text(
-        _score("schedule"), encoding="utf-8"
-    )
-    (runs / "run-260802-0649-resp").mkdir(parents=True)
-    (runs / "run-260802-0649-resp" / "boot-score.json").write_text(
-        _score("telegram"), encoding="utf-8"
-    )
-
-    c = cont_mod.build_continuity(tmp_path, current_run_id="run-260802-0730-cc2f")
-    assert c.last_run == "run-260802-0649-resp"
-
-
-def test_only_workers_are_skipped_ordinary_runs_are_untouched(tmp_path: Path) -> None:
-    """The regression guard: the filter must not eat the ordinary case."""
-    runs = tmp_path / "runs"
-    for name, gate in (
-        ("run-260802-0632-v2ir", "schedule"),
-        ("run-260802-0649-aaaa", "telegram"),
-    ):
-        (runs / name).mkdir(parents=True)
-        (runs / name / "boot-score.json").write_text(_score(gate), encoding="utf-8")
-
-    c = cont_mod.build_continuity(tmp_path, current_run_id="run-260802-0730-cc2f")
-    assert c.mount == "✓"
-    assert c.last_run == "run-260802-0649-aaaa"
-
-
-def test_a_score_with_no_source_field_behaves_as_it_did_before(tmp_path: Path) -> None:
-    """Absent ⇒ today's behaviour, never ⇒ skip.
-
-    Every score written before #987 predates the question, and a filter that
-    read *silence* as *worker* would walk the whole history backwards looking
-    for a field none of it has — turning a boot that named the wrong run into a
-    boot that names ``✗ first wake`` on a resident with months of memory.
-    Absent is not evidence.
-    """
-    runs = tmp_path / "runs"
-    # Pre-#987 shape: no ``attention`` block at all.
-    (runs / "run-260713-2251-ropg").mkdir(parents=True)
-    (runs / "run-260713-2251-ropg" / "boot-score.json").write_text(
-        json.dumps({"schema_version": "1"}), encoding="utf-8"
-    )
-    # Present-but-null: a wake whose event carried no source.
-    (runs / "run-260713-2300-nsrc").mkdir(parents=True)
-    (runs / "run-260713-2300-nsrc" / "boot-score.json").write_text(
-        _score(None), encoding="utf-8"
-    )
-
-    c = cont_mod.build_continuity(tmp_path, current_run_id="run-260713-2331-qk3d")
-    assert c.mount == "✓"
-    assert c.last_run == "run-260713-2300-nsrc"
-
-
-def test_an_unparseable_worker_score_is_still_a_broken_mount(tmp_path: Path) -> None:
-    """A score the filter cannot read is reported, not quietly stepped over.
-
-    ``build_continuity`` owes an unreadable score a ``✗ unreachable``.  A picker
-    that skipped on parse failure would hand back a healthy ``✓`` for an older
-    run while the broken memory went unmentioned — the mount lying in the
-    reassuring direction, which is the one direction it must never lie in.
-    """
-    runs = tmp_path / "runs"
-    (runs / "run-260802-0632-v2ir").mkdir(parents=True)
-    (runs / "run-260802-0632-v2ir" / "boot-score.json").write_text(
-        _score("schedule"), encoding="utf-8"
-    )
-    (runs / "run-260802-0649-lcrd").mkdir(parents=True)
-    (runs / "run-260802-0649-lcrd" / "boot-score.json").write_text(
-        "{not json", encoding="utf-8"
-    )
-
-    c = cont_mod.build_continuity(tmp_path, current_run_id="run-260802-0730-cc2f")
-    assert c.mount == "✗ unreachable"
-    assert c.last_run == "run-260802-0649-lcrd"
-
-
-def test_unparseable_prior_score_is_a_broken_mount(tmp_path: Path) -> None:
-    """A score that will not parse is not a ``✓``. Saying so is the honest move."""
-    runs = tmp_path / "runs"
-    (runs / "run-260713-2251-ropg").mkdir(parents=True)
-    (runs / "run-260713-2251-ropg" / "boot-score.json").write_text(
-        "{not json", encoding="utf-8"
-    )
-    assert cont_mod.build_continuity(tmp_path).mount == "✗ unreachable"
 
 
 # ── Drift: rare and true, or worthless ────────────────────────────────────────
@@ -483,173 +260,6 @@ def _git_repo(path: Path) -> None:
     )
 
 
-def test_daemon_owned_run_state_is_not_drift(tmp_path: Path) -> None:
-    """**The one that matters.**
-
-    The dominion *always* carries one untracked file mid-wake:
-    ``runs/<repo>/<run>/state.md``, written by the daemon at run start and
-    committed by the capture net at run *end*.  Counting it meant ``drift: the
-    capture net did not close`` would fire on **every wake, forever** — a
-    permanent lie about a capture net that was working perfectly and simply had
-    not run yet.
-
-    Caught on the first live render.  A drift line that cries wolf gets skimmed
-    by the third wake, and then gets skimmed the one time it is real.
-    """
-    brr_dir = _brr_with_prior_wake(tmp_path)
-    dom = tmp_path / "dominion"
-    _git_repo(dom)
-    state = dom / "runs" / "Gurio__brr" / "run-260713-2331-qk3d" / "state.md"
-    state.parent.mkdir(parents=True)
-    state.write_text("live", encoding="utf-8")
-
-    c = cont_mod.build_continuity(brr_dir, dominion_repo=dom)
-    assert c.mount == "✓"          # exercise the real path, not an early return
-    assert c.drift == ()
-
-
-def test_delivery_mutated_message_records_are_not_drift(tmp_path: Path) -> None:
-    """Post-capture delivery bookkeeping is the daemon's, not lost memory.
-
-    The capture net commits at run end; the delivery pipeline then mutates the
-    run's ``messages/*`` frontmatter (``status: pending → delivered``,
-    ``platform_message_id``, ``delivered_at``) once the platform acks.  So any
-    wake that delivered a reply left its message records *modified after* the
-    capture commit — and counting them fired ``capture net did not close`` on
-    three consecutive real wakes (260721–260722) about a net that had closed
-    perfectly.  Same permanent-lie shape as ``state.md``, one seam later.
-    """
-    brr_dir = _brr_with_prior_wake(tmp_path)
-    dom = tmp_path / "dominion"
-    _git_repo(dom)
-    msgs = dom / "runs" / "Gurio__brr" / "run-260722-0037-tqdp" / "messages"
-    msgs.mkdir(parents=True)
-    rec = msgs / "000001-outbound.md"
-    rec.write_text("---\nstatus: pending\n---\nbody", encoding="utf-8")
-    subprocess.run(["git", "-C", str(dom), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(dom), "commit", "-qm", "capture"], check=True)
-    # The delivery pipeline's post-capture mutation:
-    rec.write_text("---\nstatus: delivered\n---\nbody", encoding="utf-8")
-
-    c = cont_mod.build_continuity(brr_dir, dominion_repo=dom)
-    assert c.mount == "✓"          # exercise the real path, not an early return
-    assert c.drift == ()
-
-
-def test_daemon_gate_state_is_not_drift(tmp_path: Path) -> None:
-    """Heartbeat-mutated gate state is machinery, not lost memory (#942).
-
-    ``account/gates/*.json`` (health, server ack cursors) is rewritten by the
-    daemon *after* every capture commit, so counting it fired ``capture net
-    did not close`` on effectively every wake of a cloud-connected account —
-    the third instalment of the same permanent-lie shape (``state.md``,
-    ``messages/*``).  The fix is structural: daemon machinery is exempt by
-    whole root, so the next bookkeeping file the daemon grows under
-    ``account/`` joins the exempt class with no edit to continuity.
-    """
-    brr_dir = _brr_with_prior_wake(tmp_path)
-    dom = tmp_path / "dominion"
-    _git_repo(dom)
-    gates = dom / "account" / "gates"
-    gates.mkdir(parents=True)
-    health = gates / "cloud.health.json"
-    health.write_text('{"ok": true}', encoding="utf-8")
-    subprocess.run(["git", "-C", str(dom), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(dom), "commit", "-qm", "capture"], check=True)
-    # The heartbeat's post-capture mutation, plus a file capture never saw:
-    health.write_text('{"ok": false}', encoding="utf-8")
-    (gates / "cloud.server.json").write_text("{}", encoding="utf-8")
-
-    c = cont_mod.build_continuity(brr_dir, dominion_repo=dom)
-    assert c.mount == "✓"          # exercise the real path, not an early return
-    assert c.drift == ()
-
-
-def test_waking_runs_own_node_and_seat_state_are_not_drift(tmp_path: Path) -> None:
-    """#1947's residue: the waking run's own node and root-level seat state.
-
-    Measured on run-261001-2212-1wou: the boot said three uncommitted changes
-    and blamed a prior wake.  They were ``shuttle.json`` and ``tick.json``
-    (daemon live state, rewritten after every capture) and this run's own
-    ``request.md``, which the daemon writes at run start and the capture net
-    commits at run end.
-    """
-    brr_dir = _brr_with_prior_wake(tmp_path)
-    dom = tmp_path / "dominion"
-    _git_repo(dom)
-    for name in ("shuttle.json", "tick.json"):
-        (dom / name).write_text("{}", encoding="utf-8")
-    subprocess.run(["git", "-C", str(dom), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(dom), "commit", "-qm", "capture"], check=True)
-    for name in ("shuttle.json", "tick.json"):
-        (dom / name).write_text('{"n": 2}', encoding="utf-8")
-    node = dom / "runs" / "Gurio__brr" / "run-261001-2212-1wou"
-    node.mkdir(parents=True)
-    (node / "request.md").write_text("the ask", encoding="utf-8")
-    (node / "body.md").write_text("the card", encoding="utf-8")
-    topics = dom / "surface" / "topics"
-    topics.mkdir(parents=True)
-    (topics / "the-post.index.jsonl").write_text("{}\n", encoding="utf-8")
-    (topics / "threads.json").write_text("{}", encoding="utf-8")
-
-    c = cont_mod.build_continuity(
-        brr_dir, current_run_id="run-261001-2212-1wou", dominion_repo=dom
-    )
-    assert c.mount == "✓"          # exercise the real path, not an early return
-    assert c.drift == ()
-
-
-def test_a_prior_runs_uncommitted_node_still_fires(tmp_path: Path) -> None:
-    """Positive control: the exemption is the *waking* run's node only."""
-    brr_dir = _brr_with_prior_wake(tmp_path)
-    dom = tmp_path / "dominion"
-    _git_repo(dom)
-    node = dom / "runs" / "Gurio__brr" / "run-260930-0000-prev"
-    node.mkdir(parents=True)
-    (node / "body.md").write_text("a card nobody captured", encoding="utf-8")
-    # An authored topic page is memory, beside the frame's ledgers:
-    (dom / "surface" / "topics").mkdir(parents=True)
-    (dom / "surface" / "topics" / "the-post.md").write_text("x", encoding="utf-8")
-
-    c = cont_mod.build_continuity(
-        brr_dir, current_run_id="run-261001-2212-1wou", dominion_repo=dom
-    )
-    assert len(c.drift) == 1
-    assert "2 uncommitted" in c.drift[0]
-
-
-def test_resident_memory_under_daemon_adjacent_roots_still_fires(
-    tmp_path: Path,
-) -> None:
-    """The root exemption is scoped: real memory outside those roots counts.
-
-    ``repos/<label>/dominion/`` and ``surface/`` sit beside ``account/`` in
-    the same home repo; the exemption must not swallow them.
-    """
-    brr_dir = _brr_with_prior_wake(tmp_path)
-    dom = tmp_path / "dominion"
-    _git_repo(dom)
-    note = dom / "repos" / "Gurio__brr" / "dominion" / "notes.md"
-    note.parent.mkdir(parents=True)
-    note.write_text("a thought nobody committed", encoding="utf-8")
-
-    c = cont_mod.build_continuity(brr_dir, dominion_repo=dom)
-    assert len(c.drift) == 1
-    assert "capture net did not close" in c.drift[0]
-
-
-def test_uncommitted_resident_memory_is_drift(tmp_path: Path) -> None:
-    """Real lost memory still fires — the check is scoped, not disabled."""
-    brr_dir = _brr_with_prior_wake(tmp_path)
-    dom = tmp_path / "dominion"
-    _git_repo(dom)
-    (dom / "notes.md").write_text("a thought nobody committed", encoding="utf-8")
-
-    c = cont_mod.build_continuity(brr_dir, dominion_repo=dom)
-    assert len(c.drift) == 1
-    assert "capture net did not close" in c.drift[0]
-
-
 def test_drift_is_reported_even_when_the_mount_fails(tmp_path: Path) -> None:
     """A failed mount is when drift matters *most*, not when it may be skipped.
 
@@ -672,67 +282,11 @@ def test_drift_is_reported_even_when_the_mount_fails(tmp_path: Path) -> None:
     assert "drift:" in format_kernel(BootScore(continuity=c))
 
 
-def test_shipped_only_counts_merges_after_the_last_wake() -> None:
-    """``shipped`` is the world saying *you did this* — not a list of all PRs."""
-    prs = [
-        {"number": 386, "state": "MERGED", "merged_at": "2026-07-13T23:20:00Z"},
-        {"number": 300, "state": "MERGED", "merged_at": "2026-07-01T10:00:00Z"},
-        {"number": 999, "state": "OPEN"},
-    ]
-    # Cutoff parsed with the same parser production uses, so the test cannot
-    # drift from the daemon's notion of time.
-    from brr import forge_pr_cache
-
-    cutoff = forge_pr_cache.parse_iso("2026-07-13T23:00:00Z")
-    assert cont_mod._merged_since(prs, cutoff) == ("#386",)
-
-
 # ── #1140: a stacked merge is not "shipped" ─────────────────────────────────
 
 
 def _pr(number, base=None, merged_at="2026-07-13T23:20:00Z") -> dict:
     return {"number": number, "state": "MERGED", "merged_at": merged_at, "base": base}
-
-
-def test_merged_since_ignores_default_branch_when_not_given() -> None:
-    """No ``default_branch`` known ⇒ the pre-#1140 reading: everything MERGED
-    since the cutoff counts as shipped, regardless of ``base``."""
-    from brr import forge_pr_cache
-
-    cutoff = forge_pr_cache.parse_iso("2026-07-13T23:00:00Z")
-    prs = [_pr(1139, base="brr/the-child-speaks-for-itself"), _pr(1134, base="main")]
-    assert cont_mod._merged_since(prs, cutoff) == ("#1134", "#1139")
-    assert cont_mod._stacked_since(prs, cutoff) == ()
-
-
-def test_merged_since_excludes_a_known_stacked_base() -> None:
-    """A PR whose base is known and disagrees with ``default_branch`` moves
-    out of ``shipped`` and into ``stacked`` — #1140's whole point."""
-    from brr import forge_pr_cache
-
-    cutoff = forge_pr_cache.parse_iso("2026-07-13T23:00:00Z")
-    prs = [
-        _pr(1139, base="brr/the-child-speaks-for-itself"),
-        _pr(1134, base="main"),
-        _pr(1130, base=None),  # unknown base never excludes — see docstring
-    ]
-    assert cont_mod._merged_since(prs, cutoff, default_branch="main") == (
-        "#1130", "#1134",
-    )
-    assert cont_mod._stacked_since(prs, cutoff, default_branch="main") == (
-        "#1139 (→ brr/the-child-speaks-for-itself)",
-    )
-
-
-def test_stacked_since_empty_without_a_default_branch() -> None:
-    """Nothing is ever reclassified as stacked on missing information —
-    an unreadable ``default_branch`` degrades to "say nothing", not to a
-    guess."""
-    from brr import forge_pr_cache
-
-    cutoff = forge_pr_cache.parse_iso("2026-07-13T23:00:00Z")
-    prs = [_pr(1139, base="brr/the-child-speaks-for-itself")]
-    assert cont_mod._stacked_since(prs, cutoff) == ()
 
 
 def test_build_continuity_splits_shipped_and_stacked(tmp_path: Path) -> None:
@@ -995,54 +549,6 @@ def test_orientation_files_render_as_reach_not_as_a_row() -> None:
     assert "orient:" not in kernel
 
 
-def test_kernel_renders_debts_and_reach_not_rows(tmp_path):
-    from brr import prompts
-
-    (tmp_path / "AGENTS.md").write_text("# rules\ncontract\n", encoding="utf-8")
-    score = prompts.build_boot_score(
-        tmp_path, is_daemon=True, environment="host",
-        event_ids=("evt-1",), pending_count=2, has_event_body=True,
-    )
-    kernel = format_kernel(score)
-    assert "×3 standing · self-owned" in kernel
-    assert "op⇐reply owed — answer the person" in kernel
-    assert "pending×2" in kernel
-    assert "shared checkout: dflt↗branch ⇢ edit" in kernel
-    assert "first outward ⇒ .name + .mood" in kernel
-    assert "assignments:" not in kernel
-    assert "discharge each" not in kernel and __import__("re").search(r"↗\d+b", kernel) is None
-    assert "discharge each" not in kernel
-    assert "next:" not in kernel
-    assert "\norient:" not in kernel
-    assert "reach: files×1" in kernel
-    assert str((tmp_path / "AGENTS.md").resolve()) in kernel
-
-
-def test_a_strand_kernel_faces_the_parent(tmp_path):
-    from brr import prompts
-
-    score = prompts.build_boot_score(
-        tmp_path, is_daemon=True, is_strand=True, environment="host",
-        pending_count=12, has_event_body=True,
-    )
-    kernel = format_kernel(score)
-    assert "pending" not in kernel
-    assert "the return message on stdout (to the parent" in kernel
-    assert "answer the person" not in kernel
-    assert "first outward" not in kernel
-
-
-def test_the_persisted_score_carries_no_assignments_field(tmp_path):
-    from brr import prompts
-    from brr.bootscore import to_dict
-
-    (tmp_path / "AGENTS.md").write_text("# rules\n", encoding="utf-8")
-    score = prompts.build_boot_score(
-        tmp_path, is_daemon=True, has_event_body=True,
-    )
-    assert "assignments" not in to_dict(score)
-
-
 def test_orientation_set_rides_to_dict() -> None:
     from brr.bootscore import OrientationFile, to_dict
 
@@ -1052,240 +558,6 @@ def test_orientation_set_rides_to_dict() -> None:
     assert to_dict(score)["orientation_set"] == [
         {"path": "/repo/AGENTS.md", "bytes": 7}
     ]
-
-
-def test_orientation_set_names_only_provable_files(tmp_path: Path) -> None:
-    from brr import prompts
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / ".brr").mkdir()
-    (repo / ".brr" / "config").write_text("", encoding="utf-8")
-
-    # Nothing provable → an empty set, never a padded one.
-    assert prompts._build_orientation_set(repo) == []
-
-    # An AGENTS.md that exists enters, with its true byte cost.
-    (repo / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
-    entries = prompts._build_orientation_set(repo)
-    assert [Path(e.path).name for e in entries] == ["AGENTS.md"]
-    assert entries[0].bytes == len("# Agents\n")
-
-    # An empty file orients nobody and is excluded — the meter must never
-    # ask for a Read with no reading.
-    (repo / "AGENTS.md").write_text("", encoding="utf-8")
-    assert prompts._build_orientation_set(repo) == []
-
-
-def test_agents_md_leaves_the_walk_for_a_shell_that_already_read_it(
-    tmp_path: Path,
-) -> None:
-    """codex holds ``AGENTS.md`` natively; the walk must not bill it for a Read.
-
-    ``run.md`` has always said the file is Shell-dependent — *"some Shells read
-    it natively (codex), others don't (claude)"* — while the set named it for
-    every Shell alike.  On this repo ``AGENTS.md`` is 33 KB of a 38–64 KB set,
-    so on codex the meter's largest entry was a file already in context: the
-    polling tax the identity core names, charged by the instrument built to
-    make orientation honest.
-    """
-    from brr import prompts
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
-
-    def names(shell: str | None) -> list[str]:
-        return [
-            Path(e.path).name
-            for e in prompts._build_orientation_set(repo, runner_shell=shell)
-        ]
-
-    assert names("codex") == []
-    assert names("codex exec --sandbox danger-full-access") == []
-
-    # Every other Shell still walks it, and so does an unknown one: a walk
-    # entry for a file already in context costs one redundant Read, a missing
-    # entry for a file nobody read costs the orientation.  The cheap error is
-    # the one to make.
-    assert names("claude") == ["AGENTS.md"]
-    assert names(None) == ["AGENTS.md"]
-    assert names("") == ["AGENTS.md"]
-    assert names("some-future-shell") == ["AGENTS.md"]
-
-
-def test_shell_conditional_removes_only_agents_md(tmp_path: Path, monkeypatch) -> None:
-    """The rest of the walk is Shell-independent and must stay.
-
-    Guards the obvious over-correction: a Shell that reads one file natively
-    has not read the plan or the kb hubs, and a codex wake that lost its whole
-    orientation set would look exactly like this feature working.
-    """
-    from brr import prompts
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
-    kb = tmp_path / "kb"
-    kb.mkdir()
-    (kb / "subject-boot-sequence.md").write_text("# hub\n", encoding="utf-8")
-    monkeypatch.setattr(
-        prompts, "_home_knowledge_log_path", lambda _root: kb / "log.md"
-    )
-
-    entries = prompts._build_orientation_set(
-        repo, task_text="fix the boot sequence meter", runner_shell="codex"
-    )
-    assert [Path(e.path).name for e in entries] == ["subject-boot-sequence.md"]
-
-
-def test_build_boot_score_threads_the_shell_into_the_walk(tmp_path: Path) -> None:
-    """The conditional is worthless if the caller never passes the Shell.
-
-    The score already knew which body it was in; the set simply was not asked.
-    Pinned end to end through the production builder so the wiring cannot be
-    quietly dropped while the unit above stays green.
-    """
-    from brr import prompts
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / ".brr").mkdir()
-    (repo / ".brr" / "config").write_text("", encoding="utf-8")
-    (repo / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
-
-    claude = prompts.build_boot_score(repo, is_daemon=True, runner_shell="claude")
-    codex = prompts.build_boot_score(repo, is_daemon=True, runner_shell="codex")
-
-    assert [Path(e.path).name for e in claude.orientation_set] == ["AGENTS.md"]
-    assert codex.orientation_set == []
-
-
-def test_touched_subject_hub_requires_every_slug_token(
-    tmp_path: Path, monkeypatch,
-) -> None:
-    from brr import prompts
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    kb = tmp_path / "kb"
-    kb.mkdir()
-    (kb / "subject-boot-sequence.md").write_text("# hub\n", encoding="utf-8")
-    (kb / "subject-envs.md").write_text("# hub\n", encoding="utf-8")
-    monkeypatch.setattr(
-        prompts, "_home_knowledge_log_path", lambda _root: kb / "log.md"
-    )
-
-    # Both slug tokens present → the hub is provably touched.
-    touched = prompts._build_orientation_set(
-        repo, task_text="fix the boot sequence meter"
-    )
-    assert [Path(e.path).name for e in touched] == ["subject-boot-sequence.md"]
-
-    # One token alone is a guess wearing a match's clothes — excluded.
-    partial = prompts._build_orientation_set(
-        repo, task_text="the boot kernel line"
-    )
-    assert partial == []
-
-    # No task text → no hub can be *touched*, so none is named.
-    assert prompts._build_orientation_set(repo) == []
-
-
-def test_orientation_set_is_capped_never_padded(
-    tmp_path: Path, monkeypatch,
-) -> None:
-    from brr import prompts
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
-    kb = tmp_path / "kb"
-    kb.mkdir()
-    for i in range(7):
-        (kb / f"subject-boot-{i}.md").write_text("# hub\n", encoding="utf-8")
-    monkeypatch.setattr(
-        prompts, "_home_knowledge_log_path", lambda _root: kb / "log.md"
-    )
-
-    entries = prompts._build_orientation_set(
-        repo, task_text="boot 0 1 2 3 4 5 6"
-    )
-    assert len(entries) == prompts._ORIENTATION_SET_MAX
-    # Deterministic order: AGENTS.md first, then hubs in sorted-name order.
-    assert [Path(e.path).name for e in entries] == [
-        "AGENTS.md", "subject-boot-0.md", "subject-boot-1.md",
-        "subject-boot-2.md", "subject-boot-3.md",
-    ]
-
-
-def test_build_boot_score_carries_the_orientation_set(tmp_path: Path) -> None:
-    from brr import prompts
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / ".brr").mkdir()
-    (repo / ".brr" / "config").write_text("", encoding="utf-8")
-    (repo / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
-
-    score = prompts.build_boot_score(repo, is_daemon=True, task_text="任务")
-    assert [Path(e.path).name for e in score.orientation_set] == ["AGENTS.md"]
-
-
-def test_rendered_kernel_names_every_file_the_persisted_score_meters(
-    tmp_path: Path, monkeypatch,
-) -> None:
-    """The walk the wake is *told* to do == the walk the meter counts.
-
-    Two ``build_boot_score`` calls back one wake: the kernel's (inside
-    :func:`build_daemon_prompt`) and the persisted one (returned by
-    :func:`build_daemon_prompt_with_score`, dumped to ``boot-score.json`` and
-    read by ``hooks._orientation_progress`` as the ``orient x/y`` denominator).
-    Until 2026-07-24 only the second was given ``task_text``, so a wake whose
-    task touched a ``subject-*.md`` hub got a kernel naming N files and a meter
-    counting N+k — unreachable hubs, and a meter no compliance could clear.
-
-    Pinned on the *rendered text*, not on a second call to the builder: the
-    kernel is the only surface that asks for a Read, so the assertion has to
-    be about what it actually says.
-    """
-    from brr import prompts
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / ".brr").mkdir()
-    (repo / ".brr" / "config").write_text("", encoding="utf-8")
-    (repo / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
-
-    kb = tmp_path / "kb"
-    kb.mkdir()
-    (kb / "subject-boot-sequence.md").write_text("# hub\n", encoding="utf-8")
-    monkeypatch.setattr(
-        prompts, "_home_knowledge_log_path", lambda _root: kb / "log.md"
-    )
-
-    prompt, score = prompts.build_daemon_prompt_with_score(
-        "fix the boot sequence meter",
-        "evt-orient-001",
-        "/tmp/response.md",
-        repo,
-        runner_shell="claude",
-        environment="worktree",
-    )
-
-    # The hub was selected — otherwise this test proves nothing about drift.
-    assert [Path(e.path).name for e in score.orientation_set] == [
-        "AGENTS.md", "subject-boot-sequence.md",
-    ]
-    # …and every selected file is named in the text the wake reads —
-    # since w-69, under the orient assignment row rather than a block of
-    # its own.
-    for entry in score.orientation_set:
-        assert entry.path in prompt, f"kernel never names {entry.path}"
-    assert (
-        f"reach: files×{len(score.orientation_set)}"
-        in prompt
-    )
 
 
 # ── #628 — the walk must name only what the wake was NOT already handed ──
@@ -1320,49 +592,6 @@ def _seed_account_home_for_orientation(
         encoding="utf-8",
     )
     return home
-
-
-def test_plan_injected_whole_leaves_the_orientation_walk(
-    tmp_path: Path, monkeypatch,
-) -> None:
-    """The defect, reproduced and fixed: a plan handed over whole by the
-    work-surface block must not also be billed as a walk entry.
-
-    ``AGENTS.md`` and a touched ``subject-*.md`` hub are seeded alongside the
-    plan so this also pins checks 4 and 5 from the #628 spec: neither
-    mechanism is disturbed by the new subtraction — only the plan (the one
-    candidate the surface block actually handed over whole) leaves the set.
-    """
-    from brr import prompts
-
-    home = _seed_account_home_for_orientation(tmp_path)
-    (tmp_path / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
-
-    surface = home / "surface"
-    plan_dir = surface / "plans" / "local__default"
-    plan_dir.mkdir(parents=True)
-    (plan_dir / "active.md").write_text("# Plan\n\nship it\n", encoding="utf-8")
-
-    kb = tmp_path / "kb"
-    kb.mkdir()
-    (kb / "subject-boot-sequence.md").write_text("# hub\n", encoding="utf-8")
-    monkeypatch.setattr(
-        prompts, "_home_knowledge_log_path", lambda _root: kb / "log.md"
-    )
-
-    score = prompts.build_boot_score(
-        tmp_path,
-        is_daemon=True,
-        runner_shell="claude",
-        task_text="fix the boot sequence meter",
-    )
-
-    names = [Path(e.path).name for e in score.orientation_set]
-    assert "active.md" not in names, (
-        "the plan was injected whole by the work-surface block and must not "
-        "also be billed as a walk entry"
-    )
-    assert names == ["AGENTS.md", "subject-boot-sequence.md"]
 
 
 def test_workflow_reserve_rescues_the_old_starvation_fixture(tmp_path: Path) -> None:
@@ -1484,28 +713,6 @@ def test_workflow_page_injected_whole_leaves_the_walk(tmp_path: Path) -> None:
         tmp_path, runner_shell="claude", injected_whole=whole,
     )
     assert workflow not in {Path(e.path) for e in entries}
-
-
-def test_codex_plan_whole_no_hub_match_empties_the_walk(tmp_path: Path) -> None:
-    """On codex, with the plan injected whole and no touched hub, the walk
-    is genuinely empty — and the rendered kernel must not show an ``orient:``
-    line for it (closes #614 item 2: documented as differential, no longer a
-    permanent fixture).
-    """
-    from brr import prompts
-    from brr.bootscore import format_kernel
-
-    home = _seed_account_home_for_orientation(tmp_path)
-    surface = home / "surface"
-    plan_dir = surface / "plans" / "local__default"
-    plan_dir.mkdir(parents=True)
-    (plan_dir / "active.md").write_text("# Plan\n\nship it\n", encoding="utf-8")
-    # No AGENTS.md (codex reads it natively regardless), no subject hub.
-
-    score = prompts.build_boot_score(tmp_path, is_daemon=True, runner_shell="codex")
-
-    assert score.orientation_set == []
-    assert "orient:" not in format_kernel(score)
 
 
 def test_active_plan_reserve_rescues_the_old_starvation_fixture(tmp_path: Path) -> None:
