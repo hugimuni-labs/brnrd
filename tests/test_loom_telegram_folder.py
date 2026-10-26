@@ -276,3 +276,15 @@ def test_door_names_the_bot_and_links_the_code(bot):
     result = subprocess.run([str(bot.folder / 'door'), 'c0de'], env=bot.env,
                             capture_output=True, text=True, timeout=30)
     assert json.loads(result.stdout) == dict(name='@ada_bot', link='https://t.me/ada_bot?start=c0de')
+
+
+def test_telegram_setup_interrupted_during_the_check_keeps_the_old_token(bot, monkeypatch):
+    import urllib.request
+    before = (bot.state / 'token').read_text()
+
+    def interrupted(*_args, **_kwargs):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(urllib.request, 'urlopen', interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        run_setup(bot, monkeypatch, '123:ABC-def_9')
+    assert (bot.state / 'token').read_text() == before

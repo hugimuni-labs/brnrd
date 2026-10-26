@@ -53,10 +53,15 @@ for attempt in range(TRIES):
         raise SystemExit('No token: input closed before one arrived') from None
     message = problem(value)
     if message is None:
+        if value and sys.stdout.isatty():
+            # The token was pasted in the clear; keep it out of the scrollback.
+            print(f"\033[1A\033[2K  {style.qmark()} {style.bold('Paste the token here:')} "
+                  f"{value.partition(':')[0]}:…")
         store(path, value + '\n')
+        kept = False
         try:
             print(f"  {style.check()} This is @{common.call('getMe', {}, timeout=15)['username']}")
-            break
+            kept = True
         except common.Refused:
             message = 'Telegram does not know this token; copy it again from @BotFather.'
         except ConfigError as exc:
@@ -64,11 +69,16 @@ for attempt in range(TRIES):
         except RuntimeError as exc:
             # Offline is not a wrong token: keep it, pairing will say if it is.
             print(f"  {style.dot()} Could not ask Telegram about the token ({exc}); keeping it.")
+            kept = True
+        finally:
+            # An unchecked token never outlives the check, Ctrl-C included.
+            if not kept:
+                if before is None:
+                    path.unlink()
+                else:
+                    store(path, before)
+        if kept:
             break
-        if before is None:
-            path.unlink()
-        else:
-            store(path, before)
     print(f'  {style.cross()} {message}', file=sys.stderr)
 else:
     raise SystemExit(f'  {style.cross()} No token after {TRIES} tries.')
