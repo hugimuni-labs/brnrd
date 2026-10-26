@@ -27,6 +27,7 @@ from .adapters import body_label, resolve
 from .bodies import COMMANDS, TABLE, Observation, decide, fact_for, row_for, state_of
 from .faces import propose, proposal_line
 from .health import Health, degraded_line
+from .library import problem_line
 from .since import since_gone
 from .update import Updater, moved_line
 from .home import Home, atomic_write, is_channel, mint, notice_id
@@ -520,11 +521,17 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     atomic_write(part_path, part)
     if repos is None:
         from .adapters import repos as seat_repos, seat_text
-        repos = seat_repos(seat_text(home, thread))
+        repos = seat_repos(seat_text(home, thread), home)
     from .repos import PUBLISH_HINT, prepare_repos
     repo_text, failures = prepare_repos(home, strand, thread, repos, parent)
     if any((room / name / ".git").exists() for name, _ in repos):
         repo_text += PUBLISH_HINT
+    from . import library
+    repo_text += library.wake_text(home)
+    shelf = library.entries(home)[0]
+    library.write_room_list(room, shelf)
+    for trouble in library.link(room, shelf):
+        repo_text += trouble + "\n"
     repo_file = None
     if failures:
         _log(home, f"start {strand}: {'; '.join(failures)}")
@@ -557,6 +564,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                         attachments=attachments, reply_context=reply_context,
                         repaired=_repaired(facts, strand, gen),
                         degraded=degraded_line(facts, home.install_id()),
+                        library=problem_line(facts, home.install_id()),
                         moved=moved_line(facts, strand, gen, home.install_id()),
                         face=proposal_line(propose(facts, strand, gen, thread)),
                         left=_left(facts, thread, strand),
@@ -1415,6 +1423,7 @@ def _boundary(home, facts, strand, gen, context):
         reply_context=_reply_context(facts, context.thread, owed, home.room(strand)),
         repaired=_repaired(facts, strand, gen),
         degraded=degraded_line(facts, home.install_id()),
+        library=problem_line(facts, home.install_id()),
         moved=moved_line(facts, strand, gen, home.install_id()),
         face=proposal_line(propose(facts, strand, gen, context.thread)),
         left=_left(facts, context.thread, strand),
@@ -1815,6 +1824,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         publisher = Publisher(home, _log, functools.partial(health.guard, backoff=False))
         from .mirror import Mirror
         mirror = Mirror(home, _log)
+        from .library import Keeper
+        keeper = Keeper(home, _log)
         from .reap import Reaper
         reaper = Reaper(home, _log)
         from .receipts import source_root
@@ -1841,6 +1852,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 health.guard("tick_once", tick_once, home, bodies, adapter, core, router)
                 health.guard("publisher", publisher.step, config, router, backoff=False)
                 health.guard("mirror", mirror.step, config, backoff=False)
+                health.guard("library", keeper.step, backoff=False)
                 health.guard("disk", reaper.disk, backoff=False)
                 health.guard("reap", reaper.step, backoff=False)
                 # Only at an idle tick, and the re-exec follows in this same pass.
