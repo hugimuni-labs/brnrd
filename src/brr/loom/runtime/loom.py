@@ -1439,6 +1439,34 @@ def _boundary(home, facts, strand, gen, context):
 
 
 _PAUSE_LOOKED: dict[Path, float] = {}
+# Ports with a call this process paused, and their home: a stopped call that
+# holds the ledger lock is resumed before anyone waits on it.
+_PAUSED: dict[Path, Home] = {}
+
+
+def _free_ledger(lock):
+    """``ledger.ON_CONTENDED``: resume each paused call that has ``lock`` open."""
+    from brr import pause
+    from . import pausing
+    for port, records in pausing.free_lock(list(_PAUSED), Path(lock)).items():
+        _log(_PAUSED[port], f"resumed {port.parent.name}'s paused call, which held the ledger lock: "
+                            + pause.describe_paused(records))
+    for port in [p for p in _PAUSED if not pause.read_paused_record(p)]:
+        del _PAUSED[port]
+
+
+def _unstick(home):
+    """Between ticks nobody may wait behind a paused call that holds the lock."""
+    if not _PAUSED:
+        return
+    lock = home.facts_dir() / ".lock"
+    with open(lock, "a+") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            _free_ledger(lock)
+        else:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _pause_for_letters(home, strand, c):
@@ -1465,6 +1493,7 @@ def _pause_for_letters(home, strand, c):
     delegating = live.is_dir() and any(time.time() - p.stat().st_mtime < pausing.CAP for p in live.iterdir())
     if since and not delegating and (records := pausing.pause_call(port, c.pid, pattern, float(since))):
         _log(home, f"paused {strand}'s call for a letter: {pause.describe_paused(records)}")
+        _PAUSED[port] = home
 
 
 @dataclass
@@ -1659,6 +1688,7 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     from .router import Router
     if router is None:
         router = Router(home)
+    _unstick(home)
     facts = router.reader.refresh(home)
     if router.projection_revision != router.reader.revision:
         router.projections.clear()
@@ -1807,6 +1837,10 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         if stop is not None and stop.is_set():
             return
         home.install_id()
+        from . import ledger
+        ledger.ON_CONTENDED = _free_ledger
+        # A pause outlives a re-exec on disk; the loop must still free its lock.
+        _PAUSED.update((port.parent, home) for port in (home.root / "rooms").glob("*/port/.paused.json"))
         from .receipts import record_start
         try:
             # Each start and re-exec: which merged pull requests this code holds.

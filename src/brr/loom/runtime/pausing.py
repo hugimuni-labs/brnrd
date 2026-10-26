@@ -10,6 +10,10 @@ detached, into the kept file; drop ends it. The exit status is lost.
 
 A body folder opts in with a ``pause`` file: one regex matching the shell's
 wrapper among the body's children. Without it nothing here runs.
+
+A stopped process that holds the ledger lock freezes every writer, the loom
+included (pause-deadlock, 2026-10-26). So a call whose work runs brnrd is
+never paused, and ``free_lock`` resumes any paused call found holding it.
 """
 
 from __future__ import annotations
@@ -79,7 +83,8 @@ def pause_call(port: Path, body_pid: int, pattern: re.Pattern, since: float) -> 
                 or shell.started_at <= since or now - shell.started_at < MIN_AGE):
             continue
         work = [p for p in procs if p.ppid == shell.pid]
-        if not work:
+        # A brnrd verb takes the ledger lock: stopped, it would hold every writer.
+        if not work or any(pause._looks_like_brnrd(p.command) for p in pause.descendants(shell.pid, procs)):
             continue
         for child in work:
             for proc in pause._subtree_deepest_first(child, pause.descendants(child.pid, procs)):
@@ -100,6 +105,52 @@ def pause_call(port: Path, body_pid: int, pattern: re.Pattern, since: float) -> 
     if records:
         pause.write_paused_record(port, records)
     return records
+
+
+def _openers(path: Path, pids: set[int]) -> set[int]:
+    """Which of ``pids`` have ``path`` open; all of them when that cannot be read."""
+    if sys.platform.startswith("linux"):
+        target, found = os.path.realpath(path), set()
+        for pid in pids:
+            try:
+                fds = os.listdir(f"/proc/{pid}/fd")
+            except OSError:
+                continue
+            for fd in fds:
+                try:
+                    if os.readlink(f"/proc/{pid}/fd/{fd}") == target:
+                        found.add(pid)
+                        break
+                except OSError:
+                    continue
+        return found
+    try:
+        proc = subprocess.run(["lsof", "-t", str(path)], capture_output=True, text=True,
+                              check=False, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return pids
+    return pids & {int(token) for token in proc.stdout.split() if token.isdigit()}
+
+
+def free_lock(ports, lock: Path) -> dict[Path, list[dict]]:
+    """Resume each paused call whose work has ``lock`` open, by port.
+
+    Holding or waiting, a stopped opener keeps the lock from whoever waits
+    next; an early resume costs the body only its chance to drop the call.
+    """
+    procs = pause.list_all_processes()
+    trees = {(port, int(record.get("pid", -1))): None for port in ports
+             for record in pause.read_paused_record(port)}
+    for port, pid in trees:
+        trees[port, pid] = {pid, *(p.pid for p in pause.descendants(pid, procs))}
+    if not trees:
+        return {}
+    openers = _openers(lock, set().union(*trees.values()))
+    resumed: dict[Path, list[dict]] = {}
+    for (port, pid), tree in trees.items():
+        if tree & openers:
+            resumed.setdefault(port, []).extend(pause.resume_pids(port, only_pid=pid))
+    return resumed
 
 
 def describe(records: list[dict]) -> str:

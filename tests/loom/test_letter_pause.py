@@ -1,10 +1,17 @@
 """A letter landing mid-call pauses the body's tool call; resume lets it finish (4538)."""
 
 import json
+import os
+import re
+import signal
 import subprocess
+import sys
+import threading
 import time
 
+from brr import pause
 from brr.loom.runtime import pausing
+from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import inject_letter
 
 from _step import Loom, wait_until, write_thread
@@ -177,3 +184,91 @@ Path({str(seen)!r}).write_text(json.dumps({{"alive": alive, "letters": [letter.b
         loom.halt()
     assert not loom.errors
     assert json.loads(seen.read_text()) == {"alive": True, "letters": ["any news?"], "paused": False}
+
+
+def test_call_running_a_brnrd_verb_is_left_running(tmp_path, monkeypatch):
+    """A brnrd verb takes the ledger lock: stopped, it would freeze every writer (pause-deadlock)."""
+    monkeypatch.setattr(pausing, "MIN_AGE", 0.5)
+    root = tmp_path / "home"
+    write_thread(root, "work", "Worker", "work", wait="30")
+    seen, started = root / "seen.json", root / "started"
+    verb = root / "bin/brnrd"
+    verb.parent.mkdir(parents=True)
+    verb.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(30)\n")
+    verb.chmod(0o755)
+    bodies(root, f'''import json, subprocess, sys, time
+from pathlib import Path
+from brr.loom.runtime.fakebody import Ctx, _own_thread
+ctx = Ctx(Path(sys.argv[1]))
+own = _own_thread(ctx.wake())
+for letter in ctx.owed():
+    ctx.send(f"thread:{{own}}", note="on it", re=letter.id)
+while ctx.jack("post").letters:
+    time.sleep(0.03)
+time.sleep(1.1)
+call = subprocess.Popen(["/bin/sh", "-c", ": fake-tool-wrapper; {verb} runtime send --to channel:mine hi"])
+Path({str(started)!r}).write_text("1")
+time.sleep(3)
+alive = call.poll() is None
+call.kill()
+view = ctx.jack("post")
+Path({str(seen)!r}).write_text(json.dumps({{"alive": alive, "letters": [letter.body for letter in view.letters],
+    "paused": (ctx.room / "port/.paused.json").exists()}}))
+''')
+    (root / "loom/bodies/fake/jack").write_text("hooks\n")
+    (root / "loom/bodies/fake/pause").write_text("fake-tool-wrapper\n")
+    inject_letter(root, to="thread:work", body="reply to him")
+    loom = Loom(root)
+    loom.start()
+    try:
+        wait_until(started.exists, 15, loom.dump)
+        inject_letter(root, to="thread:work", body="and one more thing")
+        wait_until(seen.exists, 20, loom.dump)
+    finally:
+        loom.halt()
+        subprocess.run(["pkill", "-f", str(verb)], check=False)
+    assert not loom.errors
+    assert json.loads(seen.read_text()) == {"alive": True, "letters": ["and one more thing"], "paused": False}
+
+
+def test_paused_call_holding_the_ledger_lock_is_resumed_before_the_loom_waits(tmp_path, monkeypatch):
+    """Whatever the call is, a stopped holder of the ledger lock is resumed, not waited on for CAP."""
+    from brr.loom.runtime import ledger, loom
+    monkeypatch.setattr(pausing, "MIN_AGE", 0)
+    monkeypatch.setattr(loom, "_PAUSED", {})
+    monkeypatch.setattr(ledger, "ON_CONTENDED", loom._free_ledger)
+    root = tmp_path / "home"
+    write_thread(root, "work", "Worker", "work")
+    inject_letter(root, to="thread:work", body="first")
+    home = Home(root)
+    port = home.room("s-test") / "port"
+    port.mkdir(parents=True)
+    locked, finished = tmp_path / "locked", tmp_path / "finished"
+    work = tmp_path / "work.py"
+    work.write_text(f'''import fcntl, time
+from pathlib import Path
+with open({str(home.facts_dir() / ".lock")!r}, "a+") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    Path({str(locked)!r}).write_text("1")
+    time.sleep(1)
+Path({str(finished)!r}).write_text("1")
+''')
+    since = time.time() - 1
+    call = subprocess.Popen(["/bin/sh", "-c", f": fake-tool-wrapper; {sys.executable} {work}"])
+    try:
+        wait_until(locked.exists, 10, lambda: "")
+        [record] = pausing.pause_call(port, os.getpid(), re.compile("fake-tool-wrapper"), since)
+        assert _stat(record["pid"]).startswith("T")
+        loom._PAUSED[port] = home
+        # The loom's own write: unfixed, it waits on the stopped holder until CAP.
+        writer = threading.Thread(target=inject_letter, args=(root,), kwargs={"to": "thread:work", "body": "second"},
+                                  daemon=True)
+        writer.start()
+        writer.join(10)
+        assert not writer.is_alive()
+        wait_until(finished.exists, 10, lambda: "")
+    finally:
+        os.kill(call.pid, signal.SIGKILL) if call.poll() is None else None
+        pause.resume_pids(port)
+    assert "which held the ledger lock: " in (root / "loom/loom.log").read_text()
+    assert not pause.read_paused_record(port) and not loom._PAUSED

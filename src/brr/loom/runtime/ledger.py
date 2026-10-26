@@ -454,6 +454,11 @@ def _heal_tail(path: Path) -> None:
         os.fsync(handle.fileno())
 
 
+# Called with the lock's path when ``append`` finds it held, before it waits:
+# the loom sets it to resume a call it paused that holds the lock (pausing.py).
+ON_CONTENDED = None
+
+
 def append(home: Home, fact: Fact) -> Fact:
     """Append ``fact``. Same id + same content is a no-op; different content raises.
 
@@ -464,7 +469,12 @@ def append(home: Home, fact: Fact) -> Fact:
     directory = home.facts_dir()
     lock_path = directory / ".lock"
     with open(lock_path, "a+") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            if ON_CONTENDED is not None:
+                ON_CONTENDED(lock_path)
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
             index = _writer_index(directory)
             old = index.existing.get(fact.id)
