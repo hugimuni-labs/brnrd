@@ -515,11 +515,13 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     atomic_write(part_path, part)
     if repos is None:
         from .adapters import repos as seat_repos, seat_text
-        repos = seat_repos(seat_text(home, thread))
+        repos = seat_repos(seat_text(home, thread), home)
     from .repos import PUBLISH_HINT, prepare_repos
     repo_text, failures = prepare_repos(home, strand, thread, repos, parent)
     if any((room / name / ".git").exists() for name, _ in repos):
         repo_text += PUBLISH_HINT
+    from .library import wake_text as library_text
+    repo_text += library_text(home)
     repo_file = None
     if failures:
         _log(home, f"start {strand}: {'; '.join(failures)}")

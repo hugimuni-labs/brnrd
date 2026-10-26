@@ -369,7 +369,7 @@ def _done_is_published(room: Path, strand: str, facts, refs) -> None:
     thread = sender_threads(facts).get(strand)
     if thread is None:
         return
-    declared = {name for name, _source in repos(seat_text(home, thread))}
+    declared = {name for name, _source in repos(seat_text(home, thread), home)}
     for name in sorted({Path(ref).parts[0] for ref in refs
                         if ref and not ref.startswith("https://") and Path(ref).parts}):
         if name not in declared:

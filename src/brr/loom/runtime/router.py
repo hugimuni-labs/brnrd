@@ -234,7 +234,7 @@ class Router:
                     if letter.data.get("wake") and facts.index(letter) > freed:
                         _wake_letter(home, facts, thread, seated, letter, channel, parked=False)
                 choice = _wake_choice(facts, thread) or seated
-                declared = seat_repos(text)
+                declared = seat_repos(text, home)
                 require_body_author(home)
             except (ValueError, OSError) as exc:
                 if isinstance(exc, RepoSeatError):
