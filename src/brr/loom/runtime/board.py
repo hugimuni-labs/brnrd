@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+from collections import Counter
 import json
 import re
 import threading
@@ -400,16 +401,23 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
     for row in letters:
         for name in row.get("threads") or ():
             by_thread.setdefault(name, []).append(row)
+    # A wish row ships in its thread's part; the index keeps counts by state, so a moved wish resends one thread.
+    wished: dict[str, list] = {}
+    for row in told:
+        wished.setdefault(row.get("thread"), []).append(row)
+    known = {t["id"] for t in threads}
+    counts = {name: dict(Counter(row["state"] for row in rows)) for name, rows in wished.items() if name in known}
     for t in threads:
         mine = by_thread.get(t["id"], [])
         strands = [s["id"] for s in t.get("strands") or ()]
         parts[f"thread/{t['id']}"] = {
-            "id": t["id"], "count": len(mine), "letters": mine,
+            "id": t["id"], "count": len(mine), "letters": mine, "wishes": wished.get(t["id"], []),
             "tools": {s: tools[s] for s in strands if s in tools},
             "live": {s: live[s] for s in strands if s in live}}
     parts["beads"] = beads_of(facts, main_snapshot(home))
     hashes = {name: digest(part) for name, part in parts.items()}
-    index = {"v": 1, **{k: v for k, v in snap.items() if k not in {"at", "log"}}, "wishes": told,
+    index = {"v": 1, **{k: v for k, v in snap.items() if k not in {"at", "log"}}, "wishes": counts,
+             "unthreaded": [row for name, rows in wished.items() if name not in known for row in rows],
              "person": person, "parts": hashes}
     parts["index"] = index
     return parts

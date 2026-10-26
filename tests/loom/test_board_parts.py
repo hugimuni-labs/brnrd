@@ -11,7 +11,8 @@ import pytest
 from brr.loom.runtime.board import Parts, digest, serve, window
 from brr.loom.runtime.config import load_config
 from brr.loom.runtime.home import Home
-from brr.loom.runtime.ledger import inject_letter
+from brr.daemon2.facts import Fact
+from brr.loom.runtime.ledger import append, inject_letter
 
 from _step import write_thread
 
@@ -51,6 +52,22 @@ def test_parts_are_hashed_stably_and_a_letter_moves_only_its_thread(parts):
     assert parts.hashes["thread/web"] != before["thread/web"]
     assert parts.hashes["index"] != before["index"]
     assert [r["body"] for r in parts.parts["thread/web"]["letters"]] == ["first", "second"]
+
+
+def test_a_wish_ships_in_its_thread_part_and_the_index_keeps_counts(parts):
+    root = parts.home.root
+    letter = inject_letter(root, to="thread:web", body="make it fast")
+    inject_letter(root, to="thread:docs", body="other")
+    assert parts.step()
+    before = dict(parts.hashes)
+    append(parts.home, Fact(kind="wish", by="person:ada", id="w-fast", data={
+        "wish": "w-fast", "says": [[letter, 0, None]], "from": "person", "line": "make it fast", "thread": "web"}))
+    assert parts.step()
+    index = parts.parts["index"]
+    assert parts.hashes["thread/docs"] == before["thread/docs"]
+    assert [w["wish"] for w in parts.parts["thread/web"]["wishes"]] == ["w-fast"]
+    assert sum(index["wishes"]["web"].values()) == 1 and "docs" not in index["wishes"]
+    assert "w-fast" not in json.dumps(index)  # the index carries no wish rows: a moved wish resends one thread
 
 
 def test_window_cuts_to_the_newest_and_reaches_back_to_a_target():
