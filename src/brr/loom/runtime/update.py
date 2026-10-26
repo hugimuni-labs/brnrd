@@ -3,8 +3,10 @@
 ``update`` in loom/config.toml picks the source. ``dev`` follows a git
 checkout's main: every ``EVERY`` seconds, off the loop, it fetches origin's
 main and asks the forge for that commit's checks. When every check passed and
-the tip is ahead of HEAD, the loop fast-forwards at the next idle tick (no
-body of this install has a tool call open) and re-execs; the start that
+the tip is ahead of HEAD, the loop fast-forwards at the next idle tick and
+re-execs. Idle starts strict (no body of this install has a tool call open)
+and loosens the longer the move waits (``PATIENCE``), since several seated
+bodies seldom pause at once; the start that
 follows writes ``loom.moved``. It never resets: a HEAD main does not contain,
 a branch other than main or a tree with uncommitted changes is refused, and
 the refusal is the ``update`` step's ``loom.degraded``. Red or pending checks
@@ -33,6 +35,12 @@ EVERY = 300
 LOOK_EVERY = 5
 #: Check conclusions that count as passed; any other completed one is red.
 PASSED = {"success", "neutral", "skipped"}
+#: (seconds a green move has waited, how young an open tool call must be to hold it back);
+#: ``None`` is any open call. A call that has run a minute waits on CI or tests; it is not
+#: importing the checkout. On 6 h of this loom's calls (2026-10-26) the strict gate was open
+#: 39% of the time with 7 waits over 10 min, and once 1% of a 44 min busy stretch; under 60 s
+#: the longest wait was 8 min, under 15 s 1 min.
+PATIENCE = ((0, None), (600, 60), (1800, 15))
 _MERGE = re.compile(r"^Merge pull request #(\d+)")
 
 
@@ -82,9 +90,11 @@ class GitHubChecks:
                      "Accept": "application/vnd.github+json"})
         with urllib.request.urlopen(req, timeout=20) as resp:
             runs = json.load(resp).get("check_runs") or []
-        if any(r.get("status") == "completed" and r.get("conclusion") not in PASSED for r in runs):
+        # A run with a conclusion is done, even when GitHub left its status in_progress.
+        done = [r for r in runs if r.get("status") == "completed" or r.get("conclusion")]
+        if any(r.get("conclusion") not in PASSED for r in done):
             return "red"
-        if not runs or any(r.get("status") != "completed" for r in runs):
+        if not runs or len(done) < len(runs):
             return "pending"
         return "green"
 
@@ -157,6 +167,8 @@ class Updater:
         self.offer: Offer | None = None
         self.moved: Offer | None = None
         self.looked = 0.0
+        #: Monotonic time a green move first waited for an idle tick; cleared by the move.
+        self.waiting: float | None = None
         self.said: set[str] = set()
 
     def _say_once(self, text: str) -> None:
@@ -178,21 +190,36 @@ class Updater:
             return None
         return SOURCES[mode](self.root, forge_for(config))
 
+    def young(self) -> float | None:
+        """How young an open tool call must be to hold back the waiting move."""
+        waited = time.monotonic() - (self.waiting or time.monotonic())
+        return [young for after, young in PATIENCE if waited >= after][-1]
+
     def step(self, config, idle) -> None:
-        """Sets ``moved`` once the checkout moved; raises while the source refuses or fails."""
+        """Sets ``moved`` once the checkout moved; raises while the source refuses or fails.
+
+        ``idle(young)`` is true when no body has an open tool call younger than ``young``
+        seconds (``None``: none open at all)."""
         source = self._source(config)
         if source is None:
-            self.failing = self.offer = None
+            self.failing = self.offer = self.waiting = None
             return
+        if self.offer is not None and self.waiting is None:
+            self.waiting = time.monotonic()
+            self._say_once(f"{self.offer.new[:8]} is green; waiting for an idle tick")
         if self.offer is not None and time.monotonic() - self.looked >= LOOK_EVERY:
             self.looked = time.monotonic()
-            if not idle():
+            young = self.young()
+            if not idle(young):
                 self._attempt(source)
                 return
             offer, self.offer = self.offer, None
             if source.apply(offer):
-                self.log(self.home, f"update: fast-forwarded {self.root} {offer.old[:8]} -> {offer.new[:8]}")
-                self.moved = offer
+                waited = time.monotonic() - self.waiting
+                held = "any open call" if young is None else f"open calls under {young:.0f}s"
+                self.log(self.home, f"update: fast-forwarded {self.root} {offer.old[:8]} -> {offer.new[:8]}"
+                                    f" after waiting {waited:.0f}s ({held} held it)")
+                self.moved, self.waiting = offer, None
                 return
         self._attempt(source)
         if self.failing is not None:

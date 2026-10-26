@@ -214,7 +214,8 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     attachments: dict[str, list[str]] | None = None,
                     reply_context: dict[str, str] | None = None,
                     budget: str = "", over: str = "", repaired: str = "",
-                    degraded: str = "", face: str = "", left: str = "", moved: str = "") -> str:
+                    degraded: str = "", face: str = "", left: str = "", moved: str = "",
+                    library: str = "") -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
     ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
@@ -241,6 +242,8 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
         lines.insert(2, over)
     if repaired:
         lines.insert(2, repaired)
+    if library:
+        lines.insert(2, library)
     if degraded:
         lines.insert(2, degraded)
     if settled is not None:
@@ -372,7 +375,7 @@ def _done_is_published(room: Path, strand: str, facts, refs) -> None:
     thread = sender_threads(facts).get(strand)
     if thread is None:
         return
-    declared = {name for name, _source in repos(seat_text(home, thread))}
+    declared = {name for name, _source in repos(seat_text(home, thread), home)}
     for name in sorted({Path(ref).parts[0] for ref in refs
                         if ref and not ref.startswith("https://") and Path(ref).parts}):
         if name not in declared:
@@ -686,6 +689,10 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         else:
             fields["label"] = sender_label.trailer()
     text = _front(fields, "" if note is not None else body)
+    reopened = []
+    if wish_stamps:
+        from .lifecycle import reopen_for
+        reopened = reopen_for(Path(room), wish_stamps)
     if opening is not None:
         from .lifecycle import open_thread
         open_thread(Path(room), opening, sender, body, body_choice, repo_sources,
@@ -694,6 +701,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     write_port(room, stem, text)
     if wish_stamps:
         from .ledger import append
+        for fact in reopened:
+            append(home, fact)
         for stamp in wish_stamps:
             append(home, stamp)
         for result in results:
@@ -749,7 +758,7 @@ def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
     if owed:
         # The successor reads what is left from the wish, not from this body's memory.
         raise PortError("molt: say what is left first, then molt:\n" + "\n".join(
-            f'  python -m brr.loom.runtime wish {ident} --left "<step>" --left "<step>"   ({why}; --left same if nothing moved)'
+            f'  brnrd runtime wish {ident} --left "<step>" --left "<step>"   ({why}; --left same if nothing moved)'
             for ident, why in owed))
     clone = resolve_clone(room)
     path = f"threads/{thread}/README.md"

@@ -319,10 +319,14 @@ def init_self(home: Path, person: str | None = None, remote: str | None = None) 
     if (self_dir / ".git").exists():
         seed_config(home)
         return f"self already exists: {self_dir}"
-    if self_dir.exists():
-        raise SelfError(f"{self_dir} exists and is not a git self; refusing to overwrite")
     if person is not None:
         _segment(person, "person")
+    # A pairing that ran before any self left its files here: set them aside,
+    # seed, and put back what the seed does not hold, uncommitted.
+    aside = None
+    if self_dir.exists():
+        aside = Path(tempfile.mkdtemp(prefix="self-", dir=home))
+        self_dir.rename(aside / "self")
     self_dir.mkdir(parents=True)
     try:
         _copy_seed(self_dir)
@@ -354,7 +358,17 @@ def init_self(home: Path, person: str | None = None, remote: str | None = None) 
             git(self_dir, "push", "-u", "origin", "main")
     except Exception:
         shutil.rmtree(self_dir, ignore_errors=True)
+        if aside is not None:
+            (aside / "self").rename(self_dir)
+            shutil.rmtree(aside, ignore_errors=True)
         raise
+    if aside is not None:
+        for src in sorted((aside / "self").rglob("*")):
+            target = self_dir / src.relative_to(aside / "self")
+            if src.is_file() and not target.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, target)
+        shutil.rmtree(aside, ignore_errors=True)
     seed_config(home)
     sha = git(self_dir, "rev-parse", "--short", "HEAD").stdout.strip()
     return f"initialized {self_dir} {sha}"
@@ -708,7 +722,7 @@ def default_loom_part(clone: Path, thread: str) -> str:
     lines.append(f"thread: {thread}")
     lines.append(
         "letters arrive at your tool boundaries. "
-        "answer with `python -m brr.loom.runtime send`. "
+        "answer with `brnrd runtime send`. "
         "when you are done, stop; the jack holds you while letters may come."
     )
     return "\n".join(lines) + "\n"

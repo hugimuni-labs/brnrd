@@ -210,7 +210,7 @@ def _letter_owners(facts, main, inputs=None, selected=None):
         d = letter.data
         thread = _destination(d)
         if thread == LEGACY_HOME_THREAD and thread not in main and HOME_THREAD in main:
-            thread = HOME_THREAD  # old letters still say inbox
+            thread = HOME_THREAD  # old letters still say brnrd
         reply = reply_address(letter, thread)
         disposition = dispositions.get(ident, {})
         reason = disposition.get('reason', '')

@@ -38,7 +38,7 @@ def stuck(reason):
 def root(tmp_path):
     path = tmp_path / "home"
     init_self(path)
-    write_thread(path, "brnrd", (Home(path).thread_dir("brnrd") / "README.md").read_text(),
+    write_thread(path, "inbox", (Home(path).thread_dir("inbox") / "README.md").read_text(),
                  "answer-fast", wait="0.1")
     return path
 
@@ -195,20 +195,20 @@ def test_impossible_router_window_does_not_silently_abandon_messages(root):
         wait_until(lambda: answered(loom, original), 2, loom.dump)
 
 
-@pytest.mark.parametrize("destination", ["thread:removed", "nowhere", "thread:brnrd"])
+@pytest.mark.parametrize("destination", ["thread:removed", "nowhere", "thread:inbox"])
 def test_unroutable_letter_gets_a_disposition(root, destination):
-    readme = Home(root).thread_dir("brnrd") / "README.md"
-    if destination == "thread:brnrd":
+    readme = Home(root).thread_dir("inbox") / "README.md"
+    if destination == "thread:inbox":
         from brr.loom.runtime.selfrepo import git, _commit
         readme.unlink()
-        git(root / "self", "add", "threads/brnrd/README.md")
+        git(root / "self", "add", "threads/inbox/README.md")
         _commit(root / "self", "Remove brnrd from main.")
     original = "p-test/lost"
     append(Home(root), Fact(kind="letter", by="person:p-test", id=original,
                            data={"id": original, "from": "p-test", "to": destination,
                                  "body": "please help"}))
     with running(root) as loom:
-        if destination == "thread:brnrd":
+        if destination == "thread:inbox":
             # With no thread on main, the operator owns it visibly.
             from brr.loom.runtime.owners import letter_owners
             from brr.loom.runtime.lifecycle import main_snapshot
@@ -219,7 +219,7 @@ def test_unroutable_letter_gets_a_disposition(root, destination):
             _attention(["--home", str(root), "--note", original, "--why", "handled by hand"])
             assert table()[original].done
         else:
-            told_and_settled(loom, original, "brnrd", repr(destination))
+            told_and_settled(loom, original, "inbox", repr(destination))
 
 
 def relay_event(ident):
@@ -366,7 +366,7 @@ def test_relay_poll_recovers_after_saved_cursor_is_repaired(root, tmp_path, monk
 
 @stuck("brnrd addressed to an absent thread leaves phone messages without even a refusal")
 def test_unavailable_home_thread_owner_explains_the_refusal_remotely(root, tmp_path, monkeypatch):
-    readme = Home(root).thread_dir("brnrd") / "README.md"
+    readme = Home(root).thread_dir("inbox") / "README.md"
     readme.write_text(readme.read_text().replace('for: ""', 'for: "absent-brnrd"'))
     person = root / "self" / "people" / "owner"
     person.mkdir(parents=True)
@@ -399,3 +399,34 @@ def test_unavailable_home_thread_owner_explains_the_refusal_remotely(root, tmp_p
                           for f in letter_owners(loom.facts(), main_snapshot(loom.home)).values()), loom)
         # Respect ownership; the requested outcome is a refusal the person sees.
         wait_until(lambda: any(p.get("body_markdown") for p in sent), 2, loom.dump)
+
+
+def test_unroutable_chat_letter_is_answered_on_its_chat(root, monkeypatch):
+    # Setup paired a chat before any self held the home thread: the letter
+    # has no thread to climb to, and the person who wrote it hears that.
+    from brr.loom.runtime import connector
+    from brr.loom.runtime.selfrepo import git, _commit
+    from brr.loom.runtime.owners import letter_owners
+    from brr.loom.runtime.lifecycle import main_snapshot
+    monkeypatch.setattr(connector, "instances", lambda home: {"tg": "telegram"})
+    git(root / "self", "rm", "-q", "threads/inbox/README.md")
+    _commit(root / "self", "Remove brnrd from main.")
+    chat, original = "channel:tg/42", "p-test/lost"
+    append(Home(root), Fact(kind="source", by="loom:test", id="source:tg:1",
+                            data={"origin": "tg:1", "channel": chat, "from": "p-test"}))
+    append(Home(root), Fact(kind="letter", by="person:p-test", id=original,
+                            data={"id": original, "from": "p-test", "to": "thread:inbox",
+                                  "cites": "source:tg:1", "body": "hello?"}))
+    loom = Loom(root)
+    loom.start()
+    try:
+        wait_until(lambda: letter_owners(loom.facts(), main_snapshot(loom.home))[original].done,
+                   5, loom.dump)
+        told = [Fact(kind="letter", by="loom", data=d["successor"]) for f in loom.facts()
+                if f.kind == "letter.disposed" for d in f.data["dispositions"]
+                if d["id"] == original and d.get("successor")]
+        assert [f.data["to"] for f in told] == [chat]
+        assert told[0].data["re"] == original
+        assert "brnrd setup" in told[0].data["body"]
+    finally:
+        loom.halt()

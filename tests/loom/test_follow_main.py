@@ -99,6 +99,16 @@ def test_a_green_tip_fast_forwards_re_execs_and_the_next_start_says_what_loaded(
     assert update.moved_text(moved) == f"loom moved {world.old[:8]} → {world.tip[:8]}, loaded #7"
 
 
+def test_a_loom_the_shim_started_re_execs_through_the_shim(world, monkeypatch):
+    # Python resolves a linked ``current`` into sys.executable: re-exec'ing that would keep the old code.
+    import sys
+    from brr.loom.runtime import entry
+    entry.write_shim()
+    monkeypatch.setattr(sys, "orig_argv", ["/old/bin/python", "-m", "brr", "runtime", "loom", "--home", "/h"])
+    _run(world.root, lambda: world.execs)
+    assert world.execs[0] == (str(entry.shim()), [str(entry.shim()), "runtime", "loom", "--home", "/h"])
+
+
 def test_a_red_tip_waits_without_a_fact(world):
     world.forge.verdict_of = "red"
     _run(world.root, lambda: len(world.forge.asked) >= 3)
@@ -131,7 +141,7 @@ def test_a_diverged_checkout_is_refused_without_asking_the_forge(world):
 
 def test_the_move_and_the_re_exec_wait_for_an_idle_tick(world, monkeypatch):
     busy = [True]
-    monkeypatch.setattr(loom, "_idle", lambda home: not busy[0])
+    monkeypatch.setattr(loom, "_idle", lambda home, young=None: not busy[0])
     looming = Loom(world.root, tick=0.01)
     looming.start()
     try:
@@ -164,6 +174,63 @@ def test_an_open_tool_call_of_a_live_body_is_not_idle(tmp_path, monkeypatch):
     assert not loom._idle(home)
     tooltrace.note(room, call, "post")
     assert loom._idle(home)
+
+
+def test_a_move_kept_waiting_by_busy_bodies_loosens_its_gate_and_lands(world, monkeypatch):
+    # Seated bodies with long calls seldom all pause at once (2026-10-26: 35 s of 44 min).
+    monkeypatch.setattr(update, "PATIENCE", ((0, None), (0.3, 60)))
+    asked = []
+
+    def idle(home, young=None):
+        asked.append(young)
+        return young is not None  # a call is always open, but none is younger than a minute
+    monkeypatch.setattr(loom, "_idle", idle)
+    _run(world.root, lambda: world.execs)
+    assert asked[0] is None and asked[-1] == 60
+    assert _git(world.source, "rev-parse", "HEAD") == world.tip
+    log = (world.root / "loom/loom.log").read_text()
+    assert f"update: {world.tip[:8]} is green; waiting for an idle tick" in log
+    assert "(open calls under 60s held it)" in log
+
+
+def test_an_open_call_older_than_the_limit_does_not_hold_the_move(tmp_path, monkeypatch):
+    import time
+    root = tmp_path / "home"
+    write_thread(root, "brnrd", "Brnrd", "brnrd")
+    home = Home(root)
+    strand = f"s-{home.install_id()}-aaaaaa"
+    room = home.room(strand)
+    (room / "port").mkdir(parents=True)
+
+    class Folded:
+        holder = {"brnrd": (strand, 1)}
+
+    monkeypatch.setattr(loom, "fold", lambda facts: Folded)
+    monkeypatch.setattr(loom, "body_alive", lambda r: True)
+    from brr.loom.runtime import tooltrace
+    tooltrace.note(room, '{"tool_name": "Bash", "tool_use_id": "t1", "tool_input": {"command": "gh pr checks --watch"}}', "pre")
+    later = time.time() + 120
+    monkeypatch.setattr(time, "time", lambda: later)
+    assert not loom._idle(home)
+    assert not loom._idle(home, 300)
+    assert loom._idle(home, 60)
+
+
+def test_a_run_with_a_conclusion_is_done_though_its_status_says_in_progress(monkeypatch):
+    # 1a35ba71 on 2026-10-26: "Repo hygiene" stayed in_progress with conclusion success.
+    import io
+    runs = [{"status": "completed", "conclusion": "success"},
+            {"status": "in_progress", "conclusion": "success"}]
+    monkeypatch.setattr(update.urllib.request, "urlopen",
+                        lambda req, timeout: io.BytesIO(json.dumps({"check_runs": runs}).encode()))
+    checks = update.GitHubChecks("t")
+    monkeypatch.setattr(checks, "_token", lambda: "t")
+    url = "https://github.com/o/r.git"
+    assert checks.verdict(url, "abc") == "green"
+    runs.append({"status": "in_progress", "conclusion": None})
+    assert checks.verdict(url, "abc") == "pending"
+    runs.append({"status": "in_progress", "conclusion": "failure"})
+    assert checks.verdict(url, "abc") == "red"
 
 
 def _at(minutes):

@@ -44,6 +44,8 @@ def bot(tmp_path, monkeypatch):
                 if not updates:
                     time.sleep(.01)
                 self.reply(dict(ok=True, result=updates))
+            elif method == 'getMe':
+                self.reply(dict(ok=True, result=dict(id=1, is_bot=True, username='ada_bot')))
             elif method == 'getFile':
                 self.reply(dict(ok=True, result=dict(file_path='photo.jpg')))
             else:
@@ -179,6 +181,47 @@ def test_telegram_setup_stores_only_private_instance_secret(bot, monkeypatch):
     assert (bot.state / 'token').read_text().strip() == 'command: printf test-token'
 
 
+def run_setup(bot, monkeypatch, hidden, *visible):
+    import runpy
+    answers = iter(visible)
+
+    def visible_input(_prompt):
+        for answer in answers:
+            return answer
+        raise EOFError
+    monkeypatch.setenv('BRNRD_STATE', str(bot.state))
+    monkeypatch.setattr('getpass.getpass', lambda _: hidden)
+    monkeypatch.setattr('builtins.input', visible_input)
+    runpy.run_path(str(bot.folder / 'setup'), run_name='__main__')
+
+
+def test_telegram_setup_reprompts_visibly_after_an_empty_hidden_paste(bot, monkeypatch, capsys):
+    run_setup(bot, monkeypatch, '', '123:ABC-def_9')
+    assert capsys.readouterr().err == 'Received 0 characters.\n'
+    assert (bot.state / 'token').read_text() == '123:ABC-def_9\n'
+
+
+def test_telegram_setup_refuses_a_value_that_is_not_a_token(bot, monkeypatch, capsys):
+    run_setup(bot, monkeypatch, 'ABC-def', 'file: /tmp/tg')
+    assert 'Received 7 characters, which is not a BotFather token' in capsys.readouterr().err
+    assert (bot.state / 'token').read_text() == 'file: /tmp/tg\n'
+
+
+def test_telegram_setup_gives_up_after_three_tries_and_keeps_the_old_token(bot, monkeypatch, capsys):
+    before = (bot.state / 'token').read_text()
+    with pytest.raises(SystemExit, match='No token after 3 tries'):
+        run_setup(bot, monkeypatch, '', '', ' ')
+    assert capsys.readouterr().err.count('Received 0 characters.') == 3
+    assert (bot.state / 'token').read_text() == before
+
+
+def test_telegram_setup_stops_when_input_closes(bot, monkeypatch):
+    before = (bot.state / 'token').read_text()
+    with pytest.raises(SystemExit, match='input closed'):
+        run_setup(bot, monkeypatch, '')
+    assert (bot.state / 'token').read_text() == before
+
+
 def test_photo_answer_and_reply_bind_same_thread_through_named_instance(bot):
     from brr.daemon2.leases import LocalLeaseAuthority
     from brr.loom.runtime import speak
@@ -211,3 +254,9 @@ def test_photo_answer_and_reply_bind_same_thread_through_named_instance(bot):
         assert reply.data['to'] == 'thread:first'
     finally:
         inputs.close()
+
+
+def test_door_names_the_bot_and_links_the_code(bot):
+    result = subprocess.run([str(bot.folder / 'door'), 'c0de'], env=bot.env,
+                            capture_output=True, text=True, timeout=30)
+    assert json.loads(result.stdout) == dict(name='@ada_bot', link='https://t.me/ada_bot?start=c0de')
