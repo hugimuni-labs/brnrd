@@ -366,9 +366,38 @@ class Router:
         self._keep(facts, "letter.disposed", {"dispositions": dispositions},
                    f"{kind}:{thread}:{letters[-1].id}")
 
+    def _heal_home(self, facts: list[Fact], known: set[str]) -> bool:
+        """Put the home thread back on main when an unroutable letter needs it.
+
+        True when main now holds it. A failure is retried at most once a
+        minute and logged for the operator, who fixes it with ``brnrd setup``.
+        """
+        from .loom import _log
+        from .selfrepo import SelfError, heal_home_thread
+        if home_thread(known) in known:
+            return True
+        if not any(f.action == "unroutable" for f in active_owners(facts, main_snapshot(self.home))):
+            return False
+        now = self.clock()
+        if now - getattr(self, "_healed_at", float("-inf")) < 60:
+            return False
+        self._healed_at = now
+        try:
+            sha = heal_home_thread(self.home.root)
+        except (SelfError, OSError) as exc:
+            _log(self.home, f"home thread missing from main and not restored ({exc}); "
+                            "letters are held: run `brnrd setup` again")
+            return False
+        self._keep(facts, "self.healed", {"thread": home_thread(()), "commit": sha},
+                   f"self.healed:{sha}")
+        _log(self.home, f"home thread {home_thread(())} was missing from main; restored at {sha}")
+        known.add(home_thread(()))
+        return True
+
     def _unrouted(self, facts: list[Fact], known: set[str]) -> list[Fact]:
         """Materialize the table's climb/invalid-address decision atomically."""
         from .loom import notice
+        homed = self._heal_home(facts, known)
         for fate in active_owners(facts, main_snapshot(self.home)):
             if fate.action not in {"climb", "unroutable"}:
                 continue
@@ -380,23 +409,23 @@ class Router:
                 kind, target = "unroutable", home_thread(known)
                 target = target if target in known else None
                 what = f"letter {letter.id} addressed to {letter.data.get('to')!r}, which is not a thread on main"
+            if not target and not homed:
+                # No thread on main can hold it and the loom could not put
+                # one back: the letter waits for the home thread, and its chat
+                # hears so once, with nothing asked of whoever is writing.
+                channel = reply_channels(facts, self.home).get(letter.id)
+                if channel:
+                    notice(self.home, facts, "held", channel, "Got it.",
+                           "I'm still being set up, so I'll hold on to this "
+                           "and answer as soon as I'm ready.",
+                           about=letter, channel=channel)
+                continue
             data = {"id": letter.id, "outcome": "operator", "reason": fate.reason}
-            channel = None if target else reply_channels(facts, self.home).get(letter.id)
+            successor = None
             if target:
                 successor = notice(self.home, facts, kind, letter.id, what,
                                    str(letter.data.get('body') or ''),
                                    thread=target, about=letter, stands=True, draft_only=True)
-            elif channel:
-                # No thread on main can hold it: the person who wrote is
-                # waiting on this chat, so the answer goes back there.
-                successor = notice(self.home, facts, kind, letter.id,
-                                   "Your message reached brnrd, but no thread is set up "
-                                   "to read it yet, so nobody saw it.",
-                                   "Run brnrd setup again on the machine where brnrd runs, "
-                                   "then send your message again.",
-                                   about=letter, channel=channel, draft_only=True)
-            else:
-                successor = None
             if isinstance(successor, Fact):
                 data.update(outcome="done", successor=successor.data)
             self._keep(facts, "letter.disposed", {"dispositions": [data]},
