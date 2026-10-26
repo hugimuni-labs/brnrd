@@ -13,6 +13,7 @@ import pytest
 
 ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "docs" / "public" / "install.sh"
+SYSTEM = ("sh", "grep", "sed", "wc", "tr", "mktemp", "rm")
 SHELLS = [path for path in ("/bin/sh", "/bin/dash") if os.path.exists(path)]
 CURL = "curl -LsSf https://hugimuni-labs.github.io/brnrd/install.sh | sh"
 UV_BOOTSTRAP = "curl -LsSf https://astral.sh/uv/install.sh | sh"
@@ -65,6 +66,18 @@ def _tool(bindir: Path, name: str, body: str) -> None:
     path.chmod(0o755)
 
 
+def _system(tmp_path: Path) -> Path:
+    # Only the utilities the script uses: a runner's /usr/bin holds gh (and
+    # may hold uv or pipx), which a test needs absent.
+    sysbin = tmp_path / "system"
+    sysbin.mkdir()
+    for name in SYSTEM:
+        found = shutil.which(name, path="/usr/bin:/bin")
+        assert found, name
+        (sysbin / name).symlink_to(found)
+    return sysbin
+
+
 def _run(
     tmp_path: Path,
     tools: dict[str, str],
@@ -80,7 +93,7 @@ def _run(
     base.pop("PYTHONPATH", None)
     base.update(env or {})
     env = base
-    env["PATH"] = os.pathsep.join((str(bindir), "/usr/bin", "/bin"))
+    env["PATH"] = os.pathsep.join((str(bindir), str(_system(tmp_path))))
     env["HOME"] = str(tmp_path / "home")
     env["BRNRD_INSTALL_DRY_RUN"] = "1"
     env["BRNRD_TRACE"] = str(trace)
