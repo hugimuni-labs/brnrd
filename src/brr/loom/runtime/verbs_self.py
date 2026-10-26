@@ -49,7 +49,14 @@ def cmd_lib(argv: list[str]) -> int:
     add.add_argument("--kind", required=True, choices=library.KINDS)
     add.add_argument("--whose", required=True)
     add.add_argument("--for", dest="purpose", required=True)
+    add.add_argument("--git-init", action="store_true",
+                     help="kept, plain folder: run git init there (say so to the person first)")
     add.add_argument("--room", default=".", help="the self clone to commit in")
+    commit = sub.add_parser("commit", help="commit the paths you wrote in a kept folder, nothing else")
+    commit.add_argument("name")
+    commit.add_argument("paths", nargs="+")
+    commit.add_argument("-m", "--message", required=True)
+    commit.add_argument("--home")
     drop = sub.add_parser("drop", help="remove a library page; the folder stays")
     drop.add_argument("name")
     drop.add_argument("--room", default=".")
@@ -66,12 +73,28 @@ def cmd_lib(argv: list[str]) -> int:
             for why in bad:
                 print(f"library page unreadable: {why}")
             return 0
+        if args.verb == "commit":
+            from .home import Home
+            found = {e.name: e for e in library.entries(Home(resolve_home(args.home)[0]))[0]}
+            entry = found.get(args.name)
+            if entry is None or entry.kind != "kept" or not entry.here(library.machine()):
+                raise library.LibraryError(f"{args.name}: no kept folder of that name on this machine")
+            sha = library.commit(Path(entry.path), args.message, args.paths)
+            print(f"{args.name}: committed {sha[:12]}")
+            return 0
         room = Path(args.room).resolve()
         if args.verb == "add":
             dest = library.add(room, args.name, args.target, kind=args.kind,
-                               whose=args.whose, purpose=args.purpose)
+                               whose=args.whose, purpose=args.purpose, git_init=args.git_init)
             print(f"wrote and committed {dest.relative_to(room)}; land it with "
                   f"`python -m brr.loom.runtime send-self --room .`")
+            entry = library.parse(args.name, dest.read_text())
+            if entry.kind == "kept" and entry.path:
+                files, size = library.first_commit_size(Path(entry.path))
+                print(f"{args.name}: {files} file(s), {size / 1024 ** 2:.1f} MB not yet committed there")
+                if size > library.INIT_CAP:
+                    print(f"{args.name}: over 1 GB; do not commit it whole: propose a narrower "
+                          ".gitignore, or drop it and add it as known")
         else:
             library.drop(room, args.name)
             print(f"dropped library/{args.name}.md (the folder is untouched); land it with send-self")

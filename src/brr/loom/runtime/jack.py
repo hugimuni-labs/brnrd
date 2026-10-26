@@ -381,6 +381,28 @@ def _guard_stop(room: Path) -> str:
                   " who set it (send-self, publish and settle refuse until then):\n" + seen})
 
 
+def _kept_stop(room: Path) -> str:
+    """Uncommitted writes in a kept folder since this body began block one stop.
+
+    The same set a second time lets the stop through: they may be his, and
+    the body has been told. A check that cannot run never costs the stop.
+    """
+    from .library import written_since
+    try:
+        since = (room / "port" / "library.json").stat().st_mtime
+        lines = written_since(room, since)
+    except Exception:
+        return ""
+    seen = "\n".join(lines)
+    if not lines or _state(room).get("kept_stop") == seen:
+        return ""
+    _set_state(room, kept_stop=seen)
+    return _json({"decision": "block", "reason": (
+        "uncommitted changes in a kept folder since this body began. Commit what you wrote, "
+        "only those paths: `python -m brr.loom.runtime lib commit <name> -m \"<what and why>\" <path>...`. "
+        "Leave what is the person's; the loom reports it after an hour:\n" + seen)})
+
+
 def execute(event: str, room: Path, stdin_text: str) -> str:
     """Return the hook's stdout. Raise on trouble; ``run`` turns that into fail-open."""
     room = Path(room)
@@ -468,7 +490,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             "hookEventName": hook, "additionalContext": text}})
     if _state(room).get("molted") or parsed.settled is not None:
         return ""
-    blocked = _guard_stop(room)
+    blocked = _guard_stop(room) or _kept_stop(room)
     if blocked:
         return blocked
     if parsed.ids and (_hand() or not _state(room).get("stop_blocks") and not _dry(room)):
