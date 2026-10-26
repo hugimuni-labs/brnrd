@@ -34,7 +34,7 @@ def test_the_index_derives_rows_from_the_tree(tmp_path: Path) -> None:
     write(work, "threads/old/report.md", "# What shipped\n\nbody\n")
     commit(work, "old thread")
     write(work, "threads/fresh/README.md",
-          "---\nid: fresh\nstatus: open\ntense: plan\nopened-by: thread:brnrd\n"
+          "---\nid: fresh\nstatus: open\ntense: plan\nopened-by: thread:inbox\n"
           "opened-for: [w-abc]\nwish-w-abc: \"Split it out, cleanly\"\n---\n# Fresh work\n")
     write(work, "threads/fresh/research/notes.md", "---\nkind: notes\n---\n# Sources\n\n" + "x" * 3000 + "\n")
     write(work, "memory/scars/git/rebase-dirty.md", "---\ntrigger: rebase\n---\n# Rebase on a dirty tree\n")
@@ -47,7 +47,7 @@ def test_the_index_derives_rows_from_the_tree(tmp_path: Path) -> None:
     assert "  - [research/notes.md](threads/fresh/research/notes.md) · Sources · 2 KB" in text
     assert text.index("### settled (") < text.index("- **[old](threads/old/README.md)** · settled · Old work, done")
     assert "  - [report.md](threads/old/report.md) · What shipped · <1 KB" in text
-    assert text.index("[fresh]") < text.index("[brnrd]") < text.index("### settled")
+    assert text.index("[fresh]") < text.index("[inbox]") < text.index("### settled")
     assert "- [scars/git/](memory/scars/git/index.md) · 1 scars" in text
     assert "- [scars/x.md](memory/scars/x.md) · base · <1 KB" in text
     assert "- [stance.md](memory/stance.md)" in text
@@ -119,7 +119,7 @@ def test_a_scar_folder_from_before_the_index_lands_without_one(tmp_path: Path) -
     git(None, "init", "-b", "main", os.fspath(seed))
     copy_seed(seed)
     (seed / "core" / "loom" / "index").unlink()
-    write(seed, "threads/brnrd/README.md", "---\nid: brnrd\nstatus: open\ntense: plan\n---\n# Brnrd\n")
+    write(seed, "threads/inbox/README.md", "---\nid: inbox\nstatus: open\ntense: plan\n---\n# Inbox\n")
     write(seed, "memory/scars/git/old.md", "# Old\ntrigger: old\n2026-10-01\n")
     commit(seed, "a self from before the recipe")
     git(seed, "remote", "add", "origin", os.fspath(bare))
@@ -255,7 +255,7 @@ def test_init_seeds_the_index_in_the_one_seed_commit(tmp_path: Path) -> None:
     self_dir = home / "self"
     assert git(self_dir, "rev-list", "--count", "HEAD").stdout.strip() == "1"
     assert (self_dir / "CLAUDE.md").read_text() == (self_dir / "AGENTS.md").read_text()
-    assert "- **[brnrd](threads/brnrd/README.md)** · open" in (self_dir / "INDEX.md").read_text()
+    assert "- **[inbox](threads/inbox/README.md)** · open" in (self_dir / "INDEX.md").read_text()
     assert "- ada" in (self_dir / "INDEX.md").read_text()
     assert "Loom-Label: taint=0" in git(self_dir, "log", "-1", "--format=%B").stdout
     assert os.access(self_dir / "core" / "loom" / "index", os.X_OK)

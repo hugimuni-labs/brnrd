@@ -266,7 +266,7 @@ def test_a_missing_attachment_holds_the_cursor_three_pulls_then_lands(home):
     assert len(kinds(home, "source")) == 1 and letter.id == "letter:relay:telegram:555:ev_f"
     assert told.data["from"] == "loom" and told.data["to"] == source.data["to"]
     assert "attachment(s) [1] of letter:relay:telegram:555:ev_f" in told.data["body"]
-    assert told in letters_for(read_facts(home), main_snapshot(home), "brnrd")
+    assert told in letters_for(read_facts(home), main_snapshot(home), "inbox")
 
 
 # ── the molt analog: a bare line after the speaker released ────────────

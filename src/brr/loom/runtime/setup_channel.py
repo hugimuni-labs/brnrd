@@ -15,6 +15,7 @@ from .config import config_path, load_config, read_array, seed_config
 from .connector import addressed, environment, instances
 from .home import Home, atomic_write, channel_parts, resolve_home
 from .port import _front, parse_frontmatter
+from .selfrepo import SelfError, init_self
 
 
 def pair(home, kind, name, person, *, timeout=180, out=print):
@@ -117,7 +118,9 @@ def main(argv=None):
         name = args.name or input('Name this channel: ').strip()
         people = sorted(p.name for p in (home.root / 'self/people').glob('*') if p.is_dir())
         person = args.person or (people[0] if len(people) == 1 else input('Your person name: ').strip())
+        # A letter lands only on a thread on the self's main: seed it before pairing.
+        print(init_self(home.root, person=person))
         pair(home, kind, name, person, timeout=args.timeout)
-    except (ValueError, OSError, TimeoutError, subprocess.SubprocessError) as exc:
+    except (ValueError, OSError, TimeoutError, subprocess.SubprocessError, SelfError) as exc:
         raise SystemExit(str(exc)) from None
     return 0

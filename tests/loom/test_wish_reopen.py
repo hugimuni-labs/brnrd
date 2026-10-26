@@ -18,7 +18,7 @@ def settle(root, thread="work"):
 
 
 @pytest.fixture
-def brnrd(tmp_path):
+def inbox(tmp_path):
     root = tmp_path / "home"
     init_self(root, person="test")
     write_thread(root / "self", "work", "Work")
@@ -28,7 +28,7 @@ def brnrd(tmp_path):
     home = Home(root, install="aaaa")
     append(home, Fact(kind="router", by="loom:aaaa", data={"gen": 1}))
     append(home, Fact(kind="lease", by="loom:aaaa", data={
-        "thread": "brnrd", "strand": "s-aaaa-test", "gen": 1,
+        "thread": "inbox", "strand": "s-aaaa-test", "gen": 1,
         "install": "aaaa", "router_gen": 1, "shell": "fake", "core": "fake", "repos": [],
     }))
     return home, clone.parent
@@ -51,10 +51,10 @@ def state(home, thread):
     return row["now"], status
 
 
-def test_a_forward_with_a_new_wish_reopens_a_settled_thread(brnrd):
-    home, seat = brnrd
+def test_a_forward_with_a_new_wish_reopens_a_settled_thread(inbox):
+    home, seat = inbox
     assert state(home, "work")[0].startswith("settled")
-    letter = inject_letter(home.root, to="thread:brnrd", body="The switch flickers, fix it")
+    letter = inject_letter(home.root, to="thread:inbox", body="The switch flickers, fix it")
     run("send", "--room", str(seat), "--re", letter, "--to", "thread:work",
         "--wish", "new:The switch stops flickering", "Yours")
     now, status = state(home, "work")
@@ -70,33 +70,33 @@ def test_a_forward_with_a_new_wish_reopens_a_settled_thread(brnrd):
     assert "the switch shipped" in wake
 
 
-def test_a_steer_on_a_settled_threads_wish_reopens_it(brnrd):
-    home, seat = brnrd
-    first = inject_letter(home.root, to="thread:brnrd", body="Build the switch")
+def test_a_steer_on_a_settled_threads_wish_reopens_it(inbox):
+    home, seat = inbox
+    first = inject_letter(home.root, to="thread:inbox", body="Build the switch")
     ident = run("wish", "new", "--room", str(seat), "--line", "Build the switch", "--say", first,
                 "--thread", "work")
     run("wish", ident, "--room", str(seat), "--accept", "word")
     settle(home.root)
     assert state(home, "work")[1] == "settled"
-    steer = inject_letter(home.root, to="thread:brnrd", body="Make it dimmable too")
+    steer = inject_letter(home.root, to="thread:inbox", body="Make it dimmable too")
     run("wish", ident, "--room", str(seat), "--say", steer)
     assert state(home, "work")[1] == "open"
     assert wishes(read_facts(home))[ident].open
     assert [f.data["wish"] for f in read_facts(home) if f.kind == "thread.reopened"] == [ident, ident]
 
 
-def test_an_open_thread_takes_a_wish_without_a_reopen(brnrd):
-    home, seat = brnrd
-    first = inject_letter(home.root, to="thread:brnrd", body="One")
+def test_an_open_thread_takes_a_wish_without_a_reopen(inbox):
+    home, seat = inbox
+    first = inject_letter(home.root, to="thread:inbox", body="One")
     run("send", "--room", str(seat), "--re", first, "--to", "thread:work", "--wish", "new:One", "Yours")
-    second = inject_letter(home.root, to="thread:brnrd", body="Two")
+    second = inject_letter(home.root, to="thread:inbox", body="Two")
     run("send", "--room", str(seat), "--re", second, "--to", "thread:work", "--wish", "new:Two", "Yours")
     assert len([f for f in read_facts(home) if f.kind == "thread.reopened"]) == 1
 
 
-def test_a_wish_placed_from_no_room_on_a_settled_thread_is_refused(brnrd):
-    home, _ = brnrd
-    letter = inject_letter(home.root, to="thread:brnrd", body="Build the switch")
+def test_a_wish_placed_from_no_room_on_a_settled_thread_is_refused(inbox):
+    home, _ = inbox
+    letter = inject_letter(home.root, to="thread:inbox", body="Build the switch")
     result = cli(["wish", "new", "--home", str(home.root), "--line", "Build it", "--say", letter,
                   "--thread", "work"])
     assert result.returncode == 1 and "reopens it" in result.stderr
@@ -104,12 +104,12 @@ def test_a_wish_placed_from_no_room_on_a_settled_thread_is_refused(brnrd):
     assert not [w for w in wishes(read_facts(home)).values() if w.thread == "work"]
 
 
-def test_an_ask_from_a_body_whose_thread_settled_reopens_it(brnrd):
-    home, seat = brnrd
-    letter = inject_letter(home.root, to="thread:brnrd", body="Build the switch")
+def test_an_ask_from_a_body_whose_thread_settled_reopens_it(inbox):
+    home, seat = inbox
+    letter = inject_letter(home.root, to="thread:inbox", body="Build the switch")
     ident = run("wish", "new", "--room", str(seat), "--line", "Build the switch", "--say", letter)
-    settle(home.root, "brnrd")
-    assert state(home, "brnrd")[1] == "settled"
+    settle(home.root, "inbox")
+    assert state(home, "inbox")[1] == "settled"
     ask = run("ask", "Which colour?", "--room", str(seat), "--for", ident).splitlines()[0]
-    assert state(home, "brnrd")[1] == "open"
+    assert state(home, "inbox")[1] == "open"
     assert [f.data["wish"] for f in read_facts(home) if f.kind == "thread.reopened"] == [ask]
