@@ -162,8 +162,11 @@ def _env(room: Path) -> dict[str, str]:
     env["BRNRD_WAKE"] = str(room / "port" / "wake.md")
     env["BRNRD_CORE"] = str(room / "port" / "core.md")
     env["BRNRD_OCCASION"] = str(room / "port" / "occasion.md")
-    env["BRNRD_JACK"] = (f"{shlex.quote(sys.executable)} -m brr.loom.runtime jack "
-                         f"--room {shlex.quote(str(room))}")
+    # Launchers name the shim, never this interpreter (entry.py); a body types
+    # ``brnrd runtime``, so the shim's directory leads its PATH.
+    from . import entry
+    env["BRNRD_JACK"] = entry.command("jack", "--room", str(room))
+    env["PATH"] = str(entry.shim().parent) + os.pathsep + env.get("PATH", os.defpath)
     wait = room / "port" / "wait"
     from .jack import PARK
     env["BRNRD_WAIT"] = wait.read_text().strip() if wait.is_file() else f"{PARK:g}"
@@ -456,11 +459,11 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
             _log(home, f"start {strand}: {repaired_line(repair)}")
             repaired.append(repair)
 
-    from .converge import converge, port_want, room_wants
+    from .converge import converge, driver_want, entry_want, port_want, room_wants
     wait_src = home.thread_dir(thread) / "wait"
     wait = wait_src.read_text().strip() if wait_src.is_file() else None
-    fell = converge(home, strand, gen, [*room_wants(home, strand, gen, parent, facts, ensure),
-                                        port_want(room, wait)])
+    fell = converge(home, strand, gen, [entry_want(), *room_wants(home, strand, gen, parent, facts, ensure),
+                                        port_want(room, wait), driver_want(room / "self")])
     for fact in fell:
         if fact.data.get("source") not in (f"strand/{parent}", None):
             _log(home, f"start {strand}: seeded from {fact.data['source']} "
@@ -485,19 +488,19 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         f"you are strand {strand} on thread {thread}"
         + (f" ({forge}/{thread})" if forge else "") + "; letters arrive at your "
         "tool boundaries, each line naming its reply address; answer with "
-        "`python -m brr.loom.runtime send --re <id> --to <reply address> \"…\"`; "
+        "`brnrd runtime send --re <id> --to <reply address> \"…\"`; "
         "where the address is `-` nobody is waiting for words: settle the letter with "
-        f"`python -m brr.loom.runtime send --re <id> --to thread:{thread} --note "
+        f"`brnrd runtime send --re <id> --to thread:{thread} --note "
         "\"<what you did>\"`; if you commit in this self clone, land it with "
-        "`python -m brr.loom.runtime send-self --room .`; you will forget what is "
+        "`brnrd runtime send-self --room .`; you will forget what is "
         "not written: keep this thread's README true (the spec and the decisions); "
-        "what is left on a wish lives on the wish: `python -m brr.loom.runtime wish "
+        "what is left on a wish lives on the wish: `brnrd runtime wish "
         "<w-id> --left \"<step>\" --left \"<step>\"`, the whole list, latest wins "
         "(`--left same` when nothing moved), and the stop asks for it once a wish "
         "moved; progress is the wishes; land the edit with send-self. "
         "When your context grows "
-        "heavy hand over with `python -m brr.loom.runtime molt --why \"<where "
-        "things stand>\"`; `python -m brr.loom.runtime settle <thread> --why "
+        "heavy hand over with `brnrd runtime molt --why \"<where "
+        "things stand>\"`; `brnrd runtime settle <thread> --why "
         "\"…\"` closes a thread whose work is done; "
         "a letter from `loom` is a notice of something the loom could not settle, "
         "yours to deal with: its last lines name what settles it "
@@ -505,7 +508,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         "`send --wish` (core/loom/README.md, Wishes), and open a thread only for "
         "a wish: `send --to thread:<new> --wish <w-id>` or `--wish new:\"<line>\"`; "
         "a `face?` line proposes a face for a fact you just met: "
-        "`python -m brr.loom.runtime face take` wears it, `face <face>` wears another, "
+        "`brnrd runtime face take` wears it, `face <face>` wears another, "
         "and doing nothing lets it lapse; "
         + ("call `$BRNRD_JACK --event start` now, `$BRNRD_JACK --event post` between "
            "steps and `$BRNRD_JACK --event stop` before ending; read each returned boundary\n"
@@ -986,7 +989,7 @@ def _leftovers(home: Home, strand: str) -> str:
         lines.extend(f"- {commit}" for commit in commits)
         if count > limit:
             lines.append(f"... and {count - limit} more commits")
-        command = f"python -m brr.loom.runtime send-self --room {shlex.quote(str(clone))}"
+        command = f"brnrd runtime send-self --room {shlex.quote(str(clone))}"
         lines.append(f"To land these commits on the self's main, run: `{command}`")
     if paths:
         lines.append(f"Uncommitted paths relative to that self clone ({len(paths)}):")
@@ -1844,7 +1847,9 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 _log(home, "runtime source changed; re-executing loom")
                 inputs.close()
                 _shutdown(bodies)
-                os.execv(sys.executable, [sys.executable, *sys.orig_argv[1:]])
+                from .entry import reexec_argv
+                argv = reexec_argv() or [sys.executable, *sys.orig_argv[1:]]
+                os.execv(argv[0], argv)
                 return
             if _pause(stop, tick):
                 break

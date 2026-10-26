@@ -25,6 +25,7 @@ from pathlib import Path
 
 from brr.daemon_install import linux, macos
 
+from . import entry
 from .config import config_path, load_config, seed_config
 from .home import found_homes, is_home, resolve_home
 from .threads import _age
@@ -53,7 +54,34 @@ def _interpreter() -> str:
 
 
 def _program(home: Path) -> list[str]:
-    return ["-m", "brr.loom.runtime", "loom", "--home", str(home)]
+    """The unit's arguments after the shim (entry.py), which it runs instead of this Python."""
+    return ["runtime", "loom", "--home", str(home)]
+
+
+def _path_env() -> str:
+    """The installing shell's PATH, the shim's directory first and this venv's ``bin`` read
+    through ``current``: a unit that names the venv would outlive it."""
+    venv = {os.path.abspath(entry.prefix() / "bin"), os.path.dirname(_interpreter())}
+    kept = [str(entry.current() / "bin") if os.path.abspath(part) in venv else part
+            for part in os.environ.get("PATH", "").split(os.pathsep) if part]
+    return os.pathsep.join(dict.fromkeys([str(entry.shim().parent), *kept]))
+
+
+def _refuse_prefix() -> None:
+    """Refuse an interpreter whose prefix has no ``bin/python`` for the shim to run,
+    before anything is stopped or written."""
+    target = entry.prefix()
+    if not os.access(target / "bin" / "python", os.X_OK):
+        raise SystemExit(f"loom install: {target} has no bin/python for {entry.shim()} to run; "
+                         "install brnrd into a virtualenv (uv tool, pipx) and run it from there")
+
+
+def _point_entry() -> str:
+    """Write the shim and point ``current`` at this interpreter's prefix: installing is choosing this brnrd."""
+    target = entry.prefix()
+    entry.write_shim()
+    was = entry.point(target)
+    return f"{entry.current()} -> {entry.prefix()}" + (f" (was {was})" if was else "")
 
 
 def _brr_source() -> Path | None:
@@ -474,6 +502,7 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
     from brr import __version__
 
     _refuse_source(args.dev)
+    _refuse_prefix()
     system = _platform(system)
     home, source = _service_home(args.home, agents_home=agents_home, system=system)
     body, picked = _settle_body(home, write=not args.dry_run)
@@ -488,8 +517,10 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
         ("home", f"{home} ({source})"),
         ("body", f"{body} ({picked})"),
         ("service", unit_file),
+        ("entry", entry.shim()),
     ]
     if args.dry_run:
+        receipt.append(("current", f"{entry.current()} -> {entry.prefix()} (dry run: not linked)"))
         replaced = "not checked (--no-start)" if args.no_start else _replace(
             home, run=run, system=system, alive=alive, dry_run=True)
         _receipt(receipt + [("replaced", replaced), ("pid", "- (dry run: nothing written or started)")])
@@ -497,6 +528,7 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
     replaced = "nothing (--no-start)" if args.no_start else _replace(
         home, run=run, system=system, alive=alive, dry_run=False)
     receipt.append(("replaced", replaced))
+    receipt.append(("current", _point_entry()))
     poll = _poll(poll_timeout, system)
     if system == "Linux":
         code = linux.install(
@@ -506,13 +538,14 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
             program_args=_program(home),
             log_directory=_linux_log_dir(),
             kill_mode="process",
-            executable=_interpreter(),
+            executable=str(entry.shim()),
             successor="loom",
             run=run,
             sleep=_sleep(sleep),
             workdir=home,
             delay=poll,
             restart=True,
+            path_env=_path_env(),
         )
         if args.no_start:
             _receipt(receipt + [("pid", "- (not started: --no-start)")])
@@ -533,7 +566,7 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
 
     result = macos.install(
         no_start=args.no_start,
-        brr_path=_interpreter(),
+        brr_path=entry.shim(),
         home=_agents(agents_home),
         workdir=home,
         run=_run(run),
@@ -545,6 +578,7 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
         abandon_process_group=True,
         confirm=confirm,
         retry_command="`brnrd loom install`",
+        path_env=_path_env(),
     )
     if args.no_start:
         _receipt(receipt + [("pid", "- (not started: --no-start; it loads at next login)")])

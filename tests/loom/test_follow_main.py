@@ -99,6 +99,16 @@ def test_a_green_tip_fast_forwards_re_execs_and_the_next_start_says_what_loaded(
     assert update.moved_text(moved) == f"loom moved {world.old[:8]} → {world.tip[:8]}, loaded #7"
 
 
+def test_a_loom_the_shim_started_re_execs_through_the_shim(world, monkeypatch):
+    # Python resolves a linked ``current`` into sys.executable: re-exec'ing that would keep the old code.
+    import sys
+    from brr.loom.runtime import entry
+    entry.write_shim()
+    monkeypatch.setattr(sys, "orig_argv", ["/old/bin/python", "-m", "brr", "runtime", "loom", "--home", "/h"])
+    _run(world.root, lambda: world.execs)
+    assert world.execs[0] == (str(entry.shim()), [str(entry.shim()), "runtime", "loom", "--home", "/h"])
+
+
 def test_a_red_tip_waits_without_a_fact(world):
     world.forge.verdict_of = "red"
     _run(world.root, lambda: len(world.forge.asked) >= 3)

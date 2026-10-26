@@ -204,6 +204,7 @@ def install(
     abandon_process_group: bool = False,
     confirm: Callable[..., int | None] | None = None,
     retry_command: str = "`brnrd daemon install`",
+    path_env: str | None = None,
 ) -> InstallResult:
     brr_bin = str(brr_path or shutil.which("brnrd") or "")
     if not brr_bin:
@@ -218,7 +219,7 @@ def install(
     path = plist_path(home=home, label=label)
     path.write_text(
         render_plist(
-            brr_bin, home=home, workdir=workdir_value, label=label,
+            brr_bin, home=home, path_env=path_env, workdir=workdir_value, label=label,
             program_args=program_args, log_directory=logs,
             abandon_process_group=abandon_process_group,
         ),
