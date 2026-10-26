@@ -399,3 +399,34 @@ def test_unavailable_home_thread_owner_explains_the_refusal_remotely(root, tmp_p
                           for f in letter_owners(loom.facts(), main_snapshot(loom.home)).values()), loom)
         # Respect ownership; the requested outcome is a refusal the person sees.
         wait_until(lambda: any(p.get("body_markdown") for p in sent), 2, loom.dump)
+
+
+def test_unroutable_chat_letter_is_answered_on_its_chat(root, monkeypatch):
+    # Setup paired a chat before any self held the home thread: the letter
+    # has no thread to climb to, and the person who wrote it hears that.
+    from brr.loom.runtime import connector
+    from brr.loom.runtime.selfrepo import git, _commit
+    from brr.loom.runtime.owners import letter_owners
+    from brr.loom.runtime.lifecycle import main_snapshot
+    monkeypatch.setattr(connector, "instances", lambda home: {"tg": "telegram"})
+    git(root / "self", "rm", "-q", "threads/inbox/README.md")
+    _commit(root / "self", "Remove brnrd from main.")
+    chat, original = "channel:tg/42", "p-test/lost"
+    append(Home(root), Fact(kind="source", by="loom:test", id="source:tg:1",
+                            data={"origin": "tg:1", "channel": chat, "from": "p-test"}))
+    append(Home(root), Fact(kind="letter", by="person:p-test", id=original,
+                            data={"id": original, "from": "p-test", "to": "thread:inbox",
+                                  "cites": "source:tg:1", "body": "hello?"}))
+    loom = Loom(root)
+    loom.start()
+    try:
+        wait_until(lambda: letter_owners(loom.facts(), main_snapshot(loom.home))[original].done,
+                   5, loom.dump)
+        told = [Fact(kind="letter", by="loom", data=d["successor"]) for f in loom.facts()
+                if f.kind == "letter.disposed" for d in f.data["dispositions"]
+                if d["id"] == original and d.get("successor")]
+        assert [f.data["to"] for f in told] == [chat]
+        assert told[0].data["re"] == original
+        assert "brnrd setup" in told[0].data["body"]
+    finally:
+        loom.halt()
