@@ -373,12 +373,19 @@ def commit(folder: Path, message: str, paths: list[str]) -> str:
     raise AssertionError("unreachable")
 
 
+def _missing(name: str, path: str, inode: str) -> str:
+    return (f"missing at {_home_short(path)}: look for a folder named {Path(path).name} whose device:inode"
+            f" is {inode or '?'}, propose the new path to its owner, and repoint library/{name}.md on their word")
+
+
 def problems(entry: Entry, now: float | None = None) -> dict[str, str]:
-    """What is wrong with a kept folder of this machine, by kind: one short text each."""
+    """What is wrong with a folder of this machine, by kind: missing for any, the git checks for a kept one."""
     now = time.time() if now is None else now
     folder = Path(entry.path)
     if not folder.is_dir():
-        return {"missing": f"missing at {_home_short(entry.path)} (inode {entry.inode})"}
+        return {"missing": _missing(entry.name, entry.path, entry.inode)}
+    if entry.kind != "kept":
+        return {}
     if not (folder / ".git").exists():
         return {"not-git": f"no .git at {_home_short(entry.path)}; never re-init it unasked"}
     status = _status(folder)
@@ -446,7 +453,7 @@ class Keeper:
         host = machine()
         found = {}
         for entry in entries(self.home)[0]:
-            if entry.kind == "kept" and entry.here(host):
+            if entry.here(host):
                 for kind, text in problems(entry).items():
                     found[(entry.name, kind)] = text
         opened = open_problems(read_facts(self.home), install)
@@ -503,7 +510,7 @@ def written_since(room: Path, since: float, host: str | None = None) -> list[str
 def write_room_list(room: Path, found: list[Entry], host: str | None = None) -> None:
     """``port/library.json``: this machine's folders, for the room's hooks."""
     host = host or machine()
-    rows = [{"name": e.name, "kind": e.kind, "path": e.path} for e in found if e.here(host)]
+    rows = [{"name": e.name, "kind": e.kind, "path": e.path, "inode": e.inode} for e in found if e.here(host)]
     from .home import atomic_write
     atomic_write(room / "port" / "library.json", json.dumps(rows, indent=1) + "\n")
 
@@ -598,3 +605,92 @@ def known_nudge(room: Path) -> str:
     atomic_write(room / "port" / TOUCHED, json.dumps(state) + "\n")
     ask = "anything to tidy, or to note on its page?" if wrote else "anything worth noting on its page?"
     return f"you touched the known folder{'s' if len(fresh) > 1 else ''} {', '.join(parts)}: {ask}"
+
+
+# --- the jack: a kept folder's HEAD moved, or a folder vanished, under a body --
+
+HEADS = "library-heads.json"
+
+
+def head(folder: Path) -> str:
+    """A repo's HEAD sha from its files: the jack reads it at every boundary, so no subprocess."""
+    git_dir = folder / ".git"
+    try:
+        text = (git_dir / "HEAD").read_text().strip()
+        if not text.startswith("ref: "):
+            return text
+        ref = text[5:]
+        try:
+            return (git_dir / ref).read_text().strip()
+        except OSError:
+            for row in (git_dir / "packed-refs").read_text().splitlines():
+                sha, _, name = row.partition(" ")
+                if name == ref:
+                    return sha
+    except OSError:
+        pass
+    return ""
+
+
+def _heads_state(room: Path, since: float) -> dict | None:
+    try:
+        state = json.loads((room / "port" / HEADS).read_text())
+    except (OSError, ValueError):
+        return None
+    return state if isinstance(state, dict) and state.get("since") == since else None
+
+
+def changes(room: Path) -> str:
+    """Lines for what moved under this body since its last boundary, each said once.
+
+    A kept folder's HEAD moved by anyone but this body's ``lib commit``, or a
+    folder vanished. The body's first boundary only records: what it woke to
+    is in its wake.
+    """
+    listed = room / "port" / "library.json"
+    since = listed.stat().st_mtime
+    found = json.loads(listed.read_text())
+    items = [i for i in found if isinstance(i, dict) and i.get("path")] if isinstance(found, list) else []
+    if not items:
+        return ""
+    state = _heads_state(room, since)
+    first = state is None
+    state = state or {"since": since, "heads": {}, "gone": []}
+    lines = []
+    for item in items:
+        name, folder = str(item.get("name")), Path(str(item["path"]))
+        shown = f"{LINKS}/{name}" if item.get("kind") == "kept" else name
+        if not folder.is_dir():
+            if name not in state["gone"]:
+                state["gone"].append(name)
+                if not first:
+                    lines.append(f"library: {shown} vanished under you; it is "
+                                 + _missing(name, str(item["path"]), str(item.get("inode", ""))))
+            continue
+        if name in state["gone"]:
+            state["gone"].remove(name)
+        if item.get("kind") != "kept":
+            continue
+        now, was = head(folder), state["heads"].get(name, "")
+        if now and now != was:
+            state["heads"][name] = now
+            if was and not first:
+                lines.append(f"library: {shown} HEAD moved {was[:8]}..{now[:8]} under you, not by your lib commit;"
+                             f" re-read what you rely on there (git -C {shown} log --stat {was[:8]}..)")
+    from .home import atomic_write
+    atomic_write(room / "port" / HEADS, json.dumps(state) + "\n")
+    return "\n".join(lines)
+
+
+def own_head(room: Path, name: str, sha: str) -> None:
+    """``lib commit`` in a body: its own new HEAD is no news to the jack."""
+    try:
+        since = (room / "port" / "library.json").stat().st_mtime
+        state = _heads_state(room, since)
+        if state is None:
+            return
+        state["heads"][name] = sha
+        from .home import atomic_write
+        atomic_write(room / "port" / HEADS, json.dumps(state) + "\n")
+    except OSError:
+        return

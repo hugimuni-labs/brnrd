@@ -14,7 +14,7 @@ from brr.loom.runtime.jack import execute
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import read_facts
 from brr.loom.runtime.router import Router
-from brr.loom.runtime.selfrepo import _commit, git
+from brr.loom.runtime.selfrepo import git
 
 from test_project_repos import LABEL, _home, _kill, _log, _room, _seat, _source, _started, _tick
 
@@ -306,5 +306,49 @@ def test_a_known_folder_a_body_touched_is_nudged_once_at_stop(tmp_path: Path, mo
         execute("post", room, _call("Grep", room, pattern="IBAN", path=str(taxes)))
         again = json.loads(execute("stop", room, "{}"))
         assert "taxes/ (read 1)" in again["reason"] and "worth noting" in again["reason"]
+    finally:
+        _kill(read_facts(home))
+
+
+def test_the_jack_says_once_when_a_kept_head_moves_or_a_folder_vanishes_under_a_body(
+        tmp_path: Path, monkeypatch) -> None:
+    root = _home(tmp_path)
+    kb = _kept(root, tmp_path)
+    taxes = tmp_path / "taxes"
+    taxes.mkdir()
+    assert _add(root, "taxes", str(taxes), "--kind", "known", "--whose", "Ada", "--for", "tax returns") == 0
+    _seat(root, "work", [])
+    home = Home(root)
+    bodies: dict = {}
+    try:
+        _tick(home, bodies, Router(home))
+        assert _started(root), _log(root)
+        room = _room(root)
+        monkeypatch.setenv("BRNRD_THREAD", "work")
+        monkeypatch.setenv("BRNRD_ROOM", str(room))
+
+        def said() -> str:
+            out = execute("post", room, _call("Read", room, file_path=str(room / "x")))
+            return json.loads(out)["hookSpecificOutput"]["additionalContext"] if out else ""
+
+        assert "library:" not in said()  # the first boundary only records
+        before = git(kb, "rev-parse", "HEAD").stdout.strip()
+        (kb / "a.md").write_text("his, edited\n")
+        git(kb, "commit", "-q", "-am", "his second")
+        line = said()
+        assert f"lib/notes HEAD moved {before[:8]}.." in line and "re-read" in line
+        assert "library:" not in said()  # said once
+        (kb / "c.md").write_text("mine\n")
+        assert cli(["lib", "commit", "notes", "-m", "c", "c.md", "--home", str(root)]) == 0
+        assert "library:" not in said()  # the body's own commit is no news
+        git(kb, "gc", "-q")  # HEAD read from packed-refs
+        assert "library:" not in said()
+        inode = {e.name: e for e in library.entries(home)[0]}["taxes"].inode
+        taxes.rename(tmp_path / "taxes-2025")
+        gone = said()
+        assert "taxes vanished under you" in gone and inode in gone
+        assert "library:" not in said()
+        found = {e.name: e for e in library.entries(home)[0]}
+        assert set(library.problems(found["taxes"])) == {"missing"}  # the idle check sees a known folder too
     finally:
         _kill(read_facts(home))

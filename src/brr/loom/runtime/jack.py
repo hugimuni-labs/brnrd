@@ -421,6 +421,14 @@ def _touch(room: Path, stdin_text: str) -> None:
         return
 
 
+def _lib_changes(room: Path) -> str:
+    from .library import changes
+    try:
+        return changes(room)
+    except Exception:  # noqa: BLE001 - a missed line costs a notice, never the hook
+        return ""
+
+
 def execute(event: str, room: Path, stdin_text: str) -> str:
     """Return the hook's stdout. Raise on trouble; ``run`` turns that into fail-open."""
     room = Path(room)
@@ -446,6 +454,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     if event == "post":
         tooltrace.note(room, stdin_text, "post")
         _touch(room, stdin_text)
+        guarded = "\n".join(filter(None, (guarded, _lib_changes(room))))
         _note_tool(room, stdin_text)
         if _delegate_call(stdin_text):
             _delegates(room, stdin_text, True)
