@@ -263,3 +263,35 @@ def test_a_second_channel_of_a_kind_gets_a_numbered_name(tmp_path):
     (tmp_path / 'loom/config.toml').write_text('connectors = ["telegram=telegram"]\n')
     assert setup_channel._channel_name(Home(tmp_path), 'telegram') == 'telegram-2'
     assert setup_channel._person_id('  Ada Lovelace! ') == 'ada-lovelace'
+
+
+def test_a_running_loom_hears_a_channel_paired_after_it_started(tmp_path):
+    from brr.loom.runtime.ledger import read_facts
+    home = home_at(tmp_path)
+    inbox = home.thread_dir('inbox')
+    inbox.mkdir(parents=True)
+    (inbox / 'README.md').write_text('---\nid: inbox\nstatus: open\ntense: plan\n---\n# Inbox\n')
+    inputs = connector.Inputs(home)  # the loom, started before any channel exists
+    try:
+        inputs.step()
+        state = Path(connector.environment(home, 'desk')['BRNRD_STATE'])
+        def send_code(line):
+            code = code_in(line)
+            if not code:
+                return
+            drop = state / 'in'
+            # The start link and the typed code: the same code arrives twice.
+            for ident in ('code', 'again'):
+                (drop / f'{ident}.md').write_text(_front(dict(kind='letter', id=ident,
+                                                  to='42', **{'from': '42'}), code))
+        assert setup_channel.pair(home, 'fake', 'desk', 'ada', out=send_code) == 'desk:42'
+        assert not list((state / 'in').glob('*.md'))
+        (state / 'in/hello.md').write_text(_front(dict(kind='letter', id='hello',
+                                           to='42', **{'from': '42'}), 'hello brnrd'))
+        inputs.step()
+        letter, = [f for f in read_facts(home) if f.kind == 'letter']
+        assert letter.data['body'] == 'hello brnrd'
+        assert letter.data['to'] == 'thread:inbox'
+        assert letter.data['from'] == 'person:ada'
+    finally:
+        inputs.close()
