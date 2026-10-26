@@ -683,6 +683,10 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         else:
             fields["label"] = sender_label.trailer()
     text = _front(fields, "" if note is not None else body)
+    reopened = []
+    if wish_stamps:
+        from .lifecycle import reopen_for
+        reopened = reopen_for(Path(room), wish_stamps)
     if opening is not None:
         from .lifecycle import open_thread
         open_thread(Path(room), opening, sender, body, body_choice, repo_sources,
@@ -691,6 +695,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     write_port(room, stem, text)
     if wish_stamps:
         from .ledger import append
+        for fact in reopened:
+            append(home, fact)
         for stamp in wish_stamps:
             append(home, stamp)
         for result in results:

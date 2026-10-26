@@ -177,7 +177,12 @@ for the recorded reset, without consuming letters. Its opener can run
 start and records its ordinary `body.started` observation. It grants no
 ongoing exemption from the gauge. A failed letter returns to its author, who
 may resend or note the failure closed; operator debt is listed with the note
-command that retires it. Only the opener closes or reopens a child thread.
+command that retires it. Only the opener closes or reopens a child thread by
+verb. A wish placed on a settled or retired thread (`send --wish`, a forward
+that carries one, or `wish <w-id> --say` on one of its wishes) opens it again:
+the send lands `status: open` on main before the stamp, and a `thread.reopened`
+fact names the wish and the settle it undid, which the next wake shows above
+its wishes. Placed with `--home`, outside any room, such a wish is refused.
 
 `brnrd threads --left` also looks inside every room and adds a `left` count:
 commits and edited files that exist only there (`?` when a room could not be
