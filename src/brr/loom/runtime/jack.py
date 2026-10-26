@@ -434,6 +434,32 @@ def _kept_stop(room: Path) -> str:
         "Leave what is the person's; the loom reports it after an hour:\n" + seen)})
 
 
+def _known_stop(room: Path) -> str:
+    """A known folder this body touched blocks one stop with a nudge to tidy or note it."""
+    from .library import known_nudge
+    try:
+        nudge = known_nudge(room)
+    except Exception:
+        return ""
+    return _json({"decision": "block", "reason": nudge}) if nudge else ""
+
+
+def _touch(room: Path, stdin_text: str) -> None:
+    from .library import touch
+    try:
+        touch(room, stdin_text)
+    except Exception:  # noqa: BLE001 - a lost touch costs a nudge, never the hook
+        return
+
+
+def _lib_changes(room: Path) -> str:
+    from .library import changes
+    try:
+        return changes(room)
+    except Exception:  # noqa: BLE001 - a missed line costs a notice, never the hook
+        return ""
+
+
 def execute(event: str, room: Path, stdin_text: str) -> str:
     """Return the hook's stdout. Raise on trouble; ``run`` turns that into fail-open."""
     room = Path(room)
@@ -458,6 +484,8 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     guarded = _guard_warnings(room, "post", stdin_text)[0] if event == "post" else ""
     if event == "post":
         tooltrace.note(room, stdin_text, "post")
+        _touch(room, stdin_text)
+        guarded = "\n".join(filter(None, (guarded, _lib_changes(room))))
         _note_tool(room, stdin_text)
         if _delegate_call(stdin_text):
             _delegates(room, stdin_text, True)
@@ -526,7 +554,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             "hookEventName": hook, "additionalContext": text}})
     if _state(room).get("molted") or parsed.settled is not None:
         return ""
-    blocked = _guard_stop(room) or _kept_stop(room)
+    blocked = _guard_stop(room) or _kept_stop(room) or _known_stop(room)
     if blocked:
         return blocked
     # Work only this room holds blocks the stop the way an owed letter does.

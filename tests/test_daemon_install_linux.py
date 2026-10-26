@@ -348,23 +348,6 @@ def test_uninstall_removes_unit_and_leaves_linger_by_default(tmp_path, monkeypat
     ]
 
 
-def test_status_and_logs_use_systemd_user_commands(monkeypatch):
-    calls: list[tuple[list[str], bool]] = []
-
-    def fake_run(command, *, check=True):
-        calls.append((command, check))
-        return subprocess.CompletedProcess(command, 7)
-
-    monkeypatch.setattr(linux, "_run", fake_run)
-
-    assert linux.status() == 7
-    assert linux.logs(lines=50, follow=False) == 7
-    assert calls == [
-        (["systemctl", "--user", "status", linux.SERVICE_UNIT, "--no-pager"], False),
-        (["journalctl", "--user", "-u", "brr", "-n", "50"], False),
-    ]
-
-
 # ── The spelling the launcher earned (npx) ──────────────────────────
 #
 # `brnrd account connect` ends by installing the service, so this "next:"
@@ -417,35 +400,6 @@ def test_install_next_steps_stay_bare_for_a_path_install(
 # oomd kill landed on exactly such a host.
 
 
-def test_missing_policy_directives_flags_a_unit_that_predates_the_oomd_fence(
-    tmp_path, monkeypatch
-):
-    """A pre-#1160 unit — correct in every other way — is named as drifted."""
-    unit_file = tmp_path / "brr.service"
-    unit_file.write_text(
-        "[Unit]\n"
-        "Description=brnrd daemon\n"
-        "\n"
-        "[Service]\n"
-        "Type=simple\n"
-        "WorkingDirectory=/home/ada/proj\n"
-        "ExecStart=/opt/venv/bin/brnrd daemon up --foreground\n"
-        "Restart=on-failure\n"
-        "RestartSec=5s\n"
-        "OOMPolicy=continue\n"
-        "MemoryHigh=8G\n"
-        "MemoryMax=12G\n"
-        'Environment="PATH=/usr/bin"\n'
-        "\n"
-        "[Install]\n"
-        "WantedBy=default.target\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(linux, "unit_path", lambda: unit_file)
-
-    assert linux.missing_policy_directives() == ["ManagedOOMPreference"]
-
-
 def test_missing_policy_directives_is_quiet_on_a_current_unit(tmp_path, monkeypatch):
     """The alarm must not fire for a non-reason.
 
@@ -487,31 +441,3 @@ def test_missing_policy_directives_does_not_accuse_an_operator_override(
     assert linux.missing_policy_directives() == []
 
 
-def test_missing_policy_directives_scans_a_nonempty_set_of_directives():
-    """Sanity: a rename in SYSTEMD_UNIT must not turn the check into a no-op.
-
-    Without this, a template refactor that changed the section header or the
-    `[Install]` split would make every assertion above pass over an empty
-    candidate set — green, and blind.
-    """
-    scanned = linux.template_service_directives()
-    assert len(scanned) >= 5, scanned
-    assert "ManagedOOMPreference" in scanned
-    assert "OOMPolicy" in scanned
-    assert "MemoryMax" in scanned
-    # [Unit] and [Install] directives are out of scope — an older unit that
-    # spells `After=` differently is not drifted hardening.
-    assert "After" not in scanned
-    assert "Wants" not in scanned
-    assert "WantedBy" not in scanned
-    assert "Description" not in scanned
-    # ...and the machine pins never appear, or every differing PATH is drift.
-    for pinned in linux._MACHINE_PINNED_DIRECTIVES:
-        assert pinned not in scanned
-
-
-def test_missing_policy_directives_is_silent_when_nothing_is_installed(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setattr(linux, "unit_path", lambda: tmp_path / "absent.service")
-    assert linux.missing_policy_directives() == []

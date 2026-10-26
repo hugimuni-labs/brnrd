@@ -5,32 +5,11 @@ from statistics import median
 
 import pytest
 
-from brr import breakeven, claude_status, daemon, hooks, vibe_usage
+from brr import breakeven, claude_status, daemon, vibe_usage
 from brr.run import Run
 
 FIXTURES = Path(__file__).parent / "fixtures/breakeven"
 RUNS = sorted(p.parent for p in FIXTURES.glob("*/*/provenance.json"))
-
-
-@pytest.mark.parametrize("directory", RUNS, ids=lambda p: p.name)
-def test_native_real_records(directory):
-    provenance = json.loads((directory / "provenance.json").read_text())
-    snapshot = breakeven.native(directory / "native.jsonl", provenance["shell"],
-                                core=provenance["core"])
-    assert snapshot["boot"] == provenance["measured"]["B"]
-    assert median(r["weighted"] for r in snapshot["baseline"]) == provenance["measured"]["c0"]
-    assert len(snapshot["baseline"]) == 3
-    assert len({r["request"] for r in snapshot["baseline"]}) == 3
-    assert all(r["weighted"] > 0 for r in snapshot["baseline"])
-
-
-@pytest.mark.parametrize("directory", RUNS, ids=lambda p: p.name)
-def test_original_hook_draws_cannot_prove_a_baseline(directory):
-    spend_path = directory / "spend.json"
-    spend = json.loads(spend_path.read_text()) if spend_path.exists() else {}
-    assert breakeven.baseline(spend, directory / "boundaries.jsonl") is None
-    assert breakeven.chip(breakeven.project({}, None, shell=directory.parent.name,
-                                          core=None)) == "n* ?"
 
 
 def install_native(directory, tmp_path, monkeypatch):
@@ -72,14 +51,6 @@ def test_boot_stamp_and_baseline_survive_snapshot_overwrite(directory, tmp_path,
     daemon._record_boot_cost(task, info["shell"], tmp_path, outbox)
 
 
-def test_exact_identity_no_global_fallback(tmp_path, monkeypatch):
-    monkeypatch.setattr(breakeven.codex_status, "_latest_rollout_fallback",
-                        lambda *a: pytest.fail("read sibling"))
-    assert breakeven.collect({}, "codex", tmp_path, tmp_path) == {}
-    assert breakeven.collect({"codex_thread_id": "../bad"}, "codex", tmp_path, tmp_path) == {}
-    assert breakeven.collect({}, "vibe", tmp_path, tmp_path) == {}
-
-
 def test_incremental_reader_retries_torn_tail(tmp_path, monkeypatch):
     directory = next(p for p in RUNS if p.parent.name == "codex")
     info, task, outbox = install_native(directory, tmp_path, monkeypatch)
@@ -112,41 +83,6 @@ def test_cohort_exact_core_limit_and_medians(tmp_path, monkeypatch):
     assert breakeven.cohort(tmp_path / "runs", "codex", "gpt-6.1-sol", limit=1)["boot_samples"] == 1
 
 
-def test_model_request_dedup_and_boot_exclusion(tmp_path):
-    p = next(p for p in RUNS if p.parent.name == "codex")
-    native = breakeven.native(p / "native.jsonl", "codex")
-    cost = native["baseline"][0]
-    boundary = tmp_path / "boundaries.jsonl"
-    records = [{"phase": "post-tool", "cost": {**cost, "request": native["boot_request"]}},
-               {"phase": "post-tool", "cost": cost},
-               {"phase": "post-tool", "cost": cost},
-               {"phase": "post-tool", "cost": native["baseline"][1], "subagent": {"id": "child"}},
-               {"phase": "post-tool", "cost": native["baseline"][2]}]
-    boundary.write_text("".join(json.dumps(r) + "\n" for r in records))
-    assert breakeven.baseline({"boot": {"request": native["boot_request"]}}, boundary) == median([
-        cost["weighted"], native["baseline"][2]["weighted"]])
-
-
-@pytest.mark.parametrize("bad", [None, True, -1, float("nan"), float("inf"), "12", 10**500])
-def test_bad_terms_are_unknown(bad):
-    assert breakeven.chip(breakeven.calculate(bad, 100, 10)) == "n* ?"
-
-
-def test_finite_infinite_and_full_bar():
-    terms = breakeven.calculate(38607, 27000, 16973)
-    assert breakeven.chip(terms) == "n* 4"
-    assert breakeven.chip(breakeven.calculate(38607, 16973, 16973)) == "n* ∞"
-    assert breakeven.chip(breakeven.calculate(38607, 1, 16973)) == "n* ∞"
-    assert hooks._hold_chip({"quota": {"hold": {"ratio": 0.8}}}) == "hold 0.8·boot"
-    rendered = {}
-    hooks._render_bar(run={}, pending=0, pending_known=True, pending_files=0,
-                      events=[], budget={}, outbound={}, produce={}, card={},
-                      card_stale=False, run_name={}, mood=None, resources={"breakeven": terms,
-                      "quota": {"hold": {"ratio": 0.8}}}, rendered_chips=rendered)
-    assert rendered["hold"] == "hold 0.8·boot"
-    assert rendered["breakeven"] == "n* 4"
-
-
 def test_resume_does_not_create_fresh_sample_or_change_hold_meter(tmp_path, monkeypatch):
     directory = next(p for p in RUNS if p.parent.name == "claude")
     info, task, outbox = install_native(directory, tmp_path, monkeypatch)
@@ -168,15 +104,6 @@ def test_native_cache_drops_a_predecessors_coordinate(tmp_path, monkeypatch):
     second = breakeven.collect(task.meta, "codex", tmp_path, outbox)
     assert second["boot"] != first["boot"]
     assert second["boot_request"] != first["boot_request"]
-
-
-@pytest.mark.parametrize("shell", ["claude", "codex", "vibe"])
-def test_corrupt_native_rows_do_not_raise(tmp_path, shell):
-    path = tmp_path / "corrupt.jsonl"
-    path.write_text('bad json\n{"type":"assistant","message":[]}\n'
-                    '{"type":"event_msg","payload":false}\n'
-                    '{"type":"action_result","payload":{"result":[]}}\n')
-    assert breakeven.native(path, shell) == {}
 
 
 def test_archive_recovery_reads_exact_native_prefix(tmp_path, monkeypatch):

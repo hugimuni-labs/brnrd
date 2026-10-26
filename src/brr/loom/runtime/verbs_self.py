@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -80,6 +81,8 @@ def cmd_lib(argv: list[str]) -> int:
             if entry is None or entry.kind != "kept" or not entry.here(library.machine()):
                 raise library.LibraryError(f"{args.name}: no kept folder of that name on this machine")
             sha = library.commit(Path(entry.path), args.message, args.paths)
+            if os.environ.get("BRNRD_ROOM"):
+                library.own_head(Path(os.environ["BRNRD_ROOM"]), entry.name, sha)
             print(f"{args.name}: committed {sha[:12]}")
             return 0
         room = Path(args.room).resolve()

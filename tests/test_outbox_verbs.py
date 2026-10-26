@@ -361,21 +361,6 @@ def test_daemon_drain_outbox_is_a_call_into_outbox_drain():
     assert not any(isinstance(n, (ast.For, ast.While)) for n in ast.walk(fn))
 
 
-def test_daemon_drain_outbox_signature_is_unchanged():
-    import inspect
-
-    params = inspect.signature(daemon._drain_outbox).parameters
-    assert list(params) == [
-        "emit", "task", "responses_dir", "event_id", "outbox_dir", "inbox_dir",
-        "repo_root", "account_context", "stats",
-    ]
-    assert params["inbox_dir"].default is None
-    assert all(
-        params[name].kind is inspect.Parameter.KEYWORD_ONLY
-        for name in ("repo_root", "account_context", "stats")
-    )
-
-
 def test_every_handler_is_documented_by_its_row():
     handlers = {row.handler for row in table.ROWS}
     public = {

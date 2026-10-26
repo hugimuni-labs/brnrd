@@ -374,6 +374,50 @@ def init_self(home: Path, person: str | None = None, remote: str | None = None) 
     return f"initialized {self_dir} {sha}"
 
 
+def heal_home_thread(home: Path) -> str:
+    """Put the seed's home thread README back on the self's ``main``; return the sha.
+
+    The loom's own repair for a self whose home thread was deleted or never
+    landed: letters with no other thread have nowhere to go. It lands through
+    the self's pre-receive like any push, from a scratch clone, so a dirty
+    ``home/self`` worktree is never touched. A home thread already on main is
+    a no-op. Raises ``SelfError`` when there is no self or the push is refused.
+    """
+    from .home import HOME_THREAD
+    from .merge import _push_lock
+
+    self_dir = Path(home).resolve() / "self"
+    if not (self_dir / ".git").exists():
+        raise SelfError(f"no self at {self_dir}")
+    path = f"threads/{HOME_THREAD}/README.md"
+    if git(self_dir, "cat-file", "-e", f"main:{path}", check=False).returncode == 0:
+        return git(self_dir, "rev-parse", "--short", "main").stdout.strip()
+    seed = seed_root() / path
+    scratch = Path(tempfile.mkdtemp(prefix="heal-", dir=self_dir.parent))
+    try:
+        clone = scratch / "self"
+        git(scratch, "clone", "-q", "--branch", "main", str(self_dir), str(clone))
+        target = clone / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(seed, target)
+        git(clone, "add", "--", path)
+        _commit(clone, f"Put {HOME_THREAD} back on main.\n\n"
+                "Letters with no thread had nowhere to land; the loom restores the seed's.\n\n"
+                "Loom-Strand: loom\n"
+                "Loom-Label: taint=0; audience=self\n")
+        changed = refresh_index(clone)
+        if changed:
+            git(clone, "add", "--", *changed)
+            _commit(clone, "", amend=True)
+        with _push_lock(clone):
+            push = git(clone, "push", "-q", "origin", "HEAD:main", check=False)
+        if push.returncode != 0:
+            raise SelfError(f"push refused: {(push.stderr or push.stdout).strip()}")
+        return git(clone, "rev-parse", "--short", "HEAD").stdout.strip()
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 def pin_clone(repo: Path) -> None:
     """Give the clone no credential helper.
 

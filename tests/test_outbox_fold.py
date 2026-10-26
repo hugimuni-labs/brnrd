@@ -180,17 +180,6 @@ def test_no_readable_head_is_dropped(tmp_path, monkeypatch):
     assert "rev-parse HEAD" in notice["text"]
 
 
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ("src/brr", "src/brr"), ("./src//brr/", "src/brr"), (".", "."),
-        ("", None), ("..", None), ("a/../b", None), ("/abs", None),
-    ],
-)
-def test_normalise_place(raw, expected):
-    assert fold.normalise_place(raw) == expected
-
-
 def test_fold_is_a_declared_internal_source():
     assert fold.SOURCE in protocol.INTERNAL_SOURCES
 

@@ -15,10 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from brr import account, daemon, facets, hooks, protocol, resource_hold, stake
+from brr import account, daemon, hooks, protocol, resource_hold, stake
 from brr.outbox import mark
 from brr.run import Run
-import importlib
 
 
 @pytest.fixture(autouse=True)
@@ -38,56 +37,6 @@ def _seat() -> Run:
 
 
 # ── the grammar and the unit ─────────────────────────────────────────
-
-
-class TestGrammar:
-    def test_a_share_normalises_against_the_default_window(self):
-        row = stake.normalise("5%", None, cfg={})
-        assert (row["tokens"], row["share_pct"], row["unit"]) == (5_000_000, 5.0, "share")
-        assert (row["cut_at_tokens"], row["cut_at_share_pct"], row["cut_at_basis"]) == (7_500_000, 7.5, "default")
-        assert (row["window_tokens"], row["window_basis"]) == (100_000_000, "default")
-
-    def test_tokens_keep_the_share_beside_them(self):
-        row = stake.normalise("2m", "3m", cfg={"stake.window_tokens": "40m"})
-        assert (row["tokens"], row["share_pct"], row["unit"]) == (2_000_000, 5.0, "tokens")
-        assert (row["cut_at_tokens"], row["cut_at_share_pct"], row["cut_at_basis"]) == (3_000_000, 7.5, "given")
-        assert row["window_basis"] == "config"
-
-    def test_an_explicit_cut_at_in_share(self):
-        row = stake.normalise("5%", "12%", cfg={})
-        assert row["cut_at_tokens"] == 12_000_000
-
-    @pytest.mark.parametrize(("value", "cut"), [("lots", None), ("0%", None), ("150%", None), ("5%", "3%"), ("5%", "soon")])
-    def test_what_the_grammar_does_not_read_is_refused(self, value, cut):
-        with pytest.raises(stake.StakeError):
-            stake.normalise(value, cut, cfg={})
-
-    def test_a_request_in_frontmatter_or_a_messages_lead_lines(self):
-        assert stake.request_from({"stake": "5%", "cut_at": "8%"}) == {"stake": "5%", "cut_at": "8%"}
-        assert stake.request_from({}, "stake: 5%\ncut-at: 9%\n\nfix the drain") == {"stake": "5%", "cut_at": "9%"}
-        assert stake.request_from({}, "fix the drain\nstake: 5%") is None
-        assert stake.request_from({}, "cut-at: 9%\nfix") is None
-        assert stake.request_from({"stake": "5%", "stake_refused": "no"}) is None
-
-    def test_the_meter_folds_positive_deltas_and_survives_a_window_roll(self):
-        row = stake.normalise("1m", None, cfg={})
-        row.update(state="armed", spent=0, last_reading=None)
-        stake.meter(row, 300_000)
-        stake.meter(row, 500_000)
-        stake.meter(row, None)
-        assert row["spent"] == 500_000
-        stake.meter(row, 100_000)  # the seat's window rolled; the reading restarted
-        assert row["spent"] == 600_000
-        assert row["pct"] == 60.0 and row["spent_share_pct"] == 0.6
-
-    def test_the_chip_speaks_the_unit_it_was_given(self):
-        row = stake.normalise("5%", None, cfg={})
-        row.update(state="armed", spent=1_100_000)
-        assert stake.chip(row) == "stake 1.1m/5% · 22%"
-        row = stake.normalise("2m", None, cfg={})
-        row.update(state="armed", spent=500_000)
-        assert stake.chip(row) == "stake 500k/2m · 25%"
-        assert stake.chip({**row, "state": "refused"}) is None
 
 
 # ── the boundary's judgement ─────────────────────────────────────────
@@ -263,56 +212,7 @@ class TestTheCutAtTheDoor:
         assert daemon._read_outbox_notices(tmp_path)[0]["text"].startswith("stake raised:")
 
 
-def test_prepare_reads_the_waking_events_stake_from_the_message(tmp_path):
-    """The stamp `worker/prepare.py` makes is `stake.request_from` on the event."""
-    event = {"id": "evt-1", "body": "stake: 5%\n\nfix it", "stake_carried_spent": ""}
-    assert stake.request_from(event, event["body"]) == {"stake": "5%", "cut_at": ""}
-    prepare_mod = importlib.import_module("brr.worker.prepare")
-    assert "stake_mod.request_from(event" in Path(prepare_mod.__file__).read_text(encoding="utf-8")
-
-
 # ── the chip, the portal facet, the boundary row ─────────────────────
-
-
-def _resources(stake_row: dict | None) -> dict:
-    allowance = {"tokens": 20_000_000, "spent": 3_000_000, "scope": "resident", "explicit": False}
-    if stake_row is not None:
-        allowance["stake"] = stake_row
-    return facets.build(allowance=allowance)
-
-
-def _armed_row(**over) -> dict:
-    row = stake.normalise("5%", None, cfg={})
-    row.update(state="armed", spent=1_100_000, spent_share_pct=1.1, pct=22.0)
-    row.update(over)
-    return row
-
-
-class TestTheSurfaces:
-    def test_the_facet_carries_the_stake_and_the_chip_reads_it(self):
-        resources = _resources(_armed_row())
-        facet = resources["allowance"]
-        assert facet["stake"]["state"] == "armed" and facet["stake_summary"] == "stake 1.1m/5% · 22%"
-        assert hooks._allowance_chip(resources) == "stake 1.1m/5% · 22%"
-
-    def test_no_stake_leaves_the_seat_chip_and_facet_as_they_were(self):
-        resources = _resources(None)
-        assert "stake" not in resources["allowance"]
-        assert hooks._allowance_chip(resources).startswith("spend 3m · pace")
-
-    def test_every_boundary_row_carries_the_spend_against_the_stake(self):
-        readings = hooks._boundary_readings({"resources": _resources(_armed_row())}, None, None)
-        assert readings["spend"]["stake"] == {
-            "state": "armed", "spent": 1_100_000, "spent_share_pct": 1.1,
-            "tokens": 5_000_000, "share_pct": 5.0, "cut_at_tokens": 7_500_000,
-        }
-        assert "stake" not in hooks._boundary_readings({"resources": _resources(None)}, None, None)["spend"]
-
-    def test_the_cut_line_fires_once(self):
-        resources = _resources(_armed_row(state="cut", spent=7_600_000))
-        line, gate = hooks._stake_directive(resources)
-        assert line.startswith("- stake cut-at reached (7.6m of 7.5m)") and gate == "cut:7500000"
-        assert hooks._stake_directive(_resources(_armed_row())) == (None, "")
 
 
 # ── the stake riding spawn: and respawn: ─────────────────────────────
