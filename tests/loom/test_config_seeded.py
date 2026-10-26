@@ -27,7 +27,7 @@ def _home(tmp_path: Path, text: str | None = None) -> Path:
 
 def test_declaration_is_the_dataclass():
     assert [f.name for f in dataclasses.fields(load_config(Path("/nonexistent")))] == [k.name for k in KEYS]
-    assert len(KEYS) == 15
+    assert len(KEYS) == 16
 
 
 def test_unknown_key_is_refused_with_the_nearest(tmp_path):

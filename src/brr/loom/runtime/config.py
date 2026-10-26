@@ -99,6 +99,8 @@ KEYS: tuple[Key, ...] = (
         "Clock skew, in seconds, a router lease must tolerate; grants stop at until - max_skew - margin."),
     Key("margin", "seconds", DEFAULT_MARGIN,
         "Extra seconds, beyond max_skew, a router stops granting before its lease ends."),
+    Key("board_port", "text", None,
+        "Loopback port the board's parts are served on (127.0.0.1); unset, the board is off. Read at start."),
 )
 BY_NAME = {k.name: k for k in KEYS}
 

@@ -1800,7 +1800,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
     held = _hold_loop(home, stop)
     if held is None:
         return
-    inputs = None
+    inputs = board = shell = None
     bodies: dict[str, Body] = {}
     try:
         if stop is not None and stop.is_set():
@@ -1824,6 +1824,14 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         health = Health(home, read_facts(home), _log)
         from .snapshot import Publisher
         publisher = Publisher(home, _log, functools.partial(health.guard, backoff=False))
+        if config.board_port:  # read at start: a port change waits for the next re-exec
+            from .board import Parts, serve
+            board = Parts(home, lambda: load_config(home.root), _log)
+            threading.Thread(target=board.run, name="board", daemon=True).start()
+            try:
+                shell = serve(board, int(config.board_port))
+            except (OSError, ValueError) as exc:  # a taken port or not a number: the loop runs on without a board
+                _log(home, f"board: port {config.board_port}: {exc}")
         from .mirror import Mirror
         mirror = Mirror(home, _log)
         from .library import Keeper
@@ -1872,6 +1880,11 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 break
     finally:
         _shutdown(bodies)
+        if board is not None:
+            board.stop.set()
+        if shell is not None:
+            shell.shutdown()
+            shell.server_close()
         if inputs is not None:
             inputs.close()
         fcntl.flock(held, fcntl.LOCK_UN)
