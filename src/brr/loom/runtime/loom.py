@@ -327,7 +327,7 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
     """The one writer of loom notices: what the loom cannot settle, a body is told.
 
     A notice is an owed letter from ``loom``, so it is shown at every
-    boundary until a body settles it. Its id is derived from the condition:
+    boundary until a body settles it; a ``passive`` one is done once shown. Its id is derived from the condition:
     a condition met on every tick writes one letter. It goes to ``thread``
     when a body can run there, else to the home thread. The last lines always name
     the handle. ``stands`` ties it to ``about``: the two settle together.
@@ -355,7 +355,8 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
     else:
         lines.append(can)
     if channel is None:
-        lines.append(f"settle this notice with a reply or a note, re: {ident}")
+        lines.append("passive: shown once, owed by nobody" if passive
+                     else f"settle this notice with a reply or a note, re: {ident}")
     data.update(body="\n".join(lines), label=label.as_dict())
     draft = Fact(kind="letter", by=_by(home), data=data, id=ident)
     if channel is not None:
