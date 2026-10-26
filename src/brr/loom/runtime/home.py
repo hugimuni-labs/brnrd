@@ -153,7 +153,7 @@ class Home:
     def main_thread(self) -> str:
         """The home thread, where letters with no better address land.
 
-        ``brnrd`` once its folder exists, else a legacy ``inbox``, else ``brnrd``.
+        ``inbox`` once its folder exists, else a legacy ``brnrd``, else ``inbox``.
         """
         threads = self.root / "self" / "threads"
         return home_thread(n for n in (HOME_THREAD, LEGACY_HOME_THREAD) if (threads / n).is_dir())
@@ -172,12 +172,12 @@ class Home:
         return self.root / "rooms" / strand
 
 
-HOME_THREAD = "brnrd"
-LEGACY_HOME_THREAD = "inbox"
+HOME_THREAD = "inbox"
+LEGACY_HOME_THREAD = "brnrd"
 
 
 def home_thread(names) -> str:
-    """The home thread among thread names: brnrd, else a surviving inbox, else brnrd."""
+    """The home thread among thread names: inbox, else a surviving brnrd, else inbox."""
     names = set(names)
     return LEGACY_HOME_THREAD if LEGACY_HOME_THREAD in names and HOME_THREAD not in names else HOME_THREAD
 

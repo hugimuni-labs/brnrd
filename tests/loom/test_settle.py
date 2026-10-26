@@ -135,7 +135,7 @@ Path({str(done)!r}).write_text("ok")
         wait_until(done.exists, 30, loom.dump)
         wait_until(lambda: not mail(root, loom.facts(), "work"), 5, loom.dump)
         assert not [f for f in loom.facts() if f.id.startswith("loom/climbed")]
-        assert not [f for f in loom.facts() if f.kind == "lease" and f.data.get("thread") == "brnrd"]
+        assert not [f for f in loom.facts() if f.kind == "lease" and f.data.get("thread") == "inbox"]
     finally:
         loom.halt()
     assert not loom.errors

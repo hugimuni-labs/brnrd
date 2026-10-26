@@ -50,7 +50,7 @@ def test_a_thread_letter_that_cites_nothing_is_refused(ledger):
 @pytest.fixture
 def person_home(tmp_path):
     home = Home(tmp_path / "home", install="aaaa")
-    write_thread(home.root, "brnrd", "Brnrd", "quit-now")
+    write_thread(home.root, "inbox", "Brnrd", "quit-now")
     (home.root / "loom/config.toml").write_text('connectors = ["mine=fake"]\n')
     person = home.root / "self/people/ada"
     person.mkdir(parents=True)
@@ -70,7 +70,7 @@ def test_a_person_letter_lands_with_the_known_link_and_both_sides_are_told(perso
     assert letter.data["links"] == ["letter:mine:first"]
     assert letter.data["body"] == "as in &first, and &w-nope too"
     [body] = notices(home, "ref-unknown")
-    assert body.data["to"] == "thread:brnrd" and body.data["notice"] is True
+    assert body.data["to"] == "thread:inbox" and body.data["notice"] is True
     [him] = notices(home, "ref-told")
     assert him.data["to"] == "channel:mine/42" and him.data["re"] == "letter:mine:second"
     assert "&w-nope" in him.data["body"]

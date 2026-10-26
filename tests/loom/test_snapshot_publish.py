@@ -18,7 +18,7 @@ README = """---
 id: web
 status: open
 tense: plan
-opened-by: thread:brnrd
+opened-by: thread:inbox
 ---
 # Put the loom on the web. Then tell brnrd.
 
@@ -96,7 +96,7 @@ own = _own_thread(ctx.wake())
 for letter in ctx.owed():
     ctx.send("thread:" + own, note="ok", re=letter.id)
 if own == "web":
-    ctx.send("thread:brnrd", "PR https://github.com/acme/brnrd/pull/7 opened", cite=letter.id)
+    ctx.send("thread:inbox", "PR https://github.com/acme/brnrd/pull/7 opened", cite=letter.id)
 ctx.jack("stop")
 """)
     run.chmod(0o755)
@@ -138,7 +138,7 @@ def test_document_matches_the_contract(board):
         {"window": "session", "left_pct": 82, "resets_at": "2026-10-19T05:00:00Z"}]}]
     thread = next(t for t in doc["threads"] if t["id"] == "web")
     assert thread["id"] == "web" and thread["title"] == "Put the loom on the web."
-    assert thread["status"] == "open" and thread["opened_by"] == "thread:brnrd"
+    assert thread["status"] == "open" and thread["opened_by"] == "thread:inbox"
     assert thread["plan"] == {"done": 1, "total": 2, "next": "Publisher pushes"}
     assert thread["done"] == [{"kind": "pr", "ref": "https://github.com/acme/brnrd/pull/7",
                                "line": "snapshot contract"}]
@@ -155,7 +155,7 @@ def test_document_matches_the_contract(board):
     assert asked == {"id": asked["id"], "at": asked["at"], "from": "p-test", "to": "thread:web",
                      "thread": "web", "kind": "letter", "head": "Ship the board, please."}
     receipt = next(e for e in doc["log"] if e["kind"] == "receipt")
-    assert receipt["thread"] == "web" and receipt["to"] == "thread:brnrd"
+    assert receipt["thread"] == "web" and receipt["to"] == "thread:inbox"
     assert receipt["ref"] == "https://github.com/acme/brnrd/pull/7"
     assert receipt["from"] in {s["id"] for s in thread["strands"]}
     # Nothing the loom lacks is sent as a placeholder.
@@ -286,9 +286,9 @@ def test_an_open_ask_to_a_person_is_their_turn(tmp_path):
                                        says=[["p-test/site", 0, None]], thread="web"))
     ask = append(home, wish_fact(read_facts(home), by="person:test", ident="new", line="Pick a domain",
                                  thread="web", sender="resident", parent=root_wish.data["wish"]))
-    assert turn() != "yours"  # it waits on its opener, thread:brnrd, until that asks onward
+    assert turn() != "yours"  # it waits on its opener, thread:inbox, until that asks onward
     onward = append(home, wish_fact(read_facts(home), by="person:test", ident="new", line="Pick a domain",
-                                    thread="brnrd", sender="resident", parent=ask.data["wish"]))
+                                    thread="inbox", sender="resident", parent=ask.data["wish"]))
     assert turn() == "yours"
     for i, w in enumerate((onward, ask)):
         append(home, Fact(kind="wish.verdict", by="person:test", id=f"wish.verdict:t{i}",
