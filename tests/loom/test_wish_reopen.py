@@ -11,10 +11,10 @@ from brr.loom.runtime.wishes import wake_wishes, wishes
 from test_wake import cli, commit, write_thread
 
 
-def settle(root):
-    readme = root / "self/threads/work/README.md"
+def settle(root, thread="work"):
+    readme = root / f"self/threads/{thread}/README.md"
     readme.write_text(readme.read_text().replace("status: open", "status: settled"))
-    commit(root / "self", "settle work: the switch shipped")
+    commit(root / "self", f"settle {thread}: the switch shipped")
 
 
 @pytest.fixture
@@ -102,3 +102,14 @@ def test_a_wish_placed_from_no_room_on_a_settled_thread_is_refused(brnrd):
     assert result.returncode == 1 and "reopens it" in result.stderr
     assert state(home, "work")[1] == "settled"
     assert not [w for w in wishes(read_facts(home)).values() if w.thread == "work"]
+
+
+def test_an_ask_from_a_body_whose_thread_settled_reopens_it(brnrd):
+    home, seat = brnrd
+    letter = inject_letter(home.root, to="thread:brnrd", body="Build the switch")
+    ident = run("wish", "new", "--room", str(seat), "--line", "Build the switch", "--say", letter)
+    settle(home.root, "brnrd")
+    assert state(home, "brnrd")[1] == "settled"
+    ask = run("ask", "Which colour?", "--room", str(seat), "--for", ident).splitlines()[0]
+    assert state(home, "brnrd")[1] == "open"
+    assert [f.data["wish"] for f in read_facts(home) if f.kind == "thread.reopened"] == [ask]

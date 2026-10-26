@@ -232,6 +232,11 @@ def cmd_ask(args):
         if same is None:
             fact = wish_fact(facts, by=by, ident="new", line=args.what, thread=thread,
                              sender="resident", parent=args.wish)
+            from .lifecycle import reopen_for
+            from .verbs_loom import _room
+            # A body that settled its own thread and asks again holds open work there.
+            for reopened in reopen_for(_room(args.room), [fact]):
+                append(home, reopened)
             append(home, fact)
             ident = fact.data["wish"]
         else:
