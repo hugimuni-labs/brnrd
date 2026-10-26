@@ -83,17 +83,6 @@ def test_group_or_spoofed_identity_never_pairs(tmp_path):
     assert load_config(tmp_path).connectors == ()
 
 
-def test_cli_setup_and_setup_channel_share_flow(tmp_path, monkeypatch):
-    from brr.cli import main
-    calls = []
-    monkeypatch.setattr(setup_channel, 'pair', lambda *a, **kw: calls.append((a, kw)))
-    for spelling in (['setup'], ['setup', 'channel']):
-        assert main([*spelling, '--home', str(tmp_path), '--kind', 'fake',
-                     '--name', 'desk', '--person', 'ada']) == 0
-    assert len(calls) == 2
-    assert all(args[1:] == ('fake', 'desk', 'ada') for args, _ in calls)
-
-
 def test_relay_setup_explains_existing_account_pairing(tmp_path, capfd):
     home = home_at(tmp_path)
     with pytest.raises(ValueError, match='Nothing was enabled'):

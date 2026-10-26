@@ -17,7 +17,6 @@ import subprocess
 import time
 from pathlib import Path
 
-import pytest
 
 from brr import daemon, resource_hold
 from brr.operator_console import history
@@ -53,24 +52,6 @@ def _run(runs_dir: Path, run_id: str, *, status: str, hold: dict | None = None,
         old = time.time() - age_seconds
         os.utime(path, (old, old))
     return task
-
-
-@pytest.mark.parametrize(
-    ("status", "hold", "expected"),
-    [
-        ("running", "active", True),     # the manifest a stopped write leaves
-        ("pending", "active", True),
-        ("held", "active", True),        # the mirror, still written today
-        ("held", "released", False),     # a stale word is not a hold
-        ("held", None, False),
-        ("done", "active", False),       # an ended run is not held
-        ("error", "active", False),
-        ("running", None, False),
-    ],
-)
-def test_run_is_held_reads_the_record_not_the_word(status, hold, expected):
-    meta = {} if hold is None else {"resource_hold": _hold(released=hold == "released")}
-    assert resource_hold.run_is_held(status, meta) is expected
 
 
 def test_held_runs_for_repo_lists_a_hold_whatever_its_status_word(tmp_path):

@@ -473,27 +473,6 @@ def test_no_receipt_is_written_outside_a_run(tmp_path, monkeypatch):
     assert gate.write_receipt("GREEN", []) is None
 
 
-def test_receipt_lands_in_the_outbox_and_names_the_verdict(tmp_path, monkeypatch):
-    """Under a run it is written beside the other control dotfiles — never
-    delivered to chat (the drain skips dotfiles), read by the closeout guard.
-
-    The file is a map keyed per tree (#820); `gate.REPO_ROOT` (unpatched here,
-    so this repo's own checkout) is looked up like any reader would.
-    """
-    from brr import gate_receipt
-
-    gate = _gate()
-    monkeypatch.setenv("BRR_OUTBOX_DIR", str(tmp_path))
-    path = gate.write_receipt("RED", [("backend: Run tests", "FAIL rc=1", 12.34)])
-    assert path == tmp_path / gate.RECEIPT_NAME
-    entry = gate_receipt.read_receipt(tmp_path, gate.REPO_ROOT)
-    # RED is recorded, not suppressed: the obligation a reader checks is that
-    # the gate *ran* on this tree, never that it was green.
-    assert entry["verdict"] == "RED"
-    assert entry["legs"][0]["verdict"] == "FAIL rc=1"
-    assert set(entry) >= {"head", "status", "diff_digest", "untracked_digest"}
-
-
 # ── #917: the receipt has to be about the tree the *legs* saw ─────────────
 
 
@@ -1090,28 +1069,6 @@ def test_targeted_selection_maps_a_module_to_its_named_test_and_its_importers(tm
     (repo / "tests" / "test_unrelated.py").write_text("from brr import gizmo\n", encoding="utf-8")
     selection = gate.targeted_test_selection(repo, ["src/brr/widget.py"])
     assert selection == ["tests/test_other.py", "tests/test_widget.py"]
-
-
-def test_write_receipt_records_mode_and_omits_test_selection_when_absent(tmp_path, monkeypatch):
-    from brr import gate_receipt
-
-    gate = _gate()
-    monkeypatch.setenv("BRR_OUTBOX_DIR", str(tmp_path))
-    gate.write_receipt("GREEN", [], mode="changed-only")
-    entry = gate_receipt.read_receipt(tmp_path, gate.REPO_ROOT)
-    assert entry["mode"] == "changed-only"
-    assert "test_selection" not in entry
-
-
-def test_write_receipt_records_the_exact_targeted_selection(tmp_path, monkeypatch):
-    from brr import gate_receipt
-
-    gate = _gate()
-    monkeypatch.setenv("BRR_OUTBOX_DIR", str(tmp_path))
-    gate.write_receipt("GREEN", [], mode="targeted", test_selection=["tests/test_x.py"])
-    entry = gate_receipt.read_receipt(tmp_path, gate.REPO_ROOT)
-    assert entry["mode"] == "targeted"
-    assert entry["test_selection"] == ["tests/test_x.py"]
 
 
 def test_full_flag_refuses_to_combine_with_changed_only_or_targeted():

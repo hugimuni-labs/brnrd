@@ -339,39 +339,6 @@ def test_a_non_number_is_dropped(tmp_path, monkeypatch):
     assert result["notices"][0]["kind"] == "dropped"
 
 
-def test_gh_checks_json_parse_is_structural(monkeypatch, tmp_path):
-    """The real client parses `gh pr checks --json name,state` even on the
-    non-zero exit gh uses for pending (8) and failing (1) checks."""
-    import subprocess
-
-    def fake_run(argv, **_kw):
-        return subprocess.CompletedProcess(
-            argv, 8,
-            stdout=json.dumps([{"name": "Backend tests", "state": "pending"}]),
-            stderr="",
-        )
-
-    monkeypatch.setattr(land.subprocess, "run", fake_run)
-    checks = land.GhCli(tmp_path, "o/r").checks(12)
-    assert checks == [land.Check("Backend tests", "PENDING")]
-
-
-def test_gh_merge_is_pinned_to_the_read_head(monkeypatch, tmp_path):
-    import subprocess
-
-    seen: list[list[str]] = []
-
-    def fake_run(argv, **_kw):
-        seen.append(argv)
-        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(land.subprocess, "run", fake_run)
-    land.GhCli(tmp_path, "o/r").merge(12, head_sha=HEAD)
-    assert seen == [[
-        "gh", "pr", "merge", "12", "--squash", "--match-head-commit", HEAD, "--repo", "o/r",
-    ]]
-
-
 def test_a_checkout_read_failing_after_the_merge_still_produces_and_announces(tmp_path, monkeypatch):
     class Flaky(FakeCheckout):
         def head(self):

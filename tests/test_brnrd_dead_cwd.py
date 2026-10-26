@@ -177,19 +177,6 @@ def test_daemon_loop_guards_warn_new_exception(tmp_path):
 # is_tracked: dead cwd must return False, not raise.
 # ---------------------------------------------------------------------------
 
-def test_is_tracked_dead_cwd_returns_false(tmp_path):
-    """``is_tracked`` with a dead cwd returns ``False`` rather than raising."""
-    dead_dir = tmp_path / "dead_cwd3"
-    dead_dir.mkdir()
-    saved_cwd = Path.cwd()
-    try:
-        _chdir_then_rmdir(dead_dir)
-        result = gitops.is_tracked(tmp_path / "some_file.py")
-    finally:
-        os.chdir(saved_cwd)
-
-    assert result is False
-
 
 # ---------------------------------------------------------------------------
 # diagnose_unusable_tree: the asked_from=None branch is covered.

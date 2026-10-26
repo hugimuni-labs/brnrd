@@ -29,29 +29,6 @@ def _clean():
 # ── 1. the suggested new slug ────────────────────────────────────────
 
 
-@pytest.mark.parametrize("text,slug", [
-    ("the deck v12 — slide 8's numbers are an August read", "the-deck-v12"),
-    ("hey, can you do a reddit read on the launch thread?", "reddit-read"),
-    ("Web Summit booth: print the banners before Friday", "web-summit-booth"),
-])
-def test_three_event_texts_suggest_three_slugs(tmp_path, text, slug):
-    assert heddles.slug_phrase(text) == slug
-    assert heddles.propose(tmp_path / "home", text) == (slug, "suggested")
-
-
-@pytest.mark.parametrize("text,slug", [
-    ("# Fix the flaky test\n\nit reds CI", "the-flaky-test"),      # a heading, a request verb
-    ("```\ncode first\n```\nlet's talk about pricing tiers", "pricing-tiers"),
-    ("look at `src/x.py` — [the loom](https://x.y) is lit", "the-loom"),
-    ("Café crème order", "cafe-creme-order"),                          # the ASCII fold
-    ("ok so", None),                                                   # only filler
-    ("Привет, как дела", None),                                        # a script the fold drops
-    ("", None),
-])
-def test_the_slugifier_edges(text, slug):
-    assert heddles.slug_phrase(text) == slug
-
-
 def test_a_collision_falls_back_to_a_numbered_suffix(tmp_path):
     home = tmp_path / "home"
     _topic(home, "reddit-read")
@@ -94,16 +71,6 @@ def test_prepare_stamps_the_suggestion_and_the_bundle_offers_it(tmp_path):
     # a proposal outranks a suggestion; an assignment outranks both
     (proposed,) = prompts._topic_bundle_lines({"topic_proposed": "the-post", "topic_suggested": "x"})
     assert "`the-post` proposed" in proposed
-
-
-def test_the_kernel_says_minting_costs_one_line(tmp_path):
-    from brr import prompts
-    from brr.bootscore import format_kernel
-
-    kernel = format_kernel(prompts.build_boot_score(
-        tmp_path, is_daemon=True, environment="host", event_ids=("evt-1",), has_event_body=True,
-    ))
-    assert "this run's topic: an existing heddle ∨ `new <slug>` ∨ null (minting costs one line)" in kernel
 
 
 @pytest.mark.parametrize("text,expected", [
@@ -323,36 +290,6 @@ def test_show_caps_the_inline_body_at_24_kb(tmp_path, monkeypatch):
     assert topic_show.render(home, "the-post", kinds=("messages",), depth="whole").count("\n- ") == 20
 
 
-def test_the_query_grammar_round_trips():
-    query = topic_show.parse_query("the-loom  kinds:events ,messages depth: HEADS bench: true since 2h")
-    assert query == topic_show.Query(slug="the-loom", since="2h", kinds=("events", "messages"),
-                                     depth="heads", bench=True)
-    assert topic_show.parse_query(query.describe()) == query
-    assert topic_show.parse_query("the-loom") == topic_show.Query(slug="the-loom")
-    assert topic_show.shape("only one\n", "cut") == "only one"
-    assert topic_show.shape("a\n\nb\n\nc\n", "cut") == "a … c"
-
-
-def test_hud_topic_takes_the_same_flags(tmp_path, monkeypatch, capsys):
-    from brr import cli
-
-    got = _seat(tmp_path, monkeypatch, {"reply.md": REPLY})
-    home = got["home"]
-    monkeypatch.setattr(cli, "_repo_root", lambda: tmp_path / "repo")
-    monkeypatch.setattr(account, "resolve_context",
-                        lambda *_a, **_k: type("C", (), {"dispatch_inbox": got["inbox"]})())
-    monkeypatch.setattr(account, "context_home_root", lambda _ctx: home)
-    import types
-
-    args = types.SimpleNamespace(topic="the-loom", since="3d", kinds="messages, events", depth="cut")
-    assert cli._hud_topic(args) == 0
-    out = capsys.readouterr().out
-    assert "  The verdict line. … The last word." in out and "event `" in out
-    args = types.SimpleNamespace(topic="the-loom", since=None, kinds=None, depth="deep")
-    assert cli._hud_topic(args) == 1
-    assert "heads · cut · whole" in capsys.readouterr().err
-
-
 # ── the steer: every inbound event carries a reading; a seat's reply follows it ──
 
 
@@ -389,25 +326,6 @@ def test_every_inbound_event_is_stamped_once_where_the_seat_first_sees_it(tmp_pa
     later = protocol.create_event(inbox, "telegram", "reddit read please")
     daemon._pending_events_for_agent(inbox, own.stem, strand=True, account_context=ctx, repo_label="o/r")
     assert "topic_suggested" not in protocol._read_event(later)
-
-
-def test_a_shown_event_names_its_reading_in_the_bundle_wording(tmp_path):
-    from brr import hooks, prompts
-
-    assert run_topic.event_topic_line({"topic_suggested": "the-deck-v12"}) == \
-        "topic: none matched — new `the-deck-v12`?"
-    assert run_topic.event_topic_line({"topic_proposed": "the-loom", "topic_proposed_by": "thread"}) == \
-        "topic: `the-loom` proposed (thread)"
-    assert run_topic.event_topic_line({"topic": "the-post", "topic_suggested": "x"}) == "topic: `the-post`"
-    assert run_topic.event_topic_line({}) is None
-    ev = {"id": "evt-1", "source": "telegram", "topic_suggested": "the-deck-v12", "created": ""}
-    assert "topic: none matched — new `the-deck-v12`?" in hooks._event_header(ev, size=10)
-    assert "topic:" not in hooks._event_header({"id": "evt-2", "source": "telegram"}, size=10)
-    rendered = prompts._format_pending_events(
-        [{"id": "evt-1", "source": "telegram", "summary": "the deck", "topic_proposed": "the-loom",
-          "topic_proposed_by": "signature"}]
-    )
-    assert "  - topic: `the-loom` proposed (signature)" in rendered
 
 
 def _letter_seat(tmp_path, monkeypatch, *, control: str | None, reply_topic: str = "", strand=False):

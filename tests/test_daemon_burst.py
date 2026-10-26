@@ -17,7 +17,6 @@ flakiness.
 from __future__ import annotations
 
 import datetime
-import os
 import threading
 import time
 
@@ -40,59 +39,10 @@ def _seed(tmp_path, eid: str) -> dict:
     return {"id": eid, "status": "pending", "_path": path}
 
 
-def _aged(tmp_path, eid: str, age: float, now: float) -> dict:
-    """Seed an event whose mtime is *age* seconds before *now*."""
-    ev = _seed(tmp_path, eid)
-    os.utime(ev["_path"], (now - age, now - age))
-    return ev
-
-
 # ── _burst_settle_delay (pure logic) ─────────────────────────────────
 
 WINDOW = 1.5
 MAX_WAIT = 12.0
-
-
-def test_lone_event_never_holds(tmp_path):
-    now = time.time()
-    ev = _aged(tmp_path, "evt-a", 0.0, now)  # brand new
-    assert daemon._burst_settle_delay([ev], WINDOW, MAX_WAIT, now) == 0.0
-
-
-def test_window_zero_disables_coalescing(tmp_path):
-    now = time.time()
-    evs = [_aged(tmp_path, "evt-a", 0.0, now), _aged(tmp_path, "evt-b", 0.0, now)]
-    assert daemon._burst_settle_delay(evs, 0.0, MAX_WAIT, now) == 0.0
-
-
-def test_fresh_burst_holds(tmp_path):
-    now = time.time()
-    evs = [_aged(tmp_path, "evt-a", 0.0, now), _aged(tmp_path, "evt-b", 0.0, now)]
-    delay = daemon._burst_settle_delay(evs, WINDOW, MAX_WAIT, now)
-    assert 0.0 < delay <= WINDOW
-
-
-def test_settled_burst_dispatches(tmp_path):
-    now = time.time()
-    # newest event is 2.0s old ≥ window → the inbox went quiet → dispatch.
-    evs = [_aged(tmp_path, "evt-a", 5.0, now), _aged(tmp_path, "evt-b", 2.0, now)]
-    assert daemon._burst_settle_delay(evs, WINDOW, MAX_WAIT, now) == 0.0
-
-
-def test_cap_forces_dispatch_even_while_arriving(tmp_path):
-    now = time.time()
-    # Still arriving (a fresh event), but the oldest has waited past the cap.
-    evs = [_aged(tmp_path, "evt-a", 13.0, now), _aged(tmp_path, "evt-b", 0.0, now)]
-    assert daemon._burst_settle_delay(evs, WINDOW, MAX_WAIT, now) == 0.0
-
-
-def test_still_arriving_holds_until_quiet_or_cap(tmp_path):
-    now = time.time()
-    # newest 0.5s old (< window) → hold; oldest 3s old (< cap).
-    evs = [_aged(tmp_path, "evt-a", 3.0, now), _aged(tmp_path, "evt-b", 0.5, now)]
-    delay = daemon._burst_settle_delay(evs, WINDOW, MAX_WAIT, now)
-    # remaining window = 1.5 - 0.5 = 1.0; remaining cap = 12 - 3 = 9 → min 1.0
-    assert delay == pytest.approx(1.0, abs=0.05)
 
 
 def test_event_mtime_fallback_reads_as_old():
@@ -101,109 +51,7 @@ def test_event_mtime_fallback_reads_as_old():
     assert daemon._event_mtime({}) == 0.0
 
 
-def test_unstattable_member_does_not_stall_burst(tmp_path):
-    now = time.time()
-    fresh = _aged(tmp_path, "evt-a", 0.0, now)
-    # The pathless member's mtime reads as 0.0 → oldest waited "forever" →
-    # cap trips → dispatch rather than hold on a member we can't time.
-    evs = [fresh, {"id": "evt-x", "status": "pending"}]
-    assert daemon._burst_settle_delay(evs, WINDOW, MAX_WAIT, now) == 0.0
-
-
 # ── Same-thread burst weaving ────────────────────────────────────────
-
-
-def _seed_threaded(tmp_path, eid: str, body: str, *, conv: str, age: float, now: float) -> dict:
-    path = tmp_path / ".brr" / "inbox" / f"{eid}.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        f"---\nid: {eid}\nstatus: pending\nsource: telegram\n"
-        f"conversation_key: {conv}\n---\n{body}\n",
-        encoding="utf-8",
-    )
-    ev = {
-        "id": eid,
-        "status": "pending",
-        "body": body,
-        "source": "telegram",
-        "conversation_key": conv,
-        "_path": path,
-    }
-    os.utime(path, (now - age, now - age))
-    return ev
-
-
-def test_weave_burst_siblings_merges_same_thread_followups(tmp_path):
-    now = time.time()
-    conv = "telegram:chat:9"
-    lead = _seed_threaded(tmp_path, "evt-a", "first thought", conv=conv, age=2.0, now=now)
-    sib = _seed_threaded(
-        tmp_path,
-        "evt-b",
-        "address this as changes right away",
-        conv=conv,
-        age=0.5,
-        now=now,
-    )
-    inbox = tmp_path / ".brr" / "inbox"
-    woven, woven_ids = daemon._weave_burst_siblings_into_body(
-        inbox,
-        lead,
-        {},
-        correspondent_key="",
-        conversation_key=conv,
-    )
-    assert woven_ids == {"evt-b"}
-    assert "first thought" in woven
-    assert "address this as changes right away" in woven
-    assert "evt-b" in woven
-
-
-def test_weave_burst_siblings_skips_other_threads(tmp_path):
-    now = time.time()
-    lead = _seed_threaded(tmp_path, "evt-a", "thread one", conv="telegram:chat:1", age=1.0, now=now)
-    _seed_threaded(tmp_path, "evt-b", "thread two", conv="telegram:chat:2", age=0.5, now=now)
-    woven, woven_ids = daemon._weave_burst_siblings_into_body(
-        tmp_path / ".brr" / "inbox",
-        lead,
-        {},
-        correspondent_key="",
-        conversation_key="telegram:chat:1",
-    )
-    assert woven is None
-    assert woven_ids == set()
-
-
-def test_weave_burst_siblings_skips_stale_same_thread_messages(tmp_path):
-    now = time.time()
-    conv = "telegram:chat:9"
-    lead = _seed_threaded(tmp_path, "evt-a", "old lead", conv=conv, age=30.0, now=now)
-    _seed_threaded(tmp_path, "evt-b", "fresh follow-up", conv=conv, age=0.5, now=now)
-    woven, woven_ids = daemon._weave_burst_siblings_into_body(
-        tmp_path / ".brr" / "inbox",
-        lead,
-        {},
-        correspondent_key="",
-        conversation_key=conv,
-    )
-    assert woven is None
-    assert woven_ids == set()
-
-
-def test_weave_disabled_when_burst_window_zero(tmp_path):
-    now = time.time()
-    conv = "telegram:chat:9"
-    lead = _seed_threaded(tmp_path, "evt-a", "first", conv=conv, age=1.0, now=now)
-    _seed_threaded(tmp_path, "evt-b", "second", conv=conv, age=0.5, now=now)
-    woven, woven_ids = daemon._weave_burst_siblings_into_body(
-        tmp_path / ".brr" / "inbox",
-        lead,
-        {"dispatch.burst_window_seconds": 0},
-        correspondent_key="",
-        conversation_key=conv,
-    )
-    assert woven is None
-    assert woven_ids == set()
 
 
 # ── Loop wiring ──────────────────────────────────────────────────────

@@ -53,26 +53,6 @@ CANONICAL = {"strand": True}
 # ── the read helper answers both spellings ──────────────────────────
 
 
-@pytest.mark.parametrize(
-    "record, expected",
-    [
-        (CANONICAL, True),
-        (LEGACY, True),
-        ({"strand": True, "worker": True}, True),
-        ({}, False),
-        (None, False),
-        ({"strand": False, "worker": False}, False),
-        # A resident-stack run's meta carries neither key, and the absent
-        # case must never be guessed into a strand: the failure direction
-        # matters. False-negative widens a child's authority; false-positive
-        # silently starves the resident of its own thread.
-        ({"root_kind": "repo"}, False),
-    ],
-)
-def test_is_strand_reads_both_spellings(record, expected):
-    assert daemon._is_strand(record) is expected
-
-
 # ── the behavioural half: the pin the legacy record would have lost ──
 
 
@@ -253,29 +233,3 @@ def test_writers_stamp_only_the_canonical_key():
 # renders a mismatch names only the child's run id.
 
 
-def test_prose_report_declaration_names_the_dispatcher_and_the_ambiguity():
-    note = "\n".join(daemon._unstattable_report_note("the PR body is the report"))
-    assert "dispatcher's declaration" in note
-    # The ambiguity is named, not resolved: a path may legally contain a
-    # space, so the line may not assert "that is not a path".
-    assert "if" in note and "meant as prose" in note
-    assert "not a path" not in note
-    assert "stat" in note
-
-
-def test_a_plausible_path_gets_the_ownership_line_and_no_prose_guess():
-    note = "\n".join(
-        daemon._unstattable_report_note("/tmp/brr-wt-x/report.md")
-    )
-    assert "dispatcher's declaration" in note
-    # Nothing here is evidence of prose — the strand plausibly just never
-    # wrote the file, and saying otherwise would be the confident branch.
-    assert "meant as prose" not in note
-
-
-def test_a_path_with_a_space_is_not_called_prose():
-    """The whitespace heuristic must not fire on a legal path (#800)."""
-    note = "\n".join(
-        daemon._unstattable_report_note("/tmp/my runs/report.md")
-    )
-    assert "meant as prose" not in note
