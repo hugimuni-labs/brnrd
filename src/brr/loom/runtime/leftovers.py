@@ -68,7 +68,7 @@ def leftovers(home, strand: str, only: str | None = None) -> tuple[Leftover, ...
                 return True
         return False
 
-    declared = dict(repos(seat_text(home, thread))) if thread else {}
+    declared = dict(repos(seat_text(home, thread), home)) if thread else {}
     result = []
     for checkout in sorted(room.iterdir()):
         if not (checkout / '.git').exists() or only is not None and checkout.name != only:

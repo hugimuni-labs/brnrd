@@ -25,6 +25,7 @@ VERBS = {
     "attention": ("verbs_loom", "_attention"),
     "init": ("verbs_self", "cmd_init"),
     "wake": ("verbs_self", "cmd_wake"),
+    "lib": ("verbs_self", "cmd_lib"),
     "send-self": ("verbs_merge", "main"),
     "publish": ("publish", "main"),
     "reap": ("reap", "main"),

@@ -99,18 +99,31 @@ def repo_dirname(source: str) -> str:
     return name
 
 
-def repos(text: str) -> list[tuple[str, str]]:
+def repos(text: str, home=None) -> list[tuple[str, str]]:
     """``repo:`` lines of a seat: ``(directory name, source)`` in seat order.
 
+    A bare name is a library entry with a source (``library/<name>.md``),
+    resolved through ``home``; with no home it is checked as a name only.
     Two lines whose sources name the same directory are refused. ``body:`` and
     ``watch:`` are ignored here.
     """
     found: list[tuple[str, str]] = []
     seen: set[str] = set()
+    shelf = None
     for key, value in _entries(text):
         if key != "repo":
             continue
-        name = repo_dirname(value)
+        if _NAME.fullmatch(value) and value != "self":
+            name = value
+            if home is not None:
+                if shelf is None:
+                    from .library import sources
+                    shelf = sources(home)
+                if name not in shelf:
+                    raise RepoSeatError(f"repo {name!r}: no library/{name}.md with a source on main")
+                value = shelf[name]
+        else:
+            name = repo_dirname(value)
         if name in seen:
             raise RepoSeatError(f"repo name {name!r} is declared twice")
         seen.add(name)

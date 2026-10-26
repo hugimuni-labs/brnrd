@@ -87,6 +87,8 @@ REGISTRY = (
     _kind("loom.degraded",     "loom",    "install step error where since",                   "loom",        "machine"),
     _kind("loom.recovered",    "loom",    "install step since count last",                    "loom",        "machine"),
     _kind("loom.moved",        "loom",    "install from to merges started",                   "loom",        "global"),
+    _kind("library.problem",   "loom",    "install name problem text since",                  "loom",        "machine"),
+    _kind("library.cleared",   "loom",    "install name problem",                             "loom",        "machine"),
 )
 
 KINDS = {row.kind: row for row in REGISTRY}
