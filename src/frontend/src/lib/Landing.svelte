@@ -5,7 +5,6 @@
 	import { isComplete as legalNoticeIsComplete } from '$lib/legalNotice';
 	import { typeReveal } from '$lib/transitions';
 	import WinkWordmark from '$lib/WinkWordmark.svelte';
-	import HeroExchange from '$lib/HeroExchange.svelte';
 	import ShelfIcon from '$lib/ShelfIcon.svelte';
 	import {
 		REACH_GROUPS,
@@ -35,7 +34,10 @@
 
 	let signinHref = $derived(resolveSigninHref(loginContext, resolve('/login')));
 
-	const HERO_HEADLINE = 'assign the work. get back a receipt.';
+	// Pick (1) of the three drafts sent to Arseni; his choice replaces it.
+	const HERO_HEADLINE = 'many tracks of work, all moving. follow each one where it happens.';
+	// Served by the app from docs/public/install.sh (spa.py, mount_installer).
+	const INSTALL_LINE = 'curl -fsSL https://brnrd.dev/install | sh';
 
 	interface DeckStep {
 		index: string;
@@ -121,48 +123,37 @@
 				{HERO_HEADLINE}
 			</h1>
 			<p class="mt-5 max-w-2xl text-base leading-relaxed text-stone-300 sm:text-lg">
-				A co-maintainer that lives on your machine: survives reboots, remembers who it is, works
-				your Claude, Codex, Grok, and Mistral Vibe subscriptions, and leaves receipts — a commit, a
-				pull request, or a reply you can actually check.
-			</p>
-			<p class="mt-2 max-w-2xl text-xs leading-relaxed text-ink-mute">
-				Needs a machine that's on — a laptop that doesn't sleep, a Mac mini, a home server, or a
-				<a
-					class="underline underline-offset-2 hover:text-stone-300"
-					href={`${DOCS_URL}guides/vps-install/`}
-					rel="external">$5 VPS</a
-				> (about ten minutes to set up).
+				A resident on your machine keeps a thread per topic, works each one with your agent CLI, and
+				lands every change as a commit or a pull request you can check.
 			</p>
 
-			<div class="mt-6 flex flex-wrap items-center gap-3">
+			<div class="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
+				<pre
+					class="panel overflow-x-auto px-4 py-2.5 font-mono text-sm text-stone-200"
+					aria-label="install brnrd"><code
+						><span class="text-ink-mute select-none">$ </span>{INSTALL_LINE}</code
+					></pre>
 				<a
-					href={resolve('/new?demo')}
-					class="border border-amber-600 bg-amber-500/10 px-4 py-2.5 font-mono text-[12px] font-semibold tracking-wide text-amber-200 uppercase shadow-[0_0_20px_rgba(217,164,65,0.15)] hover:bg-amber-500/20"
-					>▶ explore the demo</a
-				>
-				<a
-					href="#install"
-					class="border border-amber-700 bg-amber-950/40 px-3 py-2 font-mono text-[12px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70"
-					>install brnrd</a
-				>
-				<a
-					href={DOCS_URL}
+					href={signinHref}
 					rel="external"
-					class="font-mono text-[12px] tracking-wide text-ink-quiet uppercase underline decoration-stone-700 underline-offset-4 hover:text-stone-300"
-					>read the docs →</a
+					class="border border-amber-700 bg-amber-950/40 px-3 py-2 text-center font-mono text-[12px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70"
+					>sign in</a
 				>
 			</div>
-			<p class="mt-3 font-mono text-[10px] tracking-wide text-ink-mute uppercase">
-				a scripted demo with sample data · sign in to watch your own runs live
-			</p>
-			<p class="mt-2 font-mono text-[10px] tracking-wide text-ink-mute uppercase">
-				open source · local execution · no brnrd account required for the local engine
-			</p>
 		</div>
 
-		<div class="mt-8 max-w-3xl">
-			<HeroExchange />
-		</div>
+		<figure class="mt-8">
+			<img
+				src="/board.jpg"
+				width="1440"
+				height="745"
+				alt="brnrd's own board: one column per thread, each showing what its strand is doing now"
+				class="panel h-auto w-full"
+			/>
+			<figcaption class="mt-2 font-mono text-[10px] tracking-wide text-ink-mute uppercase">
+				brnrd's own board, building brnrd
+			</figcaption>
+		</figure>
 	</section>
 
 	<section
@@ -435,9 +426,8 @@
 					install your resident
 				</h2>
 				<p class="mt-3 text-sm leading-relaxed text-stone-400">
-					The npm package installs the same brnrd CLI as the uv and pipx routes. Run it from a
-					repository to start; the guided setup picks up that project context and walks you through
-					the rest.
+					One line puts the brnrd CLI on your PATH; the guided setup walks you through the rest. Run
+					it from a repository and setup picks up that project.
 				</p>
 				<a
 					class="mt-4 inline-flex font-mono text-[11px] tracking-wide text-sky-400 underline underline-offset-2"
@@ -448,7 +438,7 @@
 			<div class="panel p-4" aria-label="terminal install commands">
 				<p class="font-mono text-[10px] tracking-wide text-ink-mute uppercase">terminal</p>
 				<pre class="mt-3 overflow-x-auto font-mono text-sm leading-7 text-stone-300"><code
-						><span class="text-ink-mute">$</span> npm install -g brnrd
+						><span class="text-ink-mute">$</span> {INSTALL_LINE}
 <span class="text-ink-mute">$</span> brnrd</code
 					></pre>
 			</div>

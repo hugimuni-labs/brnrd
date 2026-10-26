@@ -48,29 +48,19 @@ async function renderLanding(): Promise<string> {
 
 after(() => rmSync(generated, { force: true }));
 
-// The 2026-09-06 redesign's whole point (maintainer ask: a "real
-// outcome-first hero", not identity-then-topology). Pin the headline so a
-// future edit can't quietly drift back to leading on what brnrd *is* rather
-// than what a visitor gets back.
-test('the hero leads with an outcome, not identity', async () => {
+// The fold is headline, install line, sign in, and the proof (threads/landing
+// in brnrd-self, phase 2). The proof is brnrd's own board, not a scripted
+// exchange: the hook is several tracks of work moving at once, each one
+// followable. The 2026-09-06 hero's demo button left with the exchange.
+test('the fold is the install line, sign in, and the board', async () => {
 	const html = await renderLanding();
-	ok(html.includes('assign the work. get back a receipt.'));
-});
-
-// "Add visible 'Explore the live demo' leading to existing /new (inspect it;
-// label demo honestly)": the target is `/new?demo` specifically, not bare
-// `/new` — bare `/new` shows "sign in to see the room" to an anonymous
-// visitor (see routes/new/+page.svelte), which would make the landing's own
-// CTA a dead end for exactly the reader it is aimed at. The disclosure line
-// keeps the label from over-promising a live feed of the visitor's own runs.
-test('the demo CTA targets the honest public route and discloses what it shows', async () => {
-	const html = await renderLanding();
-	ok(html.includes('href="/new?demo"'), 'links to the demo-flagged route, not bare /new');
-	ok(html.includes('explore the demo'));
 	ok(
-		html.includes('scripted demo with sample data'),
-		'discloses that the anonymous demo is a replay, not a live feed of the visitor'
+		html.includes('curl -fsSL https://brnrd.dev/install | sh'),
+		'the install line pipes the served installer'
 	);
+	ok(html.includes('>sign in</a'));
+	ok(html.includes('src="/board.jpg"'), 'the proof is the board shot');
+	ok(!html.includes('npm install -g brnrd'), 'no npm route the README does not document');
 });
 
 // The command-deck strip: three real beats (assign / work / receipt), not an
@@ -87,7 +77,7 @@ test('the how-work-moves strip renders all three real beats', async () => {
 // redesign — this pins that the redesign didn't quietly drop any of them.
 test('install, reach, and legal surfaces still render', async () => {
 	const html = await renderLanding();
-	ok(html.includes('npm install -g brnrd'));
+	ok(html.includes('id="install"'));
 	ok(html.includes('same platforms, different topology'));
 	ok(html.includes('href="/terms"'));
 	ok(html.includes('href="/privacy"'));
