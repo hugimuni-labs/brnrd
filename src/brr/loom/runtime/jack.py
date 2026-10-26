@@ -480,8 +480,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         hook = _hook_event(stdin_text)
         # Past its allocation a strand is told at every boundary, not once.
         over = next((line for line in text.splitlines() if line.startswith("budget: ")), "")
-        left = _left(room, False).rstrip("
-")
+        left = _left(room, False).rstrip("\n")
         if not parsed.ids and not settled_changed and not opened_changed and not plan_changed \
                 and not face_changed and not moved_changed:
             if not weight and not paused and not over and not guarded and not left:
