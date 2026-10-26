@@ -722,7 +722,7 @@ def default_loom_part(clone: Path, thread: str) -> str:
     lines.append(f"thread: {thread}")
     lines.append(
         "letters arrive at your tool boundaries. "
-        "answer with `python -m brr.loom.runtime send`. "
+        "answer with `brnrd runtime send`. "
         "when you are done, stop; the jack holds you while letters may come."
     )
     return "\n".join(lines) + "\n"
