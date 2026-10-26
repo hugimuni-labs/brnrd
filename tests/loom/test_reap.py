@@ -248,6 +248,31 @@ def test_a_dead_strands_clean_clone_goes_and_self_and_port_stay(tmp_path):
     assert len([f for f in read_facts(home) if f.kind == "room.reaped"]) == 1
 
 
+def test_a_link_into_a_persons_folder_is_never_a_clone_or_loose(tmp_path):
+    home = Home(tmp_path / "home", install="0001")
+    init_self(home.root, person="test")
+    _project(tmp_path, home, [("0001-old", 3), ("0001-latest", 3)])
+    kb = tmp_path / "kb"
+    kb.mkdir()
+    git(kb, "init", "-q")
+    (kb / "notes.md").write_text("his, untracked, nowhere else")
+    room = home.room("0001-old")
+    (room / "lib").mkdir()
+    (room / "lib" / "kb").symlink_to(kb)
+    (room / "kb").symlink_to(kb)
+    assert reap.clones(room) == [room / "widget"]
+    assert reap.loose(room) == []
+    assert set(reap.heads(room)) == {"self", "widget"}
+
+    lines = []
+    reap.Reaper(home, lambda _home, line: lines.append(line)).reap()
+    assert not (room / "widget").exists()
+    assert list(_reaped(home)) == ["rooms/0001-old/widget"]
+    assert (kb / ".git").is_dir() and (kb / "notes.md").read_text() == "his, untracked, nowhere else"
+    assert (room / "lib" / "kb").is_symlink() and (room / "kb").is_symlink()
+    assert not [f for f in read_facts(home) if f.kind == "letter" and "rooms are kept" in str(f.data)]
+
+
 def test_a_clone_fact_left_by_a_crash_mid_delete_is_finished(tmp_path):
     home = Home(tmp_path / "home", install="0001")
     init_self(home.root, person="test")

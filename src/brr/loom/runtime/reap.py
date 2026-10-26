@@ -46,7 +46,8 @@ LOG_KEEP = 3
 FLOOR_BYTES = 5 * 1024 ** 3
 FLOOR_SHARE = 0.05
 # What the loom and the harness put at a room's root; checkouts are read by leftovers.
-PLUMBING = {"self", "port", ".body", ".starting", ".claude", ".pytest-tmp", "delegates"}
+# lib/ holds links into a person's own folders; nothing here follows a link.
+PLUMBING = {"self", "port", ".body", ".starting", ".claude", ".pytest-tmp", "delegates", "lib"}
 # Reasons only a body can settle; the rest are the loom's or time's.
 BODY_REASONS = ("loose files", "leftovers in", "a stash in")
 KEPT = "loom/reap-kept.json"
@@ -75,7 +76,7 @@ def heads(path: Path) -> dict[str, dict[str, str]]:
     """Every checkout's branch tips under ``path``, so the fact says what was there."""
     from .selfrepo import git
     found = {}
-    for checkout in [path, *sorted(p for p in path.iterdir() if p.is_dir())]:
+    for checkout in [path, *sorted(p for p in path.iterdir() if p.is_dir() and not p.is_symlink())]:
         if not (checkout / ".git").exists():
             continue
         out = git(checkout, "for-each-ref", "--format=%(refname:short) %(objectname)",
@@ -246,7 +247,8 @@ def clone_kept(home, facts, strand: str, name: str, now: float, working: set[str
 
 
 def clones(room: Path) -> list[Path]:
-    return sorted(p for p in room.iterdir() if p.name not in PLUMBING and (p / ".git").exists())
+    return sorted(p for p in room.iterdir() if p.name not in PLUMBING and not p.is_symlink()
+                  and (p / ".git").exists())
 
 
 class Reaper:
