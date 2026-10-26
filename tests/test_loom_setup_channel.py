@@ -56,7 +56,7 @@ def test_fake_live_pair_saves_named_identity_and_keeps_unrelated_letters(tmp_pat
     assert load_config(tmp_path).connectors == ('desk=fake',)
     assert (tmp_path / 'self/people/ada/channels.toml').read_text() == 'channels = ["desk:42"]\n'
     sent = [json.loads(r) for r in (tmp_path / 'loom/channel-fake.jsonl').read_text().splitlines()]
-    assert sent[0]['text'] == 'heard you as 42'
+    assert sent[0]['text'].startswith('Paired ✓')
     assert (state / 'in/other.md').exists() and not (state / 'in/code.md').exists()
     assert connector.person_dm(home, 'channel:desk/42') == 'person:ada'
     with pytest.raises(ValueError, match='already in use'):
@@ -85,7 +85,7 @@ def test_group_or_spoofed_identity_never_pairs(tmp_path):
 
 def test_relay_setup_explains_existing_account_pairing(tmp_path, capfd):
     home = home_at(tmp_path)
-    with pytest.raises(subprocess.CalledProcessError):
+    with pytest.raises(ValueError, match='Nothing was enabled'):
         setup_channel.pair(home, 'relay', 'cloud', 'ada', out=lambda _: None)
     assert 'brnrd account connect' in capfd.readouterr().err
     assert load_config(tmp_path).connectors == ()
@@ -235,3 +235,31 @@ def test_a_door_link_is_also_a_qr_code_a_phone_can_scan(tmp_path):
     with pytest.raises(TimeoutError):
         setup_channel.pair(Home(tmp_path, 'aaaa'), 'fake', 'desk2', 'ada', timeout=0, out=lines.append, qr=False)
     assert len(lines) == 1 and 'scan' not in lines[0] and 'https://t.me/ada_bot?start=' in lines[0]
+
+
+def test_guided_setup_asks_in_plain_words_and_derives_the_channel_name(tmp_path, monkeypatch, capsys):
+    import io
+    calls = []
+    monkeypatch.setattr(setup_channel, 'pair', lambda *a, **kw: calls.append(a))
+    monkeypatch.setattr(setup_channel, '_full_name', lambda: 'Sasha Petrova')
+    monkeypatch.setattr(setup_channel.shutil, 'which', lambda name: f'/bin/{name}')
+    monkeypatch.setattr('brr.loom.runtime.service._codex_model', lambda: 'gpt-5')
+    # Piped answers: codex, Enter for Telegram, Enter for the OS name.
+    monkeypatch.setattr('sys.stdin', io.StringIO('2\n\n\n'))
+    assert setup_channel.main(['--home', str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    for asked in ('Which AI should brnrd think with?', 'How do you want to talk to brnrd?',
+                  'What should brnrd call you?', 'brnrd will call you Sasha Petrova'):
+        assert asked in out
+    for gone in ('Channel kind', 'Name this channel', 'Your person name', 'fake'):
+        assert gone not in out
+    assert [a[1:] for a in calls] == [('telegram', 'telegram', 'sasha-petrova')]
+    assert load_config(tmp_path).body.startswith('codex')
+
+
+def test_a_second_channel_of_a_kind_gets_a_numbered_name(tmp_path):
+    home = home_at(tmp_path)
+    (tmp_path / 'loom').mkdir(exist_ok=True)
+    (tmp_path / 'loom/config.toml').write_text('connectors = ["telegram=telegram"]\n')
+    assert setup_channel._channel_name(Home(tmp_path), 'telegram') == 'telegram-2'
+    assert setup_channel._person_id('  Ada Lovelace! ') == 'ada-lovelace'
