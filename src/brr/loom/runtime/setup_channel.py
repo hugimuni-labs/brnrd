@@ -152,6 +152,43 @@ def pair(home, kind, name, person, *, timeout=180, out=print, qr=None):
                     shutil.rmtree(path.with_suffix('.d'))
 
 
+def first_letter(home, person, *, timeout=600, out=print, running=None, sleep=time.sleep):
+    """Wait until a letter from ``person`` is shown to a body: the proof the chat reaches brnrd.
+
+    Returns the strand that was shown it. Pairing proves the bot can talk;
+    only a body reading the next letter proves the loom hears that chat.
+    """
+    from .ledger import read_facts
+    from .service import _lock_held
+    sender = f'person:{person}'
+    before = {f.id for f in read_facts(home) if f.kind == 'letter'}
+    running = running or (lambda: _lock_held(home.root))
+    told = landed = False
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        facts = read_facts(home)
+        new = {str(f.data.get('id', f.id)) for f in facts
+               if f.kind == 'letter' and f.id not in before and f.data.get('from') == sender}
+        if new and not landed:
+            out(f"  {style.check()} brnrd got your message")
+            landed = True
+        for fact in facts:
+            if fact.kind == 'shown' and new & set(fact.data.get('ids') or ()):
+                strand = fact.data.get('strand')
+                out(f"  {style.check()} brnrd is reading it now ({strand}); the answer comes in that chat")
+                return strand
+        if not landed and not told and not running():
+            out(f"  {style.dot()} brnrd isn't running here yet: start it with `brnrd loom install`, "
+                "and your message will go through.")
+            told = True
+        sleep(.5)
+    if landed:
+        raise TimeoutError('Your message reached brnrd, but nothing has started reading it yet; '
+                           'see `brnrd loom status`.')
+    raise TimeoutError("No message from you reached brnrd; the chat is paired, so once "
+                       "`brnrd loom status` shows it running, write again.")
+
+
 #: What a person picks from, in plain words; a kind not named here shows by its own name.
 #: ``fake`` is a test pipe: reachable with ``--kind fake``, never offered.
 CHOICES = {
@@ -257,6 +294,8 @@ def main(argv=None):
     parser.add_argument('--name')
     parser.add_argument('--person')
     parser.add_argument('--timeout', type=float, default=180)
+    parser.add_argument('--wait', type=float, default=600,
+                        help='seconds to wait for your first message to reach brnrd; 0 skips')
     args = parser.parse_args(argv)
     # Setup creates a home; the read-only resolver normally requires one.
     target = args.home or os.environ.get("BRNRD_HOME") or Path.home() / "brnrd"
@@ -284,7 +323,10 @@ def main(argv=None):
         # A letter lands only on a thread on the self's main: seed it before pairing.
         init_self(home.root, person=person)
         _step(f'Connect {CHOICES.get(kind, kind).split(",")[0]}')
-        pair(home, kind, name, person, timeout=args.timeout)
+        paired = pair(home, kind, name, person, timeout=args.timeout)
+        if paired and args.wait > 0:
+            _step('Say hello: send brnrd any message in that chat')
+            first_letter(home, person, timeout=args.wait)
     except (ValueError, OSError, TimeoutError, subprocess.SubprocessError, SelfError) as exc:
         raise SystemExit(str(exc)) from None
     except KeyboardInterrupt:
