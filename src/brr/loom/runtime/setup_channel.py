@@ -18,6 +18,29 @@ from .port import _front, parse_frontmatter
 from .selfrepo import SelfError, init_self
 
 
+def _instructions(folder, env, code, timeout):
+    """Say which way pairing runs: the person writes first; nothing arrives before."""
+    door = None
+    if (folder / 'door').is_file():
+        # An optional door names the bot and a link that sends the code by itself.
+        try:
+            result = subprocess.run([str(folder / 'door'), code], env=env, stdout=subprocess.PIPE,
+                                    text=True, timeout=30)
+            door = json.loads(result.stdout) if result.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError, ValueError):
+            door = None
+        if not (isinstance(door, dict) and isinstance(door.get('name'), str)
+                and isinstance(door.get('link'), str)):
+            door = None
+    tail = (f"The bot does not write first; it answers 'heard you as <your id>'. "
+            f'Waiting up to {timeout:g}s.')
+    if door:
+        return (f"Open {door['link']} where you use the app and press Start: that sends "
+                f"your code. Or open {door['name']} yourself and send the code {code}. " + tail)
+    return (f'Open the chat with your bot yourself (press Start if the app asks) '
+            f'and send the code {code}. ' + tail)
+
+
 def pair(home, kind, name, person, *, timeout=180, out=print):
     if not all(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', v) for v in (name, person)):
         raise ValueError('Channel and person names use letters, digits, dots, dashes or underscores')
@@ -38,7 +61,7 @@ def pair(home, kind, name, person, *, timeout=180, out=print):
     drop.mkdir(parents=True, exist_ok=True)
     command = folder / 'in'
     child = subprocess.Popen([str(command), str(drop)], env=env) if command.is_file() else None
-    out(f'Send {code} to the bot now (waiting up to {timeout:g}s).')
+    out(_instructions(folder, env, code, timeout))
     deadline = time.monotonic() + timeout
     try:
         while time.monotonic() < deadline:
