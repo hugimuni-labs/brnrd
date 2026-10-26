@@ -58,6 +58,14 @@ class Inputs:
         self.names = instances(home)
 
     def step(self):
+        # Read at every step: a channel paired while the loom runs is heard
+        # without a restart, and one taken away stops being polled.
+        names = instances(self.home)
+        if names != self.names:
+            carries(self.home)
+            for name in [n for n in self.children if self.names.get(n) != names.get(n)]:
+                self._stop(self.children.pop(name)[0])
+            self.names = names
         for name, kind in self.names.items():
             folder = resolve(self.home, kind, "connectors")
             drop = self.home.root / "loom/connectors" / name / "state/in"
@@ -79,14 +87,18 @@ class Inputs:
 
     def close(self):
         for child, _due, _delay in self.children.values():
-            if child is not None and child.poll() is None:
-                child.terminate()
-                try:
-                    child.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    child.kill()
-                    child.wait()
+            self._stop(child)
         self.children.clear()
+
+    @staticmethod
+    def _stop(child):
+        if child is not None and child.poll() is None:
+            child.terminate()
+            try:
+                child.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
 
 
 def addressed(name, fm):

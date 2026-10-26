@@ -143,6 +143,13 @@ def pair(home, kind, name, person, *, timeout=180, out=print, qr=None):
             except subprocess.TimeoutExpired:
                 child.kill()
                 child.wait()
+        # The code said twice (the start link, then typed) leaves a second
+        # copy; once the loom polls this channel it would be a stray letter.
+        for path in drop.glob('*.md'):
+            if not path.is_symlink() and parse_frontmatter(path.read_text()).get('body', '').strip() in (code, '/start ' + code):
+                path.unlink()
+                if path.with_suffix('.d').exists():
+                    shutil.rmtree(path.with_suffix('.d'))
 
 
 #: What a person picks from, in plain words; a kind not named here shows by its own name.
