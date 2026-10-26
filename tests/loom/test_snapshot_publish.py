@@ -83,7 +83,12 @@ def fuel(root, left):
 
 
 def reporting_body(root):
-    """Notes what it is owed; on web it also reports the PR to brnrd."""
+    """Notes what it is owed; on web it also reports the PR to brnrd, once.
+
+    Only a person's letter gets the report: the fake adapter has no policy on
+    brnrd, so the report bounces back as a loom notice, and reporting again on
+    that notice would loop until the attempt limit hands web to the operator.
+    """
     folder = root / "loom/bodies/fake"
     folder.mkdir(parents=True)
     (folder / "jack").write_text("hand\n")
@@ -94,10 +99,12 @@ from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx, _own_thread
 ctx = Ctx(Path(sys.argv[1]))
 own = _own_thread(ctx.wake())
-for letter in ctx.owed():
+owed = ctx.owed()
+for letter in owed:
     ctx.send("thread:" + own, note="ok", re=letter.id)
-if own == "web":
-    ctx.send("thread:brnrd", "PR https://github.com/acme/brnrd/pull/7 opened", cite=letter.id)
+asked = [letter for letter in owed if not letter.id.startswith("loom/")]
+if own == "web" and asked:
+    ctx.send("thread:brnrd", "PR https://github.com/acme/brnrd/pull/7 opened", cite=asked[-1].id)
 ctx.jack("stop")
 """)
     run.chmod(0o755)
