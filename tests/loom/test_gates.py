@@ -206,8 +206,14 @@ def test_the_app_never_falls_back_to_the_persons_gh_and_a_persons_choice_stays(t
     # The verb with its gate gone stays the verb: it fails loudly as the App (fork A).
     (root / "loom/config.toml").write_text(f'forge_token = {json.dumps(spec(root))}\n')
     assert gates.converge(root) == {}
-    (root / "loom/config.toml").write_text('forge_token = "env: MY_TOKEN"\n')
+    # A person switches identity by changing the getter; converge leaves it.
+    for chosen in ("env: MY_TOKEN", "file: /tmp/t", "command: op read op://x/gh"):
+        (root / "loom/config.toml").write_text(f'forge_token = {json.dumps(chosen)}\n')
+        assert gates.converge(root) == {}
+        assert load_config(root).forge_token == chosen
+    connected(root, "http://127.0.0.1:1")
     assert gates.converge(root) == {}
+    assert load_config(root).forge_token == chosen
 
 
 def test_install_writes_and_names_the_identity_and_a_dry_run_writes_nothing(tmp_path, monkeypatch):

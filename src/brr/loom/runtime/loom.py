@@ -87,6 +87,29 @@ def _commit_identity(room: Path) -> tuple[str, str]:
 _FORGE_TOKEN_VARS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
 
 
+# Repo deletion through the body's gh: ``gh repo delete`` and ``gh api`` with
+# DELETE on ``repos/<owner>/<repo>`` itself. It guards this wrapper only; the
+# minted token can still delete through any other client (threads/forge-auth).
+_REFUSE_REPO_DELETE = r"""refuse=
+if [ "$1" = repo ] && [ "$2" = delete ]; then refuse=1; fi
+if [ "$1" = api ]; then
+  delete= repo= prev=
+  for a in "$@"; do
+    case "$prev" in -X|--method) case "$a" in [Dd][Ee][Ll][Ee][Tt][Ee]) delete=1;; esac;; esac
+    case "$a" in -X[Dd][Ee][Ll][Ee][Tt][Ee]|--method=[Dd][Ee][Ll][Ee][Tt][Ee]) delete=1;; esac
+    r=${a%%\?*}; r=${r#/}; r=${r%/}
+    case "$r" in repos/*/*/*) ;; repos/?*/?*) repo=1;; esac
+    prev=$a
+  done
+  if [ -n "$delete" ] && [ -n "$repo" ]; then refuse=1; fi
+fi
+if [ -n "$refuse" ]; then
+  echo 'gh: brnrd refuses to delete a repository; a person deletes it on github.com' >&2
+  exit 1
+fi
+"""
+
+
 def _forge_env(room: Path, env: dict[str, str]) -> None:
     """Keep a configured forge identity isolated even when a shell bypasses the shim."""
     from .config import ConfigError, load_config, resolve_secret, secret_shell
@@ -128,6 +151,7 @@ def _forge_env(room: Path, env: dict[str, str]) -> None:
         # calls the real gh rather than recursing through this shim.
         script = (
             "#!/bin/sh\n"
+            + _REFUSE_REPO_DELETE +
             f"GH_TOKEN=$(PATH={shlex.quote(path)} sh -c {shlex.quote(snippet)} 2>/dev/null) || "
             "{ echo 'gh: forge_token source failed' >&2; exit 1; }\n"
             "[ -n \"$GH_TOKEN\" ] || { echo 'gh: forge_token source gave nothing' >&2; exit 1; }\n"
