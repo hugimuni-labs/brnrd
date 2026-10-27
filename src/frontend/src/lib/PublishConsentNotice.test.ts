@@ -106,7 +106,7 @@ test('an opted-out repo is named as having chosen to publish nothing', async () 
 
 test('the deep link targets the specific repo id when one is known', async () => {
 	const html = await renderNotice([repo({ id: 'repo-9', publish_layers: null })]);
-	ok(html.includes('href="/repos?scope=repo-9#repo-repo-9"'));
+	ok(html.includes('href="/dashboard/repos?scope=repo-9#repo-repo-9"'));
 });
 
 test("the wording matches WithheldNotice's shared clause, not a restated copy", async () => {

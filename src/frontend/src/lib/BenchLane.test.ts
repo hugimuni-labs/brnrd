@@ -60,7 +60,7 @@ test('a row renders the place, a short commit, and the question', async () => {
 
 test('a row links to the bench page at repo/place/commit', async () => {
 	const html = await renderBench({ files: [file({})] });
-	ok(html.includes('href="/bench/Gurio__brr/src/brr/daemon.py/abc1234567890"'));
+	ok(html.includes('href="/dashboard/bench/Gurio__brr/src/brr/daemon.py/abc1234567890"'));
 });
 
 test('a row with no question renders none', async () => {

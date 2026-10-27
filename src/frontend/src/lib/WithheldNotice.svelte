@@ -41,13 +41,14 @@
 			     which always has an id). A plain /repos link still gets the
 			     owner to the page that covers everything this dialog doesn't. -->
 			paused — {unrecorded}. One scope on the
-			<a class="underline hover:text-amber-100" href={resolve('/repos')}>repos page</a> reopens this.
+			<a class="underline hover:text-amber-100" href={resolve('/dashboard/repos')}>repos page</a> reopens
+			this.
 		{/if}
 		{#if optedOut !== null}
 			{unrecorded !== null ? '' : 'paused — '}{optedOut}.
 		{/if}
 		{#if canNameRepo}
-			<a class="underline hover:text-amber-100" href={resolve('/repos')}
+			<a class="underline hover:text-amber-100" href={resolve('/dashboard/repos')}
 				>Set the full publish scope.</a
 			>
 		{/if}

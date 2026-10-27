@@ -42,7 +42,7 @@
 	data-turn={turn}
 >
 	<a
-		href={resolve('/thread/[id]', { id: thread.id })}
+		href={resolve('/dashboard/thread/[id]', { id: thread.id })}
 		class="block p-3 pb-2 focus-visible:outline focus-visible:outline-amber-500/70"
 	>
 		<div class="flex items-start gap-2.5">

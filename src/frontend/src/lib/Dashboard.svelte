@@ -1532,7 +1532,7 @@
 			mapStageOpen = true;
 		}}
 		onInstruments={() => {
-			window.location.href = resolve('/daily');
+			window.location.href = resolve('/dashboard/daily');
 		}}
 	>
 		{#snippet attention()}
@@ -1614,7 +1614,9 @@
 			     ("a small one somewhere") — a plain link, not a nav bar this
 			     single-page dashboard doesn't otherwise have. -->
 				<div class="flex flex-wrap items-center gap-4">
-					<a href={resolve('/bridge')} class="font-mono text-[11px] text-amber-200">bridge ↗</a>
+					<a href={resolve('/dashboard/bridge')} class="font-mono text-[11px] text-amber-200"
+						>bridge ↗</a
+					>
 					<!-- /activity retired 2026-07-19. Its honest content — open runs,
 				     queued wakes, parked respawns — is the loom's NOW seam and
 				     the rack's future shelf, and its one real affordance over
@@ -1639,7 +1641,7 @@
 					<!-- #327: repo management now lives in this same SPA at /repos,
 				     backed by the /v1/dashboard/repos JSON twin. -->
 					<a
-						href={resolve('/repos')}
+						href={resolve('/dashboard/repos')}
 						class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
 						>manage repos</a
 					>
@@ -2198,7 +2200,7 @@
 				<BenchLane files={benchFiles ?? []} error={benchError} />
 			{/if}
 			<p class="mt-2 font-mono text-[10px] text-ink-mute">
-				<a href={resolve('/warp')} class="hover:text-stone-300"
+				<a href={resolve('/dashboard/warp')} class="hover:text-stone-300"
 					>all items · live &amp; completed →</a
 				>
 			</p>

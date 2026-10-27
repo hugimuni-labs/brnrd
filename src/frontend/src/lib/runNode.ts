@@ -17,7 +17,7 @@
 // SvelteKit's Vite build and breaks this module's node-run unit tests
 // (`runNode.test.ts` imports these functions directly, no bundler in the
 // loop). The URLs below are already built by hand with `encodeURIComponent`
-// and match the `/runs/[repo]/[run]` route exactly, so the cast is honest,
+// and match the `/dashboard/runs/[repo]/[run]` route exactly, so the cast is honest,
 // not a bypass — `svelte/no-navigation-without-resolve` only cares that the
 // *type* the caller receives is `ResolvedPathname`.
 import type { ResolvedPathname } from '$app/types';
@@ -71,7 +71,7 @@ export function runIdSlug(runId: string | null | undefined): string {
 
 /** Route to the run node page for one ledger/live run. */
 export function runNodeHref(repoLabel: string | null | undefined, runId: string): ResolvedPathname {
-	return `/runs/${encodeURIComponent(repoRunSlug(repoLabel))}/${encodeURIComponent(runIdSlug(runId))}` as ResolvedPathname;
+	return `/dashboard/runs/${encodeURIComponent(repoRunSlug(repoLabel))}/${encodeURIComponent(runIdSlug(runId))}` as ResolvedPathname;
 }
 
 /**
@@ -84,7 +84,7 @@ export function runNodeHrefForPath(path: string): ResolvedPathname | null {
 	if (parts.length < 3 || parts[0] !== 'runs') return null;
 	const [, slug, run] = parts;
 	if (!slug || !run) return null;
-	return `/runs/${encodeURIComponent(slug)}/${encodeURIComponent(run)}` as ResolvedPathname;
+	return `/dashboard/runs/${encodeURIComponent(slug)}/${encodeURIComponent(run)}` as ResolvedPathname;
 }
 
 /** Select the receipt for this node without bleeding across account repos. */
@@ -281,7 +281,7 @@ export interface DispatchEdges {
 function edgeTo(repoSlug: string, runId: string, mirrored: Set<string>): DispatchEdge {
 	const slug = runIdSlug(runId);
 	const href = mirrored.has(`runs/${repoSlug}/${slug}/state.md`)
-		? (`/runs/${encodeURIComponent(repoSlug)}/${encodeURIComponent(slug)}` as ResolvedPathname)
+		? (`/dashboard/runs/${encodeURIComponent(repoSlug)}/${encodeURIComponent(slug)}` as ResolvedPathname)
 		: null;
 	return { runId, href };
 }
@@ -353,7 +353,7 @@ export function messageInstant(metadata: Record<string, string>): string {
 // The selected loom frame shows a *smaller and more targeted* read of the
 // node than the standalone page (maintainer, 2026-07-19: "keep the loom as
 // the spine"). Navigating away costs the reader their position in the band,
-// so the band stays put and the frame fills; the `/runs/...` page remains the
+// so the band stays put and the frame fills; the `/dashboard/runs/...` page remains the
 // addressable deep link for sharing.
 
 /** Mirror of `brr.card.CARD_TEXT_MAX_CHARS` / `LiveRunIn.card_text`'s max_length. */

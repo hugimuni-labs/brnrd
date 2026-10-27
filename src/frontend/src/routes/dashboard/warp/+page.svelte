@@ -126,7 +126,7 @@
 							{@const callback = blockersOnYou(goal.id, graph)}
 							<li class="border-l-2 border-amber-300/60 py-0.5 pl-2">
 								<a
-									href={resolve('/goals/[id]', { id: goal.id })}
+									href={resolve('/dashboard/goals/[id]', { id: goal.id })}
 									class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-amber-100 hover:text-amber-50"
 								>
 									<span class="shrink-0" aria-hidden="true">◎</span>

@@ -395,3 +395,20 @@ def test_the_backend_prefers_the_fallback_name_the_build_actually_writes():
     assert f'root / "{fallback.group(1)}"' in spa_source, (
         f"vite writes the fallback as {fallback.group(1)!r}; spa.py does not prefer it"
     )
+
+
+def test_old_app_paths_redirect_under_dashboard(spa_client):
+    """The old app moved to /dashboard; links printed before the move still land."""
+    response = spa_client.get("/runs/acme__site/run-1?tab=log", follow_redirects=False)
+    assert response.status_code == 308
+    assert response.headers["location"] == "/dashboard/runs/acme__site/run-1?tab=log"
+    assert spa_client.get("/bridge", follow_redirects=False).headers["location"] == "/dashboard/bridge"
+
+
+def test_every_moved_path_exists_under_dashboard():
+    """A redirect to a route that was not moved would be a 308 into the SPA's 404."""
+    from brnrd.spa import MOVED_TO_DASHBOARD
+
+    moved = {child.name for child in (FRONTEND_ROUTES / "dashboard").iterdir() if child.is_dir()}
+    assert MOVED_TO_DASHBOARD <= moved
+    assert not MOVED_TO_DASHBOARD & _spa_top_level_routes()

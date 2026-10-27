@@ -51,7 +51,7 @@
 						{#if entry.thread && !thread}
 							<span class="text-ink-mute">on</span>
 							<a
-								href={resolve('/thread/[id]', { id: entry.thread })}
+								href={resolve('/dashboard/thread/[id]', { id: entry.thread })}
 								class="text-ink-quiet hover:text-amber-200">{entry.thread}</a
 							>
 						{/if}

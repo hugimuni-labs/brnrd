@@ -93,6 +93,11 @@ jobs:
         run: |
           npx svelte-kit sync
           npm run check
+      # The board over synthetic parts (e2e/fixture.mjs): vite dev + headless chromium.
+      - name: Board e2e
+        run: |
+          npx playwright install --with-deps chromium --only-shell
+          npm run e2e
 
   launcher:
     name: npm launcher package
