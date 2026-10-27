@@ -140,6 +140,23 @@ def test_stop_blocks_while_letters_are_owed(tmp_path):
     assert list((room / "port" / "out").glob("*.md"))
 
 
+def test_a_stop_repeats_only_what_was_not_said(tmp_path):
+    # A blocked stop used to re-send the whole boundary the body had just read.
+    room = _room(tmp_path)
+    _write(room, [_letter()])
+    assert "ping-1" in execute("start", room, "{}")
+    reason = json.loads(execute("stop", room, "{}"))["reason"]
+    assert "ping-1" not in reason
+    assert "owed: p-test/abcde (shown before)" in reason
+    newer = Fact(kind="letter", by="strand:s-ab12-bbbbbb", id="p-test/fghij",
+                 data={"id": "p-test/fghij", "to": "thread:ta", "body": "pong-2", "from": "s-ab12-bbbbbb"})
+    _write(room, [_letter(), newer])
+    execute("post", room, "{}")
+    _write(room, [_letter(), newer])
+    reason = json.loads(execute("stop", room, "{}"))["reason"]
+    assert "pong-2" not in reason and "p-test/fghij" in reason
+
+
 def test_three_blocks_then_the_stop_is_allowed(tmp_path, monkeypatch):
     # The hand jack retains the old bounded behavior; hooks hold instead.
     monkeypatch.setenv("BRNRD_BODY_JACK", "hand")
