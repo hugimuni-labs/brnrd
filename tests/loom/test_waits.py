@@ -337,3 +337,16 @@ def test_one_failing_read_leaves_the_other_waits_resolving(ledger):
     forge.down = {1, 2}
     watcher._poll(forge, {f"pr:{REPO}#1", f"pr:{REPO}#2"})
     assert isinstance(watcher.failing[0], urllib.error.URLError), "every read failing is an outage"
+
+
+def test_the_cards_poll_the_owner_the_opened_url_names(ledger):
+    """Live 18:xx: watcher.prs held brnrd#N (the library name), so every card read was a 404."""
+    from brr.loom.runtime.receipts import receipts
+    home, _seat = ledger
+    for number, merged in ((51, False), (52, True)):
+        append(home, Fact(kind="pr.opened", by="strand:s-aaaa-test", data={
+            "thread": "work", "repo": "brnrd", "number": number, "head": "abc",
+            "url": f"https://github.com/{REPO}/pull/{number}"}))
+    append(home, Fact(kind="pr.merged", by="strand:s-aaaa-test", data={
+        "thread": "work", "repo": "brnrd", "number": 52, "head": "abc", "merge_commit": "def"}))
+    assert waits.open_claims(receipts(read_facts(home), "i")) == {f"{REPO}#51"}

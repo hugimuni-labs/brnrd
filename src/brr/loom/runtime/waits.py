@@ -138,6 +138,15 @@ def pr_repo(data: dict) -> str | None:
     return match.group(1) if match else None
 
 
+def open_claims(receipts: dict) -> set[str]:
+    """``owner/repo#N`` of each claimed pull request not yet merged, for the cards.
+
+    A receipt's ``repo`` is the library name; the forge needs the owner its url names.
+    """
+    return {f"{pr_repo({'url': r.url})}#{r.number}" for rows in receipts.values() for r in rows
+            if not r.merge_commit and pr_repo({"url": r.url})}
+
+
 def forge_wants(found: dict) -> set[str]:
     return {read["wait"]["on"] for _wish, read in live(found)
             if str(read["wait"].get("on", "")).startswith(("pr:", "ci:"))}
