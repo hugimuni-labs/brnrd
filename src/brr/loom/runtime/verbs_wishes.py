@@ -201,8 +201,9 @@ def _wait(facts, ident, condition, until, default=None):
 def _repo(facts, number):
     """The repo a bare ``#N`` names: a pull request opened on this ledger, else the loom's own origin."""
     if number is not None:
-        repos = {f.data.get("repo") for f in facts if f.kind == "pr.opened"
-                 and str(f.data.get("number")) == str(number)}
+        from .waits import pr_repo
+        repos = {pr_repo(f.data) for f in facts if f.kind == "pr.opened"
+                 and str(f.data.get("number")) == str(number)} - {None}
         if len(repos) == 1:
             return repos.pop()
     from .receipts import source_root
