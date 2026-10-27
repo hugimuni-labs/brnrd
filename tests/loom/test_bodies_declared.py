@@ -55,10 +55,10 @@ class MemoryBody:
         for index, fact in enumerate(self.facts):
             observation = self.audit[fact.id]
             if fact.kind == "body.started":
-                assert not observation.closed
+                assert not observation.closed and not observation.fenced
             if fact.kind == "body.stopped":
                 leaving = fact_for(self.facts[:index], "body.leaving", fact.data["strand"], fact.data["gen"])
-                assert observation.closed and leaving is not None
+                assert (observation.closed or observation.fenced) and leaving is not None
                 assert observation.now >= leaving.data["deadline"]
         # Rule 5: release follows both ending and draining on this prefix.
         ended, drained = set(), set()
@@ -100,7 +100,7 @@ class MemoryBody:
                     return
             elif name == "started":
                 # Rule 4 includes closed deferred starts, without exceptions.
-                assert not o.closed
+                assert not o.closed and not o.fenced
                 self.add("body.started", pid=123, shell="fake", core="echo")
                 self.alive = True
             elif name == "park":
@@ -116,7 +116,7 @@ class MemoryBody:
                     if name == "stopped":
                         # Rule 3: closed, and this generation's durable deadline.
                         leaving = fact_for(self.facts, "body.leaving", self.strand, self.gen)
-                        assert o.closed and leaving is not None
+                        assert (o.closed or o.fenced) and leaving is not None
                         assert o.now >= leaving.data["deadline"]
                     self.add("body." + name)
             elif name == "exit":
@@ -169,12 +169,13 @@ def test_seeded_sequences_check_ledger_prefixes_and_reach_every_row():
                 body.add("shown", ids=[])
                 body.alive = True
             closed = rng.random() < 0.65
+            fenced = rng.random() < 0.15
             gauge = rng.choice(["ok", "ok", "unknown", "refreshing", "empty"])
             failure = "spawn failed" if state in STARTABLE and not body.alive and rng.random() < 0.1 else ""
             woken = "other/core" if state == "parked" and rng.random() < 0.1 else ""
             o = Observation(body.strand, body.gen, body.alive, closed, gauge, body.now,
                             proven=rng.choice([True, False]), until=body.now + 3,
-                            stop_grace=1, failure=failure, woken=woken)
+                            stop_grace=1, failure=failure, woken=woken, fenced=fenced)
             body.step(o, crash_at_end=not body.alive and rng.random() < 0.2,
                       crash_at_exit=not body.alive and rng.random() < 0.2)
     assert coverage == set(range(len(TABLE))), {i: TABLE[i] for i in set(range(len(TABLE))) - coverage}
@@ -184,7 +185,7 @@ def test_table_rendering_matches_checked_in_page():
     from pathlib import Path
     page = Path(__file__).resolve().parents[2] / "src/brr/loom/runtime/bodies.md"
     assert render_table() == page.read_text().strip()
-    assert len(TABLE) == 21
+    assert len(TABLE) == 23
 
 
 def test_an_unlisted_pair_logs_and_raises(caplog):
@@ -326,7 +327,7 @@ def test_reclosed_body_probes_once_per_deadline_and_stopping_holds(tmp_path, mon
     from brr.loom.runtime import loom as runtime, config, lifecycle, usage
 
     clock, closed, proofs, signals, boundaries = [1], [True], [], [], []
-    home = SimpleNamespace(root=tmp_path, room=lambda strand: tmp_path / strand)
+    home = SimpleNamespace(root=tmp_path, room=lambda strand: tmp_path / strand, install_id=lambda: "aaaa")
     monkeypatch.setattr(runtime.time, "time", lambda: clock[0])
     monkeypatch.setattr(config, "load_config", lambda root: SimpleNamespace(hold_floor_pct=10, stop_grace=2))
     monkeypatch.setattr(lifecycle, "read_thread", lambda home, thread: {"status": "settled" if closed[0] else "open"})

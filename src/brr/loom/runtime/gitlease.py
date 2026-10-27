@@ -84,6 +84,7 @@ class GitLeaseAuthority:
         self.polled: float | None = None
         self.held: dict[str, tuple[Lease, str, float]] = {}  # what -> (lease, sha, valid_until)
         self.graced: set[str] = set()
+        self.prior: dict[str, tuple[str, str]] = {}  # what -> (holder, ledger) we took over
 
     # -- local plumbing -------------------------------------------------
 
@@ -201,6 +202,9 @@ class GitLeaseAuthority:
             return None
         gen = max(int(current.get("gen", 0)) + 1 if current else 1, floor)
         expected = current["sha"] if current else ""
+        # Whose ledger a new holder must have read before it grants.
+        self.prior[what] = ((current.get("holder", ""), current.get("ledger", ""))
+                            if current else ("", ""))
         try:
             sha, t_send = self._push(what, {"holder": holder, "gen": gen, "ttl": ttl,
                                             "released": False}, expected)
