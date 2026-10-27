@@ -48,6 +48,9 @@ def _set_state(room: Path, **updates) -> None:
 # timeout from the same number, in BRNRD_STOP_TIMEOUT.
 PARK = 6 * 3600.0
 MARGIN = 90.0
+#: Written by the loom into a held body's port when more bodies are live than
+#: ``max_held`` allows; the stop hook then lets the body leave.
+DISPLACED = "displaced"
 
 
 def _cache_access(stdin_text: str) -> str:
@@ -231,7 +234,9 @@ def _block(room: Path, text: str, parsed: Boundary) -> str:
         return ""
     if parsed.ids:
         _shown(room, parsed)
-    _set_state(room, stop_blocks=count + 1)
+    # Letters arrived: the body works again, so it is no longer held or displaced.
+    _set_state(room, stop_blocks=count + 1, held_at=None)
+    (room / "port" / DISPLACED).unlink(missing_ok=True)
     return _json({"decision": "block", "reason": text})
 
 
@@ -245,6 +250,10 @@ def _poll(room: Path, stdin_text: str = '') -> str:
     wait = _wait(room, stdin_text)
     deadline = ceiling if wait is None else min(begun + wait, ceiling)
     parked = False
+    # Held since the first stop with nothing to do; a keepalive turn keeps the
+    # mark, real work clears it. The loom displaces the longest held first.
+    if not _state(room).get("held_at"):
+        _set_state(room, held_at=time.time())
     while True:
         if _state(room).get("molted"):
             return ""
@@ -270,6 +279,10 @@ def _poll(room: Path, stdin_text: str = '') -> str:
                 deadline = ceiling
         if (parsed.ids if _hand() else any(not letter.compact for letter in parsed.letters)):
             return _block(room, text, parsed)
+        if (room / "port" / DISPLACED).exists():
+            # Over the loom's max_held: leave warm memory for a body with work.
+            # The next letter to this thread starts a fresh one.
+            return ""
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             if _hand():
@@ -567,7 +580,8 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
                                                  "additionalContext": guarded}}) if guarded else ""
         # A call begun before this is not the body's current one (pausing.py):
         # a background call returns at once, so a boundary always follows it.
-        _set_state(room, stop_blocks=0, boundary_at=time.time())
+        _set_state(room, stop_blocks=0, boundary_at=time.time(), held_at=None)
+        (room / "port" / DISPLACED).unlink(missing_ok=True)
     elif event == "start":
         _set_state(room, boundary_at=time.time())
     text = _boundary_text(room)

@@ -1733,6 +1733,43 @@ def _advance_bodies(home, bodies, facts, choice, *, reader=None):
     return facts
 
 
+def _displace(home: Home, facts: list[Fact]) -> None:
+    """Over ``max_held`` live bodies, the ones held longest are asked to leave.
+
+    The home thread's body is not counted and never displaced. Only a body
+    parked in its stop hook (``held_at`` in its jack state) is marked, so work
+    in flight is never cut; the count settles as working bodies park.
+    """
+    from .config import load_config
+    from .jack import DISPLACED
+    from .router import install_of
+    limit = load_config(home.root).max_held
+    if not limit:
+        return
+    main = home.main_thread()
+    live = [(thread, strand, home.room(strand))
+            for thread, (strand, _gen) in fold(facts).holder.items()
+            if thread != main and install_of(strand) == home.install_id()
+            and body_alive(home.room(strand))]
+    marked = sum((room / "port" / DISPLACED).exists() for _t, _s, room in live)
+    over = len(live) - int(limit) - marked
+    if over <= 0:
+        return
+    held = []
+    for thread, strand, room in live:
+        try:
+            held_at = json.loads((room / "port" / "jack-state.json").read_text()).get("held_at")
+        except (OSError, ValueError):
+            continue
+        if held_at and not (room / "port" / DISPLACED).exists():
+            held.append((float(held_at), thread, strand, room))
+    now = time.time()
+    for held_at, thread, strand, room in sorted(held)[:over]:
+        atomic_write(room / "port" / DISPLACED, f"{len(live)} live bodies, max_held {limit:g}\n")
+        _log(home, f"displace {strand} thread {thread}: held {(now - held_at) / 60:.0f} min,"
+                   f" {len(live)} live bodies over max_held {limit:g}")
+
+
 def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
               router=None) -> None:
     """One read of the ledger, then ingest, route, boundaries, reap.
@@ -1754,6 +1791,7 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         facts = _grant_landed(home, facts)
         facts = _grant_opened(home, facts)
         facts = _advance_bodies(home, bodies, facts, (adapter, core), reader=router.reader)
+        _displace(home, facts)
         # Time enters the owner table once, using only the facts already held.
         facts = observe_due(home, facts, router.armed())
         # A park's condition is checked the same way; the forge is read off the loop.

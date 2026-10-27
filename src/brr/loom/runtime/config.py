@@ -88,6 +88,10 @@ KEYS: tuple[Key, ...] = (
         choices=("on", "off")),
     Key("hold_floor_pct", "percent", 3.0,
         "A quota window with this percent or less left counts as exhausted: a held body stays held."),
+    Key("max_held", "positive", None,
+        "Most live bodies this install keeps warm, the home thread's not counted. Past it, the "
+        "body held longest with nothing to do leaves at its stop hook; a working body is never "
+        "cut, and the next letter to its thread starts a fresh one. Unset: every body holds."),
     Key("thread_budget", "positive", 2_000_000,
         "Weighted tokens a thread opened by another thread may spend before its strand is told, at "
         "every boundary, to write to its parent for more. `send --budget` overrides it."),
@@ -189,6 +193,9 @@ def _coerce(key: Key, value: object, path: Path) -> object:
         if value not in key.choices:
             raise refuse(" or ".join(f'"{c}"' for c in key.choices))
         return value
+    if value == "" and key.default is None:
+        # A number with no default renders as "" in the seeded file: unset.
+        return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise refuse("a number")
     number = float(value)
