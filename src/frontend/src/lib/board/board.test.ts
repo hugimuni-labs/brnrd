@@ -326,6 +326,26 @@ test('parts: older letters load by before=, or back to until=', async () => {
 	equal(await store.older('web'), false);
 });
 
+test('parts: a refetched window keeps the history scrolled in before it', async () => {
+	let h = 'h',
+		newest = [L('l3', '3')];
+	const store = new Store(async (p) => {
+		if (p === '/v1/loom/index') return index({ 'thread/web': h }, [T('web')]);
+		if (p === '/v1/loom/thread/web') return part('web', newest, true);
+		return part('web', [L('l1', '1'), L('l2', '2')], false);
+	});
+	await store.sync();
+	await store.older('web');
+	h = 'h2';
+	newest = [L('l3', '3'), L('l4', '4')];
+	ok(await store.sync());
+	deepEqual(
+		store.threads.get('web')!.letters.map((l) => l.id),
+		['l1', 'l2', 'l3', 'l4']
+	);
+	equal(store.threads.get('web')!.more, false);
+});
+
 test('beads: the chain walks up to the source; children hang below oldest first', () => {
 	const b: Beads = {
 		src: [null, null, 'person:arseni', '1', 'ask'],

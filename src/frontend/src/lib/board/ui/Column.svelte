@@ -47,6 +47,15 @@
 		first = false;
 		if (bottom) tick().then(() => pane && (pane.scrollTop = pane.scrollHeight));
 	});
+	// Near the top, the older letters load above; the reader stays on the letter they were reading.
+	const more = $derived(!!b.model && !!b.store.threads.get(t.id)?.more && !wv);
+	async function onscroll() {
+		if (!pane || !more || pane.scrollTop > 200) return;
+		const h = pane.scrollHeight;
+		if (!(await b.older(t.id))) return;
+		await tick();
+		if (pane) pane.scrollTop += pane.scrollHeight - h;
+	}
 </script>
 
 <!-- eslint-disable svelte/no-navigation-without-resolve -- the forge url -->
@@ -145,7 +154,8 @@
 			<div class="wishpane"><Ledger {t} {letters} /></div>
 		</div>
 	{/if}
-	<div class="messages" bind:this={pane}>
+	<div class="messages" bind:this={pane} {onscroll}>
+		{#if more}<div class="empty older">{b.loading.has(t.id) ? 'loading…' : '▴ older'}</div>{/if}
 		{#if W}<div class="wishpane">
 				{#each W.cards as w (w.wish)}<WishCard {w} />{:else}<div class="empty">
 						no wishes

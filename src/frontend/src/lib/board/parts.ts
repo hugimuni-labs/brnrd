@@ -53,6 +53,18 @@ export function moved(
 	};
 }
 
+// A refetched part is the newest window again; the older letters scrolled in before it stay, so a new letter
+// does not drop the history a reader loaded.
+export function keep(was: ThreadPart | undefined, got: ThreadPart): ThreadPart {
+	const first = got.letters[0];
+	if (!was || !first || !got.more) return got;
+	const have = new Set(got.letters.map((l) => l.id));
+	const prior = was.letters.filter(
+		(l) => !have.has(l.id) && (l.at < first.at || (l.at === first.at && l.id < first.id))
+	);
+	return prior.length ? { ...got, letters: [...prior, ...got.letters], more: was.more } : got;
+}
+
 export class Store {
 	index: Index | null = null;
 	threads = new Map<string, ThreadPart>();
@@ -72,7 +84,7 @@ export class Store {
 			fetch.map((n) => this.get(`${BASE}/${n}`) as Promise<ThreadPart>)
 		);
 		fetch.forEach((n, i) => {
-			this.threads.set(n.slice(7), got[i]);
+			this.threads.set(n.slice(7), keep(this.threads.get(n.slice(7)), got[i]));
 			this.held.set(n, index.parts[n]);
 		});
 		for (const n of drop) {

@@ -85,6 +85,23 @@ export class Board {
 		}
 	}
 
+	// Scrolled to the top: the 200 letters before the oldest held. One load per thread at a time; true when any came.
+	loading = new SvelteSet<string>();
+	async older(thread: string): Promise<boolean> {
+		if (this.loading.has(thread)) return false;
+		this.loading.add(thread);
+		try {
+			if (!(await this.store.older(thread))) return false;
+			this.model = this.store.model();
+			return true;
+		} catch (e) {
+			this.error = String(e);
+			return false;
+		} finally {
+			this.loading.delete(thread);
+		}
+	}
+
 	// SSE first; a tunnel may hold the stream back, so a silent stream falls back to polling the index.
 	connect(): () => void {
 		let heard = 0;
