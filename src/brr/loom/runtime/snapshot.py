@@ -167,7 +167,7 @@ def _wish_rows(told, facts) -> list[dict]:
         answer = answers.get(w.id)
         rows.append(_bare({
             "id": w.id, "thread": w.thread, "from": w.sender, "line": w.line, "state": w.state,
-            "origin": w.origin, "at": _iso(w.at), "says": says, "reading": w.reading,
+            "origin": w.origin, "at": _iso(w.at), "says": says, "reading": w.reading, "rec": w.rec,
             # What the loom watches for this park, while it stands.
             "wait": _bare({"on": parked[w.id]["wait"].get("on"), "since": _iso(parked[w.id]["at"]),
                            "until": parked[w.id]["wait"].get("until")}) if w.id in parked else None,
