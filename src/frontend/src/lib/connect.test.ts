@@ -209,8 +209,14 @@ test('missingApprovalProof names the live-code-but-truncated-link case', () => {
 });
 
 test('requesterLabel names the computer that asked, or nothing', () => {
-	assert.equal(requesterLabel({ requester: { hostname: 'eves-laptop', os_user: 'eve' } }), 'eve on eves-laptop');
-	assert.equal(requesterLabel({ requester: { hostname: 'eves-laptop', os_user: '' } }), 'eves-laptop');
+	assert.equal(
+		requesterLabel({ requester: { hostname: 'eves-laptop', os_user: 'eve' } }),
+		'eve on eves-laptop'
+	);
+	assert.equal(
+		requesterLabel({ requester: { hostname: 'eves-laptop', os_user: '' } }),
+		'eves-laptop'
+	);
 	assert.equal(requesterLabel({ requester: { hostname: '', os_user: '' } }), '');
 	assert.equal(requesterLabel({}), '');
 });

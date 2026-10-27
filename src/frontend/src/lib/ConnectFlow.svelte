@@ -364,7 +364,8 @@
 								type="button"
 								class="mt-4 cursor-pointer border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500 disabled:cursor-not-allowed disabled:border-stone-800 disabled:text-ink-mute"
 								disabled={posting || !repoId}
-								onclick={() => approve(false)}>{posting ? 'approving…' : 'approve this computer'}</button
+								onclick={() => approve(false)}
+								>{posting ? 'approving…' : 'approve this computer'}</button
 							>
 							{#if suggested}
 								<button
