@@ -33,6 +33,9 @@ CAP = 600.0
 # A call this young reaches its own boundary soon enough; pausing it costs
 # the call's exit status for nothing.
 MIN_AGE = 5.0
+# Work that waits by spinning: a sleep, a watch, a shell loop. No letter lands
+# inside one, which is what the loom's typed park is for.
+POLL = re.compile(r"\bsleep\b|\bwatch\b|--watch\b|\b(?:while|until)\b.*\bdo\b", re.S)
 
 
 def wrapper(folder: Path) -> re.Pattern | None:
@@ -159,7 +162,13 @@ def describe(records: list[dict]) -> str:
         return ""
     outputs = sorted({r["output"] for r in records if r.get("output")})
     where = f"; its output goes on into {', '.join(outputs)}" if outputs else ""
-    return (f"paused: {pause.describe_paused(records)} · a letter arrived, so your call returned early "
-            f"with its work stopped, not lost{where}. `brnrd runtime resume` lets it "
-            "finish in the background (its exit status is gone); `brnrd runtime drop` "
-            f"ends it. Unanswered, it resumes in {CAP / 60:.0f} min.")
+    head = (f"paused: {pause.describe_paused(records)} · a letter arrived, so your call returned early "
+            f"with its work stopped, not lost{where}. ")
+    if any(POLL.search(str(r.get("argv", ""))) for r in records):
+        from .waits import GRAMMAR
+        return head + ("It is a sleep or poll loop, and no letter lands inside one: `brnrd runtime drop` "
+                       "it, answer the letter, then re-park this as `wish <w-id> --read \"waiting: …\" "
+                       f"--wait <{GRAMMAR}>` and stop; the loom's letter wakes you when it comes true. "
+                       f"Unanswered, it resumes in {CAP / 60:.0f} min.")
+    return head + ("`brnrd runtime resume` lets it finish in the background (its exit status is gone); "
+                   f"`brnrd runtime drop` ends it. Unanswered, it resumes in {CAP / 60:.0f} min.")

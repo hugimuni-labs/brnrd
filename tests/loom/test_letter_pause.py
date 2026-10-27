@@ -99,9 +99,55 @@ Path({str(go)!r}).write_text(resumed.stdout)
     assert context["hookEventName"] == "PostToolUseFailure"
     assert context["additionalContext"].startswith(f"paused: {record['argv'].split()[0].rsplit('/', 1)[-1]} ")
     assert kept in context["additionalContext"]
+    assert "re-park" not in context["additionalContext"], "a real job is not a poll loop"
     assert got["letters"] == ["stop: wrong branch"]
     assert go.read_text().startswith("resume: ")
     assert len(open(kept).read().splitlines()) > len(before.splitlines())
+
+
+def test_a_paused_sleep_loop_is_told_to_re_park_as_a_typed_wait(tmp_path, monkeypatch):
+    """A body polling CI in a shell loop learns the loom's rest from the pause itself."""
+    from brr.loom.runtime.waits import GRAMMAR
+    monkeypatch.setattr(pausing, "MIN_AGE", 0.5)
+    root = tmp_path / "home"
+    write_thread(root, "work", "Worker", "work", wait="30")
+    seen, started, finish = (root / name for name in ("seen.json", "started", "finish"))
+    bodies(root, f'''import json, subprocess, sys, time
+from pathlib import Path
+from brr.loom.runtime.fakebody import Ctx, _own_thread
+ctx = Ctx(Path(sys.argv[1]))
+own = _own_thread(ctx.wake())
+for letter in ctx.owed():
+    ctx.send(f"thread:{{own}}", note="on it", re=letter.id)
+while ctx.jack("post").letters:
+    time.sleep(0.03)
+time.sleep(0.2)
+call = subprocess.Popen(["/bin/sh", "-c", ": fake-tool-wrapper; /bin/sh -c 'until [ -e {finish} ]; do sleep 0.05; done'"])
+Path({str(started)!r}).write_text("1")
+call.wait()
+view = ctx.jack("post", {{"hook_event_name": "PostToolUseFailure", "tool_name": "Bash", "error": "Exit code 1"}})
+for letter in view.letters:
+    ctx.send(f"thread:{{own}}", note="read", re=letter.id)
+subprocess.run([sys.executable, "-m", "brr.loom.runtime", "drop"], capture_output=True, text=True)
+Path({str(seen)!r}).write_text(view.raw)
+''')
+    (root / "loom/bodies/fake/jack").write_text("hooks\n")
+    (root / "loom/bodies/fake/pause").write_text("fake-tool-wrapper\n")
+    inject_letter(root, to="thread:work", body="watch CI")
+    loom = Loom(root)
+    loom.start()
+    try:
+        wait_until(started.exists, 15, loom.dump)
+        time.sleep(0.3)
+        inject_letter(root, to="thread:work", body="any news?")
+        wait_until(seen.exists, 15, loom.dump)
+    finally:
+        finish.write_text("")
+        loom.halt()
+    assert not loom.errors
+    said = json.loads(seen.read_text())["hookSpecificOutput"]["additionalContext"]
+    assert said.startswith("paused: sh ") and "sleep or poll loop" in said
+    assert f're-park this as `wish <w-id> --read "waiting: …" --wait <{GRAMMAR}>` and stop' in said
 
 
 def test_call_begun_before_the_last_boundary_is_left_running(tmp_path, monkeypatch):
