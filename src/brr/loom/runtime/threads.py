@@ -127,6 +127,8 @@ def thread_table(home: Home, facts: list) -> list[dict]:
     now, rows = time.time(), []
     from .wishes import plan_word, told as fold_wishes
     told = fold_wishes(facts)
+    # A gauge depends on its shell alone: read it once per table, not per row.
+    tanks = {}
     from .receipts import receipts
     shipped = receipts(facts, home.install_id())
     cards = pr_cards(home)
@@ -167,7 +169,9 @@ def thread_table(home: Home, facts: list) -> list[dict]:
             if not count or jack.get('stop_blocks'):
                 value = 'holding'
                 from .usage import fuel
-                tank = fuel(home, shell) if shell else ''
+                if shell not in tanks:
+                    tanks[shell] = fuel(home, shell) if shell else ''
+                tank = tanks[shell]
                 if tank:
                     value += ' ' + tank.removeprefix(f'fuel {shell} ')
             elif now - recent <= 180:
