@@ -18,9 +18,10 @@ Conditions, one row each in ``KINDS``, resolve on any terminal outcome:
   answers or cites it (how a person answers an ask).
 - ``letter:<id>``: a letter replies to it.
 - ``at:<instant>``: the clock passes it.
-- ``file:<path>``: the path exists. A body that starts a long command itself
-  runs ``(cmd; echo $? > <path>) &``, parks on the path and stops; the jack
-  holds it and the notice says what the file says. The loom reads the path on
+- ``file:<path>``: the path holds something. A body that starts a long command
+  itself runs ``(cmd; echo $? > <path>) &``, parks on the path and stops; the
+  jack holds it and the notice says what the file says. The shell creates the
+  file before it writes it, so an empty file is still pending. The loom reads the path on
   its own machine, so it is absolute, and it is the room's machine.
 """
 
@@ -219,8 +220,8 @@ def outcome(wish, read, facts, found: dict, forge: dict, now: datetime) -> str |
             head = None
         except OSError as exc:
             head = f"unreadable: {exc.strerror}"
-        if head is not None:
-            return f"{on[5:]} exists" + (f" ({head.splitlines()[0]})" if head else ", empty")
+        if head:
+            return f"{on[5:]} exists ({head.splitlines()[0]})"
     until = parse_instant(str(wait.get("until", "")))
     if until is not None and until <= now:
         return f"nothing resolved by {wait['until']}"

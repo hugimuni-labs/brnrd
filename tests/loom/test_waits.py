@@ -238,6 +238,8 @@ def test_a_file_wait_resolves_when_the_path_exists_and_says_what_it_holds(ledger
     read = park(home, seat, ident, "--wait", f"file:{done}")
     assert read["wait"]["on"] == f"file:{done}"
     assert told(home) == []
+    done.write_text("")  # `> path` has opened it; `echo $?` has not written yet
+    assert told(home) == []
     done.write_text("1\n")
     [letter] = told(home)
     assert f"wait on {ident} resolved: {done} exists (1)" in letter.data["body"]
