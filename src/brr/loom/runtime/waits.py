@@ -2,8 +2,8 @@
 
 A park is a ``wish.read`` whose reading starts ``waiting:``. Its ``wait``
 field is ``{"on": <condition>, "until": <instant>}``, ``on`` absent for a
-prose park. The live wait is the latest read of an open wish with nothing
-after it: a result, a verdict or another read ends it. Every tick
+prose park. The live wait is the latest read of an open wish with no result
+after it: a result or another read ends it, and a closed wish has none. Every tick
 ``observe_waits`` checks the live waits against facts already held and the
 forge states the ``Watcher`` polled off the loop; when one comes true, or its
 ``until`` passes, the loom writes one notice to the wish's thread, and that
