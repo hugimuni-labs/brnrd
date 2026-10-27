@@ -849,9 +849,10 @@ def test_cli_install_picks_a_body_with_fuel_and_writes_it(tmp_path, machine, mon
     monkeypatch.setattr(service, "_fuel", lambda h, shell: asked.append(shell) or ("week 80%" if shell == "codex" else None))
     assert _brnrd("loom", "install", "--home", str(home)) == 0
     assert asked == ["claude", "codex"]
-    assert _default_body(home) == "codex/gpt-6"
+    # Bare codex: its body reads the person's codex model at each run, so a later change there carries.
+    assert _default_body(home) == "codex"
     out = capsys.readouterr().out
-    assert "body: codex/gpt-6 (picked: codex has fuel, week 80%; written to" in out
+    assert "body: codex (picked: codex has fuel, week 80%; written to" in out
     # The rest of the seeded file is kept.
     assert "# brnrd loom config" in (home / "loom" / "config.toml").read_text()
 
@@ -859,7 +860,7 @@ def test_cli_install_picks_a_body_with_fuel_and_writes_it(tmp_path, machine, mon
     asked.clear()
     assert _brnrd("loom", "install", "--home", str(home)) == 0
     assert asked == []
-    assert "body: codex/gpt-6 (from preferences)" in capsys.readouterr().out
+    assert "body: codex (from preferences)" in capsys.readouterr().out
 
 
 def test_cli_install_writes_the_pick_once_and_a_hand_edit_wins(tmp_path, machine, monkeypatch, capsys):
