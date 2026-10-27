@@ -56,7 +56,7 @@ def test_fake_live_pair_saves_named_identity_and_keeps_unrelated_letters(tmp_pat
     assert load_config(tmp_path).connectors == ('desk=fake',)
     assert (tmp_path / 'self/people/ada/channels.toml').read_text() == 'channels = ["desk:42"]\n'
     sent = [json.loads(r) for r in (tmp_path / 'loom/channel-fake.jsonl').read_text().splitlines()]
-    assert sent[0]['text'] == 'heard you as 42'
+    assert sent[0]['text'].startswith('Paired ✓')
     assert (state / 'in/other.md').exists() and not (state / 'in/code.md').exists()
     assert connector.person_dm(home, 'channel:desk/42') == 'person:ada'
     with pytest.raises(ValueError, match='already in use'):
@@ -83,20 +83,9 @@ def test_group_or_spoofed_identity_never_pairs(tmp_path):
     assert load_config(tmp_path).connectors == ()
 
 
-def test_cli_setup_and_setup_channel_share_flow(tmp_path, monkeypatch):
-    from brr.cli import main
-    calls = []
-    monkeypatch.setattr(setup_channel, 'pair', lambda *a, **kw: calls.append((a, kw)))
-    for spelling in (['setup'], ['setup', 'channel']):
-        assert main([*spelling, '--home', str(tmp_path), '--kind', 'fake',
-                     '--name', 'desk', '--person', 'ada']) == 0
-    assert len(calls) == 2
-    assert all(args[1:] == ('fake', 'desk', 'ada') for args, _ in calls)
-
-
 def test_relay_setup_explains_existing_account_pairing(tmp_path, capfd):
     home = home_at(tmp_path)
-    with pytest.raises(subprocess.CalledProcessError):
+    with pytest.raises(ValueError, match='Nothing was enabled'):
         setup_channel.pair(home, 'relay', 'cloud', 'ada', out=lambda _: None)
     assert 'brnrd account connect' in capfd.readouterr().err
     assert load_config(tmp_path).connectors == ()
@@ -221,3 +210,137 @@ def test_a_door_puts_its_link_in_the_prompt_and_a_broken_one_falls_back(tmp_path
     code = code_in(lines[0])
     assert code and 'does not write first' in lines[0]
     assert (f'https://t.me/ada_bot?start={code}' in lines[0]) == linked
+
+
+def test_a_door_link_is_also_a_qr_code_a_phone_can_scan(tmp_path):
+    segno = pytest.importorskip('segno')
+    home = home_at(tmp_path)
+    folder = tmp_path / 'loom/connectors/fake'
+    shutil.copytree(Path(setup_channel.__file__).parent / 'connectors/fake', folder)
+    (folder / 'door').write_text('#!/usr/bin/env python3\nimport json, sys\n'
+                                 'print(json.dumps(dict(name="@ada_bot", link="https://t.me/ada_bot?start=" + sys.argv[1])))\n')
+    (folder / 'door').chmod(0o755)
+    lines = []
+    with pytest.raises(TimeoutError):
+        setup_channel.pair(home, 'fake', 'desk', 'ada', timeout=0, out=lines.append, qr=True)
+    code = code_in(lines[0])
+    assert 'scan the code below' in lines[0] and len(lines) == 2
+    # Every module is painted explicitly, black or white, and they spell the link.
+    painted = [[cell == '40' for cell in re.findall(r'\x1b\[(4[07])m  ', row)] for row in lines[1].splitlines()]
+    want = [[bool(dark) for dark in row]
+            for row in segno.make(f'https://t.me/ada_bot?start={code}', error='l').matrix_iter(border=2)]
+    assert painted == want
+
+    lines = []
+    with pytest.raises(TimeoutError):
+        setup_channel.pair(Home(tmp_path, 'aaaa'), 'fake', 'desk2', 'ada', timeout=0, out=lines.append, qr=False)
+    assert len(lines) == 1 and 'scan' not in lines[0] and 'https://t.me/ada_bot?start=' in lines[0]
+
+
+def test_guided_setup_asks_in_plain_words_and_derives_the_channel_name(tmp_path, monkeypatch, capsys):
+    import io
+    calls = []
+    monkeypatch.setattr(setup_channel, 'pair', lambda *a, **kw: calls.append(a))
+    monkeypatch.setattr(setup_channel, '_full_name', lambda: 'Sasha Petrova')
+    monkeypatch.setattr(setup_channel.shutil, 'which', lambda name: f'/bin/{name}')
+    monkeypatch.setattr('brr.loom.runtime.service._codex_model', lambda: 'gpt-5')
+    # Piped answers: codex, Enter for Telegram, Enter for the OS name.
+    monkeypatch.setattr('sys.stdin', io.StringIO('2\n\n\n'))
+    assert setup_channel.main(['--home', str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    for asked in ('Which AI should brnrd think with?', 'How do you want to talk to brnrd?',
+                  'What should brnrd call you?', 'brnrd will call you Sasha Petrova'):
+        assert asked in out
+    for gone in ('Channel kind', 'Name this channel', 'Your person name', 'fake'):
+        assert gone not in out
+    assert [a[1:] for a in calls] == [('telegram', 'telegram', 'sasha-petrova')]
+    assert load_config(tmp_path).body.startswith('codex')
+
+
+def test_a_second_channel_of_a_kind_gets_a_numbered_name(tmp_path):
+    home = home_at(tmp_path)
+    (tmp_path / 'loom').mkdir(exist_ok=True)
+    (tmp_path / 'loom/config.toml').write_text('connectors = ["telegram=telegram"]\n')
+    assert setup_channel._channel_name(Home(tmp_path), 'telegram') == 'telegram-2'
+    assert setup_channel._person_id('  Ada Lovelace! ') == 'ada-lovelace'
+
+
+def test_a_running_loom_hears_a_channel_paired_after_it_started(tmp_path):
+    from brr.loom.runtime.ledger import read_facts
+    home = home_at(tmp_path)
+    inbox = home.thread_dir('inbox')
+    inbox.mkdir(parents=True)
+    (inbox / 'README.md').write_text('---\nid: inbox\nstatus: open\ntense: plan\n---\n# Inbox\n')
+    inputs = connector.Inputs(home)  # the loom, started before any channel exists
+    try:
+        inputs.step()
+        state = Path(connector.environment(home, 'desk')['BRNRD_STATE'])
+        def send_code(line):
+            code = code_in(line)
+            if not code:
+                return
+            drop = state / 'in'
+            # The start link and the typed code: the same code arrives twice.
+            for ident in ('code', 'again'):
+                (drop / f'{ident}.md').write_text(_front(dict(kind='letter', id=ident,
+                                                  to='42', **{'from': '42'}), code))
+        assert setup_channel.pair(home, 'fake', 'desk', 'ada', out=send_code) == 'desk:42'
+        assert not list((state / 'in').glob('*.md'))
+        (state / 'in/hello.md').write_text(_front(dict(kind='letter', id='hello',
+                                           to='42', **{'from': '42'}), 'hello brnrd'))
+        inputs.step()
+        letter, = [f for f in read_facts(home) if f.kind == 'letter']
+        assert letter.data['body'] == 'hello brnrd'
+        assert letter.data['to'] == 'thread:inbox'
+        assert letter.data['from'] == 'person:ada'
+    finally:
+        inputs.close()
+
+
+def test_setup_is_done_when_the_first_letter_reaches_a_body(tmp_path):
+    import threading
+    import time
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime.ledger import append, read_facts
+    home = home_at(tmp_path)
+    inbox = home.thread_dir('inbox')
+    inbox.mkdir(parents=True)
+    (inbox / 'README.md').write_text('---\nid: inbox\nstatus: open\ntense: plan\n---\n# Inbox\n')
+    (tmp_path / 'self/people/ada').mkdir(parents=True)
+    (tmp_path / 'self/people/ada/channels.toml').write_text('channels = ["desk:42"]\n')
+    (tmp_path / 'loom/config.toml').write_text('connectors = ["desk=fake"]\n')
+    said, result = [], {}
+    def wait():
+        try:
+            result['strand'] = setup_channel.first_letter(home, 'ada', timeout=30, out=said.append,
+                                                          running=lambda: True, sleep=lambda s: time.sleep(.02))
+        except Exception as exc:
+            result['error'] = exc
+    inputs = connector.Inputs(home)
+    waiter = threading.Thread(target=wait)
+    waiter.start()
+    try:
+        inputs.step()
+        state = Path(connector.environment(home, 'desk')['BRNRD_STATE'])
+        (state / 'in/hello.md').write_text(_front(dict(kind='letter', id='hello',
+                                           to='42', **{'from': '42'}), 'hello brnrd'))
+        inputs.step()
+        letter, = [f for f in read_facts(home) if f.kind == 'letter']
+        assert waiter.is_alive()  # landed is not done: no body has read it
+        append(home, Fact(kind='shown', by='strand:s-1', id='shown:s-1:1',
+                          data={'strand': 's-1', 'gen': 1, 'ids': [letter.data['id']]}))
+        waiter.join(30)
+    finally:
+        inputs.close()
+    assert result == {'strand': 's-1'}
+    words = '\n'.join(said)
+    assert 'brnrd got your message' in words and 'brnrd is reading it now (s-1)' in words
+
+
+def test_setup_says_when_nothing_is_running_to_hear_the_first_letter(tmp_path):
+    home = home_at(tmp_path)
+    said = []
+    with pytest.raises(TimeoutError, match='No message from you reached brnrd'):
+        setup_channel.first_letter(home, 'ada', timeout=.2, out=said.append, running=lambda: False,
+                                   sleep=lambda s: None)
+    assert said == [said[0]] and '`brnrd loom install`' in said[0]

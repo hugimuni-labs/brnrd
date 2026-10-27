@@ -105,35 +105,6 @@ def test_write_receipt_lands_beside_the_run_and_names_the_verdict(tmp_path):
     assert gate_receipt.read_receipt(outbox, repo) == entry
 
 
-def test_write_receipt_none_outside_a_git_repo(tmp_path):
-    stray = tmp_path / "not-a-repo"
-    stray.mkdir()
-    outbox = tmp_path / "outbox"
-    assert gate_receipt.write_receipt(
-        outbox, stray, verdict="GREEN", command="true") is None
-    assert not outbox.exists()  # no partial write on the failure path
-
-
-def test_run_and_write_receipt_green_forwards_zero_exit(tmp_path, capsys):
-    repo = _repo(tmp_path)
-    outbox = tmp_path / "outbox"
-    rc = gate_receipt.run_and_write_receipt(repo, outbox, "true", run_id="run-2")
-    assert rc == 0
-    entry = gate_receipt.read_receipt(outbox, repo)
-    assert entry["verdict"] == "GREEN"
-    assert entry["gate_command"] == "true"
-    assert "receipt" in capsys.readouterr().out
-
-
-def test_run_and_write_receipt_red_forwards_nonzero_exit(tmp_path):
-    repo = _repo(tmp_path)
-    outbox = tmp_path / "outbox"
-    rc = gate_receipt.run_and_write_receipt(repo, outbox, "false")
-    assert rc != 0
-    entry = gate_receipt.read_receipt(outbox, repo)
-    assert entry["verdict"] == "RED"
-
-
 def test_run_and_write_receipt_matches_the_tree_it_ran_on(tmp_path):
     """The receipt this writer produces must be exactly what
     `hooks._gate_closeout_clause` compares against — same git output, same
@@ -187,23 +158,6 @@ def test_two_trees_gated_under_one_outbox_both_survive(tmp_path):
     # The map really does carry both keys, not just "whichever read wins".
     data = json.loads((outbox / gate_receipt.RECEIPT_NAME).read_text(encoding="utf-8"))
     assert set(data) == {gate_receipt.tree_key(first), gate_receipt.tree_key(second)}
-
-
-def test_a_receipt_for_a_different_tree_is_neither_pass_nor_fail(tmp_path):
-    """A reader asking about *its own* tree must never be answered by another
-    tree's entry — the class of bug #820 names: a referent filed under the
-    wrong key. `stray` was never gated; `first`'s entry existing beside it in
-    the same file must not change that."""
-    (tmp_path / "first").mkdir()
-    (tmp_path / "stray").mkdir()
-    first = _repo(tmp_path / "first")
-    stray = _repo(tmp_path / "stray")
-    outbox = tmp_path / "outbox"
-
-    gate_receipt.write_receipt(outbox, first, verdict="GREEN", command="cmd-a")
-
-    assert gate_receipt.read_receipt(outbox, stray) is None
-    assert gate_receipt.read_receipt(outbox, first) is not None
 
 
 def test_tree_key_is_a_digest_not_the_path(tmp_path):

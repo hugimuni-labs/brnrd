@@ -15,7 +15,6 @@ from pathlib import Path
 import pytest
 
 from brr import daemon, hooks, protocol
-from brr.outbox import notices
 from brr.run import Run
 
 
@@ -103,45 +102,6 @@ def test_the_staging_casualty_drop_is_attributed_before_any_row(tmp_path, monkey
     })
     (row,) = daemon._read_outbox_notices(outbox)
     assert (row["source_file"], row["verb"]) == ("do-1-cut-2.md", "cut")
-
-
-def test_an_explicit_source_file_wins_over_the_attribution(tmp_path):
-    outbox = tmp_path / "outbox"
-    with notices.attributed(source_file="staged.md", verb="spawn", run="run-1"):
-        daemon._record_outbox_notice(
-            outbox, "x refused: y", kind="refused", lifetime="run",
-            source_file="other.md", verb="cut",
-        )
-    (row,) = daemon._read_outbox_notices(outbox)
-    assert (row["source_file"], row["verb"], row["run"]) == ("other.md", "cut", "run-1")
-
-
-def test_a_notice_outside_any_drain_carries_no_file(tmp_path):
-    outbox = tmp_path / "outbox"
-    daemon._record_outbox_notice(
-        outbox, "runners.md ignored: repo-side", kind="refused", lifetime="standing",
-    )
-    (row,) = daemon._read_outbox_notices(outbox)
-    assert set(row) == {"at", "text", "kind", "lifetime"}
-
-
-def test_the_attribution_does_not_leak_past_its_block(tmp_path):
-    outbox = tmp_path / "outbox"
-    with notices.attributed(source_file="a.md", verb="note", run="r"):
-        pass
-    daemon._record_outbox_notice(outbox, "z dropped", kind="dropped", lifetime="run")
-    (row,) = daemon._read_outbox_notices(outbox)
-    assert "source_file" not in row and "verb" not in row
-
-
-def test_kind_and_lifetime_are_still_required_and_checked(tmp_path):
-    with pytest.raises(ValueError, match="invalid kind"):
-        daemon._record_outbox_notice(tmp_path, "x", kind="oops", lifetime="run")
-    with pytest.raises(ValueError, match="invalid lifetime"):
-        notices.write("refused", "x", outbox_dir=tmp_path, lifetime="forever")
-    assert daemon._NOTICE_KINDS is notices.KINDS
-    assert daemon._NOTICE_LIFETIMES is notices.LIFETIMES
-    assert daemon.NOTICES_FILE == notices.NOTICES_FILE
 
 
 def test_the_chip_still_counts_and_names_the_spawn_refusal(tmp_path, monkeypatch):

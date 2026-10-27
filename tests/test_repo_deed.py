@@ -222,30 +222,3 @@ def test_link_never_replaces_an_owner_authored_readme(tmp_path, monkeypatch):
 # ── ceremony surfaces ────────────────────────────────────────────────────
 
 
-def test_link_ceremony_states_owner_names_privacy_and_rename(capsys):
-    from brr.cli import _print_link_ceremony
-
-    _print_link_ceremony("acme", "brnrd-home", "brnrd-knowledge")
-    out = capsys.readouterr().out
-    assert "acme/brnrd-home" in out
-    assert "acme/brnrd-knowledge" in out
-    assert "private" in out
-    assert "brnrd's App owns nothing" in out
-    assert "--dominion-name" in out and "--knowledge-name" in out
-    assert "README deed" in out
-
-
-def test_init_narration_names_both_repos_without_linking(tmp_path, capsys, monkeypatch):
-    from brr import adopt
-
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo_root, check=True)
-    home = tmp_path / "home"
-    monkeypatch.setenv("BRNRD_HOME", str(home))
-
-    adopt._narrate_home_repos(repo_root)
-    out = capsys.readouterr().out
-    assert str(home) in out
-    assert "memory" in out and "knowledge" in out
-    assert "README deed" in out

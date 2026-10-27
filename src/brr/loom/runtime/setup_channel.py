@@ -6,9 +6,12 @@ import re
 import secrets
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
+
+from brr import style
 
 from .adapters import resolve
 from .config import load_config, read_array, seed_config, set_value
@@ -18,30 +21,50 @@ from .port import _front, parse_frontmatter
 from .selfrepo import SelfError, init_self
 
 
-def _instructions(folder, env, code, timeout):
+def _door(folder, env, code):
+    """An optional door's ``{name, link}``: the bot, and a link that sends the code by itself."""
+    if not (folder / 'door').is_file():
+        return None
+    try:
+        result = subprocess.run([str(folder / 'door'), code], env=env, stdout=subprocess.PIPE,
+                                text=True, timeout=30)
+        door = json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if not (isinstance(door, dict) and isinstance(door.get('name'), str)
+            and isinstance(door.get('link'), str)):
+        return None
+    return door
+
+
+def _instructions(door, code, timeout, scan=False):
     """Say which way pairing runs: the person writes first; nothing arrives before."""
-    door = None
-    if (folder / 'door').is_file():
-        # An optional door names the bot and a link that sends the code by itself.
-        try:
-            result = subprocess.run([str(folder / 'door'), code], env=env, stdout=subprocess.PIPE,
-                                    text=True, timeout=30)
-            door = json.loads(result.stdout) if result.returncode == 0 else None
-        except (OSError, subprocess.SubprocessError, ValueError):
-            door = None
-        if not (isinstance(door, dict) and isinstance(door.get('name'), str)
-                and isinstance(door.get('link'), str)):
-            door = None
     tail = (f"The bot does not write first; it answers 'heard you as <your id>'. "
             f'Waiting up to {timeout:g}s.')
     if door:
-        return (f"Open {door['link']} where you use the app and press Start: that sends "
+        also = ", or scan the code below with your phone's camera" if scan else ''
+        return (f"Open {door['link']} where you use the app and press Start{also}: that sends "
                 f"your code. Or open {door['name']} yourself and send the code {code}. " + tail)
     return (f'Open the chat with your bot yourself (press Start if the app asks) '
             f'and send the code {code}. ' + tail)
 
 
-def pair(home, kind, name, person, *, timeout=180, out=print):
+def qr_code(link):
+    """``link`` as a QR code for a terminal, or "" when segno is missing.
+
+    Each module is painted black or white, not left to the terminal's own
+    colours: a light theme would otherwise invert the code.
+    """
+    try:
+        import segno
+    except ImportError:
+        return ''
+    rows = segno.make(link, error='l').matrix_iter(border=2)
+    return '\n'.join(''.join('\x1b[40m  ' if dark else '\x1b[47m  ' for dark in row) + '\x1b[0m'
+                     for row in rows)
+
+
+def pair(home, kind, name, person, *, timeout=180, out=print, qr=None):
     if not all(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', v) for v in (name, person)):
         raise ValueError('Channel and person names use letters, digits, dots, dashes or underscores')
     if name in instances(home):
@@ -53,7 +76,9 @@ def pair(home, kind, name, person, *, timeout=180, out=print):
     state = Path(env['BRNRD_STATE'])
     setup = folder / 'setup'
     if setup.is_file():
-        subprocess.run([str(setup)], env=env, check=True)
+        sys.stdout.flush()  # the connector writes to the same terminal, after what is already said
+        if subprocess.run([str(setup)], env=env).returncode != 0:
+            raise ValueError('Nothing was enabled; run brnrd again when you have it.')
     code = secrets.token_hex(4)
     # Use the normal drop directory: unrelated letters survive pairing for the
     # loom to ingest once enabled. The connector advances its usual cursor.
@@ -61,7 +86,11 @@ def pair(home, kind, name, person, *, timeout=180, out=print):
     drop.mkdir(parents=True, exist_ok=True)
     command = folder / 'in'
     child = subprocess.Popen([str(command), str(drop)], env=env) if command.is_file() else None
-    out(_instructions(folder, env, code, timeout))
+    door = _door(folder, env, code)
+    picture = qr_code(door['link']) if door and (sys.stdout.isatty() if qr is None else qr) else ''
+    out(_instructions(door, code, timeout, scan=bool(picture)))
+    if picture:
+        out(picture)
     deadline = time.monotonic() + timeout
     try:
         while time.monotonic() < deadline:
@@ -79,7 +108,7 @@ def pair(home, kind, name, person, *, timeout=180, out=print):
                 with tempfile.TemporaryDirectory(prefix='pair-', dir=state) as directory:
                     reply = Path(directory) / 'reply.md'
                     reply.write_text(_front(dict(kind='letter', id='pair-' + code,
-                                                to=chat, re=fm['id']), f'heard you as {chat}'))
+                                                to=chat, re=fm['id']), 'Paired ✓ This chat now reaches brnrd; write here any time.'))
                     result = subprocess.run([str(folder / 'out'), str(reply)], env=env,
                                             capture_output=True, text=True, timeout=60)
                 if result.returncode != 0:
@@ -114,6 +143,147 @@ def pair(home, kind, name, person, *, timeout=180, out=print):
             except subprocess.TimeoutExpired:
                 child.kill()
                 child.wait()
+        # The code said twice (the start link, then typed) leaves a second
+        # copy; once the loom polls this channel it would be a stray letter.
+        for path in drop.glob('*.md'):
+            if not path.is_symlink() and parse_frontmatter(path.read_text()).get('body', '').strip() in (code, '/start ' + code):
+                path.unlink()
+                if path.with_suffix('.d').exists():
+                    shutil.rmtree(path.with_suffix('.d'))
+
+
+def first_letter(home, person, *, timeout=600, out=print, running=None, sleep=time.sleep):
+    """Wait until a letter from ``person`` is shown to a body: the proof the chat reaches brnrd.
+
+    Returns the strand that was shown it. Pairing proves the bot can talk;
+    only a body reading the next letter proves the loom hears that chat.
+    """
+    from .ledger import read_facts
+    from .service import _lock_held
+    sender = f'person:{person}'
+    before = {f.id for f in read_facts(home) if f.kind == 'letter'}
+    running = running or (lambda: _lock_held(home.root))
+    told = landed = False
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        facts = read_facts(home)
+        new = {str(f.data.get('id', f.id)) for f in facts
+               if f.kind == 'letter' and f.id not in before and f.data.get('from') == sender}
+        if new and not landed:
+            out(f"  {style.check()} brnrd got your message")
+            landed = True
+        for fact in facts:
+            if fact.kind == 'shown' and new & set(fact.data.get('ids') or ()):
+                strand = fact.data.get('strand')
+                out(f"  {style.check()} brnrd is reading it now ({strand}); the answer comes in that chat")
+                return strand
+        if not landed and not told and not running():
+            out(f"  {style.dot()} brnrd isn't running here yet: start it with `brnrd loom install`, "
+                "and your message will go through.")
+            told = True
+        sleep(.5)
+    if landed:
+        raise TimeoutError('Your message reached brnrd, but nothing has started reading it yet; '
+                           'see `brnrd loom status`.')
+    raise TimeoutError("No message from you reached brnrd; the chat is paired, so once "
+                       "`brnrd loom status` shows it running, write again.")
+
+
+#: What a person picks from, in plain words; a kind not named here shows by its own name.
+#: ``fake`` is a test pipe: reachable with ``--kind fake``, never offered.
+CHOICES = {
+    'telegram': 'Telegram, with a bot you make yourself (two minutes, in the Telegram app)',
+    'relay': 'brnrd cloud, with your brnrd.dev login',
+}
+HIDDEN = {'fake'}
+
+
+def _step(label):
+    print(f"\n{style.bold('→')} {style.bold(label)}")
+
+
+def _ok(text):
+    print(f"  {style.check()} {text}")
+
+
+def _ask(question, default=''):
+    hint = f" {style.dim('(Enter for ' + default + ')')}" if default else ''
+    try:
+        return input(f"  {style.qmark()} {style.bold(question)}{hint} ").strip() or default
+    except EOFError:
+        raise ValueError('No answer: input closed; nothing was changed') from None
+
+
+def _choose_kind(kinds):
+    offered = [k for k in CHOICES if k in kinds] + [k for k in kinds if k not in CHOICES and k not in HIDDEN]
+    _step('How do you want to talk to brnrd?')
+    for number, kind in enumerate(offered, 1):
+        print(f"    {number}. {CHOICES.get(kind, kind)}")
+    while True:
+        answer = _ask(f'Choose 1-{len(offered)}:', '1')
+        if answer in kinds:
+            return answer
+        if answer.isdigit() and 1 <= int(answer) <= len(offered):
+            return offered[int(answer) - 1]
+        print(f"  {style.dot()} Type a number from the list.")
+
+
+def _channel_name(home, kind):
+    """The channel's name is the kind, numbered when that is taken: nobody should have to name a pipe."""
+    taken = set(instances(home))
+    return next(n for n in (kind, *(f'{kind}-{i}' for i in range(2, 100))) if n not in taken)
+
+
+def _full_name():
+    """The OS account's display name: macOS ``id -F``, else the passwd comment."""
+    import getpass
+    try:
+        name = subprocess.run(['id', '-F'], capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        name = ''
+    if not name:
+        try:
+            import pwd
+            name = pwd.getpwuid(os.getuid()).pw_gecos.split(',')[0].strip()
+        except (ImportError, KeyError):
+            name = ''
+    return name or getpass.getuser()
+
+
+def _person_id(name):
+    """A people/ folder name from what a person wants to be called."""
+    slug = re.sub(r'[^a-z0-9._-]+', '-', name.strip().lower()).strip('-._')
+    return slug or 'me'
+
+
+def _choose_body(home):
+    """The harness brnrd thinks with: the config's, else one on PATH, asked when there are two."""
+    from .adapters import body_label
+    from .service import _defaults
+    _step('Which AI should brnrd think with?')
+    seed_config(home.root)
+    current = load_config(home.root).body
+    if isinstance(current, str) and current.strip():
+        _ok(f'{current.strip()} (already set)')
+        return
+    found = [(shell, core) for shell, core in _defaults() if core is not None and shutil.which(shell)]
+    if not found:
+        # Like the daemon-era runner rung: say it, keep going; pairing does not need it.
+        print(f"  {style.cross()} Neither claude nor codex is on PATH: install Claude Code "
+              '(https://claude.com/claude-code) or Codex, then run brnrd setup again')
+        return
+    if len(found) > 1:
+        for number, (shell, _core) in enumerate(found, 1):
+            print(f"    {number}. {shell}")
+        while True:
+            answer = _ask(f'Choose 1-{len(found)}:', '1')
+            if answer.isdigit() and 1 <= int(answer) <= len(found):
+                break
+            print(f"  {style.dot()} Type a number from the list.")
+        found = [found[int(answer) - 1]]
+    choice = body_label(*found[0])
+    set_value(home.root, 'body', choice)
+    _ok(choice)
 
 
 def main(argv=None):
@@ -124,6 +294,8 @@ def main(argv=None):
     parser.add_argument('--name')
     parser.add_argument('--person')
     parser.add_argument('--timeout', type=float, default=180)
+    parser.add_argument('--wait', type=float, default=600,
+                        help='seconds to wait for your first message to reach brnrd; 0 skips')
     args = parser.parse_args(argv)
     # Setup creates a home; the read-only resolver normally requires one.
     target = args.home or os.environ.get("BRNRD_HOME") or Path.home() / "brnrd"
@@ -131,14 +303,33 @@ def main(argv=None):
     bundled = Path(__file__).parent / 'connectors'
     kinds = sorted({p.name for root in (bundled, home.root / 'loom/connectors')
                     for p in root.glob('*') if (p / 'carries').is_file() and (p / 'out').is_file()})
+    from brr import __version__
+    print(f"{style.bold('brnrd')} {style.dim(__version__)} {style.dim('· guided setup')}")
+    print(f"{style.dim('home:')} {style.accent(str(home.root))}")
     try:
-        kind = args.kind or input(f'Channel kind ({", ".join(kinds)}): ').strip()
-        name = args.name or input('Name this channel: ').strip()
+        _choose_body(home)
+        kind = args.kind or _choose_kind(kinds)
+        if not args.kind:
+            _ok(CHOICES.get(kind, kind).split(',')[0])
+        name = args.name or _channel_name(home, kind)
         people = sorted(p.name for p in (home.root / 'self/people').glob('*') if p.is_dir())
-        person = args.person or (people[0] if len(people) == 1 else input('Your person name: ').strip())
+        if args.person or len(people) == 1:
+            person = args.person or people[0]
+        else:
+            _step('What should brnrd call you?')
+            called = _ask('Your name:', _full_name())
+            person = _person_id(called)
+            _ok(f'brnrd will call you {called}')
         # A letter lands only on a thread on the self's main: seed it before pairing.
-        print(init_self(home.root, person=person))
-        pair(home, kind, name, person, timeout=args.timeout)
+        init_self(home.root, person=person)
+        _step(f'Connect {CHOICES.get(kind, kind).split(",")[0]}')
+        paired = pair(home, kind, name, person, timeout=args.timeout)
+        if paired and args.wait > 0:
+            _step('Say hello: send brnrd any message in that chat')
+            first_letter(home, person, timeout=args.wait)
     except (ValueError, OSError, TimeoutError, subprocess.SubprocessError, SelfError) as exc:
         raise SystemExit(str(exc)) from None
+    except KeyboardInterrupt:
+        print()
+        raise SystemExit('Stopped; nothing past the last ✓ was changed.') from None
     return 0

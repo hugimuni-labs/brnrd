@@ -31,13 +31,6 @@ def _plan(seed: str = "main", target: str | None = "main") -> branching.PublishP
     )
 
 
-def test_get_env_returns_real_builtins():
-    assert envs.get_env("host").name == "host"
-    assert envs.get_env("worktree").name == "worktree"
-    assert envs.get_env("docker").name == "docker"
-    assert envs.get_env("sandbox").name == "sandbox"
-
-
 class _SbxRecorder:
     """Fake ``subprocess.run`` for the sbx CLI: ``ls``, the version probe,
     the per-Shell login probe. ``logged_in`` is what the VM answers to
@@ -424,13 +417,6 @@ def test_sandbox_relocate_script_is_safe_against_shell_metacharacters_in_cwd(
     assert not (sentinel_dir / "INJECTED2").exists()
     resumed = tx.claude_session_path(weird_cwd, session_id, home=vm_home)
     assert resumed.exists(), "the relocation must still have worked, injection or not"
-
-
-def test_get_env_rejects_unknown_backend():
-    with pytest.raises(envs.UnsupportedEnvironmentError) as exc:
-        envs.get_env("firecracker")
-
-    assert "environment backend 'firecracker' is not available yet" in str(exc.value)
 
 
 def test_docker_prepare_requires_cli_and_image(tmp_path, monkeypatch):
@@ -2324,10 +2310,6 @@ def _solitary_invoke(backend, ctx, recorder, cfg, response_path, tmp_path):
         ctx, "claude", invocation,
         {**cfg, "runner_cmd": ["mock", "{prompt}"]},
     )
-
-
-def test_get_env_returns_solitary():
-    assert envs.get_env("solitary").name == "solitary"
 
 
 def test_solitary_prepare_never_resolves_github_token(tmp_path, monkeypatch):

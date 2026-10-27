@@ -9,6 +9,7 @@ requires-python = ">=3.10"
 dependencies = [
   "requests>=2.31,<3",
   "packaging>=23",
+  "segno>=1.6,<2",
   "tomli; python_version < '3.11'",
 ]
 license = "MIT AND AGPL-3.0-only"

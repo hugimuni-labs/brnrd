@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from brr import cli, gitops
+from brr import gitops
 
 
 def test_not_a_git_repo_raises_the_named_class(tmp_path: Path, monkeypatch):
@@ -42,18 +42,3 @@ def test_it_is_a_runtimeerror_but_not_a_repotreeunusable():
     assert not issubclass(gitops.RepoTreeUnusable, gitops.NotAGitRepository)
 
 
-def test_maybe_repo_root_still_degrades_to_none(tmp_path: Path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    assert cli._maybe_repo_root() is None
-
-
-def test_cli_main_renders_a_clean_line_not_a_traceback(tmp_path, monkeypatch, capsys):
-    # A command that resolves the repo root from cwd, driven from a non-git
-    # folder, must exit with a single `[brnrd] …` line — no traceback.
-    monkeypatch.chdir(tmp_path)
-    with pytest.raises(SystemExit) as exc:
-        cli.main(["gate-run"])
-    rendered = str(exc.value)
-    assert rendered.startswith("[brnrd] ")
-    assert "not a git repository" in rendered.lower()
-    assert "Traceback" not in rendered

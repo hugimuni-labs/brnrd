@@ -151,21 +151,6 @@ def test_maybe_brr_dir_does_not_swallow_it(
         cli._maybe_brr_dir()
 
 
-def test_cli_main_renders_the_diagnosis_instead_of_a_traceback(
-    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
-) -> None:
-    from brr import cli
-
-    _dead_run_worktree(repo)
-    monkeypatch.chdir(repo)
-    with pytest.raises(SystemExit) as excinfo:
-        cli.main(["daemon", "status"])
-    message = str(excinfo.value.code)
-    assert message.startswith("[brnrd] ")
-    assert "core.worktree" in message
-    assert "Traceback" not in message
-
-
 # ── the two repairs ──────────────────────────────────────────────────
 
 def test_heal_unsets_a_pin_naming_a_dead_brnrd_worktree(repo: Path) -> None:

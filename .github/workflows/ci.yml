@@ -21,8 +21,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
+      # Per-test times ride along as an artifact: what a slow suite spends is
+      # read from here, not guessed (the daemon-tests cut measured with it).
       - name: Run tests
-        run: python -m pytest -q
+        run: python -m pytest -q --durations=30 --junitxml=pytest-times.xml
+      - name: Upload test times
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-times
+          path: pytest-times.xml
 
   hygiene:
     name: Repo hygiene
