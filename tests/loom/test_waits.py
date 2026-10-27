@@ -36,8 +36,13 @@ def test_a_pr_wait_resolves_on_the_merge_and_tells_the_thread_once(ledger):
     assert read["wait"]["on"] == f"pr:{REPO}#12"
     assert read["wait"]["until"] > later(days=6).strftime("%Y-%m-%dT%H:%M:%SZ")
     assert told(home) == []
+    # publish writes the library name as ``repo``; only pr.opened carries the url.
     append(home, Fact(kind="pr.merged", by="strand:s-aaaa-test", data={
-        "thread": "work", "repo": REPO, "number": 12, "head": "loom/x", "merge_commit": "abcdef1234"}))
+        "thread": "work", "repo": "brnrd", "number": 12, "head": "loom/x", "merge_commit": "abcdef1234"}))
+    assert told(home) == [], "a merge of brnrd#12 names no owner until a pr.opened does"
+    append(home, Fact(kind="pr.opened", by="strand:s-aaaa-test", data={
+        "thread": "work", "repo": "brnrd", "number": 12, "head": "loom/x",
+        "url": f"https://github.com/{REPO}/pull/12"}))
     [letter] = told(home)
     assert letter.id == notice_id("wait", waits.subject(view(home, ident), read))
     assert letter.data["to"] == "thread:work" and letter.data["from"] == "loom"
@@ -269,3 +274,66 @@ def test_watcher_writes_pr_cards_and_never_rereads_a_closed_one(tmp_path):
     watcher.prs = {"o/r#1", "o/r#2"}
     opened = {key for key in watcher.prs if watcher.cards.get(key, {}).get("state") not in ("merged", "closed")}
     assert opened == {"o/r#1"}
+
+
+def test_a_bare_pr_wait_takes_its_owner_from_the_opened_url_and_refuses_none(ledger, monkeypatch):
+    """pr.opened stores the library name as repo; a bare #N stored as pr:brnrd#N is a 404 forever."""
+    from brr.loom.runtime import verbs_wishes
+    home, seat = ledger
+    ident = heard(home, seat, "Bare")
+    append(home, Fact(kind="pr.opened", by="strand:s-aaaa-test", data={
+        "thread": "work", "repo": "brnrd", "number": 31, "head": "abc",
+        "url": f"https://github.com/{REPO}/pull/31"}))
+    assert park(home, seat, ident, "--wait", "pr:#31")["wait"]["on"] == f"pr:{REPO}#31"
+    now = datetime.now(timezone.utc)
+    for named in ("brnrd", "", None):
+        try:
+            waits.canonical("pr:#40", now, repo=lambda number: named)
+        except ValueError as exc:
+            assert "name the repo" in str(exc)
+        else:
+            raise AssertionError(f"{named!r} is no owner/repo")
+    monkeypatch.setattr(verbs_wishes, "_repo", lambda facts, number: "brnrd")
+    assert "name the repo" in command(home, seat, "wish", ident, "--read", "waiting: x",
+                                      "--wait", "pr:#40", ok=False)
+
+
+def test_one_failing_read_leaves_the_other_waits_resolving(ledger):
+    """gen 4: one 404 in Watcher._poll degraded every wait; now each condition fails alone."""
+    import urllib.error
+    from brr.loom.runtime.waits import Watcher
+    home, seat = ledger
+    merged, broken, gone = (heard(home, seat, line) for line in ("Merged", "Broken", "Gone"))
+    park(home, seat, merged, "--wait", f"pr:{REPO}#1")
+    park(home, seat, broken, "--wait", f"pr:{REPO}#2")
+    park(home, seat, gone, "--wait", "pr:o/nothing#3")
+
+    class Forge:
+        down = {2}
+
+        def pull(self, repo, number):
+            if number in self.down:
+                raise urllib.error.URLError("timed out")
+            if repo == "o/nothing":
+                raise urllib.error.HTTPError("u", 404, "Not Found", None, None)
+            return {"state": "merged", "at": "2026-10-27T18:00:00Z", "url": "u"}
+
+        def ci(self, repo, sha):
+            raise AssertionError("no ci wait")
+
+    watcher, forge = Watcher(), Forge()
+    watcher.states = {f"pr:{REPO}#2": {"state": "open", "url": "u"}, "pr:gone#9": {"state": "open"}}
+    watcher._poll(forge, waits.forge_wants(wishes(read_facts(home))))
+    assert watcher.failing is None, "one failing read is not an outage"
+    assert set(watcher.errors) == {f"pr:{REPO}#2"}
+    assert watcher.states[f"pr:{REPO}#2"] == {"state": "open", "url": "u"}, "a failed read keeps its last state"
+    assert "pr:gone#9" not in watcher.states
+    letters = told(home, forge=watcher.states)
+    bodies = {letter.data["body"].split()[2]: letter.data["body"] for letter in letters}
+    assert set(bodies) == {merged, gone}
+    assert f"pr:{REPO}#1 merged" in bodies[merged]
+    assert "pr:o/nothing#3 cannot be read: HTTP 404" in bodies[gone]
+    assert "corrected" in bodies[gone]
+    forge.down = {1, 2}
+    watcher._poll(forge, {f"pr:{REPO}#1", f"pr:{REPO}#2"})
+    assert isinstance(watcher.failing[0], urllib.error.URLError), "every read failing is an outage"

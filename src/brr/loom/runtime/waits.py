@@ -26,6 +26,7 @@ import json
 import re
 import threading
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -82,7 +83,7 @@ def canonical(text: str, now: datetime, repo=None) -> str:
         match = pattern.fullmatch(text)
         if match:
             owner = match.group(1) or (repo(match.group(2) if kind == "pr" else None) if repo else None)
-            if not owner:
+            if not owner or owner.count("/") != 1:
                 raise ValueError(f"--wait {text}: name the repo, {kind}:<owner>/<repo>"
                                  + ("#" if kind == "pr" else "@") + match.group(2))
             return f"{kind}:{owner}" + ("#" if kind == "pr" else "@") + match.group(2)
@@ -131,6 +132,12 @@ def live(found: dict) -> list[tuple]:
     return rows
 
 
+def pr_repo(data: dict) -> str | None:
+    """``owner/repo`` of a ``pr.opened`` fact, read off its url; its ``repo`` is the library name."""
+    match = re.match(r"https://github\.com/([\w.-]+/[\w.-]+)/pull/\d+", str(data.get("url") or ""))
+    return match.group(1) if match else None
+
+
 def forge_wants(found: dict) -> set[str]:
     return {read["wait"]["on"] for _wish, read in live(found)
             if str(read["wait"].get("on", "")).startswith(("pr:", "ci:"))}
@@ -167,12 +174,16 @@ def outcome(wish, read, facts, found: dict, forge: dict, now: datetime) -> str |
         number = int(on.rpartition("#")[2])
         repo = on[3:].partition("#")[0]
         from .ledger import kind_facts
+        names = {f.data.get("repo") for f in kind_facts(facts, "pr.opened")
+                 if int(f.data.get("number") or 0) == number and pr_repo(f.data) == repo}
         for merged in kind_facts(facts, "pr.merged"):
-            if merged.data.get("repo") == repo and int(merged.data.get("number") or 0) == number:
+            if merged.data.get("repo") in names and int(merged.data.get("number") or 0) == number:
                 return f"{on} merged ({merged.data.get('merge_commit', '')[:8]})"
         state = forge.get(on)
         if state and state.get("state") in ("merged", "closed"):
             return f"{on} {state['state']} at {state.get('at')}: {state.get('url')}"
+        if state and state.get("state") == "unreadable":
+            return f"{on} cannot be read: {state.get('error')}"
     elif on.startswith("ci:"):
         state = forge.get(on)
         if state and state.get("state") in ("green", "red"):
@@ -198,7 +209,7 @@ def outcome(wish, read, facts, found: dict, forge: dict, now: datetime) -> str |
     return None
 
 
-def _advice(wish, read, resolved: bool) -> str:
+def _advice(wish, read, resolved: bool, said: str = "") -> str:
     wait = read["wait"]
     if not resolved and wait.get("default") is not None:
         return (f"nobody answered by {wait['until']}. Your rec was: {wait['default']}. If it is inside "
@@ -210,6 +221,8 @@ def _advice(wish, read, resolved: bool) -> str:
                 f"watch, re-park with wish {wish.id} --read \"waiting: …\" --wait <{GRAMMAR}>; "
                 f"if it still waits on words, re-park in prose (next re-check in {_span(nxt)}), "
                 "or deliver, ask or settle")
+    if resolved and str(wait.get("on", "")).startswith("pr:") and "cannot be read" in said:
+        return f"the forge has no such pull request: re-park {wish.id} with the repo and number corrected"
     if resolved:
         return f"go on with {wish.id}: deliver, re-park with a new --wait, or ask"
     return f"re-judge {wish.id}: re-park with a new --wait or --until, deliver, ask or drop it"
@@ -242,7 +255,7 @@ def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: date
         resolved = not said.startswith("nothing resolved by")
         head = (f"wait on {wish.id} {'resolved' if resolved else 'ran out'}: {said}. "
                 f"Parked as: {read['reading']}")
-        notice(home, facts, "wait", subject(wish, read), head, _advice(wish, read, resolved),
+        notice(home, facts, "wait", subject(wish, read), head, _advice(wish, read, resolved, said),
                thread=wish.thread)
     return facts
 
@@ -306,8 +319,11 @@ class Watcher:
     The tick hands it what it wants; ``states`` is what the last poll read.
     It also reads every open pull request in ``prs`` (``<repo>#<n>``) each
     ``PRS_EVERY`` seconds and writes the cards to ``path``, which the thread
-    lines read (wake-vision). A failing poll raises from ``step``, so the
-    loop's guard records it.
+    lines read (wake-vision). A failure is kept per condition: the others'
+    states still land, and a failed one keeps its last state. A pull request
+    the forge answers 404 for is ``unreadable``, which resolves its wait with
+    that word. Only a poll in which every read failed raises from ``step``,
+    so the loop's guard records an outage, not one bad condition.
     """
 
     def __init__(self, path=None):
@@ -321,6 +337,8 @@ class Watcher:
         self.cards: dict[str, dict] = {}
         self.worker: threading.Thread | None = None
         self.failing: tuple[Exception, object] | None = None
+        #: The last poll's failure per condition, in words.
+        self.errors: dict[str, str] = {}
 
     def step(self, config, armed: bool) -> None:
         if self.path is not None and not self.cards:
@@ -350,33 +368,41 @@ class Watcher:
             raise self.failing[0].with_traceback(self.failing[1])
 
     def _poll(self, forge, wants: set[str], prs: set[str] = frozenset()) -> None:
-        try:
-            if prs:
-                from .home import atomic_write
-                # One unreadable pull request keeps its last card; the rest still land.
-                cards, missed = dict(self.cards), None
-                for key in sorted(prs):
-                    repo, _, number = key.partition("#")
-                    try:
-                        cards[key] = forge.card(repo, int(number))
-                    except Exception as exc:
-                        missed = missed or exc
+        read, missed = 0, None
+        if prs:
+            from .home import atomic_write
+            # One unreadable pull request keeps its last card; the rest still land.
+            cards = dict(self.cards)
+            for key in sorted(prs):
+                repo, _, number = key.partition("#")
+                try:
+                    cards[key] = forge.card(repo, int(number))
+                    read += 1
+                except Exception as exc:
+                    missed = missed or exc
+            try:
                 atomic_write(self.path, json.dumps(cards, indent=1, sort_keys=True) + "\n")
                 self.cards = cards
-                if missed is not None:
-                    raise missed
-            if not wants:
-                self.failing = None
-                return
-            states = {}
-            for on in sorted(wants):
+            except Exception as exc:
+                missed, read = exc, 0
+        states, errors = dict(self.states), {}
+        for on in sorted(wants):
+            try:
                 if on.startswith("pr:"):
                     repo, _, number = on[3:].partition("#")
                     states[on] = forge.pull(repo, int(number))
                 else:
                     repo, _, sha = on[3:].partition("@")
                     states[on] = forge.ci(repo, sha)
-            self.states = states
-            self.failing = None
-        except Exception as exc:
-            self.failing = (exc, exc.__traceback__)
+                read += 1
+            except urllib.error.HTTPError as exc:
+                if exc.code == 404 and on.startswith("pr:"):
+                    states[on] = {"state": "unreadable", "error": f"HTTP {exc.code}"}
+                    read += 1
+                else:
+                    errors[on], missed = str(exc), missed or exc
+            except Exception as exc:
+                errors[on], missed = str(exc), missed or exc
+        self.states = {on: state for on, state in states.items() if on in wants} if wants else self.states
+        self.errors = errors
+        self.failing = (missed, missed.__traceback__) if missed is not None and not read else None
