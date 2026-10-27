@@ -4,7 +4,8 @@
 state, calls and steps, wishes, presence, fuel, every other part's hash), one ``thread/<id>`` per
 thread (its newest letters and its strands' tool tape) and ``beads`` (each item's parent and a label,
 so a client walks chains itself). ``Parts`` recomputes them on its own thread whenever the ledger or
-a room's trace moves; ``serve`` is the loopback shell over it on 127.0.0.1 (config ``board_port``).
+a room's trace moves; ``serve`` is the loopback shell over it on 127.0.0.1 (config ``board_port``), which also
+serves the SvelteKit build, so the board needs no cloud hop and no dev server.
 The cloud PUT of parts stays off until brnrd.dev stores them.
 """
 
@@ -14,6 +15,8 @@ import gzip
 import hashlib
 from collections import Counter
 import json
+import mimetypes
+import os
 import re
 import threading
 import time
@@ -592,7 +595,35 @@ def person_of(home: Home, person: str | None) -> tuple[str, str, str]:
     raise LookupError("no person with a direct channel on an enabled connector")
 
 
-def handler(parts: Parts, port: int):
+def spa_root() -> Path | None:
+    """The SvelteKit build the loopback serves: ``BRNRD_FRONTEND_DIR`` (as the cloud's ``brnrd.spa``), else the
+    checkout's ``src/frontend/build``; ``None`` until ``npm run build`` has written one. Read per request, so a
+    rebuild lands without a re-exec."""
+    configured = os.environ.get("BRNRD_FRONTEND_DIR")
+    root = Path(configured).expanduser() if configured else Path(__file__).resolve().parents[3] / "frontend" / "build"
+    return root.resolve() if root.is_dir() else None
+
+
+def spa_file(root: Path, url_path: str) -> Path | None:
+    """What a GET of ``url_path`` reads from the build: the file, its prerendered ``<path>.html`` or ``<path>/index.html``,
+    else the ``200.html`` shell (the client router owns the path), but never the shell under ``_app/``, where every
+    URL is the build's own and a missing chunk must 404 for SvelteKit's stale-build recovery. Nothing outside ``root``."""
+    rel = url_path.lstrip("/")
+    candidate = (root / rel).resolve()
+    if candidate.is_relative_to(root):
+        if candidate.is_file():
+            return candidate
+        if candidate != root and (sibling := candidate.with_name(candidate.name + ".html")).is_file():
+            return sibling
+        if (child := candidate / "index.html").is_file():
+            return child
+    if rel == "_app" or rel.startswith("_app/"):
+        return None
+    shell = root / "200.html"
+    return shell if shell.is_file() else None
+
+
+def handler(parts: Parts, port: int, spa=spa_root):
     hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
     origins = {f"http://{host}" for host in hosts}
 
@@ -640,7 +671,31 @@ def handler(parts: Parts, port: int):
                     cut = window(part)
                     return self._json(cut, digest(cut))
                 return self._json(part, hashes[path])
+            if not url.path.startswith("/v1/"):
+                return self._file(url.path)
             self.send_error(HTTPStatus.NOT_FOUND)
+
+        def _file(self, url_path: str):
+            root = spa()
+            found = spa_file(root, url_path) if root else None
+            if found is None:
+                self.send_error(HTTPStatus.NOT_FOUND, "no SPA build" if root is None else None)
+                return
+            raw = found.read_bytes()
+            kind = {".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".html": "text/html",
+                    ".json": "application/json", ".svg": "image/svg+xml", ".woff2": "font/woff2"}.get(found.suffix)
+            kind = kind or mimetypes.guess_type(found.name)[0] or "application/octet-stream"
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", kind + ("; charset=utf-8" if kind.startswith("text/") else ""))
+            # hashed chunks never change under one name; every page points at one build's chunks, so it revalidates
+            immutable = url_path.startswith("/_app/immutable/")
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable" if immutable else "no-cache")
+            if len(raw) > 4096 and kind != "font/woff2" and "gzip" in (self.headers.get("Accept-Encoding") or ""):
+                raw = gzip.compress(raw, 5)
+                self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
 
         def do_POST(self):
             # A write needs our own Host (DNS rebinding), our own Origin when a browser sends one, and a
@@ -694,11 +749,12 @@ def handler(parts: Parts, port: int):
     return Handler
 
 
-def serve(parts: Parts, port: int) -> ThreadingHTTPServer:
-    """The loopback shell: GET ``/v1/loom/{index,thread/<id>,beads,events}``, POST ``/v1/loom/letters``, on 127.0.0.1."""
-    server = ThreadingHTTPServer(("127.0.0.1", port), handler(parts, port))
+def serve(parts: Parts, port: int, spa=spa_root) -> ThreadingHTTPServer:
+    """The loopback shell: GET ``/v1/loom/{index,thread/<id>,beads,events}``, POST ``/v1/loom/letters``, and every
+    other GET outside ``/v1/`` from the SPA build ``spa()`` names (its ``/`` is the board), on 127.0.0.1."""
+    server = ThreadingHTTPServer(("127.0.0.1", port), handler(parts, port, spa))
     server.daemon_threads = True
     if port == 0:  # a test's free port: the Host check needs the bound one
-        server.RequestHandlerClass = handler(parts, server.server_address[1])
+        server.RequestHandlerClass = handler(parts, server.server_address[1], spa)
     threading.Thread(target=server.serve_forever, name="board-http", daemon=True).start()
     return server
