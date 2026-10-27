@@ -184,11 +184,8 @@ def core_text(root: Path) -> str:
     """Who wakes, whatever the occasion. Nothing per-wake goes here."""
     identity = read_exact(root / "core" / "identity.md", "core/identity.md")
     stance = read_exact(root / "memory" / "stance.md", "memory/stance.md")
-    text = section("core/identity.md", identity) + section("memory/stance.md", stance)
-    # How a body holds the seat. A self from before it wakes without one.
-    if (root / "core" / "role.md").is_file():
-        text += section("core/role.md", read_exact(root / "core" / "role.md", "core/role.md"))
-    return text
+    # The loom adds its briefing after the stance; the self does not keep it.
+    return section("core/identity.md", identity) + section("memory/stance.md", stance)
 
 
 def fixed_text(root: Path, thread: str, loom: str, owed: Path, excess: int = 0, limit: int = 0) -> tuple[str, str]:
@@ -292,7 +289,7 @@ def main() -> None:
         die(
             f"over budget: the wake is {total}B, {total - limit}B over its {limit}B budget, "
             f"more than cutting the thread README can give. Largest parts: {largest}. "
-            f"core/identity.md, memory/stance.md, core/role.md and the letters are never cut.",
+            f"core/identity.md, memory/stance.md and the letters are never cut.",
             3,
         )
     out = head + fit_tree(fixed, tree_lines(root, thread), limit) + tail

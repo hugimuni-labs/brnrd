@@ -203,30 +203,50 @@ def test_wake_carries_the_self_and_skips_hearth(tmp_path: Path) -> None:
     assert "threads/w-1/notes/" not in out.split("## Tree\n", 1)[1]
 
 
-def test_the_role_wakes_after_the_stance_and_an_old_self_wakes_without_it(tmp_path: Path) -> None:
+def test_the_loom_briefing_wakes_after_the_stance_within_the_budget(tmp_path: Path) -> None:
+    from brr.loom.runtime.briefing import section as briefing
     home = tmp_path / "home"
     assert cli(["init", "--home", str(home)]).returncode == 0
     self_dir = home / "self"
+    assert not (self_dir / "core" / "role.md").exists()
     write_thread(self_dir, "w-1", "Headline")
     commit(self_dir, "thread")
     owed = tmp_path / "owed.json"
     owed.write_text("[]", encoding="utf-8")
     clone = selfrepo.room(home, "seeded")
     stance = (clone / "memory" / "stance.md").read_text(encoding="utf-8")
-    role = (clone / "core" / "role.md").read_text(encoding="utf-8")
-    assert "--wait" in role and "sleep loop" in role
+    brief = briefing()
+    assert "--wait <" in brief and "sleep or poll loop" in brief
+    part = tmp_path / "part"
+    part.write_text("loom part\n", encoding="utf-8")
     core = tmp_path / "core.md"
-    seeded = wake(clone, "w-1", owed, LOOM_CORE=str(core))
-    assert seeded.returncode == 0, seeded.stderr
-    assert core.read_text(encoding="utf-8").endswith(
-        f"## memory/stance.md\n{stance}## core/role.md\n{role}")
-    assert role not in seeded.stdout
+    core.write_text("a stale core from an older wake\n", encoding="utf-8")
+    out = tmp_path / "out"
+    with out.open("w", encoding="utf-8") as stdout:
+        code = selfrepo.run_wake(clone, "w-1", owed, loom_part=part, core=core, stdout=stdout)
+    assert code == 0
+    text = core.read_text(encoding="utf-8")
+    assert text.endswith(f"## memory/stance.md\n{stance}{brief}")
+    assert "stale" not in text and brief not in out.read_text(encoding="utf-8")
+    # The briefing's bytes come out of the budget, not on top of it.
+    tight = len(text.encode("utf-8")) + len(out.read_text(encoding="utf-8").encode("utf-8"))
+    env = {"LOOM_BUDGET_BYTES": str(tight - 1)}
+    old = dict(os.environ)
+    os.environ.update(env)
+    try:
+        with out.open("w", encoding="utf-8") as stdout:
+            code = selfrepo.run_wake(clone, "w-1", owed, loom_part=part, core=core, stdout=stdout)
+    finally:
+        os.environ.clear()
+        os.environ.update(old)
+    total = len(core.read_text(encoding="utf-8").encode("utf-8")) + len(out.read_bytes())
+    assert code == 0 and total <= tight - 1
 
-    (self_dir / "core" / "role.md").unlink()
-    commit(self_dir, "a self from before the role")
-    old = wake(selfrepo.room(home, "old"), "w-1", owed, LOOM_CORE=str(core))
-    assert old.returncode == 0, old.stderr
-    assert core.read_text(encoding="utf-8").endswith(f"## memory/stance.md\n{stance}")
+    # A recipe that keeps the core in stdout gets the briefing there, after the stance.
+    with out.open("w", encoding="utf-8") as stdout:
+        assert selfrepo.run_wake(clone, "w-1", owed, loom_part=part, stdout=stdout) == 0
+    inline = out.read_text(encoding="utf-8")
+    assert f"## memory/stance.md\n{stance}{brief}## threads/w-1/README.md\n" in inline
 
 
 def test_the_self_decides(tmp_path: Path) -> None:
@@ -255,7 +275,9 @@ def test_the_self_decides(tmp_path: Path) -> None:
     custom = selfrepo.room(home, "custom")
     via_cli = cli(["wake", "--room", str(custom), "--thread", "w-1", "--owed", str(owed)])
     assert via_cli.returncode == 0, via_cli.stderr
-    assert via_cli.stdout.strip() == "custom"
+    # The self decides its wake; the loom's briefing is the one part it adds.
+    from brr.loom.runtime.briefing import section as briefing
+    assert via_cli.stdout == briefing() + "custom\n"
     seed_line = "I am a placeholder."
     assert seed_line not in via_cli.stdout
 
