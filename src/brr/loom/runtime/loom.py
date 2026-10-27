@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import fcntl
+from contextvars import ContextVar
 import functools
 import json
 import os
@@ -560,7 +561,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         room / "port" / "in" / "boundary.md",
         render_boundary(strand, gen, thread, letters, shown, threads,
                         fuel=fuel, channels=reply_channels(facts, home),
-                        opened=thread_table(home, facts), plan=_plan(home, thread, facts),
+                        opened=_opened(home, facts), plan=_plan(home, thread, facts),
                         replies={f.letter.id: f.reply_to for f in active_owners(facts, main_snapshot(home))},
                         attachments=attachments, reply_context=reply_context,
                         repaired=_repaired(facts, strand, gen),
@@ -1403,22 +1404,38 @@ def _person_dms(home, facts, thread):
 
 def _repaired(facts, strand, gen) -> str:
     """What the loom repaired in this generation's room before it woke."""
-    for fact in reversed(facts):
-        if (fact.kind == "room.repaired" and fact.data.get("strand") == strand
+    for fact in reversed(kind_facts(facts, "room.repaired")):
+        if (fact.data.get("strand") == strand
                 and fact.data.get("gen") == gen):
             return repaired_line(fact)
     return ""
 
 
-def _boundary(home, facts, strand, gen, context):
+# One thread table per pass over the bodies: every body this tick reads the same
+# rows, and each row costs gauge and main reads that do not change between bodies.
+_TABLES: ContextVar[dict | None] = ContextVar("loom_tick_tables", default=None)
+
+
+def _opened(home, facts):
     from .threads import thread_table
+    tables = _TABLES.get()
+    if tables is None or not isinstance(facts, LedgerView):
+        return thread_table(home, facts)
+    key = (id(facts), facts.semantic_revision, len(facts))
+    if key not in tables:
+        tables.clear()
+        tables[key] = (facts, thread_table(home, facts))
+    return tables[key][1]
+
+
+def _boundary(home, facts, strand, gen, context):
     main, state = main_snapshot(home), fold(facts)
     owed = letters_for(facts, main, context.thread)
     text = render_boundary(
         strand, gen, context.thread, owed,
         state.shown.get(strand, set()), sender_threads(facts), context.fuel,
         context.why or None, reply_channels(facts, home),
-        opened=thread_table(home, facts), plan=_plan(home, context.thread, facts),
+        opened=_opened(home, facts), plan=_plan(home, context.thread, facts),
         replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
         attachments=letter_attachments(home.root, facts),
         reply_context=_reply_context(facts, context.thread, owed, home.room(strand)),
@@ -1662,6 +1679,14 @@ def _advance_body(home, strand, thread, gen, bodies, facts, *, choice=None, forc
 
 
 def _advance_bodies(home, bodies, facts, choice, *, reader=None):
+    token = _TABLES.set({})
+    try:
+        return _advance_each(home, bodies, facts, choice, reader=reader)
+    finally:
+        _TABLES.reset(token)
+
+
+def _advance_each(home, bodies, facts, choice, *, reader=None):
     from .router import install_of
     holders = {strand: (thread, gen) for thread, (strand, gen) in fold(facts).holder.items()}
     for strand in holders.keys() | bodies.keys():
