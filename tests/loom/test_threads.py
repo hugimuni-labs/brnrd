@@ -73,7 +73,8 @@ if own == "opener":
             Path({str(root / "changed")!r}).write_text(view.raw)
         for letter in view.letters:
             if letter.body == "work answered":
-                assert "opened: new-work holding · owed 0" in context, context
+                # A post repeats no line it said before: holding was shown here or at an earlier post.
+                assert "opened: new-work holding · owed 0" in context or Path({str(root / "changed")!r}).exists(), context
                 ctx.send("thread:opener", note="read answer", re=letter.id)
                 Path({str(reply)!r}).write_text(letter.body)
         time.sleep(0.03)

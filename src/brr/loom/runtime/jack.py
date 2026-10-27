@@ -140,6 +140,9 @@ def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], l
     letters: list[str] = []
     skipped: list[str] = []
     for unit in units:
+        # Past its allocation the warning comes at every post (``over``), so it is never said nor gone.
+        if unit[0].startswith("budget: "):
+            continue
         item = _ITEM_LINE.match(unit[0])
         if item:
             told.append(item.group(1))
@@ -624,6 +627,8 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             return _json({"hookSpecificOutput": {"hookEventName": hook, "additionalContext": "\n".join(
                 filter(None, (guarded, paused, weight, over, left)))}})
         text = news
+        if over:
+            text = over + "\n" + text
         if left:
             text = left + "\n" + text
         if guarded:
