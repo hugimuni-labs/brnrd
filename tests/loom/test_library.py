@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+from types import SimpleNamespace
 from pathlib import Path
 
 from brr.loom.runtime import library
@@ -198,7 +199,10 @@ def test_a_held_index_lock_is_waited_out_once(tmp_path: Path, monkeypatch) -> No
     lock = kb / ".git" / "index.lock"
     lock.write_text("")
     slept = []
-    monkeypatch.setattr(library.time, "sleep", lambda s: (slept.append(s), lock.unlink()))
+    # library's own time only: subprocess.run(timeout=) polls the global time.sleep on a slow runner
+    monkeypatch.setattr(library, "time", SimpleNamespace(
+        time=time.time, monotonic=time.monotonic,
+        sleep=lambda s: (slept.append(s), lock.unlink())))
     library.commit(kb, "a", ["a.md"])
     assert slept == [1.0]
     assert git(kb, "log", "--format=%s").stdout.split() == ["a"]
