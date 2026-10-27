@@ -86,7 +86,7 @@ def parse_boundary(text: str) -> Boundary:
             current = None
             continue
         if not line.strip() or line.startswith(("status:", "owed:", "opened:", "budget:", "repaired:", "degraded:", "library:", "moved:",
-                                                "face? ", "left? ")):
+                                                "face? ", "left? ", "gone: ", "idle: ")):
             current = None
             continue
         match = _ITEM.match(line)
@@ -261,6 +261,10 @@ def _letter_lines(letter: Fact, reply: str, compact: bool,
     return lines
 
 
+#: A child thread's ``now`` word that earns it a line: a body is on it or waiting on fuel.
+MOVING = frozenset({"working", "holding", "paced", "pending", "unidentified"})
+
+
 def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     shown: set[str], sender_threads: dict[str, str], fuel: str = "",
                     settled: str | None = None,
@@ -271,7 +275,7 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     reply_context: dict[str, str] | None = None,
                     budget: str = "", over: str = "", repaired: str = "",
                     degraded: str = "", face: str = "", left: str = "", moved: str = "",
-                    library: str = "") -> str:
+                    library: str = "", forge: str = "") -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
     ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
@@ -304,15 +308,30 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
         lines.insert(2, degraded)
     if settled is not None:
         lines.insert(2, f"settled: {settled}")
-    children = []
+    children, idle = [], 0
     for row in opened:
         if row['opened-by'] != f"thread:{thread}" or row['status'] in {"settled", "retired"}:
             continue
         now, _, detail = row['now'].partition(' ')
+        prs = row.get('prs') or []
+        # Only a moving thread gets a line (wake-vision); a due park is moving by the notice it owes.
+        if now not in MOVING and not row['owed'] and not prs:
+            idle += 1
+            continue
         # Child fuel is not a change of state; ages cost at most one write a minute.
         if re.fullmatch(r"\d+[smhd]", detail):
             now += ' ' + (f"{int(detail[:-1]) // 60}m" if detail.endswith('s') else detail)
-        children.append(f"opened: {row['thread']} {now} · owed {row['owed']}")
+        # The jack reads ``split()[1:3]`` and what follows `` · owed ``: new fields go after it.
+        fields = [f"owed {row['owed']}", *prs]
+        if row.get('waits'):
+            fields.append(f"waits {row['waits']}")
+        if row.get('headline'):
+            fields.append(row['headline'])
+        if forge:
+            fields.append(f"{forge}/{row['thread']}")
+        children.append(f"opened: {row['thread']} {now} · " + " · ".join(fields))
+    if idle:
+        children.append(f"idle: {idle} more opened here (brnrd runtime threads)")
     lines[2:2] = children
     for letter in letters:
         compact = str(letter.data["id"]) in shown

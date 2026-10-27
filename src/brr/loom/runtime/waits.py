@@ -37,6 +37,8 @@ TYPED = timedelta(days=7)
 PROSE = (timedelta(hours=24), timedelta(days=3), timedelta(days=7))
 #: Seconds between forge polls of the open ``pr``/``ci`` waits.
 EVERY = 60
+#: Seconds between polls of every open pull request a thread claimed (``loom/prs.json``).
+PRS_EVERY = 300
 #: Wish states a ``wish:`` wait resolves on.
 SETTLED = {"delivered", "accepted", "dropped"}
 
@@ -267,6 +269,31 @@ class Forge:
     def ci(self, repo: str, sha: str) -> dict:
         return {"state": self.checks.verdict(f"https://github.com/{repo}.git", sha)}
 
+    def _get(self, path: str) -> dict:
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{path}",
+            headers={"Authorization": f"Bearer {self.checks._token()}",
+                     "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return json.load(resp)
+
+    def card(self, repo: str, number: int) -> dict:
+        """What a thread line says of an open pull request: draft, CI on its head, when the head was pushed.
+
+        The head commit's committer date stands for the push: GitHub keeps no
+        push time on a pull request, and ``updated_at`` moves on every comment.
+        """
+        body = self._get(f"{repo}/pulls/{number}")
+        if body.get("merged_at"):
+            return {"state": "merged"}
+        if body.get("state") == "closed":
+            return {"state": "closed"}
+        head = str((body.get("head") or {}).get("sha") or "")
+        commit = self._get(f"{repo}/commits/{head}") if head else {}
+        return {"state": "open", "draft": bool(body.get("draft")), "head": head,
+                "ci": self.checks.verdict(f"https://github.com/{repo}.git", head) if head else "pending",
+                "pushed": ((commit.get("commit") or {}).get("committer") or {}).get("date")}
+
 
 def forge_for(config) -> Forge:
     from .update import forge_for as checks_for
@@ -277,32 +304,70 @@ class Watcher:
     """Polls the forge for the open ``pr``/``ci`` waits off the loop, the way ``Updater`` does.
 
     The tick hands it what it wants; ``states`` is what the last poll read.
-    A failing poll raises from ``step``, so the loop's guard records it.
+    It also reads every open pull request in ``prs`` (``<repo>#<n>``) each
+    ``PRS_EVERY`` seconds and writes the cards to ``path``, which the thread
+    lines read (wake-vision). A failing poll raises from ``step``, so the
+    loop's guard records it.
     """
 
-    def __init__(self):
+    def __init__(self, path=None):
         self.states: dict[str, dict] = {}
         self.wants: set[str] = set()
+        self.prs: set[str] = set()
+        self.path = path
         self.checked: float | None = None
+        self.prs_checked: float | None = None
+        #: The last cards read; a closed or merged one is never read again.
+        self.cards: dict[str, dict] = {}
         self.worker: threading.Thread | None = None
         self.failing: tuple[Exception, object] | None = None
 
     def step(self, config, armed: bool) -> None:
-        if not armed or not self.wants:
+        if self.path is not None and not self.cards:
+            try:
+                self.cards = json.loads(self.path.read_text())
+            except (OSError, ValueError):
+                self.cards = {}
+        open_prs = {key for key in self.prs if self.cards.get(key, {}).get("state") not in ("merged", "closed")}
+        cards = self.path is not None and bool(open_prs)
+        if not armed or not (self.wants or cards):
             self.failing = None
             return
         if not (self.worker and self.worker.is_alive()):
             now = time.monotonic()
-            if self.checked is None or now - self.checked >= EVERY:
+            wants = set(self.wants) if self.checked is None or now - self.checked >= EVERY else set()
+            prs = (open_prs if cards and (self.prs_checked is None or now - self.prs_checked >= PRS_EVERY)
+                   else set())
+            if wants:
                 self.checked = now
-                self.worker = threading.Thread(target=self._poll, args=(forge_for(config), set(self.wants)),
+            if prs:
+                self.prs_checked = now
+            if wants or prs:
+                self.worker = threading.Thread(target=self._poll, args=(forge_for(config), wants, prs),
                                                name="loom-waits", daemon=True)
                 self.worker.start()
         if self.failing is not None:
             raise self.failing[0].with_traceback(self.failing[1])
 
-    def _poll(self, forge, wants: set[str]) -> None:
+    def _poll(self, forge, wants: set[str], prs: set[str] = frozenset()) -> None:
         try:
+            if prs:
+                from .home import atomic_write
+                # One unreadable pull request keeps its last card; the rest still land.
+                cards, missed = dict(self.cards), None
+                for key in sorted(prs):
+                    repo, _, number = key.partition("#")
+                    try:
+                        cards[key] = forge.card(repo, int(number))
+                    except Exception as exc:
+                        missed = missed or exc
+                atomic_write(self.path, json.dumps(cards, indent=1, sort_keys=True) + "\n")
+                self.cards = cards
+                if missed is not None:
+                    raise missed
+            if not wants:
+                self.failing = None
+                return
             states = {}
             for on in sorted(wants):
                 if on.startswith("pr:"):

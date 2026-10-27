@@ -161,3 +161,40 @@ else:
     finally:
         loom.halt()
     assert not loom.errors
+
+
+def test_a_successor_wakes_with_its_predecessors_molt_why_and_the_notes_after_it(tmp_path):
+    """wake-vision: gen 221 of the inbox grepped the ledger for the molt why and the
+    note its predecessor wrote after the molt, which held the real state."""
+    root = tmp_path / "home"
+    init_self(root, person="test")
+    write_thread(root, "work", "Work\n\nNext step: original", "work", wait="0")
+    inject_letter(root, to="thread:work", body="merge it once green")
+    received = root / "successor.json"
+    bodies(root, f'''import json, sys
+from pathlib import Path
+from brr.loom.runtime.fakebody import Ctx
+from brr.loom.runtime.home import atomic_write
+ctx = Ctx(Path(sys.argv[1]))
+letters = ctx.owed()
+if "handover from" in ctx.wake():
+    atomic_write(Path({str(received)!r}), json.dumps({{"wake": ctx.wake()}}))
+    for letter in letters:
+        ctx.send("thread:work", note="settled", re=letter.id)
+else:
+    ctx.molt("NEXT: merge #7 when its re-run is green")
+    ctx.send("thread:work", note="done after the molt: #7 merged as abc123", re=letters[0].id)
+    assert ctx.jack("stop").raw == ""
+''')
+    loom = Loom(root)
+    loom.start()
+    try:
+        wait_until(received.exists, 30, loom.dump)
+        wake = json.loads(received.read_text())["wake"]
+        assert "(gen 1, molted " in wake
+        assert "NEXT: merge #7 when its re-run is green" in wake
+        assert "done after the molt: #7 merged as abc123" in wake
+        assert wake.index("NEXT: merge #7") < wake.index("done after the molt")
+    finally:
+        loom.halt()
+    assert not loom.errors

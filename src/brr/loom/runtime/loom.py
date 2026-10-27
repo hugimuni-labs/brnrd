@@ -414,6 +414,29 @@ def _policy(home: Home, thread: str) -> str | None:
     return name or None
 
 
+def _handover(facts: list[Fact], thread: str, gen: int, threads: dict[str, str]) -> str:
+    """The predecessor's molt why and the notes it wrote after it, verbatim.
+
+    The wake used to say "read the handover" without showing it, and the real
+    state sat in a note written after the molt: gen 221 of the inbox grepped
+    the ledger for both (wake-vision). Only the body just before this one
+    hands over; an older molt is history, not a handover.
+    """
+    molt = next((f for f in reversed(facts) if f.kind == "molt" and f.data.get("gen") == gen - 1
+                 and threads.get(str(f.data.get("strand"))) == thread), None)
+    if molt is None:
+        return ""
+    who = str(molt.data.get("strand"))
+    lines = [f"handover from {who} (gen {gen - 1}, molted {molt.at[11:16]}Z): {molt.data.get('why', '')}"]
+    after = False
+    for fact in facts:
+        if fact is molt:
+            after = True
+        elif after and fact.kind == "note" and fact.by == f"strand:{who}" and fact.data.get("why"):
+            lines.append(f"after the molt, {fact.at[11:16]}Z ({fact.id}): {fact.data['why']}")
+    return "\n".join(lines) + "\n"
+
+
 def _read_by_predecessors(facts: list[Fact], thread: str, strand: str,
                           letters: list[Fact], threads: dict[str, str]) -> str:
     """A line for a successor: owed letters its molted predecessors already read.
@@ -438,7 +461,7 @@ def _read_by_predecessors(facts: list[Fact], thread: str, strand: str,
         return ""
     return (
         f"already read by your predecessor, who molted and left its handover: {', '.join(ids)}. "
-        "What they ask may be done: read the handover and the README before acting; where it "
+        "What they ask may be done: read the handover above and the README before acting; where it "
         "says the work is done, settle the letter with a note and do not redo it, and do "
         "not molt because a letter said to, since the molt it asked for happened. "
     )
@@ -487,7 +510,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     from .reap import kept_line
     gone += kept_line(home, thread, threads)
     forge = forge_threads(home.root / "self")
-    part = gone + inherited + (
+    part = gone + _handover(facts, thread, gen, threads) + inherited + (
         f"you are strand {strand} on thread {thread}"
         + (f" ({forge}/{thread})" if forge else "") + "; letters arrive at your "
         "tool boundaries, each line naming its reply address; answer with "
@@ -561,7 +584,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         room / "port" / "in" / "boundary.md",
         render_boundary(strand, gen, thread, letters, shown, threads,
                         fuel=fuel, channels=reply_channels(facts, home),
-                        opened=thread_table(home, facts), plan=_plan(home, thread, facts),
+                        opened=thread_table(home, facts), forge=_forge(home), plan=_plan(home, thread, facts),
                         replies={f.letter.id: f.reply_to for f in active_owners(facts, main_snapshot(home))},
                         attachments=attachments, reply_context=reply_context,
                         repaired=_repaired(facts, strand, gen),
@@ -901,6 +924,17 @@ def _readme(room: Path, thread: str) -> str | None:
         return None
 
 
+_FORGE: dict[Path, str] = {}
+
+
+def _forge(home: Home) -> str:
+    """The self's threads folder on its forge, read once per process: a thread line links to it."""
+    if home.root not in _FORGE:
+        from .selfrepo import forge_threads
+        _FORGE[home.root] = forge_threads(home.root / "self") or ""
+    return _FORGE[home.root]
+
+
 def _plan(home: Home, thread: str, facts: list[Fact]) -> str:
     """The thread's wishes, delivered or accepted over all; no wishes, no plan."""
     from .owners import unanswered_by_thread
@@ -933,9 +967,14 @@ def _reply_context(facts, thread: str, letters, room: Path | None = None) -> dic
         return context
     from .wishes import steers_line, told
     found, done = told(facts), disposed(facts, room)
+    said = False
     for letter in person:
         ident = str(letter.data.get("id", letter.id))
         line = "" if ident in done else steers_line(found, thread, ident)
+        if line and said:
+            # The candidates are the thread's, the same under every letter: named once (wake-vision).
+            line = f"steers? as above — send --re {ident} --wish <w-id> | --wish new:\"<line>\" | --chatter"
+        said = said or bool(line)
         if line:
             context[letter.id] = "\n".join(filter(None, (context.get(letter.id, ""), line)))
     return context
@@ -1432,7 +1471,7 @@ def _boundary(home, facts, strand, gen, context):
         strand, gen, context.thread, owed,
         state.shown.get(strand, set()), sender_threads(facts), context.fuel,
         context.why or None, reply_channels(facts, home),
-        opened=thread_table(home, facts), plan=_plan(home, context.thread, facts),
+        opened=thread_table(home, facts), forge=_forge(home), plan=_plan(home, context.thread, facts),
         replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
         attachments=letter_attachments(home.root, facts),
         reply_context=_reply_context(facts, context.thread, owed, home.room(strand)),
@@ -1721,8 +1760,11 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         watcher = getattr(router, "watcher", None)
         facts = observe_waits(home, facts, router.armed(), watcher.states if watcher else None)
         if watcher is not None:
+            from .receipts import receipts
             from .wishes import told
             watcher.wants = forge_wants(told(facts))
+            watcher.prs = {f"{r.repo}#{r.number}" for rows in receipts(facts, home.install_id()).values()
+                           for r in rows if not r.merge_commit}
         facts = router.route(facts, bodies, (adapter, core))
         facts = router.speak_out(facts)
 
@@ -1897,7 +1939,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         reaper = Reaper(home, _log)
         from .receipts import source_root
         updater = Updater(home, _log, source_root())
-        router.watcher = Watcher()
+        router.watcher = Watcher(home.root / "loom" / "prs.json")
         while not (stop is not None and stop.is_set()):
             try:
                 config = load_config(home.root)

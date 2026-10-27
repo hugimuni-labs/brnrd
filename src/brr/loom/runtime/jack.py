@@ -16,6 +16,9 @@ from brr.pause import read_paused_record
 from .home import atomic_write, home_of_room, mint
 from .pausing import describe
 from .port import Boundary, parse_boundary
+
+_HEADER_LINE = re.compile(r"<!-- port (\S+) gen (\d+) · owed[^>]*-->")
+_ITEM_LINE = re.compile(r"^- (\S+) · from \S+ · reply \S+")
 from . import tooltrace
 
 
@@ -95,6 +98,77 @@ def _wait(room: Path, stdin_text: str = '') -> float | None:
 
 def _stop_timeout() -> float:
     return float(os.environ.get("BRNRD_STOP_TIMEOUT") or PARK + 60)
+
+
+_AGE = re.compile(r" \d+[smhd](?= ·|$)")
+
+
+def _ageless(line: str) -> str:
+    """A thread line without its ages: an hour passing on an idle child or a PR's push is not news."""
+    return _AGE.sub("", line)
+
+
+def _slot(key: str) -> str:
+    if key.startswith("opened: "):
+        return " ".join(key.split()[:2])
+    return "idle:" if key.startswith("idle: ") else key
+
+
+def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], list[str]]:
+    """The boundary minus what an earlier boundary already said: (news, said, told).
+
+    The wake shows everything; a post shows a line only when it is new, the
+    status line only when the plan moved, and an owed letter only the first
+    time. A live boundary that repeated 54 rows and every owed letter cost
+    ~1.7k tokens a call (wake-vision). The port header names the letters
+    shown here; one ``owed:`` line names the ones still owed from before.
+    """
+    header = _HEADER_LINE.search(text)
+    if header is None:
+        return "", [], []
+    units: list[list[str]] = []
+    for line in text[header.end():].splitlines():
+        if line.startswith("  ") and units:
+            units[-1].append(line)
+        elif line.strip() and line != "owed:":
+            units.append([line])
+    before = set(state.get("said", []))
+    known = set(state.get("told", []))
+    said: list[str] = []
+    told: list[str] = []
+    body: list[str] = []
+    letters: list[str] = []
+    skipped: list[str] = []
+    for unit in units:
+        # Past its allocation the warning comes at every post (``over``), so it is never said nor gone.
+        if unit[0].startswith("budget: "):
+            continue
+        item = _ITEM_LINE.match(unit[0])
+        if item:
+            told.append(item.group(1))
+            if item.group(1) in known:
+                skipped.append(item.group(1))
+            else:
+                letters.extend(unit)
+            continue
+        status = unit[0].startswith("status:")
+        key = ("status: · plan " + unit[0].partition(" · plan ")[2] if status
+               else _ageless(unit[0]) if unit[0].startswith("opened: ") else "\n".join(unit))
+        said.append(key)
+        if (plan_changed if status else key not in before):
+            body.extend(unit)
+    # A row that left (a child settled, a line cleared) is news too; the status line moves, it never leaves.
+    # A thread line that changed is said anew, not gone: its slot (``opened: <thread>``, ``idle:``) is still here.
+    slots = {_slot(key) for key in said}
+    body.extend("gone: " + key.split("\n")[0] for key in state.get("said", [])
+                if key not in said and not key.startswith("status:") and _slot(key) not in slots)
+    if not body and not letters:
+        return "", said, told
+    shown = [item.group(1) for line in letters if (item := _ITEM_LINE.match(line))]
+    owed = (["owed: " + " ".join(skipped) + " (shown before)"] if skipped else []) \
+        + (["owed:"] if letters else [])
+    head = f"<!-- port {header.group(1)} gen {header.group(2)} · owed {' '.join(shown)} -->"
+    return "\n".join([head, *body, *owed, *letters, ""]), said, told
 
 
 def _shown(room: Path, parsed: Boundary) -> None:
@@ -498,7 +572,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         _set_state(room, boundary_at=time.time())
     text = _boundary_text(room)
     parsed = parse_boundary(text)
-    opened = [[line.split()[1], line.split()[2], line.rpartition(" · owed ")[2]]
+    opened = [[line.split()[1], line.split()[2], _ageless(line.rpartition(" · owed ")[2])]
               for line in text.splitlines() if line.startswith("opened: ")]
     plan = next((line.partition(" · plan ")[2] for line in text.splitlines()
                  if line.startswith("status:")), "")
@@ -514,7 +588,8 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             return ""
         if parsed.ids:
             _shown(room, parsed)
-        _set_state(room, opened=opened, plan=plan, face=face, moved=moved)
+        _set_state(room, opened=opened, plan=plan, face=face, moved=moved,
+                   **dict(zip(("said", "told"), _news(text, {}, True)[1:])))
         return text if text.endswith("\n") else text + "\n"
     if event == "post":
         state = _state(room)
@@ -531,12 +606,29 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         # Past its allocation a strand is told at every boundary, not once.
         over = next((line for line in text.splitlines() if line.startswith("budget: ")), "")
         left = _left(room, False).rstrip("\n")
+        # A left in room is news when it changes; the stop still holds on it every time.
+        if left == state.get("left_said", ""):
+            left = ""
+        else:
+            _set_state(room, left_said=left)
+        news, said, told = _news(text, state, plan_changed)
+        _set_state(room, said=said, told=told)
         if not parsed.ids and not settled_changed and not opened_changed and not plan_changed \
                 and not face_changed and not moved_changed:
+            news = ""
+        if not news:
+            if parsed.ids:
+                _shown(room, parsed)
+            _set_state(room, opened=opened, plan=plan, face=face, moved=moved)
+            if parsed.settled is not None:
+                _set_state(room, settled=parsed.settled)
             if not weight and not paused and not over and not guarded and not left:
                 return ""
             return _json({"hookSpecificOutput": {"hookEventName": hook, "additionalContext": "\n".join(
                 filter(None, (guarded, paused, weight, over, left)))}})
+        text = news
+        if over:
+            text = over + "\n" + text
         if left:
             text = left + "\n" + text
         if guarded:

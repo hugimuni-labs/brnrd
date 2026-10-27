@@ -1,4 +1,5 @@
 """A park names what it waits on; the loom checks it every tick and wakes the thread once."""
+import json
 from datetime import datetime, timedelta, timezone
 
 from brr.daemon2.facts import Fact
@@ -238,3 +239,33 @@ def test_the_board_row_carries_the_standing_wait(ledger):
     assert wait["since"].endswith("Z")
     command(home, seat, "wish", ident, "--read", "Back on it")
     assert "wait" not in row()
+
+
+def test_watcher_writes_pr_cards_and_never_rereads_a_closed_one(tmp_path):
+    """wake-vision (3): open PRs land in loom/prs.json; the thread line reads them."""
+    from brr.loom.runtime.threads import pr_word
+    from brr.loom.runtime.waits import Watcher
+
+    class Fake:
+        def __init__(self):
+            self.read = []
+
+        def card(self, repo, number):
+            self.read.append(number)
+            if number == 2:
+                return {"state": "closed"}
+            return {"state": "open", "draft": True, "head": "abc", "ci": "green",
+                    "pushed": "2026-10-27T00:00:00Z"}
+
+    path = tmp_path / "prs.json"
+    watcher, forge = Watcher(path), Fake()
+    watcher._poll(forge, set(), {"o/r#1", "o/r#2"})
+    cards = json.loads(path.read_text())
+    assert watcher.failing is None and sorted(forge.read) == [1, 2]
+    now = datetime(2026, 10, 27, 14, tzinfo=timezone.utc).timestamp()
+    assert pr_word(1, cards["o/r#1"], now) == "#1 draft green 14h"
+    assert pr_word(2, cards["o/r#2"], now) == ""
+    assert pr_word(3, None, now) == "#3"
+    watcher.prs = {"o/r#1", "o/r#2"}
+    opened = {key for key in watcher.prs if watcher.cards.get(key, {}).get("state") not in ("merged", "closed")}
+    assert opened == {"o/r#1"}
