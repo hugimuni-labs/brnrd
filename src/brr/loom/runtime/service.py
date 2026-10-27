@@ -144,19 +144,28 @@ def _service_home(flag, *, agents_home=None, system=None) -> tuple[Path, str]:
 
 
 def _body_choice(home: Path) -> str | None:
-    """``body`` from the home's config: None when unset, refused when not a body folder's shell or shell/core."""
-    from .adapters import parse_body, resolve
+    """The home's default body: ``model.default`` in ``loom/preferences.toml``, else config ``body``.
+
+    None when neither is set; refused when not a body folder's shell or shell/core.
+    """
+    from .adapters import default_body, parse_body, resolve
     from .home import Home
-    choice = load_config(home).body
-    if not isinstance(choice, str) or not choice.strip():
+    choice = default_body(Home(home))
+    if not choice:
         return None
     try:
         resolve(Home(home), parse_body(choice)[0])
     except ValueError:
         raise SystemExit(
-            f"loom install: body must be shell or shell/core, got {choice!r} in {config_path(home)}"
+            f"loom install: body must be shell or shell/core, got {choice!r}"
         ) from None
     return choice.strip()
+
+
+def _preferred_default(home: Path) -> bool:
+    from .adapters import _preferences
+    from .home import Home
+    return bool(_preferences(Home(home))[1].get("model.default"))
 
 
 def _codex_model() -> str | None:
@@ -190,8 +199,10 @@ def _fuel(home: Path, shell: str) -> str | None:
 
 
 def _write_body(home: Path, choice: str) -> None:
-    """Set ``body`` in the config, keeping every other line as written."""
-    set_value(home, "body", choice)
+    """Set the default body, ``model.default`` in ``loom/preferences.toml``."""
+    from .adapters import prefer
+    from .home import Home
+    prefer(Home(home), "default", choice)
 
 
 def _require_body(home: Path) -> str:
@@ -207,14 +218,14 @@ def _require_body(home: Path) -> str:
 def _settle_body(home: Path, *, write: bool = True) -> tuple[str, str]:
     """The body install's service will run, and where it came from.
 
-    Unset: the first default body whose CLI answers with fuel, written to
-    the config so ``loom config`` and the service agree on it.
+    Unset: the first default body whose CLI answers with fuel, written as
+    ``model.default`` so setup, the board and the service agree on it.
     """
     if write:
         fold_config(home)
     choice = _body_choice(home)
     if choice is not None:
-        return choice, "from config"
+        return choice, "from preferences" if _preferred_default(home) else "from config"
     tried = []
     for shell, core in _defaults():
         fuel = _fuel(home, shell) if core is not None else None
@@ -225,7 +236,7 @@ def _settle_body(home: Path, *, write: bool = True) -> tuple[str, str]:
         choice = body_label(shell, core)
         if write:
             _write_body(home, choice)
-        where = f"written to {config_path(home)}" if write else "not written: dry run"
+        where = f"written to {home / 'loom' / 'preferences.toml'}" if write else "not written: dry run"
         return choice, f"picked: {shell} has fuel, {fuel}; {where}"
     raise SystemExit(
         f"loom install: body is unset in {config_path(home)} and no CLI answered with fuel "
@@ -447,10 +458,10 @@ def _log_line(home: Path | None) -> str:
 def _body_line(home: Path | None) -> str:
     if home is None:
         return "body: -"
-    choice = load_config(home).body
-    if not isinstance(choice, str) or not choice.strip():
-        return "body: unset"
-    return f"body: {choice.strip()}"
+    from .adapters import default_body
+    from .home import Home
+    choice = default_body(Home(home))
+    return f"body: {choice}" if choice else "body: unset"
 
 
 def _print_status(*, state: str, pid: int | None, home: Path | None) -> None:

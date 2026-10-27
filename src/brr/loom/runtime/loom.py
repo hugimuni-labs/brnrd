@@ -41,6 +41,7 @@ from .project import projection_cache, fold, generation, is_notice, reply_channe
 from .owners import active_owners, letters_for, letter_owners
 from .lifecycle import main_snapshot
 from .timers import observe_due
+from .waits import Watcher, forge_wants, observe_waits
 from .selfrepo import (
     AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, git,
     ensure_room, forge_threads, repaired_line, run_wake, seed_root,
@@ -1465,6 +1466,36 @@ def _boundary(home, facts, strand, gen, context):
 
 
 _PAUSE_LOOKED: dict[Path, float] = {}
+# Ports with a call this process paused, and their home: a stopped call that
+# holds the ledger lock is resumed before anyone waits on it.
+_PAUSED: dict[Path, Home] = {}
+
+
+def _free_ledger(lock):
+    """``ledger.ON_CONTENDED``: resume each paused call that has ``lock`` open."""
+    if not _PAUSED:
+        return
+    from brr import pause
+    from . import pausing
+    for port, records in pausing.free_lock(list(_PAUSED), Path(lock)).items():
+        _log(_PAUSED[port], f"resumed {port.parent.name}'s paused call, which held the ledger lock: "
+                            + pause.describe_paused(records))
+    for port in [p for p in _PAUSED if not pause.read_paused_record(p)]:
+        del _PAUSED[port]
+
+
+def _unstick(home):
+    """Between ticks nobody may wait behind a paused call that holds the lock."""
+    if not _PAUSED:
+        return
+    lock = home.facts_dir() / ".lock"
+    with open(lock, "a+") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            _free_ledger(lock)
+        else:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _pause_for_letters(home, strand, c):
@@ -1491,6 +1522,7 @@ def _pause_for_letters(home, strand, c):
     delegating = live.is_dir() and any(time.time() - p.stat().st_mtime < pausing.CAP for p in live.iterdir())
     if since and not delegating and (records := pausing.pause_call(port, c.pid, pattern, float(since))):
         _log(home, f"paused {strand}'s call for a letter: {pause.describe_paused(records)}")
+        _PAUSED[port] = home
 
 
 @dataclass
@@ -1685,6 +1717,7 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     from .router import Router
     if router is None:
         router = Router(home)
+    _unstick(home)
     facts = router.reader.refresh(home)
     if router.projection_revision != router.reader.revision:
         router.projections.clear()
@@ -1697,6 +1730,12 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         facts = _advance_bodies(home, bodies, facts, (adapter, core), reader=router.reader)
         # Time enters the owner table once, using only the facts already held.
         facts = observe_due(home, facts, router.armed())
+        # A park's condition is checked the same way; the forge is read off the loop.
+        watcher = getattr(router, "watcher", None)
+        facts = observe_waits(home, facts, router.armed(), watcher.states if watcher else None)
+        if watcher is not None:
+            from .wishes import told
+            watcher.wants = forge_wants(told(facts))
         facts = router.route(facts, bodies, (adapter, core))
         facts = router.speak_out(facts)
 
@@ -1862,12 +1901,16 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
     held = _hold_loop(home, stop)
     if held is None:
         return
-    inputs = None
+    inputs = board = shell = None
     bodies: dict[str, Body] = {}
     try:
         if stop is not None and stop.is_set():
             return
         home.install_id()
+        from . import ledger
+        ledger.ON_CONTENDED = _free_ledger
+        # A pause outlives a re-exec on disk; the loop must still free its lock.
+        _PAUSED.update((port.parent, home) for port in (home.root / "rooms").glob("*/port/.paused.json"))
         from .receipts import record_start
         try:
             # Each start and re-exec: which merged pull requests this code holds.
@@ -1888,6 +1931,14 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         health = Health(home, read_facts(home), _log)
         from .snapshot import Publisher
         publisher = Publisher(home, _log, functools.partial(health.guard, backoff=False))
+        if config.board_port:  # read at start: a port change waits for the next re-exec
+            from .board import Parts, serve
+            board = Parts(home, lambda: load_config(home.root), _log)
+            threading.Thread(target=board.run, name="board", daemon=True).start()
+            try:
+                shell = serve(board, int(config.board_port))
+            except (OSError, ValueError) as exc:  # a taken port or not a number: the loop runs on without a board
+                _log(home, f"board: port {config.board_port}: {exc}")
         from .mirror import Mirror
         mirror = Mirror(home, _log)
         from .library import Keeper
@@ -1896,6 +1947,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         reaper = Reaper(home, _log)
         from .receipts import source_root
         updater = Updater(home, _log, source_root())
+        router.watcher = Watcher()
         while not (stop is not None and stop.is_set()):
             try:
                 config = load_config(home.root)
@@ -1917,6 +1969,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                     inputs.close()
                 health.guard("tick_once", tick_once, home, bodies, adapter, core, router)
                 health.guard("publisher", publisher.step, config, router, backoff=False)
+                health.guard("waits", router.watcher.step, config, router.armed(), backoff=False)
                 health.guard("mirror", mirror.step, config, backoff=False)
                 health.guard("library", keeper.step, backoff=False)
                 health.guard("disk", reaper.disk, backoff=False)
@@ -1936,6 +1989,11 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 break
     finally:
         _shutdown(bodies)
+        if board is not None:
+            board.stop.set()
+        if shell is not None:
+            shell.shutdown()
+            shell.server_close()
         if inputs is not None:
             inputs.close()
         fcntl.flock(held, fcntl.LOCK_UN)

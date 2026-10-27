@@ -172,6 +172,18 @@ class DaemonRegistered(BaseModel):
     repo_id: str | None = None
 
 
+class DaemonDoorStart(BaseModel):
+    # The loom's own pairing code (`setup_channel.pair`: 8 hex digits).
+    code: str = Field(pattern=r"^[0-9a-f]{8}$")
+
+
+class DaemonDoor(BaseModel):
+    """Where a person opens the shared bot to pair with this daemon's loom:
+    the shape a connector's `door` prints."""
+    name: str
+    link: str
+
+
 class DaemonWhoami(BaseModel):
     """The identity a daemon token resolves to — nothing more.
 

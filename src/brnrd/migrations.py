@@ -325,6 +325,8 @@ def _migrate_tg_pair_codes(conn: Connection) -> None:
     conn.execute(text("ALTER TABLE tg_pair_codes ALTER COLUMN repo_id DROP NOT NULL"))
     # #1464 — the minting session's outcome readback; see models.py.
     conn.execute(text("ALTER TABLE tg_pair_codes ADD COLUMN IF NOT EXISTS redeemed_display VARCHAR(255)"))
+    # The loom's pairing code a door code carries; see models.py.
+    conn.execute(text("ALTER TABLE tg_pair_codes ADD COLUMN IF NOT EXISTS relay_text VARCHAR(64)"))
 
 
 def _migrate_events(conn: Connection) -> None:

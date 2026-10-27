@@ -152,6 +152,8 @@ def _wish_rows(told, facts) -> list[dict]:
 
     def last(wish):
         return max((_when(r["at"]) for r in wish.results), default=_when(wish.at))
+    from .waits import live
+    parked = {wish.id: read for wish, read in live(told)}
     rows = []
     for w in sorted(told.values(), key=lambda w: (not w.open, -last(w).timestamp(), w.id))[:WISHES]:
         says = []
@@ -166,6 +168,9 @@ def _wish_rows(told, facts) -> list[dict]:
         rows.append(_bare({
             "id": w.id, "thread": w.thread, "from": w.sender, "line": w.line, "state": w.state,
             "origin": w.origin, "at": _iso(w.at), "says": says, "reading": w.reading,
+            # What the loom watches for this park, while it stands.
+            "wait": _bare({"on": parked[w.id]["wait"].get("on"), "since": _iso(parked[w.id]["at"]),
+                           "until": parked[w.id]["wait"].get("until")}) if w.id in parked else None,
             "results": [_bare({"kind": r.get("kind"), "ref": r.get("ref"), "line": r.get("line"),
                                "delivered": bool(r.get("delivered")), "at": _iso(r["at"])})
                         for r in w.results],
@@ -185,7 +190,7 @@ def _wish_rows(told, facts) -> list[dict]:
 class View:
     """The projections every section reads, each read once per assemble."""
 
-    def __init__(self, home: Home, facts: list, config):
+    def __init__(self, home: Home, facts: list, config, told: dict | None = None):
         from .lifecycle import main_snapshot
         from .receipts import receipts
         from .selfrepo import forge_threads
@@ -210,7 +215,7 @@ class View:
                 if f.data.get("core"):
                     cores.setdefault(f.data["shell"], set()).add(f.data["core"])
         self.cores = {shell: sorted(c) for shell, c in cores.items()}
-        self.told = wishes([f for f in facts if f.kind.startswith("wish") or f.kind == "letter"])
+        self.told = told if told is not None else wishes([f for f in facts if f.kind.startswith("wish") or f.kind == "letter"])
         self.shipped = receipts(facts, home.install_id())
         # An open ask is the person's turn unless it waits on a thread that has not asked onward.
         self.waits: dict[str, list[str]] = {}
@@ -289,17 +294,20 @@ def fuel(v: View) -> list[dict]:
 
 
 def bodies(v: View) -> dict:
-    from .adapters import resolve
-    config = v.config
-    choices = {body_label(s, c) for s, cs in v.cores.items() for c in cs} | ({config.body} if config.body else set())
+    from .adapters import default_body, resolve
+    try:
+        default = default_body(v.home)
+    except ValueError:  # a broken preferences file: the config's body still runs
+        default = v.config.body
+    choices = {body_label(s, c) for s, cs in v.cores.items() for c in cs} | ({default} if default else set())
 
     def usable(choice):
         try:
             return bool(resolve(v.home, choice.partition("/")[0]))
         except ValueError:
             return False
-    found = {"default": config.body,
-             "choices": sorted(filter(usable, choices), key=lambda c: (c != config.body, c))}
+    found = {"default": default,
+             "choices": sorted(filter(usable, choices), key=lambda c: (c != default, c))}
     return {k: val for k, val in found.items() if val}
 
 
@@ -313,13 +321,13 @@ def _raise(step, fn, *args):
     fn(*args)
 
 
-def assemble(home: Home, facts: list, config, guard=_raise) -> dict:
+def assemble(home: Home, facts: list, config, guard=_raise, told: dict | None = None) -> dict:
     """The snapshot document, ``at`` included; pure reads of what is held.
 
     Each section runs through ``guard`` as ``publisher.<section>``: the loop's
     guard leaves a section that raises out of this document and keeps its streak.
     """
-    v = View(home, facts, config)
+    v = View(home, facts, config, told)
     sections = {"presence": presence, "fuel": fuel, "bodies": bodies,
                 "threads": lambda v: [thread(v, row) for row in v.table],
                 "log": log, "wishes": lambda v: _wish_rows(v.told, v.facts)}
