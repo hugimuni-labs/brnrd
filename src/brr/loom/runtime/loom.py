@@ -1404,8 +1404,8 @@ def _person_dms(home, facts, thread):
 
 def _repaired(facts, strand, gen) -> str:
     """What the loom repaired in this generation's room before it woke."""
-    for fact in reversed(facts):
-        if (fact.kind == "room.repaired" and fact.data.get("strand") == strand
+    for fact in reversed(kind_facts(facts, "room.repaired")):
+        if (fact.data.get("strand") == strand
                 and fact.data.get("gen") == gen):
             return repaired_line(fact)
     return ""

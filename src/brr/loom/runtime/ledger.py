@@ -136,6 +136,7 @@ class LedgerView(list):
         self.missing = set()
         self.maximum = None
         self.cache = {}
+        self.merged_kinds = {}
         self.semantic_revision = 0
         self.reducer = None
         self.delta = ()
@@ -270,6 +271,7 @@ class LedgerView(list):
             'reply-channels': ('source', 'letter'),
             'attachments': ('source', 'blob', 'letter'),
             'reply-context': ('source', 'letter'),
+            'letters-by-sender': ('letter',),
             'wishes': ('wish', 'wish.read', 'wish.result', 'wish.verdict', 'wish.left', 'letter'),
         }
         if name == 'body-state':
@@ -290,8 +292,23 @@ def kind_facts(facts, *kinds):
     if isinstance(facts, LedgerView):
         if len(kinds) == 1:
             return facts.by_kind[kinds[0]]
-        return sorted((f for kind in kinds for f in facts.by_kind[kind]), key=lambda f: facts.positions[f.id])
+        # Bodies ask for the same merge every tick; re-sort only after one of its kinds grew.
+        counts = tuple(len(facts.by_kind[kind]) for kind in kinds)
+        prior = facts.merged_kinds.get(kinds)
+        if prior is None or prior[0] != counts:
+            prior = facts.merged_kinds[kinds] = (counts, sorted(
+                (f for kind in kinds for f in facts.by_kind[kind]), key=lambda f: facts.positions[f.id]))
+        return prior[1]
     return [f for f in facts if f.kind in kinds]
+
+
+def _names(directory, *, dirs=False):
+    try:
+        with os.scandir(directory) as entries:
+            return [e.name for e in entries
+                    if not e.name.startswith(".") and (e.is_dir() if dirs else e.is_file())]
+    except (FileNotFoundError, NotADirectoryError):
+        return []
 
 
 class LedgerReader:
@@ -306,6 +323,7 @@ class LedgerReader:
 
     def __init__(self):
         self.streams = {}
+        self.listing = (None, [])
         self.ordered = LedgerView()
         self.revision = 0
 
@@ -313,12 +331,29 @@ class LedgerReader:
         return list(self.refresh(home))
 
     def refresh(self, home: Home) -> LedgerView:
-        paths = sorted((home.root / "ledger" / "facts").glob("*/*.jsonl"))
+        # Path.glob plus a Path sort costs more than the stats below; keep the parts order.
+        root = str(home.root / "ledger" / "facts")
+        names = sorted((directory, name) for directory in _names(root, dirs=True)
+                       for name in _names(f"{root}/{directory}") if name.endswith(".jsonl"))
+        if self.listing[0] != (root, names):
+            self.listing = ((root, names), [Path(root, *parts) for parts in names])
+        paths = self.listing[1]
         streams = {}
         changed = set(paths) != set(self.streams)
         repair = bool(set(self.streams) - set(paths))
         additions = []
         for path in paths:
+            prior = self.streams.get(path)
+            if prior is not None:
+                # An unchanged stream costs one stat, not an open: hundreds of streams, every body, every tick.
+                try:
+                    stat = os.stat(prior[2])
+                except FileNotFoundError:
+                    stat = None
+                if stat is not None and prior[0] == (stat.st_dev, stat.st_ino, stat.st_size,
+                                                     stat.st_mtime_ns, stat.st_ctime_ns):
+                    streams[path] = prior
+                    continue
             with path.open("rb") as handle:
                 stat = os.fstat(handle.fileno())
                 stamp = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns,
@@ -339,7 +374,7 @@ class LedgerReader:
                 complete = raw[:raw.rfind(b"\n") + 1]
                 added = [Fact.from_row(json.loads(line))
                          for line in complete.decode().splitlines() if line.strip()]
-                streams[path] = (stamp, offset + len(complete))
+                streams[path] = (stamp, offset + len(complete), str(path))
                 additions.extend(added)
         if changed:
             if repair:

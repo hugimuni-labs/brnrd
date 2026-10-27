@@ -8,8 +8,11 @@ import pytest
 from brr.daemon2.facts import Fact, union
 from brr.loom.runtime.bodies import state_of
 from brr.loom.runtime.home import Home
-from brr.loom.runtime.ledger import LedgerReader, LedgerView, append, read_facts
-from brr.loom.runtime.owners import letter_owners, letters_for, thread_axes
+from datetime import datetime, timezone
+
+from brr.loom.runtime.faces import triggers
+from brr.loom.runtime.ledger import LedgerReader, LedgerView, append, kind_facts, read_facts
+from brr.loom.runtime.owners import letter_owners, letters_for, thread_axes, unanswered_letters
 from brr.loom.runtime.port import letter_attachments, letter_replies
 from brr.loom.runtime.project import fold, reply_channels, sender_threads
 from brr.loom.runtime.threads import _table_inputs
@@ -31,6 +34,13 @@ def equivalent(view, raw, main, root):
     assert letter_replies(view) == letter_replies(ordered)
     for thread in main:
         assert letters_for(view, main, thread) == letters_for(ordered, main, thread)
+    assert unanswered_letters(view) == unanswered_letters(ordered)
+    # Asked twice: the second answer comes from what the view carried.
+    for _ in range(2):
+        assert kind_facts(view, 'shown', 'letter', 'note') == kind_facts(ordered, 'shown', 'letter', 'note')
+    now = datetime(2100, 1, 1, tzinfo=timezone.utc)
+    for thread, (strand, gen) in fold(ordered).holder.items():
+        assert triggers(view, strand, gen, thread, now) == triggers(ordered, strand, gen, thread, now)
     for strand, gen in fold(ordered).holder.values():
         for alive in (True, False):
             assert state_of(view, strand, gen, alive=alive) == state_of(ordered, strand, gen, alive=alive)
@@ -111,6 +121,14 @@ def test_reader_and_locked_writer_refresh_external_suffixes_and_partial_tails(tm
     with path.open('ab') as out:
         out.write(b'{partial')
     append(home, f('router.renewed', 4, {'gen': 1}))
+    assert reader.refresh(home) == read_facts(home)
+    # A stream that appears, or one replaced under the same size, is still read.
+    other = home.facts_dir() / 's-abcd-other.jsonl'
+    other.write_text(json.dumps(f('router.renewed', 5, {'gen': 1}).row()) + '\n')
+    assert reader.refresh(home) == read_facts(home)
+    other.write_text(json.dumps(f('router.renewed', 6, {'gen': 1}).row()) + '\n')
+    assert [x.id for x in reader.refresh(home)] == [x.id for x in read_facts(home)]
+    other.unlink()
     assert reader.refresh(home) == read_facts(home)
 
 

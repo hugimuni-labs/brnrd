@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta
 
-from .ledger import kind_facts
+from .ledger import LedgerView, kind_facts
 from .project import fold
 
 QUIET = timedelta(minutes=40)
@@ -58,6 +58,23 @@ def _body(facts, strand: str, gen: int):
                  if f.data.get("strand") == strand and f.data.get("gen") == gen), None)
 
 
+def _met(facts, strand: str):
+    """The rows ``triggers`` can act on, in ledger order; on a view, without walking every letter."""
+    if not isinstance(facts, LedgerView):
+        return kind_facts(facts, "shown", "pr.merged", "wish.result", "letter")
+    senders = facts.project("letters-by-sender", None, _letters_by_sender)
+    rows = [f for f in facts.by_strand[strand] if f.kind == "shown"]
+    rows += [*kind_facts(facts, "pr.merged"), *kind_facts(facts, "wish.result"), *senders.get(strand, ())]
+    return sorted(rows, key=lambda f: facts.positions[f.id])
+
+
+def _letters_by_sender(facts) -> dict[str, list]:
+    found: dict[str, list] = {}
+    for fact in kind_facts(facts, "letter"):
+        found.setdefault(fact.data.get("from"), []).append(fact)
+    return found
+
+
 def triggers(facts, strand: str, gen: int, thread: str, now: datetime | None = None) -> list[dict]:
     """``{kind, fact, at, token}`` per fact this body met, oldest first, each a change."""
     from .dispositions import is_person, letter_index
@@ -73,7 +90,7 @@ def triggers(facts, strand: str, gen: int, thread: str, now: datetime | None = N
                       "token": f"exit {ended.data['code']}"})
     letters, seen, outs = letter_index(kind_facts(facts, "letter")), set(), [began]
     wished = {w.id: w.thread for w in told(facts).values()} if kind_facts(facts, "wish.result") else {}
-    for fact in kind_facts(facts, "shown", "pr.merged", "wish.result", "letter"):
+    for fact in _met(facts, strand):
         if fact.kind == "shown" and fact.data.get("strand") == strand:
             new = [i for i in fact.data.get("ids", ()) if i not in seen
                    and i in letters and is_person(letters[i])]
