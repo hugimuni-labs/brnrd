@@ -510,38 +510,31 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     from .reap import kept_line
     gone += kept_line(home, thread, threads)
     forge = forge_threads(home.root / "self")
+    from .waits import GRAMMAR
     part = gone + _handover(facts, thread, gen, threads) + inherited + (
         f"you are strand {strand} on thread {thread}"
-        + (f" ({forge}/{thread})" if forge else "") + "; letters arrive at your "
-        "tool boundaries, each line naming its reply address; answer with "
-        "`brnrd runtime send --re <id> --to <reply address> \"…\"`; "
-        "where the address is `-` nobody is waiting for words: settle the letter with "
-        f"`brnrd runtime send --re <id> --to thread:{thread} --note "
-        "\"<what you did>\"`; if you commit in this self clone, land it with "
-        "`brnrd runtime send-self --room .`; you will forget what is "
-        "not written: keep this thread's README true (the spec and the decisions); "
-        "what is left on a wish lives on the wish: `brnrd runtime wish "
-        "<w-id> --left \"<step>\" --left \"<step>\"`, the whole list, latest wins "
-        "(`--left same` when nothing moved), and the stop asks for it once a wish "
-        "moved; progress is the wishes; land the edit with send-self. "
-        "When your context grows "
-        "heavy hand over with `brnrd runtime molt --why \"<where "
-        "things stand>\"`; `brnrd runtime settle <thread> --why "
-        "\"…\"` closes a thread whose work is done; "
-        "a letter from `loom` is a notice of something the loom could not settle, "
-        "yours to deal with: its last lines name what settles it "
-        "(core/loom/README.md, Notices); stamp what someone wants with "
-        "`send --wish` (core/loom/README.md, Wishes), and open a thread only for "
-        "a wish: `send --to thread:<new> --wish <w-id>` or `--wish new:\"<line>\"`; "
-        "a `face?` line proposes a face for a fact you just met: "
-        "`brnrd runtime face take` wears it, `face <face>` wears another, "
-        "and doing nothing lets it lapse; "
+        + (f" ({forge}/{thread})" if forge else "") + "; letters arrive at your tool "
+        "boundaries, each naming its reply address: answer with "
+        "`brnrd runtime send --re <id> --to <address> \"…\"`, or where the address is `-`, "
+        f"settle it with `send --re <id> --to thread:{thread} --note \"<what you did>\"`. "
+        "You forget what is not written: keep this thread's README true (spec, decisions) and "
+        "land self commits with `brnrd runtime send-self --room .`; what is left on a wish lives "
+        "on it: `wish <w-id> --left \"<step>\" …`, the whole list, latest wins (`--left same` "
+        "when nothing moved), and the stop asks for it once a wish moved. Heavy context: `molt --why \"<where things stand>\"`; work done: "
+        "`settle <thread> --why \"…\"`. A letter from `loom` is a notice yours to settle; its "
+        "last lines say how (core/loom/README.md, Notices). Stamp what someone wants with "
+        "`send --wish`; open a thread only for one: `send --to thread:<new> --wish <w-id>` or "
+        "`--wish new:\"<line>\"`. A `face?` line: `face take` wears it, `face <face>` another, "
+        "silence lets it lapse. "
         + ("call `$BRNRD_JACK --event start` now, `$BRNRD_JACK --event post` between "
            "steps and `$BRNRD_JACK --event stop` before ending; read each returned boundary\n"
            if jack == "hand" else
-           "before you stop with wishes open, say how this body ends: a result (`wish <w-id> --result`), "
-           "an `ask`, a park with its reason (`wish <w-id> --read \"waiting: …\"`), or `settle`; "
-           "then stop, and the jack holds you while letters may come\n")
+           "Stopping is resting, not ending: the jack holds you at no cost and the next letter "
+           "wakes you here. Waiting on CI, a PR, a command, a person or a time, park it: "
+           f"`wish <w-id> --read \"waiting: …\" --wait <{GRAMMAR}>`, then stop; the loom's letter "
+           "wakes you when it comes true. A sleep or poll loop is never the wait: no letter "
+           "lands inside it. Before you stop with wishes open, end each as a result "
+           "(`wish <w-id> --result`), an `ask`, a park or `settle`\n")
     )
     atomic_write(part_path, part)
     if repos is None:
