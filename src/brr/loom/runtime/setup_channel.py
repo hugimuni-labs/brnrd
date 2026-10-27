@@ -18,7 +18,7 @@ from .config import load_config, read_array, seed_config, set_value
 from .connector import addressed, environment, instances
 from .home import Home, atomic_write, channel_parts, resolve_home
 from .port import _front, parse_frontmatter
-from .selfrepo import SelfError, init_self
+from .selfrepo import IDENTITY_NOTE, SelfError, init_self
 
 
 def _door(folder, env, code):
@@ -341,7 +341,8 @@ def main(argv=None):
             person = _person_id(called)
             _ok(f'brnrd will call you {called}')
         # A letter lands only on a thread on the self's main: seed it before pairing.
-        init_self(home.root, person=person)
+        if init_self(home.root, person=person).startswith('initialized '):
+            _ok(IDENTITY_NOTE)
         _step(f'Connect {CHOICES.get(kind, kind).split(",")[0]}')
         paired = pair(home, kind, name, person, timeout=args.timeout)
         if paired and args.wait > 0:
