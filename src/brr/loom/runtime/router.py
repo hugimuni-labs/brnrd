@@ -120,6 +120,13 @@ class Router:
         # local lease above follows it at its gen and stays the fence speak
         # authorizes against.
         self.gate = gate_for(home, self.config)
+        # Each install's ledger folder rides its lease pushes and is fetched
+        # into ledger/facts/<peer>/ by the others (P2).
+        self.shuttle = None
+        if self.gate is not None:
+            from .shuttle import Shuttle
+            self.shuttle = Shuttle(home, self.gate)
+            self.gate.riders = self.shuttle.riders
         self.gate_lease: Lease | None = None
         self._gate_at: float | None = None
         # A git renew is a network round trip that may stall for tens of
@@ -173,6 +180,20 @@ class Router:
             if previous < gen:
                 return True
         return False
+
+    def _caught_up(self, facts: list[Fact], gen: int) -> bool:
+        """Under the git lease, the previous holder's ledger, at the sha its
+        lease carried, is in this install's folder for it; any earlier router
+        fact (``_prior_visible``) passes for an install that synced an hour
+        ago."""
+        if self.gate is None:
+            return self._prior_visible(facts, gen)
+        holder, sha = self.gate.prior.get("inbox", ("", ""))
+        if self.shuttle.caught_up(holder, sha):
+            return True
+        self.shuttle._beat = None  # fetch now rather than at the next beat
+        self.shuttle.sync(holding=True)
+        return self.shuttle.caught_up(holder, sha)
 
     def _held_since(self, facts: list[Fact], gen: int) -> bool:
         """Every router gen from ``gen`` to the current one is this install's.
@@ -258,10 +279,13 @@ class Router:
     def begin_tick(self, facts: list[Fact]) -> list[Fact]:
         if self.gate is not None:
             facts = self._gate_tick(facts)
+            self.shuttle.sync(holding=self.gate_lease is not None)
             if self.gate_lease is None:
                 return facts
             if self.lease is None or self.lease.gen != self.gate_lease.gen:
                 return self._acquire(facts, gen=self.gate_lease.gen)
+            if not self.caught_up:
+                self.caught_up = self._caught_up(facts, self.lease.gen)
         if self.lease is None:
             return self._acquire(facts)
         renewed = self.authority.renew(self.lease, self.config.router_ttl)
@@ -296,7 +320,7 @@ class Router:
                 "gen": acquired.gen,
                 "until": acquired.until,
             }, f"router:{acquired.gen}")
-        self.caught_up = self._prior_visible(facts, acquired.gen)
+        self.caught_up = self._caught_up(facts, acquired.gen)
         self.granting = self.caught_up and self._window()
         return facts
 
