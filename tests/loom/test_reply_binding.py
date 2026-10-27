@@ -54,6 +54,20 @@ def receipt(home, native, key=FIRST, *, channel=CHANNEL, by="loom:aaaa"):
         "key": key, "channel": channel, "receipt": {"message_id": native}}))
 
 
+def _seen(text, expected):
+    """Where the context's lines stand in ``text``, in order and once, whatever their indent."""
+    lines = [line.strip() for line in text.splitlines()]
+    want = expected.splitlines()
+    at = [i for i in range(len(lines)) if lines[i:i + len(want)] == want]
+    assert len(at) == 1, (expected, text)
+    return text.index(want[0])
+
+
+def _landed(home, native):
+    letter = next(f for f in read_facts(home) if f.id == f"letter:mine:{native}")
+    return letter.data["to"].removeprefix("thread:")
+
+
 def prepare(home, facts, thread):
     append(home, Fact(kind="lease", by="loom:aaaa", id=f"lease:{READER}", data={
         "strand": READER, "thread": thread, "gen": 2, "router_gen": 1}))
@@ -92,17 +106,17 @@ def test_source_reply_binding_reaches_wake_and_boundary(home, mode):
     assert letter.data.get("re") == (FIRST if mode == "known" else None)
     assert source.data.get("re") == native
     expected = (f"replying to your {FIRST}: The first answer" if mode == "known" else
-                f"replying to an earlier message ({native})" if native else "")
+                f"replying to an earlier message ({native})" if native else
+                # Not a reply: read against what we last said on that channel, newest first.
+                "not a reply; the conversation before it on this channel:\n"
+                "s-aaaa-first/answer · first · 0m before — The first answer\n"
+                "s-aaaa-second/answer · second · 0m before — The second answer")
     room, facts = prepare(home, facts, thread)
     wake = (room / "port/wake.md").read_text()
     boundary = (room / "port/in/boundary.md").read_text()
     for text in (wake, boundary):
         assert "My follow-up" in text
-        if expected:
-            assert text.count(expected) == 1
-            assert text.index(expected) > text.index("My follow-up")
-        else:
-            assert "replying to" not in text
+        assert _seen(text, expected) > text.index("My follow-up")
     # The same context survives compact live redelivery and the jack parser.
     append(home, Fact(kind="shown", by=f"strand:{READER}", id="shown:reply", data={
         "strand": READER, "gen": 2, "ids": [letter.id]}))
@@ -112,10 +126,49 @@ def test_source_reply_binding_reaches_wake_and_boundary(home, mode):
     parsed, = parse_boundary(text).letters
     assert parsed.compact
     delivered = execute("post", room, "{}")
-    if expected:
-        assert expected in parsed.body and expected in delivered
-    else:
-        assert "replying to" not in delivered
+    delivered = json.loads(delivered)["hookSpecificOutput"]["additionalContext"]
+    assert _seen(parsed.body, expected) >= 0 and _seen(delivered, expected) >= 0
+
+
+def test_non_reply_reads_the_conversation_tail_once_per_burst(home):
+    ingest(home, "mine", dict(id="early", kind="letter", to=CHANNEL, body="His opener\nmore"), [])
+    append(home, Fact(kind="lease", by="loom:aaaa", id="lease:first", data={
+        "strand": "s-aaaa-first", "thread": "first", "gen": 1, "router_gen": 1}))
+    for n in range(4):
+        key = f"s-aaaa-first/out{n}"
+        append(home, Fact(kind="letter", by="strand:s-aaaa-first", id=key, data={
+            "id": key, "from": "s-aaaa-first", "to": CHANNEL, "body": f"Ours {n}\ndetail"}))
+    append(home, Fact(kind="letter", by="strand:s-aaaa-second", id="elsewhere", data={
+        "id": "elsewhere", "from": "s-aaaa-second", "to": "channel:other/42", "body": "Not here"}))
+    ingest(home, "mine", dict(id="cold", kind="letter", to=CHANNEL, body="link pls"), [])
+    ingest(home, "mine", dict(id="burst", kind="letter", to=CHANNEL, body="the design one"), [])
+    # Said after he wrote: not what his letters followed.
+    append(home, Fact(kind="letter", by="strand:s-aaaa-first", id="later", data={
+        "id": "later", "from": "s-aaaa-first", "to": CHANNEL, "body": "After"}))
+    room, _ = prepare(home, read_facts(home), _landed(home, "cold"))
+    lines = [line.strip() for line in (room / "port/in/boundary.md").read_text().splitlines()]
+    cold = next(i for i, line in enumerate(lines) if line.endswith("— link pls"))
+    assert lines[cold + 1] == "not a reply; the conversation before it on this channel:"
+    tail = lines[cold + 2:cold + 6]
+    # Interleaved, oldest first, TURNS of them: his opener has aged out behind four of ours.
+    assert [line.split(" · ")[0] for line in tail] == [f"s-aaaa-first/out{n}" for n in range(4)]
+    assert tail[-1] == "s-aaaa-first/out3 · first · 0m before — Ours 3"
+    burst = next(i for i, line in enumerate(lines) if line.endswith("— the design one"))
+    # The burst's second letter follows the first directly: nothing extra under it.
+    assert not any(line.startswith(("not a reply", "replying to")) for line in lines[burst + 1:burst + 2])
+    text = "\n".join(lines)
+    assert "Not here" not in text and "— After" not in text
+
+
+def test_a_cold_letter_after_ours_reads_his_turns_too(home):
+    ingest(home, "mine", dict(id="early", kind="letter", to=CHANNEL, body="His opener"), [])
+    draft(home, "first")
+    ingest(home, "mine", dict(id="cold", kind="letter", to=CHANNEL, body="link pls"), [])
+    room, _ = prepare(home, read_facts(home), _landed(home, "cold"))
+    wake = [line.strip() for line in (room / "port/wake.md").read_text().splitlines()]
+    at = wake.index("not a reply; the conversation before it on this channel:")
+    assert wake[at + 1].startswith("letter:mine:early · ") and wake[at + 1].endswith("— His opener")
+    assert wake[at + 2] == "s-aaaa-first/answer · first · 0m before — The first answer"
 
 
 def test_late_reply_delivers_context_at_a_live_boundary(home):
@@ -232,3 +285,27 @@ def test_pending_send_rechecks_authority_after_selecting_letter(home, monkeypatc
     router.speak_out(facts)
     assert router.lease is None
     assert not (home.root / "loom/channel-fake.jsonl").exists()
+
+
+def test_a_letter_to_a_person_names_self_files_by_forge_url(home):
+    """Live, 2026-10-27: Telegram linked a bare threads/wait-on/design.md as
+    the website design.md; the letter now carries the forge URL instead."""
+    import subprocess
+    from brr.loom.runtime.port import write_send
+    room = home.room(READER)
+    clone = room / "self"
+    for path in ("threads/wait-on/design.md", "people/ada/notes.md"):
+        (clone / path).parent.mkdir(parents=True, exist_ok=True)
+        (clone / path).write_text("x\n")
+    subprocess.run(["git", "init", "-q", str(clone)], check=True)
+    subprocess.run(["git", "-C", str(clone), "remote", "add", "origin",
+                    "git@github.com:acme/self.git"], check=True)
+    (room / "port/out").mkdir(parents=True, exist_ok=True)
+    url = "https://github.com/acme/self/tree/main/threads/wait-on/design.md"
+    write_send(room, to=CHANNEL, sender=READER, body=(
+        "The design is at threads/wait-on/design.md. Also `threads/wait-on/design.md`,\n"
+        f"{url}, threads/wait-on/, people/ada/notes.md and src/brr/port.py:177 stay."))
+    sent, = (room / "port/out").glob("*.md")
+    body = sent.read_text()
+    assert f"The design is at {url}. Also {url},\n{url}, https://github.com/acme/self/tree/main/threads/wait-on," in body
+    assert "people/ada/notes.md and src/brr/port.py:177 stay." in body

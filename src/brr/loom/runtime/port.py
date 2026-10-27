@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from brr.daemon2.facts import Fact
@@ -167,15 +168,44 @@ def letter_replies(facts: list[Fact]) -> dict[str, str]:
     return cached_projection(facts, "reply-context", (), _letter_replies)
 
 
+# A non-reply is read against the last turns on its channel, his and ours;
+# a letter within BURST seconds of his previous one, with nothing of ours
+# between, follows that one directly and carries nothing extra.
+TURNS = 4
+BURST = 600
+
+
 def _letter_replies(facts, selected=None):
     sources = facts.by_id if isinstance(facts, LedgerView) else {f.id: f for f in kind_facts(facts, "source")}
     letters = facts.named_letters if isinstance(facts, LedgerView) else {str(f.data.get("id") or f.id): f for f in kind_facts(facts, "letter")}
     result = {}
-    for letter in (letters.values() if selected is None else selected):
+    picked = None if selected is None else {letter.id for letter in selected}
+    turns: dict[str, list[Fact]] = {}
+    threads = None
+    # Canonical order: a letter is read against the turns before it, so its
+    # line never changes once projected.
+    for letter in kind_facts(facts, "letter"):
         source_fact = sources.get(letter.data.get("cites"))
         source = source_fact.data if source_fact is not None and source_fact.kind == "source" else {}
+        channel = str(letter.data.get("to") or "")
+        if not is_channel(channel):
+            channel = str(source.get("channel") or "")
+        before = turns.setdefault(channel, []) if channel else []
+        if channel:
+            before.append(letter)
+        if picked is not None and letter.id not in picked or letter.data.get("to") == channel:
+            continue
         native = source.get("re")
         if native in (None, ""):
+            before = before[:-1]
+            if not before or _follows(before[-1], letter):
+                continue
+            if threads is None:
+                from .project import sender_threads
+                threads = sender_threads(facts)
+            result[letter.id] = "\n".join(
+                ["not a reply; the conversation before it on this channel:"]
+                + [_turn_line(turn, letter, threads) for turn in before[-TURNS:]])
             continue
         target = letters.get(letter.data.get("re"))
         if target is not None:
@@ -184,6 +214,35 @@ def _letter_replies(facts, selected=None):
         else:
             result[letter.id] = f"replying to an earlier message ({native})"
     return result
+
+
+def _seconds_between(earlier: Fact, later: Fact) -> float | None:
+    try:
+        return (datetime.fromisoformat(later.at) - datetime.fromisoformat(earlier.at)).total_seconds()
+    except (TypeError, ValueError):
+        return None
+
+
+def _follows(previous: Fact, letter: Fact) -> bool:
+    """``letter`` is a later letter of a burst: his previous one came just before, unanswered."""
+    if is_channel(str(previous.data.get("to") or "")):
+        return False
+    seconds = _seconds_between(previous, letter)
+    return seconds is not None and seconds < BURST
+
+
+def _turn_line(turn: Fact, letter: Fact, threads: dict[str, str]) -> str:
+    first = " ".join(str(turn.data.get("body") or "").split("\n", 1)[0].split())
+    first = first if len(first) <= 160 else first[:159] + "…"
+    sender = str(turn.data.get("from") or "")
+    who = threads.get(sender, sender) if is_channel(str(turn.data.get("to") or "")) else sender
+    seconds = _seconds_between(turn, letter)
+    age = ""
+    if seconds is not None:
+        minutes = max(0, int(seconds // 60))
+        age = " · " + (f"{minutes // 1440}d" if minutes >= 1440 else
+                       f"{minutes // 60}h{minutes % 60:02d}m" if minutes >= 60 else f"{minutes}m") + " before"
+    return f"{turn.data.get('id', turn.id)} · {who}{age} — {first}"
 
 
 def _letter_lines(letter: Fact, reply: str, compact: bool,
@@ -455,6 +514,28 @@ OPEN_NEEDS_WISH = ('send: opening a thread needs the wish behind it: '
                    '--wish <id> | --wish new:"<line>"')
 
 
+# A path into the self, bare or in backticks, not already part of a URL or word.
+_SELF_PATH = re.compile(r"(`?)(?<![\w/.:@~%-])((?:[\w.-]+/)+[\w.-]*[\w-]/?)\1")
+
+
+def forge_paths(room: Path, home, body: str) -> str:
+    """A letter to a person names self files by forge URL: a chat app links a
+    bare ``design.md`` to the website design.md. Only a path the self holds
+    is rewritten, and never one under ``people/``."""
+    from .selfrepo import forge_threads
+    clone = room / "self" if (room / "self" / ".git").exists() else home.root / "self"
+    found = [m for m in _SELF_PATH.finditer(body)
+             if ".." not in m[2].split("/") and m[2].split("/", 1)[0] != "people"
+             and (clone / m[2]).exists()]
+    threads = forge_threads(clone) if found else None
+    if not threads:
+        return body
+    base = threads.removesuffix("/threads")
+    for m in reversed(found):
+        body = body[:m.start()] + f"{base}/{m[2].rstrip('/')}" + body[m.end():]
+    return body
+
+
 def write_send(room: Path, *, to: str, sender: str, body: str = "",
                re: str | None = None, note: str | None = None,
                clean: bool = False, kind: str | None = None,
@@ -497,6 +578,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                    'choose an enabled channel and write a fresh letter',
                    thread=sender_threads(facts).get(sender))
             raise PortError(str(exc)) from exc
+        body = forge_paths(Path(room), home, body)
     else:
         thread = thread_of(to)
         if home.routable(thread):
