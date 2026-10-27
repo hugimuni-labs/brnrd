@@ -178,11 +178,21 @@ def cmd_wish(args):
             _declare(args, "result")
         elif actions and kind == "wish.read" and by.startswith("strand:") and "wait" in data:
             _declare(args, "park")
+        if fact.kind == "wish" and args.id == "new":
+            _related(home, fact.data["line"], facts, fact.data["thread"])
         print(fact.data["wish"])
         return 0
     except (ValueError, OSError, RuntimeError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
+
+
+def _related(home, line, facts, thread) -> None:
+    """Advice beside a new wish: the closest threads, on stderr; stdout stays the id."""
+    from .recall import related_line
+    said = related_line(home, line, facts=facts, exclude={thread})
+    if said:
+        print(said, file=sys.stderr)
 
 
 def _wait(facts, ident, condition, until, default=None):
@@ -308,6 +318,8 @@ def cmd_ask(args):
                 "wish": args.wish, "reading": f"waiting: ask {ident}: {args.what}", "by": "resident",
                 "wait": _wait(facts, args.wish, "wish:" + ident, args.default_at, default=args.rec)}))
         _declare(args, "ask")
+        if same is None:
+            _related(home, args.what, facts, thread)
         print(ident)
         return 0
     except (ValueError, OSError, RuntimeError) as exc:
