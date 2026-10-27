@@ -1,5 +1,5 @@
 from _step import mail
-"""A molted successor inherits the committed next step and the unanswered ask."""
+"""A molted successor inherits the committed next step; a person hears back before the molt."""
 
 import json
 
@@ -11,12 +11,24 @@ from _step import Loom, wait_until, write_thread
 from test_lifecycle import bodies
 
 
-def test_molt_mid_work_lands_readme_and_inherits_unanswered_letter(tmp_path):
+def _chat_letter(root, body):
+    """A person letter a connector brought in, so it has a chat to answer on."""
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime.home import Home, mint
+    from brr.loom.runtime.ledger import append
+    source, letter = f"src-{mint(5)}", f"p-test/{mint(5)}"
+    append(Home(root), Fact(kind="source", by="loom:test", id=source, data={"id": source, "channel": "channel:fake"}))
+    append(Home(root), Fact(kind="letter", by="person:p-test", id=letter, data={
+        "id": letter, "to": "thread:work", "body": body, "from": "p-test", "cites": source}))
+    return letter
+
+
+def test_molt_refuses_an_unanswered_person_letter_then_lands_readme_and_hands_over_the_rest(tmp_path):
     root = tmp_path / "home"
     init_self(root, person="test")
     write_thread(root, "work", "Work\n\nNext step: original", "work", wait="0")
     first = inject_letter(root, to="thread:work", body="first ask")
-    second = inject_letter(root, to="thread:work", body="second ask")
+    second = _chat_letter(root, "second ask")
     received = root / "successor.json"
     bodies(root, f'''import json, sys, time
 from pathlib import Path
@@ -33,6 +45,13 @@ else:
     ctx.send("channel:fake", "first answer", re={first!r})
     path = ctx.room / "self/threads/work/README.md"
     path.write_text(path.read_text().replace("Next step: original", "Next step: inherited"))
+    try:
+        ctx.molt("carry the next step")
+    except RuntimeError as exc:
+        assert {second!r} in str(exc) and {first!r} not in str(exc), str(exc)
+    else:
+        raise AssertionError("molt passed with a person letter unanswered")
+    ctx.send("channel:fake", "on it, my successor finishes it", re={second!r})
     ctx.molt("carry the next step")
     assert ctx.jack("stop").raw == ""
 assert not (ctx.room / "port/molt-pending").exists()
@@ -43,8 +62,10 @@ assert not (ctx.room / "port/molt-pending").exists()
         wait_until(received.exists, 30, loom.dump)
         result = json.loads(received.read_text())
         assert "Next step: inherited" in result["wake"]
-        assert second in result["wake"] and "second ask" in result["bodies"]
-        assert "first ask" not in result["bodies"]
+        # The ack settled the second ask; the successor carries its work from the README.
+        assert "second ask" not in result["bodies"] and "first ask" not in result["bodies"]
+        assert any(f.kind == "letter" and f.data.get("re") == second and f.data.get("to") == "channel:fake"
+                   for f in loom.facts())
         assert "Next step: inherited" in (root / "self/threads/work/README.md").read_text()
         wait_until(lambda: not mail(root, loom.facts(), "work"), 5, loom.dump)
         assert any(f.kind == "attempt.ended" and f.data["cause"] == "molted" for f in loom.facts())
