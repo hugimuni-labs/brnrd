@@ -72,3 +72,10 @@ export function resolveRef(beads: Beads, model: Model | null, token: string): st
 	const tail = Object.keys(beads).filter((k) => k.endsWith(':' + token) || k.endsWith('/' + token));
 	return tail.length === 1 ? tail[0] : null;
 }
+
+// The ids a selected item links to on the board (53vuyk): the bead panel's, so the chain up to its source, the item
+// and what hangs below it. A letter whose chain crosses a wish links to that wish's cards.
+export function panelIds(beads: Beads, id: string | null): ReadonlySet<string> {
+	if (!id) return new Set();
+	return new Set([...ancestors(beads, id).map((a) => a.id), id, ...children(beads, id)]);
+}

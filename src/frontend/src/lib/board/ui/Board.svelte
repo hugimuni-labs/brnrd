@@ -12,6 +12,7 @@
 	import Column from './Column.svelte';
 	import Stack from './Stack.svelte';
 	import BeadSheet from './BeadSheet.svelte';
+	import Links from './Links.svelte';
 	import Composer from './Composer.svelte';
 	import { Board, provide } from './board.svelte.ts';
 	let { get }: { get?: (path: string) => Promise<unknown> } = $props();
@@ -132,10 +133,11 @@
 			{:else if byId.get(id)}<Column t={byId.get(id)!} letters={by.get(id) || []} />{/if}
 		{/each}
 	</main>
+	<Links />
 	<BeadSheet />
 	<Composer />
 	<footer>
-		← strands · you → / oldest → newest ↓ in every column / tap a heading to grow the plan / the
-		input writes to the inbox as you
+		← strands · you → / oldest → newest ↓ in every column / tap a heading to grow the plan / tap a
+		letter to link it across columns / the input writes to the inbox as you
 	</footer>
 </div>

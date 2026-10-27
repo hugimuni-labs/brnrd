@@ -16,7 +16,7 @@
 	let quoteOpen = $state(false);
 	function press() {
 		if (shut || (internal(l) && inbox)) return b.toggle(b.open, 'l:' + l.id);
-		b.sel = b.sel === l.id && !l.person ? null : l.id;
+		b.select(b.isSel(l.id, col) && !l.person ? null : l.id, col);
 		if (l.person) {
 			if (!dis) return b.toggle(b.open, 'd:' + l.id);
 			const r = routes(l, b.model!.byId, (t) => b.model!.threads.some((x) => x.id === t))[0];
@@ -40,7 +40,8 @@
 	class:internal={internal(l)}
 	class:collapsed={shut}
 	class:pending={l.pendingNote}
-	class:sel={b.sel === l.id}
+	class:sel={b.isSel(l.id, col)}
+	class:linked={b.linked.has(l.id) && !b.isSel(l.id, col)}
 	style:--h={hue(who)}
 	onclick={press}
 >

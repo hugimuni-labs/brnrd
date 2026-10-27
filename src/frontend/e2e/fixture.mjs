@@ -209,15 +209,25 @@ export function fixture() {
 		tools: {},
 		live: {}
 	};
+	// asks.Beads.parent: a letter hangs from its re, else its first link, else (a strand's) from its strand; a strand
+	// from its thread, a thread from the wish it was opened for, a wish from the letter that said it.
 	const beads = {};
-	for (const l of letters)
-		beads[l.id] = [
-			l.re || null,
-			l.re ? 're' : l.person ? 'person' : null,
-			l.from,
-			l.at,
-			l.body.slice(0, 40)
-		];
+	for (const l of letters) {
+		const [up, edge] = l.re
+			? [l.re, 're']
+			: l.links?.length
+				? [l.links[0], 'link']
+				: l.person
+					? [null, 'person']
+					: l.from.startsWith('s-')
+						? [l.from, 'strand']
+						: [null, 'dangling'];
+		beads[l.id] = [up, edge, l.from, l.at, l.body.slice(0, 40)];
+	}
+	for (const t of threads) {
+		for (const s of t.strands) beads[s.id] = [`thread:${t.id}`, 'thread', null, null, t.id];
+		beads[`thread:${t.id}`] = [wishes[t.id]?.[0]?.wish ?? null, 'opened-for', null, null, t.id];
+	}
 	for (const [id, ws] of Object.entries(wishes))
 		for (const w of ws) beads[w.wish] = [w.letters?.[0] || null, 'wish', id, w.at, w.line];
 	parts.beads = beads;

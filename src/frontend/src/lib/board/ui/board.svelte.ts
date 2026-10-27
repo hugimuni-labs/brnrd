@@ -4,7 +4,7 @@ import { getContext, setContext } from 'svelte';
 import { SvelteSet } from 'svelte/reactivity';
 import { BASE, getJSON, Store, type Beads } from '../parts.ts';
 import type { Letter, Model } from '../types.ts';
-import { normalize, resolveRef, timeline, type Timeline } from '../bead.ts';
+import { normalize, panelIds, resolveRef, timeline, type Timeline } from '../bead.ts';
 import { armedVerdict, correctDraft, verdictLetter } from '../calls.ts';
 import { refTokens } from '../text.ts';
 
@@ -27,7 +27,9 @@ export class Board {
 	grown = new SvelteSet<string>();
 	cunfold = $state(false);
 	hovered = $state<string | null>(null);
+	// the selected letter and the column it was pressed in (the same letter sits in the inbox and its thread)
 	sel = $state<string | null>(null);
+	selCol = $state<string | null>(null);
 	// the bead sheet
 	beadId = $state<string | null>(null);
 	beadHist = $state<string[]>([]);
@@ -157,6 +159,16 @@ export class Board {
 		this.beadId = null;
 		this.beadHist = [];
 	}
+	select(id: string | null, col: string | null = null) {
+		this.sel = id;
+		this.selCol = id ? col : null;
+		if (id && !this.beads) this.store.loadBeads().then((x) => (this.beads ??= x));
+	}
+	// What the selection links to (Links.svelte draws the lines); the item alone until the beads are in.
+	linked = $derived<ReadonlySet<string>>(panelIds(this.beads || {}, this.sel));
+	isSel(id: string, col: string) {
+		return this.sel === id && this.selCol === col;
+	}
 	// Show a bead on the board: its letter or wish row scrolled into the middle of its column, or the thread's column.
 	locate(id: string) {
 		const q = id.startsWith('thread:')
@@ -164,7 +176,8 @@ export class Board {
 			: `[data-letter="${CSS.escape(id)}"],[data-wish="${CSS.escape(id)}"]`;
 		const el = document.querySelector(q);
 		el?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
-		if (el?.matches('[data-letter]')) this.sel = id;
+		if (el?.matches('[data-letter]'))
+			this.select(id, el.closest<HTMLElement>('[data-column]')?.dataset.column ?? null);
 	}
 	timeline = $derived.by((): Timeline | null =>
 		this.beadId && this.beads ? timeline(this.beads, this.model, this.beadId) : null

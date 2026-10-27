@@ -41,6 +41,7 @@
 		class:assumed={nested}
 		class:on={b.open.has(key)}
 		data-wish={r.w.wish}
+		class:linked={b.linked.has(r.w.wish)}
 	>
 		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 		<div

@@ -363,7 +363,7 @@ test('beads: the chain walks up to the source; children hang below oldest first'
 });
 
 // The bead sheet walks the beads part in the client (no /bead on the loopback): chain up to the source, what hangs below.
-import { kindOf, resolveRef, timeline } from './bead.ts';
+import { kindOf, panelIds, resolveRef, timeline } from './bead.ts';
 test('a bead timeline walks the parent map up to its source and down to its children', () => {
 	const beads = {
 		'letter:tg:1': [null, null, 'person:ada', '2026-10-27T10:00:00Z', 'make the board'],
@@ -399,4 +399,17 @@ test('inbox wish view: done above, open below, oldest first in each, newest open
 		['w-done1', 'w-done2', 'w-old', 'w-new']
 	);
 	equal(g.open, 2);
+});
+
+test('a selection links to its bead panel: the chain up, the item, what hangs below; nothing beside it', () => {
+	const beads = {
+		ask: [null, 'person', 'person:ada', '2026-10-27T09:00:00Z', 'please'],
+		'w-alpha0000000': ['ask', 'wish', 'alpha', '2026-10-27T09:01:00Z', 'alpha'],
+		note: ['w-alpha0000000', 'link', 's-x', '2026-10-27T09:02:00Z', 'a note'],
+		reply: ['note', 're', 's-y', '2026-10-27T09:03:00Z', 'ok'],
+		sibling: ['ask', 're', 's-x', '2026-10-27T09:04:00Z', 'on it']
+	} as Beads;
+	deepEqual([...panelIds(beads, 'note')].sort(), ['ask', 'note', 'reply', 'w-alpha0000000']);
+	deepEqual([...panelIds(beads, 'gone')], ['gone']);
+	equal(panelIds(beads, null).size, 0);
 });
