@@ -839,6 +839,12 @@ def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
         raise PortError("molt: say what is left first, then molt:\n" + "\n".join(
             f'  brnrd runtime wish {ident} --left "<step>" --left "<step>"   ({why}; --left same if nothing moved)'
             for ident, why in owed))
+    held = unreplied_held(facts, strand)
+    if held:
+        # A person who wrote to this body hears from it before a stranger takes over.
+        raise PortError("molt: reply to each person letter you hold first, even with just an ack:\n" + "\n".join(
+            f'  brnrd runtime send --re {ident} --to {channel} "…"   (from {letter.data.get("from") or letter.by})'
+            for ident, (letter, channel) in held.items()))
     clone = resolve_clone(room)
     path = f"threads/{thread}/README.md"
     if not fresh and git(clone, "diff", "HEAD", "--quiet", "--", path, check=False).returncode:
@@ -859,6 +865,25 @@ def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
     from .jack import _set_state
     _set_state(room, molted=True)
     return fact_id
+
+
+def _words(value) -> tuple:
+    return tuple(value.split()) if isinstance(value, str) else tuple(value or ())
+
+
+def unreplied_held(facts, strand: str) -> dict:
+    """Person letters with a chat to answer on, shown to this strand, that no letter answers yet.
+
+    A reply counts once it is written: its delivery receipt may come after the molt.
+    """
+    from .owners import unanswered_letters
+    from .project import is_notice, reply_channels
+    channels = reply_channels(facts)
+    shown = {ident for f in facts if f.kind == "shown" and f.data.get("strand") == strand
+             for ident in _words(f.data.get("ids"))}
+    replied = {f.data.get("re") for f in facts if f.kind == "letter" and not is_notice(f)}
+    return {ident: (letter, channels[ident]) for ident, letter in unanswered_letters(facts).items()
+            if ident in shown and ident in channels and ident not in replied}
 
 
 def _current_label(room: Path | None, strand: str):
