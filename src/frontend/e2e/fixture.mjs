@@ -137,7 +137,8 @@ export function fixture() {
 			opened_at: at(m),
 			last_at: at(m + 3),
 			opened_for: [{ wish: wid }],
-			strands: state ? [{ id: sid, state, body: 'claude/opus' }] : [],
+			// a thread keeps its strands' history: a no-body thread lists the one that stopped
+			strands: [{ id: sid, state: state || 'stopped', body: 'claude/opus' }],
 			steps:
 				id === 'alpha'
 					? [
