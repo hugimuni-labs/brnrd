@@ -138,13 +138,13 @@ def free_lock(ports, lock: Path) -> dict[Path, list[dict]]:
     Holding or waiting, a stopped opener keeps the lock from whoever waits
     next; an early resume costs the body only its chance to drop the call.
     """
-    procs = pause.list_all_processes()
     trees = {(port, int(record.get("pid", -1))): None for port in ports
              for record in pause.read_paused_record(port)}
-    for port, pid in trees:
-        trees[port, pid] = {pid, *(p.pid for p in pause.descendants(pid, procs))}
     if not trees:
         return {}
+    procs = pause.list_all_processes()
+    for port, pid in trees:
+        trees[port, pid] = {pid, *(p.pid for p in pause.descendants(pid, procs))}
     openers = _openers(lock, set().union(*trees.values()))
     resumed: dict[Path, list[dict]] = {}
     for (port, pid), tree in trees.items():

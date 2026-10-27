@@ -1446,6 +1446,8 @@ _PAUSED: dict[Path, Home] = {}
 
 def _free_ledger(lock):
     """``ledger.ON_CONTENDED``: resume each paused call that has ``lock`` open."""
+    if not _PAUSED:
+        return
     from brr import pause
     from . import pausing
     for port, records in pausing.free_lock(list(_PAUSED), Path(lock)).items():
