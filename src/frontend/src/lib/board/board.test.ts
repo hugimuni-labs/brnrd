@@ -363,7 +363,7 @@ test('beads: the chain walks up to the source; children hang below oldest first'
 });
 
 // The bead sheet walks the beads part in the client (no /bead on the loopback): chain up to the source, what hangs below.
-import { kindOf, panelIds, resolveRef, timeline } from './bead.ts';
+import { kindOf, panelIds, refOf, resolveRef, timeline, trace } from './bead.ts';
 test('a bead timeline walks the parent map up to its source and down to its children', () => {
 	const beads = {
 		'letter:tg:1': [null, null, 'person:ada', '2026-10-27T10:00:00Z', 'make the board'],
@@ -412,4 +412,40 @@ test('a selection links to its bead panel: the chain up, the item, what hangs be
 	deepEqual([...panelIds(beads, 'note')].sort(), ['ask', 'note', 'reply', 'w-alpha0000000']);
 	deepEqual([...panelIds(beads, 'gone')], ['gone']);
 	equal(panelIds(beads, null).size, 0);
+});
+
+test('a wish trace: stamps with a ref or a line, a result once, the verdict, beads interleaved by time', () => {
+	const beads = {
+		'w-aaaaaaaaaaaa': [null, 'wish', 'x', '2026-10-27T10:00:00Z', 'the board'],
+		note: ['w-aaaaaaaaaaaa', 'link', 's-x', '2026-10-27T10:03:00Z', 'a note']
+	} as Beads;
+	const w = W('w-aaaaaaaaaaaa', {
+		state: 'accepted',
+		stamps: [
+			{ stamp: 'heard', at: '2026-10-27T10:00:00Z' },
+			{ stamp: 'read', at: '2026-10-27T10:01:00Z' },
+			{ stamp: 'result', at: '2026-10-27T10:02:00Z', ref: 'brnrd#1' },
+			{ stamp: 'delivered', at: '2026-10-27T10:04:00Z', ref: 'abc1234', line: 'out' }
+		],
+		results: [{ ref: 'brnrd#1', at: '2026-10-27T10:02:00Z' }, { ref: 'threads/x/README.md' }],
+		verdict: { as: 'accepted', at: '2026-10-27T10:05:00Z' }
+	});
+	const rows = trace(w, timeline(beads, null, 'w-aaaaaaaaaaaa'));
+	deepEqual(
+		rows.map((r) => (r.t === 'stamp' ? r.k : r.t === 'bead' ? r.bead.id : r.t)),
+		['read', 'granting', 'note', 'delivered', 'verdict', 'result']
+	);
+	const steps = [{ text: 'write the `parser`', wishes: [], receipt: 'abc1234' }];
+	deepEqual(refOf('brnrd#1', beads, steps), {
+		kind: 'url',
+		href: 'https://github.com/hugimuni-labs/brnrd/pull/1',
+		text: 'brnrd#1'
+	});
+	deepEqual(refOf('note', beads, steps), { kind: 'bead', id: 'note', text: 'a note' });
+	deepEqual(refOf('abc1234', beads, steps), {
+		kind: 'step',
+		sha: 'abc1234',
+		text: 'write the parser'
+	});
+	deepEqual(refOf('nope', beads, steps), { kind: 'text', text: 'nope' });
 });
