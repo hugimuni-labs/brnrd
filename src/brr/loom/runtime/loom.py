@@ -1754,10 +1754,10 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         facts = observe_waits(home, facts, router.armed(), watcher.states if watcher else None)
         if watcher is not None:
             from .receipts import receipts
+            from .waits import open_claims
             from .wishes import told
             watcher.wants = forge_wants(told(facts))
-            watcher.prs = {f"{r.repo}#{r.number}" for rows in receipts(facts, home.install_id()).values()
-                           for r in rows if not r.merge_commit}
+            watcher.prs = open_claims(receipts(facts, home.install_id()))
         facts = router.route(facts, bodies, (adapter, core))
         facts = router.speak_out(facts)
 
