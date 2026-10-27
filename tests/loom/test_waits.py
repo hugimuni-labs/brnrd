@@ -53,9 +53,9 @@ def test_a_forge_state_resolves_a_wait_the_ledger_never_saw(ledger):
     assert told(home, forge={f"ci:{REPO}@abc1234": {"state": "pending"}}) == []
     letters = told(home, forge={f"pr:{REPO}#7": {"state": "closed", "at": "x", "url": "u"},
                                 f"ci:{REPO}@abc1234": {"state": "red"}})
-    bodies = sorted(letter.data["body"].splitlines()[0] for letter in letters)
-    assert bodies[0].startswith(f"wait on {ci} resolved: ci:{REPO}@abc1234 is red")
-    assert bodies[1].startswith(f"wait on {pr} resolved: pr:{REPO}#7 closed")
+    heads = {letter.data["body"].split()[2]: letter.data["body"] for letter in letters}
+    assert heads[ci].startswith(f"wait on {ci} resolved: ci:{REPO}@abc1234 is red")
+    assert heads[pr].startswith(f"wait on {pr} resolved: pr:{REPO}#7 closed")
 
 
 def test_a_wish_wait_resolves_on_a_settled_state_or_a_citing_letter(ledger):
@@ -221,3 +221,20 @@ for letter in ctx.owed():
         kill_bodies(loom)
     assert not loom.errors, loom.errors
     assert sum(1 for f in loom.facts() if f.kind == "letter" and f.id.startswith("loom/wait-")) == 1
+
+
+def test_the_board_row_carries_the_standing_wait(ledger):
+    from brr.loom.runtime import snapshot
+    from brr.loom.runtime.config import load_config
+    home, seat = ledger
+    ident = heard(home, seat, "Shown")
+    read = park(home, seat, ident, "--wait", f"pr:{REPO}#9")
+
+    def row():
+        doc = snapshot.assemble(home, read_facts(home), load_config(home.root))
+        return next(w for w in doc["wishes"] if w["id"] == ident)
+    wait = row()["wait"]
+    assert wait["on"] == f"pr:{REPO}#9" and wait["until"] == read["wait"]["until"]
+    assert wait["since"].endswith("Z")
+    command(home, seat, "wish", ident, "--read", "Back on it")
+    assert "wait" not in row()

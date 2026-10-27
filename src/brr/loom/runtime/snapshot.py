@@ -152,6 +152,8 @@ def _wish_rows(told, facts) -> list[dict]:
 
     def last(wish):
         return max((_when(r["at"]) for r in wish.results), default=_when(wish.at))
+    from .waits import live
+    parked = {wish.id: read for wish, read in live(told)}
     rows = []
     for w in sorted(told.values(), key=lambda w: (not w.open, -last(w).timestamp(), w.id))[:WISHES]:
         says = []
@@ -166,6 +168,9 @@ def _wish_rows(told, facts) -> list[dict]:
         rows.append(_bare({
             "id": w.id, "thread": w.thread, "from": w.sender, "line": w.line, "state": w.state,
             "origin": w.origin, "at": _iso(w.at), "says": says, "reading": w.reading,
+            # What the loom watches for this park, while it stands.
+            "wait": _bare({"on": parked[w.id]["wait"].get("on"), "since": _iso(parked[w.id]["at"]),
+                           "until": parked[w.id]["wait"].get("until")}) if w.id in parked else None,
             "results": [_bare({"kind": r.get("kind"), "ref": r.get("ref"), "line": r.get("line"),
                                "delivered": bool(r.get("delivered")), "at": _iso(r["at"])})
                         for r in w.results],
