@@ -23,6 +23,7 @@ import json
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -92,7 +93,10 @@ class GitLeaseAuthority:
         return proc.stdout.strip()
 
     def _commit(self, body: dict) -> str:
-        line = json.dumps(body, sort_keys=True, separators=(",", ":"))
+        # A nonce: two renewals in one second would otherwise be one sha,
+        # and a follower would never see the second.
+        line = json.dumps(dict(body, nonce=uuid.uuid4().hex[:12]),
+                          sort_keys=True, separators=(",", ":"))
         return self._local("-c", "user.name=brnrd", "-c", "user.email=loom@brnrd.dev",
                            "commit-tree", EMPTY_TREE, "-m", line)
 
@@ -181,7 +185,9 @@ class GitLeaseAuthority:
 
     def acquire(self, what: str, holder: str, ttl: float, *,
                 capabilities: set[str] | None = None,
-                required: set[str] | None = None) -> Lease | None:
+                required: set[str] | None = None, floor: int = 1) -> Lease | None:
+        """Take the lease if it is free or expired; a takeover bumps ``gen``,
+        never below ``floor`` (the gens a single-machine home already used)."""
         if not holder or ttl <= 0:
             raise ValueError("holder and positive ttl required")
         if what in self.held and self.held[what][0].holder == holder:
@@ -193,7 +199,7 @@ class GitLeaseAuthority:
         current = self.view(what)
         if current is not None and not current["expired"] and current.get("holder") != holder:
             return None
-        gen = int(current.get("gen", 0)) + 1 if current else 1
+        gen = max(int(current.get("gen", 0)) + 1 if current else 1, floor)
         expected = current["sha"] if current else ""
         try:
             sha, t_send = self._push(what, {"holder": holder, "gen": gen, "ttl": ttl,

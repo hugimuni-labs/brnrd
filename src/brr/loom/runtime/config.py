@@ -99,6 +99,14 @@ KEYS: tuple[Key, ...] = (
         "Clock skew, in seconds, a router lease must tolerate; grants stop at until - max_skew - margin."),
     Key("margin", "seconds", DEFAULT_MARGIN,
         "Extra seconds, beyond max_skew, a router stops granting before its lease ends."),
+    Key("lease_remote", "text", None,
+        "The self's https URL whose refs/leases/inbox decides which install routes and runs "
+        "connectors, so two machines can share one resident; unset, the router lease is this "
+        "machine's alone."),
+    Key("lease_mode", "choice", "contested",
+        "contested: a holder that cannot reach lease_remote keeps routing unless a peer's "
+        "ledger moved there in the last 10 minutes; strict: it stops at the end of its ttl.",
+        choices=("contested", "strict")),
     Key("board_port", "text", None,
         "Loopback port the board's parts are served on (127.0.0.1); unset, the board is off. Read at start."),
 )
