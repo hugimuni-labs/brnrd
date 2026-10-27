@@ -2105,3 +2105,6 @@
 .brd .bd.waitv .vb {
 	color: var(--ember-hot);
 }
+.brd .heading .bytes.over {
+	color: #d33;
+}

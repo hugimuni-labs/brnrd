@@ -97,6 +97,29 @@ test('a new letter in a part reaches its column within a second (design §D7)', 
 	console.log(`fact visible in ${Date.now() - t0} ms`);
 });
 
+test('the inbox opens on its wishes, done above and open below; its heading turns it to letters', async () => {
+	const inbox = B.page.locator('[data-column="inbox"]');
+	const states = await inbox.locator('.wishpane .wc small').allInnerTexts();
+	assert.ok(states.length > 0);
+	const done = states.map((s) => /^(delivered|accepted|dropped|declined) /.test(s));
+	assert.deepEqual(
+		done,
+		[...done].sort((a, b) => +b - +a),
+		'every done card stands above every open one'
+	);
+	assert.match(
+		await inbox.locator('.heading .tog').innerText(),
+		/^wishes \d+ open of \d+ · ▸ letters$/
+	);
+	assert.equal(await inbox.locator('.chat .letter').count(), 0);
+	await inbox.locator('.wishpane .wc .wch').last().click();
+	await inbox.locator('.wishpane .wc.open .insp').waitFor();
+	await inbox.locator('.heading .state').click();
+	await inbox.locator('.chat .letter').first().waitFor();
+	assert.equal(await inbox.locator('.wishpane .wc').count(), 0);
+	assert.match(await inbox.locator('.heading .tog').innerText(), /^letters · ▸ wishes \d+$/);
+});
+
 test('the composer sends a letter to the inbox and shows it pending', async () => {
 	await B.page.fill('#say', 'hello from the board');
 	await B.page.click('#compose button');

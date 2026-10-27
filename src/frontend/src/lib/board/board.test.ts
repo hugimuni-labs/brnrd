@@ -6,7 +6,7 @@ import { inSide, internal, linked, sender } from './sides.ts';
 import { arrange, REORDER, SETTLED, sortThreads, wanted } from './order.ts';
 import { pipOn, stages, stageWord } from './stages.ts';
 import { answered, stack, verdictLetter } from './calls.ts';
-import { ledger, threadWishes } from './ledger.ts';
+import { inboxCards, ledger, threadWishes } from './ledger.ts';
 import { bar, beats, liveOf, withTools } from './tape.ts';
 import { ancestors, children, moved, Store, type Beads } from './parts.ts';
 
@@ -365,4 +365,18 @@ test('a bead timeline walks the parent map up to its source and down to its chil
 	equal(kindOf('s-ae66-abcdef', beads), 'strand');
 	equal(resolveRef(beads, null, '2'), 'letter:tg:2');
 	equal(resolveRef(beads, null, 'nope'), null);
+});
+
+test('inbox wish view: done above, open below, oldest first in each, newest open last', () => {
+	const g = inboxCards([
+		W('w-new', { state: 'granting', at: '5' }),
+		W('w-done2', { state: 'accepted', at: '4' }),
+		W('w-old', { state: 'heard', at: '1' }),
+		W('w-done1', { state: 'delivered', at: '2' })
+	]);
+	deepEqual(
+		g.cards.map((w) => w.wish),
+		['w-done1', 'w-done2', 'w-old', 'w-new']
+	);
+	equal(g.open, 2);
 });

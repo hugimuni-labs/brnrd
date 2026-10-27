@@ -10,14 +10,21 @@
 	import Tape from './Tape.svelte';
 	import Ledger from './Ledger.svelte';
 	import Calls from './Calls.svelte';
+	import WishCard from './WishCard.svelte';
+	import { inboxCards } from '../ledger.ts';
 	import { board } from './board.svelte.ts';
 	let { t, inbox = false, letters }: { t: Thread; inbox?: boolean; letters: Letter[] } = $props();
 	const b = board();
 	const B = $derived(t.board || {});
 	const strand = $derived((t.strands || []).slice(-1)[0]);
+	// The inbox opens on its wishes (board.html's default); a press on its heading turns it to letters and back.
+	const wv = $derived(inbox && !b.letterView.has('inbox'));
+	const W = $derived(wv ? inboxCards(b.model?.wishes || []) : null);
 	const rows = $derived(
 		inbox
-			? letters
+			? wv
+				? []
+				: letters
 			: withTools(letters, t, b.model?.tools || {}, b.model?.live || {}).filter(
 					(r) => !('live' in r)
 				)
@@ -34,6 +41,7 @@
 	// Stick to the bottom when the reader is there (or on first paint); a reader scrolled up keeps the place.
 	$effect.pre(() => {
 		void rows.length;
+		void W?.cards.length;
 		if (!pane) return;
 		const bottom = first || pane.scrollHeight - pane.clientHeight - pane.scrollTop < 40;
 		first = false;
@@ -46,6 +54,7 @@
 	class="column"
 	class:inbox
 	class:threadcol={!inbox}
+	class:wv
 	class:red={B.red}
 	class:stall={B.stall}
 	data-column={t.id}
@@ -57,8 +66,11 @@
 	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 	<div
 		class="heading"
-		onclick={(e) =>
-			!inbox && !(e.target as HTMLElement).closest('a,button') && b.toggle(b.grown, t.id)}
+		onclick={(e) => {
+			if ((e.target as HTMLElement).closest('a,button')) return;
+			if (inbox) (b.toggle(b.letterView, 'inbox'), b.persist(), (first = true));
+			else b.toggle(b.grown, t.id);
+		}}
 	>
 		<h2>
 			{#if B.state === 'settled'}<button
@@ -103,8 +115,25 @@
 		<div class="state">
 			{inbox ? 'the strand that weaves all of it' : t.status || ''}{#if strand}
 				· {strand.id.slice(-6)} {strand.body || ''} {strand.state || ''}{/if}{#if t.plan?.total}
-				· <span class="plan">plan {t.plan.done}/{t.plan.total}</span>{/if}
+				· <span class="plan">plan {t.plan.done}/{t.plan.total}</span
+				>{/if}{#if inbox && t.plan?.bytes != null && t.plan?.cap}
+				· <span
+					class="bytes"
+					class:over={t.plan.bytes > t.plan.cap * 0.9}
+					title="Plan bytes, carried at every wake; the inbox README keeps it under {t.plan.cap}"
+					>{t.plan.bytes}/{t.plan.cap} B</span
+				>{/if}{#if inbox}
+				· <span class="tog"
+					>{#if W}wishes {W.open} open of {W.cards.length} · ▸ letters{:else}letters · ▸ wishes {(
+							b.model?.wishes || []
+						).length}{/if}</span
+				>{/if}
 		</div>
+		{#if inbox}<div class="wish">
+				{#if W}done above, open below · newest at the bottom<br />heard → read → granting →
+					delivered → agreed{:else}Every thread · {letters.length} letters<br />Time order · thread
+					colours{/if}
+			</div>{/if}
 	</div>
 	{#if inbox}
 		<Calls calls={B.calls || []} />
@@ -114,6 +143,11 @@
 		</div>
 	{/if}
 	<div class="messages" bind:this={pane}>
+		{#if W}<div class="wishpane">
+				{#each W.cards as w (w.wish)}<WishCard {w} />{:else}<div class="empty">
+						no wishes
+					</div>{/each}
+			</div>{/if}
 		<div class="chat">
 			{#each rows as r (r.id)}
 				{#if 'fold' in r}<Tape f={r} />{:else if 'body' in r}<LetterCard

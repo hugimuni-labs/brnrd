@@ -159,3 +159,13 @@ export function ledger(t: Thread, tw: ThreadWishes, wishes: Wish[], pending: Let
 		loose: tw.loose
 	};
 }
+
+// The inbox's wish view (board.html wishCards): every wish, done above and open below, oldest first within each, so the
+// newest open wish sits at the bottom beside the composer.
+export function inboxCards(wishes: Wish[]): { cards: Wish[]; open: number } {
+	const cards = [...wishes].sort(
+		(a, b) =>
+			+DONE.includes(b.state) - +DONE.includes(a.state) || String(a.at).localeCompare(String(b.at))
+	);
+	return { cards, open: cards.filter((w) => !DONE.includes(w.state)).length };
+}
