@@ -12,6 +12,7 @@ moving or deleting either breaks neither publish nor a body's gh
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import sys
@@ -27,6 +28,9 @@ GATE_FILES = ("cloud.json", "cloud.token", "cloud.health.json", "cloud.server.js
 TOKEN_FILE = "github.json"
 # A cached token with less than this left is minted again (App tokens last an hour).
 MARGIN = 600
+# A body exports one token at start for shells that bypass its gh shim
+# (loom.py _forge_env); it asks for at least this much life, not MARGIN.
+MIN_LIFE_ENV = "BRNRD_FORGE_MIN_LIFE"
 MINT_PATH = "/v1/daemons/publishing-credential"
 
 
@@ -38,12 +42,12 @@ def state_dir(home_root: Path | str, config) -> Path | None:
     return own if (own / "gates" / "cloud.json").is_file() else None
 
 
-def forge_token(state: Path, *, request=None, now=time.time) -> str:
-    """A GitHub App token for the forge: cached until MARGIN before it expires, else minted."""
+def forge_token(state: Path, *, request=None, now=time.time, margin: float = MARGIN) -> str:
+    """A GitHub App token for the forge: cached until ``margin`` before it expires, else minted."""
     cache = state / "gates" / TOKEN_FILE
     try:
         held = json.loads(cache.read_text(encoding="utf-8"))
-        if held["token"] and float(held["expires"]) - now() > MARGIN:
+        if held["token"] and float(held["expires"]) - now() > margin:
             return str(held["token"])
     except (OSError, ValueError, KeyError, TypeError):
         pass
@@ -75,7 +79,11 @@ def main(argv: list[str]) -> int:
         if state is None:
             raise RuntimeError(f"no cloud gate in {root / 'loom' / 'gates'}: "
                                "run brnrd account connect")
-        print(forge_token(state))
+        try:
+            margin = max(MARGIN, float(os.environ.get(MIN_LIFE_ENV) or 0))
+        except ValueError:
+            margin = MARGIN
+        print(forge_token(state, margin=margin))
     except Exception as exc:
         sys.stderr.write(f"forge-token: {exc}\n")
         return 1

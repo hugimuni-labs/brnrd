@@ -97,6 +97,24 @@ def test_a_token_near_its_end_is_minted_again(tmp_path):
         mint.server.shutdown()
 
 
+def test_a_body_starts_with_a_token_good_for_most_of_an_hour(tmp_path, mint, shim):
+    """The GH_TOKEN a body exports for shells that bypass its gh shim is resolved
+    once; a cached token with 20 min left would die mid-body, so it is minted again."""
+    import time
+    from brr.loom.runtime.loom import _forge_env
+    root = tmp_path / "home"
+    gate = connected(root, mint.url)
+    (root / "loom/config.toml").write_text(f'forge_token = "{spec(root)}"\n')
+    room = root / "rooms" / "s-1"
+    room.mkdir(parents=True)
+    (gate / gates.TOKEN_FILE).write_text(json.dumps({"token": "ghs_old", "expires": time.time() + 1200}))
+    env = dict(__import__("os").environ)
+    _forge_env(room, env)
+    assert env["GH_TOKEN"] == "ghs_1"
+    # The shim and publish keep the cache's own margin: no second mint.
+    assert resolve_secret(spec(root)) == "ghs_1" and mint.minted == ["ghs_1"]
+
+
 def test_the_verb_fails_closed_without_a_gate(tmp_path, shim):
     root = tmp_path / "home"
     (root / "loom").mkdir(parents=True)

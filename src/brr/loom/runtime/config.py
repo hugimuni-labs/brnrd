@@ -402,18 +402,19 @@ def _secret_source(spec: str) -> str:
     return f"{source}: {arg}"
 
 
-def resolve_secret(spec: str) -> str:
+def resolve_secret(spec: str, *, env: dict[str, str] | None = None) -> str:
     """Run a secret source now and return the value.
 
     Called at each use, never once at load: the bot's App token expires
     hourly, so a value read at start goes stale under a running loom. The
     value is returned, never logged; an error names the source, not the value.
+    ``env``, when given, is a command source's whole environment.
     """
     source, _, arg = _secret_source(spec).partition(": ")
     if source == "command":
         try:
             proc = subprocess.run(["sh", "-c", arg], capture_output=True, text=True,
-                                  timeout=_SECRET_TIMEOUT, stdin=subprocess.DEVNULL)
+                                  timeout=_SECRET_TIMEOUT, stdin=subprocess.DEVNULL, env=env)
         except subprocess.TimeoutExpired:
             raise ConfigError(f"secret command timed out after {_SECRET_TIMEOUT}s: {arg}") from None
         except OSError:

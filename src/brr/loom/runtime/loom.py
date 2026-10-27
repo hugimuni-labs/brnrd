@@ -130,9 +130,11 @@ def _forge_env(room: Path, env: dict[str, str]) -> None:
     if mode == "auto" and spec:
         # Login profiles can put real gh ahead of our refreshing shim. An
         # exported token survives that PATH change; absent one, the empty
-        # room config makes gh fail closed.
+        # room config makes gh fail closed. It is resolved once, so the App
+        # verb is asked for most of an hour, not the 10 min its cache keeps.
+        from .gates import MIN_LIFE_ENV
         try:
-            env["GH_TOKEN"] = resolve_secret(spec)
+            env["GH_TOKEN"] = resolve_secret(spec, env={**os.environ, MIN_LIFE_ENV: "3000"})
         except ConfigError:
             _log(Home(room.parent.parent), "forge_token unavailable at body start; gh remains signed out")
         path = env.get("PATH", os.defpath)
