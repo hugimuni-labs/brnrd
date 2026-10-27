@@ -234,10 +234,10 @@ def heard(home, letter_id, data):
         targets.discard(thread)
     can = 'nothing owed' if data['verdict'] == 'agree' else f'nothing owed here; the letter is owed on thread {thread}'
     # A settled thread may still hold delivered wishes (silence archives a
-    # thread, never accepts a wish), and the router skips closed threads: a
-    # correct sent there would wait on nobody, so the inbox owes it instead.
-    from .lifecycle import CLOSED, read_thread
-    orphan = data['verdict'] == 'correct' and read_thread(home, thread).get('status') in CLOSED
+    # thread, never accepts a wish). A letter to a closed thread climbs to its
+    # open ancestor (owners); with none, a correct would wait on nobody, so
+    # the inbox owes it instead.
+    orphan = data['verdict'] == 'correct' and not _open_ancestor(home, thread)
     if orphan:
         targets.discard(thread)
         can = (f'thread {thread} is settled: reopen it with a letter to thread:{thread} '
@@ -245,6 +245,20 @@ def heard(home, letter_id, data):
     for target in sorted(targets):
         notice(home, read_facts(home), f'verdict-{target}', letter_id, words, can, thread=target,
                passive=not orphan)
+
+
+def _open_ancestor(home, thread):
+    """``thread`` itself when open, else the nearest open opener thread, else None."""
+    from .lifecycle import CLOSED, read_thread
+    seen = set()
+    while thread and thread not in seen:
+        seen.add(thread)
+        data = read_thread(home, thread)
+        if not data or data.get('status') not in CLOSED:
+            return thread if data else None
+        opener = str(data.get('opened-by', ''))
+        thread = opener.removeprefix('thread:') if opener.startswith('thread:') else None
+    return None
 
 
 def drain(home, name, drop, failures=None):

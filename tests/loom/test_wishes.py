@@ -239,19 +239,30 @@ def delivered_wish(home, seat, line="Delivered work"):
 
 
 @pytest.mark.parametrize("retire", [False, True])
-def test_settle_refuses_each_delivered_wish_without_changing_state(ledger, retire):
+def test_settle_leaves_each_delivered_wish_delivered_on_the_closed_thread(ledger, retire):
     from brr.loom.runtime.lifecycle import read_thread
 
     home, seat = ledger
     ids = [delivered_wish(home, seat, str(i)) for i in range(2)]
-    said = word(home)
-    before = read_facts(home)
-    error = command(home, seat, "settle", "work", "--word", said, "--why", "Finished",
-                    *(["--retire"] if retire else []), ok=False)
-    assert all(ident in error for ident in ids)
-    assert "--hand-to" in error
+    stamps = [f for f in read_facts(home) if f.kind == "wish"]
+    command(home, seat, "settle", "work", "--why", "Finished", *(["--retire"] if retire else []))
+    assert read_thread(home, "work")["status"] == ("retired" if retire else "settled")
+    # Silence archives the thread, never accepts the wish: no verdict, no move.
+    assert [f for f in read_facts(home) if f.kind == "wish"] == stamps
+    assert not any(f.kind == "wish.verdict" for f in read_facts(home))
+    for ident in ids:
+        assert view(home, ident).state == "delivered"
+        assert view(home, ident).thread == "work"
+
+
+def test_settle_with_work_in_hand_still_needs_the_persons_word(ledger):
+    from brr.loom.runtime.lifecycle import read_thread
+
+    home, seat = ledger
+    delivered_wish(home, seat)
+    heard(home, seat, "Still heard")
+    assert "--word" in command(home, seat, "settle", "work", "--why", "Finished", ok=False)
     assert read_thread(home, "work")["status"] == "open"
-    assert read_facts(home) == before
 
 
 @pytest.mark.parametrize("verdict", [("--accept", "word"), ("--drop", "Cancelled")])

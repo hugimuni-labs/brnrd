@@ -167,6 +167,34 @@ def test_a_correct_is_owed_on_the_wishs_thread_and_only_noticed_by_the_inbox(own
     assert owed(owner, "inbox") == []
 
 
+def test_a_correct_on_a_settled_thread_is_owed_by_the_inbox(owner):
+    # Silence settles a thread whose wishes are only delivered; the router skips
+    # closed threads, so his correction would otherwise wait on nobody.
+    wish(owner)
+    readme = owner.thread_dir("first") / "README.md"
+    readme.write_text(readme.read_text().replace("status: open", "status: settled"))
+    relay.pull_once(owner, FakeClient([verdict(word="correct")]), 0)
+    notice, = owed(owner, "inbox")
+    assert notice.data["from"] == "loom" and "thread first is settled" in notice.data["body"]
+    seat(owner, "inbox", "s-aaaa-inbox1")
+    show(owner, "s-aaaa-inbox1", [notice])
+    assert owed(owner, "inbox") == [notice]  # shown is not answered: it asks for work
+
+
+def test_a_correct_on_a_settled_thread_climbs_to_its_open_opener_alone(owner):
+    wish(owner)
+    readme = owner.thread_dir("first") / "README.md"
+    readme.write_text(readme.read_text().replace("status: open", "status: settled\nopened-by: thread:second"))
+    relay.pull_once(owner, FakeClient([verdict(word="correct")]), 0)
+    from brr.loom.runtime.lifecycle import main_snapshot
+    from brr.loom.runtime.owners import active_owners
+    letter, = said(owner)
+    fate, = [f for f in active_owners(read_facts(owner), main_snapshot(owner)) if f.letter.id == letter.id]
+    assert (fate.action, fate.thread) == ("climb", "second")  # the router lands it there
+    notice, = owed(owner, "inbox")  # the passive notice of a correct, as on any thread
+    assert notice.data["notice"] is True and "owed on thread first" in notice.data["body"]
+
+
 def test_a_verdict_on_an_inbox_wish_is_one_notice_there(owner):
     from brr.daemon2.facts import Fact
     from brr.loom.runtime.ledger import append
