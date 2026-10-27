@@ -59,7 +59,7 @@
 	<header>
 		<b>fuel</b><span id="fuel">{(b.model?.fuel || []).map((f) => `${f.shell} ${f.gauges.map((g) => g.window + ' ' + g.left_pct + '%').join(' ')}`).join('   ')}</span>
 		<span id="open" style="color:#d33">{b.letters.filter((l) => l.open).length} open</span>
-		<span class="dim" id="at">{b.letters.length} letters · as {b.model?.person || '?'}</span>
+		<span class="dim" id="at">{b.letters.length} letters · as {b.model?.person || '?'}{#if b.model?.via} via {b.model.via}{/if}</span>
 		<span id="live" class="dim" class:off={b.live === 'offline'}>{b.error || b.live}</span>
 		<label id="internal" class="dim"><input type="checkbox" bind:checked={b.showAll} onchange={() => b.persist()} /> show internal</label>
 	</header>

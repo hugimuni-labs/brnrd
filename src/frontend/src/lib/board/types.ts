@@ -118,6 +118,8 @@ export type Index = {
 	wishes: Record<string, Record<string, number>>;
 	unthreaded: Wish[];
 	person: string | null;
+	// the channel a letter typed on the board goes out through
+	via?: string | null;
 	parts: Record<string, string>;
 };
 
@@ -141,4 +143,5 @@ export type Model = {
 	live: Record<string, Live>;
 	fuel: Fuel[];
 	person: string | null;
+	via?: string | null;
 };

@@ -30,7 +30,8 @@ export function assemble(index: Index, threads: Map<string, ThreadPart>): Model 
 		tools,
 		live,
 		fuel: index.fuel || [],
-		person: index.person
+		person: index.person,
+		via: index.via
 	};
 }
 
