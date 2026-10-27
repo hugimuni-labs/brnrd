@@ -41,6 +41,7 @@ from .project import projection_cache, fold, generation, is_notice, reply_channe
 from .owners import active_owners, letters_for, letter_owners
 from .lifecycle import main_snapshot
 from .timers import observe_due
+from .waits import Watcher, forge_wants, observe_waits
 from .selfrepo import (
     AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, git,
     ensure_room, forge_threads, repaired_line, run_wake, seed_root,
@@ -1703,6 +1704,12 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         facts = _advance_bodies(home, bodies, facts, (adapter, core), reader=router.reader)
         # Time enters the owner table once, using only the facts already held.
         facts = observe_due(home, facts, router.armed())
+        # A park's condition is checked the same way; the forge is read off the loop.
+        watcher = getattr(router, "watcher", None)
+        facts = observe_waits(home, facts, router.armed(), watcher.states if watcher else None)
+        if watcher is not None:
+            from .wishes import told
+            watcher.wants = forge_wants(told(facts))
         facts = router.route(facts, bodies, (adapter, core))
         facts = router.speak_out(facts)
 
@@ -1877,6 +1884,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         reaper = Reaper(home, _log)
         from .receipts import source_root
         updater = Updater(home, _log, source_root())
+        router.watcher = Watcher()
         while not (stop is not None and stop.is_set()):
             try:
                 config = load_config(home.root)
@@ -1898,6 +1906,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                     inputs.close()
                 health.guard("tick_once", tick_once, home, bodies, adapter, core, router)
                 health.guard("publisher", publisher.step, config, router, backoff=False)
+                health.guard("waits", router.watcher.step, config, router.armed(), backoff=False)
                 health.guard("mirror", mirror.step, config, backoff=False)
                 health.guard("library", keeper.step, backoff=False)
                 health.guard("disk", reaper.disk, backoff=False)
