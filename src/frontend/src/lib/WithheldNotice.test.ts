@@ -57,7 +57,7 @@ test('an unrecorded repo is named, and the reopening act is a /repos link', asyn
 	const html = await renderNotice({ lane: 'corpus', unrecorded: ['Gurio/BeCenter'] });
 	ok(html.includes('Gurio/BeCenter'), 'the withholding repo must be named, not just "paused"');
 	ok(html.includes('never recorded a publish scope'));
-	ok(html.includes('href="/repos"'), 'the reopening act must be an actual link to /repos');
+	ok(html.includes('href="/dashboard/repos"'), 'the reopening act must be an actual link to /repos');
 	ok(!html.includes('paused — no publish scope'), 'the bare sentence must not also render');
 });
 
@@ -78,7 +78,7 @@ test('both lists present renders both clauses, unrecorded first', async () => {
 	ok(html.includes('Gurio/other-repo'));
 	ok(html.includes('never recorded a publish scope'));
 	ok(html.includes('chose to publish nothing'));
-	ok(html.includes('href="/repos"'));
+	ok(html.includes('href="/dashboard/repos"'));
 	const unrecordedAt = html.indexOf('Gurio/BeCenter');
 	const optedOutAt = html.indexOf('Gurio/other-repo');
 	ok(
@@ -106,14 +106,14 @@ test('an id-bearing gap points at the full publish-scope selector', async () => 
 		unrecorded_ids: ['repo-1']
 	});
 	ok(html.includes('Set the full publish scope.'));
-	ok(html.includes('href="/repos"'));
+	ok(html.includes('href="/dashboard/repos"'));
 	ok(!html.includes('Or fix it here.'));
 });
 
 test('a name with no id twin gets no in-place trigger — only the /repos link', async () => {
 	const html = await renderNotice({ lane: 'corpus', unrecorded: ['Gurio/legacy'] });
 	ok(!html.includes('Or fix it here.'), 'no id ⇒ no dead in-place button');
-	ok(html.includes('href="/repos"'));
+	ok(html.includes('href="/dashboard/repos"'));
 });
 
 test('the bare "no publish scope" state (no names at all) gets no trigger either', async () => {

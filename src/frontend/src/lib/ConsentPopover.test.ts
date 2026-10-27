@@ -106,7 +106,7 @@ test('the /repos link is always present as the aggregate fallback', async () => 
 		unrecorded: ['Gurio/BeCenter'],
 		unrecorded_ids: ['repo-1']
 	});
-	equal((html.match(/href="\/repos"/g) ?? []).length >= 1, true);
+	equal((html.match(/href="\/dashboard\/repos"/g) ?? []).length >= 1, true);
 });
 
 test('an unknown lane token still renders without throwing, degraded but honest', async () => {

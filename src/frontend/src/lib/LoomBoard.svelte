@@ -39,7 +39,7 @@
 <main class="mx-auto max-w-4xl px-5 pb-16 sm:px-6" data-testid="loom-board">
 	<header class="flex items-center justify-between pt-4 pb-3">
 		<p class="eyebrow eyebrow--asis">brnrd · the loom</p>
-		<a href={resolve('/bridge')} class="font-mono text-[10px] text-ink-quiet hover:text-amber-200"
+		<a href={resolve('/dashboard/bridge')} class="font-mono text-[10px] text-ink-quiet hover:text-amber-200"
 			>the bridge →</a
 		>
 	</header>

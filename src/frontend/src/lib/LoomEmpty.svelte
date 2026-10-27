@@ -78,7 +78,7 @@
 
 	<p class="mt-4 font-mono text-[10px] text-ink-mute">
 		already set up another way? <a
-			href={resolve('/bridge')}
+			href={resolve('/dashboard/bridge')}
 			class="text-ink-quiet hover:text-amber-200">the bridge →</a
 		>
 	</p>

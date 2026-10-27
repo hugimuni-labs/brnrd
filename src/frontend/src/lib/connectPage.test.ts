@@ -97,7 +97,7 @@ test('the "connect a repository" dead-end link carries the pairing back as next=
 	ok(needsRepoEnableBlock, 'the needsRepoEnable branch exists');
 	const block = needsRepoEnableBlock![0];
 	ok(
-		/href=\{resolve\(`\/repos\?next=/.test(block),
+		/href=\{resolve\(`\/dashboard\/repos\?next=/.test(block),
 		'the link points at /repos with a next= query param, routed through resolve()'
 	);
 	ok(

@@ -78,11 +78,11 @@ function benchApiPath(repo: string, place: string, commit: string): string {
 	return `/v1/dashboard/bench/${encodeURIComponent(repo)}/${encodedSegments(place)}/${encodeURIComponent(commit)}`;
 }
 
-/** Route to the bench page for one file — `/bench/[repo]/[...rest]`, `rest`
+/** Route to the bench page for one file — `/dashboard/bench/[repo]/[...rest]`, `rest`
  * being `<place>/<commit>` (the store's own nested-dir layout, split from
  * the right server-side too — see `dashboard_bench_file_api`'s doc). */
 export function benchFileHref(repo: string, place: string, commit: string): ResolvedPathname {
-	return `/bench/${encodeURIComponent(repo)}/${encodedSegments(place)}/${encodeURIComponent(commit)}` as ResolvedPathname;
+	return `/dashboard/bench/${encodeURIComponent(repo)}/${encodedSegments(place)}/${encodeURIComponent(commit)}` as ResolvedPathname;
 }
 
 /** Age label for the bench row list — `made_at` is a plain ISO timestamp,

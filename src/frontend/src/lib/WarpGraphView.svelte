@@ -197,7 +197,7 @@
 				{item.headline}
 			</button>
 			<a
-				href={resolve('/warp/[id]', { id: item.id })}
+				href={resolve('/dashboard/warp/[id]', { id: item.id })}
 				class="shrink-0 font-mono text-[9px] text-ink-mute hover:text-stone-400"
 				title="open item page">{item.id}</a
 			>

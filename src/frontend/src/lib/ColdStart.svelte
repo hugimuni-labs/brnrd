@@ -396,14 +396,14 @@
 			{#if appInstalled}
 				GitHub App installed — commits and comments already post as <code>brnrd-dev[bot]</code>, not
 				your own identity. Manage it on the
-				<a class="text-sky-400 underline hover:text-sky-300" href={resolve('/repos')}
+				<a class="text-sky-400 underline hover:text-sky-300" href={resolve('/dashboard/repos')}
 					>repos screen</a
 				>.
 			{:else}
 				Optional: install the GitHub App so commits and comments post as
 				<code>brnrd-dev[bot]</code> instead of your own identity — one click to revoke, any time, on
 				the
-				<a class="text-sky-400 underline hover:text-sky-300" href={resolve('/repos')}
+				<a class="text-sky-400 underline hover:text-sky-300" href={resolve('/dashboard/repos')}
 					>repos screen</a
 				>. Nothing here waits on it.
 			{/if}
