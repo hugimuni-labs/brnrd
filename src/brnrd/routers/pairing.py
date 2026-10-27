@@ -44,6 +44,17 @@ def pair_suggested_repo_full_name(pair: PairRequest) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def pair_requester(pair: PairRequest) -> dict[str, str]:
+    """``{hostname, os_user}`` the requesting computer reported, each ``""`` when absent.
+
+    Display-only and self-reported: the approve page shows it beside the
+    code so a person can tell their own computer from one in a link someone
+    sent them (RFC 8628 §5.4), never as proof of who started the pairing.
+    """
+    caps = pair_capabilities(pair)
+    return {k: caps[k].strip() if isinstance(caps.get(k), str) else "" for k in ("hostname", "os_user")}
+
+
 def pair_suggested_forge(pair: PairRequest) -> str:
     """``"github"`` or ``"local"`` for the suggested repo above, or ``""``
     when there is no suggestion at all. Display-only — `_resolve_or_create_
@@ -124,7 +135,7 @@ def start_pair(
     capabilities_json = None
     if payload is not None:
         caps = {
-            k: v
+            k: v.strip()[:100]
             for k, v in payload.model_dump().items()
             if isinstance(v, str) and v.strip()
         }

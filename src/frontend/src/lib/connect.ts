@@ -27,6 +27,19 @@ export interface ConnectContext {
 	// rather than letting a synthesized `local/foo-a1b2c3` read as a real
 	// GitHub org.
 	suggested_forge: string;
+	// The computer that asked, as it names itself (`hostname`, `os_user`,
+	// each "" when not sent). Shown beside the code so a link someone else
+	// sent reads as someone else's computer; self-reported, never proof.
+	// Optional: a backend older than this field omits it.
+	requester?: { hostname: string; os_user: string };
+}
+
+/** "eve on eves-laptop", "eves-laptop", or "" when the pairing named no computer. */
+export function requesterLabel(context: Pick<ConnectContext, 'requester'>): string {
+	const host = context.requester?.hostname ?? '';
+	const user = context.requester?.os_user ?? '';
+	if (host && user) return `${user} on ${host}`;
+	return host || user;
 }
 
 export interface TelegramPair {

@@ -1,7 +1,9 @@
 """A folder, including a passive fake, pairs through the one letter API."""
+import getpass
 import json
 import re
 import shutil
+import socket
 import subprocess
 from pathlib import Path
 
@@ -126,10 +128,12 @@ def test_relay_setup_signs_in_and_writes_the_gate_the_relay_reads(tmp_path):
         server.shutdown()
     assert done.returncode == 0, done.stderr
     assert 'Open http://approve.example/BR-T and sign in' in done.stdout
-    assert 'The page shows the code BR-T: approve only if it matches.' in done.stdout
+    assert 'Only approve a code you started yourself: the page shows BR-T for ' in done.stdout
     assert 'Signed in to brnrd.dev' in done.stdout
     # Bound to the home's self repo, which has no remote: the server makes a local repo for it.
     assert seen[0][:2] == ('POST', '/v1/accounts/pair') and seen[0][2]['forge'] == 'local'
+    # The approve page names the computer that asked, beside the code.
+    assert seen[0][2]['hostname'] == socket.gethostname() and seen[0][2]['os_user'] == getpass.getuser()
     assert seen[-1][:2] == ('POST', '/v1/daemons/register') and seen[-1][3] == 'Bearer bd_tok'
     assert load_config(tmp_path).relay_state == str(tmp_path / 'loom')
     state = cloud._load_state_from_dir(tmp_path / 'loom')

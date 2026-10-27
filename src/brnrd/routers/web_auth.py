@@ -28,7 +28,13 @@ from brnrd.models import Account, ConfigChangeRequest, PairRequest, Repo, TermsA
 from brnrd.routers.accounts import SESSION_TTL, account_for_github_identity, issue_session_token
 from brnrd.routers.config_approval import decide_core as decide_config_change
 from brnrd.routers.github_app import sync_app_installations_for_account
-from brnrd.routers.pairing import approve_core, initiator_proof_ok, pair_suggested_forge, pair_suggested_repo_full_name
+from brnrd.routers.pairing import (
+    approve_core,
+    initiator_proof_ok,
+    pair_requester,
+    pair_suggested_forge,
+    pair_suggested_repo_full_name,
+)
 
 from ._session import (
     _account_id,
@@ -429,6 +435,7 @@ def connect_context_api(code: str, request: Request, db: Session = Depends(get_d
             "repos": [{"id": repo.id, "repo_full_name": repo.repo_full_name} for repo in repos],
             "suggested_repo_full_name": suggested,
             "suggested_forge": suggested_forge,
+            "requester": pair_requester(pair) if pair is not None else {"hostname": "", "os_user": ""},
         }
     )
 

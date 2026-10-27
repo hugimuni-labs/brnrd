@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+	requesterLabel,
 	ConnectAuthError,
 	approvalProofFromHash,
 	approveConnect,
@@ -205,4 +206,11 @@ test('missingApprovalProof names the live-code-but-truncated-link case', () => {
 	assert.equal(missingApprovalProof(ctx({ status: 'consumed' }), ''), false);
 	assert.equal(missingApprovalProof(ctx({ status: 'expired' }), ''), false);
 	assert.equal(missingApprovalProof(ctx({ repos: [] }), ''), false, 'the repo dead end wins');
+});
+
+test('requesterLabel names the computer that asked, or nothing', () => {
+	assert.equal(requesterLabel({ requester: { hostname: 'eves-laptop', os_user: 'eve' } }), 'eve on eves-laptop');
+	assert.equal(requesterLabel({ requester: { hostname: 'eves-laptop', os_user: '' } }), 'eves-laptop');
+	assert.equal(requesterLabel({ requester: { hostname: '', os_user: '' } }), '');
+	assert.equal(requesterLabel({}), '');
 });

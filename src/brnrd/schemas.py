@@ -78,6 +78,11 @@ class PairStartRequest(BaseModel):
     # folder (`gates.cloud.local_repo_identity`). Never trusted alone: it
     # only ever labels a `repo_full_name` sent in the same payload.
     forge: str = ""
+    # The requesting computer as it names itself, shown beside the code on
+    # the approve page so a link someone else sent reads as someone else's
+    # computer. Self-reported, so a hint, never proof.
+    hostname: str = ""
+    os_user: str = ""
 
 
 class PairStarted(BaseModel):

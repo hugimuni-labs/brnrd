@@ -12,6 +12,7 @@
 		loginUrlForConnect,
 		missingApprovalProof,
 		needsRepoEnable,
+		requesterLabel,
 		statusNotice,
 		type ApproveResult,
 		type ConnectContext
@@ -263,8 +264,14 @@
 			>
 				{code}
 			</p>
+			{#if context && requesterLabel(context)}
+				<p class="mt-2 text-sm text-stone-300" data-testid="requester">
+					asked by <span class="font-mono text-amber-200">{requesterLabel(context)}</span>
+				</p>
+			{/if}
 			<p class="mt-2 text-xs text-ink-quiet">
-				Approve only if this is the code your own terminal shows.
+				Only approve a code you started yourself, on your own computer. If someone sent you this
+				link, close the page.
 			</p>
 
 			{#if contextError}
