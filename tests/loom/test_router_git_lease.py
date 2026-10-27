@@ -234,3 +234,18 @@ def test_a_prefer_hands_inbox_to_that_install_and_the_old_holder_s_bodies_leave(
     facts = read_facts(a_home)
     assert len([f for f in facts if f.kind == "lease.handed"]) == 1
     assert not [f for f in facts if f.kind == "lease.fenced"]
+
+
+def test_prefer_refuses_an_install_whose_ledger_this_home_has_never_seen(tmp_path):
+    """A typo would hand inbox to nobody, so the verb writes nothing for an
+    install with no ``ledger/facts/<install>/`` here, and accepts it once the
+    shuttle has brought that folder."""
+    from brr.loom.runtime.__main__ import main
+    a_home = _home(tmp_path, "aaaa", tmp_path / "self.git")
+    argv = ["machines", "--home", str(a_home.root), "--install", "aaaa", "prefer", "bbbb"]
+    assert main(argv) == 2
+    assert not [f for f in read_facts(a_home) if f.kind == "machines.prefer"]
+    (a_home.root / "ledger" / "facts" / "bbbb").mkdir(parents=True)
+    assert main(argv) == 0
+    assert [f.data for f in read_facts(a_home) if f.kind == "machines.prefer"] == [
+        {"install": "bbbb", "from": "aaaa"}]

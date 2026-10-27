@@ -30,6 +30,11 @@ def _machines(argv: list[str]) -> int:
         return 2
     root, _ = resolve_home(args.home)
     home = Home(root, install=args.install)
+    if to != home.install_id() and not (root / "ledger" / "facts" / to).is_dir():
+        # A typo would hand inbox to nobody: the holder's bodies leave and the
+        # connectors stay down until it takes the lease back.
+        sys.stderr.write(f"{to}: no ledger from that install here; is it joined and shuttled?\n")
+        return 2
     fact = append(home, Fact(kind="machines.prefer", by="person:operator",
                              id="machines.prefer:" + mint(12),
                              data={"install": to, "from": home.install_id()}))
