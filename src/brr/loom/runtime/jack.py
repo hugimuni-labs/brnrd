@@ -174,6 +174,29 @@ def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], l
     return "\n".join([head, *body, *owed, *letters, ""]), said, told
 
 
+def _stop_news(room: Path, text: str, parsed: Boundary) -> str:
+    """What a stop shows: the boundary minus what the wake or a call already said.
+
+    A stop that blocked, a letter that woke a held body and a keepalive each
+    repeated the whole boundary (~3 KB with 13 thread rows) though the body
+    had read all of it; across held strands that was most of the jack's
+    spend. A body that has seen no boundary yet still gets it whole. Letters
+    already shown come back as their ids on one ``owed:`` line.
+    """
+    state = _state(room)
+    if "said" not in state:
+        return text
+    plan = next((line.partition(" · plan ")[2] for line in text.splitlines()
+                 if line.startswith("status:")), "")
+    news, said, told = _news(text, state, plan != state.get("plan", ""))
+    _set_state(room, said=said, told=told, plan=plan)
+    header = _HEADER_LINE.search(text)
+    if not news and parsed.ids and header:
+        news = (f"<!-- port {header.group(1)} gen {header.group(2)} · owed  -->\n"
+                f"owed: {' '.join(parsed.ids)} (shown before)\n")
+    return news
+
+
 def _shown(room: Path, parsed: Boundary) -> None:
     if not parsed.strand:
         raise ValueError("boundary names owed letters and no strand")
@@ -278,7 +301,7 @@ def _poll(room: Path, stdin_text: str = '') -> str:
                 parked = False
                 deadline = ceiling
         if (parsed.ids if _hand() else any(not letter.compact for letter in parsed.letters)):
-            return _block(room, text, parsed)
+            return _block(room, _stop_news(room, text, parsed), parsed)
         if (room / "port" / DISPLACED).exists():
             # Over the loom's max_held: leave warm memory for a body with work.
             # The next letter to this thread starts a fresh one.
@@ -292,7 +315,7 @@ def _poll(room: Path, stdin_text: str = '') -> str:
             # then leave while it still owes. With no cache lifetime this
             # happens only at the hook ceiling.
             return _json({"decision": "block", "reason": "cache keepalive, nothing new arrived: stop, unless the boundary"
-                          " below shows work you already owed\n" + text})
+                          " below shows work you already owed\n" + _stop_news(room, text, parsed)})
         time.sleep(min(0.2, remaining))
 
 
@@ -666,9 +689,9 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     # Work only this room holds blocks the stop the way an owed letter does.
     left = _left(room, True)
     if left and (_hand() or not _state(room).get("stop_blocks") and not _dry(room)):
-        return _block(room, left + text, parsed)
+        return _block(room, left + _stop_news(room, text, parsed), parsed)
     if parsed.ids and (_hand() or not _state(room).get("stop_blocks") and not _dry(room)):
-        return _block(room, text, parsed)
+        return _block(room, _stop_news(room, text, parsed), parsed)
     refused = _left_owed(room, text) or _undeclared(room, plan)
     if refused:
         return refused
