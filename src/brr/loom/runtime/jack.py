@@ -100,6 +100,20 @@ def _stop_timeout() -> float:
     return float(os.environ.get("BRNRD_STOP_TIMEOUT") or PARK + 60)
 
 
+_AGE = re.compile(r" \d+[smhd](?= ·|$)")
+
+
+def _ageless(line: str) -> str:
+    """A thread line without its ages: an hour passing on an idle child or a PR's push is not news."""
+    return _AGE.sub("", line)
+
+
+def _slot(key: str) -> str:
+    if key.startswith("opened: "):
+        return " ".join(key.split()[:2])
+    return "idle:" if key.startswith("idle: ") else key
+
+
 def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], list[str]]:
     """The boundary minus what an earlier boundary already said: (news, said, told).
 
@@ -135,13 +149,16 @@ def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], l
                 letters.extend(unit)
             continue
         status = unit[0].startswith("status:")
-        key = "status: · plan " + unit[0].partition(" · plan ")[2] if status else "\n".join(unit)
+        key = ("status: · plan " + unit[0].partition(" · plan ")[2] if status
+               else _ageless(unit[0]) if unit[0].startswith("opened: ") else "\n".join(unit))
         said.append(key)
         if (plan_changed if status else key not in before):
             body.extend(unit)
     # A row that left (a child settled, a line cleared) is news too; the status line moves, it never leaves.
+    # A thread line that changed is said anew, not gone: its slot (``opened: <thread>``, ``idle:``) is still here.
+    slots = {_slot(key) for key in said}
     body.extend("gone: " + key.split("\n")[0] for key in state.get("said", [])
-                if key not in said and not key.startswith("status:"))
+                if key not in said and not key.startswith("status:") and _slot(key) not in slots)
     if not body and not letters:
         return "", said, told
     shown = [item.group(1) for line in letters if (item := _ITEM_LINE.match(line))]
@@ -552,7 +569,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         _set_state(room, boundary_at=time.time())
     text = _boundary_text(room)
     parsed = parse_boundary(text)
-    opened = [[line.split()[1], line.split()[2], line.rpartition(" · owed ")[2]]
+    opened = [[line.split()[1], line.split()[2], _ageless(line.rpartition(" · owed ")[2])]
               for line in text.splitlines() if line.startswith("opened: ")]
     plan = next((line.partition(" · plan ")[2] for line in text.splitlines()
                  if line.startswith("status:")), "")

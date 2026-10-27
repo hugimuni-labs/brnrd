@@ -584,7 +584,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         room / "port" / "in" / "boundary.md",
         render_boundary(strand, gen, thread, letters, shown, threads,
                         fuel=fuel, channels=reply_channels(facts, home),
-                        opened=thread_table(home, facts), plan=_plan(home, thread, facts),
+                        opened=thread_table(home, facts), forge=_forge(home), plan=_plan(home, thread, facts),
                         replies={f.letter.id: f.reply_to for f in active_owners(facts, main_snapshot(home))},
                         attachments=attachments, reply_context=reply_context,
                         repaired=_repaired(facts, strand, gen),
@@ -922,6 +922,17 @@ def _readme(room: Path, thread: str) -> str | None:
         return hashlib.sha256((room / "self/threads" / thread / "README.md").read_bytes()).hexdigest()
     except OSError:
         return None
+
+
+_FORGE: dict[Path, str] = {}
+
+
+def _forge(home: Home) -> str:
+    """The self's threads folder on its forge, read once per process: a thread line links to it."""
+    if home.root not in _FORGE:
+        from .selfrepo import forge_threads
+        _FORGE[home.root] = forge_threads(home.root / "self") or ""
+    return _FORGE[home.root]
 
 
 def _plan(home: Home, thread: str, facts: list[Fact]) -> str:
@@ -1447,7 +1458,7 @@ def _boundary(home, facts, strand, gen, context):
         strand, gen, context.thread, owed,
         state.shown.get(strand, set()), sender_threads(facts), context.fuel,
         context.why or None, reply_channels(facts, home),
-        opened=thread_table(home, facts), plan=_plan(home, context.thread, facts),
+        opened=thread_table(home, facts), forge=_forge(home), plan=_plan(home, context.thread, facts),
         replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
         attachments=letter_attachments(home.root, facts),
         reply_context=_reply_context(facts, context.thread, owed, home.room(strand)),
@@ -1736,8 +1747,11 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         watcher = getattr(router, "watcher", None)
         facts = observe_waits(home, facts, router.armed(), watcher.states if watcher else None)
         if watcher is not None:
+            from .receipts import receipts
             from .wishes import told
             watcher.wants = forge_wants(told(facts))
+            watcher.prs = {f"{r.repo}#{r.number}" for rows in receipts(facts, home.install_id()).values()
+                           for r in rows if not r.merge_commit}
         facts = router.route(facts, bodies, (adapter, core))
         facts = router.speak_out(facts)
 
@@ -1912,7 +1926,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         reaper = Reaper(home, _log)
         from .receipts import source_root
         updater = Updater(home, _log, source_root())
-        router.watcher = Watcher()
+        router.watcher = Watcher(home.root / "loom" / "prs.json")
         while not (stop is not None and stop.is_set()):
             try:
                 config = load_config(home.root)

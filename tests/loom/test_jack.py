@@ -93,14 +93,29 @@ def test_opened_delivery_ignores_age_and_fuel_but_tracks_state_owed_and_removal(
         (room / 'port/in/boundary.md').write_text(text)
         return text
 
-    first = write('idle 7s')
-    assert 'opened: child idle 0m · owed 0' in first
+    # An idle child owing nothing is folded into a count (wake-vision).
+    assert 'opened: child' not in write('idle 7s')
+    assert 'idle: 1 more opened here' in write('idle 7s')
+    first = write('idle 7s', owed=1)
+    assert 'opened: child idle 0m · owed 1' in first
     assert execute('start', room, '{}') == first
     assert execute('post', room, '{}') == ''
-    assert write('idle 59s') == first
+    assert write('idle 59s', owed=1) == first
     assert execute('post', room, '{}') == ''
-    assert 'idle 1m' in write('idle 1m')
+    assert 'idle 1m' in write('idle 1m', owed=1)
     assert execute('post', room, '{}') == ''
+    # A PR's push age ticking is not news; its CI turning is, said once and not as gone.
+    row['prs'] = ['#7 draft pending 2h']
+    assert 'owed 1 · #7 draft pending 2h' in write('idle 1m', owed=1)
+    assert execute('post', room, '{}')
+    row['prs'] = ['#7 draft pending 3h']
+    write('idle 1m', owed=1)
+    assert execute('post', room, '{}') == ''
+    row['prs'] = ['#7 draft green 3h']
+    write('idle 1m', owed=1)
+    said = json.loads(execute('post', room, '{}'))['hookSpecificOutput']['additionalContext']
+    assert '#7 draft green 3h' in said and 'gone:' not in said
+    row['prs'] = []
     holding = write('holding 84%')
     assert 'opened: child holding · owed 0' in holding
     assert execute('post', room, '{}')
