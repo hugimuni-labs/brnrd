@@ -203,8 +203,9 @@
 					One persistent mind for all your work.
 				</h2>
 				<p class="mt-3 text-sm leading-relaxed text-stone-300">
-					Message brnrd from anywhere. It keeps its own threads moving, uses the AI tools you already
-					pay for, and gives you a window into everything it's doing, waiting on, and finished.
+					Message brnrd from anywhere. It keeps its own threads moving, uses the AI tools you
+					already pay for, and gives you a window into everything it's doing, waiting on, and
+					finished.
 				</p>
 				<p class="mt-3 text-sm leading-relaxed text-ink-quiet">
 					The loom runs on your machine, with your repos and your credentials. Its memory is a git
