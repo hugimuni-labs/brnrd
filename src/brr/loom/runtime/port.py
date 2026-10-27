@@ -86,7 +86,7 @@ def parse_boundary(text: str) -> Boundary:
             current = None
             continue
         if not line.strip() or line.startswith(("status:", "owed:", "opened:", "budget:", "repaired:", "degraded:", "library:", "moved:",
-                                                "face? ", "left? ")):
+                                                "face? ", "left? ", "gone: ")):
             current = None
             continue
         match = _ITEM.match(line)

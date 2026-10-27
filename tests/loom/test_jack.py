@@ -427,3 +427,24 @@ def test_tool_trace_never_fails_the_hook_and_rotates(tmp_path, monkeypatch):
     args = [r["arg"] for r in tooltrace.read(room)]
     assert args[-1] == "step 19" and args == sorted(args, key=lambda a: int(a.split()[1]))
     assert len(tooltrace.read(room, limit=3)) == 3
+
+
+def test_a_post_says_only_what_changed_since_the_last_boundary(tmp_path):
+    """wake-vision: a live post re-sent ~7 KB (every row, every owed letter) on every call."""
+    room = _room(tmp_path)
+    first = _letter("ping-1\nmore")
+    _write(room, [first])
+    assert "ping-1\n  more" in execute("start", room, "{}")
+    _write(room, [first], shown={"p-test/abcde"})
+    # Owed, shown at the wake, nothing new: the post is silent, the stop still holds on it.
+    assert execute("post", room, json.dumps({"tool_name": "Bash"})) == ""
+    second = Fact(kind="letter", by="strand:s-ab12-bbbbbb", id="p-test/fghij",
+                  data={"id": "p-test/fghij", "to": "thread:ta", "body": "pong-2\nwhole", "from": "s-ab12-bbbbbb"})
+    _write(room, [first, second], shown={"p-test/abcde"})
+    said = json.loads(execute("post", room, json.dumps({"tool_name": "Bash"})))["hookSpecificOutput"]["additionalContext"]
+    assert "pong-2\n  whole" in said
+    assert "ping-1" not in said and "status:" not in said
+    assert "owed: p-test/abcde (shown before)" in said
+    assert [letter.id for letter in parse_boundary(said).letters] == ["p-test/fghij"]
+    _write(room, [first, second], shown={"p-test/abcde", "p-test/fghij"})
+    assert execute("post", room, json.dumps({"tool_name": "Bash"})) == ""
