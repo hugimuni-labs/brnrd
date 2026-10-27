@@ -23,10 +23,11 @@ from pathlib import Path
 
 from brr.daemon2.facts import Fact
 
-from .adapters import resolve
+from .adapters import body_label, resolve
 from .bodies import COMMANDS, TABLE, Observation, decide, fact_for, row_for, state_of
 from .faces import propose, proposal_line
 from .health import Health, degraded_line
+from .library import problem_line
 from .since import since_gone
 from .update import Updater, moved_line
 from .home import Home, atomic_write, is_channel, mint, notice_id
@@ -162,8 +163,11 @@ def _env(room: Path) -> dict[str, str]:
     env["BRNRD_WAKE"] = str(room / "port" / "wake.md")
     env["BRNRD_CORE"] = str(room / "port" / "core.md")
     env["BRNRD_OCCASION"] = str(room / "port" / "occasion.md")
-    env["BRNRD_JACK"] = (f"{shlex.quote(sys.executable)} -m brr.loom.runtime jack "
-                         f"--room {shlex.quote(str(room))}")
+    # Launchers name the shim, never this interpreter (entry.py); a body types
+    # ``brnrd runtime``, so the shim's directory leads its PATH.
+    from . import entry
+    env["BRNRD_JACK"] = entry.command("jack", "--room", str(room))
+    env["PATH"] = str(entry.shim().parent) + os.pathsep + env.get("PATH", os.defpath)
     wait = room / "port" / "wait"
     from .jack import PARK
     env["BRNRD_WAIT"] = wait.read_text().strip() if wait.is_file() else f"{PARK:g}"
@@ -324,7 +328,7 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
     """The one writer of loom notices: what the loom cannot settle, a body is told.
 
     A notice is an owed letter from ``loom``, so it is shown at every
-    boundary until a body settles it. Its id is derived from the condition:
+    boundary until a body settles it; a ``passive`` one is done once shown. Its id is derived from the condition:
     a condition met on every tick writes one letter. It goes to ``thread``
     when a body can run there, else to the home thread. The last lines always name
     the handle. ``stands`` ties it to ``about``: the two settle together.
@@ -352,7 +356,8 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
     else:
         lines.append(can)
     if channel is None:
-        lines.append(f"settle this notice with a reply or a note, re: {ident}")
+        lines.append("passive: shown once, owed by nobody" if passive
+                     else f"settle this notice with a reply or a note, re: {ident}")
     data.update(body="\n".join(lines), label=label.as_dict())
     draft = Fact(kind="letter", by=_by(home), data=data, id=ident)
     if channel is not None:
@@ -456,11 +461,11 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
             _log(home, f"start {strand}: {repaired_line(repair)}")
             repaired.append(repair)
 
-    from .converge import converge, port_want, room_wants
+    from .converge import converge, driver_want, entry_want, port_want, room_wants
     wait_src = home.thread_dir(thread) / "wait"
     wait = wait_src.read_text().strip() if wait_src.is_file() else None
-    fell = converge(home, strand, gen, [*room_wants(home, strand, gen, parent, facts, ensure),
-                                        port_want(room, wait)])
+    fell = converge(home, strand, gen, [entry_want(), *room_wants(home, strand, gen, parent, facts, ensure),
+                                        port_want(room, wait), driver_want(room / "self")])
     for fact in fell:
         if fact.data.get("source") not in (f"strand/{parent}", None):
             _log(home, f"start {strand}: seeded from {fact.data['source']} "
@@ -478,24 +483,26 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     part_path = room / "port" / "loom.md"
     inherited = _read_by_predecessors(facts, thread, strand, letters, threads)
     gone = since_gone(facts, strand, gen, thread, threads, home.install_id())
+    from .reap import kept_line
+    gone += kept_line(home, thread, threads)
     forge = forge_threads(home.root / "self")
     part = gone + inherited + (
         f"you are strand {strand} on thread {thread}"
         + (f" ({forge}/{thread})" if forge else "") + "; letters arrive at your "
         "tool boundaries, each line naming its reply address; answer with "
-        "`python -m brr.loom.runtime send --re <id> --to <reply address> \"…\"`; "
+        "`brnrd runtime send --re <id> --to <reply address> \"…\"`; "
         "where the address is `-` nobody is waiting for words: settle the letter with "
-        f"`python -m brr.loom.runtime send --re <id> --to thread:{thread} --note "
+        f"`brnrd runtime send --re <id> --to thread:{thread} --note "
         "\"<what you did>\"`; if you commit in this self clone, land it with "
-        "`python -m brr.loom.runtime send-self --room .`; you will forget what is "
+        "`brnrd runtime send-self --room .`; you will forget what is "
         "not written: keep this thread's README true (the spec and the decisions); "
-        "what is left on a wish lives on the wish: `python -m brr.loom.runtime wish "
+        "what is left on a wish lives on the wish: `brnrd runtime wish "
         "<w-id> --left \"<step>\" --left \"<step>\"`, the whole list, latest wins "
         "(`--left same` when nothing moved), and the stop asks for it once a wish "
         "moved; progress is the wishes; land the edit with send-self. "
         "When your context grows "
-        "heavy hand over with `python -m brr.loom.runtime molt --why \"<where "
-        "things stand>\"`; `python -m brr.loom.runtime settle <thread> --why "
+        "heavy hand over with `brnrd runtime molt --why \"<where "
+        "things stand>\"`; `brnrd runtime settle <thread> --why "
         "\"…\"` closes a thread whose work is done; "
         "a letter from `loom` is a notice of something the loom could not settle, "
         "yours to deal with: its last lines name what settles it "
@@ -503,7 +510,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         "`send --wish` (core/loom/README.md, Wishes), and open a thread only for "
         "a wish: `send --to thread:<new> --wish <w-id>` or `--wish new:\"<line>\"`; "
         "a `face?` line proposes a face for a fact you just met: "
-        "`python -m brr.loom.runtime face take` wears it, `face <face>` wears another, "
+        "`brnrd runtime face take` wears it, `face <face>` wears another, "
         "and doing nothing lets it lapse; "
         + ("call `$BRNRD_JACK --event start` now, `$BRNRD_JACK --event post` between "
            "steps and `$BRNRD_JACK --event stop` before ending; read each returned boundary\n"
@@ -515,11 +522,17 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     atomic_write(part_path, part)
     if repos is None:
         from .adapters import repos as seat_repos, seat_text
-        repos = seat_repos(seat_text(home, thread))
+        repos = seat_repos(seat_text(home, thread), home)
     from .repos import PUBLISH_HINT, prepare_repos
     repo_text, failures = prepare_repos(home, strand, thread, repos, parent)
     if any((room / name / ".git").exists() for name, _ in repos):
         repo_text += PUBLISH_HINT
+    from . import library
+    repo_text += library.wake_text(home)
+    shelf = library.entries(home)[0]
+    library.write_room_list(room, shelf)
+    for trouble in library.link(room, shelf):
+        repo_text += trouble + "\n"
     repo_file = None
     if failures:
         _log(home, f"start {strand}: {'; '.join(failures)}")
@@ -552,6 +565,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                         attachments=attachments, reply_context=reply_context,
                         repaired=_repaired(facts, strand, gen),
                         degraded=degraded_line(facts, home.install_id()),
+                        library=problem_line(facts, home.install_id()),
                         moved=moved_line(facts, strand, gen, home.install_id()),
                         face=proposal_line(propose(facts, strand, gen, thread)),
                         left=_left(facts, thread, strand),
@@ -984,7 +998,7 @@ def _leftovers(home: Home, strand: str) -> str:
         lines.extend(f"- {commit}" for commit in commits)
         if count > limit:
             lines.append(f"... and {count - limit} more commits")
-        command = f"python -m brr.loom.runtime send-self --room {shlex.quote(str(clone))}"
+        command = f"brnrd runtime send-self --room {shlex.quote(str(clone))}"
         lines.append(f"To land these commits on the self's main, run: `{command}`")
     if paths:
         lines.append(f"Uncommitted paths relative to that self clone ({len(paths)}):")
@@ -1293,7 +1307,7 @@ def _wake_letter(home, facts, thread, leased, letter, channel, *, parked=True):
     elif parked and named == leased:
         disposition["reason"] = "wake: started before its reset"
     else:
-        disposition.update(reason=f"wake: on {named[0]}/{named[1]}", thread=thread, body="/".join(named))
+        disposition.update(reason=f"wake: on {body_label(*named)}", thread=thread, body=body_label(*named))
     try:
         facts.append(_record(home, "letter.disposed", {"dispositions": [disposition]},
                              f"letter.disposed:{ident}"))
@@ -1317,7 +1331,7 @@ def _core_for(home, facts, thread, shell, leased):
         seated = at_birth(home, thread, ("", ""))
     except (ValueError, OSError):
         seated = ("", "")
-    if seated[0] == shell and seated[1]:
+    if seated[0] == shell:
         return seated[1]
     return next((f.data["core"] for f in reversed(facts)
                  if f.kind == "lease" and f.data.get("shell") == shell and f.data.get("core")), None)
@@ -1332,7 +1346,7 @@ def _wake_body(home, facts, thread, leased, said):
     if shell not in valid:
         return f"No body {said[1]!r} here; bodies are {', '.join(valid)}."
     core = said[2] or _core_for(home, facts, thread, shell, leased)
-    if not core:
+    if core is None:
         return f"No core on record for {shell}: name one, as wake {shell}/<core>."
     return shell, core
 
@@ -1343,14 +1357,14 @@ def _wake_lines(home, facts, thread, leased, park):
     found = shell_fuels(home)
     if park:
         window, left, when = park
-        lines = [f"wake: retry {leased[0]}/{leased[1]} ({window} {left:g}%, "
+        lines = [f"wake: retry {body_label(*leased)} ({window} {left:g}%, "
                  f"resets {datetime.fromtimestamp(when).astimezone():%a %H:%M})"]
     else:
-        lines = [f"wake: retry {leased[0]}/{leased[1]}"]
+        lines = [f"wake: retry {body_label(*leased)}"]
     for shell in _wake_shells(home, leased[0]):
         if shell == leased[0]:
             continue
-        word = f"wake {shell}" if _core_for(home, facts, thread, shell, leased) else f"wake {shell}/<core>"
+        word = f"wake {shell}" if _core_for(home, facts, thread, shell, leased) is not None else f"wake {shell}/<core>"
         lines.append(f"{word}: {shell + ' ' + found[shell] if shell in found else 'fuel unknown'}")
     return lines
 
@@ -1367,8 +1381,11 @@ def _wake_choice(facts, thread):
         if f.kind == "letter.disposed" and f.by.startswith("loom:"):
             for d in f.data.get("dispositions", ()):
                 if d.get("thread") == thread and d.get("body"):
-                    shell, _, core = str(d["body"]).partition("/")
-                    return shell, core
+                    from .adapters import parse_body
+                    try:
+                        return parse_body(d["body"])
+                    except ValueError:
+                        continue
     return None
 
 
@@ -1407,6 +1424,7 @@ def _boundary(home, facts, strand, gen, context):
         reply_context=_reply_context(facts, context.thread, owed, home.room(strand)),
         repaired=_repaired(facts, strand, gen),
         degraded=degraded_line(facts, home.install_id()),
+        library=problem_line(facts, home.install_id()),
         moved=moved_line(facts, strand, gen, home.install_id()),
         face=proposal_line(propose(facts, strand, gen, context.thread)),
         left=_left(facts, context.thread, strand),
@@ -1524,7 +1542,7 @@ def _hand_started(x, command, step):
     c = x.c
     x.values["lstart"] = _ps_field(x.proc.pid, "lstart") or ""
     _hand_record(x, command, step)
-    _log(x.home, f"start {x.o.strand} thread {c.thread} gen {x.o.gen} pid {x.proc.pid} {c.shell}/{c.core}")
+    _log(x.home, f"start {x.o.strand} thread {c.thread} gen {x.o.gen} pid {x.proc.pid} {body_label(c.shell, c.core)}")
 
 
 def _hand_signal(x, command, step):
@@ -1754,15 +1772,17 @@ def _source_fingerprint():
 IDLE_STALE = 1800
 
 
-def _idle(home: Home) -> bool:
-    """No live body of this install has a tool call open: the loom may move its code."""
+def _idle(home: Home, young: float | None = None) -> bool:
+    """No live body of this install has a tool call open younger than ``young`` seconds
+    (``None``: none open at all): the loom may move its code."""
+    limit = IDLE_STALE if young is None else min(young, IDLE_STALE)
     from . import tooltrace
     from .router import install_of
     for strand, _gen in fold(read_facts(home)).holder.values():
         room = home.room(strand)
         if install_of(strand) != home.install_id() or not body_alive(room):
             continue
-        if any(time.time() - call["at"] < IDLE_STALE for call in tooltrace.live(room)["open"]):
+        if any(time.time() - call["at"] < limit for call in tooltrace.live(room)["open"]):
             return False
     return True
 
@@ -1807,6 +1827,10 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         publisher = Publisher(home, _log, functools.partial(health.guard, backoff=False))
         from .mirror import Mirror
         mirror = Mirror(home, _log)
+        from .library import Keeper
+        keeper = Keeper(home, _log)
+        from .reap import Reaper
+        reaper = Reaper(home, _log)
         from .receipts import source_root
         updater = Updater(home, _log, source_root())
         while not (stop is not None and stop.is_set()):
@@ -1821,7 +1845,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 if time.monotonic() >= next_usage:
                     health.guard("usage", _read_usage, home, usage, backoff=False)
                     next_usage = time.monotonic() + usage.REFRESH_INTERVAL
-                # Inputs, publisher and mirror pace their own retries; only the tick backs off.
+                # Inputs, publisher, mirror and reap pace their own retries; only the tick backs off.
                 # Connectors run only on the router lease's holder: a second
                 # install ingesting too would answer every letter twice.
                 if router.armed():
@@ -1831,6 +1855,9 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 health.guard("tick_once", tick_once, home, bodies, adapter, core, router)
                 health.guard("publisher", publisher.step, config, router, backoff=False)
                 health.guard("mirror", mirror.step, config, backoff=False)
+                health.guard("library", keeper.step, backoff=False)
+                health.guard("disk", reaper.disk, backoff=False)
+                health.guard("reap", reaper.step, backoff=False)
                 # Only at an idle tick, and the re-exec follows in this same pass.
                 health.guard("update", updater.step, config, functools.partial(_idle, home),
                              backoff=False)
@@ -1838,7 +1865,9 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 _log(home, "runtime source changed; re-executing loom")
                 inputs.close()
                 _shutdown(bodies)
-                os.execv(sys.executable, [sys.executable, *sys.orig_argv[1:]])
+                from .entry import reexec_argv
+                argv = reexec_argv() or [sys.executable, *sys.orig_argv[1:]]
+                os.execv(argv[0], argv)
                 return
             if _pause(stop, tick):
                 break

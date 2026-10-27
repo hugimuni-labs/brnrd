@@ -58,8 +58,9 @@ KEYS: tuple[Key, ...] = (
     Key("name", "text", None,
         "This loom's name. A thread whose README says `for: <name>` runs only on the loom of that name; unset matches none."),
     Key("body", "text", None,
-        "The body a login service runs, as shell/core (e.g. claude/sonnet). "
-        "Required by `brnrd loom install`."),
+        "The body a login service runs: a shell (e.g. claude), which uses the harness's own "
+        "model choice, or shell/core to pin a model (e.g. claude/sonnet). "
+        "`brnrd loom install` writes one when unset."),
     Key("author", "text", None,
         "`Name <email>` for every commit a body makes. Unset: the loom's own."),
     Key("forge_token", "secret", None,
@@ -218,10 +219,78 @@ def read_values(path: Path | str) -> dict[str, object]:
                 continue
             key, _, raw = line.partition("=")
             key = key.strip()
-            if key in {"connectors", "channels"} and key in found:
-                raise ConfigError(f"{path}: duplicate {key} declaration")
+            if key in found:
+                # The last line used to win, so a hand edit above an appended
+                # line was silently ignored. Writers fold; a reader refuses.
+                raise ConfigError(f"{path}: {key} is set twice; keep one line")
             found[key] = _literal(raw.strip())
     return found
+
+
+def _set_key(line: str) -> str | None:
+    """The key an uncommented ``key = value`` line sets, else None."""
+    line = _without_comment(line).strip()
+    if not line or "=" not in line:
+        return None
+    return line.partition("=")[0].strip()
+
+
+_FOLDED = "# folded, an earlier duplicate the last line overrode: "
+
+
+def fold_config(root: Path | str) -> list[str]:
+    """Comment out every line a later line of the same key overrode.
+
+    The value in effect does not change: the reader used to keep the last
+    line. Returns the keys folded, so a caller can say so.
+    """
+    path = config_path(root)
+    if not path.is_file():
+        return []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    last: dict[str, int] = {}
+    for index, line in enumerate(lines):
+        key = _set_key(line)
+        if key is not None:
+            last[key] = index
+    folded = []
+    for index, line in enumerate(lines):
+        key = _set_key(line)
+        if key is not None and last[key] != index:
+            lines[index] = _FOLDED + line
+            folded.append(key)
+    if folded:
+        from .home import atomic_write
+        atomic_write(path, "\n".join(lines) + "\n")
+    return sorted(set(folded))
+
+
+def set_value(root: Path | str, name: str, value: object) -> None:
+    """Set one key in place, keeping every other line as written.
+
+    The line that sets ``name`` is replaced; with none, the seeded template's
+    commented ``# name = ...`` line is; with neither, the line is appended.
+    Any other line setting ``name`` is folded, so the file says it once.
+    """
+    if name not in BY_NAME:
+        raise ConfigError(f"{config_path(root)}: unknown key {name!r}")
+    seed_config(root)
+    path = config_path(root)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    setting = f"{name} = {_render_value(value)}"
+    live = [i for i, line in enumerate(lines) if _set_key(line) == name]
+    template = [i for i, line in enumerate(lines)
+                if re.match(rf"#\s*{re.escape(name)}\s*=", line.strip())]
+    if live:
+        lines[live[-1]] = setting
+        for index in live[:-1]:
+            lines[index] = _FOLDED + lines[index]
+    elif template:
+        lines[template[-1]] = setting
+    else:
+        lines.append(setting)
+    from .home import atomic_write
+    atomic_write(path, "\n".join(lines) + "\n")
 
 
 def read_array(path: Path, key: str) -> list[str]:
@@ -291,9 +360,14 @@ def render_config() -> str:
 
 
 def seed_config(root: Path | str) -> bool:
-    """Write the commented file unless one exists. True when it wrote."""
+    """Write the commented file unless one exists. True when it wrote.
+
+    An existing file is folded instead, so a home written by an appending
+    writer loads under the reader that refuses duplicates.
+    """
     path = config_path(root)
     if path.exists():
+        fold_config(root)
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_config(), encoding="utf-8")

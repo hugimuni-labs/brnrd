@@ -4,6 +4,7 @@ import json
 import time
 from datetime import datetime
 
+from .adapters import body_label
 from .home import Home, thread_of
 from .ledger import LedgerView
 from .lifecycle import CLOSED, read_thread, main_snapshot, main_tree, readme_at
@@ -139,7 +140,7 @@ def thread_table(home: Home, facts: list) -> list[dict]:
         seat = choice or '—'
         if latest and latest.data.get('shell'):
             shell = latest.data['shell']
-            seat = f"{shell}/{latest.data.get('core', '')}"
+            seat = body_label(shell, latest.data.get('core', ''))
         last = activity.get(thread, created)
         if data['status'] in CLOSED:
             count = len(axes[thread]['letters'])

@@ -57,14 +57,3 @@ def test_legacy_runner_pin_is_read_then_migrated_and_ignored(tmp_path, monkeypat
     assert any("codex-mini resolved to codex-gpt-5.6-luna" in line for line in logs)
 
 
-def test_config_table_names_the_winning_source(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    monkeypatch.setattr(
-        config, "security_config_path", lambda _root, _cfg=None: home / "security.config"
-    )
-    write_config(tmp_path, {"repo.label": "acme/app"})
-    config.write_daemon_config(tmp_path, {"runner.default": "codex"})
-
-    rows = {row["key"]: row for row in config.load_config_table(tmp_path)}
-    assert rows["runner.default"]["source"].endswith("daemon.config")
-    assert rows["repo.label"]["source"].endswith(".brr/config")

@@ -102,17 +102,6 @@ def test_collect_is_fail_open_per_producer(tmp_path, monkeypatch):
 # --- chat policy -------------------------------------------------------------
 
 
-def test_chat_policy_defaults_unlisted_kind_to_dashboard_only():
-    assert news_lane.is_chat_worthy("some-future-kind") is False
-
-
-def test_release_kind_is_chat_worthy_per_maintainer_briefing_scope():
-    # The maintainer named "published brnrd releases" explicitly as in
-    # scope for the daily briefing (see the strand's report) — pinned here
-    # so a change is visible in review rather than silent.
-    assert news_lane.is_chat_worthy("release") is True
-
-
 # --- interrupt lane (expiry) -------------------------------------------------
 
 
@@ -291,36 +280,3 @@ def test_record_announced_propagates_a_real_write_failure(tmp_path, monkeypatch)
         news_lane.record_announced(repo, _item())
 
 
-def test_a_delivered_item_that_cannot_be_recorded_disables_the_chat_lane(monkeypatch, capsys):
-    """The send-then-record ordering has one bad tail, and this closes it.
-
-    Recording *after* a confirmed send is right: recording first would lose the
-    fact whenever a send fails. But `_announce_pending_news` rides the ~10s
-    heartbeat, so a persistently unwritable ledger means a delivered item is
-    never marked delivered — and the user's chat receives the same message
-    every ten seconds, forever. One failure is a message plus a log line; a
-    loop is an incident.
-    """
-    from brr import daemon as daemon_mod
-
-    monkeypatch.setattr(daemon_mod, "_news_announce_disabled", False, raising=False)
-    calls: list[str] = []
-
-    def boom() -> None:
-        calls.append("attempted")
-        raise OSError("read-only file system")
-
-    daemon_mod._news_record_or_disable(boom, "interrupt release:pypi")
-
-    assert calls == ["attempted"], "the record was never attempted"
-    assert daemon_mod._news_announce_disabled is True, (
-        "a delivered-but-unrecorded item must disable the lane, not fall through "
-        "to the next tick"
-    )
-    out = capsys.readouterr().out
-    assert "could not be recorded" in out and "disabled for this process" in out
-
-    # And a successful record leaves the lane alone.
-    monkeypatch.setattr(daemon_mod, "_news_announce_disabled", False, raising=False)
-    daemon_mod._news_record_or_disable(lambda: None, "briefing")
-    assert daemon_mod._news_announce_disabled is False

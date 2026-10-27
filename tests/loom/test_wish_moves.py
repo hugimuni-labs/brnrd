@@ -20,7 +20,7 @@ def brnrd(tmp_path):
     home = Home(root, install="aaaa")
     append(home, Fact(kind="router", by="loom:aaaa", data={"gen": 1}))
     append(home, Fact(kind="lease", by="loom:aaaa", data={
-        "thread": "brnrd", "strand": "s-aaaa-test", "gen": 1,
+        "thread": "inbox", "strand": "s-aaaa-test", "gen": 1,
         "install": "aaaa", "router_gen": 1, "shell": "fake", "core": "fake", "repos": [],
     }))
     return home, clone.parent
@@ -38,7 +38,7 @@ def said(home, letter):
 
 def test_first_forward_moves_the_wish_it_stamps(brnrd):
     home, seat = brnrd
-    letter = inject_letter(home.root, to="thread:brnrd", body="Please build the switch")
+    letter = inject_letter(home.root, to="thread:inbox", body="Please build the switch")
     run(seat, "send", "--re", letter, "--to", "thread:work", "--wish", "new:Build the switch", "Yours")
     [wish] = said(home, letter)
     assert wish.thread == "work" and not wish.parent
@@ -46,9 +46,9 @@ def test_first_forward_moves_the_wish_it_stamps(brnrd):
 
 def test_later_forward_makes_one_child_and_leaves_the_wish(brnrd):
     home, seat = brnrd
-    letter = inject_letter(home.root, to="thread:brnrd", body="Please build the switch")
+    letter = inject_letter(home.root, to="thread:inbox", body="Please build the switch")
     ident = run(seat, "wish", "new", "--line", "Build the switch", "--say", letter)
-    assert wishes(read_facts(home))[ident].thread == "brnrd"
+    assert wishes(read_facts(home))[ident].thread == "inbox"
     run(seat, "send", "--re", letter, "--to", "thread:work", "Yours")
     assert wishes(read_facts(home))[ident].thread == "work"
     run(seat, "send", "--re", letter, "--to", "thread:other", "Yours too")
@@ -62,7 +62,7 @@ def test_later_forward_makes_one_child_and_leaves_the_wish(brnrd):
 
 def test_a_note_home_moves_nothing(brnrd):
     home, seat = brnrd
-    letter = inject_letter(home.root, to="thread:brnrd", body="Please build the switch")
+    letter = inject_letter(home.root, to="thread:inbox", body="Please build the switch")
     ident = run(seat, "wish", "new", "--line", "Build the switch", "--say", letter)
-    run(seat, "send", "--re", letter, "--to", "thread:brnrd", "--note", "kept")
-    assert wishes(read_facts(home))[ident].thread == "brnrd"
+    run(seat, "send", "--re", letter, "--to", "thread:inbox", "--note", "kept")
+    assert wishes(read_facts(home))[ident].thread == "inbox"

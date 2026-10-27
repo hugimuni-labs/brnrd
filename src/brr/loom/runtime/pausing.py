@@ -109,6 +109,6 @@ def describe(records: list[dict]) -> str:
     outputs = sorted({r["output"] for r in records if r.get("output")})
     where = f"; its output goes on into {', '.join(outputs)}" if outputs else ""
     return (f"paused: {pause.describe_paused(records)} · a letter arrived, so your call returned early "
-            f"with its work stopped, not lost{where}. `python -m brr.loom.runtime resume` lets it "
-            "finish in the background (its exit status is gone); `python -m brr.loom.runtime drop` "
+            f"with its work stopped, not lost{where}. `brnrd runtime resume` lets it "
+            "finish in the background (its exit status is gone); `brnrd runtime drop` "
             f"ends it. Unanswered, it resumes in {CAP / 60:.0f} min.")

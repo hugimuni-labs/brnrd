@@ -1,14 +1,84 @@
 #!/usr/bin/env python3
-"""Keep the bot credential private to this channel instance."""
-import getpass
+"""Keep the bot credential private to this channel instance, checked with Telegram first."""
+import importlib.util
 import os
+import re
+import sys
 from pathlib import Path
 
+from brr import style
+from brr.loom.runtime.config import SECRET_SOURCES, ConfigError
+
+# Loaded under its own name: setup may run in-process, where a bare
+# ``common`` would shadow another connector's module of the same name.
+_spec = importlib.util.spec_from_file_location('telegram_common', Path(__file__).parent / 'common.py')
+common = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(common)
+
+TRIES = 3
+
+
+def ask(attempt):
+    # Visible on purpose: a hidden field swallows pastes in some terminals and
+    # shows nothing either way, so a person cannot see what went wrong.
+    if attempt == 0:
+        print(f"  {style.dot()} Make a bot: open https://t.me/BotFather, send /newbot, "
+              'pick a name; it answers with a token.')
+    return input(f"  {style.qmark()} {style.bold('Paste the token here:')} ")
+
+
+def problem(value):
+    if not value:
+        return 'Received 0 characters.'
+    if value.partition(':')[0] in SECRET_SOURCES:
+        return None
+    if not re.fullmatch(r'\d+:[A-Za-z0-9_-]+', value):
+        return f'Received {len(value)} characters, which is not a BotFather token (digits, a colon, then letters).'
+    return None
+
+
+def store(path, value):
+    fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+    with os.fdopen(fd, 'w') as stream:
+        os.fchmod(stream.fileno(), 0o600)
+        stream.write(value)
+
+
 path = Path(os.environ['BRNRD_STATE']) / 'token'
-value = getpass.getpass('BotFather token (or command:/file:/env: secret source): ').strip()
-if not value or '\n' in value or '\r' in value:
-    raise SystemExit('A token or secret source is required')
-fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
-with os.fdopen(fd, 'w') as stream:
-    os.fchmod(stream.fileno(), 0o600)
-    stream.write(value + '\n')
+before = path.read_text() if path.is_file() else None
+for attempt in range(TRIES):
+    try:
+        value = ask(attempt).strip()
+    except EOFError:
+        raise SystemExit('No token: input closed before one arrived') from None
+    message = problem(value)
+    if message is None:
+        if value and sys.stdout.isatty():
+            # The token was pasted in the clear; keep it out of the scrollback.
+            print(f"\033[1A\033[2K  {style.qmark()} {style.bold('Paste the token here:')} "
+                  f"{value.partition(':')[0]}:…")
+        store(path, value + '\n')
+        kept = False
+        try:
+            print(f"  {style.check()} This is @{common.call('getMe', {}, timeout=15)['username']}")
+            kept = True
+        except common.Refused:
+            message = 'Telegram does not know this token; copy it again from @BotFather.'
+        except ConfigError as exc:
+            message = str(exc)
+        except RuntimeError as exc:
+            # Offline is not a wrong token: keep it, pairing will say if it is.
+            print(f"  {style.dot()} Could not ask Telegram about the token ({exc}); keeping it.")
+            kept = True
+        finally:
+            # An unchecked token never outlives the check, Ctrl-C included.
+            if not kept:
+                if before is None:
+                    path.unlink()
+                else:
+                    store(path, before)
+        if kept:
+            break
+    print(f'  {style.cross()} {message}', file=sys.stderr)
+else:
+    raise SystemExit(f'  {style.cross()} No token after {TRIES} tries.')

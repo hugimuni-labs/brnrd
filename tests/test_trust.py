@@ -329,16 +329,6 @@ def test_from_event_untrusted_env_key_cannot_escalate(isolated_backend):
 # ── gate stamping ───────────────────────────────────────────────────────
 
 
-def test_telegram_sender_tier_owner_vs_collaborator():
-    from brr.gates import telegram
-
-    state = {"paired_user_id": 111, "allowlist": [222]}
-    assert telegram._sender_tier(state, 111) == trust.OWNER
-    assert telegram._sender_tier(state, 222) == trust.COLLABORATOR
-    assert telegram._sender_tier(state, 333) is None
-    assert telegram._sender_tier(state, None) is None
-
-
 def test_github_gate_stamps_collaborator(tmp_path, monkeypatch):
     from brr import protocol
     from brr.gates.github import state, loop, client

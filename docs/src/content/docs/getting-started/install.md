@@ -77,10 +77,11 @@ pid: 4242
   home on this machine (`~/brnrd`, or a home inside a brnrd account), else a
   new `~/brnrd`. When more than one could be meant, install lists them and asks
   for `--home`.
-- **body** is the coding agent the loom runs, as shell/core. Unset, install
-  asks Claude Code, then Codex (with the model in your `~/.codex/config.toml`),
-  for its quota and writes the first one with fuel left. `brnrd loom config
-  edit` changes it.
+- **body** is the coding agent the loom runs: a shell such as `claude`, which
+  uses that agent's own model choice, or shell/core to pin a model
+  (`claude/sonnet`). Unset, install asks Claude Code, then Codex (with the model
+  in your `~/.codex/config.toml`), for its quota and writes the first one with
+  fuel left. `brnrd loom config edit` changes it.
 - **replaced** names the loom install stopped to make way. The service's own
   loom is reloaded; a loom running outside the service is sent SIGTERM, which
   ends only its loop. Bodies are never stopped: they keep their sessions, and

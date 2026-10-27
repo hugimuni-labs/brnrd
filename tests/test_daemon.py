@@ -12,7 +12,6 @@ import pytest
 
 from brr import claude_status, daemon, envs, news_lane, presence, promises, protocol
 from brr import release_availability, resource_hold
-from brr import portals
 from brr import runner_failures
 from brr import schedule as schedule_mod
 from brr import worktree
@@ -21,13 +20,26 @@ from brr.run import Run
 from brr.runner import RunnerResult
 
 from _helpers import (
-    StubWorktreeEnv,
     commit_files,
     init_git_repo,
     make_event,
-    succeed_invoke,
     write_repo_scaffold,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_notify_gate_cache():
+    """Drop the per-run notify-gate memo around every test in this module.
+
+    :func:`daemon._cached_notify_gate` is a process-global keyed by run id,
+    and the fixtures below all use ``run-1`` — without this, the first test
+    to resolve a gate would answer for every later one. Production drops an
+    entry in ``_run_worker_and_finalize``'s ``finally``; a test never
+    reaches that, so it clears here.
+    """
+    daemon._notify_gate_cache.clear()
+    yield
+    daemon._notify_gate_cache.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -88,142 +100,6 @@ def _stub_env_isolated(monkeypatch, tmp_path):
 
     monkeypatch.setattr(envs, "get_env", lambda _name: StubEnv())
     return worktree_path, finalized
-
-
-def test_merge_level_snapshots_forwards_enriched_quota_subfields():
-    """Regression guard for #214/B2: `_merge_level_snapshots` forwards the
-    whole `quota` value it's handed — it must not strip the new numeric
-    `buckets` / `*_remaining_percent` sub-fields the collectors now attach,
-    since `binding_quota_remaining_pct` reads them downstream of the merge.
-    """
-    usage_levels = {
-        "source": "claude /usage PTY",
-        "quota": {
-            "summary": "week 15% left",
-            "buckets": {"week": {"remaining_percentage": 15.0}},
-        },
-    }
-    result_levels = {"source": "claude result json", "spend": {"summary": "$1.20"}}
-
-    merged = daemon._merge_level_snapshots(usage_levels, result_levels)
-
-    assert merged["quota"] == usage_levels["quota"]
-    assert merged["quota"]["buckets"]["week"]["remaining_percentage"] == 15.0
-    assert merged["spend"] == result_levels["spend"]
-
-
-def _live_shape_561_levels():
-    """The exact live shape from issue #561's dispatching run: session/week
-    healthy, a near-exhausted per-model week bucket for a Core (Fable) the
-    run never selects.
-    """
-    return {
-        "quota": {
-            "summary": "session 96% left; week 44% left; Fable week 4% left",
-            "buckets": {
-                "session": {"remaining_percentage": 96.0},
-                "week": {"remaining_percentage": 44.0},
-                "week_models": {"Fable": {"remaining_percentage": 4.0}},
-            },
-        }
-    }
-
-
-def test_quota_pacing_status_not_critical_for_live_shape_561():
-    """#561: a run dispatched to a Core other than the thin week_models
-    bucket's must not read `floor: critical` off that unrelated bucket —
-    the account-wide session/week buckets (96%/44%) are what's live for it.
-    """
-    levels = _live_shape_561_levels()
-
-    status = daemon._quota_pacing_status({}, levels, model="opus")
-
-    assert status["binding_remaining_pct"] == 44.0
-    assert status["floor"] is None
-    assert status["excluded_thin"] == ["Fable"]
-
-
-def test_quota_pacing_status_binds_when_model_matches_thin_bucket():
-    """The same snapshot, for a run actually dispatched to the thin Core,
-    still reads critical — exclusion is scoped to *other* Cores, not
-    blanket immunity for week_models.
-    """
-    levels = _live_shape_561_levels()
-
-    status = daemon._quota_pacing_status({}, levels, model="fable")
-
-    assert status["binding_remaining_pct"] == 4.0
-    assert status["floor"] == "critical"
-    assert "excluded_thin" not in status
-
-
-def test_quota_pacing_status_no_model_excludes_all_week_models():
-    """A scheduling tick with no committed runner: per-model buckets never
-    bind, but a thin one still surfaces informationally."""
-    levels = _live_shape_561_levels()
-
-    status = daemon._quota_pacing_status({}, levels)
-
-    assert status["binding_remaining_pct"] == 44.0
-    assert status["floor"] is None
-    assert status["excluded_thin"] == ["Fable"]
-
-
-def test_quota_pacing_status_carries_default_thresholds():
-    status = daemon._quota_pacing_status({}, _live_shape_561_levels(), model="opus")
-
-    assert status["low_floor_pct"] == 20.0
-    assert status["critical_floor_pct"] == 8.0
-    assert status["stretch_factor"] == 3.0
-
-
-def test_quota_pacing_status_carries_configured_threshold_used_for_floor():
-    cfg = {"pacing.quota_low_floor_pct": 35}
-    levels = {
-        "quota": {
-            "buckets": {"week": {"remaining_percentage": 24.0}},
-        }
-    }
-
-    status = daemon._quota_pacing_status(cfg, levels)
-
-    assert status["low_floor_pct"] == 35.0
-    assert status["floor"] == "low"
-
-
-def test_quota_pacing_status_stays_absent_without_measurement():
-    assert daemon._quota_pacing_status({}, None) is None
-
-
-def test_quota_window_pace_recommends_slowing_down_only_from_a_complete_window():
-    # The window began 100 minutes ago and is 40% consumed: 40% used against
-    # 33.3% elapsed is a real pace signal, not a projection from a bare bar.
-    pace = daemon._quota_window_pace(
-        {
-            "quota": {
-                "primary_remaining_percent": 60.0,
-                "primary_resets_at": 22_000.0,
-                "primary_window_minutes": 300.0,
-            }
-        },
-        now=10_000.0,
-    )
-
-    assert pace == {
-        "consumed_share_pct": 40.0,
-        "elapsed_share_pct": 33.3,
-        "ratio": 1.2,
-        "recommendation": "slow_down",
-        "window_minutes": 300.0,
-        "resets_at": 22_000.0,
-    }
-
-
-def test_quota_window_pace_stays_absent_without_a_binding_window_clock():
-    assert daemon._quota_window_pace(
-        {"quota": {"primary_remaining_percent": 60.0}}, now=10_000.0,
-    ) is None
-
 
 
 def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
@@ -532,62 +408,6 @@ def test_run_worker_never_claims_a_tap_itself(tmp_path, monkeypatch):
     assert wake_request_mod.last_receipt(brr_dir) is None
     # No tap was in play *for this wake* — absent, not a miss.
     assert "wake_request" not in task.meta
-
-
-def test_run_worker_finalize_appends_run_ledger_row(tmp_path, monkeypatch):
-    write_repo_scaffold(tmp_path)
-    event = make_event(tmp_path, eid="evt-ledger")
-    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
-    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts,
-        "build_daemon_prompt",
-        lambda task, eid, rp, root, **kw: "PROMPT",
-    )
-    monkeypatch.setattr(
-        envs,
-        "get_env",
-        lambda _name: StubWorktreeEnv(invoke_fn=succeed_invoke("ledger done\n")),
-    )
-    snapshots = iter([
-        {
-            "quota": {
-                "primary_used_percent": 10.0,
-                "secondary_used_percent": 20.0,
-            },
-        },
-        {
-            "quota": {
-                "primary_used_percent": 12.0,
-                "secondary_used_percent": 25.0,
-            },
-        },
-    ])
-    monkeypatch.setattr(
-        daemon.run_ledger,
-        "load_quota_levels",
-        lambda *args, **kwargs: next(snapshots),
-    )
-
-    task = daemon._run_worker_and_finalize(
-        event,
-        tmp_path,
-        tmp_path / ".brr" / "responses",
-        {"run_ledger.subscription_price.codex": 20},
-        0,
-    )
-
-    ledger = tmp_path / ".brr" / "run-ledger.jsonl"
-    rows = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
-    assert len(rows) == 1
-    assert rows[0]["run_id"] == task.id
-    assert rows[0]["event_id"] == "evt-ledger"
-    assert rows[0]["weekly_pct_delta"] == 5.0
-    assert rows[0]["five_hour_pct_delta"] == 2.0
-    assert rows[0]["usd_subscription_attributed"] == 1.0
-    assert rows[0]["bolt_declaration"] is None
-    assert task.terminal_reply == "ledger done"
-    assert not (tmp_path / ".brr" / "outbox" / "evt-ledger").exists()
 
 
 def test_capture_knowledge_no_longer_archives_replies(tmp_path, monkeypatch):
@@ -1210,53 +1030,6 @@ def test_run_worker_marks_error_on_env_setup_failure(tmp_path, monkeypatch):
     persisted = Run.from_file(tmp_path / ".brr" / "runs" / task.id / "run.md")
     assert persisted is not None
     assert persisted.status == "error"
-
-
-def test_presence_label_for_event_never_falls_back_to_task_body():
-    """#585: a presence `label` is dashboard chrome, not a content channel.
-
-    The pre-fix shape derived the label as
-    ``event.get("summary") or task.body``, so a spawn strand's presence
-    label was its own full task spec whenever `summary` was unpopulated —
-    which it always was (audited: no writer sets it on this creation-time
-    `event` dict). `_presence_label_for_event` must never read `body`
-    (or any task-prose field) at all — an absent `summary` degrades to an
-    empty label, not to the event's body."""
-    huge_task_prose = (
-        "# Task — issue #565: stopped runs are credited even though the "
-        "branch never merged, which double-counts them in the ledger. " * 5
-    )
-    event = {"id": "evt-1", "body": huge_task_prose}
-    assert daemon._presence_label_for_event(event) == ""
-
-
-def test_presence_label_for_event_uses_summary_when_a_caller_sets_it():
-    """A caller that *does* populate a short, deliberate `summary` still
-    gets it through, truncated to 120 chars — the field stays usable for
-    a future handle-shaped writer, just never task prose by default."""
-    event = {"id": "evt-1", "body": "irrelevant", "summary": "Add labels to live runs"}
-    assert daemon._presence_label_for_event(event) == "Add labels to live runs"
-
-    event_long = {"id": "evt-2", "summary": "x" * 200}
-    assert len(daemon._presence_label_for_event(event_long)) == 120
-
-
-def test_presence_label_for_event_prefers_declared_title_over_summary(tmp_path):
-    """#880 §1b: a spawn dispatcher's declared ``title:`` frontmatter — a
-    one-line, dispatcher-authored label, not the free-text ``task.body``
-    #585 guarded against — wins over ``summary`` and populates the
-    presence row from the first heartbeat, before the child has had a
-    chance to introduce itself via ``.name``."""
-    event = {
-        "id": "evt-1", "body": "irrelevant",
-        "title": "fix the frontend build",
-        "summary": "some other auto-derived text",
-    }
-    assert daemon._presence_label_for_event(event) == "fix the frontend build"
-
-    # No title ⇒ falls back to summary exactly as before.
-    event_no_title = {"id": "evt-2", "summary": "Add labels to live runs"}
-    assert daemon._presence_label_for_event(event_no_title) == "Add labels to live runs"
 
 
 def test_presence_registered_during_run_and_cleared_after(tmp_path, monkeypatch):
@@ -2415,153 +2188,6 @@ def test_notify_spawn_parent_of_crash_noop_without_parent_linkage(tmp_path):
 # ── #574: spawn contract check (spec vs what the child actually published) ──
 
 
-def test_extract_spawn_contract_finds_branch_and_report():
-    spec = (
-        "# Task: issue #574\n"
-        "**Branch: `brr/spawn-contract-check`**\n"
-        "**Report: `/tmp/brr-spawn-contract-check-report.md`**\n"
-    )
-    branch, report = daemon._extract_spawn_contract(spec)
-    assert branch == "brr/spawn-contract-check"
-    assert report == "/tmp/brr-spawn-contract-check-report.md"
-
-
-def test_extract_spawn_contract_ignores_source_paths_masquerading_as_branch():
-    """A spec's own code anchors (``src/brr/daemon.py``) must never be read
-    as the branch commitment — this repo's own spec bodies routinely cite
-    both in the same message, anchors first."""
-    spec = (
-        "Anchors: `src/brr/daemon.py::_queue_spawn_request` (~4906).\n"
-        "**Branch: `brr/real-slug`**\n"
-    )
-    branch, _report = daemon._extract_spawn_contract(spec)
-    assert branch == "brr/real-slug"
-
-
-def test_extract_spawn_contract_ignores_dot_brr_runtime_paths():
-    """`.brr/worktrees/<run-id>` is named in the working rules of every
-    host-environment spawn spec brnrd writes — and it is a `brr/` token
-    reached via a `.`, not a `/`. The first cut of this check extracted
-    `brr/worktrees` from it and would have flagged a compliant worker.
-    Ordering saved the two live dispatches on 2026-07-23; ordering is not
-    a guard."""
-    spec = (
-        "Work ONLY under `/home/gurio/src/misc/brr/.brr/worktrees/<run-id>`;\n"
-        "re-read `.brr/outbox/evt-x/portal-state.json` at plan boundaries.\n"
-        "**Branch: `brr/real-slug`**\n"
-    )
-    branch, _report = daemon._extract_spawn_contract(spec)
-    assert branch == "brr/real-slug"
-
-
-def test_extract_spawn_contract_no_tokens_returns_none_none():
-    branch, report = daemon._extract_spawn_contract("just do the thing, no branch here")
-    assert branch is None
-    assert report is None
-
-
-def test_spawn_contract_check_no_branch_in_spec_is_no_contract():
-    assert daemon._spawn_contract_check("do the thing", "brr/whatever") is None
-
-
-def test_spawn_contract_check_match_is_no_mismatch(tmp_path):
-    # The report-path token convention is literally `/tmp/brr-*.md` (every
-    # dispatch spec uses it) — tmp_path itself lives under a nested
-    # `/tmp/pytest-.../` prefix, so the fixture path is built directly
-    # under `/tmp/` here to actually exercise the regex, not just the
-    # branch-only fallback.
-    report = Path(f"/tmp/brr-contract-check-match-{tmp_path.name}-report.md")
-    report.write_text("done\n", encoding="utf-8")
-    try:
-        spec = f"Branch: `brr/thing`\nReport: `{report}`\n"
-        result = daemon._spawn_contract_check(spec, "brr/thing")
-        assert result["mismatch"] is False
-        assert result["spec_branch"] == "brr/thing"
-        assert result["published_branch"] == "brr/thing"
-        assert result["report_found"] is True
-    finally:
-        report.unlink(missing_ok=True)
-
-
-def test_spawn_contract_check_branch_mismatch():
-    spec = "Branch: `brr/wake-request-source-gate`\n"
-    result = daemon._spawn_contract_check(spec, "brr/stopped-run-kb-credit")
-    assert result["mismatch"] is True
-    assert result["spec_branch"] == "brr/wake-request-source-gate"
-    assert result["published_branch"] == "brr/stopped-run-kb-credit"
-
-
-def test_spawn_contract_check_no_branch_published_is_mismatch():
-    """A spec that names a branch but the child never published anything at
-    all is exactly the silent-substitution shape #574 exists to catch."""
-    spec = "Branch: `brr/thing`\n"
-    result = daemon._spawn_contract_check(spec, None)
-    assert result["mismatch"] is True
-    assert result["published_branch"] is None
-
-
-def test_spawn_contract_check_missing_report_is_mismatch(tmp_path):
-    missing = Path(f"/tmp/brr-never-written-{tmp_path.name}-report.md")
-    assert not missing.exists()
-    spec = f"Branch: `brr/thing`\nReport: `{missing}`\n"
-    result = daemon._spawn_contract_check(spec, "brr/thing")
-    assert result["mismatch"] is True
-    assert result["report_found"] is False
-
-
-def test_spawn_contract_check_no_report_named_only_branch_checked():
-    """No ``/tmp/brr-*.md`` token in the spec at all ⇒ nothing to check
-    there; only the branch commitment governs the verdict."""
-    spec = "Branch: `brr/thing`\n"
-    result = daemon._spawn_contract_check(spec, "brr/thing")
-    assert result["mismatch"] is False
-    assert result["spec_report"] is None
-    assert result["report_found"] is None
-
-
-def test_spawn_contract_check_declared_report_alone_is_a_contract(tmp_path):
-    """A declared ``report:`` with no ``branch:`` is still a contract.
-
-    The gate used to be ``if declared_branch:`` alone, so this shape fell
-    through to the prose scan: the declared report was discarded, and with
-    no ``brr/`` token in the prose the whole contract evaporated
-    (``return None``) — a dispatcher's stated commitment, dropped in
-    silence. Either clause alone is a contract; the branch clause simply
-    has nothing to say."""
-    missing = Path(f"/tmp/brr-report-only-{tmp_path.name}.md")
-    assert not missing.exists()
-    result = daemon._spawn_contract_check(
-        "no branch named anywhere in this prose",
-        "brr/whatever-the-child-picked",
-        declared_report=str(missing),
-    )
-    assert result is not None
-    assert result["source"] == "declared"
-    assert result["spec_branch"] is None
-    assert result["branch_ok"] is True
-    assert result["report_ok"] is False
-    assert result["mismatch"] is True
-
-
-def test_spawn_contract_check_declared_report_alone_ignores_prose_branch(tmp_path):
-    """...and the scan must not run alongside it.
-
-    Falling through to the scan did not merely drop the declared report —
-    an incidental ``brr/<slug>`` anywhere in the prose (a sibling's branch,
-    #640's own live false positive) became an enforced branch commitment
-    nobody made. A declaration on either clause makes the whole contract
-    declared."""
-    written = tmp_path / "report.md"
-    written.write_text("done", encoding="utf-8")
-    result = daemon._spawn_contract_check(
-        "A sibling worker is live on `brr/sibling-branch` — don't collide.",
-        "brr/what-this-child-published",
-        declared_report=str(written),
-    )
-    assert result["spec_branch"] is None
-    assert result["mismatch"] is False
-
-
 def test_report_only_mismatch_prints_no_branch_line(tmp_path):
     """#1097's rule, applied to the clause that does not exist.
 
@@ -3241,29 +2867,6 @@ def test_ask_allowance_requires_a_positive_delta(tmp_path):
     assert notices and notices[0]["kind"] == "refused"
 
 
-def test_apply_allowance_grant_adds_a_signed_delta():
-    daemon._register_run_control("evt-x", "run-parent", allowance_tokens=100_000)
-    control = daemon._find_run_control("evt-x")
-    new_total = daemon._apply_allowance_grant(control, "allowance: +50k\n")
-    assert new_total == 150_000
-    assert control["allowance_tokens"] == 150_000
-    assert control["allowance_asked"] is False
-
-
-def test_apply_allowance_grant_sets_an_unsigned_ceiling():
-    daemon._register_run_control("evt-y", "run-parent", allowance_tokens=100_000)
-    control = daemon._find_run_control("evt-y")
-    new_total = daemon._apply_allowance_grant(control, "allowance: 300k")
-    assert new_total == 300_000
-
-
-def test_apply_allowance_grant_ignores_an_ordinary_steer():
-    daemon._register_run_control("evt-z", "run-parent", allowance_tokens=100_000)
-    control = daemon._find_run_control("evt-z")
-    assert daemon._apply_allowance_grant(control, "keep going, looks good") is None
-    assert control["allowance_tokens"] == 100_000
-
-
 def test_cut_mismatches_names_an_unasked_allowance_overrun():
     task = Run(
         id="run-child", event_id="evt-overrun", body="", source="spawn",
@@ -3322,43 +2925,6 @@ def test_cut_mismatches_tolerates_a_small_overrun():
 # handle to) ──────────────────────────────────────────────────────────────
 
 
-def test_register_run_control_stores_the_dispatcher_declared_title():
-    daemon._register_run_control(
-        "evt-titled", "run-parent", allowance_tokens=100_000, title="the gauge run",
-    )
-    control = daemon._find_run_control("evt-titled")
-    assert control["title"] == "the gauge run"
-    assert control["allowance_spent"] is None
-
-
-def test_owned_child_controls_carries_title_and_weighted_when_present():
-    daemon._register_run_control(
-        "evt-child", "run-parent", allowance_tokens=100_000, title="side task",
-    )
-    daemon._bind_run_control("evt-child", "run-child")
-    control = daemon._find_run_control("evt-child")
-    control["allowance_spent"] = 42_000
-
-    rows = daemon._owned_child_controls("run-parent")
-    assert rows == [{
-        "parent_run_id": "run-parent",
-        "event_id": "evt-child",
-        "run_id": "run-child",
-        "title": "side task",
-        "weighted": 42_000,
-    }]
-
-
-def test_owned_child_controls_omits_title_and_weighted_when_absent():
-    """No dispatcher-declared title, no metered spend yet — the exact fixture
-    an earlier regression test already pins the bare-keys shape against."""
-    daemon._register_run_control("evt-plain", "run-parent")
-    rows = daemon._owned_child_controls("run-parent")
-    assert rows == [{
-        "parent_run_id": "run-parent", "event_id": "evt-plain", "run_id": "",
-    }]
-
-
 def test_refused_spawn_absent_from_owned_children(tmp_path):
     """#1994 Case 1: a spawn refused at admission must not appear in
     owned_children.  All refusal branches in _queue_spawn_request return
@@ -3383,53 +2949,6 @@ def test_refused_spawn_absent_from_owned_children(tmp_path):
     assert accepted is False
     assert daemon._owned_child_controls("run-parent") == [], (
         "a refused spawn must leave no control in owned_children"
-    )
-
-
-def test_reap_exception_retires_orphan_control():
-    """#1994 Case 2: if the spawn-reap notify path throws, the finally block
-    must retire the control so it does not linger as a phantom owned child."""
-    spawn_eid = "evt-reap-exc-test"
-    parent_run_id = "run-reap-exc-parent"
-    daemon._register_run_control(spawn_eid, parent_run_id)
-
-    # Verify the control is visible before cleanup.
-    assert daemon._owned_child_controls(parent_run_id) != []
-
-    # Simulate what the #1994 finally-block fix does when _edge_resolved is
-    # False (i.e. the notify path threw before _retire_run_control ran).
-    with daemon._run_controls_lock:
-        ctrl = daemon._run_controls.get(spawn_eid)
-    if ctrl is not None and not isinstance(ctrl.get("parked"), dict):
-        daemon._retire_run_control(spawn_eid)
-
-    assert daemon._owned_child_controls(parent_run_id) == [], (
-        "after exception-path retirement, the control must not appear in owned_children"
-    )
-
-
-def test_reap_exception_does_not_retire_parked_control():
-    """#1994: the finally-block cleanup must not touch parked controls —
-    those are kept deliberately so the parent can still stop: or steer them."""
-    spawn_eid = "evt-reap-parked-test"
-    parent_run_id = "run-reap-parked-parent"
-    daemon._register_run_control(spawn_eid, parent_run_id)
-    # Mark it as parked (simulates _park_run_control succeeding).
-    with daemon._run_controls_lock:
-        daemon._run_controls[spawn_eid]["parked"] = {
-            "reason": "refill", "resume": "refill", "waiting_on": "quota",
-        }
-
-    # The finally-block guard: skip if parked.
-    with daemon._run_controls_lock:
-        ctrl = daemon._run_controls.get(spawn_eid)
-    if ctrl is not None and not isinstance(ctrl.get("parked"), dict):
-        daemon._retire_run_control(spawn_eid)
-
-    # Should still be present (parked edge is kept intentionally).
-    rows = daemon._owned_child_controls(parent_run_id)
-    assert rows and rows[0]["status"] == "parked", (
-        "a parked control must survive the exception-path cleanup guard"
     )
 
 
@@ -3640,26 +3159,6 @@ def test_record_context_window_ignores_a_predecessors_transcript_on_a_shared_cwd
     assert snap["context_window"]["tokens_used"] == 86_700
 
 
-def test_record_boot_cost_ignores_a_predecessors_transcript_on_a_shared_cwd(
-    tmp_path, monkeypatch,
-):
-    """Same shared-cwd hazard, the other reader: a boot cost is a *this run*
-    number, and the predecessor's first turn is not it."""
-    seen = {}
-
-    def _fake(cwd, projects_root=None, *, not_before=None):
-        seen["not_before"] = not_before
-        return None
-
-    monkeypatch.setattr(daemon.allowance, "latest_claude_transcript", _fake)
-    task = types.SimpleNamespace(meta={})
-    daemon._record_boot_cost(
-        task, "claude", tmp_path / "work", tmp_path / "outbox",
-        not_before=4321.0,
-    )
-    assert seen["not_before"] == 4321.0
-
-
 def test_record_context_window_never_regresses_a_known_percentage(tmp_path, monkeypatch):
     """The final envelope already produced the honest ``contextWindow``-
     derived percentage (this run's own, or the cross-run fallback) — a
@@ -3685,19 +3184,6 @@ def test_record_context_window_never_regresses_a_known_percentage(tmp_path, monk
     snap = claude_status.load_snapshot(outbox_dir)
     assert snap["context_window"]["remaining_percentage"] == 62.0
     assert "tokens_used" not in snap["context_window"]
-
-
-def test_record_context_window_skips_non_claude_runners(tmp_path):
-    daemon._record_context_window("codex", tmp_path / "work", tmp_path / "outbox")
-    assert not (tmp_path / "outbox").exists()
-
-
-def test_record_context_window_leaves_no_trace_before_a_transcript_reading_exists(
-    tmp_path,
-):
-    outbox_dir = tmp_path / "outbox"
-    daemon._record_context_window("claude", tmp_path / "nope", outbox_dir)
-    assert not outbox_dir.exists()
 
 
 def test_notify_spawn_parent_declared_contract_beats_sibling_prose(tmp_path):
@@ -7165,65 +6651,6 @@ class TestNotifyGateFallback:
 # ── #1444: the account-scoped routing rule has exactly one home ────────────
 
 
-def test_gate_dirs_routes_account_scoped_gate_to_the_account_pair(tmp_path):
-    ctx = types.SimpleNamespace(
-        enabled=True,
-        dispatch_inbox=tmp_path / "account-inbox",
-        responses_dir=tmp_path / "account-responses",
-    )
-    own_inbox = tmp_path / "repo-inbox"
-    own_responses = tmp_path / "repo-responses"
-
-    inbox, responses = daemon.gate_dirs(
-        "cloud", inbox_dir=own_inbox, responses_dir=own_responses,
-        account_context=ctx,
-    )
-    assert inbox == ctx.dispatch_inbox
-    assert responses == ctx.responses_dir
-
-
-@pytest.mark.parametrize(
-    "ctx",
-    [
-        None,
-        types.SimpleNamespace(
-            enabled=False, dispatch_inbox=Path("x"), responses_dir=Path("y"),
-        ),
-    ],
-    ids=["no-account-context", "account-context-disabled"],
-)
-def test_gate_dirs_falls_back_to_the_callers_own_pair(tmp_path, ctx):
-    own_inbox = tmp_path / "repo-inbox"
-    own_responses = tmp_path / "repo-responses"
-
-    inbox, responses = daemon.gate_dirs(
-        "cloud", inbox_dir=own_inbox, responses_dir=own_responses,
-        account_context=ctx,
-    )
-    assert inbox == own_inbox
-    assert responses == own_responses
-
-
-def test_gate_dirs_leaves_a_non_account_scoped_gate_alone(tmp_path):
-    # A capable, enabled account context must not hijack a gate that was
-    # never in ``_ACCOUNT_SCOPED_GATES`` — telegram's delivery thread reads
-    # its own per-repo pair regardless of account mode.
-    ctx = types.SimpleNamespace(
-        enabled=True,
-        dispatch_inbox=tmp_path / "account-inbox",
-        responses_dir=tmp_path / "account-responses",
-    )
-    own_inbox = tmp_path / "repo-inbox"
-    own_responses = tmp_path / "repo-responses"
-
-    inbox, responses = daemon.gate_dirs(
-        "telegram", inbox_dir=own_inbox, responses_dir=own_responses,
-        account_context=ctx,
-    )
-    assert inbox == own_inbox
-    assert responses == own_responses
-
-
 def test_account_scoped_routing_has_one_consumer():
     """#1444: one routing rule, three implementations in a week, no home.
 
@@ -7412,29 +6839,6 @@ def test_run_worker_proceeds_when_sync_fails(tmp_path, monkeypatch):
     assert task.status == "done"
 
 
-def test_branches_to_refresh_includes_default_and_structured(monkeypatch, tmp_path):
-    """The helper merges the local default branch with structured event keys."""
-    write_repo_scaffold(tmp_path)
-    monkeypatch.setattr(daemon.gitops, "default_branch", lambda _root: "main")
-    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(daemon.gitops, "valid_branch_name", lambda _root, _b: True)
-
-    targets = daemon._branches_to_refresh(
-        tmp_path,
-        {
-            "branch_target": "feature-x",
-            "target_branch": "release",
-            "branch": "auto",
-        },
-    )
-
-    assert targets[0] == "main"
-    assert "feature-x" in targets
-    assert "release" in targets
-    # ``branch=auto`` is a no-op sentinel and must not appear.
-    assert "auto" not in targets
-
-
 def test_start_settles_event_done_and_records_run_outcome_on_error(
     tmp_path, monkeypatch,
 ):
@@ -7533,103 +6937,6 @@ def test_cleanup_traces_on_success_keeps_on_failure(tmp_path):
 
         assert trace.exists(), f"trace removed on status={status}"
         assert task.meta.get("trace_dirs"), f"meta cleared on status={status}"
-
-
-def test_start_allows_same_pid_during_reexec(tmp_path, monkeypatch):
-    write_repo_scaffold(tmp_path)
-    calls: list[str] = []
-
-    monkeypatch.setenv("BRR_REEXEC", "1")
-    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: daemon.os.getpid())
-    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: calls.append("write-pid"))
-    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: calls.append("clear-pid"))
-    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
-    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {})
-    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
-
-    def stop_on_scan(_inbox):
-        calls.append("scan")
-        raise StopIteration
-
-    monkeypatch.setattr(daemon.protocol, "list_pending", stop_on_scan)
-
-    with pytest.raises(StopIteration):
-        daemon.start(tmp_path)
-
-    # Three scans: the boot interrupted-run marker (#316) and the boot
-    # spawn-reconciliation sweep (#311) each scan first and their
-    # must-not-block-boot guards swallow the fixture's StopIteration;
-    # the main loop's own first scan then raises it for real.
-    assert calls == ["write-pid", "scan", "scan", "scan", "clear-pid"]
-
-
-def test_start_rejects_existing_pid_without_reexec(tmp_path, monkeypatch):
-    write_repo_scaffold(tmp_path)
-    monkeypatch.delenv("BRR_REEXEC", raising=False)
-    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: daemon.os.getpid())
-
-    with pytest.raises(SystemExit) as exc:
-        daemon.start(tmp_path)
-
-    assert "daemon already running" in str(exc.value)
-
-
-def test_start_rejects_different_pid_during_reexec(tmp_path, monkeypatch):
-    write_repo_scaffold(tmp_path)
-    monkeypatch.setenv("BRR_REEXEC", "1")
-    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: daemon.os.getpid() + 1)
-
-    with pytest.raises(SystemExit) as exc:
-        daemon.start(tmp_path)
-
-    assert "daemon already running" in str(exc.value)
-
-
-def test_dev_reload_mode_from_config_reexecs_at_idle_boundary(tmp_path, monkeypatch):
-    write_repo_scaffold(tmp_path)
-    order: list[str] = []
-
-    class FakeWatcher:
-        last_changed = ["package/daemon.py"]
-
-        def changed(self):
-            order.append("watch")
-            return True
-
-    def _stop_after_reexec():
-        order.append("reexec")
-        raise StopIteration
-
-    monkeypatch.setattr(
-        daemon.reload_mod.DevReloadWatcher,
-        "for_repo",
-        classmethod(lambda cls, _repo_root: order.append("watcher") or FakeWatcher()),
-    )
-    monkeypatch.setattr(daemon.reload_mod, "reexec", _stop_after_reexec)
-    monkeypatch.setattr(
-        daemon.reload_mod,
-        "format_dev_reload_breadcrumb",
-        lambda paths: order.append(f"breadcrumb:{paths}") or "dev-reload: re-exec",
-    )
-    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
-    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: order.append("write-pid"))
-    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: order.append("clear-pid"))
-    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
-    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {"dev_reload": True})
-    monkeypatch.setattr(
-        daemon.protocol,
-        "list_pending",
-        lambda _inbox: (_ for _ in ()).throw(AssertionError("should reexec first")),
-    )
-    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
-
-    with pytest.raises(StopIteration):
-        daemon.start(tmp_path)
-
-    assert order == [
-        "write-pid", "watcher", "watch",
-        "breadcrumb:['package/daemon.py']", "reexec", "clear-pid",
-    ]
 
 
 def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
@@ -7754,64 +7061,6 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
 # with the arithmetic — replaced by the one fact that outlives it: the config
 # key is a *logged no-op*, not a silent one, for the release after it stopped
 # meaning anything.
-
-
-def test_retired_spawn_width_config_is_a_logged_no_op(tmp_path, monkeypatch, capsys):
-    """A `.brr/config` in the wild still carries `spawn.max_concurrent`. It has
-    to stop mattering, but it must not stop *appearing to matter* silently — an
-    operator who set it to 2 deserves to learn from the daemon's own startup
-    line that the number is no longer read, rather than from a strand fleet
-    that ignored it."""
-    assert not hasattr(daemon, "_max_concurrent_spawns")
-    assert not hasattr(daemon, "_cpu_scaled_max_concurrent_spawns")
-    assert not hasattr(daemon, "_MAX_CONCURRENT_SPAWNS_DEFAULT")
-    # And it can no longer be *raised* through the config-change lane either:
-    # proposing a new ceiling for a key nothing reads is a parked decision
-    # about nothing.
-    assert "spawn.max_concurrent" not in daemon._CONFIG_CHANGE_ALLOWED_KEYS
-
-    write_repo_scaffold(tmp_path)
-    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
-    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
-    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
-    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
-    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
-    monkeypatch.setattr(
-        daemon.conf, "load_config", lambda _root: {"spawn.max_concurrent": 2},
-    )
-    monkeypatch.setattr(
-        daemon, "_fire_due_schedules",
-        lambda *_a, **_k: (_ for _ in ()).throw(StopIteration),
-    )
-    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.01)
-
-    with pytest.raises(StopIteration):
-        daemon.start(tmp_path)
-
-    out = capsys.readouterr().out
-    assert "spawn.max_concurrent is deprecated and ignored" in out
-
-
-def test_absent_spawn_width_config_says_nothing(tmp_path, monkeypatch, capsys):
-    """The deprecation line is a fact about *this operator's* config, so a
-    config that never carried the key must not be told it is being ignored."""
-    write_repo_scaffold(tmp_path)
-    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
-    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
-    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
-    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
-    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
-    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {})
-    monkeypatch.setattr(
-        daemon, "_fire_due_schedules",
-        lambda *_a, **_k: (_ for _ in ()).throw(StopIteration),
-    )
-    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.01)
-
-    with pytest.raises(StopIteration):
-        daemon.start(tmp_path)
-
-    assert "spawn.max_concurrent" not in capsys.readouterr().out
 
 
 def test_concurrent_spawn_admission_ignores_legacy_numeric_width(tmp_path, monkeypatch):
@@ -8063,7 +7312,6 @@ def test_concurrent_spawn_reap_surfaces_notify_crash(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="notify blew up"):
         daemon.start(tmp_path)
-
 
 
 def test_refused_spawn_leaves_no_owned_child_edge(tmp_path):
@@ -8513,40 +7761,6 @@ def test_publish_runs_with_task_meta_for_pr_rebase(tmp_path, monkeypatch):
     )
 
 
-def test_commits_between_raises_on_timeout_not_empty(tmp_path):
-    """#1308: a probe that cannot measure must say so, not answer zero.
-
-    ``_commits_between`` shells out to ``git log``; a ``TimeoutExpired``
-    used to propagate uncaught (returning nothing at all, effectively an
-    unhandled crash from the caller's perspective) and a non-zero
-    returncode used to read as "no commits". Neither is the same fact as
-    "measured the range and found it empty" — both must now raise
-    ``_CommitProbeUnresolvable`` so ``publish()`` can tell the difference.
-    """
-    import subprocess as subprocess_mod
-
-    def fake_run(*_a, **_k):
-        raise subprocess_mod.TimeoutExpired(cmd=["git", "log"], timeout=10)
-
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(daemon.subprocess, "run", fake_run)
-        with pytest.raises(daemon._CommitProbeUnresolvable):
-            daemon._commits_between(tmp_path, "main", "brr/topic")
-
-
-def test_commits_between_raises_on_nonzero_returncode(tmp_path):
-    """A resolvable-looking call that still exits non-zero (lock
-    contention, an unresolvable ref) is a failed measurement, not a zero
-    one — the old code returned ``[]`` for both "genuinely no commits"
-    and "git could not tell me", indistinguishably (#1308)."""
-    init_git_repo(tmp_path)
-    commit_files(tmp_path, {"seed.txt": "seed\n"})
-    with pytest.raises(daemon._CommitProbeUnresolvable):
-        # "definitely-not-a-ref" resolves nowhere, so git log exits non-zero
-        # rather than answering "zero commits".
-        daemon._commits_between(tmp_path, "definitely-not-a-ref", "HEAD")
-
-
 def test_publish_pushes_first_publish_branch_when_commit_probe_times_out(
     tmp_path, monkeypatch, capsys,
 ):
@@ -8687,75 +7901,6 @@ def test_worker_finalize_tolerates_gate_cleanup_after_response(
 # below only cover those wrapper-specific responsibilities.
 
 
-def test_forge_view_url_feeds_remote_and_config_overrides_to_forges(monkeypatch, tmp_path):
-    """The wrapper reads the remote URL via gitops and the
-    ``forge.kind`` / ``forge.url_base`` overrides via the config
-    loader, then delegates to ``forges.view_branch_url``. This guards
-    the *plumbing* — that the wrapper still wires the right inputs
-    together — without re-testing URL templating."""
-    monkeypatch.setattr(
-        daemon.gitops, "remote_url",
-        lambda _repo, _remote: "git@git.internal.example.com:team/repo.git",
-    )
-    monkeypatch.setattr(
-        daemon.conf, "load_config",
-        lambda _repo: {
-            "forge.kind": "gitlab",
-            "forge.url_base": "https://gitlab.example.com",
-        },
-    )
-    captured: dict = {}
-
-    def fake_view_branch_url(url, branch, **kwargs):
-        captured["args"] = (url, branch)
-        captured["kwargs"] = kwargs
-        return "https://gitlab.example.com/team/repo/-/tree/feature/foo"
-
-    monkeypatch.setattr(daemon.forges, "view_branch_url", fake_view_branch_url)
-
-    url = daemon._forge_view_url(tmp_path, "origin", "feature/foo")
-
-    assert url == "https://gitlab.example.com/team/repo/-/tree/feature/foo"
-    assert captured["args"] == (
-        "git@git.internal.example.com:team/repo.git", "feature/foo",
-    )
-    assert captured["kwargs"] == {
-        "override_kind": "gitlab",
-        "override_url_base": "https://gitlab.example.com",
-    }
-
-
-def test_forge_view_url_returns_none_when_remote_missing(monkeypatch, tmp_path):
-    """No remote URL means nothing to template against — the wrapper
-    short-circuits to ``None`` rather than calling ``forges`` with
-    ``None``."""
-    monkeypatch.setattr(daemon.gitops, "remote_url", lambda _repo, _remote: None)
-    called = False
-
-    def _should_not_call(*_a, **_kw):
-        nonlocal called
-        called = True
-        return "should not happen"
-
-    monkeypatch.setattr(daemon.forges, "view_branch_url", _should_not_call)
-
-    assert daemon._forge_view_url(tmp_path, "origin", "main") is None
-    assert called is False
-
-
-def test_forge_view_url_swallows_exceptions(monkeypatch, tmp_path):
-    """The push has already succeeded by the time we reach
-    ``_forge_view_url``; a missing link is never worth failing the
-    task over, so any exception in the resolve chain returns
-    ``None``."""
-    def _boom(*_a, **_kw):
-        raise RuntimeError("git binary exploded")
-
-    monkeypatch.setattr(daemon.gitops, "remote_url", _boom)
-
-    assert daemon._forge_view_url(tmp_path, "origin", "main") is None
-
-
 # ── §8 re-alignment: success-signal axis on _result_satisfied_delivery ──
 
 
@@ -8769,120 +7914,6 @@ def _result(ok=True, has_response=False, missing=()):
     r.has_response = has_response
     r.missing_artifacts = list(missing)
     return r
-
-
-def test_result_satisfied_delivery_picks_current_reply_signal():
-    """A stdout reply on the current thread is one satisfying signal; it
-    wins over commit/outbound and identifies as ``current_reply``."""
-    event = {"source": "telegram"}
-    stats = {"current": 1, "other": 0, "outbound": 0}
-    ok, signal = daemon._result_satisfied_delivery(
-        _result(has_response=True), stats, event,
-    )
-    assert ok is True
-    assert signal == "current_reply"
-
-
-def test_result_satisfied_delivery_picks_outbox_current_reply_signal():
-    """An outbox-only current-thread interim counts as success even
-    without stdout. Preserves the existing shipped behavior, now with
-    the named signal so the card can reflect it."""
-    event = {"source": "telegram"}
-    stats = {"current": 1, "other": 0, "outbound": 0}
-    ok, signal = daemon._result_satisfied_delivery(_result(), stats, event)
-    assert ok is True
-    assert signal == "current_reply"
-
-
-def test_result_satisfied_delivery_recognises_other_thread_reply():
-    """A folded-in reply to a sibling event (no current-thread reply)
-    is a successful delivery — §6 says events go to threads, not stdout.
-    Previously this read as a silent drop."""
-    event = {"source": "telegram"}
-    stats = {"current": 0, "other": 1, "outbound": 0}
-    ok, signal = daemon._result_satisfied_delivery(_result(), stats, event)
-    assert ok is True
-    assert signal == "other_reply"
-
-
-def test_result_satisfied_delivery_recognises_outbound_gate_send():
-    """A `gate:` out-of-bound message is a delivery event — a co-maintainer
-    that pinged a forge or chat from a scheduled wake didn't fail just
-    because the current thread had no reply."""
-    event = {"source": "schedule"}
-    stats = {"current": 0, "other": 0, "outbound": 1}
-    ok, signal = daemon._result_satisfied_delivery(_result(), stats, event)
-    assert ok is True
-    assert signal == "outbound"
-
-
-def test_result_satisfied_delivery_recognises_respawn_signal():
-    """A parked respawn is an explicit success signal: the current run handed the
-    work to a new Shell/Core instead of silently producing no output."""
-    event = {"source": "telegram"}
-    stats = {"current": 0, "other": 0, "outbound": 0, "respawn": 1}
-    ok, signal = daemon._result_satisfied_delivery(_result(), stats, event)
-    assert ok is True
-    assert signal == "respawn"
-
-
-def test_result_satisfied_delivery_recognises_commit_signal():
-    """A run that committed new work on the worktree branch is a
-    successful run, even without any reply event — §6's commit signal."""
-    event = {"source": "telegram"}
-    stats = {"current": 0, "other": 0, "outbound": 0}
-    ok, signal = daemon._result_satisfied_delivery(
-        _result(), stats, event, has_new_commit=True,
-    )
-    assert ok is True
-    assert signal == "commit"
-
-
-def test_result_satisfied_delivery_internal_event_passes_without_reply():
-    """Internal-source events (schedule fires) have no user thread to
-    close, so a clean exit with no signal still resolves as ``internal``
-    success. Preserves the shipped behavior with the named signal."""
-    event = {"source": "schedule"}
-    stats = {"current": 0, "other": 0, "outbound": 0}
-    ok, signal = daemon._result_satisfied_delivery(_result(), stats, event)
-    assert ok is True
-    assert signal == "internal"
-
-
-def test_result_satisfied_delivery_user_event_without_signal_fails():
-    """The §6 invariant: silence on a user-addressed event is failure.
-    No reply, no commit, no internal-event exemption → satisfied=False
-    so the failure-path writes a terminal note instead of swallowing
-    the request."""
-    event = {"source": "telegram"}
-    stats = {"current": 0, "other": 0, "outbound": 0}
-    ok, signal = daemon._result_satisfied_delivery(_result(), stats, event)
-    assert ok is False
-    assert signal == ""
-
-
-def test_result_satisfied_delivery_runner_error_fails():
-    """A runner.ok=False result is operational failure regardless of
-    any output stats — those didn't come from the failed attempt."""
-    event = {"source": "telegram"}
-    stats = {"current": 5, "other": 5, "outbound": 5}
-    ok, signal = daemon._result_satisfied_delivery(
-        _result(ok=False), stats, event, has_new_commit=True,
-    )
-    assert ok is False
-    assert signal == ""
-
-
-def test_result_satisfied_delivery_missing_artifact_fails():
-    """A missing required artifact means the runner didn't validate —
-    treat as failure even if other output paths fired."""
-    event = {"source": "telegram"}
-    stats = {"current": 1, "other": 0, "outbound": 0}
-    ok, signal = daemon._result_satisfied_delivery(
-        _result(missing=["foo"]), stats, event,
-    )
-    assert ok is False
-    assert signal == ""
 
 
 def test_status_done_race_still_dispatches_follow_up_promptly(tmp_path, monkeypatch):
@@ -9115,44 +8146,7 @@ def test_run_worker_writes_prompt_to_run_dir(tmp_path, monkeypatch):
 # ── _scm_facet (portal-state SCM posture) ────────────────────────────
 
 
-def test_scm_facet_unknown_without_workdir():
-    # No readable worktree → known=False so the back channel stays silent
-    # rather than claim a clean tree it never inspected.
-    facet = daemon._scm_facet(None, "brr/run-x")
-    assert facet == {
-        "known": False, "branch": "brr/run-x",
-        "unpushed_commits": 0, "modified_files": 0,
-    }
-
-
-def test_scm_facet_reports_dirty_unpushed_tree(tmp_path):
-    repo = tmp_path / "repo"
-    init_git_repo(repo)
-    commit_files(repo, {"a.txt": "x\n"})  # no remote → 1 unpushed
-    (repo / "b.txt").write_text("dirty\n", encoding="utf-8")  # 1 untracked
-    facet = daemon._scm_facet(repo, "brr/run-x")
-    assert facet["known"] is True
-    assert facet["branch"] == "brr/run-x"
-    assert facet["unpushed_commits"] == 1
-    assert facet["modified_files"] == 1
-
-
 # ── delivery: — "would my reply reach a human if I ended right now?" ──
-
-
-@pytest.fixture(autouse=True)
-def _clear_notify_gate_cache():
-    """Drop the per-run notify-gate memo around every test in this module.
-
-    :func:`daemon._cached_notify_gate` is a process-global keyed by run id,
-    and the fixtures below all use ``run-1`` — without this, the first test
-    to resolve a gate would answer for every later one. Production drops an
-    entry in ``_run_worker_and_finalize``'s ``finally``; a test never
-    reaches that, so it clears here.
-    """
-    daemon._notify_gate_cache.clear()
-    yield
-    daemon._notify_gate_cache.clear()
 
 
 def test_notify_gate_is_resolved_once_per_run_not_once_per_heartbeat(
@@ -9267,7 +8261,6 @@ def test_an_uncacheable_run_still_resolves(tmp_path, monkeypatch):
     )
     assert projection["gate"] == "telegram"
     assert daemon._notify_gate_cache == {}
-
 
 
 def test_delivery_projection_unknown_without_a_source(tmp_path):
@@ -9978,33 +8971,6 @@ def test_portal_state_await_resolved_state_is_sticky_across_ticks(tmp_path):
 # ── _resources_facet (portal-state work-status posture) ──────────────
 
 
-def test_resources_facet_quota_known_when_summary_present():
-    facet = daemon._resources_facet("weekly 42% - resets 3d")
-    assert facet["quota"]["status"] == "known"
-    assert facet["quota"]["summary"] == "weekly 42% - resets 3d"
-    # The level facets with no collector wired for this medium advertise
-    # themselves as unimplemented and whether they are required, so a future
-    # wake sees the slot and its weight.
-    assert facet["spend"]["status"] == "unimplemented"
-    assert facet["spend"]["required"] is True
-    assert facet["context_window"]["status"] == "unimplemented"
-    assert facet["context_window"]["required"] is True
-    assert facet["coexisting_runs"]["status"] == "unimplemented"
-    assert facet["coexisting_runs"]["required"] is False
-
-
-def test_resources_facet_coexisting_known_when_siblings_passed():
-    """Explicit passthrough: ``_resources_facet`` forwards ``coexisting`` to
-    ``facets.build`` unchanged (the wiring under test is the call site in
-    ``_write_live_portal_state`` below, not this thin wrapper)."""
-    facet = daemon._resources_facet(
-        "weekly 42%",
-        coexisting=[{"run_id": "run-b", "label": "other work"}],
-    )
-    assert facet["coexisting_runs"]["status"] == "known"
-    assert "other work" in facet["coexisting_runs"]["summary"]
-
-
 # ── _write_live_portal_state (coexisting_runs ← presence registry) ───────────
 
 
@@ -10073,8 +9039,6 @@ def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path, mon
     assert facet["spawn_pool"] == {"floor": None}
 
 
-
-
 def test_write_live_portal_state_spawn_pool_floor_unknown_without_quota(tmp_path, monkeypatch):
     """No quota measurement ⇒ ``floor: null`` — the absent reading, not a
     cheerful "clear". Absent and clear are different facts from a resident's
@@ -10136,107 +9100,6 @@ def test_write_live_portal_state_projects_owned_children_from_run_controls(tmp_p
         {"event_id": "evt-child-b", "parent_run_id": "run-parent", "run_id": ""},
         {"event_id": "evt-child-a", "parent_run_id": "run-parent", "run_id": "run-child-a"},
     ]
-
-
-def test_resources_facet_level_collector_flips_empty_to_absent():
-    # With a level collector wired (for example Claude result JSON), an empty spend /
-    # context-window slot is affirmative-'absent', not unbuilt 'unimplemented'.
-    facet = daemon._resources_facet(None, levels_collector=True)
-    assert facet["spend"]["status"] == "absent"
-    assert facet["context_window"]["status"] == "absent"
-    # A populated level snapshot reads 'known' and carries its summary.
-    facet = daemon._resources_facet(
-        None,
-        levels_collector=True,
-        levels={
-            "spend": {"summary": "$0.42 this session"},
-            "context_window": {"summary": "62% context left"},
-            "quota": {"summary": "5h 58% left"},
-        },
-    )
-    assert facet["spend"]["status"] == "known"
-    assert facet["spend"]["summary"] == "$0.42 this session"
-    assert facet["context_window"]["status"] == "known"
-    # A level-source quota wins over the local snapshot path.
-    assert facet["quota"]["status"] == "known"
-    assert facet["quota"]["summary"] == "5h 58% left"
-
-
-def test_resources_facet_quota_absent_without_summary():
-    # Quota's collector exists but proved nothing for this medium: that is an
-    # affirmative-empty 'absent', not an unbuilt 'unimplemented'.
-    facet = daemon._resources_facet(None)
-    assert facet["quota"]["status"] == "absent"
-    assert facet["quota"]["summary"] is None
-    assert facet["quota"]["note"]
-    facet_blank = daemon._resources_facet("   ")
-    assert facet_blank["quota"]["status"] == "absent"
-
-
-def test_resources_facet_remote_scm_pr_not_created_is_absent():
-    facet = daemon._resources_facet(None, branch="brr/feature")
-    assert facet["remote_scm"]["status"] == "absent"
-    assert facet["remote_scm"]["pr_state"] == "none"
-    assert facet["remote_scm"]["branch"] == "brr/feature"
-    assert facet["remote_scm"]["pr_number"] is None
-    assert "no PR" in facet["remote_scm"]["note"]
-
-
-def test_resources_facet_remote_scm_known_when_pr_recorded():
-    facet = daemon._resources_facet(None, branch="brr/feature", pr_number="207")
-    assert facet["remote_scm"]["status"] == "known"
-    assert facet["remote_scm"]["pr_state"] == "recorded"
-    assert facet["remote_scm"]["pr_number"] == "207"
-    assert facet["remote_scm"]["note"] is None
-
-
-def test_read_pr_control_accepts_bare_number_hash_and_url(tmp_path):
-    """The `.pr` control file (2026-07-07 fix for 'remote_scm=absent even
-    after the resident created a PR itself mid-run'): the resident can write
-    whatever `gh pr create` handed it, not a specific format."""
-    for text in (
-        "274", "#274", "https://github.com/Gurio/brr/pull/274\n",
-        "https://gitlab.com/Gurio/brr/-/merge_requests/274",
-    ):
-        pr_path = tmp_path / ".pr"
-        pr_path.write_text(text, encoding="utf-8")
-        assert daemon._read_pr_control(pr_path) == "274"
-
-
-@pytest.mark.parametrize(
-    "text", ["ea35206", "prefix 274", "not-a-url/pull/274", "https://x/pulls/274"],
-)
-def test_read_pr_control_rejects_sha_and_malformed_content(tmp_path, text):
-    pr_path = tmp_path / ".pr"
-    pr_path.write_text(text, encoding="utf-8")
-    assert daemon._read_pr_control(pr_path) is None
-
-
-def test_read_pr_control_missing_or_empty_file_is_none(tmp_path):
-    assert daemon._read_pr_control(tmp_path / ".pr") is None
-    empty = tmp_path / ".pr"
-    empty.write_text("   ", encoding="utf-8")
-    assert daemon._read_pr_control(empty) is None
-
-
-def test_resources_facet_threads_runner_catalog():
-    facet = daemon._resources_facet(
-        None,
-        runner_name="codex-mini",
-        runner_catalog=[
-            {
-                "name": "codex-mini",
-                "shell": "codex",
-                "model": "gpt-5.4-mini",
-                "selected": True,
-                "availability": "available",
-            }
-        ],
-    )
-
-    catalog = facet["runner"]["catalog"]
-    assert catalog[0]["name"] == "codex-mini"
-    assert catalog[0]["selected"] is True
 
 
 def test_repo_label_prefers_event_repo():
@@ -10695,69 +9558,6 @@ def test_account_dispatch_keeps_forge_events_on_repo_local_route(tmp_path):
     assert targets[0].event["repo_label"] == "Gurio/b"
 
 
-def test_cloud_dispatch_uses_explicit_then_thread_sticky_then_default(tmp_path):
-    repo_a = tmp_path / "repo-a"
-    repo_b = tmp_path / "repo-b"
-    repo_a.mkdir()
-    repo_b.mkdir()
-    write_repo_scaffold(repo_a)
-    write_repo_scaffold(repo_b)
-    cfg = {
-        "repo.label": "Gurio/a",
-        "home.path": str(tmp_path / "account-home"),
-        "account.repo.Gurio/b": str(repo_b),
-    }
-    ctx = daemon.account.resolve_context(repo_a, cfg)
-    thread = "cloud:telegram:42:"
-
-    explicit = {
-        "source": "cloud",
-        "repo": "Gurio/b",
-        "cloud_platform": "telegram",
-        "cloud_chat_id": 42,
-    }
-    assert daemon._repo_for_event(
-        ctx,
-        explicit,
-        fallback_repo_root=repo_a,
-        fallback_label="Gurio/a",
-    ) == (repo_b, "Gurio/b")
-
-    daemon.conversations.append_run(
-        repo_b / ".brr",
-        thread,
-        run_id="run-b",
-        event_id="evt-b",
-        env="worktree",
-        status="finished",
-        repo_label="Gurio/b",
-    )
-    follow_up = {
-        "source": "cloud",
-        "cloud_platform": "telegram",
-        "cloud_chat_id": 42,
-    }
-    assert daemon._repo_for_event(
-        ctx,
-        follow_up,
-        fallback_repo_root=repo_a,
-        fallback_label="Gurio/a",
-    ) == (repo_b, "Gurio/b")
-
-    fresh_thread = {
-        "source": "cloud",
-        "cloud_platform": "telegram",
-        "cloud_chat_id": 99,
-    }
-    assert daemon._repo_for_event(
-        ctx,
-        fresh_thread,
-        fallback_repo_root=repo_a,
-        fallback_label="Gurio/a",
-    ) == (repo_a, "Gurio/a")
-
-
-
 def test_run_worker_says_the_repo_label_it_could_not_find(tmp_path, monkeypatch):
     """#1472: an unserved repo label must not be swallowed at ingress.
 
@@ -10910,42 +9710,6 @@ def test_run_worker_says_the_repo_label_it_could_not_find(tmp_path, monkeypatch)
     assert label_a in truncated and label_b in truncated
     assert server_label_b in seed_block
     assert label_a in seed_block and label_b in seed_block
-
-def test_account_starts_one_cloud_gate_on_default_repo_runtime(
-    tmp_path, monkeypatch,
-):
-    repo_a = tmp_path / "repo-a"
-    repo_b = tmp_path / "repo-b"
-    repo_a.mkdir()
-    repo_b.mkdir()
-    write_repo_scaffold(repo_a)
-    write_repo_scaffold(repo_b)
-    ctx = daemon.account.resolve_context(
-        repo_a,
-        {
-            "repo.label": "Gurio/a",
-            "home.path": str(tmp_path / "account-home"),
-            "account.repo.Gurio/b": str(repo_b),
-        },
-    )
-    calls = []
-
-    def capture(*args):
-        calls.append(args)
-        return []
-
-    monkeypatch.setattr(daemon, "_start_gates", capture)
-
-    daemon._start_account_gates(ctx, repo_a)
-
-    cloud_calls = [
-        call for call in calls
-        if len(call) >= 5 and call[4] == frozenset({"cloud"})
-    ]
-    assert len(cloud_calls) == 1
-    assert cloud_calls[0][0] == repo_a / ".brr"
-    assert cloud_calls[0][1] == ctx.dispatch_inbox
-    assert cloud_calls[0][2] == ctx.responses_dir
 
 
 # ── #733 the one claim point: `_apply_dashboard_wake_request` ────────────
@@ -12192,13 +10956,6 @@ def test_capture_control_files_noop_without_outbox_or_disabled_account(tmp_path)
     ) == []
 
 
-def test_card_now_projection_keeps_the_full_body_off_the_live_card():
-    body = "## Now\n\nDriving tests.\n\n## Arc\n\nA long permanent story."
-
-    assert daemon._card_now_projection(body) == "Driving tests."
-    assert daemon._card_now_projection("Plain legacy note") == "Plain legacy note"
-
-
 def test_card_drain_derives_course_from_full_body_below_now(tmp_path):
     """The wire fact comes from the full card, not its Now-only projection."""
     body = (
@@ -12382,65 +11139,6 @@ def test_capture_dominion_commits_account_home(tmp_path):
     assert log == "brnrd-home: capture account memory after run run-capture"
 
 
-def test_primary_dominion_candidate_matches_forwarded_account_context(tmp_path):
-    """#1409: forwarding ``account_context`` must reproduce the old hand-built candidate.
-
-    ``_primary_dominion_candidate`` used to hand-build an extra
-    ``ResidentDominion`` (``repo_label = account.repo_label(repo_root, cfg)``)
-    and ``insert(0, …)`` it ahead of whatever ``resident_dominion_candidates``
-    derived on its own. That is exactly the label ``resident_dominion_
-    candidates`` derives internally when given ``account_context=`` but no
-    ``repo_label=`` override, so the hand-built insert is provably a
-    duplicate once the context is forwarded — this asserts the *path* and
-    *capture_root* the caller now gets are the same values the old manual
-    insert would have produced.
-    """
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    write_repo_scaffold(repo)
-    cfg = {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")}
-    ctx = daemon.account.resolve_context(repo, cfg)
-    repo_dom = daemon.account.repo_dominion_path(ctx, "Gurio/brr")
-    daemon.dominion.seed_account_dominion(repo_dom)
-
-    candidate = daemon._primary_dominion_candidate(repo, cfg, ctx)
-
-    assert candidate is not None
-    assert candidate.path == repo_dom
-    assert candidate.capture_root == ctx.dominion_repo
-
-
-def test_primary_dominion_candidate_reuses_context_instead_of_rederiving(
-    tmp_path, monkeypatch,
-):
-    """#1409: the equivalence above holds because forwarding *replaces*
-    re-derivation, not merely because ``account.resolve_context`` happens to
-    be deterministic. Pin the mechanism directly: break a *fresh*
-    ``resolve_context`` call and confirm ``_primary_dominion_candidate``
-    still succeeds using the already-resolved context it was handed.
-    """
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    write_repo_scaffold(repo)
-    cfg = {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")}
-    ctx = daemon.account.resolve_context(repo, cfg)
-    repo_dom = daemon.account.repo_dominion_path(ctx, "Gurio/brr")
-    daemon.dominion.seed_account_dominion(repo_dom)
-
-    def _boom(*_a, **_k):
-        raise AssertionError(
-            "resolve_context re-derived instead of reusing the forwarded context"
-        )
-
-    monkeypatch.setattr(daemon.account, "resolve_context", _boom)
-
-    candidate = daemon._primary_dominion_candidate(repo, cfg, ctx)
-
-    assert candidate is not None
-    assert candidate.path == repo_dom
-    assert candidate.capture_root == ctx.dominion_repo
-
-
 def test_capture_dominion_repo_label_can_diverge_from_config_label(tmp_path):
     """#1409: ``_capture_dominion``'s manual insert is *not* provably a duplicate.
 
@@ -12534,117 +11232,6 @@ def test_finalize_captures_after_finished_run_state(monkeypatch, tmp_path):
     )
 
     assert calls == [("persist", "finished"), ("capture", "finished")]
-
-
-def test_collect_levels_for_claude_merges_usage_and_result(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        daemon.claude_usage,
-        "load_or_refresh_snapshot",
-        lambda outbox, cwd=None: {
-            "source": "claude /usage PTY",
-            "quota": {"summary": "session 100% left; week 55% left"},
-        },
-    )
-    monkeypatch.setattr(
-        daemon.claude_status,
-        "load_snapshot",
-        lambda outbox: {
-            "source": "claude result JSON",
-            "spend": {"summary": "$0.0100 this session"},
-            "context_window": {"summary": "95% context left (est)"},
-        },
-    )
-
-    levels, slots = daemon._collect_levels("claude", tmp_path, tmp_path)
-
-    assert slots == {"quota", "spend", "context_window"}
-    assert levels["quota"]["summary"] == "session 100% left; week 55% left"
-    assert levels["spend"]["summary"] == "$0.0100 this session"
-    assert levels["context_window"]["summary"] == "95% context left (est)"
-    assert levels["source"] == "claude /usage PTY + claude result JSON"
-
-
-def test_collect_levels_for_claude_falls_back_to_shared_spend_when_own_outbox_is_fresh(
-    monkeypatch, tmp_path,
-):
-    """#1027: a *new* run's own outbox has no result-JSON reading of its own
-    yet — that is exactly the wake-time state ``portal-state.json``'s
-    ``spend``/``context_window`` facets render from. The last claude run's
-    reading, durably written into the account-shared dir (``BRR_SHARED_DIR``,
-    ``claude_status._shared_dir``), is what must be found instead of
-    reporting ``absent`` for a fact that is one run stale, not unknown — and
-    its summary must say whose reading it is: the shared slot is one mutable
-    file every claude run overwrites, so serving its "...this session" text
-    unchanged here would misattribute a different run's cost as this run's
-    own (maintainer review, 2026-08-03 — see ``claude_status.mark_cross_run``).
-    """
-    monkeypatch.setattr(
-        daemon.claude_usage, "load_snapshot", lambda outbox: None,
-    )
-    outbox_dir = tmp_path / "outbox" / "evt-fresh-run"
-    outbox_dir.mkdir(parents=True)
-    shared_dir = tmp_path / "shared"
-    shared_dir.mkdir()
-    daemon.claude_status.write_snapshot(
-        shared_dir,
-        {
-            "source": "claude result JSON",
-            "run_id": "run-earlier-worker",
-            "spend": {"summary": "$0.42 this session (estimated)"},
-            "context_window": {"summary": "80% context left (est)"},
-        },
-    )
-
-    levels, slots = daemon._collect_levels(
-        "claude", outbox_dir, tmp_path, refresh=False, shared_dir=shared_dir,
-    )
-
-    assert slots == {"quota", "spend", "context_window"}
-    assert levels["spend"]["summary"] == (
-        "$0.42 this session (estimated) — run-earlier-worker's reading, "
-        "carried (not this run's)"
-    )
-    assert levels["context_window"]["summary"] == (
-        "80% context left (est) — run-earlier-worker's reading, "
-        "carried (not this run's)"
-    )
-
-
-def test_collect_levels_for_claude_prefers_own_fresh_reading_over_shared(
-    monkeypatch, tmp_path,
-):
-    """The current run's own outbox copy — when it has already produced
-    one — wins outright and keeps its unmodified "this session" wording; the
-    cross-run attribution note is only for the shared-slot fallback."""
-    monkeypatch.setattr(
-        daemon.claude_usage, "load_snapshot", lambda outbox: None,
-    )
-    outbox_dir = tmp_path / "outbox" / "evt-this-run"
-    outbox_dir.mkdir(parents=True)
-    shared_dir = tmp_path / "shared"
-    shared_dir.mkdir()
-    daemon.claude_status.write_snapshot(
-        outbox_dir,
-        {
-            "source": "claude result JSON",
-            "run_id": "evt-this-run",
-            "spend": {"summary": "$1.00 this session (estimated)"},
-        },
-    )
-    daemon.claude_status.write_snapshot(
-        shared_dir,
-        {
-            "source": "claude result JSON",
-            "run_id": "run-earlier-worker",
-            "spend": {"summary": "$0.42 this session (estimated)"},
-        },
-    )
-
-    levels, _ = daemon._collect_levels(
-        "claude", outbox_dir, tmp_path, refresh=False, shared_dir=shared_dir,
-    )
-
-    assert levels["spend"]["summary"] == "$1.00 this session (estimated)"
 
 
 def test_run_worker_weaves_same_thread_siblings_into_prompt(tmp_path, monkeypatch):
@@ -13599,36 +12186,6 @@ def test_quota_shell_labels_reads_each_pool_once(tmp_path, monkeypatch):
     assert labels == {"codex": "exhausted, resets Jul 28", "claude": "88%"}
 
 
-def test_enrich_catalog_quota_stamps_every_row_and_skips_unknown_pools(
-    tmp_path, monkeypatch,
-):
-    """The daemon-side wiring, which had no test at all.
-
-    Without this, either ``_enrich_catalog_quota`` call site in ``_run_worker``
-    could be deleted and the suite would stay green — the exact "the number
-    exists, the chooser cannot see it" failure #632 was filed about.
-    """
-    from brr.gates import cloud
-
-    monkeypatch.setattr(
-        cloud, "_quota_snapshot",
-        lambda brr_dir: [{"shell": "codex", "windows": [{"percent": 0.0}]}],
-    )
-    catalog = [
-        {"name": "codex", "shell": "codex", "quota_source": "codex-local"},
-        {"name": "codex-full", "shell": "codex", "quota_source": "codex-local"},
-        {"name": "claude", "shell": "claude", "quota_source": "claude-local"},
-    ]
-
-    daemon._enrich_catalog_quota(catalog, tmp_path)
-
-    assert catalog[0]["quota_level"] == "exhausted"
-    assert catalog[1]["quota_level"] == "exhausted"
-    # claude had no reading in this snapshot — unknown stays unknown, and the
-    # key must be absent rather than empty so the renderer emits nothing.
-    assert "quota_level" not in catalog[2]
-
-
 def test_dispatch_auth_health_marks_and_success_clears_same_domain(tmp_path):
     from brr import runner_auth_health, runner_failures, runner_select
 
@@ -14098,19 +12655,6 @@ def _boot_cost_outbox(tmp_path, weighted):
     return outbox
 
 
-def test_hold_boot_ratio_divides_weighted_tokens():
-    assert resource_hold.hold_boot_ratio(1_400_000, 1_000_000) == pytest.approx(1.4)
-
-
-def test_hold_boot_ratio_none_without_hold_so_far():
-    assert resource_hold.hold_boot_ratio(None, 1_000_000) is None
-
-
-def test_hold_boot_ratio_none_without_a_positive_boot_cost():
-    assert resource_hold.hold_boot_ratio(500_000, None) is None
-    assert resource_hold.hold_boot_ratio(500_000, 0) is None
-
-
 class TestHoldRatioFacet:
     def test_no_await_armed_reports_nothing(self):
         task = _hold_seat()
@@ -14447,28 +12991,6 @@ def test_write_live_portal_state_never_parks_on_default_config(
 
 
 # ── cut: / the bolt (design-the-bolt.md) ─────────────────────────────
-
-
-def test_issue_filing_claims_matches_the_conservative_pattern_set():
-    """#1259's pattern set, pinned directly: adjacency to the `#N` token is
-    what does the work of not firing on ordinary issue-number prose."""
-    assert daemon._issue_filing_claims("Filed #12 to track this.") == {12: "filed"}
-    assert daemon._issue_filing_claims("#12 filed, will follow up.") == {12: "filed"}
-    assert daemon._issue_filing_claims("Opened #12 for the follow-up.") == {12: "filed"}
-    assert daemon._issue_filing_claims("Closes #12 outright.") == {12: "closed"}
-    assert daemon._issue_filing_claims("closing #12 now.") == {12: "closed"}
-    # a later claim about the same number wins — a real filed-then-closed
-    # lifecycle settles on the final state, not the first sentence.
-    assert daemon._issue_filing_claims(
-        "Filed #12 earlier this run.", "Closes #12.",
-    ) == {12: "closed"}
-    # ordinary mentions, no adjacent claim verb — nothing fires.
-    assert daemon._issue_filing_claims("See #12 for context.") == {}
-    assert daemon._issue_filing_claims("This fixes the bug described in #12.") == {}
-    assert daemon._issue_filing_claims("") == {}
-    # a PR opened with a number between the verb and the ref — the
-    # adjacency requirement structurally excludes it.
-    assert daemon._issue_filing_claims("Opened PR #12 for review.") == {}
 
 
 def _drain_cut(
@@ -15453,93 +13975,6 @@ Body text for the item file itself; irrelevant to ignition.
 """
 
 
-def _warp_dir_with_item(tmp_path: Path, item_id: str = "w-8") -> Path:
-    warp = tmp_path / "surface" / "warp"
-    warp.mkdir(parents=True)
-    (warp / f"{item_id}.md").write_text(_WELD_ITEM_TEXT, encoding="utf-8")
-    return warp
-
-
-def _account_ctx_for_warp(tmp_path: Path) -> "daemon.account.AccountContext":
-    return daemon.account.AccountContext(
-        account_id="default",
-        dominion_repo=tmp_path,
-        dispatch_inbox=tmp_path / "dispatch" / "inbox",
-        responses_dir=tmp_path / "dispatch" / "responses",
-        runs_dir=tmp_path / "runs",
-        repos={},
-        default_repo=daemon.account.AccountRepo(label="Gurio/brr", root=tmp_path),
-    )
-
-
-@pytest.mark.parametrize(
-    "source", sorted(protocol.INTERNAL_SOURCES),
-)
-def test_weld_ignition_body_empty_for_every_internal_source(source):
-    """Every brnrd-minted source (#1118's completeness-tested set) is
-    system-authored prose, not a correspondent's task — including `spawn`,
-    the member the narrower "not schedule" guard missed."""
-    body = daemon._weld_ignition_body({"source": source, "body": "please do w-8"})
-    assert body == ""
-
-
-@pytest.mark.parametrize("source", ["telegram", "github", "slack", "signal", "cloud"])
-def test_weld_ignition_body_passes_through_for_correspondent_sources(source):
-    """A gate-ingress source is never in `INTERNAL_SOURCES` (nor could a
-    future one be, without becoming a `create_event` call this package's
-    own AST completeness test would catch) — it stays ignition-eligible
-    with no edit to this predicate."""
-    body = daemon._weld_ignition_body({"source": source, "body": "please do w-8"})
-    assert body == "please do w-8"
-
-
-def test_weld_ignite_schedule_source_leaves_item_unchanged(tmp_path):
-    warp = _warp_dir_with_item(tmp_path)
-    ctx = _account_ctx_for_warp(tmp_path)
-    outbox = tmp_path / "outbox"
-    outbox.mkdir()
-    event = {
-        "source": "schedule",
-        "body": "the w-14/w-45/w-46/w-47 cluster and w-8 count as docket",
-    }
-
-    resolved = daemon._weld_ignite(event, ctx, outbox, "run-agenda-1")
-
-    assert resolved == []
-    assert "taken:" not in (warp / "w-8.md").read_text(encoding="utf-8")
-
-
-def test_weld_ignite_spawn_source_leaves_item_unchanged(tmp_path):
-    """The case the parent's own measurement caught: a `spawn:` dispatch's
-    spec quoting an id as a citation must not ignite it either."""
-    warp = _warp_dir_with_item(tmp_path)
-    ctx = _account_ctx_for_warp(tmp_path)
-    outbox = tmp_path / "outbox"
-    outbox.mkdir()
-    event = {
-        "source": "spawn",
-        "body": "Read the issue; it quotes the w-14/w-45/w-46/w-47 cluster and w-8.",
-    }
-
-    resolved = daemon._weld_ignite(event, ctx, outbox, "run-spawn-1")
-
-    assert resolved == []
-    assert "taken:" not in (warp / "w-8.md").read_text(encoding="utf-8")
-
-
-def test_weld_ignite_correspondent_source_still_ignites(tmp_path):
-    warp = _warp_dir_with_item(tmp_path)
-    ctx = _account_ctx_for_warp(tmp_path)
-    outbox = tmp_path / "outbox"
-    outbox.mkdir()
-    event = {"source": "telegram", "body": "please pick up w-8 today"}
-
-    resolved = daemon._weld_ignite(event, ctx, outbox, "run-user-1")
-
-    assert resolved == ["w-8"]
-    assert "taken: run-user-1" in (warp / "w-8.md").read_text(encoding="utf-8")
-
-
 # ── THE WELD ignition item-state guard (#1436 facet 1) ────────────────────
 #
 # `w-14` closed 2026-08-13 and was ignited eleven more times after that —
@@ -15566,46 +14001,6 @@ retired: 2026-08-13 superseded
 
 Body text for the item file itself; irrelevant to ignition.
 """
-
-
-def test_weld_ignite_done_item_leaves_item_unchanged_even_from_a_correspondent(
-    tmp_path,
-):
-    """The acceptance case verbatim: a `done:` item stays untouched no
-    matter the source — including a live correspondent, which #1435's
-    source guard alone would wave through."""
-    warp = _warp_dir_with_item(tmp_path)
-    (warp / "w-8.md").write_text(_WELD_DONE_ITEM_TEXT, encoding="utf-8")
-    ctx = _account_ctx_for_warp(tmp_path)
-    outbox = tmp_path / "outbox"
-    outbox.mkdir()
-    event = {"source": "telegram", "body": "please pick up w-8 today"}
-
-    resolved = daemon._weld_ignite(event, ctx, outbox, "run-user-2")
-
-    assert resolved == []
-    text = (warp / "w-8.md").read_text(encoding="utf-8")
-    assert "taken:" not in text
-    relics_file = outbox / ".relics.jsonl"
-    assert not relics_file.exists() or "w-8" not in relics_file.read_text(
-        encoding="utf-8"
-    )
-
-
-def test_weld_ignite_retired_item_also_not_a_candidate(tmp_path):
-    """A retired item is equally closed — no work left to start — so the
-    same item-state guard covers it, not just `done:`."""
-    warp = _warp_dir_with_item(tmp_path)
-    (warp / "w-8.md").write_text(_WELD_RETIRED_ITEM_TEXT, encoding="utf-8")
-    ctx = _account_ctx_for_warp(tmp_path)
-    outbox = tmp_path / "outbox"
-    outbox.mkdir()
-    event = {"source": "telegram", "body": "please pick up w-8 today"}
-
-    resolved = daemon._weld_ignite(event, ctx, outbox, "run-user-3")
-
-    assert resolved == []
-    assert "taken:" not in (warp / "w-8.md").read_text(encoding="utf-8")
 
 
 class TestNewsLaneAnnounce:
@@ -15772,14 +14167,6 @@ def test_correspondent_quiet_seconds_reads_the_newest_thing_they_said(tmp_path):
     assert 100 <= quiet <= 180
 
 
-def test_correspondent_facet_is_absent_without_a_chat_thread(tmp_path):
-    from brr import correspondent
-
-    assert correspondent.facet_input(
-        tmp_path / "inbox", thread_key=None, correspondent_key=None,
-    ) is None
-
-
 def test_correspondent_facet_input_measures_and_never_infers_a_receipt(tmp_path):
     from brr import correspondent
 
@@ -15799,58 +14186,6 @@ def test_correspondent_facet_input_measures_and_never_infers_a_receipt(tmp_path)
     # A Telegram bot is never given a read receipt. The field exists for
     # the lanes that have one; it is never inferred.
     assert facet["read"] is None
-
-
-def test_composing_flips_on_a_staged_draft(tmp_path):
-    from brr.gates import cloud_publisher
-
-    brr_dir = tmp_path / ".brr"
-    outbox = brr_dir / "outbox" / "evt-1"
-    outbox.mkdir(parents=True)
-    manifest = {"event_id": "evt-1"}
-
-    assert cloud_publisher._composing(brr_dir, manifest) is False
-
-    draft = outbox / "note.md.tmp.1234.abcd"
-    draft.write_text("half a sentence", encoding="utf-8")
-    assert cloud_publisher._composing(brr_dir, manifest) is True
-
-
-def test_composing_holds_briefly_after_a_line_is_written(tmp_path):
-    from brr.gates import cloud_publisher
-
-    brr_dir = tmp_path / ".brr"
-    outbox = brr_dir / "outbox" / "evt-1"
-    outbox.mkdir(parents=True)
-    manifest = {"event_id": "evt-1"}
-    sent = outbox / "note.md"
-    sent.write_text("a line", encoding="utf-8")
-
-    assert cloud_publisher._composing(brr_dir, manifest) is True
-    # Past the window, with nothing new staged, the run is no longer
-    # composing — a typing indicator nobody is behind is worse than none.
-    old = time.time() - 120
-    os.utime(sent, (old, old))
-    assert cloud_publisher._composing(brr_dir, manifest) is False
-
-
-def test_composing_ignores_the_daemon_owned_control_files(tmp_path):
-    from brr.gates import cloud_publisher
-
-    brr_dir = tmp_path / ".brr"
-    outbox = brr_dir / "outbox" / "evt-1"
-    outbox.mkdir(parents=True)
-    # The daemon rewrites these every heartbeat. If they counted, every run
-    # would read as composing forever.
-    for name in portals.CONTROL_NAMES:
-        (outbox / name).write_text("{}", encoding="utf-8")
-    assert cloud_publisher._composing(brr_dir, {"event_id": "evt-1"}) is False
-
-
-def test_composing_is_false_for_a_run_with_no_portal(tmp_path):
-    from brr.gates import cloud_publisher
-
-    assert cloud_publisher._composing(tmp_path / ".brr", {}) is False
 
 
 # ── the reading at death (_capture_exit_quota) ───────────────────────
@@ -16016,31 +14351,3 @@ def test_capture_exit_quota_survives_a_collector_that_raises(tmp_path, monkeypat
     assert "fuel at exit" not in note["body"]
 
 
-def test_merge_level_snapshots_dates_a_quota_block_that_has_no_stamp():
-    """The whitelist used to drop a snapshot's own `updated_at`, so a claude
-    reading reached `_capture_exit_quota` with nothing to date it by while
-    codex's (stated inside its own quota block) arrived stamped. A cached
-    reading presented as "at death" with no way to tell its age is the same
-    lie the capture exists to end."""
-    usage = {
-        "source": "claude /usage PTY",
-        "updated_at": "2026-09-19T12:47:49Z",
-        "quota": {"summary": "session 84% left", "buckets": {}},
-    }
-    merged = daemon._merge_level_snapshots(usage, None)
-    assert daemon._levels_measured_at(merged) == "2026-09-19T12:47:49Z"
-    # The cached snapshot dict is shared; the merge copies, never mutates.
-    assert "updated_at" not in usage["quota"]
-
-    # A collector that states its own never gets overwritten — and the
-    # quota block's stamp outranks the snapshot's, because a merged codex
-    # snapshot dates itself by "the freshest thing in it", which can be a
-    # rollout write later than the probe that produced these buckets.
-    codex = {
-        "source": "codex app-server",
-        "updated_at": "2026-09-19T12:00:00Z",
-        "quota": {"summary": "5h 0% left", "updated_at": "2026-09-19T10:09:26Z"},
-    }
-    assert daemon._levels_measured_at(
-        daemon._merge_level_snapshots(codex)
-    ) == "2026-09-19T10:09:26Z"

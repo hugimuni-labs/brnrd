@@ -130,7 +130,7 @@ def proposal_line(proposal: dict | None) -> str:
     if not proposal:
         return ""
     return (f"face? {proposal['face']} for {proposal['token']} ({proposal['fact']}): "
-            "`python -m brr.loom.runtime face take` wears it, `face <face>` wears another, "
+            "`brnrd runtime face take` wears it, `face <face>` wears another, "
             "your next letter lets it lapse")
 
 

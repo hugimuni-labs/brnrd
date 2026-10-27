@@ -111,7 +111,7 @@ else:
         # Once decided, the next boundary proposes nothing, and take has nothing to wear.
         assert result["early"][0] == 1 and "nothing is proposed" in result["early"][1]
         short = letter.rpartition("/")[2]
-        assert result["asked"] == [f"face? b°O°d for your {short} ({letter}): `python -m brr.loom.runtime "
+        assert result["asked"] == [f"face? b°O°d for your {short} ({letter}): `brnrd runtime "
                                    "face take` wears it, `face <face>` wears another, your next letter lets it lapse"]
         assert result["wordmark"][0] == 1 and "give the face itself" in result["wordmark"][1]
         assert result["named"][0] == 1 and "give the face itself" in result["named"][1]

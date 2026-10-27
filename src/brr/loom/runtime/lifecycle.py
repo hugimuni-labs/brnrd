@@ -132,8 +132,8 @@ def open_thread(room: Path, thread: str, sender: str, text: str,
     if _current_label(resolve_clone(room), sender).taint:
         raise PortError("send: a tainted strand cannot open a thread on main; "
                         f"send a clean letter to {home_of_room(room).main_thread()} instead")
-    if body_choice is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*/[^\s]+", body_choice):
-        raise PortError("send: --body must be shell/core")
+    if body_choice is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*(/[^\s]+)?", body_choice):
+        raise PortError("send: --body must be shell or shell/core")
     from .adapters import repos
     if any("\n" in source or "\r" in source for source in repo_sources):
         raise PortError("send: --repo must be one seat line")
@@ -214,10 +214,44 @@ def settle(room: Path, thread: str, why: str, retire: bool = False,
     if pending and hand_to is None:
         raise PortError(f"settle: delivered wishes await a verdict: {', '.join(pending)}; "
                         "record a verdict or use --hand-to <thread>")
-    for ident in pending:
-        append(home, wish_fact(facts, by="strand:" + strand_of_room(room),
-                               ident=ident, thread=hand_to))
+    handed = [wish_fact(facts, by="strand:" + strand_of_room(room), ident=ident, thread=hand_to)
+              for ident in pending]
+    for fact in reopen_for(room, handed):
+        append(home, fact)
+    for stamp in handed:
+        append(home, stamp)
     land_status(room, thread, "retired" if retire else "settled", f"settle {thread}: {why}")
+
+
+def reopen_for(room: Path, stamps) -> list:
+    """A wish placed on a closed thread opens it again, whatever placed it.
+
+    Every ``wish`` stamp names a thread and leaves the wish open, so a closed
+    thread holding it would hold open work. The status line on main stays the
+    one store: it flips to ``open`` here, before the stamp lands. The returned
+    ``thread.reopened`` facts are the event the next wake reads, never a state.
+    """
+    from brr.daemon2.facts import Fact
+    from .home import mint
+    from .registry import admit
+    home = home_of_room(room)
+    out, seen = [], set()
+    for stamp in stamps:
+        thread = stamp.data.get("thread")
+        if not thread or thread in seen:
+            continue
+        seen.add(thread)
+        status = read_thread(home, thread).get("status")
+        if status not in CLOSED:
+            continue
+        sha, why, _ = closing_commit(home, thread)
+        land_status(room, thread, "open", f"reopen {thread}: {stamp.data['wish']} placed on it")
+        fact = Fact(kind="thread.reopened", by=stamp.by, id="thread.reopened:" + mint(12),
+                    data={"thread": thread, "wish": stamp.data["wish"], "was": status,
+                          "closed": sha, "why": why})
+        admit(fact)
+        out.append(fact)
+    return out
 
 
 _closing: dict[tuple[str, str, str], tuple[str, str, str]] = {}

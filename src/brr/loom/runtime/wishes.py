@@ -456,7 +456,17 @@ def wake_wishes(facts: Iterable[Fact], thread: str, plan_rows=()) -> str:
         return ""
     rows.sort(key=lambda w: (w.sender != "resident", w.id))
     bodies = {str(f.data.get("id", f.id)): str(f.data.get("body", "")) for f in facts if f.kind == "letter"}
-    section = "## Wishes\n" + "".join(line + "\n" for w in rows[:20] for line in wish_tree(w, bodies, plan_rows))
+    section = "## Wishes\n"
+    # The last reopen, while the wish that reopened it is still open here.
+    held = {w.id for w in rows}
+    reopen = max((f for f in facts if f.kind == "thread.reopened" and f.data.get("thread") == thread
+                  and f.data.get("wish") in held), key=lambda f: f.at, default=None)
+    if reopen is not None:
+        d = reopen.data
+        section += (f"reopened {reopen.at[5:16].replace('T', ' ')}: {d['wish']} placed by "
+                    f"{reopen.by.removeprefix('strand:')} on a thread {d['was']}"
+                    + (f" as: {_short(d['why'], 120)}" if d.get("why") else "") + "\n")
+    section += "".join(line + "\n" for w in rows[:20] for line in wish_tree(w, bodies, plan_rows))
     if len(rows) > 20:
         section += f"+{len(rows) - 20} more · wishes --thread {thread}\n"
     return section

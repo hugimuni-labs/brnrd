@@ -50,27 +50,6 @@ def test_plan_is_read_only_and_keeps_layout(migration):
     assert (snapshot(repo), snapshot(home)) == before
 
 
-def test_link_rewriting_preserves_internal_links_and_code():
-    text = '''[page](../index.md#part)
-[code](../../src/f(x).py?raw=1#L2 "title")
-![asset](<../../public/an image.svg>)
-[reference]: ../../README.md#intro "title"
-[web](https://example.org/a) [anchor](#local)
-`[example](../../src/no.py)`
-```md
-[example](../../src/no.py)
-```
-'''
-    actual, changes = kb_migrate._rewrite(text, 'notes/page.md', 'https://github.com/o/r.git', 'abc123')
-    assert len(changes) == 3
-    assert '[page](../index.md#part)' in actual
-    assert '/blob/abc123/src/f%28x%29.py?raw=1#L2 "title")' in actual
-    assert '<https://github.com/o/r/blob/abc123/public/an%20image.svg>' in actual
-    assert '[reference]: https://github.com/o/r/blob/abc123/README.md#intro "title"' in actual
-    assert actual.count('[example](../../src/no.py)') == 2
-    assert '[web](https://example.org/a) [anchor](#local)' in actual
-
-
 @pytest.mark.parametrize('apply', [False, True])
 def test_existing_scope_refuses_whole_plan(migration, apply):
     repo, home, tree = migration

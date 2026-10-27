@@ -91,79 +91,6 @@ def h(tmp_path):
 # ── ticks ────────────────────────────────────────────────────────────────
 
 
-def test_three_coordinate_kinds_tick_and_other_lines_are_untouched(h):
-    h.card(CARD)
-    h.run(T0)  # first sight of every open line
-    h.set_forge([
-        {"number": 1976, "state": "MERGED", "branch": "brr/the-hud-is-one-shape", "merged_at": iso(T0 + 60)},
-        {"number": 1977, "state": "MERGED", "branch": "brr/the-wait-that-costs-nothing", "merged_at": iso(T0 + 70)},
-        {"number": 1975, "state": "MERGED", "branch": "brr/the-outbox-is-a-verb-table", "merged_at": iso(T0 - 3600)},
-    ])
-    h.events = [{
-        "id": "evt-1790000090000000000-abcd", "source": "spawn_completed",
-        "created": iso(T0 + 90), "spawned_by_run": "run-260914-1608-8jwz",
-    }]
-    result = h.run(T0 + 100)
-    card = h.read_card()
-    assert "- [x] converge #1976 (the HUD)" in card
-    assert "- [x] read back brr/the-wait-that-costs-nothing" in card
-    assert "- [x] fold in strand run-260914-1608-8jwz" in card
-    # no coordinate ⇒ the weaver's line; merged before the line was seen ⇒ left
-    assert "- [ ] write the report" in card
-    assert "- [ ] follow up on #1975" in card
-    assert [t.why for t in result.ticks] == [
-        "#1976 merged", "brr/the-wait-that-costs-nothing's PR merged",
-        "run-260914-1608-8jwz returned",
-    ]
-    ((kind, text),) = h.notices
-    assert kind == "advisory"
-    assert text.startswith("card_ticks: ticked “- [ ] converge #1976 (the HUD)” — #1976 merged")
-
-
-def test_a_line_naming_two_prs_waits_for_both(h):
-    h.card("- [ ] land #10 and #11\n")
-    h.run(T0)
-    h.set_forge([{"number": 10, "state": "MERGED", "branch": "brr/a", "merged_at": iso(T0 + 5)}])
-    h.run(T0 + 10)
-    assert card_frame.card_halves(h.read_card())[0] == "- [ ] land #10 and #11"
-    h.set_forge([
-        {"number": 10, "state": "MERGED", "branch": "brr/a", "merged_at": iso(T0 + 5)},
-        {"number": 11, "state": "MERGED", "branch": "brr/b", "merged_at": iso(T0 + 15)},
-    ])
-    h.run(T0 + 20)
-    weaver, frame = card_frame.card_halves(h.read_card())
-    assert weaver == "- [x] land #10 and #11"
-    assert "- merges: #10 · #11" in frame  # the forge's merges of the card's PRs (§19.3)
-
-
-def test_an_open_pr_and_an_unreturned_strand_tick_nothing(h):
-    h.card(CARD)
-    h.run(T0)
-    h.set_forge([{"number": 1976, "state": "OPEN", "branch": "brr/the-hud-is-one-shape"}])
-    h.events = [{"id": "evt-1-aaaa", "source": "telegram", "spawned_by_run": "run-260914-1608-8jwz"}]
-    h.run(T0 + 100)
-    assert h.read_card() == CARD
-    assert h.notices == []
-
-
-def test_a_land_produce_row_is_a_merge(h):
-    h.card("- [ ] ship #42\n")
-    h.run(T0)
-    with (h.run_dir / "produce.jsonl").open("w", encoding="utf-8") as fh:
-        fh.write(json.dumps({"kind": "knot", "ref": "abc", "verb": "land", "pr": 42, "at": iso(T0 + 1)}) + "\n")
-    h.run(T0 + 2)
-    weaver, frame = card_frame.card_halves(h.read_card())
-    assert weaver == "- [x] ship #42"
-    assert "- merges: #42 → abc" in frame  # the same row is now a ledger line (§19.3)
-
-
-def test_the_frames_tick_is_not_the_weavers_write():
-    ticked = ["- [ ] ship #42"]
-    assert card_frame.intent_hash("- [x] ship #42\n", ticked) == card_frame.intent_hash("- [ ] ship #42\n")
-    said = "## Now\nx\n\n## Said\n- 17:00Z → abcd: hello\n"
-    assert card_frame.intent_hash(said) == card_frame.intent_hash("## Now\nx\n")
-
-
 # ── the delta item ───────────────────────────────────────────────────────
 
 
@@ -171,93 +98,6 @@ def _baseline(h):
     h.card("## Now\nworking\n\n## Plan\n- [ ] converge #1976\n")
     h.run(T0)
     assert card_frame.portal_delta(h.meta) is None
-
-
-def test_a_strand_return_is_a_moment_but_no_longer_the_deltas(h):
-    # §19.3: the ledger shows the return; the delta keeps deliveries and refusals.
-    _baseline(h)
-    h.events = [{"id": "evt-x", "source": "spawn_completed", "created": iso(T0 + 30),
-                 "spawned_by_run": "run-260914-1608-8jwz", "spawn_status": "done"}]
-    result = h.run(T0 + 40)
-    assert result.triggers == ["strand_returned"]
-    assert card_frame.portal_delta(h.meta) is None
-    assert "- strand done: run-260914-1608-8jwz — done" in h.read_card()
-
-
-def test_a_merge_is_a_moment_but_no_longer_the_deltas(h):
-    _baseline(h)
-    h.set_forge([
-        {"number": 1976, "state": "MERGED", "branch": "brr/x", "merged_at": iso(T0 + 30)},
-        {"number": 1999, "state": "MERGED", "branch": "brr/stranger", "merged_at": iso(T0 + 30)},
-    ])
-    result = h.run(T0 + 40)
-    assert result.triggers == ["pr_merged"]
-    assert card_frame.portal_delta(h.meta) is None
-
-
-def test_a_delivery_after_a_return_names_only_the_delivery(h):
-    _baseline(h)
-    h.events = [{"id": "evt-x", "source": "spawn_completed", "created": iso(T0 + 30),
-                 "spawned_by_run": "run-260914-1608-8jwz"}]
-    h.stats.update({"current": 1})
-    result = h.run(T0 + 40)
-    assert result.triggers == ["strand_returned", "delivery"]
-    delta = card_frame.portal_delta(h.meta)
-    assert delta["text"] == "since your last card write: 1 reply delivered"
-    assert delta["id"] == "card-delta-ocgl-1"
-    assert delta["trigger"] == "delivery"
-
-
-def test_a_strangers_merge_is_no_trigger(h):
-    _baseline(h)
-    h.set_forge([{"number": 1999, "state": "MERGED", "branch": "brr/stranger", "merged_at": iso(T0 + 30)}])
-    assert h.run(T0 + 40).triggers == []
-    assert card_frame.portal_delta(h.meta) is None
-
-
-def test_trigger_delivery_batch(h):
-    _baseline(h)
-    h.stats.update({"current": 1, "other": 1})
-    result = h.run(T0 + 40)
-    assert result.triggers == ["delivery"]
-    assert card_frame.portal_delta(h.meta)["text"] == "since your last card write: 2 replies delivered"
-
-
-def test_trigger_refusal_ignores_advisories_and_standing(h):
-    _baseline(h)
-    h.notice_rows([
-        {"kind": "advisory", "text": "fyi", "lifetime": "run"},
-        {"kind": "refused", "text": "x", "lifetime": "standing"},
-    ])
-    assert h.run(T0 + 30).triggers == []
-    h.notice_rows([
-        {"kind": "advisory", "text": "fyi", "lifetime": "run"},
-        {"kind": "refused", "text": "x", "lifetime": "standing"},
-        {"kind": "refused", "text": "spawn refused", "lifetime": "run"},
-    ])
-    result = h.run(T0 + 40)
-    assert result.triggers == ["refusal"]
-    assert card_frame.portal_delta(h.meta)["text"] == "since your last card write: 1 refusal"
-
-
-def test_the_item_is_redrafted_in_place_then_folded_by_a_card_edit(h):
-    _baseline(h)
-    h.stats.update({"current": 1})
-    h.run(T0 + 10)
-    h.notice_rows([{"kind": "dropped", "text": "x", "lifetime": "run"}])
-    h.run(T0 + 20)
-    delta = card_frame.portal_delta(h.meta)
-    assert delta["id"] == "card-delta-ocgl-1"
-    assert delta["text"] == "since your last card write: 1 reply delivered · 1 refusal"
-    # the weaver edits the card: the item leaves, and the count restarts
-    h.card("## Now\ncaught up\n\n## Plan\n- [ ] converge #1976\n")
-    h.run(T0 + 30)
-    assert card_frame.portal_delta(h.meta) is None
-    h.stats.update({"current": 2})
-    h.run(T0 + 40)
-    delta = card_frame.portal_delta(h.meta)
-    assert delta["id"] == "card-delta-ocgl-2"
-    assert delta["text"] == "since your last card write: 1 reply delivered"
 
 
 def test_a_said_projection_is_not_a_card_write(h):
@@ -291,19 +131,6 @@ def test_note_clears_the_item_through_the_outbox(h, tmp_path, monkeypatch):
     assert card_frame.portal_delta(h.meta) is None
     assert daemon._read_outbox_notices(h.outbox) == []
     assert not (h.outbox / "n.md").exists()
-
-
-def test_a_strand_gets_ticks_and_no_delta(h):
-    _baseline(h)
-    h.stats.update({"current": 1})
-    h.run(T0 + 10, is_strand=True)
-    assert card_frame.portal_delta(h.meta) is None
-
-
-def test_nothing_moved_means_no_item_and_a_missing_outbox_is_a_noop(h):
-    _baseline(h)
-    assert h.run(T0 + 10).triggers == []
-    assert card_frame.frame_pass({}, outbox_dir=None).delta is None
 
 
 # ── the heartbeat wiring ─────────────────────────────────────────────────

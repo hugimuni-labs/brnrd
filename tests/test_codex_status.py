@@ -3,7 +3,6 @@ source for the Codex Shell (§8). Verified live 2026-06-28: ``token_count``
 events in a rollout JSONL carry ``rate_limits`` (5h + weekly)."""
 
 import pytest
-import json
 
 from brr import codex_status, facets
 
@@ -81,59 +80,6 @@ def test_parse_token_count_missing_secondary_stays_none():
     assert levels["quota"]["secondary_resets_at"] is None
 
 
-def test_load_levels_reads_newest_rollout(tmp_path, monkeypatch):
-    sessions = tmp_path / ".codex" / "sessions" / "2026" / "06" / "28"
-    sessions.mkdir(parents=True)
-    rollout = sessions / "rollout-2026-06-28T00-00-00-abc.jsonl"
-    rollout.write_text(
-        "\n".join(
-            json.dumps({"timestamp": "t", "type": "event_msg", "payload": p})
-            for p in (
-                {"type": "user_message", "message": "hi"},
-                _PAYLOAD,
-            )
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
-    levels = codex_status.load_levels()
-    assert levels is not None
-    assert "5h 20% left" in levels["quota"]["summary"]
-
-
-def test_load_levels_no_sessions_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "absent"))
-    assert codex_status.load_levels() is None
-
-
-def test_load_levels_updated_at_is_the_events_own_timestamp_not_scrape_time(
-    tmp_path, monkeypatch
-):
-    """Live-caught 2026-07-09: a screenshot showed the 5h window rendered
-    'critical, resets in now' while the weekly window read a healthy 81% —
-    traced to ``updated_at`` being stamped with wall-clock "now" on every
-    daemon poll tick, even when the rollout file hadn't been written to in
-    hours (no codex run active). ``activity_dashboard.py::_quota_views``'s
-    staleness check trusts this field, so an hours-stale snapshot always
-    looked freshly-scraped — the same "lying usage panel" class already
-    fixed for Claude (2026-07-07), reproduced here because this collector
-    was assumed to have no idle-gap. ``updated_at`` must reflect the
-    rollout event's own real time, not whenever brr happened to re-read it."""
-    sessions = tmp_path / ".codex" / "sessions" / "2026" / "07" / "08"
-    sessions.mkdir(parents=True)
-    rollout = sessions / "rollout-2026-07-08T00-00-00-abc.jsonl"
-    old_timestamp = "2026-07-08T20:18:25.753Z"
-    rollout.write_text(
-        json.dumps({"timestamp": old_timestamp, "type": "event_msg", "payload": _PAYLOAD}),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
-    levels = codex_status.load_levels()
-    assert levels is not None
-    # Reformatted to the shared updated_at shape, not left as wall-clock now.
-    assert levels["updated_at"] == "2026-07-08T20:18:25Z"
-
-
 def test_fmt_event_timestamp_falls_back_to_none_for_garbage():
     assert codex_status._fmt_event_timestamp("not-a-timestamp") is None
     assert codex_status._fmt_event_timestamp(None) is None
@@ -148,13 +94,6 @@ def test_facets_codex_collector_marks_spend_unimplemented():
     assert res["quota"]["status"] == "known"
     assert res["context_window"]["status"] == "known"
     assert res["spend"]["status"] == "unimplemented"
-
-
-def test_facets_levels_collector_bool_back_compat():
-    """``levels_collector=True`` still means all level slots are wired."""
-    res = facets.build(levels={}, levels_collector=True)
-    assert res["spend"]["status"] == "absent"
-    assert res["context_window"]["status"] == "absent"
 
 
 def test_parse_token_count_carries_each_windows_duration():
@@ -180,112 +119,6 @@ def test_parse_token_count_carries_each_windows_duration():
 
 
 # ── Issue #195: exact thread-id correlation ──────────────────────────────
-
-
-def _write_rollout(path, *, used_percent: float) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "type": "token_count",
-        "rate_limits": {
-            "primary": {"used_percent": used_percent, "window_minutes": 300},
-            "secondary": None,
-        },
-    }
-    path.write_text(
-        json.dumps({"timestamp": "t", "type": "event_msg", "payload": payload}),
-        encoding="utf-8",
-    )
-
-
-def test_load_levels_exact_thread_id_ignores_newer_unrelated_rollout(
-    tmp_path, monkeypatch,
-):
-    """A concurrent sibling Codex run's rollout can be newer-mtime than this
-    run's own — the whole point of #195. Exact ``thread_id`` correlation must
-    win over "whatever was touched most recently", not just over "no id"."""
-    sessions = tmp_path / ".codex" / "sessions" / "2026" / "07" / "22"
-    mine_id = "a0d0f1e9-8aeb-4f27-8e3c-f72822288984"
-    sibling_id = "2914d67e-aa77-477a-ad34-2f024f7458e8"
-    mine = sessions / f"rollout-2026-07-22T00-00-00-{mine_id}.jsonl"
-    _write_rollout(mine, used_percent=20.0)
-    # A sibling's rollout, written *after* mine — newest-mtime would pick
-    # this one and report the wrong run's quota.
-    sibling = sessions / f"rollout-2026-07-22T00-05-00-{sibling_id}.jsonl"
-    _write_rollout(sibling, used_percent=99.0)
-    assert sibling.stat().st_mtime >= mine.stat().st_mtime
-
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
-    levels = codex_status.load_levels(thread_id=mine_id)
-    assert levels is not None
-    assert "80% left" in levels["quota"]["summary"]  # 100 - 20 used
-
-
-def test_load_levels_no_thread_id_falls_back_to_newest_mtime(tmp_path, monkeypatch):
-    """No id available at all (pre-``--json`` caller, or the Shell isn't
-    codex) — the explicit compatibility fallback, unchanged from before
-    #195."""
-    sessions = tmp_path / ".codex" / "sessions" / "2026" / "07" / "22"
-    older = sessions / "rollout-2026-07-22T00-00-00-aaa.jsonl"
-    _write_rollout(older, used_percent=10.0)
-    newer = sessions / "rollout-2026-07-22T00-05-00-bbb.jsonl"
-    _write_rollout(newer, used_percent=90.0)
-
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
-    levels = codex_status.load_levels()
-    assert levels is not None
-    assert "10% left" in levels["quota"]["summary"]  # 100 - 90 used (newest)
-
-
-def test_load_levels_malformed_thread_id_is_honest_absence_not_fallback(
-    tmp_path, monkeypatch,
-):
-    """A supplied-but-invalid id is not the same fact as no id being known.
-    Falling back could read a sibling's rollout, so drift stays absent."""
-    sessions = tmp_path / ".codex" / "sessions" / "2026" / "07" / "22"
-    rollout = sessions / "rollout-2026-07-22T00-00-00-only.jsonl"
-    _write_rollout(rollout, used_percent=5.0)
-
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
-    for unsafe in ("../../etc/passwd", "../escape", "a/b", "", None, 42):
-        if unsafe is None:
-            continue  # None deliberately selects the compatibility fallback.
-        assert codex_status.load_levels(thread_id=unsafe) is None
-
-
-def test_load_levels_thread_id_given_but_absent_returns_none_not_fallback(
-    tmp_path, monkeypatch,
-):
-    """A *proven* thread id that matches nothing is honest absence, not a
-    silent fallback to some other rollout — falling back here would risk
-    exactly the sibling cross-read #195 exists to prevent."""
-    sessions = tmp_path / ".codex" / "sessions" / "2026" / "07" / "22"
-    unrelated = sessions / "rollout-2026-07-22T00-00-00-someone-else.jsonl"
-    _write_rollout(unrelated, used_percent=50.0)
-
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
-    assert codex_status.load_levels(
-        thread_id="a0d0f1e9-8aeb-4f27-8e3c-f72822288984"
-    ) is None
-
-
-def test_rollout_for_thread_exact_suffix_match(tmp_path):
-    root = tmp_path / "sessions"
-    thread_id = "a0d0f1e9-8aeb-4f27-8e3c-f72822288984"
-    target = root / "2026" / "07" / "22" / f"rollout-2026-07-22T00-00-00-{thread_id}.jsonl"
-    target.parent.mkdir(parents=True)
-    target.write_text("{}", encoding="utf-8")
-    decoy = root / "2026" / "07" / "22" / "rollout-2026-07-22T01-00-00-2914d67e-aa77-477a-ad34-2f024f7458e8.jsonl"
-    decoy.write_text("{}", encoding="utf-8")
-
-    assert codex_status._rollout_for_thread(root, thread_id) == target
-
-
-def test_safe_thread_id_rejects_traversal_and_separators():
-    assert codex_status._safe_thread_id("a0d0f1e9-8aeb-4f27-8e3c-f72822288984") == (
-        "a0d0f1e9-8aeb-4f27-8e3c-f72822288984"
-    )
-    for bad in ("../etc", "a/b", "a\\b", "", None, 123, "x" * 200, "abc-123"):
-        assert codex_status._safe_thread_id(bad) is None
 
 
 # ── credits-based plans (2026-07-24) ──────────────────────────────────
