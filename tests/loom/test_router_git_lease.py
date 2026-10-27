@@ -85,3 +85,48 @@ def test_the_first_git_gen_starts_above_the_homes_local_gens(tmp_path):
 def test_without_lease_remote_there_is_no_gate(tmp_path):
     home = Home(tmp_path / "aaaa", install="aaaa")
     assert Router(home).gate is None
+
+
+def test_the_git_lease_lasts_at_least_90_seconds_under_the_default_router_ttl(tmp_path):
+    remote = tmp_path / "self.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+    home = Home(tmp_path / "aaaa", install="aaaa")
+    (home.root / "loom").mkdir(parents=True, exist_ok=True)
+    (home.root / "loom/config.toml").write_text(f'lease_remote = "{remote}"\n')
+    router = _router(home, 100)
+    assert router.config.router_ttl == 30
+    router.begin_tick(read_facts(home))
+    assert router.gate.view("inbox")["ttl"] == 90
+    # Past the local 30 s, inside the git 90 s: still armed, nothing fenced.
+    router.gate.clock.now += 60
+    facts = router.begin_tick(read_facts(home))
+    assert router.armed()
+    assert not [f for f in facts if f.kind == "lease.fenced"]
+
+
+def test_a_fence_opens_a_lease_streak_and_taking_the_lease_back_closes_it(tmp_path):
+    from brr.loom.runtime.health import degraded_line, open_streaks
+    remote = tmp_path / "self.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+    a_home, b_home = _home(tmp_path, "aaaa", remote), _home(tmp_path, "bbbb", remote)
+    a, b = _router(a_home, 100), _router(b_home, 9_000)
+    a.begin_tick(read_facts(a_home))
+    b.begin_tick(read_facts(b_home))
+
+    a.gate.clock.now += 100
+    b.gate.clock.now += 100
+    b.begin_tick(read_facts(b_home))
+    a.begin_tick(read_facts(a_home))
+    [streak] = open_streaks(read_facts(a_home), "aaaa")
+    assert streak.data["step"] == "lease"
+    assert degraded_line(read_facts(a_home), "aaaa").startswith("degraded: lease since")
+    # A second fenced tick does not open a second streak.
+    a.begin_tick(read_facts(a_home))
+    assert len(open_streaks(read_facts(a_home), "aaaa")) == 1
+
+    # b goes silent in turn; a takes inbox back and the streak closes.
+    b.gate.clock.now += 200
+    a.gate.clock.now += 200
+    a.begin_tick(read_facts(a_home))
+    assert a.gate_lease is not None and a.gate_lease.gen == 3
+    assert open_streaks(read_facts(a_home), "aaaa") == []

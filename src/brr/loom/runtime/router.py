@@ -8,6 +8,7 @@ this one is still granting.
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 
 from brr.daemon2.facts import Fact
@@ -25,6 +26,8 @@ from .lifecycle import main_snapshot
 from .speak import speak
 
 REST_FACE = "b·_·d"
+#: The shortest git inbox lease, whatever ``router_ttl`` says (design §3.1: renew every 30 s).
+GATE_MIN_TTL = 90.0
 
 
 def install_of(strand: str) -> str | None:
@@ -119,6 +122,9 @@ class Router:
         self.gate = gate_for(home, self.config)
         self.gate_lease: Lease | None = None
         self._gate_at: float | None = None
+        # A git renew is a network round trip that may stall for tens of
+        # seconds; 30 s, the local default, would fence on one slow push.
+        self.gate_ttl = max(float(self.config.router_ttl), GATE_MIN_TTL)
 
     def _window(self) -> bool:
         if self.lease is None:
@@ -186,12 +192,13 @@ class Router:
         return all(g in held for g in range(gen, self.lease.gen + 1))
 
     def _gate_tick(self, facts: list[Fact]) -> list[Fact]:
-        """Renew or take the git inbox lease, at most every ``router_ttl / 3``.
+        """Renew or take the git inbox lease, at most every ``gate_ttl / 3``.
 
         Losing it releases the local lease at once, so ``speak`` steps down
-        before the next send, and records ``lease.fenced``.
+        before the next send, and records ``lease.fenced`` and a
+        ``loom.degraded`` streak at step ``lease`` that taking it back closes.
         """
-        ttl = self.config.router_ttl
+        ttl = self.gate_ttl
         now = self.gate.clock()
         if self._gate_at is not None and now - self._gate_at < ttl / 3:
             if self.gate_lease is not None and not self.gate.authorize(self.gate_lease):
@@ -207,7 +214,24 @@ class Router:
         row = self.authority._read(self.authority._paths("router")[0])
         self.gate_lease = self.gate.acquire("inbox", self.home.install_id(), ttl,
                                             floor=int(row["gen"]) + 1)
+        if self.gate_lease is not None:
+            facts = self._recovered(facts)
         return facts
+
+    def _lease_streak(self, facts: list[Fact]) -> Fact | None:
+        from .health import open_streaks
+        return next((f for f in open_streaks(facts, self.home.install_id())
+                     if f.data.get("step") == "lease"), None)
+
+    def _recovered(self, facts: list[Fact]) -> list[Fact]:
+        streak = self._lease_streak(facts)
+        if streak is None:
+            return facts
+        install = self.home.install_id()
+        return self._keep(facts, "loom.recovered", {
+            "install": install, "step": "lease", "since": streak.data["since"],
+            "count": 1, "last": streak.data.get("error", ""),
+        }, streak.id.replace("loom.degraded:", "loom.recovered:", 1))
 
     def _fence(self, facts: list[Fact], why: str) -> list[Fact]:
         gen = self.gate_lease.gen if self.gate_lease else 0
@@ -218,9 +242,18 @@ class Router:
         self.lease = None
         self.granting = False
         self.caught_up = False
-        return self._keep(facts, "lease.fenced", {
-            "install": self.home.install_id(), "gen": gen, "why": why,
-        }, f"lease.fenced:{self.home.install_id()}:{gen}:{why}")
+        install = self.home.install_id()
+        facts = self._keep(facts, "lease.fenced", {
+            "install": install, "gen": gen, "why": why,
+        }, f"lease.fenced:{install}:{gen}:{why}")
+        if self._lease_streak(facts) is None:
+            from .health import _iso
+            since = _iso(time.time())
+            facts = self._keep(facts, "loom.degraded", {
+                "install": install, "step": "lease", "error": f"fenced: inbox gen {gen} {why}",
+                "where": "", "since": since,
+            }, f"loom.degraded:{install}:lease:{since}")
+        return facts
 
     def begin_tick(self, facts: list[Fact]) -> list[Fact]:
         if self.gate is not None:
