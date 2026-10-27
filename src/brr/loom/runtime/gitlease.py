@@ -1,10 +1,11 @@
 """Leases held as refs on the self's remote, swapped by ``git push --force-with-lease``.
 
 A lease is ``refs/leases/<what>``: a commit with an empty tree whose message is
-one JSON line, ``{holder, gen, ttl, ledger, released}``. Acquire, renew and
+one JSON line, ``{holder, gen, ttl, ledger, released, preferred?}``. Acquire, renew and
 release are one atomic push that names the sha this loom last saw, so of two
 racing pushes exactly one lands. A renewal keeps ``gen`` and changes the sha;
-a takeover bumps ``gen``.
+a takeover bumps ``gen``. A release that names ``preferred`` is a handover:
+every other install yields to it for ``ttl`` after it first saw the release.
 
 No two machines compare clocks. The holder's lease runs ``ttl`` from the moment
 it began the push that landed. A follower counts ``ttl + margin`` from the
@@ -200,6 +201,8 @@ class GitLeaseAuthority:
         current = self.view(what)
         if current is not None and not current["expired"] and current.get("holder") != holder:
             return None
+        if current is not None and self._yields(what, current, holder):
+            return None
         gen = max(int(current.get("gen", 0)) + 1 if current else 1, floor)
         expected = current["sha"] if current else ""
         # Whose ledger a new holder must have read before it grants.
@@ -251,13 +254,26 @@ class GitLeaseAuthority:
         return (lease.what in self.graced and not self.strict
                 and not self.contested(lease.holder))
 
-    def release(self, lease: Lease) -> bool:
+    def _yields(self, what: str, current: dict, holder: str) -> bool:
+        """Released to another install, which has ``ttl`` from when this one
+        first saw the release to take it; after that anyone may."""
+        preferred = current.get("preferred")
+        if not current.get("released") or not preferred or preferred == holder:
+            return False
+        ttl = float(current.get("ttl", 0) or 0)
+        return self.clock() - self.seen[LEASES + what].at <= ttl + self.margin
+
+    def release(self, lease: Lease, *, preferred: str = "", ttl: float = 0.0) -> bool:
+        """Give the lease up. With ``preferred``, hand it to that install:
+        the others, this one included, yield to it for ``ttl``."""
         held = self.held.get(lease.what)
         if held is None or held[0].gen != lease.gen:
             return False
+        body = {"holder": lease.holder, "gen": lease.gen, "ttl": 0, "released": True}
+        if preferred:
+            body.update(preferred=preferred, ttl=ttl)
         try:
-            sha, _t = self._push(lease.what, {"holder": lease.holder, "gen": lease.gen,
-                                              "ttl": 0, "released": True}, held[1])
+            sha, _t = self._push(lease.what, body, held[1])
         except Unreachable:
             sha = ""
         self._drop(lease.what)

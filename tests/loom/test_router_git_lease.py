@@ -175,3 +175,62 @@ def test_a_fenced_install_s_seated_body_leaves_and_stays_once_the_lease_is_back(
     a.begin_tick(read_facts(a_home))
     o, c = observe()
     assert [x.name for x in decide(read_facts(a_home), [o])] == ["stayed"]
+
+
+def test_a_prefer_hands_inbox_to_that_install_and_the_old_holder_s_bodies_leave(tmp_path, monkeypatch):
+    """``machines prefer bbbb`` written on b reaches a on the ledger; a steps
+    down and releases inbox to b, b takes it at once, and a does not take it
+    back. a's seated body leaves with no degraded streak."""
+    from brr.loom.runtime import lifecycle, loom
+    from brr.loom.runtime.__main__ import main
+    from brr.loom.runtime.bodies import decide
+    from brr.loom.runtime.health import open_streaks
+    remote = tmp_path / "self.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+    a_home, b_home = _home(tmp_path, "aaaa", remote), _home(tmp_path, "bbbb", remote)
+    a, b = _router(a_home, 100), _router(b_home, 9_000)
+    a.begin_tick(read_facts(a_home))
+    b.begin_tick(read_facts(b_home))
+    assert a.armed() and not b.armed()
+    monkeypatch.setattr(loom, "body_alive", lambda room: True)
+    monkeypatch.setattr(lifecycle, "read_thread", lambda *a: {"status": "open"})
+    strand = "s-aaaa-000001"
+    for kind, data in (("lease", {"thread": "work", "install": "aaaa", "router_gen": 1,
+                                  "shell": "fake", "core": "echo", "repos": []}),
+                       ("body.started", {"pid": 123, "shell": "fake", "core": "echo",
+                                         "readme": "", "lstart": "start"})):
+        append(a_home, Fact(kind=kind, by="loom:aaaa", id=f"{kind}:{strand}:1",
+                            data={"strand": strand, "gen": 1, **data}))
+
+    def observe():
+        o, _c = loom._observe_body(a_home, read_facts(a_home), strand, "work", 1, {}, force=True)
+        return [x.name for x in decide(read_facts(a_home), [o])]
+
+    assert observe() == []
+
+    assert main(["machines", "--home", str(b_home.root), "--install", "bbbb", "prefer", "bbbb"]) == 0
+    # The shuttle carries b's folder to a within a heartbeat.
+    b.shuttle._beat = None
+    b.shuttle.sync(holding=False)
+    a.shuttle._beat = None
+    a.shuttle.sync(holding=True)
+    a._gate_at = None
+    facts = a.begin_tick(read_facts(a_home))
+    [handed] = [f for f in facts if f.kind == "lease.handed"]
+    assert handed.data["to"] == "bbbb" and handed.data["gen"] == 1
+    assert a.gate_lease is None and not a.armed()
+    assert open_streaks(read_facts(a_home), "aaaa") == []
+    assert observe() == ["leaving"]
+
+    # No clock moved: b, the preferred install, takes it at once.
+    b._gate_at = None
+    b.begin_tick(read_facts(b_home))
+    assert b.gate_lease is not None and b.gate_lease.gen == 2
+
+    a._gate_at = None
+    a.begin_tick(read_facts(a_home))
+    assert a.gate_lease is None
+    # A second tick does not hand again or fence.
+    facts = read_facts(a_home)
+    assert len([f for f in facts if f.kind == "lease.handed"]) == 1
+    assert not [f for f in facts if f.kind == "lease.fenced"]
