@@ -639,7 +639,7 @@ def test_connect_approve_with_no_repo_id_creates_and_binds_the_suggested_repo(cl
     assert approve.status_code == 200
     body = approve.json()
     assert body["ok"] is True
-    assert "Your daemon is connected" in body["notice"]
+    assert "This computer is connected" in body["notice"]
 
     with client.app.state.SessionLocal() as db:
         repo = db.execute(select(Repo).where(Repo.repo_full_name == "Gurio/newbox")).scalar_one()
@@ -824,7 +824,7 @@ def test_connect_approve_makes_poll_return_token(client, monkeypatch):
     assert approve.status_code == 200
     body = approve.json()
     assert body["ok"] is True
-    assert "Your daemon is connected" in body["notice"]
+    assert "This computer is connected" in body["notice"]
     assert body["telegram"] is None
 
     # The CLI's poll now returns the freshly minted daemon token.
@@ -872,7 +872,7 @@ def test_connect_approve_leaves_messenger_pairing_to_the_connector_panel(monkeyp
     )
     assert approve.status_code == 200
     body = approve.json()
-    assert "Your daemon is connected" in body["notice"]
+    assert "This computer is connected" in body["notice"]
     assert body["telegram"] is None
 
     polled = client.get(

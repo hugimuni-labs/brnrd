@@ -142,7 +142,11 @@ def start_pair(
         )
     )
     db.commit()
-    pair_url = f"{settings.public_base_url.rstrip()}/connect"
+    # The page's own deep link: the code in the path opens the approve step,
+    # and in the fragment (never sent to a server) it is the initiator proof.
+    # One tap or one scan, nothing typed; the page shows the code so the
+    # person can match it against their terminal.
+    pair_url = f"{settings.public_base_url.rstrip('/')}/connect/{code}#{code}"
     return schemas.PairStarted(pair_code=code, pair_url=pair_url, poll_secret=secret, approve_secret=approve_secret, expires_at=expires_at)
 
 

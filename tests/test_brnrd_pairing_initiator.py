@@ -83,7 +83,7 @@ def _daemon_tokens(client) -> list[Token]:
 
 
 def test_start_pair_hands_the_initiator_a_human_device_code():
-    """The generic page asks for a 40-bit, one-time initiator proof."""
+    """A 40-bit, one-time initiator proof, carried by the approval link itself."""
     client = TestClient(
         create_app(
             Settings(
@@ -97,7 +97,9 @@ def test_start_pair_hands_the_initiator_a_human_device_code():
     assert secret
     assert secret == pair["pair_code"]
     assert len(pair["pair_code"].removeprefix("BR-")) == 8
-    assert pair["pair_url"] == "https://brnrd.example/connect"
+    # The link opens the approve step with the code; the proof rides in the fragment.
+    code = pair["pair_code"]
+    assert pair["pair_url"] == f"https://brnrd.example/connect/{code}#{code}"
     # Never stored in the clear — hashed exactly like the poll secret.
     row = _pair_row(client, pair["pair_code"])
     assert row.approve_secret_hash

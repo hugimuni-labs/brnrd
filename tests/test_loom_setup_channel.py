@@ -126,6 +126,7 @@ def test_relay_setup_signs_in_and_writes_the_gate_the_relay_reads(tmp_path):
         server.shutdown()
     assert done.returncode == 0, done.stderr
     assert 'Open http://approve.example/BR-T and sign in' in done.stdout
+    assert 'The page shows the code BR-T: approve only if it matches.' in done.stdout
     assert 'Signed in to brnrd.dev' in done.stdout
     # Bound to the home's self repo, which has no remote: the server makes a local repo for it.
     assert seen[0][:2] == ('POST', '/v1/accounts/pair') and seen[0][2]['forge'] == 'local'

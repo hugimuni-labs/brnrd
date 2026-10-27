@@ -514,7 +514,7 @@ def connect_approve_api(
     return JSONResponse(
         {
             "ok": True,
-            "notice": "Your daemon is connected. You can return to your terminal.",
+            "notice": "This computer is connected. You can return to your terminal.",
             # Door pairing is owned by the shared connector panel. Minting a
             # Telegram code here created an invisible duplicate code whenever
             # the user did not choose Telegram immediately.

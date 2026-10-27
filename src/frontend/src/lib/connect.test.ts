@@ -69,12 +69,12 @@ test('fetchConnectContext raises the auth error on 401', async () => {
 test('approveConnect posts the repo id and returns the backend notice', async () => {
 	const impl = fakeFetch(200, {
 		ok: true,
-		notice: 'Your daemon is connected. You can return to your terminal.',
+		notice: 'This computer is connected. You can return to your terminal.',
 		telegram: { pair_code: 'PK-1', instructions: 'send /start PK-1', deep_link: null }
 	});
 	const result = await approveConnect('BR-123', 'repo_1', 'proof-abc', impl);
 	assert.equal(result.ok, true);
-	assert.match(result.notice, /daemon is connected/);
+	assert.match(result.notice, /computer is connected/);
 	assert.equal(result.telegram?.pair_code, 'PK-1');
 	const calls = (impl as unknown as { calls: { url: string; init?: RequestInit }[] }).calls;
 	assert.equal(calls[0].init?.method, 'POST');
@@ -159,7 +159,7 @@ test('needsRepoEnable marks the one dead end that has somewhere to go', () => {
 test('approveConnect with no repo id posts an empty body (server auto-resolves)', async () => {
 	const impl = fakeFetch(200, {
 		ok: true,
-		notice: 'Your daemon is connected. You can return to your terminal.',
+		notice: 'This computer is connected. You can return to your terminal.',
 		telegram: null
 	});
 	await approveConnect('BR-123', '', 'proof-abc', impl);

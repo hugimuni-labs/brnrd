@@ -32,6 +32,7 @@ print(f"  Open {pair['pair_url']} and sign in to approve this computer"
 picture = qr_code(pair['pair_url']) if sys.stdout.isatty() else ''
 if picture:
     print(picture, flush=True)
+print(f"  The page shows the code {pair['pair_code']}: approve only if it matches.", flush=True)
 try:
     status = cloud.await_pair(url, pair, timeout_s=float(os.environ.get('BRNRD_PAIR_TIMEOUT', 600)))
 except TimeoutError:
