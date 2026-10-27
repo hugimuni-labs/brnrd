@@ -3,6 +3,7 @@
 	// below. Data is the loom's parts (design §D1), live over SSE; the order moves at most once per 10 s and holds while
 	// the sheet is open or the pointer is on a thread column (order.ts arrange).
 	import { onMount, untrack } from 'svelte';
+	import { updated } from '$app/state';
 	import './board.css';
 	import { arrange, bst, byThread, SETTLED, sortThreads, wanted } from '../order.ts';
 	import { INBOX } from '../sides.ts';
@@ -59,6 +60,18 @@
 		})
 	);
 
+	// A newer page (v44hse5kpf, 4912): reload at once, unless the box has focus and holds text; then say so, and
+	// leaving the box takes it. The draft and its armed wish ride sessionStorage across the reload either way.
+	$effect(() => {
+		if (updated.current) b.newer = true;
+	});
+	$effect(() => {
+		if (b.newer && !(b.writing && b.draft.trim())) {
+			b.keep();
+			location.reload();
+		}
+	});
+
 	onMount(() => {
 		// e2e reads the board's state here (src/frontend/e2e), as the board.html proofs read its globals
 		(window as unknown as { __board?: Board }).__board = b;
@@ -81,7 +94,9 @@
 			>{b.letters.length} letters · as {b.model?.person || '?'}{#if b.model?.via}
 				via {b.model.via}{/if}</span
 		>
-		<span id="live" class="dim" class:off={b.live === 'offline'}>{b.error || b.live}</span>
+		<span id="live" class="dim" class:off={b.live === 'offline'}
+			>{b.error || (b.newer ? 'a newer page · leave the box to take it' : b.live)}</span
+		>
 		<label id="internal" class="dim"
 			><input type="checkbox" bind:checked={b.showAll} onchange={() => b.persist()} /> show internal</label
 		>

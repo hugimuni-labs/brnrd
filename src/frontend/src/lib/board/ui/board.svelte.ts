@@ -37,6 +37,9 @@ export class Board {
 	armed = $state<string | null>(null);
 	force = $state(false);
 	sendError = $state('');
+	// a newer build is out (SvelteKit's version poll); the page takes it unless the box holds a draft in hand
+	newer = $state(false);
+	writing = $state(false);
 	typedBy = '';
 	now = $state(Date.now());
 

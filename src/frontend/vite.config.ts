@@ -41,6 +41,8 @@ export default defineConfig({
 			// deployed in the same release would break every client-only route's
 			// bootstrap shell (backend keeps looking for 'index.html'). See
 			// /tmp/brnrd-unfurl.md for the precise two-file fix this needs.
+			// The board takes a newer build while it is open (Board.svelte, `updated`); 60 s is board.html's cadence.
+			version: { pollInterval: 60_000 },
 			adapter: adapter({
 				pages: 'build',
 				assets: 'build',
