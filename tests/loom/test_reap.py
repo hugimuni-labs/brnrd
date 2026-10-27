@@ -97,6 +97,13 @@ def test_a_fact_left_by_a_crash_mid_delete_is_finished(tmp_path):
     assert len(_reaped(home)) == 1
 
 
+def test_the_floor_is_two_percent_of_the_volume_and_never_under_five_gib(monkeypatch):
+    gib = 1024 ** 3
+    for total, least in ((228 * gib, 5 * gib), (1000 * gib, 20 * gib)):
+        monkeypatch.setattr(reap.shutil, "disk_usage", lambda path, t=total: reap.shutil._ntuple_diskusage(t, t - gib, gib))
+        assert reap.floor(".") == (gib, least)
+
+
 def test_under_the_disk_floor_the_loop_degrades_and_recovers(tmp_path, monkeypatch):
     root = tmp_path / "home"
     write_thread(root, "brnrd", "Brnrd", "brnrd")

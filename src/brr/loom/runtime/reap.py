@@ -47,7 +47,7 @@ BROKEN_AGE = 14 * 86400
 LOG_MAX = 20 * 1024 * 1024
 LOG_KEEP = 3
 FLOOR_BYTES = 5 * 1024 ** 3
-FLOOR_SHARE = 0.05
+FLOOR_SHARE = 0.02
 # What the loom and the harness put at a room's root; checkouts are read by leftovers.
 # lib/ holds links into a person's own folders; nothing here follows a link.
 PLUMBING = {"self", "port", ".body", ".starting", ".claude", ".pytest-tmp", "delegates", "lib"}
@@ -90,7 +90,7 @@ def heads(path: Path) -> dict[str, dict[str, str]]:
 
 
 def floor(path: Path) -> tuple[int, int]:
-    """``(free, floor)`` in bytes for the volume holding ``path``."""
+    """``(free, floor)`` in bytes for the volume holding ``path``: the floor is 2% of the volume, never under 5 GiB."""
     usage = shutil.disk_usage(path)
     return usage.free, max(FLOOR_BYTES, int(usage.total * FLOOR_SHARE))
 
