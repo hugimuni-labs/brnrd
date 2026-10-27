@@ -93,14 +93,29 @@ def test_opened_delivery_ignores_age_and_fuel_but_tracks_state_owed_and_removal(
         (room / 'port/in/boundary.md').write_text(text)
         return text
 
-    first = write('idle 7s')
-    assert 'opened: child idle 0m · owed 0' in first
+    # An idle child owing nothing is folded into a count (wake-vision).
+    assert 'opened: child' not in write('idle 7s')
+    assert 'idle: 1 more opened here' in write('idle 7s')
+    first = write('idle 7s', owed=1)
+    assert 'opened: child idle 0m · owed 1' in first
     assert execute('start', room, '{}') == first
     assert execute('post', room, '{}') == ''
-    assert write('idle 59s') == first
+    assert write('idle 59s', owed=1) == first
     assert execute('post', room, '{}') == ''
-    assert 'idle 1m' in write('idle 1m')
+    assert 'idle 1m' in write('idle 1m', owed=1)
     assert execute('post', room, '{}') == ''
+    # A PR's push age ticking is not news; its CI turning is, said once and not as gone.
+    row['prs'] = ['#7 draft pending 2h']
+    assert 'owed 1 · #7 draft pending 2h' in write('idle 1m', owed=1)
+    assert execute('post', room, '{}')
+    row['prs'] = ['#7 draft pending 3h']
+    write('idle 1m', owed=1)
+    assert execute('post', room, '{}') == ''
+    row['prs'] = ['#7 draft green 3h']
+    write('idle 1m', owed=1)
+    said = json.loads(execute('post', room, '{}'))['hookSpecificOutput']['additionalContext']
+    assert '#7 draft green 3h' in said and 'gone:' not in said
+    row['prs'] = []
     holding = write('holding 84%')
     assert 'opened: child holding · owed 0' in holding
     assert execute('post', room, '{}')
@@ -123,6 +138,23 @@ def test_stop_blocks_while_letters_are_owed(tmp_path):
     state = json.loads((room / "port" / "jack-state.json").read_text())
     assert state["stop_blocks"] == 1
     assert list((room / "port" / "out").glob("*.md"))
+
+
+def test_a_stop_repeats_only_what_was_not_said(tmp_path):
+    # A blocked stop used to re-send the whole boundary the body had just read.
+    room = _room(tmp_path)
+    _write(room, [_letter()])
+    assert "ping-1" in execute("start", room, "{}")
+    reason = json.loads(execute("stop", room, "{}"))["reason"]
+    assert "ping-1" not in reason
+    assert "owed: p-test/abcde (shown before)" in reason
+    newer = Fact(kind="letter", by="strand:s-ab12-bbbbbb", id="p-test/fghij",
+                 data={"id": "p-test/fghij", "to": "thread:ta", "body": "pong-2", "from": "s-ab12-bbbbbb"})
+    _write(room, [_letter(), newer])
+    execute("post", room, "{}")
+    _write(room, [_letter(), newer])
+    reason = json.loads(execute("stop", room, "{}"))["reason"]
+    assert "pong-2" not in reason and "p-test/fghij" in reason
 
 
 def test_three_blocks_then_the_stop_is_allowed(tmp_path, monkeypatch):
@@ -427,3 +459,24 @@ def test_tool_trace_never_fails_the_hook_and_rotates(tmp_path, monkeypatch):
     args = [r["arg"] for r in tooltrace.read(room)]
     assert args[-1] == "step 19" and args == sorted(args, key=lambda a: int(a.split()[1]))
     assert len(tooltrace.read(room, limit=3)) == 3
+
+
+def test_a_post_says_only_what_changed_since_the_last_boundary(tmp_path):
+    """wake-vision: a live post re-sent ~7 KB (every row, every owed letter) on every call."""
+    room = _room(tmp_path)
+    first = _letter("ping-1\nmore")
+    _write(room, [first])
+    assert "ping-1\n  more" in execute("start", room, "{}")
+    _write(room, [first], shown={"p-test/abcde"})
+    # Owed, shown at the wake, nothing new: the post is silent, the stop still holds on it.
+    assert execute("post", room, json.dumps({"tool_name": "Bash"})) == ""
+    second = Fact(kind="letter", by="strand:s-ab12-bbbbbb", id="p-test/fghij",
+                  data={"id": "p-test/fghij", "to": "thread:ta", "body": "pong-2\nwhole", "from": "s-ab12-bbbbbb"})
+    _write(room, [first, second], shown={"p-test/abcde"})
+    said = json.loads(execute("post", room, json.dumps({"tool_name": "Bash"})))["hookSpecificOutput"]["additionalContext"]
+    assert "pong-2\n  whole" in said
+    assert "ping-1" not in said and "status:" not in said
+    assert "owed: p-test/abcde (shown before)" in said
+    assert [letter.id for letter in parse_boundary(said).letters] == ["p-test/fghij"]
+    _write(room, [first, second], shown={"p-test/abcde", "p-test/fghij"})
+    assert execute("post", room, json.dumps({"tool_name": "Bash"})) == ""

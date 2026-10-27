@@ -223,6 +223,9 @@ def _letter_owners(facts, main, inputs=None, selected=None):
             result[ident] = Ownership(letter, owner, why, target, reply, action, cited)
         if ident in state.handled or ident in sent or disposition.get('outcome') == 'done':
             keep(None, reason or 'reply or note recorded')
+        elif d.get('notice') and is_notice(letter) and any(ident in ids for ids in state.shown.values()):
+            # A passive notice informs; once a body was shown it, nobody owes it a word.
+            keep(None, 'passive notice shown')
         elif disposition.get('outcome') == 'operator':
             keep('operator', reason or 'failed attempt limit', action='note')
         elif d.get("at") and ident not in due:
@@ -393,7 +396,12 @@ def unanswered_letters(facts) -> dict[str, Fact]:
     Handling debt and answering a person are separate projections: neither a
     resident's note nor a done disposition is evidence the person heard back.
     """
-    facts = ordered_facts(facts)
+    if isinstance(facts, LedgerView):
+        return facts.project('unanswered', None, _unanswered_letters)
+    return _unanswered_letters(ordered_facts(facts))
+
+
+def _unanswered_letters(facts) -> dict[str, Fact]:
     accepted = fold(facts).accepted
     channels = reply_channels(facts)
 

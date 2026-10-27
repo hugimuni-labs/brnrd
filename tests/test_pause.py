@@ -63,6 +63,8 @@ def chain(tmp_path):
     try:
         yield root
     finally:
+        # Read before the root dies: its orphans go to init, out of reach.
+        stray = pause.descendants(root.pid)
         if root.poll() is None:
             root.kill()
         try:
@@ -71,7 +73,7 @@ def chain(tmp_path):
             pass
         # Reap anything still alive under the root — best-effort, tests
         # must not leak stopped/zombie processes into the rest of the suite.
-        for proc in pause.descendants(root.pid):
+        for proc in stray + pause.descendants(root.pid):
             try:
                 import os
                 import signal

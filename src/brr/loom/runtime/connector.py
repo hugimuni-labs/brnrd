@@ -127,6 +127,10 @@ def ingest(home, name, fm, attachments):
         to = (f"thread:{fm['thread']}" if fm.get('thread') else
               route_bare(facts, f'{platform}/{chat}', binding[1] if binding else None,
                          home.main_thread()))
+        # A verdict belongs to the thread that owns its wish, wherever it was given.
+        owner = wishes(facts).get(fm.get('wish')) if fm.get('verdict') and sender.startswith('person:') else None
+        if owner is not None and home.routable(owner.thread):
+            to = f'thread:{owner.thread}'
         if not home.routable(to.removeprefix('thread:')):
             to = f'thread:{home.main_thread()}'
         blobs, blob_ids = [], []
@@ -197,12 +201,64 @@ def ingest(home, name, fm, attachments):
         if wish is not None and wish.state == 'delivered':
             append(home, Fact(kind='wish.verdict', by=source.data['from'], id=verdict_id,
                               data={'wish': wish.id, 'as': 'accepted', 'evidence': 'word', 'ref': letter_id}))
+    if source.data.get('verdict') and source.data['from'].startswith('person:'):
+        heard(home, letter_id, source.data)
     if source.data.get('blobs_missing'):
         from .loom import notice
         notice(home, read_facts(home), 'blobs-missing', source.id,
                f"{name}: gave up on attachment(s) {source.data['blobs_missing']} of {letter_id} after 3 pulls",
                'ask the sender to send the files again if they matter',
                thread=source.data['to'].removeprefix('thread:'))
+
+
+def heard(home, letter_id, data):
+    """A person's verdict is news to its wish's thread and to the inbox; only a correct asks for work.
+
+    An agree is settled by the loom as it lands; each thread it reaches gets a
+    passive notice, shown once and owed by nobody. A correct stays owed on the
+    wish's thread, and the inbox, the center, is told of it the same way.
+    """
+    from .loom import notice
+    facts = read_facts(home)
+    found = wishes(facts).get(data.get('wish'))
+    line = f' "{found.line}"' if found is not None and found.line else ''
+    thread = data['to'].removeprefix('thread:')
+    words = f"verdict: {data['verdict']} on {data['wish']}{line} from {data['from']} ({letter_id})"
+    # A correct is itself the letter owed on its thread; that thread needs no notice of it.
+    targets = {home.main_thread()} | ({thread} if data['verdict'] == 'agree' else set())
+    if data['verdict'] == 'agree':
+        if not any(f.kind == 'note' and f.data.get('re') == letter_id for f in facts):
+            append(home, Fact(kind='note', by=f'loom:{home.install_id()}', id=f'note:verdict:{letter_id}',
+                              data={'re': letter_id, 'body': 'an agree is a notice: no reply owed'}))
+    else:
+        targets.discard(thread)
+    can = 'nothing owed' if data['verdict'] == 'agree' else f'nothing owed here; the letter is owed on thread {thread}'
+    # A settled thread may still hold delivered wishes (silence archives a
+    # thread, never accepts a wish). A letter to a closed thread climbs to its
+    # open ancestor (owners); with none, a correct would wait on nobody, so
+    # the inbox owes it instead.
+    orphan = data['verdict'] == 'correct' and not _open_ancestor(home, thread)
+    if orphan:
+        targets.discard(thread)
+        can = (f'thread {thread} is settled: reopen it with a letter to thread:{thread} '
+               'that carries the correction, or answer the person here')
+    for target in sorted(targets):
+        notice(home, read_facts(home), f'verdict-{target}', letter_id, words, can, thread=target,
+               passive=not orphan)
+
+
+def _open_ancestor(home, thread):
+    """``thread`` itself when open, else the nearest open opener thread, else None."""
+    from .lifecycle import CLOSED, read_thread
+    seen = set()
+    while thread and thread not in seen:
+        seen.add(thread)
+        data = read_thread(home, thread)
+        if not data or data.get('status') not in CLOSED:
+            return thread if data else None
+        opener = str(data.get('opened-by', ''))
+        thread = opener.removeprefix('thread:') if opener.startswith('thread:') else None
+    return None
 
 
 def drain(home, name, drop, failures=None):

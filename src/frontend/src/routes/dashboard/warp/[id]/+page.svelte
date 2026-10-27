@@ -119,7 +119,9 @@
 	<div class="mx-auto max-w-xl p-6">
 		<p class="font-mono text-sm text-ink-quiet">
 			no item named <span class="text-stone-300">{itemId}</span> —
-			<a href={resolve('/warp')} class="text-amber-300 hover:text-amber-100">back to the warp</a>
+			<a href={resolve('/dashboard/warp')} class="text-amber-300 hover:text-amber-100"
+				>back to the warp</a
+			>
 		</p>
 	</div>
 {:else}
@@ -142,7 +144,7 @@
 				<p class="mt-1.5 font-mono text-[11px] text-stone-400 italic">{item.returnNote}</p>
 			{/if}
 			<p class="mt-2 font-mono text-[10px] text-ink-quiet">
-				<a href={resolve('/warp')} class="hover:text-stone-300">← the warp</a>
+				<a href={resolve('/dashboard/warp')} class="hover:text-stone-300">← the warp</a>
 			</p>
 			{#if topics.length > 0}
 				<p class="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-ink-quiet">

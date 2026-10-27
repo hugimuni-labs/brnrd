@@ -8,6 +8,7 @@ this one is still granting.
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 
 from brr.daemon2.facts import Fact
@@ -25,6 +26,8 @@ from .lifecycle import main_snapshot
 from .speak import speak
 
 REST_FACE = "b·_·d"
+#: The shortest git inbox lease, whatever ``router_ttl`` says (design §3.1: renew every 30 s).
+GATE_MIN_TTL = 90.0
 
 
 def install_of(strand: str) -> str | None:
@@ -68,6 +71,36 @@ def readme_for(home: Home, thread: str) -> str | None:
 
 
 
+def gate_for(home: Home, config: LoomConfig):
+    """The git inbox lease on ``lease_remote``, or None when it is unset."""
+    remote = config.lease_remote
+    if not remote:
+        return None
+    import subprocess
+
+    from .gitlease import GitLeaseAuthority
+    from .publish import PublishError, remote_command
+
+    repo = home.root / "ledger" / "git"
+    if not (repo / "HEAD").exists():
+        repo.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "--bare", "-q", str(repo)], check=True)
+
+    def git(tail):
+        try:
+            args, env, _lane, _note = remote_command(remote, tail, config.forge_token)
+        except PublishError as exc:
+            return subprocess.CompletedProcess(tail, 128, "", str(exc))
+        try:
+            return subprocess.run(["git", "-C", str(repo), *args], env=env,
+                                  capture_output=True, text=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            return subprocess.CompletedProcess(tail, 128, "", "git timed out")
+
+    return GitLeaseAuthority(repo, remote, git, margin=max(config.margin, 1.0),
+                             strict=config.lease_mode == "strict")
+
+
 class Router:
     def __init__(self, home: Home, config: LoomConfig | None = None):
         self.home = home
@@ -83,6 +116,22 @@ class Router:
         self.granting = False
         self.caught_up = False
         self._renew_bucket: int | None = None
+        # With lease_remote set, the git inbox lease decides who routes; the
+        # local lease above follows it at its gen and stays the fence speak
+        # authorizes against.
+        self.gate = gate_for(home, self.config)
+        # Each install's ledger folder rides its lease pushes and is fetched
+        # into ledger/facts/<peer>/ by the others (P2).
+        self.shuttle = None
+        if self.gate is not None:
+            from .shuttle import Shuttle
+            self.shuttle = Shuttle(home, self.gate)
+            self.gate.riders = self.shuttle.riders
+        self.gate_lease: Lease | None = None
+        self._gate_at: float | None = None
+        # A git renew is a network round trip that may stall for tens of
+        # seconds; 30 s, the local default, would fence on one slow push.
+        self.gate_ttl = max(float(self.config.router_ttl), GATE_MIN_TTL)
 
     def _window(self) -> bool:
         if self.lease is None:
@@ -95,6 +144,10 @@ class Router:
     def armed(self) -> bool:
         """Authorize, then refuse the skew window. A false steps down now."""
         if self.lease is None or not self.granting or not self.caught_up:
+            return False
+        if self.gate is not None and (
+                self.gate_lease is None or not self.gate.authorize(self.gate_lease)):
+            self.granting = False
             return False
         if not self.authority.authorize(self.lease):
             self.lease = None
@@ -128,6 +181,20 @@ class Router:
                 return True
         return False
 
+    def _caught_up(self, facts: list[Fact], gen: int) -> bool:
+        """Under the git lease, the previous holder's ledger, at the sha its
+        lease carried, is in this install's folder for it; any earlier router
+        fact (``_prior_visible``) passes for an install that synced an hour
+        ago."""
+        if self.gate is None:
+            return self._prior_visible(facts, gen)
+        holder, sha = self.gate.prior.get("inbox", ("", ""))
+        if self.shuttle.caught_up(holder, sha):
+            return True
+        self.shuttle._beat = None  # fetch now rather than at the next beat
+        self.shuttle.sync(holding=True)
+        return self.shuttle.caught_up(holder, sha)
+
     def _held_since(self, facts: list[Fact], gen: int) -> bool:
         """Every router gen from ``gen`` to the current one is this install's.
 
@@ -145,7 +212,80 @@ class Router:
                 continue
         return all(g in held for g in range(gen, self.lease.gen + 1))
 
+    def _gate_tick(self, facts: list[Fact]) -> list[Fact]:
+        """Renew or take the git inbox lease, at most every ``gate_ttl / 3``.
+
+        Losing it releases the local lease at once, so ``speak`` steps down
+        before the next send, and records ``lease.fenced`` and a
+        ``loom.degraded`` streak at step ``lease`` that taking it back closes.
+        """
+        ttl = self.gate_ttl
+        now = self.gate.clock()
+        if self._gate_at is not None and now - self._gate_at < ttl / 3:
+            if self.gate_lease is not None and not self.gate.authorize(self.gate_lease):
+                return self._fence(facts, "expired")
+            return facts
+        self._gate_at = now
+        if self.gate_lease is not None:
+            renewed = self.gate.renew(self.gate_lease, ttl)
+            if renewed is None or not self.gate.authorize(renewed):
+                return self._fence(facts, "lost" if renewed is None else "expired")
+            self.gate_lease = renewed
+            return facts
+        row = self.authority._read(self.authority._paths("router")[0])
+        self.gate_lease = self.gate.acquire("inbox", self.home.install_id(), ttl,
+                                            floor=int(row["gen"]) + 1)
+        if self.gate_lease is not None:
+            facts = self._recovered(facts)
+        return facts
+
+    def _lease_streak(self, facts: list[Fact]) -> Fact | None:
+        from .health import open_streaks
+        return next((f for f in open_streaks(facts, self.home.install_id())
+                     if f.data.get("step") == "lease"), None)
+
+    def _recovered(self, facts: list[Fact]) -> list[Fact]:
+        streak = self._lease_streak(facts)
+        if streak is None:
+            return facts
+        install = self.home.install_id()
+        return self._keep(facts, "loom.recovered", {
+            "install": install, "step": "lease", "since": streak.data["since"],
+            "count": 1, "last": streak.data.get("error", ""),
+        }, streak.id.replace("loom.degraded:", "loom.recovered:", 1))
+
+    def _fence(self, facts: list[Fact], why: str) -> list[Fact]:
+        gen = self.gate_lease.gen if self.gate_lease else 0
+        self.gate_lease = None
+        self._gate_at = None
+        if self.lease is not None:
+            self.authority.release(self.lease)
+        self.lease = None
+        self.granting = False
+        self.caught_up = False
+        install = self.home.install_id()
+        facts = self._keep(facts, "lease.fenced", {
+            "install": install, "gen": gen, "why": why,
+        }, f"lease.fenced:{install}:{gen}:{why}")
+        if self._lease_streak(facts) is None:
+            from .health import _iso
+            since = _iso(time.time())
+            facts = self._keep(facts, "loom.degraded", {
+                "install": install, "step": "lease", "error": f"fenced: inbox gen {gen} {why}",
+                "where": "", "since": since,
+            }, f"loom.degraded:{install}:lease:{since}")
+        return facts
+
     def begin_tick(self, facts: list[Fact]) -> list[Fact]:
+        if self.gate is not None:
+            facts = self._gate_tick(facts)
+            self.shuttle.sync(holding=self.gate_lease is not None)
+            if self.gate_lease is None:
+                return facts
+            if self.lease is None or self.lease.gen != self.gate_lease.gen:
+                return self._acquire(facts, gen=self.gate_lease.gen)
+            if not self.caught_up:
+                self.caught_up = self._caught_up(facts, self.lease.gen)
         if self.lease is None:
             return self._acquire(facts)
         renewed = self.authority.renew(self.lease, self.config.router_ttl)
@@ -159,9 +299,9 @@ class Router:
         self.granting = self.caught_up and self._window()
         return facts
 
-    def _acquire(self, facts: list[Fact]) -> list[Fact]:
+    def _acquire(self, facts: list[Fact], gen: int | None = None) -> list[Fact]:
         acquired = self.authority.acquire(
-            "router", self.home.install_id(), self.config.router_ttl,
+            "router", self.home.install_id(), self.config.router_ttl, gen=gen,
         )
         if acquired is None:
             self.lease = None
@@ -180,7 +320,7 @@ class Router:
                 "gen": acquired.gen,
                 "until": acquired.until,
             }, f"router:{acquired.gen}")
-        self.caught_up = self._prior_visible(facts, acquired.gen)
+        self.caught_up = self._caught_up(facts, acquired.gen)
         self.granting = self.caught_up and self._window()
         return facts
 

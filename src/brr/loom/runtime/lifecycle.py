@@ -184,9 +184,13 @@ def settle(room: Path, thread: str, why: str, retire: bool = False,
     from .wishes import wishes
 
     facts = read_facts(home)
-    if opener != f"thread:{own}":
-        # A person's thread settles on their word, never on silence: the
-        # body judges the reply and cites it; the loom checks who wrote it.
+    mine = [w for w in wishes(facts).values() if w.thread == thread]
+    in_hand = sorted(w.id for w in mine if w.state in {"heard", "read", "granting"})
+    if opener != f"thread:{own}" and in_hand:
+        # A person's thread with work in hand settles on their word, never on
+        # silence: the body judges the reply and cites it; the loom checks who
+        # wrote it. With nothing in hand there is nothing to hear: a delivered
+        # wish keeps its state and still waits on their verdict.
         said = next((f for f in fold(facts).accepted if f.kind == "letter" and f.id == word), None)
         if said is None or not str(said.data.get("from", "")).startswith(("p-", "person:")) \
                 or _destination(said.data) != thread:
@@ -205,17 +209,16 @@ def settle(room: Path, thread: str, why: str, retire: bool = False,
         broken += [f"{where.name}: {line}" for line in lines]
     if broken:
         raise PortError("settle: a path guard is broken in this thread's rooms:\n" + "\n".join(broken))
-    pending = sorted(w.id for w in wishes(facts).values()
-                     if w.thread == thread and w.state == "delivered")
+    # Silence archives a thread, never accepts a wish: a delivered wish stays
+    # delivered on the settled thread, and a later verdict that puts it back
+    # to work reopens the thread (reopen_for). --hand-to moves them instead.
+    pending = sorted(w.id for w in mine if w.state == "delivered")
     if hand_to is not None:
         check_thread_id(hand_to)
         if hand_to == thread or not home.routable(hand_to):
             raise PortError("settle: --hand-to must name another thread on main")
-    if pending and hand_to is None:
-        raise PortError(f"settle: delivered wishes await a verdict: {', '.join(pending)}; "
-                        "record a verdict or use --hand-to <thread>")
     handed = [wish_fact(facts, by="strand:" + strand_of_room(room), ident=ident, thread=hand_to)
-              for ident in pending]
+              for ident in pending] if hand_to is not None else []
     for fact in reopen_for(room, handed):
         append(home, fact)
     for stamp in handed:

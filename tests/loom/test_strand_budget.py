@@ -114,7 +114,8 @@ def test_past_its_allocation_the_strand_is_warned_at_every_boundary_and_the_open
     # Nothing else changed between these calls; the warning still comes each time.
     for _ in range(2):
         said = json.loads(execute("post", home.room(CHILD), "{}"))["hookSpecificOutput"]["additionalContext"]
-        assert "\nbudget: thread work has spent 3.5M of 3M tokens. Write to thread:parent" in said
+        assert any(line.startswith("budget: thread work has spent 3.5M of 3M tokens. Write to thread:parent")
+                   for line in said.splitlines())
     # With nothing owed and nothing new, the warning is the whole message, each time.
     over = next(line for line in text.splitlines() if line.startswith("budget: "))
     boundary.write_text(render_boundary(CHILD, 1, "work", [], set(), {}, budget="spent 3.5M/3M", over=over))

@@ -95,8 +95,9 @@
 		{#if gaps.length === 0}
 			<p class="mt-3 text-stone-400">
 				Nothing left to name here —
-				<a class="underline hover:text-amber-100" href={resolve('/repos')}>the repos page</a> covers anything
-				else this lane is waiting on.
+				<a class="underline hover:text-amber-100" href={resolve('/dashboard/repos')}
+					>the repos page</a
+				> covers anything else this lane is waiting on.
 			</p>
 		{:else}
 			<ul class="mt-3 space-y-2">
@@ -130,8 +131,8 @@
 			</p>
 		{/if}
 		<p class="mt-3 font-mono text-[10px] text-ink-mute">
-			<a class="underline hover:text-amber-100" href={resolve('/repos')}>the repos page</a> is the full
-			picture — every lane, every repo, in one place.
+			<a class="underline hover:text-amber-100" href={resolve('/dashboard/repos')}>the repos page</a
+			> is the full picture — every lane, every repo, in one place.
 		</p>
 	</form>
 </dialog>

@@ -75,7 +75,7 @@
 	// comment inside `<script>`, the working pattern repos/+page.svelte
 	// uses for the identical goto()-plus-fragment shape) an HTML comment
 	// in markup isn't honoured as a suppression here. So: `href` stays a
-	// bare `resolve('/warp')` (real navigation even with JS disabled or a
+	// bare `resolve('/dashboard/warp')` (real navigation even with JS disabled or a
 	// right-click/open-in-new-tab), and a primary click additionally
 	// `goto()`s with the item's own #fragment appended — same "resolve()
 	// owns the route, the fragment is appended once after" idiom, routed
@@ -83,7 +83,7 @@
 	function openItem(event: MouseEvent, item: WarpItem): void {
 		event.preventDefault();
 		// eslint-disable-next-line svelte/no-navigation-without-resolve
-		void goto(`${resolve('/warp')}#${item.id}`);
+		void goto(`${resolve('/dashboard/warp')}#${item.id}`);
 	}
 
 	const METRIC_SPINE: Array<[string, 'metric' | 'target' | 'horizon']> = [
@@ -111,7 +111,7 @@
 			>{typeMark(item)}</span
 		>
 		<a
-			href={resolve('/warp')}
+			href={resolve('/dashboard/warp')}
 			onclick={(event) => openItem(event, item)}
 			class="min-w-[9ch] flex-1 break-words text-left leading-tight text-amber-100 hover:text-amber-50"
 			>{item.headline}</a
@@ -154,7 +154,9 @@
 	<div class="mx-auto max-w-xl p-6">
 		<p class="font-mono text-sm text-ink-quiet">
 			no goal named <span class="text-stone-300">{goalId}</span> —
-			<a href={resolve('/warp')} class="text-amber-300 hover:text-amber-100">back to the warp</a>
+			<a href={resolve('/dashboard/warp')} class="text-amber-300 hover:text-amber-100"
+				>back to the warp</a
+			>
 		</p>
 	</div>
 {:else}
@@ -163,7 +165,7 @@
 			<p class="eyebrow">goal · {goal.id}</p>
 			<h1 class="font-mono text-lg font-semibold text-amber-100">{goal.headline}</h1>
 			<p class="mt-1 font-mono text-[10px] text-ink-quiet">
-				<a href={resolve('/warp')} class="hover:text-stone-300">← the warp</a>
+				<a href={resolve('/dashboard/warp')} class="hover:text-stone-300">← the warp</a>
 			</p>
 			{#if goal.metric || goal.target || goal.horizon}
 				<p class="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-stone-300">

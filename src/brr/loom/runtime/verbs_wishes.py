@@ -11,6 +11,7 @@ from pathlib import Path
 from brr.daemon2.facts import Fact
 from .home import Home, home_of_room, mint, resolve_home, strand_of_room
 from .ledger import append, read_facts
+from .waits import GRAMMAR
 from .wishes import Say, waits_on, waits_word, wishes, wish_line
 
 
@@ -46,7 +47,7 @@ def say_span(raw: str, facts) -> Say:
     return Say(ident, off, size)
 
 
-def wish_fact(facts, *, by, ident, says=(), line=None, thread=None, sender=None, parent=None):
+def wish_fact(facts, *, by, ident, says=(), line=None, thread=None, sender=None, parent=None, rec=None):
     known = wishes(facts)
     current = known.get(ident)
     if parent is not None and parent not in known:
@@ -67,6 +68,8 @@ def wish_fact(facts, *, by, ident, says=(), line=None, thread=None, sender=None,
     }
     if parent is not None:
         data["parent"] = parent
+    if rec is not None:
+        data["rec"] = rec
     if data["from"] == "resident" and not (parent or (current and current.parent)):
         raise ValueError("an ask needs the wish it unblocks: ask --for <wish>")
     return Fact(kind="wish", by=by, id=ident if current is None else "wish:" + mint(12), data=data)
@@ -92,6 +95,8 @@ def _wish_arguments(parser):
     action.add_argument("--drop")
     parser.add_argument("--deliver", action="store_true")
     parser.add_argument("--ref")
+    parser.add_argument("--wait", help="what the park waits on: " + GRAMMAR)
+    parser.add_argument("--until", help="when the park re-asks its thread if nothing resolved")
     parser.add_argument("--left", action="append", default=[],
                         help="a step still to do; repeat for each, the whole list (or: same)")
 
@@ -115,6 +120,8 @@ def cmd_wish(args):
             raise ValueError("--deliver requires --result")
         if args.ref is not None and args.accept is None:
             raise ValueError("--ref requires --accept")
+        if (args.wait is not None or args.until is not None) and args.read is None:
+            raise ValueError("--wait and --until go with --read \"waiting: …\"")
         touches = args.say or any(x is not None for x in (args.line, args.sender, args.thread, args.parent))
         if args.id != "new" and not actions and not touches:
             current = wishes(facts).get(args.id)
@@ -131,6 +138,10 @@ def cmd_wish(args):
             if args.read is not None:
                 kind = "wish.read"
                 data.update(reading=args.read, by="person" if by.startswith("person:") else "resident")
+                if args.wait is not None and not args.read.startswith("waiting:"):
+                    data["reading"] = "waiting: " + args.read
+                if data["reading"].startswith("waiting:"):
+                    data["wait"] = _wait(facts, args.id, args.wait, args.until)
             elif args.result is not None:
                 result_kind, sep, ref = args.result.partition(":")
                 if not sep or not result_kind or not ref or not args.line:
@@ -167,13 +178,54 @@ def cmd_wish(args):
         # A park is a reading that says what it waits on, the one the board shows.
         if actions and kind == "wish.result" and by.startswith("strand:"):
             _declare(args, "result")
-        elif actions and kind == "wish.read" and by.startswith("strand:") and args.read.startswith("waiting:"):
+        elif actions and kind == "wish.read" and by.startswith("strand:") and "wait" in data:
             _declare(args, "park")
+        if fact.kind == "wish" and args.id == "new":
+            _related(home, fact.data["line"], facts, fact.data["thread"])
         print(fact.data["wish"])
         return 0
     except (ValueError, OSError, RuntimeError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
+
+
+def _related(home, line, facts, thread) -> None:
+    """Advice beside a new wish: the closest threads, on stderr; stdout stays the id."""
+    from .recall import related_line
+    said = related_line(home, line, facts=facts, exclude={thread})
+    if said:
+        print(said, file=sys.stderr)
+
+
+def _wait(facts, ident, condition, until, default=None):
+    """A park's ``wait``: its condition with the repo filled in, and its deadline."""
+    from datetime import datetime, timezone
+    from . import waits
+    now = datetime.now(timezone.utc)
+    found = wishes(facts)
+    if condition is not None:
+        condition = waits.canonical(condition, now, repo=lambda number: _repo(facts, number))
+        if condition.startswith("wish:") and condition[5:] not in found:
+            raise ValueError(f"--wait {condition}: no wish {condition[5:]}")
+    return waits.park(found[ident], condition, until, now, found=found, default=default)
+
+
+def _repo(facts, number):
+    """The repo a bare ``#N`` names: a pull request opened on this ledger, else the loom's own origin."""
+    if number is not None:
+        from .waits import pr_repo
+        repos = {pr_repo(f.data) for f in facts if f.kind == "pr.opened"
+                 and str(f.data.get("number")) == str(number)} - {None}
+        if len(repos) == 1:
+            return repos.pop()
+    from .receipts import source_root
+    from .selfrepo import git
+    from .update import slug
+    root = source_root()
+    if not (root / ".git").exists():
+        return None
+    url = git(root, "remote", "get-url", "origin", check=False).stdout.strip()
+    return slug(url) if url else None
 
 
 def _left_fact(args, facts, by):
@@ -229,9 +281,12 @@ def cmd_ask(args):
         # (thread, parent, line) is reused, and mailed only if no mail for it left.
         same = next((w for w in wishes(facts).values() if w.open and w.sender == "resident"
                      and (w.thread, w.parent, w.line) == (thread, args.wish, args.what)), None)
+        if args.default_at is not None and args.rec is None:
+            raise ValueError("ask --default-at needs --rec: the default is what you recommend")
         if same is None:
+            # The rec rides on the ask itself: a wish.read would read as the person's answer.
             fact = wish_fact(facts, by=by, ident="new", line=args.what, thread=thread,
-                             sender="resident", parent=args.wish)
+                             sender="resident", parent=args.wish, rec=args.rec)
             from .lifecycle import reopen_for
             from .verbs_loom import _room
             # A body that settled its own thread and asks again holds open work there.
@@ -242,9 +297,8 @@ def cmd_ask(args):
         else:
             ident = same.id
             print(f"ask: reused {ident}, the open ask with this line for {args.wish}", file=sys.stderr)
-        if args.rec is not None and (same is None or same.reading != args.rec):
-            append(home, Fact(kind="wish.read", by=by, id="wish.read:" + mint(12),
-                              data={"wish": ident, "reading": args.rec, "by": "resident"}))
+        if same is not None and args.rec is not None and same.rec != args.rec:
+            append(home, wish_fact(facts, by=by, ident=ident, rec=args.rec))
         # A thread that waits on another must wake it: a wish alone is mail to nobody.
         from .lifecycle import main_snapshot
         from .port import write_send
@@ -260,7 +314,14 @@ def cmd_ask(args):
             # The &ref is the mail's parent: a thread letter cites what it answers.
             body += f"Answer &{ident}, or ask onward with: ask \"<what>\" --for {ident}\n"
             write_send(room, to=head, sender=strand_of_room(room), body=body)
+        if args.default_at is not None:
+            # The asking wish parks on the ask; at its deadline the body is woken with its own rec.
+            append(home, Fact(kind="wish.read", by=by, id="wish.read:" + mint(12), data={
+                "wish": args.wish, "reading": f"waiting: ask {ident}: {args.what}", "by": "resident",
+                "wait": _wait(facts, args.wish, "wish:" + ident, args.default_at, default=args.rec)}))
         _declare(args, "ask")
+        if same is None:
+            _related(home, args.what, facts, thread)
         print(ident)
         return 0
     except (ValueError, OSError, RuntimeError) as exc:
@@ -273,7 +334,9 @@ def _ask_arguments(parser):
     parser.add_argument("--home")
     parser.add_argument("what")
     parser.add_argument("--for", dest="wish", required=True, help="the wish this ask unblocks")
-    parser.add_argument("--rec", help="what you recommend; written as the ask's reading")
+    parser.add_argument("--rec", help="what you recommend; kept on the ask as its rec, apart from the answer")
+    parser.add_argument("--default-at", dest="default_at",
+                        help="if nobody answers by then, you are woken to carry out your rec")
 
 
 def cmd_wishes(args):

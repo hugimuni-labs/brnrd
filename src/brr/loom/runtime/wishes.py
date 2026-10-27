@@ -69,6 +69,8 @@ class Wish:
     thread: str = ""
     parent: str = ""
     reading: str = ""
+    # An ask's recommendation: the asker's proposal, never a reading of the person's answer.
+    rec: str = ""
     reads: list[dict] = field(default_factory=list)
     results: list[dict] = field(default_factory=list)
     verdict: dict | None = None
@@ -129,6 +131,7 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
                     wish.says.append(say)
             wish.sender, wish.line, wish.thread = d["from"], d["line"], d["thread"]
             wish.parent = d.get("parent") or wish.parent
+            wish.rec = d.get("rec") or wish.rec
             wish.verdict = None
         else:
             if ident not in found:

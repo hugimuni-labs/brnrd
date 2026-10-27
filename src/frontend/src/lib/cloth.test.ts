@@ -162,7 +162,7 @@ test('curated line: name, repo, chips, duration, age, node link', () => {
 		line.age,
 		new Date(NOW - 3 * HOUR).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 	);
-	assert.equal(line.href, '/runs/acme__site/run-1');
+	assert.equal(line.href, '/dashboard/runs/acme__site/run-1');
 });
 
 test('curated line: falls back to the run id for a nameless run, no link without one', () => {

@@ -28,7 +28,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from fastapi import APIRouter, FastAPI
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -43,6 +43,10 @@ _READ_METHODS = frozenset({"GET", "HEAD"})
 # revalidation before reuse; the hashed ``/_app/immutable`` files remain free
 # to use their own long-lived cache semantics.
 _SHELL_CACHE_CONTROL = "no-cache"
+
+# The old app lives under ``/dashboard`` now; its former top-level paths answer
+# with a permanent redirect so bookmarks and links printed by older looms land.
+MOVED_TO_DASHBOARD = frozenset({"bridge", "daily", "repos", "runs", "warp", "goals", "bench", "thread"})
 
 
 def resolve_frontend_dir(configured: str = "") -> Path | None:
@@ -204,6 +208,9 @@ def mount_frontend(app: FastAPI, directory: Path, claimed: frozenset[str]) -> No
         head = spa_path.split("/", 1)[0]
         if head in claimed or request.method not in _READ_METHODS:
             return JSONResponse({"detail": "Not Found"}, status_code=404)
+        if head in MOVED_TO_DASHBOARD:
+            query = f"?{request.url.query}" if request.url.query else ""
+            return RedirectResponse(f"/dashboard/{spa_path}{query}", status_code=308)
         asset = _safe_file(root, spa_path)
         if asset is not None:
             response = FileResponse(asset)

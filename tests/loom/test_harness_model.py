@@ -108,3 +108,25 @@ def test_the_inbox_preference_follows_a_legacy_home_thread(tmp_path):
     (home.root / "loom").mkdir(parents=True)
     (home.root / "loom" / "preferences.toml").write_text('model.inbox = "claude/opus"\n')
     assert at_birth(home, "brnrd", ("fake", "x")) == ("claude", "opus")
+
+
+def test_prefer_sets_one_role_in_place_and_clears_it(tmp_path):
+    from brr.loom.runtime.adapters import prefer, preferred_body
+    home = Home(tmp_path / "home")
+    home.thread_dir("inbox").mkdir(parents=True)
+    prefer(home, "default", "claude")
+    prefer(home, "work", "codex/gpt-6")
+    path = home.root / "loom" / "preferences.toml"
+    path.write_text("# kept\n" + path.read_text())
+    prefer(home, "default", " codex ")
+    assert path.read_text() == '# kept\nmodel.default = "codex"\nmodel.work = "codex/gpt-6"\n'
+    assert preferred_body(home, "work") == "codex/gpt-6"
+    assert at_birth(home, "inbox", ("fake", "x")) == ("codex", "")
+
+    prefer(home, "work", None)
+    assert path.read_text() == '# kept\nmodel.default = "codex"\n'
+    assert preferred_body(home, "work") == "codex"
+    for role, body in (("../x", "claude"), ("work", "claude/"), ("work", "/opus")):
+        with pytest.raises(ValueError):
+            prefer(home, role, body)
+    assert path.read_text() == '# kept\nmodel.default = "codex"\n'

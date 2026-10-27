@@ -114,6 +114,8 @@ export interface LoomWish {
 	at?: string;
 	says?: LoomWishSay[];
 	reading?: string;
+	/** An ask's recommendation: the asker's proposal, not the person's answer. */
+	rec?: string;
 	results?: LoomWishResult[];
 	verdict?: { as?: 'accepted' | 'dropped' | string; evidence?: string; at?: string };
 	answer?: { verdict?: WishVerdict | string; at?: string; head?: string };

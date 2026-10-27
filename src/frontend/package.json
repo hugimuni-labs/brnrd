@@ -11,6 +11,7 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"test": "node --experimental-strip-types --test src/lib/*.test.ts src/lib/*/*.test.ts",
+		"e2e": "node --test --test-concurrency=1 e2e/*.e2e.mjs",
 		"lint": "prettier --check . && eslint .",
 		"format": "prettier --write ."
 	},

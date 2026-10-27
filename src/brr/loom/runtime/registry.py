@@ -67,8 +67,8 @@ REGISTRY = (
     _kind("body.stopped",      "body",    "strand gen pid why",                               "loom",        "machine", once=True),
     _kind("body.unidentified", "body",    "strand gen pid why",                               "loom",        "machine"),
     _kind("body.exited",       "body",    "strand gen code why? failure_origin? failure_letters?",                             "loom",        "global",  once=True),
-    _kind("wish",              "wish",    "wish says from line thread parent?",                "strand person", "global"),
-    _kind("wish.read",         "wish",    "wish reading by",                                   "strand person", "global"),
+    _kind("wish",              "wish",    "wish says from line thread parent? rec?",           "strand person", "global"),
+    _kind("wish.read",         "wish",    "wish reading by wait?",                             "strand person", "global"),
     _kind("wish.result",       "wish",    "wish kind ref line delivered cmd?",                  "strand loom",   "global"),
     _kind("wish.verdict",      "wish",    "wish as evidence ref",                              "strand person", "global"),
     _kind("wish.left",         "wish",    "wish steps gen same?",                              "strand",        "global"),
@@ -87,6 +87,7 @@ REGISTRY = (
     _kind("loom.degraded",     "loom",    "install step error where since",                   "loom",        "machine"),
     _kind("loom.recovered",    "loom",    "install step since count last",                    "loom",        "machine"),
     _kind("loom.moved",        "loom",    "install from to merges started",                   "loom",        "global"),
+    _kind("lease.fenced",      "loom",    "install gen why",                                  "loom",        "global"),
     _kind("self.healed",       "loom",    "thread commit",                                    "loom",        "global",  once=True),
     _kind("library.problem",   "loom",    "install name problem text since",                  "loom",        "machine"),
     _kind("library.cleared",   "loom",    "install name problem",                             "loom",        "machine"),
@@ -143,5 +144,7 @@ def admit(fact: Fact) -> None:
                 found.append("an ask needs the wish it unblocks: ask --for <wish>")
         elif not fact.id.startswith("wish:"):
             found.append("a wish fact is a birth (id = the wish) or a touch (id wish:…)")
+        if "rec" in fact.data and fact.data["from"] != "resident":
+            found.append("only an ask carries a rec")
     if found:
         raise UndeclaredFact(f"registry refused {fact.id}: " + "; ".join(found))

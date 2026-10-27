@@ -15,7 +15,11 @@ from brr.pause import read_paused_record
 
 from .home import atomic_write, home_of_room, mint
 from .pausing import describe
+from .waits import GRAMMAR
 from .port import Boundary, parse_boundary
+
+_HEADER_LINE = re.compile(r"<!-- port (\S+) gen (\d+) · owed[^>]*-->")
+_ITEM_LINE = re.compile(r"^- (\S+) · from \S+ · reply \S+")
 from . import tooltrace
 
 
@@ -95,6 +99,100 @@ def _wait(room: Path, stdin_text: str = '') -> float | None:
 
 def _stop_timeout() -> float:
     return float(os.environ.get("BRNRD_STOP_TIMEOUT") or PARK + 60)
+
+
+_AGE = re.compile(r" \d+[smhd](?= ·|$)")
+
+
+def _ageless(line: str) -> str:
+    """A thread line without its ages: an hour passing on an idle child or a PR's push is not news."""
+    return _AGE.sub("", line)
+
+
+def _slot(key: str) -> str:
+    if key.startswith("opened: "):
+        return " ".join(key.split()[:2])
+    return "idle:" if key.startswith("idle: ") else key
+
+
+def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], list[str]]:
+    """The boundary minus what an earlier boundary already said: (news, said, told).
+
+    The wake shows everything; a post shows a line only when it is new, the
+    status line only when the plan moved, and an owed letter only the first
+    time. A live boundary that repeated 54 rows and every owed letter cost
+    ~1.7k tokens a call (wake-vision). The port header names the letters
+    shown here; one ``owed:`` line names the ones still owed from before.
+    """
+    header = _HEADER_LINE.search(text)
+    if header is None:
+        return "", [], []
+    units: list[list[str]] = []
+    for line in text[header.end():].splitlines():
+        if line.startswith("  ") and units:
+            units[-1].append(line)
+        elif line.strip() and line != "owed:":
+            units.append([line])
+    before = set(state.get("said", []))
+    known = set(state.get("told", []))
+    said: list[str] = []
+    told: list[str] = []
+    body: list[str] = []
+    letters: list[str] = []
+    skipped: list[str] = []
+    for unit in units:
+        # Past its allocation the warning comes at every post (``over``), so it is never said nor gone.
+        if unit[0].startswith("budget: "):
+            continue
+        item = _ITEM_LINE.match(unit[0])
+        if item:
+            told.append(item.group(1))
+            if item.group(1) in known:
+                skipped.append(item.group(1))
+            else:
+                letters.extend(unit)
+            continue
+        status = unit[0].startswith("status:")
+        key = ("status: · plan " + unit[0].partition(" · plan ")[2] if status
+               else _ageless(unit[0]) if unit[0].startswith("opened: ") else "\n".join(unit))
+        said.append(key)
+        if (plan_changed if status else key not in before):
+            body.extend(unit)
+    # A row that left (a child settled, a line cleared) is news too; the status line moves, it never leaves.
+    # A thread line that changed is said anew, not gone: its slot (``opened: <thread>``, ``idle:``) is still here.
+    slots = {_slot(key) for key in said}
+    body.extend("gone: " + key.split("\n")[0] for key in state.get("said", [])
+                if key not in said and not key.startswith("status:") and _slot(key) not in slots)
+    if not body and not letters:
+        return "", said, told
+    shown = [item.group(1) for line in letters if (item := _ITEM_LINE.match(line))]
+    owed = (["owed: " + " ".join(skipped) + " (shown before)"] if skipped else []) \
+        + (["owed:"] if letters else [])
+    head = f"<!-- port {header.group(1)} gen {header.group(2)} · owed {' '.join(shown)} -->"
+    return "\n".join([head, *body, *owed, *letters, ""]), said, told
+
+
+def _stop_news(room: Path, text: str, parsed: Boundary) -> str:
+    """What a stop shows: the boundary minus what the wake or a call already said.
+
+    A stop that blocked, a letter that woke a held body and a keepalive each
+    repeated the whole boundary (~3 KB with 13 thread rows) though the body
+    had read all of it; across held strands that was most of the jack's
+    spend. A body that has seen no boundary yet still gets it whole. Letters
+    already shown come back as their ids on one ``owed:`` line.
+    """
+    state = _state(room)
+    if "said" not in state:
+        return text
+    plan = next((line.partition(" · plan ")[2] for line in text.splitlines()
+                 if line.startswith("status:")), "")
+    news, said, told = _news(text, state, plan != state.get("plan", ""))
+    _set_state(room, said=said, told=told, plan=plan)
+    header = _HEADER_LINE.search(text)
+    if not news and parsed.ids and header:
+        news = (f"<!-- port {header.group(1)} gen {header.group(2)} · owed  -->\n"
+                f"owed: {' '.join(parsed.ids)} (shown before)\n")
+    return news
 
 
 def _shown(room: Path, parsed: Boundary) -> None:
@@ -195,7 +293,7 @@ def _poll(room: Path, stdin_text: str = '') -> str:
                 parked = False
                 deadline = ceiling
         if (parsed.ids if _hand() else any(not letter.compact for letter in parsed.letters)):
-            return _block(room, text, parsed)
+            return _block(room, _stop_news(room, text, parsed), parsed)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             if _hand():
@@ -205,7 +303,7 @@ def _poll(room: Path, stdin_text: str = '') -> str:
             # then leave while it still owes. With no cache lifetime this
             # happens only at the hook ceiling.
             return _json({"decision": "block", "reason": "cache keepalive, nothing new arrived: stop, unless the boundary"
-                          " below shows work you already owed\n" + text})
+                          " below shows work you already owed\n" + _stop_news(room, text, parsed)})
         time.sleep(min(0.2, remaining))
 
 
@@ -498,7 +596,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         _set_state(room, boundary_at=time.time())
     text = _boundary_text(room)
     parsed = parse_boundary(text)
-    opened = [[line.split()[1], line.split()[2], line.rpartition(" · owed ")[2]]
+    opened = [[line.split()[1], line.split()[2], _ageless(line.rpartition(" · owed ")[2])]
               for line in text.splitlines() if line.startswith("opened: ")]
     plan = next((line.partition(" · plan ")[2] for line in text.splitlines()
                  if line.startswith("status:")), "")
@@ -514,7 +612,8 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             return ""
         if parsed.ids:
             _shown(room, parsed)
-        _set_state(room, opened=opened, plan=plan, face=face, moved=moved)
+        _set_state(room, opened=opened, plan=plan, face=face, moved=moved,
+                   **dict(zip(("said", "told"), _news(text, {}, True)[1:])))
         return text if text.endswith("\n") else text + "\n"
     if event == "post":
         state = _state(room)
@@ -531,12 +630,29 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         # Past its allocation a strand is told at every boundary, not once.
         over = next((line for line in text.splitlines() if line.startswith("budget: ")), "")
         left = _left(room, False).rstrip("\n")
+        # A left in room is news when it changes; the stop still holds on it every time.
+        if left == state.get("left_said", ""):
+            left = ""
+        else:
+            _set_state(room, left_said=left)
+        news, said, told = _news(text, state, plan_changed)
+        _set_state(room, said=said, told=told)
         if not parsed.ids and not settled_changed and not opened_changed and not plan_changed \
                 and not face_changed and not moved_changed:
+            news = ""
+        if not news:
+            if parsed.ids:
+                _shown(room, parsed)
+            _set_state(room, opened=opened, plan=plan, face=face, moved=moved)
+            if parsed.settled is not None:
+                _set_state(room, settled=parsed.settled)
             if not weight and not paused and not over and not guarded and not left:
                 return ""
             return _json({"hookSpecificOutput": {"hookEventName": hook, "additionalContext": "\n".join(
                 filter(None, (guarded, paused, weight, over, left)))}})
+        text = news
+        if over:
+            text = over + "\n" + text
         if left:
             text = left + "\n" + text
         if guarded:
@@ -560,9 +676,9 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     # Work only this room holds blocks the stop the way an owed letter does.
     left = _left(room, True)
     if left and (_hand() or not _state(room).get("stop_blocks") and not _dry(room)):
-        return _block(room, left + text, parsed)
+        return _block(room, left + _stop_news(room, text, parsed), parsed)
     if parsed.ids and (_hand() or not _state(room).get("stop_blocks") and not _dry(room)):
-        return _block(room, text, parsed)
+        return _block(room, _stop_news(room, text, parsed), parsed)
     refused = _left_owed(room, text) or _undeclared(room, plan)
     if refused:
         return refused
@@ -572,9 +688,10 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
 END = """work is left on this thread (plan {plan}) and this body has not said how it ends. Do one, then stop:
 - a result: brnrd runtime wish <w-id> --result <kind>:<ref> --line "<what it is>" [--deliver]
 - an ask to a person: brnrd runtime ask "<question>" --for <w-id> --rec "<your call>"
-- a park with its reason: brnrd runtime wish <w-id> --read "waiting: <on what>"
+- a park with its reason: brnrd runtime wish <w-id> --read "waiting: <on what>" --wait <condition>
 - done: brnrd runtime settle {thread} --why "<what it became>"
-`brnrd runtime wishes` lists the w-ids. The jack then holds you while letters may come."""
+`brnrd runtime wishes` lists the w-ids, and `--wait` takes {grammar}.
+The jack then holds you, and the loom's letter wakes you when the wait comes true; never a sleep loop."""
 
 
 LEFT = """what is left on a wish moved since it was last said: {named}
@@ -648,7 +765,7 @@ def _undeclared(room: Path, plan: str) -> str:
         return ""
     _set_state(room, end_refused=True)
     thread = os.environ.get("BRNRD_THREAD") or "<thread>"
-    return _json({"decision": "block", "reason": END.format(plan=f"{done}/{total}", thread=thread)})
+    return _json({"decision": "block", "reason": END.format(plan=f"{done}/{total}", thread=thread, grammar=GRAMMAR)})
 
 
 def _dry(room: Path) -> bool:
