@@ -233,8 +233,18 @@ def heard(home, letter_id, data):
     else:
         targets.discard(thread)
     can = 'nothing owed' if data['verdict'] == 'agree' else f'nothing owed here; the letter is owed on thread {thread}'
+    # A settled thread may still hold delivered wishes (silence archives a
+    # thread, never accepts a wish), and the router skips closed threads: a
+    # correct sent there would wait on nobody, so the inbox owes it instead.
+    from .lifecycle import CLOSED, read_thread
+    orphan = data['verdict'] == 'correct' and read_thread(home, thread).get('status') in CLOSED
+    if orphan:
+        targets.discard(thread)
+        can = (f'thread {thread} is settled: reopen it with a letter to thread:{thread} '
+               'that carries the correction, or answer the person here')
     for target in sorted(targets):
-        notice(home, read_facts(home), f'verdict-{target}', letter_id, words, can, thread=target, passive=True)
+        notice(home, read_facts(home), f'verdict-{target}', letter_id, words, can, thread=target,
+               passive=not orphan)
 
 
 def drain(home, name, drop, failures=None):
