@@ -1,15 +1,27 @@
 // A loopback loom made of recorded parts: GET /v1/loom/{index,thread/<id>,beads} from a directory of
 // <name>.json files (a thread's slash is `__`), /v1/loom/events as an SSE stream that names the index hash,
-// POST /v1/loom/letters kept in memory. `node e2e/parts-server.mjs <dir> <port>`.
+// POST /v1/loom/letters kept in memory. `node e2e/parts-server.mjs <dir> <port>`. Given an object ({ name: json }, as
+// fixture.mjs makes) instead of a directory, `set(parts)` swaps it and sends the new index hash to every open stream.
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 export function partsServer(dir, port = 0) {
-	const sent = [];
+	const sent = [],
+		streams = new Set();
+	let mem = typeof dir === 'string' ? null : dir;
 	const read = (name) => {
+		if (mem) return name in mem ? JSON.stringify(mem[name]) : null;
 		const f = join(dir, name.replaceAll('/', '__') + '.json');
 		return existsSync(f) ? readFileSync(f) : null;
+	};
+	const ping = (res) =>
+		res.write(
+			`event: index\ndata: ${JSON.parse(read('index') || '{}').parts?.index ?? 'fixture'}\n\n`
+		);
+	const set = (parts) => {
+		mem = parts;
+		for (const res of streams) ping(res);
 	};
 	const server = createServer((req, res) => {
 		const url = new URL(req.url, 'http://x');
@@ -27,13 +39,14 @@ export function partsServer(dir, port = 0) {
 		}
 		if (path === 'events') {
 			res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
-			const index = JSON.parse(read('index') || '{}');
-			res.write(`event: index\ndata: ${index.parts?.index ?? 'fixture'}\n\n`);
+			ping(res);
+			streams.add(res);
 			const t = setInterval(() => res.write(': keepalive\n\n'), 15000);
-			req.on('close', () => clearInterval(t));
+			req.on('close', () => (clearInterval(t), streams.delete(res)));
 			return;
 		}
-		const raw = path === 'index' || path === 'beads' || path.startsWith('thread/') ? read(path) : null;
+		const raw =
+			path === 'index' || path === 'beads' || path.startsWith('thread/') ? read(path) : null;
 		if (!raw) {
 			res.writeHead(404, { 'content-type': 'application/json' });
 			res.end(JSON.stringify({ error: `no part ${path}` }));
@@ -42,7 +55,9 @@ export function partsServer(dir, port = 0) {
 		res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-cache' });
 		res.end(raw);
 	});
-	return new Promise((ok) => server.listen(port, '127.0.0.1', () => ok({ server, sent, port: server.address().port })));
+	return new Promise((ok) =>
+		server.listen(port, '127.0.0.1', () => ok({ server, sent, set, port: server.address().port }))
+	);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

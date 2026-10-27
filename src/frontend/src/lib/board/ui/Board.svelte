@@ -28,7 +28,12 @@
 		first = true;
 	const want = $derived(wanted(sorted, b.settledOpen));
 	function place() {
-		const r = arrange(want, order, { first, held: !!b.beadId || !!b.hovered, now: Date.now(), last });
+		const r = arrange(want, order, {
+			first,
+			held: !!b.beadId || !!b.hovered,
+			now: Date.now(),
+			last
+		});
 		first = false;
 		last = r.last;
 		if (r.ids.join() !== order.join()) order = r.ids;
@@ -44,12 +49,19 @@
 	const rail = $derived(
 		(b.model?.threads || []).flatMap((t) => {
 			const s = (t.strands || []).slice(-1)[0];
-			if (!s || t.status === 'settled' || !['working', 'holding', 'idle', 'parked', 'failed'].includes(s.state || '')) return [];
+			if (
+				!s ||
+				t.status === 'settled' ||
+				!['working', 'holding', 'idle', 'parked', 'failed'].includes(s.state || '')
+			)
+				return [];
 			return [{ t, s, lv: liveOf(s, b.model!.live) }];
 		})
 	);
 
 	onMount(() => {
+		// e2e reads the board's state here (src/frontend/e2e), as the board.html proofs read its globals
+		(window as unknown as { __board?: Board }).__board = b;
 		b.load();
 		return b.connect();
 	});
@@ -57,20 +69,45 @@
 
 <div class="brd" class:sheet={!!b.beadId}>
 	<header>
-		<b>fuel</b><span id="fuel">{(b.model?.fuel || []).map((f) => `${f.shell} ${f.gauges.map((g) => g.window + ' ' + g.left_pct + '%').join(' ')}`).join('   ')}</span>
+		<b>fuel</b><span id="fuel"
+			>{(b.model?.fuel || [])
+				.map(
+					(f) => `${f.shell} ${f.gauges.map((g) => g.window + ' ' + g.left_pct + '%').join(' ')}`
+				)
+				.join('   ')}</span
+		>
 		<span id="open" style="color:#d33">{b.letters.filter((l) => l.open).length} open</span>
-		<span class="dim" id="at">{b.letters.length} letters · as {b.model?.person || '?'}{#if b.model?.via} via {b.model.via}{/if}</span>
+		<span class="dim" id="at"
+			>{b.letters.length} letters · as {b.model?.person || '?'}{#if b.model?.via}
+				via {b.model.via}{/if}</span
+		>
 		<span id="live" class="dim" class:off={b.live === 'offline'}>{b.error || b.live}</span>
-		<label id="internal" class="dim"><input type="checkbox" bind:checked={b.showAll} onchange={() => b.persist()} /> show internal</label>
+		<label id="internal" class="dim"
+			><input type="checkbox" bind:checked={b.showAll} onchange={() => b.persist()} /> show internal</label
+		>
 	</header>
 	<nav id="rail" aria-label="strands">
 		{#each rail as r (r.s.id)}<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-			<span data-thread={r.t.id} data-strand={r.s.id} style:--h={hue(r.t.id)} onclick={() => b.openBead(r.s.id)}
-				>{#if r.t.board?.state === 'seated'}<b class="pulse"></b>{/if}{r.t.id} · {r.s.id.slice(-6)} · {r.s.state}{#if r.lv}<em> · {r.lv.verb}</em>{/if}</span
+			<span
+				data-thread={r.t.id}
+				data-strand={r.s.id}
+				style:--h={hue(r.t.id)}
+				onclick={() => b.openBead(r.s.id)}
+				>{#if r.t.board?.state === 'seated'}<b class="pulse"></b>{/if}{r.t.id} · {r.s.id.slice(-6)} ·
+				{r.s.state}{#if r.lv}<em> · {r.lv.verb}</em>{/if}</span
 			>{/each}
 	</nav>
 	<nav id="tabs" aria-label="columns">
-		{#each order as id (id)}<a href="#{id}" style:--h={hue(id)} onclick={(e) => (e.preventDefault(), document.querySelector(`[data-column="${CSS.escape(id)}"]`)?.scrollIntoView({ inline: 'start', behavior: 'smooth' }))}>{id === SETTLED ? 'settled' : id}</a>{/each}
+		{#each order as id (id)}<a
+				href="#{id}"
+				style:--h={hue(id)}
+				onclick={(e) => (
+					e.preventDefault(),
+					document
+						.querySelector(`[data-column="${CSS.escape(id)}"]`)
+						?.scrollIntoView({ inline: 'start', behavior: 'smooth' })
+				)}>{id === SETTLED ? 'settled' : id}</a
+			>{/each}
 	</nav>
 	<main id="board">
 		{#if !b.model}<div class="empty">{b.error || 'loading the board'}</div>{/if}
@@ -82,5 +119,8 @@
 	</main>
 	<BeadSheet />
 	<Composer />
-	<footer>← strands · you → / oldest → newest ↓ in every column / tap a heading to grow the plan / the input writes to the inbox as you</footer>
+	<footer>
+		← strands · you → / oldest → newest ↓ in every column / tap a heading to grow the plan / the
+		input writes to the inbox as you
+	</footer>
 </div>

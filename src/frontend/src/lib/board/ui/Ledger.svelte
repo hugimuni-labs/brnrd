@@ -20,9 +20,14 @@
 
 {#snippet steps(list: LedgerRow['steps'])}
 	{#if list.length}<div class="stp">
-			{#each list as s (s.i)}<div class="st {s.receipt ? 'done' : 'next'}" class:act={s === L.active}>
+			{#each list as s (s.i)}<div
+					class="st {s.receipt ? 'done' : 'next'}"
+					class:act={s === L.active}
+				>
 					<span class="sm">{s.receipt ? '✓' : '→'}</span><span class="tx"
-						>{stepText(s.text)}{#if s.receipt}<span class="rc">{String(s.receipt).replace(/^.*\//, '')}</span>{/if}</span
+						>{stepText(s.text)}{#if s.receipt}<span class="rc"
+								>{String(s.receipt).replace(/^.*\//, '')}</span
+							>{/if}</span
 					>
 				</div>{/each}
 		</div>{/if}
@@ -46,7 +51,8 @@
 			}}
 		>
 			<span class="lg-line"
-				>{#if r.w.origin === 'derived'}<span class="lg-tag as">assumed</span>{/if}{#if r.from}<button
+				>{#if r.w.origin === 'derived'}<span class="lg-tag as">assumed</span
+					>{/if}{#if r.from}<button
 						type="button"
 						class="ref"
 						onclick={(e) => {
@@ -61,9 +67,15 @@
 				{#if r.status}<span class="lg-st">{r.status}</span>{/if}
 				{#if r.sec === 'waits' && r.call}
 					{@const act = r.call.kind === 'ask' ? 'done' : 'agree'}
-					<button type="button" data-act={act} onclick={(e) => (e.stopPropagation(), b.answer(r.w.wish, act))}>{act}</button>
-					<button type="button" data-act="correct" onclick={(e) => (e.stopPropagation(), b.answer(r.w.wish, 'correct'))}
-						>correct</button
+					<button
+						type="button"
+						data-act={act}
+						onclick={(e) => (e.stopPropagation(), b.answer(r.w.wish, act))}>{act}</button
+					>
+					<button
+						type="button"
+						data-act="correct"
+						onclick={(e) => (e.stopPropagation(), b.answer(r.w.wish, 'correct'))}>correct</button
 					>
 				{/if}
 			</span>
@@ -71,22 +83,37 @@
 		{@render steps(r.steps)}
 		{#if b.open.has(key)}
 			<div class="lg-b">
-				<div class="dim">{r.w.wish} · {r.w.origin || ''} · {r.w.state}{r.w.thread ? ' · ' + r.w.thread : ''}</div>
+				<div class="dim">
+					{r.w.wish} · {r.w.origin || ''} · {r.w.state}{r.w.thread ? ' · ' + r.w.thread : ''}
+				</div>
 				<h4>asked · {(r.w.says || []).length}</h4>
-				{#each r.w.says || [] as s (s.id + s.quote)}<div class="say {s.cites}"><q>{s.quote}</q></div>{:else}<div class="dim">none</div>{/each}
+				{#each r.w.says || [] as s (s.id + s.quote)}<div class="say {s.cites}">
+						<q>{s.quote}</q>
+					</div>{:else}<div class="dim">none</div>{/each}
 				<h4>delivered</h4>
 				{#each r.w.results || [] as res, i (i)}<div>
 						{res.delivered ? 'delivered' : 'result'} · {res.kind || ''}
-						{#if /^https?:/.test(res.ref || '')}<a href={res.ref} target="_blank" rel="noopener">{res.ref}</a>{:else}{res.ref || ''}{/if}
+						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- an external link -->
+						{#if /^https?:/.test(res.ref || '')}<a href={res.ref} target="_blank" rel="noopener"
+								>{res.ref}</a
+							>{:else}{res.ref || ''}{/if}
 						<span class="dim">{res.line || ''} {hm(res.at)}</span>
 					</div>{:else}<div class="dim">nothing yet</div>{/each}
 				<h4>verdict</h4>
-				{#if r.w.verdict}<b>{r.w.verdict.as}</b> {hm(r.w.verdict.at)} {r.w.verdict.evidence || ''}{:else}<span class="dim">none yet</span>{/if}
+				{#if r.w.verdict}<b>{r.w.verdict.as}</b>
+					{hm(r.w.verdict.at)}
+					{r.w.verdict.evidence || ''}{:else}<span class="dim">none yet</span>{/if}
 				<h4>letters · {lettersOf(r).length} · oldest first</h4>
 				{#each lettersOf(r) as l (l.id)}<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 					<div class="lrow" class:quiet={l.chatter} onclick={() => b.openBead(l.id)}>
-						<b>{l.notice ? 'loom' : l.from.replace('person:', '').split('/')[0]} → {String(l.to || '').replace(/^thread:/, '')}</b>
-						<span class="dim">{hm(l.at)}</span><br />{String(l.body).replace(/\s+/g, ' ').slice(0, 140)}
+						<b
+							>{l.notice ? 'loom' : l.from.replace('person:', '').split('/')[0]} → {String(
+								l.to || ''
+							).replace(/^thread:/, '')}</b
+						>
+						<span class="dim">{hm(l.at)}</span><br />{String(l.body)
+							.replace(/\s+/g, ' ')
+							.slice(0, 140)}
 					</div>{:else}<div class="dim">none</div>{/each}
 			</div>
 		{/if}
@@ -101,7 +128,9 @@
 		</div>{/if}
 	{#each L.sections as s (s.k)}
 		{#if L.many}<div class="lg-sec {s.k}">{LABEL[s.k]}<i>{s.n}</i></div>{/if}
-		{#each s.rows as r (r.w.wish)}{@render row(r, false)}{:else}<div class="dim pad">nothing</div>{/each}
+		{#each s.rows as r (r.w.wish)}{@render row(r, false)}{:else}<div class="dim pad">
+				nothing
+			</div>{/each}
 	{/each}
 	{#if L.unplanned.length}
 		{@const uk = 'u:' + t.id}
@@ -110,6 +139,10 @@
 		>
 		{#if b.open.has(uk)}{@render steps(L.unplanned)}{/if}
 	{/if}
-	{#if !tw.W.length && !(t.steps || []).length}<div class="dim pad">no wish and no Plan row on record</div>{/if}
-	{#if L.loose.length}<div class="wc loose"><small>not tied to a wish</small> · {L.loose.length} letters</div>{/if}
+	{#if !tw.W.length && !(t.steps || []).length}<div class="dim pad">
+			no wish and no Plan row on record
+		</div>{/if}
+	{#if L.loose.length}<div class="wc loose">
+			<small>not tied to a wish</small> · {L.loose.length} letters
+		</div>{/if}
 </div>

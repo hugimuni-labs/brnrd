@@ -10,6 +10,12 @@ export type Beads = Record<
 >;
 type Get = (path: string) => Promise<unknown>;
 
+export async function getJSON(path: string): Promise<unknown> {
+	const r = await fetch(path, { cache: 'no-store' });
+	if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
+	return r.json();
+}
+
 // One letter may sit in several thread parts (its `threads`); the board holds it once.
 export function assemble(index: Index, threads: Map<string, ThreadPart>): Model {
 	const byId = new Map<string, Letter>(),

@@ -16,9 +16,15 @@
 	const B = $derived(t.board || {});
 	const strand = $derived((t.strands || []).slice(-1)[0]);
 	const rows = $derived(
-		inbox ? letters : withTools(letters, t, b.model?.tools || {}, b.model?.live || {}).filter((r) => !('live' in r))
+		inbox
+			? letters
+			: withTools(letters, t, b.model?.tools || {}, b.model?.live || {}).filter(
+					(r) => !('live' in r)
+				)
 	);
-	const now = $derived(strand && strand.state === 'working' ? liveOf(strand, b.model?.live || {}) : null);
+	const now = $derived(
+		strand && strand.state === 'working' ? liveOf(strand, b.model?.live || {}) : null
+	);
 	const steps = $derived(t.steps || []);
 	const ai = $derived(steps.findIndex((s) => !s.receipt));
 	const grown = $derived(b.grown.has(t.id));
@@ -35,6 +41,7 @@
 	});
 </script>
 
+<!-- eslint-disable svelte/no-navigation-without-resolve -- the forge url -->
 <section
 	class="column"
 	class:inbox
@@ -48,21 +55,55 @@
 	onmouseleave={() => b.hovered === t.id && (b.hovered = null)}
 >
 	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-	<div class="heading" onclick={(e) => !inbox && !(e.target as HTMLElement).closest('a,button') && b.toggle(b.grown, t.id)}>
+	<div
+		class="heading"
+		onclick={(e) =>
+			!inbox && !(e.target as HTMLElement).closest('a,button') && b.toggle(b.grown, t.id)}
+	>
 		<h2>
-			{#if B.state === 'settled'}<button type="button" class="unsettle" title="back into the settled stack" onclick={() => (b.settledOpen.delete(t.id), b.persist())}>×</button>{/if}
-			{t.id}{#if t.url}<a class="forge" href={t.url} target="_blank" rel="noopener" title="open on the forge">↗</a>{/if}
-			{#if B.state === 'seated'}<span class="pulse" class:hold={B.strand === 'holding'} title="seated · {B.strand}"></span>{/if}
-			{#if B.open || B.waits}<span class="badge">verdict</span>{:else if B.state === 'mine'}<span class="badge mine" class:stall={B.stall}>{B.stall ? 'no body' : 'mine'}</span>{/if}
-			{#if B.ready}<span class="badge ready" title="every wish on this thread is delivered or past it">ready to settle</span>{/if}
+			{#if B.state === 'settled'}<button
+					type="button"
+					class="unsettle"
+					title="back into the settled stack"
+					onclick={() => (b.settledOpen.delete(t.id), b.persist())}>×</button
+				>{/if}
+			{t.id}{#if t.url}<a
+					class="forge"
+					href={t.url}
+					target="_blank"
+					rel="noopener"
+					title="open on the forge">↗</a
+				>{/if}
+			{#if B.state === 'seated'}<span
+					class="pulse"
+					class:hold={B.strand === 'holding'}
+					title="seated · {B.strand}"
+				></span>{/if}
+			{#if B.open || B.waits}<span class="badge">verdict</span>{:else if B.state === 'mine'}<span
+					class="badge mine"
+					class:stall={B.stall}>{B.stall ? 'no body' : 'mine'}</span
+				>{/if}
+			{#if B.ready}<span
+					class="badge ready"
+					title="every wish on this thread is delivered or past it">ready to settle</span
+				>{/if}
 		</h2>
-		{#if B.why}<div class="why {B.waits ? 'call' : B.state === 'waiting' ? 'waiting' : 'mine'}">{B.why}</div>{/if}
+		{#if B.why}<div class="why {B.waits ? 'call' : B.state === 'waiting' ? 'waiting' : 'mine'}">
+				{B.why}
+			</div>{/if}
 		{#if (B.unanswered || []).length}<div class="why unans">
 				{B.unanswered!.length} letter{B.unanswered!.length > 1 ? 's' : ''} of yours unanswered:
-				{#each B.unanswered || [] as id (id)}<button type="button" class="ref" onclick={() => b.openBead(id)}>{short(id)}</button> {/each}
+				{#each B.unanswered || [] as id (id)}<button
+						type="button"
+						class="ref"
+						onclick={() => b.openBead(id)}>{short(id)}</button
+					>
+				{/each}
 			</div>{/if}
 		<div class="state">
-			{inbox ? 'the strand that weaves all of it' : t.status || ''}{#if strand} · {strand.id.slice(-6)} {strand.body || ''} {strand.state || ''}{/if}{#if t.plan?.total} · <span class="plan">plan {t.plan.done}/{t.plan.total}</span>{/if}
+			{inbox ? 'the strand that weaves all of it' : t.status || ''}{#if strand}
+				· {strand.id.slice(-6)} {strand.body || ''} {strand.state || ''}{/if}{#if t.plan?.total}
+				· <span class="plan">plan {t.plan.done}/{t.plan.total}</span>{/if}
 		</div>
 	</div>
 	{#if inbox}
@@ -75,16 +116,24 @@
 	<div class="messages" bind:this={pane}>
 		<div class="chat">
 			{#each rows as r (r.id)}
-				{#if 'fold' in r}<Tape f={r} />{:else if 'body' in r}<LetterCard l={r} col={t.id} {inbox} />{/if}
+				{#if 'fold' in r}<Tape f={r} />{:else if 'body' in r}<LetterCard
+						l={r}
+						col={t.id}
+						{inbox}
+					/>{/if}
 			{:else}<div class="empty">no letters</div>{/each}
 		</div>
 	</div>
 	{#if now}
 		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 		<div class="nowbar" onclick={() => pane && (pane.scrollTop = pane.scrollHeight)}>
-			<b>now{#if ai >= 0} · <span class="stn" title={stepText(steps[ai].text)}>step {ai + 1}</span>{/if}{now.say ? ' · ' + now.say : ''} ·
-				<span class="t">{now.verb} {now.abs ? now.since.slice(11, 16) + 'Z' : dur(secs(now.since, new Date(b.now).toISOString()))}</span></b
-			>{#if now.open[0]} <span class="oc">· {what(now.open[0])}</span>{/if}
+			<b
+				>now{#if ai >= 0}<span class="stn" title={stepText(steps[ai].text)}
+						>{` · step ${ai + 1}`}</span
+					>{/if}{now.say ? ' · ' + now.say : ''}<span class="t"
+					>{` · ${now.verb} ${now.abs ? now.since.slice(11, 16) + 'Z' : dur(secs(now.since, new Date(b.now).toISOString()))}`}</span
+				></b
+			>{#if now.open[0]}<span class="oc">{` · ${what(now.open[0])}`}</span>{/if}
 		</div>
 	{/if}
 </section>

@@ -9,7 +9,11 @@
 	const b = board();
 	const calls = $derived(allCalls(b.model?.threads || []));
 	const st = $derived(
-		stages(w, openAsks(calls), calls.some((c) => c.wish === w.wish && answered(c, b.pending)))
+		stages(
+			w,
+			openAsks(calls),
+			calls.some((c) => c.wish === w.wish && answered(c, b.pending))
+		)
 	);
 	const n = $derived(st.filter((s) => s.on).length);
 </script>

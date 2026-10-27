@@ -15,9 +15,12 @@
 
 {#if b.refs.length}<div id="refs">
 		<span class="dim">refs</span>
-		{#each b.refs as r (r.t)}{#if r.id}<button type="button" class="ref" onclick={() => b.openBead(r.id!)}>&{r.t} → {r.id}</button>{:else}<span
-					class="ref miss"
-					title="the loom will send it unlinked and tell the thread">&{r.t} · not in the ledger</span
+		{#each b.refs as r (r.t)}{#if r.id}<button
+					type="button"
+					class="ref"
+					onclick={() => b.openBead(r.id!)}>&{r.t} → {r.id}</button
+				>{:else}<span class="ref miss" title="the loom will send it unlinked and tell the thread"
+					>&{r.t} · not in the ledger</span
 				>{/if}{/each}
 	</div>{/if}
 <form
@@ -44,8 +47,7 @@
 				e.preventDefault();
 				b.send();
 			}
-		}}
-	></textarea>
+		}}></textarea>
 	<button>send</button>
 	{#if b.sendError}<span class="err">{b.sendError}</span>{/if}
 </form>

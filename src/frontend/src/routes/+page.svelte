@@ -15,14 +15,39 @@
 	import { HOME_DESCRIPTION, HOME_TITLE, SOCIAL_IMAGE } from '$lib/seo';
 	import { onMount } from 'svelte';
 	import Board from '$lib/board/ui/Board.svelte';
+	import { BASE, getJSON } from '$lib/board/parts';
 
-	// 2026-10-27 (web-main): `/` becomes the board. Until parity gates the switch it shows only on a loopback origin
-	// (the loom serving its own SPA) or with localStorage `board` = 1; everyone else keeps the page below.
-	let showBoard = $state(false);
+	// 2026-10-27 (web-main): `/` becomes the board. Until parity gates the switch it is tried only on a loopback origin
+	// or with localStorage `board` = 1, and shown only when a loom answers /v1/loom/index there: a dev server on
+	// localhost with no loom behind it (the repro drivers) keeps the page below. `board` = 0 skips the board.
+	// Nothing renders until that is decided: mounting the page below first would fetch /v1/dashboard/* (404s on a
+	// loopback loom) before the board replaced it. The board then drops the app's body chrome (layout.css grain).
+	let mode = $state<'?' | 'board' | 'home'>('?');
+	let index: unknown = null;
+	// the board's first read of the index is the answer the probe already holds
+	const get = (path: string) => {
+		const held = path === `${BASE}/index` ? index : null;
+		index = null;
+		return held ? Promise.resolve(held) : getJSON(path);
+	};
 	onMount(() => {
-		showBoard =
-			['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname) ||
-			localStorage.getItem('board') === '1';
+		const flag = localStorage.getItem('board');
+		const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
+		let gone = false;
+		const probe =
+			flag === '0' || !(loopback || flag === '1')
+				? Promise.resolve(null)
+				: getJSON(`${BASE}/index`).catch(() => null);
+		probe.then((j) => {
+			if (gone) return;
+			index = j && typeof j === 'object' && 'parts' in j ? j : null;
+			mode = index ? 'board' : 'home';
+			if (index) document.documentElement.classList.add('board');
+		});
+		return () => {
+			gone = true;
+			document.documentElement.classList.remove('board');
+		};
 	});
 </script>
 
@@ -37,18 +62,18 @@
 	<meta name="twitter:image" content={SOCIAL_IMAGE} />
 </svelte:head>
 
-{#if showBoard}
-	<div class="fixed inset-0 z-40"><Board /></div>
-{:else}
-<div class="mx-auto max-w-4xl px-5 pt-5 sm:px-6 sm:pt-6">
-	<a
-		href={resolve('/websummit')}
-		class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-y border-amber-900/50 py-2.5 font-mono text-[10px] tracking-wide uppercase transition-colors hover:border-amber-700/70"
-	>
-		<span class="text-ink-quiet">HugiMuni / brnrd · Web Summit Lisbon 2026</span>
-		<span class="text-amber-200">Meet us · Nov 9–12 →</span>
-	</a>
-</div>
+{#if mode === 'board'}
+	<Board {get} />
+{:else if mode === 'home'}
+	<div class="mx-auto max-w-4xl px-5 pt-5 sm:px-6 sm:pt-6">
+		<a
+			href={resolve('/websummit')}
+			class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-y border-amber-900/50 py-2.5 font-mono text-[10px] tracking-wide uppercase transition-colors hover:border-amber-700/70"
+		>
+			<span class="text-ink-quiet">HugiMuni / brnrd · Web Summit Lisbon 2026</span>
+			<span class="text-amber-200">Meet us · Nov 9–12 →</span>
+		</a>
+	</div>
 
-<LoomHome />
+	<LoomHome />
 {/if}

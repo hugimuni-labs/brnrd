@@ -353,9 +353,15 @@ test('a bead timeline walks the parent map up to its source and down to its chil
 	} as Record<string, [string | null, string | null, string | null, string | null, string]>;
 	const T = timeline(beads, null, 'w-aaaaaaaaaaaa');
 	equal(T.root, 'person');
-	deepEqual(T.chain.map((x) => x.id), ['letter:tg:1']);
+	deepEqual(
+		T.chain.map((x) => x.id),
+		['letter:tg:1']
+	);
 	equal(T.chain[0].edge, null);
-	deepEqual(T.out.map((x) => x.id), ['letter:tg:3', 'letter:tg:2']);
+	deepEqual(
+		T.out.map((x) => x.id),
+		['letter:tg:3', 'letter:tg:2']
+	);
 	equal(kindOf('s-ae66-abcdef', beads), 'strand');
 	equal(resolveRef(beads, null, '2'), 'letter:tg:2');
 	equal(resolveRef(beads, null, 'nope'), null);

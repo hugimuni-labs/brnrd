@@ -45,7 +45,10 @@ export function normalize(id: string, model: Model | null): string {
 export function timeline(beads: Beads, model: Model | null, id: string): Timeline {
 	const me = bead(beads, id),
 		up = ancestors(beads, id).reverse();
-	const chain = up.map((a, i) => ({ ...bead(beads, a.id), edge: (up[i + 1] || { edge: null }).edge }));
+	const chain = up.map((a, i) => ({
+		...bead(beads, a.id),
+		edge: (up[i + 1] || { edge: null }).edge
+	}));
 	const top = chain[0] || me;
 	const wish = model?.wishes.find((w) => w.wish === top.id);
 	const root: Root = !beads[top.id]

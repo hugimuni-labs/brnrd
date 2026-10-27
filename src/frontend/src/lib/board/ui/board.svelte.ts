@@ -2,14 +2,15 @@
 // per page, handed to every component by context; the logic it calls is the tested modules one level up.
 import { getContext, setContext } from 'svelte';
 import { SvelteSet } from 'svelte/reactivity';
-import { BASE, Store, type Beads } from '../parts.ts';
+import { BASE, getJSON, Store, type Beads } from '../parts.ts';
 import type { Letter, Model } from '../types.ts';
 import { normalize, resolveRef, timeline, type Timeline } from '../bead.ts';
 import { armedVerdict, correctDraft, verdictLetter } from '../calls.ts';
 import { refTokens } from '../text.ts';
 
 const KEY = Symbol('board');
-const local = (k: string, d: string) => (typeof localStorage === 'undefined' ? d : localStorage.getItem(k) ?? d);
+const local = (k: string, d: string) =>
+	typeof localStorage === 'undefined' ? d : (localStorage.getItem(k) ?? d);
 
 export class Board {
 	store: Store;
@@ -42,6 +43,7 @@ export class Board {
 	constructor(get: (path: string) => Promise<unknown> = getJSON) {
 		this.store = new Store(get);
 		if (typeof window !== 'undefined') {
+			// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a local, not state
 			const q = new URLSearchParams(location.search).get('typed_by');
 			if (q) sessionStorage.setItem('board.typedBy', q);
 			this.typedBy = sessionStorage.getItem('board.typedBy') || '';
@@ -60,6 +62,7 @@ export class Board {
 	letters = $derived.by(() => {
 		const m = this.model;
 		if (!m) return [];
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a local, not state
 		const have = new Set(m.letters.map((l) => l.id));
 		return [...m.letters, ...this.pending.filter((p) => !have.has(p.id))].sort(
 			(a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id)
@@ -70,6 +73,7 @@ export class Board {
 		try {
 			if (await this.store.sync()) {
 				this.model = this.store.model();
+				// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a local, not state
 				const have = new Set(this.model!.letters.map((l) => l.id));
 				if (this.pending.some((p) => have.has(p.id)))
 					this.pending = this.pending.filter((p) => !have.has(p.id));
@@ -118,7 +122,8 @@ export class Board {
 	async openBead(id: string, how?: 'back' | 'keep') {
 		id = normalize(id, this.model);
 		if (!how && this.beadId === id) return this.closeBead();
-		if (how !== 'back' && this.beadId && this.beadId !== id) this.beadHist = [...this.beadHist, this.beadId];
+		if (how !== 'back' && this.beadId && this.beadId !== id)
+			this.beadHist = [...this.beadHist, this.beadId];
 		this.beadId = id;
 		if (!this.beads) this.beads = await this.store.loadBeads();
 	}
@@ -153,7 +158,11 @@ export class Board {
 		}))
 	);
 	keep() {
-		if (this.draft) sessionStorage.setItem('board.draft', JSON.stringify({ body: this.draft, armed: this.armed }));
+		if (this.draft)
+			sessionStorage.setItem(
+				'board.draft',
+				JSON.stringify({ body: this.draft, armed: this.armed })
+			);
 		else sessionStorage.removeItem('board.draft');
 	}
 	async post(body: string, extra: { wish?: string; verdict?: string }) {
@@ -168,6 +177,7 @@ export class Board {
 			...this.pending,
 			{
 				id: j.id,
+				// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a local, not state
 				at: new Date().toISOString(),
 				from: 'person:' + (this.model?.person || ''),
 				to: 'thread:' + j.thread,
@@ -217,12 +227,6 @@ export class Board {
 			this.sendError = (e as Error).message;
 		}
 	}
-}
-
-async function getJSON(path: string): Promise<unknown> {
-	const r = await fetch(path, { cache: 'no-store' });
-	if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
-	return r.json();
 }
 
 export const provide = (b: Board) => setContext(KEY, b);

@@ -20,7 +20,10 @@
 		if (l.person) {
 			if (!dis) return b.toggle(b.open, 'd:' + l.id);
 			const r = routes(l, b.model!.byId, (t) => b.model!.threads.some((x) => x.id === t))[0];
-			if (r) document.querySelector(`[data-column="${CSS.escape(r)}"]`)?.scrollIntoView({ inline: 'start' });
+			if (r)
+				document
+					.querySelector(`[data-column="${CSS.escape(r)}"]`)
+					?.scrollIntoView({ inline: 'start' });
 			else b.open.delete('d:' + l.id);
 			return;
 		}
@@ -85,7 +88,9 @@
 						<b>{w.wish}</b> · {w.state}{w.thread ? ' · ' + w.thread : ''}<br />{w.line}
 					</div>{:else}<div class="dim warn">none: no wish say or chatter cites it</div>{/each}
 				<h4>letters answering it · {(l.answers || []).length}</h4>
-				{#each (l.answers || []).map((id) => b.model?.byId.get(id)).filter(Boolean) as x (x!.id)}<div class="row">
+				{#each (l.answers || [])
+					.map((id) => b.model?.byId.get(id))
+					.filter(Boolean) as x (x!.id)}<div class="row">
 						<b>{sender(x!)} → {String(x!.to || '').replace(/^thread:/, '')}</b>
 						{hm(x!.at)}<br />{String(x!.body).replace(/\s+/g, ' ').slice(0, 140)}
 					</div>{:else}<div class="dim">none yet</div>{/each}
