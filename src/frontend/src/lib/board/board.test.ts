@@ -341,3 +341,22 @@ test('beads: the chain walks up to the source; children hang below oldest first'
 	deepEqual(children(b, 'w'), ['l1', 'l2']);
 	deepEqual(ancestors(b, 'loop'), []);
 });
+
+// The bead sheet walks the beads part in the client (no /bead on the loopback): chain up to the source, what hangs below.
+import { kindOf, resolveRef, timeline } from './bead.ts';
+test('a bead timeline walks the parent map up to its source and down to its children', () => {
+	const beads = {
+		'letter:tg:1': [null, null, 'person:ada', '2026-10-27T10:00:00Z', 'make the board'],
+		'w-aaaaaaaaaaaa': ['letter:tg:1', 'says', 'person:ada', '2026-10-27T10:01:00Z', 'the board'],
+		'letter:tg:2': ['w-aaaaaaaaaaaa', 're', 's-ae66-abcdef', '2026-10-27T10:05:00Z', 'on it'],
+		'letter:tg:3': ['w-aaaaaaaaaaaa', 're', 's-ae66-abcdef', '2026-10-27T10:03:00Z', 'reading']
+	} as Record<string, [string | null, string | null, string | null, string | null, string]>;
+	const T = timeline(beads, null, 'w-aaaaaaaaaaaa');
+	equal(T.root, 'person');
+	deepEqual(T.chain.map((x) => x.id), ['letter:tg:1']);
+	equal(T.chain[0].edge, null);
+	deepEqual(T.out.map((x) => x.id), ['letter:tg:3', 'letter:tg:2']);
+	equal(kindOf('s-ae66-abcdef', beads), 'strand');
+	equal(resolveRef(beads, null, '2'), 'letter:tg:2');
+	equal(resolveRef(beads, null, 'nope'), null);
+});

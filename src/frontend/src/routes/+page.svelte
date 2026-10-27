@@ -13,6 +13,17 @@
 	import { resolve } from '$app/paths';
 	import LoomHome from '$lib/LoomHome.svelte';
 	import { HOME_DESCRIPTION, HOME_TITLE, SOCIAL_IMAGE } from '$lib/seo';
+	import { onMount } from 'svelte';
+	import Board from '$lib/board/ui/Board.svelte';
+
+	// 2026-10-27 (web-main): `/` becomes the board. Until parity gates the switch it shows only on a loopback origin
+	// (the loom serving its own SPA) or with localStorage `board` = 1; everyone else keeps the page below.
+	let showBoard = $state(false);
+	onMount(() => {
+		showBoard =
+			['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname) ||
+			localStorage.getItem('board') === '1';
+	});
 </script>
 
 <svelte:head>
@@ -26,6 +37,9 @@
 	<meta name="twitter:image" content={SOCIAL_IMAGE} />
 </svelte:head>
 
+{#if showBoard}
+	<div class="fixed inset-0 z-40"><Board /></div>
+{:else}
 <div class="mx-auto max-w-4xl px-5 pt-5 sm:px-6 sm:pt-6">
 	<a
 		href={resolve('/websummit')}
@@ -37,3 +51,4 @@
 </div>
 
 <LoomHome />
+{/if}
