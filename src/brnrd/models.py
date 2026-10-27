@@ -530,6 +530,10 @@ class TgPairCode(Base):
     # `GET /v1/dashboard/pair/{code}` polls this row. `None` until
     # consumed; stays `None` forever for a code that expires unused.
     redeemed_display: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # A loom's own pairing code, minted through `POST /v1/daemons/door`: on
+    # redemption the webhook hands it to the daemon as the chat's first
+    # message, so one tap binds the chat here and pairs the person there.
+    relay_text: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class PairRequest(Base):

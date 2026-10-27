@@ -826,6 +826,12 @@ def _handle_start(db: Session, settings, parsed: tg.ParsedMessage, code: str) ->
     repo = db.get(Repo, pc.repo_id) if pc.repo_id is not None else None
     account = db.get(Account, pc.account_id)
     db.commit()
+    if pc.relay_text and pc.repo_id is not None:
+        # A loom's door code (`POST /v1/daemons/door`): the loom pairs on
+        # its own code arriving from this chat, and answers itself, so the
+        # bot says nothing here.
+        _enqueue_telegram_event(db, parsed, repo_id=pc.repo_id, body=pc.relay_text)
+        return
     # #1464 — name the bound identity in the very message that creates the
     # bind: a wrong-account/wrong-phone redeem (the maintainer's own live
     # trace) is now visible in-band instead of only discoverable later on
