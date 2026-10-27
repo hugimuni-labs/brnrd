@@ -154,9 +154,12 @@ reaches a person. The same ask again (same line, same `--for`) while it is
 open reuses it and sends only the mail that did not leave; it says `reused
 <id>`. Reword it to ask anew. `brnrd asks`
 lists, over every thread, what is in hand, the asks, the unanswered letters
-and the Done lines. A thread a person opened settles on their word only: when
+and the Done lines. A thread settles when nothing is in hand; a person's
+wish is accepted on their word only. A thread a person opened that still
+holds a wish in hand (heard, read, granting) settles on their word: when
 their reply says it is done, `settle <thread> --why "…" --word <their
-letter>`; silence never settles. `brnrd graph` lists each
+letter>`. A delivered wish keeps its state on a settled thread and waits
+on their verdict; a correct sent there reaches the inbox. `brnrd graph` lists each
 thread's strands, `--strands` each strand's threads, with the origin of each.
 
 ## Ends and starts
