@@ -15,6 +15,7 @@ from brr.pause import read_paused_record
 
 from .home import atomic_write, home_of_room, mint
 from .pausing import describe
+from .waits import GRAMMAR
 from .port import Boundary, parse_boundary
 
 _HEADER_LINE = re.compile(r"<!-- port (\S+) gen (\d+) · owed[^>]*-->")
@@ -687,9 +688,10 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
 END = """work is left on this thread (plan {plan}) and this body has not said how it ends. Do one, then stop:
 - a result: brnrd runtime wish <w-id> --result <kind>:<ref> --line "<what it is>" [--deliver]
 - an ask to a person: brnrd runtime ask "<question>" --for <w-id> --rec "<your call>"
-- a park with its reason: brnrd runtime wish <w-id> --read "waiting: <on what>"
+- a park with its reason: brnrd runtime wish <w-id> --read "waiting: <on what>" --wait <condition>
 - done: brnrd runtime settle {thread} --why "<what it became>"
-`brnrd runtime wishes` lists the w-ids. The jack then holds you while letters may come."""
+`brnrd runtime wishes` lists the w-ids, and `--wait` takes {grammar}.
+The jack then holds you, and the loom's letter wakes you when the wait comes true; never a sleep loop."""
 
 
 LEFT = """what is left on a wish moved since it was last said: {named}
@@ -763,7 +765,7 @@ def _undeclared(room: Path, plan: str) -> str:
         return ""
     _set_state(room, end_refused=True)
     thread = os.environ.get("BRNRD_THREAD") or "<thread>"
-    return _json({"decision": "block", "reason": END.format(plan=f"{done}/{total}", thread=thread)})
+    return _json({"decision": "block", "reason": END.format(plan=f"{done}/{total}", thread=thread, grammar=GRAMMAR)})
 
 
 def _dry(room: Path) -> bool:
