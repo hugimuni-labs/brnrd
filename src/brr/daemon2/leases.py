@@ -102,7 +102,10 @@ class LocalLeaseAuthority:
 
     def acquire(self, what: str, holder: str, ttl: float, *,
                 capabilities: set[str] | None = None,
-                required: set[str] | None = None) -> Lease | None:
+                required: set[str] | None = None,
+                gen: int | None = None) -> Lease | None:
+        """``gen`` seats the lease at a generation decided elsewhere (a
+        remote lease), over any local holder, never below the current one."""
         if not holder or ttl <= 0:
             raise ValueError("holder and positive ttl required")
         offered = capabilities or set()
@@ -111,6 +114,13 @@ class LocalLeaseAuthority:
 
         def action(path: Path, row: dict[str, Any]) -> Lease | None:
             now = self.clock()
+            if gen is not None:
+                if gen < row["gen"]:
+                    return None
+                row.update(holder=holder, gen=gen, until=now + ttl,
+                           capabilities=sorted(offered))
+                self._write(path, row)
+                return Lease(what, holder, gen, row["until"], tuple(row["capabilities"]))
             if row["until"] > now and row["holder"] != holder:
                 return None
             if row["until"] > now and row["holder"] == holder:
