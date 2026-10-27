@@ -134,13 +134,18 @@ def forge_wants(found: dict) -> set[str]:
             if str(read["wait"].get("on", "")).startswith(("pr:", "ci:"))}
 
 
-def _answers(facts, target: str, since: str) -> str | None:
-    """A letter that replies to or cites ``target``, at or after ``since``."""
+def _answers(facts, target: str, since: str, replied: str | None = None) -> str | None:
+    """A letter that replies to ``target`` at or after ``replied`` (default ``since``), or cites it after ``since``.
+
+    Only the reply index reaches back past ``since``: the citation scan walks
+    the letters newest first and stops there, so a tick never walks the ledger.
+    """
     from .ledger import LedgerView, kind_facts
+    replied = since if replied is None else replied
     if isinstance(facts, LedgerView):
         for ident in facts.letters_by_reply.get(target, ()):
             letter = facts.by_id.get(ident)
-            if letter is not None and letter.at >= since:
+            if letter is not None and letter.at >= replied:
                 return str(letter.data.get("id") or letter.id)
     for letter in reversed(kind_facts(facts, "letter")):
         if letter.at < since:
@@ -178,7 +183,7 @@ def outcome(wish, read, facts, found: dict, forge: dict, now: datetime) -> str |
         if answer is not None:
             return f"{on[5:]} was answered by {answer}"
     elif on.startswith("letter:"):
-        answer = _answers(facts, on[7:], "")
+        answer = _answers(facts, on[7:], read["at"], replied="")
         if answer is not None:
             return f"{on[7:]} was answered by {answer}"
     elif on.startswith("at:"):
