@@ -26,7 +26,7 @@ from pathlib import Path
 from brr.daemon_install import linux, macos
 
 from . import entry
-from .config import config_path, fold_config, load_config, set_value
+from .config import config_path, fold_config, load_config, seed_config, set_value
 from .home import found_homes, is_home, resolve_home
 from .threads import _age
 
