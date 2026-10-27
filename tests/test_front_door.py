@@ -44,6 +44,17 @@ def repo(tmp_path, monkeypatch) -> Path:
 # ── Dispatch ────────────────────────────────────────────────────────
 
 
+def test_bare_argv_runs_the_loom_guided_setup(monkeypatch):
+    from brr.cli import main
+    from brr.loom.runtime import setup_channel
+
+    calls = []
+    monkeypatch.setattr(front_door, "run", lambda: calls.append("front_door") or 7)
+    monkeypatch.setattr(setup_channel, "main", lambda argv: calls.append(argv) or 0)
+    assert main([]) == 0
+    assert calls == [[]]
+
+
 # ── The narration is not a lie ──────────────────────────────────────
 
 

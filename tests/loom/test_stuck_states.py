@@ -313,15 +313,15 @@ def test_unavailable_channel_does_not_block_a_live_threads_new_letter(root, monk
         wait_until(lambda: answered(loom, fresh), 2, loom.dump)
 
 
-def test_stale_speech_gets_a_visible_disposition(root):
-    # Recovery can start the old lease before speak_out creates its notice.
-    # Keep reading boundaries so the fixture handles mail arriving after start.
+def _draft_under_gen_1(root, router_install=None):
+    """A channel draft stamped router gen 1, whose lease is then released."""
     thread(root, "answer-pings")
     home = Home(root)
     authority = LocalLeaseAuthority(root / "ledger" / "leases")
     lease = authority.acquire("router", home.install_id(), 30)
-    append(home, Fact(kind="router", by=f"loom:{home.install_id()}", id="router:1",
-                     data={"gen": 1, "install": home.install_id(), "until": lease.until}))
+    install = router_install or home.install_id()
+    append(home, Fact(kind="router", by=f"loom:{install}", id="router:1",
+                     data={"gen": 1, "install": install, "until": lease.until}))
     strand = f"s-{home.install_id()}-old123"
     append(home, Fact(kind="lease", by=f"loom:{home.install_id()}", id="lease:work:1",
            data={"strand": strand, "thread": "work", "gen": 1, "router_gen": 1}))
@@ -330,12 +330,31 @@ def test_stale_speech_gets_a_visible_disposition(root):
            data={"id": key, "from": strand, "to": "channel:fake", "body": "old answer",
                  "gen": 1, "router_gen": 1}))
     authority.release(lease)
+    return key
+
+
+def test_stale_speech_gets_a_visible_disposition(root):
+    # Gen 1 was another install's router: the lease moved machines, so the
+    # draft is refused. Recovery can start the old lease before speak_out
+    # creates its notice; keep reading boundaries for mail after start.
+    key = _draft_under_gen_1(root, router_install="other")
     with running(root) as loom:
         reach(lambda: any(f.kind == "router" and f.data["gen"] == 2
                           for f in loom.facts()), loom)
         # The thread that drafted it is woken, told, and settles it; never sent.
         told_and_settled(loom, key, "work", "was not sent", "send a fresh message")
         assert not (root / "loom" / "channel-fake.jsonl").exists()
+
+
+def test_a_draft_survives_a_new_router_gen_on_the_same_install(root):
+    # A network flap fails renew and this install takes gen 2: the same
+    # speaker, so the draft from gen 1 is still delivered, not refused.
+    key = _draft_under_gen_1(root)
+    sent = root / "loom" / "channel-fake.jsonl"
+    with running(root) as loom:
+        reach(lambda: sent.exists() and "old answer" in sent.read_text(), loom)
+        assert not any(f.kind == "letter" and f.data.get("about") == key
+                       and "stale-speech" in json.dumps(f.data) for f in loom.facts())
 
 
 def test_relay_poll_recovers_after_saved_cursor_is_repaired(root, tmp_path, monkeypatch):
