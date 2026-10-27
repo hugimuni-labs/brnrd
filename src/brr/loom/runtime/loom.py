@@ -1923,8 +1923,13 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         health = Health(home, read_facts(home), _log)
         from .snapshot import Publisher
         publisher = Publisher(home, _log, functools.partial(health.guard, backoff=False))
+        spa = None
         if config.board_port:  # read at start: a port change waits for the next re-exec
             from .board import Parts, serve
+            from .spabuild import SpaBuild
+            frontend = Path(__file__).resolve().parents[3] / "frontend"
+            if (frontend / "package.json").is_file() and not os.environ.get("BRNRD_FRONTEND_DIR"):
+                spa = SpaBuild(frontend, lambda text: _log(home, text))
             board = Parts(home, lambda: load_config(home.root), _log)
             threading.Thread(target=board.run, name="board", daemon=True).start()
             try:
@@ -1966,6 +1971,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 health.guard("library", keeper.step, backoff=False)
                 health.guard("disk", reaper.disk, backoff=False)
                 health.guard("reap", reaper.step, backoff=False)
+                if spa is not None:  # the board's build follows the checkout; a failed one stays degraded
+                    health.guard("spa", spa.step, backoff=False)
                 # Only at an idle tick, and the re-exec follows in this same pass.
                 health.guard("update", updater.step, config, functools.partial(_idle, home),
                              backoff=False)
