@@ -18,11 +18,16 @@ Conditions, one row each in ``KINDS``, resolve on any terminal outcome:
   answers or cites it (how a person answers an ask).
 - ``letter:<id>``: a letter replies to it.
 - ``at:<instant>``: the clock passes it.
+- ``file:<path>``: the path exists. A body that starts a long command itself
+  runs ``(cmd; echo $? > <path>) &``, parks on the path and stops; the jack
+  holds it and the notice says what the file says. The loom reads the path on
+  its own machine, so it is absolute, and it is the room's machine.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -47,7 +52,7 @@ _PR = re.compile(r"^pr:(?:([\w.-]+/[\w.-]+))?#(\d+)$")
 _CI = re.compile(r"^ci:(?:([\w.-]+/[\w.-]+))?@([0-9a-f]{7,40})$")
 _WISH = re.compile(r"^wish:(w-[a-z0-9]+)$")
 _LETTER = re.compile(r"^letter:(\S+)$")
-GRAMMAR = "pr:[owner/repo]#N, ci:[owner/repo]@sha, wish:<w-id>, letter:<id>, at:<when>"
+GRAMMAR = "pr:[owner/repo]#N, ci:[owner/repo]@sha, wish:<w-id>, letter:<id>, at:<when>, file:<path>"
 
 
 def _iso(moment: datetime) -> str:
@@ -91,6 +96,9 @@ def canonical(text: str, now: datetime, repo=None) -> str:
         return text
     if text.startswith("at:"):
         return "at:" + when(text[3:], now, "--wait at:")
+    if text.startswith("file:") and text[5:].strip():
+        # Relative to the parker's cwd, which the loom does not share.
+        return "file:" + os.path.abspath(os.path.expanduser(text[5:].strip()))
     raise ValueError(f"--wait {text}: expected one of {GRAMMAR}")
 
 
@@ -203,6 +211,16 @@ def outcome(wish, read, facts, found: dict, forge: dict, now: datetime) -> str |
         due = parse_instant(on[3:])
         if due is not None and due <= now:
             return f"{on[3:]} has passed"
+    elif on.startswith("file:"):
+        try:
+            with open(on[5:], "rb") as handle:
+                head = handle.read(200).decode("utf-8", "replace").strip()
+        except FileNotFoundError:
+            head = None
+        except OSError as exc:
+            head = f"unreadable: {exc.strerror}"
+        if head is not None:
+            return f"{on[5:]} exists" + (f" ({head.splitlines()[0]})" if head else ", empty")
     until = parse_instant(str(wait.get("until", "")))
     if until is not None and until <= now:
         return f"nothing resolved by {wait['until']}"
