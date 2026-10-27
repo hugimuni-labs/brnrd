@@ -292,7 +292,9 @@ def _poll(room: Path, stdin_text: str = '') -> str:
                 # full rewrite for nothing. Hold on letters until the ceiling.
                 parked = False
                 deadline = ceiling
-        if (parsed.ids if _hand() else any(not letter.compact for letter in parsed.letters)):
+        done = answered(room) if parsed.ids else set()
+        if (set(parsed.ids) - done if _hand() else
+                any(not letter.compact and letter.id not in done for letter in parsed.letters)):
             return _block(room, _stop_news(room, text, parsed), parsed)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -488,58 +490,36 @@ def _guard_warnings(room: Path, at: str, stdin_text: str) -> tuple[str, bool]:
     return "\n".join(label for label, _ in hits), any(refuse for _, refuse in hits)
 
 
-def _guard_stop(room: Path) -> str:
-    """A broken path guard blocks the stop once per distinct set of breaks.
-
-    The same breaks a second time let the stop through: a body that has read
-    the guard and cannot fix it is not trapped in a loop. send-self, publish
-    and settle still refuse.
-    """
+def _guard_miss(room: Path) -> str:
+    """A broken path guard, as one section of the stop's block."""
     from .guards import violations
     guards, _errors = _guards(room)
     lines = violations([g for g in guards if g.paths], room)
-    if not lines:
-        if _state(room).get("guard_stop"):
-            _set_state(room, guard_stop="")
-        return ""
-    seen = "\n".join(lines)
-    if _state(room).get("guard_stop") == seen:
-        return ""
-    _set_state(room, guard_stop=seen)
-    return _json({"decision": "block", "reason": "a path guard is broken; undo the change, or ask the person"
-                  " who set it (send-self, publish and settle refuse until then):\n" + seen})
+    return ("a path guard is broken; undo the change, or ask the person who set it"
+            " (send-self, publish and settle refuse until then):\n" + "\n".join(lines)) if lines else ""
 
 
-def _kept_stop(room: Path) -> str:
-    """Uncommitted writes in a kept folder since this body began block one stop.
-
-    The same set a second time lets the stop through: they may be his, and
-    the body has been told. A check that cannot run never costs the stop.
-    """
+def _kept_miss(room: Path) -> str:
+    """Uncommitted writes in a kept folder since this body began. A check that cannot run never costs the stop."""
     from .library import written_since
     try:
         since = (room / "port" / "library.json").stat().st_mtime
         lines = written_since(room, since)
     except Exception:
         return ""
-    seen = "\n".join(lines)
-    if not lines or _state(room).get("kept_stop") == seen:
-        return ""
-    _set_state(room, kept_stop=seen)
-    return _json({"decision": "block", "reason": (
+    return ((
         "uncommitted changes in a kept folder since this body began. Commit what you wrote, "
         "only those paths: `python -m brr.loom.runtime lib commit <name> -m \"<what and why>\" <path>...`. "
-        "Leave what is the person's; the loom reports it after an hour:\n" + seen)})
+        "Leave what is the person's; the loom reports it after an hour:\n") + "\n".join(lines)) if lines else ""
 
 
-def _known_stop(room: Path) -> str:
-    """A known folder this body touched blocks one stop with a nudge to tidy or note it."""
+def _known_miss(room: Path) -> str:
+    """A known folder this body touched: a nudge to tidy or note it, once per folder (library.known_nudge)."""
     from .library import known_nudge
     try:
-        nudge = known_nudge(room)
+        return known_nudge(room)
     except Exception:
         return ""
-    return _json({"decision": "block", "reason": nudge}) if nudge else ""
 
 
 def _touch(room: Path, stdin_text: str) -> None:
@@ -670,22 +650,92 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             "hookEventName": hook, "additionalContext": text}})
     if _state(room).get("molted") or parsed.settled is not None:
         return ""
-    blocked = _guard_stop(room) or _kept_stop(room) or _known_stop(room)
-    if blocked:
-        return blocked
-    # Work only this room holds blocks the stop the way an owed letter does.
-    left = _left(room, True)
-    if left and (_hand() or not _state(room).get("stop_blocks") and not _dry(room)):
-        return _block(room, left + _stop_news(room, text, parsed), parsed)
-    if parsed.ids and (_hand() or not _state(room).get("stop_blocks") and not _dry(room)):
-        return _block(room, _stop_news(room, text, parsed), parsed)
-    refused = _left_owed(room, text) or _undeclared(room, plan)
+    refused = _stop_block(room, text, plan)
     if refused:
         return refused
     return _poll(room, stdin_text)
 
 
-END = """work is left on this thread (plan {plan}) and this body has not said how it ends. Do one, then stop:
+def answered(room: Path) -> set[str]:
+    """Letter ids a reply or note in this room's port/out already answers.
+
+    The loom drains port/out on its tick; until it does, the boundary still
+    names those letters as owed, and a slow loom made a stop re-show letters
+    the body had answered for minutes (stop-list)."""
+    from .port import PortError, parse_frontmatter
+    found = set()
+    for path in (room / "port" / "out").glob("*.md"):
+        try:
+            fields = parse_frontmatter(path.read_text())
+        except (PortError, OSError):
+            continue
+        if fields.get("kind") in {"letter", "note"} and fields.get("re"):
+            found.add(fields["re"])
+    return found
+
+
+def _letter_miss(room: Path, parsed: Boundary, done: set[str]) -> str:
+    thread = os.environ.get("BRNRD_THREAD") or "<thread>"
+    rows = []
+    for letter in parsed.letters:
+        if letter.id in done:
+            continue
+        rows.append(f"- {letter.id}: brnrd runtime send --re {letter.id} --to thread:{thread} --note \"<what you did>\""
+                    if letter.reply == "-" else
+                    f"- {letter.id}: brnrd runtime send --re {letter.id} --to {letter.reply} \"<answer>\"")
+    return "owed letters, each with its reply (a reply already in port/out counts):\n" + "\n".join(rows) if rows else ""
+
+
+STOP = "the stop holds on {n}; do each, then stop. This list comes back whole at every stop until it is empty."
+
+
+def _stop_block(room: Path, text: str, plan: str) -> str:
+    """Everything the stop holds on, in one block (stop-list).
+
+    Each miss is a section with its exact command: owed letters, a left in
+    room, wishes whose left moved, an end not yet said, a broken guard, a
+    kept folder's writes, a known folder touched. The block comes back whole at
+    every stop after a call until it is empty. A stop again with no call and
+    the same misses passes: a body that has read the list and cannot clear it
+    is never trapped; the wishes asked about become ``left.asked`` facts then,
+    and the wake shows them stale.
+    """
+    if _dry(room):
+        # A turn without fuel fails; the hold sleeps instead.
+        return ""
+    text, lefts = _settled_render(room, text)
+    parsed = parse_boundary(text)
+    if parsed.settled is not None:
+        return ""
+    sections = [
+        _letter_miss(room, parsed, answered(room)),
+        _left(room, True).rstrip("\n"),
+        LEFT.format(named=" · ".join(f"{ident} ({why})" for ident, why in lefts)) if lefts else "",
+        _end_miss(room, plan),
+        _guard_miss(room),
+        _kept_miss(room),
+    ]
+    sections = [section for section in sections if section]
+    state = _state(room)
+    count = int(state.get("stop_blocks") or 0)
+    seen = "\n\n".join(sections)
+    if (count >= 3) if _hand() else (count and seen == state.get("stop_said")):
+        # Stopped again with nothing done since the same list: let it through.
+        _asked(room, parsed, [ident for ident, _ in lefts])
+        return ""
+    known = _known_miss(room)
+    if not sections and not known:
+        return ""
+    sections = [*sections, known] if known else sections
+    if parsed.ids:
+        _shown(room, parsed)
+    _set_state(room, stop_blocks=count + 1, stop_said=seen)
+    head = STOP.format(n=f"{len(sections)} thing{'s' * (len(sections) > 1)}")
+    news = _stop_news(room, text, parsed) if parsed.ids else ""
+    return _json({"decision": "block", "reason": "\n\n".join([head, *sections, *([news] if news else [])])})
+
+
+END = """work is left on this thread (plan {plan}) and this body has not said how it ends. Do one:
 - a result: brnrd runtime wish <w-id> --result <kind>:<ref> --line "<what it is>" [--deliver]
 - an ask to a person: brnrd runtime ask "<question>" --for <w-id> --rec "<your call>"
 - a park with its reason: brnrd runtime wish <w-id> --read "waiting: <on what>" --wait <condition>
@@ -695,27 +745,24 @@ The jack then holds you, and the loom's letter wakes you when the wait comes tru
 
 
 LEFT = """what is left on a wish moved since it was last said: {named}
-Restate each one's whole list, then stop:
+Restate each one's whole list:
 - brnrd runtime wish <w-id> --left "<step>" --left "<step>"   (--left same when nothing moved)
-- or a park: wish <w-id> --read "waiting: <on what>"; a delivery: --result <kind>:<ref> --line "<what>" --deliver
-This is asked once per wish: the next stop passes, and the wake shows an unanswered left as stale."""
+- or a park: wish <w-id> --read "waiting: <on what>"; a delivery: --result <kind>:<ref> --line "<what>" --deliver"""
 
-# Long enough for the loom to render a left written just before the stop.
+# Long enough for the loom to render a fact written just before the stop.
 LEFT_GRACE = 3.0
 
 
-def _left_owed(room: Path, text: str) -> str:
-    """Refuse a stop while the boundary names wishes whose left moved. Nothing is
-    remembered here: the loom derives the line from the ledger, and a refusal
-    becomes a ``left.asked`` fact through the port, after which the line drops it."""
-    if _hand() or _dry(room) or "\nleft? " not in "\n" + text:
-        return ""
+def _settled_render(room: Path, text: str) -> tuple[str, list[tuple[str, str]]]:
+    """The boundary once the loom has rendered this strand's last facts, and the
+    wishes its ``left?`` line still owes. A loom too slow to render within the
+    grace cannot be trusted to ask: the left fails open, the wake shows it stale."""
+    if _hand() or not text or "\nleft? " not in "\n" + text:
+        return text, []
     stop = time.monotonic() + LEFT_GRACE
     while _rendered_before_ledger(room):
         if time.monotonic() >= stop:
-            # A loom too slow to render cannot be trusted to ask: fail open, and
-            # the next wake shows the left as stale.
-            return ""
+            return _boundary_text(room), []
         time.sleep(0.2)
     text = _boundary_text(room)
     line = next((x for x in text.splitlines() if x.startswith("left? ")), "")
@@ -723,10 +770,15 @@ def _left_owed(room: Path, text: str) -> str:
     for path in (room / "port" / "out").glob("asked-*.md"):
         for listed in re.findall(r"^wishes: (.*)$", path.read_text(), re.M):
             pending.update(listed.split())
-    owed = [ident for ident in re.findall(r"(w-[0-9a-z]+) \(", line) if ident not in pending]
+    return text, [(ident, why) for ident, why in re.findall(r"(w-[0-9a-z]+) \(([^)]*)\)", line)
+                  if ident not in pending]
+
+
+def _asked(room: Path, parsed: Boundary, owed: list[str]) -> None:
+    """A stop let through with lefts still owed: a ``left.asked`` fact through the
+    port, after which the line drops them and the wake shows them stale."""
     if not owed:
-        return ""
-    parsed = parse_boundary(text)
+        return
     stem = mint(5)
     atomic_write(room / "port" / "out" / f"asked-{stem}.md", (
         "---\n"
@@ -734,7 +786,6 @@ def _left_owed(room: Path, text: str) -> str:
         f"id: {parsed.strand or room.name}/{stem}\n"
         f"wishes: {' '.join(owed)}\n"
         "---\n"))
-    return _json({"decision": "block", "reason": LEFT.format(named=line.removeprefix("left? "))})
 
 
 def _rendered_before_ledger(room: Path) -> bool:
@@ -754,18 +805,14 @@ def declare(room: Path, how: str) -> None:
     _set_state(room, declared=how)
 
 
-def _undeclared(room: Path, plan: str) -> str:
-    """The first stop with wishes still open is refused once unless this body
-    declared its end. The plan counts wish stamps, never Plan rows."""
+def _end_miss(room: Path, plan: str) -> str:
+    """Wishes still open and this body has not declared its end. The plan counts
+    wish stamps, never Plan rows."""
     done, _, total = plan.partition(" ")[0].partition("/")
-    if _hand() or not (done.isdigit() and total.isdigit() and int(done) < int(total)) or _dry(room):
+    if not (done.isdigit() and total.isdigit() and int(done) < int(total)) or _state(room).get("declared"):
         return ""
-    state = _state(room)
-    if state.get("declared") or state.get("end_refused"):
-        return ""
-    _set_state(room, end_refused=True)
     thread = os.environ.get("BRNRD_THREAD") or "<thread>"
-    return _json({"decision": "block", "reason": END.format(plan=f"{done}/{total}", thread=thread, grammar=GRAMMAR)})
+    return END.format(plan=f"{done}/{total}", thread=thread, grammar=GRAMMAR)
 
 
 def _dry(room: Path) -> bool:

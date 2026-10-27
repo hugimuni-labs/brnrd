@@ -43,8 +43,7 @@ def left_line(home):
 
 
 def stop(seat):
-    """A stop after the boundary's letters were shown once (the jack's own first block)."""
-    (seat / "port/jack-state.json").write_text(json.dumps({"stop_blocks": 1}) + "\n")
+    """A stop with no call since the last one."""
     return jack.execute("stop", seat, "{}")
 
 
@@ -62,7 +61,7 @@ def test_a_stop_is_refused_once_until_the_body_says_what_is_left(body):
     assert refused["decision"] == "block"
     assert f"{wish} (no left yet)" in refused["reason"]
     assert f'wish <w-id> --left "<step>"' in refused["reason"]
-    # The refusal is a fact through the port, never jack memory: drained, the line drops it.
+    # Stopped again with nothing done: let through, and the ask is a fact through the port.
     assert "what is left" not in stop(seat)
     _ingest(home)
     assert [f.data["wishes"] for f in read_facts(home) if f.kind == "left.asked"] == [[wish]]
@@ -192,3 +191,24 @@ def test_a_pr_opened_on_a_one_wish_thread_is_its_result(body):
     found = wishes(read_facts(home))
     # Two open wishes: the pull request names neither, so the body's --result is the door.
     assert len(found[wish].results) == 1 and not found[other].results
+
+
+def test_one_stop_shows_every_miss_at_once_until_each_is_cleared(body):
+    home, seat = body
+    wish = heard(home, seat, "Hold the board still")
+    render(home)
+    first = json.loads(stop(seat))["reason"]
+    # The left and the ending in one block, each with its command: no maze of stops.
+    assert f"{wish} (no left yet)" in first and 'wish <w-id> --left "<step>"' in first
+    assert "has not said how it ends" in first and "settle work --why" in first
+    jack.execute("post", seat, "{}")
+    again = json.loads(stop(seat))["reason"]
+    assert f"{wish} (no left yet)" in again and "has not said how it ends" in again
+    command(home, seat, "wish", wish, "--left", "freeze hover")
+    jack.execute("post", seat, "{}")
+    render(home)
+    third = json.loads(stop(seat))["reason"]
+    # A left answers both (it says how the body ends); the letter still owed stays on the list.
+    assert "what is left" not in third and "has not said how it ends" not in third
+    assert third.startswith("the stop holds on 1 thing") and "--note" in third
+    assert not list((seat / "port/out").glob("asked-*.md"))
