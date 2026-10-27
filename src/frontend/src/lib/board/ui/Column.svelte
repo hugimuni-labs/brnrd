@@ -68,8 +68,11 @@
 		class="heading"
 		onclick={(e) => {
 			if ((e.target as HTMLElement).closest('a,button')) return;
-			if (inbox) (b.toggle(b.letterView, 'inbox'), b.persist(), (first = true));
-			else b.toggle(b.grown, t.id);
+			if (inbox) {
+				b.toggle(b.letterView, 'inbox');
+				b.persist();
+				first = true;
+			} else b.toggle(b.grown, t.id);
 		}}
 	>
 		<h2>
