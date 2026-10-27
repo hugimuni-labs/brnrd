@@ -83,12 +83,61 @@ def test_group_or_spoofed_identity_never_pairs(tmp_path):
     assert load_config(tmp_path).connectors == ()
 
 
-def test_relay_setup_explains_existing_account_pairing(tmp_path, capfd):
+def test_relay_setup_signs_in_and_writes_the_gate_the_relay_reads(tmp_path):
+    """The cloud choice is a sign-in, not a pointer to `brnrd account connect`."""
+    import http.server
+    import threading
+    from brr.gates import cloud
+    seen, polls = [], iter([{'status': 'pending'}])
+
+    class Pairing(http.server.BaseHTTPRequestHandler):
+        def _send(self, doc):
+            raw = json.dumps(doc).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def do_POST(self):
+            size = int(self.headers.get('Content-Length') or 0)
+            seen.append(('POST', self.path, json.loads(self.rfile.read(size) or b'null'),
+                         self.headers.get('Authorization')))
+            self._send({'pair_code': 'BR-T', 'pair_url': 'http://approve.example/BR-T',
+                        'poll_secret': 's'} if self.path == '/v1/accounts/pair' else {})
+
+        def do_GET(self):
+            seen.append(('GET', self.path.split('?')[0], None, None))
+            self._send(next(polls, {'status': 'paired', 'account_id': 'acc_x', 'repo_id': 'repo_x',
+                                    'daemon_token': 'bd_tok'}))
+
+        def log_message(self, *_):
+            pass
+
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Pairing)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
     home = home_at(tmp_path)
-    with pytest.raises(ValueError, match='Nothing was enabled'):
-        setup_channel.pair(home, 'relay', 'cloud', 'ada', out=lambda _: None)
-    assert 'brnrd account connect' in capfd.readouterr().err
-    assert load_config(tmp_path).connectors == ()
+    subprocess.run(['git', 'init', '-q', str(tmp_path / 'self')], check=True)
+    env = dict(connector.environment(home, 'cloud'), BRNRD_URL=f'http://127.0.0.1:{server.server_port}')
+    try:
+        done = subprocess.run([str(Path(setup_channel.__file__).parent / 'connectors/relay/setup')],
+                              env=env, capture_output=True, text=True, timeout=60)
+    finally:
+        server.shutdown()
+    assert done.returncode == 0, done.stderr
+    assert 'Open http://approve.example/BR-T and sign in' in done.stdout
+    assert 'Signed in to brnrd.dev' in done.stdout
+    # Bound to the home's self repo, which has no remote: the server makes a local repo for it.
+    assert seen[0][:2] == ('POST', '/v1/accounts/pair') and seen[0][2]['forge'] == 'local'
+    assert seen[-1][:2] == ('POST', '/v1/daemons/register') and seen[-1][3] == 'Bearer bd_tok'
+    assert load_config(tmp_path).relay_state == str(tmp_path / 'loom')
+    state = cloud._load_state_from_dir(tmp_path / 'loom')
+    assert (state['token'], state['account_id'], state['repo_id']) == ('bd_tok', 'acc_x', 'repo_x')
+    assert 'token' not in json.loads((tmp_path / 'loom/gates/cloud.json').read_text())
+    # A home already signed in is left as it is.
+    again = subprocess.run([str(Path(setup_channel.__file__).parent / 'connectors/relay/setup')],
+                           env=env, capture_output=True, text=True, timeout=60)
+    assert again.returncode == 0 and again.stdout == ''
 
 
 def test_first_setup_can_create_the_default_home(tmp_path, monkeypatch):

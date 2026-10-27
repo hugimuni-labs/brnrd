@@ -267,6 +267,28 @@ def register(payload: schemas.DaemonRegister, principal: Principal = Depends(req
     return schemas.DaemonRegistered(daemon_id=daemon.id, repo_id=principal.repo_id)
 
 
+@router.post("/door", response_model=schemas.DaemonDoor)
+def door(payload: schemas.DaemonDoorStart, request: Request, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+    """A one-tap link to the shared bot that pairs a person with this loom.
+
+    The shared bot binds a chat only to a code the server minted, and a
+    daemon token cannot mint through the account routes. This mints one
+    for the token's repo carrying the loom's own pairing code: redeeming it
+    binds the chat and hands the daemon that code as the chat's first
+    message (`webhooks._handle_start`), which is what the loom pairs on.
+    """
+    from .pairing import telegram_pair_core
+
+    if principal.repo_id is None:
+        raise HTTPException(status_code=409, detail="daemon token names no repo")
+    started = telegram_pair_core(db, request.app.state.settings, principal.account_id, principal.repo_id,
+                                 relay_text=payload.code)
+    if not started.deep_link:
+        raise HTTPException(status_code=503, detail="no shared Telegram bot is configured")
+    name = started.deep_link.removeprefix("https://t.me/").split("?", 1)[0]
+    return schemas.DaemonDoor(name="@" + name, link=started.deep_link)
+
+
 @router.get("/whoami", response_model=schemas.DaemonWhoami)
 def whoami(principal: Principal = Depends(require_daemon)) -> schemas.DaemonWhoami:
     """Is this daemon token still alive? The status code is the whole answer.
