@@ -115,6 +115,8 @@ export type Index = {
 	v: number;
 	threads: Thread[];
 	fuel?: Fuel[];
+	// the rail's face frames by 'running' / 'idle' (brr.emotes.for_telemetry)
+	faces?: Record<string, string[]>;
 	wishes: Record<string, Record<string, number>>;
 	unthreaded: Wish[];
 	person: string | null;
@@ -142,6 +144,7 @@ export type Model = {
 	tools: Record<string, ToolCall[]>;
 	live: Record<string, Live>;
 	fuel: Fuel[];
+	faces?: Record<string, string[]>;
 	person: string | null;
 	via?: string | null;
 };

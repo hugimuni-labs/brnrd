@@ -68,6 +68,8 @@ def test_a_wish_ships_in_its_thread_part_and_the_index_keeps_counts(parts):
     assert [w["wish"] for w in parts.parts["thread/web"]["wishes"]] == ["w-fast"]
     assert sum(index["wishes"]["web"].values()) == 1 and "docs" not in index["wishes"]
     assert "w-fast" not in json.dumps(index)  # the index carries no wish rows: a moved wish resends one thread
+    assert index["faces"]["running"][0] == index["faces"]["idle"][0] == "brnrd"  # the rail's faces, at rest on the name
+    assert len(index["faces"]["running"]) > 1
 
 
 def test_window_cuts_to_the_newest_and_reaches_back_to_a_target():

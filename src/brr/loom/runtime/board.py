@@ -35,6 +35,7 @@ from .project import fold, is_notice, projection_cache, sender_threads
 from .snapshot import _iso, assemble
 from .wishes import Say, receipt, told as told_of, waits_on, wishes
 from . import tooltrace
+from brr import emotes
 
 TICK = 0.25  # seconds between stats of the ledger and the rooms; a still home costs a few stats
 TOOLS = 120  # tool lines kept per strand
@@ -394,6 +395,10 @@ def digest(part) -> str:
     return hashlib.sha256(json.dumps(part, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
 
 
+# The rail's face per strand state, the frames a working or resting strand plays (board.html read these off board.py).
+FACES = {s: list(emotes.for_telemetry(s).frames) for s in ("idle", "running")}
+
+
 def compute(home: Home, facts, config, tools: dict, live: dict, person: str | None = None,
             typed: dict | None = None) -> dict[str, dict]:
     """Every part by name: ``index``, ``thread/<id>`` per thread, ``beads``. The index carries the others' hashes."""
@@ -421,7 +426,7 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
     hashes = {name: digest(part) for name, part in parts.items()}
     index = {"v": 1, **{k: v for k, v in snap.items() if k not in {"at", "log"}}, "wishes": counts,
              "unthreaded": [row for name, rows in wished.items() if name not in known for row in rows],
-             **_as(home, person), "parts": hashes}
+             **_as(home, person), "parts": hashes, "faces": FACES}
     parts["index"] = index
     return parts
 

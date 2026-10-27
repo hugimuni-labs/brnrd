@@ -234,6 +234,10 @@ export function fixture() {
 	return reindex(parts, {
 		v: 1,
 		threads: [inbox, ...threads],
+		faces: {
+			running: ['brnrd', 'brvrd', 'br^rd', 'brvrd', 'brnrd'],
+			idle: ['brnrd', 'b-n-d', 'brnrd']
+		},
 		fuel: [
 			{
 				shell: 'claude',

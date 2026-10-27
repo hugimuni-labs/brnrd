@@ -9,6 +9,7 @@ import { answered, stack, verdictLetter } from './calls.ts';
 import { inboxCards, ledger, threadWishes } from './ledger.ts';
 import { bar, beats, liveOf, withTools } from './tape.ts';
 import { ancestors, children, moved, Store, type Beads } from './parts.ts';
+import { face, moves, seen } from './rail.ts';
 
 const L = (id: string, at: string, o: Partial<Letter> = {}): Letter => ({
 	id,
@@ -448,4 +449,20 @@ test('a wish trace: stamps with a ref or a line, a result once, the verdict, bea
 		text: 'write the parser'
 	});
 	deepEqual(refOf('nope', beads, steps), { kind: 'text', text: 'nope' });
+});
+
+test('the rail logs a moved strand once, the first load moves none, and a working strand plays the running face', () => {
+	const th = (state: string) =>
+		[{ id: 'web', strands: [{ id: 's-old' }, { id: 's-new', state }] }] as Thread[];
+	const at = '2026-10-27T10:21:05.123Z';
+	deepEqual([...moves(null, seen(th('idle')), at).changed], []);
+	const m = moves(seen(th('idle')), seen(th('working')), at);
+	deepEqual([...m.changed], ['s-new']);
+	deepEqual(m.lines, ['10:21:05 web idle→working']);
+	deepEqual(moves(seen(th('working')), seen(th('working')), at).lines, []);
+	deepEqual(moves({}, seen(th('idle')), at).lines, ['10:21:05 web new→idle']);
+	const faces = { running: ['a', 'b'], idle: ['c'] };
+	equal(face(faces, 'working', 3), 'b');
+	equal(face(faces, 'holding', 3), 'c');
+	equal(face(undefined, 'working', 3), 'brnrd');
 });
